@@ -5,13 +5,14 @@ This file demonstrates how to use the new Options API functions:
 1. optiongreeks - Calculate Option Greeks and IV
 2. optionsymbol - Get option symbol details
 3. optionsorder - Place option orders with auto-resolved symbols
+4. syntheticfuture - Calculate synthetic futures price
 """
 
-import openalgo
+from openalgo import api
 
 # Initialize the API client
 # Replace with your actual API key and host
-api = openalgo.api(
+client = api(
     api_key="your_api_key_here",
     host="http://127.0.0.1:5000"
 )
@@ -26,8 +27,8 @@ print("=" * 80)
 print("\n1. Calculate Option Greeks - Basic Usage")
 print("-" * 80)
 
-greeks = api.optiongreeks(
-    symbol="NIFTY28NOV2526000CE",
+greeks = client.optiongreeks(
+    symbol="NIFTY25NOV2526000CE",
     exchange="NFO"
 )
 
@@ -54,8 +55,8 @@ else:
 print("\n\n2. Calculate Option Greeks - With Custom Interest Rate")
 print("-" * 80)
 
-greeks = api.optiongreeks(
-    symbol="BANKNIFTY28NOV2550000CE",
+greeks = client.optiongreeks(
+    symbol="BANKNIFTY25NOV2553000CE",
     exchange="NFO",
     interest_rate=6.5  # Current RBI repo rate
 )
@@ -74,10 +75,10 @@ else:
 print("\n\n3. Calculate Option Greeks - Using Futures as Underlying")
 print("-" * 80)
 
-greeks = api.optiongreeks(
-    symbol="NIFTY28NOV2526000CE",
+greeks = client.optiongreeks(
+    symbol="NIFTY25NOV2526000CE",
     exchange="NFO",
-    underlying_symbol="NIFTY28NOV25FUT",
+    underlying_symbol="NIFTY25NOV25FUT",
     underlying_exchange="NFO"
 )
 
@@ -95,8 +96,8 @@ else:
 print("\n\n4. Calculate Option Greeks - MCX with Custom Expiry Time")
 print("-" * 80)
 
-greeks = api.optiongreeks(
-    symbol="CRUDEOIL17NOV255400CE",
+greeks = client.optiongreeks(
+    symbol="CRUDEOIL25NOV255400CE",
     exchange="MCX",
     expiry_time="19:00"  # Crude Oil expires at 7:00 PM
 )
@@ -115,12 +116,11 @@ else:
 print("\n\n5. Get Option Symbol Details - ATM Call")
 print("-" * 80)
 
-symbol_info = api.optionsymbol(
+symbol_info = client.optionsymbol(
     strategy="test_strategy",
     underlying="NIFTY",
     exchange="NSE_INDEX",
-    expiry_date="28NOV24",
-    strike_int=50,
+    expiry_date="25NOV25",
     offset="ATM",
     option_type="CE"
 )
@@ -140,11 +140,10 @@ else:
 print("\n\n6. Get Option Symbol Details - OTM Put")
 print("-" * 80)
 
-symbol_info = api.optionsymbol(
+symbol_info = client.optionsymbol(
     underlying="BANKNIFTY",
     exchange="NSE_INDEX",
-    expiry_date="28NOV24",
-    strike_int=100,
+    expiry_date="25NOV25",
     offset="OTM2",
     option_type="PE"
 )
@@ -162,12 +161,11 @@ else:
 print("\n\n7. Place Option Order - ATM Call (MARKET)")
 print("-" * 80)
 
-order_result = api.optionsorder(
+order_result = client.optionsorder(
     strategy="test_strategy",
     underlying="NIFTY",
     exchange="NSE_INDEX",
-    expiry_date="28NOV24",
-    strike_int=50,
+    expiry_date="25NOV25",
     offset="ATM",
     option_type="CE",
     action="BUY",
@@ -192,11 +190,11 @@ else:
 print("\n\n8. Place Option Order - LIMIT Order")
 print("-" * 80)
 
-order_result = api.optionsorder(
+order_result = client.optionsorder(
     strategy="nifty_scalping",
     underlying="NIFTY",
     exchange="NSE_INDEX",
-    expiry_date="28NOV24",
+    expiry_date="25NOV25",
     strike_int=50,
     offset="OTM1",
     option_type="CE",
@@ -220,12 +218,11 @@ else:
 print("\n\n9. Place Option Order - Stop Loss Order")
 print("-" * 80)
 
-order_result = api.optionsorder(
+order_result = client.optionsorder(
     strategy="protective_stop",
     underlying="BANKNIFTY",
     exchange="NSE_INDEX",
-    expiry_date="28NOV24",
-    strike_int=100,
+    expiry_date="25NOV25",
     offset="ATM",
     option_type="PE",
     action="SELL",
@@ -250,40 +247,39 @@ print("\n\n10. Build Iron Condor Strategy - Get All 4 Symbols")
 print("-" * 80)
 
 # Leg 1: Sell OTM1 Call
-leg1 = api.optionsymbol(
+leg1 = client.optionsymbol(
     underlying="NIFTY",
     exchange="NSE_INDEX",
-    expiry_date="28NOV24",
-    strike_int=50,
+    expiry_date="25NOV25",
     offset="OTM1",
     option_type="CE"
 )
 
 # Leg 2: Sell OTM1 Put
-leg2 = api.optionsymbol(
+leg2 = client.optionsymbol(
     underlying="NIFTY",
     exchange="NSE_INDEX",
-    expiry_date="28NOV24",
+    expiry_date="25NOV25",
     strike_int=50,
     offset="OTM1",
     option_type="PE"
 )
 
 # Leg 3: Buy OTM3 Call
-leg3 = api.optionsymbol(
+leg3 = client.optionsymbol(
     underlying="NIFTY",
     exchange="NSE_INDEX",
-    expiry_date="28NOV24",
+    expiry_date="25NOV25",
     strike_int=50,
     offset="OTM3",
     option_type="CE"
 )
 
 # Leg 4: Buy OTM3 Put
-leg4 = api.optionsymbol(
+leg4 = client.optionsymbol(
     underlying="NIFTY",
     exchange="NSE_INDEX",
-    expiry_date="28NOV24",
+    expiry_date="25NOV25",
     strike_int=50,
     offset="OTM3",
     option_type="PE"
@@ -294,6 +290,106 @@ print(f"  Sell OTM1 Call: {leg1.get('symbol', 'Error')}")
 print(f"  Sell OTM1 Put:  {leg2.get('symbol', 'Error')}")
 print(f"  Buy OTM3 Call:  {leg3.get('symbol', 'Error')}")
 print(f"  Buy OTM3 Put:   {leg4.get('symbol', 'Error')}")
+
+# ============================================================================
+# Example 11: Calculate Synthetic Future Price - NIFTY Index
+# ============================================================================
+print("\n\n11. Calculate Synthetic Future Price - NIFTY Index")
+print("-" * 80)
+
+synthetic = client.syntheticfuture(
+    underlying="NIFTY",
+    exchange="NSE_INDEX",
+    expiry_date="25NOV25"
+)
+
+if synthetic.get('status') == 'success':
+    print(f"Underlying: {synthetic['underlying']}")
+    print(f"Spot Price (LTP): ₹{synthetic['underlying_ltp']}")
+    print(f"ATM Strike: ₹{synthetic['atm_strike']}")
+    print(f"Synthetic Future Price: ₹{synthetic['synthetic_future_price']}")
+    basis = synthetic['synthetic_future_price'] - synthetic['underlying_ltp']
+    print(f"Basis (Future - Spot): ₹{basis:.2f}")
+    print(f"Expiry: {synthetic['expiry']}")
+else:
+    print(f"Error: {synthetic.get('message')}")
+
+# ============================================================================
+# Example 12: Calculate Synthetic Future Price - BANKNIFTY Index
+# ============================================================================
+print("\n\n12. Calculate Synthetic Future Price - BANKNIFTY Index")
+print("-" * 80)
+
+synthetic = client.syntheticfuture(
+    underlying="BANKNIFTY",
+    exchange="NSE_INDEX",
+    expiry_date="25NOV25"
+)
+
+if synthetic.get('status') == 'success':
+    print(f"Underlying: {synthetic['underlying']}")
+    print(f"Spot Price: ₹{synthetic['underlying_ltp']}")
+    print(f"ATM Strike: ₹{synthetic['atm_strike']}")
+    print(f"Synthetic Future: ₹{synthetic['synthetic_future_price']}")
+    basis = synthetic['synthetic_future_price'] - synthetic['underlying_ltp']
+    print(f"Basis: ₹{basis:.2f}")
+else:
+    print(f"Error: {synthetic.get('message')}")
+
+# ============================================================================
+# Example 13: Calculate Synthetic Future Price - RELIANCE Stock
+# ============================================================================
+print("\n\n13. Calculate Synthetic Future Price - RELIANCE Stock")
+print("-" * 80)
+
+synthetic = client.syntheticfuture(
+    underlying="RELIANCE",
+    exchange="NSE",
+    expiry_date="25NOV25"
+)
+
+if synthetic.get('status') == 'success':
+    print(f"Underlying: {synthetic['underlying']}")
+    print(f"Spot Price: ₹{synthetic['underlying_ltp']}")
+    print(f"ATM Strike: ₹{synthetic['atm_strike']}")
+    print(f"Synthetic Future: ₹{synthetic['synthetic_future_price']}")
+
+    # Calculate arbitrage opportunity
+    basis = synthetic['synthetic_future_price'] - synthetic['underlying_ltp']
+    print(f"\nArbitrage Analysis:")
+    print(f"  Basis: ₹{basis:.2f}")
+    if abs(basis) > 5:  # If basis is greater than ₹5
+        print(f"  Opportunity: {'Buy Spot, Sell Synthetic' if basis > 0 else 'Sell Spot, Buy Synthetic'}")
+    else:
+        print(f"  Opportunity: No significant arbitrage")
+else:
+    print(f"Error: {synthetic.get('message')}")
+
+# ============================================================================
+# Example 14: Compare Synthetic Future vs Actual Future
+# ============================================================================
+print("\n\n14. Compare Synthetic Future vs Actual Future Price")
+print("-" * 80)
+
+# Get synthetic future price
+synthetic = client.syntheticfuture(
+    underlying="NIFTY",
+    exchange="NSE_INDEX",
+    expiry_date="25NOV25"
+)
+
+if synthetic.get('status') == 'success':
+    print(f"Synthetic Future Calculation:")
+    print(f"  Spot Price: ₹{synthetic['underlying_ltp']}")
+    print(f"  ATM Strike: ₹{synthetic['atm_strike']}")
+    print(f"  Synthetic Price: ₹{synthetic['synthetic_future_price']}")
+
+    # You can compare with actual futures price
+    # actual_future = client.quotes(symbol="NIFTY25NOV25FUT", exchange="NFO")
+    # This comparison helps identify arbitrage opportunities
+    print(f"\nNote: Compare this with actual NIFTY futures to find arbitrage")
+else:
+    print(f"Error: {synthetic.get('message')}")
 
 print("\n" + "=" * 80)
 print("Examples completed!")
