@@ -529,3 +529,105 @@ class OptionsAPI(BaseAPI):
             payload["expiry_date"] = expiry_date
 
         return self._make_request("optionsmultiorder", payload)
+
+    def optionchain(self, *, underlying, exchange, expiry_date=None, strike_count=None):
+        """
+        Fetch Option Chain Data with Real-time Quotes for All Strikes.
+
+        Returns complete option chain with CE and PE data for each strike including
+        LTP, bid/ask, OHLC, volume, OI, lot size, and moneyness labels.
+
+        Parameters:
+        - underlying (str): Underlying symbol (e.g., NIFTY, BANKNIFTY, RELIANCE,
+                           or future like NIFTY30DEC25FUT). Required.
+        - exchange (str): Exchange code (NSE_INDEX, NSE, NFO, BSE_INDEX, BSE, BFO). Required.
+        - expiry_date (str, optional): Expiry date in DDMMMYY format (e.g., 30DEC25).
+                                      Required unless underlying includes expiry.
+        - strike_count (int, optional): Number of strikes above and below ATM (1-100).
+                                       Returns all strikes if not specified.
+
+        Returns:
+        dict: JSON response containing:
+            - status: success/error
+            - underlying: Base underlying symbol
+            - underlying_ltp: Last Traded Price of underlying
+            - expiry_date: Expiry date in DDMMMYY format
+            - atm_strike: At-The-Money strike price
+            - chain: Array of strike data, each containing:
+                - strike: Strike price
+                - ce: Call option data (or null)
+                    - symbol: Option symbol (e.g., NIFTY30DEC2526000CE)
+                    - label: Moneyness label (ATM, ITM1, OTM1, etc.)
+                    - ltp: Last Traded Price
+                    - bid: Best bid price
+                    - ask: Best ask price
+                    - open: Day's open price
+                    - high: Day's high price
+                    - low: Day's low price
+                    - prev_close: Previous close price
+                    - volume: Traded volume
+                    - oi: Open Interest
+                    - lotsize: Lot size
+                    - tick_size: Minimum price movement
+                - pe: Put option data (same structure as ce, or null)
+
+        Label Logic:
+            - Strikes below ATM: CE is ITM, PE is OTM
+            - Strikes above ATM: CE is OTM, PE is ITM
+            - ATM strike: Both CE and PE labeled as ATM
+
+        Example:
+            # Full option chain for NIFTY
+            chain = api.optionchain(
+                underlying="NIFTY",
+                exchange="NSE_INDEX",
+                expiry_date="30DEC25"
+            )
+
+            # 10 strikes around ATM (21 total)
+            chain = api.optionchain(
+                underlying="NIFTY",
+                exchange="NSE_INDEX",
+                expiry_date="30DEC25",
+                strike_count=10
+            )
+
+            # Using future as underlying (expiry auto-detected)
+            chain = api.optionchain(
+                underlying="NIFTY30DEC25FUT",
+                exchange="NFO"
+            )
+
+            # Stock options
+            chain = api.optionchain(
+                underlying="RELIANCE",
+                exchange="NSE",
+                expiry_date="30DEC25",
+                strike_count=10
+            )
+
+            # Process the chain
+            if chain["status"] == "success":
+                print(f"ATM Strike: {chain['atm_strike']}")
+                print(f"Underlying LTP: {chain['underlying_ltp']}")
+
+                for item in chain["chain"]:
+                    ce = item.get("ce") or {}
+                    pe = item.get("pe") or {}
+                    print(f"Strike: {item['strike']} | "
+                          f"CE: {ce.get('ltp', '-')} ({ce.get('label', '-')}) | "
+                          f"PE: {pe.get('ltp', '-')} ({pe.get('label', '-')})")
+        """
+        payload = {
+            "apikey": self.api_key,
+            "underlying": underlying,
+            "exchange": exchange
+        }
+
+        # Add optional parameters if provided
+        if expiry_date is not None:
+            payload["expiry_date"] = expiry_date
+        if strike_count is not None:
+            payload["strike_count"] = int(strike_count)
+
+        return self._make_request("optionchain", payload)
