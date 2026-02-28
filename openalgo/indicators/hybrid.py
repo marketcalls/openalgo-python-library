@@ -14,77 +14,79 @@ from .utils import true_range, ema_wilder
 class ADX(BaseIndicator):
     """
     Average Directional Index
-    
+
     ADX measures the strength of a trend, regardless of direction.
-    
+
     Components: +DI, -DI, ADX
     """
-    
+
     def __init__(self):
         super().__init__("ADX")
-    
+
     @staticmethod
-    # @jit(nopython=True, cache=False)  # Disabled - jit breaks the NaN handling logic  
-    def _calculate_adx_optimized(high: np.ndarray, low: np.ndarray, close: np.ndarray,
-                      period: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Optimized ADX calculation using consolidated utilities"""
+    @jit(nopython=True)
+    def _compute_dm(high: np.ndarray, low: np.ndarray, close: np.ndarray
+                    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Compute True Range and Directional Movement (jitted)."""
         n = len(high)
-        
-        # Use consolidated true_range utility
-        tr = true_range(high, low, close)
-        
-        # Calculate Directional Movement
+        tr = np.empty(n)
         dm_plus = np.empty(n)
         dm_minus = np.empty(n)
-        dm_plus[0] = 0
-        dm_minus[0] = 0
-        
+
+        tr[0] = high[0] - low[0]
+        dm_plus[0] = 0.0
+        dm_minus[0] = 0.0
+
         for i in range(1, n):
-            up_move = high[i] - high[i-1]
-            down_move = low[i-1] - low[i]
-            
+            hl = high[i] - low[i]
+            hc = abs(high[i] - close[i - 1])
+            lc = abs(low[i] - close[i - 1])
+            tr[i] = max(hl, hc, lc)
+
+            up_move = high[i] - high[i - 1]
+            down_move = low[i - 1] - low[i]
+
             if up_move > down_move and up_move > 0:
                 dm_plus[i] = up_move
             else:
-                dm_plus[i] = 0
-                
+                dm_plus[i] = 0.0
+
             if down_move > up_move and down_move > 0:
                 dm_minus[i] = down_move
             else:
-                dm_minus[i] = 0
-        
-        # Use optimized Wilder's smoothing for ATR and DM
-        atr = ema_wilder(tr, period)
-        sm_dm_plus = ema_wilder(dm_plus, period)
-        sm_dm_minus = ema_wilder(dm_minus, period)
-        
-        # Calculate DI values
+                dm_minus[i] = 0.0
+
+        return tr, dm_plus, dm_minus
+
+    @staticmethod
+    @jit(nopython=True)
+    def _compute_di_dx(sm_atr: np.ndarray, sm_dm_plus: np.ndarray,
+                       sm_dm_minus: np.ndarray, period: int
+                       ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Compute DI+, DI-, DX from smoothed arrays (jitted)."""
+        n = len(sm_atr)
         di_plus = np.full(n, np.nan)
         di_minus = np.full(n, np.nan)
         dx = np.full(n, np.nan)
-        
-        for i in range(period-1, n):
-            if atr[i] > 0:
-                di_plus[i] = (sm_dm_plus[i] / atr[i]) * 100
-                di_minus[i] = (sm_dm_minus[i] / atr[i]) * 100
-                
-                # DX calculation
+
+        for i in range(period - 1, n):
+            if not np.isnan(sm_atr[i]) and sm_atr[i] > 0:
+                di_plus[i] = (sm_dm_plus[i] / sm_atr[i]) * 100
+                di_minus[i] = (sm_dm_minus[i] / sm_atr[i]) * 100
+
                 di_sum = di_plus[i] + di_minus[i]
                 if di_sum > 0:
                     dx[i] = abs(di_plus[i] - di_minus[i]) / di_sum * 100
-        
-        # Calculate ADX using Wilder's smoothing of DX
-        adx = ema_wilder(dx, period)
-        
-        return di_plus, di_minus, adx
-    
+
+        return di_plus, di_minus, dx
+
     def calculate(self, high: Union[np.ndarray, pd.Series, list],
                  low: Union[np.ndarray, pd.Series, list],
                  close: Union[np.ndarray, pd.Series, list],
                  period: int = 14) -> Union[Tuple[np.ndarray, np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series, pd.Series]]:
         """
         Calculate Average Directional Index
-        
+
         Parameters:
         -----------
         high : Union[np.ndarray, pd.Series, list]
@@ -95,7 +97,7 @@ class ADX(BaseIndicator):
             Closing prices
         period : int, default=14
             Period for ADX calculation
-            
+
         Returns:
         --------
         Union[Tuple[np.ndarray, np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series, pd.Series]]
@@ -104,12 +106,25 @@ class ADX(BaseIndicator):
         high_data, input_type, index = self.validate_input(high)
         low_data, _, _ = self.validate_input(low)
         close_data, _, _ = self.validate_input(close)
-        
+
         high_data, low_data, close_data = self.align_arrays(high_data, low_data, close_data)
         self.validate_period(period, len(close_data))
-        
-        results = self._calculate_adx_optimized(high_data, low_data, close_data, period)
-        return self.format_multiple_outputs(results, input_type, index)
+
+        # Stage 1 (jitted): compute raw TR, DM+, DM-
+        tr, dm_plus, dm_minus = self._compute_dm(high_data, low_data, close_data)
+
+        # Stage 2: Wilder's smoothing (each call is jitted)
+        sm_atr = ema_wilder(tr, period)
+        sm_dm_plus = ema_wilder(dm_plus, period)
+        sm_dm_minus = ema_wilder(dm_minus, period)
+
+        # Stage 3 (jitted): compute DI+, DI-, DX
+        di_plus, di_minus, dx = self._compute_di_dx(sm_atr, sm_dm_plus, sm_dm_minus, period)
+
+        # Stage 4: ADX = Wilder's smoothing of DX
+        adx = ema_wilder(dx, period)
+
+        return self.format_multiple_outputs((di_plus, di_minus, adx), input_type, index)
 
 
 class Aroon(BaseIndicator):
@@ -127,11 +142,11 @@ class Aroon(BaseIndicator):
         super().__init__("Aroon")
     
     @staticmethod
-    # @jit(nopython=True)  # Disabled for consistency with ADX fix
+    @jit(nopython=True)
     def _calculate_aroon(high: np.ndarray, low: np.ndarray, period: int) -> Tuple[np.ndarray, np.ndarray]:
         """
         Aroon calculation matching TradingView logic
-        
+
         TradingView formula:
         upper = 100 * (ta.highestbars(high, length + 1) + length)/length
         lower = 100 * (ta.lowestbars(low, length + 1) + length)/length
@@ -139,37 +154,28 @@ class Aroon(BaseIndicator):
         n = len(high)
         aroon_up = np.full(n, np.nan)
         aroon_down = np.full(n, np.nan)
-        
-        # TradingView uses period + 1 bars for lookback
+
         lookback = period + 1
-        
+
         for i in range(lookback - 1, n):
-            # Find highest high and lowest low positions in the window (period + 1 bars)
             window_start = i - lookback + 1
-            window_end = i + 1
-            high_window = high[window_start:window_end]
-            low_window = low[window_start:window_end]
-            
-            # Find positions of highest high and lowest low
-            # Use FIRST occurrence to match TradingView behavior
+
             highest_pos = 0
             lowest_pos = 0
-            
-            for j in range(len(high_window)):
-                if high_window[j] > high_window[highest_pos]:  # Changed >= to > for first occurrence
+
+            for j in range(lookback):
+                idx = window_start + j
+                if high[idx] > high[window_start + highest_pos]:
                     highest_pos = j
-                if low_window[j] < low_window[lowest_pos]:     # Changed <= to < for first occurrence
+                if low[idx] < low[window_start + lowest_pos]:
                     lowest_pos = j
-            
-            # Calculate bars since highest/lowest (0 = current bar)
-            bars_since_high = len(high_window) - 1 - highest_pos
-            bars_since_low = len(low_window) - 1 - lowest_pos
-            
-            # TradingView formula: 100 * (ta.highestbars + period) / period
-            # ta.highestbars returns -bars_since_high, so:
-            aroon_up[i] = 100 * (period - bars_since_high) / period
-            aroon_down[i] = 100 * (period - bars_since_low) / period
-        
+
+            bars_since_high = lookback - 1 - highest_pos
+            bars_since_low = lookback - 1 - lowest_pos
+
+            aroon_up[i] = 100.0 * (period - bars_since_high) / period
+            aroon_down[i] = 100.0 * (period - bars_since_low) / period
+
         return aroon_up, aroon_down
     
     def calculate(self, high: Union[np.ndarray, pd.Series, list],

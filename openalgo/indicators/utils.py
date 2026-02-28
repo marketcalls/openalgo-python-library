@@ -21,7 +21,7 @@ def validate_input(arr: Union[np.ndarray, pd.Series, list]) -> np.ndarray:
     return arr
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def crossover(series1: np.ndarray, series2: np.ndarray) -> np.ndarray:
     """
     Check if series1 crosses over series2
@@ -42,16 +42,15 @@ def crossover(series1: np.ndarray, series2: np.ndarray) -> np.ndarray:
     result = np.zeros(n, dtype=np.bool_)
     
     for i in range(1, n):
-        if (series1[i] > series2[i] and 
-            series1[i-1] <= series2[i-1] and 
-            not np.isnan(series1[i]) and not np.isnan(series2[i]) and
-            not np.isnan(series1[i-1]) and not np.isnan(series2[i-1])):
+        if (not np.isnan(series1[i]) and not np.isnan(series2[i]) and
+            not np.isnan(series1[i-1]) and not np.isnan(series2[i-1]) and
+            series1[i] > series2[i] and series1[i-1] <= series2[i-1]):
             result[i] = True
-    
+
     return result
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def crossunder(series1: np.ndarray, series2: np.ndarray) -> np.ndarray:
     """
     Check if series1 crosses under series2
@@ -72,27 +71,27 @@ def crossunder(series1: np.ndarray, series2: np.ndarray) -> np.ndarray:
     result = np.zeros(n, dtype=np.bool_)
     
     for i in range(1, n):
-        if (series1[i] < series2[i] and 
-            series1[i-1] >= series2[i-1] and 
-            not np.isnan(series1[i]) and not np.isnan(series2[i]) and
-            not np.isnan(series1[i-1]) and not np.isnan(series2[i-1])):
+        if (not np.isnan(series1[i]) and not np.isnan(series2[i]) and
+            not np.isnan(series1[i-1]) and not np.isnan(series2[i-1]) and
+            series1[i] < series2[i] and series1[i-1] >= series2[i-1]):
             result[i] = True
     
     return result
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def highest(data: np.ndarray, period: int) -> np.ndarray:
     """
     Calculate the highest value over a rolling window using O(n) deque algorithm
-    
+    with circular buffer for O(1) front-pop.
+
     Parameters:
     -----------
     data : np.ndarray
         Input data
     period : int
         Window size
-        
+
     Returns:
     --------
     np.ndarray
@@ -100,49 +99,45 @@ def highest(data: np.ndarray, period: int) -> np.ndarray:
     """
     n = len(data)
     result = np.full(n, np.nan)
-    
-    # Deque simulation using arrays for Numba compatibility
-    deque_vals = np.empty(period, dtype=np.float64)
-    deque_indices = np.empty(period, dtype=np.int64)
-    deque_size = 0
-    
+    cap = n + 1
+    dq_val = np.empty(cap, dtype=np.float64)
+    dq_idx = np.empty(cap, dtype=np.int64)
+    head = 0
+    tail = 0
+
     for i in range(n):
-        # Remove elements outside the window
-        while deque_size > 0 and deque_indices[0] <= i - period:
-            # Shift elements left (pop front)
-            for j in range(deque_size - 1):
-                deque_vals[j] = deque_vals[j + 1]
-                deque_indices[j] = deque_indices[j + 1]
-            deque_size -= 1
-        
-        # Remove elements smaller than current value from back
-        while deque_size > 0 and deque_vals[deque_size - 1] <= data[i]:
-            deque_size -= 1
-        
-        # Add current element
-        deque_vals[deque_size] = data[i]
-        deque_indices[deque_size] = i
-        deque_size += 1
-        
-        # Set result if window is complete
+        # Pop front if outside window
+        while head < tail and dq_idx[head % cap] <= i - period:
+            head += 1
+
+        # Pop back while smaller than current
+        while head < tail and dq_val[(tail - 1) % cap] <= data[i]:
+            tail -= 1
+
+        # Push current
+        dq_val[tail % cap] = data[i]
+        dq_idx[tail % cap] = i
+        tail += 1
+
         if i >= period - 1:
-            result[i] = deque_vals[0]  # Front element is the maximum
-    
+            result[i] = dq_val[head % cap]
+
     return result
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def lowest(data: np.ndarray, period: int) -> np.ndarray:
     """
     Calculate the lowest value over a rolling window using O(n) deque algorithm
-    
+    with circular buffer for O(1) front-pop.
+
     Parameters:
     -----------
     data : np.ndarray
         Input data
     period : int
         Window size
-        
+
     Returns:
     --------
     np.ndarray
@@ -150,38 +145,33 @@ def lowest(data: np.ndarray, period: int) -> np.ndarray:
     """
     n = len(data)
     result = np.full(n, np.nan)
-    
-    # Deque simulation using arrays for Numba compatibility  
-    deque_vals = np.empty(period, dtype=np.float64)
-    deque_indices = np.empty(period, dtype=np.int64)
-    deque_size = 0
-    
+    cap = n + 1
+    dq_val = np.empty(cap, dtype=np.float64)
+    dq_idx = np.empty(cap, dtype=np.int64)
+    head = 0
+    tail = 0
+
     for i in range(n):
-        # Remove elements outside the window
-        while deque_size > 0 and deque_indices[0] <= i - period:
-            # Shift elements left (pop front)
-            for j in range(deque_size - 1):
-                deque_vals[j] = deque_vals[j + 1]
-                deque_indices[j] = deque_indices[j + 1]
-            deque_size -= 1
-        
-        # Remove elements larger than current value from back
-        while deque_size > 0 and deque_vals[deque_size - 1] >= data[i]:
-            deque_size -= 1
-        
-        # Add current element
-        deque_vals[deque_size] = data[i]
-        deque_indices[deque_size] = i
-        deque_size += 1
-        
-        # Set result if window is complete
+        # Pop front if outside window
+        while head < tail and dq_idx[head % cap] <= i - period:
+            head += 1
+
+        # Pop back while larger than current
+        while head < tail and dq_val[(tail - 1) % cap] >= data[i]:
+            tail -= 1
+
+        # Push current
+        dq_val[tail % cap] = data[i]
+        dq_idx[tail % cap] = i
+        tail += 1
+
         if i >= period - 1:
-            result[i] = deque_vals[0]  # Front element is the minimum
-    
+            result[i] = dq_val[head % cap]
+
     return result
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def change(data: np.ndarray, length: int = 1) -> np.ndarray:
     """
     Calculate the change in value over a specified number of periods
@@ -207,7 +197,7 @@ def change(data: np.ndarray, length: int = 1) -> np.ndarray:
     return result
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def roc(data: np.ndarray, length: int) -> np.ndarray:
     """
     Calculate Rate of Change (ROC)
@@ -234,7 +224,7 @@ def roc(data: np.ndarray, length: int) -> np.ndarray:
     return result
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def sma(data: np.ndarray, period: int) -> np.ndarray:
     """
     Simple Moving Average using O(n) rolling sum algorithm
@@ -271,18 +261,20 @@ def sma(data: np.ndarray, period: int) -> np.ndarray:
     return result
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def ema(data: np.ndarray, period: int) -> np.ndarray:
     """
     Exponential Moving Average utility function
-    
+
+    Uses first-value seed and alpha = 2 / (period + 1), adjust=False.
+
     Parameters:
     -----------
     data : np.ndarray
         Input data
     period : int
         EMA period
-        
+
     Returns:
     --------
     np.ndarray
@@ -292,23 +284,17 @@ def ema(data: np.ndarray, period: int) -> np.ndarray:
     result = np.empty(n)
     alpha = 2.0 / (period + 1)
 
-    # Seed initial values with NaN until enough data is available
-    result[:period-1] = np.nan
+    # First-value seed
+    result[0] = data[0]
 
-    # Calculate initial SMA as the first EMA value
-    sum_val = 0.0
-    for i in range(period):
-        sum_val += data[i]
-    result[period-1] = sum_val / period
-
-    # Calculate EMA for remaining values
-    for i in range(period, n):
-        result[i] = alpha * data[i] + (1 - alpha) * result[i-1]
+    # EMA recursion
+    for i in range(1, n):
+        result[i] = alpha * data[i] + (1 - alpha) * result[i - 1]
 
     return result
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def stdev(data: np.ndarray, period: int) -> np.ndarray:
     """
     Calculate rolling standard deviation using O(n) rolling sums algorithm
@@ -359,7 +345,7 @@ def stdev(data: np.ndarray, period: int) -> np.ndarray:
     return result
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def true_range(high: np.ndarray, low: np.ndarray, close: np.ndarray) -> np.ndarray:
     """
     Calculate True Range (Numba optimized)
@@ -394,7 +380,7 @@ def true_range(high: np.ndarray, low: np.ndarray, close: np.ndarray) -> np.ndarr
     return tr
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def atr_wilder(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int) -> np.ndarray:
     """
     Average True Range using Wilder's smoothing method (consolidated kernel)
@@ -433,7 +419,7 @@ def atr_wilder(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int
     return atr
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def atr_sma(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int) -> np.ndarray:
     """
     Average True Range using Simple Moving Average (consolidated kernel)
@@ -458,18 +444,18 @@ def atr_sma(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int) -
     return sma(tr, period)
 
 
-# @njit(fastmath=True, cache=False)  # Disabled - jit breaks the NaN handling logic
+@njit(cache=True, nogil=True)
 def ema_wilder(data: np.ndarray, period: int) -> np.ndarray:
     """
     Exponential Moving Average using Wilder's smoothing (alpha = 1/period)
-    
+
     Parameters:
     -----------
     data : np.ndarray
         Input data
     period : int
         EMA period
-        
+
     Returns:
     --------
     np.ndarray
@@ -477,56 +463,38 @@ def ema_wilder(data: np.ndarray, period: int) -> np.ndarray:
     """
     n = len(data)
     result = np.full(n, np.nan)
-    alpha = 1.0 / period
-    
-    # Find first valid (non-NaN) value
-    first_valid_idx = -1
-    for i in range(n):
-        if not np.isnan(data[i]):
-            first_valid_idx = i
-            break
-    
-    if first_valid_idx == -1:
-        return result  # All values are NaN
-    
-    # Need at least 'period' valid values to start calculation
-    valid_count = 0
-    for i in range(first_valid_idx, n):
-        if not np.isnan(data[i]):
-            valid_count += 1
-            if valid_count >= period:
-                break
-    
-    if valid_count < period:
-        return result  # Not enough valid values
-    
-    # Find the start index where we have 'period' valid values
-    start_idx = first_valid_idx + period - 1
-    
-    # Calculate initial SMA as the first EMA value
+
+    # Find first valid (non-NaN) index
+    first_valid = 0
+    while first_valid < n and np.isnan(data[first_valid]):
+        first_valid += 1
+
+    if first_valid + period > n:
+        return result
+
+    # SMA seed over first 'period' values from first_valid
     sum_val = 0.0
-    valid_count = 0
-    for i in range(first_valid_idx, first_valid_idx + period):
-        if not np.isnan(data[i]):
-            sum_val += data[i]
-            valid_count += 1
-    
-    if valid_count == period:
-        result[start_idx] = sum_val / period
-        
-        # Calculate EMA for remaining values
-        for i in range(start_idx + 1, n):
-            if not np.isnan(data[i]):
-                result[i] = alpha * data[i] + (1 - alpha) * result[i-1]
-            else:
-                result[i] = result[i-1]  # Carry forward previous value for NaN
-    
+    for i in range(first_valid, first_valid + period):
+        if np.isnan(data[i]):
+            return result
+        sum_val += data[i]
+
+    start = first_valid + period - 1
+    result[start] = sum_val / period
+
+    # Wilder's smoothing: result[i] = (prev * (period-1) + data[i]) / period
+    for i in range(start + 1, n):
+        if np.isnan(data[i]):
+            result[i] = result[i - 1]
+        else:
+            result[i] = (result[i - 1] * (period - 1) + data[i]) / period
+
     return result
 
 
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def rolling_variance(data: np.ndarray, period: int) -> np.ndarray:
     """
     Calculate rolling variance using O(n) rolling sums algorithm
@@ -575,7 +543,7 @@ def rolling_variance(data: np.ndarray, period: int) -> np.ndarray:
     return result
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def rolling_sum(data: np.ndarray, period: int) -> np.ndarray:
     """
     Calculate rolling sum using O(n) algorithm
@@ -612,7 +580,7 @@ def rolling_sum(data: np.ndarray, period: int) -> np.ndarray:
     return result
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def vwma_optimized(data: np.ndarray, volume: np.ndarray, period: int) -> np.ndarray:
     """
     Volume Weighted Moving Average using O(n) rolling sums algorithm
@@ -670,7 +638,7 @@ def vwma_optimized(data: np.ndarray, volume: np.ndarray, period: int) -> np.ndar
     return result
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def cmo_optimized(data: np.ndarray, period: int) -> np.ndarray:
     """
     Chande Momentum Oscillator using O(n) rolling sums algorithm
@@ -743,7 +711,7 @@ def cmo_optimized(data: np.ndarray, period: int) -> np.ndarray:
     return result
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def kama_optimized(data: np.ndarray, period: int = 10, fast_sc: float = 2.0, slow_sc: float = 30.0) -> np.ndarray:
     """
     Kaufman's Adaptive Moving Average using O(n) rolling volatility calculation
@@ -812,7 +780,7 @@ def kama_optimized(data: np.ndarray, period: int = 10, fast_sc: float = 2.0, slo
     return result
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def ulcer_index_optimized(data: np.ndarray, period: int) -> np.ndarray:
     """
     Improved O(n×period) Ulcer Index using running peak calculation
@@ -854,7 +822,7 @@ def ulcer_index_optimized(data: np.ndarray, period: int) -> np.ndarray:
     return result
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def exrem(primary: np.ndarray, secondary: np.ndarray) -> np.ndarray:
     """
     Excess Removal function - eliminates excessive signals
@@ -885,7 +853,7 @@ def exrem(primary: np.ndarray, secondary: np.ndarray) -> np.ndarray:
     return result
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def flip(primary: np.ndarray, secondary: np.ndarray) -> np.ndarray:
     """
     Flip function - creates a toggle state based on two signals
@@ -916,7 +884,7 @@ def flip(primary: np.ndarray, secondary: np.ndarray) -> np.ndarray:
     return result
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def valuewhen(expr: np.ndarray, array: np.ndarray, n: int = 1) -> np.ndarray:
     """
     Returns the value of array when expr was true for the nth most recent time
@@ -963,7 +931,7 @@ def valuewhen(expr: np.ndarray, array: np.ndarray, n: int = 1) -> np.ndarray:
     return result
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def rising(data: np.ndarray, length: int) -> np.ndarray:
     """
     Check if data is rising (current value > value n periods ago)
@@ -986,11 +954,11 @@ def rising(data: np.ndarray, length: int) -> np.ndarray:
     for i in range(length, n):
         if not np.isnan(data[i]) and not np.isnan(data[i - length]):
             result[i] = data[i] > data[i - length]
-    
+
     return result
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def falling(data: np.ndarray, length: int) -> np.ndarray:
     """
     Check if data is falling (current value < value n periods ago)
@@ -1013,11 +981,11 @@ def falling(data: np.ndarray, length: int) -> np.ndarray:
     for i in range(length, n):
         if not np.isnan(data[i]) and not np.isnan(data[i - length]):
             result[i] = data[i] < data[i - length]
-    
+
     return result
 
 
-@njit(fastmath=True, cache=True)
+@njit(cache=True, nogil=True)
 def cross(series1: np.ndarray, series2: np.ndarray) -> np.ndarray:
     """
     Check if series1 crosses series2 (either direction)
@@ -1041,13 +1009,10 @@ def cross(series1: np.ndarray, series2: np.ndarray) -> np.ndarray:
     for i in range(1, n):
         if (not np.isnan(series1[i]) and not np.isnan(series2[i]) and
             not np.isnan(series1[i-1]) and not np.isnan(series2[i-1])):
-            
-            # Check for crossover (series1 crosses above series2)
+
             crossover_condition = (series1[i] > series2[i] and series1[i-1] <= series2[i-1])
-            
-            # Check for crossunder (series1 crosses below series2)  
             crossunder_condition = (series1[i] < series2[i] and series1[i-1] >= series2[i-1])
-            
+
             result[i] = crossover_condition or crossunder_condition
     
     return result

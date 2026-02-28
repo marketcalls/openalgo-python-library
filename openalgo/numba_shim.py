@@ -1,7 +1,7 @@
 """Shim that upgrades legacy @jit decorators to modern njit fast paths.
 
 This lets existing code using `from numba import jit` automatically gain
-fastmath and caching without touching every file.  It also adds an easy
+caching and nogil without touching every file.  It also adds an easy
 way to request parallel loops simply by passing ``parallel=True``.
 """
 
@@ -17,13 +17,14 @@ def jit(*args, **kwargs):  # type: ignore[override]
     ... def foo(x): ...
 
     This shim ensures:
-    • nopython=True by default (so we stay in compiled mode)
-    • fastmath=True for SIMD optimisations
-    • cache=True so the kernel is stored on disk after first compile
-    All existing keyword arguments still work and can override these
-    defaults (e.g. parallel=True).
+    - nopython=True  (stay in compiled mode)
+    - cache=True     (persist compiled kernels to disk)
+    - nogil=True     (release GIL so threads can run concurrently)
+
+    fastmath is deliberately OFF to preserve IEEE 754 NaN semantics.
+    np.isnan() silently returns wrong results under fastmath=True.
     """
     kwargs.pop("nopython", None)
-    kwargs.setdefault("fastmath", True)
     kwargs.setdefault("cache", True)
+    kwargs.setdefault("nogil", True)
     return njit(*args, **kwargs)

@@ -14,13 +14,12 @@ from .volatility import BollingerBands
 
 class OBV(BaseIndicator):
     """
-    On Balance Volume (TradingView Pine Script Implementation)
-    
+    On Balance Volume
+
     OBV is a momentum indicator that uses volume flow to predict changes in stock price.
-    Uses the TradingView Pine Script formula: obv = ta.cum(math.sign(ta.change(src)) * volume)
-    
+
     Formula:
-    sign = 1 if close > close[1], -1 if close < close[1], 0 if close == close[1]
+    sign = 1 if close >= close[1], -1 if close < close[1]
     obv = cumsum(sign * volume)
     """
     
@@ -30,24 +29,19 @@ class OBV(BaseIndicator):
     @staticmethod
     @jit(nopython=True)
     def _calculate_obv(close: np.ndarray, volume: np.ndarray) -> np.ndarray:
-        """Numba optimized OBV calculation (TradingView Pine Script formula)"""
+        """Numba optimized OBV calculation"""
         n = len(close)
         obv = np.empty(n)
         
         # First value is 0 (no previous close to compare)
         obv[0] = 0.0
         
-        # Calculate OBV using TradingView formula: cum(sign(change(close)) * volume)
         for i in range(1, n):
-            # Calculate sign of price change
-            if close[i] > close[i-1]:
-                sign = 1.0
-            elif close[i] < close[i-1]:
+            if close[i] < close[i-1]:
                 sign = -1.0
             else:
-                sign = 0.0
-            
-            # Cumulative sum of (sign * volume)
+                sign = 1.0
+
             obv[i] = obv[i-1] + (sign * float(volume[i]))
         
         return obv

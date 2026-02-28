@@ -5,10 +5,10 @@ OpenAlgo Technical Indicators - Momentum Indicators
 
 import numpy as np
 import pandas as pd
-from numba import jit
+from openalgo.numba_shim import jit
 from typing import Union, Tuple, Optional
 from .base import BaseIndicator
-from .utils import ema
+from .utils import ema, highest, lowest, sma, rolling_sum
 
 
 @jit(nopython=True, cache=True)
@@ -196,44 +196,64 @@ class Stochastic(BaseIndicator):
     
     @staticmethod
     @jit(nopython=True)
-    def _calculate_stochastic(high: np.ndarray, low: np.ndarray, close: np.ndarray,
-                             k_period: int, d_period: int) -> Tuple[np.ndarray, np.ndarray]:
-        """Numba optimized Stochastic calculation"""
+    def _calculate_stochastic(close: np.ndarray,
+                             k_period: int, smooth_k: int, d_period: int,
+                             hh: np.ndarray, ll: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Numba optimized Stochastic using pre-computed highest/lowest.
+
+        Returns (slow_k, slow_d) where:
+          fast_k  = raw stochastic
+          slow_k  = SMA(fast_k, smooth_k)   ← returned as %K
+          slow_d  = SMA(slow_k, d_period)    ← returned as %D
+
+        Uses index arithmetic to avoid NaN checks (fastmath-safe).
+        """
         n = len(close)
-        k_percent = np.full(n, np.nan)
-        d_percent = np.full(n, np.nan)
-        
-        # Calculate %K
-        for i in range(k_period - 1, n):
-            highest_high = high[i - k_period + 1:i + 1].max()
-            lowest_low = low[i - k_period + 1:i + 1].min()
-            
-            if highest_high != lowest_low:
-                k_percent[i] = 100 * (close[i] - lowest_low) / (highest_high - lowest_low)
+        fast_k = np.full(n, np.nan)
+
+        fk_start = k_period - 1  # first valid fast_k index
+
+        # Fast %K from pre-computed highest high / lowest low
+        for i in range(fk_start, n):
+            if hh[i] != ll[i]:
+                fast_k[i] = 100.0 * (close[i] - ll[i]) / (hh[i] - ll[i])
             else:
-                k_percent[i] = 50.0  # Default when range is zero
-        
-        # Calculate %D (SMA of %K)
-        for i in range(k_period + d_period - 2, n):
-            d_sum = 0.0
-            count = 0
-            for j in range(d_period):
-                idx = i - j
-                if idx >= 0 and not np.isnan(k_percent[idx]):
-                    d_sum += k_percent[idx]
-                    count += 1
-            if count > 0:
-                d_percent[i] = d_sum / count
-        
-        return k_percent, d_percent
-    
+                fast_k[i] = 50.0
+
+        # Slow %K = SMA(fast_k, smooth_k)
+        slow_k = np.full(n, np.nan)
+        sk_start = fk_start + smooth_k - 1  # first valid slow_k index
+        if sk_start < n:
+            sk_sum = 0.0
+            for j in range(fk_start, fk_start + smooth_k):
+                sk_sum += fast_k[j]
+            slow_k[sk_start] = sk_sum / smooth_k
+            for i in range(sk_start + 1, n):
+                sk_sum += fast_k[i] - fast_k[i - smooth_k]
+                slow_k[i] = sk_sum / smooth_k
+
+        # Slow %D = SMA(slow_k, d_period)
+        slow_d = np.full(n, np.nan)
+        sd_start = sk_start + d_period - 1  # first valid slow_d index
+        if sd_start < n:
+            sd_sum = 0.0
+            for j in range(sk_start, sk_start + d_period):
+                sd_sum += slow_k[j]
+            slow_d[sd_start] = sd_sum / d_period
+            for i in range(sd_start + 1, n):
+                sd_sum += slow_k[i] - slow_k[i - d_period]
+                slow_d[i] = sd_sum / d_period
+
+        return slow_k, slow_d
+
     def calculate(self, high: Union[np.ndarray, pd.Series, list],
                  low: Union[np.ndarray, pd.Series, list],
                  close: Union[np.ndarray, pd.Series, list],
-                 k_period: int = 14, d_period: int = 3) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series]]:
+                 k_period: int = 14, smooth_k: int = 3,
+                 d_period: int = 3) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series]]:
         """
         Calculate Stochastic Oscillator
-        
+
         Parameters:
         -----------
         high : Union[np.ndarray, pd.Series, list]
@@ -243,10 +263,12 @@ class Stochastic(BaseIndicator):
         close : Union[np.ndarray, pd.Series, list]
             Closing prices
         k_period : int, default=14
-            Period for %K calculation
+            Lookback period for raw (fast) %K
+        smooth_k : int, default=3
+            Smoothing period for %K (SMA of fast %K)
         d_period : int, default=3
-            Period for %D calculation (SMA of %K)
-            
+            Period for %D calculation (SMA of smoothed %K)
+
         Returns:
         --------
         Union[Tuple[np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series]]
@@ -255,16 +277,22 @@ class Stochastic(BaseIndicator):
         high_data, input_type, index = self.validate_input(high)
         low_data, _, _ = self.validate_input(low)
         close_data, _, _ = self.validate_input(close)
-        
+
         # Align arrays
         high_data, low_data, close_data = self.align_arrays(high_data, low_data, close_data)
-        
+
         # Validate periods
         self.validate_period(k_period, len(close_data))
         if d_period <= 0:
             raise ValueError(f"d_period must be positive, got {d_period}")
-        
-        results = self._calculate_stochastic(high_data, low_data, close_data, k_period, d_period)
+        if smooth_k <= 0:
+            raise ValueError(f"smooth_k must be positive, got {smooth_k}")
+
+        # Pre-compute O(n) highest/lowest
+        hh = highest(high_data, k_period)
+        ll = lowest(low_data, k_period)
+
+        results = self._calculate_stochastic(close_data, k_period, smooth_k, d_period, hh, ll)
         return self.format_multiple_outputs(results, input_type, index)
 
 
@@ -284,32 +312,36 @@ class CCI(BaseIndicator):
     
     @staticmethod
     @jit(nopython=True)
-    def _calculate_cci(high: np.ndarray, low: np.ndarray, close: np.ndarray, 
+    def _calculate_cci(high: np.ndarray, low: np.ndarray, close: np.ndarray,
                       period: int) -> np.ndarray:
-        """Numba optimized CCI calculation"""
+        """Numba optimized CCI with O(n) rolling sum for SMA"""
         n = len(close)
         cci = np.full(n, np.nan)
-        
-        # Calculate Typical Price
-        typical_price = (high + low + close) / 3.0
-        
-        # Calculate CCI
+
+        # Typical Price
+        tp = (high + low + close) / 3.0
+
+        # Rolling sum for SMA of TP
+        rsum = 0.0
+        for i in range(period):
+            rsum += tp[i]
+
         for i in range(period - 1, n):
-            # SMA of typical price
-            sma_tp = np.mean(typical_price[i - period + 1:i + 1])
-            
-            # Mean deviation
+            if i > period - 1:
+                rsum = rsum + tp[i] - tp[i - period]
+            sma_tp = rsum / period
+
+            # Mean deviation still O(period) per bar — no shortcut exists
             mean_dev = 0.0
             for j in range(period):
-                mean_dev += abs(typical_price[i - period + 1 + j] - sma_tp)
-            mean_dev = mean_dev / period
-            
-            # CCI calculation
-            if mean_dev != 0:
-                cci[i] = (typical_price[i] - sma_tp) / (0.015 * mean_dev)
+                mean_dev += abs(tp[i - period + 1 + j] - sma_tp)
+            mean_dev /= period
+
+            if mean_dev != 0.0:
+                cci[i] = (tp[i] - sma_tp) / (0.015 * mean_dev)
             else:
                 cci[i] = 0.0
-        
+
         return cci
     
     def calculate(self, high: Union[np.ndarray, pd.Series, list],
@@ -362,21 +394,18 @@ class WilliamsR(BaseIndicator):
     
     @staticmethod
     @jit(nopython=True)
-    def _calculate_williams_r(high: np.ndarray, low: np.ndarray, close: np.ndarray,
-                             period: int) -> np.ndarray:
-        """Numba optimized Williams %R calculation"""
+    def _calculate_williams_r(close: np.ndarray, period: int,
+                             hh: np.ndarray, ll: np.ndarray) -> np.ndarray:
+        """Numba optimized Williams %R using pre-computed highest/lowest"""
         n = len(close)
         williams_r = np.full(n, np.nan)
-        
+
         for i in range(period - 1, n):
-            highest_high = high[i - period + 1:i + 1].max()
-            lowest_low = low[i - period + 1:i + 1].min()
-            
-            if highest_high != lowest_low:
-                williams_r[i] = -100 * (highest_high - close[i]) / (highest_high - lowest_low)
+            if hh[i] != ll[i]:
+                williams_r[i] = -100.0 * (hh[i] - close[i]) / (hh[i] - ll[i])
             else:
-                williams_r[i] = -50.0  # Default when range is zero
-        
+                williams_r[i] = -50.0
+
         return williams_r
     
     def calculate(self, high: Union[np.ndarray, pd.Series, list],
@@ -405,12 +434,16 @@ class WilliamsR(BaseIndicator):
         high_data, input_type, index = self.validate_input(high)
         low_data, _, _ = self.validate_input(low)
         close_data, _, _ = self.validate_input(close)
-        
+
         # Align arrays
         high_data, low_data, close_data = self.align_arrays(high_data, low_data, close_data)
         self.validate_period(period, len(close_data))
-        
-        result = self._calculate_williams_r(high_data, low_data, close_data, period)
+
+        # Pre-compute O(n) highest/lowest
+        hh = highest(high_data, period)
+        ll = lowest(low_data, period)
+
+        result = self._calculate_williams_r(close_data, period, hh, ll)
         return self.format_output(result, input_type, index)
 
 
@@ -490,27 +523,13 @@ class ElderRay(BaseIndicator):
     def __init__(self):
         super().__init__("Elder Ray")
     
-    @staticmethod
-    @jit(nopython=True)
-    def _calculate_ema(data: np.ndarray, period: int) -> np.ndarray:
-        """Calculate EMA"""
-        n = len(data)
-        result = np.empty(n)
-        alpha = 2.0 / (period + 1)
-        
-        result[0] = data[0]
-        for i in range(1, n):
-            result[i] = alpha * data[i] + (1 - alpha) * result[i - 1]
-        
-        return result
-    
     def calculate(self, high: Union[np.ndarray, pd.Series, list],
                  low: Union[np.ndarray, pd.Series, list],
                  close: Union[np.ndarray, pd.Series, list],
                  period: int = 13) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series]]:
         """
         Calculate Elder Ray Index
-        
+
         Parameters:
         -----------
         high : Union[np.ndarray, pd.Series, list]
@@ -521,7 +540,7 @@ class ElderRay(BaseIndicator):
             Closing prices
         period : int, default=13
             Period for EMA calculation
-            
+
         Returns:
         --------
         Union[Tuple[np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series]]
@@ -530,16 +549,14 @@ class ElderRay(BaseIndicator):
         high_data, input_type, index = self.validate_input(high)
         low_data, _, _ = self.validate_input(low)
         close_data, _, _ = self.validate_input(close)
-        
+
         high_data, low_data, close_data = self.align_arrays(high_data, low_data, close_data)
-        
-        # Calculate EMA of close
-        ema = self._calculate_ema(close_data, period)
-        
-        # Calculate Bull and Bear Power
-        bull_power = high_data - ema
-        bear_power = low_data - ema
-        
+
+        ema_close = ema(close_data, period)
+
+        bull_power = high_data - ema_close
+        bear_power = low_data - ema_close
+
         results = (bull_power, bear_power)
         return self.format_multiple_outputs(results, input_type, index)
 
@@ -673,45 +690,7 @@ class CRSI(BaseIndicator):
     
     def __init__(self):
         super().__init__("Connors RSI")
-    
-    @staticmethod
-    @jit(nopython=True)
-    def _calculate_rsi(data: np.ndarray, period: int) -> np.ndarray:
-        """Calculate RSI"""
-        n = len(data)
-        result = np.full(n, np.nan)
-        
-        if n < period + 1:
-            return result
-        
-        deltas = np.diff(data)
-        gains = np.where(deltas > 0, deltas, 0.0)
-        losses = np.where(deltas < 0, -deltas, 0.0)
-        
-        avg_gain = np.mean(gains[:period])
-        avg_loss = np.mean(losses[:period])
-        
-        if avg_loss == 0:
-            result[period] = 100.0
-        else:
-            rs = avg_gain / avg_loss
-            result[period] = 100.0 - (100.0 / (1.0 + rs))
-        
-        for i in range(period + 1, n):
-            gain = gains[i - 1]
-            loss = losses[i - 1]
-            
-            avg_gain = (avg_gain * (period - 1) + gain) / period
-            avg_loss = (avg_loss * (period - 1) + loss) / period
-            
-            if avg_loss == 0:
-                result[i] = 100.0
-            else:
-                rs = avg_gain / avg_loss
-                result[i] = 100.0 - (100.0 / (1.0 + rs))
-        
-        return result
-    
+
     @staticmethod
     @jit(nopython=True)
     def _calculate_updown_streak(data: np.ndarray) -> np.ndarray:
@@ -786,11 +765,11 @@ class CRSI(BaseIndicator):
         self.validate_period(max(lenrsi, lenupdown, lenroc), len(validated_data))
         
         # Component 1: RSI of price (ta.rsi(src, lenrsi))
-        price_rsi = self._calculate_rsi(validated_data, lenrsi)
-        
+        price_rsi = RSI._calculate_rsi(validated_data, lenrsi)
+
         # Component 2: RSI of updown streak (ta.rsi(updown(src), lenupdown))
         updown_streak = self._calculate_updown_streak(validated_data)
-        streak_rsi = self._calculate_rsi(updown_streak, lenupdown)
+        streak_rsi = RSI._calculate_rsi(updown_streak, lenupdown)
         
         # Component 3: Percent rank of 1-period ROC (ta.percentrank(ta.roc(src, 1), lenroc))
         # TradingView: ta.roc(src, 1) calculates 1-period rate of change
