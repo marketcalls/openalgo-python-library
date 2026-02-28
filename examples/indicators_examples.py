@@ -70,7 +70,7 @@ def basic_indicators_example():
     
     rsi = ta.rsi(close_np, 14)
     macd_line, signal_line, histogram = ta.macd(close_np, 12, 26, 9)
-    k_percent, d_percent = ta.stochastic(high_np, low_np, close_np, 14, 3)
+    k_percent, d_percent = ta.stochastic(high_np, low_np, close_np, k_period=14, smooth_k=3, d_period=3)
     
     print(f"RSI(14): {rsi[-1]:.2f}")
     print(f"MACD: {macd_line[-1]:.4f}, Signal: {signal_line[-1]:.4f}")
