@@ -612,14 +612,15 @@ for i in range(1, len(macd_line)):
 - `high`: High prices
 - `low`: Low prices
 - `close`: Close prices
-- `k_period`: %K period (default: 14)
-- `d_period`: %D period (default: 3)
+- `k_period`: Lookback period for raw (fast) %K (default: 14)
+- `smooth_k`: Smoothing period for %K — SMA of fast %K (default: 3)
+- `d_period`: Period for %D — SMA of smoothed %K (default: 3)
 
 **Returns**: Tuple of (k_percent, d_percent)
 
 ```python
 # Example
-k_percent, d_percent = ta.stochastic(high, low, close, 14, 3)
+k_percent, d_percent = ta.stochastic(high, low, close, k_period=14, smooth_k=3, d_period=3)
 
 # Identify overbought/oversold
 for i in range(len(k_percent)):
@@ -1509,9 +1510,10 @@ Volume indicators analyze trading volume to confirm price movements and identify
 
 **Description**: Cumulative indicator using volume flow to predict price changes.
 
-**Formula**: 
+**Formula**:
 - If Close > Previous Close: OBV = Previous OBV + Volume
 - If Close < Previous Close: OBV = Previous OBV - Volume
+- If Close = Previous Close: OBV = Previous OBV + Volume (TradingView convention)
 
 **Parameters**:
 - `close`: Close prices
@@ -3474,7 +3476,7 @@ def trading_system(high, low, close, volume):
     # 2. Momentum Confirmation
     rsi = ta.rsi(close, 14)
     macd_line, macd_signal, macd_hist = ta.macd(close, 12, 26, 9)
-    stoch_k, stoch_d = ta.stochastic(high, low, close, 14, 3)
+    stoch_k, stoch_d = ta.stochastic(high, low, close, k_period=14, smooth_k=3, d_period=3)
     
     # 3. Volatility Assessment
     atr = ta.atr(high, low, close, 14)

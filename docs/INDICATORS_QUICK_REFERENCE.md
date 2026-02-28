@@ -46,7 +46,7 @@ import numpy as np
 |-----------|----------|------------|---------|---------|
 | RSI | `ta.rsi(data, period=14)` | data, period=14 | Array (0-100) | `rsi = ta.rsi(close)` |
 | MACD | `ta.macd(data, fast=12, slow=26, signal=9)` | data, fast=12, slow=26, signal=9 | (macd, signal, histogram) | `m, s, h = ta.macd(close)` |
-| Stochastic | `ta.stochastic(high, low, close, k=14, d=3)` | high, low, close, k=14, d=3 | (k%, d%) | `k, d = ta.stochastic(h, l, c)` |
+| Stochastic | `ta.stochastic(high, low, close, k_period=14, smooth_k=3, d_period=3)` | high, low, close, k_period=14, smooth_k=3, d_period=3 | (k%, d%) | `k, d = ta.stochastic(h, l, c)` |
 | CCI | `ta.cci(high, low, close, period=20)` | high, low, close, period=20 | Array | `cci = ta.cci(high, low, close)` |
 | Williams %R | `ta.williams_r(high, low, close, period=14)` | high, low, close, period=14 | Array (-100 to 0) | `wr = ta.williams_r(h, l, c)` |
 | Balance of Power | `ta.bop(open, high, low, close)` | open, high, low, close | Array (-1 to 1) | `bop = ta.bop(o, h, l, c)` |
@@ -408,7 +408,7 @@ class TradingStrategy:
             # Momentum
             'rsi': ta.rsi(close, 14),
             'macd': ta.macd(close, 12, 26, 9),
-            'stoch': ta.stochastic(high, low, close, 14, 3),
+            'stoch': ta.stochastic(high, low, close, k_period=14, smooth_k=3, d_period=3),
             
             # Volatility
             'atr': ta.atr(high, low, close, 14),

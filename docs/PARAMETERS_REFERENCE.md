@@ -268,18 +268,19 @@ macd, signal, hist = ta.macd(close, 10, 20, 7)        # Custom parameters
 
 ### Stochastic Oscillator
 ```python
-ta.stochastic(high, low, close, k_period=14, d_period=3)
+ta.stochastic(high, low, close, k_period=14, smooth_k=3, d_period=3)
 ```
 - **high**: High prices
 - **low**: Low prices
 - **close**: Close prices
-- **k_period**: %K calculation period (default: **14**)
-- **d_period**: %D calculation period (default: **3**)
+- **k_period**: Lookback period for raw (fast) %K (default: **14**)
+- **smooth_k**: Smoothing period for %K — SMA of fast %K (default: **3**)
+- **d_period**: Period for %D calculation — SMA of smoothed %K (default: **3**)
 
 **Example:**
 ```python
-k, d = ta.stochastic(high, low, close)                 # Uses defaults
-k, d = ta.stochastic(high, low, close, 21, 5)         # Custom parameters
+k, d = ta.stochastic(high, low, close)                          # Uses defaults
+k, d = ta.stochastic(high, low, close, k_period=21, smooth_k=3, d_period=5)  # Custom
 ```
 
 ### Commodity Channel Index (CCI)

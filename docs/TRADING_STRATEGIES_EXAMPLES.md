@@ -709,7 +709,7 @@ class TripleScreen:
         macd_line, signal_line, _ = ta.macd(close_tf, 12, 26, 9)
         
         # Oscillators
-        stoch_k, stoch_d = ta.stochastic(high_tf, low_tf, close_tf, 14, 3)
+        stoch_k, stoch_d = ta.stochastic(high_tf, low_tf, close_tf, k_period=14, smooth_k=3, d_period=3)
         
         return {
             'trend': 1 if ema_13[-1] > ema_13[-2] else -1,
