@@ -768,14 +768,29 @@ print(response)
 ### History Example
 
 ```python
-response = client.history(symbol="SBIN", 
-    exchange="NSE", 
-    interval="5m", 
-    start_date="2025-04-01", 
+# Fetch from broker API (default)
+response = client.history(symbol="SBIN",
+    exchange="NSE",
+    interval="5m",
+    start_date="2025-04-01",
     end_date="2025-04-08"
     )
 print(response)
+
+# Fetch from OpenAlgo DuckDB database
+response = client.history(symbol="SBIN",
+    exchange="NSE",
+    interval="5m",
+    start_date="2025-04-01",
+    end_date="2025-04-08",
+    source="db"
+    )
+print(response)
 ```
+
+**Source Parameter:**
+- `source="api"` (default) — Fetches data from broker API
+- `source="db"` — Fetches data from OpenAlgo DuckDB/Historify database (no rate limit, stores 1m & D intervals, computes others on-the-fly)
 
 **History Response**
 

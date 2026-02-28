@@ -229,7 +229,7 @@ class DataAPI(BaseAPI):
 
         return self._make_request("search", payload)
         
-    def history(self, *, symbol, exchange, interval, start_date, end_date, **kwargs):
+    def history(self, *, symbol, exchange, interval, start_date, end_date, source="api", **kwargs):
         """
         Get historical data for a symbol in pandas DataFrame format.
 
@@ -240,6 +240,13 @@ class DataAPI(BaseAPI):
                        Use interval() method to get supported intervals.
         - start_date (str): Start date in format 'YYYY-MM-DD'. Required.
         - end_date (str): End date in format 'YYYY-MM-DD'. Required.
+        - source (str): Data source. 'api' fetches from broker API (default),
+                       'db' fetches from OpenAlgo DuckDB/Historify database.
+                       The db source stores 1m and D intervals physically and
+                       computes all other intervals on-the-fly via SQL aggregation.
+                       Custom intraday intervals (2m, 3m, 4m, 6m, 7m, 2h, 3h, 4h, etc.)
+                       and daily-based intervals (W, M, Q, Y with multiples like 2W, 3M)
+                       are only available with source='db'.
         - **kwargs: Optional additional parameters for future API extensions.
 
         Returns:
@@ -254,7 +261,8 @@ class DataAPI(BaseAPI):
             "exchange": exchange,
             "interval": interval,
             "start_date": start_date,
-            "end_date": end_date
+            "end_date": end_date,
+            "source": source
         }
         # Add any additional kwargs
         for key, value in kwargs.items():
