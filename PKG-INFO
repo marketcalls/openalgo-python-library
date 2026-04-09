@@ -56,6 +56,12 @@ A Python library for algorithmic trading using OpenAlgo's REST APIs. This librar
 pip install openalgo
 ```
 
+For JIT-accelerated technical indicators (requires numba):
+
+```bash
+pip install openalgo[indicators]
+```
+
 ## Quick Start
 
 ```python
