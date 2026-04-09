@@ -17,11 +17,11 @@ from .indicators import ta
 # ------------------------------------------------------------------
 # Speed patch: upgrade all legacy @jit decorators project-wide
 # ------------------------------------------------------------------
-from .numba_shim import jit as _jit_shim  # noqa: E402
-import numba as _nb  # noqa: E402
-from numba import prange as _prange  # noqa: E402
+from .numba_shim import jit as _jit_shim, prange as _prange, HAS_NUMBA  # noqa: E402
 
-_nb.jit = _jit_shim  # monkey-patch once at import time
+if HAS_NUMBA:
+    import numba as _nb  # noqa: E402
+    _nb.jit = _jit_shim  # monkey-patch once at import time
 
 # Make shim available as openalgo.nbjit if users want it explicitly
 nbjit = _jit_shim
@@ -87,7 +87,7 @@ class api(OrderAPI, DataAPI, AccountAPI, FeedAPI, OptionsAPI, TelegramAPI, Utili
         self.quotes_callback = None
         self.depth_callback = None
 
-__version__ = "1.0.46"
+__version__ = "1.0.47"
 
 # Export main components for easy access
-__all__ = ['api', 'Strategy', 'ta', 'nbjit', 'prange']
+__all__ = ['api', 'Strategy', 'ta', 'nbjit', 'prange', 'HAS_NUMBA']

@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="openalgo",
-    version="1.0.46",
+    version="1.0.47",
     author="Rajandran R",
     author_email="rajandran@openalgo.in",
     description="A Python library for interacting with OpenAlgo's trading APIs with high-performance technical indicators",
@@ -15,8 +15,10 @@ setup(
         "pandas>=1.2.0",
         "websocket-client>=1.8.0",
         "numpy>=2.0.0",
-        "numba>=0.63.0b1"
     ],
+    extras_require={
+        "indicators": ["numba>=0.63.0b1"],
+    },
     classifiers=[
         "Development Status :: 5 - Production/Stable",
         "Intended Audience :: Developers",

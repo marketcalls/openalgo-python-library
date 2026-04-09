@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: openalgo
-Version: 1.0.46
+Version: 1.0.47
 Summary: A Python library for interacting with OpenAlgo's trading APIs with high-performance technical indicators
 Home-page: https://openalgo.in
 Author: Rajandran R
@@ -31,7 +31,8 @@ Requires-Dist: httpx>=0.23.0
 Requires-Dist: pandas>=1.2.0
 Requires-Dist: websocket-client>=1.8.0
 Requires-Dist: numpy>=2.0.0
-Requires-Dist: numba>=0.61.0
+Provides-Extra: indicators
+Requires-Dist: numba>=0.63.0b1; extra == "indicators"
 Dynamic: author
 Dynamic: author-email
 Dynamic: classifier

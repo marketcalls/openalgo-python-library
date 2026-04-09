@@ -5,7 +5,7 @@ OpenAlgo Technical Indicators - Volume Indicators
 
 import numpy as np
 import pandas as pd
-from numba import jit
+from openalgo.numba_shim import jit
 from typing import Union, Tuple, Optional
 from .base import BaseIndicator
 from .trend import SMA, EMA, WMA
