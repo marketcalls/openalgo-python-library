@@ -125,8 +125,16 @@ class FeedAPI(BaseAPI):
                 on_close=on_close
             )
             
-            # Start WebSocket connection in a separate thread
-            self.ws_thread = threading.Thread(target=self.ws.run_forever)
+            # Start WebSocket connection in a separate thread.
+            # ping_interval sends a WebSocket ping every 20s so the OS-level TCP
+            # connection cannot become a silent "zombie" (broker stops streaming
+            # ticks but the socket appears OPEN with no error). ping_timeout
+            # closes and triggers on_close if the pong is not received within
+            # 10s, allowing the caller to detect and reconnect.
+            self.ws_thread = threading.Thread(
+                target=self.ws.run_forever,
+                kwargs={"ping_interval": 20, "ping_timeout": 10},
+            )
             self.ws_thread.daemon = True
             self.ws_thread.start()
             
