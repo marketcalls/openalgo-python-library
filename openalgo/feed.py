@@ -7,7 +7,7 @@ OpenAlgo WebSocket API Documentation - Feed Methods
 import json
 import threading
 import time
-from typing import List, Dict, Any, Callable, Optional
+from typing import List, Dict, Any, Callable, Optional, Tuple
 import websocket
 from .base import BaseAPI
 
@@ -17,7 +17,7 @@ class FeedAPI(BaseAPI):
     Inherits from the BaseAPI class.
     """
 
-    def __init__(self, api_key, host="http://127.0.0.1:5000", version="v1", ws_port=8765, ws_url=None, verbose=False):
+    def __init__(self, api_key, host="http://127.0.0.1:5000", version="v1", ws_port=8765, ws_url=None, verbose=False, auto_reconnect=True):
         """
         Initialize the FeedAPI object with API key and optionally a host URL, API version, and WebSocket details.
 
@@ -31,6 +31,12 @@ class FeedAPI(BaseAPI):
             - 0 or False: Silent mode (errors only)
             - 1 or True: Basic info (connection, auth, subscription status)
             - 2: Full debug (all market data updates)
+        - auto_reconnect (bool): If True (default), the SDK transparently
+            reconnects after a drop, re-authenticates, and replays all active
+            subscriptions with exponential backoff. Existing strategies will
+            survive network blips and broker session refreshes without any
+            extra code. Set to False to keep the previous manual-reconnect
+            behaviour.
         """
         super().__init__(api_key, host, version)
 
@@ -77,6 +83,16 @@ class FeedAPI(BaseAPI):
         self.quotes_callback = None
         self.depth_callback = None
 
+        # Auto-reconnect state (private, additive — does not change any
+        # existing public attribute or behaviour).
+        self.auto_reconnect = bool(auto_reconnect)
+        self._shutting_down = False
+        self._reconnect_thread = None
+        self._reconnect_lock = threading.Lock()
+        # Active subscription registry keyed by mode -> {(exchange, symbol): instrument_dict}
+        # Replayed verbatim on reconnect.
+        self._active_subs: Dict[int, Dict[Tuple[str, str], Dict[str, Any]]] = {1: {}, 2: {}, 3: {}}
+
     def _log(self, level: int, category: str, message: str) -> None:
         """
         Internal logging method with verbosity control.
@@ -95,14 +111,26 @@ class FeedAPI(BaseAPI):
     def connect(self) -> bool:
         """
         Connect to the WebSocket server and authenticate.
-        
+
         Returns:
             bool: True if connection and authentication are successful, False otherwise.
+        """
+        # User-initiated connect resets the shutdown flag so auto-reconnect
+        # is armed. (disconnect() sets _shutting_down=True to suppress it.)
+        self._shutting_down = False
+        return self._do_connect()
+
+    def _do_connect(self) -> bool:
+        """
+        Internal: open one WebSocket connection, start the read thread, and
+        wait for authentication. Used by both connect() and the reconnect
+        loop. Public surface (self.ws, self.ws_thread, self.connected,
+        self.authenticated) is unchanged.
         """
         try:
             def on_message(ws, message):
                 self._process_message(message)
-                
+
             def on_error(ws, error):
                 self._log(1, "ERROR", f"WebSocket error: {error}")
 
@@ -115,7 +143,12 @@ class FeedAPI(BaseAPI):
                 self._log(1, "WS", f"Disconnected from {self.ws_url}")
                 self.connected = False
                 self.authenticated = False
-            
+                # Schedule auto-reconnect unless the user called disconnect()
+                # or auto_reconnect is disabled. Any registered subscriptions
+                # will be replayed once the new connection authenticates.
+                if self.auto_reconnect and not self._shutting_down:
+                    self._schedule_reconnect()
+
             # Initialize WebSocket connection
             self.ws = websocket.WebSocketApp(
                 self.ws_url,
@@ -124,7 +157,7 @@ class FeedAPI(BaseAPI):
                 on_open=on_open,
                 on_close=on_close
             )
-            
+
             # Start WebSocket connection in a separate thread.
             # ping_interval sends a WebSocket ping every 20s so the OS-level TCP
             # connection cannot become a silent "zombie" (broker stops streaming
@@ -137,31 +170,33 @@ class FeedAPI(BaseAPI):
             )
             self.ws_thread.daemon = True
             self.ws_thread.start()
-            
+
             # Wait for connection to establish
             timeout = 5
             start_time = time.time()
             while not self.connected and time.time() - start_time < timeout:
                 time.sleep(0.1)
-            
+
             if not self.connected:
                 self._log(1, "ERROR", "Failed to connect to WebSocket server")
                 return False
-                
+
             # Wait for authentication to complete
             timeout = 5
             start_time = time.time()
             while not self.authenticated and time.time() - start_time < timeout and self.connected:
                 time.sleep(0.1)
-                
+
             return self.authenticated
-            
+
         except Exception as e:
             self._log(1, "ERROR", f"Error connecting to WebSocket: {e}")
             return False
 
     def disconnect(self) -> None:
         """Disconnect from the WebSocket server."""
+        # Mark a graceful shutdown so on_close does not trigger auto-reconnect.
+        self._shutting_down = True
         if self.ws:
             self.ws.close()
             # Wait for websocket to close
@@ -172,6 +207,113 @@ class FeedAPI(BaseAPI):
             self.ws = None
             self.connected = False
             self.authenticated = False
+
+    def _schedule_reconnect(self) -> None:
+        """
+        Spawn the reconnect thread if one is not already running. Called from
+        on_close. No-op when auto_reconnect is disabled or the user has
+        called disconnect().
+        """
+        with self._reconnect_lock:
+            if self._shutting_down or not self.auto_reconnect:
+                return
+            if self._reconnect_thread is not None and self._reconnect_thread.is_alive():
+                return
+            self._reconnect_thread = threading.Thread(
+                target=self._reconnect_loop,
+                name="openalgo-ws-reconnect",
+                daemon=True,
+            )
+            self._reconnect_thread.start()
+
+    def _reconnect_loop(self) -> None:
+        """
+        Reconnect with exponential backoff, then replay every active
+        subscription. Stops when the user calls disconnect() or a connection
+        is fully re-authenticated.
+        """
+        # Exponential backoff schedule (seconds), capped at 60s.
+        backoffs = [1, 2, 5, 10, 30, 60]
+        attempt = 0
+        while not self._shutting_down and not self.authenticated:
+            delay = backoffs[min(attempt, len(backoffs) - 1)]
+            self._log(1, "WS", f"Reconnect attempt {attempt + 1} in {delay}s...")
+            # Sleep in small slices so a disconnect() is responsive.
+            slept = 0.0
+            while slept < delay and not self._shutting_down:
+                time.sleep(0.2)
+                slept += 0.2
+            if self._shutting_down:
+                return
+            try:
+                ok = self._do_connect()
+                if ok:
+                    self._log(1, "WS", "Reconnected and re-authenticated.")
+                    self._replay_subscriptions()
+                    return
+            except Exception as e:
+                self._log(1, "ERROR", f"Reconnect attempt {attempt + 1} failed: {e}")
+            attempt += 1
+
+    def _replay_subscriptions(self) -> None:
+        """
+        Re-issue every previously active subscription as a single bulk message
+        per mode. Called once after a successful reconnect+authenticate. The
+        existing self.ltp_callback / self.quote_callback / self.depth_callback
+        references are preserved across reconnects, so callbacks resume
+        firing without any extra plumbing.
+        """
+        for mode, store in self._active_subs.items():
+            if not store:
+                continue
+            instruments = list(store.values())
+            mode_name = {1: "LTP", 2: "Quote", 3: "Depth"}.get(mode, str(mode))
+            self._log(1, "SUB", f"Replaying {len(instruments)} {mode_name} subscription(s) after reconnect")
+            self._send_subscribe_msg(mode, instruments)
+
+    def _send_subscribe_msg(self, mode: int, instruments: List[Dict[str, Any]], depth: int = 5) -> bool:
+        """
+        Send a single bulk subscribe message containing the symbols array.
+        The server has supported `data["symbols"]` since the unified
+        WebSocket proxy was introduced; using the bulk path replaces the
+        previous per-symbol loop with a 100ms forced sleep. Returns True if
+        the frame was sent, False on transport failure.
+        """
+        if not self.ws:
+            return False
+        msg = {
+            "action": "subscribe",
+            "symbols": instruments,
+            "mode": mode,
+            "depth": depth,
+        }
+        try:
+            self.ws.send(json.dumps(msg))
+            return True
+        except Exception as e:
+            self._log(1, "ERROR", f"Error sending bulk subscribe: {e}")
+            return False
+
+    def _send_unsubscribe_msg(self, mode: int, instruments: List[Dict[str, Any]]) -> bool:
+        """
+        Send a single bulk unsubscribe message. Each entry carries its own
+        mode field as required by the server contract (server.py:1187).
+        """
+        if not self.ws:
+            return False
+        msg = {
+            "action": "unsubscribe",
+            "symbols": [
+                {"symbol": i["symbol"], "exchange": i["exchange"], "mode": mode}
+                for i in instruments
+            ],
+        }
+        try:
+            self.ws.send(json.dumps(msg))
+            return True
+        except Exception as e:
+            self._log(1, "ERROR", f"Error sending bulk unsubscribe: {e}")
+            return False
 
     def _authenticate(self) -> None:
         """Authenticate with the WebSocket server using the API key."""
@@ -371,14 +513,14 @@ class FeedAPI(BaseAPI):
     def subscribe_ltp(self, instruments: List[Dict[str, Any]], on_data_received: Optional[Callable] = None) -> bool:
         """
         Subscribe to LTP updates for instruments.
-        
+
         Args:
             instruments: List of instrument dictionaries with keys:
                 - exchange (str): Exchange code (e.g., 'NSE', 'BSE', 'NFO')
                 - symbol (str): Trading symbol
                 - exchange_token (str, optional): Exchange token for the instrument
             on_data_received: Callback function for data updates
-                
+
         Returns:
             bool: True if subscription successful, False otherwise
         """
@@ -394,7 +536,10 @@ class FeedAPI(BaseAPI):
         if on_data_received:
             self.ltp_callback = on_data_received
 
-        # Subscribe to each instrument individually (matching the working test implementation)
+        # Validate inputs and register in the active-subscription store
+        # (used for replay across reconnects). Behaviour preserved: invalid
+        # instruments are logged and skipped just like the previous loop.
+        valid: List[Dict[str, Any]] = []
         for instrument in instruments:
             exchange = instrument.get("exchange")
             symbol = instrument.get("symbol")
@@ -408,26 +553,19 @@ class FeedAPI(BaseAPI):
                 self._log(1, "ERROR", f"Invalid instrument: {instrument}")
                 continue
 
-            # Use the exact same message format as the working test
-            subscription_msg = {
-                "action": "subscribe",
-                "symbol": symbol,
-                "exchange": exchange,
-                "mode": 1,  # 1 for LTP
-                "depth": 5  # Default depth level
-            }
-
+            entry = {"symbol": symbol, "exchange": exchange}
+            valid.append(entry)
+            self._active_subs[1][(exchange, symbol)] = entry
             self._log(1, "SUB", f"Subscribing {exchange}:{symbol} LTP...")
-            try:
-                self.ws.send(json.dumps(subscription_msg))
 
-                # Small delay to ensure the message is processed separately (just like the test)
-                time.sleep(0.1)
-            except Exception as e:
-                self._log(1, "ERROR", f"Error subscribing to {exchange}:{symbol}: {e}")
-                return False
+        if not valid:
+            return False
 
-        return True
+        # Single bulk message instead of N×100ms loop. The unified WebSocket
+        # proxy (server.py) accepts `data["symbols"]` as an array; using it
+        # makes a 200-symbol option-chain subscribe near-instant instead of
+        # ~20 seconds.
+        return self._send_subscribe_msg(mode=1, instruments=valid)
 
     def unsubscribe_ltp(self, instruments: List[Dict[str, Any]]) -> bool:
         """
@@ -445,13 +583,12 @@ class FeedAPI(BaseAPI):
         if not self.connected or not self.authenticated:
             return False
 
-        # Unsubscribe from each instrument individually (matching the working test implementation)
+        valid: List[Dict[str, Any]] = []
         for instrument in instruments:
             exchange = instrument.get("exchange")
             symbol = instrument.get("symbol")
             exchange_token = instrument.get("exchange_token")
 
-            # If only exchange_token is provided, we need to map it to a symbol
             if not symbol and exchange_token:
                 symbol = exchange_token
 
@@ -460,32 +597,22 @@ class FeedAPI(BaseAPI):
                 continue
 
             self._log(1, "UNSUB", f"Unsubscribing {exchange}:{symbol} LTP")
+            valid.append({"symbol": symbol, "exchange": exchange})
 
-            # Use the exact same message format as the working test
-            unsubscribe_msg = {
-                "action": "unsubscribe",
-                "symbol": symbol,
-                "exchange": exchange,
-                "mode": 1  # 1 for LTP
-            }
+            # Drop from active-subscription store so reconnect does not replay.
+            self._active_subs[1].pop((exchange, symbol), None)
 
-            try:
-                self.ws.send(json.dumps(unsubscribe_msg))
+            # Clean up cached LTP data for this symbol (preserved behaviour).
+            with self.lock:
+                symbol_key = f"{exchange}:{symbol}"
+                if symbol_key in self.ltp_data:
+                    del self.ltp_data[symbol_key]
 
-                # Clean up the data
-                with self.lock:
-                    symbol_key = f"{exchange}:{symbol}"
-                    if symbol_key in self.ltp_data:
-                        del self.ltp_data[symbol_key]
+        if not valid:
+            return False
 
-                # Small delay to ensure the message is processed separately
-                time.sleep(0.1)
-            except Exception as e:
-                self._log(1, "ERROR", f"Error unsubscribing {exchange}:{symbol}: {e}")
-                return False
+        return self._send_unsubscribe_msg(mode=1, instruments=valid)
 
-        return True
-        
     def subscribe_quote(self, instruments: List[Dict[str, Any]], on_data_received: Optional[Callable] = None) -> bool:
         """
         Subscribe to Quote updates for instruments.
@@ -508,17 +635,15 @@ class FeedAPI(BaseAPI):
             self._log(1, "ERROR", "Not authenticated with WebSocket server")
             return False
 
-        # Set callback if provided
         if on_data_received:
             self.quote_callback = on_data_received
 
-        # Subscribe to each instrument individually
+        valid: List[Dict[str, Any]] = []
         for instrument in instruments:
             exchange = instrument.get("exchange")
             symbol = instrument.get("symbol")
             exchange_token = instrument.get("exchange_token")
 
-            # If only exchange_token is provided, we need to map it to a symbol
             if not symbol and exchange_token:
                 symbol = exchange_token
 
@@ -526,27 +651,16 @@ class FeedAPI(BaseAPI):
                 self._log(1, "ERROR", f"Invalid instrument: {instrument}")
                 continue
 
-            # Use the same message format as for LTP but with mode 2 for Quote
-            subscription_msg = {
-                "action": "subscribe",
-                "symbol": symbol,
-                "exchange": exchange,
-                "mode": 2,  # 2 for Quote
-                "depth": 5  # Default depth level
-            }
-
+            entry = {"symbol": symbol, "exchange": exchange}
+            valid.append(entry)
+            self._active_subs[2][(exchange, symbol)] = entry
             self._log(1, "SUB", f"Subscribing {exchange}:{symbol} Quote...")
-            try:
-                self.ws.send(json.dumps(subscription_msg))
 
-                # Small delay to ensure the message is processed separately
-                time.sleep(0.1)
-            except Exception as e:
-                self._log(1, "ERROR", f"Error subscribing to {exchange}:{symbol}: {e}")
-                return False
+        if not valid:
+            return False
 
-        return True
-    
+        return self._send_subscribe_msg(mode=2, instruments=valid)
+
     def unsubscribe_quote(self, instruments: List[Dict[str, Any]]) -> bool:
         """
         Unsubscribe from Quote updates for instruments.
@@ -563,13 +677,12 @@ class FeedAPI(BaseAPI):
         if not self.connected or not self.authenticated:
             return False
 
-        # Unsubscribe from each instrument individually
+        valid: List[Dict[str, Any]] = []
         for instrument in instruments:
             exchange = instrument.get("exchange")
             symbol = instrument.get("symbol")
             exchange_token = instrument.get("exchange_token")
 
-            # If only exchange_token is provided, we need to map it to a symbol
             if not symbol and exchange_token:
                 symbol = exchange_token
 
@@ -578,32 +691,20 @@ class FeedAPI(BaseAPI):
                 continue
 
             self._log(1, "UNSUB", f"Unsubscribing {exchange}:{symbol} Quote")
+            valid.append({"symbol": symbol, "exchange": exchange})
 
-            # Use the same message format as for LTP but with mode 2 for Quote
-            unsubscribe_msg = {
-                "action": "unsubscribe",
-                "symbol": symbol,
-                "exchange": exchange,
-                "mode": 2  # 2 for Quote
-            }
+            self._active_subs[2].pop((exchange, symbol), None)
 
-            try:
-                self.ws.send(json.dumps(unsubscribe_msg))
+            with self.lock:
+                symbol_key = f"{exchange}:{symbol}"
+                if symbol_key in self.quotes_data:
+                    del self.quotes_data[symbol_key]
 
-                # Clean up the data
-                with self.lock:
-                    symbol_key = f"{exchange}:{symbol}"
-                    if symbol_key in self.quotes_data:
-                        del self.quotes_data[symbol_key]
+        if not valid:
+            return False
 
-                # Small delay to ensure the message is processed separately
-                time.sleep(0.1)
-            except Exception as e:
-                self._log(1, "ERROR", f"Error unsubscribing {exchange}:{symbol}: {e}")
-                return False
+        return self._send_unsubscribe_msg(mode=2, instruments=valid)
 
-        return True
-        
     def subscribe_depth(self, instruments: List[Dict[str, Any]], on_data_received: Optional[Callable] = None) -> bool:
         """
         Subscribe to Market Depth updates for instruments.
@@ -626,17 +727,15 @@ class FeedAPI(BaseAPI):
             self._log(1, "ERROR", "Not authenticated with WebSocket server")
             return False
 
-        # Set callback if provided
         if on_data_received:
             self.depth_callback = on_data_received
 
-        # Subscribe to each instrument individually
+        valid: List[Dict[str, Any]] = []
         for instrument in instruments:
             exchange = instrument.get("exchange")
             symbol = instrument.get("symbol")
             exchange_token = instrument.get("exchange_token")
 
-            # If only exchange_token is provided, we need to map it to a symbol
             if not symbol and exchange_token:
                 symbol = exchange_token
 
@@ -644,26 +743,15 @@ class FeedAPI(BaseAPI):
                 self._log(1, "ERROR", f"Invalid instrument: {instrument}")
                 continue
 
-            # Use the same message format as for Quote but with mode 3 for Market Depth
-            subscription_msg = {
-                "action": "subscribe",
-                "symbol": symbol,
-                "exchange": exchange,
-                "mode": 3,  # 3 for Market Depth
-                "depth": 5  # Default depth level
-            }
-
+            entry = {"symbol": symbol, "exchange": exchange}
+            valid.append(entry)
+            self._active_subs[3][(exchange, symbol)] = entry
             self._log(1, "SUB", f"Subscribing {exchange}:{symbol} Depth...")
-            try:
-                self.ws.send(json.dumps(subscription_msg))
 
-                # Small delay to ensure the message is processed separately
-                time.sleep(0.1)
-            except Exception as e:
-                self._log(1, "ERROR", f"Error subscribing to {exchange}:{symbol}: {e}")
-                return False
+        if not valid:
+            return False
 
-        return True
+        return self._send_subscribe_msg(mode=3, instruments=valid)
     
     def unsubscribe_depth(self, instruments: List[Dict[str, Any]]) -> bool:
         """
@@ -681,13 +769,12 @@ class FeedAPI(BaseAPI):
         if not self.connected or not self.authenticated:
             return False
 
-        # Unsubscribe from each instrument individually
+        valid: List[Dict[str, Any]] = []
         for instrument in instruments:
             exchange = instrument.get("exchange")
             symbol = instrument.get("symbol")
             exchange_token = instrument.get("exchange_token")
 
-            # If only exchange_token is provided, we need to map it to a symbol
             if not symbol and exchange_token:
                 symbol = exchange_token
 
@@ -696,31 +783,19 @@ class FeedAPI(BaseAPI):
                 continue
 
             self._log(1, "UNSUB", f"Unsubscribing {exchange}:{symbol} Depth")
+            valid.append({"symbol": symbol, "exchange": exchange})
 
-            # Use the same message format as for Quote but with mode 3 for Market Depth
-            unsubscribe_msg = {
-                "action": "unsubscribe",
-                "symbol": symbol,
-                "exchange": exchange,
-                "mode": 3  # 3 for Market Depth
-            }
+            self._active_subs[3].pop((exchange, symbol), None)
 
-            try:
-                self.ws.send(json.dumps(unsubscribe_msg))
+            with self.lock:
+                symbol_key = f"{exchange}:{symbol}"
+                if symbol_key in self.depth_data:
+                    del self.depth_data[symbol_key]
 
-                # Clean up the data
-                with self.lock:
-                    symbol_key = f"{exchange}:{symbol}"
-                    if symbol_key in self.depth_data:
-                        del self.depth_data[symbol_key]
+        if not valid:
+            return False
 
-                # Small delay to ensure the message is processed separately
-                time.sleep(0.1)
-            except Exception as e:
-                self._log(1, "ERROR", f"Error unsubscribing {exchange}:{symbol}: {e}")
-                return False
-
-        return True
+        return self._send_unsubscribe_msg(mode=3, instruments=valid)
 
     def get_ltp(self, exchange: str = None, symbol: str = None) -> Dict[str, Any]:
         """
