@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="openalgo",
-    version="1.0.47",
+    version="1.0.48",
     author="Rajandran R",
     author_email="rajandran@openalgo.in",
     description="A Python library for interacting with OpenAlgo's trading APIs with high-performance technical indicators",
@@ -11,13 +11,13 @@ setup(
     url="https://openalgo.in",
     packages=find_packages(),
     install_requires=[
-        "httpx>=0.23.0",
-        "pandas>=1.2.0",
+        "httpx>=0.27.0",
+        "pandas>=2.2.0",
         "websocket-client>=1.8.0",
         "numpy>=2.0.0",
     ],
     extras_require={
-        "indicators": ["numba>=0.63.0b1"],
+        "indicators": ["numba>=0.63.0"],
     },
     classifiers=[
         "Development Status :: 5 - Production/Stable",
@@ -26,18 +26,13 @@ setup(
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.7",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
-        "Programming Language :: Python :: 3.10",
-        "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
         "Programming Language :: Python :: 3.13",
         "Programming Language :: Python :: 3.14",
         "Topic :: Office/Business :: Financial :: Investment",
         "Topic :: Software Development :: Libraries :: Python Modules",
     ],
-    python_requires=">=3.7",
+    python_requires=">=3.12",
     keywords=[
         "trading",
         "algorithmic-trading",
