@@ -482,6 +482,89 @@ def ma_envelopes(data, period, percentage, ma_type):
     return ma * (1 + mult), ma, ma * (1 - mult)
 
 
+def ema_first_valid(data, period):
+    data = _f(data)
+    period = int(period)
+    if HAVE_RUST:
+        return _rs.ema_first_valid(data, period)
+    n = data.size
+    out = np.full(n, np.nan)
+    alpha = 2.0 / (period + 1.0)
+    fv = -1
+    for i in range(n):
+        if not np.isnan(data[i]):
+            out[i] = data[i]
+            fv = i
+            break
+    if fv == -1:
+        return out
+    for i in range(fv + 1, n):
+        if not np.isnan(data[i]):
+            out[i] = alpha * data[i] + (1.0 - alpha) * out[i - 1]
+    return out
+
+
+def obv(close, volume):
+    close, volume = _f(close), _f(volume)
+    if HAVE_RUST:
+        return _rs.obv(close, volume)
+    n = close.size
+    out = np.zeros(n)
+    sign = np.where(close[1:] < close[:-1], -1.0, 1.0)
+    out[1:] = np.cumsum(sign * volume[1:])
+    return out
+
+
+def adl(high, low, close, volume):
+    high, low, close, volume = _f(high), _f(low), _f(close), _f(volume)
+    if HAVE_RUST:
+        return _rs.adl(high, low, close, volume)
+    n = close.size
+    out = np.full(n, np.nan)
+    rng = high - low
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mfm = np.where(rng != 0, ((close - low) - (high - close)) / np.where(rng == 0, 1, rng), 0.0)
+    out[0] = 0.0
+    out[1:] = np.cumsum((mfm * volume)[1:])
+    return out
+
+
+def cmf(high, low, close, volume, period):
+    high, low, close, volume = _f(high), _f(low), _f(close), _f(volume)
+    if HAVE_RUST:
+        return _rs.cmf(high, low, close, volume, int(period))
+    raise RuntimeError("cmf requires the _oaindicators extension")
+
+
+def mfi(high, low, close, volume, period):
+    high, low, close, volume = _f(high), _f(low), _f(close), _f(volume)
+    if HAVE_RUST:
+        return _rs.mfi(high, low, close, volume, int(period))
+    raise RuntimeError("mfi requires the _oaindicators extension")
+
+
+def emv(high, low, volume, length, divisor):
+    high, low, volume = _f(high), _f(low), _f(volume)
+    if HAVE_RUST:
+        raw = _rs.emv_raw(high, low, volume, float(divisor))
+    else:
+        n = high.size
+        raw = np.full(n, np.nan)
+        for i in range(1, n):
+            chl2 = (high[i] + low[i]) / 2 - (high[i - 1] + low[i - 1]) / 2
+            hlr = high[i] - low[i]
+            raw[i] = divisor * chl2 * hlr / volume[i] if (volume[i] > 0 and hlr > 0) else 0.0
+    return _win_mean(raw, int(length))
+
+
+def force_index(close, volume, length):
+    close, volume = _f(close), _f(volume)
+    n = close.size
+    raw = np.full(n, np.nan)
+    raw[1:] = volume[1:] * (close[1:] - close[:-1])
+    return ema_first_valid(raw, int(length))
+
+
 def _win_mean(data, period):
     return _roll(data, int(period), np.mean)
 

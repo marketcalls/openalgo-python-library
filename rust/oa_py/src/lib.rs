@@ -60,6 +60,71 @@ wrap_hlc_period!(cci, oa_core::cci);
 wrap_hlc_period!(williams_r, oa_core::williams_r);
 
 wrap_period!(percent_rank, oa_core::percent_rank);
+wrap_period!(ema_first_valid, oa_core::ema_first_valid);
+
+#[pyfunction]
+#[pyo3(signature = (close, volume))]
+fn obv<'py>(
+    py: Python<'py>,
+    close: PyReadonlyArray1<'py, f64>,
+    volume: PyReadonlyArray1<'py, f64>,
+) -> PyResult<Py<PyArray1<f64>>> {
+    Ok(oa_core::obv(close.as_slice()?, volume.as_slice()?).into_pyarray_bound(py).unbind())
+}
+
+#[pyfunction]
+#[pyo3(signature = (high, low, close, volume))]
+fn adl<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    close: PyReadonlyArray1<'py, f64>,
+    volume: PyReadonlyArray1<'py, f64>,
+) -> PyResult<Py<PyArray1<f64>>> {
+    let out = oa_core::adl(high.as_slice()?, low.as_slice()?, close.as_slice()?, volume.as_slice()?);
+    Ok(out.into_pyarray_bound(py).unbind())
+}
+
+#[pyfunction]
+#[pyo3(signature = (high, low, close, volume, period))]
+fn cmf<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    close: PyReadonlyArray1<'py, f64>,
+    volume: PyReadonlyArray1<'py, f64>,
+    period: usize,
+) -> PyResult<Py<PyArray1<f64>>> {
+    let out = oa_core::cmf(high.as_slice()?, low.as_slice()?, close.as_slice()?, volume.as_slice()?, period);
+    Ok(out.into_pyarray_bound(py).unbind())
+}
+
+#[pyfunction]
+#[pyo3(signature = (high, low, close, volume, period))]
+fn mfi<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    close: PyReadonlyArray1<'py, f64>,
+    volume: PyReadonlyArray1<'py, f64>,
+    period: usize,
+) -> PyResult<Py<PyArray1<f64>>> {
+    let out = oa_core::mfi(high.as_slice()?, low.as_slice()?, close.as_slice()?, volume.as_slice()?, period);
+    Ok(out.into_pyarray_bound(py).unbind())
+}
+
+#[pyfunction]
+#[pyo3(signature = (high, low, volume, divisor))]
+fn emv_raw<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    volume: PyReadonlyArray1<'py, f64>,
+    divisor: f64,
+) -> PyResult<Py<PyArray1<f64>>> {
+    let out = oa_core::emv_raw(high.as_slice()?, low.as_slice()?, volume.as_slice()?, divisor);
+    Ok(out.into_pyarray_bound(py).unbind())
+}
 
 #[pyfunction]
 fn updown_streak<'py>(
@@ -368,6 +433,12 @@ fn _oaindicators(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(williams_r, m)?)?;
     m.add_function(wrap_pyfunction!(stochastic, m)?)?;
     m.add_function(wrap_pyfunction!(bop, m)?)?;
+    m.add_function(wrap_pyfunction!(ema_first_valid, m)?)?;
+    m.add_function(wrap_pyfunction!(obv, m)?)?;
+    m.add_function(wrap_pyfunction!(adl, m)?)?;
+    m.add_function(wrap_pyfunction!(cmf, m)?)?;
+    m.add_function(wrap_pyfunction!(mfi, m)?)?;
+    m.add_function(wrap_pyfunction!(emv_raw, m)?)?;
     m.add_function(wrap_pyfunction!(fisher, m)?)?;
     m.add_function(wrap_pyfunction!(updown_streak, m)?)?;
     m.add_function(wrap_pyfunction!(percent_rank, m)?)?;

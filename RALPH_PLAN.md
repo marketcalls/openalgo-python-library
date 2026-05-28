@@ -97,8 +97,12 @@ RUST_MIGRATION_TRACKER.csv  # 108-row indicator inventory + per-indicator status
         HistoricalVolatility, UlcerIndex, STARC. Per-window mean/std helpers
         (_win_mean/_win_std) in _backend for bit-exactness; mass/ulcer compose rust.
         ALL bit-exact (0.0) incl HV log. **VOLATILITY MODULE COMPLETE.**
-  - [ ] volume / oscillators / statistics / hybrid modules.
-        44 of ~90 indicators migrated. (TREND, MOMENTUM, VOLATILITY complete.)
+  - [x] Volume batch 1: OBV, ADL, CMF, MFI, EMV, FI. New kernels obv/adl/cmf/mfi/
+        emv_raw/ema_first_valid (cargo 32/32). All bit-exact (volume_parity.py).
+  - [ ] Volume batch 2: OBVSmoothed, VWAP (session-anchored - read carefully),
+        NVI, PVI, VOLOSC, VROC, KlingerVolumeOscillator, PriceVolumeTrend, RVOL.
+  - [ ] oscillators / statistics / hybrid modules.
+        50 of ~90 indicators migrated. (TREND, MOMENTUM, VOLATILITY complete.)
         NOTE: _backend.frama and _backend.fisher numpy fallbacks raise (rust-only);
         add numpy fallbacks in a later polish pass.
 

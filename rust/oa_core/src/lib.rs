@@ -1071,6 +1071,147 @@ pub fn williams_r(high: &[f64], low: &[f64], close: &[f64], period: usize) -> Ve
     out
 }
 
+// ============================================================================
+// Volume indicators
+// ============================================================================
+
+/// On Balance Volume. obv[0]=0; sign=+1 if close>=prev else -1; cumulative.
+pub fn obv(close: &[f64], volume: &[f64]) -> Vec<f64> {
+    let n = close.len();
+    let mut r = vec![0.0f64; n];
+    for i in 1..n {
+        let sign = if close[i] < close[i - 1] { -1.0 } else { 1.0 };
+        r[i] = r[i - 1] + sign * volume[i];
+    }
+    r
+}
+
+/// Accumulation/Distribution Line. Seed 0; cumulative money-flow volume.
+pub fn adl(high: &[f64], low: &[f64], close: &[f64], volume: &[f64]) -> Vec<f64> {
+    let n = close.len();
+    let mut r = nan_vec(n);
+    if n == 0 {
+        return r;
+    }
+    r[0] = 0.0;
+    for i in 1..n {
+        let mfm = if high[i] != low[i] {
+            ((close[i] - low[i]) - (high[i] - close[i])) / (high[i] - low[i])
+        } else {
+            0.0
+        };
+        r[i] = r[i - 1] + mfm * volume[i];
+    }
+    r
+}
+
+/// Chaikin Money Flow: sum(MFV, period) / sum(volume, period) per window.
+pub fn cmf(high: &[f64], low: &[f64], close: &[f64], volume: &[f64], period: usize) -> Vec<f64> {
+    let n = close.len();
+    let mut r = nan_vec(n);
+    if period == 0 || n < period {
+        return r;
+    }
+    for i in period - 1..n {
+        let mut smfv = 0.0;
+        let mut sv = 0.0;
+        for j in 0..period {
+            let idx = i - period + 1 + j;
+            let mfm = if high[idx] != low[idx] {
+                ((close[idx] - low[idx]) - (high[idx] - close[idx])) / (high[idx] - low[idx])
+            } else {
+                0.0
+            };
+            smfv += mfm * volume[idx];
+            sv += volume[idx];
+        }
+        r[i] = if sv > 0.0 { smfv / sv } else { 0.0 };
+    }
+    r
+}
+
+/// Money Flow Index (volume-weighted RSI), rolling window of pos/neg money flow.
+pub fn mfi(high: &[f64], low: &[f64], close: &[f64], volume: &[f64], period: usize) -> Vec<f64> {
+    let n = close.len();
+    let mut r = nan_vec(n);
+    if period == 0 {
+        return r;
+    }
+    let tp: Vec<f64> = (0..n)
+        .map(|i| (high[i] + low[i] + close[i]) / 3.0)
+        .collect();
+    let mut pos = vec![0.0f64; n];
+    let mut neg = vec![0.0f64; n];
+    for i in 1..n {
+        let rmf = tp[i] * volume[i];
+        if tp[i] > tp[i - 1] {
+            pos[i] = rmf;
+        } else if tp[i] < tp[i - 1] {
+            neg[i] = rmf;
+        }
+    }
+    let mut ps = 0.0;
+    let mut ns = 0.0;
+    for i in 1..n {
+        ps += pos[i];
+        ns += neg[i];
+        if i >= period {
+            ps -= pos[i - period];
+            ns -= neg[i - period];
+        }
+        if i >= period - 1 {
+            r[i] = if ns == 0.0 {
+                100.0
+            } else {
+                100.0 - 100.0 / (1.0 + ps / ns)
+            };
+        }
+    }
+    r
+}
+
+/// Raw Ease of Movement: divisor * change(hl2) * (high-low) / volume; 0 if vol/range<=0.
+pub fn emv_raw(high: &[f64], low: &[f64], volume: &[f64], divisor: f64) -> Vec<f64> {
+    let n = high.len();
+    let mut r = nan_vec(n);
+    for i in 1..n {
+        let chl2 = (high[i] + low[i]) / 2.0 - (high[i - 1] + low[i - 1]) / 2.0;
+        let hlr = high[i] - low[i];
+        r[i] = if volume[i] > 0.0 && hlr > 0.0 {
+            divisor * chl2 * hlr / volume[i]
+        } else {
+            0.0
+        };
+    }
+    r
+}
+
+/// EMA (alpha=2/(p+1)) seeded at the first non-NaN value; NaN inputs after are skipped
+/// (value held). Matches the FI/force-index EMA helper.
+pub fn ema_first_valid(data: &[f64], period: usize) -> Vec<f64> {
+    let n = data.len();
+    let mut r = nan_vec(n);
+    let alpha = 2.0 / (period as f64 + 1.0);
+    let mut fv = None;
+    for i in 0..n {
+        if !data[i].is_nan() {
+            r[i] = data[i];
+            fv = Some(i);
+            break;
+        }
+    }
+    let fv = match fv {
+        Some(x) => x,
+        None => return r,
+    };
+    for i in fv + 1..n {
+        if !data[i].is_nan() {
+            r[i] = alpha * data[i] + (1.0 - alpha) * r[i - 1];
+        }
+    }
+    r
+}
+
 /// Balance of Power: (close-open)/(high-low) per bar; 0 when high==low.
 pub fn bop(open_: &[f64], high: &[f64], low: &[f64], close: &[f64]) -> Vec<f64> {
     let n = close.len();
@@ -1306,6 +1447,47 @@ mod tests {
         let s = [false, false, true, false];
         assert_eq!(exrem(&p, &s), vec![true, false, false, true]);
         assert_eq!(flip(&p, &s), vec![true, true, false, true]);
+    }
+
+    #[test]
+    fn obv_cumulative() {
+        let c = [10.0, 11.0, 10.5, 10.5];
+        let v = [100.0, 200.0, 50.0, 30.0];
+        let r = obv(&c, &v);
+        approx(r[0], 0.0);
+        approx(r[1], 200.0); // up
+        approx(r[2], 150.0); // down -50
+        approx(r[3], 180.0); // equal -> +1
+    }
+
+    #[test]
+    fn adl_seed_zero() {
+        let h = [10.0, 12.0];
+        let l = [8.0, 9.0];
+        let c = [9.0, 11.0];
+        let v = [100.0, 200.0];
+        let r = adl(&h, &l, &c, &v);
+        approx(r[0], 0.0);
+        assert!(r[1].is_finite());
+    }
+
+    #[test]
+    fn mfi_bounds() {
+        let h: Vec<f64> = (1..=20).map(|x| x as f64 + 1.0).collect();
+        let l: Vec<f64> = (1..=20).map(|x| x as f64 - 1.0).collect();
+        let c: Vec<f64> = (1..=20).map(|x| x as f64).collect();
+        let v = vec![100.0; 20];
+        let r = mfi(&h, &l, &c, &v, 14);
+        assert!(r[12].is_nan());
+        assert!(r[14] >= 0.0 && r[14] <= 100.0);
+    }
+
+    #[test]
+    fn ema_first_valid_skips_leading_nan() {
+        let d = [f64::NAN, 2.0, 4.0, 6.0];
+        let r = ema_first_valid(&d, 3);
+        assert!(r[0].is_nan());
+        approx(r[1], 2.0); // seed at first valid
     }
 
     #[test]

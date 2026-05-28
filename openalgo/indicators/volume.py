@@ -10,6 +10,7 @@ from typing import Union, Tuple, Optional
 from .base import BaseIndicator
 from .trend import SMA, EMA, WMA
 from .volatility import BollingerBands
+from . import _backend
 
 
 class OBV(BaseIndicator):
@@ -69,7 +70,7 @@ class OBV(BaseIndicator):
         # Align arrays
         close_data, volume_data = self.align_arrays(close_data, volume_data)
         
-        result = self._calculate_obv(close_data, volume_data)
+        result = _backend.obv(close_data, volume_data)
         return self.format_output(result, input_type, index)
 
 
@@ -618,7 +619,7 @@ class MFI(BaseIndicator):
         high_data, low_data, close_data, volume_data = self.align_arrays(high_data, low_data, close_data, volume_data)
         self.validate_period(period, len(close_data))
         
-        result = self._calculate_mfi(high_data, low_data, close_data, volume_data, period)
+        result = _backend.mfi(high_data, low_data, close_data, volume_data, period)
         return self.format_output(result, input_type, index)
 
 
@@ -687,7 +688,7 @@ class ADL(BaseIndicator):
         
         high_data, low_data, close_data, volume_data = self.align_arrays(high_data, low_data, close_data, volume_data)
         
-        result = self._calculate_adl(high_data, low_data, close_data, volume_data)
+        result = _backend.adl(high_data, low_data, close_data, volume_data)
         return self.format_output(result, input_type, index)
 
 
@@ -768,7 +769,7 @@ class CMF(BaseIndicator):
         high_data, low_data, close_data, volume_data = self.align_arrays(high_data, low_data, close_data, volume_data)
         self.validate_period(period, len(close_data))
         
-        result = self._calculate_cmf(high_data, low_data, close_data, volume_data, period)
+        result = _backend.cmf(high_data, low_data, close_data, volume_data, period)
         return self.format_output(result, input_type, index)
 
 
@@ -862,12 +863,7 @@ class EMV(BaseIndicator):
         if divisor <= 0:
             raise ValueError(f"Divisor must be positive, got {divisor}")
         
-        # Calculate raw EMV values
-        raw_emv = self._calculate_emv_raw(high_data, low_data, volume_data, float(divisor))
-        
-        # Apply SMA smoothing (TradingView always smooths)
-        smoothed_emv = self._calculate_sma(raw_emv, length)
-        
+        smoothed_emv = _backend.emv(high_data, low_data, volume_data, length, divisor)
         return self.format_output(smoothed_emv, input_type, index)
 
 
@@ -962,12 +958,7 @@ class FI(BaseIndicator):
         if cumulative_volume == 0:
             raise ValueError("No volume is provided by the data vendor.")
         
-        # Calculate raw Force Index: volume * change(close)
-        raw_fi = self._calculate_raw_fi(close_data, volume_data)
-        
-        # Apply EMA smoothing (TradingView: ta.ema(raw_fi, length))
-        smoothed_fi = self._calculate_ema(raw_fi, length)
-        
+        smoothed_fi = _backend.force_index(close_data, volume_data, length)
         return self.format_output(smoothed_fi, input_type, index)
 
 
