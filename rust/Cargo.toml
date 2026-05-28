@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["oa_core"]
+# The PyO3 binding crate (`oa_py`, cdylib -> openalgo._oaindicators) is added as a
+# workspace member once the core kernels are wired to Python via maturin. Kept out
+# of the default workspace for now so `cargo test` does not require a Python link.
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+panic = "abort"

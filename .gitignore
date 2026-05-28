@@ -181,3 +181,7 @@ tmp/
 temp/
 .tmp/
 .temp/
+# Rust build artifacts
+target/
+**/target/
+*.pdb

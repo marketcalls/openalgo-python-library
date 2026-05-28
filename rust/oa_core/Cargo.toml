@@ -1,0 +1,15 @@
+[package]
+name = "oa_core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Zero-dependency Rust core for OpenAlgo technical indicators. Byte-for-byte port of the legacy numba kernels."
+license = "MIT"
+publish = false
+
+[lib]
+name = "oa_core"
+
+[dependencies]
+# Intentionally zero runtime dependencies — keeps the core trivially auditable,
+# fast to compile, and `cargo test`-able without any Python toolchain.
