@@ -63,7 +63,25 @@ def main():
     cmp("kvo.trig", kt, rkt)
     cmp("rvol", b.rvol(v, 20), RVOL._calculate_rvol(v, 20))
 
+    # OBVSmoothed branches + VWAP (public API level, vs independent references)
+    from openalgo import ta
+    from openalgo.indicators.volume import OBVSmoothed, VWAP
+    obv = OBV._calculate_obv(c, v)
+    cmp("obvsm.smma", np.asarray(ta.obv_smoothed(c, v, "SMMA (RMA)", 20)),
+        OBVSmoothed._calculate_rma(obv, 20))
+    cmp("obvsm.sma", np.asarray(ta.obv_smoothed(c, v, "SMA", 20)),
+        np.asarray(ta.sma(OBV._calculate_obv(c, v), 20)))
+    src = (h + lo + c) / 3.0
+    starts = np.zeros(len(c)); starts[0] = 1.0
+    rv, _ = VWAP._calculate_session_vwap(src, v, starts.astype(bool))
+    cmp("vwap", np.asarray(ta.vwap(h, lo, c, v)), rv)
+
     print("\nRESULT:", "ALL VOLUME PARITY PASS" if not FAILS else f"FAILURES: {FAILS}")
+
+
+def _ema_wilder_ref(data, period):
+    from openalgo.indicators.volume import OBVSmoothed
+    return OBVSmoothed._calculate_rma(data, period)
 
 
 def _volosc_ref(v, s, l):

@@ -1075,6 +1075,36 @@ pub fn williams_r(high: &[f64], low: &[f64], close: &[f64], period: usize) -> Ve
 // Volume indicators
 // ============================================================================
 
+/// Session-anchored VWAP. `starts[i] != 0` (or i==0) resets the running sums.
+/// Returns (vwap, stdev) where stdev = sqrt(max(0, E[p^2] - vwap^2)) within session.
+pub fn session_vwap(source: &[f64], volume: &[f64], starts: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    let n = source.len();
+    let mut vwap = nan_vec(n);
+    let mut sd = nan_vec(n);
+    let mut spv = 0.0;
+    let mut sv = 0.0;
+    let mut spv2 = 0.0;
+    for i in 0..n {
+        if starts[i] != 0.0 || i == 0 {
+            spv = 0.0;
+            sv = 0.0;
+            spv2 = 0.0;
+        }
+        spv += source[i] * volume[i];
+        sv += volume[i];
+        spv2 += source[i] * source[i] * volume[i];
+        if sv > 0.0 {
+            vwap[i] = spv / sv;
+            let variance = spv2 / sv - vwap[i].powf(2.0);
+            sd[i] = variance.max(0.0).sqrt();
+        } else {
+            vwap[i] = source[i];
+            sd[i] = 0.0;
+        }
+    }
+    (vwap, sd)
+}
+
 /// On Balance Volume. obv[0]=0; sign=+1 if close>=prev else -1; cumulative.
 pub fn obv(close: &[f64], volume: &[f64]) -> Vec<f64> {
     let n = close.len();

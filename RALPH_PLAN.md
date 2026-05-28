@@ -102,9 +102,13 @@ RUST_MIGRATION_TRACKER.csv  # 108-row indicator inventory + per-indicator status
   - [x] Volume batch 2: NVI, PVI, VOLOSC, VROC, KVO, PVT, RVOL. Composed in _backend
         (cumsum/cumprod + ema/ema_first_valid). PVI fixed via threaded cumprod
         (prepend initial) for bit-exactness. All bit-exact (volume_parity.py).
-  - [ ] Volume remaining: OBVSmoothed (MA/BB overlay), VWAP (session-anchored).
+  - [x] Volume remaining: OBVSmoothed (composes migrated OBV/SMA/EMA/WMA/BB +
+        rma_smma/vwma_strict helpers), VWAP (rust session_vwap kernel; was already
+        numba-free). All bit-exact. **VOLUME MODULE COMPLETE (15/15).**
   - [ ] oscillators / statistics / hybrid modules.
-        57 of ~90 indicators migrated. (TREND, MOMENTUM, VOLATILITY complete.)
+        59 of ~90 indicators migrated. (TREND, MOMENTUM, VOLATILITY, VOLUME complete.)
+        NOTE: PVI._with_signal secondary method still references numba EMA - swap in
+        Phase 3 cleanup along with all remaining _calculate_* numba staticmethods.
         NOTE: _backend.frama and _backend.fisher numpy fallbacks raise (rust-only);
         add numpy fallbacks in a later polish pass.
 

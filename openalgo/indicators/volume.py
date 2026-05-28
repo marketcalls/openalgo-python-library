@@ -203,11 +203,11 @@ class OBVSmoothed(BaseIndicator):
         elif ma_type == "EMA":
             result = self._ema.calculate(obv, ma_length)
         elif ma_type == "SMMA (RMA)":
-            result = self._calculate_rma(obv, ma_length)
+            result = _backend.rma_smma(np.asarray(obv, dtype=np.float64), ma_length)
         elif ma_type == "WMA":
             result = self._wma.calculate(obv, ma_length)
         elif ma_type == "VWMA":
-            result = self._calculate_vwma(obv, volume_data, ma_length)
+            result = _backend.vwma_strict(np.asarray(obv, dtype=np.float64), volume_data, ma_length)
         else:
             raise ValueError(f"Unsupported ma_type: {ma_type}")
         
@@ -421,7 +421,7 @@ class VWAP(BaseIndicator):
             session_starts_array[0] = True
         
         # Calculate VWAP
-        vwap, _ = self._calculate_session_vwap(source, volume_data, session_starts_array)
+        vwap, _ = _backend.session_vwap(source, volume_data, session_starts_array)
         
         return self.format_output(vwap, input_type, index)
     
@@ -503,7 +503,7 @@ class VWAP(BaseIndicator):
             session_starts_array[0] = True
         
         # Calculate VWAP and standard deviation
-        vwap, stdev = self._calculate_session_vwap(source, volume_data, session_starts_array)
+        vwap, stdev = _backend.session_vwap(source, volume_data, session_starts_array)
         
         # Calculate bands
         upper_bands = []

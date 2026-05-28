@@ -565,6 +565,74 @@ def force_index(close, volume, length):
     return ema_first_valid(raw, int(length))
 
 
+def rma_smma(data, length):
+    """RMA/SMMA in the alpha=1/length, alpha*v+(1-alpha)*prev form (OBVSmoothed)."""
+    data = _f(data)
+    length = int(length)
+    n = data.size
+    out = np.full(n, np.nan)
+    fv = 0
+    for i in range(n):
+        if not np.isnan(data[i]):
+            fv = i
+            break
+    s = 0.0
+    cnt = 0
+    for i in range(fv, min(fv + length, n)):
+        if not np.isnan(data[i]):
+            s += data[i]
+            cnt += 1
+    if cnt == length:
+        out[fv + length - 1] = s / length
+        alpha = 1.0 / length
+        for i in range(fv + length, n):
+            if not np.isnan(data[i]):
+                out[i] = alpha * data[i] + (1.0 - alpha) * out[i - 1]
+    return out
+
+
+def session_vwap(source, volume, starts):
+    source, volume = _f(source), _f(volume)
+    starts = np.ascontiguousarray(starts, dtype=np.float64)
+    if HAVE_RUST:
+        return _rs.session_vwap(source, volume, starts)
+    n = source.size
+    vwap = np.full(n, np.nan)
+    sd = np.full(n, np.nan)
+    spv = sv = spv2 = 0.0
+    for i in range(n):
+        if starts[i] != 0.0 or i == 0:
+            spv = sv = spv2 = 0.0
+        spv += source[i] * volume[i]
+        sv += volume[i]
+        spv2 += source[i] * source[i] * volume[i]
+        if sv > 0:
+            vwap[i] = spv / sv
+            sd[i] = np.sqrt(max(0.0, spv2 / sv - vwap[i] ** 2))
+        else:
+            vwap[i] = source[i]
+            sd[i] = 0.0
+    return vwap, sd
+
+
+def vwma_strict(values, volume, length):
+    """Per-window VWMA that skips NaN and yields NaN when window volume <= 0
+    (matches OBVSmoothed._calculate_vwma)."""
+    values, volume = _f(values), _f(volume)
+    length = int(length)
+    n = values.size
+    out = np.full(n, np.nan)
+    for i in range(length - 1, n):
+        sw = sv = 0.0
+        for j in range(i - length + 1, i + 1):
+            if not np.isnan(values[j]) and not np.isnan(volume[j]):
+                sw += values[j] * volume[j]
+                sv += volume[j]
+        if sv > 0:
+            out[i] = sw / sv
+    return out
+
+
 def nvi(close, volume):
     close, volume = _f(close), _f(volume)
     n = close.size

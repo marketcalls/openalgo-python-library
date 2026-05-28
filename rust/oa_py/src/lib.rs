@@ -63,6 +63,18 @@ wrap_period!(percent_rank, oa_core::percent_rank);
 wrap_period!(ema_first_valid, oa_core::ema_first_valid);
 
 #[pyfunction]
+#[pyo3(signature = (source, volume, starts))]
+fn session_vwap<'py>(
+    py: Python<'py>,
+    source: PyReadonlyArray1<'py, f64>,
+    volume: PyReadonlyArray1<'py, f64>,
+    starts: PyReadonlyArray1<'py, f64>,
+) -> PyResult<(Py<PyArray1<f64>>, Py<PyArray1<f64>>)> {
+    let (v, s) = oa_core::session_vwap(source.as_slice()?, volume.as_slice()?, starts.as_slice()?);
+    Ok((v.into_pyarray_bound(py).unbind(), s.into_pyarray_bound(py).unbind()))
+}
+
+#[pyfunction]
 #[pyo3(signature = (close, volume))]
 fn obv<'py>(
     py: Python<'py>,
@@ -434,6 +446,7 @@ fn _oaindicators(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(stochastic, m)?)?;
     m.add_function(wrap_pyfunction!(bop, m)?)?;
     m.add_function(wrap_pyfunction!(ema_first_valid, m)?)?;
+    m.add_function(wrap_pyfunction!(session_vwap, m)?)?;
     m.add_function(wrap_pyfunction!(obv, m)?)?;
     m.add_function(wrap_pyfunction!(adl, m)?)?;
     m.add_function(wrap_pyfunction!(cmf, m)?)?;

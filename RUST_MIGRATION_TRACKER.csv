@@ -51,8 +51,8 @@ ID,Category,Indicator,Public_API,Class,Source_File,Inputs,Parameters,Outputs,TA_
 50,Volatility,STARC Bands,ta.starc,STARC,volatility.py,"high,low,close","ma_period,atr_period,multiplier","upper,mid,lower",—,Yes,Medium,3,Migrated; parity PASS,1e-12 rel,SMA +/- ATR multiple
 51,Volatility,Ultimate Oscillator,ta.ultimate_oscillator,ULTOSC,volatility.py,"high,low,close","period1,period2,period3",series,ULTOSC,No,Medium,2,Migrated; parity PASS,1e-12 rel,Weighted multi-period BP/TR
 52,Volume,On Balance Volume,ta.obv,OBV,volume.py,"close,volume",—,series,OBV,Yes,Low,2,Migrated; parity PASS,bit-exact,Cumulative signed volume
-53,Volume,OBV Smoothed,ta.obv_smoothed,OBVSmoothed,volume.py,"close,volume","ma_type,ma_length,bb_length,bb_mult","obv,bb_upper,bb_lower",—,Yes,Medium,2,Not Started,1e-12 rel,OBV + optional MA/BB overlay
-53b,Volume,VWAP,ta.vwap,VWAP,volume.py,"high,low,close,volume","anchor,source,band mults",series,—,No,High,3,Not Started,1e-9 rel,Session-anchored; bands; needs timestamps
+53,Volume,OBV Smoothed,ta.obv_smoothed,OBVSmoothed,volume.py,"close,volume","ma_type,ma_length,bb_length,bb_mult","obv,bb_upper,bb_lower",—,Yes,Medium,2,Migrated; parity PASS,1e-12 rel,OBV + optional MA/BB overlay
+53b,Volume,VWAP,ta.vwap,VWAP,volume.py,"high,low,close,volume","anchor,source,band mults",series,—,No,High,3,Migrated; parity PASS,1e-9 rel,Session-anchored; bands; needs timestamps
 54,Volume,Money Flow Index,ta.mfi,MFI,volume.py,"high,low,close,volume",period,series,MFI,No,Medium,2,Migrated; parity PASS,1e-12 rel,Volume-weighted RSI
 55,Volume,Accumulation/Distribution,ta.adl,ADL,volume.py,"high,low,close,volume",—,series,AD,Yes,Low,2,Migrated; parity PASS,bit-exact,Cumulative money flow volume
 56,Volume,Chaikin Money Flow,ta.cmf,CMF,volume.py,"high,low,close,volume",period,series,—,No,Low,2,Migrated; parity PASS,1e-12 rel,Sum(MFV)/Sum(vol)
