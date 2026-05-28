@@ -277,7 +277,7 @@ class UO(BaseIndicator):
         
         high_data, low_data, close_data = self.align_arrays(high_data, low_data, close_data)
         
-        result = self._calculate_uo(high_data, low_data, close_data, period1, period2, period3)
+        result = _backend.uo(high_data, low_data, close_data, period1, period2, period3)
         return self.format_output(result, input_type, index)
 
 
@@ -817,8 +817,8 @@ class StochRSI(BaseIndicator):
         validated_data, input_type, index = self.validate_input(data)
         self.validate_period(rsi_period + stoch_period, len(validated_data))
         
-        k_values, d_values = self._calculate_stochrsi(validated_data, rsi_period, stoch_period, k_period, d_period)
-        
+        k_values, d_values = _backend.stochrsi(validated_data, rsi_period, stoch_period, k_period, d_period)
+
         results = (k_values, d_values)
         return self.format_multiple_outputs(results, input_type, index)
 
@@ -1003,16 +1003,7 @@ class CHO(BaseIndicator):
         
         high_data, low_data, close_data, volume_data = self.align_arrays(high_data, low_data, close_data, volume_data)
         
-        # Calculate A/D Line
-        adl = self._calculate_adl(high_data, low_data, close_data, volume_data)
-        
-        # Calculate EMAs of A/D Line
-        fast_ema = self._calculate_ema(adl, fast_period)
-        slow_ema = self._calculate_ema(adl, slow_period)
-        
-        # Calculate Chaikin Oscillator
-        result = fast_ema - slow_ema
-        
+        result = _backend.cho(high_data, low_data, close_data, volume_data, fast_period, slow_period)
         return self.format_output(result, input_type, index)
 
 
@@ -1107,7 +1098,7 @@ class CHOP(BaseIndicator):
         high_data, low_data, close_data = self.align_arrays(high_data, low_data, close_data)
         self.validate_period(period, len(close_data))
         
-        result = self._calculate_chop(high_data, low_data, close_data, period)
+        result = _backend.chop(high_data, low_data, close_data, period)
         return self.format_output(result, input_type, index)
 
 

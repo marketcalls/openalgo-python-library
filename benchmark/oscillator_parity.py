@@ -13,7 +13,8 @@ import numpy as np
 import pandas as pd
 
 from openalgo.indicators import _backend as b
-from openalgo.indicators.oscillators import (ROC, CMO, TRIX, AO, AC, PPO, PO, DPO, AROONOSC)
+from openalgo.indicators.oscillators import (ROC, CMO, TRIX, AO, AC, PPO, PO, DPO, AROONOSC,
+                                             UO, StochRSI, CHO, CHOP)
 
 DATA = Path(__file__).resolve().parent / "data"
 FAILS = []
@@ -67,9 +68,23 @@ def main():
         PO._calculate_ema(c, 10) - PO._calculate_ema(c, 20))
     cmp("dpo", b.dpo(c, 21, False), _dpo_ref(c, 21))
     cmp("aroonosc", b.aroon_osc(h, lo, 14), AROONOSC._calculate_aroon_osc(h, lo, 14))
+    cmp("uo", b.uo(h, lo, c, 7, 14, 28), UO._calculate_uo(h, lo, c, 7, 14, 28), tol=1e-9)
+    o = df["open"].to_numpy(np.float64)
+    v = df["volume"].to_numpy(np.float64)
+    uk, ud = b.stochrsi(c, 14, 14, 3, 3)
+    ruk, rud = StochRSI._calculate_stochrsi(c, 14, 14, 3, 3)
+    cmp("stochrsi.k", uk, ruk)
+    cmp("stochrsi.d", ud, rud)
+    cmp("cho", b.cho(h, lo, c, v, 3, 10), _cho_ref(h, lo, c, v))
+    cmp("chop", b.chop(h, lo, c, 14), CHOP._calculate_chop(h, lo, c, 14))
 
     print("\nRESULT:", "ALL OSCILLATOR PARITY PASS" if not FAILS else f"FAILURES: {FAILS}")
     return 1 if FAILS else 0
+
+
+def _cho_ref(h, lo, c, v):
+    adl = CHO._calculate_adl(h, lo, c, v)
+    return CHO._calculate_ema(adl, 3) - CHO._calculate_ema(adl, 10)
 
 
 def _ac_ref(h, lo, period):

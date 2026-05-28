@@ -615,6 +615,79 @@ def session_vwap(source, volume, starts):
     return vwap, sd
 
 
+def uo(high, low, close, period1, period2, period3):
+    high, low, close = _f(high), _f(low), _f(close)
+    n = close.size
+    tl = np.empty(n)
+    if n:
+        tl[0] = low[0]
+        tl[1:] = np.minimum(low[1:], close[:-1])
+    tr = true_range(high, low, close)
+    bp = close - tl
+
+    def avg(p):
+        bps = _roll(bp, int(p), np.sum)
+        trs = _roll(tr, int(p), np.sum)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            return np.where(trs > 0, bps / np.where(trs == 0, 1.0, trs), 0.0)
+
+    out = 100.0 * (4 * avg(period1) + 2 * avg(period2) + avg(period3)) / 7.0
+    mp = max(int(period1), int(period2), int(period3))
+    out[:mp - 1] = np.nan
+    return out
+
+
+def stochrsi(data, rsi_period, stoch_period, k_period, d_period):
+    data = _f(data)
+    r = rsi(data, int(rsi_period))
+    n = r.size
+    sr = np.full(n, np.nan)
+    for i in range(int(stoch_period) - 1, n):
+        w = r[i - stoch_period + 1:i + 1]
+        wc = w[~np.isnan(w)]
+        if len(wc):
+            hi, lo = wc.max(), wc.min()
+            sr[i] = (r[i] - lo) / (hi - lo) * 100 if hi != lo else 50.0
+
+    def smooth(src, p):
+        out = np.full(n, np.nan)
+        for i in range(int(p) - 1, n):
+            w = src[i - p + 1:i + 1]
+            wc = w[~np.isnan(w)]
+            if len(wc):
+                out[i] = wc.mean()
+        return out
+
+    k = smooth(sr, k_period)
+    d = smooth(k, d_period)
+    return k, d
+
+
+def cho(high, low, close, volume, fast_period, slow_period):
+    high, low, close, volume = _f(high), _f(low), _f(close), _f(volume)
+    rng = high - low
+    with np.errstate(invalid="ignore", divide="ignore"):
+        clv = np.where(rng != 0, ((close - low) - (high - close)) / np.where(rng == 0, 1.0, rng), 0.0)
+    adl_ = np.cumsum(clv * volume)
+    return ema(adl_, int(fast_period)) - ema(adl_, int(slow_period))
+
+
+def chop(high, low, close, period):
+    high, low, close = _f(high), _f(low), _f(close)
+    period = int(period)
+    tr = true_range(high, low, close)
+    atr_sum = rolling_sum(tr, period)
+    rng = highest(high, period) - lowest(low, period)
+    out = np.full(high.size, np.nan)
+    valid = (rng > 0) & (atr_sum > 0) & ~np.isnan(rng) & ~np.isnan(atr_sum)
+    if period > 1:
+        lp = np.log10(period)
+        out[valid] = 100 * np.log10(atr_sum[valid] / rng[valid]) / lp
+    invalid = (~valid) & ~np.isnan(atr_sum)
+    out[invalid] = 50.0
+    return out
+
+
 def cmo(data, period):
     data = _f(data)
     period = int(period)
