@@ -1,0 +1,110 @@
+ID,Category,Indicator,Public_API,Class,Source_File,Inputs,Parameters,Outputs,TA_Lib_Reference,Recursive_Stateful,Complexity,Phase,Status,Parity_Target,Notes
+1,Primitive,Simple Moving Average,ta.sma,SMA,trend.py,close,period,series,SMA,No,Low,1,Not Started,bit-exact,Core building block; rolling mean
+2,Primitive,Exponential Moving Average,ta.ema,EMA,trend.py,close,period,series,EMA,Yes,Low,1,Not Started,1e-12 rel,Recursive; SMA-seeded; building block
+3,Primitive,Weighted Moving Average,ta.wma,WMA,trend.py,close,period,series,WMA,No,Low,1,Not Started,bit-exact,Linear-weighted window; building block
+4,Primitive,Wilder RMA / SMMA,(internal),utils_ema,utils.py,series,period,series,—,Yes,Low,1,Not Started,1e-12 rel,RMA smoothing used by RSI/ATR/ADX
+5,Primitive,Rolling Std Dev,(internal),stdev,utils.py,series,period,series,STDDEV,No,Low,1,Not Started,1e-12 rel,Used by BBands/Keltner/HV
+6,Primitive,True Range,ta.true_range,TRANGE,volatility.py,"high,low,close",—,series,TRANGE,No,Low,1,Not Started,bit-exact,Building block for ATR/NATR/DMI
+7,Primitive,Highest,ta.highest,(util),utils.py,series,period,series,MAX,No,Low,1,Not Started,bit-exact,Rolling max; Donchian/Stoch/Aroon dep
+8,Primitive,Lowest,ta.lowest,(util),utils.py,series,period,series,MIN,No,Low,1,Not Started,bit-exact,Rolling min
+9,Primitive,Change,ta.change,(util),utils.py,"series,length",—,series,—,No,Low,1,Not Started,bit-exact,n-period difference
+10,Primitive,Rate of Change,ta.roc,ROC,oscillators.py,close,period,series,ROC,No,Low,1,Not Started,1e-12 rel,Percent change over period
+11,Primitive,Rolling Median,ta.median,MEDIAN,statistics.py,close,period,series,—,No,Low,1,Not Started,bit-exact,MedianBands dependency
+12,Trend,Double EMA,ta.dema,DEMA,trend.py,close,period,series,DEMA,Yes,Low,2,Not Started,1e-12 rel,2*EMA - EMA(EMA)
+13,Trend,Triple EMA,ta.tema,TEMA,trend.py,close,period,series,TEMA,Yes,Low,2,Not Started,1e-12 rel,Composite of EMA
+14,Trend,Triangular MA,ta.trima,TRIMA,trend.py,close,period,series,TRIMA,No,Low,2,Not Started,bit-exact,Double-smoothed SMA
+15,Trend,Hull MA,ta.hma,HMA,trend.py,close,period,series,—,No,Medium,2,Not Started,1e-12 rel,WMA composite + sqrt period
+16,Trend,Volume Weighted MA,ta.vwma,VWMA,trend.py,"close,volume",period,series,—,No,Low,2,Not Started,1e-12 rel,SMA(price*vol)/SMA(vol)
+17,Trend,Zero-Lag EMA,ta.zlema,ZLEMA,trend.py,close,period,series,—,Yes,Low,2,Not Started,1e-12 rel,EMA of de-lagged price
+18,Trend,Arnaud Legoux MA,ta.alma,ALMA,trend.py,close,"period,offset,sigma",series,—,No,Medium,2,Not Started,1e-12 rel,Gaussian-weighted window
+19,Trend,T3 MA,ta.t3,T3,trend.py,close,"period,v_factor",series,T3,Yes,Medium,2,Not Started,1e-12 rel,6x cascaded EMA (GD)
+20,Trend,Supertrend,ta.supertrend,Supertrend,trend.py,"high,low,close","period,multiplier","supertrend,direction",—,Yes,High,3,Not Started,bit-exact,Stateful band-flip logic; ATR-based
+21,Trend,Ichimoku Cloud,ta.ichimoku,Ichimoku,trend.py,"high,low,close","conversion,base,span2,displacement","conv,base,spanA,spanB,lagging",—,No,High,3,Not Started,bit-exact,Multi-line; forward/back displacement
+22,Trend,Kaufman Adaptive MA,ta.kama,KAMA,trend.py,close,"length,fast,slow",series,KAMA,Yes,High,3,Not Started,1e-12 rel,Adaptive efficiency-ratio recursion
+23,Trend,Fractal Adaptive MA,ta.frama,FRAMA,trend.py,"high,low",period,series,—,Yes,High,3,Not Started,1e-12 rel,Fractal-dimension adaptive alpha
+24,Trend,McGinley Dynamic,ta.mcginley,McGinley,trend.py,close,period,series,—,Yes,Medium,3,Not Started,1e-12 rel,Self-adjusting recursion
+25,Trend,Variable Index Dynamic Avg,ta.vidya,VIDYA,trend.py,close,"period,alpha",series,—,Yes,High,3,Not Started,1e-12 rel,CMO-driven adaptive EMA
+26,Trend,Chande Kroll Stop,ta.ckstop,ChandeKrollStop,trend.py,"high,low,close","p,x,q","long_stop,short_stop",—,Yes,High,3,Not Started,bit-exact,ATR stop with rolling extremes
+27,Trend,Alligator,ta.alligator,Alligator,trend.py,close,"jaw/teeth/lips periods+shifts","jaw,teeth,lips",—,Yes,Medium,3,Not Started,1e-12 rel,Shifted SMMA lines
+28,Trend,MA Envelopes,ta.ma_envelopes,MovingAverageEnvelopes,trend.py,close,"period,percentage,ma_type","upper,basis,lower",—,No,Medium,3,Not Started,1e-12 rel,MA +/- percent bands
+29,Momentum,Relative Strength Index,ta.rsi,RSI,momentum.py,close,period,series,RSI,Yes,Low,2,Not Started,1e-12 rel,RMA of gains/losses
+30,Momentum,MACD,ta.macd,MACD,momentum.py,close,"fast,slow,signal","macd,signal,hist",MACD,Yes,Low,2,Not Started,1e-12 rel,EMA difference + signal EMA
+31,Momentum,Stochastic,ta.stochastic,Stochastic,momentum.py,"high,low,close","k_period,smooth_k,d_period","k,d",STOCH,No,Medium,2,Not Started,1e-12 rel,Rolling hi/lo + SMA smoothing
+32,Momentum,Commodity Channel Index,ta.cci,CCI,momentum.py,"high,low,close",period,series,CCI,No,Medium,2,Not Started,1e-12 rel,Typical price vs mean deviation
+33,Momentum,Williams %R,ta.williams_r,WilliamsR,momentum.py,"high,low,close",period,series,WILLR,No,Low,2,Not Started,bit-exact,Rolling hi/lo range position
+34,Momentum,Balance of Power,ta.bop,BOP,momentum.py,"open,high,low,close",—,series,BOP,No,Low,2,Not Started,bit-exact,(close-open)/(high-low)
+35,Momentum,Elder Ray,ta.elderray,ElderRay,momentum.py,"high,low,close",period,"bull,bear",—,Yes,Low,2,Not Started,1e-12 rel,High/Low minus EMA
+36,Momentum,Fisher Transform,ta.fisher,Fisher,momentum.py,"high,low",length,"fisher,trigger",—,Yes,High,3,Not Started,1e-12 rel,Recursive normalize + transform
+37,Momentum,Connors RSI,ta.crsi,CRSI,momentum.py,close,"lenrsi,lenupdown,lenroc",series,—,Yes,High,3,Not Started,1e-12 rel,Composite RSI+streak+ROC rank
+38,Volatility,Average True Range,ta.atr,ATR,volatility.py,"high,low,close",period,series,ATR,Yes,Low,2,Not Started,1e-12 rel,RMA of True Range
+39,Volatility,Normalized ATR,ta.natr,NATR,volatility.py,"high,low,close",period,series,NATR,Yes,Low,2,Not Started,1e-12 rel,ATR as percent of close
+40,Volatility,Bollinger Bands,ta.bbands,BollingerBands,volatility.py,close,"period,std_dev","upper,mid,lower",BBANDS,No,Low,2,Not Started,1e-12 rel,SMA +/- k*stdev
+41,Volatility,Bollinger %B,ta.bbpercent,BBPercent,volatility.py,close,"period,std_dev",series,—,No,Low,2,Not Started,1e-12 rel,Position within bands
+42,Volatility,Bollinger Bandwidth,ta.bbwidth,BBWidth,volatility.py,close,"period,std_dev",series,—,No,Low,2,Not Started,1e-12 rel,Band width / mid
+43,Volatility,Keltner Channel,ta.keltner,Keltner,volatility.py,"high,low,close","ema_period,atr_period,multiplier","upper,mid,lower",—,Yes,Medium,2,Not Started,1e-12 rel,EMA +/- ATR multiple
+44,Volatility,Donchian Channel,ta.donchian,Donchian,volatility.py,"high,low",period,"upper,mid,lower",—,No,Low,2,Not Started,bit-exact,Rolling hi/lo
+45,Volatility,Chaikin Volatility,ta.chaikin,Chaikin,volatility.py,"high,low","ema_period,roc_period",series,—,Yes,Medium,2,Not Started,1e-12 rel,ROC of EMA(high-low)
+46,Volatility,Mass Index,ta.massindex,MASS,volatility.py,"high,low",length,series,—,Yes,Medium,2,Not Started,1e-12 rel,EMA ratio sum (Pine v6)
+47,Volatility,Chandelier Exit,ta.chandelier_exit,ChandelierExit,volatility.py,"high,low,close","period,multiplier","long,short",—,Yes,High,3,Not Started,bit-exact,ATR trailing stop
+48,Volatility,Historical Volatility,ta.hv,HistoricalVolatility,volatility.py,close,"length,annual,per",series,—,No,Medium,3,Not Started,1e-12 rel,Annualized stdev of log returns
+49,Volatility,Ulcer Index,ta.ulcerindex,UlcerIndex,volatility.py,close,"length,smooth,signal,type",series,—,No,Medium,3,Not Started,1e-12 rel,Drawdown-based risk measure
+50,Volatility,STARC Bands,ta.starc,STARC,volatility.py,"high,low,close","ma_period,atr_period,multiplier","upper,mid,lower",—,Yes,Medium,3,Not Started,1e-12 rel,SMA +/- ATR multiple
+51,Volatility,Ultimate Oscillator,ta.ultimate_oscillator,ULTOSC,volatility.py,"high,low,close","period1,period2,period3",series,ULTOSC,No,Medium,2,Not Started,1e-12 rel,Weighted multi-period BP/TR
+52,Volume,On Balance Volume,ta.obv,OBV,volume.py,"close,volume",—,series,OBV,Yes,Low,2,Not Started,bit-exact,Cumulative signed volume
+53,Volume,OBV Smoothed,ta.obv_smoothed,OBVSmoothed,volume.py,"close,volume","ma_type,ma_length,bb_length,bb_mult","obv,bb_upper,bb_lower",—,Yes,Medium,2,Not Started,1e-12 rel,OBV + optional MA/BB overlay
+53b,Volume,VWAP,ta.vwap,VWAP,volume.py,"high,low,close,volume","anchor,source,band mults",series,—,No,High,3,Not Started,1e-9 rel,Session-anchored; bands; needs timestamps
+54,Volume,Money Flow Index,ta.mfi,MFI,volume.py,"high,low,close,volume",period,series,MFI,No,Medium,2,Not Started,1e-12 rel,Volume-weighted RSI
+55,Volume,Accumulation/Distribution,ta.adl,ADL,volume.py,"high,low,close,volume",—,series,AD,Yes,Low,2,Not Started,bit-exact,Cumulative money flow volume
+56,Volume,Chaikin Money Flow,ta.cmf,CMF,volume.py,"high,low,close,volume",period,series,—,No,Low,2,Not Started,1e-12 rel,Sum(MFV)/Sum(vol)
+57,Volume,Ease of Movement,ta.emv,EMV,volume.py,"high,low,volume","length,divisor",series,—,No,Medium,2,Not Started,1e-12 rel,Distance moved / box ratio
+58,Volume,Elder Force Index,ta.force_index,FI,volume.py,"close,volume",length,series,—,Yes,Low,2,Not Started,1e-12 rel,EMA of change*volume
+59,Volume,Negative Volume Index,ta.nvi,NVI,volume.py,"close,volume",—,series,—,Yes,Medium,2,Not Started,1e-12 rel,Cumulative on volume-down days
+60,Volume,Positive Volume Index,ta.pvi,PVI,volume.py,"close,volume",initial_value,series,—,Yes,Medium,2,Not Started,1e-12 rel,Cumulative on volume-up days
+61,Volume,Volume Oscillator,ta.volosc,VOLOSC,volume.py,volume,"short_length,long_length",series,—,Yes,Low,2,Not Started,1e-12 rel,EMA short/long volume spread
+62,Volume,Volume Rate of Change,ta.vroc,VROC,volume.py,volume,period,series,—,No,Low,2,Not Started,1e-12 rel,ROC of volume
+63,Volume,Klinger Volume Oscillator,ta.kvo,KlingerVolumeOscillator,volume.py,"high,low,close,volume","trig_len,fast_x,slow_x","kvo,trigger",—,Yes,High,2,Not Started,1e-12 rel,Volume force EMA spread
+64,Volume,Price Volume Trend,ta.pvt,PriceVolumeTrend,volume.py,"close,volume",—,series,—,Yes,Low,2,Not Started,1e-12 rel,Cumulative pct-change*volume
+65,Volume,Relative Volume,ta.rvol,RVOL,volume.py,volume,period,series,—,No,Low,2,Not Started,1e-12 rel,Volume / SMA(volume)
+66,Oscillator,Chande Momentum Osc,ta.cmo,CMO,oscillators.py,close,period,series,CMO,No,Low,2,Not Started,1e-12 rel,Sum up/down momentum
+67,Oscillator,TRIX,ta.trix,TRIX,oscillators.py,close,length,series,TRIX,Yes,Low,2,Not Started,1e-12 rel,ROC of triple EMA of log price
+68,Oscillator,Ultimate Oscillator,ta.uo_oscillator,UO,oscillators.py,"high,low,close","period1,period2,period3",series,ULTOSC,No,Medium,2,Not Started,1e-12 rel,Duplicate of ta.ultimate_oscillator
+69,Oscillator,Awesome Oscillator,ta.awesome_oscillator,AO,oscillators.py,"high,low","fast,slow",series,—,No,Low,2,Not Started,1e-12 rel,SMA(median price) spread
+70,Oscillator,Accelerator Oscillator,ta.accelerator_oscillator,AC,oscillators.py,"high,low",period,series,—,No,Low,2,Not Started,1e-12 rel,AO minus SMA(AO)
+71,Oscillator,Percentage Price Osc,ta.ppo,PPO,oscillators.py,close,"fast,slow,signal","ppo,signal,hist",PPO,Yes,Low,2,Not Started,1e-12 rel,EMA pct spread + signal
+72,Oscillator,Price Oscillator,ta.po,PO,oscillators.py,close,"fast,slow,ma_type",series,APO,Yes,Low,2,Not Started,1e-12 rel,MA spread (SMA/EMA)
+73,Oscillator,Detrended Price Osc,ta.dpo,DPO,oscillators.py,close,"period,is_centered",series,—,No,Low,2,Not Started,1e-12 rel,Price minus shifted SMA
+74,Oscillator,Aroon Oscillator,ta.aroon_oscillator,AROONOSC,oscillators.py,"high,low",period,series,AROONOSC,No,Low,2,Not Started,bit-exact,AroonUp - AroonDown
+75,Oscillator,Stochastic RSI,ta.stochrsi,StochRSI,oscillators.py,close,"rsi_period,stoch_period,k,d","k,d",STOCHRSI,Yes,Medium,2,Not Started,1e-12 rel,Stochastic applied to RSI
+76,Oscillator,Relative Vigor Index,ta.rvi,RVI,oscillators.py,"open,high,low,close",period,"rvi,signal",—,No,Medium,2,Not Started,1e-12 rel,SWMA ratio (note: name clash w/ volatility RVI)
+77,Oscillator,Chaikin Oscillator,ta.cho,CHO,oscillators.py,"high,low,close,volume","fast,slow",series,ADOSC,Yes,Medium,2,Not Started,1e-12 rel,EMA spread of ADL
+78,Oscillator,Choppiness Index,ta.chop,CHOP,oscillators.py,"high,low,close",period,series,—,No,Medium,2,Not Started,1e-12 rel,log(sumATR/range)/log(n)
+79,Oscillator,Know Sure Thing,ta.kst,KST,oscillators.py,close,"4x roclen,4x smalen,siglen","kst,signal",—,No,Medium,2,Not Started,1e-12 rel,Weighted smoothed ROC sum
+80,Oscillator,True Strength Index,ta.tsi,TSI,oscillators.py,close,"long,short,signal","tsi,signal",—,Yes,Medium,2,Not Started,1e-12 rel,Double-smoothed momentum
+81,Oscillator,Vortex Indicator,ta.vi,VI,oscillators.py,"high,low,close",period,"vi_plus,vi_minus",—,No,Medium,2,Not Started,1e-12 rel,VM+/VM- over sum TR
+82,Oscillator,Gator Oscillator,ta.gator_oscillator,GatorOscillator,oscillators.py,"high,low","jaw,teeth,lips","upper,lower",—,Yes,Medium,3,Not Started,1e-12 rel,Alligator line spreads
+83,Oscillator,Schaff Trend Cycle,ta.stc,STC,oscillators.py,close,"fast,slow,cycle,d1,d2",series,—,Yes,High,3,Not Started,1e-12 rel,MACD + double stochastic
+84,Oscillator,Coppock Curve,ta.coppock,Coppock,oscillators.py,close,"wma_len,long_roc,short_roc",series,—,No,Low,2,Not Started,1e-12 rel,WMA of summed ROC
+85,Statistics,Linear Regression,ta.linreg,LINREG,statistics.py,close,period,series,LINEARREG,No,Medium,2,Not Started,1e-12 rel,Rolling least-squares endpoint
+86,Statistics,Linear Reg Slope,ta.lrslope,LRSLOPE,statistics.py,close,"period,interval",series,LINEARREG_SLOPE,No,Medium,2,Not Started,1e-12 rel,Rolling regression slope
+87,Statistics,Correlation,ta.correlation,CORREL,statistics.py,"data1,data2",period,series,CORREL,No,Medium,2,Not Started,1e-12 rel,Rolling Pearson r
+88,Statistics,Beta,ta.beta,BETA,statistics.py,"asset,market",period,series,BETA,No,Medium,2,Not Started,1e-12 rel,Rolling covariance/variance
+89,Statistics,Variance,ta.variance,VAR,statistics.py,close,"lookback,mode,ema_period,...","var or components",VAR,Yes,High,2,Not Started,1e-12 rel,PR/LR variance + zscore filter
+90,Statistics,Time Series Forecast,ta.tsf,TSF,statistics.py,close,period,series,TSF,No,Medium,2,Not Started,1e-12 rel,Linreg endpoint+slope projection
+91,Statistics,Median Bands,ta.median_bands,MedianBands,statistics.py,"high,low,close","median_length,atr_length,atr_mult","mid,upper,lower,ema",—,Yes,Medium,3,Not Started,1e-12 rel,Rolling median +/- ATR
+92,Statistics,Mode,ta.mode,MODE,statistics.py,close,"period,bins",series,—,No,High,3,Not Started,1e-9 rel,Histogram-binned rolling mode
+93,Hybrid,Average Directional Index,ta.adx,ADX,hybrid.py,"high,low,close",period,"plus_di,minus_di,adx",ADX,Yes,Medium,2,Not Started,1e-12 rel,Wilder DI/DX smoothing
+94,Hybrid,Aroon,ta.aroon,Aroon,hybrid.py,"high,low",period,"up,down",AROON,No,Low,2,Not Started,bit-exact,Periods since hi/lo
+95,Hybrid,Directional Movement Index,ta.dmi,DMI,hybrid.py,"high,low,close",period,"plus_di,minus_di",DX,Yes,Medium,2,Not Started,1e-12 rel,+DI/-DI (ADX subset)
+96,Hybrid,Pivot Points,ta.pivot_points,PivotPoints,hybrid.py,"high,low,close",—,"pivot,r1,s1,r2,s2,r3,s3",—,No,Low,3,Not Started,bit-exact,Classic floor pivots
+97,Hybrid,Parabolic SAR,ta.psar,SAR,hybrid.py,"high,low","acceleration,maximum",series,SAR,Yes,High,3,Not Started,bit-exact,Stateful AF/EP trend reversal
+98,Hybrid,Williams Fractals,ta.fractals,WilliamsFractals,hybrid.py,"high,low",periods,"up,down",—,No,Medium,3,Not Started,bit-exact,Lookahead local extrema
+99,Hybrid,Random Walk Index,ta.rwi,RWI,hybrid.py,"high,low,close",period,"rwi_high,rwi_low",—,No,Medium,3,Not Started,1e-12 rel,Range vs ATR*sqrt(n)
+100,Hybrid,ZigZag,(internal),ZigZag,hybrid.py,"high,low",deviation,series,—,Yes,High,3,Not Started,bit-exact,Not in public ta.* API; pivot-based
+101,Utility,Crossover,ta.crossover,(util),utils.py,"series1,series2",—,bool series,—,No,Low,1,Not Started,bit-exact,Boolean cross-up detect
+102,Utility,Crossunder,ta.crossunder,(util),utils.py,"series1,series2",—,bool series,—,No,Low,1,Not Started,bit-exact,Boolean cross-down detect
+103,Utility,Cross,(util),cross,utils.py,"series1,series2",—,bool series,—,No,Low,1,Not Started,bit-exact,Either-direction cross
+104,Utility,Rising,(util),rising,utils.py,series,length,bool series,—,No,Low,1,Not Started,bit-exact,Monotonic up over length
+105,Utility,Falling,(util),falling,utils.py,series,length,bool series,—,No,Low,1,Not Started,bit-exact,Monotonic down over length
+106,Utility,ExRem,(util),exrem,utils.py,"primary,secondary",—,bool series,—,Yes,Low,1,Not Started,bit-exact,Remove excess signals (AFL)
+107,Utility,Flip,(util),flip,utils.py,"primary,secondary",—,bool series,—,Yes,Low,1,Not Started,bit-exact,Toggle/latch signal (AFL)
+108,Utility,ValueWhen,(util),valuewhen,utils.py,"condition,source,occurrence",—,series,—,Yes,Medium,1,Not Started,bit-exact,Value at Nth prior true
