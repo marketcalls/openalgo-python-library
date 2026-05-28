@@ -86,10 +86,13 @@ RUST_MIGRATION_TRACKER.csv  # 108-row indicator inventory + per-indicator status
         (rust kernels supertrend/chande_kroll_stop/frama multi-output; ichimoku
         composed from highest/lowest; cargo 24/24). ALL bit-exact (0.0) incl FRAMA
         log/exp. **TREND MODULE COMPLETE (20/20).**
-  - [ ] Remaining momentum: BOP, ElderRay, Fisher, CRSI.
+  - [x] Momentum complete (9/9): + BOP, ElderRay, Fisher, CRSI. New kernels bop/
+        fisher/updown_streak/percent_rank (cargo 28/28); elderray/crsi composed.
+        All bit-exact (benchmark/momentum_parity.py). **MOMENTUM MODULE COMPLETE.**
   - [ ] volatility / volume / oscillators / statistics / hybrid modules.
-        27 of ~90 indicators migrated.
-        NOTE: _backend.frama numpy fallback raises (rust-only); add fallback later.
+        31 of ~90 indicators migrated.
+        NOTE: _backend.frama and _backend.fisher numpy fallbacks raise (rust-only);
+        add numpy fallbacks in a later polish pass.
 
   LOCAL BUILD METHOD (until maturin/CI phase): from rust/ run
   `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo build --release -p oa_py`

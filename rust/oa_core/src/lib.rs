@@ -1051,6 +1051,100 @@ pub fn williams_r(high: &[f64], low: &[f64], close: &[f64], period: usize) -> Ve
     out
 }
 
+/// Balance of Power: (close-open)/(high-low) per bar; 0 when high==low.
+pub fn bop(open_: &[f64], high: &[f64], low: &[f64], close: &[f64]) -> Vec<f64> {
+    let n = close.len();
+    let mut r = nan_vec(n);
+    for i in 0..n {
+        r[i] = if high[i] != low[i] {
+            (close[i] - open_[i]) / (high[i] - low[i])
+        } else {
+            0.0
+        };
+    }
+    r
+}
+
+/// Fisher Transform (TradingView). Input is the price source (hl2). Returns
+/// (fisher, trigger). Recursive value/fisher with log; window extrema over `length`.
+pub fn fisher(data: &[f64], length: usize) -> (Vec<f64>, Vec<f64>) {
+    let n = data.len();
+    let mut fish1 = nan_vec(n);
+    let mut fish2 = nan_vec(n);
+    if length == 0 || n < length {
+        return (fish1, fish2);
+    }
+    let mut value = 0.0;
+    let mut fish1_prev = 0.0;
+    for i in length - 1..n {
+        let ws = i + 1 - length;
+        let mut hi = data[ws];
+        let mut lo = data[ws];
+        for k in ws..i + 1 {
+            if data[k] > hi {
+                hi = data[k];
+            }
+            if data[k] < lo {
+                lo = data[k];
+            }
+        }
+        if hi != lo {
+            let normalized = (data[i] - lo) / (hi - lo) - 0.5;
+            let new_value = 0.66 * normalized + 0.67 * value;
+            value = if new_value > 0.99 {
+                0.999
+            } else if new_value < -0.99 {
+                -0.999
+            } else {
+                new_value
+            };
+            let log_term = 0.5 * ((1.0 + value) / (1.0 - value)).ln();
+            fish1[i] = log_term + 0.5 * fish1_prev;
+            fish1_prev = fish1[i];
+        } else {
+            fish1[i] = fish1_prev;
+        }
+        fish2[i] = if i > length - 1 { fish1[i - 1] } else { 0.0 };
+    }
+    (fish1, fish2)
+}
+
+/// Connors RSI up/down streak length (positive=up run, negative=down run, 0=flat).
+pub fn updown_streak(data: &[f64]) -> Vec<f64> {
+    let n = data.len();
+    let mut s = vec![0.0f64; n];
+    for i in 1..n {
+        if data[i] == data[i - 1] {
+            s[i] = 0.0;
+        } else if data[i] > data[i - 1] {
+            s[i] = if s[i - 1] <= 0.0 { 1.0 } else { s[i - 1] + 1.0 };
+        } else {
+            s[i] = if s[i - 1] >= 0.0 { -1.0 } else { s[i - 1] - 1.0 };
+        }
+    }
+    s
+}
+
+/// Percent rank: pct of the trailing `period` window strictly below the current value.
+pub fn percent_rank(data: &[f64], period: usize) -> Vec<f64> {
+    let n = data.len();
+    let mut r = nan_vec(n);
+    if period == 0 {
+        return r;
+    }
+    for i in period - 1..n {
+        let cur = data[i];
+        let mut count = 0usize;
+        for j in i + 1 - period..i + 1 {
+            if data[j] < cur {
+                count += 1;
+            }
+        }
+        r[i] = (count as f64 / period as f64) * 100.0;
+    }
+    r
+}
+
 /// valuewhen: value of `array` when `expr` (nonzero == true) was true the n-th most
 /// recent time. Mirrors the legacy kernel, including its 1000-entry lookback cap.
 pub fn valuewhen(expr: &[f64], array: &[f64], n: usize) -> Vec<f64> {
@@ -1192,6 +1286,45 @@ mod tests {
         let s = [false, false, true, false];
         assert_eq!(exrem(&p, &s), vec![true, false, false, true]);
         assert_eq!(flip(&p, &s), vec![true, true, false, true]);
+    }
+
+    #[test]
+    fn bop_basic() {
+        let o = [10.0, 10.0];
+        let h = [12.0, 11.0];
+        let l = [8.0, 11.0];
+        let c = [11.0, 11.0];
+        let r = bop(&o, &h, &l, &c);
+        approx(r[0], (11.0 - 10.0) / (12.0 - 8.0));
+        approx(r[1], 0.0); // high==low
+    }
+
+    #[test]
+    fn updown_streak_runs() {
+        let d = [1.0, 2.0, 3.0, 3.0, 2.0, 1.0];
+        let s = updown_streak(&d);
+        approx(s[1], 1.0);
+        approx(s[2], 2.0);
+        approx(s[3], 0.0);
+        approx(s[4], -1.0);
+        approx(s[5], -2.0);
+    }
+
+    #[test]
+    fn percent_rank_basic() {
+        let d = [1.0, 2.0, 3.0, 4.0];
+        let r = percent_rank(&d, 3);
+        approx(r[2], 100.0 * 2.0 / 3.0); // 3 > 1,2
+        approx(r[3], 100.0 * 2.0 / 3.0); // 4 > 2,3
+    }
+
+    #[test]
+    fn fisher_runs() {
+        let d: Vec<f64> = (1..=20).map(|x| (x as f64 * 0.3).sin() + 5.0).collect();
+        let (f1, f2) = fisher(&d, 9);
+        assert_eq!(f1.len(), 20);
+        assert!(f1[8].is_finite());
+        approx(f2[9], f1[8]);
     }
 
     #[test]

@@ -498,7 +498,7 @@ class BOP(BaseIndicator):
         
         open_data, high_data, low_data, close_data = self.align_arrays(open_data, high_data, low_data, close_data)
         
-        result = self._calculate_bop(open_data, high_data, low_data, close_data)
+        result = _backend.bop(open_data, high_data, low_data, close_data)
         return self.format_output(result, input_type, index)
 
 
@@ -545,12 +545,7 @@ class ElderRay(BaseIndicator):
 
         high_data, low_data, close_data = self.align_arrays(high_data, low_data, close_data)
 
-        ema_close = ema(close_data, period)
-
-        bull_power = high_data - ema_close
-        bear_power = low_data - ema_close
-
-        results = (bull_power, bear_power)
+        results = _backend.elderray(high_data, low_data, close_data, period)
         return self.format_multiple_outputs(results, input_type, index)
 
 
@@ -662,7 +657,7 @@ class Fisher(BaseIndicator):
         # Calculate HL2 (typical price) as TradingView uses
         hl2 = (high_data + low_data) / 2.0
         
-        fish1, fish2 = self._calculate_fisher_tv(hl2, length)
+        fish1, fish2 = _backend.fisher(hl2, length)
         
         results = (fish1, fish2)
         return self.format_multiple_outputs(results, input_type, index)
@@ -757,27 +752,5 @@ class CRSI(BaseIndicator):
         validated_data, input_type, index = self.validate_input(data)
         self.validate_period(max(lenrsi, lenupdown, lenroc), len(validated_data))
         
-        # Component 1: RSI of price (ta.rsi(src, lenrsi))
-        price_rsi = RSI._calculate_rsi(validated_data, lenrsi)
-
-        # Component 2: RSI of updown streak (ta.rsi(updown(src), lenupdown))
-        updown_streak = self._calculate_updown_streak(validated_data)
-        streak_rsi = RSI._calculate_rsi(updown_streak, lenupdown)
-        
-        # Component 3: Percent rank of 1-period ROC (ta.percentrank(ta.roc(src, 1), lenroc))
-        # TradingView: ta.roc(src, 1) calculates 1-period rate of change
-        roc_1period = np.full_like(validated_data, np.nan)
-        for i in range(1, len(validated_data)):
-            if validated_data[i - 1] != 0:
-                roc_1period[i] = ((validated_data[i] - validated_data[i - 1]) / validated_data[i - 1]) * 100
-        
-        # Then calculate percent rank of this ROC over lenroc period
-        roc_percentrank = self._calculate_percent_rank(roc_1period, lenroc)
-        
-        # Calculate Connors RSI: math.avg(rsi, updownrsi, percentrank)
-        crsi = np.full_like(validated_data, np.nan)
-        for i in range(len(validated_data)):
-            if not np.isnan(price_rsi[i]) and not np.isnan(streak_rsi[i]) and not np.isnan(roc_percentrank[i]):
-                crsi[i] = (price_rsi[i] + streak_rsi[i] + roc_percentrank[i]) / 3.0
-        
+        crsi = _backend.crsi(validated_data, lenrsi, lenupdown, lenroc)
         return self.format_output(crsi, input_type, index)

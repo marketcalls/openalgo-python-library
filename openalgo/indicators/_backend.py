@@ -378,6 +378,82 @@ def vidya(data, period, alpha):
     return out
 
 
+def bop(open_, high, low, close):
+    open_, high, low, close = _f(open_), _f(high), _f(low), _f(close)
+    if HAVE_RUST:
+        return _rs.bop(open_, high, low, close)
+    n = close.size
+    out = np.full(n, np.nan)
+    rng = high - low
+    nz = rng != 0
+    out[nz] = (close[nz] - open_[nz]) / rng[nz]
+    out[~nz] = 0.0
+    return out
+
+
+def elderray(high, low, close, period):
+    high, low, close = _f(high), _f(low), _f(close)
+    e = ema(close, int(period))
+    return high - e, low - e
+
+
+def fisher(data, length):
+    data = _f(data)
+    if HAVE_RUST:
+        return _rs.fisher(data, int(length))
+    raise RuntimeError("fisher requires the _oaindicators extension")
+
+
+def updown_streak(data):
+    data = _f(data)
+    if HAVE_RUST:
+        return _rs.updown_streak(data)
+    n = data.size
+    s = np.zeros(n)
+    for i in range(1, n):
+        if data[i] == data[i - 1]:
+            s[i] = 0.0
+        elif data[i] > data[i - 1]:
+            s[i] = 1.0 if s[i - 1] <= 0 else s[i - 1] + 1.0
+        else:
+            s[i] = -1.0 if s[i - 1] >= 0 else s[i - 1] - 1.0
+    return s
+
+
+def percent_rank(data, period):
+    data = _f(data)
+    if HAVE_RUST:
+        return _rs.percent_rank(data, int(period))
+    return _roll(data, int(period), lambda w: (np.sum(w[:-1] < w[-1]) / period) * 100.0)
+
+
+def crsi(data, lenrsi, lenupdown, lenroc):
+    data = _f(data)
+    price_rsi = rsi(data, int(lenrsi))
+    streak_rsi = rsi(updown_streak(data), int(lenupdown))
+    roc1 = roc(data, 1)
+    pr = percent_rank(roc1, int(lenroc))
+    out = np.full(data.size, np.nan)
+    m = ~(np.isnan(price_rsi) | np.isnan(streak_rsi) | np.isnan(pr))
+    out[m] = (price_rsi[m] + streak_rsi[m] + pr[m]) / 3.0
+    return out
+
+
+def roc(data, length):
+    data = _f(data)
+    length = int(length)
+    if HAVE_RUST:
+        return _rs.roc(data, length)
+    n = data.size
+    out = np.full(n, np.nan)
+    prev = data[:-length] if length < n else np.array([])
+    if length < n:
+        nz = prev != 0
+        idx = np.arange(length, n)
+        out[idx[nz]] = (data[length:][nz] - prev[nz]) / prev[nz] * 100.0
+    return out
+
+
 def _shift(arr, k):
     out = np.full(len(arr), np.nan)
     if 0 <= k < len(arr):

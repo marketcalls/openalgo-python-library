@@ -32,10 +32,10 @@ ID,Category,Indicator,Public_API,Class,Source_File,Inputs,Parameters,Outputs,TA_
 31,Momentum,Stochastic,ta.stochastic,Stochastic,momentum.py,"high,low,close","k_period,smooth_k,d_period","k,d",STOCH,No,Medium,2,Migrated; parity PASS,1e-12 rel,Rolling hi/lo + SMA smoothing
 32,Momentum,Commodity Channel Index,ta.cci,CCI,momentum.py,"high,low,close",period,series,CCI,No,Medium,2,Migrated; parity PASS,1e-12 rel,Typical price vs mean deviation
 33,Momentum,Williams %R,ta.williams_r,WilliamsR,momentum.py,"high,low,close",period,series,WILLR,No,Low,2,Migrated; parity PASS,bit-exact,Rolling hi/lo range position
-34,Momentum,Balance of Power,ta.bop,BOP,momentum.py,"open,high,low,close",—,series,BOP,No,Low,2,Not Started,bit-exact,(close-open)/(high-low)
-35,Momentum,Elder Ray,ta.elderray,ElderRay,momentum.py,"high,low,close",period,"bull,bear",—,Yes,Low,2,Not Started,1e-12 rel,High/Low minus EMA
-36,Momentum,Fisher Transform,ta.fisher,Fisher,momentum.py,"high,low",length,"fisher,trigger",—,Yes,High,3,Not Started,1e-12 rel,Recursive normalize + transform
-37,Momentum,Connors RSI,ta.crsi,CRSI,momentum.py,close,"lenrsi,lenupdown,lenroc",series,—,Yes,High,3,Not Started,1e-12 rel,Composite RSI+streak+ROC rank
+34,Momentum,Balance of Power,ta.bop,BOP,momentum.py,"open,high,low,close",—,series,BOP,No,Low,2,Migrated; parity PASS,bit-exact,(close-open)/(high-low)
+35,Momentum,Elder Ray,ta.elderray,ElderRay,momentum.py,"high,low,close",period,"bull,bear",—,Yes,Low,2,Migrated; parity PASS,1e-12 rel,High/Low minus EMA
+36,Momentum,Fisher Transform,ta.fisher,Fisher,momentum.py,"high,low",length,"fisher,trigger",—,Yes,High,3,Migrated; parity PASS,1e-12 rel,Recursive normalize + transform
+37,Momentum,Connors RSI,ta.crsi,CRSI,momentum.py,close,"lenrsi,lenupdown,lenroc",series,—,Yes,High,3,Migrated; parity PASS,1e-12 rel,Composite RSI+streak+ROC rank
 38,Volatility,Average True Range,ta.atr,ATR,volatility.py,"high,low,close",period,series,ATR,Yes,Low,2,Migrated; parity PASS,1e-12 rel,RMA of True Range
 39,Volatility,Normalized ATR,ta.natr,NATR,volatility.py,"high,low,close",period,series,NATR,Yes,Low,2,Not Started,1e-12 rel,ATR as percent of close
 40,Volatility,Bollinger Bands,ta.bbands,BollingerBands,volatility.py,close,"period,std_dev","upper,mid,lower",BBANDS,No,Low,2,Migrated; parity PASS,1e-12 rel,SMA +/- k*stdev

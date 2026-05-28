@@ -58,6 +58,43 @@ macro_rules! wrap_hlc_period {
 wrap_hlc_period!(cci, oa_core::cci);
 wrap_hlc_period!(williams_r, oa_core::williams_r);
 
+wrap_period!(percent_rank, oa_core::percent_rank);
+
+#[pyfunction]
+fn updown_streak<'py>(
+    py: Python<'py>,
+    data: PyReadonlyArray1<'py, f64>,
+) -> PyResult<Py<PyArray1<f64>>> {
+    Ok(oa_core::updown_streak(data.as_slice()?).into_pyarray_bound(py).unbind())
+}
+
+#[pyfunction]
+#[pyo3(signature = (open, high, low, close))]
+fn bop<'py>(
+    py: Python<'py>,
+    open: PyReadonlyArray1<'py, f64>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    close: PyReadonlyArray1<'py, f64>,
+) -> PyResult<Py<PyArray1<f64>>> {
+    let out = oa_core::bop(open.as_slice()?, high.as_slice()?, low.as_slice()?, close.as_slice()?);
+    Ok(out.into_pyarray_bound(py).unbind())
+}
+
+#[pyfunction]
+#[pyo3(signature = (data, length))]
+fn fisher<'py>(
+    py: Python<'py>,
+    data: PyReadonlyArray1<'py, f64>,
+    length: usize,
+) -> PyResult<(Py<PyArray1<f64>>, Py<PyArray1<f64>>)> {
+    let (f1, f2) = oa_core::fisher(data.as_slice()?, length);
+    Ok((
+        f1.into_pyarray_bound(py).unbind(),
+        f2.into_pyarray_bound(py).unbind(),
+    ))
+}
+
 #[pyfunction]
 #[pyo3(signature = (high, low, period))]
 fn frama<'py>(
@@ -328,6 +365,10 @@ fn _oaindicators(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cci, m)?)?;
     m.add_function(wrap_pyfunction!(williams_r, m)?)?;
     m.add_function(wrap_pyfunction!(stochastic, m)?)?;
+    m.add_function(wrap_pyfunction!(bop, m)?)?;
+    m.add_function(wrap_pyfunction!(fisher, m)?)?;
+    m.add_function(wrap_pyfunction!(updown_streak, m)?)?;
+    m.add_function(wrap_pyfunction!(percent_rank, m)?)?;
     m.add_function(wrap_pyfunction!(frama, m)?)?;
     m.add_function(wrap_pyfunction!(supertrend, m)?)?;
     m.add_function(wrap_pyfunction!(chande_kroll_stop, m)?)?;
