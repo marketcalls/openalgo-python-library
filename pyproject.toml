@@ -50,3 +50,7 @@ module-name = "openalgo._oaindicators"
 manifest-path = "rust/oa_py/Cargo.toml"
 features = ["pyo3/extension-module"]
 strip = true
+# The repo-root LICENSE lives outside the crate dir, so the sdist (built relative to
+# the manifest) did not bundle it even though PKG-INFO declared `License-File: LICENSE`
+# - PyPI rejects that mismatch. Explicitly include it in the sdist.
+include = [{ path = "LICENSE", format = "sdist" }]
