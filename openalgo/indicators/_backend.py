@@ -618,6 +618,8 @@ def session_vwap(source, volume, starts):
 def adx(high, low, close, period):
     high, low, close = _f(high), _f(low), _f(close)
     period = int(period)
+    if HAVE_RUST:
+        return _rs.adx(high, low, close, period)
     n = close.size
     tr = true_range(high, low, close)
     dmp = np.zeros(n)
@@ -647,6 +649,8 @@ def adx(high, low, close, period):
 def aroon(high, low, period):
     high, low = _f(high), _f(low)
     period = int(period)
+    if HAVE_RUST:
+        return _rs.aroon(high, low, period)
     n = high.size
     up = np.full(n, np.nan)
     down = np.full(n, np.nan)
@@ -686,6 +690,8 @@ def sar(high, low, acceleration, maximum):
 def rwi(high, low, close, period):
     high, low, close = _f(high), _f(low), _f(close)
     period = int(period)
+    if HAVE_RUST:
+        return _rs.rwi(high, low, close, period)
     n = close.size
     atr = _win_mean(true_range(high, low, close), period)
     rh = np.full(n, np.nan)
@@ -728,6 +734,8 @@ def zigzag(high, low, close, deviation):
 
 def williams_fractals(high, low, periods):
     high, low = _f(high), _f(low)
+    if HAVE_RUST:
+        return _rs.williams_fractals(high, low, int(periods))
     n = int(periods)
     length = high.size
     fu = np.zeros(length, dtype=bool)
@@ -877,43 +885,46 @@ def variance(data, lookback, mode, ema_period, filter_lookback, ema_length, retu
     data = _f(data)
     lookback = int(lookback)
     n = data.size
-    source = np.full(n, np.nan)
-    if mode == "LR":
-        with np.errstate(invalid="ignore", divide="ignore"):
-            valid = (data[1:] > 0) & (data[:-1] > 0)
-        idx = np.arange(1, n)
-        ratio = np.empty(n - 1)
-        ratio[:] = np.nan
-        ratio[valid] = np.log(data[1:][valid] / data[:-1][valid]) * 100
-        source[1:] = ratio
+    if HAVE_RUST:
+        var = _rs.variance(data, lookback, mode == "LR")
+        with np.errstate(invalid="ignore"):
+            sd = np.sqrt(var)
     else:
-        source = data.copy()
-    var = np.full(n, np.nan)
-    sd = np.full(n, np.nan)
-    if n >= lookback and lookback > 1:
-        rs = rsq = 0.0
-        for i in range(lookback):
-            if not np.isnan(source[i]):
-                rs += source[i]
-                rsq += source[i] * source[i]
-        mean = rs / lookback
-        v = (rsq - lookback * mean * mean) / (lookback - 1)
-        if v >= 0:
-            var[lookback - 1] = v
-            sd[lookback - 1] = np.sqrt(v)
-        for i in range(lookback, n):
-            old, new = source[i - lookback], source[i]
-            if not np.isnan(old):
-                rs -= old
-                rsq -= old * old
-            if not np.isnan(new):
-                rs += new
-                rsq += new * new
+        source = np.full(n, np.nan)
+        if mode == "LR":
+            with np.errstate(invalid="ignore", divide="ignore"):
+                valid = (data[1:] > 0) & (data[:-1] > 0)
+            ratio = np.full(n - 1, np.nan)
+            ratio[valid] = np.log(data[1:][valid] / data[:-1][valid]) * 100
+            source[1:] = ratio
+        else:
+            source = data.copy()
+        var = np.full(n, np.nan)
+        sd = np.full(n, np.nan)
+        if n >= lookback and lookback > 1:
+            rs = rsq = 0.0
+            for i in range(lookback):
+                if not np.isnan(source[i]):
+                    rs += source[i]
+                    rsq += source[i] * source[i]
             mean = rs / lookback
             v = (rsq - lookback * mean * mean) / (lookback - 1)
             if v >= 0:
-                var[i] = v
-                sd[i] = np.sqrt(v)
+                var[lookback - 1] = v
+                sd[lookback - 1] = np.sqrt(v)
+            for i in range(lookback, n):
+                old, new = source[i - lookback], source[i]
+                if not np.isnan(old):
+                    rs -= old
+                    rsq -= old * old
+                if not np.isnan(new):
+                    rs += new
+                    rsq += new * new
+                mean = rs / lookback
+                v = (rsq - lookback * mean * mean) / (lookback - 1)
+                if v >= 0:
+                    var[i] = v
+                    sd[i] = np.sqrt(v)
     if not return_components:
         return var
     ema_var = ema(var, int(ema_period))
@@ -927,7 +938,10 @@ def variance(data, lookback, mode, ema_period, filter_lookback, ema_length, retu
 
 
 def median(data, period):
-    return _roll(_f(data), int(period), np.median)
+    data = _f(data)
+    if HAVE_RUST:
+        return _rs.median(data, int(period))
+    return _roll(data, int(period), np.median)
 
 
 def _median_pnr(data, period):
@@ -951,6 +965,8 @@ def median_bands(high, low, close, source, median_length, atr_length, atr_mult):
 def mode(data, period, bins):
     data = _f(data)
     period, bins = int(period), int(bins)
+    if HAVE_RUST:
+        return _rs.mode(data, period, bins)
     n = data.size
     out = np.full(n, np.nan)
     for i in range(period - 1, n):
@@ -1003,6 +1019,8 @@ def gator(high, low, jaw_period, teeth_period, lips_period):
 
 
 def _stoch_single(data, period):
+    if HAVE_RUST:
+        return _rs.stoch_single(_f(data), int(period))
     n = data.size
     out = np.full(n, np.nan)
     for i in range(int(period) - 1, n):
@@ -1030,6 +1048,8 @@ def stc(data, fast_length, slow_length, cycle_length, d1_length, d2_length):
 
 
 def _wma_nan(data, period):
+    if HAVE_RUST:
+        return _rs.wma_nan(_f(data), int(period))
     n = data.size
     out = np.full(n, np.nan)
     period = int(period)
@@ -1066,6 +1086,8 @@ def swma(data):
 def rvi_vigor(open_, high, low, close, period):
     open_, high, low, close = _f(open_), _f(high), _f(low), _f(close)
     period = int(period)
+    if HAVE_RUST:
+        return _rs.rvi_vigor(open_, high, low, close, period)
     sco = swma(close - open_)
     shl = swma(high - low)
     n = close.size
@@ -1247,20 +1269,23 @@ def dpo(data, period, is_centered):
     sma_ = _win_mean(data, period)
     barsback = int(period / 2 + 1)
     out = np.full(n, np.nan)
+    if barsback >= n:
+        return out
     if is_centered:
-        for i in range(barsback, n):
-            if not np.isnan(sma_[i]):
-                out[i] = data[i - barsback] - sma_[i]
+        sh = sma_[barsback:]
+        out[barsback:] = np.where(~np.isnan(sh), data[:n - barsback] - sh, np.nan)
     else:
-        for i in range(barsback, n):
-            if not np.isnan(sma_[i - barsback]):
-                out[i] = data[i] - sma_[i - barsback]
+        sh = sma_[:n - barsback]
+        out[barsback:] = np.where(~np.isnan(sh), data[barsback:] - sh, np.nan)
     return out
 
 
 def aroon_osc(high, low, period):
     high, low = _f(high), _f(low)
     period = int(period)
+    if HAVE_RUST:
+        up, down = _rs.aroon(high, low, period)
+        return up - down
     n = high.size
     out = np.full(n, np.nan)
     lookback = period + 1

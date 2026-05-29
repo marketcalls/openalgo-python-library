@@ -40,6 +40,99 @@ wrap_period!(cmo, oa_core::cmo);
 wrap_period!(ulcer_index, oa_core::ulcer_index);
 wrap_period!(rsi, oa_core::rsi);
 wrap_period!(win_mean, oa_core::win_mean);
+wrap_period!(stoch_single, oa_core::stoch_single);
+wrap_period!(median, oa_core::median);
+wrap_period!(wma_nan, oa_core::wma_nan);
+
+#[pyfunction]
+#[pyo3(signature = (data, lookback, use_log))]
+fn variance<'py>(
+    py: Python<'py>,
+    data: PyReadonlyArray1<'py, f64>,
+    lookback: usize,
+    use_log: bool,
+) -> PyResult<Py<PyArray1<f64>>> {
+    Ok(oa_core::variance(data.as_slice()?, lookback, use_log).into_pyarray_bound(py).unbind())
+}
+
+#[pyfunction]
+#[pyo3(signature = (high, low, period))]
+fn aroon<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    period: usize,
+) -> PyResult<(Py<PyArray1<f64>>, Py<PyArray1<f64>>)> {
+    let (u, d) = oa_core::aroon(high.as_slice()?, low.as_slice()?, period);
+    Ok((u.into_pyarray_bound(py).unbind(), d.into_pyarray_bound(py).unbind()))
+}
+
+#[pyfunction]
+#[pyo3(signature = (high, low, n))]
+fn williams_fractals<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    n: usize,
+) -> PyResult<(Py<PyArray1<bool>>, Py<PyArray1<bool>>)> {
+    let (u, d) = oa_core::williams_fractals(high.as_slice()?, low.as_slice()?, n);
+    Ok((u.into_pyarray_bound(py).unbind(), d.into_pyarray_bound(py).unbind()))
+}
+
+#[pyfunction]
+#[pyo3(signature = (data, period, bins))]
+fn mode<'py>(
+    py: Python<'py>,
+    data: PyReadonlyArray1<'py, f64>,
+    period: usize,
+    bins: usize,
+) -> PyResult<Py<PyArray1<f64>>> {
+    Ok(oa_core::mode(data.as_slice()?, period, bins).into_pyarray_bound(py).unbind())
+}
+
+#[pyfunction]
+#[pyo3(signature = (open, high, low, close, period))]
+fn rvi_vigor<'py>(
+    py: Python<'py>,
+    open: PyReadonlyArray1<'py, f64>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    close: PyReadonlyArray1<'py, f64>,
+    period: usize,
+) -> PyResult<(Py<PyArray1<f64>>, Py<PyArray1<f64>>)> {
+    let (r, s) = oa_core::rvi_vigor(open.as_slice()?, high.as_slice()?, low.as_slice()?, close.as_slice()?, period);
+    Ok((r.into_pyarray_bound(py).unbind(), s.into_pyarray_bound(py).unbind()))
+}
+
+#[pyfunction]
+#[pyo3(signature = (high, low, close, period))]
+fn adx<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    close: PyReadonlyArray1<'py, f64>,
+    period: usize,
+) -> PyResult<(Py<PyArray1<f64>>, Py<PyArray1<f64>>, Py<PyArray1<f64>>)> {
+    let (dp, dm, a) = oa_core::adx(high.as_slice()?, low.as_slice()?, close.as_slice()?, period);
+    Ok((
+        dp.into_pyarray_bound(py).unbind(),
+        dm.into_pyarray_bound(py).unbind(),
+        a.into_pyarray_bound(py).unbind(),
+    ))
+}
+
+#[pyfunction]
+#[pyo3(signature = (high, low, close, period))]
+fn rwi<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    close: PyReadonlyArray1<'py, f64>,
+    period: usize,
+) -> PyResult<(Py<PyArray1<f64>>, Py<PyArray1<f64>>)> {
+    let (rh, rl) = oa_core::rwi(high.as_slice()?, low.as_slice()?, close.as_slice()?, period);
+    Ok((rh.into_pyarray_bound(py).unbind(), rl.into_pyarray_bound(py).unbind()))
+}
 wrap_period!(win_std, oa_core::win_std);
 wrap_period!(linreg, oa_core::linreg);
 wrap_period!(tsf, oa_core::tsf);
@@ -492,6 +585,16 @@ fn _oaindicators(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ulcer_index, m)?)?;
     m.add_function(wrap_pyfunction!(rsi, m)?)?;
     m.add_function(wrap_pyfunction!(win_mean, m)?)?;
+    m.add_function(wrap_pyfunction!(stoch_single, m)?)?;
+    m.add_function(wrap_pyfunction!(median, m)?)?;
+    m.add_function(wrap_pyfunction!(wma_nan, m)?)?;
+    m.add_function(wrap_pyfunction!(variance, m)?)?;
+    m.add_function(wrap_pyfunction!(aroon, m)?)?;
+    m.add_function(wrap_pyfunction!(williams_fractals, m)?)?;
+    m.add_function(wrap_pyfunction!(mode, m)?)?;
+    m.add_function(wrap_pyfunction!(rvi_vigor, m)?)?;
+    m.add_function(wrap_pyfunction!(adx, m)?)?;
+    m.add_function(wrap_pyfunction!(rwi, m)?)?;
     m.add_function(wrap_pyfunction!(win_std, m)?)?;
     m.add_function(wrap_pyfunction!(linreg, m)?)?;
     m.add_function(wrap_pyfunction!(tsf, m)?)?;

@@ -83,8 +83,8 @@ def main():
 
     rh, rl = b.rwi(h, lo, c, 14)
     rrh, rrl = RWI._calculate_rwi(h, lo, c, 14)
-    cmp("rwi.high", rh, rrh)
-    cmp("rwi.low", rl, rrl)
+    cmp("rwi.high", rh, rrh, tol=1e-9)  # win_mean naive vs numpy pairwise ~1e-15
+    cmp("rwi.low", rl, rrl, tol=1e-9)
 
     print("\nRESULT:", "ALL HYBRID PARITY PASS" if not FAILS else f"FAILURES: {FAILS}")
     return 1 if FAILS else 0

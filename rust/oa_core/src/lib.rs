@@ -1607,6 +1607,376 @@ pub fn beta(asset: &[f64], market: &[f64], period: usize) -> Vec<f64> {
     out
 }
 
+/// Rolling sample variance (/(lookback-1)), threaded rolling sums. PR or LR(log*100).
+pub fn variance(data: &[f64], lookback: usize, use_log: bool) -> Vec<f64> {
+    let n = data.len();
+    let mut source = nan_vec(n);
+    if use_log {
+        for i in 1..n {
+            if data[i] > 0.0 && data[i - 1] > 0.0 {
+                source[i] = (data[i] / data[i - 1]).ln() * 100.0;
+            }
+        }
+    } else {
+        source.copy_from_slice(data);
+    }
+    let mut var = nan_vec(n);
+    if lookback <= 1 || n < lookback {
+        return var;
+    }
+    let lb = lookback as f64;
+    let mut rs = 0.0;
+    let mut rsq = 0.0;
+    for &s in source.iter().take(lookback) {
+        if !s.is_nan() {
+            rs += s;
+            rsq += s * s;
+        }
+    }
+    let mean = rs / lb;
+    let v = (rsq - lb * mean * mean) / (lb - 1.0);
+    if v >= 0.0 {
+        var[lookback - 1] = v;
+    }
+    for i in lookback..n {
+        let old = source[i - lookback];
+        let new = source[i];
+        if !old.is_nan() {
+            rs -= old;
+            rsq -= old * old;
+        }
+        if !new.is_nan() {
+            rs += new;
+            rsq += new * new;
+        }
+        let mean = rs / lb;
+        let v = (rsq - lb * mean * mean) / (lb - 1.0);
+        if v >= 0.0 {
+            var[i] = v;
+        }
+    }
+    var
+}
+
+/// Aroon up/down over `period` (lookback period+1, first-occurrence extrema).
+pub fn aroon(high: &[f64], low: &[f64], period: usize) -> (Vec<f64>, Vec<f64>) {
+    let n = high.len();
+    let mut up = nan_vec(n);
+    let mut down = nan_vec(n);
+    if period == 0 {
+        return (up, down);
+    }
+    let lookback = period + 1;
+    if n < lookback {
+        return (up, down);
+    }
+    let p = period as f64;
+    for i in lookback - 1..n {
+        let ws = i - lookback + 1;
+        let mut hp = 0usize;
+        let mut lp = 0usize;
+        for j in 0..lookback {
+            if high[ws + j] > high[ws + hp] {
+                hp = j;
+            }
+            if low[ws + j] < low[ws + lp] {
+                lp = j;
+            }
+        }
+        up[i] = 100.0 * (p - (lookback - 1 - hp) as f64) / p;
+        down[i] = 100.0 * (p - (lookback - 1 - lp) as f64) / p;
+    }
+    (up, down)
+}
+
+/// Williams Fractals (up, down) booleans, TradingView frontier patterns.
+pub fn williams_fractals(high: &[f64], low: &[f64], n: usize) -> (Vec<bool>, Vec<bool>) {
+    let length = high.len();
+    let mut fu = vec![false; length];
+    let mut fd = vec![false; length];
+    if n == 0 || length < 2 * n + 1 {
+        return (fu, fd);
+    }
+    for center in n..length - n {
+        let mut df = true;
+        for i in 1..n + 1 {
+            if high[center - i] >= high[center] {
+                df = false;
+                break;
+            }
+        }
+        if df {
+            let mut f = [true; 5];
+            for i in 1..n + 1 {
+                if center + i < length && high[center + i] >= high[center] {
+                    f[0] = false;
+                }
+                for p in 1..5 {
+                    for q in 1..p + 1 {
+                        if center + q < length && high[center + q] > high[center] {
+                            f[p] = false;
+                        }
+                    }
+                    if center + i + p < length && high[center + i + p] >= high[center] {
+                        f[p] = false;
+                    }
+                }
+            }
+            fu[center] = f.iter().any(|&x| x);
+        }
+        let mut df = true;
+        for i in 1..n + 1 {
+            if low[center - i] <= low[center] {
+                df = false;
+                break;
+            }
+        }
+        if df {
+            let mut f = [true; 5];
+            for i in 1..n + 1 {
+                if center + i < length && low[center + i] <= low[center] {
+                    f[0] = false;
+                }
+                for p in 1..5 {
+                    for q in 1..p + 1 {
+                        if center + q < length && low[center + q] < low[center] {
+                            f[p] = false;
+                        }
+                    }
+                    if center + i + p < length && low[center + i + p] <= low[center] {
+                        f[p] = false;
+                    }
+                }
+            }
+            fd[center] = f.iter().any(|&x| x);
+        }
+    }
+    (fu, fd)
+}
+
+/// Rolling mode via histogram binning (first-max bin midpoint).
+pub fn mode(data: &[f64], period: usize, bins: usize) -> Vec<f64> {
+    let n = data.len();
+    let mut out = nan_vec(n);
+    if period == 0 || bins == 0 || n < period {
+        return out;
+    }
+    for i in period - 1..n {
+        let w = &data[i - period + 1..i + 1];
+        let mut mn = w[0];
+        let mut mx = w[0];
+        for &x in w {
+            if x < mn {
+                mn = x;
+            }
+            if x > mx {
+                mx = x;
+            }
+        }
+        if mx > mn {
+            let bw = (mx - mn) / bins as f64;
+            let mut counts = vec![0i64; bins];
+            for &x in w {
+                let mut bi = ((x - mn) / bw) as i64;
+                if bi < 0 {
+                    bi = 0;
+                }
+                if bi > bins as i64 - 1 {
+                    bi = bins as i64 - 1;
+                }
+                counts[bi as usize] += 1;
+            }
+            let mut mb = 0usize;
+            for k in 1..bins {
+                if counts[k] > counts[mb] {
+                    mb = k;
+                }
+            }
+            out[i] = mn + (mb as f64 + 0.5) * bw;
+        } else {
+            out[i] = w[0];
+        }
+    }
+    out
+}
+
+/// Rolling median over `period` (odd -> middle, even -> mean of two middle).
+pub fn median(data: &[f64], period: usize) -> Vec<f64> {
+    let n = data.len();
+    let mut out = nan_vec(n);
+    if period == 0 || n < period {
+        return out;
+    }
+    let mut buf = vec![0.0f64; period];
+    for i in period - 1..n {
+        buf.copy_from_slice(&data[i - period + 1..i + 1]);
+        buf.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        out[i] = if period % 2 == 1 {
+            buf[period / 2]
+        } else {
+            (buf[period / 2 - 1] + buf[period / 2]) / 2.0
+        };
+    }
+    out
+}
+
+/// Single-series stochastic over `period` (NaN-aware; 50 when flat). Used by STC.
+pub fn stoch_single(data: &[f64], period: usize) -> Vec<f64> {
+    let n = data.len();
+    let mut out = nan_vec(n);
+    if period == 0 {
+        return out;
+    }
+    for i in period - 1..n {
+        let w = &data[i - period + 1..i + 1];
+        let mut hi = f64::NEG_INFINITY;
+        let mut lo = f64::INFINITY;
+        let mut any = false;
+        for &x in w {
+            if !x.is_nan() {
+                if x > hi {
+                    hi = x;
+                }
+                if x < lo {
+                    lo = x;
+                }
+                any = true;
+            }
+        }
+        if any {
+            if hi != lo && !data[i].is_nan() {
+                out[i] = (data[i] - lo) / (hi - lo) * 100.0;
+            } else if hi == lo {
+                out[i] = 50.0;
+            }
+        }
+    }
+    out
+}
+
+/// NaN-aware weighted MA (weights 1..period over valid entries). Used by Coppock.
+pub fn wma_nan(data: &[f64], period: usize) -> Vec<f64> {
+    let n = data.len();
+    let mut out = nan_vec(n);
+    if period == 0 || n < period {
+        return out;
+    }
+    for i in period - 1..n {
+        if data[i].is_nan() {
+            continue;
+        }
+        let mut ws = 0.0;
+        let mut vw = 0.0;
+        for j in 0..period {
+            let v = data[i - period + 1 + j];
+            if !v.is_nan() {
+                let w = (j + 1) as f64;
+                ws += v * w;
+                vw += w;
+            }
+        }
+        if vw > 0.0 {
+            out[i] = ws / vw;
+        }
+    }
+    out
+}
+
+#[inline]
+fn swma_vec(data: &[f64]) -> Vec<f64> {
+    let n = data.len();
+    let mut out = nan_vec(n);
+    for i in 3..n {
+        out[i] = (data[i - 3] + 2.0 * data[i - 2] + 2.0 * data[i - 1] + data[i]) / 6.0;
+    }
+    out
+}
+
+/// Relative Vigor Index (vigor): sum(swma(c-o))/sum(swma(h-l)) over period; signal=swma.
+pub fn rvi_vigor(
+    open_: &[f64],
+    high: &[f64],
+    low: &[f64],
+    close: &[f64],
+    period: usize,
+) -> (Vec<f64>, Vec<f64>) {
+    let n = close.len();
+    let co: Vec<f64> = (0..n).map(|i| close[i] - open_[i]).collect();
+    let hl: Vec<f64> = (0..n).map(|i| high[i] - low[i]).collect();
+    let sco = swma_vec(&co);
+    let shl = swma_vec(&hl);
+    let mut rvi = nan_vec(n);
+    if n > period + 2 {
+        for i in period + 2..n {
+            let mut ns = 0.0;
+            let mut ds = 0.0;
+            for j in i - period + 1..i + 1 {
+                if !sco[j].is_nan() {
+                    ns += sco[j];
+                }
+                if !shl[j].is_nan() {
+                    ds += shl[j];
+                }
+            }
+            rvi[i] = if ds != 0.0 { ns / ds } else { 0.0 };
+        }
+    }
+    let signal = swma_vec(&rvi);
+    (rvi, signal)
+}
+
+/// ADX system: returns (di_plus, di_minus, adx) with Wilder smoothing.
+pub fn adx(high: &[f64], low: &[f64], close: &[f64], period: usize) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+    let n = close.len();
+    let tr = true_range(high, low, close);
+    let mut dmp = vec![0.0f64; n];
+    let mut dmm = vec![0.0f64; n];
+    for i in 1..n {
+        let up = high[i] - high[i - 1];
+        let dn = low[i - 1] - low[i];
+        dmp[i] = if up > dn && up > 0.0 { up } else { 0.0 };
+        dmm[i] = if dn > up && dn > 0.0 { dn } else { 0.0 };
+    }
+    let sa = ema_wilder(&tr, period);
+    let sp = ema_wilder(&dmp, period);
+    let sm = ema_wilder(&dmm, period);
+    let mut dip = nan_vec(n);
+    let mut dim = nan_vec(n);
+    let mut dx = nan_vec(n);
+    if period >= 1 {
+        for i in period - 1..n {
+            if !sa[i].is_nan() && sa[i] > 0.0 {
+                dip[i] = (sp[i] / sa[i]) * 100.0;
+                dim[i] = (sm[i] / sa[i]) * 100.0;
+                let ds = dip[i] + dim[i];
+                if ds > 0.0 {
+                    dx[i] = (dip[i] - dim[i]).abs() / ds * 100.0;
+                }
+            }
+        }
+    }
+    let adx = ema_wilder(&dx, period);
+    (dip, dim, adx)
+}
+
+/// Random Walk Index (rwi_high, rwi_low). ATR = per-window mean of True Range.
+pub fn rwi(high: &[f64], low: &[f64], close: &[f64], period: usize) -> (Vec<f64>, Vec<f64>) {
+    let n = close.len();
+    let atr = win_mean(&true_range(high, low, close), period);
+    let mut rh = nan_vec(n);
+    let mut rl = nan_vec(n);
+    if period > 0 && n > period {
+        let sq = (period as f64).sqrt();
+        for i in period..n {
+            if atr[i] > 0.0 {
+                rh[i] = (high[i] - low[i - period]) / (atr[i] * sq);
+                rl[i] = (high[i - period] - low[i]) / (atr[i] * sq);
+            }
+        }
+    }
+    (rh, rl)
+}
+
 /// valuewhen: value of `array` when `expr` (nonzero == true) was true the n-th most
 /// recent time. Mirrors the legacy kernel, including its 1000-entry lookback cap.
 pub fn valuewhen(expr: &[f64], array: &[f64], n: usize) -> Vec<f64> {
@@ -1748,6 +2118,35 @@ mod tests {
         let s = [false, false, true, false];
         assert_eq!(exrem(&p, &s), vec![true, false, false, true]);
         assert_eq!(flip(&p, &s), vec![true, true, false, true]);
+    }
+
+    #[test]
+    fn aroon_extremes() {
+        let h = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let l = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let (up, down) = aroon(&h, &l, 3);
+        approx(up[4], 100.0); // highest is the current bar
+        approx(down[4], 0.0); // lowest was period bars ago
+    }
+
+    #[test]
+    fn adx_rwi_run() {
+        let h: Vec<f64> = (1..=40).map(|x| (x as f64).sin() + 10.0).collect();
+        let l: Vec<f64> = (1..=40).map(|x| (x as f64).sin() + 9.0).collect();
+        let c: Vec<f64> = (1..=40).map(|x| (x as f64).sin() + 9.5).collect();
+        let (dp, dm, a) = adx(&h, &l, &c, 14);
+        assert_eq!(a.len(), 40);
+        assert!(dp[39].is_finite() && dm[39].is_finite());
+        let (rh, rl) = rwi(&h, &l, &c, 14);
+        assert!(rh[39].is_finite() && rl[39].is_finite());
+    }
+
+    #[test]
+    fn mode_variance_run() {
+        let d: Vec<f64> = (1..=60).map(|x| (x % 7) as f64 + 100.0).collect();
+        assert!(mode(&d, 20, 10)[59].is_finite());
+        assert!(variance(&d, 20, false)[59] >= 0.0);
+        assert!(stoch_single(&d, 10)[59] >= 0.0);
     }
 
     #[test]
