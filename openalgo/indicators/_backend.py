@@ -1401,6 +1401,220 @@ def apo(data, fast_period, slow_period, ma_type):
     return _win_mean(data, int(fast_period)) - _win_mean(data, int(slow_period))
 
 
+# --- TA-Lib-faithful directional-movement family (matches TA-Lib seeding) ---
+
+def plus_dm(high, low, period):
+    high, low = _f(high), _f(low)
+    period = int(period)
+    if HAVE_RUST:
+        return _rs.plus_dm_talib(high, low, period)
+    n = high.size
+    out = np.full(n, np.nan)
+    if period == 0 or n < period:
+        return out
+    prev = 0.0
+    for i in range(1, period):
+        dp = high[i] - high[i - 1]
+        dm = low[i - 1] - low[i]
+        if dp > 0.0 and dp > dm:
+            prev += dp
+    out[period - 1] = prev
+    for i in range(period, n):
+        dp = high[i] - high[i - 1]
+        dm = low[i - 1] - low[i]
+        add = dp if (dp > 0.0 and dp > dm) else 0.0
+        prev = prev - prev / period + add
+        out[i] = prev
+    return out
+
+
+def minus_dm(high, low, period):
+    high, low = _f(high), _f(low)
+    period = int(period)
+    if HAVE_RUST:
+        return _rs.minus_dm_talib(high, low, period)
+    n = high.size
+    out = np.full(n, np.nan)
+    if period == 0 or n < period:
+        return out
+    prev = 0.0
+    for i in range(1, period):
+        dp = high[i] - high[i - 1]
+        dm = low[i - 1] - low[i]
+        if dm > 0.0 and dm > dp:
+            prev += dm
+    out[period - 1] = prev
+    for i in range(period, n):
+        dp = high[i] - high[i - 1]
+        dm = low[i - 1] - low[i]
+        add = dm if (dm > 0.0 and dm > dp) else 0.0
+        prev = prev - prev / period + add
+        out[i] = prev
+    return out
+
+
+def dx(high, low, close, period):
+    high, low, close = _f(high), _f(low), _f(close)
+    period = int(period)
+    if HAVE_RUST:
+        return _rs.dx_talib(high, low, close, period)
+    n = close.size
+    out = np.full(n, np.nan)
+    if period == 0 or n < period + 1:
+        return out
+    tr = true_range(high, low, close)
+    s_tr = s_p = s_m = 0.0
+    for i in range(1, period):
+        dp = high[i] - high[i - 1]
+        dm = low[i - 1] - low[i]
+        if dp > 0.0 and dp > dm:
+            s_p += dp
+        elif dm > 0.0 and dm > dp:
+            s_m += dm
+        s_tr += tr[i]
+    for i in range(period, n):
+        dp = high[i] - high[i - 1]
+        dm = low[i - 1] - low[i]
+        s_tr = s_tr - s_tr / period + tr[i]
+        s_p = s_p - s_p / period + (dp if (dp > 0.0 and dp > dm) else 0.0)
+        s_m = s_m - s_m / period + (dm if (dm > 0.0 and dm > dp) else 0.0)
+        if s_tr != 0.0:
+            pdi = 100.0 * s_p / s_tr
+            mdi = 100.0 * s_m / s_tr
+            den = pdi + mdi
+            out[i] = (100.0 * abs(pdi - mdi) / den) if den != 0.0 else 0.0
+        else:
+            out[i] = 0.0
+    return out
+
+
+def adx_talib(high, low, close, period):
+    high, low, close = _f(high), _f(low), _f(close)
+    period = int(period)
+    if HAVE_RUST:
+        return _rs.adx_talib(high, low, close, period)
+    n = close.size
+    out = np.full(n, np.nan)
+    if period == 0 or n < 2 * period:
+        return out
+    tr = true_range(high, low, close)
+    s_tr = s_p = s_m = 0.0
+    for i in range(1, period):
+        dp = high[i] - high[i - 1]
+        dm = low[i - 1] - low[i]
+        if dp > 0.0 and dp > dm:
+            s_p += dp
+        elif dm > 0.0 and dm > dp:
+            s_m += dm
+        s_tr += tr[i]
+
+    def _step(i):
+        nonlocal s_tr, s_p, s_m
+        dp = high[i] - high[i - 1]
+        dm = low[i - 1] - low[i]
+        s_tr = s_tr - s_tr / period + tr[i]
+        s_p = s_p - s_p / period + (dp if (dp > 0.0 and dp > dm) else 0.0)
+        s_m = s_m - s_m / period + (dm if (dm > 0.0 and dm > dp) else 0.0)
+        if s_tr != 0.0:
+            pdi = 100.0 * s_p / s_tr
+            mdi = 100.0 * s_m / s_tr
+            den = pdi + mdi
+            if den != 0.0:
+                return 100.0 * abs(pdi - mdi) / den
+        return 0.0
+
+    sumdx = 0.0
+    for i in range(period, 2 * period):
+        sumdx += _step(i)
+    prevadx = sumdx / period
+    out[2 * period - 1] = prevadx
+    for i in range(2 * period, n):
+        d = _step(i)
+        prevadx = (prevadx * (period - 1) + d) / period
+        out[i] = prevadx
+    return out
+
+
+def adxr(high, low, close, period):
+    high, low, close = _f(high), _f(low), _f(close)
+    period = int(period)
+    if HAVE_RUST:
+        return _rs.adxr_talib(high, low, close, period)
+    a = adx_talib(high, low, close, period)
+    n = a.size
+    out = np.full(n, np.nan)
+    if period == 0:
+        return out
+    off = period - 1
+    start = 2 * period - 1 + off
+    for i in range(start, n):
+        if not (np.isnan(a[i]) or np.isnan(a[i - off])):
+            out[i] = (a[i] + a[i - off]) / 2.0
+    return out
+
+
+def stochf(high, low, close, fastk_period, fastd_period):
+    high, low, close = _f(high), _f(low), _f(close)
+    fastk_period, fastd_period = int(fastk_period), int(fastd_period)
+    if HAVE_RUST:
+        return _rs.stochf(high, low, close, fastk_period, fastd_period)
+    n = close.size
+    k = np.full(n, np.nan)
+    d = np.full(n, np.nan)
+    if fastk_period == 0 or fastd_period == 0 or n < fastk_period:
+        return k, d
+    hh = highest(high, fastk_period)
+    ll = lowest(low, fastk_period)
+    raw = np.full(n, np.nan)
+    for i in range(fastk_period - 1, n):
+        rng = hh[i] - ll[i]
+        raw[i] = (100.0 * (close[i] - ll[i]) / rng) if rng != 0.0 else 0.0
+    start = fastk_period - 1 + fastd_period - 1
+    for i in range(start, n):
+        d[i] = raw[i + 1 - fastd_period:i + 1].sum() / fastd_period
+        k[i] = raw[i]
+    return k, d
+
+
+def linreg_angle(data, period):
+    data = _f(data)
+    period = int(period)
+    if HAVE_RUST:
+        return _rs.linreg_angle(data, period)
+    n = data.size
+    out = np.full(n, np.nan)
+    if period == 0 or n < period:
+        return out
+    x = np.arange(period, dtype=np.float64)
+    sx = x.sum()
+    den = period * (x * x).sum() - sx * sx
+    for i in range(period - 1, n):
+        y = data[i + 1 - period:i + 1]
+        slope = (period * (x * y).sum() - sx * y.sum()) / den if den != 0.0 else 0.0
+        out[i] = np.degrees(np.arctan(slope))
+    return out
+
+
+def linreg_intercept(data, period):
+    data = _f(data)
+    period = int(period)
+    if HAVE_RUST:
+        return _rs.linreg_intercept(data, period)
+    n = data.size
+    out = np.full(n, np.nan)
+    if period == 0 or n < period:
+        return out
+    x = np.arange(period, dtype=np.float64)
+    sx = x.sum()
+    den = period * (x * x).sum() - sx * sx
+    for i in range(period - 1, n):
+        y = data[i + 1 - period:i + 1]
+        sy = y.sum()
+        slope = (period * (x * y).sum() - sx * sy) / den if den != 0.0 else 0.0
+        out[i] = (sy - slope * sx) / period
+    return out
+
+
 def nvi(close, volume):
     close, volume = _f(close), _f(volume)
     n = close.size

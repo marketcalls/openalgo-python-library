@@ -236,3 +236,17 @@ Wrapper-swap pattern proven (SMA/EMA/WMA migrated; `import openalgo` fixed). Sca
 Backlog: trend MAs reusing existing kernels (dema/tema/trima/hma/vwma/zlema/kama/t3),
 then statistics/oscillators/volume/hybrid; finally Phase 3 cleanup (delete numba_shim,
 drop numba dep + [indicators] extra) and Phase 4 maturin/CI.
+
+## Gap-fill loop progress (post-migration)
+- Batch A1 (committed b5f194f): price transforms + ROC/MOM/MIDPOINT/APO variants
+  (avgprice/medprice/typprice/wclprice/midpoint/midprice/mom/rocp/rocr/rocr100/apo).
+- Batch A2 (this commit): TA-Lib-faithful directional-movement family + linreg
+  variants — ta.plus_dm/minus_dm/dx/adxr/stochf/linregangle/linregintercept. New
+  Rust kernels (plus_dm_talib/minus_dm_talib/dx_talib/adx_talib/adxr_talib/stochf/
+  linreg_angle/linreg_intercept) with exact TA-Lib Wilder seeding; all match TA-Lib
+  <=1e-12. Also HARDENED all oa_core window indexing to underflow-safe `i+1-period`
+  form so `cargo test` passes in DEBUG (was only passing in release; CI runs debug).
+  44 cargo tests + 9 parity gates + talib_extra_parity (19) + ci_smoke all green.
+- NEXT (batch B): Hilbert Transform suite (HT_DCPERIOD, HT_DCPHASE, HT_PHASOR,
+  HT_SINE, HT_TRENDMODE, HT_TRENDLINE) — port TA-Lib's exact DSP, parity <=1e-6.
+- Still NOT pushed. Candlesticks (61 CDL*) intentionally out of scope unless asked.

@@ -39,6 +39,17 @@ def main():
     cmp("rocr", ta.rocr(c, 10), talib.ROCR(c, 10))
     cmp("rocr100", ta.rocr100(c, 10), talib.ROCR100(c, 10))
     cmp("apo", ta.apo(c, 12, 26, "SMA"), talib.APO(c, 12, 26, 0))
+    # Directional-movement family + linreg variants (TA-Lib-faithful)
+    cmp("plus_dm", ta.plus_dm(h, l, 14), talib.PLUS_DM(h, l, 14))
+    cmp("minus_dm", ta.minus_dm(h, l, 14), talib.MINUS_DM(h, l, 14))
+    cmp("dx", ta.dx(h, l, c, 14), talib.DX(h, l, c, 14), tol=1e-7)
+    cmp("adxr", ta.adxr(h, l, c, 14), talib.ADXR(h, l, c, 14), tol=1e-7)
+    fk, fd = ta.stochf(h, l, c, 5, 3)
+    tk, td = talib.STOCHF(h, l, c, 5, 3, 0)
+    cmp("stochf_k", fk, tk, tol=1e-7)
+    cmp("stochf_d", fd, td, tol=1e-7)
+    cmp("linregangle", ta.linregangle(c, 14), talib.LINEARREG_ANGLE(c, 14), tol=1e-7)
+    cmp("linregintercept", ta.linregintercept(c, 14), talib.LINEARREG_INTERCEPT(c, 14), tol=1e-7)
     print("\nRESULT:", "ALL TALIB-EXTRA PARITY PASS" if not FAILS else f"FAIL: {FAILS}")
     return 1 if FAILS else 0
 

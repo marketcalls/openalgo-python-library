@@ -151,7 +151,7 @@ pub fn wma(data: &[f64], period: usize) -> Vec<f64> {
     for i in period - 1..n {
         let mut ws = 0.0;
         for j in 0..period {
-            ws += data[i - period + 1 + j] * (j + 1) as f64;
+            ws += data[i + 1 - period + j] * (j + 1) as f64;
         }
         result[i] = ws / weight_sum;
     }
@@ -481,7 +481,7 @@ pub fn alma(data: &[f64], period: usize, offset: f64, sigma: f64) -> Vec<f64> {
     for i in period - 1..n {
         let mut acc = 0.0;
         for j in 0..period {
-            acc += weights[j] * data[i - period + 1 + j];
+            acc += weights[j] * data[i + 1 - period + j];
         }
         result[i] = acc;
     }
@@ -523,7 +523,7 @@ pub fn vidya(data: &[f64], period: usize, alpha: f64) -> Vec<f64> {
     for i in period..n {
         let mut gains = 0.0;
         let mut losses = 0.0;
-        for j in i - period + 1..i + 1 {
+        for j in i + 1 - period..i + 1 {
             if j > 0 {
                 let diff = data[j] - data[j - 1];
                 if diff > 0.0 {
@@ -565,7 +565,7 @@ pub fn kama_tv(data: &[f64], length: usize, fast_length: usize, slow_length: usi
     for i in length..n {
         let mom = (data[i] - data[i - length]).abs();
         let mut volatility = 0.0;
-        for j in i - length + 1..i + 1 {
+        for j in i + 1 - length..i + 1 {
             if j > 0 {
                 volatility += (data[j] - data[j - 1]).abs();
             }
@@ -656,9 +656,9 @@ pub fn chande_kroll_stop(
     let mut fhs = nan_vec(n);
     let mut fls = nan_vec(n);
     for i in p - 1..n {
-        let mut hh = high[i - p + 1];
-        let mut ll = low[i - p + 1];
-        for k in i - p + 1..i + 1 {
+        let mut hh = high[i + 1 - p];
+        let mut ll = low[i + 1 - p];
+        for k in i + 1 - p..i + 1 {
             if high[k] > hh {
                 hh = high[k];
             }
@@ -713,9 +713,9 @@ pub fn frama(high: &[f64], low: &[f64], period: usize) -> Vec<f64> {
     let ln2 = 2.0_f64.ln();
     for i in 1..n {
         if i >= period && half > 0 {
-            let mut hmax = high[i - period + 1];
-            let mut lmin = low[i - period + 1];
-            for k in i - period + 1..i + 1 {
+            let mut hmax = high[i + 1 - period];
+            let mut lmin = low[i + 1 - period];
+            for k in i + 1 - period..i + 1 {
                 if high[k] > hmax {
                     hmax = high[k];
                 }
@@ -1040,7 +1040,7 @@ pub fn cci(high: &[f64], low: &[f64], close: &[f64], period: usize) -> Vec<f64> 
         let sma_tp = rsum / p;
         let mut md = 0.0;
         for j in 0..period {
-            md += (tp[i - period + 1 + j] - sma_tp).abs();
+            md += (tp[i + 1 - period + j] - sma_tp).abs();
         }
         md /= p;
         out[i] = if md != 0.0 {
@@ -1208,7 +1208,7 @@ pub fn cmf(high: &[f64], low: &[f64], close: &[f64], volume: &[f64], period: usi
         let mut smfv = 0.0;
         let mut sv = 0.0;
         for j in 0..period {
-            let idx = i - period + 1 + j;
+            let idx = i + 1 - period + j;
             let mfm = if high[idx] != low[idx] {
                 ((close[idx] - low[idx]) - (high[idx] - close[idx])) / (high[idx] - low[idx])
             } else {
@@ -1441,7 +1441,7 @@ pub fn win_mean(data: &[f64], period: usize) -> Vec<f64> {
     }
     let p = period as f64;
     for i in period - 1..n {
-        let w = &data[i - period + 1..i + 1];
+        let w = &data[i + 1 - period..i + 1];
         let mut s = 0.0;
         let mut nan = false;
         for &v in w {
@@ -1467,7 +1467,7 @@ pub fn win_std(data: &[f64], period: usize) -> Vec<f64> {
     }
     let p = period as f64;
     for i in period - 1..n {
-        let w = &data[i - period + 1..i + 1];
+        let w = &data[i + 1 - period..i + 1];
         let mut s = 0.0;
         let mut nan = false;
         for &v in w {
@@ -1501,7 +1501,7 @@ pub fn linreg(data: &[f64], period: usize) -> Vec<f64> {
     let (sx, sx2) = _xstats(period);
     let den = period as f64 * sx2 - sx * sx;
     for i in period - 1..n {
-        out[i] = _linreg_endval(&data[i - period + 1..i + 1], period, sx, den, (period - 1) as f64);
+        out[i] = _linreg_endval(&data[i + 1 - period..i + 1], period, sx, den, (period - 1) as f64);
     }
     out
 }
@@ -1516,7 +1516,7 @@ pub fn tsf(data: &[f64], period: usize) -> Vec<f64> {
     let (sx, sx2) = _xstats(period);
     let den = period as f64 * sx2 - sx * sx;
     for i in period - 1..n {
-        out[i] = _linreg_endval(&data[i - period + 1..i + 1], period, sx, den, period as f64);
+        out[i] = _linreg_endval(&data[i + 1 - period..i + 1], period, sx, den, period as f64);
     }
     out
 }
@@ -1532,7 +1532,7 @@ pub fn lrslope(data: &[f64], period: usize, interval: f64) -> Vec<f64> {
     let den = period as f64 * sx2 - sx * sx;
     let ex = (period - 1) as f64;
     for i in period..n {
-        let cur = _linreg_endval(&data[i - period + 1..i + 1], period, sx, den, ex);
+        let cur = _linreg_endval(&data[i + 1 - period..i + 1], period, sx, den, ex);
         let prev = _linreg_endval(&data[i - period..i], period, sx, den, ex);
         out[i] = (cur - prev) / interval;
     }
@@ -1548,8 +1548,8 @@ pub fn correl(d1: &[f64], d2: &[f64], period: usize) -> Vec<f64> {
     }
     let p = period as f64;
     for i in period - 1..n {
-        let x = &d1[i - period + 1..i + 1];
-        let y = &d2[i - period + 1..i + 1];
+        let x = &d1[i + 1 - period..i + 1];
+        let y = &d2[i + 1 - period..i + 1];
         let mut mx = 0.0;
         let mut my = 0.0;
         for j in 0..period {
@@ -1589,8 +1589,8 @@ pub fn beta(asset: &[f64], market: &[f64], period: usize) -> Vec<f64> {
         mr[i] = market[i] - market[i - 1];
     }
     for i in period..n {
-        let aw = &ar[i - period + 1..i + 1];
-        let mw = &mr[i - period + 1..i + 1];
+        let aw = &ar[i + 1 - period..i + 1];
+        let mw = &mr[i + 1 - period..i + 1];
         let mut ma = 0.0;
         let mut mm = 0.0;
         for j in 0..period {
@@ -1679,7 +1679,7 @@ pub fn aroon(high: &[f64], low: &[f64], period: usize) -> (Vec<f64>, Vec<f64>) {
     }
     let p = period as f64;
     for i in lookback - 1..n {
-        let ws = i - lookback + 1;
+        let ws = i + 1 - lookback;
         let mut hp = 0usize;
         let mut lp = 0usize;
         for j in 0..lookback {
@@ -1769,7 +1769,7 @@ pub fn mode(data: &[f64], period: usize, bins: usize) -> Vec<f64> {
         return out;
     }
     for i in period - 1..n {
-        let w = &data[i - period + 1..i + 1];
+        let w = &data[i + 1 - period..i + 1];
         let mut mn = w[0];
         let mut mx = w[0];
         for &x in w {
@@ -1822,7 +1822,7 @@ pub fn trima(data: &[f64], period: usize) -> Vec<f64> {
         for i in n1 - 1..n {
             let mut s = 0.0;
             for j in 0..n1 {
-                s += data[i - n1 + 1 + j];
+                s += data[i + 1 - n1 + j];
             }
             first[i] = s / n1 as f64;
         }
@@ -1928,7 +1928,7 @@ pub fn median(data: &[f64], period: usize) -> Vec<f64> {
     }
     let mut buf = vec![0.0f64; period];
     for i in period - 1..n {
-        buf.copy_from_slice(&data[i - period + 1..i + 1]);
+        buf.copy_from_slice(&data[i + 1 - period..i + 1]);
         buf.sort_by(|a, b| a.partial_cmp(b).unwrap());
         out[i] = if period % 2 == 1 {
             buf[period / 2]
@@ -1947,7 +1947,7 @@ pub fn stoch_single(data: &[f64], period: usize) -> Vec<f64> {
         return out;
     }
     for i in period - 1..n {
-        let w = &data[i - period + 1..i + 1];
+        let w = &data[i + 1 - period..i + 1];
         let mut hi = f64::NEG_INFINITY;
         let mut lo = f64::INFINITY;
         let mut any = false;
@@ -1987,7 +1987,7 @@ pub fn wma_nan(data: &[f64], period: usize) -> Vec<f64> {
         let mut ws = 0.0;
         let mut vw = 0.0;
         for j in 0..period {
-            let v = data[i - period + 1 + j];
+            let v = data[i + 1 - period + j];
             if !v.is_nan() {
                 let w = (j + 1) as f64;
                 ws += v * w;
@@ -2029,7 +2029,7 @@ pub fn rvi_vigor(
         for i in period + 2..n {
             let mut ns = 0.0;
             let mut ds = 0.0;
-            for j in i - period + 1..i + 1 {
+            for j in i + 1 - period..i + 1 {
                 if !sco[j].is_nan() {
                     ns += sco[j];
                 }
@@ -2124,6 +2124,256 @@ pub fn valuewhen(expr: &[f64], array: &[f64], n: usize) -> Vec<f64> {
         }
     }
     result
+}
+
+// ---------------------------------------------------------------------------
+// TA-Lib-faithful directional-movement family (exact TA-Lib seeding/smoothing).
+// These intentionally replicate TA-Lib (NOT OpenAlgo's TradingView-seeded adx).
+// ---------------------------------------------------------------------------
+
+/// TA-Lib PLUS_DM: Wilder running sum of +DM1. First value at index period-1
+/// = sum of +DM1 over bars 1..period-1; then dm = dm - dm/period + +DM1.
+pub fn plus_dm_talib(high: &[f64], low: &[f64], period: usize) -> Vec<f64> {
+    let n = high.len();
+    let mut out = nan_vec(n);
+    if period == 0 || n < period {
+        return out;
+    }
+    let mut prev = 0.0;
+    for i in 1..period {
+        let dp = high[i] - high[i - 1];
+        let dm = low[i - 1] - low[i];
+        if dp > 0.0 && dp > dm {
+            prev += dp;
+        }
+    }
+    out[period - 1] = prev;
+    let pf = period as f64;
+    for i in period..n {
+        let dp = high[i] - high[i - 1];
+        let dm = low[i - 1] - low[i];
+        let add = if dp > 0.0 && dp > dm { dp } else { 0.0 };
+        prev = prev - prev / pf + add;
+        out[i] = prev;
+    }
+    out
+}
+
+/// TA-Lib MINUS_DM (symmetric to plus_dm_talib).
+pub fn minus_dm_talib(high: &[f64], low: &[f64], period: usize) -> Vec<f64> {
+    let n = high.len();
+    let mut out = nan_vec(n);
+    if period == 0 || n < period {
+        return out;
+    }
+    let mut prev = 0.0;
+    for i in 1..period {
+        let dp = high[i] - high[i - 1];
+        let dm = low[i - 1] - low[i];
+        if dm > 0.0 && dm > dp {
+            prev += dm;
+        }
+    }
+    out[period - 1] = prev;
+    let pf = period as f64;
+    for i in period..n {
+        let dp = high[i] - high[i - 1];
+        let dm = low[i - 1] - low[i];
+        let add = if dm > 0.0 && dm > dp { dm } else { 0.0 };
+        prev = prev - prev / pf + add;
+        out[i] = prev;
+    }
+    out
+}
+
+/// TA-Lib DX. First value at index period (Wilder-smoothed +DI/-DI then
+/// 100*|+DI - -DI|/(+DI + -DI)).
+pub fn dx_talib(high: &[f64], low: &[f64], close: &[f64], period: usize) -> Vec<f64> {
+    let n = high.len();
+    let mut out = nan_vec(n);
+    if period == 0 || n < period + 1 {
+        return out;
+    }
+    let tr1 = true_range(high, low, close);
+    let (mut str_, mut sp, mut sm) = (0.0, 0.0, 0.0);
+    for i in 1..period {
+        let dp = high[i] - high[i - 1];
+        let dm = low[i - 1] - low[i];
+        if dp > 0.0 && dp > dm {
+            sp += dp;
+        } else if dm > 0.0 && dm > dp {
+            sm += dm;
+        }
+        str_ += tr1[i];
+    }
+    let pf = period as f64;
+    for i in period..n {
+        let dp = high[i] - high[i - 1];
+        let dm = low[i - 1] - low[i];
+        str_ = str_ - str_ / pf + tr1[i];
+        sp = sp - sp / pf + if dp > 0.0 && dp > dm { dp } else { 0.0 };
+        sm = sm - sm / pf + if dm > 0.0 && dm > dp { dm } else { 0.0 };
+        if str_ != 0.0 {
+            let pdi = 100.0 * sp / str_;
+            let mdi = 100.0 * sm / str_;
+            let s = pdi + mdi;
+            out[i] = if s != 0.0 { 100.0 * (pdi - mdi).abs() / s } else { 0.0 };
+        } else {
+            out[i] = 0.0;
+        }
+    }
+    out
+}
+
+/// TA-Lib ADX. First value at index 2*period-1 (mean of `period` DX values),
+/// then Wilder recursion adx = (adx*(period-1) + dx)/period.
+pub fn adx_talib(high: &[f64], low: &[f64], close: &[f64], period: usize) -> Vec<f64> {
+    let n = high.len();
+    let mut out = nan_vec(n);
+    if period == 0 || n < 2 * period {
+        return out;
+    }
+    let tr1 = true_range(high, low, close);
+    let (mut str_, mut sp, mut sm) = (0.0, 0.0, 0.0);
+    for i in 1..period {
+        let dp = high[i] - high[i - 1];
+        let dm = low[i - 1] - low[i];
+        if dp > 0.0 && dp > dm {
+            sp += dp;
+        } else if dm > 0.0 && dm > dp {
+            sm += dm;
+        }
+        str_ += tr1[i];
+    }
+    let pf = period as f64;
+    let wilder = |i: usize, str_: &mut f64, sp: &mut f64, sm: &mut f64| -> f64 {
+        let dp = high[i] - high[i - 1];
+        let dm = low[i - 1] - low[i];
+        *str_ = *str_ - *str_ / pf + tr1[i];
+        *sp = *sp - *sp / pf + if dp > 0.0 && dp > dm { dp } else { 0.0 };
+        *sm = *sm - *sm / pf + if dm > 0.0 && dm > dp { dm } else { 0.0 };
+        if *str_ != 0.0 {
+            let pdi = 100.0 * *sp / *str_;
+            let mdi = 100.0 * *sm / *str_;
+            let s = pdi + mdi;
+            if s != 0.0 {
+                return 100.0 * (pdi - mdi).abs() / s;
+            }
+        }
+        0.0
+    };
+    let mut sumdx = 0.0;
+    for i in period..2 * period {
+        sumdx += wilder(i, &mut str_, &mut sp, &mut sm);
+    }
+    let mut prevadx = sumdx / pf;
+    out[2 * period - 1] = prevadx;
+    for i in 2 * period..n {
+        let dx = wilder(i, &mut str_, &mut sp, &mut sm);
+        prevadx = (prevadx * (pf - 1.0) + dx) / pf;
+        out[i] = prevadx;
+    }
+    out
+}
+
+/// TA-Lib ADXR = (ADX[i] + ADX[i-(period-1)]) / 2.
+pub fn adxr_talib(high: &[f64], low: &[f64], close: &[f64], period: usize) -> Vec<f64> {
+    let n = high.len();
+    let adx = adx_talib(high, low, close, period);
+    let mut out = nan_vec(n);
+    if period == 0 {
+        return out;
+    }
+    let off = period - 1;
+    let start = 2 * period - 1 + off;
+    for i in start..n {
+        if !adx[i].is_nan() && !adx[i - off].is_nan() {
+            out[i] = (adx[i] + adx[i - off]) / 2.0;
+        }
+    }
+    out
+}
+
+/// TA-Lib STOCHF -> (fastk, fastd). fastk = 100*(c-LL)/(HH-LL) over fastk_period,
+/// fastd = SMA(fastk, fastd_period). Both aligned to first index
+/// (fastk_period-1)+(fastd_period-1), matching TA-Lib's output padding.
+pub fn stochf(
+    high: &[f64],
+    low: &[f64],
+    close: &[f64],
+    fastk_period: usize,
+    fastd_period: usize,
+) -> (Vec<f64>, Vec<f64>) {
+    let n = close.len();
+    let mut k = nan_vec(n);
+    let mut d = nan_vec(n);
+    if fastk_period == 0 || fastd_period == 0 || n < fastk_period {
+        return (k, d);
+    }
+    let hh = highest(high, fastk_period);
+    let ll = lowest(low, fastk_period);
+    let mut raw = nan_vec(n);
+    for i in fastk_period - 1..n {
+        let rng = hh[i] - ll[i];
+        raw[i] = if rng != 0.0 { 100.0 * (close[i] - ll[i]) / rng } else { 0.0 };
+    }
+    let start = fastk_period - 1 + fastd_period - 1;
+    let fp = fastd_period as f64;
+    for i in start..n {
+        let mut s = 0.0;
+        for j in i + 1 - fastd_period..=i {
+            s += raw[j];
+        }
+        d[i] = s / fp;
+        k[i] = raw[i];
+    }
+    (k, d)
+}
+
+/// TA-Lib LINEARREG_ANGLE = degrees(atan(OLS slope)) over `period`.
+pub fn linreg_angle(data: &[f64], period: usize) -> Vec<f64> {
+    let n = data.len();
+    let mut out = nan_vec(n);
+    if period == 0 || n < period {
+        return out;
+    }
+    let (sx, sx2) = _xstats(period);
+    let p = period as f64;
+    let den = p * sx2 - sx * sx;
+    for i in period - 1..n {
+        let y = &data[i + 1 - period..i + 1];
+        let (mut sy, mut sxy) = (0.0, 0.0);
+        for (j, &v) in y.iter().enumerate() {
+            sy += v;
+            sxy += j as f64 * v;
+        }
+        let slope = if den != 0.0 { (p * sxy - sx * sy) / den } else { 0.0 };
+        out[i] = slope.atan().to_degrees();
+    }
+    out
+}
+
+/// TA-Lib LINEARREG_INTERCEPT = OLS intercept b over `period`.
+pub fn linreg_intercept(data: &[f64], period: usize) -> Vec<f64> {
+    let n = data.len();
+    let mut out = nan_vec(n);
+    if period == 0 || n < period {
+        return out;
+    }
+    let (sx, sx2) = _xstats(period);
+    let p = period as f64;
+    let den = p * sx2 - sx * sx;
+    for i in period - 1..n {
+        let y = &data[i + 1 - period..i + 1];
+        let (mut sy, mut sxy) = (0.0, 0.0);
+        for (j, &v) in y.iter().enumerate() {
+            sy += v;
+            sxy += j as f64 * v;
+        }
+        let slope = if den != 0.0 { (p * sxy - sx * sy) / den } else { 0.0 };
+        out[i] = (sy - slope * sx) / p;
+    }
+    out
 }
 
 #[cfg(test)]
@@ -2246,6 +2496,52 @@ mod tests {
         assert!(r[3].is_finite());
         // smooth of a linear ramp stays increasing
         assert!(r[9] > r[8]);
+    }
+
+    #[test]
+    fn talib_dm_family_alignment() {
+        let n = 60usize;
+        let high: Vec<f64> = (0..n).map(|i| 100.0 + (i as f64 * 0.3).sin() * 5.0 + i as f64 * 0.1).collect();
+        let low: Vec<f64> = high.iter().map(|h| h - 2.0).collect();
+        let close: Vec<f64> = high.iter().map(|h| h - 1.0).collect();
+        let p = 14;
+        let pdm = plus_dm_talib(&high, &low, p);
+        let mdm = minus_dm_talib(&high, &low, p);
+        // first valid at period-1
+        assert!(pdm[p - 2].is_nan() && pdm[p - 1].is_finite());
+        assert!(mdm[p - 1].is_finite());
+        let dx = dx_talib(&high, &low, &close, p);
+        assert!(dx[p - 1].is_nan() && dx[p].is_finite()); // first DX at index period
+        let adx = adx_talib(&high, &low, &close, p);
+        assert!(adx[2 * p - 2].is_nan() && adx[2 * p - 1].is_finite()); // 2*period-1
+        let adxr = adxr_talib(&high, &low, &close, p);
+        assert!(adxr[3 * p - 3].is_nan() && adxr[3 * p - 2].is_finite()); // 3*period-2
+        // DX bounded [0,100]
+        for v in dx.iter().filter(|v| !v.is_nan()) {
+            assert!(*v >= -1e-9 && *v <= 100.0 + 1e-9);
+        }
+    }
+
+    #[test]
+    fn stochf_and_linreg_variants() {
+        let n = 40usize;
+        let high: Vec<f64> = (0..n).map(|i| 50.0 + (i as f64 * 0.4).sin() * 3.0).collect();
+        let low: Vec<f64> = high.iter().map(|h| h - 1.5).collect();
+        let close: Vec<f64> = high.iter().map(|h| h - 0.5).collect();
+        let (k, d) = stochf(&high, &low, &close, 5, 3);
+        // both aligned to (5-1)+(3-1)=6
+        assert!(k[5].is_nan() && k[6].is_finite() && d[6].is_finite());
+        for v in k.iter().filter(|v| !v.is_nan()) {
+            assert!(*v >= -1e-9 && *v <= 100.0 + 1e-9);
+        }
+        let ang = linreg_angle(&close, 14);
+        let icpt = linreg_intercept(&close, 14);
+        assert!(ang[12].is_nan() && ang[13].is_finite());
+        assert!(icpt[13].is_finite());
+        // angle of a rising line is positive
+        let ramp: Vec<f64> = (0..30).map(|x| x as f64).collect();
+        let a = linreg_angle(&ramp, 10);
+        approx(a[29], 45.0); // slope 1 -> 45 degrees
     }
 
     #[test]

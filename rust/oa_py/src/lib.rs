@@ -151,6 +151,96 @@ fn rwi<'py>(
 wrap_period!(win_std, oa_core::win_std);
 wrap_period!(linreg, oa_core::linreg);
 wrap_period!(tsf, oa_core::tsf);
+wrap_period!(linreg_angle, oa_core::linreg_angle);
+wrap_period!(linreg_intercept, oa_core::linreg_intercept);
+
+#[pyfunction]
+#[pyo3(signature = (high, low, period))]
+fn plus_dm_talib<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    period: usize,
+) -> PyResult<Py<PyArray1<f64>>> {
+    Ok(oa_core::plus_dm_talib(high.as_slice()?, low.as_slice()?, period)
+        .into_pyarray_bound(py)
+        .unbind())
+}
+
+#[pyfunction]
+#[pyo3(signature = (high, low, period))]
+fn minus_dm_talib<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    period: usize,
+) -> PyResult<Py<PyArray1<f64>>> {
+    Ok(oa_core::minus_dm_talib(high.as_slice()?, low.as_slice()?, period)
+        .into_pyarray_bound(py)
+        .unbind())
+}
+
+#[pyfunction]
+#[pyo3(signature = (high, low, close, period))]
+fn dx_talib<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    close: PyReadonlyArray1<'py, f64>,
+    period: usize,
+) -> PyResult<Py<PyArray1<f64>>> {
+    Ok(oa_core::dx_talib(high.as_slice()?, low.as_slice()?, close.as_slice()?, period)
+        .into_pyarray_bound(py)
+        .unbind())
+}
+
+#[pyfunction]
+#[pyo3(signature = (high, low, close, period))]
+fn adx_talib<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    close: PyReadonlyArray1<'py, f64>,
+    period: usize,
+) -> PyResult<Py<PyArray1<f64>>> {
+    Ok(oa_core::adx_talib(high.as_slice()?, low.as_slice()?, close.as_slice()?, period)
+        .into_pyarray_bound(py)
+        .unbind())
+}
+
+#[pyfunction]
+#[pyo3(signature = (high, low, close, period))]
+fn adxr_talib<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    close: PyReadonlyArray1<'py, f64>,
+    period: usize,
+) -> PyResult<Py<PyArray1<f64>>> {
+    Ok(oa_core::adxr_talib(high.as_slice()?, low.as_slice()?, close.as_slice()?, period)
+        .into_pyarray_bound(py)
+        .unbind())
+}
+
+#[pyfunction]
+#[pyo3(signature = (high, low, close, fastk_period, fastd_period))]
+fn stochf<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    close: PyReadonlyArray1<'py, f64>,
+    fastk_period: usize,
+    fastd_period: usize,
+) -> PyResult<(Py<PyArray1<f64>>, Py<PyArray1<f64>>)> {
+    let (k, d) = oa_core::stochf(
+        high.as_slice()?,
+        low.as_slice()?,
+        close.as_slice()?,
+        fastk_period,
+        fastd_period,
+    );
+    Ok((k.into_pyarray_bound(py).unbind(), d.into_pyarray_bound(py).unbind()))
+}
 
 #[pyfunction]
 #[pyo3(signature = (data, period, interval))]
@@ -615,6 +705,14 @@ fn _oaindicators(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(win_std, m)?)?;
     m.add_function(wrap_pyfunction!(linreg, m)?)?;
     m.add_function(wrap_pyfunction!(tsf, m)?)?;
+    m.add_function(wrap_pyfunction!(linreg_angle, m)?)?;
+    m.add_function(wrap_pyfunction!(linreg_intercept, m)?)?;
+    m.add_function(wrap_pyfunction!(plus_dm_talib, m)?)?;
+    m.add_function(wrap_pyfunction!(minus_dm_talib, m)?)?;
+    m.add_function(wrap_pyfunction!(dx_talib, m)?)?;
+    m.add_function(wrap_pyfunction!(adx_talib, m)?)?;
+    m.add_function(wrap_pyfunction!(adxr_talib, m)?)?;
+    m.add_function(wrap_pyfunction!(stochf, m)?)?;
     m.add_function(wrap_pyfunction!(lrslope, m)?)?;
     m.add_function(wrap_pyfunction!(correl, m)?)?;
     m.add_function(wrap_pyfunction!(beta, m)?)?;

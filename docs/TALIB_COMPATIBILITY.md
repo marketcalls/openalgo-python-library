@@ -50,6 +50,18 @@ existing users:
 | `ta.rocr(data,n)` | ROCR | price/prev |
 | `ta.rocr100(data,n)` | ROCR100 | price/prev*100 |
 | `ta.apo(data,fast,slow,ma_type)` | APO | MA(fast) - MA(slow) |
+| `ta.plus_dm(h,l,n)` | PLUS_DM | Wilder-summed +DM (TA-Lib seeding) |
+| `ta.minus_dm(h,l,n)` | MINUS_DM | Wilder-summed -DM (TA-Lib seeding) |
+| `ta.dx(h,l,c,n)` | DX | 100*&#124;+DI - -DI&#124;/(+DI + -DI) |
+| `ta.adxr(h,l,c,n)` | ADXR | (ADX + ADX[n-1]) / 2 |
+| `ta.stochf(h,l,c,fk,fd)` | STOCHF | fast %K, %D=SMA(%K,fd) -> (fastk, fastd) |
+| `ta.linregangle(data,n)` | LINEARREG_ANGLE | degrees(atan(OLS slope)) |
+| `ta.linregintercept(data,n)` | LINEARREG_INTERCEPT | OLS intercept b |
+
+These directional-movement indicators use **TA-Lib's exact Wilder seeding** (sum the
+first `period-1` DMs, then `dm = dm - dm/period + todayDM`), which is why they match
+TA-Lib bit-for-bit and are kept separate from `ta.adx`/`ta.atr` (those follow
+TradingView). Parity vs TA-Lib: all <=1e-12 on RELIANCE daily.
 
 ## Coverage gap (TA-Lib functions OpenAlgo does not yet have)
 Vector math (ADD/SUB/COS/LN/...) and operators (MAX/MIN/SUM - available as
@@ -57,9 +69,9 @@ ta.highest/lowest and the rolling-sum util) are excluded as non-indicators.
 
 - **Candlestick patterns (61):** CDL2CROWS ... CDLXSIDEGAP3METHODS - none yet.
 - **Hilbert Transform / cycle (6):** HT_DCPERIOD, HT_DCPHASE, HT_PHASOR, HT_SINE,
-  HT_TRENDMODE, HT_TRENDLINE - planned.
-- **Momentum variants (7):** ADXR, DX, MACDEXT, MACDFIX, MINUS_DM, PLUS_DM, STOCHF.
+  HT_TRENDMODE, HT_TRENDLINE - planned (next batch).
+- **Momentum variants (2):** MACDEXT, MACDFIX. (ADXR, DX, MINUS_DM, PLUS_DM, STOCHF
+  added above.)
 - **Overlap (3):** MAMA, MAVP, SAREXT.
-- **Statistic (2):** LINEARREG_ANGLE, LINEARREG_INTERCEPT.
 
 See `benchmark/TALIB_COMPARISON.md` for the live numbers.

@@ -32,7 +32,9 @@ from .utils import (crossover, crossunder, highest, lowest, change, roc,
                    sma as utils_sma, ema as utils_ema, stdev, validate_input,
                    exrem, flip, valuewhen, rising, falling, cross)
 from .talib_extra import (MOM, ROCP, ROCR, ROCR100, MIDPOINT, APO,
-                          MEDPRICE, TYPPRICE, WCLPRICE, MIDPRICE, AVGPRICE)
+                          MEDPRICE, TYPPRICE, WCLPRICE, MIDPRICE, AVGPRICE,
+                          PLUS_DM, MINUS_DM, DX, ADXR, STOCHF,
+                          LINEARREG_ANGLE, LINEARREG_INTERCEPT)
 
 
 class TechnicalAnalysis:
@@ -175,6 +177,13 @@ class TechnicalAnalysis:
         self._wclprice = WCLPRICE()
         self._midprice = MIDPRICE()
         self._avgprice = AVGPRICE()
+        self._plus_dm = PLUS_DM()
+        self._minus_dm = MINUS_DM()
+        self._dx = DX()
+        self._adxr = ADXR()
+        self._stochf = STOCHF()
+        self._linregangle = LINEARREG_ANGLE()
+        self._linregintercept = LINEARREG_INTERCEPT()
 
         # Hybrid indicators
         self._adx = ADX()
@@ -1317,6 +1326,34 @@ class TechnicalAnalysis:
     def wclprice(self, high, low, close):
         """Weighted Close Price (TA-Lib WCLPRICE): (high+low+2*close)/4."""
         return self._wclprice.calculate(high, low, close)
+
+    def plus_dm(self, high, low, period: int = 14):
+        """Plus Directional Movement (TA-Lib PLUS_DM): Wilder-summed +DM."""
+        return self._plus_dm.calculate(high, low, period)
+
+    def minus_dm(self, high, low, period: int = 14):
+        """Minus Directional Movement (TA-Lib MINUS_DM): Wilder-summed -DM."""
+        return self._minus_dm.calculate(high, low, period)
+
+    def dx(self, high, low, close, period: int = 14):
+        """Directional Movement Index (TA-Lib DX): 100*|+DI - -DI|/(+DI + -DI)."""
+        return self._dx.calculate(high, low, close, period)
+
+    def adxr(self, high, low, close, period: int = 14):
+        """Average Directional Movement Rating (TA-Lib ADXR): (ADX + ADX[period-1])/2."""
+        return self._adxr.calculate(high, low, close, period)
+
+    def stochf(self, high, low, close, fastk_period: int = 5, fastd_period: int = 3):
+        """Stochastic Fast (TA-Lib STOCHF): returns (fastk, fastd)."""
+        return self._stochf.calculate(high, low, close, fastk_period, fastd_period)
+
+    def linregangle(self, data, period: int = 14):
+        """Linear Regression Angle (TA-Lib LINEARREG_ANGLE): degrees(atan(slope))."""
+        return self._linregangle.calculate(data, period)
+
+    def linregintercept(self, data, period: int = 14):
+        """Linear Regression Intercept (TA-Lib LINEARREG_INTERCEPT)."""
+        return self._linregintercept.calculate(data, period)
 
     # =================== UTILITY FUNCTIONS ===================
     

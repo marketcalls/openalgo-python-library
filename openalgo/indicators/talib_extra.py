@@ -139,3 +139,69 @@ class AVGPRICE(BaseIndicator):
         c, _, _ = self.validate_input(close)
         o, h, l, c = self.align_arrays(o, h, l, c)
         return self.format_output(_backend.avgprice(o, h, l, c), input_type, index)
+
+
+# --- TA-Lib-faithful directional-movement family (matches TA-Lib, not TradingView) ---
+
+class PLUS_DM(_HLC):
+    def __init__(self):
+        super().__init__("Plus Directional Movement")
+
+    def calculate(self, high, low, period: int = 14):
+        h, l, _, it, idx = self._hlc(high, low)
+        return self.format_output(_backend.plus_dm(h, l, period), it, idx)
+
+
+class MINUS_DM(_HLC):
+    def __init__(self):
+        super().__init__("Minus Directional Movement")
+
+    def calculate(self, high, low, period: int = 14):
+        h, l, _, it, idx = self._hlc(high, low)
+        return self.format_output(_backend.minus_dm(h, l, period), it, idx)
+
+
+class DX(_HLC):
+    def __init__(self):
+        super().__init__("Directional Movement Index")
+
+    def calculate(self, high, low, close, period: int = 14):
+        h, l, c, it, idx = self._hlc(high, low, close)
+        return self.format_output(_backend.dx(h, l, c, period), it, idx)
+
+
+class ADXR(_HLC):
+    def __init__(self):
+        super().__init__("Average Directional Movement Rating")
+
+    def calculate(self, high, low, close, period: int = 14):
+        h, l, c, it, idx = self._hlc(high, low, close)
+        return self.format_output(_backend.adxr(h, l, c, period), it, idx)
+
+
+class STOCHF(_HLC):
+    def __init__(self):
+        super().__init__("Stochastic Fast")
+
+    def calculate(self, high, low, close, fastk_period: int = 5, fastd_period: int = 3):
+        h, l, c, it, idx = self._hlc(high, low, close)
+        k, d = _backend.stochf(h, l, c, fastk_period, fastd_period)
+        return self.format_multiple_outputs((k, d), it, idx)
+
+
+class LINEARREG_ANGLE(BaseIndicator):
+    def __init__(self):
+        super().__init__("Linear Regression Angle")
+
+    def calculate(self, data, period: int = 14):
+        validated, input_type, index = self.validate_input(data)
+        return self.format_output(_backend.linreg_angle(validated, period), input_type, index)
+
+
+class LINEARREG_INTERCEPT(BaseIndicator):
+    def __init__(self):
+        super().__init__("Linear Regression Intercept")
+
+    def calculate(self, data, period: int = 14):
+        validated, input_type, index = self.validate_input(data)
+        return self.format_output(_backend.linreg_intercept(validated, period), input_type, index)
