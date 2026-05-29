@@ -43,10 +43,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
-      - name: Install maturin + runtime deps
-        run: pip install 'maturin>=1.7,<2.0' numpy pandas
-      - name: Build and install the wheel
-        run: maturin develop --release
+      - name: Install maturin
+        run: pip install 'maturin>=1.7,<2.0'
+      - name: Build the wheel
+        run: maturin build --release --out dist -m rust/oa_py/Cargo.toml
+      - name: Install the built wheel (+ runtime deps from PyPI)
+        run: pip install dist/*.whl
       - name: Smoke test (no committed data needed)
         run: python benchmark/ci_smoke.py
 
