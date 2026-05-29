@@ -2091,30 +2091,59 @@ pub fn rvi_vigor(
 /// ADX system: returns (di_plus, di_minus, adx) with Wilder smoothing.
 pub fn adx(high: &[f64], low: &[f64], close: &[f64], period: usize) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
     let n = close.len();
-    let tr = true_range(high, low, close);
-    let mut dmp = vec![0.0f64; n];
-    let mut dmm = vec![0.0f64; n];
-    for i in 1..n {
-        let up = high[i] - high[i - 1];
-        let dn = low[i - 1] - low[i];
-        dmp[i] = if up > dn && up > 0.0 { up } else { 0.0 };
-        dmm[i] = if dn > up && dn > 0.0 { dn } else { 0.0 };
-    }
-    let sa = ema_wilder(&tr, period);
-    let sp = ema_wilder(&dmp, period);
-    let sm = ema_wilder(&dmm, period);
     let mut dip = nan_vec(n);
     let mut dim = nan_vec(n);
     let mut dx = nan_vec(n);
-    if period >= 1 {
-        for i in period - 1..n {
-            if !sa[i].is_nan() && sa[i] > 0.0 {
-                dip[i] = (sp[i] / sa[i]) * 100.0;
-                dim[i] = (sm[i] / sa[i]) * 100.0;
-                let ds = dip[i] + dim[i];
-                if ds > 0.0 {
-                    dx[i] = (dip[i] - dim[i]).abs() / ds * 100.0;
-                }
+    if period == 0 || n < period {
+        return (dip, dim, nan_vec(n));
+    }
+    // Single fused pass: true range and +DM/-DM are computed on the fly and their
+    // Wilder-smoothed values (sa/sp/sm) carried in scalars - identical seeding to
+    // three ema_wilder() calls (seed = mean of first `period`, then x = (x*(p-1)+v)/p)
+    // but without the six intermediate arrays.
+    let p = period as f64;
+    let pm1 = (period - 1) as f64;
+    let (mut sa, mut sp, mut sm) = (0.0, 0.0, 0.0);
+    for i in 0..n {
+        let tr_i = if i == 0 {
+            high[0] - low[0]
+        } else {
+            max3(
+                high[i] - low[i],
+                (high[i] - close[i - 1]).abs(),
+                (low[i] - close[i - 1]).abs(),
+            )
+        };
+        let (dmp_i, dmm_i) = if i == 0 {
+            (0.0, 0.0)
+        } else {
+            let up = high[i] - high[i - 1];
+            let dn = low[i - 1] - low[i];
+            (
+                if up > dn && up > 0.0 { up } else { 0.0 },
+                if dn > up && dn > 0.0 { dn } else { 0.0 },
+            )
+        };
+        if i < period {
+            sa += tr_i;
+            sp += dmp_i;
+            sm += dmm_i;
+            if i + 1 == period {
+                sa /= p;
+                sp /= p;
+                sm /= p;
+            }
+        } else {
+            sa = (sa * pm1 + tr_i) / p;
+            sp = (sp * pm1 + dmp_i) / p;
+            sm = (sm * pm1 + dmm_i) / p;
+        }
+        if i + 1 >= period && sa > 0.0 {
+            dip[i] = sp / sa * 100.0;
+            dim[i] = sm / sa * 100.0;
+            let ds = dip[i] + dim[i];
+            if ds > 0.0 {
+                dx[i] = (dip[i] - dim[i]).abs() / ds * 100.0;
             }
         }
     }
