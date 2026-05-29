@@ -160,10 +160,24 @@ RUST_MIGRATION_TRACKER.csv  # 108-row indicator inventory + per-indicator status
   - [x] Final verification: all 9 parity suites + ci_smoke + cargo (33) green.
   - [x] MIGRATION_SUMMARY.md written; RUST_MIGRATION_TRACKER.csv all migrated.
 
-*** PROJECT COMPLETE. Migration + tests + parity + benchmark + CI/CD all done on
-branch rust-indicators-migration. NOTHING PUSHED. Awaiting user decision on
-push / PR / tag. Real-data benchmark still pending Dhan/Historify availability
-(currently yfinance). ***
+*** Phases 0-5 COMPLETE. Migration + tests + parity + benchmark + CI/CD done. ***
+
+- **Phase 6 — Rust-port the remaining numpy per-window kernels** [IN PROGRESS]
+  Goal: the ~20 indicators still computed in numpy (per-window loops) show ~1x speedup
+  in the NIFTY 924k benchmark. Port each to oa_core Rust (naive per-window sums; these
+  differ from numpy pairwise summation by ~1e-14, well within 1e-12 rel - relax those
+  parity gates from bit-exact to tol=1e-9 and document).
+  - [x] Batch 1 (statistics regressions): linreg, tsf, lrslope, correl, beta -> Rust.
+        ~360x-810x vs old interpreted; on par with TA-Lib. statistics_parity green (tol).
+  - [ ] Batch 2: add Rust `win_mean`/`win_std` (per-window) kernels and route
+        _backend._win_mean/_win_std through them -> instantly speeds up dpo, po,
+        awesome/accel osc, kst, starc, chandelier_exit, emv, rvol, bbpercent, bbwidth, hv.
+  - [ ] Batch 3 (bespoke loops): aroon, aroon_osc, williams_fractals, mode, median,
+        stc (_stoch_single), coppock (_wma_nan), rvi_vigor, adx DI/DX loop, rwi.
+  - [ ] Re-run ALL parity gates + the NIFTY 924k full benchmark; refresh FULL_BENCHMARK.md.
+
+NOTHING PUSHED. Awaiting user decision on push / PR / tag. Real-data parity/benchmark
+still pending Dhan/Historify (currently yfinance + NIFTY CSV).
         NOTE: PVI._with_signal secondary method still references numba EMA - swap in
         Phase 3 cleanup along with all remaining _calculate_* numba staticmethods.
         NOTE: _backend.frama and _backend.fisher numpy fallbacks raise (rust-only);

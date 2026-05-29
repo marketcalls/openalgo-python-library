@@ -1391,6 +1391,162 @@ pub fn percent_rank(data: &[f64], period: usize) -> Vec<f64> {
     r
 }
 
+// ============================================================================
+// Statistics (per-window OLS / correlation / beta)
+// ============================================================================
+
+#[inline]
+fn _linreg_endval(y: &[f64], period: usize, sx: f64, den: f64, end_x: f64) -> f64 {
+    let p = period as f64;
+    let mut sy = 0.0;
+    let mut sxy = 0.0;
+    for (j, &v) in y.iter().enumerate() {
+        sy += v;
+        sxy += j as f64 * v;
+    }
+    if den != 0.0 {
+        let slope = (p * sxy - sx * sy) / den;
+        let intercept = (sy - slope * sx) / p;
+        slope * end_x + intercept
+    } else {
+        y[period - 1]
+    }
+}
+
+fn _xstats(period: usize) -> (f64, f64) {
+    let mut sx = 0.0;
+    let mut sx2 = 0.0;
+    for j in 0..period {
+        let xf = j as f64;
+        sx += xf;
+        sx2 += xf * xf;
+    }
+    (sx, sx2)
+}
+
+/// Rolling linear-regression endpoint value (slope*(period-1)+intercept).
+pub fn linreg(data: &[f64], period: usize) -> Vec<f64> {
+    let n = data.len();
+    let mut out = nan_vec(n);
+    if period == 0 || n < period {
+        return out;
+    }
+    let (sx, sx2) = _xstats(period);
+    let den = period as f64 * sx2 - sx * sx;
+    for i in period - 1..n {
+        out[i] = _linreg_endval(&data[i - period + 1..i + 1], period, sx, den, (period - 1) as f64);
+    }
+    out
+}
+
+/// Time Series Forecast (linreg projected one bar ahead: slope*period+intercept).
+pub fn tsf(data: &[f64], period: usize) -> Vec<f64> {
+    let n = data.len();
+    let mut out = nan_vec(n);
+    if period == 0 || n < period {
+        return out;
+    }
+    let (sx, sx2) = _xstats(period);
+    let den = period as f64 * sx2 - sx * sx;
+    for i in period - 1..n {
+        out[i] = _linreg_endval(&data[i - period + 1..i + 1], period, sx, den, period as f64);
+    }
+    out
+}
+
+/// Linear-regression slope (TradingView): (endval(cur) - endval(prev)) / interval.
+pub fn lrslope(data: &[f64], period: usize, interval: f64) -> Vec<f64> {
+    let n = data.len();
+    let mut out = nan_vec(n);
+    if period == 0 || n < period + 1 {
+        return out;
+    }
+    let (sx, sx2) = _xstats(period);
+    let den = period as f64 * sx2 - sx * sx;
+    let ex = (period - 1) as f64;
+    for i in period..n {
+        let cur = _linreg_endval(&data[i - period + 1..i + 1], period, sx, den, ex);
+        let prev = _linreg_endval(&data[i - period..i], period, sx, den, ex);
+        out[i] = (cur - prev) / interval;
+    }
+    out
+}
+
+/// Rolling Pearson correlation over `period`.
+pub fn correl(d1: &[f64], d2: &[f64], period: usize) -> Vec<f64> {
+    let n = d1.len();
+    let mut out = nan_vec(n);
+    if period == 0 || n < period {
+        return out;
+    }
+    let p = period as f64;
+    for i in period - 1..n {
+        let x = &d1[i - period + 1..i + 1];
+        let y = &d2[i - period + 1..i + 1];
+        let mut mx = 0.0;
+        let mut my = 0.0;
+        for j in 0..period {
+            mx += x[j];
+            my += y[j];
+        }
+        mx /= p;
+        my /= p;
+        let mut num = 0.0;
+        let mut ssx = 0.0;
+        let mut ssy = 0.0;
+        for j in 0..period {
+            let dx = x[j] - mx;
+            let dy = y[j] - my;
+            num += dx * dy;
+            ssx += dx * dx;
+            ssy += dy * dy;
+        }
+        let den = (ssx * ssy).sqrt();
+        out[i] = if den > 0.0 { num / den } else { 0.0 };
+    }
+    out
+}
+
+/// Rolling Beta = cov(asset_returns, market_returns) / var(market_returns) over `period`.
+pub fn beta(asset: &[f64], market: &[f64], period: usize) -> Vec<f64> {
+    let n = asset.len();
+    let mut out = nan_vec(n);
+    if period == 0 || n < period + 1 {
+        return out;
+    }
+    let p = period as f64;
+    let mut ar = nan_vec(n);
+    let mut mr = nan_vec(n);
+    for i in 1..n {
+        ar[i] = asset[i] - asset[i - 1];
+        mr[i] = market[i] - market[i - 1];
+    }
+    for i in period..n {
+        let aw = &ar[i - period + 1..i + 1];
+        let mw = &mr[i - period + 1..i + 1];
+        let mut ma = 0.0;
+        let mut mm = 0.0;
+        for j in 0..period {
+            ma += aw[j];
+            mm += mw[j];
+        }
+        ma /= p;
+        mm /= p;
+        let mut cov = 0.0;
+        let mut mvar = 0.0;
+        for j in 0..period {
+            let ad = aw[j] - ma;
+            let md = mw[j] - mm;
+            cov += ad * md;
+            mvar += md * md;
+        }
+        cov /= p;
+        mvar /= p;
+        out[i] = if mvar > 0.0 { cov / mvar } else { 0.0 };
+    }
+    out
+}
+
 /// valuewhen: value of `array` when `expr` (nonzero == true) was true the n-th most
 /// recent time. Mirrors the legacy kernel, including its 1000-entry lookback cap.
 pub fn valuewhen(expr: &[f64], array: &[f64], n: usize) -> Vec<f64> {
@@ -1532,6 +1688,30 @@ mod tests {
         let s = [false, false, true, false];
         assert_eq!(exrem(&p, &s), vec![true, false, false, true]);
         assert_eq!(flip(&p, &s), vec![true, true, false, true]);
+    }
+
+    #[test]
+    fn linreg_perfect_line() {
+        let d = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let r = linreg(&d, 3);
+        approx(r[2], 3.0); // endpoint of line through (1,2,3) extended
+        approx(r[5], 6.0);
+        let t = tsf(&d, 3);
+        approx(t[2], 4.0); // one step ahead
+    }
+
+    #[test]
+    fn correl_self_is_one() {
+        let d = [1.0, 3.0, 2.0, 5.0, 4.0, 6.0];
+        let r = correl(&d, &d, 4);
+        approx(r[5], 1.0);
+    }
+
+    #[test]
+    fn beta_self_is_one() {
+        let a = [10.0, 11.0, 10.5, 12.0, 11.5, 13.0];
+        let r = beta(&a, &a, 4);
+        approx(r[5], 1.0);
     }
 
     #[test]

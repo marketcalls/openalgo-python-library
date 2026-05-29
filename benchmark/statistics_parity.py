@@ -42,11 +42,13 @@ def main():
     lo = df["low"].to_numpy(np.float64)
     m2 = df2["close"].to_numpy(np.float64)[:len(c)]
 
-    cmp("linreg", b.linreg(c, 14), LINREG._calculate_linearreg(c, 14))
-    cmp("lrslope", b.lrslope(c, 100, 1), _calculate_slope_tv(c, 100, 1))
-    cmp("correl", b.correl(c, m2, 20), CORREL._calculate_correl(c, m2, 20))
-    cmp("beta", b.beta(c, m2, 60), BETA._calculate_beta_optimized(c, m2, 60))
-    cmp("tsf", b.tsf(c, 14), TSF._calculate_tsf(c, 14))
+    # linreg/correl/beta/tsf: Rust naive summation vs numpy pairwise summation differs
+    # by ~1e-14 abs (~1e-16 rel) - within the 1e-12 rel target, not bit-exact cross-impl.
+    cmp("linreg", b.linreg(c, 14), LINREG._calculate_linearreg(c, 14), tol=1e-9)
+    cmp("lrslope", b.lrslope(c, 100, 1), _calculate_slope_tv(c, 100, 1), tol=1e-9)
+    cmp("correl", b.correl(c, m2, 20), CORREL._calculate_correl(c, m2, 20), tol=1e-9)
+    cmp("beta", b.beta(c, m2, 60), BETA._calculate_beta_optimized(c, m2, 60), tol=1e-9)
+    cmp("tsf", b.tsf(c, 14), TSF._calculate_tsf(c, 14), tol=1e-9)
     cmp("median", b.median(c, 5), MEDIAN._calculate_median(c, 5))
     cmp("mode", b.mode(c, 20, 10), MODE._calculate_mode_optimized(c, 20, 10))
 

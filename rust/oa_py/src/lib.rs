@@ -39,6 +39,41 @@ wrap_period!(roc, oa_core::roc);
 wrap_period!(cmo, oa_core::cmo);
 wrap_period!(ulcer_index, oa_core::ulcer_index);
 wrap_period!(rsi, oa_core::rsi);
+wrap_period!(linreg, oa_core::linreg);
+wrap_period!(tsf, oa_core::tsf);
+
+#[pyfunction]
+#[pyo3(signature = (data, period, interval))]
+fn lrslope<'py>(
+    py: Python<'py>,
+    data: PyReadonlyArray1<'py, f64>,
+    period: usize,
+    interval: f64,
+) -> PyResult<Py<PyArray1<f64>>> {
+    Ok(oa_core::lrslope(data.as_slice()?, period, interval).into_pyarray_bound(py).unbind())
+}
+
+#[pyfunction]
+#[pyo3(signature = (d1, d2, period))]
+fn correl<'py>(
+    py: Python<'py>,
+    d1: PyReadonlyArray1<'py, f64>,
+    d2: PyReadonlyArray1<'py, f64>,
+    period: usize,
+) -> PyResult<Py<PyArray1<f64>>> {
+    Ok(oa_core::correl(d1.as_slice()?, d2.as_slice()?, period).into_pyarray_bound(py).unbind())
+}
+
+#[pyfunction]
+#[pyo3(signature = (asset, market, period))]
+fn beta<'py>(
+    py: Python<'py>,
+    asset: PyReadonlyArray1<'py, f64>,
+    market: PyReadonlyArray1<'py, f64>,
+    period: usize,
+) -> PyResult<Py<PyArray1<f64>>> {
+    Ok(oa_core::beta(asset.as_slice()?, market.as_slice()?, period).into_pyarray_bound(py).unbind())
+}
 
 /// (high, low, close, period) -> f64 array, for hlc kernels.
 macro_rules! wrap_hlc_period {
@@ -454,6 +489,11 @@ fn _oaindicators(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cmo, m)?)?;
     m.add_function(wrap_pyfunction!(ulcer_index, m)?)?;
     m.add_function(wrap_pyfunction!(rsi, m)?)?;
+    m.add_function(wrap_pyfunction!(linreg, m)?)?;
+    m.add_function(wrap_pyfunction!(tsf, m)?)?;
+    m.add_function(wrap_pyfunction!(lrslope, m)?)?;
+    m.add_function(wrap_pyfunction!(correl, m)?)?;
+    m.add_function(wrap_pyfunction!(beta, m)?)?;
     m.add_function(wrap_pyfunction!(cci, m)?)?;
     m.add_function(wrap_pyfunction!(williams_r, m)?)?;
     m.add_function(wrap_pyfunction!(stochastic, m)?)?;

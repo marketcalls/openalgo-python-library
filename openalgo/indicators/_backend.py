@@ -787,6 +787,8 @@ def _linreg_end(y, period):
 def linreg(data, period):
     data = _f(data)
     period = int(period)
+    if HAVE_RUST:
+        return _rs.linreg(data, period)
     n = data.size
     out = np.full(n, np.nan)
     for i in range(period - 1, n):
@@ -799,6 +801,8 @@ def linreg(data, period):
 def lrslope(data, period, interval):
     data = _f(data)
     period = int(period)
+    if HAVE_RUST:
+        return _rs.lrslope(data, period, float(interval))
     n = data.size
     out = np.full(n, np.nan)
 
@@ -814,6 +818,8 @@ def lrslope(data, period, interval):
 def tsf(data, period):
     data = _f(data)
     period = int(period)
+    if HAVE_RUST:
+        return _rs.tsf(data, period)
     n = data.size
     out = np.full(n, np.nan)
     for i in range(period - 1, n):
@@ -826,6 +832,8 @@ def tsf(data, period):
 def correl(data1, data2, period):
     data1, data2 = _f(data1), _f(data2)
     period = int(period)
+    if HAVE_RUST:
+        return _rs.correl(data1, data2, period)
     n = data1.size
     out = np.full(n, np.nan)
     for i in range(period - 1, n):
@@ -841,6 +849,8 @@ def correl(data1, data2, period):
 def beta(asset, market, period):
     asset, market = _f(asset), _f(market)
     period = int(period)
+    if HAVE_RUST:
+        return _rs.beta(asset, market, period)
     n = asset.size
     out = np.full(n, np.nan)
     ar = np.full(n, np.nan)
