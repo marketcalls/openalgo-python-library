@@ -148,12 +148,20 @@ pub fn wma(data: &[f64], period: usize) -> Vec<f64> {
         return result;
     }
     let weight_sum = (period * (period + 1) / 2) as f64;
-    for i in period - 1..n {
-        let mut ws = 0.0;
-        for j in 0..period {
-            ws += data[i + 1 - period + j] * (j + 1) as f64;
-        }
-        result[i] = ws / weight_sum;
+    let p = period as f64;
+    // O(n) rolling: maintain window sum and weighted sum (weights 1..period).
+    // wsum_i = wsum_{i-1} + period*x_new - sum_{i-1}; then slide sum.
+    let mut sum = 0.0;
+    let mut wsum = 0.0;
+    for j in 0..period {
+        sum += data[j];
+        wsum += data[j] * (j + 1) as f64;
+    }
+    result[period - 1] = wsum / weight_sum;
+    for i in period..n {
+        wsum = wsum + p * data[i] - sum;
+        sum = sum + data[i] - data[i - period];
+        result[i] = wsum / weight_sum;
     }
     result
 }
@@ -1491,6 +1499,47 @@ pub fn win_std(data: &[f64], period: usize) -> Vec<f64> {
     out
 }
 
+/// O(n) rolling OLS over `period`. Returns (slope, intercept) per window, NaN warm-up.
+/// x is the integer grid 0..period-1 (so `sx`, `sx2` are constants). Sy and the
+/// weighted sum (weights 1..period) are slid in O(1) per step, exactly like `wma`;
+/// Sxy = wsum - Sy. Drift vs per-window recompute is ~1e-11 (same as the prior code).
+fn _ols_roll(data: &[f64], period: usize) -> (Vec<f64>, Vec<f64>) {
+    let n = data.len();
+    let mut slope = nan_vec(n);
+    let mut intercept = nan_vec(n);
+    if period == 0 || n < period {
+        return (slope, intercept);
+    }
+    let p = period as f64;
+    let (sx, sx2) = _xstats(period);
+    let den = p * sx2 - sx * sx;
+    let mut sy = 0.0;
+    let mut wsum = 0.0;
+    for j in 0..period {
+        sy += data[j];
+        wsum += data[j] * (j + 1) as f64;
+    }
+    let mut emit = |idx: usize, sy: f64, wsum: f64| {
+        if den != 0.0 {
+            let sxy = wsum - sy; // Σ j*y over the window (weights 0..period-1)
+            let m = (p * sxy - sx * sy) / den;
+            slope[idx] = m;
+            intercept[idx] = (sy - m * sx) / p;
+        } else {
+            // period == 1: regression of a single point is the point itself.
+            slope[idx] = 0.0;
+            intercept[idx] = data[idx];
+        }
+    };
+    emit(period - 1, sy, wsum);
+    for i in period..n {
+        wsum = wsum + p * data[i] - sy;
+        sy = sy + data[i] - data[i - period];
+        emit(i, sy, wsum);
+    }
+    (slope, intercept)
+}
+
 /// Rolling linear-regression endpoint value (slope*(period-1)+intercept).
 pub fn linreg(data: &[f64], period: usize) -> Vec<f64> {
     let n = data.len();
@@ -1498,10 +1547,10 @@ pub fn linreg(data: &[f64], period: usize) -> Vec<f64> {
     if period == 0 || n < period {
         return out;
     }
-    let (sx, sx2) = _xstats(period);
-    let den = period as f64 * sx2 - sx * sx;
+    let (slope, intercept) = _ols_roll(data, period);
+    let ex = (period - 1) as f64;
     for i in period - 1..n {
-        out[i] = _linreg_endval(&data[i + 1 - period..i + 1], period, sx, den, (period - 1) as f64);
+        out[i] = slope[i] * ex + intercept[i];
     }
     out
 }
@@ -1513,10 +1562,10 @@ pub fn tsf(data: &[f64], period: usize) -> Vec<f64> {
     if period == 0 || n < period {
         return out;
     }
-    let (sx, sx2) = _xstats(period);
-    let den = period as f64 * sx2 - sx * sx;
+    let (slope, intercept) = _ols_roll(data, period);
+    let ex = period as f64;
     for i in period - 1..n {
-        out[i] = _linreg_endval(&data[i + 1 - period..i + 1], period, sx, den, period as f64);
+        out[i] = slope[i] * ex + intercept[i];
     }
     out
 }
@@ -1528,12 +1577,11 @@ pub fn lrslope(data: &[f64], period: usize, interval: f64) -> Vec<f64> {
     if period == 0 || n < period + 1 {
         return out;
     }
-    let (sx, sx2) = _xstats(period);
-    let den = period as f64 * sx2 - sx * sx;
+    let (slope, intercept) = _ols_roll(data, period);
     let ex = (period - 1) as f64;
     for i in period..n {
-        let cur = _linreg_endval(&data[i + 1 - period..i + 1], period, sx, den, ex);
-        let prev = _linreg_endval(&data[i - period..i], period, sx, den, ex);
+        let cur = slope[i] * ex + intercept[i];
+        let prev = slope[i - 1] * ex + intercept[i - 1];
         out[i] = (cur - prev) / interval;
     }
     out
@@ -1817,38 +1865,28 @@ pub fn trima(data: &[f64], period: usize) -> Vec<f64> {
     }
     let n1 = (period + 1) / 2;
     let n2 = period - n1 + 1;
-    let mut first = nan_vec(n);
-    if n >= n1 && n1 > 0 {
-        for i in n1 - 1..n {
-            let mut s = 0.0;
-            for j in 0..n1 {
-                s += data[i + 1 - n1 + j];
-            }
-            first[i] = s / n1 as f64;
-        }
+    if n1 == 0 || n2 == 0 {
+        return out;
     }
+    // First pass is a plain O(n) rolling SMA (valid contiguously from index n1-1).
+    let first = sma(data, n1);
     if n1 + n2 < 2 {
         return out;
     }
     let start = n1 + n2 - 2;
-    for i in start..n {
-        if first[i].is_nan() {
-            continue;
-        }
-        let ws = if i + 1 >= n2 { i + 1 - n2 } else { 0 };
-        let mut valid: Vec<f64> = Vec::with_capacity(i + 1 - ws);
-        for k in ws..i + 1 {
-            if !first[k].is_nan() {
-                valid.push(first[k]);
-            }
-        }
-        if valid.len() >= n2 {
-            let mut s = 0.0;
-            for &x in &valid[valid.len() - n2..] {
-                s += x;
-            }
-            out[i] = s / n2 as f64;
-        }
+    if start >= n {
+        return out;
+    }
+    // Second pass: O(n) rolling SMA over `first` of window n2. Since `first` is
+    // contiguously valid from n1-1, the window for out[start] is first[n1-1..=start].
+    let mut s = 0.0;
+    for k in start + 1 - n2..=start {
+        s += first[k];
+    }
+    out[start] = s / n2 as f64;
+    for i in start + 1..n {
+        s = s + first[i] - first[i - n2];
+        out[i] = s / n2 as f64;
     }
     out
 }
@@ -2330,48 +2368,30 @@ pub fn stochf(
     (k, d)
 }
 
-/// TA-Lib LINEARREG_ANGLE = degrees(atan(OLS slope)) over `period`.
+/// TA-Lib LINEARREG_ANGLE = degrees(atan(OLS slope)) over `period`. O(n).
 pub fn linreg_angle(data: &[f64], period: usize) -> Vec<f64> {
     let n = data.len();
     let mut out = nan_vec(n);
     if period == 0 || n < period {
         return out;
     }
-    let (sx, sx2) = _xstats(period);
-    let p = period as f64;
-    let den = p * sx2 - sx * sx;
+    let (slope, _) = _ols_roll(data, period);
     for i in period - 1..n {
-        let y = &data[i + 1 - period..i + 1];
-        let (mut sy, mut sxy) = (0.0, 0.0);
-        for (j, &v) in y.iter().enumerate() {
-            sy += v;
-            sxy += j as f64 * v;
-        }
-        let slope = if den != 0.0 { (p * sxy - sx * sy) / den } else { 0.0 };
-        out[i] = slope.atan().to_degrees();
+        out[i] = slope[i].atan().to_degrees();
     }
     out
 }
 
-/// TA-Lib LINEARREG_INTERCEPT = OLS intercept b over `period`.
+/// TA-Lib LINEARREG_INTERCEPT = OLS intercept b over `period`. O(n).
 pub fn linreg_intercept(data: &[f64], period: usize) -> Vec<f64> {
     let n = data.len();
     let mut out = nan_vec(n);
     if period == 0 || n < period {
         return out;
     }
-    let (sx, sx2) = _xstats(period);
-    let p = period as f64;
-    let den = p * sx2 - sx * sx;
+    let (_, intercept) = _ols_roll(data, period);
     for i in period - 1..n {
-        let y = &data[i + 1 - period..i + 1];
-        let (mut sy, mut sxy) = (0.0, 0.0);
-        for (j, &v) in y.iter().enumerate() {
-            sy += v;
-            sxy += j as f64 * v;
-        }
-        let slope = if den != 0.0 { (p * sxy - sx * sy) / den } else { 0.0 };
-        out[i] = (sy - slope * sx) / p;
+        out[i] = intercept[i];
     }
     out
 }

@@ -250,3 +250,21 @@ drop numba dep + [indicators] extra) and Phase 4 maturin/CI.
 - NEXT (batch B): Hilbert Transform suite (HT_DCPERIOD, HT_DCPHASE, HT_PHASOR,
   HT_SINE, HT_TRENDMODE, HT_TRENDLINE) — port TA-Lib's exact DSP, parity <=1e-6.
 - Still NOT pushed. Candlesticks (61 CDL*) intentionally out of scope unless asked.
+
+## Performance pass P1 (O(n*period) -> O(n))
+User redirect: skip Hilbert; close the TA-Lib speed gap on large series by turning
+O(n*period) per-window kernels into O(n) rolling accumulators.
+- wma: rolling weighted-sum (TA-Lib periodSum/periodSub trick). 12.8ms -> 2.95ms on
+  924k bars; now matches talib.WMA EXACTLY (0.0 diff).
+- trima: was O(n*period) AND allocated a Vec per bar; now two O(n) SMA passes
+  (sma-of-sma). 33.6ms -> 4.9ms; flat at period 100 (was O(n*p)). parity 2.3e-12.
+- linreg/tsf/lrslope/linregangle/linregintercept: shared O(n) rolling-OLS helper
+  (_ols_roll) maintaining Sy + weighted-sum, Sxy = wsum - Sy on the integer x-grid.
+  lrslope(100) 136ms -> 6.5ms (21x). linreg/tsf/linregangle now BEAT talib.
+  Parity vs reference 0.0; vs talib still <=1e-12.
+- highest/lowest already O(n) (monotonic deque); stochastic/rsi already O(n) - their
+  benchmark gap to talib is fixed Python FFI/wrapper overhead, not the kernel.
+- NEXT (P2): correl + beta are the last O(n*period) stats (one-pass rolling moments
+  is cancellation-prone at price^2 scale; needs careful tolerance). Also investigate
+  the benchmark's correlation max|d|=1.0 New-vs-Old (degenerate flat-window: 0.0 vs
+  perfect-corr). Then refresh benchmark/FULL_BENCHMARK.md with the new numbers.
