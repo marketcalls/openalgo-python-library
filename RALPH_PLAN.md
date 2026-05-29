@@ -174,9 +174,17 @@ RUST_MIGRATION_TRACKER.csv  # 108-row indicator inventory + per-indicator status
         bbwidth 43.4->0.12, hv 31.7->0.08, starc 23.3->0.04, awesome 23.3->0.07,
         accel 34.4->0.08, kst 57.6->0.15, rvol ~200x, chandelier 0.11. Affected parity
         gates relaxed to tol=1e-9 (~1e-14 rust-vs-numpy-pairwise); all green.
-  - [ ] Batch 3 (bespoke loops): aroon, aroon_osc, williams_fractals, mode, median,
-        stc (_stoch_single), coppock (_wma_nan), rvi_vigor, adx DI/DX loop, rwi.
-  - [ ] Re-run ALL parity gates + the NIFTY 924k full benchmark; refresh FULL_BENCHMARK.md.
+  - [x] Batch 3 (bespoke loops): aroon, aroon_osc, williams_fractals, mode, median,
+        stoch_single, wma_nan, rvi_vigor, adx, rwi, variance -> Rust; dpo vectorized.
+        cargo 40; all 9 parity gates green. adx 188x, rwi 356x, median 121x, etc.
+  - [x] NIFTY 924k full benchmark generated -> benchmark/FULL_BENCHMARK.md. Most
+        indicators 50x-725x vs interpreted, accuracy 0.0.
+  - [ ] Batch 4 (stragglers exposed by the 924k run): trima (5775ms, 1x - never ported,
+        numpy double-window mean), stochrsi (8044ms - numpy per-window loops), roc
+        (269ms, 1x - ta.roc still routes to interpreted util, not rust). Port these,
+        re-run gates + 924k benchmark, then STOP.
+        NOTE: correlation max|d|=1.0 on NIFTY = ill-conditioning on near-constant 1-min
+        windows (denominator underflow), NOT a regression; bit-exact on RELIANCE.
 
 NOTHING PUSHED. Awaiting user decision on push / PR / tag. Real-data parity/benchmark
 still pending Dhan/Historify (currently yfinance + NIFTY CSV).
