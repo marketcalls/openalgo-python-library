@@ -1378,26 +1378,6 @@ Instruments **Response**
 3045     ONE POINT ONE SOL LTD    -1.0    ONEPOINT       0.01  10100000009939  
 ```
 
-### Telegram Alert Example
-
-```python
-response = client.telegram(
-      username="<layr0_imc_loginid>",
-      message="NIFTY crossed 26000!"
-  )
-
-print(response)
-```
-
-**Telegram Alert Response**
-
-```json
-{
-  "message": "Notification sent successfully",
-  "status": "success"
-}
-```
-
 ### Funds Example
 
 ```python

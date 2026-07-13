@@ -50,6 +50,15 @@ def test_legacy_position_method_is_not_exposed():
     assert not hasattr(api, legacy_name)
 
 
+def test_unsupported_notification_method_is_not_exposed():
+    from layr0_imc import api as ImcApi
+
+    client = ImcApi("test-key")
+    unsupported_name = "tele" + "gram"
+
+    assert not hasattr(client, unsupported_name)
+
+
 def test_structured_mode_error_payload_is_preserved():
     error_payload = {
         "status": "error",

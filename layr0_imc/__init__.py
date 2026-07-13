@@ -10,7 +10,6 @@ from .account import AccountAPI
 from .strategy import Strategy
 from .feed import FeedAPI
 from .options import OptionsAPI
-from .telegram import TelegramAPI
 from .utilities import UtilitiesAPI
 from .indicators import ta
 
@@ -27,7 +26,7 @@ _nb.jit = _jit_shim  # monkey-patch once at import time
 nbjit = _jit_shim
 prange = _prange
 
-class api(OrderAPI, DataAPI, AccountAPI, FeedAPI, OptionsAPI, TelegramAPI, UtilitiesAPI):
+class api(OrderAPI, DataAPI, AccountAPI, FeedAPI, OptionsAPI, UtilitiesAPI):
     """
     layr0_imc API client class
     """
