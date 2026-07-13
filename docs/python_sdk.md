@@ -531,7 +531,7 @@ print(response)
 
 ### ClosePosition Example
 
-To close all open positions across various exchanges
+To close all Strategy exposures across various exchanges
 
 ```python
 response = client.closeposition(
@@ -543,7 +543,7 @@ print(response)
 **ClosePosition Response**
 
 ```json
-{'message': 'All Open Positions Squared Off', 'status': 'success'}
+{'message': 'All Strategy exposures Squared Off', 'status': 'success'}
 ```
 
 ### OrderStatus Example
@@ -580,21 +580,25 @@ print(response)
 }
 ```
 
-### OpenPosition Example
+### positionsopen Example
 
-To Get the Current OpenPosition
+Read current strategy exposure for reconciliation. `positionsopen` is mode-checked and read-only.
 
 ```python
-response = client.openposition(
-            strategy="Test Strategy",
-            symbol="YESBANK",
-            exchange="NSE",
-            product="MIS"
-        )
+response = client.positionsopen(
+    strategy="Test Strategy",
+    symbol="YESBANK",
+    exchange="NSE",
+    product="MIS",
+    expected_mode="live",
+    expected_balance_type="live",
+    expected_mode_version=7,
+    request_id="positionsopen-001"
+)
 print(response)
 ```
 
-OpenPosition Response
+positionsopen Response
 
 ```json
 {'quantity': '-10', 'status': 'success'}

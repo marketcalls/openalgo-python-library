@@ -4,7 +4,6 @@ layr0_imc REST API Documentation - Account Methods
     https://docs.layr0.org
 """
 
-import httpx
 from typing import List, Dict, Any, Optional, Union
 from .base import BaseAPI
 
@@ -13,72 +12,6 @@ class AccountAPI(BaseAPI):
     Account management API methods for layr0_imc.
     Inherits from the BaseAPI class.
     """
-
-    def _make_request(self, endpoint, payload):
-        """Make HTTP request with proper error handling"""
-        url = self.base_url + endpoint
-        try:
-            response = httpx.post(url, json=payload, headers=self.headers, timeout=self.timeout)
-            return self._handle_response(response)
-        except httpx.TimeoutException:
-            return {
-                'status': 'error',
-                'message': 'Request timed out. The server took too long to respond.',
-                'error_type': 'timeout_error'
-            }
-        except httpx.ConnectError:
-            return {
-                'status': 'error',
-                'message': 'Failed to connect to the server. Please check if the server is running.',
-                'error_type': 'connection_error'
-            }
-        except httpx.HTTPError as e:
-            return {
-                'status': 'error',
-                'message': f'HTTP error occurred: {str(e)}',
-                'error_type': 'http_error'
-            }
-        except Exception as e:
-            return {
-                'status': 'error',
-                'message': f'An unexpected error occurred: {str(e)}',
-                'error_type': 'unknown_error'
-            }
-    
-    def _handle_response(self, response):
-        """Helper method to handle API responses"""
-        try:
-            if response.status_code != 200:
-                return {
-                    'status': 'error',
-                    'message': f'HTTP {response.status_code}: {response.text}',
-                    'code': response.status_code,
-                    'error_type': 'http_error'
-                }
-            
-            data = response.json()
-            if data.get('status') == 'error':
-                return {
-                    'status': 'error',
-                    'message': data.get('message', 'Unknown error'),
-                    'code': response.status_code,
-                    'error_type': 'api_error'
-                }
-            return data
-            
-        except ValueError:
-            return {
-                'status': 'error',
-                'message': 'Invalid JSON response from server',
-                'raw_response': response.text,
-                'error_type': 'json_error'
-            }
-        except Exception as e:
-            return {
-                'status': 'error',
-                'message': str(e),
-                'error_type': 'unknown_error'
-            }
 
     def funds(self, **kwargs):
         """

@@ -283,13 +283,18 @@ result = client.orderstatus(
 )
 ```
 
-#### Open Position
-Get current open position for a symbol.
+#### Strategy exposure
+Read current strategy exposure for reconciliation. `positionsopen` is mode-checked and read-only.
 ```python
-result = client.openposition(
+result = client.positionsopen(
+    strategy="Test Strategy",
     symbol="YESBANK",
     exchange="NSE",
-    product="CNC"
+    product="CNC",
+    expected_mode="live",
+    expected_balance_type="live",
+    expected_mode_version=7,
+    request_id="positionsopen-001"
 )
 ```
 
@@ -323,7 +328,7 @@ result = client.cancelallorder()
 ```
 
 #### Close Position
-Close all open positions.
+Close all Strategy exposures.
 ```python
 result = client.closeposition()
 ```

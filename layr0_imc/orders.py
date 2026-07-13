@@ -4,7 +4,6 @@ layr0_imc REST API Documentation - Order Methods
     https://docs.layr0.org
 """
 
-import httpx
 from .base import BaseAPI
 
 class OrderAPI(BaseAPI):
@@ -12,72 +11,6 @@ class OrderAPI(BaseAPI):
     Order management API methods for layr0_imc.
     Inherits from the BaseAPI class.
     """
-
-    def _make_request(self, endpoint, payload):
-        """Make HTTP request with proper error handling"""
-        url = self.base_url + endpoint
-        try:
-            response = httpx.post(url, json=payload, headers=self.headers, timeout=self.timeout)
-            return self._handle_response(response)
-        except httpx.TimeoutException:
-            return {
-                'status': 'error',
-                'message': 'Request timed out. The server took too long to respond.',
-                'error_type': 'timeout_error'
-            }
-        except httpx.ConnectError:
-            return {
-                'status': 'error',
-                'message': 'Failed to connect to the server. Please check if the server is running.',
-                'error_type': 'connection_error'
-            }
-        except httpx.HTTPError as e:
-            return {
-                'status': 'error',
-                'message': f'HTTP error occurred: {str(e)}',
-                'error_type': 'http_error'
-            }
-        except Exception as e:
-            return {
-                'status': 'error',
-                'message': f'An unexpected error occurred: {str(e)}',
-                'error_type': 'unknown_error'
-            }
-    
-    def _handle_response(self, response):
-        """Helper method to handle API responses"""
-        try:
-            if response.status_code != 200:
-                return {
-                    'status': 'error',
-                    'message': f'HTTP {response.status_code}: {response.text}',
-                    'code': response.status_code,
-                    'error_type': 'http_error'
-                }
-            
-            data = response.json()
-            if data.get('status') == 'error':
-                return {
-                    'status': 'error',
-                    'message': data.get('message', 'Unknown error'),
-                    'code': response.status_code,
-                    'error_type': 'api_error'
-                }
-            return data
-            
-        except ValueError:
-            return {
-                'status': 'error',
-                'message': 'Invalid JSON response from server',
-                'raw_response': response.text,
-                'error_type': 'json_error'
-            }
-        except Exception as e:
-            return {
-                'status': 'error',
-                'message': str(e),
-                'error_type': 'unknown_error'
-            }
 
     def placeorder(self, *, strategy="Python", symbol, action, exchange, price_type="MARKET", product="MIS", quantity=1, **kwargs):
         """
@@ -307,16 +240,20 @@ class OrderAPI(BaseAPI):
                 payload[key] = str(value)
         return self._make_request("orderstatus", payload)
 
-    def openposition(self, *, strategy="Python", symbol, exchange, product, **kwargs):
+    def positionsopen(self, *, strategy="Python", symbol, exchange, product, **kwargs):
         """
-        Get the current open position for a specific symbol.
+        Read the current strategy exposure for a specific symbol.
+
+        This is a read-only, mode-checked reconciliation endpoint. It requires
+        the caller to pass the current mode precondition fields through kwargs:
+        expected_mode, expected_balance_type, expected_mode_version, and request_id.
 
         Parameters:
         - strategy (str, optional): The trading strategy name. Defaults to "Python".
         - symbol (str): Trading symbol. Required.
         - exchange (str): Exchange code. Required.
         - product (str): Product type. Required.
-        - **kwargs: Optional additional parameters for future API extensions.
+        - **kwargs: Mode precondition fields and optional future API extensions.
 
         Returns:
         dict: JSON response containing position details with format:
@@ -336,7 +273,7 @@ class OrderAPI(BaseAPI):
         for key, value in kwargs.items():
             if value is not None:
                 payload[key] = str(value)
-        return self._make_request("openposition", payload)
+        return self._make_request("positionsopen", payload)
     
     def modifyorder(self, *, order_id, strategy="Python", symbol, action, exchange, price_type="LIMIT", product, quantity, price, disclosed_quantity="0", trigger_price="0", **kwargs):
         """
@@ -405,7 +342,7 @@ class OrderAPI(BaseAPI):
     
     def closeposition(self, *, strategy="Python", **kwargs):
         """
-        Close all open positions for a given strategy.
+        Close all Strategy exposures for a given strategy.
 
         Parameters:
         - strategy (str, optional): The trading strategy name. Defaults to "Python".

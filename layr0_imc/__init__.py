@@ -32,7 +32,7 @@ class api(OrderAPI, DataAPI, AccountAPI, FeedAPI, OptionsAPI, TelegramAPI, Utili
     layr0_imc API client class
     """
     def __init__(self, api_key, host="http://127.0.0.1:5000", version="v1", timeout=120.0,
-                 ws_port=8765, ws_url=None, verbose=False):
+                 ws_port=8765, ws_url=None, verbose=False, auto_reconnect=True):
         """
         Initialize the layr0_imc API client.
 
@@ -47,6 +47,8 @@ class api(OrderAPI, DataAPI, AccountAPI, FeedAPI, OptionsAPI, TelegramAPI, Utili
                 - 0 or False: Silent mode (errors only)
                 - 1 or True: Basic info (connection, auth, subscription status)
                 - 2: Full debug (all market data updates)
+            auto_reconnect (bool): Reconnect WebSocket feeds and replay active
+                subscriptions after transient disconnects. Defaults to True.
         """
         # Initialize BaseAPI for REST functionality
         BaseAPI.__init__(self, api_key, host, version, timeout)
@@ -86,8 +88,13 @@ class api(OrderAPI, DataAPI, AccountAPI, FeedAPI, OptionsAPI, TelegramAPI, Utili
         self.quote_callback = None
         self.quotes_callback = None
         self.depth_callback = None
+        self.auto_reconnect = bool(auto_reconnect)
+        self._shutting_down = False
+        self._reconnect_thread = None
+        self._reconnect_lock = __import__('threading').Lock()
+        self._active_subs = {1: {}, 2: {}, 3: {}}
 
-__version__ = "1.1.4"
+__version__ = "1.2.0"
 
 # Export main components for easy access
 __all__ = ['api', 'Strategy', 'ta', 'nbjit', 'prange']

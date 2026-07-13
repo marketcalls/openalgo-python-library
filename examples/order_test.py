@@ -36,15 +36,19 @@ def main():
         )
         print("Order Status Result:", status_result)
 
-        # Test 3: Check open position
-        print("\nTest 3: Open Position")
-        position_result = client.openposition(
+        # Test 3: Check Strategy exposure
+        print("\nTest 3: Strategy exposure")
+        position_result = client.positionsopen(
             strategy="Test Strategy",
             symbol="YESBANK",
             exchange="NSE",
-            product="CNC"
+            product="CNC",
+            expected_mode="live",
+            expected_balance_type="live",
+            expected_mode_version=7,
+            request_id="positionsopen-test-001"
         )
-        print("Open Position Result:", position_result)
+        print("Strategy exposure Result:", position_result)
 
     # Test 4: Place a basket order
     print("\nTest 4: Basket Order")
