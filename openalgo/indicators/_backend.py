@@ -24,6 +24,24 @@ def _f(a):
     return np.ascontiguousarray(a, dtype=np.float64)
 
 
+def _nan_windows(bad, period):
+    """Bool mask: True where the `period`-wide window ending at i contains a NaN.
+
+    Lets the cumulative-sum kernels below keep their O(n) form on NaN-substituted
+    data and then blank exactly the affected windows, instead of letting a single
+    NaN propagate through the cumulative sum and blank every later bar.
+    """
+    n = bad.size
+    mask = np.zeros(n, dtype=bool)
+    if period <= 0 or n < period:
+        return mask
+    nc = np.cumsum(bad.astype(np.int64))
+    counts = nc[period - 1:].copy()
+    counts[1:] -= nc[: n - period]
+    mask[period - 1:] = counts > 0
+    return mask
+
+
 def sma(data, period):
     data = _f(data)
     period = int(period)
@@ -33,10 +51,12 @@ def sma(data, period):
     out = np.full(n, np.nan)
     if period <= 0 or n < period:
         return out
-    c = np.cumsum(data)
+    bad = np.isnan(data)
+    c = np.cumsum(np.where(bad, 0.0, data))
     out[period - 1] = c[period - 1] / period
     if n > period:
         out[period:] = (c[period:] - c[:-period]) / period
+    out[_nan_windows(bad, period)] = np.nan
     return out
 
 
@@ -104,8 +124,10 @@ def stdev(data, period):
     out = np.full(n, np.nan)
     if period <= 0 or n < period:
         return out
-    c = np.cumsum(data)
-    csq = np.cumsum(data * data)
+    bad = np.isnan(data)
+    filled = np.where(bad, 0.0, data)
+    c = np.cumsum(filled)
+    csq = np.cumsum(filled * filled)
     s = np.empty(n)
     sq = np.empty(n)
     s[period - 1] = c[period - 1]
@@ -116,6 +138,7 @@ def stdev(data, period):
     mean = s[period - 1:] / period
     var = sq[period - 1:] / period - mean * mean
     out[period - 1:] = np.sqrt(np.maximum(0.0, var))
+    out[_nan_windows(bad, period)] = np.nan
     return out
 
 

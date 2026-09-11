@@ -14,6 +14,20 @@ fn nan_vec(n: usize) -> Vec<f64> {
     vec![f64::NAN; n]
 }
 
+/// NaN treated as an absent value (0.0) inside a rolling accumulator.
+///
+/// The window's NaN population is tracked separately, so the accumulator stays
+/// finite and the output is blanked only while a NaN is actually inside the
+/// window. Without this a single NaN poisons the running sums permanently.
+#[inline]
+fn nz(x: f64) -> f64 {
+    if x.is_nan() {
+        0.0
+    } else {
+        x
+    }
+}
+
 #[inline]
 fn max3(a: f64, b: f64, c: f64) -> f64 {
     let m = if a > b { a } else { b };
@@ -36,14 +50,26 @@ pub fn sma(data: &[f64], period: usize) -> Vec<f64> {
         return result;
     }
     let mut rolling = 0.0;
+    let mut nans = 0usize;
     for &x in data.iter().take(period) {
-        rolling += x;
+        if x.is_nan() {
+            nans += 1;
+        } else {
+            rolling += x;
+        }
     }
-    result[period - 1] = rolling / period as f64;
+    if nans == 0 {
+        result[period - 1] = rolling / period as f64;
+    }
     for i in period..n {
         // Match the reference left-to-right association exactly: (r + new) - old.
-        rolling = rolling + data[i] - data[i - period];
-        result[i] = rolling / period as f64;
+        // NaN is held out of the accumulator and counted instead, so a bad tick
+        // blanks only the windows spanning it instead of every later bar.
+        rolling = rolling + nz(data[i]) - nz(data[i - period]);
+        nans = nans + data[i].is_nan() as usize - data[i - period].is_nan() as usize;
+        if nans == 0 {
+            result[i] = rolling / period as f64;
+        }
     }
     result
 }
@@ -104,19 +130,32 @@ pub fn stdev(data: &[f64], period: usize) -> Vec<f64> {
     let p = period as f64;
     let mut rsum = 0.0;
     let mut rsq = 0.0;
+    let mut nans = 0usize;
     for &x in data.iter().take(period) {
-        rsum += x;
-        rsq += x * x;
+        if x.is_nan() {
+            nans += 1;
+        } else {
+            rsum += x;
+            rsq += x * x;
+        }
     }
-    let mean = rsum / p;
-    result[period - 1] = (rsq / p - mean * mean).max(0.0).sqrt();
+    if nans == 0 {
+        let mean = rsum / p;
+        result[period - 1] = (rsq / p - mean * mean).max(0.0).sqrt();
+    }
     for i in period..n {
         let old = data[i - period];
         let new = data[i];
-        rsum = rsum + new - old;
-        rsq = rsq + new * new - old * old;
-        let mean = rsum / p;
-        result[i] = (rsq / p - mean * mean).max(0.0).sqrt();
+        // `f64::max` returns the non-NaN operand, so a poisoned accumulator used
+        // to leave `(NaN).max(0.0).sqrt()` == 0.0 here: a silent zero standard
+        // deviation for every bar after the first NaN rather than a visible gap.
+        rsum = rsum + nz(new) - nz(old);
+        rsq = rsq + nz(new) * nz(new) - nz(old) * nz(old);
+        nans = nans + new.is_nan() as usize - old.is_nan() as usize;
+        if nans == 0 {
+            let mean = rsum / p;
+            result[i] = (rsq / p - mean * mean).max(0.0).sqrt();
+        }
     }
     result
 }
@@ -153,15 +192,28 @@ pub fn wma(data: &[f64], period: usize) -> Vec<f64> {
     // wsum_i = wsum_{i-1} + period*x_new - sum_{i-1}; then slide sum.
     let mut sum = 0.0;
     let mut wsum = 0.0;
+    let mut nans = 0usize;
     for j in 0..period {
-        sum += data[j];
-        wsum += data[j] * (j + 1) as f64;
+        if data[j].is_nan() {
+            nans += 1;
+        } else {
+            sum += data[j];
+            wsum += data[j] * (j + 1) as f64;
+        }
     }
-    result[period - 1] = wsum / weight_sum;
+    if nans == 0 {
+        result[period - 1] = wsum / weight_sum;
+    }
     for i in period..n {
-        wsum = wsum + p * data[i] - sum;
-        sum = sum + data[i] - data[i - period];
-        result[i] = wsum / weight_sum;
+        // Both accumulators substitute 0.0 for NaN, so the recursion stays exact
+        // for the substituted series; once the NaN leaves the window the window
+        // holds only real values and `wsum` is again their true weighted sum.
+        wsum = wsum + p * nz(data[i]) - sum;
+        sum = sum + nz(data[i]) - nz(data[i - period]);
+        nans = nans + data[i].is_nan() as usize - data[i - period].is_nan() as usize;
+        if nans == 0 {
+            result[i] = wsum / weight_sum;
+        }
     }
     result
 }
@@ -196,20 +248,32 @@ pub fn hma(data: &[f64], period: usize) -> Vec<f64> {
     // Seed the first sqrt_p-wide window over diff[valid_start ..= valid_start+sqrt_p-1].
     let mut sum = 0.0;
     let mut wsum = 0.0;
+    let mut nans = 0usize;
     for j in 0..sqrt_p {
         let v = diff(valid_start + j);
-        sum += v;
-        wsum += v * (j + 1) as f64;
+        if v.is_nan() {
+            nans += 1;
+        } else {
+            sum += v;
+            wsum += v * (j + 1) as f64;
+        }
     }
     let first_out = valid_start + sqrt_p - 1;
-    out[first_out] = wsum / weight_sum;
+    if nans == 0 {
+        out[first_out] = wsum / weight_sum;
+    }
     // Slide: wsum += sqrt_p*x_new - sum; sum += x_new - x_leaving (same as `wma`).
+    // `diff` is NaN wherever an input NaN reaches either inner WMA, so the same
+    // hold-out-and-count rule applies here.
     for i in first_out + 1..n {
         let v = diff(i);
         let leaving = diff(i - sqrt_p);
-        wsum = wsum + sp * v - sum;
-        sum = sum + v - leaving;
-        out[i] = wsum / weight_sum;
+        wsum = wsum + sp * nz(v) - sum;
+        sum = sum + nz(v) - nz(leaving);
+        nans = nans + v.is_nan() as usize - leaving.is_nan() as usize;
+        if nans == 0 {
+            out[i] = wsum / weight_sum;
+        }
     }
     out
 }
@@ -2628,6 +2692,79 @@ mod tests {
         approx(r[2], 2.0);
         approx(r[3], 3.0);
         approx(r[4], 4.0);
+    }
+
+    // ---- NaN containment -------------------------------------------------
+    // A NaN must blank only the windows that span it. The rolling accumulators
+    // are shared by the whole moving-average family, so once one is poisoned the
+    // rest of the series is lost: the symptom reported upstream was crossover()
+    // returning no crossings at all on a chained indicator.
+
+    /// Index of the single NaN in `nan_at_4`; windows ending at 4, 5 and 6 span it.
+    fn nan_at_4() -> [f64; 10] {
+        let mut d = [0.0f64; 10];
+        for (i, v) in d.iter_mut().enumerate() {
+            *v = (i + 1) as f64;
+        }
+        d[4] = f64::NAN;
+        d
+    }
+
+    #[test]
+    fn sma_nan_blanks_only_spanning_windows() {
+        let r = sma(&nan_at_4(), 3);
+        approx(r[2], 2.0);
+        approx(r[3], 3.0);
+        assert!(r[4].is_nan() && r[5].is_nan() && r[6].is_nan());
+        approx(r[7], 7.0); // recovers once the NaN leaves the window
+        approx(r[9], 9.0);
+    }
+
+    #[test]
+    fn wma_nan_blanks_only_spanning_windows() {
+        let r = wma(&nan_at_4(), 3);
+        assert!(r[4].is_nan() && r[5].is_nan() && r[6].is_nan());
+        approx(r[7], 44.0 / 6.0);
+        assert!(!r[9].is_nan());
+    }
+
+    #[test]
+    fn stdev_nan_is_blank_not_a_silent_zero() {
+        let r = stdev(&nan_at_4(), 3);
+        // `f64::max` returns the non-NaN operand, so a poisoned accumulator left
+        // (NaN).max(0.0).sqrt() == 0.0: a zero standard deviation that reads as a
+        // real measurement. Every spanned window must be NaN instead.
+        for i in 4..7 {
+            assert!(r[i].is_nan(), "index {i} must be NaN, got {}", r[i]);
+            assert!(r[i] != 0.0);
+        }
+        approx(r[7], 0.816_496_580_927_724_6);
+    }
+
+    #[test]
+    fn hma_nan_does_not_poison_the_tail() {
+        let mut d = [0.0f64; 40];
+        for (i, v) in d.iter_mut().enumerate() {
+            *v = (i + 1) as f64;
+        }
+        d[20] = f64::NAN;
+        let r = hma(&d, 9);
+        assert!(!r[39].is_nan(), "tail must recover after the NaN clears");
+        assert!(r[20].is_nan());
+    }
+
+    #[test]
+    fn clean_input_is_unchanged_by_nan_handling() {
+        // The NaN path must not perturb ordinary data: same accumulation order.
+        let d: Vec<f64> = (1..=50).map(|i| (i as f64) * 1.5).collect();
+        for period in [2usize, 5, 9, 14] {
+            let s = sma(&d, period);
+            let w = wma(&d, period);
+            for i in period - 1..d.len() {
+                assert!(!s[i].is_nan() && !w[i].is_nan());
+            }
+            approx(s[period - 1], d[..period].iter().sum::<f64>() / period as f64);
+        }
     }
 
     #[test]
