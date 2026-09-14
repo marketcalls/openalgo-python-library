@@ -2258,6 +2258,21 @@ finally:
     client.disconnect()
 ```
 
+Every tick carries the fields this SDK documents for its mode, plus any other
+field the server sent for that tick under the broker's own key. On an F&O depth
+feed that commonly means OI, volume and OHLC alongside the order book:
+
+```python
+def on_depth(data):
+    tick = data["data"]
+    print(tick["ltp"], tick["depth"])
+    print(tick.get("oi"), tick.get("volume"))  # present when the broker sends them
+```
+
+Read the extras with `.get()`: which ones arrive depends on the broker and the
+instrument, so none is guaranteed. The polled snapshots (`get_ltp`, `get_quotes`,
+`get_depth`) return the fixed shapes documented on them and are unchanged.
+
 ## More Examples
 
 The `examples/` directory in the source repository contains runnable scripts:

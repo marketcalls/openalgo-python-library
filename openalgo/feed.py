@@ -11,6 +11,36 @@ from typing import List, Dict, Any, Callable, Optional, Tuple
 import websocket
 from .base import BaseAPI
 
+
+def _with_broker_fields(market_data: Dict[str, Any], mapped: Dict[str, Any]) -> Dict[str, Any]:
+    """Layer the SDK's mapped tick fields over everything the server sent.
+
+    Each mode used to build its payload from a fixed key list, so any field
+    outside that list was discarded before the callback or the snapshot saw it.
+    Depth ticks kept three keys and dropped OI, volume and OHLC even though the
+    server frame carries them; quote ticks kept eleven and dropped OI. A broker
+    that starts sending a new field needed an SDK release to surface it.
+
+    ``mapped`` wins on every key it defines, so the documented names keep their
+    existing values and their defaults when the server omits them. Everything
+    else the server sent rides alongside under the broker's own key. Callers
+    reading only the documented keys are unaffected.
+
+    The envelope (``type``, ``symbol``, ``exchange``, ``mode``) sits outside
+    ``data`` in the server frame and so is never part of ``market_data``.
+
+    Args:
+        market_data: The ``data`` object from one server frame.
+        mapped: The fields this SDK names and defaults itself.
+
+    Returns:
+        dict: ``market_data`` merged under ``mapped``.
+    """
+    if not isinstance(market_data, dict):
+        return dict(mapped)
+    return {**market_data, **mapped}
+
+
 class FeedAPI(BaseAPI):
     """
     Market data feed API methods for OpenAlgo using WebSockets.
@@ -419,12 +449,15 @@ class FeedAPI(BaseAPI):
                             ltp = market_data.get("ltp")
                             timestamp = market_data.get("timestamp", int(time.time() * 1000))
                             
-                            # Store both price and timestamp with format 'EXCHANGE:SYMBOL'
+                            # Store both price and timestamp with format
+                            # 'EXCHANGE:SYMBOL', carrying through every other
+                            # field the broker sent. 'price' is this SDK's name
+                            # for the LTP and stays the key get_ltp() reads.
                             symbol_key = f"{exchange}:{symbol}"
-                            self.ltp_data[symbol_key] = {
+                            self.ltp_data[symbol_key] = _with_broker_fields(market_data, {
                                 'price': ltp,
                                 'timestamp': timestamp
-                            }
+                            })
 
                             self._log(2, "LTP", f"{symbol_key:<20} | LTP: {ltp}")
                         
@@ -437,10 +470,10 @@ class FeedAPI(BaseAPI):
                                     'symbol': symbol,
                                     'exchange': exchange,
                                     'mode': mode,
-                                    'data': {
+                                    'data': _with_broker_fields(market_data, {
                                         'ltp': ltp,
                                         'timestamp': timestamp
-                                    }
+                                    })
                                 }
                                 # Include LTT if available in original data
                                 if 'ltt' in market_data:
@@ -456,8 +489,9 @@ class FeedAPI(BaseAPI):
                     # Handle Quotes data (mode 2)
                     elif mode == 2:
                         with self.lock:
-                            # Extract quote data fields
-                            quote_data = {
+                            # Extract quote data fields, carrying through every
+                            # other field the broker sent (OI, depth, ...).
+                            quote_data = _with_broker_fields(market_data, {
                                 'open': market_data.get("open", 0),
                                 'high': market_data.get("high", 0),
                                 'low': market_data.get("low", 0),
@@ -469,7 +503,7 @@ class FeedAPI(BaseAPI):
                                 'change': market_data.get("change", 0),
                                 'change_percent': market_data.get("change_percent", 0),
                                 'timestamp': market_data.get("timestamp", int(time.time() * 1000))
-                            }
+                            })
                             
                             # Store quote data with format 'EXCHANGE:SYMBOL'
                             symbol_key = f"{exchange}:{symbol}"
@@ -495,12 +529,13 @@ class FeedAPI(BaseAPI):
                     # Handle Market Depth data (mode 3)
                     elif mode == 3 and "depth" in market_data:
                         with self.lock:
-                            # Extract depth data
-                            depth_data = {
+                            # Extract depth data, carrying through every other
+                            # field the broker sent (OI, volume, OHLC, ...).
+                            depth_data = _with_broker_fields(market_data, {
                                 'ltp': market_data.get("ltp", 0),
                                 'timestamp': market_data.get("timestamp", int(time.time() * 1000)),
                                 'depth': market_data.get("depth", {"buy": [], "sell": []})
-                            }
+                            })
                             
                             # Store depth data with format 'EXCHANGE:SYMBOL'
                             symbol_key = f"{exchange}:{symbol}"
@@ -560,6 +595,12 @@ class FeedAPI(BaseAPI):
                 - symbol (str): Trading symbol
                 - exchange_token (str, optional): Exchange token for the instrument
             on_data_received: Callback function for data updates
+
+        The callback receives ``ltp`` and ``timestamp`` under ``data``, plus
+        every other field the server sent for that tick, under the broker's own
+        key (``ltt``, for instance). Read them with ``.get()``, since which
+        extras arrive depends on the broker and the instrument. ``get_ltp()``
+        returns the fixed nested snapshot documented on it and is unaffected.
 
         Returns:
             bool: True if subscription successful, False otherwise
@@ -664,6 +705,12 @@ class FeedAPI(BaseAPI):
                 - exchange_token (str, optional): Exchange token for the instrument
             on_data_received: Callback function for data updates
 
+        The callback receives the eleven documented quote fields under ``data``,
+        plus every other field the server sent for that tick, under the broker's
+        own key (``oi``, for instance). Read them with ``.get()``, since which
+        extras arrive depends on the broker and the instrument. ``get_quotes()``
+        returns the fixed nested snapshot documented on it and is unaffected.
+
         Returns:
             bool: True if subscription request sent successfully
         """
@@ -755,6 +802,13 @@ class FeedAPI(BaseAPI):
                 - symbol (str): Trading symbol
                 - exchange_token (str, optional): Exchange token for the instrument
             on_data_received: Callback function for data updates
+
+        The callback receives ``ltp``, ``timestamp`` and ``depth`` under
+        ``data``, plus every other field the server sent for that tick, under
+        the broker's own key. Which extras arrive depends on the broker and the
+        instrument: OI, volume and OHLC are common on F&O depth feeds. Read them
+        with ``.get()``, since none is guaranteed. ``get_depth()`` returns the
+        fixed nested snapshot documented on it and is unaffected.
 
         Returns:
             bool: True if subscription request sent successfully
