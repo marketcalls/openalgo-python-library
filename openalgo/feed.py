@@ -102,10 +102,14 @@ class FeedAPI(BaseAPI):
         self.message_queue = []
         self.lock = threading.Lock()
         
-        # Data storage
-        self.ltp_data = {}  # Structure: {'EXCHANGE:SYMBOL': {'price': price, 'timestamp': timestamp}}
-        self.quotes_data = {}  # Structure: {'EXCHANGE:SYMBOL': {'open': open, 'high': high, 'low': low, 'close': close, 'ltp': ltp, 'timestamp': timestamp}}
-        self.depth_data = {}  # Structure: {'EXCHANGE:SYMBOL': {'ltp': ltp, 'timestamp': timestamp, 'depth': {'buy': [...], 'sell': [...]}}}
+        # Data storage. Each holds the keys named below, which are always
+        # present, plus any other field the server sent for that tick under the
+        # broker's own key - so treat the lists as the guaranteed minimum, not
+        # as the whole dict. The getters below project a fixed shape out of
+        # these and are unaffected by the extras.
+        self.ltp_data = {}  # Structure: {'EXCHANGE:SYMBOL': {'price': price, 'timestamp': timestamp, ...}}
+        self.quotes_data = {}  # Structure: {'EXCHANGE:SYMBOL': {'open': open, 'high': high, 'low': low, 'close': close, 'ltp': ltp, 'timestamp': timestamp, ...}}
+        self.depth_data = {}  # Structure: {'EXCHANGE:SYMBOL': {'ltp': ltp, 'timestamp': timestamp, 'depth': {'buy': [...], 'sell': [...]}, ...}}
         
         # Callback registry
         self.ltp_callback = None
@@ -475,7 +479,12 @@ class FeedAPI(BaseAPI):
                                         'timestamp': timestamp
                                     })
                                 }
-                                # Include LTT if available in original data
+                                # Include LTT if available in original data.
+                                # The first branch is now what the passthrough
+                                # above already did; it is kept so the nested
+                                # fallback below reads as the exception it is,
+                                # and so this block still behaves the same if
+                                # 'ltt' ever joins the mapped fields.
                                 if 'ltt' in market_data:
                                     clean_data['data']['ltt'] = market_data['ltt']
                                 # Check if ltt is in the nested data structure (which seems to be the case)
