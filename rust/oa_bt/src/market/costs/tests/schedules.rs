@@ -56,17 +56,12 @@ fn builtin_versions_start_on_2020_07_01_and_follow_each_other_without_a_gap() {
 
 /// The rows no primary source confirms in both of the last two versions: BSE groups X
 /// (the fee page charges ZP ten times the row) and SS (the page no longer shows the
-/// group), and the MCX contracts with their own rate (MCX/F&A/631/2024 charges every
-/// futures contract Rs 2.10 per lakh from 2024-10-01).
-const UNCONFIRMED_SINCE_2024_10_01: [Segment; 8] = [
+/// group).
+const UNCONFIRMED_SINCE_2024_10_01: [Segment; 4] = [
     Segment::BseEqDeliveryX,
     Segment::BseEqIntradayX,
     Segment::BseEqDeliverySs,
     Segment::BseEqIntradaySs,
-    Segment::McxFutCastorseed,
-    Segment::McxFutRbdpmolein,
-    Segment::McxFutPepper,
-    Segment::McxFutKapas,
 ];
 
 #[test]

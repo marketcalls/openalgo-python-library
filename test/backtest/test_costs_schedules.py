@@ -128,17 +128,12 @@ def test_schedule_rates_are_fractions_named_with_a_rate_suffix():
 
 
 # The rows of the last two versions that no primary source confirms: BSE groups X (ZP
-# pays ten times the row) and SS (no longer on the BSE fee page), and the MCX contracts
-# with their own rate (MCX/F&A/631/2024 charges every future Rs 2.10 per lakh).
+# pays ten times the row) and SS (no longer on the BSE fee page).
 UNCONFIRMED_SINCE_2024_10_01 = [
     "BSE_EQ_DELIVERY_X",
     "BSE_EQ_INTRADAY_X",
     "BSE_EQ_DELIVERY_SS",
     "BSE_EQ_INTRADAY_SS",
-    "MCX_FUT_CASTORSEED",
-    "MCX_FUT_RBDPMOLEIN",
-    "MCX_FUT_PEPPER",
-    "MCX_FUT_KAPAS",
 ]
 
 
@@ -214,10 +209,19 @@ def test_a_trade_in_the_older_version_is_priced_by_it_and_verified():
     assert (cost.schedules, cost.verified) == (("IN-2024-10-01",), True)
 
 
-def test_an_unconfirmed_mcx_rate_of_the_older_version_warns_with_its_reason():
-    with pytest.warns(costs.UnverifiedScheduleWarning, match="IN-2024-10-01.*MCX/F&A/631/2024"):
-        cost = costs.trade_cost("SELL", 100, 10, "2025-06-02", segment="MCX_FUT_KAPAS")
+def test_an_unconfirmed_row_of_the_older_version_warns_with_its_reason():
+    with pytest.warns(costs.UnverifiedScheduleWarning, match="IN-2024-10-01.*group ZP"):
+        cost = costs.trade_cost("BUY", 100, 10, "2025-06-02", segment="BSE_EQ_DELIVERY_X")
     assert (cost.schedules, cost.verified) == (("IN-2024-10-01",), False)
+
+
+def test_kapas_pays_the_uniform_mcx_charge_from_2024_10_01():
+    # MCX/F&A/631/2024: Rs 2.10 per lakh for every futures contract from 2024-10-01, so a
+    # Rs 1 crore KAPAS sale pays 210 (the Rs 2.60 per lakh of 2024-09-30 was its own rate).
+    before = costs.trade_cost("SELL", 10_000_000, 1, "2024-09-30", segment="MCX_FUT_KAPAS")
+    after = costs.trade_cost("SELL", 10_000_000, 1, "2024-10-01", segment="MCX_FUT_KAPAS")
+    assert (before.exchange_txn, after.exchange_txn) == pytest.approx((260.0, 210.0))
+    assert after.verified is True
 
 
 def test_the_unconfirmed_bse_options_rate_is_flagged_with_its_notice_and_the_gap():

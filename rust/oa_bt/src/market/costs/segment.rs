@@ -51,13 +51,13 @@ pub enum Segment {
     /// MCX futures on an agri commodity exempt from CTT (one listed in rule 3 of the
     /// CTT Rules 2013), at the standard exchange rate.
     McxFutAgri = 15,
-    /// MCX CASTORSEED futures (agri, own exchange rate).
+    /// MCX CASTORSEED futures (agri, own exchange rate until 2024-09-30).
     McxFutCastorseed = 16,
-    /// MCX RBDPMOLEIN futures (agri, CTT on sells, own exchange rate).
+    /// MCX RBDPMOLEIN futures (agri, CTT on sells, own exchange rate until 2024-09-30).
     McxFutRbdpmolein = 17,
-    /// MCX PEPPER futures (agri, own exchange rate).
+    /// MCX PEPPER futures (agri, own exchange rate until 2024-09-30).
     McxFutPepper = 18,
-    /// MCX KAPAS futures (agri, own exchange rate).
+    /// MCX KAPAS futures (agri, own exchange rate until 2024-09-30).
     McxFutKapas = 19,
     /// BSE options other than Sensex and Bankex: Sensex 50 and stock options.
     BfoOptOther = 20,
@@ -179,10 +179,10 @@ const TABLE: [SegmentInfo; SEGMENT_COUNT] = {
         info(Segment::BfoOpt, "BFO_OPT", Bfo, Options, "BSE Sensex and Bankex options (charges on premium)"),
         info(Segment::McxFut, "MCX_FUT", Mcx, Futures, "MCX futures, non-agri commodity"),
         info(Segment::McxFutAgri, "MCX_FUT_AGRI", Mcx, Futures, "MCX futures, CTT-exempt agri commodity at the standard exchange rate (no CTT)"),
-        info(Segment::McxFutCastorseed, "MCX_FUT_CASTORSEED", Mcx, Futures, "MCX CASTORSEED futures (agri, own exchange rate)"),
-        info(Segment::McxFutRbdpmolein, "MCX_FUT_RBDPMOLEIN", Mcx, Futures, "MCX RBDPMOLEIN futures (agri, CTT on sells, own exchange rate)"),
-        info(Segment::McxFutPepper, "MCX_FUT_PEPPER", Mcx, Futures, "MCX PEPPER futures (agri, own exchange rate)"),
-        info(Segment::McxFutKapas, "MCX_FUT_KAPAS", Mcx, Futures, "MCX KAPAS futures (agri, own exchange rate)"),
+        info(Segment::McxFutCastorseed, "MCX_FUT_CASTORSEED", Mcx, Futures, "MCX CASTORSEED futures (agri, own exchange rate until 2024-09-30)"),
+        info(Segment::McxFutRbdpmolein, "MCX_FUT_RBDPMOLEIN", Mcx, Futures, "MCX RBDPMOLEIN futures (agri, CTT on sells, own exchange rate until 2024-09-30)"),
+        info(Segment::McxFutPepper, "MCX_FUT_PEPPER", Mcx, Futures, "MCX PEPPER futures (agri, own exchange rate until 2024-09-30)"),
+        info(Segment::McxFutKapas, "MCX_FUT_KAPAS", Mcx, Futures, "MCX KAPAS futures (agri, own exchange rate until 2024-09-30)"),
         info(Segment::BfoOptOther, "BFO_OPT_OTHER", Bfo, Options, "BSE Sensex 50 and stock options (charges on premium)"),
         info(Segment::McxFutAgriCtt, "MCX_FUT_AGRI_CTT", Mcx, Futures, "MCX futures, agri commodity outside the CTT exemption, at the standard exchange rate (CTT on sells)"),
     ]

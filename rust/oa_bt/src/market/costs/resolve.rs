@@ -84,10 +84,11 @@ const MCX_AGRI_CTT_EXEMPT: [&str; 2] = ["CARDAMOM", "COTTONCNDY"];
 /// their oils).
 const MCX_AGRI_CTT_PAYING: [&str; 5] = ["COTTONOIL", "CPO", "MENTHAOIL", "RUBBER", "SUNOIL"];
 
-/// MCX agri commodities with a contract-specific exchange rate. Source: the
-/// contract-specific rates of the reference note. Castor seed, pepper and kapas are
-/// items (iv), (xiv) and (xii) of rule 3; RBD palmolein is not, and its schedule rows
-/// charge CTT.
+/// MCX agri commodities that had a contract-specific exchange rate until 2024-09-30
+/// (MCX/F&A/631/2024 charges every futures contract the same rate from 2024-10-01).
+/// Source: the contract-specific rates of the reference note. Castor seed, pepper
+/// and kapas are items (iv), (xiv) and (xii) of rule 3; RBD palmolein is not, and its
+/// schedule rows charge CTT.
 const MCX_AGRI_SPECIFIC: [(&str, Segment); 4] = [
     ("CASTORSEED", Segment::McxFutCastorseed),
     ("RBDPMOLEIN", Segment::McxFutRbdpmolein),

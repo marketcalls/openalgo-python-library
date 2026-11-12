@@ -1,6 +1,7 @@
-//! Reference note section 3, "Commodity derivatives": the MCX futures column, the
-//! contract-specific rates and the agri list. Amounts are rupees on a fill of Rs 1
-//! crore unless a row says otherwise.
+//! Reference note section 3, "Commodity derivatives": the MCX futures column and the
+//! agri list, with the exchange charge of MCX circular MCX/F&A/631/2024 in place of the
+//! note's contract-specific rates. Amounts are rupees on a fill of Rs 1 crore unless a
+//! row says otherwise.
 
 use crate::model::{Exchange, InstrumentKind, Product, Side};
 
@@ -79,21 +80,14 @@ fn ctt_row_agri_futures_in_rule_3_pay_no_ctt() {
 }
 
 #[test]
-fn exchange_txn_row_standard_and_contract_specific_rates() {
-    // 0.0021 percent standard; CASTORSEED 0.0005, RBDPMOLEIN 0.001, PEPPER 0.00005
-    // and KAPAS 0.0026 percent.
-    let rows = [
-        (Segment::McxFut, 210.0),
-        (Segment::McxFutAgri, 210.0),
-        (Segment::McxFutAgriCtt, 210.0),
-        (Segment::McxFutCastorseed, 50.0),
-        (Segment::McxFutRbdpmolein, 100.0),
-        (Segment::McxFutPepper, 5.0),
-        (Segment::McxFutKapas, 260.0),
-    ];
-    for (segment, per_crore) in rows {
+fn exchange_txn_row_is_0_0021_percent_for_every_contract() {
+    // MCX/F&A/631/2024: Rs 2.10 per lakh of turnover for every futures contract from
+    // 2024-10-01. The reference note's contract-specific rates (CASTORSEED 0.0005,
+    // RBDPMOLEIN 0.001, PEPPER 0.00005 and KAPAS 0.0026 percent) are those of the
+    // circulars that one replaced, so these four now pay 210 on Rs 1 crore too.
+    for segment in MCX_SEGMENTS {
         for side in BOTH_SIDES {
-            assert_close(accrued(segment, side, CRORE).exchange_txn, per_crore);
+            assert_close(accrued(segment, side, CRORE).exchange_txn, 210.0);
         }
     }
 }
@@ -121,12 +115,13 @@ fn gst_row_is_18_percent_of_brokerage_exchange_charge_and_sebi_fee() {
     // On a Rs 1 crore sell. CTT is not in the base.
     //   non-agri: 0.18 x (20 + 210 + 10) = 43.20
     //   agri:     0.18 x (20 + 210 + 1) = 41.58
-    //   PEPPER:   0.18 x (20 + 5 + 1) = 4.68
+    // PEPPER pays the uniform exchange charge since 2024-10-01 (MCX/F&A/631/2024), so
+    // its GST is the agri figure, no longer the note's 0.18 x (20 + 5 + 1) = 4.68.
     let rows = [
         (Segment::McxFut, 43.20),
         (Segment::McxFutAgri, 41.58),
         (Segment::McxFutAgriCtt, 41.58),
-        (Segment::McxFutPepper, 4.68),
+        (Segment::McxFutPepper, 41.58),
     ];
     for (segment, gst) in rows {
         assert_close(accrued(segment, Side::Sell, CRORE).gst, gst);

@@ -165,11 +165,11 @@ def test_each_row_says_which_version_priced_it_and_whether_it_is_verified():
 
 
 def test_a_batch_warns_once_per_version_and_reason():
-    # KAPAS futures have no verified row in either version, so five rows give two
+    # BSE group X has no verified row in either version, so five rows give two
     # warnings: one per version.
     dates = ["2025-06-02", "2025-06-03", "2026-11-13", "2026-11-14", SNAPSHOT]
     with pytest.warns(costs.UnverifiedScheduleWarning) as caught:
-        costs.trade_costs("SELL", 100, 1, dates, "MCX_FUT_KAPAS")
+        costs.trade_costs("SELL", 100, 1, dates, "BSE_EQ_DELIVERY_X")
     assert len(caught) == 2
 
 

@@ -251,7 +251,8 @@ type Boundary = (Day, Segment, Side, Line, f64, f64);
 fn boundaries() -> Vec<Boundary> {
     use Line::{Exchange, Sebi, Stt};
     use Segment::{
-        BfoOpt, BfoOptOther, BseEqDelivery, McxFut, McxFutKapas, NfoFut, NfoOpt, NseEqDelivery,
+        BfoOpt, BfoOptOther, BseEqDelivery, McxFut, McxFutKapas, McxFutPepper, NfoFut, NfoOpt,
+        NseEqDelivery,
     };
     use Side::{Buy, Sell};
     vec![
@@ -284,6 +285,10 @@ fn boundaries() -> Vec<Boundary> {
         (d(2024, 10, 1), NseEqDelivery, Buy, Exchange, 335.0, 307.0),
         (d(2024, 10, 1), NfoFut, Sell, Stt, 1_250.0, 2_000.0),
         (d(2024, 10, 1), McxFut, Buy, Exchange, 260.0, 210.0),
+        // MCX/F&A/631/2024 also ends the contract-specific rates: KAPAS from Rs 2.60 and
+        // PEPPER from Rs 0.05 per lakh to the uniform Rs 2.10.
+        (d(2024, 10, 1), McxFutKapas, Buy, Exchange, 260.0, 210.0),
+        (d(2024, 10, 1), McxFutPepper, Sell, Exchange, 5.0, 210.0),
     ]
 }
 
