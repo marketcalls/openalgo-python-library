@@ -15,8 +15,9 @@ the load succeeds, the bars really are 1 minute apart (data at a coarser interva
 pass the calendar's checks), the source returned the whole requested range and no
 session of the range is without bars. When every instrument passes, those bars are the
 run's bars; otherwise every instrument is loaded at the strategy interval (own 1-minute
-data is resampled to it). The Assumptions block states the base, why it was chosen and
-what it means for fills.
+data is resampled to it). A suspected unadjusted split or bonus stops the run at the
+probe: it is in the prices at every interval. The Assumptions block states the base, why
+it was chosen and what it means for fills.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from typing import Any
 import numpy as np
 
 from ._layout import IST_OFFSET_NANOS, NANOS_PER_MINUTE, parse_interval
+from ._run_corporate_actions import declared_for, is_split_error
 from .data import BarsResult, load_bars
 from .errors import ConfigError, DataError
 
@@ -110,6 +112,7 @@ def choose_base(
             tz=args["tz"],
             base=base,
             now=plan.present,
+            corporate_actions=declared_for(args["corporate_actions"], symbol, plan.symbols),
         )
 
     if args["base"] is not None:
@@ -132,6 +135,8 @@ def _probe(plan: Any, args: dict[str, Any], load: Callable[..., BarsResult]) -> 
         try:
             loaded[symbol] = load(symbol, ONE_MINUTE)
         except DataError as exc:
+            if is_split_error(exc):
+                raise
             gaps.append(f"{symbol}: no usable 1-minute data ({_first_line(exc)})")
             continue
         gap = _gap(symbol, loaded[symbol])

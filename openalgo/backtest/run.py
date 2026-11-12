@@ -54,6 +54,7 @@ def backtest(
     calendar: Any = None,
     source: str = "auto",
     tz: str | None = None,
+    corporate_actions: Any = None,
     base: str | None = None,
     fill: str = "next_open",
     quantity_mode: str = "fractional",
@@ -94,6 +95,11 @@ def backtest(
         equity is a generic cash-equity instrument (lot 1, tick 0.05) and futures and
         options come from the reference tables (`_instruments`; the Assumptions say so).
     calendar: a session calendar; the built-in one by default.
+    corporate_actions: splits, bonuses and checked dates of NSE and BSE shares (a list of
+        `bt.data.CorporateAction`, or a dict of lists by symbol). A gap in the bars that
+        looks like an unadjusted split or bonus stops the run unless declared; a
+        declared one the bars are not adjusted for is a warning, and holding across it
+        is not built yet (`_run_corporate_actions`, `data.splits`).
     base: the base interval ("1m", "D", ...); default "D" for daily strategies, and for
         intraday ones 1 minute when 1-minute data covers the run for every instrument,
         else the strategy interval (`_base_interval`; the Assumptions say which and why).
