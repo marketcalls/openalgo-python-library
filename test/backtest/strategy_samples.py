@@ -95,6 +95,13 @@ class EmaCross(bt.Strategy):
             self.exit()
 
 
+class EmaCrossIntraday(EmaCross):
+    """EmaCross on MIS, which the default charges price (a same-day CNC round trip is
+    not built yet)."""
+
+    product = "MIS"
+
+
 def final_equity(result: bt.Result) -> float:
     """A custom objective: the last equity point, rupees."""
     return float(result.equity["equity_rupees"].iloc[-1])
@@ -110,6 +117,7 @@ __all__ = [
     "DAY",
     "IST",
     "EmaCross",
+    "EmaCrossIntraday",
     "at",
     "daily_bars",
     "final_equity",

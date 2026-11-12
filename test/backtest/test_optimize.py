@@ -12,7 +12,14 @@ import os
 import numpy as np
 import pandas as pd
 import pytest
-from strategy_samples import CAPITAL, EmaCross, final_equity, process_id, wave_bars
+from strategy_samples import (
+    CAPITAL,
+    EmaCross,
+    EmaCrossIntraday,
+    final_equity,
+    process_id,
+    wave_bars,
+)
 
 import openalgo.backtest as bt
 from openalgo.backtest import _causality_checks
@@ -180,7 +187,31 @@ def test_a_class_workers_cannot_import_runs_with_one_worker():
 def test_a_run_with_its_own_calendar_sweeps_in_this_process():
     calendar = default_calendar().copy()
     result = sweep(workers=2, calendar=calendar, slow=(10,))
-    assert "in this process (the run's own calendar cannot be sent" in result.plan
+    assert "in this process (the run's own calendar or cost model cannot be sent" in result.plan
+
+
+def test_a_sweep_with_the_default_charges_and_slippage_matches_the_single_runs():
+    # Workers resolve the cost model and the slippage table again from costs="zerodha"
+    # and slippage="default".
+    data = wave_bars()
+    swept = bt.optimize(EmaCrossIntraday, data=data, capital=CAPITAL, workers=2, slow=(10,))
+    for row in swept.table.itertuples():
+        params = {"fast": int(row.fast)}
+        alone = bt.backtest(EmaCrossIntraday, data=data, capital=CAPITAL, params=params)
+        assert row.objective == alone.metrics["net_profit"]
+    assert swept.table["trades"].sum() > 0
+
+
+def test_a_cost_model_that_cannot_be_sent_to_workers_sweeps_in_this_process():
+    result = bt.optimize(
+        EmaCrossIntraday,
+        data=wave_bars(),
+        capital=CAPITAL,
+        costs=bt.costs.flat(20),
+        workers=2,
+        slow=(10,),
+    )
+    assert "own calendar or cost model cannot be sent" in result.plan
 
 
 def test_the_causality_checks_run_once_for_the_sweep(monkeypatch):

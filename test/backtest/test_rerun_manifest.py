@@ -93,7 +93,7 @@ def test_the_manifest_records_versions_seed_and_platform():
     manifest = backtest().manifest
     assert manifest["engine_version"].count(".") == 2
     assert manifest["reference_tables"] is None  # a generic instrument, no table used
-    assert manifest["cost_schedules"] is None  # costs=None
+    assert manifest["cost_schedules"] == []  # costs=None
     assert manifest["random_seed"] is None
     assert manifest["platform"]["python"] == platform.python_version()
 

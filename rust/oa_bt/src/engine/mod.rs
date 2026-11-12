@@ -39,7 +39,7 @@
 //! | `Engine::submit(OrderRequest)` | while paused | submission checks, `Submitted` or `Rejected` |
 //! | `Engine::cancel(OrderId)` | while paused | cancel a working order |
 //! | `Engine::modify(OrderId, OrderRequest)` | while paused | not built yet |
-//! | `position`, `leg`, `order`, `working_orders`, `has_pending_entry`, `account`, `last_close`, `decision_instant`, `strategy_bars`, `timer_counts` | any time | queries |
+//! | `position`, `leg`, `order`, `working_orders`, `has_pending_entry`, `account`, `last_close`, `decision_instant`, `trading_state`, `strategy_bars`, `timer_counts` | any time | queries |
 //! | `Engine::add_timer(TimerSpec)` | before the first `advance` | register `self.at` or `self.every` |
 //! | `Engine::finish()` | after `Pause::Finished` | the `RunOutput` |
 //! | `pause::run(engine, driver)` | Rust drivers | the loop above, for a `Driver` |
@@ -66,17 +66,20 @@
 //! | Step | Code | Built |
 //! |---|---|---|
 //! | 1 session open, reference events | `steps::open_slice`; intraday times resolved lazily by `session::session_times` | times yes; rolls and lot-size changes no |
-//! | 2 fills at the open | `timers::fill_due_orders` -> `fills::fill_queued` (eligible when the open is at or after `decided_at`, SPEC-35; a missing bar keeps the order queued, SPEC-06; entry window and margin checked at the fill bar), then `timers::timers_pause` -> `Pause::Timers`, then `steps::step_open_fills` (the orders the timers placed, then `session::square_off_at_open`, the square-off timer, SPEC-05) | MARKET orders, timers, square-off; rolls no |
-//! | 3 resting orders, leg levels | `steps::step_levels` -> `rms::LegState::test_bar` | no (plain legs only) |
-//! | 4 ratchets | `steps::step_ratchets` -> `rms::LegState::ratchet` | no |
+//! | 2 fills at the open | `steps::step_open_fills`: per instrument the risk exits of step 6 (`risk_exits_at_open`), then `fills::fill_queued` (eligible when the open is at or after `decided_at`, SPEC-35; a missing bar keeps the order queued, SPEC-06; entry window and margin checked at the fill bar), the time exit, then `session::square_off_at_open` (the square-off timer, SPEC-05). In a slice where a timer is due, `timers::fill_due_orders` runs the risk exits and queued orders first, `timers::timers_pause` returns `Pause::Timers`, and `step_open_fills` then fills what the timers placed | MARKET orders, timers, square-off; rolls no |
+//! | 3 resting orders, leg levels | `steps::step_levels` -> `legs::test_leg_levels` -> `rms::LegState::test_bar`, exits through `fills::execute_fill` | leg levels yes (MIS); resting orders no |
+//! | 4 ratchets | `steps::step_ratchets` -> `legs::ratchet_legs` -> `rms::LegState::ratchet` | yes |
 //! | 5 mark | `steps::step_mark`: close, or last close and stale | yes |
-//! | 6 aggregate rules | refused at `RunConfig::validate` until built | no |
+//! | 6 aggregate rules | `aggregate::step_aggregate_rules`: daily loss limit, drawdown halt; their exits at the next open (`risk_exits_at_open`, step 2) or the last close; the session boundary in step 1 (`risk_session_open`) | yes (combined rules: Phase 3) |
 //! | 7 callbacks and `on_bar` | `steps::callbacks_pause` -> `Pause::BarClose`; `submit::submit` | yes |
-//! | 8 session close | `steps::close_slice`: expire DAY orders, close open MIS positions at the last close (reason `eod`, flagged); settlement and futures MTM no | partly |
+//! | 8 session close | `steps::close_slice`: expire DAY orders, close open MIS positions at the last close (reason `eod`, flagged), settle the day's contract notes (`accounting::settle_contract_notes`); settlement and futures MTM no | partly |
 //!
-//! Every fill takes one path, `fills::execute_fill`: slippage (`market::slippage`),
-//! position and tranches (`portfolio`), the ledger, the leg state (`rms::leg`), then the
-//! records: the fill, `Filled` (when it has an order), the position event, the trade.
+//! Every fill takes one path, `fills::execute_fill`: slippage (`market::slippage`, the
+//! run's or the dated default table's), position and tranches (`portfolio`), the ledger,
+//! the charges (`charges`, posted to the ledger; contract notes settle in step 8), the
+//! leg state (`rms::leg`), then the records: the fill, `Filled` (when it has an order),
+//! the position event, the trade. The glue to the market rules is in `accounting`, the
+//! sizers' in `sizing`.
 //!
 //! # Determinism
 //!
@@ -96,8 +99,15 @@
 //! | `kernel` | `Engine`, `advance`, queries, `finish` |
 //! | `steps` | Steps 1 to 8 |
 //! | `fills` | Step 2 fills of queued orders, `execute_fill` |
+//! | `legs` | Leg rules in steps 3 and 4, the add rule of SPEC-14 |
+//! | `reverse` | `reverse=True`: close, then open the rest |
+//! | `accounting` | Slippage, margin and charges of a fill; contract notes at the session close |
+//! | `sizing` | What a sizer sees, cost estimates in its budget, the engine default |
 //! | `session` | Intraday times per session, the entry window, the square-off timer |
 //! | `submit` | `submit`, `cancel`, `modify`, the submission checks, DAY validity and market closed |
+//! | `aggregate` | Step 6 (daily loss limit, drawdown halt), the step-1 session boundary, the exits they queue |
+//! | `entry_rules` | Entry gates at submission (trading state, cooldown, maximum positions), the time exit, the fill hook |
+//! | `strategy_risk` | `StrategyRisk`: trading state and the bookkeeping of the strategy and session rules |
 //! | `pause` | `Pause`, `Driver`, `run` |
 //! | `timers` | `self.at` and `self.every`: registration, when they are due, the timer pause |
 //! | `history` | The strategy bars of the whole run, for indicators computed ahead |
@@ -114,25 +124,37 @@
 //!
 //! Built: one exchange, any number of instruments on it, intraday or daily strategy
 //! intervals on an intraday or daily base, MARKET DAY orders (entry, add, reduce,
-//! exit by fraction), the quantity, freeze, product, entry-window and market-closed
-//! checks, the square-off, timers (`self.at`, `self.every`), margin for cash equity, zero
-//! slippage and the fixed slippage forms, the position history, the equity series,
-//! trades and events, and the whole-run strategy bars for indicators. Everything else
-//! returns `KernelError::NotBuilt` naming the feature.
+//! exit by fraction, `reverse=True`), the quantity, freeze, product, entry-window,
+//! market-closed and reverse checks, engine-held leg rules on MIS (stop, targets,
+//! every trail form, breakeven, `after_first_target`), the square-off, timers
+//! (`self.at`, `self.every`), charges on every fill with contract-note rounding, the
+//! dated default slippage and margin tables (cash, MIS with leverage on request, long
+//! options, NSE index futures), the sizers and the engine default size, the position
+//! history, the equity series, trades and events, the whole-run strategy bars for
+//! indicators; the daily loss limit, the drawdown halt, the trading state, the
+//! cooldown, maximum positions and the time exit. Everything else returns
+//! `KernelError::NotBuilt` naming the feature.
 
+mod accounting;
+mod aggregate;
 pub mod clock;
 pub mod config;
+mod entry_rules;
 pub mod error;
 pub mod event;
 mod fills;
 mod history;
 pub mod kernel;
+mod legs;
 pub mod market_data;
 pub mod output;
 pub mod pause;
+mod reverse;
 mod session;
 pub mod signals;
+mod sizing;
 mod steps;
+mod strategy_risk;
 pub mod submit;
 pub mod timers;
 

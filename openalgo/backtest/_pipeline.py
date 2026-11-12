@@ -3,10 +3,13 @@ first (the Python half of the design in `rust/oa_bt/src/engine/mod.rs`).
 
 `prepare` resolves everything that does not depend on the strategy's parameters: the
 settings (`_settings.resolve`), the calendar, the base interval and its bars
-(`_base_interval.choose_base`, through the data layer) and the instruments
-(`_instruments.resolve_instruments`). Its `PreparedRun` holds plain data, so a sweep
-can send it to worker processes, unless the run has a calendar of its own (a native
-object that does not cross processes; the shared default calendar is rebuilt there).
+(`_base_interval.choose_base`, through the data layer), the instruments
+(`_instruments.resolve_instruments`) and the market settings (`_market`: the cost model,
+the slippage and the per-instrument facts). A sweep sends its `PreparedRun` to worker
+processes without the market settings, which hold native objects, and each worker
+resolves them again from the `costs=` and `slippage=` arguments. That needs those
+arguments to pickle and the run to use the shared default calendar (a calendar of its
+own is a native object too); otherwise the sweep runs in this process.
 
 `execute` builds the native engine, binds a strategy instance to a `RunContext`, runs
 `init` and the driver to the end of the grid, and returns the `Result` with its
@@ -16,13 +19,13 @@ Assumptions block, warnings and manifest.
 from __future__ import annotations
 
 import dataclasses
+import pickle
 from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
 
 from . import calendar as calendar_module
-from . import costs as costs_module
 from ._base_interval import choose_base, meaning
 from ._causality_checks import IndicatorChecks
 from ._context import RunContext, RunData
@@ -30,6 +33,7 @@ from ._driver import drive
 from ._engine import build_engine, call
 from ._instruments import resolve_instruments
 from ._manifest import build_manifest, strategy_source_hash
+from ._market import MarketSettings, market_settings
 from ._settings import RunPlan, assumptions, resolve
 from .reference import Instrument
 from .result import Result
@@ -39,8 +43,10 @@ from .result import Result
 class PreparedRun:
     """A run resolved up to the engine: the plan (base interval decided), the calendar
     (None for the shared default one), the instruments and their base bars in
-    registration order, the data partition hashes by symbol, the Assumptions lines and
-    the warnings found so far."""
+    registration order, the data partition hashes by symbol, the Assumptions lines, the
+    warnings found so far, the reference-table version used, and the market settings
+    (None in a worker, rebuilt from `market_args`, the `costs=` and `slippage=`
+    arguments)."""
 
     plan: RunPlan
     calendar: Any
@@ -50,15 +56,37 @@ class PreparedRun:
     notes: dict[str, str]
     warnings: list[str]
     reference_tables: str | None
+    market_args: dict[str, Any]
+    market: MarketSettings | None
 
     @property
     def portable(self) -> bool:
-        """True when the run can be sent to another process (no calendar of its own)."""
-        return self.calendar is None
+        """True when the run can be sent to another process: the shared default
+        calendar, and `costs=` and `slippage=` arguments that pickle."""
+        return self.calendar is None and _picklable(self.market_args)
+
+    def for_workers(self) -> PreparedRun:
+        """This run without its market settings, to send to worker processes."""
+        return dataclasses.replace(self, market=None)
+
+    def market_settings(self) -> MarketSettings:
+        """The market settings, resolved again when this run came without them."""
+        if self.market is not None:
+            return self.market
+        return market_settings(self.plan, self.instruments, self.market_args)
 
     def session_calendar(self) -> calendar_module.Calendar:
         """The run's calendar."""
         return self.calendar or calendar_module.default_calendar()
+
+
+def _picklable(value: Any) -> bool:
+    """True when `value` pickles (native objects do not)."""
+    try:
+        pickle.dumps(value)
+    except (pickle.PicklingError, TypeError, AttributeError):
+        return False
+    return True
 
 
 def _calendar(given: Any, plan: RunPlan) -> calendar_module.Calendar | None:
@@ -90,6 +118,8 @@ def prepare(strategy: type, client: Any, args: dict[str, Any]) -> PreparedRun:
     choice = choose_base(plan, args, client, calendar)
     plan = dataclasses.replace(plan, base=choice.base)
     instruments, lines, version = resolve_instruments(plan, args["instrument"], calendar)
+    market_args = {"costs": args["costs"], "slippage": args["slippage"]}
+    market = market_settings(plan, instruments, market_args)
     loaded = [choice.bars[symbol] for symbol in plan.symbols]
     warnings = [*plan.warnings]
     for result in loaded:
@@ -99,6 +129,7 @@ def prepare(strategy: type, client: Any, args: dict[str, Any]) -> PreparedRun:
             warnings.append(
                 f"{instrument.symbol}: generic cash-equity instrument assumed (lot 1, tick 0.05)"
             )
+    warnings += market.warnings
     return PreparedRun(
         plan=plan,
         calendar=own_calendar,
@@ -111,12 +142,16 @@ def prepare(strategy: type, client: Any, args: dict[str, Any]) -> PreparedRun:
         notes={"base_rule": choice.reason, "instruments": "; ".join(lines.values())},
         warnings=warnings,
         reference_tables=version,
+        market_args=market_args,
+        market=market,
     )
 
 
-def _assumptions(prepared: PreparedRun, calendar: Any, checks: IndicatorChecks) -> dict:
+def _assumptions(
+    prepared: PreparedRun, calendar: Any, checks: IndicatorChecks, market: MarketSettings
+) -> dict:
     plan = prepared.plan
-    block = assumptions(plan, calendar)
+    block = assumptions(plan, calendar) | market.assumptions
     session = calendar.session(plan.exchange, plan.start)
     session_open = None
     if session is not None and block["square_off"] is not None:
@@ -131,24 +166,16 @@ def _assumptions(prepared: PreparedRun, calendar: Any, checks: IndicatorChecks) 
     return block
 
 
-def _cost_schedules(plan: RunPlan) -> list[str] | None:
-    """Ids of the built-in cost schedule versions in force over the run, or None
-    without charges."""
-    if plan.costs is None:
-        return None
-    ids = []
-    for schedule in costs_module.schedules():
-        valid_from, valid_to = schedule["valid_from"], schedule["valid_to"]
-        if valid_from <= plan.end and (valid_to is None or valid_to >= plan.start):
-            ids.append(f"{plan.costs}:{schedule['id']}")
-    return ids
-
-
-def _arguments(prepared: PreparedRun, args: dict[str, Any]) -> dict[str, Any]:
-    """Every argument of the run after defaults were resolved, for the manifest."""
+def _arguments(
+    prepared: PreparedRun, args: dict[str, Any], market: MarketSettings
+) -> dict[str, Any]:
+    """Every argument of the run after defaults were resolved, for the manifest (the
+    cost model by its label: it is a native object)."""
     plan = prepared.plan
-    resolved = dataclasses.asdict(plan)
+    resolved = {field.name: getattr(plan, field.name) for field in dataclasses.fields(plan)}
     resolved.update(
+        costs=market.costs_label,
+        slippage_rule=market.slippage_label,
         source=args["source"],
         tz=args["tz"],
         data="given" if args["data"] is not None else None,
@@ -171,7 +198,8 @@ def execute(
     plan = prepared.plan
     calendar = prepared.session_calendar()
     checks = checks or IndicatorChecks(strategy_source_hash(strategy) or strategy.__qualname__)
-    config = plan.native_config(deliver_events=strategy.wants_events())
+    market = prepared.market_settings()
+    config = plan.native_config(deliver_events=strategy.wants_events()) | market.config
     engine = build_engine(calendar._cal, config, prepared.instruments, prepared.frames)
     base_bars = dict(zip(plan.symbols, prepared.frames, strict=True))
     run = RunData(plan.exchange, plan.interval, plan.base, base_bars, calendar, checks)
@@ -187,16 +215,16 @@ def execute(
     manifest = build_manifest(
         strategy,
         parameters,
-        _arguments(prepared, args),
+        _arguments(prepared, args, market),
         [instrument.to_dict() for instrument in prepared.instruments],
         prepared.partitions,
         prepared.reference_tables,
-        _cost_schedules(plan),
+        market.cost_schedules,
     )
     return Result(
         output,
         list(plan.symbols),
-        _assumptions(prepared, calendar, checks),
+        _assumptions(prepared, calendar, checks, market),
         [*prepared.warnings, *timer_warnings],
         context.skipped,
         manifest.to_dict(),

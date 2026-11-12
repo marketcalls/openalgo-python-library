@@ -69,6 +69,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DataFrames. Stops, targets, charges, slippage presets and the other rules of the
   contract are being built; each raises `NotImplementedError` naming its phase until
   then. `bt.live` is planned for the live phase.
+- **Strategy and session risk rules in `bt.backtest` (early preview).** `max_daily_loss`
+  measures the day's loss on `risk_basis` as the realized P&L of the strategy's runs
+  that ended this session plus the live run's MTM since its first fill; a breach exits
+  every position (at the next base-bar open, or at the day's close on a daily base),
+  writes `daily_loss_limit_hit` and leaves the strategy REDUCING until the next
+  session, rejecting new entries with `daily_loss_gate`. `drawdown_halt=bt.pct(x)`
+  latches HALTED for the rest of the run (reject code `halted`); `cooldown` and
+  `max_positions` reject entries with `cooldown` and `max_positions`; the class
+  attribute `max_hold` exits a position after that many base bars (reason
+  `time_exit`). Trading-state changes reach `on_risk_event` as `trading_state_changed`,
+  and the Assumptions block lists every risk setting. A class attribute wins over the
+  run argument of the same name. The combined rules (`combined_stop`,
+  `combined_target`, `lock_profit`, `trail_sl_to_entry`) raise `NotImplementedError`
+  until Phase 3.
+- **Leg rules in `openalgo.backtest` (preview).** `buy` and `sell` on MIS take `stop=`,
+  `target=`, `targets=[(distance, fraction), ...]`, `trail=` (`bt.trail(x, y)`,
+  `bt.trail_points`, `bt.trail_pct`, `bt.trail_atr`), `breakeven=` and
+  `after_first_target="breakeven"`. Levels come from the fill average, round to the
+  tick, and are tested on every base bar from the entry bar on: a level crossed at the
+  open fills at the open, the stop beats a target inside one bar, several targets can
+  fill in one bar, and a trail or breakeven moved by a bar is in force from the next.
+  Adds recompute the stop (never loosening it) and the unfilled targets from the new
+  average. Exit fills carry the reason `leg_sl` or `leg_target` and the target index,
+  with the matching risk events. `bt.atr` distances use the ATR from `openalgo.ta` at
+  the decision. `reverse=True` closes a position and opens the rest on the other side;
+  without it an order larger than the opposite position is rejected with
+  `reverse_not_allowed`. Leg rules on CNC and NRML positions (GTT orders) and
+  `max_hold` raise `NotImplementedError` until built.
+- **Backtest accounting and results (early preview).** `bt.backtest` now runs on its
+  defaults, `costs="zerodha"` and `slippage="default"`, with no server: every fill is
+  charged by `openalgo.backtest.costs` at the rates of its trade date, the day's
+  contract notes are rounded at the session close (`Result.costs`,
+  `Result.contract_notes`), delivery sells pay the DP charge, and `costs=` also takes a
+  preset (`bt.costs.flat(20)`) or a `bt.costs.CostModel` (calculator rounding, own
+  schedules). Slippage comes from a dated per-class table (`bt.slippage.defaults()`):
+  2 bps for cash equity, 1 or 2 ticks for futures, a percent of premium for options,
+  overridable with `bt.ticks`, `bt.pct`, `bt.slippage.bps` or `bt.slippage.table(...)`.
+  Margin comes from a dated table (delivery in full, intraday 1x unless the order asks
+  for up to 5x, long options the premium, NSE index futures a percent of value); a row
+  that is not verified is named in `Result.warnings`. Orders with no quantity take the
+  engine default (1x the capital net of estimated costs, one lot for F&O);
+  `bt.size.fixed_risk` and `bt.size.atr_risk` size to the stop; sized quantities are
+  capped at the freeze quantity. `Result.performance`, `Result.metrics` and
+  `Result.tearsheet()` report the run. Charges for a delivery buy and sell of one scrip
+  on the same day, the margin of stock, BSE and MCX futures, and short options are not
+  built yet.
 - **The strategy surface of `openalgo.backtest` (early preview).** `self.I(ta.x, ...)`
   registers an indicator from `openalgo.ta`, computed once in Rust and revealed bar by
   bar, with `[-1]`, slices, comparisons, arithmetic, `.crossed_above` and

@@ -32,10 +32,10 @@ impl std::error::Error for TableError {}
 
 /// One data line of a table.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Record {
+pub(crate) struct Record {
     /// Line number in the file, from 1.
-    pub(super) line: usize,
-    pub(super) fields: Vec<String>,
+    pub(crate) line: usize,
+    pub(crate) fields: Vec<String>,
 }
 
 /// Split one line into fields.
@@ -68,7 +68,7 @@ fn split_fields(line: &str) -> Result<Vec<String>, String> {
 ///
 /// Errors: a missing or different header, an unbalanced quote, or a record whose
 /// number of fields differs from the header's.
-pub(super) fn read(
+pub(crate) fn read(
     table: &'static str,
     text: &str,
     header: &[&str],

@@ -1,10 +1,12 @@
 //! Timers: `self.at("HH:MM", fn)` and `self.every(period, fn)` (14-strategy-api 2.3).
 //!
-//! Step 2 of a slice runs in three parts (03-architecture 4.2): the strategy orders due
-//! at this open fill (`fill_due_orders`); then the timers due at or before this open
-//! fire, which is `Pause::Timers` (`timers_pause`); then `steps::step_open_fills` fills
-//! the orders the timers placed, at this same open, and runs the square-off. A timer
-//! pause carries no events: callbacks are delivered in step 7 of the slice (SPEC-31).
+//! In a slice where a timer is due, step 2 runs in three parts (03-architecture 4.2):
+//! the risk exits and strategy orders due at this open fill (`fill_due_orders`); then
+//! the timers fire, which is `Pause::Timers` (`timers_pause`); then
+//! `steps::step_open_fills` fills the orders the timers placed, at this same open, and
+//! runs the time exits and the square-off. A slice with no timer due runs step 2 in one
+//! pass, exactly as without timers. A timer pause carries no events: callbacks are
+//! delivered in step 7 of the slice (SPEC-31).
 //!
 //! When a timer is due:
 //!
@@ -135,14 +137,16 @@ impl Engine {
             .collect()
     }
 
-    /// Step 2, first part: the strategy orders due at this open fill (SPEC-35); an
-    /// instrument with no bar keeps its orders queued (SPEC-06).
+    /// Step 2 before a timer pause: the risk exits and the strategy orders due at this
+    /// open fill (SPEC-35), as in `steps::step_open_fills`; an instrument with no bar
+    /// keeps its orders queued (SPEC-06).
     pub(super) fn fill_due_orders(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         for index in 0..self.instruments.len() {
             let instrument = InstrumentId(index as u32);
             let Some(bar) = self.market.bar(instrument, slice.index) else {
                 continue;
             };
+            self.risk_exits_at_open(slice, instrument, bar.open)?;
             for id in self.book.queued_for(instrument) {
                 self.fill_queued(slice, id, bar.open)?;
             }
@@ -150,8 +154,8 @@ impl Engine {
         Ok(())
     }
 
-    /// Step 2, second part: the timers due at or before this open, as a pause; `None`
-    /// when none is due. Also counts the sessions an `At` timer missed.
+    /// The timers due at or before this open, as a pause; `None` when none is due.
+    /// Also counts the sessions an `At` timer missed.
     pub(super) fn timers_pause(&mut self, slice: &SliceInfo) -> Option<Pause> {
         if self.timers.timers.is_empty() {
             return None;

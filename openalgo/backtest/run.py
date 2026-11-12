@@ -8,8 +8,9 @@ How a backtest runs (the Python half of the design in `rust/oa_bt/src/engine/mod
 2. **Inputs** (`_pipeline.prepare`): the calendar (`calendar.default_calendar()` unless
    given), the base interval and its bars from the data layer (`_base_interval`: the
    1-minute coverage probe; `data.load_bars`: OpenAlgo through `client`, or the user's
-   `data=`), and the instruments (`_instruments`: `instrument=`, the generic cash-equity
-   instrument, or the reference tables), each stated in the Assumptions block.
+   `data=`), the instruments (`_instruments`: `instrument=`, the generic cash-equity
+   instrument, or the reference tables) and the market settings (`_market`: charges,
+   slippage, per-instrument facts), each stated in the Assumptions block.
 3. **Engine** (`_engine.build_engine`): the native `Engine` validates everything and
    refuses, with NotImplementedError naming the feature, any setting it cannot honour
    yet. Nothing is ignored.
@@ -37,6 +38,7 @@ from .errors import ConfigError
 from .reference import Instrument
 from .result import Result
 from .strategy import Strategy
+from .units import Distance
 
 PHASE_1_WORK = "is not implemented yet (Phase 1 work in progress)"
 
@@ -62,11 +64,11 @@ def backtest(
     entry_from: str | None = None,
     entry_until: str | None = None,
     square_off: str | None = None,
-    max_daily_loss: float | None = None,
+    max_daily_loss: float | Distance | None = None,
     risk_basis: str = "gross",
     after_risk_exit: str = "lock_session",
     max_positions: int | None = None,
-    drawdown_halt: float | None = None,
+    drawdown_halt: float | Distance | None = None,
     cooldown: int | None = None,
     round_levels: bool = True,
     strict_config: bool = True,
@@ -88,14 +90,18 @@ def backtest(
     base: the base interval ("1m", "D", ...); default "D" for daily strategies, and for
         intraday ones 1 minute when 1-minute data covers the run for every instrument,
         else the strategy interval (`_base_interval`; the Assumptions say which and why).
-    fill, quantity_mode, costs, slippage: "next_open"; "fractional" or "venue";
-        "zerodha" or None (no charges, with a warning); "default" (per segment), 0,
-        bt.ticks(n) or bt.pct(p).
+    fill, quantity_mode: "next_open"; "fractional" or "venue".
+    costs: "zerodha" (the default) or another preset name, a preset from bt.costs, a
+        bt.costs.CostModel, or None (no charges, with a warning on every report); see
+        `_market`.
+    slippage: "default" (the dated per-class table), 0, bt.ticks(n), bt.pct(p),
+        bt.slippage.bps(b) or bt.slippage.table(...); see `openalgo.backtest.slippage`.
     product, entry_from, entry_until, square_off: product default by interval and
         exchange; IST "HH:MM" times for MIS (calendar defaults when omitted).
     max_daily_loss, risk_basis, after_risk_exit, max_positions, drawdown_halt, cooldown,
         round_levels, strict_config: risk settings (05-risk-management); strategy class
-        attributes of the same names win.
+        attributes of the same names win. `max_daily_loss` is rupees (or bt.rupees),
+        `drawdown_halt` percent from peak equity (bt.pct(x)), `cooldown` base bars.
     roll: futures roll settings. params: parameter values for the strategy.
 
     Raises ConfigError for unusable arguments, the data layer's errors for data, and

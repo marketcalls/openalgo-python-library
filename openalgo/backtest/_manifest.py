@@ -83,7 +83,7 @@ class RunManifest:
     instruments: list[dict[str, Any]]
     data: dict[str, dict[str, str]]
     reference_tables: str | None
-    cost_schedules: list[str] | None
+    cost_schedules: list[str]
     random_seed: None
     platform: dict[str, str]
 
@@ -113,7 +113,7 @@ def build_manifest(
     instruments: list[dict[str, Any]],
     data: dict[str, dict[str, str]],
     reference_tables: str | None,
-    cost_schedules: list[str] | None,
+    cost_schedules: list[str],
 ) -> RunManifest:
     """The manifest of a run of `strategy` with resolved `parameters` and `arguments`,
     its `instruments` as `Instrument.to_dict()` (anything not a JSON type is written as

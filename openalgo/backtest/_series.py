@@ -71,6 +71,12 @@ class SeriesStore:
         """One column of the whole run (read-only use: views slice it)."""
         return self._series[name]
 
+    @property
+    def columns(self) -> dict[str, np.ndarray]:
+        """The price and volume columns of the revealed bars only (read-only views)."""
+        stop = self.visible()
+        return {name: self._series[name][:stop] for name in FIELDS}
+
     def times(self) -> pd.DatetimeIndex:
         """IST open of every bar of the run."""
         if self._times is None:

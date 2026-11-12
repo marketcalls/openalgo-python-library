@@ -6,6 +6,7 @@ use numpy::IntoPyArray;
 use oa_bt::engine::{Event, EventStamp, OrderEventKind, Pause, StrategyBar};
 use oa_bt::exec::Order;
 use oa_bt::portfolio::Position;
+use oa_bt::rms::{RiskEventName, RiskScope, TradingState, TradingStateCause};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
@@ -63,8 +64,31 @@ pub(super) fn event<'py>(py: Python<'py>, event: &Event) -> PyResult<Bound<'py, 
             dict.set_item("target_index", event.target_index)?;
             dict.set_item("observed_rupees", event.observed_rupees)?;
         }
+        Event::TradingState {
+            from, to, cause, ..
+        } => trading_state_into(&dict, from, to, cause)?,
     }
     Ok(dict)
+}
+
+/// A trading-state change as a risk event named `trading_state_changed` (scope
+/// strategy), with the state before and after it and its cause.
+fn trading_state_into(
+    dict: &Bound<'_, PyDict>,
+    from: TradingState,
+    to: TradingState,
+    cause: TradingStateCause,
+) -> PyResult<()> {
+    dict.set_item("type", "risk")?;
+    dict.set_item("name", RiskEventName::TradingStateChanged.code())?;
+    dict.set_item("scope", RiskScope::Strategy.code())?;
+    dict.set_item("instrument", None::<u32>)?;
+    dict.set_item("level_rupees", None::<f64>)?;
+    dict.set_item("target_index", None::<u16>)?;
+    dict.set_item("observed_rupees", None::<f64>)?;
+    dict.set_item("previous_state", from.code())?;
+    dict.set_item("trading_state", to.code())?;
+    dict.set_item("cause", cause.code())
 }
 
 pub(super) fn events<'py>(py: Python<'py>, list: &[Event]) -> PyResult<Bound<'py, PyList>> {

@@ -92,7 +92,7 @@ def run_combinations(
     rows = []
     for params in combinations:
         result = execute(strategy, prepared, {**arguments, "params": params}, checks=checks)
-        rows.append(evaluate(result, prepared.plan.exchange, objective))
+        rows.append(evaluate(result, objective))
     return rows
 
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import _orders
+from ._atr import decision_atr
 from ._orders import Order
 from .errors import ConfigError
 
@@ -77,6 +78,7 @@ class OrderMethods:
     def _open(self, side: str, **args: Any) -> Order | None:
         ctx = self._ctx
         instrument = ctx.instrument_index(args["symbol"])
+        store = ctx.stores[ctx.symbol_of(instrument)]
         rules = _orders.leg_rules(
             args["stop"],
             args["target"],
@@ -84,6 +86,7 @@ class OrderMethods:
             args["trail"],
             args["breakeven"],
             args["after_first_target"],
+            atr_at=lambda period: decision_atr(store, period),
         )
         request = _orders.request(
             instrument,

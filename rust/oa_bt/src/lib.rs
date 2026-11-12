@@ -10,6 +10,8 @@
 //! - Session dates are IST calendar dates as days since 1970-01-01 (`model::Day`).
 //! - Prices and money are `f64` rupees; quantities are `f64` units (never lots).
 
+#[cfg(all(feature = "costs", feature = "time"))]
+pub mod charges;
 pub mod data;
 #[cfg(all(feature = "costs", feature = "time"))]
 pub mod engine;

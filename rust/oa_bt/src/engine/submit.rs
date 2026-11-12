@@ -12,7 +12,7 @@ use crate::exec::{
 };
 use crate::model::{Product, Side, TsNanos};
 use crate::portfolio::PositionKey;
-use crate::sizing::{size, SizeOutcome, SizingContext, SkipReason};
+use crate::sizing::{SizeOutcome, SkipReason};
 
 use super::clock::SliceInfo;
 use super::config::QuantityMode;
@@ -57,7 +57,8 @@ impl Engine {
     ///
     /// Errors: `NotAtDecisionPoint` unless paused; `Exec(InvalidRequest)` for a
     /// quantity that is not positive or a fraction outside (0, 1]; `Rms(InvalidRule)`
-    /// for contradictory leg rules; `NotBuilt` for order types, validities and
+    /// for contradictory leg rules, or an add whose leg rules differ from the
+    /// position's (SPEC-14); `NotBuilt` for order types, validities and
     /// arguments not built yet. A market rule that refuses the order is not an error:
     /// the result is `Submission::Rejected`.
     pub fn submit(&mut self, request: OrderRequest) -> Result<Submission, KernelError> {
@@ -65,7 +66,7 @@ impl Engine {
             return Err(KernelError::NotAtDecisionPoint);
         };
         self.check_buildable(&request)?;
-        let units = match self.resolve_units(&request)? {
+        let units = match self.resolve_units(&request, &slice)? {
             Resolved::Units(units) => units,
             Resolved::AtFill => 0.0,
             Resolved::Skipped(reason) => return Ok(Submission::Skipped(reason)),
@@ -146,22 +147,24 @@ impl Engine {
         if request.validity == Validity::Gtt {
             return Err(not_built("GTT orders"));
         }
-        if request.reverse {
-            return Err(not_built("reverse=True"));
-        }
-        if request.leverage.is_some_and(|leverage| leverage != 1.0) {
-            return Err(not_built("intraday leverage"));
-        }
         request.leg_rules.validate(self.config.risk.strict_config)?;
-        if !request.leg_rules.is_empty() {
+        if request.leg_rules.max_hold_bars.is_some() {
+            return Err(not_built("max_hold (the time exit)"));
+        }
+        if !request.leg_rules.is_empty() && request.product != Product::Mis {
             return Err(not_built(
-                "leg stops, targets, trailing stops and breakeven",
+                "stops, targets, trails and breakeven on CNC and NRML positions (held as \
+                 GTT orders, 04-execution 4.4)",
             ));
         }
-        Ok(())
+        self.check_leg_rules(request)
     }
 
-    fn resolve_units(&self, request: &OrderRequest) -> Result<Resolved, KernelError> {
+    fn resolve_units(
+        &self,
+        request: &OrderRequest,
+        slice: &SliceInfo,
+    ) -> Result<Resolved, KernelError> {
         let lot = self
             .instruments
             .get(request.instrument.index())
@@ -183,27 +186,12 @@ impl Engine {
                 }
                 Ok(Resolved::AtFill)
             }
-            QuantitySpec::Sizer(sizer) => match size(sizer, &self.sizing_context(request)?)? {
+            QuantitySpec::Sizer(_) if self.sizes_at_fill(request) => Ok(Resolved::AtFill),
+            QuantitySpec::Sizer(sizer) => match self.size_at_decision(request, sizer, slice)? {
                 SizeOutcome::Units(units) => Ok(Resolved::Units(units)),
                 SizeOutcome::Skipped(reason) => Ok(Resolved::Skipped(reason)),
             },
         }
-    }
-
-    fn sizing_context(&self, request: &OrderRequest) -> Result<SizingContext, KernelError> {
-        let spec = self.spec(request.instrument)?;
-        let account = self.account();
-        Ok(SizingContext {
-            equity_rupees: account.equity_rupees,
-            initial_capital_rupees: self.config.capital_rupees,
-            free_cash_rupees: account.free_cash_rupees,
-            decision_price_rupees: self.last_close(request.instrument).unwrap_or(0.0),
-            stop_distance_rupees: None,
-            lot_size_units: spec.lot_size_units,
-            multiplier: spec.multiplier,
-            estimated_cost_rupees: 0.0,
-            fractional: self.fractional(request.instrument),
-        })
     }
 
     fn fractional(&self, instrument: InstrumentId) -> bool {
@@ -232,11 +220,8 @@ impl Engine {
         };
         let held = self.held_units(key);
         let reduces = held != 0.0 && (held > 0.0) != (request.side == Side::Buy);
-        if reduces && !request.reduce_only && units > held.abs() {
-            return Err(not_built(
-                "an order larger than the opposite position (the excess rule and reverse=True)",
-            ));
-        }
+        // Beyond the opposite position: reversed with `reverse=True`, else rejected.
+        let excess = reduces && !request.reduce_only && units > held.abs();
         let fractional = self.fractional(request.instrument);
         let rules = if units > 0.0 {
             quantity_rule(units, spec, fractional).and_then(|()| freeze_rule(units, spec))
@@ -248,13 +233,24 @@ impl Engine {
         if let Err(code) = checked {
             return Ok(Err(code));
         }
-        let opening = !reduces && !request.reduce_only;
+        let opening = (!reduces || excess) && !request.reduce_only;
         if opening && request.product == Product::Mis {
             if let Err(code) = self.session_times(slice.day)?.entry.check(decided_at) {
                 return Ok(Err(code));
             }
         }
-        Ok(self.day_validity(slice, decided_at))
+        // Pre-trade check order of 03-architecture 4.4: closed market (5), trading state
+        // and entry gates (6, 7), then an excess over the position without `reverse` (7).
+        let validity = self.day_validity(slice, decided_at);
+        if opening && validity.is_ok() {
+            if let Err(code) = self.entry_gates(key, held, slice) {
+                return Ok(Err(code));
+            }
+        }
+        if validity.is_ok() && excess && !request.reverse {
+            return Ok(Err(RejectCode::ReverseNotAllowed));
+        }
+        Ok(validity)
     }
 
     /// When a DAY order decided at this slice expires, or `market_closed` when its fill

@@ -26,24 +26,24 @@ impl Engine {
         // Step 1: session open and reference events. The session's intraday times are
         // resolved on first use (`session_times`); no reference event (lot-size change,
         // roll) can be configured yet.
-        self.fill_due_orders(slice)?;
+        self.risk_session_open(slice);
         if let Some(pause) = self.timers_pause(slice) {
+            self.fill_due_orders(slice)?;
             return Ok(Some(pause));
         }
         self.finish_open_slice(slice)?;
         Ok(None)
     }
 
-    /// The rest of steps 2 to 6: `step_open_fills` fills what is due at this open
-    /// (after `fill_due_orders`, only the orders the timers placed) and runs the
-    /// square-off, then steps 3 to 6.
+    /// The rest of steps 2 to 6. After a timer pause `step_open_fills` fills what the
+    /// timers placed (what `fill_due_orders` handled is no longer queued), then the time
+    /// exits and the square-off; without one it is the whole of step 2.
     pub(super) fn finish_open_slice(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         self.step_open_fills(slice)?;
         self.step_levels(slice)?;
         self.step_ratchets(slice)?;
         self.step_mark(slice);
-        // Step 6: no aggregate rule can be configured yet (`RunConfig::validate`).
-        Ok(())
+        self.step_aggregate_rules(slice)
     }
 
     /// Step 2: queued orders fill at the open; then the square-off timer.
@@ -53,42 +53,25 @@ impl Engine {
             let Some(bar) = self.market.bar(instrument, slice.index) else {
                 continue;
             };
+            self.risk_exits_at_open(slice, instrument, bar.open)?;
             for id in self.book.queued_for(instrument) {
                 self.fill_queued(slice, id, bar.open)?;
             }
+            self.time_exit_at_open(slice, instrument, bar.open)?;
             self.square_off_at_open(slice, instrument, bar.open)?;
         }
         Ok(())
     }
 
-    /// Step 3: leg levels against the bar. A plain leg has none; a leg with rules
-    /// cannot exist yet (`LegState::open` refuses them).
+    /// Step 3: leg levels against the bar (`legs::test_leg_levels`).
     fn step_levels(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
-        for (key, leg) in &self.legs {
-            if let Some(bar) = self.market.bar(key.instrument, slice.index) {
-                if !leg.test_bar(&bar)?.is_empty() {
-                    return Err(KernelError::NotBuilt {
-                        feature: "exits at leg levels",
-                    });
-                }
-            }
-        }
-        Ok(())
+        self.test_leg_levels(slice)
     }
 
-    /// Step 4: trail and breakeven ratchets, in force from the next slice.
+    /// Step 4: trail and breakeven ratchets, in force from the next slice
+    /// (`legs::ratchet_legs`).
     fn step_ratchets(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
-        let market = &self.market;
-        for (key, leg) in &mut self.legs {
-            if let Some(bar) = market.bar(key.instrument, slice.index) {
-                if !leg.ratchet(&bar)?.is_empty() {
-                    return Err(KernelError::NotBuilt {
-                        feature: "trail and breakeven arming",
-                    });
-                }
-            }
-        }
-        Ok(())
+        self.ratchet_legs(slice)
     }
 
     /// Step 5: mark every open position at its close, or at its last close and flagged
@@ -140,11 +123,14 @@ impl Engine {
         })
     }
 
-    /// Step 8 when the session ends at this slice, then the end-of-slice records.
+    /// Step 8 when the session ends at this slice (expiry of DAY orders, the `eod`
+    /// close, the day's contract notes), then the end-of-slice records.
     pub(super) fn close_slice(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         if slice.closes_session {
             self.expire_day_orders(slice)?;
+            self.risk_exits_at_session_close(slice)?;
             self.close_intraday_positions(slice)?;
+            self.settle_contract_notes(slice);
         }
         self.record_levels(slice);
         self.record_equity(slice);

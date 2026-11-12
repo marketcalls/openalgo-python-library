@@ -121,7 +121,7 @@ def _workers(requested: Any, remaining: int, prepared: PreparedRun) -> tuple[int
         raise ConfigError(f"workers takes at least 1, got {requested}")
     count = min(requested or os.cpu_count() or 1, max(remaining, 1))
     if count > 1 and not prepared.portable:
-        return 1, "the run's own calendar cannot be sent to worker processes"
+        return 1, "the run's own calendar or cost model cannot be sent to worker processes"
     return count, ""
 
 
@@ -194,7 +194,7 @@ def optimize(
     if count > 1:
         shipped = (portable(strategy, "the strategy"), portable(objective, "the objective"))
         chunks = [
-            Chunk(*shipped, prepared, light, part, checks.strategy_hash, checks.keys)
+            Chunk(*shipped, prepared.for_workers(), light, part, checks.strategy_hash, checks.keys)
             for part in split(rest, count)
         ]
         rows += run_in_pool(chunks, count)

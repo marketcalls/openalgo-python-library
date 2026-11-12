@@ -10,10 +10,12 @@
 //! | `orders` | order | every order with its final state |
 //! | `events` | event | the stream of `event` |
 //! | `stale_marks` | open position marked at a last close for want of a bar | SPEC-07 |
+//! | `charges` | charged fill, contract note, market-table row used | `charges` |
 //!
 //! Equity is `capital + realized - costs + unrealized`, recorded at the end of every
 //! slice, after its session-close step.
 
+use crate::charges::ChargesOutput;
 use crate::exec::{Fill, InstrumentId, InstrumentSpec, Order};
 use crate::model::{Day, Product, Side, TsNanos};
 use crate::portfolio::{FillEffect, FillKind, PositionChange, PositionKey};
@@ -155,6 +157,8 @@ pub struct RunOutput {
     pub orders: Vec<Order>,
     pub events: Vec<Event>,
     pub stale_marks: Vec<StaleMark>,
+    /// Charges per fill, contract notes and the dated market-table rows used.
+    pub charges: ChargesOutput,
     pub final_positions: Vec<FinalPosition>,
     pub gross_pnl: GrossPnl,
 }
