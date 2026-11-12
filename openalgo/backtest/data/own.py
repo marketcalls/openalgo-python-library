@@ -283,6 +283,22 @@ class Frame:
             else f"{described}/{self._label}",
         )
 
+    def stamp_range(self, symbol: str, exchange: str, interval: str) -> tuple[int, int]:
+        """The first and last timestamp of the rows a request for `symbol`, `exchange`
+        and `interval` reads, int64 UTC nanoseconds, with the declared `tz`, `unit`,
+        `columns` and `timestamp_format` (the bar label is not applied): what a run
+        with no `start=` or `end=` takes its dates from.
+
+        Raises ConfigError for an undeclared time zone or columns that cannot be found,
+        NoDataError when there are no rows for the symbol."""
+        table, origin = self._read_table(symbol, exchange, interval)
+        fields = _resolve_columns(table, self._columns)
+        table = _select_rows(table, fields, {"symbol": symbol, "exchange": exchange}, origin)
+        stamps_ns, _, _ = self._stamps(table, fields, origin)
+        if len(stamps_ns) == 0:
+            raise NoDataError(f"{exchange}:{symbol} {interval}: {origin} has no rows")
+        return int(stamps_ns.min()), int(stamps_ns.max())
+
     def _read_table(self, symbol: str, exchange: str, interval: str) -> tuple[pd.DataFrame, str]:
         """The table to read rows from and how to name it in messages."""
         if self._table is None:

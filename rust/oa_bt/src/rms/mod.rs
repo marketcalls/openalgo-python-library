@@ -15,6 +15,7 @@
 //! | `daily_loss` | `DailyLossMeasure`: the daily loss measure of SPEC-16, and the breach test |
 //! | `drawdown` | `DrawdownWatch`: peak equity and the drawdown halt's floor |
 //! | `entry_gates` | The cooldown and maximum-positions gates on new entries |
+//! | `scale_in` | The scale-in limits on adds (`max_adds`, `max_position`, `min_spacing`, `max_risk`, averaging down) |
 //! | `vocabulary` | `ExitReason`, `RiskEventName`, `RiskScope`, `RiskEvent` |
 //! | `error` | `RmsError` |
 //!
@@ -22,9 +23,9 @@
 //! breakeven, `after_first_target`), engine-held on MIS legs and held as GTT orders on
 //! CNC and NRML positions (`engine::gtt`, which keeps this module's leg state as the
 //! source of the levels); the daily loss limit, the drawdown halt, the trading state
-//! and the entry gates (daily loss gate, halted, cooldown, maximum positions), which
-//! the engine evaluates in step 6 and at submission (`engine::aggregate`,
-//! `engine::entry_rules`). Not built yet: the combined rules (combined stop and target,
+//! and the entry gates (daily loss gate, halted, cooldown, maximum positions) and the
+//! scale-in limits on adds, which the engine evaluates in step 6 and at submission
+//! (`engine::aggregate`, `engine::entry_rules`, `engine::scale_in`). Not built yet: the combined rules (combined stop and target,
 //! lock profit, Phase 3). The engine refuses a run that asks for them with a typed
 //! not-implemented error instead of ignoring them.
 
@@ -34,6 +35,7 @@ pub mod entry_gates;
 pub mod error;
 pub mod leg;
 pub mod rules;
+pub mod scale_in;
 pub mod trading_state;
 pub mod vocabulary;
 
@@ -46,6 +48,7 @@ pub use rules::{
     AfterFirstTarget, AfterRiskExit, BreakevenSpec, Distance, LegRules, RiskBasis, ScaleLimits,
     StrategyRiskConfig, TargetSpec, TrailSpec,
 };
+pub use scale_in::{scale_in_gate, AddFacts, PositionCap, RiskCap, Spacing};
 pub use trading_state::{
     next_trading_state, StateChange, TradingLock, TradingState, TradingStateCause,
 };

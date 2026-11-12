@@ -53,6 +53,7 @@ from ._calendar_convert import IST
 from ._clock import ClockCondition
 from ._engine import call
 from ._series import FIELDS, ist_time
+from ._strategy_orders import order_leverage
 from ._views import TimelineView
 from .errors import ConfigError
 
@@ -124,7 +125,9 @@ def declare(strategy: Any, kind: str, condition: Any, order_args: dict[str, Any]
     order = None
     if kind in ENTRY_SIDES:
         check_order_arguments(order_args, what)
-        order = _entry_request(strategy._ctx, ENTRY_SIDES[kind], order_args)
+        leverage = order_leverage(order_args.get("leverage"), type(strategy).leverage)
+        arguments = {**order_args, "leverage": leverage}
+        order = _entry_request(strategy._ctx, ENTRY_SIDES[kind], arguments)
     declared[kind] = Declared(condition, order)
 
 

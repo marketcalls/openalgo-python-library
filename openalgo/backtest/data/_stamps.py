@@ -6,6 +6,9 @@ The three things a user must say when the data does not say them itself:
 - the unit of numeric timestamps (`unit`);
 - the pattern of timestamp strings that are not ISO 8601 (`fmt`), so that a
   day-first date is never mistaken for a month-first one.
+
+Numeric timestamps are epoch values: they count from 1970-01-01 UTC, so they need no
+`tz`, and a `tz` other than UTC contradicts them.
 """
 
 import datetime as _dt
@@ -35,8 +38,8 @@ def to_utc_ns(
     values: a DatetimeIndex, or a Series, Index, list or array of datetimes, epoch
         numbers or strings.
     tz: time zone of naive values, for example "Asia/Kolkata". Ignored for tz-aware
-        values that agree with it.
-    unit: "s", "ms", "us" or "ns" for numeric values.
+        values that agree with it, and for epoch numbers when it is UTC.
+    unit: "s", "ms", "us" or "ns" for numeric values (epoch values, UTC).
     fmt: strptime pattern for strings that are not ISO 8601.
     what: how to name the values in error messages.
 
@@ -46,7 +49,7 @@ def to_utc_ns(
     contradicts the data, and TimestampError when values are missing, cannot be
     parsed, do not exist in the time zone or do not fit in nanosecond precision.
     """
-    index = _to_datetime_index(values, unit=unit, fmt=fmt, what=what)
+    index = _to_datetime_index(values, unit=unit, fmt=fmt, tz=tz, what=what)
     if index.hasnans:
         missing = int(index.isna().sum())
         raise TimestampError(f"{what}: {missing} values are missing or unparseable")
@@ -61,6 +64,23 @@ def to_utc_ns(
     except _CONVERSION_ERRORS as exc:
         raise TimestampError(f"{what} do not fit in nanosecond precision: {exc}") from exc
     return np.asarray(nanos, dtype="int64"), described
+
+
+def _check_epoch_zone(index: pd.DatetimeIndex, tz: str | None, what: str) -> None:
+    """Epoch values are UTC instants: `tz` may be omitted or name a zone at UTC for
+    every one of them, anything else contradicts them."""
+    if tz is None or len(index) == 0:
+        return
+    try:
+        local = index.tz_convert(tz)
+    except _CONVERSION_ERRORS as exc:
+        raise ConfigError(f"tz={tz!r} is not a known time zone ({exc})") from exc
+    if (local.tz_localize(None) != index.tz_localize(None)).any():
+        raise ConfigError(
+            f"{what} are epoch numbers, which count from 1970-01-01 UTC, and tz={tz!r} says "
+            "something else. Drop tz= (epoch numbers need none), or convert the data to "
+            "true epoch values first."
+        )
 
 
 def _check_declared_zone(index: pd.DatetimeIndex, tz: str | None, what: str) -> None:
@@ -91,7 +111,7 @@ def _localise(index: pd.DatetimeIndex, tz: str | None, what: str) -> pd.Datetime
 
 
 def _to_datetime_index(
-    values: object, *, unit: str | None, fmt: str | None, what: str
+    values: object, *, unit: str | None, fmt: str | None, tz: str | None, what: str
 ) -> pd.DatetimeIndex:
     if isinstance(values, pd.DatetimeIndex):
         return values
@@ -102,7 +122,9 @@ def _to_datetime_index(
     if pd.api.types.is_bool_dtype(dtype):
         raise TimestampError(f"{what} are booleans, not timestamps")
     if pd.api.types.is_numeric_dtype(dtype):
-        return _from_numbers(series, unit, what)
+        index = _from_numbers(series, unit, what)
+        _check_epoch_zone(index, tz, what)
+        return index
     if len(series) == 0:
         return pd.DatetimeIndex([])
     if isinstance(series.iloc[0], (_dt.datetime, _dt.date, np.datetime64)):
@@ -114,10 +136,10 @@ def _from_numbers(series: pd.Series, unit: str | None, what: str) -> pd.Datetime
     if unit not in EPOCH_UNITS:
         raise ConfigError(
             f"{what} are numbers. Pass unit= ('s', 'ms', 'us' or 'ns') to say what they "
-            "count, and tz='UTC' if they are true epoch values."
+            "count; they are read as epoch values, from 1970-01-01 UTC."
         )
     try:
-        return pd.DatetimeIndex(pd.to_datetime(series.to_numpy(), unit=unit))
+        return pd.DatetimeIndex(pd.to_datetime(series.to_numpy(), unit=unit, utc=True))
     except _CONVERSION_ERRORS as exc:
         raise TimestampError(f"{what} could not be read as epoch {unit}: {exc}") from exc
 

@@ -11,6 +11,7 @@
 //! nearest tick unless `round_levels` is off (SPEC-03).
 
 use super::error::RmsError;
+use super::scale_in::{PositionCap, RiskCap, Spacing};
 
 /// A distance from the reference price.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -187,19 +188,20 @@ pub enum AfterRiskExit {
 }
 
 /// Limits checked before every add (12-position-sizing 2). No limit unless set
-/// (SPEC-15); averaging down is judged at the decision price.
+/// (SPEC-15); averaging down is judged at the decision price. The gate is
+/// `scale_in::scale_in_gate`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ScaleLimits {
     /// Additional entries a condition strategy may make while in a position.
     pub pyramiding: u32,
     /// Most adds to one position.
     pub max_adds: Option<u32>,
-    /// Largest position, in units.
-    pub max_position_units: Option<f64>,
-    /// Fewest base bars between two adds.
-    pub min_spacing_bars: Option<u32>,
-    /// Largest open risk of the whole position after an add, in rupees.
-    pub max_risk_rupees: Option<f64>,
+    /// Largest position after an add.
+    pub max_position: Option<PositionCap>,
+    /// Fewest base bars, or least price distance, between two tranches.
+    pub min_spacing: Option<Spacing>,
+    /// Largest open risk of the whole position after an add.
+    pub max_risk: Option<RiskCap>,
     /// Allow adding while the decision price is worse than the average price.
     pub allow_averaging_down: bool,
 }
@@ -257,13 +259,15 @@ impl StrategyRiskConfig {
     /// Check the strategy and session rules before the run starts.
     ///
     /// Errors: `InvalidRule` for a daily loss limit that is not a positive amount of
-    /// rupees, a drawdown halt that is not above 0 and below 100 percent, or a position
-    /// count, cooldown or holding time of zero bars.
+    /// rupees, a drawdown halt that is not above 0 and below 100 percent, a position
+    /// count, cooldown or holding time of zero bars, or an unusable scale-in limit
+    /// (`ScaleLimits::validate`).
     pub fn validate(&self) -> Result<(), RmsError> {
         let invalid = |rule: &'static str, reason: &str| RmsError::InvalidRule {
             rule,
             reason: reason.to_string(),
         };
+        self.scale.validate()?;
         if let Some(limit) = self.max_daily_loss_rupees {
             if !(limit.is_finite() && limit > 0.0) {
                 return Err(invalid(

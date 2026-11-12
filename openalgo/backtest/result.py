@@ -2,7 +2,8 @@
 
 The tables are pandas DataFrames built from the kernel's result columns. Times are IST
 (`time` columns, tz-aware) next to the kernel's UTC nanoseconds (`*_ts` columns);
-instruments are named by symbol. Prices and money are rupees, quantities units.
+instruments are named by symbol. Prices and money are rupees, quantities units. Every
+table has the same columns whether or not it has rows.
 
 Built: `fills`, `orders`, `trades`, `equity`, `returns`, `positions` (the position
 history), `events`, `risk_events`, `stale_marks`, `final_positions`, `gross_pnl`,
@@ -26,9 +27,60 @@ from .errors import BacktestError
 from .metrics import analyse
 from .report._performance import Performance
 
+# The keys an event can carry, in order: those of every kind of event the binding writes
+# (`rust/oa_py/src/backtest/engine/tables.rs`, `event`), so the events table has the
+# same columns whatever events a run had.
+EVENT_COLUMNS = (
+    "slice",
+    "slice_ts",
+    "step",
+    "type",
+    "name",
+    "order_id",
+    "quantity_units",
+    "price_rupees",
+    "reject_code",
+    "instrument",
+    "product",
+    "position_quantity_units",
+    "scope",
+    "level_rupees",
+    "target_index",
+    "observed_rupees",
+    "previous_state",
+    "trading_state",
+    "cause",
+    "gtt_id",
+    "stop_trigger_rupees",
+    "target_trigger_rupees",
+    "order_trigger_rupees",
+    "fired_leg",
+    "child_limit_rupees",
+)
+# The keys of a final position (`rust/oa_py/src/backtest/engine/results.rs`, `finals`).
+FINAL_POSITION_COLUMNS = (
+    "instrument",
+    "product",
+    "quantity_units",
+    "average_price_rupees",
+    "mark_rupees",
+    "unrealized_rupees",
+    "stale",
+)
+
 
 def _times(values: Any) -> pd.DatetimeIndex:
-    return pd.to_datetime(pd.Series(values, dtype="int64"), utc=True).dt.tz_convert(IST)
+    """IST times of int64 UTC nanoseconds, at nanosecond resolution even when there are
+    none (pandas reads an empty column at second resolution)."""
+    utc = pd.to_datetime(pd.Series(values, dtype="int64"), unit="ns", utc=True)
+    return pd.DatetimeIndex(utc).as_unit("ns").tz_convert(IST)
+
+
+def _fixed(rows: Any, columns: tuple[str, ...]) -> pd.DataFrame:
+    """A table with `columns` first, in order, then any key the rows have beyond them."""
+    frame = pd.DataFrame(rows)
+    extra = [name for name in frame.columns if name not in columns]
+    return frame.reindex(columns=[*columns, *extra])
 
 
 class Result:
@@ -59,8 +111,8 @@ class Result:
         frame = pd.DataFrame(self._output[name])
         if "instrument" in frame.columns:
             frame.insert(0, "symbol", [self._symbols[i] for i in frame["instrument"]])
-        if time_column is not None and len(frame):
-            frame.insert(0, "time", _times(frame[time_column]).to_numpy())
+        if time_column is not None:
+            frame.insert(0, "time", _times(frame[time_column]))
         return frame
 
     @property
@@ -78,9 +130,8 @@ class Result:
     def trades(self) -> pd.DataFrame:
         """Closed round trips; positions open at the end are in `final_positions`."""
         frame = self._table("trades", None)
-        if len(frame):
-            frame.insert(1, "entry_time", _times(frame["entry_ts"]).to_numpy())
-            frame.insert(2, "exit_time", _times(frame["exit_ts"]).to_numpy())
+        frame.insert(1, "entry_time", _times(frame["entry_ts"]))
+        frame.insert(2, "exit_time", _times(frame["exit_ts"]))
         return frame
 
     @property
@@ -103,17 +154,17 @@ class Result:
 
     @property
     def events(self) -> pd.DataFrame:
-        """The event stream: order, position and risk events in order of occurrence."""
-        frame = pd.DataFrame(self._output["events"])
-        if len(frame):
-            frame.insert(0, "time", _times(frame["slice_ts"]).to_numpy())
+        """The event stream: order, position and risk events in order of occurrence. A
+        key an event does not carry is empty in its row."""
+        frame = _fixed(self._output["events"], EVENT_COLUMNS)
+        frame.insert(0, "time", _times(frame["slice_ts"]))
         return frame
 
     @property
     def risk_events(self) -> pd.DataFrame:
         """The risk events of the stream."""
         events = self.events
-        return events[events["type"] == "risk"] if len(events) else events
+        return events[events["type"] == "risk"]
 
     @property
     def stale_marks(self) -> pd.DataFrame:
@@ -126,9 +177,8 @@ class Result:
     @property
     def final_positions(self) -> pd.DataFrame:
         """Every position at the end of the run, open ones marked at the last close."""
-        frame = pd.DataFrame(self._output["final_positions"])
-        if len(frame):
-            frame.insert(0, "symbol", [self._symbols[i] for i in frame["instrument"]])
+        frame = _fixed(self._output["final_positions"], FINAL_POSITION_COLUMNS)
+        frame.insert(0, "symbol", [self._symbols[i] for i in frame["instrument"]])
         return frame
 
     @property
