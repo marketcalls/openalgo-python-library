@@ -11,6 +11,31 @@ technical-indicator library powered by a Rust core (`openalgo._oaindicators`).
   WebSocket proxy `ws://127.0.0.1:8765`). It is a client only; it does not run a
   server itself.
 
+## Engineering standards (apply to every change)
+
+Code quality, code hygiene, modularity, readability and maintainability are
+requirements for every change in this library, throughout its development. They are a
+gate on each unit of work, not a final polish. Before a change is committed:
+
+- **Quality.** It is correct and tested, and it passes the checks for its area. A
+  defect is reproduced by a failing test before it is fixed.
+- **Hygiene.** No dead code, commented-out code, debug prints, hardcoded secrets or
+  unexplained constants. Errors are never swallowed.
+- **Modularity.** Each module, class and function has one job. A new concern goes in
+  a new, focused module, not in more branches of a long function. Every shared
+  definition has one source of truth.
+- **Readability.** Code is written for the next maintainer: plain names in the
+  trader's vocabulary, units stated, a docstring on every public item, and comments
+  that explain why.
+- **Maintainability.** A small public surface, backward compatible changes to
+  published APIs, every behaviour change recorded in `CHANGELOG.md`, and no
+  abstraction for a feature that is not being built.
+
+In the existing SDK modules keep the diff minimal: change only what the fix needs and
+do not reformat or restyle the surrounding code. New code under the backtest paths
+follows the detailed rules in "Code standards for the backtest package" below. Work
+produced by agents is reviewed independently before it is committed.
+
 ## Architecture
 
 The public entry point is `openalgo.api`, which composes every REST mixin via
