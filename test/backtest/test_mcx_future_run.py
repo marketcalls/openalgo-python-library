@@ -20,12 +20,14 @@ percent, SEBI fee Rs 10 a crore (0.0001 percent), stamp duty 0.002 percent on bu
 decision D23 for every futures contract: 20 percent of the contract value.
 """
 
+import dataclasses
 import datetime as dt
 
 import pandas as pd
 import pytest
 
 import openalgo.backtest as bt
+from openalgo.backtest.errors import CostError
 from openalgo.backtest.reference import Instrument
 
 SYMBOL = "CRUDEOIL18NOV26FUT"
@@ -100,16 +102,35 @@ class CrudeSwing(bt.Strategy):
             self.exit()
 
 
-@pytest.fixture(scope="module")
-def result() -> bt.Result:
+def crude_run(instrument: Instrument = CRUDEOIL, strategy: type = CrudeSwing) -> bt.Result:
     return bt.backtest(
-        CrudeSwing,
+        strategy,
         data=bars(),
         capital=CAPITAL,
-        instrument=CRUDEOIL,
+        instrument=instrument,
         product="NRML",
         slippage=0,
     )
+
+
+@pytest.fixture(scope="module")
+def result() -> bt.Result:
+    return crude_run()
+
+
+def test_a_contract_given_without_its_underlying_is_charged_by_the_commodity_of_its_symbol():
+    # CRUDEOIL18NOV26FUT is a CRUDEOIL contract, so its charges are the non-agri MCX
+    # futures rates worked by hand above.
+    costs = crude_run(dataclasses.replace(CRUDEOIL, underlying=None)).costs
+    assert list(costs["segment"]) == ["MCX_FUT", "MCX_FUT"]
+    assert list(costs["total"]) == pytest.approx([BUY_LINES["total"], SELL_LINES["total"]])
+
+
+def test_a_future_whose_symbol_names_no_commodity_still_needs_the_underlying():
+    plain = dataclasses.replace(CRUDEOIL, symbol="CRUDE", underlying=None)
+    strategy = type("PlainCrude", (CrudeSwing,), {"symbol": "CRUDE"})
+    with pytest.raises(CostError, match="pass the commodity as the underlying"):
+        crude_run(plain, strategy)
 
 
 def at(day: dt.date, clock: dt.time) -> dt.datetime:

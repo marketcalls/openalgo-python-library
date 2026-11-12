@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`Result.to_csv(folder)` and `Result.to_excel(path)`** write every table of
+  `to_dataframes()`: one CSV file per table, or one workbook with a sheet per table.
+  Times are written as plain IST date-times (a spreadsheet cell holds no time zone, so
+  `to_excel` on a table failed before); the `*_ts` columns stay UTC nanoseconds. Excel
+  needs openpyxl, which is not installed with openalgo: without it `to_excel` raises
+  `MissingDependencyError` saying `pip install openpyxl`.
+- **`SymbolNotFoundError`** (a `DataError`, in `openalgo.backtest.errors`): the OpenAlgo
+  server answered that the symbol is not in its master contract. `symbol` and
+  `exchange` name what was asked for.
+
+### Changed
+
+- **Rejected orders are reported.** A backtest now adds one warning per reject code
+  that occurred: how many of the run's orders it refused, when the first was decided
+  (IST), what the code means and what to do (for `product_rule` on a stock: a delivery
+  short is not allowed, short intraday with MIS or trade futures). `print(result)` has a
+  `rejected orders:` line with the count by code. Before, a run whose entries were all
+  rejected ended with no trade and no warning. The warning for orders a sizer sized and
+  the margin refused is now part of the margin warning, which also covers orders given
+  in units or lots.
+- **An expired futures contract is named as such.** When a run needs the history of a
+  contract that expired before today and the server no longer lists it, the error says
+  that the contract expired on its date, that brokers stop serving an expired
+  contract's history, and to start after that date or run on stored bars with `data=`.
+- **The underlying of a contract is read from its symbol for the charges.** An MCX
+  future (or a BFO option) given as an `Instrument` without `underlying=` is charged
+  by the commodity its OpenAlgo symbol names, as the futures margin already was;
+  `CostError` remains for a symbol that names none.
+- **Unverified charge rates are announced once.** A run charged at rates that were not
+  verified warns with a short `UnverifiedScheduleWarning` once per process for each
+  cost schedule, segment and reason, and puts the details (the date and the schedule's
+  notes) in `result.warnings`. The worker processes of `bt.optimize` no longer repeat
+  it. The cost model's own functions still warn with the full text, which now ends "so
+  the charges may be off".
+- **`bt.from_arrays` errors say what to pass.** A missing `symbol=`, `exchange=` or
+  `interval=`, or `shorts` and `covers` given by position, raise `ConfigError` with a
+  one-line example instead of a `TypeError`.
+- The `buy` and `sell` docstrings state that with `reverse=True` only the quantity
+  beyond the open position opens the other side (flipping one lot takes two lots), and
+  `target` is documented as the one-call way to flip.
+
 ## [2.1.0] - 2026-11-12
 
 ### Added

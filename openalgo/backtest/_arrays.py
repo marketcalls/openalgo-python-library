@@ -55,6 +55,8 @@ MIN_CUT_BARS = 2
 # The class attribute naming the function that built a strategy class here (private, so
 # `Strategy.parameters` does not take it for a parameter).
 MADE_BY = "_made_by"
+# The keywords of the one-line examples in from_arrays' errors.
+FROM_ARRAYS_MARKET = 'symbol="SBIN", exchange="NSE", interval="5m"'
 
 
 def made_by(strategy: type) -> str | None:
@@ -97,13 +99,32 @@ def _declare(strategy: Strategy, arrays: tuple[Any, ...], order_args: dict[str, 
         getattr(strategy, method)(values, **arguments)
 
 
+def _check_from_arrays_call(extra: tuple[Any, ...], market: dict[str, str | None]) -> None:
+    """Raise ConfigError, with a one-line example, for arrays given by position after
+    `exits` or a missing `symbol`, `exchange` or `interval` (all three are keywords)."""
+    if extra:
+        raise ConfigError(
+            f"from_arrays takes entries and exits by position and got "
+            f"{len(extra) + 2} values: pass shorts= and covers= by name, for example "
+            "bt.from_arrays(entries, exits, shorts=shorts, covers=covers, "
+            f"{FROM_ARRAYS_MARKET})"
+        )
+    missing = [name for name, value in market.items() if value is None]
+    if missing:
+        needs = ", ".join(f"{name}=" for name in missing)
+        raise ConfigError(
+            f"from_arrays needs {needs} (the strategy's symbol, exchange and interval, by "
+            f"name), for example bt.from_arrays(entries, exits, {FROM_ARRAYS_MARKET})"
+        )
+
+
 def from_arrays(
     entries: Any,
     exits: Any = None,
-    *,
-    symbol: str,
-    exchange: str,
-    interval: str,
+    *extra: Any,
+    symbol: str | None = None,
+    exchange: str | None = None,
+    interval: str | None = None,
     shorts: Any = None,
     covers: Any = None,
     pyramiding: int = 0,
@@ -111,10 +132,14 @@ def from_arrays(
     **order_args: Any,
 ) -> type[Strategy]:
     """A strategy from boolean arrays, one value per strategy bar (see the module
-    docstring). `order_args` are those of `entry_when` (14-strategy-api 4.1) and apply
-    to entries and shorts; `product` is the strategy's product (its default by interval
-    when None). Raises ConfigError for order arguments 4.1 does not list; the arrays are
-    checked against the run's strategy bars when the run starts."""
+    docstring). `entries` and `exits` may be given by position; everything else is a
+    keyword, and `symbol`, `exchange` and `interval` are required. `order_args` are
+    those of `entry_when` (14-strategy-api 4.1) and apply to entries and shorts;
+    `product` is the strategy's product (its default by interval when None). Raises
+    ConfigError for a missing `symbol`, `exchange` or `interval`, for arrays given by
+    position after `exits` (`extra`), and for order arguments 4.1 does not list; the
+    arrays are checked against the run's strategy bars when the run starts."""
+    _check_from_arrays_call(extra, {"symbol": symbol, "exchange": exchange, "interval": interval})
     check_order_arguments(order_args, "from_arrays")
     arrays = (entries, exits, shorts, covers)
 

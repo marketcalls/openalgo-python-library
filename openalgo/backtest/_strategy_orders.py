@@ -46,8 +46,12 @@ class OrderMethods:
         after_first_target: str | None = None,
         validity: str = "day",
     ) -> Order | None:
-        """Buy: open a long, add to it, or reduce a short (the excess over the short is
-        rejected unless `reverse=True`). `price=None` is MARKET, a price makes it LIMIT;
+        """Buy: open a long, add to it, or reduce a short. A buy larger than the short is
+        rejected (reject code `reverse_not_allowed`) unless `reverse=True`, and then
+        only the quantity beyond the short opens a long: short one lot, `buy(lots=1,
+        reverse=True)` only closes it, and flipping to one lot long takes
+        `buy(lots=2, reverse=True)` or, in one call, `self.target(lots=1)`.
+        `price=None` is MARKET, a price makes it LIMIT;
         `trigger_price` makes it a stop order, SL with a price and SL-M without (on
         options an SL-M is sent as an SL with its limit 5 percent beyond the trigger).
         A LIMIT or stop order rests from the next base bar until it fills or its session
@@ -81,7 +85,12 @@ class OrderMethods:
         after_first_target: str | None = None,
         validity: str = "day",
     ) -> Order | None:
-        """Sell: open a short, add to it, or reduce a long. Arguments as `buy`."""
+        """Sell: open a short, add to it, or reduce a long. Arguments as `buy`. A sell
+        larger than the long is rejected (reject code `reverse_not_allowed`) unless
+        `reverse=True`, and then only the quantity beyond the long opens a short: long
+        one lot, `sell(lots=1, reverse=True)` only closes it, and flipping to one lot
+        short takes `sell(lots=2, reverse=True)` or, in one call, `self.target(lots=-1)`.
+        A delivery (CNC) sale can never open a short (reject code `product_rule`)."""
         return self._open("SELL", **locals_without_self(locals()))
 
     def _open(self, side: str, **args: Any) -> Order | None:
@@ -179,7 +188,9 @@ class OrderMethods:
         """Trade to a target position: exactly one of `qty` units or `lots`, taken as
         given, or `value` rupees or `percent` of equity (the sizing equity, see
         `reinvest`), converted at the decision price and rounded towards zero to the
-        venue rule. Positive is long, negative short, 0 flat.
+        venue rule. Positive is long, negative short, 0 flat. It is the one-call way to
+        flip a position: long one lot, `self.target(lots=-1)` sells two lots, closing
+        the long and opening one lot short.
 
         Sends one MARKET DAY order for the difference between the target and the
         position the strategy will hold once its queued market orders on the symbol

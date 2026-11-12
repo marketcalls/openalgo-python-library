@@ -137,19 +137,46 @@ class CostModel:
         """
         return copy.deepcopy(list(self._views))
 
+    def _untrusted_texts(self, status: tuple[int, int], what: str, day: int) -> tuple[str, str]:
+        """The short and the full text of the warning for a kernel status whose rates are
+        not verified: the short one names the schedule, `what` (a segment code or "GST")
+        and why, the same for every date; the full one adds the date and the notes."""
+        schedule, trust = status
+        view, code = self._views[schedule], TRUST_CODES[trust]
+        short = (
+            f"the {what} rates of cost schedule {view['id']} {_WHY_UNTRUSTED[code]}, so the "
+            "charges may be off"
+        )
+        notes = view["rates"].get(what, {}).get("notes") or view["notes"]
+        full = (
+            f"the {what} rates of cost schedule {view['id']} used for {day_to_date(day)} "
+            f"{_WHY_UNTRUSTED[code]}, so the charges may be off. {notes}"
+        ).rstrip()
+        return short, full
+
     def _trusted(self, status: tuple[int, int], what: str, day: int) -> tuple[str, str]:
         """The schedule id and trust code of a kernel status, warning when not verified."""
         schedule, trust = status
         view, code = self._views[schedule], TRUST_CODES[trust]
         if code != VERIFIED:
-            notes = view["rates"].get(what, {}).get("notes") or view["notes"]
             warnings.warn(
-                f"the {what} rates of cost schedule {view['id']} used for {day_to_date(day)} "
-                f"{_WHY_UNTRUSTED[code]}, so this cost may be off. {notes}".rstrip(),
+                self._untrusted_texts(status, what, day)[1],
                 UnverifiedScheduleWarning,
                 skip_file_prefixes=(_PACKAGE_DIR,),
             )
         return view["id"], code
+
+    def _unverified(self, segment: str, date: DateLike) -> tuple[str, str] | None:
+        """The short and the full text of the warning `trade` would give for `segment` on
+        `date` (`_untrusted_texts`), or None when the rates are verified; nothing is
+        warned, so a caller that checks many dates can report each reason once. Raises
+        CostError as `trade` does."""
+        code = segment_code(segment)
+        day = to_day(date)
+        _, status = call(self._kernel.fill, code, int(side_ids("BUY", 1)[0]), 1.0, 1.0, day)
+        if TRUST_CODES[status[1]] == VERIFIED:
+            return None
+        return self._untrusted_texts(status, code, day)
 
     def _breakdown(
         self, amounts: tuple, segment: str, used: list[tuple[str, str]]
