@@ -135,7 +135,7 @@ impl Engine {
 
     /// Exit at a level hit: the risk event, the fill, and for a target the
     /// `after_first_target` move.
-    fn exit_at_level(
+    pub(super) fn exit_at_level(
         &mut self,
         stamp: EventStamp,
         key: PositionKey,

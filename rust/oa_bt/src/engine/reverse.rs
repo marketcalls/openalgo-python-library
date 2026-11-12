@@ -19,6 +19,7 @@ use super::clock::SliceInfo;
 use super::error::KernelError;
 use super::event::OrderEventKind;
 use super::fills::FillRequest;
+use super::futures::FillOrigin;
 use super::kernel::Engine;
 use super::order_fill::OrderFill;
 
@@ -56,6 +57,7 @@ impl Engine {
             target_index: None,
             pricing: how.pricing,
             gtt: how.gtt,
+            origin: FillOrigin::Trade,
         };
         self.execute_fill(stamp, close.clone())?;
         let margin = match self.reversal_margin(slice, order, open_units, open_rupees)? {

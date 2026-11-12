@@ -112,9 +112,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine default (1x the capital net of estimated costs, one lot for F&O);
   `bt.size.fixed_risk` and `bt.size.atr_risk` size to the stop; sized quantities are
   capped at the freeze quantity. `Result.performance`, `Result.metrics` and
-  `Result.tearsheet()` report the run. Charges for a delivery buy and sell of one scrip
-  on the same day, the margin of stock, BSE and MCX futures, and short options are not
-  built yet.
+  `Result.tearsheet()` report the run. A delivery (CNC) buy and sell of one scrip on the
+  same day is charged as intraday with no DP charge: the units a CNC fill matches
+  against the day's fills on the other side are charged at the intraday rates and the
+  earlier fills charged again. Short-option margin is not built yet.
 - **LIMIT, stop and GTT orders in `openalgo.backtest` (preview).** `buy` and `sell` take
   `price=` (LIMIT) and `trigger_price=` (SL with a price, SL-M without), OpenAlgo's
   order types. A LIMIT or stop order rests from the next base bar until it fills or its
@@ -174,6 +175,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `after_first_target`, `product`, `leverage` and `tag`; ATR distances and
   `bt.size.atr_risk` in them raise `NotImplementedError` until built. A condition
   strategy trades one symbol and has no callbacks or timers.
+- **Futures strategies in `openalgo.backtest` (preview).** A strategy names an
+  underlying (`underlying = "NIFTY"` with `exchange = "NFO"`, or underlying names in
+  `symbols`) and the contract rank in `expiry` (`"current_month"`, the default, or
+  `"next_month"`); the contracts come from `instrument=` or the reference tables (lot
+  size by contract expiry, final last trading days). `bt.backtest(roll=1)` (the
+  default) rolls a position N sessions before expiry at the roll session's first open:
+  near leg first, both legs charged, reason `roll`, stop, target, trail, breakeven and
+  the favourable extreme shifted by the spread of the two raw opens, a level crossed at
+  the near contract's open exits there instead, GTTs cancelled and placed again on the
+  next contract; a roll does not end a run for the daily loss limit. `roll=None` holds
+  the position to expiry and settles it at the close of the last trading day (reason
+  `expiry`, flagged, not charged). `on_bar` and every series view and `self.I`
+  indicator read one back-adjusted series per underlying, re-adjusted at each roll as
+  known at the decision point (point-in-time causality checks); the bar `on_bar` gets is
+  the contract's own. `Result.settlements` holds the daily futures mark to market (the
+  last close, flagged, where the data gives no settlement price) and `Result.rolls`
+  every switch with its spread. Trades are split at a roll (exit reason `roll`).
+  Condition strategies on an underlying and other intervals of a futures series raise
+  `NotImplementedError`.
+- **More futures margin in the dated table.** NSE stock futures (218 underlyings), BSE
+  BANKEX and the MCX commodities (30), each one day's observation of a broker's public
+  margin page and unverified, so a run using one warns. SENSEX and SENSEX50 futures have
+  no row yet (no public page read gave their margin) and still stop a run.
 - **`openalgo.backtest.metrics` and `openalgo.backtest.report` (preview).** Performance
   metrics computed in the Rust core (returns, CAGR on calendar time, volatility, Sharpe
   and Sortino with a per-session risk-free rate, drawdowns, Calmar, exposure, trade

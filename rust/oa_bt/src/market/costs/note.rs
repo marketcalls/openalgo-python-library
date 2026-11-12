@@ -135,6 +135,17 @@ impl ContractNoteAggregator {
         accrual.fills += 1;
     }
 
+    /// Correct the accrual of a note by `difference` (amounts may be negative) without
+    /// counting a fill: a fill already accrued that is charged again at other rates of the
+    /// same note (a delivery fill that a same-day sale turned into intraday).
+    pub fn amend(&mut self, day: Day, segment: Segment, difference: &CostBreakdown) {
+        let accrual = self.notes.entry((day, segment.note_group())).or_default();
+        for (index, amount) in difference.components().into_iter().enumerate() {
+            let exact = to_picos(amount, LINES[index].0);
+            accrual.picos[index] = accrual.picos[index].saturating_add(exact);
+        }
+    }
+
     /// Accrue STT in rupees that is not tied to a fill, such as STT on an exercised
     /// option (from `CostModel::exercise_stt`), into the note of `day`.
     pub fn add_stt(&mut self, day: Day, segment: Segment, stt: f64) {

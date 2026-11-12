@@ -6,7 +6,8 @@ instruments are named by symbol. Prices and money are rupees, quantities units.
 
 Built: `fills`, `orders`, `trades`, `equity`, `returns`, `positions` (the position
 history), `events`, `risk_events`, `stale_marks`, `final_positions`, `gross_pnl`,
-`costs`, `contract_notes`, `performance`, `metrics`, `tearsheet()`, `assumptions`,
+`costs`, `contract_notes`, `settlements` and `rolls` (futures), `performance`,
+`metrics`, `tearsheet()`, `assumptions`,
 `warnings`, `skipped`, `manifest` (see `_manifest`), `rerun()` (see `_rerun`),
 `to_dataframes()`. Not built yet: the several-strategy views `strategy()`, `combined`,
 `correlation` (Phase 3).
@@ -19,7 +20,7 @@ from typing import Any
 
 import pandas as pd
 
-from . import _result_costs, _result_report
+from . import _result_costs, _result_futures, _result_report
 from ._native import native
 from ._series import IST
 from .errors import BacktestError
@@ -198,6 +199,22 @@ class Result:
         note whose session close the run did not reach. `attrs["rule"]` states the
         assumed contract-note rule."""
         return _result_costs.notes_frame(self._output)
+
+    @property
+    def settlements(self) -> pd.DataFrame:
+        """The futures mark to market (04-execution 7): a row per futures position at
+        each session close (`kind` "daily") and for a contract settled on its last
+        trading day ("expiry"), with the units held after the close, the settlement
+        price, `last_close_used` (no settlement price in the data, so the last close)
+        and the cash flow in rupees. The postings sum to the position's gross P&L."""
+        return _result_futures.settlements_frame(self._output, self._symbols)
+
+    @property
+    def rolls(self) -> pd.DataFrame:
+        """Every switch of a futures series from one contract to the next: when, the
+        two contracts, the spread that back-adjusts the series and whether positions
+        rolled there (False with roll=None, where they are settled at expiry)."""
+        return _result_futures.switches_frame(self._output, self._symbols)
 
     @cached_property
     def performance(self) -> Performance:

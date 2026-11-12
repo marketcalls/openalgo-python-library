@@ -33,6 +33,7 @@ from ._conditions import drive_conditions, has_conditions
 from ._context import RunContext, RunData
 from ._driver import drive
 from ._engine import build_engine, call
+from ._futures import attach, resolve_futures
 from ._instruments import resolve_instruments
 from ._manifest import build_manifest, strategy_source_hash
 from ._market import MarketSettings, market_settings
@@ -60,6 +61,8 @@ class PreparedRun:
     reference_tables: str | None
     market_args: dict[str, Any]
     market: MarketSettings | None
+    # The futures series (`_futures.FuturesPlan`), None for a strategy on no underlying.
+    futures: Any = None
 
     @property
     def portable(self) -> bool:
@@ -117,9 +120,17 @@ def prepare(strategy: type, client: Any, args: dict[str, Any]) -> PreparedRun:
     plan = resolve(strategy, args)
     own_calendar = _calendar(args["calendar"], plan)
     calendar = own_calendar or calendar_module.default_calendar()
-    choice = choose_base(plan, args, client, calendar)
+    futures = resolve_futures(strategy, plan, args, calendar)
+    windows = None
+    if futures is not None:
+        plan = dataclasses.replace(plan, symbols=futures.symbols)
+        windows = futures.windows
+    choice = choose_base(plan, args, client, calendar, windows)
     plan = dataclasses.replace(plan, base=choice.base)
-    instruments, lines, version = resolve_instruments(plan, args["instrument"], calendar)
+    if futures is None:
+        instruments, lines, version = resolve_instruments(plan, args["instrument"], calendar)
+    else:
+        instruments, lines, version = futures.instruments, futures.lines, futures.version
     market_args = {"costs": args["costs"], "slippage": args["slippage"]}
     market = market_settings(plan, instruments, market_args)
     loaded = [choice.bars[symbol] for symbol in plan.symbols]
@@ -132,6 +143,7 @@ def prepare(strategy: type, client: Any, args: dict[str, Any]) -> PreparedRun:
                 f"{instrument.symbol}: generic cash-equity instrument assumed (lot 1, tick 0.05)"
             )
     warnings += market.warnings
+    warnings += [] if futures is None else list(futures.warnings)
     return PreparedRun(
         plan=plan,
         calendar=own_calendar,
@@ -146,6 +158,7 @@ def prepare(strategy: type, client: Any, args: dict[str, Any]) -> PreparedRun:
         reference_tables=version,
         market_args=market_args,
         market=market,
+        futures=futures,
     )
 
 
@@ -162,6 +175,8 @@ def _assumptions(
     rule = meaning(plan.base, block["square_off"], session_open)
     block["base_rule"] = f"base {plan.base} ({prepared.notes['base_rule']}): {rule}"
     block["instruments"] = prepared.notes["instruments"]
+    if prepared.futures is not None:
+        block["futures"] = prepared.futures.assumption()
     indicator_checks = checks.assumption()
     if indicator_checks is not None:
         block["indicator_checks"] = indicator_checks
@@ -203,12 +218,20 @@ def execute(
     market = prepared.market_settings()
     config = plan.native_config(deliver_events=strategy.wants_events()) | market.config
     engine = build_engine(calendar._cal, config, prepared.instruments, prepared.frames)
+    futures = None
+    if prepared.futures is not None:
+        futures = (prepared.futures, attach(engine, prepared.futures, list(plan.symbols)))
     base_bars = dict(zip(plan.symbols, prepared.frames, strict=True))
     run = RunData(plan.exchange, plan.interval, plan.base, base_bars, calendar, checks)
-    context = RunContext(engine, prepared.instruments, plan.product, strategy.size, run)
+    context = RunContext(engine, prepared.instruments, plan.product, strategy.size, run, futures)
     instance = strategy(**(args["params"] or {}))
     instance._ctx = context
     instance.init()
+    if has_conditions(instance) and futures is not None:
+        raise NotImplementedError(
+            "condition strategies on a futures underlying are not implemented yet (Phase 1 "
+            "work in progress): write on_bar"
+        )
     if has_conditions(instance):
         drive_conditions(instance, engine)
     else:

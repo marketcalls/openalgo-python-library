@@ -201,6 +201,12 @@ def register(checks: Any, func: Any, inputs: tuple, params: dict) -> Any:
         parts = call(start, stop)
         return [part for n, part in zip(names, parts, strict=True) if n in causal]
 
+    # A futures series is re-adjusted at each roll: its indicators are checked point in
+    # time and recomputed at every roll (`_spliced`).
+    adapter = getattr(store, "indicator_adapter", None)
+    if adapter is not None:
+        adapter = adapter(call, names, causal)
+        compute, whole = adapter.compute, adapter.whole
     checks.check(key, label, compute, whole, anchored)
     views = [
         LookaheadOutput(name, n, lookahead[n], causal)
@@ -208,6 +214,8 @@ def register(checks: Any, func: Any, inputs: tuple, params: dict) -> Any:
         else TimelineView(store, values, label if len(outputs) == 1 else f"{label}.{n}")
         for n, values in zip(names, outputs, strict=True)
     ]
+    if adapter is not None:
+        views = adapter.adopt(views)
     return views[0] if len(views) == 1 and not isinstance(returned, tuple | list) else tuple(views)
 
 

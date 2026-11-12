@@ -15,6 +15,7 @@ use super::clock::SliceInfo;
 use super::config::QuantityMode;
 use super::error::KernelError;
 use super::event::{Event, EventStamp, OrderEventKind};
+use super::futures::FillOrigin;
 use super::kernel::Engine;
 use super::order_fill::OrderFill;
 use super::output::FillRecord;
@@ -42,6 +43,8 @@ pub(super) struct FillRequest {
     pub(super) pricing: FillPricing,
     /// The GTT whose child this fill is, or whose unfilled child it follows.
     pub(super) gtt: Option<GttId>,
+    /// A trade, a futures roll or an expiry settlement (its reason and charges).
+    pub(super) origin: FillOrigin,
 }
 
 impl FillRequest {
@@ -71,6 +74,7 @@ impl FillRequest {
             target_index: None,
             pricing: FillPricing::Market,
             gtt: None,
+            origin: FillOrigin::Trade,
         }
     }
 
@@ -175,6 +179,7 @@ impl Engine {
             target_index: None,
             pricing: how.pricing,
             gtt: how.gtt,
+            origin: FillOrigin::Trade,
         };
         self.execute_fill(stamp, fill)?;
         Ok(())
@@ -275,7 +280,10 @@ impl Engine {
         self.portfolio.account.post_realized(effect.realized_rupees);
         self.portfolio.refresh_margin();
         let (side, units) = (request.side, request.units);
-        let costs = self.charge_fill(request.key, side, units, price, day, effect)?;
+        let costs = match request.origin {
+            FillOrigin::ExpirySettlement => self.uncharged_fill(request.key, effect),
+            _ => self.charge_fill(request.key, side, units, price, day, effect)?,
+        };
         let context = LegContext {
             side: request.side,
             tick_rupees: spec.tick_size_rupees,
@@ -287,6 +295,7 @@ impl Engine {
         };
         self.update_leg(&request, &effect, context, average)?;
         let reason = match effect.kind {
+            _ if request.origin == FillOrigin::Roll => FillReason::Roll,
             FillKind::Entry => FillReason::Entry,
             FillKind::Add => FillReason::Add,
             FillKind::Reduce => FillReason::Exit(request.exit_reason),

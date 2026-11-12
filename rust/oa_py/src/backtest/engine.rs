@@ -19,6 +19,7 @@
 #![allow(unexpected_cfgs, clippy::useless_conversion)]
 
 mod charges;
+mod futures;
 mod market;
 mod request;
 mod results;
@@ -33,7 +34,7 @@ use oa_bt::model::Product;
 use pyo3::create_exception;
 use pyo3::exceptions::{PyException, PyNotImplementedError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList};
 
 use super::calendar::NativeCalendar;
 use setup::BarArrays;
@@ -249,6 +250,20 @@ impl NativeEngine {
         tables::strategy_bars(py, &bars)
     }
 
+    /// Register a futures series (see `futures`); returns its index. Only before the
+    /// first `advance`.
+    fn add_futures_series(&mut self, series: &Bound<'_, PyDict>) -> PyResult<u32> {
+        let series = futures::series(series)?;
+        self.engine_mut()?
+            .add_futures_series(series)
+            .map_err(engine_error)
+    }
+
+    /// The switches of the run's futures series, in slice order, as dicts.
+    fn futures_switches<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        futures::switches(py, self.engine()?.futures_switches())
+    }
+
     /// The result tables, once the run has finished. The engine cannot be used after.
     fn finish<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         if !self.engine()?.is_finished() {
@@ -274,5 +289,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         py.get_type_bound::<NativeEngineInputError>(),
     )?;
     m.add_class::<NativeEngine>()?;
+    futures::register(m)?;
     market::register(m)
 }

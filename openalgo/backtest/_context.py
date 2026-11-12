@@ -14,6 +14,7 @@ from typing import Any
 import pandas as pd
 
 from ._engine import call
+from ._futures_context import SeriesContext
 from ._orders import Order
 from ._series import Bar, BarStore, PositionView, SeriesStore, ist_time
 from ._timers import Timers
@@ -46,6 +47,7 @@ class RunContext:
         product: str,
         default_size: Sizer | None,
         run: RunData,
+        futures: tuple[Any, list[dict]] | None = None,
     ) -> None:
         self.engine = engine
         self.instruments = {instrument.symbol: instrument for instrument in instruments}
@@ -64,6 +66,16 @@ class RunContext:
         # (decision instant, symbol, reason) of every order a sizer skipped.
         self.skipped: list[tuple[int | None, str, str]] = []
         self._final_orders: dict[int, dict] | None = None
+        # Futures series by underlying, from (`_futures.FuturesPlan`, the kernel's switches).
+        self.futures = None
+        if futures is not None:
+            plan, switches = futures
+            self.futures = SeriesContext(plan, switches, self.stores, self.symbols, run.interval)
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        """What the strategy addresses: its symbols, or its futures underlyings."""
+        return self.futures.names if self.futures is not None else tuple(self.symbols)
 
     # ----- the clock and the bars ------------------------------------------------
 
@@ -76,6 +88,8 @@ class RunContext:
         for row in pause.get("bars", ()):
             symbol = self.symbols[row[0]]
             revealed[symbol] = self.stores[symbol].reveal(row)
+        if self.futures is not None:
+            return self.futures.reveal(revealed, self.stores, self.decided_at)
         return revealed
 
     @property
@@ -87,6 +101,8 @@ class RunContext:
         """The bars of a symbol at the strategy interval, or at `interval` (built on first
         use, visible once closed). Raises ConfigError for an unknown symbol or an
         interval the base bars cannot give."""
+        if self.futures is not None and (symbol is None or symbol in self.futures.names):
+            return self.futures.store(symbol, interval)
         name = self.symbol_of(self.instrument_index(symbol))
         if interval is None or interval == self.run.interval:
             return self.stores[name]
@@ -113,7 +129,10 @@ class RunContext:
         """The registration index of a symbol; None means the only instrument.
 
         Raises ConfigError for an unknown symbol, or for None with several instruments.
+        A futures underlying (or None for the only one) gives the contract it trades now.
         """
+        if self.futures is not None and (symbol is None or symbol in self.futures.names):
+            return self.futures.contract_index(symbol, self.decided_at)
         if symbol is None:
             if len(self.symbols) != 1:
                 raise ConfigError("this strategy trades several symbols: pass symbol=")
@@ -126,7 +145,7 @@ class RunContext:
 
     def submit(self, request: dict) -> Order | None:
         """Place a request; returns its handle, or None when a sizer skipped it."""
-        store = self.stores[self.symbols[request["instrument"]]]
+        store = self.sizing_store(request["instrument"])
         request = {**request, "quantity": resolve_atr(request["quantity"], store)}
         outcome, number, code = call(self.engine.submit, request)
         if outcome == "skipped":
@@ -134,6 +153,13 @@ class RunContext:
             self.skipped.append((self.decided_at, symbol, code))
             return None
         return Order(number, self.order, self.cancel)
+
+    def sizing_store(self, instrument: int) -> SeriesStore:
+        """The bars an order's ATR distances and sizers read: the instrument's strategy
+        bars, or the spliced series of the futures underlying it belongs to."""
+        symbol = self.symbols[instrument]
+        spliced = None if self.futures is None else self.futures.store_of(symbol)
+        return self.stores[symbol] if spliced is None else spliced
 
     def order(self, number: int) -> dict:
         """An order's state, from the engine or, after the run, from the result."""
