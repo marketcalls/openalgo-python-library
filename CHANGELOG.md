@@ -64,11 +64,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   days of NSE and BSE bhavcopies. Part of the backtest engine being built; the
   interface may change before the backtest beta.
 - **`openalgo.backtest.backtest` and `openalgo.backtest.Strategy` (early preview).** The
-  backtest kernel runs a strategy class with `on_bar` and market orders through the
-  Rust event loop and returns fills, positions, equity, trades and events as
-  DataFrames. Stops, targets, charges, slippage presets and the other rules of the
-  contract are being built; each raises `NotImplementedError` naming its phase until
-  then. `bt.live` is planned for the live phase.
+  backtest kernel runs a strategy class through the Rust event loop and returns
+  fills, positions, equity, trades and events as DataFrames. The entries below cover
+  each part. What is not built yet (the futures roll, walk-forward, `bt.live`) raises
+  `NotImplementedError` naming its phase.
 - **Strategy and session risk rules in `bt.backtest` (early preview).** `max_daily_loss`
   measures the day's loss on `risk_basis` as the realized P&L of the strategy's runs
   that ended this session plus the live run's MTM since its first fill; a breach exits
