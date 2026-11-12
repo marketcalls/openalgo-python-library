@@ -791,8 +791,9 @@ class FeedAPI(BaseAPI):
             f"| Avg: {message.get('average_price', 0)} | ID: {message.get('orderid', '?')}",
         )
 
+        # The callback gets its own copy: an edit must not change get_orders().
         if self.order_callback:
-            self._deliver("Order", self.order_callback, message, message)
+            self._deliver("Order", self.order_callback, fresh_copy(message), message)
 
     def _on_market_data(self, message: Dict[str, Any]) -> None:
         """Handle market data: store the latest values, then invoke the callback of the mode."""
@@ -1125,10 +1126,11 @@ class FeedAPI(BaseAPI):
         Get the order updates received so far (most recent first, capped).
 
         Returns:
-            dict: {"orders": [ {...order_update message...}, ... ]}
+            dict: {"orders": [ {...order_update message...}, ... ]}, copies
+                that the caller may edit without changing the stored history.
         """
         with self.lock:
-            return {"orders": list(self.order_data)}
+            return {"orders": [fresh_copy(order) for order in self.order_data]}
 
     def get_ltp(self, exchange: str = None, symbol: str = None) -> Dict[str, Any]:
         """

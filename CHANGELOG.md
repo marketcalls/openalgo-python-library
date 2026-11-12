@@ -573,6 +573,9 @@ across a NaN bar.
   included.
 - An error reported while the last `on_error` hook was being removed reached neither a
   hook nor the `openalgo.feed` logger. It is now logged.
+- An order callback received the very dict kept in the order history, and
+  `get_orders()` returned those dicts, so editing one changed what later
+  `get_orders()` calls returned. Both now hand out copies.
 
 ## [2.0.5] - 2026-09-11
 
