@@ -1,0 +1,421 @@
+{
+  "format": 1,
+  "year": 2019,
+  "timezone": "Asia/Kolkata",
+  "coverage": {
+    "NSE": "sourced",
+    "NFO": "sourced",
+    "BSE": "sourced",
+    "BFO": "unverified"
+  },
+  "notes": [
+    "NSE, NFO and BSE holidays are the published lists (NSE/CMTR/39612, NSE/FAOP/39613, BSE notice 20181207-13) with the two election holidays added later. The NSE archive has no equity price file on exactly these 17 weekdays.",
+    "BFO is assumed to follow BSE and is unverified. MCX, CDS and BCD have no 2019 holiday list here."
+  ],
+  "sources": {
+    "bse-20181207-13": "BSE notice 20181207-13, trading holidays 2019: https://www.bseindia.com/markets/MarketInfo/DispNewNoticesCirculars.aspx?page=20181207-13",
+    "bse-20191007-25": "BSE notice 20191007-25, trading holiday on 2019-10-21: https://www.bseindia.com/markets/MarketInfo/DispNewNoticesCirculars.aspx?page=20191007-25",
+    "nse-archive-files": "NSE archive daily equity price files cmDDMONYYYYbhav.csv.zip for every date of 2019, 2020, 2021 and 2023 (present or absent), read on 2026-11-12",
+    "nse-cmtr-39612": "NSE/CMTR/39612 trading holidays 2019 (capital market): https://nsearchives.nseindia.com/content/circulars/CMTR39612.pdf",
+    "nse-cmtr-40536": "NSE/CMTR/40536 trading holiday on 2019-04-29 (capital market): https://nsearchives.nseindia.com/content/circulars/CMTR40536.pdf",
+    "nse-cmtr-42483": "NSE/CMTR/42483 Muhurat trading 2019-10-27, normal market 18:15 to 19:15: https://nsearchives.nseindia.com/content/circulars/CMTR42483.pdf",
+    "nse-faop-39613": "NSE/FAOP/39613 trading holidays 2019 (futures and options): https://nsearchives.nseindia.com/content/circulars/FAOP39613.pdf",
+    "nse-msd-42319": "NSE/MSD/42319 trading holiday on 2019-10-21 (CM, FO and CD segments): https://nsearchives.nseindia.com/content/circulars/MSD42319.pdf",
+    "zerodha-muhurat-2019": "https://zerodha.com/marketintel/bulletin/234057/muhurat-trading-session-on-account-of-diwali-3"
+  },
+  "days": [
+    {
+      "date": "2019-03-04",
+      "name": "Mahashivratri",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-39612",
+        "nse-faop-39613",
+        "bse-20181207-13",
+        "nse-archive-files"
+      ],
+      "unverified": [
+        "BFO"
+      ]
+    },
+    {
+      "date": "2019-03-21",
+      "name": "Holi",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-39612",
+        "nse-faop-39613",
+        "bse-20181207-13",
+        "nse-archive-files"
+      ],
+      "unverified": [
+        "BFO"
+      ]
+    },
+    {
+      "date": "2019-04-17",
+      "name": "Mahavir Jayanti",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-39612",
+        "nse-faop-39613",
+        "bse-20181207-13",
+        "nse-archive-files"
+      ],
+      "unverified": [
+        "BFO"
+      ]
+    },
+    {
+      "date": "2019-04-19",
+      "name": "Good Friday",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-39612",
+        "nse-faop-39613",
+        "bse-20181207-13",
+        "nse-archive-files"
+      ],
+      "unverified": [
+        "BFO"
+      ]
+    },
+    {
+      "date": "2019-04-29",
+      "name": "Parliamentary Elections in Mumbai",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-40536",
+        "nse-archive-files"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE",
+        "NFO"
+      ],
+      "note": "NSE/CMTR/40536 closes the capital market segment; the BSE notice and an F&O circular were not found."
+    },
+    {
+      "date": "2019-05-01",
+      "name": "Maharashtra Day",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-39612",
+        "nse-faop-39613",
+        "bse-20181207-13",
+        "nse-archive-files"
+      ],
+      "unverified": [
+        "BFO"
+      ]
+    },
+    {
+      "date": "2019-06-05",
+      "name": "Id-Ul-Fitr (Ramzan ID)",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-39612",
+        "nse-faop-39613",
+        "bse-20181207-13",
+        "nse-archive-files"
+      ],
+      "unverified": [
+        "BFO"
+      ]
+    },
+    {
+      "date": "2019-08-12",
+      "name": "Bakri Id",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-39612",
+        "nse-faop-39613",
+        "bse-20181207-13",
+        "nse-archive-files"
+      ],
+      "unverified": [
+        "BFO"
+      ]
+    },
+    {
+      "date": "2019-08-15",
+      "name": "Independence Day",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-39612",
+        "nse-faop-39613",
+        "bse-20181207-13",
+        "nse-archive-files"
+      ],
+      "unverified": [
+        "BFO"
+      ]
+    },
+    {
+      "date": "2019-09-02",
+      "name": "Ganesh Chaturthi",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-39612",
+        "nse-faop-39613",
+        "bse-20181207-13",
+        "nse-archive-files"
+      ],
+      "unverified": [
+        "BFO"
+      ]
+    },
+    {
+      "date": "2019-09-10",
+      "name": "Moharram",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-39612",
+        "nse-faop-39613",
+        "bse-20181207-13",
+        "nse-archive-files"
+      ],
+      "unverified": [
+        "BFO"
+      ]
+    },
+    {
+      "date": "2019-10-02",
+      "name": "Mahatma Gandhi Jayanti",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-39612",
+        "nse-faop-39613",
+        "bse-20181207-13",
+        "nse-archive-files"
+      ],
+      "unverified": [
+        "BFO"
+      ]
+    },
+    {
+      "date": "2019-10-08",
+      "name": "Dasera",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-39612",
+        "nse-faop-39613",
+        "bse-20181207-13",
+        "nse-archive-files"
+      ],
+      "unverified": [
+        "BFO"
+      ]
+    },
+    {
+      "date": "2019-10-21",
+      "name": "Assembly Elections in Maharashtra",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-msd-42319",
+        "bse-20191007-25",
+        "nse-archive-files"
+      ],
+      "unverified": [
+        "BFO"
+      ],
+      "note": "NSE/MSD/42319 closes the CM, FO and CD segments; the NSE commodity segment kept its evening session. MCX is not recorded."
+    },
+    {
+      "date": "2019-10-27",
+      "name": "Diwali Laxmi Pujan (Muhurat trading)",
+      "closed": [],
+      "sessions": {
+        "NSE": [
+          "18:15",
+          "19:15"
+        ],
+        "BSE": [
+          "18:15",
+          "19:15"
+        ],
+        "NFO": [
+          "18:15",
+          "19:15"
+        ],
+        "BFO": [
+          "18:15",
+          "19:15"
+        ],
+        "CDS": [
+          "18:15",
+          "19:15"
+        ],
+        "BCD": [
+          "18:15",
+          "19:15"
+        ]
+      },
+      "sources": [
+        "nse-cmtr-42483",
+        "zerodha-muhurat-2019",
+        "nse-archive-files"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "NFO"
+      ],
+      "hours_unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "NFO"
+      ],
+      "note": "A Sunday. NSE capital market times from NSE/CMTR/42483; the other segments from a broker bulletin. MCX is not recorded."
+    },
+    {
+      "date": "2019-10-28",
+      "name": "Diwali-Balipratipada",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-39612",
+        "nse-faop-39613",
+        "bse-20181207-13",
+        "nse-archive-files"
+      ],
+      "unverified": [
+        "BFO"
+      ]
+    },
+    {
+      "date": "2019-11-12",
+      "name": "Gurunanak Jayanti",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-39612",
+        "nse-faop-39613",
+        "bse-20181207-13",
+        "nse-archive-files"
+      ],
+      "unverified": [
+        "BFO"
+      ]
+    },
+    {
+      "date": "2019-12-25",
+      "name": "Christmas",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-39612",
+        "nse-faop-39613",
+        "bse-20181207-13",
+        "nse-archive-files"
+      ],
+      "unverified": [
+        "BFO"
+      ]
+    }
+  ]
+}

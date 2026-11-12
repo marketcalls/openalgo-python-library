@@ -31,6 +31,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outputs use only data up to the current bar. The outputs that look ahead are
   `ichimoku` lagging span, both `fractals` outputs and the `ZigZag` class. A test
   across the whole library keeps this list complete.
+- **`openalgo.backtest.calendar` and `openalgo.backtest.resample` (preview).** Session
+  calendars for every OpenAlgo exchange with built-in holiday lists for 2019 to 2026,
+  dated regular hours (including the closing auction changes of 2026) and default
+  intraday entry and square-off times, each marked by how well it is sourced; a year
+  without a holiday list is reported as such, never treated as holiday-free.
+  `validate_intraday` catches series shifted by 5 hours 30 minutes, bars stamped at
+  their close, bars off the session lattice and bars on closed days. `resample_bars`
+  builds 5m, 15m, 1h, daily, weekly and monthly bars from 1-minute or daily bars on
+  the same lattice as Historify, and drops and counts bars outside the session. Part
+  of the backtest engine being built; the interface may change before the backtest
+  beta.
 - **`openalgo.backtest.costs` (preview).** Indian trading charges for NSE and BSE
   equity (delivery and intraday), NFO and BFO futures and options, and MCX futures:
   brokerage presets (`zerodha`, `flat`, `percent`, `zero_brokerage`, `custom`), STT or

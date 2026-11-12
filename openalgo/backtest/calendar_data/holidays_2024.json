@@ -1,0 +1,529 @@
+{
+  "format": 1,
+  "year": 2024,
+  "timezone": "Asia/Kolkata",
+  "coverage": {
+    "NSE": "sourced",
+    "NFO": "sourced",
+    "BSE": "unverified",
+    "BFO": "unverified"
+  },
+  "notes": [
+    "NSE holidays are the published list NSE/CMTR/59722 with three added holidays (NSE/CMTR/60338, 61518, 64960); NFO is NSE/FAOP/59723, and the three added holidays are assumed for NFO (their F&O circulars were not read). Both equal the weekdays without an NSE bhavcopy or index row.",
+    "BSE and BFO are assumed to follow NSE and are unverified. MCX, CDS and BCD have no 2024 holiday list: only dates a source states are recorded for them."
+  ],
+  "sources": {
+    "groww-2024-11-20": "https://groww.in/blog/bse-and-nse-to-remain-closed-on-wednesday-november-20-amid-maharashtra-elections",
+    "nse-bhavcopy": "NSE cash bhavcopy rows for RELIANCE, 2021-08-13 to 2023-01-10 and 2024-01-01 to 2024-11-11: every weekday without a row is a closure, read on 2026-11-12",
+    "nse-cmpt-60343": "NSE/CMPT/60343 settlement of the special live trading session of 2024-01-20: https://nsearchives.nseindia.com/content/circulars/CMPT60343.pdf",
+    "nse-cmtr-59722": "NSE/CMTR/59722 trading holidays 2024 (capital market): https://nsearchives.nseindia.com/content/circulars/CMTR59722.pdf",
+    "nse-cmtr-60338": "NSE/CMTR/60338 trading holiday on 2024-01-22: https://nsearchives.nseindia.com/content/circulars/CMTR60338.zip",
+    "nse-cmtr-61518": "NSE/CMTR/61518 trading holiday on 2024-05-20: https://nsearchives.nseindia.com/content/circulars/CMTR61518.pdf",
+    "nse-cmtr-64960": "NSE/CMTR/64960 trading holiday on 2024-11-20: https://nsearchives.nseindia.com/content/circulars/CMTR64960.pdf",
+    "nse-faop-59723": "NSE/FAOP/59723 trading holidays 2024 (futures and options): https://nsearchives.nseindia.com/content/circulars/FAOP59723.pdf",
+    "nse-index": "NSE Nifty 50 daily index history, 2024-10-07 to 2026-11-11: every weekday without a row is a closure, read on 2026-11-12",
+    "phonepe-2024-01-20": "https://www.phonepeinvest.com/blog/nse-bse-special-trading-session",
+    "upstox-muhurat-2024": "https://upstox.com/news/market-news/trading/muhurat-trading-2024-nse-bse-to-conduct-special-session-on-november-1-check-timings-and-other-key-details/article-123298",
+    "zerodha-2024-03-02": "https://zerodha.com/marketintel/bulletin/371327/live-trading-session-on-saturday-march-02-2024",
+    "zerodha-2024-05-18": "https://zerodha.com/marketintel/bulletin/377895/live-trading-session-on-saturday-may-18-2024"
+  },
+  "days": [
+    {
+      "date": "2024-01-20",
+      "name": "Special live trading session (full day)",
+      "closed": [],
+      "sessions": {
+        "NSE": [
+          "09:15",
+          "15:30"
+        ],
+        "BSE": [
+          "09:15",
+          "15:30"
+        ],
+        "NFO": [
+          "09:15",
+          "15:30"
+        ],
+        "BFO": [
+          "09:15",
+          "15:30"
+        ]
+      },
+      "sources": [
+        "nse-cmpt-60343",
+        "phonepe-2024-01-20"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE",
+        "NFO"
+      ],
+      "hours_unverified": [
+        "BFO",
+        "BSE",
+        "NFO",
+        "NSE"
+      ],
+      "note": "NSE clearing circular NCL/CMPT/60343 settles trades of this Saturday; the times come from a broker page."
+    },
+    {
+      "date": "2024-01-22",
+      "name": "Special holiday (Ram Mandir consecration)",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-60338",
+        "phonepe-2024-01-20"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE",
+        "NFO"
+      ]
+    },
+    {
+      "date": "2024-01-26",
+      "name": "Republic Day",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-59722",
+        "nse-faop-59723",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    },
+    {
+      "date": "2024-03-02",
+      "name": "Special live trading session (disaster recovery site)",
+      "closed": [],
+      "sessions": {
+        "NSE": [
+          "09:15",
+          "12:30"
+        ],
+        "BSE": [
+          "09:15",
+          "12:30"
+        ],
+        "NFO": [
+          "09:15",
+          "12:30"
+        ],
+        "BFO": [
+          "09:15",
+          "12:30"
+        ]
+      },
+      "sources": [
+        "zerodha-2024-03-02"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE",
+        "NFO",
+        "NSE"
+      ],
+      "hours_unverified": [
+        "BFO",
+        "BSE",
+        "NFO",
+        "NSE"
+      ],
+      "note": "Two sessions: 09:15 to 10:00 from the primary site and 11:30 to 12:30 from the disaster recovery site; one window is held (first open to last close)."
+    },
+    {
+      "date": "2024-03-08",
+      "name": "Mahashivratri",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-59722",
+        "nse-faop-59723",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    },
+    {
+      "date": "2024-03-25",
+      "name": "Holi",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-59722",
+        "nse-faop-59723",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    },
+    {
+      "date": "2024-03-29",
+      "name": "Good Friday",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-59722",
+        "nse-faop-59723",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    },
+    {
+      "date": "2024-04-11",
+      "name": "Id-Ul-Fitr (Ramadan Eid)",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-59722",
+        "nse-faop-59723",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    },
+    {
+      "date": "2024-04-17",
+      "name": "Shri Ram Navami",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-59722",
+        "nse-faop-59723",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    },
+    {
+      "date": "2024-05-01",
+      "name": "Maharashtra Day",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-59722",
+        "nse-faop-59723",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    },
+    {
+      "date": "2024-05-18",
+      "name": "Special live trading session (disaster recovery site)",
+      "closed": [],
+      "sessions": {
+        "NSE": [
+          "09:15",
+          "12:30"
+        ],
+        "BSE": [
+          "09:15",
+          "12:30"
+        ],
+        "NFO": [
+          "09:15",
+          "12:30"
+        ],
+        "BFO": [
+          "09:15",
+          "12:30"
+        ]
+      },
+      "sources": [
+        "zerodha-2024-05-18"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE",
+        "NFO",
+        "NSE"
+      ],
+      "hours_unverified": [
+        "BFO",
+        "BSE",
+        "NFO",
+        "NSE"
+      ],
+      "note": "Sources disagree on the second session (11:30 to 12:30 on the cited page, other reports 11:45 to 12:40 or later)."
+    },
+    {
+      "date": "2024-05-20",
+      "name": "General Parliamentary Elections (Mumbai)",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-61518",
+        "groww-2024-11-20"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE",
+        "NFO"
+      ]
+    },
+    {
+      "date": "2024-06-17",
+      "name": "Bakri Id",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-59722",
+        "nse-faop-59723",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    },
+    {
+      "date": "2024-07-17",
+      "name": "Moharram",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-59722",
+        "nse-faop-59723",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    },
+    {
+      "date": "2024-08-15",
+      "name": "Independence Day",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-59722",
+        "nse-faop-59723",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    },
+    {
+      "date": "2024-10-02",
+      "name": "Mahatma Gandhi Jayanti",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-59722",
+        "nse-faop-59723",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    },
+    {
+      "date": "2024-11-01",
+      "name": "Diwali Laxmi Pujan (Muhurat trading)",
+      "closed": [],
+      "sessions": {
+        "NSE": [
+          "18:00",
+          "19:00"
+        ],
+        "BSE": [
+          "18:00",
+          "19:00"
+        ],
+        "NFO": [
+          "18:00",
+          "19:00"
+        ],
+        "BFO": [
+          "18:00",
+          "19:00"
+        ],
+        "CDS": [
+          "18:00",
+          "19:00"
+        ],
+        "BCD": [
+          "18:00",
+          "19:00"
+        ]
+      },
+      "sources": [
+        "nse-cmtr-59722",
+        "nse-faop-59723",
+        "upstox-muhurat-2024",
+        "nse-index"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS"
+      ],
+      "hours_unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "NFO",
+        "NSE"
+      ],
+      "note": "A trading holiday with an evening session, listed in the NSE circulars. The times come from a news page. MCX is not recorded."
+    },
+    {
+      "date": "2024-11-15",
+      "name": "Gurunanak Jayanti",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-59722",
+        "nse-faop-59723",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    },
+    {
+      "date": "2024-11-20",
+      "name": "Maharashtra Assembly Elections",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-64960",
+        "groww-2024-11-20",
+        "nse-index"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE",
+        "MCX",
+        "NFO"
+      ],
+      "note": "MCX: morning session closed, evening session open (news page)."
+    },
+    {
+      "date": "2024-12-25",
+      "name": "Christmas",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-59722",
+        "nse-faop-59723",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    }
+  ]
+}

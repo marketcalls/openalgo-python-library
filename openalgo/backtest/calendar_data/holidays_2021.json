@@ -1,0 +1,433 @@
+{
+  "format": 1,
+  "year": 2021,
+  "timezone": "Asia/Kolkata",
+  "coverage": {
+    "NSE": "sourced",
+    "NFO": "sourced",
+    "BSE": "sourced",
+    "BFO": "unverified",
+    "MCX": "unverified"
+  },
+  "notes": [
+    "NSE, NFO and BSE holidays are the published lists (NSE/CMTR/46623, NSE/FAOP/46625, BSE notice 20201210-7). The NSE archive has no equity price file on exactly the 13 full holidays.",
+    "BFO is assumed to follow BSE. MCX is a data vendor table (mcxindia.com could not be read) and is unverified. CDS and BCD have no 2021 holiday list here.",
+    "On 2021-11-04 the MCX vendor table marks the evening open for Muhurat trading without its times; the regular evening session is recorded."
+  ],
+  "sources": {
+    "bse-20201210-7": "BSE notice 20201210-7, trading holidays 2021: https://www.bseindia.com/markets/MarketInfo/DispNewNoticesCirculars.aspx?page=20201210-7",
+    "legal500-muhurat-2021": "https://www.legal500.com/intelligence/india/finance-and-banking/trading-hours-and-muhurat-trading-on-deepavali-in-india",
+    "nse-archive-files": "NSE archive daily equity price files cmDDMONYYYYbhav.csv.zip for every date of 2019, 2020, 2021 and 2023 (present or absent), read on 2026-11-12",
+    "nse-cmtr-46623": "NSE/CMTR/46623 trading holidays 2021 (capital market): https://nsearchives.nseindia.com/content/circulars/CMTR46623.pdf",
+    "nse-cmtr-50050": "NSE/CMTR/50050 Muhurat trading 2021-11-04, normal market 18:15 to 19:15: https://nsearchives.nseindia.com/content/circulars/CMTR50050.pdf",
+    "nse-faop-46625": "NSE/FAOP/46625 trading holidays 2021 (futures and options): https://nsearchives.nseindia.com/content/circulars/FAOP46625.pdf",
+    "truedata-2021": "https://www.truedata.in/blog/list-of-nse-and-mcx-holidays-2021/ (fetched 2026-11-12)"
+  },
+  "days": [
+    {
+      "date": "2021-01-01",
+      "name": "New Year Day (MCX evening session closed)",
+      "closed": [],
+      "sessions": {
+        "MCX": [
+          "09:00",
+          "17:00"
+        ]
+      },
+      "sources": [
+        "truedata-2021"
+      ],
+      "unverified": [
+        "MCX"
+      ]
+    },
+    {
+      "date": "2021-01-26",
+      "name": "Republic Day",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "MCX"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-46623",
+        "nse-faop-46625",
+        "bse-20201210-7",
+        "nse-archive-files",
+        "truedata-2021"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2021-03-11",
+      "name": "Mahashivratri",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-46623",
+        "nse-faop-46625",
+        "bse-20201210-7",
+        "nse-archive-files",
+        "truedata-2021"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2021-03-29",
+      "name": "Holi",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-46623",
+        "nse-faop-46625",
+        "bse-20201210-7",
+        "nse-archive-files",
+        "truedata-2021"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2021-04-02",
+      "name": "Good Friday",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "MCX"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-46623",
+        "nse-faop-46625",
+        "bse-20201210-7",
+        "nse-archive-files",
+        "truedata-2021"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2021-04-14",
+      "name": "Dr. Baba Saheb Ambedkar Jayanti",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-46623",
+        "nse-faop-46625",
+        "bse-20201210-7",
+        "nse-archive-files",
+        "truedata-2021"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2021-04-21",
+      "name": "Ram Navami",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-46623",
+        "nse-faop-46625",
+        "bse-20201210-7",
+        "nse-archive-files",
+        "truedata-2021"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2021-05-13",
+      "name": "Id-Ul-Fitr (Ramzan ID)",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-46623",
+        "nse-faop-46625",
+        "bse-20201210-7",
+        "nse-archive-files",
+        "truedata-2021"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2021-07-21",
+      "name": "Bakri Id",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-46623",
+        "nse-faop-46625",
+        "bse-20201210-7",
+        "nse-archive-files",
+        "truedata-2021"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2021-08-19",
+      "name": "Moharram",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-46623",
+        "nse-faop-46625",
+        "bse-20201210-7",
+        "nse-archive-files",
+        "truedata-2021"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2021-09-10",
+      "name": "Ganesh Chaturthi",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-46623",
+        "nse-faop-46625",
+        "bse-20201210-7",
+        "nse-archive-files",
+        "truedata-2021"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2021-10-15",
+      "name": "Dussehra",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-46623",
+        "nse-faop-46625",
+        "bse-20201210-7",
+        "nse-archive-files",
+        "truedata-2021"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2021-11-04",
+      "name": "Diwali Laxmi Pujan (Muhurat trading)",
+      "closed": [],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ],
+        "NSE": [
+          "18:15",
+          "19:15"
+        ],
+        "BSE": [
+          "18:15",
+          "19:15"
+        ],
+        "NFO": [
+          "18:15",
+          "19:15"
+        ],
+        "BFO": [
+          "18:15",
+          "19:15"
+        ]
+      },
+      "sources": [
+        "truedata-2021",
+        "nse-cmtr-46623",
+        "nse-faop-46625",
+        "nse-cmtr-50050",
+        "legal500-muhurat-2021"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE",
+        "MCX"
+      ],
+      "hours_unverified": [
+        "BFO",
+        "BSE",
+        "NFO"
+      ],
+      "note": "A trading holiday with an evening session. NSE capital market times from NSE/CMTR/50050; the other segments from a secondary page."
+    },
+    {
+      "date": "2021-11-05",
+      "name": "Diwali-Balipratipada",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-46623",
+        "nse-faop-46625",
+        "bse-20201210-7",
+        "nse-archive-files",
+        "truedata-2021"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2021-11-19",
+      "name": "Gurunanak Jayanti",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-46623",
+        "nse-faop-46625",
+        "bse-20201210-7",
+        "nse-archive-files",
+        "truedata-2021"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    }
+  ]
+}

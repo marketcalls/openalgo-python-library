@@ -1,0 +1,465 @@
+{
+  "format": 1,
+  "year": 2023,
+  "timezone": "Asia/Kolkata",
+  "coverage": {
+    "NSE": "sourced",
+    "NFO": "sourced",
+    "BSE": "sourced",
+    "BFO": "unverified",
+    "MCX": "unverified"
+  },
+  "notes": [
+    "NSE, NFO and BSE holidays are the published lists (NSE/CMTR/54757 with NSE/CMTR/57285, NSE/FAOP/54759, BSE notices 20221208-31 and 20230627-2). The NSE archive has no equity price file on exactly these 15 weekdays.",
+    "BFO is assumed to follow BSE. MCX is a data vendor table and is unverified. CDS and BCD have no 2023 holiday list here.",
+    "The MCX vendor table still lists Bakri Id on 2023-06-28; whether MCX moved it to 2023-06-29 with the equity segments was not confirmed. The MCX Muhurat session of 2023-11-12 is not recorded."
+  ],
+  "sources": {
+    "bse-20221208-31": "BSE notice 20221208-31, trading holidays 2023: https://www.bseindia.com/markets/MarketInfo/DispNewNoticesCirculars.aspx?page=20221208-31",
+    "bse-20230627-2": "BSE notice 20230627-2, Bakri Id holiday moved to 2023-06-29: https://www.bseindia.com/markets/MarketInfo/DispNewNoticesCirculars.aspx?page=20230627-2",
+    "nse-archive-files": "NSE archive daily equity price files cmDDMONYYYYbhav.csv.zip for every date of 2019, 2020, 2021 and 2023 (present or absent), read on 2026-11-12",
+    "nse-cmtr-54757": "NSE/CMTR/54757 trading holidays 2023 (capital market): https://nsearchives.nseindia.com/content/circulars/CMTR54757.pdf",
+    "nse-cmtr-57285": "NSE/CMTR/57285 Bakri Id holiday moved from 2023-06-28 to 2023-06-29: https://nsearchives.nseindia.com/content/circulars/CMTR57285.zip",
+    "nse-faop-54759": "NSE/FAOP/54759 trading holidays 2023 (futures and options), original list: https://nsearchives.nseindia.com/content/circulars/FAOP54759.pdf",
+    "truedata-2023": "https://www.truedata.in/blog/list-of-nse-bse-and-mcx-trading-holidays-in-2023 (fetched 2026-11-12)",
+    "truedata-muhurat-2023": "https://www.truedata.in/blog/muhurat-trading-2023"
+  },
+  "days": [
+    {
+      "date": "2023-01-26",
+      "name": "Republic Day",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "MCX"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-54757",
+        "nse-faop-54759",
+        "bse-20221208-31",
+        "nse-archive-files",
+        "truedata-2023"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2023-03-07",
+      "name": "Holi",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-54757",
+        "nse-faop-54759",
+        "bse-20221208-31",
+        "nse-archive-files",
+        "truedata-2023"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2023-03-30",
+      "name": "Ram Navami",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-54757",
+        "nse-faop-54759",
+        "bse-20221208-31",
+        "nse-archive-files",
+        "truedata-2023"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2023-04-04",
+      "name": "Mahavir Jayanti",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-54757",
+        "nse-faop-54759",
+        "bse-20221208-31",
+        "nse-archive-files",
+        "truedata-2023"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2023-04-07",
+      "name": "Good Friday",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "MCX"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-54757",
+        "nse-faop-54759",
+        "bse-20221208-31",
+        "nse-archive-files",
+        "truedata-2023"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2023-04-14",
+      "name": "Dr. Baba Saheb Ambedkar Jayanti",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-54757",
+        "nse-faop-54759",
+        "bse-20221208-31",
+        "nse-archive-files",
+        "truedata-2023"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2023-05-01",
+      "name": "Maharashtra Day",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-54757",
+        "nse-faop-54759",
+        "bse-20221208-31",
+        "nse-archive-files",
+        "truedata-2023"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2023-06-28",
+      "name": "Bakri Id (MCX, as first listed)",
+      "closed": [],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "truedata-2023"
+      ],
+      "unverified": [
+        "MCX"
+      ]
+    },
+    {
+      "date": "2023-06-29",
+      "name": "Bakri Id",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-57285",
+        "bse-20230627-2",
+        "nse-archive-files"
+      ],
+      "unverified": [
+        "BFO",
+        "NFO"
+      ],
+      "note": "Moved from 2023-06-28 for the capital market by NSE/CMTR/57285 and BSE notice 20230627-2. NSE/FAOP/54759 lists 2023-06-28; the F&O change was not read, so NFO is assumed to follow the move."
+    },
+    {
+      "date": "2023-08-15",
+      "name": "Independence Day",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "MCX"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-54757",
+        "nse-faop-54759",
+        "bse-20221208-31",
+        "nse-archive-files",
+        "truedata-2023"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2023-09-19",
+      "name": "Ganesh Chaturthi",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-54757",
+        "nse-faop-54759",
+        "bse-20221208-31",
+        "nse-archive-files",
+        "truedata-2023"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2023-10-02",
+      "name": "Mahatma Gandhi Jayanti",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "MCX"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-54757",
+        "nse-faop-54759",
+        "bse-20221208-31",
+        "nse-archive-files",
+        "truedata-2023"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2023-10-24",
+      "name": "Dussehra",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-54757",
+        "nse-faop-54759",
+        "bse-20221208-31",
+        "nse-archive-files",
+        "truedata-2023"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2023-11-12",
+      "name": "Diwali Laxmi Pujan (Muhurat trading)",
+      "closed": [],
+      "sessions": {
+        "NSE": [
+          "18:15",
+          "19:15"
+        ],
+        "BSE": [
+          "18:15",
+          "19:15"
+        ],
+        "NFO": [
+          "18:15",
+          "19:15"
+        ],
+        "BFO": [
+          "18:15",
+          "19:15"
+        ]
+      },
+      "sources": [
+        "nse-cmtr-54757",
+        "truedata-muhurat-2023",
+        "nse-archive-files"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE",
+        "NFO"
+      ],
+      "hours_unverified": [
+        "BFO",
+        "BSE",
+        "NFO",
+        "NSE"
+      ],
+      "note": "A Sunday listed with Muhurat trading in NSE/CMTR/54757; the NSE archive has a price file for it. The times come from a data vendor page. MCX is not recorded."
+    },
+    {
+      "date": "2023-11-14",
+      "name": "Diwali-Balipratipada",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-54757",
+        "nse-faop-54759",
+        "bse-20221208-31",
+        "nse-archive-files",
+        "truedata-2023"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2023-11-27",
+      "name": "Gurunanak Jayanti",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-54757",
+        "nse-faop-54759",
+        "bse-20221208-31",
+        "nse-archive-files",
+        "truedata-2023"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2023-12-25",
+      "name": "Christmas",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "MCX"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-54757",
+        "nse-faop-54759",
+        "bse-20221208-31",
+        "nse-archive-files",
+        "truedata-2023"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    }
+  ]
+}
