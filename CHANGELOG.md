@@ -66,7 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`openalgo.backtest.backtest` and `openalgo.backtest.Strategy` (early preview).** The
   backtest kernel runs a strategy class through the Rust event loop and returns
   fills, positions, equity, trades and events as DataFrames. The entries below cover
-  each part. What is not built yet (the futures roll, walk-forward, `bt.live`) raises
+  each part. What is not built yet (walk-forward, `bt.live`) raises
   `NotImplementedError` naming its phase.
 - **Strategy and session risk rules in `bt.backtest` (early preview).** `max_daily_loss`
   measures the day's loss on `risk_basis` as the realized P&L of the strategy's runs
@@ -206,6 +206,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the source has it, else the contract's own close that day (said in the
   Assumptions). It still asks when the data has neither, and refuses a tick that would
   change during the run.
+- **Scale-in limits in `bt.backtest` (preview).** `max_adds`, `max_position` (units,
+  lots, rupees of value or percent of equity), `min_spacing` (base bars, or a price
+  distance in points, percent or ticks), `max_risk` (rupees or percent of equity) and
+  `allow_averaging_down` (default False) are checked on every add, at the decision
+  price, after the cooldown and maximum positions; a broken limit rejects the add
+  with code `scale_in_limit`. An entry from flat is never held to them. A class-level
+  `leverage` is the default of every order; `leverage=` on an order wins.
+- **No strategy setting or run argument is accepted and then ignored.** Each one
+  works, warns when it cannot apply to the run (`pyramiding` on an `on_bar`
+  strategy, intraday times on a delivery run, `client=` given with own data) or
+  raises; a test pins the audited lists. The Assumptions block states `entry_from`,
+  `leverage`, the scale-in limits, and the intraday times as they applied over the
+  whole run (one time, the rule they follow, or dated periods). Own data with naive
+  timestamps and `tz=` gives the run its dates; epoch numbers with `unit=` are UTC
+  and need no `tz=`. Every Result table keeps its columns when it has no rows.
 - **`openalgo.backtest.metrics` and `openalgo.backtest.report` (preview).** Performance
   metrics computed in the Rust core (returns, CAGR on calendar time, volatility, Sharpe
   and Sortino with a per-session risk-free rate, drawdowns, Calmar, exposure, trade
@@ -275,6 +290,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Backtest preview: adding to a losing position is refused unless the strategy sets
+  `allow_averaging_down = True`; `state` as a class attribute raises `ConfigError`
+  (use `self.state`); `after_risk_exit="allow_reentry"` raises `NotImplementedError`
+  until the combined risk rules it governs are built; `roll=1` is the default of
+  `bt.backtest`.
 - `closeposition()` and `cancelallorder()` are documented as what they are:
   account-wide. The server squares off every open position, or cancels every open
   order, of the account that owns the API key; the `strategy` argument is a label
