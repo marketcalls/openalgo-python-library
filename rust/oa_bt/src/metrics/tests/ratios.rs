@@ -61,6 +61,15 @@ fn a_flat_series_has_zero_volatility_and_no_sharpe_or_sortino() {
 }
 
 #[test]
+fn equal_nonzero_returns_have_no_deviation_whatever_their_mean_rounds_to() {
+    // The mean of three 0.01 returns is a rounding unit away from 0.01; the deviation is
+    // still exactly zero, so Sharpe stays undefined instead of enormous.
+    let stats = return_stats(&[0.01, 0.01, 0.01], 249.0, 0.0).unwrap();
+    assert_eq!(stats.volatility, 0.0);
+    assert!(stats.sharpe.is_nan());
+}
+
+#[test]
 fn a_series_with_no_shortfall_has_an_infinite_sortino() {
     let stats = return_stats(&[0.01, 0.02], 249.0, 0.0).unwrap();
     assert_eq!(stats.sortino, f64::INFINITY);

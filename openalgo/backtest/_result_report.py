@@ -6,7 +6,8 @@ The kernel's tables are turned into the inputs `metrics.analyse` documents:
     equity   the equity series in rupees, indexed by the IST close of each slice. Its
              first point, the close of the first slice, can already hold P&L (an order
              a timer places at the first open fills there), so every point is a mark
-             and the run's capital is passed as the opening wealth
+             and the run's capital is passed as the opening wealth, with the open of
+             the first slice as the opening time
     trades   one row per round trip: closed trades from the kernel's trades table, and
              each position still open at the end as an open trade (exit_time NaT) priced
              at its average price, so that exposure and turnover count it. Side is the
@@ -23,8 +24,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from ._calendar_convert import interval_nanos
 from ._result_costs import open_charges, trade_charges
 from ._series import IST
+from .errors import BacktestError
 from .report import tearsheet as render_tearsheet
 from .report._performance import Performance
 
@@ -119,6 +122,39 @@ def equity_series(equity: pd.DataFrame) -> pd.Series:
     return equity["equity_rupees"].rename("equity")
 
 
+def slice_returns(equity: pd.Series, capital: float) -> pd.Series:
+    """Simple returns of an equity series slice to slice, the first slice measured
+    from the capital (the equity before it)."""
+    before = equity.shift(1).fillna(capital)
+    return (equity / before - 1.0).rename("returns")
+
+
+def opening_time(first_close_ns: int, base: str, exchange: str, calendar: Any) -> int | None:
+    """UTC nanoseconds of the open of the run's first slice, the instant the run opened
+    with its capital; None without the run's calendar.
+
+    A slice is one base bar on the session grid: with the "D" base the whole session,
+    so it opens at the session's open; with an intraday base of step `s` it is the bar
+    whose slot holds its close, so it opens at `open + floor((close - 1 - open) / s) s`
+    (a session's last bar may be shorter than a step). Raises BacktestError when the
+    first close is not in a session of the calendar, which a run never produces.
+    """
+    if calendar is None:
+        return None
+    day = pd.Timestamp(first_close_ns, tz="UTC").tz_convert(IST).date()
+    session = calendar.session(exchange, day)
+    if session is None:
+        raise BacktestError(
+            f"the run's first slice closes on {day}, which is not a {exchange} session of "
+            "its calendar: the result does not match the calendar it was run on"
+        )
+    session_open = int(session[0])
+    step = interval_nanos(base)
+    if step is None:
+        return session_open
+    return session_open + ((first_close_ns - 1 - session_open) // step) * step
+
+
 @dataclass(frozen=True)
 class Report:
     """What the tearsheet reads: the performance, a title and the assumption lines."""
@@ -128,9 +164,18 @@ class Report:
     assumptions: list[str]
 
 
-def tearsheet(report: Report, path: str | None) -> str:
-    """The HTML tearsheet of a run (returned, or written to `path`)."""
-    return render_tearsheet(report, path)
+def tearsheet(report: Report, path: str | None, mode: str, log_scale: bool) -> str:
+    """The HTML tearsheet of a run in `mode` (returned, or written to `path`)."""
+    return render_tearsheet(report, path, mode=mode, log_scale=log_scale)
 
 
-__all__ = ["Report", "closed_trades", "equity_series", "open_trades", "tearsheet", "trades_table"]
+__all__ = [
+    "Report",
+    "closed_trades",
+    "equity_series",
+    "open_trades",
+    "opening_time",
+    "slice_returns",
+    "tearsheet",
+    "trades_table",
+]

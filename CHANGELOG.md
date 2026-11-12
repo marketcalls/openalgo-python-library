@@ -188,6 +188,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   report with inline charts that follows the reader's light or dark setting and needs
   no plotting package. Part of the backtest engine being built; the interface may
   change before the backtest beta.
+- **Complete performance reporting in `openalgo.backtest` (preview).** Every figure is
+  computed in the Rust core and defined, with its source, in `metrics.DEFINITIONS`:
+  smart, adjusted and probabilistic Sharpe and Sortino, the autocorrelation penalty,
+  Omega, gain to pain, the risk-return ratio, return over exposure, ulcer index,
+  ulcer performance index, serenity index, recovery factor; the distribution of
+  session returns (expected and average return, best and worst session, month and
+  year, session win rate and streaks, skew, excess kurtosis, historical value at risk,
+  expected shortfall, conditional drawdown, tail and outlier ratios); trade ratios
+  (win/loss count ratio, Kelly criterion, risk of ruin as the Lundberg bound, CPC
+  index, common sense ratio); and against a benchmark R squared, tracking error,
+  information ratio and Treynor ratio. `Performance` adds `wealth`,
+  `drawdown_episodes` with `drawdown_details(top)`, `rolling` (volatility, Sharpe,
+  Sortino, win rate and beta over a window of sessions, `rolling_window=`), `horizons`
+  (1M, 3M, 6M, 1Y, 3Y, 5Y and since start), `losing_streaks`, `benchmark_returns` and
+  `benchmark_comparison(period)`. `metrics.monte_carlo()` resamples session returns or
+  trades with a seeded generator (the same seed gives the same simulations on every
+  platform) and reports the percentiles of final return, CAGR, maximum drawdown and
+  Sharpe, a cumulative-return band and the share of paths that reach a bust or goal
+  level. `report.tearsheet(..., mode=)` renders a "full", "basic", "metrics" or
+  "charts" page, still self-contained (inline SVG, no script, no external URL), with
+  the new charts: cumulative return against the benchmark (`log_scale=True` for a log
+  axis), session return bars, return distribution by period and its histogram, the
+  longest drawdowns shaded on the equity curve, rolling statistics and Monte Carlo.
+  `report.metrics_table()` gives the metrics as a DataFrame; `Result.tearsheet(path,
+  mode=, log_scale=)`, `Result.metrics_table()` and `Result.monte_carlo()` do the same
+  for a run. `analyse(..., opening_time=)` passes the instant the run opened with its
+  capital: the start, elapsed time and CAGR are counted from it, exposure counts the
+  first slice, and a drawdown from the opening is timed from it; `Result.performance`
+  passes the open of the run's first slice. Every drawdown figure is now zero or
+  negative: `max_drawdown_amount` changed sign (a fall of 500 rupees is -500, as
+  `max_drawdown` is a negative fraction). `Result.returns` measures the first slice
+  from the capital instead of reporting 0. Equal returns now have a standard
+  deviation of exactly 0, so Sharpe is undefined rather than enormous when a series
+  of equal nonzero returns averages to a rounding unit away from them.
 - **`openalgo.backtest.costs` (preview).** Indian trading charges for NSE and BSE
   equity (delivery and intraday), NFO and BFO futures and options, and MCX futures:
   brokerage presets (`zerodha`, `flat`, `percent`, `zero_brokerage`, `custom`), STT or

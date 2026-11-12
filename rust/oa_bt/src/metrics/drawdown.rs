@@ -14,12 +14,16 @@
 //!   peak. An episode still open at the last point is unrecovered. Its trough is its
 //!   deepest point (the first one on a tie) and its depth is the drawdown there.
 //! - Duration: from the peak to the recovery, or to the last point when unrecovered,
-//!   in nanoseconds of elapsed time. The opening has no time of its own, so an episode
-//!   that starts there is timed from the first point.
+//!   in nanoseconds of elapsed time. An episode that starts at the opening is timed from
+//!   the opening time when the caller gives one (the instant the run opened with its
+//!   capital), and otherwise from the first point.
 //! - Maximum drawdown: the episode with the lowest depth (the first one on a tie).
 //! - Longest drawdown: the episode with the longest duration (the first one on a tie).
+//! - Episodes: every episode in the order they start, the last one possibly
+//!   unrecovered; the drawdown details table ranks them.
 //! - Maximum drawdown amount: the largest fall of cumulative P&L from its running
-//!   peak (0 at the opening), in rupees (cash flows excluded), zero or positive.
+//!   peak (0 at the opening), in rupees (cash flows excluded), zero or negative like
+//!   every drawdown: a fall of 500 rupees is -500.
 
 use crate::model::TsNanos;
 
@@ -40,8 +44,8 @@ pub struct DrawdownEpisode {
     pub recovery: Option<usize>,
     /// Drawdown at the trough, a fraction in `[-1, 0)`.
     pub depth: f64,
-    /// Elapsed time from the peak (the first point when the peak is the opening) to the
-    /// recovery or the last point, in nanoseconds.
+    /// Elapsed time from the peak (the opening time, or the first point without one,
+    /// when the peak is the opening) to the recovery or the last point, in nanoseconds.
     pub duration: TsNanos,
 }
 
@@ -54,20 +58,29 @@ pub struct Drawdowns {
     pub max: Option<DrawdownEpisode>,
     /// The longest episode, or `None` when the index never falls below its peak.
     pub longest: Option<DrawdownEpisode>,
-    /// The largest fall of cumulative P&L from its running peak, in rupees.
+    /// Every episode, in the order they start.
+    pub episodes: Vec<DrawdownEpisode>,
+    /// The largest fall of cumulative P&L from its running peak, in rupees, zero or
+    /// negative.
     pub max_amount: f64,
 }
 
 struct Tracker<'a> {
     ts: &'a [TsNanos],
+    opening_time: Option<TsNanos>,
     max: Option<DrawdownEpisode>,
     longest: Option<DrawdownEpisode>,
+    episodes: Vec<DrawdownEpisode>,
 }
 
 impl Tracker<'_> {
     fn close(&mut self, mut episode: DrawdownEpisode, end: usize) {
         let at = |i: usize| self.ts.get(i).copied().unwrap_or(0);
-        episode.duration = at(end).saturating_sub(at(episode.peak.unwrap_or(0)));
+        let start = match episode.peak {
+            Some(peak) => at(peak),
+            None => self.opening_time.unwrap_or_else(|| at(0)),
+        };
+        episode.duration = at(end).saturating_sub(start);
         if self.max.map_or(true, |max| episode.depth < max.depth) {
             self.max = Some(episode);
         }
@@ -77,20 +90,30 @@ impl Tracker<'_> {
         {
             self.longest = Some(episode);
         }
+        self.episodes.push(episode);
     }
 }
 
 /// The drawdowns of the wealth index `wealth` stamped `ts`, and the largest rupee fall
 /// of the cumulative P&L `pnl` (definitions in the module docs). Both are measured from
-/// the opening (index 1, P&L 0), as `curve::wealth` returns them. The three slices are
-/// read up to the shortest of them. An empty series has no drawdown.
-pub fn drawdowns(ts: &[TsNanos], wealth: &[f64], pnl: &[f64]) -> Drawdowns {
+/// the opening (index 1, P&L 0), as `curve::wealth` returns them. `opening_time` is the
+/// UTC nanosecond instant of the opening, which times an episode that starts there;
+/// `None` times it from the first point. The three slices are read up to the shortest
+/// of them. An empty series has no drawdown.
+pub fn drawdowns(
+    ts: &[TsNanos],
+    wealth: &[f64],
+    pnl: &[f64],
+    opening_time: Option<TsNanos>,
+) -> Drawdowns {
     let n = ts.len().min(wealth.len());
     let mut series = Vec::with_capacity(n);
     let mut tracker = Tracker {
         ts,
+        opening_time,
         max: None,
         longest: None,
+        episodes: Vec::new(),
     };
     let mut open: Option<DrawdownEpisode> = None;
     let (mut peak, mut peak_index) = (OPENING_INDEX, None);
@@ -125,18 +148,20 @@ pub fn drawdowns(ts: &[TsNanos], wealth: &[f64], pnl: &[f64]) -> Drawdowns {
         series,
         max: tracker.max,
         longest: tracker.longest,
+        episodes: tracker.episodes,
         max_amount: max_fall(pnl),
     }
 }
 
 /// The largest fall of a cumulative P&L series from its running peak, which starts at
-/// the opening's 0; zero for a series that never falls below its peak or is empty.
+/// the opening's 0, as a negative amount; zero for a series that never falls below its
+/// peak or is empty.
 fn max_fall(values: &[f64]) -> f64 {
     let mut peak = OPENING_PNL;
     let mut fall: f64 = 0.0;
     for &value in values {
         peak = peak.max(value);
-        fall = fall.max(peak - value);
+        fall = fall.min(value - peak);
     }
     fall
 }

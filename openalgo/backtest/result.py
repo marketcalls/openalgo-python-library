@@ -6,7 +6,8 @@ instruments are named by symbol. Prices and money are rupees, quantities units.
 
 Built: `fills`, `orders`, `trades`, `equity`, `returns`, `positions` (the position
 history), `events`, `risk_events`, `stale_marks`, `final_positions`, `gross_pnl`,
-`costs`, `contract_notes`, `performance`, `metrics`, `tearsheet()`, `assumptions`,
+`costs`, `contract_notes`, `performance`, `metrics`, `metrics_table()`,
+`monte_carlo()`, `tearsheet()` (full, basic, metrics or charts), `assumptions`,
 `warnings`, `skipped`, `manifest` (see `_manifest`), `rerun()` (see `_rerun`),
 `to_dataframes()`. Not built yet: the several-strategy views `strategy()`, `combined`,
 `correlation` (Phase 3).
@@ -23,7 +24,8 @@ from . import _result_costs, _result_report
 from ._native import native
 from ._series import IST
 from .errors import BacktestError
-from .metrics import analyse
+from .metrics import MonteCarlo, analyse, monte_carlo
+from .report import _montecarlo, metrics_table
 from .report._performance import Performance
 
 
@@ -43,8 +45,10 @@ class Result:
         skipped: list[tuple],
         manifest: dict[str, Any],
         record: Any = None,
+        calendar: Any = None,
     ) -> None:
         self._output = output
+        self._calendar = calendar
         self._symbols = symbols
         self._assumptions = assumptions
         schedules = manifest.get("cost_schedules", [])
@@ -98,8 +102,10 @@ class Result:
 
     @property
     def returns(self) -> pd.Series:
-        """Simple returns of the equity series, slice to slice."""
-        return self.equity["equity_rupees"].pct_change().fillna(0.0).rename("returns")
+        """Simple returns of the equity series, slice to slice; the first slice is
+        measured from the capital, so the P&L made in it counts."""
+        capital = self._manifest["arguments"]["capital"]
+        return _result_report.slice_returns(self.equity["equity_rupees"], capital)
 
     @property
     def events(self) -> pd.DataFrame:
@@ -203,13 +209,24 @@ class Result:
     def performance(self) -> Performance:
         """Every metric of the run (`openalgo.backtest.metrics.analyse`) over its equity
         series and trades, annualised by the traded exchange's calendar. The capital is
-        the opening wealth, so the P&L of the first slice and the return of the first
-        session count. Raises ConfigError when the run has no equity point."""
+        the opening wealth and the open of the first slice the opening time, so the P&L
+        of the first slice, the return of the first session and the time in the first
+        slice (elapsed time, CAGR, exposure) count. A result built without its run's
+        calendar times the opening at the first point. Raises ConfigError when the run
+        has no equity point."""
         trades = _result_report.trades_table(self._output, self._symbols)
         equity = _result_report.equity_series(self.equity)
-        exchange = self._manifest["arguments"]["exchange"]
-        capital = self._manifest["arguments"]["capital"]
-        return analyse(equity, exchanges=exchange, trades=trades, opening_wealth=capital)
+        arguments = self._manifest["arguments"]
+        exchange, capital = arguments["exchange"], arguments["capital"]
+        opening = None
+        if len(equity):
+            first = int(self._output["equity"]["ts"][0])
+            opening = _result_report.opening_time(
+                first, arguments["base"], exchange, self._calendar
+            )
+        return analyse(
+            equity, exchanges=exchange, trades=trades, opening_wealth=capital, opening_time=opening
+        )
 
     @property
     def metrics(self) -> Any:
@@ -217,15 +234,44 @@ class Result:
         `openalgo.backtest.metrics.DEFINITIONS`."""
         return self.performance.metrics
 
-    def tearsheet(self, path: str | None = None) -> str:
-        """The HTML tearsheet: returned as a string, or written to `path` (and the path
-        returned). Its Assumptions section lists the run's assumptions and every warning,
-        so a cost-free run says so on the report."""
+    def metrics_table(self) -> pd.DataFrame:
+        """Every metric as a DataFrame indexed by key: group, label, value, unit and
+        definition (`openalgo.backtest.report.metrics_table`)."""
+        return metrics_table(self.performance)
+
+    def monte_carlo(
+        self,
+        *,
+        simulations: int = _montecarlo.DEFAULT_SIMULATIONS,
+        seed: int = _montecarlo.DEFAULT_SEED,
+        resample: str = "sessions",
+        bust: float | None = None,
+        goal: float | None = None,
+    ) -> MonteCarlo:
+        """Monte Carlo by bootstrap of the run's session returns or closed trades
+        (`openalgo.backtest.metrics.monte_carlo`, which documents the arguments)."""
+        return monte_carlo(
+            self.performance,
+            simulations=simulations,
+            seed=seed,
+            resample=resample,
+            bust=bust,
+            goal=goal,
+        )
+
+    def tearsheet(
+        self, path: str | None = None, *, mode: str = "full", log_scale: bool = False
+    ) -> str:
+        """The HTML tearsheet in `mode` ("full", "basic", "metrics" or "charts"; see
+        `openalgo.backtest.report.tearsheet`): returned as a string, or written to `path`
+        (and the path returned). `log_scale` draws the cumulative return on a log scale.
+        Its Assumptions section lists the run's assumptions and every warning, so a
+        cost-free run says so on the report."""
         lines = [f"{key}: {value}" for key, value in self._assumptions.items()]
         lines += [f"warning: {text}" for text in self._warnings]
         name = self._manifest["strategy"]["name"]
         report = _result_report.Report(self.performance, name, lines)
-        return _result_report.tearsheet(report, path)
+        return _result_report.tearsheet(report, path, mode, log_scale)
 
     # ----- running again, and what is not built yet ----------------------------------
 

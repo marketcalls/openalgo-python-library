@@ -79,7 +79,7 @@ def test_a_fall_below_the_opening_wealth_is_a_drawdown_from_it():
     # 95 / 100 - 1 and 98 / 100 - 1; 105 is above the opening.
     assert result.drawdown.to_numpy() == pytest.approx([-0.05, -0.02, 0.0])
     assert m["max_drawdown"] == pytest.approx(-0.05)
-    assert m["max_drawdown_amount"] == pytest.approx(5.0)
+    assert m["max_drawdown_amount"] == pytest.approx(-5.0)
     # The peak is the opening, timed at the start; recovered at the Wednesday close.
     assert m["max_drawdown_peak"] == m["start"] == at("2025-06-02")
     assert m["max_drawdown_trough"] == at("2025-06-02")
