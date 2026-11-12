@@ -195,14 +195,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every switch with its spread. Trades are split at a roll (exit reason `roll`).
   Condition strategies on an underlying and other intervals of a futures series raise
   `NotImplementedError`.
-- **More futures margin in the dated table.** NSE stock futures (218 underlyings), BSE
-  BANKEX and the MCX commodities (30), each one day's observation of a broker's public
-  margin page and unverified, so a run using one warns. SENSEX and SENSEX50 futures have
-  no row yet (no public page read gave their margin) and still stop a run. A run whose
-  instrument has no margin row now stops before any data is loaded, with the engine's
-  message, instead of at its first entry.
-- **`margin=` in `bt.backtest` and `bt.optimize` (preview).** The futures margin of a
-  backtest can be the user's own: one value for every futures contract
+- **A missing margin rule stops a run before any data is loaded,** with the engine's
+  message, instead of at the first entry.
+- **Futures margin in backtests, and `margin=` in `bt.backtest` and `bt.optimize`
+  (preview).** Every futures contract, on any exchange, underlying and date, blocks 20
+  percent of its contract value (5x) by default, since real margins differ by underlying
+  and change every day; a run on the default does not warn, and the Assumptions block
+  states it. The futures margin of a backtest can be the user's own: one value for every
+  futures contract
   (`margin=bt.pct(15)`), or a dict by underlying symbol (`margin={"NIFTY": bt.pct(12),
   "CRUDEOIL": bt.rupees(450_000)}`) whose missing names keep the default. `bt.pct(x)` is
   x percent of the contract value (at most 100); `bt.rupees(x)` is x rupees per lot of
@@ -409,16 +409,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Bar`, the argument of `on_bar`, is now an immutable named tuple that also carries
   `ts_open` and `ts_close` (UTC nanoseconds), and makes `time` and `close_time` when
   they are read. `benchmark/backtest_speed.py --check` checks the speed targets.
-- **Backtest preview: futures margin is 20 percent of contract value (5x) by default.**
-  The per-underlying futures rows of the dated margin table (NSE index and stock futures,
-  NIFTYFPI, BSE BANKEX and the MCX commodities, each one day's observation of a broker's
-  page) are removed, since real margins differ by underlying and change every day. Every
-  futures contract, on any exchange and underlying and on any date, now blocks 20 percent
-  of its contract value unless `margin=` says otherwise, so SENSEX, SENSEX50 and every
-  other underlying have a margin and no longer stop a run. A run on the default does not
-  warn: the row's status is `default` and the Assumptions block states it. Futures runs
-  block a different margin wherever the old row was not 20 percent, and with it free
-  cash can allow different entries.
 - `closeposition()` and `cancelallorder()` are documented as what they are:
   account-wide. The server squares off every open position, or cancels every open
   order, of the account that owns the API key; the `strategy` argument is a label

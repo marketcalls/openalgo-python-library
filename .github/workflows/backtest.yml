@@ -15,6 +15,12 @@ on:
       - 'test/backtest/**'
       - 'examples/backtest_quickstart.py'
       - '.github/workflows/backtest.yml'
+      # Dependency, build and lint settings change what the gate checks.
+      - 'rust/Cargo.toml'
+      - 'rust/Cargo.lock'
+      - 'rust/oa_bt/Cargo.toml'
+      - 'rust/oa_py/Cargo.toml'
+      - 'pyproject.toml'
   workflow_dispatch:
 
 permissions:
