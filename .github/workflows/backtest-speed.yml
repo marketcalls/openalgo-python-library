@@ -18,7 +18,7 @@ env:
   # The targets were set on a current desktop core. A shared runner's core is slower and
   # its speed varies with the jobs next to it, so here the rate target is divided and the
   # time targets are multiplied by this factor (--slack): at least 150k callbacks per
-  # second, the 1M-bar run within 3 seconds, a round trip within 100 microseconds. The
+  # second, the 1M-bar run within 4 seconds, a round trip within 100 microseconds. The
   # linearity ratio compares two runs on the same machine and is not relaxed.
   SPEED_SLACK: '2'
 

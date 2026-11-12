@@ -298,8 +298,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Backtest speed.** A run's time no longer grows with its bars times its orders (every
   slice walked every order and GTT of the run) nor with its bars times its months (the
   data hash); results are unchanged bit for bit. An event strategy makes about 550k
-  `on_bar` calls a second (was about 115k) and an array strategy over 1M one-minute bars
-  with charges, slippage and every metric runs in about 1.1 seconds (was about 10.6).
+  `on_bar` calls a second (was about 120k) and an array strategy over 1M one-minute bars
+  with charges, slippage and every metric runs in 1.1 to 1.5 seconds (was about 10.6).
   `Bar`, the argument of `on_bar`, is now an immutable named tuple that also carries
   `ts_open` and `ts_close` (UTC nanoseconds), and makes `time` and `close_time` when
   they are read. `benchmark/backtest_speed.py --check` checks the speed targets.
