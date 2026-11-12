@@ -109,6 +109,47 @@ run function yet.
 | `openalgo/backtest/` | Python package: costs, calendar, resample, data layer, reference tables. `import openalgo` does not import it |
 | `test/backtest/` | pytest suite. It never contacts a server; anything that needs a client uses an in-process fake |
 
+### Product decisions (set by the maintainer)
+
+These are settled. Do not redesign around them without asking.
+
+- **Two run modes only: `bt.backtest` and `bt.live`.** There is no paper verb. The same
+  strategy class runs in both.
+- **Sandbox or live is chosen inside OpenAlgo, never in code.** The analyzer switch in
+  OpenAlgo is the only control. The engine never calls `analyzertoggle` and no run call
+  takes a mode argument or a live confirmation flag. `bt.live` reads the mode at start,
+  shows it first in its start banner, and stops entering if the switch changes during
+  a session. `capital` and `max_daily_loss` stay mandatory: they are risk limits, not
+  mode control.
+- **GTT orders for positional trades.** In Indian markets every pending order is
+  cancelled the same day, except a GTT. So ordinary orders are DAY orders at every
+  strategy interval, and anything that must rest overnight on a CNC or NRML position
+  (a stop, a target, a resting entry) is a GTT: SINGLE for one trigger, OCO for a stop
+  with a target. Backtests model a GTT the way it works (a trigger, then a child order
+  that may not fill on a gap), and live sends it through the SDK's GTT calls. MIS
+  cannot hold a GTT.
+- **Reports are built in.** The engine does not depend on openstatz or on any plotting
+  or market-data download package. The metrics and tearsheets it needs live in
+  `openalgo` itself.
+- **Data comes from OpenAlgo or from the user.** Broker history and Historify through
+  the SDK, or the user's own DataFrames and files with no server at all. No third-party
+  market-data downloader is bundled.
+- **Live bars are typed by how they were made.** A bar type is the instrument, the
+  step, the aggregation, the price type and the source. Internal bars are built by the
+  engine from WebSocket ticks (the default); external bars are the broker's candles.
+  Time bars are stamped at their close.
+- **Indicators come only from `openalgo.ta`.** Outputs that look ahead are listed in
+  `openalgo.indicators.causality` and are rejected in strategies.
+- **Indian market rules are the default.** Charges, slippage, lot size, tick size,
+  freeze quantity and session times apply without being asked for. Quantity is always
+  in units, never lots.
+- **One Rust kernel, Python on top.** Backtest and live share the same kernel and the
+  same rules; Python declares, Rust executes.
+
+Working agreement for this build: work is committed and pushed to the
+`feat/backtest-engine` branch in verified units, and the `## [Unreleased]` section of
+`CHANGELOG.md` is kept current with each of them.
+
 ### Code standards for the backtest package
 
 These apply to every change under the four paths above.
