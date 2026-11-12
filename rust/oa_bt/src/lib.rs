@@ -11,6 +11,8 @@
 
 pub mod data;
 pub mod market;
+#[cfg(feature = "metrics")]
+pub mod metrics;
 pub mod model;
 
 /// Version of the kernel, reported in run manifests.

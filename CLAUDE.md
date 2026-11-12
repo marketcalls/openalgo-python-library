@@ -116,9 +116,9 @@ run function yet.
 
 | Path | Responsibility |
 |------|----------------|
-| `rust/oa_bt/` | Zero-dependency Rust kernel crate: `model` (shared types and IST time helpers), `market` (costs, calendars), `data` (resampling) |
+| `rust/oa_bt/` | Zero-dependency Rust kernel crate: `model` (shared types and IST time helpers), `market` (costs, calendars), `data` (resampling), `metrics` (performance metrics) |
 | `rust/oa_py/src/backtest/` | PyO3 bindings, one file per area, exposed as `openalgo._oaindicators.backtest` |
-| `openalgo/backtest/` | Python package: costs, calendar, resample, data layer, reference tables. `import openalgo` does not import it |
+| `openalgo/backtest/` | Python package: costs, calendar, resample, data layer, reference tables, metrics and the HTML tearsheet (`report`). `import openalgo` does not import it |
 | `test/backtest/` | pytest suite. It never contacts a server; anything that needs a client uses an in-process fake |
 
 ### Product decisions (set by the maintainer)

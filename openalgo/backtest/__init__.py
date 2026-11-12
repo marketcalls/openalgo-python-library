@@ -11,7 +11,16 @@ network call is made on import.
 
 from importlib import import_module as _import_module
 
-_SUBMODULES = ("calendar", "costs", "data", "errors", "reference", "resample")
+_SUBMODULES = (
+    "calendar",
+    "costs",
+    "data",
+    "errors",
+    "metrics",
+    "reference",
+    "report",
+    "resample",
+)
 
 __all__ = list(_SUBMODULES)
 

@@ -63,6 +63,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The tables reproduce the listed contracts, last trading days and lot sizes of 92
   days of NSE and BSE bhavcopies. Part of the backtest engine being built; the
   interface may change before the backtest beta.
+- **`openalgo.backtest.metrics` and `openalgo.backtest.report` (preview).** Performance
+  metrics computed in the Rust core (returns, CAGR on calendar time, volatility, Sharpe
+  and Sortino with a per-session risk-free rate, drawdowns, Calmar, exposure, trade
+  statistics, costs, turnover, monthly and yearly returns, benchmark alpha, beta and
+  correlation), annualised with the real number of sessions per year from the session
+  calendar. Several strategies combine into one equity curve with a correlation
+  matrix. `report.tearsheet()` writes a self-contained HTML report with inline charts
+  that follows the reader's light or dark setting and needs no plotting package. Part
+  of the backtest engine being built; the interface may change before the backtest
+  beta.
 - **`openalgo.backtest.costs` (preview).** Indian trading charges for NSE and BSE
   equity (delivery and intraday), NFO and BFO futures and options, and MCX futures:
   brokerage presets (`zerodha`, `flat`, `percent`, `zero_brokerage`, `custom`), STT or

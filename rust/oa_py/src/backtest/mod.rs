@@ -8,6 +8,7 @@ use pyo3::prelude::*;
 
 mod calendar;
 mod costs;
+mod metrics;
 mod resample;
 
 /// Version of the Rust kernel (recorded in run manifests).
@@ -22,6 +23,7 @@ pub fn register(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     costs::register(&m)?;
     calendar::register(&m)?;
     resample::register(&m)?;
+    metrics::register(&m)?;
     parent.add_submodule(&m)?;
     Ok(())
 }
