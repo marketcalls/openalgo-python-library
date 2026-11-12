@@ -1,0 +1,23 @@
+[package]
+name = "oa_bt"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Backtest and execution kernel for OpenAlgo: Indian market model, costs, calendars, data and the event engine."
+license = "MIT"
+publish = false
+
+[lib]
+name = "oa_bt"
+
+[features]
+# Each area is a default-on feature so one area can be compiled and tested alone:
+#   cargo test -p oa_bt --no-default-features --features costs
+default = ["costs", "time"]
+costs = []
+time = []
+
+[dependencies]
+# Intentionally zero runtime dependencies, like oa_core: fast to compile, simple to
+# audit, and `cargo test`-able without a Python toolchain. India has one fixed UTC
+# offset (+05:30, no daylight saving), so no time zone database is needed.

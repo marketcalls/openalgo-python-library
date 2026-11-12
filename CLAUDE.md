@@ -71,6 +71,65 @@ Always confirm analyze mode before placing test orders. Note: simulated MARKET o
 need a live price, so they fail when the market is closed (use LIMIT for testing on
 holidays).
 
+## Backtest package (`openalgo.backtest`, in progress)
+
+A backtesting, paper and live trading engine for Indian markets is being built inside
+the SDK. Only the foundations exist so far; there is no event kernel, Strategy class or
+run function yet.
+
+| Path | Responsibility |
+|------|----------------|
+| `rust/oa_bt/` | Zero-dependency Rust kernel crate: `model` (shared types and IST time helpers), `market` (costs, calendars), `data` (resampling) |
+| `rust/oa_py/src/backtest/` | PyO3 bindings, one file per area, exposed as `openalgo._oaindicators.backtest` |
+| `openalgo/backtest/` | Python package: costs, calendar, resample, data layer, reference tables. `import openalgo` does not import it |
+| `test/backtest/` | pytest suite. It never contacts a server; anything that needs a client uses an in-process fake |
+
+### Code standards for the backtest package
+
+These apply to every change under the four paths above.
+
+- One responsibility per module. Split a file before it grows past roughly 400 lines of
+  non-test code and a function before roughly 60 lines. Data tables, parsing and rules
+  live in separate modules.
+- Small, explicit public surface: `__all__` in Python, `pub use` in Rust. Everything
+  else is private.
+- One source of truth: shared types in `rust/oa_bt/src/model.rs`, the bars layout in
+  `openalgo/backtest/_layout.py`, exceptions in `openalgo/backtest/errors.py`. Do not
+  redefine them locally.
+- Names use the trader's vocabulary and carry the unit where it matters (UTC
+  nanoseconds versus IST, quantity in units never lots, percent versus fraction). No
+  magic numbers: use a named constant and say where the value comes from.
+- Every public function and class has a docstring that states units, conventions and
+  the errors it raises. Comments explain why, not what.
+- Nothing falls back silently. Unknown input raises a typed error whose message says
+  what to do. Library code never prints.
+- Market facts (rates, lot sizes, holidays, session times) are data with a source and a
+  verification status, never constants scattered through the code.
+- Rust: `cargo fmt` clean, `cargo clippy -- -D warnings` clean, no `unsafe`, and no
+  `unwrap`, `expect` or panic on a path that depends on input.
+- Python: `ruff check` and `ruff format --check` clean (configuration in
+  `pyproject.toml`), type hints on public functions, no bare `except`, no mutable
+  module state.
+- Tests read as specifications: one behaviour per test, the name states the behaviour,
+  table-driven where rows repeat, and expected values are never produced by copying the
+  implementation.
+- No dead code, no commented-out code, and no abstraction for a feature that is not
+  being built yet.
+- Original code only, described in its own terms. Never name another backtesting or
+  trading engine or library in code, comments, tests, data files, docs, the changelog
+  or commit messages, whether as a comparison, an inspiration or a cautionary example.
+  Say what this engine does and why. (OpenAlgo, exchanges, brokers and regulators are
+  named freely.)
+
+Checks to run before committing:
+
+    cargo fmt -p oa_bt --check --manifest-path rust/Cargo.toml
+    cargo clippy -p oa_bt --all-targets --manifest-path rust/Cargo.toml -- -D warnings
+    cargo test -p oa_bt --manifest-path rust/Cargo.toml
+    ruff check openalgo/backtest test/backtest
+    ruff format --check openalgo/backtest test/backtest
+    pytest test/backtest
+
 ## Bumping the version
 
 The version string lives in three files and they must stay in sync:

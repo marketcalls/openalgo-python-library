@@ -9,6 +9,8 @@
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
 use pyo3::prelude::*;
 
+mod backtest;
+
 /// f64 slice -> f64 numpy array, for a kernel taking (data, period).
 macro_rules! wrap_period {
     ($name:ident, $core:path) => {
@@ -830,5 +832,6 @@ fn _oaindicators(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(flip, m)?)?;
     m.add_function(wrap_pyfunction!(valuewhen, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    backtest::register(m)?;
     Ok(())
 }

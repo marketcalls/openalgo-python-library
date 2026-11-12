@@ -54,3 +54,19 @@ strip = true
 # the manifest) did not bundle it even though PKG-INFO declared `License-File: LICENSE`
 # - PyPI rejects that mismatch. Explicitly include it in the sdist.
 include = [{ path = "LICENSE", format = "sdist" }]
+
+[tool.ruff]
+# Lint and format gate for the backtest package and its tests. The older SDK modules
+# predate this configuration and are not reformatted.
+line-length = 100
+target-version = "py312"
+include = ["openalgo/backtest/**/*.py", "test/backtest/**/*.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "C90", "RUF100"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 12
+
+[tool.ruff.lint.isort]
+known-first-party = ["openalgo"]

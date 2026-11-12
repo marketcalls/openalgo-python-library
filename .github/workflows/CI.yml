@@ -17,7 +17,7 @@ env:
   PYO3_USE_ABI3_FORWARD_COMPATIBILITY: '1'
 
 jobs:
-  # ---------- Fast PR feedback: cargo test on the zero-dep Rust core ----------
+  # ---------- Fast PR feedback: cargo test on the zero-dep Rust crates ----------
   rust-test:
     name: Rust core tests
     runs-on: ubuntu-latest
@@ -29,6 +29,57 @@ jobs:
           workspaces: rust
       - name: cargo test (oa_core)
         run: cargo test --release -p oa_core --manifest-path rust/Cargo.toml
+      - name: cargo test (oa_bt)
+        run: cargo test --release -p oa_bt --manifest-path rust/Cargo.toml
+
+  # ---------- Lint gate for the backtest kernel and package ----------
+  # Kept out of the publish chain so a new toolchain lint cannot block a release.
+  lint:
+    name: Lint (backtest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: cargo fmt (oa_bt)
+        run: cargo fmt -p oa_bt --check --manifest-path rust/Cargo.toml
+      - name: cargo clippy (oa_bt)
+        run: cargo clippy -p oa_bt --all-targets --manifest-path rust/Cargo.toml -- -D warnings
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: ruff (openalgo/backtest, test/backtest)
+        run: |
+          pip install ruff
+          ruff check openalgo/backtest test/backtest
+          ruff format --check openalgo/backtest test/backtest
+
+  # ---------- Backtest package tests against a freshly built extension ----------
+  backtest-tests:
+    name: Backtest package tests
+    runs-on: ubuntu-latest
+    needs: rust-test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Build the extension into a virtual environment
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          pip install 'maturin>=1.7,<2.0' pytest hypothesis
+          maturin develop
+      - name: pytest (test/backtest)
+        run: |
+          . .venv/bin/activate
+          pytest test/backtest -q
 
   # ---------- Build + import smoke test on Linux ----------
   smoke:
