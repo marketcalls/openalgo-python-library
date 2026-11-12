@@ -163,10 +163,10 @@
           {"decision": 1, "position_condition_met": true, "order_id": "o2", "outcome": "filled"}
         ],
         "fills": [
-          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "instrument": "SBIN", "side": "BUY", "quantity_units": 100, "price_rupees": 800.5, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T09:48:00+05:30", "step": 3, "instrument": "SBIN", "side": "SELL", "quantity_units": 100, "price_rupees": 802.0, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T10:00:00+05:30", "step": 2, "instrument": "SBIN", "side": "BUY", "quantity_units": 100, "price_rupees": 801.0, "fill_at": "open", "reason": "entry", "order_id": "o2", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T10:04:00+05:30", "step": 3, "instrument": "SBIN", "side": "SELL", "quantity_units": 100, "price_rupees": 807.0, "fill_at": "level", "reason": "leg_target", "order_id": null, "target_index": 0, "flags": []}
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "instrument": "SBIN", "side": "BUY", "quantity_units": 100, "price_rupees": 800.5, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:48:00+05:30", "step": 3, "instrument": "SBIN", "side": "SELL", "quantity_units": 100, "price_rupees": 802.0, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T10:00:00+05:30", "step": 2, "instrument": "SBIN", "side": "BUY", "quantity_units": 100, "price_rupees": 801.0, "fill_at": "open", "reason": "entry", "order_id": "o2", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T10:04:00+05:30", "step": 3, "instrument": "SBIN", "side": "SELL", "quantity_units": 100, "price_rupees": 807.0, "fill_at": "level", "reason": "leg_target", "order_id": null, "target_index": 0, "flags": [], "gtt_id": null}
         ],
         "levels": [
           {
@@ -488,8 +488,8 @@
           {"decision": 1, "position_condition_met": false, "order_id": null, "outcome": "no_order"}
         ],
         "fills": [
-          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "instrument": "SBIN", "side": "BUY", "quantity_units": 100, "price_rupees": 800.5, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T10:00:00+05:30", "step": 3, "instrument": "SBIN", "side": "SELL", "quantity_units": 100, "price_rupees": 801.0, "fill_at": "open", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": []}
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "instrument": "SBIN", "side": "BUY", "quantity_units": 100, "price_rupees": 800.5, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T10:00:00+05:30", "step": 3, "instrument": "SBIN", "side": "SELL", "quantity_units": 100, "price_rupees": 801.0, "fill_at": "open", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "gtt_id": null}
         ],
         "levels": [
           {
@@ -689,8 +689,8 @@
           {"decision": 0, "position_condition_met": true, "order_id": "o1", "outcome": "filled"}
         ],
         "fills": [
-          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "instrument": "SBIN", "side": "BUY", "quantity_units": 100, "price_rupees": 800.5, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T09:31:00+05:30", "step": 3, "instrument": "SBIN", "side": "SELL", "quantity_units": 100, "price_rupees": 800.6, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "depends_on": ["SPEC-01"]}
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "instrument": "SBIN", "side": "BUY", "quantity_units": 100, "price_rupees": 800.5, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:31:00+05:30", "step": 3, "instrument": "SBIN", "side": "SELL", "quantity_units": 100, "price_rupees": 800.6, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "gtt_id": null, "depends_on": ["SPEC-01"]}
         ],
         "levels": [
           {
@@ -861,8 +861,8 @@
           {"decision": 0, "position_condition_met": true, "order_id": "o1", "outcome": "filled"}
         ],
         "fills": [
-          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "instrument": "SBIN", "side": "BUY", "quantity_units": 100, "price_rupees": 800.5, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T09:33:00+05:30", "step": 3, "instrument": "SBIN", "side": "SELL", "quantity_units": 100, "price_rupees": 801.0, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "depends_on": ["SPEC-24"]}
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "instrument": "SBIN", "side": "BUY", "quantity_units": 100, "price_rupees": 800.5, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:33:00+05:30", "step": 3, "instrument": "SBIN", "side": "SELL", "quantity_units": 100, "price_rupees": 801.0, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "gtt_id": null, "depends_on": ["SPEC-24"]}
         ],
         "levels": [
           {

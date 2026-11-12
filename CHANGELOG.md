@@ -69,6 +69,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DataFrames. Stops, targets, charges, slippage presets and the other rules of the
   contract are being built; each raises `NotImplementedError` naming its phase until
   then. `bt.live` is planned for the live phase.
+- **Strategy and session risk rules in `bt.backtest` (early preview).** `max_daily_loss`
+  measures the day's loss on `risk_basis` as the realized P&L of the strategy's runs
+  that ended this session plus the live run's MTM since its first fill; a breach exits
+  every position (at the next base-bar open, or at the day's close on a daily base),
+  writes `daily_loss_limit_hit` and leaves the strategy REDUCING until the next
+  session, rejecting new entries with `daily_loss_gate`. `drawdown_halt=bt.pct(x)`
+  latches HALTED for the rest of the run (reject code `halted`); `cooldown` and
+  `max_positions` reject entries with `cooldown` and `max_positions`; the class
+  attribute `max_hold` exits a position after that many base bars (reason
+  `time_exit`). Trading-state changes reach `on_risk_event` as `trading_state_changed`,
+  and the Assumptions block lists every risk setting. A class attribute wins over the
+  run argument of the same name. The combined rules (`combined_stop`,
+  `combined_target`, `lock_profit`, `trail_sl_to_entry`) raise `NotImplementedError`
+  until Phase 3.
 - **Backtest accounting and results (early preview).** `bt.backtest` now runs on its
   defaults, `costs="zerodha"` and `slippage="default"`, with no server: every fill is
   charged by `openalgo.backtest.costs` at the rates of its trade date, the day's

@@ -332,13 +332,13 @@
           {"decision": 9, "position_condition_met": true, "order_id": "o5", "outcome": "filled"}
         ],
         "fills": [
-          {"slice_ist": "2025-07-01T09:25:00+05:30", "step": 2, "instrument": "DABUR", "side": "BUY", "quantity_units": 100, "price_rupees": 500.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 3, "instrument": "DABUR", "side": "SELL", "quantity_units": 50, "price_rupees": 505.0, "fill_at": "level", "reason": "leg_target", "order_id": null, "target_index": 0, "flags": []},
-          {"slice_ist": "2025-07-01T09:40:00+05:30", "step": 2, "instrument": "DABUR", "side": "SELL", "quantity_units": 50, "price_rupees": 506.5, "fill_at": "open", "reason": "signal", "order_id": "o2", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T09:45:00+05:30", "step": 2, "instrument": "DABUR", "side": "BUY", "quantity_units": 100, "price_rupees": 506.0, "fill_at": "open", "reason": "entry", "order_id": "o3", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T09:50:00+05:30", "step": 3, "instrument": "DABUR", "side": "SELL", "quantity_units": 100, "price_rupees": 501.0, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T09:55:00+05:30", "step": 2, "instrument": "DABUR", "side": "BUY", "quantity_units": 100, "price_rupees": 500.5, "fill_at": "open", "reason": "entry", "order_id": "o4", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T10:00:00+05:30", "step": 2, "instrument": "DABUR", "side": "SELL", "quantity_units": 100, "price_rupees": 501.0, "fill_at": "open", "reason": "signal", "order_id": "o5", "target_index": null, "flags": []}
+          {"slice_ist": "2025-07-01T09:25:00+05:30", "step": 2, "instrument": "DABUR", "side": "BUY", "quantity_units": 100, "price_rupees": 500.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 3, "instrument": "DABUR", "side": "SELL", "quantity_units": 50, "price_rupees": 505.0, "fill_at": "level", "reason": "leg_target", "order_id": null, "target_index": 0, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:40:00+05:30", "step": 2, "instrument": "DABUR", "side": "SELL", "quantity_units": 50, "price_rupees": 506.5, "fill_at": "open", "reason": "signal", "order_id": "o2", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:45:00+05:30", "step": 2, "instrument": "DABUR", "side": "BUY", "quantity_units": 100, "price_rupees": 506.0, "fill_at": "open", "reason": "entry", "order_id": "o3", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:50:00+05:30", "step": 3, "instrument": "DABUR", "side": "SELL", "quantity_units": 100, "price_rupees": 501.0, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:55:00+05:30", "step": 2, "instrument": "DABUR", "side": "BUY", "quantity_units": 100, "price_rupees": 500.5, "fill_at": "open", "reason": "entry", "order_id": "o4", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T10:00:00+05:30", "step": 2, "instrument": "DABUR", "side": "SELL", "quantity_units": 100, "price_rupees": 501.0, "fill_at": "open", "reason": "signal", "order_id": "o5", "target_index": null, "flags": [], "gtt_id": null}
         ],
         "levels": [
           {

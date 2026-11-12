@@ -7,12 +7,15 @@
   "cases": [
     {
       "id": "trace-06a-daily-cnc",
-      "title": "Daily CNC: an order at the close fills at the next open, the stop is tested on the day's range, and a gap down fills at the open",
-      "depends_on": ["SPEC-21", "SPEC-22"],
+      "title": "Daily CNC: an order at the close fills at the next open, the stop GTT fires on the day's range, and on a gap through its child's limit the child fills when the bar trades back to it",
+      "depends_on": ["GTT-1", "GTT-5", "GTT-7", "GTT-8", "GTT-10", "SPEC-21", "SPEC-22"],
       "notes": [
         "Daily bars carry the session open (09:15 IST) of their date as time_ist; a daily slice is the whole session.",
+        "Positional model (04-execution 4.4, 14-strategy-api 2.4): the stop of a CNC position is held as a GTT, placed as soon as the entry fills. When a bar reaches its trigger or opens beyond it, the GTT fires and places a child sell LIMIT 1 percent below the trigger (GTT-1). The GTT events and the fill field gtt_id are the fixture's vocabulary for a life cycle the documents describe but do not name (GTT-8).",
         "On both entry days the low stays above the stop, so no expectation depends on SPEC-02.",
-        "On 2025-07-09 the close 1470.00 is above the stop 1460.00 and the low 1455.00 is below it: the stop is tested on the range, not on the close."
+        "On 2025-07-09 the close 1470.00 is above the trigger 1460.00 and the low 1455.00 is below it: the GTT fires on the range, not on the close. The child limit 1445.40 is below the trigger, so the child is marketable when it is placed and fills at the trigger (GTT-5).",
+        "On 2025-07-11 the bar opens at 1410.00, beyond both the trigger 1425.00 and the child's limit 1410.75, and then trades up to 1418.00, through the limit: the child fills at 1410.75 (GTT-7). Before the GTT model this exit was at the open 1410.00 and the gross P&L was -1150.00; the general rule that a level crossed at the open fills at the open (03-architecture 4.2 step 3) still reads that way and contradicts 04-execution 4.4 for CNC and NRML (GTT-10).",
+        "Other readings, same bars. GTT-5 alternative (a child always fills at its limit): the first exit is at 1445.40 and the gross P&L -1288.50. GTT-7 alternative (a child does not fill in a bar that opened beyond its limit): the child is cancelled, the engine's exit would come at the next session's open, which is outside the run, so the run ends long 10 marked at 1415.00 (realized -500.00, unrealized -600.00)."
       ],
       "instruments": [
         {"symbol": "INFY", "exchange": "NSE", "type": "equity", "tick_size_rupees": 0.05, "lot_size_units": 1, "product": "CNC", "expiry_date": null, "underlying": null}
@@ -109,10 +112,10 @@
           {"decision": 1, "position_condition_met": true, "order_id": "o2", "outcome": "filled"}
         ],
         "fills": [
-          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "instrument": "INFY", "side": "BUY", "quantity_units": 10, "price_rupees": 1510.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-09T09:15:00+05:30", "step": 3, "instrument": "INFY", "side": "SELL", "quantity_units": 10, "price_rupees": 1460.0, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-10T09:15:00+05:30", "step": 2, "instrument": "INFY", "side": "BUY", "quantity_units": 10, "price_rupees": 1475.0, "fill_at": "open", "reason": "entry", "order_id": "o2", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-11T09:15:00+05:30", "step": 3, "instrument": "INFY", "side": "SELL", "quantity_units": 10, "price_rupees": 1410.0, "fill_at": "open", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": []}
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "instrument": "INFY", "side": "BUY", "quantity_units": 10, "price_rupees": 1510.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-09T09:15:00+05:30", "step": 3, "instrument": "INFY", "side": "SELL", "quantity_units": 10, "price_rupees": 1460.0, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "gtt_id": "g1", "depends_on": ["GTT-5", "GTT-8"]},
+          {"slice_ist": "2025-07-10T09:15:00+05:30", "step": 2, "instrument": "INFY", "side": "BUY", "quantity_units": 10, "price_rupees": 1475.0, "fill_at": "open", "reason": "entry", "order_id": "o2", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-11T09:15:00+05:30", "step": 3, "instrument": "INFY", "side": "SELL", "quantity_units": 10, "price_rupees": 1410.75, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "gtt_id": "g2", "depends_on": ["GTT-1", "GTT-7", "GTT-8", "GTT-10"]}
         ],
         "levels": [
           {
@@ -138,92 +141,121 @@
             "trail": null,
             "breakeven": null
           },
-          {"slice_ist": "2025-07-11T09:15:00+05:30", "instrument": "INFY", "position_quantity_units": 0, "average_price_rupees": null, "stop": null, "targets": [], "remainder_quantity_units": 0, "trail": null, "breakeven": null}
+          {"slice_ist": "2025-07-11T09:15:00+05:30", "instrument": "INFY", "position_quantity_units": 0, "average_price_rupees": null, "stop": null, "targets": [], "remainder_quantity_units": 0, "trail": null, "breakeven": null, "depends_on": ["GTT-7"]}
         ],
         "events": [
           {"slice_ist": "2025-07-07T09:15:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o1", "quantity_units": null, "price_rupees": null, "reject_code": null},
           {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o1", "quantity_units": 10, "price_rupees": 1510.0, "reject_code": null},
           {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "INFY", "position_quantity_units": 10},
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "type": "gtt", "name": "GttPlaced", "gtt_id": "g1", "instrument": "INFY", "quantity_units": 10, "stop_trigger_rupees": 1460.0, "target_trigger_rupees": null, "fired_leg": null, "child_limit_rupees": null, "price_rupees": null, "depends_on": ["GTT-8"]},
+          {"slice_ist": "2025-07-09T09:15:00+05:30", "step": 3, "type": "gtt", "name": "GttTriggered", "gtt_id": "g1", "instrument": "INFY", "quantity_units": 10, "stop_trigger_rupees": 1460.0, "target_trigger_rupees": null, "fired_leg": "stop", "child_limit_rupees": 1445.4, "price_rupees": null, "depends_on": ["GTT-1", "GTT-8"]},
           {"slice_ist": "2025-07-09T09:15:00+05:30", "step": 3, "type": "risk", "name": "leg_sl_hit", "scope": "leg", "instrument": "INFY", "level_rupees": 1460.0, "target_index": null, "observed_rupees": null},
+          {"slice_ist": "2025-07-09T09:15:00+05:30", "step": 3, "type": "gtt", "name": "GttChildFilled", "gtt_id": "g1", "instrument": "INFY", "quantity_units": 10, "stop_trigger_rupees": null, "target_trigger_rupees": null, "fired_leg": null, "child_limit_rupees": 1445.4, "price_rupees": 1460.0, "depends_on": ["GTT-1", "GTT-8", "GTT-5"]},
           {"slice_ist": "2025-07-09T09:15:00+05:30", "step": 3, "type": "position", "name": "PositionClosed", "instrument": "INFY", "position_quantity_units": 0},
           {"slice_ist": "2025-07-09T09:15:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o2", "quantity_units": null, "price_rupees": null, "reject_code": null},
           {"slice_ist": "2025-07-10T09:15:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o2", "quantity_units": 10, "price_rupees": 1475.0, "reject_code": null},
           {"slice_ist": "2025-07-10T09:15:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "INFY", "position_quantity_units": 10},
+          {"slice_ist": "2025-07-10T09:15:00+05:30", "step": 2, "type": "gtt", "name": "GttPlaced", "gtt_id": "g2", "instrument": "INFY", "quantity_units": 10, "stop_trigger_rupees": 1425.0, "target_trigger_rupees": null, "fired_leg": null, "child_limit_rupees": null, "price_rupees": null, "depends_on": ["GTT-8"]},
+          {"slice_ist": "2025-07-11T09:15:00+05:30", "step": 3, "type": "gtt", "name": "GttTriggered", "gtt_id": "g2", "instrument": "INFY", "quantity_units": 10, "stop_trigger_rupees": 1425.0, "target_trigger_rupees": null, "fired_leg": "stop", "child_limit_rupees": 1410.75, "price_rupees": null, "depends_on": ["GTT-1", "GTT-8"]},
           {"slice_ist": "2025-07-11T09:15:00+05:30", "step": 3, "type": "risk", "name": "leg_sl_hit", "scope": "leg", "instrument": "INFY", "level_rupees": 1425.0, "target_index": null, "observed_rupees": null},
-          {"slice_ist": "2025-07-11T09:15:00+05:30", "step": 3, "type": "position", "name": "PositionClosed", "instrument": "INFY", "position_quantity_units": 0}
+          {
+            "slice_ist": "2025-07-11T09:15:00+05:30",
+            "step": 3,
+            "type": "gtt",
+            "name": "GttChildFilled",
+            "gtt_id": "g2",
+            "instrument": "INFY",
+            "quantity_units": 10,
+            "stop_trigger_rupees": null,
+            "target_trigger_rupees": null,
+            "fired_leg": null,
+            "child_limit_rupees": 1410.75,
+            "price_rupees": 1410.75,
+            "depends_on": ["GTT-1", "GTT-8", "GTT-7", "GTT-10"]
+          },
+          {"slice_ist": "2025-07-11T09:15:00+05:30", "step": 3, "type": "position", "name": "PositionClosed", "instrument": "INFY", "position_quantity_units": 0, "depends_on": ["GTT-7"]}
         ],
         "stale_marks": [],
         "final_positions": [
-          {"instrument": "INFY", "quantity_units": 0, "average_price_rupees": null}
+          {"instrument": "INFY", "quantity_units": 0, "average_price_rupees": null, "depends_on": ["GTT-7"]}
         ],
-        "gross_pnl": {"realized_rupees": -1150.0, "unrealized_rupees": 0.0, "total_rupees": -1150.0}
+        "gross_pnl": {"realized_rupees": -1142.5, "unrealized_rupees": 0.0, "total_rupees": -1142.5, "depends_on": ["GTT-1", "GTT-5", "GTT-7", "GTT-10"]}
       },
       "derivation": [
         {
           "n": 1,
           "slice_ist": "2025-07-07T09:15:00+05:30",
           "step": 7,
-          "text": "Daily strategy on a daily base (the base-interval table: daily or longer strategy, daily). on_bar runs at the close of 2025-07-07; flat, so decision 0 calls buy. For a daily interval an order placed at a session's close is valid for the next session only and fills at its first base-bar open. The session close step of this slice must not cancel it.",
-          "cites": ["03-architecture 4.1, 4.2 step 7, step 8 and order validity", "04-execution 4.2"]
+          "text": "Daily strategy on a daily base (the base-interval table: daily or longer strategy, daily). on_bar runs at the close of 2025-07-07; flat, so decision 0 calls buy and o1 is Submitted. Every order is a DAY order, and a market order decided at a daily close fills at the next session's first base-bar open, so the session close step of this slice does not cancel it.",
+          "cites": ["03-architecture 4.1, 4.2 step 7 and order validity", "04-execution 4.4 item 1", "14-strategy-api 2.4"]
         },
         {
           "n": 2,
           "slice_ist": "2025-07-08T09:15:00+05:30",
           "step": 2,
-          "text": "BUY 10 at the open of 2025-07-08, 1510.00 (the decision close was 1508.00). Product CNC (the default for a daily equity strategy). Stop 1510.00 - 50 = 1460.00.",
-          "cites": ["03-architecture 4.2 step 2", "10-simple-path 2", "05-risk-management 3"]
+          "text": "BUY 10 at the open of 2025-07-08, 1510.00 (the decision close was 1508.00). Product CNC (the default for a daily equity strategy). Stop 1510.00 - 50 = 1460.00. On a CNC position a stop is held as a GTT, and a stop alone is a SINGLE GTT; it is placed as soon as the entry fill is confirmed: GttPlaced g1, stop trigger 1460.00, quantity 10, after the position event.",
+          "cites": ["10-simple-path 2", "03-architecture 4.2 step 2", "05-risk-management 3", "04-execution 4.4 item 2", "14-strategy-api 2.4", "08-live-trading 6.2"]
         },
         {
           "n": 3,
           "slice_ist": "2025-07-08T09:15:00+05:30",
           "step": 3,
-          "text": "The entry day's low 1480.00 is above the stop. No exit.",
-          "cites": ["03-architecture 4.2 step 3"]
+          "text": "Legs opened in step 2 are tested against the whole of this bar, so g1 is in force: the low 1480.00 is above the trigger. Nothing fires.",
+          "cites": ["03-architecture 4.2 step 3", "04-execution 4.4 item 3"]
         },
         {
           "n": 4,
           "slice_ist": "2025-07-09T09:15:00+05:30",
           "step": 3,
-          "text": "Stop 1460.00. The open 1485.00 is above it and the day's low 1455.00 is at or below it: the stop fills at the level, SELL 10 at 1460.00, reason leg_sl ('base D: stops are tested on the day's range and fill at the stop level, or at the open on a gap'). The close 1470.00 plays no part. Realized (1460.00 - 1510.00) x 10 = -500.00.",
-          "cites": ["03-architecture 4.1 and 4.2 step 3", "04-execution 4.2"]
+          "text": "The open 1485.00 is above the trigger 1460.00 and the low 1455.00 is at or below it: the bar reaches the trigger and g1 fires on its stop leg (GttTriggered, then leg_sl_hit at 1460.00). The child is a sell LIMIT 1 percent beyond the trigger, 1460.00 x 0.99 = 1445.40, already a whole number of ticks. When it is placed the price is at the trigger, 1460.00, above the limit, so the child is marketable and fills at the trigger (GTT-5): SELL 10 at 1460.00, reason leg_sl (GttChildFilled, then PositionClosed). Realized (1460.00 - 1510.00) x 10 = -500.00.",
+          "cites": ["04-execution 4.4 item 3", "03-architecture 4.2 step 3", "03-architecture 4.5", "05-risk-management 7"]
         },
         {
           "n": 5,
           "slice_ist": "2025-07-09T09:15:00+05:30",
           "step": 7,
-          "text": "on_bar at the close of 2025-07-09 sees a flat position (the stop filled in step 3 of this slice). Decision 1 calls buy; o2 is valid for the next session.",
+          "text": "on_bar at the close of 2025-07-09 sees a flat position (the child filled in step 3 of this slice). Decision 1 calls buy; o2 is Submitted, valid for the next session.",
           "cites": ["03-architecture 4.2 step 7 and order validity"]
         },
         {
           "n": 6,
           "slice_ist": "2025-07-10T09:15:00+05:30",
           "step": 2,
-          "text": "BUY 10 at the open of 2025-07-10, 1475.00. Stop 1425.00. Step 3: low 1462.00, no exit.",
-          "cites": ["03-architecture 4.2 steps 2 and 3"]
+          "text": "BUY 10 at the open of 2025-07-10, 1475.00. Stop 1425.00, held by a new SINGLE GTT: GttPlaced g2, trigger 1425.00. Step 3: the low 1462.00 is above the trigger; nothing fires.",
+          "cites": [
+            "03-architecture 4.2 step 2",
+            "05-risk-management 3",
+            "04-execution 4.4 item 2",
+            "14-strategy-api 2.4",
+            "08-live-trading 6.2",
+            "03-architecture 4.2 step 3"
+          ]
         },
         {
           "n": 7,
           "slice_ist": "2025-07-11T09:15:00+05:30",
           "step": 3,
-          "text": "The open of 2025-07-11, 1410.00, is already at or below the stop 1425.00: the stop fills at the open, SELL 10 at 1410.00, reason leg_sl; the risk event reports the level 1425.00. Realized (1410.00 - 1475.00) x 10 = -650.00.",
-          "cites": ["03-architecture 4.1 and 4.2 step 3", "vectors: long_stop_gapped_through"]
+          "text": "The open of 2025-07-11, 1410.00, is beyond the trigger 1425.00, so g2 fires at the open (GttTriggered, then leg_sl_hit at the level 1425.00). Child sell LIMIT 1425.00 x 0.99 = 1410.75, a whole number of ticks. The open 1410.00 is below the limit, so the child is not marketable at the open. The bar then trades up to 1418.00, through 1410.75, after the trigger, so the child fills at its limit (GTT-7): SELL 10 at 1410.75, reason leg_sl, where it filled: level (GttChildFilled, then PositionClosed). Realized (1410.75 - 1475.00) x 10 = -642.50.",
+          "cites": ["04-execution 4.4 item 3", "03-architecture 4.2 step 3", "03-architecture 4.5", "05-risk-management 7"]
         },
         {
           "n": 8,
           "slice_ist": null,
           "step": null,
-          "text": "End of run: flat. Gross P&L -500.00 - 650.00 = -1150.00.",
+          "text": "End of run: flat. Gross P&L -500.00 - 642.50 = -1142.50.",
           "cites": ["03-architecture 4.2 end of run"]
         }
       ]
     },
     {
       "id": "trace-06b-percent-levels-rounded",
-      "title": "Percent stop and target that do not land on the tick grid are rounded to the nearest tick",
-      "depends_on": ["SPEC-03", "SPEC-21", "SPEC-22"],
+      "title": "Percent stop and target that do not land on the tick grid are rounded to the nearest tick and held as one OCO GTT; the stop leg fires and cancels the target leg",
+      "depends_on": ["GTT-1", "GTT-5", "GTT-6", "GTT-8", "SPEC-03", "SPEC-21", "SPEC-22"],
       "notes": [
-        "This case exists to pin SPEC-03. The engine default rounds levels to the tick size but the documents do not say how. The fixture uses the nearest tick.",
+        "This case pins SPEC-03 (levels rounded to the nearest tick) and the OCO form of a positional stop and target.",
+        "Positional model (04-execution 4.4, 14-strategy-api 2.4): the stop of a CNC position is held as a GTT, placed as soon as the entry fills. When a bar reaches its trigger or opens beyond it, the GTT fires and places a child sell LIMIT 1 percent below the trigger (GTT-1). The GTT events and the fill field gtt_id are the fixture's vocabulary for a life cycle the documents describe but do not name (GTT-8). A stop with a target is one OCO GTT; when one leg fires the other is cancelled with it.",
         "The unrounded stop is 1504.00 x 0.98 = 1473.92, 0.4 of a tick above 1473.90: nearest gives 1473.90, rounding towards the entry (the tighter side) gives 1473.95, rounding down gives 1473.90. The unrounded target is 1504.00 x 1.035 = 1556.64, 0.8 of a tick above 1556.60: nearest gives 1556.65, rounding down gives 1556.60. The pair (1473.90, 1556.65) identifies nearest-tick rounding.",
+        "The child limit 1473.90 x 0.99 = 1459.161 is not a whole number of ticks. Rounded away from the trader (down, for a sell) it is 1459.15, and the nearest tick is also 1459.15; only rounding towards the trader would give 1459.20 (GTT-6). The child is marketable at the trigger, so its limit does not change the fill.",
         "With the stop at 1473.95 the exit on 2025-07-09 would be at 1473.95 and the gross P&L -300.50."
       ],
       "instruments": [
@@ -301,8 +333,8 @@
           {"decision": 0, "position_condition_met": true, "order_id": "o1", "outcome": "filled"}
         ],
         "fills": [
-          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "instrument": "INFY", "side": "BUY", "quantity_units": 10, "price_rupees": 1504.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-09T09:15:00+05:30", "step": 3, "instrument": "INFY", "side": "SELL", "quantity_units": 10, "price_rupees": 1473.9, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "depends_on": ["SPEC-03"]}
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "instrument": "INFY", "side": "BUY", "quantity_units": 10, "price_rupees": 1504.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-09T09:15:00+05:30", "step": 3, "instrument": "INFY", "side": "SELL", "quantity_units": 10, "price_rupees": 1473.9, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "gtt_id": "g1", "depends_on": ["SPEC-03", "GTT-5", "GTT-8"]}
         ],
         "levels": [
           {
@@ -325,53 +357,95 @@
           {"slice_ist": "2025-07-07T09:15:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o1", "quantity_units": null, "price_rupees": null, "reject_code": null},
           {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o1", "quantity_units": 10, "price_rupees": 1504.0, "reject_code": null},
           {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "INFY", "position_quantity_units": 10},
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "type": "gtt", "name": "GttPlaced", "gtt_id": "g1", "instrument": "INFY", "quantity_units": 10, "stop_trigger_rupees": 1473.9, "target_trigger_rupees": 1556.65, "fired_leg": null, "child_limit_rupees": null, "price_rupees": null, "depends_on": ["GTT-8", "SPEC-03"]},
+          {
+            "slice_ist": "2025-07-09T09:15:00+05:30",
+            "step": 3,
+            "type": "gtt",
+            "name": "GttTriggered",
+            "gtt_id": "g1",
+            "instrument": "INFY",
+            "quantity_units": 10,
+            "stop_trigger_rupees": 1473.9,
+            "target_trigger_rupees": 1556.65,
+            "fired_leg": "stop",
+            "child_limit_rupees": 1459.15,
+            "price_rupees": null,
+            "depends_on": ["GTT-1", "GTT-8", "SPEC-03", "GTT-6"]
+          },
           {"slice_ist": "2025-07-09T09:15:00+05:30", "step": 3, "type": "risk", "name": "leg_sl_hit", "scope": "leg", "instrument": "INFY", "level_rupees": 1473.9, "target_index": null, "observed_rupees": null, "depends_on": ["SPEC-03"]},
+          {
+            "slice_ist": "2025-07-09T09:15:00+05:30",
+            "step": 3,
+            "type": "gtt",
+            "name": "GttChildFilled",
+            "gtt_id": "g1",
+            "instrument": "INFY",
+            "quantity_units": 10,
+            "stop_trigger_rupees": null,
+            "target_trigger_rupees": null,
+            "fired_leg": null,
+            "child_limit_rupees": 1459.15,
+            "price_rupees": 1473.9,
+            "depends_on": ["GTT-1", "GTT-8", "SPEC-03", "GTT-5", "GTT-6"]
+          },
           {"slice_ist": "2025-07-09T09:15:00+05:30", "step": 3, "type": "position", "name": "PositionClosed", "instrument": "INFY", "position_quantity_units": 0}
         ],
         "stale_marks": [],
         "final_positions": [
           {"instrument": "INFY", "quantity_units": 0, "average_price_rupees": null}
         ],
-        "gross_pnl": {"realized_rupees": -301.0, "unrealized_rupees": 0.0, "total_rupees": -301.0, "depends_on": ["SPEC-03"]}
+        "gross_pnl": {"realized_rupees": -301.0, "unrealized_rupees": 0.0, "total_rupees": -301.0, "depends_on": ["SPEC-03", "GTT-5"]}
       },
       "derivation": [
         {
           "n": 1,
           "slice_ist": "2025-07-07T09:15:00+05:30",
           "step": 7,
-          "text": "on_bar at the close of 2025-07-07; flat; buy queued for the next session (o1).",
-          "cites": ["03-architecture 4.2 step 7 and order validity"]
+          "text": "on_bar at the close of 2025-07-07; flat; buy Submitted for the next session (o1).",
+          "cites": ["03-architecture 4.2 step 7 and order validity", "04-execution 4.4 item 1"]
         },
         {
           "n": 2,
           "slice_ist": "2025-07-08T09:15:00+05:30",
           "step": 2,
-          "text": "BUY 10 at the open 1504.00. bt.pct is percent of the leg's fill average: stop distance 2 percent of 1504.00 = 30.08, level 1473.92; target distance 3.5 percent = 52.64, level 1556.64. Tick size 0.05. Levels are rounded to the tick size by default; SPEC-03, nearest tick: 1473.92 / 0.05 = 29478.4, so 29478 ticks = 1473.90; 1556.64 / 0.05 = 31132.8, so 31133 ticks = 1556.65.",
-          "cites": ["03-architecture 4.2 step 2", "03-architecture 7", "05-risk-management 3 and 8", "14-strategy-api 1", "strategy-module 3.1"]
+          "text": "BUY 10 at the open 1504.00. bt.pct is percent of the leg's fill average: stop distance 2 percent of 1504.00 = 30.08, level 1473.92; target distance 3.5 percent = 52.64, level 1556.64. Tick size 0.05; levels round to the nearest tick, an exact half tick up, on integer paise: 1473.92 / 0.05 = 29478.4, so 29478 ticks = 1473.90; 1556.64 / 0.05 = 31132.8, so 31133 ticks = 1556.65. A stop with a target on a CNC position is one OCO GTT: GttPlaced g1, stop trigger 1473.90, target trigger 1556.65, quantity 10.",
+          "cites": [
+            "03-architecture 7",
+            "05-risk-management 8",
+            "14-strategy-api 1",
+            "strategy-module 3.1",
+            "03-architecture 4.2 step 2",
+            "05-risk-management 3",
+            "04-execution 4.4 item 2",
+            "14-strategy-api 2.4",
+            "08-live-trading 6.2"
+          ]
         },
         {
           "n": 3,
           "slice_ist": "2025-07-08T09:15:00+05:30",
           "step": 3,
-          "text": "Entry day range 1490.00 to 1504.00: no level reached.",
-          "cites": ["03-architecture 4.2 step 3"]
+          "text": "Entry day range 1490.00 to 1504.00: neither trigger is reached.",
+          "cites": ["03-architecture 4.2 step 3", "04-execution 4.4 item 3"]
         },
         {
           "n": 4,
           "slice_ist": "2025-07-09T09:15:00+05:30",
           "step": 3,
-          "text": "Stop 1473.90. Open 1498.00 above it; the low 1473.90 touches it exactly (price <= stop): SELL 10 at 1473.90, reason leg_sl. Realized (1473.90 - 1504.00) x 10 = -301.00.",
-          "cites": ["03-architecture 4.2 step 3", "vectors: long_stop_exact_touch"]
+          "text": "The open 1498.00 lies between the triggers. The low 1473.90 touches the stop trigger exactly (a long stop is reached at price <= stop); the high 1502.00 is below the target trigger. g1 fires on its stop leg and, being an OCO, its target leg is cancelled with it. Child sell LIMIT 1473.90 x 0.99 = 1459.161, rounded to the tick: 1459.15 (GTT-6). The child is marketable at the trigger and fills there (GTT-5): SELL 10 at 1473.90, reason leg_sl. Realized (1473.90 - 1504.00) x 10 = -301.00.",
+          "cites": ["04-execution 4.4 items 3 and 4", "03-architecture 4.2 step 3", "03-architecture 4.5", "vectors: long_stop_exact_touch"]
         }
       ]
     },
     {
       "id": "trace-06c-stop-on-the-entry-day",
-      "title": "The stop is tested against the entry bar itself: bought at the open, stopped the same day",
-      "depends_on": ["SPEC-02", "SPEC-21", "SPEC-22"],
+      "title": "The stop GTT is tested against the entry bar itself: bought at the open, stopped the same day",
+      "depends_on": ["GTT-1", "GTT-5", "GTT-8", "SPEC-02", "SPEC-21", "SPEC-22"],
       "notes": [
-        "This case exists to pin SPEC-02. The sequence runs step 2 (fill at the open) and then step 3 (levels against this bar) with no exemption for a leg that has just been opened, and the whole bar follows its open in time.",
-        "Under the other reading (levels are first tested in the slice after the entry) the exit is on 2025-07-09 at the open 1458.00 (already below the stop), gross P&L -520.00.",
+        "This case pins SPEC-02: step 2 (fill at the open) is followed by step 3 (levels against this bar) with no exemption for a leg just opened, and the whole bar follows its open in time.",
+        "Positional model (04-execution 4.4, 14-strategy-api 2.4): the stop of a CNC position is held as a GTT, placed as soon as the entry fills. When a bar reaches its trigger or opens beyond it, the GTT fires and places a child sell LIMIT 1 percent below the trigger (GTT-1). The GTT events and the fill field gtt_id are the fixture's vocabulary for a life cycle the documents describe but do not name (GTT-8). The GTT placed in step 2 of the entry slice is in force for step 3 of that slice.",
+        "Under the other reading of SPEC-02 the GTT would first be tested on 2025-07-09, which opens at 1458.00, beyond the trigger 1460.00 but not beyond the child's limit 1445.40, so the child would fill at the open 1458.00 and the gross P&L would be -520.00.",
         "A CNC buy and sell on the same day is charged as intraday (04-execution 2); costs are zero here."
       ],
       "instruments": [
@@ -448,8 +522,8 @@
           {"decision": 0, "position_condition_met": true, "order_id": "o1", "outcome": "filled"}
         ],
         "fills": [
-          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "instrument": "INFY", "side": "BUY", "quantity_units": 10, "price_rupees": 1510.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 3, "instrument": "INFY", "side": "SELL", "quantity_units": 10, "price_rupees": 1460.0, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "depends_on": ["SPEC-02"]}
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "instrument": "INFY", "side": "BUY", "quantity_units": 10, "price_rupees": 1510.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 3, "instrument": "INFY", "side": "SELL", "quantity_units": 10, "price_rupees": 1460.0, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "gtt_id": "g1", "depends_on": ["SPEC-02", "GTT-5", "GTT-8"]}
         ],
         "levels": [
           {"slice_ist": "2025-07-08T09:15:00+05:30", "instrument": "INFY", "position_quantity_units": 0, "average_price_rupees": null, "stop": null, "targets": [], "remainder_quantity_units": 0, "trail": null, "breakeven": null, "depends_on": ["SPEC-02"]}
@@ -458,42 +532,269 @@
           {"slice_ist": "2025-07-07T09:15:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o1", "quantity_units": null, "price_rupees": null, "reject_code": null},
           {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o1", "quantity_units": 10, "price_rupees": 1510.0, "reject_code": null},
           {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "INFY", "position_quantity_units": 10},
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "type": "gtt", "name": "GttPlaced", "gtt_id": "g1", "instrument": "INFY", "quantity_units": 10, "stop_trigger_rupees": 1460.0, "target_trigger_rupees": null, "fired_leg": null, "child_limit_rupees": null, "price_rupees": null, "depends_on": ["GTT-8"]},
+          {
+            "slice_ist": "2025-07-08T09:15:00+05:30",
+            "step": 3,
+            "type": "gtt",
+            "name": "GttTriggered",
+            "gtt_id": "g1",
+            "instrument": "INFY",
+            "quantity_units": 10,
+            "stop_trigger_rupees": 1460.0,
+            "target_trigger_rupees": null,
+            "fired_leg": "stop",
+            "child_limit_rupees": 1445.4,
+            "price_rupees": null,
+            "depends_on": ["GTT-1", "GTT-8", "SPEC-02"]
+          },
           {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 3, "type": "risk", "name": "leg_sl_hit", "scope": "leg", "instrument": "INFY", "level_rupees": 1460.0, "target_index": null, "observed_rupees": null, "depends_on": ["SPEC-02"]},
+          {
+            "slice_ist": "2025-07-08T09:15:00+05:30",
+            "step": 3,
+            "type": "gtt",
+            "name": "GttChildFilled",
+            "gtt_id": "g1",
+            "instrument": "INFY",
+            "quantity_units": 10,
+            "stop_trigger_rupees": null,
+            "target_trigger_rupees": null,
+            "fired_leg": null,
+            "child_limit_rupees": 1445.4,
+            "price_rupees": 1460.0,
+            "depends_on": ["GTT-1", "GTT-8", "SPEC-02", "GTT-5"]
+          },
           {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 3, "type": "position", "name": "PositionClosed", "instrument": "INFY", "position_quantity_units": 0, "depends_on": ["SPEC-02"]}
         ],
         "stale_marks": [],
         "final_positions": [
           {"instrument": "INFY", "quantity_units": 0, "average_price_rupees": null}
         ],
-        "gross_pnl": {"realized_rupees": -500.0, "unrealized_rupees": 0.0, "total_rupees": -500.0, "depends_on": ["SPEC-02"]}
+        "gross_pnl": {"realized_rupees": -500.0, "unrealized_rupees": 0.0, "total_rupees": -500.0, "depends_on": ["SPEC-02", "GTT-5"]}
       },
       "derivation": [
         {
           "n": 1,
           "slice_ist": "2025-07-07T09:15:00+05:30",
           "step": 7,
-          "text": "on_bar at the close of 2025-07-07; flat; buy queued for the next session (o1).",
-          "cites": ["03-architecture 4.2 step 7 and order validity"]
+          "text": "on_bar at the close of 2025-07-07; flat; buy Submitted for the next session (o1).",
+          "cites": ["03-architecture 4.2 step 7 and order validity", "04-execution 4.4 item 1"]
         },
         {
           "n": 2,
           "slice_ist": "2025-07-08T09:15:00+05:30",
           "step": 2,
-          "text": "BUY 10 at the open 1510.00. The leg has levels from the moment its entry fills: stop 1460.00.",
-          "cites": ["03-architecture 4.2 step 2", "05-risk-management 3"]
+          "text": "BUY 10 at the open 1510.00. The leg has levels from the moment its entry fills: stop 1460.00, held by a SINGLE GTT placed as soon as the entry is confirmed: GttPlaced g1, trigger 1460.00, quantity 10.",
+          "cites": ["03-architecture 4.2 step 2", "05-risk-management 3", "04-execution 4.4 item 2", "14-strategy-api 2.4", "08-live-trading 6.2"]
         },
         {
           "n": 3,
           "slice_ist": "2025-07-08T09:15:00+05:30",
           "step": 3,
-          "text": "SPEC-02: the new leg's stop is tested against this bar. The open is the entry, so the level is not crossed at the open; the day's low 1452.00 is at or below 1460.00: SELL 10 at 1460.00, reason leg_sl, on the entry day. Realized -500.00. The level row at the end of this slice is flat.",
-          "cites": ["03-architecture 4.2 steps 2 and 3", "04-execution 2"]
+          "text": "SPEC-02: the new leg's GTT is tested against this bar. The open is the entry, so the trigger is not crossed at the open; the day's low 1452.00 is at or below 1460.00, so g1 fires on its stop leg. Child sell LIMIT 1460.00 x 0.99 = 1445.40; marketable at the trigger, it fills there (GTT-5): SELL 10 at 1460.00, reason leg_sl, on the entry day. Realized -500.00. The level row at the end of this slice is flat.",
+          "cites": ["03-architecture 4.2 steps 2 and 3", "04-execution 4.4 item 3", "03-architecture 4.5", "04-execution 2"]
         },
         {
           "n": 4,
           "slice_ist": "2025-07-09T09:15:00+05:30",
           "step": null,
           "text": "Flat; nothing happens. End of run.",
+          "cites": ["03-architecture 4.2 end of run"]
+        }
+      ]
+    },
+    {
+      "id": "trace-06d-gtt-child-unfilled",
+      "title": "A gap beyond the child's limit that never trades back: the child is cancelled first, and the engine exits at the next session's open",
+      "depends_on": ["GTT-1", "GTT-4", "GTT-8", "GTT-10", "SPEC-21", "SPEC-22"],
+      "notes": [
+        "This case pins the unfilled-child rule of 04-execution 4.4 item 3 and lead ruling LEAD-10 (01-requirements 7.3): when the child has not filled through one base bar, the engine raises a risk event, cancels the child, and only after the cancel sends its own exit at the next base-bar open, flagged in the trade list.",
+        "Positional model (04-execution 4.4, 14-strategy-api 2.4): the stop of a CNC position is held as a GTT, placed as soon as the entry fills. When a bar reaches its trigger or opens beyond it, the GTT fires and places a child sell LIMIT 1 percent below the trigger (GTT-1). The GTT events and the fill field gtt_id are the fixture's vocabulary for a life cycle the documents describe but do not name (GTT-8).",
+        "On 2025-07-09 the bar opens at 1440.00, beyond the trigger 1460.00 and the child's limit 1445.40, and its high 1442.00 never reaches the limit, so the child cannot fill under any reading of GTT-7. A backtest assumes the engine runs at every session open (GTT-4), so its exit fills at the open of 2025-07-10.",
+        "The position is still long at the close of 2025-07-09, so decision 1 (buy when flat) places no order.",
+        "The risk event, the flag and the reason of the engine's exit are named by the fixture (GTT-8): risk event gtt_child_unfilled (level: the child's limit; observed: the best price after the trigger), fill reason leg_sl, flag gtt_child_unfilled. Before the GTT model this stop filled at the open 1440.00 on 2025-07-09 (gross P&L -700.00), and the general rule that a level crossed at the open fills at the open (03-architecture 4.2 step 3) still reads that way (GTT-10)."
+      ],
+      "instruments": [
+        {"symbol": "INFY", "exchange": "NSE", "type": "equity", "tick_size_rupees": 0.05, "lot_size_units": 1, "product": "CNC", "expiry_date": null, "underlying": null}
+      ],
+      "calendar": {
+        "NSE": [
+          {"date": "2025-07-07", "open_ist": "09:15", "close_ist": "15:30"},
+          {"date": "2025-07-08", "open_ist": "09:15", "close_ist": "15:30"},
+          {"date": "2025-07-09", "open_ist": "09:15", "close_ist": "15:30"},
+          {"date": "2025-07-10", "open_ist": "09:15", "close_ist": "15:30"}
+        ]
+      },
+      "settings": {
+        "strategy_interval": "D",
+        "base": "D",
+        "entry_from": null,
+        "entry_until": null,
+        "square_off": null,
+        "fill": "next_open",
+        "slippage": 0.0,
+        "costs": null,
+        "capital": 1000000,
+        "quantity_mode": "venue",
+        "round_levels": true,
+        "max_daily_loss": null,
+        "risk_basis": "gross",
+        "after_risk_exit": "lock_session",
+        "roll": null,
+        "first_slice_ist": "2025-07-07T09:15:00+05:30",
+        "last_slice_ist": "2025-07-10T09:15:00+05:30",
+        "documented_defaults": ["base", "product", "fill", "risk_basis", "round_levels"]
+      },
+      "bars": {
+        "interval": "D",
+        "derived_from_case": null,
+        "columns": ["time_ist", "open", "high", "low", "close", "volume"],
+        "rows": {
+          "INFY": [
+            ["2025-07-07T09:15:00+05:30", 1500.0, 1512.0, 1495.0, 1508.0, 100000],
+            ["2025-07-08T09:15:00+05:30", 1510.0, 1515.0, 1480.0, 1490.0, 100000],
+            ["2025-07-09T09:15:00+05:30", 1440.0, 1442.0, 1420.0, 1425.0, 100000],
+            ["2025-07-10T09:15:00+05:30", 1430.0, 1438.0, 1425.0, 1432.0, 100000]
+          ]
+        }
+      },
+      "missing_slices": [],
+      "strategy": {
+        "class_attributes": {"symbol": "INFY", "exchange": "NSE", "interval": "D"},
+        "conditions": null,
+        "decisions": [
+          {
+            "bar_open_ist": "2025-07-07T09:15:00+05:30",
+            "decision_time_ist": "2025-07-07T15:30:00+05:30",
+            "decision_slice_ist": "2025-07-07T09:15:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "buy",
+              "arguments": {
+                "qty": 10,
+                "stop": {"bt": "points", "args": [50]}
+              }
+            },
+            "python": "self.buy(qty=10, stop=bt.points(50))"
+          },
+          {
+            "bar_open_ist": "2025-07-09T09:15:00+05:30",
+            "decision_time_ist": "2025-07-09T15:30:00+05:30",
+            "decision_slice_ist": "2025-07-09T09:15:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "buy",
+              "arguments": {
+                "qty": 10,
+                "stop": {"bt": "points", "args": [50]}
+              }
+            },
+            "python": "self.buy(qty=10, stop=bt.points(50))"
+          }
+        ]
+      },
+      "expected": {
+        "assumptions": {"base": "D", "product": "CNC", "entry_until": null, "square_off": null},
+        "strategy_bars": [
+          {"bar_open_ist": "2025-07-07T09:15:00+05:30", "open": 1500.0, "high": 1512.0, "low": 1495.0, "close": 1508.0},
+          {"bar_open_ist": "2025-07-08T09:15:00+05:30", "open": 1510.0, "high": 1515.0, "low": 1480.0, "close": 1490.0},
+          {"bar_open_ist": "2025-07-09T09:15:00+05:30", "open": 1440.0, "high": 1442.0, "low": 1420.0, "close": 1425.0},
+          {"bar_open_ist": "2025-07-10T09:15:00+05:30", "open": 1430.0, "high": 1438.0, "low": 1425.0, "close": 1432.0}
+        ],
+        "decisions": [
+          {"decision": 0, "position_condition_met": true, "order_id": "o1", "outcome": "filled"},
+          {"decision": 1, "position_condition_met": false, "order_id": null, "outcome": "no_order"}
+        ],
+        "fills": [
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "instrument": "INFY", "side": "BUY", "quantity_units": 10, "price_rupees": 1510.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-10T09:15:00+05:30", "step": 2, "instrument": "INFY", "side": "SELL", "quantity_units": 10, "price_rupees": 1430.0, "fill_at": "open", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": ["gtt_child_unfilled"], "gtt_id": "g1", "depends_on": ["GTT-8", "GTT-10"]}
+        ],
+        "levels": [
+          {
+            "slice_ist": "2025-07-08T09:15:00+05:30",
+            "instrument": "INFY",
+            "position_quantity_units": 10,
+            "average_price_rupees": 1510.0,
+            "stop": {"level_rupees": 1460.0, "quantity_units": 10},
+            "targets": [],
+            "remainder_quantity_units": 10,
+            "trail": null,
+            "breakeven": null
+          },
+          {"slice_ist": "2025-07-10T09:15:00+05:30", "instrument": "INFY", "position_quantity_units": 0, "average_price_rupees": null, "stop": null, "targets": [], "remainder_quantity_units": 0, "trail": null, "breakeven": null}
+        ],
+        "events": [
+          {"slice_ist": "2025-07-07T09:15:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o1", "quantity_units": null, "price_rupees": null, "reject_code": null},
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o1", "quantity_units": 10, "price_rupees": 1510.0, "reject_code": null},
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "INFY", "position_quantity_units": 10},
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "type": "gtt", "name": "GttPlaced", "gtt_id": "g1", "instrument": "INFY", "quantity_units": 10, "stop_trigger_rupees": 1460.0, "target_trigger_rupees": null, "fired_leg": null, "child_limit_rupees": null, "price_rupees": null, "depends_on": ["GTT-8"]},
+          {"slice_ist": "2025-07-09T09:15:00+05:30", "step": 3, "type": "gtt", "name": "GttTriggered", "gtt_id": "g1", "instrument": "INFY", "quantity_units": 10, "stop_trigger_rupees": 1460.0, "target_trigger_rupees": null, "fired_leg": "stop", "child_limit_rupees": 1445.4, "price_rupees": null, "depends_on": ["GTT-1", "GTT-8"]},
+          {"slice_ist": "2025-07-09T09:15:00+05:30", "step": 3, "type": "risk", "name": "leg_sl_hit", "scope": "leg", "instrument": "INFY", "level_rupees": 1460.0, "target_index": null, "observed_rupees": null, "depends_on": ["GTT-8"]},
+          {"slice_ist": "2025-07-09T09:15:00+05:30", "step": 3, "type": "risk", "name": "gtt_child_unfilled", "scope": "leg", "instrument": "INFY", "level_rupees": 1445.4, "target_index": null, "observed_rupees": 1442.0, "depends_on": ["GTT-1", "GTT-8"]},
+          {"slice_ist": "2025-07-09T09:15:00+05:30", "step": 3, "type": "gtt", "name": "GttChildCanceled", "gtt_id": "g1", "instrument": "INFY", "quantity_units": 10, "stop_trigger_rupees": null, "target_trigger_rupees": null, "fired_leg": null, "child_limit_rupees": 1445.4, "price_rupees": null, "depends_on": ["GTT-1", "GTT-8"]},
+          {"slice_ist": "2025-07-10T09:15:00+05:30", "step": 2, "type": "position", "name": "PositionClosed", "instrument": "INFY", "position_quantity_units": 0, "depends_on": ["GTT-10"]}
+        ],
+        "stale_marks": [],
+        "final_positions": [
+          {"instrument": "INFY", "quantity_units": 0, "average_price_rupees": null}
+        ],
+        "gross_pnl": {"realized_rupees": -800.0, "unrealized_rupees": 0.0, "total_rupees": -800.0, "depends_on": ["GTT-10"]}
+      },
+      "derivation": [
+        {
+          "n": 1,
+          "slice_ist": "2025-07-07T09:15:00+05:30",
+          "step": 7,
+          "text": "on_bar at the close of 2025-07-07; flat; decision 0 calls buy; o1 Submitted for the next session.",
+          "cites": ["03-architecture 4.2 step 7 and order validity", "04-execution 4.4 item 1"]
+        },
+        {
+          "n": 2,
+          "slice_ist": "2025-07-08T09:15:00+05:30",
+          "step": 2,
+          "text": "BUY 10 at the open 1510.00. Stop 1460.00, held by a SINGLE GTT: GttPlaced g1, trigger 1460.00, quantity 10.",
+          "cites": ["03-architecture 4.2 step 2", "05-risk-management 3", "04-execution 4.4 item 2", "14-strategy-api 2.4", "08-live-trading 6.2"]
+        },
+        {
+          "n": 3,
+          "slice_ist": "2025-07-08T09:15:00+05:30",
+          "step": 3,
+          "text": "The low 1480.00 is above the trigger; nothing fires.",
+          "cites": ["03-architecture 4.2 step 3", "04-execution 4.4 item 3"]
+        },
+        {
+          "n": 4,
+          "slice_ist": "2025-07-09T09:15:00+05:30",
+          "step": 3,
+          "text": "The open 1440.00 is beyond the trigger 1460.00: g1 fires at the open on its stop leg (GttTriggered, then leg_sl_hit at 1460.00). Child sell LIMIT 1460.00 x 0.99 = 1445.40. The open is below the limit and the high 1442.00 never reaches it, so the price never trades through the limit after the trigger: the child has not filled through one base bar. The engine raises a risk event (gtt_child_unfilled, level 1445.40, observed 1442.00), cancels the child (GttChildCanceled) and, the cancel being confirmed, queues its own exit for the next base-bar open. The GTT is spent.",
+          "cites": ["04-execution 4.4 item 3", "01-requirements 7.3", "08-live-trading 6.2", "03-architecture 4.2 step 3"]
+        },
+        {
+          "n": 5,
+          "slice_ist": "2025-07-09T09:15:00+05:30",
+          "step": 5,
+          "text": "The position is still long 10 and is marked at the close 1425.00 (unrealized -850.00). It has a bar, so it is not stale.",
+          "cites": ["03-architecture 4.2 step 5"]
+        },
+        {
+          "n": 6,
+          "slice_ist": "2025-07-09T09:15:00+05:30",
+          "step": 7,
+          "text": "on_bar at the close of 2025-07-09: the position is long, so decision 1, guarded by flat, places no order.",
+          "cites": ["03-architecture 4.2 step 7", "14-strategy-api 2.2"]
+        },
+        {
+          "n": 7,
+          "slice_ist": "2025-07-10T09:15:00+05:30",
+          "step": 2,
+          "text": "A backtest assumes the engine is running at every session open: its exit fills at the open of 2025-07-10, SELL 10 at 1430.00 (a MARKET exit, zero slippage), reason leg_sl, flagged gtt_child_unfilled, carrying gtt_id g1. Realized (1430.00 - 1510.00) x 10 = -800.00.",
+          "cites": ["04-execution 4.4 item 3", "03-architecture 4.2 step 2", "05-risk-management 6.2"]
+        },
+        {
+          "n": 8,
+          "slice_ist": null,
+          "step": null,
+          "text": "End of run: flat. Gross P&L -800.00.",
           "cites": ["03-architecture 4.2 end of run"]
         }
       ]

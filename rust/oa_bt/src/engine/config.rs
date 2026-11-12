@@ -156,8 +156,9 @@ impl RunConfig {
     /// Check that the kernel can run this configuration as given.
     ///
     /// Errors: `InvalidConfig` for a reversed date range, capital that is not positive,
-    /// or a strategy interval that is not a whole multiple of the base; `NotBuilt` for
-    /// `fill="close"`, period intervals and any strategy or session risk rule.
+    /// or a strategy interval that is not a whole multiple of the base; `Rms` for an
+    /// unusable strategy or session risk rule; `NotBuilt` for `fill="close"` and period
+    /// intervals.
     pub fn validate(&self) -> Result<(), KernelError> {
         if self.first_day > self.last_day {
             return Err(invalid("start", "the first day is after the last day"));
@@ -169,12 +170,7 @@ impl RunConfig {
         if self.fill == FillTiming::Close {
             return Err(not_built("fill=\"close\""));
         }
-        if !self.risk.aggregate_rules_set().is_empty() {
-            return Err(not_built(
-                "strategy and session risk rules (daily loss, positions cap, drawdown halt, \
-                 cooldown)",
-            ));
-        }
+        self.risk.validate()?;
         Ok(())
     }
 

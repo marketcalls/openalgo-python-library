@@ -12,9 +12,10 @@
 //! and longer strategies are valid for the next session; GTT orders persist.
 //!
 //! Built: the quantity rule, the freeze quantity (deny), the product rule (no delivery
-//! short, no trading an index), the entry window and market closed. Not built yet:
-//! tick validity of limit and trigger prices, margin at submission, the daily loss
-//! gate, cooldown, maximum positions, the halted state and the order rate limit.
+//! short, no trading an index), the entry window and market closed; the trading-state
+//! gate (daily loss gate, halted), cooldown and maximum positions are risk rules
+//! (`rms::TradingLock`, `rms::entry_gates`). Not built yet: tick validity of limit and
+//! trigger prices, margin at submission and the order rate limit.
 
 use crate::model::{Product, Side, TsNanos};
 

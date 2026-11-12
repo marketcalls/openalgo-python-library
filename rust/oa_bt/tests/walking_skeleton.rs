@@ -265,6 +265,7 @@ fn event_names(output: &RunOutput) -> Vec<(i64, Step, &'static str)> {
             Event::Order { stamp, kind, .. } => (stamp.slice_ts, stamp.step, kind.code()),
             Event::Position { stamp, change, .. } => (stamp.slice_ts, stamp.step, change.code()),
             Event::Risk { stamp, event, .. } => (stamp.slice_ts, stamp.step, event.name.code()),
+            Event::TradingState { stamp, to, .. } => (stamp.slice_ts, stamp.step, to.code()),
         })
         .collect()
 }

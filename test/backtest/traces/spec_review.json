@@ -402,6 +402,7 @@
         "trace-06a-daily-cnc",
         "trace-06b-percent-levels-rounded",
         "trace-06c-stop-on-the-entry-day",
+        "trace-06d-gtt-child-unfilled",
         "trace-08a-trail-across-roll",
         "trace-08b-daily-loss-across-roll",
         "trace-11a-conditions-and-on-bar",
@@ -439,6 +440,7 @@
         "trace-06a-daily-cnc",
         "trace-06b-percent-levels-rounded",
         "trace-06c-stop-on-the-entry-day",
+        "trace-06d-gtt-child-unfilled",
         "trace-08a-trail-across-roll",
         "trace-08b-daily-loss-across-roll",
         "trace-11a-conditions-and-on-bar",
@@ -674,6 +676,231 @@
       "decided_on": "2026-11-12",
       "reason": "03 4.1 is the rule; 05 only needs the wording aligned.",
       "proposed_wording": "05-risk-management 1, principle 3: replace '1-minute base bars' with 'base bars (03-architecture 4.1)'.",
+      "cases": []
+    },
+    {
+      "id": "GTT-1",
+      "kind": "gap",
+      "severity": "high",
+      "status": "resolved",
+      "title": "Price of the order a GTT places when it fires",
+      "documents": ["04-execution-and-market-model 4.4"],
+      "question": "When a GTT on a positional (CNC or NRML) position fires, it places a child order. What price does the engine give that order by default?",
+      "readings": [
+        "A. A LIMIT beyond the trigger by a buffer per segment: 1 percent for cash and futures, 5 percent for options (the same as the options stop), rounded to the tick, and configurable.",
+        "B. A MARKET order where the broker accepts one, otherwise the LIMIT of reading A.",
+        "C. A LIMIT exactly at the trigger price."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "Reading A behaves the same at every broker, so backtest and live agree. Reading B depends on per-broker support that has not been confirmed. Reading C often fails to fill on a fast move, leaving the position unprotected.",
+      "proposed_wording": "04-execution-and-market-model 4.4 item 3, add: 'The child order is a LIMIT beyond the trigger by 1 percent for cash and futures and 5 percent for options, rounded to the tick; the buffer is configurable per segment.'",
+      "cases": [
+        "trace-06a-daily-cnc",
+        "trace-06b-percent-levels-rounded",
+        "trace-06c-stop-on-the-entry-day",
+        "trace-06d-gtt-child-unfilled",
+        "trace-08a-trail-across-roll"
+      ]
+    },
+    {
+      "id": "GTT-2",
+      "kind": "gap",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "GTT expiry",
+      "documents": ["04-execution-and-market-model 4.4"],
+      "question": "Brokers cancel a GTT after a fixed period, typically one year. What does the engine do about a positional trade held that long?",
+      "readings": [
+        "A. Re-create any GTT older than 360 days at the next session open, in live and in backtests alike.",
+        "B. Model no expiry, and warn in live when a GTT nears its expiry.",
+        "C. Let the GTT expire; the position is then unprotected."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "A position held for a year should not silently lose its stop. Re-creating it in both modes keeps backtest and live the same.",
+      "proposed_wording": "04-execution-and-market-model 4.4, add: 'A GTT older than 360 days is cancelled and re-created at the next session open, in backtest and live alike.'",
+      "cases": []
+    },
+    {
+      "id": "GTT-3",
+      "kind": "gap",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "How often a trailing GTT is modified",
+      "documents": ["04-execution-and-market-model 4.4 item 5", "05-risk-management 3"],
+      "question": "A trailing stop or a breakeven on a positional trade moves its GTT. How often may the engine modify it?",
+      "readings": [
+        "A. At most once per base bar, and only when the level moves by at least one tick; in live also at most once a minute per GTT.",
+        "B. Every time the level changes."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "Brokers rate-limit order modifications and some charge for them. One tick is the smallest move that changes anything, and one change per base bar is all a backtest can observe anyway.",
+      "proposed_wording": "04-execution-and-market-model 4.4 item 5, add: 'A GTT is modified at most once per base bar, only when its level moves by at least one tick, and in live at most once a minute.'",
+      "cases": ["trace-08a-trail-across-roll"]
+    },
+    {
+      "id": "GTT-4",
+      "kind": "gap",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "What a backtest assumes when the engine would not be running",
+      "documents": ["04-execution-and-market-model 4.4 item 3", "08-live-trading 4"],
+      "question": "A GTT fires at the broker even when the engine is not running. But when its child order does not fill on a gap, the follow-up exit needs the engine. What does a backtest assume?",
+      "readings": [
+        "A. The engine is running at every session open, so the follow-up exit happens at the next base-bar open; the live engine checks GTT state at each session open to match.",
+        "B. The engine runs only during hours the user configures, and the follow-up exit is modelled at the next time it would be running."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "Reading A is simple, matches the live preflight that already runs before each session, and is what a positional trader expects. Reading B adds a schedule setting for little benefit in v1.",
+      "proposed_wording": "04-execution-and-market-model 4.4 item 3, add: 'A backtest assumes the engine is running at every session open; the live engine checks every GTT at each session open.'",
+      "cases": ["trace-06d-gtt-child-unfilled"]
+    },
+    {
+      "id": "GTT-5",
+      "kind": "clarification",
+      "severity": "high",
+      "status": "open",
+      "title": "Fill price of a GTT child that is marketable when it is placed",
+      "documents": ["04-execution 4.4 item 3", "03-architecture 4.2 step 3 and slippage", "05-risk-management 6.2"],
+      "question": "A GTT's child is a LIMIT beyond the trigger, so when a bar trades to the trigger (or opens beyond it but not beyond the limit) the child is marketable the moment it is placed. 04 4.4 says when it fills, not at what price. Does a child LIMIT take slippage?",
+      "readings": [
+        "A. At the price that fired it: the trigger when the bar reached it inside its range, the open when the bar opened beyond the trigger but not beyond the limit; slippage applies as to a MARKET exit but never past the limit.",
+        "B. Always at its limit price."
+      ],
+      "recommended": "A",
+      "decision": "",
+      "decided_on": "",
+      "reason": "A marketable LIMIT executes at the market, and the trigger (or the open) is the only market price the bar tells. B would book up to the whole buffer as a loss on every stop. With A a positional stop exit on bars is priced as an engine-held stop is (03-architecture 4.2 step 3).",
+      "proposed_wording": "04-execution 4.4 item 3, add: 'A child that is marketable when placed fills at the trigger, or at the open when the bar opened beyond the trigger, plus slippage, never worse than its limit.'",
+      "cases": ["trace-06a-daily-cnc", "trace-06b-percent-levels-rounded", "trace-06c-stop-on-the-entry-day", "trace-08a-trail-across-roll"]
+    },
+    {
+      "id": "GTT-6",
+      "kind": "gap",
+      "severity": "low",
+      "status": "open",
+      "title": "Rounding of a GTT child's limit",
+      "documents": ["04-execution 4.4 item 3", "05-risk-management 8", "04-execution 4.3"],
+      "question": "The child limit is 'rounded to the tick' with no direction. Is it computed from the rounded trigger, and rounded to the nearest tick (as levels are, 05 section 8), away from the trader (as slippage is, 04 4.3) or towards the trader? On which side of a target trigger does a target's child sit?",
+      "readings": [
+        "A. From the rounded trigger, rounded away from the trader (down for a sell, up for a buy); a child always sits on the far side of its trigger for its own side (below for a sell), for the target leg too.",
+        "B. From the rounded trigger, rounded to the nearest tick, an exact half tick up.",
+        "C. Rounded towards the trader."
+      ],
+      "recommended": "A",
+      "decision": "",
+      "decided_on": "",
+      "reason": "The buffer is there to make the child fill; rounding it towards the market would shrink it. A and B agree on every limit in the traces; only C differs (06b: 1459.20 instead of 1459.15).",
+      "proposed_wording": "04-execution 4.4 item 3: 'rounded to the tick away from the trader'.",
+      "cases": ["trace-06b-percent-levels-rounded"]
+    },
+    {
+      "id": "GTT-7",
+      "kind": "ambiguity",
+      "severity": "high",
+      "status": "open",
+      "title": "A bar that opens beyond the child's limit and later trades back to it",
+      "documents": ["04-execution 4.4 item 3", "04-execution 4.1"],
+      "question": "04 4.4 says a child 'fills only if the price trades through the limit after the trigger' and 'on a gap beyond the limit it does not fill'. When a bar opens beyond the limit and later in the same bar trades back through it, does the child fill? Is a touch of the limit enough?",
+      "readings": [
+        "A. Yes: the child rests through the bar like any LIMIT and fills at its limit when the bar trades back to it (a touch is enough, as for levels); 'does not fill' describes a gap that never comes back.",
+        "B. No: a child whose bar opened beyond its limit does not fill in that bar; it is cancelled and the engine exits at the next base-bar open."
+      ],
+      "recommended": "A",
+      "decision": "",
+      "decided_on": "",
+      "reason": "A gives 'has not filled through one base bar' its purpose and treats the child like every other resting LIMIT (03-architecture 4.2 step 3). An independent derivation from the documents read it the same way.",
+      "proposed_wording": "04-execution 4.4 item 3: 'On a gap beyond the limit it fills only if the bar later trades back to the limit; otherwise the GTT is spent.'",
+      "cases": ["trace-06a-daily-cnc"]
+    },
+    {
+      "id": "GTT-8",
+      "kind": "gap",
+      "severity": "medium",
+      "status": "open",
+      "title": "The event stream of a GTT",
+      "documents": ["03-architecture 4.5", "05-risk-management 7", "04-execution 4.4"],
+      "question": "The documents describe the life of a GTT (placed, modified, fired with a child order, the child filled or cancelled, cancelled by the engine) but name none of its events, their fields or steps. Also open: does the child order emit order events; is leg_sl_hit emitted when the GTT fires; what are the risk event, the flag and the reason of the engine's exit after an unfilled child; what 'where it filled' a fill at the child's limit carries; does a GTT the engine places go through the submission checks of step 7.",
+      "readings": [
+        "A. As the fixtures: events of type gtt named GttPlaced (step 2, after the fill that opened the position), GttModified (step 4), GttTriggered (step 3, with the fired leg and the child's limit), GttChildFilled or GttChildCanceled (step 3), GttCanceled (in the step of the engine's own exit, before it); the child emits no order events; leg_sl_hit or leg_target_hit is emitted when the GTT fires; after an unfilled child, risk event gtt_child_unfilled (level: the limit, observed: the best price after the trigger) and an engine exit with reason leg_sl, flag gtt_child_unfilled; a fill carries the GTT's id in gtt_id and 'level' when it fills at the child's limit; an automatic GTT goes through no submission check.",
+        "B. The child is an order: Submitted, Filled and Canceled order events carrying the parent GTT's id; a new 'limit' value for where a fill happened."
+      ],
+      "recommended": "A",
+      "decision": "",
+      "decided_on": "",
+      "reason": "A keeps one rule of 03-architecture 4.5, that protective exits emit no order events, while making every state of the GTT visible to on_risk_event and the comparison. B is closer to the live order book and would be equally testable; the choice only has to be written down.",
+      "proposed_wording": "03-architecture 4.5, add rows for the GTT events, and 05-risk-management 7: add the risk event gtt_child_unfilled and the flag.",
+      "cases": [
+        "trace-06a-daily-cnc",
+        "trace-06b-percent-levels-rounded",
+        "trace-06c-stop-on-the-entry-day",
+        "trace-06d-gtt-child-unfilled",
+        "trace-08a-trail-across-roll",
+        "trace-08b-daily-loss-across-roll"
+      ]
+    },
+    {
+      "id": "GTT-9",
+      "kind": "gap",
+      "severity": "medium",
+      "status": "open",
+      "title": "GTTs at a futures roll and at the engine's own exits",
+      "documents": ["04-execution 7", "04-execution 4.4", "08-live-trading 6.2", "03-architecture 4.2 steps 2, 3 and 6"],
+      "question": "At a roll the near contract is closed and the next opened; at a daily-loss exit the engine closes the position itself. What happens to the GTT in force? When is a new GTT on the next contract live? The roll's rule 'a level already crossed at the near contract's open exits there instead' is written for step 2, while GTTs are tested in step 3.",
+      "readings": [
+        "A. Cancel-then-exit: the GTT in force is cancelled in the step of the engine's exit (the roll's step 2, the daily loss's step 6), before the exit, and the exit fills in that step; at a roll a new GTT with the shifted triggers is placed on the next contract after its fill and is tested in step 3 of the roll slice; a near-contract trigger crossed at its open fires the GTT in step 2 and nothing is rolled.",
+        "B. The GTT is modified to the next contract and in force from the next base bar; an engine exit waits for the next bar after the cancel."
+      ],
+      "recommended": "A",
+      "decision": "",
+      "decided_on": "",
+      "reason": "08-live-trading 6.2 gives one exit owner and cancel-then-exit for every exit that is not the protective order's own, and a GTT cannot change its instrument. A keeps the roll and the daily-loss exit where 04 section 7 and 03 4.2 step 6 put them.",
+      "proposed_wording": "04-execution 7, add: 'The near contract's GTT is cancelled before the near leg closes; a new GTT with the shifted triggers is placed on the next contract after its fill.' 04-execution 4.4, add: 'Every exit the engine makes itself cancels the GTT first, in the same step.'",
+      "cases": ["trace-08a-trail-across-roll", "trace-08b-daily-loss-across-roll"]
+    },
+    {
+      "id": "GTT-10",
+      "kind": "contradiction",
+      "severity": "high",
+      "status": "open",
+      "title": "The general gap rule against the GTT child on positional products",
+      "documents": ["03-architecture 4.1 (Assumptions text), 4.2 step 3", "04-execution 4.2", "05-risk-management 3 and 6.2", "04-execution 4.4 item 3"],
+      "question": "03 4.2 step 3, 04 4.2 and 05 sections 3 and 6.2 say a level already crossed at the open fills at the open, and the Assumptions text for base D says stops 'fill at the stop level, or at the open on a gap'. For a CNC or NRML position 04 4.4 says the stop is a GTT whose child LIMIT does not fill beyond its limit. Which governs a positional stop on a gap?",
+      "readings": [
+        "A. 04 4.4 governs CNC and NRML: the general texts describe engine-held levels (MIS) and are qualified accordingly.",
+        "B. The general rule governs: a positional stop crossed at the open fills at the open whatever its child's limit."
+      ],
+      "recommended": "A",
+      "decision": "",
+      "decided_on": "",
+      "reason": "The GTT model was decided because it is how positional orders work in Indian markets; B would undo it on exactly the gaps it exists for. An independent derivation found the same contradiction.",
+      "proposed_wording": "03-architecture 4.2 step 3 and 04-execution 4.2: add 'For CNC and NRML positions the stop and target are GTTs and fill by 04-execution 4.4'. 03-architecture 4.1, Assumptions text for base D: 'or at the open on a gap (for a positional stop, at the open or at its child's limit)'.",
+      "cases": ["trace-06a-daily-cnc", "trace-06d-gtt-child-unfilled"]
+    },
+    {
+      "id": "GTT-11",
+      "kind": "gap",
+      "severity": "low",
+      "status": "open",
+      "title": "Several targets, adds and partial exits on a positional position",
+      "documents": ["04-execution 4.4 item 2", "12-position-sizing 3 and 4"],
+      "question": "One OCO GTT holds one stop and one target. How are targets=[...] with several targets, after_first_target, an add (which changes the quantity and the levels) and a partial exit held as GTTs, so that the working exit quantity never exceeds the position?",
+      "readings": [
+        "A. One OCO GTT per target, each with its own quantity and a stop leg for that quantity, plus a SINGLE stop GTT for the remainder; an add or a partial exit modifies them (a full replacement, effective from the next base bar).",
+        "B. Only the stop and the nearest target are GTTs; further targets are re-armed when the first fills."
+      ],
+      "recommended": "A",
+      "decision": "",
+      "decided_on": "",
+      "reason": "A keeps every unit protected by exactly one stop and never sells more than is held. No trace exercises it yet.",
+      "proposed_wording": "04-execution 4.4 item 2, add the rule chosen.",
       "cases": []
     }
   ]

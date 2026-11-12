@@ -118,6 +118,7 @@ fn risk(dict: &Bound<'_, PyDict>) -> PyResult<StrategyRiskConfig> {
         max_positions: optional(dict, "max_positions")?,
         drawdown_halt_percent: optional(dict, "drawdown_halt")?,
         cooldown_bars: optional(dict, "cooldown_bars")?,
+        max_hold_bars: optional(dict, "max_hold_bars")?,
         round_levels: field(dict, "round_levels")?,
         strict_config: field(dict, "strict_config")?,
         ..StrategyRiskConfig::default()

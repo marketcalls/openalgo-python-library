@@ -35,6 +35,7 @@ FORWARDED_SETTINGS = (
     "capital",
     "quantity_mode",
     "round_levels",
+    "max_daily_loss",
     "risk_basis",
     "after_risk_exit",
 )
@@ -47,8 +48,6 @@ def unsupported_reason(case: Case, form: str) -> str | None:
     settings = case["settings"]
     if settings["roll"] is not None:
         return "the futures roll"
-    if settings["max_daily_loss"] is not None:
-        return "the daily loss limit"
     if len({instrument["exchange"] for instrument in case["instruments"]}) != 1:
         return "runs across exchanges"
     for decision in case["strategy"]["decisions"]:

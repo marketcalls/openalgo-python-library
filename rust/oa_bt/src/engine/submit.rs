@@ -238,7 +238,13 @@ impl Engine {
                 return Ok(Err(code));
             }
         }
-        Ok(self.day_validity(slice))
+        let validity = self.day_validity(slice);
+        if opening && validity.is_ok() {
+            if let Err(code) = self.entry_gates(key, held, slice) {
+                return Ok(Err(code));
+            }
+        }
+        Ok(validity)
     }
 
     /// When a DAY order decided at this slice expires, or `market_closed` when its fill

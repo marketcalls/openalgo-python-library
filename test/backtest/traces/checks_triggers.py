@@ -7,6 +7,11 @@ force must produce a fill, and a level fill must be priced from the level in for
 Slices in which the instrument has a fill at the open (an entry, an add, a square-off, a
 roll) are left out: there the levels change in step 2 and the timeline, which records
 the end of each slice, does not show the levels step 3 used.
+
+On a CNC or NRML position the levels are a GTT's triggers (04-execution 4.4): a bar that
+reaches one fires the GTT, and its exit is either the child's fill in that slice or, when
+the child cannot fill, the engine's exit at the next bar open. The price of a GTT's exit
+is checked in `checks_gtt_children`, not here.
 """
 
 from __future__ import annotations
@@ -32,6 +37,7 @@ Violations = list[str]
 Trigger = tuple[str, int | None]
 
 LEVEL_REASONS = ("leg_sl", "leg_target")
+REASON_BY_GTT_LEG = {"stop": "leg_sl", "target": "leg_target"}
 
 
 def _carried_positions(case: Case) -> Iterator[tuple[str, str, Bar, LevelRow]]:
@@ -65,9 +71,33 @@ def _expected_triggers(bar: Bar, row: LevelRow) -> set[Trigger]:
     return {("leg_target", index) for index, level in targets if is_beyond(favourable, level, long)}
 
 
+def _gtt_fires_left_unfilled(
+    case: Case, instrument: str, slice_ist: str, row: LevelRow
+) -> set[Trigger]:
+    """Levels whose GTT fired in this slice but whose child was cancelled unfilled; the exit
+    then comes at the next bar open, so the slice has no fill for them."""
+    unfilled = {
+        event["gtt_id"]
+        for event in case["expected"]["events"]
+        if event["type"] == "gtt"
+        and event["name"] == "GttChildCanceled"
+        and event["slice_ist"] == slice_ist
+    }
+    triggers = set()
+    for event in case["expected"]["events"]:
+        fired = event["type"] == "gtt" and event["name"] == "GttTriggered"
+        if not fired or event["gtt_id"] not in unfilled or event["instrument"] != instrument:
+            continue
+        reason = REASON_BY_GTT_LEG[event["fired_leg"]]
+        index = None if reason == "leg_sl" else working_targets(row)[0]["index"]
+        triggers.add((reason, index))
+    return triggers
+
+
 def no_level_in_force_is_missed(case: Case) -> Violations:
-    """Rule: a bar that reaches a stop or target in force has exactly the fills step 3
-    prescribes, and a bar that reaches none has no level fill."""
+    """Rule: a bar that reaches a stop or target in force has exactly the exits step 3
+    prescribes (a fill, or a fired GTT whose child could not fill), and a bar that reaches
+    none has no level exit."""
     problems = []
     for instrument, slice_ist, bar, row in _carried_positions(case):
         expected = _expected_triggers(bar, row)
@@ -75,7 +105,7 @@ def no_level_in_force_is_missed(case: Case) -> Violations:
             (fill["reason"], fill["target_index"])
             for fill in fills_at(case, instrument, slice_ist)
             if fill["reason"] in LEVEL_REASONS
-        }
+        } | _gtt_fires_left_unfilled(case, instrument, slice_ist, row)
         if expected != actual:
             problems.append(
                 f"{case['id']} {slice_ist}: {instrument} bar {bar.low} to {bar.high} against "
@@ -86,13 +116,15 @@ def no_level_in_force_is_missed(case: Case) -> Violations:
 
 
 def level_fills_are_priced_from_the_level_in_force(case: Case) -> Violations:
-    """Rule: a stop or target fills at its level when the bar opens short of it, and at the
-    open when the open has already reached it."""
+    """Rule: an engine-held stop or target (MIS) fills at its level when the bar opens short
+    of it, and at the open when the open has already reached it."""
     problems = []
     bars = bars_by_slice(case)
     for fill in case["expected"]["fills"]:
         instrument, slice_ist = fill["instrument"], fill["slice_ist"]
-        if fill["reason"] not in LEVEL_REASONS or has_fill_at_the_open(case, instrument, slice_ist):
+        if fill["reason"] not in LEVEL_REASONS or fill["gtt_id"] is not None:
+            continue
+        if has_fill_at_the_open(case, instrument, slice_ist):
             continue
         where = f"{case['id']} {slice_ist}: {fill['reason']} fill"
         row = row_in_force(case, instrument, slice_ist)

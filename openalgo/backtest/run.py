@@ -40,6 +40,7 @@ from .errors import ConfigError
 from .reference import Instrument
 from .result import Result
 from .strategy import Strategy
+from .units import Distance
 
 CASH_EXCHANGES = ("NSE", "BSE")
 PHASE_1_WORK = "is not implemented yet (Phase 1 work in progress)"
@@ -66,11 +67,11 @@ def backtest(
     entry_from: str | None = None,
     entry_until: str | None = None,
     square_off: str | None = None,
-    max_daily_loss: float | None = None,
+    max_daily_loss: float | Distance | None = None,
     risk_basis: str = "gross",
     after_risk_exit: str = "lock_session",
     max_positions: int | None = None,
-    drawdown_halt: float | None = None,
+    drawdown_halt: float | Distance | None = None,
     cooldown: int | None = None,
     round_levels: bool = True,
     strict_config: bool = True,
@@ -101,7 +102,8 @@ def backtest(
         exchange; IST "HH:MM" times for MIS (calendar defaults when omitted).
     max_daily_loss, risk_basis, after_risk_exit, max_positions, drawdown_halt, cooldown,
         round_levels, strict_config: risk settings (05-risk-management); strategy class
-        attributes of the same names win.
+        attributes of the same names win. `max_daily_loss` is rupees (or bt.rupees),
+        `drawdown_halt` percent from peak equity (bt.pct(x)), `cooldown` base bars.
     roll: futures roll settings. params: parameter values for the strategy.
 
     Raises ConfigError for unusable arguments, the data layer's errors for data, and

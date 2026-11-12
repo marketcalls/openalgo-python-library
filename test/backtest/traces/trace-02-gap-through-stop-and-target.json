@@ -138,12 +138,12 @@
           {"decision": 2, "position_condition_met": true, "order_id": "o3", "outcome": "filled"}
         ],
         "fills": [
-          {"slice_ist": "2025-07-01T09:20:00+05:30", "step": 2, "instrument": "ITC", "side": "BUY", "quantity_units": 50, "price_rupees": 420.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T09:22:00+05:30", "step": 3, "instrument": "ITC", "side": "SELL", "quantity_units": 50, "price_rupees": 417.2, "fill_at": "open", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T09:25:00+05:30", "step": 2, "instrument": "ITC", "side": "BUY", "quantity_units": 50, "price_rupees": 417.0, "fill_at": "open", "reason": "entry", "order_id": "o2", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T09:27:00+05:30", "step": 3, "instrument": "ITC", "side": "SELL", "quantity_units": 50, "price_rupees": 420.6, "fill_at": "open", "reason": "leg_target", "order_id": null, "target_index": 0, "flags": [], "depends_on": ["SPEC-33"]},
-          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "instrument": "ITC", "side": "BUY", "quantity_units": 50, "price_rupees": 415.5, "fill_at": "open", "reason": "entry", "order_id": "o3", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T09:31:00+05:30", "step": 3, "instrument": "ITC", "side": "SELL", "quantity_units": 50, "price_rupees": 413.5, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": []}
+          {"slice_ist": "2025-07-01T09:20:00+05:30", "step": 2, "instrument": "ITC", "side": "BUY", "quantity_units": 50, "price_rupees": 420.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:22:00+05:30", "step": 3, "instrument": "ITC", "side": "SELL", "quantity_units": 50, "price_rupees": 417.2, "fill_at": "open", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:25:00+05:30", "step": 2, "instrument": "ITC", "side": "BUY", "quantity_units": 50, "price_rupees": 417.0, "fill_at": "open", "reason": "entry", "order_id": "o2", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:27:00+05:30", "step": 3, "instrument": "ITC", "side": "SELL", "quantity_units": 50, "price_rupees": 420.6, "fill_at": "open", "reason": "leg_target", "order_id": null, "target_index": 0, "flags": [], "gtt_id": null, "depends_on": ["SPEC-33"]},
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "instrument": "ITC", "side": "BUY", "quantity_units": 50, "price_rupees": 415.5, "fill_at": "open", "reason": "entry", "order_id": "o3", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:31:00+05:30", "step": 3, "instrument": "ITC", "side": "SELL", "quantity_units": 50, "price_rupees": 413.5, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "gtt_id": null}
         ],
         "levels": [
           {
@@ -438,12 +438,12 @@
           {"decision": 2, "position_condition_met": true, "order_id": "o3", "outcome": "filled"}
         ],
         "fills": [
-          {"slice_ist": "2025-07-01T09:20:00+05:30", "step": 2, "instrument": "ITC", "side": "SELL", "quantity_units": 50, "price_rupees": 420.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T09:22:00+05:30", "step": 3, "instrument": "ITC", "side": "BUY", "quantity_units": 50, "price_rupees": 422.7, "fill_at": "open", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T09:25:00+05:30", "step": 2, "instrument": "ITC", "side": "SELL", "quantity_units": 50, "price_rupees": 423.0, "fill_at": "open", "reason": "entry", "order_id": "o2", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T09:27:00+05:30", "step": 3, "instrument": "ITC", "side": "BUY", "quantity_units": 50, "price_rupees": 419.4, "fill_at": "open", "reason": "leg_target", "order_id": null, "target_index": 0, "flags": [], "depends_on": ["SPEC-33"]},
-          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "instrument": "ITC", "side": "SELL", "quantity_units": 50, "price_rupees": 425.0, "fill_at": "open", "reason": "entry", "order_id": "o3", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T09:31:00+05:30", "step": 3, "instrument": "ITC", "side": "BUY", "quantity_units": 50, "price_rupees": 427.0, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": []}
+          {"slice_ist": "2025-07-01T09:20:00+05:30", "step": 2, "instrument": "ITC", "side": "SELL", "quantity_units": 50, "price_rupees": 420.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:22:00+05:30", "step": 3, "instrument": "ITC", "side": "BUY", "quantity_units": 50, "price_rupees": 422.7, "fill_at": "open", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:25:00+05:30", "step": 2, "instrument": "ITC", "side": "SELL", "quantity_units": 50, "price_rupees": 423.0, "fill_at": "open", "reason": "entry", "order_id": "o2", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:27:00+05:30", "step": 3, "instrument": "ITC", "side": "BUY", "quantity_units": 50, "price_rupees": 419.4, "fill_at": "open", "reason": "leg_target", "order_id": null, "target_index": 0, "flags": [], "gtt_id": null, "depends_on": ["SPEC-33"]},
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "instrument": "ITC", "side": "SELL", "quantity_units": 50, "price_rupees": 425.0, "fill_at": "open", "reason": "entry", "order_id": "o3", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:31:00+05:30", "step": 3, "instrument": "ITC", "side": "BUY", "quantity_units": 50, "price_rupees": 427.0, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "gtt_id": null}
         ],
         "levels": [
           {

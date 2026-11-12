@@ -113,8 +113,8 @@
           {"decision": 0, "position_condition_met": true, "order_id": "o1", "outcome": "filled"}
         ],
         "fills": [
-          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "instrument": "DABUR", "side": "BUY", "quantity_units": 100, "price_rupees": 500.4, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T09:38:00+05:30", "step": 3, "instrument": "DABUR", "side": "SELL", "quantity_units": 100, "price_rupees": 496.9, "fill_at": "open", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": []}
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "instrument": "DABUR", "side": "BUY", "quantity_units": 100, "price_rupees": 500.4, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:38:00+05:30", "step": 3, "instrument": "DABUR", "side": "SELL", "quantity_units": 100, "price_rupees": 496.9, "fill_at": "open", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "gtt_id": null}
         ],
         "levels": [
           {
@@ -285,7 +285,7 @@
           {"decision": 0, "position_condition_met": true, "order_id": "o1", "outcome": "filled", "depends_on": ["SPEC-06"]}
         ],
         "fills": [
-          {"slice_ist": "2025-07-01T09:31:00+05:30", "step": 2, "instrument": "DABUR", "side": "BUY", "quantity_units": 100, "price_rupees": 500.6, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": [], "depends_on": ["SPEC-06"]}
+          {"slice_ist": "2025-07-01T09:31:00+05:30", "step": 2, "instrument": "DABUR", "side": "BUY", "quantity_units": 100, "price_rupees": 500.6, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": [], "gtt_id": null, "depends_on": ["SPEC-06"]}
         ],
         "levels": [
           {"slice_ist": "2025-07-01T09:31:00+05:30", "instrument": "DABUR", "position_quantity_units": 100, "average_price_rupees": 500.6, "stop": null, "targets": [], "remainder_quantity_units": 100, "trail": null, "breakeven": null, "depends_on": ["SPEC-06"]}

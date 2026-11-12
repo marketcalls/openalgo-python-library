@@ -133,12 +133,12 @@
           {"decision": 2, "position_condition_met": true, "order_id": "o3", "outcome": "filled"}
         ],
         "fills": [
-          {"slice_ist": "2025-07-01T09:20:00+05:30", "step": 2, "instrument": "HDFCBANK", "side": "BUY", "quantity_units": 100, "price_rupees": 1000.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "instrument": "HDFCBANK", "side": "BUY", "quantity_units": 100, "price_rupees": 1004.0, "fill_at": "open", "reason": "add", "order_id": "o2", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T09:35:00+05:30", "step": 3, "instrument": "HDFCBANK", "side": "SELL", "quantity_units": 100, "price_rupees": 1012.0, "fill_at": "level", "reason": "leg_target", "order_id": null, "target_index": 0, "flags": [], "depends_on": ["SPEC-08", "SPEC-10"]},
-          {"slice_ist": "2025-07-01T09:40:00+05:30", "step": 2, "instrument": "HDFCBANK", "side": "BUY", "quantity_units": 100, "price_rupees": 1012.0, "fill_at": "open", "reason": "add", "order_id": "o3", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T09:45:00+05:30", "step": 3, "instrument": "HDFCBANK", "side": "SELL", "quantity_units": 90, "price_rupees": 1027.0, "fill_at": "level", "reason": "leg_target", "order_id": null, "target_index": 1, "flags": [], "depends_on": ["SPEC-08", "SPEC-09", "SPEC-10"]},
-          {"slice_ist": "2025-07-01T09:50:00+05:30", "step": 3, "instrument": "HDFCBANK", "side": "SELL", "quantity_units": 110, "price_rupees": 1019.5, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "depends_on": ["SPEC-08", "SPEC-09"]}
+          {"slice_ist": "2025-07-01T09:20:00+05:30", "step": 2, "instrument": "HDFCBANK", "side": "BUY", "quantity_units": 100, "price_rupees": 1000.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "instrument": "HDFCBANK", "side": "BUY", "quantity_units": 100, "price_rupees": 1004.0, "fill_at": "open", "reason": "add", "order_id": "o2", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:35:00+05:30", "step": 3, "instrument": "HDFCBANK", "side": "SELL", "quantity_units": 100, "price_rupees": 1012.0, "fill_at": "level", "reason": "leg_target", "order_id": null, "target_index": 0, "flags": [], "gtt_id": null, "depends_on": ["SPEC-08", "SPEC-10"]},
+          {"slice_ist": "2025-07-01T09:40:00+05:30", "step": 2, "instrument": "HDFCBANK", "side": "BUY", "quantity_units": 100, "price_rupees": 1012.0, "fill_at": "open", "reason": "add", "order_id": "o3", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:45:00+05:30", "step": 3, "instrument": "HDFCBANK", "side": "SELL", "quantity_units": 90, "price_rupees": 1027.0, "fill_at": "level", "reason": "leg_target", "order_id": null, "target_index": 1, "flags": [], "gtt_id": null, "depends_on": ["SPEC-08", "SPEC-09", "SPEC-10"]},
+          {"slice_ist": "2025-07-01T09:50:00+05:30", "step": 3, "instrument": "HDFCBANK", "side": "SELL", "quantity_units": 110, "price_rupees": 1019.5, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "gtt_id": null, "depends_on": ["SPEC-08", "SPEC-09"]}
         ],
         "levels": [
           {
