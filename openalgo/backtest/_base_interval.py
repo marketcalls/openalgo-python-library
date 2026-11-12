@@ -39,6 +39,7 @@ ONE_MINUTE = "1m"
 NANOS_PER_DAY = 24 * 60 * NANOS_PER_MINUTE
 SECONDS_PER_MINUTE = 60
 MINUTES_PER_HOUR = 60
+SECONDS_PER_HOUR = SECONDS_PER_MINUTE * MINUTES_PER_HOUR
 DAILY_MEANING = (
     "stops are tested on the day's range and fill at the stop level, or at the open on a "
     "gap; combined and daily-loss exits fill at the day's close"
@@ -172,14 +173,25 @@ def _probe(plan: Any, args: dict[str, Any], load: Callable[..., BarsResult]) -> 
 
 def _span(interval: str) -> str:
     seconds = parse_interval(interval)[1]
-    minutes = seconds // SECONDS_PER_MINUTE
-    if minutes % MINUTES_PER_HOUR == 0:
-        return f"{minutes // MINUTES_PER_HOUR}-hour"
-    return f"{minutes}-minute"
+    if seconds % SECONDS_PER_HOUR == 0:
+        return f"{seconds // SECONDS_PER_HOUR}-hour"
+    if seconds % SECONDS_PER_MINUTE == 0:
+        return f"{seconds // SECONDS_PER_MINUTE}-minute"
+    return f"{seconds}-second"
 
 
-def _clock(minute: int) -> str:
-    return f"{minute // MINUTES_PER_HOUR:02d}:{minute % MINUTES_PER_HOUR:02d}"
+def _clock(second: int) -> str:
+    """ "HH:MM" for seconds since IST midnight, "HH:MM:SS" when they are not whole
+    minutes (a base of seconds)."""
+    hours, rest = divmod(second, SECONDS_PER_HOUR)
+    minutes, seconds = divmod(rest, SECONDS_PER_MINUTE)
+    text = f"{hours:02d}:{minutes:02d}"
+    return text if seconds == 0 else f"{text}:{seconds:02d}"
+
+
+def _seconds(clock: str) -> int:
+    """Seconds since IST midnight of an "HH:MM" time."""
+    return (int(clock[:2]) * MINUTES_PER_HOUR + int(clock[3:])) * SECONDS_PER_MINUTE
 
 
 def meaning(base: str, square_off: str | None, session_open: str | None) -> str:
@@ -192,9 +204,9 @@ def meaning(base: str, square_off: str | None, session_open: str | None) -> str:
     text = f"stops are tested on {span} ranges and orders fill at {span} bar opens"
     if square_off is None or session_open is None:
         return text
-    step = parse_interval(base)[1] // SECONDS_PER_MINUTE
-    opens = int(session_open[:2]) * MINUTES_PER_HOUR + int(session_open[3:])
-    target = int(square_off[:2]) * MINUTES_PER_HOUR + int(square_off[3:])
+    # In seconds, so a base of seconds (30s) steps as finely as its bars.
+    step = parse_interval(base)[1]
+    opens, target = _seconds(session_open), _seconds(square_off)
     fill = opens + -(-(target - opens) // step) * step
     return f"{text}; a {square_off} square-off fills at the {_clock(fill)} open"
 

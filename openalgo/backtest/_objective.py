@@ -20,10 +20,13 @@ from .errors import ConfigError
 DEFAULT_OBJECTIVE = "net_profit"
 # The metrics every row of an optimisation table carries.
 KEY_METRICS = ("net_profit", "total_return", "max_drawdown", "sharpe", "trades")
+# Units of the metric definitions whose values are not numbers, so cannot rank a sweep.
+NOT_NUMBERS = ("timestamp", "text", "flag")
 
 
 def check_objective(objective: Any) -> None:
-    """Raise ConfigError unless `objective` is a known metric name or a callable."""
+    """Raise ConfigError unless `objective` is a callable or the name of a metric whose
+    value is a number."""
     if callable(objective):
         return
     from .metrics import DEFINITIONS
@@ -32,6 +35,13 @@ def check_objective(objective: Any) -> None:
         raise ConfigError(
             "objective takes a metric name of openalgo.backtest.metrics (for example "
             f"'net_profit', 'sharpe', 'calmar') or a function of a Result, got {objective!r}"
+        )
+    unit = DEFINITIONS[objective].unit
+    if unit in NOT_NUMBERS:
+        raise ConfigError(
+            f"objective {objective!r} is not a number ({unit}), so it cannot rank the "
+            "combinations: name a metric that is one, such as 'net_profit', 'sharpe' or "
+            "'calmar'"
         )
 
 

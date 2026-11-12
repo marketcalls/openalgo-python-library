@@ -1,4 +1,4 @@
-"""openalgo.backtest: backtesting and live trading engine for Indian markets.
+"""openalgo.backtest: backtesting engine for Indian markets (live trading is not built yet).
 
 Status: beta. `bt.backtest` runs one `bt.Strategy` class on OpenAlgo history or on your
 own bars, with Indian charges, slippage, session calendars and contract terms applied by

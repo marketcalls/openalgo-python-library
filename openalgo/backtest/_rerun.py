@@ -40,9 +40,10 @@ class RunRecord:
         names = set(inspect.signature(backtest).parameters) - {"strategy", "client"}
         parameters = self.strategy.parameters()
         arguments = {name: self.arguments[name] for name in names}
-        params = dict(arguments.get("params") or {})
         changes = dict(overrides)
         client = changes.pop("client", self.client)
+        # `params=` replaces the original mapping; a parameter by name changes one entry.
+        params = dict(changes.pop("params", arguments.get("params")) or {})
         for name, value in changes.items():
             if name in names:
                 arguments[name] = value

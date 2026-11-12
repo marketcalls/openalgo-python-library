@@ -1,10 +1,13 @@
 """What `metrics.analyse` refuses, and the definitions table behind its keys."""
 
+from types import SimpleNamespace
+
 import pandas as pd
 import pytest
 
 from openalgo.backtest import metrics
 from openalgo.backtest.errors import ConfigError
+from openalgo.backtest.report import _kernel
 from openalgo.backtest.report._definitions import UNITS
 
 IST = "Asia/Kolkata"
@@ -34,6 +37,13 @@ GOOD = pd.Series(
 def test_unusable_equity_is_refused_with_a_reason(equity, message):
     with pytest.raises(ConfigError, match=message):
         metrics.analyse(equity, exchanges="NSE")
+
+
+def test_an_extension_older_than_the_metrics_kernel_says_to_reinstall(monkeypatch):
+    # Such an extension has neither the metric's function nor the kernel's error type.
+    monkeypatch.setattr(_kernel, "native", SimpleNamespace())
+    with pytest.raises(ImportError, match="Reinstall openalgo"):
+        _kernel.call("returns")
 
 
 def test_a_cash_flow_at_the_start_is_refused():

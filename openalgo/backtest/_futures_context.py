@@ -54,6 +54,11 @@ class SeriesContext:
             for position, symbol in enumerate(symbols_of):
                 self._place[symbol] = (series.name, position)
 
+    @property
+    def stores(self) -> tuple[SplicedStore, ...]:
+        """The spliced store of every series, in series order."""
+        return tuple(self._stores.values())
+
     def _name(self, name: str | None) -> str:
         if name is not None:
             return name

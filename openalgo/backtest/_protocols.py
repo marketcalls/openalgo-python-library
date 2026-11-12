@@ -31,6 +31,10 @@ class SessionCalendar(Protocol):
         One of COVERAGE_LEVELS. A caller whose result would be wrong on an unknown
         holiday (an expiry date moved to the previous session, for example) must not
         rely on a "template" date.
+
+        Optional for the data layer and `resample`: a calendar without it is copied with
+        every date "unverified" (`Calendar.from_sessions`). Required where the reference
+        tables place an expiry on a trading day, which refuse a calendar without it.
         """
         ...
 

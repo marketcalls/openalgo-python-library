@@ -34,12 +34,21 @@ def _terms(instrument: Instrument) -> str:
     return f"lot {instrument.lot_size}, tick {instrument.tick_size}, {freeze}"
 
 
-def _given(given: Any) -> dict[str, Instrument]:
+def given_instruments(given: Any) -> dict[str, Instrument]:
+    """`instrument=` by symbol: None, an Instrument, or a dict of them, each under its own
+    symbol. Raises ConfigError for anything else, and for a dict key that is not the
+    symbol of its Instrument."""
     if given is None:
         return {}
     if isinstance(given, Instrument):
         return {given.symbol: given}
     if isinstance(given, dict) and all(isinstance(v, Instrument) for v in given.values()):
+        for key, instrument in given.items():
+            if key != instrument.symbol:
+                raise ConfigError(
+                    f"instrument= keys each Instrument by its own symbol: the key {key!r} "
+                    f"holds the Instrument of {instrument.symbol!r}"
+                )
         return dict(given)
     raise ConfigError("instrument= takes an Instrument or a dict of them by symbol")
 
@@ -58,9 +67,16 @@ def resolve_instruments(
 ) -> tuple[list[Instrument], dict[str, str], str | None]:
     """(instruments in registration order, an Assumptions line by symbol, the
     reference-table version if the tables were used). Raises ConfigError for an
-    `instrument=` of another exchange or one that cannot be used, and the reference
-    tables' errors for a contract they do not cover."""
-    by_symbol = _given(given)
+    `instrument=` of another exchange, of a symbol the strategy does not trade, or one
+    that cannot be used, and the reference tables' errors for a contract they do not
+    cover."""
+    by_symbol = given_instruments(given)
+    untraded = [symbol for symbol in by_symbol if symbol not in plan.symbols]
+    if untraded:
+        raise ConfigError(
+            f"instrument= gives {', '.join(untraded)}, which this strategy does not trade "
+            f"({', '.join(plan.symbols)}): pass instruments for its own symbols only"
+        )
     instruments, lines, version = [], {}, None
     for symbol in plan.symbols:
         if symbol in by_symbol:
@@ -85,4 +101,4 @@ def resolve_instruments(
     return instruments, lines, version
 
 
-__all__ = ["CASH_EXCHANGES", "resolve_instruments"]
+__all__ = ["CASH_EXCHANGES", "given_instruments", "resolve_instruments"]

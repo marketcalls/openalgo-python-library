@@ -22,8 +22,12 @@ indexed by IST bar open (columns open, high, low, close, volume) and returns
 `(entries, exits)` or `(entries, exits, shorts, covers)`, any of which may be None.
 
 Before the run the function is checked for look-ahead (03-architecture 5): it is run
-again on the bars cut at fixed points, and every value up to a cut must be the same as
-on the whole series. A function that reads later bars stops the run with ConfigError.
+again on the bars cut at fixed points, and it must return the same outputs there (as
+many, None where it gave None) with every value up to a cut the same as on the whole
+series. A function that reads later bars stops the run with ConfigError. The cuts are a
+sample (CUT_FRACTIONS): a value that reads a later bar shows only at the bar just before
+a cut, so a sparse signal read one bar ahead (a crossover shifted back a bar) passes
+unless it fires there. The check catches look-ahead; it does not prove its absence.
 
 The classes are built at run time, so no module defines them and a spawned worker
 process cannot import one: `made_by` names the function that built a class (or a class
@@ -32,7 +36,7 @@ it derives from), and `bt.optimize` sweeps such a strategy in its own process.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import numpy as np
@@ -133,9 +137,10 @@ def from_signals(
 ) -> type[Strategy]:
     """A strategy from a function of the strategy bars returning `(entries, exits)` or
     `(entries, exits, shorts, covers)` (see the module docstring). The function runs
-    once per run, plus once per cut of the look-ahead check. Raises ConfigError for
-    order arguments 4.1 does not list; when the run starts, ConfigError for a function
-    that returns anything else or looks ahead."""
+    once per run, plus once per cut of the look-ahead check; the cuts are a sample of
+    three, so a function that reads a later bar only away from them passes. Raises
+    ConfigError for order arguments 4.1 does not list; when the run starts, ConfigError
+    for a function that returns anything else or looks ahead."""
     if not callable(func):
         raise ConfigError("from_signals takes a function of the strategy bars")
     check_order_arguments(order_args, "from_signals")
@@ -162,10 +167,20 @@ def _signals(func: Callable[..., Any], frame: pd.DataFrame) -> tuple[Any, ...]:
     return tuple(outputs)
 
 
+def _given(outputs: Sequence[Any]) -> str:
+    """The outputs a function returned, by name, with None for one it left out."""
+    names = [
+        name if values is not None else "None"
+        for name, values in zip(OUTPUT_NAMES, outputs, strict=False)
+    ]
+    return f"({', '.join(names)})"
+
+
 def _check_causal(func: Callable[..., Any], frame: pd.DataFrame, arrays: tuple) -> None:
-    """The truncation check of 03-architecture 5: the outputs on the bars cut at each
-    point of CUT_FRACTIONS equal the full-run outputs up to the cut. Raises ConfigError
-    naming the first bar that changed."""
+    """The truncation check of 03-architecture 5: on the bars cut at each point of
+    CUT_FRACTIONS the function returns the same outputs (as many, and None where it gave
+    None) and their values equal the full-run values up to the cut. Raises ConfigError
+    naming the first bar that changed, or the outputs that did."""
     opens = frame.index.tz_convert("UTC").as_unit("ns").asi8
     full = [
         None if values is None else array_values(values, opens, name)
@@ -176,8 +191,14 @@ def _check_causal(func: Callable[..., Any], frame: pd.DataFrame, arrays: tuple) 
         if count < MIN_CUT_BARS:
             continue
         cut = _signals(func, frame.iloc[:count])
+        if _given(cut) != _given(full):
+            raise ConfigError(
+                f"{getattr(func, '__name__', 'the function')} looks ahead: it returns "
+                f"{_given(full)} on all the bars and {_given(cut)} on the first {count}. A "
+                "signal may use only bars up to its own close."
+            )
         for name, whole, values in zip(OUTPUT_NAMES, full, cut, strict=False):
-            if whole is None or values is None:
+            if whole is None:
                 continue
             changed = np.flatnonzero(array_values(values, opens[:count], name) != whole[:count])
             if changed.size:

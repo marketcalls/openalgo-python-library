@@ -29,6 +29,7 @@ import re
 from typing import Any
 
 from ._calendar_convert import to_day
+from ._futures_contracts import underlying_of
 from ._native import native
 from .errors import BacktestError, ConfigError
 from .reference import Instrument
@@ -123,9 +124,9 @@ def parse_margin(value: Any) -> MarginSetting:
 
 
 def _name(instrument: Instrument) -> str:
-    """The name `margin=` knows a future by: its underlying, or its own symbol when it
-    has none."""
-    return instrument.underlying or instrument.symbol
+    """The name `margin=` knows a future by: its underlying (as given, else read from its
+    symbol, as the futures series do), or its own symbol when it has none."""
+    return underlying_of(instrument) or instrument.symbol
 
 
 def own_margin(setting: MarginSetting, instrument: Instrument) -> MarginRule | None:

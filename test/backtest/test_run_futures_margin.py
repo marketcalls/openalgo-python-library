@@ -10,6 +10,7 @@ then until the exit at the 09:45 open. The roll runs use two NIFTY contracts of
 `test_futures` (September 2024 with lot 25, here October 2024 with lot 50).
 """
 
+import dataclasses
 import datetime as dt
 
 import pandas as pd
@@ -166,6 +167,15 @@ def test_an_underlying_the_dict_does_not_name_keeps_the_default():
     assert result.assumptions["futures_margin"] == (
         f"NIFTY {DEFAULT_LINE}; SBIN 10 percent of contract value (margin=)"
     )
+
+
+def test_a_future_given_without_its_underlying_is_known_by_the_underlying_of_its_symbol():
+    # NIFTY24NOV26FUT is a NIFTY future: 12 percent of one lot of 75 at 1,000.00
+    # (75,000) is 9,000, and no warning calls NIFTY untraded.
+    bare = dataclasses.replace(NIFTY_FUTURE, underlying=None)
+    result = future_round_trip({"lots": 1}, bare, margin={"NIFTY": bt.pct(12)}, **OFF)
+    assert margin_after_entry(result) == 9_000.0
+    assert not any("margin" in text for text in result.warnings)
 
 
 def test_names_the_run_does_not_trade_are_reported_as_unused():
