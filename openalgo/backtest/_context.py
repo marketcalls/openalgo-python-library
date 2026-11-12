@@ -4,6 +4,12 @@ A `Strategy` reads data, positions and the account and places orders only throug
 context, so the same strategy class runs against any driver (backtest now, live in
 Phase 2). Orders can be placed only while the engine is paused at a decision point; the
 kernel refuses them anywhere else.
+
+A run has two phases. It is declaring while the strategy's `init` runs, from the
+context's creation until the driver starts the run (the first pause of the event driver,
+or the start of the condition driver, `begin_run`). The context marks the phase on every
+store it makes, so a view can refuse a truth test while conditions are declared
+(`_views`).
 """
 
 from __future__ import annotations
@@ -52,8 +58,10 @@ class RunContext:
         self.symbols = [instrument.symbol for instrument in instruments]
         self.index = {symbol: number for number, symbol in enumerate(self.symbols)}
         self.run = run
+        # True while `init` declares the strategy; see the module docstring.
+        self.declaring = True
         self.stores = {
-            symbol: BarStore(symbol, run.interval, call(engine.strategy_bars, number))
+            symbol: self._marked(BarStore(symbol, run.interval, call(engine.strategy_bars, number)))
             for number, symbol in enumerate(self.symbols)
         }
         self.timeframes: dict[tuple[str, str], SeriesStore] = {}
@@ -65,12 +73,28 @@ class RunContext:
         self.skipped: list[tuple[int | None, str, str]] = []
         self._final_orders: dict[int, dict] | None = None
 
+    # ----- the phase of the run ----------------------------------------------------
+
+    def _marked(self, store: SeriesStore) -> SeriesStore:
+        """`store`, marked with the run's phase for its views."""
+        store.declaring = self.declaring
+        return store
+
+    def begin_run(self) -> None:
+        """End the declaration phase: `init` has returned and the driver runs. From here
+        a view answers a truth test (in timers, callbacks, `on_bar` and `on_stop`)."""
+        self.declaring = False
+        for store in (*self.stores.values(), *self.timeframes.values()):
+            self._marked(store)
+
     # ----- the clock and the bars ------------------------------------------------
 
     def reveal(self, pause: dict) -> dict[str, Bar]:
         """Take the decision instant of a pause (the last one stays at the end of the
         run) and reveal its strategy bars; returns them by symbol (none at a timer
-        pause)."""
+        pause). The first pause begins the run (`begin_run`)."""
+        if self.declaring:
+            self.begin_run()
         self.decided_at = pause.get("decided_at", self.decided_at)
         revealed = {}
         for row in pause.get("bars", ()):
@@ -95,7 +119,7 @@ class RunContext:
             from ._timeframes import timeframe_store
 
             run = self.run
-            self.timeframes[key] = timeframe_store(
+            store = timeframe_store(
                 name,
                 run.exchange,
                 interval,
@@ -104,6 +128,7 @@ class RunContext:
                 run.calendar,
                 lambda: self.decided_at,
             )
+            self.timeframes[key] = self._marked(store)
         return self.timeframes[key]
 
     def symbol_of(self, index: int) -> str:

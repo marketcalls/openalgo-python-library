@@ -75,6 +75,10 @@ ORDER_ARGUMENTS = frozenset(
     }
 )
 GRAMMAR = "the condition grammar of 14-strategy-api 4.2"
+# The two evaluation paths of 03-architecture 5: `on_bar` (and timers and callbacks) in
+# Python at every decision, or conditions run by the Rust signal driver.
+EVENT_PATH = "event"
+CONDITIONS_PATH = "conditions"
 NOT_BUILT = "is not implemented yet (Phase 1 work in progress)"
 ARRAYS = (pd.Series, np.ndarray, list, tuple)
 
@@ -127,6 +131,12 @@ def declare(strategy: Any, kind: str, condition: Any, order_args: dict[str, Any]
 def has_conditions(strategy: Any) -> bool:
     """True when the strategy declared at least one condition in `init`."""
     return bool(strategy.__dict__.get("_conditions"))
+
+
+def evaluation_path(strategy: Any) -> str:
+    """The evaluation path (03-architecture 5) a strategy instance runs on once its
+    `init` has run: CONDITIONS_PATH when it declared conditions, else EVENT_PATH."""
+    return CONDITIONS_PATH if has_conditions(strategy) else EVENT_PATH
 
 
 def _check_form(cls: type, what: str) -> None:
@@ -312,6 +322,7 @@ def drive_conditions(strategy: Any, engine: Any) -> None:
     would, then call `on_stop`. Raises ConfigError for timers (they call Python during
     the run); errors of the evaluation and of the kernel propagate (ConfigError,
     BacktestError, NotImplementedError)."""
+    strategy._ctx.begin_run()
     if call(engine.timer_counts):
         raise ConfigError(
             f"{type(strategy).__name__}: a condition strategy runs in Rust with no Python "
@@ -325,12 +336,15 @@ def drive_conditions(strategy: Any, engine: Any) -> None:
 
 
 __all__ = [
+    "CONDITIONS_PATH",
+    "EVENT_PATH",
     "ORDER_ARGUMENTS",
     "array_values",
     "check_order_arguments",
     "condition_values",
     "declare",
     "drive_conditions",
+    "evaluation_path",
     "has_conditions",
     "signal_spec",
     "strategy_frame",

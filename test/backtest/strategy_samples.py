@@ -95,6 +95,22 @@ class EmaCross(bt.Strategy):
             self.exit()
 
 
+class EmaCrossConditions(bt.Strategy):
+    """`EmaCross` written as conditions (14-strategy-api 4.1): the same decisions, made
+    in Rust."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "5m"
+    product = "CNC"
+    fast = bt.param(3, (3, 5, 8))
+    slow = bt.param(10, (10, 15, 20))
+
+    def init(self):
+        fast_line = self.I(ta.ema, self.close, self.fast)
+        slow_line = self.I(ta.ema, self.close, self.slow)
+        self.entry_when(fast_line.crossed_above(slow_line), qty=10)
+        self.exit_when(fast_line.crossed_below(slow_line))
+
+
 class EmaCrossIntraday(EmaCross):
     """EmaCross on MIS, which the default charges price (a same-day CNC round trip is
     not built yet)."""
@@ -117,6 +133,7 @@ __all__ = [
     "DAY",
     "IST",
     "EmaCross",
+    "EmaCrossConditions",
     "EmaCrossIntraday",
     "at",
     "daily_bars",

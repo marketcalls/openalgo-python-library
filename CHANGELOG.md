@@ -237,6 +237,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without opening a second socket.
 - `disconnect()` called from inside a callback no longer stalls for two seconds.
 
+- **Condition declarations fail loudly.** A truth test of a view inside `init` (`and`,
+  `or`, `not`, `if`, or a chained comparison such as `a < b < c`) raises `ConfigError`
+  saying to combine conditions with `&`, `|` and `~`; before, `a and b` silently became
+  `a`. `bt.optimize` reports the path a sweep really ran (`"conditions"` or
+  `"event"`) with a matching duration estimate, and sweeps strategies made by
+  `bt.from_arrays` and `bt.from_signals` in this process instead of failing to pickle
+  them.
+
 #### Indicators: results that change on clean data
 
 - **`ta.vwap` honours `anchor`.** In 2.0.5 the anchor was ignored and the VWAP ran

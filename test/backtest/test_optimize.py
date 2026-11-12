@@ -15,6 +15,7 @@ import pytest
 from strategy_samples import (
     CAPITAL,
     EmaCross,
+    EmaCrossConditions,
     EmaCrossIntraday,
     final_equity,
     process_id,
@@ -22,6 +23,7 @@ from strategy_samples import (
 )
 
 import openalgo.backtest as bt
+from openalgo import ta
 from openalgo.backtest import _causality_checks
 from openalgo.backtest._optimize import LARGE_EVENT_GRID, _plan
 from openalgo.backtest.calendar import default_calendar
@@ -229,9 +231,104 @@ def test_the_causality_checks_run_once_for_the_sweep(monkeypatch):
 
 
 def test_a_large_event_grid_suggests_the_condition_form():
-    text = _plan(EmaCross, LARGE_EVENT_GRID + 1, 4, 0.5, "")
+    text = _plan(EmaCross, LARGE_EVENT_GRID + 1, 4, [0.5], "", "event")
     assert "suits the condition form" in text
     assert "about 125.0 s" in text  # 1000 more combinations x 0.5 s / 4 workers
+
+
+# ----------------------------------------------------------------- the conditions path
+
+
+@pytest.fixture(scope="module")
+def by_conditions():
+    lines = []
+    result = bt.optimize(
+        EmaCrossConditions, data=wave_bars(), workers=2, progress=lines.append, **SETTINGS
+    )
+    return result, lines
+
+
+def test_a_condition_strategy_sweeps_on_the_conditions_path(by_conditions):
+    result, lines = by_conditions
+    assert result.path == "conditions"
+    assert lines == [result.plan]
+    assert result.plan.startswith(
+        "bt.optimize: 9 combinations of EmaCrossConditions on the conditions path (the "
+        "conditions become arrays once per combination and the bars run in Rust, with no "
+        "Python call per bar), in 2 worker processes. The first took "
+    )
+    assert "on_bar" not in result.plan
+
+
+def test_a_condition_sweep_times_a_combination_without_the_indicator_checks(by_conditions):
+    # The first combination also ran the sweep's indicator checks; the second did not.
+    assert "with the sweep's indicator checks, the second took " in by_conditions[0].plan
+
+
+def test_a_condition_sweep_estimates_the_rest_from_the_second_combination():
+    # 10 combinations, 2 already run: 8 more x 0.5 s / 2 workers.
+    text = _plan(EmaCrossConditions, 10, 2, [3.0, 0.5], "", "conditions")
+    assert "the rest should take about 2.0 s" in text
+
+
+def test_a_large_condition_grid_gets_no_suggestion_to_use_conditions():
+    text = _plan(EmaCrossConditions, LARGE_EVENT_GRID + 1, 4, [1.0, 0.1], "", "conditions")
+    assert "suits the condition form" not in text
+
+
+def test_the_conditions_form_gives_the_table_of_the_same_on_bar_strategy(pooled, by_conditions):
+    pd.testing.assert_frame_equal(by_conditions[0].table, pooled[0].table, check_exact=True)
+
+
+def test_a_strategy_without_on_bar_that_runs_timers_is_on_the_event_path():
+    class Timed(bt.Strategy):
+        symbol, exchange, interval = "SBIN", "NSE", "5m"
+        product = "CNC"
+        qty = bt.param(10, (10, 20))
+
+        def init(self):
+            self.at("09:30", lambda: self.buy(qty=self.qty))
+
+    result = bt.optimize(Timed, data=wave_bars(), workers=1, **SETTINGS)
+    assert result.path == "event"
+    assert "on the event path" in result.plan
+
+
+# ----------------------------------------------------------------- arrays and functions
+
+
+def crossings(frame: pd.DataFrame) -> tuple:
+    fast, slow = ta.ema(frame.close, 3), ta.ema(frame.close, 10)
+    return ta.crossover(fast, slow), ta.crossunder(fast, slow)
+
+
+def made_by_from_signals():
+    return bt.from_signals(crossings, "SBIN", "NSE", "5m", qty=10)
+
+
+def made_by_from_arrays():
+    # One value per 5-minute bar of the 375-minute session: enter at bars 3, 23, 43 and
+    # 63, exit at bars 10, 30, 50 and 70.
+    bars = np.arange(75)
+    entries, exits = bars % 20 == 3, bars % 20 == 10
+    return bt.from_arrays(entries, exits, symbol="SBIN", exchange="NSE", interval="5m", qty=10)
+
+
+@pytest.mark.parametrize(
+    ("build", "maker"),
+    [(made_by_from_signals, "bt.from_signals"), (made_by_from_arrays, "bt.from_arrays")],
+    ids=["from_signals", "from_arrays"],
+)
+def test_a_strategy_made_from_signals_or_arrays_sweeps_in_this_process(build, maker):
+    # These strategies have no parameters of their own: a subclass adds one to sweep, with
+    # enough values to leave work for two worker processes.
+    class Tuned(build()):
+        label = bt.param("a", ("a", "b", "c", "d"))
+
+    result = bt.optimize(Tuned, data=wave_bars(), workers=2, objective=process_id, **SETTINGS)
+    assert list(result.table["objective"]) == [os.getpid()] * 4
+    assert f"in this process (a strategy made by {maker} is built in this process" in result.plan
+    assert result.path == "conditions"
 
 
 def test_optimize_is_reachable_from_the_package_without_a_start_date():
