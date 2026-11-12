@@ -1,7 +1,9 @@
 """Tick and quantity helpers the kernel uses (FR-EXEC-04)."""
 
+import sys
+
 import pytest
-from hypothesis import given, settings
+from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
 from openalgo.backtest.errors import ConfigError
@@ -94,13 +96,23 @@ def test_round_to_tick_rejects_bad_input(price, tick, mode):
         round_to_tick(price, tick, mode)
 
 
+def noise_allowance(price: float, tick: float) -> float:
+    """How far a price may sit from a tick and still be taken as on it (rupees): a
+    ten-millionth of a tick, or 64 units in the last place of the price, whichever is
+    larger. Anything further away is a real price and must be rounded as one."""
+    return max(1e-7 * tick, 64 * sys.float_info.epsilon * abs(price)) * (1 + 1e-9)
+
+
 @settings(max_examples=400, deadline=None)
 @given(
     price=st.floats(min_value=0.01, max_value=500000.0, allow_nan=False, allow_infinity=False),
     tick=st.sampled_from(TICKS),
 )
+# 432350.39749956765 is 0.00043 paise below a 0.0025 tick: a real price, not noise, so
+# rounding it down must not return the tick above it.
+@example(price=432350.39749956765, tick=0.0025)
 def test_rounded_prices_bracket_the_price_within_one_tick(price, tick):
-    slack = 1e-9
+    slack = noise_allowance(price, tick)
     down = round_to_tick(price, tick, "down")
     up = round_to_tick(price, tick, "up")
     nearest = round_to_tick(price, tick, "nearest")

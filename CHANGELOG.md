@@ -465,6 +465,11 @@ across a NaN bar.
 
 ### Fixed
 
+- `openalgo.backtest.reference.round_to_tick` (and `ReferenceTables.round_price`) took
+  a real price within about 1e-12 of its value of a tick as on that tick, so on a
+  0.0025 tick a price of several lakh rupees could round down to the tick above it. Only
+  floating-point noise (64 units in the last place) is now treated as on a tick. The
+  backtest kernel rounds on its own price units and was not affected.
 - The WebSocket URL derived from an IPv6 literal host or from an upper-case scheme
   was invalid.
 - `ta.highest` and `ta.lowest` with a period far larger than the series tried to

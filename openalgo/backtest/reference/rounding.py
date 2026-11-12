@@ -24,7 +24,10 @@ from ..errors import ConfigError
 # ROUND_HALF_UP in `decimal` rounds an exact half away from zero.
 _TICK_ROUNDING = {"nearest": ROUND_HALF_UP, "down": ROUND_FLOOR, "up": ROUND_CEILING}
 _ABS_TOLERANCE = Decimal("1e-7")
-_REL_TOLERANCE = Decimal("1e-12")
+# 64 units in the last place of an f64 (64 x 2**-52), relative: far above the rounding
+# error of the few arithmetic steps a price goes through, and far below a tick even for
+# a price of several lakh rupees on a 0.0025 tick (a looser bound snapped real prices).
+_REL_TOLERANCE = Decimal(64) * Decimal(2) ** -52
 
 
 def _whole(value: object) -> int | None:
