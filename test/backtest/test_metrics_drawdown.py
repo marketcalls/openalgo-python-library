@@ -32,7 +32,7 @@ def test_maximum_drawdown_with_its_dates_and_duration():
     assert m["max_drawdown_trough"] == at("2025-06-03")
     assert m["max_drawdown_recovery"] == at("2025-06-04")
     assert m["max_drawdown_days"] == pytest.approx(2.0)
-    assert m["max_drawdown_amount"] == pytest.approx(11.0)
+    assert m["max_drawdown_amount"] == pytest.approx(-11.0)
 
 
 def test_the_drawdown_series_is_the_fall_from_the_running_peak_at_every_point():
@@ -91,7 +91,7 @@ def test_the_rupee_drawdown_excludes_cash_flows():
     deposit = pd.Series([50.0], index=[at("2025-06-03")])
     m = metrics.analyse(equity, exchanges="NSE", cash_flows=deposit).metrics
     # Cumulative P&L: 0, 10, 0 (150 - 100 - 50), -10: a fall of 20 rupees from its peak.
-    assert m["max_drawdown_amount"] == pytest.approx(20.0)
+    assert m["max_drawdown_amount"] == pytest.approx(-20.0)
 
 
 def test_calmar_is_cagr_over_the_depth_of_the_maximum_drawdown():

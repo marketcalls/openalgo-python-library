@@ -229,6 +229,7 @@ def execute(
         context.skipped,
         manifest.to_dict(),
         record=record,
+        calendar=calendar,
     )
 
 

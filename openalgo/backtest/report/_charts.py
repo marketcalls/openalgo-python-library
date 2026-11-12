@@ -22,6 +22,7 @@ MAX_PLOT_BUCKETS = 1200  # a long series keeps the lowest and highest point per 
 HOVER_COLUMNS = 60  # tooltip columns across the equity chart
 TARGET_TICKS = 5  # value gridlines per axis, about
 TARGET_BINS = 20  # histogram bins, about
+SHADED_DRAWDOWNS = 5  # longest drawdown periods shaded on the equity chart
 _NICE_STEPS = (1.0, 2.0, 2.5, 5.0, 10.0)
 
 
@@ -47,7 +48,7 @@ def value_axis(low: float, high: float) -> tuple[float, float, list[float]]:
     return start, stop, ticks
 
 
-def _thin(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def thin(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """At most two points per bucket of x (its lowest and highest), in x order."""
     if len(x) <= 2 * MAX_PLOT_BUCKETS:
         return x, y
@@ -59,7 +60,7 @@ def _thin(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return x[keep], y[keep]
 
 
-def _path(x: np.ndarray, y: np.ndarray) -> str:
+def line_path(x: np.ndarray, y: np.ndarray) -> str:
     """An SVG path through the points; a NaN breaks the line."""
     parts, pen_down = [], False
     for px, py in zip(x, y, strict=True):
@@ -71,7 +72,7 @@ def _path(x: np.ndarray, y: np.ndarray) -> str:
     return "".join(parts)
 
 
-def _y_position(values: np.ndarray, low: float, high: float) -> np.ndarray:
+def y_position(values: np.ndarray, low: float, high: float) -> np.ndarray:
     return VIEW_HEIGHT - (values - low) / (high - low) * VIEW_HEIGHT
 
 
@@ -91,13 +92,19 @@ def _time_labels(start: pd.Timestamp, end: pd.Timestamp) -> list[tuple[pd.Timest
     return [(s, s.strftime(pattern)) for s in stamps]
 
 
-def _x_axis(start: pd.Timestamp, end: pd.Timestamp) -> str:
+def _edge_class(left: float) -> str:
+    """The class of an axis label at `left` percent: a label near an end is aligned to
+    sit inside the axis rather than centred on its tick."""
+    return " class='first'" if left < 4 else " class='last'" if left > 96 else ""
+
+
+def time_axis(start: pd.Timestamp, end: pd.Timestamp) -> str:
+    """Labels of a time axis from `start` to `end`, at round dates."""
     span = (end - start).total_seconds() or 1.0
     labels = []
     for stamp, label in _time_labels(start, end):
         left = (stamp - start).total_seconds() / span * 100
-        edge = " class='first'" if left < 4 else " class='last'" if left > 96 else ""
-        labels.append(f"<span{edge} style='left:{left:.2f}%'>{fmt.text(label)}</span>")
+        labels.append(f"<span{_edge_class(left)} style='left:{left:.2f}%'>{fmt.text(label)}</span>")
     return f"<div class='x' aria-hidden='true'>{''.join(labels)}</div>"
 
 
@@ -110,13 +117,13 @@ def _y_axis(ticks: list[float], low: float, high: float, labels: list[str]) -> s
 
 
 def _gridlines(ticks: list[float], low: float, high: float) -> str:
-    rows = _y_position(np.array(ticks, dtype=float), low, high)
+    rows = y_position(np.array(ticks, dtype=float), low, high)
     return "".join(
         f"<line class='grid' x1='0' x2='{VIEW_WIDTH:.0f}' y1='{y:.2f}' y2='{y:.2f}'/>" for y in rows
     )
 
 
-def _hover(x: np.ndarray, tip: Callable[[int], str]) -> str:
+def hover_columns(x: np.ndarray, tip: Callable[[int], str]) -> str:
     """Invisible columns, each with the tooltip `tip(point)` of the last point in it."""
     edges = np.linspace(0.0, VIEW_WIDTH, HOVER_COLUMNS + 1)
     last = np.searchsorted(x, edges[1:], side="right") - 1
@@ -132,7 +139,7 @@ def _hover(x: np.ndarray, tip: Callable[[int], str]) -> str:
     return f"<g class='hover'>{''.join(rects)}</g>"
 
 
-def _plot(label: str, height: str, axis: tuple, marks: str, x_axis: str) -> str:
+def plot_frame(label: str, height: str, axis: tuple, marks: str, x_axis: str) -> str:
     low, high, ticks, tick_labels = axis
     svg = (
         f"<svg viewBox='0 0 {VIEW_WIDTH:.0f} {VIEW_HEIGHT:.0f}' preserveAspectRatio='none' "
@@ -144,36 +151,65 @@ def _plot(label: str, height: str, axis: tuple, marks: str, x_axis: str) -> str:
     )
 
 
-def equity_chart(performance: Performance) -> str:
-    """The equity curve in rupees (with the benchmark, when given, on the same scale)
-    above the drawdown of the time-weighted wealth index."""
-    equity, drawdown = performance.equity, performance.drawdown
-    start, end = equity.index[0], equity.index[-1]
+def time_scale(start: pd.Timestamp, end: pd.Timestamp) -> Callable[[pd.DatetimeIndex], np.ndarray]:
+    """The x position of instants on a time axis from `start` to `end`."""
     span = (end - start).total_seconds() or 1.0
 
     def to_x(index: pd.DatetimeIndex) -> np.ndarray:
         return (index - start).total_seconds().to_numpy() / span * VIEW_WIDTH
 
+    return to_x
+
+
+def shaded_periods(
+    episodes: pd.DataFrame, last: pd.Timestamp, to_x: Callable[[pd.DatetimeIndex], np.ndarray]
+) -> str:
+    """The longest `SHADED_DRAWDOWNS` drawdown episodes as bands behind a time chart,
+    each from its start to its recovery (the last point when unrecovered)."""
+    if episodes.empty:
+        return ""
+    longest = episodes.sort_values("days", ascending=False, kind="stable").head(SHADED_DRAWDOWNS)
+    ends = longest["end"].where(longest["recovered"], last)
+    # A fall from the opening starts before the first point, at the left edge.
+    left = np.clip(to_x(pd.DatetimeIndex(longest["start"])), 0.0, VIEW_WIDTH)
+    right = np.clip(to_x(pd.DatetimeIndex(ends)), 0.0, VIEW_WIDTH)
+    bands = []
+    for x0, x1, days in zip(left, right, longest["days"], strict=True):
+        tip = f"Drawdown of {fmt.number(float(days), 1)} days"
+        bands.append(
+            f"<rect class='shade' x='{x0:.2f}' y='0' width='{max(x1 - x0, 1.0):.2f}' "
+            f"height='{VIEW_HEIGHT:.0f}'><title>{tip}</title></rect>"
+        )
+    return "".join(bands)
+
+
+def equity_chart(performance: Performance) -> str:
+    """The equity curve in rupees (with the benchmark, when given, on the same scale),
+    with its longest drawdown periods shaded, above the drawdown of the time-weighted
+    wealth index."""
+    equity, drawdown = performance.equity, performance.drawdown
+    start, end = equity.index[0], equity.index[-1]
+    to_x = time_scale(start, end)
     x, values = to_x(equity.index), equity.to_numpy(dtype=float)
     bench = performance.benchmark_equity
     pool = values if bench is None else np.concatenate([values, bench.to_numpy(dtype=float)])
     low, high, ticks = value_axis(float(np.nanmin(pool)), float(np.nanmax(pool)))
-    marks = []
+    marks = [shaded_periods(performance.drawdown_episodes, end, to_x)]
     if bench is not None:
-        bx, by = to_x(bench.index), _y_position(bench.to_numpy(dtype=float), low, high)
-        marks.append(f"<path class='line benchmark' d='{_path(bx, by)}'/>")
-    ex, ey = _thin(x, values)
-    marks.append(f"<path class='line equity' d='{_path(ex, _y_position(ey, low, high))}'/>")
+        bx, by = to_x(bench.index), y_position(bench.to_numpy(dtype=float), low, high)
+        marks.append(f"<path class='line benchmark' d='{line_path(bx, by)}'/>")
+    ex, ey = thin(x, values)
+    marks.append(f"<path class='line equity' d='{line_path(ex, y_position(ey, low, high))}'/>")
     depth = drawdown.to_numpy(dtype=float)
 
     def tip(point: int) -> str:
         when, value = equity.index[point], values[point]
         return f"{fmt.day(when)}: {fmt.rupees(value)}, drawdown {fmt.percent(depth[point])}"
 
-    marks.append(_hover(x, tip))
+    marks.append(hover_columns(x, tip))
     axis = (low, high, ticks, fmt.rupee_ticks(ticks))
-    x_axis = _x_axis(start, end)
-    top = _plot("Equity in rupees", "18rem", axis, "".join(marks), x_axis)
+    x_axis = time_axis(start, end)
+    top = plot_frame("Equity in rupees", "18rem", axis, "".join(marks), x_axis)
     return top + _drawdown_plot(x, depth, x_axis)
 
 
@@ -184,45 +220,79 @@ _SHALLOWEST_DRAWDOWN_AXIS = -0.01
 
 def _drawdown_plot(x: np.ndarray, depth: np.ndarray, x_axis: str) -> str:
     low, high, ticks = value_axis(min(float(np.min(depth)), _SHALLOWEST_DRAWDOWN_AXIS), 0.0)
-    dx, dy = _thin(x, depth)
-    line = _path(dx, _y_position(dy, low, high))
-    top = _y_position(np.array([0.0]), low, high)[0]
+    dx, dy = thin(x, depth)
+    line = line_path(dx, y_position(dy, low, high))
+    top = y_position(np.array([0.0]), low, high)[0]
     area = f"{line}L{dx[-1]:.2f} {top:.2f}L{dx[0]:.2f} {top:.2f}Z"
     marks = f"<path class='wash' d='{area}'/><path class='line drawdown' d='{line}'/>"
     axis = (low, high, ticks, fmt.percent_ticks(ticks))
     title = "<p class='panel-title'>Drawdown from the running peak</p>"
-    return title + _plot("Drawdown", "7rem", axis, marks, x_axis)
+    return title + plot_frame("Drawdown", "7rem", axis, marks, x_axis)
 
 
-def pnl_histogram(net_pnl: np.ndarray) -> str:
-    """Distribution of closed trades' net P&L as columns; red bins lie at or below
-    zero, blue above. Bin edges are round multiples of one step, so zero is an edge."""
-    pnl = net_pnl[np.isfinite(net_pnl)]
-    low, high = float(pnl.min()), float(pnl.max())
-    step = nice_step(high - low, TARGET_BINS) if high > low else max(abs(high), 1.0)
+def histogram(
+    values: np.ndarray, *, label: str, edge: Callable[[float], str], unit: str, floor: float
+) -> str:
+    """Distribution of `values` as columns; red bins lie at or below zero, blue above.
+    Bin edges are round multiples of one step, so zero is an edge. `edge` writes an edge
+    value, `unit` names what a bin counts and `floor` is the bin width of a sample whose
+    values are all equal (at least that much, or the value's own size)."""
+    known = values[np.isfinite(values)]
+    low, high = float(known.min()), float(known.max())
+    step = nice_step(high - low, TARGET_BINS) if high > low else max(abs(high), floor)
     first = math.floor(low / step) * step
     last = max(math.ceil(high / step) * step, first + step)
     edges = np.arange(round((last - first) / step) + 1) * step + first
-    counts, _ = np.histogram(pnl, bins=edges)
+    counts, _ = np.histogram(known, bins=edges)
     peak = max(int(counts.max()), 1)
     bins = []
     for left, right, count in zip(edges[:-1], edges[1:], counts, strict=True):
         side = "loss" if right <= 0 else "gain"
-        tip = f"{fmt.rupees(left, 0)} to {fmt.rupees(right, 0)}: {count} trade(s)"
+        tip = f"{edge(left)} to {edge(right)}: {count} {unit}"
         bins.append(
             f"<div class='bin {side}' title='{tip}'><i style='height:{count / peak * 100:.2f}%'>"
             "</i></div>"
         )
     marked = [first, last] + ([0.0] if first < 0 < last else [])
     positions = [(v - first) / (last - first) * 100 for v in marked]
+    # The end labels sit inside the axis, so that two histograms side by side do not
+    # run their labels into each other.
     labels = "".join(
-        f"<span style='left:{left:.2f}%'>{fmt.rupees_compact(v)}</span>"
+        f"<span{_edge_class(left)} style='left:{left:.2f}%'>{edge(v)}</span>"
         for v, left in zip(marked, positions, strict=True)
     )
     return (
-        f"<div class='hist' role='img' aria-label='Distribution of trade net P&amp;L'>"
+        f"<div class='hist' role='img' aria-label='{fmt.text(label)}'>"
         f"{''.join(bins)}</div><div class='hist-axis' aria-hidden='true'>{labels}</div>"
     )
 
 
-__all__ = ["equity_chart", "nice_step", "pnl_histogram", "value_axis"]
+def pnl_histogram(net_pnl: np.ndarray) -> str:
+    """Distribution of closed trades' net P&L in rupees (see `histogram`)."""
+    return histogram(
+        net_pnl,
+        label="Distribution of trade net P&L",
+        edge=fmt.rupees_compact,
+        unit="trade(s)",
+        floor=1.0,
+    )
+
+
+__all__ = [
+    "SHADED_DRAWDOWNS",
+    "VIEW_HEIGHT",
+    "VIEW_WIDTH",
+    "equity_chart",
+    "histogram",
+    "hover_columns",
+    "line_path",
+    "nice_step",
+    "plot_frame",
+    "pnl_histogram",
+    "shaded_periods",
+    "thin",
+    "time_axis",
+    "time_scale",
+    "value_axis",
+    "y_position",
+]

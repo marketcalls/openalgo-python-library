@@ -29,6 +29,7 @@ use crate::model::TsNanos;
 
 use super::curve::{check_finite, check_length};
 use super::error::MetricsError;
+use super::tails::ratio_or_infinite;
 use super::PNL_TOLERANCE_RUPEES;
 
 /// Closed trades as columns, one row per trade. Times are UTC nanoseconds and money is
@@ -106,7 +107,7 @@ impl TradeColumns<'_> {
     }
 
     /// Net P&L in the order of exit time, then entry time, then input order.
-    fn net_by_exit(&self) -> Vec<f64> {
+    pub(super) fn net_by_exit(&self) -> Vec<f64> {
         let mut order: Vec<usize> = (0..self.entry_ts.len()).collect();
         order.sort_by_key(|&i| (self.exit_ts.get(i), self.entry_ts.get(i)));
         order
@@ -116,18 +117,9 @@ impl TradeColumns<'_> {
     }
 }
 
-fn ratio_or_infinite(numerator: f64, denominator: f64) -> f64 {
-    if denominator > 0.0 {
-        numerator / denominator
-    } else if numerator > 0.0 {
-        f64::INFINITY
-    } else {
-        f64::NAN
-    }
-}
-
-/// Longest runs of wins and of losses in a sequence of net P&L.
-fn longest_runs(net: &[f64]) -> (usize, usize) {
+/// Longest runs of positive and of negative values in a sequence (net P&L, or session
+/// returns); zero breaks both.
+pub(super) fn longest_runs(net: &[f64]) -> (usize, usize) {
     let (mut wins, mut losses, mut best_wins, mut best_losses) = (0, 0, 0, 0);
     for &p in net {
         (wins, losses) = if p > 0.0 {

@@ -121,14 +121,14 @@ fn an_opening_wealth_that_is_not_a_positive_number_is_refused() {
 #[test]
 fn a_first_point_below_the_opening_is_a_drawdown_from_the_opening() {
     let ts = [days(0), days(1), days(2)];
-    let result = drawdowns(&ts, &[0.95, 0.98, 1.05], &[-5.0, -2.0, 5.0]);
+    let result = drawdowns(&ts, &[0.95, 0.98, 1.05], &[-5.0, -2.0, 5.0], None);
     assert_all_close(&result.series, &[-0.05, -0.02, 0.0]);
     let max = result.max.unwrap();
     assert_eq!((max.peak, max.trough, max.recovery), (None, 0, Some(2)));
     assert_close(max.depth, -0.05);
     // The opening has no time of its own: the episode is timed from the first point.
     assert_eq!(max.duration, days(2));
-    assert_eq!(result.max_amount, 5.0);
+    assert_eq!(result.max_amount, -5.0);
 }
 
 #[test]
