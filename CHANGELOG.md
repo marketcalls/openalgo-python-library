@@ -270,6 +270,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the capital instead of reporting 0. Equal returns now have a standard
   deviation of exactly 0, so Sharpe is undefined rather than enormous when a series
   of equal nonzero returns averages to a rounding unit away from them.
+- **A benchmark for a backtest (preview).** `bt.backtest(benchmark=...)` takes an index
+  symbol (`"NIFTY"`, read on NSE_INDEX for an NSE or NFO strategy and on BSE_INDEX for
+  BSE or BFO), a `(symbol, exchange)` pair on NSE_INDEX or BSE_INDEX, or your own
+  closes as a pandas Series (or a DataFrame with a close column; a date index is
+  stamped at each session's close). An index's daily closes come through the same data
+  layer and source rules as the strategy's bars (a dict `data=` holding the symbol,
+  else Historify or the broker through `client`), on the run's calendar, up to `now=`,
+  starting at the session before the run so its first session has a benchmark return.
+  `Result.performance`, `metrics`, `metrics_table()` and `tearsheet()` then report
+  alpha, beta, correlation, R squared, tracking error, information ratio, Treynor
+  ratio, rolling beta, the horizon summary and the yearly comparison against it; the
+  Assumptions block names it and where its closes came from. It never trades and never
+  changes a fill. Missing benchmark data is a warning, never a stop: a source that
+  cannot serve it leaves the run without benchmark figures, and the warnings name every
+  session without a close (it keeps the last earlier close, never a later one). The
+  manifest records it (symbol, exchange, source and the hashes of its closes),
+  `rerun()` reproduces it and says when only its closes changed, and `bt.optimize`
+  measures every combination against it. The default is no benchmark.
 - **`openalgo.backtest.costs` (preview).** Indian trading charges for NSE and BSE
   equity (delivery and intraday), NFO and BFO futures and options, and MCX futures:
   brokerage presets (`zerodha`, `flat`, `percent`, `zero_brokerage`, `custom`), STT or

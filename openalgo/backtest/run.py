@@ -49,6 +49,7 @@ def backtest(
     start: Any = None,
     end: Any = None,
     data: Any = None,
+    benchmark: Any = None,
     instrument: Instrument | dict[str, Instrument] | None = None,
     calendar: Any = None,
     source: str = "auto",
@@ -82,6 +83,13 @@ def backtest(
     start, end: IST dates (inclusive); a datetime also bounds the run to slices opening
         at or after `start` and at or before `end`. Taken from `data=` when omitted.
     data: own bars (a DataFrame, or a dict of them by symbol) at the base interval.
+    benchmark: what the reports compare the strategy with (alpha, beta, information
+        ratio, the comparison tables and charts); it never trades. An index symbol
+        ("NIFTY", on NSE_INDEX for an NSE or NFO strategy and BSE_INDEX for BSE or BFO),
+        a (symbol, exchange) pair on NSE_INDEX or BSE_INDEX, whose daily closes come
+        from the run's own source (a dict `data=` holding it, else `client`), or a
+        pandas Series of closes (a DataFrame with a close column). None (the default):
+        no benchmark. Missing benchmark data is a warning (`_benchmark`).
     instrument: an `Instrument`, or a dict of them by symbol; without it NSE or BSE cash
         equity is a generic cash-equity instrument (lot 1, tick 0.05) and futures and
         options come from the reference tables (`_instruments`; the Assumptions say so).
