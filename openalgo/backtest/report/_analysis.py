@@ -357,7 +357,8 @@ def _benchmark(
     opening time when it is given and otherwise as the last benchmark value stamped
     before that point. The base is the first value known in the run: as of the start,
     or else as of the first session end it covers (daily closes stamped after an
-    intraday start, for example).
+    intraday start, for example). The return over the run is
+    `periods.benchmark_growth`, the rule the horizons and the comparison table share.
     """
     bench_ts, bench_values = benchmark_columns(benchmark)
     ends = periods.session_end_times(points.marks, days)
@@ -375,7 +376,7 @@ def _benchmark(
     known = np.flatnonzero(np.isfinite(path))
     base = path[known[0]] if len(known) else math.nan
     figures = {
-        "benchmark_total_return": float(path[-1] / base - 1.0),
+        "benchmark_total_return": periods.benchmark_growth(bench_returns),
         "benchmark_sessions": stats["sessions"],
         **{key: stats[name] for key, name in _BENCHMARK_KEYS.items()},
     }

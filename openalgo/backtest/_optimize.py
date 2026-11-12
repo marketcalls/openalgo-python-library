@@ -248,6 +248,7 @@ def optimize(
     checks = IndicatorChecks(strategy_source_hash(strategy) or strategy.__qualname__)
     light = {key: arguments[key] for key in ("source", "tz")}
     light["data"] = None if arguments["data"] is None else "given"
+    light["now"] = None if arguments["now"] is None else "given"
 
     def run(
         part: list[dict[str, Any]], on_path: Callable[[str], Any] | None = None

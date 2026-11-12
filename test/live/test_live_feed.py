@@ -205,14 +205,6 @@ def test_no_error_reached_the_error_hooks_or_the_feed_logger(feed_run):
     assert [record.getMessage() for record in feed_run.log_records] == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "defect: the server's quote frames carry average_price and last_quantity, but "
-        "openalgo/_feed_ticks.py reads avg_trade_price and last_trade_quantity, so both "
-        "are always 0"
-    ),
-)
 def test_quote_ticks_carry_the_average_traded_price(feed_run):
     symbol = feed_run.instruments[0]["symbol"]
     _, message = feed_run.ticks[("quote", symbol)][-1]

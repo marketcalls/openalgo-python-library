@@ -108,8 +108,9 @@ def benchmark_comparison(
     if period not in COMPARISON_PERIODS:
         raise ConfigError(f"period is one of {sorted(COMPARISON_PERIODS)}, got {period!r}")
     code = COMPARISON_PERIODS[period]
-    strategy, bench = compound(returns, code), compound(benchmark, code)
-    frame = pd.DataFrame({"strategy": strategy, "benchmark": bench})
+    keys = benchmark.index.to_period(code)
+    bench = benchmark.groupby(keys).agg(lambda span: periods.benchmark_growth(span.to_numpy()))
+    frame = pd.DataFrame({"strategy": compound(returns, code), "benchmark": bench})
     frame["excess"] = frame["strategy"] - frame["benchmark"]
     # Unknown (NA) where the benchmark return is unknown, rather than a False.
     frame["beat"] = (frame["excess"] > 0).astype("boolean").mask(frame["excess"].isna())

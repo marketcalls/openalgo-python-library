@@ -85,7 +85,7 @@ RISK_ADJUSTED = {
         "Serenity index",
         "ratio",
         "(CAGR - risk-free rate) / (ulcer index x pitfall), with the pitfall indicator "
-        "-conditional drawdown / annualised volatility (the serenity ratio of KeyQuant).",
+        "-conditional drawdown / annualised volatility (the published serenity ratio).",
     ),
     "recovery_factor": (
         "Recovery factor",

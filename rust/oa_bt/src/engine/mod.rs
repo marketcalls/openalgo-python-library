@@ -95,6 +95,7 @@
 //! |---|---|
 //! | `config` | `RunConfig`, `RunSetup`, `BarColumns`, interval and mode enums; what is refused as not built |
 //! | `clock` | `Timeline`: the grid, slice facts, strategy-bar closes by the clock |
+//! | `run_end` | Where the run ends: the end of its range, its last bar or the present |
 //! | `market_data` | Base bars aligned to the grid; strategy bars via `data::resample` |
 //! | `kernel` | `Engine`, `advance`, queries, `finish` |
 //! | `steps` | Steps 1 to 8 |
@@ -177,6 +178,7 @@ pub mod pause;
 mod resting;
 mod reverse;
 mod roll;
+pub mod run_end;
 mod scale_in;
 mod session;
 mod settlement;
@@ -204,6 +206,7 @@ pub use output::{
     EquityColumns, FillRecord, FinalPosition, GrossPnl, LevelRow, RunOutput, StaleMark, TradeRecord,
 };
 pub use pause::{run, Driver, Pause, TimerId};
+pub use run_end::{RunEnd, RunEndCause};
 pub use signals::{run_signals, EntrySignal, SignalArrays, SkippedEntry};
 pub use submit::Submission;
 pub use timers::{TimerCount, TimerSpec};

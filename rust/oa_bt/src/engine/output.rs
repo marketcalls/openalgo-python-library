@@ -23,6 +23,7 @@ use crate::rms::leg::{BreakevenState, LevelInForce, TargetLevel, TrailState};
 
 use super::event::{Event, EventStamp};
 use super::futures::FuturesOutput;
+use super::run_end::RunEnd;
 
 /// A fill and when it happened.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -164,6 +165,8 @@ pub struct RunOutput {
     pub futures: FuturesOutput,
     pub final_positions: Vec<FinalPosition>,
     pub gross_pnl: GrossPnl,
+    /// Where the run ended and why, when before the end of its range (`run_end`).
+    pub run_end: RunEnd,
 }
 
 /// A round trip still open.

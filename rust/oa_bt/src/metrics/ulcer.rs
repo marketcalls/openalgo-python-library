@@ -7,7 +7,7 @@
 //! - Close drawdowns: the wealth `W_k = (1 + r_1) ... (1 + r_k)` from `W_0 = 1` at the
 //!   opening, and `D_k = W_k / max(1, W_1..W_k) - 1`, zero or negative. Once a session
 //!   loses everything (`1 + r <= 0`) the wealth is 0 and the path ends there.
-//! - Ulcer index (Martin and McCann 1989, The Investor's Guide to Fidelity Funds, Wiley):
+//! - Ulcer index (Martin and McCann 1989):
 //!   `sqrt((D_1^2 + ... + D_n^2) / n)`, a fraction; 0 for a path that never falls.
 //! - Ulcer performance index (the Martin ratio, same source): `(CAGR - R) / ulcer index`
 //!   with `R` the annual risk-free rate.

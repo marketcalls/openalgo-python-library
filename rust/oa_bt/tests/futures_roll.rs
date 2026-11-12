@@ -98,6 +98,7 @@ fn config() -> RunConfig {
         last_day: july(32),
         first_slice: None,
         last_slice: None,
+        present: None,
         base: BaseInterval::Daily,
         strategy_interval: StrategyInterval::Daily,
         fill: FillTiming::NextOpen,

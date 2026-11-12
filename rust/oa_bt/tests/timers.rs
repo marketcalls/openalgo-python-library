@@ -88,6 +88,7 @@ fn config(
         last_day,
         first_slice: None,
         last_slice: None,
+        present: None,
         base,
         strategy_interval: interval,
         fill: FillTiming::NextOpen,

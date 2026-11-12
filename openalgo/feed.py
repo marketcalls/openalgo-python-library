@@ -1192,8 +1192,16 @@ class FeedAPI(BaseAPI):
                     "last_trade_quantity": last_trade_quantity,
                     "avg_trade_price": avg_trade_price,
                     "change": change,
-                    "change_percent": change_percent
+                    "change_percent": change_percent,
+                    "ltt": last_trade_time,
+                    "total_buy_quantity": total_buy_quantity,
+                    "total_sell_quantity": total_sell_quantity,
+                    "oi": open_interest
                 }}}}
+                The server sends the average traded price as average_price and
+                the last traded quantity as last_quantity; they are read into
+                avg_trade_price and last_trade_quantity. A field the server did
+                not send is 0. A quote callback receives the same fields.
         """
         with self.lock:
             # Create nested format response
@@ -1231,7 +1239,11 @@ class FeedAPI(BaseAPI):
                         "last_trade_quantity": data.get('last_trade_quantity', 0),
                         "avg_trade_price": data.get('avg_trade_price', 0),
                         "change": data.get('change', 0),
-                        "change_percent": data.get('change_percent', 0)
+                        "change_percent": data.get('change_percent', 0),
+                        "ltt": data.get('ltt', 0),
+                        "total_buy_quantity": data.get('total_buy_quantity', 0),
+                        "total_sell_quantity": data.get('total_sell_quantity', 0),
+                        "oi": data.get('oi', 0)
                     }
             
             return result

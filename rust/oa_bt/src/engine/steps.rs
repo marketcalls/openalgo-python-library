@@ -135,7 +135,8 @@ impl Engine {
 
     /// Step 8 when the session ends at this slice (expiry of DAY orders, the `eod`
     /// close, futures expiry and mark to market (`settlement`), the day's contract
-    /// notes), then the end-of-slice records.
+    /// notes), the contract notes of a run that ends before its session close
+    /// (`run_end`), then the end-of-slice records.
     pub(super) fn close_slice(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         if slice.closes_session {
             self.expire_day_orders(slice)?;
@@ -144,6 +145,7 @@ impl Engine {
             self.settle_futures(slice)?;
             self.settle_contract_notes(slice);
         }
+        self.settle_at_run_end(slice);
         self.record_levels(slice);
         self.record_equity(slice);
         Ok(())

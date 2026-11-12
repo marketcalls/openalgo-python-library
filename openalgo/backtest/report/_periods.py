@@ -6,6 +6,7 @@ to the previous day by a time-zone conversion).
 """
 
 import datetime as dt
+import math
 import warnings
 
 import numpy as np
@@ -122,10 +123,23 @@ def benchmark_path(
     return np.where(position >= 0, bench_values[np.maximum(position, 0)], np.nan)
 
 
+def benchmark_growth(returns: np.ndarray) -> float:
+    """The benchmark's return over a span of sessions, by the one rule of the run's
+    `benchmark_total_return`, the horizon summary and `benchmark_comparison`: the
+    product of (1 + r) over the sessions whose benchmark return is known, minus 1, so
+    from the benchmark's first value in the span to its end; NaN when no session of
+    the span has one. Only sessions before the benchmark's first value lack a return
+    (`benchmark_path` never back-fills, and carries the last value forward after it)."""
+    known = np.asarray(returns, dtype=float)
+    known = known[np.isfinite(known)]
+    return float(np.prod(1.0 + known)) - 1.0 if len(known) else math.nan
+
+
 __all__ = [
     "IST",
     "NANOS_PER_DAY",
     "annualisation",
+    "benchmark_growth",
     "benchmark_path",
     "date_index",
     "ist_date",

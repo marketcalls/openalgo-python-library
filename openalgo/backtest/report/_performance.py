@@ -80,10 +80,11 @@ class Performance:
     def benchmark_comparison(self, period: str = "year") -> pd.DataFrame:
         """Strategy against benchmark per calendar "year" or "month": the compounded
         returns of both (fractions), excess (strategy minus benchmark) and beat (True
-        when the strategy did better). A period with a session whose benchmark return
-        is unknown has no benchmark return, and its beat is NA. Years are indexed by
-        their number, months by period. Raises ConfigError without a benchmark or for
-        another period."""
+        when the strategy did better). A period's benchmark return follows the rule of
+        `benchmark_total_return`: from the benchmark's first value in the period to its
+        end; a period with no benchmark return has none, and its beat is NA. Years are
+        indexed by their number, months by period. Raises ConfigError without a
+        benchmark or for another period."""
         return _tables_data.benchmark_comparison(
             self.session_returns, self.benchmark_returns, period
         )

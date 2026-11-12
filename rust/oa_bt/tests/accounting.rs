@@ -73,6 +73,7 @@ fn config(costs: CostConfig, slippage: SlippageSpec, mode: QuantityMode) -> RunC
         last_day: day(),
         first_slice: None,
         last_slice: None,
+        present: None,
         base: BaseInterval::Intraday(MINUTE),
         strategy_interval: StrategyInterval::Intraday(15 * MINUTE),
         fill: FillTiming::NextOpen,
