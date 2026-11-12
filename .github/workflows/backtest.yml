@@ -15,6 +15,18 @@ on:
       - 'test/backtest/**'
       - 'examples/backtest_quickstart.py'
       - '.github/workflows/backtest.yml'
+      # The rest of what the gate runs: the indicator core and package, the feed, and
+      # their tests.
+      - 'rust/oa_core/**'
+      - 'rust/oa_py/src/**'
+      - 'openalgo/indicators/**'
+      - 'openalgo/feed.py'
+      - 'openalgo/_feed_*.py'
+      - 'test/test_feed_*.py'
+      - 'test/feed_*.py'
+      - 'test/test_indicators_*.py'
+      - 'test/indicator_references.py'
+      - 'test/docs/**'
       # Dependency, build and lint settings change what the gate checks.
       - 'rust/Cargo.toml'
       - 'rust/Cargo.lock'
