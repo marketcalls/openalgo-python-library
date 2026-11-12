@@ -405,11 +405,24 @@ class OrderAPI(BaseAPI):
     
     def closeposition(self, *, strategy="Python", **kwargs):
         """
-        Close all open positions for a given strategy.
+        Close ALL open positions in the account (square off everything).
+
+        WARNING: this call is account-wide. It is NOT scoped to a strategy.
+        The server squares off every open position of the account that owns the
+        API key, across all symbols, exchanges and products, whichever strategy,
+        application or manual trade opened it. In analyzer (sandbox) mode it
+        closes every open sandbox position of the user instead.
+
+        To exit one position only, send an opposite order for that symbol
+        instead of calling this method.
 
         Parameters:
-        - strategy (str, optional): The trading strategy name. Defaults to "Python".
+        - strategy (str, optional): A label only. The server requires the field
+          and uses it for logging; it does not filter positions by it.
+          Defaults to "Python".
         - **kwargs: Optional additional parameters for future API extensions.
+          The endpoint accepts only the API key and the strategy label today,
+          so there is no symbol, exchange or product filter to pass here.
 
         Returns:
         dict: JSON response from the API indicating the result of the close position action.
@@ -426,14 +439,29 @@ class OrderAPI(BaseAPI):
     
     def cancelallorder(self, *, strategy="Python", **kwargs):
         """
-        Cancel all orders for a given strategy.
+        Cancel ALL open orders in the account.
+
+        WARNING: this call is account-wide. It is NOT scoped to a strategy.
+        The server cancels every open and trigger-pending order of the account
+        that owns the API key, whichever strategy, application or manual action
+        placed it. That includes pending stop-loss orders that protect other
+        positions. In analyzer (sandbox) mode it cancels every open sandbox
+        order of the user instead.
+
+        To cancel one order only, use cancelorder(order_id=...).
 
         Parameters:
-        - strategy (str, optional): The trading strategy name. Defaults to "Python".
+        - strategy (str, optional): A label only. The server requires the field
+          and uses it for logging; it does not filter orders by it.
+          Defaults to "Python".
         - **kwargs: Optional additional parameters for future API extensions.
+          The endpoint accepts only the API key and the strategy label today,
+          so there is no symbol, exchange or product filter to pass here.
 
         Returns:
         dict: JSON response from the API indicating the result of the cancel all orders action.
+              On success it carries the lists "canceled_orders" and
+              "failed_cancellations".
         """
         payload = {
             "apikey": self.api_key,

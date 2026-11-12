@@ -141,7 +141,7 @@ class CorrectedIndicatorTestSuite:
         """Initialize API client for real data"""
         try:
             self.api_client = api(
-                api_key='91300b85a12a7c3c5c7fb091b6a8f17f94222a41a339d3e76640cf9bf4831350',
+                api_key=os.getenv('OPENALGO_API_KEY', 'your_api_key_here'),
                 host='http://127.0.0.1:5001'
             )
             print("[OK] API client initialized")

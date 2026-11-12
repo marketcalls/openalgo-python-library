@@ -16,7 +16,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsymbol
 
 ```json
 {
-    "apikey": "eb51c74ed08ffc821fd5da90b55b7560a3a9e48fd58df01063225ecd7b98c993",
+    "apikey": "your_api_key",
     "strategy": "test_strategy",
     "underlying": "NIFTY",
     "exchange": "NSE_INDEX",
@@ -48,7 +48,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsymbol
 
 ```json
 {
-    "apikey": "eb51c74ed08ffc821fd5da90b55b7560a3a9e48fd58df01063225ecd7b98c993",
+    "apikey": "your_api_key",
     "strategy": "test_strategy",
     "underlying": "NIFTY28OCT25FUT",
     "exchange": "NFO",

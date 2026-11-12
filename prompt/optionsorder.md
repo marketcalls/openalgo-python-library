@@ -168,7 +168,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsorder
 | Parameter       | Description                                  | Type   |
 | --------------- | -------------------------------------------- | ------ |
 | status          | API response status (success/error)          | string |
-| orderid         | Broker order ID (or SB-xxx for analyze mode) | string |
+| orderid         | Order ID (numeric sandbox ID in analyze mode) | string |
 | symbol          | Resolved option symbol                       | string |
 | exchange        | Exchange code where order is placed          | string |
 | underlying      | Underlying symbol from request               | string |
@@ -194,7 +194,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsorder
 
 * **When**: Analyze Mode toggle is ON in OpenAlgo settings
 * **Behavior**: Places virtual orders in sandbox environment
-* **Order ID Format**: Sandbox ID with "SB-" prefix (e.g., "SB-1234567890")
+* **Order ID Format**: A numeric sandbox ID with no prefix (`YYMMDD` plus an 8-digit sequence). Check the `mode` field, not the ID, to tell a simulated order from a real one
 * **Response**: Includes "mode": "analyze" field
 * **Features**: Virtual capital, realistic execution, auto square-off
 

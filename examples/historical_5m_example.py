@@ -2,6 +2,7 @@
 Example of fetching 5-minute historical data from OpenAlgo
 """
 
+import os
 from openalgo import api
 from datetime import datetime, timedelta
 import pandas as pd
@@ -11,7 +12,7 @@ pd.set_option('display.float_format', lambda x: '%.2f' % x)
 
 # Initialize the API client
 client = api(
-    api_key="38f99d7d226cc0c3baa19dcacf0b1f049d2f68371da1dda2c97b1b63a3a9ca2e",
+    api_key=os.getenv("OPENALGO_API_KEY", "your_api_key_here"),
     host="http://127.0.0.1:5000"
 )
 

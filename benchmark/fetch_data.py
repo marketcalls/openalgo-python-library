@@ -19,7 +19,7 @@ os.environ.setdefault("NUMBA_DISABLE_JIT", "1")  # legacy numba stack is broken 
 from pathlib import Path
 import pandas as pd
 
-API_KEY = "c9aeca4e3255182e59d2c58994c6d55fc04aecce09dac6c49b2c1ba39d480254"
+API_KEY = os.getenv("OPENALGO_API_KEY", "your_api_key_here")
 HOST = "http://127.0.0.1:5000"
 DATA_DIR = Path(__file__).resolve().parent / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)

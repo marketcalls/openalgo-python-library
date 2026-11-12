@@ -27,7 +27,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optiongreeks
 
 ```json
 {
-    "apikey": "eb51c74ed08ffc821fd5da90b55b7560a3a9e48fd58df01063225ecd7b98c993",
+    "apikey": "your_api_key",
     "symbol": "NIFTY28OCT2526000CE",
     "exchange": "NFO"
 }
@@ -41,7 +41,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optiongreeks
 
 ```json
 {
-    "apikey": "eb51c74ed08ffc821fd5da90b55b7560a3a9e48fd58df01063225ecd7b98c993",
+    "apikey": "your_api_key",
     "symbol": "NIFTY28OCT2526000CE",
     "exchange": "NFO",
     "interest_rate": 0,
@@ -88,7 +88,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optiongreeks
 
 ```json
 {
-    "apikey": "eb51c74ed08ffc821fd5da90b55b7560a3a9e48fd58df01063225ecd7b98c993",
+    "apikey": "your_api_key",
     "symbol": "NIFTY28NOV2526000CE",
     "exchange": "NFO",
     "underlying_symbol": "NIFTY28NOV25FUT",
@@ -134,7 +134,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optiongreeks
 
 ```json
 {
-    "apikey": "eb51c74ed08ffc821fd5da90b55b7560a3a9e48fd58df01063225ecd7b98c993",
+    "apikey": "your_api_key",
     "symbol": "BANKNIFTY28NOV2550000CE",
     "exchange": "NFO",
     "interest_rate": 6.5

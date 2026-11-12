@@ -3,12 +3,13 @@
 OpenAlgo Account API Test Examples
 """
 
+import os
 from openalgo import api
 
 def main():
     # Initialize API with test credentials
     client = api(
-        api_key="499128a9359e97ce3e4d2bfb6a32f41be45e504e8cdbb7f35fee23795c9a7b9d",
+        api_key=os.getenv("OPENALGO_API_KEY", "your_api_key_here"),
         host="http://127.0.0.1:5000"
     )
 

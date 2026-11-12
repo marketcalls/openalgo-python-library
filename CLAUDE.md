@@ -62,7 +62,10 @@ drop; `ping_interval`/`ping_timeout` guard against zombie sockets.
 ## Analyzer (sandbox) mode
 
 The server has an analyzer/sandbox mode where orders are simulated instead of being
-sent to the broker (orderids look like `SB-...`, responses carry `"mode": "analyze"`).
+sent to the broker. Responses carry `"mode": "analyze"`, and that field is the only
+reliable marker: sandbox order IDs are plain numeric strings (`YYMMDD` plus an 8-digit
+sequence, with no `SB-` prefix), so they cannot be told apart from broker order IDs.
+Sandbox GTT IDs look like `GTT-YYMMDD-xxxxxxxx`.
 Check it with `client.analyzerstatus()` and switch with `client.analyzertoggle(True/False)`.
 Always confirm analyze mode before placing test orders. Note: simulated MARKET orders
 need a live price, so they fail when the market is closed (use LIMIT for testing on
@@ -100,7 +103,9 @@ compiling the Rust core from the sdist.
 
 - Live tests need a running OpenAlgo server on `:5000` (and the WS proxy on `:8765`)
   plus a valid API key. Do not hardcode API keys in committed files.
-- Importing `openalgo` triggers a Numba warmup in `openalgo/indicators/__init__.py`.
-  On Python 3.14 with NumPy 2.x there is a Numba incompatibility (`np.trapz` was
-  removed). To import the SDK for REST/WebSocket testing without the indicators JIT,
-  run with `NUMBA_DISABLE_JIT=1`.
+- Importing `openalgo` needs no Numba and no environment variable. Numba was removed in
+  2.0.0, so `NUMBA_DISABLE_JIT` has no effect on the SDK (`openalgo/numba_shim.py` only
+  keeps the old `@jit` / `@njit` decorators importable as no-ops). The indicators run in
+  the Rust core (`openalgo._oaindicators`). In a source checkout without a built
+  extension, `openalgo/indicators/_backend.py` falls back to NumPy where a fallback
+  exists; build the extension with maturin (see `pyproject.toml`) for the full set.

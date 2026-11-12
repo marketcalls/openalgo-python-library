@@ -151,7 +151,7 @@ class DataAPI(BaseAPI):
 
     def depth(self, *, symbol, exchange, **kwargs):
         """
-        Get market depth (order book) for a symbol.
+        Get market depth (order book) for a symbol over REST.
 
         Parameters:
         - symbol (str): Trading symbol. Required.
@@ -159,7 +159,23 @@ class DataAPI(BaseAPI):
         - **kwargs: Optional additional parameters for future API extensions.
 
         Returns:
-        dict: JSON response containing market depth data including top 5 bids/asks.
+        dict: JSON response from the server, returned as received. The top 5
+            bids and asks are lists of price/quantity dicts under "data":
+            {
+                "status": "success",
+                "data": {
+                    "bids": [{"price": price, "quantity": quantity}, ...],
+                    "asks": [{"price": price, "quantity": quantity}, ...],
+                    "ltp": ltp, "ltq": ltq, "volume": volume, "oi": oi,
+                    "open": open, "high": high, "low": low, "prev_close": prev_close,
+                    "totalbuyqty": quantity, "totalsellqty": quantity
+                }
+            }
+
+        Note: this is not the shape of the WebSocket snapshot get_depth(), which
+        nests by exchange and symbol and returns "buyBook" / "sellBook" dicts
+        keyed by level ("1", "2", ...) with "price", "qty" and "orders". Code
+        written for one does not work on the other.
         """
         payload = {
             "apikey": self.api_key,
@@ -237,23 +253,41 @@ class DataAPI(BaseAPI):
         - symbol (str): Trading symbol. Required.
         - exchange (str): Exchange code. Required.
         - interval (str): Time interval for the data. Required.
-                       Use interval() method to get supported intervals.
+                       The server accepts only this fixed list, for both sources,
+                       and answers HTTP 400 for anything else:
+                           seconds: 1s, 5s, 10s, 15s, 30s, 45s
+                           minutes: 1m, 2m, 3m, 5m, 10m, 15m, 20m, 30m
+                           hours:   1h, 2h, 3h, 4h
+                           daily and longer: D, W, M, Q, Y
+                       Other values (4m, 6m, 7m, 2W, 3M and similar) are rejected.
+                       With source='api' the interval must also be one the
+                       connected broker supports: intervals() lists those.
         - start_date (str): Start date in format 'YYYY-MM-DD'. Required.
         - end_date (str): End date in format 'YYYY-MM-DD'. Required.
         - source (str): Data source. 'api' fetches from broker API (default),
                        'db' fetches from OpenAlgo DuckDB/Historify database.
                        The db source stores 1m and D intervals physically and
-                       computes all other intervals on-the-fly via SQL aggregation.
-                       Custom intraday intervals (2m, 3m, 4m, 6m, 7m, 2h, 3h, 4h, etc.)
-                       and daily-based intervals (W, M, Q, Y with multiples like 2W, 3M)
-                       are only available with source='db'.
+                       computes the other accepted minute and hour intervals from
+                       1m, and W, M, Q, Y from D, on-the-fly via SQL aggregation.
+                       It can therefore serve accepted intervals the broker does
+                       not offer, once the 1m or D data has been downloaded.
+                       Q and Y are available only with source='db'.
         - **kwargs: Optional additional parameters for future API extensions.
 
         Returns:
         pandas.DataFrame or dict: DataFrame with historical data if successful,
                                 error dict if failed. DataFrame has timestamp as index.
-                                For intraday data (non-daily timeframes), timestamps
-                                are converted to IST. Daily data is already in IST.
+                                For every interval except D, W and M the timestamps
+                                are converted to IST (timezone-aware Asia/Kolkata).
+                                For D, W and M they are left as received
+                                (timezone-naive). Q and Y are not in that
+                                exception list, so they are converted as well.
+
+        "No data" is reported in two different ways, so check for both:
+        - source='api': when the broker returns no rows, this method returns
+          {'status': 'error', 'error_type': 'no_data', 'message': ...}.
+        - source='db': the server answers HTTP 404, which this method returns as
+          {'status': 'error', 'error_type': 'http_error', 'code': 404, 'message': ...}.
         """
         payload = {
             "apikey": self.api_key,
@@ -314,7 +348,9 @@ class DataAPI(BaseAPI):
 
         Returns:
         dict: JSON response containing supported intervals categorized by type
-              (seconds, minutes, hours, days, weeks, months)
+              (seconds, minutes, hours, days, weeks, months). These are the
+              intervals of the connected broker, limited to the ones history()
+              accepts. Q and Y are never listed here.
         """
         payload = {
             "apikey": self.api_key
