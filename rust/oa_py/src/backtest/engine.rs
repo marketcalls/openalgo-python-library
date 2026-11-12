@@ -1,0 +1,226 @@
+//! Bindings for `oa_bt::engine`: the stepping kernel as `Engine`.
+//!
+//! The Python driver (`openalgo/backtest/_driver.py`) builds an `Engine` from a config
+//! dict, instrument dicts and bar arrays, then loops: `advance()` returns a pause dict,
+//! the driver runs the strategy's callbacks and `on_bar`, places orders with
+//! `submit(request)`, and repeats until the pause kind is "finished"; `finish()`
+//! returns the result tables. Conversions live in `setup` (inputs), `request` (orders)
+//! `tables` (pauses, events, positions, orders) and `results` (the result tables).
+//!
+//! Errors: a part that is not built yet raises Python's `NotImplementedError`; bad
+//! configuration, data or requests raise `NativeEngineInputError`; anything else
+//! (a call at the wrong time, a kernel defect) raises `NativeEngineError`. The Python
+//! package converts the last two to its public error types.
+
+// Two lints fire inside PyO3 0.22 macro expansions on newer toolchains, not in this
+// code: `create_exception!` checks `cfg(feature = "gil-refs")`, which this crate does
+// not declare, and `#[pymethods]` converts the error of every `PyResult` return with
+// `.into()`.
+#![allow(unexpected_cfgs, clippy::useless_conversion)]
+
+mod request;
+mod results;
+mod setup;
+mod tables;
+
+use oa_bt::engine::{Engine, KernelError, RunSetup, Submission};
+use oa_bt::exec::{InstrumentId, OrderId};
+use oa_bt::model::Product;
+use pyo3::create_exception;
+use pyo3::exceptions::{PyException, PyNotImplementedError};
+use pyo3::prelude::*;
+use pyo3::types::PyDict;
+
+use super::calendar::NativeCalendar;
+use setup::BarArrays;
+
+create_exception!(
+    backtest,
+    NativeEngineError,
+    PyException,
+    "The engine cannot go on: a call at the wrong time, or a kernel defect."
+);
+create_exception!(
+    backtest,
+    NativeEngineInputError,
+    NativeEngineError,
+    "The configuration, the data or an order request cannot be used."
+);
+
+fn engine_error(error: KernelError) -> PyErr {
+    let message = error.to_string();
+    if error.not_built_feature().is_some() {
+        PyNotImplementedError::new_err(message)
+    } else if error.is_input_error() {
+        NativeEngineInputError::new_err(message)
+    } else {
+        NativeEngineError::new_err(message)
+    }
+}
+
+fn parse_product(code: &str) -> PyResult<Product> {
+    Product::from_code(code)
+        .ok_or_else(|| NativeEngineInputError::new_err(format!("unknown product {code:?}")))
+}
+
+/// The backtest kernel of one run (see `oa_bt::engine`).
+#[pyclass(name = "Engine", module = "openalgo._oaindicators.backtest")]
+pub struct NativeEngine {
+    /// `None` once `finish` has taken the run.
+    inner: Option<Engine>,
+}
+
+impl NativeEngine {
+    fn engine(&self) -> PyResult<&Engine> {
+        self.inner
+            .as_ref()
+            .ok_or_else(|| NativeEngineError::new_err("this run has already finished"))
+    }
+
+    fn engine_mut(&mut self) -> PyResult<&mut Engine> {
+        self.inner
+            .as_mut()
+            .ok_or_else(|| NativeEngineError::new_err("this run has already finished"))
+    }
+}
+
+#[pymethods]
+impl NativeEngine {
+    /// Build a run from a calendar, the config dict, one dict per instrument and one
+    /// tuple of six arrays per instrument (ts_open int64, open, high, low, close,
+    /// volume float64), in registration order.
+    #[new]
+    fn new(
+        calendar: PyRef<'_, NativeCalendar>,
+        config: &Bound<'_, PyDict>,
+        instruments: Vec<Bound<'_, PyDict>>,
+        bars: Vec<BarArrays<'_>>,
+    ) -> PyResult<Self> {
+        let setup = RunSetup {
+            config: setup::run_config(config)?,
+            calendar: calendar.inner.clone(),
+            instruments: instruments
+                .iter()
+                .map(setup::instrument)
+                .collect::<PyResult<_>>()?,
+            bars: bars.iter().map(BarArrays::columns).collect(),
+        };
+        let engine = Engine::new(setup).map_err(engine_error)?;
+        Ok(NativeEngine {
+            inner: Some(engine),
+        })
+    }
+
+    /// Run to the next decision point; the pause as a dict.
+    fn advance<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let pause = self.engine_mut()?.advance().map_err(engine_error)?;
+        tables::pause(py, &pause)
+    }
+
+    /// Place an order at the current decision point. Returns (outcome, order id, code):
+    /// ("submitted", id, None), ("rejected", id, reject code) or ("skipped", None, skip
+    /// reason).
+    fn submit(
+        &mut self,
+        request: &Bound<'_, PyDict>,
+    ) -> PyResult<(&'static str, Option<u64>, Option<&'static str>)> {
+        let request = request::order_request(request)?;
+        let outcome = self.engine_mut()?.submit(request).map_err(engine_error)?;
+        Ok(match outcome {
+            Submission::Submitted(id) => ("submitted", Some(id.0), None),
+            Submission::Rejected(id, code) => ("rejected", Some(id.0), Some(code.code())),
+            Submission::Skipped(reason) => ("skipped", None, Some(reason.code())),
+        })
+    }
+
+    /// Cancel a working order; returns its state afterwards.
+    fn cancel(&mut self, order_id: u64) -> PyResult<&'static str> {
+        let status = self
+            .engine_mut()?
+            .cancel(OrderId(order_id))
+            .map_err(engine_error)?;
+        Ok(status.code())
+    }
+
+    /// The position of an instrument and product as a dict, or None if never opened.
+    fn position<'py>(
+        &self,
+        py: Python<'py>,
+        instrument: u32,
+        product: &str,
+    ) -> PyResult<Option<Bound<'py, PyDict>>> {
+        let product = parse_product(product)?;
+        self.engine()?
+            .position(InstrumentId(instrument), product)
+            .map(|p| tables::position(py, p))
+            .transpose()
+    }
+
+    /// An order as a dict, or None for an unknown id.
+    fn order<'py>(&self, py: Python<'py>, order_id: u64) -> PyResult<Option<Bound<'py, PyDict>>> {
+        self.engine()?
+            .order(OrderId(order_id))
+            .map(|o| tables::order(py, o))
+            .transpose()
+    }
+
+    /// Ids of the orders that can still fill.
+    fn working_orders(&self) -> PyResult<Vec<u64>> {
+        Ok(self
+            .engine()?
+            .working_orders()
+            .iter()
+            .map(|id| id.0)
+            .collect())
+    }
+
+    /// True while an order that would open or add works on the instrument.
+    fn has_pending_entry(&self, instrument: u32) -> PyResult<bool> {
+        Ok(self.engine()?.has_pending_entry(InstrumentId(instrument)))
+    }
+
+    /// The last close seen of an instrument, rupees.
+    fn last_close(&self, instrument: u32) -> PyResult<Option<f64>> {
+        Ok(self.engine()?.last_close(InstrumentId(instrument)))
+    }
+
+    /// The account as (equity, free cash, realized, unrealized, costs, margin), rupees.
+    fn account(&self) -> PyResult<(f64, f64, f64, f64, f64, f64)> {
+        let a = self.engine()?.account();
+        Ok((
+            a.equity_rupees,
+            a.free_cash_rupees,
+            a.realized_rupees,
+            a.unrealized_rupees,
+            a.costs_rupees,
+            a.margin_rupees,
+        ))
+    }
+
+    /// The result tables, once the run has finished. The engine cannot be used after.
+    fn finish<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        if !self.engine()?.is_finished() {
+            return Err(engine_error(KernelError::RunNotFinished));
+        }
+        let engine = self
+            .inner
+            .take()
+            .ok_or_else(|| NativeEngineError::new_err("this run has already finished"))?;
+        let output = engine.finish().map_err(engine_error)?;
+        results::output(py, &output)
+    }
+}
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    let py = m.py();
+    m.add(
+        "NativeEngineError",
+        py.get_type_bound::<NativeEngineError>(),
+    )?;
+    m.add(
+        "NativeEngineInputError",
+        py.get_type_bound::<NativeEngineInputError>(),
+    )?;
+    m.add_class::<NativeEngine>()?;
+    Ok(())
+}

@@ -1,16 +1,17 @@
 """Where the kernel plugs into the worked traces, and the comparison with a fixture.
 
-The kernel does not exist yet. When it does, it provides one function:
+The kernel is reached through one function, in the test package next to this module:
 
-    openalgo.backtest.trace_runner.run_trace_case(case, strategy_form) -> dict
+    traces.kernel_runner.run_trace_case(case, strategy_form) -> dict
 
 `case` is one case of a fixture file as `fixture_loader.load_cases` returns it (derived
 bars resolved). `strategy_form` is "script" (run `strategy.decisions` as an on_bar
 strategy) or "conditions" (run `strategy.conditions` as a condition strategy; only for
-cases that carry conditions). The function runs the case with the declared instruments,
-calendar, settings and bars, and returns a dict with the keys of the case's `expected`
-section, in the same shapes and units. `compare_with_expected` then lists every
-difference.
+cases that carry conditions). The function runs the case through `bt.backtest` with the
+declared instruments, calendar, settings and bars, and returns a dict with the keys of the
+case's `expected` section, in the same shapes and units. `compare_with_expected` then
+lists every difference. A case that needs a part of the kernel not built yet is skipped
+by the runner with a reason naming that part.
 """
 
 from __future__ import annotations
@@ -23,9 +24,9 @@ from typing import Any
 from . import vocabulary as vocab
 from .timegrid import Case
 
-RUNNER_MODULE = "openalgo.backtest.trace_runner"
+RUNNER_MODULE = f"{__package__}.kernel_runner"
 RUNNER_FUNCTION = "run_trace_case"
-KERNEL_MISSING_REASON = "kernel not implemented"
+KERNEL_MISSING_REASON = "the kernel runner module is missing"
 
 # Prices and amounts are rupees with at most two decimals; anything closer than this is
 # the same number.

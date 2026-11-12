@@ -111,14 +111,15 @@ holidays).
 ## Backtest package (`openalgo.backtest`, in progress)
 
 A backtesting, paper and live trading engine for Indian markets is being built inside
-the SDK. Only the foundations exist so far; there is no event kernel, Strategy class or
-run function yet.
+the SDK. The foundations are complete; the event kernel (Phase 1) is being built. Its
+architecture is documented in `rust/oa_bt/src/engine/mod.rs`: a stepping state machine
+with no Python dependency, driven by `bt.backtest` through `Engine.advance()`.
 
 | Path | Responsibility |
 |------|----------------|
-| `rust/oa_bt/` | Zero-dependency Rust kernel crate: `model` (shared types and IST time helpers), `market` (costs, calendars), `data` (resampling), `metrics` (performance metrics) |
+| `rust/oa_bt/` | Zero-dependency Rust kernel crate: `model` (shared types and IST time helpers), `market` (costs, calendars, margin, slippage), `data` (resampling), `metrics` (performance metrics), and the kernel: `engine` (the slice loop and stepping API), `exec` (orders, fills, GTT), `portfolio` (positions and tranches, ledger), `rms` (risk rules and trading states), `sizing` |
 | `rust/oa_py/src/backtest/` | PyO3 bindings, one file per area, exposed as `openalgo._oaindicators.backtest` |
-| `openalgo/backtest/` | Python package: costs, calendar, resample, data layer, reference tables, metrics and the HTML tearsheet (`report`). `import openalgo` does not import it |
+| `openalgo/backtest/` | Python package: `Strategy`, `backtest()` and its `Result` (`strategy.py`, `run.py`, `result.py`), costs, calendar, resample, data layer, reference tables, metrics and the HTML tearsheet (`report`). `import openalgo` does not import it |
 | `test/backtest/` | pytest suite. It never contacts a server; anything that needs a client uses an in-process fake |
 
 ### Product decisions (set by the maintainer)

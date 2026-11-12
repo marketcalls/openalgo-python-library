@@ -63,6 +63,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The tables reproduce the listed contracts, last trading days and lot sizes of 92
   days of NSE and BSE bhavcopies. Part of the backtest engine being built; the
   interface may change before the backtest beta.
+- **`openalgo.backtest.backtest` and `openalgo.backtest.Strategy` (early preview).** The
+  backtest kernel runs a strategy class with `on_bar` and market orders through the
+  Rust event loop and returns fills, positions, equity, trades and events as
+  DataFrames. Stops, targets, charges, slippage presets and the other rules of the
+  contract are being built; each raises `NotImplementedError` naming its phase until
+  then. `bt.live` is planned for the live phase.
 - **`openalgo.backtest.metrics` and `openalgo.backtest.report` (preview).** Performance
   metrics computed in the Rust core (returns, CAGR on calendar time, volatility, Sharpe
   and Sortino with a per-session risk-free rate, drawdowns, Calmar, exposure, trade

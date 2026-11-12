@@ -4,3 +4,6 @@
 pub mod calendar;
 #[cfg(feature = "costs")]
 pub mod costs;
+pub mod margin;
+#[cfg(all(feature = "costs", feature = "time"))]
+pub mod slippage;
