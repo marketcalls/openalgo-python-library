@@ -8,8 +8,9 @@ Markers are HTML comments on the lines just before a fenced block (GitBook does 
 render them):
 
     <!-- requires-server -->   the ```python block needs an OpenAlgo server; it runs only
-                               when OPENALGO_API_KEY is set, with the literal
-                               "your_api_key" read from that variable at run time
+                               when OPENALGO_API_KEY is set, with the dummy key in
+                               api_key="OPENALGO_API_KEY" read from that variable at
+                               run time
     <!-- requires-network -->  the block downloads data from a network data source; it
                                runs only when OPENALGO_DOCS_NETWORK=1, with the Python
                                named by OPENALGO_DOCS_PYTHON when set (an interpreter
@@ -55,7 +56,9 @@ MARKERS = (REQUIRES_SERVER, REQUIRES_NETWORK, OUTPUT_VARIES, RUNNABLE, CONTINUES
 NEEDS = (REQUIRES_SERVER, REQUIRES_NETWORK)
 # The placeholder the docs show in `api(api_key=...)`, and the expression that replaces it
 # in a script that runs against a server: the key stays in the environment.
-API_KEY_PLACEHOLDER = '"your_api_key"'
+API_KEY_PLACEHOLDER = f'api_key="{API_KEY_ENV}"'
+# The placeholder the pages used before, still accepted until every page is converted.
+OLD_API_KEY_PLACEHOLDER = '"your_api_key"'
 API_KEY_FROM_ENVIRONMENT = f'__import__("os").environ["{API_KEY_ENV}"]'
 TIMEOUT_SECONDS = 600
 ROOT = Path(__file__).resolve().parents[2]
@@ -98,7 +101,9 @@ class Example:
         marker = f'\nif __name__ == "__main__":\n    print({SEPARATOR!r}, flush=True)\n'
         code = marker.join(self.blocks) + marker
         if REQUIRES_SERVER in self.needs:
-            code = code.replace(API_KEY_PLACEHOLDER, API_KEY_FROM_ENVIRONMENT)
+            # Only the api_key argument is replaced: a page may name the variable itself.
+            code = code.replace(API_KEY_PLACEHOLDER, f"api_key={API_KEY_FROM_ENVIRONMENT}")
+            code = code.replace(OLD_API_KEY_PLACEHOLDER, API_KEY_FROM_ENVIRONMENT)
         return code
 
 

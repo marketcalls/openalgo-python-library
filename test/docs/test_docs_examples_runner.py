@@ -27,13 +27,30 @@ FAKE_KEY = "0123456789abcdef" * 4
 SERVER_PAGE = """\
 <!-- requires-server -->
 ```python
-key = "your_api_key"
+def api(api_key):
+    return api_key
+
+key = api(api_key="OPENALGO_API_KEY")
 print(len(key), key[:4])
 ```
 
 <!-- output -->
 ```text
 64 0123
+```
+"""
+
+
+# A page that names the environment variable itself, which the runner must leave alone.
+NAMED_VARIABLE_PAGE = """\
+<!-- requires-server -->
+```python
+print("OPENALGO_API_KEY")
+```
+
+<!-- output -->
+```text
+OPENALGO_API_KEY
 ```
 """
 
@@ -156,3 +173,8 @@ def test_a_network_example_runs_with_the_python_named_in_the_environment(tmp_pat
 def test_an_example_without_the_network_marker_keeps_the_test_python(tmp_path):
     (example,) = examples_of(SERVER_PAGE, tmp_path)
     assert interpreter(example, environ={PYTHON_ENV: "elsewhere"}) == sys.executable
+
+
+def test_only_the_api_key_argument_is_replaced_not_the_variable_name(tmp_path):
+    (example,) = examples_of(NAMED_VARIABLE_PAGE, tmp_path)
+    check(example, tmp_path, environ={**os.environ, API_KEY_ENV: FAKE_KEY})
