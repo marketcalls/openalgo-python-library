@@ -6,7 +6,8 @@
 //! position is flat and an order on the same side is already waiting to open it (so
 //! two orders decided together cannot pass a limit between them). An order that only
 //! reduces, or reverses an opposite position, does not add. A modification does not
-//! count the order it replaces as waiting.
+//! count the order it replaces as waiting. A rebalance order (`OrderRequest::rebalance`)
+//! is an intended add: averaging down does not refuse it; the other limits apply.
 //!
 //! Every fact is taken at the decision price, the instrument's last close (SPEC-15):
 //! the add and the adds still waiting count as filled at that price. A quantity that
@@ -39,7 +40,10 @@ impl Engine {
         slice: &SliceInfo,
         replacing: Option<OrderId>,
     ) -> Result<Result<(), RejectCode>, KernelError> {
-        if request.reduce_only || self.config.risk.scale.is_open() {
+        let mut limits = self.config.risk.scale;
+        // A rebalance buys what has fallen on purpose: an intended add (`rebalance`).
+        limits.allow_averaging_down |= request.rebalance;
+        if request.reduce_only || limits.is_open() {
             return Ok(Ok(()));
         }
         let key = PositionKey {
@@ -65,7 +69,7 @@ impl Engine {
             return Ok(Ok(()));
         }
         let facts = self.add_facts(request, units, slice, key, &waiting)?;
-        Ok(scale_in_gate(&self.config.risk.scale, &facts))
+        Ok(scale_in_gate(&limits, &facts))
     }
 
     /// The facts of an add to `key` (see the module documentation).

@@ -1,7 +1,8 @@
 """The order methods of `Strategy` (14-strategy-api 2.4), as a mixin.
 
 `buy` and `sell` open, add or reduce; `exit` and `reduce` only reduce; `target` trades to
-a target position. Every method takes `symbol=None` (required with several instruments)
+a target position; `rebalance` trades several symbols to target weights at once
+(`_rebalance`). Every other method takes `symbol=None` (required with several instruments)
 and returns an `Order` handle, or None when there is nothing to do (an exit while flat,
 a target already held) or a sizer skipped the order. A MARKET
 order fills at the next base-bar open at or after the decision; a LIMIT or stop order
@@ -14,14 +15,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import _orders
+from . import _orders, _rebalance
 from ._atr import decision_atr
 from ._orders import Order
 from .errors import ConfigError
 
 
 class OrderMethods:
-    """`buy`, `sell`, `exit`, `reduce`, `target`, `cancel`, `cancel_all`."""
+    """`buy`, `sell`, `exit`, `reduce`, `target`, `rebalance`, `cancel`, `cancel_all`."""
 
     _ctx: Any
 
@@ -196,6 +197,33 @@ class OrderMethods:
         leverage = order_leverage(None, getattr(self, "leverage", None))
         request = _orders.target(ctx.instrument_index(symbol), ctx.product, leverage, amounts)
         return ctx.submit_target(request)
+
+    def rebalance(
+        self, weights: dict[str, float], *, cash_buffer: float = _rebalance.DEFAULT_CASH_BUFFER
+    ) -> dict[str, Order]:
+        """Trade the portfolio to `weights`, percent of equity by symbol
+        ({"RELIANCE": 25, "TCS": 25, ...}, adding up to 100 at most; a symbol of the
+        strategy left out is sold to flat), keeping `cash_buffer` percent of equity in
+        cash for charges and a move to the next open. Call it in `on_bar` (or a timer)
+        when the strategy's schedule says so; the orders fill at the next base-bar open.
+
+        Each symbol gets one `target(value=...)` order for its weight of the equity at
+        this decision, after the buffer. Sales are sent first and every sale fills
+        before every buy, so the buys can spend the sales' proceeds as far as the dated
+        sale-credit rule allows. Every order is tagged "rebalance" in `result.orders`.
+        Its buys are intended adds: the kernel marks each rebalance order, and the
+        averaging-down refusal (`allow_averaging_down = False`, the default) does not
+        apply to a marked buy, so buying back what has fallen is never refused for it;
+        the other scale-in limits a strategy declares still apply. A buy the cash does
+        not cover at its fill is rejected for margin and the next rebalance corrects
+        it (see `_rebalance` for the rules and what is not built).
+
+        Returns the orders sent, by symbol (none for a symbol already at its target).
+        Raises ConfigError for weights that are not a dict of numbers from 0 to 100
+        adding up to 100 at most, a symbol the strategy does not trade, or a
+        `cash_buffer` outside 0 to below 100."""
+        leverage = order_leverage(None, getattr(self, "leverage", None))
+        return _rebalance.rebalance(self._ctx, weights, cash_buffer, leverage)
 
     def cancel(self, order: Order) -> str:
         """Cancel a working order; returns its state afterwards."""

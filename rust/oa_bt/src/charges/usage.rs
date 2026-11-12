@@ -11,14 +11,17 @@ pub enum MarketTable {
     Slippage,
     /// `margin_defaults.csv`.
     Margin,
+    /// `sale_credit_defaults.csv`.
+    SaleCredit,
 }
 
 impl MarketTable {
-    /// "slippage" or "margin".
+    /// "slippage", "margin" or "sale_credit".
     pub fn code(self) -> &'static str {
         match self {
             MarketTable::Slippage => "slippage",
             MarketTable::Margin => "margin",
+            MarketTable::SaleCredit => "sale_credit",
         }
     }
 }

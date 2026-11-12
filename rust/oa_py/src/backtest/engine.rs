@@ -158,6 +158,21 @@ impl NativeEngine {
         Ok(outcome.map(submission_tuple))
     }
 
+    /// Trade to a target position as part of a rebalance (`rebalance()`, a target dict
+    /// as `target` takes): the same order, marked and tagged `rebalance`, whose buy fills
+    /// after the slice's sales. Returns what `target` returns.
+    fn rebalance_target(
+        &mut self,
+        request: &Bound<'_, PyDict>,
+    ) -> PyResult<Option<SubmissionTuple>> {
+        let request = sizing::target_request(request)?;
+        let outcome = self
+            .engine_mut()?
+            .submit_rebalance(request)
+            .map_err(engine_error)?;
+        Ok(outcome.map(submission_tuple))
+    }
+
     /// What a sizer sees for an order request at the decision, as a dict (see
     /// `sizing::inputs`): what a strategy's sizing function receives.
     fn sizing_inputs<'py>(

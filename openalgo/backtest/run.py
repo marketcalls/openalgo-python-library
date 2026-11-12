@@ -193,8 +193,7 @@ def rebalance(*args: Any, **settings: Any) -> Any:
     NotImplementedError."""
     raise not_supported(
         "bt.rebalance",
-        "write the rebalance in on_bar of a strategy on several symbols, with "
-        "self.target(percent=...) for each symbol",
+        "call self.rebalance(weights) in on_bar of a strategy on several symbols",
     )
 
 

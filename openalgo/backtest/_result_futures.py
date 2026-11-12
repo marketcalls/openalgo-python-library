@@ -30,20 +30,22 @@ def _ist(values: Any) -> Any:
 
 
 def settlements_frame(output: dict[str, Any], symbols: list[str]) -> pd.DataFrame:
-    """One row per posting: IST `date`, `symbol`, product, units held after the session
-    close, the settlement price, `last_close_used` (the data gave no settlement price),
-    the cash flow `amount_rupees` and `kind` ("daily" or "expiry")."""
+    """One row per posting: `time` (IST open of the slice it was posted in), IST
+    `date`, `symbol`, product, units held after the session close, the settlement
+    price, `last_close_used` (the data gave no settlement price), the cash flow
+    `amount_rupees` and `kind` ("daily" or "expiry")."""
     frame = pd.DataFrame(output["futures"]["settlements"], columns=list(SETTLEMENT_COLUMNS))
     frame.insert(0, "symbol", [symbols[i] for i in frame["instrument"]])
     frame.insert(0, "date", [from_day(day) for day in frame["day"]])
+    frame.insert(0, "time", _ist(frame["slice_ts"]).to_numpy())
     return frame.drop(columns=["day"])
 
 
 def switches_frame(output: dict[str, Any], symbols: list[str]) -> pd.DataFrame:
     """One row per switch of a futures series: `time` (IST open of the slice from which
-    the next contract is traded), `from_symbol`, `to_symbol`, the `spread_rupees` that
-    back-adjusts the series and `rolls_positions` (False when positions are settled at
-    expiry instead)."""
+    the next contract is traded), its IST `date`, `from_symbol`, `to_symbol`, the
+    `spread_rupees` that back-adjusts the series and `rolls_positions` (False when
+    positions are settled at expiry instead)."""
     columns = [
         "series",
         "from",
@@ -57,8 +59,9 @@ def switches_frame(output: dict[str, Any], symbols: list[str]) -> pd.DataFrame:
     frame = pd.DataFrame(output["futures"]["switches"], columns=columns)
     frame.insert(0, "to_symbol", [symbols[i] for i in frame["to"]])
     frame.insert(0, "from_symbol", [symbols[i] for i in frame["from"]])
+    frame.insert(0, "date", [from_day(day) for day in frame["day"]])
     frame.insert(0, "time", _ist(frame["slice_ts"]).to_numpy())
-    return frame
+    return frame.drop(columns=["day"])
 
 
 __all__ = ["settlements_frame", "switches_frame"]

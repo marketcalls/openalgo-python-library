@@ -189,5 +189,7 @@ pub(super) fn order_request(dict: &Bound<'_, PyDict>) -> PyResult<OrderRequest> 
             .unwrap_or_default(),
         leverage: optional(dict, "leverage")?,
         tag: optional(dict, "tag")?,
+        // Only `Engine.rebalance_target` makes a rebalance order.
+        rebalance: false,
     })
 }

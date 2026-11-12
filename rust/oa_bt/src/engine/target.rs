@@ -61,6 +61,18 @@ impl Engine {
         &mut self,
         target: TargetRequest,
     ) -> Result<Option<Submission>, KernelError> {
+        match self.target_order(target)? {
+            Some(request) => self.submit(request).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// The order `submit_target` sends for `target`, or `None` when the position
+    /// already is the target. Errors: those of `submit_target` before it submits.
+    pub(super) fn target_order(
+        &self,
+        target: TargetRequest,
+    ) -> Result<Option<OrderRequest>, KernelError> {
         let Some((slice, _, _)) = self.decision_point() else {
             return Err(KernelError::NotAtDecisionPoint);
         };
@@ -88,7 +100,7 @@ impl Engine {
         };
         let crosses = expected != 0.0 && wanted != 0.0 && (wanted > 0.0) != (expected > 0.0);
         let reduces = expected != 0.0 && !crosses && wanted.abs() < expected.abs();
-        let request = OrderRequest {
+        Ok(Some(OrderRequest {
             product: target.product,
             reduce_only: reduces,
             reverse: crosses,
@@ -98,8 +110,7 @@ impl Engine {
                 side,
                 QuantitySpec::Units(difference.abs()),
             )
-        };
-        self.submit(request).map(Some)
+        }))
     }
 
     /// Signed units the queued MARKET DAY orders on `key` add to the position when they
