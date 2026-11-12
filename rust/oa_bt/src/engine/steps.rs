@@ -1,8 +1,9 @@
 //! The eight steps of one slice (03-architecture 4.2), each across every instrument in
 //! registration order before the next step starts.
 //!
-//! Steps 1 to 6 run in `open_slice`, step 7 decides whether to pause
-//! (`callbacks_pause`), and step 8 plus the end-of-slice records run in `close_slice`.
+//! Steps 1 to 6 run in `open_slice` (resumed by `finish_open_slice` after a timer pause
+//! in step 2), step 7 decides whether to pause (`callbacks_pause`), and step 8 plus the
+//! end-of-slice records run in `close_slice`.
 
 use crate::exec::{FillAt, FillFlags, InstrumentId, OrderAction};
 use crate::model::Product;
@@ -18,12 +19,26 @@ use super::output::{LevelRow, StaleMark};
 use super::pause::Pause;
 
 impl Engine {
-    /// Steps 1 to 6 of a slice.
-    pub(super) fn open_slice(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
+    /// Steps 1 to 6 of a slice. Returns the timer pause of step 2 when timers are due
+    /// (`timers`); the slice then goes on with `finish_open_slice` at the next
+    /// `advance`.
+    pub(super) fn open_slice(&mut self, slice: &SliceInfo) -> Result<Option<Pause>, KernelError> {
         // Step 1: session open and reference events. The session's intraday times are
         // resolved on first use (`session_times`); no reference event (lot-size change,
         // roll) can be configured yet.
         self.risk_session_open(slice);
+        if let Some(pause) = self.timers_pause(slice) {
+            self.fill_due_orders(slice)?;
+            return Ok(Some(pause));
+        }
+        self.finish_open_slice(slice)?;
+        Ok(None)
+    }
+
+    /// The rest of steps 2 to 6. After a timer pause `step_open_fills` fills what the
+    /// timers placed (what `fill_due_orders` handled is no longer queued), then the time
+    /// exits and the square-off; without one it is the whole of step 2.
+    pub(super) fn finish_open_slice(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         self.step_open_fills(slice)?;
         self.step_levels(slice)?;
         self.step_ratchets(slice)?;

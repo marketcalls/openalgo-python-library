@@ -122,9 +122,20 @@ def test_malformed_leg_arguments_are_configuration_errors(arguments):
 
 
 def store_of(rows):
-    store = BarStore("SBIN")
+    """A store with every row revealed (a bar opening at `number`, open equal to close)."""
+    highs, lows, closes = (pd.Series([row[k] for row in rows], dtype=float) for k in range(3))
+    series = {
+        "ts_open": pd.Series(range(len(rows))).to_numpy(),
+        "ts_close": pd.Series(range(1, len(rows) + 1)).to_numpy(),
+        "open": closes.to_numpy(),
+        "high": highs.to_numpy(),
+        "low": lows.to_numpy(),
+        "close": closes.to_numpy(),
+        "volume": pd.Series(0.0, index=closes.index).to_numpy(),
+    }
+    store = BarStore("SBIN", "1m", series)
     for number, (high, low, close) in enumerate(rows):
-        store.append((0, number, number + 1, close, high, low, close, 0.0))
+        store.reveal((0, number, number + 1, close, high, low, close, 0.0))
     return store
 
 

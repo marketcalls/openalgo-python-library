@@ -115,6 +115,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Result.tearsheet()` report the run. Charges for a delivery buy and sell of one scrip
   on the same day, the margin of stock, BSE and MCX futures, and short options are not
   built yet.
+- **The strategy surface of `openalgo.backtest` (early preview).** `self.I(ta.x, ...)`
+  registers an indicator from `openalgo.ta`, computed once in Rust and revealed bar by
+  bar, with `[-1]`, slices, comparisons, arithmetic, `.crossed_above` and
+  `.crossed_below`; outputs that look ahead (`ta.fractals`, the Ichimoku lagging span)
+  are rejected by name, and each indicator passes a truncation check and a
+  window-stability check (warm-up length, tolerance in the Assumptions block) once per
+  strategy and data. `self.data[symbol, "15m"]` shows another interval, each bar only
+  once it has closed. `self.at("09:20", fn)` and `self.every("month", fn)` are timers
+  whose orders fill at that same open. Without `base=`, an intraday run uses 1-minute
+  bars when 1-minute data covers the whole run and the strategy interval otherwise, and
+  says which and why. Futures and options take their lot size, tick and freeze quantity
+  from the reference tables. `bt.optimize` sweeps a parameter grid in spawned worker
+  processes (Windows included) and returns `.table`, `.best`, `.select()`,
+  `.heatmap()` and `.path`; `Result.rerun()` repeats a run bit for bit or with
+  overrides, and `Result.manifest` records what is needed to reproduce it.
 - **`openalgo.backtest.metrics` and `openalgo.backtest.report` (preview).** Performance
   metrics computed in the Rust core (returns, CAGR on calendar time, volatility, Sharpe
   and Sortino with a per-session risk-free rate, drawdowns, Calmar, exposure, trade
