@@ -49,8 +49,11 @@ pub enum SlippageError {
     NoDefault { class: &'static str, day: Day },
     /// The embedded default table is malformed (a defect of the release).
     InvalidTable { reason: String },
-    /// A slippage model that is not built yet.
-    NotBuilt { feature: &'static str },
+    /// A slippage model that is not built yet, and what the user can do instead.
+    NotBuilt {
+        feature: &'static str,
+        instead: &'static str,
+    },
 }
 
 impl fmt::Display for SlippageError {
@@ -67,11 +70,8 @@ impl fmt::Display for SlippageError {
             SlippageError::InvalidTable { reason } => {
                 write!(f, "the built-in slippage table is malformed: {reason}")
             }
-            SlippageError::NotBuilt { feature } => {
-                write!(
-                    f,
-                    "{feature} is not implemented yet (Phase 1 work in progress)"
-                )
+            SlippageError::NotBuilt { feature, instead } => {
+                crate::model::write_not_supported(f, feature, instead)
             }
         }
     }

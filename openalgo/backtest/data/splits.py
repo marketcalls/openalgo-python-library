@@ -51,6 +51,7 @@ import pandas as pd
 
 from .._calendar_convert import from_day, to_day
 from .._layout import parse_interval
+from .._messages import counted
 from ..errors import ConfigError
 from ._sessions import ist_days
 from ._severity import ERROR, INFO, WARNING
@@ -112,35 +113,43 @@ ADVICE = (
     "CorporateAction.bonus(ex_date, bonus, held) for a split or bonus, or "
     "CorporateAction.none(ex_date) when the move is genuine"
 )
-# The issues of the check: (name, severity, statuses, message with {count} and {gaps}).
+_DECLARED = ("declared corporate action", "declared corporate actions")
+# The issues of the check: (name, severity, statuses, the counted noun in the singular
+# and the plural, message with {counted} and {gaps}).
 _ISSUES = (
     (
         CHECK,
         ERROR,
         (SUSPECTED, MISMATCH),
-        "{count} suspected unadjusted split or bonus ({gaps}). " + ADVICE,
+        ("suspected unadjusted split or bonus", "suspected unadjusted splits or bonuses"),
+        "{counted} ({gaps}). " + ADVICE,
     ),
     (
         UNADJUSTED_CHECK,
         WARNING,
         (UNADJUSTED,),
-        "the bars are not adjusted for {count} declared corporate actions ({gaps}). Adjusting "
-        "for them is FR-MKT-11 (Phase 5): until then an indicator whose window spans an "
-        "ex-date reads prices from both sides of it, and a backtest that holds a position or "
-        "a GTT across one stops with NotImplementedError",
+        _DECLARED,
+        "the bars are not adjusted for {counted} ({gaps}). This version does not adjust "
+        "bars for a corporate action, so an indicator whose window spans an ex-date reads "
+        "prices from both sides of it, and a backtest that holds a position or a GTT across "
+        "one stops with NotImplementedError. Supply adjusted bars (data=) to avoid both",
     ),
     (
         ADJUSTED_CHECK,
         INFO,
         (ADJUSTED,),
-        "the bars are already adjusted for {count} declared corporate actions ({gaps})",
+        _DECLARED,
+        "the bars are already adjusted for {counted} ({gaps})",
     ),
     (
         ACKNOWLEDGED_CHECK,
         INFO,
         (ACKNOWLEDGED,),
-        "{count} gaps that look like a split or bonus are read as genuine price moves, as "
-        "declared with CorporateAction.none ({gaps})",
+        (
+            "gap that looks like a split or bonus is read as a genuine price move",
+            "gaps that look like a split or bonus are read as genuine price moves",
+        ),
+        "{counted}, as declared with CorporateAction.none ({gaps})",
     ),
 )
 
@@ -361,7 +370,7 @@ def _not_applicable(exchange: str | None, interval: str | None) -> str | None:
     if exchange not in CASH_EXCHANGES:
         return (
             f"not checked on {exchange}: shares on NSE and BSE split, an index does not, and "
-            "adjusting derivative contracts at a corporate action is FR-MKT-14 (Phase 6)"
+            "this version does not adjust derivative contracts at a corporate action"
         )
     if parse_interval(interval)[0] not in ("intraday", "D"):
         return (
@@ -373,11 +382,12 @@ def _not_applicable(exchange: str | None, interval: str | None) -> str | None:
 
 def _record(report: QualityReport, gaps: list[PriceGap]) -> None:
     """Add the issues of the reported gaps to `report`, one per check of `_ISSUES`."""
-    for check, severity, statuses, message in _ISSUES:
+    for check, severity, statuses, (singular, plural), message in _ISSUES:
         chosen = [gap for gap in gaps if gap.status in statuses]
         text = "; ".join(gap.describe() for gap in chosen)
         days = [gap.ex_date for gap in chosen]
-        report.add(check, severity, len(chosen), message.format(count=len(chosen), gaps=text), days)
+        number = counted(len(chosen), singular, plural)
+        report.add(check, severity, len(chosen), message.format(counted=number, gaps=text), days)
 
 
 __all__ = [

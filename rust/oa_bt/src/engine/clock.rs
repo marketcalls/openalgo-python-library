@@ -14,7 +14,7 @@
 use crate::market::calendar::{union_grid, BaseInterval, Calendar, UnionGrid};
 use crate::model::{Day, Exchange, TsNanos};
 
-use super::config::{RunConfig, StrategyInterval};
+use super::config::{RunConfig, StrategyInterval, PERIOD_INTERVALS, PERIOD_INTERVALS_INSTEAD};
 use super::error::KernelError;
 
 /// What the steps need to know about one slice.
@@ -101,7 +101,8 @@ impl Timeline {
             StrategyInterval::Daily => BaseInterval::Daily,
             StrategyInterval::Period(_) => {
                 return Err(KernelError::NotBuilt {
-                    feature: "weekly, monthly, quarterly and yearly strategy intervals",
+                    feature: PERIOD_INTERVALS,
+                    instead: PERIOD_INTERVALS_INSTEAD,
                 })
             }
         };

@@ -257,15 +257,18 @@ def expiry_schedule(
     calendar: SessionCalendar,
     series: str = ALL_SERIES,
     as_of: _dt.date | None = None,
+    record_use: bool = True,
 ) -> list[Expiry]:
     """Contracts whose last trading day falls from `first` to `last`, in date order.
 
     `as_of` is a trade date: the dates are those in force then; None gives the final
     dates. `exchange` is the derivatives exchange (NFO, BFO) and is what the calendar is
-    asked about. Raises `ConfigError` for a bad argument, `ReferenceDataError` when the
-    rules do not cover a day of the range or an answer would rest on a "template"
-    calendar date, and `CalendarError` when the calendar has no session to move an
-    expiry back to.
+    asked about. `record_use=False` lists the contracts without recording the rows as
+    used and without warnings, for a caller that looks ahead past the dates it needs and
+    records only the contracts it keeps (by listing each of them again). Raises
+    `ConfigError` for a bad argument, `ReferenceDataError` when the rules do not cover a
+    day of the range or an answer would rest on a "template" calendar date, and
+    `CalendarError` when the calendar has no session to move an expiry back to.
     """
     if series != ALL_SERIES and series not in SERIES:
         raise ConfigError(f"series must be 'all', 'weekly' or 'monthly', got {series!r}")
@@ -278,7 +281,8 @@ def expiry_schedule(
         if series in (ALL_SERIES, entry[0]):
             result = _in_range(context, contract, entry, first, last)
             found += [] if result is None else [result]
-    _finish(context, found)
+    if record_use:
+        _finish(context, found)
     return sorted((record for record, _ in found), key=lambda item: item.last_trading_day)
 
 

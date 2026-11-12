@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use crate::model::{Day, Exchange, TsNanos, NANOS_PER_SEC};
+use crate::model::{counted, Day, Exchange, TsNanos, NANOS_PER_SEC};
 
 use super::error::{format_day, format_ist};
 use super::offset::{ShiftDirection, ShiftEvidence};
@@ -70,14 +70,15 @@ fn offset_message(
     };
     format!(
         "timestamps are 5 hours 30 minutes {way} against the {code} session calendar: \
-         {misplaced} of {bars} bars are outside the session or off its lattice as given, \
-         {undone} after undoing the offset, which then covers {days} days (first bar: \
+         {misplaced} of {bars} are outside the session or off its lattice as given, \
+         {undone} after undoing the offset, which then covers {days} (first bar: \
          {first}). Likely cause: {cause}. Declare the time zone of the source, or set the \
          per-broker shift flag; timestamps are never shifted silently",
         code = exchange.code(),
         misplaced = evidence.misplaced,
+        bars = counted(bars, "bar", "bars"),
         undone = evidence.misplaced_if_undone,
-        days = evidence.covered_days_if_undone,
+        days = counted(evidence.covered_days_if_undone, "day", "days"),
         first = format_ist(first_bar)
     )
 }
@@ -90,12 +91,17 @@ fn close_labelled_message(
 ) -> String {
     format!(
         "the bars look labelled by their close time, not their open time: on \
-         {days_at_close} of {days} {} session days a bar opens at the session close \
+         {days_at_close} of {days} {} {} a bar opens at the session close \
          (first at {}) and no day has a bar at the first bar of its session. Served as \
          they are, every bar would close one interval after it really did. Declare that \
          the source stamps bars at their close (for your own data, label=\"close\"); \
          timestamps are never shifted silently",
         exchange.code(),
+        if days == 1 {
+            "session day"
+        } else {
+            "session days"
+        },
         format_ist(first_at_close)
     )
 }
@@ -108,10 +114,11 @@ fn off_lattice_message(
     bars: u64,
 ) -> String {
     format!(
-        "{bars} bars are not on the {} bar lattice: the bar at {} does not open at the \
+        "{} not on the {} bar lattice: the bar at {} does not open at the \
          regular open ({}) plus a whole number of {}-second intervals. Bars are anchored \
          to the exchange's regular open (09:15 for NSE) on every date, not to midnight or \
          to the hour; check the interval and the resampling of the source",
+        counted(bars, "bar is", "bars are"),
         exchange.code(),
         format_ist(ts),
         format_ist(lattice_anchor),
@@ -133,9 +140,11 @@ fn closed_day_message(
         Coverage::Unverified | Coverage::Sourced => "",
     };
     format!(
-        "{bars} bars fall on {days} date(s) with no {} session in the calendar, first on \
+        "{} on {} with no {} session in the calendar, first on \
          {}{template_note}. If the exchange held a special session, add it to the calendar \
          with add_session; otherwise drop those rows, or allow closed days explicitly",
+        counted(bars, "bar falls", "bars fall"),
+        counted(days, "date", "dates"),
         exchange.code(),
         format_day(day)
     )

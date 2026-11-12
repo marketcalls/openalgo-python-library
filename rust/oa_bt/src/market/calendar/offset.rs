@@ -20,7 +20,7 @@
 //!    few bars after the close and one complete shifted day all end here, with the
 //!    counts, so the caller can warn and a person can decide.
 
-use crate::model::{Exchange, TsNanos, IST_OFFSET_NANOS};
+use crate::model::{counted, Exchange, TsNanos, IST_OFFSET_NANOS};
 
 use super::lattice::{LatticeCursor, Placement};
 use super::store::Calendar;
@@ -116,17 +116,19 @@ impl OffsetCheck {
             ShiftDirection::Early5h30 => ("early", "later"),
         };
         let counts = format!(
-            "{misplaced} bars are outside the session or off its lattice as given, and \
-             {misplaced_if_undone} if every timestamp is moved 5 hours 30 minutes {undo}"
+            "{} outside the session or off its lattice as given, and \
+             {misplaced_if_undone} if every timestamp is moved 5 hours 30 minutes {undo}",
+            counted(misplaced, "bar is", "bars are")
         );
+        let days = counted(covered_days_if_undone, "day", "days");
         match self {
             OffsetCheck::Shifted(_) => format!(
                 "the timestamps are 5 hours 30 minutes {way}: {counts}, which then covers \
-                 {covered_days_if_undone} days"
+                 {days}"
             ),
             _ => format!(
                 "the offset check is inconclusive: {counts}, but that covers only \
-                 {covered_days_if_undone} day(s) by at least half a session and the rule \
+                 {days} by at least half a session and the rule \
                  needs {MIN_COVERED_DAYS} with nine in ten misplaced bars explained. The \
                  timestamps may be 5 hours 30 minutes {way}, or the series may be thin, or \
                  the calendar may lack a session"

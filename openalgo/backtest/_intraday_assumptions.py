@@ -21,6 +21,7 @@ import datetime as dt
 from typing import Any
 
 from ._layout import NANOS_PER_SECOND
+from ._messages import counted
 from ._series import IST
 
 TIMES = ("entry_from", "entry_until", "square_off")
@@ -80,7 +81,7 @@ def _statement(name: str, values: list[SessionTime]) -> str | None:
         return OPEN_RULE
     offsets = {offset for _, _, offset, _ in values}
     if all(follows for *_, follows in values) and len(offsets) == 1:
-        return f"{offsets.pop()} minutes before each session's close"
+        return f"{counted(offsets.pop(), 'minute')} before each session's close"
     return _periods(values)
 
 

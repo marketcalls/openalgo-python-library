@@ -32,6 +32,7 @@ mod decide;
 mod driver;
 
 use crate::exec::{InstrumentId, OrderRequest, OrderType, Validity};
+use crate::market::calendar::format_ist;
 use crate::model::{Product, Side, TsNanos};
 use crate::sizing::SkipReason;
 
@@ -161,7 +162,7 @@ impl SignalArrays {
         } else if order.side != side {
             Some("is on the wrong side (entry_when buys, short_when sells)")
         } else if order.order_type != OrderType::Market || order.validity != Validity::Day {
-            Some("is not a MARKET DAY order (14-strategy-api 4.1)")
+            Some("is not a MARKET DAY order (a condition entry always is)")
         } else if order.reduce_only || order.reverse {
             Some("only reduces or reverses; a condition entry opens or adds")
         } else {
@@ -180,8 +181,9 @@ impl SignalArrays {
     fn bar_index(&self, ts_open: TsNanos) -> Result<usize, KernelError> {
         self.bar_opens.binary_search(&ts_open).map_err(|_| {
             invalid(format!(
-                "the condition arrays have no value for the strategy bar opening at \
-                 {ts_open} (UTC nanoseconds): align them on the run's strategy bars"
+                "the condition arrays have no value for the strategy bar opening at {}: \
+                 align them on the run's strategy bars",
+                format_ist(ts_open)
             ))
         })
     }

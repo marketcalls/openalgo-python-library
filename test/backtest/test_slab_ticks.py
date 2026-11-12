@@ -149,7 +149,7 @@ def test_a_missing_margin_row_stops_the_run_before_any_data_is_loaded():
     class Idle(bt.Strategy):
         symbol, exchange, interval = "UNLISTED19DEC25FUT", "MCX", "D"
 
-    with pytest.raises(NotImplementedError, match="futures whose underlying has no row"):
+    with pytest.raises(NotImplementedError, match="the dated margin table does not list"):
         bt.backtest(
             Idle,
             capital=1_000_000,

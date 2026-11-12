@@ -208,7 +208,7 @@ def test_infinite_high_of_a_base_bar_fails_the_resampled_load():
     rows = truth_rows(CAL, "NSE", [JAN_1])
     rows[7] = dict(rows[7], high=float("inf"))  # the 09:22 bar, inside the 09:20 5m bar
     client = FakeClient(db={("X", "NSE", "1m"): historify_shape(rows)})
-    with pytest.raises(DataQualityError, match="1 rows have an open, high, low or close"):
+    with pytest.raises(DataQualityError, match="1 row has an open, high, low or close"):
         _load(client, "5m", JAN_1, JAN_1, base="1m")
     result = _load(client, "5m", JAN_1, JAN_1, base="1m", strict=False)
     assert [issue.check for issue in result.meta.quality.errors] == ["non_finite_price"]

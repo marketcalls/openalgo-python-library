@@ -22,6 +22,7 @@ import numpy as np
 
 from openalgo.indicators import ta
 
+from ._messages import counted
 from ._series import SeriesStore
 from .errors import ConfigError
 
@@ -56,8 +57,9 @@ def decision_atr(store: SeriesStore, period: int) -> float:
     closed = len(store)
     if closed < period:
         raise ConfigError(
-            f"bt.atr(period={period}) on {store.symbol} needs {period} closed strategy bars "
-            f"at the decision and {closed} have closed: place the order later or use a "
+            f"bt.atr(period={period}) on {store.symbol} needs "
+            f"{counted(period, 'closed strategy bar')} at the decision and {closed} "
+            f"{'has' if closed == 1 else 'have'} closed: place the order later or use a "
             "shorter period"
         )
     value = float(atr_values(store, period)[-1])

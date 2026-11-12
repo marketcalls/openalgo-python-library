@@ -185,8 +185,7 @@ def _check_causal(func: Callable[..., Any], frame: pd.DataFrame, arrays: tuple) 
                 raise ConfigError(
                     f"{getattr(func, '__name__', 'the function')} looks ahead: its {name} "
                     f"value at the bar opening {when} changes when the bars after the first "
-                    f"{count} are removed (03-architecture 5). A signal may use only bars "
-                    "up to its own close."
+                    f"{count} are removed. A signal may use only bars up to its own close."
                 )
 
 

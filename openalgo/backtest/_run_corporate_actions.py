@@ -23,6 +23,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from ._messages import not_supported
 from .data import BarsResult
 from .data.corporate_actions import declared
 from .data.splits import (
@@ -146,11 +147,11 @@ def check_crossings(output: dict[str, Any], events: Sequence[UnadjustedEvent]) -
             held = "a GTT rests"
         else:
             continue
-        raise NotImplementedError(
+        raise not_supported(
             f"{event.symbol}: {held} across {event.ex_date}, the ex-date of {event.reading} "
             "that the bars are not adjusted for. Adjusting the units, average price, levels "
-            "and GTTs of a holding at a corporate action is FR-MKT-11, planned for Phase 5. "
-            "Supply bars adjusted for it (data=), or run on dates that do not span it"
+            "and GTTs of a holding at a corporate action",
+            "supply bars adjusted for it (data=), or run on dates that do not span it",
         )
 
 

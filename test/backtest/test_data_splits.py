@@ -159,8 +159,8 @@ def test_an_index_or_a_derivative_is_not_checked_and_the_report_says_so(exchange
     assert (report.count("split_or_bonus"), report.price_gaps) == (0, [])
     assert [text for text in report.not_run if text.startswith("split_or_bonus")] == [
         f"split_or_bonus: not checked on {exchange}: shares on NSE and BSE split, an index "
-        "does not, and adjusting derivative contracts at a corporate action is FR-MKT-14 "
-        "(Phase 6)"
+        "does not, and this version does not adjust derivative contracts at a corporate "
+        "action"
     ]
 
 

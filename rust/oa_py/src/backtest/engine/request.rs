@@ -173,10 +173,15 @@ pub(super) fn order_request(dict: &Bound<'_, PyDict>) -> PyResult<OrderRequest> 
         reverse: field(dict, "reverse")?,
         exit_reason: match reason {
             None => None,
-            Some(code) => Some(
-                ExitReason::from_code(&code)
-                    .ok_or_else(|| unknown("exit reason", &code, "a reason of 05-risk 7"))?,
-            ),
+            Some(code) => Some(ExitReason::from_code(&code).ok_or_else(|| {
+                let reasons: Vec<&str> =
+                    ExitReason::ALL.iter().map(|reason| reason.code()).collect();
+                unknown(
+                    "exit reason",
+                    &code,
+                    &format!("one of {}", reasons.join(", ")),
+                )
+            })?),
         },
         leg_rules: rules
             .map(|rules| leg_rules(&rules))

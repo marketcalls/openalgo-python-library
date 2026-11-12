@@ -23,6 +23,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ._engine import call
+from ._messages import counted
 from .errors import BacktestError, ConfigError
 
 # `self.every` periods and the kernel's calendar unit codes.
@@ -90,8 +91,8 @@ class Timers:
             if missed:
                 label = self._timers[timer_id][0]
                 notes.append(
-                    f"{label} did not run in {missed} of {fired + missed} sessions: no base "
-                    "bar opens at or after that time in them"
+                    f"{label} did not run in {missed} of {counted(fired + missed, 'session')}: "
+                    f"no base bar opens at or after that time in {'it' if missed == 1 else 'them'}"
                 )
         return notes
 

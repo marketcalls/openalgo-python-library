@@ -274,9 +274,10 @@ def test_a_max_hold_given_as_a_time_is_not_built_yet():
         run_daily(TimedHold)
 
 
-def test_combined_rules_are_refused_until_phase_3():
+def test_combined_rules_are_refused_with_what_to_set_instead():
     class Combined(BuyOnDays):
         combined_stop = bt.rupees(5_000)
 
-    with pytest.raises(NotImplementedError, match="Phase 3"):
+    with pytest.raises(NotImplementedError, match="combined_stop .* is not supported") as caught:
         run_daily(Combined)
+    assert "give each order its own stop=" in str(caught.value)

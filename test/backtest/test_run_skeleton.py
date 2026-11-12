@@ -147,8 +147,8 @@ def test_an_exit_while_flat_places_no_order():
     assert handles and all(handle is None for handle in handles)
 
 
-def test_live_is_phase_2():
-    with pytest.raises(NotImplementedError, match="Phase 2"):
+def test_live_is_not_supported_in_this_version():
+    with pytest.raises(NotImplementedError, match="bt.live is not supported in this version"):
         bt.live(BuyThenExit, None, capital=CAPITAL, max_daily_loss=1_000)
 
 

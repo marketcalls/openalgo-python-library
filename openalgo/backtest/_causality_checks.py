@@ -29,6 +29,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from ._messages import counted
 from .errors import ConfigError
 
 # Cut points of the truncation check, spread over the second half of the series.
@@ -62,8 +63,10 @@ class CheckOutcome:
 
     def describe(self) -> str:
         """One line for the Assumptions block."""
-        settled = f"warm-up {self.warm_up} bars" if self.warm_up is not None else self.note
-        return f"{self.label}: truncation passed at {self.cuts} cuts, {settled}"
+        settled = (
+            f"warm-up {counted(self.warm_up, 'bar')}" if self.warm_up is not None else self.note
+        )
+        return f"{self.label}: truncation passed at {counted(self.cuts, 'cut')}, {settled}"
 
 
 def _agree(window: np.ndarray, whole: np.ndarray, tolerance: float, floor: float) -> bool:

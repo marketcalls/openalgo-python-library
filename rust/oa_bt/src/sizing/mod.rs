@@ -85,6 +85,24 @@ pub enum SizerSpec {
     EngineDefault,
 }
 
+impl SizerSpec {
+    /// The sizer's name in results: the `bt.size` function that makes it ("qty", "lots",
+    /// "value", "percent", "fixed_risk", "atr_risk"), "function" for a sizing function
+    /// and "default" for the engine default.
+    pub fn code(self) -> &'static str {
+        match self {
+            SizerSpec::Qty(_) => "qty",
+            SizerSpec::Lots(_) => "lots",
+            SizerSpec::Value { .. } => "value",
+            SizerSpec::Percent { .. } => "percent",
+            SizerSpec::FixedRisk { .. } => "fixed_risk",
+            SizerSpec::AtrRisk { .. } => "atr_risk",
+            SizerSpec::Function { .. } => "function",
+            SizerSpec::EngineDefault => "default",
+        }
+    }
+}
+
 /// What a sizer can see. Money is rupees, quantities units.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SizingContext {
@@ -176,19 +194,19 @@ pub enum SizeOutcome {
 pub enum SizingError {
     /// The sizer or the context cannot be used.
     InvalidSizer { reason: String },
-    /// A sizer that is not built yet.
-    NotBuilt { feature: &'static str },
+    /// A sizer that is not built yet, and what the user can do instead.
+    NotBuilt {
+        feature: &'static str,
+        instead: &'static str,
+    },
 }
 
 impl fmt::Display for SizingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SizingError::InvalidSizer { reason } => write!(f, "sizer: {reason}"),
-            SizingError::NotBuilt { feature } => {
-                write!(
-                    f,
-                    "{feature} is not implemented yet (Phase 1 work in progress)"
-                )
+            SizingError::NotBuilt { feature, instead } => {
+                crate::model::write_not_supported(f, feature, instead)
             }
         }
     }

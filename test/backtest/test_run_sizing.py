@@ -90,6 +90,58 @@ class AtrRisk(bt.Strategy):
             self.buy(size=bt.size.atr_risk(0.1, 2, period=14))
 
 
+class WideAtrRisk(AtrRisk):
+    """Buys at the 14th one-minute close risking 1 percent with the ATR-risk sizer."""
+
+    def on_bar(self, bar):
+        if len(self.close) == 14:
+            self.buy(size=bt.size.atr_risk(1, 2, period=14))
+
+
+def _delivery_run(strategy: type, **settings):
+    return bt.backtest(
+        strategy,
+        data=session_bars(),
+        capital=CAPITAL,
+        costs=None,
+        slippage=0,
+        quantity_mode="venue",
+        product="CNC",
+        **settings,
+    )
+
+
+def test_a_sizer_asking_for_more_than_the_margin_is_rejected_and_the_result_says_why():
+    # 1 percent of 10,00,000 is 10,000 of risk over a 4.00 stop: 2,500 shares, worth
+    # 25,00,000 at 1,000.00, against 10,00,000 of free cash on delivery.
+    result = _delivery_run(WideAtrRisk)
+    orders = result.orders
+    assert (orders["reject_code"].tolist(), orders["sizer"].tolist()) == (
+        ["margin"],
+        ["atr_risk"],
+    )
+    assert (
+        "1 order sized by bt.size.atr_risk was rejected for margin (reject_code 'margin' in "
+        "result.orders): the sizer asked for more than the margin allows"
+    ) in result.warnings[0]
+    assert "size_caps = bt.size.caps(leverage=1)" in result.warnings[0]
+
+
+def test_size_caps_bound_the_sizer_to_what_the_margin_allows():
+    # A 1x cap: 10,00,000 / 1,000.00 = 1,000 shares, which the free cash covers.
+    capped = type("Capped", (WideAtrRisk,), {"size_caps": bt.size.caps(leverage=1)})
+    result = _delivery_run(capped)
+    assert entry_units(result) == 1_000.0
+    assert not any("rejected for margin" in text for text in result.warnings)
+
+
+def test_an_explicit_quantity_rejected_for_margin_names_no_sizer():
+    result = round_trip({"qty": 5_000}, costs=None, slippage=0, product="CNC")
+    assert result.orders["reject_code"].tolist()[0] == "margin"
+    assert result.orders["sizer"].isna().all()
+    assert not any("rejected for margin" in text for text in result.warnings)
+
+
 def test_atr_risk_puts_the_stop_a_multiple_of_the_atr_away():
     # Every bar's range is 2.00 and it opens at the previous close, so the ATR is 2.00;
     # the stop is 2 x 2.00 = 4.00 away and 0.1 percent of 10,00,000 is 1,000 of risk:

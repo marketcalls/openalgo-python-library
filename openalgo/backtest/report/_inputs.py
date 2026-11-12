@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from .._messages import counted
 from ..costs import COMPONENTS
 from ..errors import ConfigError
 
@@ -95,7 +96,7 @@ def series_columns(series: object, *, what: str) -> tuple[np.ndarray, np.ndarray
         )
     nanos, missing = utc_nanos(series.index, what=f"{what} timestamps")
     if missing.any():
-        raise ConfigError(f"{what} has {int(missing.sum())} missing timestamp(s)")
+        raise ConfigError(f"{what} has {counted(int(missing.sum()), 'missing timestamp')}")
     return nanos, _floats(series.to_numpy(), what=what)
 
 

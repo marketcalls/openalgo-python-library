@@ -29,6 +29,7 @@ from typing import Any, Protocol
 import numpy as np
 import pandas as pd
 
+from ._messages import counted
 from .errors import ConfigError
 
 
@@ -100,7 +101,8 @@ class TimelineView:
             return shown[key].item()
         except IndexError:
             raise IndexError(
-                f"{self._label}: bar {key} is not available, {len(shown)} bars have closed"
+                f"{self._label}: bar {key} is not available, "
+                f"{counted(len(shown), 'bar has', 'bars have')} closed"
             ) from None
 
     @property
@@ -273,7 +275,7 @@ class TimelineView:
         return bool(shown[-1]) if len(shown) else False
 
     def __repr__(self) -> str:
-        return f"{type(self).__name__}({self._label}, {len(self)} bars)"
+        return f"{type(self).__name__}({self._label}, {counted(len(self), 'bar')})"
 
 
 __all__ = ["Store", "TimelineView"]

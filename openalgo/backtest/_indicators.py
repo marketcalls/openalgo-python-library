@@ -25,6 +25,7 @@ import pandas as pd
 
 from openalgo.indicators import causality
 
+from ._messages import counted, not_supported
 from ._views import TimelineView
 from .errors import ConfigError
 
@@ -103,9 +104,9 @@ def _store_of(inputs: tuple) -> Any:
     if not stores:
         raise ConfigError("self.I needs at least one series input, such as self.close")
     if any(store is not stores[0] for store in stores):
-        raise NotImplementedError(
-            "indicators over series of several symbols or intervals are not implemented yet "
-            "(Phase 1 work in progress)"
+        raise not_supported(
+            "an indicator over series of several symbols or intervals",
+            "compute one indicator per series and combine their values in on_bar",
         )
     return stores[0]
 
@@ -130,7 +131,7 @@ def _outputs(returned: Any, length: int, label: str) -> list[np.ndarray]:
         if array.dtype != np.bool_:
             array = array.astype(float)
         if array.ndim != 1 or len(array) != length:
-            raise ConfigError(f"{label} returned {array.shape} values for {length} bars")
+            raise ConfigError(f"{label} returned {array.shape} values for {counted(length, 'bar')}")
         arrays.append(array)
     return arrays
 
@@ -183,7 +184,8 @@ def register(checks: Any, func: Any, inputs: tuple, params: dict) -> Any:
     try:
         returned = func(*call.arguments(0, length), **params)
     except ValueError as exc:
-        raise ConfigError(f"{label} failed on the {length} bars of the run: {exc}") from exc
+        bars = counted(length, "bar")
+        raise ConfigError(f"{label} failed on the run's {bars}: {exc}") from exc
     outputs = _outputs(returned, length, label)
     names = [*record["outputs"], *(f"output_{k}" for k in range(len(outputs)))][: len(outputs)]
     causal = tuple(n for n in names if n not in lookahead)

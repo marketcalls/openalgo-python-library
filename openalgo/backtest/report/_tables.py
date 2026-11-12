@@ -6,6 +6,7 @@ from collections.abc import Mapping
 import numpy as np
 import pandas as pd
 
+from .._messages import counted
 from . import _format as fmt
 from ._performance import Performance
 
@@ -131,7 +132,8 @@ def trade_list(trades: pd.DataFrame) -> str:
         if position == count - TRADE_ROWS_SHOWN and count > 2 * TRADE_ROWS_SHOWN:
             hidden = count - 2 * TRADE_ROWS_SHOWN
             rows.append(
-                f"<tr class='gap'><td colspan='{len(heads)}'>{hidden} trades not shown</td></tr>"
+                f"<tr class='gap'><td colspan='{len(heads)}'>{counted(hidden, 'trade')} not "
+                "shown</td></tr>"
             )
         rows.append(_trade_row(position + 1, frame.loc[position], extra))
     return (

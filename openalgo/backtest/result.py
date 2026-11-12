@@ -23,6 +23,7 @@ from typing import Any
 import pandas as pd
 
 from . import _result_costs, _result_futures, _result_r, _result_report
+from ._messages import SEVERAL_STRATEGIES, not_supported
 from ._native import native
 from ._series import IST
 from .errors import BacktestError
@@ -375,15 +376,19 @@ class Result:
         return self._record.rerun(overrides, self.manifest)
 
     def strategy(self, name: str) -> Result:
-        raise NotImplementedError("several strategies in one run are planned for Phase 3")
+        """One strategy's result in a run of several; not supported in this version."""
+        raise not_supported(*SEVERAL_STRATEGIES)
 
     @property
     def combined(self) -> Result:
-        raise NotImplementedError("several strategies in one run are planned for Phase 3")
+        """The combined result of a run of several strategies; not supported in this
+        version."""
+        raise not_supported(*SEVERAL_STRATEGIES)
 
     @property
     def correlation(self) -> pd.DataFrame:
-        raise NotImplementedError("several strategies in one run are planned for Phase 3")
+        """The correlation of a run's strategies; not supported in this version."""
+        raise not_supported(*SEVERAL_STRATEGIES)
 
     def __repr__(self) -> str:
         pnl = self.gross_pnl

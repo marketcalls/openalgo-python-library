@@ -19,6 +19,7 @@ import math
 import numbers
 from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal
 
+from .._messages import counted
 from ..errors import ConfigError
 
 # ROUND_HALF_UP in `decimal` rounds an exact half away from zero.
@@ -135,7 +136,7 @@ def units_to_lots(quantity: int, lot_size: int) -> int:
     lots = _snap(_decimal(quantity, "quantity") / lot)
     if lots != lots.to_integral_value():
         raise ConfigError(
-            f"quantity {quantity!r} is not a whole number of lots of {lot} units; "
+            f"quantity {quantity!r} is not a whole number of lots of {counted(lot, 'unit')}; "
             "quantity is in units, not lots"
         )
     return int(lots)
@@ -174,7 +175,7 @@ def max_order_quantity(freeze_qty: int | None, lot_size: int = 1) -> int | None:
         return None
     if limit < lot:
         raise ConfigError(
-            f"freeze quantity {limit} is smaller than one lot of {lot} units; "
+            f"freeze quantity {limit} is smaller than one lot of {counted(lot, 'unit')}; "
             "the reference data for this instrument is inconsistent"
         )
     return (limit // lot) * lot
@@ -193,7 +194,9 @@ def split_by_freeze(quantity: int, freeze_qty: int | None, lot_size: int = 1) ->
     if units is None or units < 1:
         raise ConfigError(f"quantity must be a positive whole number of units, got {quantity!r}")
     if units % lot:
-        raise ConfigError(f"quantity {units} is not a whole number of lots of {lot} units")
+        raise ConfigError(
+            f"quantity {units} is not a whole number of lots of {counted(lot, 'unit')}"
+        )
     largest = max_order_quantity(freeze_qty, lot)
     if largest is None or units <= largest:
         return [units]

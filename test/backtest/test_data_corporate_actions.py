@@ -126,9 +126,9 @@ def test_the_unadjusted_warning_says_what_is_not_adjusted_and_what_a_backtest_do
     report = checked(HALVED, CorporateAction.bonus(EX_DATE, 1, 1))
     message = issue(report, "split_or_bonus_unadjusted").message
     assert message.startswith(
-        "the bars are not adjusted for 1 declared corporate actions (2024-07-08: a bonus (2 "
+        "the bars are not adjusted for 1 declared corporate action (2024-07-08: a bonus (2 "
         "shares for every 1); the previous close 2000.00 against the open 1000.00 is a ratio "
-        "of 2.000). Adjusting for them is FR-MKT-11 (Phase 5)"
+        "of 2.000). This version does not adjust bars for a corporate action"
     )
     assert "a backtest that holds a position or a GTT across one stops" in message
 
