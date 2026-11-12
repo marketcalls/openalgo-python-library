@@ -73,6 +73,7 @@ fn config(last_slice: Option<i64>) -> RunConfig {
         last_day: day(),
         first_slice: None,
         last_slice,
+        present: None,
         base: BaseInterval::Intraday(MINUTE),
         strategy_interval: StrategyInterval::Intraday(15 * MINUTE),
         fill: FillTiming::NextOpen,

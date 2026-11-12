@@ -4,20 +4,28 @@
 import time
 from typing import Any
 
-# The quote fields a callback and get_quotes() see, in this order. A field the
-# server leaves out is 0.
-QUOTE_FIELDS = (
-    "open",
-    "high",
-    "low",
-    "close",
-    "ltp",
-    "volume",
-    "last_trade_quantity",
-    "avg_trade_price",
-    "change",
-    "change_percent",
-)
+# The quote fields a callback and get_quotes() see, in this order, each with the names
+# the server may send it under (the first one present wins). A field the server leaves
+# out is 0. The server's broker adapters send the average traded price as
+# average_price and the last traded quantity as last_quantity; the SDK's own names
+# are still read for a server that sends them.
+QUOTE_SOURCES = {
+    "open": ("open",),
+    "high": ("high",),
+    "low": ("low",),
+    "close": ("close",),
+    "ltp": ("ltp",),
+    "volume": ("volume",),
+    "last_trade_quantity": ("last_quantity", "last_trade_quantity"),
+    "avg_trade_price": ("average_price", "avg_trade_price"),
+    "change": ("change",),
+    "change_percent": ("change_percent",),
+    "ltt": ("ltt",),
+    "total_buy_quantity": ("total_buy_quantity",),
+    "total_sell_quantity": ("total_sell_quantity",),
+    "oi": ("oi",),
+}
+QUOTE_FIELDS = tuple(QUOTE_SOURCES)
 
 
 def _timestamp(market_data: dict[str, Any]) -> Any:
@@ -36,9 +44,17 @@ def ltp_update(market_data: dict[str, Any]) -> dict[str, Any]:
     return update
 
 
+def _first_present(market_data: dict[str, Any], names: tuple[str, ...]) -> Any:
+    """The value under the first of `names` the server sent, else 0."""
+    for name in names:
+        if name in market_data:
+            return market_data[name]
+    return 0
+
+
 def quote_update(market_data: dict[str, Any]) -> dict[str, Any]:
     """The "data" of a quote update: the quote fields and the timestamp."""
-    update = {field: market_data.get(field, 0) for field in QUOTE_FIELDS}
+    update = {field: _first_present(market_data, names) for field, names in QUOTE_SOURCES.items()}
     update["timestamp"] = _timestamp(market_data)
     return update
 

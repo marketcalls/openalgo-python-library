@@ -282,10 +282,12 @@ fn a_stop_limit_exit_not_filled_within_its_bar_fills_at_the_next_open_plus_slipp
 fn an_unfilled_limit_expires_at_the_session_close() {
     let mut config = minute_config();
     config.last_slice = None;
+    // Bars through the session: a run ends with its last bar (`run_end`).
+    let session_minutes = order_support::NSE_CLOSE_MINUTE - order_support::NSE_OPEN_MINUTE;
     let kernel = engine(
         config,
         order_support::equity(),
-        minute_bars(BARS, FLAT, &[]),
+        minute_bars(session_minutes, FLAT, &[]),
     );
     let (output, _) = run_script(kernel, vec![(minute(1), Act::Submit(buy(limit(99.0))))]);
     assert_eq!(output.orders[0].status, OrderStatus::Expired);

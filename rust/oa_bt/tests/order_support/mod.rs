@@ -138,6 +138,7 @@ fn config(days: (Day, Day), base: BaseInterval, interval: StrategyInterval) -> R
         last_day: days.1,
         first_slice: None,
         last_slice: None,
+        present: None,
         base,
         strategy_interval: interval,
         fill: FillTiming::NextOpen,

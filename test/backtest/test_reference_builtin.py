@@ -717,7 +717,42 @@ def test_broker_units_report_what_the_server_source_shows_per_broker(tables):
     rows = tables.broker_units("zerodha")
     assert [row["segment"] for row in rows] == ["cds_bcd", "equity", "mcx", "nfo_bfo"]
     assert {row["status"] for row in rows} == {"unverified"}
-    assert {row["live_status"] for row in rows} == {"not confirmed live"}
+    others = [row["live_status"] for row in rows if row["segment"] != "mcx"]
+    assert set(others) == {"not confirmed live"}
+
+
+def _zerodha_mcx(tables) -> dict:
+    (row,) = [row for row in tables.broker_units("zerodha") if row["segment"] == "mcx"]
+    return row
+
+
+def test_zerodha_mcx_lot_sizes_were_seen_in_units_on_a_live_server(tables):
+    row = _zerodha_mcx(tables)
+    assert row["live_status"] == (
+        "lotsize confirmed live on 2026-11-12; order quantity conversion not confirmed"
+    )
+    # The order side is still unconfirmed, so the row as a whole stays unverified.
+    assert row["status"] == "unverified"
+
+
+# Lot sizes a live OpenAlgo server's Zerodha master contract gave on 2026-11-12.
+LIVE_ZERODHA_MCX_LOTS = {
+    "CRUDEOIL": 100,
+    "CRUDEOILM": 10,
+    "GOLDM": 100,
+    "NATURALGAS": 1250,
+    "SILVERM": 5,
+    "COPPER": 2500,
+    "ZINC": 5,
+}
+
+
+@pytest.mark.parametrize("root,lot", LIVE_ZERODHA_MCX_LOTS.items())
+def test_the_live_zerodha_mcx_lot_is_noted_and_equals_the_reference_tables(tables, root, lot):
+    assert re.search(rf"\b{root} {lot}\b", _zerodha_mcx(tables)["note"])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ReferenceDataWarning)
+        assert tables.lot_size(root, "MCX", "2026-11-12") == lot
 
 
 # ---- the shared default tables ------------------------------------------------------------------

@@ -54,12 +54,56 @@ def test_quote_update_holds_the_quote_fields_in_their_order_then_the_timestamp()
         "avg_trade_price",
         "change",
         "change_percent",
+        "ltt",
+        "total_buy_quantity",
+        "total_sell_quantity",
+        "oi",
         "timestamp",
     ]
 
 
 def test_quote_field_the_server_left_out_is_zero():
     assert ticks.quote_update({"ltp": 7.0, "timestamp": STAMP})["volume"] == 0
+
+
+# A quote frame's data as the server's broker adapters send it (websocket_proxy).
+SERVER_QUOTE = {
+    "ltp": 6512.0,
+    "ltt": 1762941600000,
+    "timestamp": STAMP,
+    "volume": 4210,
+    "last_quantity": 3,
+    "average_price": 6498.35,
+    "total_buy_quantity": 1200,
+    "total_sell_quantity": 950,
+    "oi": 15800,
+}
+
+
+def test_quote_update_reads_the_average_price_the_server_sends():
+    assert ticks.quote_update(SERVER_QUOTE)["avg_trade_price"] == 6498.35
+
+
+def test_quote_update_reads_the_last_quantity_the_server_sends():
+    assert ticks.quote_update(SERVER_QUOTE)["last_trade_quantity"] == 3
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("ltt", 1762941600000),
+        ("total_buy_quantity", 1200),
+        ("total_sell_quantity", 950),
+        ("oi", 15800),
+    ],
+)
+def test_quote_update_keeps_the_trade_time_the_book_totals_and_open_interest(field, value):
+    assert ticks.quote_update(SERVER_QUOTE)[field] == value
+
+
+def test_quote_update_still_reads_a_server_that_sends_the_sdk_names():
+    update = ticks.quote_update({"avg_trade_price": 9.5, "last_trade_quantity": 4})
+    assert (update["avg_trade_price"], update["last_trade_quantity"]) == (9.5, 4)
 
 
 def test_quote_update_ignores_a_field_that_is_not_a_quote_field():
