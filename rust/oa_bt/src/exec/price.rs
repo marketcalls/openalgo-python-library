@@ -91,6 +91,14 @@ pub fn is_on_tick(price_rupees: f64, tick_rupees: f64) -> Result<bool, ExecError
     Ok(to_units("price", price_rupees)? % tick_units(tick_rupees)? == 0)
 }
 
+/// A price in whole price units, for comparisons that binary noise must not flip (a bar
+/// that touches a limit of 1410.75 touches it, whatever the last bit says). Only for
+/// prices already checked where they entered the run (bars, limits, triggers), which
+/// lie far inside the `i64` range.
+pub fn whole_units(price_rupees: f64) -> i64 {
+    (price_rupees * PRICE_UNITS_PER_RUPEE).round() as i64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

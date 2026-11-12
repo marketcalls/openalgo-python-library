@@ -81,18 +81,13 @@ impl LegState {
     ///
     /// Errors: `InvalidValue` for an average price or quantity that is not positive;
     /// `InvalidRule` for a distance or a level that cannot be used (a stop at or beyond
-    /// zero); `NotBuilt` for `max_hold`.
+    /// zero).
     pub fn open(
         rules: LegRules,
         context: LegContext,
         average_price_rupees: f64,
         quantity_units: f64,
     ) -> Result<LegState, RmsError> {
-        if rules.max_hold_bars.is_some() {
-            return Err(RmsError::NotBuilt {
-                feature: "max_hold (the time exit)",
-            });
-        }
         let reference = positive("average price", average_price_rupees)?;
         let mut leg = LegState {
             rules,

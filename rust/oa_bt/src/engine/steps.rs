@@ -24,6 +24,7 @@ impl Engine {
         // resolved on first use (`session_times`); no reference event (lot-size change,
         // roll) can be configured yet.
         self.risk_session_open(slice);
+        self.renew_old_gtts(slice)?;
         self.step_open_fills(slice)?;
         self.step_levels(slice)?;
         self.step_ratchets(slice)?;
@@ -39,6 +40,7 @@ impl Engine {
                 continue;
             };
             self.risk_exits_at_open(slice, instrument, bar.open)?;
+            self.gtt_exits_at_open(slice, instrument, bar.open)?;
             for id in self.book.queued_for(instrument) {
                 self.fill_queued(slice, id, bar.open)?;
             }
@@ -48,15 +50,21 @@ impl Engine {
         Ok(())
     }
 
-    /// Step 3: leg levels against the bar (`legs::test_leg_levels`).
+    /// Step 3: engine-held leg levels (`legs::test_leg_levels`), then GTTs
+    /// (`gtt_fire::test_gtts`), then resting DAY orders (`resting::test_resting_orders`),
+    /// each across the instruments in registration order.
     fn step_levels(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
-        self.test_leg_levels(slice)
+        self.test_leg_levels(slice)?;
+        self.test_gtts(slice)?;
+        self.test_resting_orders(slice)
     }
 
     /// Step 4: trail and breakeven ratchets, in force from the next slice
-    /// (`legs::ratchet_legs`).
+    /// (`legs::ratchet_legs`); then the GTTs of CNC and NRML legs follow their levels
+    /// (`gtt::sync_gtts`).
     fn step_ratchets(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
-        self.ratchet_legs(slice)
+        self.ratchet_legs(slice)?;
+        self.sync_gtts(slice)
     }
 
     /// Step 5: mark every open position at its close, or at its last close and flagged

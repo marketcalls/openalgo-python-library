@@ -71,7 +71,6 @@ fn leg_rules(dict: &Bound<'_, PyDict>) -> PyResult<LegRules> {
             Some("breakeven") => AfterFirstTarget::Breakeven,
             Some(other) => return Err(unknown("after_first_target", other, "breakeven")),
         },
-        max_hold_bars: optional(dict, "max_hold_bars")?,
     })
 }
 

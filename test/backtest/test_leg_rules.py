@@ -203,7 +203,12 @@ def test_an_add_that_changes_the_stop_is_a_configuration_error():
         run(strategy)
 
 
-def test_leg_rules_on_a_delivery_position_are_not_built_yet():
+def test_a_stop_on_a_delivery_position_is_held_as_a_gtt():
+    # Bought at the 09:18 open of 100.00 with a 4-point stop: a GTT at 96.00, placed with
+    # the fill (04-execution 4.4).
     strategy = scripted({2: lambda s: s.buy(qty=10, stop=bt.points(4), product="CNC")})
-    with pytest.raises(NotImplementedError, match="GTT"):
-        run(strategy)
+    events = run(strategy).events
+    placed = events[events["type"] == "gtt"]
+    assert list(placed["name"]) == ["GttPlaced"]
+    assert list(placed["stop_trigger_rupees"]) == [96.0]
+    assert list(placed["time"]) == [at(3)]

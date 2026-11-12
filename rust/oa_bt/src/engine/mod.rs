@@ -38,8 +38,8 @@
 //! | `Engine::advance()` | until `Pause::Finished` | run steps to the next decision point |
 //! | `Engine::submit(OrderRequest)` | while paused | submission checks, `Submitted` or `Rejected` |
 //! | `Engine::cancel(OrderId)` | while paused | cancel a working order |
-//! | `Engine::modify(OrderId, OrderRequest)` | while paused | not built yet |
-//! | `position`, `leg`, `order`, `working_orders`, `has_pending_entry`, `account`, `last_close`, `decision_instant`, `trading_state` | any time | queries |
+//! | `Engine::modify(OrderId, OrderRequest)` | while paused | a full replacement of a working order (`modify`) |
+//! | `position`, `leg`, `order`, `working_orders`, `gtts`, `has_pending_entry`, `account`, `last_close`, `decision_instant`, `trading_state` | any time | queries |
 //! | `Engine::finish()` | after `Pause::Finished` | the `RunOutput` |
 //! | `pause::run(engine, driver)` | Rust drivers | the loop above, for a `Driver` |
 //!
@@ -63,10 +63,10 @@
 //!
 //! | Step | Code | Built |
 //! |---|---|---|
-//! | 1 session open, reference events | `steps::open_slice`; intraday times resolved lazily by `session::session_times` | times yes; rolls and lot-size changes no |
-//! | 2 fills at the open | `steps::step_open_fills` -> `fills::fill_queued` (eligible when the open is at or after `decided_at`, SPEC-35; a missing bar keeps the order queued, SPEC-06; entry window and margin checked at the fill bar), then `session::square_off_at_open` (the square-off timer, SPEC-05) | MARKET orders, square-off; timers and rolls no |
-//! | 3 resting orders, leg levels | `steps::step_levels` -> `legs::test_leg_levels` -> `rms::LegState::test_bar`, exits through `fills::execute_fill` | leg levels yes (MIS); resting orders no |
-//! | 4 ratchets | `steps::step_ratchets` -> `legs::ratchet_legs` -> `rms::LegState::ratchet` | yes |
+//! | 1 session open, reference events | `steps::open_slice`; intraday times resolved lazily by `session::session_times`; GTTs older than 360 days re-created (`gtt::renew_old_gtts`, GTT-2) | times and GTTs yes; rolls and lot-size changes no |
+//! | 2 fills at the open | `steps::step_open_fills` -> `fills::fill_queued` (eligible when the open is at or after `decided_at`, SPEC-35; a missing bar keeps the order queued, SPEC-06; entry window and margin checked at the fill bar), the engine's exits after unfilled GTT children (`gtt_fire::gtt_exits_at_open`) before them, then `session::square_off_at_open` (the square-off timer, SPEC-05) | MARKET orders, converted stop-limit exits, square-off; timers and rolls no |
+//! | 3 resting orders, leg levels | `steps::step_levels` -> `legs::test_leg_levels` -> `rms::LegState::test_bar` (MIS), `gtt_fire::test_gtts` (CNC and NRML levels and GTT orders), `resting::test_resting_orders` (LIMIT, SL, SL-M), exits through `fills::execute_fill` | yes |
+//! | 4 ratchets | `steps::step_ratchets` -> `legs::ratchet_legs` -> `rms::LegState::ratchet`, then `gtt::sync_gtts` (GTTs follow the levels, GTT-3) | yes |
 //! | 5 mark | `steps::step_mark`: close, or last close and stale | yes |
 //! | 6 aggregate rules | `aggregate::step_aggregate_rules`: daily loss limit, drawdown halt; their exits at the next open (`risk_exits_at_open`, step 2) or the last close; the session boundary in step 1 (`risk_session_open`) | yes (combined rules: Phase 3) |
 //! | 7 callbacks and `on_bar` | `steps::callbacks_pause` -> `Pause::BarClose`; `submit::submit` | yes |
@@ -99,10 +99,17 @@
 //! | `fills` | Step 2 fills of queued orders, `execute_fill` |
 //! | `legs` | Leg rules in steps 3 and 4, the add rule of SPEC-14 |
 //! | `reverse` | `reverse=True`: close, then open the rest |
+//! | `resting` | Step 3: resting LIMIT, SL and SL-M DAY orders, the stop-limit exit conversion |
+//! | `modify` | `modify`: a full replacement of a working order |
+//! | `order_fill` | Where and how an order fills; the price of any fill (slippage, limits) |
+//! | `gtt` | GTTs holding CNC and NRML levels: placement, cancel-then-exit, step-4 sync, renewal |
+//! | `gtt_plan` | Which GTTs a positional leg needs (GTT-11) and when one is modified (GTT-3) |
+//! | `gtt_fire` | Step 3 for GTTs, the child fill, the engine's exit after an unfilled child |
+//! | `gtt_orders` | Strategy GTT orders (`validity="gtt"`), the per-segment order shape |
 //! | `accounting` | Slippage, margin and charges of a fill; contract notes at the session close |
 //! | `sizing` | What a sizer sees, cost estimates in its budget, the engine default |
 //! | `session` | Intraday times per session, the entry window, the square-off timer |
-//! | `submit` | `submit`, `cancel`, `modify`, the submission checks, DAY validity and market closed |
+//! | `submit` | `submit`, `cancel`, the submission checks, DAY validity and market closed |
 //! | `aggregate` | Step 6 (daily loss limit, drawdown halt), the step-1 session boundary, the exits they queue |
 //! | `entry_rules` | Entry gates at submission (trading state, cooldown, maximum positions), the time exit, the fill hook |
 //! | `strategy_risk` | `StrategyRisk`: trading state and the bookkeeping of the strategy and session rules |
@@ -119,10 +126,11 @@
 //! # Phase 1 scope of this skeleton
 //!
 //! Built: one exchange, any number of instruments on it, intraday or daily strategy
-//! intervals on an intraday or daily base, MARKET DAY orders (entry, add, reduce,
-//! exit by fraction, `reverse=True`), the quantity, freeze, product, entry-window,
-//! market-closed and reverse checks, engine-held leg rules on MIS (stop, targets,
-//! every trail form, breakeven, `after_first_target`), the square-off, charges on
+//! intervals on an intraday or daily base, MARKET, LIMIT, SL and SL-M DAY orders
+//! (entry, add, reduce, exit by fraction, `reverse=True`, modification), GTT orders,
+//! the quantity, tick, freeze, product, entry-window, market-closed and reverse checks,
+//! leg rules (stop, targets, every trail form, breakeven, `after_first_target`)
+//! engine-held on MIS and held as GTTs on CNC and NRML, the square-off, charges on
 //! every fill with contract-note rounding, the dated default slippage and margin
 //! tables (cash, MIS with leverage on request, long options, NSE index futures), the
 //! sizers and the engine default size, the position history, the equity series,
@@ -138,11 +146,18 @@ mod entry_rules;
 pub mod error;
 pub mod event;
 mod fills;
+mod gtt;
+mod gtt_fire;
+mod gtt_orders;
+mod gtt_plan;
 pub mod kernel;
 mod legs;
 pub mod market_data;
+mod modify;
+mod order_fill;
 pub mod output;
 pub mod pause;
+mod resting;
 mod reverse;
 mod session;
 pub mod signals;

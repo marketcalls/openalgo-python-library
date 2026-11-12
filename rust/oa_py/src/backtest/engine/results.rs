@@ -30,7 +30,7 @@ fn columns<'py>(
     Ok(table)
 }
 
-const FILL_KEYS: [&str; 15] = [
+const FILL_KEYS: [&str; 16] = [
     "slice",
     "slice_ts",
     "step",
@@ -42,6 +42,7 @@ const FILL_KEYS: [&str; 15] = [
     "fill_at",
     "reason",
     "order_id",
+    "gtt_id",
     "target_index",
     "flags",
     "costs_rupees",
@@ -60,6 +61,7 @@ fn fill<'py>(py: Python<'py>, record: &FillRecord) -> PyResult<Bound<'py, PyDict
     dict.set_item("fill_at", f.at.code())?;
     dict.set_item("reason", f.reason.code())?;
     dict.set_item("order_id", f.order.map(|id| id.0))?;
+    dict.set_item("gtt_id", f.gtt.map(|id| id.0))?;
     dict.set_item("target_index", f.target_index)?;
     dict.set_item("flags", f.flags.names())?;
     dict.set_item("costs_rupees", f.costs_rupees)?;
@@ -176,11 +178,14 @@ fn trade<'py>(py: Python<'py>, t: &TradeRecord) -> PyResult<Bound<'py, PyDict>> 
     Ok(dict)
 }
 
-const ORDER_KEYS: [&str; 14] = [
+const ORDER_KEYS: [&str; 17] = [
     "order_id",
     "instrument",
     "side",
     "order_type",
+    "limit_rupees",
+    "trigger_rupees",
+    "validity",
     "product",
     "status",
     "decided_at",

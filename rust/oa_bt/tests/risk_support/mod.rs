@@ -249,6 +249,7 @@ pub fn events(output: &RunOutput) -> Vec<(i64, u8, String)> {
                 Event::TradingState { from, to, .. } => {
                     format!("state {} -> {}", from.code(), to.code())
                 }
+                Event::Gtt { event, .. } => event.name.code().to_string(),
             };
             (stamp.slice_ts, stamp.step.number(), name)
         })

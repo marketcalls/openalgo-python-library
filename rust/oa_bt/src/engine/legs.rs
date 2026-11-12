@@ -23,16 +23,20 @@ use super::clock::SliceInfo;
 use super::error::KernelError;
 use super::event::{Event, EventStamp, Step};
 use super::fills::FillRequest;
+use super::gtt::held_as_gtt;
 use super::kernel::Engine;
 
 impl Engine {
-    /// Step 3: every leg's levels against its instrument's bar in this slice. Legs
-    /// opened or added to in step 2 are tested with the levels step 2 set (SPEC-02,
-    /// SPEC-11).
+    /// Step 3: every engine-held leg's levels against its instrument's bar in this
+    /// slice. Legs opened or added to in step 2 are tested with the levels step 2 set
+    /// (SPEC-02, SPEC-11). A CNC or NRML leg's levels are GTTs, tested by `gtt_fire`.
     ///
     /// Errors: those of `execute_fill` and of the leg rules.
     pub(super) fn test_leg_levels(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         for key in self.leg_order() {
+            if held_as_gtt(key.product) {
+                continue;
+            }
             let Some(bar) = self.market.bar(key.instrument, slice.index) else {
                 continue;
             };

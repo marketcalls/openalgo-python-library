@@ -27,10 +27,9 @@ from .timegrid import Case, format_ist, parse_ist
 
 # The calls the kernel runs today, with the arguments it accepts.
 LEG_RULE_ARGUMENTS = {"stop", "target", "targets", "trail", "breakeven", "after_first_target"}
-OPENING_ARGUMENTS = {"qty", "lots", "size", "reverse"} | LEG_RULE_ARGUMENTS
+ORDER_PRICE_ARGUMENTS = {"price", "trigger_price", "validity"}
+OPENING_ARGUMENTS = {"qty", "lots", "size", "reverse"} | LEG_RULE_ARGUMENTS | ORDER_PRICE_ARGUMENTS
 SUPPORTED_ARGUMENTS = {"buy": OPENING_ARGUMENTS, "sell": OPENING_ARGUMENTS, "exit": set()}
-# Leg rules on a carried product are held as GTT orders (04-execution 4.4).
-GTT_HELD_PRODUCTS = ("CNC", "NRML")
 FORWARDED_SETTINGS = (
     "base",
     "entry_from",
@@ -55,14 +54,11 @@ def unsupported_reason(case: Case, form: str) -> str | None:
         return "the futures roll"
     if len({instrument["exchange"] for instrument in case["instruments"]}) != 1:
         return "runs across exchanges"
-    carried = case["instruments"][0]["product"] in GTT_HELD_PRODUCTS
     for decision in case["strategy"]["decisions"]:
         call = decision["call"]
         allowed = SUPPORTED_ARGUMENTS.get(call["method"])
         if allowed is None or not set(call["arguments"]) <= allowed:
             return f"{decision['python']} (sizers or this order method)"
-        if carried and set(call["arguments"]) & LEG_RULE_ARGUMENTS:
-            return f"{decision['python']} (leg rules held as GTT orders on CNC and NRML)"
     return None
 
 
@@ -219,6 +215,11 @@ def _order_id(number: Any) -> str | None:
     return None if number is None else f"o{int(number)}"
 
 
+def _gtt_id(number: Any) -> str | None:
+    number = _none(number)
+    return None if number is None else f"g{int(number)}"
+
+
 def _decisions(case: Case, log: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
     for number in range(len(case["strategy"]["decisions"])):
@@ -248,6 +249,7 @@ def _fill(row: dict[str, Any]) -> dict[str, Any]:
         "order_id": _order_id(row["order_id"]),
         "target_index": _none(row["target_index"]),
         "flags": list(row["flags"]),
+        "gtt_id": _gtt_id(row["gtt_id"]),
     }
 
 
@@ -309,6 +311,18 @@ def _event(result: Any, event: dict[str, Any]) -> dict[str, Any]:
             **head,
             "instrument": symbol,
             "position_quantity_units": event["position_quantity_units"],
+        }
+    if event["type"] == "gtt":
+        return {
+            **head,
+            "gtt_id": _gtt_id(event["gtt_id"]),
+            "instrument": symbol,
+            "quantity_units": event["quantity_units"],
+            "stop_trigger_rupees": _none(event["stop_trigger_rupees"]),
+            "target_trigger_rupees": _none(event["target_trigger_rupees"]),
+            "fired_leg": _none(event["fired_leg"]),
+            "child_limit_rupees": _none(event["child_limit_rupees"]),
+            "price_rupees": _none(event["price_rupees"]),
         }
     return {
         **head,

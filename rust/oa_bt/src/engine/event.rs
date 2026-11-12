@@ -16,8 +16,11 @@
 //!   its own, written right after the risk event that caused it, or in step 1 when a
 //!   session boundary ends REDUCING. Strategies receive it through `on_risk_event` as
 //!   `trading_state_changed`.
+//! - A GTT writes the events of its life (`exec::gtt_event`, decision GTT-8). Its child
+//!   order writes no order event: a protective GTT's exit is engine-held, and a
+//!   strategy GTT's fill is reported on the strategy's order.
 
-use crate::exec::{InstrumentId, OrderId, RejectCode};
+use crate::exec::{GttEvent, InstrumentId, OrderId, RejectCode};
 use crate::model::{Product, TsNanos};
 use crate::portfolio::PositionChange;
 use crate::rms::{RiskEvent, TradingState, TradingStateCause};
@@ -83,6 +86,8 @@ pub enum OrderEventKind {
     Canceled,
     /// Its DAY validity ended unfilled.
     Expired,
+    /// The strategy replaced its request (a full replacement, same id).
+    Modified,
 }
 
 impl OrderEventKind {
@@ -96,6 +101,7 @@ impl OrderEventKind {
             OrderEventKind::Filled { .. } => "Filled",
             OrderEventKind::Canceled => "Canceled",
             OrderEventKind::Expired => "Expired",
+            OrderEventKind::Modified => "Modified",
         }
     }
 }
@@ -130,6 +136,8 @@ pub enum Event {
         to: TradingState,
         cause: TradingStateCause,
     },
+    /// A GTT was placed, modified, fired, resolved or cancelled.
+    Gtt { stamp: EventStamp, event: GttEvent },
 }
 
 impl Event {
@@ -139,7 +147,8 @@ impl Event {
             Event::Order { stamp, .. }
             | Event::Position { stamp, .. }
             | Event::Risk { stamp, .. }
-            | Event::TradingState { stamp, .. } => *stamp,
+            | Event::TradingState { stamp, .. }
+            | Event::Gtt { stamp, .. } => *stamp,
         }
     }
 }

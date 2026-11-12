@@ -3,7 +3,7 @@
 //! `o<n>`), instruments as their registration index, instants as int64 UTC nanoseconds.
 
 use oa_bt::engine::{Event, EventStamp, OrderEventKind, Pause, StrategyBar};
-use oa_bt::exec::Order;
+use oa_bt::exec::{GttEvent, Order, Validity};
 use oa_bt::portfolio::Position;
 use oa_bt::rms::{RiskEventName, RiskScope, TradingState, TradingStateCause};
 use pyo3::prelude::*;
@@ -66,8 +66,27 @@ pub(super) fn event<'py>(py: Python<'py>, event: &Event) -> PyResult<Bound<'py, 
         Event::TradingState {
             from, to, cause, ..
         } => trading_state_into(&dict, from, to, cause)?,
+        Event::Gtt { event, .. } => gtt_into(&dict, &event)?,
     }
     Ok(dict)
+}
+
+/// A GTT event: its name, the GTT's id (an integer, `g<n>` in Python), the instrument,
+/// the child's quantity, the triggers, the fired leg, the child's limit and fill price
+/// (rupees; `None` where the event does not carry the field).
+fn gtt_into(dict: &Bound<'_, PyDict>, event: &GttEvent) -> PyResult<()> {
+    dict.set_item("type", "gtt")?;
+    dict.set_item("name", event.name.code())?;
+    dict.set_item("gtt_id", event.gtt.0)?;
+    dict.set_item("instrument", event.instrument.0)?;
+    dict.set_item("product", event.product.code())?;
+    dict.set_item("quantity_units", event.quantity_units)?;
+    dict.set_item("stop_trigger_rupees", event.stop_trigger_rupees)?;
+    dict.set_item("target_trigger_rupees", event.target_trigger_rupees)?;
+    dict.set_item("order_trigger_rupees", event.order_trigger_rupees)?;
+    dict.set_item("fired_leg", event.fired_leg.map(|leg| leg.code()))?;
+    dict.set_item("child_limit_rupees", event.child_limit_rupees)?;
+    dict.set_item("price_rupees", event.price_rupees)
 }
 
 /// A trading-state change as a risk event named `trading_state_changed` (scope
@@ -169,6 +188,13 @@ pub(super) fn order<'py>(py: Python<'py>, o: &Order) -> PyResult<Bound<'py, PyDi
     dict.set_item("instrument", o.request.instrument.0)?;
     dict.set_item("side", o.request.side.code())?;
     dict.set_item("order_type", o.request.order_type.code())?;
+    dict.set_item("limit_rupees", o.request.order_type.limit_rupees())?;
+    dict.set_item("trigger_rupees", o.request.order_type.trigger_rupees())?;
+    let validity = match o.request.validity {
+        Validity::Day => "DAY",
+        Validity::Gtt => "GTT",
+    };
+    dict.set_item("validity", validity)?;
     dict.set_item("product", o.request.product.code())?;
     dict.set_item("status", o.status.code())?;
     dict.set_item("decided_at", o.decided_at)?;

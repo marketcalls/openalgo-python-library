@@ -1,10 +1,11 @@
-//! Fills: queued orders at the open (step 2), and the one path every fill takes into
-//! the portfolio, the leg states and the records.
+//! Fills: queued orders at the open (step 2), an order filled at a point of its bar
+//! (`fill_order`, also step 3 for resting orders and GTT children), and the one path
+//! every fill takes into the portfolio, the leg states and the records.
 
 use crate::exec::{
-    Fill, FillAt, FillFlags, FillReason, Order, OrderAction, OrderId, QuantitySpec, RejectCode,
+    Fill, FillAt, FillFlags, FillPricing, FillReason, GttId, Order, OrderAction, OrderId,
+    QuantitySpec, RejectCode,
 };
-use crate::market::slippage::slipped_price;
 use crate::model::{Product, Side};
 use crate::portfolio::{FillEffect, FillKind, PositionChange, PositionKey};
 use crate::rms::{ExitReason, LegContext, LegRules, LegState};
@@ -13,8 +14,9 @@ use crate::sizing::round_down_to_venue;
 use super::clock::SliceInfo;
 use super::config::QuantityMode;
 use super::error::KernelError;
-use super::event::{Event, EventStamp, OrderEventKind, Step};
+use super::event::{Event, EventStamp, OrderEventKind};
 use super::kernel::Engine;
+use super::order_fill::OrderFill;
 use super::output::FillRecord;
 
 /// One fill to execute.
@@ -36,6 +38,10 @@ pub(super) struct FillRequest {
     pub(super) leg_rules: LegRules,
     /// The target a target exit fills (0 is the first).
     pub(super) target_index: Option<u16>,
+    /// How the reference becomes the price (slippage, a limit).
+    pub(super) pricing: FillPricing,
+    /// The GTT whose child this fill is, or whose unfilled child it follows.
+    pub(super) gtt: Option<GttId>,
 }
 
 impl FillRequest {
@@ -63,6 +69,8 @@ impl FillRequest {
             margin_rupees: 0.0,
             leg_rules: LegRules::default(),
             target_index: None,
+            pricing: FillPricing::Market,
+            gtt: None,
         }
     }
 
@@ -105,13 +113,27 @@ impl Engine {
         if slice.open < order.decided_at {
             return Ok(());
         }
-        let stamp = Self::stamp(slice, Step::OpenFills);
+        self.fill_order(slice, &order, OrderFill::at_open(open))
+    }
+
+    /// Fill an order as `how` says, after the checks of the fill bar: the position
+    /// (reduce, reverse), the entry window and margin.
+    ///
+    /// Errors: those of `execute_fill`, the session times, sizing and the margin model.
+    pub(super) fn fill_order(
+        &mut self,
+        slice: &SliceInfo,
+        order: &Order,
+        how: OrderFill,
+    ) -> Result<(), KernelError> {
+        let (id, price) = (order.id, how.point.price_rupees);
+        let stamp = Self::stamp(slice, how.step);
         let request = &order.request;
         let key = PositionKey {
             instrument: request.instrument,
             product: request.product,
         };
-        let (units, opening) = match self.at_fill(slice, &order, key)? {
+        let (units, opening) = match self.at_fill(slice, order, key)? {
             AtFill::Fill(units, opening) => (units, opening),
             AtFill::Reject(code) => {
                 let kind = OrderEventKind::Rejected(code);
@@ -122,16 +144,16 @@ impl Engine {
                 return self.end_order(stamp, id, OrderAction::Cancel, kind);
             }
             AtFill::Reverse(close, open_units) => {
-                return self.fill_reversal(slice, &order, (close, open_units), open);
+                return self.fill_reversal(slice, order, (close, open_units), how);
             }
         };
-        let Some(units) = self.size_at_fill(slice, &order, units, opening, open)? else {
+        let Some(units) = self.size_at_fill(slice, order, units, opening, price)? else {
             let kind = OrderEventKind::Rejected(RejectCode::Margin);
             return self.end_order(stamp, id, OrderAction::Reject, kind);
         };
         let margin = if opening {
             let leverage = request.leverage;
-            self.opening_margin(slice.day, key, request.side, units, open, leverage)?
+            self.opening_margin(slice.day, key, request.side, units, price, leverage)?
         } else {
             0.0
         };
@@ -143,14 +165,16 @@ impl Engine {
             key,
             side: request.side,
             units,
-            reference_rupees: open,
-            at: FillAt::Open,
+            reference_rupees: price,
+            at: how.point.at,
             order: Some(id),
             exit_reason: request.exit_reason.unwrap_or(ExitReason::Signal),
             flags: FillFlags::NONE,
             margin_rupees: margin,
             leg_rules: request.leg_rules.clone(),
             target_index: None,
+            pricing: how.pricing,
+            gtt: how.gtt,
         };
         self.execute_fill(stamp, fill)?;
         Ok(())
@@ -164,6 +188,7 @@ impl Engine {
         action: OrderAction,
         kind: OrderEventKind,
     ) -> Result<(), KernelError> {
+        self.cancel_order_gtt(stamp, id)?;
         self.book.apply(id, action)?;
         if let (Some(order), OrderEventKind::Rejected(code)) = (self.book.get_mut(id), kind) {
             order.reject_code = Some(code);
@@ -221,6 +246,11 @@ impl Engine {
                 return Ok(AtFill::Reject(code));
             }
         }
+        // Delivery cannot be shorted (04-execution 2): a resting sale whose long was
+        // closed after it was placed must not open a short.
+        if request.product == Product::Cnc && request.side == Side::Sell {
+            return Ok(AtFill::Reject(RejectCode::ProductRule));
+        }
         Ok(AtFill::Fill(order.quantity_units, true))
     }
 
@@ -234,14 +264,10 @@ impl Engine {
         stamp: EventStamp,
         request: FillRequest,
     ) -> Result<FillEffect, KernelError> {
+        self.cancel_gtts_before_exit(stamp, &request)?;
         let spec = self.spec(request.key.instrument)?.clone();
         let day = self.trade_day(stamp);
-        let price = slipped_price(
-            self.fill_slippage(request.key.instrument, day)?,
-            request.side,
-            request.reference_rupees,
-            spec.tick_size_rupees,
-        )?;
+        let price = self.fill_price(&request, spec.tick_size_rupees, day)?;
         let position = self.portfolio.position_mut(request.key, spec.multiplier);
         let effect = position.apply(request.side, request.units, price, stamp.slice_ts)?;
         position.margin_rupees += request.margin_rupees;
@@ -267,6 +293,7 @@ impl Engine {
         };
         let fill = Fill {
             order: request.order,
+            gtt: request.gtt,
             instrument: request.key.instrument,
             side: request.side,
             quantity_units: request.units,
@@ -279,6 +306,7 @@ impl Engine {
         };
         self.record_fill(stamp, request.key, fill, &effect)?;
         self.risk_after_fill(stamp, request.key, &fill, &effect);
+        self.place_gtts_after_entry(stamp, request.key, &effect)?;
         Ok(effect)
     }
 
@@ -350,6 +378,9 @@ impl Engine {
                 order: id,
                 kind,
             });
+        }
+        if let Some(gtt) = fill.gtt {
+            self.gtt_child_filled(stamp, gtt, fill.price_rupees)?;
         }
         self.emit(Event::Position {
             stamp,

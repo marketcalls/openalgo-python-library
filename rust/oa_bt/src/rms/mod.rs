@@ -19,11 +19,12 @@
 //! | `error` | `RmsError` |
 //!
 //! Built: the leg rules (stop, target and several targets, every trailing form,
-//! breakeven, `after_first_target`) on engine-held MIS legs; the daily loss limit, the
-//! drawdown halt, the trading state and the entry gates (daily loss gate, halted,
-//! cooldown, maximum positions), which the engine evaluates in step 6 and at submission
-//! (`engine::aggregate`, `engine::entry_rules`). Not built yet: leg rules held as GTT
-//! orders on CNC and NRML positions, and the combined rules (combined stop and target,
+//! breakeven, `after_first_target`), engine-held on MIS legs and held as GTT orders on
+//! CNC and NRML positions (`engine::gtt`, which keeps this module's leg state as the
+//! source of the levels); the daily loss limit, the drawdown halt, the trading state
+//! and the entry gates (daily loss gate, halted, cooldown, maximum positions), which
+//! the engine evaluates in step 6 and at submission (`engine::aggregate`,
+//! `engine::entry_rules`). Not built yet: the combined rules (combined stop and target,
 //! lock profit, Phase 3). The engine refuses a run that asks for them with a typed
 //! not-implemented error instead of ignoring them.
 
