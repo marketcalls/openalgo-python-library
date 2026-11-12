@@ -15,6 +15,7 @@ from strategy_samples import at, daily_bars, minute_bars, run
 
 import openalgo.backtest as bt
 from openalgo.backtest._base_interval import DAILY_MEANING, meaning
+from openalgo.backtest.errors import DataQualityError
 
 
 class Quarterly(bt.Strategy):
@@ -75,6 +76,15 @@ def test_1_minute_data_missing_a_session_makes_the_strategy_interval_the_base():
     )
     # Own 1-minute data is resampled to the strategy interval.
     assert bar == (at(9, 15), 500.0, 501.45)
+
+
+def test_a_quality_error_of_own_1_minute_data_reaches_the_user_as_itself():
+    # The 09:20 bar's high (500.00) sits below its open (500.50): the 1-minute bars fail
+    # the price check, and the 15-minute bars of the strategy are made from them.
+    bars = minute_bars()
+    bars.iloc[5, bars.columns.get_loc("high")] = 500.0
+    with pytest.raises(DataQualityError, match="1 row has a high below the open or close"):
+        run(Quarterly, data=bars)
 
 
 def test_an_explicit_base_is_used_as_given():

@@ -23,7 +23,7 @@ Hooks run in step 7 of the kernel slice: callbacks for the events since the prev
 decision, then `on_bar`. Orders placed there are queued for the next base-bar open.
 Timers (`self.at`, `self.every`) run in step 2 and their orders fill at that same open.
 Indicators come from `openalgo.ta` through `self.I`. Parts not built yet raise
-NotImplementedError naming the phase.
+NotImplementedError saying what to do instead.
 """
 
 from __future__ import annotations
@@ -33,11 +33,18 @@ from typing import Any, ClassVar
 import pandas as pd
 
 from ._conditions import declare
+from ._messages import not_supported
 from ._series import Bar, InstrumentData, PositionView, SeriesView
-from ._strategy_orders import NOT_BUILT, OrderMethods
+from ._strategy_orders import OrderMethods
 from .errors import ConfigError
 from .reference import Instrument
 from .units import Param
+
+# (what is not supported, what to do instead) of the pair helpers.
+PAIRS = (
+    "a pair trade (pair_long or pair_short)",
+    "place each leg with self.buy and self.sell on a strategy whose symbols are the pair",
+)
 
 # Class attributes with a meaning of their own; every other public one is a parameter.
 DECLARATIONS = (
@@ -146,9 +153,9 @@ class Strategy(OrderMethods):
     @classmethod
     def traded_symbols(cls) -> tuple[str, ...]:
         """What the class declares it trades. Raises ConfigError unless exactly one of
-        symbol, symbols, universe, underlying is set; NotImplementedError for the forms
-        of later phases. An underlying (futures, `expiry` naming the contract rank) is
-        resolved to its contracts by `_futures`."""
+        symbol, symbols, universe, underlying is set; NotImplementedError for a universe,
+        which this version does not run. An underlying (futures, `expiry` naming the
+        contract rank) is resolved to its contracts by `_futures`."""
         declared = [n for n in ("symbol", "symbols", "universe", "underlying") if getattr(cls, n)]
         if len(declared) != 1:
             raise ConfigError(
@@ -160,7 +167,9 @@ class Strategy(OrderMethods):
             return tuple(cls.symbols)
         if declared[0] == "underlying":
             return (cls.underlying,)
-        raise NotImplementedError(f"strategies on a {declared[0]} {NOT_BUILT}")
+        raise not_supported(
+            "a strategy on a universe", "list its symbols in the class attribute symbols"
+        )
 
     @classmethod
     def wants_events(cls) -> bool:
@@ -309,12 +318,14 @@ class Strategy(OrderMethods):
         declare(self, "cover", condition, {})
 
     def pair_long(self, *args: Any, **kwargs: Any) -> Any:
-        """Buy leg 0 and sell leg 1 as one leg group."""
-        raise NotImplementedError("pairs are planned for Phase 3")
+        """Buy leg 0 and sell leg 1 as one leg group. Not supported in this version:
+        raises NotImplementedError."""
+        raise not_supported(*PAIRS)
 
     def pair_short(self, *args: Any, **kwargs: Any) -> Any:
-        """Sell leg 0 and buy leg 1 as one leg group."""
-        raise NotImplementedError("pairs are planned for Phase 3")
+        """Sell leg 0 and buy leg 1 as one leg group. Not supported in this version:
+        raises NotImplementedError."""
+        raise not_supported(*PAIRS)
 
 
 class _DataAccess:

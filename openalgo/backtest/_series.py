@@ -17,7 +17,9 @@ from typing import NamedTuple
 import numpy as np
 import pandas as pd
 
+from ._calendar_convert import format_ist
 from ._layout import IST_OFFSET_NANOS, NANOS_PER_SECOND
+from ._messages import not_supported
 from ._views import TimelineView
 from .errors import BacktestError
 
@@ -134,8 +136,9 @@ class BarStore(SeriesStore):
         count = self._count
         if count >= self._size or self._opens.item(count) != row[1]:
             raise BacktestError(
-                f"{self.symbol}: the kernel delivered a strategy bar opening at {row[1]} that "
-                "is not the next bar of its series; please report this"
+                f"{self.symbol}: the kernel delivered a strategy bar opening at "
+                f"{format_ist(row[1])} that is not the next bar of its series; please report "
+                "this"
             )
         self._count = count + 1
         # The row has the fields of a Bar after the instrument; tuple.__new__ is what
@@ -161,8 +164,9 @@ class InstrumentData:
         if name in FIELDS:
             return self._store.view(name)
         if name == "oi":
-            raise NotImplementedError(
-                "open interest in strategy bars is not implemented yet (Phase 1 work in progress)"
+            raise not_supported(
+                "open interest in strategy bars",
+                "keep it in a DataFrame of your own and look it up in on_bar by bar.time",
             )
         raise AttributeError(name)
 

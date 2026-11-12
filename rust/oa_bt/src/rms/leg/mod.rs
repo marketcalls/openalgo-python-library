@@ -146,8 +146,8 @@ impl LegState {
         Err(RmsError::InvalidRule {
             rule: "leg rules",
             reason: "an add may repeat the position's stop, target, targets, trail, breakeven \
-                     and after_first_target, or give none, but may not change them \
-                     (14-strategy-api 2.4)"
+                     and after_first_target, or give none, but may not change them: the \
+                     position keeps the rules of the order that opened it"
                 .to_string(),
         })
     }

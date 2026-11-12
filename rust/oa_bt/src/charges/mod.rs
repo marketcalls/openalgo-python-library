@@ -56,18 +56,20 @@ pub use usage::{MarketTable, TableUse};
 pub enum ChargeError {
     /// The cost model cannot price the fill (no segment, no schedule for the date).
     Cost(CostError),
-    /// A charging rule that is not built yet.
-    NotBuilt { feature: &'static str },
+    /// A charging rule that is not built yet, and what the user can do instead.
+    NotBuilt {
+        feature: &'static str,
+        instead: &'static str,
+    },
 }
 
 impl fmt::Display for ChargeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ChargeError::Cost(inner) => inner.fmt(f),
-            ChargeError::NotBuilt { feature } => write!(
-                f,
-                "{feature} is not implemented yet (Phase 1 work in progress)"
-            ),
+            ChargeError::NotBuilt { feature, instead } => {
+                crate::model::write_not_supported(f, feature, instead)
+            }
         }
     }
 }

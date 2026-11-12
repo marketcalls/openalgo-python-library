@@ -16,8 +16,9 @@ pass the calendar's checks), the source returned the whole requested range and n
 session of the range is without bars. When every instrument passes, those bars are the
 run's bars; otherwise every instrument is loaded at the strategy interval (own 1-minute
 data is resampled to it). A suspected unadjusted split or bonus stops the run at the
-probe: it is in the prices at every interval. The Assumptions block states the base, why
-it was chosen and what it means for fills.
+probe: it is in the prices at every interval. So does any quality error of own data,
+which is in the bars every base is built from. The Assumptions block states the base,
+why it was chosen and what it means for fills.
 """
 
 from __future__ import annotations
@@ -29,9 +30,10 @@ from typing import Any
 import numpy as np
 
 from ._layout import IST_OFFSET_NANOS, NANOS_PER_MINUTE, parse_interval
+from ._messages import counted
 from ._run_corporate_actions import declared_for, is_split_error
 from .data import BarsResult, load_bars
-from .errors import ConfigError, DataError
+from .errors import ConfigError, DataError, DataQualityError
 
 ONE_MINUTE = "1m"
 NANOS_PER_DAY = 24 * 60 * NANOS_PER_MINUTE
@@ -79,7 +81,7 @@ def _gap(symbol: str, loaded: BarsResult) -> str | None:
     if meta.short_history or missing:
         return (
             f"{symbol}: 1-minute bars run from {meta.obtained_start} to {meta.obtained_end} "
-            f"with {missing} sessions missing, for {meta.requested_start} to "
+            f"with {counted(missing, 'session')} missing, for {meta.requested_start} to "
             f"{meta.requested_end}"
         )
     return None
@@ -87,6 +89,16 @@ def _gap(symbol: str, loaded: BarsResult) -> str | None:
 
 def _first_line(error: Exception) -> str:
     return str(error).split(". ")[0].rstrip(".")
+
+
+def _stops_the_run(error: DataError, own_data: bool) -> bool:
+    """True when a failed 1-minute load must reach the user as itself rather than send
+    the run to the strategy interval: a suspected unadjusted split is in the prices at
+    every interval, and a quality error of own data is in the bars that any base is
+    built from (loading them again at the strategy interval would only fail on the
+    interval instead). A server's 1-minute bars are fetched apart from its bars at the
+    strategy interval, so their other errors only rule the 1-minute base out."""
+    return is_split_error(error) or (own_data and isinstance(error, DataQualityError))
 
 
 def choose_base(
@@ -135,7 +147,7 @@ def _probe(plan: Any, args: dict[str, Any], load: Callable[..., BarsResult]) -> 
         try:
             loaded[symbol] = load(symbol, ONE_MINUTE)
         except DataError as exc:
-            if is_split_error(exc):
+            if _stops_the_run(exc, own_data=args["data"] is not None):
                 raise
             gaps.append(f"{symbol}: no usable 1-minute data ({_first_line(exc)})")
             continue

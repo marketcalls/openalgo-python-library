@@ -46,6 +46,7 @@ import pandas as pd
 from ._benchmark_given import read_given
 from ._calendar_convert import EXCHANGES, from_day
 from ._layout import parse_interval
+from ._messages import counted
 from ._slab_ticks import last_session_before
 from .data import BarsResult, LoadMetadata, load_bars
 from .errors import CalendarError, ConfigError, DataError, TimestampError
@@ -266,10 +267,12 @@ def _from_given(value: pd.Series | pd.DataFrame, exchange: str, calendar: Any) -
     }
     notes = []
     if read.off_session_dates:
-        notes.append(
-            f"benchmark {name}: {read.off_session_dates} of its dates are not {exchange} "
-            "sessions and were left out"
+        left_out = counted(
+            read.off_session_dates,
+            f"of its dates is not one of the {exchange} sessions and was left out",
+            f"of its dates are not {exchange} sessions and were left out",
         )
+        notes.append(f"benchmark {name}: {left_out}")
     if not len(read.levels):
         return _absent(name, record, "it holds no usable close")
     closes = pd.Series(read.levels, index=ist_times(read.stamps_ns), name="benchmark")
@@ -302,8 +305,8 @@ def _coverage_note(name: str, missing: list[dt.date], needed: int) -> str:
     if len(missing) > LISTED_DATES:
         listed += f" and {len(missing) - LISTED_DATES} more"
     return (
-        f"benchmark {name}: no close on {len(missing)} of the {needed} sessions it is read "
-        f"on (the run's sessions and the one before them): {listed}. A missing session is "
+        f"benchmark {name}: no close on {len(missing)} of the {counted(needed, 'session')} it "
+        f"is read on (the run's sessions and the one before them): {listed}. A missing session is "
         "never filled from a neighbouring day: it has no benchmark return, nor has the "
         "session after it, and alpha, beta and the other paired figures use only the "
         "sessions with both a strategy and a benchmark return (benchmark_sessions)"

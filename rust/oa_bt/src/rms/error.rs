@@ -11,8 +11,12 @@ pub enum RmsError {
     /// A price or quantity handed to a leg that is not a positive finite number (a
     /// kernel defect in a backtest; an unusable tick in tick mode).
     InvalidValue { what: &'static str, value: f64 },
-    /// A part of risk management that is not built yet.
-    NotBuilt { feature: &'static str },
+    /// A part of risk management that is not built yet, and what the user can do
+    /// instead.
+    NotBuilt {
+        feature: &'static str,
+        instead: &'static str,
+    },
 }
 
 impl fmt::Display for RmsError {
@@ -22,11 +26,8 @@ impl fmt::Display for RmsError {
             RmsError::InvalidValue { what, value } => {
                 write!(f, "{what} must be a positive finite number, got {value}")
             }
-            RmsError::NotBuilt { feature } => {
-                write!(
-                    f,
-                    "{feature} is not implemented yet (Phase 1 work in progress)"
-                )
+            RmsError::NotBuilt { feature, instead } => {
+                crate::model::write_not_supported(f, feature, instead)
             }
         }
     }

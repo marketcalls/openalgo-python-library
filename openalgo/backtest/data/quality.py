@@ -26,6 +26,7 @@ import pandas as pd
 
 from .._calendar_convert import format_ist, from_day, interval_nanos, to_day
 from .._layout import PRICE_COLUMNS, parse_interval
+from .._messages import counted
 from .._protocols import SessionCalendar
 from ..errors import DataQualityError
 from ._sessions import Sessions, ist_days
@@ -34,69 +35,87 @@ from .corporate_actions import CorporateAction, declared
 from .normalise import MAX_EXAMPLES, NormaliseReport
 from .splits import PriceGap, check_splits
 
-# The checks of PRD 06 section 5 that Phase 0 does not run, with the reason.
+# The checks of PRD 06 section 5 that this version does not run, with the reason (the
+# reason is shown to the user, so it names no internal planning phase).
 NOT_RUN = (
-    "zero_volume_runs: not checked in Phase 0",
-    "outlier_returns: not checked in Phase 0",
+    "zero_volume_runs: not checked in this version",
+    "outlier_returns: not checked in this version",
     "survivorship_bias: a property of a universe, checked where portfolios are built",
     "adjustment_status: the sources do not say whether a series is adjusted; treat it as unknown",
 )
 
 # Rows removed during normalisation, reported with the checks of the bars themselves:
-# (check name, severity, NormaliseReport count, message, NormaliseReport examples).
+# (check name, severity, NormaliseReport count, what is counted in the singular and the
+# plural, message with {counted}, NormaliseReport examples).
 _NORMALISATION_ISSUES = (
     (
         "oi_zero_to_nan",
         INFO,
         "oi_zero_to_nan",
-        "open interest was 0 on all {count} rows, which means the source supplies none: "
-        "converted to NaN (unknown)",
+        ("row", "rows"),
+        "open interest was 0 in every row ({counted}), which means the source supplies "
+        "none: converted to NaN (unknown)",
         None,
     ),
     (
         "preopen_dropped",
         INFO,
         "preopen_dropped",
-        "{count} pre-open bars (before the session open) were dropped",
+        (
+            "pre-open bar (before the session open) was dropped",
+            "pre-open bars (before the session open) were dropped",
+        ),
+        "{counted}",
         None,
     ),
     (
         "postclose_dropped",
         WARNING,
         "postclose_dropped",
-        "{count} bars at or after the session close were dropped; check the session times "
-        "of the calendar if this exchange trades later",
+        (
+            "bar at or after the session close was dropped",
+            "bars at or after the session close were dropped",
+        ),
+        "{counted}; check the session times of the calendar if this exchange trades later",
         None,
     ),
     (
         "closed_day_dropped",
         WARNING,
         "closed_day_dropped",
-        "{count} rows on dates the calendar marks closed were dropped; add the special "
-        "session to the calendar to keep them",
+        (
+            "row on a date the calendar marks closed was dropped",
+            "rows on dates the calendar marks closed were dropped",
+        ),
+        "{counted}; add the special session to the calendar to keep such rows",
         "closed_day_examples",
     ),
     (
         "partial_dropped",
         INFO,
         "partial_dropped",
-        "{count} bars that had not closed yet were dropped",
+        ("bar that had not closed yet was dropped", "bars that had not closed yet were dropped"),
+        "{counted}",
         None,
     ),
     (
         "incomplete_period_dropped",
         WARNING,
         "incomplete_period_dropped",
-        "{count} weekly or longer bars were dropped because their period is not wholly "
-        "inside the requested dates and the data obtained for them",
+        (
+            "weekly or longer bar was dropped because its period is",
+            "weekly or longer bars were dropped because their period is",
+        ),
+        "{counted} not wholly inside the requested dates and the data obtained",
         None,
     ),
     (
         "late_session_start",
         WARNING,
         "late_start_days",
-        "on {count} session days the first bar opens after the session open (no trade in "
-        "the opening bars, or bars are missing)",
+        ("session day", "session days"),
+        "on {counted} the first bar opens after the session open (no trade in the opening "
+        "bars, or bars are missing)",
         "late_start_examples",
     ),
 )
@@ -253,15 +272,21 @@ def check_bars(
         declared=declared(corporate_actions),
     )
     if normalisation is not None:
-        for check, severity, count_field, message, examples_field in _NORMALISATION_ISSUES:
-            count = getattr(normalisation, count_field)
+        for check, severity, field_name, nouns, message, examples_field in _NORMALISATION_ISSUES:
+            count = getattr(normalisation, field_name)
             examples = getattr(normalisation, examples_field) if examples_field else ()
-            report.add(check, severity, count, message.format(count=count), examples)
+            text = message.format(counted=counted(count, *nouns))
+            report.add(check, severity, count, text, examples)
     return report
 
 
 def _examples(ts_open: np.ndarray, rows: np.ndarray) -> list[str]:
     return [format_ist(int(ts)) for ts in ts_open[rows][:MAX_EXAMPLES]]
+
+
+def _rows_have(count: int) -> str:
+    """ "1 row has" or "N rows have"."""
+    return counted(int(count), "row has", "rows have")
 
 
 def _check_prices(bars: pd.DataFrame, ts_open: np.ndarray, report: QualityReport) -> None:
@@ -277,14 +302,14 @@ def _check_prices(bars: pd.DataFrame, ts_open: np.ndarray, report: QualityReport
         "non_finite_price",
         ERROR,
         non_finite.sum(),
-        f"{int(non_finite.sum())} rows have an open, high, low or close that is NaN or infinite",
+        f"{_rows_have(non_finite.sum())} an open, high, low or close that is NaN or infinite",
         _examples(ts_open, non_finite),
     )
     report.add(
         "non_positive_price",
         ERROR,
         non_positive.sum(),
-        f"{int(non_positive.sum())} rows have a price that is zero or negative",
+        f"{_rows_have(non_positive.sum())} a price that is zero or negative",
         _examples(ts_open, non_positive),
     )
     unusable = non_finite | non_positive
@@ -297,7 +322,7 @@ def _check_prices(bars: pd.DataFrame, ts_open: np.ndarray, report: QualityReport
         "ohlc_inconsistent",
         ERROR,
         contradicts.sum(),
-        f"{int(contradicts.sum())} rows have a high below the open or close, or a low above them",
+        f"{_rows_have(contradicts.sum())} a high below the open or close, or a low above them",
         _examples(ts_open, contradicts),
     )
 
@@ -320,7 +345,10 @@ def _check_duplicates(
         parts.append(f"{in_frame} still present")
     total = in_frame + removed
     report.add(
-        "duplicate_timestamps", WARNING, total, f"{total} duplicate timestamps: " + ", ".join(parts)
+        "duplicate_timestamps",
+        WARNING,
+        total,
+        f"{counted(total, 'duplicate timestamp')}: " + ", ".join(parts),
     )
 
 
@@ -362,22 +390,26 @@ def _check_missing(
             "missing_bars",
             WARNING,
             missing,
-            f"{missing} bars of the session grid are missing on the "
-            f"{counts['session_days']} session days that have bars",
+            f"{counted(missing, 'bar of the session grid is', 'bars of the session grid are')} "
+            "missing on the "
+            + counted(
+                counts["session_days"], "session day that has bars", "session days that have bars"
+            ),
         )
+        off_lattice = counts["off_lattice_bars"]
         report.add(
             "off_lattice_bars",
             WARNING,
-            counts["off_lattice_bars"],
-            f"{counts['off_lattice_bars']} bars do not start a whole number of intervals after "
-            "the session open",
+            off_lattice,
+            f"{counted(off_lattice, 'bar does', 'bars do')} not start a whole number of "
+            "intervals after the session open",
         )
     report.add(
         "missing_sessions",
         WARNING,
         len(without),
-        f"{len(without)} of {len(session_days)} session days between the first and the last "
-        "bar have no bar at all",
+        f"{len(without)} of {counted(len(session_days), 'session day')} between the first and "
+        f"the last bar {'has' if len(without) == 1 else 'have'} no bar at all",
         without,
     )
 

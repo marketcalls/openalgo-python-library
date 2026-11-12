@@ -9,6 +9,7 @@
 //! template before it submits it. Both forms therefore place the same orders.
 
 use crate::exec::{OrderRequest, QuantitySpec};
+use crate::market::calendar::format_ist;
 use crate::model::TsNanos;
 use crate::rms::Distance;
 use crate::sizing::SizerSpec;
@@ -147,10 +148,11 @@ pub(super) fn order_at(
         if !usable && input.slot != AtrSlot::Sizer {
             return Err(invalid(format!(
                 "bt.atr(period={period}) has no positive value at the strategy bar opening at \
-                 {ts_open} (UTC nanoseconds): fewer than {period} strategy bars have closed, \
-                 or the series has not moved. Require the ATR in the condition, for example \
+                 {opens}: fewer than {period} strategy bars have closed, or the series has \
+                 not moved. Require the ATR in the condition, for example \
                  & (self.I(ta.atr, self.high, self.low, self.close, {period}) > 0)",
-                period = input.period
+                period = input.period,
+                opens = format_ist(ts_open)
             )));
         }
         if let Some(slot) = slot_mut(&mut order, input.slot) {

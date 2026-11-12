@@ -106,7 +106,8 @@ fn single_exchange(instruments: &[InstrumentSpec]) -> Result<Exchange, KernelErr
         .any(|spec| spec.exchange != first.exchange)
     {
         return Err(KernelError::NotBuilt {
-            feature: "runs across several exchanges (multi-asset, Phase 3)",
+            feature: "a run across several exchanges",
+            instead: "run the instruments of each exchange in a backtest of their own",
         });
     }
     Ok(first.exchange)

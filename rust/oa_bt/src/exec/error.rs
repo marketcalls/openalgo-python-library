@@ -28,8 +28,12 @@ pub enum ExecError {
     },
     /// A GTT transition the state table does not allow (a kernel defect).
     IllegalGttTransition { from: GttStatus, action: GttAction },
-    /// A part of the execution layer that is not built yet.
-    NotBuilt { feature: &'static str },
+    /// A part of the execution layer that is not built yet, and what the user can do
+    /// instead.
+    NotBuilt {
+        feature: &'static str,
+        instead: &'static str,
+    },
 }
 
 impl fmt::Display for ExecError {
@@ -61,11 +65,8 @@ impl fmt::Display for ExecError {
                 from.code(),
                 action.code()
             ),
-            ExecError::NotBuilt { feature } => {
-                write!(
-                    f,
-                    "{feature} is not implemented yet (Phase 1 work in progress)"
-                )
+            ExecError::NotBuilt { feature, instead } => {
+                crate::model::write_not_supported(f, feature, instead)
             }
         }
     }

@@ -369,6 +369,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (use `self.state`); `after_risk_exit="allow_reentry"` raises `NotImplementedError`
   until the combined risk rules it governs are built; `roll=1` is the default of
   `bt.backtest`.
+- **Backtest messages say what to do.** A part of the backtest engine that is not built
+  yet raises `NotImplementedError` with "... is not supported in this version: ..." and
+  what to do instead (for example "bt.live is not supported in this version: test the
+  strategy with bt.backtest"). No exception, warning, quality report line or
+  Assumptions text cites an internal planning reference (a requirement or decision id,
+  a phase number) any more, and the source column of the default slippage table names
+  its origin plainly. Counts read in the right number ("1 declared corporate action",
+  "1 row has a price that is zero or negative"). A weekly or longer strategy interval
+  is refused with how to read longer bars instead of a message about base intervals.
+- **Sized orders rejected for margin are explained.** An order whose sizer asked for
+  more than the margin allows is still rejected with reject code `margin` (the sizer is
+  not cut down to the cash); the result now warns that the sizer asked for more than
+  the margin allows and names `size_caps` (`bt.size.caps(leverage=1)`) as the bound.
+  `result.orders` has a new `sizer` column naming the sizer that set each order's
+  quantity.
+- `ReferenceTables.expiry_schedule` takes `record_use=False` to list contracts without
+  recording them as used or warning about them.
 - **Backtest speed.** A run's time no longer grows with its bars times its orders (every
   slice walked every order and GTT of the run) nor with its bars times its months (the
   data hash); results are unchanged bit for bit. An event strategy makes about 550k
@@ -465,6 +482,18 @@ across a NaN bar.
 
 ### Fixed
 
+- A data quality error in own 1-minute data now stops `bt.backtest` with that error;
+  before, the base-interval probe moved on to the strategy interval and the run stopped
+  with a confusing `TimestampError` about the interval.
+- `bt.backtest(data="bars.csv")` (a file path, a `pathlib.Path` or `bt.data.Files`)
+  without `start=` and `end=` takes the run's dates from the file, as it does for a
+  DataFrame.
+- A futures run that ends within about 75 days of the reference tables' check date no
+  longer warns about the contracts listed past its end that it never uses. It warns
+  only when an expiry it relies on (one that sets a roll inside the run) is past the
+  check date.
+- The ATR error of a condition strategy and the kernel's errors about a bar name the
+  bar's open in IST, not in UTC nanoseconds.
 - `openalgo.backtest.reference.round_to_tick` (and `ReferenceTables.round_price`) took
   a real price within about 1e-12 of its value of a tick as on that tick, so on a
   0.0025 tick a price of several lakh rupees could round down to the tick above it. Only

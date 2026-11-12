@@ -6,7 +6,7 @@
 //! then read back key by key, keeps the cost of a result linear and small in its rows.
 
 use oa_bt::engine::{FillRecord, LevelRow, TradeRecord};
-use oa_bt::exec::{FillFlags, Order, Validity};
+use oa_bt::exec::{FillFlags, Order, QuantitySpec, Validity};
 use oa_bt::model::Side;
 use oa_bt::rms::leg::TargetState;
 use pyo3::prelude::*;
@@ -145,8 +145,9 @@ pub(super) const TRADE_COLUMNS: [Column<TradeRecord>; 18] = [
 ];
 
 /// The orders: the request (type, prices in rupees, validity, product), the state and
-/// what filled.
-pub(super) const ORDER_COLUMNS: [Column<Order>; 17] = [
+/// what filled; `sizer` names the sizer that set the quantity (None for a quantity
+/// given in units, lots or a fraction of the position).
+pub(super) const ORDER_COLUMNS: [Column<Order>; 18] = [
     ("order_id", |py, o| o.id.0.into_py(py)),
     ("instrument", |py, o| o.request.instrument.0.into_py(py)),
     ("side", |py, o| o.request.side.code().into_py(py)),
@@ -180,4 +181,11 @@ pub(super) const ORDER_COLUMNS: [Column<Order>; 17] = [
     }),
     ("reduce_only", |py, o| o.request.reduce_only.into_py(py)),
     ("tag", |py, o| o.request.tag.clone().into_py(py)),
+    ("sizer", |py, o| {
+        match o.request.quantity {
+            QuantitySpec::Sizer(sizer) => Some(sizer.code()),
+            _ => None,
+        }
+        .into_py(py)
+    }),
 ];

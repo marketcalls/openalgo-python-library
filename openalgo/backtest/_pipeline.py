@@ -43,7 +43,9 @@ from ._instruments import resolve_instruments
 from ._intraday_assumptions import one_clock_time
 from ._manifest import build_manifest, strategy_source_hash
 from ._margin_check import check_margin
+from ._margin_rejections import margin_rejections
 from ._market import MarketSettings, market_settings
+from ._messages import not_supported
 from ._run_corporate_actions import (
     UnadjustedEvent,
     check_crossings,
@@ -275,9 +277,9 @@ def execute(
     instance._ctx = context
     instance.init()
     if has_conditions(instance) and futures is not None:
-        raise NotImplementedError(
-            "condition strategies on a futures underlying are not implemented yet (Phase 1 "
-            "work in progress): write on_bar"
+        raise not_supported(
+            "a condition strategy on a futures underlying",
+            "write the strategy with on_bar",
         )
     if has_conditions(instance):
         drive_conditions(instance, engine)
@@ -303,7 +305,12 @@ def execute(
         output,
         list(plan.symbols),
         _assumptions(prepared, calendar, checks, market),
-        [*run_end_warnings(output["run_end"]), *prepared.warnings, *timer_warnings],
+        [
+            *run_end_warnings(output["run_end"]),
+            *margin_rejections(output["orders"]),
+            *prepared.warnings,
+            *timer_warnings,
+        ],
         context.skipped,
         manifest.to_dict(),
         record=record,

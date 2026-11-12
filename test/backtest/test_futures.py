@@ -19,16 +19,19 @@ spread of the two opens is 25,300.00 - 25,200.00 = 100.00.
 """
 
 import datetime as dt
+import warnings
 
 import pandas as pd
 import pytest
 
 import openalgo.backtest as bt
 from openalgo import ta
-from openalgo.backtest import _futures
+from openalgo.backtest import _futures, reference
 from openalgo.backtest.calendar import default_calendar
 from openalgo.backtest.errors import ConfigError
 from openalgo.backtest.reference import Instrument
+
+CALENDAR = default_calendar()
 
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 SEPTEMBER = "NIFTY26SEP24FUT"
@@ -182,6 +185,52 @@ def test_a_contract_is_loaded_from_the_session_it_takes_over_to_its_last_trading
         (dt.date(2024, 9, 2), dt.date(2024, 9, 26)),
         (dt.date(2024, 9, 25), dt.date(2024, 10, 31)),
     )
+
+
+# The reference tables were last checked on 2026-11-12 (tables.csv); a row used for a
+# later date warns. NIFTY's monthly contracts expire on 2026-10-27, 2026-11-24 (listed
+# for Monday 2026-11-23) and 2026-12-29.
+CHECKED_ON = dt.date(2026, 11, 12)
+
+
+class _AutumnPlan:
+    exchange = "NFO"
+    start = dt.date(2026, 10, 1)
+
+
+def _reference_warnings(monkeypatch, end: dt.date, roll: int) -> list[str]:
+    """The ReferenceDataWarnings of resolving a current-month NIFTY run from 2026-10-01
+    to `end`, on reference tables of its own (a table warns once per row)."""
+    fresh = reference.ReferenceTables()
+    monkeypatch.setattr(reference, "default_tables", lambda: fresh)
+    plan = type("Plan", (_AutumnPlan,), {"end": end})
+
+    class Futures(bt.Strategy):
+        underlying, exchange, interval = "NIFTY", "NFO", "D"
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _futures.resolve_futures(Futures, plan, {"instrument": None, "roll": roll}, CALENDAR)
+    return [str(w.message) for w in caught if w.category is reference.ReferenceDataWarning]
+
+
+def test_a_run_whose_contracts_are_all_checked_does_not_warn_about_the_look_ahead(monkeypatch):
+    # The run needs October (rolled on 10-26) and November, held past its end on 11-10;
+    # the look-ahead also lists December and January, which the run never uses.
+    tables = reference.default_tables()
+    assert [tables.table_as_of(name) for name in ("expiry_rules", "contract_dates")] == [
+        CHECKED_ON,
+        CHECKED_ON,
+    ]
+    assert _reference_warnings(monkeypatch, dt.date(2026, 11, 10), roll=1) == []
+
+
+def test_a_roll_set_by_an_expiry_after_the_check_date_warns(monkeypatch):
+    # roll=10 moves to December inside the run, ten sessions before November's
+    # 2026-11-24 expiry, a date after the tables were checked.
+    found = _reference_warnings(monkeypatch, dt.date(2026, 11, 12), roll=10)
+    assert len(found) == 1
+    assert "is being used for 2026-11-24" in found[0]
 
 
 def test_next_month_with_roll_none_is_refused():

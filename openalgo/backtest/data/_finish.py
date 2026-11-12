@@ -21,6 +21,7 @@ import pandas as pd
 
 from .._calendar_convert import from_day, to_day
 from .._layout import BAR_COLUMNS, IST_OFFSET_NANOS, parse_interval
+from .._messages import counted
 from ..errors import NoDataError
 from ..resample import resample_bars
 from ._sessions import Sessions, ist_days
@@ -203,7 +204,8 @@ def finish(request: LoadRequest, stamped: Stamped, meta: LoadMetadata, strict: b
     if len(bars) == 0:
         raise NoDataError(
             f"{request.tag}: {stamped.origin} has no completed bars between {request.start} and "
-            f"{request.end} ({report.rows_in} rows in range; pre-open {report.preopen_dropped}, "
+            f"{request.end} ({counted(report.rows_in, 'row')} in range; pre-open "
+            f"{report.preopen_dropped}, "
             f"post-close {report.postclose_dropped}, closed days {report.closed_day_dropped}, "
             f"partial {report.partial_dropped}, incomplete periods "
             f"{report.incomplete_period_dropped}). {advice}"
@@ -259,17 +261,17 @@ def _describe_coverage(
     meta.short_history = first > expected[0] + slack or last < expected[-1] - slack
     if not meta.short_history:
         return
-    counted = ""
+    sessions = ""
     if not slack_days:
         with_bars = set(ist_days(bars["ts_open"].to_numpy()).tolist())
         obtained = sum(1 for day in expected if to_day(day) in with_bars)
-        counted = f", {obtained} of {len(expected)} sessions"
+        sessions = f", {obtained} of {counted(len(expected), 'session')}"
     stopped = meta.fetch.stopped if meta.fetch else None
     because = f" The fetch stopped going back because {stopped}." if stopped else ""
     meta.warnings.insert(
         0,
         f"Short history: {start} to {end} was requested but {origin} returned {first} to "
-        f"{last}{counted}. {advice}{because}",
+        f"{last}{sessions}. {advice}{because}",
     )
 
 

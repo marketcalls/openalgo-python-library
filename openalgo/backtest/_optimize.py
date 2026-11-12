@@ -53,6 +53,7 @@ from ._arrays import made_by
 from ._causality_checks import IndicatorChecks
 from ._conditions import CONDITIONS_PATH, EVENT_PATH
 from ._manifest import strategy_source_hash
+from ._messages import counted
 from ._objective import DEFAULT_OBJECTIVE, check_objective
 from ._optimize_result import OptimizeResult
 from ._pipeline import PreparedRun, execute, prepare
@@ -194,7 +195,8 @@ def _plan(
     if len(seconds) > 1:
         took += f" with the sweep's indicator checks, the second took {seconds[1]:.2f} s"
     text = (
-        f"bt.optimize: {combinations} combinations of {strategy.__name__} on the {path} path "
+        f"bt.optimize: {counted(combinations, 'combination')} of {strategy.__name__} on the "
+        f"{path} path "
         f"({PATH_MEANINGS[path]}), in {where}{f' ({why})' if why else ''}. {took}; the "
         f"rest should take about {rest:.1f} s."
     )

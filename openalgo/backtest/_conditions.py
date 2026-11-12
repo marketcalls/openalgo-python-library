@@ -54,6 +54,7 @@ from ._calendar_convert import IST
 from ._clock import ClockCondition
 from ._condition_atr import Slot, atr_inputs, atr_slots, template_atr
 from ._engine import call
+from ._messages import counted
 from ._series import FIELDS, ist_time
 from ._strategy_orders import order_leverage
 from ._views import TimelineView
@@ -77,7 +78,12 @@ ORDER_ARGUMENTS = frozenset(
         "tag",
     }
 )
-GRAMMAR = "the condition grammar of 14-strategy-api 4.2"
+# The grammar of the module docstring, as messages name it.
+GRAMMAR = (
+    "the condition grammar (series views and self.I indicators combined with arithmetic, "
+    "comparisons, &, |, ~, crossed_above, crossed_below, shift, rolling_max and "
+    "rolling_min, clock conditions, or one boolean per strategy bar)"
+)
 # The two evaluation paths of 03-architecture 5: `on_bar` (and timers and callbacks) in
 # Python at every decision, or conditions run by the Rust signal driver.
 EVENT_PATH = "event"
@@ -108,7 +114,7 @@ def check_order_arguments(order_args: dict[str, Any], what: str) -> None:
         raise ConfigError(
             f"{what} does not take {unknown}: its order arguments are "
             f"{sorted(ORDER_ARGUMENTS)}. price, validity and reverse are absent on purpose "
-            "(a condition entry is a MARKET DAY order, 14-strategy-api 4.1); use on_bar"
+            "(a condition entry is always a MARKET DAY order); use on_bar"
         )
 
 
@@ -152,7 +158,7 @@ def _check_form(cls: type, what: str) -> None:
     if cls.on_bar is not Strategy.on_bar:
         raise ConfigError(
             f"{cls.__name__} defines on_bar and calls {what}: a strategy uses on_bar or "
-            "conditions, not both (14-strategy-api 4.1)"
+            "conditions, not both"
         )
     if cls.wants_events():
         raise ConfigError(
@@ -256,8 +262,9 @@ def array_values(data: Any, opens: np.ndarray, what: str) -> np.ndarray:
         return values[rows]
     if len(values) != len(opens):
         raise ConfigError(
-            f"{what} has {len(values)} values and the run has {len(opens)} strategy bars: "
-            "give one value per strategy bar, or a Series indexed by bar open time"
+            f"{what} has {counted(len(values), 'value')} and the run has "
+            f"{counted(len(opens), 'strategy bar')}: give one value per strategy bar, or a "
+            "Series indexed by bar open time"
         )
     return values
 

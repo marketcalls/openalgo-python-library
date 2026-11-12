@@ -17,6 +17,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from .._messages import counted
 from ..errors import ConfigError, TimestampError
 
 EPOCH_UNITS = ("s", "ms", "us", "ns")
@@ -52,7 +53,9 @@ def to_utc_ns(
     index = _to_datetime_index(values, unit=unit, fmt=fmt, tz=tz, what=what)
     if index.hasnans:
         missing = int(index.isna().sum())
-        raise TimestampError(f"{what}: {missing} values are missing or unparseable")
+        raise TimestampError(
+            f"{what}: {counted(missing, 'value is', 'values are')} missing or unparseable"
+        )
     if index.tz is not None:
         _check_declared_zone(index, tz, what)
         described = f"tz-aware ({index.tz})"
@@ -153,7 +156,8 @@ def _from_datetime_objects(series: pd.Series, what: str) -> pd.DatetimeIndex:
 
 def _from_text(series: pd.Series, fmt: str | None, what: str) -> pd.DatetimeIndex:
     if series.isna().any():
-        raise TimestampError(f"{what}: {int(series.isna().sum())} values are missing")
+        missing = int(series.isna().sum())
+        raise TimestampError(f"{what}: {counted(missing, 'value is', 'values are')} missing")
     texts = series.astype(str).to_numpy(dtype=object)
     if fmt is not None:
         try:

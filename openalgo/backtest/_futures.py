@@ -7,12 +7,11 @@ symbol is an underlying). The class attribute `expiry` names the contract rank,
 "current_month" (the default) or "next_month". Before the run this module resolves,
 for each underlying:
 
-- its monthly contracts: those `instrument=` gives for the underlying (each with its
-  expiry and last trading day), else the reference tables' monthly expiry schedule
-  (`ReferenceTables.expiry_schedule`, final dates, so a re-dated contract keeps the
-  last trading day it really had) with each contract's terms (`ReferenceTables.
-  instrument`: lot size by contract expiry, tick, freeze quantity) as on the day the
-  run starts trading it;
+- its monthly contracts (`_futures_contracts`): those `instrument=` gives for the
+  underlying (each with its expiry and last trading day), else the reference tables'
+  monthly expiry schedule, with each contract's terms (`ReferenceTables.instrument`:
+  lot size by contract expiry, tick, freeze quantity) as on the day the run starts
+  trading it;
 - when the rank moves on: with `roll=N` (the default 1) at the session N sessions
   before the expiry of the nearest contract still traded, which is when a position
   rolls; with `roll=None` at the session after that contract's last trading day, a
@@ -38,19 +37,17 @@ from typing import Any
 from . import reference
 from ._calendar_convert import from_day, to_day
 from ._engine import call
+from ._futures_contracts import Contract, listed_contracts, record_expiries
+from ._messages import counted, not_supported
 from ._native import native
 from .errors import ConfigError, ReferenceDataError
-from .reference import Instrument, SymbolError, format_symbol, parse_symbol
+from .reference import Instrument, SymbolError, parse_symbol
 
 FUTURES_EXCHANGES = ("NFO", "BFO", "MCX", "CDS", "BCD")
 # The contract ranks of 14-strategy-api 2.1 and how many contracts each lies past the
 # nearest one still traded.
 RANKS = {"current_month": 0, "next_month": 1}
 DEFAULT_RANK = "current_month"
-# Calendar days past the run's end for which the reference tables are asked for
-# contracts: a monthly contract expires within about five weeks of any date, and the
-# next-month rank needs one contract more.
-LOOKAHEAD_DAYS = 75
 
 
 @dataclass(frozen=True)
@@ -126,7 +123,7 @@ class FuturesPlan:
         rule = (
             "settled at expiry (roll=None)"
             if self.roll is None
-            else f"rolled {self.roll} session(s) before expiry"
+            else f"rolled {counted(self.roll, 'session')} before expiry"
         )
         parts = []
         for s in self.series:
@@ -136,16 +133,6 @@ class FuturesPlan:
             ]
             parts.append(f"{s.name}: {', then '.join(steps)}")
         return f"{self.rank} contracts, {rule}, back-adjusted series; " + "; ".join(parts)
-
-
-@dataclass(frozen=True)
-class _Contract:
-    """A contract before its terms: its symbol, last trading day and, when the caller
-    gave it, its instrument."""
-
-    symbol: str
-    last_day: dt.date
-    instrument: Instrument | None
 
 
 def underlying_names(strategy: type, exchange: str) -> tuple[str, ...]:
@@ -165,9 +152,9 @@ def underlying_names(strategy: type, exchange: str) -> tuple[str, ...]:
     names = tuple(getattr(strategy, "symbols", None) or ())
     plain = tuple(name for name in names if not _is_contract(name, exchange))
     if plain and len(plain) != len(names):
-        raise NotImplementedError(
-            "symbols mixing futures underlyings and contract symbols are not implemented "
-            "yet (Phase 1 work in progress): name every future by its underlying"
+        raise not_supported(
+            "a symbols list that mixes futures underlyings and contract symbols",
+            "name every future by its underlying",
         )
     return plain
 
@@ -200,54 +187,6 @@ def check_roll(roll: Any) -> int | None:
     return roll
 
 
-def _given(given: Any) -> list[Instrument]:
-    if isinstance(given, Instrument):
-        return [given]
-    if isinstance(given, dict):
-        return [value for value in given.values() if isinstance(value, Instrument)]
-    return []
-
-
-def _underlying_of(instrument: Instrument) -> str | None:
-    if instrument.underlying:
-        return instrument.underlying
-    try:
-        return parse_symbol(instrument.symbol, instrument.exchange).underlying
-    except SymbolError:
-        return None
-
-
-def _last_day(instrument: Instrument) -> dt.date:
-    return instrument.last_trading_day or instrument.expiry
-
-
-def _contracts(name: str, plan: Any, given: Any, calendar: Any) -> list[_Contract]:
-    """The underlying's monthly contracts, nearest first (see the module docstring)."""
-    mine = [
-        i
-        for i in _given(given)
-        if i.kind == "future" and i.exchange == plan.exchange and _underlying_of(i) == name
-    ]
-    if mine:
-        mine.sort(key=_last_day)
-        return [_Contract(i.symbol, _last_day(i), i) for i in mine]
-    tables = reference.default_tables()
-    last = plan.end + dt.timedelta(days=LOOKAHEAD_DAYS)
-    try:
-        found = tables.expiry_schedule(
-            name, plan.exchange, plan.start, last, calendar, series="monthly"
-        )
-    except ReferenceDataError as exc:
-        raise ReferenceDataError(
-            f"{name} on {plan.exchange}: the reference tables cannot list its monthly "
-            f"futures ({exc}). Pass the contracts with instrument={{symbol: Instrument(...)}} "
-            "giving each one's expiry and last trading day"
-        ) from None
-    return [
-        _Contract(format_symbol(name, item.expiry), item.last_trading_day, None) for item in found
-    ]
-
-
 def _move_day(day: dt.date, roll: int | None, exchange: str, calendar: Any) -> dt.date:
     """When the rank moves past a contract expiring on `day`: the roll session, or the
     session after its last trading day."""
@@ -259,8 +198,8 @@ def _move_day(day: dt.date, roll: int | None, exchange: str, calendar: Any) -> d
 
 
 def _select(
-    name: str, contracts: list[_Contract], rank: int, roll: int | None, plan: Any, calendar: Any
-) -> list[tuple[_Contract, dt.date | None]]:
+    name: str, contracts: list[Contract], rank: int, roll: int | None, plan: Any, calendar: Any
+) -> list[tuple[Contract, dt.date | None]]:
     """The contracts of the rank over the run and the session each hands over on.
 
     The rank moves past the nearest contract still traded (the anchor) on its move day.
@@ -283,7 +222,7 @@ def _select(
     )
     if anchor is None:
         raise ReferenceDataError(f"{name} on {plan.exchange}: no contract trades in the run")
-    chosen: list[tuple[_Contract, dt.date | None]] = []
+    chosen: list[tuple[Contract, dt.date | None]] = []
     while True:
         held = anchor + rank
         if held >= len(contracts):
@@ -302,7 +241,7 @@ def _select(
 
 
 def _windows(
-    chosen: list[tuple[_Contract, dt.date | None]], roll: int | None, plan: Any
+    chosen: list[tuple[Contract, dt.date | None]], roll: int | None, plan: Any
 ) -> list[tuple[dt.date, dt.date]]:
     windows = []
     for position, (contract, _) in enumerate(chosen):
@@ -322,7 +261,7 @@ def _terms(instrument: Instrument) -> str:
     return f"lot {instrument.lot_size}, tick {instrument.tick_size}, {freeze}"
 
 
-def _instrument(contract: _Contract, plan: Any, first: dt.date, calendar: Any) -> Instrument:
+def _instrument(contract: Contract, plan: Any, first: dt.date, calendar: Any) -> Instrument:
     """The contract's instrument: as given, or from the reference tables as on `first`
     with its final last trading day (a tick chosen by a price slab is left None and
     resolved from the run's data, `_slab_ticks`)."""
@@ -336,8 +275,9 @@ def _instrument(contract: _Contract, plan: Any, first: dt.date, calendar: Any) -
 def _series(
     name: str, plan: Any, args: dict[str, Any], calendar: Any, rank: int, roll: int | None
 ) -> tuple[SeriesPlan, dict[str, str], bool]:
-    contracts = _contracts(name, plan, args["instrument"], calendar)
+    contracts = listed_contracts(name, plan, args["instrument"], calendar)
     chosen = _select(name, contracts, rank, roll, plan, calendar)
+    record_expiries(name, contracts, chosen, rank, roll, plan, calendar)
     windows = _windows(chosen, roll, plan)
     instruments, lines, from_tables = [], {}, False
     for (contract, _), (first, _) in zip(chosen, windows, strict=True):

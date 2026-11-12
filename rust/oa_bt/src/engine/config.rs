@@ -154,9 +154,16 @@ fn invalid(field: &'static str, reason: &str) -> KernelError {
     }
 }
 
-fn not_built(feature: &'static str) -> KernelError {
-    KernelError::NotBuilt { feature }
+fn not_built(feature: &'static str, instead: &'static str) -> KernelError {
+    KernelError::NotBuilt { feature, instead }
 }
+
+/// Strategy intervals longer than a day: what is not supported and what to do instead.
+/// The clock and the market data refuse them with the same words.
+pub(super) const PERIOD_INTERVALS: &str = "a strategy interval longer than a day (W, M, Q or Y)";
+pub(super) const PERIOD_INTERVALS_INSTEAD: &str =
+    "run the strategy on interval=\"D\" and read the longer bars with \
+     self.data[symbol, \"W\"] (or \"M\", \"Q\", \"Y\")";
 
 impl RunConfig {
     /// Check that the kernel can run this configuration as given.
@@ -174,7 +181,10 @@ impl RunConfig {
         }
         self.check_intervals()?;
         if self.fill == FillTiming::Close {
-            return Err(not_built("fill=\"close\""));
+            return Err(not_built(
+                "fill=\"close\"",
+                "use fill=\"next_open\" (the default): an order fills at the next bar's open",
+            ));
         }
         self.risk.validate()?;
         self.sizing.validate()?;
@@ -198,9 +208,9 @@ impl RunConfig {
                 "base",
                 "an intraday strategy needs an intraday base interval",
             )),
-            (_, StrategyInterval::Period(_)) => Err(not_built(
-                "weekly, monthly, quarterly and yearly strategy intervals",
-            )),
+            (_, StrategyInterval::Period(_)) => {
+                Err(not_built(PERIOD_INTERVALS, PERIOD_INTERVALS_INSTEAD))
+            }
             _ => Ok(()),
         }
     }

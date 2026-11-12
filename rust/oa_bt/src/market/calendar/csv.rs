@@ -98,7 +98,11 @@ pub(crate) fn read(
             continue;
         }
         if fields.len() != header.len() {
-            let problem = format!("{} fields, expected {}", fields.len(), header.len());
+            let problem = format!(
+                "{}, expected {}",
+                crate::model::counted(fields.len(), "field", "fields"),
+                header.len()
+            );
             return Err(fail(line, problem));
         }
         records.push(Record { line, fields });

@@ -251,18 +251,28 @@ class ReferenceTables:
         calendar: SessionCalendar,
         series: str = expiry.ALL_SERIES,
         as_of: DateLike | None = None,
+        record_use: bool = True,
     ) -> list[expiry.Expiry]:
         """Contracts whose last trading day falls from `start` to `end` inclusive.
 
         `as_of` is a trade date: the listed expiries and last trading days are those in
         force on it (None: the final ones). `series` is "all", "weekly" or "monthly".
-        See `expiry.expiry_schedule` for the rules and the errors raised.
+        `record_use=False` looks ahead without recording the rows as used or warning
+        about them. See `expiry.expiry_schedule` for the rules and the errors raised.
         """
         first, last = as_date(start, "start"), as_date(end, "end")
         trade_date = None if as_of is None else as_date(as_of, "as_of")
         exchange = derivative_exchange(exchange)
         return expiry.expiry_schedule(
-            self._store, underlying.upper(), exchange, first, last, calendar, series, trade_date
+            self._store,
+            underlying.upper(),
+            exchange,
+            first,
+            last,
+            calendar,
+            series,
+            trade_date,
+            record_use,
         )
 
     def expiries(

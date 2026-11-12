@@ -129,7 +129,7 @@ def test_duplicates_still_in_a_frame_are_found_without_a_normalisation_report():
     bars = canonical_frame(DAY_ROWS + [DAY_ROWS[0]])
     bars.attrs.update(symbol="X", exchange="NSE", interval="1m")
     issue = _issue(check_bars(bars.sort_values("ts_open"), calendar=CAL), "duplicate_timestamps")
-    assert issue.message == "1 duplicate timestamps: 1 still present"
+    assert issue.message == "1 duplicate timestamp: 1 still present"
 
 
 def test_missing_intraday_bars_are_a_warning_with_their_count():
@@ -242,7 +242,7 @@ def test_report_is_json_serialisable():
         "check": "non_positive_price",
         "severity": "error",
         "count": 1,
-        "message": "1 rows have a price that is zero or negative",
+        "message": "1 row has a price that is zero or negative",
         "examples": ["2024-01-01 09:22 IST"],
     }
 
@@ -263,7 +263,7 @@ def _load(frame, **options):
 
 def test_load_stops_on_an_error_severity_issue_and_carries_the_report():
     frame = ist_frame(_with(DAY_ROWS, 7, low=-1.0))
-    with pytest.raises(DataQualityError, match="1 rows have a price that is zero") as caught:
+    with pytest.raises(DataQualityError, match="1 row has a price that is zero") as caught:
         _load(frame)
     assert caught.value.report.count("non_positive_price") == 1
 
