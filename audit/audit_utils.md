@@ -18,7 +18,7 @@ _Date_: 2025-06-11 19:38 IST_
 ## Findings & Actions
 | Function | Status | Notes |
 |----------|--------|-------|
-| crossover / crossunder | OK | Boolean crossover detection matches vectorbt implementation; NaN-guarded. |
+| crossover / crossunder | OK | Boolean crossover detection matches an independent reference implementation; NaN-guarded. |
 | highest / lowest | OK | Sliding window max/min using `.max()` / `.min()`; error-free. |
 | change | OK | Simple diff over `length`; aligns with pandas `diff`. |
 | roc | OK | % change times 100; ignores divide-by-zero. |

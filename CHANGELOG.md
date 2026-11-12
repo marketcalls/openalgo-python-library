@@ -5,6 +5,28 @@ All notable changes to the OpenAlgo Python Library will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- The example, playground, audit, benchmark and test scripts no longer carry API key
+  literals. They read the key from the `OPENALGO_API_KEY` environment variable.
+
+### Changed
+
+- `closeposition()` and `cancelallorder()` are documented as what they are:
+  account-wide. The server squares off every open position, or cancels every open
+  order, of the account that owns the API key; the `strategy` argument is a label
+  and does not scope the call. Behaviour is unchanged, only the docstrings.
+- `history()`, `intervals()` and `depth()` docstrings now match what the server
+  accepts and returns: the exact set of intervals, the two shapes of a "no data"
+  reply, and the REST depth layout (`bids` and `asks` lists).
+- Sandbox order IDs are described correctly. They are plain numeric strings with no
+  `SB-` prefix, so the `"mode": "analyze"` field is the only reliable marker of a
+  simulated order.
+- Source comments, tests, audit notes and documentation describe this library in its
+  own terms and no longer name third-party engines or libraries used for comparison.
+
 ## [2.0.5] - 2026-09-11
 
 ### Fixed
