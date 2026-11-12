@@ -12,11 +12,15 @@
 //!   event, and no order event; a square-off or a roll emits only the position event.
 //! - Events are in order of occurrence: by slice, then step, then instrument in
 //!   registration order, then order id.
+//! - A change of the strategy's trading state (ACTIVE, REDUCING, HALTED) is an event of
+//!   its own, written right after the risk event that caused it, or in step 1 when a
+//!   session boundary ends REDUCING. Strategies receive it through `on_risk_event` as
+//!   `trading_state_changed`.
 
 use crate::exec::{InstrumentId, OrderId, RejectCode};
 use crate::model::{Product, TsNanos};
 use crate::portfolio::PositionChange;
-use crate::rms::RiskEvent;
+use crate::rms::{RiskEvent, TradingState, TradingStateCause};
 
 /// The eight steps of one time slice (03-architecture 4.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -119,6 +123,13 @@ pub enum Event {
         instrument: Option<InstrumentId>,
         event: RiskEvent,
     },
+    /// The strategy's trading state changed, and why.
+    TradingState {
+        stamp: EventStamp,
+        from: TradingState,
+        to: TradingState,
+        cause: TradingStateCause,
+    },
 }
 
 impl Event {
@@ -127,7 +138,8 @@ impl Event {
         match self {
             Event::Order { stamp, .. }
             | Event::Position { stamp, .. }
-            | Event::Risk { stamp, .. } => *stamp,
+            | Event::Risk { stamp, .. }
+            | Event::TradingState { stamp, .. } => *stamp,
         }
     }
 }

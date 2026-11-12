@@ -226,6 +226,9 @@ pub struct StrategyRiskConfig {
     pub drawdown_halt_percent: Option<f64>,
     /// Base bars after an exit before a new entry.
     pub cooldown_bars: Option<u32>,
+    /// Exit a position once it has been held this many base bars (`max_hold`, a
+    /// strategy-wide class attribute), reason `time_exit`.
+    pub max_hold_bars: Option<u32>,
     /// Round levels to the tick (engine default; `False` restores the live module).
     pub round_levels: bool,
     /// Configuration errors are raised rather than ignored (engine default).
@@ -244,6 +247,7 @@ impl Default for StrategyRiskConfig {
             max_positions: None,
             drawdown_halt_percent: None,
             cooldown_bars: None,
+            max_hold_bars: None,
             round_levels: true,
             strict_config: true,
             scale: ScaleLimits::default(),
@@ -252,23 +256,41 @@ impl Default for StrategyRiskConfig {
 }
 
 impl StrategyRiskConfig {
-    /// The rules that act on a run or a session rather than on one leg (steps 6 and
-    /// the pre-trade gates). Names of the ones that are set, for messages.
-    pub fn aggregate_rules_set(&self) -> Vec<&'static str> {
-        let mut set = Vec::new();
-        if self.max_daily_loss_rupees.is_some() {
-            set.push("max_daily_loss");
+    /// Check the strategy and session rules before the run starts.
+    ///
+    /// Errors: `InvalidRule` for a daily loss limit that is not a positive amount of
+    /// rupees, a drawdown halt that is not above 0 and below 100 percent, or a position
+    /// count, cooldown or holding time of zero bars.
+    pub fn validate(&self) -> Result<(), RmsError> {
+        let invalid = |rule: &'static str, reason: &str| RmsError::InvalidRule {
+            rule,
+            reason: reason.to_string(),
+        };
+        if let Some(limit) = self.max_daily_loss_rupees {
+            if !(limit.is_finite() && limit > 0.0) {
+                return Err(invalid(
+                    "max_daily_loss",
+                    "give a positive amount of rupees",
+                ));
+            }
         }
-        if self.max_positions.is_some() {
-            set.push("max_positions");
+        if let Some(percent) = self.drawdown_halt_percent {
+            if !(percent > 0.0 && percent < 100.0) {
+                return Err(invalid(
+                    "drawdown_halt",
+                    "give a percent above 0 and below 100",
+                ));
+            }
         }
-        if self.drawdown_halt_percent.is_some() {
-            set.push("drawdown_halt");
+        let counts = [
+            ("max_positions", self.max_positions),
+            ("cooldown", self.cooldown_bars),
+            ("max_hold", self.max_hold_bars),
+        ];
+        match counts.into_iter().find(|(_, count)| *count == Some(0)) {
+            Some((rule, _)) => Err(invalid(rule, "give at least 1, or None for no limit")),
+            None => Ok(()),
         }
-        if self.cooldown_bars.is_some() {
-            set.push("cooldown");
-        }
-        set
     }
 }
 

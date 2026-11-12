@@ -281,6 +281,7 @@ impl Engine {
             costs_rupees: 0.0,
         };
         self.record_fill(stamp, request.key, fill, &effect)?;
+        self.risk_after_fill(stamp, request.key, &fill, &effect);
         Ok(effect)
     }
 

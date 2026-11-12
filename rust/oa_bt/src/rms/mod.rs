@@ -11,26 +11,39 @@
 //! |---|---|
 //! | `rules` | `LegRules`, `Distance`, `TrailSpec`, `BreakevenSpec`, `StrategyRiskConfig`, scale-in limits |
 //! | `leg` | `LegState`: the levels in force on one leg and the calls each step makes |
-//! | `trading_state` | `TradingState` (ACTIVE, REDUCING, HALTED) and its transition table |
+//! | `trading_state` | `TradingState` (ACTIVE, REDUCING, HALTED), its transition table, and `TradingLock` (the state with its cause, the trading-state gate) |
+//! | `daily_loss` | `DailyLossMeasure`: the daily loss measure of SPEC-16, and the breach test |
+//! | `drawdown` | `DrawdownWatch`: peak equity and the drawdown halt's floor |
+//! | `entry_gates` | The cooldown and maximum-positions gates on new entries |
 //! | `vocabulary` | `ExitReason`, `RiskEventName`, `RiskScope`, `RiskEvent` |
 //! | `error` | `RmsError` |
 //!
-//! Not built yet: the leg rules themselves (`leg`), the aggregate rules of step 6
-//! (combined stop and target, lock profit, daily loss limit, drawdown halt) and the
-//! pre-entry gates. The engine refuses a run that asks for them with a typed
-//! not-implemented error instead of ignoring them.
+//! Built: the daily loss limit, the drawdown halt, the trading state and the entry
+//! gates (daily loss gate, halted, cooldown, maximum positions); the engine evaluates
+//! them in step 6 and at submission (`engine::aggregate`, `engine::entry_rules`). Not
+//! built yet: the leg rules themselves (`leg`) and the combined rules (combined stop
+//! and target, lock profit, Phase 3). The engine refuses a run that asks for them with
+//! a typed not-implemented error instead of ignoring them.
 
+pub mod daily_loss;
+pub mod drawdown;
+pub mod entry_gates;
 pub mod error;
 pub mod leg;
 pub mod rules;
 pub mod trading_state;
 pub mod vocabulary;
 
+pub use daily_loss::{is_breached, AccountTotals, DailyLossMeasure};
+pub use drawdown::{DrawdownBreach, DrawdownWatch};
+pub use entry_gates::{cooldown_gate, max_positions_gate};
 pub use error::RmsError;
 pub use leg::{BarPrices, LegContext, LegState, LevelHit, LevelKind};
 pub use rules::{
     AfterFirstTarget, AfterRiskExit, BreakevenSpec, Distance, LegRules, RiskBasis, ScaleLimits,
     StrategyRiskConfig, TargetSpec, TrailSpec,
 };
-pub use trading_state::{next_trading_state, TradingState, TradingStateCause};
+pub use trading_state::{
+    next_trading_state, StateChange, TradingLock, TradingState, TradingStateCause,
+};
 pub use vocabulary::{ExitReason, RiskEvent, RiskEventName, RiskScope};

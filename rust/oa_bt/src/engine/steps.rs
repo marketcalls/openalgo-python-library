@@ -23,12 +23,12 @@ impl Engine {
         // Step 1: session open and reference events. The session's intraday times are
         // resolved on first use (`session_times`); no reference event (lot-size change,
         // roll) can be configured yet.
+        self.risk_session_open(slice);
         self.step_open_fills(slice)?;
         self.step_levels(slice)?;
         self.step_ratchets(slice)?;
         self.step_mark(slice);
-        // Step 6: no aggregate rule can be configured yet (`RunConfig::validate`).
-        Ok(())
+        self.step_aggregate_rules(slice)
     }
 
     /// Step 2: queued orders fill at the open; then the square-off timer.
@@ -38,9 +38,11 @@ impl Engine {
             let Some(bar) = self.market.bar(instrument, slice.index) else {
                 continue;
             };
+            self.risk_exits_at_open(slice, instrument, bar.open)?;
             for id in self.book.queued_for(instrument) {
                 self.fill_queued(slice, id, bar.open)?;
             }
+            self.time_exit_at_open(slice, instrument, bar.open)?;
             self.square_off_at_open(slice, instrument, bar.open)?;
         }
         Ok(())
@@ -129,6 +131,7 @@ impl Engine {
     pub(super) fn close_slice(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         if slice.closes_session {
             self.expire_day_orders(slice)?;
+            self.risk_exits_at_session_close(slice)?;
             self.close_intraday_positions(slice)?;
         }
         self.record_levels(slice);
