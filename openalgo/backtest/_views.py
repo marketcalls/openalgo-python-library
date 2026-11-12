@@ -11,6 +11,13 @@ and `~`; `.shift(n)`, `.rolling_max(n)` and `.rolling_min(n)` look back `n` bars
 make the condition grammar of 14-strategy-api 4.2 (`_conditions`). A view of booleans
 is true when its latest value is (false before any bar); a numeric view has no truth
 value, so `if view:` is an error that points to `view[-1]`.
+
+While the strategy's `init` declares it, no view has a truth value: `and`, `or`, `not`,
+`if` and a chained comparison such as `a < b < c` need one true or false, a condition
+over the whole run has none, and reading "false, no bar has closed" would quietly drop
+part of a condition (`a and b` would become `a`). A truth test then raises ConfigError
+saying to combine conditions with `&`, `|` and `~`. The run context marks the phase on
+its stores (`declaring`, see `Store`), so the rule needs no state of its own.
 """
 
 from __future__ import annotations
@@ -26,7 +33,11 @@ from .errors import ConfigError
 
 
 class Store(Protocol):
-    """What a view needs from the bars it is aligned to."""
+    """What a view needs from the bars it is aligned to.
+
+    A store of a run also carries `declaring`, true while the strategy's `init` runs
+    (`_context.RunContext` sets it on every store it makes); a store without it, such as
+    one built outside a run, is never declaring."""
 
     symbol: str
     interval: str
@@ -38,6 +49,17 @@ class Store(Protocol):
     def times(self) -> pd.DatetimeIndex:
         """IST open of every bar of the run."""
         ...
+
+
+def _truth_in_init(label: str) -> str:
+    """The error for a truth test of a view while `init` declares the strategy."""
+    return (
+        f"{label} was tested for truth in init: and, or, not, if and a chained comparison "
+        "such as a < b < c need one true or false, and a condition over the whole run has "
+        "none, so part of the condition would be lost: combine conditions with & (and), "
+        "| (or) and ~ (not), each comparison in brackets: "
+        "(fast > slow) & (close > ema); write a < b < c as (a < b) & (b < c)"
+    )
 
 
 def _bar_count(value: Any, what: str, minimum: int = 1) -> int:
@@ -241,6 +263,8 @@ class TimelineView:
         return TimelineView(self._store, values, f"{self._label}.{name}({count})")
 
     def __bool__(self) -> bool:
+        if getattr(self._store, "declaring", False):
+            raise ConfigError(_truth_in_init(self._label))
         if self._values.dtype != np.bool_:
             raise TypeError(
                 f"{self._label} is a series of numbers: use {self._label}[-1] for the latest value"

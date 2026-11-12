@@ -24,6 +24,10 @@ indexed by IST bar open (columns open, high, low, close, volume) and returns
 Before the run the function is checked for look-ahead (03-architecture 5): it is run
 again on the bars cut at fixed points, and every value up to a cut must be the same as
 on the whole series. A function that reads later bars stops the run with ConfigError.
+
+The classes are built at run time, so no module defines them and a spawned worker
+process cannot import one: `made_by` names the function that built a class (or a class
+it derives from), and `bt.optimize` sweeps such a strategy in its own process.
 """
 
 from __future__ import annotations
@@ -44,9 +48,19 @@ OUTPUT_NAMES = ("entries", "exits", "shorts", "covers")
 # run is reproducible. A cut needs at least MIN_CUT_BARS bars before it.
 CUT_FRACTIONS = (0.25, 0.5, 0.75)
 MIN_CUT_BARS = 2
+# The class attribute naming the function that built a strategy class here (private, so
+# `Strategy.parameters` does not take it for a parameter).
+MADE_BY = "_made_by"
+
+
+def made_by(strategy: type) -> str | None:
+    """The function that built `strategy` or a class it derives from, "bt.from_arrays"
+    or "bt.from_signals"; None for any other strategy class."""
+    return getattr(strategy, MADE_BY, None)
 
 
 def _class(
+    maker: str,
     name: str,
     symbol: str,
     exchange: str,
@@ -62,6 +76,7 @@ def _class(
         "pyramiding": pyramiding,
         "product": product,
         "init": init,
+        MADE_BY: maker,
         "__doc__": f"A condition strategy on {symbol} ({exchange}, {interval}) from {name}.",
     }
     return type(name, (Strategy,), attributes)
@@ -102,7 +117,8 @@ def from_arrays(
     def init(self: Strategy) -> None:
         _declare(self, arrays, order_args)
 
-    return _class("FromArrays", symbol, exchange, interval, (pyramiding, product), init)
+    settings = (pyramiding, product)
+    return _class("bt.from_arrays", "FromArrays", symbol, exchange, interval, settings, init)
 
 
 def from_signals(
@@ -131,7 +147,8 @@ def from_signals(
         _declare(self, arrays, order_args)
 
     name = f"FromSignals_{getattr(func, '__name__', 'function')}"
-    return _class(name, symbol, exchange, interval, (pyramiding, product), init)
+    settings = (pyramiding, product)
+    return _class("bt.from_signals", name, symbol, exchange, interval, settings, init)
 
 
 def _signals(func: Callable[..., Any], frame: pd.DataFrame) -> tuple[Any, ...]:
@@ -173,4 +190,4 @@ def _check_causal(func: Callable[..., Any], frame: pd.DataFrame, arrays: tuple) 
                 )
 
 
-__all__ = ["from_arrays", "from_signals"]
+__all__ = ["from_arrays", "from_signals", "made_by"]

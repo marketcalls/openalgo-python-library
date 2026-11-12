@@ -6,9 +6,11 @@ with the highest objective (the lowest with `maximize=False`); a tie goes to the
 in grid order and a NaN objective is never best. `.select(**params)` runs one
 combination again in this process and returns its full `Result`, bit for bit what the
 sweep computed. `.heatmap(x, y)` is the objective over two parameters with the others
-held at their best values. `.path` names the evaluation path that ran ("event": the
-strategy's `on_bar` in Python) and `.plan` is the line reported before the sweep
-started, with its duration estimate.
+held at their best values. `.path` names the evaluation path that ran (03-architecture
+5): "event" for a strategy whose `on_bar`, timers or callbacks run in Python at every
+decision, "conditions" for one that declared `entry_when` and the like (or was made by
+`bt.from_arrays` or `bt.from_signals`), whose bars run in the Rust signal driver.
+`.plan` is the line reported before the sweep started, with its duration estimate.
 """
 
 from __future__ import annotations
@@ -51,7 +53,7 @@ class OptimizeResult:
 
     @property
     def path(self) -> str:
-        """The evaluation path that ran: "event"."""
+        """The evaluation path that ran: "event" or "conditions"."""
         return self._path
 
     @property

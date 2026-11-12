@@ -6,7 +6,9 @@ objective function) therefore reach a worker by module and name, so they must be
 importable from a module. A class defined in a notebook, an interactive session or
 inside a function is not; it is sent by value with cloudpickle when cloudpickle is
 already installed, and otherwise the sweep stops with a ConfigError that says what to
-do. Nothing is installed or imported speculatively.
+do. Nothing is installed or imported speculatively. A strategy built at run time by
+`bt.from_arrays` or `bt.from_signals` is never sent: `bt.optimize` sweeps it in its own
+process.
 
 The combinations are split into one contiguous chunk per worker, in grid order, and the
 rows come back in that order, so a sweep's table does not depend on the number of
@@ -19,6 +21,7 @@ import importlib.util
 import multiprocessing
 import pickle
 import sys
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from typing import Any
@@ -87,11 +90,14 @@ def run_combinations(
     arguments: dict[str, Any],
     combinations: list[dict[str, Any]],
     checks: IndicatorChecks,
+    on_path: Callable[[str], Any] | None = None,
 ) -> list[dict[str, float]]:
-    """The objective and key metrics of each combination, in order."""
+    """The objective and key metrics of each combination, in order; `on_path` is told
+    the evaluation path of each run (see `_pipeline.execute`)."""
     rows = []
     for params in combinations:
-        result = execute(strategy, prepared, {**arguments, "params": params}, checks=checks)
+        settings = {**arguments, "params": params}
+        result = execute(strategy, prepared, settings, checks=checks, on_path=on_path)
         rows.append(evaluate(result, objective))
     return rows
 

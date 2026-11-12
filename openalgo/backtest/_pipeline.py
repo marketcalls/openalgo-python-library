@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import dataclasses
 import pickle
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -29,7 +30,7 @@ import pandas as pd
 from . import calendar as calendar_module
 from ._base_interval import choose_base, meaning
 from ._causality_checks import IndicatorChecks
-from ._conditions import drive_conditions, has_conditions
+from ._conditions import drive_conditions, evaluation_path, has_conditions
 from ._context import RunContext, RunData
 from ._driver import drive
 from ._engine import build_engine, call
@@ -193,10 +194,13 @@ def execute(
     args: dict[str, Any],
     checks: IndicatorChecks | None = None,
     record: Any = None,
+    on_path: Callable[[str], Any] | None = None,
 ) -> Result:
     """Run `strategy` on a prepared run with the parameter values of `args["params"]`.
     `checks` carries indicator checks already done (a sweep); `record` lets the result
-    rerun itself. Raises the kernel's and the strategy's errors unchanged."""
+    rerun itself; `on_path`, when given, is told the evaluation path the run took
+    (`_conditions.evaluation_path`). Raises the kernel's and the strategy's errors
+    unchanged."""
     plan = prepared.plan
     calendar = prepared.session_calendar()
     checks = checks or IndicatorChecks(strategy_source_hash(strategy) or strategy.__qualname__)
@@ -213,6 +217,8 @@ def execute(
         drive_conditions(instance, engine)
     else:
         drive(instance, engine, context)
+    if on_path is not None:
+        on_path(evaluation_path(instance))
     timer_warnings = context.timers.warnings()
     output = call(engine.finish)
     context.close(output["orders"])
