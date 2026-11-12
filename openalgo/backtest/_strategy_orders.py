@@ -86,7 +86,7 @@ class OrderMethods:
     def _open(self, side: str, **args: Any) -> Order | None:
         ctx = self._ctx
         instrument = ctx.instrument_index(args["symbol"])
-        store = ctx.stores[ctx.symbol_of(instrument)]
+        store = ctx.sizing_store(instrument)
         rules = _orders.leg_rules(
             args["stop"],
             args["target"],

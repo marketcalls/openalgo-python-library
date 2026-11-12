@@ -18,6 +18,7 @@ use super::clock::{SliceInfo, Timeline};
 use super::config::{RunConfig, RunSetup};
 use super::error::KernelError;
 use super::event::{Event, EventStamp, Step};
+use super::futures::FuturesDesk;
 use super::gtt::GttDesk;
 use super::market_data::MarketData;
 use super::output::{FinalPosition, GrossPnl, Recorder, RunOutput};
@@ -85,6 +86,8 @@ pub struct Engine {
     pub(super) gtts: GttDesk,
     /// Timers registered with `add_timer`.
     pub(super) timers: TimerBook,
+    /// Futures series, their switches and the settlement postings.
+    pub(super) futures: FuturesDesk,
 }
 
 /// The one exchange of a Phase 1 run.
@@ -153,6 +156,7 @@ impl Engine {
             record: Recorder::default(),
             session: None,
             timers: TimerBook::default(),
+            futures: FuturesDesk::default(),
         })
     }
 
@@ -317,6 +321,7 @@ impl Engine {
             events: self.record.events,
             stale_marks: self.record.stale_marks,
             charges: self.charges.into_output(),
+            futures: self.futures.into_output(),
             final_positions,
             gross_pnl: GrossPnl {
                 realized_rupees: realized,

@@ -6,8 +6,9 @@
 //! dated default table `margin_defaults.csv` (`margin_table`): delivery equity 100
 //! percent of value, intraday equity value / leverage with leverage only when the
 //! strategy asks for it (at most 5x), long options the premium, and futures a percent
-//! of contract value per underlying. Zero defaults are forbidden: a position for which
-//! no row exists is an error, never free. Short options are Phase 3.
+//! of contract value per underlying (NSE index and stock futures, BSE BANKEX, MCX
+//! commodities). Zero defaults are forbidden: a position for which no row exists is an
+//! error, never free. Short options are Phase 3.
 
 use std::fmt;
 
@@ -159,7 +160,8 @@ fn missing_row(request: &MarginRequest<'_>) -> MarginError {
     if request.kind == InstrumentKind::Future {
         return not_built(
             "the default margin of futures whose underlying has no row in the dated margin \
-             table (it holds the NSE index futures; stock, BSE and MCX futures are not in it)",
+             table (it holds NSE index and stock futures, BSE BANKEX and MCX commodities; \
+             SENSEX and SENSEX50 futures are not in it)",
         );
     }
     invalid(format!(
@@ -297,8 +299,8 @@ mod tests {
 
     #[test]
     fn futures_without_a_row_are_not_free() {
-        let stock = future("SBIN", 750.0, 800.0);
-        let result = MarginModel.initial_margin(&stock);
+        let sensex = future("SENSEX", 20.0, 80_000.0);
+        let result = MarginModel.initial_margin(&sensex);
         assert!(matches!(result, Err(MarginError::NotBuilt { .. })));
     }
 

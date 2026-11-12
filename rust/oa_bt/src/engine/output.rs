@@ -16,13 +16,13 @@
 //! slice, after its session-close step.
 
 use crate::charges::ChargesOutput;
-use crate::exec::{Fill, InstrumentId, InstrumentSpec, Order};
+use crate::exec::{Fill, FillReason, InstrumentId, InstrumentSpec, Order};
 use crate::model::{Day, Product, Side, TsNanos};
 use crate::portfolio::{FillEffect, FillKind, PositionChange, PositionKey};
 use crate::rms::leg::{BreakevenState, LevelInForce, TargetLevel, TrailState};
-use crate::rms::ExitReason;
 
 use super::event::{Event, EventStamp};
+use super::futures::FuturesOutput;
 
 /// A fill and when it happened.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -115,8 +115,9 @@ pub struct TradeRecord {
     pub costs_rupees: f64,
     /// Gross P&L less charges.
     pub net_pnl_rupees: f64,
-    /// The reason of the closing fill.
-    pub exit_reason: ExitReason,
+    /// The reason of the closing fill: an exit reason, or `roll` for a futures
+    /// contract closed by a roll (the position goes on in the next contract's trade).
+    pub exit_reason: FillReason,
     /// Number of fills.
     pub fills: u32,
 }
@@ -159,6 +160,8 @@ pub struct RunOutput {
     pub stale_marks: Vec<StaleMark>,
     /// Charges per fill, contract notes and the dated market-table rows used.
     pub charges: ChargesOutput,
+    /// Futures switches and the settlement postings (`futures`, `settlement`).
+    pub futures: FuturesOutput,
     pub final_positions: Vec<FinalPosition>,
     pub gross_pnl: GrossPnl,
 }
@@ -229,15 +232,11 @@ impl TradeBook {
         trade.max_units = trade.max_units.max(effect.quantity_after.abs());
         if effect.change == PositionChange::Closed {
             let done = self.open.remove(index);
-            let reason = match fill.reason {
-                crate::exec::FillReason::Exit(reason) => reason,
-                _ => ExitReason::Signal,
-            };
-            self.close(done, record.stamp, reason);
+            self.close(done, record.stamp, fill.reason);
         }
     }
 
-    fn close(&mut self, trade: OpenTrade, stamp: EventStamp, reason: ExitReason) {
+    fn close(&mut self, trade: OpenTrade, stamp: EventStamp, reason: FillReason) {
         let average = |value: f64, units: f64| if units > 0.0 { value / units } else { 0.0 };
         self.closed.push(TradeRecord {
             number: self.closed.len() as u32 + 1,

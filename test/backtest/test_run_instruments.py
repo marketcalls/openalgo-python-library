@@ -68,6 +68,10 @@ def test_a_future_takes_its_terms_from_the_reference_tables():
     assert version.startswith("builtin:")
 
 
-def test_a_tick_by_price_slab_asks_for_an_instrument():
-    with pytest.raises(ConfigError, match="tick size depends on a price slab"):
-        resolve_instruments(plan("NIFTY31JUL25FUT", dt.date(2025, 7, 1)), None, default_calendar())
+def test_a_tick_by_price_slab_is_left_for_the_runs_data():
+    # From 2025-04-15 the NIFTY futures tick follows a price slab; the tables cannot
+    # choose it, so it is resolved later from the data (`_slab_ticks`).
+    instruments, _, _ = resolve_instruments(
+        plan("NIFTY31JUL25FUT", dt.date(2025, 7, 1)), None, default_calendar()
+    )
+    assert instruments[0].tick_size is None

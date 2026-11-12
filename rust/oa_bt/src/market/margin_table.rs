@@ -185,11 +185,13 @@ mod tests {
     #[test]
     fn the_built_in_table_parses() {
         let rows = margin_defaults().map_err(|e| e.to_string());
-        assert_eq!(rows.map(|r| r.len()), Ok(9));
+        // 4 equity and option rows, 5 NSE index futures, NIFTYFPI, 218 NSE stock
+        // futures, 30 MCX futures and BANKEX.
+        assert_eq!(rows.map(|r| r.len()), Ok(259));
     }
 
     #[test]
-    fn index_futures_rows_are_one_day_observations_and_unverified() {
+    fn futures_rows_are_one_day_observations_and_unverified() {
         for row in margin_defaults().unwrap_or_default() {
             if row.kind == InstrumentKind::Future {
                 assert_eq!(row.meta.status, RowStatus::Unverified, "{}", row.meta.id);
@@ -201,12 +203,12 @@ mod tests {
     fn a_row_for_one_underlying_does_not_price_another() {
         let day = days_from_civil(2025, 7, 1);
         let nifty = margin_row(InstrumentKind::Future, Product::Nrml, Some("nifty"), day);
-        let stock = margin_row(InstrumentKind::Future, Product::Nrml, Some("SBIN"), day);
+        let sensex = margin_row(InstrumentKind::Future, Product::Nrml, Some("SENSEX"), day);
         assert_eq!(
             nifty.map(|r| r.map(|r| r.meta.id.as_str())),
             Ok(Some("FUT_NIFTY/1"))
         );
-        assert_eq!(stock.map(|r| r.is_none()), Ok(true));
+        assert_eq!(sensex.map(|r| r.is_none()), Ok(true));
     }
 
     #[test]

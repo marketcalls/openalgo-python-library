@@ -7,6 +7,11 @@ condition arrays the `entry_when`, `exit_when`, `short_when` and `cover_when` of
 condition strategy ("conditions" form, run by the Rust signal driver). The result is then
 written with the keys and units of the case's `expected` section.
 
+A rolled futures case (`settings.roll`) runs as the frozen contract has it: the strategy
+names the underlying and the contract rank (its class attributes), the fixture's contracts
+are given as `instrument=` with their expiry and underlying, and `roll=` is the case's
+`sessions_before_expiry`. The contracts the run registered must be the case's `chain`.
+
 A case that needs a part of the kernel that is not built yet is skipped with a reason
 that names the part (`unsupported_reason`), so the trace suite reports exactly which
 cases the kernel runs. Only test code lives here; nothing of it ships in the package.
@@ -53,9 +58,6 @@ FORWARDED_SETTINGS = (
 def unsupported_reason(case: Case, form: str) -> str | None:
     """Why the kernel cannot run this case yet, or None when it can. The conditions form
     runs the same order arguments as the script, so one check covers both forms."""
-    settings = case["settings"]
-    if settings["roll"] is not None:
-        return "the futures roll"
     if len({instrument["exchange"] for instrument in case["instruments"]}) != 1:
         return "runs across exchanges"
     for decision in case["strategy"]["decisions"]:
@@ -112,6 +114,10 @@ def _instruments(case: Case) -> dict[str, Instrument]:
             kind=row["type"],
             lot_size=row["lot_size_units"],
             tick_size=row["tick_size_rupees"],
+            expiry=None
+            if row["expiry_date"] is None
+            else dt.date.fromisoformat(row["expiry_date"]),
+            underlying=row["underlying"],
         )
         for row in case["instruments"]
     }
@@ -209,9 +215,21 @@ def run_trace_case(case: Case, strategy_form: str) -> dict[str, Any]:
         costs=settings["costs"],
         slippage=settings["slippage"],
         product=product,
+        roll=None if settings["roll"] is None else settings["roll"]["sessions_before_expiry"],
         **{name: settings[name] for name in FORWARDED_SETTINGS},
     )
+    _check_chain(case, result)
     return translate(case, result, log)
+
+
+def _check_chain(case: Case, result: Any) -> None:
+    """A rolled case must have registered exactly the contracts of its chain, in order."""
+    roll = case["settings"]["roll"]
+    if roll is None:
+        return
+    registered = [row["symbol"] for row in result.manifest["instruments"]]
+    if registered != roll["chain"]:
+        raise AssertionError(f"{case['id']}: the run traded {registered}, not {roll['chain']}")
 
 
 def translate(case: Case, result: Any, log: dict[str, Any]) -> dict[str, Any]:

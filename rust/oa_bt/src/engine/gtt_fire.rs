@@ -77,17 +77,20 @@ impl Engine {
                 continue;
             };
             for id in self.gtts.book.active_for(instrument) {
-                self.test_gtt(slice, id, &bar)?;
+                self.test_gtt(slice, id, &bar, Step::Levels)?;
             }
         }
         Ok(())
     }
 
-    fn test_gtt(
+    /// Test one GTT against a bar, its events stamped with `step` (3; a futures roll
+    /// fires a trigger crossed at the near contract's open in step 2, GTT-9).
+    pub(super) fn test_gtt(
         &mut self,
         slice: &SliceInfo,
         id: GttId,
         bar: &BarPrices,
+        step: Step,
     ) -> Result<(), KernelError> {
         let Some(gtt) = self.gtts.book.get(id).cloned() else {
             return Ok(());
@@ -98,7 +101,7 @@ impl Engine {
         let Some((leg, fired)) = fired_leg(&gtt, bar) else {
             return Ok(());
         };
-        let stamp = Self::stamp(slice, Step::Levels);
+        let stamp = Self::stamp(slice, step);
         let key = PositionKey {
             instrument: gtt.instrument,
             product: gtt.product,

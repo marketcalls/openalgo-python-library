@@ -24,8 +24,9 @@ impl Engine {
     /// `advance`.
     pub(super) fn open_slice(&mut self, slice: &SliceInfo) -> Result<Option<Pause>, KernelError> {
         // Step 1: session open and reference events. The session's intraday times are
-        // resolved on first use (`session_times`); no reference event (lot-size change,
-        // roll) can be configured yet.
+        // resolved on first use (`session_times`); a futures roll is planned before the
+        // run (`futures`) and fills in step 2; no lot-size change event can be
+        // configured yet.
         self.risk_session_open(slice);
         self.renew_old_gtts(slice)?;
         if let Some(pause) = self.timers_pause(slice) {
@@ -47,7 +48,8 @@ impl Engine {
         self.step_aggregate_rules(slice)
     }
 
-    /// Step 2: queued orders fill at the open; then the square-off timer.
+    /// Step 2: queued orders fill at the open; then the square-off timer; then the
+    /// futures rolls due at this open (`roll`).
     fn step_open_fills(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         for index in 0..self.instruments.len() {
             let instrument = InstrumentId(index as u32);
@@ -62,7 +64,7 @@ impl Engine {
             self.time_exit_at_open(slice, instrument, bar.open)?;
             self.square_off_at_open(slice, instrument, bar.open)?;
         }
-        Ok(())
+        self.roll_due_futures(slice)
     }
 
     /// Step 3: engine-held leg levels (`legs::test_leg_levels`), then GTTs
@@ -132,12 +134,14 @@ impl Engine {
     }
 
     /// Step 8 when the session ends at this slice (expiry of DAY orders, the `eod`
-    /// close, the day's contract notes), then the end-of-slice records.
+    /// close, futures expiry and mark to market (`settlement`), the day's contract
+    /// notes), then the end-of-slice records.
     pub(super) fn close_slice(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         if slice.closes_session {
             self.expire_day_orders(slice)?;
             self.risk_exits_at_session_close(slice)?;
             self.close_intraday_positions(slice)?;
+            self.settle_futures(slice)?;
             self.settle_contract_notes(slice);
         }
         self.record_levels(slice);

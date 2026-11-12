@@ -116,10 +116,12 @@ impl Engine {
     }
 
     /// Charge a fill and post its cost to the ledger; returns the fill's cost in rupees
-    /// (0 when the run is cost-free). Call it before the fill is recorded.
+    /// (0 when the run is cost-free). A CNC sale of a scrip bought the same day (or a
+    /// buy back of one sold) also carries the new charges of the earlier fill it turned
+    /// into intraday (`charges::same_day`). Call it before the fill is recorded.
     ///
     /// Errors: `InvalidConfig` (field `costs`) when the cost model cannot price the
-    /// fill; `NotBuilt` for a delivery round trip within one day.
+    /// fill.
     pub(super) fn charge_fill(
         &mut self,
         key: PositionKey,
@@ -153,6 +155,16 @@ impl Engine {
         let rupees = self.charges.charge(model, &fill).map_err(charge_error)?;
         self.portfolio.account.post_costs(rupees);
         Ok(rupees)
+    }
+
+    /// A fill that is not a trade (a futures position settled at expiry): it costs
+    /// nothing, but it ends its round trip in the charge book too, so the charges keep
+    /// the trade numbers of the trades table. Returns its cost, 0.
+    pub(super) fn uncharged_fill(&mut self, key: PositionKey, effect: FillEffect) -> f64 {
+        if matches!(self.config.costs, CostConfig::Model(_)) {
+            self.charges.note_uncharged(key, effect);
+        }
+        0.0
     }
 
     /// Step 8: settle the day's contract notes, posting each note's rounding

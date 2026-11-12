@@ -18,20 +18,22 @@
 //!
 //! A delivery (CNC) sell from holdings also pays the DP charge, once per scrip per sell
 //! day; it is not on the contract note. A CNC buy and sell of the same scrip on one day
-//! is charged as intraday by brokers (04-execution 2); that reclassification is not
-//! built yet and such a sell stops the run with `NotBuilt` rather than being charged as
-//! delivery.
+//! is charged as intraday with no DP charge (04-execution 2): the units a CNC fill
+//! matches against the day's fills on the other side are charged at the intraday rates,
+//! and the earlier fills it matched are charged again (`same_day`).
 //!
 //! | Module | Responsibility |
 //! |---|---|
 //! | `book` | `ChargeBook`: the run's charge state, per-fill charging, trade numbers |
 //! | `notes` | Contract-note settlement at the session close |
+//! | `same_day` | CNC fills of one scrip bought and sold on one day, charged as intraday |
 //! | `estimate` | Cost estimates for sizers |
 //! | `usage` | `TableUse`: dated table rows a run used |
 
 mod book;
 mod estimate;
 mod notes;
+mod same_day;
 mod usage;
 
 #[cfg(test)]

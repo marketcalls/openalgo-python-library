@@ -11,20 +11,24 @@
 //! (row_id, kind, product, underlying, valid_from, valid_to, model, percent, source,
 //! status, notes), with dates as IST days since 1970-01-01 or None.
 
-use oa_bt::engine::CostConfig;
+use oa_bt::engine::{CostConfig, KernelError};
 use oa_bt::market::facts::{InstrumentMarket, MarketFacts};
-use oa_bt::market::margin::{margin_defaults as margin_rows, MarginBasis, MarginError};
+use oa_bt::market::margin::{
+    margin_defaults as margin_rows, MarginBasis, MarginError, MarginModel, MarginRequest,
+};
 use oa_bt::market::slippage::{
     slippage_defaults as slippage_rows, SlippageClass, SlippageError, SlippageSpec,
 };
 use oa_bt::market::table_rows::RowMeta;
+use oa_bt::model::{InstrumentKind, Product, Side};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+use super::super::calendar::{parse_exchange, PyDay};
 use super::super::costs::PyCostModel;
 use super::setup::{optional, slippage, unknown};
-use super::NativeEngineInputError;
+use super::{engine_error, NativeEngineInputError};
 
 /// (row_id, valid_from, valid_to, source, status, notes) of a row.
 type MetaParts = (
@@ -172,8 +176,44 @@ fn margin_defaults() -> PyResult<Vec<MarginRowTuple>> {
         .collect())
 }
 
+/// The id of the margin row that prices opening a long position of `kind` ("EQ",
+/// "FUT", "OPT") in `product` on the IST day `day` (days since 1970-01-01) on
+/// `underlying` (None when it has none), so a run can check before loading any data that
+/// every instrument it trades has a margin. Raises what the engine raises at the fill:
+/// NotImplementedError for a futures underlying with no row, NativeEngineInputError for
+/// a kind and product with no rule.
+#[pyfunction]
+#[pyo3(signature = (exchange, kind, product, day, underlying))]
+fn margin_check(
+    exchange: &str,
+    kind: &str,
+    product: &str,
+    day: PyDay,
+    underlying: Option<String>,
+) -> PyResult<String> {
+    let request = MarginRequest {
+        exchange: parse_exchange(exchange)?,
+        kind: InstrumentKind::from_code(kind)
+            .ok_or_else(|| unknown("instrument kind", kind, "EQ, FUT or OPT"))?,
+        product: Product::from_code(product)
+            .ok_or_else(|| unknown("product", product, "CNC, MIS or NRML"))?,
+        side: Side::Buy,
+        quantity_units: 1.0,
+        price_rupees: 1.0,
+        multiplier: 1.0,
+        leverage: 1.0,
+        day: day.0,
+        underlying: underlying.as_deref(),
+    };
+    let quote = MarginModel
+        .initial_margin(&request)
+        .map_err(|error| engine_error(KernelError::Margin(error)))?;
+    Ok(quote.row.meta.id.clone())
+}
+
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(slippage_defaults, m)?)?;
     m.add_function(wrap_pyfunction!(margin_defaults, m)?)?;
+    m.add_function(wrap_pyfunction!(margin_check, m)?)?;
     Ok(())
 }

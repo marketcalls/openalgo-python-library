@@ -24,6 +24,7 @@ import pandas as pd
 
 from . import slippage as slippage_module
 from ._calendar_convert import interval_nanos, to_day, to_seconds
+from ._futures import check_roll
 from ._layout import NANOS_PER_SECOND, parse_interval
 from ._series import IST
 from .errors import ConfigError
@@ -73,6 +74,8 @@ class RunPlan:
     entry_until: str | None
     square_off: str | None
     warnings: tuple[str, ...]
+    # Sessions before expiry at which a future rolls, or None to settle at expiry.
+    roll: int | None = 1
 
     def native_config(self, deliver_events: bool) -> dict[str, Any]:
         """The config dict of the native engine."""
@@ -244,8 +247,6 @@ def resolve(strategy: type, args: dict[str, Any]) -> RunPlan:
     """The plan of a run of `strategy` with the run arguments `args` (the keyword
     arguments of `bt.backtest`). Raises ConfigError for unusable values and
     NotImplementedError for settings of later work."""
-    if args["roll"] is not None:
-        raise NotImplementedError("futures roll is not implemented yet (Phase 1 work in progress)")
     symbols = strategy.traded_symbols()
     if not strategy.exchange or not strategy.interval:
         raise ConfigError(f"{strategy.__name__}: set exchange and interval on the class")
@@ -283,6 +284,7 @@ def resolve(strategy: type, args: dict[str, Any]) -> RunPlan:
         entry_until=overrides["entry_until"],
         square_off=overrides["square_off"],
         warnings=tuple(warnings),
+        roll=check_roll(args["roll"]),
     )
 
 

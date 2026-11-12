@@ -53,7 +53,7 @@ def deliver(strategy: Any, ctx: RunContext, events: list[dict]) -> None:
 def drive(strategy: Any, engine: Any, ctx: RunContext) -> None:
     """Run the strategy to the end of the grid. Errors of the kernel and of the strategy
     propagate unchanged (a strategy exception stops the run)."""
-    single = strategy.symbol is not None
+    single = strategy.symbol is not None or strategy.underlying is not None
     while True:
         pause = call(engine.advance)
         if pause["kind"] == "timers":
