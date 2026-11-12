@@ -4,10 +4,75 @@ A Python library for algorithmic trading using OpenAlgo's REST APIs and WebSocke
 
 - Python Library Docs: https://docs.openalgo.in/trading-platform/python
 - Technical Indicators (100+): https://docs.openalgo.in/trading-platform/python/indicators
+- Backtesting: https://docs.openalgo.in/trading-platform/python/backtesting
 - WebSocket & Verbose Control: https://docs.openalgo.in/trading-platform/python/websockets-verbose-control
 - API Reference: https://docs.openalgo.in/api-documentation/v1
 - General Documentation: https://docs.openalgo.in
 - Source: https://github.com/marketcalls/openalgo-python-library
+
+## What's New in 2.1.0
+
+**A backtesting engine for Indian markets (preview).** `openalgo.backtest` runs a
+strategy through an event-driven kernel written in Rust, with Indian market rules
+applied without being asked for: exchange charges and taxes, slippage, lot size, tick
+size, freeze quantity, session times and MIS square-off.
+
+```python
+import openalgo.backtest as bt
+from openalgo import api, ta
+
+client = api(api_key="your_api_key", host="http://127.0.0.1:5000")
+
+
+class EmaCross(bt.Strategy):
+    symbol, exchange, interval = "SBIN", "NSE", "D"
+
+    def init(self):
+        self.fast = self.I(ta.ema, self.close, 5)
+        self.slow = self.I(ta.ema, self.close, 20)
+
+    def on_bar(self, bar):
+        if self.position.is_flat and self.fast.crossed_above(self.slow):
+            self.buy()
+        elif self.position.is_long and self.fast.crossed_below(self.slow):
+            self.exit()
+
+
+result = bt.backtest(EmaCross, client, start="2025-01-01", end="2025-12-31", capital=100_000)
+print(result)
+print(result.metrics["net_profit"], result.metrics["max_drawdown"])
+```
+
+- **Strategies** as a class with `on_bar`, as entry and exit conditions, or as arrays;
+  `bt.optimize` runs parameter sweeps in parallel.
+- **Orders and risk:** market, limit and stop orders, GTT (SINGLE and OCO) for
+  positional trades, stops, targets and trailing stops per leg, daily loss limit,
+  drawdown halt, cooldown, time exit, scale-in limits, `target()` positions and
+  position sizing (fixed, percent, risk-based, ATR, your own function).
+- **Futures** with automatic roll before expiry, a back-adjusted signal series,
+  daily mark to market, and margin of 5x by default (set your own with `margin=`).
+- **Data** from OpenAlgo (broker history or Historify) or your own DataFrames and
+  files, with no server at all; splits and bonuses in unadjusted data are detected.
+- **Reports built in:** about 100 performance metrics, rolling statistics, drawdown
+  tables, benchmark comparison, Monte Carlo and an HTML tearsheet, with no plotting
+  package.
+- **Fast:** about 575,000 `on_bar` calls a second, and 1M one-minute bars of an
+  array strategy with charges, slippage and every metric in about 1.1 seconds on a
+  desktop core.
+
+`bt.live` is not part of this release. The interface may change in later releases;
+see the [backtesting docs](https://docs.openalgo.in/trading-platform/python/backtesting).
+
+**WebSocket feed:** connection hooks (`on_connect`, `on_disconnect`, `on_reconnect`,
+`on_error`), callback errors reported instead of dropped, subscriptions made while
+disconnected replayed on reconnect, `wss://` for an `https` host, and quote ticks that
+carry average price, last quantity, last trade time, buy and sell totals and open
+interest.
+
+**Indicators:** fixes that change some results (VWAP anchors, the RVI class, NaN
+handling in DEMA, TEMA and others); see "Changes in SDK 2.1.0" on the
+[indicators page](https://docs.openalgo.in/trading-platform/python/indicators).
+The full list is in [CHANGELOG.md](CHANGELOG.md).
 
 ## What's New in 2.0.5
 
