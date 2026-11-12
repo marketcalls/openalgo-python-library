@@ -13,8 +13,9 @@ The kernel's tables are turned into the inputs `metrics.analyse` documents:
              at its average price, so that exposure and turnover count it. Side is the
              side of the entry ("BUY" long, "SELL" short), quantity the units bought (or
              sold) to build it, net_pnl = gross_pnl - costs. The charges of each closed
-             trade are broken down into the cost components and the DP charge, and its
-             R-multiple is in `r_multiple` (`_result_r`; NaN for an open trade).
+             trade are broken down into the cost components and the DP charge, its
+             R-multiple is in `r_multiple` (`_result_r`; NaN for an open trade) and the
+             base bars from its opening fill to its closing fill in `bars_held`.
 """
 
 from __future__ import annotations
@@ -62,6 +63,7 @@ def closed_trades(output: dict[str, Any], symbols: list[str]) -> pd.DataFrame:
             "net_pnl": raw["net_pnl_rupees"],
             "exit_reason": raw["exit_reason"],
             "r_multiple": r_values(raw["net_pnl_rupees"], raw["initial_risk_rupees"]),
+            "bars_held": raw["exit_slice"] - raw["entry_slice"],
         }
     )
     charges = trade_charges(output)
@@ -160,11 +162,26 @@ def opening_time(first_close_ns: int, base: str, exchange: str, calendar: Any) -
 
 @dataclass(frozen=True)
 class Report:
-    """What the tearsheet reads: the performance, a title and the assumption lines."""
+    """What the tearsheet reads: the performance, a title, the assumption lines and the
+    name of the benchmark (None without one)."""
 
     performance: Performance
     name: str
     assumptions: list[str]
+    benchmark_name: str | None = None
+
+
+#: The name a benchmark given as closes (a Series or DataFrame) is shown under.
+GIVEN_BENCHMARK = "Benchmark"
+
+
+def benchmark_name(manifest: dict[str, Any]) -> str | None:
+    """The run's benchmark as the tearsheet names it: the index symbol ("NIFTY"), or
+    `GIVEN_BENCHMARK` for closes given as a Series; None without a benchmark."""
+    record = manifest["arguments"].get("benchmark")
+    if record is None:
+        return None
+    return record["symbol"] or GIVEN_BENCHMARK
 
 
 def tearsheet(report: Report, path: str | None, mode: str, log_scale: bool) -> str:
@@ -173,7 +190,9 @@ def tearsheet(report: Report, path: str | None, mode: str, log_scale: bool) -> s
 
 
 __all__ = [
+    "GIVEN_BENCHMARK",
     "Report",
+    "benchmark_name",
     "closed_trades",
     "equity_series",
     "open_trades",

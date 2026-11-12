@@ -10,19 +10,19 @@ metrics as a DataFrame.
     report.tearsheet(perf, mode="charts", log_scale=True)   # every chart
     report.metrics_table(perf)                       # the metrics as a DataFrame
 
-The tearsheet is one self-contained HTML file: inline CSS and inline SVG charts, no
-script, no font or image fetched when it is opened. It follows the reader's light or
-dark setting and reads at phone width.
+The tearsheet is one self-contained HTML dashboard in the layout of OpenStatz's
+dashboard: inline CSS, inline SVG charts and a small inline script for the theme
+toggle, sorting, paging and the chart crosshair; no font or image is fetched when it
+is opened, and it reads in full with script turned off. It follows the reader's light
+or dark setting and reads at phone width.
 
-Modules: `tearsheet` (the entry points and page), `_pages` (the sections of each mode),
-`_sections`, `_tables` and `_tables_extra` (the report sections and tables), `_charts`,
-`_charts_series` and `_charts_simulation` (SVG), `_format` (numbers in Indian notation),
-`_style` (the stylesheet). The metrics computation behind `openalgo.backtest.metrics`
-lives here too, in `_analysis`, `_extended`, `_rolling`, `_montecarlo`, `_inputs`,
-`_periods`, `_combined`, `_kernel`, `_tables_data`, `_definitions` and `_performance`.
+Modules: `tearsheet` (the entry points), `_dashboard` (the page, its sections, charts
+and tables), `_format` (numbers in Indian notation). The metrics computation behind
+`openalgo.backtest.metrics` lives here too, in `_analysis`, `_extended`, `_rolling`,
+`_montecarlo`, `_inputs`, `_periods`, `_combined`, `_kernel`, `_tables_data`,
+`_definitions` and `_performance`.
 """
 
-from ._pages import MODES
-from .tearsheet import metrics_table, tearsheet
+from .tearsheet import MODES, metrics_table, tearsheet
 
 __all__ = ["MODES", "metrics_table", "tearsheet"]

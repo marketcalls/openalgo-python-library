@@ -1,10 +1,10 @@
-"""Report text: Indian digit grouping, compact rupees, percentages, durations, axes."""
+"""Report text: Indian digit grouping, rupees, percentages, durations and figures by
+their unit."""
 
 import math
 
 import pytest
 
-from openalgo.backtest.report import _charts as charts
 from openalgo.backtest.report import _format as fmt
 
 R = "&#8377;"
@@ -25,24 +25,11 @@ def test_indian_digit_grouping(value, text):
     assert fmt.indian_digits(value) == text
 
 
-@pytest.mark.parametrize(
-    ("value", "text"),
-    [
-        (2_500_000.0, f"{R}25 L"),
-        (12_345_678.0, f"{R}1.2 Cr"),
-        (1_500.0, f"{R}1.5 K"),
-        (999.0, f"{R}999"),
-        (-250_000.0, f"-{R}2.5 L"),
-    ],
-)
-def test_compact_rupees_use_lakh_and_crore(value, text):
-    assert fmt.rupees_compact(value) == text
-
-
 def test_rupees_and_percentages():
     assert fmt.rupees(-500.0) == f"-{R}500.00"
+    assert fmt.rupees(1_23_456.0, 0) == f"{R}1,23,456"
     assert fmt.percent(0.1234) == "12.34%"
-    assert fmt.percent(0.05, 1, signed=True) == "+5.0%"
+    assert fmt.percent(0.05, 1) == "5.0%"
 
 
 def test_undefined_and_infinite_figures():
@@ -64,25 +51,3 @@ def test_figures_are_formatted_by_their_unit():
     assert fmt.figure("trades", 1234) == "1,234"
     assert fmt.figure("longest_drawdown_days", 12.25) == "12.2 d"
     assert fmt.figure("ruined", False) == "no"
-
-
-def test_rupee_axis_labels_share_a_unit_and_tell_ticks_apart():
-    labels = fmt.rupee_ticks([100_000.0, 102_500.0, 105_000.0])
-    assert labels == [f"{R}1.000 L", f"{R}1.025 L", f"{R}1.050 L"]
-
-
-def test_percent_axis_labels():
-    assert fmt.percent_ticks([-0.2, -0.1, 0.0]) == ["-20%", "-10%", "0%"]
-    assert fmt.percent_ticks([-0.005, -0.0025, 0.0]) == ["-0.50%", "-0.25%", "0.00%"]
-
-
-def test_value_axes_end_on_round_ticks():
-    low, high, ticks = charts.value_axis(97_000.0, 112_000.0)
-    # 15,000 over five steps is 3,000, rounded up to 5,000.
-    assert (low, high) == (95_000.0, 115_000.0)
-    assert ticks == [95_000.0, 100_000.0, 105_000.0, 110_000.0, 115_000.0]
-
-
-def test_a_flat_value_axis_is_widened():
-    low, high, _ = charts.value_axis(100.0, 100.0)
-    assert low < 100.0 < high

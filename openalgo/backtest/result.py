@@ -7,7 +7,8 @@ UTC nanoseconds are kept only in the `*_ts` columns beside them. Instruments are
 by symbol. Prices and money are rupees, quantities units. Every
 table has the same columns whether or not it has rows.
 
-Built: `fills`, `orders`, `trades`, `equity`, `returns`, `positions` (the position
+Built: `fills`, `orders`, `trades`, `trade_list()` (`_trade_list`), `equity`, `returns`,
+`positions` (the position
 history), `events`, `risk_events`, `stale_marks`, `final_positions`, `gross_pnl`,
 `costs`, `contract_notes`, `settlements` and `rolls` (futures), `performance`,
 `metrics`, `metrics_table()`, `monte_carlo()`, `tearsheet()` (full, basic, metrics or
@@ -32,6 +33,7 @@ from . import _rejections, _result_costs, _result_export, _result_futures, _resu
 from ._messages import SEVERAL_STRATEGIES, not_supported
 from ._native import native
 from ._series import IST
+from ._trade_list import trade_list as closed_trade_list
 from .errors import BacktestError
 from .metrics import MonteCarlo, analyse, monte_carlo
 from .report import _montecarlo, metrics_table
@@ -184,6 +186,15 @@ class Result:
         risk = frame["initial_risk_rupees"]
         frame["r_multiple"] = _result_r.r_values(frame["net_pnl_rupees"], risk)
         return frame
+
+    def trade_list(self) -> pd.DataFrame:
+        """The closed trades as a trader reads them, one row each, indexed by trade
+        number: symbol, direction, product, entry and exit time (IST), quantity in
+        units, entry and exit price, gross P&L, charges and net P&L in rupees,
+        return_pct, bars_held, days_held, exit_reason and r_multiple
+        (`_trade_list.trade_list` defines each column). The tearsheet's trade table
+        shows the same rows."""
+        return closed_trade_list(_result_report.closed_trades(self._output, self._symbols))
 
     @property
     def positions(self) -> pd.DataFrame:
@@ -419,15 +430,17 @@ class Result:
     def tearsheet(
         self, path: str | None = None, *, mode: str = "full", log_scale: bool = False
     ) -> str:
-        """The HTML tearsheet in `mode` ("full", "basic", "metrics" or "charts"; see
-        `openalgo.backtest.report.tearsheet`): returned as a string, or written to `path`
-        (and the path returned). `log_scale` draws the cumulative return on a log scale.
-        Its Assumptions section lists the run's assumptions and every warning, so a
-        cost-free run says so on the report."""
+        """The HTML tearsheet, a dashboard in `mode` ("full", "basic", "metrics" or
+        "charts"; see `openalgo.backtest.report.tearsheet`): returned as a string, or
+        written to `path` (and the path returned). `log_scale` draws the cumulative
+        return on a log scale. Its trade table is `trade_list()`, its benchmark is named
+        by the run's `benchmark=`, and its Notes section lists the run's assumptions and
+        every warning, so a cost-free run says so on the report."""
         lines = [f"{key}: {value}" for key, value in self._assumptions.items()]
         lines += [f"warning: {text}" for text in self._warnings]
         name = self._manifest["strategy"]["name"]
-        report = _result_report.Report(self.performance, name, lines)
+        bench = _result_report.benchmark_name(self._manifest)
+        report = _result_report.Report(self.performance, name, lines, bench)
         return _result_report.tearsheet(report, path, mode, log_scale)
 
     # ----- running again, and what is not built yet ----------------------------------

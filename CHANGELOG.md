@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`Result.trade_list()`**: the closed trades as a pandas DataFrame a trader reads,
+  one row each, indexed by trade number: symbol, direction ("long" or "short"),
+  product, entry and exit time (IST), quantity in units, entry and exit price, gross
+  P&L, charges and net P&L in rupees, `return_pct` (net P&L over the entry value, in
+  percent), `bars_held`, `days_held`, `exit_reason` and `r_multiple`. The tearsheet's
+  trade table shows the same rows. `Result.performance.trades` gains a `bars_held`
+  column.
+
+### Changed
+
+- **The HTML tearsheet is a dashboard in the layout of OpenStatz's dashboard**
+  (`result.tearsheet(path)`, `report.tearsheet`): a sticky header with section links,
+  Export PDF and a light and dark toggle, then numbered sections: Overview (headline
+  tiles), Performance (cumulative return against the benchmark, rolling Sharpe,
+  volatility and win rate, CAGR, maximum drawdown and Sharpe by horizon, period
+  returns), Risk (drawdown chart, risk tiles, the benchmark tiles and rolling beta, the
+  ten worst drawdowns, losing streaks), Monthly (monthly and weekly heatmaps, monthly
+  tiles, yearly returns against the benchmark), Distribution (tiles, histogram, box
+  plot), Metrics (every metric, the benchmark's beside it, sortable), Trades (trade
+  tiles, the sortable and paged trade list, charges by component, the R-multiples) and
+  Notes (how the figures were computed, the assumptions and warnings). A tile's
+  subline is the benchmark's figure measured as the strategy's is, where a benchmark
+  has one. It is still one offline file: inline CSS and SVG, plus a small inline script
+  for the toggle, sorting, paging, the weekly year picker and a chart crosshair; it
+  reads in full with script turned off. `mode="basic" | "metrics" | "charts"` and
+  `log_scale=` show subsets of the same layout.
+- The tearsheet no longer draws the Monte Carlo band and histograms, the session
+  return bars, the trade P&L histogram or the trade losing-streak table:
+  `Result.monte_carlo()`, `performance.session_returns`, `Result.trade_list()` and
+  `performance.losing_streaks` keep them.
+
 ## [2.1.1] - 2026-11-13
 
 ### Added
