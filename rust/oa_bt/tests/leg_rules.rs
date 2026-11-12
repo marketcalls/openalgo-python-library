@@ -79,6 +79,7 @@ fn engine(instruments: Vec<(&str, BarColumns)>, slippage: SlippageSpec) -> Engin
         last_day: day(),
         first_slice: None,
         last_slice: Some(at(10, 14)),
+        present: None,
         base: BaseInterval::Intraday(MINUTE),
         strategy_interval: StrategyInterval::Intraday(5 * MINUTE),
         fill: FillTiming::NextOpen,

@@ -92,6 +92,9 @@ pub struct RunConfig {
     pub first_slice: Option<TsNanos>,
     /// Optional last slice instant (UTC nanoseconds): slices opening later are not run.
     pub last_slice: Option<TsNanos>,
+    /// The present, UTC nanoseconds: slices closing later are not run (`run_end`). The
+    /// caller resolves it; the kernel reads no clock. `None` sets no such bound.
+    pub present: Option<TsNanos>,
     /// The base interval of 03-architecture 4.1.
     pub base: BaseInterval,
     /// The strategy interval.

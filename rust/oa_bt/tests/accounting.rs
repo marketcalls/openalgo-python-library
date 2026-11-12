@@ -20,8 +20,7 @@ use oa_bt::market::margin::MarginModel;
 use oa_bt::market::slippage::SlippageSpec;
 use oa_bt::model::{days_from_civil, ts_from_ist, Day, Exchange, InstrumentKind, Product, Side};
 use oa_bt::rms::StrategyRiskConfig;
-use oa_bt::sizing::SizerSpec;
-use oa_bt::sizing::SizingControls;
+use oa_bt::sizing::{SizerSpec, SizingControls};
 
 const MINUTE: i64 = 60_000_000_000;
 const SESSION_MINUTES: u32 = 375;
@@ -74,6 +73,7 @@ fn config(costs: CostConfig, slippage: SlippageSpec, mode: QuantityMode) -> RunC
         last_day: day(),
         first_slice: None,
         last_slice: None,
+        present: None,
         base: BaseInterval::Intraday(MINUTE),
         strategy_interval: StrategyInterval::Intraday(15 * MINUTE),
         fill: FillTiming::NextOpen,

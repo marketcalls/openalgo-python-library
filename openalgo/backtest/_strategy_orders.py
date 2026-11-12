@@ -53,8 +53,9 @@ class OrderMethods:
         `trigger_price` makes it a stop order, SL with a price and SL-M without (on
         options an SL-M is sent as an SL with its limit 5 percent beyond the trigger).
         A LIMIT or stop order rests from the next base bar until it fills or its session
-        closes. Quantity: `qty` units or `lots`, else `size=`, else the strategy's
-        `size`, else the engine default. `leverage=` asks for intraday leverage, else the
+        closes. Quantity: `qty` units or `lots`, else `size=` (a `bt.size` sizer or a
+        sizing function `size(ctx, order)`, see `bt.size`), else the strategy's `size`,
+        else the engine default. `leverage=` asks for intraday leverage, else the
         strategy's `leverage`, else 1x. Risk arguments attach to the position it opens
         (an add may repeat them but not change them, SPEC-14); on CNC and NRML they are
         held as GTT orders. `validity="gtt"` rests it as a GTT until it fires or is

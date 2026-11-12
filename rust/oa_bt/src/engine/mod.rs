@@ -96,6 +96,7 @@
 //! |---|---|
 //! | `config` | `RunConfig`, `RunSetup`, `BarColumns`, interval and mode enums; what is refused as not built |
 //! | `clock` | `Timeline`: the grid, slice facts, strategy-bar closes by the clock |
+//! | `run_end` | Where the run ends: the end of its range, its last bar or the present |
 //! | `market_data` | Base bars aligned to the grid; strategy bars via `data::resample` |
 //! | `kernel` | `Engine`, `advance`, queries, `finish` |
 //! | `steps` | Steps 1 to 8 |
@@ -146,8 +147,9 @@
 //! (`self.at`, `self.every`), charges on every fill with contract-note rounding, the
 //! dated default slippage and margin tables (cash, MIS with leverage on request, long
 //! options, NSE index and stock futures, BSE BANKEX and MCX futures), a CNC buy and
-//! sell of one scrip on one day charged as intraday, the sizers and the engine default
-//! size, the position
+//! sell of one scrip on one day charged as intraday, the sizers (with a strategy's own
+//! sizing function, `reinvest` and the size caps), the engine default size, target
+//! positions, the initial risk of each trade, the position
 //! history, the equity series, trades and events, the whole-run strategy bars for
 //! indicators; the daily loss limit, the drawdown halt, the trading state, the
 //! cooldown, maximum positions, the scale-in limits and the time exit; condition and
@@ -181,6 +183,7 @@ pub mod pause;
 mod resting;
 mod reverse;
 mod roll;
+pub mod run_end;
 mod scale_in;
 mod session;
 mod settlement;
@@ -209,6 +212,7 @@ pub use output::{
     EquityColumns, FillRecord, FinalPosition, GrossPnl, LevelRow, RunOutput, StaleMark, TradeRecord,
 };
 pub use pause::{run, Driver, Pause, TimerId};
+pub use run_end::{RunEnd, RunEndCause};
 pub use signals::{run_signals, AtrInput, AtrSlot, EntrySignal, SignalArrays, SkippedEntry};
 pub use submit::Submission;
 pub use target::TargetRequest;

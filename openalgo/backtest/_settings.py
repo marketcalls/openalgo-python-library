@@ -37,6 +37,7 @@ from ._series import IST
 from ._setting_checks import class_leverage, refuse_unusable, unused_settings
 from ._size_controls import describe as describe_size_controls
 from ._size_controls import size_controls
+from .data._sessions import resolve_now
 from .data.own import Frame
 from .errors import ConfigError
 from .units import Distance
@@ -75,6 +76,9 @@ class RunPlan:
     end: dt.date
     first_slice: int | None
     last_slice: int | None
+    # The present, UTC nanoseconds (`now=`, the clock by default): the run and the data
+    # load stop at it (`rust/oa_bt/src/engine/run_end.rs`).
+    present: int
     capital: float
     fill: str
     quantity_mode: str
@@ -107,6 +111,7 @@ class RunPlan:
             "last_day": to_day(self.end),
             "first_slice": self.first_slice,
             "last_slice": self.last_slice,
+            "present": self.present,
             "base_nanos": interval_nanos(self.base),
             "strategy_interval": strategy,
             "fill": self.fill,
@@ -299,6 +304,7 @@ def resolve(strategy: type, args: dict[str, Any]) -> RunPlan:
         end=end,
         first_slice=_instant(args["start"]),
         last_slice=_instant(args["end"]),
+        present=resolve_now(args["now"]),
         capital=float(capital),
         fill=_choice(args["fill"], FILL_MODES, "fill"),
         quantity_mode=_choice(args["quantity_mode"], QUANTITY_MODES, "quantity_mode"),

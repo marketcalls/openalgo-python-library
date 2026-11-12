@@ -109,6 +109,7 @@ def choose_base(
             calendar=calendar,
             tz=args["tz"],
             base=base,
+            now=plan.present,
         )
 
     if args["base"] is not None:

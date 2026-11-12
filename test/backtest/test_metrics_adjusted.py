@@ -121,6 +121,13 @@ def test_the_serenity_index_divides_by_ulcer_index_times_pitfall():
     assert m["serenity_index"] == pytest.approx(expected)
 
 
+def test_the_serenity_definition_cites_the_published_ratio_by_its_name_alone():
+    definition = metrics.DEFINITIONS["serenity_index"].definition
+    assert definition.endswith(
+        "-conditional drawdown / annualised volatility (the published serenity ratio)."
+    )
+
+
 def test_the_recovery_factor_is_net_profit_over_the_drawdown_amount():
     m = analyse(RETURNS)
     assert m["recovery_factor"] == pytest.approx(m["net_profit"] / -m["max_drawdown_amount"])

@@ -172,8 +172,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cut data before the run and refused if its signals look ahead. The order arguments are
   `qty`, `size`, `lots`, `stop`, `target`, `targets`, `trail`, `breakeven`,
   `after_first_target`, `product`, `leverage` and `tag`; ATR distances and
-  `bt.size.atr_risk` in them raise `NotImplementedError` until built. A condition
-  strategy trades one symbol and has no callbacks or timers.
+  `bt.size.atr_risk` in them take the ATR of the deciding bar. A condition strategy
+  trades one symbol and has no callbacks, timers or sizing functions.
 - **Futures strategies in `openalgo.backtest` (preview).** A strategy names an
   underlying (`underlying = "NIFTY"` with `exchange = "NFO"`, or underlying names in
   `symbols`) and the contract rank in `expiry` (`"current_month"`, the default, or
@@ -422,6 +422,30 @@ across a NaN bar.
   bar on short input.
 - Crossover helpers (`crossover`, `crossunder`, `cross`, `valuewhen` and the others)
   run in the Rust core: about 100 times faster on long series.
+- **A backtest no longer runs past its data or the present.** `bt.backtest` ends a run
+  at the earliest of `end`, the close of the last bar any instrument has, and the
+  present (the new `now=` argument, the clock by default), with a warning that names
+  the end used when it is before `end`. Equity, trades and metrics stop there, a
+  position still open is reported open, and the contract notes of the last session are
+  settled at the run's end as at a session close, so charges do not depend on where
+  the run ends after its last fill; before, a run for today continued on empty
+  slices to the session close and squared off an MIS position at a price from hours
+  earlier.
+- **Quote ticks carry the average price and last quantity the server sends.**
+  `avg_trade_price` and `last_trade_quantity` were always 0 in quote callbacks and
+  `get_quotes()` because the server sends them as `average_price` and `last_quantity`;
+  quotes now also carry `ltt`, `total_buy_quantity`, `total_sell_quantity` and `oi`.
+- The `serenity_index` definition cites the published serenity ratio without naming a
+  company.
+- With an opening wealth, the benchmark return of the horizon summary's "Since start"
+  row and of the first period of `benchmark_comparison` was NaN when the benchmark had
+  no value before the first equity point, while `benchmark_total_return` started at the
+  first session end. All three now follow one rule, stated in the metric definitions:
+  from the benchmark's first value in the span, NaN when the span has no benchmark
+  return.
+- The `broker_units` reference table records that a live OpenAlgo server's Zerodha
+  master contract gives MCX `lotsize` in units (observed 2026-11-12); the broker-side
+  conversion to contracts remains unconfirmed.
 
 ## [2.0.5] - 2026-09-11
 

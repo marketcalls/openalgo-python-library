@@ -82,6 +82,7 @@ AUDITED_RUN_ARGUMENTS = {
     "strict_config",
     "roll",
     "params",
+    "now",
 }
 
 

@@ -98,13 +98,14 @@ def test_the_benchmark_comparison_compounds_both_per_year_and_per_month():
     assert yearly.loc[2025, "excess"] == pytest.approx(102.978792 / 100 - 1 - 0.02)
 
 
-def test_a_period_with_an_unknown_benchmark_return_is_not_compared():
+def test_a_period_compares_the_benchmark_from_its_first_value_in_the_period():
     equity = closes(102.0, 104.04)
     bench = pd.Series([1000.0, 1010.0], index=equity.index)
     comparison = analyse(equity, benchmark=bench).benchmark_comparison()
-    # The opening has no benchmark value, so the first session has no benchmark return.
-    assert math.isnan(comparison.loc[2025, "benchmark"])
-    assert pd.isna(comparison.loc[2025, "beat"])
+    # The opening has no benchmark value, so the first session has no benchmark return
+    # and the year runs from the first session's 1000 to 1010, as the run's total does.
+    assert comparison.loc[2025, "benchmark"] == pytest.approx(1010 / 1000 - 1)
+    assert bool(comparison.loc[2025, "beat"]) is True
 
 
 def test_a_comparison_needs_a_benchmark_and_a_known_period():
