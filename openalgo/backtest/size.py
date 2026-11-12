@@ -1,6 +1,5 @@
 """Sizers: `bt.size.qty`, `lots`, `value`, `percent`, `fixed_risk` and `atr_risk`, a
-strategy's own sizing function, and the caps shared by every sizer, `bt.size.caps`
-(12-position-sizing section 5).
+strategy's own sizing function, and the caps shared by every sizer, `bt.size.caps`.
 
 A sizer is passed as `size=` on an order or set as the strategy's default (the class
 attribute `size`). The kernel turns it into a quantity in units at the decision price,
@@ -21,7 +20,7 @@ Equity means the sizing equity: the current equity (compounding), or the capital
 allocated at the start when the strategy sets `reinvest = False`.
 
 An order with no `qty`, `lots` or `size` (and no strategy `size`) takes the engine
-default (03-architecture 7): one lot for futures and options; for cash equity 1x the
+default: one lot for futures and options; for cash equity 1x the
 strategy's equity (never more than its free cash, split equally across its
 instruments) net of the order's estimated costs, sized at the fill price in fractional
 mode and at the decision price with a 2 percent cash buffer in venue mode.
@@ -123,8 +122,8 @@ class SizeCaps:
 
 
 def caps(position: Any = None, leverage: float | None = None, risk: Any = None) -> SizeCaps:
-    """Caps on the quantity every sizer gives, for the class attribute `size_caps`
-    (12-position-sizing 5); the tightest wins:
+    """Caps on the quantity every sizer gives, for the class attribute `size_caps`; the
+    tightest wins:
 
     * `position`: the largest position on the order's side after it, counting what is
       held: units (a number or `bt.size.qty(n)`), `bt.size.lots(n)`, rupees of value at

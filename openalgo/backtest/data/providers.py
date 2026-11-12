@@ -1,7 +1,7 @@
-"""The data provider protocol, the provider registry and entry-point plugins (FR-DATA-03).
+"""The data provider protocol, the provider registry and entry-point plugins.
 
 A provider is any object with a `name`, a set of `capabilities`, a declared
-`timestamp_convention` and a `bars()` method (PRD 06 section 1.1). Third-party
+`timestamp_convention` and a `bars()` method (`DataProvider`). Third-party
 packages add providers by declaring an entry point in the group
 `openalgo.backtest.providers`:
 
@@ -37,7 +37,8 @@ _BUILTIN_PROVIDERS = {"openalgo": OpenAlgoProvider, "frame": Frame, "files": Fil
 
 @runtime_checkable
 class DataProvider(Protocol):
-    """What every data source implements (PRD 06 section 1.1).
+    """What every data source implements: a name, its capabilities, the timestamp
+    convention it declares (never guessed) and `bars`.
 
     `bars` returns a pandas DataFrame in the canonical layout of
     `openalgo.backtest._layout` for the inclusive IST date range `start` to `end`.

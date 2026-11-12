@@ -1,5 +1,5 @@
 """Corporate actions a user declares for a share: splits, bonuses, and dates checked to
-have none (PRD 06 sections 2, 5 and 7).
+have none.
 
 OpenAlgo's sources supply no corporate-action data, and the history they return may or
 may not be adjusted for splits and bonuses depending on the source. The quality check
@@ -17,8 +17,8 @@ Units: `ex_date` is the IST date of the first session at the new price; face val
 rupees per share; `factor` is the number of shares held after the event for each share
 held before it, so the price after the event is the price before divided by it.
 
-A declaration does not adjust anything in this phase: adjusting prices, quantities and
-orders from supplied corporate actions is FR-MKT-11 (Phase 5).
+A declaration does not adjust anything in this version: adjusting prices, quantities and
+orders from supplied corporate actions is not supported yet.
 """
 
 from __future__ import annotations

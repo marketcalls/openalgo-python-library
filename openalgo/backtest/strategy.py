@@ -1,5 +1,4 @@
-"""`Strategy`: the one class a user subclasses, the same in `bt.backtest` and `bt.live`
-(14-strategy-api section 2).
+"""`Strategy`: the one class a user subclasses, the same in `bt.backtest` and `bt.live`.
 
     class EmaCross(bt.Strategy):
         symbol, exchange, interval = "SBIN", "NSE", "5m"
@@ -13,15 +12,17 @@
 
 Declaring what it trades: exactly one of `symbol`, `symbols`, `universe`, `underlying`,
 plus `exchange` and `interval`. Futures in `symbols` are named by their underlying and
-follow the same contract rule as `underlying` (lead ruling). Session and risk settings
-may be class attributes (`max_daily_loss`, `entry_from`, `entry_until`, `square_off`,
-`drawdown_halt`, `cooldown`): a class attribute wins over the run argument of the same
-name (lead ruling). Parameters are any other class attributes with a number, bool or
-string default, or `bt.param(default, values)`.
+trade the same contract as `underlying` would (the rank in `expiry`, rolled by the run's
+`roll`). Session and risk settings may be class attributes (`max_daily_loss`,
+`entry_from`, `entry_until`, `square_off`, `drawdown_halt`, `cooldown`): a class
+attribute wins over the run argument of the same name. Parameters are any other class
+attributes with a number, bool or string default, or `bt.param(default, values)`.
 
-Hooks run in step 7 of the kernel slice: callbacks for the events since the previous
-decision, then `on_bar`. Orders placed there are queued for the next base-bar open.
-Timers (`self.at`, `self.every`) run in step 2 and their orders fill at that same open.
+Hooks run at each strategy-bar close, after that bar's fills, stops, targets and risk
+rules: first the callbacks for the events since the previous decision, then `on_bar`.
+Orders placed there are queued for the next base-bar open. Timers (`self.at`,
+`self.every`) run at a base-bar open, once the orders queued for it have filled, and
+their orders fill at that same open.
 Indicators come from `openalgo.ta` through `self.I`. Parts not built yet raise
 NotImplementedError saying what to do instead.
 """
@@ -185,16 +186,20 @@ class Strategy(OrderMethods):
         """Called at each strategy-bar close: the bar, or a mapping by symbol."""
 
     def on_fill(self, fill: dict) -> None:
-        """Called for every fill since the previous decision (step 7)."""
+        """Called for every fill since the previous decision, at the bar close before
+        `on_bar`."""
 
     def on_order(self, order: dict) -> None:
-        """Called for every order event since the previous decision (step 7)."""
+        """Called for every order event since the previous decision, at the bar close
+        before `on_bar`."""
 
     def on_position(self, position: dict) -> None:
-        """Called for every position event since the previous decision (step 7)."""
+        """Called for every position event since the previous decision, at the bar close
+        before `on_bar`."""
 
     def on_risk_event(self, event: dict) -> None:
-        """Called when a risk rule fires or the trading state changes (step 7)."""
+        """Called when a risk rule fires or the trading state changes, at the bar close
+        before `on_bar`."""
 
     def on_stop(self) -> None:
         """Called at the end of the run."""
@@ -300,8 +305,11 @@ class Strategy(OrderMethods):
 
     def entry_when(self, condition: Any, **order_args: Any) -> None:
         """Buy while the condition holds: enter when flat, add while long and `adds <
-        pyramiding` (14-strategy-api 4.1). Declared in `init`; the whole strategy then
-        runs in Rust. `condition` follows the grammar of 4.2 (see `_conditions`)."""
+        pyramiding`. Declared in `init`; the whole strategy then runs in Rust.
+        `condition` is a view of booleans built from series views and `self.I`
+        indicators (arithmetic, comparisons, `&`, `|`, `~`, `.crossed_above`,
+        `.crossed_below`), a clock condition (`bt.time_between`, `bt.weekday`) or an
+        array with one boolean per strategy bar (see `_conditions`)."""
         declare(self, "entry", condition, order_args)
 
     def exit_when(self, condition: Any) -> None:

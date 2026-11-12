@@ -1,7 +1,7 @@
 """Units for risk arguments and parameters: `bt.points`, `bt.pct`, `bt.rupees`, `bt.ticks`,
 `bt.atr`, the trailing forms, `bt.breakeven`, `bt.lock` and `bt.param`.
 
-Conventions (14-strategy-api section 1, decisions SPEC-24 and SPEC-25):
+Conventions:
 
 * A bare number where a distance is expected is points (rupees of price).
 * `bt.pct(x)` is x percent of the leg's fill average (`bt.pct(1)` is 1 percent).
@@ -138,7 +138,8 @@ class Lock:
 
 
 def lock(reach: float, lock_amount: float, trail_step: float | None = None) -> Lock:
-    """Lock profit in rupees (a combined rule, Phase 3)."""
+    """Lock profit in rupees, a combined rule over the run's positions. A run with
+    `lock_profit` is not supported in this version and raises NotImplementedError."""
     step = None if trail_step is None else _positive(trail_step, "trail_step")
     return Lock(_positive(reach, "reach"), _positive(lock_amount, "lock"), step)
 

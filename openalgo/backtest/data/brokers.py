@@ -5,10 +5,9 @@ chunk window), the pacing between requests and whether the broker's intraday
 timestamps are known to be shifted.
 
 Source of the numbers: the OpenAlgo server's broker adapters
-(`broker/<name>/api/data.py`, read at server HEAD d8cc13f24), as summarised in the
-reference note `openalgo-historify-and-history.md` section 2, and PRD
-`06-data-layer.md` section 4. The server adapters chunk on their own as well, so
-these windows only bound how much one SDK request asks the server to assemble.
+(`broker/<name>/api/data.py`, read at server HEAD d8cc13f24). The server adapters
+chunk on their own as well, so these windows only bound how much one SDK request asks
+the server to assemble.
 
 Verification status: `verified=False` marks chunk windows, and
 `timestamps_verified=False` a timestamp convention, that could not be confirmed in

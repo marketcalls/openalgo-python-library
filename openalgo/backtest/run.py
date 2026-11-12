@@ -24,8 +24,8 @@ How a backtest runs (the Python half of the design in `rust/oa_bt/src/engine/mod
    Assumptions block, the warnings, the manifest (`_manifest`) and `rerun` (`_rerun`).
 
 Python declares and decides; Rust executes: fills, positions, the ledger, the event
-stream and every market rule live in the kernel, so `bt.live` (Phase 2) will run the same
-rules with a live clock. Sandbox or live is chosen inside OpenAlgo, never here.
+stream and every market rule live in the kernel, so `bt.live`, when it is supported, will
+run the same rules with a live clock. Sandbox or live is chosen inside OpenAlgo, never here.
 """
 
 from __future__ import annotations
@@ -124,14 +124,14 @@ def backtest(
     product, entry_from, entry_until, square_off: product default by interval and
         exchange; IST "HH:MM" times for MIS (calendar defaults when omitted).
     max_daily_loss, risk_basis, after_risk_exit, max_positions, drawdown_halt, cooldown,
-        round_levels, strict_config: risk settings (05-risk-management); strategy class
-        attributes of the same names win. `max_daily_loss` is rupees (or bt.rupees),
-        `drawdown_halt` percent from peak equity (bt.pct(x)), `cooldown` base bars.
+        round_levels, strict_config: risk settings; strategy class attributes of the
+        same names win. `max_daily_loss` is rupees (or bt.rupees), `drawdown_halt`
+        percent from peak equity (bt.pct(x)), `cooldown` base bars.
     roll: sessions before expiry at which a futures position rolls to the next contract
         (1, the session before the last trading day; 0 rolls on it), or None to hold it
-        to expiry and settle it there (04-execution 7). A futures strategy names its
-        underlying (`underlying`, or underlyings in `symbols`) and the contract rank in
-        `expiry` ("current_month" or "next_month"); see `_futures`.
+        to expiry and settle it there in cash (see `Result.settlements`). A futures
+        strategy names its underlying (`underlying`, or underlyings in `symbols`) and
+        the contract rank in `expiry` ("current_month" or "next_month"); see `_futures`.
     params: parameter values for the strategy.
     now: the present (UTC nanoseconds, a datetime or an ISO string, naive is IST; the
         clock when None). The data load drops bars that have not closed by then.

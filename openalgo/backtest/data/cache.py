@@ -1,4 +1,4 @@
-"""Local cache of raw history rows (FR-DATA-08).
+"""Local cache of raw history rows.
 
 The cache stores exactly what a source returned: epoch seconds and values, per
 source and broker. Nothing in it depends on a calendar, a session filter, a

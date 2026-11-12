@@ -1,12 +1,11 @@
 """openalgo.backtest: backtesting and live trading engine for Indian markets.
 
-Status: Phase 1 in progress. The foundations (Indian cost model, session calendars,
-resampling, reference tables, data layer) are complete. The event kernel runs a walking
-skeleton: `bt.Strategy` with `on_bar`, `self.I` indicators from `openalgo.ta`, other
-intervals (`self.data[symbol, "15m"]`), timers (`self.at`, `self.every`) and MARKET
-orders through `bt.backtest`, `Result.rerun` and the run manifest, and `bt.optimize`
-grids; every part not built yet raises NotImplementedError saying what to do instead.
-`bt.live` is Phase 2.
+Status: beta. `bt.backtest` runs one `bt.Strategy` class on OpenAlgo history or on your
+own bars, with Indian charges, slippage, session calendars and contract terms applied by
+default, and returns a `Result` with its tables, metrics and HTML tearsheet;
+`bt.optimize` sweeps a strategy's parameters over a grid. A part this version does not
+run raises NotImplementedError saying what to do instead: `bt.live`, `bt.walk_forward`,
+`bt.rebalance` and a run of several strategies among them.
 
     import openalgo.backtest as bt
 

@@ -1,4 +1,4 @@
-"""Symbol-master snapshot files (FR-DATA-11): writing one from a client, reading one back.
+"""Symbol-master snapshot files: writing one from a client, reading one back.
 
 The OpenAlgo server holds today's contracts only, so a later backtest cannot ask it
 what the lot size of a contract was. A snapshot is a dated copy of

@@ -1,4 +1,4 @@
-"""Own data without a server: `Frame` for tables in memory (FR-DATA-04).
+"""Own data without a server: `Frame` for tables in memory.
 
 Three things must be declared, and none is guessed:
 

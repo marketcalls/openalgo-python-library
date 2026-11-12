@@ -1,5 +1,5 @@
 """`ReferenceTables`: dated lookups over the built-in reference data, user files and
-symbol-master snapshots (FR-MKT-09, FR-DATA-11, FR-INST-02).
+symbol-master snapshots.
 
 Rules this class keeps:
 
