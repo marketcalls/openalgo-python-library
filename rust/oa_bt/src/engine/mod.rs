@@ -65,8 +65,8 @@
 //! |---|---|---|
 //! | 1 session open, reference events | `steps::open_slice`; intraday times resolved lazily by `session::session_times` | times yes; rolls and lot-size changes no |
 //! | 2 fills at the open | `steps::step_open_fills` -> `fills::fill_queued` (eligible when the open is at or after `decided_at`, SPEC-35; a missing bar keeps the order queued, SPEC-06; entry window and margin checked at the fill bar), then `session::square_off_at_open` (the square-off timer, SPEC-05) | MARKET orders, square-off; timers and rolls no |
-//! | 3 resting orders, leg levels | `steps::step_levels` -> `rms::LegState::test_bar` | no (plain legs only) |
-//! | 4 ratchets | `steps::step_ratchets` -> `rms::LegState::ratchet` | no |
+//! | 3 resting orders, leg levels | `steps::step_levels` -> `legs::test_leg_levels` -> `rms::LegState::test_bar`, exits through `fills::execute_fill` | leg levels yes (MIS); resting orders no |
+//! | 4 ratchets | `steps::step_ratchets` -> `legs::ratchet_legs` -> `rms::LegState::ratchet` | yes |
 //! | 5 mark | `steps::step_mark`: close, or last close and stale | yes |
 //! | 6 aggregate rules | `aggregate::step_aggregate_rules`: daily loss limit, drawdown halt; their exits at the next open (`risk_exits_at_open`, step 2) or the last close; the session boundary in step 1 (`risk_session_open`) | yes (combined rules: Phase 3) |
 //! | 7 callbacks and `on_bar` | `steps::callbacks_pause` -> `Pause::BarClose`; `submit::submit` | yes |
@@ -94,6 +94,8 @@
 //! | `kernel` | `Engine`, `advance`, queries, `finish` |
 //! | `steps` | Steps 1 to 8 |
 //! | `fills` | Step 2 fills of queued orders, `execute_fill` |
+//! | `legs` | Leg rules in steps 3 and 4, the add rule of SPEC-14 |
+//! | `reverse` | `reverse=True`: close, then open the rest |
 //! | `session` | Intraday times per session, the entry window, the square-off timer |
 //! | `submit` | `submit`, `cancel`, `modify`, the submission checks, DAY validity and market closed |
 //! | `aggregate` | Step 6 (daily loss limit, drawdown halt), the step-1 session boundary, the exits they queue |
@@ -113,11 +115,13 @@
 //!
 //! Built: one exchange, any number of instruments on it, intraday or daily strategy
 //! intervals on an intraday or daily base, MARKET DAY orders (entry, add, reduce,
-//! exit by fraction), the quantity, freeze, product, entry-window and market-closed
-//! checks, the square-off, margin for cash equity, zero slippage and the fixed slippage
-//! forms, the position history, the equity series, trades and events; the daily loss
-//! limit, the drawdown halt, the trading state, the cooldown, maximum positions and the
-//! time exit. Everything else returns `KernelError::NotBuilt` naming the feature.
+//! exit by fraction, `reverse=True`), the quantity, freeze, product, entry-window,
+//! market-closed and reverse checks, engine-held leg rules on MIS (stop, targets,
+//! every trail form, breakeven, `after_first_target`), the square-off, margin for cash
+//! equity, zero slippage and the fixed slippage forms, the position history, the
+//! equity series, trades and events; the daily loss limit, the drawdown halt, the
+//! trading state, the cooldown, maximum positions and the time exit. Everything else
+//! returns `KernelError::NotBuilt` naming the feature.
 
 mod aggregate;
 pub mod clock;
@@ -127,9 +131,11 @@ pub mod error;
 pub mod event;
 mod fills;
 pub mod kernel;
+mod legs;
 pub mod market_data;
 pub mod output;
 pub mod pause;
+mod reverse;
 mod session;
 pub mod signals;
 mod steps;

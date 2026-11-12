@@ -83,6 +83,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run argument of the same name. The combined rules (`combined_stop`,
   `combined_target`, `lock_profit`, `trail_sl_to_entry`) raise `NotImplementedError`
   until Phase 3.
+- **Leg rules in `openalgo.backtest` (preview).** `buy` and `sell` on MIS take `stop=`,
+  `target=`, `targets=[(distance, fraction), ...]`, `trail=` (`bt.trail(x, y)`,
+  `bt.trail_points`, `bt.trail_pct`, `bt.trail_atr`), `breakeven=` and
+  `after_first_target="breakeven"`. Levels come from the fill average, round to the
+  tick, and are tested on every base bar from the entry bar on: a level crossed at the
+  open fills at the open, the stop beats a target inside one bar, several targets can
+  fill in one bar, and a trail or breakeven moved by a bar is in force from the next.
+  Adds recompute the stop (never loosening it) and the unfilled targets from the new
+  average. Exit fills carry the reason `leg_sl` or `leg_target` and the target index,
+  with the matching risk events. `bt.atr` distances use the ATR from `openalgo.ta` at
+  the decision. `reverse=True` closes a position and opens the rest on the other side;
+  without it an order larger than the opposite position is rejected with
+  `reverse_not_allowed`. Leg rules on CNC and NRML positions (GTT orders) and
+  `max_hold` raise `NotImplementedError` until built.
 - **`openalgo.backtest.metrics` and `openalgo.backtest.report` (preview).** Performance
   metrics computed in the Rust core (returns, CAGR on calendar time, volatility, Sharpe
   and Sortino with a per-session risk-free rate, drawdowns, Calmar, exposure, trade

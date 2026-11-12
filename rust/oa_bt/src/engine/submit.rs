@@ -57,7 +57,8 @@ impl Engine {
     ///
     /// Errors: `NotAtDecisionPoint` unless paused; `Exec(InvalidRequest)` for a
     /// quantity that is not positive or a fraction outside (0, 1]; `Rms(InvalidRule)`
-    /// for contradictory leg rules; `NotBuilt` for order types, validities and
+    /// for contradictory leg rules, or an add whose leg rules differ from the
+    /// position's (SPEC-14); `NotBuilt` for order types, validities and
     /// arguments not built yet. A market rule that refuses the order is not an error:
     /// the result is `Submission::Rejected`.
     pub fn submit(&mut self, request: OrderRequest) -> Result<Submission, KernelError> {
@@ -146,19 +147,20 @@ impl Engine {
         if request.validity == Validity::Gtt {
             return Err(not_built("GTT orders"));
         }
-        if request.reverse {
-            return Err(not_built("reverse=True"));
-        }
         if request.leverage.is_some_and(|leverage| leverage != 1.0) {
             return Err(not_built("intraday leverage"));
         }
         request.leg_rules.validate(self.config.risk.strict_config)?;
-        if !request.leg_rules.is_empty() {
+        if request.leg_rules.max_hold_bars.is_some() {
+            return Err(not_built("max_hold (the time exit)"));
+        }
+        if !request.leg_rules.is_empty() && request.product != Product::Mis {
             return Err(not_built(
-                "leg stops, targets, trailing stops and breakeven",
+                "stops, targets, trails and breakeven on CNC and NRML positions (held as \
+                 GTT orders, 04-execution 4.4)",
             ));
         }
-        Ok(())
+        self.check_leg_rules(request)
     }
 
     fn resolve_units(&self, request: &OrderRequest) -> Result<Resolved, KernelError> {
@@ -230,11 +232,8 @@ impl Engine {
         };
         let held = self.held_units(key);
         let reduces = held != 0.0 && (held > 0.0) != (request.side == Side::Buy);
-        if reduces && !request.reduce_only && units > held.abs() {
-            return Err(not_built(
-                "an order larger than the opposite position (the excess rule and reverse=True)",
-            ));
-        }
+        // Beyond the opposite position: reversed with `reverse=True`, else rejected.
+        let excess = reduces && !request.reduce_only && units > held.abs();
         let fractional = self.fractional(request.instrument);
         let rules = if units > 0.0 {
             quantity_rule(units, spec, fractional).and_then(|()| freeze_rule(units, spec))
@@ -246,17 +245,22 @@ impl Engine {
         if let Err(code) = checked {
             return Ok(Err(code));
         }
-        let opening = !reduces && !request.reduce_only;
+        let opening = (!reduces || excess) && !request.reduce_only;
         if opening && request.product == Product::Mis {
             if let Err(code) = self.session_times(slice.day)?.entry.check(slice.close) {
                 return Ok(Err(code));
             }
         }
+        // Pre-trade check order of 03-architecture 4.4: closed market (5), trading state
+        // and entry gates (6, 7), then an excess over the position without `reverse` (7).
         let validity = self.day_validity(slice);
         if opening && validity.is_ok() {
             if let Err(code) = self.entry_gates(key, held, slice) {
                 return Ok(Err(code));
             }
+        }
+        if validity.is_ok() && excess && !request.reverse {
+            return Ok(Err(RejectCode::ReverseNotAllowed));
         }
         Ok(validity)
     }

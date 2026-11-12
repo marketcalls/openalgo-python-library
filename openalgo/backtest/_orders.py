@@ -18,44 +18,52 @@ from .size import Sizer
 VALIDITIES = {"day": "DAY", "gtt": "GTT"}
 AFTER_FIRST_TARGET = (None, "keep", "breakeven")
 
+# The ATR in rupees of a period at the current decision (`_atr.decision_atr`).
+AtrAt = Callable[[int], float]
+DistanceTuple = tuple[str, float, float | None]
 
-def _distance(value: object, what: str) -> tuple[str, float, float | None]:
+
+def _distance(value: object, what: str, atr_at: AtrAt) -> DistanceTuple:
+    """(unit, value, ATR in rupees or None); a bare number is points. An ATR distance
+    carries the ATR resolved at this decision, so the kernel computes no indicator."""
     distance = units.as_distance(value, what)
-    if distance.unit == "atr":
-        raise NotImplementedError(
-            "ATR distances (bt.atr, bt.trail_atr) are not implemented yet (Phase 1 work in "
-            "progress): the ATR value at the decision is resolved through openalgo.ta"
-        )
-    return (distance.unit, distance.value, None)
+    if distance.unit != "atr":
+        return (distance.unit, distance.value, None)
+    if distance.period is None:
+        raise ConfigError(f"{what}: an ATR distance needs a period, use bt.atr(multiple, period)")
+    return (distance.unit, distance.value, atr_at(distance.period))
 
 
-def _trail(value: object) -> tuple[Any, Any] | None:
+def _trail(value: object, atr_at: AtrAt) -> tuple[Any, Any] | None:
     if value is None:
         return None
     if not isinstance(value, units.Trail):
         raise ConfigError(
             "trail= takes bt.trail(x, y), bt.trail_points, bt.trail_pct or bt.trail_atr"
         )
-    step = None if value.step is None else _distance(value.step, "trail step")
-    return (_distance(value.trigger, "trail trigger"), step)
+    step = None if value.step is None else _distance(value.step, "trail step", atr_at)
+    return (_distance(value.trigger, "trail trigger", atr_at), step)
 
 
-def _breakeven(value: object) -> tuple[Any, Any] | None:
+def _breakeven(value: object, atr_at: AtrAt) -> tuple[Any, Any] | None:
     if value is None:
         return None
     if not isinstance(value, units.Breakeven):
         raise ConfigError("breakeven= takes bt.breakeven(trigger, offset)")
-    offset = None if value.offset is None else _distance(value.offset, "breakeven offset")
-    return (_distance(value.trigger, "breakeven trigger"), offset)
+    offset = None if value.offset is None else _distance(value.offset, "breakeven offset", atr_at)
+    return (_distance(value.trigger, "breakeven trigger", atr_at), offset)
 
 
-def _targets(value: object) -> list[tuple[Any, float]]:
+def _targets(value: object, atr_at: AtrAt) -> list[tuple[Any, float]]:
     if value is None:
         return []
     pairs = []
     for item in value:  # type: ignore[union-attr]
-        level, fraction = item
-        pairs.append((_distance(level, "target"), float(fraction)))
+        try:
+            level, fraction = item
+        except (TypeError, ValueError):
+            raise ConfigError(f"targets= takes (distance, fraction) pairs, got {item!r}") from None
+        pairs.append((_distance(level, "target", atr_at), float(fraction)))
     return pairs
 
 
@@ -66,16 +74,19 @@ def leg_rules(
     trail: object,
     breakeven: object,
     after_first_target: str | None,
+    atr_at: AtrAt,
 ) -> dict[str, Any] | None:
-    """The rules dict of a request, or None when no rule is given."""
+    """The rules dict of a request, or None when no rule is given. `atr_at(period)`
+    gives the ATR in rupees at this decision for a `bt.atr` distance. Raises
+    ConfigError for an argument of the wrong kind."""
     if after_first_target not in AFTER_FIRST_TARGET:
         raise ConfigError("after_first_target takes 'breakeven' or 'keep'")
     rules = {
-        "stop": None if stop is None else _distance(stop, "stop"),
-        "target": None if target is None else _distance(target, "target"),
-        "targets": _targets(targets),
-        "trail": _trail(trail),
-        "breakeven": _breakeven(breakeven),
+        "stop": None if stop is None else _distance(stop, "stop", atr_at),
+        "target": None if target is None else _distance(target, "target", atr_at),
+        "targets": _targets(targets, atr_at),
+        "trail": _trail(trail, atr_at),
+        "breakeven": _breakeven(breakeven, atr_at),
         "after_first_target": after_first_target,
     }
     if all(not value for value in rules.values()):

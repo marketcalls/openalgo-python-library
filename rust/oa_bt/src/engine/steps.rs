@@ -48,34 +48,15 @@ impl Engine {
         Ok(())
     }
 
-    /// Step 3: leg levels against the bar. A plain leg has none; a leg with rules
-    /// cannot exist yet (`LegState::open` refuses them).
+    /// Step 3: leg levels against the bar (`legs::test_leg_levels`).
     fn step_levels(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
-        for (key, leg) in &self.legs {
-            if let Some(bar) = self.market.bar(key.instrument, slice.index) {
-                if !leg.test_bar(&bar)?.is_empty() {
-                    return Err(KernelError::NotBuilt {
-                        feature: "exits at leg levels",
-                    });
-                }
-            }
-        }
-        Ok(())
+        self.test_leg_levels(slice)
     }
 
-    /// Step 4: trail and breakeven ratchets, in force from the next slice.
+    /// Step 4: trail and breakeven ratchets, in force from the next slice
+    /// (`legs::ratchet_legs`).
     fn step_ratchets(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
-        let market = &self.market;
-        for (key, leg) in &mut self.legs {
-            if let Some(bar) = market.bar(key.instrument, slice.index) {
-                if !leg.ratchet(&bar)?.is_empty() {
-                    return Err(KernelError::NotBuilt {
-                        feature: "trail and breakeven arming",
-                    });
-                }
-            }
-        }
-        Ok(())
+        self.ratchet_legs(slice)
     }
 
     /// Step 5: mark every open position at its close, or at its last close and flagged

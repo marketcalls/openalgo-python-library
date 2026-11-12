@@ -35,6 +35,8 @@ pub(super) struct FillRequest {
     pub(super) margin_rupees: f64,
     /// Rules for the leg an entry opens.
     pub(super) leg_rules: LegRules,
+    /// The target a target exit fills (0 is the first).
+    pub(super) target_index: Option<u16>,
 }
 
 impl FillRequest {
@@ -61,6 +63,7 @@ impl FillRequest {
             flags: FillFlags::NONE,
             margin_rupees: 0.0,
             leg_rules: LegRules::default(),
+            target_index: None,
         }
     }
 
@@ -84,6 +87,8 @@ enum AtFill {
     Reject(RejectCode),
     /// Nothing left to reduce: cancelled.
     Cancel,
+    /// `reverse=True` beyond the position: close these units, then open these.
+    Reverse(f64, f64),
 }
 
 impl Engine {
@@ -117,6 +122,9 @@ impl Engine {
                 let kind = OrderEventKind::Canceled;
                 return self.end_order(stamp, id, OrderAction::Cancel, kind);
             }
+            AtFill::Reverse(close, open_units) => {
+                return self.fill_reversal(slice, &order, (close, open_units), open);
+            }
         };
         let margin = if opening {
             self.margin_for(slice, key, request.side, units, open)?
@@ -138,6 +146,7 @@ impl Engine {
             flags: FillFlags::NONE,
             margin_rupees: margin,
             leg_rules: request.leg_rules.clone(),
+            target_index: None,
         };
         self.execute_fill(stamp, fill)?;
         Ok(())
@@ -195,9 +204,10 @@ impl Engine {
         }
         if reduces {
             if order.quantity_units > held.abs() {
-                return Err(KernelError::NotBuilt {
-                    feature: "an order larger than the opposite position (the excess rule and \
-                              reverse=True)",
+                return Ok(if request.reverse {
+                    AtFill::Reverse(held.abs(), order.quantity_units - held.abs())
+                } else {
+                    AtFill::Reject(RejectCode::ReverseNotAllowed)
                 });
             }
             return Ok(AtFill::Fill(order.quantity_units, false));
@@ -211,7 +221,7 @@ impl Engine {
     }
 
     /// Margin an opening fill blocks, rupees.
-    fn margin_for(
+    pub(super) fn margin_for(
         &self,
         slice: &SliceInfo,
         key: PositionKey,
@@ -261,6 +271,9 @@ impl Engine {
             tick_rupees: spec.tick_size_rupees,
             multiplier: spec.multiplier,
             round_levels: self.config.risk.round_levels,
+            lot_size_units: spec.lot_size_units,
+            fractional: self.config.quantity_mode == QuantityMode::Fractional
+                && !spec.is_derivative(),
         };
         self.update_leg(&request, &effect, context, average)?;
         let reason = match effect.kind {
@@ -276,7 +289,7 @@ impl Engine {
             price_rupees: price,
             at: request.at,
             reason,
-            target_index: None,
+            target_index: request.target_index,
             flags: request.flags,
             costs_rupees: 0.0,
         };
@@ -301,12 +314,19 @@ impl Engine {
                 self.legs.retain(|(k, _)| *k != key);
                 self.legs.push((key, leg));
             }
-            (FillKind::Add, _, Some(slot)) => self.legs[slot].1.on_add(average, request.units)?,
+            (FillKind::Add, _, Some(slot)) => {
+                let leg = &mut self.legs[slot].1;
+                leg.accepts_add_rules(&request.leg_rules)?;
+                leg.on_add(average, request.units)?;
+            }
             (FillKind::Reduce, PositionChange::Closed, Some(slot)) => {
                 self.legs.remove(slot);
             }
             (FillKind::Reduce, _, Some(slot)) => {
-                self.legs[slot].1.on_reduce(effect.quantity_after.abs())?;
+                let remaining = effect.quantity_after.abs();
+                self.legs[slot]
+                    .1
+                    .on_reduce(remaining, request.target_index)?;
             }
             _ => {}
         }
@@ -321,10 +341,21 @@ impl Engine {
         effect: &FillEffect,
     ) -> Result<(), KernelError> {
         if let Some(id) = fill.order {
-            self.book.apply(id, OrderAction::Fill)?;
+            // A reversal fills its order in two parts: the close, then the open.
+            let part = self.book.get(id).is_some_and(|order| {
+                order.filled_units + fill.quantity_units < order.quantity_units
+            });
+            let action = if part {
+                OrderAction::FillPart
+            } else {
+                OrderAction::Fill
+            };
+            self.book.apply(id, action)?;
             if let Some(order) = self.book.get_mut(id) {
-                order.filled_units = fill.quantity_units;
-                order.average_fill_rupees = fill.price_rupees;
+                let value = order.filled_units * order.average_fill_rupees
+                    + fill.quantity_units * fill.price_rupees;
+                order.filled_units += fill.quantity_units;
+                order.average_fill_rupees = value / order.filled_units;
             }
             let kind = OrderEventKind::Filled {
                 quantity_units: fill.quantity_units,
