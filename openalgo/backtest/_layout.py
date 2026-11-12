@@ -40,7 +40,7 @@ def parse_interval(interval):
         return interval, 1
     unit = interval[-1]
     count = interval[:-1]
-    if unit in _INTRADAY_UNITS and count.isdigit() and int(count) > 0:
+    if unit in _INTRADAY_UNITS and count.isdecimal() and int(count) > 0:
         return "intraday", int(count) * _INTRADAY_UNITS[unit]
     raise ConfigError(
         f"unknown interval {interval!r}: use forms such as '1m', '5m', '15m', '1h', "

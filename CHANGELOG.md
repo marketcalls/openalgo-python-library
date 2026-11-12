@@ -607,8 +607,8 @@ across a NaN bar.
   number (a flag, a time or text, such as `"ruined"`).
 - A base of seconds (`base="30s"`) no longer stops an MIS run with ZeroDivisionError,
   and the Assumptions block calls its bars 30-second bars (it said 0-hour).
-- A session time written with a digit that is not decimal (a superscript) raises
-  ConfigError instead of ValueError.
+- A session time or an interval written with a digit that is not decimal (a superscript
+  two, for example) raises ConfigError instead of ValueError.
 - `benchmark/backtest_speed.py --rows` refuses an unknown row group, so `--check` cannot
   pass without measuring anything.
 - When a reconnected socket opened, went live and dropped again before the reconnect

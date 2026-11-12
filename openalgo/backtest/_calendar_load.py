@@ -318,7 +318,7 @@ def _holiday_rows(response, year: int | None) -> tuple[list[dict], int]:
         year = response.get("year")
     if year is None:
         years = {str(row.get("date", ""))[:4] for row in rows}
-        if len(years) != 1 or not next(iter(years)).isdigit():
+        if len(years) != 1 or not next(iter(years)).isdecimal():
             raise CalendarError(
                 "cannot tell which year these holidays belong to: pass year=, or the "
                 "whole holidays(year) response"
