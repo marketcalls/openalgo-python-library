@@ -3,8 +3,8 @@
 A check that refuses an order gives it a reject code (`result.orders["reject_code"]`)
 and the run goes on, so a run whose entries were all refused can end with no trade and
 nothing else to say why. The result therefore says, for each reject code that occurred,
-how many of the run's orders it refused, when the first of them was decided (IST), what
-the code means and what to do (`_reject_reasons`). One line per code, however many
+how many of the run's orders it refused, when the earliest of them was decided (IST),
+what the code means and what to do (`_reject_reasons`). One line per code, however many
 orders it refused: an entry cut-off can refuse an order at every bar after it.
 
 Orders a sizer sized and the margin refused get one more clause: a risk sizer
@@ -16,6 +16,7 @@ causes it: it sizes from the free cash itself.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from ._calendar_convert import format_ist
@@ -23,6 +24,8 @@ from ._messages import counted
 from ._reject_reasons import PRODUCT_RULE, PRODUCT_RULE_CASES, REASONS
 
 MARGIN = "margin"
+# The `Instrument.kind` of an index, which the kernel refuses every order for.
+INDEX_KIND = "index"
 # The sizer codes of the orders table (`SizerSpec::code` in the kernel) and how a user
 # writes each; the engine default ("default") is left out on purpose (module docstring).
 SIZERS = {
@@ -35,14 +38,14 @@ SIZERS = {
     "function": "a sizing function",
 }
 # The columns of the orders table these messages read.
-COLUMNS = ("reject_code", "decided_at", "side", "product", "validity", "sizer")
+COLUMNS = ("reject_code", "decided_at", "side", "product", "validity", "sizer", "instrument")
 
 
 def _rejected_by_code(orders: dict[str, list[Any]]) -> dict[str, list[dict[str, Any]]]:
     """The rejected orders grouped by reject code, codes in the order they first
-    occurred and orders in id order (the kernel's table is in id order, which is the
-    order they were decided in). `orders` is the kernel's orders table, a list per
-    column."""
+    occurred and orders in id order (the kernel's table is in id order; an order keeps
+    its id when it is modified, so id order is not always decision order). `orders` is
+    the kernel's orders table, a list per column."""
     groups: dict[str, list[dict[str, Any]]] = {}
     for values in zip(*(orders[name] for name in COLUMNS), strict=True):
         row = dict(zip(COLUMNS, values, strict=True))
@@ -51,14 +54,16 @@ def _rejected_by_code(orders: dict[str, list[Any]]) -> dict[str, list[dict[str, 
     return groups
 
 
-def product_rule_case(order: dict[str, Any]) -> str:
-    """Which product rule refused `order` (the kernel's submission and fill checks): a
-    delivery (CNC) sale opens a short, a GTT on MIS, or else an order for an index."""
+def product_rule_case(order: dict[str, Any], kind: str) -> str:
+    """Which product rule refused `order`, an order for an instrument of `kind`
+    (`Instrument.kind`), by the kernel's submission and fill checks: any order for an
+    index (checked first: an index refuses every order), a delivery (CNC) sale that opens
+    a short, or a GTT on MIS."""
+    if kind == INDEX_KIND:
+        return "index"
     if order["product"] == "CNC" and order["side"] == "SELL":
         return "delivery_short"
-    if order["validity"] == "GTT" and order["product"] == "MIS":
-        return "gtt_on_mis"
-    return "index"
+    return "gtt_on_mis"
 
 
 def _sized(rows: list[dict[str, Any]]) -> str:
@@ -71,30 +76,34 @@ def _sized(rows: list[dict[str, Any]]) -> str:
     return f" ({which}sized by {names}, which asked for more than the margin allows)"
 
 
-def _explanation(code: str, rows: list[dict[str, Any]]) -> str:
+def _explanation(code: str, rows: list[dict[str, Any]], kinds: Sequence[str]) -> str:
     """What the code means and what to do, for the orders it refused."""
     if code == PRODUCT_RULE:
-        cases = dict.fromkeys(product_rule_case(row) for row in rows)
+        cases = dict.fromkeys(product_rule_case(row, kinds[row["instrument"]]) for row in rows)
         return ". ".join("; ".join(PRODUCT_RULE_CASES[case]) for case in cases)
     meaning, advice = REASONS[code]
     detail = _sized(rows) if code == MARGIN else ""
     return f"{meaning}{detail}; {advice}"
 
 
-def reject_warnings(orders: dict[str, list[Any]]) -> list[str]:
+def reject_warnings(orders: dict[str, list[Any]], kinds: Sequence[str]) -> list[str]:
     """One warning per reject code that occurred, in the order the codes first occurred:
     for example "4 of 28 orders were rejected with reject_code 'margin'
-    (result.orders), the first decided at 2026-10-05 10:15 IST: ...". `orders` is the
-    kernel's orders table, a list per column."""
+    (result.orders), the first decided at 2026-10-05 10:15 IST: ...", the first being
+    the earliest decision (UTC nanoseconds `decided_at`, shown in IST) among them.
+    `orders` is the kernel's orders table, a list per column; `kinds` is the
+    `Instrument.kind` of each of the run's instruments, by the kernel's instrument
+    index."""
     total = len(orders["reject_code"])
     lines = []
     for code, rows in _rejected_by_code(orders).items():
         were = "was" if len(rows) == 1 else "were"
         first = "decided at" if len(rows) == 1 else "the first decided at"
+        earliest = min(row["decided_at"] for row in rows)
         lines.append(
             f"{len(rows)} of {counted(total, 'order')} {were} rejected with reject_code "
-            f"'{code}' (result.orders), {first} {format_ist(rows[0]['decided_at'])}: "
-            f"{_explanation(code, rows)}"
+            f"'{code}' (result.orders), {first} {format_ist(earliest)}: "
+            f"{_explanation(code, rows, kinds)}"
         )
     return lines
 

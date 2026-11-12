@@ -77,6 +77,8 @@ FINAL_POSITION_COLUMNS = (
     "unrealized_rupees",
     "stale",
 )
+# The `Instrument.kind` of a futures contract, whose final position has no market value.
+FUTURE_KIND = "future"
 # The columns of the orders table that hold a string or nothing. A missing one is NaN in
 # an object column, as the events table marks a missing key, whatever the other rows
 # hold: left to pandas, a column of None alone stays None while one with a string turns
@@ -235,10 +237,15 @@ class Result:
 
         `value_rupees` is the signed market value at the mark (units x mark, negative
         for a short) and `weight_pct` that value in percent of the run's final equity,
-        so a portfolio's end weights read off directly."""
+        so a portfolio's end weights read off directly. Both are NaN for a future: it is
+        not bought with cash (the account holds its margin, and its open profit or loss
+        is already in equity), so its contract value, often several times the equity,
+        would read as a share of the portfolio; `equity["exposure_rupees"]` counts it."""
         frame = _fixed(self._output["final_positions"], FINAL_POSITION_COLUMNS)
         frame.insert(0, "symbol", [self._symbols[i] for i in frame["instrument"]])
-        frame["value_rupees"] = frame["quantity_units"] * frame["mark_rupees"]
+        kinds = [self._manifest["instruments"][i]["kind"] for i in frame["instrument"]]
+        held = frame["quantity_units"] * frame["mark_rupees"]
+        frame["value_rupees"] = held.mask(pd.Series(kinds, index=frame.index) == FUTURE_KIND)
         equity = self.equity["equity_rupees"]
         final_equity = float(equity.iloc[-1]) if len(equity) else math.nan
         frame["weight_pct"] = frame["value_rupees"] / final_equity * 100
@@ -307,8 +314,9 @@ class Result:
         return _result_export.to_csv(self.to_dataframes(), folder)
 
     def to_excel(self, path: str | os.PathLike) -> Path:
-        """Write every table of `to_dataframes()` to one Excel workbook at `path`, one
-        sheet per table named after it, and return the path. Times are written as plain
+        """Write every table of `to_dataframes()` to one Excel workbook at `path` (its
+        folder is created when missing), one sheet per table named after it, and return
+        the path. Times are written as plain
         IST date-times, without the zone (a cell holds none); the `*_ts` columns stay UTC
         nanoseconds. Needs openpyxl, which openalgo does not install: raises
         MissingDependencyError, an ImportError, saying `pip install openpyxl` when it is

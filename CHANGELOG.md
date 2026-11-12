@@ -13,7 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`Result.final_positions` shows each position's `value_rupees` and `weight_pct`** (its
   market value at the mark, in percent of the run's final equity), so a portfolio's end
-  weights read off directly; an optimisation table counts `trades` in whole numbers.
+  weights read off directly; an optimisation table counts `trades` in whole numbers. A
+  future has neither (NaN): it is not bought with cash, and its contract value, often
+  several times the equity, would read as a share of the portfolio;
+  `equity["exposure_rupees"]` counts it.
 - **`self.rebalance(weights, cash_buffer=2)` in `openalgo.backtest` (preview).** Trades a
   portfolio to target weights, in percent of equity by symbol, at one decision: a
   symbol of the strategy left out of the weights is sold to flat, `cash_buffer`
@@ -23,7 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the sales' proceeds. Its buys are intended adds: the averaging-down refusal
   (`allow_averaging_down = False`, the default) does not apply to them; the other
   scale-in limits do. Every order of a rebalance is tagged "rebalance" in
-  `result.orders`. Scheduling stays in the strategy (`on_bar`, or `self.every`). Not
+  `result.orders`. Scheduling stays in the strategy (`on_bar`, or `self.every`). A
+  timer that rebalances at an open where an earlier rebalance's buys are due trades
+  from the position those buys make: they fill before the timer runs. Not
   built yet: scaling the buys to the cash left at the fill, no-trade rules, weight
   tables and functions, drift bands, the rebalance log and `bt.rebalance`.
 - **The credit for selling delivery holdings is a dated table** (`sale_credit_defaults.csv`
@@ -32,11 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   October 2020 and applied to earlier dates) and from 2024-10-07, and 80 percent from
   2020-12-01 to 2024-10-06 with the rest on the next trading day (under SEBI's peak
   margin rules 20 percent stayed blocked until the shares were delivered; the broker
-  sources are in the table). Units bought and sold on one day are an intraday trade
-  and are credited in full. A run that uses the unverified row warns. Not modelled:
-  the next-day credit of shares sold before their delivery (bought the previous day).
+  sources are in the table). It applies to shares (ETFs included) sold on CNC; a future
+  or an option sold on CNC withholds nothing. Units bought and sold on one day are an
+  intraday trade and are credited in full. A run that uses the unverified row warns.
+  Not modelled: the next-day credit of shares sold before their delivery (bought the
+  previous day).
 - **`Result.to_csv(folder)` and `Result.to_excel(path)`** write every table of
-  `to_dataframes()`: one CSV file per table, or one workbook with a sheet per table.
+  `to_dataframes()`: one CSV file per table, or one workbook with a sheet per table;
+  both create the folder they write into.
   Times are written as plain IST date-times (a spreadsheet cell holds no time zone, so
   `to_excel` on a table failed before); the `*_ts` columns stay UTC nanoseconds. Excel
   needs openpyxl, which is not installed with openalgo: without it `to_excel` raises
@@ -44,20 +52,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`SymbolNotFoundError`** (a `DataError`, in `openalgo.backtest.errors`): the OpenAlgo
   server answered that the symbol is not in its master contract. `symbol` and
   `exchange` name what was asked for.
-- **Charges from 2020-07-01 (`openalgo.backtest.costs`).** Ten earlier schedule
+- **Charges from 2020-07-01 (`openalgo.backtest.costs`).** Eleven earlier schedule
   versions, from IN-2020-07-01 (the day stamp duty became one rate across states) to
   IN-2024-05-13, so a backtest from mid 2020 is charged the rates that applied on each
   trade date instead of stopping with "no cost schedule covers ...". They cover every
   segment (NSE and BSE equity, NFO, BFO, MCX futures) and each change has its own
   version: NSE transaction charges (2021-01-01, 2023-04-01, with the NSE IPFT levy),
   BSE group A and B charges (2021-03-01, 2022-12-01), the SEBI fee (half rate until
-  2021-03-31), MCX KAPAS (2021-05-01), F&O STT (2023-04-01) and BSE options charges
-  (2022-05-02, 2023-11-01, 2024-05-13). Every version names its sources (exchange
-  circulars and notices, SEBI notifications, the Finance Acts, the GST rate
-  notification) and a row is verified only where a primary source states its rates
-  and their dates; the other rows (BSE groups X and SS, MCX RBDPMOLEIN, MCX in 2020,
-  Sensex options from 2023-11-01 to 2024-05-12) are unverified, say why in
-  their notes and warn. `costs.schedules()` lists them.
+  2021-03-31), MCX KAPAS (2021-05-01), F&O STT (2023-04-01), BSE options charges
+  (2022-05-02, 2023-11-01, 2024-05-13) and GST on the SEBI fee (2022-07-18: the fee was
+  exempt from GST before, so earlier trades pay GST on brokerage and the exchange charge
+  only). Every version names its sources (exchange circulars and notices, SEBI
+  notifications and circulars, the Finance Acts, the GST rate notification) and a row is
+  verified only where a primary source states its rates and their dates; the other rows
+  are unverified, say why in their notes and warn: BSE groups X and SS, MCX RBDPMOLEIN,
+  MCX in 2020, Sensex options from 2023-11-01 to 2024-05-12, NSE equity from 2020-08-01
+  to 2021-03-31 (NSE charged shares outside the NIFTY 50 and NIFTY Next 50 a lower rate,
+  and the engine does not know an index's members) and the MCX futures at Rs 2.60 per
+  lakh until 2021-03-31 (the third expiry and later paid half; the rate is right for the
+  current_month and next_month contracts a futures strategy holds, but the engine does
+  not know the expiry rank of a contract traded on its own). `costs.schedules()` lists
+  them; each version's `gst_on_sebi_fee` says whether GST falls on the SEBI fee, and a
+  user schedule may set it (True by default).
 
 ### Changed
 
@@ -67,24 +83,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and its open loss no longer blocks cash already left over. Before, a portfolio of
   holdings that had fallen had its buys refused for margin although the cash was
   there (the rejections seen when rebalancing a buy-and-hold portfolio), and one that
-  had risen could buy with its paper profit. Intraday (MIS) and futures positions are
-  unchanged.
+  had risen could buy with its paper profit. This applies to shares (ETFs included):
+  intraday (MIS) positions, and futures and options on any product, CNC included,
+  block their margin as before.
 - **Every time in a `Result` table is an IST datetime.** `orders["decided_at"]` and
   `orders["good_until"]` (NaT for a GTT order) and `skipped["decided_at"]` were UTC
   nanoseconds; `stale_marks` and `settlements` gain a `time` column; `rolls` has an
-  IST `date` in place of its day number. The kernel's UTC nanoseconds stay only in the
-  `*_ts` columns.
+  IST `date` in place of its day number. The `time` column of `rolls` and
+  `settlements` is an IST datetime column in a run without futures too, where the
+  tables are empty. The kernel's UTC nanoseconds stay only in the `*_ts` columns.
 - **Rejected orders are reported.** A backtest now adds one warning per reject code
-  that occurred: how many of the run's orders it refused, when the first was decided
+  that occurred: how many of the run's orders it refused, when the earliest was decided
   (IST), what the code means and what to do (for `product_rule` on a stock: a delivery
-  short is not allowed, short intraday with MIS or trade futures). `print(result)` has a
+  short is not allowed, short intraday with MIS or trade futures; on an index: an index
+  cannot be traded, trade its futures or options). `print(result)` has a
   `rejected orders:` line with the count by code. Before, a run whose entries were all
   rejected ended with no trade and no warning. The warning for orders a sizer sized and
   the margin refused is now part of the margin warning, which also covers orders given
   in units or lots.
 - **An expired futures contract is named as such.** When a run needs the history of a
   contract that expired before today and the server no longer lists it, the error says
-  that the contract expired on its date, that brokers stop serving an expired
+  that the contract expired on its date (its last trading day, which a holiday can
+  move before the expiry its symbol names), that brokers stop serving an expired
   contract's history, and to start after that date or run on stored bars with `data=`.
 - **The underlying of a contract is read from its symbol for the charges.** An MCX
   future (or a BFO option) given as an `Instrument` without `underlying=` is charged
@@ -97,8 +117,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it. The cost model's own functions still warn with the full text, which now ends "so
   the charges may be off".
 - **`bt.from_arrays` errors say what to pass.** A missing `symbol=`, `exchange=` or
-  `interval=`, or `shorts` and `covers` given by position, raise `ConfigError` with a
-  one-line example instead of a `TypeError`.
+  `interval=`, or any value given by position after `exits` (the message names
+  `symbol=`, `exchange=`, `interval=`, `shorts=` and `covers=`), raise `ConfigError`
+  with a one-line example instead of a `TypeError`.
 - The `buy` and `sell` docstrings state that with `reverse=True` only the quantity
   beyond the open position opens the other side (flipping one lot takes two lots), and
   `target` is documented as the one-call way to flip.
@@ -106,9 +127,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CostError unless `backfill=True`, and the message now says from which date charges
   are available. Trades from 2020-07-01 to 2024-09-30 that a model with `backfill=True`
   used to charge at the 2024-10-01 rates are now charged at the rates of their own
-  dates. Known limits of these versions, stated in their notes: GST is charged on the
-  SEBI fee before 2022-07-18 too (Rs 0.90 to 1.80 per crore high), and exchange
-  charges, tiered by a member's turnover before 2024-10-01, are the first-slab rates.
+  dates. A known limit of these versions, stated in their notes: exchange charges,
+  tiered by a member's turnover before 2024-10-01, are the first-slab rates.
 
 ### Fixed
 

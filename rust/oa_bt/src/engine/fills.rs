@@ -163,7 +163,7 @@ impl Engine {
         } else {
             0.0
         };
-        if opening && margin > self.portfolio.free_cash_rupees() {
+        if opening && margin > self.free_cash_rupees() {
             let kind = OrderEventKind::Rejected(RejectCode::Margin);
             return self.end_order(stamp, id, OrderAction::Reject, kind);
         }

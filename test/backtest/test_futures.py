@@ -24,6 +24,7 @@ import warnings
 
 import pandas as pd
 import pytest
+from accounting_runs import daily_round_trip
 
 import openalgo.backtest as bt
 from openalgo import ta
@@ -396,6 +397,16 @@ def test_a_switch_and_a_settlement_are_dated_in_ist():
     assert "day" not in result.rolls.columns
     first = result.settlements.iloc[0]
     assert (first["date"], first["time"].date()) == (dt.date(2024, 9, 23),) * 2
+
+
+@pytest.mark.parametrize("table", ["rolls", "settlements"])
+def test_the_time_column_is_an_ist_datetime_in_a_run_with_no_futures(table):
+    # A stock run has no switch and no settlement: the empty column keeps its type, so
+    # `.dt` works on it as on any other run's.
+    times = getattr(daily_round_trip(costs=None), table)["time"]
+    assert times.empty
+    assert isinstance(times.dtype, pd.DatetimeTZDtype)
+    assert times.dt.tz.utcoffset(None) == dt.timedelta(hours=5, minutes=30)
 
 
 def test_on_bar_sees_each_contracts_own_bar_and_the_series_re_adjusted_at_the_roll():

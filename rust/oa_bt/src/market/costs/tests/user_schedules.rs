@@ -36,6 +36,7 @@ fn user_version(id: &str, from: Day, to: Option<Day>, rate: f64) -> CostSchedule
         valid_from: from,
         valid_to: to,
         gst_rate: 0.18,
+        gst_on_sebi_fee: true,
         gst_verified_through: None,
         source: "test".to_string(),
         notes: String::new(),

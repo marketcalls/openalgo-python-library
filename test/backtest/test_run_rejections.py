@@ -8,13 +8,19 @@ bars (a 15-minute strategy decides at 09:30, 09:45, ...), and the daily bars of
 10,00,000 and every price is near 1,000.00.
 """
 
-from accounting_runs import CAPITAL, daily_bars, round_trip, session_bars
+from typing import Any
+
+import pandas as pd
+from accounting_runs import CAPITAL, at, daily_bars, round_trip, session_bars
 
 import openalgo.backtest as bt
 from openalgo.backtest._reject_reasons import PRODUCT_RULE_CASES, REASONS
+from openalgo.backtest._rejections import reject_warnings
+from openalgo.backtest.reference import Instrument
 
 # Every code a kernel check can reject an order with (`RejectCode` in
-# rust/oa_bt/src/exec/checks.rs).
+# rust/oa_bt/src/exec/checks.rs). `RejectCode::RateLimit` is left out: no kernel check
+# makes it, because no order rate limit is enforced in a backtest.
 KERNEL_REJECT_CODES = {
     "quantity_rule",
     "tick",
@@ -27,11 +33,13 @@ KERNEL_REJECT_CODES = {
     "cooldown",
     "max_positions",
     "halted",
-    "rate_limit",
     "instrument_unknown",
     "reverse_not_allowed",
     "scale_in_limit",
 }
+NIFTY_INDEX = Instrument(
+    symbol="NIFTY", exchange="NSE_INDEX", kind="index", tick_size=0.05, settlement="none"
+)
 MARGIN_ADVICE = (
     "raise capital, lower the size, or set size_caps, for example size_caps = "
     "bt.size.caps(leverage=1) for a position of at most 1x the equity"
@@ -135,6 +143,58 @@ def test_a_short_condition_on_delivery_is_told_delivery_cannot_be_shorted():
     result = bt.backtest(shorts, data=daily_bars(), capital=CAPITAL, costs=None, slippage=0)
     (text,) = rejection_warnings(result)
     assert text.endswith(": " + DELIVERY_SHORT)
+
+
+class SellsTheIndex(bt.Strategy):
+    """A daily strategy on an index that sells 10 units at every close while flat, on
+    CNC (a daily strategy's default product outside the derivatives exchanges)."""
+
+    symbol, exchange, interval = "NIFTY", "NSE_INDEX", "D"
+
+    def on_bar(self, bar):
+        if self.position.is_flat:
+            self.sell(qty=10)
+
+
+def test_a_sale_of_an_index_on_delivery_is_told_an_index_cannot_be_traded():
+    result = bt.backtest(
+        SellsTheIndex,
+        data=daily_bars(),
+        instrument=NIFTY_INDEX,
+        capital=CAPITAL,
+        costs=None,
+        slippage=0,
+    )
+    assert rejection_warnings(result) == [
+        "3 of 3 orders were rejected with reject_code 'product_rule' (result.orders), the "
+        "first decided at 2026-11-02 15:30 IST: an index cannot be traded; trade its futures "
+        "or options"
+    ]
+
+
+def kernel_orders(*rows: dict[str, Any]) -> dict[str, list[Any]]:
+    """The kernel's orders table (a list per column) holding `rows` in id order."""
+    return {name: [row[name] for row in rows] for name in rows[0]}
+
+
+def margin_rejection(decided_at: Any) -> dict[str, Any]:
+    """An MIS buy of instrument 0, given in units, rejected for margin."""
+    return {
+        "instrument": 0,
+        "reject_code": "margin",
+        "decided_at": pd.Timestamp(decided_at).value,
+        "side": "BUY",
+        "product": "MIS",
+        "validity": "DAY",
+        "sizer": None,
+    }
+
+
+def test_the_first_decided_at_is_the_earliest_decision_whatever_the_order_ids():
+    # Order 0 was modified at 10:15, which moved its decision after order 1's at 09:45.
+    orders = kernel_orders(margin_rejection(at(10, 15)), margin_rejection(at(9, 45)))
+    (text,) = reject_warnings(orders, ["equity"])
+    assert "the first decided at 2026-11-04 09:45 IST:" in text
 
 
 def test_a_gtt_on_mis_is_told_to_use_cnc_or_nrml():

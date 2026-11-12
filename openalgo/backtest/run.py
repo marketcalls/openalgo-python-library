@@ -210,8 +210,9 @@ def from_arrays(entries: Any, exits: Any = None, *extra: Any, **settings: Any) -
     `bt.backtest`; read by the rules of conditions (`_arrays.from_arrays`). Everything
     after `exits` is a keyword, and `symbol`, `exchange` and `interval` are required:
     `bt.from_arrays(entries, exits, symbol="SBIN", exchange="NSE", interval="5m")`.
-    Raises ConfigError, with that example, when one is missing or more arrays are given
-    by position (`shorts=` and `covers=` are keywords)."""
+    Raises ConfigError, with that example, when one is missing or more values are given
+    by position (`symbol=`, `exchange=`, `interval=`, `shorts=` and `covers=` are
+    keywords)."""
     from ._arrays import from_arrays as build
 
     return build(entries, exits, *extra, **settings)

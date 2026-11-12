@@ -112,7 +112,7 @@
 //! | `gtt_fire` | Step 3 for GTTs, the child fill, the engine's exit after an unfilled child |
 //! | `gtt_orders` | Strategy GTT orders (`validity="gtt"`), the per-segment order shape |
 //! | `accounting` | Slippage, margin and charges of a fill; contract notes at the session close |
-//! | `sale_credit` | The part of a sale of delivery holdings credited only on the next trading day (`market::sale_credit`) |
+//! | `sale_credit` | Delivery shares, paid in full: the free cash that counts them at cost, and the part of their sale credited only on the next trading day (`market::sale_credit`) |
 //! | `futures` | Futures series: the series, the switches and their spreads, the roll session, the settlement records |
 //! | `futures_plan` | Registering a series and planning its switches from the bars; settlement prices |
 //! | `roll` | Step 2: the futures auto-roll, the level shift, the GTTs at a roll |

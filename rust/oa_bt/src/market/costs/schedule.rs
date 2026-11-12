@@ -156,9 +156,12 @@ pub struct CostSchedule {
     /// Last trade date (IST) the version applies to, inclusive, or None while it is
     /// still in force.
     pub valid_to: Option<Day>,
-    /// GST rate (a fraction) on brokerage plus exchange transaction charge plus SEBI
-    /// fee, and on the DP fee.
+    /// GST rate (a fraction) on brokerage plus exchange transaction charge, plus the
+    /// SEBI fee when `gst_on_sebi_fee`, and on the DP fee.
     pub gst_rate: f64,
+    /// True when GST falls on the SEBI fee too: from 2022-07-18 (SEBI circular
+    /// SEBI/HO/GSD/TAD/CIR/P/2022/0097); before, the SEBI fee was exempt.
+    pub gst_on_sebi_fee: bool,
     /// The last trade date the GST rate was verified for, or None.
     pub gst_verified_through: Option<Day>,
     /// Where the figures came from.
@@ -180,11 +183,41 @@ fn check_rate(what: &str, name: &str, rate: f64, bound: f64) -> Result<(), Strin
     ))
 }
 
+/// What GST falls on under one version, and at what rate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct GstRule {
+    rate: f64,
+    on_sebi_fee: bool,
+}
+
+impl GstRule {
+    /// GST on a fill's brokerage, exchange charge and SEBI fee (rupees), in rupees; the
+    /// SEBI fee counts only when the version puts it in the base.
+    #[inline]
+    pub(super) fn on(self, brokerage: f64, exchange_txn: f64, sebi_fee: f64) -> f64 {
+        let base = if self.on_sebi_fee {
+            brokerage + exchange_txn + sebi_fee
+        } else {
+            brokerage + exchange_txn
+        };
+        self.rate * base
+    }
+}
+
 impl CostSchedule {
     /// The row of a segment, if the version has one.
     #[inline]
     pub fn row(&self, segment: Segment) -> Option<&SegmentRow> {
         self.rows[segment.index()].as_ref()
+    }
+
+    /// The version's GST: its rate and whether the SEBI fee is in its base.
+    #[inline]
+    pub(super) fn gst_rule(&self) -> GstRule {
+        GstRule {
+            rate: self.gst_rate,
+            on_sebi_fee: self.gst_on_sebi_fee,
+        }
     }
 
     /// Check the version on its own.

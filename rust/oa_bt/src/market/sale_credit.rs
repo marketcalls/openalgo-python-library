@@ -5,14 +5,14 @@
 //! The dated rows are in `sale_credit_defaults.csv`, embedded and parsed once: the full
 //! proceeds before 2020-12-01 and from 2024-10-07, 80 percent between (the peak margin
 //! period, when 20 percent of the sale value stayed blocked until delivery). A malformed
-//! embedded file is a typed error (`MarginError::InvalidTable`) and fails the unit
+//! embedded file is a typed error (`SaleCreditError::InvalidTable`) and fails the unit
 //! tests; it never panics.
 
+use std::fmt;
 use std::sync::OnceLock;
 
 use crate::model::Day;
 
-use super::margin::MarginError;
 use super::table_rows::{at_line, parse_meta, records, RowMeta};
 
 const DATA: &str = include_str!("sale_credit_defaults.csv");
@@ -30,6 +30,25 @@ const HEADER: [&str; 7] = [
 const DATES: usize = 1;
 /// The whole sale value, percent.
 const WHOLE_PERCENT: f64 = 100.0;
+
+/// What went wrong with the sale-credit table.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SaleCreditError {
+    /// The embedded table is malformed (a defect of the release).
+    InvalidTable { reason: String },
+}
+
+impl fmt::Display for SaleCreditError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SaleCreditError::InvalidTable { reason } => {
+                write!(f, "the built-in sale-credit table is malformed: {reason}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SaleCreditError {}
 
 /// One row of the sale-credit table.
 #[derive(Clone, Debug, PartialEq)]
@@ -98,17 +117,20 @@ fn parse_table(text: &str) -> Result<Vec<SaleCreditRow>, String> {
     }
 }
 
+/// `parse_table` with its problem as the table's typed error.
+fn checked_table(text: &str) -> Result<Vec<SaleCreditRow>, SaleCreditError> {
+    parse_table(text).map_err(|reason| SaleCreditError::InvalidTable { reason })
+}
+
 /// The built-in sale-credit rows, in date order.
 ///
 /// Errors: `InvalidTable` if the embedded file is malformed (a unit test guards against
 /// shipping one).
-pub fn sale_credit_defaults() -> Result<&'static [SaleCreditRow], MarginError> {
-    static ROWS: OnceLock<Result<Vec<SaleCreditRow>, String>> = OnceLock::new();
-    match ROWS.get_or_init(|| parse_table(DATA)) {
+pub fn sale_credit_defaults() -> Result<&'static [SaleCreditRow], SaleCreditError> {
+    static ROWS: OnceLock<Result<Vec<SaleCreditRow>, SaleCreditError>> = OnceLock::new();
+    match ROWS.get_or_init(|| checked_table(DATA)) {
         Ok(rows) => Ok(rows),
-        Err(reason) => Err(MarginError::InvalidTable {
-            reason: reason.clone(),
-        }),
+        Err(error) => Err(error.clone()),
     }
 }
 
@@ -116,11 +138,11 @@ pub fn sale_credit_defaults() -> Result<&'static [SaleCreditRow], MarginError> {
 ///
 /// Errors: `InvalidTable` as `sale_credit_defaults`, or when no row covers the day
 /// (which the parse rules out).
-pub fn sale_credit_row(day: Day) -> Result<&'static SaleCreditRow, MarginError> {
+pub fn sale_credit_row(day: Day) -> Result<&'static SaleCreditRow, SaleCreditError> {
     sale_credit_defaults()?
         .iter()
         .find(|row| row.meta.covers(day))
-        .ok_or_else(|| MarginError::InvalidTable {
+        .ok_or_else(|| SaleCreditError::InvalidTable {
             reason: format!("{TABLE}: no row covers day {day}"),
         })
 }
@@ -199,5 +221,14 @@ mod tests {
         assert!(parse_table(&closed).is_err_and(|e| e.contains("in force")));
         let late_start = format!("{}\nS/1,2020-01-01,,100,src,verified,\n", header());
         assert!(parse_table(&late_start).is_err());
+    }
+
+    #[test]
+    fn a_malformed_table_is_reported_as_the_sale_credit_table() {
+        let zero = format!("{}\nS/1,,,0,src,verified,\n", header());
+        let message = checked_table(&zero).map_err(|error| error.to_string());
+        assert!(message.is_err_and(|text| text.starts_with(
+            "the built-in sale-credit table is malformed: sale_credit_defaults.csv line 2: "
+        )));
     }
 }

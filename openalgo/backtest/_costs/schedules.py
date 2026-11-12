@@ -3,7 +3,7 @@
 A schedule version as users see it:
 
     {"id": "IN-2026-04-01", "valid_from": date(2026, 4, 1), "valid_to": None,
-     "verified_through": date(2026, 11, 12), "gst_rate": 0.18,
+     "verified_through": date(2026, 11, 12), "gst_rate": 0.18, "gst_on_sebi_fee": True,
      "source": "...", "notes": "...",
      "rates": {"NSE_EQ_DELIVERY": {
          "stt_buy_rate": 0.001, "stt_sell_rate": 0.001, "exchange_txn_rate": 0.0000297,
@@ -14,7 +14,9 @@ A schedule version as users see it:
 
 Units: every key ending in `_rate` is a fraction (0.001 is 0.1 percent).
 `verified_through` is the last trade date the figures were checked for (None means
-never); the schedule's own value covers GST and is the default for its rows.
+never); the schedule's own value covers GST and is the default for its rows. GST falls
+on brokerage and the exchange charge, and on the SEBI fee too when `gst_on_sebi_fee` is
+True (from 2022-07-18; the SEBI fee was exempt before).
 
 This module checks the shape of a user's dict (fields present, nothing misspelt);
 the kernel checks the values, the plausibility of each rate and the date ranges.
@@ -54,11 +56,14 @@ _SCHEDULE_FIELDS = (
     "valid_to",
     "verified_through",
     "gst_rate",
+    "gst_on_sebi_fee",
     "source",
     "notes",
     "rates",
 )
 _REQUIRED_FIELDS = ("id", "valid_from", "gst_rate", "rates")
+# A user version that does not say taxes the SEBI fee, as GST has since 2022-07-18.
+_DEFAULT_GST_ON_SEBI_FEE = True
 
 
 def _row_view(row: tuple) -> dict[str, Any]:
@@ -74,13 +79,15 @@ def _row_view(row: tuple) -> dict[str, Any]:
 
 def schedule_view(raw: tuple) -> dict[str, Any]:
     """A kernel schedule tuple as a dict, with dates in place of day numbers."""
-    identifier, valid_from, valid_to, gst_rate, verified_through, source, notes, rows = raw
+    identifier, valid_from, valid_to, gst_rate, gst_on_sebi_fee, verified_through = raw[:6]
+    source, notes, rows = raw[6:]
     return {
         "id": identifier,
         "valid_from": day_to_date(valid_from),
         "valid_to": day_to_date(valid_to),
         "verified_through": day_to_date(verified_through),
         "gst_rate": gst_rate,
+        "gst_on_sebi_fee": gst_on_sebi_fee,
         "source": source,
         "notes": notes,
         "rates": {row[0]: _row_view(row) for row in rows},
@@ -148,16 +155,18 @@ def schedule_spec(schedule: Any) -> tuple:
     """A user's schedule dict as the tuple the kernel takes.
 
     `id`, `valid_from`, `gst_rate` and `rates` are required. `valid_to` defaults to
-    None (still in force), `verified_through` to None (never verified), `source` to
-    "user supplied" and `notes` to "". Each rate row needs every field of
+    None (still in force), `verified_through` to None (never verified),
+    `gst_on_sebi_fee` to True (GST on the SEBI fee, the rule from 2022-07-18), `source`
+    to "user supplied" and `notes` to "". Each rate row needs every field of
     `RATE_FIELDS` except `ipft_rate` and `stt_exercise_rate`, which default to zero;
     it may carry its own `verified_through`, `notes`, `calculator_tax_base` ("sides"
     by default, or "turnover") and `calculator_tax_unit` ("rupee" by default, or
     "paise"); a text field given as None takes its default.
 
     Raises CostError for a missing or unknown field, so a misspelt rate cannot be
-    dropped silently, and for a segment given twice under codes that differ only in
-    case or spaces. Rate values and date ranges are validated by the kernel.
+    dropped silently, for a `gst_on_sebi_fee` that is not True or False, and for a
+    segment given twice under codes that differ only in case or spaces. Rate values and
+    date ranges are validated by the kernel.
     """
     if not isinstance(schedule, dict):
         raise CostError(
@@ -173,11 +182,15 @@ def schedule_spec(schedule: Any) -> tuple:
     if not isinstance(rates, dict):
         raise CostError(f"{where}: rates must be a dict of segment code to rate row")
     verified = _optional_day(schedule.get("verified_through"), f"{where}: verified_through")
+    gst_on_sebi_fee = schedule.get("gst_on_sebi_fee", _DEFAULT_GST_ON_SEBI_FEE)
+    if not isinstance(gst_on_sebi_fee, bool):
+        raise CostError(f"{where}: gst_on_sebi_fee must be True or False, got {gst_on_sebi_fee!r}")
     return (
         str(schedule["id"]),
         to_day(schedule["valid_from"], f"{where}: valid_from"),
         _optional_day(schedule.get("valid_to"), f"{where}: valid_to"),
         number(f"{where}: gst_rate", schedule["gst_rate"]),
+        gst_on_sebi_fee,
         verified,
         str(schedule.get("source") or "user supplied"),
         str(schedule.get("notes") or ""),

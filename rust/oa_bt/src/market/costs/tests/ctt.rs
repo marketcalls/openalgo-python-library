@@ -81,7 +81,7 @@ fn a_cpo_note_has_ctt_because_crude_palm_oil_is_not_in_rule_3() {
 
 #[test]
 fn a_cpo_note_of_2022_has_ctt_at_that_year_exchange_rate() {
-    // The same trade on 2022-08-01 (IN-2022-05-02): exchange Rs 2.60 per lakh.
+    // The same trade on 2022-08-01 (IN-2022-07-18): exchange Rs 2.60 per lakh.
     //   CTT 103.17 -> Rs 103; exchange 0.0026 percent = 53.1492 -> 53.15
     //   SEBI 0.20442 -> 0.20; stamp 20.25 -> Rs 20
     //   GST 0.18 x (40 + 53.1492 + 0.20442) = 16.8036516 -> 16.80

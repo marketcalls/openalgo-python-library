@@ -33,7 +33,8 @@ fn the_versions_before_2024_10_01_and_their_dates() {
         ("IN-2021-03-01", d(2021, 3, 1), Some(d(2021, 3, 31))),
         ("IN-2021-04-01", d(2021, 4, 1), Some(d(2021, 4, 30))),
         ("IN-2021-05-01", d(2021, 5, 1), Some(d(2022, 5, 1))),
-        ("IN-2022-05-02", d(2022, 5, 2), Some(d(2022, 11, 30))),
+        ("IN-2022-05-02", d(2022, 5, 2), Some(d(2022, 7, 17))),
+        ("IN-2022-07-18", d(2022, 7, 18), Some(d(2022, 11, 30))),
         ("IN-2022-12-01", d(2022, 12, 1), Some(d(2023, 3, 31))),
         ("IN-2023-04-01", d(2023, 4, 1), Some(d(2023, 10, 31))),
         ("IN-2023-11-01", d(2023, 11, 1), Some(d(2024, 5, 12))),
@@ -75,28 +76,32 @@ struct VersionNotes {
 /// of Rs 2,10,430 pays STT 210.43 -> 210. Intraday (STT 0.025 percent on the sell,
 /// stamp 0.003 percent on the buy, brokerage Rs 20 a leg): STT 110, stamp 12,
 /// brokerage 40. The exchange line is (charge + IPFT) x value, SEBI is its rate x
-/// value, and GST is 18 percent of brokerage + exchange + SEBI, each rounded to the
-/// paisa. The rates that move the totals:
+/// value, and GST is 18 percent of brokerage + exchange, plus SEBI from 2022-07-18 (the
+/// SEBI fee was exempt from GST before), each rounded to the paisa. The rates that
+/// move the totals:
 ///
 /// - 2020-07-01: NSE Rs 3.25 per lakh + IPFT Rs 0.01 per crore, SEBI Rs 5 per crore.
-///   Buy: exchange 6.540338735 -> 6.54, SEBI 0.1006175 -> 0.10, GST 1.1953721 -> 1.20,
-///   total 201 + 6.54 + 0.10 + 30 + 1.20 = 238.84. Sell: 6.83918543 -> 6.84,
-///   0.105215 -> 0.11, GST 1.2499921 -> 1.25, total 218.20. Intraday on Rs 8,40,000:
-///   exchange 27.30084 -> 27.30, SEBI 0.42, GST 18% of 67.72084 = 12.1897512 -> 12.19,
-///   total 40 + 110 + 27.30 + 0.42 + 12 + 12.19 = 201.91.
+///   Buy: exchange 6.540338735 -> 6.54, SEBI 0.1006175 -> 0.10, GST 18% of 6.540338735
+///   = 1.1772609723 -> 1.18, total 201 + 6.54 + 0.10 + 30 + 1.18 = 238.82. Sell:
+///   6.83918543 -> 6.84, 0.105215 -> 0.11, GST 1.2310533774 -> 1.23, total 218.18.
+///   Intraday on Rs 8,40,000: exchange 27.30084 -> 27.30, SEBI 0.42, GST 18% of
+///   67.30084 = 12.1141512 -> 12.11, total 40 + 110 + 27.30 + 0.42 + 12 + 12.11 =
+///   201.83.
 /// - 2021-01-01 and 2021-03-01: NSE Rs 3.45 per lakh. Buy: exchange 6.942808735 ->
-///   6.94, GST 1.2678167 -> 1.27, total 239.31. Sell: 7.26004543 -> 7.26, GST
-///   1.3257469 -> 1.33, total 218.70. Intraday: exchange 28.98084 -> 28.98, GST
-///   12.4921512 -> 12.49, total 203.89.
-/// - 2021-04-01 to 2022-12-01: SEBI back to Rs 10 per crore. Buy: SEBI 0.201235 ->
-///   0.20, GST 1.2859279 -> 1.29, total 239.43. Sell: SEBI 0.21043 -> 0.21, GST
-///   1.3446856 -> 1.34, total 218.81. Intraday: SEBI 0.84, GST 12.5677512 -> 12.57,
-///   total 204.39.
+///   6.94, GST 1.2497055723 -> 1.25, total 239.29. Sell: 7.26004543 -> 7.26, GST
+///   1.3068081774 -> 1.31, total 218.68. Intraday: exchange 28.98084 -> 28.98, GST
+///   18% of 68.98084 = 12.4165512 -> 12.42, total 203.82.
+/// - 2021-04-01 to 2022-07-17: SEBI back to Rs 10 per crore, still outside GST. Buy:
+///   SEBI 0.201235 -> 0.20, GST 1.25, total 239.39. Sell: SEBI 0.21043 -> 0.21, GST
+///   1.31, total 218.78. Intraday: SEBI 0.84, GST 12.42, total 204.24.
+/// - 2022-07-18 to 2023-03-31: GST on the SEBI fee too. Buy: GST 18% of 7.144043735 =
+///   1.2859278723 -> 1.29, total 239.43. Sell: GST 1.3446855774 -> 1.34, total 218.81.
+///   Intraday: GST 18% of 69.82084 = 12.5677512 -> 12.57, total 204.39.
 /// - 2023-04-01 to 2024-05-13: NSE Rs 3.25 per lakh + IPFT Rs 10 per crore. Buy:
 ///   exchange 6.7413725 -> 6.74, GST 1.2496694 -> 1.25, total 239.19. Sell: 7.049405 ->
 ///   7.05, GST 1.3067703 -> 1.31, total 218.57. Intraday: exchange 28.14, GST
 ///   12.4164 -> 12.42, total 203.40.
-fn version_notes() -> [(&'static str, VersionNotes); 10] {
+fn version_notes() -> [(&'static str, VersionNotes); 11] {
     let notes = |buy: (Day, f64), sell: (Day, f64), intraday: (Day, f64)| VersionNotes {
         buy_day: buy.0,
         buy_note: buy.1,
@@ -109,47 +114,55 @@ fn version_notes() -> [(&'static str, VersionNotes); 10] {
         (
             "IN-2020-07-01",
             notes(
-                (d(2020, 8, 3), 238.84),
-                (d(2020, 11, 2), 218.20),
-                (d(2020, 12, 1), 201.91),
+                (d(2020, 8, 3), 238.82),
+                (d(2020, 11, 2), 218.18),
+                (d(2020, 12, 1), 201.83),
             ),
         ),
         (
             "IN-2021-01-01",
             notes(
-                (d(2021, 1, 4), 239.31),
-                (d(2021, 2, 1), 218.70),
-                (d(2021, 2, 15), 203.89),
+                (d(2021, 1, 4), 239.29),
+                (d(2021, 2, 1), 218.68),
+                (d(2021, 2, 15), 203.82),
             ),
         ),
         (
             "IN-2021-03-01",
             notes(
-                (d(2021, 3, 2), 239.31),
-                (d(2021, 3, 25), 218.70),
-                (d(2021, 3, 15), 203.89),
+                (d(2021, 3, 2), 239.29),
+                (d(2021, 3, 25), 218.68),
+                (d(2021, 3, 15), 203.82),
             ),
         ),
         (
             "IN-2021-04-01",
             notes(
-                (d(2021, 4, 5), 239.43),
-                (d(2021, 4, 28), 218.81),
-                (d(2021, 4, 15), 204.39),
+                (d(2021, 4, 5), 239.39),
+                (d(2021, 4, 28), 218.78),
+                (d(2021, 4, 15), 204.24),
             ),
         ),
         (
             "IN-2021-05-01",
             notes(
-                (d(2021, 6, 1), 239.43),
-                (d(2022, 1, 3), 218.81),
-                (d(2021, 9, 1), 204.39),
+                (d(2021, 6, 1), 239.39),
+                (d(2022, 1, 3), 218.78),
+                (d(2021, 9, 1), 204.24),
             ),
         ),
         (
             "IN-2022-05-02",
             notes(
-                (d(2022, 5, 4), 239.43),
+                (d(2022, 5, 4), 239.39),
+                (d(2022, 7, 15), 218.78),
+                (d(2022, 6, 1), 204.24),
+            ),
+        ),
+        (
+            "IN-2022-07-18",
+            notes(
+                (d(2022, 7, 18), 239.43),
                 (d(2022, 11, 1), 218.81),
                 (d(2022, 8, 1), 204.39),
             ),
@@ -232,6 +245,7 @@ enum Line {
     Stt,
     Exchange,
     Sebi,
+    Gst,
 }
 
 impl Line {
@@ -240,6 +254,7 @@ impl Line {
             Line::Stt => cost.stt,
             Line::Exchange => cost.exchange_txn,
             Line::Sebi => cost.sebi_fee,
+            Line::Gst => cost.gst,
         }
     }
 }
@@ -249,7 +264,7 @@ impl Line {
 type Boundary = (Day, Segment, Side, Line, f64, f64);
 
 fn boundaries() -> Vec<Boundary> {
-    use Line::{Exchange, Sebi, Stt};
+    use Line::{Exchange, Gst, Sebi, Stt};
     use Segment::{
         BfoOpt, BfoOptOther, BseEqDelivery, McxFut, McxFutKapas, McxFutPepper, NfoFut, NfoOpt,
         NseEqDelivery,
@@ -269,6 +284,10 @@ fn boundaries() -> Vec<Boundary> {
         // BSE notice 20220425-2: options pay Rs 500 per crore of premium, from nil.
         (d(2022, 5, 2), BfoOpt, Sell, Exchange, 0.0, 500.0),
         (d(2022, 5, 2), BfoOptOther, Sell, Exchange, 0.0, 500.0),
+        // SEBI/HO/GSD/TAD/CIR/P/2022/0097: GST on the SEBI fee from 2022-07-18. A delivery
+        // buy pays no brokerage: 18 percent of the exchange line 345.01, then of 345.01 +
+        // the SEBI fee of Rs 10.
+        (d(2022, 7, 18), NseEqDelivery, Buy, Gst, 62.1018, 63.9018),
         // BSE notice 20221109-7: groups A and B, Rs 375 per crore flat.
         (d(2022, 12, 1), BseEqDelivery, Buy, Exchange, 345.0, 375.0),
         // NSE/FATAX/56235: futures STT 0.01 to 0.0125 percent, options 0.05 to 0.0625.
@@ -318,11 +337,13 @@ fn every_rate_change_applies_from_its_effective_date_and_not_the_day_before() {
     }
 }
 
-/// The segments of each version before 2024-10-01 whose rates are not verified: BSE
-/// groups X (ZP is charged otherwise) and SS (no dated source), MCX RBDPMOLEIN (no
-/// fee found), every MCX row in 2020 (no fee circular found before 2020-12-18), and
-/// Sensex options while the nearest expiry had its own slabs.
-fn unverified_rows() -> [(&'static str, Vec<Segment>); 10] {
+/// The segments of each version before 2024-10-01 whose rates are not verified on its
+/// first day: BSE groups X (ZP is charged otherwise) and SS (no dated source), MCX
+/// RBDPMOLEIN (no fee found), every MCX row in 2020 (no fee circular found before
+/// 2020-12-18), Sensex options while the nearest expiry had its own slabs, and in 2021
+/// until 03-31 NSE equity (lower rate outside the NIFTY 50 and NIFTY Next 50) and the
+/// MCX futures at Rs 2.60 per lakh (half that for the third expiry and later).
+fn unverified_rows() -> [(&'static str, Vec<Segment>); 11] {
     use Segment::*;
     let always = [
         BseEqDeliveryX,
@@ -345,13 +366,21 @@ fn unverified_rows() -> [(&'static str, Vec<Segment>); 10] {
         McxFutPepper,
         McxFutKapas,
     ];
+    let tiered = [
+        NseEqDelivery,
+        NseEqIntraday,
+        McxFut,
+        McxFutAgri,
+        McxFutAgriCtt,
+    ];
     [
         ("IN-2020-07-01", with(&all_mcx)),
-        ("IN-2021-01-01", with(&[])),
-        ("IN-2021-03-01", with(&[])),
+        ("IN-2021-01-01", with(&tiered)),
+        ("IN-2021-03-01", with(&tiered)),
         ("IN-2021-04-01", with(&[])),
         ("IN-2021-05-01", with(&[])),
         ("IN-2022-05-02", with(&[])),
+        ("IN-2022-07-18", with(&[])),
         ("IN-2022-12-01", with(&[])),
         ("IN-2023-04-01", with(&[])),
         ("IN-2023-11-01", with(&[BfoOpt])),
@@ -374,6 +403,26 @@ fn only_the_rows_without_a_primary_source_are_unverified() {
             .filter(|&segment| model.status(segment, day).unwrap().trust != Trust::Verified)
             .collect();
         assert_eq!(unverified, expected, "{id}");
+    }
+}
+
+#[test]
+fn nse_equity_is_unverified_while_shares_outside_the_two_indices_paid_less() {
+    // NSE/FA/46225: Rs 2.75 per lakh for EQ shares outside the NIFTY 50 and NIFTY Next
+    // 50 from 2020-08-01 to 2021-03-31; the rows charge the standard rate.
+    let model = accrual_model();
+    let rows = [
+        (d(2020, 7, 31), true),
+        (d(2020, 8, 3), false),
+        (d(2021, 1, 4), false),
+        (d(2021, 3, 31), false),
+        (d(2021, 4, 1), true),
+    ];
+    for segment in [Segment::NseEqDelivery, Segment::NseEqIntraday] {
+        for (day, verified) in rows {
+            let trust = model.status(segment, day).unwrap().trust;
+            assert_eq!(trust == Trust::Verified, verified, "{segment:?} on {day}");
+        }
     }
 }
 

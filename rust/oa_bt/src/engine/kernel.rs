@@ -49,8 +49,8 @@ pub struct AccountView {
     /// Capital plus realized minus costs plus unrealized.
     pub equity_rupees: f64,
     /// What the account can trade with (`Portfolio::free_cash_rupees`): equity not
-    /// blocked as margin, with delivery holdings at their cost and sale proceeds not yet
-    /// credited left out.
+    /// blocked as margin, with delivery holdings of shares at their cost and sale
+    /// proceeds not yet credited left out.
     pub free_cash_rupees: f64,
     /// Gross P&L realized since the start.
     pub realized_rupees: f64,
@@ -291,7 +291,7 @@ impl Engine {
         let account = &self.portfolio.account;
         AccountView {
             equity_rupees: self.portfolio.equity_rupees(),
-            free_cash_rupees: self.portfolio.free_cash_rupees(),
+            free_cash_rupees: self.free_cash_rupees(),
             realized_rupees: account.realized_rupees,
             unrealized_rupees: self.portfolio.unrealized_rupees(),
             costs_rupees: account.costs_rupees,

@@ -176,6 +176,39 @@ def test_a_rebalance_returns_the_orders_it_sent_by_symbol():
     assert returned[1] == {}
 
 
+class RetargetedByATimer(bt.Strategy):
+    """Puts everything in AAA at its first close, then a timer at the next open, before
+    that buy has filled, moves AAA to 50 percent."""
+
+    symbols, exchange, interval, product = ("AAA",), "NSE", "D", "CNC"
+
+    def init(self):
+        self.weight = None
+        self.at("09:15", self.retarget)
+
+    def on_bar(self, bars):
+        if len(self.data["AAA"].close) == 1:
+            self.rebalance({"AAA": 100}, cash_buffer=0)
+            self.weight = 50
+
+    def retarget(self):
+        if self.weight is not None:
+            self.rebalance({"AAA": self.weight}, cash_buffer=0)
+            self.weight = None
+
+
+def test_a_timer_rebalance_trades_from_the_buy_due_at_its_open():
+    # The first close buys 1,000 AAA (10,00,000 at 1,000.00), due at the second open.
+    # The timer at that open targets 5,00,000, 500 AAA: the buy fills first, then 500
+    # are sold, both at that open.
+    result = run(RetargetedByATimer, {"AAA": flat()})
+    assert fills(result) == [
+        (DAYS[1], "AAA", "BUY", 1_000.0, "entry"),
+        (DAYS[1], "AAA", "SELL", 500.0, "signal"),
+    ]
+    assert result.final_positions["quantity_units"].tolist() == [500.0]
+
+
 @pytest.mark.parametrize(
     "call, message",
     [

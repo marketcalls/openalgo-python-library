@@ -100,12 +100,14 @@ def _declare(strategy: Strategy, arrays: tuple[Any, ...], order_args: dict[str, 
 
 
 def _check_from_arrays_call(extra: tuple[Any, ...], market: dict[str, str | None]) -> None:
-    """Raise ConfigError, with a one-line example, for arrays given by position after
-    `exits` or a missing `symbol`, `exchange` or `interval` (all three are keywords)."""
+    """Raise ConfigError, with a one-line example, for values given by position after
+    `exits` (every argument after it is a keyword) or a missing `symbol`, `exchange` or
+    `interval`."""
     if extra:
         raise ConfigError(
             f"from_arrays takes entries and exits by position and got "
-            f"{len(extra) + 2} values: pass shorts= and covers= by name, for example "
+            f"{len(extra) + 2} values: pass symbol=, exchange=, interval=, shorts= and "
+            "covers= by name, for example "
             "bt.from_arrays(entries, exits, shorts=shorts, covers=covers, "
             f"{FROM_ARRAYS_MARKET})"
         )
