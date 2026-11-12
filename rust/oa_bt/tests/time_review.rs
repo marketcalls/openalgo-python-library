@@ -75,7 +75,7 @@ fn finding_1_cash_intraday_defaults_move_earlier_from_the_closing_auction_date()
     let times = default_intraday_times(&calendar(), Exchange::Nse, d(2026, 9, 7)).unwrap();
     assert_eq!(times.entry_until, 1_788_772_800_000_000_000); // 2026-09-07 14:50 IST
     assert_eq!(times.square_off, 1_788_773_400_000_000_000); // 2026-09-07 15:00 IST
-    assert!(times.unverified);
+    assert!(!times.unverified, "confirmed by the maintainer (decision TIMES-1)");
 }
 
 #[test]

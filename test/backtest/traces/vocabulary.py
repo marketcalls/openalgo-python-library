@@ -166,6 +166,8 @@ KEYS: dict[str, tuple[str, ...]] = {
         "question",
         "readings",
         "recommended",
+        "decision",
+        "decided_on",
         "reason",
         "proposed_wording",
         "cases",
@@ -230,3 +232,6 @@ EVENT_KEYS = {"order": "order_event", "position": "position_event", "risk": "ris
 
 REVIEW_KINDS = ("contradiction", "ambiguity", "gap", "clarification")
 REVIEW_SEVERITIES = ("high", "medium", "low")
+# "open" until the maintainer decides; then "resolved", with the reading chosen in
+# `decision` and the ISO date in `decided_on` (both empty strings while open).
+REVIEW_STATUSES = ("open", "resolved")

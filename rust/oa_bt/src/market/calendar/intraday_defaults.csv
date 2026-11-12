@@ -31,11 +31,11 @@
 # 15:30, derivatives close 15:45).
 exchange,valid_from,valid_to,entry_until,square_off,entry_before_close_min,square_off_before_close_min,source,status
 NSE,,2026-08-02,15:00,15:10,30,20,"Backtesting PRD 04-execution-and-market-model.md section 2",verified
-NSE,2026-08-03,2026-12-06,14:50,15:00,30,20,"Review decision of 2026-11-12. The square-off equals the earliest broker time read for cash stocks in the closing auction (15:00, see the note above); to be confirmed by the maintainer",unverified
-NSE,2026-12-07,,14:50,15:00,30,20,"Kept from the previous row: no broker time for the period from 2026-12-07 was found on 2026-11-12; to be reviewed when brokers publish them",unverified
+NSE,2026-08-03,2026-12-06,14:50,15:00,30,20,"Maintainer decision TIMES-1 of 2026-11-12: entries until 14:50, square-off at 15:00, the earliest broker auto square-off read for cash stocks in the closing auction (see the note above)",verified
+NSE,2026-12-07,,14:50,15:00,30,20,"Maintainer decision TIMES-1 of 2026-11-12, kept from the previous row; no broker time for the period from 2026-12-07 was found on 2026-11-12, so review it when brokers publish them",verified
 BSE,,2026-08-02,15:00,15:10,30,20,"Backtesting PRD 04-execution-and-market-model.md section 2",verified
-BSE,2026-08-03,2026-12-06,14:50,15:00,30,20,"Review decision of 2026-11-12. The square-off equals the earliest broker time read for cash stocks in the closing auction (15:00, see the note above); to be confirmed by the maintainer",unverified
-BSE,2026-12-07,,14:50,15:00,30,20,"Kept from the previous row: no broker time for the period from 2026-12-07 was found on 2026-11-12; to be reviewed when brokers publish them",unverified
+BSE,2026-08-03,2026-12-06,14:50,15:00,30,20,"Maintainer decision TIMES-1 of 2026-11-12: entries until 14:50, square-off at 15:00, the earliest broker auto square-off read for cash stocks in the closing auction (see the note above)",verified
+BSE,2026-12-07,,14:50,15:00,30,20,"Maintainer decision TIMES-1 of 2026-11-12, kept from the previous row; no broker time for the period from 2026-12-07 was found on 2026-11-12, so review it when brokers publish them",verified
 NFO,,,15:00,15:10,30,20,"Backtesting PRD 04-execution-and-market-model.md section 2",verified
 BFO,,,15:00,15:10,30,20,"Backtesting PRD 04-execution-and-market-model.md section 2",verified
 CDS,,,16:30,16:40,30,20,"Backtesting PRD 04-execution-and-market-model.md section 2",verified

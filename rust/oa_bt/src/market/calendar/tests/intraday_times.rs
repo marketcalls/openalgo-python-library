@@ -14,7 +14,7 @@ fn clock_times_apply_to_regular_sessions() {
         (Exchange::Nse, d(2025, 6, 2), NSE_15_00, false),
         (Exchange::Nfo, d(2025, 6, 2), NSE_15_00, false),
         (Exchange::Cds, d(2025, 6, 2), CDS_16_30, false),
-        (Exchange::Nse, d(2026, 9, 7), NSE_14_50, true),
+        (Exchange::Nse, d(2026, 9, 7), NSE_14_50, false),
     ];
     for (exchange, day, entry_until, unverified) in cases {
         let times = default_intraday_times(&calendar(), exchange, day).unwrap();

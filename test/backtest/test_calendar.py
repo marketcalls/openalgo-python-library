@@ -265,7 +265,7 @@ def test_intraday_times_of_an_evening_session_are_relative_to_its_close(cal):
 
 @pytest.mark.parametrize(
     ("exchange", "day", "unverified"),
-    [("MCX", MONDAY, True), ("NSE", MONDAY, False), ("NSE", dt.date(2026, 9, 7), True)],
+    [("MCX", MONDAY, True), ("NSE", MONDAY, False), ("NSE", dt.date(2026, 9, 7), False)],
 )
 def test_intraday_times_say_when_they_rest_on_unconfirmed_data(cal, exchange, day, unverified):
     assert cal.intraday_times(exchange, day).unverified is unverified

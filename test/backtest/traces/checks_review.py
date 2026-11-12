@@ -8,6 +8,7 @@ id any of its expectations (or its inputs) depends on. These rules keep the two 
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import date
 from typing import Any
 
 from . import vocabulary as vocab
@@ -22,7 +23,8 @@ TEXT_FIELDS = ("title", "question", "recommended", "reason", "proposed_wording")
 
 def review_items_are_complete(review: Review) -> Violations:
     """Rule: every review item has all fields, a known kind and severity, at least two
-    readings, and recommends one of its readings."""
+    readings, recommends one of its readings, and, once resolved, names the reading
+    decided."""
     name = "spec_review.json"
     problems = member_violation(review.get("format"), (vocab.SPEC_REVIEW_FORMAT,), "format", name)
     problems += each(review["items"], "review_item", f"{name} items")
@@ -42,7 +44,31 @@ def review_items_are_complete(review: Review) -> Violations:
             problems.append(f"{where}: needs the documents involved and at least two readings")
         if not any(reading.startswith(f"{item['recommended']}.") for reading in item["readings"]):
             problems.append(f"{where}: recommended must be the letter of one of the readings")
+        problems += _decision_violations(item, where)
     return problems
+
+
+def _decision_violations(item: dict[str, Any], where: str) -> Violations:
+    """A resolved item names one of its readings and the ISO date it was decided on; an
+    open item names neither."""
+    problems = member_violation(item["status"], vocab.REVIEW_STATUSES, "status", where)
+    letters = {reading.split(".", 1)[0] for reading in item["readings"]}
+    if item["status"] == "resolved":
+        if item["decision"] not in letters:
+            problems.append(f"{where}: decision must be the letter of one of the readings")
+        if not _is_iso_date(item["decided_on"]):
+            problems.append(f"{where}: decided_on must be an ISO date (YYYY-MM-DD)")
+    elif item["decision"] or item["decided_on"]:
+        problems.append(f"{where}: an open item has no decision and no decided_on")
+    return problems
+
+
+def _is_iso_date(text: str) -> bool:
+    try:
+        date.fromisoformat(text)
+    except (TypeError, ValueError):
+        return False
+    return len(text) == 10
 
 
 def _tags(node: Any) -> Iterator[str]:
