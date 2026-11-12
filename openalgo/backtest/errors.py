@@ -17,12 +17,27 @@ class DataError(BacktestError):
     """Market data is missing, malformed or fails a quality check."""
 
 
+class DataQualityError(DataError):
+    """Market data failed a quality check at error severity.
+
+    `report` holds the quality report that describes every failed check.
+    """
+
+    def __init__(self, message, report=None):
+        super().__init__(message)
+        self.report = report
+
+
 class NoDataError(DataError):
     """A source returned no rows for the requested symbol, interval and range."""
 
 
 class TimestampError(DataError):
     """Timestamps do not match the declared convention or the session calendar."""
+
+
+class MissingDependencyError(BacktestError, ImportError):
+    """An optional package needed for the requested feature is not installed."""
 
 
 class CalendarError(BacktestError):
@@ -43,6 +58,8 @@ __all__ = [
     "ConfigError",
     "CostError",
     "DataError",
+    "DataQualityError",
+    "MissingDependencyError",
     "NoDataError",
     "ReferenceDataError",
     "TimestampError",

@@ -66,7 +66,7 @@ separate top-level exports.
 
 All REST calls go through the single `httpx.Client` created in `BaseAPI.__init__`
 and reused via `self.client.post(...)` / `self.client.get(...)`. Do NOT reintroduce
-module-level `httpx.post` / `httpx.get` — that opens and tears down a fresh TCP
+module-level `httpx.post` / `httpx.get`: that opens and tears down a fresh TCP
 connection per call, which over a trading session leaves thousands of sockets in
 TIME_WAIT and exhausts ephemeral ports. The client mirrors the server's own pooling
 in `utils/httpx_client.py`.

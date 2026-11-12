@@ -125,6 +125,14 @@ impl Side {
         }
     }
 
+    pub fn from_u8(value: u8) -> Option<Side> {
+        match value {
+            0 => Some(Side::Buy),
+            1 => Some(Side::Sell),
+            _ => None,
+        }
+    }
+
     /// +1.0 for a buy, -1.0 for a sell.
     pub fn sign(self) -> f64 {
         match self {
@@ -143,6 +151,29 @@ pub enum InstrumentKind {
     Option = 3,
 }
 
+impl InstrumentKind {
+    /// The OpenAlgo instrument type string: "EQ", "INDEX", "FUT" or "OPT".
+    pub fn code(self) -> &'static str {
+        match self {
+            InstrumentKind::Equity => "EQ",
+            InstrumentKind::Index => "INDEX",
+            InstrumentKind::Future => "FUT",
+            InstrumentKind::Option => "OPT",
+        }
+    }
+
+    /// Parse an instrument type string. "CE" and "PE" are accepted for options.
+    pub fn from_code(code: &str) -> Option<InstrumentKind> {
+        match code {
+            "EQ" => Some(InstrumentKind::Equity),
+            "INDEX" => Some(InstrumentKind::Index),
+            "FUT" => Some(InstrumentKind::Future),
+            "OPT" | "CE" | "PE" => Some(InstrumentKind::Option),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum OptionType {
@@ -156,29 +187,44 @@ pub enum OptionType {
 // Dates and IST time
 // ---------------------------------------------------------------------------
 
+/// First and last IST dates whose every instant fits in `TsNanos` (1677 to 2262).
+/// Code that accepts dates from outside the kernel validates against this range.
+pub const MIN_DAY: Day = -106_750;
+pub const MAX_DAY: Day = 106_750;
+
+/// True when every instant of `day` can be written as `TsNanos`.
+pub fn is_supported_day(day: Day) -> bool {
+    (MIN_DAY..=MAX_DAY).contains(&day)
+}
+
+// None of the functions below can panic. They are exact for supported days and
+// saturate for inputs beyond them, so a bad date from outside becomes a typed error at
+// the boundary that validates it, never a panic inside the kernel.
+
 /// Days since 1970-01-01 for a proleptic Gregorian date.
 pub fn days_from_civil(year: i32, month: u32, day: u32) -> Day {
-    let y = if month <= 2 { year - 1 } else { year };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = (y - era * 400) as u32;
+    let month = i64::from(month);
+    let y = i64::from(year) - i64::from(month <= 2);
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
     let mp = if month > 2 { month - 3 } else { month + 9 };
-    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doy = (153 * mp + 2) / 5 + i64::from(day) - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe as i32 - 719_468
+    saturate_to_i32(era * 146_097 + doe - 719_468)
 }
 
 /// (year, month, day) for a day number.
 pub fn civil_from_days(day: Day) -> (i32, u32, u32) {
-    let z = day + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u32;
+    let z = i64::from(day) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
     let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe as i32 + era * 400 + if m <= 2 { 1 } else { 0 };
-    (y, m, d)
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    (saturate_to_i32(y), m as u32, d as u32)
 }
 
 /// A date written as the integer YYYYMMDD, for example 20260401.
@@ -189,23 +235,27 @@ pub fn day_from_ymd(ymd: i32) -> Day {
 /// The integer YYYYMMDD for a day number.
 pub fn ymd_from_day(day: Day) -> i32 {
     let (y, m, d) = civil_from_days(day);
-    y * 10_000 + (m as i32) * 100 + d as i32
+    saturate_to_i32(i64::from(y) * 10_000 + i64::from(m) * 100 + i64::from(d))
 }
 
 /// Day of week, Monday = 0 through Sunday = 6.
 pub fn weekday(day: Day) -> u32 {
     // 1970-01-01 was a Thursday.
-    (day as i64 + 3).rem_euclid(7) as u32
+    (i64::from(day) + 3).rem_euclid(7) as u32
 }
 
 /// The IST calendar date of a UTC instant.
 pub fn ist_day(ts: TsNanos) -> Day {
-    (ts + IST_OFFSET_NANOS).div_euclid(NANOS_PER_DAY) as Day
+    saturate_to_i32(
+        ts.saturating_add(IST_OFFSET_NANOS)
+            .div_euclid(NANOS_PER_DAY),
+    )
 }
 
 /// Nanoseconds since IST midnight for a UTC instant.
 pub fn ist_nanos_of_day(ts: TsNanos) -> i64 {
-    (ts + IST_OFFSET_NANOS).rem_euclid(NANOS_PER_DAY)
+    ts.saturating_add(IST_OFFSET_NANOS)
+        .rem_euclid(NANOS_PER_DAY)
 }
 
 /// Minutes since IST midnight for a UTC instant (09:15 IST is 555).
@@ -215,7 +265,14 @@ pub fn ist_minute_of_day(ts: TsNanos) -> u32 {
 
 /// The UTC instant of an IST date and minute of day.
 pub fn ts_from_ist(day: Day, minute_of_day: u32) -> TsNanos {
-    day as i64 * NANOS_PER_DAY + minute_of_day as i64 * NANOS_PER_MIN - IST_OFFSET_NANOS
+    i64::from(day)
+        .saturating_mul(NANOS_PER_DAY)
+        .saturating_add(i64::from(minute_of_day).saturating_mul(NANOS_PER_MIN))
+        .saturating_sub(IST_OFFSET_NANOS)
+}
+
+fn saturate_to_i32(value: i64) -> i32 {
+    value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
 #[cfg(test)]
@@ -269,6 +326,37 @@ mod tests {
     }
 
     #[test]
+    fn extreme_inputs_saturate_instead_of_panicking() {
+        for day in [
+            i32::MIN,
+            MIN_DAY - 1,
+            MIN_DAY,
+            0,
+            MAX_DAY,
+            MAX_DAY + 1,
+            i32::MAX,
+        ] {
+            let (y, m, d) = civil_from_days(day);
+            assert!(
+                (1..=12).contains(&m) && (1..=31).contains(&d),
+                "{day}: {y}-{m}-{d}"
+            );
+            let _ = (ymd_from_day(day), weekday(day), ts_from_ist(day, u32::MAX));
+        }
+        for ts in [i64::MIN, -1, 0, i64::MAX] {
+            let _ = (ist_day(ts), ist_minute_of_day(ts));
+        }
+        let _ = (
+            days_from_civil(i32::MAX, u32::MAX, u32::MAX),
+            day_from_ymd(i32::MIN),
+        );
+        assert!(is_supported_day(MIN_DAY) && is_supported_day(MAX_DAY));
+        assert!(!is_supported_day(MAX_DAY + 1) && !is_supported_day(MIN_DAY - 1));
+        assert_eq!(ist_day(ts_from_ist(MAX_DAY, 1_439)), MAX_DAY);
+        assert_eq!(ist_day(ts_from_ist(MIN_DAY, 0)), MIN_DAY);
+    }
+
+    #[test]
     fn codes() {
         for e in Exchange::ALL {
             assert_eq!(Exchange::from_code(e.code()), Some(e));
@@ -277,6 +365,17 @@ mod tests {
         assert_eq!(Exchange::from_code("nse"), None);
         assert_eq!(Product::from_code("MIS"), Some(Product::Mis));
         assert_eq!(Side::from_code("SELL"), Some(Side::Sell));
+        assert_eq!(Side::from_u8(1), Some(Side::Sell));
+        assert_eq!(Side::from_u8(2), None);
+        assert_eq!(
+            InstrumentKind::from_code("PE"),
+            Some(InstrumentKind::Option)
+        );
+        assert_eq!(
+            InstrumentKind::from_code("FUT").map(InstrumentKind::code),
+            Some("FUT")
+        );
+        assert_eq!(InstrumentKind::from_code("eq"), None);
         assert_eq!(Side::Buy.sign(), 1.0);
     }
 }
