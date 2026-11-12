@@ -18,6 +18,8 @@
 // `.into()`.
 #![allow(unexpected_cfgs, clippy::useless_conversion)]
 
+mod charges;
+mod market;
 mod request;
 mod results;
 mod setup;
@@ -222,5 +224,5 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         py.get_type_bound::<NativeEngineInputError>(),
     )?;
     m.add_class::<NativeEngine>()?;
-    Ok(())
+    market::register(m)
 }

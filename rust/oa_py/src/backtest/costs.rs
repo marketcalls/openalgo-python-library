@@ -71,8 +71,8 @@ fn float_arrays(py: Python<'_>, columns: Vec<Vec<f64>>) -> Vec<FloatArray> {
 
 /// A cost model: dated schedules, a brokerage preset and a rounding mode.
 #[pyclass(name = "CostModel", module = "openalgo._oaindicators.backtest", frozen)]
-struct PyCostModel {
-    inner: CostModel,
+pub(in crate::backtest) struct PyCostModel {
+    pub(in crate::backtest) inner: CostModel,
 }
 
 #[pymethods]

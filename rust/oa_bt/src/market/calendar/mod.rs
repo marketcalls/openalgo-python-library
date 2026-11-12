@@ -33,7 +33,7 @@
 //! (checking an intraday series against the calendar).
 
 mod check;
-mod csv;
+pub(crate) mod csv;
 mod error;
 mod grid;
 mod intraday;

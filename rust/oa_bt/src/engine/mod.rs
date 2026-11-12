@@ -70,11 +70,14 @@
 //! | 5 mark | `steps::step_mark`: close, or last close and stale | yes |
 //! | 6 aggregate rules | `aggregate::step_aggregate_rules`: daily loss limit, drawdown halt; their exits at the next open (`risk_exits_at_open`, step 2) or the last close; the session boundary in step 1 (`risk_session_open`) | yes (combined rules: Phase 3) |
 //! | 7 callbacks and `on_bar` | `steps::callbacks_pause` -> `Pause::BarClose`; `submit::submit` | yes |
-//! | 8 session close | `steps::close_slice`: expire DAY orders, close open MIS positions at the last close (reason `eod`, flagged); settlement and futures MTM no | partly |
+//! | 8 session close | `steps::close_slice`: expire DAY orders, close open MIS positions at the last close (reason `eod`, flagged), settle the day's contract notes (`accounting::settle_contract_notes`); settlement and futures MTM no | partly |
 //!
-//! Every fill takes one path, `fills::execute_fill`: slippage (`market::slippage`),
-//! position and tranches (`portfolio`), the ledger, the leg state (`rms::leg`), then the
-//! records: the fill, `Filled` (when it has an order), the position event, the trade.
+//! Every fill takes one path, `fills::execute_fill`: slippage (`market::slippage`, the
+//! run's or the dated default table's), position and tranches (`portfolio`), the ledger,
+//! the charges (`charges`, posted to the ledger; contract notes settle in step 8), the
+//! leg state (`rms::leg`), then the records: the fill, `Filled` (when it has an order),
+//! the position event, the trade. The glue to the market rules is in `accounting`, the
+//! sizers' in `sizing`.
 //!
 //! # Determinism
 //!
@@ -96,6 +99,8 @@
 //! | `fills` | Step 2 fills of queued orders, `execute_fill` |
 //! | `legs` | Leg rules in steps 3 and 4, the add rule of SPEC-14 |
 //! | `reverse` | `reverse=True`: close, then open the rest |
+//! | `accounting` | Slippage, margin and charges of a fill; contract notes at the session close |
+//! | `sizing` | What a sizer sees, cost estimates in its budget, the engine default |
 //! | `session` | Intraday times per session, the entry window, the square-off timer |
 //! | `submit` | `submit`, `cancel`, `modify`, the submission checks, DAY validity and market closed |
 //! | `aggregate` | Step 6 (daily loss limit, drawdown halt), the step-1 session boundary, the exits they queue |
@@ -117,12 +122,15 @@
 //! intervals on an intraday or daily base, MARKET DAY orders (entry, add, reduce,
 //! exit by fraction, `reverse=True`), the quantity, freeze, product, entry-window,
 //! market-closed and reverse checks, engine-held leg rules on MIS (stop, targets,
-//! every trail form, breakeven, `after_first_target`), the square-off, margin for cash
-//! equity, zero slippage and the fixed slippage forms, the position history, the
-//! equity series, trades and events; the daily loss limit, the drawdown halt, the
-//! trading state, the cooldown, maximum positions and the time exit. Everything else
-//! returns `KernelError::NotBuilt` naming the feature.
+//! every trail form, breakeven, `after_first_target`), the square-off, charges on
+//! every fill with contract-note rounding, the dated default slippage and margin
+//! tables (cash, MIS with leverage on request, long options, NSE index futures), the
+//! sizers and the engine default size, the position history, the equity series,
+//! trades and events; the daily loss limit, the drawdown halt, the trading state, the
+//! cooldown, maximum positions and the time exit. Everything else returns
+//! `KernelError::NotBuilt` naming the feature.
 
+mod accounting;
 mod aggregate;
 pub mod clock;
 pub mod config;
@@ -138,6 +146,7 @@ pub mod pause;
 mod reverse;
 mod session;
 pub mod signals;
+mod sizing;
 mod steps;
 mod strategy_risk;
 pub mod submit;

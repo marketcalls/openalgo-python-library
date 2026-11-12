@@ -53,7 +53,7 @@ impl Engine {
             target_index: None,
         };
         self.execute_fill(stamp, close.clone())?;
-        let margin = match self.opening_margin(slice, order, open_units, open_rupees)? {
+        let margin = match self.reversal_margin(slice, order, open_units, open_rupees)? {
             Ok(margin) => margin,
             Err(code) => {
                 let kind = OrderEventKind::Rejected(code);
@@ -72,7 +72,7 @@ impl Engine {
 
     /// The margin the opening part of a reversal blocks, or the fill-bar check that
     /// refuses it: the entry window for MIS, then margin.
-    fn opening_margin(
+    fn reversal_margin(
         &mut self,
         slice: &SliceInfo,
         order: &Order,
@@ -89,7 +89,14 @@ impl Engine {
             instrument: request.instrument,
             product: request.product,
         };
-        let margin = self.margin_for(slice, key, request.side, open_units, open_rupees)?;
+        let margin = self.opening_margin(
+            slice.day,
+            key,
+            request.side,
+            open_units,
+            open_rupees,
+            request.leverage,
+        )?;
         if margin > self.portfolio.free_cash_rupees() {
             return Ok(Err(RejectCode::Margin));
         }

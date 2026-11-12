@@ -15,6 +15,7 @@ use oa_bt::exec::{
     FillAt, InstrumentId, InstrumentSpec, OrderRequest, OrderStatus, QuantitySpec, RejectCode,
 };
 use oa_bt::market::calendar::{BaseInterval, Calendar};
+use oa_bt::market::facts::MarketFacts;
 use oa_bt::market::margin::MarginModel;
 use oa_bt::market::slippage::SlippageSpec;
 use oa_bt::model::{days_from_civil, ts_from_ist, Day, Exchange, InstrumentKind, Product, Side};
@@ -85,6 +86,7 @@ fn engine(instruments: Vec<(&str, BarColumns)>, slippage: SlippageSpec) -> Engin
         costs: CostConfig::Off,
         slippage,
         margin: MarginModel,
+        market: MarketFacts::default(),
         risk: StrategyRiskConfig::default(),
         intraday: IntradayOverrides::default(),
         deliver_events: false,

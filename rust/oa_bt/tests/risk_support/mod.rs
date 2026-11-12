@@ -12,6 +12,7 @@ use oa_bt::engine::{
 };
 use oa_bt::exec::{FillAt, InstrumentId, InstrumentSpec, OrderRequest, QuantitySpec};
 use oa_bt::market::calendar::{BaseInterval, Calendar};
+use oa_bt::market::facts::MarketFacts;
 use oa_bt::market::margin::MarginModel;
 use oa_bt::market::slippage::SlippageSpec;
 use oa_bt::model::{days_from_civil, ts_from_ist, Day, Exchange, InstrumentKind, Product, Side};
@@ -122,6 +123,7 @@ pub fn config(
         costs: CostConfig::Off,
         slippage: SlippageSpec::Zero,
         margin: MarginModel,
+        market: MarketFacts::default(),
         risk,
         intraday: IntradayOverrides::default(),
         deliver_events: false,

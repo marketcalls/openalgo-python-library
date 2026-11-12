@@ -10,6 +10,7 @@ use oa_bt::rms::leg::TargetState;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
+use super::charges::charges;
 use super::tables::{events, order, stamp_into};
 
 /// Rows as a dict of columns: every row gives the same keys in the same order.
@@ -251,6 +252,7 @@ pub(super) fn output<'py>(py: Python<'py>, output: &RunOutput) -> PyResult<Bound
         .map(|m| (m.slice, m.slice_ts, m.instrument.0, m.mark_rupees))
         .collect();
     dict.set_item("stale_marks", stale)?;
+    dict.set_item("charges", charges(py, &output.charges)?)?;
     dict.set_item("final_positions", finals(py, output)?)?;
     let g = output.gross_pnl;
     dict.set_item(

@@ -15,7 +15,7 @@ from ._orders import Order
 from ._series import Bar, BarStore, PositionView, ist_time
 from .errors import ConfigError
 from .reference import Instrument
-from .size import Sizer
+from .size import Sizer, resolve_atr
 
 
 class RunContext:
@@ -76,6 +76,8 @@ class RunContext:
 
     def submit(self, request: dict) -> Order | None:
         """Place a request; returns its handle, or None when a sizer skipped it."""
+        store = self.stores[self.symbols[request["instrument"]]]
+        request = {**request, "quantity": resolve_atr(request["quantity"], store)}
         outcome, number, code = call(self.engine.submit, request)
         if outcome == "skipped":
             symbol = self.symbols[request["instrument"]]

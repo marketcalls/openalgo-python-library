@@ -12,7 +12,7 @@ use crate::exec::{
 };
 use crate::model::{Product, Side, TsNanos};
 use crate::portfolio::PositionKey;
-use crate::sizing::{size, SizeOutcome, SizingContext, SkipReason};
+use crate::sizing::{SizeOutcome, SkipReason};
 
 use super::clock::SliceInfo;
 use super::config::QuantityMode;
@@ -66,7 +66,7 @@ impl Engine {
             return Err(KernelError::NotAtDecisionPoint);
         };
         self.check_buildable(&request)?;
-        let units = match self.resolve_units(&request)? {
+        let units = match self.resolve_units(&request, &slice)? {
             Resolved::Units(units) => units,
             Resolved::AtFill => 0.0,
             Resolved::Skipped(reason) => return Ok(Submission::Skipped(reason)),
@@ -147,9 +147,6 @@ impl Engine {
         if request.validity == Validity::Gtt {
             return Err(not_built("GTT orders"));
         }
-        if request.leverage.is_some_and(|leverage| leverage != 1.0) {
-            return Err(not_built("intraday leverage"));
-        }
         request.leg_rules.validate(self.config.risk.strict_config)?;
         if request.leg_rules.max_hold_bars.is_some() {
             return Err(not_built("max_hold (the time exit)"));
@@ -163,7 +160,11 @@ impl Engine {
         self.check_leg_rules(request)
     }
 
-    fn resolve_units(&self, request: &OrderRequest) -> Result<Resolved, KernelError> {
+    fn resolve_units(
+        &self,
+        request: &OrderRequest,
+        slice: &SliceInfo,
+    ) -> Result<Resolved, KernelError> {
         let lot = self
             .instruments
             .get(request.instrument.index())
@@ -185,27 +186,12 @@ impl Engine {
                 }
                 Ok(Resolved::AtFill)
             }
-            QuantitySpec::Sizer(sizer) => match size(sizer, &self.sizing_context(request)?)? {
+            QuantitySpec::Sizer(_) if self.sizes_at_fill(request) => Ok(Resolved::AtFill),
+            QuantitySpec::Sizer(sizer) => match self.size_at_decision(request, sizer, slice)? {
                 SizeOutcome::Units(units) => Ok(Resolved::Units(units)),
                 SizeOutcome::Skipped(reason) => Ok(Resolved::Skipped(reason)),
             },
         }
-    }
-
-    fn sizing_context(&self, request: &OrderRequest) -> Result<SizingContext, KernelError> {
-        let spec = self.spec(request.instrument)?;
-        let account = self.account();
-        Ok(SizingContext {
-            equity_rupees: account.equity_rupees,
-            initial_capital_rupees: self.config.capital_rupees,
-            free_cash_rupees: account.free_cash_rupees,
-            decision_price_rupees: self.last_close(request.instrument).unwrap_or(0.0),
-            stop_distance_rupees: None,
-            lot_size_units: spec.lot_size_units,
-            multiplier: spec.multiplier,
-            estimated_cost_rupees: 0.0,
-            fractional: self.fractional(request.instrument),
-        })
     }
 
     fn fractional(&self, instrument: InstrumentId) -> bool {
