@@ -195,11 +195,15 @@ These apply to every change under the four paths above.
   implementation.
 - No dead code, no commented-out code, and no abstraction for a feature that is not
   being built yet.
-- Original code only, described in its own terms. Never name another backtesting or
-  trading engine or library in code, comments, tests, data files, docs, the changelog
-  or commit messages, whether as a comparison, an inspiration or a cautionary example.
-  Say what this engine does and why. (OpenAlgo, exchanges, brokers and regulators are
-  named freely.)
+- Original code only, described in its own terms. Never name a third-party product or
+  brand anywhere in the repository: code, identifiers, comments, docstrings, error
+  messages, tests, benchmarks, data files, docs, the changelog or commit messages.
+  That covers trading and charting platforms, their scripting languages, other
+  backtesting or trading engines and indicator libraries, also as abbreviations
+  (for example a `_tv` suffix). Describe what the code computes instead of whose
+  output it matches. Named freely: OpenAlgo and its own products, exchanges,
+  regulators, brokers where they are functional identifiers (a cost preset, a broker
+  adapter), and the technical dependencies (Python, Rust, NumPy, pandas, PyO3).
 
 Checks to run before committing:
 
