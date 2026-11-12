@@ -145,8 +145,10 @@ def test_a_run_in_2022_is_charged_at_the_rates_of_2022():
 
 
 def test_fills_on_unverified_rates_are_named_in_the_warnings():
-    # The rates of schedule IN-2024-10-01 were never verified for NSE intraday.
+    # The rates of schedule IN-2026-04-01 are verified only up to 2026-11-12.
+    day = dt.date(2026, 12, 1)
     with pytest.warns(costs.UnverifiedScheduleWarning):
-        result = round_trip({"qty": QTY}, slippage=0, data=session_bars(dt.date(2025, 7, 1)))
-    assert any("IN-2024-10-01" in text and "unverified" in text for text in result.warnings)
+        result = round_trip({"qty": QTY}, slippage=0, data=session_bars(day), now="2026-12-10")
+    named = "IN-2026-04-01 are past verification for 2 fills, from 2026-12-01"
+    assert any(named in text for text in result.warnings)
     assert not result.costs["verified"].any()

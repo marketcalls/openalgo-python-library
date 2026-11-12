@@ -66,20 +66,28 @@ fn bse_tier(group: &str) -> Result<BseTier, CostError> {
         .ok_or_else(|| CostError::unknown(NameKind::BseGroup, group))
 }
 
-/// MCX commodities whose futures pay no CTT and the lower SEBI fee, at the standard
-/// exchange rate. Source: the agri list of the reference note.
-const MCX_AGRI_STANDARD: [&str; 7] = [
-    "CARDAMOM",
-    "COTTONCNDY",
-    "COTTONOIL",
-    "CPO",
-    "MENTHAOIL",
-    "RUBBER",
-    "SUNOIL",
-];
+// CTT is charged on the sale of a commodity derivative other than one on an
+// agricultural commodity (Finance Act 2013 sections 116(7) and 117), and the
+// agricultural commodities are exactly the 61 of rule 3 of the CTT Rules 2013 as
+// substituted by notification 13/2015 of 2015-02-10 (reproduced in MCX master
+// circular MCX/MCXCCL/443/2020, annexure 6). An MCX "agri" contract on anything else
+// pays CTT like a metal. The agri lists below come from the reference note; which
+// side of rule 3 each commodity falls on is noted on its list.
+
+/// MCX agri commodities at the standard exchange rate whose futures pay no CTT and the
+/// lower SEBI fee: cardamom and cotton are items (iii) and (viii) of rule 3.
+const MCX_AGRI_CTT_EXEMPT: [&str; 2] = ["CARDAMOM", "COTTONCNDY"];
+
+/// MCX agri commodities at the standard exchange rate whose futures pay the lower SEBI
+/// fee but also CTT: crude palm oil, mentha oil, rubber, cotton seed wash oil and
+/// sunflower oil are not in rule 3 (it lists cotton seed and sunflower seed, not
+/// their oils).
+const MCX_AGRI_CTT_PAYING: [&str; 5] = ["COTTONOIL", "CPO", "MENTHAOIL", "RUBBER", "SUNOIL"];
 
 /// MCX agri commodities with a contract-specific exchange rate. Source: the
-/// contract-specific rates of the reference note.
+/// contract-specific rates of the reference note. Castor seed, pepper and kapas are
+/// items (iv), (xiv) and (xii) of rule 3; RBD palmolein is not, and its schedule rows
+/// charge CTT.
 const MCX_AGRI_SPECIFIC: [(&str, Segment); 4] = [
     ("CASTORSEED", Segment::McxFutCastorseed),
     ("RBDPMOLEIN", Segment::McxFutRbdpmolein),
@@ -254,26 +262,24 @@ impl Segment {
     /// spaces do not matter.
     ///
     /// Errors: `UnknownName` for a commodity in neither the agri nor the non-agri
-    /// list. Guessing would either charge CTT to an agri contract or skip it for a
-    /// non-agri one.
+    /// lists. Guessing would either charge CTT to an exempt agri contract or skip it
+    /// for one that owes it.
     pub fn mcx_future(commodity: &str) -> Result<Segment, CostError> {
         let name = commodity.trim();
+        let listed = |list: &[&str]| list.iter().any(|known| known.eq_ignore_ascii_case(name));
         if let Some((_, segment)) = MCX_AGRI_SPECIFIC
             .iter()
             .find(|(known, _)| known.eq_ignore_ascii_case(name))
         {
             return Ok(*segment);
         }
-        if MCX_AGRI_STANDARD
-            .iter()
-            .any(|known| known.eq_ignore_ascii_case(name))
-        {
+        if listed(&MCX_AGRI_CTT_EXEMPT) {
             return Ok(Segment::McxFutAgri);
         }
-        if MCX_NON_AGRI
-            .iter()
-            .any(|known| known.eq_ignore_ascii_case(name))
-        {
+        if listed(&MCX_AGRI_CTT_PAYING) {
+            return Ok(Segment::McxFutAgriCtt);
+        }
+        if listed(&MCX_NON_AGRI) {
             return Ok(Segment::McxFut);
         }
         Err(CostError::unknown(NameKind::Commodity, name))

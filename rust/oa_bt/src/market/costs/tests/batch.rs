@@ -141,8 +141,9 @@ fn batch_equals_per_fill_in_calculator_mode() {
 
 #[test]
 fn a_batch_reports_which_version_priced_each_row_and_how_far_it_is_verified() {
-    // Old version (never verified), the snapshot day (verified), the day after
-    // (past the verified-through date), and BSE stock options (unverified row).
+    // Old version (verified through its last day), the snapshot day (verified), the
+    // day after (past the verified-through date), and BSE stock options (unverified
+    // row).
     let mut batch = Batch::valid();
     batch.days = [
         days_from_civil(2025, 6, 2),
@@ -160,7 +161,7 @@ fn a_batch_reports_which_version_priced_each_row_and_how_far_it_is_verified() {
     let (old, current) = (position("IN-2024-10-01"), position("IN-2026-04-01"));
     assert_eq!(out.schedule, [old, current, current, current]);
     let trust = [
-        Trust::Unverified,
+        Trust::Verified,
         Trust::Verified,
         Trust::PastVerification,
         Trust::Unverified,

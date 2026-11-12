@@ -61,8 +61,10 @@ impl NameKind {
                 "the groups with a known charge are listed in the BSE group table"
             }
             NameKind::Commodity => {
-                "it is in neither the agri nor the non-agri list, so pass the segment \
-                 explicitly: MCX_FUT for a non-agri commodity, MCX_FUT_AGRI for an agri one"
+                "it is in neither the agri nor the non-agri lists, so pass the segment \
+                 explicitly: MCX_FUT for a non-agri commodity, MCX_FUT_AGRI for an agri \
+                 one listed in rule 3 of the CTT Rules 2013 (exempt from CTT), \
+                 MCX_FUT_AGRI_CTT for any other agri one"
             }
             NameKind::Preset => {
                 "built-in presets are zerodha and zero_brokerage; build others from a flat \

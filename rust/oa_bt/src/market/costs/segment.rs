@@ -11,7 +11,7 @@ use crate::model::Exchange;
 use super::error::{CostError, NameKind};
 
 /// Number of segments, and the length of the rate table in a schedule.
-pub const SEGMENT_COUNT: usize = 21;
+pub const SEGMENT_COUNT: usize = 22;
 
 /// One row of the rate card. The discriminant is the stable id used by the batch
 /// API and the Python binding.
@@ -48,11 +48,12 @@ pub enum Segment {
     BfoOpt = 13,
     /// MCX futures on a non-agri commodity (CTT on sells).
     McxFut = 14,
-    /// MCX futures on an agri commodity at the standard exchange rate.
+    /// MCX futures on an agri commodity exempt from CTT (one listed in rule 3 of the
+    /// CTT Rules 2013), at the standard exchange rate.
     McxFutAgri = 15,
     /// MCX CASTORSEED futures (agri, own exchange rate).
     McxFutCastorseed = 16,
-    /// MCX RBDPMOLEIN futures (agri, own exchange rate).
+    /// MCX RBDPMOLEIN futures (agri, CTT on sells, own exchange rate).
     McxFutRbdpmolein = 17,
     /// MCX PEPPER futures (agri, own exchange rate).
     McxFutPepper = 18,
@@ -60,6 +61,9 @@ pub enum Segment {
     McxFutKapas = 19,
     /// BSE options other than Sensex and Bankex: Sensex 50 and stock options.
     BfoOptOther = 20,
+    /// MCX futures on an agri commodity that is not in rule 3 of the CTT Rules 2013,
+    /// so not exempt from CTT (CTT on sells), at the standard exchange rate.
+    McxFutAgriCtt = 21,
 }
 
 /// Which rule of a brokerage preset applies to a segment.
@@ -174,12 +178,13 @@ const TABLE: [SegmentInfo; SEGMENT_COUNT] = {
         info(Segment::BfoFut, "BFO_FUT", Bfo, Futures, "BSE index and stock futures"),
         info(Segment::BfoOpt, "BFO_OPT", Bfo, Options, "BSE Sensex and Bankex options (charges on premium)"),
         info(Segment::McxFut, "MCX_FUT", Mcx, Futures, "MCX futures, non-agri commodity"),
-        info(Segment::McxFutAgri, "MCX_FUT_AGRI", Mcx, Futures, "MCX futures, agri commodity at the standard exchange rate (no CTT)"),
+        info(Segment::McxFutAgri, "MCX_FUT_AGRI", Mcx, Futures, "MCX futures, CTT-exempt agri commodity at the standard exchange rate (no CTT)"),
         info(Segment::McxFutCastorseed, "MCX_FUT_CASTORSEED", Mcx, Futures, "MCX CASTORSEED futures (agri, own exchange rate)"),
-        info(Segment::McxFutRbdpmolein, "MCX_FUT_RBDPMOLEIN", Mcx, Futures, "MCX RBDPMOLEIN futures (agri, own exchange rate)"),
+        info(Segment::McxFutRbdpmolein, "MCX_FUT_RBDPMOLEIN", Mcx, Futures, "MCX RBDPMOLEIN futures (agri, CTT on sells, own exchange rate)"),
         info(Segment::McxFutPepper, "MCX_FUT_PEPPER", Mcx, Futures, "MCX PEPPER futures (agri, own exchange rate)"),
         info(Segment::McxFutKapas, "MCX_FUT_KAPAS", Mcx, Futures, "MCX KAPAS futures (agri, own exchange rate)"),
         info(Segment::BfoOptOther, "BFO_OPT_OTHER", Bfo, Options, "BSE Sensex 50 and stock options (charges on premium)"),
+        info(Segment::McxFutAgriCtt, "MCX_FUT_AGRI_CTT", Mcx, Futures, "MCX futures, agri commodity outside the CTT exemption, at the standard exchange rate (CTT on sells)"),
     ]
 };
 

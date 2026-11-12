@@ -189,6 +189,9 @@ def test_the_equity_oracle_reproduces_the_screenshot_verified_example():
 
 
 # Reference note section 3: (segment, contract multiplier, agri, exchange rate, price range).
+# The calculator charges no CTT on any agri contract, but CTT exempts only the commodities
+# of rule 3 of the CTT Rules 2013, so MENTHAOIL and CPO (MCX_FUT_AGRI_CTT) pay CTT here and
+# are not compared; COTTONCNDY (cotton is in rule 3) is.
 MCX_CONTRACTS = {
     "CRUDEOIL": ("MCX_FUT", 100, False, 0.000021, (4000, 7000)),
     "CRUDEOILM": ("MCX_FUT", 10, False, 0.000021, (4000, 7000)),
@@ -197,8 +200,6 @@ MCX_CONTRACTS = {
     "SILVERM": ("MCX_FUT", 5, False, 0.000021, (70000, 150000)),
     "COPPER": ("MCX_FUT", 2500, False, 0.000021, (700, 1100)),
     "ZINC": ("MCX_FUT", 5000, False, 0.000021, (200, 320)),
-    "MENTHAOIL": ("MCX_FUT_AGRI", 360, True, 0.000021, (800, 1100)),
-    "CPO": ("MCX_FUT_AGRI", 1000, True, 0.000021, (500, 1200)),
     "COTTONCNDY": ("MCX_FUT_AGRI", 48, True, 0.000021, (50000, 62000)),
 }
 

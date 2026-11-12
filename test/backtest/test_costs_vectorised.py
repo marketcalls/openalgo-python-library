@@ -151,8 +151,7 @@ def test_segments_may_be_codes_or_ids(segment):
 
 def test_each_trade_is_charged_at_the_rates_of_its_own_date():
     # Futures STT on Rs 1 crore sold: 0.02 percent before 2026-04-01, 0.05 percent after.
-    with pytest.warns(costs.UnverifiedScheduleWarning):
-        frame = costs.trade_costs("SELL", 10_000_000, 1, ["2026-03-31", "2026-04-01"], "NFO_FUT")
+    frame = costs.trade_costs("SELL", 10_000_000, 1, ["2026-03-31", "2026-04-01"], "NFO_FUT")
     assert list(frame["stt"]) == pytest.approx([2000.0, 5000.0])
 
 
@@ -162,13 +161,15 @@ def test_each_row_says_which_version_priced_it_and_whether_it_is_verified():
     with pytest.warns(costs.UnverifiedScheduleWarning):
         frame = costs.trade_costs("SELL", 100, 1, dates, "NFO_FUT")
     assert list(frame["schedule"]) == ["IN-2024-10-01", "IN-2026-04-01", "IN-2026-04-01"]
-    assert list(frame["verified"]) == [False, True, False]
+    assert list(frame["verified"]) == [True, True, False]
 
 
 def test_a_batch_warns_once_per_version_and_reason():
+    # KAPAS futures have no verified row in either version, so five rows give two
+    # warnings: one per version.
     dates = ["2025-06-02", "2025-06-03", "2026-11-13", "2026-11-14", SNAPSHOT]
     with pytest.warns(costs.UnverifiedScheduleWarning) as caught:
-        costs.trade_costs("SELL", 100, 1, dates, "NFO_FUT")
+        costs.trade_costs("SELL", 100, 1, dates, "MCX_FUT_KAPAS")
     assert len(caught) == 2
 
 

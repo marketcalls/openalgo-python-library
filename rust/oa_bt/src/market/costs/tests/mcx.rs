@@ -9,19 +9,29 @@ use super::{accrued, assert_close, assert_paise, calculator_model, snapshot_day,
 
 const BOTH_SIDES: [Side; 2] = [Side::Buy, Side::Sell];
 
-const MCX_SEGMENTS: [Segment; 6] = [
+const MCX_SEGMENTS: [Segment; 7] = [
     Segment::McxFut,
     Segment::McxFutAgri,
+    Segment::McxFutAgriCtt,
     Segment::McxFutCastorseed,
     Segment::McxFutRbdpmolein,
     Segment::McxFutPepper,
     Segment::McxFutKapas,
 ];
 
-const AGRI_SEGMENTS: [Segment; 5] = [
+const AGRI_SEGMENTS: [Segment; 6] = [
     Segment::McxFutAgri,
+    Segment::McxFutAgriCtt,
     Segment::McxFutCastorseed,
     Segment::McxFutRbdpmolein,
+    Segment::McxFutPepper,
+    Segment::McxFutKapas,
+];
+
+/// The agri segments whose commodities are in rule 3 of the CTT Rules 2013.
+const CTT_EXEMPT_SEGMENTS: [Segment; 4] = [
+    Segment::McxFutAgri,
+    Segment::McxFutCastorseed,
     Segment::McxFutPepper,
     Segment::McxFutKapas,
 ];
@@ -52,8 +62,16 @@ fn ctt_row_non_agri_futures_pay_one_bp_on_sells() {
 }
 
 #[test]
-fn ctt_row_agri_futures_pay_no_ctt() {
-    for segment in AGRI_SEGMENTS {
+fn ctt_row_agri_futures_outside_rule_3_pay_one_bp_on_sells() {
+    for segment in [Segment::McxFutAgriCtt, Segment::McxFutRbdpmolein] {
+        assert_eq!(accrued(segment, Side::Buy, CRORE).stt, 0.0, "{segment:?}");
+        assert_close(accrued(segment, Side::Sell, CRORE).stt, 1_000.0);
+    }
+}
+
+#[test]
+fn ctt_row_agri_futures_in_rule_3_pay_no_ctt() {
+    for segment in CTT_EXEMPT_SEGMENTS {
         for side in BOTH_SIDES {
             assert_eq!(accrued(segment, side, CRORE).stt, 0.0, "{segment:?}");
         }
@@ -67,6 +85,7 @@ fn exchange_txn_row_standard_and_contract_specific_rates() {
     let rows = [
         (Segment::McxFut, 210.0),
         (Segment::McxFutAgri, 210.0),
+        (Segment::McxFutAgriCtt, 210.0),
         (Segment::McxFutCastorseed, 50.0),
         (Segment::McxFutRbdpmolein, 100.0),
         (Segment::McxFutPepper, 5.0),
@@ -106,6 +125,7 @@ fn gst_row_is_18_percent_of_brokerage_exchange_charge_and_sebi_fee() {
     let rows = [
         (Segment::McxFut, 43.20),
         (Segment::McxFutAgri, 41.58),
+        (Segment::McxFutAgriCtt, 41.58),
         (Segment::McxFutPepper, 4.68),
     ];
     for (segment, gst) in rows {
@@ -115,14 +135,18 @@ fn gst_row_is_18_percent_of_brokerage_exchange_charge_and_sebi_fee() {
 
 #[test]
 fn agri_list_commodities_resolve_to_agri_segments() {
+    // Rule 3 of the CTT Rules 2013 (as substituted in 2015) lists cardamom (iii),
+    // cotton (viii), castor seed (iv), kapas (xii) and pepper (xiv); crude palm oil,
+    // mentha oil, rubber, cotton seed wash oil, sunflower oil and RBD palmolein are
+    // not in it.
     let rows = [
         ("CARDAMOM", Segment::McxFutAgri),
         ("COTTONCNDY", Segment::McxFutAgri),
-        ("COTTONOIL", Segment::McxFutAgri),
-        ("CPO", Segment::McxFutAgri),
-        ("MENTHAOIL", Segment::McxFutAgri),
-        ("RUBBER", Segment::McxFutAgri),
-        ("SUNOIL", Segment::McxFutAgri),
+        ("COTTONOIL", Segment::McxFutAgriCtt),
+        ("CPO", Segment::McxFutAgriCtt),
+        ("MENTHAOIL", Segment::McxFutAgriCtt),
+        ("RUBBER", Segment::McxFutAgriCtt),
+        ("SUNOIL", Segment::McxFutAgriCtt),
         ("CASTORSEED", Segment::McxFutCastorseed),
         ("RBDPMOLEIN", Segment::McxFutRbdpmolein),
         ("PEPPER", Segment::McxFutPepper),
@@ -187,7 +211,9 @@ fn an_unknown_commodity_is_an_error_not_a_guess() {
             name: "UNOBTAINIUM".to_string()
         }
     );
-    assert!(error.to_string().contains("MCX_FUT_AGRI"), "{error}");
+    for code in ["MCX_FUT for", "MCX_FUT_AGRI for", "MCX_FUT_AGRI_CTT for"] {
+        assert!(error.to_string().contains(code), "{error}");
+    }
 }
 
 #[test]
@@ -202,7 +228,8 @@ fn an_mcx_future_needs_its_commodity_to_be_resolved() {
         )
     };
     assert_eq!(resolve(Some("GOLD")), Ok(Segment::McxFut));
-    assert_eq!(resolve(Some("CPO")), Ok(Segment::McxFutAgri));
+    assert_eq!(resolve(Some("CARDAMOM")), Ok(Segment::McxFutAgri));
+    assert_eq!(resolve(Some("CPO")), Ok(Segment::McxFutAgriCtt));
     assert!(matches!(
         resolve(None),
         Err(CostError::InvalidCombination { .. })
@@ -233,8 +260,8 @@ fn calculator_mode_non_agri_round_trip() {
 }
 
 #[test]
-fn calculator_mode_agri_round_trip() {
-    // MENTHAOIL, one lot of 360 kg, buy 900 and sell 905:
+fn calculator_mode_ctt_exempt_agri_round_trip() {
+    // A CTT-exempt agri future, 360 units, buy 900 and sell 905:
     //   turnover 6,49,800; brokerage 20 + 20 = 40; no CTT
     //   exchange 0.0021 percent = 13.6458, rounded 13.65
     //   SEBI Rs 1 per crore = 0.06498, rounded 0.06
@@ -251,6 +278,19 @@ fn calculator_mode_agri_round_trip() {
     assert_paise(cost.gst, 9.67);
     assert_paise(cost.stamp_duty, 6.0);
     assert_paise(cost.total(), 69.38);
+}
+
+#[test]
+fn calculator_mode_ctt_paying_agri_round_trip() {
+    // MENTHAOIL, one lot of 360 kg, buy 900 and sell 905: the exempt round trip above
+    // plus CTT of 0.01 percent of the sell value 3,25,800 = 32.58, kept in paise.
+    //   total 69.38 + 32.58 = 101.96
+    let cost = calculator_model()
+        .round_trip_on(Segment::McxFutAgriCtt, 900.0, 905.0, 360.0, snapshot_day())
+        .unwrap();
+    assert_paise(cost.stt, 32.58);
+    assert_paise(cost.sebi_fee, 0.06);
+    assert_paise(cost.total(), 101.96);
 }
 
 #[test]

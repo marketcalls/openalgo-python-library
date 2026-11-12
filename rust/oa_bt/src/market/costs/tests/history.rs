@@ -314,10 +314,9 @@ fn every_rate_change_applies_from_its_effective_date_and_not_the_day_before() {
 }
 
 /// The segments of each version before 2024-10-01 whose rates are not verified: BSE
-/// groups X (ZP is charged otherwise) and SS (no dated source), MCX agri futures (CTT
-/// exemption narrower than the row) and RBDPMOLEIN (no fee found), every MCX row in
-/// 2020 (no fee circular found before 2020-12-18), and Sensex options while the
-/// nearest expiry had its own slabs.
+/// groups X (ZP is charged otherwise) and SS (no dated source), MCX RBDPMOLEIN (no
+/// fee found), every MCX row in 2020 (no fee circular found before 2020-12-18), and
+/// Sensex options while the nearest expiry had its own slabs.
 fn unverified_rows() -> [(&'static str, Vec<Segment>); 10] {
     use Segment::*;
     let always = [
@@ -325,7 +324,6 @@ fn unverified_rows() -> [(&'static str, Vec<Segment>); 10] {
         BseEqIntradayX,
         BseEqDeliverySs,
         BseEqIntradaySs,
-        McxFutAgri,
         McxFutRbdpmolein,
     ];
     let with = |extra: &[Segment]| -> Vec<Segment> {
@@ -334,7 +332,14 @@ fn unverified_rows() -> [(&'static str, Vec<Segment>); 10] {
         rows.sort();
         rows
     };
-    let all_mcx = [McxFut, McxFutCastorseed, McxFutPepper, McxFutKapas];
+    let all_mcx = [
+        McxFut,
+        McxFutAgri,
+        McxFutAgriCtt,
+        McxFutCastorseed,
+        McxFutPepper,
+        McxFutKapas,
+    ];
     [
         ("IN-2020-07-01", with(&all_mcx)),
         ("IN-2021-01-01", with(&[])),
