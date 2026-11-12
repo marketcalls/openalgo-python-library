@@ -2,6 +2,10 @@
 """
 Parity gate: Rust core (openalgo._oaindicators) vs the Python reference kernels
 (openalgo.indicators.utils, run with NUMBA_DISABLE_JIT=1 = identical algorithm).
+The helpers whose utils function now calls the shared kernel itself (highest, lowest,
+change, cmo, the crossings, rising, falling, valuewhen) are compared with plain
+pandas and NumPy expressions written in this script, or with the plain-Python
+reference in test/indicator_references.py, so that each gate can fail.
 
 HARD GATE  = Rust must match the Python reference (this is the backend we replace):
              identical length, identical NaN mask, and finite values within
@@ -16,10 +20,12 @@ import sys
 from pathlib import Path
 # Ensure the LOCAL openalgo package (repo root) wins over any pip-installed copy.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "test"))
 
 import numpy as np
 import pandas as pd
 
+import indicator_references as references
 import openalgo._oaindicators as rs
 from openalgo.indicators import utils as ref
 from openalgo.indicators.momentum import RSI as _RSI, Stochastic as _STO, CCI as _CCI, WilliamsR as _WR
@@ -82,32 +88,34 @@ def build_cases(P):
         ("rolling_sum(14)", lambda: rs.rolling_sum(c, per), lambda: ref.rolling_sum(c, per), "f"),
         ("rolling_variance(14)", lambda: rs.rolling_variance(c, per),
          lambda: ref.rolling_variance(c, per), "f"),
-        ("change(1)", lambda: rs.change(c, 1), lambda: ref.change(c, 1), "f"),
+        ("change(1)", lambda: rs.change(c, 1), lambda: _ref_change(c, 1), "f"),
         ("roc(10)", lambda: rs.roc(c, 10), lambda: ref.roc(c, 10), "f"),
-        ("highest(14)", lambda: rs.highest(c, per), lambda: ref.highest(c, per), "f"),
-        ("lowest(14)", lambda: rs.lowest(c, per), lambda: ref.lowest(c, per), "f"),
+        ("highest(14)", lambda: rs.highest(c, per),
+         lambda: pd.Series(c).rolling(per).max().to_numpy(), "f"),
+        ("lowest(14)", lambda: rs.lowest(c, per),
+         lambda: pd.Series(c).rolling(per).min().to_numpy(), "f"),
         ("true_range", lambda: rs.true_range(h, l, c), lambda: ref.true_range(h, l, c), "f"),
         ("atr_wilder(14)", lambda: rs.atr_wilder(h, l, c, per),
          lambda: ref.atr_wilder(h, l, c, per), "f"),
         ("atr_sma(14)", lambda: rs.atr_sma(h, l, c, per),
          lambda: ref.atr_sma(h, l, c, per), "f"),
         ("vwma(14)", lambda: rs.vwma(c, v, per), lambda: ref.vwma_optimized(c, v, per), "f"),
-        ("cmo(14)", lambda: rs.cmo(c, per), lambda: ref.cmo_optimized(c, per), "f"),
+        ("cmo(14)", lambda: rs.cmo(c, per), lambda: references.cmo(c, per), "f"),
         ("kama(10,2,30)", lambda: rs.kama(c, 10, 2.0, 30.0),
          lambda: ref.kama_optimized(c, 10, 2.0, 30.0), "f"),
         ("ulcer_index(14)", lambda: rs.ulcer_index(c, per),
          lambda: ref.ulcer_index_optimized(c, per), "f"),
         # boolean kernels
         ("crossover", lambda: rs.crossover(c, ref.sma(c, per)),
-         lambda: ref.crossover(c, ref.sma(c, per)), "b"),
+         lambda: _ref_crossings(c, ref.sma(c, per))[0], "b"),
         ("crossunder", lambda: rs.crossunder(c, ref.sma(c, per)),
-         lambda: ref.crossunder(c, ref.sma(c, per)), "b"),
+         lambda: _ref_crossings(c, ref.sma(c, per))[1], "b"),
         ("cross", lambda: rs.cross(c, ref.sma(c, per)),
-         lambda: ref.cross(c, ref.sma(c, per)), "b"),
-        ("rising(5)", lambda: rs.rising(c, 5), lambda: ref.rising(c, 5), "b"),
-        ("falling(5)", lambda: rs.falling(c, 5), lambda: ref.falling(c, 5), "b"),
+         lambda: np.logical_or(*_ref_crossings(c, ref.sma(c, per))), "b"),
+        ("rising(5)", lambda: rs.rising(c, 5), lambda: _ref_change(c, 5) > 0, "b"),
+        ("falling(5)", lambda: rs.falling(c, 5), lambda: _ref_change(c, 5) < 0, "b"),
         ("valuewhen", lambda: rs.valuewhen(_expr(c, per), c, 1),
-         lambda: ref.valuewhen(_expr(c, per), c, 1), "f"),
+         lambda: _ref_valuewhen(_expr(c, per), c), "f"),
         # Phase-1 indicators (reference = original numba staticmethods, pure-python)
         ("rsi(14)", lambda: rs.rsi(c, per), lambda: _RSI._calculate_rsi(c, per), "f"),
         ("cci(14)", lambda: rs.cci(h, l, c, per),
@@ -137,6 +145,29 @@ def _ref_wma(c, period):
     ws = w.sum()
     for i in range(period - 1, n):
         out[i] = float(np.dot(c[i - period + 1:i + 1], w) / ws)
+    return out
+
+
+def _ref_change(c, length):
+    """c[i] - c[i - length], NaN for the first `length` bars."""
+    return (pd.Series(c) - pd.Series(c).shift(length)).to_numpy()
+
+
+def _ref_crossings(a, b):
+    """(crossover, crossunder): a moves from at-or-below b to above it, or the reverse.
+    A NaN on the bar or the bar before compares False, so it never fires."""
+    now, before = a - b, np.concatenate(([np.nan], (a - b)[:-1]))
+    return (before <= 0) & (now > 0), (before >= 0) & (now < 0)
+
+
+def _ref_valuewhen(expr, values):
+    """`values` at the latest bar where `expr` is nonzero, NaN before the first one."""
+    out = np.full(len(values), np.nan)
+    latest = np.nan
+    for i, (flag, value) in enumerate(zip(expr, values)):
+        if flag != 0:
+            latest = value
+        out[i] = latest
     return out
 
 

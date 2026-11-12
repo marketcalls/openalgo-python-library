@@ -4,9 +4,11 @@ This is a comprehensive index of all documentation files for the OpenAlgo Techni
 
 ## Main Documentation Files
 
-### 0. **[INDICATOR_CONVENTIONS.md](INDICATOR_CONVENTIONS.md)** - Seeds, smoothing and windows
+### 0. **[INDICATOR_CONVENTIONS.md](INDICATOR_CONVENTIONS.md)** - Seeds, smoothing, windows and NaN
 **Purpose**: The seed, smoothing and window convention of each indicator that has
-more than one published form, and the formulas of the single-formula indicators.
+more than one published form, how the indicators treat NaN input, the formulas of the
+single-formula indicators, how the conventions are checked in CI, and which functions
+cost more than one pass over the bars.
 
 ---
 

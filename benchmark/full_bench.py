@@ -8,6 +8,10 @@ benchmark/FULL_BENCHMARK.md:
   - Old (OpenAlgo)  : the original kernels run INTERPRETED. numba is uninstallable on
                       this Python 3.14 / numpy 2.x env (the reason for the migration),
                       so this is a conservative lower bound on the old JIT speed.
+                      Rows marked * have no Python kernel left in their class (it was
+                      replaced by the shared Rust kernel), so Old times the plain-Python
+                      reference in test/indicator_references.py instead; rows with no
+                      kernel and no reference show "-".
 Also reports max|delta| of New vs Old as an accuracy check.
 
 Volume in the index feed is 0, so a positive synthetic volume is used for volume
@@ -19,10 +23,12 @@ import sys
 import time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "test"))
 
 import numpy as np
 import pandas as pd
 
+import indicator_references as references
 from openalgo import ta
 from openalgo.indicators import utils as U
 from openalgo.indicators import trend as T, momentum as M, volatility as V
@@ -96,7 +102,7 @@ def main():
         ("vidya(14)", lambda: ta.vidya(c, 14), lambda: T.VIDYA._calculate_vidya(c, 14, 0.2)),
         ("supertrend(10,3)", lambda: ta.supertrend(h, lo, c, 10, 3.0), lambda: T.Supertrend._calculate_supertrend(h, lo, c, 10, 3.0)),
         ("ichimoku", lambda: ta.ichimoku(h, lo, c), lambda: T.Ichimoku._calculate_ichimoku(h, lo, c, 9, 26, 52, 26)),
-        ("frama(26)", lambda: ta.frama(h, lo, 26), lambda: T.FRAMA._calculate_frama(h, lo, 26)),
+        ("frama(26)*", lambda: ta.frama(h, lo, 26), lambda: references.frama(h, lo, 26)),
         ("ckstop", lambda: ta.ckstop(h, lo, c), lambda: T.ChandeKrollStop._calculate_chande_kroll_stop(h, lo, c, 10, 1.0, 9)),
 
         ("[Momentum]", None, None),
@@ -113,7 +119,7 @@ def main():
         ("[Volatility]", None, None),
         ("atr(14)", lambda: ta.atr(h, lo, c, 14), lambda: U.atr_wilder(h, lo, c, 14)),
         ("natr(14)", lambda: ta.natr(h, lo, c, 14), None),
-        ("bbands(20)", lambda: ta.bbands(c, 20), lambda: V.BollingerBands._calculate_bollinger_bands(c, 20, 2.0)),
+        ("bbands(20)", lambda: ta.bbands(c, 20), None),
         ("keltner", lambda: ta.keltner(h, lo, c), lambda: V.Keltner._calculate_keltner_channel(h, lo, c, 20, 10, 2.0)),
         ("donchian(20)", lambda: ta.donchian(h, lo, 20), None),
         ("chaikin", lambda: ta.chaikin(h, lo), None),
@@ -130,9 +136,9 @@ def main():
         ("[Volume]", None, None),
         ("obv", lambda: ta.obv(c, v), lambda: VO.OBV._calculate_obv(c, v)),
         ("vwap", lambda: ta.vwap(h, lo, c, v), None),
-        ("mfi(14)", lambda: ta.mfi(h, lo, c, v, 14), lambda: VO.MFI._calculate_mfi(h, lo, c, v, 14)),
+        ("mfi(14)*", lambda: ta.mfi(h, lo, c, v, 14), lambda: references.mfi(h, lo, c, v, 14)),
         ("adl", lambda: ta.adl(h, lo, c, v), lambda: VO.ADL._calculate_adl(h, lo, c, v)),
-        ("cmf(20)", lambda: ta.cmf(h, lo, c, v, 20), lambda: VO.CMF._calculate_cmf(h, lo, c, v, 20)),
+        ("cmf(20)*", lambda: ta.cmf(h, lo, c, v, 20), lambda: references.cmf(h, lo, c, v, 20)),
         ("emv", lambda: ta.emv(h, lo, v), None),
         ("force_index(13)", lambda: ta.force_index(c, v, 13), None),
         ("nvi", lambda: ta.nvi(c, v), None),
@@ -145,7 +151,7 @@ def main():
 
         ("[Oscillators]", None, None),
         ("roc(12)", lambda: ta.roc(c, 12), lambda: O.ROC._calculate_roc(c, 12)),
-        ("cmo(14)", lambda: ta.cmo(c, 14), lambda: O.CMO._calculate_cmo(c, 14)),
+        ("cmo(14)*", lambda: ta.cmo(c, 14), lambda: references.cmo(c, 14)),
         ("trix(18)", lambda: ta.trix(c, 18), None),
         ("awesome_osc", lambda: ta.awesome_oscillator(h, lo), None),
         ("accel_osc", lambda: ta.accelerator_oscillator(h, lo), None),
@@ -178,7 +184,7 @@ def main():
         ("adx(14)", lambda: ta.adx(h, lo, c, 14), adx_old),
         ("aroon(14)", lambda: ta.aroon(h, lo, 14), lambda: H.Aroon._calculate_aroon(h, lo, 14)),
         ("pivot_points", lambda: ta.pivot_points(h, lo, c), lambda: H.PivotPoints._calculate_pivot_points(h, lo, c)),
-        ("psar", lambda: ta.psar(h, lo), lambda: H.SAR._calculate_sar(h, lo, 0.02, 0.2)),
+        ("psar*", lambda: ta.psar(h, lo), lambda: references.sar(h, lo, 0.02, 0.2)),
         ("dmi(14)", lambda: ta.dmi(h, lo, c, 14), None),
         ("fractals", lambda: ta.fractals(h, lo), None),
         ("rwi(14)", lambda: ta.rwi(h, lo, c, 14), lambda: H.RWI._calculate_rwi(h, lo, c, 14)),
@@ -191,6 +197,8 @@ def main():
         "- **Old (OpenAlgo)**: original kernels run INTERPRETED. numba does not import on this "
         "Python 3.14 / numpy 2.x env (the reason for the migration), so this is a conservative "
         "lower bound on the old JIT speed - real numba would be faster, so true speedups are smaller.",
+        "- Rows marked * have no Python kernel left in their class, so Old times the plain-Python "
+        "reference in `test/indicator_references.py` instead.",
         "- Times are best-of-3 (New) / single-run (Old, since interpreted is slow), in ms.",
         "- `Speedup` = Old / New. `max|d|` = max abs difference New vs Old (accuracy).", "",
         "| Indicator | New Rust (ms) | Old OpenAlgo (ms) | Speedup (Old/New) | max&#124;d&#124; New-vs-Old |",

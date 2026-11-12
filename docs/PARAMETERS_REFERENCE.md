@@ -125,15 +125,17 @@ t3_custom = ta.t3(close, 30, 0.8)              # Custom parameters
 
 ### Fractal Adaptive Moving Average (FRAMA)
 ```python
-ta.frama(data, period=16)
+ta.frama(high, low, period=26)
 ```
-- **data**: Price data
-- **period**: Number of periods (default: **16**)
+- **high**: High prices
+- **low**: Low prices
+- **period**: Number of periods, even and at least 2 (default: **26**)
+- **Formula**: see the FRAMA row of [INDICATOR_CONVENTIONS.md](INDICATOR_CONVENTIONS.md)
 
 **Example:**
 ```python
-frama_default = ta.frama(close)                 # Uses period=16
-frama_custom = ta.frama(close, 20)             # Custom period
+frama_default = ta.frama(high, low)             # Uses period=26
+frama_custom = ta.frama(high, low, 20)          # Custom period
 ```
 
 ### Supertrend
@@ -335,12 +337,14 @@ ta.elderray(high, low, close, period=13)
 
 ### Fisher Transform
 ```python
-ta.fisher(data, period=10)
+ta.fisher(high, low, length=9)
 ```
-- **data**: Price data
-- **period**: Smoothing period (default: 10)
+- **high**: High prices
+- **low**: Low prices
+- **length**: Bars in the highest/lowest window of the midpoint (high + low) / 2 (default: 9)
+- **Formula**: see the Fisher Transform row of [INDICATOR_CONVENTIONS.md](INDICATOR_CONVENTIONS.md)
 
-**Returns:** Tuple of (Fisher Transform, Trigger line)
+**Returns:** Tuple of (Fisher Transform, Trigger line); the trigger is the previous bar's Fisher value
 
 ### Connors RSI
 ```python
@@ -1166,7 +1170,8 @@ ta.rwi(high, low, close, period=14)
 - **low**: Low prices
 - **close**: Close prices
 - **period**: Number of periods (default: 14)
-- **Formula**: `rwiHigh = (high - low[length]) / (atr(length) * sqrt(length))`, with `low[length]` taken as 0 when undefined
+- **Formula**: `rwi_high = (high - low[period]) / (atr * sqrt(period))` and `rwi_low = (high[period] - low) / (atr * sqrt(period))`, where `low[period]` and `high[period]` are the values `period` bars back and `atr` is the simple mean of the true range over the last `period` bars (not the Wilder-smoothed `ta.atr`)
+- **Warm-up**: both outputs are NaN for the first `period` bars, and on any bar where that mean true range is 0
 
 **Returns:** Tuple of (RWI High, RWI Low)
 

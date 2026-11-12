@@ -435,6 +435,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an outside library are removed, and private kernels and one internal module are renamed
   (`kama_full_window`, the `*_wilder_sum` kernels, `openalgo/indicators/classic.py`). The
   public API and every indicator output are unchanged.
+- **Market tables say which figures are assumptions.** The rows of the default slippage
+  table (`bt.slippage.defaults()`) have status `default` instead of `verified`: no
+  exchange or broker publishes slippage, so they are OpenAlgo's starting assumptions,
+  overridable with `slippage=`. As with the default futures margin, a run does not warn
+  about them and the Assumptions block names the default table. The NSE and BSE intraday
+  times from 2026-12-07 (entries until 14:50, square-off at 15:00, kept from the earlier
+  row) are unverified until brokers publish their times for the 15:30 closing auction,
+  so `Calendar.intraday_times` reports `unverified=True` for those sessions. Fills,
+  charges and every other result are unchanged.
+- **Indicator docs and audit notes match the code.** `docs/INDICATOR_CONVENTIONS.md`
+  now states the conventions of WMA, FRAMA, the Fisher Transform, CMF, MFI, RVI, RWI,
+  the Parabolic SAR and VWAP and how NaN input is treated; it no longer promises
+  identical values across releases (a change is listed here) or that every function is
+  O(n) (KAMA and `ta.correlation` recompute each window). `docs/PARAMETERS_REFERENCE.md`
+  gives the real signatures of `ta.frama(high, low, period=26)` and
+  `ta.fisher(high, low, length=9)`, and the RWI formula as computed: a simple mean of
+  the true range, NaN for the first `period` bars. The audit notes under `audit/` name,
+  for every verdict, the test or script that checks it and its tolerance, mark MACD,
+  `validate_input` and Bollinger Bands as a whole as unchecked, and correct the EMA,
+  TRIX, Mass Index and Relative Volatility Index rows.
+- **Indicator checks that can fail.** `test/indicator_references.py` implements WMA,
+  FRAMA, the Fisher Transform, CMO, CMF, MFI, RVI, VWAP and the Parabolic SAR from
+  their published formulas with plain Python loops, and `test/test_indicators_fixes.py`
+  compares each with `ta` on both backends in CI. The parity scripts in `benchmark/`
+  compare against these references, or against pandas and NumPy expressions, wherever
+  their old reference had come to call the same kernel it was checking.
 - **Feed errors are never silent.** An exception raised inside an LTP, quote, depth
   or order callback, a frame that cannot be parsed, and a rejection from the server
   (for example an invalid API key) now reach `on_error` listeners, or an ERROR record

@@ -17,10 +17,11 @@
 //! 2026-12-04 continuous trading in cash stocks that have derivatives ended at 15:15,
 //! when the closing auction started, and brokers squared such positions off from
 //! 15:00. The NSE and BSE rows from 2026-08-03 (14:50 and 15:00) are no later than any
-//! broker time that was found, and are marked unverified until the maintainer confirms
-//! them. The 15:15 end itself is not modelled: the cash session runs to 15:30 for
-//! every stock. Nor is the 15:30 stop of index derivatives on their expiry day (from
-//! 2026-12-07).
+//! broker time that was found and are verified by the maintainer's decision TIMES-1.
+//! The rows from 2026-12-07 keep those times but are unverified: no broker had
+//! published its times for the closing auction at 15:30 when they were written. The
+//! 15:15 end itself is not modelled: the cash session runs to 15:30 for every stock.
+//! Nor is the 15:30 stop of index derivatives on their expiry day (from 2026-12-07).
 
 use crate::model::{Day, Exchange, TsNanos, NANOS_PER_MIN, NANOS_PER_SEC};
 

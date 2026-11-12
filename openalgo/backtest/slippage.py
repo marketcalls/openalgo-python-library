@@ -19,8 +19,9 @@ the trader. The forms:
 Slippage classes (`CLASSES`): EQ_LARGE_MID (cash equity, the default), EQ_LOW_VOLUME
 (cash equity the run names as low volume), INDEX_FUT, STOCK_FUT, INDEX_OPT, STOCK_OPT,
 MCX_FUT, MCX_OPT and CDS. The figures live in the kernel's data file
-`rust/oa_bt/src/market/slippage_defaults.csv`, each row with its source and
-verification status.
+`rust/oa_bt/src/market/slippage_defaults.csv`, each row with its source and status:
+no exchange or broker publishes slippage, so every row is an OpenAlgo default (status
+"default"), to be calibrated against live fills.
 
 Raises ConfigError for any other value.
 """
@@ -160,7 +161,8 @@ def _date(day: int | None) -> dt.date | None:
 def defaults() -> list[dict[str, Any]]:
     """The built-in default table: one dict per row with row_id, slippage_class,
     valid_from and valid_to (dates, None for open), model, amount, min_ticks, source,
-    status ("verified" or "unverified") and notes."""
+    status ("verified", "unverified", or "default" for a modelling default no source
+    publishes, which every built-in row is) and notes."""
     rows = []
     for raw in native.slippage_defaults():
         row = dict(zip(_ROW_FIELDS, raw, strict=True))
