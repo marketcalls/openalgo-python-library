@@ -159,6 +159,14 @@ These are settled. Do not redesign around them without asking.
   in units, never lots.
 - **One Rust kernel, Python on top.** Backtest and live share the same kernel and the
   same rules; Python declares, Rust executes.
+- **Futures margin: 5x by default, the user's figure when given.** Every futures
+  contract blocks 20 percent of its contract value in a backtest unless the user sets
+  `margin=` (one value, or per underlying, as a percent of contract value or rupees per
+  lot). Real margins differ by underlying and over time, so no per-underlying table is
+  kept. In live trading the broker computes margin.
+- **Speed targets.** An empty `on_bar` makes at least 300k callbacks per second; an
+  array or condition strategy over 1M bars, with charges, slippage and every metric,
+  takes at most 2 seconds on a current desktop core (`benchmark/backtest_speed.py`).
 
 Working agreement for this build: work is committed and pushed to the
 `feat/backtest-engine` branch in verified units, and the `## [Unreleased]` section of
