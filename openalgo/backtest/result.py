@@ -6,9 +6,9 @@ instruments are named by symbol. Prices and money are rupees, quantities units.
 
 Built: `fills`, `orders`, `trades`, `equity`, `returns`, `positions` (the position
 history), `events`, `risk_events`, `stale_marks`, `final_positions`, `gross_pnl`,
-`assumptions`, `warnings`, `skipped`, `manifest`, `to_dataframes()`. Not built yet:
-`metrics`, `costs`, `tearsheet()`, `rerun()` (Phase 1 work), and the several-strategy
-views `strategy()`, `combined`, `correlation` (Phase 3).
+`assumptions`, `warnings`, `skipped`, `manifest` (see `_manifest`), `rerun()` (see
+`_rerun`), `to_dataframes()`. Not built yet: `metrics`, `costs`, `tearsheet()` (Phase 1
+work), and the several-strategy views `strategy()`, `combined`, `correlation` (Phase 3).
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ import pandas as pd
 
 from ._native import native
 from ._series import IST
+from .errors import BacktestError
 
 NOT_BUILT = "is not implemented yet (Phase 1 work in progress)"
 
@@ -38,6 +39,7 @@ class Result:
         warnings: list[str],
         skipped: list[tuple],
         manifest: dict[str, Any],
+        record: Any = None,
     ) -> None:
         self._output = output
         self._symbols = symbols
@@ -45,6 +47,7 @@ class Result:
         self._warnings = warnings
         self._skipped = skipped
         self._manifest = manifest
+        self._record = record
 
     # ----- tables --------------------------------------------------------------------
 
@@ -149,7 +152,9 @@ class Result:
 
     @property
     def manifest(self) -> dict[str, Any]:
-        """Engine version, settings and instruments of the run."""
+        """Engine version, strategy and its source hash, every resolved argument, data
+        partition hashes, reference-table and cost-schedule versions, random seed and
+        platform: JSON types (`_manifest.RunManifest.from_dict` reads it back)."""
         return {"engine_version": native.engine_version(), **self._manifest}
 
     def to_dataframes(self) -> dict[str, pd.DataFrame]:
@@ -171,7 +176,12 @@ class Result:
         raise NotImplementedError(f"Result.tearsheet {NOT_BUILT}")
 
     def rerun(self, **overrides: Any) -> Result:
-        raise NotImplementedError(f"Result.rerun {NOT_BUILT}")
+        """The same backtest again with run arguments or strategy parameters changed;
+        with none, this result bit for bit. Raises ConfigError for an unknown name and
+        BacktestError for a result that was not made by `bt.backtest`."""
+        if self._record is None:
+            raise BacktestError("this result was not made by bt.backtest and cannot rerun")
+        return self._record.rerun(overrides, self.manifest)
 
     def strategy(self, name: str) -> Result:
         raise NotImplementedError("several strategies in one run are planned for Phase 3")

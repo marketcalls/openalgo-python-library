@@ -161,17 +161,15 @@ def _product(strategy: type, product: str | None, interval: str, exchange: str) 
     return "NRML" if exchange in DERIVATIVE_EXCHANGES else "CNC"
 
 
-def _base(base: str | None, interval: str, warnings: list[str]) -> str:
+def _base(base: str | None, interval: str) -> str:
+    """The base interval before data is seen: `base=`, daily for daily or longer
+    strategies, else the strategy interval, which `_base_interval.choose_base` replaces
+    with 1 minute when 1-minute data covers the run (03-architecture 4.1)."""
     if base is not None:
         parse_interval(base)
         return base
     if parse_interval(interval)[0] != "intraday":
         return "D"
-    warnings.append(
-        f"base interval {interval}: the strategy interval is used because choosing the "
-        "1-minute base by data coverage is not implemented yet; pass base='1m' for a "
-        "1-minute base"
-    )
     return interval
 
 
@@ -214,7 +212,7 @@ def resolve(strategy: type, args: dict[str, Any]) -> RunPlan:
         symbols=symbols,
         exchange=strategy.exchange,
         interval=strategy.interval,
-        base=_base(args["base"], strategy.interval, warnings),
+        base=_base(args["base"], strategy.interval),
         product=product,
         start=start,
         end=end,

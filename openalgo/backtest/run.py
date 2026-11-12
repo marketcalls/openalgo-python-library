@@ -5,20 +5,22 @@ How a backtest runs (the Python half of the design in `rust/oa_bt/src/engine/mod
 1. **Resolve** (`_settings.resolve`): the strategy's class attributes, the run arguments
    and the documented defaults become one `RunPlan` in kernel units. A strategy class
    attribute wins over a run argument of the same name.
-2. **Inputs**: the calendar (`calendar.default_calendar()` unless given), the instruments
-   (`instrument=`, or the generic cash-equity instrument for own NSE or BSE data, stated
-   in the warnings), and the bars at the base interval from the data layer
-   (`data.load_bars`: OpenAlgo through `client`, or the user's `data=`).
+2. **Inputs** (`_pipeline.prepare`): the calendar (`calendar.default_calendar()` unless
+   given), the base interval and its bars from the data layer (`_base_interval`: the
+   1-minute coverage probe; `data.load_bars`: OpenAlgo through `client`, or the user's
+   `data=`), and the instruments (`_instruments`: `instrument=`, the generic cash-equity
+   instrument, or the reference tables), each stated in the Assumptions block.
 3. **Engine** (`_engine.build_engine`): the native `Engine` validates everything and
    refuses, with NotImplementedError naming the feature, any setting it cannot honour
    yet. Nothing is ignored.
-4. **Drive** (`_driver.drive`): the strategy instance is bound to a `RunContext`, `init`
-   runs, then the loop `advance` -> callbacks -> `on_bar` -> orders runs to the end of
-   the grid, one Python call per strategy-bar close. Condition and array strategies
+4. **Drive** (`_pipeline.execute`, `_driver.drive`): the strategy instance is bound to a
+   `RunContext`, `init` runs (indicators, timers), then the loop `advance` -> timers or
+   callbacks -> `on_bar` -> orders runs to the end of the grid, one Python call per
+   strategy-bar close. Condition and array strategies
    (`entry_when`, `bt.from_arrays`) will run the same kernel through a Rust driver with
    no Python call per bar.
 5. **Result** (`result.Result`): the kernel's result columns as DataFrames, with the
-   Assumptions block, the warnings and the manifest.
+   Assumptions block, the warnings, the manifest (`_manifest`) and `rerun` (`_rerun`).
 
 Python declares and decides; Rust executes: fills, positions, the ledger, the event
 stream and every market rule live in the kernel, so `bt.live` (Phase 2) will run the same
@@ -29,18 +31,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import calendar as calendar_module
-from ._context import RunContext
-from ._driver import drive
-from ._engine import build_engine, call
-from ._settings import assumptions, resolve
-from .data import load_bars
+from ._pipeline import execute, prepare
+from ._rerun import RunRecord
 from .errors import ConfigError
 from .reference import Instrument
 from .result import Result
 from .strategy import Strategy
 
-CASH_EXCHANGES = ("NSE", "BSE")
 PHASE_1_WORK = "is not implemented yet (Phase 1 work in progress)"
 
 
@@ -84,12 +81,13 @@ def backtest(
     start, end: IST dates (inclusive); a datetime also bounds the run to slices opening
         at or after `start` and at or before `end`. Taken from `data=` when omitted.
     data: own bars (a DataFrame, or a dict of them by symbol) at the base interval.
-    instrument: an `Instrument`, or a dict of them by symbol; without it own NSE or BSE
-        data is a generic cash-equity instrument (lot 1, tick 0.05) and a warning says so.
+    instrument: an `Instrument`, or a dict of them by symbol; without it NSE or BSE cash
+        equity is a generic cash-equity instrument (lot 1, tick 0.05) and futures and
+        options come from the reference tables (`_instruments`; the Assumptions say so).
     calendar: a session calendar; the built-in one by default.
-    base: the base interval ("1m", "D", ...); default "D" for daily strategies and the
-        strategy interval for intraday ones (with a warning until the 1-minute coverage
-        probe exists).
+    base: the base interval ("1m", "D", ...); default "D" for daily strategies, and for
+        intraday ones 1 minute when 1-minute data covers the run for every instrument,
+        else the strategy interval (`_base_interval`; the Assumptions say which and why).
     fill, quantity_mode, costs, slippage: "next_open"; "fractional" or "venue";
         "zerodha" or None (no charges, with a warning); "default" (per segment), 0,
         bt.ticks(n) or bt.pct(p).
@@ -111,77 +109,10 @@ def backtest(
 
 
 def _run(strategy: type[Strategy], client: Any, args: dict[str, Any]) -> Result:
-    """Steps 1 to 5 of the module docstring for one strategy."""
-    plan = resolve(strategy, args)
-    session_calendar = _calendar(args["calendar"], plan)
-    instruments, notes = _instruments(plan, args["instrument"], client)
-    frames = [_bars(plan, symbol, client, session_calendar, args) for symbol in plan.symbols]
-    config = plan.native_config(deliver_events=strategy.wants_events())
-    engine = build_engine(session_calendar._cal, config, instruments, frames)
-    context = RunContext(engine, instruments, plan.product, strategy.size)
-    instance = strategy(**(args["params"] or {}))
-    instance._ctx = context
-    instance.init()
-    drive(instance, engine, context)
-    output = call(engine.finish)
-    context.close(output["orders"])
-    return Result(
-        output,
-        list(plan.symbols),
-        assumptions(plan, session_calendar),
-        [*plan.warnings, *notes],
-        context.skipped,
-        {"plan": plan, "instruments": [i.to_dict() for i in instruments]},
-    )
-
-
-def _bars(plan: Any, symbol: str, client: Any, calendar: Any, args: dict[str, Any]) -> Any:
-    """The base-interval bars of one symbol from the data layer."""
-    return load_bars(
-        symbol,
-        plan.exchange,
-        plan.base,
-        plan.start,
-        plan.end,
-        source=args["source"],
-        client=client,
-        data=_data_for(args["data"], symbol),
-        calendar=calendar,
-        tz=args["tz"],
-    ).bars
-
-
-def _calendar(calendar: Any, plan: Any) -> calendar_module.Calendar:
-    if calendar is None:
-        return calendar_module.default_calendar()
-    if isinstance(calendar, calendar_module.Calendar):
-        return calendar
-    return calendar_module.Calendar.from_sessions(calendar, plan.exchange, plan.start, plan.end)
-
-
-def _instruments(plan: Any, given: Any, client: Any) -> tuple[list[Instrument], list[str]]:
-    by_symbol = {given.symbol: given} if isinstance(given, Instrument) else dict(given or {})
-    instruments, notes = [], []
-    for symbol in plan.symbols:
-        if symbol in by_symbol:
-            instruments.append(by_symbol[symbol])
-        elif client is not None:
-            raise NotImplementedError(f"instrument lookup through client.symbol() {PHASE_1_WORK}")
-        elif plan.exchange in CASH_EXCHANGES:
-            instruments.append(Instrument.cash_equity(symbol, plan.exchange))
-            notes.append(f"{symbol}: generic cash-equity instrument assumed (lot 1, tick 0.05)")
-        else:
-            raise ConfigError(f"pass instrument= for {symbol} on {plan.exchange}")
-    return instruments, notes
-
-
-def _data_for(data: Any, symbol: str) -> Any:
-    """The own data of one symbol: `data` itself, or its entry in a dict by symbol."""
-    if not isinstance(data, dict):
-        return data
-    if symbol not in data:
-        raise ConfigError(f"data= has no bars for {symbol}")
-    return data[symbol]
+    """Steps 1 to 5 of the module docstring for one strategy (`_pipeline`)."""
+    prepared = prepare(strategy, client, args)
+    record = RunRecord(strategy, client, {k: v for k, v in args.items() if k != "client"})
+    return execute(strategy, prepared, args, record=record)
 
 
 def live(
@@ -193,8 +124,14 @@ def live(
 
 
 def optimize(strategy: type[Strategy], client: Any = None, **settings: Any) -> Any:
-    """Sweep the strategy's parameters; returns an OptimizeResult."""
-    raise NotImplementedError(f"bt.optimize {PHASE_1_WORK}")
+    """Sweep the strategy's parameters over a grid and return an `OptimizeResult`
+    (`.table`, `.best`, `.select(**params)`, `.heatmap(x, y)`, `.path`). Takes the run
+    arguments of `bt.backtest`, ranges named after parameters (`fast=range(5, 30, 5)`;
+    `bt.param` ranges otherwise), `objective=`, `maximize=`, `workers=` and `progress=`.
+    See `_optimize.optimize` for the rules and errors."""
+    from ._optimize import optimize as sweep
+
+    return sweep(strategy, client, **settings)
 
 
 def walk_forward(strategy: type[Strategy], client: Any = None, **settings: Any) -> Any:
