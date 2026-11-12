@@ -3,7 +3,7 @@
 //! the events, stale marks, final positions and gross P&L.
 
 use numpy::IntoPyArray;
-use oa_bt::engine::RunOutput;
+use oa_bt::engine::{RunEndCause, RunOutput};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
@@ -70,5 +70,8 @@ pub(super) fn output<'py>(py: Python<'py>, output: &RunOutput) -> PyResult<Bound
         "gross_pnl",
         (g.realized_rupees, g.unrealized_rupees, g.total_rupees),
     )?;
+    let end = output.run_end;
+    let cause = end.cause.map(RunEndCause::code);
+    dict.set_item("run_end", (end.close, end.range_close, cause))?;
     Ok(dict)
 }

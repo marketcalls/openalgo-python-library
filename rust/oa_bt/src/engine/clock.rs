@@ -1,9 +1,11 @@
 //! The run's clock: the grid of base-interval slices and the strategy-bar closes.
 //!
 //! Every slot of the calendar's base grid is a slice, whether or not any instrument
-//! has a bar in it (SPEC-07). A strategy bar closes at a slice when the slice's base
-//! bar closes at a strategy-interval lattice point or at the session close: decided by
-//! the clock, never by whether the last base bar exists.
+//! has a bar in it (SPEC-07), up to the run's end: the slots after the last bar of
+//! every instrument, or after the present, are not run (`run_end`). A strategy bar
+//! closes at a slice when the slice's base bar closes at a strategy-interval lattice
+//! point or at the session close: decided by the clock, never by whether the last base
+//! bar exists.
 //!
 //! Phase 1 runs the instruments of one exchange. Runs across exchanges with different
 //! hours (Phase 3) keep this type and add one strategy-close list per exchange; their
@@ -111,6 +113,19 @@ impl Timeline {
             grid,
             strategy_bars,
         })
+    }
+
+    /// Keep the first `len` slices: the run ends with the last of them (`run_end`).
+    pub(super) fn end_after(&mut self, len: usize) {
+        let grid = &mut self.grid;
+        grid.ts.truncate(len);
+        grid.day.truncate(len);
+        grid.active.truncate(len);
+        grid.session_open.truncate(len);
+        grid.session_close.truncate(len);
+        for closes in &mut grid.bar_close {
+            closes.truncate(len);
+        }
     }
 
     /// The exchange whose calendar the run follows.

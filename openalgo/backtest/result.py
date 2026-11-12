@@ -251,9 +251,9 @@ class Result:
     def contract_notes(self) -> pd.DataFrame:
         """One row per contract note (trade date and note group; contract-note rounding
         only): its charged lines and total, the accrued total, what its fills posted and
-        the rounding adjustment posted at the session close. `settled` is False for a
-        note whose session close the run did not reach. `attrs["rule"]` states the
-        assumed contract-note rule."""
+        the rounding adjustment posted at the session close, or at the run's end when the
+        run ends before it. `settled` is True once the adjustment is posted.
+        `attrs["rule"]` states the assumed contract-note rule."""
         return _result_costs.notes_frame(self._output)
 
     @property

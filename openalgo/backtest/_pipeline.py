@@ -42,6 +42,7 @@ from ._intraday_assumptions import one_clock_time
 from ._manifest import build_manifest, strategy_source_hash
 from ._margin_check import check_margin
 from ._market import MarketSettings, market_settings
+from ._run_end import run_end_warnings
 from ._settings import RunPlan, assumptions, resolve
 from ._slab_ticks import resolve_slab_ticks
 from .reference import Instrument
@@ -213,6 +214,9 @@ def _arguments(
         client="given" if args.get("client") is not None else None,
         calendar="default" if prepared.calendar is None else "given",
     )
+    # The present only when `now=` fixed it: a run on the clock reruns to the same manifest.
+    present = resolved.pop("present")
+    resolved["now"] = None if args["now"] is None else present
     return resolved
 
 
@@ -272,7 +276,7 @@ def execute(
         output,
         list(plan.symbols),
         _assumptions(prepared, calendar, checks, market),
-        [*prepared.warnings, *timer_warnings],
+        [*run_end_warnings(output["run_end"]), *prepared.warnings, *timer_warnings],
         context.skipped,
         manifest.to_dict(),
         record=record,

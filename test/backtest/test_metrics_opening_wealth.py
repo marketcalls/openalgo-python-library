@@ -125,6 +125,47 @@ def test_with_an_opening_wealth_the_benchmark_base_is_its_last_value_before_the_
     assert result.benchmark_equity.to_numpy() == pytest.approx([101.0, 99.99, 104.9895])
 
 
+def with_benchmark(bench: pd.Series) -> metrics.Performance:
+    return metrics.analyse(
+        closes(102.0, 99.96, 104.958), exchanges="NSE", opening_wealth=100.0, benchmark=bench
+    )
+
+
+# Benchmark closes on the session dates only, none before the first point: the first
+# session has no benchmark return, the next two have -0.01 and 0.05.
+FROM_THE_FIRST_SESSION_END = curve(
+    (at("2025-06-02"), 1010.0), (at("2025-06-03"), 999.9), (at("2025-06-04"), 1049.895)
+)
+# The benchmark from its first value in the run to the end: 0.99 x 1.05 - 1.
+SINCE_FIRST_VALUE = 1049.895 / 1010.0 - 1
+
+
+def test_the_benchmark_return_starts_at_its_first_value_in_the_run():
+    m = with_benchmark(FROM_THE_FIRST_SESSION_END).metrics
+    assert m["benchmark_total_return"] == pytest.approx(SINCE_FIRST_VALUE)
+
+
+def test_the_since_start_horizon_has_the_same_benchmark_return():
+    horizons = with_benchmark(FROM_THE_FIRST_SESSION_END).horizons
+    assert horizons.loc["Since start", "benchmark_return"] == pytest.approx(SINCE_FIRST_VALUE)
+
+
+def test_the_first_month_of_the_benchmark_comparison_has_the_same_benchmark_return():
+    table = with_benchmark(FROM_THE_FIRST_SESSION_END).benchmark_comparison("month")
+    june = table.loc[pd.Period("2025-06", "M")]
+    assert june["benchmark"] == pytest.approx(SINCE_FIRST_VALUE)
+    # The strategy's 1.02 x 0.98 x 1.05 - 1 is above it.
+    assert bool(june["beat"]) is True
+
+
+def test_a_benchmark_with_no_return_in_the_run_is_nan_in_all_three():
+    # One value, at the last session end: no session of the run has a benchmark return.
+    result = with_benchmark(curve((at("2025-06-04"), 1000.0)))
+    assert math.isnan(result.metrics["benchmark_total_return"])
+    assert math.isnan(result.horizons.loc["Since start", "benchmark_return"])
+    assert math.isnan(result.benchmark_comparison("month")["benchmark"].iloc[0])
+
+
 @pytest.mark.parametrize("value", [0.0, -100.0, math.nan, math.inf, "100", True])
 def test_an_opening_wealth_that_is_not_a_positive_number_is_refused(value):
     with pytest.raises(ConfigError, match="opening_wealth"):

@@ -63,6 +63,7 @@ line-length = 100
 target-version = "py312"
 include = [
     "benchmark/backtest_speed.py",
+    "examples/backtest_quickstart.py",
     "openalgo/backtest/**/*.py",
     "openalgo/_feed_*.py",
     "openalgo/indicators/_anchors.py",

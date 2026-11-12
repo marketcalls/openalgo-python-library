@@ -9,13 +9,14 @@ calendar date that many months before the last session date (the month's last da
 that date does not exist) to the end. A horizon is listed only when the run started on
 or before that date. Its figures are those of the sessions after the date: total return,
 CAGR over the calendar days of the window, volatility, Sharpe, the deepest drawdown at
-session closes and, with a benchmark, the benchmark's return over the same sessions.
-"Since start" covers the whole run, with CAGR over its elapsed time.
+session closes and, with a benchmark, the benchmark's return over the same sessions
+(`_periods.benchmark_growth`: from its first value in the window, NaN with none).
+"Since start" covers the whole run, with CAGR over its elapsed time; its benchmark
+return is the run's `benchmark_total_return`.
 """
 
 import numbers
 
-import numpy as np
 import pandas as pd
 
 from ..errors import ConfigError
@@ -75,8 +76,7 @@ def _row(
     row = {"horizon": label, "from": since.date(), "sessions": len(window)}
     row |= {name: figures[name] for name in HORIZON_FIGURES}
     if bench is not None:
-        growth = (1.0 + bench).to_numpy(dtype=float)
-        row["benchmark_return"] = float(np.prod(growth)) - 1.0 if len(growth) else 0.0
+        row["benchmark_return"] = periods.benchmark_growth(bench.to_numpy(dtype=float))
     return row
 
 

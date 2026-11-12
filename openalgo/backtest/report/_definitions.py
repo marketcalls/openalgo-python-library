@@ -257,9 +257,12 @@ _BENCHMARK = {
     "benchmark_total_return": (
         "Benchmark return",
         "fraction",
-        "Benchmark value at the end over its first value in the run (as of the start, "
-        "which with an opening wealth is its last value before the first point; else as "
-        "of the first session end it covers), minus 1.",
+        "Product of (1 + benchmark session return) over the sessions that have one, minus "
+        "1: the benchmark value at the end over its first value in the run (as of the "
+        "start, which with an opening wealth is its last value before the first point; "
+        "else as of the first session end it covers), minus 1. NaN when no session has a "
+        "benchmark return. The horizon summary and benchmark_comparison take each span's "
+        "benchmark return by the same rule.",
     ),
     "benchmark_sessions": (
         "Benchmark sessions",
