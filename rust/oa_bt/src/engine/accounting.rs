@@ -23,7 +23,7 @@ use super::kernel::Engine;
 /// the run's `costs` setting.
 pub(super) fn charge_error(error: ChargeError) -> KernelError {
     match error {
-        ChargeError::NotBuilt { feature } => KernelError::NotBuilt { feature },
+        ChargeError::NotBuilt { feature, instead } => KernelError::NotBuilt { feature, instead },
         ChargeError::Cost(inner) => KernelError::InvalidConfig {
             field: "costs",
             reason: inner.to_string(),

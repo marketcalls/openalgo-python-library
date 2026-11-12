@@ -26,6 +26,7 @@ import pandas as pd
 
 from .._calendar_convert import DateLike, to_day
 from .._layout import NANOS_PER_SECOND, is_intraday
+from .._messages import counted
 from .._protocols import SessionCalendar
 from ..errors import ConfigError, DataError
 from ._sessions import IST_OFFSET_SECONDS, NowLike, Sessions, resolve_now, to_date
@@ -230,8 +231,8 @@ class OpenAlgoProvider:
             if missing:
                 probe.first_missing = missing[0].isoformat()
                 probe.reason = (
-                    f"Historify lacks a daily bar for {len(missing)} of {len(required)} sessions "
-                    f"(first missing: {probe.first_missing})"
+                    f"Historify lacks a daily bar for {len(missing)} of "
+                    f"{counted(len(required), 'session')} (first missing: {probe.first_missing})"
                 )
                 return probe
             edge_days = dict.fromkeys((required[0], required[-1])) if is_intraday(interval) else ()
@@ -251,7 +252,9 @@ class OpenAlgoProvider:
             probe.reason = f"the Historify probe failed: {exc}"
             return probe
         probe.decision = "db"
-        probe.reason = f"Historify holds a daily bar for all {len(required)} sessions of the range"
+        probe.reason = (
+            f"Historify holds a daily bar for all {counted(len(required), 'session')} of the range"
+        )
         if is_intraday(interval):
             probe.reason += f" and {interval} bars on the first and last of them"
         return probe

@@ -9,12 +9,14 @@
 
 use crate::data::resample::{resample_daily, resample_intraday, BarsIn, BarsOut, ClosedDayPolicy};
 use crate::exec::{InstrumentId, InstrumentSpec};
-use crate::market::calendar::{BaseInterval, Calendar};
-use crate::model::TsNanos;
+use crate::market::calendar::{format_ist, BaseInterval, Calendar};
+use crate::model::{counted, TsNanos};
 use crate::rms::BarPrices;
 
 use super::clock::Timeline;
-use super::config::{BarColumns, RunConfig, StrategyInterval};
+use super::config::{
+    BarColumns, RunConfig, StrategyInterval, PERIOD_INTERVALS, PERIOD_INTERVALS_INSTEAD,
+};
 use super::error::KernelError;
 
 /// A strategy bar handed to `on_bar`: prices in rupees, volume in units.
@@ -83,7 +85,10 @@ fn validate(spec: &InstrumentSpec, bars: &BarColumns) -> Result<(), KernelError>
         if !finite || l > o.min(c) || h < o.max(c) {
             return Err(bad(
                 spec,
-                format!("bar at {} is not a valid OHLC bar", bars.ts_open[row]),
+                format!(
+                    "the bar opening at {} is not a valid OHLC bar",
+                    format_ist(bars.ts_open[row])
+                ),
             ));
         }
     }
@@ -109,7 +114,10 @@ fn align(
         let slot = opens.binary_search(&ts).map_err(|_| {
             bad(
                 spec,
-                format!("bar at {ts} does not open on the base-interval grid"),
+                format!(
+                    "the bar opening at {} does not open on the base-interval grid",
+                    format_ist(ts)
+                ),
             )
         })?;
         if let Some(cell) = rows.get_mut(slot) {
@@ -166,7 +174,8 @@ fn strategy_bars(
         }
         (_, StrategyInterval::Period(_)) => {
             return Err(KernelError::NotBuilt {
-                feature: "weekly, monthly, quarterly and yearly strategy intervals",
+                feature: PERIOD_INTERVALS,
+                instead: PERIOD_INTERVALS_INSTEAD,
             })
         }
         _ => return Ok(aligned),
@@ -191,9 +200,9 @@ impl MarketData {
             return Err(KernelError::InvalidConfig {
                 field: "data",
                 reason: format!(
-                    "{} bar sets for {} instruments",
-                    bars.len(),
-                    instruments.len()
+                    "{} for {}",
+                    counted(bars.len(), "bar set", "bar sets"),
+                    counted(instruments.len(), "instrument", "instruments")
                 ),
             });
         }

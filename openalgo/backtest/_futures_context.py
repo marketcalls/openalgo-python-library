@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 
+from ._messages import not_supported
 from ._series import Bar, BarStore
 from ._spliced import SplicedStore
 from .errors import ConfigError
@@ -75,9 +76,9 @@ class SeriesContext:
         """The spliced strategy bars of a series. Raises NotImplementedError for another
         interval."""
         if interval is not None and interval != self._interval:
-            raise NotImplementedError(
-                "other intervals of a futures series are not implemented yet (Phase 1 work "
-                "in progress): use the strategy interval"
+            raise not_supported(
+                "a futures series at another interval than the strategy's",
+                "read the series at the strategy interval",
             )
         return self._stores[self._name(name)]
 

@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from ._messages import counted
 from ._series import IST
 from .costs import COMPONENTS, CONTRACT_NOTE_RULE
 
@@ -115,7 +116,7 @@ def run_warnings(output: dict[str, Any], schedules: list[str]) -> list[str]:
             first = _dates([group["day"].min()])[0]
             lines.append(
                 f"charges: the {segment} rates of cost schedule {schedules[schedule]} are "
-                f"{trust.replace('_', ' ')} for {len(group)} fill(s), from {first}"
+                f"{trust.replace('_', ' ')} for {counted(len(group), 'fill')}, from {first}"
             )
     return lines
 

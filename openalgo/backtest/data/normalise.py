@@ -29,6 +29,7 @@ import pandas as pd
 
 from .._calendar_convert import from_day, interval_nanos, to_day
 from .._layout import BAR_COLUMNS, PRICE_COLUMNS, parse_interval
+from .._messages import counted
 from .._protocols import SessionCalendar
 from ..errors import ConfigError, DataError
 from . import _placement
@@ -280,7 +281,9 @@ def _as_float(data: object, length: int, name: str) -> np.ndarray:
         raise DataError(f"column {name!r} is not numeric: {exc}") from exc
     out = np.array(out, dtype="float64").reshape(-1)
     if len(out) != length:
-        raise DataError(f"column {name!r} has {len(out)} values for {length} timestamps")
+        raise DataError(
+            f"column {name!r} has {counted(len(out), 'value')} for {counted(length, 'timestamp')}"
+        )
     return out
 
 
@@ -359,9 +362,12 @@ def _checked_intraday(rows: _Rows, label: str, series: _Series) -> np.ndarray:
     if not series.regular_only:
         outside = int((~rows.in_session).sum())
         if outside:
-            report.notes.append(
-                f"{outside} bars outside the regular session were kept (regular_session_only=False)"
+            kept = counted(
+                outside,
+                "bar outside the regular session was kept",
+                "bars outside the regular session were kept",
             )
+            report.notes.append(f"{kept} (regular_session_only=False)")
         return np.ones(len(rows.ts_open), dtype=bool)
     report.preopen_dropped = counts["pre_open_bars"]
     report.postclose_dropped = counts["post_close_bars"]

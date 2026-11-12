@@ -17,6 +17,7 @@ from collections.abc import Mapping
 import numpy as np
 import pandas as pd
 
+from .._messages import counted
 from . import _charts as charts
 from . import _charts_series as series
 from . import _charts_simulation as simulation
@@ -195,9 +196,8 @@ def trade_distribution(performance: Performance) -> str:
 
 def trade_list(performance: Performance) -> str:
     metrics, trades = performance.metrics, performance.trades
-    counts = (
-        f"{metrics['trades']} closed and {metrics['open_trades']} open trade(s), in entry order."
-    )
+    closed = counted(metrics["trades"], "closed trade")
+    counts = f"{closed} and {metrics['open_trades']} open, in entry order."
     listing = tables.trade_list(trades) if len(trades) else "<p class='note'>No trades.</p>"
     return sections.section("trades", "Trades", listing, counts)
 

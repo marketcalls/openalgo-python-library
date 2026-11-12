@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 
 import openalgo.backtest as bt
-from openalgo.backtest.data import Frame
+from openalgo.backtest.data import Files, Frame
 from openalgo.backtest.errors import ConfigError
 
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
@@ -53,6 +53,20 @@ def test_naive_timestamps_with_tz_give_the_run_its_dates():
 def test_naive_timestamps_in_a_column_with_tz_give_the_run_its_dates():
     frame = naive_ist_frame().reset_index()
     assert run(frame, tz="Asia/Kolkata").manifest["arguments"]["start"] == "2025-07-01"
+
+
+def test_a_csv_file_with_tz_gives_the_run_its_dates(tmp_path):
+    path = tmp_path / "SBIN.csv"
+    naive_ist_frame().to_csv(path)
+    arguments = run(str(path), tz="Asia/Kolkata").manifest["arguments"]
+    assert (arguments["start"], arguments["end"]) == ("2025-07-01", "2025-07-01")
+
+
+def test_a_files_reader_gives_the_run_its_dates(tmp_path):
+    path = tmp_path / "SBIN.csv"
+    naive_ist_frame().to_csv(path)
+    arguments = run(Files(path, tz="Asia/Kolkata")).manifest["arguments"]
+    assert (arguments["start"], arguments["end"]) == ("2025-07-01", "2025-07-01")
 
 
 def test_naive_timestamps_without_tz_ask_for_a_time_zone_not_for_dates():

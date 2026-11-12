@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 from .._layout import IST_OFFSET_NANOS
+from .._messages import counted
 from ..errors import CostError
 from .kernel import MAX_DAY, MIN_DAY, SEGMENTS, call, native
 
@@ -135,7 +136,7 @@ def _fit(array: np.ndarray, length: int, name: str) -> np.ndarray:
     if array.shape[0] == 1 and length != 1:
         array = np.repeat(array, length)
     if array.shape[0] != length:
-        raise CostError(f"{name} has {array.shape[0]} elements, expected {length}")
+        raise CostError(f"{name} has {counted(array.shape[0], 'element')}, expected {length}")
     return np.ascontiguousarray(array)
 
 

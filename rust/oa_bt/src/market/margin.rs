@@ -110,8 +110,11 @@ pub enum MarginError {
     InvalidRequest { reason: String },
     /// The embedded default table is malformed (a defect of the release).
     InvalidTable { reason: String },
-    /// A margin rule that is not built yet.
-    NotBuilt { feature: &'static str },
+    /// A margin rule that is not built yet, and what the user can do instead.
+    NotBuilt {
+        feature: &'static str,
+        instead: &'static str,
+    },
 }
 
 impl fmt::Display for MarginError {
@@ -121,11 +124,8 @@ impl fmt::Display for MarginError {
             MarginError::InvalidTable { reason } => {
                 write!(f, "the built-in margin table is malformed: {reason}")
             }
-            MarginError::NotBuilt { feature } => {
-                write!(
-                    f,
-                    "{feature} is not implemented yet (Phase 1 work in progress)"
-                )
+            MarginError::NotBuilt { feature, instead } => {
+                crate::model::write_not_supported(f, feature, instead)
             }
         }
     }
@@ -149,7 +149,10 @@ impl MarginModel {
     pub fn initial_margin(&self, request: &MarginRequest) -> Result<MarginQuote, MarginError> {
         let value = notional(request)?;
         if request.kind == InstrumentKind::Option && request.side == Side::Sell {
-            return Err(not_built("short-option margin (Phase 3)"));
+            return Err(not_built(
+                "selling an option to open a short position (short-option margin)",
+                "buy options, or trade futures",
+            ));
         }
         if let Some(own) = request.futures_margin {
             return own_futures_margin(own, request, value);
@@ -252,8 +255,8 @@ fn invalid(reason: String) -> MarginError {
     MarginError::InvalidRequest { reason }
 }
 
-fn not_built(feature: &'static str) -> MarginError {
-    MarginError::NotBuilt { feature }
+fn not_built(feature: &'static str, instead: &'static str) -> MarginError {
+    MarginError::NotBuilt { feature, instead }
 }
 
 #[cfg(test)]

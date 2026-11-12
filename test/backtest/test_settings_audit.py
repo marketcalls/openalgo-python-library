@@ -161,7 +161,7 @@ def test_a_class_attribute_state_is_refused():
 
 
 def test_after_risk_exit_other_than_the_default_is_not_built_yet():
-    # It governs only the combined rules' exits, which are Phase 3.
+    # It governs only the combined rules' exits, which this version does not run.
     with pytest.raises(NotImplementedError, match="after_risk_exit"):
         run(round_trip_strategy(qty=10), after_risk_exit="allow_reentry")
 

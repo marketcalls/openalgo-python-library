@@ -72,6 +72,16 @@ def test_an_atr_entry_before_the_atr_has_a_value_stops_the_run():
         run(strategy, walk_bars([3, -2, 5, -1]))
 
 
+def test_the_atr_error_names_the_deciding_bar_in_ist():
+    # The first 5-minute bar of 2025-07-01 opens at 09:15 IST.
+    order_args = {"qty": 10, "stop": bt.atr(2, PERIOD)}
+    strategy = conditions(entering_at(0, order_args), 0, order_args)
+    with pytest.raises(ConfigError) as caught:
+        run(strategy, walk_bars([3, -2, 5, -1]))
+    assert "at the strategy bar opening at 2025-07-01 09:15:00 IST:" in str(caught.value)
+    assert "nanoseconds" not in str(caught.value)
+
+
 def test_an_atr_the_causality_registry_does_not_clear_is_refused(monkeypatch):
     monkeypatch.setattr(causality, "is_causal", lambda name, output=None: False)
     order_args = {"qty": 10, "stop": bt.atr(2, PERIOD)}

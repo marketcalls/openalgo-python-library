@@ -105,7 +105,7 @@ def test_a_declared_split_crossed_while_flat_runs_and_warns():
     assert result.trades["gross_pnl_rupees"].tolist() == [0.0]  # 2,000.00 in and out
     assert any(
         text.startswith(
-            "SBIN: the bars are not adjusted for 1 declared corporate actions (2026-10-08: "
+            "SBIN: the bars are not adjusted for 1 declared corporate action (2026-10-08: "
             "a bonus (2 shares for every 1); the previous close 2000.00 against the open "
             "1000.00 is a ratio of 2.000)"
         )
@@ -133,11 +133,11 @@ def test_a_position_held_across_a_declared_split_is_not_built_yet():
     # Bought at the 2026-10-06 open, still held at the 2026-10-07 close.
     with pytest.raises(NotImplementedError) as caught:
         run(holding(1, 4), corporate_actions=BONUS)
-    assert str(caught.value).startswith(
+    assert str(caught.value) == (
         "SBIN: a position is held across 2026-10-08, the ex-date of a bonus (2 shares for "
         "every 1) that the bars are not adjusted for. Adjusting the units, average price, "
-        "levels and GTTs of a holding at a corporate action is FR-MKT-11, planned for "
-        "Phase 5."
+        "levels and GTTs of a holding at a corporate action is not supported in this "
+        "version: supply bars adjusted for it (data=), or run on dates that do not span it"
     )
 
 
@@ -162,7 +162,7 @@ def test_a_position_held_across_a_genuine_move_keeps_its_units_and_takes_the_los
     trade = result.trades.iloc[0]
     assert (trade["entry_price_rupees"], trade["exit_price_rupees"]) == (2_000.0, 1_000.0)
     assert trade["gross_pnl_rupees"] == QTY * (1_000.0 - 2_000.0)
-    assert any("read as genuine price moves" in text for text in result.warnings)
+    assert any("read as a genuine price move" in text for text in result.warnings)
 
 
 # --- arguments ------------------------------------------------------------------------

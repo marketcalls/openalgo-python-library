@@ -183,7 +183,11 @@ mod tests {
         assert_eq!(row.product, None);
         assert_eq!((row.meta.valid_from, row.meta.valid_to), (None, None));
         assert_eq!(row.meta.status, RowStatus::Default);
-        assert!(row.meta.source.contains("D23"), "{}", row.meta.source);
+        assert!(
+            row.meta.source.starts_with("OpenAlgo backtest default"),
+            "{}",
+            row.meta.source
+        );
     }
 
     #[test]

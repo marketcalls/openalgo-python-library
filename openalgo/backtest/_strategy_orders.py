@@ -19,8 +19,6 @@ from ._atr import decision_atr
 from ._orders import Order
 from .errors import ConfigError
 
-NOT_BUILT = "is not implemented yet (Phase 1 work in progress)"
-
 
 class OrderMethods:
     """`buy`, `sell`, `exit`, `reduce`, `target`, `cancel`, `cancel_all`."""

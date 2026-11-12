@@ -73,7 +73,7 @@ def test_a_session_without_a_bar_at_or_after_the_time_is_reported():
             self.at("15:45", lambda: None)
 
     warnings = run(TooLate).warnings
-    assert "self.at('15:45') did not run in 1 of 1 sessions" in " ".join(warnings)
+    assert "self.at('15:45') did not run in 1 of 1 session: no base bar opens" in " ".join(warnings)
 
 
 @pytest.mark.parametrize("time_ist", ["9:20", "24:00", "09:60", 920])

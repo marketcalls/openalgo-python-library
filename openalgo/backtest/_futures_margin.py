@@ -209,9 +209,10 @@ def margin_warnings(setting: MarginSetting, instruments: list[Instrument]) -> li
     unused = [name for name in setting if name not in traded]
     if not unused:
         return []
+    values = "its value is" if len(unused) == 1 else "their values are"
     return [
         f"margin= names {', '.join(unused)}, which this run does not trade as futures; "
-        "those values are unused"
+        f"{values} unused"
     ]
 
 

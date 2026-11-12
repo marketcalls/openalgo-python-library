@@ -275,9 +275,43 @@ fn saturate_to_i32(value: i64) -> i32 {
     value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
+/// `count` followed by `singular` when it is exactly 1, else by `plural`: "1 bar",
+/// "3 bars", "0 bars". Messages count with it so that a count of one never reads as a
+/// plural.
+pub fn counted<T>(count: T, singular: &str, plural: &str) -> String
+where
+    T: std::fmt::Display + PartialEq + From<u8>,
+{
+    let noun = if count == T::from(1) {
+        singular
+    } else {
+        plural
+    };
+    format!("{count} {noun}")
+}
+
+/// Write the message of a part this version does not run, the one wording every area's
+/// `NotBuilt` error shares: what is not supported, then what the user can do instead.
+/// The message reaches Python as a `NotImplementedError`, so it names no internal
+/// planning document.
+pub fn write_not_supported(
+    f: &mut std::fmt::Formatter<'_>,
+    feature: &str,
+    instead: &str,
+) -> std::fmt::Result {
+    write!(f, "{feature} is not supported in this version: {instead}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_count_of_one_takes_the_singular_and_any_other_the_plural() {
+        assert_eq!(counted(1_usize, "bar", "bars"), "1 bar");
+        assert_eq!(counted(0_usize, "bar", "bars"), "0 bars");
+        assert_eq!(counted(3_u32, "row has", "rows have"), "3 rows have");
+    }
 
     #[test]
     fn civil_round_trip() {

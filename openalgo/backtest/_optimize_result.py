@@ -20,6 +20,7 @@ from typing import Any
 
 import pandas as pd
 
+from ._messages import counted
 from .errors import BacktestError, ConfigError
 
 
@@ -107,7 +108,8 @@ class OptimizeResult:
 
     def __repr__(self) -> str:
         return (
-            f"OptimizeResult({len(self._table)} combinations, objective {self._objective!r}, "
+            f"OptimizeResult({counted(len(self._table), 'combination')}, objective "
+            f"{self._objective!r}, "
             f"path {self._path!r})"
         )
 

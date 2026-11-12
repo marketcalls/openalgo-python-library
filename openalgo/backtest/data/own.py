@@ -24,6 +24,7 @@ import pandas as pd
 
 from .._calendar_convert import DateLike, format_ist
 from .._layout import BAR_COLUMNS, PRICE_COLUMNS, parse_interval
+from .._messages import counted
 from .._protocols import SessionCalendar
 from ..errors import ConfigError, DataError, NoDataError
 from ._sessions import NANOS_PER_DAY, NowLike, day_start_ns
@@ -65,7 +66,8 @@ def _to_table(data: object, columns: object) -> pd.DataFrame:
             )
         if len(columns) != data.shape[1]:
             raise ConfigError(
-                f"columns names {len(columns)} fields but the array has {data.shape[1]} columns"
+                f"columns names {counted(len(columns), 'field')} but the array has "
+                f"{counted(data.shape[1], 'column')}"
             )
         return pd.DataFrame(data, columns=list(columns))
     # A dataframe of another library, by duck typing: no import, no pyarrow needed.
@@ -257,7 +259,8 @@ class Frame:
             held = "it is empty"
             if len(stamps_ns):
                 first, last = format_ist(int(stamps_ns.min())), format_ist(int(stamps_ns.max()))
-                held = f"its {len(stamps_ns)} rows run from {first} to {last}"
+                rows = counted(len(stamps_ns), "row runs", "rows run")
+                held = f"its {rows} from {first} to {last}"
             raise NoDataError(
                 f"{exchange}:{symbol} {interval}: {origin} holds no rows between {start} and "
                 f"{end} ({held})"

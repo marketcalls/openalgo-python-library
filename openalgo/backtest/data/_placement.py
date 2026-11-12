@@ -22,6 +22,7 @@ import pandas as pd
 from .._calendar_convert import format_ist, from_day
 from .._calendar_types import PLACEMENTS
 from .._layout import IST_OFFSET_NANOS
+from .._messages import counted
 from ..errors import TimestampError
 from ._sessions import Sessions, day_start_ns, format_span, ist_days
 
@@ -149,7 +150,8 @@ def _raise_if_open_labelled(
         example = format_ist(int(ts_open[one_before_open][0]))
         raise TimestampError(
             f"{tag}: label='close' was declared, but the bars look stamped at their "
-            f"open: on {days_before} of {days} session days a bar would open one interval "
+            f"open: on {days_before} of {counted(days, 'session day')} a bar would open one "
+            "interval "
             f"before the session open (for example {example}) and no day has a bar in the "
             "last slot of the session. Declare label='open'. Nothing was shifted."
         )
@@ -219,11 +221,11 @@ def check_rows(
     if unit == "D":
         _raise_if_dated_wrong(first_day, closed, sessions, tag)
     if not regular_only:
+        on_closed = counted(int(closed.sum()), "row falls on a date", "rows fall on dates")
         raise TimestampError(
-            f"{tag}: {int(closed.sum())} rows fall on dates the {sessions.exchange} "
-            f"calendar marks closed (for example {from_day(first_day[closed][0])}), so they "
-            "have no session open or close. Add the session to the calendar or load with "
-            "regular_session_only=True."
+            f"{tag}: {on_closed} the {sessions.exchange} calendar marks closed (for example "
+            f"{from_day(first_day[closed][0])}), with no session open or close. Add the "
+            "session to the calendar or load with regular_session_only=True."
         )
     return closed
 
@@ -256,7 +258,8 @@ def _raise_if_dated_wrong(
             example = from_day(days[closed][0])
             raise TimestampError(
                 f"{tag}: daily rows look dated one day {word}. As delivered, "
-                f"{as_delivered} of {len(days)} rows fall on {sessions.exchange} session days "
+                f"{as_delivered} of {counted(len(days), 'row')} "
+                f"{'falls' if as_delivered == 1 else 'fall'} on {sessions.exchange} session days "
                 f"(for example {example} is closed); moved one day {direction}, {fit} fit. "
                 "Likely cause: a midnight stamp was converted between UTC and IST. Nothing "
                 "was shifted."

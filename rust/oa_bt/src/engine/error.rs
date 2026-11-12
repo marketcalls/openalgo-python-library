@@ -48,20 +48,23 @@ pub enum KernelError {
     RunNotFinished,
     /// An order id the run does not know.
     UnknownOrder(OrderId),
-    /// A part of the engine that is not built yet.
-    NotBuilt { feature: &'static str },
+    /// A part of the engine that is not built yet, and what the user can do instead.
+    NotBuilt {
+        feature: &'static str,
+        instead: &'static str,
+    },
 }
 
 impl KernelError {
     /// The feature that is not built yet, when this error is (or wraps) a `NotBuilt`.
     pub fn not_built_feature(&self) -> Option<&'static str> {
         match self {
-            KernelError::NotBuilt { feature }
-            | KernelError::Exec(ExecError::NotBuilt { feature })
-            | KernelError::Rms(RmsError::NotBuilt { feature })
-            | KernelError::Sizing(SizingError::NotBuilt { feature })
-            | KernelError::Margin(MarginError::NotBuilt { feature })
-            | KernelError::Slippage(SlippageError::NotBuilt { feature }) => Some(feature),
+            KernelError::NotBuilt { feature, .. }
+            | KernelError::Exec(ExecError::NotBuilt { feature, .. })
+            | KernelError::Rms(RmsError::NotBuilt { feature, .. })
+            | KernelError::Sizing(SizingError::NotBuilt { feature, .. })
+            | KernelError::Margin(MarginError::NotBuilt { feature, .. })
+            | KernelError::Slippage(SlippageError::NotBuilt { feature, .. }) => Some(feature),
             _ => None,
         }
     }
@@ -111,11 +114,8 @@ impl fmt::Display for KernelError {
                 write!(f, "the run has not finished: advance it to the end first")
             }
             KernelError::UnknownOrder(id) => write!(f, "no order {id} in this run"),
-            KernelError::NotBuilt { feature } => {
-                write!(
-                    f,
-                    "{feature} is not implemented yet (Phase 1 work in progress)"
-                )
+            KernelError::NotBuilt { feature, instead } => {
+                crate::model::write_not_supported(f, feature, instead)
             }
         }
     }
@@ -152,6 +152,7 @@ mod tests {
     fn a_wrapped_not_built_error_names_its_feature() {
         let error = KernelError::from(RmsError::NotBuilt {
             feature: "lock profit",
+            instead: "set a stop on each order",
         });
         assert_eq!(error.not_built_feature(), Some("lock profit"));
         assert!(!error.is_input_error());
@@ -161,5 +162,17 @@ mod tests {
         };
         assert_eq!(config.not_built_feature(), None);
         assert!(config.is_input_error());
+    }
+
+    #[test]
+    fn a_not_built_error_says_what_is_not_supported_and_what_to_do_instead() {
+        let error = KernelError::NotBuilt {
+            feature: "fill=\"close\"",
+            instead: "use fill=\"next_open\"",
+        };
+        assert_eq!(
+            error.to_string(),
+            "fill=\"close\" is not supported in this version: use fill=\"next_open\""
+        );
     }
 }

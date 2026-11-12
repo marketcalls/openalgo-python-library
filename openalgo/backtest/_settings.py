@@ -32,6 +32,7 @@ from ._futures_margin import MarginSetting, parse_margin
 from ._intraday_assumptions import TIMES as INTRADAY_TIMES
 from ._intraday_assumptions import intraday_times
 from ._layout import parse_interval
+from ._messages import not_supported
 from ._scale_in import describe as describe_scale_limits
 from ._scale_in import scale_limits
 from ._series import IST
@@ -39,7 +40,7 @@ from ._setting_checks import class_leverage, refuse_unusable, unused_settings
 from ._size_controls import describe as describe_size_controls
 from ._size_controls import size_controls
 from .data._sessions import resolve_now
-from .data.own import Frame
+from .data.loader import own_reader
 from .errors import ConfigError
 from .units import Distance
 
@@ -60,7 +61,6 @@ CLASS_OVERRIDES = (
 # Combined rules of a run, class attributes for strategies that open single positions
 # (14-strategy-api 2.1); refused until Phase 3 builds them.
 COMBINED_RULES = ("combined_stop", "combined_target", "lock_profit", "trail_sl_to_entry")
-NOT_BUILT = "is not implemented yet (Phase 1 work in progress)"
 SECONDS_PER_MINUTE = 60
 
 
@@ -98,7 +98,10 @@ class RunPlan:
 
     def native_config(self, deliver_events: bool) -> dict[str, Any]:
         """The config dict of the native engine."""
-        strategy = interval_nanos(self.interval) if self.interval != "D" else "D"
+        # Nanoseconds for an intraday interval, else its code ("D", or "W", "M", "Q" and
+        # "Y", which the kernel refuses saying what to do instead).
+        intraday = parse_interval(self.interval)[0] == "intraday"
+        strategy = interval_nanos(self.interval) if intraday else self.interval
         minutes = {
             f"{name}_minute": None
             if value is None
@@ -154,8 +157,8 @@ def _instant(value: Any) -> int | None:
 def _frame_range(strategy: type, args: dict[str, Any]) -> tuple[dt.date, dt.date]:
     """The IST dates the own data (`data=`) of the strategy's symbols covers, its
     timestamps read as the data layer reads them (naive ones in `tz=`). Raises the data
-    layer's ConfigError for naive timestamps without `tz=`, and ConfigError for data
-    given as a file or a provider."""
+    layer's errors for naive timestamps without `tz=` or a file it cannot read, and
+    ConfigError for data given by a provider that is not own data."""
     data = args["data"]
     symbols = strategy.traded_symbols()
     frames = data if isinstance(data, dict) else dict.fromkeys(symbols, data)
@@ -163,13 +166,13 @@ def _frame_range(strategy: type, args: dict[str, Any]) -> tuple[dt.date, dt.date
     for symbol in symbols:
         if symbol not in frames:
             raise ConfigError(f"data= has no bars for {symbol}")
-        frame = frames[symbol]
-        if not isinstance(frame, pd.DataFrame):
+        reader = own_reader(frames[symbol], args["tz"])
+        if reader is None:
             raise ConfigError(
-                "pass start= and end= (IST dates): the run reads its dates only from data= "
-                "given as a DataFrame, or a dict of them by symbol"
+                "pass start= and end= (IST dates): the run reads its dates only from own "
+                "data (a DataFrame, a file path or bt.data.Frame or Files), or a dict of "
+                "them by symbol"
             )
-        reader = Frame(frame, tz=args["tz"])
         stamps += reader.stamp_range(symbol, strategy.exchange, strategy.interval)
     days = [pd.Timestamp(stamp, tz="UTC").tz_convert(IST).date() for stamp in stamps]
     return min(days), max(days)
@@ -247,7 +250,9 @@ def _count(value: Any, name: str, unit: str) -> int | None:
 def _bars(value: Any, name: str) -> int | None:
     """None, or a positive whole number of base bars. A time ("30m") is not built yet."""
     if isinstance(value, str):
-        raise NotImplementedError(f"{name} as a time ({value!r}) {NOT_BUILT}: give base bars")
+        raise not_supported(
+            f"{name} as a time ({value!r})", f"give {name} as a whole number of base bars"
+        )
     return _count(value, name, "base bars")
 
 
@@ -255,7 +260,10 @@ def _refuse_combined_rules(strategy: type) -> None:
     """Combined rules of a run (05-risk-management 4) are Phase 3; never ignore them."""
     for name in COMBINED_RULES:
         if getattr(strategy, name, None) not in (None, False):
-            raise NotImplementedError(f"{name} (combined rules) is planned for Phase 3")
+            raise not_supported(
+                f"{name} (a combined rule over the run's positions)",
+                "give each order its own stop=, target= or trail=, and the run max_daily_loss=",
+            )
 
 
 def _risk(strategy: type, args: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:

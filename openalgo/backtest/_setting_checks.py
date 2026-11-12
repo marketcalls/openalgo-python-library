@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ._messages import not_supported
 from .errors import ConfigError
 
 INTRADAY_TIMES = ("entry_from", "entry_until", "square_off")
@@ -54,10 +55,11 @@ def refuse_unusable(strategy: type, args: dict[str, Any]) -> None:
             "init or on_bar; remove the class attribute state"
         )
     if args["after_risk_exit"] in AFTER_RISK_EXIT_NOT_BUILT:
-        raise NotImplementedError(
-            f"after_risk_exit={args['after_risk_exit']!r}: it governs only the exits of the "
-            "combined rules (overall_sl, lock_profit), planned for Phase 3; the daily loss "
-            "limit and the drawdown halt have their own rules"
+        raise not_supported(
+            f"after_risk_exit={args['after_risk_exit']!r}, which governs only the exits of "
+            "the combined rules (overall_sl, lock_profit)",
+            "leave after_risk_exit at its default; the daily loss limit and the drawdown "
+            "halt have their own rules",
         )
 
 
@@ -82,7 +84,7 @@ def unused_settings(
             value = times[name]
             if value is not None:
                 notes.append(
-                    f"{name}={value!r} applies to MIS orders only (SPEC-32); this run's "
+                    f"{name}={value!r} applies to MIS orders only; this run's "
                     f"product is {product}, so it applies only to orders placed with "
                     "product='MIS'"
                 )

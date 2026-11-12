@@ -5,6 +5,7 @@ from collections.abc import Iterable, Mapping
 
 import pandas as pd
 
+from .._messages import counted
 from . import _format as fmt
 from ._definitions import DEFINITIONS
 from ._performance import Performance
@@ -136,7 +137,8 @@ def masthead(title: str, performance: Performance, kicker: str = "Backtest repor
     parts = (
         fmt.text(", ".join(performance.exchanges)),
         f"{fmt.day(m['start'])} to {fmt.day(m['end'])}",
-        f"{fmt.figure('sessions', m['sessions'])} sessions",
+        f"{fmt.figure('sessions', m['sessions'])} "
+        f"{'session' if m['sessions'] == 1 else 'sessions'}",
         f"start equity {fmt.rupees(m['start_equity'])}",
     )
     dek = "".join(f"<span>{part}</span>" for part in parts)
@@ -200,9 +202,10 @@ def method_notes(
             "weekday was counted as a session, so the annualisation is overstated."
         )
     if m["missing_sessions"]:
+        sessions = counted(m["missing_sessions"], "calendar session has", "calendar sessions have")
         notes.append(
-            f"{m['missing_sessions']} calendar session(s) have no equity point; the move "
-            "of each is folded into the next session's return."
+            f"{sessions} no equity point; the move of each is folded into the next "
+            "session's return."
         )
     if m["ruined"]:
         notes.append(f"The account was ruined on {fmt.moment(m['ruin_time'])}.")

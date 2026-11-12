@@ -32,6 +32,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ._messages import SEVERAL_STRATEGIES, not_supported
 from ._pipeline import execute, prepare
 from ._rerun import RunRecord
 from .errors import ConfigError
@@ -79,12 +80,14 @@ def backtest(
 ) -> Result:
     """Backtest one strategy class and return its `Result`.
 
-    strategy: a `bt.Strategy` subclass (a list of strategies is Phase 3).
+    strategy: a `bt.Strategy` subclass (a list of strategies is not supported in this
+        version).
     client: an `openalgo.api` client for OpenAlgo data; not needed with `data=`.
     capital: rupees allocated to the strategy (required).
     start, end: IST dates (inclusive); a datetime also bounds the run to slices opening
         at or after `start` and at or before `end`. Taken from `data=` when omitted.
-    data: own bars (a DataFrame, or a dict of them by symbol) at the base interval.
+    data: own bars (a DataFrame, a CSV, Parquet or Feather file path, or a dict of them
+        by symbol) at the base interval.
     benchmark: what the reports compare the strategy with (alpha, beta, information
         ratio, the comparison tables and charts); it never trades. An index symbol
         ("NIFTY", on NSE_INDEX for an NSE or NFO strategy and BSE_INDEX for BSE or BFO),
@@ -141,7 +144,7 @@ def backtest(
     NotImplementedError for any setting or feature the kernel does not run yet.
     """
     if isinstance(strategy, list | tuple):
-        raise NotImplementedError("several strategies in one run are planned for Phase 3")
+        raise not_supported(*SEVERAL_STRATEGIES)
     if not (isinstance(strategy, type) and issubclass(strategy, Strategy)):
         raise ConfigError("backtest takes a bt.Strategy subclass")
     return _run(strategy, client, dict(locals()))
@@ -159,8 +162,9 @@ def live(
 ) -> Any:
     """Trade a strategy through OpenAlgo in the mode set inside OpenAlgo (sandbox or
     live). `capital` and `max_daily_loss` are mandatory risk limits. It takes no
-    `margin=`: in live trading the broker computes margin."""
-    raise NotImplementedError("bt.live is planned for Phase 2")
+    `margin=`: in live trading the broker computes margin. Not supported in this
+    version: raises NotImplementedError."""
+    raise not_supported("bt.live", "test the strategy with bt.backtest")
 
 
 def optimize(strategy: type[Strategy], client: Any = None, **settings: Any) -> Any:
@@ -175,13 +179,23 @@ def optimize(strategy: type[Strategy], client: Any = None, **settings: Any) -> A
 
 
 def walk_forward(strategy: type[Strategy], client: Any = None, **settings: Any) -> Any:
-    """Walk-forward optimisation; returns a WalkForwardResult."""
-    raise NotImplementedError("bt.walk_forward is planned for Phase 4")
+    """Walk-forward optimisation. Not supported in this version: raises
+    NotImplementedError."""
+    raise not_supported(
+        "bt.walk_forward",
+        "run bt.optimize on each in-sample window and bt.backtest with the chosen "
+        "parameters on the window after it",
+    )
 
 
 def rebalance(*args: Any, **settings: Any) -> Any:
-    """Portfolio rebalancing backtests; returns a RebalanceResult."""
-    raise NotImplementedError("bt.rebalance is planned for Phase 3")
+    """Portfolio rebalancing backtests. Not supported in this version: raises
+    NotImplementedError."""
+    raise not_supported(
+        "bt.rebalance",
+        "write the rebalance in on_bar of a strategy on several symbols, with "
+        "self.target(percent=...) for each symbol",
+    )
 
 
 def from_signals(func: Any, symbol: str, exchange: str, interval: str, **settings: Any) -> Any:

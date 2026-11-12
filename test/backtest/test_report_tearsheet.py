@@ -298,5 +298,5 @@ def test_an_open_trade_is_listed_without_an_exit():
     trades.loc[0, "exit_time"] = pd.NaT
     trades.loc[0, ["exit_price", "gross_pnl", "net_pnl", "costs"]] = np.nan
     page = report.tearsheet(metrics.analyse(equity, exchanges="NSE", trades=trades))
-    assert "0 closed and 1 open trade(s)" in page
+    assert "0 closed trades and 1 open" in page
     assert Structure(page).errors == []

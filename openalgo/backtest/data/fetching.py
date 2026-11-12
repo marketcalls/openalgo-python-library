@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 
 from .._layout import BAR_COLUMNS, NANOS_PER_SECOND, PRICE_COLUMNS
+from .._messages import counted
 from ..errors import ConfigError, DataError, TimestampError
 from ._sessions import ist_days
 
@@ -206,7 +207,7 @@ def rows_to_records(rows: Sequence[dict], tag: str = "history") -> np.ndarray:
     epoch_seconds = raw.to_numpy(dtype="float64", na_value=np.nan)
     if not np.all(np.isfinite(epoch_seconds)):
         absent = int((~np.isfinite(epoch_seconds)).sum())
-        raise TimestampError(f"{tag}: {absent} rows have no timestamp")
+        raise TimestampError(f"{tag}: {counted(absent, 'row has', 'rows have')} no timestamp")
     if np.any(epoch_seconds != np.floor(epoch_seconds)):
         raise TimestampError(f"{tag}: timestamps are not whole epoch seconds")
     if epoch_seconds.min() <= 0 or epoch_seconds.max() >= _EPOCH_SECONDS_LIMIT:
@@ -289,7 +290,8 @@ class HistoryFetcher:
             if attempt >= self.max_retries:
                 raise DataError(
                     f"the OpenAlgo server kept answering HTTP 429 (rate limited) for "
-                    f"'{endpoint}' after {attempt} retries: {reply.message()} Raise pacing= "
+                    f"'{endpoint}' after {counted(attempt, 'retry', 'retries')}: "
+                    f"{reply.message()} Raise pacing= "
                     "or try again later."
                 )
             wait = self.backoff_base_seconds * (2**attempt)

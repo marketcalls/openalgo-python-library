@@ -49,7 +49,8 @@ impl MarketFacts {
             Ok(())
         } else {
             Err(format!(
-                "market facts are given for {given} instruments but the run has {instruments}"
+                "market facts are given for {} but the run has {instruments}",
+                crate::model::counted(given, "instrument", "instruments")
             ))
         }
     }

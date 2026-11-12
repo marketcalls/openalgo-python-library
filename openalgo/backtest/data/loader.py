@@ -19,6 +19,7 @@ import pandas as pd
 
 from .._calendar_convert import DateLike, from_day, to_day
 from .._layout import NANOS_PER_SECOND, parse_interval
+from .._messages import counted
 from .._protocols import SessionCalendar
 from ..errors import ConfigError, DataError, NoDataError
 from ._finish import PERIOD_UNITS, BarsResult, LoadMetadata, LoadRequest, finish
@@ -161,6 +162,24 @@ def load_bars(
 # --- which provider ------------------------------------------------------------------
 
 
+def _is_provider(data: object) -> bool:
+    """True for `data=` given as a provider object (anything but a pandas DataFrame with
+    a `bars` method), False for a table of own data."""
+    return not isinstance(data, pd.DataFrame) and callable(getattr(data, "bars", None))
+
+
+def own_reader(data: object, tz: str | None) -> Frame | None:
+    """The own data of one `data=` entry as `load_bars` reads it, for what needs it
+    before a load (a run's dates when `start=` or `end=` is omitted): `Files` for a file
+    path, `Frame` for a table, both with naive timestamps in `tz`, the object itself for
+    a `Frame` or `Files`, and None for a provider that is not own data."""
+    if isinstance(data, Frame):
+        return data
+    if isinstance(data, str | os.PathLike):
+        return Files(data, tz=tz)
+    return None if _is_provider(data) else Frame(data, tz=tz)
+
+
 def _provider(
     source: str | DataProvider,
     client: object,
@@ -180,8 +199,7 @@ def _provider(
             )
         if isinstance(data, str | os.PathLike):
             return Files(data, **own, **options)
-        is_provider = not isinstance(data, pd.DataFrame) and callable(getattr(data, "bars", None))
-        if not is_provider:
+        if not _is_provider(data):
             return Frame(data, **own, **options)
         source = data
     if own_given:
@@ -357,7 +375,8 @@ def _through_cache(
     kept = [day for day in unsettled if day in cached.fetched_at and to_day(day) not in served]
     if kept:
         meta.warnings.append(
-            f"the source returned no rows for {len(kept)} sessions that are in the cache "
+            "the source returned no rows for "
+            f"{counted(len(kept), 'session that is', 'sessions that are')} in the cache "
             f"({kept[0]} to {kept[-1]}); the cached rows were kept"
         )
     fetched_at_s = now_ns // NANOS_PER_SECOND
@@ -377,4 +396,4 @@ def _runs(days: list[dt.date], among: list[dt.date]) -> list[DateRange]:
     return ranges
 
 
-__all__ = ["BarsResult", "LoadMetadata", "load_bars"]
+__all__ = ["BarsResult", "LoadMetadata", "load_bars", "own_reader"]
