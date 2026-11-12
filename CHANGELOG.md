@@ -197,7 +197,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **More futures margin in the dated table.** NSE stock futures (218 underlyings), BSE
   BANKEX and the MCX commodities (30), each one day's observation of a broker's public
   margin page and unverified, so a run using one warns. SENSEX and SENSEX50 futures have
-  no row yet (no public page read gave their margin) and still stop a run.
+  no row yet (no public page read gave their margin) and still stop a run. A run whose
+  instrument has no margin row now stops before any data is loaded, with the engine's
+  message, instead of at its first entry.
+- **Ticks chosen by a price slab come from the run's data.** An NFO or BFO contract whose
+  tick follows a reference close (an index future's by the index close on the previous
+  month's last trading day, a stock derivative's by the share's) no longer asks for
+  `instrument=`: the backtest loads that close from its own source, the underlying's
+  when the source has it, else the contract's own close that day (said in the
+  Assumptions). It still asks when the data has neither, and refuses a tick that would
+  change during the run.
 - **`openalgo.backtest.metrics` and `openalgo.backtest.report` (preview).** Performance
   metrics computed in the Rust core (returns, CAGR on calendar time, volatility, Sharpe
   and Sortino with a per-session risk-free rate, drawdowns, Calmar, exposure, trade

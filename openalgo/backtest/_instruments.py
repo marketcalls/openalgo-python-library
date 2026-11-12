@@ -10,7 +10,7 @@ traded symbol (14-strategy-api 6; 03-architecture 7).
 - Futures and options are resolved by the reference tables
   (`openalgo.backtest.reference`) as on the run's first date: lot size, freeze
   quantity, expiry and, where one tick applies to every price, the tick. Where the tick
-  depends on a price slab the run stops and asks for `instrument=`.
+  depends on a price slab it is resolved from the run's data (`_slab_ticks`).
 
 Every instrument gets one line in the Assumptions block that says where its terms
 came from.
@@ -45,14 +45,10 @@ def _given(given: Any) -> dict[str, Instrument]:
 
 
 def _from_tables(symbol: str, plan: Any, calendar: Any) -> tuple[Instrument, str]:
+    """The instrument from the reference tables. A tick chosen by a price slab is left
+    None here and resolved from the run's data (`_slab_ticks`)."""
     tables = reference.default_tables()
     instrument = tables.instrument(symbol, plan.exchange, plan.start, calendar=calendar)
-    if instrument.tick_size is None:
-        raise ConfigError(
-            f"{symbol}: its tick size depends on a price slab that the reference tables "
-            "select by a previous closing price; pass instrument=Instrument(..., "
-            "tick_size=...)"
-        )
     line = f"{symbol}: {_terms(instrument)} from the reference tables ({tables.version})"
     return instrument, line
 

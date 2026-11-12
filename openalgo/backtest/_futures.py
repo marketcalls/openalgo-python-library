@@ -97,6 +97,16 @@ class FuturesPlan:
             for i, window in zip(s.contracts, s.windows, strict=True)
         }
 
+    def with_instruments(self, instruments: list[Instrument]) -> FuturesPlan:
+        """This plan with its contracts replaced by `instruments` of the same symbols
+        (their slab ticks resolved)."""
+        by_symbol = {instrument.symbol: instrument for instrument in instruments}
+        series = tuple(
+            dataclasses.replace(s, contracts=tuple(by_symbol[i.symbol] for i in s.contracts))
+            for s in self.series
+        )
+        return dataclasses.replace(self, series=series)
+
     def native_series(self, index_of: dict[str, int]) -> list[dict[str, Any]]:
         """The series dicts of `Engine.add_futures_series`, with registration indexes."""
         rule = "settle_at_expiry" if self.roll is None else "roll"
@@ -314,16 +324,12 @@ def _terms(instrument: Instrument) -> str:
 
 def _instrument(contract: _Contract, plan: Any, first: dt.date, calendar: Any) -> Instrument:
     """The contract's instrument: as given, or from the reference tables as on `first`
-    with its final last trading day. Raises ConfigError when its tick is unknown."""
+    with its final last trading day (a tick chosen by a price slab is left None and
+    resolved from the run's data, `_slab_ticks`)."""
     if contract.instrument is not None:
         return contract.instrument
     tables = reference.default_tables()
     found = tables.instrument(contract.symbol, plan.exchange, first, calendar=calendar)
-    if found.tick_size is None:
-        raise ConfigError(
-            f"{contract.symbol}: its tick size depends on a price slab; pass "
-            "instrument=Instrument(..., tick_size=...)"
-        )
     return dataclasses.replace(found, last_trading_day=contract.last_day)
 
 

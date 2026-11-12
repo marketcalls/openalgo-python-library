@@ -2,10 +2,12 @@
 first (the Python half of the design in `rust/oa_bt/src/engine/mod.rs`).
 
 `prepare` resolves everything that does not depend on the strategy's parameters: the
-settings (`_settings.resolve`), the calendar, the base interval and its bars
-(`_base_interval.choose_base`, through the data layer), the instruments
-(`_instruments.resolve_instruments`) and the market settings (`_market`: the cost model,
-the slippage and the per-instrument facts). A sweep sends its `PreparedRun` to worker
+settings (`_settings.resolve`), the calendar, the futures series (`_futures`), the
+instruments (`_instruments.resolve_instruments`) and, before any data is loaded, that the
+margin table prices them all (`_margin_check`); then the base interval and its bars
+(`_base_interval.choose_base`, through the data layer), the ticks chosen by a price slab
+(`_slab_ticks`, from the data) and the market settings (`_market`: the cost model, the
+slippage and the per-instrument facts). A sweep sends its `PreparedRun` to worker
 processes without the market settings, which hold native objects, and each worker
 resolves them again from the `costs=` and `slippage=` arguments. That needs those
 arguments to pickle and the run to use the shared default calendar (a calendar of its
@@ -36,8 +38,10 @@ from ._engine import build_engine, call
 from ._futures import attach, resolve_futures
 from ._instruments import resolve_instruments
 from ._manifest import build_manifest, strategy_source_hash
+from ._margin_check import check_margin
 from ._market import MarketSettings, market_settings
 from ._settings import RunPlan, assumptions, resolve
+from ._slab_ticks import resolve_slab_ticks
 from .reference import Instrument
 from .result import Result
 
@@ -125,12 +129,19 @@ def prepare(strategy: type, client: Any, args: dict[str, Any]) -> PreparedRun:
     if futures is not None:
         plan = dataclasses.replace(plan, symbols=futures.symbols)
         windows = futures.windows
-    choice = choose_base(plan, args, client, calendar, windows)
-    plan = dataclasses.replace(plan, base=choice.base)
     if futures is None:
         instruments, lines, version = resolve_instruments(plan, args["instrument"], calendar)
     else:
         instruments, lines, version = futures.instruments, futures.lines, futures.version
+    # Before any data is loaded: an instrument the margin table cannot price stops here.
+    check_margin(instruments, plan.product, (plan.start, plan.end))
+    choice = choose_base(plan, args, client, calendar, windows)
+    plan = dataclasses.replace(plan, base=choice.base)
+    instruments, lines = resolve_slab_ticks(
+        instruments, lines, plan, args, client, calendar, windows
+    )
+    if futures is not None:
+        futures = futures.with_instruments(instruments)
     market_args = {"costs": args["costs"], "slippage": args["slippage"]}
     market = market_settings(plan, instruments, market_args)
     loaded = [choice.bars[symbol] for symbol in plan.symbols]
