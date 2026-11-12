@@ -9,10 +9,11 @@ margin table prices them all (`_margin_check`); then the base interval and its b
 (`_slab_ticks`, from the data) and the market settings (`_market`: the cost model, the
 slippage and the per-instrument facts). A sweep sends its `PreparedRun` to worker
 processes without the market settings, which hold native objects, and each worker
-resolves them again from the `costs=` and `slippage=` arguments. That needs those
-arguments to pickle and the run to use the shared default calendar (a calendar of its
-own is a native object too); otherwise the sweep runs in this process. The benchmark's
-closes (`_benchmark`) are loaded last, after the strategy's bars, and sent along.
+resolves them again from the `costs=` and `slippage=` arguments and the parsed `margin=`
+(`_futures_margin`). That needs those arguments to pickle and the run to use the shared
+default calendar (a calendar of its own is a native object too); otherwise the sweep
+runs in this process. The benchmark's closes (`_benchmark`) are loaded last, after the
+strategy's bars, and sent along.
 
 `execute` builds the native engine, binds a strategy instance to a `RunContext`, runs
 `init` and the driver to the end of the grid (the Rust signal driver for a condition
@@ -39,6 +40,7 @@ from ._context import RunContext, RunData
 from ._driver import drive
 from ._engine import build_engine, call
 from ._futures import attach, resolve_futures
+from ._futures_margin import margin_assumption, margin_warnings
 from ._instruments import resolve_instruments
 from ._intraday_assumptions import one_clock_time
 from ._manifest import build_manifest, strategy_source_hash
@@ -65,7 +67,7 @@ class PreparedRun:
     registration order, the data partition hashes by symbol, the Assumptions lines, the
     warnings found so far, the reference-table version used, and the market settings
     (None in a worker, rebuilt from `market_args`, the `costs=` and `slippage=`
-    arguments)."""
+    arguments and the parsed `margin=`)."""
 
     plan: RunPlan
     calendar: Any
@@ -162,10 +164,10 @@ def prepare(strategy: type, client: Any, args: dict[str, Any]) -> PreparedRun:
     )
     if futures is not None:
         futures = futures.with_instruments(instruments)
-    market_args = {"costs": args["costs"], "slippage": args["slippage"]}
+    market_args = {"costs": args["costs"], "slippage": args["slippage"], "margin": plan.margin}
     market = market_settings(plan, instruments, market_args)
     loaded = [choice.bars[symbol] for symbol in plan.symbols]
-    warnings = [*plan.warnings]
+    warnings = [*plan.warnings, *margin_warnings(plan.margin, instruments)]
     for result in loaded:
         warnings += [note for note in result.meta.warnings if note not in warnings]
     warnings += run_warnings(plan.symbols, loaded)
@@ -215,6 +217,9 @@ def _assumptions(
     block["instruments"] = prepared.notes["instruments"]
     if prepared.futures is not None:
         block["futures"] = prepared.futures.assumption()
+    futures_margin = margin_assumption(plan.margin, prepared.instruments, plan.start)
+    if futures_margin is not None:
+        block["futures_margin"] = futures_margin
     block["benchmark"] = None if prepared.benchmark is None else prepared.benchmark.assumption()
     indicator_checks = checks.assumption()
     if indicator_checks is not None:

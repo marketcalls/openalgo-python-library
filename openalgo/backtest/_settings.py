@@ -14,7 +14,7 @@ Risk settings take the units of 14-strategy-api: `max_daily_loss` in rupees (a n
 scale-in limits as `_scale_in` reads them, and `reinvest` and `size_caps` as
 `_size_controls` reads them. The combined rules of a run are refused
 until Phase 3 builds them; no other setting is accepted and then ignored
-(`_setting_checks`).
+(`_setting_checks`). The futures margin, `margin=`, is read by `_futures_margin`.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ import pandas as pd
 from . import slippage as slippage_module
 from ._calendar_convert import interval_nanos, to_day, to_seconds
 from ._futures import check_roll
+from ._futures_margin import MarginSetting, parse_margin
 from ._intraday_assumptions import TIMES as INTRADAY_TIMES
 from ._intraday_assumptions import intraday_times
 from ._layout import parse_interval
@@ -92,6 +93,8 @@ class RunPlan:
     warnings: tuple[str, ...]
     # Sessions before expiry at which a future rolls, or None to settle at expiry.
     roll: int | None = 1
+    # The run's own futures margin (`margin=`, `_futures_margin`), None for the default.
+    margin: MarginSetting = None
 
     def native_config(self, deliver_events: bool) -> dict[str, Any]:
         """The config dict of the native engine."""
@@ -317,6 +320,7 @@ def resolve(strategy: type, args: dict[str, Any]) -> RunPlan:
         leverage=class_leverage(strategy),
         warnings=tuple(warnings),
         roll=check_roll(args["roll"]),
+        margin=parse_margin(args["margin"]),
     )
 
 

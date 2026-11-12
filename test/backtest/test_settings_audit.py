@@ -70,6 +70,7 @@ AUDITED_RUN_ARGUMENTS = {
     "quantity_mode",
     "costs",
     "slippage",
+    "margin",
     "product",
     "entry_from",
     "entry_until",
@@ -182,6 +183,11 @@ def test_a_client_given_with_own_data_is_reported_as_unused():
 def test_intraday_times_on_a_delivery_run_are_reported_as_applying_to_mis_only():
     warnings = run(round_trip_strategy(qty=10), product="CNC", entry_until="14:00").warnings
     assert any("entry_until" in text and "MIS" in text for text in warnings)
+
+
+def test_a_futures_margin_on_a_run_without_futures_is_reported_as_unused():
+    warnings = run(round_trip_strategy(qty=10), margin=bt.pct(15)).warnings
+    assert any(text.startswith("margin=") and "unused" in text for text in warnings)
 
 
 # ----- the Assumptions block --------------------------------------------------------

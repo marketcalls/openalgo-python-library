@@ -6,7 +6,10 @@
 //! Status, as in the calendar's tables: `verified` means the row states what its source
 //! states for the dates it covers; `unverified` means it does not (an observation of one
 //! day applied to a range, or a figure still to be confirmed). A run that uses an
-//! unverified row says so in its warnings.
+//! unverified row says so in its warnings. `default` marks a modelling default the
+//! maintainer set in place of figures that differ by symbol and date (the futures margin
+//! of decision D23): the user can override it, the Assumptions block states it, and a
+//! run that uses it does not warn.
 //!
 //! The files are read with the calendar's CSV reader (`market::calendar::csv`): `#`
 //! comments, one header line, optional double quotes.
@@ -21,14 +24,18 @@ pub enum RowStatus {
     Verified,
     /// It does not, or not yet; a run that uses it warns.
     Unverified,
+    /// A modelling default set by the maintainer, which the user can override; a run
+    /// that uses it states it in the Assumptions block and does not warn.
+    Default,
 }
 
 impl RowStatus {
-    /// "verified" or "unverified".
+    /// "verified", "unverified" or "default".
     pub fn code(self) -> &'static str {
         match self {
             RowStatus::Verified => "verified",
             RowStatus::Unverified => "unverified",
+            RowStatus::Default => "default",
         }
     }
 }
@@ -97,7 +104,10 @@ fn parse_status(text: &str) -> Result<RowStatus, String> {
     match text {
         "verified" => Ok(RowStatus::Verified),
         "unverified" => Ok(RowStatus::Unverified),
-        other => Err(format!("status {other:?} must be verified or unverified")),
+        "default" => Ok(RowStatus::Default),
+        other => Err(format!(
+            "status {other:?} must be verified, unverified or default"
+        )),
     }
 }
 
@@ -173,6 +183,14 @@ mod tests {
     fn rows_overlap_when_they_share_a_date() {
         assert!(meta(None, Some(10)).overlaps(&meta(Some(10), None)));
         assert!(!meta(None, Some(9)).overlaps(&meta(Some(10), None)));
+    }
+
+    #[test]
+    fn a_status_is_verified_unverified_or_default() {
+        assert_eq!(parse_status("verified"), Ok(RowStatus::Verified));
+        assert_eq!(parse_status("unverified"), Ok(RowStatus::Unverified));
+        assert_eq!(parse_status("default"), Ok(RowStatus::Default));
+        assert!(parse_status("assumed").is_err());
     }
 
     #[test]

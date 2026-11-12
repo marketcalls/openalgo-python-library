@@ -146,7 +146,7 @@
 //! engine-held on MIS and held as GTTs on CNC and NRML, the square-off, timers
 //! (`self.at`, `self.every`), charges on every fill with contract-note rounding, the
 //! dated default slippage and margin tables (cash, MIS with leverage on request, long
-//! options, NSE index and stock futures, BSE BANKEX and MCX futures), a CNC buy and
+//! options, futures at the default of D23 or the run's own `margin=`), a CNC buy and
 //! sell of one scrip on one day charged as intraday, the sizers (with a strategy's own
 //! sizing function, `reinvest` and the size caps), the engine default size, target
 //! positions, the initial risk of each trade, the position

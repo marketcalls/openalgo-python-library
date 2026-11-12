@@ -3,15 +3,14 @@ checked at the fill bar's open; intraday leverage only when the order asks for i
 
 Capital is 10,00,000 and entries fill at 1,000.00 (see accounting_runs). Each table
 row's figure is tested in the kernel (`market::margin`); these tests check the run.
+The futures margin (the default of decision D23 and `margin=`) is tested in
+`test_run_futures_margin`.
 """
 
-import datetime as dt
-
 import pytest
-from accounting_runs import at, future_round_trip, round_trip
+from accounting_runs import at, round_trip
 
 from openalgo.backtest.errors import ConfigError
-from openalgo.backtest.reference import Instrument
 
 
 def margin_after_entry(result):
@@ -46,42 +45,3 @@ def test_leverage_above_the_tables_limit_is_refused():
 def test_leverage_on_delivery_is_refused():
     with pytest.raises(ConfigError, match="leverage"):
         round_trip({"qty": 100, "leverage": 2}, costs=None, slippage=0, product="CNC")
-
-
-def test_an_index_future_blocks_its_rows_percent_and_warns_the_row_is_unverified():
-    # One lot of 75 at 1,000.00 is 75,000; NIFTY's row blocks 11.37 percent: 8,527.50.
-    result = future_round_trip({"lots": 1}, costs=None, slippage=0)
-    assert margin_after_entry(result) == pytest.approx(8_527.5)
-    assert any("FUT_NIFTY/1" in text and "unverified" in text for text in result.warnings)
-
-
-def test_a_stock_future_blocks_its_rows_percent_and_warns_the_row_is_unverified():
-    # One lot of 750 at 1,000.00 is 7,50,000; SBIN's row blocks 17.79 percent: 1,33,425.
-    stock = Instrument(
-        symbol="SBIN24NOV26FUT",
-        exchange="NFO",
-        kind="future",
-        lot_size=750,
-        tick_size=0.05,
-        expiry=dt.date(2026, 11, 24),
-        underlying="SBIN",
-    )
-    result = future_round_trip({"lots": 1}, stock, costs=None, slippage=0)
-    assert margin_after_entry(result) == pytest.approx(133_425.0)
-    assert any("FUT_SBIN/1" in text and "unverified" in text for text in result.warnings)
-
-
-def test_a_future_whose_underlying_has_no_row_is_not_built():
-    # An underlying the dated table does not list (as SENSEX, whose futures margin no
-    # public page read gave) has no margin, and a run never treats it as free.
-    unlisted = Instrument(
-        symbol="UNLISTED24NOV26FUT",
-        exchange="NFO",
-        kind="future",
-        lot_size=100,
-        tick_size=0.05,
-        expiry=dt.date(2026, 11, 24),
-        underlying="UNLISTED",
-    )
-    with pytest.raises(NotImplementedError, match="margin"):
-        future_round_trip({"lots": 1}, unlisted, costs=None, slippage=0)

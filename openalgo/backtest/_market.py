@@ -6,6 +6,7 @@ facts the kernel's market rules read (`rust/oa_py/src/backtest/engine/market.rs`
               rounding, user schedules or backfill), or None (no charges; every report
               warns). Statutory charges apply under every preset.
     slippage: see `openalgo.backtest.slippage`.
+    margin:   a futures contract's own margin, from `margin=` (`_futures_margin`).
 
 The cost segment of each instrument is checked here for the run's product, and the cost
 model is asked for the run's first and last day, so an instrument or a date the model
@@ -20,6 +21,7 @@ from typing import Any
 
 from . import costs as costs_module
 from . import slippage as slippage_module
+from ._futures_margin import MarginSetting, own_margin
 from .errors import CostError, ReferenceDataError
 from .reference import Instrument, default_tables
 
@@ -127,7 +129,9 @@ def _slippage_class(instrument: Instrument, table: Any, day: dt.date) -> tuple[s
     return (f"INDEX_{suffix}" if kind == "index" else f"STOCK_{suffix}"), ""
 
 
-def _facts(instruments: list[Instrument], slippage: Any, day: dt.date) -> tuple[list, list[str]]:
+def _facts(
+    instruments: list[Instrument], slippage: Any, day: dt.date, margin: MarginSetting
+) -> tuple[list, list[str]]:
     facts, notes = [], []
     for instrument in instruments:
         own, class_code = None, None
@@ -142,6 +146,7 @@ def _facts(instruments: list[Instrument], slippage: Any, day: dt.date) -> tuple[
                 "bse_group": None,
                 "slippage_class": class_code,
                 "slippage": own,
+                "futures_margin": own_margin(margin, instrument),
             }
         )
     return facts, notes
@@ -151,12 +156,13 @@ def market_settings(
     plan: Any, instruments: list[Instrument], args: dict[str, Any]
 ) -> MarketSettings:
     """The market settings of a run of `plan` on `instruments` with the run arguments
-    `args`. Raises CostError or ConfigError for settings that cannot be used."""
+    `args` (`costs`, `slippage`, and `margin`, the parsed `margin=`, absent for the
+    default). Raises CostError or ConfigError for settings that cannot be used."""
     model = cost_model(args["costs"])
     if model is not None:
         _check_costs(model, instruments, plan.product, (plan.start, plan.end))
     slippage = slippage_module.resolve(args["slippage"])
-    facts, notes = _facts(instruments, slippage, plan.start)
+    facts, notes = _facts(instruments, slippage, plan.start, args.get("margin"))
     run_form = (
         ("segment_default", 0.0, 0)
         if isinstance(slippage, slippage_module.SlippageTable)

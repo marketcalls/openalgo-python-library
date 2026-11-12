@@ -60,6 +60,7 @@ def backtest(
     quantity_mode: str = "fractional",
     costs: str | None = "zerodha",
     slippage: Any = "default",
+    margin: Any = None,
     product: str | None = None,
     entry_from: str | None = None,
     entry_until: str | None = None,
@@ -109,6 +110,14 @@ def backtest(
         `_market`.
     slippage: "default" (the dated per-class table), 0, bt.ticks(n), bt.pct(p),
         bt.slippage.bps(b) or bt.slippage.table(...); see `openalgo.backtest.slippage`.
+    margin: the margin a futures position blocks. None (the default): 20 percent of the
+        contract value (5x) for every futures contract, any underlying and date. One
+        value for every futures contract, or a dict by underlying symbol ({"NIFTY":
+        bt.pct(12), "CRUDEOIL": bt.rupees(450_000)}) whose missing names keep the
+        default; a value is bt.pct(x), x percent of the contract value, or
+        bt.rupees(x), x rupees per lot of the contract traded (the figure a broker's
+        margin calculator shows). A backtest assumption only: in live trading the
+        broker computes margin. See `_futures_margin`.
     product, entry_from, entry_until, square_off: product default by interval and
         exchange; IST "HH:MM" times for MIS (calendar defaults when omitted).
     max_daily_loss, risk_basis, after_risk_exit, max_positions, drawdown_halt, cooldown,
@@ -149,7 +158,8 @@ def live(
     strategy: type[Strategy], client: Any, *, capital: float, max_daily_loss: float, **settings: Any
 ) -> Any:
     """Trade a strategy through OpenAlgo in the mode set inside OpenAlgo (sandbox or
-    live). `capital` and `max_daily_loss` are mandatory risk limits."""
+    live). `capital` and `max_daily_loss` are mandatory risk limits. It takes no
+    `margin=`: in live trading the broker computes margin."""
     raise NotImplementedError("bt.live is planned for Phase 2")
 
 

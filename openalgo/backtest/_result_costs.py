@@ -49,6 +49,7 @@ NOTE_COLUMNS = (
 )
 _EPOCH = dt.date(1970, 1, 1)
 _VERIFIED = "verified"
+_UNVERIFIED = "unverified"
 
 
 def _dates(days: Any) -> list[dt.date]:
@@ -96,10 +97,12 @@ def notes_frame(output: dict[str, Any]) -> pd.DataFrame:
 
 def run_warnings(output: dict[str, Any], schedules: list[str]) -> list[str]:
     """One warning per unverified slippage or margin row the run used, and one per cost
-    schedule and segment whose rates were not verified for some fill's date."""
+    schedule and segment whose rates were not verified for some fill's date. A row of
+    status "default" (the futures margin of decision D23) is stated in the Assumptions
+    block instead."""
     lines = []
     for table, row_id, status, first_day, source, notes in output["charges"]["tables"]:
-        if status != _VERIFIED:
+        if status == _UNVERIFIED:
             first = _dates([first_day])[0]
             lines.append(
                 f"{table} row {row_id}, used from {first}, is unverified: {notes} "

@@ -16,8 +16,8 @@ cost schedule IN-2026-04-01 cites (the Zerodha charges page and calculator, snap
 2026-11-12; reference note indian-trading-costs.md section 3): brokerage 0.03 percent
 capped at Rs 20 an order, CTT 0.01 percent on sells, exchange transaction charge 0.0021
 percent, SEBI fee Rs 10 a crore (0.0001 percent), stamp duty 0.002 percent on buys, GST
-18 percent of brokerage, exchange charge and SEBI fee. The margin is the dated table's
-CRUDEOIL row: 31.25 percent of the contract value.
+18 percent of brokerage, exchange charge and SEBI fee. The margin is the default of
+decision D23 for every futures contract: 20 percent of the contract value.
 """
 
 import datetime as dt
@@ -155,11 +155,13 @@ def test_the_ledger_is_charged_the_contract_notes_and_the_trade_its_fills(result
     assert trade["net_pnl_rupees"] == pytest.approx(GROSS_PNL - fills_total, abs=1e-9)
 
 
-def test_the_margin_is_the_crudeoil_rows_percent_of_the_contract_value_while_held(result):
-    # 31.25% of 5,030.00 x 100 = 1,57,187.50, blocked from the entry to the exit.
+def test_the_margin_is_twenty_percent_of_the_contract_value_while_held(result):
+    # 20% of 5,030.00 x 100 = 1,00,600.00, blocked from the entry to the exit.
     margin = result.equity["margin_rupees"]
-    assert list(margin) == [0.0, 157_187.5, 157_187.5, 0.0]
-    assert any("FUT_CRUDEOIL/1" in text and "unverified" in text for text in result.warnings)
+    assert list(margin) == [0.0, 100_600.0, 100_600.0, 0.0]
+    assert result.assumptions["futures_margin"] == (
+        "CRUDEOIL 20 percent of contract value (default)"
+    )
 
 
 def test_the_daily_mark_to_market_posts_each_sessions_move_and_adds_up_to_the_pnl(result):

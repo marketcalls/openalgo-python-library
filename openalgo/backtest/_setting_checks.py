@@ -16,6 +16,8 @@ strategies, is named in the result's warnings with the reason it did nothing her
 * `client` with `data=`: the bars come from `data=`, so the client is not used.
 * `entry_from`, `entry_until`, `square_off` on a run whose product is not MIS: they
   apply to MIS orders only (SPEC-32).
+* `margin=` on a run that trades no futures, or naming underlyings it does not trade as
+  futures: it sets the margin of futures only (reported by `_futures_margin`).
 """
 
 from __future__ import annotations
