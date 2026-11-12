@@ -2,8 +2,9 @@
 longer be reproduced (14-strategy-api 6).
 
 It records the engine version, the strategy (module, name, a hash of its source and its
-parameter values), every argument after defaults were resolved, the instruments in
-registration order (their terms as used), the data partition hashes of every
+parameter values), every argument after defaults were resolved (the benchmark as its
+symbol, exchange, source and the partition hashes of its closes, `_benchmark`), the
+instruments in registration order (their terms as used), the data partition hashes of every
 instrument, the reference-table and cost-schedule versions, the random seed (always
 None: nothing in a backtest is random) and the platform. No API key or other secret is
 ever written: a client is recorded only as having been given.

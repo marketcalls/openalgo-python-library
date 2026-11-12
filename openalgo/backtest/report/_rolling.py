@@ -10,13 +10,15 @@ that date does not exist) to the end. A horizon is listed only when the run star
 or before that date. Its figures are those of the sessions after the date: total return,
 CAGR over the calendar days of the window, volatility, Sharpe, the deepest drawdown at
 session closes and, with a benchmark, the benchmark's return over the same sessions
-(`_periods.benchmark_growth`: from its first value in the window, NaN with none).
+(`_periods.benchmark_growth`: over the sessions that have a benchmark return, NaN with
+none) and the count of sessions with both a strategy and a benchmark return.
 "Since start" covers the whole run, with CAGR over its elapsed time; its benchmark
 return is the run's `benchmark_total_return`.
 """
 
 import numbers
 
+import numpy as np
 import pandas as pd
 
 from ..errors import ConfigError
@@ -76,7 +78,10 @@ def _row(
     row = {"horizon": label, "from": since.date(), "sessions": len(window)}
     row |= {name: figures[name] for name in HORIZON_FIGURES}
     if bench is not None:
-        row["benchmark_return"] = periods.benchmark_growth(bench.to_numpy(dtype=float))
+        known = bench.to_numpy(dtype=float)
+        row["benchmark_return"] = periods.benchmark_growth(known)
+        paired = np.isfinite(known) & np.isfinite(window.to_numpy(dtype=float))
+        row["benchmark_sessions"] = int(np.sum(paired))
     return row
 
 

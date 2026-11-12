@@ -258,16 +258,20 @@ _BENCHMARK = {
         "Benchmark return",
         "fraction",
         "Product of (1 + benchmark session return) over the sessions that have one, minus "
-        "1: the benchmark value at the end over its first value in the run (as of the "
-        "start, which with an opening wealth is its last value before the first point; "
-        "else as of the first session end it covers), minus 1. NaN when no session has a "
-        "benchmark return. The horizon summary and benchmark_comparison take each span's "
-        "benchmark return by the same rule.",
+        "1; NaN when no session has a benchmark return. A session has a benchmark return "
+        "only when it and the session before it (the start, for the first) both have a "
+        "close of their own: a missing session is never filled from a neighbouring day, "
+        "so the moves into and out of it are not counted. With no session missing this "
+        "is the benchmark's close at the end over its close at the start, minus 1. The "
+        "horizon summary and benchmark_comparison take each span's benchmark return by "
+        "the same rule.",
     ),
     "benchmark_sessions": (
         "Benchmark sessions",
         "count",
-        "Sessions with both a strategy and a benchmark return.",
+        "Sessions with both a strategy and a benchmark return: the only sessions alpha, "
+        "beta, correlation, R squared, tracking error, information ratio, Treynor ratio "
+        "and rolling beta use.",
     ),
     "alpha": (
         "Alpha",

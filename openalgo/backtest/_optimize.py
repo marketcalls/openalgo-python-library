@@ -10,7 +10,8 @@ with `bt.param(default, values)` and not fixed by `params=`, in the order the cl
 declares them; the others keep their defaults (or their `params=` values). Every
 other keyword is a run argument of `bt.backtest`, the same for every combination.
 
-How it runs: the inputs (settings, base interval, bars, instruments) are prepared once.
+How it runs: the inputs (settings, base interval, bars, instruments, the benchmark's
+closes) are prepared once, so every combination is measured against the same benchmark.
 The first combination runs in this process. It runs the indicator causality checks for
 the whole sweep (they are never repeated per combination) and shows which evaluation
 path of 03-architecture 5 the strategy takes (`OptimizeResult.path`):

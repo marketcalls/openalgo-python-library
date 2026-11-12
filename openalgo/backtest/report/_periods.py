@@ -18,6 +18,10 @@ from ..calendar import Calendar
 
 IST = "Asia/Kolkata"
 NANOS_PER_DAY = 86_400 * NANOS_PER_SECOND
+EPOCH = dt.date(1970, 1, 1)
+#: Calendar days searched back for the session before a date: far longer than any run
+#: of closed days in the calendar's tables (a weekend next to holidays, a few days).
+PREVIOUS_SESSION_SEARCH_DAYS = 15
 
 
 def ist_days(nanos: np.ndarray) -> np.ndarray:
@@ -114,24 +118,52 @@ def session_end_times(marks: np.ndarray, days: np.ndarray) -> np.ndarray:
     return marks[np.searchsorted(point_days, days, side="right") - 1]
 
 
+def previous_session_day(calendar: Calendar, exchanges: list[str], day: int) -> int | None:
+    """The last session date (IST days since 1970-01-01) of the union calendar of
+    `exchanges` before the IST date `day`, or None when the calendar has none within
+    `PREVIOUS_SESSION_SEARCH_DAYS` days."""
+    last = date_index(np.array([day - 1])).date[0]
+    first = last - dt.timedelta(days=PREVIOUS_SESSION_SEARCH_DAYS - 1)
+    found: list[dt.date] = []
+    for code in exchanges:
+        found.extend(calendar.sessions(code, first, last)["date"])
+    return None if not found else (max(found) - EPOCH).days
+
+
 def benchmark_path(
-    bench_ts: np.ndarray, bench_values: np.ndarray, start_ns: int, end_ns: np.ndarray
+    bench_ts: np.ndarray,
+    bench_values: np.ndarray,
+    start_ns: int,
+    start_floor_day: int,
+    end_ns: np.ndarray,
+    days: np.ndarray,
 ) -> np.ndarray:
-    """Benchmark levels as of `start_ns` and each session end: the last benchmark value
-    stamped at or before each instant, NaN where it has none yet (never back-filled,
-    which would book a later move)."""
-    instants = np.concatenate(([start_ns], end_ns))
+    """Benchmark levels at the start and at each session end, a close of the session's
+    own or NaN (07-research-and-reporting 3, rule 3: a missing session stays missing and
+    is never filled from a neighbouring day).
+
+    The level of session `days[k]` is the last benchmark value stamped on that IST date
+    after the previous reading (the start, or the previous session's end) and at or
+    before its end `end_ns[k]`. The level at the start is the last value stamped at or
+    before `start_ns` on or after the IST date `start_floor_day`, the session before the
+    first (`previous_session_day`). Days are IST days since 1970-01-01."""
+    instants = np.concatenate(([start_ns], end_ns)).astype(np.int64)
+    floors = np.concatenate(([start_floor_day], days)).astype(np.int64)
     position = np.searchsorted(bench_ts, instants, side="right") - 1
-    return np.where(position >= 0, bench_values[np.maximum(position, 0)], np.nan)
+    nearest = np.maximum(position, 0)
+    stamps = bench_ts[nearest]
+    after_previous = np.concatenate(([True], stamps[1:] > instants[:-1]))
+    own = (position >= 0) & (ist_days(stamps) >= floors) & after_previous
+    return np.where(own, bench_values[nearest], np.nan)
 
 
 def benchmark_growth(returns: np.ndarray) -> float:
     """The benchmark's return over a span of sessions, by the one rule of the run's
     `benchmark_total_return`, the horizon summary and `benchmark_comparison`: the
-    product of (1 + r) over the sessions whose benchmark return is known, minus 1, so
-    from the benchmark's first value in the span to its end; NaN when no session of
-    the span has one. Only sessions before the benchmark's first value lack a return
-    (`benchmark_path` never back-fills, and carries the last value forward after it)."""
+    product of (1 + r) over the sessions whose benchmark return is known, minus 1; NaN
+    when no session of the span has one. A session has no benchmark return when it or
+    the session before it has no close of its own (`benchmark_path`), so a move into or
+    out of a missing session is not counted."""
     known = np.asarray(returns, dtype=float)
     known = known[np.isfinite(known)]
     return float(np.prod(1.0 + known)) - 1.0 if len(known) else math.nan
@@ -150,5 +182,6 @@ __all__ = [
     "ist_times",
     "missing_sessions",
     "period_returns",
+    "previous_session_day",
     "session_end_times",
 ]

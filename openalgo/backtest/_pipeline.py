@@ -11,7 +11,8 @@ slippage and the per-instrument facts). A sweep sends its `PreparedRun` to worke
 processes without the market settings, which hold native objects, and each worker
 resolves them again from the `costs=` and `slippage=` arguments. That needs those
 arguments to pickle and the run to use the shared default calendar (a calendar of its
-own is a native object too); otherwise the sweep runs in this process.
+own is a native object too); otherwise the sweep runs in this process. The benchmark's
+closes (`_benchmark`) are loaded last, after the strategy's bars, and sent along.
 
 `execute` builds the native engine, binds a strategy instance to a `RunContext`, runs
 `init` and the driver to the end of the grid (the Rust signal driver for a condition
@@ -31,6 +32,7 @@ import pandas as pd
 
 from . import calendar as calendar_module
 from ._base_interval import choose_base, meaning
+from ._benchmark import benchmark_request, load_benchmark
 from ._causality_checks import IndicatorChecks
 from ._conditions import drive_conditions, evaluation_path, has_conditions
 from ._context import RunContext, RunData
@@ -70,6 +72,9 @@ class PreparedRun:
     market: MarketSettings | None
     # The futures series (`_futures.FuturesPlan`), None for a strategy on no underlying.
     futures: Any = None
+    # The benchmark (`_benchmark.Benchmark`), reference closes for the reports; None
+    # without one.
+    benchmark: Any = None
 
     @property
     def portable(self) -> bool:
@@ -125,6 +130,8 @@ def prepare(strategy: type, client: Any, args: dict[str, Any]) -> PreparedRun:
     Raises ConfigError for unusable arguments, the data layer's and the reference
     tables' errors, and NotImplementedError for settings of later work."""
     plan = resolve(strategy, args)
+    # Checked before any data is loaded; loaded after the strategy's bars.
+    wanted_benchmark = benchmark_request(args["benchmark"], plan.exchange)
     own_calendar = _calendar(args["calendar"], plan)
     calendar = own_calendar or calendar_module.default_calendar()
     futures = resolve_futures(strategy, plan, args, calendar)
@@ -158,11 +165,14 @@ def prepare(strategy: type, client: Any, args: dict[str, Any]) -> PreparedRun:
             )
     warnings += market.warnings
     warnings += [] if futures is None else list(futures.warnings)
+    frames = [_cut(result.bars, plan) for result in loaded]
+    benchmark = load_benchmark(wanted_benchmark, plan, args, client, calendar, frames)
+    warnings += [] if benchmark is None else list(benchmark.warnings)
     return PreparedRun(
         plan=plan,
         calendar=own_calendar,
         instruments=instruments,
-        frames=[_cut(result.bars, plan) for result in loaded],
+        frames=frames,
         partitions={
             symbol: result.meta.partition_hashes()
             for symbol, result in zip(plan.symbols, loaded, strict=True)
@@ -173,6 +183,7 @@ def prepare(strategy: type, client: Any, args: dict[str, Any]) -> PreparedRun:
         market_args=market_args,
         market=market,
         futures=futures,
+        benchmark=benchmark,
     )
 
 
@@ -192,6 +203,7 @@ def _assumptions(
     block["instruments"] = prepared.notes["instruments"]
     if prepared.futures is not None:
         block["futures"] = prepared.futures.assumption()
+    block["benchmark"] = None if prepared.benchmark is None else prepared.benchmark.assumption()
     indicator_checks = checks.assumption()
     if indicator_checks is not None:
         block["indicator_checks"] = indicator_checks
@@ -213,6 +225,7 @@ def _arguments(
         data="given" if args["data"] is not None else None,
         client="given" if args.get("client") is not None else None,
         calendar="default" if prepared.calendar is None else "given",
+        benchmark=None if prepared.benchmark is None else prepared.benchmark.record,
     )
     # The present only when `now=` fixed it: a run on the clock reruns to the same manifest.
     present = resolved.pop("present")
@@ -281,6 +294,7 @@ def execute(
         manifest.to_dict(),
         record=record,
         calendar=calendar,
+        benchmark=None if prepared.benchmark is None else prepared.benchmark.closes,
     )
 
 

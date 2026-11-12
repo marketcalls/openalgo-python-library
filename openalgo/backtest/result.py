@@ -99,9 +99,12 @@ class Result:
         manifest: dict[str, Any],
         record: Any = None,
         calendar: Any = None,
+        benchmark: pd.Series | None = None,
     ) -> None:
         self._output = output
         self._calendar = calendar
+        # Reference closes for the reports (`_benchmark`); they never entered the run.
+        self._benchmark = benchmark
         self._symbols = symbols
         self._assumptions = assumptions
         schedules = manifest.get("cost_schedules", [])
@@ -279,8 +282,10 @@ class Result:
         the opening wealth and the open of the first slice the opening time, so the P&L
         of the first slice, the return of the first session and the time in the first
         slice (elapsed time, CAGR, exposure) count. A result built without its run's
-        calendar times the opening at the first point. Raises ConfigError when the run
-        has no equity point."""
+        calendar times the opening at the first point. A run with `benchmark=` measures
+        the benchmark figures (alpha, beta, information ratio, the comparison tables and
+        charts) against its closes. Raises ConfigError when the run has no equity
+        point."""
         trades = _result_report.trades_table(self._output, self._symbols)
         equity = _result_report.equity_series(self.equity)
         arguments = self._manifest["arguments"]
@@ -292,7 +297,12 @@ class Result:
                 first, arguments["base"], exchange, self._calendar
             )
         return analyse(
-            equity, exchanges=exchange, trades=trades, opening_wealth=capital, opening_time=opening
+            equity,
+            exchanges=exchange,
+            trades=trades,
+            benchmark=self._benchmark,
+            opening_wealth=capital,
+            opening_time=opening,
         )
 
     @property

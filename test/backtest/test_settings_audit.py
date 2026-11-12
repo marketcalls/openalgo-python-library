@@ -57,6 +57,7 @@ AUDITED_RUN_ARGUMENTS = {
     "start",
     "end",
     "data",
+    "benchmark",
     "instrument",
     "calendar",
     "source",
