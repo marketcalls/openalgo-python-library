@@ -42,6 +42,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same lattice as Historify, and drops and counts bars outside the session. Part
   of the backtest engine being built; the interface may change before the backtest
   beta.
+- **`openalgo.backtest.data` (preview).** `load_bars(symbol, exchange, interval, start,
+  end, ...)` loads bars from an OpenAlgo server (`source="api"` for broker history,
+  `"db"` for Historify, `"auto"` to use Historify only when it covers the whole range)
+  or from your own DataFrame or CSV, Parquet or Feather files with no server at all.
+  Every source is normalised to one layout with UTC nanosecond bar open and close
+  times, checked against the session calendar, and quality checked; a short history,
+  dropped bars and every other adjustment are reported in the returned metadata. A
+  local cache keeps the raw rows each source returned, verifies them on every read,
+  and treats a session as complete only well after its close. No market-data
+  downloader is bundled. Part of the backtest engine being built; the interface may
+  change before the backtest beta.
 - **`openalgo.backtest.costs` (preview).** Indian trading charges for NSE and BSE
   equity (delivery and intraday), NFO and BFO futures and options, and MCX futures:
   brokerage presets (`zerodha`, `flat`, `percent`, `zero_brokerage`, `custom`), STT or
