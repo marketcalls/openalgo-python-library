@@ -141,19 +141,24 @@ def test_an_mcx_future_has_a_margin_row():
     check_margin([crude], "NRML", (dt.date(2025, 12, 1),))
 
 
-def test_a_missing_margin_row_stops_the_run_before_any_data_is_loaded():
-    # No data and no client: the run would stop at loading the bars, so the margin
-    # error shows the check ran first, with the engine's own message.
-    unlisted = _future("UNLISTED19DEC25FUT", "MCX", None, 100)
+def test_a_future_without_an_underlying_has_a_margin_row():
+    # Decision D23: one futures row for every underlying, named or not.
+    unnamed = _future("UNLISTED19DEC25FUT", "MCX", None, 100)
+    check_margin([unnamed], "NRML", (dt.date(2025, 12, 1),))
 
+
+def test_a_missing_margin_rule_stops_the_run_before_any_data_is_loaded():
+    # Cash equity has no margin rule on NRML. No data and no client: the run would stop
+    # at loading the bars, so the margin error shows the check ran first, with the
+    # engine's own message.
     class Idle(bt.Strategy):
-        symbol, exchange, interval = "UNLISTED19DEC25FUT", "MCX", "D"
+        symbol, exchange, interval = "SBIN", "NSE", "D"
 
-    with pytest.raises(NotImplementedError, match="the dated margin table does not list"):
+    with pytest.raises(ConfigError, match="no margin rule for EQ with NRML"):
         bt.backtest(
             Idle,
             capital=1_000_000,
-            instrument=unlisted,
+            product="NRML",
             start=dt.date(2025, 12, 1),
             end=dt.date(2025, 12, 5),
             costs=None,

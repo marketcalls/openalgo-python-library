@@ -25,7 +25,8 @@
 //! nearest whole number of its lots to those units, and at least one lot, and the leg
 //! follows the new quantity (a smaller position shrinks it as a partial exit does; a
 //! larger one is an add at the shifted reference). The next position blocks its margin
-//! from the dated table; a roll is never refused for margin, since it continues a
+//! as an entry would (`opening_margin`, per lot of the next contract when the run gives
+//! rupees per lot); a roll is never refused for margin, since it continues a
 //! position the run already holds. The near contract's working orders are cancelled at
 //! the switch: entries trade the next contract from the roll session on.
 

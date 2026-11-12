@@ -14,11 +14,10 @@ import re
 from pathlib import Path
 
 import pytest
-from strategy_samples import daily_bars, minute_bars, run
+from strategy_samples import daily_bars, run
 
 import openalgo.backtest as bt
 from openalgo.backtest._messages import counted
-from openalgo.backtest.reference import Instrument
 
 ROOT = Path(__file__).resolve().parents[2]
 # Internal references: requirement ids (FR-MKT-11, NFR-PERF-04), decision and rule ids
@@ -48,21 +47,6 @@ class MixedFutures(bt.Strategy):
     symbols, exchange, interval = ("NIFTY", "NIFTY24NOV26FUT"), "NFO", "D"
 
 
-class Unlisted(bt.Strategy):
-    symbol, exchange, interval = "UNLISTED24NOV26FUT", "NFO", "D"
-
-
-UNLISTED = Instrument(
-    symbol="UNLISTED24NOV26FUT",
-    exchange="NFO",
-    kind="future",
-    lot_size=100,
-    tick_size=0.05,
-    expiry=dt.date(2026, 11, 24),
-    underlying="UNLISTED",
-)
-
-
 def _with(**attributes) -> type:
     return type("Variant", (Quarterly,), attributes)
 
@@ -88,9 +72,6 @@ NOT_BUILT = {
     "fill close": lambda: run(Quarterly, fill="close"),
     "weekly strategy interval": lambda: run(Weekly, data=daily_bars(DAYS)),
     "mixed futures symbols": lambda: run(MixedFutures, start=DAYS[0], end=DAYS[-1]),
-    "future with no margin row": lambda: run(
-        Unlisted, data=minute_bars(), instrument=UNLISTED, start=DAYS[0], end=DAYS[0]
-    ),
 }
 
 

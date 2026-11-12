@@ -82,8 +82,9 @@ impl Engine {
         Ok(row.spec)
     }
 
-    /// Margin an opening fill blocks, rupees, from the dated margin table; `leverage` is
-    /// what the order asked for (`None` is 1x).
+    /// Margin an opening fill blocks, rupees: the run's own futures margin for the
+    /// instrument (`margin=`), else the dated margin table; `leverage` is what the order
+    /// asked for (`None` is 1x).
     ///
     /// Errors: `Margin` (no row, a leverage the row does not allow, short options).
     pub(super) fn opening_margin(
@@ -105,13 +106,15 @@ impl Engine {
             quantity_units: units,
             price_rupees,
             multiplier: spec.multiplier,
+            lot_size_units: f64::from(spec.lot_size_units),
             leverage: leverage.unwrap_or(1.0),
             day,
-            underlying: facts.and_then(|f| f.underlying.as_deref()),
+            futures_margin: facts.and_then(|f| f.futures_margin),
         };
         let quote = self.config.margin.initial_margin(&request)?;
-        self.charges
-            .record_use(MarketTable::Margin, &quote.row.meta, day);
+        if let Some(row) = quote.row {
+            self.charges.record_use(MarketTable::Margin, &row.meta, day);
+        }
         Ok(quote.rupees)
     }
 

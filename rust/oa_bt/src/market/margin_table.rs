@@ -1,5 +1,5 @@
 //! The dated default margin table (04-execution 5): `margin_defaults.csv`, embedded and
-//! parsed once, and its lookup by instrument kind, product, underlying and trade date.
+//! parsed once, and its lookup by instrument kind, product and trade date.
 //!
 //! A malformed embedded file is a typed error (`MarginError::InvalidTable`) and fails
 //! the unit tests; it never panics.
@@ -13,11 +13,10 @@ use super::table_rows::{at_line, parse_meta, records, RowMeta};
 
 const DATA: &str = include_str!("margin_defaults.csv");
 const TABLE: &str = "margin_defaults.csv";
-const HEADER: [&str; 11] = [
+const HEADER: [&str; 10] = [
     "row_id",
     "kind",
     "product",
-    "underlying",
     "valid_from",
     "valid_to",
     "model",
@@ -27,7 +26,7 @@ const HEADER: [&str; 11] = [
     "notes",
 ];
 /// Position of `valid_from` in a record.
-const DATES: usize = 4;
+const DATES: usize = 3;
 /// The `product` value of a row that applies to every product.
 const ANY_PRODUCT: &str = "*";
 
@@ -50,30 +49,14 @@ pub struct MarginRow {
     pub kind: InstrumentKind,
     /// The product, or `None` for every product.
     pub product: Option<Product>,
-    /// The underlying, or `None` for every underlying.
-    pub underlying: Option<String>,
     /// How the margin is computed.
     pub basis: MarginBasis,
 }
 
 impl MarginRow {
-    /// True when the row prices this kind, product and underlying on `day`.
-    fn matches(
-        &self,
-        kind: InstrumentKind,
-        product: Product,
-        underlying: Option<&str>,
-        day: Day,
-    ) -> bool {
-        let underlying_matches = match (&self.underlying, underlying) {
-            (None, _) => true,
-            (Some(row), Some(asked)) => row.eq_ignore_ascii_case(asked.trim()),
-            (Some(_), None) => false,
-        };
-        self.kind == kind
-            && self.product.map_or(true, |p| p == product)
-            && underlying_matches
-            && self.meta.covers(day)
+    /// True when the row prices this kind and product on `day`.
+    fn matches(&self, kind: InstrumentKind, product: Product, day: Day) -> bool {
+        self.kind == kind && self.product.map_or(true, |p| p == product) && self.meta.covers(day)
     }
 }
 
@@ -94,7 +77,7 @@ fn parse_basis(model: &str, percent: &str) -> Result<MarginBasis, String> {
 }
 
 fn parse_row(fields: &[String]) -> Result<MarginRow, String> {
-    let [_, kind, product, underlying, _, _, model, percent, ..] = fields else {
+    let [_, kind, product, _, _, model, percent, ..] = fields else {
         return Err("too few fields".to_string());
     };
     let kind = match InstrumentKind::from_code(kind) {
@@ -114,21 +97,18 @@ fn parse_row(fields: &[String]) -> Result<MarginRow, String> {
         meta: parse_meta(fields, DATES)?,
         kind,
         product,
-        underlying: (!underlying.is_empty()).then(|| underlying.clone()),
         basis: parse_basis(model, percent)?,
     })
 }
 
-/// Parse a margin table: every row valid, ids unique, no two rows of one kind, product
-/// and underlying on one date.
+/// Parse a margin table: every row valid, ids unique, no two rows of one kind and
+/// product on one date.
 fn parse_table(text: &str) -> Result<Vec<MarginRow>, String> {
     let mut rows: Vec<MarginRow> = Vec::new();
     for record in records(TABLE, text, &HEADER)? {
         let row = parse_row(&record.fields).map_err(|problem| at_line(TABLE, &record, &problem))?;
         let clash = rows.iter().find(|earlier| {
-            let same_key = earlier.kind == row.kind
-                && earlier.product == row.product
-                && earlier.underlying == row.underlying;
+            let same_key = earlier.kind == row.kind && earlier.product == row.product;
             earlier.meta.id == row.meta.id || (same_key && earlier.meta.overlaps(&row.meta))
         });
         if let Some(earlier) = clash {
@@ -157,19 +137,18 @@ pub fn margin_defaults() -> Result<&'static [MarginRow], MarginError> {
     }
 }
 
-/// The row that prices a position of `kind` in `product` on `underlying` on the IST
-/// trade date `day`, or `None` when the table has none.
+/// The row that prices a position of `kind` in `product` on the IST trade date `day`,
+/// or `None` when the table has none.
 ///
 /// Errors: `InvalidTable` as `margin_defaults`.
 pub fn margin_row(
     kind: InstrumentKind,
     product: Product,
-    underlying: Option<&str>,
     day: Day,
 ) -> Result<Option<&'static MarginRow>, MarginError> {
     Ok(margin_defaults()?
         .iter()
-        .find(|row| row.matches(kind, product, underlying, day)))
+        .find(|row| row.matches(kind, product, day)))
 }
 
 #[cfg(test)]
@@ -185,30 +164,30 @@ mod tests {
     #[test]
     fn the_built_in_table_parses() {
         let rows = margin_defaults().map_err(|e| e.to_string());
-        // 4 equity and option rows, 5 NSE index futures, NIFTYFPI, 218 NSE stock
-        // futures, 30 MCX futures and BANKEX.
-        assert_eq!(rows.map(|r| r.len()), Ok(259));
+        // Delivery, two intraday rows, long options and futures.
+        assert_eq!(rows.map(|r| r.len()), Ok(5));
     }
 
+    /// Decision D23: one futures row, 20 percent of contract value for every product
+    /// and date, a maintainer's default rather than a market figure.
     #[test]
-    fn futures_rows_are_one_day_observations_and_unverified() {
-        for row in margin_defaults().unwrap_or_default() {
-            if row.kind == InstrumentKind::Future {
-                assert_eq!(row.meta.status, RowStatus::Unverified, "{}", row.meta.id);
-            }
-        }
-    }
-
-    #[test]
-    fn a_row_for_one_underlying_does_not_price_another() {
-        let day = days_from_civil(2025, 7, 1);
-        let nifty = margin_row(InstrumentKind::Future, Product::Nrml, Some("nifty"), day);
-        let sensex = margin_row(InstrumentKind::Future, Product::Nrml, Some("SENSEX"), day);
-        assert_eq!(
-            nifty.map(|r| r.map(|r| r.meta.id.as_str())),
-            Ok(Some("FUT_NIFTY/1"))
+    fn futures_have_one_default_row_of_twenty_percent_for_every_product_and_date() {
+        let rows = margin_defaults().unwrap_or_default();
+        let futures: Vec<&MarginRow> = rows
+            .iter()
+            .filter(|row| row.kind == InstrumentKind::Future)
+            .collect();
+        assert_eq!(futures.len(), 1);
+        let row = futures[0];
+        assert_eq!(row.basis, MarginBasis::Percent { percent: 20.0 });
+        assert_eq!(row.product, None);
+        assert_eq!((row.meta.valid_from, row.meta.valid_to), (None, None));
+        assert_eq!(row.meta.status, RowStatus::Default);
+        assert!(
+            row.meta.source.starts_with("OpenAlgo backtest default"),
+            "{}",
+            row.meta.source
         );
-        assert_eq!(sensex.map(|r| r.is_none()), Ok(true));
     }
 
     #[test]
@@ -217,7 +196,6 @@ mod tests {
             margin_row(
                 InstrumentKind::Equity,
                 Product::Mis,
-                None,
                 days_from_civil(y, m, d),
             )
             .ok()
@@ -229,13 +207,20 @@ mod tests {
     }
 
     #[test]
+    fn delivery_has_no_row_for_a_carry_forward_product() {
+        let day = days_from_civil(2025, 7, 1);
+        let row = margin_row(InstrumentKind::Equity, Product::Nrml, day);
+        assert_eq!(row.map(|r| r.is_none()), Ok(true));
+    }
+
+    #[test]
     fn a_malformed_table_is_an_error_naming_the_line() {
-        let bad_kind = format!("{}\nX/1,INDEX,*,,,,percent,10,src,verified,\n", header());
+        let bad_kind = format!("{}\nX/1,INDEX,*,,,percent,10,src,verified,\n", header());
         assert!(parse_table(&bad_kind).is_err_and(|e| e.contains("line 2")));
-        let bad_percent = format!("{}\nX/1,FUT,*,,,,percent,0,src,verified,\n", header());
+        let bad_percent = format!("{}\nX/1,FUT,*,,,percent,0,src,verified,\n", header());
         assert!(parse_table(&bad_percent).is_err());
         let overlap = format!(
-            "{}\nX/1,FUT,*,A,,,percent,10,src,verified,\nX/2,FUT,*,A,2025-01-01,,percent,12,src,verified,\n",
+            "{}\nX/1,FUT,*,,,percent,10,src,verified,\nX/2,FUT,*,2025-01-01,,percent,12,src,verified,\n",
             header()
         );
         assert!(parse_table(&overlap).is_err_and(|e| e.contains("X/2")));

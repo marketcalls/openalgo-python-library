@@ -3,18 +3,21 @@
 //! Config keys read here (set by `openalgo/backtest/_market.py`):
 //! - `costs`: None (cost-free) or a native `CostModel` (`openalgo.backtest.costs`);
 //! - `market`: absent, or one dict per instrument with `underlying`, `bse_group`,
-//!   `slippage_class` (a code of the default slippage table) and `slippage` (None, or
-//!   the instrument's own slippage as (kind, amount, min_ticks)).
+//!   `slippage_class` (a code of the default slippage table), `slippage` (None, or
+//!   the instrument's own slippage as (kind, amount, min_ticks)) and `futures_margin`
+//!   (absent or None, or a futures contract's own margin as ("percent", percent of
+//!   contract value) or ("rupees_per_lot", rupees)).
 //!
 //! The tables cross as tuples: `slippage_defaults()` gives (row_id, class, valid_from,
 //! valid_to, model, amount, min_ticks, source, status, notes) and `margin_defaults()`
-//! (row_id, kind, product, underlying, valid_from, valid_to, model, percent, source,
-//! status, notes), with dates as IST days since 1970-01-01 or None.
+//! (row_id, kind, product, valid_from, valid_to, model, percent, source, status, notes),
+//! with dates as IST days since 1970-01-01 or None.
 
 use oa_bt::engine::{CostConfig, KernelError};
 use oa_bt::market::facts::{InstrumentMarket, MarketFacts};
 use oa_bt::market::margin::{
-    margin_defaults as margin_rows, MarginBasis, MarginError, MarginModel, MarginRequest,
+    margin_defaults as margin_rows, FuturesMargin, MarginBasis, MarginError, MarginModel,
+    MarginRequest,
 };
 use oa_bt::market::slippage::{
     slippage_defaults as slippage_rows, SlippageClass, SlippageError, SlippageSpec,
@@ -57,7 +60,6 @@ type MarginRowTuple = (
     String,
     &'static str,
     &'static str,
-    Option<String>,
     Option<i32>,
     Option<i32>,
     &'static str,
@@ -83,9 +85,30 @@ pub(super) fn costs(dict: &Bound<'_, PyDict>) -> PyResult<CostConfig> {
     }
 }
 
+/// A futures contract's own margin as it crosses: ("percent", percent of contract
+/// value) or ("rupees_per_lot", rupees).
+fn futures_margin((kind, amount): (String, f64)) -> PyResult<FuturesMargin> {
+    let margin = match kind.as_str() {
+        "percent" => FuturesMargin::PercentOfValue(amount),
+        "rupees_per_lot" => FuturesMargin::RupeesPerLot(amount),
+        _ => {
+            return Err(unknown(
+                "futures margin kind",
+                &kind,
+                "percent or rupees_per_lot",
+            ))
+        }
+    };
+    margin
+        .validate()
+        .map_err(|error| NativeEngineInputError::new_err(error.to_string()))?;
+    Ok(margin)
+}
+
 fn instrument_market(dict: &Bound<'_, PyDict>) -> PyResult<InstrumentMarket> {
     let class: Option<String> = optional(dict, "slippage_class")?;
     let own: Option<(String, f64, u32)> = optional(dict, "slippage")?;
+    let margin: Option<(String, f64)> = optional(dict, "futures_margin")?;
     Ok(InstrumentMarket {
         underlying: optional(dict, "underlying")?,
         bse_group: optional(dict, "bse_group")?,
@@ -101,6 +124,7 @@ fn instrument_market(dict: &Bound<'_, PyDict>) -> PyResult<InstrumentMarket> {
             })
             .transpose()?,
         slippage: own.map(slippage).transpose()?,
+        futures_margin: margin.map(futures_margin).transpose()?,
     })
 }
 
@@ -168,29 +192,21 @@ fn margin_defaults() -> PyResult<Vec<MarginRowTuple>> {
                 MarginBasis::Percent { percent } => ("percent", percent),
             };
             let kind = row.kind.code();
-            let underlying = row.underlying.clone();
             (
-                id, kind, product, underlying, from, to, model, percent, source, status, notes,
+                id, kind, product, from, to, model, percent, source, status, notes,
             )
         })
         .collect())
 }
 
-/// The id of the margin row that prices opening a long position of `kind` ("EQ",
-/// "FUT", "OPT") in `product` on the IST day `day` (days since 1970-01-01) on
-/// `underlying` (None when it has none), so a run can check before loading any data that
-/// every instrument it trades has a margin. Raises what the engine raises at the fill:
-/// NotImplementedError for a futures underlying with no row, NativeEngineInputError for
+/// The id of the default-table row that prices opening a long position of `kind`
+/// ("EQ", "FUT", "OPT") in `product` on the IST day `day` (days since 1970-01-01), so a
+/// run can check before loading any data that every instrument it trades has a margin.
+/// The request carries no own futures margin, so a row always prices it when it is
+/// priced at all. Raises what the engine raises at the fill: NativeEngineInputError for
 /// a kind and product with no rule.
 #[pyfunction]
-#[pyo3(signature = (exchange, kind, product, day, underlying))]
-fn margin_check(
-    exchange: &str,
-    kind: &str,
-    product: &str,
-    day: PyDay,
-    underlying: Option<String>,
-) -> PyResult<String> {
+fn margin_check(exchange: &str, kind: &str, product: &str, day: PyDay) -> PyResult<Option<String>> {
     let request = MarginRequest {
         exchange: parse_exchange(exchange)?,
         kind: InstrumentKind::from_code(kind)
@@ -201,14 +217,15 @@ fn margin_check(
         quantity_units: 1.0,
         price_rupees: 1.0,
         multiplier: 1.0,
+        lot_size_units: 1.0,
         leverage: 1.0,
         day: day.0,
-        underlying: underlying.as_deref(),
+        futures_margin: None,
     };
     let quote = MarginModel
         .initial_margin(&request)
         .map_err(|error| engine_error(KernelError::Margin(error)))?;
-    Ok(quote.row.meta.id.clone())
+    Ok(quote.row.map(|row| row.meta.id.clone()))
 }
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
