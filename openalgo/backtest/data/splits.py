@@ -1,5 +1,4 @@
-"""Split and bonus detection from the bars themselves (FR-DATA-10, FR-MKT-10; PRD 06
-section 5 and PRD 04 section 7).
+"""Split and bonus detection from the bars themselves.
 
 OpenAlgo's sources supply no corporate-action data, and the history they return may not
 be adjusted for splits and bonuses. A split or bonus of factor f (shares held after the
@@ -35,8 +34,8 @@ A declaration applies to the first boundary whose later session is on or after i
 ex-date, so it still finds its gap when the bars miss the ex-date session.
 
 The check runs on shares on NSE and BSE at intraday and daily intervals. An index has
-no corporate actions, and adjusting derivative contracts at a corporate action is
-FR-MKT-14 (Phase 6), so a series on another exchange is listed under `not_run`.
+no corporate actions, and adjusting derivative contracts at a corporate action is not
+supported in this version, so a series on another exchange is listed under `not_run`.
 """
 
 from __future__ import annotations

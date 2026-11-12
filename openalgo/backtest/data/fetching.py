@@ -1,4 +1,4 @@
-"""Raw history from an OpenAlgo server: transport, chunking, pacing and backoff (FR-DATA-07).
+"""Raw history from an OpenAlgo server: transport, chunking, pacing and backoff.
 
 Why not `client.history()`: the SDK turns the response into a DataFrame whose
 index is tz-aware IST for intraday intervals, naive for D, W and M and shifted by

@@ -1,4 +1,4 @@
-"""Timestamp normalisation into the canonical bars layout (PRD 06 section 3).
+"""Timestamp normalisation into the canonical bars layout.
 
 `build_bars` is the single path every source goes through, on every load. It takes
 one stamp per row, already converted to a UTC instant, and produces `ts_open` and

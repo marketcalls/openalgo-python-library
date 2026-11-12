@@ -1,4 +1,4 @@
-"""OpenAlgo symbol parsing and formatting (FR-INST-01).
+"""OpenAlgo symbol parsing and formatting.
 
 The OpenAlgo symbol string, together with the exchange code, is the primary key of an
 instrument. The formats are:

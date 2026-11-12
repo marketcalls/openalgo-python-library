@@ -23,10 +23,16 @@ def counted(count: int, singular: str, plural: str | None = None) -> str:
     return f"{count} {singular if count == 1 else plural or singular + 's'}"
 
 
+def unsupported(feature: str, instead: str) -> str:
+    """The message for `feature`, which this version does not run, saying what the user
+    can do `instead`; for an error whose type says more than NotImplementedError would."""
+    return f"{feature} is not supported in this version: {instead}"
+
+
 def not_supported(feature: str, instead: str) -> NotImplementedError:
     """The NotImplementedError for `feature`, which this version does not run, saying
     what the user can do `instead`."""
-    return NotImplementedError(f"{feature} is not supported in this version: {instead}")
+    return NotImplementedError(unsupported(feature, instead))
 
 
-__all__ = ["SEVERAL_STRATEGIES", "counted", "not_supported"]
+__all__ = ["SEVERAL_STRATEGIES", "counted", "not_supported", "unsupported"]

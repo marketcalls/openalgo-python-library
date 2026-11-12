@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import reference
+from ._messages import unsupported
 from .errors import ReferenceDataError
 from .reference import Instrument, SymbolError, format_symbol, parse_symbol
 
@@ -26,6 +27,9 @@ from .reference import Instrument, SymbolError, format_symbol, parse_symbol
 # contracts: a monthly contract expires within about five weeks of any date, and the
 # next-month rank needs one contract more.
 LOOKAHEAD_DAYS = 75
+# The expiry of the example contract in the message for an underlying without expiry
+# rules (`_no_expiry_rule`): it only shapes the example symbol and date the user replaces.
+EXAMPLE_EXPIRY = dt.date(2026, 11, 18)
 
 
 @dataclass(frozen=True)
@@ -59,9 +63,30 @@ def _last_day(instrument: Instrument) -> dt.date:
     return instrument.last_trading_day or instrument.expiry
 
 
+def _no_expiry_rule(name: str, exchange: str) -> str:
+    """The message for an underlying the reference tables have no monthly expiry rule
+    for (MCX commodities, for one), with an example of the call that gives the run its
+    contracts instead."""
+    symbol = format_symbol(name, EXAMPLE_EXPIRY)
+    expiry = f"datetime.date({EXAMPLE_EXPIRY.year}, {EXAMPLE_EXPIRY.month}, {EXAMPLE_EXPIRY.day})"
+    example = (
+        f'bt.backtest(Strategy, ..., instrument={{"{symbol}": Instrument(symbol="{symbol}", '
+        f'exchange="{exchange}", kind="future", underlying="{name}", expiry={expiry}, '
+        "lot_size=..., tick_size=...), ...})"
+    )
+    return unsupported(
+        f"{name} futures on {exchange} without instrument=",
+        f"the reference tables have no expiry rule for {name} on {exchange}, so pass every "
+        "contract the run trades with instrument=, each with its own expiry, lot size and "
+        f"tick size, for example {example}, with Instrument from openalgo.backtest.reference",
+    )
+
+
 def listed_contracts(name: str, plan: Any, given: Any, calendar: Any) -> list[Contract]:
     """The underlying's monthly contracts, nearest first (see the module docstring).
-    Raises ReferenceDataError when the reference tables cannot list them."""
+    Raises ReferenceDataError when the reference tables cannot list them: saying to pass
+    the contracts with `instrument=` when the tables have no expiry rule for the
+    underlying, else why they cannot."""
     mine = [
         i
         for i in _given(given)
@@ -77,6 +102,8 @@ def listed_contracts(name: str, plan: Any, given: Any, calendar: Any) -> list[Co
             name, plan.exchange, plan.start, last, calendar, series="monthly", record_use=False
         )
     except ReferenceDataError as exc:
+        if not tables.rows("expiry_rules", (name.upper(), plan.exchange, "monthly")):
+            raise ReferenceDataError(_no_expiry_rule(name, plan.exchange)) from None
         raise ReferenceDataError(
             f"{name} on {plan.exchange}: the reference tables cannot list its monthly "
             f"futures ({exc}). Pass the contracts with instrument={{symbol: Instrument(...)}} "

@@ -45,7 +45,7 @@ class Bar(NamedTuple):
     opens at `time` and is closed at `close_time`). Immutable.
 
     The IST datetimes are made when they are read: making two for every bar was most of
-    the cost of an `on_bar` call (NFR-PERF-04), and many strategies never read them."""
+    the cost of an `on_bar` call, and many strategies never read them."""
 
     symbol: str
     ts_open: int

@@ -558,6 +558,9 @@ across a NaN bar.
 - The `broker_units` reference table records that a live OpenAlgo server's Zerodha
   master contract gives MCX `lotsize` in units (observed 2026-11-12); the broker-side
   conversion to contracts remains unconfirmed.
+- `result.orders` marks an order without a `reject_code`, `tag` or `sizer` with NaN in
+  that column in every run; before, it was None when no order of the run had one and
+  NaN when another did (an exit after an entry with the default size).
 
 ## [2.0.5] - 2026-09-11
 

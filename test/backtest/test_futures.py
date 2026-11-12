@@ -28,7 +28,7 @@ import openalgo.backtest as bt
 from openalgo import ta
 from openalgo.backtest import _futures, reference
 from openalgo.backtest.calendar import default_calendar
-from openalgo.backtest.errors import ConfigError
+from openalgo.backtest.errors import ConfigError, ReferenceDataError
 from openalgo.backtest.reference import Instrument
 
 CALENDAR = default_calendar()
@@ -262,6 +262,40 @@ def test_underlyings_in_symbols_are_futures_series_and_contracts_are_not():
 
     assert _futures.underlying_names(Pair, "NFO") == ("HDFCBANK", "ICICIBANK")
     assert _futures.underlying_names(Contracts, "NFO") == ()
+
+
+def _refusal(underlying: str, exchange: str, start: dt.date) -> str:
+    """The ReferenceDataError message of a futures run on `underlying` with no
+    `instrument=`, from `start` for three weeks."""
+
+    declared = {"underlying": underlying, "exchange": exchange, "interval": "D"}
+    strategy = type("Futures", (bt.Strategy,), declared)
+    with pytest.raises(ReferenceDataError) as caught:
+        bt.backtest(strategy, capital=1_000_000, start=start, end=start + dt.timedelta(days=21))
+    return str(caught.value)
+
+
+def test_an_mcx_underlying_without_instrument_says_to_pass_each_contract():
+    # The built-in reference tables have no MCX expiry rules, so the run cannot list
+    # CRUDEOIL's monthly contracts on its own.
+    message = _refusal("CRUDEOIL", "MCX", dt.date(2026, 10, 1))
+    assert message.startswith(
+        "CRUDEOIL futures on MCX without instrument= is not supported in this version: "
+        "the reference tables have no expiry rule for CRUDEOIL on MCX, so pass every "
+        "contract the run trades with instrument="
+    )
+    assert (
+        'bt.backtest(Strategy, ..., instrument={"CRUDEOIL18NOV26FUT": Instrument('
+        'symbol="CRUDEOIL18NOV26FUT", exchange="MCX", kind="future", underlying="CRUDEOIL", '
+        "expiry=datetime.date(2026, 11, 18), lot_size=..., tick_size=...), ...})"
+    ) in message
+
+
+def test_an_underlying_whose_rules_miss_the_run_dates_says_which_dates_they_cover():
+    # NIFTY's monthly expiry rules start on 2019-01-01, after a run in January 2015.
+    message = _refusal("NIFTY", "NFO", dt.date(2015, 1, 1))
+    assert "is not supported in this version" not in message
+    assert "Rows for this key cover 2019-01-01 to the present" in message
 
 
 def test_an_underlying_on_a_cash_exchange_is_refused():

@@ -5,13 +5,20 @@ one never reads as a plural.
 
 The not-built errors are reached through the public API, one row each; the string
 literals of the package and of the kernel (Rust code that reaches Python) are scanned
-so that no new message brings a reference back.
+so that no new message brings a reference back, and so are the docstrings a user reads
+through `help()`.
 """
 
 import ast
 import datetime as dt
+import functools
+import importlib
+import inspect
+import pkgutil
 import re
+from collections.abc import Iterator
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from strategy_samples import daily_bars, run
@@ -26,6 +33,15 @@ ROOT = Path(__file__).resolve().parents[2]
 PLANNING = re.compile(
     r"\bN?FR-[A-Z]+-\d+|\bSPEC-\d+|\bLEAD-\d+|\bGTT-\d{1,2}\b|\bTIMES-\d+|\bD\d{1,2}\b"
     r"|[Pp]hase \d|work in progress|\b\d{2}-[a-z]+(?:-[a-z]+)* \d|\bPRD\b"
+)
+# What a docstring may not cite either: a design document by its name alone
+# ("05-risk-management", "06-data-layer.md"), a bare section number ("the grammar of
+# 4.2"), a numbered section, or a lead ruling.
+DOCSTRING_PLANNING = re.compile(
+    PLANNING.pattern
+    + r"|\b\d{2}-(?:requirements|prd|architecture|execution|risk-management|data-layer"
+    r"|research|live-trading|roadmap|simple-path|portfolio|position-sizing|competitive"
+    r"|strategy-api)|\b(?:of|in|see) \d\.\d\b|\bsections? \d|\blead ruling"
 )
 NOT_SUPPORTED = " is not supported in this version: "
 DAYS = [dt.date(2025, 7, day) for day in (1, 2, 3, 4, 7)]
@@ -141,6 +157,84 @@ def test_no_message_string_of_the_kernel_cites_a_planning_reference():
         for path in _kernel_sources()
         for text in _rust_literals(path)
         if PLANNING.search(text)
+    ]
+    assert found == []
+
+
+def _public_modules() -> list[ModuleType]:
+    """The package and every submodule whose dotted path has no part with a leading
+    underscore."""
+    modules = [bt]
+    for info in pkgutil.walk_packages(bt.__path__, f"{bt.__name__}."):
+        if not any(part.startswith("_") for part in info.name.split(".")):
+            modules.append(importlib.import_module(info.name))
+    return modules
+
+
+def _documented(value: object) -> object | None:
+    """The function or class whose docstring `value` shows in `help()`, or None for a
+    value that has no docstring of its own (a constant, a native function)."""
+    if isinstance(value, property):
+        value = value.fget
+    elif isinstance(value, classmethod | staticmethod):
+        value = value.__func__
+    elif isinstance(value, functools.cached_property):
+        value = value.func
+    if not (inspect.isfunction(value) or inspect.isclass(value)):
+        return None
+    return value if value.__module__.startswith("openalgo.backtest") else None
+
+
+def _members(cls: type) -> Iterator[tuple[str, object]]:
+    """The public attributes of a class, including those it inherits from the package's
+    own classes (the order methods `Strategy` takes from its mixin); a name the class
+    overrides is taken from the class, as `help()` shows it."""
+    seen: set[str] = set()
+    for klass in cls.__mro__:
+        if klass.__module__.startswith("openalgo.backtest"):
+            for name, value in vars(klass).items():
+                if not name.startswith("_") and name not in seen:
+                    seen.add(name)
+                    yield f"{cls.__name__}.{name}", value
+
+
+def _public_docstrings() -> dict[str, str]:
+    """By qualified name: the docstring of every public module, of every name in its
+    `__all__` and of every public member of those classes."""
+    found: dict[str, str] = {}
+    for module in _public_modules():
+        found[module.__name__] = module.__doc__ or ""
+        for name in getattr(module, "__all__", ()):
+            value = getattr(module, name)
+            entries = [(name, value)]
+            if inspect.isclass(value):
+                entries += list(_members(value))
+            for label, entry in entries:
+                documented = _documented(entry)
+                if documented is not None:
+                    found[f"{module.__name__}.{label}"] = documented.__doc__ or ""
+    return found
+
+
+def test_the_walk_reaches_the_public_surface():
+    names = _public_docstrings()
+    assert {
+        "openalgo.backtest",
+        "openalgo.backtest.size.caps",
+        "openalgo.backtest.data.DataProvider",
+        "openalgo.backtest.run.backtest",
+        "openalgo.backtest.result.Result.settlements",
+        "openalgo.backtest.strategy.Strategy.buy",
+        "openalgo.backtest.strategy.Strategy.on_fill",
+        "openalgo.backtest.units.lock",
+    } <= set(names)
+
+
+def test_no_public_docstring_cites_a_planning_reference():
+    found = [
+        f"{name}: {match.group(0)!r}"
+        for name, text in _public_docstrings().items()
+        for match in DOCSTRING_PLANNING.finditer(text)
     ]
     assert found == []
 

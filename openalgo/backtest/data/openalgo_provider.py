@@ -1,11 +1,11 @@
-"""The OpenAlgo data provider: broker history, Historify and the "auto" choice (FR-DATA-01, 02).
+"""The OpenAlgo data provider: broker history, Historify and the "auto" choice.
 
 `source="api"` asks the broker through the OpenAlgo server, `source="db"` reads
 Historify, and `source="auto"` probes Historify and uses it for the whole range if
 it is complete, otherwise the broker for the whole range. The two are never
 stitched together, because their bars are aggregated differently.
 
-The probe behind "auto" (PRD 06 section 1, PRD 14 section 6). An API key cannot
+The probe behind "auto": an API key cannot
 query Historify's catalog, so coverage is decided with history requests. Historify
 is complete for a range when it returns a daily bar for every session of the range
 that has closed and, for an intraday interval, bars inside the session of the first

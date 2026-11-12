@@ -1,4 +1,4 @@
-"""`Result`: what `bt.backtest` returns (14-strategy-api section 5).
+"""`Result`: what `bt.backtest` returns.
 
 The tables are pandas DataFrames built from the kernel's result columns. Times are IST
 (`time` columns, tz-aware) next to the kernel's UTC nanoseconds (`*_ts` columns);
@@ -11,12 +11,13 @@ history), `events`, `risk_events`, `stale_marks`, `final_positions`, `gross_pnl`
 `metrics`, `metrics_table()`, `monte_carlo()`, `tearsheet()` (full, basic, metrics or
 charts), `r_summary` (the R-multiples, `_result_r`), `assumptions`,
 `warnings`, `skipped`, `manifest` (see `_manifest`), `rerun()` (see `_rerun`),
-`to_dataframes()`. Not built yet: the several-strategy views `strategy()`, `combined`,
-`correlation` (Phase 3).
+`to_dataframes()`. Not supported in this version: the several-strategy views
+`strategy()`, `combined` and `correlation`, which raise NotImplementedError.
 """
 
 from __future__ import annotations
 
+import math
 from functools import cached_property
 from typing import Any
 
@@ -71,6 +72,16 @@ FINAL_POSITION_COLUMNS = (
     "unrealized_rupees",
     "stale",
 )
+# The columns of the orders table that hold a string or nothing. A missing one is NaN in
+# an object column, as the events table marks a missing key, whatever the other rows
+# hold: left to pandas, a column of None alone stays None while one with a string turns
+# None into NaN, so the marker would depend on the run.
+ORDER_TEXT_COLUMNS = ("reject_code", "tag", "sizer")
+
+
+def _text(values: list[str | None]) -> pd.Series:
+    """An object column of strings with NaN, pandas' missing value, for each None."""
+    return pd.Series([math.nan if value is None else value for value in values], dtype=object)
 
 
 def _times(values: Any) -> pd.DatetimeIndex:
@@ -132,8 +143,16 @@ class Result:
 
     @property
     def orders(self) -> pd.DataFrame:
-        """Every order with its final state and reject code."""
-        return self._table("orders", "decided_at")
+        """Every order with its final state and reject code. `sizer` names what set the
+        quantity: a `bt.size` sizer ("qty", "lots", "value", "percent", "fixed_risk",
+        "atr_risk"), "function" for a sizing function or "default" for the engine
+        default. `reject_code`, `tag` and `sizer` are NaN for an order without one (a
+        quantity given in units, in lots or as a fraction of the position, as `qty=`,
+        `lots=` and `exit()` give it, has no sizer)."""
+        frame = self._table("orders", "decided_at")
+        for name in ORDER_TEXT_COLUMNS:
+            frame[name] = _text(self._output["orders"][name])
+        return frame
 
     @property
     def trades(self) -> pd.DataFrame:
@@ -276,11 +295,12 @@ class Result:
 
     @property
     def settlements(self) -> pd.DataFrame:
-        """The futures mark to market (04-execution 7): a row per futures position at
-        each session close (`kind` "daily") and for a contract settled on its last
-        trading day ("expiry"), with the units held after the close, the settlement
-        price, `last_close_used` (no settlement price in the data, so the last close)
-        and the cash flow in rupees. The postings sum to the position's gross P&L."""
+        """The futures mark to market, the cash each futures position gains or loses: a
+        row per position at each session close (`kind` "daily") and for a contract
+        settled on its last trading day ("expiry"), with the units held after the close,
+        the settlement price, `last_close_used` (no settlement price in the data, so the
+        last close) and the cash flow in rupees. The postings sum to the position's
+        gross P&L."""
         return _result_futures.settlements_frame(self._output, self._symbols)
 
     @property

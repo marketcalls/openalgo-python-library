@@ -55,7 +55,7 @@ class OrderMethods:
         sizing function `size(ctx, order)`, see `bt.size`), else the strategy's `size`,
         else the engine default. `leverage=` asks for intraday leverage, else the
         strategy's `leverage`, else 1x. Risk arguments attach to the position it opens
-        (an add may repeat them but not change them, SPEC-14); on CNC and NRML they are
+        (an add may repeat them but not change them); on CNC and NRML they are
         held as GTT orders. `validity="gtt"` rests it as a GTT until it fires or is
         cancelled (CNC and NRML only; it needs `price`, its trigger)."""
         return self._open("BUY", **locals_without_self(locals()))
@@ -121,7 +121,8 @@ class OrderMethods:
     ) -> Order | None:
         """Close the position, or `fraction` of it, or `qty` units, at the next open.
         Returns None when flat. The fill's reason is "signal" unless `reason=` names
-        another of 05-risk-management 7."""
+        another exit reason of the fills table, such as "manual"; an unknown reason is
+        an error that lists them."""
         return self._reduce(symbol, fraction=fraction, qty=qty, reason=reason)
 
     def reduce(
@@ -175,10 +176,10 @@ class OrderMethods:
         lots: int | None = None,
         symbol: str | None = None,
     ) -> Order | None:
-        """Trade to a target position (12-position-sizing 5): exactly one of `qty` units
-        or `lots`, taken as given, or `value` rupees or `percent` of equity (the sizing
-        equity, see `reinvest`), converted at the decision price and rounded towards zero
-        to the venue rule. Positive is long, negative short, 0 flat.
+        """Trade to a target position: exactly one of `qty` units or `lots`, taken as
+        given, or `value` rupees or `percent` of equity (the sizing equity, see
+        `reinvest`), converted at the decision price and rounded towards zero to the
+        venue rule. Positive is long, negative short, 0 flat.
 
         Sends one MARKET DAY order for the difference between the target and the
         position the strategy will hold once its queued market orders on the symbol

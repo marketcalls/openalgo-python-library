@@ -1,5 +1,4 @@
-"""Data quality checks, run on every load and returned as a structured report
-(PRD 06 section 5).
+"""Data quality checks, run on every load and returned as a structured report.
 
 Severities:
 
@@ -13,9 +12,9 @@ Severities:
   NaN where the source supplies none, pre-open bars dropped, a partial bar dropped).
 
 Timestamp offsets and mixed conventions are not in the report: they stop
-normalisation with a TimestampError. The checks of PRD 06 section 5 that this phase
-does not run are listed in every report under `not_run`, so that their absence from
-`issues` is never read as a pass.
+normalisation with a TimestampError. The checks that this version does not run are
+listed in every report under `not_run`, so that their absence from `issues` is never
+read as a pass.
 """
 
 from collections.abc import Iterable

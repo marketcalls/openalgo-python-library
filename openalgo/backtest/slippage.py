@@ -1,8 +1,8 @@
-"""Slippage for `bt.backtest(slippage=...)` (04-execution-and-market-model section 4.3).
+"""Slippage for `bt.backtest(slippage=...)`.
 
 Every MARKET fill, entry or exit, is worse than its reference price by the slippage for
 its side (a buy pays more, a sell receives less) and is rounded to the tick away from
-the trader (decision SPEC-27). The forms:
+the trader. The forms:
 
     "default"              the dated default table, one row per slippage class (the
                            default; see `defaults()`)
@@ -39,7 +39,7 @@ from .units import Distance
 
 #: The slippage classes of the default table, in table order.
 CLASSES: tuple[str, ...] = tuple(dict.fromkeys(row[1] for row in native.slippage_defaults()))
-#: The least slippage, in ticks, of the bps and percent forms (04-execution 4.3).
+#: The least slippage, in ticks, of the bps and percent forms.
 MIN_TICKS = 1
 _ROW_FIELDS = (
     "row_id",
