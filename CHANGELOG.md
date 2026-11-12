@@ -563,6 +563,16 @@ across a NaN bar.
 - `result.orders` marks an order without a `reject_code`, `tag` or `sizer` with NaN in
   that column in every run; before, it was None when no order of the run had one and
   NaN when another did (an exit after an entry with the default size).
+- When a reconnected socket opened, went live and dropped again before the reconnect
+  thread looked at it, the feed stayed down for the 5-second connect timeout before the
+  next attempt. A connection attempt now ends as soon as its socket is refused or
+  closes, so the next attempt follows its backoff, and `connect()` to a server that
+  refuses returns False at once instead of after the timeout.
+- A depth callback that edited a level of its update changed what `get_depth()`
+  returns. Data callbacks now receive their own copy of the update, nested levels
+  included.
+- An error reported while the last `on_error` hook was being removed reached neither a
+  hook nor the `openalgo.feed` logger. It is now logged.
 
 ## [2.0.5] - 2026-09-11
 

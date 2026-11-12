@@ -12,7 +12,7 @@ import websocket
 from .base import BaseAPI
 from . import _feed_ticks as ticks
 from ._feed_errors import ErrorReporter, FeedServerError, server_rejection
-from ._feed_hooks import HookRegistry
+from ._feed_hooks import HookRegistry, fresh_copy
 from ._feed_replay import PendingReplay, ReplayTracker
 from ._feed_state import MODES, Link, Phase, Timing
 from ._feed_url import DEFAULT_WS_PORT, derive_ws_url
@@ -334,12 +334,13 @@ class FeedAPI(BaseAPI):
             if replaced is not None:
                 self._close_unused(replaced)
 
-            # Wait for connection to establish
+            # Wait while the socket is being opened. Not for self.connected:
+            # the socket can open, go live and drop again between two looks,
+            # and nothing would then end the wait before the timeout. Refused,
+            # closed or disconnect() ends it at once.
             timeout = self._timing.connect
             start_time = time.time()
-            while not self.connected and time.time() - start_time < timeout:
-                if self._shutting_down:
-                    break  # disconnect() was called: there is nothing left to wait for
+            while self._link.phase is Phase.CONNECTING and time.time() - start_time < timeout:
                 time.sleep(self._timing.poll)
 
             if not self.connected:
@@ -830,9 +831,11 @@ class FeedAPI(BaseAPI):
         else:
             return
 
-        # Invoke callback if set, with a clean copy of what was stored
+        # Invoke callback if set, with a clean copy of what was stored. The copy
+        # goes all the way down: the depth levels are lists of dicts, and a
+        # callback that edits one must not change what get_depth() returns.
         if callback:
-            clean_data = ticks.callback_message(message, update.copy())
+            clean_data = ticks.callback_message(message, fresh_copy(update))
             self._deliver(MODES[mode].label, callback, clean_data, message)
 
     def _valid_instruments(self, instruments: List[Dict[str, Any]]) -> Iterator[Dict[str, Any]]:

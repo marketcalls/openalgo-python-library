@@ -94,6 +94,43 @@ def test_reconnect_attempt_that_was_already_decided_is_refused_after_disconnect(
     assert (connected.connected, len(server.sockets)) == (False, 1)
 
 
+class HeldBeforeTheFirstLook:
+    """Stands in for the waiting times of a client (its test seam, _timing).
+
+    A reconnect attempt reads the connect timeout after it has started its
+    socket and before it first looks whether that socket has opened. The first
+    read on a thread other than the test's is held there until go_on is set.
+    """
+
+    def __init__(self, timing):
+        self._timing = timing
+        self.holding = threading.Event()
+        self.go_on = threading.Event()
+
+    def __getattr__(self, name):
+        on_the_reconnect_thread = threading.current_thread() is not threading.main_thread()
+        if name == "connect" and on_the_reconnect_thread and not self.holding.is_set():
+            self.holding.set()
+            self.go_on.wait(WAIT)
+        return getattr(self._timing, name)
+
+
+def test_connection_that_drops_before_the_reconnect_thread_looks_at_it_is_restored(
+    server, connected, recorder
+):
+    # A reconnect thread that waits out the connect timeout instead of trying
+    # again cannot restore the feed within this test.
+    shorten(connected, connect=10 * WAIT)
+    timing = HeldBeforeTheFirstLook(connected._timing)
+    connected._timing = timing
+    server.last.drop()
+    assert timing.holding.wait(WAIT)  # the second socket has been started
+    assert wait_for(lambda: recorder.count("reconnect") == 1)  # it went live unobserved
+    server.last.drop()
+    timing.go_on.set()
+    assert wait_for(lambda: recorder.count("reconnect") == 2)
+
+
 def test_disconnect_that_starts_while_a_drop_is_handled_gives_one_consistent_report(
     server, connected, recorder
 ):

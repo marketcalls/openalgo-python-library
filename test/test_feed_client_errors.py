@@ -7,6 +7,7 @@ Fake socket only: see feed_fakes.py. Nothing here reaches the network.
 
 import json
 import logging
+import time
 
 import pytest
 from feed_fakes import (
@@ -16,6 +17,7 @@ from feed_fakes import (
     KEY_REFUSED,
     KINDS,
     SBIN,
+    WAIT,
     Recorder,
     feed_log,
     message_for,
@@ -220,6 +222,15 @@ def test_failed_connection_names_the_url_it_tried_and_the_ws_url_override(
         "[ERROR]  Failed to connect to WebSocket server at wss://trade.example.org/ws. "
         "If the feed is served at another URL, pass ws_url= to the client."
     ]
+
+
+def test_refused_connection_returns_without_waiting_for_the_connect_timeout(server, make_client):
+    server.accept = False
+    client = make_client(auto_reconnect=False)
+    shorten(client, connect=2 * WAIT)
+    started = time.time()
+    assert client.connect() is False
+    assert time.time() - started < WAIT
 
 
 # ---------------------------------------------------------------------------
