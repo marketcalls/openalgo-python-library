@@ -64,8 +64,9 @@ CALLBACKS_PER_SECOND_TARGET = 300_000
 # 1M bars with full metrics, one core. The PRD states it relative to another engine; the
 # repository keeps an absolute target instead: 2 seconds for the whole call (data
 # checks, the kernel with charges and slippage, the result tables, every metric), 2
-# microseconds per bar, on a current desktop core. Measured there: 1.1 to 1.5 seconds,
-# depending on the clock speed the core holds under sustained load.
+# microseconds per bar, on a current desktop core (confirmed by the maintainer on
+# 2026-11-12). Measured there: 1.1 to 1.5 seconds, depending on the clock speed the core
+# holds under sustained load.
 CONDITIONS_1M_SECONDS_TARGET = 2.0
 # Linearity in trades: the run time one round trip adds (two orders, two fills, their
 # charges, events and result rows) on the 375k-bar run, at most this many microseconds.
