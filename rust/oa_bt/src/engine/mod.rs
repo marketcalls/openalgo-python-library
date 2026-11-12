@@ -39,7 +39,7 @@
 //! | `Engine::submit(OrderRequest)` | while paused | submission checks, `Submitted` or `Rejected` |
 //! | `Engine::cancel(OrderId)` | while paused | cancel a working order |
 //! | `Engine::modify(OrderId, OrderRequest)` | while paused | not built yet |
-//! | `position`, `leg`, `order`, `working_orders`, `has_pending_entry`, `account`, `last_close`, `decision_instant` | any time | queries |
+//! | `position`, `leg`, `order`, `working_orders`, `has_pending_entry`, `account`, `last_close`, `decision_instant`, `trading_state` | any time | queries |
 //! | `Engine::finish()` | after `Pause::Finished` | the `RunOutput` |
 //! | `pause::run(engine, driver)` | Rust drivers | the loop above, for a `Driver` |
 //!
@@ -68,7 +68,7 @@
 //! | 3 resting orders, leg levels | `steps::step_levels` -> `rms::LegState::test_bar` | no (plain legs only) |
 //! | 4 ratchets | `steps::step_ratchets` -> `rms::LegState::ratchet` | no |
 //! | 5 mark | `steps::step_mark`: close, or last close and stale | yes |
-//! | 6 aggregate rules | refused at `RunConfig::validate` until built | no |
+//! | 6 aggregate rules | `aggregate::step_aggregate_rules`: daily loss limit, drawdown halt; their exits at the next open (`risk_exits_at_open`, step 2) or the last close; the session boundary in step 1 (`risk_session_open`) | yes (combined rules: Phase 3) |
 //! | 7 callbacks and `on_bar` | `steps::callbacks_pause` -> `Pause::BarClose`; `submit::submit` | yes |
 //! | 8 session close | `steps::close_slice`: expire DAY orders, close open MIS positions at the last close (reason `eod`, flagged); settlement and futures MTM no | partly |
 //!
@@ -96,6 +96,9 @@
 //! | `fills` | Step 2 fills of queued orders, `execute_fill` |
 //! | `session` | Intraday times per session, the entry window, the square-off timer |
 //! | `submit` | `submit`, `cancel`, `modify`, the submission checks, DAY validity and market closed |
+//! | `aggregate` | Step 6 (daily loss limit, drawdown halt), the step-1 session boundary, the exits they queue |
+//! | `entry_rules` | Entry gates at submission (trading state, cooldown, maximum positions), the time exit, the fill hook |
+//! | `strategy_risk` | `StrategyRisk`: trading state and the bookkeeping of the strategy and session rules |
 //! | `pause` | `Pause`, `Driver`, `run` |
 //! | `signals` | Condition and array strategies (not built yet) |
 //! | `event` | `Event`, `EventStamp`, `Step` |
@@ -112,11 +115,14 @@
 //! intervals on an intraday or daily base, MARKET DAY orders (entry, add, reduce,
 //! exit by fraction), the quantity, freeze, product, entry-window and market-closed
 //! checks, the square-off, margin for cash equity, zero slippage and the fixed slippage
-//! forms, the position history, the equity series, trades and events. Everything else
-//! returns `KernelError::NotBuilt` naming the feature.
+//! forms, the position history, the equity series, trades and events; the daily loss
+//! limit, the drawdown halt, the trading state, the cooldown, maximum positions and the
+//! time exit. Everything else returns `KernelError::NotBuilt` naming the feature.
 
+mod aggregate;
 pub mod clock;
 pub mod config;
+mod entry_rules;
 pub mod error;
 pub mod event;
 mod fills;
@@ -127,6 +133,7 @@ pub mod pause;
 mod session;
 pub mod signals;
 mod steps;
+mod strategy_risk;
 pub mod submit;
 
 pub use clock::{SliceInfo, Timeline};

@@ -20,6 +20,7 @@ use super::market_data::MarketData;
 use super::output::{FinalPosition, GrossPnl, Recorder, RunOutput};
 use super::pause::Pause;
 use super::session::SessionTimes;
+use super::strategy_risk::StrategyRisk;
 
 /// Where the state machine stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,6 +70,8 @@ pub struct Engine {
     pub(super) record: Recorder,
     /// Intraday times of the most recent session asked for.
     pub(super) session: Option<SessionTimes>,
+    /// Trading state and the bookkeeping of the strategy and session rules.
+    pub(super) risk: StrategyRisk,
 }
 
 /// The one exchange of a Phase 1 run.
@@ -114,6 +117,7 @@ impl Engine {
         let portfolio = Portfolio::new(config.capital_rupees)?;
         Ok(Engine {
             last_close: vec![None; instruments.len()],
+            risk: StrategyRisk::new(&config.risk, config.capital_rupees, instruments.len()),
             config,
             calendar,
             instruments,
