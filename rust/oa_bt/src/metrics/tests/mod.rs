@@ -3,14 +3,22 @@
 //! Expected values are worked out by hand in the test, or written as the published
 //! formula applied to the literal inputs; none is produced by the code under test.
 
+mod adjusted;
 mod benchmark;
 mod combine;
 mod curve;
 mod drawdown;
 mod exposure;
+mod moments;
+mod montecarlo;
 mod opening;
 mod ratios;
+mod rolling;
+mod sessions;
+mod tails;
+mod trade_ratios;
 mod trades;
+mod ulcer;
 
 use crate::model::{days_from_civil, ts_from_ist, TsNanos, NANOS_PER_DAY, NANOS_PER_HOUR};
 

@@ -30,6 +30,7 @@ use crate::model::{TsNanos, NANOS_PER_DAY};
 
 use super::curve::check_finite;
 use super::error::MetricsError;
+use super::moments::varies;
 use super::{DAYS_PER_YEAR, MIN_CAGR_DAYS};
 
 /// Volatility-based statistics of a series of session returns.
@@ -74,10 +75,15 @@ fn mean(values: &[f64]) -> f64 {
     values.iter().sum::<f64>() / values.len() as f64
 }
 
-/// Sample standard deviation (divisor `n - 1`); NaN below two values.
+/// Sample standard deviation (divisor `n - 1`); NaN below two values. Equal values
+/// give exactly 0: their computed mean can differ from them by a rounding unit, which
+/// would otherwise read as a tiny deviation and an enormous Sharpe ratio.
 pub(super) fn sample_std(values: &[f64]) -> f64 {
     if values.len() < 2 {
         return f64::NAN;
+    }
+    if !varies(values) {
+        return 0.0;
     }
     let centre = mean(values);
     let squares: f64 = values.iter().map(|v| (v - centre) * (v - centre)).sum();

@@ -66,6 +66,38 @@ fn fewer_than_two_paired_sessions_leave_everything_undefined() {
 }
 
 #[test]
+fn active_return_figures_follow_their_definitions() {
+    // s = 2b: the active return s - b is b itself, and R squared is 1.
+    let benchmark = [0.01, -0.02, 0.03];
+    let strategy = [0.02, -0.04, 0.06];
+    let mean_b: f64 = 0.02 / 3.0;
+    let squares: f64 = benchmark.iter().map(|b| (b - mean_b).powi(2)).sum();
+    let deviation = (squares / 2.0).sqrt();
+    let stats = benchmark_stats(&strategy, &benchmark, 4.0, 0.0).unwrap();
+    assert_close(stats.r_squared, 1.0);
+    assert_close(stats.tracking_error, deviation * 2.0);
+    assert_close(stats.information_ratio, mean_b / deviation * 2.0);
+    // Mean strategy return 0.04 / 3 a session, four a year, over a beta of 2.
+    assert_close(stats.treynor, 0.04 / 3.0 * 4.0 / 2.0);
+}
+
+#[test]
+fn a_strategy_that_tracks_the_benchmark_has_no_information_ratio() {
+    let returns = [0.01, -0.02, 0.03];
+    let stats = benchmark_stats(&returns, &returns, 249.0, 0.0).unwrap();
+    assert_eq!(stats.tracking_error, 0.0);
+    assert!(stats.information_ratio.is_nan());
+    assert_close(stats.r_squared, 1.0);
+}
+
+#[test]
+fn a_benchmark_of_equal_nonzero_returns_never_moves() {
+    // 0.01 three times averages to a rounding unit away from 0.01; it is still flat.
+    let stats = benchmark_stats(&[0.01, 0.02, 0.03], &[0.01; 3], 249.0, 0.0).unwrap();
+    assert!(stats.beta.is_nan() && stats.treynor.is_nan() && stats.r_squared.is_nan());
+}
+
+#[test]
 fn malformed_input_is_refused() {
     assert!(matches!(
         benchmark_stats(&[0.01], &[0.02, 0.0], 249.0, 0.0),

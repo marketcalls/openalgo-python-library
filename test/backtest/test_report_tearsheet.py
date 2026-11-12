@@ -12,17 +12,38 @@ from openalgo.backtest import metrics, report
 from openalgo.backtest.errors import ConfigError
 
 IST = "Asia/Kolkata"
+# Every section of the full report, in page order; "benchmark" only with a benchmark.
 SECTIONS = (
     "summary",
     "equity",
+    "cumulative",
+    "daily",
     "monthly",
     "yearly",
+    "return-distribution",
+    "drawdowns",
+    "rolling",
+    "horizons",
+    "benchmark",
+    "montecarlo",
     "distribution",
     "trades",
+    "streaks",
     "costs",
     "assumptions",
     "notes",
 )
+WITHOUT_BENCHMARK = tuple(name for name in SECTIONS if name != "benchmark")
+# Sections drawn as inline SVG, and how many plots each holds with a benchmark: equity
+# and drawdown; cumulative; session bars; box plot; five rolling statistics; the band.
+SVG_PLOTS = {
+    "equity": 2,
+    "cumulative": 1,
+    "daily": 1,
+    "return-distribution": 1,
+    "rolling": 5,
+    "montecarlo": 1,
+}
 # Elements that never have a closing tag in HTML.
 VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "wbr"}
 
@@ -93,8 +114,14 @@ def performance() -> metrics.Performance:
     )
     bench = pd.Series(24_000 * np.cumprod(1 + rng.normal(0.0003, 0.008, len(closes))), index=closes)
     trades = sample_trades(25, closes)
+    # Four months of sessions: a 20-session window gives every rolling chart values.
     return metrics.analyse(
-        equity, exchanges="NSE", trades=trades, benchmark=bench, risk_free_rate=0.065
+        equity,
+        exchanges="NSE",
+        trades=trades,
+        benchmark=bench,
+        risk_free_rate=0.065,
+        rolling_window=20,
     )
 
 
@@ -130,11 +157,23 @@ def test_the_page_fetches_nothing_and_runs_nothing(page):
     assert not names & {"src", "href", "onload", "onclick", "onmouseover"}
 
 
-def test_the_page_contains_every_section(page):
-    structure = Structure(page)
-    ids = {value for name, value in structure.attributes if name == "id"}
-    assert set(SECTIONS) <= ids
-    assert structure.tags["section"] == len(SECTIONS)
+def section_ids(page: str) -> list[str]:
+    """The ids of the page's sections, in page order."""
+    return [
+        value
+        for name, value in Structure(page).attributes
+        if name == "id" and not value.endswith("-title")
+    ]
+
+
+def section_of(page: str, anchor: str) -> str:
+    part = page[page.index(f"<section id='{anchor}'") :]
+    return part[: part.index("</section>")]
+
+
+def test_the_page_contains_every_section_in_order(page):
+    assert section_ids(page) == list(SECTIONS)
+    assert Structure(page).tags["section"] == len(SECTIONS)
 
 
 def test_every_tag_is_properly_nested_and_closed(page):
@@ -155,9 +194,25 @@ def test_the_page_is_plain_ascii_with_character_entities(page):
 
 
 def test_charts_are_inline_svg_and_the_histogram_marks_gains_and_losses(page):
-    structure = Structure(page)
-    assert structure.tags["svg"] == 2
-    assert "class='bin loss'" in page and "class='bin gain'" in page
+    for anchor, plots in SVG_PLOTS.items():
+        assert section_of(page, anchor).count("<svg") == plots, anchor
+    assert Structure(page).tags["svg"] == sum(SVG_PLOTS.values())
+    trades = section_of(page, "distribution")
+    assert "class='bin loss'" in trades and "class='bin gain'" in trades
+
+
+def test_the_longest_drawdowns_are_shaded_on_the_equity_chart(performance, page):
+    # Five at most: the run has as many episodes as it has.
+    shaded = min(5, len(performance.drawdown_episodes))
+    assert shaded >= 2
+    assert section_of(page, "equity").count("<rect class='shade'") == shaded
+
+
+def test_a_run_shorter_than_the_rolling_window_says_so():
+    page = report.tearsheet(metrics.analyse(edge_cases()["flat"], exchanges="NSE"))
+    rolling = section_of(page, "rolling")
+    assert "<svg" not in rolling
+    assert "the run has fewer sessions than one window" in rolling
 
 
 def test_the_trade_list_shows_the_first_and_last_rows_with_a_count(page):
@@ -228,8 +283,7 @@ def test_edge_cases_render_a_complete_page(name):
     structure = Structure(page)
     assert structure.errors == [] and structure.stack == []
     assert "No closed trades." in page and "No trades." in page
-    ids = {value for key, value in structure.attributes if key == "id"}
-    assert set(SECTIONS) <= ids
+    assert section_ids(page) == list(WITHOUT_BENCHMARK)
 
 
 def test_a_ruined_account_is_said_in_the_notes():
