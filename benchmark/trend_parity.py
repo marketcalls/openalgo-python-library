@@ -6,22 +6,25 @@ numba kernels (run pure-python via NUMBA_DISABLE_JIT) on real RELIANCE data.
 Covers the composite/standalone trend MAs whose wrappers were swapped to Rust:
 vwma, kama (full window), zlema, t3, trima, plus dema/tema/hma which compose the already
 bit-exact ema/wma kernels (checked for finiteness + identical NaN mask vs a
-utils.ema reconstruction).
+utils.ema reconstruction). FRAMA has no kernel of its own left in its class, so it is
+checked against the plain-Python reference in test/indicator_references.py.
 """
 import os
 os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "test"))
 
 import numpy as np
 import pandas as pd
 
+import indicator_references as references
 from openalgo.indicators import _backend as b
 from openalgo.indicators import utils as u
 from openalgo.indicators.trend import (KAMA, ZLEMA, T3, TRIMA, ALMA, McGinley, VIDYA,
                                         Alligator, MovingAverageEnvelopes,
-                                        Supertrend, Ichimoku, FRAMA, ChandeKrollStop)
+                                        Supertrend, Ichimoku, ChandeKrollStop)
 from openalgo import ta
 
 DATA = Path(__file__).resolve().parent / "data"
@@ -95,7 +98,7 @@ def main():
     ric = Ichimoku._calculate_ichimoku(h, lo, c, 9, 26, 52, 26)
     for nm, g, r in zip(["conv", "base", "spanA", "spanB", "lag"], ic, ric):
         cmp(f"ichimoku.{nm}", g, r)
-    cmp("frama(26)", b.frama(h, lo, 26), FRAMA._calculate_frama(h, lo, 26), tol=1e-8)
+    cmp("frama(26)", b.frama(h, lo, 26), references.frama(h, lo, 26), tol=1e-8)
 
     print("\nRESULT:", "ALL TREND PARITY PASS" if not FAILS else f"FAILURES: {FAILS}")
     return 1 if FAILS else 0

@@ -1,4 +1,4 @@
-ID,Category,Indicator,Public_API,Class,Source_File,Inputs,Parameters,Outputs,TA_Lib_Reference,Recursive_Stateful,Complexity,Phase,Status,Parity_Target,Notes
+ID,Category,Indicator,Public_API,Class,Source_File,Inputs,Parameters,Outputs,Classic_Name,Recursive_Stateful,Complexity,Phase,Status,Parity_Target,Notes
 1,Primitive,Simple Moving Average,ta.sma,SMA,trend.py,close,period,series,SMA,No,Low,1,Migrated; parity PASS,bit-exact,Core building block; rolling mean
 2,Primitive,Exponential Moving Average,ta.ema,EMA,trend.py,close,period,series,EMA,Yes,Low,1,Migrated; parity PASS,1e-12 rel,Recursive; SMA-seeded; building block
 3,Primitive,Weighted Moving Average,ta.wma,WMA,trend.py,close,period,series,WMA,No,Low,1,Migrated; parity PASS,bit-exact,Linear-weighted window; building block

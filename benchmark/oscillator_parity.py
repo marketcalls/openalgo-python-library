@@ -2,20 +2,28 @@
 """
 Oscillator parity: migrated _backend vs ORIGINAL numba kernels (NUMBA_DISABLE_JIT=1)
 on real RELIANCE data. Batch 1: ROC, CMO, TRIX, AO, AC, PPO, PO, DPO, AROONOSC.
+CMO and RVI have no kernel of their own left in their classes, so they are checked
+against the plain-Python references in test/indicator_references.py.
 """
 import os
 os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "test"))
 
 import numpy as np
 import pandas as pd
 
+import indicator_references as references
 from openalgo.indicators import _backend as b
-from openalgo.indicators.oscillators import (ROC, CMO, TRIX, AO, AC, PPO, PO, DPO, AROONOSC,
-                                             UO, StochRSI, CHO, CHOP, RVI, KST, TSI,
+from openalgo.indicators.oscillators import (ROC, TRIX, AO, AC, PPO, PO, DPO, AROONOSC,
+                                             UO, StochRSI, CHO, CHOP, KST, TSI,
                                              VI, GatorOscillator, STC, Coppock)
+
+# Where the kernel and the reference add or smooth in a different order (a fresh sum per
+# window against a running sum, for example), their values agree only to the last few bits.
+SUM_ORDER_TOL = 1e-9
 
 DATA = Path(__file__).resolve().parent / "data"
 FAILS = []
@@ -55,10 +63,11 @@ def main():
     c = df["close"].to_numpy(np.float64)
 
     cmp("roc", b.roc_osc(c, 12), ROC._calculate_roc(c, 12))
-    cmp("cmo", b.cmo(c, 14), CMO._calculate_cmo(c, 14), tol=1e-9)  # rolling vs per-window
+    cmp("cmo", b.cmo(c, 14), references.cmo(c, 14), tol=1e-9)  # rolling vs per-window
     cmp("trix", b.trix(c, 18), _trix_ref(c, 18))
-    cmp("ao", b.ao(h, lo, 5, 34), AO._calculate_sma((h + lo) / 2, 5) - AO._calculate_sma((h + lo) / 2, 34))
-    cmp("ac", b.ac(h, lo, 5), _ac_ref(h, lo, 5))
+    cmp("ao", b.ao(h, lo, 5, 34), AO._calculate_sma((h + lo) / 2, 5) - AO._calculate_sma((h + lo) / 2, 34),
+        tol=SUM_ORDER_TOL)
+    cmp("ac", b.ac(h, lo, 5), _ac_ref(h, lo, 5), tol=SUM_ORDER_TOL)
     pl, sl, hi = b.ppo(c, 12, 26, 9)
     rpl, rsl, rhi = _ppo_ref(c, 12, 26, 9)
     cmp("ppo.line", pl, rpl)
@@ -67,7 +76,7 @@ def main():
         PO._calculate_sma(c, 10) - PO._calculate_sma(c, 20), tol=1e-9)
     cmp("po.ema", b.price_oscillator(c, 10, 20, "EMA"),
         PO._calculate_ema(c, 10) - PO._calculate_ema(c, 20))
-    cmp("dpo", b.dpo(c, 21, False), _dpo_ref(c, 21))
+    cmp("dpo", b.dpo(c, 21, False), _dpo_ref(c, 21), tol=SUM_ORDER_TOL)
     cmp("aroonosc", b.aroon_osc(h, lo, 14), AROONOSC._calculate_aroon_osc(h, lo, 14))
     cmp("uo", b.uo(h, lo, c, 7, 14, 28), UO._calculate_uo(h, lo, c, 7, 14, 28), tol=1e-9)
     o = df["open"].to_numpy(np.float64)
@@ -79,9 +88,9 @@ def main():
     cmp("cho", b.cho(h, lo, c, v, 3, 10), _cho_ref(h, lo, c, v))
     cmp("chop", b.chop(h, lo, c, 14), CHOP._calculate_chop(h, lo, c, 14))
     rk, rks = b.rvi_vigor(o, h, lo, c, 10)
-    rrk, rrks = RVI._calculate_rvi(o, h, lo, c, 10)
-    cmp("rvi.vigor", rk, rrk)
-    cmp("rvi.signal", rks, rrks)
+    rrk, rrks = references.rvi(o, h, lo, c, 10)
+    cmp("rvi.vigor", rk, rrk, tol=SUM_ORDER_TOL)
+    cmp("rvi.signal", rks, rrks, tol=SUM_ORDER_TOL)
     kk, ks = b.kst(c, 10, 15, 20, 30, 10, 10, 10, 15, 9)
     cmp("kst", kk, _kst_ref(c), tol=1e-9)
     tk, ts = b.tsi(c, 25, 13, 13)
@@ -92,8 +101,8 @@ def main():
     cmp("vi.minus", vm, rvm)
     gu, gl = b.gator(h, lo, 13, 8, 5)
     rgu, rgl = _gator_ref(h, lo)
-    cmp("gator.up", gu, rgu)
-    cmp("gator.low", gl, rgl)
+    cmp("gator.up", gu, rgu, tol=SUM_ORDER_TOL)
+    cmp("gator.low", gl, rgl, tol=SUM_ORDER_TOL)
     cmp("stc", b.stc(c, 23, 50, 10, 3, 3), _stc_ref(c))
     cmp("coppock", b.coppock(c, 10, 14, 11), Coppock._calculate_coppock(c, 10, 14, 11))
 

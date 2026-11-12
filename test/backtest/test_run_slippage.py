@@ -108,7 +108,8 @@ def test_the_default_table_lists_every_class_with_its_source_and_status():
     rows = bt.slippage.defaults()
     assert [row["slippage_class"] for row in rows] == list(bt.slippage.CLASSES)
     assert len(rows) == 9
-    assert all(row["source"] and row["status"] in ("verified", "unverified") for row in rows)
+    # No exchange or broker publishes slippage, so every row is an OpenAlgo default.
+    assert all(row["source"] and row["status"] == "default" for row in rows)
 
 
 @pytest.mark.parametrize(

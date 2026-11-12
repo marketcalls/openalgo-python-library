@@ -12,10 +12,12 @@ np.ndarray/list in -> np.ndarray out).
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "test"))
 
 import numpy as np
 import pandas as pd
 
+import indicator_references as references
 import openalgo
 from openalgo import ta
 import openalgo._oaindicators as _rs  # noqa: F401  (proves extension present)
@@ -49,9 +51,14 @@ def main():
     m = ~(np.isnan(out.to_numpy()) | np.isnan(ref.to_numpy()))
     check("sma vs pandas", float(np.abs(out.to_numpy()[m] - ref.to_numpy()[m]).max()) < 1e-9)
 
-    # ---- WMA type ----
+    # ---- WMA vs the plain-Python weighted average (weights 1..per, newest heaviest) ----
     outw = ta.wma(arr, per)
     check("wma returns ndarray", isinstance(outw, np.ndarray))
+    refw = references.wma(arr, per)
+    mw = ~(np.isnan(outw) | np.isnan(refw))
+    check("wma vs manual", np.array_equal(np.isnan(outw), np.isnan(refw))
+          and float(np.abs(outw[mw] - refw[mw]).max()) < 1e-9,
+          f"maxdiff={np.abs(outw[mw] - refw[mw]).max():.2e}")
 
     # ---- EMA vs manual recursion (first-value seed, alpha=2/(p+1)) ----
     oute = ta.ema(arr, per)

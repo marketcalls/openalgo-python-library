@@ -250,12 +250,14 @@ mod tests {
         }
     }
 
+    /// No exchange or broker publishes slippage, so every row is the maintainer's
+    /// modelling default, never a verified figure.
     #[test]
-    fn the_built_in_table_is_one_open_row_per_class_and_all_verified() {
+    fn the_built_in_table_is_one_open_row_per_class_and_all_defaults() {
         let rows = slippage_defaults().map_err(|e| e.to_string());
         assert_eq!(rows.as_ref().map(|r| r.len()), Ok(SlippageClass::ALL.len()));
         for row in rows.unwrap_or_default() {
-            assert_eq!(row.meta.status, RowStatus::Verified, "{}", row.meta.id);
+            assert_eq!(row.meta.status, RowStatus::Default, "{}", row.meta.id);
             assert_eq!((row.meta.valid_from, row.meta.valid_to), (None, None));
         }
     }

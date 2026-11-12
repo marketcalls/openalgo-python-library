@@ -3,8 +3,10 @@ Behaviour of the `openalgo.ta` indicators the backtest engine relies on (gap G-S
 
 Each test states one behaviour. Expected values come from the indicator's
 published definition or are worked out by hand in the test; they are never
-produced by the code under test. One table compares implementations on purpose:
-it pins every NumPy fallback to its Rust kernel.
+produced by the code under test. Section 12 compares each indicator with a
+plain-Python reference written from its formula (`indicator_references.py`).
+One table compares implementations on purpose: it pins every NumPy fallback to
+its Rust kernel.
 
 A test that takes the `backend` fixture runs twice: on the compiled Rust core
 ("rust", skipped when the extension is not installed) and on the pure NumPy
@@ -17,6 +19,7 @@ import inspect
 import math
 import warnings
 
+import indicator_references as references
 import numpy as np
 import pandas as pd
 import pytest
@@ -1344,3 +1347,75 @@ def test_ulcerindex_is_zero_not_nan_when_rounding_makes_the_mean_of_squares_nega
     assert np.isnan(ulcer[:3]).all()
     assert not np.isnan(ulcer[3:]).any()
     assert np.array_equal(ulcer[9:], [0.0, 0.0, 0.0])
+
+
+# ===========================================================================
+# 12. Every indicator against its plain-Python reference
+# ===========================================================================
+
+REFERENCE_BARS = 200
+FLAT_BARS = slice(100, 112)  # no range: FRAMA's D = 1, Fisher's window without range
+GAP_FROM_BAR, GAP_RUPEES = 150, 40.0  # halves apart: FRAMA's weight held at 1
+CLIMB_BARS, CLIMB_STEP = slice(170, 190), 3.0  # a new high every bar: Fisher's value held
+
+
+@pytest.fixture(scope="module")
+def reference_market(market):
+    """Complete wide bars (many SAR reversals) shaped to reach every branch of the
+    references: a flat stretch, a gap up and a steady climb."""
+    open_, high, low, close, volume = market(REFERENCE_BARS, seed=11, bar_range=2.5)
+    for series in (open_, high, low, close):
+        series[FLAT_BARS] = close[FLAT_BARS.start - 1]
+        series[GAP_FROM_BAR:] += GAP_RUPEES
+    steps = np.arange(1, CLIMB_BARS.stop - CLIMB_BARS.start + 1)
+    climb = close[CLIMB_BARS.start - 1] + CLIMB_STEP * steps
+    open_[CLIMB_BARS] = close[CLIMB_BARS] = climb
+    high[CLIMB_BARS], low[CLIMB_BARS] = climb + 0.5, climb - 0.5
+    return {"o": open_, "h": high, "l": low, "c": close, "v": volume}
+
+
+REFERENCE_CASES = {
+    "wma": (lambda d: ta.wma(d["c"], 10), lambda d: references.wma(d["c"], 10)),
+    "frama": (
+        lambda d: ta.frama(d["h"], d["l"], 16),
+        lambda d: references.frama(d["h"], d["l"], 16),
+    ),
+    "fisher": (
+        lambda d: ta.fisher(d["h"], d["l"], 9),
+        lambda d: references.fisher(d["h"], d["l"], 9),
+    ),
+    "cmo": (lambda d: ta.cmo(d["c"], 14), lambda d: references.cmo(d["c"], 14)),
+    "cmf": (
+        lambda d: ta.cmf(d["h"], d["l"], d["c"], d["v"], 20),
+        lambda d: references.cmf(d["h"], d["l"], d["c"], d["v"], 20),
+    ),
+    "mfi": (
+        lambda d: ta.mfi(d["h"], d["l"], d["c"], d["v"], 14),
+        lambda d: references.mfi(d["h"], d["l"], d["c"], d["v"], 14),
+    ),
+    "rvi": (
+        lambda d: ta.rvi(d["o"], d["h"], d["l"], d["c"], 10),
+        lambda d: references.rvi(d["o"], d["h"], d["l"], d["c"], 10),
+    ),
+    "vwap": (
+        lambda d: ta.vwap(d["h"], d["l"], d["c"], d["v"]),
+        lambda d: references.vwap(d["h"], d["l"], d["c"], d["v"]),
+    ),
+    "psar": (
+        lambda d: ta.psar(d["h"], d["l"], 0.02, 0.2, return_trend=True),
+        lambda d: references.sar(d["h"], d["l"], 0.02, 0.2),
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(REFERENCE_CASES))
+def test_indicator_equals_its_plain_python_reference(name, reference_market, backend):
+    """A reference shares no code with `ta`, so a wrong kernel fails here."""
+    under_test, reference = REFERENCE_CASES[name]
+    got, expected = under_test(reference_market), reference(reference_market)
+    got = got if isinstance(got, tuple) else (got,)
+    expected = expected if isinstance(expected, tuple) else (expected,)
+    assert len(got) == len(expected)
+    for from_ta, from_reference in zip(got, expected, strict=True):
+        assert_compares_real_values(from_reference, name)
+        assert_series(from_ta, from_reference)

@@ -7,9 +7,10 @@
 //! states for the dates it covers; `unverified` means it does not (an observation of one
 //! day applied to a range, or a figure still to be confirmed). A run that uses an
 //! unverified row says so in its warnings. `default` marks a modelling default the
-//! maintainer set in place of figures that differ by symbol and date (the futures margin
-//! of decision D23): the user can override it, the Assumptions block states it, and a
-//! run that uses it does not warn.
+//! maintainer set in place of figures that differ by symbol and date or that no source
+//! publishes (the futures margin of decision D23, every default slippage row): the user
+//! can override it, the Assumptions block states it, and a run that uses it does not
+//! warn.
 //!
 //! The files are read with the calendar's CSV reader (`market::calendar::csv`): `#`
 //! comments, one header line, optional double quotes.
