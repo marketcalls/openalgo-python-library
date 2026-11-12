@@ -2,7 +2,9 @@
 
     from openalgo.backtest import metrics
 
-    perf = metrics.analyse(equity, exchanges="NSE", trades=trades, risk_free_rate=0.065)
+    perf = metrics.analyse(
+        equity, exchanges="NSE", trades=trades, risk_free_rate=0.065, opening_wealth=500_000
+    )
     perf.metrics["sharpe"], perf.metrics["max_drawdown"], perf.monthly_returns
 
 The per-bar and per-trade work runs in the native kernel; this module checks the
@@ -11,10 +13,20 @@ inputs, takes sessions per year from the session calendar, and returns a
 
 Inputs
     equity: a pandas Series of equity in rupees, indexed by time (a time-zone-aware
-        DatetimeIndex in any zone, or int64 UTC nanoseconds), strictly increasing. The
-        first point is the starting equity, before any P&L of the run; each later
-        point is the marked equity at that instant (bars are stamped at their close).
-        At least two points.
+        DatetimeIndex in any zone, or int64 UTC nanoseconds), strictly increasing. Each
+        point is the marked equity at that instant (bars are stamped at their close),
+        except that without an opening wealth the first point is taken as the starting
+        equity, before any P&L of the run. At least one point with an opening wealth,
+        two without.
+    opening_wealth: the capital before the first equity point, in rupees: the wealth
+        the run opens with. Pass it whenever the first point can already hold P&L, as
+        the close of a backtest's first slice can (`Result.performance` passes the
+        run's capital). The first point is then a mark: its P&L counts in the total
+        return and CAGR, its session has a return from the opening wealth, and a fall
+        below the opening wealth is a drawdown. None (the default) keeps the reading
+        above: the first point is the start and belongs to no session. The opening has
+        no time of its own; elapsed time and a drawdown that starts at the opening are
+        counted from the first point.
     exchanges: the OpenAlgo exchanges the strategy trades ("NSE", or ["NFO", "MCX"]).
         Their union calendar gives the sessions per year.
     trades: a DataFrame, one row per round trip, with the columns
@@ -36,16 +48,20 @@ Inputs
     benchmark: a Series of positive index or price levels indexed by time (NIFTY 50
         closes, or a total-return index). It is read as of the start and as of each
         session's last equity point, never back-filled: a session whose previous
-        benchmark value is unknown has no benchmark return.
+        benchmark value is unknown has no benchmark return. With an opening wealth the
+        start is read as the benchmark's last value stamped before the first point.
     risk_free_rate: the annual risk-free rate as a fraction (0.065 is 6.5 percent).
         It is converted to the per-session rate (1 + rate) ^ (1 / sessions per year) - 1
         before it is subtracted from session returns.
     calendar: the session calendar; the shared built-in one by default.
 
 Conventions
-    Session returns: the IST date of each point after the first is its session date,
-    and the return of a session is the time-weighted wealth at its last point over the
-    wealth at the previous session's last point (the start for the first), minus 1.
+    Session returns: the IST date of each mark is its session date (every point with an
+    opening wealth, every point after the first without one), and the return of a
+    session is the time-weighted wealth at its last mark over the wealth at the
+    previous session's last mark (the start for the first: the opening wealth, else the
+    first point), minus 1. Total return, drawdowns and the monthly and yearly tables
+    are built from the same start.
     Annualisation: CAGR uses elapsed calendar time (365.25 days a year). Volatility,
     Sharpe, Sortino and alpha use sessions per year: the sessions of the traded
     exchanges' union calendar in the whole calendar years the run touches, scaled to
@@ -56,8 +72,13 @@ Conventions
     Undefined figures are NaN; a positive figure over a zero denominator is infinite.
 
 Several strategies on fixed allocations: each strategy's equity is analysed on its own
-allocation; the combined account is `analyse(combine_equity({...}), trades=...)` with
-the trades tables concatenated, and `return_correlation` compares the strategies.
+allocation, its opening wealth. The combined account opens with the sum of their
+capitals, and its trades are their trades tables concatenated:
+
+    combined = combine_equity(equities, opening_wealth=capitals)
+    analyse(combined, exchanges=..., opening_wealth=sum(capitals.values()), trades=...)
+
+`return_correlation` compares the strategies.
 
 Errors: ConfigError for any input that cannot be used, with a message that names the
 column and row; CalendarError for an unknown exchange.
@@ -82,13 +103,16 @@ def analyse(
     benchmark: pd.Series | None = None,
     risk_free_rate: float = 0.0,
     calendar: Calendar | None = None,
+    opening_wealth: float | None = None,
 ) -> Performance:
     """Every metric of one equity series, with its trades, flows and benchmark.
 
     The inputs are described in the module docstring and every key of the returned
-    `Performance.metrics` in `DEFINITIONS`. Raises ConfigError for unusable input
-    (naive timestamps, unsorted points, a trade whose net P&L is not gross P&L minus
-    costs, a rate written in percent) and CalendarError for an unknown exchange.
+    `Performance.metrics` in `DEFINITIONS`. `opening_wealth` (rupees) is the capital
+    before the first point; None takes the first point as the starting equity. Raises
+    ConfigError for unusable input (naive timestamps, unsorted points, a trade whose
+    net P&L is not gross P&L minus costs, a rate written in percent, an opening wealth
+    that is not a positive number) and CalendarError for an unknown exchange.
     """
     return _analysis.analyse(
         equity,
@@ -98,20 +122,26 @@ def analyse(
         benchmark=benchmark,
         risk_free_rate=risk_free_rate,
         calendar=calendar,
+        opening_wealth=opening_wealth,
     )
 
 
-def combine_equity(equities: Mapping[str, pd.Series]) -> pd.Series:
+def combine_equity(
+    equities: Mapping[str, pd.Series], *, opening_wealth: Mapping[str, float] | None = None
+) -> pd.Series:
     """The combined equity, in rupees, of strategies run on fixed capital allocations.
 
     Each strategy trades its own allocation, so the combined account is the sum of
     their equities on the union of their timestamps. A strategy's equity at an instant
-    is its last value at or before it, and its first value (its allocation) before its
-    first point. `equities` maps a strategy name to an equity Series indexed as for
-    `analyse`. Returns a Series indexed by IST time. Raises ConfigError for an empty
-    mapping or a malformed series.
+    is its last value at or before it. Before its first point it is its capital when
+    `opening_wealth` maps every strategy name to its capital in rupees, and otherwise
+    its first value (which is then its starting equity). `equities` maps a strategy
+    name to an equity Series indexed as for `analyse`. Returns a Series indexed by IST
+    time; with capitals, analyse it with `opening_wealth=sum(capitals.values())`, the
+    combined capital. Raises ConfigError for an empty mapping, a malformed series, or
+    capitals that do not name exactly the strategies or are not positive numbers.
     """
-    return _combined.combine_equity(equities)
+    return _combined.combine_equity(equities, opening_wealth)
 
 
 def return_correlation(strategies: Mapping[str, Performance | pd.Series]) -> pd.DataFrame:

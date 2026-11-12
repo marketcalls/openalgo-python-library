@@ -3,9 +3,10 @@ and trades, and the HTML tearsheet.
 
 The kernel's tables are turned into the inputs `metrics.analyse` documents:
 
-    equity   the equity series in rupees, indexed by the IST close of each slice; its
-             first point (the close of the first slice, before any fill can happen) is
-             the capital
+    equity   the equity series in rupees, indexed by the IST close of each slice. Its
+             first point, the close of the first slice, can already hold P&L (an order
+             a timer places at the first open fills there), so every point is a mark
+             and the run's capital is passed as the opening wealth
     trades   one row per round trip: closed trades from the kernel's trades table, and
              each position still open at the end as an open trade (exit_time NaT) priced
              at its average price, so that exposure and turnover count it. Side is the
