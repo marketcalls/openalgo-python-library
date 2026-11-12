@@ -21,6 +21,9 @@ pub enum MetricsError {
     NotFinite { what: &'static str, index: usize },
     /// A starting equity of zero or below: no return can be measured on it.
     NonPositiveStart { equity: f64 },
+    /// An opening wealth (the capital before the first point) that is not a positive
+    /// finite number of rupees.
+    InvalidOpeningWealth { value: f64 },
     /// A cash flow stamped at or before the first equity point or after the last.
     FlowOutsideCurve { index: usize },
     /// A cash flow after which no capital is left, so later returns are undefined.
@@ -48,7 +51,8 @@ impl fmt::Display for MetricsError {
             MetricsError::TooFewPoints { needed, found } => write!(
                 f,
                 "the equity series has {found} point(s) and needs at least {needed}: the \
-                 starting equity first, then the equity at each later mark"
+                 equity at each mark, with the starting equity as the first point when \
+                 no opening wealth is given"
             ),
             MetricsError::LengthMismatch {
                 what,
@@ -72,11 +76,16 @@ impl fmt::Display for MetricsError {
                 f,
                 "the starting equity is {equity}: returns need a positive starting capital"
             ),
+            MetricsError::InvalidOpeningWealth { value } => write!(
+                f,
+                "the opening wealth is {value}: it is the capital before the first equity \
+                 point, a positive number of rupees"
+            ),
             MetricsError::FlowOutsideCurve { index } => write!(
                 f,
                 "cash flow {index} is not after the first equity point and at or before the \
-                 last: fold a flow at the start into the starting equity, and drop flows \
-                 after the end"
+                 last: fold a flow at the start into the starting equity (or the opening \
+                 wealth), and drop flows after the end"
             ),
             MetricsError::NoCapitalAfterFlow { index } => write!(
                 f,

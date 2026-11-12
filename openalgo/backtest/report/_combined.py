@@ -7,20 +7,41 @@ import pandas as pd
 
 from ..errors import ConfigError
 from . import _periods as periods
-from ._inputs import series_columns
+from ._inputs import check_opening_wealth, series_columns
 from ._kernel import call
 from ._performance import Performance
 
 
-def combine_equity(equities: Mapping[str, pd.Series]) -> pd.Series:
+def combine_equity(
+    equities: Mapping[str, pd.Series], opening_wealth: Mapping[str, float] | None = None
+) -> pd.Series:
     """Implementation of `openalgo.backtest.metrics.combine_equity` (documented there)."""
     if not isinstance(equities, Mapping) or not equities:
         raise ConfigError("pass a mapping {strategy name: equity Series} with at least one entry")
     curves = [
         series_columns(series, what=f"equity of {name!r}") for name, series in equities.items()
     ]
-    ts, total = call("combine", curves)
+    capitals = None if opening_wealth is None else _capitals(equities, opening_wealth)
+    ts, total = call("combine", curves, capitals)
     return pd.Series(total, index=periods.ist_times(ts), name="equity")
+
+
+def _capitals(equities: Mapping[str, pd.Series], opening_wealth: object) -> list[float]:
+    """Each strategy's opening wealth in rupees, in the order of `equities`. Raises
+    ConfigError unless `opening_wealth` maps exactly those names to positive numbers."""
+    if not isinstance(opening_wealth, Mapping):
+        raise ConfigError("opening_wealth maps each strategy name to its capital in rupees")
+    missing = [name for name in equities if name not in opening_wealth]
+    unknown = [name for name in opening_wealth if name not in equities]
+    if missing or unknown:
+        raise ConfigError(
+            f"opening_wealth must give the capital of every strategy and of no other: "
+            f"missing {missing}, unknown {unknown}"
+        )
+    return [
+        check_opening_wealth(opening_wealth[name], what=f"opening_wealth of {name!r}")
+        for name in equities
+    ]
 
 
 def return_correlation(strategies: Mapping[str, Performance | pd.Series]) -> pd.DataFrame:

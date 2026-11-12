@@ -42,13 +42,20 @@ UNITS = (
 )
 
 _RUN = {
-    "start": ("Start", "timestamp", "Time of the first equity point (the starting equity)."),
+    "start": (
+        "Start",
+        "timestamp",
+        "Time of the first equity point: the starting equity, or with an opening wealth "
+        "the first mark after it (the opening has no time of its own and is counted from "
+        "here).",
+    ),
     "end": ("End", "timestamp", "Time of the last equity point."),
     "elapsed_days": ("Elapsed", "days", "Calendar days from start to end."),
     "sessions": (
         "Sessions",
         "count",
-        "IST session dates with an equity point after the start; one return each.",
+        "IST session dates with an equity point after the start (every point, with an "
+        "opening wealth); one return each, the first one from the start equity.",
     ),
     "missing_sessions": (
         "Missing sessions",
@@ -56,7 +63,12 @@ _RUN = {
         "Calendar sessions of the traded exchanges, between the first and last session "
         "date, with no equity point; each one's move is folded into the next return.",
     ),
-    "start_equity": ("Start equity", "rupees", "Equity at the first point."),
+    "start_equity": (
+        "Start equity",
+        "rupees",
+        "The opening wealth (the capital before the first point) when one is given, else "
+        "the equity at the first point.",
+    ),
     "end_equity": ("End equity", "rupees", "Equity at the last point."),
     "net_cash_flows": ("Net cash flows", "rupees", "Deposits minus withdrawals in the run."),
     "net_profit": (
@@ -70,7 +82,8 @@ _RETURNS = {
     "total_return": (
         "Total return",
         "fraction",
-        "Time-weighted: the product of (1 + session return), minus 1. Cash flows are not returns.",
+        "Time-weighted: the product of (1 + session return), minus 1, so measured from the "
+        "start equity. Cash flows are not returns.",
     ),
     "cagr": (
         "CAGR",
@@ -99,7 +112,8 @@ _RETURNS = {
     "exposure": (
         "Exposure",
         "fraction",
-        "Share of the equity series' bars during which a position was open.",
+        "Share of the equity series' bars during which a position was open. A bar runs "
+        "from one equity point to the next; time before the first point is not a bar.",
     ),
     "risk_free_rate": ("Risk-free rate", "fraction", "The annual risk-free rate supplied."),
     "risk_free_per_session": (
@@ -135,14 +149,20 @@ _DRAWDOWN = {
         "Maximum drawdown",
         "fraction",
         "Deepest fall of the time-weighted wealth index from its running peak, on every "
-        "equity point. Zero or negative.",
+        "equity point. The peak starts at the start equity, so a first point below an "
+        "opening wealth is a fall. Zero or negative.",
     ),
     "max_drawdown_amount": (
         "Maximum drawdown amount",
         "rupees",
-        "Largest fall of cumulative P&L (equity less cash flows) from its running peak.",
+        "Largest fall of cumulative P&L (equity less the start equity and cash flows) "
+        "from its running peak, which starts at 0.",
     ),
-    "max_drawdown_peak": ("Drawdown peak", "timestamp", "Peak before the maximum drawdown."),
+    "max_drawdown_peak": (
+        "Drawdown peak",
+        "timestamp",
+        "Peak before the maximum drawdown; the start when the peak is the opening wealth.",
+    ),
     "max_drawdown_trough": ("Drawdown trough", "timestamp", "Lowest point of it."),
     "max_drawdown_recovery": (
         "Drawdown recovery",
@@ -159,7 +179,11 @@ _DRAWDOWN = {
         "days",
         "Calendar days of the longest time below a peak, recovered or not.",
     ),
-    "longest_drawdown_start": ("Longest drawdown start", "timestamp", "Its peak."),
+    "longest_drawdown_start": (
+        "Longest drawdown start",
+        "timestamp",
+        "Its peak; the start when that is the opening wealth.",
+    ),
     "longest_drawdown_end": (
         "Longest drawdown end",
         "timestamp",
@@ -219,7 +243,8 @@ _BENCHMARK = {
         "Benchmark return",
         "fraction",
         "Benchmark value at the end over its first value in the run (as of the start, "
-        "else as of the first session end it covers), minus 1.",
+        "which with an opening wealth is its last value before the first point; else as "
+        "of the first session end it covers), minus 1.",
     ),
     "benchmark_sessions": (
         "Benchmark sessions",

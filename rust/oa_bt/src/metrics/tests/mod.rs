@@ -8,6 +8,7 @@ mod combine;
 mod curve;
 mod drawdown;
 mod exposure;
+mod opening;
 mod ratios;
 mod trades;
 
