@@ -2,6 +2,7 @@
 //! orders, as dicts with string codes. Order ids cross as integers (Python shows
 //! `o<n>`), instruments as their registration index, instants as int64 UTC nanoseconds.
 
+use numpy::IntoPyArray;
 use oa_bt::engine::{Event, EventStamp, OrderEventKind, Pause, StrategyBar};
 use oa_bt::exec::Order;
 use oa_bt::portfolio::Position;
@@ -88,7 +89,7 @@ fn bar_tuple(bar: &StrategyBar) -> (u32, i64, i64, f64, f64, f64, f64, f64) {
 }
 
 /// A pause as a dict: `kind` ("bar_close", "timers" or "finished"), its stamp, the
-/// decision instant, the strategy bars and the events.
+/// decision instant, the strategy bars, the events and (timer pauses) the timer ids.
 pub(super) fn pause<'py>(py: Python<'py>, pause: &Pause) -> PyResult<Bound<'py, PyDict>> {
     let dict = PyDict::new_bound(py);
     dict.set_item("events", events(py, pause.events())?)?;
@@ -108,14 +109,36 @@ pub(super) fn pause<'py>(py: Python<'py>, pause: &Pause) -> PyResult<Bound<'py, 
             dict.set_item("bars", tuples)?;
         }
         Pause::Timers {
-            stamp, decided_at, ..
+            stamp,
+            decided_at,
+            timers,
         } => {
             dict.set_item("kind", "timers")?;
             stamp_into(&dict, *stamp)?;
             dict.set_item("decided_at", decided_at)?;
+            let ids: Vec<u32> = timers.iter().map(|timer| timer.0).collect();
+            dict.set_item("timers", ids)?;
         }
         Pause::Finished { .. } => dict.set_item("kind", "finished")?,
     }
+    Ok(dict)
+}
+
+/// Strategy bars as a dict of arrays, one per column.
+pub(super) fn strategy_bars<'py>(
+    py: Python<'py>,
+    bars: &[StrategyBar],
+) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new_bound(py);
+    let times = |get: fn(&StrategyBar) -> i64| bars.iter().map(get).collect::<Vec<i64>>();
+    let values = |get: fn(&StrategyBar) -> f64| bars.iter().map(get).collect::<Vec<f64>>();
+    dict.set_item("ts_open", times(|b| b.ts_open).into_pyarray_bound(py))?;
+    dict.set_item("ts_close", times(|b| b.ts_close).into_pyarray_bound(py))?;
+    dict.set_item("open", values(|b| b.open).into_pyarray_bound(py))?;
+    dict.set_item("high", values(|b| b.high).into_pyarray_bound(py))?;
+    dict.set_item("low", values(|b| b.low).into_pyarray_bound(py))?;
+    dict.set_item("close", values(|b| b.close).into_pyarray_bound(py))?;
+    dict.set_item("volume", values(|b| b.volume).into_pyarray_bound(py))?;
     Ok(dict)
 }
 

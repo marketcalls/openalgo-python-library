@@ -17,8 +17,8 @@ use crate::sizing::{size, SizeOutcome, SizingContext, SkipReason};
 use super::clock::SliceInfo;
 use super::config::QuantityMode;
 use super::error::KernelError;
-use super::event::{Event, OrderEventKind, Step};
-use super::kernel::{Engine, Phase};
+use super::event::{Event, OrderEventKind};
+use super::kernel::Engine;
 
 /// Days searched for the next session of a daily strategy's order before it counts as
 /// having no session to fill in: longer than any run of Indian market holidays.
@@ -61,7 +61,7 @@ impl Engine {
     /// arguments not built yet. A market rule that refuses the order is not an error:
     /// the result is `Submission::Rejected`.
     pub fn submit(&mut self, request: OrderRequest) -> Result<Submission, KernelError> {
-        let Phase::Paused(slice) = self.phase else {
+        let Some((slice, decided_at, step)) = self.decision_point() else {
             return Err(KernelError::NotAtDecisionPoint);
         };
         self.check_buildable(&request)?;
@@ -70,7 +70,7 @@ impl Engine {
             Resolved::AtFill => 0.0,
             Resolved::Skipped(reason) => return Ok(Submission::Skipped(reason)),
         };
-        let checked = self.submission_checks(&request, units, &slice)?;
+        let checked = self.submission_checks(&request, units, &slice, decided_at)?;
         let id = self.book.next_id();
         let (action, kind, good_until, reject) = match checked {
             Ok(good_until) => (
@@ -82,7 +82,7 @@ impl Engine {
             Err(code) => (
                 OrderAction::FailChecks,
                 OrderEventKind::Rejected(code),
-                slice.close,
+                decided_at,
                 Some(code),
             ),
         };
@@ -91,14 +91,14 @@ impl Engine {
             id,
             request,
             status,
-            decided_at: slice.close,
+            decided_at,
             good_until,
             quantity_units: units,
             filled_units: 0.0,
             average_fill_rupees: 0.0,
             reject_code: reject,
         })?;
-        let stamp = Self::stamp(&slice, Step::Callbacks);
+        let stamp = Self::stamp(&slice, step);
         self.emit(Event::Order {
             stamp,
             order: id,
@@ -115,7 +115,7 @@ impl Engine {
     ///
     /// Errors: `NotAtDecisionPoint` unless paused; `UnknownOrder`.
     pub fn cancel(&mut self, id: OrderId) -> Result<OrderStatus, KernelError> {
-        let Phase::Paused(slice) = self.phase else {
+        let Some((slice, _, step)) = self.decision_point() else {
             return Err(KernelError::NotAtDecisionPoint);
         };
         let status = self
@@ -126,7 +126,7 @@ impl Engine {
         if !status.is_working() {
             return Ok(status);
         }
-        let stamp = Self::stamp(&slice, Step::Callbacks);
+        let stamp = Self::stamp(&slice, step);
         self.end_order(stamp, id, OrderAction::Cancel, OrderEventKind::Canceled)?;
         Ok(OrderStatus::Canceled)
     }
@@ -214,12 +214,14 @@ impl Engine {
         self.config.quantity_mode == QuantityMode::Fractional && !derivative
     }
 
-    /// The submission checks, in order; `Ok` carries the order's `good_until`.
+    /// The submission checks, in order, at the decision instant `decided_at`; `Ok`
+    /// carries the order's `good_until`.
     fn submission_checks(
         &mut self,
         request: &OrderRequest,
         units: f64,
         slice: &SliceInfo,
+        decided_at: TsNanos,
     ) -> Result<Result<TsNanos, RejectCode>, KernelError> {
         let Some(spec) = self.instruments.get(request.instrument.index()) else {
             return Ok(Err(RejectCode::InstrumentUnknown));
@@ -248,27 +250,29 @@ impl Engine {
         }
         let opening = !reduces && !request.reduce_only;
         if opening && request.product == Product::Mis {
-            if let Err(code) = self.session_times(slice.day)?.entry.check(slice.close) {
+            if let Err(code) = self.session_times(slice.day)?.entry.check(decided_at) {
                 return Ok(Err(code));
             }
         }
-        Ok(self.day_validity(slice))
+        Ok(self.day_validity(slice, decided_at))
     }
 
     /// When a DAY order decided at this slice expires, or `market_closed` when its fill
     /// would fall in a later session than the decision (lead ruling). Orders of daily
-    /// and longer strategies are valid for the next session.
-    fn day_validity(&self, slice: &SliceInfo) -> Result<TsNanos, RejectCode> {
+    /// and longer strategies are valid for the first session that opens at or after the
+    /// decision: the next session for a decision at a close, the same session for a
+    /// timer at its open.
+    fn day_validity(&self, slice: &SliceInfo, decided_at: TsNanos) -> Result<TsNanos, RejectCode> {
         let exchange = self.timeline.exchange();
         if self.config.strategy_interval.is_intraday() {
             return match self.calendar.session(exchange, slice.day) {
-                Some(session) if slice.close < session.close => Ok(session.close),
+                Some(session) if decided_at < session.close => Ok(session.close),
                 _ => Err(RejectCode::MarketClosed),
             };
         }
-        (1..=NEXT_SESSION_SEARCH_DAYS)
+        (0..=NEXT_SESSION_SEARCH_DAYS)
             .filter_map(|ahead| self.calendar.session(exchange, slice.day + ahead))
-            .find(|session| session.open >= slice.close)
+            .find(|session| session.open >= decided_at)
             .map(|session| session.close)
             .ok_or(RejectCode::MarketClosed)
     }

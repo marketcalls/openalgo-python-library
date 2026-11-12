@@ -12,23 +12,24 @@ use super::event::{Event, EventStamp};
 use super::kernel::Engine;
 use super::market_data::StrategyBar;
 
-/// Identifier of a timer registered with `self.at(...)` or `self.every(...)`.
+/// Identifier of a timer registered with `self.at(...)` or `self.every(...)`
+/// (`Engine::add_timer`): dense, in registration order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TimerId(pub u32);
 
 /// Why the engine stopped.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pause {
-    /// Step 2 of a slice: timers due at or before this open fired. Orders submitted now
-    /// fill at this same open (03-architecture 4.2 step 2). Not produced until timers
-    /// are built.
+    /// Step 2 of a slice: timers due at or before this open fired (`timers`, in
+    /// registration order), after the strategy orders due at this open have filled.
+    /// Orders submitted now fill at this same open, before the square-off
+    /// (03-architecture 4.2 step 2). It carries no events: those wait for step 7 of the
+    /// slice (SPEC-31).
     Timers {
         stamp: EventStamp,
         /// The decision instant: this slice's open.
         decided_at: TsNanos,
         timers: Vec<TimerId>,
-        /// Events since the previous pause.
-        events: Vec<Event>,
     },
     /// Step 7 of a slice: deliver the events of steps 2 to 6 (and anything since the
     /// previous pause) to the callbacks, then run `on_bar` for the strategy bars that
@@ -50,12 +51,11 @@ pub enum Pause {
 }
 
 impl Pause {
-    /// The events delivered with this pause.
+    /// The events delivered with this pause (none with a timer pause).
     pub fn events(&self) -> &[Event] {
         match self {
-            Pause::Timers { events, .. }
-            | Pause::BarClose { events, .. }
-            | Pause::Finished { events } => events,
+            Pause::Timers { .. } => &[],
+            Pause::BarClose { events, .. } | Pause::Finished { events } => events,
         }
     }
 }

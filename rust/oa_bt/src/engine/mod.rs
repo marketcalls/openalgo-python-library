@@ -39,16 +39,18 @@
 //! | `Engine::submit(OrderRequest)` | while paused | submission checks, `Submitted` or `Rejected` |
 //! | `Engine::cancel(OrderId)` | while paused | cancel a working order |
 //! | `Engine::modify(OrderId, OrderRequest)` | while paused | not built yet |
-//! | `position`, `leg`, `order`, `working_orders`, `has_pending_entry`, `account`, `last_close`, `decision_instant` | any time | queries |
+//! | `position`, `leg`, `order`, `working_orders`, `has_pending_entry`, `account`, `last_close`, `decision_instant`, `strategy_bars`, `timer_counts` | any time | queries |
+//! | `Engine::add_timer(TimerSpec)` | before the first `advance` | register `self.at` or `self.every` |
 //! | `Engine::finish()` | after `Pause::Finished` | the `RunOutput` |
 //! | `pause::run(engine, driver)` | Rust drivers | the loop above, for a `Driver` |
 //!
 //! A pause is a decision point: `Pause::BarClose` in step 7 of a slice where a strategy
 //! bar closes by the clock (or where events wait and the strategy has callbacks), and
-//! `Pause::Timers` in step 2 for `self.at` and `self.every` (not built yet; orders it
-//! receives fill at that same open). Each pause carries the events since the previous
-//! one, so callbacks see everything of steps 2 to 6 before `on_bar` runs. Events of
-//! step 8 and of submissions are delivered with the next pause.
+//! `Pause::Timers` in step 2 for `self.at` and `self.every` (`timers`; orders it
+//! receives fill at that same open). A step 7 pause carries the events since the
+//! previous one, so callbacks see everything of steps 2 to 6 before `on_bar` runs; a
+//! timer pause carries none (SPEC-31). Events of step 8 and of submissions are
+//! delivered with the next step 7 pause.
 //!
 //! In live trading (Phase 2) the same machine runs with a live clock: the adapter feeds
 //! bars or ticks before calling `advance`, and tick mode runs steps 3 to 6 for one
@@ -64,7 +66,7 @@
 //! | Step | Code | Built |
 //! |---|---|---|
 //! | 1 session open, reference events | `steps::open_slice`; intraday times resolved lazily by `session::session_times` | times yes; rolls and lot-size changes no |
-//! | 2 fills at the open | `steps::step_open_fills` -> `fills::fill_queued` (eligible when the open is at or after `decided_at`, SPEC-35; a missing bar keeps the order queued, SPEC-06; entry window and margin checked at the fill bar), then `session::square_off_at_open` (the square-off timer, SPEC-05) | MARKET orders, square-off; timers and rolls no |
+//! | 2 fills at the open | `timers::fill_due_orders` -> `fills::fill_queued` (eligible when the open is at or after `decided_at`, SPEC-35; a missing bar keeps the order queued, SPEC-06; entry window and margin checked at the fill bar), then `timers::timers_pause` -> `Pause::Timers`, then `steps::step_open_fills` (the orders the timers placed, then `session::square_off_at_open`, the square-off timer, SPEC-05) | MARKET orders, timers, square-off; rolls no |
 //! | 3 resting orders, leg levels | `steps::step_levels` -> `rms::LegState::test_bar` | no (plain legs only) |
 //! | 4 ratchets | `steps::step_ratchets` -> `rms::LegState::ratchet` | no |
 //! | 5 mark | `steps::step_mark`: close, or last close and stale | yes |
@@ -97,6 +99,8 @@
 //! | `session` | Intraday times per session, the entry window, the square-off timer |
 //! | `submit` | `submit`, `cancel`, `modify`, the submission checks, DAY validity and market closed |
 //! | `pause` | `Pause`, `Driver`, `run` |
+//! | `timers` | `self.at` and `self.every`: registration, when they are due, the timer pause |
+//! | `history` | The strategy bars of the whole run, for indicators computed ahead |
 //! | `signals` | Condition and array strategies (not built yet) |
 //! | `event` | `Event`, `EventStamp`, `Step` |
 //! | `output` | `RunOutput` and its tables |
@@ -111,8 +115,9 @@
 //! Built: one exchange, any number of instruments on it, intraday or daily strategy
 //! intervals on an intraday or daily base, MARKET DAY orders (entry, add, reduce,
 //! exit by fraction), the quantity, freeze, product, entry-window and market-closed
-//! checks, the square-off, margin for cash equity, zero slippage and the fixed slippage
-//! forms, the position history, the equity series, trades and events. Everything else
+//! checks, the square-off, timers (`self.at`, `self.every`), margin for cash equity, zero
+//! slippage and the fixed slippage forms, the position history, the equity series,
+//! trades and events, and the whole-run strategy bars for indicators. Everything else
 //! returns `KernelError::NotBuilt` naming the feature.
 
 pub mod clock;
@@ -120,6 +125,7 @@ pub mod config;
 pub mod error;
 pub mod event;
 mod fills;
+mod history;
 pub mod kernel;
 pub mod market_data;
 pub mod output;
@@ -128,6 +134,7 @@ mod session;
 pub mod signals;
 mod steps;
 pub mod submit;
+pub mod timers;
 
 pub use clock::{SliceInfo, Timeline};
 pub use config::{
@@ -144,3 +151,4 @@ pub use output::{
 pub use pause::{run, Driver, Pause, TimerId};
 pub use signals::{run_signals, SignalArrays};
 pub use submit::Submission;
+pub use timers::{TimerCount, TimerSpec};
