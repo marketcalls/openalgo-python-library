@@ -107,7 +107,7 @@
 //! | `entry_rules` | Entry gates at submission (trading state, cooldown, maximum positions), the time exit, the fill hook |
 //! | `strategy_risk` | `StrategyRisk`: trading state and the bookkeeping of the strategy and session rules |
 //! | `pause` | `Pause`, `Driver`, `run` |
-//! | `signals` | Condition and array strategies (not built yet) |
+//! | `signals` | Condition and array strategies: the Rust driver of 14-strategy-api 4.1 over the stepping API |
 //! | `event` | `Event`, `EventStamp`, `Step` |
 //! | `output` | `RunOutput` and its tables |
 //! | `error` | `KernelError` |
@@ -127,8 +127,9 @@
 //! tables (cash, MIS with leverage on request, long options, NSE index futures), the
 //! sizers and the engine default size, the position history, the equity series,
 //! trades and events; the daily loss limit, the drawdown halt, the trading state, the
-//! cooldown, maximum positions and the time exit. Everything else returns
-//! `KernelError::NotBuilt` naming the feature.
+//! cooldown, maximum positions and the time exit; condition and array strategies on
+//! one instrument (`signals`). Everything else returns `KernelError::NotBuilt` naming
+//! the feature.
 
 mod accounting;
 mod aggregate;
@@ -164,5 +165,5 @@ pub use output::{
     EquityColumns, FillRecord, FinalPosition, GrossPnl, LevelRow, RunOutput, StaleMark, TradeRecord,
 };
 pub use pause::{run, Driver, Pause, TimerId};
-pub use signals::{run_signals, SignalArrays};
+pub use signals::{run_signals, EntrySignal, SignalArrays};
 pub use submit::Submission;

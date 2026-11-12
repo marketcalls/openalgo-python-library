@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from ._expr import ConditionOperators, Expr, column
 from ._layout import IST_OFFSET_NANOS, NANOS_PER_SECOND
 
 IST = dt.timezone(dt.timedelta(seconds=IST_OFFSET_NANOS // NANOS_PER_SECOND), "IST")
@@ -69,9 +70,10 @@ class BarStore:
         return pd.DataFrame(data, index=index)
 
 
-class SeriesView:
+class SeriesView(ConditionOperators):
     """One column of revealed bars: `[-1]` is the latest closed bar, slices and `len()`
-    work, `.values` is a NumPy copy."""
+    work, `.values` is a NumPy copy. In conditions (`entry_when`) it stands for the
+    whole column (`_expr`)."""
 
     def __init__(self, store: BarStore, name: str) -> None:
         self._store = store
@@ -92,6 +94,10 @@ class SeriesView:
 
     def __repr__(self) -> str:
         return f"SeriesView({self._store.symbol}.{self._name}, {len(self)} bars)"
+
+    def __condition_expr__(self) -> Expr:
+        """The column as a condition operand."""
+        return column(self._store.symbol, self._name)
 
 
 class InstrumentData:

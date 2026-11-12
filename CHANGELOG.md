@@ -115,6 +115,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Result.tearsheet()` report the run. Charges for a delivery buy and sell of one scrip
   on the same day, the margin of stock, BSE and MCX futures, and short options are not
   built yet.
+- **Condition and array strategies in `openalgo.backtest` (preview).** A strategy with
+  no `on_bar` declares `entry_when(cond, **order_args)`, `exit_when(cond)`,
+  `short_when(cond, **order_args)` and `cover_when(cond)` in `init`; the conditions are
+  evaluated once per run over the strategy bars and the whole run then goes through the
+  Rust kernel with no Python call per bar. The decisions are exactly those of the
+  equivalent `on_bar` of the strategy contract: level-triggered, long entry before
+  short, exit before adding, `pyramiding` adds (default 0), the position read after the
+  fills of the bar, a queued entry counting as not flat. Conditions combine series views
+  (`self.close`), `openalgo.ta` indicators, numbers, arrays with one value per strategy
+  bar, `+ - * /`, `< <= > >=`, `&`, `|`, `~`, `.crossed_above`, `.crossed_below`,
+  `.shift(n)`, `.rolling_max(n)`, `.rolling_min(n)`, `bt.time_between("09:30", "14:30")`
+  and `bt.weekday("Mon", ...)`; anything else (`==`, `and`, a look-ahead indicator
+  output, a negative shift) raises `ConfigError` saying to use `on_bar`.
+  `bt.from_arrays(entries, exits, symbol=..., exchange=..., interval=...)` and
+  `bt.from_signals(func, symbol, exchange, interval)` build such a strategy from boolean
+  arrays or from a function of the strategy bars; a `from_signals` function is re-run on
+  cut data before the run and refused if its signals look ahead. The order arguments are
+  `qty`, `size`, `lots`, `stop`, `target`, `targets`, `trail`, `breakeven`,
+  `after_first_target`, `product`, `leverage` and `tag`; ATR distances and
+  `bt.size.atr_risk` in them raise `NotImplementedError` until built.
 - **`openalgo.backtest.metrics` and `openalgo.backtest.report` (preview).** Performance
   metrics computed in the Rust core (returns, CAGR on calendar time, volatility, Sharpe
   and Sortino with a per-session risk-free rate, drawdowns, Calmar, exposure, trade

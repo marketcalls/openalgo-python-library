@@ -66,6 +66,7 @@ _EXPORTS = {
         "lock",
         "param",
     ),
+    "_expr": ("time_between", "weekday"),
 }
 _ATTRIBUTES = {name: module for module, names in _EXPORTS.items() for name in names}
 

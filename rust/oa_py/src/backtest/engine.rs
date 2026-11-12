@@ -23,6 +23,7 @@ mod market;
 mod request;
 mod results;
 mod setup;
+mod signals;
 mod tables;
 
 use oa_bt::engine::{Engine, KernelError, RunSetup, Submission};
@@ -179,6 +180,25 @@ impl NativeEngine {
     /// True while an order that would open or add works on the instrument.
     fn has_pending_entry(&self, instrument: u32) -> PyResult<bool> {
         Ok(self.engine()?.has_pending_entry(InstrumentId(instrument)))
+    }
+
+    /// Every strategy bar of an instrument over the run, as a dict of arrays (see
+    /// `signals::strategy_bars`), for conditions evaluated once per run.
+    fn strategy_bars<'py>(&self, py: Python<'py>, instrument: u32) -> PyResult<Bound<'py, PyDict>> {
+        let bars = self
+            .engine()?
+            .strategy_bars(InstrumentId(instrument))
+            .ok_or_else(|| {
+                NativeEngineInputError::new_err(format!("no instrument with index {instrument}"))
+            })?;
+        signals::strategy_bars(py, bars)
+    }
+
+    /// Run a condition strategy to the end of the grid in Rust, with no Python call per
+    /// bar, from its spec dict (see `signals`). Then `finish()` returns the result.
+    fn run_signals(&mut self, spec: &Bound<'_, PyDict>) -> PyResult<()> {
+        let signals = signals::signal_arrays(spec)?;
+        oa_bt::engine::run_signals(self.engine_mut()?, &signals).map_err(engine_error)
     }
 
     /// The last close seen of an instrument, rupees.

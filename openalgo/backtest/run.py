@@ -15,8 +15,9 @@ How a backtest runs (the Python half of the design in `rust/oa_bt/src/engine/mod
 4. **Drive** (`_driver.drive`): the strategy instance is bound to a `RunContext`, `init`
    runs, then the loop `advance` -> callbacks -> `on_bar` -> orders runs to the end of
    the grid, one Python call per strategy-bar close. Condition and array strategies
-   (`entry_when`, `bt.from_arrays`) will run the same kernel through a Rust driver with
-   no Python call per bar.
+   (`entry_when`, `bt.from_arrays`, `bt.from_signals`) instead run the same kernel
+   through the Rust signal driver with no Python call per bar
+   (`_conditions.drive_conditions`).
 5. **Result** (`result.Result`): the kernel's result columns as DataFrames, with the
    Assumptions block, the warnings and the manifest.
 
@@ -30,6 +31,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import calendar as calendar_module
+from ._conditions import drive_conditions, has_conditions
 from ._context import RunContext
 from ._driver import drive
 from ._engine import build_engine, call
@@ -129,7 +131,10 @@ def _run(strategy: type[Strategy], client: Any, args: dict[str, Any]) -> Result:
     instance = strategy(**(args["params"] or {}))
     instance._ctx = context
     instance.init()
-    drive(instance, engine, context)
+    if has_conditions(instance):
+        drive_conditions(instance, engine, context)
+    else:
+        drive(instance, engine, context)
     output = call(engine.finish)
     context.close(output["orders"])
     return Result(
@@ -220,13 +225,19 @@ def rebalance(*args: Any, **settings: Any) -> Any:
 
 
 def from_signals(func: Any, symbol: str, exchange: str, interval: str, **settings: Any) -> Any:
-    """A strategy from a function that returns entries and exits."""
-    raise NotImplementedError(f"bt.from_signals {PHASE_1_WORK}")
+    """A strategy from a function of the strategy bars that returns entries and exits,
+    for `bt.backtest`; read by the rules of conditions (`_arrays.from_signals`)."""
+    from ._arrays import from_signals as build
+
+    return build(func, symbol, exchange, interval, **settings)
 
 
-def from_arrays(entries: Any, exits: Any, **settings: Any) -> Any:
-    """A strategy from boolean entry and exit arrays."""
-    raise NotImplementedError(f"bt.from_arrays {PHASE_1_WORK}")
+def from_arrays(entries: Any, exits: Any = None, **settings: Any) -> Any:
+    """A strategy from boolean entry and exit arrays, one value per strategy bar, for
+    `bt.backtest`; read by the rules of conditions (`_arrays.from_arrays`)."""
+    from ._arrays import from_arrays as build
+
+    return build(entries, exits, **settings)
 
 
 __all__ = [

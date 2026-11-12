@@ -7,6 +7,7 @@
 //! themselves are in `steps`, order submission in `submit`, fills in `fills`.
 
 use crate::charges::ChargeBook;
+use crate::data::resample::BarsOut;
 use crate::exec::{InstrumentId, InstrumentSpec, Order, OrderBook, OrderId};
 use crate::market::calendar::Calendar;
 use crate::model::{Exchange, Product, TsNanos};
@@ -239,6 +240,14 @@ impl Engine {
     /// The last close seen of an instrument, rupees.
     pub fn last_close(&self, instrument: InstrumentId) -> Option<f64> {
         self.last_close.get(instrument.index()).copied().flatten()
+    }
+
+    /// Every strategy bar of an instrument over the whole run (opens and closes in UTC
+    /// nanoseconds, prices in rupees), for conditions evaluated once per run; `None` for
+    /// an instrument the run does not have. A driver must reveal them to a strategy
+    /// only as they close.
+    pub fn strategy_bars(&self, instrument: InstrumentId) -> Option<&BarsOut> {
+        self.market.strategy_bars(instrument)
     }
 
     /// The account at the last marks.
