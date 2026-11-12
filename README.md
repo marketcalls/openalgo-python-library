@@ -10,6 +10,26 @@ A Python library for algorithmic trading using OpenAlgo's REST APIs and WebSocke
 - General Documentation: https://docs.openalgo.in
 - Source: https://github.com/marketcalls/openalgo-python-library
 
+## What's New in 2.1.1
+
+Backtesting fixes and additions, found while writing the beginner tutorial on real
+OpenAlgo data:
+
+- **Charges from 1 July 2020.** Backtests are charged at the rates of each trade date
+  (STT, exchange charges, SEBI fee, stamp duty, GST), each rate sourced; before, a run
+  that started before October 2024 stopped with a charges error.
+- **Portfolio rebalancing.** `self.rebalance({"RELIANCE": 25, "HDFCBANK": 25, ...})`
+  sells before it buys; delivery cash is counted at cost; same-day sale proceeds follow
+  the brokers' dated rules; `result.final_positions` shows each holding's weight.
+- **Easier for beginners.** Every rejected order is reported with what to do,
+  `result.to_csv()` and `result.to_excel()` export the tables, result times are in IST,
+  expired futures contracts are named as such, and error messages say what to pass.
+- **Futures margin** is 20 percent of contract value by default, with `margin=` per
+  underlying. CTT on MCX follows the exempt list of the CTT Rules.
+
+The full list is in [CHANGELOG.md](CHANGELOG.md). Backtesting guide:
+https://docs.openalgo.in/trading-platform/python/backtesting
+
 ## What's New in 2.1.0
 
 **A backtesting engine for Indian markets (preview).** `openalgo.backtest` runs a

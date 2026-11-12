@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-11-13
+
 ### Added
 
 - **`Result.final_positions` shows each position's `value_rupees` and `weight_pct`** (its
