@@ -1,0 +1,49 @@
+# broker_units: what the OpenAlgo server source shows about the unit of lotsize,
+# tick_size and order quantity per broker. This is a reading of source code, NOT a
+# confirmation of live broker behaviour: every row is unverified until an order and a
+# symbol-master row have been checked against the live broker (a Phase 0 exit item).
+#
+# Columns
+#   broker, segment        broker name; segment is equity (NSE and BSE), nfo_bfo, mcx or cds_bcd
+#   valid_from, valid_to   dates the reading applies to: the server source was read on
+#                          2026-11-12 at commit d8cc13f24
+#   lotsize_field          what the symbol-master column `lotsize` holds after the broker's
+#                          master-contract import
+#   tick_size_unit         what the column `tick_size` holds, and the arithmetic applied
+#   order_quantity_unit    how an order `quantity` reaches the broker
+#   live_status            whether the reading was confirmed on a live broker
+#   source                 files and line numbers in the server repository (paths start at
+#                          broker/<name>/)
+#   status                 unverified for every row (see above)
+#   note                   what the source cannot show, and behaviour that changed recently
+#
+# The OpenAlgo convention the adapters aim for: quantity in units on every segment and
+# every broker (one lot of CRUDEOIL is quantity 100), and tick_size in rupees.
+#
+# The server has 38 broker folders; this table reads 6 of them (zerodha, angel, upstox,
+# fyers, dhan, kotak). Snapshot lot sizes are used only for these six brokers.
+broker,segment,valid_from,valid_to,lotsize_field,tick_size_unit,order_quantity_unit,live_status,source,status,note
+zerodha,equity,2026-11-12,,Kite lot_size unchanged,Kite tick_size unchanged (rupees expected; the source does not show the raw unit),units; cast to an integer,not confirmed live,database/master_contract_db.py:204-215; mapping/transform_data.py:8-18 and 36; mapping/mcx_contract_size.py:342-367,unverified,
+zerodha,nfo_bfo,2026-11-12,,Kite lot_size unchanged (units per lot),Kite tick_size unchanged (rupees expected; the source does not show the raw unit),units; cast to an integer,not confirmed live,database/master_contract_db.py:204-215; mapping/transform_data.py:8-18 and 36; mapping/mcx_contract_size.py:342-367,unverified,
+zerodha,mcx,2026-11-12,,market lot from a static table keyed on the root (CRUDEOIL 100; GOLD 1); a root not in the table keeps Kite's 1,Kite tick_size unchanged (rupees expected; the source does not show the raw unit),units in OpenAlgo; cast to an integer and divided by the lot before sending because Kite counts contracts,not confirmed live,mapping/mcx_contract_size.py:342-373; mapping/transform_data.py:8-18 and 36; database/master_contract_db.py:231-266,unverified,Before server commit cf27e5f98 (2026-09-22) the lot was 1 and quantity was in contracts; an install that has not re-downloaded the master contract still behaves that way
+zerodha,cds_bcd,2026-11-12,,Kite lot_size unchanged (the value is not shown in the source),Kite tick_size unchanged (the source does not show the raw unit),units; cast to an integer,not confirmed live,database/master_contract_db.py:177-215; mapping/transform_data.py:8-18 and 36; mapping/mcx_contract_size.py:342-367,unverified,No contract multiplier for currency contracts is stored anywhere
+angel,equity,2026-11-12,,Angel lotsize as an integer,Angel tick_size divided by 100 (rupees if Angel sends paise),units; sent unchanged,not confirmed live,database/master_contract_db.py:196-197; mapping/transform_data.py:27,unverified,
+angel,nfo_bfo,2026-11-12,,Angel lotsize as an integer (units per lot),Angel tick_size divided by 100 (rupees if Angel sends paise),units; sent unchanged,not confirmed live,database/master_contract_db.py:196-197; mapping/transform_data.py:27,unverified,
+angel,mcx,2026-11-12,,Angel lotsize as an integer,Angel tick_size divided by 100 (rupees if Angel sends paise),units; sent unchanged,not confirmed live,database/master_contract_db.py:196-197; mapping/transform_data.py:27; zerodha/mapping/mcx_contract_size.py:15-17,unverified,A comment in the Zerodha adapter (zerodha/mapping/mcx_contract_size.py:15-17) says Angel reports CRUDEOIL as 100 and COPPER as 2500; whether Angel counts MCX quantity in units or lots is not shown by the source
+angel,cds_bcd,2026-11-12,,Angel lotsize as an integer,Angel tick_size divided by 100,units; sent unchanged,not confirmed live,database/master_contract_db.py:186-197; mapping/transform_data.py:27,unverified,The scale of Angel's raw currency tick and strike is not shown by the source
+upstox,equity,2026-11-12,,Upstox lot_size unchanged,Upstox tick_size divided by 100 (paise to rupees),units; sent unchanged,not confirmed live,database/master_contract_db.py:153-177 and 311-320; mapping/transform_data.py:23,unverified,tick_size was stored in paise before server commit 0db9038de (2026-09-11)
+upstox,nfo_bfo,2026-11-12,,Upstox lot_size unchanged (units per lot),Upstox tick_size divided by 100 (paise to rupees),units; sent unchanged,not confirmed live,database/master_contract_db.py:153-177 and 311-320; mapping/transform_data.py:23,unverified,tick_size was stored in paise before server commit 0db9038de (2026-09-11)
+upstox,mcx,2026-11-12,,Upstox lot_size unchanged,Upstox tick_size divided by 100 (paise to rupees),units; sent unchanged,not confirmed live,database/master_contract_db.py:153-177 and 311-320; mapping/transform_data.py:23,unverified,Whether Upstox counts MCX quantity in units or lots is not shown by the source
+upstox,cds_bcd,2026-11-12,,Upstox lot_size unchanged,Upstox tick_size divided by 100 (paise to rupees),units; sent unchanged,not confirmed live,database/master_contract_db.py:136-177 and 311-320; mapping/transform_data.py:23,unverified,
+fyers,equity,2026-11-12,,Fyers Minimum lot size,Fyers Tick size unchanged (the source does not show the raw unit),units; sent unchanged as an integer,not confirmed live,database/master_contract_db.py:284-285 and 377-378; mapping/transform_data.py:16-23,unverified,
+fyers,nfo_bfo,2026-11-12,,Fyers Minimum lot size (units per lot),Fyers Tick size unchanged (the source does not show the raw unit),units; sent unchanged as an integer,not confirmed live,database/master_contract_db.py:518-519 and 652-653; mapping/transform_data.py:16-23,unverified,
+fyers,mcx,2026-11-12,,Fyers qtyMultiplier as an integer,Fyers tickSize unchanged (the source does not show the raw unit),units; sent unchanged as an integer,not confirmed live,database/master_contract_db.py:726-727; mapping/transform_data.py:16-23,unverified,If Fyers counts MCX quantity in lots one OpenAlgo lot would be sent as many lots: the highest-risk row to confirm
+fyers,cds_bcd,2026-11-12,,Fyers qtyMultiplier (CDS only; BCD is not downloaded),Fyers tickSize unchanged (the source does not show the raw unit),units; sent unchanged as an integer,not confirmed live,database/master_contract_db.py:592-593; mapping/transform_data.py:16-23,unverified,
+dhan,equity,2026-11-12,,Dhan SEM_LOT_UNITS unchanged,Dhan SEM_TICK_SIZE divided by 100 (paise to rupees); index rows left as sent,units; sent unchanged as an integer,not confirmed live,database/master_contract_db.py:287-297; mapping/transform_data.py:106,unverified,
+dhan,nfo_bfo,2026-11-12,,Dhan SEM_LOT_UNITS unchanged (units per lot),Dhan SEM_TICK_SIZE divided by 100 (paise to rupees),units; sent unchanged as an integer,not confirmed live,database/master_contract_db.py:287-297; mapping/transform_data.py:106,unverified,
+dhan,mcx,2026-11-12,,Dhan SEM_LOT_UNITS unchanged,Dhan SEM_TICK_SIZE divided by 100 (paise to rupees),units; sent unchanged as an integer,not confirmed live,database/master_contract_db.py:287-297; mapping/transform_data.py:106,unverified,Whether Dhan counts MCX quantity in units or lots is not shown by the source
+dhan,cds_bcd,2026-11-12,,Dhan SEM_LOT_UNITS unchanged,Dhan SEM_TICK_SIZE divided by 100,units; sent unchanged as an integer,not confirmed live,database/master_contract_db.py:237-297; mapping/transform_data.py:106,unverified,
+kotak,equity,2026-11-12,,Kotak lLotSize unchanged,Kotak dTickSize divided by 100,units; sent unchanged as text,not confirmed live,database/master_contract_db.py:202-203 and 256-257; mapping/transform_data.py:180,unverified,
+kotak,nfo_bfo,2026-11-12,,Kotak lLotSize unchanged (units per lot),Kotak dTickSize divided by 100,units; sent unchanged as text,not confirmed live,database/master_contract_db.py:354-355 and 648-649; mapping/transform_data.py:180,unverified,
+kotak,mcx,2026-11-12,,Kotak lLotSize unchanged,Kotak dTickSize divided by 100,units; sent unchanged as text,not confirmed live,database/master_contract_db.py:602-603; mapping/transform_data.py:180,unverified,Whether Kotak counts MCX quantity in units or lots is not shown by the source
+kotak,cds_bcd,2026-11-12,,Kotak lLotSize unchanged (1 for USDINR in the server's test fixture; BCD is not downloaded),Kotak dTickSize divided by 10000000,units; sent unchanged as text,not confirmed live,database/master_contract_db.py:525 and 561-562; mapping/transform_data.py:180,unverified,A currency lot of 1 means the contract multiplier of 1000 is not in the symbol master

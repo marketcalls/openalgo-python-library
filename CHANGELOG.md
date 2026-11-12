@@ -53,6 +53,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and treats a session as complete only well after its close. No market-data
   downloader is bundled. Part of the backtest engine being built; the interface may
   change before the backtest beta.
+- **`openalgo.backtest.reference` (preview).** Instruments and dated reference tables
+  for Indian derivatives: OpenAlgo symbol parsing and formatting, lot size, freeze
+  quantity, strike step, tick size, settlement and expiry dates by trade date for the
+  NSE and BSE index underlyings, and the main MCX contracts. Each row cites its exchange
+  circular or file and is marked verified or unverified; using an unverified row warns,
+  and a date the tables do not cover raises instead of guessing. Contracts re-dated by
+  the exchange after listing keep their listed expiry and their real last trading day.
+  The tables reproduce the listed contracts, last trading days and lot sizes of 92
+  days of NSE and BSE bhavcopies. Part of the backtest engine being built; the
+  interface may change before the backtest beta.
 - **`openalgo.backtest.costs` (preview).** Indian trading charges for NSE and BSE
   equity (delivery and intraday), NFO and BFO futures and options, and MCX futures:
   brokerage presets (`zerodha`, `flat`, `percent`, `zero_brokerage`, `custom`), STT or

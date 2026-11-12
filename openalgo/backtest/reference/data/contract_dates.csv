@@ -1,0 +1,157 @@
+# contract_dates: the dates of one contract as they stood on a range of trade dates.
+#
+# Columns
+#   underlying, exchange   the underlying symbol and its derivatives exchange (NFO, BFO)
+#   contract               the contract's identity: the date the weekday rule in
+#                          expiry_rules.csv gives for its week or month. It does not change
+#                          when the exchange re-dates the contract
+#   valid_from, valid_to   TRADE dates the row applies to, both inclusive (empty valid_to:
+#                          open). The first row of a contract starts on its first listing
+#                          day: the date of the first bhavcopy read that lists it (the
+#                          exchange may have listed it a little earlier), or the listing day
+#                          the trading cycle in a circular gives. On earlier trade dates the
+#                          contract is not listed: no schedule holds it and no symbol names it
+#   expiry_date            the listed expiry on those trade dates: the date in the symbol and
+#                          in the exchange's expiry column
+#   last_trading_day       the day the contract stops trading, as known on those trade dates
+#   source                 the circulars, notices and bhavcopies the row was read from
+#   status                 verified: checked against those documents; unverified: not confirmed
+#   note                   why the weekday rule and the calendar are not enough
+#
+# A contract with no row here takes its dates from the weekday rule and the calendar:
+# the rule date, moved back to the previous trading day when the exchange is closed, as
+# both the listed expiry and the last trading day. Rows record what that cannot give:
+#   - a contract re-dated by a circular after it was listed (the symbol changes with it,
+#     so each symbol is valid only on the trade dates of its row)
+#   - a contract whose maturity moved while its listed expiry did not (Saturday
+#     2024-01-20 carried the expiry of contracts listed for Monday 2024-01-22)
+#   - an expiry around a special session (Muhurat, Saturday)
+#   - a contract listed into a year the calendar has no holiday list for
+#
+# A symbol a re-dated contract carried on other trade dates still names it (an alias):
+# instrument() resolves it to the contract with the dates and the symbol in force on the
+# trade date.
+#
+# BSE bhavcopies list only contracts that traded or hold open interest, so a BSE contract
+# can be listed on a day whose bhavcopy does not show it; NSE bhavcopies list every
+# contract. Not covered: the BANKEX Friday contracts that expired early on 2023-10-13
+# (BSE notice 20230830-8 ended every Friday contract that day; which ones were listed is
+# not known).
+#
+# NSE bhavcopies: https://nsearchives.nseindia.com/content/fo/ and
+#   https://nsearchives.nseindia.com/content/historical/DERIVATIVES/
+# BSE bhavcopies: https://www.bseindia.com/download/Bhavcopy/Derivative/
+underlying,exchange,contract,valid_from,valid_to,expiry_date,last_trading_day,source,status,note
+NIFTY,NFO,2021-11-04,2021-10-13,,2021-11-03,2021-11-03,NSE F&O bhavcopy of 2021-11-03 (fo03NOV2021bhav.csv); NSE/FAOP/46625 (2020-12-11); first listed in the NSE F&O bhavcopy of 2021-10-13,verified,Thursday 2021-11-04 was a holiday with an evening Muhurat session
+NIFTY,NFO,2023-06-29,2019-01-01,2023-06-27,2023-06-29,2023-06-29,NSE F&O bhavcopies of 2023-06-26 and 2023-06-27; NSE/FAOP/37689 (2018-05-04) trading cycle: three quarterly and the next 8 half-yearly expiries,verified,Listed for Thursday 2023-06-29 while the holiday was set for 2023-06-28
+NIFTY,NFO,2023-06-29,2023-06-28,,2023-06-28,2023-06-28,NSE F&O bhavcopy of 2023-06-28,verified,The holiday moved to 2023-06-29 and the expiry moved back to 2023-06-28
+NIFTY,NFO,2025-09-30,2024-11-12,2025-07-31,2025-09-25,2025-09-25,NSE/FAOP/68747 (2025-06-25); NSE F&O bhavcopies of 2025-07-01 and 2025-07-31; first listed in the NSE F&O bhavcopy of 2024-11-12,verified,Re-dated to the last Tuesday at the close of 2025-07-31 (bhavcopy of 2025-08-01)
+NIFTY,NFO,2025-10-21,2025-10-17,,2025-10-20,2025-10-20,NSE F&O bhavcopy of 2025-10-20; NSE/FAOP/65588 (2024-12-13); first listed in the NSE F&O bhavcopy of 2025-10-17,verified,Tuesday 2025-10-21 was a holiday with an afternoon Muhurat session
+NIFTY,NFO,2025-12-30,2021-01-11,2025-07-31,2025-12-24,2025-12-24,NSE/FAOP/68747 (2025-06-25); NSE F&O bhavcopy of 2025-07-31; first listed in the NSE F&O bhavcopy of 2021-01-11,verified,Re-dated to the last Tuesday at the close of 2025-07-31
+NIFTY,NFO,2026-03-31,2025-04-24,2025-07-31,2026-03-26,2026-03-26,NSE/FAOP/68747 (2025-06-25); NSE F&O bhavcopy of 2025-07-31; first listed in the NSE F&O bhavcopy of 2025-04-24,verified,Re-dated to the last Tuesday at the close of 2025-07-31
+NIFTY,NFO,2026-03-31,2025-08-01,2025-12-26,2026-03-31,2026-03-31,NSE F&O bhavcopies of 2025-08-01 and 2025-12-26,verified,Listed for Tuesday 2026-03-31 before that day became a holiday
+NIFTY,NFO,2026-03-31,2025-12-27,,2026-03-30,2026-03-30,NSE F&O bhavcopy of 2025-12-29,verified,2026-03-31 became a holiday and the expiry moved back to 2026-03-30
+NIFTY,NFO,2026-06-30,2021-06-25,2025-07-31,2026-06-25,2026-06-25,NSE/FAOP/68747 (2025-06-25); NSE F&O bhavcopy of 2025-07-31; first listed in the NSE F&O bhavcopy of 2021-06-25,verified,Re-dated to the last Tuesday at the close of 2025-07-31
+NIFTY,NFO,2026-12-29,2022-01-24,2025-07-31,2026-12-31,2026-12-31,NSE/FAOP/68747 (2025-06-25); NSE F&O bhavcopy of 2025-07-31; first listed in the NSE F&O bhavcopy of 2022-01-24,verified,Re-dated to the last Tuesday at the close of 2025-07-31
+NIFTY,NFO,2027-01-26,2026-11-11,,2027-01-25,2027-01-25,NSE F&O bhavcopy of 2026-11-11 (first listed in the bhavcopy of 2026-11-11),verified,Tuesday 2027-01-26 is Republic Day; the calendar has no 2027 holiday list
+NIFTY,NFO,2027-03-30,2026-06-01,,2027-03-30,2027-03-30,NSE F&O bhavcopies of 2026-06-01 and 2026-11-11 (first listed in the bhavcopy of 2026-06-01),verified,Listed into 2027
+NIFTY,NFO,2027-06-29,2023-04-20,2025-07-31,2027-06-24,2027-06-24,NSE/FAOP/68747 (2025-06-25); NSE F&O bhavcopy of 2025-07-31; first listed in the NSE F&O bhavcopy of 2023-04-20,verified,Re-dated to the last Tuesday at the close of 2025-07-31
+NIFTY,NFO,2027-06-29,2025-08-01,,2027-06-29,2027-06-29,NSE F&O bhavcopies of 2025-08-01 and 2026-11-11,verified,Listed into 2027
+NIFTY,NFO,2027-09-28,2026-11-11,,2027-09-28,2027-09-28,NSE F&O bhavcopy of 2026-11-11 (first listed in the bhavcopy of 2026-11-11),verified,Listed into 2027
+NIFTY,NFO,2027-12-28,2023-04-20,2025-07-31,2027-12-30,2027-12-30,NSE/FAOP/68747 (2025-06-25); NSE F&O bhavcopy of 2025-07-31; first listed in the NSE F&O bhavcopy of 2023-04-20,verified,Re-dated to the last Tuesday at the close of 2025-07-31
+NIFTY,NFO,2027-12-28,2025-08-01,,2027-12-28,2027-12-28,NSE F&O bhavcopies of 2025-08-01 and 2026-11-11,verified,Listed into 2027
+NIFTY,NFO,2028-06-27,2023-06-30,2025-07-31,2028-06-29,2028-06-29,NSE/FAOP/68747 (2025-06-25); NSE F&O bhavcopy of 2025-07-31; first listed in the NSE F&O bhavcopy of 2023-06-30,verified,Re-dated to the last Tuesday at the close of 2025-07-31
+NIFTY,NFO,2028-06-27,2025-08-01,,2028-06-27,2028-06-27,NSE F&O bhavcopies of 2025-08-01 and 2026-11-11,verified,Listed into 2028
+NIFTY,NFO,2028-12-26,2024-01-18,2025-07-31,2028-12-28,2028-12-28,NSE/FAOP/68747 (2025-06-25); NSE F&O bhavcopy of 2025-07-31; first listed in the NSE F&O bhavcopy of 2024-01-18,verified,Re-dated to the last Tuesday at the close of 2025-07-31
+NIFTY,NFO,2028-12-26,2025-08-01,,2028-12-26,2028-12-26,NSE F&O bhavcopies of 2025-08-01 and 2026-11-11,verified,Listed into 2028
+NIFTY,NFO,2029-06-26,2024-07-05,2025-07-31,2029-06-28,2029-06-28,NSE/FAOP/68747 (2025-06-25); NSE F&O bhavcopy of 2025-07-31; first listed in the NSE F&O bhavcopy of 2024-07-05,verified,Re-dated to the last Tuesday at the close of 2025-07-31
+NIFTY,NFO,2029-06-26,2025-08-01,,2029-06-26,2029-06-26,NSE F&O bhavcopies of 2025-08-01 and 2026-11-11,verified,Listed into 2029
+NIFTY,NFO,2029-12-25,2024-12-27,2025-07-31,2029-12-27,2029-12-27,NSE/FAOP/68747 (2025-06-25); NSE F&O bhavcopy of 2025-07-31; first listed in the NSE F&O bhavcopy of 2024-12-27,verified,Re-dated at the close of 2025-07-31
+NIFTY,NFO,2029-12-25,2025-08-01,,2029-12-24,2029-12-24,NSE F&O bhavcopies of 2025-08-01 and 2026-11-11,verified,The last Tuesday is 2029-12-25 (Christmas); listed for Monday 2029-12-24
+NIFTY,NFO,2030-06-25,2025-07-01,,2030-06-25,2030-06-25,NSE F&O bhavcopies of 2025-07-31 and 2026-11-11; first listed in the NSE F&O bhavcopy of 2025-07-01,verified,Listed into 2030
+NIFTY,NFO,2030-12-31,2025-12-31,,2030-12-31,2030-12-31,NSE F&O bhavcopy of 2026-11-11; first listed in the NSE F&O bhavcopy of 2025-12-31,verified,Listed into 2030
+NIFTY,NFO,2031-06-24,2026-11-11,,2031-06-24,2031-06-24,NSE F&O bhavcopy of 2026-11-11 (first listed in the bhavcopy of 2026-11-11),verified,Listed into 2031
+BANKNIFTY,NFO,2021-11-04,2021-10-13,,2021-11-03,2021-11-03,NSE F&O bhavcopy of 2021-11-03 (fo03NOV2021bhav.csv); NSE/FAOP/46625 (2020-12-11); first listed in the NSE F&O bhavcopy of 2021-10-13,verified,Thursday 2021-11-04 was a holiday with an evening Muhurat session
+BANKNIFTY,NFO,2023-06-29,2023-04-20,2023-06-27,2023-06-29,2023-06-29,NSE F&O bhavcopies of 2023-06-26 and 2023-06-27; first listed in the NSE F&O bhavcopy of 2023-04-20,verified,Listed for Thursday 2023-06-29 while the holiday was set for 2023-06-28
+BANKNIFTY,NFO,2023-06-29,2023-06-28,,2023-06-28,2023-06-28,NSE F&O bhavcopy of 2023-06-28,verified,The holiday moved to 2023-06-29 and the expiry moved back to 2023-06-28
+BANKNIFTY,NFO,2023-09-06,2023-08-10,2023-09-01,2023-09-07,2023-09-07,NSE/FAOP/57540 (2023-07-12); NSE F&O bhavcopies of 2023-08-10 and 2023-09-01 (first listed in the bhavcopy of 2023-08-10),verified,Weekly contracts re-dated to Wednesday from 2023-09-04
+BANKNIFTY,NFO,2023-09-13,2023-09-01,2023-09-01,2023-09-14,2023-09-14,NSE/FAOP/57540 (2023-07-12); NSE F&O bhavcopy of 2023-09-01 (first listed in the bhavcopy of 2023-09-01),verified,Weekly contracts re-dated to Wednesday from 2023-09-04
+BANKNIFTY,NFO,2023-09-20,2023-09-01,2023-09-01,2023-09-21,2023-09-21,NSE/FAOP/57540 (2023-07-12); NSE F&O bhavcopy of 2023-09-01 (first listed in the bhavcopy of 2023-09-01),verified,Weekly contracts re-dated to Wednesday from 2023-09-04
+BANKNIFTY,NFO,2023-10-04,2023-09-01,2023-09-01,2023-10-05,2023-10-05,NSE/FAOP/57540 (2023-07-12); NSE F&O bhavcopy of 2023-09-01 (first listed in the bhavcopy of 2023-09-01),verified,Weekly contracts re-dated to Wednesday from 2023-09-04
+BANKNIFTY,NFO,2024-03-27,2023-04-20,2024-02-29,2024-03-28,2024-03-28,NSE/FAOP/60011 (2023-12-28); NSE F&O bhavcopy of 2024-02-20; first listed in the NSE F&O bhavcopy of 2023-04-20,verified,Monthly contracts re-dated to the last Wednesday from March 2024
+BANKNIFTY,NFO,2024-04-24,2024-02-20,2024-02-29,2024-04-25,2024-04-25,NSE/FAOP/60011 (2023-12-28); NSE F&O bhavcopy of 2024-02-20 (first listed in the bhavcopy of 2024-02-20),verified,Monthly contracts re-dated to the last Wednesday from March 2024
+BANKNIFTY,NFO,2024-06-26,2023-06-30,2024-02-29,2024-06-27,2024-06-27,NSE/FAOP/60011 (2023-12-28); NSE F&O bhavcopies of 2023-08-10 2023-09-01 and 2024-02-20; first listed in the NSE F&O bhavcopy of 2023-06-30,verified,Monthly contracts re-dated to the last Wednesday from March 2024
+BANKNIFTY,NFO,2024-09-25,2024-01-18,2024-02-29,2024-09-26,2024-09-26,NSE/FAOP/60011 (2023-12-28); NSE F&O bhavcopy of 2024-02-20; first listed in the NSE F&O bhavcopy of 2024-01-18,verified,Monthly contracts re-dated to the last Wednesday from March 2024
+BANKNIFTY,NFO,2024-12-25,2024-01-18,2024-02-29,2024-12-26,2024-12-26,NSE/FAOP/60011 (2023-12-28); NSE F&O bhavcopy of 2024-02-20; first listed in the NSE F&O bhavcopy of 2024-01-18,verified,Monthly contracts re-dated to the last Wednesday from March 2024
+BANKNIFTY,NFO,2024-12-25,2024-03-01,,2024-12-24,2024-12-24,NSE F&O bhavcopies of 2024-12-02 and 2024-12-24,verified,The last Wednesday is 2024-12-25 (Christmas)
+BANKNIFTY,NFO,2025-01-30,2024-11-12,2025-01-01,2025-01-29,2025-01-29,NSE/FAOP/65336 (2024-11-29); NSE F&O bhavcopies of 2024-12-02 and 2025-01-01; first listed in the NSE F&O bhavcopy of 2024-11-12,verified,Re-dated to the last Thursday at the close of 2025-01-01 (bhavcopy of 2025-01-02)
+BANKNIFTY,NFO,2025-02-27,2024-12-02,2025-01-01,2025-02-26,2025-02-26,NSE/FAOP/65336 (2024-11-29); NSE F&O bhavcopy of 2025-01-01; first listed in the NSE F&O bhavcopy of 2024-12-02,verified,Re-dated to the last Thursday at the close of 2025-01-01
+BANKNIFTY,NFO,2025-03-27,2024-04-24,2025-01-01,2025-03-26,2025-03-26,NSE/FAOP/65336 (2024-11-29); NSE F&O bhavcopy of 2025-01-01; first listed in the NSE F&O bhavcopy of 2024-04-24,verified,Re-dated to the last Thursday at the close of 2025-01-01
+BANKNIFTY,NFO,2025-06-26,2024-07-05,2025-01-01,2025-06-25,2025-06-25,NSE/FAOP/65336 (2024-11-29); NSE F&O bhavcopy of 2025-01-01; first listed in the NSE F&O bhavcopy of 2024-07-05,verified,Re-dated to the last Thursday at the close of 2025-01-01
+BANKNIFTY,NFO,2025-09-30,2024-11-12,2025-01-01,2025-09-24,2025-09-24,NSE/FAOP/65336 (2024-11-29); NSE F&O bhavcopy of 2025-01-01; first listed in the NSE F&O bhavcopy of 2024-11-12,verified,Re-dated to Thursday 2025-09-25 at the close of 2025-01-01
+BANKNIFTY,NFO,2025-09-30,2025-01-02,2025-07-31,2025-09-25,2025-09-25,NSE/FAOP/68747 (2025-06-25); NSE F&O bhavcopies of 2025-01-02 and 2025-07-31,verified,Re-dated to the last Tuesday at the close of 2025-07-31
+BANKNIFTY,NFO,2025-12-30,2024-12-26,2025-01-01,2025-12-31,2025-12-31,NSE/FAOP/65336 (2024-11-29); NSE F&O bhavcopy of 2025-01-01; first listed in the NSE F&O bhavcopy of 2024-12-26,verified,Re-dated to Wednesday 2025-12-24 at the close of 2025-01-01 (the last Thursday is Christmas)
+BANKNIFTY,NFO,2025-12-30,2025-01-02,2025-07-31,2025-12-24,2025-12-24,NSE/FAOP/68747 (2025-06-25); NSE F&O bhavcopies of 2025-01-02 and 2025-07-31,verified,Re-dated to the last Tuesday at the close of 2025-07-31
+BANKNIFTY,NFO,2026-03-31,2025-04-24,2025-07-31,2026-03-26,2026-03-26,NSE/FAOP/68747 (2025-06-25); NSE F&O bhavcopy of 2025-07-31; first listed in the NSE F&O bhavcopy of 2025-04-24,verified,Re-dated to the last Tuesday at the close of 2025-07-31
+BANKNIFTY,NFO,2026-03-31,2025-08-01,2025-12-26,2026-03-31,2026-03-31,NSE F&O bhavcopies of 2025-08-01 and 2025-12-26,verified,Listed for Tuesday 2026-03-31 before that day became a holiday
+BANKNIFTY,NFO,2026-03-31,2025-12-27,,2026-03-30,2026-03-30,NSE F&O bhavcopy of 2025-12-29,verified,2026-03-31 became a holiday and the expiry moved back to 2026-03-30
+BANKNIFTY,NFO,2027-01-26,2026-11-11,,2027-01-25,2027-01-25,NSE F&O bhavcopy of 2026-11-11 (first listed in the bhavcopy of 2026-11-11),verified,Tuesday 2027-01-26 is Republic Day; the calendar has no 2027 holiday list
+BANKNIFTY,NFO,2027-03-30,2026-06-01,,2027-03-30,2027-03-30,NSE F&O bhavcopy of 2026-11-11; first listed in the NSE F&O bhavcopy of 2026-06-01,verified,Listed into 2027
+BANKNIFTY,NFO,2027-06-29,2026-11-11,,2027-06-29,2027-06-29,NSE F&O bhavcopy of 2026-11-11 (first listed in the bhavcopy of 2026-11-11),verified,Listed into 2027
+BANKNIFTY,NFO,2027-09-28,2026-11-11,,2027-09-28,2027-09-28,NSE F&O bhavcopy of 2026-11-11 (first listed in the bhavcopy of 2026-11-11),verified,Listed into 2027
+FINNIFTY,NFO,2021-10-19,2021-10-13,2021-10-14,2021-10-21,2021-10-21,NSE/FAOP/49595 (2021-09-15); NSE F&O bhavcopies of 2021-10-14 and 2021-10-18; first listed in the NSE F&O bhavcopy of 2021-10-13,verified,Preponed to the Tuesday of the same week at the close of 2021-10-14
+FINNIFTY,NFO,2021-10-26,2021-10-13,2021-10-14,2021-10-28,2021-10-28,NSE/FAOP/49595 (2021-09-15); NSE F&O bhavcopies of 2021-10-14 and 2021-10-18; first listed in the NSE F&O bhavcopy of 2021-10-13,verified,Preponed to the Tuesday of the same week at the close of 2021-10-14
+FINNIFTY,NFO,2021-11-02,2021-10-13,2021-10-14,2021-11-03,2021-11-03,NSE/FAOP/49595 (2021-09-15); NSE F&O bhavcopies of 2021-10-14 and 2021-10-18; first listed in the NSE F&O bhavcopy of 2021-10-13,verified,Preponed to the Tuesday of the same week at the close of 2021-10-14
+FINNIFTY,NFO,2021-11-09,2021-10-13,2021-10-14,2021-11-11,2021-11-11,NSE/FAOP/49595 (2021-09-15); NSE F&O bhavcopies of 2021-10-14 and 2021-10-18; first listed in the NSE F&O bhavcopy of 2021-10-13,verified,Preponed to the Tuesday of the same week at the close of 2021-10-14
+FINNIFTY,NFO,2021-11-16,2021-10-13,2021-10-14,2021-11-18,2021-11-18,NSE/FAOP/49595 (2021-09-15); NSE F&O bhavcopies of 2021-10-14 and 2021-10-18; first listed in the NSE F&O bhavcopy of 2021-10-13,verified,Preponed to the Tuesday of the same week at the close of 2021-10-14
+FINNIFTY,NFO,2021-11-23,2021-10-13,2021-10-14,2021-11-25,2021-11-25,NSE/FAOP/49595 (2021-09-15); NSE F&O bhavcopies of 2021-10-14 and 2021-10-18; first listed in the NSE F&O bhavcopy of 2021-10-13,verified,The November 2021 monthly contract; preponed to the Tuesday of its week at the close of 2021-10-14
+FINNIFTY,NFO,2021-11-30,2021-10-13,2021-10-14,2021-12-02,2021-12-02,NSE/FAOP/49595 (2021-09-15); NSE F&O bhavcopies of 2021-10-14 and 2021-10-18; first listed in the NSE F&O bhavcopy of 2021-10-13,verified,Preponed to the Tuesday of the same week at the close of 2021-10-14
+FINNIFTY,NFO,2021-12-07,2021-10-13,2021-10-14,2021-12-09,2021-12-09,NSE/FAOP/49595 (2021-09-15); NSE F&O bhavcopies of 2021-10-14 and 2021-10-18; first listed in the NSE F&O bhavcopy of 2021-10-13,verified,Preponed to the Tuesday of the same week at the close of 2021-10-14
+FINNIFTY,NFO,2021-12-28,2021-10-13,2021-10-14,2021-12-30,2021-12-30,NSE/FAOP/49595 (2021-09-15); NSE F&O bhavcopies of 2021-10-14 and 2021-10-18; first listed in the NSE F&O bhavcopy of 2021-10-13,verified,Preponed to the Tuesday of the same week at the close of 2021-10-14
+FINNIFTY,NFO,2025-01-30,2024-11-12,2025-01-01,2025-01-28,2025-01-28,NSE/FAOP/65336 (2024-11-29); NSE F&O bhavcopies of 2025-01-01 and 2025-01-02; first listed in the NSE F&O bhavcopy of 2024-11-12,verified,Re-dated to the last Thursday at the close of 2025-01-01
+FINNIFTY,NFO,2025-02-27,2024-12-02,2025-01-01,2025-02-25,2025-02-25,NSE/FAOP/65336 (2024-11-29); NSE F&O bhavcopies of 2025-01-01 and 2025-01-02; first listed in the NSE F&O bhavcopy of 2024-12-02,verified,Re-dated to the last Thursday at the close of 2025-01-01
+FINNIFTY,NFO,2025-03-27,2025-01-01,2025-01-01,2025-03-25,2025-03-25,NSE/FAOP/65336 (2024-11-29); NSE F&O bhavcopies of 2025-01-01 and 2025-01-02 (first listed in the bhavcopy of 2025-01-01),verified,Re-dated to the last Thursday at the close of 2025-01-01
+FINNIFTY,NFO,2027-01-26,2026-11-11,,2027-01-25,2027-01-25,NSE F&O bhavcopy of 2026-11-11 (first listed in the bhavcopy of 2026-11-11),verified,Tuesday 2027-01-26 is Republic Day; the calendar has no 2027 holiday list
+MIDCPNIFTY,NFO,2023-05-03,2023-04-20,2023-04-25,2023-05-02,2023-05-02,NSE/FAOP/56128 (2023-03-24); NSE F&O bhavcopies of 2023-04-25 and 2023-04-26; first listed in the NSE F&O bhavcopy of 2023-04-20,verified,Re-dated to the Wednesday of the same week at the close of 2023-04-25
+MIDCPNIFTY,NFO,2023-05-10,2023-04-20,2023-04-25,2023-05-09,2023-05-09,NSE/FAOP/56128 (2023-03-24); NSE F&O bhavcopies of 2023-04-25 and 2023-04-26; first listed in the NSE F&O bhavcopy of 2023-04-20,verified,Re-dated to the Wednesday of the same week at the close of 2023-04-25
+MIDCPNIFTY,NFO,2023-05-17,2023-04-20,2023-04-25,2023-05-16,2023-05-16,NSE/FAOP/56128 (2023-03-24); NSE F&O bhavcopies of 2023-04-25 and 2023-04-26; first listed in the NSE F&O bhavcopy of 2023-04-20,verified,Re-dated to the Wednesday of the same week at the close of 2023-04-25
+MIDCPNIFTY,NFO,2023-05-24,2023-04-20,2023-04-25,2023-05-23,2023-05-23,NSE/FAOP/56128 (2023-03-24); NSE F&O bhavcopies of 2023-04-25 and 2023-04-26; first listed in the NSE F&O bhavcopy of 2023-04-20,verified,Re-dated to the Wednesday of the same week at the close of 2023-04-25
+MIDCPNIFTY,NFO,2023-05-31,2023-04-20,2023-04-25,2023-05-30,2023-05-30,NSE/FAOP/56128 (2023-03-24); NSE F&O bhavcopies of 2023-04-25 and 2023-04-26; first listed in the NSE F&O bhavcopy of 2023-04-20,verified,The May 2023 monthly contract; re-dated to Wednesday at the close of 2023-04-25
+MIDCPNIFTY,NFO,2023-06-28,2023-04-20,,2023-06-27,2023-06-27,NSE F&O bhavcopies of 2023-04-25 2023-04-26 2023-06-26 2023-06-27 and 2023-06-28; first listed in the NSE F&O bhavcopy of 2023-04-20,verified,The June 2023 monthly contract stayed on Tuesday 2023-06-27 under the Wednesday rule
+MIDCPNIFTY,NFO,2023-08-21,2023-08-10,2023-08-16,2023-08-23,2023-08-23,NSE/FAOP/57538 (2023-07-12); NSE F&O bhavcopy of 2023-08-10 (first listed in the bhavcopy of 2023-08-10),verified,Re-dated to Monday at the close of 2023-08-16
+MIDCPNIFTY,NFO,2023-08-28,2023-06-26,2023-08-16,2023-08-30,2023-08-30,NSE/FAOP/57538 (2023-07-12); NSE F&O bhavcopy of 2023-08-10; first listed in the NSE F&O bhavcopy of 2023-06-26,verified,The August 2023 monthly contract; re-dated to Monday at the close of 2023-08-16
+MIDCPNIFTY,NFO,2023-09-04,2023-08-10,2023-08-16,2023-09-06,2023-09-06,NSE/FAOP/57538 (2023-07-12); NSE F&O bhavcopy of 2023-08-10 (first listed in the bhavcopy of 2023-08-10),verified,Re-dated to Monday at the close of 2023-08-16
+MIDCPNIFTY,NFO,2023-09-11,2023-08-10,2023-08-16,2023-09-13,2023-09-13,NSE/FAOP/57538 (2023-07-12); NSE F&O bhavcopy of 2023-08-10 (first listed in the bhavcopy of 2023-08-10),verified,Re-dated to Monday at the close of 2023-08-16
+MIDCPNIFTY,NFO,2023-09-25,2023-06-28,2023-08-16,2023-09-27,2023-09-27,NSE/FAOP/57538 (2023-07-12); NSE F&O bhavcopy of 2023-08-10; first listed in the NSE F&O bhavcopy of 2023-06-28,verified,The September 2023 monthly contract; re-dated to Monday at the close of 2023-08-16
+MIDCPNIFTY,NFO,2023-10-30,2023-08-10,2023-08-16,2023-10-25,2023-10-25,NSE/FAOP/57538 (2023-07-12); NSE F&O bhavcopies of 2023-08-10 and 2023-09-01 (first listed in the bhavcopy of 2023-08-10),verified,The October 2023 monthly contract; moved to the last Monday at the close of 2023-08-16
+MIDCPNIFTY,NFO,2024-01-22,2024-01-18,2024-01-19,2024-01-22,2024-01-22,NSE F&O bhavcopy of 2024-01-19; first listed in the NSE F&O bhavcopy of 2024-01-18,verified,Listed for Monday 2024-01-22
+MIDCPNIFTY,NFO,2024-01-22,2024-01-20,,2024-01-22,2024-01-20,NSE/MSD/60340 (2024-01-19); NSE F&O bhavcopy of 2024-01-20,verified,2024-01-22 was declared a holiday; the full session of Saturday 2024-01-20 was the last trading day and the listed expiry stayed 2024-01-22
+MIDCPNIFTY,NFO,2024-05-20,2024-04-24,,2024-05-17,2024-05-17,NSE F&O bhavcopies of 2024-05-17 and 2024-05-18; NSE/FAOP/61517 (2024-04-08); first listed in the NSE F&O bhavcopy of 2024-04-24,verified,Monday 2024-05-20 was a holiday; the special session of Saturday 2024-05-18 carried no expiry
+MIDCPNIFTY,NFO,2025-01-30,2024-11-12,2025-01-01,2025-01-27,2025-01-27,NSE/FAOP/65336 (2024-11-29); NSE F&O bhavcopies of 2025-01-01 and 2025-01-02; first listed in the NSE F&O bhavcopy of 2024-11-12,verified,Re-dated to the last Thursday at the close of 2025-01-01
+MIDCPNIFTY,NFO,2025-02-27,2024-12-02,2025-01-01,2025-02-24,2025-02-24,NSE/FAOP/65336 (2024-11-29); NSE F&O bhavcopies of 2025-01-01 and 2025-01-02; first listed in the NSE F&O bhavcopy of 2024-12-02,verified,Re-dated to the last Thursday at the close of 2025-01-01
+MIDCPNIFTY,NFO,2025-03-27,2024-12-31,2025-01-01,2025-03-31,2025-03-31,NSE/FAOP/65336 (2024-11-29); NSE F&O bhavcopies of 2025-01-01 and 2025-01-02; first listed in the NSE F&O bhavcopy of 2024-12-31,verified,Re-dated to the last Thursday at the close of 2025-01-01
+MIDCPNIFTY,NFO,2027-01-26,2026-11-11,,2027-01-25,2027-01-25,NSE F&O bhavcopy of 2026-11-11 (first listed in the bhavcopy of 2026-11-11),verified,Tuesday 2027-01-26 is Republic Day; the calendar has no 2027 holiday list
+NIFTYNXT50,NFO,2025-01-30,2024-11-12,2025-01-01,2025-01-31,2025-01-31,NSE/FAOP/65336 (2024-11-29); NSE F&O bhavcopies of 2025-01-01 and 2025-01-02; first listed in the NSE F&O bhavcopy of 2024-11-12,verified,Re-dated to the last Thursday at the close of 2025-01-01
+NIFTYNXT50,NFO,2025-02-27,2024-12-02,2025-01-01,2025-02-28,2025-02-28,NSE/FAOP/65336 (2024-11-29); NSE F&O bhavcopies of 2025-01-01 and 2025-01-02; first listed in the NSE F&O bhavcopy of 2024-12-02,verified,Re-dated to the last Thursday at the close of 2025-01-01
+NIFTYNXT50,NFO,2025-03-27,2024-12-31,2025-01-01,2025-03-28,2025-03-28,NSE/FAOP/65336 (2024-11-29); NSE F&O bhavcopies of 2025-01-01 and 2025-01-02; first listed in the NSE F&O bhavcopy of 2024-12-31,verified,Re-dated to the last Thursday at the close of 2025-01-01
+NIFTYNXT50,NFO,2027-01-26,2026-11-11,,2027-01-25,2027-01-25,NSE F&O bhavcopy of 2026-11-11 (first listed in the bhavcopy of 2026-11-11),verified,Tuesday 2027-01-26 is Republic Day; the calendar has no 2027 holiday list
+NIFTYFPI,NFO,2027-01-26,2026-11-11,,2027-01-25,2027-01-25,NSE F&O bhavcopy of 2026-11-11 (first listed in the bhavcopy of 2026-11-11),verified,Tuesday 2027-01-26 is Republic Day; the calendar has no 2027 holiday list
+SENSEX,BFO,2024-11-01,2024-10-31,,2024-10-31,2024-10-31,BSE F&O bhavcopy of 2024-10-31; BSE notice 20231212-40 (2023-12-12) (first listed in the bhavcopy of 2024-10-31),verified,Friday 2024-11-01 was a holiday with an evening Muhurat session
+SENSEX,BFO,2025-01-07,2024-12-02,2024-12-31,2025-01-10,2025-01-10,BSE notice 20241128-70 (2024-11-28); BSE F&O bhavcopies of 2024-12-31 and 2025-01-01; first listed in the BSE F&O bhavcopy of 2024-12-02,verified,Re-dated to Tuesday at the close of 2024-12-31
+SENSEX,BFO,2025-01-14,2024-12-27,2024-12-31,2025-01-17,2025-01-17,BSE notice 20241128-70 (2024-11-28); BSE F&O bhavcopies of 2024-12-31 and 2025-01-01; first listed in the BSE F&O bhavcopy of 2024-12-27,verified,Re-dated to Tuesday at the close of 2024-12-31
+SENSEX,BFO,2025-01-21,2024-12-27,2024-12-31,2025-01-24,2025-01-24,BSE notice 20241128-70 (2024-11-28); BSE F&O bhavcopies of 2024-12-31 and 2025-01-01; first listed in the BSE F&O bhavcopy of 2024-12-27,verified,Re-dated to Tuesday at the close of 2024-12-31
+SENSEX,BFO,2025-01-28,2024-11-21,2024-12-31,2025-01-31,2025-01-31,BSE notice 20241128-70 (2024-11-28); BSE F&O bhavcopies of 2024-12-31 and 2025-01-01; first listed in the BSE F&O bhavcopy of 2024-11-21,verified,The January 2025 monthly contract; re-dated to Tuesday at the close of 2024-12-31
+SENSEX,BFO,2025-02-04,2024-12-30,2024-12-31,2025-02-07,2025-02-07,BSE notice 20241128-70 (2024-11-28); BSE F&O bhavcopies of 2024-12-31 and 2025-01-01; first listed in the BSE F&O bhavcopy of 2024-12-30,verified,Re-dated to Tuesday at the close of 2024-12-31
+SENSEX,BFO,2025-02-11,2024-12-30,2024-12-31,2025-02-14,2025-02-14,BSE notice 20241128-70 (2024-11-28) items 1 and 2; BSE F&O bhavcopy of 2024-12-30,verified,Weekly contract listed for Friday 2025-02-14; re-dated to Tuesday 2025-02-11 at the close of 2024-12-31 with every SENSEX contract expiring after 2025-01-03. BSE bhavcopies omit contracts with no trades and no open interest so it appears only in the bhavcopy of 2024-12-30
+SENSEX,BFO,2025-02-25,2024-12-02,2024-12-31,2025-02-28,2025-02-28,BSE notice 20241128-70 (2024-11-28); BSE F&O bhavcopies of 2024-12-31 and 2025-01-01; first listed in the BSE F&O bhavcopy of 2024-12-02,verified,The February 2025 monthly contract; re-dated to Tuesday at the close of 2024-12-31
+SENSEX,BFO,2025-03-25,2024-12-31,2024-12-31,2025-03-28,2025-03-28,BSE notice 20241128-70 (2024-11-28); BSE F&O bhavcopies of 2024-12-31 and 2025-01-01 (first listed in the bhavcopy of 2024-12-31),verified,The March 2025 monthly contract; re-dated to Tuesday at the close of 2024-12-31
+SENSEX,BFO,2026-01-15,2026-01-12,2026-01-12,2026-01-15,2026-01-15,BSE F&O bhavcopy of 2026-01-12 (first listed in the bhavcopy of 2026-01-12),verified,Listed for Thursday 2026-01-15
+SENSEX,BFO,2026-01-15,2026-01-13,,2026-01-14,2026-01-14,BSE notice 20260112-8 (2026-01-12); BSE F&O bhavcopy of 2026-01-14,verified,Thursday 2026-01-15 was declared a holiday three days ahead
+SENSEX,BFO,2027-01-28,2026-11-11,,2027-01-28,2027-01-28,BSE F&O bhavcopy of 2026-11-11 (first listed in the bhavcopy of 2026-11-11),verified,Listed into 2027
+SENSEX,BFO,2027-03-25,2026-10-29,,2027-03-25,2027-03-25,BSE F&O bhavcopy of 2026-11-11; first listed in the BSE F&O bhavcopy of 2026-10-29,verified,Listed into 2027
+SENSEX,BFO,2027-12-30,2026-11-11,,2027-12-30,2027-12-30,BSE F&O bhavcopy of 2026-11-11 (first listed in the bhavcopy of 2026-11-11),verified,Listed into 2027
+BANKEX,BFO,2024-01-22,2024-01-19,2024-01-19,2024-01-22,2024-01-22,BSE F&O bhavcopy of 2024-01-19 (first listed in the bhavcopy of 2024-01-19),verified,Listed for Monday 2024-01-22
+BANKEX,BFO,2024-01-22,2024-01-20,,2024-01-20,2024-01-20,BSE notice 20240119-45 (2024-01-19); BSE F&O bhavcopy of 2024-01-20,verified,2024-01-22 was declared a holiday; BSE re-dated the contract to Saturday 2024-01-20
+BANKEX,BFO,2024-05-20,2024-05-17,,2024-05-17,2024-05-17,BSE F&O bhavcopies of 2024-05-17 and 2024-05-18; BSE notice 20240408-25 (2024-04-08) (first listed in the bhavcopy of 2024-05-17),verified,Monday 2024-05-20 was a holiday; the special session of Saturday 2024-05-18 carried no expiry
+BANKEX,BFO,2025-01-28,2024-11-21,2024-12-31,2025-01-27,2025-01-27,BSE notice 20241128-70 (2024-11-28); BSE F&O bhavcopies of 2024-12-31 and 2025-01-01; first listed in the BSE F&O bhavcopy of 2024-11-21,verified,The January 2025 monthly contract; re-dated to Tuesday at the close of 2024-12-31
+BANKEX,BFO,2025-02-25,2024-12-27,2024-12-31,2025-02-24,2025-02-24,BSE notice 20241128-70 (2024-11-28); BSE F&O bhavcopies of 2024-12-31 and 2025-01-01; first listed in the BSE F&O bhavcopy of 2024-12-27,verified,The February 2025 monthly contract; re-dated to Tuesday at the close of 2024-12-31

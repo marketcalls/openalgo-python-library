@@ -1,0 +1,25 @@
+# tables: the registry of the reference tables shipped in this directory.
+#
+# Columns
+#   table         table name, as used by the loader
+#   file          the CSV file in this directory
+#   as_of         the date up to which the table was checked against exchange sources.
+#                 Using a row for a later date raises a warning (once per row), because
+#                 the exchange may have changed the value since
+#   description   what the table holds
+#
+# Every other file here carries valid_from, valid_to, source and status columns and
+# documents its own columns in its header. To change a figure, edit the row, name the
+# exchange document in `source`, and set `status` to verified only if that document was
+# read. The loader refuses rows of one key whose ranges overlap.
+table,file,as_of,description
+underlyings,underlyings.csv,2026-11-12,Whether an underlying is an index a stock or an ETF by date
+lot_sizes,lot_sizes.csv,2026-11-12,Market lot in units of NSE and BSE index derivatives by trade date and contract expiry
+freeze_qty,freeze_qty.csv,2026-11-12,Largest order quantity in units of NSE and BSE index derivatives
+strike_steps,strike_steps.csv,2026-11-12,Strike interval of the near contracts of NSE and BSE index options
+expiry_rules,expiry_rules.csv,2026-11-12,Expiry weekday of weekly and monthly index derivative series by period
+contract_dates,contract_dates.csv,2026-11-12,Listed expiry and last trading day of contracts by trade date where the rule does not give them
+tick_sizes,tick_sizes.csv,2026-11-12,Tick size by segment and price slab for NSE and BSE shares and derivatives
+settlement,settlement.csv,2026-11-12,Cash or physical settlement by derivative segment
+mcx_contracts,mcx_contracts.csv,2026-03-31,Lot size multiplier tick size and maximum order size of MCX futures
+broker_units,broker_units.csv,2026-11-12,What the OpenAlgo server source shows about quantity and tick units per broker

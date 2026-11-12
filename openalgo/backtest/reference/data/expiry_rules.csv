@@ -1,0 +1,78 @@
+# expiry_rules: the expiry weekday of each index derivative series, by period.
+#
+# Columns
+#   underlying, exchange   the underlying symbol and its derivatives exchange (NFO, BFO)
+#   series                 weekly or monthly
+#   valid_from, valid_to   EXPIRY dates the row applies to, both inclusive (empty valid_to:
+#                          open). A weekday change takes effect on the first expiry that
+#                          falls on or after valid_from. Monthly rows start and end on
+#                          month boundaries, so that no month has two monthly dates.
+#   weekday                MON TUE WED THU FRI, or NONE when the series is not listed
+#   listed_from            the first TRADE date on which the row's contracts were listed: the
+#                          launch of a series, or the day contracts of a new weekday were
+#                          first generated (empty: not limited). Before it the row gives no
+#                          contract
+#   source                 the exchange circular or notice the row was read from
+#   status                 verified: checked against that document; unverified: not confirmed
+#   note                   free text
+#
+# How a row is used (see expiry.py):
+#   weekly    every such weekday is an expiry, except in a week that holds the monthly
+#             expiry of the same underlying (that week's contract is the monthly one)
+#   monthly   the last such weekday of the month is the expiry
+# An expiry that falls on a trading holiday moves to the previous trading day; the
+# session calendar decides that, not this table. The rule dates name the contracts;
+# contract_dates.csv holds the dates of contracts the exchange set differently (re-dated
+# contracts, special sessions, contracts listed into years without a holiday list).
+#
+# NSE circulars: https://nsearchives.nseindia.com/content/circulars/FAOP<number>.pdf
+# BSE notices:   https://www.bseindia.com/markets/MarketInfo/DispNewNoticesCirculars.aspx?page=<number>
+underlying,exchange,series,valid_from,valid_to,weekday,listed_from,source,status,note
+NIFTY,NFO,weekly,2019-01-01,2019-02-10,NONE,,NSE/FAOP/39894 (2019-01-07),verified,Weekly options were listed from 2019-02-11
+NIFTY,NFO,weekly,2019-02-11,2025-08-31,THU,2019-02-11,NSE/FAOP/39675 (2018-12-18); NSE/FAOP/39894 (2019-01-07); NSE/FAOP/68589 (2025-06-17),verified,First weekly expiry 2019-02-14
+NIFTY,NFO,weekly,2025-09-01,,TUE,,NSE/FAOP/68589 (2025-06-17); NSE/FAOP/68747 (2025-06-25); NSE/FAOP/73928 (2026-04-28),verified,First Tuesday weekly expiry 2025-09-02
+NIFTY,NFO,monthly,2019-01-01,2025-08-31,THU,,NSE/FAOP/44482 (2020-05-27); NSE/FAOP/65336 (2024-11-29); NSE/FAOP/68589 (2025-06-17),verified,
+NIFTY,NFO,monthly,2025-09-01,,TUE,,NSE/FAOP/68589 (2025-06-17); NSE/FAOP/68747 (2025-06-25); NSE/FAOP/73928 (2026-04-28),verified,
+BANKNIFTY,NFO,weekly,2019-01-01,2023-09-03,THU,,NSE/FAOP/32329 (2016-05-05); NSE/FAOP/57540 (2023-07-12),verified,
+BANKNIFTY,NFO,weekly,2023-09-04,2024-11-13,WED,,NSE/FAOP/57540 (2023-07-12); NSE/FAOP/64506 (2024-10-10),verified,First Wednesday expiry 2023-09-06; last weekly expiry 2024-11-13
+BANKNIFTY,NFO,weekly,2024-11-14,,NONE,,NSE/FAOP/64506 (2024-10-10),verified,Weekly contracts discontinued
+BANKNIFTY,NFO,monthly,2019-01-01,2024-02-29,THU,,NSE/FAOP/44482 (2020-05-27); NSE/FAOP/60011 (2023-12-28),verified,
+BANKNIFTY,NFO,monthly,2024-03-01,2024-12-31,WED,,NSE/FAOP/60011 (2023-12-28); NSE/FAOP/65336 (2024-11-29),verified,First Wednesday monthly expiry 2024-03-27
+BANKNIFTY,NFO,monthly,2025-01-01,2025-08-31,THU,,NSE/FAOP/65336 (2024-11-29); NSE/FAOP/68589 (2025-06-17),verified,
+BANKNIFTY,NFO,monthly,2025-09-01,,TUE,,NSE/FAOP/68589 (2025-06-17); NSE/FAOP/68747 (2025-06-25),verified,
+FINNIFTY,NFO,weekly,2021-01-11,2021-10-14,THU,2021-01-11,NSE/FAOP/46603 (2020-12-10); NSE/FAOP/49595 (2021-09-15),verified,Listed from 2021-01-11
+FINNIFTY,NFO,weekly,2021-10-15,2024-11-19,TUE,,NSE/FAOP/49595 (2021-09-15); NSE/FAOP/64506 (2024-10-10),verified,First Tuesday expiry 2021-10-19; last weekly expiry 2024-11-19
+FINNIFTY,NFO,weekly,2024-11-20,,NONE,,NSE/FAOP/64506 (2024-10-10),verified,Weekly contracts discontinued
+FINNIFTY,NFO,monthly,2021-01-11,2021-09-30,THU,2021-01-11,NSE/FAOP/46603 (2020-12-10); NSE/FAOP/49595 (2021-09-15),verified,Ends with the September 2021 expiry so that a month has one monthly date
+FINNIFTY,NFO,monthly,2021-10-01,2024-12-31,TUE,,NSE/FAOP/49595 (2021-09-15); NSE/FAOP/65336 (2024-11-29),verified,First Tuesday monthly expiry 2021-10-26
+FINNIFTY,NFO,monthly,2025-01-01,2025-08-31,THU,,NSE/FAOP/65336 (2024-11-29); NSE/FAOP/68589 (2025-06-17),verified,
+FINNIFTY,NFO,monthly,2025-09-01,,TUE,,NSE/FAOP/68589 (2025-06-17),verified,
+MIDCPNIFTY,NFO,weekly,2022-01-24,2023-04-25,TUE,2022-01-24,NSE/FAOP/50968 (2022-01-10); NSE/FAOP/56128 (2023-03-24),verified,Listed from 2022-01-24
+MIDCPNIFTY,NFO,weekly,2023-04-26,2023-08-16,WED,,NSE/FAOP/56128 (2023-03-24); NSE/FAOP/57538 (2023-07-12),verified,
+MIDCPNIFTY,NFO,weekly,2023-08-17,2024-11-18,MON,,NSE/FAOP/57538 (2023-07-12); NSE/FAOP/64506 (2024-10-10),verified,First Monday expiry 2023-08-21; last weekly expiry 2024-11-18
+MIDCPNIFTY,NFO,weekly,2024-11-19,,NONE,,NSE/FAOP/64506 (2024-10-10),verified,Weekly contracts discontinued
+MIDCPNIFTY,NFO,monthly,2022-01-24,2023-04-30,TUE,2022-01-24,NSE/FAOP/50968 (2022-01-10); NSE/FAOP/56128 (2023-03-24),verified,The April 2023 monthly expiry stayed on Tuesday 2023-04-25
+MIDCPNIFTY,NFO,monthly,2023-05-01,2023-07-31,WED,,NSE/FAOP/56128 (2023-03-24); NSE/FAOP/57538 (2023-07-12),verified,May to July 2023; the June 2023 contract stayed on Tuesday 2023-06-27 (contract_dates.csv)
+MIDCPNIFTY,NFO,monthly,2023-08-01,2024-12-31,MON,,NSE/FAOP/57538 (2023-07-12); NSE/FAOP/65336 (2024-11-29),verified,From the August 2023 expiry (2023-08-28)
+MIDCPNIFTY,NFO,monthly,2025-01-01,2025-08-31,THU,,NSE/FAOP/65336 (2024-11-29); NSE/FAOP/68589 (2025-06-17),verified,
+MIDCPNIFTY,NFO,monthly,2025-09-01,,TUE,,NSE/FAOP/68589 (2025-06-17),verified,
+NIFTYNXT50,NFO,weekly,2024-04-24,,NONE,,NSE/FAOP/61629 (2024-04-18),verified,Monthly contracts only
+NIFTYNXT50,NFO,monthly,2024-04-24,2024-04-30,NONE,,NSE/FAOP/61629 (2024-04-18),verified,Listed from 2024-04-24 with no April 2024 expiry
+NIFTYNXT50,NFO,monthly,2024-05-01,2024-12-31,FRI,2024-04-24,NSE/FAOP/61629 (2024-04-18); NSE/FAOP/65336 (2024-11-29),verified,The launch cycle was 2024-05-31 2024-06-28 and 2024-07-26
+NIFTYNXT50,NFO,monthly,2025-01-01,2025-08-31,THU,,NSE/FAOP/65336 (2024-11-29); NSE/FAOP/68589 (2025-06-17),verified,
+NIFTYNXT50,NFO,monthly,2025-09-01,,TUE,,NSE/FAOP/68589 (2025-06-17),verified,
+NIFTYFPI,NFO,weekly,2026-08-12,,NONE,,NSE/FAOP/75239 (2026-07-16),verified,Monthly contracts only
+NIFTYFPI,NFO,monthly,2026-08-12,,TUE,2026-08-12,NSE/FAOP/75239 (2026-07-16),verified,Listed from 2026-08-12; first expiries 2026-08-25 2026-09-29 and 2026-10-27
+SENSEX,BFO,weekly,2023-05-15,2025-01-03,FRI,2023-05-15,BSE notice 20230327-65 (2023-03-27); BSE notice 20241128-70 (2024-11-28),verified,From the relaunch: Friday contracts generated at the close of 2023-05-12 and listed from 2023-05-15 (BSE notice 20230327-65); the contract of 2025-01-03 stayed on Friday
+SENSEX,BFO,weekly,2025-01-04,2025-08-31,TUE,,BSE notice 20241128-70 (2024-11-28); BSE notice 20250623-59 (2025-06-23),verified,First Tuesday expiry 2025-01-07
+SENSEX,BFO,weekly,2025-09-01,,THU,,BSE notice 20250617-11 (2025-06-17); BSE notice 20250623-59 (2025-06-23),verified,First Thursday expiry 2025-09-04
+SENSEX,BFO,monthly,2023-05-15,2024-12-31,FRI,2023-05-15,BSE notice 20230327-65 (2023-03-27); BSE notice 20241128-70 (2024-11-28),verified,From the relaunch: Friday contracts generated at the close of 2023-05-12 and listed from 2023-05-15 (BSE notice 20230327-65)
+SENSEX,BFO,monthly,2025-01-01,2025-08-31,TUE,,BSE notice 20241128-70 (2024-11-28); BSE notice 20250623-59 (2025-06-23),verified,
+SENSEX,BFO,monthly,2025-09-01,,THU,,BSE notice 20250617-11 (2025-06-17); BSE notice 20250623-59 (2025-06-23),verified,
+BANKEX,BFO,weekly,2023-05-15,2023-10-13,FRI,2023-05-15,BSE notice 20230327-65 (2023-03-27); BSE notice 20230830-8 (2023-08-30),verified,"From the relaunch on 2023-05-15. The Friday contracts still listed on 2023-10-13 (expiring after it) all stopped trading that day (BSE notice 20230830-8); which ones were listed is not known, so they are not covered"
+BANKEX,BFO,weekly,2023-10-14,2024-11-18,MON,2023-10-16,BSE notice 20230830-8 (2023-08-30); BSE notice 20241003-42 (2024-10-03),verified,First Monday expiry 2023-10-16; last weekly expiry 2024-11-18; Monday contracts were generated at the close of 2023-10-13 and listed from 2023-10-16 (BSE notice 20230830-8)
+BANKEX,BFO,weekly,2024-11-19,,NONE,,BSE notice 20241003-42 (2024-10-03),verified,Weekly contracts discontinued
+BANKEX,BFO,monthly,2023-05-15,2023-09-30,FRI,2023-05-15,BSE notice 20230327-65 (2023-03-27); BSE notice 20230830-8 (2023-08-30),verified,"From the relaunch on 2023-05-15. The Friday contracts still listed on 2023-10-13 (expiring after it) all stopped trading that day (BSE notice 20230830-8); which ones were listed is not known, so they are not covered"
+BANKEX,BFO,monthly,2023-10-01,2024-12-31,MON,2023-10-16,BSE notice 20230830-8 (2023-08-30); BSE notice 20241128-70 (2024-11-28),verified,From the October 2023 expiry (2023-10-30); Monday contracts were generated at the close of 2023-10-13 and listed from 2023-10-16 (BSE notice 20230830-8)
+BANKEX,BFO,monthly,2025-01-01,2025-08-31,TUE,,BSE notice 20241128-70 (2024-11-28); BSE notice 20250623-59 (2025-06-23),verified,
+BANKEX,BFO,monthly,2025-09-01,,THU,,BSE notice 20250623-59 (2025-06-23),verified,
