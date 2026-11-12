@@ -7,6 +7,11 @@
 //! triggered without filling (04-execution 4.1). Step 2 of every slice walks it per
 //! instrument; step 3 walks the resting DAY orders (LIMIT, SL, SL-M) the same way, which
 //! keeps fills deterministic.
+//!
+//! The ids of the orders that still work are kept apart, in id order, so the steps that
+//! run every slice (the resting orders, a pending entry, the session-close expiry) walk
+//! the few orders that can still fill instead of every order of the run: otherwise a run
+//! costs its bars times its orders, and its time grows with the square of its length.
 
 use crate::model::TsNanos;
 
@@ -20,6 +25,8 @@ use super::state::{next_status, OrderAction, OrderStatus};
 pub struct OrderBook {
     orders: Vec<Order>,
     queued: Vec<OrderId>,
+    /// Ids of the working orders, in id order (see the module docs).
+    working: Vec<OrderId>,
 }
 
 impl OrderBook {
@@ -39,8 +46,12 @@ impl OrderBook {
             });
         }
         let id = order.id;
-        if order.status.is_working() && order.request.order_type == OrderType::Market {
-            self.queued.push(id);
+        if order.status.is_working() {
+            // Ids only grow, so pushing keeps both lists in id order.
+            self.working.push(id);
+            if order.request.order_type == OrderType::Market {
+                self.queued.push(id);
+            }
         }
         self.orders.push(order);
         Ok(id)
@@ -69,10 +80,22 @@ impl OrderBook {
         let order = self.get_mut(id).ok_or_else(|| ExecError::InvalidRequest {
             reason: format!("no order {id}"),
         })?;
+        let was_working = order.status.is_working();
         let status = next_status(order.status, action)?;
         order.status = status;
-        if !status.is_working() {
-            self.queued.retain(|queued| *queued != id);
+        match (was_working, status.is_working()) {
+            (true, false) => {
+                self.queued.retain(|queued| *queued != id);
+                if let Ok(slot) = self.working.binary_search(&id) {
+                    self.working.remove(slot);
+                }
+            }
+            (false, true) => {
+                if let Err(slot) = self.working.binary_search(&id) {
+                    self.working.insert(slot, id);
+                }
+            }
+            _ => {}
         }
         Ok(status)
     }
@@ -125,11 +148,9 @@ impl OrderBook {
     /// The resting DAY orders of an instrument (LIMIT, SL and SL-M not waiting for an
     /// open), in id order. A GTT order rests in the GTT book instead.
     pub fn resting_for(&self, instrument: InstrumentId) -> Vec<OrderId> {
-        self.orders
-            .iter()
+        self.working()
             .filter(|order| {
-                order.status.is_working()
-                    && order.request.instrument == instrument
+                order.request.instrument == instrument
                     && order.request.order_type != OrderType::Market
                     && order.request.validity == Validity::Day
                     && !self.queued.contains(&order.id)
@@ -157,7 +178,7 @@ impl OrderBook {
 
     /// The orders that can still fill, in id order.
     pub fn working(&self) -> impl Iterator<Item = &Order> {
-        self.orders.iter().filter(|order| order.status.is_working())
+        self.working.iter().filter_map(|id| self.get(*id))
     }
 }
 
@@ -220,6 +241,19 @@ mod tests {
             .get(OrderId(1))
             .map(|o| (o.decided_at, o.good_until, o.quantity_units));
         assert_eq!(order, Some((50, 200, 2.0)));
+    }
+
+    #[test]
+    fn working_lists_only_the_orders_that_can_still_fill_in_id_order() {
+        let mut book = OrderBook::default();
+        for id in 1..=4 {
+            assert!(book.insert(submitted(id, LIMIT)).is_ok());
+        }
+        assert!(book.apply(OrderId(2), OrderAction::Fill).is_ok());
+        assert!(book.apply(OrderId(4), OrderAction::Cancel).is_ok());
+        let working: Vec<OrderId> = book.working().map(|order| order.id).collect();
+        assert_eq!(working, [OrderId(1), OrderId(3)]);
+        assert_eq!(book.resting_for(InstrumentId(0)), [OrderId(1), OrderId(3)]);
     }
 
     #[test]

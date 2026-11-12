@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -25,25 +26,43 @@ FIELDS = ("open", "high", "low", "close", "volume")
 TIMES = ("ts_open", "ts_close")
 
 
+# The Unix epoch in IST. IST has a fixed offset, so adding the microseconds since the
+# epoch to it gives the same datetime as converting the UTC instant, without a time-zone
+# conversion on every call.
+EPOCH_IST = dt.datetime(1970, 1, 1, tzinfo=dt.UTC).astimezone(IST)
+
+
 def ist_time(ts_ns: int) -> dt.datetime:
     """An IST datetime from UTC nanoseconds (to the microsecond)."""
-    utc = dt.datetime(1970, 1, 1, tzinfo=dt.UTC) + dt.timedelta(microseconds=ts_ns // 1000)
-    return utc.astimezone(IST)
+    return EPOCH_IST + dt.timedelta(microseconds=ts_ns // 1000)
 
 
-@dataclass(frozen=True)
-class Bar:
-    """One strategy bar: prices in rupees, volume in units, times in IST (the bar opens at
-    `time` and is closed at `close_time`)."""
+class Bar(NamedTuple):
+    """One strategy bar: prices in rupees, volume in units, the open and close instants
+    as UTC nanoseconds (`ts_open`, `ts_close`) and in IST (`time`, `close_time`: the bar
+    opens at `time` and is closed at `close_time`). Immutable.
+
+    The IST datetimes are made when they are read: making two for every bar was most of
+    the cost of an `on_bar` call (NFR-PERF-04), and many strategies never read them."""
 
     symbol: str
-    time: dt.datetime
-    close_time: dt.datetime
+    ts_open: int
+    ts_close: int
     open: float
     high: float
     low: float
     close: float
     volume: float
+
+    @property
+    def time(self) -> dt.datetime:
+        """The bar's open, IST."""
+        return ist_time(self.ts_open)
+
+    @property
+    def close_time(self) -> dt.datetime:
+        """The instant the bar is closed, IST."""
+        return ist_time(self.ts_close)
 
 
 class SeriesStore:
@@ -102,6 +121,8 @@ class BarStore(SeriesStore):
     def __init__(self, symbol: str, interval: str, series: dict[str, np.ndarray]) -> None:
         super().__init__(symbol, interval, series)
         self._count = 0
+        self._opens = self._series["ts_open"]
+        self._size = len(self._opens)
 
     def visible(self) -> int:
         return self._count
@@ -110,15 +131,16 @@ class BarStore(SeriesStore):
         """Reveal the next bar from the kernel's tuple (index, ts_open, ts_close, o, h, l,
         c, v). Raises BacktestError when it is not the next bar of the series (a kernel
         defect: indicators would be misaligned)."""
-        _, ts_open, ts_close, *values = row
-        opens = self._series["ts_open"]
-        if self._count >= len(opens) or int(opens[self._count]) != ts_open:
+        count = self._count
+        if count >= self._size or self._opens.item(count) != row[1]:
             raise BacktestError(
-                f"{self.symbol}: the kernel delivered a strategy bar opening at {ts_open} that "
+                f"{self.symbol}: the kernel delivered a strategy bar opening at {row[1]} that "
                 "is not the next bar of its series; please report this"
             )
-        self._count += 1
-        return Bar(self.symbol, ist_time(ts_open), ist_time(ts_close), *values)
+        self._count = count + 1
+        # The row has the fields of a Bar after the instrument; tuple.__new__ is what
+        # Bar._make calls, without its frame and length check, once per callback.
+        return tuple.__new__(Bar, (self.symbol, *row[1:]))
 
 
 class SeriesView(TimelineView):

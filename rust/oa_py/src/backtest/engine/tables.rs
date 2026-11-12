@@ -4,11 +4,14 @@
 
 use numpy::IntoPyArray;
 use oa_bt::engine::{Event, EventStamp, OrderEventKind, Pause, StrategyBar};
-use oa_bt::exec::{GttEvent, Order, Validity};
+use oa_bt::exec::{GttEvent, Order};
 use oa_bt::portfolio::Position;
 use oa_bt::rms::{RiskEventName, RiskScope, TradingState, TradingStateCause};
+use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyDict, PyList, PyString};
+
+use super::columns::{row, ORDER_COLUMNS};
 
 pub(super) fn stamp_into(dict: &Bound<'_, PyDict>, stamp: EventStamp) -> PyResult<()> {
     dict.set_item("slice", stamp.slice)?;
@@ -131,40 +134,61 @@ fn bar_tuple(bar: &StrategyBar) -> (u32, i64, i64, f64, f64, f64, f64, f64) {
     )
 }
 
-/// A pause as a dict: `kind` ("bar_close", "timers" or "finished"), its stamp, the
-/// decision instant, the strategy bars, the events and (timer pauses) the timer ids.
-pub(super) fn pause<'py>(py: Python<'py>, pause: &Pause) -> PyResult<Bound<'py, PyDict>> {
-    let dict = PyDict::new_bound(py);
-    dict.set_item("events", events(py, pause.events())?)?;
-    match pause {
+/// What `pause` returns: (kind, decision instant, strategy bars, events, timer ids).
+pub(super) type PauseTuple<'py> = (
+    Bound<'py, PyString>,
+    Option<i64>,
+    Bound<'py, PyList>,
+    Bound<'py, PyList>,
+    Bound<'py, PyList>,
+);
+
+/// A pause as a tuple (kind, decided_at, bars, events, timers): `kind` "bar_close",
+/// "timers" or "finished" (interned, so the driver compares it by identity first), the
+/// decision instant (UTC nanoseconds, None when finished), the strategy bars as tuples
+/// (instrument, ts_open, ts_close, open, high, low, close, volume), the events as dicts
+/// and the timer ids (timer pauses). A tuple, not a dict: the event driver unpacks one
+/// per strategy-bar close, and its cost is part of every callback (NFR-PERF-04).
+pub(super) fn pause<'py>(py: Python<'py>, pause: &Pause) -> PyResult<PauseTuple<'py>> {
+    let events = events(py, pause.events())?;
+    let none = || PyList::empty_bound(py);
+    Ok(match pause {
         Pause::BarClose {
-            stamp,
-            decided_at,
-            strategy_bar_closed,
-            bars,
-            ..
+            decided_at, bars, ..
         } => {
-            dict.set_item("kind", "bar_close")?;
-            stamp_into(&dict, *stamp)?;
-            dict.set_item("decided_at", decided_at)?;
-            dict.set_item("strategy_bar_closed", strategy_bar_closed)?;
-            let tuples: Vec<_> = bars.iter().map(bar_tuple).collect();
-            dict.set_item("bars", tuples)?;
+            let tuples = bars
+                .iter()
+                .map(|bar| -> PyObject { bar_tuple(bar).into_py(py) });
+            let kind = intern!(py, "bar_close").clone();
+            (
+                kind,
+                Some(*decided_at),
+                PyList::new_bound(py, tuples),
+                events,
+                none(),
+            )
         }
         Pause::Timers {
-            stamp,
-            decided_at,
-            timers,
+            decided_at, timers, ..
         } => {
-            dict.set_item("kind", "timers")?;
-            stamp_into(&dict, *stamp)?;
-            dict.set_item("decided_at", decided_at)?;
-            let ids: Vec<u32> = timers.iter().map(|timer| timer.0).collect();
-            dict.set_item("timers", ids)?;
+            let ids = timers.iter().map(|timer| timer.0);
+            let kind = intern!(py, "timers").clone();
+            (
+                kind,
+                Some(*decided_at),
+                none(),
+                events,
+                PyList::new_bound(py, ids),
+            )
         }
-        Pause::Finished { .. } => dict.set_item("kind", "finished")?,
-    }
-    Ok(dict)
+        Pause::Finished { .. } => (
+            intern!(py, "finished").clone(),
+            None,
+            none(),
+            events,
+            none(),
+        ),
+    })
 }
 
 /// Strategy bars as a dict of arrays, one per column.
@@ -204,29 +228,7 @@ pub(super) fn position<'py>(py: Python<'py>, p: &Position) -> PyResult<Bound<'py
     Ok(dict)
 }
 
-/// An order as a dict.
+/// An order as a dict (the keys of the orders table, `columns::ORDER_COLUMNS`).
 pub(super) fn order<'py>(py: Python<'py>, o: &Order) -> PyResult<Bound<'py, PyDict>> {
-    let dict = PyDict::new_bound(py);
-    dict.set_item("order_id", o.id.0)?;
-    dict.set_item("instrument", o.request.instrument.0)?;
-    dict.set_item("side", o.request.side.code())?;
-    dict.set_item("order_type", o.request.order_type.code())?;
-    dict.set_item("limit_rupees", o.request.order_type.limit_rupees())?;
-    dict.set_item("trigger_rupees", o.request.order_type.trigger_rupees())?;
-    let validity = match o.request.validity {
-        Validity::Day => "DAY",
-        Validity::Gtt => "GTT",
-    };
-    dict.set_item("validity", validity)?;
-    dict.set_item("product", o.request.product.code())?;
-    dict.set_item("status", o.status.code())?;
-    dict.set_item("decided_at", o.decided_at)?;
-    dict.set_item("good_until", o.good_until)?;
-    dict.set_item("quantity_units", o.quantity_units)?;
-    dict.set_item("filled_units", o.filled_units)?;
-    dict.set_item("average_fill_rupees", o.average_fill_rupees)?;
-    dict.set_item("reject_code", o.reject_code.map(|c| c.code()))?;
-    dict.set_item("reduce_only", o.request.reduce_only)?;
-    dict.set_item("tag", o.request.tag.clone())?;
-    Ok(dict)
+    row(py, o, &ORDER_COLUMNS)
 }

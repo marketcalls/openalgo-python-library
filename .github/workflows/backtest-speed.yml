@@ -1,0 +1,47 @@
+name: Backtest speed
+
+# The speed targets of the backtest engine, checked by benchmark/backtest_speed.py on
+# synthetic seeded data (no server): NFR-PERF-04 (an event strategy makes at least 300k
+# strategy-bar callbacks per second), NFR-PERF-01 (an array strategy over 1M bars with
+# charges, slippage and every metric) and the linearity of a run in its trades and bars.
+on:
+  push:
+    branches: [feat/backtest-engine]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # pyo3 0.22 predates Python 3.13/3.14; abi3 wheels are forward compatible.
+  PYO3_USE_ABI3_FORWARD_COMPATIBILITY: '1'
+  # The targets were set on a current desktop core. A shared runner's core is slower and
+  # its speed varies with the jobs next to it, so here the rate target is divided and the
+  # time targets are multiplied by this factor (--slack): at least 150k callbacks per
+  # second, the 1M-bar run within 3 seconds, a round trip within 100 microseconds. The
+  # linearity ratio compares two runs on the same machine and is not relaxed.
+  SPEED_SLACK: '2'
+
+jobs:
+  speed:
+    name: Backtest speed targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Build the release extension into a virtual environment
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          pip install 'maturin>=1.7,<2.0'
+          maturin develop --release
+      - name: Benchmark, failing when a target is missed
+        run: |
+          . .venv/bin/activate
+          python benchmark/backtest_speed.py --check --slack "$SPEED_SLACK"

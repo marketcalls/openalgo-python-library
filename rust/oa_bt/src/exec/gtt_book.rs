@@ -1,6 +1,7 @@
 //! The GTTs of a run: every GTT by id, in creation order, never removed, so a result can
 //! list them all. Queries return ids in id order, which keeps the slice sequence
-//! deterministic.
+//! deterministic. The ids of the active GTTs are kept apart, in id order, so the tests of
+//! every slice walk the GTTs still resting, not every GTT of the run.
 
 use crate::model::Product;
 
@@ -13,6 +14,8 @@ use super::order::OrderId;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GttBook {
     gtts: Vec<Gtt>,
+    /// Ids of the active GTTs, in id order.
+    active: Vec<GttId>,
 }
 
 impl GttBook {
@@ -32,6 +35,10 @@ impl GttBook {
             });
         }
         let id = gtt.id;
+        if gtt.is_active() {
+            // Ids only grow, so pushing keeps the list in id order.
+            self.active.push(id);
+        }
         self.gtts.push(gtt);
         Ok(id)
     }
@@ -59,9 +66,23 @@ impl GttBook {
         let gtt = self.get_mut(id).ok_or_else(|| ExecError::InvalidRequest {
             reason: format!("no GTT {id}"),
         })?;
+        let was_active = gtt.is_active();
         let status = next_gtt_status(gtt.status, action)?;
         gtt.status = status;
+        let now_active = gtt.is_active();
+        match (was_active, now_active, self.active.binary_search(&id)) {
+            (true, false, Ok(slot)) => {
+                self.active.remove(slot);
+            }
+            (false, true, Err(slot)) => self.active.insert(slot, id),
+            _ => {}
+        }
         Ok(status)
+    }
+
+    /// The active GTTs, in id order.
+    pub fn active(&self) -> impl Iterator<Item = &Gtt> {
+        self.active.iter().filter_map(|id| self.get(*id))
     }
 
     /// Every GTT, in creation order.
@@ -71,20 +92,17 @@ impl GttBook {
 
     /// The active GTTs of an instrument, in id order.
     pub fn active_for(&self, instrument: InstrumentId) -> Vec<GttId> {
-        self.gtts
-            .iter()
-            .filter(|gtt| gtt.is_active() && gtt.instrument == instrument)
+        self.active()
+            .filter(|gtt| gtt.instrument == instrument)
             .map(|gtt| gtt.id)
             .collect()
     }
 
     /// The active GTTs that hold the levels of a position, in id order.
     pub fn protecting(&self, instrument: InstrumentId, product: Product) -> Vec<GttId> {
-        self.gtts
-            .iter()
+        self.active()
             .filter(|gtt| {
-                gtt.is_active()
-                    && gtt.instrument == instrument
+                gtt.instrument == instrument
                     && gtt.product == product
                     && matches!(gtt.purpose, GttPurpose::Protect(_))
             })
@@ -94,9 +112,8 @@ impl GttBook {
 
     /// The active GTT a strategy order rests as, if any.
     pub fn of_order(&self, order: OrderId) -> Option<GttId> {
-        self.gtts
-            .iter()
-            .find(|gtt| gtt.is_active() && gtt.purpose == GttPurpose::Order(order))
+        self.active()
+            .find(|gtt| gtt.purpose == GttPurpose::Order(order))
             .map(|gtt| gtt.id)
     }
 }
@@ -151,5 +168,19 @@ mod tests {
         );
         assert!(book.protecting(InstrumentId(0), Product::Cnc).is_empty());
         assert_eq!(book.active_for(InstrumentId(0)), [GttId(2)]);
+    }
+
+    #[test]
+    fn an_order_gtt_is_found_only_while_it_is_active() {
+        let mut book = GttBook::default();
+        let resting = Gtt {
+            purpose: GttPurpose::Order(OrderId(7)),
+            ..stop_gtt(1, Product::Cnc)
+        };
+        assert!(book.insert(resting).is_ok());
+        assert_eq!(book.of_order(OrderId(7)), Some(GttId(1)));
+        assert!(book.apply(GttId(1), GttAction::Cancel).is_ok());
+        assert_eq!(book.of_order(OrderId(7)), None);
+        assert_eq!(book.active().count(), 0);
     }
 }

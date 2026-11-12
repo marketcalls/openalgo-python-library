@@ -1,8 +1,13 @@
 """Shared inputs of the condition-strategy tests: 5-minute SBIN bars on the built-in NSE
-calendar, the run settings, and the comparison of two results table by table.
+calendar, the run settings, the two forms of one condition strategy, and the exact
+comparison of two results table by table.
 
 `walk_bars` builds a session from tick moves: bar k opens at the previous close and
 closes `moves[k]` ticks (0.05 rupees) away, with a high and low half a rupee outside.
+
+`conditions` declares four condition arrays with entry_when, exit_when, short_when and
+cover_when (run by the Rust signal driver); `literal_on_bar` is the `on_bar` of
+14-strategy-api 4.1 written out for the same arrays (run by the Python event driver).
 """
 
 from __future__ import annotations
@@ -22,6 +27,10 @@ BAR_MINUTES = 5
 BARS_PER_SESSION = 75
 SESSIONS = (dt.date(2025, 7, 1), dt.date(2025, 7, 2))
 CAPITAL = 1_000_000
+# What the strategies of these tests trade unless a test names another instrument.
+SBIN_5M = {"symbol": "SBIN", "exchange": "NSE", "interval": "5m"}
+# The four conditions, in the order of 14-strategy-api 4.1.
+CONDITION_NAMES = ("entry", "exit", "short", "cover")
 
 
 def bar_open(day: dt.date, k: int) -> dt.datetime:
@@ -65,25 +74,79 @@ def run(strategy: type, data: pd.DataFrame, **settings: Any) -> Any:
     return bt.backtest(strategy, **arguments)
 
 
+def literal_on_bar(
+    arrays: dict, pyramiding: int, order_args: dict, attributes: dict = SBIN_5M
+) -> type:
+    """The `on_bar` of 14-strategy-api 4.1 written out for `arrays` (one boolean per
+    strategy bar under each of CONDITION_NAMES). A strategy bar with no base bar is not
+    delivered, so the bar's position in the arrays is the number of bars seen."""
+    entry, exit_, short, cover = (arrays[name] for name in CONDITION_NAMES)
+
+    class Literal(bt.Strategy):
+        def on_bar(self, bar):
+            i = len(self.close) - 1
+            position = self.position
+            flat = position.is_flat and not self._ctx.has_pending_entry(self.symbol)
+            if flat:
+                if entry[i]:
+                    self.buy(**order_args)
+                elif short[i]:
+                    self.sell(**order_args)
+            elif position.is_long:
+                if exit_[i]:
+                    self.exit()
+                elif entry[i] and position.adds < pyramiding:
+                    self.buy(**order_args)
+            elif position.is_short:
+                if cover[i]:
+                    self.exit()
+                elif short[i] and position.adds < pyramiding:
+                    self.sell(**order_args)
+
+    for name, value in {**attributes, "pyramiding": pyramiding}.items():
+        setattr(Literal, name, value)
+    return Literal
+
+
+def conditions(arrays: dict, pyramiding: int, order_args: dict, attributes: dict = SBIN_5M) -> type:
+    """The same strategy declared with entry_when, exit_when, short_when, cover_when."""
+
+    class Conditions(bt.Strategy):
+        def init(self):
+            self.entry_when(arrays["entry"], **order_args)
+            self.exit_when(arrays["exit"])
+            self.short_when(arrays["short"], **order_args)
+            self.cover_when(arrays["cover"])
+
+    for name, value in {**attributes, "pyramiding": pyramiding}.items():
+        setattr(Conditions, name, value)
+    return Conditions
+
+
 def assert_same_result(first: Any, second: Any) -> None:
-    """Every table of two results is equal (fills, orders, trades, positions, equity,
-    events, stale marks, costs, contract notes, orders a sizer skipped), and so is the
-    gross P&L."""
+    """Every table of two results is equal bit for bit (fills, orders, trades,
+    positions, equity, events, stale marks, costs, contract notes, orders a sizer
+    skipped), and so is the gross P&L: floats are compared exactly, not within a
+    tolerance."""
     tables = first.to_dataframes()
     for name, table in second.to_dataframes().items():
-        pd.testing.assert_frame_equal(tables[name], table, obj=name)
-    pd.testing.assert_frame_equal(first.skipped, second.skipped, obj="skipped")
+        pd.testing.assert_frame_equal(tables[name], table, obj=name, check_exact=True)
+    pd.testing.assert_frame_equal(first.skipped, second.skipped, obj="skipped", check_exact=True)
     assert first.gross_pnl == second.gross_pnl
 
 
 __all__ = [
     "BARS_PER_SESSION",
     "CAPITAL",
+    "CONDITION_NAMES",
     "IST",
+    "SBIN_5M",
     "SESSIONS",
     "assert_same_result",
     "bar_open",
     "bars_from_closes",
+    "conditions",
+    "literal_on_bar",
     "run",
     "walk_bars",
 ]
