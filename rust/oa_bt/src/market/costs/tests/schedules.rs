@@ -54,37 +54,54 @@ fn builtin_versions_start_on_2020_07_01_and_follow_each_other_without_a_gap() {
     assert_eq!(versions.last().map(|v| v.valid_to), Some(None));
 }
 
-#[test]
-fn the_2024_10_01_version_has_no_verified_row() {
-    let older = version("IN-2024-10-01");
-    assert_eq!(older.gst_verified_through, None);
-    assert!(older
-        .rows
-        .iter()
-        .flatten()
-        .all(|row| row.verified_through.is_none()));
-}
+/// The rows no primary source confirms in both of the last two versions: BSE groups X
+/// (the fee page charges ZP ten times the row) and SS (the page no longer shows the
+/// group).
+const UNCONFIRMED_SINCE_2024_10_01: [Segment; 4] = [
+    Segment::BseEqDeliveryX,
+    Segment::BseEqIntradayX,
+    Segment::BseEqDeliverySs,
+    Segment::BseEqIntradaySs,
+];
 
 #[test]
-fn the_current_version_is_verified_through_the_snapshot_day_except_bse_stock_options() {
-    let current = current();
-    assert_eq!(current.gst_verified_through, Some(snapshot_day()));
+fn the_2024_10_01_version_is_verified_through_its_last_day_where_a_primary_source_confirms_it() {
+    let older = version("IN-2024-10-01");
+    let last_day = Some(days_from_civil(2026, 3, 31));
+    assert_eq!(older.gst_verified_through, last_day);
     for segment in Segment::ALL {
-        let verified = current.row(segment).unwrap().verified_through;
-        let expected = if segment == Segment::BfoOptOther {
-            None
+        let row = older.row(segment).unwrap();
+        if UNCONFIRMED_SINCE_2024_10_01.contains(&segment) {
+            assert_eq!(row.verified_through, None, "{segment:?}");
+            assert!(!row.notes.is_empty(), "{segment:?}");
         } else {
-            Some(snapshot_day())
-        };
-        assert_eq!(verified, expected, "{segment:?}");
+            assert_eq!(row.verified_through, last_day, "{segment:?}");
+        }
     }
 }
 
 #[test]
-fn the_unverified_bse_options_row_names_its_conflicting_sources() {
+fn the_current_version_is_verified_through_the_snapshot_day_where_a_source_confirms_it() {
+    let current = current();
+    assert_eq!(current.gst_verified_through, Some(snapshot_day()));
+    for segment in Segment::ALL {
+        let row = current.row(segment).unwrap();
+        let unconfirmed =
+            segment == Segment::BfoOptOther || UNCONFIRMED_SINCE_2024_10_01.contains(&segment);
+        if unconfirmed {
+            assert_eq!(row.verified_through, None, "{segment:?}");
+            assert!(!row.notes.is_empty(), "{segment:?}");
+        } else {
+            assert_eq!(row.verified_through, Some(snapshot_day()), "{segment:?}");
+        }
+    }
+}
+
+#[test]
+fn the_unverified_bse_options_row_names_its_notice_and_the_gap() {
     let notes = &current().row(Segment::BfoOptOther).unwrap().notes;
     assert!(
-        notes.contains("Angel One") && notes.contains("Zerodha"),
+        notes.contains("20240927-37") && notes.contains("2026-04-01"),
         "{notes}"
     );
 }
@@ -229,13 +246,14 @@ fn a_round_trip_across_the_stt_change_charges_each_leg_at_its_own_rates() {
 #[test]
 fn rates_are_verified_only_through_the_snapshot_day() {
     // (trade date, trust): the current version is charged on every later date but
-    // is verified only up to 2026-11-12.
+    // is verified only up to 2026-11-12; the 2024-10-01 version is verified through
+    // its last day.
     let rows = [
         (days_from_civil(2026, 4, 1), Trust::Verified),
         (snapshot_day(), Trust::Verified),
         (snapshot_day() + 1, Trust::PastVerification),
         (days_from_civil(2031, 1, 1), Trust::PastVerification),
-        (days_from_civil(2025, 6, 2), Trust::Unverified),
+        (days_from_civil(2025, 6, 2), Trust::Verified),
     ];
     for (day, expected) in rows {
         assert_eq!(trust(Segment::NseEqDelivery, day), expected, "day {day}");

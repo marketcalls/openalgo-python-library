@@ -53,8 +53,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (2022-05-02, 2023-11-01, 2024-05-13). Every version names its sources (exchange
   circulars and notices, SEBI notifications, the Finance Acts, the GST rate
   notification) and a row is verified only where a primary source states its rates
-  and their dates; the other rows (BSE groups X and SS, MCX agri and RBDPMOLEIN, MCX
-  in 2020, Sensex options from 2023-11-01 to 2024-05-12) are unverified, say why in
+  and their dates; the other rows (BSE groups X and SS, MCX RBDPMOLEIN, MCX in 2020,
+  Sensex options from 2023-11-01 to 2024-05-12) are unverified, say why in
   their notes and warn. `costs.schedules()` lists them.
 
 ### Changed
@@ -107,6 +107,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dates. Known limits of these versions, stated in their notes: GST is charged on the
   SEBI fee before 2022-07-18 too (Rs 0.90 to 1.80 per crore high), and exchange
   charges, tiered by a member's turnover before 2024-10-01, are the first-slab rates.
+
+### Fixed
+
+- **CTT on MCX agri futures outside the exemption.** Commodities transaction tax (0.01
+  percent of the sell value) is exempt only for the agricultural commodities listed in
+  rule 3 of the CTT Rules 2013, as substituted by notification 13/2015 (Finance Act 2013
+  sections 116(7) and 117). Every charge schedule exempted all MCX agri contracts, so
+  sales of CPO, MENTHAOIL, RUBBER, COTTONOIL, SUNOIL and RBDPMOLEIN futures were charged
+  no CTT. They now pay it in every schedule version, through a new segment
+  `MCX_FUT_AGRI_CTT` (CPO, MENTHAOIL, RUBBER, COTTONOIL, SUNOIL; the agri exchange charge
+  and SEBI fee, plus CTT) and CTT on the `MCX_FUT_RBDPMOLEIN` rows. `MCX_FUT_AGRI` now
+  holds CARDAMOM and COTTONCNDY only, and CASTORSEED, PEPPER and KAPAS stay exempt; all
+  five are in rule 3. A user schedule that costs CPO, MENTHAOIL, RUBBER, COTTONOIL or
+  SUNOIL needs a `MCX_FUT_AGRI_CTT` row. With the reason for their status gone, the
+  MCX agri rows of 2021-01-01 to 2024-09-30 are verified like the other MCX rows.
+- **Charge rates from 2024-10-01 are checked against primary sources.** The
+  IN-2024-10-01 version (to 2026-03-31) was unverified in full, so every run dated in it
+  warned. Its GST and its NSE, BSE group A, B and M, NFO, BFO and MCX rows are now
+  verified through 2026-03-31 against NSE circulars NSE/FA/73061 and NSE/FATAX/63809
+  and 73524, the BSE fee pages and notice 20240927-37, MCX circular MCX/F&A/631/2024,
+  the SEBI fee regulations (2019 and the Stock Brokers Regulations 2026), the stamp
+  duty schedule and the GST rate notification; both versions now name these sources.
+  Still unverified, with the reason in the row's notes, in both IN-2024-10-01 and
+  IN-2026-04-01: BSE groups X (the same row charges ZP, which pays Rs 1,00,000 per
+  crore) and SS (no longer on the BSE fee page). In IN-2026-04-01 these four rows were
+  marked verified before and now warn; BSE options other than Sensex and Bankex stay
+  unverified there.
+- **MCX CASTORSEED, PEPPER, KAPAS and RBDPMOLEIN futures pay the uniform exchange charge
+  from 2024-10-01.** MCX circular MCX/F&A/631/2024 charges every futures contract Rs 2.10
+  per lakh of turnover from that date. The schedules kept the contract-specific rates of
+  the circulars it replaced (CASTORSEED Rs 0.50, PEPPER Rs 0.05, KAPAS Rs 2.60 and
+  RBDPMOLEIN Rs 1 per lakh) in IN-2024-10-01 and IN-2026-04-01; both now charge Rs 2.10
+  per lakh, verified against the circular. Earlier versions keep the old rates.
 
 ## [2.1.0] - 2026-11-12
 

@@ -86,7 +86,7 @@ def test_the_built_in_versions_and_how_far_each_is_verified():
     ]
     assert listed == [
         *((vid, first, last, last) for vid, first, last in EARLIER_VERSIONS),
-        ("IN-2024-10-01", dt.date(2024, 10, 1), dt.date(2026, 3, 31), None),
+        ("IN-2024-10-01", dt.date(2024, 10, 1), dt.date(2026, 3, 31), dt.date(2026, 3, 31)),
         ("IN-2026-04-01", dt.date(2026, 4, 1), None, SNAPSHOT_DATE),
     ]
 
@@ -127,14 +127,32 @@ def test_schedule_rates_are_fractions_named_with_a_rate_suffix():
     assert current["rates"]["NSE_EQ_DELIVERY"]["stt_sell_rate"] == 0.001
 
 
-def test_only_the_unconfirmed_bse_options_row_of_the_current_version_is_unverified():
-    rows = costs.schedules()[-1]["rates"]
-    unverified = [code for code, row in rows.items() if row["verified_through"] is None]
-    assert unverified == ["BFO_OPT_OTHER"]
+# The rows of the last two versions that no primary source confirms: BSE groups X (ZP
+# pays ten times the row) and SS (no longer on the BSE fee page).
+UNCONFIRMED_SINCE_2024_10_01 = [
+    "BSE_EQ_DELIVERY_X",
+    "BSE_EQ_INTRADAY_X",
+    "BSE_EQ_DELIVERY_SS",
+    "BSE_EQ_INTRADAY_SS",
+]
+
+
+@pytest.mark.parametrize(
+    "version, last_day, also_unconfirmed",
+    [
+        ("IN-2024-10-01", dt.date(2026, 3, 31), []),
+        ("IN-2026-04-01", SNAPSHOT_DATE, ["BFO_OPT_OTHER"]),
+    ],
+)
+def test_the_last_two_versions_leave_unverified_only_the_rows_no_source_confirms(
+    version, last_day, also_unconfirmed
+):
+    rows = next(s for s in costs.schedules() if s["id"] == version)["rates"]
+    unverified = {code for code, row in rows.items() if row["verified_through"] is None}
+    assert unverified == {*UNCONFIRMED_SINCE_2024_10_01, *also_unconfirmed}
+    assert all(row["notes"] for code, row in rows.items() if code in unverified)
     assert all(
-        row["verified_through"] == SNAPSHOT_DATE
-        for code, row in rows.items()
-        if code != "BFO_OPT_OTHER"
+        row["verified_through"] == last_day for code, row in rows.items() if code not in unverified
     )
 
 
@@ -164,8 +182,7 @@ def test_a_trade_is_charged_at_the_rates_in_force_on_its_trade_date(segment, bef
 def test_exercise_stt_changed_with_the_fno_stt_rates():
     # 0.125 percent before, 0.15 percent from 2026-04-01, on Rs 1,00,000 of intrinsic value.
     model = costs.CostModel()
-    with pytest.warns(costs.UnverifiedScheduleWarning):
-        before = model.exercise_stt(100, 1000, LAST_OLD_DAY)
+    before = model.exercise_stt(100, 1000, LAST_OLD_DAY)
     assert (before, model.exercise_stt(100, 1000, FIRST_NEW_DAY)) == pytest.approx((125.0, 150.0))
 
 
@@ -185,16 +202,32 @@ def test_a_trade_after_the_last_verified_day_is_charged_but_flagged(date):
     assert (cost.stt, cost.verified, cost.backfilled) == (pytest.approx(1.0), False, False)
 
 
-def test_a_trade_in_the_older_version_warns_and_is_flagged():
-    with pytest.warns(costs.UnverifiedScheduleWarning, match="IN-2024-10-01.*never verified"):
+def test_a_trade_in_the_older_version_is_priced_by_it_and_verified():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
         cost = costs.trade_cost("BUY", 100, 10, "2025-06-02", segment="NSE_EQ_DELIVERY")
+    assert (cost.schedules, cost.verified) == (("IN-2024-10-01",), True)
+
+
+def test_an_unconfirmed_row_of_the_older_version_warns_with_its_reason():
+    with pytest.warns(costs.UnverifiedScheduleWarning, match="IN-2024-10-01.*group ZP"):
+        cost = costs.trade_cost("BUY", 100, 10, "2025-06-02", segment="BSE_EQ_DELIVERY_X")
     assert (cost.schedules, cost.verified) == (("IN-2024-10-01",), False)
 
 
-def test_the_unconfirmed_bse_options_rate_is_flagged_with_its_conflicting_sources():
-    # Rs 500 per crore of premium, from the BSE notice of 2024-09-27 as reported by a
-    # broker; the Zerodha page lists a single BSE options rate.
-    with pytest.warns(costs.UnverifiedScheduleWarning, match="Angel One.*Zerodha"):
+def test_kapas_pays_the_uniform_mcx_charge_from_2024_10_01():
+    # MCX/F&A/631/2024: Rs 2.10 per lakh for every futures contract from 2024-10-01, so a
+    # Rs 1 crore KAPAS sale pays 210 (the Rs 2.60 per lakh of 2024-09-30 was its own rate).
+    before = costs.trade_cost("SELL", 10_000_000, 1, "2024-09-30", segment="MCX_FUT_KAPAS")
+    after = costs.trade_cost("SELL", 10_000_000, 1, "2024-10-01", segment="MCX_FUT_KAPAS")
+    assert (before.exchange_txn, after.exchange_txn) == pytest.approx((260.0, 210.0))
+    assert after.verified is True
+
+
+def test_the_unconfirmed_bse_options_rate_is_flagged_with_its_notice_and_the_gap():
+    # Rs 500 per crore of premium, from BSE notice 20240927-37 of 2024-09-27; no source
+    # covers the dates from 2026-04-01.
+    with pytest.warns(costs.UnverifiedScheduleWarning, match="20240927-37.*2026-04-01"):
         cost = costs.trade_cost("SELL", 10_000_000, 1, SNAPSHOT, segment="BFO_OPT_OTHER")
     assert (cost.exchange_txn, cost.verified) == (pytest.approx(500.0), False)
 
@@ -224,12 +257,11 @@ def test_backfill_charges_early_trades_at_the_first_version_rates():
 
 def test_a_round_trip_across_the_boundary_charges_each_leg_at_its_own_rates():
     # Buy on the old day, sell Rs 1 crore on the new day: STT at 0.05 percent.
-    with pytest.warns(costs.UnverifiedScheduleWarning):
-        cost = costs.round_trip_cost(
-            10_000_000, 10_000_000, 1, LAST_OLD_DAY, sell_date=FIRST_NEW_DAY, segment="NFO_FUT"
-        )
+    cost = costs.round_trip_cost(
+        10_000_000, 10_000_000, 1, LAST_OLD_DAY, sell_date=FIRST_NEW_DAY, segment="NFO_FUT"
+    )
     assert cost.stt == pytest.approx(5000.0)
-    assert (cost.schedules, cost.verified) == (("IN-2024-10-01", "IN-2026-04-01"), False)
+    assert (cost.schedules, cost.verified) == (("IN-2024-10-01", "IN-2026-04-01"), True)
 
 
 def test_a_user_version_for_an_earlier_period_is_used_on_its_dates():

@@ -90,7 +90,7 @@ fn an_unknown_name_message_quotes_the_name_and_lists_what_to_use() {
         (NameKind::Product, "CNC, MIS or NRML"),
         (NameKind::Instrument, "EQ, FUT or OPT"),
         (NameKind::BseGroup, "XT, Z, ZP"),
-        (NameKind::Commodity, "MCX_FUT_AGRI"),
+        (NameKind::Commodity, "MCX_FUT_AGRI_CTT"),
         (NameKind::Preset, "zerodha"),
         (NameKind::Rounding, "contract_note or calculator"),
     ];

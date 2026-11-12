@@ -251,7 +251,8 @@ type Boundary = (Day, Segment, Side, Line, f64, f64);
 fn boundaries() -> Vec<Boundary> {
     use Line::{Exchange, Sebi, Stt};
     use Segment::{
-        BfoOpt, BfoOptOther, BseEqDelivery, McxFut, McxFutKapas, NfoFut, NfoOpt, NseEqDelivery,
+        BfoOpt, BfoOptOther, BseEqDelivery, McxFut, McxFutKapas, McxFutPepper, NfoFut, NfoOpt,
+        NseEqDelivery,
     };
     use Side::{Buy, Sell};
     vec![
@@ -284,6 +285,10 @@ fn boundaries() -> Vec<Boundary> {
         (d(2024, 10, 1), NseEqDelivery, Buy, Exchange, 335.0, 307.0),
         (d(2024, 10, 1), NfoFut, Sell, Stt, 1_250.0, 2_000.0),
         (d(2024, 10, 1), McxFut, Buy, Exchange, 260.0, 210.0),
+        // MCX/F&A/631/2024 also ends the contract-specific rates: KAPAS from Rs 2.60 and
+        // PEPPER from Rs 0.05 per lakh to the uniform Rs 2.10.
+        (d(2024, 10, 1), McxFutKapas, Buy, Exchange, 260.0, 210.0),
+        (d(2024, 10, 1), McxFutPepper, Sell, Exchange, 5.0, 210.0),
     ]
 }
 
@@ -314,10 +319,9 @@ fn every_rate_change_applies_from_its_effective_date_and_not_the_day_before() {
 }
 
 /// The segments of each version before 2024-10-01 whose rates are not verified: BSE
-/// groups X (ZP is charged otherwise) and SS (no dated source), MCX agri futures (CTT
-/// exemption narrower than the row) and RBDPMOLEIN (no fee found), every MCX row in
-/// 2020 (no fee circular found before 2020-12-18), and Sensex options while the
-/// nearest expiry had its own slabs.
+/// groups X (ZP is charged otherwise) and SS (no dated source), MCX RBDPMOLEIN (no
+/// fee found), every MCX row in 2020 (no fee circular found before 2020-12-18), and
+/// Sensex options while the nearest expiry had its own slabs.
 fn unverified_rows() -> [(&'static str, Vec<Segment>); 10] {
     use Segment::*;
     let always = [
@@ -325,7 +329,6 @@ fn unverified_rows() -> [(&'static str, Vec<Segment>); 10] {
         BseEqIntradayX,
         BseEqDeliverySs,
         BseEqIntradaySs,
-        McxFutAgri,
         McxFutRbdpmolein,
     ];
     let with = |extra: &[Segment]| -> Vec<Segment> {
@@ -334,7 +337,14 @@ fn unverified_rows() -> [(&'static str, Vec<Segment>); 10] {
         rows.sort();
         rows
     };
-    let all_mcx = [McxFut, McxFutCastorseed, McxFutPepper, McxFutKapas];
+    let all_mcx = [
+        McxFut,
+        McxFutAgri,
+        McxFutAgriCtt,
+        McxFutCastorseed,
+        McxFutPepper,
+        McxFutKapas,
+    ];
     [
         ("IN-2020-07-01", with(&all_mcx)),
         ("IN-2021-01-01", with(&[])),
