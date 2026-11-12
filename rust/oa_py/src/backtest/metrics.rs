@@ -4,8 +4,11 @@
 //! - Timestamps are contiguous int64 arrays of UTC nanoseconds; money, returns and
 //!   rates are contiguous float64 arrays (rupees and fractions).
 //! - Session dates come back as an int32 array of IST days since 1970-01-01.
-//! - A drawdown episode is a tuple (peak, trough, recovery or None, depth, duration):
-//!   point positions, the depth as a fraction and the duration in nanoseconds.
+//! - A drawdown episode is a tuple (peak or None, trough, recovery or None, depth,
+//!   duration): point positions (a peak of None is the opening wealth, before the first
+//!   point), the depth as a fraction and the duration in nanoseconds.
+//! - An opening wealth (rupees, the capital before the first point) is an optional
+//!   last argument; None takes the first point as the start (`oa_bt::metrics::curve`).
 //! - Several results come back as a dict whose keys are the kernel's field names.
 //!
 //! Errors are raised as `NativeMetricsError`; the Python package converts them to its
@@ -37,7 +40,7 @@ fn metrics_error(error: mt::MetricsError) -> PyErr {
 
 type Times<'py> = PyReadonlyArray1<'py, i64>;
 type Values<'py> = PyReadonlyArray1<'py, f64>;
-type EpisodeTuple = (usize, usize, Option<usize>, f64, i64);
+type EpisodeTuple = (Option<usize>, usize, Option<usize>, f64, i64);
 /// A combined equity series: (int64 UTC nanoseconds, float64 rupees).
 type CombinedColumns<'py> = (Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<f64>>);
 
@@ -46,14 +49,17 @@ fn episode(value: Option<mt::DrawdownEpisode>) -> Option<EpisodeTuple> {
 }
 
 /// Wealth index, cumulative P&L, booked flows, ruin point, session returns and
-/// drawdowns of an equity series with its cash flows (see `oa_bt::metrics::curve`).
+/// drawdowns of an equity series with its cash flows and optional opening wealth (see
+/// `oa_bt::metrics::curve`).
 #[pyfunction]
+#[pyo3(signature = (ts, equity, flow_ts, flow_amount, opening_wealth=None))]
 fn metrics_curve<'py>(
     py: Python<'py>,
     ts: Times<'py>,
     equity: Values<'py>,
     flow_ts: Times<'py>,
     flow_amount: Values<'py>,
+    opening_wealth: Option<f64>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let ts = ts.as_slice()?;
     let curve = mt::EquityCurve {
@@ -64,7 +70,7 @@ fn metrics_curve<'py>(
         ts: flow_ts.as_slice()?,
         amount: flow_amount.as_slice()?,
     };
-    let wealth = mt::wealth(&curve, &flows).map_err(metrics_error)?;
+    let wealth = mt::wealth(&curve, &flows, opening_wealth).map_err(metrics_error)?;
     let sessions = mt::session_returns(ts, &wealth);
     let drawdowns = mt::drawdowns(ts, &wealth.index, &wealth.pnl);
     let out = PyDict::new_bound(py);
@@ -194,11 +200,14 @@ fn metrics_benchmark<'py>(
 }
 
 /// Combined equity of several (timestamps, equity) series: their sum on the union of
-/// the timestamps (see `oa_bt::metrics::combine`).
+/// the timestamps, with each series at its opening wealth (one per series, rupees)
+/// before its first point when those are given (see `oa_bt::metrics::combine`).
 #[pyfunction]
+#[pyo3(signature = (curves, opening_wealth=None))]
 fn metrics_combine<'py>(
     py: Python<'py>,
     curves: Vec<(Times<'py>, Values<'py>)>,
+    opening_wealth: Option<Vec<f64>>,
 ) -> PyResult<CombinedColumns<'py>> {
     let mut borrowed = Vec::with_capacity(curves.len());
     for (ts, equity) in &curves {
@@ -207,7 +216,8 @@ fn metrics_combine<'py>(
             equity: equity.as_slice()?,
         });
     }
-    let (ts, equity) = mt::combine_equity(&borrowed).map_err(metrics_error)?;
+    let (ts, equity) =
+        mt::combine_equity(&borrowed, opening_wealth.as_deref()).map_err(metrics_error)?;
     Ok((ts.into_pyarray_bound(py), equity.into_pyarray_bound(py)))
 }
 

@@ -12,8 +12,8 @@
 use crate::exec::{ExecError, OrderId, OrderRequest};
 
 use super::error::KernelError;
-use super::event::{Event, OrderEventKind, Step};
-use super::kernel::{Engine, Phase};
+use super::event::{Event, OrderEventKind};
+use super::kernel::Engine;
 use super::submit::{Resolved, Submission};
 
 /// Why a request cannot replace an order, if it cannot.
@@ -33,9 +33,10 @@ fn replacement_error(current: &OrderRequest, replacement: &OrderRequest) -> Opti
 impl Engine {
     /// Replace a working order's request in full (see the module documentation).
     ///
-    /// Returns `Submitted(id)` when the order was replaced (event `Modified`, step 7),
-    /// `Rejected(id, code)` when the replacement failed a submission check (the order
-    /// is unchanged and no event is written), `Skipped` when a sizer gave no quantity.
+    /// Returns `Submitted(id)` when the order was replaced (event `Modified`, in the step
+    /// of the decision), `Rejected(id, code)` when the replacement failed a submission
+    /// check (the order is unchanged and no event is written), `Skipped` when a sizer gave
+    /// no quantity.
     ///
     /// Errors: `NotAtDecisionPoint` unless paused; `UnknownOrder`; `Exec(InvalidRequest)`
     /// for an order that no longer works or a replacement that changes what identifies
@@ -45,7 +46,7 @@ impl Engine {
         id: OrderId,
         request: OrderRequest,
     ) -> Result<Submission, KernelError> {
-        let Phase::Paused(slice) = self.phase else {
+        let Some((slice, decided_at, step)) = self.decision_point() else {
             return Err(KernelError::NotAtDecisionPoint);
         };
         let order = self.book.get(id).ok_or(KernelError::UnknownOrder(id))?;
@@ -67,18 +68,19 @@ impl Engine {
             Resolved::AtFill => 0.0,
             Resolved::Skipped(reason) => return Ok(Submission::Skipped(reason)),
         };
-        let good_until = match self.submission_checks(&request, units, &slice)? {
+        let good_until = match self.submission_checks(&request, units, &slice, decided_at)? {
             Ok(good_until) => good_until,
             Err(code) => return Ok(Submission::Rejected(id, code)),
         };
         self.book
-            .replace(id, request, slice.close, good_until, units)?;
+            .replace(id, request, decided_at, good_until, units)?;
+        let stamp = Self::stamp(&slice, step);
         self.emit(Event::Order {
-            stamp: Self::stamp(&slice, Step::Callbacks),
+            stamp,
             order: id,
             kind: OrderEventKind::Modified,
         });
-        self.modify_order_gtt(&slice, id)?;
+        self.modify_order_gtt(stamp, id)?;
         Ok(Submission::Submitted(id))
     }
 }

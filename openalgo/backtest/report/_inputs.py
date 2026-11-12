@@ -5,6 +5,8 @@ nanoseconds. Naive datetimes are refused rather than guessed: a wrong zone would
 every point by 5 hours 30 minutes and could change its IST session date.
 """
 
+import math
+import numbers
 from dataclasses import dataclass
 
 import numpy as np
@@ -95,6 +97,22 @@ def series_columns(series: object, *, what: str) -> tuple[np.ndarray, np.ndarray
     if missing.any():
         raise ConfigError(f"{what} has {int(missing.sum())} missing timestamp(s)")
     return nanos, _floats(series.to_numpy(), what=what)
+
+
+def check_opening_wealth(value: object, *, what: str = "opening_wealth") -> float:
+    """A capital before the first equity point, in rupees, as a float.
+
+    Raises ConfigError for anything but a positive finite number (True, text and NaN
+    included): a wrong opening wealth would rescale every return of the run.
+    """
+    real = isinstance(value, numbers.Real) and not isinstance(value, bool)
+    number = float(value) if real else math.nan  # type: ignore[arg-type]
+    if not (math.isfinite(number) and number > 0):
+        raise ConfigError(
+            f"{what} is the capital before the first equity point, a positive number of "
+            f"rupees, got {value!r}"
+        )
+    return number
 
 
 def flow_columns(cash_flows: pd.Series | None) -> tuple[np.ndarray, np.ndarray]:
@@ -207,6 +225,7 @@ __all__ = [
     "TradeTable",
     "benchmark_columns",
     "flow_columns",
+    "check_opening_wealth",
     "series_columns",
     "trade_table",
     "utc_nanos",

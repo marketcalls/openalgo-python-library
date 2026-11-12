@@ -1,23 +1,32 @@
 //! The time-weighted wealth index of an equity series, and its per-session returns.
 //!
-//! Definitions, for points `0..n` with equity `E_i` at `t_i`:
+//! The opening wealth `O` is the wealth before the run's first P&L, in rupees: the
+//! capital. A caller that knows it passes it, and every point of the series is then a
+//! mark after the opening (a backtest's first point is the close of its first slice,
+//! which can already hold P&L). A caller that passes none gets the first point as the
+//! start: `O = E_0`, and point 0 is the opening itself rather than a mark.
+//!
+//! Definitions, for points `0..n` with equity `E_i` at `t_i`, and `E_{-1} = O`:
 //!
 //! - `F_i`, the cash flow booked at point `i`: the sum of the flows stamped in
 //!   `(t_{i-1}, t_i]`. A flow is taken to arrive at the point that follows it, so the
 //!   P&L of that interval is earned on `E_{i-1}` alone. Deposits are positive,
-//!   withdrawals negative.
+//!   withdrawals negative. A flow at or before the first point is refused (fold it into
+//!   the opening wealth), so `F_0 = 0`.
 //! - Bar return `r_i = (E_i - F_i) / E_{i-1} - 1`, and the wealth index
-//!   `W_0 = 1`, `W_i = W_{i-1} * (1 + r_i)`. Between two flows the index is computed
-//!   as `W_k * E_i / E_k` from the last flow point `k`, so an equity that returns to an
-//!   earlier value gives exactly the earlier index.
-//! - Cumulative P&L `P_i = E_i - E_0 - (F_1 + ... + F_i)`, in rupees.
+//!   `W_{-1} = 1` at the opening, `W_i = W_{i-1} * (1 + r_i)`. Between two flows the
+//!   index is computed as `W_k * E_i / E_k` from the last flow point `k` (from the
+//!   opening before the first flow), so an equity that returns to an earlier value
+//!   gives exactly the earlier index. Without an opening wealth `W_0 = E_0 / E_0 = 1`.
+//! - Cumulative P&L `P_i = E_i - O - (F_1 + ... + F_i)`, in rupees; 0 at the opening.
 //! - Ruin: the first point at which the equity before its flow, `E_i - F_i`, is zero
 //!   or below. The index is 0 from there on: the capital is lost and no later return
 //!   is defined.
-//! - Session return: the IST date of each point after the first is its session date.
-//!   The return of a session is `W(last point of the date) / W(last point of the
-//!   previous date) - 1`, with `W_0` as the base of the first date. Sessions after the
-//!   ruin session have no return.
+//! - Session return: the IST date of each mark is its session date: every point with
+//!   an opening wealth, every point after the first without one. The return of a
+//!   session is `W(last mark of the date) / W(last mark of the previous date) - 1`,
+//!   with the opening (`W = 1`) as the base of the first date. Sessions after the ruin
+//!   session have no return.
 
 use crate::model::{ist_day, Day, TsNanos};
 
@@ -48,14 +57,18 @@ impl CashFlows<'static> {
 /// The wealth index of an equity series and what it rests on.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Wealth {
-    /// Time-weighted wealth index per point: 1.0 at the start, 0.0 from ruin on.
+    /// Time-weighted wealth index per point, relative to the opening (1.0 there, and
+    /// so 1.0 at point 0 without an opening wealth); 0.0 from ruin on.
     pub index: Vec<f64>,
-    /// Cumulative P&L per point, in rupees (equity minus the start and the flows).
+    /// Cumulative P&L per point, in rupees (equity minus the opening and the flows).
     pub pnl: Vec<f64>,
     /// The cash flow booked at each point, in rupees.
     pub flow: Vec<f64>,
     /// The first point at which the account was ruined, if it was.
     pub ruin: Option<usize>,
+    /// The opening wealth the caller gave, in rupees; `None` when the first point is
+    /// the start. With it, point 0 is a mark and has a session.
+    pub opening_wealth: Option<f64>,
 }
 
 /// Per-session returns of a wealth index.
@@ -146,30 +159,49 @@ fn flows_per_point(curve: &EquityCurve, flows: &CashFlows) -> Result<Vec<f64>, M
     Ok(booked)
 }
 
-/// The time-weighted wealth index, cumulative P&L and ruin point of an equity series
-/// (definitions in the module docs).
-///
-/// Errors: `TooFewPoints` below two points; `LengthMismatch`, `NotIncreasing`,
-/// `NotFinite` for malformed columns; `NonPositiveStart`; `FlowOutsideCurve`;
-/// `NoCapitalAfterFlow` when a withdrawal empties the account.
-pub fn wealth(curve: &EquityCurve, flows: &CashFlows) -> Result<Wealth, MetricsError> {
-    curve.check(2)?;
-    let flow = flows_per_point(curve, flows)?;
-    let start = curve.equity.first().copied().unwrap_or(0.0);
-    if start <= 0.0 {
-        return Err(MetricsError::NonPositiveStart { equity: start });
+/// The wealth before the first P&L, in rupees: the opening wealth when one is given,
+/// else the first point (see the module docs).
+fn opening(curve: &EquityCurve, opening_wealth: Option<f64>) -> Result<f64, MetricsError> {
+    match opening_wealth {
+        Some(value) if value.is_finite() && value > 0.0 => Ok(value),
+        Some(value) => Err(MetricsError::InvalidOpeningWealth { value }),
+        None => match curve.equity.first().copied() {
+            Some(first) if first > 0.0 => Ok(first),
+            first => Err(MetricsError::NonPositiveStart {
+                equity: first.unwrap_or(0.0),
+            }),
+        },
     }
+}
+
+/// The time-weighted wealth index, cumulative P&L and ruin point of an equity series
+/// (definitions in the module docs). `opening_wealth` is the capital before the first
+/// point, in rupees; `None` takes the first point as the start.
+///
+/// Errors: `TooFewPoints` below one point with an opening wealth and below two
+/// without; `LengthMismatch`, `NotIncreasing`, `NotFinite` for malformed columns;
+/// `InvalidOpeningWealth` for an opening wealth that is not a positive number;
+/// `NonPositiveStart` for a first point of zero or below without one;
+/// `FlowOutsideCurve`; `NoCapitalAfterFlow` when a withdrawal empties the account.
+pub fn wealth(
+    curve: &EquityCurve,
+    flows: &CashFlows,
+    opening_wealth: Option<f64>,
+) -> Result<Wealth, MetricsError> {
+    curve.check(if opening_wealth.is_some() { 1 } else { 2 })?;
+    let flow = flows_per_point(curve, flows)?;
+    let start = opening(curve, opening_wealth)?;
     let n = curve.equity.len();
     let (mut index, mut pnl) = (Vec::with_capacity(n), Vec::with_capacity(n));
+    // The opening stands before point 0 with index 1. Without an opening wealth it is
+    // point 0 itself, whose index comes out as exactly 1 (E_0 / E_0).
     let (mut base_index, mut base_equity) = (1.0, start);
     let (mut previous_index, mut previous_equity) = (1.0, start);
     let (mut flows_so_far, mut ruin) = (0.0, None);
     for (point, (&equity, &booked)) in curve.equity.iter().zip(&flow).enumerate() {
         flows_so_far += booked;
         pnl.push(equity - start - flows_so_far);
-        let current = if point == 0 {
-            1.0
-        } else if ruin.is_some() || equity - booked <= 0.0 {
+        let current = if ruin.is_some() || equity - booked <= 0.0 {
             ruin = ruin.or(Some(point));
             0.0
         } else if booked == 0.0 {
@@ -189,35 +221,40 @@ pub fn wealth(curve: &EquityCurve, flows: &CashFlows) -> Result<Wealth, MetricsE
         pnl,
         flow,
         ruin,
+        opening_wealth,
     })
 }
 
 /// Per-session returns of a wealth index whose points are stamped `ts` (definitions in
-/// the module docs). `ts` and `wealth.index` must have equal lengths; extra values of
-/// the longer one are ignored. An index with fewer than two points has no session.
+/// the module docs): from every point when the index has an opening wealth, from every
+/// point after the first when it has none. `ts` and `wealth.index` must have equal
+/// lengths; extra values of the longer one are ignored. An index with no mark has no
+/// session.
 pub fn session_returns(ts: &[TsNanos], wealth: &Wealth) -> SessionReturns {
     let mut out = SessionReturns {
         days: Vec::new(),
         returns: Vec::new(),
     };
-    let mut base = 1.0;
-    let last_point = wealth.ruin.unwrap_or(usize::MAX);
-    let points: Vec<(Day, f64)> = ts
+    // Without an opening wealth point 0 is the opening itself, in no session.
+    let first_mark = usize::from(wealth.opening_wealth.is_none());
+    let ruin = wealth.ruin.unwrap_or(usize::MAX);
+    let marks: Vec<(usize, Day, f64)> = ts
         .iter()
         .zip(&wealth.index)
-        .skip(1)
-        .map(|(&t, &w)| (ist_day(t), w))
+        .enumerate()
+        .skip(first_mark)
+        .map(|(point, (&t, &w))| (point, ist_day(t), w))
         .collect();
-    for (position, &(day, index)) in points.iter().enumerate() {
-        let next_day = points.get(position + 1).map(|&(next, _)| next);
-        let ends_session = next_day != Some(day) || position + 1 == last_point;
-        if !ends_session {
+    let mut base = 1.0;
+    for (position, &(point, day, index)) in marks.iter().enumerate() {
+        let next_day = marks.get(position + 1).map(|&(_, next, _)| next);
+        if next_day == Some(day) && point < ruin {
             continue;
         }
         out.days.push(day);
         out.returns.push(index / base - 1.0);
         base = index;
-        if position + 1 >= last_point {
+        if point >= ruin {
             break;
         }
     }

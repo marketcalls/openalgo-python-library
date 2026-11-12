@@ -14,7 +14,7 @@ fn the_series_is_the_fall_from_the_running_peak() {
     // 0.99 / 1.1 - 1 = -0.1.
     assert_all_close(&result.series, &[0.0, 0.0, -0.1, 0.0]);
     let max = result.max.unwrap();
-    assert_eq!((max.peak, max.trough, max.recovery), (1, 2, Some(3)));
+    assert_eq!((max.peak, max.trough, max.recovery), (Some(1), 2, Some(3)));
     assert_close(max.depth, -0.1);
     assert_eq!(max.duration, days(2));
 }
@@ -25,7 +25,7 @@ fn the_deepest_and_the_longest_episode_are_told_apart() {
     let index = [1.0, 0.8, 1.0, 0.95, 0.96, 0.97, 0.99];
     let result = drawdowns(&ts, &index, &[0.0; 7]);
     let deepest = DrawdownEpisode {
-        peak: 0,
+        peak: Some(0),
         trough: 1,
         recovery: Some(2),
         depth: 0.8 - 1.0,
@@ -36,7 +36,7 @@ fn the_deepest_and_the_longest_episode_are_told_apart() {
     let longest = result.longest.unwrap();
     assert_eq!(
         (longest.peak, longest.trough, longest.recovery),
-        (2, 3, None)
+        (Some(2), 3, None)
     );
     assert_eq!(longest.duration, days(4));
     assert_close(longest.depth, 0.95 - 1.0);
@@ -55,8 +55,8 @@ fn a_curve_that_never_falls_has_no_episode() {
 fn equal_depths_keep_the_first_episode() {
     let ts = daily(5);
     let result = drawdowns(&ts, &[1.0, 0.9, 1.0, 0.9, 1.0], &[0.0; 5]);
-    assert_eq!(result.max.map(|e| e.peak), Some(0));
-    assert_eq!(result.longest.map(|e| e.peak), Some(0));
+    assert_eq!(result.max.map(|e| e.peak), Some(Some(0)));
+    assert_eq!(result.longest.map(|e| e.peak), Some(Some(0)));
 }
 
 #[test]

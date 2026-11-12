@@ -7,8 +7,9 @@ instruments are named by symbol. Prices and money are rupees, quantities units.
 Built: `fills`, `orders`, `trades`, `equity`, `returns`, `positions` (the position
 history), `events`, `risk_events`, `stale_marks`, `final_positions`, `gross_pnl`,
 `costs`, `contract_notes`, `performance`, `metrics`, `tearsheet()`, `assumptions`,
-`warnings`, `skipped`, `manifest`, `to_dataframes()`. Not built yet: `rerun()` (Phase 1
-work), and the several-strategy views `strategy()`, `combined`, `correlation` (Phase 3).
+`warnings`, `skipped`, `manifest` (see `_manifest`), `rerun()` (see `_rerun`),
+`to_dataframes()`. Not built yet: the several-strategy views `strategy()`, `combined`,
+`correlation` (Phase 3).
 """
 
 from __future__ import annotations
@@ -21,10 +22,9 @@ import pandas as pd
 from . import _result_costs, _result_report
 from ._native import native
 from ._series import IST
+from .errors import BacktestError
 from .metrics import analyse
 from .report._performance import Performance
-
-NOT_BUILT = "is not implemented yet (Phase 1 work in progress)"
 
 
 def _times(values: Any) -> pd.DatetimeIndex:
@@ -42,6 +42,7 @@ class Result:
         warnings: list[str],
         skipped: list[tuple],
         manifest: dict[str, Any],
+        record: Any = None,
     ) -> None:
         self._output = output
         self._symbols = symbols
@@ -50,6 +51,7 @@ class Result:
         self._warnings = [*warnings, *_result_costs.run_warnings(output, schedules)]
         self._skipped = skipped
         self._manifest = manifest
+        self._record = record
 
     # ----- tables --------------------------------------------------------------------
 
@@ -154,7 +156,9 @@ class Result:
 
     @property
     def manifest(self) -> dict[str, Any]:
-        """Engine version, settings and instruments of the run."""
+        """Engine version, strategy and its source hash, every resolved argument, data
+        partition hashes, reference-table and cost-schedule versions, random seed and
+        platform: JSON types (`_manifest.RunManifest.from_dict` reads it back)."""
         return {"engine_version": native.engine_version(), **self._manifest}
 
     def to_dataframes(self) -> dict[str, pd.DataFrame]:
@@ -198,11 +202,14 @@ class Result:
     @cached_property
     def performance(self) -> Performance:
         """Every metric of the run (`openalgo.backtest.metrics.analyse`) over its equity
-        series and trades, annualised by the traded exchange's calendar. Raises
-        ConfigError when the run has fewer than two equity points."""
+        series and trades, annualised by the traded exchange's calendar. The capital is
+        the opening wealth, so the P&L of the first slice and the return of the first
+        session count. Raises ConfigError when the run has no equity point."""
         trades = _result_report.trades_table(self._output, self._symbols)
         equity = _result_report.equity_series(self.equity)
-        return analyse(equity, exchanges=self._manifest["plan"].exchange, trades=trades)
+        exchange = self._manifest["arguments"]["exchange"]
+        capital = self._manifest["arguments"]["capital"]
+        return analyse(equity, exchanges=exchange, trades=trades, opening_wealth=capital)
 
     @property
     def metrics(self) -> Any:
@@ -216,14 +223,19 @@ class Result:
         so a cost-free run says so on the report."""
         lines = [f"{key}: {value}" for key, value in self._assumptions.items()]
         lines += [f"warning: {text}" for text in self._warnings]
-        name = self._manifest.get("strategy") or ", ".join(self._symbols)
+        name = self._manifest["strategy"]["name"]
         report = _result_report.Report(self.performance, name, lines)
         return _result_report.tearsheet(report, path)
 
-    # ----- not built yet --------------------------------------------------------------
+    # ----- running again, and what is not built yet ----------------------------------
 
     def rerun(self, **overrides: Any) -> Result:
-        raise NotImplementedError(f"Result.rerun {NOT_BUILT}")
+        """The same backtest again with run arguments or strategy parameters changed;
+        with none, this result bit for bit. Raises ConfigError for an unknown name and
+        BacktestError for a result that was not made by `bt.backtest`."""
+        if self._record is None:
+            raise BacktestError("this result was not made by bt.backtest and cannot rerun")
+        return self._record.rerun(overrides, self.manifest)
 
     def strategy(self, name: str) -> Result:
         raise NotImplementedError("several strategies in one run are planned for Phase 3")

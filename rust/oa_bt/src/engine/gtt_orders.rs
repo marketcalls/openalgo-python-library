@@ -19,9 +19,8 @@ use crate::exec::{
     OrderId, OrderRequest, OrderType, TriggerDirection, Validity,
 };
 
-use super::clock::SliceInfo;
 use super::error::KernelError;
-use super::event::Step;
+use super::event::EventStamp;
 use super::kernel::Engine;
 
 impl Engine {
@@ -78,13 +77,14 @@ impl Engine {
         })
     }
 
-    /// Step 7: a GTT order that passed the submission checks rests as its GTT
-    /// (`GttPlaced` after `Submitted`). Other orders place nothing.
+    /// At the order's decision (step 7, or step 2 for a timer): a GTT order that passed
+    /// the submission checks rests as its GTT (`GttPlaced` after `Submitted`). Other
+    /// orders place nothing.
     ///
     /// Errors: as `order_gtt_leg`.
     pub(super) fn place_order_gtt(
         &mut self,
-        slice: &SliceInfo,
+        stamp: EventStamp,
         order: OrderId,
     ) -> Result<(), KernelError> {
         let Some(placed) = self.book.get(order).cloned() else {
@@ -105,41 +105,40 @@ impl Engine {
             legs: vec![leg],
             purpose: GttPurpose::Order(order),
             status: GttStatus::Active,
-            created_on: slice.day,
+            created_on: self.trade_day(stamp),
             eligible_from: placed.decided_at,
             last_modified_slice: None,
             fired: None,
         })?;
-        self.emit_gtt(
-            Self::stamp(slice, Step::Callbacks),
-            GttEventName::Placed,
-            id,
-        );
+        self.emit_gtt(stamp, GttEventName::Placed, id);
         Ok(())
     }
 
-    /// Step 7, after a modification of a GTT order: its GTT takes the new trigger,
-    /// child and quantity in full (`GttModified`), tested from the next base bar.
+    /// After a modification of a GTT order: its GTT takes the new trigger, child and
+    /// quantity in full (`GttModified`), tested from the first base bar at or after the
+    /// order's new decision instant.
     ///
     /// Errors: as `order_gtt_leg`.
     pub(super) fn modify_order_gtt(
         &mut self,
-        slice: &SliceInfo,
+        stamp: EventStamp,
         order: OrderId,
     ) -> Result<(), KernelError> {
         let Some(id) = self.gtts.book.of_order(order) else {
             return Ok(());
         };
         let leg = self.order_gtt_leg(order)?;
-        let quantity = self.book.get(order).map_or(0.0, |o| o.quantity_units);
+        let Some(replaced) = self.book.get(order) else {
+            return Err(KernelError::UnknownOrder(order));
+        };
+        let (quantity, decided_at) = (replaced.quantity_units, replaced.decided_at);
         self.gtts.book.apply(id, GttAction::Modify)?;
         if let Some(gtt) = self.gtts.book.get_mut(id) {
             gtt.legs = vec![leg];
             gtt.quantity_units = quantity;
-            gtt.eligible_from = slice.close;
-            gtt.last_modified_slice = u32::try_from(slice.index).ok();
+            gtt.eligible_from = decided_at;
+            gtt.last_modified_slice = Some(stamp.slice);
         }
-        let stamp = Self::stamp(slice, Step::Callbacks);
         self.emit_gtt(stamp, GttEventName::Modified, id);
         Ok(())
     }

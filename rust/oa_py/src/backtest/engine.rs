@@ -23,9 +23,11 @@ mod market;
 mod request;
 mod results;
 mod setup;
+mod signals;
 mod tables;
 
-use oa_bt::engine::{Engine, KernelError, RunSetup, Submission};
+use oa_bt::data::resample::CalendarUnit;
+use oa_bt::engine::{Engine, KernelError, RunSetup, Submission, TimerSpec};
 use oa_bt::exec::{InstrumentId, OrderId};
 use oa_bt::model::Product;
 use pyo3::create_exception;
@@ -181,6 +183,19 @@ impl NativeEngine {
         Ok(self.engine()?.has_pending_entry(InstrumentId(instrument)))
     }
 
+    /// Run a condition strategy to the end of the grid in Rust, with no Python call per
+    /// bar, from its spec dict (see `signals`). Returns the entries a sizer skipped as
+    /// (decision instant, reason) pairs. Then `finish()` returns the result.
+    fn run_signals(&mut self, spec: &Bound<'_, PyDict>) -> PyResult<Vec<(i64, &'static str)>> {
+        let signals = signals::signal_arrays(spec)?;
+        let skipped =
+            oa_bt::engine::run_signals(self.engine_mut()?, &signals).map_err(engine_error)?;
+        Ok(skipped
+            .iter()
+            .map(|entry| (entry.decided_at, entry.reason.code()))
+            .collect())
+    }
+
     /// The last close seen of an instrument, rupees.
     fn last_close(&self, instrument: u32) -> PyResult<Option<f64>> {
         Ok(self.engine()?.last_close(InstrumentId(instrument)))
@@ -197,6 +212,41 @@ impl NativeEngine {
             a.costs_rupees,
             a.margin_rupees,
         ))
+    }
+
+    /// Register a timer at an IST time each session (minutes since midnight); returns
+    /// its id. Only before the first `advance`.
+    fn add_timer_at(&mut self, minute_of_day: u32) -> PyResult<u32> {
+        let spec = TimerSpec::At { minute_of_day };
+        Ok(self.engine_mut()?.add_timer(spec).map_err(engine_error)?.0)
+    }
+
+    /// Register a timer at the close of the first session of each period ("W", "M", "Q"
+    /// or "Y"); returns its id. Only before the first `advance`.
+    fn add_timer_every(&mut self, unit: &str) -> PyResult<u32> {
+        let unit = CalendarUnit::from_code(unit).ok_or_else(|| {
+            NativeEngineInputError::new_err(format!("unknown period {unit:?}: use W, M, Q or Y"))
+        })?;
+        let spec = TimerSpec::Every(unit);
+        Ok(self.engine_mut()?.add_timer(spec).map_err(engine_error)?.0)
+    }
+
+    /// (timer id, sessions fired, sessions missed) of every timer, in id order.
+    fn timer_counts(&self) -> PyResult<Vec<(u32, u32, u32)>> {
+        Ok(self
+            .engine()?
+            .timer_counts()
+            .iter()
+            .map(|count| (count.timer.0, count.fired, count.missed))
+            .collect())
+    }
+
+    /// Every strategy bar of an instrument over the run, as a dict of arrays (ts_open,
+    /// ts_close int64; open, high, low, close, volume float64): the bars the pauses
+    /// deliver, in the same order.
+    fn strategy_bars<'py>(&self, py: Python<'py>, instrument: u32) -> PyResult<Bound<'py, PyDict>> {
+        let bars = self.engine()?.strategy_bars(InstrumentId(instrument));
+        tables::strategy_bars(py, &bars)
     }
 
     /// The result tables, once the run has finished. The engine cannot be used after.

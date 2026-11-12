@@ -141,9 +141,10 @@ These are settled. Do not redesign around them without asking.
   with a target. Backtests model a GTT the way it works (a trigger, then a child order
   that may not fill on a gap), and live sends it through the SDK's GTT calls. MIS
   cannot hold a GTT.
-- **Reports are built in.** The engine does not depend on openstatz or on any plotting
-  or market-data download package. The metrics and tearsheets it needs live in
-  `openalgo` itself.
+- **Reports are built in.** openstatz is not used. Everything a trader would get from
+  it (the metrics, rolling statistics, drawdown tables, Monte Carlo, benchmark
+  comparison, the charts and the HTML report) is built inside `openalgo` as original
+  code, with no plotting package and no market-data download (no yfinance).
 - **Data comes from OpenAlgo or from the user.** Broker history and Historify through
   the SDK, or the user's own DataFrames and files with no server at all. No third-party
   market-data downloader is bundled.

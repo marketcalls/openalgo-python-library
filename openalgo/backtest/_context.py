@@ -8,18 +8,36 @@ kernel refuses them anywhere else.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
+
+import pandas as pd
 
 from ._engine import call
 from ._orders import Order
-from ._series import Bar, BarStore, PositionView, ist_time
+from ._series import Bar, BarStore, PositionView, SeriesStore, ist_time
+from ._timers import Timers
 from .errors import ConfigError
 from .reference import Instrument
 from .size import Sizer, resolve_atr
 
 
+@dataclass(frozen=True)
+class RunData:
+    """The run's facts a strategy's data views need: the exchange, the strategy and base
+    intervals, the base bars by symbol (canonical layout, cut to the run's slices), the
+    calendar, and the indicator checks of the run (`_causality_checks.IndicatorChecks`)."""
+
+    exchange: str
+    interval: str
+    base: str
+    base_bars: dict[str, pd.DataFrame]
+    calendar: Any
+    checks: Any
+
+
 class RunContext:
-    """One run's engine, instruments, revealed bars and decision instant."""
+    """One run's engine, instruments, bars, timers and decision instant."""
 
     def __init__(
         self,
@@ -27,12 +45,19 @@ class RunContext:
         instruments: list[Instrument],
         product: str,
         default_size: Sizer | None,
+        run: RunData,
     ) -> None:
         self.engine = engine
         self.instruments = {instrument.symbol: instrument for instrument in instruments}
         self.symbols = [instrument.symbol for instrument in instruments]
         self.index = {symbol: number for number, symbol in enumerate(self.symbols)}
-        self.stores = {symbol: BarStore(symbol) for symbol in self.symbols}
+        self.run = run
+        self.stores = {
+            symbol: BarStore(symbol, run.interval, call(engine.strategy_bars, number))
+            for number, symbol in enumerate(self.symbols)
+        }
+        self.timeframes: dict[tuple[str, str], SeriesStore] = {}
+        self.timers = Timers(engine)
         self.product = product
         self.default_size = default_size
         self.decided_at: int | None = None
@@ -43,18 +68,43 @@ class RunContext:
     # ----- the clock and the bars ------------------------------------------------
 
     def reveal(self, pause: dict) -> dict[str, Bar]:
-        """Reveal the strategy bars of a pause; returns them by symbol."""
-        self.decided_at = pause.get("decided_at")
+        """Take the decision instant of a pause (the last one stays at the end of the
+        run) and reveal its strategy bars; returns them by symbol (none at a timer
+        pause)."""
+        self.decided_at = pause.get("decided_at", self.decided_at)
         revealed = {}
         for row in pause.get("bars", ()):
             symbol = self.symbols[row[0]]
-            revealed[symbol] = self.stores[symbol].append(row)
+            revealed[symbol] = self.stores[symbol].reveal(row)
         return revealed
 
     @property
     def now(self):
         """The decision instant in IST, or None before the first decision."""
         return None if self.decided_at is None else ist_time(self.decided_at)
+
+    def store(self, symbol: str | None, interval: str | None = None) -> SeriesStore:
+        """The bars of a symbol at the strategy interval, or at `interval` (built on first
+        use, visible once closed). Raises ConfigError for an unknown symbol or an
+        interval the base bars cannot give."""
+        name = self.symbol_of(self.instrument_index(symbol))
+        if interval is None or interval == self.run.interval:
+            return self.stores[name]
+        key = (name, interval)
+        if key not in self.timeframes:
+            from ._timeframes import timeframe_store
+
+            run = self.run
+            self.timeframes[key] = timeframe_store(
+                name,
+                run.exchange,
+                interval,
+                run.base,
+                run.base_bars[name],
+                run.calendar,
+                lambda: self.decided_at,
+            )
+        return self.timeframes[key]
 
     def symbol_of(self, index: int) -> str:
         return self.symbols[index]
@@ -127,4 +177,4 @@ class RunContext:
         return call(self.engine.account)
 
 
-__all__ = ["RunContext"]
+__all__ = ["RunContext", "RunData"]

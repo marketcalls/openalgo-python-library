@@ -26,7 +26,8 @@ class Performance:
         summed over closed trades.
     benchmark_equity: the benchmark scaled so that its first value in the run equals
         the starting equity, in rupees, at the start and at each session end (IST
-        index), NaN before it has a value; None without a benchmark.
+        index), NaN before it has a value; None without a benchmark. With an opening
+        wealth the start has no time of its own and is not a row.
     exchanges: the exchanges whose calendars annualise the ratios.
     """
 

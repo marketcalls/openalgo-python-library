@@ -136,16 +136,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`GttPlaced`, `GttModified`, `GttTriggered`, `GttChildFilled`, `GttChildCanceled`,
   `GttCanceled`), fills carry `gtt_id`, and the orders table shows the type, prices and
   validity. The kernel's `Engine.modify` replaces a working order in full.
+- **The strategy surface of `openalgo.backtest` (early preview).** `self.I(ta.x, ...)`
+  registers an indicator from `openalgo.ta`, computed once in Rust and revealed bar by
+  bar, with `[-1]`, slices, comparisons, arithmetic, `.crossed_above` and
+  `.crossed_below`; outputs that look ahead (`ta.fractals`, the Ichimoku lagging span)
+  are rejected by name, and each indicator passes a truncation check and a
+  window-stability check (warm-up length, tolerance in the Assumptions block) once per
+  strategy and data. `self.data[symbol, "15m"]` shows another interval, each bar only
+  once it has closed. `self.at("09:20", fn)` and `self.every("month", fn)` are timers
+  whose orders fill at that same open. Without `base=`, an intraday run uses 1-minute
+  bars when 1-minute data covers the whole run and the strategy interval otherwise, and
+  says which and why. Futures and options take their lot size, tick and freeze quantity
+  from the reference tables. `bt.optimize` sweeps a parameter grid in spawned worker
+  processes (Windows included) and returns `.table`, `.best`, `.select()`,
+  `.heatmap()` and `.path`; `Result.rerun()` repeats a run bit for bit or with
+  overrides, and `Result.manifest` records what is needed to reproduce it.
+- **Condition and array strategies in `openalgo.backtest` (preview).** A strategy with
+  no `on_bar` declares `entry_when(cond, **order_args)`, `exit_when(cond)`,
+  `short_when(cond, **order_args)` and `cover_when(cond)` in `init`; the conditions are
+  read once per run over the strategy bars and the whole run then goes through the Rust
+  kernel with no Python call per bar. The decisions are exactly those of the equivalent
+  `on_bar` of the strategy contract: level-triggered, long entry before short, exit
+  before adding, `pyramiding` adds (default 0), the position read after the fills of the
+  bar, a queued entry counting as not flat. A condition is a view of booleans built from
+  series views and `self.I` indicators (comparisons, arithmetic, `.crossed_above`,
+  `.crossed_below`, and new on every view: `&`, `|`, `~`, `.shift(n)`,
+  `.rolling_max(n)`, `.rolling_min(n)`), a clock condition (`bt.time_between("09:30",
+  "14:30")`, `bt.weekday("Mon", ...)`, combined with views by `&` and `|`), or an array
+  with one boolean per strategy bar; anything else (a number, a plain `True`, text, a
+  look-ahead indicator output, a negative shift) raises `ConfigError` saying to use
+  `on_bar`. A view of another interval counts with its latest closed bar.
+  `bt.from_arrays(entries, exits, symbol=..., exchange=..., interval=...)` and
+  `bt.from_signals(func, symbol, exchange, interval)` build such a strategy from boolean
+  arrays or from a function of the strategy bars; a `from_signals` function is re-run on
+  cut data before the run and refused if its signals look ahead. The order arguments are
+  `qty`, `size`, `lots`, `stop`, `target`, `targets`, `trail`, `breakeven`,
+  `after_first_target`, `product`, `leverage` and `tag`; ATR distances and
+  `bt.size.atr_risk` in them raise `NotImplementedError` until built. A condition
+  strategy trades one symbol and has no callbacks or timers.
 - **`openalgo.backtest.metrics` and `openalgo.backtest.report` (preview).** Performance
   metrics computed in the Rust core (returns, CAGR on calendar time, volatility, Sharpe
   and Sortino with a per-session risk-free rate, drawdowns, Calmar, exposure, trade
   statistics, costs, turnover, monthly and yearly returns, benchmark alpha, beta and
   correlation), annualised with the real number of sessions per year from the session
   calendar. Several strategies combine into one equity curve with a correlation
-  matrix. `report.tearsheet()` writes a self-contained HTML report with inline charts
-  that follows the reader's light or dark setting and needs no plotting package. Part
-  of the backtest engine being built; the interface may change before the backtest
-  beta.
+  matrix. `analyse(..., opening_wealth=capital)` reads every equity point as a mark
+  after the capital, so the P&L of the first point, the return of its session and a
+  fall below the capital all count; `Result.performance` passes the run's capital
+  (before, a backtest's first slice and, on daily runs, its whole first session were
+  left out), and `combine_equity(..., opening_wealth=capitals)` holds each strategy at
+  its capital until its first mark. `report.tearsheet()` writes a self-contained HTML
+  report with inline charts that follows the reader's light or dark setting and needs
+  no plotting package. Part of the backtest engine being built; the interface may
+  change before the backtest beta.
 - **`openalgo.backtest.costs` (preview).** Indian trading charges for NSE and BSE
   equity (delivery and intraday), NFO and BFO futures and options, and MCX futures:
   brokerage presets (`zerodha`, `flat`, `percent`, `zero_brokerage`, `custom`), STT or
