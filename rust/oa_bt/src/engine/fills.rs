@@ -19,6 +19,7 @@ use super::futures::FillOrigin;
 use super::kernel::Engine;
 use super::order_fill::OrderFill;
 use super::output::FillRecord;
+use super::rebalance::waits_for_sales;
 
 /// One fill to execute.
 #[derive(Clone, Debug, PartialEq)]
@@ -104,7 +105,8 @@ enum AtFill {
 
 impl Engine {
     /// Fill a queued order at the open, when the open is at or after its decision
-    /// instant (SPEC-35); otherwise it stays queued.
+    /// instant (SPEC-35); otherwise it stays queued. A rebalance buy is left for
+    /// `rebalance::fill_rebalance_buys`, after every instrument's queued orders.
     pub(super) fn fill_queued(
         &mut self,
         slice: &SliceInfo,
@@ -114,7 +116,7 @@ impl Engine {
         let Some(order) = self.book.get(id).cloned() else {
             return Err(KernelError::UnknownOrder(id));
         };
-        if slice.open < order.decided_at {
+        if slice.open < order.decided_at || waits_for_sales(&order) {
             return Ok(());
         }
         self.fill_order(slice, &order, OrderFill::at_open(open))
@@ -279,6 +281,7 @@ impl Engine {
         let average = position.average_price_rupees;
         self.portfolio.account.post_realized(effect.realized_rupees);
         self.portfolio.refresh_margin();
+        self.credit_delivery_sale(&request, price, spec.multiplier, day, effect.kind)?;
         let (side, units) = (request.side, request.units);
         let costs = match request.origin {
             FillOrigin::ExpirySettlement => self.uncharged_fill(request.key, effect),

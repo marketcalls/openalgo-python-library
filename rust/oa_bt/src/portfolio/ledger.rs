@@ -5,7 +5,8 @@
 //! Every posting is rounded to the paisa (decision D6), so the ledger never carries
 //! fractions of a paisa however many fills it sees. Equity is
 //! `capital + realized - costs + unrealized`; free cash is equity less the margin the
-//! open positions block.
+//! open positions block and less the proceeds of today's sales of delivery holdings that
+//! the broker credits only on the next trading day (`market::sale_credit`).
 
 use super::position::PortfolioError;
 
@@ -28,6 +29,9 @@ pub struct SubAccount {
     pub costs_rupees: f64,
     /// Margin the open positions block, rupees, in paise.
     pub margin_blocked_rupees: f64,
+    /// Proceeds of the current session's sales of delivery holdings not yet credited for
+    /// trading (credited at the session close), rupees, in paise.
+    pub uncredited_sale_rupees: f64,
 }
 
 impl SubAccount {
@@ -45,6 +49,7 @@ impl SubAccount {
             realized_rupees: 0.0,
             costs_rupees: 0.0,
             margin_blocked_rupees: 0.0,
+            uncredited_sale_rupees: 0.0,
         })
     }
 
@@ -68,9 +73,23 @@ impl SubAccount {
         self.capital_rupees + self.realized_rupees - self.costs_rupees + unrealized_rupees
     }
 
-    /// Equity not blocked as margin, rupees.
+    /// Withhold part of a sale of delivery holdings until the next trading day.
+    pub fn withhold_sale_proceeds(&mut self, rupees: f64) {
+        self.uncredited_sale_rupees =
+            round_to_paise(self.uncredited_sale_rupees + round_to_paise(rupees));
+    }
+
+    /// Credit every withheld sale proceed (at the session close).
+    pub fn credit_sale_proceeds(&mut self) {
+        self.uncredited_sale_rupees = 0.0;
+    }
+
+    /// Equity with the given unrealized P&L, less the margin blocked and the sale
+    /// proceeds not yet credited, rupees.
     pub fn free_cash_rupees(&self, unrealized_rupees: f64) -> f64 {
-        self.equity_rupees(unrealized_rupees) - self.margin_blocked_rupees
+        self.equity_rupees(unrealized_rupees)
+            - self.margin_blocked_rupees
+            - self.uncredited_sale_rupees
     }
 }
 
@@ -88,6 +107,19 @@ mod tests {
             assert_eq!(account.realized_rupees, 10.0);
             assert_eq!(account.costs_rupees, 1.24);
             assert!((account.equity_rupees(5.0) - 100_013.76).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn withheld_sale_proceeds_are_not_free_until_credited() {
+        // 10,00,000 of capital with 1,80,000 of a sale withheld: 8,20,000 free, then all.
+        let account = SubAccount::new(1_000_000.0);
+        assert!(account.is_ok());
+        if let Ok(mut account) = account {
+            account.withhold_sale_proceeds(180_000.0);
+            assert_eq!(account.free_cash_rupees(0.0), 820_000.0);
+            account.credit_sale_proceeds();
+            assert_eq!(account.free_cash_rupees(0.0), 1_000_000.0);
         }
     }
 

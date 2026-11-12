@@ -1,8 +1,10 @@
 """`Result`: what `bt.backtest` returns.
 
-The tables are pandas DataFrames built from the kernel's result columns. Times are IST
-(`time` columns, tz-aware) next to the kernel's UTC nanoseconds (`*_ts` columns);
-instruments are named by symbol. Prices and money are rupees, quantities units. Every
+The tables are pandas DataFrames built from the kernel's result columns. Every time is a
+tz-aware IST datetime (the `time` column of each table, and `entry_time`, `exit_time`,
+`decided_at`, `good_until`) and every date an IST date (`date` columns); the kernel's
+UTC nanoseconds are kept only in the `*_ts` columns beside them. Instruments are named
+by symbol. Prices and money are rupees, quantities units. Every
 table has the same columns whether or not it has rows.
 
 Built: `fills`, `orders`, `trades`, `equity`, `returns`, `positions` (the position
@@ -77,6 +79,9 @@ FINAL_POSITION_COLUMNS = (
 # hold: left to pandas, a column of None alone stays None while one with a string turns
 # None into NaN, so the marker would depend on the run.
 ORDER_TEXT_COLUMNS = ("reject_code", "tag", "sizer")
+# The `good_until` of a GTT order in the kernel (`exec::GTT_GOOD_UNTIL`, the largest
+# int64): no session close ends it.
+GTT_GOOD_UNTIL = 2**63 - 1
 
 
 def _text(values: list[str | None]) -> pd.Series:
@@ -84,10 +89,14 @@ def _text(values: list[str | None]) -> pd.Series:
     return pd.Series([math.nan if value is None else value for value in values], dtype=object)
 
 
-def _times(values: Any) -> pd.DatetimeIndex:
+def _times(values: Any, open_ended: int | None = None) -> pd.DatetimeIndex:
     """IST times of int64 UTC nanoseconds, at nanosecond resolution even when there are
-    none (pandas reads an empty column at second resolution)."""
-    utc = pd.to_datetime(pd.Series(values, dtype="int64"), unit="ns", utc=True)
+    none (pandas reads an empty column at second resolution); `open_ended`, the
+    kernel's stand-in for "no end", becomes NaT."""
+    nanos = pd.Series(values, dtype="int64")
+    if open_ended is not None:
+        nanos = nanos.astype("Int64").mask(nanos == open_ended)
+    utc = pd.to_datetime(nanos, unit="ns", utc=True)
     return pd.DatetimeIndex(utc).as_unit("ns").tz_convert(IST)
 
 
@@ -143,13 +152,18 @@ class Result:
 
     @property
     def orders(self) -> pd.DataFrame:
-        """Every order with its final state and reject code. `sizer` names what set the
-        quantity: a `bt.size` sizer ("qty", "lots", "value", "percent", "fixed_risk",
-        "atr_risk"), "function" for a sizing function or "default" for the engine
-        default. `reject_code`, `tag` and `sizer` are NaN for an order without one (a
-        quantity given in units, in lots or as a fraction of the position, as `qty=`,
-        `lots=` and `exit()` give it, has no sizer)."""
+        """Every order with its final state and reject code. `time` and `decided_at` are
+        the IST instant it was decided, `good_until` the IST instant its DAY validity
+        ends (NaT for a GTT order, which no session close ends). `sizer` names what set
+        the quantity: a `bt.size` sizer ("qty", "lots", "value", "percent",
+        "fixed_risk", "atr_risk"), "function" for a sizing function or "default" for the
+        engine default. `reject_code`, `tag` and `sizer` are NaN for an order without
+        one (a quantity given in units, in lots or as a fraction of the position, as
+        `qty=`, `lots=` and `exit()` give it, has no sizer); `tag` is "rebalance" on
+        every order of `rebalance()`."""
         frame = self._table("orders", "decided_at")
+        frame["decided_at"] = frame["time"]
+        frame["good_until"] = _times(frame["good_until"], open_ended=GTT_GOOD_UNTIL)
         for name in ORDER_TEXT_COLUMNS:
             frame[name] = _text(self._output["orders"][name])
         return frame
@@ -204,10 +218,12 @@ class Result:
 
     @property
     def stale_marks(self) -> pd.DataFrame:
-        """Open positions marked at a last close for want of a bar."""
+        """Open positions marked at a last close for want of a bar; `time` is the IST
+        open of the slice."""
         columns = ("slice", "slice_ts", "instrument", "mark_rupees")
         frame = pd.DataFrame(self._output["stale_marks"], columns=list(columns))
         frame.insert(0, "symbol", [self._symbols[i] for i in frame["instrument"]])
+        frame.insert(0, "time", _times(frame["slice_ts"]))
         return frame
 
     @property
@@ -237,8 +253,10 @@ class Result:
 
     @property
     def skipped(self) -> pd.DataFrame:
-        """Orders a sizer skipped: decision instant, symbol and reason."""
-        return pd.DataFrame(self._skipped, columns=["decided_at", "symbol", "reason"])
+        """Orders a sizer skipped: the IST decision instant, symbol and reason."""
+        frame = pd.DataFrame(self._skipped, columns=["decided_at", "symbol", "reason"])
+        frame["decided_at"] = _times(frame["decided_at"])
+        return frame
 
     @property
     def r_summary(self) -> dict[str, Any]:

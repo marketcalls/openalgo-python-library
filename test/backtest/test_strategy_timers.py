@@ -20,10 +20,6 @@ class Quarterly(bt.Strategy):
     product = "CNC"
 
 
-def utc_nanos(moment: dt.datetime) -> int:
-    return int(moment.timestamp()) * 1_000_000_000
-
-
 def test_an_order_placed_by_a_timer_fills_at_that_same_open():
     class BuyAtTwenty(Quarterly):
         def init(self):
@@ -37,7 +33,7 @@ def test_an_order_placed_by_a_timer_fills_at_that_same_open():
     # 09:20 is k = 5: it opens at 500.50.
     assert list(fills["time"]) == [at(9, 20)]
     assert list(fills["price_rupees"]) == [500.5]
-    assert list(result.orders["decided_at"]) == [utc_nanos(at(9, 20))]
+    assert list(result.orders["decided_at"]) == [at(9, 20)]
 
 
 def test_a_timer_runs_at_the_open_it_is_due_at():

@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`self.rebalance(weights, cash_buffer=2)` in `openalgo.backtest` (preview).** Trades a
+  portfolio to target weights, in percent of equity by symbol, at one decision: a
+  symbol of the strategy left out of the weights is sold to flat, `cash_buffer`
+  percent of equity stays in cash for charges and the move to the next open, and
+  each symbol gets one `target(value=...)` order. Every sale fills before every buy
+  at the same open, whatever order the symbols were registered in, so the buys can use
+  the sales' proceeds. Its buys are intended adds: the averaging-down refusal
+  (`allow_averaging_down = False`, the default) does not apply to them; the other
+  scale-in limits do. Every order of a rebalance is tagged "rebalance" in
+  `result.orders`. Scheduling stays in the strategy (`on_bar`, or `self.every`). Not
+  built yet: scaling the buys to the cash left at the fill, no-trade rules, weight
+  tables and functions, drift bands, the rebalance log and `bt.rebalance`.
+- **The credit for selling delivery holdings is a dated table** (`sale_credit_defaults.csv`
+  in the kernel, each row with its source and status): the whole sale value is cash
+  for trading on the day of the sale before 2020-12-01 (unverified: observed for
+  October 2020 and applied to earlier dates) and from 2024-10-07, and 80 percent from
+  2020-12-01 to 2024-10-06 with the rest on the next trading day (under SEBI's peak
+  margin rules 20 percent stayed blocked until the shares were delivered; the broker
+  sources are in the table). Units bought and sold on one day are an intraday trade
+  and are credited in full. A run that uses the unverified row warns. Not modelled:
+  the next-day credit of shares sold before their delivery (bought the previous day).
+
+### Changed
+
+- **Delivery (CNC) cash in a backtest is what a cash account holds.** The free cash
+  that the margin check at a fill, `self.cash` and sizers on free cash use now counts
+  a delivery holding at the price paid for it: its open profit is no longer spendable
+  and its open loss no longer blocks cash already left over. Before, a portfolio of
+  holdings that had fallen had its buys refused for margin although the cash was
+  there (the rejections seen when rebalancing a buy-and-hold portfolio), and one that
+  had risen could buy with its paper profit. Intraday (MIS) and futures positions are
+  unchanged.
+- **Every time in a `Result` table is an IST datetime.** `orders["decided_at"]` and
+  `orders["good_until"]` (NaT for a GTT order) and `skipped["decided_at"]` were UTC
+  nanoseconds; `stale_marks` and `settlements` gain a `time` column; `rolls` has an
+  IST `date` in place of its day number. The kernel's UTC nanoseconds stay only in the
+  `*_ts` columns.
+
 ## [2.1.0] - 2026-11-12
 
 ### Added

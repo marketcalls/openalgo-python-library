@@ -40,6 +40,7 @@
 //! | `Engine::cancel(OrderId)` | while paused | cancel a working order |
 //! | `Engine::modify(OrderId, OrderRequest)` | while paused | a full replacement of a working order (`modify`) |
 //! | `Engine::submit_target(TargetRequest)` | while paused | the order for the difference to a target position (`target`) |
+//! | `Engine::submit_rebalance(TargetRequest)` | while paused | the same order as part of a rebalance (`rebalance`) |
 //! | `position`, `leg`, `order`, `working_orders`, `gtts`, `has_pending_entry`, `account`, `last_close`, `decision_instant`, `trading_state`, `strategy_bars`, `timer_counts` | any time | queries |
 //! | `Engine::add_timer(TimerSpec)` | before the first `advance` | register `self.at` or `self.every` |
 //! | `Engine::finish()` | after `Pause::Finished` | the `RunOutput` |
@@ -67,13 +68,13 @@
 //! | Step | Code | Built |
 //! |---|---|---|
 //! | 1 session open, reference events | `steps::open_slice`; intraday times resolved lazily by `session::session_times`; GTTs older than 360 days re-created (`gtt::renew_old_gtts`, GTT-2); futures switches are planned before the run (`futures`) | times, GTTs and rolls yes; lot-size change events no |
-//! | 2 fills at the open | `steps::step_open_fills`: per instrument the risk exits of step 6 (`risk_exits_at_open`) and the engine's exits after unfilled GTT children (`gtt_fire::gtt_exits_at_open`), then `fills::fill_queued` (eligible when the open is at or after `decided_at`, SPEC-35; a missing bar keeps the order queued, SPEC-06; entry window and margin checked at the fill bar), the time exit, then `session::square_off_at_open` (the square-off timer, SPEC-05), then `roll::roll_due_futures` (the futures auto-roll, near leg first, SPEC-19, GTT-9). In a slice where a timer is due, `timers::fill_due_orders` runs the engine exits and queued orders first, `timers::timers_pause` returns `Pause::Timers`, and `step_open_fills` then fills what the timers placed | MARKET orders, converted stop-limit exits, timers, square-off, rolls |
+//! | 2 fills at the open | `steps::step_open_fills`: per instrument the risk exits of step 6 (`risk_exits_at_open`) and the engine's exits after unfilled GTT children (`gtt_fire::gtt_exits_at_open`), then `fills::fill_queued` (eligible when the open is at or after `decided_at`, SPEC-35; a missing bar keeps the order queued, SPEC-06; entry window and margin checked at the fill bar), the time exit, then `session::square_off_at_open` (the square-off timer, SPEC-05); after every instrument, `rebalance::fill_rebalance_buys` (the buys of a rebalance, after its sales), then `roll::roll_due_futures` (the futures auto-roll, near leg first, SPEC-19, GTT-9). In a slice where a timer is due, `timers::fill_due_orders` runs the engine exits and queued orders first, `timers::timers_pause` returns `Pause::Timers`, and `step_open_fills` then fills what the timers placed | MARKET orders, converted stop-limit exits, timers, square-off, rolls |
 //! | 3 resting orders, leg levels | `steps::step_levels` -> `legs::test_leg_levels` -> `rms::LegState::test_bar` (MIS), `gtt_fire::test_gtts` (CNC and NRML levels and GTT orders), `resting::test_resting_orders` (LIMIT, SL, SL-M), exits through `fills::execute_fill` | yes |
 //! | 4 ratchets | `steps::step_ratchets` -> `legs::ratchet_legs` -> `rms::LegState::ratchet`, then `gtt::sync_gtts` (GTTs follow the levels, GTT-3) | yes |
 //! | 5 mark | `steps::step_mark`: close, or last close and stale | yes |
 //! | 6 aggregate rules | `aggregate::step_aggregate_rules`: daily loss limit, drawdown halt; their exits at the next open (`risk_exits_at_open`, step 2) or the last close; the session boundary in step 1 (`risk_session_open`) | yes (combined rules: Phase 3) |
 //! | 7 callbacks and `on_bar` | `steps::callbacks_pause` -> `Pause::BarClose`; `submit::submit` | yes |
-//! | 8 session close | `steps::close_slice`: expire DAY orders, close open MIS positions at the last close (reason `eod`, flagged), settle expiring futures and post the futures mark to market (`settlement::settle_futures`), settle the day's contract notes (`accounting::settle_contract_notes`) | yes (options expiry: Phase 3) |
+//! | 8 session close | `steps::close_slice`: expire DAY orders, close open MIS positions at the last close (reason `eod`, flagged), settle expiring futures and post the futures mark to market (`settlement::settle_futures`), settle the day's contract notes (`accounting::settle_contract_notes`), credit the day's withheld sale proceeds (`sale_credit::credit_withheld_sales`) | yes (options expiry: Phase 3) |
 //!
 //! Every fill takes one path, `fills::execute_fill`: slippage (`market::slippage`, the
 //! run's or the dated default table's), position and tranches (`portfolio`), the ledger,
@@ -111,12 +112,14 @@
 //! | `gtt_fire` | Step 3 for GTTs, the child fill, the engine's exit after an unfilled child |
 //! | `gtt_orders` | Strategy GTT orders (`validity="gtt"`), the per-segment order shape |
 //! | `accounting` | Slippage, margin and charges of a fill; contract notes at the session close |
+//! | `sale_credit` | The part of a sale of delivery holdings credited only on the next trading day (`market::sale_credit`) |
 //! | `futures` | Futures series: the series, the switches and their spreads, the roll session, the settlement records |
 //! | `futures_plan` | Registering a series and planning its switches from the bars; settlement prices |
 //! | `roll` | Step 2: the futures auto-roll, the level shift, the GTTs at a roll |
 //! | `settlement` | Step 8: futures expiry settlement and the daily mark to market |
 //! | `sizing` | What a sizer sees, cost estimates in its budget, the engine default |
 //! | `target` | `submit_target`: the order that takes a position to a target (`target()`) |
+//! | `rebalance` | `submit_rebalance`: target orders of a rebalance; its buys fill after the slice's sales |
 //! | `initial_risk` | What a trade's opening fill would lose at its entry stop (R-multiples) |
 //! | `session` | Intraday times per session, the entry window, the square-off timer |
 //! | `submit` | `submit`, `cancel`, the submission checks, DAY validity and market closed |
@@ -146,7 +149,8 @@
 //! engine-held on MIS and held as GTTs on CNC and NRML, the square-off, timers
 //! (`self.at`, `self.every`), charges on every fill with contract-note rounding, the
 //! dated default slippage and margin tables (cash, MIS with leverage on request, long
-//! options, futures at the default of D23 or the run's own `margin=`), a CNC buy and
+//! options, futures at the default of D23 or the run's own `margin=`), delivery cash
+//! (holdings at their cost, the dated credit for selling them), a CNC buy and
 //! sell of one scrip on one day charged as intraday, the sizers (with a strategy's own
 //! sizing function, `reinvest` and the size caps), the engine default size, target
 //! positions, the initial risk of each trade, the position
@@ -180,10 +184,12 @@ mod modify;
 mod order_fill;
 pub mod output;
 pub mod pause;
+mod rebalance;
 mod resting;
 mod reverse;
 mod roll;
 pub mod run_end;
+mod sale_credit;
 mod scale_in;
 mod session;
 mod settlement;

@@ -199,6 +199,15 @@ class RunContext:
         _, number, _ = submitted
         return Order(number, self.order, self.cancel)
 
+    def submit_rebalance(self, request: dict) -> Order | None:
+        """`submit_target` for one trade of a rebalance (`_rebalance`): the order is
+        tagged "rebalance" and, when it buys, fills after the slice's sales."""
+        submitted = call(self.engine.rebalance_target, request)
+        if submitted is None:
+            return None
+        _, number, _ = submitted
+        return Order(number, self.order, self.cancel)
+
     def sizing_store(self, instrument: int) -> SeriesStore:
         """The bars an order's ATR distances and sizers read: the instrument's strategy
         bars, or the spliced series of the futures underlying it belongs to."""

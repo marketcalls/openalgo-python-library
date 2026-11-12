@@ -1,0 +1,27 @@
+# How much of the proceeds of selling delivery holdings (CNC equity bought on an earlier
+# day) a broker credits for trading on the day of the sale, by trade date (IST)
+# (04-execution-and-market-model 5). The rest is credited on the next trading day. The
+# engine reads this file at build time (see sale_credit.rs); it is the only place the
+# rule is written.
+#
+# row_id                 unique id, shown in results and warnings
+# valid_from, valid_to   trade dates the row applies to, both inclusive; an empty valid_from
+#                        applies to every earlier date, an empty valid_to while in force.
+#                        Rows never overlap and together cover every date.
+# same_day_percent       percent of the sale value credited on the day of the sale, above 0
+#                        and at most 100
+# source                 where the figure comes from
+# status                 verified: the row states what its source states; unverified: it
+#                        does not (for example one day's observation applied to a range),
+#                        and a run that uses it warns
+# notes                  caveats
+#
+# Units bought and sold on one day are an intraday trade, not a sale of holdings: their
+# proceeds are credited in full. Not modelled: units bought on the previous trading day
+# and sold before they are delivered (T1 holdings, buy today sell tomorrow), whose
+# proceeds brokers credit only on the next trading day; the engine credits them as
+# holdings.
+row_id,valid_from,valid_to,same_day_percent,source,status,notes
+SALE_CREDIT/1,,2020-11-30,100,"Trading Q&A by Zerodha, RE: Changes in margin requirements from 1st Sep 2020, reply of 2020-10-01: the entire proceeds from a sale of holdings can buy other stocks",unverified,"Observed for October 2020 and applied to every earlier date, before the peak margin rules"
+SALE_CREDIT/2,2020-12-01,2024-10-06,80,"Zerodha Z-Connect, Peak margin, Intraday leverages and 2nd order effects - Dec 1 2020 (2020-11-30): only 80 percent credit against the sale value is available for subsequent trades, 20 percent is released on the next trading day; Zerodha support, sell-holdings-credit (read 2026-11-12): only 80 percent of the proceeds until 2024-10-07",verified,"20 percent of the sale value stayed blocked as margin until the shares were delivered to the clearing corporation"
+SALE_CREDIT/3,2024-10-07,,100,"Zerodha support, Why is a nudge displayed mentioning that 100% of the funds from the sale of holdings can be used for other trades (read 2026-11-12): from 2024-10-07, 100 percent of the sale proceeds can be used to buy stocks or trade in F&O on the same day",verified,

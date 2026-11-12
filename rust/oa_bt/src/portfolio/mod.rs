@@ -12,6 +12,8 @@
 pub mod ledger;
 pub mod position;
 
+use crate::model::Product;
+
 pub use ledger::{round_to_paise, SubAccount};
 pub use position::{
     FillEffect, FillKind, PortfolioError, Position, PositionChange, PositionKey, Tranche,
@@ -79,8 +81,70 @@ impl Portfolio {
         self.account.equity_rupees(self.unrealized_rupees())
     }
 
-    /// Free cash at the last marks, rupees.
+    /// Free cash at the last marks, rupees: equity less the margin blocked and the sale
+    /// proceeds not yet credited, with delivery (CNC) holdings counted as a cash account
+    /// counts them. Delivery is paid in full, so a holding takes its cost from the cash
+    /// (not the margin quoted at its fill's reference price), and its open profit or
+    /// loss is not cash until it is sold.
     pub fn free_cash_rupees(&self) -> f64 {
-        self.account.free_cash_rupees(self.unrealized_rupees())
+        let delivery_beyond_margin: f64 = self
+            .positions
+            .iter()
+            .filter(|position| position.key.product == Product::Cnc && !position.is_flat())
+            .map(|position| {
+                let cost = position.average_price_rupees
+                    * position.quantity_units.abs()
+                    * position.multiplier;
+                cost + position.unrealized_rupees() - position.margin_rupees
+            })
+            .sum();
+        self.account.free_cash_rupees(self.unrealized_rupees()) - delivery_beyond_margin
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::exec::instrument::InstrumentId;
+    use crate::model::Side;
+
+    /// 10,00,000 of capital and 900 units bought at 1,000.00 in `product`, blocking
+    /// `margin` (the delivery table quotes the value at the fill's reference price),
+    /// then marked at `mark`.
+    fn holding(product: Product, margin: f64, mark: f64) -> Portfolio {
+        let key = PositionKey {
+            instrument: InstrumentId(0),
+            product,
+        };
+        let mut portfolio = Portfolio::new(1_000_000.0).unwrap_or_else(|e| panic!("{e}"));
+        let position = portfolio.position_mut(key, 1.0);
+        assert!(position.apply(Side::Buy, 900.0, 1_000.0, 0).is_ok());
+        position.margin_rupees = margin;
+        position.mark_rupees = Some(mark);
+        portfolio.refresh_margin();
+        portfolio
+    }
+
+    #[test]
+    fn a_delivery_holding_takes_its_cost_and_its_open_profit_or_loss_is_not_cash() {
+        // 9,00,000 paid for the holding leave 1,00,000 at a mark of 1,100.00 or 900.00.
+        for mark in [1_100.0, 900.0] {
+            let portfolio = holding(Product::Cnc, 900_000.0, mark);
+            assert_eq!(portfolio.free_cash_rupees(), 100_000.0, "mark {mark}");
+        }
+    }
+
+    #[test]
+    fn a_delivery_holding_takes_the_price_paid_not_the_margin_quoted_before_slippage() {
+        // Margin quoted at an open of 999.50 (8,99,550); the 9,00,000 paid are what left.
+        let portfolio = holding(Product::Cnc, 899_550.0, 1_000.0);
+        assert_eq!(portfolio.free_cash_rupees(), 100_000.0);
+    }
+
+    #[test]
+    fn an_intraday_position_counts_its_open_profit_against_its_margin() {
+        // MIS at 1x blocks 9,00,000; a mark of 1,100.00 adds 90,000 of open profit.
+        let portfolio = holding(Product::Mis, 900_000.0, 1_100.0);
+        assert_eq!(portfolio.free_cash_rupees(), 190_000.0);
     }
 }

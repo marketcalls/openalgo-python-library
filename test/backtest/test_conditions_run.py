@@ -107,7 +107,7 @@ def test_an_entry_the_sizer_skips_is_recorded_as_on_bar_records_it():
     by_conditions = run_steps(Small, quantity_mode="venue")
     skipped = by_conditions.skipped
     assert list(skipped["decided_at"]) == [
-        int(pd.Timestamp(at(9, 30) + dt.timedelta(minutes=5 * k)).value) for k in range(7)
+        at(9, 30) + dt.timedelta(minutes=5 * k) for k in range(7)
     ]
     assert set(skipped["reason"]) == {"rounded_to_zero"}
     assert_same_result(by_conditions, run_steps(SmallOnBar, quantity_mode="venue"))

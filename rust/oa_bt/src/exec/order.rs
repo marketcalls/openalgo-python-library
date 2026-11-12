@@ -145,6 +145,10 @@ pub struct OrderRequest {
     pub leverage: Option<f64>,
     /// The strategy's own label, carried to results.
     pub tag: Option<String>,
+    /// Part of a rebalance (`rebalance()`, `engine::rebalance`): a buy is an intended
+    /// add, never refused for averaging down, and fills after the other orders queued
+    /// for its open, once the rebalance's sales have freed their cash.
+    pub rebalance: bool,
 }
 
 impl OrderRequest {
@@ -163,6 +167,7 @@ impl OrderRequest {
             leg_rules: LegRules::default(),
             leverage: None,
             tag: None,
+            rebalance: false,
         }
     }
 

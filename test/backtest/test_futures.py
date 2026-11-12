@@ -385,6 +385,19 @@ def test_the_roll_fills_carry_the_contracts_and_reason_roll():
     ]
 
 
+def test_a_switch_and_a_settlement_are_dated_in_ist():
+    # The roll fills at the 09-25 open; the first posting is at the 09-23 session close.
+    result = _run()
+    switch = result.rolls.iloc[0]
+    assert (switch["date"], switch["time"].tz.utcoffset(None)) == (
+        dt.date(2024, 9, 25),
+        dt.timedelta(hours=5, minutes=30),
+    )
+    assert "day" not in result.rolls.columns
+    first = result.settlements.iloc[0]
+    assert (first["date"], first["time"].date()) == (dt.date(2024, 9, 23),) * 2
+
+
 def test_on_bar_sees_each_contracts_own_bar_and_the_series_re_adjusted_at_the_roll():
     # On 09-24: close[-2] is 25,100.00 and sma(2) 25,150.00. On 09-25 (the roll): the
     # bar is October's, close[-2] is 25,200.00 + 100.00 = 25,300.00 and sma(2)
