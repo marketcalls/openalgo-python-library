@@ -66,6 +66,24 @@ def _fill_violations(fills: list[dict[str, Any]], name: str) -> Violations:
             problems.append(f"{where}: quantity_units must be a positive whole number of units")
         if (fill["reason"] == "leg_target") != (fill["target_index"] is not None):
             problems.append(f"{where}: target_index is given exactly for a leg_target fill")
+        problems += _fill_gtt_violations(fill, where)
+    return problems
+
+
+def _fill_gtt_violations(fill: dict[str, Any], where: str) -> Violations:
+    """A fill names a GTT only when it is that GTT's stop or target exit; the engine's own
+    exit after an unfilled child is flagged and fills at the next base-bar open."""
+    problems: Violations = []
+    gtt_id = fill["gtt_id"]
+    if gtt_id is not None and fill["reason"] not in ("leg_sl", "leg_target"):
+        problems.append(f"{where}: only a stop or target exit is a GTT's fill (gtt_id {gtt_id})")
+    if "gtt_child_unfilled" in fill["flags"]:
+        placed = (fill["step"], fill["fill_at"])
+        if gtt_id is None or placed != (vocab.STEP_FILLS_AT_OPEN, "open"):
+            problems.append(
+                f"{where}: an exit after an unfilled GTT child names its GTT and "
+                "fills in step 2 at the open"
+            )
     return problems
 
 
@@ -125,7 +143,32 @@ def _event_field_violations(event: dict[str, Any], where: str) -> Violations:
             problems += member_violation(code, vocab.REJECT_CODES, "reject_code", where)
         if (event["name"] == "Filled") != (event["price_rupees"] is not None):
             problems.append(f"{where}: quantity and price are given exactly for a Filled event")
+    if event["type"] == "gtt":
+        problems += _gtt_event_violations(event, where)
     return problems
+
+
+def _gtt_event_violations(event: dict[str, Any], where: str) -> Violations:
+    """The fields a GTT event carries depend on its name (vocabulary.GTT_EVENT_FIELDS)."""
+    carried = vocab.GTT_EVENT_FIELDS[event["name"]]
+    problems: Violations = []
+    if event["gtt_id"] is None or event["instrument"] is None:
+        problems.append(f"{where}: a GTT event names its GTT and its instrument")
+    triggers = (event["stop_trigger_rupees"], event["target_trigger_rupees"])
+    if ("triggers" in carried) == (triggers == (None, None)):
+        problems.append(
+            f"{where}: the trigger prices are given exactly for {_names_with('triggers')}"
+        )
+    for field in ("quantity_units", "fired_leg", "child_limit_rupees", "price_rupees"):
+        if (field in carried) == (event[field] is None):
+            problems.append(f"{where}: {field} is given exactly for {_names_with(field)}")
+    if event["fired_leg"] is not None:
+        problems += member_violation(event["fired_leg"], vocab.GTT_LEGS, "fired_leg", where)
+    return problems
+
+
+def _names_with(field: str) -> str:
+    return ", ".join(name for name, fields in vocab.GTT_EVENT_FIELDS.items() if field in fields)
 
 
 def _closing_state_violations(case: Case, name: str) -> Violations:

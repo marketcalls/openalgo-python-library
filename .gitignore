@@ -209,3 +209,6 @@ PKG-INFO
 # sdist, which cargo builds from the git file list) must see them.
 !rust/oa_bt/**/*.csv
 !rust/oa_bt/**/*.json
+
+# Agent worktrees created by Claude Code (one per parallel workstream)
+.claude/worktrees/

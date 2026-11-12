@@ -35,11 +35,24 @@ def _risk_events(case: Case) -> list[Event]:
     return [event for event in case["expected"]["events"] if event["type"] == "risk"]
 
 
+def _rule_fired_at(case: Case, fill: dict[str, Any]) -> tuple[str, int]:
+    """Slice and step in which the rule behind an exit fired: the fill's own, except for the
+    engine's exit after a GTT child did not fill, whose rule fired when the GTT did."""
+    if "gtt_child_unfilled" not in fill["flags"]:
+        return fill["slice_ist"], fill["step"]
+    for event in case["expected"]["events"]:
+        fired = event["type"] == "gtt" and event["name"] == "GttTriggered"
+        if fired and event["gtt_id"] == fill["gtt_id"]:
+            return event["slice_ist"], event["step"]
+    return fill["slice_ist"], fill["step"]
+
+
 def rule_exits_have_matching_risk_events(case: Case) -> Violations:
-    """Rule: a stop, target or daily-loss exit has a risk event in the same slice and step,
-    and every such risk event has its exit."""
+    """Rule: a stop, target or daily-loss exit has a risk event in the slice and step in
+    which its rule fired (for a GTT exit, the step in which the GTT fired), and every such
+    risk event has its exit."""
     exits = sorted(
-        (fill["slice_ist"], fill["step"], HIT_EVENT_BY_REASON[fill["reason"]], fill["target_index"])
+        (*_rule_fired_at(case, fill), HIT_EVENT_BY_REASON[fill["reason"]], fill["target_index"])
         for fill in case["expected"]["fills"]
         if fill["reason"] in HIT_EVENT_BY_REASON
     )

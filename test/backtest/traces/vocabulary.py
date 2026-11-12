@@ -107,6 +107,7 @@ KEYS: dict[str, tuple[str, ...]] = {
         "order_id",
         "target_index",
         "flags",
+        "gtt_id",
     ),
     "level_row": (
         "slice_ist",
@@ -152,6 +153,20 @@ KEYS: dict[str, tuple[str, ...]] = {
         "target_index",
         "observed_rupees",
     ),
+    "gtt_event": (
+        "slice_ist",
+        "step",
+        "type",
+        "name",
+        "gtt_id",
+        "instrument",
+        "quantity_units",
+        "stop_trigger_rupees",
+        "target_trigger_rupees",
+        "fired_leg",
+        "child_limit_rupees",
+        "price_rupees",
+    ),
     "stale_mark": ("slice_ist", "instrument", "mark_price_rupees"),
     "final_position": ("instrument", "quantity_units", "average_price_rupees"),
     "gross_pnl": ("realized_rupees", "unrealized_rupees", "total_rupees"),
@@ -176,7 +191,10 @@ KEYS: dict[str, tuple[str, ...]] = {
 
 SIDES = ("BUY", "SELL")
 FILL_AT = ("open", "level", "close")
-FILL_FLAGS = ("filled_at_last_close",)
+# filled_at_last_close: 03-architecture 4.2 step 6. gtt_child_unfilled: the engine's own
+# exit after a GTT child order did not fill through one base bar, 04-execution 4.4 item 3
+# (the flag's name is the fixture's own, specification review GTT-8).
+FILL_FLAGS = ("filled_at_last_close", "gtt_child_unfilled")
 
 # Reasons a fill adds to or moves a position. The documents define reasons for exits
 # only; these three are the fixture's own (specification review SPEC-22).
@@ -226,9 +244,42 @@ EVENT_NAMES: dict[str, tuple[str, ...]] = {
         "leg_trail_armed",
         "leg_breakeven_armed",
         "daily_loss_limit_hit",
+        "gtt_child_unfilled",
+    ),
+    "gtt": (
+        "GttPlaced",
+        "GttModified",
+        "GttTriggered",
+        "GttChildFilled",
+        "GttChildCanceled",
+        "GttCanceled",
     ),
 }
-EVENT_KEYS = {"order": "order_event", "position": "position_event", "risk": "risk_event"}
+EVENT_KEYS = {
+    "order": "order_event",
+    "position": "position_event",
+    "risk": "risk_event",
+    "gtt": "gtt_event",
+}
+
+# GTT orders for positional trades, 04-execution 4.4. The documents describe the life
+# cycle (placed, modified, fired with a child order, child filled or cancelled, cancelled)
+# but do not name its events; the names and fields are the fixture's (specification
+# review GTT-8). Products whose stops and targets are held as GTTs (item 2):
+GTT_PRODUCTS = ("CNC", "NRML")
+GTT_LEGS = ("stop", "target")
+# Default buffer of the child LIMIT beyond the trigger, in percent, by instrument type
+# (04-execution 4.4 item 3, decision GTT-1; configurable per segment).
+GTT_CHILD_BUFFER_PERCENT = {"equity": 1, "future": 1, "option": 5}
+# Which fields each GTT event carries; every other field of a gtt_event is null.
+GTT_EVENT_FIELDS: dict[str, tuple[str, ...]] = {
+    "GttPlaced": ("quantity_units", "triggers"),
+    "GttModified": ("quantity_units", "triggers"),
+    "GttCanceled": ("quantity_units", "triggers"),
+    "GttTriggered": ("quantity_units", "triggers", "fired_leg", "child_limit_rupees"),
+    "GttChildFilled": ("quantity_units", "child_limit_rupees", "price_rupees"),
+    "GttChildCanceled": ("quantity_units", "child_limit_rupees"),
+}
 
 REVIEW_KINDS = ("contradiction", "ambiguity", "gap", "clarification")
 REVIEW_SEVERITIES = ("high", "medium", "low")

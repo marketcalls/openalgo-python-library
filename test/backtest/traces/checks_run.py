@@ -21,10 +21,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "after_risk_exit": "lock_session",  # 14-strategy-api 3
     "round_levels": True,  # 05-risk-management 8
 }
-# Default intraday times of day (IST) for NSE and BSE cash and their F&O segments,
-# 04-execution section 2.
-DEFAULT_INTRADAY_TIMES = {"entry_until": "15:00", "square_off": "15:10"}
-INTRADAY_TIME_EXCHANGES = ("NSE", "BSE", "NFO", "BFO")
+# Default intraday times of day (IST), 04-execution section 2. They are dated: NSE and BSE
+# cash move to 14:50 and 15:00 on 2026-08-03 (decision TIMES-1); NFO and BFO keep 15:00
+# and 15:10. Each row: exchanges, first trade date it applies to, the times.
+DEFAULT_INTRADAY_TIMES = (
+    (("NSE", "BSE"), "2026-08-03", {"entry_until": "14:50", "square_off": "15:00"}),
+    (("NSE", "BSE", "NFO", "BFO"), "0001-01-01", {"entry_until": "15:00", "square_off": "15:10"}),
+)
+INTRADAY_TIME_KEYS = ("entry_until", "square_off")
 # Default base interval, 03-architecture 4.1: 1 minute for an intraday strategy whose
 # 1-minute data covers the run, daily for a daily strategy.
 DEFAULT_INTRADAY_BASE = "1m"
@@ -41,6 +45,17 @@ def _is_daily(case: Case) -> bool:
     return interval_step(case["settings"]["strategy_interval"]) is None
 
 
+def _intraday_default(exchange: str, trade_date: str) -> dict[str, str]:
+    """The documented intraday times for an exchange on a trade date (YYYY-MM-DD).
+
+    Raises KeyError when the documents give no default for the exchange.
+    """
+    for exchanges, valid_from, times in DEFAULT_INTRADAY_TIMES:
+        if exchange in exchanges and trade_date >= valid_from:
+            return times
+    raise KeyError(exchange)
+
+
 def _documented_value(case: Case, key: str) -> tuple[Any, Any]:
     """(the documented default, the value the case uses) for one setting.
 
@@ -50,8 +65,10 @@ def _documented_value(case: Case, key: str) -> tuple[Any, Any]:
     instrument = case["instruments"][0]
     if key in DEFAULT_SETTINGS:
         return DEFAULT_SETTINGS[key], settings[key]
-    if key in DEFAULT_INTRADAY_TIMES and instrument["exchange"] in INTRADAY_TIME_EXCHANGES:
-        return DEFAULT_INTRADAY_TIMES[key], settings[key]
+    if key in INTRADAY_TIME_KEYS:
+        return _intraday_default(instrument["exchange"], settings["first_slice_ist"][:10])[
+            key
+        ], settings[key]
     if key == "base":
         default = DAILY_INTERVAL if _is_daily(case) else DEFAULT_INTRADAY_BASE
         return default, settings["base"]

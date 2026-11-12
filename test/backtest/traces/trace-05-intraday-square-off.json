@@ -181,8 +181,8 @@
           {"decision": 3, "position_condition_met": true, "order_id": "o4", "outcome": "rejected", "depends_on": ["SPEC-04"]}
         ],
         "fills": [
-          {"slice_ist": "2025-07-01T14:45:00+05:30", "step": 2, "instrument": "SBIN", "side": "BUY", "quantity_units": 100, "price_rupees": 810.2, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T15:10:00+05:30", "step": 2, "instrument": "SBIN", "side": "SELL", "quantity_units": 100, "price_rupees": 808.4, "fill_at": "open", "reason": "scheduler", "order_id": null, "target_index": null, "flags": []}
+          {"slice_ist": "2025-07-01T14:45:00+05:30", "step": 2, "instrument": "SBIN", "side": "BUY", "quantity_units": 100, "price_rupees": 810.2, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T15:10:00+05:30", "step": 2, "instrument": "SBIN", "side": "SELL", "quantity_units": 100, "price_rupees": 808.4, "fill_at": "open", "reason": "scheduler", "order_id": null, "target_index": null, "flags": [], "gtt_id": null}
         ],
         "levels": [
           {
@@ -385,8 +385,8 @@
           {"decision": 3, "position_condition_met": true, "order_id": "o3", "outcome": "rejected", "depends_on": ["SPEC-04"]}
         ],
         "fills": [
-          {"slice_ist": "2025-07-01T14:45:00+05:30", "step": 2, "instrument": "SBIN", "side": "BUY", "quantity_units": 100, "price_rupees": 810.2, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": []},
-          {"slice_ist": "2025-07-01T15:15:00+05:30", "step": 2, "instrument": "SBIN", "side": "SELL", "quantity_units": 100, "price_rupees": 807.1, "fill_at": "open", "reason": "scheduler", "order_id": null, "target_index": null, "flags": []}
+          {"slice_ist": "2025-07-01T14:45:00+05:30", "step": 2, "instrument": "SBIN", "side": "BUY", "quantity_units": 100, "price_rupees": 810.2, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T15:15:00+05:30", "step": 2, "instrument": "SBIN", "side": "SELL", "quantity_units": 100, "price_rupees": 807.1, "fill_at": "open", "reason": "scheduler", "order_id": null, "target_index": null, "flags": [], "gtt_id": null}
         ],
         "levels": [
           {

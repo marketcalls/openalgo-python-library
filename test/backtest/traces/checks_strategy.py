@@ -15,6 +15,7 @@ from typing import Any
 from . import ledger
 from . import vocabulary as vocab
 from .bars import resample, rupees
+from .rolls import contract_on
 from .timegrid import Case, bar_close, decision_slice, format_ist, parse_ist
 
 Violations = list[str]
@@ -136,22 +137,25 @@ def filled_orders_fill_at_the_next_open(case: Case) -> Violations:
 
 def strategy_bars_are_the_aggregate_of_the_base_bars(case: Case) -> Violations:
     """Rule: the strategy bars handed to on_bar are the session-aligned aggregates of the
-    base bars that exist, for every strategy bar that closes inside the run."""
+    base bars that exist, for every strategy bar that closes inside the run; a rolled future
+    shows the contract it holds that session (as recorded when used, 04-execution 7)."""
     stated = case["expected"]["strategy_bars"]
     if stated is None:
         return []
     exchange = _exchange(case)
     settings = case["settings"]
-    instrument = case["instruments"][0]["symbol"]
+    interval = settings["strategy_interval"]
     run_end = bar_close(case, exchange, settings["last_slice_ist"], settings["base"])
-    bars = resample(
-        case, instrument, case["bars"]["rows"][instrument], settings["strategy_interval"]
-    )
-    aggregated = [
-        (bar_open, bar.open, bar.high, bar.low, bar.close)
-        for bar_open, bar in bars.items()
-        if bar_close(case, exchange, bar_open, settings["strategy_interval"]) <= run_end
-    ]
+    by_contract = {
+        symbol: resample(case, symbol, rows, interval)
+        for symbol, rows in case["bars"]["rows"].items()
+    }
+    bar_opens = sorted({bar_open for bars in by_contract.values() for bar_open in bars})
+    aggregated = []
+    for bar_open in bar_opens:
+        bar = by_contract[contract_on(case, bar_open[:10])].get(bar_open)
+        if bar is not None and bar_close(case, exchange, bar_open, interval) <= run_end:
+            aggregated.append((bar_open, bar.open, bar.high, bar.low, bar.close))
     listed = [
         (bar["bar_open_ist"], *(rupees(bar[key]) for key in ("open", "high", "low", "close")))
         for bar in stated

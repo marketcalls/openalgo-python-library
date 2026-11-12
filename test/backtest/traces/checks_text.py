@@ -9,9 +9,11 @@ from .timegrid import Case
 Violations = list[str]
 
 # What a derivation step may cite: a PRD document by its file-name prefix (followed by a
-# section), the reference note on the OpenAlgo /strategy module, or a named golden vector
-# of the OpenAlgo server's risk core (test/risk/vectors.json in the server repository).
+# section; 01-requirements section 7.3 holds the decisions and lead rulings), the
+# reference note on the OpenAlgo /strategy module, or a named golden vector of the
+# OpenAlgo server's risk core (test/risk/vectors.json in the server repository).
 CITABLE_SOURCES = (
+    "01-requirements ",
     "03-architecture ",
     "04-execution ",
     "05-risk-management ",

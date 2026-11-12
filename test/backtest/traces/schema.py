@@ -26,6 +26,7 @@ TAGGABLE = (
     "order_event",
     "position_event",
     "risk_event",
+    "gtt_event",
     "final_position",
     "gross_pnl",
 )
