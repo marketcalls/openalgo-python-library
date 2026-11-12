@@ -369,6 +369,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (use `self.state`); `after_risk_exit="allow_reentry"` raises `NotImplementedError`
   until the combined risk rules it governs are built; `roll=1` is the default of
   `bt.backtest`.
+- **Backtest speed.** A run's time no longer grows with its bars times its orders (every
+  slice walked every order and GTT of the run) nor with its bars times its months (the
+  data hash); results are unchanged bit for bit. An event strategy makes about 550k
+  `on_bar` calls a second (was about 120k) and an array strategy over 1M one-minute bars
+  with charges, slippage and every metric runs in 1.1 to 1.5 seconds (was about 10.6).
+  `Bar`, the argument of `on_bar`, is now an immutable named tuple that also carries
+  `ts_open` and `ts_close` (UTC nanoseconds), and makes `time` and `close_time` when
+  they are read. `benchmark/backtest_speed.py --check` checks the speed targets.
 - `closeposition()` and `cancelallorder()` are documented as what they are:
   account-wide. The server squares off every open position, or cancels every open
   order, of the account that owns the API key; the `strategy` argument is a label

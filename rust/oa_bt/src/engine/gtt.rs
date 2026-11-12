@@ -317,9 +317,8 @@ impl Engine {
         let due: Vec<GttId> = self
             .gtts
             .book
-            .gtts()
-            .iter()
-            .filter(|gtt| gtt.is_active() && policy.is_due_for_renewal(gtt.created_on, slice.day))
+            .active()
+            .filter(|gtt| policy.is_due_for_renewal(gtt.created_on, slice.day))
             .map(|gtt| gtt.id)
             .collect();
         for id in due {

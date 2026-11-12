@@ -322,10 +322,11 @@ def _hash_by_month(bars: pd.DataFrame, key: str) -> list[dict]:
         column[np.isnan(column)] = np.nan
         records[name] = column
     local = (records["ts_open"] + IST_OFFSET_NANOS).astype("datetime64[ns]")
-    months = np.datetime_as_string(local.astype("datetime64[M]"), unit="M")
+    months = local.astype("datetime64[M]")
     entries = []
-    for month in dict.fromkeys(months.tolist()):
-        rows = records[months == month]
+    for numbers in _rows_by_month(months.view("int64")):
+        month = str(np.datetime_as_string(months[numbers[0]], unit="M"))
+        rows = records[numbers]
         digest = hashlib.sha256(_HASH_HEADER + rows.tobytes()).hexdigest()
         entries.append(
             {
@@ -336,6 +337,17 @@ def _hash_by_month(bars: pd.DataFrame, key: str) -> list[dict]:
             }
         )
     return entries
+
+
+def _rows_by_month(months: np.ndarray) -> list[np.ndarray]:
+    """The row numbers of each month code, in row order, the months in order of first
+    appearance. One stable sort instead of a pass over every row per month, which made the
+    hash cost the bars times the months."""
+    if len(months) == 0:
+        return []
+    order = np.argsort(months, kind="stable")
+    groups = np.split(order, np.flatnonzero(np.diff(months[order])) + 1)
+    return sorted(groups, key=lambda rows: rows[0])
 
 
 __all__ = [

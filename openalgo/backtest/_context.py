@@ -74,7 +74,10 @@ class RunContext:
         self.decided_at: int | None = None
         # (decision instant, symbol, reason) of every order a sizer skipped.
         self.skipped: list[tuple[int | None, str, str]] = []
-        self._final_orders: dict[int, dict] | None = None
+        # The result's orders table once the run is over (`close`), and the row of each
+        # order id in it, made on the first lookup.
+        self._final_orders: dict[str, list] | None = None
+        self._final_rows: dict[int, int] | None = None
         # Futures series by underlying, from (`_futures.FuturesPlan`, the kernel's switches).
         self.futures = None
         if futures is not None:
@@ -102,15 +105,16 @@ class RunContext:
 
     # ----- the clock and the bars ------------------------------------------------
 
-    def reveal(self, pause: dict) -> dict[str, Bar]:
-        """Take the decision instant of a pause (the last one stays at the end of the
-        run) and reveal its strategy bars; returns them by symbol (none at a timer
-        pause). The first pause begins the run (`begin_run`)."""
+    def reveal(self, decided_at: int | None, rows: list[tuple]) -> dict[str, Bar]:
+        """Take the decision instant of a pause (None at the end of the run keeps the
+        last one) and reveal its strategy bars, the kernel's rows; returns them by symbol
+        (none at a timer pause). The first pause begins the run (`begin_run`)."""
         if self.declaring:
             self.begin_run()
-        self.decided_at = pause.get("decided_at", self.decided_at)
+        if decided_at is not None:
+            self.decided_at = decided_at
         revealed = {}
-        for row in pause.get("bars", ()):
+        for row in rows:
             symbol = self.symbols[row[0]]
             revealed[symbol] = self.stores[symbol].reveal(row)
         if self.futures is not None:
@@ -202,13 +206,13 @@ class RunContext:
     def order(self, number: int) -> dict:
         """An order's state, from the engine or, after the run, from the result."""
         if self._final_orders is not None:
-            return self._final_orders[number]
+            return self._final_order(number)
         return call(self.engine.order, number)
 
     def cancel(self, number: int) -> str:
         """Cancel a working order; returns its state afterwards."""
         if self._final_orders is not None:
-            return self._final_orders[number]["status"]
+            return self._final_order(number)["status"]
         return call(self.engine.cancel, number)
 
     def working_orders(self) -> list[Order]:
@@ -219,10 +223,19 @@ class RunContext:
         return [Order(number, self.order, self.cancel) for number in numbers]
 
     def close(self, orders: dict[str, list]) -> None:
-        """Freeze order lookups on the result's orders table once the engine is gone."""
-        keys = list(orders)
-        rows = zip(*(orders[key] for key in keys), strict=True)
-        self._final_orders = {row[0]: dict(zip(keys, row, strict=True)) for row in rows}
+        """Freeze order lookups on the result's orders table (columns by key) once the
+        engine is gone. A row is read only when a handle asks for it after the run, so a
+        run with many orders does not build a dict for each."""
+        self._final_orders = orders
+
+    def _final_order(self, number: int) -> dict:
+        """One order of the result's orders table as a dict. Raises KeyError for an id
+        the run did not give."""
+        orders = self._final_orders
+        if self._final_rows is None:
+            self._final_rows = {order_id: row for row, order_id in enumerate(orders["order_id"])}
+        row = self._final_rows[number]
+        return {key: column[row] for key, column in orders.items()}
 
     # ----- positions and the account ----------------------------------------------
 

@@ -1,7 +1,7 @@
 //! Bindings for `oa_bt::engine`: the stepping kernel as `Engine`.
 //!
 //! The Python driver (`openalgo/backtest/_driver.py`) builds an `Engine` from a config
-//! dict, instrument dicts and bar arrays, then loops: `advance()` returns a pause dict,
+//! dict, instrument dicts and bar arrays, then loops: `advance()` returns a pause tuple,
 //! the driver runs the strategy's callbacks and `on_bar`, places orders with
 //! `submit(request)`, and repeats until the pause kind is "finished"; `finish()`
 //! returns the result tables. Conversions live in `setup` (inputs), `request` (orders)
@@ -19,6 +19,7 @@
 #![allow(unexpected_cfgs, clippy::useless_conversion)]
 
 mod charges;
+mod columns;
 mod futures;
 mod market;
 mod request;
@@ -129,8 +130,9 @@ impl NativeEngine {
         })
     }
 
-    /// Run to the next decision point; the pause as a dict.
-    fn advance<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+    /// Run to the next decision point; the pause as a tuple (kind, decided_at, bars,
+    /// events, timers), see `tables::pause`.
+    fn advance<'py>(&mut self, py: Python<'py>) -> PyResult<tables::PauseTuple<'py>> {
         let pause = self.engine_mut()?.advance().map_err(engine_error)?;
         tables::pause(py, &pause)
     }

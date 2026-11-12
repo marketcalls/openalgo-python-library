@@ -52,17 +52,24 @@ def deliver(strategy: Any, ctx: RunContext, events: list[dict]) -> None:
 
 def drive(strategy: Any, engine: Any, ctx: RunContext) -> None:
     """Run the strategy to the end of the grid. Errors of the kernel and of the strategy
-    propagate unchanged (a strategy exception stops the run)."""
+    propagate unchanged (a strategy exception stops the run).
+
+    This loop runs once per strategy-bar close, so its own cost is part of every
+    callback (NFR-PERF-04): the kernel hands each pause over as a tuple (kind, decision
+    instant, bar rows, events, timer ids) and nothing is built that the strategy does
+    not receive."""
     single = strategy.symbol is not None or strategy.underlying is not None
+    advance = engine.advance
     while True:
-        pause = call(engine.advance)
-        if pause["kind"] == "timers":
-            ctx.reveal(pause)
-            ctx.timers.fire(pause["timers"])
+        kind, decided_at, rows, events, timers = call(advance)
+        if kind == "timers":
+            ctx.reveal(decided_at, rows)
+            ctx.timers.fire(timers)
             continue
-        bars = ctx.reveal(pause)
-        deliver(strategy, ctx, pause["events"])
-        if pause["kind"] == "finished":
+        bars = ctx.reveal(decided_at, rows)
+        if events:
+            deliver(strategy, ctx, events)
+        if kind == "finished":
             strategy.on_stop()
             return
         if bars:

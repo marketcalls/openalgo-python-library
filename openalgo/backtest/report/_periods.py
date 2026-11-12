@@ -35,8 +35,10 @@ def date_index(days: np.ndarray) -> pd.DatetimeIndex:
 
 
 def ist_times(nanos: np.ndarray) -> pd.DatetimeIndex:
-    """UTC nanosecond instants as an IST DatetimeIndex."""
-    return pd.to_datetime(np.asarray(nanos, dtype=np.int64), utc=True).tz_convert(IST)
+    """UTC nanosecond instants as an IST DatetimeIndex. The unit is named: without it
+    pandas reads the integers one by one, which costs a 1M-point equity series 0.15 s."""
+    utc = pd.to_datetime(np.asarray(nanos, dtype=np.int64), unit="ns", utc=True)
+    return utc.tz_convert(IST)
 
 
 def ist_instant(nanos: int | None) -> pd.Timestamp | None:

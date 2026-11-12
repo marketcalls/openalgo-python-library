@@ -4,15 +4,17 @@
 //! `on_bar`, so its run equals the run of that `on_bar` written out as a script driver.
 //!
 //! Bars are 15-minute MIS bars on the embedded NSE calendar, two sessions (2025-07-01
-//! and 2025-07-02), no charges and no slippage.
+//! and 2025-07-02), with no charges and no slippage unless a test says otherwise.
 
 mod risk_support;
 
 use oa_bt::engine::{
-    run, run_signals, Driver, Engine, EntrySignal, KernelError, Pause, RunOutput, SignalArrays,
-    SkippedEntry, StrategyBar,
+    run, run_signals, CostConfig, Driver, Engine, EntrySignal, KernelError, Pause, RunConfig,
+    RunOutput, SignalArrays, SkippedEntry, StrategyBar,
 };
 use oa_bt::exec::{InstrumentId, OrderRequest, QuantitySpec};
+use oa_bt::market::costs::CostModel;
+use oa_bt::market::slippage::SlippageSpec;
 use oa_bt::model::{Product, Side};
 use oa_bt::rms::{Distance, LegRules, StrategyRiskConfig, TargetSpec};
 use oa_bt::sizing::{SizerSpec, SkipReason};
@@ -61,9 +63,28 @@ fn walk(rng: &mut Lcg) -> oa_bt::engine::BarColumns {
 }
 
 fn engine_for(bars: oa_bt::engine::BarColumns) -> Engine {
+    engine_with(bars, CostConfig::Off, SlippageSpec::Zero)
+}
+
+fn engine_with(
+    bars: oa_bt::engine::BarColumns,
+    costs: CostConfig,
+    slippage: SlippageSpec,
+) -> Engine {
     let days = days();
-    let config = intraday_config((days[0], days[1]), StrategyRiskConfig::default());
+    let config = RunConfig {
+        costs,
+        slippage,
+        ..intraday_config((days[0], days[1]), StrategyRiskConfig::default())
+    };
     engine(config, vec![equity("SBIN")], vec![bars]).expect("a valid setup")
+}
+
+/// The built-in charges of the default broker and the dated default slippage table:
+/// what `bt.backtest` uses when a run names neither.
+fn charges_and_slippage() -> (CostConfig, SlippageSpec) {
+    let model = CostModel::builtin().expect("the built-in schedules parse");
+    (CostConfig::Model(model), SlippageSpec::SegmentDefault)
 }
 
 fn bar_opens() -> Vec<i64> {
@@ -160,13 +181,15 @@ impl Driver for LiteralOnBar<'_> {
 }
 
 fn with_signal_driver(bars: oa_bt::engine::BarColumns, signals: &SignalArrays) -> RunOutput {
-    let mut kernel = engine_for(bars);
+    signal_run(engine_for(bars), signals)
+}
+
+fn signal_run(mut kernel: Engine, signals: &SignalArrays) -> RunOutput {
     run_signals(&mut kernel, signals).expect("the run completes");
     kernel.finish().expect("finished")
 }
 
-fn with_literal_on_bar(bars: oa_bt::engine::BarColumns, signals: &SignalArrays) -> RunOutput {
-    let mut kernel = engine_for(bars);
+fn literal_run(mut kernel: Engine, signals: &SignalArrays) -> RunOutput {
     run(&mut kernel, &mut LiteralOnBar { signals }).expect("the run completes");
     kernel.finish().expect("finished")
 }
@@ -186,8 +209,10 @@ fn stop_and_target() -> LegRules {
     }
 }
 
-#[test]
-fn the_signal_driver_equals_the_literal_on_bar_on_random_arrays_and_bars() {
+/// Sixty seeded runs of random arrays on random bars: the run of the signal driver
+/// equals the run of the literal `on_bar`, every table bit for bit (`RunOutput`'s
+/// equality compares every float exactly).
+fn assert_equal_runs_on_random_arrays_and_bars(costs: CostConfig, slippage: SlippageSpec) {
     for seed in 0..60u64 {
         let mut rng = Lcg(seed);
         let bars = walk(&mut rng);
@@ -203,11 +228,23 @@ fn the_signal_driver_equals_the_literal_on_bar_on_random_arrays_and_bars() {
             LegRules::default()
         };
         let signals = signals(when, (seed % 3) as u32, rules);
-        let by_signals = with_signal_driver(bars.clone(), &signals);
-        let by_on_bar = with_literal_on_bar(bars, &signals);
+        let kernel = || engine_with(bars.clone(), costs.clone(), slippage);
+        let by_signals = signal_run(kernel(), &signals);
+        let by_on_bar = literal_run(kernel(), &signals);
         assert!(!by_on_bar.fills.is_empty(), "seed {seed} trades");
         assert_eq!(by_signals, by_on_bar, "seed {seed}");
     }
+}
+
+#[test]
+fn the_signal_driver_equals_the_literal_on_bar_on_random_arrays_and_bars() {
+    assert_equal_runs_on_random_arrays_and_bars(CostConfig::Off, SlippageSpec::Zero);
+}
+
+#[test]
+fn the_signal_driver_equals_the_literal_on_bar_with_charges_and_slippage() {
+    let (costs, slippage) = charges_and_slippage();
+    assert_equal_runs_on_random_arrays_and_bars(costs, slippage);
 }
 
 /// Every bar closes at 500.00 and opens there too, so nothing but the conditions acts.

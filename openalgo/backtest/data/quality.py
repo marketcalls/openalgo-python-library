@@ -305,7 +305,10 @@ def _check_prices(bars: pd.DataFrame, ts_open: np.ndarray, report: QualityReport
 def _check_duplicates(
     ts_open: np.ndarray, normalisation: NormaliseReport | None, report: QualityReport
 ) -> None:
-    in_frame = len(ts_open) - len(np.unique(ts_open))
+    # Strictly increasing times (the canonical layout) have no duplicate; only other
+    # input pays for the sort of np.unique.
+    increasing = bool(np.all(ts_open[1:] > ts_open[:-1]))
+    in_frame = 0 if increasing else len(ts_open) - len(np.unique(ts_open))
     removed = normalisation.duplicates_removed if normalisation is not None else 0
     conflicting = normalisation.duplicates_conflicting if normalisation is not None else 0
     parts = []
