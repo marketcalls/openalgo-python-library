@@ -5,27 +5,39 @@
         symbol, exchange, interval = "SBIN", "NSE", "5m"
 
         def init(self):
-            self.entry_when(self.close.crossed_above(self.open), stop=bt.pct(1))
-            self.exit_when(self.close.crossed_below(self.open))
+            fast, slow = self.I(ta.ema, self.close, 10), self.I(ta.ema, self.close, 30)
+            self.entry_when(fast.crossed_above(slow) & bt.time_between("09:30", "14:30"),
+                            stop=bt.pct(1))
+            self.exit_when(fast.crossed_below(slow))
 
-The run (`drive_conditions`, called by `bt.backtest` in place of the `on_bar` driver):
+What a condition is (the grammar of 4.2): a view of booleans built from series views and
+`self.I` indicators with `+ - * /`, comparisons, `&`, `|`, `~`, `.crossed_above`,
+`.crossed_below`, `.shift(n)`, `.rolling_max(n)` and `.rolling_min(n)` (`_views`), a clock
+condition (`bt.time_between`, `bt.weekday`, `_clock`), or an array with one boolean per
+strategy bar: a NumPy array or list in bar order, or a pandas Series indexed by bar open
+time (SPEC-29 reads every array input the same way). Views hold the values of the whole
+run, each computed from bars up to its own close, so a condition at a bar never reads a
+later one. A view of another interval of the same symbol (`self.data[s, "15m"]`) counts
+at a strategy bar with the value of its latest bar closed by then. Anything else raises
+ConfigError saying to use `on_bar`.
 
-1. the strategy bars of the instrument come from the engine (the same bars `on_bar`
-   would see, one at a time);
-2. each condition is evaluated once over all of them into a bool array (`_expr_eval`);
-3. the arrays and the order templates go to the Rust signal driver
+The run (`drive_conditions`, called in place of the `on_bar` driver):
+
+1. each condition becomes a bool array over the strategy bars of the instrument, the
+   bars the pauses deliver (`Engine.strategy_bars`);
+2. the arrays and the order templates go to the Rust signal driver
    (`oa_bt::engine::signals`), which runs the whole grid with no Python call per bar and
    makes, at every strategy-bar close, the decision of the equivalent `on_bar` of 4.1;
-4. `on_stop` runs and `bt.backtest` collects the result as for any strategy.
+3. `on_stop` runs and the run's result is collected as for any strategy.
 
 Rules of 4.1: conditions are level-triggered; long entry before short when flat; exit
 before adding when in a position; `pyramiding` (class attribute, default 0) adds; the
 position is read in step 7 and a queued entry counts as not flat (SPEC-29). The order
 arguments are `qty`, `size`, `lots`, `stop`, `target`, `targets`, `trail`, `breakeven`,
-`after_first_target`, `product`, `leverage` and `tag`; a condition entry is always a
-MARKET DAY order. A strategy uses `on_bar` or conditions, never both, and a condition
-strategy trades one symbol and has no per-event callbacks (they would need Python per
-event).
+`after_first_target`, `product`, `leverage` and `tag`: a condition entry is always a
+MARKET DAY order. A strategy uses `on_bar` or conditions, never both; a condition
+strategy trades one symbol and has no per-event callbacks or timers (they would call
+Python during the run).
 """
 
 from __future__ import annotations
@@ -34,11 +46,14 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from . import _orders
+from ._calendar_convert import IST
+from ._clock import ClockCondition
 from ._engine import call
-from ._expr import BOOL, Expr, typed
-from ._expr_eval import StrategyBars, condition_values
+from ._series import FIELDS, ist_time
+from ._views import TimelineView
 from .errors import ConfigError
 
 KINDS = ("entry", "exit", "short", "cover")
@@ -59,15 +74,22 @@ ORDER_ARGUMENTS = frozenset(
         "tag",
     }
 )
+GRAMMAR = "the condition grammar of 14-strategy-api 4.2"
 NOT_BUILT = "is not implemented yet (Phase 1 work in progress)"
+ARRAYS = (pd.Series, np.ndarray, list, tuple)
 
 
 @dataclass(frozen=True)
 class Declared:
     """One declared condition and, for an entry, the request its orders send."""
 
-    condition: Expr
+    condition: Any
     order: dict[str, Any] | None
+
+
+def outside(what: str) -> ConfigError:
+    """The error for a condition outside the grammar."""
+    return ConfigError(f"{what} is outside {GRAMMAR}; write this logic in on_bar instead")
 
 
 def check_order_arguments(order_args: dict[str, Any], what: str) -> None:
@@ -94,12 +116,12 @@ def declare(strategy: Any, kind: str, condition: Any, order_args: dict[str, Any]
     declared = strategy.__dict__.setdefault("_conditions", {})
     if kind in declared:
         raise ConfigError(f"{what} is declared once; combine conditions with & and |")
-    expr = typed(condition, BOOL, what)
+    _check_condition(condition, what)
     order = None
     if kind in ENTRY_SIDES:
         check_order_arguments(order_args, what)
         order = _entry_request(strategy._ctx, ENTRY_SIDES[kind], order_args)
-    declared[kind] = Declared(expr, order)
+    declared[kind] = Declared(condition, order)
 
 
 def has_conditions(strategy: Any) -> bool:
@@ -127,6 +149,27 @@ def _check_form(cls: type, what: str) -> None:
         )
 
 
+def _check_condition(condition: Any, what: str) -> None:
+    """Refuse, when it is declared, anything that cannot be a condition."""
+    from ._indicators import LookaheadOutput
+
+    if isinstance(condition, LookaheadOutput):
+        condition._refuse()
+    if isinstance(condition, TimelineView):
+        if condition._values.dtype != np.bool_:
+            raise ConfigError(
+                f"{what} takes a condition (true or false); {condition.label} is a series "
+                "of numbers: compare it, for example view > 0"
+            )
+        return
+    if isinstance(condition, ClockCondition):
+        return
+    if isinstance(condition, bool | np.bool_):
+        raise outside(f"{what}({condition}) (and, or, not, ==, a plain True or False)")
+    if not isinstance(condition, ARRAYS):
+        raise outside(f"a {type(condition).__name__} condition")
+
+
 def _refuse_atr(period: int) -> float:
     raise NotImplementedError(
         f"ATR distances (bt.atr, bt.trail_atr) in condition order arguments {NOT_BUILT}: "
@@ -146,9 +189,8 @@ def _entry_request(ctx: Any, side: str, args: dict[str, Any]) -> dict[str, Any]:
         args.get("after_first_target"),
         atr_at=_refuse_atr,
     )
-    quantity = _orders.quantity(
-        args.get("qty"), args.get("lots"), args.get("size"), ctx.default_size
-    )
+    sizer = args.get("size")
+    quantity = _orders.quantity(args.get("qty"), args.get("lots"), sizer, ctx.default_size)
     if quantity.get("sizer") == "atr_risk":
         raise NotImplementedError(f"bt.size.atr_risk in condition order arguments {NOT_BUILT}")
     return _orders.request(
@@ -165,12 +207,75 @@ def _entry_request(ctx: Any, side: str, args: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def run_bars(strategy: Any) -> StrategyBars:
-    """Every strategy bar of the strategy's instrument over the run, from the engine:
-    what its conditions are evaluated on."""
-    ctx = strategy._ctx
-    index = ctx.instrument_index(None)
-    return StrategyBars.from_native(ctx.symbol_of(index), call(ctx.engine.strategy_bars, index))
+def strategy_frame(strategy: Any) -> pd.DataFrame:
+    """Every strategy bar of the strategy's instrument over the run, as a DataFrame
+    indexed by IST bar open (open, high, low, close in rupees, volume in units): what a
+    `from_signals` function receives."""
+    store = strategy._ctx.store(None)
+    return pd.DataFrame({name: store.column(name) for name in FIELDS}, index=store.times())
+
+
+def array_values(data: Any, opens: np.ndarray, what: str) -> np.ndarray:
+    """An array input as one boolean per bar opening at `opens` (int64 UTC nanoseconds):
+    a Series with a DatetimeIndex is matched by bar open time (a naive index is IST, extra
+    times are ignored); anything else is read in bar order. Raises ConfigError for
+    values that are not booleans, a wrong length or a bar the Series does not cover."""
+    values = np.asarray(data.to_numpy() if isinstance(data, pd.Series) else data)
+    if values.ndim != 1 or values.dtype != np.bool_:
+        raise ConfigError(
+            f"{what} takes one boolean per strategy bar; got {values.dtype} values of shape "
+            f"{values.shape}"
+        )
+    if isinstance(data, pd.Series) and isinstance(data.index, pd.DatetimeIndex):
+        index = data.index if data.index.tz is not None else data.index.tz_localize(IST)
+        times = pd.Index(index.tz_convert("UTC").as_unit("ns").asi8)
+        if not times.is_unique:
+            raise ConfigError(f"{what}: the Series has the same bar open time more than once")
+        rows = times.get_indexer(opens)
+        if (rows < 0).any():
+            first = int(opens[int(np.argmax(rows < 0))])
+            raise ConfigError(
+                f"{what}: the Series has no value for the strategy bar opening at "
+                f"{ist_time(first).isoformat()}; index it by the strategy-bar open times"
+            )
+        return values[rows]
+    if len(values) != len(opens):
+        raise ConfigError(
+            f"{what} has {len(values)} values and the run has {len(opens)} strategy bars: "
+            "give one value per strategy bar, or a Series indexed by bar open time"
+        )
+    return values
+
+
+def _view_values(view: TimelineView, store: Any, what: str) -> np.ndarray:
+    """A view's values at the strategy bars: its own when it is a view of them; for
+    another interval of the symbol, the value of its latest bar closed by each strategy
+    bar's close (false before its first)."""
+    own = view._store
+    if own is store:
+        return view._values
+    if own.symbol != store.symbol:
+        raise ConfigError(
+            f"{what}: {view.label} is a series of {own.symbol}; a condition strategy reads "
+            f"its own symbol {store.symbol}"
+        )
+    closed = np.searchsorted(own.column("ts_close"), store.column("ts_close"), side="right")
+    if not len(view._values):
+        return np.zeros(len(closed), dtype=bool)
+    return np.where(closed > 0, view._values[np.maximum(closed - 1, 0)], False)
+
+
+def condition_values(condition: Any, store: Any, what: str) -> np.ndarray:
+    """A condition as a contiguous bool array, one value per bar of `store` (the strategy
+    bars). Raises ConfigError for anything outside the grammar."""
+    _check_condition(condition, what)
+    if isinstance(condition, TimelineView):
+        values = _view_values(condition, store, what)
+    elif isinstance(condition, ClockCondition):
+        values = condition.values(store.column("ts_close"))
+    else:
+        values = array_values(condition, store.column("ts_open"), what)
+    return np.ascontiguousarray(values, dtype=bool)
 
 
 def _pyramiding(cls: type) -> int:
@@ -180,41 +285,49 @@ def _pyramiding(cls: type) -> int:
     return value
 
 
-def signal_spec(strategy: Any, bars: StrategyBars) -> dict[str, Any]:
+def signal_spec(strategy: Any) -> dict[str, Any]:
     """The spec dict the engine's `run_signals` reads: the condition arrays (None when
     not declared), the entry order templates, the product and `pyramiding`."""
     declared: dict[str, Declared] = strategy.__dict__.get("_conditions", {})
     ctx = strategy._ctx
+    store = ctx.store(None)
     spec: dict[str, Any] = {
         "instrument": ctx.instrument_index(None),
         "product": ctx.product,
-        "bar_opens": np.ascontiguousarray(bars.ts_open, dtype=np.int64),
+        "bar_opens": np.ascontiguousarray(store.column("ts_open"), dtype=np.int64),
         "pyramiding": _pyramiding(type(strategy)),
     }
     for kind in KINDS:
         entry = declared.get(kind)
         what = f"{kind}_when"
-        spec[kind] = None if entry is None else condition_values(entry.condition, bars, what)
+        spec[kind] = None if entry is None else condition_values(entry.condition, store, what)
         if kind in ENTRY_SIDES:
             spec[f"{kind}_order"] = None if entry is None else entry.order
     return spec
 
 
-def drive_conditions(strategy: Any, engine: Any, ctx: Any) -> None:
+def drive_conditions(strategy: Any, engine: Any) -> None:
     """Run a condition strategy to the end of the grid: evaluate its conditions once,
-    hand them to the Rust signal driver, then call `on_stop`. Errors of the evaluation
-    and of the kernel propagate (ConfigError, BacktestError, NotImplementedError)."""
-    spec = signal_spec(strategy, run_bars(strategy))
-    call(engine.run_signals, spec)
+    hand them to the Rust signal driver, then call `on_stop`. Raises ConfigError for
+    timers (they call Python during the run); errors of the evaluation and of the kernel
+    propagate (ConfigError, BacktestError, NotImplementedError)."""
+    if call(engine.timer_counts):
+        raise ConfigError(
+            f"{type(strategy).__name__}: a condition strategy runs in Rust with no Python "
+            "call during the run, and self.at or self.every would call Python; use on_bar"
+        )
+    call(engine.run_signals, signal_spec(strategy))
     strategy.on_stop()
 
 
 __all__ = [
     "ORDER_ARGUMENTS",
+    "array_values",
     "check_order_arguments",
+    "condition_values",
     "declare",
     "drive_conditions",
     "has_conditions",
-    "run_bars",
     "signal_spec",
+    "strategy_frame",
 ]

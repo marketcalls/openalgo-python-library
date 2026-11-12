@@ -39,16 +39,18 @@
 //! | `Engine::submit(OrderRequest)` | while paused | submission checks, `Submitted` or `Rejected` |
 //! | `Engine::cancel(OrderId)` | while paused | cancel a working order |
 //! | `Engine::modify(OrderId, OrderRequest)` | while paused | not built yet |
-//! | `position`, `leg`, `order`, `working_orders`, `has_pending_entry`, `account`, `last_close`, `decision_instant`, `trading_state` | any time | queries |
+//! | `position`, `leg`, `order`, `working_orders`, `has_pending_entry`, `account`, `last_close`, `decision_instant`, `trading_state`, `strategy_bars`, `timer_counts` | any time | queries |
+//! | `Engine::add_timer(TimerSpec)` | before the first `advance` | register `self.at` or `self.every` |
 //! | `Engine::finish()` | after `Pause::Finished` | the `RunOutput` |
 //! | `pause::run(engine, driver)` | Rust drivers | the loop above, for a `Driver` |
 //!
 //! A pause is a decision point: `Pause::BarClose` in step 7 of a slice where a strategy
 //! bar closes by the clock (or where events wait and the strategy has callbacks), and
-//! `Pause::Timers` in step 2 for `self.at` and `self.every` (not built yet; orders it
-//! receives fill at that same open). Each pause carries the events since the previous
-//! one, so callbacks see everything of steps 2 to 6 before `on_bar` runs. Events of
-//! step 8 and of submissions are delivered with the next pause.
+//! `Pause::Timers` in step 2 for `self.at` and `self.every` (`timers`; orders it
+//! receives fill at that same open). A step 7 pause carries the events since the
+//! previous one, so callbacks see everything of steps 2 to 6 before `on_bar` runs; a
+//! timer pause carries none (SPEC-31). Events of step 8 and of submissions are
+//! delivered with the next step 7 pause.
 //!
 //! In live trading (Phase 2) the same machine runs with a live clock: the adapter feeds
 //! bars or ticks before calling `advance`, and tick mode runs steps 3 to 6 for one
@@ -64,7 +66,7 @@
 //! | Step | Code | Built |
 //! |---|---|---|
 //! | 1 session open, reference events | `steps::open_slice`; intraday times resolved lazily by `session::session_times` | times yes; rolls and lot-size changes no |
-//! | 2 fills at the open | `steps::step_open_fills` -> `fills::fill_queued` (eligible when the open is at or after `decided_at`, SPEC-35; a missing bar keeps the order queued, SPEC-06; entry window and margin checked at the fill bar), then `session::square_off_at_open` (the square-off timer, SPEC-05) | MARKET orders, square-off; timers and rolls no |
+//! | 2 fills at the open | `steps::step_open_fills`: per instrument the risk exits of step 6 (`risk_exits_at_open`), then `fills::fill_queued` (eligible when the open is at or after `decided_at`, SPEC-35; a missing bar keeps the order queued, SPEC-06; entry window and margin checked at the fill bar), the time exit, then `session::square_off_at_open` (the square-off timer, SPEC-05). In a slice where a timer is due, `timers::fill_due_orders` runs the risk exits and queued orders first, `timers::timers_pause` returns `Pause::Timers`, and `step_open_fills` then fills what the timers placed | MARKET orders, timers, square-off; rolls no |
 //! | 3 resting orders, leg levels | `steps::step_levels` -> `legs::test_leg_levels` -> `rms::LegState::test_bar`, exits through `fills::execute_fill` | leg levels yes (MIS); resting orders no |
 //! | 4 ratchets | `steps::step_ratchets` -> `legs::ratchet_legs` -> `rms::LegState::ratchet` | yes |
 //! | 5 mark | `steps::step_mark`: close, or last close and stale | yes |
@@ -107,6 +109,8 @@
 //! | `entry_rules` | Entry gates at submission (trading state, cooldown, maximum positions), the time exit, the fill hook |
 //! | `strategy_risk` | `StrategyRisk`: trading state and the bookkeeping of the strategy and session rules |
 //! | `pause` | `Pause`, `Driver`, `run` |
+//! | `timers` | `self.at` and `self.every`: registration, when they are due, the timer pause |
+//! | `history` | The strategy bars of the whole run, for indicators computed ahead |
 //! | `signals` | Condition and array strategies: the Rust driver of 14-strategy-api 4.1 over the stepping API |
 //! | `event` | `Event`, `EventStamp`, `Step` |
 //! | `output` | `RunOutput` and its tables |
@@ -122,11 +126,12 @@
 //! intervals on an intraday or daily base, MARKET DAY orders (entry, add, reduce,
 //! exit by fraction, `reverse=True`), the quantity, freeze, product, entry-window,
 //! market-closed and reverse checks, engine-held leg rules on MIS (stop, targets,
-//! every trail form, breakeven, `after_first_target`), the square-off, charges on
-//! every fill with contract-note rounding, the dated default slippage and margin
-//! tables (cash, MIS with leverage on request, long options, NSE index futures), the
-//! sizers and the engine default size, the position history, the equity series,
-//! trades and events; the daily loss limit, the drawdown halt, the trading state, the
+//! every trail form, breakeven, `after_first_target`), the square-off, timers
+//! (`self.at`, `self.every`), charges on every fill with contract-note rounding, the
+//! dated default slippage and margin tables (cash, MIS with leverage on request, long
+//! options, NSE index futures), the sizers and the engine default size, the position
+//! history, the equity series, trades and events, the whole-run strategy bars for
+//! indicators; the daily loss limit, the drawdown halt, the trading state, the
 //! cooldown, maximum positions and the time exit; condition and array strategies on
 //! one instrument (`signals`). Everything else returns `KernelError::NotBuilt` naming
 //! the feature.
@@ -139,6 +144,7 @@ mod entry_rules;
 pub mod error;
 pub mod event;
 mod fills;
+mod history;
 pub mod kernel;
 mod legs;
 pub mod market_data;
@@ -151,6 +157,7 @@ mod sizing;
 mod steps;
 mod strategy_risk;
 pub mod submit;
+pub mod timers;
 
 pub use clock::{SliceInfo, Timeline};
 pub use config::{
@@ -167,3 +174,4 @@ pub use output::{
 pub use pause::{run, Driver, Pause, TimerId};
 pub use signals::{run_signals, EntrySignal, SignalArrays};
 pub use submit::Submission;
+pub use timers::{TimerCount, TimerSpec};

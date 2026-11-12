@@ -7,7 +7,6 @@
 //! themselves are in `steps`, order submission in `submit`, fills in `fills`.
 
 use crate::charges::ChargeBook;
-use crate::data::resample::BarsOut;
 use crate::exec::{InstrumentId, InstrumentSpec, Order, OrderBook, OrderId};
 use crate::market::calendar::Calendar;
 use crate::model::{Exchange, Product, TsNanos};
@@ -24,6 +23,7 @@ use super::output::{FinalPosition, GrossPnl, Recorder, RunOutput};
 use super::pause::Pause;
 use super::session::SessionTimes;
 use super::strategy_risk::StrategyRisk;
+use super::timers::TimerBook;
 
 /// Where the state machine stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,6 +32,9 @@ pub(super) enum Phase {
     Ready(usize),
     /// Paused in step 7 of this slice; step 8 runs on the next `advance`.
     Paused(SliceInfo),
+    /// Paused for timers in step 2 of this slice; the rest of the slice runs on the
+    /// next `advance`.
+    Timers(SliceInfo),
     /// The grid is exhausted.
     Finished,
 }
@@ -77,6 +80,8 @@ pub struct Engine {
     pub(super) risk: StrategyRisk,
     /// Charges, contract notes and the market-table rows used.
     pub(super) charges: ChargeBook,
+    /// Timers registered with `add_timer`.
+    pub(super) timers: TimerBook,
 }
 
 /// The one exchange of a Phase 1 run.
@@ -143,24 +148,31 @@ impl Engine {
             undelivered: Vec::new(),
             record: Recorder::default(),
             session: None,
+            timers: TimerBook::default(),
         })
     }
 
     /// Run the slice sequence to the next decision point.
     ///
-    /// From a pause it first completes the paused slice (step 8). It returns
-    /// `Pause::BarClose` at step 7 of a slice where a strategy bar closes (or events are
-    /// waiting and `deliver_events` is set), and `Pause::Finished` once the grid is
-    /// exhausted.
+    /// From a pause it first completes the paused slice (from a timer pause, the rest
+    /// of step 2 onwards; from step 7, step 8). It returns `Pause::Timers` in step 2 of
+    /// a slice where timers are due, `Pause::BarClose` at step 7 of a slice where a
+    /// strategy bar closes (or events are waiting and `deliver_events` is set), and
+    /// `Pause::Finished` once the grid is exhausted.
     ///
     /// Errors: `RunFinished` after `Pause::Finished`; any error of a step.
     pub fn advance(&mut self) -> Result<Pause, KernelError> {
         loop {
-            match self.phase {
+            let slice = match self.phase {
                 Phase::Finished => return Err(KernelError::RunFinished),
                 Phase::Paused(slice) => {
                     self.close_slice(&slice)?;
                     self.phase = Phase::Ready(slice.index + 1);
+                    continue;
+                }
+                Phase::Timers(slice) => {
+                    self.finish_open_slice(&slice)?;
+                    slice
                 }
                 Phase::Ready(index) => {
                     let Some(slice) = self.timeline.slice(index) else {
@@ -168,23 +180,34 @@ impl Engine {
                         let events = std::mem::take(&mut self.undelivered);
                         return Ok(Pause::Finished { events });
                     };
-                    self.open_slice(&slice)?;
-                    if let Some(pause) = self.callbacks_pause(&slice) {
-                        self.phase = Phase::Paused(slice);
+                    if let Some(pause) = self.open_slice(&slice)? {
+                        self.phase = Phase::Timers(slice);
                         return Ok(pause);
                     }
-                    self.close_slice(&slice)?;
-                    self.phase = Phase::Ready(index + 1);
+                    slice
                 }
+            };
+            if let Some(pause) = self.callbacks_pause(&slice) {
+                self.phase = Phase::Paused(slice);
+                return Ok(pause);
             }
+            self.close_slice(&slice)?;
+            self.phase = Phase::Ready(slice.index + 1);
         }
     }
 
     /// The decision instant of the current pause (UTC nanoseconds), `None` when the
     /// engine is not paused.
     pub fn decision_instant(&self) -> Option<TsNanos> {
+        self.decision_point().map(|(_, decided_at, _)| decided_at)
+    }
+
+    /// The paused slice, the decision instant and the step of the current pause: the
+    /// slice's close in step 7, its open at a timer pause in step 2.
+    pub(super) fn decision_point(&self) -> Option<(SliceInfo, TsNanos, Step)> {
         match self.phase {
-            Phase::Paused(slice) => Some(slice.close),
+            Phase::Paused(slice) => Some((slice, slice.close, Step::Callbacks)),
+            Phase::Timers(slice) => Some((slice, slice.open, Step::OpenFills)),
             _ => None,
         }
     }
@@ -240,14 +263,6 @@ impl Engine {
     /// The last close seen of an instrument, rupees.
     pub fn last_close(&self, instrument: InstrumentId) -> Option<f64> {
         self.last_close.get(instrument.index()).copied().flatten()
-    }
-
-    /// Every strategy bar of an instrument over the whole run (opens and closes in UTC
-    /// nanoseconds, prices in rupees), for conditions evaluated once per run; `None` for
-    /// an instrument the run does not have. A driver must reveal them to a strategy
-    /// only as they close.
-    pub fn strategy_bars(&self, instrument: InstrumentId) -> Option<&BarsOut> {
-        self.market.strategy_bars(instrument)
     }
 
     /// The account at the last marks.

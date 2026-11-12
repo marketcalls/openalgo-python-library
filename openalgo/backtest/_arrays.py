@@ -32,9 +32,9 @@ from collections.abc import Callable
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
-from ._conditions import check_order_arguments, run_bars
-from ._expr_eval import StrategyBars, condition_values
+from ._conditions import array_values, check_order_arguments, strategy_frame
 from .errors import ConfigError
 from .strategy import Strategy
 
@@ -125,18 +125,18 @@ def from_signals(
     check_order_arguments(order_args, "from_signals")
 
     def init(self: Strategy) -> None:
-        bars = run_bars(self)
-        arrays = _signals(func, bars)
-        _check_causal(func, bars, arrays)
+        frame = strategy_frame(self)
+        arrays = _signals(func, frame)
+        _check_causal(func, frame, arrays)
         _declare(self, arrays, order_args)
 
     name = f"FromSignals_{getattr(func, '__name__', 'function')}"
     return _class(name, symbol, exchange, interval, (pyramiding, product), init)
 
 
-def _signals(func: Callable[..., Any], bars: StrategyBars) -> tuple[Any, ...]:
+def _signals(func: Callable[..., Any], frame: pd.DataFrame) -> tuple[Any, ...]:
     """The function's outputs on these bars, checked to be 2 or 4 of them."""
-    outputs = func(bars.frame())
+    outputs = func(frame)
     if not isinstance(outputs, tuple | list) or len(outputs) not in (2, 4):
         raise ConfigError(
             f"{getattr(func, '__name__', 'the function')} must return (entries, exits) or "
@@ -145,29 +145,29 @@ def _signals(func: Callable[..., Any], bars: StrategyBars) -> tuple[Any, ...]:
     return tuple(outputs)
 
 
-def _check_causal(func: Callable[..., Any], bars: StrategyBars, arrays: tuple) -> None:
+def _check_causal(func: Callable[..., Any], frame: pd.DataFrame, arrays: tuple) -> None:
     """The truncation check of 03-architecture 5: the outputs on the bars cut at each
     point of CUT_FRACTIONS equal the full-run outputs up to the cut. Raises ConfigError
     naming the first bar that changed."""
+    opens = frame.index.tz_convert("UTC").as_unit("ns").asi8
     full = [
-        None if values is None else condition_values(values, bars, name)
+        None if values is None else array_values(values, opens, name)
         for name, values in zip(OUTPUT_NAMES, arrays, strict=False)
     ]
     for fraction in CUT_FRACTIONS:
-        count = int(len(bars) * fraction)
+        count = int(len(frame) * fraction)
         if count < MIN_CUT_BARS:
             continue
-        part = bars.head(count)
-        cut = _signals(func, part)
+        cut = _signals(func, frame.iloc[:count])
         for name, whole, values in zip(OUTPUT_NAMES, full, cut, strict=False):
             if whole is None or values is None:
                 continue
-            changed = np.flatnonzero(condition_values(values, part, name) != whole[:count])
+            changed = np.flatnonzero(array_values(values, opens[:count], name) != whole[:count])
             if changed.size:
-                when = part.frame().index[int(changed[0])].isoformat()
+                when = frame.index[int(changed[0])].isoformat()
                 raise ConfigError(
                     f"{getattr(func, '__name__', 'the function')} looks ahead: its {name} "
-                    f"at the bar opening {when} changes when the bars after the first "
+                    f"value at the bar opening {when} changes when the bars after the first "
                     f"{count} are removed (03-architecture 5). A signal may use only bars "
                     "up to its own close."
                 )

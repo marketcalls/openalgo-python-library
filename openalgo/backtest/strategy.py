@@ -20,8 +20,10 @@ name (lead ruling). Parameters are any other class attributes with a number, boo
 string default, or `bt.param(default, values)`.
 
 Hooks run in step 7 of the kernel slice: callbacks for the events since the previous
-decision, then `on_bar`. Orders placed in any hook are queued for the next base-bar open.
-Parts not built yet raise NotImplementedError naming the phase.
+decision, then `on_bar`. Orders placed there are queued for the next base-bar open.
+Timers (`self.at`, `self.every`) run in step 2 and their orders fill at that same open.
+Indicators come from `openalgo.ta` through `self.I`. Parts not built yet raise
+NotImplementedError naming the phase.
 """
 
 from __future__ import annotations
@@ -115,6 +117,20 @@ class Strategy(OrderMethods):
         return found
 
     @classmethod
+    def parameter_ranges(cls) -> dict[str, tuple[Any, ...]]:
+        """The sweep values declared with `bt.param(default, values)`, by parameter."""
+        found: dict[str, tuple[Any, ...]] = {}
+        for klass in reversed(cls.__mro__):
+            for name, value in vars(klass).items():
+                if name in DECLARATIONS or name.startswith("_"):
+                    continue
+                if isinstance(value, Param) and value.values:
+                    found[name] = value.values
+                else:
+                    found.pop(name, None)
+        return found
+
+    @classmethod
     def traded_symbols(cls) -> tuple[str, ...]:
         """What the class declares it trades. Raises ConfigError unless exactly one of
         symbol, symbols, universe, underlying is set; NotImplementedError for the forms
@@ -162,13 +178,14 @@ class Strategy(OrderMethods):
 
     @property
     def data(self) -> _DataAccess:
-        """`self.data[symbol]` (series views); `self.data[symbol, interval]` later."""
+        """`self.data[symbol]`: series views of the strategy bars; `self.data[symbol,
+        "15m"]`: another interval, each bar visible once it has closed."""
         return _DataAccess(self._ctx)
 
     def _single(self) -> InstrumentData:
         if self.symbols is not None or self.universe is not None:
             raise AttributeError("with symbols or universe use self.data[symbol]")
-        return self.data[self._ctx.symbols[0]]
+        return InstrumentData(self._ctx.store(None))
 
     @property
     def open(self) -> SeriesView:
@@ -191,13 +208,19 @@ class Strategy(OrderMethods):
         return self._single().volume
 
     def history(self, symbol: str | None, n: int) -> pd.DataFrame:
-        """The last n revealed strategy bars of a symbol as a DataFrame."""
-        name = self._ctx.symbol_of(self._ctx.instrument_index(symbol))
-        return self._ctx.stores[name].frame(last=n)
+        """The last n revealed strategy bars of a symbol as a DataFrame indexed by IST
+        bar open (prices in rupees, volume in units)."""
+        return self._ctx.store(symbol).frame(last=n)
 
     def I(self, func: Any, *inputs: Any, **params: Any) -> Any:  # noqa: E743
-        """Register an indicator from `openalgo.ta` (the name is fixed by the contract)."""
-        raise NotImplementedError(f"self.I indicators with causality checks {NOT_BUILT}")
+        """Register an indicator from `openalgo.ta` (the name is fixed by the contract):
+        `self.I(ta.ema, self.close, 20)`. Returns a view (`[-1]`, slices, `len()`,
+        `.crossed_above`, `.crossed_below`, comparisons, arithmetic), or a tuple of views
+        for a function with several outputs. Raises ConfigError for a function outside
+        `openalgo.ta` and for an output that looks ahead (see `_indicators`)."""
+        from ._indicators import register
+
+        return register(self._ctx.run.checks, func, inputs, params)
 
     @property
     def position(self) -> PositionView:
@@ -239,17 +262,21 @@ class Strategy(OrderMethods):
     # ----- scheduling and conditions -----------------------------------------------
 
     def at(self, time_ist: str, fn: Any) -> None:
-        """A timer at an IST time each session."""
-        raise NotImplementedError(f"self.at timers {NOT_BUILT}")
+        """Call `fn()` at the first base-bar open at or after `time_ist` ("HH:MM", IST) in
+        every session; its orders fill at that open. Register in `init`. Raises
+        ConfigError for a bad time or a call after the run started."""
+        self._ctx.timers.at(time_ist, fn)
 
     def every(self, period: str, fn: Any) -> None:
-        """A timer at the first close of each week, month, quarter or year."""
-        raise NotImplementedError(f"self.every timers {NOT_BUILT}")
+        """Call `fn()` for the close of the first session of each "week", "month",
+        "quarter" or "year" (daily or longer strategies); its orders fill at the next
+        session's open. Register in `init`. Raises ConfigError otherwise."""
+        self._ctx.timers.every(period, fn)
 
     def entry_when(self, condition: Any, **order_args: Any) -> None:
         """Buy while the condition holds: enter when flat, add while long and `adds <
         pyramiding` (14-strategy-api 4.1). Declared in `init`; the whole strategy then
-        runs in Rust (`_conditions`). `condition` follows the grammar of 4.2 (`_expr`)."""
+        runs in Rust. `condition` follows the grammar of 4.2 (see `_conditions`)."""
         declare(self, "entry", condition, order_args)
 
     def exit_when(self, condition: Any) -> None:
@@ -282,9 +309,9 @@ class _DataAccess:
 
     def __getitem__(self, key: str | tuple[str, str]) -> InstrumentData:
         if isinstance(key, tuple):
-            raise NotImplementedError(f"self.data[symbol, interval] {NOT_BUILT}")
-        name = self._ctx.symbol_of(self._ctx.instrument_index(key))
-        return InstrumentData(self._ctx.stores[name])
+            symbol, interval = key
+            return InstrumentData(self._ctx.store(symbol, interval))
+        return InstrumentData(self._ctx.store(key))
 
 
 __all__ = ["CALLBACKS", "DECLARATIONS", "Strategy"]

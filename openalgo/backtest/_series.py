@@ -1,8 +1,11 @@
 """What a strategy reads: strategy bars as they close, series views over them, the `bar`
 handed to `on_bar`, and positions (14-strategy-api 2.2).
 
-Bars are revealed one strategy bar at a time, at its close, from the kernel's pauses;
-nothing after the current decision is ever visible. `[-1]` is the latest closed bar.
+A store holds the bars of one instrument for the whole run and reveals them one at a
+time. `BarStore` holds the strategy bars, taken from the kernel before the run
+(`Engine.strategy_bars`), and reveals each when a pause delivers it, checking that the
+two agree; nothing after the current decision is ever visible. `[-1]` is the latest
+closed bar. Other intervals (`self.data[symbol, "15m"]`) are in `_timeframes`.
 """
 
 from __future__ import annotations
@@ -13,11 +16,13 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from ._expr import ConditionOperators, Expr, column
 from ._layout import IST_OFFSET_NANOS, NANOS_PER_SECOND
+from ._views import TimelineView
+from .errors import BacktestError
 
 IST = dt.timezone(dt.timedelta(seconds=IST_OFFSET_NANOS // NANOS_PER_SECOND), "IST")
 FIELDS = ("open", "high", "low", "close", "volume")
+TIMES = ("ts_open", "ts_close")
 
 
 def ist_time(ts_ns: int) -> dt.datetime:
@@ -41,69 +46,89 @@ class Bar:
     volume: float
 
 
-class BarStore:
-    """The strategy bars of one instrument revealed so far."""
+class SeriesStore:
+    """The bars of one instrument and interval over the whole run, as arrays: `ts_open`
+    and `ts_close` int64 UTC nanoseconds, prices in rupees, volume in units. A subclass
+    says how many are visible. `name` prefixes the labels of its views."""
 
-    def __init__(self, symbol: str) -> None:
+    def __init__(
+        self, symbol: str, interval: str, series: dict[str, np.ndarray], name: str | None = None
+    ) -> None:
         self.symbol = symbol
-        self.ts_open: list[int] = []
-        self.ts_close: list[int] = []
-        self.columns: dict[str, list[float]] = {name: [] for name in FIELDS}
+        self.interval = interval
+        self.name = name or symbol
+        self._series = {name: np.asarray(series[name]) for name in (*TIMES, *FIELDS)}
+        self._times: pd.DatetimeIndex | None = None
 
-    def append(self, row: tuple) -> Bar:
-        """Reveal one bar from the kernel's tuple (index, ts_open, ts_close, o, h, l, c, v)."""
-        _, ts_open, ts_close, *values = row
-        self.ts_open.append(ts_open)
-        self.ts_close.append(ts_close)
-        for name, value in zip(FIELDS, values, strict=True):
-            self.columns[name].append(value)
-        return Bar(self.symbol, ist_time(ts_open), ist_time(ts_close), *values)
+    def visible(self) -> int:
+        """How many bars are revealed now."""
+        raise NotImplementedError
 
     def __len__(self) -> int:
-        return len(self.ts_open)
+        return self.visible()
 
-    def frame(self, last: int | None = None) -> pd.DataFrame:
-        """The revealed bars as a DataFrame indexed by IST bar open."""
-        start = 0 if last is None else max(len(self) - last, 0)
-        index = pd.DatetimeIndex([ist_time(ts) for ts in self.ts_open[start:]], name="time")
-        data = {name: self.columns[name][start:] for name in FIELDS}
-        return pd.DataFrame(data, index=index)
-
-
-class SeriesView(ConditionOperators):
-    """One column of revealed bars: `[-1]` is the latest closed bar, slices and `len()`
-    work, `.values` is a NumPy copy. In conditions (`entry_when`) it stands for the
-    whole column (`_expr`)."""
-
-    def __init__(self, store: BarStore, name: str) -> None:
-        self._store = store
-        self._name = name
-
-    def __getitem__(self, key: int | slice) -> float | np.ndarray:
-        column = self._store.columns[self._name]
-        if isinstance(key, slice):
-            return np.asarray(column[key], dtype=float)
-        return column[key]
-
-    def __len__(self) -> int:
-        return len(self._store)
+    def column(self, name: str) -> np.ndarray:
+        """One column of the whole run (read-only use: views slice it)."""
+        return self._series[name]
 
     @property
-    def values(self) -> np.ndarray:
-        return np.asarray(self._store.columns[self._name], dtype=float)
+    def columns(self) -> dict[str, np.ndarray]:
+        """The price and volume columns of the revealed bars only (read-only views)."""
+        stop = self.visible()
+        return {name: self._series[name][:stop] for name in FIELDS}
 
-    def __repr__(self) -> str:
-        return f"SeriesView({self._store.symbol}.{self._name}, {len(self)} bars)"
+    def times(self) -> pd.DatetimeIndex:
+        """IST open of every bar of the run."""
+        if self._times is None:
+            utc = pd.to_datetime(self._series["ts_open"], utc=True)
+            self._times = pd.DatetimeIndex(utc.tz_convert(IST), name="time")
+        return self._times
 
-    def __condition_expr__(self) -> Expr:
-        """The column as a condition operand."""
-        return column(self._store.symbol, self._name)
+    def frame(self, last: int | None = None) -> pd.DataFrame:
+        """The revealed bars as a DataFrame indexed by IST bar open; the last `last`."""
+        stop = self.visible()
+        start = 0 if last is None else max(stop - last, 0)
+        data = {name: self._series[name][start:stop].copy() for name in FIELDS}
+        return pd.DataFrame(data, index=self.times()[start:stop])
+
+
+class BarStore(SeriesStore):
+    """The strategy bars of one instrument, revealed by the kernel's pauses."""
+
+    def __init__(self, symbol: str, interval: str, series: dict[str, np.ndarray]) -> None:
+        super().__init__(symbol, interval, series)
+        self._count = 0
+
+    def visible(self) -> int:
+        return self._count
+
+    def reveal(self, row: tuple) -> Bar:
+        """Reveal the next bar from the kernel's tuple (index, ts_open, ts_close, o, h, l,
+        c, v). Raises BacktestError when it is not the next bar of the series (a kernel
+        defect: indicators would be misaligned)."""
+        _, ts_open, ts_close, *values = row
+        opens = self._series["ts_open"]
+        if self._count >= len(opens) or int(opens[self._count]) != ts_open:
+            raise BacktestError(
+                f"{self.symbol}: the kernel delivered a strategy bar opening at {ts_open} that "
+                "is not the next bar of its series; please report this"
+            )
+        self._count += 1
+        return Bar(self.symbol, ist_time(ts_open), ist_time(ts_close), *values)
+
+
+class SeriesView(TimelineView):
+    """One column of a store's bars: `[-1]` is the latest closed bar, slices and `len()`
+    work, `.values` is a NumPy copy; arithmetic and comparisons as `TimelineView`."""
+
+    def __init__(self, store: SeriesStore, name: str) -> None:
+        super().__init__(store, store.column(name), f"{store.name}.{name}")
 
 
 class InstrumentData:
-    """`self.data[symbol]`: series views of one instrument's strategy bars."""
+    """`self.data[symbol]`: series views of one instrument's bars."""
 
-    def __init__(self, store: BarStore) -> None:
+    def __init__(self, store: SeriesStore) -> None:
         self._store = store
 
     def __getattr__(self, name: str) -> SeriesView:
@@ -116,7 +141,7 @@ class InstrumentData:
         raise AttributeError(name)
 
     def __len__(self) -> int:
-        return len(self._store)
+        return self._store.visible()
 
 
 @dataclass(frozen=True)
@@ -172,6 +197,7 @@ __all__ = [
     "BarStore",
     "InstrumentData",
     "PositionView",
+    "SeriesStore",
     "SeriesView",
     "ist_time",
 ]

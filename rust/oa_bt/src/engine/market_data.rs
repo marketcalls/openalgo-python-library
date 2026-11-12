@@ -224,14 +224,6 @@ impl MarketData {
         })
     }
 
-    /// Every strategy bar of an instrument over the run, in time order (a bucket with no
-    /// base bar is absent, SPEC-07); `None` for an instrument the run does not have.
-    pub fn strategy_bars(&self, instrument: InstrumentId) -> Option<&BarsOut> {
-        self.instruments
-            .get(instrument.index())
-            .map(|data| &data.strategy)
-    }
-
     /// The strategy bar of an instrument that opens at `ts_open`, or `None` when no base
     /// bar of it was present.
     pub fn strategy_bar(&self, instrument: InstrumentId, ts_open: TsNanos) -> Option<StrategyBar> {

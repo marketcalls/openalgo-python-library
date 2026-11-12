@@ -1,14 +1,14 @@
-//! Condition strategies across the boundary: the strategy bars a condition is evaluated
-//! on, out to Python, and the condition arrays with their order templates, in from
-//! `openalgo/backtest/_conditions.py`, parsed into `oa_bt::engine::SignalArrays`.
+//! Condition strategies across the boundary: the condition arrays and their order
+//! templates from `openalgo/backtest/_conditions.py`, parsed into
+//! `oa_bt::engine::SignalArrays`. The arrays are aligned on the strategy bars that
+//! `Engine.strategy_bars` gives Python.
 //!
 //! The spec dict has the keys `instrument` (registration index), `product` (CNC, MIS
 //! or NRML), `bar_opens` (int64 UTC nanoseconds), `entry`, `exit`, `short`, `cover`
 //! (bool arrays, or None when not declared), `entry_order` and `short_order` (request
 //! dicts as `request.rs` reads them, or None) and `pyramiding`.
 
-use numpy::{IntoPyArray, PyReadonlyArray1};
-use oa_bt::data::resample::BarsOut;
+use numpy::PyReadonlyArray1;
 use oa_bt::engine::{EntrySignal, SignalArrays};
 use oa_bt::exec::InstrumentId;
 use oa_bt::model::Product;
@@ -59,23 +59,4 @@ pub(super) fn signal_arrays(dict: &Bound<'_, PyDict>) -> PyResult<SignalArrays> 
         cover: flags(dict, "cover")?,
         pyramiding: field(dict, "pyramiding")?,
     })
-}
-
-/// Strategy bars as a dict of NumPy arrays: `ts_open` and `ts_close` (int64 UTC
-/// nanoseconds), `open`, `high`, `low`, `close` (rupees) and `volume` (units).
-pub(super) fn strategy_bars<'py>(py: Python<'py>, bars: &BarsOut) -> PyResult<Bound<'py, PyDict>> {
-    let dict = PyDict::new_bound(py);
-    dict.set_item("ts_open", bars.ts_open.clone().into_pyarray_bound(py))?;
-    dict.set_item("ts_close", bars.ts_close.clone().into_pyarray_bound(py))?;
-    let prices = [
-        ("open", &bars.open),
-        ("high", &bars.high),
-        ("low", &bars.low),
-        ("close", &bars.close),
-        ("volume", &bars.volume),
-    ];
-    for (name, column) in prices {
-        dict.set_item(name, column.clone().into_pyarray_bound(py))?;
-    }
-    Ok(dict)
 }

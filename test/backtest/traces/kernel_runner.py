@@ -22,7 +22,7 @@ import pandas as pd
 import pytest
 
 import openalgo.backtest as bt
-from openalgo.backtest._conditions import run_bars
+from openalgo.backtest._conditions import strategy_frame
 from openalgo.backtest.calendar import Calendar
 from openalgo.backtest.reference import Instrument
 
@@ -178,7 +178,7 @@ def _condition_strategy(case: Case, log: dict[str, Any]) -> type:
     opens = pd.DatetimeIndex([parse_ist(text) for text in conditions["bar_opens_ist"]])
 
     def init(self):
-        frame = run_bars(self).frame()
+        frame = strategy_frame(self)
         log["bars"] = [_bar_row(time, bar) for time, bar in frame.iterrows()]
         for method in CONDITION_METHODS:
             declared = conditions[method]

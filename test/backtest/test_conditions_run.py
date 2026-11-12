@@ -16,7 +16,6 @@ from condition_runs import IST, assert_same_result, bars_from_closes, run, walk_
 
 import openalgo.backtest as bt
 from openalgo import ta
-from openalgo.backtest._expr import indicator
 from openalgo.backtest.errors import ConfigError
 
 STEPS = 9
@@ -215,6 +214,56 @@ def test_a_condition_strategy_trades_one_symbol():
         run(Pair, {"SBIN": steps(), "INFY": steps()}, end=at(9, 55))
 
 
+def test_a_condition_strategy_cannot_have_timers():
+    class Timed(Levels):
+        def init(self):
+            super().init()
+            self.at("09:30", lambda: None)
+
+    with pytest.raises(ConfigError, match="self.at or self.every"):
+        run_steps(Timed)
+
+
+# ----------------------------------------------------------------- other intervals
+
+
+def fifteen_minute_trend(strategy):
+    """True while the latest closed 15-minute bar closed above its open."""
+    bars = strategy.data["SBIN", "15m"]
+    return bars.close > bars.open
+
+
+class TrendConditions(bt.Strategy):
+    symbol, exchange, interval = "SBIN", "NSE", "5m"
+
+    def init(self):
+        trend = fifteen_minute_trend(self)
+        self.entry_when(trend, qty=10)
+        self.exit_when(~trend)
+
+
+class TrendOnBar(bt.Strategy):
+    """The same rule as `TrendConditions`, written as the on_bar of 14-strategy-api 4.1."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "5m"
+
+    def init(self):
+        self.trend = fifteen_minute_trend(self)
+
+    def on_bar(self, bar):
+        if self.position.is_flat and self.trend:
+            self.buy(qty=10)
+        elif self.position.is_long and ~self.trend:
+            self.exit()
+
+
+def test_a_view_of_another_interval_decides_as_on_bar_reads_it():
+    data = walk_bars([7, -3, -6, 2, 9, -8, -1, 5, -4])
+    with_conditions = run(TrendConditions, data)
+    assert len(with_conditions.fills) > 2
+    assert_same_result(with_conditions, run(TrendOnBar, data))
+
+
 # ----------------------------------------------------------------- arrays and functions
 
 FAST, SLOW = 5, 12
@@ -226,8 +275,8 @@ class EmaCross(bt.Strategy):
     symbol, exchange, interval = "SBIN", "NSE", "5m"
 
     def init(self):
-        fast = indicator(ta.ema, self.close, FAST)
-        slow = indicator(ta.ema, self.close, SLOW)
+        fast = self.I(ta.ema, self.close, FAST)
+        slow = self.I(ta.ema, self.close, SLOW)
         self.entry_when(fast.crossed_above(slow), qty=10, stop=bt.points(3))
         self.exit_when(fast.crossed_below(slow))
 
@@ -275,8 +324,8 @@ def test_from_arrays_shorts_and_covers_follow_the_short_branch():
         symbol, exchange, interval = "SBIN", "NSE", "5m"
 
         def init(self):
-            fast = indicator(ta.ema, self.close, FAST)
-            slow = indicator(ta.ema, self.close, SLOW)
+            fast = self.I(ta.ema, self.close, FAST)
+            slow = self.I(ta.ema, self.close, SLOW)
             self.short_when(fast.crossed_below(slow), qty=10)
             self.cover_when(fast.crossed_above(slow))
 

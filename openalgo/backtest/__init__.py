@@ -2,8 +2,11 @@
 
 Status: Phase 1 in progress. The foundations (Indian cost model, session calendars,
 resampling, reference tables, data layer) are complete. The event kernel runs a walking
-skeleton: `bt.Strategy` with `on_bar` and MARKET orders through `bt.backtest`; every part
-not built yet raises NotImplementedError naming its phase. `bt.live` is Phase 2.
+skeleton: `bt.Strategy` with `on_bar`, `self.I` indicators from `openalgo.ta`, other
+intervals (`self.data[symbol, "15m"]`), timers (`self.at`, `self.every`) and MARKET
+orders through `bt.backtest`, `Result.rerun` and the run manifest, and `bt.optimize`
+grids; every part not built yet raises NotImplementedError naming its phase. `bt.live`
+is Phase 2.
 
     import openalgo.backtest as bt
 
@@ -43,6 +46,7 @@ _SUBMODULES = (
 _EXPORTS = {
     "strategy": ("Strategy",),
     "result": ("Result",),
+    "_optimize_result": ("OptimizeResult",),
     "run": (
         "backtest",
         "live",
@@ -66,7 +70,7 @@ _EXPORTS = {
         "lock",
         "param",
     ),
-    "_expr": ("time_between", "weekday"),
+    "_clock": ("time_between", "weekday"),
 }
 _ATTRIBUTES = {name: module for module, names in _EXPORTS.items() for name in names}
 
