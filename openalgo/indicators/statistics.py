@@ -80,9 +80,9 @@ class LINREG(BaseIndicator):
 
 class LRSLOPE(BaseIndicator):
     """
-    Linear Regression Slope - matches TradingView exactly
+    Linear Regression Slope
     
-    TradingView calculates slope as the difference between consecutive 
+    The slope is the difference between consecutive 
     linear regression values divided by interval:
     linear_reg = linreg(close_price, len, 0)
     linear_reg_prev = linreg(close[1], len, 0)  
@@ -109,7 +109,7 @@ class LRSLOPE(BaseIndicator):
             slope = (period * sum_xy - sum_x * sum_y) / denominator
             intercept = (sum_y - slope * sum_x) / period
             
-            # Calculate value at offset position (TradingView uses offset 0 for current)
+            # Calculate value at offset position (offset 0 is the current bar)
             return slope * (period - 1 - offset) + intercept
         else:
             return y[-1 - offset] if offset < len(y) else y[-1]
@@ -117,16 +117,16 @@ class LRSLOPE(BaseIndicator):
     def calculate(self, data: Union[np.ndarray, pd.Series, list], 
                  period: int = 100, interval: int = 1) -> Union[np.ndarray, pd.Series]:
         """
-        Calculate Linear Regression Slope - matches TradingView exactly
+        Calculate Linear Regression Slope
         
         Parameters:
         -----------
         data : Union[np.ndarray, pd.Series, list]
             Price data (typically closing prices)
         period : int, default=100
-            Period for linear regression calculation (TradingView default)
+            Period for linear regression calculation
         interval : int, default=1
-            Interval divisor (TradingView uses timeframe interval)
+            Interval divisor (for example the bar interval)
             
         Returns:
         --------
@@ -134,7 +134,7 @@ class LRSLOPE(BaseIndicator):
             Slope values in the same format as input
         """
         validated_data, input_type, index = self.validate_input(data)
-        self.validate_period(period + 1, len(validated_data))  # Need period+1 for TradingView method
+        self.validate_period(period + 1, len(validated_data))  # Need period+1: the slope compares two windows
         
         if interval <= 0:
             raise ValueError(f"Interval must be positive, got {interval}")
@@ -159,16 +159,16 @@ def _calculate_linreg_value_standalone(data: np.ndarray, period: int, offset: in
         slope = (period * sum_xy - sum_x * sum_y) / denominator
         intercept = (sum_y - slope * sum_x) / period
         
-        # Calculate value at offset position (TradingView uses offset 0 for current)
+        # Calculate value at offset position (offset 0 is the current bar)
         return slope * (period - 1 - offset) + intercept
     else:
         return y[-1 - offset] if offset < len(y) else y[-1]
 
 
 @jit(nopython=True) 
-def _calculate_slope_tv(data: np.ndarray, period: int, interval: int = 1) -> np.ndarray:
+def _calculate_endpoint_slope(data: np.ndarray, period: int, interval: int = 1) -> np.ndarray:
     """
-    Calculate slope using TradingView method:
+    Calculate slope as the change of the regression end value between windows:
     slope = ((linreg(close, len, 0) - linreg(close[1], len, 0)) / interval)
     """
     n = len(data)
@@ -184,7 +184,7 @@ def _calculate_slope_tv(data: np.ndarray, period: int, interval: int = 1) -> np.
         linear_reg = _calculate_linreg_value_standalone(current_window, period, 0)
         linear_reg_prev = _calculate_linreg_value_standalone(prev_window, period, 0)
         
-        # Calculate slope as TradingView does
+        # Slope: change of the end value over `interval`
         result[i] = (linear_reg - linear_reg_prev) / interval
     
     return result
@@ -350,12 +350,10 @@ class BETA(BaseIndicator):
 
 class VAR(BaseIndicator):
     """
-    Variance - TradingView Pine Script v4 Implementation
+    Variance
     
     Calculates variance with support for both logarithmic returns and price modes,
     including EMA smoothing and z-score analysis with signal generation.
-    
-    TradingView Pine Script v4 Implementation by moot-al-cabal:
     
     Variance modes:
     - "LR" (Logarithmic Returns): variance of log(close/close[1])*100
@@ -364,8 +362,8 @@ class VAR(BaseIndicator):
     Formula:
     1. source = if mode == "LR" then log(close/close[1])*100 else close
     2. mean = sma(source, lookback)
-    3. For each i in lookback: array.push(s, pow(source[i]-mean, 2))
-    4. variance = array.sum(s) / (lookback-1)
+    3. squares = (source[i] - mean)^2 for each i in lookback
+    4. variance = sum(squares) / (lookback-1)
     5. stdev = sqrt(variance)
     6. ema_variance = ema(variance, ema_period)
     7. zscore = (variance - sma(variance, filter_lookback)) / stdev(variance, filter_lookback)
@@ -378,8 +376,8 @@ class VAR(BaseIndicator):
     
     @staticmethod
     @jit(nopython=True) 
-    def _calculate_variance_tv_optimized(data: np.ndarray, lookback: int, use_log_returns: bool) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Optimized TradingView Variance calculation with O(N) rolling statistics"""
+    def _calculate_variance_rolling(data: np.ndarray, lookback: int, use_log_returns: bool) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Variance with O(N) rolling statistics"""
         n = len(data)
         
         # Step 1: Calculate source based on mode
@@ -446,7 +444,7 @@ class VAR(BaseIndicator):
                  filter_lookback: int = 20, ema_length: int = 14,
                  return_components: bool = False) -> Union[np.ndarray, pd.Series, Tuple]:
         """
-        Calculate Variance - TradingView Pine Script v4 Implementation
+        Calculate Variance
         
         Parameters:
         -----------
@@ -549,11 +547,11 @@ class TSF(BaseIndicator):
 
 class MEDIAN(BaseIndicator):
     """
-    Rolling Median (Pine Script v6)
+    Rolling Median
     
-    Calculates the median value over a rolling window using percentile_nearest_rank.
-    Pine Script v6 Formula:
-    median = ta.percentile_nearest_rank(source, length, 50)
+    Calculates the median value over a rolling window using the nearest-rank percentile.
+    Formula:
+    median = percentile_nearest_rank(source, length, 50)
     
     This is equivalent to the 50th percentile of the data.
     """
@@ -589,17 +587,17 @@ class MEDIAN(BaseIndicator):
     
     def calculate(self, data: Union[np.ndarray, pd.Series, list], period: int = 3) -> Union[np.ndarray, pd.Series]:
         """
-        Calculate Rolling Median (Pine Script v6)
+        Calculate Rolling Median
         
-        Pine Script v6 Formula:
-        median = ta.percentile_nearest_rank(source, length, 50)
+        Formula:
+        median = percentile_nearest_rank(source, length, 50)
         
         Parameters:
         -----------
         data : Union[np.ndarray, pd.Series, list]
-            Price data (default hl2 in Pine Script)
+            Price data (commonly hl2)
         period : int, default=3
-            Period for median calculation (Pine Script default)
+            Period for median calculation
             
         Returns:
         --------
@@ -615,19 +613,19 @@ class MEDIAN(BaseIndicator):
 
 class MedianBands(BaseIndicator):
     """
-    Median Bands (Pine Script v6 Complete Implementation)
+    Median Bands
     
-    Implements the complete Pine Script v6 Median indicator with:
+    Median indicator with:
     - Median line using percentile_nearest_rank
     - ATR-based upper and lower bands
     - EMA of the median
     
-    Pine Script v6 Formula:
-    median = ta.percentile_nearest_rank(source, length, 50)
-    atr_ = atr_mult * ta.atr(atr_length)
+    Formula:
+    median = percentile_nearest_rank(source, length, 50)
+    atr_ = atr_mult * atr(atr_length)
     upper = median + atr_
     lower = median - atr_
-    median_ema = ta.ema(median, length)
+    median_ema = ema(median, length)
     """
     
     def __init__(self):
@@ -731,7 +729,7 @@ class MedianBands(BaseIndicator):
                             atr_mult: float = 2.0) -> Union[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray], 
                                                            Tuple[pd.Series, pd.Series, pd.Series, pd.Series]]:
         """
-        Calculate Median with Bands and EMA (Pine Script v6 Complete)
+        Calculate Median with Bands and EMA
         
         Parameters:
         -----------

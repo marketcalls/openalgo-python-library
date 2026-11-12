@@ -102,15 +102,15 @@ class CMO(BaseIndicator):
 
 class TRIX(BaseIndicator):
     """
-    TRIX - Triple Exponential Average - TradingView Pine Script v6 Implementation
+    TRIX - Triple Exponential Average
     
     TRIX is a momentum oscillator that displays the rate of change 
     of a triple exponentially smoothed moving average of the logarithm of price.
     
-    TradingView Formula (Pine Script v6):
-    out = 10000 * ta.change(ta.ema(ta.ema(ta.ema(math.log(close), length), length), length))
+    Formula:
+    out = 10000 * change(ema(ema(ema(log(close), length), length), length))
     
-    Default Parameters (TradingView):
+    Default Parameters:
     - length = 18
     """
     
@@ -120,14 +120,14 @@ class TRIX(BaseIndicator):
     
     def calculate(self, data: Union[np.ndarray, pd.Series, list], length: int = 18) -> Union[np.ndarray, pd.Series]:
         """
-        Calculate TRIX using TradingView Pine Script v6 formula
+        Calculate TRIX
         
         Parameters:
         -----------
         data : Union[np.ndarray, pd.Series, list]
             Price data (typically closing prices)
         length : int, default=18
-            Number of periods for EMA calculation (TradingView default)
+            Number of periods for EMA calculation
             
         Returns:
         --------
@@ -136,8 +136,8 @@ class TRIX(BaseIndicator):
             
         Notes:
         ------
-        This implementation matches TradingView Pine Script v6:
-        out = 10000 * ta.change(ta.ema(ta.ema(ta.ema(math.log(close), length), length), length))
+        Formula:
+        out = 10000 * change(ema(ema(ema(log(close), length), length), length))
         """
         validated_data, input_type, index = self.validate_input(data)
         self.validate_period(length, len(validated_data))
@@ -474,10 +474,10 @@ class PO(BaseIndicator):
 
 class DPO(BaseIndicator):
     """
-    Detrended Price Oscillator - matches TradingView exactly
+    Detrended Price Oscillator
     
     DPO attempts to eliminate the trend in prices by comparing a current or past price 
-    to a moving average. TradingView offers both centered and non-centered modes.
+    to a moving average. Both centered and non-centered modes are available.
     
     Centered Mode: DPO = Close[barsback] - SMA(Close, period)
     Non-Centered Mode: DPO = Close - SMA(Close, period)[barsback]
@@ -502,14 +502,14 @@ class DPO(BaseIndicator):
     def calculate(self, data: Union[np.ndarray, pd.Series, list], 
                  period: int = 21, is_centered: bool = False) -> Union[np.ndarray, pd.Series]:
         """
-        Calculate Detrended Price Oscillator - matches TradingView exactly
+        Calculate Detrended Price Oscillator
         
         Parameters:
         -----------
         data : Union[np.ndarray, pd.Series, list]
             Price data (typically closing prices)
         period : int, default=21
-            Length for SMA calculation (TradingView default)
+            Length for SMA calculation
         is_centered : bool, default=False
             When False (default): DPO = Close - SMA[barsback] (non-centered)
             When True: DPO = Close[barsback] - SMA (centered)
@@ -542,17 +542,17 @@ class AROONOSC(BaseIndicator):
     # @jit(nopython=True)  # Disabled for consistency with Aroon fix
     def _calculate_aroon_osc(high: np.ndarray, low: np.ndarray, period: int) -> np.ndarray:
         """
-        Aroon Oscillator calculation matching TradingView logic
+        Aroon Oscillator over a length + 1 bar lookback
         
-        TradingView formula:
-        upper = 100 * (highestbars(high, length+1) + length)/length
-        lower = 100 * (lowestbars(low, length+1) + length)/length
+        Formula (bars_since_* counts back from the current bar, 0 = this bar):
+        upper = 100 * (length - bars_since_highest(high, length+1))/length
+        lower = 100 * (length - bars_since_lowest(low, length+1))/length
         oscillator = upper - lower
         """
         n = len(high)
         result = np.full(n, np.nan)
         
-        # TradingView uses period + 1 bars for lookback
+        # The lookback is period + 1 bars
         lookback = period + 1
         
         for i in range(lookback - 1, n):
@@ -563,7 +563,7 @@ class AROONOSC(BaseIndicator):
             low_window = low[window_start:window_end]
             
             # Find positions of highest high and lowest low
-            # Use FIRST occurrence to match TradingView behavior
+            # Use the FIRST occurrence of a tied extreme (the oldest bar)
             highest_pos = 0
             lowest_pos = 0
             
@@ -577,8 +577,7 @@ class AROONOSC(BaseIndicator):
             bars_since_high = len(high_window) - 1 - highest_pos
             bars_since_low = len(low_window) - 1 - lowest_pos
             
-            # TradingView formula: 100 * (ta.highestbars + period) / period
-            # ta.highestbars returns -bars_since_high, so:
+            # 100 * (period - bars since the extreme) / period
             aroon_up = 100 * (period - bars_since_high) / period
             aroon_down = 100 * (period - bars_since_low) / period
             
@@ -786,14 +785,14 @@ class StochRSI(BaseIndicator):
 
 class RVI(BaseIndicator):
     """
-    Relative Vigor Index (TradingView Pine Script Implementation)
+    Relative Vigor Index
     
     The RVI compares the closing price to the trading range and smooths the result
     using SWMA (Symmetrically Weighted Moving Average).
     
     Formula: 
-    rvi = math.sum(ta.swma(close-open), len) / math.sum(ta.swma(high-low), len)
-    sig = ta.swma(rvi)
+    rvi = sum(swma(close-open), len) / sum(swma(high-low), len)
+    sig = swma(rvi)
     """
     
     def __init__(self):
@@ -810,7 +809,7 @@ class RVI(BaseIndicator):
                  close: Union[np.ndarray, pd.Series, list],
                  period: int = 10) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series]]:
         """
-        Calculate Relative Vigor Index (TradingView Pine Script Implementation)
+        Calculate Relative Vigor Index
         
         Parameters:
         -----------
@@ -829,8 +828,8 @@ class RVI(BaseIndicator):
         --------
         Union[Tuple[np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series]]
             (rvi, signal) in the same format as input
-            Formula: rvi = math.sum(ta.swma(close-open), len) / math.sum(ta.swma(high-low), len)
-                    sig = ta.swma(rvi)
+            Formula: rvi = sum(swma(close-open), len) / sum(swma(high-low), len)
+                    sig = swma(rvi)
         """
         open_data, input_type, index = self.validate_input(open_prices)
         high_data, _, _ = self.validate_input(high)
@@ -1031,14 +1030,14 @@ class CHOP(BaseIndicator):
 
 class KST(BaseIndicator):
     """
-    Know Sure Thing (KST) - matches TradingView exactly
+    Know Sure Thing (KST)
     
     KST is a momentum oscillator developed by Martin Pring based on the smoothed rate-of-change values.
     
-    TradingView Formula:
-    smaroc(roclen, smalen) => ta.sma(ta.roc(close, roclen), smalen)
+    Formula:
+    smaroc(roclen, smalen) = sma(roc(close, roclen), smalen)
     kst = smaroc(roclen1, smalen1) + 2 * smaroc(roclen2, smalen2) + 3 * smaroc(roclen3, smalen3) + 4 * smaroc(roclen4, smalen4)
-    sig = ta.sma(kst, siglen)
+    sig = sma(kst, siglen)
     """
     
     def __init__(self):
@@ -1108,18 +1107,18 @@ class KST(BaseIndicator):
                  smalen1: int = 10, smalen2: int = 10, smalen3: int = 10, smalen4: int = 15,
                  siglen: int = 9) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series]]:
         """
-        Calculate Know Sure Thing - matches TradingView exactly
+        Calculate Know Sure Thing
         
         Parameters:
         -----------
         data : Union[np.ndarray, pd.Series, list]
             Close price data
         roclen1, roclen2, roclen3, roclen4 : int
-            ROC Length periods (TradingView: roclen1, roclen2, roclen3, roclen4)
+            ROC Length periods
         smalen1, smalen2, smalen3, smalen4 : int
-            SMA Length periods for smoothing ROC (TradingView: smalen1, smalen2, smalen3, smalen4)
+            SMA Length periods for smoothing ROC
         siglen : int, default=9
-            Signal Line Length (TradingView: siglen)
+            Signal Line Length
             
         Returns:
         --------
@@ -1212,14 +1211,14 @@ class TSI(BaseIndicator):
 
 class VI(BaseIndicator):
     """
-    Vortex Indicator (VI+ and VI-) - TradingView Pine Script v6 Implementation
+    Vortex Indicator (VI+ and VI-)
     
     The Vortex Indicator identifies the start of a new trend or the continuation of an existing trend.
     
-    TradingView Pine Script v6 Formula:
-    VMP = math.sum( math.abs( high - low[1]), period_ )
-    VMM = math.sum( math.abs( low - high[1]), period_ )
-    STR = math.sum( ta.atr(1), period_ )
+    Formula:
+    VMP = sum(abs(high - low[1]), period)
+    VMM = sum(abs(low - high[1]), period)
+    STR = sum(atr(1), period)
     VIP = VMP / STR
     VIM = VMM / STR
     
@@ -1252,8 +1251,8 @@ class VI(BaseIndicator):
         return atr
     
     @staticmethod
-    def _calculate_vi_tv_optimized(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int) -> Tuple[np.ndarray, np.ndarray]:
-        """Optimized TradingView Pine Script v6 Vortex Indicator calculation using O(N) rolling sums"""
+    def _calculate_vi_rolling(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int) -> Tuple[np.ndarray, np.ndarray]:
+        """Vortex Indicator calculation using O(N) rolling sums"""
         n = len(close)
         vi_plus = np.full(n, np.nan)
         vi_minus = np.full(n, np.nan)
@@ -1300,7 +1299,7 @@ class VI(BaseIndicator):
                  close: Union[np.ndarray, pd.Series, list],
                  period: int = 14) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series]]:
         """
-        Calculate Vortex Indicator - TradingView Pine Script v6 Implementation
+        Calculate Vortex Indicator
         
         Parameters:
         -----------
@@ -1311,7 +1310,7 @@ class VI(BaseIndicator):
         close : Union[np.ndarray, pd.Series, list]
             Closing prices
         period : int, default=14
-            Period for VI calculation (TradingView default)
+            Period for VI calculation
             
         Returns:
         --------
@@ -1320,10 +1319,10 @@ class VI(BaseIndicator):
             
         Notes:
         ------
-        TradingView Pine Script v6 Formula:
-        VMP = math.sum( math.abs( high - low[1]), period_ )
-        VMM = math.sum( math.abs( low - high[1]), period_ )
-        STR = math.sum( ta.atr(1), period_ )
+        Formula:
+        VMP = sum(abs(high - low[1]), period)
+        VMM = sum(abs(low - high[1]), period)
+        STR = sum(atr(1), period)
         VIP = VMP / STR
         VIM = VMM / STR
         """
@@ -1342,12 +1341,12 @@ class VI(BaseIndicator):
 
 class GatorOscillator(BaseIndicator):
     """
-    Gator Oscillator (Bill Williams) - matches TradingView exactly
+    Gator Oscillator (Bill Williams)
     
     The Gator Oscillator shows the convergence/divergence of the Alligator lines.
     Based on the Bill Williams Alligator indicator with offset.
     
-    TradingView Formula:
+    Formula:
     jaw = offset(rma(hl2, 13), 8)
     teeth = offset(rma(hl2, 8), 5)  
     lips = offset(rma(hl2, 5), 3)
@@ -1362,7 +1361,7 @@ class GatorOscillator(BaseIndicator):
     @jit(nopython=True)
     def _calculate_rma(data: np.ndarray, period: int) -> np.ndarray:
         """
-        Calculate RMA (Running Moving Average) - TradingView's rma() function
+        Calculate RMA (Running Moving Average), seeded with the SMA of the first `period` values
         This is equivalent to SMMA/SMMA/EMA with alpha = 1/period
         """
         n = len(data)
@@ -1384,8 +1383,7 @@ class GatorOscillator(BaseIndicator):
     @jit(nopython=True)
     def _apply_offset(data: np.ndarray, offset: int) -> np.ndarray:
         """
-        Apply TradingView offset function - shifts data forward by offset periods
-        TradingView offset(series, offset) shifts the series forward
+        Shift the series forward by `offset` periods (the first `offset` values are NaN)
         """
         n = len(data)
         result = np.full(n, np.nan)
@@ -1400,7 +1398,7 @@ class GatorOscillator(BaseIndicator):
                  low: Union[np.ndarray, pd.Series, list],
                  jaw_period: int = 13, teeth_period: int = 8, lips_period: int = 5) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series]]:
         """
-        Calculate Gator Oscillator - matches TradingView exactly
+        Calculate Gator Oscillator
         
         Parameters:
         -----------
@@ -1409,11 +1407,11 @@ class GatorOscillator(BaseIndicator):
         low : Union[np.ndarray, pd.Series, list]
             Low prices
         jaw_period : int, default=13
-            Period for Jaw line (TradingView default)
+            Period for Jaw line
         teeth_period : int, default=8
-            Period for Teeth line (TradingView default)
+            Period for Teeth line
         lips_period : int, default=5
-            Period for Lips line (TradingView default)
+            Period for Lips line
             
         Returns:
         --------
@@ -1435,25 +1433,24 @@ class GatorOscillator(BaseIndicator):
 
 class STC(BaseIndicator):
     """
-    Schaff Trend Cycle (STC) - TradingView Pine Script v4 Implementation
+    Schaff Trend Cycle (STC)
     
     STC is a cyclical oscillator that combines slow stochastics and the MACD.
-    Based on TradingView Pine Script v4 implementation by Alex Orekhov (everget).
     
-    TradingView Formula:
-    macd = ema(src, fastLength) - ema(src, slowLength)
-    k = nz(stoch(macd, macd, macd, cycleLength))
-    d = ema(k, d1Length)
-    kd = nz(stoch(d, d, d, cycleLength))
-    stc = ema(kd, d2Length)
-    stc := max(min(stc, 100), 0)
+    Formula:
+    macd = ema(src, fast_length) - ema(src, slow_length)
+    k = stoch(macd, macd, macd, cycle_length), 0 when undefined
+    d = ema(k, d1_length)
+    kd = stoch(d, d, d, cycle_length), 0 when undefined
+    stc = ema(kd, d2_length)
+    stc = max(min(stc, 100), 0)
     
-    Default Parameters (TradingView):
-    - fastLength = 23 (MACD Fast Length)
-    - slowLength = 50 (MACD Slow Length)
-    - cycleLength = 10 (Cycle Length)
-    - d1Length = 3 (1st %D Length)
-    - d2Length = 3 (2nd %D Length)
+    Default Parameters:
+    - fast_length = 23 (MACD Fast Length)
+    - slow_length = 50 (MACD Slow Length)
+    - cycle_length = 10 (Cycle Length)
+    - d1_length = 3 (1st %D Length)
+    - d2_length = 3 (2nd %D Length)
     """
     
     def __init__(self):
@@ -1462,7 +1459,7 @@ class STC(BaseIndicator):
     @staticmethod
     @jit(nopython=True)
     def _calculate_stochastic(data: np.ndarray, period: int) -> np.ndarray:
-        """Calculate stochastic oscillator exactly like TradingView stoch() function"""
+        """Stochastic of one series: 100 * (x - lowest) / (highest - lowest) over `period`, 50 with no range"""
         n = len(data)
         result = np.full(n, np.nan)
         
@@ -1492,22 +1489,22 @@ class STC(BaseIndicator):
                  fast_length: int = 23, slow_length: int = 50, cycle_length: int = 10, 
                  d1_length: int = 3, d2_length: int = 3) -> Union[np.ndarray, pd.Series]:
         """
-        Calculate Schaff Trend Cycle using TradingView Pine Script v4 formula
+        Calculate Schaff Trend Cycle
         
         Parameters:
         -----------
         data : Union[np.ndarray, pd.Series, list]
             Price data (typically closing prices)
         fast_length : int, default=23
-            MACD Fast Length (TradingView fastLength)
+            MACD Fast Length
         slow_length : int, default=50
-            MACD Slow Length (TradingView slowLength)
+            MACD Slow Length
         cycle_length : int, default=10
-            Cycle Length for stochastic calculations (TradingView cycleLength)
+            Cycle Length for stochastic calculations
         d1_length : int, default=3
-            1st %D Length - EMA smoothing period (TradingView d1Length)
+            1st %D Length - EMA smoothing period
         d2_length : int, default=3
-            2nd %D Length - EMA smoothing period (TradingView d2Length)
+            2nd %D Length - EMA smoothing period
             
         Returns:
         --------
@@ -1516,13 +1513,13 @@ class STC(BaseIndicator):
             
         Notes:
         ------
-        This implementation matches TradingView Pine Script v4:
-        macd = ema(src, fastLength) - ema(src, slowLength)
-        k = nz(stoch(macd, macd, macd, cycleLength))
-        d = ema(k, d1Length)
-        kd = nz(stoch(d, d, d, cycleLength))
-        stc = ema(kd, d2Length)
-        stc := max(min(stc, 100), 0)
+        Formula:
+        macd = ema(src, fast_length) - ema(src, slow_length)
+        k = stoch(macd, macd, macd, cycle_length), 0 when undefined
+        d = ema(k, d1_length)
+        kd = stoch(d, d, d, cycle_length), 0 when undefined
+        stc = ema(kd, d2_length)
+        stc = max(min(stc, 100), 0)
         """
         validated_data, input_type, index = self.validate_input(data)
         
@@ -1532,15 +1529,15 @@ class STC(BaseIndicator):
 
 class Coppock(BaseIndicator):
     """
-    Coppock Curve - TradingView Pine Script v6 Implementation
+    Coppock Curve
     
     The Coppock Curve is a long-term momentum indicator primarily used for major stock indices.
     It's calculated as a Weighted Moving Average of the sum of Rate of Change values over two periods.
     
     Formula: 
-    curve = ta.wma(ta.roc(source, longRoCLength) + ta.roc(source, shortRoCLength), wmaLength)
+    curve = wma(roc(source, long_roc_length) + roc(source, short_roc_length), wma_length)
     
-    Default TradingView Parameters:
+    Default Parameters:
     - WMA Length: 10
     - Long RoC Length: 14  
     - Short RoC Length: 11
@@ -1648,11 +1645,11 @@ class Coppock(BaseIndicator):
         data : Union[np.ndarray, pd.Series, list]
             Price data (typically closing prices)
         wma_length : int, default=10
-            WMA Length for final smoothing (TradingView default)
+            WMA Length for final smoothing
         long_roc_length : int, default=14
-            Long RoC Length (TradingView default)  
+            Long RoC Length
         short_roc_length : int, default=11
-            Short RoC Length (TradingView default)
+            Short RoC Length
             
         Returns:
         --------
@@ -1661,8 +1658,8 @@ class Coppock(BaseIndicator):
             
         Notes:
         ------
-        TradingView Pine Script v6 Formula:
-        curve = ta.wma(ta.roc(source, longRoCLength) + ta.roc(source, shortRoCLength), wmaLength)
+        Formula:
+        curve = wma(roc(source, long_roc_length) + roc(source, short_roc_length), wma_length)
         
         Interpretation:
         - Values above zero indicate bullish momentum

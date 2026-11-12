@@ -424,11 +424,14 @@ def t3(data, period, v_factor):
     return gd(gd(gd(data)))
 
 
-def kama_tv(data, length, fast_length, slow_length):
+def kama_full_window(data, length, fast_length, slow_length):
+    """KAMA with the efficiency ratio's volatility sum recomputed over the full
+    `length` window at every bar; the previous value is the source at the first
+    bar and after a NaN output."""
     data = _f(data)
     length, fast_length, slow_length = int(length), int(fast_length), int(slow_length)
     if HAVE_RUST:
-        return _rs.kama_tv(data, length, fast_length, slow_length)
+        return _rs.kama_full_window(data, length, fast_length, slow_length)
     n = data.size
     out = np.full(n, np.nan)
     if length <= 0 or n < length + 1:
@@ -577,7 +580,7 @@ def elderray(high, low, close, period):
     return high - e, low - e
 
 
-# Fisher Transform as TradingView publishes it:
+# Fisher Transform:
 #   value = 0.66 * ((price - lowest) / (highest - lowest) - 0.5) + 0.67 * value[1]
 #   fisher = 0.5 * ln((1 + value) / (1 - value)) + 0.5 * fisher[1]
 # with value held at +-0.999 once it passes +-0.99, so the logarithm stays finite.
@@ -1002,8 +1005,7 @@ def sar(high, low, acceleration, maximum):
     The first bar that has a high and a low starts a long trend with stop = low
     and extreme point EP = high. No close series is taken, so the first trend
     is not read off the first two closes: it is always long, and a falling
-    market reverses it on the next bar. Every later bar, in the order of
-    TradingView's `ta.sar` reference script:
+    market reverses it on the next bar. Every later bar, in this order:
 
     1. stop = stop + AF * (EP - stop).
     2. Reversal, tested against that unclamped stop with strict comparisons.
@@ -1462,8 +1464,7 @@ def rvi_vigor(open_, high, low, close, period):
     """Relative Vigor Index: returns (rvi, signal).
 
     rvi = sum(swma(close - open), period) / sum(swma(high - low), period) and
-    signal = swma(rvi) (John Ehlers, "Relative Vigor Index", Stocks &
-    Commodities, 2002; the formula TradingView publishes). The first value
+    signal = swma(rvi) (John Ehlers, "Relative Vigor Index", 2002). The first value
     is at bar period + 2, the first signal three bars later. A bar is NaN while
     any bar feeding its window is NaN.
     """
@@ -1753,7 +1754,7 @@ def vwma_strict(values, volume, length):
 
 
 # ---------------------------------------------------------------------------
-# TA-Lib-compatible additions (new indicators; match TA-Lib exactly by definition)
+# Price transforms, rate-of-change variants and other single-formula indicators
 # ---------------------------------------------------------------------------
 
 def avgprice(open_, high, low, close):
@@ -1787,7 +1788,7 @@ def midprice(high, low, period):
 
 
 def mom(data, period):
-    """Momentum = data - data[period] (TA-Lib MOM)."""
+    """Momentum = data - data[period]."""
     data = _f(data)
     period = int(period)
     n = data.size
@@ -1825,20 +1826,22 @@ def rocr100(data, period):
 
 
 def apo(data, fast_period, slow_period, ma_type):
-    """Absolute Price Oscillator = MA(fast) - MA(slow) (TA-Lib APO; matype SMA/EMA)."""
+    """Absolute Price Oscillator = MA(fast) - MA(slow), with ma_type SMA or EMA."""
     data = _f(data)
     if ma_type.upper() == "EMA":
         return ema(data, int(fast_period)) - ema(data, int(slow_period))
     return _win_mean(data, int(fast_period)) - _win_mean(data, int(slow_period))
 
 
-# --- TA-Lib-faithful directional-movement family (matches TA-Lib seeding) ---
+# --- Directional movement as Wilder running sums: seeded with the plain sum of the
+# first period-1 one-bar movements, then sum = sum - sum/period + today. A different
+# seed and warm-up from adx(), which averages the first `period` bars. ---
 
 def plus_dm(high, low, period):
     high, low = _f(high), _f(low)
     period = int(period)
     if HAVE_RUST:
-        return _rs.plus_dm_talib(high, low, period)
+        return _rs.plus_dm_wilder_sum(high, low, period)
     n = high.size
     out = np.full(n, np.nan)
     if period == 0 or n < period:
@@ -1863,7 +1866,7 @@ def minus_dm(high, low, period):
     high, low = _f(high), _f(low)
     period = int(period)
     if HAVE_RUST:
-        return _rs.minus_dm_talib(high, low, period)
+        return _rs.minus_dm_wilder_sum(high, low, period)
     n = high.size
     out = np.full(n, np.nan)
     if period == 0 or n < period:
@@ -1888,7 +1891,7 @@ def dx(high, low, close, period):
     high, low, close = _f(high), _f(low), _f(close)
     period = int(period)
     if HAVE_RUST:
-        return _rs.dx_talib(high, low, close, period)
+        return _rs.dx_wilder_sum(high, low, close, period)
     n = close.size
     out = np.full(n, np.nan)
     if period == 0 or n < period + 1:
@@ -1919,11 +1922,11 @@ def dx(high, low, close, period):
     return out
 
 
-def adx_talib(high, low, close, period):
+def adx_wilder_sum(high, low, close, period):
     high, low, close = _f(high), _f(low), _f(close)
     period = int(period)
     if HAVE_RUST:
-        return _rs.adx_talib(high, low, close, period)
+        return _rs.adx_wilder_sum(high, low, close, period)
     n = close.size
     out = np.full(n, np.nan)
     if period == 0 or n < 2 * period:
@@ -1970,8 +1973,8 @@ def adxr(high, low, close, period):
     high, low, close = _f(high), _f(low), _f(close)
     period = int(period)
     if HAVE_RUST:
-        return _rs.adxr_talib(high, low, close, period)
-    a = adx_talib(high, low, close, period)
+        return _rs.adxr_wilder_sum(high, low, close, period)
+    a = adx_wilder_sum(high, low, close, period)
     n = a.size
     out = np.full(n, np.nan)
     if period == 0:
@@ -2142,7 +2145,7 @@ def _win_mean(data, period):
 
 
 def _win_std(data, period):
-    """Per-window population std; NaN if the window contains any NaN (TV ta.stdev)."""
+    """Per-window population std (divides by N); NaN if the window contains any NaN."""
     data = _f(data)
     if HAVE_RUST:
         return _rs.win_std(data, int(period))
@@ -2310,7 +2313,7 @@ def natr(high, low, close, period):
 
 
 def rvi_volatility(data, stdev_period, rsi_period):
-    """Relative Volatility Index (Donald Dorsey, Stocks & Commodities, 1993), 0 to 100.
+    """Relative Volatility Index (Donald Dorsey, 1993), 0 to 100.
 
     s = population standard deviation of the last `stdev_period` values.
     A bar that closes above the bar before puts s on the up side, a bar that
@@ -2446,8 +2449,8 @@ def chande_kroll_stop(high, low, close, p, x, q):
 
 # FRAMA constants (John Ehlers, Fractal Adaptive Moving Average, 2005):
 # the EMA weight is exp(_FRAMA_DECAY * (dimension - 1)), never below
-# _FRAMA_MIN_ALPHA. The TradingView script this follows then takes a trailing
-# mean of the filter over _FRAMA_SMOOTHING bars.
+# _FRAMA_MIN_ALPHA. The filter is then smoothed by a trailing mean over
+# _FRAMA_SMOOTHING bars.
 _FRAMA_DECAY = -4.6
 _FRAMA_MIN_ALPHA = 0.01
 _FRAMA_SMOOTHING = 5

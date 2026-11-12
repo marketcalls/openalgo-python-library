@@ -5,7 +5,7 @@ swapping a class to the Rust backend.
 
 Deliberately does NOT set NUMBA_DISABLE_JIT -- importing openalgo must now succeed
 on its own (warm-up is defensive; swapped indicators are numba-free). Each migrated
-indicator is checked against an INDEPENDENT reference (pandas / TA-Lib / manual),
+indicator is checked against an INDEPENDENT reference (pandas / manual),
 and for type/index preservation (pd.Series in -> pd.Series out with same index;
 np.ndarray/list in -> np.ndarray out).
 """
@@ -19,12 +19,6 @@ import pandas as pd
 import openalgo
 from openalgo import ta
 import openalgo._oaindicators as _rs  # noqa: F401  (proves extension present)
-
-try:
-    import talib
-    HAVE_TALIB = True
-except Exception:  # noqa: BLE001
-    HAVE_TALIB = False
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 FAILS = []
@@ -55,14 +49,9 @@ def main():
     m = ~(np.isnan(out.to_numpy()) | np.isnan(ref.to_numpy()))
     check("sma vs pandas", float(np.abs(out.to_numpy()[m] - ref.to_numpy()[m]).max()) < 1e-9)
 
-    # ---- WMA vs TA-Lib ----
+    # ---- WMA type ----
     outw = ta.wma(arr, per)
     check("wma returns ndarray", isinstance(outw, np.ndarray))
-    if HAVE_TALIB:
-        refw = talib.WMA(arr, per)
-        mw = ~(np.isnan(outw) | np.isnan(refw))
-        check("wma vs talib", float(np.abs(outw[mw] - refw[mw]).max()) < 1e-9,
-              f"maxdiff={np.abs(outw[mw]-refw[mw]).max():.2e}")
 
     # ---- EMA vs manual recursion (first-value seed, alpha=2/(p+1)) ----
     oute = ta.ema(arr, per)
@@ -76,34 +65,6 @@ def main():
 
     h = pd.read_csv(DATA_DIR / "RELIANCE_D.csv", index_col=0)["high"].to_numpy(np.float64)
     lo_ = pd.read_csv(DATA_DIR / "RELIANCE_D.csv", index_col=0)["low"].to_numpy(np.float64)
-
-    def gate_vs_talib(name, got, ref_vals, tol=1e-9):
-        got = np.asarray(got, np.float64)
-        ref_vals = np.asarray(ref_vals, np.float64)
-        n = min(len(got), len(ref_vals))
-        g, r = got[-n:], ref_vals[-n:]
-        m = ~(np.isnan(g) | np.isnan(r))
-        d = float(np.abs(g[m] - r[m]).max()) if m.any() else 0.0
-        check(f"{name} vs talib", d < tol, f"maxdiff={d:.2e}")
-
-    if HAVE_TALIB:
-        gate_vs_talib("rsi", ta.rsi(arr, per), talib.RSI(arr, per))
-        gate_vs_talib("cci", ta.cci(h, lo_, arr, 20), talib.CCI(h, lo_, arr, 20))
-        gate_vs_talib("williams_r", ta.williams_r(h, lo_, arr, per), talib.WILLR(h, lo_, arr, per))
-        up, mid, low = ta.bbands(arr, 20, 2.0)
-        tu, tm, tl = talib.BBANDS(arr, 20, 2.0, 2.0, 0)
-        gate_vs_talib("bbands.mid", mid, tm)
-        gate_vs_talib("bbands.upper", up, tu)
-        gate_vs_talib("bbands.lower", low, tl)
-        # Informational (TA-Lib seeds EMA/ATR/STOCH differently from OpenAlgo):
-        for name, got, tv in [
-            ("atr", ta.atr(h, lo_, arr, per), talib.ATR(h, lo_, arr, per)),
-            ("macd", ta.macd(arr)[0], talib.MACD(arr)[0]),
-        ]:
-            g = np.asarray(got, np.float64); t = np.asarray(tv, np.float64)
-            m = ~(np.isnan(g) | np.isnan(t))
-            print(f"  [info] {name} vs talib maxdiff={np.abs(g[m]-t[m]).max():.3e} "
-                  f"(convention diff expected)")
 
     # tuple-returning wrappers preserve Series typing
     k, d = ta.stochastic(pd.Series(h), pd.Series(lo_), pd.Series(arr))

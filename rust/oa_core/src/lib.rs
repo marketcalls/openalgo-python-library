@@ -791,10 +791,19 @@ pub fn vidya(data: &[f64], period: usize, alpha: f64) -> Vec<f64> {
     result
 }
 
-/// KAMA (TradingView variant). er = |chg(length)| / sum(|chg(1)|, length); each bar
-/// recomputes the volatility window. prev = src when first/NaN (nz). Matches the
-/// `_calculate_kama_tv` reference bit-for-bit.
-pub fn kama_tv(data: &[f64], length: usize, fast_length: usize, slow_length: usize) -> Vec<f64> {
+/// KAMA with integer EMA lengths and a full-window efficiency ratio.
+/// er = |chg(length)| / sum(|chg(1)|, length), the volatility sum recomputed over
+/// the whole window at every bar (no running sum); alpha = (er * (fast_alpha -
+/// slow_alpha) + slow_alpha)^2 with fast_alpha = 2 / (fast_length + 1) and
+/// slow_alpha = 2 / (slow_length + 1). The previous value is the source itself at
+/// the first bar and after a NaN output. Matches the
+/// `_calculate_kama_full_window` reference bit-for-bit.
+pub fn kama_full_window(
+    data: &[f64],
+    length: usize,
+    fast_length: usize,
+    slow_length: usize,
+) -> Vec<f64> {
     let n = data.len();
     let mut result = nan_vec(n);
     if length == 0 || n < length + 1 {
@@ -822,7 +831,8 @@ pub fn kama_tv(data: &[f64], length: usize, fast_length: usize, slow_length: usi
     result
 }
 
-/// Supertrend (TradingView band-flip). Returns (supertrend, direction) where
+/// Supertrend (hl2 +- multiplier * ATR bands that flip on a close through the
+/// active band). Returns (supertrend, direction) where
 /// direction is -1 uptrend / +1 downtrend. ATR via Wilder smoothing.
 pub fn supertrend(
     high: &[f64],
@@ -943,7 +953,7 @@ pub fn chande_kroll_stop(
 /// Bars of the trailing mean FRAMA applies to its filter.
 const FRAMA_SMOOTHING: usize = 5;
 
-/// FRAMA (TradingView fractal adaptive MA on hl2, with a trailing 5-bar mean).
+/// FRAMA (fractal adaptive MA on hl2, with a trailing 5-bar mean).
 /// Uses log/exp so parity is transcendental-tolerance, not bit-exact.
 ///
 /// Bars are counted from the first one that has a midpoint (high + low) / 2.
@@ -1401,8 +1411,7 @@ pub fn session_vwap(source: &[f64], volume: &[f64], starts: &[f64]) -> (Vec<f64>
 /// is taken, so the first trend is not read off the first two closes: it is
 /// always long, and a falling market reverses it on the next bar.
 ///
-/// Every later bar, in this order (the order of TradingView's `ta.sar`
-/// reference script):
+/// Every later bar, in this order:
 /// 1. stop = stop + AF * (EP - stop).
 /// 2. Reversal, tested against that unclamped stop with strict comparisons.
 ///    Long and stop > low: go short, stop = max(high, EP), EP = low, AF =
@@ -1489,7 +1498,7 @@ pub fn sar(high: &[f64], low: &[f64], acceleration: f64, maximum: f64) -> (Vec<f
 }
 
 /// On Balance Volume. obv[0]=0; cumulative sign(change)*volume where a flat close
-/// (close==prev) contributes 0 -- matching TradingView ta.obv and TA-Lib OBV.
+/// (close==prev) contributes 0.
 pub fn obv(close: &[f64], volume: &[f64]) -> Vec<f64> {
     let n = close.len();
     let mut r = vec![0.0f64; n];
@@ -1671,7 +1680,7 @@ pub fn bop(open_: &[f64], high: &[f64], low: &[f64], close: &[f64]) -> Vec<f64> 
     r
 }
 
-/// Fisher Transform (TradingView). Input is the price source (hl2). Returns
+/// Fisher Transform. Input is the price source (hl2). Returns
 /// (fisher, trigger). Per bar, with the highest and lowest of the last `length`
 /// values: value = 0.66 * ((price - lowest) / (highest - lowest) - 0.5) + 0.67 *
 /// value[1], held at +-0.999 beyond +-0.99, and fisher = 0.5 * ln((1 + value) /
@@ -1929,7 +1938,8 @@ pub fn tsf(data: &[f64], period: usize) -> Vec<f64> {
     out
 }
 
-/// Linear-regression slope (TradingView): (endval(cur) - endval(prev)) / interval.
+/// Linear-regression slope as the change of the regression end value between two
+/// consecutive windows: (endval(cur) - endval(prev)) / interval.
 pub fn lrslope(data: &[f64], period: usize, interval: f64) -> Vec<f64> {
     let n = data.len();
     let mut out = nan_vec(n);
@@ -2123,7 +2133,10 @@ pub fn aroon(high: &[f64], low: &[f64], period: usize) -> (Vec<f64>, Vec<f64>) {
     (up, down)
 }
 
-/// Williams Fractals (up, down) booleans, TradingView frontier patterns.
+/// Williams Fractals (up, down) booleans. An up fractal needs the `n` highs before
+/// the centre strictly below its high; after it, any of five patterns qualifies:
+/// `n` strictly lower highs, or 1 to 4 highs that do not exceed the centre high
+/// followed by `n` strictly lower highs. Down fractals mirror this on the lows.
 pub fn williams_fractals(high: &[f64], low: &[f64], n: usize) -> (Vec<bool>, Vec<bool>) {
     let length = high.len();
     let mut fu = vec![false; length];
@@ -2436,9 +2449,9 @@ fn swma_vec(data: &[f64]) -> Vec<f64> {
 }
 
 /// Relative Vigor Index (vigor): sum(swma(c-o))/sum(swma(h-l)) over period; signal=swma.
-/// Definition: John Ehlers, "Relative Vigor Index", Stocks & Commodities, 2002
-/// (the form TradingView publishes as `math.sum(ta.swma(close-open), len) /
-/// math.sum(ta.swma(high-low), len)`).
+/// Definition: John Ehlers, "Relative Vigor Index", 2002:
+/// sum(swma(close - open), len) / sum(swma(high - low), len), where swma is the
+/// symmetric 4-bar weighted mean (1, 2, 2, 1) / 6.
 ///
 /// Window-local in NaN, like the rolling reductions above: `rvi[i]` is NaN while
 /// any bar feeding its window is NaN. All NaN when the window does not fit the
@@ -2686,7 +2699,7 @@ pub fn ultosc(
     out
 }
 
-/// Chaikin A/D Oscillator (TA-Lib ADOSC) = EMA(AD, fast) - EMA(AD, slow), where AD
+/// Chaikin A/D Oscillator (ADOSC) = EMA(AD, fast) - EMA(AD, slow), where AD
 /// is the cumulative accumulation/distribution line. Single-pass AD, then two EMAs.
 pub fn adosc(
     high: &[f64],
@@ -2719,13 +2732,15 @@ pub fn adosc(
 }
 
 // ---------------------------------------------------------------------------
-// TA-Lib-faithful directional-movement family (exact TA-Lib seeding/smoothing).
-// These intentionally replicate TA-Lib (NOT OpenAlgo's TradingView-seeded adx).
+// Directional movement as Wilder running sums. Each sum is seeded with the plain
+// sum of the first `period - 1` one-bar movements (bars 1..period-1) and then
+// updated as sum = sum - sum / period + today. This is a different seed and warm-up
+// from `adx`, which averages the first `period` bars (bar 0 included).
 // ---------------------------------------------------------------------------
 
-/// TA-Lib PLUS_DM: Wilder running sum of +DM1. First value at index period-1
+/// PLUS_DM: Wilder running sum of +DM1. First value at index period-1
 /// = sum of +DM1 over bars 1..period-1; then dm = dm - dm/period + +DM1.
-pub fn plus_dm_talib(high: &[f64], low: &[f64], period: usize) -> Vec<f64> {
+pub fn plus_dm_wilder_sum(high: &[f64], low: &[f64], period: usize) -> Vec<f64> {
     let n = high.len();
     let mut out = nan_vec(n);
     if period == 0 || n < period {
@@ -2751,8 +2766,8 @@ pub fn plus_dm_talib(high: &[f64], low: &[f64], period: usize) -> Vec<f64> {
     out
 }
 
-/// TA-Lib MINUS_DM (symmetric to plus_dm_talib).
-pub fn minus_dm_talib(high: &[f64], low: &[f64], period: usize) -> Vec<f64> {
+/// MINUS_DM (symmetric to plus_dm_wilder_sum).
+pub fn minus_dm_wilder_sum(high: &[f64], low: &[f64], period: usize) -> Vec<f64> {
     let n = high.len();
     let mut out = nan_vec(n);
     if period == 0 || n < period {
@@ -2778,9 +2793,9 @@ pub fn minus_dm_talib(high: &[f64], low: &[f64], period: usize) -> Vec<f64> {
     out
 }
 
-/// TA-Lib DX. First value at index period (Wilder-smoothed +DI/-DI then
+/// DX. First value at index period (Wilder-summed +DI/-DI then
 /// 100*|+DI - -DI|/(+DI + -DI)).
-pub fn dx_talib(high: &[f64], low: &[f64], close: &[f64], period: usize) -> Vec<f64> {
+pub fn dx_wilder_sum(high: &[f64], low: &[f64], close: &[f64], period: usize) -> Vec<f64> {
     let n = high.len();
     let mut out = nan_vec(n);
     if period == 0 || n < period + 1 {
@@ -2817,9 +2832,9 @@ pub fn dx_talib(high: &[f64], low: &[f64], close: &[f64], period: usize) -> Vec<
     out
 }
 
-/// TA-Lib ADX. First value at index 2*period-1 (mean of `period` DX values),
-/// then Wilder recursion adx = (adx*(period-1) + dx)/period.
-pub fn adx_talib(high: &[f64], low: &[f64], close: &[f64], period: usize) -> Vec<f64> {
+/// ADX over Wilder-summed DX. First value at index 2*period-1 (mean of `period`
+/// DX values), then Wilder recursion adx = (adx*(period-1) + dx)/period.
+pub fn adx_wilder_sum(high: &[f64], low: &[f64], close: &[f64], period: usize) -> Vec<f64> {
     let n = high.len();
     let mut out = nan_vec(n);
     if period == 0 || n < 2 * period {
@@ -2868,10 +2883,10 @@ pub fn adx_talib(high: &[f64], low: &[f64], close: &[f64], period: usize) -> Vec
     out
 }
 
-/// TA-Lib ADXR = (ADX[i] + ADX[i-(period-1)]) / 2.
-pub fn adxr_talib(high: &[f64], low: &[f64], close: &[f64], period: usize) -> Vec<f64> {
+/// ADXR = (ADX[i] + ADX[i-(period-1)]) / 2, over `adx_wilder_sum`.
+pub fn adxr_wilder_sum(high: &[f64], low: &[f64], close: &[f64], period: usize) -> Vec<f64> {
     let n = high.len();
-    let adx = adx_talib(high, low, close, period);
+    let adx = adx_wilder_sum(high, low, close, period);
     let mut out = nan_vec(n);
     if period == 0 {
         return out;
@@ -2886,9 +2901,9 @@ pub fn adxr_talib(high: &[f64], low: &[f64], close: &[f64], period: usize) -> Ve
     out
 }
 
-/// TA-Lib STOCHF -> (fastk, fastd). fastk = 100*(c-LL)/(HH-LL) over fastk_period,
-/// fastd = SMA(fastk, fastd_period). Both aligned to first index
-/// (fastk_period-1)+(fastd_period-1), matching TA-Lib's output padding.
+/// STOCHF -> (fastk, fastd). fastk = 100*(c-LL)/(HH-LL) over fastk_period,
+/// fastd = SMA(fastk, fastd_period). Both start at the same first index
+/// (fastk_period-1)+(fastd_period-1): fastk is NaN until fastd exists.
 pub fn stochf(
     high: &[f64],
     low: &[f64],
@@ -2922,7 +2937,7 @@ pub fn stochf(
     (k, d)
 }
 
-/// TA-Lib LINEARREG_ANGLE = degrees(atan(OLS slope)) over `period`. O(n).
+/// LINEARREG_ANGLE = degrees(atan(OLS slope)) over `period`. O(n).
 pub fn linreg_angle(data: &[f64], period: usize) -> Vec<f64> {
     let n = data.len();
     let mut out = nan_vec(n);
@@ -2936,7 +2951,7 @@ pub fn linreg_angle(data: &[f64], period: usize) -> Vec<f64> {
     out
 }
 
-/// TA-Lib LINEARREG_INTERCEPT = OLS intercept b over `period`. O(n).
+/// LINEARREG_INTERCEPT = OLS intercept b over `period`. O(n).
 pub fn linreg_intercept(data: &[f64], period: usize) -> Vec<f64> {
     let n = data.len();
     let mut out = nan_vec(n);
@@ -3103,22 +3118,22 @@ mod tests {
     }
 
     #[test]
-    fn talib_dm_family_alignment() {
+    fn wilder_sum_dm_family_alignment() {
         let n = 60usize;
         let high: Vec<f64> = (0..n).map(|i| 100.0 + (i as f64 * 0.3).sin() * 5.0 + i as f64 * 0.1).collect();
         let low: Vec<f64> = high.iter().map(|h| h - 2.0).collect();
         let close: Vec<f64> = high.iter().map(|h| h - 1.0).collect();
         let p = 14;
-        let pdm = plus_dm_talib(&high, &low, p);
-        let mdm = minus_dm_talib(&high, &low, p);
+        let pdm = plus_dm_wilder_sum(&high, &low, p);
+        let mdm = minus_dm_wilder_sum(&high, &low, p);
         // first valid at period-1
         assert!(pdm[p - 2].is_nan() && pdm[p - 1].is_finite());
         assert!(mdm[p - 1].is_finite());
-        let dx = dx_talib(&high, &low, &close, p);
+        let dx = dx_wilder_sum(&high, &low, &close, p);
         assert!(dx[p - 1].is_nan() && dx[p].is_finite()); // first DX at index period
-        let adx = adx_talib(&high, &low, &close, p);
+        let adx = adx_wilder_sum(&high, &low, &close, p);
         assert!(adx[2 * p - 2].is_nan() && adx[2 * p - 1].is_finite()); // 2*period-1
-        let adxr = adxr_talib(&high, &low, &close, p);
+        let adxr = adxr_wilder_sum(&high, &low, &close, p);
         assert!(adxr[3 * p - 3].is_nan() && adxr[3 * p - 2].is_finite()); // 3*period-2
         // DX bounded [0,100]
         for v in dx.iter().filter(|v| !v.is_nan()) {
@@ -3238,7 +3253,7 @@ mod tests {
         approx(r[0], 0.0);
         approx(r[1], 200.0); // up
         approx(r[2], 150.0); // down -50
-        approx(r[3], 150.0); // equal -> 0 (matches TA-Lib / TradingView)
+        approx(r[3], 150.0); // equal close -> contributes 0
     }
 
     #[test]
@@ -3365,9 +3380,9 @@ mod tests {
     }
 
     #[test]
-    fn kama_tv_seed_and_trend() {
+    fn kama_full_window_seed_and_trend() {
         let d = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
-        let r = kama_tv(&d, 3, 2, 30);
+        let r = kama_full_window(&d, 3, 2, 30);
         assert!(r[0].is_nan() && r[2].is_nan());
         // first valid at index length=3; er=1 on a clean trend -> alpha=fast_alpha^2
         let fa = 2.0 / 3.0;

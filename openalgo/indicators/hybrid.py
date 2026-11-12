@@ -134,11 +134,11 @@ class Aroon(BaseIndicator):
     @jit(nopython=True)
     def _calculate_aroon(high: np.ndarray, low: np.ndarray, period: int) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Aroon calculation matching TradingView logic
+        Aroon over a length + 1 bar lookback
 
-        TradingView formula:
-        upper = 100 * (ta.highestbars(high, length + 1) + length)/length
-        lower = 100 * (ta.lowestbars(low, length + 1) + length)/length
+        Formula (bars_since_* counts back from the current bar, 0 = this bar):
+        upper = 100 * (length - bars_since_highest(high, length + 1)) / length
+        lower = 100 * (length - bars_since_lowest(low, length + 1)) / length
         """
         n = len(high)
         aroon_up = np.full(n, np.nan)
@@ -514,14 +514,15 @@ class ZigZag(BaseIndicator):
 
 class WilliamsFractals(BaseIndicator):
     """
-    Williams Fractals - matches TradingView exactly
+    Williams Fractals
     
-    Identifies turning points (fractals) in price action using the exact TradingView logic.
+    Identifies turning points (fractals) in price action.
     The algorithm checks for peaks and troughs over a configurable number of periods (n).
     
-    TradingView Logic:
-    - Checks current position against n periods before and after
-    - Handles edge cases with multiple frontier checks for future periods
+    Logic:
+    - The n bars before the centre must be strictly lower (higher for a down fractal)
+    - After the centre, n strictly lower bars, optionally preceded by 1 to 4 bars
+      that do not go past the centre value
     - Default period = 2 (minimum value)
     """
     
@@ -530,11 +531,11 @@ class WilliamsFractals(BaseIndicator):
     
     @staticmethod
     @jit(nopython=True)
-    def _calculate_fractals_tv(high: np.ndarray, low: np.ndarray, n: int) -> Tuple[np.ndarray, np.ndarray]:
+    def _calculate_fractals(high: np.ndarray, low: np.ndarray, n: int) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Calculate Williams Fractals using exact TradingView logic
+        Calculate Williams Fractals
         
-        This implements the complex TradingView algorithm that handles:
+        The algorithm handles:
         1. Down frontier checks (past periods)
         2. Multiple up frontier checks (future periods with different patterns)
         """
@@ -676,7 +677,7 @@ class WilliamsFractals(BaseIndicator):
                  low: Union[np.ndarray, pd.Series, list],
                  periods: int = 2) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series]]:
         """
-        Calculate Williams Fractals - matches TradingView exactly
+        Calculate Williams Fractals
         
         Parameters:
         -----------
@@ -685,7 +686,7 @@ class WilliamsFractals(BaseIndicator):
         low : Union[np.ndarray, pd.Series, list]
             Low prices
         periods : int, default=2
-            Number of periods to check (minimum 2, matches TradingView default)
+            Number of periods to check (minimum 2)
             
         Returns:
         --------
@@ -709,13 +710,13 @@ class WilliamsFractals(BaseIndicator):
 
 class RWI(BaseIndicator):
     """
-    Random Walk Index (TradingView Pine Script Implementation)
+    Random Walk Index
     
     Measures how much a security's price movement differs from a random walk.
     
-    Formula (TradingView Pine Script):
-    rwiHigh = (high - nz(low[length])) / (atr(length) * sqrt(length))
-    rwiLow = (nz(high[length]) - low) / (atr(length) * sqrt(length))
+    Formula (low[length] and high[length] are 0 when undefined):
+    rwiHigh = (high - low[length]) / (atr(length) * sqrt(length))
+    rwiLow = (high[length] - low) / (atr(length) * sqrt(length))
     """
     
     def __init__(self):
@@ -786,16 +787,16 @@ class RWI(BaseIndicator):
         for i in range(period - 1, n):
             atr[i] = np.mean(tr[i - period + 1:i + 1])
         
-        # Calculate RWI using TradingView Pine Script formula
+        # Calculate RWI
         for i in range(period, n):  # Start from period to have valid lookback
             if atr[i] > 0:
-                # TradingView formula: rwiHigh = (high - nz(low[length])) / (atr(length) * sqrt(length))
-                # nz(low[length]) means low[i-length] with zero fill for missing values
+                # rwiHigh = (high - low[length]) / (atr(length) * sqrt(length))
+                # low[length] is low[i-length], 0 when missing
                 low_lookback = low[i - period] if i >= period else 0.0
                 rwi_high[i] = (high[i] - low_lookback) / (atr[i] * np.sqrt(period))
                 
-                # TradingView formula: rwiLow = (nz(high[length]) - low) / (atr(length) * sqrt(length))
-                # nz(high[length]) means high[i-length] with zero fill for missing values
+                # rwiLow = (high[length] - low) / (atr(length) * sqrt(length))
+                # high[length] is high[i-length], 0 when missing
                 high_lookback = high[i - period] if i >= period else 0.0
                 rwi_low[i] = (high_lookback - low[i]) / (atr[i] * np.sqrt(period))
             else:
@@ -809,7 +810,7 @@ class RWI(BaseIndicator):
                  close: Union[np.ndarray, pd.Series, list],
                  period: int = 14) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series]]:
         """
-        Calculate Random Walk Index (TradingView Pine Script Implementation)
+        Calculate Random Walk Index
         
         Parameters:
         -----------

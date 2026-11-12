@@ -388,20 +388,20 @@ ta.tsi(close, long_period=25, short_period=13, signal_period=13)
 
 **Returns:** Tuple of (TSI line, Signal line)
 
-### Vortex Indicator (VI) - TradingView Pine Script v6
+### Vortex Indicator (VI)
 ```python
 ta.vi(high, low, close, period=14)
 ```
 - **high**: High prices
 - **low**: Low prices
 - **close**: Close prices
-- **period**: Number of periods (default: **14** - TradingView default)
+- **period**: Number of periods (default: **14**)
 
-**TradingView Pine Script v6 Formula:**
+**Formula:**
 ```
-VMP = math.sum( math.abs( high - low[1]), period_ )
-VMM = math.sum( math.abs( low - high[1]), period_ )
-STR = math.sum( ta.atr(1), period_ )
+VMP = sum( abs( high - low[1]), period_ )
+VMM = sum( abs( low - high[1]), period_ )
+STR = sum( atr(1), period_ )
 VIP = VMP / STR
 VIM = VMM / STR
 ```
@@ -413,19 +413,19 @@ VIM = VMM / STR
 ta.stc(close, fast_length=23, slow_length=50, cycle_length=10, d1_length=3, d2_length=3)
 ```
 - **close**: Close prices
-- **fast_length**: MACD Fast Length (default: 23) - TradingView fastLength
-- **slow_length**: MACD Slow Length (default: 50) - TradingView slowLength  
-- **cycle_length**: Cycle Length for stochastic calculations (default: 10) - TradingView cycleLength
-- **d1_length**: 1st %D Length - EMA smoothing period (default: 3) - TradingView d1Length
-- **d2_length**: 2nd %D Length - EMA smoothing period (default: 3) - TradingView d2Length
+- **fast_length**: MACD Fast Length (default: 23)
+- **slow_length**: MACD Slow Length (default: 50)
+- **cycle_length**: Cycle Length for stochastic calculations (default: 10)
+- **d1_length**: 1st %D Length - EMA smoothing period (default: 3)
+- **d2_length**: 2nd %D Length - EMA smoothing period (default: 3)
 
 **Returns:** Array of STC values (0-100 range)
 
-**Formula (TradingView Pine Script v4):**
+**Formula:**
 - macd = ema(src, fastLength) - ema(src, slowLength)
-- k = nz(stoch(macd, macd, macd, cycleLength))
+- k = stoch(macd, macd, macd, cycleLength) (0 when undefined)
 - d = ema(k, d1Length)
-- kd = nz(stoch(d, d, d, cycleLength))
+- kd = stoch(d, d, d, cycleLength) (0 when undefined)
 - stc = ema(kd, d2Length)
 - stc := max(min(stc, 100), 0)
 
@@ -465,7 +465,7 @@ ta.rvi(open, high, low, close, period=10)
 - **low**: Low prices
 - **close**: Close prices
 - **period**: Number of periods (default: 10)
-- **Formula**: TradingView Pine Script: `rvi = math.sum(ta.swma(close-open), len) / math.sum(ta.swma(high-low), len)`
+- **Formula**: `rvi = sum(swma(close-open), len) / sum(swma(high-low), len)` (swma: symmetric 4-bar weighted average, weights 1, 2, 2, 1)
 
 **Returns:** Tuple of (RVI line, Signal line)
 
@@ -596,7 +596,7 @@ ta.true_range(high, low, close)
 - **low**: Low prices
 - **close**: Close prices
 
-### Mass Index (Pine Script v6)
+### Mass Index
 ```python
 ta.massindex(high, low, length=10)
 ```
@@ -604,10 +604,10 @@ ta.massindex(high, low, length=10)
 - **low**: Low prices
 - **length**: Sum period (default: **10**)
 
-**Pine Script v6 Formula:**
+**Formula:**
 ```
 span = high - low
-mi = math.sum(ta.ema(span, 9) / ta.ema(ta.ema(span, 9), 9), length)
+mi = sum(ema(span, 9) / ema(ema(span, 9), 9), length)
 ```
 
 ### Bollinger Bands %B
@@ -651,15 +651,15 @@ ta.hv(close, period=20, annualize=True)
 ta.ulcerindex(close, length=14, smooth_length=14, signal_length=52, signal_type="SMA", return_signal=False)
 ```
 - **close**: Close prices
-- **length**: Period for highest calculation (default: 14) - TradingView length
-- **smooth_length**: Period for smoothing squared drawdowns (default: 14) - TradingView smoothLength
-- **signal_length**: Period for signal line calculation (default: 52) - TradingView signalLength
-- **signal_type**: Signal smoothing type: "SMA" or "EMA" (default: "SMA") - TradingView signalType
+- **length**: Period for highest calculation (default: 14)
+- **smooth_length**: Period for smoothing squared drawdowns (default: 14)
+- **signal_length**: Period for signal line calculation (default: 52)
+- **signal_type**: Signal smoothing type: "SMA" or "EMA" (default: "SMA")
 - **return_signal**: Whether to return both ulcer and signal line (default: False)
 
 **Returns:** Array of Ulcer Index values, or Tuple of (ulcer, signal) if return_signal=True
 
-**Formula (TradingView Pine Script v4):**
+**Formula:**
 - highest = highest(src, length)
 - drawdown = 100 * (src - highest) / highest
 - ulcer = sqrt(sma(pow(drawdown, 2), smoothLength))
@@ -672,13 +672,13 @@ ta.starc(high, low, close, ma_period=5, atr_period=15, multiplier=1.33)
 - **high**: High prices
 - **low**: Low prices
 - **close**: Close prices
-- **ma_period**: Moving average period (default: 5) - TradingView LengthMA
-- **atr_period**: ATR period (default: 15) - TradingView LengthATR
-- **multiplier**: ATR multiplier (default: 1.33) - TradingView K parameter
+- **ma_period**: Moving average period (default: 5)
+- **atr_period**: ATR period (default: 15)
+- **multiplier**: ATR multiplier (default: 1.33)
 
 **Returns:** Tuple of (Upper STARC, Middle STARC, Lower STARC)
 
-**Formula (TradingView Pine Script v2):**
+**Formula:**
 - Middle: SMA(close, 5)
 - Upper: SMA + ATR(15) * 1.33
 - Lower: SMA - ATR(15) * 1.33
@@ -693,7 +693,7 @@ ta.obv(close, volume)
 ```
 - **close**: Close prices
 - **volume**: Volume data
-- **Formula**: TradingView Pine Script: `obv = ta.cum(math.sign(ta.change(close)) * volume)`
+- **Formula**: `obv = cumsum(sign(close - close[1]) * volume)`
 
 ### On Balance Volume with Smoothing (OBV Smoothed)
 ```python
@@ -707,7 +707,7 @@ ta.obv_smoothed(close, volume, ma_type="None", ma_length=20, bb_length=20, bb_mu
 - **bb_mult**: Bollinger Bands multiplier for "SMA + Bollinger Bands" (default: 2.0)
 - **Returns**: obv_smoothed (or tuple of (obv_smoothed, bb_upper, bb_lower) for Bollinger Bands)
 
-### Volume Weighted Average Price (VWAP) - TradingView Pine Script v6
+### Volume Weighted Average Price (VWAP)
 ```python
 ta.vwap(high, low, close, volume, anchor="Session", source="hlc3", 
         stdev_mult_1=1.0, stdev_mult_2=2.0, stdev_mult_3=3.0,
@@ -726,7 +726,7 @@ ta.vwap(high, low, close, volume, anchor="Session", source="hlc3",
 - **percent_mult_2**: Percentage multiplier for second percentage band (default: **0.382**)
 - **percent_mult_3**: Percentage multiplier for third percentage band (default: **0.618**)
 
-**TradingView Pine Script v6 Formula:**
+**Formula:**
 ```
 // Session anchoring determines reset points
 // Source calculation: hlc3 = (high + low + close) / 3
@@ -800,20 +800,21 @@ ta.force_index(close, volume)
 - **close**: Close prices
 - **volume**: Volume data
 
-### Negative Volume Index (NVI) - Pine Script Implementation
+### Negative Volume Index (NVI)
 ```python
 ta.nvi(close, volume)
 ```
 - **close**: Close prices
 - **volume**: Volume data
 
-**Pine Script Formula:**
+**Formula:**
 ```
 xROC = roc(close, 1)
-nRes = iff(volume < volume[1], nz(nRes[1], 0) + xROC, nz(nRes[1], 0))
+prev = nRes[1] (0 when undefined)
+nRes = volume < volume[1] ? prev + xROC : prev
 ```
 
-### NVI with EMA (Complete Pine Script Implementation)
+### NVI with EMA
 ```python
 nvi, nvi_ema = ta.nvi_with_ema(close, volume, ema_length=255)
 ```
@@ -823,20 +824,20 @@ nvi, nvi_ema = ta.nvi_with_ema(close, volume, ema_length=255)
 
 **Returns:** (nvi, nvi_ema)
 
-### Positive Volume Index (PVI) - TradingView Pine Script Implementation
+### Positive Volume Index (PVI)
 ```python
 ta.pvi(close, volume, initial_value=100.0)
 ```
 - **close**: Close prices
 - **volume**: Volume data
-- **initial_value**: Initial PVI value (default: **100.0** - TradingView default)
+- **initial_value**: Initial PVI value (default: **100.0**)
 
-**TradingView Pine Script Formula:**
+**Formula:**
 ```
-pvi := na(pvi[1]) ? initial : (change(volume) > 0 ? pvi[1] * close / close[1] : pvi[1])
+pvi = pvi[1] undefined ? initial : ((volume - volume[1]) > 0 ? pvi[1] * close / close[1] : pvi[1])
 ```
 
-### PVI with Signal Line (Complete TradingView Implementation)
+### PVI with Signal Line
 ```python
 pvi, signal = ta.pvi_with_signal(close, volume, initial_value=100.0, signal_type="EMA", signal_length=255)
 ```
@@ -844,23 +845,23 @@ pvi, signal = ta.pvi_with_signal(close, volume, initial_value=100.0, signal_type
 - **volume**: Volume data
 - **initial_value**: Initial PVI value (default: **100.0**)
 - **signal_type**: Signal smoothing type (default: **"EMA"**, options: "EMA", "SMA")
-- **signal_length**: Signal line period (default: **255** - TradingView default)
+- **signal_length**: Signal line period (default: **255**)
 
 **Returns:** (pvi, signal)
 
-### Volume Oscillator (TradingView Pine Script v6)
+### Volume Oscillator
 ```python
 ta.volosc(volume, short_length=5, long_length=10, check_volume_validity=True)
 ```
 - **volume**: Volume data
-- **short_length**: Short EMA length (default: **5** - TradingView default)
-- **long_length**: Long EMA length (default: **10** - TradingView default)
+- **short_length**: Short EMA length (default: **5**)
+- **long_length**: Long EMA length (default: **10**)
 - **check_volume_validity**: Check for valid volume data (default: **True**)
 
-**TradingView Pine Script v6 Formula:**
+**Formula:**
 ```
-short = ta.ema(volume, shortlen)
-long = ta.ema(volume, longlen)
+short = ema(volume, shortlen)
+long = ema(volume, longlen)
 osc = 100 * (short - long) / long
 ```
 
@@ -888,7 +889,7 @@ ta.pvt(close, volume)
 ```
 - **close**: Close prices
 - **volume**: Volume data
-- **Formula**: TradingView Pine Script: `vt = ta.cum(ta.change(src)/src[1]*volume)`
+- **Formula**: `vt = cumsum((src - src[1]) / src[1] * volume)`
 
 ---
 
@@ -913,12 +914,13 @@ ta.cmo(data, period=14)
 ta.trix(data, length=18)
 ```
 - **data**: Price data (typically close prices)
-- **length**: Number of periods for EMA calculation (default: **18**) - TradingView default
+- **length**: Number of periods for EMA calculation (default: **18**)
 
 **Returns:** Array of TRIX values
 
-**Formula (TradingView Pine Script v6):**
-- out = 10000 * ta.change(ta.ema(ta.ema(ta.ema(math.log(close), length), length), length))
+**Formula:**
+- e3 = ema(ema(ema(log(close), length), length), length)
+- out = 10000 * (e3 - e3[1])
 - Uses natural logarithm of price, triple EMA smoothing, and rate of change * 10000
 
 ### Ultimate Oscillator
@@ -1016,7 +1018,7 @@ ta.beta(asset, market, period=252)
 - **market**: Market price data
 - **period**: Number of periods, typically 1 year (default: **252**)
 
-### Variance (TradingView Pine Script v4)
+### Variance
 ```python
 ta.variance(data, lookback=20, mode="PR", ema_period=20, filter_lookback=20, ema_length=14, return_components=False)
 ```
@@ -1028,7 +1030,7 @@ ta.variance(data, lookback=20, mode="PR", ema_period=20, filter_lookback=20, ema
 - **ema_length**: EMA length for z-score smoothing (default: **14**)
 - **return_components**: If True, returns tuple of all components (default: **False**)
 
-**TradingView Pine Script v4 Formula:**
+**Formula:**
 ```
 source = if mode == "LR" then log(close/close[1])*100 else close
 mean = sma(source, lookback)
@@ -1046,19 +1048,19 @@ ta.tsf(data, period=14)
 - **data**: Price data
 - **period**: Number of periods (default: **14**)
 
-### Rolling Median (Pine Script v6)
+### Rolling Median
 ```python
 ta.median(data, period=3)
 ```
 - **data**: Price data (typically hl2 = (high + low) / 2)
 - **period**: Number of periods (default: **3**)
 
-**Pine Script v6 Formula:**
+**Formula:**
 ```
-median = ta.percentile_nearest_rank(source, length, 50)
+median = percentile_nearest_rank(source, length, 50)   // nearest-rank 50th percentile of the last `length` values
 ```
 
-### Median Bands (Pine Script v6 Complete)
+### Median Bands
 ```python
 median, upper, lower, median_ema = ta.median_bands(high, low, close, source=None, 
                                                    median_length=3, atr_length=14, atr_mult=2.0)
@@ -1164,7 +1166,7 @@ ta.rwi(high, low, close, period=14)
 - **low**: Low prices
 - **close**: Close prices
 - **period**: Number of periods (default: 14)
-- **Formula**: TradingView Pine Script: `rwiHigh = (high - nz(low[length])) / (atr(length) * sqrt(length))`
+- **Formula**: `rwiHigh = (high - low[length]) / (atr(length) * sqrt(length))`, with `low[length]` taken as 0 when undefined
 
 **Returns:** Tuple of (RWI High, RWI Low)
 

@@ -72,14 +72,12 @@ Version 2.0.0 replaces the old Numba/JIT indicator engine with a **Rust core** (
   removed; `pip install openalgo` is all you need.
 - **Python 3.12, 3.13 and 3.14** are all supported (abi3 wheels). Numba previously
   blocked newer Python/NumPy versions.
-- **New TA-Lib-compatible indicators:** `mom`, `rocp`, `rocr`, `rocr100`, `apo`,
+- **New single-formula indicators:** `mom`, `rocp`, `rocr`, `rocr100`, `apo`,
   `midpoint`, `midprice`, `avgprice`, `medprice`, `typprice`, `wclprice`, `plus_dm`,
   `minus_dm`, `dx`, `adxr`, `stochf`, `linregangle`, `linregintercept`.
-- **Performance:** every indicator is O(n). Benchmarked head-to-head with TA-Lib on
-  924k bars, the regression/statistics family (`linreg`, `tsf`, `stddev`, `cci`,
-  `macd`, ...) runs faster than TA-Lib; the rest are on par. See the
-  [performance comparison](https://github.com/marketcalls/openalgo-python-library/blob/master/benchmark/TALIB_PERF_COMPARE.md)
-  and [TA-Lib compatibility notes](https://github.com/marketcalls/openalgo-python-library/blob/master/docs/TALIB_COMPATIBILITY.md).
+- **Performance:** every indicator is O(n). See the
+  [benchmark on 924k bars](https://github.com/marketcalls/openalgo-python-library/blob/master/benchmark/FULL_BENCHMARK.md)
+  and the [indicator conventions](https://github.com/marketcalls/openalgo-python-library/blob/master/docs/INDICATOR_CONVENTIONS.md).
 - **Backward compatible:** the `from openalgo import ta` API is unchanged - existing
   code keeps working without modification.
 
@@ -154,10 +152,9 @@ atr   = ta.atr(high, low, close, period=14)
 upper, middle, lower = ta.bbands(close, period=20, std=2.0)
 ```
 
-Many indicators are value-compatible with TA-Lib; where OpenAlgo intentionally follows
-TradingView/Pine conventions instead (EMA/ATR/ADX seeding, etc.), the differences are
-documented in the
-[TA-Lib compatibility notes](https://github.com/marketcalls/openalgo-python-library/blob/master/docs/TALIB_COMPATIBILITY.md).
+Where an indicator has more than one published form (EMA/ATR/ADX seeding, etc.), the
+seed, smoothing and window each function uses are documented in the
+[indicator conventions](https://github.com/marketcalls/openalgo-python-library/blob/master/docs/INDICATOR_CONVENTIONS.md).
 
 Full indicator catalog and parameter reference: https://docs.openalgo.in/trading-platform/python/indicators
 
@@ -1739,13 +1736,13 @@ Analyzer Toggle Response:
 ## Strategy Module
 
 OpenAlgo's `/strategy` module runs multi-leg options strategies with end-to-end risk
-management, plus a signal-driven mode for TradingView alerts. Two surfaces reach it,
+management, plus a signal-driven mode for charting-platform alerts. Two surfaces reach it,
 and they take different credentials:
 
 | Surface | Credential | Use for |
 |---------|-----------|---------|
 | `api(api_key=...)` | Your OpenAlgo API key | Lifecycle and reads: list, status, start, stop, close_all, close_leg, runs, orders, events |
-| `Strategy(...)` | The strategy's `oaws_` webhook token | The public webhook at `/strategy/webhook/<token>`, which is what TradingView posts to |
+| `Strategy(...)` | The strategy's `oaws_` webhook token | The public webhook at `/strategy/webhook/<token>`, which is what alert senders post to |
 
 Building a strategy stays in the browser wizard at `/strategy`. The API-key surface is
 lifecycle plus reads only: nothing on it can create a strategy, edit its
@@ -2096,7 +2093,7 @@ Events an operator should not ignore:
 
 ### Strategy Webhook Example
 
-The public webhook is what TradingView and other alert senders post to. It is not
+The public webhook is what charting-platform alerts and other senders post to. It is not
 under `/api/v1` and takes no API key: the `oaws_` token in the URL is the whole
 credential. It is shown exactly once, in the browser, when the strategy is created or
 its token is rotated - no endpoint returns it. Treat it as a password.

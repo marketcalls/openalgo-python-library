@@ -682,7 +682,7 @@ This release brings **complete technical analysis capabilities** to the OpenAlgo
 ### ✅ Added
 - **Complete Technical Indicators Library**: All 102 technical analysis functions now working perfectly
 - **High-Performance Implementation**: NumPy and Numba optimization for fast calculations
-- **TradingView-like Syntax**: Easy-to-use `ta.function()` interface
+- **Function-call Syntax**: Easy-to-use `ta.function()` interface
 - **Comprehensive Coverage**:
   - **19 Trend Indicators**: SMA, EMA, Supertrend, Ichimoku, HMA, etc.
   - **9 Momentum Indicators**: RSI, MACD, Stochastic, CCI, Williams %R, etc.

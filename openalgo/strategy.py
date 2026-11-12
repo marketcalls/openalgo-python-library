@@ -4,7 +4,7 @@ OpenAlgo Strategy Webhook Module
     https://docs.openalgo.in
 
 Posts to the public webhook at ``/strategy/webhook/<token>``, the surface
-TradingView and any other alert sender reaches. It is not under ``/api/v1`` and
+charting-platform alerts and any other alert sender reach. It is not under ``/api/v1`` and
 takes no API key: the token in the URL is the whole of the credential, so treat
 it the way you would treat a password.
 

@@ -665,14 +665,14 @@ class TRANGE(BaseIndicator):
 
 class MASS(BaseIndicator):
     """
-    Mass Index (Pine Script v6)
+    Mass Index
     
     The Mass Index uses the high-low range to identify trend reversals 
     based on range expansion.
     
-    Pine Script v6 Formula:
+    Formula:
     span = high - low
-    mi = math.sum(ta.ema(span, 9) / ta.ema(ta.ema(span, 9), 9), length)
+    mi = sum(ema(span, 9) / ema(ema(span, 9), 9), length)
     
     Default length = 10
     """
@@ -699,9 +699,9 @@ class MASS(BaseIndicator):
         """
         Calculate Mass Index
         
-        Pine Script v6 Formula:
+        Formula:
         span = high - low
-        mi = math.sum(ta.ema(span, 9) / ta.ema(ta.ema(span, 9), 9), length)
+        mi = sum(ema(span, 9) / ema(ema(span, 9), 9), length)
         
         Parameters:
         -----------
@@ -710,7 +710,7 @@ class MASS(BaseIndicator):
         low : Union[np.ndarray, pd.Series, list]
             Low prices
         length : int, default=10
-            Period for sum calculation (Pine Script default)
+            Period for sum calculation
             
         Returns:
         --------
@@ -969,10 +969,10 @@ class ChandelierExit(BaseIndicator):
 
 
 @jit(nopython=True)
-def _calculate_stdev_tv(data: np.ndarray, period: int) -> np.ndarray:
+def _calculate_population_stdev(data: np.ndarray, period: int) -> np.ndarray:
     """
-    Calculate standard deviation using TradingView's ta.stdev method
-    This matches TradingView's population standard deviation calculation
+    Rolling population standard deviation (N in the denominator)
+    NaN for any window that contains a NaN
     """
     n = len(data)
     result = np.full(n, np.nan)
@@ -982,7 +982,7 @@ def _calculate_stdev_tv(data: np.ndarray, period: int) -> np.ndarray:
         valid_data = window[~np.isnan(window)]
         
         if len(valid_data) == period:
-            # TradingView uses population standard deviation (N in denominator)
+            # Population standard deviation (N in denominator)
             mean_val = np.mean(valid_data)
             variance = np.sum((valid_data - mean_val) ** 2) / period
             result[i] = np.sqrt(variance)
@@ -991,15 +991,15 @@ def _calculate_stdev_tv(data: np.ndarray, period: int) -> np.ndarray:
 
 class HistoricalVolatility(BaseIndicator):
     """
-    Historical Volatility (HV) - matches TradingView exactly
+    Historical Volatility (HV)
     
     Measures the standard deviation of logarithmic returns over a specified period.
-    Uses TradingView's exact formula with 365-day annualization and timeframe detection.
+    Annualized with a 365-day year and a per-bar factor for the timeframe.
     
-    TradingView Formula: 
-    hv = 100 * ta.stdev(math.log(close / close[1]), length) * math.sqrt(annual / per)
+    Formula: 
+    hv = 100 * stdev(log(close / close[1]), length) * sqrt(annual / per)
     Where:
-    - annual = 365 (TradingView default)
+    - annual = 365 (default)
     - per = 1 for daily/intraday, 7 for weekly+ timeframes
     """
     
@@ -1008,23 +1008,23 @@ class HistoricalVolatility(BaseIndicator):
     
     @staticmethod
     @jit(nopython=True)
-    def _calculate_hv_tv(close: np.ndarray, length: int, annual: int, per: int) -> np.ndarray:
+    def _calculate_hv(close: np.ndarray, length: int, annual: int, per: int) -> np.ndarray:
         """
-        Calculate Historical Volatility using exact TradingView formula
-        hv = 100 * ta.stdev(math.log(close / close[1]), length) * math.sqrt(annual / per)
+        Calculate Historical Volatility
+        hv = 100 * stdev(log(close / close[1]), length) * sqrt(annual / per)
         """
         n = len(close)
         
-        # Calculate log returns: math.log(close / close[1])
+        # Calculate log returns: log(close / close[1])
         log_returns = np.full(n, np.nan)
         for i in range(1, n):
             if close[i - 1] > 0 and close[i] > 0:
                 log_returns[i] = np.log(close[i] / close[i - 1])
         
         # Calculate standard deviation of log returns
-        stdev_returns = _calculate_stdev_tv(log_returns, length)
+        stdev_returns = _calculate_population_stdev(log_returns, length)
         
-        # Apply TradingView formula: 100 * stdev * sqrt(annual / per)
+        # 100 * stdev * sqrt(annual / per)
         annualization_factor = np.sqrt(annual / per)
         result = 100.0 * stdev_returns * annualization_factor
         
@@ -1033,20 +1033,20 @@ class HistoricalVolatility(BaseIndicator):
     def calculate(self, close: Union[np.ndarray, pd.Series, list],
                  length: int = 10, annual: int = 365, per: int = 1) -> Union[np.ndarray, pd.Series]:
         """
-        Calculate Historical Volatility - matches TradingView exactly
+        Calculate Historical Volatility
         
         Parameters:
         -----------
         close : Union[np.ndarray, pd.Series, list]
             Closing prices
         length : int, default=10
-            Period for volatility calculation (TradingView default)
+            Period for volatility calculation
         annual : int, default=365
-            Annual periods for scaling (TradingView uses 365)
+            Annual periods for scaling (default 365)
         per : int, default=1
             Timeframe periods (1 for daily/intraday, 7 for weekly+)
-            TradingView logic:
-            - per = 1 if timeframe.isintraday or (timeframe.isdaily and multiplier == 1)  
+            Convention:
+            - per = 1 for intraday bars and for 1-day bars
             - per = 7 otherwise (weekly, monthly timeframes)
             
         Returns:
@@ -1073,22 +1073,21 @@ class HistoricalVolatility(BaseIndicator):
 
 class UlcerIndex(BaseIndicator):
     """
-    Ulcer Index - TradingView Pine Script v4 Implementation
+    Ulcer Index
     
     Measures downside risk by calculating the depth and duration of drawdowns.
-    Based on TradingView Pine Script v4 implementation by Alex Orekhov (everget).
     
-    TradingView Formula:
+    Formula:
     highest = highest(src, length)
     drawdown = 100 * (src - highest) / highest
-    ulcer = sqrt(sma(pow(drawdown, 2), smoothLength))
-    signal = signalType == "SMA" ? sma(ulcer, signalLength) : ema(ulcer, signalLength)
+    ulcer = sqrt(sma(drawdown^2, smooth_length))
+    signal = sma(ulcer, signal_length) if signal_type == "SMA" else ema(ulcer, signal_length)
     
-    Default Parameters (TradingView):
+    Default Parameters:
     - length = 14
-    - smoothLength = 14
-    - signalLength = 52
-    - signalType = "SMA"
+    - smooth_length = 14
+    - signal_length = 52
+    - signal_type = "SMA"
     - breakout = 1.5
     """
     
@@ -1100,20 +1099,20 @@ class UlcerIndex(BaseIndicator):
                  length: int = 14, smooth_length: int = 14, signal_length: int = 52, 
                  signal_type: str = "SMA", return_signal: bool = False) -> Union[np.ndarray, pd.Series, Tuple[np.ndarray, np.ndarray]]:
         """
-        Calculate Ulcer Index using TradingView Pine Script v4 formula
+        Calculate Ulcer Index
         
         Parameters:
         -----------
         data : Union[np.ndarray, pd.Series, list]
             Price data (typically closing prices)
         length : int, default=14
-            Period for highest calculation (TradingView length)
+            Period for highest calculation
         smooth_length : int, default=14
-            Period for smoothing the squared drawdowns (TradingView smoothLength)
+            Period for smoothing the squared drawdowns
         signal_length : int, default=52
-            Period for signal line calculation (TradingView signalLength)
+            Period for signal line calculation
         signal_type : str, default="SMA"
-            Type of signal smoothing: "SMA" or "EMA" (TradingView signalType)
+            Type of signal smoothing: "SMA" or "EMA"
         return_signal : bool, default=False
             Whether to return both ulcer and signal line
             
@@ -1124,11 +1123,11 @@ class UlcerIndex(BaseIndicator):
             
         Notes:
         ------
-        This implementation matches TradingView Pine Script v4:
+        Formula:
         highest = highest(src, length)
         drawdown = 100 * (src - highest) / highest
-        ulcer = sqrt(sma(pow(drawdown, 2), smoothLength))
-        signal = signalType == "SMA" ? sma(ulcer, signalLength) : ema(ulcer, signalLength)
+        ulcer = sqrt(sma(drawdown^2, smooth_length))
+        signal = sma(ulcer, signal_length) if signal_type == "SMA" else ema(ulcer, signal_length)
         """
         validated_data, input_type, index = self.validate_input(data)
         self.validate_period(length, len(validated_data))
@@ -1147,18 +1146,17 @@ class UlcerIndex(BaseIndicator):
 
 class STARC(BaseIndicator):
     """
-    STARC Bands (Stoller Channels) - TradingView Pine Script v2 Implementation
+    STARC Bands (Stoller Channels)
     
     STARC Bands use an SMA and Average True Range to create bands.
-    Based on TradingView Pine Script implementation with specific parameters.
     
-    TradingView Formula:
+    Formula:
     xMA = sma(close, LengthMA)
     xATR = atr(LengthATR)
     xSTARCBandUp = xMA + xATR * K
     xSTARCBandDn = xMA - xATR * K
     
-    Default Parameters (TradingView):
+    Default Parameters:
     - LengthMA = 5
     - LengthATR = 15
     - K = 1.33
@@ -1211,7 +1209,7 @@ class STARC(BaseIndicator):
                  ma_period: int = 5, atr_period: int = 15, 
                  multiplier: float = 1.33) -> Union[Tuple[np.ndarray, np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series, pd.Series]]:
         """
-        Calculate STARC Bands using TradingView Pine Script formula
+        Calculate STARC Bands
         
         Parameters:
         -----------
@@ -1222,11 +1220,11 @@ class STARC(BaseIndicator):
         close : Union[np.ndarray, pd.Series, list]
             Closing prices
         ma_period : int, default=5
-            Period for SMA calculation (LengthMA in TradingView)
+            Period for SMA calculation (LengthMA)
         atr_period : int, default=15
-            Period for ATR calculation (LengthATR in TradingView)
+            Period for ATR calculation (LengthATR)
         multiplier : float, default=1.33
-            ATR multiplier (K in TradingView)
+            ATR multiplier (K)
             
         Returns:
         --------
@@ -1235,7 +1233,7 @@ class STARC(BaseIndicator):
             
         Notes:
         ------
-        This implementation matches TradingView Pine Script v2:
+        Formula:
         - xMA = sma(close, 5)
         - xATR = atr(15)
         - Upper Band = xMA + xATR * 1.33
