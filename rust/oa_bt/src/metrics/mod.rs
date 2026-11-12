@@ -13,8 +13,11 @@
 //!   (`model::ist_day`); no session crosses IST midnight.
 //! - Money is `f64` rupees. Returns, rates and drawdowns are fractions (0.01 is one
 //!   percent); a drawdown is zero or negative.
-//! - The first point of an equity series is the starting equity: the capital before
-//!   any P&L of the run. Every later point is the marked equity at that instant.
+//! - The opening wealth is the capital before any P&L of the run. A caller that knows
+//!   it passes it (`curve::wealth`), and every point of an equity series is then the
+//!   marked equity at that instant: a backtest's first point already holds the P&L of
+//!   its first slice. Without it, the first point is taken as the starting equity and
+//!   every later point is a mark.
 //! - Returns are time weighted: a cash flow changes the equity but is not a return
 //!   (`curve`).
 //! - A figure that the data cannot define is NaN (for example a win rate with no

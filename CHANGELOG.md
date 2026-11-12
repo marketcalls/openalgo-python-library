@@ -159,10 +159,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   statistics, costs, turnover, monthly and yearly returns, benchmark alpha, beta and
   correlation), annualised with the real number of sessions per year from the session
   calendar. Several strategies combine into one equity curve with a correlation
-  matrix. `report.tearsheet()` writes a self-contained HTML report with inline charts
-  that follows the reader's light or dark setting and needs no plotting package. Part
-  of the backtest engine being built; the interface may change before the backtest
-  beta.
+  matrix. `analyse(..., opening_wealth=capital)` reads every equity point as a mark
+  after the capital, so the P&L of the first point, the return of its session and a
+  fall below the capital all count; `Result.performance` passes the run's capital
+  (before, a backtest's first slice and, on daily runs, its whole first session were
+  left out), and `combine_equity(..., opening_wealth=capitals)` holds each strategy at
+  its capital until its first mark. `report.tearsheet()` writes a self-contained HTML
+  report with inline charts that follows the reader's light or dark setting and needs
+  no plotting package. Part of the backtest engine being built; the interface may
+  change before the backtest beta.
 - **`openalgo.backtest.costs` (preview).** Indian trading charges for NSE and BSE
   equity (delivery and intraday), NFO and BFO futures and options, and MCX futures:
   brokerage presets (`zerodha`, `flat`, `percent`, `zero_brokerage`, `custom`), STT or

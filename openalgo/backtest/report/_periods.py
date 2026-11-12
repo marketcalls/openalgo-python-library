@@ -101,13 +101,14 @@ def period_returns(session_returns: pd.Series) -> tuple[pd.DataFrame, pd.Series]
     return table, yearly
 
 
-def session_end_times(ts: np.ndarray, days: np.ndarray) -> np.ndarray:
-    """UTC nanoseconds of the last equity point of each session date in `days`.
+def session_end_times(marks: np.ndarray, days: np.ndarray) -> np.ndarray:
+    """UTC nanoseconds of the last of `marks` on each session date in `days`.
 
-    The first point is the starting equity and belongs to no session.
+    `marks` are the equity points that belong to a session, increasing: every point
+    when an opening wealth is given, every point but the first (the start) otherwise.
     """
-    point_days = ist_days(ts[1:])
-    return ts[1:][np.searchsorted(point_days, days, side="right") - 1]
+    point_days = ist_days(marks)
+    return marks[np.searchsorted(point_days, days, side="right") - 1]
 
 
 def benchmark_path(

@@ -202,12 +202,14 @@ class Result:
     @cached_property
     def performance(self) -> Performance:
         """Every metric of the run (`openalgo.backtest.metrics.analyse`) over its equity
-        series and trades, annualised by the traded exchange's calendar. Raises
-        ConfigError when the run has fewer than two equity points."""
+        series and trades, annualised by the traded exchange's calendar. The capital is
+        the opening wealth, so the P&L of the first slice and the return of the first
+        session count. Raises ConfigError when the run has no equity point."""
         trades = _result_report.trades_table(self._output, self._symbols)
         equity = _result_report.equity_series(self.equity)
         exchange = self._manifest["arguments"]["exchange"]
-        return analyse(equity, exchanges=exchange, trades=trades)
+        capital = self._manifest["arguments"]["capital"]
+        return analyse(equity, exchanges=exchange, trades=trades, opening_wealth=capital)
 
     @property
     def metrics(self) -> Any:
