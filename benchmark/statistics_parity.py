@@ -15,7 +15,7 @@ import pandas as pd
 from openalgo.indicators import _backend as b
 from openalgo.indicators import statistics as st
 from openalgo.indicators.statistics import (LINREG, CORREL, BETA, TSF, MEDIAN, MedianBands, MODE,
-                                            _calculate_slope_tv)
+                                            _calculate_endpoint_slope)
 
 DATA = Path(__file__).resolve().parent / "data"
 FAILS = []
@@ -45,7 +45,7 @@ def main():
     # linreg/correl/beta/tsf: Rust naive summation vs numpy pairwise summation differs
     # by ~1e-14 abs (~1e-16 rel) - within the 1e-12 rel target, not bit-exact cross-impl.
     cmp("linreg", b.linreg(c, 14), LINREG._calculate_linearreg(c, 14), tol=1e-9)
-    cmp("lrslope", b.lrslope(c, 100, 1), _calculate_slope_tv(c, 100, 1), tol=1e-9)
+    cmp("lrslope", b.lrslope(c, 100, 1), _calculate_endpoint_slope(c, 100, 1), tol=1e-9)
     cmp("correl", b.correl(c, m2, 20), CORREL._calculate_correl(c, m2, 20), tol=1e-9)
     cmp("beta", b.beta(c, m2, 60), BETA._calculate_beta_optimized(c, m2, 60), tol=1e-9)
     cmp("tsf", b.tsf(c, 14), TSF._calculate_tsf(c, 14), tol=1e-9)
@@ -53,9 +53,9 @@ def main():
     cmp("mode", b.mode(c, 20, 10), MODE._calculate_mode_optimized(c, 20, 10))
 
     # VAR (PR mode, variance only)
-    sV, vV, sdV = st.VAR._calculate_variance_tv_optimized(c, 20, False)
+    sV, vV, sdV = st.VAR._calculate_variance_rolling(c, 20, False)
     cmp("var.pr", b.variance(c, 20, "PR", 20, 20, 14, False), vV)
-    sV2, vV2, _ = st.VAR._calculate_variance_tv_optimized(c, 20, True)
+    sV2, vV2, _ = st.VAR._calculate_variance_rolling(c, 20, True)
     cmp("var.lr", b.variance(c, 20, "LR", 20, 20, 14, False), vV2)
 
     # MedianBands

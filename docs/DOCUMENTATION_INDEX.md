@@ -4,10 +4,11 @@ This is a comprehensive index of all documentation files for the OpenAlgo Techni
 
 ## Main Documentation Files
 
-### 0. **[TALIB_COMPATIBILITY.md](TALIB_COMPATIBILITY.md)** - TA-Lib comparison
-**Purpose**: How OpenAlgo values compare to TA-Lib (matches vs intentional TradingView
-conventions), the OBV flat-close fix, the new TA-Lib-compatible indicators, and the
-coverage gap (candlesticks, Hilbert Transform, etc.).
+### 0. **[INDICATOR_CONVENTIONS.md](INDICATOR_CONVENTIONS.md)** - Seeds, smoothing, windows and NaN
+**Purpose**: The seed, smoothing and window convention of each indicator that has
+more than one published form, how the indicators treat NaN input, the formulas of the
+single-formula indicators, how the conventions are checked in CI, and which functions
+cost more than one pass over the bars.
 
 ---
 

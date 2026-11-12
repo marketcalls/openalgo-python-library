@@ -112,6 +112,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "oa_bt"
+version = "0.1.0"
+
+[[package]]
 name = "oa_core"
 version = "0.1.0"
 
@@ -120,6 +124,7 @@ name = "oa_py"
 version = "0.1.0"
 dependencies = [
  "numpy",
+ "oa_bt",
  "oa_core",
  "pyo3",
 ]

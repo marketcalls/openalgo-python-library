@@ -3,6 +3,8 @@
 OpenAlgo Technical Indicators - Volume Indicators
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 from openalgo.numba_shim import jit
@@ -11,6 +13,7 @@ from .base import BaseIndicator
 from .trend import SMA, EMA, WMA
 from .volatility import BollingerBands
 from . import _backend
+from . import _anchors
 
 
 class OBV(BaseIndicator):
@@ -43,7 +46,7 @@ class OBV(BaseIndicator):
             elif close[i] < close[i-1]:
                 sign = -1.0
             else:
-                sign = 0.0  # flat close contributes 0 (matches TA-Lib / TradingView)
+                sign = 0.0  # flat close contributes 0
 
             obv[i] = obv[i-1] + (sign * float(volume[i]))
         
@@ -78,13 +81,13 @@ class OBV(BaseIndicator):
 
 class OBVSmoothed(BaseIndicator):
     """
-    On Balance Volume with Smoothing Options (TradingView Pine Script Implementation)
+    On Balance Volume with Smoothing Options
     
     OBV with various smoothing moving average options and Bollinger Bands support.
     Supports: None, SMA, SMA + Bollinger Bands, EMA, SMMA (RMA), WMA, VWMA
     
     Formula:
-    obv = ta.cum(math.sign(ta.change(src)) * volume)
+    obv = cumsum(sign(src - src[1]) * volume)
     Smoothed according to selected MA type
     """
     
@@ -218,12 +221,12 @@ class OBVSmoothed(BaseIndicator):
 
 class VWAP(BaseIndicator):
     """
-    Volume Weighted Average Price - TradingView Pine Script v6 Implementation
+    Volume Weighted Average Price
     
     VWAP is the average price a security has traded at throughout the day, 
     based on both volume and price. It gives more weight to prices with higher volume.
     
-    TradingView Pine Script v6 Features:
+    Features:
     - Session-based anchoring (Session, Week, Month, Quarter, Year, etc.)
     - Standard deviation and percentage-based bands
     - Multiple band levels
@@ -245,111 +248,75 @@ class VWAP(BaseIndicator):
     @staticmethod
     def _calculate_session_vwap(source: np.ndarray, volume: np.ndarray, 
                                session_starts: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Calculate session-based VWAP with standard deviation
-        
-        Parameters:
-        -----------
-        source : np.ndarray
-            Source price data (typically hlc3)
-        volume : np.ndarray
-            Volume data
-        session_starts : np.ndarray
-            Boolean array indicating session start points
-            
-        Returns:
-        --------
-        Tuple[np.ndarray, np.ndarray]
-            (vwap, stdev) arrays
-        """
-        n = len(source)
-        vwap = np.full(n, np.nan)
-        stdev = np.full(n, np.nan)
-        
-        session_sum_pv = 0.0
-        session_sum_v = 0.0
-        session_sum_pv2 = 0.0  # For variance calculation
-        
-        for i in range(n):
-            # Check if new session starts
-            if session_starts[i] or i == 0:
-                session_sum_pv = 0.0
-                session_sum_v = 0.0
-                session_sum_pv2 = 0.0
-            
-            # Add current bar to session
-            pv = source[i] * volume[i]
-            session_sum_pv += pv
-            session_sum_v += volume[i]
-            session_sum_pv2 += (source[i] * source[i] * volume[i])
-            
-            if session_sum_v > 0:
-                # Calculate VWAP
-                vwap[i] = session_sum_pv / session_sum_v
-                
-                # Calculate variance and standard deviation
-                # Var = E[X²] - E[X]²
-                # Where E[X] = VWAP and E[X²] = sum(price² * volume) / sum(volume)
-                mean_squared_price = session_sum_pv2 / session_sum_v
-                variance = mean_squared_price - (vwap[i] ** 2)
-                stdev[i] = np.sqrt(max(0, variance))  # Ensure non-negative
-            else:
-                vwap[i] = source[i]
-                stdev[i] = 0.0
-        
-        return vwap, stdev
+        """(vwap, stdev) per anchor period: the shared kernel, `_backend.session_vwap`"""
+        return _backend.session_vwap(source, volume, session_starts)
     
     @staticmethod
-    def _detect_session_starts(timestamps: Optional[np.ndarray] = None, 
-                              session_length: int = 1440) -> np.ndarray:
+    def _anchor_starts(n: int, anchor: Optional[str],
+                       session_starts: Optional[Union[np.ndarray, list]],
+                       timestamps, inputs: tuple) -> np.ndarray:
         """
-        Detect session start points based on timestamps or fixed intervals
+        Mark the first bar of every anchor period
         
         Parameters:
         -----------
-        timestamps : Optional[np.ndarray]
-            Unix timestamps (if available)
-        session_length : int, default=1440
-            Session length in minutes (1440 = 1 day)
+        n : int
+            Number of bars
+        anchor : Optional[str]
+            One of the anchor names of `calculate`, or None for one period
+        session_starts : Optional[Union[np.ndarray, list]]
+            Explicit markers, True on the first bar of each period. They win
+            over `anchor` when given.
+        timestamps : optional
+            Bar times, one per bar (see `_anchors.wall_seconds`)
+        inputs : tuple
+            The price and volume arguments as passed. When `timestamps` is
+            None the bar times are read from them (see `_anchors.bar_times`).
             
         Returns:
         --------
         np.ndarray
-            Boolean array indicating session starts
+            Boolean array of length n. Without bar times the data carries no
+            calendar, so only bar 0 is marked: the whole input is one period.
+
+        Raises ValueError for an anchor that is not one of the documented names,
+        whatever the inputs are. Warns when every anchor period holds a single
+        bar, because the VWAP is then each bar's own price.
         """
-        if timestamps is not None:
-            n = len(timestamps)
-            session_starts = np.zeros(n, dtype=bool)
-            session_starts[0] = True
-            
-            # Detect new trading sessions (e.g., new trading day)
-            for i in range(1, n):
-                # Simple day change detection (this is simplified)
-                # In real implementation, would use proper timezone handling
-                current_day = int(timestamps[i] // 86400)  # 86400 seconds in a day
-                prev_day = int(timestamps[i-1] // 86400)
-                
-                if current_day != prev_day:
-                    session_starts[i] = True
-                    
-            return session_starts
-        else:
-            # For data without timestamps, use fixed intervals
-            n = 100  # Default assumption - will be resized
-            session_starts = np.zeros(n, dtype=bool)
-            session_starts[0] = True
-            return session_starts
+        if anchor is not None:
+            _anchors.check_anchor(anchor)
+        one_period = np.zeros(n, dtype=bool)
+        one_period[:1] = True
+        if session_starts is not None:
+            starts = np.array(session_starts, dtype=bool)
+            # Markers of the wrong length cannot be applied: one period.
+            return starts if len(starts) == n else one_period
+        if timestamps is None:
+            timestamps = _anchors.bar_times(*inputs)
+        if anchor is None or timestamps is None:
+            return one_period
+        starts = _anchors.anchor_starts(timestamps, anchor)
+        if len(starts) != n:
+            raise ValueError(
+                f"timestamps has {len(starts)} values but the price data has {n}")
+        if n > 1 and starts.all():
+            warnings.warn(
+                f"vwap: every {anchor!r} period holds a single bar, so the VWAP is each "
+                "bar's own price. Pass anchor=None for one cumulative VWAP, or a longer "
+                "anchor such as 'Week' or 'Month'.",
+                UserWarning, stacklevel=4)
+        return starts
     
     def calculate(self, high: Union[np.ndarray, pd.Series, list],
                  low: Union[np.ndarray, pd.Series, list],
                  close: Union[np.ndarray, pd.Series, list],
                  volume: Union[np.ndarray, pd.Series, list],
                  source_type: str = "hlc3",
-                 anchor: str = "Session",
+                 anchor: Optional[str] = "Session",
                  session_starts: Optional[Union[np.ndarray, list]] = None,
                  timestamps: Optional[Union[np.ndarray, pd.DatetimeIndex]] = None) -> Union[np.ndarray, pd.Series]:
         """
-        Calculate Volume Weighted Average Price - TradingView Pine Script v6
+        Calculate Volume Weighted Average Price
         
         Parameters:
         -----------
@@ -363,17 +330,31 @@ class VWAP(BaseIndicator):
             Volume data
         source_type : str, default="hlc3"
             Source calculation: "hlc3", "hl2", "ohlc4", "close"
-        anchor : str, default="Session"
-            Anchor period: "Session", "Week", "Month", etc.
+        anchor : Optional[str], default="Session"
+            Period the VWAP restarts on: "Session" or "D" (each calendar day),
+            "Week", "Month", "Quarter" or "3M", "6M", "Year" or "12M", and
+            the intraday spans "4H", "1H", "30m", "15m", "5m", "1m" (measured
+            from each day's first bar). None gives one running VWAP from the
+            first bar. Any other value raises ValueError.
+            The anchor is applied through the bar times: `timestamps`, or the
+            index of the first pandas Series among high, low, close and
+            volume when it is a DatetimeIndex, a PeriodIndex or holds only
+            date or datetime objects. NumPy arrays, lists and Series with any
+            other index carry no bar times: the whole input is one period.
         session_starts : Optional[Union[np.ndarray, list]]
-            Boolean array indicating session start points
+            Boolean array, True on the first bar of each period. Overrides
+            `anchor` and `timestamps`.
         timestamps : Optional[Union[np.ndarray, pd.DatetimeIndex]]
-            Timestamps for session detection
+            Bar times, one per bar. A timezone-aware index is read in its own
+            zone, so a session is a local calendar day. Plain numbers are
+            Unix epoch seconds (split on UTC days).
             
         Returns:
         --------
         Union[np.ndarray, pd.Series]
-            VWAP values in the same format as input
+            VWAP values in the same format as input. NaN on a bar whose price
+            or volume is NaN (the sums carry on from the bar before) and
+            while a period has no volume yet.
         """
         high_data, input_type, index = self.validate_input(high)
         low_data, _, _ = self.validate_input(low)
@@ -383,11 +364,6 @@ class VWAP(BaseIndicator):
         # Align arrays
         high_data, low_data, close_data, volume_data = self.align_arrays(
             high_data, low_data, close_data, volume_data)
-        
-        # TradingView-style volume validation
-        total_volume = np.sum(volume_data)
-        if total_volume == 0:
-            raise RuntimeError("No volume is provided by the data vendor.")
         
         # Calculate source based on type
         if source_type == "hlc3":
@@ -402,25 +378,8 @@ class VWAP(BaseIndicator):
         else:
             source = (high_data + low_data + close_data) / 3.0
         
-        # Handle session starts
-        if session_starts is not None:
-            session_starts_array = np.array(session_starts, dtype=bool)
-        else:
-            # Detect sessions based on timestamps or use simple method
-            if timestamps is not None:
-                timestamp_array = np.array(timestamps)
-                if hasattr(timestamps, 'values'):  # pandas DatetimeIndex
-                    timestamp_array = timestamps.values.astype('datetime64[s]').astype(int)
-                session_starts_array = self._detect_session_starts(timestamp_array)
-            else:
-                # Default: treat as single session (cumulative VWAP)
-                session_starts_array = np.zeros(len(source), dtype=bool)
-                session_starts_array[0] = True
-        
-        # Ensure session_starts array has correct length
-        if len(session_starts_array) != len(source):
-            session_starts_array = np.zeros(len(source), dtype=bool)
-            session_starts_array[0] = True
+        session_starts_array = self._anchor_starts(
+            len(source), anchor, session_starts, timestamps, (high, low, close, volume))
         
         # Calculate VWAP
         vwap, _ = _backend.session_vwap(source, volume_data, session_starts_array)
@@ -432,13 +391,13 @@ class VWAP(BaseIndicator):
                            close: Union[np.ndarray, pd.Series, list],
                            volume: Union[np.ndarray, pd.Series, list],
                            source_type: str = "hlc3",
-                           anchor: str = "Session",
+                           anchor: Optional[str] = "Session",
                            band_mode: str = "Standard Deviation",
                            band_multipliers: Tuple[float, ...] = (1.0, 2.0, 3.0),
                            session_starts: Optional[Union[np.ndarray, list]] = None,
                            timestamps: Optional[Union[np.ndarray, pd.DatetimeIndex]] = None) -> Union[Tuple, Tuple]:
         """
-        Calculate VWAP with bands - TradingView Pine Script v6 Implementation
+        Calculate VWAP with bands
         
         Parameters:
         -----------
@@ -446,16 +405,17 @@ class VWAP(BaseIndicator):
             OHLC and volume data
         source_type : str, default="hlc3"
             Source calculation type
-        anchor : str, default="Session"
-            Anchor period
+        anchor : Optional[str], default="Session"
+            Period the VWAP and its bands restart on (see `calculate`)
         band_mode : str, default="Standard Deviation"
             "Standard Deviation" or "Percentage"
         band_multipliers : Tuple[float, ...], default=(1.0, 2.0, 3.0)
             Multipliers for each band level
         session_starts : Optional[Union[np.ndarray, list]]
-            Session start indicators
+            Boolean array, True on the first bar of each period. Overrides
+            `anchor` and `timestamps`.
         timestamps : Optional[Union[np.ndarray, pd.DatetimeIndex]]
-            Timestamps for session detection
+            Bar times, from which the anchor periods are found (see `calculate`)
             
         Returns:
         --------
@@ -471,11 +431,6 @@ class VWAP(BaseIndicator):
         high_data, low_data, close_data, volume_data = self.align_arrays(
             high_data, low_data, close_data, volume_data)
         
-        # TradingView-style volume validation
-        total_volume = np.sum(volume_data)
-        if total_volume == 0:
-            raise RuntimeError("No volume is provided by the data vendor.")
-        
         # Calculate source
         if source_type == "hlc3":
             source = (high_data + low_data + close_data) / 3.0
@@ -486,23 +441,8 @@ class VWAP(BaseIndicator):
         else:
             source = (high_data + low_data + close_data) / 3.0
         
-        # Handle session starts
-        if session_starts is not None:
-            session_starts_array = np.array(session_starts, dtype=bool)
-        else:
-            if timestamps is not None:
-                timestamp_array = np.array(timestamps)
-                if hasattr(timestamps, 'values'):
-                    timestamp_array = timestamps.values.astype('datetime64[s]').astype(int)
-                session_starts_array = self._detect_session_starts(timestamp_array)
-            else:
-                session_starts_array = np.zeros(len(source), dtype=bool)
-                session_starts_array[0] = True
-        
-        # Ensure correct length
-        if len(session_starts_array) != len(source):
-            session_starts_array = np.zeros(len(source), dtype=bool)
-            session_starts_array[0] = True
+        session_starts_array = self._anchor_starts(
+            len(source), anchor, session_starts, timestamps, (high, low, close, volume))
         
         # Calculate VWAP and standard deviation
         vwap, stdev = _backend.session_vwap(source, volume_data, session_starts_array)
@@ -547,44 +487,10 @@ class MFI(BaseIndicator):
         super().__init__("MFI")
     
     @staticmethod
-    @jit(nopython=True)
     def _calculate_mfi(high: np.ndarray, low: np.ndarray, close: np.ndarray,
                       volume: np.ndarray, period: int) -> np.ndarray:
-        """Numba optimized MFI aligned with TA-Lib"""
-        n = len(close)
-        result = np.full(n, np.nan)
-        
-        tp = (high + low + close) / 3.0
-        rmf = tp * volume  # raw money flow
-        
-        # Pre-compute positive / negative flows per bar
-        pos_raw = np.zeros(n)
-        neg_raw = np.zeros(n)
-        for i in range(1, n):
-            if tp[i] > tp[i - 1]:
-                pos_raw[i] = rmf[i]
-            elif tp[i] < tp[i - 1]:
-                neg_raw[i] = rmf[i]
-        
-        # Rolling window sums
-        pos_sum = 0.0
-        neg_sum = 0.0
-        for i in range(1, n):
-            pos_sum += pos_raw[i]
-            neg_sum += neg_raw[i]
-            
-            if i >= period:
-                pos_sum -= pos_raw[i - period]
-                neg_sum -= neg_raw[i - period]
-            
-            if i >= period - 1:
-                if neg_sum == 0:
-                    result[i] = 100.0
-                else:
-                    m_ratio = pos_sum / neg_sum
-                    result[i] = 100.0 - (100.0 / (1.0 + m_ratio))
-        
-        return result
+        """MFI values: the shared kernel, `_backend.mfi`"""
+        return _backend.mfi(high, low, close, volume, period)
     
     def calculate(self, high: Union[np.ndarray, pd.Series, list],
                  low: Union[np.ndarray, pd.Series, list],
@@ -707,35 +613,10 @@ class CMF(BaseIndicator):
         super().__init__("CMF")
     
     @staticmethod
-    @jit(nopython=True)
     def _calculate_cmf(high: np.ndarray, low: np.ndarray, close: np.ndarray,
                       volume: np.ndarray, period: int) -> np.ndarray:
-        """Numba optimized CMF calculation"""
-        n = len(close)
-        result = np.full(n, np.nan)
-        
-        for i in range(period - 1, n):
-            sum_mfv = 0.0
-            sum_volume = 0.0
-            
-            for j in range(period):
-                idx = i - period + 1 + j
-                
-                if high[idx] != low[idx]:
-                    mfm = ((close[idx] - low[idx]) - (high[idx] - close[idx])) / (high[idx] - low[idx])
-                else:
-                    mfm = 0
-                
-                mfv = mfm * volume[idx]
-                sum_mfv += mfv
-                sum_volume += volume[idx]
-            
-            if sum_volume > 0:
-                result[i] = sum_mfv / sum_volume
-            else:
-                result[i] = 0
-        
-        return result
+        """CMF values: the shared kernel, `_backend.cmf`"""
+        return _backend.cmf(high, low, close, volume, period)
     
     def calculate(self, high: Union[np.ndarray, pd.Series, list],
                  low: Union[np.ndarray, pd.Series, list],
@@ -777,13 +658,13 @@ class CMF(BaseIndicator):
 
 class EMV(BaseIndicator):
     """
-    Ease of Movement - matches TradingView exactly
+    Ease of Movement
     
     EMV relates price change to volume and is particularly useful 
-    for assessing the strength of a trend. TradingView version includes
-    automatic SMA smoothing.
+    for assessing the strength of a trend. The raw value is always
+    smoothed by an SMA.
     
-    TradingView Formula: EMV = SMA(div * change(hl2) * (high - low) / volume, length)
+    Formula: EMV = SMA(div * change(hl2) * (high - low) / volume, length)
     Where: hl2 = (high + low) / 2
            change(hl2) = current hl2 - previous hl2
     """
@@ -807,7 +688,7 @@ class EMV(BaseIndicator):
     @jit(nopython=True)
     def _calculate_emv_raw(high: np.ndarray, low: np.ndarray, volume: np.ndarray,
                           divisor: float) -> np.ndarray:
-        """Calculate raw EMV values before smoothing - matches TradingView formula"""
+        """Calculate raw EMV values before smoothing"""
         n = len(high)
         result = np.full(n, np.nan)
         
@@ -816,13 +697,13 @@ class EMV(BaseIndicator):
             hl2_current = (high[i] + low[i]) / 2
             hl2_previous = (high[i-1] + low[i-1]) / 2
             
-            # Change in hl2 (ta.change(hl2) in TradingView)
+            # Change in hl2 from the previous bar
             change_hl2 = hl2_current - hl2_previous
             
             # High - Low range
             high_low_range = high[i] - low[i]
             
-            # TradingView formula: div * change(hl2) * (high - low) / volume
+            # div * change(hl2) * (high - low) / volume
             if volume[i] > 0 and high_low_range > 0:
                 result[i] = divisor * change_hl2 * high_low_range / volume[i]
             else:
@@ -835,7 +716,7 @@ class EMV(BaseIndicator):
                  volume: Union[np.ndarray, pd.Series, list],
                  length: int = 14, divisor: int = 10000) -> Union[np.ndarray, pd.Series]:
         """
-        Calculate Ease of Movement - matches TradingView exactly
+        Calculate Ease of Movement
         
         Parameters:
         -----------
@@ -846,9 +727,9 @@ class EMV(BaseIndicator):
         volume : Union[np.ndarray, pd.Series, list]
             Volume data
         length : int, default=14
-            Period for SMA smoothing (TradingView default)
+            Period for SMA smoothing
         divisor : int, default=10000
-            Divisor for scaling EMV values (TradingView default)
+            Divisor for scaling EMV values
             
         Returns:
         --------
@@ -871,13 +752,13 @@ class EMV(BaseIndicator):
 
 class FI(BaseIndicator):
     """
-    Elder Force Index - matches TradingView exactly
+    Elder Force Index
     
     The Elder Force Index (EFI) combines price and volume to assess the power 
-    used to move the price of an asset. TradingView version applies EMA smoothing
+    used to move the price of an asset. It applies EMA smoothing
     to reduce noise.
     
-    TradingView Formula: EFI = EMA(volume * change(close), length)
+    Formula: EFI = EMA(volume * change(close), length)
     Where: change(close) = close - close[1]
     """
     
@@ -918,7 +799,7 @@ class FI(BaseIndicator):
         result = np.full(n, np.nan)
         
         for i in range(1, n):
-            # TradingView: ta.change(close) * volume
+            # (close - close[1]) * volume
             price_change = close[i] - close[i-1]
             result[i] = volume[i] * price_change
         
@@ -928,7 +809,7 @@ class FI(BaseIndicator):
                  volume: Union[np.ndarray, pd.Series, list],
                  length: int = 13) -> Union[np.ndarray, pd.Series]:
         """
-        Calculate Elder Force Index - matches TradingView exactly
+        Calculate Elder Force Index
         
         Parameters:
         -----------
@@ -937,7 +818,7 @@ class FI(BaseIndicator):
         volume : Union[np.ndarray, pd.Series, list]
             Volume data
         length : int, default=13
-            Period for EMA smoothing (TradingView default)
+            Period for EMA smoothing
             
         Returns:
         --------
@@ -955,7 +836,7 @@ class FI(BaseIndicator):
         close_data, volume_data = self.align_arrays(close_data, volume_data)
         self.validate_period(length, len(close_data))
         
-        # TradingView volume validation: check if cumulative volume is zero
+        # Volume validation: refuse a series whose cumulative volume is zero
         cumulative_volume = np.nansum(volume_data)
         if cumulative_volume == 0:
             raise ValueError("No volume is provided by the data vendor.")
@@ -966,14 +847,14 @@ class FI(BaseIndicator):
 
 class NVI(BaseIndicator):
     """
-    Negative Volume Index (Pine Script Implementation)
+    Negative Volume Index
     
     NVI focuses on days when volume decreases from the previous day.
     Uses cumulative sum of rate of change instead of multiplication.
     
-    Pine Script Formula:
+    Formula (nRes[1] is 0 before the first bar):
     xROC = roc(close, 1)
-    nRes = iff(volume < volume[1], nz(nRes[1], 0) + xROC, nz(nRes[1], 0))
+    nRes = nRes[1] + xROC if volume < volume[1] else nRes[1]
     
     Where: ROC = (Close - Previous Close) / Previous Close * 100
     """
@@ -984,11 +865,11 @@ class NVI(BaseIndicator):
     @staticmethod
     @jit(nopython=True)
     def _calculate_nvi(close: np.ndarray, volume: np.ndarray) -> np.ndarray:
-        """Numba optimized NVI calculation (Pine Script method)"""
+        """NVI as a cumulative sum of the percentage change on falling-volume bars"""
         n = len(close)
         result = np.full(n, np.nan)
         
-        result[0] = 0.0  # Start with 0 (Pine Script uses nz(..., 0))
+        result[0] = 0.0  # Start with 0
         
         for i in range(1, n):
             # Calculate ROC (rate of change) * 100
@@ -997,7 +878,7 @@ class NVI(BaseIndicator):
             else:
                 roc = 0.0
             
-            # Pine Script logic: if volume decreases, add ROC, else keep previous value
+            # If volume decreases, add ROC, else keep previous value
             if volume[i] < volume[i-1]:
                 result[i] = result[i-1] + roc
             else:
@@ -1038,7 +919,7 @@ class NVI(BaseIndicator):
     def calculate(self, close: Union[np.ndarray, pd.Series, list],
                  volume: Union[np.ndarray, pd.Series, list]) -> Union[np.ndarray, pd.Series]:
         """
-        Calculate Negative Volume Index (Pine Script Implementation)
+        Calculate Negative Volume Index
         
         Parameters:
         -----------
@@ -1064,7 +945,7 @@ class NVI(BaseIndicator):
                           volume: Union[np.ndarray, pd.Series, list],
                           ema_length: int = 255) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series]]:
         """
-        Calculate NVI with EMA (Complete Pine Script Implementation)
+        Calculate NVI with EMA
         
         Parameters:
         -----------
@@ -1073,7 +954,7 @@ class NVI(BaseIndicator):
         volume : Union[np.ndarray, pd.Series, list]
             Volume data
         ema_length : int, default=255
-            EMA period (Pine Script default)
+            EMA period
             
         Returns:
         --------
@@ -1093,12 +974,12 @@ class NVI(BaseIndicator):
 
 class PVI(BaseIndicator):
     """
-    Positive Volume Index (TradingView Pine Script Implementation)
+    Positive Volume Index
     
     PVI focuses on days when volume increases from the previous day.
     
-    TradingView Pine Script Formula:
-    pvi := na(pvi[1]) ? initial : (change(volume) > 0 ? pvi[1] * close / close[1] : pvi[1])
+    Formula:
+    pvi = initial on the first bar, then pvi[1] * close / close[1] if volume > volume[1] else pvi[1]
     
     Where: change(volume) > 0 means volume[i] > volume[i-1]
     """
@@ -1109,14 +990,14 @@ class PVI(BaseIndicator):
     @staticmethod
     @jit(nopython=True)
     def _calculate_pvi(close: np.ndarray, volume: np.ndarray, initial_value: float) -> np.ndarray:
-        """Numba optimized PVI calculation (TradingView Pine Script method)"""
+        """PVI: scaled by close / close[1] on rising-volume bars, unchanged otherwise"""
         n = len(close)
         result = np.full(n, np.nan)
         
-        result[0] = initial_value  # Start with initial value (TradingView default: 100)
+        result[0] = initial_value  # Start with initial value (default: 100)
         
         for i in range(1, n):
-            # TradingView formula: change(volume) > 0 ? pvi[1] * close / close[1] : pvi[1]
+            # pvi[1] * close / close[1] if volume rose, else pvi[1]
             if volume[i] > volume[i-1]:  # change(volume) > 0
                 if close[i-1] != 0:
                     result[i] = result[i-1] * (close[i] / close[i-1])
@@ -1176,7 +1057,7 @@ class PVI(BaseIndicator):
                  volume: Union[np.ndarray, pd.Series, list],
                  initial_value: float = 100.0) -> Union[np.ndarray, pd.Series]:
         """
-        Calculate Positive Volume Index (TradingView Pine Script Implementation)
+        Calculate Positive Volume Index
         
         Parameters:
         -----------
@@ -1185,7 +1066,7 @@ class PVI(BaseIndicator):
         volume : Union[np.ndarray, pd.Series, list]
             Volume data
         initial_value : float, default=100.0
-            Initial PVI value (TradingView default)
+            Initial PVI value
             
         Returns:
         --------
@@ -1206,7 +1087,7 @@ class PVI(BaseIndicator):
                              signal_type: str = "EMA",
                              signal_length: int = 255) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series]]:
         """
-        Calculate PVI with Signal Line (Complete TradingView Pine Script Implementation)
+        Calculate PVI with Signal Line
         
         Parameters:
         -----------
@@ -1215,11 +1096,11 @@ class PVI(BaseIndicator):
         volume : Union[np.ndarray, pd.Series, list]
             Volume data
         initial_value : float, default=100.0
-            Initial PVI value (TradingView default)
+            Initial PVI value
         signal_type : str, default="EMA"
             Signal smoothing type ("EMA" or "SMA")
         signal_length : int, default=255
-            Signal line period (TradingView default)
+            Signal line period
             
         Returns:
         --------
@@ -1248,13 +1129,13 @@ class PVI(BaseIndicator):
 
 class VOLOSC(BaseIndicator):
     """
-    Volume Oscillator - TradingView Pine Script v6 Implementation
+    Volume Oscillator
     
     Volume Oscillator shows the relationship between two exponential moving averages of volume.
     
-    TradingView Pine Script v6 Formula:
-    short = ta.ema(volume, shortlen)
-    long = ta.ema(volume, longlen)
+    Formula:
+    short = ema(volume, short_length)
+    long = ema(volume, long_length)
     osc = 100 * (short - long) / long
     
     Where:
@@ -1299,18 +1180,18 @@ class VOLOSC(BaseIndicator):
                  short_length: int = 5, long_length: int = 10,
                  check_volume_validity: bool = True) -> Union[np.ndarray, pd.Series]:
         """
-        Calculate Volume Oscillator - TradingView Pine Script v6 Implementation
+        Calculate Volume Oscillator
         
         Parameters:
         -----------
         volume : Union[np.ndarray, pd.Series, list]
             Volume data
         short_length : int, default=5
-            Short EMA length (TradingView default)
+            Short EMA length
         long_length : int, default=10
-            Long EMA length (TradingView default)
+            Long EMA length
         check_volume_validity : bool, default=True
-            Check for valid volume data (TradingView style validation)
+            Raise RuntimeError when the volume sums to zero (no volume in the data)
             
         Returns:
         --------
@@ -1319,17 +1200,17 @@ class VOLOSC(BaseIndicator):
             
         Notes:
         ------
-        TradingView Pine Script v6 Formula:
-        short = ta.ema(volume, shortlen)
-        long = ta.ema(volume, longlen)
+        Formula:
+        short = ema(volume, short_length)
+        long = ema(volume, long_length)
         osc = 100 * (short - long) / long
         
-        The TradingView script includes volume validation that raises an error
-        if no volume is provided by the data vendor.
+        With check_volume_validity, a series whose volume sums to zero raises an
+        error, because the data carries no volume.
         """
         validated_volume, input_type, index = self.validate_input(volume)
         
-        # TradingView-style volume validation
+        # Volume validation
         if check_volume_validity:
             total_volume = np.nansum(validated_volume)
             if total_volume == 0:
@@ -1391,13 +1272,13 @@ class VROC(BaseIndicator):
 
 class KlingerVolumeOscillator(BaseIndicator):
     """
-    Klinger Volume Oscillator (KVO) - matches TradingView exactly
+    Klinger Volume Oscillator (KVO)
     
     The KVO is designed to predict price reversals in a market by comparing 
     volume to price movement.
     
-    TradingView Formula:
-    xTrend = iff(hlc3 > hlc3[1], volume * 100, -volume * 100)
+    Formula:
+    xTrend = volume * 100 if hlc3 > hlc3[1] else -volume * 100
     xFast = ema(xTrend, FastX)
     xSlow = ema(xTrend, SlowX)
     xKVO = xFast - xSlow
@@ -1409,12 +1290,12 @@ class KlingerVolumeOscillator(BaseIndicator):
     
     @staticmethod
     @jit(nopython=True)
-    def _calculate_kvo_tv(high: np.ndarray, low: np.ndarray, close: np.ndarray, volume: np.ndarray,
+    def _calculate_kvo(high: np.ndarray, low: np.ndarray, close: np.ndarray, volume: np.ndarray,
                          trig_len: int, fast_x: int, slow_x: int) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Calculate KVO using exact TradingView logic
-        TradingView formula:
-        xTrend = iff(hlc3 > hlc3[1], volume * 100, -volume * 100)
+        Calculate KVO
+        Formula:
+        xTrend = volume * 100 if hlc3 > hlc3[1] else -volume * 100
         xFast = ema(xTrend, FastX)
         xSlow = ema(xTrend, SlowX)
         xKVO = xFast - xSlow
@@ -1425,8 +1306,8 @@ class KlingerVolumeOscillator(BaseIndicator):
         # Calculate hlc3 (typical price)
         hlc3 = (high + low + close) / 3.0
         
-        # Calculate xTrend using TradingView logic
-        # xTrend = iff(hlc3 > hlc3[1], volume * 100, -volume * 100)
+        # Calculate xTrend
+        # xTrend = volume * 100 if hlc3 > hlc3[1] else -volume * 100
         x_trend = np.zeros(n)  # Initialize with zeros instead of NaN
         x_trend[0] = volume[0] * 100.0  # First value assumes positive
         
@@ -1436,7 +1317,7 @@ class KlingerVolumeOscillator(BaseIndicator):
             else:
                 x_trend[i] = -volume[i] * 100.0
         
-        # Calculate EMAs using TradingView logic
+        # Calculate EMAs, each seeded with the first value
         # xFast = ema(xTrend, FastX)
         x_fast = np.zeros(n)
         fast_alpha = 2.0 / (fast_x + 1)
@@ -1476,7 +1357,7 @@ class KlingerVolumeOscillator(BaseIndicator):
                  volume: Union[np.ndarray, pd.Series, list],
                  trig_len: int = 13, fast_x: int = 34, slow_x: int = 55) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series]]:
         """
-        Calculate Klinger Volume Oscillator - matches TradingView exactly
+        Calculate Klinger Volume Oscillator
         
         Parameters:
         -----------
@@ -1489,11 +1370,11 @@ class KlingerVolumeOscillator(BaseIndicator):
         volume : Union[np.ndarray, pd.Series, list]
             Volume data
         trig_len : int, default=13
-            Trigger line EMA period (TradingView: TrigLen)
+            Trigger line EMA period
         fast_x : int, default=34
-            Fast EMA period (TradingView: FastX)
+            Fast EMA period
         slow_x : int, default=55
-            Slow EMA period (TradingView: SlowX)
+            Slow EMA period
             
         Returns:
         --------
@@ -1521,12 +1402,12 @@ class KlingerVolumeOscillator(BaseIndicator):
 
 class PriceVolumeTrend(BaseIndicator):
     """
-    Price Volume Trend (PVT) - TradingView Pine Script Implementation
+    Price Volume Trend (PVT)
     
     PVT combines price and volume to show the cumulative volume based on 
-    price changes. Uses the TradingView Pine Script formula.
+    price changes.
     
-    Formula: vt = ta.cum(ta.change(src)/src[1]*volume)
+    Formula: pvt = cumsum((src - src[1]) / src[1] * volume)
     Which expands to: PVT = cumsum((close[i] - close[i-1]) / close[i-1] * volume[i])
     """
     
@@ -1536,18 +1417,18 @@ class PriceVolumeTrend(BaseIndicator):
     @staticmethod
     @jit(nopython=True)
     def _calculate_pvt(close: np.ndarray, volume: np.ndarray) -> np.ndarray:
-        """Numba optimized PVT calculation (TradingView Pine Script formula)"""
+        """PVT: cumulative sum of (close - close[1]) / close[1] * volume, starting at 0"""
         n = len(close)
         pvt = np.zeros(n)
         
         # First value is always 0 (no previous close to compare)
         pvt[0] = 0.0
         
-        # Calculate PVT using TradingView formula: cum(change(close)/close[1]*volume)
+        # PVT = cumsum((close - close[1]) / close[1] * volume)
         for i in range(1, n):
             if close[i-1] != 0.0:
-                # TradingView formula: change(src)/src[1]*volume
-                # change(src) = close[i] - close[i-1]
+                # (src - src[1]) / src[1] * volume
+                # src - src[1] = close[i] - close[i-1]
                 # src[1] = close[i-1] (previous close)
                 price_change_ratio = (close[i] - close[i-1]) / close[i-1]
                 pvt_change = price_change_ratio * volume[i]
@@ -1561,7 +1442,7 @@ class PriceVolumeTrend(BaseIndicator):
     def calculate(self, close: Union[np.ndarray, pd.Series, list],
                  volume: Union[np.ndarray, pd.Series, list]) -> Union[np.ndarray, pd.Series]:
         """
-        Calculate Price Volume Trend (TradingView Pine Script Implementation)
+        Calculate Price Volume Trend
         
         Parameters:
         -----------
@@ -1574,7 +1455,7 @@ class PriceVolumeTrend(BaseIndicator):
         --------
         Union[np.ndarray, pd.Series]
             PVT values in the same format as input
-            Formula: vt = ta.cum(ta.change(src)/src[1]*volume)
+            Formula: pvt = cumsum((src - src[1]) / src[1] * volume)
         """
         close_data, input_type, index = self.validate_input(close)
         volume_data, _, _ = self.validate_input(volume)

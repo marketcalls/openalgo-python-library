@@ -1,0 +1,45 @@
+# Default intraday (MIS) times per exchange, by date. Times are IST, HH:MM.
+#
+# The engine reads this file at build time (see tables.rs). The defaults are chosen to
+# be no later than any known broker automatic square-off, so a backtest never keeps a
+# position the broker would already have closed.
+#
+# exchange                     OpenAlgo exchange code. The index exchanges follow NSE and BSE.
+# valid_from, valid_to         as in regular_hours.csv; the rows of an exchange are contiguous.
+# entry_until                  an intraday entry is rejected when its fill bar would open at
+#                              or after this clock time. Empty when the segment has no clock
+#                              time and uses the margins below (MCX).
+# square_off                   intraday positions are squared off at this clock time.
+# entry_before_close_min       minutes before that day's session close at which entries stop
+#                              when there is no clock time, or when the clock times do not
+#                              fit the session (a special session).
+# square_off_before_close_min  the same for the square-off.
+# source                       where the values come from.
+# status                       verified: the row states what its source states.
+#                              unverified: a value still to be confirmed (by the maintainer,
+#                              or by broker times not yet published); the session's
+#                              intraday times then say `unverified`.
+#
+# Broker automatic square-off times read from broker pages on 2026-11-12, all for the
+# period from 2026-08-03 (closing auction at 15:15, derivatives close 15:40):
+#   cash stocks in the closing auction: 15:00 PhonePe Share.Market
+#     (phonepeinvest.com/support, "what will be the new MIS auto square-off timings"),
+#     15:05 Fyers (fyers.in/notice-board, closing auction session notice), 15:10 Angel One
+#     (smartapi.angelone.in/smartapi/forum/post/19209), Dhan and Upstox, 15:12 Zerodha
+#     (support.zerodha.com, "intraday auto square-off timings").
+#   equity derivatives: 15:20 Angel One, 15:25 Fyers, Dhan, Upstox and PhonePe
+#     Share.Market, 15:26 Zerodha.
+# No broker had published times for the period from 2026-12-07 (closing auction at
+# 15:30, derivatives close 15:45).
+exchange,valid_from,valid_to,entry_until,square_off,entry_before_close_min,square_off_before_close_min,source,status
+NSE,,2026-08-02,15:00,15:10,30,20,"Backtesting PRD 04-execution-and-market-model.md section 2",verified
+NSE,2026-08-03,2026-12-06,14:50,15:00,30,20,"Maintainer decision TIMES-1 of 2026-11-12: entries until 14:50, square-off at 15:00, the earliest broker auto square-off read for cash stocks in the closing auction (see the note above)",verified
+NSE,2026-12-07,,14:50,15:00,30,20,"Maintainer decision TIMES-1 of 2026-11-12, kept from the previous row; no broker time for the period from 2026-12-07 was found on 2026-11-12, so review it when brokers publish them",unverified
+BSE,,2026-08-02,15:00,15:10,30,20,"Backtesting PRD 04-execution-and-market-model.md section 2",verified
+BSE,2026-08-03,2026-12-06,14:50,15:00,30,20,"Maintainer decision TIMES-1 of 2026-11-12: entries until 14:50, square-off at 15:00, the earliest broker auto square-off read for cash stocks in the closing auction (see the note above)",verified
+BSE,2026-12-07,,14:50,15:00,30,20,"Maintainer decision TIMES-1 of 2026-11-12, kept from the previous row; no broker time for the period from 2026-12-07 was found on 2026-11-12, so review it when brokers publish them",unverified
+NFO,,,15:00,15:10,30,20,"Backtesting PRD 04-execution-and-market-model.md section 2",verified
+BFO,,,15:00,15:10,30,20,"Backtesting PRD 04-execution-and-market-model.md section 2",verified
+CDS,,,16:30,16:40,30,20,"Backtesting PRD 04-execution-and-market-model.md section 2",verified
+BCD,,,16:30,16:40,30,20,"Backtesting PRD 04-execution-and-market-model.md section 2",verified
+MCX,,,,,30,20,"Backtesting PRD 04-execution-and-market-model.md section 2: 30 and 20 minutes before that day's session close",verified

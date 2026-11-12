@@ -1,0 +1,41 @@
+# Default margin by instrument kind, product and trade date (IST): what opening a position
+# blocks from the strategy's free cash (04-execution-and-market-model 5). The engine reads
+# this file at build time (see margin_table.rs); it is the only place a default margin is
+# written. Zero defaults are forbidden: a position with no row here is an error, never
+# free.
+#
+# row_id                 unique id, shown in results and warnings
+# kind                   EQ, FUT or OPT (the kernel's instrument kind codes)
+# product                CNC, MIS, NRML, or * for any product
+# valid_from, valid_to   trade dates the row applies to, both inclusive; an empty valid_from
+#                        applies to every earlier date, an empty valid_to while in force.
+#                        Rows of one kind and product never overlap.
+# model, percent         leverage: the margin is the value divided by the leverage the
+#                        order asks for (1 when it asks for none), and `percent` is the least
+#                        margin, so the most leverage is 100 / percent.
+#                        percent: the margin is `percent` of the value; no leverage can be
+#                        asked for.
+# source                 where the figure comes from
+# status                 verified: the row states what its source states; unverified: it
+#                        does not (for example one day's observation applied to a range),
+#                        and a run that uses it warns; default: a modelling default the
+#                        maintainer set in place of figures that differ by symbol and date,
+#                        which the user can override; the Assumptions block states it and a
+#                        run that uses it does not warn
+# notes                  caveats
+#
+# Value is quantity x price x multiplier at the fill bar's open; for a long option it is
+# the premium paid. Short options are not in this table (Phase 3).
+#
+# Futures: one row for every futures contract on any exchange and underlying (NSE index
+# and stock futures, BSE, MCX), on any date (decision D23). Real futures margins (SPAN
+# plus exposure) differ by underlying and change every day, so no per-underlying figure
+# is kept; a run gives its own with margin= (one value, or per underlying, as a percent
+# of contract value or rupees per lot), which replaces this row for the contracts it
+# names.
+row_id,kind,product,valid_from,valid_to,model,percent,source,status,notes
+CNC_EQ/1,EQ,CNC,,,leverage,100,"Zerodha support, How much margins or leverage does Zerodha provide (read 2026-11-12): no leverage outside intraday equity",verified,Delivery is paid in full: 100 percent of the value and no leverage
+MIS_EQ/1,EQ,MIS,,2021-08-31,leverage,20,"Zerodha support, How much margins or leverage does Zerodha provide (read 2026-11-12); tradingqna.com, Peak margin requirements from Sep 1st 2021",unverified,"SEBI's peak margin rules were phased in from 2020-12-01 and took full effect on 2021-09-01; before then brokers could give more intraday leverage, so the later 5x limit (a 20 percent margin) stands in"
+MIS_EQ/2,EQ,MIS,2021-09-01,,leverage,20,"Zerodha support, How much margins or leverage does Zerodha provide: up to 5 times (20% margin) for intraday; Zerodha support, What are the different types of margins: at least 20 percent of the traded value or VaR plus ELM, whichever is higher (both read 2026-11-12)",verified,"The most any symbol gets; a symbol whose VaR plus ELM is above 20 percent gets less (the per-symbol leverage table is not built)"
+LONG_OPT/1,OPT,*,,,percent,100,"Zerodha support, What are the different types of margins (read 2026-11-12): option buyers pay only the premium",verified,A long option blocks the premium paid
+FUT/1,FUT,*,,,percent,20,"OpenAlgo backtest default of 2026-11-12: every futures contract blocks 20 percent of its contract value (5x), for any underlying and date, unless the run gives margin=",default,"Real margins differ by underlying and date; pass margin= per underlying (a percent of contract value, or rupees per lot as a broker's margin calculator shows) for figures closer to the market"

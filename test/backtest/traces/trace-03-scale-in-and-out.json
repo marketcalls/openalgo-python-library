@@ -1,0 +1,367 @@
+{
+  "format": "openalgo.backtest.trace/1",
+  "id": "trace-03",
+  "roadmap_trace": 3,
+  "title": "Scale in, first target fills, an add joins the remaining targets, the trail takes the remainder; stop quantity and level after each step",
+  "phase": 1,
+  "cases": [
+    {
+      "id": "trace-03a-scale-in-and-out",
+      "title": "Scale in before the first target, first target fills, a second add joins the remaining target and the remainder, the trail takes the remainder",
+      "depends_on": ["SPEC-08", "SPEC-09", "SPEC-10", "SPEC-21", "SPEC-22", "SPEC-24"],
+      "notes": [
+        "The base interval is the strategy interval (5m): the data is supplied only at 5 minutes, the second row of the base-interval table.",
+        "Quantities and prices are chosen so every average price and every target quantity is exact: no tick rounding (SPEC-03) and no fraction rounding (SPEC-13) is involved.",
+        "Three scaling rules are not settled by the documents and decide most numbers here. SPEC-08: an add made before any target has filled gives every target its original fraction of the tranche (0.5 and 0.3) and the rest (0.2) to the remainder. SPEC-09: an add made after target 0 has filled gives the unfilled target its original fraction, 0.3, and the rest, including the filled target's 0.5, to the remainder. SPEC-10: unfilled target levels follow the average price, like the stop.",
+        "Other readings, same bars. SPEC-08 alternative (the first add does not join the targets): target 0 sells 50. SPEC-09 alternative (the second add is split between the unfilled target and the remainder in their original relative proportions, 0.3 : 0.2): target 1 sells 120 and the trail takes 80, gross P&L 4400.00. SPEC-10 alternative (targets keep the levels set at the first fill): target 0 fills at 1010.00 and target 1 at 1020.00, each in the same slice as here.",
+        "The entry bar 09:20 has high equal to open. The trail is armed by 09:35 under either reference (average price or first entry) and stays armed after the second add under either reading, so SPEC-01 and SPEC-12 do not matter. No add bar touches the old or the new stop or target, so SPEC-11 does not matter."
+      ],
+      "instruments": [
+        {"symbol": "HDFCBANK", "exchange": "NSE", "type": "equity", "tick_size_rupees": 0.05, "lot_size_units": 1, "product": "MIS", "expiry_date": null, "underlying": null}
+      ],
+      "calendar": {
+        "NSE": [
+          {"date": "2025-07-01", "open_ist": "09:15", "close_ist": "15:30"}
+        ]
+      },
+      "settings": {
+        "strategy_interval": "5m",
+        "base": "5m",
+        "entry_from": "09:15",
+        "entry_until": "15:00",
+        "square_off": "15:10",
+        "fill": "next_open",
+        "slippage": 0.0,
+        "costs": null,
+        "capital": 1000000,
+        "quantity_mode": "venue",
+        "round_levels": true,
+        "max_daily_loss": null,
+        "risk_basis": "gross",
+        "after_risk_exit": "lock_session",
+        "roll": null,
+        "first_slice_ist": "2025-07-01T09:15:00+05:30",
+        "last_slice_ist": "2025-07-01T09:50:00+05:30",
+        "documented_defaults": ["product", "entry_until", "square_off", "fill", "risk_basis", "round_levels"]
+      },
+      "bars": {
+        "interval": "5m",
+        "derived_from_case": null,
+        "columns": ["time_ist", "open", "high", "low", "close", "volume"],
+        "rows": {
+          "HDFCBANK": [
+            ["2025-07-01T09:15:00+05:30", 998.0, 1000.5, 997.5, 1000.0, 1000],
+            ["2025-07-01T09:20:00+05:30", 1000.0, 1000.0, 997.0, 998.0, 1000],
+            ["2025-07-01T09:25:00+05:30", 998.0, 1005.0, 997.5, 1004.0, 1000],
+            ["2025-07-01T09:30:00+05:30", 1004.0, 1007.0, 1003.0, 1006.0, 1000],
+            ["2025-07-01T09:35:00+05:30", 1006.0, 1012.5, 1005.5, 1012.0, 1000],
+            ["2025-07-01T09:40:00+05:30", 1012.0, 1016.0, 1010.0, 1015.0, 1000],
+            ["2025-07-01T09:45:00+05:30", 1015.0, 1027.5, 1014.0, 1026.0, 1000],
+            ["2025-07-01T09:50:00+05:30", 1026.0, 1026.5, 1019.0, 1020.0, 1000]
+          ]
+        }
+      },
+      "missing_slices": [],
+      "strategy": {
+        "class_attributes": {"symbol": "HDFCBANK", "exchange": "NSE", "interval": "5m"},
+        "conditions": null,
+        "decisions": [
+          {
+            "bar_open_ist": "2025-07-01T09:15:00+05:30",
+            "decision_time_ist": "2025-07-01T09:20:00+05:30",
+            "decision_slice_ist": "2025-07-01T09:15:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "buy",
+              "arguments": {
+                "qty": 100,
+                "stop": {"bt": "points", "args": [10]},
+                "targets": [
+                  [
+                    {"bt": "points", "args": [10]},
+                    0.5
+                  ],
+                  [
+                    {"bt": "points", "args": [20]},
+                    0.3
+                  ]
+                ],
+                "trail": {"bt": "trail", "args": [8, 0]}
+              }
+            },
+            "python": "self.buy(qty=100, stop=bt.points(10), targets=[(bt.points(10), 0.5), (bt.points(20), 0.3)], trail=bt.trail(8, 0))"
+          },
+          {
+            "bar_open_ist": "2025-07-01T09:25:00+05:30",
+            "decision_time_ist": "2025-07-01T09:30:00+05:30",
+            "decision_slice_ist": "2025-07-01T09:25:00+05:30",
+            "if_position": "long",
+            "call": {
+              "method": "buy",
+              "arguments": {"qty": 100}
+            },
+            "python": "self.buy(qty=100)"
+          },
+          {
+            "bar_open_ist": "2025-07-01T09:35:00+05:30",
+            "decision_time_ist": "2025-07-01T09:40:00+05:30",
+            "decision_slice_ist": "2025-07-01T09:35:00+05:30",
+            "if_position": "long",
+            "call": {
+              "method": "buy",
+              "arguments": {"qty": 100}
+            },
+            "python": "self.buy(qty=100)"
+          }
+        ]
+      },
+      "expected": {
+        "assumptions": {"base": "5m", "product": "MIS", "entry_until": "15:00", "square_off": "15:10"},
+        "strategy_bars": [
+          {"bar_open_ist": "2025-07-01T09:15:00+05:30", "open": 998.0, "high": 1000.5, "low": 997.5, "close": 1000.0},
+          {"bar_open_ist": "2025-07-01T09:20:00+05:30", "open": 1000.0, "high": 1000.0, "low": 997.0, "close": 998.0},
+          {"bar_open_ist": "2025-07-01T09:25:00+05:30", "open": 998.0, "high": 1005.0, "low": 997.5, "close": 1004.0},
+          {"bar_open_ist": "2025-07-01T09:30:00+05:30", "open": 1004.0, "high": 1007.0, "low": 1003.0, "close": 1006.0},
+          {"bar_open_ist": "2025-07-01T09:35:00+05:30", "open": 1006.0, "high": 1012.5, "low": 1005.5, "close": 1012.0},
+          {"bar_open_ist": "2025-07-01T09:40:00+05:30", "open": 1012.0, "high": 1016.0, "low": 1010.0, "close": 1015.0},
+          {"bar_open_ist": "2025-07-01T09:45:00+05:30", "open": 1015.0, "high": 1027.5, "low": 1014.0, "close": 1026.0},
+          {"bar_open_ist": "2025-07-01T09:50:00+05:30", "open": 1026.0, "high": 1026.5, "low": 1019.0, "close": 1020.0}
+        ],
+        "decisions": [
+          {"decision": 0, "position_condition_met": true, "order_id": "o1", "outcome": "filled"},
+          {"decision": 1, "position_condition_met": true, "order_id": "o2", "outcome": "filled"},
+          {"decision": 2, "position_condition_met": true, "order_id": "o3", "outcome": "filled"}
+        ],
+        "fills": [
+          {"slice_ist": "2025-07-01T09:20:00+05:30", "step": 2, "instrument": "HDFCBANK", "side": "BUY", "quantity_units": 100, "price_rupees": 1000.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "instrument": "HDFCBANK", "side": "BUY", "quantity_units": 100, "price_rupees": 1004.0, "fill_at": "open", "reason": "add", "order_id": "o2", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:35:00+05:30", "step": 3, "instrument": "HDFCBANK", "side": "SELL", "quantity_units": 100, "price_rupees": 1012.0, "fill_at": "level", "reason": "leg_target", "order_id": null, "target_index": 0, "flags": [], "gtt_id": null, "depends_on": ["SPEC-08", "SPEC-10"]},
+          {"slice_ist": "2025-07-01T09:40:00+05:30", "step": 2, "instrument": "HDFCBANK", "side": "BUY", "quantity_units": 100, "price_rupees": 1012.0, "fill_at": "open", "reason": "add", "order_id": "o3", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:45:00+05:30", "step": 3, "instrument": "HDFCBANK", "side": "SELL", "quantity_units": 90, "price_rupees": 1027.0, "fill_at": "level", "reason": "leg_target", "order_id": null, "target_index": 1, "flags": [], "gtt_id": null, "depends_on": ["SPEC-08", "SPEC-09", "SPEC-10"]},
+          {"slice_ist": "2025-07-01T09:50:00+05:30", "step": 3, "instrument": "HDFCBANK", "side": "SELL", "quantity_units": 110, "price_rupees": 1019.5, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "gtt_id": null, "depends_on": ["SPEC-08", "SPEC-09"]}
+        ],
+        "levels": [
+          {
+            "slice_ist": "2025-07-01T09:20:00+05:30",
+            "instrument": "HDFCBANK",
+            "position_quantity_units": 100,
+            "average_price_rupees": 1000.0,
+            "stop": {"level_rupees": 990.0, "quantity_units": 100},
+            "targets": [
+              {"index": 0, "level_rupees": 1010.0, "quantity_units": 50, "state": "working"},
+              {"index": 1, "level_rupees": 1020.0, "quantity_units": 30, "state": "working"}
+            ],
+            "remainder_quantity_units": 20,
+            "trail": {"armed": false, "favourable_extreme_rupees": 1000.0},
+            "breakeven": null
+          },
+          {
+            "slice_ist": "2025-07-01T09:30:00+05:30",
+            "instrument": "HDFCBANK",
+            "position_quantity_units": 200,
+            "average_price_rupees": 1002.0,
+            "stop": {"level_rupees": 992.0, "quantity_units": 200},
+            "targets": [
+              {"index": 0, "level_rupees": 1012.0, "quantity_units": 100, "state": "working"},
+              {"index": 1, "level_rupees": 1022.0, "quantity_units": 60, "state": "working"}
+            ],
+            "remainder_quantity_units": 40,
+            "trail": {"armed": false, "favourable_extreme_rupees": 1007.0},
+            "breakeven": null,
+            "depends_on": ["SPEC-08", "SPEC-10"]
+          },
+          {
+            "slice_ist": "2025-07-01T09:35:00+05:30",
+            "instrument": "HDFCBANK",
+            "position_quantity_units": 100,
+            "average_price_rupees": 1002.0,
+            "stop": {"level_rupees": 1004.5, "quantity_units": 100},
+            "targets": [
+              {"index": 0, "level_rupees": 1012.0, "quantity_units": 100, "state": "filled"},
+              {"index": 1, "level_rupees": 1022.0, "quantity_units": 60, "state": "working"}
+            ],
+            "remainder_quantity_units": 40,
+            "trail": {"armed": true, "favourable_extreme_rupees": 1012.5},
+            "breakeven": null,
+            "depends_on": ["SPEC-08", "SPEC-10"]
+          },
+          {
+            "slice_ist": "2025-07-01T09:40:00+05:30",
+            "instrument": "HDFCBANK",
+            "position_quantity_units": 200,
+            "average_price_rupees": 1007.0,
+            "stop": {"level_rupees": 1008.0, "quantity_units": 200},
+            "targets": [
+              {"index": 0, "level_rupees": 1012.0, "quantity_units": 100, "state": "filled"},
+              {"index": 1, "level_rupees": 1027.0, "quantity_units": 90, "state": "working"}
+            ],
+            "remainder_quantity_units": 110,
+            "trail": {"armed": true, "favourable_extreme_rupees": 1016.0},
+            "breakeven": null,
+            "depends_on": ["SPEC-08", "SPEC-09", "SPEC-10"]
+          },
+          {
+            "slice_ist": "2025-07-01T09:45:00+05:30",
+            "instrument": "HDFCBANK",
+            "position_quantity_units": 110,
+            "average_price_rupees": 1007.0,
+            "stop": {"level_rupees": 1019.5, "quantity_units": 110},
+            "targets": [
+              {"index": 0, "level_rupees": 1012.0, "quantity_units": 100, "state": "filled"},
+              {"index": 1, "level_rupees": 1027.0, "quantity_units": 90, "state": "filled"}
+            ],
+            "remainder_quantity_units": 110,
+            "trail": {"armed": true, "favourable_extreme_rupees": 1027.5},
+            "breakeven": null,
+            "depends_on": ["SPEC-08", "SPEC-09", "SPEC-10"]
+          },
+          {"slice_ist": "2025-07-01T09:50:00+05:30", "instrument": "HDFCBANK", "position_quantity_units": 0, "average_price_rupees": null, "stop": null, "targets": [], "remainder_quantity_units": 0, "trail": null, "breakeven": null}
+        ],
+        "events": [
+          {"slice_ist": "2025-07-01T09:15:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o1", "quantity_units": null, "price_rupees": null, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:20:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o1", "quantity_units": 100, "price_rupees": 1000.0, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:20:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "HDFCBANK", "position_quantity_units": 100},
+          {"slice_ist": "2025-07-01T09:25:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o2", "quantity_units": null, "price_rupees": null, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o2", "quantity_units": 100, "price_rupees": 1004.0, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "type": "position", "name": "PositionChanged", "instrument": "HDFCBANK", "position_quantity_units": 200},
+          {"slice_ist": "2025-07-01T09:35:00+05:30", "step": 3, "type": "risk", "name": "leg_target_hit", "scope": "leg", "instrument": "HDFCBANK", "level_rupees": 1012.0, "target_index": 0, "observed_rupees": null, "depends_on": ["SPEC-10"]},
+          {"slice_ist": "2025-07-01T09:35:00+05:30", "step": 3, "type": "position", "name": "PositionChanged", "instrument": "HDFCBANK", "position_quantity_units": 100, "depends_on": ["SPEC-08"]},
+          {"slice_ist": "2025-07-01T09:35:00+05:30", "step": 4, "type": "risk", "name": "leg_trail_armed", "scope": "leg", "instrument": "HDFCBANK", "level_rupees": 1004.5, "target_index": null, "observed_rupees": null},
+          {"slice_ist": "2025-07-01T09:35:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o3", "quantity_units": null, "price_rupees": null, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:40:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o3", "quantity_units": 100, "price_rupees": 1012.0, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:40:00+05:30", "step": 2, "type": "position", "name": "PositionChanged", "instrument": "HDFCBANK", "position_quantity_units": 200, "depends_on": ["SPEC-08"]},
+          {"slice_ist": "2025-07-01T09:45:00+05:30", "step": 3, "type": "risk", "name": "leg_target_hit", "scope": "leg", "instrument": "HDFCBANK", "level_rupees": 1027.0, "target_index": 1, "observed_rupees": null, "depends_on": ["SPEC-10"]},
+          {"slice_ist": "2025-07-01T09:45:00+05:30", "step": 3, "type": "position", "name": "PositionChanged", "instrument": "HDFCBANK", "position_quantity_units": 110, "depends_on": ["SPEC-08", "SPEC-09"]},
+          {"slice_ist": "2025-07-01T09:50:00+05:30", "step": 3, "type": "risk", "name": "leg_sl_hit", "scope": "leg", "instrument": "HDFCBANK", "level_rupees": 1019.5, "target_index": null, "observed_rupees": null},
+          {"slice_ist": "2025-07-01T09:50:00+05:30", "step": 3, "type": "position", "name": "PositionClosed", "instrument": "HDFCBANK", "position_quantity_units": 0}
+        ],
+        "stale_marks": [],
+        "final_positions": [
+          {"instrument": "HDFCBANK", "quantity_units": 0, "average_price_rupees": null}
+        ],
+        "gross_pnl": {"realized_rupees": 4175.0, "unrealized_rupees": 0.0, "total_rupees": 4175.0, "depends_on": ["SPEC-08", "SPEC-09", "SPEC-10"]}
+      },
+      "derivation": [
+        {
+          "n": 1,
+          "slice_ist": "2025-07-01T09:15:00+05:30",
+          "step": 7,
+          "text": "on_bar at the close of the bar 09:15; flat, so decision 0 calls buy with a stop, two targets and a trail. o1 queued for the next open.",
+          "cites": ["03-architecture 4.2 step 7", "14-strategy-api 2.4"]
+        },
+        {
+          "n": 2,
+          "slice_ist": "2025-07-01T09:20:00+05:30",
+          "step": 2,
+          "text": "BUY 100 at the open 1000.00: tranche 1, average 1000.00. Stop 1000.00 - 10 = 990.00 for 100. Target fractions are fractions of the quantity held when the order with targets= has filled, 100: target 0 at 1010.00 for 50, target 1 at 1020.00 for 30; the remaining 20 stay on the stop and the trail. Extreme 1000.00.",
+          "cites": ["03-architecture 4.2 step 2", "05-risk-management 3", "12-position-sizing 1 and 3"]
+        },
+        {
+          "n": 3,
+          "slice_ist": "2025-07-01T09:20:00+05:30",
+          "step": 3,
+          "text": "Range 997.00 to 1000.00: no level reached; the high equals the entry.",
+          "cites": ["03-architecture 4.2 steps 3 and 4"]
+        },
+        {
+          "n": 4,
+          "slice_ist": "2025-07-01T09:25:00+05:30",
+          "step": 4,
+          "text": "No level reached (low 997.50, high 1005.00). Extreme 1005.00, favourable excursion 5, below x = 8.",
+          "cites": ["03-architecture 4.2 steps 3 and 4"]
+        },
+        {
+          "n": 5,
+          "slice_ist": "2025-07-01T09:25:00+05:30",
+          "step": 7,
+          "text": "Long, so decision 1 calls buy(qty=100): buy while long adds a tranche. The decision price 1004.00 is above the average, so this is not averaging down. o2 queued.",
+          "cites": ["14-strategy-api 2.4", "12-position-sizing 1 and 2"]
+        },
+        {
+          "n": 6,
+          "slice_ist": "2025-07-01T09:30:00+05:30",
+          "step": 2,
+          "text": "BUY 100 at the open 1004.00: tranche 2. Position 200, average (100 x 1000.00 + 100 x 1004.00) / 200 = 1002.00. The stop is recomputed from the new average, 1002.00 - 10 = 992.00, and the effective stop is the more protective of that and the current 990.00: 992.00, for the whole 200. SPEC-10: the targets refer to the average price too: target 0 at 1012.00, target 1 at 1022.00. SPEC-08: every target takes its original fraction of the tranche: target 0 gains 0.5 x 100 = 50 (now 100), target 1 gains 0.3 x 100 = 30 (now 60), and the remainder gains 20 (now 40).",
+          "cites": ["03-architecture 4.2 step 2", "12-position-sizing 1, 3 and 4"]
+        },
+        {
+          "n": 7,
+          "slice_ist": "2025-07-01T09:30:00+05:30",
+          "step": 3,
+          "text": "Range 1003.00 to 1007.00: neither the stop (990.00 or 992.00) nor a target (1010.00, 1012.00) is reached under any reading. Step 4: extreme 1007.00; favourable excursion 5 from the average (7 from the first entry): not armed.",
+          "cites": ["03-architecture 4.2 steps 3 and 4", "12-position-sizing 4"]
+        },
+        {
+          "n": 8,
+          "slice_ist": "2025-07-01T09:35:00+05:30",
+          "step": 3,
+          "text": "Stop 992.00 against the low 1005.50: not hit. Target 0 at 1012.00: the open 1006.00 is below it and the high 1012.50 reaches it: SELL 100 at 1012.00, reason leg_target, target 0. Realized at average cost (1012.00 - 1002.00) x 100 = 1000.00. Position 100, average unchanged; the stop quantity shrinks to 100. Target 1 at 1022.00 is not reached.",
+          "cites": ["03-architecture 4.2 step 3", "12-position-sizing 1, 3 and 4"]
+        },
+        {
+          "n": 9,
+          "slice_ist": "2025-07-01T09:35:00+05:30",
+          "step": 4,
+          "text": "High 1012.50: extreme 1012.50, favourable excursion 10.50 from the average (12.50 from the first entry), at least x = 8 either way. The trail arms; candidate 1012.50 - 8 = 1004.50, tighter than 992.00. Stop 1004.50 from the next slice.",
+          "cites": ["03-architecture 4.2 step 4", "12-position-sizing 4"]
+        },
+        {
+          "n": 10,
+          "slice_ist": "2025-07-01T09:35:00+05:30",
+          "step": 7,
+          "text": "Long, so decision 2 calls buy(qty=100) (decision price 1012.00, above the average 1002.00). o3 queued.",
+          "cites": ["14-strategy-api 2.4"]
+        },
+        {
+          "n": 11,
+          "slice_ist": "2025-07-01T09:40:00+05:30",
+          "step": 2,
+          "text": "BUY 100 at the open 1012.00: tranche 3. Position 200, average (100 x 1002.00 + 100 x 1012.00) / 200 = 1007.00. Stop recomputed from the average: 997.00; the current trailed level 1004.50 is more protective, so the stop stays 1004.50, now for 200: it never loosens. Target 0 has filled and is not re-armed. SPEC-10: target 1 moves to 1007.00 + 20 = 1027.00. SPEC-09: the tranche joins only the unfilled target, in its original proportion, and the remainder: target 1 gains 0.3 x 100 = 30 (now 90) and the remainder gains 70 (now 110).",
+          "cites": ["03-architecture 4.2 step 2", "12-position-sizing 3 and 4"]
+        },
+        {
+          "n": 12,
+          "slice_ist": "2025-07-01T09:40:00+05:30",
+          "step": 3,
+          "text": "Stop 1004.50 against the low 1010.00: not hit. Target 1 (1022.00 or 1027.00) against the high 1016.00: not hit.",
+          "cites": ["03-architecture 4.2 step 3"]
+        },
+        {
+          "n": 13,
+          "slice_ist": "2025-07-01T09:40:00+05:30",
+          "step": 4,
+          "text": "The favourable extreme continues across adds: high 1016.00, candidate 1008.00, tighter than 1004.50. Stop 1008.00 from the next slice.",
+          "cites": ["12-position-sizing 4", "03-architecture 4.2 step 4"]
+        },
+        {
+          "n": 14,
+          "slice_ist": "2025-07-01T09:45:00+05:30",
+          "step": 3,
+          "text": "Stop 1008.00 against the low 1014.00: not hit. Target 1 at 1027.00: open 1015.00 below, high 1027.50 reaches it: SELL 90 at 1027.00, reason leg_target, target 1. Realized (1027.00 - 1007.00) x 90 = 1800.00. Position 110; stop quantity 110.",
+          "cites": ["03-architecture 4.2 step 3", "12-position-sizing 3 and 4"]
+        },
+        {
+          "n": 15,
+          "slice_ist": "2025-07-01T09:45:00+05:30",
+          "step": 4,
+          "text": "High 1027.50: candidate 1019.50. Stop 1019.50 from the next slice.",
+          "cites": ["03-architecture 4.2 step 4"]
+        },
+        {
+          "n": 16,
+          "slice_ist": "2025-07-01T09:50:00+05:30",
+          "step": 3,
+          "text": "Stop in force 1019.50. Open 1026.00 above it, low 1019.00 at or below it: SELL 110 at 1019.50, reason leg_sl. The trail takes the remainder. Realized (1019.50 - 1007.00) x 110 = 1375.00.",
+          "cites": ["03-architecture 4.2 step 3", "12-position-sizing 3"]
+        },
+        {
+          "n": 17,
+          "slice_ist": null,
+          "step": null,
+          "text": "Gross P&L 1000.00 + 1800.00 + 1375.00 = 4175.00. Cross-check by cash: sells 100 x 1012.00 + 90 x 1027.00 + 110 x 1019.50 = 305775.00; buys 100 x 1000.00 + 100 x 1004.00 + 100 x 1012.00 = 301600.00; difference 4175.00. Throughout, the stop quantity equals the position quantity and the working target quantity never exceeds it.",
+          "cites": ["12-position-sizing 1 and 4"]
+        }
+      ]
+    }
+  ]
+}

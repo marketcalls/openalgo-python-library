@@ -36,7 +36,7 @@ def test_connection_error():
     
     # Test with invalid host to trigger connection error
     client = api(
-        api_key="c3dc308401e558fdf3b373a9fa33c05d46ab9d2c1f18febd781dc9ee8c24e0c9",
+        api_key="dummy_api_key",  # not an OpenAlgo server: never send a real key here
         host="http://invalid-host-that-does-not-exist.com:5000"
     )
     
@@ -57,7 +57,7 @@ def test_timeout_error():
     # Test with a host that might timeout (using httpbin.org delay endpoint)
     # This simulates a slow server response
     client = api(
-        api_key="c3dc308401e558fdf3b373a9fa33c05d46ab9d2c1f18febd781dc9ee8c24e0c9",
+        api_key="dummy_api_key",  # not an OpenAlgo server: never send a real key here
         host="https://httpbin.org/delay/10"  # 10 second delay - should timeout
     )
     
@@ -71,7 +71,7 @@ def test_valid_connection():
     print("=" * 60)
     
     client = api(
-        api_key="c3dc308401e558fdf3b373a9fa33c05d46ab9d2c1f18febd781dc9ee8c24e0c9",
+        api_key=os.getenv("OPENALGO_API_KEY", "your_api_key_here"),
         host="http://127.0.0.1:5000"
     )
     
@@ -101,7 +101,7 @@ def test_api_error_responses():
     print("=" * 60)
     
     client = api(
-        api_key="c3dc308401e558fdf3b373a9fa33c05d46ab9d2c1f18febd781dc9ee8c24e0c9",
+        api_key=os.getenv("OPENALGO_API_KEY", "your_api_key_here"),
         host="http://127.0.0.1:5000"
     )
     
@@ -127,7 +127,7 @@ def test_different_error_types():
     
     # Test with connection error
     invalid_client = api(
-        api_key="c3dc308401e558fdf3b373a9fa33c05d46ab9d2c1f18febd781dc9ee8c24e0c9",
+        api_key="dummy_api_key",  # not an OpenAlgo server: never send a real key here
         host="http://non-existent-host.com:5000"
     )
     

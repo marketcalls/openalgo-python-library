@@ -7,9 +7,15 @@ OpenAlgo WebSocket API Documentation - Feed Methods
 import json
 import threading
 import time
-from typing import List, Dict, Any, Callable, Optional, Tuple
+from typing import List, Dict, Any, Callable, Iterator, Optional, Tuple
 import websocket
 from .base import BaseAPI
+from . import _feed_ticks as ticks
+from ._feed_errors import ErrorReporter, FeedServerError, server_rejection
+from ._feed_hooks import HookRegistry, fresh_copy
+from ._feed_replay import PendingReplay, ReplayTracker
+from ._feed_state import MODES, Link, Phase, Timing
+from ._feed_url import DEFAULT_WS_PORT, derive_ws_url
 
 class FeedAPI(BaseAPI):
     """
@@ -17,7 +23,7 @@ class FeedAPI(BaseAPI):
     Inherits from the BaseAPI class.
     """
 
-    def __init__(self, api_key, host="http://127.0.0.1:5000", version="v1", ws_port=8765, ws_url=None, verbose=False, auto_reconnect=True):
+    def __init__(self, api_key, host="http://127.0.0.1:5000", version="v1", ws_port=None, ws_url=None, verbose=False, auto_reconnect=True):
         """
         Initialize the FeedAPI object with API key and optionally a host URL, API version, and WebSocket details.
 
@@ -25,8 +31,16 @@ class FeedAPI(BaseAPI):
         - api_key (str): User's API key.
         - host (str): Base URL for the API endpoints. Defaults to localhost.
         - version (str): API version. Defaults to "v1".
-        - ws_port (int): WebSocket server port. Defaults to 8765.
+        - ws_port (int, optional): WebSocket server port. Defaults to 8765, which is
+            also what self.ws_port reads when it is not passed.
         - ws_url (str, optional): Custom WebSocket URL. If provided, this overrides host and ws_port settings.
+            Without it the WebSocket URL is derived from host:
+            - http://<host>, or a host without a scheme (local or LAN):
+              ws://<host>:<ws_port>
+            - https://<host> (a server hosted on a domain): wss://<host>/ws,
+              where the OpenAlgo installers serve the feed
+            - https://<host> with ws_port passed: ws://<host>:<ws_port>
+            The port and the path of host belong to the REST API and are not used.
         - verbose (int): Logging verbosity level. Defaults to False.
             - 0 or False: Silent mode (errors only)
             - 1 or True: Basic info (connection, auth, subscription status)
@@ -39,30 +53,25 @@ class FeedAPI(BaseAPI):
             behaviour.
         """
         super().__init__(api_key, host, version)
+        self._init_feed(host, ws_port, ws_url, verbose, auto_reconnect)
 
+    def _init_feed(self, host, ws_port, ws_url, verbose, auto_reconnect) -> None:
+        """
+        Create the WebSocket state of the client. FeedAPI.__init__ and
+        openalgo.api.__init__ (which sets up BaseAPI itself) both call it, so
+        the two cannot drift apart.
+        """
         # Verbosity control
         self.verbose = int(verbose) if verbose is not False else 0
         
         # WebSocket configuration
-        self.ws_port = ws_port
+        self.ws_port = DEFAULT_WS_PORT if ws_port is None else ws_port
         
         # Use custom WebSocket URL if provided
         if ws_url:
             self.ws_url = ws_url
         else:
-            # Extract host without protocol for WebSocket
-            if host.startswith("http://"):
-                self.ws_host = host[7:]
-            elif host.startswith("https://"):
-                self.ws_host = host[8:]
-            else:
-                self.ws_host = host
-                
-            # Remove any path component and port if present
-            self.ws_host = self.ws_host.split('/')[0].split(':')[0]
-            
-            # Create default WebSocket URL
-            self.ws_url = f"ws://{self.ws_host}:{self.ws_port}"
+            self.ws_host, self.ws_url = derive_ws_url(host, ws_port)
         self.ws = None
         self.connected = False
         self.authenticated = False
@@ -88,8 +97,7 @@ class FeedAPI(BaseAPI):
         self.order_data = []
         self._orders_subscribed = False
 
-        # Auto-reconnect state (private, additive — does not change any
-        # existing public attribute or behaviour).
+        # Auto-reconnect state (private).
         self.auto_reconnect = bool(auto_reconnect)
         self._shutting_down = False
         self._reconnect_thread = None
@@ -97,6 +105,22 @@ class FeedAPI(BaseAPI):
         # Active subscription registry keyed by mode -> {(exchange, symbol): instrument_dict}
         # Replayed verbatim on reconnect.
         self._active_subs: Dict[int, Dict[Tuple[str, str], Dict[str, Any]]] = {1: {}, 2: {}, 3: {}}
+
+        # Connection state (private). _state_lock guards _link, ws, ws_thread
+        # and the requested subscriptions, and is held while their frames are
+        # sent, so a request cannot overtake a replay. It is never held while
+        # user code runs. connected, authenticated and _shutting_down are
+        # derived from _link (see _set_link).
+        self._state_lock = threading.RLock()
+        self._link = Link()
+        self._transport_error: Optional[BaseException] = None
+        self._replay: Optional[PendingReplay] = None
+        # Waiting times. This is the one seam for tests: they replace it with
+        # a Timing that holds shorter values.
+        self._timing = Timing()
+        hook_events = ("connect", "disconnect", "reconnect", "error")
+        self._hooks = HookRegistry(hook_events, self._hook_failed)
+        self._errors = ErrorReporter(self._hooks, lambda: self._timing.error_log)
 
     def _log(self, level: int, category: str, message: str) -> None:
         """
@@ -113,16 +137,155 @@ class FeedAPI(BaseAPI):
             formatted_cat = f"[{category}]".ljust(cat_width + 2)
             print(f"{formatted_cat} {message}")
 
+    def on_connect(self, callback: Callable[[Dict[str, Any]], None]) -> Callable:
+        """
+        Register a hook for "the feed is usable": it fires once for every
+        connection, the automatic reconnects included, when the server has
+        accepted the API key and the requested subscriptions have been sent.
+
+        Receives one dict: {"event": "connect", "seq": <connection number>,
+        "url": <WebSocket URL>, "reconnect": <True when this connection
+        restores a session that was lost>, "broker": ..., "user_id": ...}.
+
+        Thread and order, the same for every hook: hooks are delivered one at
+        a time, in the order things happened. A hook normally runs on the
+        WebSocket thread of its connection (self.ws_thread), or on the thread
+        that called disconnect(). While one hook runs, whatever happens next
+        is queued and delivered afterwards by that same thread. No SDK lock is
+        held, so a hook may call any feed method. It must return quickly: the
+        WebSocket thread processes no ticks while it runs.
+
+        A connect or reconnect listener is not called for a connection that
+        has already gone again when its turn comes. "seq" grows with every
+        connection attempt, so a listener can also drop an event that is older
+        than one it has seen.
+
+        Returns the callback, so this can be used as a decorator.
+        """
+        return self._hooks.add("connect", callback)
+
+    def on_disconnect(self, callback: Callable[[Dict[str, Any]], None]) -> Callable:
+        """
+        Register a hook for "the feed is down": it fires once for every
+        connection that had been accepted by the server, whether the socket
+        dropped or the application called disconnect(). An attempt that never
+        got that far (a failed reconnect attempt, for example) fires nothing.
+
+        Receives one dict: {"event": "disconnect", "seq": <connection number>,
+        "url": ..., "code": <WebSocket close code, or None when there was no
+        close frame>, "reason": <close reason, else the transport error text>,
+        "error": <the transport exception when the socket was lost, None for a
+        clean close>, "requested": <True when disconnect() caused it>,
+        "will_reconnect": <True when the SDK reconnects by itself>}.
+
+        Thread and order: see on_connect. self.connected is already False.
+        Returns the callback, so this can be used as a decorator.
+        """
+        return self._hooks.add("disconnect", callback)
+
+    def on_reconnect(self, callback: Callable[[Dict[str, Any]], None]) -> Callable:
+        """
+        Register a hook for "the session is restored": after a connection was
+        lost, a new one is up and the server has answered the replay of the
+        requested subscriptions (or 10 seconds have passed without an answer).
+        It follows the on_connect hooks of that connection. Use it to
+        resynchronise state: the server does not replay the ticks and order
+        updates that were missed. The first connection of a client is never a
+        reconnect.
+
+        Receives the on_connect dict with "event": "reconnect", plus
+        "subscriptions": what the server accepted, in the format of
+        get_subscriptions(). What it refused or did not answer goes to the
+        on_error hooks.
+
+        Thread and order: see on_connect. When the server did not answer in
+        time, the hook runs on a timer thread of the SDK instead.
+        Returns the callback, so this can be used as a decorator.
+        """
+        return self._hooks.add("reconnect", callback)
+
+    def on_error(self, callback: Callable[[BaseException, Dict[str, Any]], None]) -> Callable:
+        """
+        Register a hook that receives every error the feed catches. The feed
+        stays up and keeps processing messages in every case.
+
+        Called as callback(error, context). context["kind"] says what failed:
+        - "callback": a data callback raised. context["callback"] is "ltp",
+          "quote", "depth" or "order"; context["message"] is the server
+          message that was being delivered.
+        - "hook": a connection hook raised. context["callback"] is its
+          registration method ("on_connect", ...); context["message"] is the
+          dict it received.
+        - "frame": the SDK could not process a frame; context["message"] is
+          the raw text.
+        - "authentication": the server refused the API key.
+        - "server": the server rejected something else. For these two, error
+          is a FeedServerError (with .code and .message), context["code"] is
+          the server's code and context["message"] its frame. A subscribe or
+          unsubscribe reply adds context["rejected"], the entries that were
+          not accepted; a replay the server did not answer adds
+          context["unanswered"].
+        Every context carries "seq", the connection number.
+
+        Without an error hook the same errors are logged at ERROR level on
+        the "openalgo.feed" logger. Only there, a failing tick callback is
+        logged once per 10 seconds and exception type, with a count after it.
+
+        Thread and order: see on_connect.
+        Returns the callback, so this can be used as a decorator.
+        """
+        return self._hooks.add("error", callback)
+
+    def remove_hook(self, callback: Callable) -> bool:
+        """
+        Remove a callback registered with on_connect, on_disconnect,
+        on_reconnect or on_error. Safe to call from any thread.
+
+        Returns:
+            bool: True if the callback was registered, False otherwise.
+        """
+        return self._hooks.remove(callback)
+
+    def _report(self, error: BaseException, line: str, **context: Any) -> None:
+        """Print the verbose line of an error, then hand it to the error hooks or the log."""
+        self._log(1, "ERROR", line)
+        self._errors.report(error, seq=self._link.seq, **context)
+
+    def _hook_failed(self, event: str, error: BaseException, args: Tuple[Any, ...]) -> None:
+        """A hook raised. The hook registry calls this on the delivering thread."""
+        context = {"kind": "hook", "callback": f"on_{event}", "message": args[-1]}
+        if event == "error":
+            # An error hook that fails is not handed to the error hooks again.
+            self._errors.log(error, context)
+        else:
+            self._report(error, f"on_{event} hook error: {error}", **context)
+
+    def _set_link(self, phase: Phase, **changes: Any) -> None:
+        """
+        Change the connection state: the phase, and seq or restoring when
+        given. Every change goes through here, with _state_lock held, and the
+        flags that existing code reads follow from it.
+        """
+        self._link = self._link._replace(phase=phase, **changes)
+        self.connected = self._link.connected
+        self.authenticated = self._link.live
+        self._shutting_down = phase is Phase.STOPPED
+
     def connect(self) -> bool:
         """
         Connect to the WebSocket server and authenticate.
+
+        When the feed is already connected and authenticated this returns
+        True without opening a second socket.
 
         Returns:
             bool: True if connection and authentication are successful, False otherwise.
         """
         # User-initiated connect resets the shutdown flag so auto-reconnect
         # is armed. (disconnect() sets _shutting_down=True to suppress it.)
-        self._shutting_down = False
+        with self._state_lock:
+            if self._link.phase is Phase.STOPPED:
+                self._set_link(Phase.IDLE)
         return self._do_connect()
 
     def _do_connect(self) -> bool:
@@ -133,64 +296,66 @@ class FeedAPI(BaseAPI):
         self.authenticated) is unchanged.
         """
         try:
-            def on_message(ws, message):
-                self._process_message(message)
+            with self._state_lock:
+                phase = self._link.phase
+                if phase is Phase.LIVE:
+                    return True
+                if phase is Phase.STOPPED:
+                    # disconnect() ran after this attempt was decided: stay down.
+                    return False
+                # An attempt that is still under way is replaced.
+                replaced = None if phase is Phase.IDLE else self.ws
 
-            def on_error(ws, error):
-                self._log(1, "ERROR", f"WebSocket error: {error}")
+                # Initialize WebSocket connection
+                self.ws = websocket.WebSocketApp(
+                    self.ws_url,
+                    on_message=self._on_ws_message,
+                    on_error=self._on_ws_error,
+                    on_open=self._on_ws_open,
+                    on_close=self._on_ws_close
+                )
 
-            def on_open(ws):
-                self._log(1, "WS", f"Connected to {self.ws_url}")
-                self.connected = True
-                self._authenticate()
+                # Start WebSocket connection in a separate thread.
+                # ping_interval sends a WebSocket ping every 20s so the OS-level TCP
+                # connection cannot become a silent "zombie" (broker stops streaming
+                # ticks but the socket appears OPEN with no error). ping_timeout
+                # closes and triggers on_close if the pong is not received within
+                # 10s, allowing the caller to detect and reconnect.
+                self.ws_thread = threading.Thread(
+                    target=self.ws.run_forever,
+                    kwargs={"ping_interval": 20, "ping_timeout": 10},
+                )
+                self.ws_thread.daemon = True
+                thread = self.ws_thread
+                self._transport_error = None
+                self._set_link(Phase.CONNECTING, seq=self._link.seq + 1)
 
-            def on_close(ws, close_status_code, close_reason):
-                self._log(1, "WS", f"Disconnected from {self.ws_url}")
-                self.connected = False
-                self.authenticated = False
-                # Schedule auto-reconnect unless the user called disconnect()
-                # or auto_reconnect is disabled. Any registered subscriptions
-                # will be replayed once the new connection authenticates.
-                if self.auto_reconnect and not self._shutting_down:
-                    self._schedule_reconnect()
+            thread.start()
+            if replaced is not None:
+                self._close_unused(replaced)
 
-            # Initialize WebSocket connection
-            self.ws = websocket.WebSocketApp(
-                self.ws_url,
-                on_message=on_message,
-                on_error=on_error,
-                on_open=on_open,
-                on_close=on_close
-            )
-
-            # Start WebSocket connection in a separate thread.
-            # ping_interval sends a WebSocket ping every 20s so the OS-level TCP
-            # connection cannot become a silent "zombie" (broker stops streaming
-            # ticks but the socket appears OPEN with no error). ping_timeout
-            # closes and triggers on_close if the pong is not received within
-            # 10s, allowing the caller to detect and reconnect.
-            self.ws_thread = threading.Thread(
-                target=self.ws.run_forever,
-                kwargs={"ping_interval": 20, "ping_timeout": 10},
-            )
-            self.ws_thread.daemon = True
-            self.ws_thread.start()
-
-            # Wait for connection to establish
-            timeout = 5
+            # Wait while the socket is being opened. Not for self.connected:
+            # the socket can open, go live and drop again between two looks,
+            # and nothing would then end the wait before the timeout. Refused,
+            # closed or disconnect() ends it at once.
+            timeout = self._timing.connect
             start_time = time.time()
-            while not self.connected and time.time() - start_time < timeout:
-                time.sleep(0.1)
+            while self._link.phase is Phase.CONNECTING and time.time() - start_time < timeout:
+                time.sleep(self._timing.poll)
 
             if not self.connected:
-                self._log(1, "ERROR", "Failed to connect to WebSocket server")
+                self._log(
+                    1, "ERROR",
+                    f"Failed to connect to WebSocket server at {self.ws_url}. "
+                    "If the feed is served at another URL, pass ws_url= to the client.",
+                )
                 return False
 
             # Wait for authentication to complete
-            timeout = 5
+            timeout = self._timing.authenticate
             start_time = time.time()
             while not self.authenticated and time.time() - start_time < timeout and self.connected:
-                time.sleep(0.1)
+                time.sleep(self._timing.poll)
 
             return self.authenticated
 
@@ -198,20 +363,177 @@ class FeedAPI(BaseAPI):
             self._log(1, "ERROR", f"Error connecting to WebSocket: {e}")
             return False
 
+    def _close_unused(self, ws: Any) -> None:
+        """Close a socket that was replaced or abandoned. Its later events are ignored."""
+        try:
+            ws.close()
+        except Exception as e:
+            self._log(2, "WS", f"Ignored an error while closing an unused socket: {e}")
+
+    def _on_ws_open(self, ws: Any) -> None:
+        """websocket-client on_open. Runs on the WebSocket thread of ws."""
+        with self._state_lock:
+            current = ws is self.ws and self._link.phase is Phase.CONNECTING
+            if current:
+                self._set_link(Phase.OPEN)
+        if not current:
+            # Opened after it was replaced, or after disconnect(): drop it.
+            self._close_unused(ws)
+            return
+        self._log(1, "WS", f"Connected to {self.ws_url}")
+        self._authenticate()
+
+    def _on_ws_message(self, ws: Any, message: str) -> None:
+        """websocket-client on_message. Runs on the WebSocket thread of ws."""
+        if ws is self.ws:
+            self._process_message(message)
+
+    def _on_ws_error(self, ws: Any, error: Any) -> None:
+        """websocket-client on_error. Runs on the WebSocket thread of ws."""
+        if ws is self.ws:
+            self._transport_error = error
+        self._log(1, "ERROR", f"WebSocket error: {error}")
+
+    def _on_ws_close(self, ws: Any, close_status_code: Any, close_reason: Any) -> None:
+        """websocket-client on_close. Runs on the WebSocket thread of ws."""
+        self._log(1, "WS", f"Disconnected from {self.ws_url}")
+        with self._state_lock:
+            was = self._link
+            if ws is not self.ws or was.phase in (Phase.IDLE, Phase.STOPPED):
+                # Replaced by a newer attempt, or disconnect() already reported it.
+                return
+            # Schedule auto-reconnect unless auto_reconnect is disabled.
+            # (After disconnect() the socket is no longer the current one.)
+            retry = bool(self.auto_reconnect)
+            was_live = was.phase is Phase.LIVE
+            self._set_link(Phase.IDLE, restoring=retry and (was_live or was.restoring))
+            self._replay = None
+            if not retry:
+                # Nothing restores this session. What was requested in it is
+                # not sent again by a later connect(), as in 2.0.5.
+                self._clear_requests()
+            if was_live:
+                # websocket-client reports a close frame through on_error as
+                # well: with a close code there was no transport failure.
+                error = self._transport_error if close_status_code is None else None
+                reason = close_reason or (str(error) if error is not None else None)
+                self._post_disconnect(was.seq, close_status_code, reason, error, retry)
+        if retry:
+            self._schedule_reconnect()
+        self._hooks.drain()
+
+    def _post_disconnect(
+        self, seq: int, code: Any, reason: Any, error: Any, will_reconnect: bool
+    ) -> None:
+        """Queue the disconnect hook. The caller holds _state_lock and drains afterwards."""
+        self._hooks.post("disconnect", {
+            "event": "disconnect",
+            "seq": seq,
+            "url": self.ws_url,
+            "code": code,
+            "reason": reason,
+            "error": error,
+            # Only disconnect() leaves the feed stopped, and it never reconnects.
+            "requested": self._link.phase is Phase.STOPPED,
+            "will_reconnect": will_reconnect,
+        })
+
+    def _on_authenticated(self, message: Dict[str, Any]) -> None:
+        """
+        The server accepted the API key. Runs on the WebSocket thread: mark
+        the connection live, send the requested subscriptions and queue the
+        connect hook, and the reconnect hook when a session is being restored.
+        """
+        with self._state_lock:
+            on_current_socket = threading.current_thread() is self.ws_thread
+            if not on_current_socket or self._link.phase is not Phase.OPEN:
+                return
+            restoring = self._link.restoring
+            self._set_link(Phase.LIVE, restoring=False)
+            live = self._link
+
+            def still_live() -> bool:
+                return self._link is live
+
+            # The requested subscriptions are sent whenever a connection
+            # authenticates. This happens under the lock that every request
+            # takes, so a request can neither be lost nor overtaken.
+            requested = self.get_subscriptions()
+            self._replay_subscriptions()
+            payload = {
+                "event": "connect",
+                "seq": live.seq,
+                "url": self.ws_url,
+                "reconnect": restoring,
+                "broker": message.get("broker"),
+                "user_id": message.get("user_id"),
+            }
+            self._hooks.post("connect", payload, still_current=still_live)
+            if restoring:
+                tracker = ReplayTracker(requested)
+                replay = PendingReplay(tracker, dict(payload, event="reconnect"), still_live)
+                self._replay = replay
+                if not tracker.done:
+                    # Do not wait for ever for a server that does not answer.
+                    deadline = threading.Timer(self._timing.replay_ack, self._settle_replay, (replay,))
+                    deadline.daemon = True
+                    deadline.start()
+        self._settle_replay()
+
+    def _settle_replay(self, expired: Optional[PendingReplay] = None) -> None:
+        """
+        Queue the reconnect hook once the server has answered the whole
+        replay, or when the wait for its answers is over (expired is then the
+        replay that was waited for), and deliver the queued hooks.
+        """
+        unanswered = None
+        with self._state_lock:
+            replay = self._replay
+            if replay is not None and (replay.tracker.done or replay is expired):
+                self._replay = None
+                if not replay.tracker.done:
+                    unanswered = replay.tracker.unanswered()
+                self._hooks.post(
+                    "reconnect",
+                    dict(replay.payload, subscriptions=replay.tracker.accepted),
+                    still_current=replay.still_live,
+                )
+        if unanswered is not None:
+            error = FeedServerError("REPLAY_NOT_ACKNOWLEDGED", "the server did not answer")
+            self._report(
+                error, f"Server error: {error}",
+                kind="server", callback=None, code=error.code, message=None, unanswered=unanswered,
+            )
+        self._hooks.drain()
+
     def disconnect(self) -> None:
-        """Disconnect from the WebSocket server."""
-        # Mark a graceful shutdown so on_close does not trigger auto-reconnect.
-        self._shutting_down = True
-        if self.ws:
-            self.ws.close()
-            # Wait for websocket to close
-            timeout = 2
-            start_time = time.time()
-            while self.connected and time.time() - start_time < timeout:
-                time.sleep(0.1)
+        """
+        Disconnect from the WebSocket server.
+
+        Stops the automatic reconnect and forgets the requested subscriptions:
+        after a later connect() nothing is subscribed until the application
+        subscribes again.
+        """
+        with self._state_lock:
+            ws, thread = self.ws, self.ws_thread
+            was = self._link
+            # Mark a graceful shutdown so on_close does not trigger auto-reconnect.
+            self._set_link(Phase.STOPPED, restoring=False)
             self.ws = None
-            self.connected = False
-            self.authenticated = False
+            self._replay = None
+            self._clear_requests()
+            if was.phase is Phase.LIVE:
+                self._post_disconnect(was.seq, None, "disconnect() called", None, False)
+        self._hooks.drain()
+        if ws:
+            ws.close()
+            # Wait for websocket to close, if it was open (as before, there is
+            # no wait for an attempt that never opened). Called on the socket's
+            # own thread, from a hook or a data callback, there is nothing to
+            # wait for.
+            was_open = was.phase in (Phase.OPEN, Phase.LIVE)
+            if was_open and thread is not threading.current_thread():
+                thread.join(self._timing.disconnect)
 
     def _schedule_reconnect(self) -> None:
         """
@@ -233,32 +555,50 @@ class FeedAPI(BaseAPI):
 
     def _reconnect_loop(self) -> None:
         """
-        Reconnect with exponential backoff, then replay every active
-        subscription. Stops when the user calls disconnect() or a connection
-        is fully re-authenticated.
+        Reconnect with exponential backoff. Stops when the user calls
+        disconnect() or a connection is fully re-authenticated; the requested
+        subscriptions are replayed as soon as it is (see _on_authenticated).
         """
         # Exponential backoff schedule (seconds), capped at 60s.
-        backoffs = [1, 2, 5, 10, 30, 60]
+        backoffs = self._timing.backoff
         attempt = 0
-        while not self._shutting_down and not self.authenticated:
+        while not self._reconnect_finished():
             delay = backoffs[min(attempt, len(backoffs) - 1)]
             self._log(1, "WS", f"Reconnect attempt {attempt + 1} in {delay}s...")
             # Sleep in small slices so a disconnect() is responsive.
             slept = 0.0
             while slept < delay and not self._shutting_down:
-                time.sleep(0.2)
-                slept += 0.2
-            if self._shutting_down:
-                return
+                time.sleep(self._timing.backoff_slice)
+                slept += self._timing.backoff_slice
             try:
+                # Refused, without opening a socket, if disconnect() ran meanwhile.
                 ok = self._do_connect()
                 if ok:
                     self._log(1, "WS", "Reconnected and re-authenticated.")
-                    self._replay_subscriptions()
-                    return
             except Exception as e:
                 self._log(1, "ERROR", f"Reconnect attempt {attempt + 1} failed: {e}")
             attempt += 1
+
+    def _reconnect_finished(self) -> bool:
+        """
+        True when the reconnect loop has nothing left to do: the feed is live
+        again, or it is no longer wanted. The reconnect thread then exits.
+
+        The decision is taken, and the thread slot released, under the lock
+        _schedule_reconnect takes. A drop that lands while the loop finishes
+        therefore either makes it go round again or starts a new thread.
+        """
+        with self._reconnect_lock:
+            finished = self._link.phase in (Phase.LIVE, Phase.STOPPED) or not self.auto_reconnect
+            if finished and self._reconnect_thread is threading.current_thread():
+                self._reconnect_thread = None
+            return finished
+
+    def _clear_requests(self) -> None:
+        """Forget the requested subscriptions. The caller holds _state_lock."""
+        for store in self._active_subs.values():
+            store.clear()
+        self._orders_subscribed = False
 
     def _replay_subscriptions(self) -> None:
         """
@@ -272,12 +612,12 @@ class FeedAPI(BaseAPI):
             if not store:
                 continue
             instruments = list(store.values())
-            mode_name = {1: "LTP", 2: "Quote", 3: "Depth"}.get(mode, str(mode))
+            mode_name = MODES[mode].label
             self._log(1, "SUB", f"Replaying {len(instruments)} {mode_name} subscription(s) after reconnect")
             self._send_subscribe_msg(mode, instruments)
 
         # Replay the account-level order-update subscription too.
-        if getattr(self, "_orders_subscribed", False) and self.ws:
+        if self._orders_subscribed and self.ws:
             self._log(1, "SUB", "Replaying order-update subscription after reconnect")
             try:
                 self.ws.send(json.dumps({"action": "subscribe_orders"}))
@@ -339,247 +679,171 @@ class FeedAPI(BaseAPI):
             "api_key": self.api_key
         }
 
-        self._log(1, "AUTH", f"Authenticating with API key: {self.api_key[:8]}...{self.api_key[-8:]}")
+        # No part of the key is printed: verbose output ends up in logs and screenshots.
+        self._log(1, "AUTH", "Authenticating with the API key...")
         self.ws.send(json.dumps(auth_msg))
 
     def _process_message(self, message_str: str) -> None:
         """
         Process incoming WebSocket messages.
-        
+
         Args:
             message_str (str): The message string received from the WebSocket.
         """
         try:
             message = json.loads(message_str)
-            
-            # Handle authentication response
-            if message.get("type") == "auth":
-                if message.get("status") == "success":
-                    self.authenticated = True
-                    broker = message.get("broker", "unknown")
-                    user_id = message.get("user_id", "unknown")
-                    self._log(1, "AUTH", f"Success | Broker: {broker} | User: {user_id}")
-                    self._log(2, "AUTH", f"Full response: {message}")
-                else:
-                    self._log(1, "ERROR", f"Authentication failed: {message.get('message', 'Unknown error')}")
-                return
-
-            # Handle order-update subscription responses
-            if message.get("type") in ("subscribe_orders", "unsubscribe_orders"):
-                self._log(1, "SUB", f"Order updates | {message.get('type')} | Status: {message.get('status', '?')}")
-                self._log(2, "SUB", f"Full response: {message}")
-                return
-
-            # Handle real-time order updates (account-level, no symbol subscription)
-            if message.get("type") == "order_update":
-                with self.lock:
-                    self.order_data.insert(0, message)
-                    del self.order_data[500:]  # cap retained history
-
-                self._log(
-                    2,
-                    "ORDER",
-                    f"{message.get('symbol', '?'):<20} | {message.get('order_status', '?'):<10} "
-                    f"| Qty: {message.get('filled_quantity', 0)}/{message.get('quantity', 0)} "
-                    f"| Avg: {message.get('average_price', 0)} | ID: {message.get('orderid', '?')}",
-                )
-
-                if self.order_callback:
-                    try:
-                        self.order_callback(message)
-                    except Exception as e:
-                        self._log(1, "ERROR", f"Order callback error: {str(e)}")
-                return
-
-            # Handle subscription response
-            if message.get("type") == "subscribe":
-                subs = message.get("subscriptions", [])
-                for sub in subs:
-                    sym = sub.get("symbol", "?")
-                    exch = sub.get("exchange", "?")
-                    status = sub.get("status", "?")
-                    mode = sub.get("mode", 0)
-                    mode_name = {1: "LTP", 2: "Quote", 3: "Depth"}.get(mode, "Unknown")
-                    self._log(1, "SUB", f"{exch}:{sym} | Mode: {mode_name} | Status: {status}")
-                self._log(2, "SUB", f"Full response: {message}")
-                return
-                
-            # Handle market data
-            if message.get("type") == "market_data":
-                exchange = message.get("exchange")
-                symbol = message.get("symbol")
-                if exchange and symbol:
-                    mode = message.get("mode")
-                    market_data = message.get("data", {})
-                    
-                    # Handle LTP data (mode 1)
-                    if mode == 1 and "ltp" in market_data:
-                        with self.lock:
-                            # Get LTP and timestamp from the message
-                            ltp = market_data.get("ltp")
-                            timestamp = market_data.get("timestamp", int(time.time() * 1000))
-                            
-                            # Store both price and timestamp with format 'EXCHANGE:SYMBOL'
-                            symbol_key = f"{exchange}:{symbol}"
-                            self.ltp_data[symbol_key] = {
-                                'price': ltp,
-                                'timestamp': timestamp
-                            }
-
-                            self._log(2, "LTP", f"{symbol_key:<20} | LTP: {ltp}")
-                        
-                        # Invoke callback if set
-                        if self.ltp_callback:
-                            try:
-                                # Create a clean market data update without redundant fields
-                                clean_data = {
-                                    'type': 'market_data',
-                                    'symbol': symbol,
-                                    'exchange': exchange,
-                                    'mode': mode,
-                                    'data': {
-                                        'ltp': ltp,
-                                        'timestamp': timestamp
-                                    }
-                                }
-                                # Include LTT if available in original data
-                                if 'ltt' in market_data:
-                                    clean_data['data']['ltt'] = market_data['ltt']
-                                # Check if ltt is in the nested data structure (which seems to be the case)
-                                elif 'ltt' in market_data.get('data', {}):
-                                    clean_data['data']['ltt'] = market_data['data']['ltt']
-                                    
-                                # Pass the cleaned message to callback
-                                self.ltp_callback(clean_data)
-                            except Exception as e:
-                                self._log(1, "ERROR", f"LTP callback error: {str(e)}")                 
-                    # Handle Quotes data (mode 2)
-                    elif mode == 2:
-                        with self.lock:
-                            # Extract quote data fields
-                            quote_data = {
-                                'open': market_data.get("open", 0),
-                                'high': market_data.get("high", 0),
-                                'low': market_data.get("low", 0),
-                                'close': market_data.get("close", 0),
-                                'ltp': market_data.get("ltp", 0),
-                                'volume': market_data.get("volume", 0),
-                                'last_trade_quantity': market_data.get("last_trade_quantity", 0),
-                                'avg_trade_price': market_data.get("avg_trade_price", 0),
-                                'change': market_data.get("change", 0),
-                                'change_percent': market_data.get("change_percent", 0),
-                                'timestamp': market_data.get("timestamp", int(time.time() * 1000))
-                            }
-                            
-                            # Store quote data with format 'EXCHANGE:SYMBOL'
-                            symbol_key = f"{exchange}:{symbol}"
-                            self.quotes_data[symbol_key] = quote_data
-
-                            self._log(2, "QUOTE", f"{symbol_key:<20} | O: {quote_data['open']:<10} H: {quote_data['high']:<10} L: {quote_data['low']:<10} C: {quote_data['close']:<10} LTP: {quote_data['ltp']}")
-                        
-                        # Invoke callback if set
-                        if self.quote_callback:
-                            try:
-                                # Create a clean market data update without redundant fields
-                                clean_data = {
-                                    'type': 'market_data',
-                                    'symbol': symbol,
-                                    'exchange': exchange,
-                                    'mode': mode,
-                                    'data': quote_data.copy()
-                                }
-                                # Pass the cleaned message to callback
-                                self.quote_callback(clean_data)
-                            except Exception as e:
-                                self._log(1, "ERROR", f"Quote callback error: {str(e)}")                 
-                    # Handle Market Depth data (mode 3)
-                    elif mode == 3 and "depth" in market_data:
-                        with self.lock:
-                            # Extract depth data
-                            depth_data = {
-                                'ltp': market_data.get("ltp", 0),
-                                'timestamp': market_data.get("timestamp", int(time.time() * 1000)),
-                                'depth': market_data.get("depth", {"buy": [], "sell": []})
-                            }
-                            
-                            # Store depth data with format 'EXCHANGE:SYMBOL'
-                            symbol_key = f"{exchange}:{symbol}"
-                            self.depth_data[symbol_key] = depth_data
-
-                            # Log depth data
-                            buy_depth = depth_data.get('depth', {}).get('buy', [])
-                            sell_depth = depth_data.get('depth', {}).get('sell', [])
-
-                            self._log(2, "DEPTH", f"{symbol_key:<20} | LTP: {depth_data.get('ltp')}")
-
-                            if self.verbose >= 2:
-                                # Print buy depth summary
-                                print(f"         {'BUY':<30} | {'SELL':<30}")
-                                print(f"         {'Price':<10} {'Qty':<10} {'Orders':<8} | {'Price':<10} {'Qty':<10} {'Orders':<8}")
-                                print("         " + "-" * 62)
-                                max_levels = max(len(buy_depth), len(sell_depth), 1)
-                                for i in range(max_levels):
-                                    buy_lvl = buy_depth[i] if i < len(buy_depth) else {}
-                                    sell_lvl = sell_depth[i] if i < len(sell_depth) else {}
-                                    bp = buy_lvl.get('price', '-')
-                                    bq = buy_lvl.get('quantity', '-')
-                                    bo = buy_lvl.get('orders', '-')
-                                    sp = sell_lvl.get('price', '-')
-                                    sq = sell_lvl.get('quantity', '-')
-                                    so = sell_lvl.get('orders', '-')
-                                    print(f"         {str(bp):<10} {str(bq):<10} {str(bo):<8} | {str(sp):<10} {str(sq):<10} {str(so):<8}")
-                        
-                        # Invoke callback if set
-                        if self.depth_callback:
-                            try:
-                                # Create a clean market data update
-                                clean_data = {
-                                    'type': 'market_data',
-                                    'symbol': symbol,
-                                    'exchange': exchange,
-                                    'mode': mode,
-                                    'data': depth_data.copy()
-                                }
-                                # Pass the cleaned message to callback
-                                self.depth_callback(clean_data)
-                            except Exception as e:
-                                self._log(1, "ERROR", f"Depth callback error: {str(e)}")
-                        
-        except json.JSONDecodeError:
-            self._log(1, "ERROR", f"Invalid JSON message: {message_str[:100]}...")
+            self._surface_rejection(message)
+            kind = message.get("type")
+            if kind == "auth":
+                self._on_auth_reply(message)
+            elif kind in ("subscribe_orders", "unsubscribe_orders"):
+                self._on_orders_reply(message)
+            elif kind == "order_update":
+                self._on_order_update(message)
+            elif kind == "subscribe":
+                self._on_subscribe_reply(message)
+            elif kind == "market_data":
+                self._on_market_data(message)
+        except json.JSONDecodeError as e:
+            line = f"Invalid JSON message: {message_str[:100]}..."
+            self._report(e, line, kind="frame", callback=None, message=message_str)
         except Exception as e:
-            self._log(1, "ERROR", f"Error handling message: {e}")
+            line = f"Error handling message: {e}"
+            self._report(e, line, kind="frame", callback=None, message=message_str)
 
-    def subscribe_ltp(self, instruments: List[Dict[str, Any]], on_data_received: Optional[Callable] = None) -> bool:
+    def _surface_rejection(self, message: Any) -> None:
+        """Report a frame in which the server rejects something. Nothing else is done about it."""
+        rejection = server_rejection(message)
+        if rejection is None:
+            return
+        kind, error, details = rejection
+        if kind == "authentication":
+            line = f"Authentication failed: {error.message}"
+        else:
+            line = f"Server error: {error}"
+        self._report(
+            error, line, kind=kind, callback=None, code=error.code, message=message, **details
+        )
+
+    def _deliver(
+        self, label: str, callback: Callable, payload: Dict[str, Any], message: Dict[str, Any]
+    ) -> None:
         """
-        Subscribe to LTP updates for instruments.
-
-        Args:
-            instruments: List of instrument dictionaries with keys:
-                - exchange (str): Exchange code (e.g., 'NSE', 'BSE', 'NFO')
-                - symbol (str): Trading symbol
-                - exchange_token (str, optional): Exchange token for the instrument
-            on_data_received: Callback function for data updates
-
-        Returns:
-            bool: True if subscription successful, False otherwise
+        Hand payload to a user data callback. An exception it raises is
+        reported with the server message it came from, and never stops the feed.
         """
-        if not self.connected:
-            self._log(1, "ERROR", "Not connected to WebSocket server")
-            return False
+        try:
+            callback(payload)
+        except Exception as e:
+            line = f"{label} callback error: {str(e)}"
+            self._report(e, line, kind="callback", callback=label.lower(), message=message)
 
-        if not self.authenticated:
-            self._log(1, "ERROR", "Not authenticated with WebSocket server")
-            return False
+    def _on_auth_reply(self, message: Dict[str, Any]) -> None:
+        """Handle authentication response (a refusal was reported by _surface_rejection)."""
+        if message.get("status") == "success":
+            broker = message.get("broker", "unknown")
+            user_id = message.get("user_id", "unknown")
+            self._log(1, "AUTH", f"Success | Broker: {broker} | User: {user_id}")
+            self._log(2, "AUTH", f"Full response: {message}")
+            self._on_authenticated(message)
 
-        # Set callback if provided
-        if on_data_received:
-            self.ltp_callback = on_data_received
+    def _on_orders_reply(self, message: Dict[str, Any]) -> None:
+        """Handle order-update subscription responses."""
+        self._log(1, "SUB", f"Order updates | {message.get('type')} | Status: {message.get('status', '?')}")
+        self._log(2, "SUB", f"Full response: {message}")
+        if message.get("type") == "subscribe_orders":
+            self._note_replay_reply(ReplayTracker.orders_reply, message)
 
-        # Validate inputs and register in the active-subscription store
-        # (used for replay across reconnects). Behaviour preserved: invalid
-        # instruments are logged and skipped just like the previous loop.
-        valid: List[Dict[str, Any]] = []
+    def _on_subscribe_reply(self, message: Dict[str, Any]) -> None:
+        """Handle subscription response."""
+        subs = message.get("subscriptions", [])
+        for sub in subs:
+            sym = sub.get("symbol", "?")
+            exch = sub.get("exchange", "?")
+            status = sub.get("status", "?")
+            mode = sub.get("mode", 0)
+            # The server names the mode ("LTP"); older ones number it.
+            mode_name = MODES[mode].label if mode in MODES else mode or "Unknown"
+            self._log(1, "SUB", f"{exch}:{sym} | Mode: {mode_name} | Status: {status}")
+        self._log(2, "SUB", f"Full response: {message}")
+        self._note_replay_reply(ReplayTracker.subscribe_reply, message)
+
+    def _note_replay_reply(
+        self, take_in: Callable[[ReplayTracker, Dict[str, Any]], None], message: Dict[str, Any]
+    ) -> None:
+        """Let the replay that waits for replies, if there is one, take this reply in."""
+        with self._state_lock:
+            if self._replay is not None:
+                take_in(self._replay.tracker, message)
+        self._settle_replay()
+
+    def _on_order_update(self, message: Dict[str, Any]) -> None:
+        """Handle real-time order updates (account-level, no symbol subscription)."""
+        with self.lock:
+            self.order_data.insert(0, message)
+            del self.order_data[500:]  # cap retained history
+
+        self._log(
+            2,
+            "ORDER",
+            f"{message.get('symbol', '?'):<20} | {message.get('order_status', '?'):<10} "
+            f"| Qty: {message.get('filled_quantity', 0)}/{message.get('quantity', 0)} "
+            f"| Avg: {message.get('average_price', 0)} | ID: {message.get('orderid', '?')}",
+        )
+
+        # The callback gets its own copy: an edit must not change get_orders().
+        if self.order_callback:
+            self._deliver("Order", self.order_callback, fresh_copy(message), message)
+
+    def _on_market_data(self, message: Dict[str, Any]) -> None:
+        """Handle market data: store the latest values, then invoke the callback of the mode."""
+        if not message.get("exchange") or not message.get("symbol"):
+            return
+        mode = message.get("mode")
+        market_data = message.get("data", {})
+        # Store with format 'EXCHANGE:SYMBOL'
+        symbol_key = f"{message['exchange']}:{message['symbol']}"
+        # Handle LTP data (mode 1)
+        if mode == 1 and "ltp" in market_data:
+            update = ticks.ltp_update(market_data)
+            with self.lock:
+                self.ltp_data[symbol_key] = {
+                    'price': update["ltp"],
+                    'timestamp': update["timestamp"]
+                }
+                self._log(2, "LTP", f"{symbol_key:<20} | LTP: {update['ltp']}")
+            callback = self.ltp_callback
+        # Handle Quotes data (mode 2)
+        elif mode == 2:
+            update = ticks.quote_update(market_data)
+            with self.lock:
+                self.quotes_data[symbol_key] = update
+                self._log(2, "QUOTE", f"{symbol_key:<20} | O: {update['open']:<10} H: {update['high']:<10} L: {update['low']:<10} C: {update['close']:<10} LTP: {update['ltp']}")
+            callback = self.quote_callback
+        # Handle Market Depth data (mode 3)
+        elif mode == 3 and "depth" in market_data:
+            update = ticks.depth_update(market_data)
+            with self.lock:
+                self.depth_data[symbol_key] = update
+                self._log(2, "DEPTH", f"{symbol_key:<20} | LTP: {update.get('ltp')}")
+                if self.verbose >= 2:
+                    print("\n".join(ticks.depth_ladder(update)))
+            callback = self.depth_callback
+        else:
+            return
+
+        # Invoke callback if set, with a clean copy of what was stored. The copy
+        # goes all the way down: the depth levels are lists of dicts, and a
+        # callback that edits one must not change what get_depth() returns.
+        if callback:
+            clean_data = ticks.callback_message(message, fresh_copy(update))
+            self._deliver(MODES[mode].label, callback, clean_data, message)
+
+    def _valid_instruments(self, instruments: List[Dict[str, Any]]) -> Iterator[Dict[str, Any]]:
+        """
+        Yield a {"symbol", "exchange"} entry for each instrument that has
+        both. The others are logged and skipped.
+        """
         for instrument in instruments:
             exchange = instrument.get("exchange")
             symbol = instrument.get("symbol")
@@ -593,19 +857,96 @@ class FeedAPI(BaseAPI):
                 self._log(1, "ERROR", f"Invalid instrument: {instrument}")
                 continue
 
-            entry = {"symbol": symbol, "exchange": exchange}
-            valid.append(entry)
-            self._active_subs[1][(exchange, symbol)] = entry
-            self._log(1, "SUB", f"Subscribing {exchange}:{symbol} LTP...")
+            yield {"symbol": symbol, "exchange": exchange}
 
-        if not valid:
-            return False
+    def _log_not_ready(self) -> None:
+        """Print why a subscribe frame cannot be sent now: no socket, or not authenticated."""
+        if not self.connected:
+            self._log(1, "ERROR", "Not connected to WebSocket server")
+        else:
+            self._log(1, "ERROR", "Not authenticated with WebSocket server")
 
-        # Single bulk message instead of N×100ms loop. The unified WebSocket
-        # proxy (server.py) accepts `data["symbols"]` as an array; using it
-        # makes a 200-symbol option-chain subscribe near-instant instead of
-        # ~20 seconds.
-        return self._send_subscribe_msg(mode=1, instruments=valid)
+    def _subscribe(self, mode: int, instruments: List[Dict[str, Any]], on_data_received: Optional[Callable]) -> bool:
+        """
+        Shared implementation of subscribe_ltp / subscribe_quote /
+        subscribe_depth (mode 1 / 2 / 3).
+
+        The request is recorded first, then the frame is sent if the feed is
+        live. Both happen under _state_lock, which the replay also takes, so
+        a request can neither be lost nor be overtaken by a replay.
+        """
+        names = MODES[mode]
+        with self._state_lock:
+            live = self._link.phase is Phase.LIVE
+            if not live:
+                self._log_not_ready()
+
+            # Set callback if provided
+            if on_data_received:
+                setattr(self, names.callback_attr, on_data_received)
+
+            # Register in the active-subscription store (used for replay
+            # across reconnects).
+            valid: List[Dict[str, Any]] = []
+            for entry in self._valid_instruments(instruments):
+                exchange, symbol = entry["exchange"], entry["symbol"]
+                valid.append(entry)
+                self._active_subs[mode][(exchange, symbol)] = entry
+                if live:
+                    self._log(1, "SUB", f"Subscribing {exchange}:{symbol} {names.label}...")
+
+            if not live or not valid:
+                return False
+
+            # Single bulk message for all instruments. The unified WebSocket
+            # proxy (server.py) accepts `data["symbols"]` as an array; using it
+            # makes a 200-symbol option-chain subscribe near-instant instead of
+            # ~20 seconds.
+            return self._send_subscribe_msg(mode=mode, instruments=valid)
+
+    def _unsubscribe(self, mode: int, instruments: List[Dict[str, Any]]) -> bool:
+        """
+        Shared implementation of unsubscribe_ltp / unsubscribe_quote /
+        unsubscribe_depth (mode 1 / 2 / 3). See _subscribe for the locking.
+        """
+        names = MODES[mode]
+        with self._state_lock:
+            valid: List[Dict[str, Any]] = []
+            for entry in self._valid_instruments(instruments):
+                exchange, symbol = entry["exchange"], entry["symbol"]
+                self._log(1, "UNSUB", f"Unsubscribing {exchange}:{symbol} {names.label}")
+                valid.append(entry)
+
+                # Drop from active-subscription store so reconnect does not replay.
+                self._active_subs[mode].pop((exchange, symbol), None)
+
+                # Clean up cached data for this symbol.
+                with self.lock:
+                    getattr(self, names.cache_attr).pop(f"{exchange}:{symbol}", None)
+
+            if not valid or self._link.phase is not Phase.LIVE:
+                return False
+
+            return self._send_unsubscribe_msg(mode=mode, instruments=valid)
+
+    def subscribe_ltp(self, instruments: List[Dict[str, Any]], on_data_received: Optional[Callable] = None) -> bool:
+        """
+        Subscribe to LTP updates for instruments.
+
+        Args:
+            instruments: List of instrument dictionaries with keys:
+                - exchange (str): Exchange code (e.g., 'NSE', 'BSE', 'NFO')
+                - symbol (str): Trading symbol
+                - exchange_token (str, optional): Exchange token for the instrument
+            on_data_received: Callback function for data updates
+
+        Returns:
+            bool: True if the subscription frame was sent, False otherwise
+                (for example while the socket is down). The requested set is
+                updated either way: it is what the SDK sends whenever the
+                connection authenticates, so also after a reconnect.
+        """
+        return self._subscribe(1, instruments, on_data_received)
 
     def unsubscribe_ltp(self, instruments: List[Dict[str, Any]]) -> bool:
         """
@@ -618,40 +959,11 @@ class FeedAPI(BaseAPI):
                 - exchange_token (str, optional): Exchange token for the instrument
 
         Returns:
-            bool: True if unsubscription successful, False otherwise
+            bool: True if the unsubscription frame was sent, False otherwise
+                (for example while the socket is down). The requested set is
+                updated either way, so the instruments are not replayed.
         """
-        if not self.connected or not self.authenticated:
-            return False
-
-        valid: List[Dict[str, Any]] = []
-        for instrument in instruments:
-            exchange = instrument.get("exchange")
-            symbol = instrument.get("symbol")
-            exchange_token = instrument.get("exchange_token")
-
-            if not symbol and exchange_token:
-                symbol = exchange_token
-
-            if not exchange or not symbol:
-                self._log(1, "ERROR", f"Invalid instrument: {instrument}")
-                continue
-
-            self._log(1, "UNSUB", f"Unsubscribing {exchange}:{symbol} LTP")
-            valid.append({"symbol": symbol, "exchange": exchange})
-
-            # Drop from active-subscription store so reconnect does not replay.
-            self._active_subs[1].pop((exchange, symbol), None)
-
-            # Clean up cached LTP data for this symbol (preserved behaviour).
-            with self.lock:
-                symbol_key = f"{exchange}:{symbol}"
-                if symbol_key in self.ltp_data:
-                    del self.ltp_data[symbol_key]
-
-        if not valid:
-            return False
-
-        return self._send_unsubscribe_msg(mode=1, instruments=valid)
+        return self._unsubscribe(1, instruments)
 
     def subscribe_quote(self, instruments: List[Dict[str, Any]], on_data_received: Optional[Callable] = None) -> bool:
         """
@@ -665,41 +977,12 @@ class FeedAPI(BaseAPI):
             on_data_received: Callback function for data updates
 
         Returns:
-            bool: True if subscription request sent successfully
+            bool: True if the subscription frame was sent, False otherwise
+                (for example while the socket is down). The requested set is
+                updated either way: it is what the SDK sends whenever the
+                connection authenticates, so also after a reconnect.
         """
-        if not self.connected:
-            self._log(1, "ERROR", "Not connected to WebSocket server")
-            return False
-
-        if not self.authenticated:
-            self._log(1, "ERROR", "Not authenticated with WebSocket server")
-            return False
-
-        if on_data_received:
-            self.quote_callback = on_data_received
-
-        valid: List[Dict[str, Any]] = []
-        for instrument in instruments:
-            exchange = instrument.get("exchange")
-            symbol = instrument.get("symbol")
-            exchange_token = instrument.get("exchange_token")
-
-            if not symbol and exchange_token:
-                symbol = exchange_token
-
-            if not exchange or not symbol:
-                self._log(1, "ERROR", f"Invalid instrument: {instrument}")
-                continue
-
-            entry = {"symbol": symbol, "exchange": exchange}
-            valid.append(entry)
-            self._active_subs[2][(exchange, symbol)] = entry
-            self._log(1, "SUB", f"Subscribing {exchange}:{symbol} Quote...")
-
-        if not valid:
-            return False
-
-        return self._send_subscribe_msg(mode=2, instruments=valid)
+        return self._subscribe(2, instruments, on_data_received)
 
     def unsubscribe_quote(self, instruments: List[Dict[str, Any]]) -> bool:
         """
@@ -712,38 +995,11 @@ class FeedAPI(BaseAPI):
                 - exchange_token (str, optional): Exchange token for the instrument
 
         Returns:
-            bool: True if unsubscription successful, False otherwise
+            bool: True if the unsubscription frame was sent, False otherwise
+                (for example while the socket is down). The requested set is
+                updated either way, so the instruments are not replayed.
         """
-        if not self.connected or not self.authenticated:
-            return False
-
-        valid: List[Dict[str, Any]] = []
-        for instrument in instruments:
-            exchange = instrument.get("exchange")
-            symbol = instrument.get("symbol")
-            exchange_token = instrument.get("exchange_token")
-
-            if not symbol and exchange_token:
-                symbol = exchange_token
-
-            if not exchange or not symbol:
-                self._log(1, "ERROR", f"Invalid instrument: {instrument}")
-                continue
-
-            self._log(1, "UNSUB", f"Unsubscribing {exchange}:{symbol} Quote")
-            valid.append({"symbol": symbol, "exchange": exchange})
-
-            self._active_subs[2].pop((exchange, symbol), None)
-
-            with self.lock:
-                symbol_key = f"{exchange}:{symbol}"
-                if symbol_key in self.quotes_data:
-                    del self.quotes_data[symbol_key]
-
-        if not valid:
-            return False
-
-        return self._send_unsubscribe_msg(mode=2, instruments=valid)
+        return self._unsubscribe(2, instruments)
 
     def subscribe_depth(self, instruments: List[Dict[str, Any]], on_data_received: Optional[Callable] = None) -> bool:
         """
@@ -757,42 +1013,13 @@ class FeedAPI(BaseAPI):
             on_data_received: Callback function for data updates
 
         Returns:
-            bool: True if subscription request sent successfully
+            bool: True if the subscription frame was sent, False otherwise
+                (for example while the socket is down). The requested set is
+                updated either way: it is what the SDK sends whenever the
+                connection authenticates, so also after a reconnect.
         """
-        if not self.connected:
-            self._log(1, "ERROR", "Not connected to WebSocket server")
-            return False
+        return self._subscribe(3, instruments, on_data_received)
 
-        if not self.authenticated:
-            self._log(1, "ERROR", "Not authenticated with WebSocket server")
-            return False
-
-        if on_data_received:
-            self.depth_callback = on_data_received
-
-        valid: List[Dict[str, Any]] = []
-        for instrument in instruments:
-            exchange = instrument.get("exchange")
-            symbol = instrument.get("symbol")
-            exchange_token = instrument.get("exchange_token")
-
-            if not symbol and exchange_token:
-                symbol = exchange_token
-
-            if not exchange or not symbol:
-                self._log(1, "ERROR", f"Invalid instrument: {instrument}")
-                continue
-
-            entry = {"symbol": symbol, "exchange": exchange}
-            valid.append(entry)
-            self._active_subs[3][(exchange, symbol)] = entry
-            self._log(1, "SUB", f"Subscribing {exchange}:{symbol} Depth...")
-
-        if not valid:
-            return False
-
-        return self._send_subscribe_msg(mode=3, instruments=valid)
-    
     def unsubscribe_depth(self, instruments: List[Dict[str, Any]]) -> bool:
         """
         Unsubscribe from Market Depth updates for instruments.
@@ -804,45 +1031,18 @@ class FeedAPI(BaseAPI):
                 - exchange_token (str, optional): Exchange token for the instrument
 
         Returns:
-            bool: True if unsubscription successful, False otherwise
+            bool: True if the unsubscription frame was sent, False otherwise
+                (for example while the socket is down). The requested set is
+                updated either way, so the instruments are not replayed.
         """
-        if not self.connected or not self.authenticated:
-            return False
-
-        valid: List[Dict[str, Any]] = []
-        for instrument in instruments:
-            exchange = instrument.get("exchange")
-            symbol = instrument.get("symbol")
-            exchange_token = instrument.get("exchange_token")
-
-            if not symbol and exchange_token:
-                symbol = exchange_token
-
-            if not exchange or not symbol:
-                self._log(1, "ERROR", f"Invalid instrument: {instrument}")
-                continue
-
-            self._log(1, "UNSUB", f"Unsubscribing {exchange}:{symbol} Depth")
-            valid.append({"symbol": symbol, "exchange": exchange})
-
-            self._active_subs[3].pop((exchange, symbol), None)
-
-            with self.lock:
-                symbol_key = f"{exchange}:{symbol}"
-                if symbol_key in self.depth_data:
-                    del self.depth_data[symbol_key]
-
-        if not valid:
-            return False
-
-        return self._send_unsubscribe_msg(mode=3, instruments=valid)
+        return self._unsubscribe(3, instruments)
 
     def subscribe_orders(self, on_order_update: Optional[Callable] = None) -> bool:
         """
         Subscribe to real-time order updates for the authenticated account.
 
         Order updates cover asynchronous status changes pushed by the broker
-        (or the sandbox engine in analyze mode) after an order is placed —
+        (or the sandbox engine in analyze mode) after an order is placed:
         fills, partial fills, rejections, cancellations. No symbols are
         involved; this is an account-level stream.
 
@@ -855,56 +1055,82 @@ class FeedAPI(BaseAPI):
                  "average_price": ..., "rejection_reason": ..., "broker": ...}
 
         Returns:
-            bool: True if the subscription request was sent successfully
+            bool: True if the subscription frame was sent, False otherwise
+                (for example while the socket is down). The request is
+                recorded either way and sent whenever the connection
+                authenticates, exactly like a market-data subscription.
         """
-        if not self.connected:
-            self._log(1, "ERROR", "Not connected to WebSocket server")
-            return False
+        with self._state_lock:
+            live = self._link.phase is Phase.LIVE
+            if not live:
+                self._log_not_ready()
 
-        if not self.authenticated:
-            self._log(1, "ERROR", "Not authenticated with WebSocket server")
-            return False
+            if on_order_update:
+                self.order_callback = on_order_update
 
-        if on_order_update:
-            self.order_callback = on_order_update
-
-        self._log(1, "SUB", "Subscribing to order updates...")
-        try:
-            self.ws.send(json.dumps({"action": "subscribe_orders"}))
             self._orders_subscribed = True
-            return True
-        except Exception as e:
-            self._log(1, "ERROR", f"Error sending order subscription: {e}")
-            return False
+            if not live:
+                return False
+
+            self._log(1, "SUB", "Subscribing to order updates...")
+            try:
+                self.ws.send(json.dumps({"action": "subscribe_orders"}))
+                return True
+            except Exception as e:
+                self._log(1, "ERROR", f"Error sending order subscription: {e}")
+                return False
 
     def unsubscribe_orders(self) -> bool:
         """
         Unsubscribe from real-time order updates.
 
         Returns:
-            bool: True if the unsubscription request was sent successfully
+            bool: True if the unsubscription frame was sent, False otherwise
+                (for example while the socket is down). The request is
+                recorded either way, so the stream is not replayed.
         """
-        if not self.connected or not self.authenticated:
-            return False
+        with self._state_lock:
+            self._orders_subscribed = False
+            if self._link.phase is not Phase.LIVE:
+                return False
 
-        self._log(1, "UNSUB", "Unsubscribing from order updates")
-        self._orders_subscribed = False
-        try:
-            self.ws.send(json.dumps({"action": "unsubscribe_orders"}))
-            return True
-        except Exception as e:
-            self._log(1, "ERROR", f"Error sending order unsubscription: {e}")
-            return False
+            self._log(1, "UNSUB", "Unsubscribing from order updates")
+            try:
+                self.ws.send(json.dumps({"action": "unsubscribe_orders"}))
+                return True
+            except Exception as e:
+                self._log(1, "ERROR", f"Error sending order unsubscription: {e}")
+                return False
+
+    def get_subscriptions(self) -> Dict[str, Any]:
+        """
+        Get the requested subscriptions: what subscribe and unsubscribe calls
+        have asked for so far, whether or not their frames could be sent. It
+        is what the SDK sends whenever the connection authenticates, and
+        disconnect() empties it. Safe to call from any thread.
+
+        Returns:
+            dict: {"ltp": [{"symbol": ..., "exchange": ...}, ...],
+                   "quote": [...], "depth": [...], "orders": <bool>}
+        """
+        with self._state_lock:
+            result: Dict[str, Any] = {
+                MODES[mode].key: [dict(entry) for entry in store.values()]
+                for mode, store in self._active_subs.items()
+            }
+            result["orders"] = bool(self._orders_subscribed)
+            return result
 
     def get_orders(self) -> Dict[str, Any]:
         """
         Get the order updates received so far (most recent first, capped).
 
         Returns:
-            dict: {"orders": [ {...order_update message...}, ... ]}
+            dict: {"orders": [ {...order_update message...}, ... ]}, copies
+                that the caller may edit without changing the stored history.
         """
         with self.lock:
-            return {"orders": list(self.order_data)}
+            return {"orders": [fresh_copy(order) for order in self.order_data]}
 
     def get_ltp(self, exchange: str = None, symbol: str = None) -> Dict[str, Any]:
         """
@@ -971,8 +1197,16 @@ class FeedAPI(BaseAPI):
                     "last_trade_quantity": last_trade_quantity,
                     "avg_trade_price": avg_trade_price,
                     "change": change,
-                    "change_percent": change_percent
+                    "change_percent": change_percent,
+                    "ltt": last_trade_time,
+                    "total_buy_quantity": total_buy_quantity,
+                    "total_sell_quantity": total_sell_quantity,
+                    "oi": open_interest
                 }}}}
+                The server sends the average traded price as average_price and
+                the last traded quantity as last_quantity; they are read into
+                avg_trade_price and last_trade_quantity. A field the server did
+                not send is 0. A quote callback receives the same fields.
         """
         with self.lock:
             # Create nested format response
@@ -1010,7 +1244,11 @@ class FeedAPI(BaseAPI):
                         "last_trade_quantity": data.get('last_trade_quantity', 0),
                         "avg_trade_price": data.get('avg_trade_price', 0),
                         "change": data.get('change', 0),
-                        "change_percent": data.get('change_percent', 0)
+                        "change_percent": data.get('change_percent', 0),
+                        "ltt": data.get('ltt', 0),
+                        "total_buy_quantity": data.get('total_buy_quantity', 0),
+                        "total_sell_quantity": data.get('total_sell_quantity', 0),
+                        "oi": data.get('oi', 0)
                     }
             
             return result

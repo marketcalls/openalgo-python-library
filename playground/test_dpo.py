@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Test Detrended Price Oscillator with TradingView defaults"""
+"""Test Detrended Price Oscillator with its default parameters"""
 
 import sys
 import os
@@ -30,14 +30,14 @@ def test_dpo_basic():
     print(f"Generated {n} test data points")
     print(f"Price range: {prices.min():.2f} - {prices.max():.2f}")
     
-    # Test with TradingView defaults: period=21, is_centered=False
+    # Test with the default parameters: period=21, is_centered=False
     period = 21
     
     # Calculate DPO in both modes
     dpo_non_centered = ta.dpo(prices, period=period, is_centered=False)
     dpo_centered = ta.dpo(prices, period=period, is_centered=True)
     
-    print(f"\nUsing TradingView defaults: period={period}")
+    print(f"\nUsing default parameters: period={period}")
     
     # Check for valid data
     valid_nc = ~np.isnan(dpo_non_centered)
@@ -183,7 +183,7 @@ def test_dpo_formula():
     return False
 
 if __name__ == "__main__":
-    print("Detrended Price Oscillator Test - TradingView Implementation")
+    print("Detrended Price Oscillator Test")
     print("=" * 65)
     
     success1 = test_dpo_basic()
@@ -192,8 +192,7 @@ if __name__ == "__main__":
     
     print(f"\nOverall Test: {'PASSED' if success1 and success2 and success3 else 'FAILED'}")
     print(f"\nDPO Implementation Summary:")
-    print(f"- Now matches TradingView Pine Script exactly")
-    print(f"- Default period changed from 20 to 21 (TradingView default)")
+    print(f"- Default period changed from 20 to 21")
     print(f"- Added is_centered parameter (default: False)")
     print(f"- Non-Centered mode: DPO = Close - SMA[barsback] (default)")
     print(f"- Centered mode: DPO = Close[barsback] - SMA")

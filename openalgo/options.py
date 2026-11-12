@@ -213,7 +213,7 @@ class OptionsAPI(BaseAPI):
         Returns:
         dict: JSON response containing:
             - status: success/error
-            - orderid: Broker order ID (or SB-xxx for analyze mode)
+            - orderid: Order ID (in analyze mode a numeric sandbox ID; check "mode", not the ID format)
             - symbol: Resolved option symbol
             - exchange: Exchange code where order is placed
             - underlying: Underlying symbol from request
@@ -446,7 +446,7 @@ class OptionsAPI(BaseAPI):
                 - option_type: CE/PE
                 - action: BUY/SELL
                 - status: success/error
-                - orderid: Broker order ID (or SB-xxx for analyze mode)
+                - orderid: Order ID (in analyze mode a numeric sandbox ID; check "mode", not the ID format)
                 - message: Error message (only if error)
 
         Example:

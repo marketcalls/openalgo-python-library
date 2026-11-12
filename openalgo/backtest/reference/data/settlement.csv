@@ -1,0 +1,28 @@
+# settlement: how a derivative segment settles at expiry.
+#
+# Columns
+#   exchange, segment      NFO or BFO with index_future, index_option, stock_future or
+#                          stock_option
+#   valid_from, valid_to   trade dates the row applies to, both inclusive (empty valid_to: open)
+#   settlement             cash: settled in cash at the final settlement price
+#                          physical: settled by delivery of the underlying shares
+#   source                 the document the row was read from
+#   status                 verified: checked against that document; unverified: not confirmed
+#   note                   free text
+#
+# Stock derivatives moved from cash to physical settlement in batches between the July
+# 2018 and October 2019 expiries, stock by stock, so no single answer exists for a stock
+# contract traded before 2019-11-01: those dates are deliberately not covered. Give the
+# settlement of such a contract in a user `symbols` row.
+#
+# MCX contracts are not in this table: each MCX contract states its own settlement in
+# mcx_contracts.csv.
+exchange,segment,valid_from,valid_to,settlement,source,status,note
+NFO,index_future,2019-01-01,,cash,NSE/FAOP/37689 (2018-05-04) item 1.11; NSE/FAOP/46603 (2020-12-10); NSE/FAOP/61629 (2024-04-18),verified,Final settlement at the index closing value on the expiry day
+NFO,index_option,2019-01-01,,cash,NSE/FAOP/37689 (2018-05-04) item 1.11; NSE/FAOP/46603 (2020-12-10); NSE/FAOP/61629 (2024-04-18),verified,Final settlement at the index closing value on the expiry day
+NFO,stock_future,2019-11-01,,physical,SEBI/HO/MRD/DOPI/CIR/P/2018/161 (2018-12-31) as issued in NSE/FAOP/39824 (2019-01-01),verified,Every stock derivative is physically settled from the October 2019 expiry
+NFO,stock_option,2019-11-01,,physical,SEBI/HO/MRD/DOPI/CIR/P/2018/161 (2018-12-31) as issued in NSE/FAOP/39824 (2019-01-01),verified,Every stock derivative is physically settled from the October 2019 expiry
+BFO,index_future,2023-05-15,,cash,BSE contract specifications page (bseindia.com; read 2026-11-12); BSE notice 20230327-65 (2023-03-27),verified,The page describes the product; the notice gives the relaunch date
+BFO,index_option,2023-05-15,,cash,BSE contract specifications page (bseindia.com; read 2026-11-12); BSE notice 20230327-65 (2023-03-27),verified,The page describes the product; the notice gives the relaunch date
+BFO,stock_future,2019-11-01,,physical,SEBI/HO/MRD/DOPI/CIR/P/2018/161 (2018-12-31) addressed to all recognised stock exchanges,verified,Every stock derivative is physically settled from the October 2019 expiry
+BFO,stock_option,2019-11-01,,physical,SEBI/HO/MRD/DOPI/CIR/P/2018/161 (2018-12-31) addressed to all recognised stock exchanges,verified,Every stock derivative is physically settled from the October 2019 expiry

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Test Chande Kroll Stop with TradingView defaults"""
+"""Test Chande Kroll Stop with its default parameters"""
 
 import sys
 import os
@@ -32,13 +32,13 @@ def test_ckstop_basic():
     print(f"Generated {n} test data points")
     print(f"Price range: {prices.min():.2f} - {prices.max():.2f}")
     
-    # Test with TradingView defaults: p=10, x=1, q=9
+    # Test with the default parameters: p=10, x=1, q=9
     p, x, q = 10, 1, 9
     
     # Calculate CKStop
     stop_long, stop_short = ta.ckstop(high, low, close, p=p, x=x, q=q)
     
-    print(f"\nUsing TradingView defaults: p={p}, x={x}, q={q}")
+    print(f"\nUsing default parameters: p={p}, x={x}, q={q}")
     
     # Check for valid data
     valid_long = ~np.isnan(stop_long)
@@ -145,7 +145,7 @@ def test_ckstop_real_pattern():
     return False
 
 if __name__ == "__main__":
-    print("Chande Kroll Stop Test - TradingView Implementation")
+    print("Chande Kroll Stop Test")
     print("=" * 55)
     
     success1 = test_ckstop_basic()
@@ -153,8 +153,7 @@ if __name__ == "__main__":
     
     print(f"\nOverall Test: {'PASSED' if success1 and success2 else 'FAILED'}")
     print(f"\nCKStop Implementation Summary:")
-    print(f"- Now matches TradingView Pine Script exactly")
     print(f"- Uses 3 parameters: p (ATR length), x (ATR coefficient), q (stop length)")
-    print(f"- Default values: p=10, x=1.0, q=9 (TradingView defaults)")
+    print(f"- Default values: p=10, x=1.0, q=9")
     print(f"- Two-step calculation: first_stops -> smoothed_stops")
-    print(f"- Returns (stop_long, stop_short) as in TradingView")
+    print(f"- Returns (stop_long, stop_short)")

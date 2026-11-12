@@ -3,7 +3,7 @@
 OpenAlgo Technical Indicators Library
 
 A high-performance technical analysis library with NumPy and Numba optimizations.
-Provides TradingView-like syntax for easy use.
+Each indicator is one call on arrays or Series, such as ta.sma(close, 20).
 """
 
 import numpy as np
@@ -28,10 +28,12 @@ from .oscillators import (CMO, TRIX, UO, AO, AC, PPO, PO, DPO, AROONOSC,
 from .statistics import (LINREG, LRSLOPE, CORREL, BETA, VAR, TSF, MEDIAN, MODE, MedianBands)
 from .hybrid import (ADX, Aroon, PivotPoints, SAR, DMI,
                     WilliamsFractals, RWI)
-from .utils import (crossover, crossunder, highest, lowest, change, roc,
-                   sma as utils_sma, ema as utils_ema, stdev, validate_input,
-                   exrem, flip, valuewhen, rising, falling, cross)
-from .talib_extra import (MOM, ROCP, ROCR, ROCR100, MIDPOINT, APO,
+from .utils import (roc, sma as utils_sma, ema as utils_ema, stdev, validate_input)
+# Same helpers as their utils.py namesakes, computed in the Rust core (vectorised
+# NumPy without it) instead of a per-bar Python loop.
+from ._backend import (crossover, crossunder, cross, highest, lowest, change,
+                       exrem, flip, valuewhen, rising, falling)
+from .classic import (MOM, ROCP, ROCR, ROCR100, MIDPOINT, APO,
                           MEDPRICE, TYPPRICE, WCLPRICE, MIDPRICE, AVGPRICE,
                           PLUS_DM, MINUS_DM, DX, ADXR, STOCHF,
                           LINEARREG_ANGLE, LINEARREG_INTERCEPT)
@@ -39,7 +41,7 @@ from .talib_extra import (MOM, ROCP, ROCR, ROCR100, MIDPOINT, APO,
 
 class TechnicalAnalysis:
     """
-    Main technical analysis interface providing TradingView-like syntax
+    Main technical analysis interface: one method per indicator
     
     Usage:
     ------
@@ -106,6 +108,7 @@ class TechnicalAnalysis:
         self._chaikin_volatility = Chaikin()
         self._natr = NATR()
         self._rvi = RVI()  # Oscillator RVI (Relative Vigor Index)
+        self._rvi_volatility = VolatilityRVI()  # Relative Volatility Index
         self._rvol = RVOL()  # Relative Volume
         self._ultosc = ULTOSC()
         self._trange = TRANGE()
@@ -165,7 +168,7 @@ class TechnicalAnalysis:
         self._median_bands = MedianBands()
         self._mode = MODE()
         
-        # TA-Lib-compatible additions
+        # Classic single-formula indicators (classic.py)
         self._mom = MOM()
         self._rocp = ROCP()
         self._rocr = ROCR()
@@ -319,7 +322,7 @@ class TechnicalAnalysis:
                  conversion_periods: int = 9, base_periods: int = 26,
                  lagging_span2_periods: int = 52, displacement: int = 26) -> Tuple[np.ndarray, ...]:
         """
-        Ichimoku Cloud - matches TradingView exactly
+        Ichimoku Cloud
         
         Parameters:
         -----------
@@ -330,13 +333,13 @@ class TechnicalAnalysis:
         close : Union[np.ndarray, pd.Series, list]
             Closing prices
         conversion_periods : int, default=9
-            Conversion Line Length (TradingView: conversionPeriods)
+            Conversion Line Length
         base_periods : int, default=26
-            Base Line Length (TradingView: basePeriods)
+            Base Line Length
         lagging_span2_periods : int, default=52
-            Leading Span B Length (TradingView: laggingSpan2Periods)
+            Leading Span B Length
         displacement : int, default=26
-            Lagging Span displacement (TradingView: displacement)
+            Lagging Span displacement
             
         Returns:
         --------
@@ -362,7 +365,8 @@ class TechnicalAnalysis:
     
     def kama(self, data: Union[np.ndarray, pd.Series, list],
              length: int = 14, fast_length: int = 2, slow_length: int = 30) -> np.ndarray:
-        """Kaufman's Adaptive Moving Average - matches TradingView exactly"""
+        """Kaufman's Adaptive Moving Average: efficiency ratio over `length`, squared
+        smoothing constant between the fast and slow EMA alphas, seeded with the source"""
         return self._kama.calculate(data, length, fast_length, slow_length)
     
     def zlema(self, data: Union[np.ndarray, pd.Series, list], period: int) -> np.ndarray:
@@ -376,7 +380,7 @@ class TechnicalAnalysis:
     
     def frama(self, high: Union[np.ndarray, pd.Series, list],
               low: Union[np.ndarray, pd.Series, list], period: int = 26) -> Union[np.ndarray, pd.Series]:
-        """Fractal Adaptive Moving Average - matches TradingView exactly"""
+        """Fractal Adaptive Moving Average on hl2, smoothed by a trailing 5-bar mean"""
         return self._frama.calculate(high, low, period)
     
     # =================== MOMENTUM INDICATORS ===================
@@ -620,6 +624,40 @@ class TechnicalAnalysis:
         """Relative Volume"""
         return self._rvol.calculate(volume, period)
     
+    def rvi_volatility(self, data: Union[np.ndarray, pd.Series, list],
+                       stdev_period: int = 10,
+                       rsi_period: int = 14) -> Union[np.ndarray, pd.Series]:
+        """
+        Relative Volatility Index (Donald Dorsey, 1993)
+
+        RVI = 100 * U / (U + D): the share of recent volatility that fell on
+        rising bars. The rolling standard deviation of the price counts on the
+        up side on a bar that closes above the bar before and on the down side
+        on a bar that closes below it; U and D are those two sides under
+        Wilder's smoothing, the average the RSI uses (not the EMA some charting
+        platforms use). 50 when there is no volatility on either side.
+
+        Not to be confused with `ta.rvi`, the Relative Vigor Index, which takes
+        open, high, low and close.
+
+        Parameters:
+        -----------
+        data : Union[np.ndarray, pd.Series, list]
+            Price data (typically closing prices)
+        stdev_period : int, default=10
+            Window, in bars, of the rolling population standard deviation
+        rsi_period : int, default=14
+            Bars of Wilder's smoothing
+
+        Returns:
+        --------
+        Union[np.ndarray, pd.Series]
+            Values from 0 to 100 in the same format as input. The first value
+            is at bar stdev_period + rsi_period - 2. A bar is NaN while a NaN
+            is in its deviation window or on the bar before it.
+        """
+        return self._rvi_volatility.calculate(data, stdev_period, rsi_period)
+    
     def ultimate_oscillator(self, high: Union[np.ndarray, pd.Series, list],
                            low: Union[np.ndarray, pd.Series, list],
                            close: Union[np.ndarray, pd.Series, list],
@@ -637,7 +675,7 @@ class TechnicalAnalysis:
     def massindex(self, high: Union[np.ndarray, pd.Series, list],
                    low: Union[np.ndarray, pd.Series, list],
                    length: int = 10) -> np.ndarray:
-        """Mass Index (Pine Script v6 formula)"""
+        """Mass Index: sum over `length` of EMA(9) of the high-low range divided by its EMA(9)"""
         return self._mass.calculate(high, low, length)
     
     # =================== VOLUME INDICATORS ===================
@@ -668,7 +706,7 @@ class TechnicalAnalysis:
                      bb_length: int = 20,
                      bb_mult: float = 2.0) -> Union[Tuple[np.ndarray, np.ndarray, np.ndarray], np.ndarray]:
         """
-        On Balance Volume with Smoothing Options (TradingView Pine Script Implementation)
+        On Balance Volume with Smoothing Options
         
         Parameters:
         -----------
@@ -697,19 +735,20 @@ class TechnicalAnalysis:
              low: Union[np.ndarray, pd.Series, list],
              close: Union[np.ndarray, pd.Series, list],
              volume: Union[np.ndarray, pd.Series, list],
-             anchor: str = "Session",
+             anchor: Optional[str] = "Session",
              source: str = "hlc3",
              stdev_mult_1: float = 1.0,
              stdev_mult_2: float = 2.0,
              stdev_mult_3: float = 3.0,
              percent_mult_1: float = 0.236,
              percent_mult_2: float = 0.382,
-             percent_mult_3: float = 0.618) -> np.ndarray:
+             percent_mult_3: float = 0.618,
+             timestamps: Optional[Union[np.ndarray, pd.DatetimeIndex, list]] = None,
+             session_starts: Optional[Union[np.ndarray, pd.Series, list]] = None) -> np.ndarray:
         """
-        Volume Weighted Average Price - TradingView Pine Script v6 Implementation
+        Volume Weighted Average Price
         
         Advanced VWAP with session-based anchoring, standard deviation and percentage bands.
-        Matches TradingView Pine Script v6 functionality exactly.
         
         Parameters:
         -----------
@@ -721,9 +760,22 @@ class TechnicalAnalysis:
             Closing prices
         volume : Union[np.ndarray, pd.Series, list]
             Volume data
-        anchor : str, default="Session"
-            Session anchoring type: "Session", "Week", "Month", "Quarter", "Year", 
-            "12M", "6M", "3M", "D", "4H", "1H", "30m", "15m", "5m", "1m"
+        anchor : Optional[str], default="Session"
+            Period the VWAP restarts on: "Session", "Week", "Month", "Quarter",
+            "Year", "12M", "6M", "3M", "D", "4H", "1H", "30m", "15m", "5m",
+            "1m". None gives one running VWAP from the first bar. Any other
+            value raises ValueError.
+
+            The anchor is applied through the bar times. They are `timestamps`
+            when given, else the index of the first pandas Series among high,
+            low, close and volume, when that index is a DatetimeIndex (read in
+            its own time zone), a PeriodIndex or holds only date or datetime
+            objects. NumPy arrays, lists and Series with any other index carry
+            no bar times: the whole input is then one period.
+
+            On daily, weekly or monthly bars the default "Session" makes every
+            bar its own period, so the VWAP is the bar's own price and a
+            warning says so: pass anchor=None or a longer anchor there.
         source : str, default="hlc3"
             Price source: "hlc3", "hl2", "ohlc4", "close"
         stdev_mult_1 : float, default=1.0
@@ -738,15 +790,22 @@ class TechnicalAnalysis:
             Percentage multiplier for second percentage band
         percent_mult_3 : float, default=0.618
             Percentage multiplier for third percentage band
+        timestamps : Optional[Union[np.ndarray, pd.DatetimeIndex, list]], default=None
+            Bar times, one per bar, for inputs that carry none: datetimes, or
+            numbers read as Unix epoch seconds
+        session_starts : Optional[Union[np.ndarray, pd.Series, list]], default=None
+            Boolean array, True on the first bar of each period. Overrides
+            `anchor` and `timestamps`.
             
         Returns:
         --------
         np.ndarray
-            Array of VWAP values
+            Array of VWAP values. NaN on a bar whose price or volume is NaN
+            and while a period has no volume yet.
             
         Notes:
         ------
-        TradingView Pine Script v6 Features:
+        Features:
         - Session-based anchoring for automatic reset points
         - Multiple price sources (hlc3, hl2, ohlc4, close)
         - Standard deviation bands for volatility analysis
@@ -756,7 +815,8 @@ class TechnicalAnalysis:
         Use calculate_with_bands() method for band calculations:
         vwap_result = ta.vwap.calculate_with_bands(high, low, close, volume, ...)
         """
-        return self._vwap.calculate(high, low, close, volume, source, anchor)
+        return self._vwap.calculate(high, low, close, volume, source, anchor,
+                                    session_starts=session_starts, timestamps=timestamps)
     
     def mfi(self, high: Union[np.ndarray, pd.Series, list],
             low: Union[np.ndarray, pd.Series, list],
@@ -805,30 +865,30 @@ class TechnicalAnalysis:
             low: Union[np.ndarray, pd.Series, list],
             volume: Union[np.ndarray, pd.Series, list],
             length: int = 14, divisor: int = 10000) -> Union[np.ndarray, pd.Series]:
-        """Ease of Movement - matches TradingView exactly"""
+        """Ease of Movement"""
         return self._emv.calculate(high, low, volume, length, divisor)
     
     def force_index(self, close: Union[np.ndarray, pd.Series, list],
                     volume: Union[np.ndarray, pd.Series, list],
                     length: int = 13) -> Union[np.ndarray, pd.Series]:
-        """Elder Force Index - matches TradingView exactly"""
+        """Elder Force Index"""
         return self._fi.calculate(close, volume, length)
     
     def nvi(self, close: Union[np.ndarray, pd.Series, list],
             volume: Union[np.ndarray, pd.Series, list]) -> np.ndarray:
-        """Negative Volume Index (Pine Script Implementation)"""
+        """Negative Volume Index"""
         return self._nvi.calculate(close, volume)
     
     def nvi_with_ema(self, close: Union[np.ndarray, pd.Series, list],
                     volume: Union[np.ndarray, pd.Series, list],
                     ema_length: int = 255) -> Tuple[np.ndarray, np.ndarray]:
-        """Negative Volume Index with EMA (Complete Pine Script Implementation)"""
+        """Negative Volume Index with its EMA"""
         return self._nvi.calculate_with_ema(close, volume, ema_length)
     
     def pvi(self, close: Union[np.ndarray, pd.Series, list],
             volume: Union[np.ndarray, pd.Series, list],
             initial_value: float = 100.0) -> np.ndarray:
-        """Positive Volume Index (TradingView Pine Script Implementation)"""
+        """Positive Volume Index"""
         return self._pvi.calculate(close, volume, initial_value)
     
     def pvi_with_signal(self, close: Union[np.ndarray, pd.Series, list],
@@ -836,25 +896,25 @@ class TechnicalAnalysis:
                        initial_value: float = 100.0,
                        signal_type: str = "EMA",
                        signal_length: int = 255) -> Tuple[np.ndarray, np.ndarray]:
-        """Positive Volume Index with Signal Line (Complete TradingView Pine Script Implementation)"""
+        """Positive Volume Index with Signal Line"""
         return self._pvi.calculate_with_signal(close, volume, initial_value, signal_type, signal_length)
     
     def volosc(self, volume: Union[np.ndarray, pd.Series, list],
                          short_length: int = 5, long_length: int = 10,
                          check_volume_validity: bool = True) -> np.ndarray:
         """
-        Volume Oscillator - TradingView Pine Script v6 Implementation
+        Volume Oscillator
         
         Parameters:
         -----------
         volume : Union[np.ndarray, pd.Series, list]
             Volume data
         short_length : int, default=5
-            Short EMA length (TradingView default)
+            Short EMA length
         long_length : int, default=10
-            Long EMA length (TradingView default)
+            Long EMA length
         check_volume_validity : bool, default=True
-            Check for valid volume data (TradingView style validation)
+            Raise RuntimeError when the volume sums to zero (no volume in the data)
             
         Returns:
         --------
@@ -863,9 +923,9 @@ class TechnicalAnalysis:
             
         Notes:
         ------
-        TradingView Pine Script v6 Formula:
-        short = ta.ema(volume, shortlen)
-        long = ta.ema(volume, longlen)
+        Formula:
+        short = ema(volume, short_length)
+        long = ema(volume, long_length)
         osc = 100 * (short - long) / long
         """
         return self._vo.calculate(volume, short_length, long_length, check_volume_validity)
@@ -880,7 +940,7 @@ class TechnicalAnalysis:
             volume: Union[np.ndarray, pd.Series, list],
             trig_len: int = 13, fast_x: int = 34, slow_x: int = 55) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Klinger Volume Oscillator - matches TradingView exactly
+        Klinger Volume Oscillator
         
         Parameters:
         -----------
@@ -893,11 +953,11 @@ class TechnicalAnalysis:
         volume : Union[np.ndarray, pd.Series, list]
             Volume data
         trig_len : int, default=13
-            Trigger line EMA period (TradingView: TrigLen)
+            Trigger line EMA period
         fast_x : int, default=34
-            Fast EMA period (TradingView: FastX)
+            Fast EMA period
         slow_x : int, default=55
-            Slow EMA period (TradingView: SlowX)
+            Slow EMA period
             
         Returns:
         --------
@@ -913,7 +973,7 @@ class TechnicalAnalysis:
         return self._cmo.calculate(data, period)
     
     def trix(self, data: Union[np.ndarray, pd.Series, list], length: int = 18) -> np.ndarray:
-        """TRIX (TradingView Pine Script v6) - triple EMA rate of change of log prices * 10000"""
+        """TRIX - triple EMA rate of change of log prices * 10000"""
         return self._trix.calculate(data, length)
     
     def uo_oscillator(self, high: Union[np.ndarray, pd.Series, list],
@@ -949,7 +1009,7 @@ class TechnicalAnalysis:
     
     def dpo(self, data: Union[np.ndarray, pd.Series, list], 
            period: int = 21, is_centered: bool = False) -> Union[np.ndarray, pd.Series]:
-        """Detrended Price Oscillator - matches TradingView exactly"""
+        """Detrended Price Oscillator"""
         return self._dpo.calculate(data, period, is_centered)
     
     def aroon_oscillator(self, high: Union[np.ndarray, pd.Series, list],
@@ -966,7 +1026,8 @@ class TechnicalAnalysis:
     
     def lrslope(self, data: Union[np.ndarray, pd.Series, list], 
                period: int = 100, interval: int = 1) -> np.ndarray:
-        """Linear Regression Slope - matches TradingView exactly"""
+        """Linear Regression Slope: change of the regression end value between two
+        consecutive windows, divided by `interval`"""
         return self._linearreg_slope.calculate(data, period, interval)
     
     def correlation(self, data1: Union[np.ndarray, pd.Series, list],
@@ -986,7 +1047,7 @@ class TechnicalAnalysis:
                 filter_lookback: int = 20, ema_length: int = 14,
                 return_components: bool = False) -> Union[np.ndarray, tuple]:
         """
-        Variance - TradingView Pine Script v4 Implementation
+        Variance
         
         Parameters:
         -----------
@@ -1017,7 +1078,7 @@ class TechnicalAnalysis:
         return self._tsf.calculate(data, period)
     
     def median(self, data: Union[np.ndarray, pd.Series, list], period: int = 3) -> np.ndarray:
-        """Rolling Median (Pine Script v6)"""
+        """Rolling Median"""
         return self._median.calculate(data, period)
     
     def median_bands(self, high: Union[np.ndarray, pd.Series, list],
@@ -1027,7 +1088,7 @@ class TechnicalAnalysis:
                     median_length: int = 3,
                     atr_length: int = 14,
                     atr_mult: float = 2.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Median with Bands and EMA (Pine Script v6 Complete)"""
+        """Median with ATR Bands and EMA"""
         return self._median_bands.calculate_with_bands(high, low, close, source, 
                                                        median_length, atr_length, atr_mult)
     
@@ -1053,9 +1114,36 @@ class TechnicalAnalysis:
     
     def pivot_points(self, high: Union[np.ndarray, pd.Series, list],
                      low: Union[np.ndarray, pd.Series, list],
-                     close: Union[np.ndarray, pd.Series, list]) -> Tuple[np.ndarray, ...]:
-        """Pivot Points (Pivot, R1, S1, R2, S2, R3, S3)"""
-        return self._pivot_points.calculate(high, low, close)
+                     close: Union[np.ndarray, pd.Series, list],
+                     anchor: Optional[str] = None,
+                     timestamps: Optional[Union[np.ndarray, pd.DatetimeIndex, list]] = None
+                     ) -> Tuple[np.ndarray, ...]:
+        """
+        Pivot Points (Pivot, R1, S1, R2, S2, R3, S3)
+
+        Parameters:
+        -----------
+        high, low, close : Union[np.ndarray, pd.Series, list]
+            High, low and closing prices
+        anchor : Optional[str], default=None
+            None applies the formula to each bar's own high, low and close.
+            The levels on bar t are then the levels for the next bar: they
+            are known only once bar t has closed.
+            "D" (or "Session"), "Week", "Month" and the other anchor names
+            of `vwap` return, on every bar, the levels of the previous
+            completed period (yesterday's high, low and close on intraday
+            bars). Bars of the first period are NaN. An anchor needs bar
+            times, found the way `vwap` finds them; without them it raises
+            ValueError.
+        timestamps : Optional[Union[np.ndarray, pd.DatetimeIndex, list]], default=None
+            Bar times, one per bar, for inputs that carry none
+
+        Returns:
+        --------
+        Tuple of seven arrays or Series, in the same format as `high`
+            (pivot, r1, s1, r2, s2, r3, s3)
+        """
+        return self._pivot_points.calculate(high, low, close, anchor, timestamps)
     
     def dmi(self, high: Union[np.ndarray, pd.Series, list],
                             low: Union[np.ndarray, pd.Series, list],
@@ -1066,16 +1154,40 @@ class TechnicalAnalysis:
     
     def psar(self, high: Union[np.ndarray, pd.Series, list],
              low: Union[np.ndarray, pd.Series, list],
-             acceleration: float = 0.02, maximum: float = 0.2) -> np.ndarray:
-        """Parabolic SAR (values only)"""
+             acceleration: float = 0.02, maximum: float = 0.2,
+             return_trend: bool = False) -> Union[np.ndarray, pd.Series, Tuple]:
+        """
+        Parabolic SAR
+
+        Parameters:
+        -----------
+        high, low : Union[np.ndarray, pd.Series, list]
+            High and low prices
+        acceleration : float, default=0.02
+            Acceleration factor: its starting value and its step
+        maximum : float, default=0.2
+            Largest acceleration factor
+        return_trend : bool, default=False
+            False returns the SAR values only, True returns (sar, trend)
+
+        Returns:
+        --------
+        SAR values in the same format as `high`, or (sar, trend)
+            Trend is +1.0 while long (SAR below price) and -1.0 while short,
+            the opposite sign of the Supertrend direction output. The first
+            bar always starts long. The order of the calculation is spelled
+            out on `_backend.sar`.
+        """
         sar_values, trend = self._sar.calculate(high, low, acceleration, maximum)
+        if return_trend:
+            return sar_values, trend
         return sar_values
     
     def ckstop(self, high: Union[np.ndarray, pd.Series, list],
               low: Union[np.ndarray, pd.Series, list],
               close: Union[np.ndarray, pd.Series, list],
               p: int = 10, x: float = 1.0, q: int = 9) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series]]:
-        """Chande Kroll Stop - matches TradingView exactly"""
+        """Chande Kroll Stop"""
         return self._chande_kroll_stop.calculate(high, low, close, p, x, q)
     
     # =================== NEW MOMENTUM INDICATORS ===================
@@ -1097,13 +1209,14 @@ class TechnicalAnalysis:
     def fisher(self, high: Union[np.ndarray, pd.Series, list],
               low: Union[np.ndarray, pd.Series, list],
               length: int = 9) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series]]:
-        """Fisher Transform - matches TradingView exactly"""
+        """Fisher Transform"""
         return self._fisher_transform.calculate(high, low, length)
     
     def crsi(self, data: Union[np.ndarray, pd.Series, list],
             lenrsi: int = 3, lenupdown: int = 2, 
             lenroc: int = 100) -> Union[np.ndarray, pd.Series]:
-        """Connors RSI - matches TradingView exactly"""
+        """Connors RSI: mean of RSI(close), RSI of the up/down streak and the
+        percent rank of the one-bar rate of change"""
         return self._connors_rsi.calculate(data, lenrsi, lenupdown, lenroc)
     
     # =================== NEW VOLUME INDICATORS ===================
@@ -1111,7 +1224,7 @@ class TechnicalAnalysis:
     def pvt(self, close: Union[np.ndarray, pd.Series, list],
            volume: Union[np.ndarray, pd.Series, list]) -> Union[np.ndarray, pd.Series]:
         """
-        Price Volume Trend (TradingView Pine Script Implementation)
+        Price Volume Trend
         
         Parameters:
         -----------
@@ -1123,7 +1236,7 @@ class TechnicalAnalysis:
         Returns:
         --------
         Union[np.ndarray, pd.Series]
-            PVT values - Formula: vt = ta.cum(ta.change(src)/src[1]*volume)
+            PVT values - Formula: pvt = cumsum((src - src[1]) / src[1] * volume)
         """
         return self._pvt.calculate(close, volume)
     
@@ -1141,7 +1254,10 @@ class TechnicalAnalysis:
            close: Union[np.ndarray, pd.Series, list],
            period: int = 10) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series]]:
         """
-        Relative Vigor Index (TradingView Pine Script Implementation)
+        Relative Vigor Index
+
+        Not the Relative Volatility Index: that one is `ta.rvi_volatility`.
+        A bar is NaN while any bar feeding its window is NaN.
         
         Parameters:
         -----------
@@ -1187,11 +1303,11 @@ class TechnicalAnalysis:
         return self._mcginley_dynamic.calculate(data, period) if hasattr(self, '_mcginley_dynamic') else None
         
     def starc(self, high, low, close, ma_period=5, atr_period=15, multiplier=1.33):
-        """STARC Bands (TradingView Pine Script v2) - uses SMA(5) + ATR(15) * 1.33"""
+        """STARC Bands - uses SMA(5) + ATR(15) * 1.33"""
         return self._starc_bands.calculate(high, low, close, ma_period, atr_period, multiplier) if hasattr(self, '_starc_bands') else None
     
     def ulcerindex(self, data, length=14, smooth_length=14, signal_length=52, signal_type="SMA", return_signal=False):
-        """Ulcer Index (TradingView Pine Script v4) - measures downside risk with optional signal line"""
+        """Ulcer Index - measures downside risk with optional signal line"""
         return self._ulcer_index.calculate(data, length, smooth_length, signal_length, signal_type, return_signal) if hasattr(self, '_ulcer_index') else None
         
     def rwi(self, high, low, close, period=14):
@@ -1199,7 +1315,7 @@ class TechnicalAnalysis:
         return self._random_walk_index.calculate(high, low, close, period) if hasattr(self, '_random_walk_index') else None
         
     def fractals(self, high, low, periods=2):
-        """Williams Fractals (alias for williams_fractals) - matches TradingView exactly"""  
+        """Williams Fractals (alias for williams_fractals)"""  
         return self._williams_fractals.calculate(high, low, periods) if hasattr(self, '_williams_fractals') else None
         
     def trima(self, data, period=20):
@@ -1223,7 +1339,7 @@ class TechnicalAnalysis:
         return self._chandelier_exit.calculate(high, low, close, period, multiplier) if hasattr(self, '_chandelier_exit') else None
         
     def hv(self, close, length=10, annual=365, per=1):
-        """Historical Volatility (alias) - matches TradingView exactly"""
+        """Historical Volatility (alias)"""
         return self._hv.calculate(close, length, annual, per) if hasattr(self, '_hv') else None
         
     def chop(self, high, low, close, period=14):
@@ -1231,7 +1347,7 @@ class TechnicalAnalysis:
         return self._chop.calculate(high, low, close, period) if hasattr(self, '_chop') else None
         
     def kst(self, data, roclen1=10, roclen2=15, roclen3=20, roclen4=30, smalen1=10, smalen2=10, smalen3=10, smalen4=15, siglen=9):
-        """Know Sure Thing - matches TradingView exactly"""
+        """Know Sure Thing"""
         return self._kst.calculate(data, roclen1, roclen2, roclen3, roclen4, smalen1, smalen2, smalen3, smalen4, siglen) if hasattr(self, '_kst') else None
         
     def tsi(self, data, long_period=25, short_period=13, signal_period=13):
@@ -1243,7 +1359,7 @@ class TechnicalAnalysis:
                close: Union[np.ndarray, pd.Series, list],
                period: int = 14) -> Union[Tuple[np.ndarray, np.ndarray], None]:
         """
-        Vortex Indicator (VI+ and VI-) - TradingView Pine Script v6 Implementation
+        Vortex Indicator (VI+ and VI-)
         
         Parameters:
         -----------
@@ -1254,7 +1370,7 @@ class TechnicalAnalysis:
         close : Union[np.ndarray, pd.Series, list]
             Closing prices
         period : int, default=14
-            Period for VI calculation (TradingView default)
+            Period for VI calculation
             
         Returns:
         --------
@@ -1263,96 +1379,96 @@ class TechnicalAnalysis:
             
         Notes:
         ------
-        TradingView Pine Script v6 Formula:
-        VMP = math.sum( math.abs( high - low[1]), period_ )
-        VMM = math.sum( math.abs( low - high[1]), period_ )
-        STR = math.sum( ta.atr(1), period_ )
+        Formula:
+        VMP = sum(abs(high - low[1]), period)
+        VMM = sum(abs(low - high[1]), period)
+        STR = sum(atr(1), period)
         VIP = VMP / STR
         VIM = VMM / STR
         """
         return self._vi.calculate(high, low, close, period) if hasattr(self, '_vi') else None
         
     def stc(self, data, fast_length=23, slow_length=50, cycle_length=10, d1_length=3, d2_length=3):
-        """Schaff Trend Cycle (TradingView Pine Script v4) - cyclical oscillator combining MACD and stochastics"""
+        """Schaff Trend Cycle - cyclical oscillator combining MACD and stochastics"""
         return self._stc.calculate(data, fast_length, slow_length, cycle_length, d1_length, d2_length) if hasattr(self, '_stc') else None
         
     def gator_oscillator(self, high, low, jaw_period=13, teeth_period=8, lips_period=5):
-        """Gator Oscillator (alias) - matches TradingView exactly"""
+        """Gator Oscillator (alias)"""
         return self._gator_oscillator.calculate(high, low, jaw_period, teeth_period, lips_period) if hasattr(self, '_gator_oscillator') else None
         
     
-    # =================== TA-LIB-COMPATIBLE ADDITIONS ===================
+    # =================== CLASSIC SINGLE-FORMULA INDICATORS ===================
 
     def mom(self, data, period: int = 10):
-        """Momentum (TA-Lib MOM): data - data[period]."""
+        """Momentum (MOM): data - data[period]."""
         return self._mom.calculate(data, period)
 
     def rocp(self, data, period: int = 10):
-        """Rate of Change Percentage (TA-Lib ROCP): (price-prev)/prev."""
+        """Rate of Change Percentage (ROCP): (price-prev)/prev."""
         return self._rocp.calculate(data, period)
 
     def rocr(self, data, period: int = 10):
-        """Rate of Change Ratio (TA-Lib ROCR): price/prev."""
+        """Rate of Change Ratio (ROCR): price/prev."""
         return self._rocr.calculate(data, period)
 
     def rocr100(self, data, period: int = 10):
-        """Rate of Change Ratio 100 scale (TA-Lib ROCR100): price/prev*100."""
+        """Rate of Change Ratio 100 scale (ROCR100): price/prev*100."""
         return self._rocr100.calculate(data, period)
 
     def midpoint(self, data, period: int = 14):
-        """MidPoint over period (TA-Lib MIDPOINT): (max+min)/2 of the source."""
+        """MidPoint over period (MIDPOINT): (max+min)/2 of the source."""
         return self._midpoint.calculate(data, period)
 
     def midprice(self, high, low, period: int = 14):
-        """Midpoint Price over period (TA-Lib MIDPRICE): (highest(high)+lowest(low))/2."""
+        """Midpoint Price over period (MIDPRICE): (highest(high)+lowest(low))/2."""
         return self._midprice.calculate(high, low, period)
 
     def apo(self, data, fast_period: int = 12, slow_period: int = 26, ma_type: str = "SMA"):
-        """Absolute Price Oscillator (TA-Lib APO): MA(fast) - MA(slow)."""
+        """Absolute Price Oscillator (APO): MA(fast) - MA(slow)."""
         return self._apo.calculate(data, fast_period, slow_period, ma_type)
 
     def avgprice(self, open_prices, high, low, close):
-        """Average Price (TA-Lib AVGPRICE): (open+high+low+close)/4."""
+        """Average Price (AVGPRICE): (open+high+low+close)/4."""
         return self._avgprice.calculate(open_prices, high, low, close)
 
     def medprice(self, high, low):
-        """Median Price (TA-Lib MEDPRICE): (high+low)/2."""
+        """Median Price (MEDPRICE): (high+low)/2."""
         return self._medprice.calculate(high, low)
 
     def typprice(self, high, low, close):
-        """Typical Price (TA-Lib TYPPRICE): (high+low+close)/3."""
+        """Typical Price (TYPPRICE): (high+low+close)/3."""
         return self._typprice.calculate(high, low, close)
 
     def wclprice(self, high, low, close):
-        """Weighted Close Price (TA-Lib WCLPRICE): (high+low+2*close)/4."""
+        """Weighted Close Price (WCLPRICE): (high+low+2*close)/4."""
         return self._wclprice.calculate(high, low, close)
 
     def plus_dm(self, high, low, period: int = 14):
-        """Plus Directional Movement (TA-Lib PLUS_DM): Wilder-summed +DM."""
+        """Plus Directional Movement (PLUS_DM): Wilder-summed +DM."""
         return self._plus_dm.calculate(high, low, period)
 
     def minus_dm(self, high, low, period: int = 14):
-        """Minus Directional Movement (TA-Lib MINUS_DM): Wilder-summed -DM."""
+        """Minus Directional Movement (MINUS_DM): Wilder-summed -DM."""
         return self._minus_dm.calculate(high, low, period)
 
     def dx(self, high, low, close, period: int = 14):
-        """Directional Movement Index (TA-Lib DX): 100*|+DI - -DI|/(+DI + -DI)."""
+        """Directional Movement Index (DX): 100*|+DI - -DI|/(+DI + -DI)."""
         return self._dx.calculate(high, low, close, period)
 
     def adxr(self, high, low, close, period: int = 14):
-        """Average Directional Movement Rating (TA-Lib ADXR): (ADX + ADX[period-1])/2."""
+        """Average Directional Movement Rating (ADXR): (ADX + ADX[period-1])/2."""
         return self._adxr.calculate(high, low, close, period)
 
     def stochf(self, high, low, close, fastk_period: int = 5, fastd_period: int = 3):
-        """Stochastic Fast (TA-Lib STOCHF): returns (fastk, fastd)."""
+        """Stochastic Fast (STOCHF): returns (fastk, fastd)."""
         return self._stochf.calculate(high, low, close, fastk_period, fastd_period)
 
     def linregangle(self, data, period: int = 14):
-        """Linear Regression Angle (TA-Lib LINEARREG_ANGLE): degrees(atan(slope))."""
+        """Linear Regression Angle (LINEARREG_ANGLE): degrees(atan(slope))."""
         return self._linregangle.calculate(data, period)
 
     def linregintercept(self, data, period: int = 14):
-        """Linear Regression Intercept (TA-Lib LINEARREG_INTERCEPT)."""
+        """Linear Regression Intercept (LINEARREG_INTERCEPT)."""
         return self._linregintercept.calculate(data, period)
 
     # =================== UTILITY FUNCTIONS ===================
@@ -1413,7 +1529,8 @@ class TechnicalAnalysis:
         Returns:
         --------
         np.ndarray
-            Array of highest values
+            Array of highest values. NaN for the first period-1 bars and for
+            every window that holds a NaN (as pandas `.rolling(period).max()`).
         """
         data = validate_input(data)
         return highest(data, period)
@@ -1432,7 +1549,8 @@ class TechnicalAnalysis:
         Returns:
         --------
         np.ndarray
-            Array of lowest values
+            Array of lowest values. NaN for the first period-1 bars and for
+            every window that holds a NaN (as pandas `.rolling(period).min()`).
         """
         data = validate_input(data)
         return lowest(data, period)

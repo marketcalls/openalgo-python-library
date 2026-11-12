@@ -1,0 +1,45 @@
+# Regular trading hours per exchange, by date. Times are IST, HH:MM.
+#
+# The engine reads this file at build time (see tables.rs). To change hours, edit or
+# add one row and cite the source.
+#
+# exchange      OpenAlgo exchange code. NSE_INDEX follows NSE and BSE_INDEX follows BSE.
+# valid_from    first IST date the row applies to; empty on the first row of an exchange.
+# valid_to      last IST date the row applies to; empty on the last row. The rows of an
+#               exchange are contiguous: valid_from is the day after the previous valid_to.
+# open, close   the continuous trading session.
+# close_us_dst  the close on dates when the United States is on daylight saving time,
+#               when it differs from close (MCX non-agri contracts).
+# source        where the values come from.
+# status        verified: an exchange or regulator document that was read states these
+#               hours for these dates. A verified row starts on the date of the earliest
+#               such document, or on the date it says the hours take effect.
+#               unverified: from a secondary source (the OpenAlgo server, a broker page)
+#               or assumed equal to another row. Sessions built from an unverified row
+#               are flagged hours_unverified.
+#
+# Not modelled here:
+# - From 2026-08-03 to 2026-12-04 continuous trading in cash stocks that have
+#   derivatives ended at 15:15, when the closing auction started; other cash stocks
+#   traded to 15:30 (NSE/CMTR/74466, BSE notice 20260610-41). The NSE and BSE rows keep
+#   15:30 for every stock. From 2026-12-07 the auction starts at 15:30 for all of them.
+# - From 2026-12-07 index derivatives that expire that day stop at 15:30 (NSE/FAOP/77356).
+# - NSE cross-currency contracts trade to 19:30 (NSE/CD/73929); the CDS row is the INR
+#   pairs.
+# - MCX agri contracts close earlier than the MCX row says.
+exchange,valid_from,valid_to,open,close,close_us_dst,source,status
+NSE,,2026-04-27,09:15,15:30,,"Assumed equal to the next row: no NSE document stating the regular hours on these dates was read. Same values in the OpenAlgo server database/market_calendar_db.py DEFAULT_MARKET_TIMINGS (commit d8cc13f24) and in NSE/CMTR/43290 for the session of 2020-02-01",unverified
+NSE,2026-04-28,,09:15,15:30,,"NSE/CMTR/73927 Capital Market Consolidated Circular (2026-04-28) item 2.2: normal market 09:15 to 15:30. Still the end of continuous trading in NSE/CMTR/74466 FAQ Q26 (from 2026-08-03) and NSE/CMTR/77355 (from 2026-12-07)",verified
+BSE,,2026-08-02,09:15,15:30,,"Assumed equal to NSE: no BSE document stating the hours on these dates was read. Same values in the OpenAlgo server database/market_calendar_db.py DEFAULT_MARKET_TIMINGS (commit d8cc13f24)",unverified
+BSE,2026-08-03,,09:15,15:30,,"BSE notice 20260801-1 (2026-08-01), in force from 2026-08-03: continuous trading T+1 09:15 am to 03:30 pm; BSE notice 20260610-41 section 2.B",verified
+NFO,,2026-01-15,09:15,15:30,,"Assumed equal to the next row: no NSE document stating the regular hours on these dates was read. Same values in the OpenAlgo server database/market_calendar_db.py CAS_CLOSE_MIGRATION old_end (commit d8cc13f24) and in NSE/FAOP/43291 for the session of 2020-02-01",unverified
+NFO,2026-01-16,2026-08-02,09:15,15:30,,"NSE/FAOP/72352 (2026-01-16): standard market timings, normal market 09:15 to 15:30; NSE/FAOP/73928 F&O Consolidated Circular (2026-04-28) item 2.2: the same",verified
+NFO,2026-08-03,2026-12-06,09:15,15:40,,"NSE/FAOP/74467 (2026-05-29), effective 2026-08-03: normal market close 15:40; SEBI circular HO/47/11/11(3)2025-MRD-POD2/I/2765/2026 para 4.2.3",verified
+NFO,2026-12-07,,09:15,15:45,,"NSE/FAOP/77356 (2026-11-06), effective 2026-12-07: normal market close 15:45 for stock and index derivatives; SEBI circular HO/47/11/11(3)2025-MRD-POD2/I/23843/2026 paras 4.2.4 and 4.2.5",verified
+BFO,,2026-08-02,09:15,15:30,,"Assumed equal to NFO: no BSE document was read. Same values in the OpenAlgo server database/market_calendar_db.py CAS_CLOSE_MIGRATION old_end (commit d8cc13f24)",unverified
+BFO,2026-08-03,2026-12-06,09:15,15:40,,"Close from SEBI circular HO/47/11/11(3)2025-MRD-POD2/I/2765/2026 para 4.2.3, addressed to all recognised stock exchanges. The open is assumed equal to NFO: no BSE derivatives notice was read",unverified
+BFO,2026-12-07,,09:15,15:45,,"Close from SEBI circular HO/47/11/11(3)2025-MRD-POD2/I/23843/2026 paras 4.2.4 and 4.2.5, addressed to all recognised stock exchanges. The open is assumed equal to NFO: no BSE notice implementing the change was found",unverified
+CDS,,2026-04-27,09:00,17:00,,"Assumed equal to the next row: no NSE document stating the hours on these dates was read. Same values in the OpenAlgo server database/market_calendar_db.py DEFAULT_MARKET_TIMINGS (commit d8cc13f24)",unverified
+CDS,2026-04-28,,09:00,17:00,,"NSE/CD/73929 Currency Derivatives Consolidated Circular (2026-04-28), contract specifications of the INR pairs: trading hours Monday to Friday 9:00 a.m. to 5:00 p.m.",verified
+BCD,,,09:00,17:00,,"Assumed equal to CDS: no BSE document was read. Same values in the OpenAlgo server database/market_calendar_db.py DEFAULT_MARKET_TIMINGS (commit d8cc13f24)",unverified
+MCX,,,09:00,23:55,23:30,"Non-agri close by United States daylight saving, from MCX trading-hours revisions effective 2019-11-04, 2025-03-10, 2025-11-03, 2026-03-09 and 2026-11-02 as republished by brokers (zerodha.com/marketintel/bulletin/233684 and 459705, 5paisa.com/announcements); no MCX page could be read. NSE/COM/76446 gives the same close, 23:55 from 2026-11-02 to 2027-03-12, for NSE's own commodity segment. The open before 2020 was not researched (NSE's commodity segment opened at 10:00 in 2019, NSE/COM/39629)",unverified

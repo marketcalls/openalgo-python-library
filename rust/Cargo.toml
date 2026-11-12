@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["oa_core", "oa_py"]
+members = ["oa_core", "oa_bt", "oa_py"]
 
 [profile.release]
 lto = "fat"

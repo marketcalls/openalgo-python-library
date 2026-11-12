@@ -1,0 +1,535 @@
+{
+  "format": 1,
+  "year": 2025,
+  "timezone": "Asia/Kolkata",
+  "coverage": {
+    "NSE": "sourced",
+    "NFO": "sourced",
+    "BSE": "unverified",
+    "BFO": "unverified",
+    "MCX": "unverified",
+    "CDS": "unverified",
+    "BCD": "unverified"
+  },
+  "notes": [
+    "NSE and NFO holidays are the published lists NSE/CMTR/65587 and NSE/FAOP/65588, which equal the weekdays without an NSE index row.",
+    "BSE, BFO, MCX, CDS and BCD come from a data vendor table or are assumed to follow NSE, and are unverified.",
+    "The 2025 seed of the OpenAlgo server is not used: it has wrong dates (Muhurat on 2025-11-01, Guru Nanak Jayanti on 2025-11-14, no 2025-10-22 or 2025-11-05)."
+  ],
+  "sources": {
+    "groww-muhurat-2025": "https://groww.in/blog/muhurat-trading-2025-timings",
+    "nse-cmtr-65587": "NSE/CMTR/65587 trading holidays 2025 (capital market), Muhurat on 2025-10-21: https://nsearchives.nseindia.com/content/circulars/CMTR65587.pdf",
+    "nse-faop-65588": "NSE/FAOP/65588 trading holidays 2025 (futures and options): https://nsearchives.nseindia.com/content/circulars/FAOP65588.pdf",
+    "nse-index": "NSE Nifty 50 daily index history, 2024-10-07 to 2026-11-11: every weekday without a row is a closure, read on 2026-11-12",
+    "truedata-2025": "https://www.truedata.in/blog/trading-holidays-list-2025-nse-bse-and-mcx (fetched 2026-11-12)",
+    "zerodha-budget-2025": "https://zerodha.com/marketintel/bulletin/400094/live-trading-session-on-saturday-february-1-2025"
+  },
+  "days": [
+    {
+      "date": "2025-01-01",
+      "name": "New Year Day (MCX evening session closed)",
+      "closed": [],
+      "sessions": {
+        "MCX": [
+          "09:00",
+          "17:00"
+        ]
+      },
+      "sources": [
+        "truedata-2025"
+      ],
+      "unverified": [
+        "MCX"
+      ]
+    },
+    {
+      "date": "2025-02-01",
+      "name": "Union Budget (Saturday live trading session)",
+      "closed": [],
+      "sessions": {
+        "NSE": [
+          "09:15",
+          "15:30"
+        ],
+        "BSE": [
+          "09:15",
+          "15:30"
+        ],
+        "NFO": [
+          "09:15",
+          "15:30"
+        ],
+        "BFO": [
+          "09:15",
+          "15:30"
+        ],
+        "MCX": [
+          "09:00",
+          "17:00"
+        ]
+      },
+      "sources": [
+        "zerodha-budget-2025"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE",
+        "MCX",
+        "NFO",
+        "NSE"
+      ],
+      "hours_unverified": [
+        "BFO",
+        "BSE",
+        "MCX",
+        "NFO",
+        "NSE"
+      ],
+      "note": "Equity and F&O 09:15 to 15:30, commodity 09:00 to 17:00, currency closed (broker bulletin)."
+    },
+    {
+      "date": "2025-02-26",
+      "name": "Mahashivratri",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-65587",
+        "nse-faop-65588",
+        "truedata-2025",
+        "nse-index"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2025-03-14",
+      "name": "Holi",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-65587",
+        "nse-faop-65588",
+        "truedata-2025",
+        "nse-index"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2025-03-31",
+      "name": "Id-Ul-Fitr (Ramadan Eid)",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-65587",
+        "nse-faop-65588",
+        "truedata-2025",
+        "nse-index"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2025-04-10",
+      "name": "Shri Mahavir Jayanti",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-65587",
+        "nse-faop-65588",
+        "truedata-2025",
+        "nse-index"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2025-04-14",
+      "name": "Dr. Baba Saheb Ambedkar Jayanti",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-65587",
+        "nse-faop-65588",
+        "truedata-2025",
+        "nse-index"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2025-04-18",
+      "name": "Good Friday",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD",
+        "MCX"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-65587",
+        "nse-faop-65588",
+        "truedata-2025",
+        "nse-index"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2025-05-01",
+      "name": "Maharashtra Day",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-65587",
+        "nse-faop-65588",
+        "truedata-2025",
+        "nse-index"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2025-08-15",
+      "name": "Independence Day",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD",
+        "MCX"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-65587",
+        "nse-faop-65588",
+        "truedata-2025",
+        "nse-index"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2025-08-27",
+      "name": "Ganesh Chaturthi",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-65587",
+        "nse-faop-65588",
+        "truedata-2025",
+        "nse-index"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2025-10-02",
+      "name": "Mahatma Gandhi Jayanti / Dussehra",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD",
+        "MCX"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-65587",
+        "nse-faop-65588",
+        "truedata-2025",
+        "nse-index"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2025-10-21",
+      "name": "Diwali Laxmi Pujan (Muhurat trading)",
+      "closed": [],
+      "sessions": {
+        "NSE": [
+          "13:45",
+          "14:45"
+        ],
+        "BSE": [
+          "13:45",
+          "14:45"
+        ],
+        "NFO": [
+          "13:45",
+          "14:45"
+        ],
+        "BFO": [
+          "13:45",
+          "14:45"
+        ],
+        "CDS": [
+          "13:45",
+          "14:45"
+        ],
+        "BCD": [
+          "13:45",
+          "14:45"
+        ],
+        "MCX": [
+          "13:45",
+          "14:45"
+        ]
+      },
+      "sources": [
+        "nse-cmtr-65587",
+        "nse-faop-65588",
+        "groww-muhurat-2025"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ],
+      "hours_unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX",
+        "NFO",
+        "NSE"
+      ],
+      "note": "A trading holiday with an afternoon session, announced in the NSE circulars. The times come from a broker page."
+    },
+    {
+      "date": "2025-10-22",
+      "name": "Diwali Balipratipada",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-65587",
+        "nse-faop-65588",
+        "truedata-2025",
+        "nse-index"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2025-11-05",
+      "name": "Prakash Gurpurb Sri Guru Nanak Dev",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-65587",
+        "nse-faop-65588",
+        "truedata-2025",
+        "nse-index"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2025-12-25",
+      "name": "Christmas",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD",
+        "MCX"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-65587",
+        "nse-faop-65588",
+        "truedata-2025",
+        "nse-index"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    }
+  ]
+}

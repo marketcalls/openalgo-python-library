@@ -1,0 +1,907 @@
+{
+  "format": "openalgo.backtest.spec-review/1",
+  "title": "Points the documents do not settle, found while deriving the worked traces",
+  "kinds": {"contradiction": "two documents, or two places in one, say different things", "ambiguity": "the text allows more than one reading and expected values differ between them", "gap": "the documents do not specify it at all", "clarification": "the text determines the answer, but only implicitly; the wording should say it"},
+  "items": [
+    {
+      "id": "SPEC-01",
+      "kind": "ambiguity",
+      "severity": "high",
+      "status": "resolved",
+      "title": "Favourable extreme on the entry bar",
+      "documents": ["03-architecture 4.2 step 4", "05-risk-management 3 and 6.2", "openalgo-strategy-module 3.1"],
+      "question": "A leg's entry fills at a bar's open (step 2). In step 4 of that same slice, does the entry bar's own high (long) or low (short) count towards the favourable extreme that arms a trail or a breakeven, and from which price is the extreme seeded?",
+      "readings": [
+        "A. Seeded from the fill average; the entry bar's extreme counts, because the whole bar follows its open.",
+        "B. Seeded from the fill average; the entry bar is excluded and extremes count from the next slice.",
+        "C. Seeded from the bar's open rather than the fill price (differs from A once slippage is not zero)."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "The live module seeds the extreme from the entry and updates it on every later tick, and every tick of the entry bar is later than an entry at its open. B hides a real excursion and makes a 15-minute or daily base lag by a whole bar.",
+      "proposed_wording": "03-architecture 4.2 step 4, add: 'For a leg opened in step 2 of this slice the favourable extreme is seeded from its fill average and includes this bar's extreme.'",
+      "cases": ["trace-01c-entry-bar-extreme"]
+    },
+    {
+      "id": "SPEC-02",
+      "kind": "clarification",
+      "severity": "high",
+      "status": "resolved",
+      "title": "Leg levels are tested against the entry bar",
+      "documents": ["03-architecture 4.2 steps 2 and 3", "05-risk-management 3", "04-execution 2"],
+      "question": "Is the stop or target of a leg opened in step 2 tested against that same bar in step 3?",
+      "readings": [
+        "A. Yes: step 3 follows step 2 with no exemption, and a leg has levels as soon as its entry fills.",
+        "B. No: levels are first tested in the slice after the entry."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "The text reads as A. It is listed because the effect is large on a daily base (a stop on the entry day) and an implementation can easily skip the entry bar. The same-day CNC buy and sell rule in 04-execution 2 presupposes A.",
+      "proposed_wording": "03-architecture 4.2 step 3, add: 'Legs opened in step 2 of this slice are included: their levels are tested against the whole of this bar.'",
+      "cases": ["trace-06c-stop-on-the-entry-day"]
+    },
+    {
+      "id": "SPEC-03",
+      "kind": "gap",
+      "severity": "high",
+      "status": "resolved",
+      "title": "How levels are rounded to the tick",
+      "documents": ["05-risk-management 8 (first row)", "03-architecture 7 and 8"],
+      "question": "Levels are rounded to the tick size by default. Rounded how: to the nearest tick, towards the protective side, or down? How are exact half-tick ties and floating-point noise resolved, and is a trailed or roll-shifted level rounded again?",
+      "readings": [
+        "A. Nearest tick; an exact half tick rounds up; the tick count is computed on integer paise so floating-point noise cannot flip a tie.",
+        "B. Conservative: a stop rounds towards the entry, a target away from it.",
+        "C. Always down."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "Nearest keeps the level closest to the live module's unrounded level and is symmetric for long and short. Whatever the choice, it has to be written down with its tie rule, because every percent or ATR level depends on it.",
+      "proposed_wording": "05-risk-management 8, first row: 'Rounded to the nearest tick (an exact half tick rounds up), computed on integer paise.'",
+      "cases": ["trace-06b-percent-levels-rounded"]
+    },
+    {
+      "id": "SPEC-04",
+      "kind": "ambiguity",
+      "severity": "high",
+      "status": "resolved",
+      "title": "Entry window: where it is decided, and the last-bar signal",
+      "documents": ["03-architecture 4.2 (order validity, entry window)", "04-execution 2 and 4.2", "05-risk-management 4", "08-live-trading 6.1"],
+      "question": "Three points. (1) Is an entry outside the window rejected at submission, against the decision time (the earliest possible fill), or at the fill slice, when the actual fill bar is known? (2) A signal at the session's last bar close has no fill bar in the session: is it rejected by the entry window, or accepted as a DAY order and cancelled in step 8? (3) 03 and 04 say rejected, 05 says ignored: is there an order and a Rejected event? Also not stated: that the window applies to adds, and the default and the test for entry_from.",
+      "readings": [
+        "A. Checked at submission against the decision time (an entry decided at or after entry_until is Rejected in step 7 of the decision slice) and again at the fill slice against the fill bar's open. It applies to adds. A Rejected order event is emitted. entry_from defaults to the session open and uses the mirrored test.",
+        "B. Checked only at the fill slice against the actual fill bar; a last-bar signal is Submitted and then Canceled by the DAY rule in step 8.",
+        "C. Silently ignored: no order and no event."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "A matches the live gate, which refuses at decision time, stops a missing bar from letting a late entry through, and leaves an audit trail.",
+      "proposed_wording": "03-architecture 4.2: 'Entry window. An intraday entry (including an add) is rejected, with a Rejected order event, when its decision time or the open of its fill bar is at or after entry_until, or before entry_from (default: the session open).' 05-risk-management 4: replace 'ignored' with 'rejected'.",
+      "cases": ["trace-05a-base-1m", "trace-05b-base-15m"]
+    },
+    {
+      "id": "SPEC-05",
+      "kind": "clarification",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "Where the square-off sits in the sequence",
+      "documents": ["03-architecture 4.1 and 4.2 (entry window, timers, step 8)", "04-execution 2", "05-risk-management 4 and 7"],
+      "question": "The eight steps never place the square-off. The fixtures treat it as a timer at square_off: it fills in step 2 at the open of the first base bar at or after that time, reason scheduler. Open points: what 'run the square-off check' in step 8 does; which reason wins when that open is also through a leg's stop; which time the warning about filling after the broker's auto square-off compares against; and what the reason eod is for.",
+      "readings": [
+        "A. Timer rule in step 2, reason scheduler. Step 8 closes any intraday position still open at its last close, flagged. Step order decides the reason (scheduler before leg_sl). The warning compares with a per-segment broker time held as data. eod is defined or removed.",
+        "B. The square-off happens only in step 8, at the session's last close."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "A is what the Assumptions example in 03-architecture 4.1 says: a 15:10 square-off fills at the 15:15 open on a 15-minute base.",
+      "proposed_wording": "03-architecture 4.2 step 2, add: 'The square-off of an intraday product is a timer at square_off (reason scheduler).' Step 8: 'square-off check: an intraday position still open is closed at its last close, flagged.'",
+      "cases": ["trace-05a-base-1m", "trace-05b-base-15m"]
+    },
+    {
+      "id": "SPEC-06",
+      "kind": "ambiguity",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "An order whose instrument has no bar in the next slice",
+      "documents": ["03-architecture 4.2 steps 2 and 7", "14-strategy-api 2.3 and 2.5"],
+      "question": "Orders are queued for the next slice's open. If the instrument has no bar in that slice, does the order wait for the instrument's next bar, or is it rejected or cancelled as having no bar to fill on (the wording used for pairs)?",
+      "readings": [
+        "A. It stays queued as a DAY order and fills at the open of the instrument's next bar in the session, with the entry window checked against that bar; if still unfilled at session close it is cancelled.",
+        "B. It is rejected in the slice it should have filled in."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "One missing minute should not drop a signal, and aggregate exits already use 'each leg's next bar open' (step 6).",
+      "proposed_wording": "03-architecture 4.2 step 2, add: 'An order whose instrument has no bar in this slice stays queued and fills at the open of that instrument's next bar in the session.'",
+      "cases": ["trace-12b-missing-fill-bar"]
+    },
+    {
+      "id": "SPEC-07",
+      "kind": "clarification",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "Slices without bars, and strategy bars with missing base bars",
+      "documents": ["03-architecture 4.2 (grid, steps 5 and 7)", "06-data-layer 5"],
+      "question": "Is a calendar grid slot in which no instrument has a bar still a slice, so that a strategy bar closing there runs on_bar on time? What does on_bar receive when base bars of that strategy bar are missing? Is a flat instrument with no bar reported as stale?",
+      "readings": [
+        "A. Every calendar slot is a slice. A strategy bar is the aggregate of the base bars that exist (open of the first, close of the last, extremes over those present). An instrument with an open position and no bar is marked at its last close and reported as stale; a flat instrument is not reported.",
+        "B. Only timestamps present in the data are slices, and a strategy bar whose last base bar is missing is detected one slice late."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "03-architecture 4.2 says the grid is the union calendar and that the strategy-bar close is decided by the clock.",
+      "proposed_wording": "03-architecture 4.2, add: 'A grid slot with no bar for any instrument is still a slice.' and 'A strategy bar is aggregated from the base bars present; if none is present no bar is delivered.'",
+      "cases": ["trace-12a-missing-last-base-bar", "trace-12b-missing-fill-bar"]
+    },
+    {
+      "id": "SPEC-08",
+      "kind": "gap",
+      "severity": "high",
+      "status": "resolved",
+      "title": "An add before any target has filled",
+      "documents": ["12-position-sizing 3 (fraction basis, adds after a target)"],
+      "question": "The fraction basis is fixed when the order with targets= fills, and the rule for adds covers only adds made after a target has filled. What happens to the target quantities when a tranche is added before any target has filled?",
+      "readings": [
+        "A. Every target takes its original fraction of the tranche and the rest joins the remainder (the same rule as after a target, SPEC-09).",
+        "B. Target quantities stay as first computed; the whole add goes to the remainder."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "One rule for every add: a target fraction always means that fraction of each tranche.",
+      "proposed_wording": "12-position-sizing 3: 'Adds. Each tranche added while targets are working gives every unfilled target its original fraction of the tranche; the rest of the tranche, including the share of any target that has already filled, joins the remainder. A filled target is not re-armed.'",
+      "cases": ["trace-03a-scale-in-and-out"]
+    },
+    {
+      "id": "SPEC-09",
+      "kind": "ambiguity",
+      "severity": "high",
+      "status": "resolved",
+      "title": "'In their original proportions' for an add after a target",
+      "documents": ["12-position-sizing 3 (adds after a target)"],
+      "question": "With targets 0.5 and 0.3 (remainder 0.2) and target 0 filled, how is a new tranche split?",
+      "readings": [
+        "A. Each unfilled target takes its original fraction of the tranche: 30 percent joins target 1 and the rest, including the filled target's 50 percent, joins the remainder.",
+        "B. The tranche is split between the unfilled targets and the remainder in their original relative proportions, 0.3 : 0.2, so 60 percent joins target 1 and 40 percent the remainder."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "A is the literal parse of 'joins only the targets that have not yet filled (in their original proportions)' and gives one rule for every add. Two independent derivations of trace 3 split on this point (4175.00 under A, 4400.00 under B), so the sentence needs rewriting whichever is meant. B keeps the composition of the remaining position unchanged by the add.",
+      "proposed_wording": "The sentence proposed under SPEC-08 settles this as well.",
+      "cases": ["trace-03a-scale-in-and-out"]
+    },
+    {
+      "id": "SPEC-10",
+      "kind": "ambiguity",
+      "severity": "high",
+      "status": "resolved",
+      "title": "Target levels after an add",
+      "documents": ["12-position-sizing 4 (first and second rows)", "05-risk-management 3"],
+      "question": "The stop is explicitly recomputed from the new average price. Are unfilled target levels recomputed from it as well, or do they keep the levels set when the order with targets= filled?",
+      "readings": [
+        "A. Recomputed from the new average price: the reference avg_price applies to stop, target and breakeven alike.",
+        "B. Fixed at the levels of the first fill."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "12-position-sizing 4 names one reference for stop, target and breakeven; the row about adds then speaks only of the stop.",
+      "proposed_wording": "12-position-sizing 4, new row: 'What happens to targets after an add? Unfilled targets are recomputed from the new average price.'",
+      "cases": ["trace-03a-scale-in-and-out"]
+    },
+    {
+      "id": "SPEC-11",
+      "kind": "ambiguity",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "When levels recomputed by an add take effect",
+      "documents": ["03-architecture 4.2 steps 2 to 4", "12-position-sizing 4"],
+      "question": "An add fills in step 2. Are the recomputed stop and targets tested in step 3 of the same slice, or from the next slice like a ratchet?",
+      "readings": ["A. The same slice: the recompute follows from a fill at the open, not from the bar's extremes.", "B. The next slice."],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "Consistent with SPEC-02. Trace 3 is built so that both readings agree.",
+      "proposed_wording": "03-architecture 4.2 step 2, add: 'Levels recomputed by a fill at the open are in force for step 3 of the same slice.'",
+      "cases": []
+    },
+    {
+      "id": "SPEC-12",
+      "kind": "ambiguity",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "Trail arming on a scaled position",
+      "documents": ["12-position-sizing 4 (trailing row)", "openalgo-strategy-module 3.1"],
+      "question": "The favourable excursion that arms a trail is the extreme minus the entry. On a scaled position, is the entry the average price or the first entry? Once armed, does a trail stay armed when an add raises the average? For the stepped form, which initial stop is the anchor after an add?",
+      "readings": ["A. The average price; armed is latched; the stepped anchor is the stop recomputed from the new average.", "B. The first entry; adds change nothing."],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "The same reference as stop and target, and leg_trail_armed is written once, which presupposes a latch. Trace 3 is built so that both readings agree.",
+      "proposed_wording": "12-position-sizing 4, trailing row, add: 'The excursion is measured from the average price; an armed trail stays armed.'",
+      "cases": []
+    },
+    {
+      "id": "SPEC-13",
+      "kind": "ambiguity",
+      "severity": "low",
+      "status": "resolved",
+      "title": "Rounding of target fractions",
+      "documents": ["12-position-sizing 3 (rounding)"],
+      "question": "'Rounded to venue quantities' and 'half of a one-lot position rounds to zero' imply rounding down. It is not stated, and neither is where the rounding loss goes when several targets round.",
+      "readings": ["A. Each target quantity rounds down; what is lost stays in the remainder.", "B. Nearest, with ties down."],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "A never assigns more than the position.",
+      "proposed_wording": "12-position-sizing 3: 'Each target quantity is rounded down to the venue quantity; the difference stays in the remainder.'",
+      "cases": []
+    },
+    {
+      "id": "SPEC-14",
+      "kind": "gap",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "Adds that carry their own risk arguments",
+      "documents": ["14-strategy-api 2.4 and 4.1", "12-position-sizing 2 and 3"],
+      "question": "With pyramiding above 0 the equivalent on_bar calls buy(**entry_args) again, so every add carries stop=, targets= and trail=. Do the add's arguments replace the position's rules, get ignored, or re-base the target fractions on the new quantity?",
+      "readings": [
+        "A. The position keeps the rules of its opening order; risk arguments on an add are accepted when equal and raise a configuration error when different.",
+        "B. The latest order's arguments replace the rules, and the fraction basis becomes the quantity after the add."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "A makes a condition strategy with pyramiding behave like an event strategy that adds with a plain buy.",
+      "proposed_wording": "14-strategy-api 2.4, add: 'The position keeps the leg rules of its opening order; an add may repeat them but may not change them.'",
+      "cases": []
+    },
+    {
+      "id": "SPEC-15",
+      "kind": "gap",
+      "severity": "low",
+      "status": "resolved",
+      "title": "Default scale-in limits, and what averaging down means",
+      "documents": ["12-position-sizing 2"],
+      "question": "max_adds, max_position, min_spacing and max_risk have no stated defaults and no place in the API. 'Adding against the position' does not say which price is compared with the average: the decision close or the fill price.",
+      "readings": ["A. No limit unless set (class attributes); averaging down is judged at the decision price.", "B. Judged at the fill price."],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "The decision price is what the strategy can see when it orders.",
+      "proposed_wording": "12-position-sizing 2: state the defaults and define 'against the position' as 'decision price worse than the average price'.",
+      "cases": []
+    },
+    {
+      "id": "SPEC-16",
+      "kind": "contradiction",
+      "severity": "high",
+      "status": "resolved",
+      "title": "What the daily loss limit measures when a run lasts several sessions",
+      "documents": ["05-risk-management 5", "14-strategy-api 3", "08-live-trading 8", "openalgo-strategy-module 3.3", "04-execution 7 (futures mark to market)"],
+      "question": "05 says 'realized P&L of runs finished this session plus the live run's MTM' (the live module's rule; the reference note says the module counts runs started since the session boundary, not finished). 14 and 08 say 'the strategy's realized P&L since the session start plus open MTM'. For a position held over several sessions these differ, and neither says whether open MTM is measured from the entry or from the previous settlement once futures are marked to market daily. Roll costs: with risk_basis net, are both roll legs' charges counted in the session of the roll?",
+      "readings": [
+        "A. The live module's measure: the live run's MTM since its first fill (realized plus unrealized) plus the realized P&L of the strategy's other runs of this session. A roll does not end the run. On the net basis every charge posted to the run counts, roll legs included.",
+        "B. Realized P&L booked since the session start plus unrealized P&L from the average price.",
+        "C. The change in the strategy's equity since the previous session close (with daily mark to market the open MTM restarts from the settlement price)."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "05-risk-management 1 promises the live module's semantics by default. A keeps the measure continuous through a roll; B loses the loss realized by the roll on the following day. If C is what the name should mean, it has to replace the live rule explicitly and be listed in 05-risk-management 8.",
+      "proposed_wording": "14-strategy-api 3 and 08-live-trading 8: 'The daily loss limit compares the limit with the realized P&L of the strategy's runs that ended this session plus the live run's MTM since its first fill (a roll does not end a run).'",
+      "cases": ["trace-08b-daily-loss-across-roll"]
+    },
+    {
+      "id": "SPEC-17",
+      "kind": "ambiguity",
+      "severity": "high",
+      "status": "resolved",
+      "title": "On a daily base an aggregate or daily-loss exit fills at the bar that breached",
+      "documents": ["03-architecture 4.2 step 6", "05-risk-management 6.2"],
+      "question": "'A leg with no later bar in the session fills at its last close, flagged.' On a daily base every bar is the last of its session, so every aggregate or daily-loss exit fills at the very close that triggered it. Is that intended for products that carry overnight, or should such an exit wait for the next session's open, as a strategy order does?",
+      "readings": [
+        "A. As written: on a daily base the exit fills at that day's close, flagged, and the Assumptions block says so.",
+        "B. For CNC and NRML the exit is queued for the next session's first open; the last-close rule applies only to intraday products."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "It is the written rule, and with ticks the limit would have been hit during that day, so an exit dated that day is closer to live behaviour than one at the next open. It needs a sentence of its own, because it is a fill at the price that produced the signal.",
+      "proposed_wording": "03-architecture 4.1, Assumptions example for base D, add: 'combined and daily-loss exits fill at the day's close'.",
+      "cases": ["trace-08b-daily-loss-across-roll"]
+    },
+    {
+      "id": "SPEC-18",
+      "kind": "gap",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "Daily loss breach: event, trading state and scope of the lock",
+      "documents": ["05-risk-management 5, 7 and 8", "14-strategy-api 3", "03-architecture 9", "openalgo-strategy-module 3.3"],
+      "question": "The event list has no name for a daily loss breach (the live module writes overall_sl_hit). Not stated: the trading state after a breach (REDUCING or HALTED), the reject code of the pre-entry gate, whether 'locked until the next session' counts from the breach or from the exit fill when the two fall in different sessions, and whether the gate is applied when an order is placed or when it would fill (a daily order placed at the breach close fills in the next session).",
+      "readings": [
+        "A. Event daily_loss_limit_hit (scope session, with the threshold and the observed value); state REDUCING until the session boundary after the breach; the gate is applied when the order is placed, and its rejections carry the code daily_loss_gate.",
+        "B. Reuse overall_sl_hit, as the live module does."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "05-risk-management 1 asks for an event with rule, scope, threshold and observed value on every trigger.",
+      "proposed_wording": "05-risk-management 7: add daily_loss_limit_hit to the events, and a list of order reject codes.",
+      "cases": ["trace-08b-daily-loss-across-roll"]
+    },
+    {
+      "id": "SPEC-19",
+      "kind": "gap",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "Mechanics of the futures roll",
+      "documents": ["04-execution 7", "03-architecture 4.2 steps 1 to 3", "05-risk-management 7"],
+      "question": "The roll is a reference event (step 1) that fills at the open. Not stated: the step and order of its two fills relative to queued strategy orders; the fill reason (the reason list has no roll); the events it emits; whether the spread uses the raw opens or the slipped fill prices; what happens when the near contract opens through the stop on the roll session; and which contract an entry decided on or after the roll session trades.",
+      "readings": [
+        "A. Step 2, after queued strategy orders, near leg first. Reason roll on both fills. Position events only (closed on the near contract, opened on the next). Spread from the two raw opens. A level already crossed at the near open exits there with its own reason and nothing is rolled. From the roll session on, entries go to the next contract.",
+        "B. Step 1, before any queued order."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "A strategy exit queued at the previous close should close the near contract, not be rolled and then closed at twice the cost.",
+      "proposed_wording": "04-execution 7: add the six points. 05-risk-management 7: add roll to the reasons.",
+      "cases": ["trace-08a-trail-across-roll", "trace-08b-daily-loss-across-roll"]
+    },
+    {
+      "id": "SPEC-20",
+      "kind": "ambiguity",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "The reference price of a rolled position",
+      "documents": ["04-execution 7", "05-risk-management 3", "12-position-sizing 4"],
+      "question": "04 shifts levels and the favourable extreme by the roll spread, while 05-risk-management 3 says levels are computed from the actual fill average, and the roll is a new fill. For rules that still need the entry after the roll (an unarmed trail, a stepped trail, breakeven, percent distances), is the entry the old fill average shifted by the spread, or the new contract's fill price, which is the position's average price?",
+      "readings": ["A. The shifted entry is kept as the reference for leg rules; the average price used for P&L is the new fill.", "B. Everything refers to the new fill."],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "Only A leaves the favourable excursion unchanged by the roll, which is the purpose of shifting the extreme. Trace 8 is built so that both readings agree.",
+      "proposed_wording": "04-execution 7, add: 'The entry reference used by leg rules is shifted by the spread as well.'",
+      "cases": []
+    },
+    {
+      "id": "SPEC-21",
+      "kind": "gap",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "The event stream of a run",
+      "documents": ["03-architecture 4.1 and 4.2 step 7", "05-risk-management 7", "14-strategy-api 2.3"],
+      "question": "The documents name event families but not the stream a run produces. Open: whether a backtest emits Accepted; whether an entry refused before submission emits Submitted first; whether engine-held exits (stop, target, square-off, roll) produce order events; the fields of each event; and the order of events inside one step.",
+      "readings": [
+        "A. As the fixtures: Submitted in step 7 of the decision slice for orders that pass the submission checks, otherwise Rejected alone. Filled and then the position event in the fill's step. Engine-held exits emit the risk event (none for square-off and roll) and then the position event, and no order event. Accepted is not compared.",
+        "B. Every exit is an order with the full order event sequence."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "A is the smallest stream that lets on_fill, on_order, on_position and on_risk_event be tested.",
+      "proposed_wording": "A new subsection in 03-architecture 4 listing the events, their fields and their order within a step.",
+      "cases": [
+        "trace-01a-base-1m",
+        "trace-01b-base-15m",
+        "trace-01c-entry-bar-extreme",
+        "trace-01d-breakeven",
+        "trace-02a-long",
+        "trace-02b-short",
+        "trace-03a-scale-in-and-out",
+        "trace-05a-base-1m",
+        "trace-05b-base-15m",
+        "trace-06a-daily-cnc",
+        "trace-06b-percent-levels-rounded",
+        "trace-06c-stop-on-the-entry-day",
+        "trace-06d-gtt-child-unfilled",
+        "trace-08a-trail-across-roll",
+        "trace-08b-daily-loss-across-roll",
+        "trace-11a-conditions-and-on-bar",
+        "trace-12a-missing-last-base-bar",
+        "trace-12b-missing-fill-bar"
+      ]
+    },
+    {
+      "id": "SPEC-22",
+      "kind": "gap",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "Fill and rejection reason vocabulary",
+      "documents": ["05-risk-management 7", "12-position-sizing 3", "14-strategy-api 2.4"],
+      "question": "The reason list covers exits only. Not defined: the reason of an entry fill and of an add; how a partial target fill names its target; the reason of roll fills; the default reason of exit() and of exit_when; reject codes.",
+      "readings": [
+        "A. As the fixtures: entry, add and roll; leg_target with a target index; signal for exit() unless reason= is passed; reject codes entry_window and daily_loss_gate.",
+        "B. Reasons on exits only."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "12-position-sizing 3 already requires that exit reasons record which target, stop or signal closed each part.",
+      "proposed_wording": "05-risk-management 7: extend the vocabulary.",
+      "cases": [
+        "trace-01a-base-1m",
+        "trace-01b-base-15m",
+        "trace-01c-entry-bar-extreme",
+        "trace-01d-breakeven",
+        "trace-02a-long",
+        "trace-02b-short",
+        "trace-03a-scale-in-and-out",
+        "trace-05a-base-1m",
+        "trace-05b-base-15m",
+        "trace-06a-daily-cnc",
+        "trace-06b-percent-levels-rounded",
+        "trace-06c-stop-on-the-entry-day",
+        "trace-06d-gtt-child-unfilled",
+        "trace-08a-trail-across-roll",
+        "trace-08b-daily-loss-across-roll",
+        "trace-11a-conditions-and-on-bar",
+        "trace-12a-missing-last-base-bar",
+        "trace-12b-missing-fill-bar"
+      ]
+    },
+    {
+      "id": "SPEC-23",
+      "kind": "contradiction",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "Arguments the documents use but the contract does not define",
+      "documents": ["14-strategy-api 2.4, 3 and 4.1", "10-simple-path 2 and 4", "12-position-sizing 2 and 3", "05-risk-management 2 and 3"],
+      "question": "buy is shown with after_first_target= in 10 and 12, and the text of 14-strategy-api 2.4 uses reverse=True, but neither is in the signature. The contract has no signature for bt.backtest, so it does not say where base, entry_from, entry_until, square_off, slippage, costs, max_daily_loss, risk_basis, after_risk_exit, roll, pyramiding, max_adds, max_position, min_spacing, max_risk, allow_averaging_down, max_hold and the cooldown are given. entry_when order arguments omit qty, price and tag. 2.4 does not say that buy or sell on a flat position opens one.",
+      "readings": [
+        "A. Add after_first_target and reverse to the signature; add the run-function signatures; say for each of the others whether it is a run argument or a class attribute; say whether leaving qty out of the entry_when arguments is deliberate.",
+        "B. Leave the examples as the definition."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "The contract is the document to be frozen; an argument that exists only in an example is not frozen.",
+      "proposed_wording": "14-strategy-api 2.4, and a new section for the run functions.",
+      "cases": ["trace-02b-short", "trace-08a-trail-across-roll", "trace-08b-daily-loss-across-roll", "trace-11a-conditions-and-on-bar"]
+    },
+    {
+      "id": "SPEC-24",
+      "kind": "gap",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "Units of bt.trail and bt.breakeven arguments; breakeven next to a stop or a trail",
+      "documents": ["14-strategy-api 1", "05-risk-management 2 and 3"],
+      "question": "bt.trail(x, y) and bt.breakeven(trigger, offset) are written with bare numbers. Are those points, or do the functions take unit objects (bt.points, bt.pct)? When a trail and a breakeven are both set, which acts first, and does breakeven create a stop when none is set?",
+      "readings": [
+        "A. A bare number is points, and unit objects are accepted (percent is of the fill average). Breakeven moves the stop only if that tightens it and creates one if none exists; with a trail the more protective level is in force.",
+        "B. Bare numbers take the unit of the stop argument."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "Points is the default risk unit of the live module's trail.",
+      "proposed_wording": "14-strategy-api 1: extend the trailing row and add a breakeven row.",
+      "cases": [
+        "trace-01a-base-1m",
+        "trace-01b-base-15m",
+        "trace-01c-entry-bar-extreme",
+        "trace-01d-breakeven",
+        "trace-03a-scale-in-and-out",
+        "trace-08a-trail-across-roll",
+        "trace-08b-daily-loss-across-roll"
+      ]
+    },
+    {
+      "id": "SPEC-25",
+      "kind": "gap",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "bt.trail_points, bt.trail_pct and bt.trail_atr",
+      "documents": ["14-strategy-api 1", "05-risk-management 3"],
+      "question": "05 defines these as 'as above'. Do they arm only after a favourable move of their own distance, like bt.trail(x, 0), or trail from the fill at once, which also acts as an initial stop? Is a percent distance a percent of the fill average (a fixed number of points) or of the running extreme?",
+      "readings": [
+        "A. bt.trail_points(x) is bt.trail(x, 0); bt.trail_pct(p) is the same with x equal to p percent of the fill average; bt.trail_atr uses the ATR at the close before the entry.",
+        "B. They trail from the fill immediately, with the distance recomputed from the running extreme."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "One trailing rule, the live module's, for every form. No fixture uses these forms.",
+      "proposed_wording": "05-risk-management 3: replace 'As above' with the definition.",
+      "cases": []
+    },
+    {
+      "id": "SPEC-26",
+      "kind": "contradiction",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "Validity of LIMIT orders",
+      "documents": ["03-architecture 4.2 step 3 and 4.3"],
+      "question": "4.3 gives validity as 'DAY, next-session for daily strategies, IOC for LIMIT'. 4.2 step 3 tests resting limit orders against each bar and never mentions IOC.",
+      "readings": [
+        "A. A LIMIT order rests like any other order (DAY, or the next session for daily strategies) and is tested in step 3 of every slice from its first eligible bar.",
+        "B. A LIMIT order is tested against one base bar and then cancelled."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "Step 3 speaks of resting limit orders. No fixture uses a LIMIT order.",
+      "proposed_wording": "03-architecture 4.3: delete 'IOC for LIMIT', or define it.",
+      "cases": []
+    },
+    {
+      "id": "SPEC-27",
+      "kind": "ambiguity",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "Slippage on fills",
+      "documents": ["03-architecture 4.2 steps 2 and 3", "03-architecture 7", "04-execution 4.3", "05-risk-management 6.2"],
+      "question": "'Open plus slippage' and 'level plus slippage' do not say that slippage is adverse for both sides, whether a level filled at the open on a gap and a target fill take slippage, how a slipped price is put back on the tick grid, or whether a slipped fill may leave the bar's range. For the roll: is the spread taken from raw opens or slipped fills (SPEC-19)?",
+      "readings": [
+        "A. Every MARKET fill, entry or exit, takes the segment slippage against its own side; the result is rounded to the tick away from the trader; a fill may leave the bar's range by the slippage.",
+        "B. Target fills take none."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "05-risk-management 6.2 makes every engine exit a MARKET order for cash and futures. All fixtures use zero slippage.",
+      "proposed_wording": "03-architecture 4.2: define 'plus slippage' as 'worse by the slippage for that side, rounded to the tick'.",
+      "cases": []
+    },
+    {
+      "id": "SPEC-28",
+      "kind": "clarification",
+      "severity": "low",
+      "status": "resolved",
+      "title": "The stop and several targets in one bar",
+      "documents": ["03-architecture 4.2 step 3", "12-position-sizing 3"],
+      "question": "With partial targets: when a bar reaches the stop and a target, does the stop win for the whole position? When a bar reaches two targets, do both fill in that slice?",
+      "readings": [
+        "A. The stop exits the whole position and no target fills. Without the stop, every target reached fills in that slice, nearest first, each at its level or at the open on a gap.",
+        "B. One target per slice."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "It is the single-target rule applied to each target.",
+      "proposed_wording": "03-architecture 4.2 step 3, add the sentence in A.",
+      "cases": []
+    },
+    {
+      "id": "SPEC-29",
+      "kind": "gap",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "Condition strategies and array inputs",
+      "documents": ["14-strategy-api 4.1 and 4.3", "10-simple-path 3"],
+      "question": "(1) Are arrays given to bt.from_arrays and bt.from_signals read with the level-triggered rules of 4.1, like condition arrays? (2) In 4.1 'position is flat' while an entry order is still queued (its fill bar is missing) fires the entry again at the next bar. (3) The literal equivalence test needs both forms to read the position at the same point, step 7, after the fills of that slice. (4) Re-entry on the bar after a stop assumes that no cooldown applies unless one is set.",
+      "readings": [
+        "A. One reading for all array inputs (4.1); a queued entry counts as not flat for the entry branch; the position is read in step 7.",
+        "B. bt.from_arrays arrays are edges."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "14-strategy-api 4.3 calls it the same path.",
+      "proposed_wording": "14-strategy-api 4.1: add the pending-order rule. 4.3: say that bt.from_arrays and bt.from_signals use 4.1.",
+      "cases": ["trace-11a-conditions-and-on-bar"]
+    },
+    {
+      "id": "SPEC-30",
+      "kind": "gap",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "Declaring a futures strategy; the spliced series",
+      "documents": ["14-strategy-api 2.1", "04-execution 7", "06-data-layer 6.3", "10-simple-path 7"],
+      "question": "How does a strategy say 'the current-month future of NIFTY, rolled automatically': a symbol with exchange NFO, underlying=, or a concrete contract symbol? Which bars does on_bar receive? The spliced series is 'difference-adjusted at each roll' without a direction (back-adjusted values change after every roll) and without the prices the difference is taken from.",
+      "readings": [
+        "A. underlying with exchange NFO and a class attribute naming the contract rank (current month); on_bar receives the spliced series, back-adjusted by the spread of the two opens at each roll; fills carry the actual contract.",
+        "B. symbol is a concrete contract and the roll applies to it."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "The fixtures give the chain in settings.roll and leave strategy_bars empty for trace 8, because the series cannot be derived from the documents.",
+      "proposed_wording": "14-strategy-api 2.1 and 04-execution 7.",
+      "cases": ["trace-08a-trail-across-roll", "trace-08b-daily-loss-across-roll"]
+    },
+    {
+      "id": "SPEC-31",
+      "kind": "clarification",
+      "severity": "low",
+      "status": "resolved",
+      "title": "When callbacks are delivered",
+      "documents": ["14-strategy-api 2.3", "03-architecture 4.2 steps 7 and 8"],
+      "question": "14 says on_fill, on_order and on_position are called 'after the kernel slice in which the event happened'. 03 delivers them in step 7 of that slice, before the session close step.",
+      "readings": ["A. In step 7 of the same slice (03).", "B. After step 8."],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "Step 7 is the defined delivery point; 14 only needs the wording aligned.",
+      "proposed_wording": "14-strategy-api 2.3: 'in step 7 of the kernel slice in which the event happened'.",
+      "cases": []
+    },
+    {
+      "id": "SPEC-32",
+      "kind": "gap",
+      "severity": "low",
+      "status": "resolved",
+      "title": "Entry window and square-off for carry products on an intraday interval",
+      "documents": ["03-architecture 4.2 (order validity, entry window)", "04-execution 2"],
+      "question": "04 ties entry_until and square_off to MIS; 03 speaks of 'an intraday entry'. For a CNC or NRML strategy on an intraday interval, do the entry window and the square-off apply?",
+      "readings": [
+        "A. They apply to MIS only. A carry product on an intraday interval has DAY orders, no entry cut-off and no square-off.",
+        "B. They apply to every strategy on an intraday interval."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "The times exist because of the broker's intraday square-off, which does not touch carry products.",
+      "proposed_wording": "03-architecture 4.2, entry window: 'for intraday products (MIS)'.",
+      "cases": []
+    },
+    {
+      "id": "SPEC-33",
+      "kind": "clarification",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "A bar that opens beyond the target and also reaches the stop",
+      "documents": ["03-architecture 4.2 step 3", "04-execution 4.2", "05-risk-management 3 and 6.2"],
+      "question": "03 says a level already crossed at the open fills at the open, whether stop or target, and only otherwise does the stop win inside the range. 05 section 3 says that within one leg the stop is tested before the target. When a bar opens beyond the target and later trades through the stop, which rule applies?",
+      "readings": [
+        "A. The open comes first: the target fills at the open and the stop is not tested (03).",
+        "B. The stop is tested over the whole bar before the target and fills at its level."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "The open is the one price of the bar whose time is known, and 03 words the rule with 'Otherwise'. An independent derivation read it the same way but flagged the sentence in 05.",
+      "proposed_wording": "05-risk-management 3: 'Within one leg, when neither level is already crossed at the open, the stop is tested before the target.'",
+      "cases": ["trace-02a-long", "trace-02b-short"]
+    },
+    {
+      "id": "SPEC-34",
+      "kind": "clarification",
+      "severity": "low",
+      "status": "resolved",
+      "title": "Price events in a backtest are base bars, not only 1-minute bars",
+      "documents": ["05-risk-management 1 (principle 3)", "03-architecture 4.1"],
+      "question": "05 says rules are evaluated on recorded ticks or 1-minute base bars in a backtest. 03 4.1 lets the base interval be the strategy interval or daily.",
+      "readings": ["A. Base bars of whatever base interval the run uses (03).", "B. Always 1-minute bars."],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "03 4.1 is the rule; 05 only needs the wording aligned.",
+      "proposed_wording": "05-risk-management 1, principle 3: replace '1-minute base bars' with 'base bars (03-architecture 4.1)'.",
+      "cases": []
+    },
+    {
+      "id": "GTT-1",
+      "kind": "gap",
+      "severity": "high",
+      "status": "resolved",
+      "title": "Price of the order a GTT places when it fires",
+      "documents": ["04-execution-and-market-model 4.4"],
+      "question": "When a GTT on a positional (CNC or NRML) position fires, it places a child order. What price does the engine give that order by default?",
+      "readings": [
+        "A. A LIMIT beyond the trigger by a buffer per segment: 1 percent for cash and futures, 5 percent for options (the same as the options stop), rounded to the tick, and configurable.",
+        "B. A MARKET order where the broker accepts one, otherwise the LIMIT of reading A.",
+        "C. A LIMIT exactly at the trigger price."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "Reading A behaves the same at every broker, so backtest and live agree. Reading B depends on per-broker support that has not been confirmed. Reading C often fails to fill on a fast move, leaving the position unprotected.",
+      "proposed_wording": "04-execution-and-market-model 4.4 item 3, add: 'The child order is a LIMIT beyond the trigger by 1 percent for cash and futures and 5 percent for options, rounded to the tick; the buffer is configurable per segment.'",
+      "cases": [
+        "trace-06a-daily-cnc",
+        "trace-06b-percent-levels-rounded",
+        "trace-06c-stop-on-the-entry-day",
+        "trace-06d-gtt-child-unfilled",
+        "trace-08a-trail-across-roll"
+      ]
+    },
+    {
+      "id": "GTT-2",
+      "kind": "gap",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "GTT expiry",
+      "documents": ["04-execution-and-market-model 4.4"],
+      "question": "Brokers cancel a GTT after a fixed period, typically one year. What does the engine do about a positional trade held that long?",
+      "readings": [
+        "A. Re-create any GTT older than 360 days at the next session open, in live and in backtests alike.",
+        "B. Model no expiry, and warn in live when a GTT nears its expiry.",
+        "C. Let the GTT expire; the position is then unprotected."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "A position held for a year should not silently lose its stop. Re-creating it in both modes keeps backtest and live the same.",
+      "proposed_wording": "04-execution-and-market-model 4.4, add: 'A GTT older than 360 days is cancelled and re-created at the next session open, in backtest and live alike.'",
+      "cases": []
+    },
+    {
+      "id": "GTT-3",
+      "kind": "gap",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "How often a trailing GTT is modified",
+      "documents": ["04-execution-and-market-model 4.4 item 5", "05-risk-management 3"],
+      "question": "A trailing stop or a breakeven on a positional trade moves its GTT. How often may the engine modify it?",
+      "readings": [
+        "A. At most once per base bar, and only when the level moves by at least one tick; in live also at most once a minute per GTT.",
+        "B. Every time the level changes."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "Brokers rate-limit order modifications and some charge for them. One tick is the smallest move that changes anything, and one change per base bar is all a backtest can observe anyway.",
+      "proposed_wording": "04-execution-and-market-model 4.4 item 5, add: 'A GTT is modified at most once per base bar, only when its level moves by at least one tick, and in live at most once a minute.'",
+      "cases": ["trace-08a-trail-across-roll"]
+    },
+    {
+      "id": "GTT-4",
+      "kind": "gap",
+      "severity": "medium",
+      "status": "resolved",
+      "title": "What a backtest assumes when the engine would not be running",
+      "documents": ["04-execution-and-market-model 4.4 item 3", "08-live-trading 4"],
+      "question": "A GTT fires at the broker even when the engine is not running. But when its child order does not fill on a gap, the follow-up exit needs the engine. What does a backtest assume?",
+      "readings": [
+        "A. The engine is running at every session open, so the follow-up exit happens at the next base-bar open; the live engine checks GTT state at each session open to match.",
+        "B. The engine runs only during hours the user configures, and the follow-up exit is modelled at the next time it would be running."
+      ],
+      "recommended": "A",
+      "decision": "A",
+      "decided_on": "2026-11-12",
+      "reason": "Reading A is simple, matches the live preflight that already runs before each session, and is what a positional trader expects. Reading B adds a schedule setting for little benefit in v1.",
+      "proposed_wording": "04-execution-and-market-model 4.4 item 3, add: 'A backtest assumes the engine is running at every session open; the live engine checks every GTT at each session open.'",
+      "cases": ["trace-06d-gtt-child-unfilled"]
+    },
+    {
+      "id": "GTT-5",
+      "kind": "clarification",
+      "severity": "high",
+      "status": "open",
+      "title": "Fill price of a GTT child that is marketable when it is placed",
+      "documents": ["04-execution 4.4 item 3", "03-architecture 4.2 step 3 and slippage", "05-risk-management 6.2"],
+      "question": "A GTT's child is a LIMIT beyond the trigger, so when a bar trades to the trigger (or opens beyond it but not beyond the limit) the child is marketable the moment it is placed. 04 4.4 says when it fills, not at what price. Does a child LIMIT take slippage?",
+      "readings": [
+        "A. At the price that fired it: the trigger when the bar reached it inside its range, the open when the bar opened beyond the trigger but not beyond the limit; slippage applies as to a MARKET exit but never past the limit.",
+        "B. Always at its limit price."
+      ],
+      "recommended": "A",
+      "decision": "",
+      "decided_on": "",
+      "reason": "A marketable LIMIT executes at the market, and the trigger (or the open) is the only market price the bar tells. B would book up to the whole buffer as a loss on every stop. With A a positional stop exit on bars is priced as an engine-held stop is (03-architecture 4.2 step 3).",
+      "proposed_wording": "04-execution 4.4 item 3, add: 'A child that is marketable when placed fills at the trigger, or at the open when the bar opened beyond the trigger, plus slippage, never worse than its limit.'",
+      "cases": ["trace-06a-daily-cnc", "trace-06b-percent-levels-rounded", "trace-06c-stop-on-the-entry-day", "trace-08a-trail-across-roll"]
+    },
+    {
+      "id": "GTT-6",
+      "kind": "gap",
+      "severity": "low",
+      "status": "open",
+      "title": "Rounding of a GTT child's limit",
+      "documents": ["04-execution 4.4 item 3", "05-risk-management 8", "04-execution 4.3"],
+      "question": "The child limit is 'rounded to the tick' with no direction. Is it computed from the rounded trigger, and rounded to the nearest tick (as levels are, 05 section 8), away from the trader (as slippage is, 04 4.3) or towards the trader? On which side of a target trigger does a target's child sit?",
+      "readings": [
+        "A. From the rounded trigger, rounded away from the trader (down for a sell, up for a buy); a child always sits on the far side of its trigger for its own side (below for a sell), for the target leg too.",
+        "B. From the rounded trigger, rounded to the nearest tick, an exact half tick up.",
+        "C. Rounded towards the trader."
+      ],
+      "recommended": "A",
+      "decision": "",
+      "decided_on": "",
+      "reason": "The buffer is there to make the child fill; rounding it towards the market would shrink it. A and B agree on every limit in the traces; only C differs (06b: 1459.20 instead of 1459.15).",
+      "proposed_wording": "04-execution 4.4 item 3: 'rounded to the tick away from the trader'.",
+      "cases": ["trace-06b-percent-levels-rounded"]
+    },
+    {
+      "id": "GTT-7",
+      "kind": "ambiguity",
+      "severity": "high",
+      "status": "open",
+      "title": "A bar that opens beyond the child's limit and later trades back to it",
+      "documents": ["04-execution 4.4 item 3", "04-execution 4.1"],
+      "question": "04 4.4 says a child 'fills only if the price trades through the limit after the trigger' and 'on a gap beyond the limit it does not fill'. When a bar opens beyond the limit and later in the same bar trades back through it, does the child fill? Is a touch of the limit enough?",
+      "readings": [
+        "A. Yes: the child rests through the bar like any LIMIT and fills at its limit when the bar trades back to it (a touch is enough, as for levels); 'does not fill' describes a gap that never comes back.",
+        "B. No: a child whose bar opened beyond its limit does not fill in that bar; it is cancelled and the engine exits at the next base-bar open."
+      ],
+      "recommended": "A",
+      "decision": "",
+      "decided_on": "",
+      "reason": "A gives 'has not filled through one base bar' its purpose and treats the child like every other resting LIMIT (03-architecture 4.2 step 3). An independent derivation from the documents read it the same way.",
+      "proposed_wording": "04-execution 4.4 item 3: 'On a gap beyond the limit it fills only if the bar later trades back to the limit; otherwise the GTT is spent.'",
+      "cases": ["trace-06a-daily-cnc"]
+    },
+    {
+      "id": "GTT-8",
+      "kind": "gap",
+      "severity": "medium",
+      "status": "open",
+      "title": "The event stream of a GTT",
+      "documents": ["03-architecture 4.5", "05-risk-management 7", "04-execution 4.4"],
+      "question": "The documents describe the life of a GTT (placed, modified, fired with a child order, the child filled or cancelled, cancelled by the engine) but name none of its events, their fields or steps. Also open: does the child order emit order events; is leg_sl_hit emitted when the GTT fires; what are the risk event, the flag and the reason of the engine's exit after an unfilled child; what 'where it filled' a fill at the child's limit carries; does a GTT the engine places go through the submission checks of step 7.",
+      "readings": [
+        "A. As the fixtures: events of type gtt named GttPlaced (step 2, after the fill that opened the position), GttModified (step 4), GttTriggered (step 3, with the fired leg and the child's limit), GttChildFilled or GttChildCanceled (step 3), GttCanceled (in the step of the engine's own exit, before it); the child emits no order events; leg_sl_hit or leg_target_hit is emitted when the GTT fires; after an unfilled child, risk event gtt_child_unfilled (level: the limit, observed: the best price after the trigger) and an engine exit with reason leg_sl, flag gtt_child_unfilled; a fill carries the GTT's id in gtt_id and 'level' when it fills at the child's limit; an automatic GTT goes through no submission check.",
+        "B. The child is an order: Submitted, Filled and Canceled order events carrying the parent GTT's id; a new 'limit' value for where a fill happened."
+      ],
+      "recommended": "A",
+      "decision": "",
+      "decided_on": "",
+      "reason": "A keeps one rule of 03-architecture 4.5, that protective exits emit no order events, while making every state of the GTT visible to on_risk_event and the comparison. B is closer to the live order book and would be equally testable; the choice only has to be written down.",
+      "proposed_wording": "03-architecture 4.5, add rows for the GTT events, and 05-risk-management 7: add the risk event gtt_child_unfilled and the flag.",
+      "cases": [
+        "trace-06a-daily-cnc",
+        "trace-06b-percent-levels-rounded",
+        "trace-06c-stop-on-the-entry-day",
+        "trace-06d-gtt-child-unfilled",
+        "trace-08a-trail-across-roll",
+        "trace-08b-daily-loss-across-roll"
+      ]
+    },
+    {
+      "id": "GTT-9",
+      "kind": "gap",
+      "severity": "medium",
+      "status": "open",
+      "title": "GTTs at a futures roll and at the engine's own exits",
+      "documents": ["04-execution 7", "04-execution 4.4", "08-live-trading 6.2", "03-architecture 4.2 steps 2, 3 and 6"],
+      "question": "At a roll the near contract is closed and the next opened; at a daily-loss exit the engine closes the position itself. What happens to the GTT in force? When is a new GTT on the next contract live? The roll's rule 'a level already crossed at the near contract's open exits there instead' is written for step 2, while GTTs are tested in step 3.",
+      "readings": [
+        "A. Cancel-then-exit: the GTT in force is cancelled in the step of the engine's exit (the roll's step 2, the daily loss's step 6), before the exit, and the exit fills in that step; at a roll a new GTT with the shifted triggers is placed on the next contract after its fill and is tested in step 3 of the roll slice; a near-contract trigger crossed at its open fires the GTT in step 2 and nothing is rolled.",
+        "B. The GTT is modified to the next contract and in force from the next base bar; an engine exit waits for the next bar after the cancel."
+      ],
+      "recommended": "A",
+      "decision": "",
+      "decided_on": "",
+      "reason": "08-live-trading 6.2 gives one exit owner and cancel-then-exit for every exit that is not the protective order's own, and a GTT cannot change its instrument. A keeps the roll and the daily-loss exit where 04 section 7 and 03 4.2 step 6 put them.",
+      "proposed_wording": "04-execution 7, add: 'The near contract's GTT is cancelled before the near leg closes; a new GTT with the shifted triggers is placed on the next contract after its fill.' 04-execution 4.4, add: 'Every exit the engine makes itself cancels the GTT first, in the same step.'",
+      "cases": ["trace-08a-trail-across-roll", "trace-08b-daily-loss-across-roll"]
+    },
+    {
+      "id": "GTT-10",
+      "kind": "contradiction",
+      "severity": "high",
+      "status": "open",
+      "title": "The general gap rule against the GTT child on positional products",
+      "documents": ["03-architecture 4.1 (Assumptions text), 4.2 step 3", "04-execution 4.2", "05-risk-management 3 and 6.2", "04-execution 4.4 item 3"],
+      "question": "03 4.2 step 3, 04 4.2 and 05 sections 3 and 6.2 say a level already crossed at the open fills at the open, and the Assumptions text for base D says stops 'fill at the stop level, or at the open on a gap'. For a CNC or NRML position 04 4.4 says the stop is a GTT whose child LIMIT does not fill beyond its limit. Which governs a positional stop on a gap?",
+      "readings": [
+        "A. 04 4.4 governs CNC and NRML: the general texts describe engine-held levels (MIS) and are qualified accordingly.",
+        "B. The general rule governs: a positional stop crossed at the open fills at the open whatever its child's limit."
+      ],
+      "recommended": "A",
+      "decision": "",
+      "decided_on": "",
+      "reason": "The GTT model was decided because it is how positional orders work in Indian markets; B would undo it on exactly the gaps it exists for. An independent derivation found the same contradiction.",
+      "proposed_wording": "03-architecture 4.2 step 3 and 04-execution 4.2: add 'For CNC and NRML positions the stop and target are GTTs and fill by 04-execution 4.4'. 03-architecture 4.1, Assumptions text for base D: 'or at the open on a gap (for a positional stop, at the open or at its child's limit)'.",
+      "cases": ["trace-06a-daily-cnc", "trace-06d-gtt-child-unfilled"]
+    },
+    {
+      "id": "GTT-11",
+      "kind": "gap",
+      "severity": "low",
+      "status": "open",
+      "title": "Several targets, adds and partial exits on a positional position",
+      "documents": ["04-execution 4.4 item 2", "12-position-sizing 3 and 4"],
+      "question": "One OCO GTT holds one stop and one target. How are targets=[...] with several targets, after_first_target, an add (which changes the quantity and the levels) and a partial exit held as GTTs, so that the working exit quantity never exceeds the position?",
+      "readings": [
+        "A. One OCO GTT per target, each with its own quantity and a stop leg for that quantity, plus a SINGLE stop GTT for the remainder; an add or a partial exit modifies them (a full replacement, effective from the next base bar).",
+        "B. Only the stop and the nearest target are GTTs; further targets are re-armed when the first fills."
+      ],
+      "recommended": "A",
+      "decision": "",
+      "decided_on": "",
+      "reason": "A keeps every unit protected by exactly one stop and never sells more than is held. No trace exercises it yet.",
+      "proposed_wording": "04-execution 4.4 item 2, add the rule chosen.",
+      "cases": []
+    }
+  ]
+}

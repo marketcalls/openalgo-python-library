@@ -7,13 +7,14 @@ Verbose levels:
   - verbose=2: Full debug - all market data updates from SDK
 """
 
+import os
 from openalgo import api
 import time
 
 # Initialize feed client with explicit parameters
 # Set verbose=True for basic logging, verbose=2 for full debug
 client = api(
-    api_key="918d504f250e6f7d6b533b245a46009d3f3b8cad8e6314c8b45ae8a35b972d8a",  # Replace with your API key
+    api_key=os.getenv("OPENALGO_API_KEY", "your_api_key_here"),  # Set OPENALGO_API_KEY in your environment
     host="http://127.0.0.1:5000",  # Replace with your API host
     ws_url="ws://127.0.0.1:8765",  # Explicit WebSocket URL (can be different from REST API host)
     verbose=False  # Silent mode (default) - set to True or 2 for debugging

@@ -1,0 +1,86 @@
+# mcx_contracts: terms of MCX futures contracts, by trade date and contract expiry.
+#
+# Columns
+#   underlying, exchange   the base of the OpenAlgo symbol (CRUDEOILM, GOLDM) and MCX
+#   valid_from, valid_to   trade dates the row applies to, both inclusive (empty valid_to: open)
+#   expiry_from, expiry_to contract expiry dates the row applies to, both inclusive
+#                          (empty: unbounded on that side)
+#   lot_size               units of quantity in one lot. The unit is the one OpenAlgo
+#                          counts MCX quantity in: the number in the exchange's trading
+#                          unit (CRUDEOIL "100 barrels" is 100; GOLD "1 kg" is 1; ZINC
+#                          "5 MT" is 5; GOLDM "100 grams" is 100)
+#   multiplier             rupees for a one-rupee move in the quoted price, per unit of
+#                          quantity: trading unit divided by quotation unit, divided by
+#                          lot_size (GOLD: 1 kg / 10 g / 1 = 100; ZINC: 5 MT / 1 kg / 5 =
+#                          1000; GOLDM: 100 g / 10 g / 100 = 0.1). lot_size x multiplier
+#                          is the rupee value of a one-rupee move for one lot
+#   tick_size              price step in rupees of the quoted price
+#   freeze_qty             maximum order size in units of quantity (the same unit as
+#                          lot_size: "10,000 barrels" is 10000; "150 MT" is 150)
+#   settlement             cash, or physical (compulsory delivery)
+#   trading_unit           the exchange's trading unit, as written in the specification
+#   quote_unit             the quantity the price is quoted for
+#   source                 the MCX circular the row was read from
+#   status                 verified: checked against that circular; unverified: not confirmed
+#   note                   which contracts the row covers
+#
+# MCX issues a specification per batch of contracts, so a verified row covers only the
+# expiries its circular names. Rows marked unverified carry the same terms to the other
+# expiries of contracts whose specification is not known to have changed; no MCX
+# document was read for them. Where a specification is known to have changed and the
+# old terms were not read (copper before the July 2019 expiry, the base metals before
+# mid 2020, the mini contracts before their 2023 relaunch), there is no row at all.
+#
+# The MCX circulars were read from copies of the PDFs as issued (mcxindia.com refused
+# scripted requests): MCX/TRD/479/2024 and 497/2024 from jainam.in, the others from
+# teamleaseregtech.com. The unit convention of lot_size follows the OpenAlgo server
+# (broker/zerodha/mapping/mcx_contract_size.py); see broker_units.csv for what is and is
+# not confirmed per broker.
+underlying,exchange,valid_from,valid_to,expiry_from,expiry_to,lot_size,multiplier,tick_size,freeze_qty,settlement,trading_unit,quote_unit,source,status,note
+CRUDEOIL,MCX,2019-01-01,,,2024-12-31,100,1,1,10000,cash,100 barrels,1 barrel,No MCX document read; terms of the 2025 contracts (MCX/TRD/479/2024) carried back,unverified,Contracts expiring up to December 2024
+CRUDEOIL,MCX,2024-07-22,2025-12-31,2025-01-01,2025-12-31,100,1,1,10000,cash,100 barrels,1 barrel,MCX/TRD/479/2024 (2024-07-19),verified,Contracts expiring in 2025
+CRUDEOIL,MCX,2025-01-01,,2026-01-01,,100,1,1,10000,cash,100 barrels,1 barrel,No MCX document read; terms of the 2025 contracts (MCX/TRD/479/2024) carried forward,unverified,Contracts expiring from January 2026
+CRUDEOILM,MCX,2023-03-03,,,2024-12-31,10,1,1,10000,cash,10 barrels,1 barrel,No MCX document read; terms of the 2025 contracts (MCX/TRD/479/2024) carried back to the relaunch,unverified,Contracts expiring up to December 2024; relaunch date from a broker listing of MCX circular 146/2023
+CRUDEOILM,MCX,2024-07-22,2025-12-31,2025-01-01,2025-12-31,10,1,1,10000,cash,10 barrels,1 barrel,MCX/TRD/479/2024 (2024-07-19),verified,Contracts expiring in 2025
+CRUDEOILM,MCX,2025-01-01,,2026-01-01,,10,1,1,10000,cash,10 barrels,1 barrel,No MCX document read; terms of the 2025 contracts (MCX/TRD/479/2024) carried forward,unverified,Contracts expiring from January 2026
+NATURALGAS,MCX,2019-01-01,,,2024-12-31,1250,1,0.1,60000,cash,1250 mmBtu,1 mmBtu,No MCX document read; terms of the 2025 contracts (MCX/TRD/497/2024) carried back,unverified,Contracts expiring up to December 2024
+NATURALGAS,MCX,2024-07-29,2025-12-31,2025-01-01,2025-12-31,1250,1,0.1,60000,cash,1250 mmBtu,1 mmBtu,MCX/TRD/497/2024 (2024-07-26),verified,Contracts expiring in 2025
+NATURALGAS,MCX,2025-01-01,,2026-01-01,,1250,1,0.1,60000,cash,1250 mmBtu,1 mmBtu,No MCX document read; terms of the 2025 contracts (MCX/TRD/497/2024) carried forward,unverified,Contracts expiring from January 2026
+NATGASMINI,MCX,2023-03-14,,,2024-12-31,250,1,0.1,60000,cash,250 mmBtu,1 mmBtu,No MCX document read; terms of the 2025 contracts (MCX/TRD/497/2024) carried back to the relaunch,unverified,Contracts expiring up to December 2024; relaunch date from a broker listing of MCX circular 157/2023
+NATGASMINI,MCX,2024-07-29,2025-12-31,2025-01-01,2025-12-31,250,1,0.1,60000,cash,250 mmBtu,1 mmBtu,MCX/TRD/497/2024 (2024-07-26),verified,Contracts expiring in 2025
+NATGASMINI,MCX,2025-01-01,,2026-01-01,,250,1,0.1,60000,cash,250 mmBtu,1 mmBtu,No MCX document read; terms of the 2025 contracts (MCX/TRD/497/2024) carried forward,unverified,Contracts expiring from January 2026
+GOLD,MCX,2019-01-01,,,,1,100,1,10,physical,1 kg,10 grams,No MCX document read; broker pages (angelone.in knowledge-center; icicidirect.com ilearn) state 1 kg quoted per 10 grams with a tick of Re 1 and a maximum order of 10 kg,unverified,All contracts
+GOLDM,MCX,2019-01-01,,,2025-09-30,100,0.1,1,10000,physical,100 grams,10 grams,No MCX document read; terms of MCX/TRD/456/2025 carried back,unverified,Contracts expiring up to September 2025
+GOLDM,MCX,2025-09-22,2026-07-31,2025-10-01,2026-07-31,100,0.1,1,10000,physical,100 grams,10 grams,MCX/TRD/456/2025 (2025-09-11),verified,Contracts expiring October 2025 to July 2026
+GOLDM,MCX,2025-09-22,,2026-08-01,,100,0.1,1,10000,physical,100 grams,10 grams,No MCX document read; terms of MCX/TRD/456/2025 carried forward,unverified,Contracts expiring from August 2026
+GOLDGUINEA,MCX,2019-01-01,,,2025-09-21,8,0.125,1,10000,physical,8 grams,8 grams,No MCX document read; terms of MCX/TRD/456/2025 carried back,unverified,Contracts expiring before 2025-09-22
+GOLDGUINEA,MCX,2025-09-22,2026-06-30,2025-09-22,2026-06-30,8,0.125,1,10000,physical,8 grams,8 grams,MCX/TRD/456/2025 (2025-09-11),verified,Contracts expiring up to June 2026
+GOLDGUINEA,MCX,2025-09-22,,2026-07-01,,8,0.125,1,10000,physical,8 grams,8 grams,No MCX document read; terms of MCX/TRD/456/2025 carried forward,unverified,Contracts expiring from July 2026
+GOLDPETAL,MCX,2019-01-01,,,2025-09-21,1,1,1,10000,physical,1 gram,1 gram,No MCX document read; terms of MCX/TRD/456/2025 carried back,unverified,Contracts expiring before 2025-09-22
+GOLDPETAL,MCX,2025-09-22,2026-06-30,2025-09-22,2026-06-30,1,1,1,10000,physical,1 gram,1 gram,MCX/TRD/456/2025 (2025-09-11),verified,Contracts expiring up to June 2026
+GOLDPETAL,MCX,2025-09-22,,2026-07-01,,1,1,1,10000,physical,1 gram,1 gram,No MCX document read; terms of MCX/TRD/456/2025 carried forward,unverified,Contracts expiring from July 2026
+GOLDTEN,MCX,2025-04-01,,,2025-09-21,10,0.1,1,10000,physical,10 grams,10 grams,No MCX document read for these contracts; launch date from MCX/PMT/254/2026; terms of MCX/TRD/456/2025 carried back,unverified,Contracts expiring before 2025-09-22
+GOLDTEN,MCX,2025-09-22,2026-06-30,2025-09-22,2026-06-30,10,0.1,1,10000,physical,10 grams,10 grams,MCX/TRD/456/2025 (2025-09-11),verified,Contracts expiring up to June 2026
+GOLDTEN,MCX,2025-09-22,,2026-07-01,,10,0.1,1,10000,physical,10 grams,10 grams,No MCX document read; terms of MCX/TRD/456/2025 carried forward,unverified,Contracts expiring from July 2026
+SILVER,MCX,2019-01-01,,,2027-02-28,30,1,1,600,physical,30 kg,1 kg,No MCX document read; terms of MCX/TRD/090/2026 carried back,unverified,Contracts expiring up to February 2027
+SILVER,MCX,2026-03-16,2027-12-31,2027-03-01,2027-12-31,30,1,1,600,physical,30 kg,1 kg,MCX/TRD/090/2026 (2026-02-25),verified,Contracts expiring March to December 2027
+SILVER,MCX,2026-03-16,,2028-01-01,,30,1,1,600,physical,30 kg,1 kg,No MCX document read; terms of MCX/TRD/090/2026 carried forward,unverified,Contracts expiring from January 2028
+SILVERM,MCX,2019-01-01,,,,5,1,1,,physical,5 kg,1 kg,No MCX document read; a broker page (icicidirect.com ilearn; 2022-10-01) states 5 kg quoted per kg with a tick of Re 1,unverified,All contracts; maximum order size not known
+SILVERMIC,MCX,2019-01-01,,,,1,1,1,,physical,1 kg,1 kg,No MCX document read; a broker page (icicidirect.com ilearn; 2022-10-01) states 1 kg quoted per kg with a tick of Re 1,unverified,All contracts; maximum order size not known
+COPPER,MCX,2019-04-01,,2019-07-01,2026-04-30,2500,1,0.05,70000,physical,2500 kg,1 kg,No MCX document read; a broker bulletin (zerodha.com/marketintel/bulletin/224330) dates 2500 kg from the July 2019 expiry; other terms from MCX/TRD/655/2025,unverified,Contracts expiring July 2019 to April 2026
+COPPER,MCX,2026-01-01,,2026-05-01,,2500,1,0.05,70000,physical,2500 kg,1 kg,MCX/TRD/655/2025 (2025-12-23),verified,Contracts expiring from May 2026
+ALUMINIUM,MCX,2020-02-01,,2020-06-01,2026-04-30,5,1000,0.05,150,physical,5 MT,1 kg,No MCX document read; a broker bulletin (zerodha.com/marketintel/bulletin/244685) dates 5 MT from the June 2020 contract; other terms from MCX/TRD/655/2025,unverified,Contracts expiring June 2020 to April 2026
+ALUMINIUM,MCX,2026-01-01,,2026-05-01,,5,1000,0.05,150,physical,5 MT,1 kg,MCX/TRD/655/2025 (2025-12-23),verified,Contracts expiring from May 2026
+ALUMINI,MCX,2023-02-20,,,2026-04-30,1,1000,0.05,150,physical,1 MT,1 kg,No MCX document read; relaunch date from a broker listing of MCX circular 104/2023; terms from MCX/TRD/655/2025,unverified,Contracts from the 2023 relaunch expiring up to April 2026
+ALUMINI,MCX,2026-01-01,,2026-05-01,,1,1000,0.05,150,physical,1 MT,1 kg,MCX/TRD/655/2025 (2025-12-23),verified,Contracts expiring from May 2026
+LEAD,MCX,2020-02-01,,2020-06-01,2026-04-30,5,1000,0.05,100,physical,5 MT,1 kg,No MCX document read; a broker bulletin (zerodha.com/marketintel/bulletin/244685) dates 5 MT from the June 2020 contract; other terms from MCX/TRD/655/2025,unverified,Contracts expiring June 2020 to April 2026
+LEAD,MCX,2026-01-01,,2026-05-01,,5,1000,0.05,100,physical,5 MT,1 kg,MCX/TRD/655/2025 (2025-12-23),verified,Contracts expiring from May 2026
+LEADMINI,MCX,2023-02-22,,,2026-04-30,1,1000,0.05,100,physical,1 MT,1 kg,No MCX document read; relaunch date from a broker listing of MCX circular 105/2023; terms from MCX/TRD/655/2025,unverified,Contracts from the 2023 relaunch expiring up to April 2026
+LEADMINI,MCX,2026-01-01,,2026-05-01,,1,1000,0.05,100,physical,1 MT,1 kg,MCX/TRD/655/2025 (2025-12-23),verified,Contracts expiring from May 2026
+ZINC,MCX,2020-02-01,,2020-06-01,2026-04-30,5,1000,0.05,100,physical,5 MT,1 kg,No MCX document read; a broker bulletin (zerodha.com/marketintel/bulletin/244685) dates 5 MT from the June 2020 contract; other terms from MCX/TRD/655/2025,unverified,Contracts expiring June 2020 to April 2026
+ZINC,MCX,2026-01-01,,2026-05-01,,5,1000,0.05,100,physical,5 MT,1 kg,MCX/TRD/655/2025 (2025-12-23),verified,Contracts expiring from May 2026
+ZINCMINI,MCX,2023-02-17,,,2026-04-30,1,1000,0.05,100,physical,1 MT,1 kg,No MCX document read; relaunch date from a broker listing of MCX circular 101/2023; terms from MCX/TRD/655/2025,unverified,Contracts from the 2023 relaunch expiring up to April 2026
+ZINCMINI,MCX,2026-01-01,,2026-05-01,,1,1000,0.05,100,physical,1 MT,1 kg,MCX/TRD/655/2025 (2025-12-23),verified,Contracts expiring from May 2026
+NICKEL,MCX,2019-09-01,2025-08-31,2019-12-01,2025-08-31,1500,1,0.1,,physical,1500 kg,1 kg,No MCX document read; a broker bulletin (zerodha.com/marketintel/bulletin/236249) dates 1500 kg from the December 2019 expiry,unverified,Contracts expiring December 2019 to August 2025; maximum order size not known
+NICKEL,MCX,2025-08-18,,2025-09-01,2026-04-30,250,1,0.1,24000,physical,250 kg,1 kg,No MCX specification read for these contracts; MCX/PMT/254/2026 gives 2025-08-18 for the revised specification; terms from MCX/TRD/655/2025,unverified,Contracts expiring September 2025 to April 2026
+NICKEL,MCX,2026-01-01,,2026-05-01,,250,1,0.1,24000,physical,250 kg,1 kg,MCX/TRD/655/2025 (2025-12-23),verified,Contracts expiring from May 2026

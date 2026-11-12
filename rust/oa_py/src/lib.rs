@@ -9,6 +9,8 @@
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
 use pyo3::prelude::*;
 
+mod backtest;
+
 /// f64 slice -> f64 numpy array, for a kernel taking (data, period).
 macro_rules! wrap_period {
     ($name:ident, $core:path) => {
@@ -157,68 +159,68 @@ wrap_period!(linreg_intercept, oa_core::linreg_intercept);
 
 #[pyfunction]
 #[pyo3(signature = (high, low, period))]
-fn plus_dm_talib<'py>(
+fn plus_dm_wilder_sum<'py>(
     py: Python<'py>,
     high: PyReadonlyArray1<'py, f64>,
     low: PyReadonlyArray1<'py, f64>,
     period: usize,
 ) -> PyResult<Py<PyArray1<f64>>> {
-    Ok(oa_core::plus_dm_talib(high.as_slice()?, low.as_slice()?, period)
+    Ok(oa_core::plus_dm_wilder_sum(high.as_slice()?, low.as_slice()?, period)
         .into_pyarray_bound(py)
         .unbind())
 }
 
 #[pyfunction]
 #[pyo3(signature = (high, low, period))]
-fn minus_dm_talib<'py>(
+fn minus_dm_wilder_sum<'py>(
     py: Python<'py>,
     high: PyReadonlyArray1<'py, f64>,
     low: PyReadonlyArray1<'py, f64>,
     period: usize,
 ) -> PyResult<Py<PyArray1<f64>>> {
-    Ok(oa_core::minus_dm_talib(high.as_slice()?, low.as_slice()?, period)
+    Ok(oa_core::minus_dm_wilder_sum(high.as_slice()?, low.as_slice()?, period)
         .into_pyarray_bound(py)
         .unbind())
 }
 
 #[pyfunction]
 #[pyo3(signature = (high, low, close, period))]
-fn dx_talib<'py>(
+fn dx_wilder_sum<'py>(
     py: Python<'py>,
     high: PyReadonlyArray1<'py, f64>,
     low: PyReadonlyArray1<'py, f64>,
     close: PyReadonlyArray1<'py, f64>,
     period: usize,
 ) -> PyResult<Py<PyArray1<f64>>> {
-    Ok(oa_core::dx_talib(high.as_slice()?, low.as_slice()?, close.as_slice()?, period)
+    Ok(oa_core::dx_wilder_sum(high.as_slice()?, low.as_slice()?, close.as_slice()?, period)
         .into_pyarray_bound(py)
         .unbind())
 }
 
 #[pyfunction]
 #[pyo3(signature = (high, low, close, period))]
-fn adx_talib<'py>(
+fn adx_wilder_sum<'py>(
     py: Python<'py>,
     high: PyReadonlyArray1<'py, f64>,
     low: PyReadonlyArray1<'py, f64>,
     close: PyReadonlyArray1<'py, f64>,
     period: usize,
 ) -> PyResult<Py<PyArray1<f64>>> {
-    Ok(oa_core::adx_talib(high.as_slice()?, low.as_slice()?, close.as_slice()?, period)
+    Ok(oa_core::adx_wilder_sum(high.as_slice()?, low.as_slice()?, close.as_slice()?, period)
         .into_pyarray_bound(py)
         .unbind())
 }
 
 #[pyfunction]
 #[pyo3(signature = (high, low, close, period))]
-fn adxr_talib<'py>(
+fn adxr_wilder_sum<'py>(
     py: Python<'py>,
     high: PyReadonlyArray1<'py, f64>,
     low: PyReadonlyArray1<'py, f64>,
     close: PyReadonlyArray1<'py, f64>,
     period: usize,
 ) -> PyResult<Py<PyArray1<f64>>> {
-    Ok(oa_core::adxr_talib(high.as_slice()?, low.as_slice()?, close.as_slice()?, period)
+    Ok(oa_core::adxr_wilder_sum(high.as_slice()?, low.as_slice()?, close.as_slice()?, period)
         .into_pyarray_bound(py)
         .unbind())
 }
@@ -653,14 +655,14 @@ fn vidya<'py>(
 
 #[pyfunction]
 #[pyo3(signature = (data, length, fast_length, slow_length))]
-fn kama_tv<'py>(
+fn kama_full_window<'py>(
     py: Python<'py>,
     data: PyReadonlyArray1<'py, f64>,
     length: usize,
     fast_length: usize,
     slow_length: usize,
 ) -> PyResult<Py<PyArray1<f64>>> {
-    let out = oa_core::kama_tv(data.as_slice()?, length, fast_length, slow_length);
+    let out = oa_core::kama_full_window(data.as_slice()?, length, fast_length, slow_length);
     Ok(out.into_pyarray_bound(py).unbind())
 }
 
@@ -780,11 +782,11 @@ fn _oaindicators(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tsf, m)?)?;
     m.add_function(wrap_pyfunction!(linreg_angle, m)?)?;
     m.add_function(wrap_pyfunction!(linreg_intercept, m)?)?;
-    m.add_function(wrap_pyfunction!(plus_dm_talib, m)?)?;
-    m.add_function(wrap_pyfunction!(minus_dm_talib, m)?)?;
-    m.add_function(wrap_pyfunction!(dx_talib, m)?)?;
-    m.add_function(wrap_pyfunction!(adx_talib, m)?)?;
-    m.add_function(wrap_pyfunction!(adxr_talib, m)?)?;
+    m.add_function(wrap_pyfunction!(plus_dm_wilder_sum, m)?)?;
+    m.add_function(wrap_pyfunction!(minus_dm_wilder_sum, m)?)?;
+    m.add_function(wrap_pyfunction!(dx_wilder_sum, m)?)?;
+    m.add_function(wrap_pyfunction!(adx_wilder_sum, m)?)?;
+    m.add_function(wrap_pyfunction!(adxr_wilder_sum, m)?)?;
     m.add_function(wrap_pyfunction!(stochf, m)?)?;
     m.add_function(wrap_pyfunction!(ultosc, m)?)?;
     m.add_function(wrap_pyfunction!(adosc, m)?)?;
@@ -817,7 +819,7 @@ fn _oaindicators(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(atr_sma, m)?)?;
     m.add_function(wrap_pyfunction!(vwma, m)?)?;
     m.add_function(wrap_pyfunction!(kama, m)?)?;
-    m.add_function(wrap_pyfunction!(kama_tv, m)?)?;
+    m.add_function(wrap_pyfunction!(kama_full_window, m)?)?;
     m.add_function(wrap_pyfunction!(alma, m)?)?;
     m.add_function(wrap_pyfunction!(mcginley, m)?)?;
     m.add_function(wrap_pyfunction!(vidya, m)?)?;
@@ -830,5 +832,6 @@ fn _oaindicators(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(flip, m)?)?;
     m.add_function(wrap_pyfunction!(valuewhen, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    backtest::register(m)?;
     Ok(())
 }

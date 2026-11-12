@@ -2,18 +2,22 @@
 """
 Volume parity: migrated _backend implementations vs ORIGINAL numba kernels
 (NUMBA_DISABLE_JIT=1) on real RELIANCE data. Batch 1: OBV, ADL, CMF, MFI, EMV, FI.
+CMF, MFI and VWAP have no kernel of their own left in their classes, so they are
+checked against the plain-Python references in test/indicator_references.py.
 """
 import os
 os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "test"))
 
 import numpy as np
 import pandas as pd
 
+import indicator_references as references
 from openalgo.indicators import _backend as b
-from openalgo.indicators.volume import (OBV, ADL, CMF, MFI, EMV, FI, NVI, PVI, VROC,
+from openalgo.indicators.volume import (OBV, ADL, EMV, FI, NVI, PVI, VROC,
                                         VOLOSC, KlingerVolumeOscillator as KVO,
                                         PriceVolumeTrend as PVT, RVOL)
 
@@ -43,8 +47,8 @@ def main():
 
     cmp("obv", b.obv(c, v), OBV._calculate_obv(c, v))
     cmp("adl", b.adl(h, lo, c, v), ADL._calculate_adl(h, lo, c, v))
-    cmp("cmf", b.cmf(h, lo, c, v, 20), CMF._calculate_cmf(h, lo, c, v, 20))
-    cmp("mfi", b.mfi(h, lo, c, v, 14), MFI._calculate_mfi(h, lo, c, v, 14))
+    cmp("cmf", b.cmf(h, lo, c, v, 20), references.cmf(h, lo, c, v, 20), tol=1e-9)
+    cmp("mfi", b.mfi(h, lo, c, v, 14), references.mfi(h, lo, c, v, 14), tol=1e-9)
 
     raw_emv = EMV._calculate_emv_raw(h, lo, v, 10000.0)
     cmp("emv", b.emv(h, lo, v, 14, 10000), EMV._calculate_sma(raw_emv, 14), tol=1e-9)
@@ -58,23 +62,20 @@ def main():
     cmp("vroc", b.vroc(v, 25), VROC._calculate_vroc(v, 25))
     cmp("volosc", b.volosc(v, 5, 10), _volosc_ref(v, 5, 10))
     kk, kt = b.kvo(h, lo, c, v, 13, 34, 55)
-    rkk, rkt = KVO._calculate_kvo_tv(h, lo, c, v, 13, 34, 55)
+    rkk, rkt = KVO._calculate_kvo(h, lo, c, v, 13, 34, 55)
     cmp("kvo", kk, rkk)
     cmp("kvo.trig", kt, rkt)
     cmp("rvol", b.rvol(v, 20), RVOL._calculate_rvol(v, 20))
 
     # OBVSmoothed branches + VWAP (public API level, vs independent references)
     from openalgo import ta
-    from openalgo.indicators.volume import OBVSmoothed, VWAP
+    from openalgo.indicators.volume import OBVSmoothed
     obv = OBV._calculate_obv(c, v)
     cmp("obvsm.smma", np.asarray(ta.obv_smoothed(c, v, "SMMA (RMA)", 20)),
         OBVSmoothed._calculate_rma(obv, 20))
     cmp("obvsm.sma", np.asarray(ta.obv_smoothed(c, v, "SMA", 20)),
         np.asarray(ta.sma(OBV._calculate_obv(c, v), 20)))
-    src = (h + lo + c) / 3.0
-    starts = np.zeros(len(c)); starts[0] = 1.0
-    rv, _ = VWAP._calculate_session_vwap(src, v, starts.astype(bool))
-    cmp("vwap", np.asarray(ta.vwap(h, lo, c, v)), rv)
+    cmp("vwap", np.asarray(ta.vwap(h, lo, c, v)), references.vwap(h, lo, c, v), tol=1e-9)
 
     print("\nRESULT:", "ALL VOLUME PARITY PASS" if not FAILS else f"FAILURES: {FAILS}")
 

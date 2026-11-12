@@ -33,7 +33,7 @@ class api(OrderAPI, GTTAPI, DataAPI, AccountAPI, FeedAPI, OptionsAPI,
     OpenAlgo API client class
     """
     def __init__(self, api_key, host="http://127.0.0.1:5000", version="v1", timeout=120.0,
-                 ws_port=8765, ws_url=None, verbose=False, auto_reconnect=True):
+                 ws_port=None, ws_url=None, verbose=False, auto_reconnect=True):
         """
         Initialize the OpenAlgo API client.
 
@@ -42,8 +42,16 @@ class api(OrderAPI, GTTAPI, DataAPI, AccountAPI, FeedAPI, OptionsAPI,
             host (str): Base URL for the API endpoints. Defaults to localhost.
             version (str): API version. Defaults to "v1".
             timeout (float): Request timeout in seconds. Defaults to 120.0 seconds.
-            ws_port (int): WebSocket server port. Defaults to 8765.
+            ws_port (int, optional): WebSocket server port. Defaults to 8765, which is
+                also what self.ws_port reads when it is not passed.
             ws_url (str, optional): Custom WebSocket URL. Overrides host and ws_port.
+                Without it the WebSocket URL is derived from host:
+                - http://<host>, or a host without a scheme (local or LAN):
+                  ws://<host>:<ws_port>
+                - https://<host> (a server hosted on a domain): wss://<host>/ws,
+                  where the OpenAlgo installers serve the feed
+                - https://<host> with ws_port passed: ws://<host>:<ws_port>
+                The port and the path of host belong to the REST API and are not used.
             verbose (int): Logging verbosity level. Defaults to False.
                 - 0 or False: Silent mode (errors only)
                 - 1 or True: Basic info (connection, auth, subscription status)
@@ -57,58 +65,10 @@ class api(OrderAPI, GTTAPI, DataAPI, AccountAPI, FeedAPI, OptionsAPI,
         BaseAPI.__init__(self, api_key, host, version, timeout)
 
         # Initialize FeedAPI WebSocket attributes
-        self.verbose = int(verbose) if verbose is not False else 0
-        self.ws_port = ws_port
+        # (with the helper FeedAPI.__init__ also runs, so the two cannot drift apart)
+        self._init_feed(host, ws_port, ws_url, verbose, auto_reconnect)
 
-        if ws_url:
-            self.ws_url = ws_url
-        else:
-            if host.startswith("http://"):
-                self.ws_host = host[7:]
-            elif host.startswith("https://"):
-                self.ws_host = host[8:]
-            else:
-                self.ws_host = host
-            self.ws_host = self.ws_host.split('/')[0].split(':')[0]
-            self.ws_url = f"ws://{self.ws_host}:{self.ws_port}"
-
-        self.ws = None
-        self.connected = False
-        self.authenticated = False
-        self.ws_thread = None
-
-        # Message management
-        import threading as _threading
-        self.message_queue = []
-        self.lock = _threading.Lock()
-
-        # Data storage
-        self.ltp_data = {}
-        self.quotes_data = {}
-        self.depth_data = {}
-
-        # Callback registry
-        self.ltp_callback = None
-        self.quote_callback = None
-        self.quotes_callback = None
-        self.depth_callback = None
-        self.order_callback = None
-
-        # Order-update storage (see FeedAPI.subscribe_orders)
-        self.order_data = []
-        self._orders_subscribed = False
-
-        # Auto-reconnect state (additive — does not change any existing
-        # public attribute or behaviour). Mirrors FeedAPI.__init__ so the
-        # unified `api()` class supports the same auto-reconnect feature
-        # as a standalone FeedAPI instance.
-        self.auto_reconnect = bool(auto_reconnect)
-        self._shutting_down = False
-        self._reconnect_thread = None
-        self._reconnect_lock = _threading.Lock()
-        self._active_subs = {1: {}, 2: {}, 3: {}}
-
-__version__ = "2.0.5"
+__version__ = "2.1.0"
 
 # Export main components for easy access
 __all__ = ['api', 'Strategy', 'ta', 'nbjit', 'prange', 'HAS_NUMBA']

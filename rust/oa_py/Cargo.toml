@@ -13,5 +13,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 oa_core = { path = "../oa_core" }
+oa_bt = { path = "../oa_bt" }
 pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }
 numpy = "0.22"

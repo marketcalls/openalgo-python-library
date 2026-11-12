@@ -1,0 +1,633 @@
+{
+  "format": 1,
+  "year": 2026,
+  "timezone": "Asia/Kolkata",
+  "coverage": {
+    "NSE": "sourced",
+    "NFO": "sourced",
+    "BSE": "unverified",
+    "BFO": "unverified",
+    "MCX": "unverified",
+    "CDS": "unverified",
+    "BCD": "unverified"
+  },
+  "notes": [
+    "NSE and NFO holidays are the published lists NSE/CMTR/71775 and NSE/FAOP/71777, plus 2026-01-15 (unverified, see its entry).",
+    "BSE, BFO, MCX, CDS and BCD follow the OpenAlgo server seed and the cited pages, and are unverified.",
+    "MCX evening sessions open at 17:00 and close at the regular MCX close of the date.",
+    "2026-11-24 and 2026-12-25 were still in the future when this file was written."
+  ],
+  "sources": {
+    "angelone-muhurat-2026": "https://www.angelone.in/announcements/market/muhurat-trading-2026-on-angel-one",
+    "groww-budget-2026": "https://groww.in/blog/stock-market-to-remain-open-on-february-1-for-union-budget",
+    "nse-cmtr-71775": "NSE/CMTR/71775 trading holidays 2026 (capital market), Muhurat on 2026-11-08: https://nsearchives.nseindia.com/content/circulars/CMTR71775.pdf",
+    "nse-faop-71777": "NSE/FAOP/71777 trading holidays 2026 (futures and options): https://nsearchives.nseindia.com/content/circulars/FAOP71777.pdf",
+    "nse-faop-72352": "NSE/FAOP/72352 live trading session 2026-02-01, normal market 09:15 to 15:30: https://nsearchives.nseindia.com/content/circulars/FAOP72352.pdf",
+    "nse-index": "NSE Nifty 50 daily index history, 2024-10-07 to 2026-11-11: every weekday without a row is a closure, read on 2026-11-12",
+    "server-2026": "OpenAlgo server, database/market_calendar_db.py at commit d8cc13f24: shipped_holidays_2026() and MUHURAT_2026_SESSION",
+    "truedata-2026": "https://www.truedata.in/blog/trading-holidays-list-2026-nse-bse-and-mcx (fetched 2026-11-12)",
+    "zerodha-calendar-2026": "https://zerodha.com/marketintel/holiday-calendar/ (fetched 2026-11-12)"
+  },
+  "days": [
+    {
+      "date": "2026-01-15",
+      "name": "Municipal Corporation Election - Maharashtra",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "server-2026",
+        "truedata-2026",
+        "nse-index",
+        "zerodha-calendar-2026"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX",
+        "NFO",
+        "NSE"
+      ],
+      "note": "Not in NSE/CMTR/71775; the NSE circular that added it was not read. The NSE index history has no row on this date."
+    },
+    {
+      "date": "2026-01-26",
+      "name": "Republic Day",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD",
+        "MCX"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-71775",
+        "nse-faop-71777",
+        "server-2026",
+        "zerodha-calendar-2026",
+        "truedata-2026"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2026-02-01",
+      "name": "Union Budget (Sunday live trading session)",
+      "closed": [],
+      "sessions": {
+        "NSE": [
+          "09:15",
+          "15:30"
+        ],
+        "BSE": [
+          "09:15",
+          "15:30"
+        ],
+        "NFO": [
+          "09:15",
+          "15:30"
+        ],
+        "BFO": [
+          "09:15",
+          "15:30"
+        ],
+        "MCX": [
+          "09:00",
+          "17:00"
+        ]
+      },
+      "sources": [
+        "nse-faop-72352",
+        "groww-budget-2026"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE",
+        "MCX",
+        "NSE"
+      ],
+      "hours_unverified": [
+        "BFO",
+        "BSE",
+        "MCX",
+        "NSE"
+      ],
+      "note": "NFO times from NSE/FAOP/72352. The capital market, BSE and commodity windows come from a news page; currency derivatives are not recorded."
+    },
+    {
+      "date": "2026-03-03",
+      "name": "Holi",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-71775",
+        "nse-faop-71777",
+        "server-2026",
+        "zerodha-calendar-2026",
+        "truedata-2026"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2026-03-26",
+      "name": "Shri Ram Navami",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-71775",
+        "nse-faop-71777",
+        "server-2026",
+        "zerodha-calendar-2026",
+        "truedata-2026"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2026-03-31",
+      "name": "Shri Mahavir Jayanti",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-71775",
+        "nse-faop-71777",
+        "server-2026",
+        "zerodha-calendar-2026",
+        "truedata-2026"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2026-04-03",
+      "name": "Good Friday",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD",
+        "MCX"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-71775",
+        "nse-faop-71777",
+        "server-2026",
+        "zerodha-calendar-2026",
+        "truedata-2026"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2026-04-14",
+      "name": "Dr. Baba Saheb Ambedkar Jayanti",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-71775",
+        "nse-faop-71777",
+        "server-2026",
+        "zerodha-calendar-2026",
+        "truedata-2026"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2026-05-01",
+      "name": "Maharashtra Day",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-71775",
+        "nse-faop-71777",
+        "server-2026",
+        "zerodha-calendar-2026",
+        "truedata-2026"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2026-05-28",
+      "name": "Bakri Id",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-71775",
+        "nse-faop-71777",
+        "server-2026",
+        "zerodha-calendar-2026",
+        "truedata-2026"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2026-06-26",
+      "name": "Muharram",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-71775",
+        "nse-faop-71777",
+        "server-2026",
+        "zerodha-calendar-2026",
+        "truedata-2026"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2026-09-14",
+      "name": "Ganesh Chaturthi",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-71775",
+        "nse-faop-71777",
+        "server-2026",
+        "zerodha-calendar-2026",
+        "truedata-2026"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2026-10-02",
+      "name": "Mahatma Gandhi Jayanti",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD",
+        "MCX"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-71775",
+        "nse-faop-71777",
+        "server-2026",
+        "zerodha-calendar-2026",
+        "truedata-2026"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2026-10-20",
+      "name": "Dussehra",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-71775",
+        "nse-faop-71777",
+        "server-2026",
+        "zerodha-calendar-2026",
+        "truedata-2026"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2026-11-08",
+      "name": "Diwali Laxmi Pujan (Muhurat trading)",
+      "closed": [],
+      "sessions": {
+        "NSE": [
+          "14:20",
+          "15:30"
+        ],
+        "BSE": [
+          "14:20",
+          "15:30"
+        ],
+        "CDS": [
+          "14:20",
+          "15:30"
+        ],
+        "BCD": [
+          "14:20",
+          "15:30"
+        ],
+        "MCX": [
+          "14:20",
+          "15:30"
+        ],
+        "NFO": [
+          "14:20",
+          "15:40"
+        ],
+        "BFO": [
+          "14:20",
+          "15:40"
+        ]
+      },
+      "sources": [
+        "nse-cmtr-71775",
+        "nse-faop-71777",
+        "server-2026",
+        "angelone-muhurat-2026"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ],
+      "hours_unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX",
+        "NFO",
+        "NSE"
+      ],
+      "note": "A Sunday, announced in the NSE circulars. The times come from the OpenAlgo server and a broker page; equity derivatives run to 15:40."
+    },
+    {
+      "date": "2026-11-10",
+      "name": "Diwali-Balipratipada",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-71775",
+        "nse-faop-71777",
+        "server-2026",
+        "zerodha-calendar-2026",
+        "truedata-2026"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2026-11-24",
+      "name": "Prakash Gurpurb Sri Guru Nanak Dev",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-71775",
+        "nse-faop-71777",
+        "server-2026",
+        "zerodha-calendar-2026",
+        "truedata-2026"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2026-12-25",
+      "name": "Christmas",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "BCD",
+        "MCX"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-71775",
+        "nse-faop-71777",
+        "server-2026",
+        "zerodha-calendar-2026",
+        "truedata-2026"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX"
+      ]
+    }
+  ]
+}

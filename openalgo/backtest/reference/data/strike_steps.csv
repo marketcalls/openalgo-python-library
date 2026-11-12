@@ -1,0 +1,31 @@
+# strike_steps: the strike interval, in rupees, of the near contracts of an index.
+#
+# Columns
+#   underlying, exchange   the underlying symbol and its derivatives exchange (NFO, BFO)
+#   valid_from, valid_to   trade dates the row applies to, both inclusive (empty valid_to: open)
+#   strike_step            distance in rupees (index points) between adjacent strikes near
+#                          the money
+#   scope                  the contracts the interval applies to
+#   source                 the exchange circular or page the row was read from
+#   status                 verified: checked against that document; unverified: not confirmed
+#   note                   free text
+#
+# The exchange lists a fixed number of strikes at this interval around the money and,
+# for some indices, further strikes at a wider interval beyond them; long-dated
+# contracts use wider intervals still. This table carries the near interval only. It is
+# a guide for building a strike ladder; the strikes that actually traded come from data.
+#
+# NSE circulars: https://nsearchives.nseindia.com/content/circulars/FAOP<number>.pdf
+underlying,exchange,valid_from,valid_to,strike_step,scope,source,status,note
+NIFTY,NFO,2019-01-01,,50,weekly and monthly contracts,NSE/FAOP/37689 (2018-05-04); NSE/FAOP/73928 (2026-04-28),verified,Quarterly and half-yearly contracts use wider intervals
+BANKNIFTY,NFO,2019-01-01,,100,weekly and monthly contracts,NSE/FAOP/37689 (2018-05-04); NSE/FAOP/42646 (2019-11-14); NSE/FAOP/73928 (2026-04-28),verified,From 2022-07-01 strikes further from the money are 500 apart (NSE/FAOP/52473)
+FINNIFTY,NFO,2021-01-11,2022-10-18,100,weekly and monthly contracts,NSE/FAOP/46603 (2020-12-10); NSE/FAOP/53728 (2022-09-16),verified,
+FINNIFTY,NFO,2022-10-19,,50,weekly and near-month contracts,NSE/FAOP/53728 (2022-09-16); NSE/FAOP/73928 (2026-04-28),verified,Middle-month and far-month contracts are 100 apart
+MIDCPNIFTY,NFO,2022-01-24,2023-07-25,50,weekly and monthly contracts,NSE/FAOP/50968 (2022-01-10); NSE/FAOP/57319 (2023-06-27),verified,
+MIDCPNIFTY,NFO,2023-07-26,,25,weekly and monthly contracts,NSE/FAOP/57319 (2023-06-27); NSE/FAOP/73928 (2026-04-28),verified,Strikes further from the money are 100 apart
+NIFTYNXT50,NFO,2024-04-24,,100,monthly contracts,NSE/FAOP/61629 (2024-04-18); NSE/FAOP/73928 (2026-04-28),verified,Strikes further from the money are 500 apart
+SENSEX,BFO,2023-05-15,2026-11-11,100,all contracts,BSE contract specifications page states 100 as of 2026-11-12 only,unverified,No dated BSE document for the interval between the relaunch and 2026-11-12 was read
+SENSEX,BFO,2026-11-12,,100,all contracts,BSE contract specifications page (bseindia.com; read 2026-11-12),verified,
+BANKEX,BFO,2023-05-15,2026-11-11,100,all contracts,BSE contract specifications page states 100 as of 2026-11-12 only,unverified,No dated BSE document for the interval between the relaunch and 2026-11-12 was read
+BANKEX,BFO,2026-11-12,,100,all contracts,BSE contract specifications page (bseindia.com; read 2026-11-12),verified,
+NIFTYFPI,NFO,2026-08-12,,5,narrow range of the monthly contracts,NSE/FAOP/75239 (2026-07-16) annexure 1,verified,Strikes of the wide range are 20 apart

@@ -69,10 +69,23 @@ python examples/data_examples.py
 
 ## API Key
 
-The examples use the following API configuration:
+No API key is stored in this directory. The order, data, account and WebSocket feed
+examples (and `test.ipynb`) read the key from the `OPENALGO_API_KEY` environment variable
+and fall back to a placeholder:
 ```python
-api_key = "38f99d7d226cc0c3baa19dcacf0b1f049d2f68371da1dda2c97b1b63a3a9ca2e"
+api_key = os.getenv("OPENALGO_API_KEY", "your_api_key_here")
 host = "http://127.0.0.1:5000"
 ```
+
+Set the variable to your own key before running them:
+
+```bash
+export OPENALGO_API_KEY="your_api_key_here"   # On Unix/macOS
+# or
+$env:OPENALGO_API_KEY = "your_api_key_here"   # On Windows PowerShell
+```
+
+The other examples carry the `your_api_key_here` placeholder in the source: replace it
+locally, and do not commit a real key.
 
 Make sure your OpenAlgo server is running at the specified host before running the examples.

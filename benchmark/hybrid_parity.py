@@ -2,18 +2,22 @@
 """
 Hybrid parity: migrated _backend vs ORIGINAL numba kernels (NUMBA_DISABLE_JIT=1)
 on real RELIANCE data. ADX, Aroon, PivotPoints, SAR, DMI, ZigZag, WilliamsFractals, RWI.
+SAR has no kernel of its own left in its class, so it is checked against the
+plain-Python reference in test/indicator_references.py.
 """
 import os
 os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "test"))
 
 import numpy as np
 import pandas as pd
 
+import indicator_references as references
 from openalgo.indicators import _backend as b
-from openalgo.indicators.hybrid import (ADX, Aroon, PivotPoints, SAR, ZigZag,
+from openalgo.indicators.hybrid import (ADX, Aroon, PivotPoints, ZigZag,
                                         WilliamsFractals, RWI)
 
 DATA = Path(__file__).resolve().parent / "data"
@@ -70,14 +74,14 @@ def main():
         cmp(f"pp.{nm}", g, r)
 
     sv, st_ = b.sar(h, lo, 0.02, 0.2)
-    rsv, rst = SAR._calculate_sar(h, lo, 0.02, 0.2)
+    rsv, rst = references.sar(h, lo, 0.02, 0.2)
     cmp("sar.val", sv, rsv)
     cmp("sar.trend", st_, rst)
 
     cmp("zigzag", b.zigzag(h, lo, c, 5.0), ZigZag._calculate_zigzag(h, lo, c, 5.0))
 
     fu, fd = b.williams_fractals(h, lo, 2)
-    rfu, rfd = WilliamsFractals._calculate_fractals_tv(h, lo, 2)
+    rfu, rfd = WilliamsFractals._calculate_fractals(h, lo, 2)
     cmpb("fractals.up", fu, rfu)
     cmpb("fractals.down", fd, rfd)
 

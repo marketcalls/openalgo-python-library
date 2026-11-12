@@ -72,6 +72,19 @@ def _roll_nan(data, period, squares=False):
     return sums, cq[period:] - cq[:-period], counts
 
 
+def _require_same_length(**series):
+    """Raise ValueError unless every named series has the same number of bars."""
+    sizes = {name: values.size for name, values in series.items()}
+    if len(set(sizes.values())) > 1:
+        raise ValueError(f"All series must have the same length, got {sizes}")
+
+
+def _unknown_in_window(unknown, period):
+    """Number of True flags in each `period`-bar window; element k is bars [k, k+period)."""
+    before = np.concatenate(([0], np.cumsum(unknown)))
+    return before[period:] - before[:-period]
+
+
 def sma(data, period):
     data = _f(data)
     period = int(period)
@@ -238,6 +251,58 @@ def macd(data, fast_period, slow_period, signal_period):
     return macd_line, signal_line, histogram
 
 
+def _ema_from(series, period, start):
+    """EMA of `series` from bar `start` on; the bars before it are NaN."""
+    out = np.full(series.size, np.nan)
+    if start < series.size:
+        out[start:] = ema(series[start:], period)
+    return out
+
+
+def _first_value(data):
+    """Index of the first bar that is not NaN, or the series length when there is none."""
+    known = ~np.isnan(data)
+    return int(np.argmax(known)) if known.any() else data.size
+
+
+def dema(data, period):
+    """Double EMA: 2 * EMA - EMA(EMA).
+
+    Counting from the first bar that has a value, the second EMA is seeded
+    period-1 bars in and the result starts period-1 bars after that. A NaN bar
+    is NaN in the result; the EMAs keep their state across it.
+    """
+    data = _f(data)
+    period = int(period)
+    warmup = period - 1
+    first = _first_value(data)
+    ema1 = ema(data, period)
+    ema2 = _ema_from(ema1, period, first + warmup)
+    out = 2 * ema1 - ema2
+    out[:first + 2 * warmup] = np.nan
+    return out
+
+
+def tema(data, period):
+    """Triple EMA: 3 * EMA - 3 * EMA(EMA) + EMA(EMA(EMA)).
+
+    Counting from the first bar that has a value, each further EMA is seeded
+    period-1 bars after the one before it and the result starts period-1 bars
+    after the third. A NaN bar is NaN in the result; the EMAs keep their state
+    across it.
+    """
+    data = _f(data)
+    period = int(period)
+    warmup = period - 1
+    first = _first_value(data)
+    ema1 = ema(data, period)
+    ema2 = _ema_from(ema1, period, first + warmup)
+    ema3 = _ema_from(ema2, period, first + 2 * warmup)
+    out = 3 * ema1 - 3 * ema2 + ema3
+    out[:first + 3 * warmup] = np.nan
+    return out
+
+
 def bbands(data, period, std_dev):
     middle = sma(data, period)
     sd = stdev(data, period)
@@ -257,10 +322,12 @@ def stochastic(high, low, close, k_period, smooth_k, d_period):
     fk = k_period - 1
     for i in range(fk, n):
         fast_k[i] = 100.0 * (close[i] - ll[i]) / (hh[i] - ll[i]) if hh[i] != ll[i] else 50.0
-    slow_k = sma(fast_k[fk:], smooth_k)
-    slow_k = np.concatenate([np.full(fk, np.nan), slow_k])
-    slow_d = sma(slow_k[fk + smooth_k - 1:], d_period)
-    slow_d = np.concatenate([np.full(fk + smooth_k - 1, np.nan), slow_d])
+    # Each warm-up is capped at the series length, so both lines have one value
+    # per bar however short the input is.
+    warm_k = min(n, fk)
+    slow_k = np.concatenate([np.full(warm_k, np.nan), sma(fast_k[warm_k:], smooth_k)])
+    warm_d = min(n, fk + smooth_k - 1)
+    slow_d = np.concatenate([np.full(warm_d, np.nan), sma(slow_k[warm_d:], d_period)])
     return slow_k, slow_d
 
 
@@ -357,11 +424,14 @@ def t3(data, period, v_factor):
     return gd(gd(gd(data)))
 
 
-def kama_tv(data, length, fast_length, slow_length):
+def kama_full_window(data, length, fast_length, slow_length):
+    """KAMA with the efficiency ratio's volatility sum recomputed over the full
+    `length` window at every bar; the previous value is the source at the first
+    bar and after a NaN output."""
     data = _f(data)
     length, fast_length, slow_length = int(length), int(fast_length), int(slow_length)
     if HAVE_RUST:
-        return _rs.kama_tv(data, length, fast_length, slow_length)
+        return _rs.kama_full_window(data, length, fast_length, slow_length)
     n = data.size
     out = np.full(n, np.nan)
     if length <= 0 or n < length + 1:
@@ -510,11 +580,54 @@ def elderray(high, low, close, period):
     return high - e, low - e
 
 
+# Fisher Transform:
+#   value = 0.66 * ((price - lowest) / (highest - lowest) - 0.5) + 0.67 * value[1]
+#   fisher = 0.5 * ln((1 + value) / (1 - value)) + 0.5 * fisher[1]
+# with value held at +-0.999 once it passes +-0.99, so the logarithm stays finite.
+_FISHER_PRICE_WEIGHT = 0.66
+_FISHER_CARRY_WEIGHT = 0.67
+_FISHER_LIMIT = 0.99
+_FISHER_HELD_AT = 0.999
+
+
 def fisher(data, length):
+    """Fisher Transform of `data` over `length` bars: returns (fisher, trigger).
+
+    The trigger is the Fisher value before the bar, 0.0 at the start. Both are
+    NaN for the first length-1 bars and while a NaN is in the window; the
+    recursion keeps its state across such bars.
+    """
     data = _f(data)
+    length = int(length)
     if HAVE_RUST:
-        return _rs.fisher(data, int(length))
-    raise RuntimeError("fisher requires the _oaindicators extension")
+        return _rs.fisher(data, length)
+    n = data.size
+    fish = np.full(n, np.nan)
+    trigger = np.full(n, np.nan)
+    if length <= 0 or n < length:
+        return fish, trigger
+    # np.max and np.min are NaN for a window that holds a NaN.
+    windows = np.lib.stride_tricks.sliding_window_view(data, length)
+    highest_ = windows.max(axis=1).tolist()
+    lowest_ = windows.min(axis=1).tolist()
+    value = 0.0
+    prev = 0.0
+    first = length - 1
+    for i in range(first, n):
+        hi, lo = highest_[i - first], lowest_[i - first]
+        if hi != hi:
+            continue
+        trigger[i] = prev
+        if hi != lo:
+            value = (_FISHER_PRICE_WEIGHT * ((data[i] - lo) / (hi - lo) - 0.5)
+                     + _FISHER_CARRY_WEIGHT * value)
+            if value > _FISHER_LIMIT:
+                value = _FISHER_HELD_AT
+            elif value < -_FISHER_LIMIT:
+                value = -_FISHER_HELD_AT
+            prev = 0.5 * np.log((1.0 + value) / (1.0 - value)) + 0.5 * prev
+        fish[i] = prev
+    return fish, trigger
 
 
 def updown_streak(data):
@@ -647,17 +760,99 @@ def adl(high, low, close, volume):
 
 
 def cmf(high, low, close, volume, period):
+    """Chaikin Money Flow: sum(money flow volume, period) / sum(volume, period).
+
+    Money flow volume is ((close - low) - (high - close)) / (high - low) * volume,
+    zero on a bar with no range. 0.0 when the window's volume is not positive.
+    NaN for the first period-1 bars and while a NaN high, low, close or volume
+    is in the window.
+    """
     high, low, close, volume = _f(high), _f(low), _f(close), _f(volume)
+    _require_same_length(high=high, low=low, close=close, volume=volume)
+    period = int(period)
     if HAVE_RUST:
-        return _rs.cmf(high, low, close, volume, int(period))
-    raise RuntimeError("cmf requires the _oaindicators extension")
+        return _rs.cmf(high, low, close, volume, period)
+    n = close.size
+    out = np.full(n, np.nan)
+    if period <= 0 or n < period:
+        return out
+    unknown = np.isnan(high) | np.isnan(low) | np.isnan(close) | np.isnan(volume)
+    bar_range = high - low
+    with np.errstate(invalid="ignore", divide="ignore"):
+        multiplier = np.where(
+            high != low,
+            ((close - low) - (high - close)) / np.where(bar_range == 0, 1.0, bar_range),
+            0.0,
+        )
+        flow_volume = multiplier * volume
+        # Add the window one offset at a time, oldest bar first. That is the
+        # order the Rust kernel sums each window in, so the two agree to the
+        # last bit, which a difference of cumulative sums would not.
+        windows = n - period + 1
+        flow_sum = np.zeros(windows)
+        volume_sum = np.zeros(windows)
+        for offset in range(period):
+            flow_sum += flow_volume[offset:offset + windows]
+            volume_sum += volume[offset:offset + windows]
+        ratio = np.where(
+            volume_sum > 0, flow_sum / np.where(volume_sum > 0, volume_sum, 1.0), 0.0)
+    out[period - 1:] = np.where(_unknown_in_window(unknown, period) > 0, np.nan, ratio)
+    return out
 
 
 def mfi(high, low, close, volume, period):
+    """Money Flow Index, 0 to 100: 100 - 100 / (1 + positive flow / negative flow).
+
+    A bar's flow is typical price times volume: positive when the typical price
+    rose from the bar before, negative when it fell, zero when it did not move
+    or there is no bar before to compare with (bar 0, or the bar after a NaN
+    one). Flows are summed over `period` bars; 100 when the window has no
+    negative flow. NaN on bar 0, for the first period-1 bars, and while a bar
+    with a NaN price or volume is in the window.
+    """
     high, low, close, volume = _f(high), _f(low), _f(close), _f(volume)
+    _require_same_length(high=high, low=low, close=close, volume=volume)
+    period = int(period)
     if HAVE_RUST:
-        return _rs.mfi(high, low, close, volume, int(period))
-    raise RuntimeError("mfi requires the _oaindicators extension")
+        return _rs.mfi(high, low, close, volume, period)
+    n = close.size
+    out = np.full(n, np.nan)
+    if period <= 0 or n < 2:
+        return out
+    typical = (high + low + close) / 3.0
+    unknown = np.isnan(typical) | np.isnan(volume)
+    flow = typical * volume
+    comparable = ~unknown[1:] & ~np.isnan(typical[:-1])
+    positive = np.zeros(n)
+    negative = np.zeros(n)
+    positive[1:] = np.where(comparable & (typical[1:] > typical[:-1]), flow[1:], 0.0)
+    negative[1:] = np.where(comparable & (typical[1:] < typical[:-1]), flow[1:], 0.0)
+    # Running sums, updated add-then-drop like the Rust kernel so both backends
+    # accumulate the same rounding. Python floats are IEEE doubles too, and
+    # stepping through lists of them is far quicker than through an array.
+    positive, negative = positive.tolist(), negative.tolist()
+    positive_sum = [0.0] * n
+    negative_sum = [0.0] * n
+    pos = neg = 0.0
+    for i in range(1, n):
+        pos += positive[i]
+        neg += negative[i]
+        if i >= period:
+            pos -= positive[i - period]
+            neg -= negative[i - period]
+        positive_sum[i] = pos
+        negative_sum[i] = neg
+    first = max(1, period - 1)
+    pos_sum = np.asarray(positive_sum[first:])
+    neg_sum = np.asarray(negative_sum[first:])
+    # Unknown bars among the last `period` (fewer while the series is that short).
+    seen = np.cumsum(unknown)
+    in_window = seen - np.concatenate((np.zeros(min(period, n), dtype=seen.dtype), seen[:-period]))
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ratio = pos_sum / np.where(neg_sum == 0.0, 1.0, neg_sum)
+        index = np.where(neg_sum == 0.0, 100.0, 100.0 - 100.0 / (1.0 + ratio))
+    out[first:] = np.where(in_window[first:] > 0, np.nan, index)
+    return out
 
 
 def emv(high, low, volume, length, divisor):
@@ -702,8 +897,16 @@ def rma_smma(data, length):
 
 
 def session_vwap(source, volume, starts):
+    """Anchored VWAP: returns (vwap, stdev), restarted where `starts` is nonzero.
+
+    vwap = sum(price * volume) / sum(volume) over the period so far, stdev the
+    volume-weighted standard deviation of the price around it. Both are NaN on
+    a bar whose price or volume is NaN (the sums keep their state) and while
+    the period has no volume yet.
+    """
     source, volume = _f(source), _f(volume)
     starts = np.ascontiguousarray(starts, dtype=np.float64)
+    _require_same_length(source=source, volume=volume, starts=starts)
     if HAVE_RUST:
         return _rs.session_vwap(source, volume, starts)
     n = source.size
@@ -713,15 +916,14 @@ def session_vwap(source, volume, starts):
     for i in range(n):
         if starts[i] != 0.0 or i == 0:
             spv = sv = spv2 = 0.0
+        if np.isnan(source[i]) or np.isnan(volume[i]):
+            continue
         spv += source[i] * volume[i]
         sv += volume[i]
         spv2 += source[i] * source[i] * volume[i]
         if sv > 0:
             vwap[i] = spv / sv
             sd[i] = np.sqrt(max(0.0, spv2 / sv - vwap[i] ** 2))
-        else:
-            vwap[i] = source[i]
-            sd[i] = 0.0
     return vwap, sd
 
 
@@ -790,11 +992,73 @@ def pivot_points(high, low, close):
     return pivot, r1, s1, r2, s2, r3, s3
 
 
+_SAR_LONG = 1.0
+_SAR_SHORT = -1.0
+
+
 def sar(high, low, acceleration, maximum):
+    """Parabolic SAR: returns (sar, trend), trend +1.0 while long and -1.0 while short.
+
+    acceleration: starting value and step of the acceleration factor AF.
+    maximum:      largest AF.
+
+    The first bar that has a high and a low starts a long trend with stop = low
+    and extreme point EP = high. No close series is taken, so the first trend
+    is not read off the first two closes: it is always long, and a falling
+    market reverses it on the next bar. Every later bar, in this order:
+
+    1. stop = stop + AF * (EP - stop).
+    2. Reversal, tested against that unclamped stop with strict comparisons.
+       Long and stop > low: go short, stop = max(high, EP), EP = low, AF reset.
+       Short and stop < high: go long, stop = min(low, EP), EP = high, AF reset.
+       A bar that only touches the stop does not reverse.
+    3. Without a reversal, a new extreme becomes EP and raises AF by
+       `acceleration`, up to `maximum`.
+    4. Clamp, on reversal bars too: when long the stop is at most the lows of
+       the two previous bars, when short at least their highs.
+
+    A bar with a NaN high or low is skipped: its outputs are NaN, the state is
+    kept, and it does not count as one of the two previous bars.
+    """
     high, low = _f(high), _f(low)
+    _require_same_length(high=high, low=low)
+    acceleration, maximum = float(acceleration), float(maximum)
     if HAVE_RUST:
-        return _rs.sar(high, low, float(acceleration), float(maximum))
-    raise RuntimeError("sar requires the _oaindicators extension")
+        return _rs.sar(high, low, acceleration, maximum)
+    n = high.size
+    stops = [np.nan] * n
+    trends = [np.nan] * n
+    long = True
+    stop = extreme = np.nan
+    factor = acceleration
+    previous = before_previous = None  # (high, low) of the last two bars that had both
+    for i, (bar_high, bar_low) in enumerate(zip(high.tolist(), low.tolist(), strict=True)):
+        if bar_high != bar_high or bar_low != bar_low:
+            continue
+        if previous is None:
+            stop, extreme = bar_low, bar_high
+        else:
+            stop += factor * (extreme - stop)
+            if long and stop > bar_low:
+                long = False
+                stop, extreme, factor = max(bar_high, extreme), bar_low, acceleration
+            elif not long and stop < bar_high:
+                long = True
+                stop, extreme, factor = min(bar_low, extreme), bar_high, acceleration
+            else:
+                new_extreme = bar_high > extreme if long else bar_low < extreme
+                if new_extreme:
+                    extreme = bar_high if long else bar_low
+                    factor = min(factor + acceleration, maximum)
+            earlier = [bar for bar in (previous, before_previous) if bar is not None]
+            if long:
+                stop = min([stop] + [earlier_low for _, earlier_low in earlier])
+            else:
+                stop = max([stop] + [earlier_high for earlier_high, _ in earlier])
+        stops[i] = stop
+        trends[i] = _SAR_LONG if long else _SAR_SHORT
+        previous, before_previous = (bar_high, bar_low), previous
+    return np.asarray(stops, dtype=np.float64), np.asarray(trends, dtype=np.float64)
 
 
 def rwi(high, low, close, period):
@@ -1193,23 +1457,41 @@ def swma(data):
     return out
 
 
+_SWMA_WARMUP = 3  # bars before the 4-bar swma has its first value
+
+
 def rvi_vigor(open_, high, low, close, period):
+    """Relative Vigor Index: returns (rvi, signal).
+
+    rvi = sum(swma(close - open), period) / sum(swma(high - low), period) and
+    signal = swma(rvi) (John Ehlers, "Relative Vigor Index", 2002). The first value
+    is at bar period + 2, the first signal three bars later. A bar is NaN while
+    any bar feeding its window is NaN.
+    """
     open_, high, low, close = _f(open_), _f(high), _f(low), _f(close)
+    _require_same_length(open=open_, high=high, low=low, close=close)
     period = int(period)
+    n = close.size
+    first = period + _SWMA_WARMUP - 1
+    if period < 0 or n <= first:
+        return np.full(n, np.nan), np.full(n, np.nan)
     if HAVE_RUST:
         return _rs.rvi_vigor(open_, high, low, close, period)
-    sco = swma(close - open_)
-    shl = swma(high - low)
-    n = close.size
+    body = swma(close - open_)
+    bar_range = swma(high - low)
+    # Sum each window oldest bar first (the Rust kernel's order). A NaN bar
+    # makes the sums it enters NaN, and such a bar stays NaN.
+    windows = n - first
+    body_sum = np.zeros(windows)
+    range_sum = np.zeros(windows)
+    for offset in range(_SWMA_WARMUP, _SWMA_WARMUP + period):
+        body_sum += body[offset:offset + windows]
+        range_sum += bar_range[offset:offset + windows]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ratio = np.where(
+            range_sum != 0.0, body_sum / np.where(range_sum != 0.0, range_sum, 1.0), 0.0)
     rvi = np.full(n, np.nan)
-    for i in range(period + 2, n):
-        ns = ds = 0.0
-        for j in range(i - period + 1, i + 1):
-            if not np.isnan(sco[j]):
-                ns += sco[j]
-            if not np.isnan(shl[j]):
-                ds += shl[j]
-        rvi[i] = ns / ds if ds != 0.0 else 0.0
+    rvi[first:] = np.where(np.isnan(body_sum) | np.isnan(range_sum), np.nan, ratio)
     return rvi, swma(rvi)
 
 
@@ -1312,11 +1594,46 @@ def chop(high, low, close, period):
 
 
 def cmo(data, period):
+    """Chande Momentum Oscillator, -100 to 100: 100 * (up - down) / (up + down).
+
+    `up` and `down` are the sums of the rises and of the falls among the last
+    `period` bar-to-bar changes of `data`. 0.0 when nothing moved. NaN for the
+    first `period` bars and while a NaN is among the period+1 bars those
+    changes span.
+    """
     data = _f(data)
     period = int(period)
+    n = data.size
+    out = np.full(n, np.nan)
+    if period < 0 or period >= n:
+        return out
     if HAVE_RUST:
         return _rs.cmo(data, period)
-    raise RuntimeError("cmo requires the _oaindicators extension")
+    changes = np.diff(data)
+    # A change next to a NaN bar is NaN: neither a rise nor a fall.
+    unknown = np.isnan(changes)
+    rises = np.where(changes > 0.0, changes, 0.0).tolist()
+    falls = np.where(changes < 0.0, -changes, 0.0).tolist()
+
+    def oscillator(up, down):
+        total = up + down
+        return ((up - down) / total) * 100.0 if total > 0.0 else 0.0
+
+    # Rolling sums, updated drop-then-add like the Rust kernel so both backends
+    # accumulate the same rounding. Bar i ends the window of changes i-period..i-1.
+    # (A plain loop, not sum(): the built-in compensates float rounding.)
+    up = down = 0.0
+    for rise, fall in zip(rises[:period], falls[:period], strict=True):
+        up += rise
+        down += fall
+    values = [oscillator(up, down)]
+    for i in range(period + 1, n):
+        up = up - rises[i - period - 1] + rises[i - 1]
+        down = down - falls[i - period - 1] + falls[i - 1]
+        values.append(oscillator(up, down))
+    in_window = _unknown_in_window(unknown, period) if period > 0 else np.zeros(n, dtype=int)
+    out[period:] = np.where(in_window > 0, np.nan, values)
+    return out
 
 
 def roc_osc(data, period):
@@ -1437,7 +1754,7 @@ def vwma_strict(values, volume, length):
 
 
 # ---------------------------------------------------------------------------
-# TA-Lib-compatible additions (new indicators; match TA-Lib exactly by definition)
+# Price transforms, rate-of-change variants and other single-formula indicators
 # ---------------------------------------------------------------------------
 
 def avgprice(open_, high, low, close):
@@ -1471,7 +1788,7 @@ def midprice(high, low, period):
 
 
 def mom(data, period):
-    """Momentum = data - data[period] (TA-Lib MOM)."""
+    """Momentum = data - data[period]."""
     data = _f(data)
     period = int(period)
     n = data.size
@@ -1509,20 +1826,22 @@ def rocr100(data, period):
 
 
 def apo(data, fast_period, slow_period, ma_type):
-    """Absolute Price Oscillator = MA(fast) - MA(slow) (TA-Lib APO; matype SMA/EMA)."""
+    """Absolute Price Oscillator = MA(fast) - MA(slow), with ma_type SMA or EMA."""
     data = _f(data)
     if ma_type.upper() == "EMA":
         return ema(data, int(fast_period)) - ema(data, int(slow_period))
     return _win_mean(data, int(fast_period)) - _win_mean(data, int(slow_period))
 
 
-# --- TA-Lib-faithful directional-movement family (matches TA-Lib seeding) ---
+# --- Directional movement as Wilder running sums: seeded with the plain sum of the
+# first period-1 one-bar movements, then sum = sum - sum/period + today. A different
+# seed and warm-up from adx(), which averages the first `period` bars. ---
 
 def plus_dm(high, low, period):
     high, low = _f(high), _f(low)
     period = int(period)
     if HAVE_RUST:
-        return _rs.plus_dm_talib(high, low, period)
+        return _rs.plus_dm_wilder_sum(high, low, period)
     n = high.size
     out = np.full(n, np.nan)
     if period == 0 or n < period:
@@ -1547,7 +1866,7 @@ def minus_dm(high, low, period):
     high, low = _f(high), _f(low)
     period = int(period)
     if HAVE_RUST:
-        return _rs.minus_dm_talib(high, low, period)
+        return _rs.minus_dm_wilder_sum(high, low, period)
     n = high.size
     out = np.full(n, np.nan)
     if period == 0 or n < period:
@@ -1572,7 +1891,7 @@ def dx(high, low, close, period):
     high, low, close = _f(high), _f(low), _f(close)
     period = int(period)
     if HAVE_RUST:
-        return _rs.dx_talib(high, low, close, period)
+        return _rs.dx_wilder_sum(high, low, close, period)
     n = close.size
     out = np.full(n, np.nan)
     if period == 0 or n < period + 1:
@@ -1603,11 +1922,11 @@ def dx(high, low, close, period):
     return out
 
 
-def adx_talib(high, low, close, period):
+def adx_wilder_sum(high, low, close, period):
     high, low, close = _f(high), _f(low), _f(close)
     period = int(period)
     if HAVE_RUST:
-        return _rs.adx_talib(high, low, close, period)
+        return _rs.adx_wilder_sum(high, low, close, period)
     n = close.size
     out = np.full(n, np.nan)
     if period == 0 or n < 2 * period:
@@ -1654,8 +1973,8 @@ def adxr(high, low, close, period):
     high, low, close = _f(high), _f(low), _f(close)
     period = int(period)
     if HAVE_RUST:
-        return _rs.adxr_talib(high, low, close, period)
-    a = adx_talib(high, low, close, period)
+        return _rs.adxr_wilder_sum(high, low, close, period)
+    a = adx_wilder_sum(high, low, close, period)
     n = a.size
     out = np.full(n, np.nan)
     if period == 0:
@@ -1826,7 +2145,7 @@ def _win_mean(data, period):
 
 
 def _win_std(data, period):
-    """Per-window population std; NaN if the window contains any NaN (TV ta.stdev)."""
+    """Per-window population std (divides by N); NaN if the window contains any NaN."""
     data = _f(data)
     if HAVE_RUST:
         return _rs.win_std(data, int(period))
@@ -1901,7 +2220,9 @@ def ulcerindex(data, length, smooth_length, signal_length, signal_type, return_s
     with np.errstate(invalid="ignore", divide="ignore"):
         dd = np.where((~np.isnan(hh)) & (hh != 0),
                       100.0 * (data - hh) / np.where(hh == 0, 1.0, hh), np.nan)
-    ulcer = np.sqrt(sma(dd ** 2, int(smooth_length)))
+    # A rolling mean of squares can land a hair below zero from rounding in the
+    # running sum; that is zero, not NaN. np.maximum keeps NaN where the mean is NaN.
+    ulcer = np.sqrt(np.maximum(sma(dd ** 2, int(smooth_length)), 0.0))
     if return_signal:
         sig = sma(ulcer, int(signal_length)) if signal_type.upper() == "SMA" \
             else ema(ulcer, int(signal_length))
@@ -1992,8 +2313,34 @@ def natr(high, low, close, period):
 
 
 def rvi_volatility(data, stdev_period, rsi_period):
+    """Relative Volatility Index (Donald Dorsey, 1993), 0 to 100.
+
+    s = population standard deviation of the last `stdev_period` values.
+    A bar that closes above the bar before puts s on the up side, a bar that
+    closes below puts it on the down side, an unchanged bar on neither.
+    U and D are the up and down sides under Wilder's smoothing over
+    `rsi_period` bars (the average the RSI uses: seeded with the mean of the
+    first `rsi_period` values, then (previous * (n - 1) + new) / n).
+    RVI = 100 * U / (U + D), and 50 when there is no volatility on either side.
+
+    The first value is at bar stdev_period + rsi_period - 2. A bar is NaN while
+    a NaN is in its deviation window or the bar before it is NaN; the smoothing
+    keeps its state across such bars.
+    """
     data = _f(data)
-    return rsi(stdev(data, int(stdev_period)), int(rsi_period))
+    deviation = stdev(data, int(stdev_period))
+    move = np.full(data.size, np.nan)
+    move[1:] = data[1:] - data[:-1]
+    known = ~np.isnan(deviation) & ~np.isnan(move)
+    up_side = ema_wilder(np.where(known, np.where(move > 0, deviation, 0.0), np.nan),
+                         int(rsi_period))
+    down_side = ema_wilder(np.where(known, np.where(move < 0, deviation, 0.0), np.nan),
+                           int(rsi_period))
+    total = up_side + down_side
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out = np.where(total > 0, 100.0 * up_side / np.where(total > 0, total, 1.0), 50.0)
+    out[~known | np.isnan(total)] = np.nan
+    return out
 
 
 def ultosc(high, low, close, period1, period2, period3):
@@ -2019,18 +2366,32 @@ def ultosc(high, low, close, period1, period2, period3):
     return out
 
 
-def highest(data, period):
+def _rolling_extreme(data, period, want_max):
+    """Rolling maximum or minimum of `data` over `period` bars.
+
+    NaN for the first period-1 bars and where the window holds a NaN. A period
+    of 0, or longer than the series, has no window: every bar is NaN.
+    """
     data = _f(data)
+    period = _lookback(period, "period")
+    out = np.full(data.size, np.nan)
+    if period == 0 or period > data.size:
+        return out
     if HAVE_RUST:
-        return _rs.highest(data, int(period))
-    return _roll(data, int(period), np.max)
+        return (_rs.highest if want_max else _rs.lowest)(data, period)
+    windows = np.lib.stride_tricks.sliding_window_view(data, period)
+    out[period - 1:] = windows.max(axis=1) if want_max else windows.min(axis=1)
+    return out
+
+
+def highest(data, period):
+    """Rolling maximum (see `_rolling_extreme`)."""
+    return _rolling_extreme(data, period, want_max=True)
 
 
 def lowest(data, period):
-    data = _f(data)
-    if HAVE_RUST:
-        return _rs.lowest(data, int(period))
-    return _roll(data, int(period), np.min)
+    """Rolling minimum (see `_rolling_extreme`)."""
+    return _rolling_extreme(data, period, want_max=False)
 
 
 def supertrend(high, low, close, period, multiplier):
@@ -2086,12 +2447,290 @@ def chande_kroll_stop(high, low, close, p, x, q):
     return long_stop, short_stop
 
 
+# FRAMA constants (John Ehlers, Fractal Adaptive Moving Average, 2005):
+# the EMA weight is exp(_FRAMA_DECAY * (dimension - 1)), never below
+# _FRAMA_MIN_ALPHA. The filter is then smoothed by a trailing mean over
+# _FRAMA_SMOOTHING bars.
+_FRAMA_DECAY = -4.6
+_FRAMA_MIN_ALPHA = 0.01
+_FRAMA_SMOOTHING = 5
+
+
+def _window_range(high, low, width):
+    """Highest high minus lowest low of each `width`-bar window; element k is bars [k, k+width)."""
+    return (np.lib.stride_tricks.sliding_window_view(high, width).max(axis=1)
+            - np.lib.stride_tricks.sliding_window_view(low, width).min(axis=1))
+
+
 def frama(high, low, period):
+    """Fractal Adaptive Moving Average of the bar midpoint (high + low) / 2.
+
+    Bars are counted from the first one that has a midpoint. For the first
+    `period` bars the filter is the midpoint. After that the fractal dimension
+    compares the high-low range of the last `period` bars with the ranges of
+    its newer and older halves: D = (ln(N1 + N2) - ln(N3)) / ln(2), each N a
+    range divided by its bar count, and D = 1 when a range is not positive.
+    The filter is an EMA of the midpoint with weight exp(-4.6 * (D - 1)) held
+    between 0.01 and 1. The result is the midpoint for the first period + 1
+    bars and the 5-bar mean of the filter from then on. `period` is in bars
+    and is meant to be even.
+
+    The filter is NaN while a NaN bar is among the `period` bars of its ranges
+    and resumes from its last value afterwards; the result is NaN while a NaN
+    filter value is among the five it averages.
+    """
     high, low = _f(high), _f(low)
+    _require_same_length(high=high, low=low)
+    # A period beyond the series never leaves the first-bars rule, like the
+    # series length itself.
+    period = min(int(period), high.size)
     if HAVE_RUST:
-        return _rs.frama(high, low, int(period))
-    # numpy fallback omitted for brevity; rust path is the supported one.
-    raise RuntimeError("frama requires the _oaindicators extension")
+        return _rs.frama(high, low, period)
+    out = np.full(high.size, np.nan)
+    first = _first_value(high + low)
+    high, low = high[first:], low[first:]
+    price = (high + low) / 2.0
+    bars = price.size
+    half = period // 2
+    filt = price.copy()
+    if half > 0 and bars > period:
+        # Element k of a window array covers the bars from k on, so the window
+        # ending at bar i with `width` bars is element i - width + 1.
+        adaptive = np.arange(period, bars)
+        whole = _window_range(high, low, period)[adaptive - period + 1] / period
+        newer = _window_range(high, low, half)[adaptive - half + 1] / half
+        older = _window_range(high, low, period - half)[adaptive - period + 1] / half
+        with np.errstate(invalid="ignore", divide="ignore"):
+            defined = (newer > 0) & (older > 0) & (whole > 0)
+            dimension = np.where(
+                defined,
+                (np.log(np.where(defined, newer + older, 1.0))
+                 - np.log(np.where(defined, whole, 1.0))) / np.log(2.0),
+                1.0,
+            )
+            alpha = np.fmax(
+                np.fmin(np.exp(_FRAMA_DECAY * (dimension - 1.0)), 1.0), _FRAMA_MIN_ALPHA)
+        usable = _unknown_in_window(np.isnan(price), period)[adaptive - period + 1] == 0
+        weights = alpha.tolist()
+        values = price.tolist()
+        last = np.nan
+        for i in range(bars):
+            if i >= period:
+                if usable[i - period]:
+                    weight = weights[i - period]
+                    values[i] = weight * values[i] + (1.0 - weight) * last
+                else:
+                    values[i] = np.nan
+            if values[i] == values[i]:
+                last = values[i]
+        filt[:] = values
+    smoothed = price.copy()
+    lag = _FRAMA_SMOOTHING - 1
+    start = max(period + 1, lag)
+    smoothed[period + 1:start] = filt[period + 1:start]
+    if bars > start:
+        # Summed oldest bar first (the order the Rust kernel uses). A NaN filter
+        # value among the five makes the sum, and so the bar, NaN.
+        total = np.zeros(bars - start)
+        for offset in range(_FRAMA_SMOOTHING):
+            total += filt[start - lag + offset:bars - lag + offset]
+        smoothed[start:] = total / _FRAMA_SMOOTHING
+    out[first:] = smoothed
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Signal helpers behind the public `ta` utilities (crossover, exrem, ...).
+#
+# Each runs in the Rust core and has a vectorised NumPy fallback that returns
+# the same values, so neither backend loops over bars in Python. All of them
+# take array-likes and return a NumPy array with one value per bar.
+# ---------------------------------------------------------------------------
+
+# Largest n for which valuewhen resolves the n-th most recent true bar.
+_VALUEWHEN_LOOKBACK_CAP = 1000
+
+
+def _lookback(length, name="length"):
+    """A bar count as a non-negative int. Raises ValueError for a negative one."""
+    length = int(length)
+    if length < 0:
+        raise ValueError(f"{name} must be zero or positive, got {length}")
+    return length
+
+
+def _aligned(first, second, first_name, second_name):
+    """Two series as float64 arrays of the length of the first.
+
+    The first series sets the number of bars. A longer second series is read
+    only that far; a shorter one is an IndexError.
+    """
+    a, b = _f(first), _f(second)
+    if b.size < a.size:
+        raise IndexError(
+            f"{second_name} has {b.size} values but {first_name} has {a.size}: "
+            f"{second_name} must be at least as long as {first_name}"
+        )
+    return a, (b if b.size == a.size else np.ascontiguousarray(b[:a.size]))
+
+
+def _cross_masks(a, b):
+    """(crossed above, crossed below) as boolean arrays, both False on bar 0."""
+    over = np.zeros(a.size, dtype=bool)
+    under = np.zeros(a.size, dtype=bool)
+    # A comparison against NaN is False, so a NaN on the bar or on the bar
+    # before blocks both signals without an explicit mask.
+    over[1:] = (a[1:] > b[1:]) & (a[:-1] <= b[:-1])
+    under[1:] = (a[1:] < b[1:]) & (a[:-1] >= b[:-1])
+    return over, under
+
+
+def crossover(series1, series2):
+    """Bars where series1 crosses above series2.
+
+    True on bar i when series1[i] > series2[i] and series1[i-1] <= series2[i-1].
+    False on bar 0 and wherever one of those four values is NaN.
+    """
+    a, b = _aligned(series1, series2, "series1", "series2")
+    if HAVE_RUST:
+        return _rs.crossover(a, b)
+    return _cross_masks(a, b)[0]
+
+
+def crossunder(series1, series2):
+    """Bars where series1 crosses below series2.
+
+    True on bar i when series1[i] < series2[i] and series1[i-1] >= series2[i-1].
+    False on bar 0 and wherever one of those four values is NaN.
+    """
+    a, b = _aligned(series1, series2, "series1", "series2")
+    if HAVE_RUST:
+        return _rs.crossunder(a, b)
+    return _cross_masks(a, b)[1]
+
+
+def cross(series1, series2):
+    """Bars where series1 crosses series2 in either direction (crossover or crossunder)."""
+    a, b = _aligned(series1, series2, "series1", "series2")
+    if HAVE_RUST:
+        return _rs.cross(a, b)
+    over, under = _cross_masks(a, b)
+    return over | under
+
+
+def rising(data, length):
+    """Bars where data[i] > data[i-length]; `length` in bars.
+
+    False for the first `length` bars and wherever either value is NaN.
+    """
+    data = _f(data)
+    length = _lookback(length)
+    if HAVE_RUST:
+        return _rs.rising(data, length)
+    out = np.zeros(data.size, dtype=bool)
+    if 0 < length < data.size:
+        out[length:] = data[length:] > data[:-length]
+    return out
+
+
+def falling(data, length):
+    """Bars where data[i] < data[i-length]; `length` in bars.
+
+    False for the first `length` bars and wherever either value is NaN.
+    """
+    data = _f(data)
+    length = _lookback(length)
+    if HAVE_RUST:
+        return _rs.falling(data, length)
+    out = np.zeros(data.size, dtype=bool)
+    if 0 < length < data.size:
+        out[length:] = data[length:] < data[:-length]
+    return out
+
+
+def change(data, length=1):
+    """data[i] - data[i-length], as float64; NaN for the first `length` bars."""
+    data = _f(data)
+    length = _lookback(length)
+    if HAVE_RUST:
+        return _rs.change(data, length)
+    if length == 0:
+        return data - data
+    out = np.full(data.size, np.nan)
+    if length < data.size:
+        out[length:] = data[length:] - data[:-length]
+    return out
+
+
+def _last_true(mask):
+    """Index of the latest True at or before each bar, -1 before the first one."""
+    return np.maximum.accumulate(np.where(mask, np.arange(mask.size), -1))
+
+
+def exrem(primary, secondary):
+    """Excess removal: keep the first `primary` signal, drop the repeats.
+
+    primary, secondary: boolean-like, one value per bar; nonzero (NaN included)
+    counts as True. Returns a boolean array: True on a `primary` bar while
+    armed. A kept signal disarms, a `secondary` bar re-arms. On a bar where
+    both are set the signal is kept if armed, otherwise the bar re-arms.
+    """
+    p, s = _aligned(primary, secondary, "primary", "secondary")
+    if HAVE_RUST:
+        return _rs.exrem(p, s)
+    p, s = p != 0.0, s != 0.0
+    # Excess removal is a two-state machine (armed or latched), and a bar
+    # applies one of four maps to the state: primary only -> latched, secondary
+    # only -> armed, both -> the other state, neither -> unchanged. So the
+    # state after a bar is the one set by the latest one-sided bar, switched
+    # once for every two-sided bar since then.
+    one_sided = p ^ s
+    two_sided = p & s
+    setter = _last_true(one_sided)
+    set_latched = np.where(setter >= 0, p[np.maximum(setter, 0)], False)
+    switches = np.cumsum(two_sided)
+    switches_since = switches - np.where(setter >= 0, switches[np.maximum(setter, 0)], 0)
+    latched_after = set_latched ^ (switches_since % 2 == 1)
+    latched_before = np.zeros(p.size, dtype=bool)
+    latched_before[1:] = latched_after[:-1]
+    return p & ~latched_before
+
+
+def flip(primary, secondary):
+    """Latch: True from a `primary` bar until the next `secondary` bar.
+
+    primary, secondary: boolean-like, one value per bar; nonzero (NaN included)
+    counts as True. Returns a boolean array. A bar where both are set counts
+    as `primary`.
+    """
+    p, s = _aligned(primary, secondary, "primary", "secondary")
+    if HAVE_RUST:
+        return _rs.flip(p, s)
+    p, s = p != 0.0, s != 0.0
+    latest = _last_true(p | s)
+    return np.where(latest >= 0, p[np.maximum(latest, 0)], False)
+
+
+def valuewhen(expr, array, n=1):
+    """`array` at the n-th most recent bar where `expr` was true (n=1: the latest).
+
+    expr: boolean-like condition, one value per bar (nonzero is True).
+    Returns float64, NaN until `expr` has been true n times. An n below 1, above
+    the series length or above 1000 never resolves: every bar is NaN.
+    """
+    condition, values = _aligned(expr, array, "expr", "array")
+    n = int(n)
+    out = np.full(condition.size, np.nan)
+    if n < 1 or n > min(_VALUEWHEN_LOOKBACK_CAP, condition.size):
+        return out
+    if HAVE_RUST:
+        return _rs.valuewhen(condition, values, n)
+    true_bar = condition != 0.0
+    true_bars = np.flatnonzero(true_bar)
+    seen = np.cumsum(true_bar)
+    resolved = seen >= n
+    out[resolved] = values[true_bars[seen[resolved] - n]]
+    return out
 
 
 def ichimoku(high, low, close, conv, base, span2, disp):

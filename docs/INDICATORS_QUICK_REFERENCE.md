@@ -92,10 +92,10 @@ import numpy as np
 | NVI with EMA | `ta.nvi_with_ema(close, volume, ema_length)` | close, volume, ema_length=255 | (nvi, ema) | `nvi, ema = ta.nvi_with_ema(c, v)` |
 | PVI | `ta.pvi(close, volume, initial_value)` | close, volume, initial_value=100.0 | Array | `pvi = ta.pvi(close, volume)` |
 | PVI with Signal | `ta.pvi_with_signal(c, v, init, sig_type, sig_len)` | close, volume, initial_value=100.0, signal_type="EMA", signal_length=255 | (pvi, signal) | `pvi, sig = ta.pvi_with_signal(c, v)` |
-| Volume Oscillator (TV v6) | `ta.volosc(v, short_length, long_length, check_volume_validity)` | volume, short_length=5, long_length=10, check_volume_validity=True | Array (%) | `vo = ta.volosc(v, 5, 10)` |
+| Volume Oscillator | `ta.volosc(v, short_length, long_length, check_volume_validity)` | volume, short_length=5, long_length=10, check_volume_validity=True | Array (%) | `vo = ta.volosc(v, 5, 10)` |
 | Volume ROC | `ta.vroc(volume, period)` | volume, period=25 | Array (%) | `vroc = ta.vroc(volume, 25)` |
 | Klinger Volume Osc | `ta.kvo(h, l, c, v, fast=34, slow=55)` | high, low, close, volume, fast=34, slow=55 | Array | `kvo = ta.kvo(h, l, c, v)` |
-| Price Volume Trend | `ta.pvt(close, volume)` | close, volume | Array | `pvt = ta.pvt(close, volume)` # TradingView formula |
+| Price Volume Trend | `ta.pvt(close, volume)` | close, volume | Array | `pvt = ta.pvt(close, volume)` |
 
 ### Oscillators (18) - 100% Working ✅
 
@@ -118,7 +118,7 @@ import numpy as np
 | Know Sure Thing | `ta.kst(data, roclen1=10, roclen2=15, roclen3=20, roclen4=30, smalen1=10, smalen2=10, smalen3=10, smalen4=15, siglen=9)` | data, ROC/SMA periods, siglen=9 | (kst, signal) | `kst, sig = ta.kst(close)` |
 | Schaff Trend Cycle | `ta.stc(data, fast_length=23, slow_length=50, cycle_length=10, d1_length=3, d2_length=3)` | data, fast_length=23, slow_length=50, cycle_length=10, d1_length=3, d2_length=3 | Array (0-100) | `stc = ta.stc(close)` |
 | True Strength Index | `ta.tsi(data, long=25, short=13, signal=13)` | data, long=25, short=13, signal=13 | (tsi, signal) | `tsi, sig = ta.tsi(close)` |
-| Vortex Indicator (TV v6) | `ta.vi(high, low, close, period=14)` | high, low, close, period=14 | (vi_plus, vi_minus) | `vip, vim = ta.vi(h, l, c)` |
+| Vortex Indicator | `ta.vi(high, low, close, period=14)` | high, low, close, period=14 | (vi_plus, vi_minus) | `vip, vim = ta.vi(h, l, c)` |
 | Gator Oscillator | `ta.gator_oscillator(high, low, jaw=13, teeth=8, lips=5)` | high, low, jaw=13, teeth=8, lips=5 | (upper, lower) | `u, l = ta.gator_oscillator(h, l)` |
 | **Coppock** | `ta.coppock(data, wma=10, long_roc=14, short_roc=11)` | data, wma=10, long_roc=14, short_roc=11 | Array | `coppock = ta.coppock(close)` |
 
@@ -130,7 +130,7 @@ import numpy as np
 | LR Slope | `ta.lrslope(data, period, interval)` | data, period=100, interval=1 | Array | `slope = ta.lrslope(close, 100, 1)` |
 | Correlation | `ta.correlation(data1, data2, period)` | data1, data2, period=20 | Array (-1 to 1) | `corr = ta.correlation(stock1, stock2, 20)` |
 | Beta | `ta.beta(asset, market, period)` | asset, market, period=252 | Array | `beta = ta.beta(stock, market, 252)` |
-| Variance (TV v4) | `ta.variance(data, lookback, mode, ema_period, filter_lookback, ema_length, return_components)` | data, lookback=20, mode="PR", ema_period=20, filter_lookback=20, ema_length=14, return_components=False | Array/Tuple | `var = ta.variance(close, lookback=20, mode="LR")` |
+| Variance | `ta.variance(data, lookback, mode, ema_period, filter_lookback, ema_length, return_components)` | data, lookback=20, mode="PR", ema_period=20, filter_lookback=20, ema_length=14, return_components=False | Array/Tuple | `var = ta.variance(close, lookback=20, mode="LR")` |
 | TSF | `ta.tsf(data, period)` | data, period=14 | Array | `tsf = ta.tsf(close, 14)` |
 | Median | `ta.median(data, period)` | data, period=3 | Array | `med = ta.median(close, 3)` |
 | Median Bands | `ta.median_bands(h, l, c, src, m_len, a_len, a_mult)` | high, low, close, source=None, median_length=3, atr_length=14, atr_mult=2.0 | (median, upper, lower, ema) | `m, u, l, e = ta.median_bands(h, l, c)` |
@@ -235,7 +235,7 @@ stop_loss = ta.valuewhen(buy_signal, ta.lowest(low, 10), 1)
 
 ### Rising/Falling Trend Detection
 ```python
-# Pine Script-style trend detection
+# Trend detection: compare each value with its value n bars ago
 price_rising_5 = ta.rising(close, 5)  # Price rising over 5 periods
 volume_rising = ta.rising(volume, 3)  # Volume increasing over 3 periods
 
@@ -267,7 +267,7 @@ price_cross_200ma = ta.cross(close, ta.sma(close, 200))
 ### Coppock Curve for Long-term Analysis
 ```python
 # Long-term momentum indicator for indices
-coppock = ta.coppock(close)  # Uses TradingView defaults (10, 14, 11)
+coppock = ta.coppock(close)  # Uses the defaults (10, 14, 11)
 
 # Zero line crossovers for major signals
 coppock_bullish = (coppock > 0) & (ta.change(coppock, 1) > 0)
@@ -545,7 +545,7 @@ chop = ta.chop(high, low, close, period=14)
 # Know Sure Thing - smoothed rate-of-change momentum oscillator
 kst, signal = ta.kst(close)
 
-# Schaff Trend Cycle - TradingView Pine Script v4 (combines MACD with stochastics)
+# Schaff Trend Cycle - combines MACD with stochastics
 stc = ta.stc(close, fast_length=23, slow_length=50, cycle_length=10)
 
 # True Strength Index - double-smoothed momentum oscillator
@@ -573,12 +573,12 @@ long_exit, short_exit = ta.chandelier_exit(high, low, close, period=22, multipli
 # Historical Volatility - realized volatility measure
 hv = ta.hv(close, period=20, annualize=True)
 
-# Ulcer Index - TradingView Pine Script v4 (downside risk measure with signal line)
+# Ulcer Index - downside risk measure with signal line
 ui = ta.ulcerindex(close, length=14, smooth_length=14)
 # With signal line
 ui, signal = ta.ulcerindex(close, length=14, smooth_length=14, signal_length=52, signal_type="SMA", return_signal=True)
 
-# STARC Bands - TradingView Pine Script v2 (SMA with ATR-based bands)
+# STARC Bands - SMA with ATR-based bands
 upper, middle, lower = ta.starc(high, low, close, ma_period=5, atr_period=15, multiplier=1.33)
 ```
 

@@ -18,7 +18,7 @@ def test_ckstop_real():
     print("=" * 50)
     
     client = api(
-        api_key='91300b85a12a7c3c5c7fb091b6a8f17f94222a41a339d3e76640cf9bf4831350', 
+        api_key=os.getenv('OPENALGO_API_KEY', 'your_api_key_here'), 
         host='http://127.0.0.1:5001'
     )
     
@@ -34,7 +34,7 @@ def test_ckstop_real():
         
         print(f"Retrieved {len(df)} data points")
         
-        # Calculate CKStop with TradingView defaults
+        # Calculate CKStop with the default parameters
         df['stop_long'], df['stop_short'] = ta.ckstop(df['high'], df['low'], df['close'])
         
         # Also test with different parameters
@@ -47,7 +47,7 @@ def test_ckstop_real():
         if valid_count > 0:
             # Show recent values
             recent = df.dropna().tail(10)
-            print(f"\nRecent CKStop values (TradingView defaults p=10, x=1, q=9):")
+            print(f"\nRecent CKStop values (defaults p=10, x=1, q=9):")
             for idx, row in recent.iterrows():
                 print(f"{idx}: H={row['high']:.2f} L={row['low']:.2f} C={row['close']:.2f}")
                 print(f"  Stop Long={row['stop_long']:.2f} Stop Short={row['stop_short']:.2f}")
@@ -161,7 +161,6 @@ if __name__ == "__main__":
     print(f"\nChande Kroll Stop Test: {'PASSED' if success else 'FAILED'}")
     
     print(f"\nImplementation Details:")
-    print(f"- Matches TradingView Pine Script exactly")
     print(f"- Formula: first_high_stop = highest(high, p) - x * atr(p)")
     print(f"- Formula: first_low_stop = lowest(low, p) + x * atr(p)")  
     print(f"- Formula: stop_short = highest(first_high_stop, q)")

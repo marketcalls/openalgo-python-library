@@ -35,7 +35,7 @@ def test_aroon_comprehensive():
     print(f"Generated {n} data points with trend patterns")
     print(f"Price range: {prices.min():.2f} - {prices.max():.2f}")
     
-    # Test with TradingView default period
+    # Test with the default period
     period = 14
     
     # Calculate indicators
@@ -131,8 +131,7 @@ if __name__ == "__main__":
     success = test_aroon_comprehensive()
     print(f"\nOverall Test: {'PASSED' if success else 'FAILED'}")
     print(f"\nSummary:")
-    print(f"- Aroon indicators now match TradingView exactly")
-    print(f"- Uses period + 1 lookback (TradingView standard)")
+    print(f"- Uses period + 1 lookback")
     print(f"- Uses first occurrence for ties")
     print(f"- Default period changed from 25 to 14")
     print(f"- Aroon Oscillator = Aroon Up - Aroon Down")

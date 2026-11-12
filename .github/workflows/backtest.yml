@@ -1,0 +1,102 @@
+name: Backtest
+
+# The quality gate of the backtest engine (openalgo.backtest and the oa_bt kernel): the
+# checks CLAUDE.md lists before a commit, on a freshly built extension, and the Python
+# examples of the backtesting docs. Releases are built and published by CI.yml.
+
+on:
+  push:
+    branches: [feat/backtest-engine]
+  pull_request:
+    paths:
+      - 'rust/oa_bt/**'
+      - 'rust/oa_py/src/backtest/**'
+      - 'openalgo/backtest/**'
+      - 'test/backtest/**'
+      - 'examples/backtest_quickstart.py'
+      - '.github/workflows/backtest.yml'
+      # Dependency, build and lint settings change what the gate checks.
+      - 'rust/Cargo.toml'
+      - 'rust/Cargo.lock'
+      - 'rust/oa_bt/Cargo.toml'
+      - 'rust/oa_py/Cargo.toml'
+      - 'pyproject.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # The branch of marketcalls/openalgo-docs whose backtesting examples must run.
+  DOCS_BRANCH: feat/python-sdk-backtesting
+  # pyo3 0.22 predates Python 3.13 and 3.14; the abi3 build is forward compatible.
+  PYO3_USE_ABI3_FORWARD_COMPATIBILITY: '1'
+  CARGO_TERM_COLOR: always
+
+jobs:
+  kernel:
+    name: Kernel (fmt, clippy, tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: cargo fmt
+        run: cargo fmt -p oa_bt --check --manifest-path rust/Cargo.toml
+      - name: cargo clippy (default features)
+        run: cargo clippy -p oa_bt --all-targets --manifest-path rust/Cargo.toml -- -D warnings
+      - name: cargo clippy (costs only)
+        run: cargo clippy -p oa_bt --all-targets --no-default-features --features costs --manifest-path rust/Cargo.toml -- -D warnings
+      - name: cargo clippy (time only)
+        run: cargo clippy -p oa_bt --all-targets --no-default-features --features time --manifest-path rust/Cargo.toml -- -D warnings
+      - name: cargo clippy (metrics only)
+        run: cargo clippy -p oa_bt --all-targets --no-default-features --features metrics --manifest-path rust/Cargo.toml -- -D warnings
+      - name: cargo test
+        run: cargo test -p oa_bt --manifest-path rust/Cargo.toml
+
+  package:
+    name: Package (extension, ruff, pytest, docs examples)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Build the extension into a virtual environment
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          pip install 'maturin>=1.7,<2.0' pytest hypothesis ruff
+          maturin develop --release
+      - name: ruff check
+        run: |
+          . .venv/bin/activate
+          ruff check
+      - name: ruff format
+        run: |
+          . .venv/bin/activate
+          ruff format --check
+      - name: pytest (backtest, feed, indicators)
+        run: |
+          . .venv/bin/activate
+          pytest test/backtest test/test_feed_*.py test/test_indicators_fixes.py test/test_indicators_causality.py -q
+      - name: Check out the docs
+        uses: actions/checkout@v4
+        with:
+          repository: marketcalls/openalgo-docs
+          ref: ${{ env.DOCS_BRANCH }}
+          path: openalgo-docs
+      - name: pytest (docs examples)
+        env:
+          OPENALGO_DOCS_DIR: ${{ github.workspace }}/openalgo-docs
+        run: |
+          . .venv/bin/activate
+          pytest test/docs -q

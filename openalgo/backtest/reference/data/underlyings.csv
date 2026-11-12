@@ -1,0 +1,34 @@
+# underlyings: what an instrument is (an index, a stock or an ETF), by date.
+#
+# Columns
+#   underlying, exchange   the underlying symbol and the exchange its derivatives trade on
+#                          (NFO, BFO); for a cash instrument, NSE or BSE
+#   valid_from, valid_to   dates the row applies to, both inclusive (empty valid_to: open).
+#                          For an index: the dates its derivatives were seen listed, from the
+#                          first date checked
+#   kind                   index, stock or etf
+#   source                 the documents the row was read from
+#   status                 verified: checked against those documents; unverified: not confirmed
+#   note                   free text
+#
+# The kind decides the tick rule (index_option, stock_option, ...) and the settlement of a
+# derivative, and whether the share tick rule applies to a cash instrument (ETFs are
+# excluded from it). Nothing is assumed for an underlying not listed here: a lookup raises,
+# unless a trusted symbol-master snapshot lists the underlying as a share on NSE or BSE (it
+# is then a stock). This table lists the index underlyings only; add stocks and ETFs with a
+# user file.
+#
+# Bhavcopies: an index derivative carries the instrument type FUTIDX or OPTIDX (NSE) or IDF
+# or IDO (BSE); a stock derivative FUTSTK or OPTSTK (NSE) or SF or SO (BSE).
+underlying,exchange,valid_from,valid_to,kind,source,status,note
+NIFTY,NFO,2019-01-01,,index,NSE/FAOP/37689 (2018-05-04); NSE F&O bhavcopies of 2019-01-02 to 2026-11-11 (FUTIDX and OPTIDX),verified,
+BANKNIFTY,NFO,2019-01-01,,index,NSE/FAOP/37689 (2018-05-04); NSE F&O bhavcopies of 2019-01-02 to 2026-11-11 (FUTIDX and OPTIDX),verified,
+NIFTYIT,NFO,2019-01-01,2020-06-25,index,NSE F&O bhavcopies of 2019-01-02 to 2020-05-04 (FUTIDX and OPTIDX),verified,Last listed expiry seen 2020-06-25; absent from the bhavcopy of 2020-06-26
+FINNIFTY,NFO,2021-01-11,,index,NSE/FAOP/46603 (2020-12-10); NSE F&O bhavcopies of 2021-01-11 to 2026-11-11 (FUTIDX and OPTIDX),verified,
+MIDCPNIFTY,NFO,2022-01-24,,index,NSE/FAOP/50968 (2022-01-10); NSE F&O bhavcopies of 2022-01-24 to 2026-11-11 (FUTIDX and OPTIDX),verified,
+NIFTYNXT50,NFO,2024-04-24,,index,NSE/FAOP/61629 (2024-04-18); NSE F&O bhavcopies of 2024-04-24 to 2026-11-11 (FUTIDX and OPTIDX),verified,
+NIFTYFPI,NFO,2026-08-12,,index,NSE/FAOP/75239 (2026-07-16); NSE F&O bhavcopy of 2026-11-11 (FUTIDX and OPTIDX),verified,Futures and options on the Nifty India FPI 150 index
+SENSEX,BFO,2023-05-15,,index,BSE notice 20230327-65 (2023-03-27); BSE F&O bhavcopies of 2023-05-15 to 2026-11-11 (IDF and IDO),verified,From the relaunch on 2023-05-15
+BANKEX,BFO,2023-05-15,,index,BSE notice 20230327-65 (2023-03-27); BSE F&O bhavcopies of 2023-05-15 to 2026-11-11 (IDF and IDO),verified,From the relaunch on 2023-05-15
+SENSEX50,BFO,2023-05-15,,index,BSE F&O bhavcopies of 2023-05-15 to 2026-11-11 (IDF and IDO),verified,First seen in the bhavcopy of 2023-05-15; its launch date was not checked
+FOCIT,BFO,2026-10-29,,index,BSE F&O bhavcopies of 2026-10-29 to 2026-11-11 (IDF and IDO),verified,First seen in the bhavcopy of 2026-10-29; its launch date was not checked

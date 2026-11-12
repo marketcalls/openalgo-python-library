@@ -1,0 +1,86 @@
+# freeze_qty: the largest quantity, in units, that the exchange accepts in one order.
+#
+# Columns
+#   underlying, exchange   the underlying symbol and its derivatives exchange (NFO, BFO)
+#   valid_from, valid_to   trade dates the row applies to, both inclusive (empty valid_to: open)
+#   freeze_qty_futures     limit for futures orders, in units (not lots)
+#   freeze_qty_options     limit for options orders, in units (not lots)
+#   source                 the exchange circular or notice the row was read from
+#   status                 verified: checked against that document; unverified: not confirmed
+#   note                   free text
+#
+# An order is frozen (rejected) when its quantity is MORE than the limit, so an order
+# equal to the limit passes (NSE/FAOP/49118 of 2021-07-31; BSE notice 20230526-54).
+#
+# NSE states one limit per index for futures and options alike and republishes the list
+# every month in a circular titled "Quantity Freeze Limits for Indices". The NFO rows
+# below were built from all 95 of those circulars from NSE/FAOP/39809 (2018-12-31) to
+# NSE/FAOP/77189 (2026-10-30): each row starts on the effective date of the circular
+# that first lists the value and ends the day before the next change. `source` names
+# that first circular. NSE circulars: https://nsearchives.nseindia.com/content/circulars/
+#
+# BSE sets "single order quantity limits", which differ between futures and options.
+# BSE notices: https://www.bseindia.com/markets/MarketInfo/DispNewNoticesCirculars.aspx?page=<number>
+underlying,exchange,valid_from,valid_to,freeze_qty_futures,freeze_qty_options,source,status,note
+NIFTY,NFO,2019-01-01,2019-03-31,7500,7500,NSE/FAOP/39809 (2018-12-31),verified,
+NIFTY,NFO,2019-04-01,2019-07-31,5000,5000,NSE/FAOP/40595 (2019-03-29),verified,
+NIFTY,NFO,2019-08-01,2019-10-31,7500,7500,NSE/FAOP/41753 (2019-07-31),verified,
+NIFTY,NFO,2019-11-01,2020-03-01,5000,5000,NSE/FAOP/42544 (2019-10-31),verified,
+NIFTY,NFO,2020-03-02,2020-03-31,7500,7500,NSE/FAOP/43710 (2020-02-28),verified,
+NIFTY,NFO,2020-04-01,2020-05-03,10000,10000,NSE/FAOP/44022 (2020-03-31),verified,
+NIFTY,NFO,2020-05-04,2020-11-01,7500,7500,NSE/FAOP/44274 (2020-04-30),verified,
+NIFTY,NFO,2020-11-02,2021-08-01,5000,5000,NSE/FAOP/46206 (2020-10-30),verified,
+NIFTY,NFO,2021-08-02,2021-09-30,2800,2800,NSE/FAOP/49129 (2021-07-31),verified,
+NIFTY,NFO,2021-10-01,2021-11-30,1800,1800,NSE/FAOP/49780 (2021-09-30),verified,
+NIFTY,NFO,2021-12-01,2022-01-02,2800,2800,NSE/FAOP/50463 (2021-11-30),verified,
+NIFTY,NFO,2022-01-03,2022-03-01,1800,1800,NSE/FAOP/50856 (2021-12-31),verified,
+NIFTY,NFO,2022-03-02,2022-03-31,2800,2800,NSE/FAOP/51460 (2022-02-28),verified,
+NIFTY,NFO,2022-04-01,2022-05-01,1800,1800,NSE/FAOP/51834 (2022-03-31),verified,
+NIFTY,NFO,2022-05-02,2022-08-31,2800,2800,NSE/FAOP/52154 (2022-04-29),verified,
+NIFTY,NFO,2022-09-01,2022-10-02,1800,1800,NSE/FAOP/53491 (2022-08-30),verified,
+NIFTY,NFO,2022-10-03,2022-10-31,2800,2800,NSE/FAOP/53915 (2022-09-30),verified,
+NIFTY,NFO,2022-11-01,2026-10-04,1800,1800,NSE/FAOP/54248 (2022-10-31),verified,
+NIFTY,NFO,2026-10-05,2026-11-01,3510,3510,NSE/FAOP/76693 (2026-10-01),verified,
+NIFTY,NFO,2026-11-02,,1800,1800,NSE/FAOP/77189 (2026-10-30),verified,
+BANKNIFTY,NFO,2019-01-01,2021-08-01,2500,2500,NSE/FAOP/39809 (2018-12-31),verified,
+BANKNIFTY,NFO,2021-08-02,2022-10-31,1200,1200,NSE/FAOP/49129 (2021-07-31),verified,
+BANKNIFTY,NFO,2022-11-01,2025-05-01,900,900,NSE/FAOP/54248 (2022-10-31),verified,
+BANKNIFTY,NFO,2025-05-02,2025-08-31,600,600,NSE/FAOP/67792 (2025-04-30),verified,
+BANKNIFTY,NFO,2025-09-01,2025-11-02,900,900,NSE/FAOP/69913 (2025-08-29),verified,
+BANKNIFTY,NFO,2025-11-03,2026-03-31,600,600,NSE/FAOP/71087 (2025-10-31),verified,
+BANKNIFTY,NFO,2026-04-01,2026-06-30,900,900,NSE/FAOP/73531 (2026-03-30),verified,
+BANKNIFTY,NFO,2026-07-01,2026-10-04,600,600,NSE/FAOP/74942 (2026-06-30),verified,
+BANKNIFTY,NFO,2026-10-05,2026-11-01,1440,1440,NSE/FAOP/76693 (2026-10-01),verified,
+BANKNIFTY,NFO,2026-11-02,,900,900,NSE/FAOP/77189 (2026-10-30),verified,
+FINNIFTY,NFO,2021-01-11,2021-01-31,5000,5000,NSE/FAOP/46924 (2021-01-06) gives 5001; NSE/FAOP/47155 (2021-01-29) lists 5000,unverified,Launch to the first monthly list: the launch circular writes the limit as 5001
+FINNIFTY,NFO,2021-02-01,2021-08-01,5000,5000,NSE/FAOP/47155 (2021-01-29),verified,
+FINNIFTY,NFO,2021-08-02,2021-08-31,2800,2800,NSE/FAOP/49129 (2021-07-31),verified,
+FINNIFTY,NFO,2021-09-01,2022-03-01,1800,1800,NSE/FAOP/49457 (2021-08-31),verified,
+FINNIFTY,NFO,2022-03-02,2022-07-31,2800,2800,NSE/FAOP/51460 (2022-02-28),verified,
+FINNIFTY,NFO,2022-08-01,2025-11-30,1800,1800,NSE/FAOP/53142 (2022-07-29),verified,
+FINNIFTY,NFO,2025-12-01,2026-01-31,1200,1200,NSE/FAOP/71540 (2025-11-28),verified,
+FINNIFTY,NFO,2026-02-01,2026-03-01,1800,1800,NSE/FAOP/72534 (2026-01-30),verified,
+FINNIFTY,NFO,2026-03-02,2026-03-31,1200,1200,NSE/FAOP/73039 (2026-02-27),verified,
+FINNIFTY,NFO,2026-04-01,2026-10-04,1800,1800,NSE/FAOP/73531 (2026-03-30),verified,
+FINNIFTY,NFO,2026-10-05,2026-11-01,3240,3240,NSE/FAOP/76693 (2026-10-01),verified,
+FINNIFTY,NFO,2026-11-02,,1800,1800,NSE/FAOP/77189 (2026-10-30),verified,
+MIDCPNIFTY,NFO,2022-01-24,2022-01-31,5500,5500,NSE/FAOP/50968 (2022-01-10),verified,Launch to the first monthly list
+MIDCPNIFTY,NFO,2022-02-01,2023-08-31,5500,5500,NSE/FAOP/51173 (2022-01-31),verified,
+MIDCPNIFTY,NFO,2023-09-01,2024-06-30,4200,4200,NSE/FAOP/58176 (2023-08-31),verified,
+MIDCPNIFTY,NFO,2024-07-01,2025-03-02,2800,2800,NSE/FAOP/62670 (2024-06-28),verified,
+MIDCPNIFTY,NFO,2025-03-03,2025-03-31,4200,4200,NSE/FAOP/66906 (2025-02-28),verified,
+MIDCPNIFTY,NFO,2025-04-01,2026-10-04,2800,2800,NSE/FAOP/67348 (2025-03-28),verified,
+MIDCPNIFTY,NFO,2026-10-05,2026-11-01,5760,5760,NSE/FAOP/76693 (2026-10-01),verified,
+MIDCPNIFTY,NFO,2026-11-02,,2800,2800,NSE/FAOP/77189 (2026-10-30),verified,
+NIFTYNXT50,NFO,2024-04-24,2024-05-01,600,600,NSE/FAOP/61629 (2024-04-18),verified,Launch to the first monthly list
+NIFTYNXT50,NFO,2024-05-02,2026-10-04,600,600,NSE/FAOP/61820 (2024-04-30),verified,
+NIFTYNXT50,NFO,2026-10-05,2026-11-01,1125,1125,NSE/FAOP/76693 (2026-10-01),verified,
+NIFTYNXT50,NFO,2026-11-02,,600,600,NSE/FAOP/77189 (2026-10-30),verified,
+SENSEX,BFO,2023-05-29,2023-06-21,500,500,BSE notice 20230526-54 (2023-05-26),verified,
+SENSEX,BFO,2023-06-22,,500,1000,BSE notice 20230621-48 (2023-06-21),unverified,Set by the notice; BSE notices after 2023 could not be searched for a later change
+BANKEX,BFO,2023-05-29,2023-12-03,600,600,BSE notice 20230526-54 (2023-05-26),verified,
+BANKEX,BFO,2023-12-04,,600,900,BSE notice 20231201-16 (2023-12-01),unverified,Set by the notice; BSE notices after 2023 could not be searched for a later change
+NIFTYFPI,NFO,2026-08-12,2026-08-31,8500,8500,NSE/FAOP/75239 (2026-07-16) annexure 1,verified,
+NIFTYFPI,NFO,2026-09-01,2026-10-04,8500,8500,NSE/FAOP/76068 (2026-08-31),verified,
+NIFTYFPI,NFO,2026-10-05,2026-11-01,53900,53900,NSE/FAOP/76693 (2026-10-01),verified,
+NIFTYFPI,NFO,2026-11-02,,8500,8500,NSE/FAOP/77189 (2026-10-30),verified,

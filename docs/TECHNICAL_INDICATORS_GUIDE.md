@@ -12,7 +12,7 @@
 8. [Statistical Indicators](#statistical-indicators)
 9. [Hybrid Indicators](#hybrid-indicators)
 10. [Utility Functions](#utility-functions)
-11. [Pine Script Utilities (NEW)](#pine-script-utilities)
+11. [Signal Utilities](#signal-utilities)
 12. [Best Practices](#best-practices)
 
 ## Introduction
@@ -22,11 +22,10 @@ The OpenAlgo Technical Indicators library provides **104 professional-grade tech
 ### 🏆 Key Features - WORLD-CLASS STATUS
 - ✅ **PERFECT 104/104 indicators working** (100% success rate)
 - ✅ **Sub-millisecond performance** with Numba JIT compilation (0.322ms average)
-- ✅ **Complete TradingView Pine Script compatibility** with 6 new utilities
+- **6 signal utilities** for signal cleanup and state (exrem, flip, valuewhen, rising, falling, cross)
 - ✅ **Institutional-grade reliability** - exceeds professional standards
 - ✅ **Comprehensive validation** with real market data testing
 - ✅ **Thread-safe calculations** for production environments
-- ✅ **Better than TA-Lib** (100% vs ~85% success rate)
 
 ### Installation
 
@@ -317,7 +316,7 @@ t3_21 = ta.t3(close, 21, 0.7)
 
 ### 12. Fractal Adaptive Moving Average (FRAMA)
 
-**Description**: Uses fractal geometry to adapt to price movements - matches TradingView exactly.
+**Description**: Uses fractal geometry to adapt to price movements: an EMA of the bar midpoint (high + low) / 2 whose weight exp(-4.6 * (D - 1)) follows the window's fractal dimension D, followed by a trailing 5-bar mean.
 
 **Parameters**:
 - `high`: High prices
@@ -515,7 +514,7 @@ if close[-1] > tenkan[-1] and tenkan[-1] > kijun[-1]:
 
 ### 20. Chande Kroll Stop
 
-**Description**: Volatility-based trailing stop that adapts to market conditions using ATR - matches TradingView exactly.
+**Description**: Volatility-based trailing stop that adapts to market conditions using ATR.
 
 **Parameters**:
 - `high`: High prices
@@ -739,7 +738,7 @@ for i in range(len(bull_power)):
 
 ### 8. Fisher Transform
 
-**Description**: Converts price to Gaussian distribution for clearer signals - matches TradingView exactly.
+**Description**: Converts price to Gaussian distribution for clearer signals. The trigger line is the previous bar's Fisher value.
 
 **Parameters**:
 - `high`: High prices
@@ -764,7 +763,7 @@ for i in range(1, len(fisher)):
 
 ### 9. Connors RSI
 
-**Description**: Combines RSI, price streaks, and rate of change for enhanced momentum analysis - matches TradingView exactly.
+**Description**: Combines RSI, price streaks, and rate of change for enhanced momentum analysis: the mean of RSI(close, lenrsi), RSI of the up/down streak length over lenupdown, and the percent rank of the one-bar ROC over lenroc.
 
 **Parameters**:
 - `data`: Close prices
@@ -817,7 +816,7 @@ for i, value in enumerate(chop):
 
 ### 12. Know Sure Thing (KST)
 
-**Description**: Momentum oscillator based on multiple rate-of-change periods - matches TradingView exactly.
+**Description**: Momentum oscillator based on multiple rate-of-change periods: four SMA-smoothed ROCs weighted 1, 2, 3 and 4, with an SMA signal line.
 
 **Parameters**:
 - `data`: Close prices
@@ -862,15 +861,15 @@ for i in range(1, len(tsi_line)):
             print(f"Day {i}: TSI bullish zero crossover")
 ```
 
-### 14. Vortex Indicator (VI) - TradingView Pine Script v6
+### 14. Vortex Indicator (VI)
 
-**Description**: Identifies trend changes by comparing positive and negative vortex movements using TradingView's exact formula.
+**Description**: Identifies trend changes by comparing positive and negative vortex movements.
 
-**TradingView Pine Script v6 Formula**:
+**Formula**:
 ```
-VMP = math.sum( math.abs( high - low[1]), period_ )
-VMM = math.sum( math.abs( low - high[1]), period_ )
-STR = math.sum( ta.atr(1), period_ )
+VMP = sum( abs( high - low[1]), period_ )
+VMM = sum( abs( low - high[1]), period_ )
+STR = sum( atr(1), period_ )
 VIP = VMP / STR
 VIM = VMM / STR
 ```
@@ -886,12 +885,12 @@ Where:
 - `high`: High prices
 - `low`: Low prices
 - `close`: Close prices
-- `period`: Number of periods (default: 14 - TradingView default)
+- `period`: Number of periods (default: 14)
 
 **Returns**: Tuple of (VI+, VI-)
 
 ```python
-# Example - TradingView Pine Script v6 implementation
+# Example
 vi_plus, vi_minus = ta.vi(high, low, close, 14)
 
 # VI crossover signals (traditional interpretation)
@@ -930,31 +929,31 @@ for i in range(1, len(price_changes)):
 
 ### 15. Schaff Trend Cycle (STC)
 
-**Description**: Combines MACD concepts with stochastic oscillator for early trend identification. Updated to TradingView Pine Script v4 implementation by Alex Orekhov (everget).
+**Description**: Combines MACD concepts with stochastic oscillator for early trend identification: a stochastic of the MACD line, EMA-smoothed, then a stochastic of that result, EMA-smoothed again and clamped to 0-100.
 
 **Parameters**:
 - `close`: Close prices
-- `fast_length`: MACD Fast Length (default: 23) - TradingView fastLength
-- `slow_length`: MACD Slow Length (default: 50) - TradingView slowLength
-- `cycle_length`: Cycle Length for stochastic calculations (default: 10) - TradingView cycleLength
-- `d1_length`: 1st %D Length - EMA smoothing period (default: 3) - TradingView d1Length
-- `d2_length`: 2nd %D Length - EMA smoothing period (default: 3) - TradingView d2Length
+- `fast_length`: MACD Fast Length (default: 23)
+- `slow_length`: MACD Slow Length (default: 50)
+- `cycle_length`: Cycle Length for stochastic calculations (default: 10)
+- `d1_length`: 1st %D Length - EMA smoothing period (default: 3)
+- `d2_length`: 2nd %D Length - EMA smoothing period (default: 3)
 
 **Returns**: Array of STC values (0-100 range)
 
-**Formula (TradingView Pine Script v4)**:
+**Formula**:
 1. macd = ema(src, fastLength) - ema(src, slowLength)
-2. k = nz(stoch(macd, macd, macd, cycleLength))
+2. k = stoch(macd, macd, macd, cycleLength) (0 when undefined)
 3. d = ema(k, d1Length)
-4. kd = nz(stoch(d, d, d, cycleLength))
+4. kd = stoch(d, d, d, cycleLength) (0 when undefined)
 5. stc = ema(kd, d2Length)
-6. stc := max(min(stc, 100), 0)
+6. stc = max(min(stc, 100), 0)
 
 ```python
-# Example using TradingView parameters
+# Example using the default parameters
 stc = ta.stc(close, fast_length=23, slow_length=50, cycle_length=10, d1_length=3, d2_length=3)
 
-# STC signals (TradingView default bands: upper=75, lower=25)
+# STC signals (common bands: upper=75, lower=25)
 for i, value in enumerate(stc):
     if not np.isnan(value):
         if value > 75:
@@ -1284,14 +1283,14 @@ stddev_20 = ta.stddev(close, 20)
 true_range = ta.true_range(high, low, close)
 ```
 
-### 11. Mass Index (Pine Script v6)
+### 11. Mass Index
 
-**Description**: Identifies trend reversals by measuring range expansion using Pine Script v6 formula.
+**Description**: Identifies trend reversals by measuring range expansion: the sum over `length` bars of the ratio of a 9-period EMA of the high-low span to the 9-period EMA of that EMA.
 
-**Pine Script v6 Formula**: 
+**Formula**:
 ```
 span = high - low
-mi = math.sum(ta.ema(span, 9) / ta.ema(ta.ema(span, 9), 9), length)
+mi = sum(ema(span, 9) / ema(ema(span, 9), 9), length)
 ```
 
 **Parameters**:
@@ -1302,7 +1301,7 @@ mi = math.sum(ta.ema(span, 9) / ta.ema(ta.ema(span, 9), 9), length)
 **Returns**: Array of Mass Index values
 
 ```python
-# Example - Pine Script v6 formula
+# Example
 mass_idx = ta.massindex(high, low, 10)  # Default length=10
 
 # Reversal signal
@@ -1393,7 +1392,7 @@ for i, (long_exit, short_exit) in enumerate(zip(ce_long, ce_short)):
 
 ### 15. Historical Volatility (HV)
 
-**Description**: Measures the volatility of returns over a specified period - matches TradingView exactly.
+**Description**: Measures the volatility of returns over a specified period: the population standard deviation of log returns, annualised by sqrt(annual / per) and scaled to a percentage.
 
 **Formula**: HV = StdDev(ln(Close/Close[1])) × √annual × 100
 
@@ -1421,26 +1420,26 @@ for i, value in enumerate(hv):
 
 ### 16. Ulcer Index
 
-**Description**: Measures downside volatility by focusing on drawdowns. Updated to TradingView Pine Script v4 implementation by Alex Orekhov (everget).
+**Description**: Measures downside volatility by focusing on drawdowns: the square root of the SMA of squared percentage drawdowns from the rolling high, with an optional SMA or EMA signal line.
 
 **Parameters**:
 - `close`: Close prices
-- `length`: Period for highest calculation (default: 14) - TradingView length
-- `smooth_length`: Period for smoothing squared drawdowns (default: 14) - TradingView smoothLength
-- `signal_length`: Period for signal line calculation (default: 52) - TradingView signalLength
-- `signal_type`: Signal smoothing type: "SMA" or "EMA" (default: "SMA") - TradingView signalType
+- `length`: Period for highest calculation (default: 14)
+- `smooth_length`: Period for smoothing squared drawdowns (default: 14)
+- `signal_length`: Period for signal line calculation (default: 52)
+- `signal_type`: Signal smoothing type: "SMA" or "EMA" (default: "SMA")
 - `return_signal`: Whether to return both ulcer and signal line (default: False)
 
 **Returns**: Array of Ulcer Index values, or Tuple of (ulcer, signal) if return_signal=True
 
-**Formula (TradingView Pine Script v4)**:
+**Formula**:
 1. highest = highest(src, length)
 2. drawdown = 100 * (src - highest) / highest
 3. ulcer = sqrt(sma(pow(drawdown, 2), smoothLength))
 4. signal = signalType == "SMA" ? sma(ulcer, signalLength) : ema(ulcer, signalLength)
 
 ```python
-# Example using TradingView defaults
+# Example using the defaults
 ulcer_idx = ta.ulcerindex(close, length=14, smooth_length=14)
 
 # With signal line for crossover analysis
@@ -1461,7 +1460,7 @@ for i in range(1, len(ulcer_idx)):
         elif ulcer_idx[i] < 2:
             print(f"Day {i}: Low downside risk (UI={ulcer_idx[i]:.2f})")
 
-# Breakout level analysis (TradingView default: 1.5)
+# Breakout level analysis (common level: 1.5)
 breakout_level = 1.5
 for i, value in enumerate(ulcer_idx):
     if not np.isnan(value) and value > breakout_level:
@@ -1470,25 +1469,25 @@ for i, value in enumerate(ulcer_idx):
 
 ### 17. STARC Bands
 
-**Description**: Stoller Channels based on ATR instead of standard deviation. Updated to TradingView Pine Script v2 implementation.
+**Description**: Stoller Channels based on ATR instead of standard deviation.
 
 **Parameters**:
 - `high`: High prices
 - `low`: Low prices
 - `close`: Close prices
-- `ma_period`: Moving average period (default: 5) - TradingView LengthMA
-- `atr_period`: ATR period (default: 15) - TradingView LengthATR
-- `multiplier`: ATR multiplier (default: 1.33) - TradingView K parameter
+- `ma_period`: Moving average period (default: 5)
+- `atr_period`: ATR period (default: 15)
+- `multiplier`: ATR multiplier (default: 1.33)
 
 **Returns**: Tuple of (Upper STARC, Middle STARC, Lower STARC)
 
-**Formula (TradingView Pine Script v2)**:
+**Formula**:
 - Middle Band = SMA(close, 5)
 - Upper Band = SMA + ATR(15) * 1.33
 - Lower Band = SMA - ATR(15) * 1.33
 
 ```python
-# Example using TradingView defaults
+# Example using the defaults
 starc_upper, starc_middle, starc_lower = ta.starc(high, low, close, 5, 15, 1.33)
 
 # STARC band signals
@@ -1513,7 +1512,7 @@ Volume indicators analyze trading volume to confirm price movements and identify
 **Formula**:
 - If Close > Previous Close: OBV = Previous OBV + Volume
 - If Close < Previous Close: OBV = Previous OBV - Volume
-- If Close = Previous Close: OBV = Previous OBV + Volume (TradingView convention)
+- If Close = Previous Close: OBV = Previous OBV (a flat close adds nothing)
 
 **Parameters**:
 - `close`: Close prices
@@ -1534,11 +1533,11 @@ for i in range(20, len(close)):
         print(f"Day {i}: OBV divergence detected")
 ```
 
-### 2. Volume Weighted Average Price (VWAP) - TradingView Pine Script v6
+### 2. Volume Weighted Average Price (VWAP)
 
-**Description**: Advanced VWAP with session-based anchoring, standard deviation and percentage bands. Matches TradingView Pine Script v6 implementation exactly.
+**Description**: Advanced VWAP with session-based anchoring, standard deviation and percentage bands.
 
-**TradingView Pine Script v6 Formula**:
+**Formula**:
 ```
 // Session anchoring determines reset points
 // Source calculation: hlc3 = (high + low + close) / 3
@@ -1678,7 +1677,7 @@ for i, value in enumerate(cmf_20):
 
 ### 6. Ease of Movement (EMV)
 
-**Description**: Shows relationship between price change and volume - matches TradingView exactly.
+**Description**: Shows relationship between price change and volume.
 
 **Parameters**:
 - `high`: High prices
@@ -1697,7 +1696,7 @@ emv_default = ta.emv(high, low, volume)  # Uses defaults
 
 ### 7. Force Index
 
-**Description**: Combines price and volume to measure buying/selling pressure - matches TradingView exactly.
+**Description**: Combines price and volume to measure buying/selling pressure.
 
 **Formula**: FI = EMA(Volume × (Close - Previous Close), length)
 
@@ -1720,15 +1719,16 @@ for i, value in enumerate(force_idx):
         print(f"Day {i}: Strong {direction} pressure")
 ```
 
-### 8. Negative Volume Index (NVI) - Pine Script Implementation
+### 8. Negative Volume Index (NVI)
 
 **Description**: Tracks cumulative rate of change on days when volume decreases.
 Uses additive cumulative method instead of multiplicative.
 
-**Pine Script Formula:**
+**Formula:**
 ```
 xROC = roc(close, 1)
-nRes = iff(volume < volume[1], nz(nRes[1], 0) + xROC, nz(nRes[1], 0))
+prev = nRes[1] (0 when undefined)
+nRes = volume < volume[1] ? prev + xROC : prev
 nResEMA = ema(nRes, EMA_Len)
 ```
 
@@ -1742,7 +1742,7 @@ nResEMA = ema(nRes, EMA_Len)
 # Example - Basic NVI
 nvi = ta.nvi(close, volume)
 
-# Example - NVI with EMA (Complete Pine Script)
+# Example - NVI with EMA signal line
 nvi, nvi_ema = ta.nvi_with_ema(close, volume, ema_length=255)
 
 # Trading signals
@@ -1754,13 +1754,13 @@ for i in range(len(nvi)):
             print(f"Day {i}: NVI below EMA (potential bearish)")
 ```
 
-### 9. Positive Volume Index (PVI) - TradingView Pine Script Implementation
+### 9. Positive Volume Index (PVI)
 
-**Description**: Tracks cumulative changes on days when volume increases using TradingView Pine Script formula.
+**Description**: Tracks cumulative changes on days when volume increases: the index is multiplied by close / close[1] on a volume increase and carried unchanged otherwise.
 
-**TradingView Pine Script Formula:**
+**Formula:**
 ```
-pvi := na(pvi[1]) ? initial : (change(volume) > 0 ? pvi[1] * close / close[1] : pvi[1])
+pvi = pvi[1] undefined ? initial : ((volume - volume[1]) > 0 ? pvi[1] * close / close[1] : pvi[1])
 ```
 
 **Parameters**:
@@ -1771,10 +1771,10 @@ pvi := na(pvi[1]) ? initial : (change(volume) > 0 ? pvi[1] * close / close[1] : 
 **Returns**: Array of PVI values
 
 ```python
-# Example - Basic PVI (TradingView implementation)
+# Example - Basic PVI
 pvi = ta.pvi(close, volume, initial_value=100.0)
 
-# Example - PVI with Signal Line (Complete TradingView)
+# Example - PVI with Signal Line
 pvi, signal = ta.pvi_with_signal(close, volume, initial_value=100.0, 
                                 signal_type="EMA", signal_length=255)
 
@@ -1802,27 +1802,27 @@ for i in range(len(nvi)):
             print(f"Day {i}: Bullish (NVI above 255-day MA)")
 ```
 
-### 10. Volume Oscillator (TradingView Pine Script v6)
+### 10. Volume Oscillator
 
-**Description**: Shows relationship between two exponential moving averages of volume using TradingView's exact formula.
+**Description**: Shows relationship between two exponential moving averages of volume, as a percentage of the long EMA.
 
-**TradingView Pine Script v6 Formula**:
+**Formula**:
 ```
-short = ta.ema(volume, shortlen)
-long = ta.ema(volume, longlen)
+short = ema(volume, shortlen)
+long = ema(volume, longlen)
 osc = 100 * (short - long) / long
 ```
 
 **Parameters**:
 - `volume`: Volume data
-- `short_length`: Short EMA length (default: 5 - TradingView default)
-- `long_length`: Long EMA length (default: 10 - TradingView default)
+- `short_length`: Short EMA length (default: 5)
+- `long_length`: Long EMA length (default: 10)
 - `check_volume_validity`: Check for valid volume data (default: True)
 
 **Returns**: Array of Volume Oscillator values (percentage)
 
 ```python
-# Example - TradingView Pine Script v6 implementation
+# Example
 vol_osc = ta.volosc(volume, short_length=5, long_length=10)
 
 # Example with custom parameters
@@ -1979,20 +1979,21 @@ for i, value in enumerate(cmo_14):
 
 ### 3. TRIX
 
-**Description**: Triple exponentially smoothed momentum oscillator. Updated to TradingView Pine Script v6 implementation.
+**Description**: Triple exponentially smoothed momentum oscillator, computed on the natural log of price.
 
 **Parameters**:
 - `data`: Price data (typically close prices)
-- `length`: Number of periods for EMA calculation (default: 18) - TradingView default
+- `length`: Number of periods for EMA calculation (default: 18)
 
 **Returns**: Array of TRIX values
 
-**Formula (TradingView Pine Script v6)**:
-- out = 10000 * ta.change(ta.ema(ta.ema(ta.ema(math.log(close), length), length), length))
+**Formula**:
+- e3 = ema(ema(ema(log(close), length), length), length)
+- out = 10000 * (e3 - e3[1])
 - Uses natural logarithm of price, triple EMA smoothing, and rate of change * 10000
 
 ```python
-# Example using TradingView defaults
+# Example using the default length
 trix = ta.trix(close, length=18)
 
 # Zero-line crossovers (momentum shifts)
@@ -2121,7 +2122,7 @@ po_ema = ta.po(close, 10, 20, "EMA")
 
 ### 9. Detrended Price Oscillator (DPO)
 
-**Description**: Removes trend from price to identify cycles - matches TradingView exactly.
+**Description**: Removes trend from price to identify cycles.
 
 **Formula**: DPO = Price - SMA(shifted back)
 
@@ -2172,11 +2173,11 @@ for i, value in enumerate(aroon_osc):
 
 ### 19. Coppock Curve
 
-**Description**: Long-term momentum indicator primarily used for major stock indices. Based on TradingView Pine Script v6 implementation.
+**Description**: Long-term momentum indicator primarily used for major stock indices: a WMA of the sum of a long and a short rate of change.
 
 **Formula**: 
 ```
-curve = ta.wma(ta.roc(source, longRoCLength) + ta.roc(source, shortRoCLength), wmaLength)
+curve = wma(roc(source, longRoCLength) + roc(source, shortRoCLength), wmaLength)
 ```
 
 **Parameters**:
@@ -2188,7 +2189,7 @@ curve = ta.wma(ta.roc(source, longRoCLength) + ta.roc(source, shortRoCLength), w
 **Returns**: Array of Coppock Curve values
 
 ```python
-# Example using TradingView defaults
+# Example using the defaults
 coppock = ta.coppock(close, 10, 14, 11)
 
 # Zero line crossovers for long-term signals
@@ -2242,7 +2243,7 @@ for i in range(1, len(linreg_14)):
 
 ### 2. Linear Regression Slope
 
-**Description**: Slope of the linear regression line - matches TradingView exactly.
+**Description**: Slope of the linear regression line, taken as the change of the regression endpoint between consecutive windows: (linreg(data, period)[i] - linreg(data, period)[i-1]) / interval.
 
 **Parameters**:
 - `data`: Price data
@@ -2310,11 +2311,9 @@ if not np.isnan(beta[-1]):
         print(f"Stock is {beta[-1]:.2f}x less volatile than market")
 ```
 
-### 5. Variance (TradingView Pine Script v4)
+### 5. Variance
 
 **Description**: Comprehensive variance indicator with support for logarithmic returns and price modes, including EMA smoothing and z-score analysis.
-
-**TradingView Pine Script v4 Implementation by moot-al-cabal**
 
 **Variance Modes**:
 - **"LR"** (Logarithmic Returns): variance of log(close/close[1])*100
@@ -2329,13 +2328,11 @@ if not np.isnan(beta[-1]):
 - `ema_length`: EMA length for z-score smoothing (default: 14)
 - `return_components`: Return all components as tuple (default: False)
 
-**TradingView Pine Script v4 Formula**:
+**Formula**:
 ```
 source = if mode == "LR" then log(close/close[1])*100 else close
 mean = sma(source, lookback)
-For i = 0 to lookback-1:
-    array.push(s, pow(source[i]-mean, 2))
-variance = array.sum(s) / (lookback-1)
+variance = sum(pow(source[i]-mean, 2) for i = 0 to lookback-1) / (lookback-1)
 stdev = sqrt(variance)
 ema_variance = ema(variance, ema_period)
 zscore = (variance - sma(variance, filter_lookback)) / stdev(variance, filter_lookback)
@@ -2398,13 +2395,13 @@ if not np.isnan(tsf_14[-2]):  # Previous forecast
     print(f"Forecast error: {error:.2f}")
 ```
 
-### 7. Rolling Median (Pine Script v6)
+### 7. Rolling Median
 
-**Description**: Middle value in a sorted dataset using percentile_nearest_rank method.
+**Description**: Middle value in a sorted dataset using the nearest-rank percentile method.
 
-**Pine Script v6 Formula**: 
+**Formula**: 
 ```
-median = ta.percentile_nearest_rank(source, length, 50)
+median = percentile_nearest_rank(source, length, 50)   // nearest-rank 50th percentile of the last `length` values
 ```
 
 **Parameters**:
@@ -2425,17 +2422,17 @@ for i in range(len(close)):
             print(f"Day {i}: Price above median (bullish)")
 ```
 
-### 7a. Median Bands (Pine Script v6 Complete)
+### 7a. Median Bands
 
-**Description**: Complete Pine Script v6 Median indicator with ATR bands and EMA.
+**Description**: Rolling median with ATR bands and an EMA of the median.
 
-**Pine Script v6 Formula**:
+**Formula**:
 ```
-median = ta.percentile_nearest_rank(source, length, 50)
-atr_ = atr_mult * ta.atr(atr_length)
+median = percentile_nearest_rank(source, length, 50)
+atr_ = atr_mult * atr(atr_length)
 upper = median + atr_
 lower = median - atr_
-median_ema = ta.ema(median, length)
+median_ema = ema(median, length)
 ```
 
 **Parameters**:
@@ -2684,7 +2681,7 @@ for i, value in enumerate(zigzag):
 
 ### 8. Williams Fractals
 
-**Description**: Identifies potential reversal points using fractal geometry - matches TradingView exactly.
+**Description**: Identifies potential reversal points using fractal geometry: a bar whose high (low) is above (below) the `periods` bars on each side.
 
 **Parameters**:
 - `high`: High prices
@@ -3001,7 +2998,7 @@ stop_loss_price = ta.valuewhen(buy_signal, ta.lowest(low, 10), 1)  # Stop at rec
 
 ### 11. Rising
 
-**Description**: Checks if data is rising (current value > value n periods ago). Similar to Pine Script's `rising()` function.
+**Description**: Checks if data is rising (current value > value n periods ago).
 
 **Parameters**:
 - `data`: Input data series
@@ -3028,7 +3025,7 @@ for i in range(len(bullish_momentum)):
 
 ### 12. Falling
 
-**Description**: Checks if data is falling (current value < value n periods ago). Similar to Pine Script's `falling()` function.
+**Description**: Checks if data is falling (current value < value n periods ago).
 
 **Parameters**:
 - `data`: Input data series
@@ -3056,7 +3053,7 @@ for i in range(len(bearish_momentum)):
 
 ### 13. Cross
 
-**Description**: Checks if series1 crosses series2 in either direction. Combines crossover and crossunder functionality similar to Pine Script's `cross()` function.
+**Description**: Checks if series1 crosses series2 in either direction. Combines crossover and crossunder functionality.
 
 **Parameters**:
 - `series1`: First series
@@ -3091,19 +3088,13 @@ strong_cross = any_cross & (abs(fast_ma - slow_ma) > 0.5)  # Significant cross o
 
 ---
 
-## Pine Script Utilities
+## Signal Utilities
 
-OpenAlgo includes **6 specialized Pine Script-compatible utility functions** that provide TradingView Pine Script functionality for advanced signal processing and state management.
-
-### 🆕 NEW: TradingView Pine Script Compatibility
-
-These functions match TradingView Pine Script behavior exactly, enabling seamless strategy migration and enhanced signal processing capabilities.
+OpenAlgo includes **6 utility functions** for advanced signal processing and state management: removing repeated signals, latching a state between two signals, recalling a value from an earlier signal, and detecting rises, falls and crosses.
 
 ### 1. Excess Removal (EXREM) 🆕
 
-**Description**: Pine Script-style excess removal for signal cleanup and state management. Eliminates excessive signals by maintaining state between primary and secondary signals.
-
-**Pine Script Equivalent**: Custom implementation matching Pine Script logic
+**Description**: Excess removal for signal cleanup and state management. Eliminates excessive signals by maintaining state between primary and secondary signals.
 
 **Parameters**:
 - `primary`: Primary signal array (boolean-like)
@@ -3128,9 +3119,7 @@ for i in range(len(clean_oversold)):
 
 ### 2. Flip Function (FLIP) 🆕
 
-**Description**: Pine Script-style toggle state creation for persistent indicators. Creates a flip-flop state that turns on with primary signals and off with secondary signals.
-
-**Pine Script Equivalent**: Matches Pine Script `flip()` function behavior
+**Description**: Toggle state creation for persistent indicators. Creates a flip-flop state that turns on with primary signals and off with secondary signals.
 
 **Parameters**:
 - `primary`: Signal to turn state ON (boolean-like)
@@ -3146,7 +3135,7 @@ slow_ma = ta.ema(close, 20)
 uptrend_start = ta.crossover(fast_ma, slow_ma)
 downtrend_start = ta.crossunder(fast_ma, slow_ma)
 
-# Create persistent trend state (Pine Script style)
+# Create persistent trend state
 in_uptrend = ta.flip(uptrend_start, downtrend_start)
 
 # Trade only in trending direction
@@ -3157,9 +3146,7 @@ for i in range(len(in_uptrend)):
 
 ### 3. Value When (VALUEWHEN) 🆕
 
-**Description**: Pine Script-style historical value reference. Returns the value when a condition was true for the nth most recent time.
-
-**Pine Script Equivalent**: Matches Pine Script `valuewhen()` function exactly
+**Description**: Historical value reference. Returns the value when a condition was true for the nth most recent time.
 
 **Parameters**:
 - `expr`: Condition to track (boolean-like)
@@ -3183,9 +3170,7 @@ for i in range(len(breakout_price)):
 
 ### 4. Rising Detection (RISING) 🆕
 
-**Description**: Pine Script-style rising trend detection. Checks if current value is greater than value n periods ago.
-
-**Pine Script Equivalent**: Matches Pine Script `rising()` function
+**Description**: Rising trend detection. Checks if current value is greater than value n periods ago.
 
 **Parameters**:
 - `data`: Input data series
@@ -3210,9 +3195,7 @@ for i in range(len(strong_momentum)):
 
 ### 5. Falling Detection (FALLING) 🆕
 
-**Description**: Pine Script-style falling trend detection. Checks if current value is less than value n periods ago.
-
-**Pine Script Equivalent**: Matches Pine Script `falling()` function
+**Description**: Falling trend detection. Checks if current value is less than value n periods ago.
 
 **Parameters**:
 - `data`: Input data series
@@ -3240,9 +3223,7 @@ for i in range(len(bearish_setup)):
 
 ### 6. Cross Detection (CROSS) 🆕
 
-**Description**: Pine Script-style bidirectional cross detection. Detects when series1 crosses series2 in either direction.
-
-**Pine Script Equivalent**: Matches Pine Script `cross()` function behavior
+**Description**: Bidirectional cross detection. Detects when series1 crosses series2 in either direction.
 
 **Parameters**:
 - `series1`: First series
@@ -3272,23 +3253,23 @@ for i in range(len(price_cross_ma200)):
         print(f"Day {i}: Price crossed {direction} 200-day MA - major signal!")
 ```
 
-### 🔥 Pine Script Strategy Example
+### Strategy Example Using All Six Signal Utilities
 
 ```python
-# Complete Pine Script-style strategy using all 6 utilities
-def pine_script_strategy(high, low, close, volume):
+# Complete strategy using all 6 utilities
+def signal_utilities_strategy(high, low, close, volume):
     # Setup indicators
     rsi = ta.rsi(close, 14)
     fast_ma = ta.ema(close, 10)
     slow_ma = ta.ema(close, 20)
     
-    # Pine Script-style signals
+    # Entry and trend signals
     oversold = rsi < 30
     overbought = rsi > 70
     uptrend_start = ta.crossover(fast_ma, slow_ma)
     downtrend_start = ta.crossunder(fast_ma, slow_ma)
     
-    # State management (Pine Script style)
+    # State management
     clean_oversold = ta.exrem(oversold, overbought)  # Clean signals
     in_uptrend = ta.flip(uptrend_start, downtrend_start)  # Persistent state
     
@@ -3313,7 +3294,7 @@ def pine_script_strategy(high, low, close, volume):
     }
 
 # Usage
-results = pine_script_strategy(high, low, close, volume)
+results = signal_utilities_strategy(high, low, close, volume)
 print(f"Total buy signals: {np.sum(results['buy_signals'])}")
 ```
 

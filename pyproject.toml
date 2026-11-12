@@ -4,8 +4,8 @@ build-backend = "maturin"
 
 [project]
 name = "openalgo"
-version = "2.0.5"
-description = "Python library for OpenAlgo's trading APIs and WebSocket feeds, with 100+ technical indicators powered by a Rust core."
+version = "2.1.0"
+description = "Python library for OpenAlgo's trading APIs and WebSocket feeds, with 100+ technical indicators and a backtesting engine powered by a Rust core."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
@@ -54,3 +54,36 @@ strip = true
 # the manifest) did not bundle it even though PKG-INFO declared `License-File: LICENSE`
 # - PyPI rejects that mismatch. Explicitly include it in the sdist.
 include = [{ path = "LICENSE", format = "sdist" }]
+
+[tool.ruff]
+# Lint and format gate for new code: the backtest package, the feed helper modules and
+# their tests. The older SDK modules predate this configuration and are not reformatted;
+# `ruff check` and `ruff format --check` with no path cover exactly the files below.
+line-length = 100
+target-version = "py312"
+include = [
+    "benchmark/backtest_speed.py",
+    "examples/backtest_quickstart.py",
+    "openalgo/backtest/**/*.py",
+    "openalgo/_feed_*.py",
+    "openalgo/indicators/_anchors.py",
+    "openalgo/indicators/causality.py",
+    "test/backtest/**/*.py",
+    "test/conftest.py",
+    "test/docs/*.py",
+    "test/feed_*.py",
+    "test/indicator_references.py",
+    "test/live/*.py",
+    "test/test_feed_*.py",
+    "test/test_indicators_causality.py",
+    "test/test_indicators_fixes.py",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "C90", "RUF100"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 12
+
+[tool.ruff.lint.isort]
+known-first-party = ["openalgo"]

@@ -1,6 +1,7 @@
 # Volatility Indicators Audit (openalgo.indicators.volatility)
 
-_Date_: 2025-06-11 19:42 IST_
+_Date_: 2025-06-11 19:42 IST. The "Verified by" column, the RVI and MASS rows and the
+methodology were updated for release 2.1.0.
 
 ## Indicators Reviewed
 - ATR
@@ -16,25 +17,30 @@ _Date_: 2025-06-11 19:42 IST_
 - MASS (Mass Index)
 
 ## Findings & Fixes
-| Indicator | Status | Notes |
-|-----------|--------|-------|
-| ATR | OK | Wilder smoothing verified; matches TA-Lib ATR. |
-| BBANDS | OK | SMA + σ × k; stddev uses population divisor *n*; identical to TA-Lib. |
-| Keltner Channel | Fixed | EMA helper now seeds with SMA and returns NaN until `period-1`; removes initial bias. |
-| Donchian Channel | OK | Highest/lowest logic correct; middle line avg validated. |
-| Chaikin Volatility | Fixed | Internal EMA of HL-range reseeded with SMA & NaNs; output aligns with Bloomberg CV. |
-| NATR | OK | ATR/Close ×100; tolerance 1e-6 vs TA-Lib. |
-| RVI | OK | σ-based RSI output matches TradingView RVI (MAE 5e-6). |
-| ULTOSC | OK | BP/TR sums and weighted formula correct (7/14/28 default). |
-| STDDEV | OK | Rolling σ (population) matches pandas `rolling.std(ddof=0)`. |
-| TRANGE | OK | High-Low/|H-Cprev|/|L-Cprev| max matches TA-Lib TRANGE. |
-| MASS | Fixed | EMA helpers reseeded (same issue); Mass Index equals StockCharts MI. |
+| Indicator | Status | Notes | Verified by (tolerance) |
+|-----------|--------|-------|-------------------------|
+| ATR | OK | Wilder smoothing, seeded with the mean of the first `period` true ranges. | `benchmark/parity.py` row `atr_wilder(14)`: equals `utils.atr_wilder` (atol 1e-12 or rtol 1e-9). |
+| BBANDS | Partly verified | SMA +/- k x the population standard deviation (divisor *n*). | Not checked as a whole. Its middle band is `ta.sma` (`benchmark/ci_smoke.py`, CI: equals the pandas rolling mean within 1e-9) and its deviation is the `stdev` kernel (`benchmark/parity.py` row `stdev(14)`: equals `utils.stdev`, atol 1e-12 or rtol 1e-9); `ci_smoke.py` checks only that upper >= middle >= lower. %B and bandwidth are checked in `benchmark/volatility_parity.py` (1e-9). |
+| Keltner Channel | Fixed (2025) | Middle line: an EMA seeded with the SMA of the first `period` values, NaN before; bands at +/- multiplier x Wilder ATR. | `benchmark/volatility_parity.py` rows `keltner.up`, `keltner.mid` and `keltner.low`: equal `Keltner`'s own kernels exactly. |
+| Donchian Channel | OK | Highest high, lowest low and their average. | `benchmark/volatility_parity.py` rows `donchian.up` and `donchian.mid`: equal `Donchian._calculate_donchian_channel` exactly. |
+| Chaikin Volatility | Fixed (2025) | ROC of an EMA of the high-low range, that EMA seeded with an SMA and NaN before. | `benchmark/volatility_parity.py` row `chaikin`: equals that formula written in the script exactly. |
+| NATR | OK | ATR / close x 100. | `benchmark/volatility_parity.py` row `natr`: equals `utils.atr_wilder` / close x 100 exactly. |
+| RVI | Fixed (2.1.0) | The published Relative Volatility Index: the population standard deviation of the last `stdev_period` closes, put on the up side when the close rose and on the down side when it fell, each side under Wilder's smoothing over `rsi_period`; RVI = 100 x U / (U + D). The 2025 verdict described the earlier formula (an RSI of the standard deviation), which 2.1.0 replaced (see `CHANGELOG.md`). | `test/test_indicators_fixes.py` (CI): series worked out by hand, the all-up, all-down and flat cases and NaN handling (1e-9). |
+| ULTOSC | OK | BP/TR sums and weighted formula (7/14/28 default). | `benchmark/volatility_parity.py` row `ultosc`: equals `ULTOSC._calculate_ultosc` (1e-9). |
+| STDDEV | OK | Rolling standard deviation (population). | `benchmark/parity.py` row `stdev(14)`: equals `utils.stdev` (atol 1e-12 or rtol 1e-9). `benchmark/ci_smoke.py` (CI) checks its NaN positions against the pandas rolling deviation (ddof 0). |
+| TRANGE | OK | Largest of high - low, abs(high - previous close) and abs(low - previous close). | `benchmark/volatility_parity.py` row `trange`: equals `TRANGE._calculate_trange` exactly; `benchmark/parity.py` row `true_range`: equals `utils.true_range`. |
+| MASS | OK | Sum over `length` of EMA(9) of the high-low range divided by EMA(9) of that EMA. The EMAs are seeded with their first value, as every `ta` EMA (`docs/INDICATOR_CONVENTIONS.md`); the 2025 note that they were reseeded with an SMA no longer describes the code. | `benchmark/volatility_parity.py` row `mass`: equals that formula written in the script exactly. |
 
-## Test Methodology
-1. 3 000-bar synthetic OHLC data and BTC-USD daily used.
-2. Benchmarked against TA-Lib, pandas-ta or manual calc in Excel.
-3. Acceptance: MAE < 1×10⁻⁵ (ignoring initial NaNs and look-backs).
-4. Edge cases: constant series, high==low, short data (< period).
+## How the verdicts are checked
+1. The 2025 review used 3 000 synthetic bars and daily BTC-USD data, compared the
+   indicators with other indicator implementations and with spreadsheet calculations,
+   and accepted a mean absolute difference below 1e-5. Those comparisons are not kept
+   in this repository, so they cannot be rerun and no longer count as evidence.
+2. Each row now names the check in this repository that verifies it and its
+   tolerance. The parity scripts in `benchmark/` are run by hand on data written by
+   `benchmark/fetch_data.py` (from an OpenAlgo server); `benchmark/ci_smoke.py` and
+   `test/test_indicators_fixes.py` run in CI. "Exact" means equal to the last bit.
 
 ---
-EMA seeding corrections applied to Keltner Channel, Chaikin Volatility and Mass Index. All other volatility indicators validated as correct.
+The 2025 EMA seeding corrections apply today to the Keltner Channel and Chaikin
+Volatility; the Mass Index uses first-value-seeded EMAs.

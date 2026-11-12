@@ -8,12 +8,13 @@ and subscribe to different types of market data (LTP, Quote, Depth).
 
 import asyncio
 import json
+import os
 import websockets
 import sys
 
 # Configuration
 WS_URL = "ws://localhost:8765"  # Update if your server is on a different host/port
-API_KEY = "918d504f250e6f7d6b533b245a46009d3f3b8cad8e6314c8b45ae8a35b972d8a"  # Your OpenAlgo API key
+API_KEY = os.getenv("OPENALGO_API_KEY", "your_api_key_here")  # Your OpenAlgo API key
 
 # Test symbols
 RELIANCE_NSE = {"exchange": "MCX", "symbol": "GOLDPETAL30MAY25FUT"}

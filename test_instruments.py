@@ -4,10 +4,11 @@
 Test script for instruments() function
 """
 
+import os
 from openalgo import api
 
 # API credentials
-API_KEY = "c32eb9dee6673190bb9dfab5f18ef0a96b0d76ba484cd36bc5ca5f7ebc8745bf"
+API_KEY = os.getenv("OPENALGO_API_KEY", "your_api_key_here")
 HOST = "http://127.0.0.1:5000"
 
 # Initialize client

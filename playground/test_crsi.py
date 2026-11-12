@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Test Connors RSI with TradingView defaults"""
+"""Test Connors RSI with its default parameters"""
 
 import sys
 import os
@@ -32,13 +32,13 @@ def test_crsi_basic():
     print(f"Generated {n} test data points")
     print(f"Price range: {prices.min():.2f} - {prices.max():.2f}")
     
-    # Test with TradingView defaults: lenrsi=3, lenupdown=2, lenroc=100
+    # Test with the default parameters: lenrsi=3, lenupdown=2, lenroc=100
     lenrsi, lenupdown, lenroc = 3, 2, 100
     
     # Calculate CRSI
     crsi = ta.crsi(prices, lenrsi=lenrsi, lenupdown=lenupdown, lenroc=lenroc)
     
-    print(f"\nUsing TradingView defaults: lenrsi={lenrsi}, lenupdown={lenupdown}, lenroc={lenroc}")
+    print(f"\nUsing default parameters: lenrsi={lenrsi}, lenupdown={lenupdown}, lenroc={lenroc}")
     
     # Check for valid data
     valid_mask = ~np.isnan(crsi)
@@ -165,7 +165,7 @@ def test_crsi_components():
     return False
 
 if __name__ == "__main__":
-    print("Connors RSI Test - TradingView Implementation")
+    print("Connors RSI Test")
     print("=" * 50)
     
     success1 = test_crsi_basic()
@@ -174,7 +174,6 @@ if __name__ == "__main__":
     
     print(f"\nOverall Test: {'PASSED' if success1 and success2 and success3 else 'FAILED'}")
     print(f"\nCRSI Implementation Summary:")
-    print(f"- Now matches TradingView Pine Script exactly")
     print(f"- Component 1: RSI of price (ta.rsi(src, lenrsi))")
     print(f"- Component 2: RSI of updown streak (ta.rsi(updown(src), lenupdown))")
     print(f"- Component 3: Percent rank of 1-period ROC (ta.percentrank(ta.roc(src, 1), lenroc))")

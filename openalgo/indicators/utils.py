@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 from openalgo.numba_shim import jit, njit, prange
 from typing import Union, Optional
+from . import _backend
 
 
 # ------------------------------------------------------------------
@@ -21,7 +22,6 @@ def validate_input(arr: Union[np.ndarray, pd.Series, list]) -> np.ndarray:
     return arr
 
 
-@njit(cache=True, nogil=True)
 def crossover(series1: np.ndarray, series2: np.ndarray) -> np.ndarray:
     """
     Check if series1 crosses over series2
@@ -38,19 +38,9 @@ def crossover(series1: np.ndarray, series2: np.ndarray) -> np.ndarray:
     np.ndarray
         Boolean array indicating crossover points
     """
-    n = len(series1)
-    result = np.zeros(n, dtype=np.bool_)
-    
-    for i in range(1, n):
-        if (not np.isnan(series1[i]) and not np.isnan(series2[i]) and
-            not np.isnan(series1[i-1]) and not np.isnan(series2[i-1]) and
-            series1[i] > series2[i] and series1[i-1] <= series2[i-1]):
-            result[i] = True
-
-    return result
+    return _backend.crossover(series1, series2)
 
 
-@njit(cache=True, nogil=True)
 def crossunder(series1: np.ndarray, series2: np.ndarray) -> np.ndarray:
     """
     Check if series1 crosses under series2
@@ -67,19 +57,9 @@ def crossunder(series1: np.ndarray, series2: np.ndarray) -> np.ndarray:
     np.ndarray
         Boolean array indicating crossunder points
     """
-    n = len(series1)
-    result = np.zeros(n, dtype=np.bool_)
-    
-    for i in range(1, n):
-        if (not np.isnan(series1[i]) and not np.isnan(series2[i]) and
-            not np.isnan(series1[i-1]) and not np.isnan(series2[i-1]) and
-            series1[i] < series2[i] and series1[i-1] >= series2[i-1]):
-            result[i] = True
-    
-    return result
+    return _backend.crossunder(series1, series2)
 
 
-@njit(cache=True, nogil=True)
 def highest(data: np.ndarray, period: int) -> np.ndarray:
     """
     Calculate the highest value over a rolling window using O(n) deque algorithm
@@ -97,35 +77,9 @@ def highest(data: np.ndarray, period: int) -> np.ndarray:
     np.ndarray
         Array of highest values
     """
-    n = len(data)
-    result = np.full(n, np.nan)
-    cap = n + 1
-    dq_val = np.empty(cap, dtype=np.float64)
-    dq_idx = np.empty(cap, dtype=np.int64)
-    head = 0
-    tail = 0
-
-    for i in range(n):
-        # Pop front if outside window
-        while head < tail and dq_idx[head % cap] <= i - period:
-            head += 1
-
-        # Pop back while smaller than current
-        while head < tail and dq_val[(tail - 1) % cap] <= data[i]:
-            tail -= 1
-
-        # Push current
-        dq_val[tail % cap] = data[i]
-        dq_idx[tail % cap] = i
-        tail += 1
-
-        if i >= period - 1:
-            result[i] = dq_val[head % cap]
-
-    return result
+    return _backend.highest(data, period)
 
 
-@njit(cache=True, nogil=True)
 def lowest(data: np.ndarray, period: int) -> np.ndarray:
     """
     Calculate the lowest value over a rolling window using O(n) deque algorithm
@@ -143,35 +97,9 @@ def lowest(data: np.ndarray, period: int) -> np.ndarray:
     np.ndarray
         Array of lowest values
     """
-    n = len(data)
-    result = np.full(n, np.nan)
-    cap = n + 1
-    dq_val = np.empty(cap, dtype=np.float64)
-    dq_idx = np.empty(cap, dtype=np.int64)
-    head = 0
-    tail = 0
-
-    for i in range(n):
-        # Pop front if outside window
-        while head < tail and dq_idx[head % cap] <= i - period:
-            head += 1
-
-        # Pop back while larger than current
-        while head < tail and dq_val[(tail - 1) % cap] >= data[i]:
-            tail -= 1
-
-        # Push current
-        dq_val[tail % cap] = data[i]
-        dq_idx[tail % cap] = i
-        tail += 1
-
-        if i >= period - 1:
-            result[i] = dq_val[head % cap]
-
-    return result
+    return _backend.lowest(data, period)
 
 
-@njit(cache=True, nogil=True)
 def change(data: np.ndarray, length: int = 1) -> np.ndarray:
     """
     Calculate the change in value over a specified number of periods
@@ -188,13 +116,7 @@ def change(data: np.ndarray, length: int = 1) -> np.ndarray:
     np.ndarray
         Array of change values
     """
-    n = len(data)
-    result = np.full(n, np.nan)
-    
-    for i in range(length, n):
-        result[i] = data[i] - data[i - length]
-    
-    return result
+    return _backend.change(data, length)
 
 
 @njit(cache=True, nogil=True)
@@ -638,7 +560,6 @@ def vwma_optimized(data: np.ndarray, volume: np.ndarray, period: int) -> np.ndar
     return result
 
 
-@njit(cache=True, nogil=True)
 def cmo_optimized(data: np.ndarray, period: int) -> np.ndarray:
     """
     Chande Momentum Oscillator using O(n) rolling sums algorithm
@@ -655,60 +576,7 @@ def cmo_optimized(data: np.ndarray, period: int) -> np.ndarray:
     np.ndarray
         Array of CMO values
     """
-    n = len(data)
-    result = np.full(n, np.nan)
-    
-    if n < period + 1:
-        return result
-    
-    # Calculate price changes
-    changes = np.empty(n - 1)
-    for i in range(1, n):
-        changes[i - 1] = data[i] - data[i - 1]
-    
-    # Initialize rolling sums
-    rolling_sum_up = 0.0
-    rolling_sum_down = 0.0
-    
-    # Calculate initial sums for first window
-    for i in range(period):
-        change = changes[i]
-        if change > 0:
-            rolling_sum_up += change
-        elif change < 0:
-            rolling_sum_down += abs(change)
-    
-    # Set first result
-    total_movement = rolling_sum_up + rolling_sum_down
-    if total_movement > 0:
-        result[period] = ((rolling_sum_up - rolling_sum_down) / total_movement) * 100
-    else:
-        result[period] = 0.0
-    
-    # Use rolling sums for subsequent values
-    for i in range(period + 1, n):
-        # Remove old change
-        old_change = changes[i - period - 1]
-        if old_change > 0:
-            rolling_sum_up -= old_change
-        elif old_change < 0:
-            rolling_sum_down -= abs(old_change)
-        
-        # Add new change
-        new_change = changes[i - 1]
-        if new_change > 0:
-            rolling_sum_up += new_change
-        elif new_change < 0:
-            rolling_sum_down += abs(new_change)
-        
-        # Calculate CMO
-        total_movement = rolling_sum_up + rolling_sum_down
-        if total_movement > 0:
-            result[i] = ((rolling_sum_up - rolling_sum_down) / total_movement) * 100
-        else:
-            result[i] = 0.0
-    
-    return result
+    return _backend.cmo(data, period)
 
 
 @njit(cache=True, nogil=True)
@@ -822,7 +690,6 @@ def ulcer_index_optimized(data: np.ndarray, period: int) -> np.ndarray:
     return result
 
 
-@njit(cache=True, nogil=True)
 def exrem(primary: np.ndarray, secondary: np.ndarray) -> np.ndarray:
     """
     Excess Removal function - eliminates excessive signals
@@ -839,21 +706,9 @@ def exrem(primary: np.ndarray, secondary: np.ndarray) -> np.ndarray:
     np.ndarray
         Boolean array with excess signals removed
     """
-    n = len(primary)
-    result = np.zeros(n, dtype=np.bool_)
-    active = False
-    
-    for i in range(n):
-        if not active and primary[i]:
-            result[i] = True
-            active = True
-        elif secondary[i]:
-            active = False
-    
-    return result
+    return _backend.exrem(primary, secondary)
 
 
-@njit(cache=True, nogil=True)
 def flip(primary: np.ndarray, secondary: np.ndarray) -> np.ndarray:
     """
     Flip function - creates a toggle state based on two signals
@@ -870,21 +725,9 @@ def flip(primary: np.ndarray, secondary: np.ndarray) -> np.ndarray:
     np.ndarray
         Boolean array representing flip state
     """
-    n = len(primary)
-    result = np.zeros(n, dtype=np.bool_)
-    active = False
-    
-    for i in range(n):
-        if primary[i]:
-            active = True
-        elif secondary[i]:
-            active = False
-        result[i] = active
-    
-    return result
+    return _backend.flip(primary, secondary)
 
 
-@njit(cache=True, nogil=True)
 def valuewhen(expr: np.ndarray, array: np.ndarray, n: int = 1) -> np.ndarray:
     """
     Returns the value of array when expr was true for the nth most recent time
@@ -903,35 +746,9 @@ def valuewhen(expr: np.ndarray, array: np.ndarray, n: int = 1) -> np.ndarray:
     np.ndarray
         Array of values when condition was true
     """
-    length = len(expr)
-    result = np.full(length, np.nan)
-    
-    # Pre-allocate arrays for true indices tracking
-    max_lookback = min(1000, length)  # Limit memory usage
-    true_indices = np.empty(max_lookback, dtype=np.int64)
-    true_count = 0
-    
-    for i in range(length):
-        # Add current index if expr is true
-        if expr[i]:
-            # Shift existing indices if we're at capacity
-            if true_count >= max_lookback:
-                for j in range(max_lookback - 1):
-                    true_indices[j] = true_indices[j + 1]
-                true_indices[max_lookback - 1] = i
-            else:
-                true_indices[true_count] = i
-                true_count += 1
-        
-        # Find the nth most recent true occurrence
-        if true_count >= n:
-            target_idx = true_indices[true_count - n]
-            result[i] = array[target_idx]
-    
-    return result
+    return _backend.valuewhen(expr, array, n)
 
 
-@njit(cache=True, nogil=True)
 def rising(data: np.ndarray, length: int) -> np.ndarray:
     """
     Check if data is rising (current value > value n periods ago)
@@ -948,17 +765,9 @@ def rising(data: np.ndarray, length: int) -> np.ndarray:
     np.ndarray
         Boolean array indicating rising periods
     """
-    n = len(data)
-    result = np.zeros(n, dtype=np.bool_)
-    
-    for i in range(length, n):
-        if not np.isnan(data[i]) and not np.isnan(data[i - length]):
-            result[i] = data[i] > data[i - length]
-
-    return result
+    return _backend.rising(data, length)
 
 
-@njit(cache=True, nogil=True)
 def falling(data: np.ndarray, length: int) -> np.ndarray:
     """
     Check if data is falling (current value < value n periods ago)
@@ -975,17 +784,9 @@ def falling(data: np.ndarray, length: int) -> np.ndarray:
     np.ndarray
         Boolean array indicating falling periods
     """
-    n = len(data)
-    result = np.zeros(n, dtype=np.bool_)
-    
-    for i in range(length, n):
-        if not np.isnan(data[i]) and not np.isnan(data[i - length]):
-            result[i] = data[i] < data[i - length]
-
-    return result
+    return _backend.falling(data, length)
 
 
-@njit(cache=True, nogil=True)
 def cross(series1: np.ndarray, series2: np.ndarray) -> np.ndarray:
     """
     Check if series1 crosses series2 (either direction)
@@ -1003,16 +804,4 @@ def cross(series1: np.ndarray, series2: np.ndarray) -> np.ndarray:
     np.ndarray
         Boolean array indicating cross points (both over and under)
     """
-    n = len(series1)
-    result = np.zeros(n, dtype=np.bool_)
-    
-    for i in range(1, n):
-        if (not np.isnan(series1[i]) and not np.isnan(series2[i]) and
-            not np.isnan(series1[i-1]) and not np.isnan(series2[i-1])):
-
-            crossover_condition = (series1[i] > series2[i] and series1[i-1] <= series2[i-1])
-            crossunder_condition = (series1[i] < series2[i] and series1[i-1] >= series2[i-1])
-
-            result[i] = crossover_condition or crossunder_condition
-    
-    return result
+    return _backend.cross(series1, series2)

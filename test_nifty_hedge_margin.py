@@ -5,12 +5,13 @@ NIFTY Futures and Hedged Options Margin Analysis
 This script tests margin requirements for various NIFTY futures and options strategies
 """
 
+import os
 from openalgo import api
 from datetime import datetime
 import json
 
 # Initialize the API client
-API_KEY = "7371cc58b9d30204e5fee1d143dc8cd926bcad90c24218201ad81735384d2752"
+API_KEY = os.getenv("OPENALGO_API_KEY", "your_api_key_here")
 client = api(api_key=API_KEY, host="http://127.0.0.1:5000")
 
 def format_margin(amount):

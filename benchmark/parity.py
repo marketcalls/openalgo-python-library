@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
 """
 Parity gate: Rust core (openalgo._oaindicators) vs the Python reference kernels
-(openalgo.indicators.utils, run with NUMBA_DISABLE_JIT=1 = identical algorithm),
-with TA-Lib as a secondary cross-check where definitions align.
+(openalgo.indicators.utils, run with NUMBA_DISABLE_JIT=1 = identical algorithm).
+The helpers whose utils function now calls the shared kernel itself (highest, lowest,
+change, cmo, the crossings, rising, falling, valuewhen) are compared with plain
+pandas and NumPy expressions written in this script, or with the plain-Python
+reference in test/indicator_references.py, so that each gate can fail.
 
 HARD GATE  = Rust must match the Python reference (this is the backend we replace):
              identical length, identical NaN mask, and finite values within
              atol=1e-12 / rtol=1e-9 (EMA-family) or exact (min/max/diff/bool).
-TA-Lib      = informational. "match" rows are expected ~0; "info" rows differ by a
-             known convention (seed/alignment) and are reported, not gated.
 
 Exit code 0 only if every HARD gate passes on every dataset.
 """
@@ -19,20 +20,16 @@ import sys
 from pathlib import Path
 # Ensure the LOCAL openalgo package (repo root) wins over any pip-installed copy.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "test"))
 
 import numpy as np
 import pandas as pd
 
+import indicator_references as references
 import openalgo._oaindicators as rs
 from openalgo.indicators import utils as ref
 from openalgo.indicators.momentum import RSI as _RSI, Stochastic as _STO, CCI as _CCI, WilliamsR as _WR
 from openalgo.indicators.trend import KAMA as _KAMA
-
-try:
-    import talib
-    HAVE_TALIB = True
-except Exception:  # noqa: BLE001
-    HAVE_TALIB = False
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 ATOL, RTOL = 1e-12, 1e-9
@@ -77,75 +74,60 @@ def cmp_bool(a, b):
     return diff == 0, float(diff), float(diff), True
 
 
-# Each entry: (label, rust_fn, ref_fn, kind, talib_fn_or_None, talib_mode)
+# Each entry: (label, rust_fn, ref_fn, kind)
 #   kind: "f" float gate, "b" bool gate
 def build_cases(P):
     h, l, c, v = P["high"], P["low"], P["close"], P["volume"]
     per = 14
     cases = [
-        ("sma(14)", lambda: rs.sma(c, per), lambda: ref.sma(c, per), "f",
-         (lambda: talib.SMA(c, per)) if HAVE_TALIB else None, "match"),
-        ("wma(14)", lambda: rs.wma(c, per), lambda: _ref_wma(c, per), "f",
-         (lambda: talib.WMA(c, per)) if HAVE_TALIB else None, "match"),
-        ("ema(14)", lambda: rs.ema(c, per), lambda: ref.ema(c, per), "f",
-         (lambda: talib.EMA(c, per)) if HAVE_TALIB else None, "info"),
-        ("ema_wilder(14)", lambda: rs.ema_wilder(c, per), lambda: ref.ema_wilder(c, per), "f",
-         None, "info"),
-        ("stdev(14)", lambda: rs.stdev(c, per), lambda: ref.stdev(c, per), "f",
-         (lambda: talib.STDDEV(c, per, 1.0)) if HAVE_TALIB else None, "match"),
-        ("rolling_sum(14)", lambda: rs.rolling_sum(c, per), lambda: ref.rolling_sum(c, per), "f",
-         (lambda: talib.SUM(c, per)) if HAVE_TALIB else None, "match"),
+        ("sma(14)", lambda: rs.sma(c, per), lambda: ref.sma(c, per), "f"),
+        ("wma(14)", lambda: rs.wma(c, per), lambda: _ref_wma(c, per), "f"),
+        ("ema(14)", lambda: rs.ema(c, per), lambda: ref.ema(c, per), "f"),
+        ("ema_wilder(14)", lambda: rs.ema_wilder(c, per), lambda: ref.ema_wilder(c, per), "f"),
+        ("stdev(14)", lambda: rs.stdev(c, per), lambda: ref.stdev(c, per), "f"),
+        ("rolling_sum(14)", lambda: rs.rolling_sum(c, per), lambda: ref.rolling_sum(c, per), "f"),
         ("rolling_variance(14)", lambda: rs.rolling_variance(c, per),
-         lambda: ref.rolling_variance(c, per), "f",
-         (lambda: talib.VAR(c, per, 1.0)) if HAVE_TALIB else None, "match"),
-        ("change(1)", lambda: rs.change(c, 1), lambda: ref.change(c, 1), "f", None, "info"),
-        ("roc(10)", lambda: rs.roc(c, 10), lambda: ref.roc(c, 10), "f",
-         (lambda: talib.ROC(c, 10)) if HAVE_TALIB else None, "match"),
-        ("highest(14)", lambda: rs.highest(c, per), lambda: ref.highest(c, per), "f",
-         (lambda: talib.MAX(c, per)) if HAVE_TALIB else None, "match"),
-        ("lowest(14)", lambda: rs.lowest(c, per), lambda: ref.lowest(c, per), "f",
-         (lambda: talib.MIN(c, per)) if HAVE_TALIB else None, "match"),
-        ("true_range", lambda: rs.true_range(h, l, c), lambda: ref.true_range(h, l, c), "f",
-         (lambda: talib.TRANGE(h, l, c)) if HAVE_TALIB else None, "info"),
+         lambda: ref.rolling_variance(c, per), "f"),
+        ("change(1)", lambda: rs.change(c, 1), lambda: _ref_change(c, 1), "f"),
+        ("roc(10)", lambda: rs.roc(c, 10), lambda: ref.roc(c, 10), "f"),
+        ("highest(14)", lambda: rs.highest(c, per),
+         lambda: pd.Series(c).rolling(per).max().to_numpy(), "f"),
+        ("lowest(14)", lambda: rs.lowest(c, per),
+         lambda: pd.Series(c).rolling(per).min().to_numpy(), "f"),
+        ("true_range", lambda: rs.true_range(h, l, c), lambda: ref.true_range(h, l, c), "f"),
         ("atr_wilder(14)", lambda: rs.atr_wilder(h, l, c, per),
-         lambda: ref.atr_wilder(h, l, c, per), "f",
-         (lambda: talib.ATR(h, l, c, per)) if HAVE_TALIB else None, "info"),
+         lambda: ref.atr_wilder(h, l, c, per), "f"),
         ("atr_sma(14)", lambda: rs.atr_sma(h, l, c, per),
-         lambda: ref.atr_sma(h, l, c, per), "f", None, "info"),
-        ("vwma(14)", lambda: rs.vwma(c, v, per), lambda: ref.vwma_optimized(c, v, per), "f",
-         None, "info"),
-        ("cmo(14)", lambda: rs.cmo(c, per), lambda: ref.cmo_optimized(c, per), "f",
-         (lambda: talib.CMO(c, per)) if HAVE_TALIB else None, "info"),
+         lambda: ref.atr_sma(h, l, c, per), "f"),
+        ("vwma(14)", lambda: rs.vwma(c, v, per), lambda: ref.vwma_optimized(c, v, per), "f"),
+        ("cmo(14)", lambda: rs.cmo(c, per), lambda: references.cmo(c, per), "f"),
         ("kama(10,2,30)", lambda: rs.kama(c, 10, 2.0, 30.0),
-         lambda: ref.kama_optimized(c, 10, 2.0, 30.0), "f", None, "info"),
+         lambda: ref.kama_optimized(c, 10, 2.0, 30.0), "f"),
         ("ulcer_index(14)", lambda: rs.ulcer_index(c, per),
-         lambda: ref.ulcer_index_optimized(c, per), "f", None, "info"),
+         lambda: ref.ulcer_index_optimized(c, per), "f"),
         # boolean kernels
         ("crossover", lambda: rs.crossover(c, ref.sma(c, per)),
-         lambda: ref.crossover(c, ref.sma(c, per)), "b", None, ""),
+         lambda: _ref_crossings(c, ref.sma(c, per))[0], "b"),
         ("crossunder", lambda: rs.crossunder(c, ref.sma(c, per)),
-         lambda: ref.crossunder(c, ref.sma(c, per)), "b", None, ""),
+         lambda: _ref_crossings(c, ref.sma(c, per))[1], "b"),
         ("cross", lambda: rs.cross(c, ref.sma(c, per)),
-         lambda: ref.cross(c, ref.sma(c, per)), "b", None, ""),
-        ("rising(5)", lambda: rs.rising(c, 5), lambda: ref.rising(c, 5), "b", None, ""),
-        ("falling(5)", lambda: rs.falling(c, 5), lambda: ref.falling(c, 5), "b", None, ""),
+         lambda: np.logical_or(*_ref_crossings(c, ref.sma(c, per))), "b"),
+        ("rising(5)", lambda: rs.rising(c, 5), lambda: _ref_change(c, 5) > 0, "b"),
+        ("falling(5)", lambda: rs.falling(c, 5), lambda: _ref_change(c, 5) < 0, "b"),
         ("valuewhen", lambda: rs.valuewhen(_expr(c, per), c, 1),
-         lambda: ref.valuewhen(_expr(c, per), c, 1), "f", None, ""),
+         lambda: _ref_valuewhen(_expr(c, per), c), "f"),
         # Phase-1 indicators (reference = original numba staticmethods, pure-python)
-        ("rsi(14)", lambda: rs.rsi(c, per), lambda: _RSI._calculate_rsi(c, per), "f",
-         (lambda: talib.RSI(c, per)) if HAVE_TALIB else None, "match"),
+        ("rsi(14)", lambda: rs.rsi(c, per), lambda: _RSI._calculate_rsi(c, per), "f"),
         ("cci(14)", lambda: rs.cci(h, l, c, per),
-         lambda: _CCI._calculate_cci(h, l, c, per), "f",
-         (lambda: talib.CCI(h, l, c, per)) if HAVE_TALIB else None, "match"),
+         lambda: _CCI._calculate_cci(h, l, c, per), "f"),
         ("williams_r(14)", lambda: rs.williams_r(h, l, c, per),
-         lambda: _WR._calculate_williams_r(c, per, ref.highest(h, per), ref.lowest(l, per)), "f",
-         (lambda: talib.WILLR(h, l, c, per)) if HAVE_TALIB else None, "match"),
+         lambda: _WR._calculate_williams_r(c, per, ref.highest(h, per), ref.lowest(l, per)), "f"),
         ("stoch_k", lambda: rs.stochastic(h, l, c, per, 3, 3)[0],
-         lambda: _ref_stoch(h, l, c, per, 3, 3)[0], "f", None, ""),
+         lambda: _ref_stoch(h, l, c, per, 3, 3)[0], "f"),
         ("stoch_d", lambda: rs.stochastic(h, l, c, per, 3, 3)[1],
-         lambda: _ref_stoch(h, l, c, per, 3, 3)[1], "f", None, ""),
-        ("kama_tv(14,2,30)", lambda: rs.kama_tv(c, 14, 2, 30),
-         lambda: _KAMA._calculate_kama_tv(c, 14, 2, 30), "f", None, ""),
+         lambda: _ref_stoch(h, l, c, per, 3, 3)[1], "f"),
+        ("kama_full_window(14,2,30)", lambda: rs.kama_full_window(c, 14, 2, 30),
+         lambda: _KAMA._calculate_kama_full_window(c, 14, 2, 30), "f"),
     ]
     return cases
 
@@ -166,57 +148,57 @@ def _ref_wma(c, period):
     return out
 
 
+def _ref_change(c, length):
+    """c[i] - c[i - length], NaN for the first `length` bars."""
+    return (pd.Series(c) - pd.Series(c).shift(length)).to_numpy()
+
+
+def _ref_crossings(a, b):
+    """(crossover, crossunder): a moves from at-or-below b to above it, or the reverse.
+    A NaN on the bar or the bar before compares False, so it never fires."""
+    now, before = a - b, np.concatenate(([np.nan], (a - b)[:-1]))
+    return (before <= 0) & (now > 0), (before >= 0) & (now < 0)
+
+
+def _ref_valuewhen(expr, values):
+    """`values` at the latest bar where `expr` is nonzero, NaN before the first one."""
+    out = np.full(len(values), np.nan)
+    latest = np.nan
+    for i, (flag, value) in enumerate(zip(expr, values)):
+        if flag != 0:
+            latest = value
+        out[i] = latest
+    return out
+
+
 def _expr(c, period):
     """Boolean-like float array: close above its SMA (drives valuewhen)."""
     return (c > np.nan_to_num(ref.sma(c, period), nan=np.inf)).astype(np.float64)
-
-
-def talib_diff(rust_vals, tfn):
-    """Informational max abs diff Rust vs TA-Lib over common finite region."""
-    try:
-        tv = np.asarray(tfn(), np.float64)
-        a = np.asarray(rust_vals, np.float64)
-        n = min(len(a), len(tv))
-        a, tv = a[-n:], tv[-n:]
-        mask = ~(np.isnan(a) | np.isnan(tv))
-        if not mask.any():
-            return None
-        return float(np.abs(a[mask] - tv[mask]).max())
-    except Exception as exc:  # noqa: BLE001
-        return f"err:{type(exc).__name__}"
 
 
 def main():
     datasets = [("RELIANCE", "D"), ("RELIANCE", "1m"), ("SBIN", "D"), ("SBIN", "1m")]
     all_pass = True
     hard_fail = []
-    print(f"Parity gate  (atol={ATOL}, rtol={RTOL}, TA-Lib={'yes' if HAVE_TALIB else 'no'})")
+    print(f"Parity gate  (atol={ATOL}, rtol={RTOL})")
     for symbol, interval in datasets:
         P = load(symbol, interval)
         n = len(P["close"])
         print(f"\n=== {symbol} {interval}  ({n} bars) ===")
-        print(f"{'kernel':22} {'gate':6} {'max_abs':>12} {'max_rel':>12}  {'talib':>12}")
-        for label, rfn, reffn, kind, tfn, tmode in build_cases(P):
+        print(f"{'kernel':22} {'gate':6} {'max_abs':>12} {'max_rel':>12}")
+        for label, rfn, reffn, kind in build_cases(P):
             rv = rfn()
             ev = reffn()
             if kind == "f":
                 ok, ma, mr, nan_ok = cmp_float(rv, ev)
             else:
                 ok, ma, mr, nan_ok = cmp_bool(rv, ev)
-            td = ""
-            if tfn is not None:
-                d = talib_diff(rv, tfn)
-                if isinstance(d, float):
-                    td = f"{d:.2e}{'' if tmode=='match' else '*'}"
-                elif d is not None:
-                    td = str(d)
             gate = "PASS" if ok else "FAIL"
             if not ok:
                 all_pass = False
                 hard_fail.append(f"{symbol}/{interval}/{label} (nan_ok={nan_ok})")
-            print(f"{label:22} {gate:6} {ma:>12.3e} {mr:>12.3e}  {td:>12}")
+            print(f"{label:22} {gate:6} {ma:>12.3e} {mr:>12.3e}")
     print("\n" + ("=" * 60))
-    print("* = TA-Lib differs by a known convention (seed/alignment); informational.")
     if all_pass:
         print("RESULT: ALL HARD GATES PASS (Rust == Python reference).")
         return 0

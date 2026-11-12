@@ -14,7 +14,7 @@ import pandas as pd
 
 from openalgo.indicators import _backend as b
 from openalgo.indicators import utils as u
-from openalgo.indicators.volatility import (Keltner, Donchian, Chaikin, ULTOSC, RVI as VolRVI,
+from openalgo.indicators.volatility import (Keltner, Donchian, Chaikin, ULTOSC,
                                             MASS, BBPercent, BBWidth, ChandelierExit,
                                             HistoricalVolatility, UlcerIndex, STARC, TRANGE)
 
@@ -66,8 +66,8 @@ def main():
     cmp("natr", b.natr(h, lo, c, 14), natr_ref)
 
     # Volatility RVI
-    rvi_ref = VolRVI._calculate_rsi_on_stdev(u.stdev(c, 10), 14)
-    cmp("rvi_volatility", b.rvi_volatility(c, 10, 14), rvi_ref)
+    cmp("rvi_volatility", b.rvi_volatility(c, 10, 14), _rvi_volatility_ref(c, 10, 14),
+        tol=1e-9)
 
     # ULTOSC (rolling_sum vs np.sum -> recursive tolerance)
     cmp("ultosc", b.ultosc(h, lo, c, 7, 14, 28),
@@ -81,7 +81,7 @@ def main():
     rcel, rces = ChandelierExit._calculate_chandelier(h, lo, c, 22, 3.0)
     cmp("chandelier.long", cel, rcel, tol=1e-9)
     cmp("chandelier.short", ces, rces, tol=1e-9)
-    cmp("hv", b.hv(c, 10, 365, 1), HistoricalVolatility._calculate_hv_tv(c, 10, 365, 1), tol=1e-9)
+    cmp("hv", b.hv(c, 10, 365, 1), HistoricalVolatility._calculate_hv(c, 10, 365, 1), tol=1e-9)
     cmp("ulcerindex", b.ulcerindex(c, 14, 14, 52, "SMA", False), _ulcer_ref(c, 14, 14))
     su, sm, sl = b.starc(h, lo, c, 5, 15, 1.33)
     cmp("starc.mid", sm, STARC._calculate_sma(c, 5))
@@ -115,6 +115,35 @@ def _bbw_ref(c, p, sd):
     out = np.full_like(c, np.nan)
     for i in range(len(c)):
         out[i] = (up[i] - lo_[i]) / m[i] if m[i] != 0 else 0.0
+    return out
+
+
+def _rvi_volatility_ref(close, stdev_period, rsi_period):
+    """Relative Volatility Index by its published definition, as a plain loop.
+
+    Population standard deviation over `stdev_period` closes, put on the up side when
+    the close rose and on the down side when it fell, each side smoothed as the RSI
+    does (seeded with the mean of the first `rsi_period` values); 100 * U / (U + D).
+    """
+    n = len(close)
+    out = np.full(n, np.nan)
+    seed_up, seed_down = [], []
+    up = down = None
+    for i in range(max(stdev_period - 1, 1), n):
+        deviation = np.std(close[i - stdev_period + 1 : i + 1])
+        move = close[i] - close[i - 1]
+        up_value = deviation if move > 0 else 0.0
+        down_value = deviation if move < 0 else 0.0
+        if up is None:
+            seed_up.append(up_value)
+            seed_down.append(down_value)
+            if len(seed_up) < rsi_period:
+                continue
+            up, down = sum(seed_up) / rsi_period, sum(seed_down) / rsi_period
+        else:
+            up = (up * (rsi_period - 1) + up_value) / rsi_period
+            down = (down * (rsi_period - 1) + down_value) / rsi_period
+        out[i] = 100.0 * up / (up + down) if up + down > 0 else 50.0
     return out
 
 

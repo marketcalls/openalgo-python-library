@@ -88,12 +88,12 @@ All parameter signature mismatches have been resolved by analyzing exact wrapper
 #### **Utility Functions (11)**
 ✓ crossover, ✓ crossunder, ✓ highest, ✓ lowest, ✓ change, ✓ exrem, ✓ flip, ✓ valuewhen, ✓ rising, ✓ falling, ✓ cross
 
-#### **New Pine Script Utilities (6) - All Working** 🆕
+#### **New Signal Utilities (6) - All Working**
 ✓ **exrem** - Excess removal for signal cleanup
 ✓ **flip** - Toggle state management for persistent indicators  
 ✓ **valuewhen** - Historical value reference at signal points
-✓ **rising** - Pine Script-style rising trend detection
-✓ **falling** - Pine Script-style falling trend detection
+**rising** - Rising trend detection
+**falling** - Falling trend detection
 ✓ **cross** - Bidirectional crossover detection (any direction)
 
 ## 📊 COMPREHENSIVE TEST RESULTS
@@ -129,7 +129,7 @@ The library exceeds **institutional-grade standards**:
 - **100% success** across ALL categories
 - **Sub-millisecond execution times** for real-time trading
 - **Professional parameter validation** and error handling
-- **Complete TradingView Pine Script compatibility** with new utilities
+- **Signal utilities** for signal state and cross detection
 
 ## ⚡ PERFORMANCE BENCHMARKS
 
@@ -150,10 +150,9 @@ The library exceeds **institutional-grade standards**:
 - **Deploy with confidence** for ALL trading applications
 - **Complete technical analysis** capabilities available
 - **Institutional-grade reliability** and performance
-- **TradingView-compatible** Pine Script utilities
+- **Signal utilities** included (exrem, flip, valuewhen, rising, falling, cross)
 
 ### Competitive Advantages
-- **Faster than TA-Lib** after Numba warming
 - **More indicators** than most commercial libraries  
 - **Better Python integration** with pandas/numpy
 - **Professional-grade documentation** and examples

@@ -1,0 +1,441 @@
+{
+  "format": 1,
+  "year": 2020,
+  "timezone": "Asia/Kolkata",
+  "coverage": {
+    "NSE": "sourced",
+    "NFO": "sourced",
+    "BSE": "sourced",
+    "BFO": "unverified",
+    "MCX": "unverified"
+  },
+  "notes": [
+    "NSE, NFO and BSE holidays are the published lists (NSE/CMTR/42877, NSE/FAOP/42878, BSE notice 20191211-2). The NSE archive has no equity price file on exactly these 12 weekdays.",
+    "BFO is assumed to follow BSE. MCX is a data vendor table (mcxindia.com could not be read) and is unverified. CDS and BCD have no 2020 holiday list here.",
+    "The MCX vendor table shows no evening session on 2020-04-02, 2020-04-06 and 2020-04-14 (lockdown), unlike the NSE commodity segment list NSE/COM/42879."
+  ],
+  "sources": {
+    "bse-20191211-2": "BSE notice 20191211-2, trading holidays 2020: https://www.bseindia.com/markets/MarketInfo/DispNewNoticesCirculars.aspx?page=20191211-2",
+    "nse-archive-files": "NSE archive daily equity price files cmDDMONYYYYbhav.csv.zip for every date of 2019, 2020, 2021 and 2023 (present or absent), read on 2026-11-12",
+    "nse-cmtr-42877": "NSE/CMTR/42877 trading holidays 2020 (capital market): https://nsearchives.nseindia.com/content/circulars/CMTR42877.pdf",
+    "nse-cmtr-43290": "NSE/CMTR/43290 live trading session 2020-02-01, normal market 09:15 to 15:30: https://nsearchives.nseindia.com/content/circulars/CMTR43290.pdf",
+    "nse-faop-42878": "NSE/FAOP/42878 trading holidays 2020 (futures and options): https://nsearchives.nseindia.com/content/circulars/FAOP42878.pdf",
+    "nse-faop-43291": "NSE/FAOP/43291 live trading session 2020-02-01, normal market 09:15 to 15:30: https://nsearchives.nseindia.com/content/circulars/FAOP43291.pdf",
+    "truedata-2020": "https://www.truedata.in/blog/nse-and-mcx-trading-holidays-2020 (fetched 2026-11-12)",
+    "zerodha-muhurat-2020": "https://zerodha.com/marketintel/bulletin/273089/muhurat-trading-session-on-account-of-diwali-4"
+  },
+  "days": [
+    {
+      "date": "2020-01-01",
+      "name": "New Year Day (MCX evening session closed)",
+      "closed": [],
+      "sessions": {
+        "MCX": [
+          "09:00",
+          "17:00"
+        ]
+      },
+      "sources": [
+        "truedata-2020"
+      ],
+      "unverified": [
+        "MCX"
+      ]
+    },
+    {
+      "date": "2020-02-01",
+      "name": "Union Budget (Saturday live trading session)",
+      "closed": [],
+      "sessions": {
+        "NSE": [
+          "09:15",
+          "15:30"
+        ],
+        "BSE": [
+          "09:15",
+          "15:30"
+        ],
+        "NFO": [
+          "09:15",
+          "15:30"
+        ],
+        "BFO": [
+          "09:15",
+          "15:30"
+        ]
+      },
+      "sources": [
+        "nse-cmtr-43290",
+        "nse-faop-43291",
+        "nse-archive-files"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ],
+      "hours_unverified": [
+        "BFO",
+        "BSE"
+      ],
+      "note": "NSE capital market and F&O from NSE/CMTR/43290 and NSE/FAOP/43291. BSE is assumed to have traded the same hours (no BSE notice was found). Currency and MCX are not recorded."
+    },
+    {
+      "date": "2020-02-21",
+      "name": "Mahashivratri",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-42877",
+        "nse-faop-42878",
+        "bse-20191211-2",
+        "nse-archive-files",
+        "truedata-2020"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2020-03-10",
+      "name": "Holi",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-42877",
+        "nse-faop-42878",
+        "bse-20191211-2",
+        "nse-archive-files",
+        "truedata-2020"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2020-04-02",
+      "name": "Ram Navami",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "MCX"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-42877",
+        "nse-faop-42878",
+        "bse-20191211-2",
+        "nse-archive-files",
+        "truedata-2020"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2020-04-06",
+      "name": "Mahavir Jayanti",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "MCX"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-42877",
+        "nse-faop-42878",
+        "bse-20191211-2",
+        "nse-archive-files",
+        "truedata-2020"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2020-04-10",
+      "name": "Good Friday",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "MCX"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-42877",
+        "nse-faop-42878",
+        "bse-20191211-2",
+        "nse-archive-files",
+        "truedata-2020"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2020-04-14",
+      "name": "Dr. Baba Saheb Ambedkar Jayanti",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "MCX"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-42877",
+        "nse-faop-42878",
+        "bse-20191211-2",
+        "nse-archive-files",
+        "truedata-2020"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2020-05-01",
+      "name": "Maharashtra Day",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-42877",
+        "nse-faop-42878",
+        "bse-20191211-2",
+        "nse-archive-files",
+        "truedata-2020"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2020-05-25",
+      "name": "Id-Ul-Fitr (Ramzan ID)",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-42877",
+        "nse-faop-42878",
+        "bse-20191211-2",
+        "nse-archive-files",
+        "truedata-2020"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2020-10-02",
+      "name": "Mahatma Gandhi Jayanti",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "MCX"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-42877",
+        "nse-faop-42878",
+        "bse-20191211-2",
+        "nse-archive-files",
+        "truedata-2020"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2020-11-14",
+      "name": "Diwali Laxmi Pujan (Muhurat trading)",
+      "closed": [],
+      "sessions": {
+        "NSE": [
+          "18:15",
+          "19:15"
+        ],
+        "BSE": [
+          "18:15",
+          "19:15"
+        ],
+        "NFO": [
+          "18:15",
+          "19:15"
+        ],
+        "BFO": [
+          "18:15",
+          "19:15"
+        ],
+        "CDS": [
+          "18:15",
+          "19:15"
+        ],
+        "BCD": [
+          "18:15",
+          "19:15"
+        ],
+        "MCX": [
+          "18:15",
+          "19:15"
+        ]
+      },
+      "sources": [
+        "nse-cmtr-42877",
+        "zerodha-muhurat-2020",
+        "nse-archive-files"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX",
+        "NFO"
+      ],
+      "hours_unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "MCX",
+        "NFO",
+        "NSE"
+      ],
+      "note": "A Saturday listed with Muhurat trading in NSE/CMTR/42877; the NSE archive has a price file for it. The times come from a broker bulletin."
+    },
+    {
+      "date": "2020-11-16",
+      "name": "Diwali-Balipratipada",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-42877",
+        "nse-faop-42878",
+        "bse-20191211-2",
+        "nse-archive-files",
+        "truedata-2020"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2020-11-30",
+      "name": "Gurunanak Jayanti",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {
+        "MCX": [
+          "17:00",
+          null
+        ]
+      },
+      "sources": [
+        "nse-cmtr-42877",
+        "nse-faop-42878",
+        "bse-20191211-2",
+        "nse-archive-files",
+        "truedata-2020"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    },
+    {
+      "date": "2020-12-25",
+      "name": "Christmas",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "MCX"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-42877",
+        "nse-faop-42878",
+        "bse-20191211-2",
+        "nse-archive-files",
+        "truedata-2020"
+      ],
+      "unverified": [
+        "BFO",
+        "MCX"
+      ]
+    }
+  ]
+}

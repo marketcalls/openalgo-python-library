@@ -11,6 +11,31 @@ technical-indicator library powered by a Rust core (`openalgo._oaindicators`).
   WebSocket proxy `ws://127.0.0.1:8765`). It is a client only; it does not run a
   server itself.
 
+## Engineering standards (apply to every change)
+
+Code quality, code hygiene, modularity, readability and maintainability are
+requirements for every change in this library, throughout its development. They are a
+gate on each unit of work, not a final polish. Before a change is committed:
+
+- **Quality.** It is correct and tested, and it passes the checks for its area. A
+  defect is reproduced by a failing test before it is fixed.
+- **Hygiene.** No dead code, commented-out code, debug prints, hardcoded secrets or
+  unexplained constants. Errors are never swallowed.
+- **Modularity.** Each module, class and function has one job. A new concern goes in
+  a new, focused module, not in more branches of a long function. Every shared
+  definition has one source of truth.
+- **Readability.** Code is written for the next maintainer: plain names in the
+  trader's vocabulary, units stated, a docstring on every public item, and comments
+  that explain why.
+- **Maintainability.** A small public surface, backward compatible changes to
+  published APIs, every behaviour change recorded in `CHANGELOG.md`, and no
+  abstraction for a feature that is not being built.
+
+In the existing SDK modules keep the diff minimal: change only what the fix needs and
+do not reformat or restyle the surrounding code. New code under the backtest paths
+follows the detailed rules in "Code standards for the backtest package" below. Work
+produced by agents is reviewed independently before it is committed.
+
 ## Architecture
 
 The public entry point is `openalgo.api`, which composes every REST mixin via
@@ -35,13 +60,14 @@ separate top-level exports.
 | `openalgo/strategy.py` | `Strategy`: standalone webhook poster for `/strategy/webhook/<token>` (own pooled client) |
 | `openalgo/strategy_api.py` | `StrategyAPI`: the API-key surface under `/api/v1/strategy/` (list, status, start, stop, close_all, close_leg, runs, orders, events) |
 | `openalgo/feed.py` | `FeedAPI`: WebSocket market-data feed (uses `websocket-client`, not httpx) |
-| `openalgo/indicators/` | `ta` technical indicators (Rust core via `_oaindicators`) |
+| `openalgo/indicators/` | `ta` technical indicators (Rust core via `_oaindicators`, NumPy fallback in `_backend.py`; one implementation per indicator) |
+| `openalgo/indicators/causality.py` | Registry of which `ta` outputs use only data up to the current bar; the backtest engine rejects the others |
 
 ## HTTP layer (connection pooling)
 
 All REST calls go through the single `httpx.Client` created in `BaseAPI.__init__`
 and reused via `self.client.post(...)` / `self.client.get(...)`. Do NOT reintroduce
-module-level `httpx.post` / `httpx.get` — that opens and tears down a fresh TCP
+module-level `httpx.post` / `httpx.get`: that opens and tears down a fresh TCP
 connection per call, which over a trading session leaves thousands of sockets in
 TIME_WAIT and exhausts ephemeral ports. The client mirrors the server's own pooling
 in `utils/httpx_client.py`.
@@ -59,14 +85,145 @@ optional callback; polled snapshots are available via `get_ltp` / `get_quotes` /
 `get_depth`. Auto-reconnect (on by default) replays active subscriptions after a
 drop; `ping_interval`/`ping_timeout` guard against zombie sockets.
 
+Connection hooks: `on_connect`, `on_disconnect`, `on_reconnect` and `on_error` register
+listeners (`remove_hook` removes one). Events are delivered in order, one at a time,
+outside every SDK lock, and each payload carries a connection sequence number `seq`.
+An exception in a user callback, an unparseable frame or a server rejection reaches
+`on_error`, or the `openalgo.feed` logger when no listener is registered; it is never
+dropped. Subscribe and unsubscribe calls made while the socket is down update the
+requested set (see `get_subscriptions`), which is what a reconnect replays; their
+return value still says only whether the frame was sent now. The helpers live in
+`openalgo/_feed_*.py` (hooks, errors, replay, state, ticks, URL). The feed tests
+(`test/test_feed_*.py`) use an in-process fake socket and fail if a test opens a real one.
+
 ## Analyzer (sandbox) mode
 
 The server has an analyzer/sandbox mode where orders are simulated instead of being
-sent to the broker (orderids look like `SB-...`, responses carry `"mode": "analyze"`).
+sent to the broker. Responses carry `"mode": "analyze"`, and that field is the only
+reliable marker: sandbox order IDs are plain numeric strings (`YYMMDD` plus an 8-digit
+sequence, with no `SB-` prefix), so they cannot be told apart from broker order IDs.
+Sandbox GTT IDs look like `GTT-YYMMDD-xxxxxxxx`.
 Check it with `client.analyzerstatus()` and switch with `client.analyzertoggle(True/False)`.
 Always confirm analyze mode before placing test orders. Note: simulated MARKET orders
 need a live price, so they fail when the market is closed (use LIMIT for testing on
 holidays).
+
+## Backtest package (`openalgo.backtest`, in progress)
+
+A backtesting, paper and live trading engine for Indian markets is being built inside
+the SDK. The foundations are complete; the event kernel (Phase 1) is being built. Its
+architecture is documented in `rust/oa_bt/src/engine/mod.rs`: a stepping state machine
+with no Python dependency, driven by `bt.backtest` through `Engine.advance()`.
+
+| Path | Responsibility |
+|------|----------------|
+| `rust/oa_bt/` | Zero-dependency Rust kernel crate: `model` (shared types and IST time helpers), `market` (costs, calendars, margin, slippage), `data` (resampling), `metrics` (performance metrics), and the kernel: `engine` (the slice loop and stepping API), `exec` (orders, fills, GTT), `portfolio` (positions and tranches, ledger), `rms` (risk rules and trading states), `sizing` |
+| `rust/oa_py/src/backtest/` | PyO3 bindings, one file per area, exposed as `openalgo._oaindicators.backtest` |
+| `openalgo/backtest/` | Python package: `Strategy`, `backtest()` and its `Result` (`strategy.py`, `run.py`, `result.py`), costs, calendar, resample, data layer, reference tables, metrics and the HTML tearsheet (`report`). `import openalgo` does not import it |
+| `test/backtest/` | pytest suite. It never contacts a server; anything that needs a client uses an in-process fake |
+
+### Product decisions (set by the maintainer)
+
+These are settled. Do not redesign around them without asking.
+
+- **Two run modes only: `bt.backtest` and `bt.live`.** There is no paper verb. The same
+  strategy class runs in both.
+- **Sandbox or live is chosen inside OpenAlgo, never in code.** The analyzer switch in
+  OpenAlgo is the only control. The engine never calls `analyzertoggle` and no run call
+  takes a mode argument or a live confirmation flag. `bt.live` reads the mode at start,
+  shows it first in its start banner, and stops entering if the switch changes during
+  a session. `capital` and `max_daily_loss` stay mandatory: they are risk limits, not
+  mode control.
+- **GTT orders for positional trades.** In Indian markets every pending order is
+  cancelled the same day, except a GTT. So ordinary orders are DAY orders at every
+  strategy interval, and anything that must rest overnight on a CNC or NRML position
+  (a stop, a target, a resting entry) is a GTT: SINGLE for one trigger, OCO for a stop
+  with a target. Backtests model a GTT the way it works (a trigger, then a child order
+  that may not fill on a gap), and live sends it through the SDK's GTT calls. MIS
+  cannot hold a GTT.
+- **Reports are built in.** openstatz is not used. Everything a trader would get from
+  it (the metrics, rolling statistics, drawdown tables, Monte Carlo, benchmark
+  comparison, the charts and the HTML report) is built inside `openalgo` as original
+  code, with no plotting package and no market-data download (no yfinance).
+- **Data comes from OpenAlgo or from the user.** Broker history and Historify through
+  the SDK, or the user's own DataFrames and files with no server at all. No third-party
+  market-data downloader is bundled.
+- **Live bars are typed by how they were made.** A bar type is the instrument, the
+  step, the aggregation, the price type and the source. Internal bars are built by the
+  engine from WebSocket ticks (the default); external bars are the broker's candles.
+  Time bars are stamped at their close.
+- **Indicators come only from `openalgo.ta`.** Outputs that look ahead are listed in
+  `openalgo.indicators.causality` and are rejected in strategies.
+- **Indian market rules are the default.** Charges, slippage, lot size, tick size,
+  freeze quantity and session times apply without being asked for. Quantity is always
+  in units, never lots.
+- **One Rust kernel, Python on top.** Backtest and live share the same kernel and the
+  same rules; Python declares, Rust executes.
+- **Futures margin: 5x by default, the user's figure when given.** Every futures
+  contract blocks 20 percent of its contract value in a backtest unless the user sets
+  `margin=` (one value, or per underlying, as a percent of contract value or rupees per
+  lot). Real margins differ by underlying and over time, so no per-underlying table is
+  kept. In live trading the broker computes margin.
+- **Speed targets.** An empty `on_bar` makes at least 300k callbacks per second; an
+  array or condition strategy over 1M bars, with charges, slippage and every metric,
+  takes at most 2 seconds on a current desktop core (`benchmark/backtest_speed.py`).
+
+Working agreement for this build: work is committed and pushed to the
+`feat/backtest-engine` branch in verified units, and the `## [Unreleased]` section of
+`CHANGELOG.md` is kept current with each of them.
+
+### Code standards for the backtest package
+
+These apply to every change under the four paths above.
+
+- One responsibility per module. Split a file before it grows past roughly 400 lines of
+  non-test code and a function before roughly 60 lines. Data tables, parsing and rules
+  live in separate modules.
+- Small, explicit public surface: `__all__` in Python, `pub use` in Rust. Everything
+  else is private.
+- One source of truth: shared types in `rust/oa_bt/src/model.rs`, the bars layout in
+  `openalgo/backtest/_layout.py`, exceptions in `openalgo/backtest/errors.py`. Do not
+  redefine them locally.
+- Names use the trader's vocabulary and carry the unit where it matters (UTC
+  nanoseconds versus IST, quantity in units never lots, percent versus fraction). No
+  magic numbers: use a named constant and say where the value comes from.
+- Every public function and class has a docstring that states units, conventions and
+  the errors it raises. Comments explain why, not what.
+- Nothing falls back silently. Unknown input raises a typed error whose message says
+  what to do. Library code never prints.
+- Market facts (rates, lot sizes, holidays, session times) are data with a source and a
+  verification status, never constants scattered through the code.
+- Rust: `cargo fmt` clean, `cargo clippy -- -D warnings` clean, no `unsafe`, and no
+  `unwrap`, `expect` or panic on a path that depends on input.
+- Python: `ruff check` and `ruff format --check` clean (configuration in
+  `pyproject.toml`), type hints on public functions, no bare `except`, no mutable
+  module state.
+- Tests read as specifications: one behaviour per test, the name states the behaviour,
+  table-driven where rows repeat, and expected values are never produced by copying the
+  implementation.
+- No dead code, no commented-out code, and no abstraction for a feature that is not
+  being built yet.
+- Original code only, described in its own terms. Never name a third-party product or
+  brand anywhere in the repository: code, identifiers, comments, docstrings, error
+  messages, tests, benchmarks, data files, docs, the changelog or commit messages.
+  That covers trading and charting platforms, their scripting languages, other
+  backtesting or trading engines and indicator libraries, also as abbreviations
+  (for example a `_tv` suffix). Describe what the code computes instead of whose
+  output it matches. Named freely: OpenAlgo and its own products, exchanges,
+  regulators, brokers where they are functional identifiers (a cost preset, a broker
+  adapter), and the technical dependencies (Python, Rust, NumPy, pandas, PyO3).
+
+Checks to run before committing:
+
+    cargo fmt -p oa_bt --check --manifest-path rust/Cargo.toml
+    cargo clippy -p oa_bt --all-targets --manifest-path rust/Cargo.toml -- -D warnings
+    cargo test -p oa_bt --manifest-path rust/Cargo.toml
+    ruff check
+    ruff format --check
+    pytest test/backtest test/test_feed_*.py test/test_indicators_fixes.py test/test_indicators_causality.py
+
+`ruff` with no path covers the files listed under `[tool.ruff] include` in
+`pyproject.toml`; add new modules outside the backtest paths to that list.
 
 ## Bumping the version
 
@@ -100,7 +257,9 @@ compiling the Rust core from the sdist.
 
 - Live tests need a running OpenAlgo server on `:5000` (and the WS proxy on `:8765`)
   plus a valid API key. Do not hardcode API keys in committed files.
-- Importing `openalgo` triggers a Numba warmup in `openalgo/indicators/__init__.py`.
-  On Python 3.14 with NumPy 2.x there is a Numba incompatibility (`np.trapz` was
-  removed). To import the SDK for REST/WebSocket testing without the indicators JIT,
-  run with `NUMBA_DISABLE_JIT=1`.
+- Importing `openalgo` needs no Numba and no environment variable. Numba was removed in
+  2.0.0, so `NUMBA_DISABLE_JIT` has no effect on the SDK (`openalgo/numba_shim.py` only
+  keeps the old `@jit` / `@njit` decorators importable as no-ops). The indicators run in
+  the Rust core (`openalgo._oaindicators`). In a source checkout without a built
+  extension, `openalgo/indicators/_backend.py` falls back to NumPy where a fallback
+  exists; build the extension with maturin (see `pyproject.toml`) for the full set.

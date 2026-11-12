@@ -3,12 +3,13 @@
 Test script for optionsmultiorder function
 """
 
+import os
 import time
 from openalgo import api
 
 # Initialize with API key
 client = api(
-    api_key="c32eb9dee6673190bb9dfab5f18ef0a96b0d76ba484cd36bc5ca5f7ebc8745bf",
+    api_key=os.getenv("OPENALGO_API_KEY", "your_api_key_here"),
     host="http://127.0.0.1:5000"
 )
 

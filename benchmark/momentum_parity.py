@@ -2,20 +2,24 @@
 """
 Momentum parity: migrated _backend implementations vs the ORIGINAL numba kernels
 (NUMBA_DISABLE_JIT=1) on real RELIANCE data. Covers BOP, ElderRay, Fisher, CRSI
-(RSI/MACD/Stochastic/CCI/WilliamsR are gated in benchmark/parity.py).
+(RSI/Stochastic/CCI/WilliamsR are gated in benchmark/parity.py; no script gates MACD).
+Fisher has no kernel of its own left in its class, so it is checked against the
+plain-Python reference in test/indicator_references.py.
 """
 import os
 os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "test"))
 
 import numpy as np
 import pandas as pd
 
+import indicator_references as references
 from openalgo.indicators import _backend as b
 from openalgo.indicators import utils as u
-from openalgo.indicators.momentum import BOP, Fisher, CRSI, RSI
+from openalgo.indicators.momentum import BOP, CRSI, RSI
 
 DATA = Path(__file__).resolve().parent / "data"
 FAILS = []
@@ -50,7 +54,7 @@ def main():
 
     hl2 = (h + lo) / 2.0
     f1, f2 = b.fisher(hl2, 9)
-    rf1, rf2 = Fisher._calculate_fisher_tv(hl2, 9)
+    rf1, rf2 = references.fisher(h, lo, 9)
     cmp("fisher.fish", f1, rf1, tol=1e-9)
     cmp("fisher.trig", f2, rf2, tol=1e-9)
 

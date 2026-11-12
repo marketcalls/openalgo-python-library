@@ -194,7 +194,7 @@ except Exception as e:
     print(f"[ERROR] Error: {e}")
 
 try:
-    # RISING - Pine Script style trend detection
+    # RISING - value above its value n bars ago
     price_rising = ta.rising(close, 5)
     rising_periods = np.sum(price_rising)
     print(f"[OK] ta.rising(close, 5) - Rising trend: {rising_periods} periods")
@@ -202,7 +202,7 @@ except Exception as e:
     print(f"[ERROR] Error: {e}")
 
 try:
-    # FALLING - Pine Script style trend detection
+    # FALLING - value below its value n bars ago
     price_falling = ta.falling(close, 5)
     falling_periods = np.sum(price_falling)
     print(f"[OK] ta.falling(close, 5) - Falling trend: {falling_periods} periods")

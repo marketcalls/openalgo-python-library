@@ -2,10 +2,12 @@
 Configuration for playground testing
 """
 
+import os
+
 # OpenAlgo API Configuration
 # Update these values with your actual settings
 
-API_KEY = '91300b85a12a7c3c5c7fb091b6a8f17f94222a41a339d3e76640cf9bf4831350'
+API_KEY = os.getenv('OPENALGO_API_KEY', 'your_api_key_here')
 HOST = 'http://127.0.0.1:5001'
 
 # Default test parameters

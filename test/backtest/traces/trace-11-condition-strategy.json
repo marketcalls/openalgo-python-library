@@ -1,0 +1,554 @@
+{
+  "format": "openalgo.backtest.trace/1",
+  "id": "trace-11",
+  "roadmap_trace": 11,
+  "title": "A condition strategy with scale-out targets and its equivalent on_bar",
+  "phase": 1,
+  "cases": [
+    {
+      "id": "trace-11a-conditions-and-on-bar",
+      "title": "Condition strategy (entry_when, exit_when) with two scale-out targets, and its equivalent on_bar",
+      "depends_on": ["SPEC-21", "SPEC-22", "SPEC-23", "SPEC-29"],
+      "notes": [
+        "This case carries the strategy in two forms that must give the same expected result. strategy.conditions is the declarative form: one boolean per strategy bar, the value of the condition at that bar's close (in Phases 1 to 3 the kernel consumes such arrays, 14-strategy-api 4.3). strategy.decisions is the equivalent on_bar of 14-strategy-api 4.1: with pyramiding 0 it reduces to 'if flat and entry_cond: buy(**entry_args)' and 'if long and exit_cond: exit()', so every true value becomes one guarded decision at that bar's close. A kernel runner executes both forms.",
+        "entry_when order arguments do not include qty (14-strategy-api 4.1), so the size is given as size=bt.size.qty(100) (SPEC-23). The declarative form consuming arrays with the level-triggered semantics of 4.1 is SPEC-29.",
+        "No entry bar touches a level (SPEC-02 does not matter). There is no trail. All levels are exact ticks.",
+        "The run shows: no add while the entry condition stays true (pyramiding 0); exit priority in a position and entry priority when flat when both conditions are true (bars 09:35 and 09:40); the remainder after a partial target leaving by signal; and re-entry on the bar after a stop because the condition is level-triggered (bar 09:50)."
+      ],
+      "instruments": [
+        {"symbol": "DABUR", "exchange": "NSE", "type": "equity", "tick_size_rupees": 0.05, "lot_size_units": 1, "product": "MIS", "expiry_date": null, "underlying": null}
+      ],
+      "calendar": {
+        "NSE": [
+          {"date": "2025-07-01", "open_ist": "09:15", "close_ist": "15:30"}
+        ]
+      },
+      "settings": {
+        "strategy_interval": "5m",
+        "base": "5m",
+        "entry_from": "09:15",
+        "entry_until": "15:00",
+        "square_off": "15:10",
+        "fill": "next_open",
+        "slippage": 0.0,
+        "costs": null,
+        "capital": 1000000,
+        "quantity_mode": "venue",
+        "round_levels": true,
+        "max_daily_loss": null,
+        "risk_basis": "gross",
+        "after_risk_exit": "lock_session",
+        "roll": null,
+        "first_slice_ist": "2025-07-01T09:15:00+05:30",
+        "last_slice_ist": "2025-07-01T10:00:00+05:30",
+        "documented_defaults": ["product", "entry_until", "square_off", "fill", "risk_basis", "round_levels"]
+      },
+      "bars": {
+        "interval": "5m",
+        "derived_from_case": null,
+        "columns": ["time_ist", "open", "high", "low", "close", "volume"],
+        "rows": {
+          "DABUR": [
+            ["2025-07-01T09:15:00+05:30", 498.0, 499.5, 497.5, 499.0, 1000],
+            ["2025-07-01T09:20:00+05:30", 499.0, 500.5, 498.8, 500.0, 1000],
+            ["2025-07-01T09:25:00+05:30", 500.0, 503.0, 499.0, 502.5, 1000],
+            ["2025-07-01T09:30:00+05:30", 502.5, 505.5, 502.0, 505.0, 1000],
+            ["2025-07-01T09:35:00+05:30", 505.0, 507.0, 504.0, 506.0, 1000],
+            ["2025-07-01T09:40:00+05:30", 506.5, 507.0, 505.0, 506.0, 1000],
+            ["2025-07-01T09:45:00+05:30", 506.0, 507.5, 505.0, 505.5, 1000],
+            ["2025-07-01T09:50:00+05:30", 505.5, 506.0, 500.0, 500.5, 1000],
+            ["2025-07-01T09:55:00+05:30", 500.5, 502.0, 499.5, 501.5, 1000],
+            ["2025-07-01T10:00:00+05:30", 501.0, 501.5, 500.0, 500.5, 1000]
+          ]
+        }
+      },
+      "missing_slices": [],
+      "strategy": {
+        "class_attributes": {"symbol": "DABUR", "exchange": "NSE", "interval": "5m"},
+        "conditions": {
+          "bar_opens_ist": [
+            "2025-07-01T09:15:00+05:30",
+            "2025-07-01T09:20:00+05:30",
+            "2025-07-01T09:25:00+05:30",
+            "2025-07-01T09:30:00+05:30",
+            "2025-07-01T09:35:00+05:30",
+            "2025-07-01T09:40:00+05:30",
+            "2025-07-01T09:45:00+05:30",
+            "2025-07-01T09:50:00+05:30",
+            "2025-07-01T09:55:00+05:30",
+            "2025-07-01T10:00:00+05:30"
+          ],
+          "pyramiding": 0,
+          "entry_when": {
+            "values": [false, true, true, true, true, true, true, true, false, false],
+            "order_arguments": {
+              "size": {"bt": "size.qty", "args": [100]},
+              "stop": {"bt": "points", "args": [5]},
+              "targets": [
+                [
+                  {"bt": "points", "args": [5]},
+                  0.5
+                ],
+                [
+                  {"bt": "points", "args": [10]},
+                  0.5
+                ]
+              ]
+            },
+            "python": "self.entry_when(entry_cond, size=bt.size.qty(100), stop=bt.points(5), targets=[(bt.points(5), 0.5), (bt.points(10), 0.5)])"
+          },
+          "exit_when": {"values": [false, false, false, false, true, true, false, false, true, false], "python": "self.exit_when(exit_cond)"},
+          "short_when": null,
+          "cover_when": null
+        },
+        "decisions": [
+          {
+            "bar_open_ist": "2025-07-01T09:20:00+05:30",
+            "decision_time_ist": "2025-07-01T09:25:00+05:30",
+            "decision_slice_ist": "2025-07-01T09:20:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "buy",
+              "arguments": {
+                "size": {"bt": "size.qty", "args": [100]},
+                "stop": {"bt": "points", "args": [5]},
+                "targets": [
+                  [
+                    {"bt": "points", "args": [5]},
+                    0.5
+                  ],
+                  [
+                    {"bt": "points", "args": [10]},
+                    0.5
+                  ]
+                ]
+              }
+            },
+            "python": "self.buy(size=bt.size.qty(100), stop=bt.points(5), targets=[(bt.points(5), 0.5), (bt.points(10), 0.5)])"
+          },
+          {
+            "bar_open_ist": "2025-07-01T09:25:00+05:30",
+            "decision_time_ist": "2025-07-01T09:30:00+05:30",
+            "decision_slice_ist": "2025-07-01T09:25:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "buy",
+              "arguments": {
+                "size": {"bt": "size.qty", "args": [100]},
+                "stop": {"bt": "points", "args": [5]},
+                "targets": [
+                  [
+                    {"bt": "points", "args": [5]},
+                    0.5
+                  ],
+                  [
+                    {"bt": "points", "args": [10]},
+                    0.5
+                  ]
+                ]
+              }
+            },
+            "python": "self.buy(size=bt.size.qty(100), stop=bt.points(5), targets=[(bt.points(5), 0.5), (bt.points(10), 0.5)])"
+          },
+          {
+            "bar_open_ist": "2025-07-01T09:30:00+05:30",
+            "decision_time_ist": "2025-07-01T09:35:00+05:30",
+            "decision_slice_ist": "2025-07-01T09:30:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "buy",
+              "arguments": {
+                "size": {"bt": "size.qty", "args": [100]},
+                "stop": {"bt": "points", "args": [5]},
+                "targets": [
+                  [
+                    {"bt": "points", "args": [5]},
+                    0.5
+                  ],
+                  [
+                    {"bt": "points", "args": [10]},
+                    0.5
+                  ]
+                ]
+              }
+            },
+            "python": "self.buy(size=bt.size.qty(100), stop=bt.points(5), targets=[(bt.points(5), 0.5), (bt.points(10), 0.5)])"
+          },
+          {
+            "bar_open_ist": "2025-07-01T09:35:00+05:30",
+            "decision_time_ist": "2025-07-01T09:40:00+05:30",
+            "decision_slice_ist": "2025-07-01T09:35:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "buy",
+              "arguments": {
+                "size": {"bt": "size.qty", "args": [100]},
+                "stop": {"bt": "points", "args": [5]},
+                "targets": [
+                  [
+                    {"bt": "points", "args": [5]},
+                    0.5
+                  ],
+                  [
+                    {"bt": "points", "args": [10]},
+                    0.5
+                  ]
+                ]
+              }
+            },
+            "python": "self.buy(size=bt.size.qty(100), stop=bt.points(5), targets=[(bt.points(5), 0.5), (bt.points(10), 0.5)])"
+          },
+          {
+            "bar_open_ist": "2025-07-01T09:35:00+05:30",
+            "decision_time_ist": "2025-07-01T09:40:00+05:30",
+            "decision_slice_ist": "2025-07-01T09:35:00+05:30",
+            "if_position": "long",
+            "call": {
+              "method": "exit",
+              "arguments": {}
+            },
+            "python": "self.exit()"
+          },
+          {
+            "bar_open_ist": "2025-07-01T09:40:00+05:30",
+            "decision_time_ist": "2025-07-01T09:45:00+05:30",
+            "decision_slice_ist": "2025-07-01T09:40:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "buy",
+              "arguments": {
+                "size": {"bt": "size.qty", "args": [100]},
+                "stop": {"bt": "points", "args": [5]},
+                "targets": [
+                  [
+                    {"bt": "points", "args": [5]},
+                    0.5
+                  ],
+                  [
+                    {"bt": "points", "args": [10]},
+                    0.5
+                  ]
+                ]
+              }
+            },
+            "python": "self.buy(size=bt.size.qty(100), stop=bt.points(5), targets=[(bt.points(5), 0.5), (bt.points(10), 0.5)])"
+          },
+          {
+            "bar_open_ist": "2025-07-01T09:40:00+05:30",
+            "decision_time_ist": "2025-07-01T09:45:00+05:30",
+            "decision_slice_ist": "2025-07-01T09:40:00+05:30",
+            "if_position": "long",
+            "call": {
+              "method": "exit",
+              "arguments": {}
+            },
+            "python": "self.exit()"
+          },
+          {
+            "bar_open_ist": "2025-07-01T09:45:00+05:30",
+            "decision_time_ist": "2025-07-01T09:50:00+05:30",
+            "decision_slice_ist": "2025-07-01T09:45:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "buy",
+              "arguments": {
+                "size": {"bt": "size.qty", "args": [100]},
+                "stop": {"bt": "points", "args": [5]},
+                "targets": [
+                  [
+                    {"bt": "points", "args": [5]},
+                    0.5
+                  ],
+                  [
+                    {"bt": "points", "args": [10]},
+                    0.5
+                  ]
+                ]
+              }
+            },
+            "python": "self.buy(size=bt.size.qty(100), stop=bt.points(5), targets=[(bt.points(5), 0.5), (bt.points(10), 0.5)])"
+          },
+          {
+            "bar_open_ist": "2025-07-01T09:50:00+05:30",
+            "decision_time_ist": "2025-07-01T09:55:00+05:30",
+            "decision_slice_ist": "2025-07-01T09:50:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "buy",
+              "arguments": {
+                "size": {"bt": "size.qty", "args": [100]},
+                "stop": {"bt": "points", "args": [5]},
+                "targets": [
+                  [
+                    {"bt": "points", "args": [5]},
+                    0.5
+                  ],
+                  [
+                    {"bt": "points", "args": [10]},
+                    0.5
+                  ]
+                ]
+              }
+            },
+            "python": "self.buy(size=bt.size.qty(100), stop=bt.points(5), targets=[(bt.points(5), 0.5), (bt.points(10), 0.5)])"
+          },
+          {
+            "bar_open_ist": "2025-07-01T09:55:00+05:30",
+            "decision_time_ist": "2025-07-01T10:00:00+05:30",
+            "decision_slice_ist": "2025-07-01T09:55:00+05:30",
+            "if_position": "long",
+            "call": {
+              "method": "exit",
+              "arguments": {}
+            },
+            "python": "self.exit()"
+          }
+        ]
+      },
+      "expected": {
+        "assumptions": {"base": "5m", "product": "MIS", "entry_until": "15:00", "square_off": "15:10"},
+        "strategy_bars": [
+          {"bar_open_ist": "2025-07-01T09:15:00+05:30", "open": 498.0, "high": 499.5, "low": 497.5, "close": 499.0},
+          {"bar_open_ist": "2025-07-01T09:20:00+05:30", "open": 499.0, "high": 500.5, "low": 498.8, "close": 500.0},
+          {"bar_open_ist": "2025-07-01T09:25:00+05:30", "open": 500.0, "high": 503.0, "low": 499.0, "close": 502.5},
+          {"bar_open_ist": "2025-07-01T09:30:00+05:30", "open": 502.5, "high": 505.5, "low": 502.0, "close": 505.0},
+          {"bar_open_ist": "2025-07-01T09:35:00+05:30", "open": 505.0, "high": 507.0, "low": 504.0, "close": 506.0},
+          {"bar_open_ist": "2025-07-01T09:40:00+05:30", "open": 506.5, "high": 507.0, "low": 505.0, "close": 506.0},
+          {"bar_open_ist": "2025-07-01T09:45:00+05:30", "open": 506.0, "high": 507.5, "low": 505.0, "close": 505.5},
+          {"bar_open_ist": "2025-07-01T09:50:00+05:30", "open": 505.5, "high": 506.0, "low": 500.0, "close": 500.5},
+          {"bar_open_ist": "2025-07-01T09:55:00+05:30", "open": 500.5, "high": 502.0, "low": 499.5, "close": 501.5},
+          {"bar_open_ist": "2025-07-01T10:00:00+05:30", "open": 501.0, "high": 501.5, "low": 500.0, "close": 500.5}
+        ],
+        "decisions": [
+          {"decision": 0, "position_condition_met": true, "order_id": "o1", "outcome": "filled"},
+          {"decision": 1, "position_condition_met": false, "order_id": null, "outcome": "no_order"},
+          {"decision": 2, "position_condition_met": false, "order_id": null, "outcome": "no_order"},
+          {"decision": 3, "position_condition_met": false, "order_id": null, "outcome": "no_order"},
+          {"decision": 4, "position_condition_met": true, "order_id": "o2", "outcome": "filled"},
+          {"decision": 5, "position_condition_met": true, "order_id": "o3", "outcome": "filled"},
+          {"decision": 6, "position_condition_met": false, "order_id": null, "outcome": "no_order"},
+          {"decision": 7, "position_condition_met": false, "order_id": null, "outcome": "no_order"},
+          {"decision": 8, "position_condition_met": true, "order_id": "o4", "outcome": "filled"},
+          {"decision": 9, "position_condition_met": true, "order_id": "o5", "outcome": "filled"}
+        ],
+        "fills": [
+          {"slice_ist": "2025-07-01T09:25:00+05:30", "step": 2, "instrument": "DABUR", "side": "BUY", "quantity_units": 100, "price_rupees": 500.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 3, "instrument": "DABUR", "side": "SELL", "quantity_units": 50, "price_rupees": 505.0, "fill_at": "level", "reason": "leg_target", "order_id": null, "target_index": 0, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:40:00+05:30", "step": 2, "instrument": "DABUR", "side": "SELL", "quantity_units": 50, "price_rupees": 506.5, "fill_at": "open", "reason": "signal", "order_id": "o2", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:45:00+05:30", "step": 2, "instrument": "DABUR", "side": "BUY", "quantity_units": 100, "price_rupees": 506.0, "fill_at": "open", "reason": "entry", "order_id": "o3", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:50:00+05:30", "step": 3, "instrument": "DABUR", "side": "SELL", "quantity_units": 100, "price_rupees": 501.0, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T09:55:00+05:30", "step": 2, "instrument": "DABUR", "side": "BUY", "quantity_units": 100, "price_rupees": 500.5, "fill_at": "open", "reason": "entry", "order_id": "o4", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-01T10:00:00+05:30", "step": 2, "instrument": "DABUR", "side": "SELL", "quantity_units": 100, "price_rupees": 501.0, "fill_at": "open", "reason": "signal", "order_id": "o5", "target_index": null, "flags": [], "gtt_id": null}
+        ],
+        "levels": [
+          {
+            "slice_ist": "2025-07-01T09:25:00+05:30",
+            "instrument": "DABUR",
+            "position_quantity_units": 100,
+            "average_price_rupees": 500.0,
+            "stop": {"level_rupees": 495.0, "quantity_units": 100},
+            "targets": [
+              {"index": 0, "level_rupees": 505.0, "quantity_units": 50, "state": "working"},
+              {"index": 1, "level_rupees": 510.0, "quantity_units": 50, "state": "working"}
+            ],
+            "remainder_quantity_units": 0,
+            "trail": null,
+            "breakeven": null
+          },
+          {
+            "slice_ist": "2025-07-01T09:30:00+05:30",
+            "instrument": "DABUR",
+            "position_quantity_units": 50,
+            "average_price_rupees": 500.0,
+            "stop": {"level_rupees": 495.0, "quantity_units": 50},
+            "targets": [
+              {"index": 0, "level_rupees": 505.0, "quantity_units": 50, "state": "filled"},
+              {"index": 1, "level_rupees": 510.0, "quantity_units": 50, "state": "working"}
+            ],
+            "remainder_quantity_units": 0,
+            "trail": null,
+            "breakeven": null
+          },
+          {"slice_ist": "2025-07-01T09:40:00+05:30", "instrument": "DABUR", "position_quantity_units": 0, "average_price_rupees": null, "stop": null, "targets": [], "remainder_quantity_units": 0, "trail": null, "breakeven": null},
+          {
+            "slice_ist": "2025-07-01T09:45:00+05:30",
+            "instrument": "DABUR",
+            "position_quantity_units": 100,
+            "average_price_rupees": 506.0,
+            "stop": {"level_rupees": 501.0, "quantity_units": 100},
+            "targets": [
+              {"index": 0, "level_rupees": 511.0, "quantity_units": 50, "state": "working"},
+              {"index": 1, "level_rupees": 516.0, "quantity_units": 50, "state": "working"}
+            ],
+            "remainder_quantity_units": 0,
+            "trail": null,
+            "breakeven": null
+          },
+          {"slice_ist": "2025-07-01T09:50:00+05:30", "instrument": "DABUR", "position_quantity_units": 0, "average_price_rupees": null, "stop": null, "targets": [], "remainder_quantity_units": 0, "trail": null, "breakeven": null},
+          {
+            "slice_ist": "2025-07-01T09:55:00+05:30",
+            "instrument": "DABUR",
+            "position_quantity_units": 100,
+            "average_price_rupees": 500.5,
+            "stop": {"level_rupees": 495.5, "quantity_units": 100},
+            "targets": [
+              {"index": 0, "level_rupees": 505.5, "quantity_units": 50, "state": "working"},
+              {"index": 1, "level_rupees": 510.5, "quantity_units": 50, "state": "working"}
+            ],
+            "remainder_quantity_units": 0,
+            "trail": null,
+            "breakeven": null
+          },
+          {"slice_ist": "2025-07-01T10:00:00+05:30", "instrument": "DABUR", "position_quantity_units": 0, "average_price_rupees": null, "stop": null, "targets": [], "remainder_quantity_units": 0, "trail": null, "breakeven": null}
+        ],
+        "events": [
+          {"slice_ist": "2025-07-01T09:20:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o1", "quantity_units": null, "price_rupees": null, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:25:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o1", "quantity_units": 100, "price_rupees": 500.0, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:25:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "DABUR", "position_quantity_units": 100},
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 3, "type": "risk", "name": "leg_target_hit", "scope": "leg", "instrument": "DABUR", "level_rupees": 505.0, "target_index": 0, "observed_rupees": null},
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 3, "type": "position", "name": "PositionChanged", "instrument": "DABUR", "position_quantity_units": 50},
+          {"slice_ist": "2025-07-01T09:35:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o2", "quantity_units": null, "price_rupees": null, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:40:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o2", "quantity_units": 50, "price_rupees": 506.5, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:40:00+05:30", "step": 2, "type": "position", "name": "PositionClosed", "instrument": "DABUR", "position_quantity_units": 0},
+          {"slice_ist": "2025-07-01T09:40:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o3", "quantity_units": null, "price_rupees": null, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:45:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o3", "quantity_units": 100, "price_rupees": 506.0, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:45:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "DABUR", "position_quantity_units": 100},
+          {"slice_ist": "2025-07-01T09:50:00+05:30", "step": 3, "type": "risk", "name": "leg_sl_hit", "scope": "leg", "instrument": "DABUR", "level_rupees": 501.0, "target_index": null, "observed_rupees": null},
+          {"slice_ist": "2025-07-01T09:50:00+05:30", "step": 3, "type": "position", "name": "PositionClosed", "instrument": "DABUR", "position_quantity_units": 0},
+          {"slice_ist": "2025-07-01T09:50:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o4", "quantity_units": null, "price_rupees": null, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:55:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o4", "quantity_units": 100, "price_rupees": 500.5, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:55:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "DABUR", "position_quantity_units": 100},
+          {"slice_ist": "2025-07-01T09:55:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o5", "quantity_units": null, "price_rupees": null, "reject_code": null},
+          {"slice_ist": "2025-07-01T10:00:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o5", "quantity_units": 100, "price_rupees": 501.0, "reject_code": null},
+          {"slice_ist": "2025-07-01T10:00:00+05:30", "step": 2, "type": "position", "name": "PositionClosed", "instrument": "DABUR", "position_quantity_units": 0}
+        ],
+        "stale_marks": [],
+        "final_positions": [
+          {"instrument": "DABUR", "quantity_units": 0, "average_price_rupees": null}
+        ],
+        "gross_pnl": {"realized_rupees": 125.0, "unrealized_rupees": 0.0, "total_rupees": 125.0}
+      },
+      "derivation": [
+        {
+          "n": 1,
+          "slice_ist": "2025-07-01T09:15:00+05:30",
+          "step": 7,
+          "text": "Bar 0. Flat; entry condition false: nothing.",
+          "cites": ["14-strategy-api 4.1"]
+        },
+        {
+          "n": 2,
+          "slice_ist": "2025-07-01T09:20:00+05:30",
+          "step": 7,
+          "text": "Bar 1. Flat and the entry condition is true: buy(**entry_args). o1 queued for the next open.",
+          "cites": ["14-strategy-api 4.1", "03-architecture 4.2 step 7"]
+        },
+        {
+          "n": 3,
+          "slice_ist": "2025-07-01T09:25:00+05:30",
+          "step": 2,
+          "text": "BUY 100 at the open 500.00 (size=bt.size.qty(100) is a fixed quantity). Stop 495.00. Target fractions are fractions of the quantity held when this order filled, 100: target 0 at 505.00 for 50, target 1 at 510.00 for 50; no remainder.",
+          "cites": ["03-architecture 4.2 step 2", "12-position-sizing 3 and 5", "05-risk-management 3"]
+        },
+        {
+          "n": 4,
+          "slice_ist": "2025-07-01T09:25:00+05:30",
+          "step": 7,
+          "text": "Step 3: range 499.00 to 503.00, no level reached. Bar 2 close: long; exit false; the entry condition is still true but adds (0) is not below pyramiding (0): conditions are level-triggered and do not add. Nothing.",
+          "cites": ["14-strategy-api 4.1", "03-architecture 4.2 step 3"]
+        },
+        {
+          "n": 5,
+          "slice_ist": "2025-07-01T09:30:00+05:30",
+          "step": 3,
+          "text": "Stop 495.00 not reached. Target 0 at 505.00: open 502.50 below, high 505.50 reaches it: SELL 50 at 505.00, reason leg_target, target 0. Realized (505.00 - 500.00) x 50 = 250.00. Position 50; the stop quantity shrinks to 50. Target 1 at 510.00 not reached.",
+          "cites": ["03-architecture 4.2 step 3", "12-position-sizing 3 and 4"]
+        },
+        {
+          "n": 6,
+          "slice_ist": "2025-07-01T09:30:00+05:30",
+          "step": 7,
+          "text": "Bar 3 close: long (50); exit false; entry true but no add. Nothing.",
+          "cites": ["14-strategy-api 4.1"]
+        },
+        {
+          "n": 7,
+          "slice_ist": "2025-07-01T09:35:00+05:30",
+          "step": 7,
+          "text": "Step 3: range 504.00 to 507.00, nothing reached. Bar 4 close: long, and both conditions are true: in a position only the exit applies. exit() queues o2 for the whole remaining position.",
+          "cites": ["14-strategy-api 2.4 and 4.1"]
+        },
+        {
+          "n": 8,
+          "slice_ist": "2025-07-01T09:40:00+05:30",
+          "step": 2,
+          "text": "SELL 50 at the open 506.50, reason signal. Realized (506.50 - 500.00) x 50 = 325.00. Flat; target 1 and the stop are gone with the position.",
+          "cites": ["03-architecture 4.2 step 2", "05-risk-management 7"]
+        },
+        {
+          "n": 9,
+          "slice_ist": "2025-07-01T09:40:00+05:30",
+          "step": 7,
+          "text": "Bar 5 close: flat (the exit filled at this bar's open), and both conditions are true: when flat only the entry applies. buy(**entry_args): o3 queued.",
+          "cites": ["14-strategy-api 4.1"]
+        },
+        {
+          "n": 10,
+          "slice_ist": "2025-07-01T09:45:00+05:30",
+          "step": 2,
+          "text": "BUY 100 at the open 506.00. Stop 501.00; target 0 at 511.00 for 50, target 1 at 516.00 for 50. Step 3: range 505.00 to 507.50, nothing reached.",
+          "cites": ["03-architecture 4.2 steps 2 and 3"]
+        },
+        {
+          "n": 11,
+          "slice_ist": "2025-07-01T09:45:00+05:30",
+          "step": 7,
+          "text": "Bar 6 close: long; exit false; entry true, no add. Nothing.",
+          "cites": ["14-strategy-api 4.1"]
+        },
+        {
+          "n": 12,
+          "slice_ist": "2025-07-01T09:50:00+05:30",
+          "step": 3,
+          "text": "Stop 501.00: open 505.50 above it, low 500.00 at or below it: SELL 100 at 501.00, reason leg_sl. Realized (501.00 - 506.00) x 100 = -500.00. Flat.",
+          "cites": ["03-architecture 4.2 step 3"]
+        },
+        {
+          "n": 13,
+          "slice_ist": "2025-07-01T09:50:00+05:30",
+          "step": 7,
+          "text": "Bar 7 close: flat (stopped in step 3 of this slice) and the entry condition is still true: level-triggered, so the strategy re-enters. buy(**entry_args): o4 queued.",
+          "cites": ["14-strategy-api 4.1"]
+        },
+        {
+          "n": 14,
+          "slice_ist": "2025-07-01T09:55:00+05:30",
+          "step": 2,
+          "text": "BUY 100 at the open 500.50. Stop 495.50; targets 505.50 and 510.50 for 50 each. Step 3: range 499.50 to 502.00, nothing reached.",
+          "cites": ["03-architecture 4.2 steps 2 and 3"]
+        },
+        {
+          "n": 15,
+          "slice_ist": "2025-07-01T09:55:00+05:30",
+          "step": 7,
+          "text": "Bar 8 close: long; the exit condition is true: exit(). o5 queued.",
+          "cites": ["14-strategy-api 4.1"]
+        },
+        {
+          "n": 16,
+          "slice_ist": "2025-07-01T10:00:00+05:30",
+          "step": 2,
+          "text": "SELL 100 at the open 501.00, reason signal. Realized (501.00 - 500.50) x 100 = 50.00. Flat.",
+          "cites": ["03-architecture 4.2 step 2"]
+        },
+        {
+          "n": 17,
+          "slice_ist": "2025-07-01T10:00:00+05:30",
+          "step": 7,
+          "text": "Bar 9 close: flat; entry false: nothing. End of run. Gross P&L 250.00 + 325.00 - 500.00 + 50.00 = 125.00.",
+          "cites": ["14-strategy-api 4.1"]
+        }
+      ]
+    }
+  ]
+}

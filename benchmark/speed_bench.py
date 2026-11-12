@@ -2,7 +2,7 @@
 """
 Speed benchmark: Rust-backed indicators (current ta.*) vs the legacy pure-Python
 reference (the original _calculate_* / utils kernels, now interpreted since numba is
-gone) and TA-Lib where applicable. Writes benchmark/SPEED.md.
+gone). Writes benchmark/SPEED.md.
 
 Datasets: real RELIANCE daily (benchmark/data/RELIANCE_D.csv) and a deterministic
 synthetic 100k OHLCV series.
@@ -24,12 +24,6 @@ from openalgo.indicators.momentum import RSI, MACD, Stochastic
 from openalgo.indicators.volatility import BollingerBands
 from openalgo.indicators.hybrid import ADX, SAR
 from openalgo.indicators.statistics import LINREG
-
-try:
-    import talib
-    HAVE_TALIB = True
-except Exception:
-    HAVE_TALIB = False
 
 DATA = Path(__file__).resolve().parent / "data"
 
@@ -54,43 +48,32 @@ def synth(n, seed=11):
 def bench_dataset(label, h, lo, c, lines):
     n = len(c)
     lines.append(f"\n### {label} ({n} bars)\n")
-    lines.append("| indicator | Rust (ms) | Py-ref (ms) | speedup | TA-Lib (ms) |")
-    lines.append("|-----------|----------:|------------:|--------:|------------:|")
+    lines.append("| indicator | Rust (ms) | Py-ref (ms) | speedup |")
+    lines.append("|-----------|----------:|------------:|--------:|")
 
-    # (name, rust_call, pyref_call, talib_call_or_None)
+    # (name, rust_call, pyref_call)
     cases = [
-        ("sma(20)", lambda: B.sma(c, 20), lambda: SMA._calculate_sma(c, 20),
-         (lambda: talib.SMA(c, 20)) if HAVE_TALIB else None),
-        ("ema(20)", lambda: B.ema(c, 20), lambda: U.ema(c, 20),
-         (lambda: talib.EMA(c, 20)) if HAVE_TALIB else None),
-        ("wma(20)", lambda: B.wma(c, 20), lambda: WMA._calculate_wma(c, 20),
-         (lambda: talib.WMA(c, 20)) if HAVE_TALIB else None),
-        ("rsi(14)", lambda: B.rsi(c, 14), lambda: RSI._calculate_rsi(c, 14),
-         (lambda: talib.RSI(c, 14)) if HAVE_TALIB else None),
-        ("macd", lambda: B.macd(c, 12, 26, 9), lambda: MACD._calculate_macd(c, 12, 26, 9),
-         (lambda: talib.MACD(c)) if HAVE_TALIB else None),
+        ("sma(20)", lambda: B.sma(c, 20), lambda: SMA._calculate_sma(c, 20)),
+        ("ema(20)", lambda: B.ema(c, 20), lambda: U.ema(c, 20)),
+        ("wma(20)", lambda: B.wma(c, 20), lambda: WMA._calculate_wma(c, 20)),
+        ("rsi(14)", lambda: B.rsi(c, 14), lambda: RSI._calculate_rsi(c, 14)),
+        ("macd", lambda: B.macd(c, 12, 26, 9), lambda: MACD._calculate_macd(c, 12, 26, 9)),
         ("bbands(20)", lambda: B.bbands(c, 20, 2.0),
-         lambda: BollingerBands._calculate_bollinger_bands(c, 20, 2.0),
-         (lambda: talib.BBANDS(c, 20)) if HAVE_TALIB else None),
-        ("atr(14)", lambda: B.atr_wilder(h, lo, c, 14), lambda: U.atr_wilder(h, lo, c, 14),
-         (lambda: talib.ATR(h, lo, c, 14)) if HAVE_TALIB else None),
+         lambda: BollingerBands._calculate_bollinger_bands(c, 20, 2.0)),
+        ("atr(14)", lambda: B.atr_wilder(h, lo, c, 14), lambda: U.atr_wilder(h, lo, c, 14)),
         ("stochastic", lambda: B.stochastic(h, lo, c, 14, 3, 3),
-         lambda: _stoch_ref(h, lo, c), (lambda: talib.STOCH(h, lo, c)) if HAVE_TALIB else None),
+         lambda: _stoch_ref(h, lo, c)),
         ("supertrend", lambda: B.supertrend(h, lo, c, 10, 3.0),
-         lambda: _supertrend_ref(h, lo, c), None),
-        ("adx(14)", lambda: B.adx(h, lo, c, 14), lambda: _adx_ref(h, lo, c),
-         (lambda: talib.ADX(h, lo, c, 14)) if HAVE_TALIB else None),
-        ("sar", lambda: B.sar(h, lo, 0.02, 0.2), lambda: SAR._calculate_sar(h, lo, 0.02, 0.2),
-         (lambda: talib.SAR(h, lo)) if HAVE_TALIB else None),
-        ("linreg(14)", lambda: B.linreg(c, 14), lambda: LINREG._calculate_linearreg(c, 14),
-         (lambda: talib.LINEARREG(c, 14)) if HAVE_TALIB else None),
+         lambda: _supertrend_ref(h, lo, c)),
+        ("adx(14)", lambda: B.adx(h, lo, c, 14), lambda: _adx_ref(h, lo, c)),
+        ("sar", lambda: B.sar(h, lo, 0.02, 0.2), lambda: SAR._calculate_sar(h, lo, 0.02, 0.2)),
+        ("linreg(14)", lambda: B.linreg(c, 14), lambda: LINREG._calculate_linearreg(c, 14)),
     ]
-    for name, rfn, pfn, tfn in cases:
+    for name, rfn, pfn in cases:
         rt = best(rfn)
         pt = best(pfn, repeats=2)  # interpreted ref is slow; fewer repeats
         sp = pt / rt if rt > 0 else float("inf")
-        tt = f"{best(tfn):.3f}" if tfn else "-"
-        lines.append(f"| {name} | {rt:.3f} | {pt:.3f} | {sp:.1f}x | {tt} |")
+        lines.append(f"| {name} | {rt:.3f} | {pt:.3f} | {sp:.1f}x |")
 
 
 def _stoch_ref(h, lo, c):
@@ -114,8 +97,7 @@ def main():
     lines = ["# OpenAlgo Indicators - Rust Core Speed Benchmark", ""]
     lines.append("Rust = current `ta.*` backend (openalgo._oaindicators). "
                  "Py-ref = the original kernels run interpreted (numba removed). "
-                 "Speedup = Py-ref / Rust. TA-Lib shown where a comparable function exists.")
-    lines.append(f"\nTA-Lib available: {HAVE_TALIB}")
+                 "Speedup = Py-ref / Rust.")
 
     df = pd.read_csv(DATA / "RELIANCE_D.csv", index_col=0)
     h = df["high"].to_numpy(np.float64)

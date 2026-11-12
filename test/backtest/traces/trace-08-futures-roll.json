@@ -1,0 +1,520 @@
+{
+  "format": "openalgo.backtest.trace/1",
+  "id": "trace-08",
+  "roadmap_trace": 8,
+  "title": "Futures auto-roll with a trailing stop and a daily loss limit across the roll",
+  "phase": 1,
+  "cases": [
+    {
+      "id": "trace-08a-trail-across-roll",
+      "title": "Futures auto-roll: an armed trailing stop and its favourable extreme are shifted by the roll spread and the stop then fills on the next contract",
+      "depends_on": ["GTT-1", "GTT-3", "GTT-5", "GTT-8", "GTT-9", "SPEC-19", "SPEC-21", "SPEC-22", "SPEC-23", "SPEC-24", "SPEC-30"],
+      "notes": [
+        "Instrument facts are declared by the fixture (lot size 75, tick 0.05, expiries 2025-07-31 and 2025-08-28) and override any built-in reference table. Quantity is in units: lots=1 is 75.",
+        "Instruments are registered in the order listed: the near contract, then the next. The roll session is one session before the near expiry (the default): 2025-07-30.",
+        "The strategy names the underlying and the contract rank (underlying NIFTY on NFO, expiry current_month), as the frozen contract has it (14-strategy-api 2.1, SPEC-30); the fixture lists the contracts it trades in settings.roll.chain. strategy_bars are the bars on_bar receives, recorded as they were when used: the near contract's bars up to 2025-07-29 and the next contract's from the roll session on (04-execution 7).",
+        "max_daily_loss is a run argument (14-strategy-api 5.1, SPEC-23).",
+        "Positional model (04-execution 4.4, 14-strategy-api 2.4): the stop of an NRML position is held as a SINGLE GTT, placed as soon as the entry fills; a trail modifies it (a full replacement, effective from the next base bar, at most once per base bar, GTT-3). The GTT events and the fill field gtt_id are the fixture's vocabulary for a life cycle the documents describe but do not name (GTT-8). At the roll the near contract's GTT is cancelled before the near leg is closed, and a new GTT with the shifted trigger is placed on the next contract after its fill (GTT-9).",
+        "The trail is armed before the roll and is the continuous form, so after the roll its level depends only on the shifted extreme, not on which entry price the position refers to (SPEC-20).",
+        "The entry bar (2025-07-28) has high equal to open (SPEC-01 does not matter).",
+        "On the roll day the next contract's high 25260.00 is above the unshifted extreme 25180.00 but below the shifted one 25275.00. A kernel that forgets to shift the extreme would move the stop; a kernel that forgets to shift the stop would not exit on 2025-07-31 (low 25170.00 against 25080.00).",
+        "The daily loss limit of 10000 is active and never breached: the run's gross MTM at the four closes is -3750.00, 10500.00, 10125.00 and 5250.00.",
+        "The roll fills come in step 2 after any strategy order, near leg first, both with reason roll, with position events only (SPEC-19, now 04-execution 7).",
+        "On 2025-07-31 the GTT's trigger 25175.00 is reached inside the range (the open 25230.00 is above it); its child sell LIMIT 25175.00 x 0.99 = 24923.25 is marketable at the trigger and fills there (GTT-5)."
+      ],
+      "instruments": [
+        {"symbol": "NIFTY31JUL25FUT", "exchange": "NFO", "type": "future", "tick_size_rupees": 0.05, "lot_size_units": 75, "product": "NRML", "expiry_date": "2025-07-31", "underlying": "NIFTY"},
+        {"symbol": "NIFTY28AUG25FUT", "exchange": "NFO", "type": "future", "tick_size_rupees": 0.05, "lot_size_units": 75, "product": "NRML", "expiry_date": "2025-08-28", "underlying": "NIFTY"}
+      ],
+      "calendar": {
+        "NFO": [
+          {"date": "2025-07-25", "open_ist": "09:15", "close_ist": "15:30"},
+          {"date": "2025-07-28", "open_ist": "09:15", "close_ist": "15:30"},
+          {"date": "2025-07-29", "open_ist": "09:15", "close_ist": "15:30"},
+          {"date": "2025-07-30", "open_ist": "09:15", "close_ist": "15:30"},
+          {"date": "2025-07-31", "open_ist": "09:15", "close_ist": "15:30"}
+        ]
+      },
+      "settings": {
+        "strategy_interval": "D",
+        "base": "D",
+        "entry_from": null,
+        "entry_until": null,
+        "square_off": null,
+        "fill": "next_open",
+        "slippage": 0.0,
+        "costs": null,
+        "capital": 1000000,
+        "quantity_mode": "venue",
+        "round_levels": true,
+        "max_daily_loss": 10000,
+        "risk_basis": "gross",
+        "after_risk_exit": "lock_session",
+        "roll": {"sessions_before_expiry": 1, "chain": ["NIFTY31JUL25FUT", "NIFTY28AUG25FUT"]},
+        "first_slice_ist": "2025-07-25T09:15:00+05:30",
+        "last_slice_ist": "2025-07-31T09:15:00+05:30",
+        "documented_defaults": ["base", "product", "fill", "risk_basis", "round_levels", "after_risk_exit", "roll"]
+      },
+      "bars": {
+        "interval": "D",
+        "derived_from_case": null,
+        "columns": ["time_ist", "open", "high", "low", "close", "volume"],
+        "rows": {
+          "NIFTY31JUL25FUT": [
+            ["2025-07-25T09:15:00+05:30", 24950.0, 25040.0, 24900.0, 25000.0, 100000],
+            ["2025-07-28T09:15:00+05:30", 25010.0, 25010.0, 24930.0, 24960.0, 100000],
+            ["2025-07-29T09:15:00+05:30", 24970.0, 25180.0, 24950.0, 25150.0, 100000],
+            ["2025-07-30T09:15:00+05:30", 25140.0, 25165.0, 25095.0, 25145.0, 100000],
+            ["2025-07-31T09:15:00+05:30", 25135.0, 25155.0, 25075.0, 25105.0, 100000]
+          ],
+          "NIFTY28AUG25FUT": [
+            ["2025-07-25T09:15:00+05:30", 25045.0, 25135.0, 24995.0, 25095.0, 100000],
+            ["2025-07-28T09:15:00+05:30", 25105.0, 25105.0, 25025.0, 25055.0, 100000],
+            ["2025-07-29T09:15:00+05:30", 25065.0, 25275.0, 25045.0, 25245.0, 100000],
+            ["2025-07-30T09:15:00+05:30", 25235.0, 25260.0, 25190.0, 25240.0, 100000],
+            ["2025-07-31T09:15:00+05:30", 25230.0, 25250.0, 25170.0, 25200.0, 100000]
+          ]
+        }
+      },
+      "missing_slices": [],
+      "strategy": {
+        "class_attributes": {"underlying": "NIFTY", "exchange": "NFO", "interval": "D", "expiry": "current_month"},
+        "conditions": null,
+        "decisions": [
+          {
+            "bar_open_ist": "2025-07-25T09:15:00+05:30",
+            "decision_time_ist": "2025-07-25T15:30:00+05:30",
+            "decision_slice_ist": "2025-07-25T09:15:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "buy",
+              "arguments": {
+                "lots": 1,
+                "stop": {"bt": "points", "args": [150]},
+                "trail": {"bt": "trail", "args": [100, 0]}
+              }
+            },
+            "python": "self.buy(lots=1, stop=bt.points(150), trail=bt.trail(100, 0))"
+          }
+        ]
+      },
+      "expected": {
+        "assumptions": {"base": "D", "product": "NRML", "entry_until": null, "square_off": null},
+        "strategy_bars": [
+          {"bar_open_ist": "2025-07-25T09:15:00+05:30", "open": 24950.0, "high": 25040.0, "low": 24900.0, "close": 25000.0},
+          {"bar_open_ist": "2025-07-28T09:15:00+05:30", "open": 25010.0, "high": 25010.0, "low": 24930.0, "close": 24960.0},
+          {"bar_open_ist": "2025-07-29T09:15:00+05:30", "open": 24970.0, "high": 25180.0, "low": 24950.0, "close": 25150.0},
+          {"bar_open_ist": "2025-07-30T09:15:00+05:30", "open": 25235.0, "high": 25260.0, "low": 25190.0, "close": 25240.0},
+          {"bar_open_ist": "2025-07-31T09:15:00+05:30", "open": 25230.0, "high": 25250.0, "low": 25170.0, "close": 25200.0}
+        ],
+        "decisions": [
+          {"decision": 0, "position_condition_met": true, "order_id": "o1", "outcome": "filled"}
+        ],
+        "fills": [
+          {"slice_ist": "2025-07-28T09:15:00+05:30", "step": 2, "instrument": "NIFTY31JUL25FUT", "side": "BUY", "quantity_units": 75, "price_rupees": 25010.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-30T09:15:00+05:30", "step": 2, "instrument": "NIFTY31JUL25FUT", "side": "SELL", "quantity_units": 75, "price_rupees": 25140.0, "fill_at": "open", "reason": "roll", "order_id": null, "target_index": null, "flags": [], "gtt_id": null, "depends_on": ["SPEC-19"]},
+          {"slice_ist": "2025-07-30T09:15:00+05:30", "step": 2, "instrument": "NIFTY28AUG25FUT", "side": "BUY", "quantity_units": 75, "price_rupees": 25235.0, "fill_at": "open", "reason": "roll", "order_id": null, "target_index": null, "flags": [], "gtt_id": null, "depends_on": ["SPEC-19"]},
+          {"slice_ist": "2025-07-31T09:15:00+05:30", "step": 3, "instrument": "NIFTY28AUG25FUT", "side": "SELL", "quantity_units": 75, "price_rupees": 25175.0, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "gtt_id": "g2", "depends_on": ["GTT-5", "GTT-8"]}
+        ],
+        "levels": [
+          {
+            "slice_ist": "2025-07-28T09:15:00+05:30",
+            "instrument": "NIFTY31JUL25FUT",
+            "position_quantity_units": 75,
+            "average_price_rupees": 25010.0,
+            "stop": {"level_rupees": 24860.0, "quantity_units": 75},
+            "targets": [],
+            "remainder_quantity_units": 75,
+            "trail": {"armed": false, "favourable_extreme_rupees": 25010.0},
+            "breakeven": null
+          },
+          {
+            "slice_ist": "2025-07-29T09:15:00+05:30",
+            "instrument": "NIFTY31JUL25FUT",
+            "position_quantity_units": 75,
+            "average_price_rupees": 25010.0,
+            "stop": {"level_rupees": 25080.0, "quantity_units": 75},
+            "targets": [],
+            "remainder_quantity_units": 75,
+            "trail": {"armed": true, "favourable_extreme_rupees": 25180.0},
+            "breakeven": null
+          },
+          {"slice_ist": "2025-07-30T09:15:00+05:30", "instrument": "NIFTY31JUL25FUT", "position_quantity_units": 0, "average_price_rupees": null, "stop": null, "targets": [], "remainder_quantity_units": 0, "trail": null, "breakeven": null},
+          {
+            "slice_ist": "2025-07-30T09:15:00+05:30",
+            "instrument": "NIFTY28AUG25FUT",
+            "position_quantity_units": 75,
+            "average_price_rupees": 25235.0,
+            "stop": {"level_rupees": 25175.0, "quantity_units": 75},
+            "targets": [],
+            "remainder_quantity_units": 75,
+            "trail": {"armed": true, "favourable_extreme_rupees": 25275.0},
+            "breakeven": null
+          },
+          {"slice_ist": "2025-07-31T09:15:00+05:30", "instrument": "NIFTY28AUG25FUT", "position_quantity_units": 0, "average_price_rupees": null, "stop": null, "targets": [], "remainder_quantity_units": 0, "trail": null, "breakeven": null}
+        ],
+        "events": [
+          {"slice_ist": "2025-07-25T09:15:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o1", "quantity_units": null, "price_rupees": null, "reject_code": null},
+          {"slice_ist": "2025-07-28T09:15:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o1", "quantity_units": 75, "price_rupees": 25010.0, "reject_code": null},
+          {"slice_ist": "2025-07-28T09:15:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "NIFTY31JUL25FUT", "position_quantity_units": 75},
+          {"slice_ist": "2025-07-28T09:15:00+05:30", "step": 2, "type": "gtt", "name": "GttPlaced", "gtt_id": "g1", "instrument": "NIFTY31JUL25FUT", "quantity_units": 75, "stop_trigger_rupees": 24860.0, "target_trigger_rupees": null, "fired_leg": null, "child_limit_rupees": null, "price_rupees": null, "depends_on": ["GTT-8"]},
+          {"slice_ist": "2025-07-29T09:15:00+05:30", "step": 4, "type": "risk", "name": "leg_trail_armed", "scope": "leg", "instrument": "NIFTY31JUL25FUT", "level_rupees": 25080.0, "target_index": null, "observed_rupees": null},
+          {"slice_ist": "2025-07-29T09:15:00+05:30", "step": 4, "type": "gtt", "name": "GttModified", "gtt_id": "g1", "instrument": "NIFTY31JUL25FUT", "quantity_units": 75, "stop_trigger_rupees": 25080.0, "target_trigger_rupees": null, "fired_leg": null, "child_limit_rupees": null, "price_rupees": null, "depends_on": ["GTT-8", "GTT-3"]},
+          {"slice_ist": "2025-07-30T09:15:00+05:30", "step": 2, "type": "gtt", "name": "GttCanceled", "gtt_id": "g1", "instrument": "NIFTY31JUL25FUT", "quantity_units": 75, "stop_trigger_rupees": 25080.0, "target_trigger_rupees": null, "fired_leg": null, "child_limit_rupees": null, "price_rupees": null, "depends_on": ["GTT-8", "GTT-9"]},
+          {"slice_ist": "2025-07-30T09:15:00+05:30", "step": 2, "type": "position", "name": "PositionClosed", "instrument": "NIFTY31JUL25FUT", "position_quantity_units": 0, "depends_on": ["SPEC-19"]},
+          {"slice_ist": "2025-07-30T09:15:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "NIFTY28AUG25FUT", "position_quantity_units": 75, "depends_on": ["SPEC-19"]},
+          {"slice_ist": "2025-07-30T09:15:00+05:30", "step": 2, "type": "gtt", "name": "GttPlaced", "gtt_id": "g2", "instrument": "NIFTY28AUG25FUT", "quantity_units": 75, "stop_trigger_rupees": 25175.0, "target_trigger_rupees": null, "fired_leg": null, "child_limit_rupees": null, "price_rupees": null, "depends_on": ["GTT-8", "GTT-9"]},
+          {
+            "slice_ist": "2025-07-31T09:15:00+05:30",
+            "step": 3,
+            "type": "gtt",
+            "name": "GttTriggered",
+            "gtt_id": "g2",
+            "instrument": "NIFTY28AUG25FUT",
+            "quantity_units": 75,
+            "stop_trigger_rupees": 25175.0,
+            "target_trigger_rupees": null,
+            "fired_leg": "stop",
+            "child_limit_rupees": 24923.25,
+            "price_rupees": null,
+            "depends_on": ["GTT-8", "GTT-1"]
+          },
+          {"slice_ist": "2025-07-31T09:15:00+05:30", "step": 3, "type": "risk", "name": "leg_sl_hit", "scope": "leg", "instrument": "NIFTY28AUG25FUT", "level_rupees": 25175.0, "target_index": null, "observed_rupees": null},
+          {
+            "slice_ist": "2025-07-31T09:15:00+05:30",
+            "step": 3,
+            "type": "gtt",
+            "name": "GttChildFilled",
+            "gtt_id": "g2",
+            "instrument": "NIFTY28AUG25FUT",
+            "quantity_units": 75,
+            "stop_trigger_rupees": null,
+            "target_trigger_rupees": null,
+            "fired_leg": null,
+            "child_limit_rupees": 24923.25,
+            "price_rupees": 25175.0,
+            "depends_on": ["GTT-1", "GTT-5", "GTT-8"]
+          },
+          {"slice_ist": "2025-07-31T09:15:00+05:30", "step": 3, "type": "position", "name": "PositionClosed", "instrument": "NIFTY28AUG25FUT", "position_quantity_units": 0}
+        ],
+        "stale_marks": [],
+        "final_positions": [
+          {"instrument": "NIFTY31JUL25FUT", "quantity_units": 0, "average_price_rupees": null},
+          {"instrument": "NIFTY28AUG25FUT", "quantity_units": 0, "average_price_rupees": null}
+        ],
+        "gross_pnl": {"realized_rupees": 5250.0, "unrealized_rupees": 0.0, "total_rupees": 5250.0, "depends_on": ["GTT-5"]}
+      },
+      "derivation": [
+        {
+          "n": 1,
+          "slice_ist": "2025-07-25T09:15:00+05:30",
+          "step": 7,
+          "text": "Daily strategy, daily base, product NRML (the default for a daily F&O strategy). on_bar at the close of 2025-07-25 receives the near contract's bar; flat; decision 0 calls buy(lots=1, ...) and o1 is Submitted. A market order decided at a daily close fills at the next session's first base-bar open.",
+          "cites": ["03-architecture 4.1, 4.2 step 7 and order validity", "04-execution 4.4 item 1", "14-strategy-api 2.1 and 5.1"]
+        },
+        {
+          "n": 2,
+          "slice_ist": "2025-07-28T09:15:00+05:30",
+          "step": 2,
+          "text": "BUY 1 lot = 75 units of the near contract at the open 25010.00. Stop 25010.00 - 150 = 24860.00. Continuous trail, x = 100, extreme 25010.00. The stop of an NRML position is a SINGLE GTT, placed as soon as the entry fill is confirmed: GttPlaced g1 on the near contract, trigger 24860.00, quantity 75.",
+          "cites": [
+            "03-architecture 4.2 step 2",
+            "03-architecture 7",
+            "04-execution 1",
+            "05-risk-management 3",
+            "04-execution 4.4 item 2",
+            "14-strategy-api 2.4",
+            "08-live-trading 6.2"
+          ]
+        },
+        {
+          "n": 3,
+          "slice_ist": "2025-07-28T09:15:00+05:30",
+          "step": 3,
+          "text": "Low 24930.00, above the stop; the high equals the entry. Step 6: daily loss measure (24960.00 - 25010.00) x 75 = -3750.00, above -10000.",
+          "cites": ["03-architecture 4.2 steps 3, 4 and 6", "05-risk-management 5"]
+        },
+        {
+          "n": 4,
+          "slice_ist": "2025-07-29T09:15:00+05:30",
+          "step": 4,
+          "text": "Step 3: low 24950.00, above the trigger 24860.00. Step 4: high 25180.00, favourable excursion 170 >= 100: the trail arms (leg_trail_armed), candidate 25180.00 - 100 = 25080.00. The trail modifies the GTT: GttModified g1, trigger 25080.00, a full replacement effective from the next base bar; it is the only modify of this bar and moves the level by more than one tick (GTT-3). Step 6: (25150.00 - 25010.00) x 75 = 10500.00.",
+          "cites": ["03-architecture 4.2 steps 3, 4 and 6", "strategy-module 3.1", "04-execution 4.4 item 5"]
+        },
+        {
+          "n": 5,
+          "slice_ist": "2025-07-30T09:15:00+05:30",
+          "step": 2,
+          "text": "2025-07-30 is the roll session (one session before the 2025-07-31 expiry). The roll closes the near position, so the near contract's GTT is cancelled first (cancel-then-exit): GttCanceled g1 at 25080.00 (GTT-9). At the first base-bar open the near contract is closed and the next opened in the same slice: SELL 75 near at 25140.00, BUY 75 next at 25235.00, both reason roll. Roll spread = next minus near raw open = 25235.00 - 25140.00 = 95.00. Stop, trail level and favourable extreme are shifted by the spread: stop 25080.00 + 95.00 = 25175.00, extreme 25180.00 + 95.00 = 25275.00; the trail stays armed. The new position's stop is held by a new SINGLE GTT on the next contract: GttPlaced g2, trigger 25175.00. Realized on the near leg (25140.00 - 25010.00) x 75 = 9750.00. The position's average price is the new fill, 25235.00.",
+          "cites": ["04-execution 7", "04-execution 4.4 item 2", "08-live-trading 6.2", "03-architecture 4.2 steps 1 and 2", "12-position-sizing 1"]
+        },
+        {
+          "n": 6,
+          "slice_ist": "2025-07-30T09:15:00+05:30",
+          "step": 3,
+          "text": "g2, placed in step 2, is tested against the next contract's bar: low 25190.00, above the trigger 25175.00. Nothing fires.",
+          "cites": ["03-architecture 4.2 step 3", "04-execution 4.4 item 3"]
+        },
+        {
+          "n": 7,
+          "slice_ist": "2025-07-30T09:15:00+05:30",
+          "step": 4,
+          "text": "High 25260.00 is below the shifted extreme 25275.00, so the extreme and the stop do not move and the GTT is not modified. Step 6: 9750.00 + (25240.00 - 25235.00) x 75 = 10125.00. on_bar receives the next contract's bar (the spliced series switches at the roll session).",
+          "cites": ["03-architecture 4.2 steps 4 and 6", "04-execution 7", "04-execution 4.4 item 5"]
+        },
+        {
+          "n": 8,
+          "slice_ist": "2025-07-31T09:15:00+05:30",
+          "step": 3,
+          "text": "Trigger 25175.00 on the next contract. The open 25230.00 is above it; the low 25170.00 is at or below it, so g2 fires on its stop leg (GttTriggered, then leg_sl_hit at 25175.00). Child sell LIMIT 25175.00 x 0.99 = 24923.25, a whole number of ticks; marketable at the trigger, it fills there (GTT-5): SELL 75 at 25175.00, reason leg_sl (GttChildFilled, then PositionClosed). Realized (25175.00 - 25235.00) x 75 = -4500.00.",
+          "cites": ["04-execution 4.4 item 3", "03-architecture 4.2 step 3", "03-architecture 4.5"]
+        },
+        {
+          "n": 9,
+          "slice_ist": null,
+          "step": null,
+          "text": "Gross P&L 9750.00 - 4500.00 = 5250.00. Cross-check: without the roll the stop 25080.00 on the near contract gives (25080.00 - 25010.00) x 75 = 5250.00; at zero cost and zero slippage the roll is P&L-neutral.",
+          "cites": ["04-execution 7"]
+        }
+      ]
+    },
+    {
+      "id": "trace-08b-daily-loss-across-roll",
+      "title": "Futures auto-roll: the daily loss limit keeps counting the loss realized by the roll and fires at the roll day's close",
+      "depends_on": ["GTT-8", "GTT-9", "SPEC-16", "SPEC-17", "SPEC-18", "SPEC-19", "SPEC-21", "SPEC-22", "SPEC-23", "SPEC-24", "SPEC-30"],
+      "notes": [
+        "Instrument facts are declared by the fixture (lot size 75, tick 0.05, expiries 2025-07-31 and 2025-08-28) and override any built-in reference table. Quantity is in units: lots=1 is 75.",
+        "Instruments are registered in the order listed: the near contract, then the next. The roll session is one session before the near expiry (the default): 2025-07-30.",
+        "The strategy names the underlying and the contract rank (underlying NIFTY on NFO, expiry current_month), as the frozen contract has it (14-strategy-api 2.1, SPEC-30); the fixture lists the contracts it trades in settings.roll.chain. strategy_bars are the bars on_bar receives, recorded as they were when used: the near contract's bars up to 2025-07-29 and the next contract's from the roll session on (04-execution 7).",
+        "max_daily_loss is a run argument (14-strategy-api 5.1, SPEC-23).",
+        "Positional model (04-execution 4.4, 14-strategy-api 2.4): the stop of an NRML position is held as a SINGLE GTT, placed as soon as the entry fills; a trail modifies it (a full replacement, effective from the next base bar, at most once per base bar, GTT-3). The GTT events and the fill field gtt_id are the fixture's vocabulary for a life cycle the documents describe but do not name (GTT-8). At the roll the near contract's GTT is cancelled before the near leg is closed, and a new GTT with the shifted trigger is placed on the next contract after its fill (GTT-9).",
+        "max_daily_loss 10000, risk_basis gross. The trail (x = 200) never arms, before or after the roll, under either entry reference (SPEC-20).",
+        "SPEC-16 (now 05-risk-management 5): the daily loss measure is the run's MTM since its first fill, and a roll does not end a run, so the loss realized by the roll stays in it: -6750.00 - 9375.00 = -16125.00 at the close of 2025-07-30. A kernel that drops the P&L realized by the roll sees -9375.00 and does not breach: that is the defect this case catches.",
+        "SPEC-17 (now 03-architecture 4.2 step 6): on a daily base the exit of an aggregate or daily-loss rule fills at the close of the day that breached, flagged.",
+        "SPEC-18 (now 05-risk-management 5 and 7): the breach emits daily_loss_limit_hit and leaves the strategy REDUCING; the gate rejects the new entry with daily_loss_gate.",
+        "The daily loss exit is the engine's own exit, so the position's GTT is cancelled before it (cancel-then-exit, 08-live-trading 6.2)."
+      ],
+      "instruments": [
+        {"symbol": "NIFTY31JUL25FUT", "exchange": "NFO", "type": "future", "tick_size_rupees": 0.05, "lot_size_units": 75, "product": "NRML", "expiry_date": "2025-07-31", "underlying": "NIFTY"},
+        {"symbol": "NIFTY28AUG25FUT", "exchange": "NFO", "type": "future", "tick_size_rupees": 0.05, "lot_size_units": 75, "product": "NRML", "expiry_date": "2025-08-28", "underlying": "NIFTY"}
+      ],
+      "calendar": {
+        "NFO": [
+          {"date": "2025-07-25", "open_ist": "09:15", "close_ist": "15:30"},
+          {"date": "2025-07-28", "open_ist": "09:15", "close_ist": "15:30"},
+          {"date": "2025-07-29", "open_ist": "09:15", "close_ist": "15:30"},
+          {"date": "2025-07-30", "open_ist": "09:15", "close_ist": "15:30"},
+          {"date": "2025-07-31", "open_ist": "09:15", "close_ist": "15:30"}
+        ]
+      },
+      "settings": {
+        "strategy_interval": "D",
+        "base": "D",
+        "entry_from": null,
+        "entry_until": null,
+        "square_off": null,
+        "fill": "next_open",
+        "slippage": 0.0,
+        "costs": null,
+        "capital": 1000000,
+        "quantity_mode": "venue",
+        "round_levels": true,
+        "max_daily_loss": 10000,
+        "risk_basis": "gross",
+        "after_risk_exit": "lock_session",
+        "roll": {"sessions_before_expiry": 1, "chain": ["NIFTY31JUL25FUT", "NIFTY28AUG25FUT"]},
+        "first_slice_ist": "2025-07-25T09:15:00+05:30",
+        "last_slice_ist": "2025-07-31T09:15:00+05:30",
+        "documented_defaults": ["base", "product", "fill", "risk_basis", "round_levels", "after_risk_exit", "roll"]
+      },
+      "bars": {
+        "interval": "D",
+        "derived_from_case": null,
+        "columns": ["time_ist", "open", "high", "low", "close", "volume"],
+        "rows": {
+          "NIFTY31JUL25FUT": [
+            ["2025-07-25T09:15:00+05:30", 24950.0, 25040.0, 24900.0, 25000.0, 100000],
+            ["2025-07-28T09:15:00+05:30", 25010.0, 25010.0, 24930.0, 24960.0, 100000],
+            ["2025-07-29T09:15:00+05:30", 24950.0, 25090.0, 24900.0, 24940.0, 100000],
+            ["2025-07-30T09:15:00+05:30", 24920.0, 24965.0, 24785.0, 24795.0, 100000],
+            ["2025-07-31T09:15:00+05:30", 24805.0, 24855.0, 24765.0, 24835.0, 100000]
+          ],
+          "NIFTY28AUG25FUT": [
+            ["2025-07-25T09:15:00+05:30", 25045.0, 25135.0, 24995.0, 25095.0, 100000],
+            ["2025-07-28T09:15:00+05:30", 25105.0, 25105.0, 25025.0, 25055.0, 100000],
+            ["2025-07-29T09:15:00+05:30", 25045.0, 25185.0, 24995.0, 25035.0, 100000],
+            ["2025-07-30T09:15:00+05:30", 25015.0, 25060.0, 24880.0, 24890.0, 100000],
+            ["2025-07-31T09:15:00+05:30", 24900.0, 24950.0, 24860.0, 24930.0, 100000]
+          ]
+        }
+      },
+      "missing_slices": [],
+      "strategy": {
+        "class_attributes": {"underlying": "NIFTY", "exchange": "NFO", "interval": "D", "expiry": "current_month"},
+        "conditions": null,
+        "decisions": [
+          {
+            "bar_open_ist": "2025-07-25T09:15:00+05:30",
+            "decision_time_ist": "2025-07-25T15:30:00+05:30",
+            "decision_slice_ist": "2025-07-25T09:15:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "buy",
+              "arguments": {
+                "lots": 1,
+                "stop": {"bt": "points", "args": [300]},
+                "trail": {"bt": "trail", "args": [200, 0]}
+              }
+            },
+            "python": "self.buy(lots=1, stop=bt.points(300), trail=bt.trail(200, 0))"
+          },
+          {
+            "bar_open_ist": "2025-07-30T09:15:00+05:30",
+            "decision_time_ist": "2025-07-30T15:30:00+05:30",
+            "decision_slice_ist": "2025-07-30T09:15:00+05:30",
+            "if_position": "any",
+            "call": {
+              "method": "buy",
+              "arguments": {"lots": 1}
+            },
+            "python": "self.buy(lots=1)"
+          }
+        ]
+      },
+      "expected": {
+        "assumptions": {"base": "D", "product": "NRML", "entry_until": null, "square_off": null},
+        "strategy_bars": [
+          {"bar_open_ist": "2025-07-25T09:15:00+05:30", "open": 24950.0, "high": 25040.0, "low": 24900.0, "close": 25000.0},
+          {"bar_open_ist": "2025-07-28T09:15:00+05:30", "open": 25010.0, "high": 25010.0, "low": 24930.0, "close": 24960.0},
+          {"bar_open_ist": "2025-07-29T09:15:00+05:30", "open": 24950.0, "high": 25090.0, "low": 24900.0, "close": 24940.0},
+          {"bar_open_ist": "2025-07-30T09:15:00+05:30", "open": 25015.0, "high": 25060.0, "low": 24880.0, "close": 24890.0},
+          {"bar_open_ist": "2025-07-31T09:15:00+05:30", "open": 24900.0, "high": 24950.0, "low": 24860.0, "close": 24930.0}
+        ],
+        "decisions": [
+          {"decision": 0, "position_condition_met": true, "order_id": "o1", "outcome": "filled"},
+          {"decision": 1, "position_condition_met": true, "order_id": "o2", "outcome": "rejected", "depends_on": ["SPEC-18"]}
+        ],
+        "fills": [
+          {"slice_ist": "2025-07-28T09:15:00+05:30", "step": 2, "instrument": "NIFTY31JUL25FUT", "side": "BUY", "quantity_units": 75, "price_rupees": 25010.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": [], "gtt_id": null},
+          {"slice_ist": "2025-07-30T09:15:00+05:30", "step": 2, "instrument": "NIFTY31JUL25FUT", "side": "SELL", "quantity_units": 75, "price_rupees": 24920.0, "fill_at": "open", "reason": "roll", "order_id": null, "target_index": null, "flags": [], "gtt_id": null, "depends_on": ["SPEC-19"]},
+          {"slice_ist": "2025-07-30T09:15:00+05:30", "step": 2, "instrument": "NIFTY28AUG25FUT", "side": "BUY", "quantity_units": 75, "price_rupees": 25015.0, "fill_at": "open", "reason": "roll", "order_id": null, "target_index": null, "flags": [], "gtt_id": null, "depends_on": ["SPEC-19"]},
+          {"slice_ist": "2025-07-30T09:15:00+05:30", "step": 6, "instrument": "NIFTY28AUG25FUT", "side": "SELL", "quantity_units": 75, "price_rupees": 24890.0, "fill_at": "close", "reason": "daily_loss_limit", "order_id": null, "target_index": null, "flags": ["filled_at_last_close"], "gtt_id": null, "depends_on": ["SPEC-17"]}
+        ],
+        "levels": [
+          {
+            "slice_ist": "2025-07-28T09:15:00+05:30",
+            "instrument": "NIFTY31JUL25FUT",
+            "position_quantity_units": 75,
+            "average_price_rupees": 25010.0,
+            "stop": {"level_rupees": 24710.0, "quantity_units": 75},
+            "targets": [],
+            "remainder_quantity_units": 75,
+            "trail": {"armed": false, "favourable_extreme_rupees": 25010.0},
+            "breakeven": null
+          },
+          {"slice_ist": "2025-07-30T09:15:00+05:30", "instrument": "NIFTY31JUL25FUT", "position_quantity_units": 0, "average_price_rupees": null, "stop": null, "targets": [], "remainder_quantity_units": 0, "trail": null, "breakeven": null},
+          {"slice_ist": "2025-07-30T09:15:00+05:30", "instrument": "NIFTY28AUG25FUT", "position_quantity_units": 0, "average_price_rupees": null, "stop": null, "targets": [], "remainder_quantity_units": 0, "trail": null, "breakeven": null, "depends_on": ["SPEC-17"]}
+        ],
+        "events": [
+          {"slice_ist": "2025-07-25T09:15:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o1", "quantity_units": null, "price_rupees": null, "reject_code": null},
+          {"slice_ist": "2025-07-28T09:15:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o1", "quantity_units": 75, "price_rupees": 25010.0, "reject_code": null},
+          {"slice_ist": "2025-07-28T09:15:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "NIFTY31JUL25FUT", "position_quantity_units": 75},
+          {"slice_ist": "2025-07-28T09:15:00+05:30", "step": 2, "type": "gtt", "name": "GttPlaced", "gtt_id": "g1", "instrument": "NIFTY31JUL25FUT", "quantity_units": 75, "stop_trigger_rupees": 24710.0, "target_trigger_rupees": null, "fired_leg": null, "child_limit_rupees": null, "price_rupees": null, "depends_on": ["GTT-8"]},
+          {"slice_ist": "2025-07-30T09:15:00+05:30", "step": 2, "type": "gtt", "name": "GttCanceled", "gtt_id": "g1", "instrument": "NIFTY31JUL25FUT", "quantity_units": 75, "stop_trigger_rupees": 24710.0, "target_trigger_rupees": null, "fired_leg": null, "child_limit_rupees": null, "price_rupees": null, "depends_on": ["GTT-8", "GTT-9"]},
+          {"slice_ist": "2025-07-30T09:15:00+05:30", "step": 2, "type": "position", "name": "PositionClosed", "instrument": "NIFTY31JUL25FUT", "position_quantity_units": 0, "depends_on": ["SPEC-19"]},
+          {"slice_ist": "2025-07-30T09:15:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "NIFTY28AUG25FUT", "position_quantity_units": 75, "depends_on": ["SPEC-19"]},
+          {"slice_ist": "2025-07-30T09:15:00+05:30", "step": 2, "type": "gtt", "name": "GttPlaced", "gtt_id": "g2", "instrument": "NIFTY28AUG25FUT", "quantity_units": 75, "stop_trigger_rupees": 24805.0, "target_trigger_rupees": null, "fired_leg": null, "child_limit_rupees": null, "price_rupees": null, "depends_on": ["GTT-8", "GTT-9"]},
+          {"slice_ist": "2025-07-30T09:15:00+05:30", "step": 6, "type": "risk", "name": "daily_loss_limit_hit", "scope": "session", "instrument": null, "level_rupees": -10000.0, "target_index": null, "observed_rupees": -16125.0, "depends_on": ["SPEC-16", "SPEC-18"]},
+          {"slice_ist": "2025-07-30T09:15:00+05:30", "step": 6, "type": "gtt", "name": "GttCanceled", "gtt_id": "g2", "instrument": "NIFTY28AUG25FUT", "quantity_units": 75, "stop_trigger_rupees": 24805.0, "target_trigger_rupees": null, "fired_leg": null, "child_limit_rupees": null, "price_rupees": null, "depends_on": ["GTT-8"]},
+          {"slice_ist": "2025-07-30T09:15:00+05:30", "step": 6, "type": "position", "name": "PositionClosed", "instrument": "NIFTY28AUG25FUT", "position_quantity_units": 0, "depends_on": ["SPEC-17"]},
+          {"slice_ist": "2025-07-30T09:15:00+05:30", "step": 7, "type": "order", "name": "Rejected", "order_id": "o2", "quantity_units": null, "price_rupees": null, "reject_code": "daily_loss_gate", "depends_on": ["SPEC-18"]}
+        ],
+        "stale_marks": [],
+        "final_positions": [
+          {"instrument": "NIFTY31JUL25FUT", "quantity_units": 0, "average_price_rupees": null},
+          {"instrument": "NIFTY28AUG25FUT", "quantity_units": 0, "average_price_rupees": null}
+        ],
+        "gross_pnl": {"realized_rupees": -16125.0, "unrealized_rupees": 0.0, "total_rupees": -16125.0, "depends_on": ["SPEC-17"]}
+      },
+      "derivation": [
+        {
+          "n": 1,
+          "slice_ist": "2025-07-25T09:15:00+05:30",
+          "step": 7,
+          "text": "on_bar at the close of 2025-07-25; flat; decision 0 calls buy(lots=1, ...); o1 Submitted, valid for the next session.",
+          "cites": ["03-architecture 4.2 step 7 and order validity", "04-execution 4.4 item 1"]
+        },
+        {
+          "n": 2,
+          "slice_ist": "2025-07-28T09:15:00+05:30",
+          "step": 2,
+          "text": "BUY 75 near at the open 25010.00. Stop 25010.00 - 300 = 24710.00, held by a SINGLE GTT placed as soon as the entry fills: GttPlaced g1, trigger 24710.00. Trail x = 200, extreme 25010.00.",
+          "cites": ["03-architecture 4.2 step 2", "05-risk-management 3", "04-execution 4.4 item 2", "08-live-trading 6.2"]
+        },
+        {
+          "n": 3,
+          "slice_ist": "2025-07-28T09:15:00+05:30",
+          "step": 6,
+          "text": "No level reached (low 24930.00). Daily loss measure (24960.00 - 25010.00) x 75 = -3750.00: above -10000.",
+          "cites": ["03-architecture 4.2 steps 3 and 6", "05-risk-management 5"]
+        },
+        {
+          "n": 4,
+          "slice_ist": "2025-07-29T09:15:00+05:30",
+          "step": 6,
+          "text": "Step 3: low 24900.00, above 24710.00. Step 4: extreme 25090.00, favourable excursion 80, below 200. Step 6: (24940.00 - 25010.00) x 75 = -5250.00 (the day's own change is -1500.00): no breach under any reading.",
+          "cites": ["03-architecture 4.2 steps 3, 4 and 6", "05-risk-management 5", "14-strategy-api 3"]
+        },
+        {
+          "n": 5,
+          "slice_ist": "2025-07-30T09:15:00+05:30",
+          "step": 2,
+          "text": "Roll session. GttCanceled g1 (24710.00) before the near leg is closed (GTT-9). SELL 75 near at the open 24920.00, BUY 75 next at the open 25015.00, both reason roll. Spread 95.00. Stop 24710.00 + 95.00 = 24805.00; extreme 25090.00 + 95.00 = 25185.00. GttPlaced g2 on the next contract, trigger 24805.00. Realized on the near leg (24920.00 - 25010.00) x 75 = -6750.00.",
+          "cites": ["04-execution 7", "04-execution 4.4 item 2", "08-live-trading 6.2", "03-architecture 4.2 steps 1 and 2"]
+        },
+        {
+          "n": 6,
+          "slice_ist": "2025-07-30T09:15:00+05:30",
+          "step": 3,
+          "text": "Next contract: low 24880.00, above g2's trigger 24805.00. Nothing fires.",
+          "cites": ["03-architecture 4.2 step 3", "04-execution 4.4 item 3"]
+        },
+        {
+          "n": 7,
+          "slice_ist": "2025-07-30T09:15:00+05:30",
+          "step": 4,
+          "text": "High 25060.00 is below the shifted extreme 25185.00. The favourable excursion is 80 from the shifted entry 25105.00 (170 from the new fill 25015.00): below 200 either way. Not armed.",
+          "cites": ["03-architecture 4.2 step 4", "04-execution 7"]
+        },
+        {
+          "n": 8,
+          "slice_ist": "2025-07-30T09:15:00+05:30",
+          "step": 5,
+          "text": "Mark the next contract at its close 24890.00: unrealized (24890.00 - 25015.00) x 75 = -9375.00.",
+          "cites": ["03-architecture 4.2 step 5"]
+        },
+        {
+          "n": 9,
+          "slice_ist": "2025-07-30T09:15:00+05:30",
+          "step": 6,
+          "text": "Daily loss, gross basis. The roll did not end the run, so the loss it realized stays in the measure: -6750.00 - 9375.00 = -16125.00 <= -10000: breach (daily_loss_limit_hit, scope session, limit -10000.00, observed -16125.00), reason daily_loss_limit. The exit is the engine's own, so g2 is cancelled first: GttCanceled g2 (24805.00). On a daily base the session has no later bar, so the exit fills at the last close, flagged: SELL 75 next at 24890.00 in this slice. Realized on the next leg -9375.00. The strategy is REDUCING until the next session.",
+          "cites": ["03-architecture 4.2 step 6", "05-risk-management 5 and 6.2", "14-strategy-api 3", "08-live-trading 6.2"]
+        },
+        {
+          "n": 10,
+          "slice_ist": "2025-07-30T09:15:00+05:30",
+          "step": 7,
+          "text": "on_risk_event is delivered, then on_bar with the next contract's bar. Decision 1 calls buy(lots=1); the strategy is REDUCING, so the daily loss gate rejects it at submission: Rejected o2, reject code daily_loss_gate.",
+          "cites": ["03-architecture 4.2 step 7", "03-architecture 4.4", "05-risk-management 5 and 7", "14-strategy-api 3"]
+        },
+        {
+          "n": 11,
+          "slice_ist": null,
+          "step": null,
+          "text": "Gross P&L -6750.00 - 9375.00 = -16125.00. End of run: flat.",
+          "cites": ["03-architecture 4.2 end of run"]
+        }
+      ]
+    }
+  ]
+}

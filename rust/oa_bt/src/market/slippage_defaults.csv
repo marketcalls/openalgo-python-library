@@ -1,0 +1,46 @@
+# Default slippage per side, by slippage class and trade date (IST). The engine reads this
+# file at build time (see slippage_table.rs); it is the only place a default slippage is
+# written.
+#
+# row_id                 unique id, shown in results and warnings
+# class                  the slippage class (SlippageClass codes):
+#                          EQ_LARGE_MID   NSE and BSE equity, large and mid cap (the default
+#                                         for cash equity)
+#                          EQ_LOW_VOLUME  NSE and BSE equity named as low volume by the run
+#                          INDEX_FUT      futures on an index (NFO, BFO)
+#                          STOCK_FUT      futures on a stock (NFO, BFO)
+#                          INDEX_OPT      options on an index (NFO, BFO)
+#                          STOCK_OPT      options on a stock (NFO, BFO)
+#                          MCX_FUT        MCX futures
+#                          MCX_OPT        MCX options
+#                          CDS            CDS futures and options
+# valid_from, valid_to   trade dates the row applies to, both inclusive; an empty valid_from
+#                        applies to every earlier date, an empty valid_to while in force.
+#                        Rows of one class never overlap.
+# model, amount          ticks: a whole number of ticks; bps: basis points of the price;
+#                        percent: percent of the price (of the premium for options)
+# min_ticks              the least slippage in ticks for bps and percent (0 for ticks)
+# source                 where the figure comes from
+# status                 verified: the row states what its source states; unverified: it
+#                        does not, and a run that uses it warns; default: a modelling
+#                        default the maintainer set where no source publishes the figure,
+#                        which the user can override (slippage=); the Assumptions block
+#                        states it and a run that uses it does not warn
+# notes                  caveats
+#
+# Every MARKET fill, entry or exit, takes the slippage against its side and is rounded to
+# the tick away from the trader (decision SPEC-27). These figures are the starting
+# assumptions of the backtesting design (PRD 04-execution-and-market-model section 4.3),
+# to be calibrated against live fills through the drift reports. No exchange or broker
+# publishes slippage, so every row is a `default`, not a verified figure. The source
+# column is shown to users, so it names no internal document.
+row_id,class,valid_from,valid_to,model,amount,min_ticks,source,status,notes
+EQ_LARGE_MID/1,EQ_LARGE_MID,,,bps,2,1,OpenAlgo backtest default of 2026-11-12 (no exchange publishes slippage),default,Starting assumption to calibrate against live fills
+EQ_LOW_VOLUME/1,EQ_LOW_VOLUME,,,bps,5,1,OpenAlgo backtest default of 2026-11-12 (no exchange publishes slippage),default,Starting assumption to calibrate against live fills; used only for symbols the run names as low volume
+INDEX_FUT/1,INDEX_FUT,,,ticks,1,0,OpenAlgo backtest default of 2026-11-12 (no exchange publishes slippage),default,Starting assumption to calibrate against live fills
+STOCK_FUT/1,STOCK_FUT,,,ticks,2,0,OpenAlgo backtest default of 2026-11-12 (no exchange publishes slippage),default,Starting assumption to calibrate against live fills
+INDEX_OPT/1,INDEX_OPT,,,percent,0.5,1,OpenAlgo backtest default of 2026-11-12 (no exchange publishes slippage),default,Percent of premium; starting assumption to calibrate against live fills
+STOCK_OPT/1,STOCK_OPT,,,percent,1,1,OpenAlgo backtest default of 2026-11-12 (no exchange publishes slippage),default,Percent of premium; starting assumption to calibrate against live fills
+MCX_FUT/1,MCX_FUT,,,ticks,1,0,OpenAlgo backtest default of 2026-11-12 (no exchange publishes slippage),default,Starting assumption to calibrate against live fills
+MCX_OPT/1,MCX_OPT,,,percent,1,1,OpenAlgo backtest default of 2026-11-12 (no exchange publishes slippage),default,Percent of premium; starting assumption to calibrate against live fills
+CDS/1,CDS,,,ticks,1,0,OpenAlgo backtest default of 2026-11-12 (no exchange publishes slippage),default,Starting assumption to calibrate against live fills

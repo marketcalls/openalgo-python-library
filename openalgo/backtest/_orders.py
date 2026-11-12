@@ -1,0 +1,252 @@
+"""Order requests and handles: what `buy`, `sell`, `exit` and `reduce` send to the kernel,
+and the `Order` handle they return (14-strategy-api 2.4).
+
+The request is a dict whose keys the binding reads (`rust/oa_py/src/backtest/engine/
+request.rs`). This module only translates arguments; the kernel decides what it can
+run, and anything not built yet comes back as NotImplementedError naming the feature.
+"""
+
+from __future__ import annotations
+
+import math
+import numbers
+from collections.abc import Callable
+from typing import Any
+
+from . import _sizing_function as sizing_function
+from . import units
+from .errors import ConfigError
+from .size import Sizer
+
+VALIDITIES = {"day": "DAY", "gtt": "GTT"}
+AFTER_FIRST_TARGET = (None, "keep", "breakeven")
+
+# The ATR in rupees of a period at the current decision (`_atr.decision_atr`).
+AtrAt = Callable[[int], float]
+DistanceTuple = tuple[str, float, float | None]
+
+
+def _distance(value: object, what: str, atr_at: AtrAt) -> DistanceTuple:
+    """(unit, value, ATR in rupees or None); a bare number is points. An ATR distance
+    carries the ATR resolved at this decision, so the kernel computes no indicator."""
+    distance = units.as_distance(value, what)
+    if distance.unit != "atr":
+        return (distance.unit, distance.value, None)
+    if distance.period is None:
+        raise ConfigError(f"{what}: an ATR distance needs a period, use bt.atr(multiple, period)")
+    return (distance.unit, distance.value, atr_at(distance.period))
+
+
+def _trail(value: object, atr_at: AtrAt) -> tuple[Any, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, units.Trail):
+        raise ConfigError(
+            "trail= takes bt.trail(x, y), bt.trail_points, bt.trail_pct or bt.trail_atr"
+        )
+    step = None if value.step is None else _distance(value.step, "trail step", atr_at)
+    return (_distance(value.trigger, "trail trigger", atr_at), step)
+
+
+def _breakeven(value: object, atr_at: AtrAt) -> tuple[Any, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, units.Breakeven):
+        raise ConfigError("breakeven= takes bt.breakeven(trigger, offset)")
+    offset = None if value.offset is None else _distance(value.offset, "breakeven offset", atr_at)
+    return (_distance(value.trigger, "breakeven trigger", atr_at), offset)
+
+
+def _targets(value: object, atr_at: AtrAt) -> list[tuple[Any, float]]:
+    if value is None:
+        return []
+    pairs = []
+    for item in value:  # type: ignore[union-attr]
+        try:
+            level, fraction = item
+        except (TypeError, ValueError):
+            raise ConfigError(f"targets= takes (distance, fraction) pairs, got {item!r}") from None
+        pairs.append((_distance(level, "target", atr_at), float(fraction)))
+    return pairs
+
+
+def leg_rules(
+    stop: object,
+    target: object,
+    targets: object,
+    trail: object,
+    breakeven: object,
+    after_first_target: str | None,
+    atr_at: AtrAt,
+) -> dict[str, Any] | None:
+    """The rules dict of a request, or None when no rule is given. `atr_at(period)`
+    gives the ATR in rupees at this decision for a `bt.atr` distance. Raises
+    ConfigError for an argument of the wrong kind."""
+    if after_first_target not in AFTER_FIRST_TARGET:
+        raise ConfigError("after_first_target takes 'breakeven' or 'keep'")
+    rules = {
+        "stop": None if stop is None else _distance(stop, "stop", atr_at),
+        "target": None if target is None else _distance(target, "target", atr_at),
+        "targets": _targets(targets, atr_at),
+        "trail": _trail(trail, atr_at),
+        "breakeven": _breakeven(breakeven, atr_at),
+        "after_first_target": after_first_target,
+    }
+    if all(not value for value in rules.values()):
+        return None
+    return rules
+
+
+def quantity(qty: float | None, lots: int | None, size: Any, default: Any) -> dict:
+    """The quantity dict: qty or lots, else size, else the strategy default, else the
+    engine default (03-architecture 7). A size may be a `bt.size` sizer or a sizing
+    function `size(ctx, order)` (`_sizing_function`, resolved at submission). Raises
+    ConfigError for qty together with lots, or a size that is neither."""
+    if qty is not None and lots is not None:
+        raise ConfigError("give qty= or lots=, not both")
+    if qty is not None:
+        return {"kind": "units", "value": float(qty)}
+    if lots is not None:
+        return {"kind": "lots", "value": int(lots)}
+    sizer = size if size is not None else default
+    if sizer is None:
+        return {"kind": "sizer", "sizer": "default", "amount": None}
+    if isinstance(sizer, Sizer):
+        return sizer.to_native()
+    if callable(sizer):
+        return sizing_function.quantity(sizer)
+    raise ConfigError(
+        "size= takes a sizer from bt.size (bt.size.percent(50), ...) or a sizing function "
+        "size(ctx, order) that returns units"
+    )
+
+
+# `target()` amounts: the keyword and the kind the binding reads
+# (`rust/oa_py/src/backtest/engine/sizing.rs`).
+TARGET_KINDS = {"qty": "units", "lots": "lots", "value": "rupees", "percent": "percent"}
+
+
+def target(
+    instrument: int, product: str, leverage: float | None, amounts: dict[str, Any]
+) -> dict[str, Any]:
+    """The kernel's target dict for `target(**amounts)`: exactly one of `qty`, `lots`,
+    `value` or `percent`, signed (negative is short). Raises ConfigError for none or
+    several, for an amount that is not a finite number, or for lots that are not a whole
+    number."""
+    given = {name: amount for name, amount in amounts.items() if amount is not None}
+    if len(given) != 1:
+        raise ConfigError(
+            "target takes exactly one of qty=, lots=, value= or percent=, got "
+            f"{sorted(given) or 'none'}"
+        )
+    ((name, amount),) = given.items()
+    whole = isinstance(amount, numbers.Integral) and not isinstance(amount, bool)
+    number = isinstance(amount, numbers.Real) and not isinstance(amount, bool)
+    if (name == "lots" and not whole) or not number or not math.isfinite(amount):
+        kind = "a whole number of lots" if name == "lots" else "a finite number"
+        raise ConfigError(f"target {name}= takes {kind} (negative for a short), got {amount!r}")
+    return {
+        "instrument": instrument,
+        "product": product,
+        "kind": TARGET_KINDS[name],
+        "amount": int(amount) if name == "lots" else float(amount),
+        "leverage": leverage,
+    }
+
+
+def order_shape(price: float | None, trigger_price: float | None = None) -> dict[str, Any]:
+    """The order type from its prices (OpenAlgo's `pricetype`): MARKET without a price,
+    LIMIT with `price`, SL (stop-limit) with `price` and `trigger_price`, SL-M
+    (stop-market) with `trigger_price` alone. Prices are rupees; the kernel rejects one
+    off the tick grid with reject code `tick`."""
+    limit = None if price is None else float(price)
+    trigger = None if trigger_price is None else float(trigger_price)
+    if trigger is None:
+        order_type = "MARKET" if limit is None else "LIMIT"
+    else:
+        order_type = "SL-M" if limit is None else "SL"
+    return {"order_type": order_type, "price": limit, "trigger": trigger}
+
+
+def request(instrument: int, side: str, product: str, **fields: Any) -> dict[str, Any]:
+    """A complete request dict with the defaults of a plain DAY order."""
+    base = {
+        "instrument": instrument,
+        "side": side,
+        "product": product,
+        "validity": "DAY",
+        "reduce_only": False,
+        "reverse": False,
+        "exit_reason": None,
+        "rules": None,
+        "leverage": None,
+        "tag": None,
+        **order_shape(None),
+    }
+    base.update(fields)
+    return base
+
+
+def validity(value: str) -> str:
+    """The kernel's validity code for "day" or "gtt". Raises ConfigError otherwise."""
+    if value not in VALIDITIES:
+        raise ConfigError(f"validity takes 'day' or 'gtt', got {value!r}")
+    return VALIDITIES[value]
+
+
+class Order:
+    """The handle `buy`, `sell`, `exit` and `reduce` return.
+
+    `id` is the order id ("o1"), `status` its state ("Submitted", "Filled", "Rejected",
+    ...), `filled_qty` the units filled and `avg_price` the average fill price in rupees;
+    `reject_code` says why it was refused. `cancel()` cancels it while it works.
+    """
+
+    def __init__(self, number: int, lookup: Callable[[int], dict], cancel: Callable[[int], str]):
+        self._number = number
+        self._lookup = lookup
+        self._cancel = cancel
+
+    @property
+    def id(self) -> str:
+        return f"o{self._number}"
+
+    @property
+    def number(self) -> int:
+        """The order id as a number (1 for "o1")."""
+        return self._number
+
+    @property
+    def status(self) -> str:
+        return self._lookup(self._number)["status"]
+
+    @property
+    def filled_qty(self) -> float:
+        return self._lookup(self._number)["filled_units"]
+
+    @property
+    def avg_price(self) -> float:
+        return self._lookup(self._number)["average_fill_rupees"]
+
+    @property
+    def reject_code(self) -> str | None:
+        return self._lookup(self._number)["reject_code"]
+
+    def cancel(self) -> str:
+        """Cancel the order if it still works; returns its state afterwards."""
+        return self._cancel(self._number)
+
+    def __repr__(self) -> str:
+        return f"Order({self.id}, {self.status})"
+
+
+__all__ = [
+    "TARGET_KINDS",
+    "Order",
+    "leg_rules",
+    "order_shape",
+    "quantity",
+    "request",
+    "target",
+    "validity",
+]

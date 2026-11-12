@@ -1,0 +1,315 @@
+{
+  "format": 1,
+  "year": 2022,
+  "timezone": "Asia/Kolkata",
+  "coverage": {
+    "NSE": "sourced",
+    "NFO": "sourced",
+    "BSE": "unverified",
+    "BFO": "unverified"
+  },
+  "notes": [
+    "NSE and NFO holidays are the published lists NSE/CMTR/50560 and NSE/FAOP/50561, which equal the weekdays without an NSE bhavcopy row.",
+    "BSE and BFO are assumed to follow NSE (no BSE notice was read) and are unverified. MCX, CDS and BCD have no 2022 holiday list here."
+  ],
+  "sources": {
+    "nse-bhavcopy": "NSE cash bhavcopy rows for RELIANCE, 2021-08-13 to 2023-01-10 and 2024-01-01 to 2024-11-11: every weekday without a row is a closure, read on 2026-11-12",
+    "nse-cmtr-50560": "NSE/CMTR/50560 trading holidays 2022 (capital market): https://nsearchives.nseindia.com/content/circulars/CMTR50560.pdf",
+    "nse-faop-50561": "NSE/FAOP/50561 trading holidays 2022 (futures and options): https://nsearchives.nseindia.com/content/circulars/FAOP50561.pdf",
+    "truedata-muhurat-2022": "https://www.truedata.in/blog/muhurat-trading-2022"
+  },
+  "days": [
+    {
+      "date": "2022-01-26",
+      "name": "Republic Day",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-50560",
+        "nse-faop-50561",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    },
+    {
+      "date": "2022-03-01",
+      "name": "Mahashivratri",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-50560",
+        "nse-faop-50561",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    },
+    {
+      "date": "2022-03-18",
+      "name": "Holi",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-50560",
+        "nse-faop-50561",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    },
+    {
+      "date": "2022-04-14",
+      "name": "Dr. Baba Saheb Ambedkar Jayanti / Mahavir Jayanti",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-50560",
+        "nse-faop-50561",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    },
+    {
+      "date": "2022-04-15",
+      "name": "Good Friday",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-50560",
+        "nse-faop-50561",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    },
+    {
+      "date": "2022-05-03",
+      "name": "Id-Ul-Fitr (Ramzan Id)",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-50560",
+        "nse-faop-50561",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    },
+    {
+      "date": "2022-08-09",
+      "name": "Moharram",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-50560",
+        "nse-faop-50561",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    },
+    {
+      "date": "2022-08-15",
+      "name": "Independence Day",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-50560",
+        "nse-faop-50561",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    },
+    {
+      "date": "2022-08-31",
+      "name": "Ganesh Chaturthi",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-50560",
+        "nse-faop-50561",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    },
+    {
+      "date": "2022-10-05",
+      "name": "Dussehra",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-50560",
+        "nse-faop-50561",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    },
+    {
+      "date": "2022-10-24",
+      "name": "Diwali Laxmi Pujan (Muhurat trading)",
+      "closed": [],
+      "sessions": {
+        "NSE": [
+          "18:15",
+          "19:15"
+        ],
+        "BSE": [
+          "18:15",
+          "19:15"
+        ],
+        "NFO": [
+          "18:15",
+          "19:15"
+        ],
+        "BFO": [
+          "18:15",
+          "19:15"
+        ],
+        "CDS": [
+          "18:15",
+          "19:15"
+        ],
+        "BCD": [
+          "18:15",
+          "19:15"
+        ]
+      },
+      "sources": [
+        "nse-cmtr-50560",
+        "nse-faop-50561",
+        "truedata-muhurat-2022",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS"
+      ],
+      "hours_unverified": [
+        "BCD",
+        "BFO",
+        "BSE",
+        "CDS",
+        "NFO",
+        "NSE"
+      ],
+      "note": "A trading holiday with an evening session, listed in the NSE circulars. The times come from a data vendor page."
+    },
+    {
+      "date": "2022-10-26",
+      "name": "Diwali Balipratipada",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-50560",
+        "nse-faop-50561",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    },
+    {
+      "date": "2022-11-08",
+      "name": "Gurunanak Jayanti",
+      "closed": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO"
+      ],
+      "sessions": {},
+      "sources": [
+        "nse-cmtr-50560",
+        "nse-faop-50561",
+        "nse-bhavcopy"
+      ],
+      "unverified": [
+        "BFO",
+        "BSE"
+      ]
+    }
+  ]
+}
