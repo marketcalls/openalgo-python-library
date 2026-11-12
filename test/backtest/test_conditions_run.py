@@ -88,6 +88,31 @@ def test_a_short_condition_enters_short_and_cover_exits():
     assert list(fills["price_rupees"])[:2] == [503.0, 505.0]
 
 
+def test_an_entry_the_sizer_skips_is_recorded_as_on_bar_records_it():
+    class Small(bt.Strategy):
+        symbol, exchange, interval = "SBIN", "NSE", "5m"
+
+        def init(self):
+            self.entry_when(self.close > 502, size=bt.size.value(100))
+
+    class SmallOnBar(bt.Strategy):
+        symbol, exchange, interval = "SBIN", "NSE", "5m"
+
+        def on_bar(self, bar):
+            if self.position.is_flat and bar.close > 502:
+                self.buy(size=bt.size.value(100))
+
+    # 100 rupees buys no whole share near 500, so the entries decided at the closes of
+    # bars 2 to 8 (09:30 to 10:00, closes above 502) are all skipped.
+    by_conditions = run_steps(Small, quantity_mode="venue")
+    skipped = by_conditions.skipped
+    assert list(skipped["decided_at"]) == [
+        int(pd.Timestamp(at(9, 30) + dt.timedelta(minutes=5 * k)).value) for k in range(7)
+    ]
+    assert set(skipped["reason"]) == {"rounded_to_zero"}
+    assert_same_result(by_conditions, run_steps(SmallOnBar, quantity_mode="venue"))
+
+
 def test_on_stop_runs_once_at_the_end():
     stopped = []
 

@@ -67,10 +67,12 @@ def run(strategy: type, data: pd.DataFrame, **settings: Any) -> Any:
 
 def assert_same_result(first: Any, second: Any) -> None:
     """Every table of two results is equal (fills, orders, trades, positions, equity,
-    events, stale marks, costs, contract notes), and so is the gross P&L."""
+    events, stale marks, costs, contract notes, orders a sizer skipped), and so is the
+    gross P&L."""
     tables = first.to_dataframes()
     for name, table in second.to_dataframes().items():
         pd.testing.assert_frame_equal(tables[name], table, obj=name)
+    pd.testing.assert_frame_equal(first.skipped, second.skipped, obj="skipped")
     assert first.gross_pnl == second.gross_pnl
 
 

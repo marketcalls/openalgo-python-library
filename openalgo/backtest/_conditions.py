@@ -308,15 +308,19 @@ def signal_spec(strategy: Any) -> dict[str, Any]:
 
 def drive_conditions(strategy: Any, engine: Any) -> None:
     """Run a condition strategy to the end of the grid: evaluate its conditions once,
-    hand them to the Rust signal driver, then call `on_stop`. Raises ConfigError for
-    timers (they call Python during the run); errors of the evaluation and of the kernel
-    propagate (ConfigError, BacktestError, NotImplementedError)."""
+    hand them to the Rust signal driver, record the entries a sizer skipped as `on_bar`
+    would, then call `on_stop`. Raises ConfigError for timers (they call Python during
+    the run); errors of the evaluation and of the kernel propagate (ConfigError,
+    BacktestError, NotImplementedError)."""
     if call(engine.timer_counts):
         raise ConfigError(
             f"{type(strategy).__name__}: a condition strategy runs in Rust with no Python "
             "call during the run, and self.at or self.every would call Python; use on_bar"
         )
-    call(engine.run_signals, signal_spec(strategy))
+    ctx = strategy._ctx
+    symbol = ctx.symbol_of(ctx.instrument_index(None))
+    for decided_at, reason in call(engine.run_signals, signal_spec(strategy)):
+        ctx.skipped.append((decided_at, symbol, reason))
     strategy.on_stop()
 
 

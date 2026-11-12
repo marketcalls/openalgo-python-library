@@ -31,12 +31,23 @@ mod driver;
 
 use crate::exec::{InstrumentId, OrderRequest, OrderType, Validity};
 use crate::model::{Product, Side, TsNanos};
+use crate::sizing::SkipReason;
 
 use super::error::KernelError;
 use super::kernel::Engine;
 use super::pause;
 
 pub use decide::{decide, BarSignals, Decision, Holding};
+
+/// An entry the sizer skipped (it gave no quantity, so no order was created), as
+/// `on_bar` records it for the result.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SkippedEntry {
+    /// The decision instant, UTC nanoseconds.
+    pub decided_at: TsNanos,
+    /// Why the sizer gave no quantity.
+    pub reason: SkipReason,
+}
 
 /// One entry condition and the order it places while true.
 #[derive(Clone, Debug, PartialEq)]
@@ -172,13 +183,19 @@ impl SignalArrays {
 }
 
 /// Run a condition strategy from the current position of the engine to the end of the
-/// grid; then `Engine::finish` returns the result.
+/// grid; then `Engine::finish` returns the result. Returns the entries a sizer
+/// skipped.
 ///
 /// Errors: `InvalidConfig` from `SignalArrays::validate` or for a strategy bar the
 /// arrays do not cover; any error of `advance` or `submit` (an order the kernel cannot
 /// run yet is `NotBuilt`). A market rule that refuses an order is not an error: it is a
 /// rejected order, as in `on_bar`.
-pub fn run_signals(engine: &mut Engine, signals: &SignalArrays) -> Result<(), KernelError> {
+pub fn run_signals(
+    engine: &mut Engine,
+    signals: &SignalArrays,
+) -> Result<Vec<SkippedEntry>, KernelError> {
     signals.validate(engine.instruments().len())?;
-    pause::run(engine, &mut driver::SignalDriver::new(signals))
+    let mut driver = driver::SignalDriver::new(signals);
+    pause::run(engine, &mut driver)?;
+    Ok(driver.skipped)
 }

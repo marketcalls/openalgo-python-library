@@ -10,11 +10,12 @@ mod risk_support;
 
 use oa_bt::engine::{
     run, run_signals, Driver, Engine, EntrySignal, KernelError, Pause, RunOutput, SignalArrays,
-    StrategyBar,
+    SkippedEntry, StrategyBar,
 };
 use oa_bt::exec::{InstrumentId, OrderRequest, QuantitySpec};
 use oa_bt::model::{Product, Side};
 use oa_bt::rms::{Distance, LegRules, StrategyRiskConfig, TargetSpec};
+use oa_bt::sizing::{SizerSpec, SkipReason};
 use risk_support::*;
 
 const SBIN: InstrumentId = InstrumentId(0);
@@ -326,6 +327,32 @@ fn arrays_that_miss_a_strategy_bar_stop_the_run_at_that_bar() {
             if reason.contains("no value for the strategy bar opening at")),
         "{error:?}"
     );
+}
+
+#[test]
+fn an_entry_the_sizer_skips_is_returned_with_its_decision_instant() {
+    // 100 rupees of a 500.00 share is 0.2 shares, which rounds down to none (venue).
+    let mut signals = signals(
+        [
+            first_session(&[0]),
+            vec![false; BARS],
+            vec![false; BARS],
+            vec![false; BARS],
+        ],
+        0,
+        LegRules::default(),
+    );
+    if let Some(entry) = signals.entry.as_mut() {
+        entry.order.quantity = QuantitySpec::Sizer(SizerSpec::Value { rupees: 100.0 });
+    }
+    let mut kernel = engine_for(flat_bars());
+    let skipped = run_signals(&mut kernel, &signals).expect("the run completes");
+    let expected = SkippedEntry {
+        decided_at: bar_close(july_2025(1), 0),
+        reason: SkipReason::RoundedToZero,
+    };
+    assert_eq!(skipped, vec![expected]);
+    assert!(kernel.finish().expect("finished").fills.is_empty());
 }
 
 #[test]

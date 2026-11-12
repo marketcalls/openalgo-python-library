@@ -172,6 +172,6 @@ pub use output::{
     EquityColumns, FillRecord, FinalPosition, GrossPnl, LevelRow, RunOutput, StaleMark, TradeRecord,
 };
 pub use pause::{run, Driver, Pause, TimerId};
-pub use signals::{run_signals, EntrySignal, SignalArrays};
+pub use signals::{run_signals, EntrySignal, SignalArrays, SkippedEntry};
 pub use submit::Submission;
 pub use timers::{TimerCount, TimerSpec};

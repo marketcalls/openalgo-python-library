@@ -8,17 +8,23 @@ use crate::model::Side;
 use super::super::error::KernelError;
 use super::super::kernel::Engine;
 use super::super::pause::{Driver, Pause};
+use super::super::submit::Submission;
 use super::decide::{decide, Decision, Holding};
-use super::SignalArrays;
+use super::{SignalArrays, SkippedEntry};
 
 /// Drives one condition strategy through `pause::run`.
 pub(super) struct SignalDriver<'a> {
     signals: &'a SignalArrays,
+    /// Entries a sizer skipped, in decision order.
+    pub(super) skipped: Vec<SkippedEntry>,
 }
 
 impl<'a> SignalDriver<'a> {
     pub(super) fn new(signals: &'a SignalArrays) -> SignalDriver<'a> {
-        SignalDriver { signals }
+        SignalDriver {
+            signals,
+            skipped: Vec::new(),
+        }
     }
 
     /// What the strategy holds in its product, read in step 7 as `self.position` reads
@@ -60,8 +66,8 @@ impl<'a> SignalDriver<'a> {
 
 impl Driver for SignalDriver<'_> {
     /// Decide at a strategy-bar close of the instrument; every other pause (events
-    /// only, timers, the end) needs no decision. A rejected or skipped order is not an
-    /// error, as in `on_bar`.
+    /// only, timers, the end) needs no decision. A rejected order is not an error, as in
+    /// `on_bar`; an entry a sizer skipped is kept for the result's skipped orders.
     fn on_pause(&mut self, engine: &mut Engine, pause: &Pause) -> Result<(), KernelError> {
         let Pause::BarClose { bars, .. } = pause else {
             return Ok(());
@@ -78,8 +84,14 @@ impl Driver for SignalDriver<'_> {
             Decision::EnterShort => self.signals.short.as_ref().map(|e| e.order.clone()),
             Decision::Exit => Some(self.exit_order(holding)),
         };
-        if let Some(order) = order {
-            engine.submit(order)?;
+        let Some(order) = order else {
+            return Ok(());
+        };
+        if let Submission::Skipped(reason) = engine.submit(order)? {
+            self.skipped.push(SkippedEntry {
+                decided_at: engine.decision_instant().unwrap_or(bar.ts_close),
+                reason,
+            });
         }
         Ok(())
     }
