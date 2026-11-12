@@ -70,6 +70,7 @@ include = [
     "test/conftest.py",
     "test/docs/*.py",
     "test/feed_*.py",
+    "test/live/*.py",
     "test/test_feed_*.py",
     "test/test_indicators_causality.py",
     "test/test_indicators_fixes.py",
