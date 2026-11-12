@@ -139,6 +139,7 @@ pub(super) fn run_config(dict: &Bound<'_, PyDict>) -> PyResult<RunConfig> {
         last_day: last_day.0,
         first_slice: optional(dict, "first_slice")?,
         last_slice: optional(dict, "last_slice")?,
+        present: optional(dict, "present")?,
         base: base_interval(optional(dict, "base_nanos")?),
         strategy_interval: strategy_interval(&interval)?,
         fill: match fill.as_str() {

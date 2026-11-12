@@ -18,7 +18,7 @@ from typing import Any
 from .errors import ConfigError
 
 # Arguments that decide which bars a run reads.
-DATA_ARGUMENTS = ("start", "end", "data", "source", "tz", "base", "calendar")
+DATA_ARGUMENTS = ("start", "end", "data", "source", "tz", "base", "calendar", "now")
 
 
 @dataclass(frozen=True)

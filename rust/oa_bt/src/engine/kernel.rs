@@ -22,6 +22,7 @@ use super::gtt::GttDesk;
 use super::market_data::MarketData;
 use super::output::{FinalPosition, GrossPnl, Recorder, RunOutput};
 use super::pause::Pause;
+use super::run_end::{end_of_run, RunEnd};
 use super::session::SessionTimes;
 use super::strategy_risk::StrategyRisk;
 use super::timers::TimerBook;
@@ -85,6 +86,8 @@ pub struct Engine {
     pub(super) gtts: GttDesk,
     /// Timers registered with `add_timer`.
     pub(super) timers: TimerBook,
+    /// Where the run ends (`run_end`).
+    pub(super) run_end: RunEnd,
 }
 
 /// The one exchange of a Phase 1 run.
@@ -125,8 +128,10 @@ impl Engine {
         for spec in &instruments {
             spec.validate()?;
         }
-        let timeline = Timeline::build(&calendar, exchange, &config)?;
+        let mut timeline = Timeline::build(&calendar, exchange, &config)?;
         let market = MarketData::build(bars, &instruments, &timeline, &calendar, &config)?;
+        let (slices, run_end) = end_of_run(&timeline, &market, instruments.len(), config.present)?;
+        timeline.end_after(slices);
         let portfolio = Portfolio::new(config.capital_rupees)?;
         config
             .market
@@ -153,6 +158,7 @@ impl Engine {
             record: Recorder::default(),
             session: None,
             timers: TimerBook::default(),
+            run_end,
         })
     }
 
@@ -323,6 +329,7 @@ impl Engine {
                 unrealized_rupees: unrealized,
                 total_rupees: realized + unrealized,
             },
+            run_end: self.run_end,
         })
     }
 

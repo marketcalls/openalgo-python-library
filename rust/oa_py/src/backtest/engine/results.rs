@@ -3,7 +3,7 @@
 //! the events, stale marks, final positions and gross P&L.
 
 use numpy::IntoPyArray;
-use oa_bt::engine::{FillRecord, LevelRow, RunOutput, TradeRecord};
+use oa_bt::engine::{FillRecord, LevelRow, RunEndCause, RunOutput, TradeRecord};
 use oa_bt::exec::FillFlags;
 use oa_bt::model::Side;
 use oa_bt::rms::leg::TargetState;
@@ -264,5 +264,8 @@ pub(super) fn output<'py>(py: Python<'py>, output: &RunOutput) -> PyResult<Bound
         "gross_pnl",
         (g.realized_rupees, g.unrealized_rupees, g.total_rupees),
     )?;
+    let end = output.run_end;
+    let cause = end.cause.map(RunEndCause::code);
+    dict.set_item("run_end", (end.close, end.range_close, cause))?;
     Ok(dict)
 }

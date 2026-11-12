@@ -105,6 +105,7 @@ def choose_base(plan: Any, args: dict[str, Any], client: Any, calendar: Any) -> 
             calendar=calendar,
             tz=args["tz"],
             base=base,
+            now=plan.present,
         )
 
     if args["base"] is not None:

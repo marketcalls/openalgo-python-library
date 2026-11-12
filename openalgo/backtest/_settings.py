@@ -26,6 +26,7 @@ from . import slippage as slippage_module
 from ._calendar_convert import interval_nanos, to_day, to_seconds
 from ._layout import NANOS_PER_SECOND, parse_interval
 from ._series import IST
+from .data._sessions import resolve_now
 from .errors import ConfigError
 from .units import Distance
 
@@ -63,6 +64,9 @@ class RunPlan:
     end: dt.date
     first_slice: int | None
     last_slice: int | None
+    # The present, UTC nanoseconds (`now=`, the clock by default): the run and the data
+    # load stop at it (`rust/oa_bt/src/engine/run_end.rs`).
+    present: int
     capital: float
     fill: str
     quantity_mode: str
@@ -92,6 +96,7 @@ class RunPlan:
             "last_day": to_day(self.end),
             "first_slice": self.first_slice,
             "last_slice": self.last_slice,
+            "present": self.present,
             "base_nanos": interval_nanos(self.base),
             "strategy_interval": strategy,
             "fill": self.fill,
@@ -273,6 +278,7 @@ def resolve(strategy: type, args: dict[str, Any]) -> RunPlan:
         end=end,
         first_slice=_instant(args["start"]),
         last_slice=_instant(args["end"]),
+        present=resolve_now(args["now"]),
         capital=float(capital),
         fill=_choice(args["fill"], FILL_MODES, "fill"),
         quantity_mode=_choice(args["quantity_mode"], QUANTITY_MODES, "quantity_mode"),

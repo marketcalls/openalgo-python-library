@@ -72,6 +72,7 @@ def backtest(
     strict_config: bool = True,
     roll: Any = None,
     params: dict[str, Any] | None = None,
+    now: Any = None,
 ) -> Result:
     """Backtest one strategy class and return its `Result`.
 
@@ -101,6 +102,12 @@ def backtest(
         attributes of the same names win. `max_daily_loss` is rupees (or bt.rupees),
         `drawdown_halt` percent from peak equity (bt.pct(x)), `cooldown` base bars.
     roll: futures roll settings. params: parameter values for the strategy.
+    now: the present (UTC nanoseconds, a datetime or an ISO string, naive is IST; the
+        clock when None). The data load drops bars that have not closed by then.
+
+    The run ends at the earliest of `end`, the close of the last base bar any
+    instrument has, and `now`; equity, trades and metrics stop there, a position still
+    open is reported open, and a warning names the end used when it is before `end`.
 
     Raises ConfigError for unusable arguments, the data layer's errors for data, and
     NotImplementedError for any setting or feature the kernel does not run yet.
