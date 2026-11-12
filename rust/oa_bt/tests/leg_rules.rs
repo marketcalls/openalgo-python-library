@@ -302,6 +302,48 @@ fn reverse_closes_the_position_and_opens_the_rest_as_two_fills_of_one_order() {
 }
 
 #[test]
+fn a_cnc_reversal_closes_the_long_and_rejects_the_delivery_short_it_would_open() {
+    // CNC long 100 from the 09:20 open. At the 09:20 bar's close sell 60, then sell 80
+    // with reverse=True: both only reduce the 100 held when placed. At the 09:25 open the
+    // 60 fills first and leaves 40, so the 80 closes those 40, and its other 40 would
+    // open a delivery short (04-execution 2): that part is rejected with product_rule.
+    let kernel = engine(vec![("SBIN", bars(&[]))], SlippageSpec::Zero);
+    let cnc = |side, units| OrderRequest {
+        product: Product::Cnc,
+        ..order(side, units, LegRules::default())
+    };
+    let reverse = OrderRequest {
+        reverse: true,
+        ..cnc(Side::Sell, 80.0)
+    };
+    let orders = vec![
+        (at(9, 15), "SBIN", cnc(Side::Buy, 100.0)),
+        (at(9, 20), "SBIN", cnc(Side::Sell, 60.0)),
+        (at(9, 20), "SBIN", reverse),
+    ];
+    let (output, _) = run_script(kernel, orders).expect("the run completes");
+    let fills: Vec<_> = output
+        .fills
+        .iter()
+        .map(|r| (r.fill.side, r.fill.quantity_units, r.fill.reason.code()))
+        .collect();
+    assert_eq!(
+        fills,
+        vec![
+            (Side::Buy, 100.0, "entry"),
+            (Side::Sell, 60.0, "signal"),
+            (Side::Sell, 40.0, "signal"),
+        ]
+    );
+    let third = &output.orders[2];
+    assert_eq!(
+        (third.status, third.filled_units, third.reject_code),
+        (OrderStatus::Rejected, 40.0, Some(RejectCode::ProductRule))
+    );
+    assert_eq!(output.final_positions[0].quantity_units, 0.0);
+}
+
+#[test]
 fn an_order_beyond_the_position_without_reverse_is_rejected() {
     let kernel = engine(vec![("SBIN", bars(&[]))], SlippageSpec::Zero);
     let orders = vec![

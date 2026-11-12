@@ -563,6 +563,28 @@ across a NaN bar.
 - `result.orders` marks an order without a `reject_code`, `tag` or `sizer` with NaN in
   that column in every run; before, it was None when no order of the run had one and
   NaN when another did (an exit after an entry with the default size).
+- A CNC sell with `reverse=True` that meets a long reduced after it was placed (by
+  another sale filling first) closes the long and rejects the rest with `product_rule`;
+  before, the rest opened a delivery short.
+- A condition entry (`entry_when` or `short_when`) whose `product=` differs from the
+  run's product raises ConfigError before the run. Before, it filled into a position the
+  conditions never read, so the strategy stayed flat and entered again at every bar its
+  condition held, whatever `pyramiding` said.
+- `self.target(percent=...)` while the sizing equity is below zero asks for a flat
+  position; before, the negative equity flipped the side, so a long target became a
+  short one.
+- The report's rolling statistics name the session of an infinite benchmark return in
+  their error; before, they named the return's place in the first window that held it.
+- `costs.custom()` refuses a percent rule whose cap is NaN or negative infinity, as
+  `costs.percent()` does; before, such a cap silently meant no cap.
+- A user cost schedule that gives one segment twice under codes differing only in case
+  or spaces (`"nse_eq_delivery"` and `"NSE_EQ_DELIVERY"`) raises CostError; before, one
+  row silently replaced the other. A rate row's `notes`, `calculator_tax_base` or
+  `calculator_tax_unit` given as None takes its default; before, it was stored as the
+  text "None".
+- `costs.trade_costs` and `CostModel.trades` refuse None, booleans and text among the
+  prices and quantities, as a single trade does; before, a float cast took None as NaN,
+  True as 1 and "1100" as 1100.
 
 ## [2.0.5] - 2026-09-11
 

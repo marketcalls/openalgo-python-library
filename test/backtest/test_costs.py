@@ -332,6 +332,13 @@ BAD_PRESETS = [
     ("an amount too large for a float", lambda: costs.flat(10**400), "too large"),
     ("a NaN amount", lambda: costs.flat(float("nan")), "zero or more"),
     ("a negative cap", lambda: costs.percent(0.03, -5), "cap"),
+    # A cap that is not a number of rupees must not read as no cap, in custom() as in percent().
+    ("a NaN cap in a custom rule", lambda: costs.custom(intraday=("percent", 0.03, np.nan)), "cap"),
+    (
+        "a negative infinite cap in a custom rule",
+        lambda: costs.custom(intraday=("percent", 0.03, -np.inf)),
+        "cap",
+    ),
     ("a negative DP fee", lambda: costs.zero_brokerage(dp_fee=-1), "DP fee"),
     ("an unknown rule kind", lambda: costs.custom(intraday=("tiered", 1, 2)), "cannot read"),
     ("a rule given as text", lambda: costs.custom(options="free"), "cannot read"),

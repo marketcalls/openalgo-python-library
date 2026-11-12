@@ -228,6 +228,17 @@ def test_a_user_row_defaults_its_optional_fields():
     assert [row[name] for name in defaults] == [0.0, 0.0, "sides", "rupee"]
 
 
+@pytest.mark.parametrize(
+    "field, default",
+    [("notes", ""), ("calculator_tax_base", "sides"), ("calculator_tax_unit", "rupee")],
+)
+def test_a_user_row_given_none_for_a_text_field_takes_its_default(field, default):
+    # As for the schedule's own source and notes, None means not given (not the text "None").
+    schedule = broken(lambda s: row(s).update({field: None}))
+    model = costs.CostModel(schedules=[schedule])
+    assert model.schedules()[0]["rates"]["NSE_EQ_INTRADAY"][field] == default
+
+
 def test_a_segment_missing_from_a_user_version_raises_on_its_dates():
     model = costs.CostModel(schedules=[user_schedule("user-2023", "2023-04-01", "2024-09-30")])
     with pytest.raises(CostError, match="has no rates for segment NFO_FUT"):
@@ -301,6 +312,11 @@ MALFORMED = [
         "an unknown tax base",
         broken(lambda s: row(s).update(calculator_tax_base="both")),
         "sides or turnover",
+    ),
+    (
+        "one segment given twice in two spellings",
+        broken(lambda s: s["rates"].update(nse_eq_intraday=dict(row(s), stt_sell_rate=0.0005))),
+        "'NSE_EQ_INTRADAY' and 'nse_eq_intraday' are both segment NSE_EQ_INTRADAY",
     ),
     ("no rates", broken(lambda s: s.update(rates={})), "no segment rates"),
     ("an end before the start", broken(lambda s: s.update(valid_to="2023-01-01")), "cannot end"),

@@ -48,13 +48,18 @@ _SIDE_IDS = MappingProxyType({"BUY": 0, "SELL": 1})
 _SIDE_HELP = "use 'BUY' or 'SELL', or the signed numbers +1 (buy) and -1 (sell)"
 
 
+def _is_number(value: Any) -> bool:
+    """True for a real number; a boolean, None and text are not numbers."""
+    return not isinstance(value, bool) and isinstance(value, (int, float, np.integer, np.floating))
+
+
 def number(name: str, value: Any) -> float:
     """A real number as a float.
 
     Raises CostError for anything that is not a number (booleans included) or is too
     large for a float.
     """
-    if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
+    if not _is_number(value):
         raise CostError(f"{name} must be a number, got {value!r}")
     try:
         return float(value)
@@ -140,11 +145,29 @@ def _fit(array: np.ndarray, length: int, name: str) -> np.ndarray:
     return np.ascontiguousarray(array)
 
 
+def _check_numbers(values: Any, name: str) -> None:
+    """Raise CostError naming the first value that `number` would refuse.
+
+    An integer or float array holds only numbers. Anything else is read element by
+    element, because a float cast would take None as NaN, True as 1.0 and "1100" as
+    1100.0 without a word.
+    """
+    if isinstance(values, (pd.Series, pd.Index)):
+        values = values.to_numpy()
+    if isinstance(values, np.ndarray) and values.dtype.kind in "iuf":
+        return
+    for element in np.atleast_1d(np.asarray(values, dtype=object)).ravel():
+        if not _is_number(element):
+            raise CostError(f"{name} must be numeric, got {element!r}")
+
+
 def floats(values: Any, length: int, name: str) -> np.ndarray:
     """A float64 array of `length` from a number or an array-like of numbers.
 
-    Raises CostError when the values are not numbers or do not fit a float.
+    Raises CostError when a value is not a number (None, a boolean and text included,
+    as for `number`) or does not fit a float.
     """
+    _check_numbers(values, name)
     try:
         array = np.atleast_1d(np.asarray(values, dtype=np.float64))
     except (ValueError, TypeError, OverflowError):

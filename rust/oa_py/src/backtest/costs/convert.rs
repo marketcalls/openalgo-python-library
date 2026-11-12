@@ -87,10 +87,9 @@ pub(super) fn rule_from_tuple(rule: &RuleTuple) -> PyResult<BrokerageRule> {
     match kind.as_str() {
         RULE_ZERO => Ok(BrokerageRule::Zero),
         RULE_FLAT => Ok(BrokerageRule::Flat(*first)),
-        RULE_PERCENT => Ok(BrokerageRule::percent(
-            *first,
-            second.is_finite().then_some(*second),
-        )),
+        // Python sends no cap as infinity, which the kernel reads as no cap; NaN and
+        // negative caps reach the kernel's validation instead of becoming no cap.
+        RULE_PERCENT => Ok(BrokerageRule::percent(*first, Some(*second))),
         RULE_RATE => Ok(BrokerageRule::Rate {
             rate: *first,
             cap: *second,
