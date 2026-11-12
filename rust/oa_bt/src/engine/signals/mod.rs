@@ -113,8 +113,8 @@ impl SignalArrays {
     /// Errors: `InvalidConfig` (field `conditions`) for an instrument the run does not
     /// have, bar opens that do not increase, an array whose length differs from the
     /// number of bars, an order template that is not a MARKET DAY order opening on the
-    /// right side of the strategy's instrument, or ATR values that do not match the
-    /// ATRs the template names.
+    /// right side of the strategy's instrument in the strategy's product, or ATR values
+    /// that do not match the ATRs the template names.
     pub fn validate(&self, instrument_count: usize) -> Result<(), KernelError> {
         if self.instrument.index() >= instrument_count {
             return Err(invalid(format!(
@@ -157,6 +157,17 @@ impl SignalArrays {
         };
         atr::check_inputs(name, &signal.order, &signal.atr, self.bar_opens.len())?;
         let order = &signal.order;
+        // The conditions read the position in the strategy's product: an entry in
+        // another product would fill into a position they never see, so the strategy
+        // would stay flat and enter again at every bar its condition holds.
+        if order.product != self.product {
+            let (given, read) = (order.product.code(), self.product.code());
+            return Err(invalid(format!(
+                "the {name} order trades product {given} but the conditions read the \
+                 position in the run's product {read}: leave product out of the {name} \
+                 arguments, or run with product=\"{given}\""
+            )));
+        }
         let problem = if order.instrument != self.instrument {
             Some("trades another instrument than the strategy")
         } else if order.side != side {

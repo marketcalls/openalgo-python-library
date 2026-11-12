@@ -193,6 +193,17 @@ BAD_BATCHES = [
     ("a value that overflows", {"price": [1e200, 1.0], "quantity": 1e200}, "row 0: traded value"),
     ("a quantity too large for a float", {"quantity": [400, 10**400]}, "quantity must be numeric"),
     ("text for a price", {"price": ["a", "b"]}, "price must be numeric"),
+    # Values a float cast would take silently (None as NaN, True as 1, "1100" as 1100)
+    # are refused, as a single trade refuses them.
+    ("None for a price", {"price": [None, 1100.0]}, "price must be numeric, got None"),
+    ("numeric text for a price", {"price": ["1000", "1100"]}, "price must be numeric, got '1000'"),
+    (
+        "a boolean in a quantity list",
+        {"quantity": [400, True]},
+        "quantity must be numeric, got True",
+    ),
+    ("a boolean quantity array", {"quantity": np.array([True, True])}, "quantity must be numeric"),
+    ("a boolean quantity", {"quantity": True}, "quantity must be numeric, got True"),
     ("an unknown segment code", {"segment": ["NSE_EQ_INTRADAY", "NSE"]}, "unknown cost segment"),
     ("a segment id past the table", {"segment": [1, 99]}, "segment ids must be between"),
     ("a missing date", {"date": [pd.Timestamp(SNAPSHOT), pd.NaT]}, "missing"),

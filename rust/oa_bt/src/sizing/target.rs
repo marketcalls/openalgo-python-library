@@ -5,9 +5,10 @@
 //! are: the order it leads to meets the quantity rule or is rejected for it. A target
 //! given as a value or a percent of the sizing equity is converted at the sizing price
 //! and rounded towards zero to the venue rule (whole lots; whole shares unless the run
-//! is fractional). The target is rounded, never the order that reaches it, so a trim
-//! is not under-sold (11-portfolio-rebalancing 2.1). The engine sends the difference
-//! between this and the position (`engine::target`).
+//! is fractional); a percent of a sizing equity below zero is a flat target. The target
+//! is rounded, never the order that reaches it, so a trim is not under-sold
+//! (11-portfolio-rebalancing 2.1). The engine sends the difference between this and the
+//! position (`engine::target`).
 
 use super::{unit_value, venue::round_down_to_venue, SizingContext, SizingError};
 
@@ -48,8 +49,10 @@ pub fn target_units(target: TargetSize, ctx: &SizingContext) -> Result<f64, Sizi
             return Ok(f64::from(lots) * f64::from(ctx.lot_size_units.max(1)));
         }
         TargetSize::Rupees(rupees) => finite("value", rupees)?,
+        // Clamped as the sizers clamp their basis: the sign of a negative equity must
+        // not flip the side the strategy asked for.
         TargetSize::PercentOfEquity(percent) => {
-            finite("percent", percent)? / PERCENT * ctx.sizing_equity()
+            finite("percent", percent)? / PERCENT * ctx.sizing_equity().max(0.0)
         }
     };
     let units = rupees.abs() / unit_value(ctx)?;

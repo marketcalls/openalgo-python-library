@@ -195,14 +195,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every switch with its spread. Trades are split at a roll (exit reason `roll`).
   Condition strategies on an underlying and other intervals of a futures series raise
   `NotImplementedError`.
-- **More futures margin in the dated table.** NSE stock futures (218 underlyings), BSE
-  BANKEX and the MCX commodities (30), each one day's observation of a broker's public
-  margin page and unverified, so a run using one warns. SENSEX and SENSEX50 futures have
-  no row yet (no public page read gave their margin) and still stop a run. A run whose
-  instrument has no margin row now stops before any data is loaded, with the engine's
-  message, instead of at its first entry.
-- **`margin=` in `bt.backtest` and `bt.optimize` (preview).** The futures margin of a
-  backtest can be the user's own: one value for every futures contract
+- **A missing margin rule stops a run before any data is loaded,** with the engine's
+  message, instead of at the first entry.
+- **Futures margin in backtests, and `margin=` in `bt.backtest` and `bt.optimize`
+  (preview).** Every futures contract, on any exchange, underlying and date, blocks 20
+  percent of its contract value (5x) by default, since real margins differ by underlying
+  and change every day; a run on the default does not warn, and the Assumptions block
+  states it. The futures margin of a backtest can be the user's own: one value for every
+  futures contract
   (`margin=bt.pct(15)`), or a dict by underlying symbol (`margin={"NIFTY": bt.pct(12),
   "CRUDEOIL": bt.rupees(450_000)}`) whose missing names keep the default. `bt.pct(x)` is
   x percent of the contract value (at most 100); `bt.rupees(x)` is x rupees per lot of
@@ -409,16 +409,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Bar`, the argument of `on_bar`, is now an immutable named tuple that also carries
   `ts_open` and `ts_close` (UTC nanoseconds), and makes `time` and `close_time` when
   they are read. `benchmark/backtest_speed.py --check` checks the speed targets.
-- **Backtest preview: futures margin is 20 percent of contract value (5x) by default.**
-  The per-underlying futures rows of the dated margin table (NSE index and stock futures,
-  NIFTYFPI, BSE BANKEX and the MCX commodities, each one day's observation of a broker's
-  page) are removed, since real margins differ by underlying and change every day. Every
-  futures contract, on any exchange and underlying and on any date, now blocks 20 percent
-  of its contract value unless `margin=` says otherwise, so SENSEX, SENSEX50 and every
-  other underlying have a margin and no longer stop a run. A run on the default does not
-  warn: the row's status is `default` and the Assumptions block states it. Futures runs
-  block a different margin wherever the old row was not 20 percent, and with it free
-  cash can allow different entries.
 - `closeposition()` and `cancelallorder()` are documented as what they are:
   account-wide. The server squares off every open position, or cancels every open
   order, of the account that owns the API key; the `strategy` argument is a label
@@ -563,6 +553,28 @@ across a NaN bar.
 - `result.orders` marks an order without a `reject_code`, `tag` or `sizer` with NaN in
   that column in every run; before, it was None when no order of the run had one and
   NaN when another did (an exit after an entry with the default size).
+- A CNC sell with `reverse=True` that meets a long reduced after it was placed (by
+  another sale filling first) closes the long and rejects the rest with `product_rule`;
+  before, the rest opened a delivery short.
+- A condition entry (`entry_when` or `short_when`) whose `product=` differs from the
+  run's product raises ConfigError before the run. Before, it filled into a position the
+  conditions never read, so the strategy stayed flat and entered again at every bar its
+  condition held, whatever `pyramiding` said.
+- `self.target(percent=...)` while the sizing equity is below zero asks for a flat
+  position; before, the negative equity flipped the side, so a long target became a
+  short one.
+- The report's rolling statistics name the session of an infinite benchmark return in
+  their error; before, they named the return's place in the first window that held it.
+- `costs.custom()` refuses a percent rule whose cap is NaN or negative infinity, as
+  `costs.percent()` does; before, such a cap silently meant no cap.
+- A user cost schedule that gives one segment twice under codes differing only in case
+  or spaces (`"nse_eq_delivery"` and `"NSE_EQ_DELIVERY"`) raises CostError; before, one
+  row silently replaced the other. A rate row's `notes`, `calculator_tax_base` or
+  `calculator_tax_unit` given as None takes its default; before, it was stored as the
+  text "None".
+- `costs.trade_costs` and `CostModel.trades` refuse None, booleans and text among the
+  prices and quantities, as a single trade does; before, a float cast took None as NaN,
+  True as 1 and "1100" as 1100.
 - `Result.rerun(params={...})` runs with the parameters given; before, it kept those of
   the original run.
 - A truth test (`if`, `and`, `or`, `not`) of a futures strategy's series in `init`

@@ -97,6 +97,14 @@ pub(super) fn check_finite(values: &[f64], what: &'static str) -> Result<(), Met
     }
 }
 
+/// As `check_finite` for a series where NaN marks a value that is not known.
+pub(super) fn check_not_infinite(values: &[f64], what: &'static str) -> Result<(), MetricsError> {
+    match values.iter().position(|value| value.is_infinite()) {
+        Some(index) => Err(MetricsError::NotFinite { what, index }),
+        None => Ok(()),
+    }
+}
+
 pub(super) fn check_length(
     values: usize,
     expected: usize,

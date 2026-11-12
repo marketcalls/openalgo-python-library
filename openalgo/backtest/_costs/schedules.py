@@ -115,8 +115,33 @@ def _rate_row(code: Any, row: Any, where: str, verified_through: int | None) -> 
     rates = tuple(number(f"{where}: {field}", row.get(field, 0.0)) for field in RATE_FIELDS)
     if "verified_through" in row:
         verified_through = _optional_day(row["verified_through"], f"{where}: verified_through")
-    texts = [str(row.get(field, default)) for field, default in _ROW_DEFAULTS.items()]
+    # None means not given, as for the schedule's own text fields.
+    texts = [
+        str(default if row.get(field) is None else row[field])
+        for field, default in _ROW_DEFAULTS.items()
+    ]
     return (code.strip().upper(), rates, verified_through, *texts)
+
+
+def _rate_rows(rates: dict, where: str, verified_through: int | None) -> list[tuple]:
+    """The rate rows of a schedule, each segment once.
+
+    Raises CostError when two codes name the same segment once normalised (for
+    example "nse_eq_delivery" and "NSE_EQ_DELIVERY"), so neither row is dropped
+    silently.
+    """
+    rows, given_as = [], {}
+    for code, row in rates.items():
+        converted = _rate_row(code, row, where, verified_through)
+        segment = converted[0]
+        if segment in given_as:
+            raise CostError(
+                f"{where}: rates {given_as[segment]!r} and {code!r} are both segment "
+                f"{segment}; give each segment once"
+            )
+        given_as[segment] = code
+        rows.append(converted)
+    return rows
 
 
 def schedule_spec(schedule: Any) -> tuple:
@@ -128,10 +153,11 @@ def schedule_spec(schedule: Any) -> tuple:
     `RATE_FIELDS` except `ipft_rate` and `stt_exercise_rate`, which default to zero;
     it may carry its own `verified_through`, `notes`, `calculator_tax_base` ("sides"
     by default, or "turnover") and `calculator_tax_unit` ("rupee" by default, or
-    "paise").
+    "paise"); a text field given as None takes its default.
 
     Raises CostError for a missing or unknown field, so a misspelt rate cannot be
-    dropped silently. Rate values and date ranges are validated by the kernel.
+    dropped silently, and for a segment given twice under codes that differ only in
+    case or spaces. Rate values and date ranges are validated by the kernel.
     """
     if not isinstance(schedule, dict):
         raise CostError(
@@ -155,5 +181,5 @@ def schedule_spec(schedule: Any) -> tuple:
         verified,
         str(schedule.get("source") or "user supplied"),
         str(schedule.get("notes") or ""),
-        [_rate_row(code, row, where, verified) for code, row in rates.items()],
+        _rate_rows(rates, where, verified),
     )
