@@ -6,9 +6,11 @@ bars its store has revealed: `[-1]` is the latest closed bar, slices and `len()`
 `.values` is a NumPy copy of what is visible. Arithmetic (`+ - * /`, unary minus,
 `abs`) and comparisons (`< <= > >= == !=`) with a number or another view of the same
 store give a new view; so do `.crossed_above(other)` and `.crossed_below(other)`, which
-use `openalgo.ta.crossover` and `crossunder`. A view of booleans is true when its latest
-value is (false before any bar); a numeric view has no truth value, so `if view:` is an
-error that points to `view[-1]`.
+use `openalgo.ta.crossover` and `crossunder`. Views of booleans combine with `&`, `|`
+and `~`; `.shift(n)`, `.rolling_max(n)` and `.rolling_min(n)` look back `n` bars. These
+make the condition grammar of 14-strategy-api 4.2 (`_conditions`). A view of booleans
+is true when its latest value is (false before any bar); a numeric view has no truth
+value, so `if view:` is an error that points to `view[-1]`.
 """
 
 from __future__ import annotations
@@ -36,6 +38,14 @@ class Store(Protocol):
     def times(self) -> pd.DatetimeIndex:
         """IST open of every bar of the run."""
         ...
+
+
+def _bar_count(value: Any, what: str, minimum: int = 1) -> int:
+    """A whole number of bars, `minimum` or more. Raises ConfigError otherwise."""
+    if isinstance(value, bool) or not isinstance(value, int | np.integer) or value < minimum:
+        later = " (a negative shift would read a later bar)" if what == "shift" else ""
+        raise ConfigError(f"{what} takes a whole number of bars, {minimum} or more{later}")
+    return int(value)
 
 
 class TimelineView:
@@ -169,6 +179,66 @@ class TimelineView:
         values = np.asarray(getattr(ta, function)(self._values, np.ascontiguousarray(line)))
         label = other.label if isinstance(other, TimelineView) else repr(other)
         return TimelineView(self._store, values.astype(bool), f"{self._label}.{name}({label})")
+
+    # ----- combining conditions, and the windows of 14-strategy-api 4.2 ----------------
+
+    def _logical(self, other: Any, function: Callable, symbol: str, flip: bool = False) -> Any:
+        operand = self._operand(other)
+        if operand is NotImplemented:
+            return NotImplemented
+        for values in (self._values, np.asarray(operand)):
+            if values.dtype != np.bool_:
+                raise ConfigError(
+                    f"{symbol} combines conditions (true or false), and {self._label} {symbol} "
+                    f"{other!r} has numbers: compare them first, for example view > 0"
+                )
+        return self._derive(other, function, symbol, flip)
+
+    def __and__(self, other: Any) -> TimelineView:
+        return self._logical(other, np.logical_and, "&")
+
+    def __rand__(self, other: Any) -> TimelineView:
+        return self._logical(other, np.logical_and, "&", flip=True)
+
+    def __or__(self, other: Any) -> TimelineView:
+        return self._logical(other, np.logical_or, "|")
+
+    def __ror__(self, other: Any) -> TimelineView:
+        return self._logical(other, np.logical_or, "|", flip=True)
+
+    def __invert__(self) -> TimelineView:
+        if self._values.dtype != np.bool_:
+            raise ConfigError(f"~ negates a condition; {self._label} is a series of numbers")
+        return TimelineView(self._store, ~self._values, f"~{self._label}")
+
+    def shift(self, bars: int) -> TimelineView:
+        """The value `bars` bars earlier (0 or more): NaN for numbers and false for a
+        condition before the first bar. A negative shift would read a later bar."""
+        count = _bar_count(bars, "shift", minimum=0)
+        condition = self._values.dtype == np.bool_
+        values = np.full(len(self._values), False if condition else np.nan)
+        if count < len(values):
+            values[count:] = self._values[: len(values) - count]
+        return TimelineView(self._store, values, f"{self._label}.shift({count})")
+
+    def rolling_max(self, bars: int) -> TimelineView:
+        """The highest of the last `bars` values, this bar's included (`ta.highest`);
+        NaN until `bars` bars have closed."""
+        return self._window(bars, "highest", "rolling_max")
+
+    def rolling_min(self, bars: int) -> TimelineView:
+        """The lowest of the last `bars` values, this bar's included (`ta.lowest`)."""
+        return self._window(bars, "lowest", "rolling_min")
+
+    def _window(self, bars: int, function: str, name: str) -> TimelineView:
+        from openalgo import ta
+
+        count = _bar_count(bars, name)
+        if self._values.dtype == np.bool_:
+            raise ConfigError(f"{name} takes a series of numbers; {self._label} is a condition")
+        source = np.ascontiguousarray(self._values, dtype=float)
+        values = np.asarray(getattr(ta, function)(source, count), dtype=float)
+        return TimelineView(self._store, values, f"{self._label}.{name}({count})")
 
     def __bool__(self) -> bool:
         if self._values.dtype != np.bool_:

@@ -2,7 +2,9 @@
 
 The case is run for real: its calendar becomes a `Calendar`, its rows the bars of
 `bt.backtest(data=...)`, its instruments `Instrument`s, its settings the run arguments,
-and its scripted decisions the `on_bar` of a `Strategy` subclass. The result is then
+and its scripted decisions the `on_bar` of a `Strategy` subclass ("script" form) or its
+condition arrays the `entry_when`, `exit_when`, `short_when` and `cover_when` of a
+condition strategy ("conditions" form, run by the Rust signal driver). The result is then
 written with the keys and units of the case's `expected` section.
 
 A case that needs a part of the kernel that is not built yet is skipped with a reason
@@ -20,9 +22,11 @@ import pandas as pd
 import pytest
 
 import openalgo.backtest as bt
+from openalgo.backtest._conditions import strategy_frame
 from openalgo.backtest.calendar import Calendar
 from openalgo.backtest.reference import Instrument
 
+from .kernel_hook import CONDITIONS_FORM
 from .timegrid import Case, format_ist, parse_ist
 
 # The calls the kernel runs today, with the arguments it accepts.
@@ -31,6 +35,7 @@ OPENING_ARGUMENTS = {"qty", "lots", "size", "reverse"} | LEG_RULE_ARGUMENTS
 SUPPORTED_ARGUMENTS = {"buy": OPENING_ARGUMENTS, "sell": OPENING_ARGUMENTS, "exit": set()}
 # Leg rules on a carried product are held as GTT orders (04-execution 4.4).
 GTT_HELD_PRODUCTS = ("CNC", "NRML")
+CONDITION_METHODS = ("entry_when", "exit_when", "short_when", "cover_when")
 FORWARDED_SETTINGS = (
     "base",
     "entry_from",
@@ -47,9 +52,8 @@ FORWARDED_SETTINGS = (
 
 
 def unsupported_reason(case: Case, form: str) -> str | None:
-    """Why the kernel cannot run this case yet, or None when it can."""
-    if form != "script":
-        return "condition strategies"
+    """Why the kernel cannot run this case yet, or None when it can. The conditions form
+    runs the same order arguments as the script, so one check covers both forms."""
     settings = case["settings"]
     if settings["roll"] is not None:
         return "the futures roll"
@@ -154,6 +158,40 @@ def _scripted_strategy(case: Case, log: dict[str, Any]) -> type:
     return type("ScriptedTrace", (bt.Strategy,), attributes)
 
 
+def _bar_row(time: Any, bar: Any) -> dict[str, Any]:
+    return {
+        "bar_open_ist": format_ist(time.to_pydatetime()),
+        "open": bar.open,
+        "high": bar.high,
+        "low": bar.low,
+        "close": bar.close,
+    }
+
+
+def _condition_strategy(case: Case, log: dict[str, Any]) -> type:
+    """The case's conditions as a condition strategy: each array a Series indexed by its
+    bar opens, declared with entry_when, exit_when, short_when, cover_when in init. The
+    strategy bars logged are those the conditions are evaluated on."""
+    attributes = dict(case["strategy"]["class_attributes"])
+    conditions = case["strategy"]["conditions"]
+    attributes["pyramiding"] = conditions["pyramiding"]
+    opens = pd.DatetimeIndex([parse_ist(text) for text in conditions["bar_opens_ist"]])
+
+    def init(self):
+        frame = strategy_frame(self)
+        log["bars"] = [_bar_row(time, bar) for time, bar in frame.iterrows()]
+        for method in CONDITION_METHODS:
+            declared = conditions[method]
+            if declared is None:
+                continue
+            arguments = declared.get("order_arguments", {})
+            values = pd.Series(declared["values"], index=opens)
+            getattr(self, method)(values, **{k: _argument(v) for k, v in arguments.items()})
+
+    attributes["init"] = init
+    return type("ConditionTrace", (bt.Strategy,), attributes)
+
+
 def run_trace_case(case: Case, strategy_form: str) -> dict[str, Any]:
     """Run one case through the kernel; the result in the shape of `expected`. Skips
     (pytest.skip) when the case needs a part of the kernel not built yet."""
@@ -162,7 +200,8 @@ def run_trace_case(case: Case, strategy_form: str) -> dict[str, Any]:
         pytest.skip(f"kernel does not run this case yet: {reason}")
     settings = case["settings"]
     log: dict[str, Any] = {"bars": [], "decisions": {}}
-    strategy = _scripted_strategy(case, log)
+    build = _condition_strategy if strategy_form == CONDITIONS_FORM else _scripted_strategy
+    strategy = build(case, log)
     product = case["instruments"][0]["product"]
     result = bt.backtest(
         strategy,

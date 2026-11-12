@@ -130,6 +130,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   processes (Windows included) and returns `.table`, `.best`, `.select()`,
   `.heatmap()` and `.path`; `Result.rerun()` repeats a run bit for bit or with
   overrides, and `Result.manifest` records what is needed to reproduce it.
+- **Condition and array strategies in `openalgo.backtest` (preview).** A strategy with
+  no `on_bar` declares `entry_when(cond, **order_args)`, `exit_when(cond)`,
+  `short_when(cond, **order_args)` and `cover_when(cond)` in `init`; the conditions are
+  read once per run over the strategy bars and the whole run then goes through the Rust
+  kernel with no Python call per bar. The decisions are exactly those of the equivalent
+  `on_bar` of the strategy contract: level-triggered, long entry before short, exit
+  before adding, `pyramiding` adds (default 0), the position read after the fills of the
+  bar, a queued entry counting as not flat. A condition is a view of booleans built from
+  series views and `self.I` indicators (comparisons, arithmetic, `.crossed_above`,
+  `.crossed_below`, and new on every view: `&`, `|`, `~`, `.shift(n)`,
+  `.rolling_max(n)`, `.rolling_min(n)`), a clock condition (`bt.time_between("09:30",
+  "14:30")`, `bt.weekday("Mon", ...)`, combined with views by `&` and `|`), or an array
+  with one boolean per strategy bar; anything else (a number, a plain `True`, text, a
+  look-ahead indicator output, a negative shift) raises `ConfigError` saying to use
+  `on_bar`. A view of another interval counts with its latest closed bar.
+  `bt.from_arrays(entries, exits, symbol=..., exchange=..., interval=...)` and
+  `bt.from_signals(func, symbol, exchange, interval)` build such a strategy from boolean
+  arrays or from a function of the strategy bars; a `from_signals` function is re-run on
+  cut data before the run and refused if its signals look ahead. The order arguments are
+  `qty`, `size`, `lots`, `stop`, `target`, `targets`, `trail`, `breakeven`,
+  `after_first_target`, `product`, `leverage` and `tag`; ATR distances and
+  `bt.size.atr_risk` in them raise `NotImplementedError` until built. A condition
+  strategy trades one symbol and has no callbacks or timers.
 - **`openalgo.backtest.metrics` and `openalgo.backtest.report` (preview).** Performance
   metrics computed in the Rust core (returns, CAGR on calendar time, volatility, Sharpe
   and Sortino with a per-session risk-free rate, drawdowns, Calmar, exposure, trade

@@ -23,6 +23,7 @@ mod market;
 mod request;
 mod results;
 mod setup;
+mod signals;
 mod tables;
 
 use oa_bt::data::resample::CalendarUnit;
@@ -180,6 +181,19 @@ impl NativeEngine {
     /// True while an order that would open or add works on the instrument.
     fn has_pending_entry(&self, instrument: u32) -> PyResult<bool> {
         Ok(self.engine()?.has_pending_entry(InstrumentId(instrument)))
+    }
+
+    /// Run a condition strategy to the end of the grid in Rust, with no Python call per
+    /// bar, from its spec dict (see `signals`). Returns the entries a sizer skipped as
+    /// (decision instant, reason) pairs. Then `finish()` returns the result.
+    fn run_signals(&mut self, spec: &Bound<'_, PyDict>) -> PyResult<Vec<(i64, &'static str)>> {
+        let signals = signals::signal_arrays(spec)?;
+        let skipped =
+            oa_bt::engine::run_signals(self.engine_mut()?, &signals).map_err(engine_error)?;
+        Ok(skipped
+            .iter()
+            .map(|entry| (entry.decided_at, entry.reason.code()))
+            .collect())
     }
 
     /// The last close seen of an instrument, rupees.

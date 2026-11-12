@@ -32,6 +32,7 @@ from typing import Any, ClassVar
 
 import pandas as pd
 
+from ._conditions import declare
 from ._series import Bar, InstrumentData, PositionView, SeriesView
 from ._strategy_orders import NOT_BUILT, OrderMethods
 from .errors import ConfigError
@@ -273,20 +274,23 @@ class Strategy(OrderMethods):
         self._ctx.timers.every(period, fn)
 
     def entry_when(self, condition: Any, **order_args: Any) -> None:
-        """Enter long while the condition holds (14-strategy-api 4.1)."""
-        raise NotImplementedError(f"condition strategies (entry_when) {NOT_BUILT}")
+        """Buy while the condition holds: enter when flat, add while long and `adds <
+        pyramiding` (14-strategy-api 4.1). Declared in `init`; the whole strategy then
+        runs in Rust. `condition` follows the grammar of 4.2 (see `_conditions`)."""
+        declare(self, "entry", condition, order_args)
 
     def exit_when(self, condition: Any) -> None:
-        """Exit a long while the condition holds."""
-        raise NotImplementedError(f"condition strategies (exit_when) {NOT_BUILT}")
+        """Exit a long while the condition holds (exit has priority over adding)."""
+        declare(self, "exit", condition, {})
 
     def short_when(self, condition: Any, **order_args: Any) -> None:
-        """Enter short while the condition holds."""
-        raise NotImplementedError(f"condition strategies (short_when) {NOT_BUILT}")
+        """Sell short while the condition holds: enter when flat (after a long entry
+        that is not due), add while short and `adds < pyramiding`."""
+        declare(self, "short", condition, order_args)
 
     def cover_when(self, condition: Any) -> None:
-        """Cover a short while the condition holds."""
-        raise NotImplementedError(f"condition strategies (cover_when) {NOT_BUILT}")
+        """Cover a short while the condition holds (cover has priority over adding)."""
+        declare(self, "cover", condition, {})
 
     def pair_long(self, *args: Any, **kwargs: Any) -> Any:
         """Buy leg 0 and sell leg 1 as one leg group."""

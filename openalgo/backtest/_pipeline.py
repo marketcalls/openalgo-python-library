@@ -12,7 +12,8 @@ arguments to pickle and the run to use the shared default calendar (a calendar o
 own is a native object too); otherwise the sweep runs in this process.
 
 `execute` builds the native engine, binds a strategy instance to a `RunContext`, runs
-`init` and the driver to the end of the grid, and returns the `Result` with its
+`init` and the driver to the end of the grid (the Rust signal driver for a condition
+strategy, `_conditions`), and returns the `Result` with its
 Assumptions block, warnings and manifest.
 """
 
@@ -28,6 +29,7 @@ import pandas as pd
 from . import calendar as calendar_module
 from ._base_interval import choose_base, meaning
 from ._causality_checks import IndicatorChecks
+from ._conditions import drive_conditions, has_conditions
 from ._context import RunContext, RunData
 from ._driver import drive
 from ._engine import build_engine, call
@@ -207,7 +209,10 @@ def execute(
     instance = strategy(**(args["params"] or {}))
     instance._ctx = context
     instance.init()
-    drive(instance, engine, context)
+    if has_conditions(instance):
+        drive_conditions(instance, engine)
+    else:
+        drive(instance, engine, context)
     timer_warnings = context.timers.warnings()
     output = call(engine.finish)
     context.close(output["orders"])

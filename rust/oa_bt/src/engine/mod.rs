@@ -111,7 +111,7 @@
 //! | `pause` | `Pause`, `Driver`, `run` |
 //! | `timers` | `self.at` and `self.every`: registration, when they are due, the timer pause |
 //! | `history` | The strategy bars of the whole run, for indicators computed ahead |
-//! | `signals` | Condition and array strategies (not built yet) |
+//! | `signals` | Condition and array strategies: the Rust driver of 14-strategy-api 4.1 over the stepping API |
 //! | `event` | `Event`, `EventStamp`, `Step` |
 //! | `output` | `RunOutput` and its tables |
 //! | `error` | `KernelError` |
@@ -132,8 +132,9 @@
 //! options, NSE index futures), the sizers and the engine default size, the position
 //! history, the equity series, trades and events, the whole-run strategy bars for
 //! indicators; the daily loss limit, the drawdown halt, the trading state, the
-//! cooldown, maximum positions and the time exit. Everything else returns
-//! `KernelError::NotBuilt` naming the feature.
+//! cooldown, maximum positions and the time exit; condition and array strategies on
+//! one instrument (`signals`). Everything else returns `KernelError::NotBuilt` naming
+//! the feature.
 
 mod accounting;
 mod aggregate;
@@ -171,6 +172,6 @@ pub use output::{
     EquityColumns, FillRecord, FinalPosition, GrossPnl, LevelRow, RunOutput, StaleMark, TradeRecord,
 };
 pub use pause::{run, Driver, Pause, TimerId};
-pub use signals::{run_signals, SignalArrays};
+pub use signals::{run_signals, EntrySignal, SignalArrays, SkippedEntry};
 pub use submit::Submission;
 pub use timers::{TimerCount, TimerSpec};
