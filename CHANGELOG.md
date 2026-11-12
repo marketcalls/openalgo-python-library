@@ -39,6 +39,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`SymbolNotFoundError`** (a `DataError`, in `openalgo.backtest.errors`): the OpenAlgo
   server answered that the symbol is not in its master contract. `symbol` and
   `exchange` name what was asked for.
+- **Charges from 2020-07-01 (`openalgo.backtest.costs`).** Ten earlier schedule
+  versions, from IN-2020-07-01 (the day stamp duty became one rate across states) to
+  IN-2024-05-13, so a backtest from mid 2020 is charged the rates that applied on each
+  trade date instead of stopping with "no cost schedule covers ...". They cover every
+  segment (NSE and BSE equity, NFO, BFO, MCX futures) and each change has its own
+  version: NSE transaction charges (2021-01-01, 2023-04-01, with the NSE IPFT levy),
+  BSE group A and B charges (2021-03-01, 2022-12-01), the SEBI fee (half rate until
+  2021-03-31), MCX KAPAS (2021-05-01), F&O STT (2023-04-01) and BSE options charges
+  (2022-05-02, 2023-11-01, 2024-05-13). Every version names its sources (exchange
+  circulars and notices, SEBI notifications, the Finance Acts, the GST rate
+  notification) and a row is verified only where a primary source states its rates
+  and their dates; the other rows (BSE groups X and SS, MCX agri and RBDPMOLEIN, MCX
+  in 2020, Sensex options from 2023-11-01 to 2024-05-12) are unverified, say why in
+  their notes and warn. `costs.schedules()` lists them.
 
 ### Changed
 
@@ -83,6 +97,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `buy` and `sell` docstrings state that with `reverse=True` only the quantity
   beyond the open position opens the other side (flipping one lot takes two lots), and
   `target` is documented as the one-call way to flip.
+- A trade dated before the first schedule version (now 2020-07-01) still raises
+  CostError unless `backfill=True`, and the message now says from which date charges
+  are available. Trades from 2020-07-01 to 2024-09-30 that a model with `backfill=True`
+  used to charge at the 2024-10-01 rates are now charged at the rates of their own
+  dates. Known limits of these versions, stated in their notes: GST is charged on the
+  SEBI fee before 2022-07-18 too (Rs 0.90 to 1.80 per crore high), and exchange
+  charges, tiered by a member's turnover before 2024-10-01, are the first-slab rates.
 
 ## [2.1.0] - 2026-11-12
 

@@ -4,7 +4,8 @@
 use crate::model::{days_from_civil, Day, Side, MAX_DAY, MIN_DAY};
 
 use super::super::{
-    builtin_schedules, Brokerage, CostError, CostModel, Rounding, Segment, SegmentRates, Trust,
+    builtin_schedules, Brokerage, CostError, CostModel, CostSchedule, Rounding, Segment,
+    SegmentRates, Trust,
 };
 use super::{
     accrual_model, assert_close, assert_paise, builtin_book, calculator_model, snapshot_day, CRORE,
@@ -27,29 +28,35 @@ fn trust(segment: Segment, day: Day) -> Trust {
     accrual_model().status(segment, day).unwrap().trust
 }
 
-#[test]
-fn builtin_versions_cover_2024_10_01_onward_without_a_gap() {
+/// The built-in version with this id.
+fn version(id: &str) -> &'static CostSchedule {
     let versions = builtin_schedules().unwrap();
-    let ranges: Vec<_> = versions
-        .iter()
-        .map(|v| (v.id.as_str(), v.valid_from, v.valid_to))
-        .collect();
-    assert_eq!(
-        ranges,
-        vec![
-            (
-                "IN-2024-10-01",
-                days_from_civil(2024, 10, 1),
-                Some(days_from_civil(2026, 3, 31))
-            ),
-            ("IN-2026-04-01", days_from_civil(2026, 4, 1), None),
-        ]
-    );
+    versions.iter().find(|v| v.id == id).unwrap()
+}
+
+/// The built-in version in force today.
+fn current() -> &'static CostSchedule {
+    version("IN-2026-04-01")
 }
 
 #[test]
-fn the_older_version_has_no_verified_row() {
-    let older = &builtin_schedules().unwrap()[0];
+fn builtin_versions_start_on_2020_07_01_and_follow_each_other_without_a_gap() {
+    let versions = builtin_schedules().unwrap();
+    assert_eq!(versions[0].valid_from, days_from_civil(2020, 7, 1));
+    for pair in versions.windows(2) {
+        assert_eq!(
+            pair[0].valid_to,
+            Some(pair[1].valid_from - 1),
+            "{}",
+            pair[0].id
+        );
+    }
+    assert_eq!(versions.last().map(|v| v.valid_to), Some(None));
+}
+
+#[test]
+fn the_2024_10_01_version_has_no_verified_row() {
+    let older = version("IN-2024-10-01");
     assert_eq!(older.gst_verified_through, None);
     assert!(older
         .rows
@@ -60,7 +67,7 @@ fn the_older_version_has_no_verified_row() {
 
 #[test]
 fn the_current_version_is_verified_through_the_snapshot_day_except_bse_stock_options() {
-    let current = &builtin_schedules().unwrap()[1];
+    let current = current();
     assert_eq!(current.gst_verified_through, Some(snapshot_day()));
     for segment in Segment::ALL {
         let verified = current.row(segment).unwrap().verified_through;
@@ -75,8 +82,7 @@ fn the_current_version_is_verified_through_the_snapshot_day_except_bse_stock_opt
 
 #[test]
 fn the_unverified_bse_options_row_names_its_conflicting_sources() {
-    let current = &builtin_schedules().unwrap()[1];
-    let notes = &current.row(Segment::BfoOptOther).unwrap().notes;
+    let notes = &current().row(Segment::BfoOptOther).unwrap().notes;
     assert!(
         notes.contains("Angel One") && notes.contains("Zerodha"),
         "{notes}"
@@ -104,10 +110,8 @@ fn every_builtin_version_has_a_row_for_every_segment() {
 }
 
 #[test]
-fn builtin_versions_differ_only_in_fno_stt() {
-    let [old, new] = builtin_schedules().unwrap() else {
-        panic!("expected two versions")
-    };
+fn the_2024_and_2026_versions_differ_only_in_fno_stt() {
+    let (old, new) = (version("IN-2024-10-01"), current());
     for segment in Segment::ALL {
         let (before, after) = (
             old.row(segment).unwrap().rates,
@@ -128,7 +132,7 @@ fn builtin_versions_differ_only_in_fno_stt() {
 fn previous_fno_stt_rates_apply_before_2026_04_01() {
     // Section 1: "the previous F&O rates (0.02% on futures, 0.1% on options
     // premium)". Exercise was 0.125 percent of intrinsic value.
-    let old = &builtin_schedules().unwrap()[0];
+    let old = version("IN-2024-10-01");
     let rows = [
         (Segment::NfoFut, 0.0002, 0.0),
         (Segment::BfoFut, 0.0002, 0.0),
@@ -270,23 +274,29 @@ fn gst_status_follows_the_version_row() {
 
 #[test]
 fn a_trade_before_the_first_version_is_an_error() {
-    let early = days_from_civil(2024, 9, 30);
+    let early = days_from_civil(2020, 6, 30);
     let error = accrual_model().fill_cost(Segment::NseEqDelivery, Side::Buy, 100.0, 10.0, early);
     assert_eq!(
         error,
         Err(CostError::NoScheduleForDay {
             day: early,
-            first_valid_from: days_from_civil(2024, 10, 1)
+            first_valid_from: days_from_civil(2020, 7, 1)
         })
     );
 }
 
 #[test]
-fn the_early_date_error_names_both_dates_and_the_remedy() {
-    let early = days_from_civil(2024, 9, 30);
+fn the_early_date_error_says_from_which_date_charges_are_available_and_the_remedy() {
+    let early = days_from_civil(2020, 6, 30);
     let message = builtin_book().lookup(early).unwrap_err().to_string();
-    for expected in ["2024-09-30", "2024-10-01", "supply a schedule", "backfill"] {
-        assert!(message.contains(expected), "{message}");
+    let expected = [
+        "2020-06-30",
+        "charges are available from 2020-07-01",
+        "supply a schedule",
+        "backfill",
+    ];
+    for text in expected {
+        assert!(message.contains(text), "{message}");
     }
 }
 
@@ -343,7 +353,7 @@ fn backfill_charges_early_trades_at_the_first_version_rates_and_says_so() {
         Rounding::ContractNote,
     );
     let early = days_from_civil(2019, 6, 3);
-    let first = days_from_civil(2024, 10, 1);
+    let first = days_from_civil(2020, 7, 1);
     assert_eq!(
         model.fill_cost(Segment::NfoFut, Side::Sell, 100.0, 10.0, early),
         model.fill_cost(Segment::NfoFut, Side::Sell, 100.0, 10.0, first)

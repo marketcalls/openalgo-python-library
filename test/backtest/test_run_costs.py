@@ -129,9 +129,19 @@ def test_a_cost_free_run_warns_on_the_result_and_on_the_tearsheet():
 
 
 def test_a_run_before_the_first_cost_schedule_stops_before_it_starts():
-    # The first built-in schedule starts on 2024-10-01.
-    with pytest.raises(CostError, match="pass costs=None"):
-        round_trip({"qty": QTY}, data=session_bars(dt.date(2024, 7, 1)))
+    # The first built-in schedule starts on 2020-07-01.
+    with pytest.raises(CostError, match="charges are available from 2020-07-01.*pass costs=None"):
+        round_trip({"qty": QTY}, data=session_bars(dt.date(2019, 7, 1)))
+
+
+def test_a_run_in_2022_is_charged_at_the_rates_of_2022():
+    # The worked example's trade on 2022-01-03 (schedule IN-2021-05-01): exchange Rs 3.45
+    # per lakh of 8,40,000 = 28.98 plus IPFT Rs 0.00084, SEBI Rs 10 per crore = 0.84, GST
+    # 18 percent of (40 + 28.98084 + 0.84) = 12.5677512; brokerage 40, STT 110, stamp 12.
+    # Total 40 + 110 + 28.98 + 0.84 + 12 + 12.57 = 204.39.
+    result = round_trip({"qty": QTY}, slippage=0, data=session_bars(dt.date(2022, 1, 3)))
+    assert list(result.contract_notes["charged_total"]) == [204.39]
+    assert set(result.costs["schedule"]) == {"IN-2021-05-01"}
 
 
 def test_fills_on_unverified_rates_are_named_in_the_warnings():

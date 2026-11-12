@@ -200,8 +200,8 @@ def futures_roll() -> bt.Result:
     prices = ["open", "high", "low", "close"]
     october[prices] += OCTOBER_PREMIUM_TICKS / TICKS_PER_RUPEE
     with warnings.catch_warnings():
-        # Expected, and listed in the result's warnings: the built-in schedules start
-        # on 2024-10-01, so September is charged at the first schedule's rates.
+        # Expected, and listed in the result's warnings: some of the rates charged in
+        # September and October 2024 are not verified against their source.
         warnings.simplefilter("ignore", bt.costs.UnverifiedScheduleWarning)
         return bt.backtest(
             NiftyTrend,
@@ -213,7 +213,6 @@ def futures_roll() -> bt.Result:
             start=dt.date(2024, 9, 2),
             end=dt.date(2024, 10, 25),
             capital=CAPITAL,
-            costs=bt.costs.CostModel(backfill=True),
         )
 
 

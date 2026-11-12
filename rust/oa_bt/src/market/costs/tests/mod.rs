@@ -9,6 +9,7 @@ mod charges;
 mod contract_note;
 mod data_file;
 mod errors;
+mod history;
 mod invariants;
 mod mcx;
 mod presets;

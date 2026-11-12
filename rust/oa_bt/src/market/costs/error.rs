@@ -243,9 +243,9 @@ fn unsupported_day(f: Out, day: Day) -> fmt::Result {
 fn no_schedule_for_day(f: Out, day: Day, first: Day) -> fmt::Result {
     write!(
         f,
-        "no cost schedule covers {}: the first schedule version starts on {}; supply a schedule \
-         for the earlier period, or opt in to backfill to charge earlier trades at the first \
-         version's rates",
+        "no cost schedule covers {}: charges are available from {}, the day the first schedule \
+         version starts; supply a schedule for the earlier period, or opt in to backfill to \
+         charge earlier trades at the first version's rates",
         iso_date(day),
         iso_date(first)
     )

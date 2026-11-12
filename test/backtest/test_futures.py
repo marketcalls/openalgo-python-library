@@ -433,13 +433,12 @@ def test_the_daily_mark_to_market_posts_each_sessions_change():
     assert result.settlements["last_close_used"].all()
 
 
-# The built-in cost schedules start on 2024-10-01; these September 2024 trades are
-# charged at the first version's rates (backfill).
-BACKFILLED = bt.costs.CostModel(backfill=True)
+# These September 2024 trades are charged at the built-in rates of their trade dates.
+CHARGED = bt.costs.CostModel()
 
 
 def test_both_roll_legs_are_charged():
-    result = _run(costs=BACKFILLED)
+    result = _run(costs=CHARGED)
     charged = result.fills.loc[result.fills["reason"] == "roll", "costs_rupees"]
     assert len(charged) == 2 and (charged > 0).all()
 
@@ -537,5 +536,5 @@ def test_with_roll_none_the_series_is_adjusted_by_the_last_trading_days_closes()
 
 
 def test_settlement_at_expiry_is_not_charged():
-    result = _run(roll=None, costs=BACKFILLED)
+    result = _run(roll=None, costs=CHARGED)
     assert result.fills.iloc[-1]["costs_rupees"] == 0.0

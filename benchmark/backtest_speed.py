@@ -29,9 +29,9 @@ were set on (a shared CI runner); the linearity ratio is a ratio and is not rela
 The bars are a random walk on the 0.05-rupee tick grid from a fixed seed, one bar a
 minute from 09:15 to 15:29 IST on every weekday from 2014, on a calendar of regular NSE
 hours with no holiday list (1M bars need more sessions than the built-in holiday lists
-cover). The charges are the default broker's, at the first schedule version's rates
-before that version starts. Each row is the best of `--repeat` runs, so one disturbed
-run does not fail the check.
+cover). The charges are the default broker's at the rates of each trade date, and at
+the first schedule version's rates before that version starts. Each row is the best of
+`--repeat` runs, so one disturbed run does not fail the check.
 """
 
 from __future__ import annotations
@@ -335,7 +335,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(
             f"unknown row group {', '.join(map(repr, unknown))}: choose from {', '.join(groups)}"
         )
-    # The runs are dated before the first cost schedule (backfilled) on a calendar with no
+    # The runs start before the first cost schedule (backfilled) on a calendar with no
     # holiday list; the warnings saying so are expected here and would flood the table.
     warnings.simplefilter("ignore", UserWarning)
     run_bars = synthetic_bars(RUN_BARS)

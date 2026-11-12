@@ -301,6 +301,9 @@ def exercise_stt(
 def schedules() -> list[dict[str, Any]]:
     """The built-in schedule versions, oldest first, with their verification status.
 
+    The first version starts on 2020-07-01, the day stamp duty on exchange trades
+    became one rate across states.
+
     Each is a dict with id, valid_from, valid_to and verified_through (dates;
     valid_to is None while in force, verified_through None when never verified),
     gst_rate, source, notes and rates. Each row of rates carries its own

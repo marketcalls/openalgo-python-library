@@ -31,9 +31,12 @@ fn all_models() -> Vec<CostModel> {
     models
 }
 
-/// One day in each built-in version, and the last day of the older one.
-fn sample_days() -> [Day; 3] {
+/// The first built-in day, a day in mid 2022, the first and last days of the 2024
+/// version, and the snapshot day.
+fn sample_days() -> [Day; 5] {
     [
+        days_from_civil(2020, 7, 1),
+        days_from_civil(2022, 6, 1),
         days_from_civil(2024, 10, 1),
         days_from_civil(2026, 3, 31),
         snapshot_day(),
@@ -51,7 +54,7 @@ fn for_random_fills(mut check: impl FnMut(&CostModel, Segment, Side, f64, f64, D
                     let price = (rng.next() * 9_000.0 * rng.next()).max(0.05);
                     let quantity =
                         (rng.next() * 2_000.0).floor() + 0.37 * (rng.next() * 1.25).floor();
-                    let day = days[(rng.next() * 3.0) as usize];
+                    let day = days[(rng.next() * days.len() as f64) as usize];
                     check(&model, segment, side, price, quantity, day);
                 }
             }

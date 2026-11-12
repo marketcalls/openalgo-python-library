@@ -33,7 +33,7 @@ fn failure(lines: &[&str]) -> (usize, String) {
 
 #[test]
 fn the_embedded_data_file_parses() {
-    assert_eq!(builtin_schedules().map(<[_]>::len), Ok(2));
+    assert_eq!(builtin_schedules().map(<[_]>::len), Ok(12));
 }
 
 #[test]
