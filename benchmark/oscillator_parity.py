@@ -87,7 +87,7 @@ def main():
     tk, ts = b.tsi(c, 25, 13, 13)
     cmp("tsi", tk, _tsi_ref(c))
     vp, vm = b.vi(h, lo, c, 14)
-    rvp, rvm = VI._calculate_vi_tv_optimized(h, lo, c, 14)
+    rvp, rvm = VI._calculate_vi_rolling(h, lo, c, 14)
     cmp("vi.plus", vp, rvp)
     cmp("vi.minus", vm, rvm)
     gu, gl = b.gator(h, lo, 13, 8, 5)

@@ -1090,11 +1090,11 @@ CLASS_KERNELS = {
         _backend.session_vwap,
         (d["c"], d["v"], d["starts"]),
     ),
-    "Fisher": lambda d: (Fisher._calculate_fisher_tv, _backend.fisher, (d["c"], 9)),
+    "Fisher": lambda d: (Fisher._calculate_fisher, _backend.fisher, (d["c"], 9)),
     "CMF": lambda d: (CMF._calculate_cmf, _backend.cmf, (d["h"], d["l"], d["c"], d["v"], 20)),
     "MFI": lambda d: (MFI._calculate_mfi, _backend.mfi, (d["h"], d["l"], d["c"], d["v"], 14)),
     "CMO": lambda d: (CMO._calculate_cmo, _backend.cmo, (d["c"], 14)),
-    "FRAMA": lambda d: (FRAMA._calculate_frama_tv, _backend.frama, (d["h"], d["l"], 26)),
+    "FRAMA": lambda d: (FRAMA._calculate_frama, _backend.frama, (d["h"], d["l"], 26)),
 }
 
 

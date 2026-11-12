@@ -252,8 +252,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sandbox order IDs are described correctly. They are plain numeric strings with no
   `SB-` prefix, so the `"mode": "analyze"` field is the only reliable marker of a
   simulated order.
-- Source comments, tests, audit notes and documentation describe this library in its
-  own terms and no longer name third-party backtesting engines used for comparison.
+- Source comments, docstrings, tests, benchmarks, audit notes and documentation describe
+  this library in its own terms and name no third-party product: each indicator is
+  described by its formula, seed and window. The benchmark scripts that compared against
+  an outside library are removed, and private kernels and one internal module are renamed
+  (`kama_full_window`, the `*_wilder_sum` kernels, `openalgo/indicators/classic.py`). The
+  public API and every indicator output are unchanged.
 - **Feed errors are never silent.** An exception raised inside an LTP, quote, depth
   or order callback, a frame that cannot be parsed, and a rejection from the server
   (for example an invalid API key) now reach `on_error` listeners, or an ERROR record
@@ -716,7 +720,7 @@ This release brings **complete technical analysis capabilities** to the OpenAlgo
 ### ✅ Added
 - **Complete Technical Indicators Library**: All 102 technical analysis functions now working perfectly
 - **High-Performance Implementation**: NumPy and Numba optimization for fast calculations
-- **TradingView-like Syntax**: Easy-to-use `ta.function()` interface
+- **Function-call Syntax**: Easy-to-use `ta.function()` interface
 - **Comprehensive Coverage**:
   - **19 Trend Indicators**: SMA, EMA, Supertrend, Ichimoku, HMA, etc.
   - **9 Momentum Indicators**: RSI, MACD, Stochastic, CCI, Williams %R, etc.

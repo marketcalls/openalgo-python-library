@@ -551,15 +551,16 @@ class ElderRay(BaseIndicator):
 
 class Fisher(BaseIndicator):
     """
-    Fisher Transform - matches TradingView exactly
+    Fisher Transform
     
     The Fisher Transform converts prices into a Gaussian normal distribution.
-    TradingView version uses recursive smoothing for both value calculation 
+    It uses recursive smoothing for both the value calculation
     and the Fisher transform itself.
     
-    TradingView Formula:
-    value := round_(.66 * ((hl2 - low_) / (high_ - low_) - .5) + .67 * nz(value[1]))
-    fish1 := .5 * math.log((1 + value) / (1 - value)) + .5 * nz(fish1[1])
+    Formula (value[1] and fish1[1] are 0 before the first bar; value is held
+    at +-0.999 once it passes +-0.99):
+    value = .66 * ((hl2 - lowest) / (highest - lowest) - .5) + .67 * value[1]
+    fish1 = .5 * log((1 + value) / (1 - value)) + .5 * fish1[1]
     fish2 = fish1[1]
     """
     
@@ -567,7 +568,7 @@ class Fisher(BaseIndicator):
         super().__init__("Fisher Transform")
     
     @staticmethod
-    def _calculate_fisher_tv(data: np.ndarray, length: int) -> Tuple[np.ndarray, np.ndarray]:
+    def _calculate_fisher(data: np.ndarray, length: int) -> Tuple[np.ndarray, np.ndarray]:
         """(fisher, trigger): the shared kernel, `_backend.fisher`"""
         return _backend.fisher(data, length)
     
@@ -575,7 +576,7 @@ class Fisher(BaseIndicator):
                  low: Union[np.ndarray, pd.Series, list],
                  length: int = 9) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series]]:
         """
-        Calculate Fisher Transform - matches TradingView exactly
+        Calculate Fisher Transform
         
         Parameters:
         -----------
@@ -584,7 +585,7 @@ class Fisher(BaseIndicator):
         low : Union[np.ndarray, pd.Series, list]
             Low prices  
         length : int, default=9
-            Length for highest/lowest calculation (TradingView default)
+            Length for highest/lowest calculation
             
         Returns:
         --------
@@ -597,7 +598,7 @@ class Fisher(BaseIndicator):
         high_data, low_data = self.align_arrays(high_data, low_data)
         self.validate_period(length, len(high_data))
         
-        # Calculate HL2 (typical price) as TradingView uses
+        # The price source is hl2 = (high + low) / 2
         hl2 = (high_data + low_data) / 2.0
         
         fish1, fish2 = _backend.fisher(hl2, length)
@@ -608,14 +609,14 @@ class Fisher(BaseIndicator):
 
 class CRSI(BaseIndicator):
     """
-    Connors RSI (CRSI) - matches TradingView exactly
+    Connors RSI (CRSI)
     
     Connors RSI is a composite momentum oscillator consisting of three components:
-    1. RSI of price (ta.rsi(src, lenrsi))
-    2. RSI of updown streak (ta.rsi(updown(src), lenupdown))
-    3. Percent rank of 1-period ROC (ta.percentrank(ta.roc(src, 1), lenroc))
+    1. RSI of price (rsi(src, lenrsi))
+    2. RSI of updown streak (rsi(updown(src), lenupdown))
+    3. Percent rank of 1-period ROC (percentrank(roc(src, 1), lenroc))
     
-    Formula: CRSI = math.avg(rsi, updownrsi, percentrank)
+    Formula: CRSI = (rsi + updownrsi + percentrank) / 3
     Default parameters: lenrsi=3, lenupdown=2, lenroc=100
     """
     
@@ -625,7 +626,7 @@ class CRSI(BaseIndicator):
     @staticmethod
     @jit(nopython=True)
     def _calculate_updown_streak(data: np.ndarray) -> np.ndarray:
-        """Calculate updown streak - matches TradingView Pine Script logic"""
+        """Up/down streak: +n after n consecutive rises, -n after n falls, 0 on an unchanged close"""
         n = len(data)
         streak = np.zeros(n)
         
@@ -674,7 +675,7 @@ class CRSI(BaseIndicator):
                  lenrsi: int = 3, lenupdown: int = 2, 
                  lenroc: int = 100) -> Union[np.ndarray, pd.Series]:
         """
-        Calculate Connors RSI - matches TradingView exactly
+        Calculate Connors RSI
         
         Parameters:
         -----------

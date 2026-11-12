@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Test Fisher Transform with TradingView defaults"""
+"""Test Fisher Transform with its default parameters"""
 
 import sys
 import os
@@ -35,13 +35,13 @@ def test_fisher_basic():
     print(f"Generated {n} test data points")
     print(f"Price range: {prices.min():.2f} - {prices.max():.2f}")
     
-    # Test with TradingView defaults: length=9
+    # Test with the default parameters: length=9
     length = 9
     
     # Calculate Fisher Transform
     fisher, trigger = ta.fisher(high, low, length=length)
     
-    print(f"\nUsing TradingView defaults: length={length}")
+    print(f"\nUsing default parameters: length={length}")
     
     # Check for valid data
     valid_fisher = ~np.isnan(fisher)
@@ -213,7 +213,7 @@ def test_fisher_recursive_smoothing():
     return False
 
 if __name__ == "__main__":
-    print("Fisher Transform Test - TradingView Implementation")
+    print("Fisher Transform Test")
     print("=" * 55)
     
     success1 = test_fisher_basic()
@@ -222,9 +222,8 @@ if __name__ == "__main__":
     
     print(f"\nOverall Test: {'PASSED' if success1 and success2 and success3 else 'FAILED'}")
     print(f"\nFisher Transform Implementation Summary:")
-    print(f"- Now matches TradingView Pine Script exactly")
     print(f"- Uses high and low prices to calculate HL2 (typical price)")
-    print(f"- Default length changed from 10 to 9 (TradingView default)")
+    print(f"- Default length changed from 10 to 9")
     print(f"- Implements recursive smoothing for both value and Fisher calculations")
     print(f"- Formula: value := round_(.66 * ((hl2-low)/(high-low)-.5) + .67 * value[1])")
     print(f"- Formula: fish1 := .5 * log((1+value)/(1-value)) + .5 * fish1[1]")

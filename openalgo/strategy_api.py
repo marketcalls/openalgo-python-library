@@ -46,9 +46,9 @@ class StrategyAPI(BaseAPI):
     Strategy module API methods for OpenAlgo.
     Inherits from the BaseAPI class.
 
-    Every route is a POST with the identifier in the body. External platforms
-    such as TradingView, Excel and ChartInk cannot always choose a method or set
-    a header, so there is no GET form and no path parameter.
+    Every route is a POST with the identifier in the body. External alert senders
+    (charting platforms, spreadsheets, screeners) cannot always choose a method or
+    set a header, so there is no GET form and no path parameter.
     """
 
     def _strategy_request(self, endpoint, payload, **kwargs):

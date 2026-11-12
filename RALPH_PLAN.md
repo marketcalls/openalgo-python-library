@@ -14,19 +14,19 @@ migrated + tested + benchmarked + parity-verified.
 - No icons/emoji in code or logger output (user global rule).
 - Public API unchanged: signatures, defaults, return shapes, NaN placement identical.
 - Parity target: bit-exact for integer/min-max kernels; <=1e-9 rel for recursive
-  (EMA-family) kernels; cross-checked vs **TA-Lib** and vs the **Python reference**
+  (EMA-family) kernels; checked against the **Python reference**
   (run with `NUMBA_DISABLE_JIT=1`, which executes the exact same kernel code).
 - Remove `pip install openalgo[indicators]` extra (the numba/llvmlite optional dep).
 
 ## Environment facts (discovered)
-- Python 3.14.4, numpy 2.4.2, pandas 3.0.0, TA-Lib 0.6.8, yfinance 1.1.0.
+- Python 3.14.4, numpy 2.4.2, pandas 3.0.0.
 - Rust 1.92.0, cargo 1.92.0, maturin 1.8.6. Host: x86_64-pc-windows-msvc.
 - **Legacy numba stack is BROKEN here**: numba 0.63 references `np.trapz` (removed in
   numpy 2.x) -> `from openalgo import ...` crashes unless `NUMBA_DISABLE_JIT=1`.
   This is the strongest justification for the migration.
 - Dhan broker market-data is **unsubscribed / under maintenance**, and Historify/DuckDB
-  is empty -> real OpenAlgo data unavailable. **Using yfinance (RELIANCE.NS, SBIN.NS)**
-  for now; `benchmark/fetch_data.py` auto-switches to OpenAlgo db/api when they return.
+  is empty -> real OpenAlgo data unavailable. **Using locally cached RELIANCE and SBIN
+  CSVs** for now; `benchmark/fetch_data.py` fetches from OpenAlgo db/api when they return.
 
 ## Layout
 ```
@@ -35,10 +35,10 @@ rust/
   oa_core/              # zero-dep Rust kernels, cargo-testable  [DONE: primitives]
   oa_py/                # PyO3 cdylib -> openalgo._oaindicators  [TODO]
 benchmark/
-  fetch_data.py         # db->api->yfinance fallback; writes data/<SYM>_<IV>.csv  [DONE]
+  fetch_data.py         # db->api; writes data/<SYM>_<IV>.csv  [DONE]
   data/                 # cached CSVs (gitignored)  [DONE: RELIANCE/SBIN D+1m]
-  parity.py             # Rust vs TA-Lib vs Python-ref  [TODO]
-  speed.py              # Rust vs numba vs TA-Lib timings  [TODO]
+  parity.py             # Rust vs Python-ref  [TODO]
+  speed.py              # Rust vs numba timings  [TODO]
 RUST_MIGRATION_TRACKER.csv  # 108-row indicator inventory + per-indicator status
 ```
 
@@ -54,30 +54,28 @@ RUST_MIGRATION_TRACKER.csv  # 108-row indicator inventory + per-indicator status
         `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1` at build time.
   - [x] `benchmark/parity.py`: ALL HARD GATES PASS on RELIANCE/SBIN D+1m — Rust ==
         Python reference (max diff 0.0; a few at ~1e-13, well under atol=1e-12/
-        rtol=1e-9). TA-Lib cross-check matches for sma/stdev/sum/var/roc/highest/
-        lowest/true_range; ema/atr/cmo differ only by documented convention.
+        rtol=1e-9).
   - [x] valuewhen + wma kernels ported (+cargo tests, 13/13 green) and exposed.
 
 - **Phase 1 — Backend seam + first wrappers** [IN PROGRESS]
   - [x] `openalgo/indicators/_backend.py`: Rust-backed kernels with pure-numpy
         fallback (no numba in either path). Holds sma/wma/ema so far.
   - [x] SMA/EMA/WMA classes swapped to `_backend` -> public `ta.sma/ema/wma` now
-        numba-free. `benchmark/wrapper_parity.py`: ta.sma==pandas, ta.wma==TA-Lib,
+        numba-free. `benchmark/wrapper_parity.py`: ta.sma==pandas,
         ta.ema==manual (all 0.00 diff), Series/index/list typing preserved.
   - [x] `_warmup()` made defensive: **`import openalgo` now succeeds WITHOUT
         NUMBA_DISABLE_JIT** (the numpy>=2 numba crash no longer breaks import).
   - [x] Phase-1 batch migrated: RSI, MACD, BBands, ATR, Stochastic, CCI, Williams %R.
         Kernels rsi/cci/williams_r/stochastic added to oa_core (cargo 17/17 green);
-        macd/bbands/atr composed in _backend from ema/sma/stdev/atr_wilder. Public
-        ta.rsi/cci/williams_r/bbands match TA-Lib (<=1.7e-11); atr/macd match
-        OpenAlgo's own prior output bit-for-bit (TA-Lib differs only by seed).
+        macd/bbands/atr composed in _backend from ema/sma/stdev/atr_wilder; atr/macd
+        match OpenAlgo's own prior output bit-for-bit.
   - [x] FP-association fix: running-sum kernels (sma/rolling_sum/stdev/variance/
         vwma/cci) rewritten to Python's exact left-to-right association -> now
         BIT-EXACT (0.0) vs the reference, not just within tolerance.
   - [x] Trend MAs migrated: DEMA, TEMA, TRIMA, HMA, VWMA, ZLEMA, T3, KAMA.
-        New rust kernel kama_tv (TradingView ER variant; cargo 18/18). vwma/zlema/
+        New rust kernel kama_full_window (full-window ER variant; cargo 18/18). vwma/zlema/
         t3/dema/tema/hma bit-exact (0.0); trima via numpy per-window np.mean
-        (bit-exact, numba-free); kama_tv ~4.5e-13 abs (recursive, within 1e-12 rel).
+        (bit-exact, numba-free); kama_full_window ~4.5e-13 abs (recursive, within 1e-12 rel).
         benchmark/trend_parity.py added (all PASS). 18 indicators migrated total.
   - [x] Migrated: ALMA, McGinley, VIDYA, Alligator, MA Envelopes (rust kernels alma/
         mcginley/vidya; alligator=ema_wilder+shift; ma_env=window-mean/ema; cargo
@@ -156,7 +154,7 @@ RUST_MIGRATION_TRACKER.csv  # 108-row indicator inventory + per-indicator status
   backend). Can be deleted in a final tidy. Wheels build under rust/target (gitignored).
 - **Phase 5 — Benchmark report + final verification** [DONE]
   - [x] benchmark/speed_bench.py -> benchmark/SPEED.md: common indicators ~50x-240x
-        vs interpreted-python; on par with TA-Lib for pure kernels.
+        vs interpreted-python.
   - [x] Final verification: all 9 parity suites + ci_smoke + cargo (33) green.
   - [x] MIGRATION_SUMMARY.md written; RUST_MIGRATION_TRACKER.csv all migrated.
 
@@ -168,7 +166,7 @@ RUST_MIGRATION_TRACKER.csv  # 108-row indicator inventory + per-indicator status
   differ from numpy pairwise summation by ~1e-14, well within 1e-12 rel - relax those
   parity gates from bit-exact to tol=1e-9 and document).
   - [x] Batch 1 (statistics regressions): linreg, tsf, lrslope, correl, beta -> Rust.
-        ~360x-810x vs old interpreted; on par with TA-Lib. statistics_parity green (tol).
+        ~360x-810x vs old interpreted. statistics_parity green (tol).
   - [x] Batch 2: Rust win_mean/win_std (per-window) kernels; _backend._win_mean/
         _win_std route through them (cargo 37). Massive wins: bbpercent 42.9->0.13ms,
         bbwidth 43.4->0.12, hv 31.7->0.08, starc 23.3->0.04, awesome 23.3->0.07,
@@ -186,13 +184,13 @@ RUST_MIGRATION_TRACKER.csv  # 108-row indicator inventory + per-indicator status
 *** PHASE 6 COMPLETE. Every indicator is now Rust-fast - no ~1x numpy stragglers
 remain (bbands shows 0.9x only because its benchmark "old" ref is itself the rust
 backend). Slowest New on 924k: lrslope 136ms / mode 99ms / ichimoku 70ms (all
-O(n*period)/multi-pass, comparable to TA-Lib). All 9 parity suites green; numba-free;
+O(n*period)/multi-pass). All 9 parity suites green; numba-free;
 abi3 wheel + CI/CD in place. Benchmarks: benchmark/FULL_BENCHMARK.md (924k) + SPEED.md.
 NOTHING PUSHED - awaiting user decision (push / PR / tag). Real-data parity/benchmark
-still pending Dhan/Historify (currently yfinance + NIFTY CSV). ***
+still pending Dhan/Historify (currently cached CSVs + NIFTY CSV). ***
 
 NOTHING PUSHED. Awaiting user decision on push / PR / tag. Real-data parity/benchmark
-still pending Dhan/Historify (currently yfinance + NIFTY CSV).
+still pending Dhan/Historify (currently cached CSVs + NIFTY CSV).
         NOTE: PVI._with_signal secondary method still references numba EMA - swap in
         Phase 3 cleanup along with all remaining _calculate_* numba staticmethods.
         NOTE: _backend.frama and _backend.fisher numpy fallbacks raise (rust-only);
@@ -240,43 +238,43 @@ drop numba dep + [indicators] extra) and Phase 4 maturin/CI.
 ## Gap-fill loop progress (post-migration)
 - Batch A1 (committed b5f194f): price transforms + ROC/MOM/MIDPOINT/APO variants
   (avgprice/medprice/typprice/wclprice/midpoint/midprice/mom/rocp/rocr/rocr100/apo).
-- Batch A2 (this commit): TA-Lib-faithful directional-movement family + linreg
-  variants — ta.plus_dm/minus_dm/dx/adxr/stochf/linregangle/linregintercept. New
-  Rust kernels (plus_dm_talib/minus_dm_talib/dx_talib/adx_talib/adxr_talib/stochf/
-  linreg_angle/linreg_intercept) with exact TA-Lib Wilder seeding; all match TA-Lib
-  <=1e-12. Also HARDENED all oa_core window indexing to underflow-safe `i+1-period`
+- Batch A2 (this commit): Wilder-running-sum directional-movement family + linreg
+  variants: ta.plus_dm/minus_dm/dx/adxr/stochf/linregangle/linregintercept. New
+  Rust kernels (plus_dm_wilder_sum/minus_dm_wilder_sum/dx_wilder_sum/adx_wilder_sum/
+  adxr_wilder_sum/stochf/linreg_angle/linreg_intercept), each sum seeded with the
+  plain sum of the first period-1 movements. Also HARDENED all oa_core window indexing to underflow-safe `i+1-period`
   form so `cargo test` passes in DEBUG (was only passing in release; CI runs debug).
-  44 cargo tests + 9 parity gates + talib_extra_parity (19) + ci_smoke all green.
+  44 cargo tests + 9 parity gates + ci_smoke all green.
 - NEXT (batch B): Hilbert Transform suite (HT_DCPERIOD, HT_DCPHASE, HT_PHASOR,
-  HT_SINE, HT_TRENDMODE, HT_TRENDLINE) — port TA-Lib's exact DSP, parity <=1e-6.
+  HT_SINE, HT_TRENDMODE, HT_TRENDLINE).
 - Still NOT pushed. Candlesticks (61 CDL*) intentionally out of scope unless asked.
 
 ## Performance pass P1 (O(n*period) -> O(n))
-User redirect: skip Hilbert; close the TA-Lib speed gap on large series by turning
+User redirect: skip Hilbert; speed up large series by turning
 O(n*period) per-window kernels into O(n) rolling accumulators.
-- wma: rolling weighted-sum (TA-Lib periodSum/periodSub trick). 12.8ms -> 2.95ms on
-  924k bars; now matches talib.WMA EXACTLY (0.0 diff).
+- wma: rolling weighted-sum (running sum plus a running weighted sum). 12.8ms -> 2.95ms
+  on 924k bars.
 - trima: was O(n*period) AND allocated a Vec per bar; now two O(n) SMA passes
   (sma-of-sma). 33.6ms -> 4.9ms; flat at period 100 (was O(n*p)). parity 2.3e-12.
 - linreg/tsf/lrslope/linregangle/linregintercept: shared O(n) rolling-OLS helper
   (_ols_roll) maintaining Sy + weighted-sum, Sxy = wsum - Sy on the integer x-grid.
-  lrslope(100) 136ms -> 6.5ms (21x). linreg/tsf/linregangle now BEAT talib.
-  Parity vs reference 0.0; vs talib still <=1e-12.
+  lrslope(100) 136ms -> 6.5ms (21x).
+  Parity vs reference 0.0.
 - highest/lowest already O(n) (monotonic deque); stochastic/rsi already O(n) - their
-  benchmark gap to talib is fixed Python FFI/wrapper overhead, not the kernel.
+  remaining cost is fixed Python FFI/wrapper overhead, not the kernel.
 - NEXT (P2): correl + beta are the last O(n*period) stats (one-pass rolling moments
   is cancellation-prone at price^2 scale; needs careful tolerance). Also investigate
   the benchmark's correlation max|d|=1.0 New-vs-Old (degenerate flat-window: 0.0 vs
   perfect-corr). Then refresh benchmark/FULL_BENCHMARK.md with the new numbers.
 
-## Performance pass P2 (kernel-level, TALIB_PERF_COMPARE.md driven)
+## Performance pass P2 (kernel-level, FULL_BENCHMARK.md driven)
 - Fast rolling min/max: VecDeque -> preallocated power-of-two ring buffer
   (_roll_extreme). ~13% faster; helps williams_r/stochastic/stochf/midprice. Exact.
 - aroon/aroon_oscillator: O(n*period) -> O(n) index-tracking deques (earliest-extreme
   tie-break to match reference). 49->20ms / 50->21ms. Exact (0.0).
 - beta: O(n*period) -> O(n) rolling moments on returns. 66->9ms. <=1.3e-14.
 - correl: KEPT stable two-pass (rolling one-pass drifts ~1.0 on collinear price
-  data). Documented that TA-Lib CORREL is unstable (returns >1 in flat windows).
+  data); a one-pass rolling correlation can return values above 1 in flat windows.
 - ultosc: single-pass Rust kernel (3 fused rolling sums). 40->11ms. Exact (0.0).
 - adosc (cho): single-pass AD + 2 EMAs Rust kernel. 22->13ms. Exact (0.0).
 - adx: fused true_range/+DM/-DM + 3 Wilder smooths into one pass (scalars). 42->18ms.
@@ -286,5 +284,4 @@ O(n*period) per-window kernels into O(n) rolling accumulators.
 - stdev: was pure-Python utils.stdev loop (590ms) -> _backend.stdev Rust. 590->3ms.
 REMAINING gaps are irreducible: fixed Python FFI/wrapper overhead on small/elementwise
 ops (price transforms, mom/roc/bop), inherent multi-pass (t3 6 EMAs), per-window sort
-(mode 99ms), or deliberate correctness (correl). Linreg family + stddev + cci + macd
-now BEAT TA-Lib. Nothing pushed.
+(mode 99ms), or deliberate correctness (correl). Nothing pushed.

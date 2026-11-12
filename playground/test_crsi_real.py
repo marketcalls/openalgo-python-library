@@ -34,7 +34,7 @@ def test_crsi_real():
         
         print(f"Retrieved {len(df)} data points")
         
-        # Calculate CRSI with TradingView defaults
+        # Calculate CRSI with the default parameters
         df['crsi'] = ta.crsi(df['close'])
         
         # Also test with different parameters
@@ -47,7 +47,7 @@ def test_crsi_real():
         if valid_count > 0:
             # Show recent values
             recent = df.dropna().tail(15)
-            print(f"\nRecent CRSI values (TradingView defaults lenrsi=3, lenupdown=2, lenroc=100):")
+            print(f"\nRecent CRSI values (defaults lenrsi=3, lenupdown=2, lenroc=100):")
             for idx, row in recent.iterrows():
                 change_str = ""
                 if idx > recent.index[0]:
@@ -177,7 +177,6 @@ if __name__ == "__main__":
     print(f"\nConnors RSI Test: {'PASSED' if success else 'FAILED'}")
     
     print(f"\nImplementation Summary:")
-    print(f"- Matches TradingView Pine Script exactly")
     print(f"- Component 1: RSI of price (standard RSI)")
     print(f"- Component 2: RSI of updown streak (consecutive up/down days)")
     print(f"- Component 3: Percent rank of 1-period ROC")

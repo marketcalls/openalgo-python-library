@@ -12,7 +12,7 @@ different credentials:
                       browser wizard at /strategy.
 
   Strategy(...)     - the public webhook at /strategy/webhook/<token>, which is
-                      what TradingView and other alert senders post to. It is
+                      what charting-platform alerts and other senders post to. It is
                       not under /api/v1 and takes no API key: the token in the
                       URL is the whole credential.
 

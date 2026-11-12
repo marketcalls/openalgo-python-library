@@ -230,7 +230,7 @@ REGISTRY: Mapping[str, Indicator] = MappingProxyType(
             non_causal={"fractal_up": _FRACTAL_REASON, "fractal_down": _FRACTAL_REASON},
         ),
         "rwi": Indicator(outputs=("rwi_high", "rwi_low")),
-        # ---- TA-Lib compatible additions
+        # ---- classic single-formula indicators (classic.py)
         "mom": _PLAIN,
         "rocp": _PLAIN,
         "rocr": _PLAIN,

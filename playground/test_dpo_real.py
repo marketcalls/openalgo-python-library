@@ -34,7 +34,7 @@ def test_dpo_real():
         
         print(f"Retrieved {len(df)} data points")
         
-        # Calculate DPO with TradingView defaults
+        # Calculate DPO with the default parameters
         df['dpo_nc'] = ta.dpo(df['close'], period=21, is_centered=False)
         df['dpo_c'] = ta.dpo(df['close'], period=21, is_centered=True)
         
@@ -51,7 +51,7 @@ def test_dpo_real():
         if valid_count_nc > 0 and valid_count_c > 0:
             # Show recent values
             recent = df.dropna().tail(15)
-            print(f"\nRecent DPO values (TradingView defaults period=21):")
+            print(f"\nRecent DPO values (default period=21):")
             for idx, row in recent.iterrows():
                 print(f"{idx}: Close={row['close']:.2f}")
                 print(f"  Non-Centered DPO={row['dpo_nc']:.4f}, Centered DPO={row['dpo_c']:.4f}")
@@ -195,8 +195,7 @@ if __name__ == "__main__":
     print(f"\nDetrended Price Oscillator Test: {'PASSED' if success else 'FAILED'}")
     
     print(f"\nImplementation Summary:")
-    print(f"- Matches TradingView Pine Script exactly")
-    print(f"- Default period: 21 (TradingView default)")
+    print(f"- Default period: 21")
     print(f"- Barsback calculation: period/2 + 1")
     print(f"- Non-Centered (default): DPO = Close - SMA[barsback]")
     print(f"- Centered: DPO = Close[barsback] - SMA")

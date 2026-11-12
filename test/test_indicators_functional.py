@@ -152,7 +152,7 @@ def test_indicators():
     
     print("\n" + "="*60)
     print("🎉 ALL TESTS PASSED! Technical Indicators Library is Working Perfectly!")
-    print("🚀 Ready for production use with TradingView-like syntax")
+    print("Ready for production use with concise ta.* function-call syntax")
     print("⚡ High performance with NumPy & Numba optimizations")
     print("📊 100+ indicators available for professional trading strategies")
     print("="*60)
