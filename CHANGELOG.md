@@ -219,7 +219,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SB-` prefix, so the `"mode": "analyze"` field is the only reliable marker of a
   simulated order.
 - Source comments, tests, audit notes and documentation describe this library in its
-  own terms and no longer name third-party engines or libraries used for comparison.
+  own terms and no longer name third-party backtesting engines used for comparison.
 - **Feed errors are never silent.** An exception raised inside an LTP, quote, depth
   or order callback, a frame that cannot be parsed, and a rejection from the server
   (for example an invalid API key) now reach `on_error` listeners, or an ERROR record
