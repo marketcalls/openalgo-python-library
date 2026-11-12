@@ -398,8 +398,10 @@ across a NaN bar.
 - **A backtest no longer runs past its data or the present.** `bt.backtest` ends a run
   at the earliest of `end`, the close of the last bar any instrument has, and the
   present (the new `now=` argument, the clock by default), with a warning that names
-  the end used when it is before `end`. Equity, trades and metrics stop there, and a
-  position still open is reported open; before, a run for today continued on empty
+  the end used when it is before `end`. Equity, trades and metrics stop there, a
+  position still open is reported open, and the contract notes of the last session are
+  settled at the run's end as at a session close, so charges do not depend on where
+  the run ends after its last fill; before, a run for today continued on empty
   slices to the session close and squared off an MIS position at a price from hours
   earlier.
 - **Quote ticks carry the average price and last quantity the server sends.**

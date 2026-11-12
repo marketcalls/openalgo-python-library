@@ -6,7 +6,10 @@
 //! runs past the moment it is made, nor past its data: the equity series, the trades and
 //! the metrics stop at the run's end, and a position still open there is reported open,
 //! marked at its last close. It is not squared off in step 8 of a session close the run
-//! never reached, at a price from hours earlier.
+//! never reached, at a price from hours earlier. The fills of that last session did
+//! happen, though, so its contract notes are settled at the run's end with the same
+//! rounding step 8 applies: the charges do not depend on where the run ends after its
+//! last fill.
 //!
 //! Slots without a bar inside the run stay slices (SPEC-07); only the slots after the
 //! last bar of every instrument are dropped. The kernel reads no clock: the present is a
@@ -15,7 +18,7 @@
 use crate::exec::InstrumentId;
 use crate::model::TsNanos;
 
-use super::clock::Timeline;
+use super::clock::{SliceInfo, Timeline};
 use super::error::KernelError;
 use super::kernel::Engine;
 use super::market_data::MarketData;
@@ -104,5 +107,14 @@ impl Engine {
     /// Where the run ends (module docs); known from `Engine::new` on.
     pub fn run_end(&self) -> RunEnd {
         self.run_end
+    }
+
+    /// At the run's last slice, when it does not close its session: settle that
+    /// session's contract notes as step 8 would (module docs). Nothing else of step 8
+    /// runs, so positions and orders stay as they are.
+    pub(super) fn settle_at_run_end(&mut self, slice: &SliceInfo) {
+        if !slice.closes_session && slice.index + 1 == self.timeline.len() {
+            self.settle_contract_notes(slice);
+        }
     }
 }
