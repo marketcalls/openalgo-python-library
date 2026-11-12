@@ -13,7 +13,8 @@ The kernel's tables are turned into the inputs `metrics.analyse` documents:
              at its average price, so that exposure and turnover count it. Side is the
              side of the entry ("BUY" long, "SELL" short), quantity the units bought (or
              sold) to build it, net_pnl = gross_pnl - costs. The charges of each closed
-             trade are broken down into the cost components and the DP charge.
+             trade are broken down into the cost components and the DP charge, and its
+             R-multiple is in `r_multiple` (`_result_r`; NaN for an open trade).
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ import pandas as pd
 
 from ._calendar_convert import interval_nanos
 from ._result_costs import open_charges, trade_charges
+from ._result_r import r_values
 from ._series import IST
 from .errors import BacktestError
 from .report import tearsheet as render_tearsheet
@@ -59,6 +61,7 @@ def closed_trades(output: dict[str, Any], symbols: list[str]) -> pd.DataFrame:
             "costs": raw["costs_rupees"],
             "net_pnl": raw["net_pnl_rupees"],
             "exit_reason": raw["exit_reason"],
+            "r_multiple": r_values(raw["net_pnl_rupees"], raw["initial_risk_rupees"]),
         }
     )
     charges = trade_charges(output)

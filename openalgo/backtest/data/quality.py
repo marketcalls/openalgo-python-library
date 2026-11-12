@@ -4,7 +4,8 @@
 Severities:
 
 - error: the data cannot be trusted (a non-positive price, a high or low that
-  contradicts the open and close). `load_bars` stops on these unless told otherwise.
+  contradicts the open and close, a suspected unadjusted split or bonus: see
+  `splits`). `load_bars` stops on these unless told otherwise.
 - warning: the data is usable but incomplete or was trimmed, and the count is
   reported (duplicate timestamps, missing bars against the calendar, bars dropped
   because they were outside the regular session or built from part of a period).
@@ -28,16 +29,13 @@ from .._layout import PRICE_COLUMNS, parse_interval
 from .._protocols import SessionCalendar
 from ..errors import DataQualityError
 from ._sessions import Sessions, ist_days
+from ._severity import ERROR, INFO, SEVERITIES, WARNING
+from .corporate_actions import CorporateAction, declared
 from .normalise import MAX_EXAMPLES, NormaliseReport
-
-ERROR = "error"
-WARNING = "warning"
-INFO = "info"
-SEVERITIES = (ERROR, WARNING, INFO)
+from .splits import PriceGap, check_splits
 
 # The checks of PRD 06 section 5 that Phase 0 does not run, with the reason.
 NOT_RUN = (
-    "split_or_bonus: unadjusted split and bonus detection arrives in Phase 1 (FR-DATA-10)",
     "zero_volume_runs: not checked in Phase 0",
     "outlier_returns: not checked in Phase 0",
     "survivorship_bias: a property of a universe, checked where portfolios are built",
@@ -128,7 +126,8 @@ class QualityReport:
     """The outcome of every quality check for one series.
 
     issues: what the checks found. not_run: the checks that did not run, each with
-    the reason.
+    the reason. price_gaps: the session boundaries the split check reports, with the
+    prices that are its evidence (`splits.PriceGap`).
     """
 
     symbol: str | None = None
@@ -137,6 +136,7 @@ class QualityReport:
     rows: int = 0
     issues: list[QualityIssue] = field(default_factory=list)
     not_run: list[str] = field(default_factory=lambda: list(NOT_RUN))
+    price_gaps: list[PriceGap] = field(default_factory=list)
 
     def add(
         self, check: str, severity: str, count: int, message: str, examples: Iterable[str] = ()
@@ -209,6 +209,8 @@ def check_bars(
     interval: str | None = None,
     normalisation: NormaliseReport | None = None,
     now_ns: int | None = None,
+    corporate_actions: Iterable[CorporateAction] | None = None,
+    base_bars: pd.DataFrame | None = None,
 ) -> QualityReport:
     """Run the quality checks on canonical bars and return a QualityReport.
 
@@ -220,10 +222,16 @@ def check_bars(
         interest of 0) appear in the same report.
     now_ns: the load time in UTC nanoseconds; bars of a session that is still
         running are not counted as missing before they can have closed.
+    corporate_actions: the splits, bonuses and checked dates declared for the share
+        (`corporate_actions.CorporateAction`), read by the split check (`splits`).
+    base_bars: the bars `bars` were resampled from, when they were; the split check
+        reads them, because a split inside a weekly or longer bar cannot be seen.
 
     The function reports and never raises on bad data; call
     `QualityReport.raise_for_errors` to stop on error severity. Raises ConfigError
-    for an interval string that is not an OpenAlgo interval.
+    for an interval string that is not an OpenAlgo interval, and for declarations
+    that are not CorporateAction objects, conflict, or are given for a series that
+    is not a share on NSE or BSE.
     """
     exchange = exchange if exchange is not None else bars.attrs.get("exchange")
     interval = interval if interval is not None else bars.attrs.get("interval")
@@ -237,6 +245,13 @@ def check_bars(
         report.not_run.append("missing_bars: the exchange or interval of the series is unknown")
     elif len(ts_open):
         _check_missing(np.sort(ts_open), calendar, exchange, interval, now_ns, report)
+    check_splits(
+        bars if base_bars is None else base_bars,
+        report,
+        exchange=exchange,
+        interval=interval if base_bars is None else base_bars.attrs.get("interval"),
+        declared=declared(corporate_actions),
+    )
     if normalisation is not None:
         for check, severity, count_field, message, examples_field in _NORMALISATION_ISSUES:
             count = getattr(normalisation, count_field)

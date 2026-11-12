@@ -214,8 +214,7 @@ def test_dropped_partial_bar_is_reported_as_info():
 def test_report_lists_every_prd_check_this_phase_does_not_run():
     not_run = [text.split(":")[0] for text in _checked(DAY_ROWS).not_run]
     assert not_run == [
-        "split_or_bonus", "zero_volume_runs", "outlier_returns", "survivorship_bias",
-        "adjustment_status",
+        "zero_volume_runs", "outlier_returns", "survivorship_bias", "adjustment_status",
     ]  # fmt: skip
 
 

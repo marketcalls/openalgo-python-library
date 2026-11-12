@@ -1,8 +1,9 @@
 """The order methods of `Strategy` (14-strategy-api 2.4), as a mixin.
 
-`buy` and `sell` open, add or reduce; `exit` and `reduce` only reduce. Every method takes
-`symbol=None` (required with several instruments) and returns an `Order` handle, or None
-when there is nothing to do (an exit while flat) or a sizer skipped the order. A MARKET
+`buy` and `sell` open, add or reduce; `exit` and `reduce` only reduce; `target` trades to
+a target position. Every method takes `symbol=None` (required with several instruments)
+and returns an `Order` handle, or None when there is nothing to do (an exit while flat,
+a target already held) or a sizer skipped the order. A MARKET
 order fills at the next base-bar open at or after the decision; a LIMIT or stop order
 (`price=`, `trigger_price=`) rests from that bar until it fills or its session closes;
 a GTT order (`validity="gtt"`) rests until it fires or is cancelled. The kernel refuses
@@ -52,8 +53,9 @@ class OrderMethods:
         `trigger_price` makes it a stop order, SL with a price and SL-M without (on
         options an SL-M is sent as an SL with its limit 5 percent beyond the trigger).
         A LIMIT or stop order rests from the next base bar until it fills or its session
-        closes. Quantity: `qty` units or `lots`, else `size=`, else the strategy's
-        `size`, else the engine default. `leverage=` asks for intraday leverage, else the
+        closes. Quantity: `qty` units or `lots`, else `size=` (a `bt.size` sizer or a
+        sizing function `size(ctx, order)`, see `bt.size`), else the strategy's `size`,
+        else the engine default. `leverage=` asks for intraday leverage, else the
         strategy's `leverage`, else 1x. Risk arguments attach to the position it opens
         (an add may repeat them but not change them, SPEC-14); on CNC and NRML they are
         held as GTT orders. `validity="gtt"` rests it as a GTT until it fires or is
@@ -172,10 +174,29 @@ class OrderMethods:
         qty: float | None = None,
         percent: float | None = None,
         value: float | None = None,
+        lots: int | None = None,
         symbol: str | None = None,
     ) -> Order | None:
-        """Trade to a target position: `qty` units, `percent` of equity or `value` rupees."""
-        raise NotImplementedError(f"target() resizing {NOT_BUILT}")
+        """Trade to a target position (12-position-sizing 5): exactly one of `qty` units
+        or `lots`, taken as given, or `value` rupees or `percent` of equity (the sizing
+        equity, see `reinvest`), converted at the decision price and rounded towards zero
+        to the venue rule. Positive is long, negative short, 0 flat.
+
+        Sends one MARKET DAY order for the difference between the target and the
+        position the strategy will hold once its queued market orders on the symbol
+        fill, and returns its handle; None when there is no difference. Going from one
+        side to the other closes and reverses in that order (two fills); a smaller
+        position on the same side only reduces. Resting LIMIT, stop and GTT orders are
+        left working and not counted. The order carries no leg rules: an add keeps the
+        position's, the side a reversal opens has none. It is the strategy's product,
+        with the strategy's `leverage` when it opens or adds; sizer caps do not apply.
+        Raises ConfigError unless exactly one amount is given as a finite number (lots a
+        whole number)."""
+        ctx = self._ctx
+        amounts = {"qty": qty, "lots": lots, "value": value, "percent": percent}
+        leverage = order_leverage(None, getattr(self, "leverage", None))
+        request = _orders.target(ctx.instrument_index(symbol), ctx.product, leverage, amounts)
+        return ctx.submit_target(request)
 
     def cancel(self, order: Order) -> str:
         """Cancel a working order; returns its state afterwards."""

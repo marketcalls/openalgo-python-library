@@ -229,6 +229,7 @@ pub(super) fn run_config(dict: &Bound<'_, PyDict>) -> PyResult<RunConfig> {
         margin: MarginModel,
         market: super::market::market_facts(dict)?,
         risk: risk(&field(dict, "risk")?)?,
+        sizing: super::sizing::controls(&field(dict, "risk")?)?,
         intraday: IntradayOverrides {
             entry_from_minute: optional(dict, "entry_from_minute")?,
             entry_until_minute: optional(dict, "entry_until_minute")?,

@@ -115,8 +115,8 @@ pub(super) const LEVEL_COLUMNS: [Column<LevelRow>; 16] = [
 ];
 
 /// The closed round trips: their number, direction, entry and exit, P&L and charges
-/// (rupees).
-pub(super) const TRADE_COLUMNS: [Column<TradeRecord>; 17] = [
+/// (rupees), and the initial risk in rupees (None with no stop at the open).
+pub(super) const TRADE_COLUMNS: [Column<TradeRecord>; 18] = [
     ("trade_id", |py, t| t.number.into_py(py)),
     ("instrument", |py, t| t.instrument.0.into_py(py)),
     ("product", |py, t| t.product.code().into_py(py)),
@@ -139,6 +139,9 @@ pub(super) const TRADE_COLUMNS: [Column<TradeRecord>; 17] = [
     ("net_pnl_rupees", |py, t| t.net_pnl_rupees.into_py(py)),
     ("exit_reason", |py, t| t.exit_reason.code().into_py(py)),
     ("fills", |py, t| t.fills.into_py(py)),
+    ("initial_risk_rupees", |py, t| {
+        t.initial_risk_rupees.into_py(py)
+    }),
 ];
 
 /// The orders: the request (type, prices in rupees, validity, product), the state and

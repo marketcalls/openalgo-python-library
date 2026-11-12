@@ -4,7 +4,8 @@ full     every section: summary, equity with the longest drawdowns shaded,
          cumulative return, session returns, monthly and yearly returns, return
          distribution, drawdowns, rolling statistics, horizons, benchmark (when
          given), Monte Carlo, trade P&L distribution, trades, losing streaks, costs,
-         strategies (when given), assumptions and notes
+         R-multiples (when a closed trade has an initial risk), strategies (when
+         given), assumptions and notes
 basic    summary with the basic facts, equity, monthly and yearly returns, drawdowns,
          trades, costs, assumptions and notes
 metrics  every metric with its definition, and the assumptions
@@ -20,6 +21,7 @@ from . import _charts as charts
 from . import _charts_series as series
 from . import _charts_simulation as simulation
 from . import _format as fmt
+from . import _r_multiples as r_multiples
 from . import _sections as sections
 from . import _tables as tables
 from . import _tables_data as tables_data
@@ -257,6 +259,7 @@ def body(
     if p.benchmark_returns is not None:
         parts.append(benchmark(p))
     parts += [montecarlo(p), trade_distribution(p), trade_list(p), streaks(p), costs(p)]
+    parts += r_multiples.section(p)
     if strategies is not None:
         parts.append(strategies_section(strategies))
     return [*parts, assumptions(assumption_lines), notes(p, sections.FACTS)]

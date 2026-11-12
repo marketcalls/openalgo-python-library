@@ -103,12 +103,13 @@ fn sizer(dict: &Bound<'_, PyDict>) -> PyResult<SizerSpec> {
             multiple: field(dict, "multiple")?,
             atr_rupees: optional(dict, "atr")?.unwrap_or(f64::NAN),
         },
+        "function" => SizerSpec::Function { units: amount()? },
         "default" => SizerSpec::EngineDefault,
         other => {
             return Err(unknown(
                 "sizer",
                 other,
-                "qty, lots, value, percent, fixed_risk, atr_risk or default",
+                "qty, lots, value, percent, fixed_risk, atr_risk, function or default",
             ))
         }
     })

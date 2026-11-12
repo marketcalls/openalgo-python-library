@@ -39,6 +39,7 @@
 //! | `Engine::submit(OrderRequest)` | while paused | submission checks, `Submitted` or `Rejected` |
 //! | `Engine::cancel(OrderId)` | while paused | cancel a working order |
 //! | `Engine::modify(OrderId, OrderRequest)` | while paused | a full replacement of a working order (`modify`) |
+//! | `Engine::submit_target(TargetRequest)` | while paused | the order for the difference to a target position (`target`) |
 //! | `position`, `leg`, `order`, `working_orders`, `gtts`, `has_pending_entry`, `account`, `last_close`, `decision_instant`, `trading_state`, `strategy_bars`, `timer_counts` | any time | queries |
 //! | `Engine::add_timer(TimerSpec)` | before the first `advance` | register `self.at` or `self.every` |
 //! | `Engine::finish()` | after `Pause::Finished` | the `RunOutput` |
@@ -115,6 +116,8 @@
 //! | `roll` | Step 2: the futures auto-roll, the level shift, the GTTs at a roll |
 //! | `settlement` | Step 8: futures expiry settlement and the daily mark to market |
 //! | `sizing` | What a sizer sees, cost estimates in its budget, the engine default |
+//! | `target` | `submit_target`: the order that takes a position to a target (`target()`) |
+//! | `initial_risk` | What a trade's opening fill would lose at its entry stop (R-multiples) |
 //! | `session` | Intraday times per session, the entry window, the square-off timer |
 //! | `submit` | `submit`, `cancel`, the submission checks, DAY validity and market closed |
 //! | `aggregate` | Step 6 (daily loss limit, drawdown halt), the step-1 session boundary, the exits they queue |
@@ -144,8 +147,9 @@
 //! (`self.at`, `self.every`), charges on every fill with contract-note rounding, the
 //! dated default slippage and margin tables (cash, MIS with leverage on request, long
 //! options, NSE index and stock futures, BSE BANKEX and MCX futures), a CNC buy and
-//! sell of one scrip on one day charged as intraday, the sizers and the engine default
-//! size, the position
+//! sell of one scrip on one day charged as intraday, the sizers (with a strategy's own
+//! sizing function, `reinvest` and the size caps), the engine default size, target
+//! positions, the initial risk of each trade, the position
 //! history, the equity series, trades and events, the whole-run strategy bars for
 //! indicators; the daily loss limit, the drawdown halt, the trading state, the
 //! cooldown, maximum positions, the scale-in limits and the time exit; condition and
@@ -168,6 +172,7 @@ mod gtt_fire;
 mod gtt_orders;
 mod gtt_plan;
 mod history;
+mod initial_risk;
 pub mod kernel;
 mod legs;
 pub mod market_data;
@@ -187,6 +192,7 @@ mod sizing;
 mod steps;
 mod strategy_risk;
 pub mod submit;
+mod target;
 pub mod timers;
 
 pub use clock::{SliceInfo, Timeline};
@@ -207,6 +213,7 @@ pub use output::{
 };
 pub use pause::{run, Driver, Pause, TimerId};
 pub use run_end::{RunEnd, RunEndCause};
-pub use signals::{run_signals, EntrySignal, SignalArrays, SkippedEntry};
+pub use signals::{run_signals, AtrInput, AtrSlot, EntrySignal, SignalArrays, SkippedEntry};
 pub use submit::Submission;
+pub use target::TargetRequest;
 pub use timers::{TimerCount, TimerSpec};

@@ -202,24 +202,6 @@ def test_entry_arguments_outside_section_4_1_are_refused(argument):
         run_steps(Priced)
 
 
-@pytest.mark.parametrize(
-    "argument",
-    [{"stop": bt.atr(2, 3)}, {"trail": bt.trail_atr(1, 3)}, {"size": bt.size.atr_risk(1, 2, 3)}],
-    ids=["atr-stop", "atr-trail", "atr-risk-sizer"],
-)
-def test_atr_order_arguments_are_not_built_for_conditions(argument):
-    class Atr(bt.Strategy):
-        symbol, exchange, interval = "SBIN", "NSE", "5m"
-
-        def init(self):
-            self.entry_when(self.close > 502, **{"qty": 10, **argument})
-
-    if "size" in argument:
-        Atr.init = lambda self: self.entry_when(self.close > 502, **argument)
-    with pytest.raises(NotImplementedError, match="condition order arguments"):
-        run_steps(Atr)
-
-
 def test_a_negative_pyramiding_is_refused():
     class Negative(Levels):
         pyramiding = -1

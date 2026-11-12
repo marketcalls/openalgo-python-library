@@ -35,9 +35,10 @@ before adding when in a position; `pyramiding` (class attribute, default 0) adds
 position is read in step 7 and a queued entry counts as not flat (SPEC-29). The order
 arguments are `qty`, `size`, `lots`, `stop`, `target`, `targets`, `trail`, `breakeven`,
 `after_first_target`, `product`, `leverage` and `tag`: a condition entry is always a
-MARKET DAY order. A strategy uses `on_bar` or conditions, never both; a condition
-strategy trades one symbol and has no per-event callbacks or timers (they would call
-Python during the run).
+MARKET DAY order. ATR distances (`bt.atr`, `bt.trail_atr`) and `bt.size.atr_risk` take
+the ATR of the deciding bar, as in `on_bar` (`_condition_atr`). A strategy uses `on_bar`
+or conditions, never both; a condition strategy trades one symbol and has no per-event
+callbacks, timers or sizing functions (they would call Python during the run).
 """
 
 from __future__ import annotations
@@ -51,6 +52,7 @@ import pandas as pd
 from . import _orders
 from ._calendar_convert import IST
 from ._clock import ClockCondition
+from ._condition_atr import Slot, atr_inputs, atr_slots, template_atr
 from ._engine import call
 from ._series import FIELDS, ist_time
 from ._strategy_orders import order_leverage
@@ -80,16 +82,17 @@ GRAMMAR = "the condition grammar of 14-strategy-api 4.2"
 # Python at every decision, or conditions run by the Rust signal driver.
 EVENT_PATH = "event"
 CONDITIONS_PATH = "conditions"
-NOT_BUILT = "is not implemented yet (Phase 1 work in progress)"
 ARRAYS = (pd.Series, np.ndarray, list, tuple)
 
 
 @dataclass(frozen=True)
 class Declared:
-    """One declared condition and, for an entry, the request its orders send."""
+    """One declared condition and, for an entry, the request its orders send and the
+    ATRs that request names (`_condition_atr`)."""
 
     condition: Any
     order: dict[str, Any] | None
+    atr: tuple[Slot, ...] = ()
 
 
 def outside(what: str) -> ConfigError:
@@ -114,21 +117,22 @@ def declare(strategy: Any, kind: str, condition: Any, order_args: dict[str, Any]
 
     Raises ConfigError when the class also defines `on_bar` or a per-event callback,
     trades several symbols, declares the same kind twice, gives a condition outside the
-    grammar or order arguments 4.1 does not list; NotImplementedError for an ATR
-    distance or `bt.size.atr_risk` (resolved per decision, not built for conditions)."""
+    grammar, order arguments 4.1 does not list, or a sizing function."""
     what = f"{kind}_when"
     _check_form(type(strategy), what)
     declared = strategy.__dict__.setdefault("_conditions", {})
     if kind in declared:
         raise ConfigError(f"{what} is declared once; combine conditions with & and |")
     _check_condition(condition, what)
-    order = None
-    if kind in ENTRY_SIDES:
-        check_order_arguments(order_args, what)
-        leverage = order_leverage(order_args.get("leverage"), type(strategy).leverage)
-        arguments = {**order_args, "leverage": leverage}
-        order = _entry_request(strategy._ctx, ENTRY_SIDES[kind], arguments)
-    declared[kind] = Declared(condition, order)
+    if kind not in ENTRY_SIDES:
+        declared[kind] = Declared(condition, None)
+        return
+    check_order_arguments(order_args, what)
+    leverage = order_leverage(order_args.get("leverage"), type(strategy).leverage)
+    arguments = {**order_args, "leverage": leverage}
+    order = _entry_request(strategy._ctx, ENTRY_SIDES[kind], arguments, what)
+    slots = tuple(atr_slots(arguments, order["quantity"]))
+    declared[kind] = Declared(condition, order, slots)
 
 
 def has_conditions(strategy: Any) -> bool:
@@ -183,16 +187,11 @@ def _check_condition(condition: Any, what: str) -> None:
         raise outside(f"a {type(condition).__name__} condition")
 
 
-def _refuse_atr(period: int) -> float:
-    raise NotImplementedError(
-        f"ATR distances (bt.atr, bt.trail_atr) in condition order arguments {NOT_BUILT}: "
-        "use points, pct, ticks or rupees, or on_bar"
-    )
-
-
-def _entry_request(ctx: Any, side: str, args: dict[str, Any]) -> dict[str, Any]:
+def _entry_request(ctx: Any, side: str, args: dict[str, Any], what: str) -> dict[str, Any]:
     """The request `buy(**args)` or `sell(**args)` sends, built once: the same dict as
-    `OrderMethods._open` for a MARKET DAY order on the strategy's instrument."""
+    `OrderMethods._open` for a MARKET DAY order on the strategy's instrument, with NaN
+    where an ATR goes (the driver puts in the deciding bar's). Raises ConfigError for a
+    sizing function, which would call Python at each decision."""
     rules = _orders.leg_rules(
         args.get("stop"),
         args.get("target"),
@@ -200,12 +199,15 @@ def _entry_request(ctx: Any, side: str, args: dict[str, Any]) -> dict[str, Any]:
         args.get("trail"),
         args.get("breakeven"),
         args.get("after_first_target"),
-        atr_at=_refuse_atr,
+        atr_at=template_atr,
     )
     sizer = args.get("size")
     quantity = _orders.quantity(args.get("qty"), args.get("lots"), sizer, ctx.default_size)
-    if quantity.get("sizer") == "atr_risk":
-        raise NotImplementedError(f"bt.size.atr_risk in condition order arguments {NOT_BUILT}")
+    if quantity.get("function") is not None:
+        raise ConfigError(
+            f"{what}: a sizing function runs Python at each decision and a condition "
+            "strategy runs in Rust; use a bt.size sizer, or on_bar"
+        )
     return _orders.request(
         ctx.instrument_index(None),
         side,
@@ -300,7 +302,9 @@ def _pyramiding(cls: type) -> int:
 
 def signal_spec(strategy: Any) -> dict[str, Any]:
     """The spec dict the engine's `run_signals` reads: the condition arrays (None when
-    not declared), the entry order templates, the product and `pyramiding`."""
+    not declared), the entry order templates and the ATRs they name, the product and
+    `pyramiding`. Raises ConfigError when the causality registry does not clear the
+    ATR."""
     declared: dict[str, Declared] = strategy.__dict__.get("_conditions", {})
     ctx = strategy._ctx
     store = ctx.store(None)
@@ -316,6 +320,7 @@ def signal_spec(strategy: Any) -> dict[str, Any]:
         spec[kind] = None if entry is None else condition_values(entry.condition, store, what)
         if kind in ENTRY_SIDES:
             spec[f"{kind}_order"] = None if entry is None else entry.order
+            spec[f"{kind}_atr"] = [] if entry is None else atr_inputs(list(entry.atr), store)
     return spec
 
 

@@ -9,7 +9,7 @@ Built: `fills`, `orders`, `trades`, `equity`, `returns`, `positions` (the positi
 history), `events`, `risk_events`, `stale_marks`, `final_positions`, `gross_pnl`,
 `costs`, `contract_notes`, `settlements` and `rolls` (futures), `performance`,
 `metrics`, `metrics_table()`, `monte_carlo()`, `tearsheet()` (full, basic, metrics or
-charts), `assumptions`,
+charts), `r_summary` (the R-multiples, `_result_r`), `assumptions`,
 `warnings`, `skipped`, `manifest` (see `_manifest`), `rerun()` (see `_rerun`),
 `to_dataframes()`. Not built yet: the several-strategy views `strategy()`, `combined`,
 `correlation` (Phase 3).
@@ -22,7 +22,7 @@ from typing import Any
 
 import pandas as pd
 
-from . import _result_costs, _result_futures, _result_report
+from . import _result_costs, _result_futures, _result_r, _result_report
 from ._native import native
 from ._series import IST
 from .errors import BacktestError
@@ -136,10 +136,16 @@ class Result:
 
     @property
     def trades(self) -> pd.DataFrame:
-        """Closed round trips; positions open at the end are in `final_positions`."""
+        """Closed round trips; positions open at the end are in `final_positions`.
+        `initial_risk_rupees` is what the opening fill would have lost at the stop its
+        entry set, and `r_multiple` the net P&L over it (NaN for a trade opened without
+        a stop; `_result_r`)."""
         frame = self._table("trades", None)
         frame.insert(1, "entry_time", _times(frame["entry_ts"]))
         frame.insert(2, "exit_time", _times(frame["exit_ts"]))
+        frame["initial_risk_rupees"] = frame["initial_risk_rupees"].astype(float)
+        risk = frame["initial_risk_rupees"]
+        frame["r_multiple"] = _result_r.r_values(frame["net_pnl_rupees"], risk)
         return frame
 
     @property
@@ -213,6 +219,14 @@ class Result:
     def skipped(self) -> pd.DataFrame:
         """Orders a sizer skipped: decision instant, symbol and reason."""
         return pd.DataFrame(self._skipped, columns=["decided_at", "symbol", "reason"])
+
+    @property
+    def r_summary(self) -> dict[str, Any]:
+        """The R-multiples of the closed trades (`trades["r_multiple"]`): how many, how
+        many had an initial risk, their mean (the expectancy in R), median, standard
+        deviation, best, worst, total and share above zero, and the distribution in
+        one-R bins (`_result_r.r_summary`)."""
+        return _result_r.r_summary(self.trades["r_multiple"])
 
     @property
     def manifest(self) -> dict[str, Any]:

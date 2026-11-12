@@ -24,6 +24,7 @@ from .._layout import BAR_COLUMNS, IST_OFFSET_NANOS, parse_interval
 from ..errors import NoDataError
 from ..resample import resample_bars
 from ._sessions import Sessions, ist_days
+from .corporate_actions import CorporateAction
 from .fetching import FetchReport
 from .normalise import VALUE_COLUMNS, NormaliseReport, Stamped, build_bars
 from .openalgo_provider import OpenAlgoProvider, Probe
@@ -136,7 +137,8 @@ def partition_hashes(result: BarsResult | LoadMetadata) -> dict[str, str]:
 @dataclass(frozen=True)
 class LoadRequest:
     """One load: the instrument, the interval to return and the base interval to
-    obtain, the inclusive IST dates, the load time and the sessions of the exchange."""
+    obtain, the inclusive IST dates, the load time, the sessions of the exchange and
+    the corporate actions declared for the share."""
 
     symbol: str
     exchange: str
@@ -146,6 +148,7 @@ class LoadRequest:
     end: dt.date
     now_ns: int
     sessions: Sessions
+    corporate_actions: tuple[CorporateAction, ...] = ()
 
     @property
     def series(self) -> tuple[str, str, str]:
@@ -185,9 +188,14 @@ def finish(request: LoadRequest, stamped: Stamped, meta: LoadMetadata, strict: b
     report.shift_applied_seconds = stamped.shift_seconds
     advice = _ADVICE.get(meta.source, _OWN_ADVICE)
     _describe_coverage(bars, request, meta, stamped.origin, advice)
+    declared = request.corporate_actions
+    base_bars = None
     if request.base != request.interval:
         meta.base_interval = request.base
-        meta.base_quality = check_bars(bars, calendar=sessions, now_ns=request.now_ns)
+        meta.base_quality = check_bars(
+            bars, calendar=sessions, now_ns=request.now_ns, corporate_actions=declared
+        )
+        base_bars = bars
         bars, meta.resample_dropped = _resampled(bars, request, report)
         left_out = {name: count for name, count in meta.resample_dropped.items() if count}
         if left_out:
@@ -215,7 +223,14 @@ def finish(request: LoadRequest, stamped: Stamped, meta: LoadMetadata, strict: b
     meta.warnings.extend(note for note in report.notes if note not in meta.warnings)
     meta.rows = len(bars)
     meta.normalisation = report
-    meta.quality = check_bars(bars, calendar=sessions, normalisation=report, now_ns=request.now_ns)
+    meta.quality = check_bars(
+        bars,
+        calendar=sessions,
+        normalisation=report,
+        now_ns=request.now_ns,
+        corporate_actions=declared,
+        base_bars=base_bars,
+    )
     key = f"{label}/{request.exchange}/{request.symbol}/{request.interval}"
     meta.partitions = _hash_by_month(bars, key)
     if strict:

@@ -65,7 +65,10 @@ def _max_adds(value: Any) -> int | None:
     return value
 
 
-def _max_position(value: Any) -> NativeLimit | None:
+def position_limit(value: Any, name: str = "max_position") -> NativeLimit | None:
+    """A position limit in the kernel's (kind, amount) form, or None; the forms are those
+    of `max_position` above (also read by `bt.size.caps`). Raises ConfigError naming
+    `name` for any other value."""
     if value is None:
         return None
     if _positive(value):
@@ -81,7 +84,7 @@ def _max_position(value: Any) -> NativeLimit | None:
     if isinstance(value, Sizer) and value.kind == "percent" and value.options["basis"] == "equity":
         return ("percent", float(value.amount))
     raise ConfigError(
-        "max_position takes units (a positive number or bt.size.qty), bt.size.lots(n), "
+        f"{name} takes units (a positive number or bt.size.qty), bt.size.lots(n), "
         "rupees of value (bt.rupees or bt.size.value) or a percent of equity (bt.pct or "
         f"bt.size.percent), got {value!r}"
     )
@@ -100,7 +103,10 @@ def _min_spacing(value: Any) -> NativeLimit | None:
     )
 
 
-def _max_risk(value: Any) -> NativeLimit | None:
+def risk_limit(value: Any, name: str = "max_risk") -> NativeLimit | None:
+    """A risk limit in the kernel's (kind, amount) form, or None; the forms are those of
+    `max_risk` above (also read by `bt.size.caps`). Raises ConfigError naming `name`
+    for any other value."""
     if value is None:
         return None
     if _positive(value):
@@ -110,7 +116,7 @@ def _max_risk(value: Any) -> NativeLimit | None:
     if isinstance(value, Distance) and value.unit == "pct" and value.value < PERCENT:
         return ("percent", value.value)
     raise ConfigError(
-        "max_risk takes rupees (a positive number or bt.rupees) or a percent of equity "
+        f"{name} takes rupees (a positive number or bt.rupees) or a percent of equity "
         f"below 100 (bt.pct), got {value!r}"
     )
 
@@ -127,9 +133,9 @@ def scale_limits(strategy: type) -> dict[str, Any]:
     given = {name: getattr(strategy, name, unset) for name, unset in LIMITS.items()}
     return {
         "max_adds": _max_adds(given["max_adds"]),
-        "max_position": _max_position(given["max_position"]),
+        "max_position": position_limit(given["max_position"]),
         "min_spacing": _min_spacing(given["min_spacing"]),
-        "max_risk": _max_risk(given["max_risk"]),
+        "max_risk": risk_limit(given["max_risk"]),
         "allow_averaging_down": _flag(given["allow_averaging_down"]),
     }
 
@@ -162,4 +168,4 @@ def describe(risk: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-__all__ = ["LIMITS", "describe", "scale_limits"]
+__all__ = ["LIMITS", "describe", "position_limit", "risk_limit", "scale_limits"]

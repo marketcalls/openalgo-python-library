@@ -1,8 +1,9 @@
 //! Risk sizers (12-position-sizing 5): fixed risk to the order's stop, and the same with
 //! the stop distance taken from the ATR.
 //!
-//! Fixed risk: the rupees at risk are `equity x risk_percent / 100` less the estimated
-//! costs of the round trip; the quantity is that over the loss per unit at the stop
+//! Fixed risk: the rupees at risk are `equity x risk_percent / 100` (the sizing equity,
+//! which follows `reinvest`) less the estimated costs of the round trip; the quantity
+//! is that over the loss per unit at the stop
 //! (`stop distance x multiplier`), capped at `hard_limit_units`, then split into
 //! `units` equal tranches of which the order is the first. Rounding down to the venue
 //! rule and the freeze cap follow in `size`.
@@ -63,7 +64,7 @@ fn risked_units(
             reason: "units must be at least 1".to_string(),
         });
     }
-    let budget = ctx.equity_rupees * percent / 100.0 - ctx.estimated_cost_rupees;
+    let budget = ctx.sizing_equity() * percent / 100.0 - ctx.estimated_cost_rupees;
     let loss_per_unit = distance * positive("the multiplier", ctx.multiplier)?;
     let mut quantity = budget.max(0.0) / loss_per_unit;
     if let Some(limit) = hard_limit_units {
