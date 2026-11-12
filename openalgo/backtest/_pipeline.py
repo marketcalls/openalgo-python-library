@@ -42,6 +42,13 @@ from ._intraday_assumptions import one_clock_time
 from ._manifest import build_manifest, strategy_source_hash
 from ._margin_check import check_margin
 from ._market import MarketSettings, market_settings
+from ._run_corporate_actions import (
+    UnadjustedEvent,
+    check_crossings,
+    manifest_form,
+    run_warnings,
+    unadjusted_events,
+)
 from ._run_end import run_end_warnings
 from ._settings import RunPlan, assumptions, resolve
 from ._slab_ticks import resolve_slab_ticks
@@ -70,6 +77,9 @@ class PreparedRun:
     market: MarketSettings | None
     # The futures series (`_futures.FuturesPlan`), None for a strategy on no underlying.
     futures: Any = None
+    # Declared splits and bonuses the bars are not adjusted for, which nothing may be
+    # held across (`_run_corporate_actions`).
+    unadjusted: tuple[UnadjustedEvent, ...] = ()
 
     @property
     def portable(self) -> bool:
@@ -151,6 +161,7 @@ def prepare(strategy: type, client: Any, args: dict[str, Any]) -> PreparedRun:
     warnings = [*plan.warnings]
     for result in loaded:
         warnings += [note for note in result.meta.warnings if note not in warnings]
+    warnings += run_warnings(plan.symbols, loaded)
     for instrument in instruments:
         if instrument.generic:
             warnings.append(
@@ -173,6 +184,7 @@ def prepare(strategy: type, client: Any, args: dict[str, Any]) -> PreparedRun:
         market_args=market_args,
         market=market,
         futures=futures,
+        unadjusted=unadjusted_events(plan.symbols, loaded),
     )
 
 
@@ -213,6 +225,7 @@ def _arguments(
         data="given" if args["data"] is not None else None,
         client="given" if args.get("client") is not None else None,
         calendar="default" if prepared.calendar is None else "given",
+        corporate_actions=manifest_form(args.get("corporate_actions")),
     )
     # The present only when `now=` fixed it: a run on the clock reruns to the same manifest.
     present = resolved.pop("present")
@@ -261,6 +274,7 @@ def execute(
         on_path(evaluation_path(instance))
     timer_warnings = context.timers.warnings()
     output = call(engine.finish)
+    check_crossings(output, prepared.unadjusted)
     context.close(output["orders"])
     parameters = {name: getattr(instance, name) for name in strategy.parameters()}
     manifest = build_manifest(

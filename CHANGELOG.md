@@ -280,6 +280,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reproduces the broker calculator to the paisa for equity and F&O; the default
   `"contract_note"` rounds per trade day and segment. Part of the backtest engine
   being built; the interface may change before the backtest beta.
+- **Split and bonus detection in `openalgo.backtest` (preview).** OpenAlgo history may
+  not be adjusted for splits and bonuses, so the data quality check now reads them from
+  the bars of NSE and BSE shares: an overnight gap that is within 5 percent of a usual
+  factor (a 1:3 bonus up to a 10 for 1 split, or a consolidation), lies beyond the widest
+  daily price band and still holds at the session's close is a suspected unadjusted
+  split or bonus, an error that stops `load_bars` and `bt.backtest` with the date, the
+  ratio, the prices and how to go on. Circuit-limit days and ordinary large moves are not
+  reported; indices and derivatives are listed as not checked. `corporate_actions=`
+  (on `load_bars` and `bt.backtest`) takes declarations made with
+  `data.CorporateAction.split(ex_date, from_face_value, to_face_value)`, `.bonus(ex_date,
+  bonus, held)` or `.none(ex_date)` for a genuine move: a declared split or bonus the
+  bars are not adjusted for becomes a warning in the report and the result, one the
+  bars are already adjusted for is noted, and a declared factor that does not match
+  the gap is an error. Adjusting a holding across a corporate action is planned for a
+  later phase: a backtest that holds a position or a GTT across a declared, unadjusted
+  split or bonus raises NotImplementedError. `QualityReport.price_gaps` carries every
+  reported gap with its evidence, and the run manifest records the declarations. Part
+  of the backtest engine being built; the interface may change before the backtest
+  beta.
 
 ### Security
 

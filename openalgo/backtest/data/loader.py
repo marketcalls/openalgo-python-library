@@ -12,7 +12,7 @@ a request happens to cover.
 
 import datetime as dt
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 
 import numpy as np
 import pandas as pd
@@ -24,12 +24,14 @@ from ..errors import ConfigError, DataError, NoDataError
 from ._finish import PERIOD_UNITS, BarsResult, LoadMetadata, LoadRequest, finish
 from ._sessions import NowLike, Sessions, ist_days, resolve_now, to_date
 from .cache import RawCache, SeriesKey, is_settled
+from .corporate_actions import CorporateAction, declared
 from .fetching import DateRange, bucket_days
 from .files import Files
 from .normalise import VALUE_COLUMNS, Stamped
 from .openalgo_provider import SOURCES, OpenAlgoProvider, Probe
 from .own import Frame
 from .providers import DataProvider, get_provider, validate_layout, validate_provider
+from .splits import require_share
 
 # The arguments of load_bars that describe own data, with the value that means
 # "not given".
@@ -78,6 +80,7 @@ def load_bars(
     timestamp_format: str | None = None,
     broker: str | None = None,
     provider_options: Mapping[str, object] | None = None,
+    corporate_actions: Iterable[CorporateAction] | None = None,
 ) -> BarsResult:
     """Load bars for one instrument in the canonical layout.
 
@@ -105,10 +108,15 @@ def load_bars(
     provider_options: keyword arguments for the provider (for OpenAlgo: pacing,
         chunk_days, max_retries, backoff_base, backoff_max, intraday_shift_seconds,
         regular_session_only, sleep, clock).
+    corporate_actions: the splits, bonuses and checked dates declared for a share on
+        NSE or BSE (a list of `CorporateAction`). A gap that looks like an unadjusted
+        split or bonus is an error unless declared (see `splits`).
 
     Returns a `BarsResult` with `.bars` (the DataFrame) and `.meta` (`LoadMetadata`).
 
-    Raises ConfigError for arguments that do not fit together, NoDataError when the
+    Raises ConfigError for arguments that do not fit together (corporate actions that
+    are not CorporateAction objects, conflict, or are given for an index or a
+    derivative contract among them), NoDataError when the
     source has nothing for the range, TimestampError when bars do not fit the
     session calendar, CalendarError for a calendar that cannot answer,
     DataQualityError (with strict) for failed quality checks and DataError for
@@ -117,6 +125,8 @@ def load_bars(
     start, end = to_date(start, "start"), to_date(end, "end")
     if start > end:
         raise ConfigError(f"start {start} is after end {end}")
+    actions = declared(corporate_actions)
+    require_share(exchange, actions)
     own = dict(zip(_OWN_DATA_DEFAULTS, (tz, columns, label, unit, timestamp_format), strict=True))
     options = dict(provider_options or {})
     now_ns = resolve_now(now)
@@ -139,6 +149,7 @@ def load_bars(
         end=end,
         now_ns=now_ns,
         sessions=Sessions(calendar, exchange, start, end),
+        corporate_actions=actions,
     )
     if server:
         stamped, meta = _server_rows(request, provider, cache, cache_dir, refresh)

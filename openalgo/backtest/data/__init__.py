@@ -35,6 +35,8 @@ Modules, one responsibility each:
     _placement         where each bar opens and closes, checked against the calendar
     cache              the local cache of raw rows
     quality            the quality checks and their report
+    splits             the split and bonus check, read from the bars
+    corporate_actions  CorporateAction: splits, bonuses and checked dates a user declares
 
 Importing this package makes no network call and reads no entry points. pyarrow
 and polars are optional and imported only where a file format needs them.
@@ -42,6 +44,7 @@ and polars are optional and imported only where a file format needs them.
 
 from ._finish import BarsResult, LoadMetadata, partition_hashes
 from .cache import resolve_cache_dir
+from .corporate_actions import CorporateAction
 from .files import Files
 from .loader import load_bars
 from .openalgo_provider import OpenAlgoProvider
@@ -54,14 +57,17 @@ from .providers import (
     unregister_provider,
 )
 from .quality import QualityIssue, QualityReport, check_bars
+from .splits import PriceGap
 
 __all__ = [
     "BarsResult",
+    "CorporateAction",
     "DataProvider",
     "Files",
     "Frame",
     "LoadMetadata",
     "OpenAlgoProvider",
+    "PriceGap",
     "QualityIssue",
     "QualityReport",
     "available_providers",

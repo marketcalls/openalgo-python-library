@@ -61,6 +61,7 @@ AUDITED_RUN_ARGUMENTS = {
     "calendar",
     "source",
     "tz",
+    "corporate_actions",
     "base",
     "fill",
     "quantity_mode",
