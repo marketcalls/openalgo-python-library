@@ -7,8 +7,7 @@
 use numpy::PyReadonlyArray1;
 use oa_bt::data::resample::CalendarUnit;
 use oa_bt::engine::{
-    BarColumns, CostConfig, FillTiming, IntradayOverrides, QuantityMode, RunConfig,
-    StrategyInterval,
+    BarColumns, FillTiming, IntradayOverrides, QuantityMode, RunConfig, StrategyInterval,
 };
 use oa_bt::exec::InstrumentSpec;
 use oa_bt::market::calendar::BaseInterval;
@@ -73,7 +72,7 @@ fn strategy_interval(value: &Bound<'_, PyAny>) -> PyResult<StrategyInterval> {
 }
 
 /// Slippage as (kind, amount, min_ticks).
-fn slippage(spec: (String, f64, u32)) -> PyResult<SlippageSpec> {
+pub(super) fn slippage(spec: (String, f64, u32)) -> PyResult<SlippageSpec> {
     let (kind, amount, min_ticks) = spec;
     match kind.as_str() {
         "zero" => Ok(SlippageSpec::Zero),
@@ -129,7 +128,6 @@ fn risk(dict: &Bound<'_, PyDict>) -> PyResult<StrategyRiskConfig> {
 pub(super) fn run_config(dict: &Bound<'_, PyDict>) -> PyResult<RunConfig> {
     let fill: String = field(dict, "fill")?;
     let mode: String = field(dict, "quantity_mode")?;
-    let costs: Option<String> = optional(dict, "costs")?;
     let first_day: PyDay = field(dict, "first_day")?;
     let last_day: PyDay = field(dict, "last_day")?;
     let interval = dict
@@ -153,12 +151,10 @@ pub(super) fn run_config(dict: &Bound<'_, PyDict>) -> PyResult<RunConfig> {
             _ => return Err(unknown("quantity_mode", &mode, "fractional or venue")),
         },
         capital_rupees: field(dict, "capital")?,
-        costs: match costs {
-            None => CostConfig::Off,
-            Some(_) => cost_model()?,
-        },
+        costs: super::market::costs(dict)?,
         slippage: slippage(field(dict, "slippage")?)?,
         margin: MarginModel,
+        market: super::market::market_facts(dict)?,
         risk: risk(&field(dict, "risk")?)?,
         intraday: IntradayOverrides {
             entry_from_minute: optional(dict, "entry_from_minute")?,
@@ -167,13 +163,6 @@ pub(super) fn run_config(dict: &Bound<'_, PyDict>) -> PyResult<RunConfig> {
         },
         deliver_events: field(dict, "deliver_events")?,
     })
-}
-
-/// The built-in cost model; the kernel refuses it until charges are in the fill path.
-fn cost_model() -> PyResult<CostConfig> {
-    oa_bt::market::costs::CostModel::builtin()
-        .map(CostConfig::Model)
-        .map_err(|error| NativeEngineInputError::new_err(error.to_string()))
 }
 
 /// One instrument from its dict.

@@ -5,15 +5,19 @@
 //! slipped price is rounded to the tick away from the trader and may leave the bar's
 //! range by the slippage.
 //!
-//! Built: no slippage, a fixed number of ticks, basis points and percent of price, each
-//! with a minimum in ticks. Not built yet: the per-segment default table of 04-execution
-//! 4.3 (`SlippageSpec::SegmentDefault`), which is the run default once it exists.
+//! Forms: no slippage, a fixed number of ticks, basis points and percent of price (of
+//! the premium for options), each with a minimum in ticks. The run default,
+//! `SlippageSpec::SegmentDefault`, is the dated per-class table of
+//! `slippage_table` (`slippage_defaults.csv`), which the engine resolves to one of the
+//! other forms for each instrument and trade date before it prices a fill.
 
 use std::fmt;
 
 use crate::exec::error::ExecError;
 use crate::exec::price::round_away_from_trader;
-use crate::model::Side;
+use crate::model::{Day, Side};
+
+pub use super::slippage_table::{default_slippage, slippage_defaults, SlippageClass, SlippageRow};
 
 /// Basis points in one unit (1 bps is 0.01 percent).
 const BPS_PER_UNIT: f64 = 10_000.0;
@@ -29,17 +33,22 @@ pub enum SlippageSpec {
     Bps { bps: f64, min_ticks: u32 },
     /// Percent of the price (of the premium for options), at least `min_ticks` ticks.
     PercentOfPrice { percent: f64, min_ticks: u32 },
-    /// The segment default of 04-execution 4.3.
+    /// The default table of 04-execution 4.3, by instrument class and trade date.
     SegmentDefault,
 }
 
 /// What went wrong while applying slippage.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SlippageError {
-    /// A negative or non-finite slippage amount.
+    /// A negative or non-finite slippage amount, or the segment default passed where a
+    /// resolved slippage is needed.
     InvalidSpec { reason: String },
     /// The reference price or the tick cannot be used.
     Price(ExecError),
+    /// No row of the default table covers the class on the trade date.
+    NoDefault { class: &'static str, day: Day },
+    /// The embedded default table is malformed (a defect of the release).
+    InvalidTable { reason: String },
     /// A slippage model that is not built yet.
     NotBuilt { feature: &'static str },
 }
@@ -49,6 +58,15 @@ impl fmt::Display for SlippageError {
         match self {
             SlippageError::InvalidSpec { reason } => write!(f, "slippage: {reason}"),
             SlippageError::Price(inner) => write!(f, "slippage: {inner}"),
+            SlippageError::NoDefault { class, day } => write!(
+                f,
+                "slippage: the default table has no {class} row for {}; pass slippage= \
+                 explicitly (bt.ticks(n), bt.pct(p) or 0)",
+                crate::market::calendar::format_day(*day)
+            ),
+            SlippageError::InvalidTable { reason } => {
+                write!(f, "the built-in slippage table is malformed: {reason}")
+            }
             SlippageError::NotBuilt { feature } => {
                 write!(
                     f,
@@ -83,8 +101,10 @@ fn amount_rupees(spec: SlippageSpec, price: f64, tick: f64) -> Result<f64, Slipp
         SlippageSpec::PercentOfPrice { percent, min_ticks } => {
             Ok((price * non_negative("percent", percent)? / 100.0).max(floor(min_ticks)))
         }
-        SlippageSpec::SegmentDefault => Err(SlippageError::NotBuilt {
-            feature: "the per-segment default slippage table",
+        SlippageSpec::SegmentDefault => Err(SlippageError::InvalidSpec {
+            reason: "the segment default must be resolved to the instrument's row of the \
+                     default table before a fill is priced"
+                .to_string(),
         }),
     }
 }
@@ -92,8 +112,8 @@ fn amount_rupees(spec: SlippageSpec, price: f64, tick: f64) -> Result<f64, Slipp
 /// The fill price after slippage: worse for `side` by the slippage, rounded to the
 /// tick away from the trader.
 ///
-/// Units: rupees. Errors: `InvalidSpec` for a negative amount, `Price` for an unusable
-/// price or tick, `NotBuilt` for the segment default.
+/// Units: rupees. Errors: `InvalidSpec` for a negative amount or an unresolved segment
+/// default, `Price` for an unusable price or tick.
 pub fn slipped_price(
     spec: SlippageSpec,
     side: Side,
@@ -137,8 +157,21 @@ mod tests {
     }
 
     #[test]
-    fn the_segment_default_is_not_built_yet() {
+    fn percent_of_premium_rounds_away_from_the_trader() {
+        // 0.5 percent of a 123.40 premium is 0.617: a seller receives 122.783, rounded
+        // down to the tick, 122.75.
+        let half = SlippageSpec::PercentOfPrice {
+            percent: 0.5,
+            min_ticks: 1,
+        };
+        assert_eq!(slipped_price(half, Side::Sell, 123.4, 0.05), Ok(122.75));
+        // On a 2.00 premium 0.5 percent is 0.01, below one tick: one tick, 2.05 for a buyer.
+        assert_eq!(slipped_price(half, Side::Buy, 2.0, 0.05), Ok(2.05));
+    }
+
+    #[test]
+    fn the_segment_default_must_be_resolved_before_pricing() {
         let result = slipped_price(SlippageSpec::SegmentDefault, Side::Buy, 100.0, 0.05);
-        assert!(matches!(result, Err(SlippageError::NotBuilt { .. })));
+        assert!(matches!(result, Err(SlippageError::InvalidSpec { .. })));
     }
 }

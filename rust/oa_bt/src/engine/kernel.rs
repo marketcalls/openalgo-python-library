@@ -6,12 +6,14 @@
 //! the queries; `finish` returns the result once the grid is exhausted. The steps
 //! themselves are in `steps`, order submission in `submit`, fills in `fills`.
 
+use crate::charges::ChargeBook;
 use crate::exec::{InstrumentId, InstrumentSpec, Order, OrderBook, OrderId};
 use crate::market::calendar::Calendar;
 use crate::model::{Exchange, Product, TsNanos};
 use crate::portfolio::{Portfolio, Position, PositionKey};
 use crate::rms::LegState;
 
+use super::accounting::charge_book;
 use super::clock::{SliceInfo, Timeline};
 use super::config::{RunConfig, RunSetup};
 use super::error::KernelError;
@@ -69,6 +71,8 @@ pub struct Engine {
     pub(super) record: Recorder,
     /// Intraday times of the most recent session asked for.
     pub(super) session: Option<SessionTimes>,
+    /// Charges, contract notes and the market-table rows used.
+    pub(super) charges: ChargeBook,
 }
 
 /// The one exchange of a Phase 1 run.
@@ -112,7 +116,15 @@ impl Engine {
         let timeline = Timeline::build(&calendar, exchange, &config)?;
         let market = MarketData::build(bars, &instruments, &timeline, &calendar, &config)?;
         let portfolio = Portfolio::new(config.capital_rupees)?;
+        config
+            .market
+            .check_count(instruments.len())
+            .map_err(|reason| KernelError::InvalidConfig {
+                field: "market",
+                reason,
+            })?;
         Ok(Engine {
+            charges: charge_book(&config.costs),
             last_close: vec![None; instruments.len()],
             config,
             calendar,
@@ -272,6 +284,7 @@ impl Engine {
             orders: self.book.orders().to_vec(),
             events: self.record.events,
             stale_marks: self.record.stale_marks,
+            charges: self.charges.into_output(),
             final_positions,
             gross_pnl: GrossPnl {
                 realized_rupees: realized,

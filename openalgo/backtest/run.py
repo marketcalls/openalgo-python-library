@@ -33,6 +33,7 @@ from . import calendar as calendar_module
 from ._context import RunContext
 from ._driver import drive
 from ._engine import build_engine, call
+from ._market import market_settings
 from ._settings import assumptions, resolve
 from .data import load_bars
 from .errors import ConfigError
@@ -90,9 +91,12 @@ def backtest(
     base: the base interval ("1m", "D", ...); default "D" for daily strategies and the
         strategy interval for intraday ones (with a warning until the 1-minute coverage
         probe exists).
-    fill, quantity_mode, costs, slippage: "next_open"; "fractional" or "venue";
-        "zerodha" or None (no charges, with a warning); "default" (per segment), 0,
-        bt.ticks(n) or bt.pct(p).
+    fill, quantity_mode: "next_open"; "fractional" or "venue".
+    costs: "zerodha" (the default) or another preset name, a preset from bt.costs, a
+        bt.costs.CostModel, or None (no charges, with a warning on every report); see
+        `_market`.
+    slippage: "default" (the dated per-class table), 0, bt.ticks(n), bt.pct(p),
+        bt.slippage.bps(b) or bt.slippage.table(...); see `openalgo.backtest.slippage`.
     product, entry_from, entry_until, square_off: product default by interval and
         exchange; IST "HH:MM" times for MIS (calendar defaults when omitted).
     max_daily_loss, risk_basis, after_risk_exit, max_positions, drawdown_halt, cooldown,
@@ -116,7 +120,8 @@ def _run(strategy: type[Strategy], client: Any, args: dict[str, Any]) -> Result:
     session_calendar = _calendar(args["calendar"], plan)
     instruments, notes = _instruments(plan, args["instrument"], client)
     frames = [_bars(plan, symbol, client, session_calendar, args) for symbol in plan.symbols]
-    config = plan.native_config(deliver_events=strategy.wants_events())
+    market = market_settings(plan, instruments, args)
+    config = plan.native_config(deliver_events=strategy.wants_events()) | market.config
     engine = build_engine(session_calendar._cal, config, instruments, frames)
     context = RunContext(engine, instruments, plan.product, strategy.size)
     instance = strategy(**(args["params"] or {}))
@@ -128,10 +133,15 @@ def _run(strategy: type[Strategy], client: Any, args: dict[str, Any]) -> Result:
     return Result(
         output,
         list(plan.symbols),
-        assumptions(plan, session_calendar),
-        [*plan.warnings, *notes],
+        assumptions(plan, session_calendar) | market.assumptions,
+        [*plan.warnings, *notes, *market.warnings],
         context.skipped,
-        {"plan": plan, "instruments": [i.to_dict() for i in instruments]},
+        {
+            "plan": plan,
+            "strategy": strategy.__name__,
+            "instruments": [i.to_dict() for i in instruments],
+            "cost_schedules": market.cost_schedules,
+        },
     )
 
 

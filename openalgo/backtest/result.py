@@ -6,19 +6,23 @@ instruments are named by symbol. Prices and money are rupees, quantities units.
 
 Built: `fills`, `orders`, `trades`, `equity`, `returns`, `positions` (the position
 history), `events`, `risk_events`, `stale_marks`, `final_positions`, `gross_pnl`,
-`assumptions`, `warnings`, `skipped`, `manifest`, `to_dataframes()`. Not built yet:
-`metrics`, `costs`, `tearsheet()`, `rerun()` (Phase 1 work), and the several-strategy
-views `strategy()`, `combined`, `correlation` (Phase 3).
+`costs`, `contract_notes`, `performance`, `metrics`, `tearsheet()`, `assumptions`,
+`warnings`, `skipped`, `manifest`, `to_dataframes()`. Not built yet: `rerun()` (Phase 1
+work), and the several-strategy views `strategy()`, `combined`, `correlation` (Phase 3).
 """
 
 from __future__ import annotations
 
+from functools import cached_property
 from typing import Any
 
 import pandas as pd
 
+from . import _result_costs, _result_report
 from ._native import native
 from ._series import IST
+from .metrics import analyse
+from .report._performance import Performance
 
 NOT_BUILT = "is not implemented yet (Phase 1 work in progress)"
 
@@ -42,7 +46,8 @@ class Result:
         self._output = output
         self._symbols = symbols
         self._assumptions = assumptions
-        self._warnings = warnings
+        schedules = manifest.get("cost_schedules", [])
+        self._warnings = [*warnings, *_result_costs.run_warnings(output, schedules)]
         self._skipped = skipped
         self._manifest = manifest
 
@@ -154,21 +159,68 @@ class Result:
 
     def to_dataframes(self) -> dict[str, pd.DataFrame]:
         """Every built table, by name."""
-        names = ("fills", "orders", "trades", "positions", "equity", "events", "stale_marks")
+        names = (
+            "fills",
+            "orders",
+            "trades",
+            "positions",
+            "equity",
+            "events",
+            "stale_marks",
+            "costs",
+            "contract_notes",
+        )
         return {name: getattr(self, name) for name in names}
 
-    # ----- not built yet --------------------------------------------------------------
+    # ----- charges and reports --------------------------------------------------------
+
+    @property
+    def costs(self) -> pd.DataFrame:
+        """What each fill was charged, rupees: the fill (time, symbol, product, side,
+        units, price, reason), its IST trade date and cost segment, the six components
+        (unrounded accruals in contract-note rounding), `cost` (their reported total),
+        `dp_charge` (on the first delivery sell of a scrip in a day), `total`, the cost
+        schedule version, whether its rates are verified for the date, and the trade id
+        once the trade has closed. Empty for a run with costs=None; `attrs["rounding"]`
+        is the rounding mode."""
+        schedules = self._manifest.get("cost_schedules", [])
+        return _result_costs.cost_frame(self._output, self._symbols, schedules)
+
+    @property
+    def contract_notes(self) -> pd.DataFrame:
+        """One row per contract note (trade date and note group; contract-note rounding
+        only): its charged lines and total, the accrued total, what its fills posted and
+        the rounding adjustment posted at the session close. `settled` is False for a
+        note whose session close the run did not reach. `attrs["rule"]` states the
+        assumed contract-note rule."""
+        return _result_costs.notes_frame(self._output)
+
+    @cached_property
+    def performance(self) -> Performance:
+        """Every metric of the run (`openalgo.backtest.metrics.analyse`) over its equity
+        series and trades, annualised by the traded exchange's calendar. Raises
+        ConfigError when the run has fewer than two equity points."""
+        trades = _result_report.trades_table(self._output, self._symbols)
+        equity = _result_report.equity_series(self.equity)
+        return analyse(equity, exchanges=self._manifest["plan"].exchange, trades=trades)
 
     @property
     def metrics(self) -> Any:
-        raise NotImplementedError(f"Result.metrics {NOT_BUILT}")
+        """The metrics mapping of `performance`; keys, units and definitions are in
+        `openalgo.backtest.metrics.DEFINITIONS`."""
+        return self.performance.metrics
 
-    @property
-    def costs(self) -> Any:
-        raise NotImplementedError(f"Result.costs {NOT_BUILT}")
+    def tearsheet(self, path: str | None = None) -> str:
+        """The HTML tearsheet: returned as a string, or written to `path` (and the path
+        returned). Its Assumptions section lists the run's assumptions and every warning,
+        so a cost-free run says so on the report."""
+        lines = [f"{key}: {value}" for key, value in self._assumptions.items()]
+        lines += [f"warning: {text}" for text in self._warnings]
+        name = self._manifest.get("strategy") or ", ".join(self._symbols)
+        report = _result_report.Report(self.performance, name, lines)
+        return _result_report.tearsheet(report, path)
 
-    def tearsheet(self, path: str | None = None) -> Any:
-        raise NotImplementedError(f"Result.tearsheet {NOT_BUILT}")
+    # ----- not built yet --------------------------------------------------------------
 
     def rerun(self, **overrides: Any) -> Result:
         raise NotImplementedError(f"Result.rerun {NOT_BUILT}")
@@ -189,6 +241,8 @@ class Result:
         lines = [f"Result({', '.join(self._symbols)})"]
         lines += [f"  {key}: {value}" for key, value in self._assumptions.items()]
         lines.append(f"  gross P&L: {pnl['total']:.2f} (realized {pnl['realized']:.2f})")
+        charged = self.equity["costs_rupees"].iloc[-1] if len(self.equity) else 0.0
+        lines.append(f"  charges: {charged:.2f}; net P&L: {pnl['total'] - charged:.2f}")
         lines += [f"  warning: {text}" for text in self._warnings]
         return "\n".join(lines)
 

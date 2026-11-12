@@ -69,6 +69,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DataFrames. Stops, targets, charges, slippage presets and the other rules of the
   contract are being built; each raises `NotImplementedError` naming its phase until
   then. `bt.live` is planned for the live phase.
+- **Backtest accounting and results (early preview).** `bt.backtest` now runs on its
+  defaults, `costs="zerodha"` and `slippage="default"`, with no server: every fill is
+  charged by `openalgo.backtest.costs` at the rates of its trade date, the day's
+  contract notes are rounded at the session close (`Result.costs`,
+  `Result.contract_notes`), delivery sells pay the DP charge, and `costs=` also takes a
+  preset (`bt.costs.flat(20)`) or a `bt.costs.CostModel` (calculator rounding, own
+  schedules). Slippage comes from a dated per-class table (`bt.slippage.defaults()`):
+  2 bps for cash equity, 1 or 2 ticks for futures, a percent of premium for options,
+  overridable with `bt.ticks`, `bt.pct`, `bt.slippage.bps` or `bt.slippage.table(...)`.
+  Margin comes from a dated table (delivery in full, intraday 1x unless the order asks
+  for up to 5x, long options the premium, NSE index futures a percent of value); a row
+  that is not verified is named in `Result.warnings`. Orders with no quantity take the
+  engine default (1x the capital net of estimated costs, one lot for F&O);
+  `bt.size.fixed_risk` and `bt.size.atr_risk` size to the stop; sized quantities are
+  capped at the freeze quantity. `Result.performance`, `Result.metrics` and
+  `Result.tearsheet()` report the run. Charges for a delivery buy and sell of one scrip
+  on the same day, the margin of stock, BSE and MCX futures, and short options are not
+  built yet.
 - **`openalgo.backtest.metrics` and `openalgo.backtest.report` (preview).** Performance
   metrics computed in the Rust core (returns, CAGR on calendar time, volatility, Sharpe
   and Sortino with a per-session risk-free rate, drawdowns, Calmar, exposure, trade

@@ -4,7 +4,6 @@
 use crate::exec::{
     Fill, FillAt, FillFlags, FillReason, Order, OrderAction, OrderId, QuantitySpec, RejectCode,
 };
-use crate::market::margin::MarginRequest;
 use crate::market::slippage::slipped_price;
 use crate::model::{Product, Side};
 use crate::portfolio::{FillEffect, FillKind, PositionChange, PositionKey};
@@ -118,8 +117,13 @@ impl Engine {
                 return self.end_order(stamp, id, OrderAction::Cancel, kind);
             }
         };
+        let Some(units) = self.size_at_fill(slice, &order, units, opening, open)? else {
+            let kind = OrderEventKind::Rejected(RejectCode::Margin);
+            return self.end_order(stamp, id, OrderAction::Reject, kind);
+        };
         let margin = if opening {
-            self.margin_for(slice, key, request.side, units, open)?
+            let leverage = request.leverage;
+            self.opening_margin(slice.day, key, request.side, units, open, leverage)?
         } else {
             0.0
         };
@@ -210,42 +214,20 @@ impl Engine {
         Ok(AtFill::Fill(order.quantity_units, true))
     }
 
-    /// Margin an opening fill blocks, rupees.
-    fn margin_for(
-        &self,
-        slice: &SliceInfo,
-        key: PositionKey,
-        side: Side,
-        units: f64,
-        price: f64,
-    ) -> Result<f64, KernelError> {
-        let spec = self.spec(key.instrument)?;
-        let request = MarginRequest {
-            exchange: spec.exchange,
-            kind: spec.kind,
-            product: key.product,
-            side,
-            quantity_units: units,
-            price_rupees: price,
-            multiplier: spec.multiplier,
-            leverage: 1.0,
-            day: slice.day,
-        };
-        Ok(self.config.margin.initial_margin(&request)?)
-    }
-
-    /// Execute one fill: price it, apply it to the position and the account, update the
-    /// leg, and record the fill, its events and the trade.
+    /// Execute one fill: price it, apply it to the position and the account, charge it,
+    /// update the leg, and record the fill, its events and the trade.
     ///
-    /// Errors: `Slippage`, `Portfolio`, `Rms` (a leg that cannot be opened).
+    /// Errors: `Slippage`, `Portfolio`, `Rms` (a leg that cannot be opened),
+    /// `InvalidConfig` or `NotBuilt` from the charges.
     pub(super) fn execute_fill(
         &mut self,
         stamp: EventStamp,
         request: FillRequest,
     ) -> Result<FillEffect, KernelError> {
         let spec = self.spec(request.key.instrument)?.clone();
+        let day = self.trade_day(stamp);
         let price = slipped_price(
-            self.config.slippage,
+            self.fill_slippage(request.key.instrument, day)?,
             request.side,
             request.reference_rupees,
             spec.tick_size_rupees,
@@ -256,6 +238,8 @@ impl Engine {
         let average = position.average_price_rupees;
         self.portfolio.account.post_realized(effect.realized_rupees);
         self.portfolio.refresh_margin();
+        let (side, units) = (request.side, request.units);
+        let costs = self.charge_fill(request.key, side, units, price, day, effect)?;
         let context = LegContext {
             side: request.side,
             tick_rupees: spec.tick_size_rupees,
@@ -278,7 +262,7 @@ impl Engine {
             reason,
             target_index: None,
             flags: request.flags,
-            costs_rupees: 0.0,
+            costs_rupees: costs,
         };
         self.record_fill(stamp, request.key, fill, &effect)?;
         Ok(effect)

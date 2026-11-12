@@ -17,11 +17,11 @@ from typing import Any
 
 import pandas as pd
 
+from . import slippage as slippage_module
 from ._calendar_convert import interval_nanos, to_day, to_seconds
 from ._layout import NANOS_PER_SECOND, parse_interval
 from ._series import IST
 from .errors import ConfigError
-from .units import Distance
 
 DERIVATIVE_EXCHANGES = ("NFO", "BFO", "MCX", "CDS", "BCD")
 FILL_MODES = ("next_open", "close")
@@ -102,14 +102,12 @@ def _choice(value: Any, allowed: tuple[str, ...], name: str) -> str:
 
 
 def _slippage(value: Any) -> tuple[str, float, int]:
-    if value == "default":
+    """The run-wide slippage form; a table (the default) is resolved per instrument
+    by `_market`. Raises ConfigError for an unknown form."""
+    resolved = slippage_module.resolve(value)
+    if isinstance(resolved, slippage_module.SlippageTable):
         return ("segment_default", 0.0, 0)
-    if isinstance(value, int | float) and not isinstance(value, bool) and value == 0:
-        return ("zero", 0.0, 0)
-    if isinstance(value, Distance) and value.unit in ("ticks", "pct"):
-        kind = "ticks" if value.unit == "ticks" else "percent"
-        return (kind, value.value, 0)
-    raise ConfigError("slippage takes 'default', 0, bt.ticks(n) or bt.pct(p)")
+    return resolved.to_native()
 
 
 def _instant(value: Any) -> int | None:

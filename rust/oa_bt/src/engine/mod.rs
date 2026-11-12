@@ -70,11 +70,14 @@
 //! | 5 mark | `steps::step_mark`: close, or last close and stale | yes |
 //! | 6 aggregate rules | refused at `RunConfig::validate` until built | no |
 //! | 7 callbacks and `on_bar` | `steps::callbacks_pause` -> `Pause::BarClose`; `submit::submit` | yes |
-//! | 8 session close | `steps::close_slice`: expire DAY orders, close open MIS positions at the last close (reason `eod`, flagged); settlement and futures MTM no | partly |
+//! | 8 session close | `steps::close_slice`: expire DAY orders, close open MIS positions at the last close (reason `eod`, flagged), settle the day's contract notes (`accounting::settle_contract_notes`); settlement and futures MTM no | partly |
 //!
-//! Every fill takes one path, `fills::execute_fill`: slippage (`market::slippage`),
-//! position and tranches (`portfolio`), the ledger, the leg state (`rms::leg`), then the
-//! records: the fill, `Filled` (when it has an order), the position event, the trade.
+//! Every fill takes one path, `fills::execute_fill`: slippage (`market::slippage`, the
+//! run's or the dated default table's), position and tranches (`portfolio`), the ledger,
+//! the charges (`charges`, posted to the ledger; contract notes settle in step 8), the
+//! leg state (`rms::leg`), then the records: the fill, `Filled` (when it has an order),
+//! the position event, the trade. The glue to the market rules is in `accounting`, the
+//! sizers' in `sizing`.
 //!
 //! # Determinism
 //!
@@ -94,6 +97,8 @@
 //! | `kernel` | `Engine`, `advance`, queries, `finish` |
 //! | `steps` | Steps 1 to 8 |
 //! | `fills` | Step 2 fills of queued orders, `execute_fill` |
+//! | `accounting` | Slippage, margin and charges of a fill; contract notes at the session close |
+//! | `sizing` | What a sizer sees, cost estimates in its budget, the engine default |
 //! | `session` | Intraday times per session, the entry window, the square-off timer |
 //! | `submit` | `submit`, `cancel`, `modify`, the submission checks, DAY validity and market closed |
 //! | `pause` | `Pause`, `Driver`, `run` |
@@ -111,10 +116,13 @@
 //! Built: one exchange, any number of instruments on it, intraday or daily strategy
 //! intervals on an intraday or daily base, MARKET DAY orders (entry, add, reduce,
 //! exit by fraction), the quantity, freeze, product, entry-window and market-closed
-//! checks, the square-off, margin for cash equity, zero slippage and the fixed slippage
-//! forms, the position history, the equity series, trades and events. Everything else
-//! returns `KernelError::NotBuilt` naming the feature.
+//! checks, the square-off, charges on every fill with contract-note rounding, the dated
+//! default slippage and margin tables (cash, MIS with leverage on request, long
+//! options, NSE index futures), the sizers and the engine default size, the position
+//! history, the equity series, trades and events. Everything else returns
+//! `KernelError::NotBuilt` naming the feature.
 
+mod accounting;
 pub mod clock;
 pub mod config;
 pub mod error;
@@ -126,6 +134,7 @@ pub mod output;
 pub mod pause;
 mod session;
 pub mod signals;
+mod sizing;
 mod steps;
 pub mod submit;
 

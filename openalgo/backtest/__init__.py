@@ -34,6 +34,7 @@ _SUBMODULES = (
     "result",
     "run",
     "size",
+    "slippage",
     "strategy",
     "units",
 )
