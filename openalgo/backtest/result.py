@@ -13,19 +13,22 @@ history), `events`, `risk_events`, `stale_marks`, `final_positions`, `gross_pnl`
 `metrics`, `metrics_table()`, `monte_carlo()`, `tearsheet()` (full, basic, metrics or
 charts), `r_summary` (the R-multiples, `_result_r`), `assumptions`,
 `warnings`, `skipped`, `manifest` (see `_manifest`), `rerun()` (see `_rerun`),
-`to_dataframes()`. Not supported in this version: the several-strategy views
-`strategy()`, `combined` and `correlation`, which raise NotImplementedError.
+`to_dataframes()`, `to_csv()` and `to_excel()` (`_result_export`). Not supported in this
+version: the several-strategy views `strategy()`, `combined` and `correlation`, which
+raise NotImplementedError.
 """
 
 from __future__ import annotations
 
 import math
+import os
 from functools import cached_property
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-from . import _result_costs, _result_futures, _result_r, _result_report
+from . import _rejections, _result_costs, _result_export, _result_futures, _result_r, _result_report
 from ._messages import SEVERAL_STRATEGIES, not_supported
 from ._native import native
 from ._series import IST
@@ -288,6 +291,22 @@ class Result:
         )
         return {name: getattr(self, name) for name in names}
 
+    def to_csv(self, folder: str | os.PathLike) -> list[Path]:
+        """Write every table of `to_dataframes()` to `folder` (created when missing), one
+        CSV file per table named after it (`fills.csv`, ...), and return the paths. Times
+        are written as plain IST date-times, without the zone; the `*_ts` columns stay
+        UTC nanoseconds (`_result_export`)."""
+        return _result_export.to_csv(self.to_dataframes(), folder)
+
+    def to_excel(self, path: str | os.PathLike) -> Path:
+        """Write every table of `to_dataframes()` to one Excel workbook at `path`, one
+        sheet per table named after it, and return the path. Times are written as plain
+        IST date-times, without the zone (a cell holds none); the `*_ts` columns stay UTC
+        nanoseconds. Needs openpyxl, which openalgo does not install: raises
+        MissingDependencyError, an ImportError, saying `pip install openpyxl` when it is
+        missing."""
+        return _result_export.to_excel(self.to_dataframes(), path)
+
     # ----- charges and reports --------------------------------------------------------
 
     @property
@@ -435,6 +454,8 @@ class Result:
         lines.append(f"  gross P&L: {pnl['total']:.2f} (realized {pnl['realized']:.2f})")
         charged = self.equity["costs_rupees"].iloc[-1] if len(self.equity) else 0.0
         lines.append(f"  charges: {charged:.2f}; net P&L: {pnl['total'] - charged:.2f}")
+        rejected = _rejections.rejected_summary(self._output["orders"])
+        lines += [] if rejected is None else [f"  {rejected}"]
         lines += [f"  warning: {text}" for text in self._warnings]
         return "\n".join(lines)
 

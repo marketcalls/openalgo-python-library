@@ -32,6 +32,20 @@ class NoDataError(DataError):
     """A source returned no rows for the requested symbol, interval and range."""
 
 
+class SymbolNotFoundError(DataError):
+    """The OpenAlgo server does not know the symbol on the exchange: it is not in the
+    master contract the server downloaded from the broker (a contract that has expired,
+    a misspelt symbol, or master contracts not downloaded yet).
+
+    `symbol` and `exchange` name what was asked for, as OpenAlgo writes them.
+    """
+
+    def __init__(self, message, symbol=None, exchange=None):
+        super().__init__(message)
+        self.symbol = symbol
+        self.exchange = exchange
+
+
 class TimestampError(DataError):
     """Timestamps do not match the declared convention or the session calendar."""
 
@@ -62,5 +76,6 @@ __all__ = [
     "MissingDependencyError",
     "NoDataError",
     "ReferenceDataError",
+    "SymbolNotFoundError",
     "TimestampError",
 ]

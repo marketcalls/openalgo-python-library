@@ -12,7 +12,7 @@ import sys
 import numpy as np
 import pandas as pd
 import pytest
-from condition_runs import IST, assert_same_result, bars_from_closes, run, walk_bars
+from condition_runs import IST, SBIN_5M, assert_same_result, bars_from_closes, run, walk_bars
 
 import openalgo.backtest as bt
 from openalgo import ta
@@ -412,6 +412,25 @@ def test_from_arrays_needs_entries_or_shorts():
     nothing = bt.from_arrays(None, [True], symbol="SBIN", exchange="NSE", interval="5m")
     with pytest.raises(ConfigError, match="entries or shorts"):
         run(nothing, DATA)
+
+
+FROM_ARRAYS_EXAMPLE = 'bt.from_arrays(entries, exits, symbol="SBIN", exchange="NSE", interval="5m")'
+
+
+@pytest.mark.parametrize("missing", ["symbol", "exchange", "interval"])
+def test_from_arrays_without_symbol_exchange_or_interval_says_what_to_pass(missing):
+    given = {name: value for name, value in SBIN_5M.items() if name != missing}
+    with pytest.raises(ConfigError) as caught:
+        bt.from_arrays([True], [False], **given)
+    assert f"needs {missing}=" in str(caught.value)
+    assert FROM_ARRAYS_EXAMPLE in str(caught.value)
+
+
+def test_from_arrays_with_shorts_given_by_position_says_to_name_them():
+    with pytest.raises(ConfigError) as caught:
+        bt.from_arrays([True], [False], [False], [True], **SBIN_5M)
+    assert "shorts= and covers= by name" in str(caught.value)
+    assert "bt.from_arrays(entries, exits, shorts=shorts, covers=covers" in str(caught.value)
 
 
 def test_an_array_of_the_wrong_length_names_the_bar_count():
