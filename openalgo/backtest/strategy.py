@@ -87,6 +87,12 @@ class Strategy(OrderMethods):
     leverage: ClassVar[float | None] = None
     size: ClassVar[Any] = None
     pyramiding: ClassVar[int] = 0
+    # Scale-in limits (12-position-sizing 2; forms and units in `_scale_in`).
+    max_adds: ClassVar[int | None] = None
+    max_position: ClassVar[Any] = None
+    min_spacing: ClassVar[Any] = None
+    max_risk: ClassVar[Any] = None
+    allow_averaging_down: ClassVar[bool] = False
     max_daily_loss: ClassVar[float | None] = None
     entry_from: ClassVar[str | None] = None
     entry_until: ClassVar[str | None] = None

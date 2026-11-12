@@ -10,8 +10,10 @@ charges; the per-segment slippage. Every value used is listed in the Assumptions
 
 Risk settings take the units of 14-strategy-api: `max_daily_loss` in rupees (a number or
 `bt.rupees`), `drawdown_halt` in percent (`bt.pct(x)` or a number of percent),
-`cooldown`, `max_hold` and `max_positions` as whole numbers (base bars, positions). The
-combined rules of a run are refused until Phase 3 builds them.
+`cooldown`, `max_hold` and `max_positions` as whole numbers (base bars, positions), and
+the scale-in limits as `_scale_in` reads them. The combined rules of a run are refused
+until Phase 3 builds them; no other setting is accepted and then ignored
+(`_setting_checks`).
 """
 
 from __future__ import annotations
@@ -25,8 +27,14 @@ import pandas as pd
 from . import slippage as slippage_module
 from ._calendar_convert import interval_nanos, to_day, to_seconds
 from ._futures import check_roll
-from ._layout import NANOS_PER_SECOND, parse_interval
+from ._intraday_assumptions import TIMES as INTRADAY_TIMES
+from ._intraday_assumptions import intraday_times
+from ._layout import parse_interval
+from ._scale_in import describe as describe_scale_limits
+from ._scale_in import scale_limits
 from ._series import IST
+from ._setting_checks import class_leverage, refuse_unusable, unused_settings
+from .data.own import Frame
 from .errors import ConfigError
 from .units import Distance
 
@@ -73,6 +81,7 @@ class RunPlan:
     entry_from: str | None
     entry_until: str | None
     square_off: str | None
+    leverage: float | None
     warnings: tuple[str, ...]
     # Sessions before expiry at which a future rolls, or None to settle at expiry.
     roll: int | None = 1
@@ -131,27 +140,36 @@ def _instant(value: Any) -> int | None:
     return None
 
 
-def _frame_range(data: Any) -> tuple[dt.date, dt.date]:
-    """The IST dates a frame of own data covers. Raises ConfigError when unknown."""
-    frames = list(data.values()) if isinstance(data, dict) else [data]
-    stamps: list[pd.Timestamp] = []
-    for frame in frames:
-        if isinstance(frame, pd.DataFrame) and "ts_open" in frame.columns:
-            stamps += [pd.Timestamp(int(frame["ts_open"].min()), tz="UTC")]
-            stamps += [pd.Timestamp(int(frame["ts_open"].max()), tz="UTC")]
-        elif isinstance(frame, pd.DataFrame) and getattr(frame.index, "tz", None) is not None:
-            stamps += [frame.index.min(), frame.index.max()]
-        else:
-            raise ConfigError("pass start= and end= (the data has no tz-aware timestamps)")
-    days = [stamp.tz_convert(IST).date() for stamp in stamps]
+def _frame_range(strategy: type, args: dict[str, Any]) -> tuple[dt.date, dt.date]:
+    """The IST dates the own data (`data=`) of the strategy's symbols covers, its
+    timestamps read as the data layer reads them (naive ones in `tz=`). Raises the data
+    layer's ConfigError for naive timestamps without `tz=`, and ConfigError for data
+    given as a file or a provider."""
+    data = args["data"]
+    symbols = strategy.traded_symbols()
+    frames = data if isinstance(data, dict) else dict.fromkeys(symbols, data)
+    stamps: list[int] = []
+    for symbol in symbols:
+        if symbol not in frames:
+            raise ConfigError(f"data= has no bars for {symbol}")
+        frame = frames[symbol]
+        if not isinstance(frame, pd.DataFrame):
+            raise ConfigError(
+                "pass start= and end= (IST dates): the run reads its dates only from data= "
+                "given as a DataFrame, or a dict of them by symbol"
+            )
+        reader = Frame(frame, tz=args["tz"])
+        stamps += reader.stamp_range(symbol, strategy.exchange, strategy.interval)
+    days = [pd.Timestamp(stamp, tz="UTC").tz_convert(IST).date() for stamp in stamps]
     return min(days), max(days)
 
 
-def _dates(start: Any, end: Any, data: Any) -> tuple[dt.date, dt.date]:
+def _dates(strategy: type, args: dict[str, Any]) -> tuple[dt.date, dt.date]:
+    start, end = args["start"], args["end"]
     if start is None or end is None:
-        if data is None:
+        if args["data"] is None:
             raise ConfigError("pass start= and end= (IST dates)")
-        first, last = _frame_range(data)
+        first, last = _frame_range(strategy, args)
         start = first if start is None else start
         end = last if end is None else end
     first_day = pd.Timestamp(start).date() if not isinstance(start, dt.date) else start
@@ -240,6 +258,7 @@ def _risk(strategy: type, args: dict[str, Any], overrides: dict[str, Any]) -> di
         "after_risk_exit": _choice(args["after_risk_exit"], AFTER_RISK_EXIT, "after_risk_exit"),
         "round_levels": bool(args["round_levels"]),
         "strict_config": bool(args["strict_config"]),
+        **scale_limits(strategy),
     }
 
 
@@ -255,6 +274,7 @@ def resolve(strategy: type, args: dict[str, Any]) -> RunPlan:
     if isinstance(capital, bool) or not isinstance(capital, int | float) or capital <= 0:
         raise ConfigError("capital must be a positive number of rupees")
     _refuse_combined_rules(strategy)
+    refuse_unusable(strategy, args)
     warnings: list[str] = []
     if args["costs"] is None:
         warnings.append("costs=None: no charges are modelled; results overstate P&L")
@@ -262,8 +282,9 @@ def resolve(strategy: type, args: dict[str, Any]) -> RunPlan:
         name: getattr(strategy, name) if getattr(strategy, name) is not None else args[name]
         for name in CLASS_OVERRIDES
     }
-    start, end = _dates(args["start"], args["end"], args["data"])
+    start, end = _dates(strategy, args)
     product = _product(strategy, args["product"], strategy.interval, strategy.exchange)
+    warnings += unused_settings(strategy, args, product, overrides)
     return RunPlan(
         symbols=symbols,
         exchange=strategy.exchange,
@@ -283,6 +304,7 @@ def resolve(strategy: type, args: dict[str, Any]) -> RunPlan:
         entry_from=overrides["entry_from"],
         entry_until=overrides["entry_until"],
         square_off=overrides["square_off"],
+        leverage=class_leverage(strategy),
         warnings=tuple(warnings),
         roll=check_roll(args["roll"]),
     )
@@ -290,14 +312,14 @@ def resolve(strategy: type, args: dict[str, Any]) -> RunPlan:
 
 def assumptions(plan: RunPlan, calendar: Any) -> dict[str, Any]:
     """The Assumptions block: what the run used. Entry window and square-off apply to
-    MIS only (SPEC-32); their defaults are the calendar's for the first session."""
+    MIS only (SPEC-32); they are stated as they applied over the whole run
+    (`_intraday_assumptions`)."""
     block: dict[str, Any] = {"base": plan.base, "product": plan.product}
-    entry_until = square_off = None
+    times: dict[str, str | None] = dict.fromkeys(INTRADAY_TIMES)
     if plan.product == "MIS":
-        times = calendar.intraday_times(plan.exchange, plan.start)
-        entry_until = plan.entry_until or (times and _clock(times.entry_until))
-        square_off = plan.square_off or (times and _clock(times.square_off))
-    block.update(entry_until=entry_until, square_off=square_off)
+        given = {name: getattr(plan, name) for name in INTRADAY_TIMES}
+        times = intraday_times(calendar, plan.exchange, plan.start, plan.end, given)
+    block.update(times)
     block.update(
         fill=plan.fill,
         quantity_mode=plan.quantity_mode,
@@ -322,6 +344,8 @@ def _risk_assumptions(plan: RunPlan) -> dict[str, Any]:
         "cooldown": risk["cooldown_bars"],
         "max_positions": risk["max_positions"],
         "max_hold": risk["max_hold_bars"],
+        "leverage": plan.leverage,
+        **describe_scale_limits(risk),
     }
     if risk["max_daily_loss"] is not None or risk["drawdown_halt"] is not None:
         block["risk_exit_fill"] = (
@@ -330,11 +354,6 @@ def _risk_assumptions(plan: RunPlan) -> dict[str, Any]:
             else "at the next base-bar open"
         )
     return block
-
-
-def _clock(ts_ns: int) -> str:
-    moment = dt.datetime.fromtimestamp(ts_ns / NANOS_PER_SECOND, tz=IST)
-    return moment.strftime("%H:%M")
 
 
 __all__ = ["CLASS_OVERRIDES", "RunPlan", "assumptions", "resolve"]

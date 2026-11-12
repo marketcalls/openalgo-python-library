@@ -113,7 +113,7 @@ def test_unknown_time_zone_is_a_timestamp_error():
 # --- the supported in-memory inputs -------------------------------------------------
 
 
-def test_dict_of_columns_with_epoch_seconds_needs_unit_and_tz():
+def test_dict_of_columns_with_epoch_seconds_is_read_with_unit_and_a_utc_tz():
     data = {"timestamp": _epoch_seconds(), **_columns()}
     bars = _bars(data, unit="s", tz="UTC")
     assert (len(bars), bars["ts_open"].iloc[0]) == (BARS_IN_WEEK, FIRST_OPEN)

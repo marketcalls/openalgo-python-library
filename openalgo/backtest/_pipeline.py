@@ -38,6 +38,7 @@ from ._driver import drive
 from ._engine import build_engine, call
 from ._futures import attach, resolve_futures
 from ._instruments import resolve_instruments
+from ._intraday_assumptions import one_clock_time
 from ._manifest import build_manifest, strategy_source_hash
 from ._margin_check import check_margin
 from ._market import MarketSettings, market_settings
@@ -180,11 +181,12 @@ def _assumptions(
     plan = prepared.plan
     block = assumptions(plan, calendar) | market.assumptions
     session = calendar.session(plan.exchange, plan.start)
+    square_off = one_clock_time(block["square_off"])
     session_open = None
-    if session is not None and block["square_off"] is not None:
+    if session is not None and square_off is not None:
         session_open = pd.Timestamp(session[0], tz="UTC").tz_convert("Asia/Kolkata")
         session_open = session_open.strftime("%H:%M")
-    rule = meaning(plan.base, block["square_off"], session_open)
+    rule = meaning(plan.base, square_off, session_open)
     block["base_rule"] = f"base {plan.base} ({prepared.notes['base_rule']}): {rule}"
     block["instruments"] = prepared.notes["instruments"]
     if prepared.futures is not None:

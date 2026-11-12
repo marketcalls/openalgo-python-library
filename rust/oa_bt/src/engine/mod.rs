@@ -118,6 +118,7 @@
 //! | `submit` | `submit`, `cancel`, the submission checks, DAY validity and market closed |
 //! | `aggregate` | Step 6 (daily loss limit, drawdown halt), the step-1 session boundary, the exits they queue |
 //! | `entry_rules` | Entry gates at submission (trading state, cooldown, maximum positions), the time exit, the fill hook |
+//! | `scale_in` | The scale-in limits at submission: the facts of an add for `rms::scale_in_gate` |
 //! | `strategy_risk` | `StrategyRisk`: trading state and the bookkeeping of the strategy and session rules |
 //! | `pause` | `Pause`, `Driver`, `run` |
 //! | `timers` | `self.at` and `self.every`: registration, when they are due, the timer pause |
@@ -146,10 +147,10 @@
 //! size, the position
 //! history, the equity series, trades and events, the whole-run strategy bars for
 //! indicators; the daily loss limit, the drawdown halt, the trading state, the
-//! cooldown, maximum positions and the time exit; condition and array strategies on
-//! one instrument (`signals`); futures series with the auto-roll or settlement at
-//! expiry, and the daily futures mark to market (`futures`, `roll`, `settlement`).
-//! Everything else returns `KernelError::NotBuilt` naming the feature.
+//! cooldown, maximum positions, the scale-in limits and the time exit; condition and
+//! array strategies on one instrument (`signals`); futures series with the auto-roll
+//! or settlement at expiry, and the daily futures mark to market (`futures`, `roll`,
+//! `settlement`). Everything else returns `KernelError::NotBuilt` naming the feature.
 
 mod accounting;
 mod aggregate;
@@ -176,6 +177,7 @@ pub mod pause;
 mod resting;
 mod reverse;
 mod roll;
+mod scale_in;
 mod session;
 mod settlement;
 pub mod signals;

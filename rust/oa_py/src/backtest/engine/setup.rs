@@ -14,7 +14,10 @@ use oa_bt::market::calendar::BaseInterval;
 use oa_bt::market::margin::MarginModel;
 use oa_bt::market::slippage::SlippageSpec;
 use oa_bt::model::InstrumentKind;
-use oa_bt::rms::{AfterRiskExit, RiskBasis, StrategyRiskConfig};
+use oa_bt::rms::{
+    AfterRiskExit, Distance, PositionCap, RiskBasis, RiskCap, ScaleLimits, Spacing,
+    StrategyRiskConfig,
+};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -121,7 +124,75 @@ fn risk(dict: &Bound<'_, PyDict>) -> PyResult<StrategyRiskConfig> {
         max_hold_bars: optional(dict, "max_hold_bars")?,
         round_levels: field(dict, "round_levels")?,
         strict_config: field(dict, "strict_config")?,
-        ..StrategyRiskConfig::default()
+        scale: scale_limits(dict)?,
+    })
+}
+
+/// A scale-in limit as it crosses: (kind, amount).
+type Limit = (String, f64);
+
+/// A whole, non-negative count crossing as a number (the kernel checks its range).
+fn count(amount: f64, what: &str) -> PyResult<u32> {
+    if amount >= 0.0 && amount.fract() == 0.0 && amount <= f64::from(u32::MAX) {
+        Ok(amount as u32)
+    } else {
+        Err(NativeEngineInputError::new_err(format!(
+            "{what} must be a whole number, got {amount}"
+        )))
+    }
+}
+
+fn position_cap((kind, amount): Limit) -> PyResult<PositionCap> {
+    match kind.as_str() {
+        "units" => Ok(PositionCap::Units(amount)),
+        "lots" => Ok(PositionCap::Lots(count(amount, "max_position lots")?)),
+        "rupees" => Ok(PositionCap::Rupees(amount)),
+        "percent" => Ok(PositionCap::PercentOfEquity(amount)),
+        _ => Err(unknown(
+            "max_position kind",
+            &kind,
+            "units, lots, rupees or percent",
+        )),
+    }
+}
+
+fn spacing((kind, amount): Limit) -> PyResult<Spacing> {
+    match kind.as_str() {
+        "bars" => Ok(Spacing::Bars(count(amount, "min_spacing bars")?)),
+        "points" => Ok(Spacing::Price(Distance::Points(amount))),
+        "pct" => Ok(Spacing::Price(Distance::Percent(amount))),
+        "ticks" => Ok(Spacing::Price(Distance::Ticks(count(
+            amount,
+            "min_spacing ticks",
+        )?))),
+        _ => Err(unknown(
+            "min_spacing kind",
+            &kind,
+            "bars, points, pct or ticks",
+        )),
+    }
+}
+
+fn risk_cap((kind, amount): Limit) -> PyResult<RiskCap> {
+    match kind.as_str() {
+        "rupees" => Ok(RiskCap::Rupees(amount)),
+        "percent" => Ok(RiskCap::PercentOfEquity(amount)),
+        _ => Err(unknown("max_risk kind", &kind, "rupees or percent")),
+    }
+}
+
+/// The scale-in limits of the risk dict (`openalgo/backtest/_scale_in.py`); an absent
+/// key sets no limit, and averaging down is refused unless allowed.
+fn scale_limits(dict: &Bound<'_, PyDict>) -> PyResult<ScaleLimits> {
+    Ok(ScaleLimits {
+        max_adds: optional(dict, "max_adds")?,
+        max_position: optional(dict, "max_position")?
+            .map(position_cap)
+            .transpose()?,
+        min_spacing: optional(dict, "min_spacing")?.map(spacing).transpose()?,
+        max_risk: optional(dict, "max_risk")?.map(risk_cap).transpose()?,
+        allow_averaging_down: optional(dict, "allow_averaging_down")?.unwrap_or(false),
+        ..ScaleLimits::default()
     })
 }
 
