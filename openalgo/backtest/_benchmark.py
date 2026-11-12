@@ -27,9 +27,10 @@ close is the level at the opening, which `metrics.analyse` reads as of the start
 the first session has a benchmark return.
 
 Coverage: the run's sessions (the IST dates of the strategy's bars) and the session
-before the first must each have a close; a warning names those that do not. The
-metrics read the benchmark as of each session end and never take a close from a later
-day, so such a session keeps the last earlier close (a zero benchmark return).
+before the first must each have a close; a warning names those that do not. A missing
+session stays missing (07-research-and-reporting 3, rule 3): the metrics never fill it
+from a neighbouring day, so it has no benchmark return, nor has the session after it,
+and the paired figures use only the sessions with both returns (`metrics.analyse`).
 """
 
 from __future__ import annotations
@@ -302,9 +303,10 @@ def _coverage_note(name: str, missing: list[dt.date], needed: int) -> str:
         listed += f" and {len(missing) - LISTED_DATES} more"
     return (
         f"benchmark {name}: no close on {len(missing)} of the {needed} sessions it is read "
-        f"on (the run's sessions and the one before them): {listed}. The metrics never "
-        "take a close from a later day: such a session keeps the last earlier close (a "
-        "zero benchmark return), and before the first close there is no benchmark return"
+        f"on (the run's sessions and the one before them): {listed}. A missing session is "
+        "never filled from a neighbouring day: it has no benchmark return, nor has the "
+        "session after it, and alpha, beta and the other paired figures use only the "
+        "sessions with both a strategy and a benchmark return (benchmark_sessions)"
     )
 
 

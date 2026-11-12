@@ -64,12 +64,15 @@ def beta(strategy: list[float], bench: list[float]) -> float:
 
 
 def assert_figures_against(result: bt.Result, bench: list[float]) -> None:
-    """Beta, correlation, the benchmark return and its session count, by hand."""
-    figures, strategy = result.metrics, strategy_returns()
-    assert figures["beta"] == pytest.approx(beta(strategy, bench))
-    assert figures["correlation"] == pytest.approx(statistics.correlation(strategy, bench))
-    assert figures["benchmark_total_return"] == pytest.approx(math.prod(1 + b for b in bench) - 1)
-    assert figures["benchmark_sessions"] == len(bench)
+    """Beta, correlation, the benchmark return and its session count, by hand, on the
+    sessions whose benchmark return is known (NaN in `bench` marks one that is not)."""
+    pairs = [(s, b) for s, b in zip(strategy_returns(), bench, strict=True) if not math.isnan(b)]
+    strategy, known = [s for s, _ in pairs], [b for _, b in pairs]
+    figures = result.metrics
+    assert figures["beta"] == pytest.approx(beta(strategy, known))
+    assert figures["correlation"] == pytest.approx(statistics.correlation(strategy, known))
+    assert figures["benchmark_total_return"] == pytest.approx(math.prod(1 + b for b in known) - 1)
+    assert figures["benchmark_sessions"] == len(known)
 
 
 # ----- an index symbol through OpenAlgo ----------------------------------------------
@@ -168,12 +171,11 @@ def test_own_data_without_the_index_is_a_warning_and_reads_no_server():
     assert "beta" not in result.metrics
 
 
-def test_a_benchmark_missing_a_session_keeps_its_last_earlier_close_and_warns():
+def test_a_benchmark_missing_a_session_leaves_it_missing_and_warns():
     missing = DAYS[2]
     result = own_run(benchmark=nifty_closes().drop(pd.Timestamp(missing)))
-    # 2026-11-04 reads the close of 2026-11-03 (a zero return); 2026-11-05 takes both moves.
-    two_sessions = (1 + BENCH_RETURNS[2]) * (1 + BENCH_RETURNS[3]) - 1
-    assert_figures_against(result, [*BENCH_RETURNS[:2], 0.0, two_sessions, BENCH_RETURNS[4]])
+    # 2026-11-04 has no close and 2026-11-05 no previous one: neither has a return.
+    assert_figures_against(result, [*BENCH_RETURNS[:2], math.nan, math.nan, BENCH_RETURNS[4]])
     note = next(text for text in result.warnings if text.startswith("benchmark"))
     assert "no close on 1 of the 6 sessions" in note and missing.isoformat() in note
 
@@ -268,7 +270,7 @@ def test_the_yearly_comparison_compounds_the_benchmark():
 
 def test_the_tearsheet_compares_with_the_benchmark_and_names_it():
     page = client_run(fake_client(), benchmark="NIFTY").tearsheet()
-    assert "Against the benchmark" in page
+    assert "Against the benchmark" in page and "Benchmark sessions" in page
     assert "benchmark: NIFTY on NSE_INDEX: 6 daily closes from Historify" in page
 
 

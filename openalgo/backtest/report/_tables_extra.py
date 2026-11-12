@@ -75,7 +75,7 @@ def horizon_table(horizons: pd.DataFrame) -> str:
     ]
     with_benchmark = "benchmark_return" in horizons.columns
     if with_benchmark:
-        heads.append(("Benchmark", True))
+        heads += [("Benchmark", True), ("Benchmark sessions", True)]
     rows = []
     for label, row in horizons.iterrows():
         cells = [
@@ -90,6 +90,7 @@ def horizon_table(horizons: pd.DataFrame) -> str:
         ]
         if with_benchmark:
             cells.append(fmt.percent(row["benchmark_return"], 2, signed=True))
+            cells.append(fmt.indian_digits(row["benchmark_sessions"], 0))
         rows.append(cells)
     return _table(heads, rows)
 

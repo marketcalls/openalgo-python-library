@@ -284,10 +284,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Assumptions block names it and where its closes came from. It never trades and never
   changes a fill. Missing benchmark data is a warning, never a stop: a source that
   cannot serve it leaves the run without benchmark figures, and the warnings name every
-  session without a close (it keeps the last earlier close, never a later one). The
-  manifest records it (symbol, exchange, source and the hashes of its closes),
-  `rerun()` reproduces it and says when only its closes changed, and `bt.optimize`
-  measures every combination against it. The default is no benchmark.
+  session without a close. The manifest records it (symbol, exchange, source and the
+  hashes of its closes), `rerun()` reproduces it and says when only its closes changed,
+  and `bt.optimize` measures every combination against it. The default is no benchmark.
+  Behaviour change in `metrics.analyse`: a missing benchmark session stays missing and
+  is never filled from a neighbouring day. Before, a session without a benchmark close
+  took the last earlier close (a zero return) and the next session took the whole move;
+  now a session has a benchmark return only when it and the session before it both
+  have a close of their own (for the first session, the close of the calendar session
+  before it), so both of those sessions are NaN in `benchmark_returns` and the
+  benchmark level is NaN on the missing session. Alpha, beta, correlation, R squared,
+  tracking error, information ratio, Treynor ratio and rolling beta use only the
+  sessions with both a strategy and a benchmark return (`benchmark_sessions`), and the
+  horizon summary gains `benchmark_sessions`, shown in the tearsheet next to the
+  benchmark return.
 - **`openalgo.backtest.costs` (preview).** Indian trading charges for NSE and BSE
   equity (delivery and intraday), NFO and BFO futures and options, and MCX futures:
   brokerage presets (`zerodha`, `flat`, `percent`, `zero_brokerage`, `custom`), STT or

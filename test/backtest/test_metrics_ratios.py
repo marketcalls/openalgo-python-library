@@ -191,14 +191,95 @@ def test_a_benchmark_without_a_value_at_the_start_begins_at_its_first_close(nse_
     assert m["benchmark_total_return"] == pytest.approx(0.98 * 1.03 - 1)
 
 
-def test_a_benchmark_is_never_back_filled(nse_2025):
-    strategy = growth_curve([0.01, 0.01, 0.01])
-    # No benchmark close on Tuesday: Tuesday's level is Monday's, never Wednesday's.
-    index = strategy.index[[0, 1, 3]]
-    bench = pd.Series([1000.0, 1010.0, 1050.0], index=index)
-    result = metrics.analyse(strategy, exchanges="NSE", benchmark=bench, calendar=nse_2025)
-    scaled = result.benchmark_equity.to_numpy()
-    assert scaled[2] == pytest.approx(scaled[1])
+# Rule 3 of 07-research-and-reporting 3: a missing benchmark session stays missing. The
+# strategy compounds RETURNS over Monday 2 to Friday 6 June 2025; the benchmark moves by
+# GAP_RETURNS from 1,000 at the 09:15 start, and some of its closes are dropped.
+GAP_RETURNS = [0.02, 0.01, -0.01, 0.03, 0.005]
+
+
+def with_closes_missing(sessions: list[int], **settings) -> metrics.Performance:
+    """The analysis (with `settings`) with the benchmark closes of the given sessions
+    (0 is Monday) left out."""
+    strategy = growth_curve(RETURNS)
+    bench = benchmark_levels(GAP_RETURNS, strategy.index)
+    bench = bench.drop(strategy.index[[session + 1 for session in sessions]])
+    calendar = nse_2025_calendar()
+    return metrics.analyse(
+        strategy, exchanges="NSE", benchmark=bench, calendar=calendar, **settings
+    )
+
+
+def nse_2025_calendar() -> Calendar:
+    return calendar_with(2025, [holiday("2025-08-15", ["NSE"])], ["NSE"])
+
+
+def paired(known: list[int]) -> dict:
+    """Beta, the benchmark return and the session count over the sessions `known`."""
+    strategy = [RETURNS[k] for k in known]
+    bench = [GAP_RETURNS[k] for k in known]
+    return {
+        "beta": statistics.covariance(strategy, bench) / statistics.variance(bench),
+        "benchmark_total_return": math.prod(1 + b for b in bench) - 1,
+        "benchmark_sessions": len(known),
+    }
+
+
+def assert_paired_on(result: metrics.Performance, known: list[int]) -> None:
+    expected = paired(known)
+    figures = result.metrics
+    assert figures["beta"] == pytest.approx(expected["beta"])
+    assert figures["benchmark_total_return"] == pytest.approx(expected["benchmark_total_return"])
+    assert figures["benchmark_sessions"] == expected["benchmark_sessions"]
+    returns = result.benchmark_returns.to_numpy()
+    assert [k for k in range(len(RETURNS)) if math.isfinite(returns[k])] == known
+
+
+def test_a_session_missing_in_the_middle_leaves_it_and_the_next_without_a_return():
+    # No close on Wednesday: Wednesday has no level, Thursday no previous one.
+    result = with_closes_missing([2])
+    assert_paired_on(result, [0, 1, 4])
+    assert math.isnan(result.benchmark_equity.iloc[3])
+
+
+def test_a_first_session_missing_leaves_it_and_the_second_without_a_return():
+    assert_paired_on(with_closes_missing([0]), [2, 3, 4])
+
+
+def test_two_sessions_missing_in_a_row_leave_three_without_a_return():
+    # No close on Tuesday or Wednesday: Tuesday, Wednesday and Thursday have no return.
+    assert_paired_on(with_closes_missing([1, 2]), [0, 4])
+
+
+def test_a_close_from_before_the_previous_session_does_not_open_the_run():
+    # With the capital at 09:15 on Monday, the opening level is Friday's close; the
+    # benchmark has Thursday's only, so Monday has no benchmark return.
+    strategy = growth_curve(RETURNS).iloc[1:]
+    closes = [at("2025-05-29"), *strategy.index]
+    bench = benchmark_levels(GAP_RETURNS, pd.DatetimeIndex(closes))
+    result = metrics.analyse(
+        strategy,
+        exchanges="NSE",
+        benchmark=bench,
+        calendar=nse_2025_calendar(),
+        opening_wealth=100.0,
+        opening_time=at("2025-06-02", "09:15"),
+    )
+    assert_paired_on(result, [1, 2, 3, 4])
+
+
+def test_rolling_beta_pairs_only_the_sessions_with_both_returns():
+    # Windows of two sessions with no close on Wednesday: Tuesday's window (Monday and
+    # Tuesday) has two pairs, Thursday's and Friday's at most one, so no beta.
+    beta = with_closes_missing([2], rolling_window=2).rolling["beta"].to_numpy()
+    assert beta[1] == pytest.approx(paired([0, 1])["beta"])
+    assert math.isnan(beta[3]) and math.isnan(beta[4])
+
+
+def test_the_horizon_summary_counts_the_sessions_with_both_returns():
+    horizons = with_closes_missing([2]).horizons
+    assert horizons.loc["Since start", "benchmark_sessions"] == 3
+    expected = paired([0, 1, 4])["benchmark_total_return"]
+    assert horizons.loc["Since start", "benchmark_return"] == pytest.approx(expected)
 
 
 def test_benchmark_returns_must_be_levels_not_returns(nse_2025):
