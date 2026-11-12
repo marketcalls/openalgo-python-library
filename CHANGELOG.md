@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Result.final_positions` shows each position's `value_rupees` and `weight_pct`** (its
+  market value at the mark, in percent of the run's final equity), so a portfolio's end
+  weights read off directly; an optimisation table counts `trades` in whole numbers.
 - **`self.rebalance(weights, cash_buffer=2)` in `openalgo.backtest` (preview).** Trades a
   portfolio to target weights, in percent of equity by symbol, at one decision: a
   symbol of the strategy left out of the weights is sold to flat, `cash_buffer`

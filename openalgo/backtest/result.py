@@ -231,9 +231,17 @@ class Result:
 
     @property
     def final_positions(self) -> pd.DataFrame:
-        """Every position at the end of the run, open ones marked at the last close."""
+        """Every position at the end of the run, open ones marked at the last close.
+
+        `value_rupees` is the signed market value at the mark (units x mark, negative
+        for a short) and `weight_pct` that value in percent of the run's final equity,
+        so a portfolio's end weights read off directly."""
         frame = _fixed(self._output["final_positions"], FINAL_POSITION_COLUMNS)
         frame.insert(0, "symbol", [self._symbols[i] for i in frame["instrument"]])
+        frame["value_rupees"] = frame["quantity_units"] * frame["mark_rupees"]
+        equity = self.equity["equity_rupees"]
+        final_equity = float(equity.iloc[-1]) if len(equity) else math.nan
+        frame["weight_pct"] = frame["value_rupees"] / final_equity * 100
         return frame
 
     @property
