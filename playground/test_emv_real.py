@@ -34,7 +34,7 @@ def test_emv_real():
         
         print(f"Retrieved {len(df)} data points")
         
-        # Calculate EMV with TradingView defaults
+        # Calculate EMV with the default parameters
         df['emv'] = ta.emv(df['high'], df['low'], df['volume'], length=14, divisor=10000)
         
         # Also test with different parameters
@@ -49,7 +49,7 @@ def test_emv_real():
         if valid_count > 0:
             # Show recent values
             recent = df.dropna().tail(15)
-            print(f"\nRecent EMV values (TradingView defaults length=14, divisor=10000):")
+            print(f"\nRecent EMV values (defaults length=14, divisor=10000):")
             for idx, row in recent.iterrows():
                 # Calculate manual components for verification
                 if idx > recent.index[0]:
@@ -204,7 +204,6 @@ if __name__ == "__main__":
     print(f"\nEase of Movement Test: {'PASSED' if success else 'FAILED'}")
     
     print(f"\nImplementation Summary:")
-    print(f"- Matches TradingView Pine Script exactly")
     print(f"- Formula: EMV = SMA(divisor * change(hl2) * (high-low) / volume, length)")
     print(f"- Default parameters: length=14, divisor=10000")
     print(f"- HL2 = (high + low) / 2 (typical price)")

@@ -35,13 +35,12 @@ windowed-mean composites) stay in numpy inside `_backend.py` for exact bit-parit
 original `np.mean`/`np.sum` semantics; they are numba-free.
 
 ## Parity (correctness)
-Verified on real RELIANCE & SBIN daily + 1m data (yfinance) and against TA-Lib where the
-definitions align. Reference = the original kernels run interpreted.
+Verified on real RELIANCE & SBIN daily + 1m data (cached CSVs). Reference = the
+original kernels run interpreted.
 - 9 parity suites all green: `parity, wrapper_parity, trend_parity, momentum_parity,
   volatility_parity, volume_parity, oscillator_parity, statistics_parity, hybrid_parity`.
 - The vast majority of kernels are **bit-exact (max diff 0.0)**. Recursive/transcendental
   ones (KAMA, ALMA, McGinley) differ by ~1e-13 absolute (<= 1e-12 relative target).
-  TA-Lib differs only by documented seeding conventions for EMA/ATR/MACD/CMO.
 - A key FP detail learned and applied: match Python's exact float association
   (`acc = acc + new - old`, `100*(a/b)`, thread the seed through `cumprod`).
 
@@ -49,13 +48,13 @@ definitions align. Reference = the original kernels run interpreted.
 Two benchmark reports:
 - `benchmark/SPEED.md` - RELIANCE daily + synthetic 100k (representative set).
 - `benchmark/FULL_BENCHMARK.md` - **NIFTY 50 1-min, 924,782 bars**, every indicator,
-  New (Rust) vs Old (interpreted) vs TA-Lib + accuracy.
+  New (Rust) vs Old (interpreted) + accuracy.
 
 After Phase 6 (all per-window kernels ported to Rust) EVERY indicator is Rust-fast.
 On 924k bars, New-vs-Old (interpreted) speedups: linreg 725x, tsf 667x, cmf 500x,
 correl 488x, kama 479x, ckstop 367x, rwi 316x, beta 305x, ultosc 278x, frama 261x,
 cci 227x, wma 197x, trima 171x, roc 163x, adx 131x ... typical absolute New times are
-5-70 ms on ~925k bars, comparable to TA-Lib's C implementation. Accuracy New-vs-Old is
+5-70 ms on ~925k bars. Accuracy New-vs-Old is
 0.0 (bit-exact) for most; recursive/transcendental/sum-heavy kernels differ ~1e-11 to
 1e-14 (within the 1e-12 rel target). NOTE: "Old" is interpreted because numba does not
 import on this env; true vs-numba speedups are smaller.
@@ -82,7 +81,7 @@ cargo test (oa_core) -> Linux wheel smoke test -> abi3 wheels for linux x86_64/a
 OIDC trusted publishing. Mirrors the opengreeks pipeline.
 
 ## Known follow-ups
-- Real-data benchmarking currently uses yfinance because the OpenAlgo DuckDB/Historify
+- Real-data benchmarking currently uses cached CSVs because the OpenAlgo DuckDB/Historify
   store is empty and the Dhan market-data API is unsubscribed/under maintenance. Re-run
   `benchmark/fetch_data.py` (auto-prefers source="db"/"api") once that is available.
 - The dead legacy `_calculate_*` numba staticmethods are retained as interpreted parity

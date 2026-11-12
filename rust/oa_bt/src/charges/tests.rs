@@ -162,19 +162,71 @@ fn the_dp_charge_is_paid_once_per_scrip_per_sell_day() {
 }
 
 #[test]
-fn a_delivery_buy_and_sell_on_one_day_is_not_built() {
+fn a_delivery_buy_and_sell_on_one_day_is_charged_as_the_intraday_round_trip() {
+    // The worked example on CNC: buy 400 at 1,000.00 and sell them at 1,100.00 the same
+    // day. Brokers charge it as intraday: the note charges the intraday 200.62, and no
+    // DP charge is paid (04-execution 2).
     let (model, spec) = (model(Rounding::ContractNote), sbin());
     let mut book = ChargeBook::new(Some(Rounding::ContractNote));
-    charge(
-        &mut book,
-        &model,
-        &fill(&spec, Product::Cnc, Side::Buy, 1_000.0, day(), opening()),
+    let posted: f64 = [
+        fill(&spec, Product::Cnc, Side::Buy, 1_000.0, day(), opening()),
+        fill(&spec, Product::Cnc, Side::Sell, 1_100.0, day(), closing()),
+    ]
+    .iter()
+    .map(|f| crate::portfolio::round_to_paise(charge(&mut book, &model, f)))
+    .sum();
+    let adjustments = book.settle_day(day());
+    let total = posted + adjustments.iter().sum::<f64>();
+    assert!((total - 200.62).abs() < 1e-9, "{total}");
+    let output = book.into_output();
+    let segments: Vec<Segment> = output.fills.iter().map(|f| f.segment).collect();
+    assert_eq!(
+        segments,
+        vec![Segment::NseEqIntraday, Segment::NseEqIntraday]
     );
-    let sell = fill(&spec, Product::Cnc, Side::Sell, 1_100.0, day(), closing());
-    assert!(matches!(
-        book.charge(&model, &sell),
-        Err(ChargeError::NotBuilt { .. })
-    ));
+    assert!(output.fills.iter().all(|f| f.dp_charge.is_none()));
+    let noted: f64 = output.notes.iter().map(|n| n.note.charged_total).sum();
+    assert!((noted - 200.62).abs() < 1e-9, "{noted}");
+}
+
+#[test]
+fn a_sale_from_holdings_bought_back_the_same_day_refunds_its_dp_charge() {
+    // Sell 400 held from before at 1,100.00, then buy 400 back at 1,000.00 the same day:
+    // the day nets to an intraday round trip, so the DP charge paid on the sale is
+    // refunded with the buy.
+    let (model, spec) = (model(Rounding::ContractNote), sbin());
+    let mut book = ChargeBook::new(Some(Rounding::ContractNote));
+    let reduce = effect(FillKind::Reduce, PositionChange::Changed);
+    let sell = fill(&spec, Product::Cnc, Side::Sell, 1_100.0, day(), reduce);
+    let add = effect(FillKind::Add, PositionChange::Changed);
+    let buy = fill(&spec, Product::Cnc, Side::Buy, 1_000.0, day(), add);
+    let dp = model
+        .dp_charge(day())
+        .map(|dp| dp.total())
+        .unwrap_or(f64::NAN);
+    let on_sale = charge(&mut book, &model, &sell);
+    let on_buy = charge(&mut book, &model, &buy);
+    let intraday = model
+        .round_trip_cost(
+            Segment::NseEqIntraday,
+            1_000.0,
+            1_100.0,
+            400.0,
+            day(),
+            day(),
+        )
+        .map(|cost| cost.total())
+        .unwrap_or(f64::NAN);
+    assert!(
+        (on_sale + on_buy - intraday).abs() < 1e-9,
+        "{on_sale} + {on_buy}"
+    );
+    assert!(on_sale > dp, "the sale paid the DP charge first");
+    assert!(book
+        .into_output()
+        .fills
+        .iter()
+        .all(|f| f.dp_charge.is_none()));
 }
 
 #[test]

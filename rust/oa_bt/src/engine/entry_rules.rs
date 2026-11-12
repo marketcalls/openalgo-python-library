@@ -13,6 +13,7 @@
 //!   while fewer than `cooldown` base bars have closed after the bar of the
 //!   instrument's last exit, `max_positions` when the positions open or with an entry
 //!   working have reached the cap.
+//! - Scale-in limits (item 7), for an add: `scale_in`, called after these gates.
 //!
 //! Time exit (`max_hold`, 05-risk-management 3): a position held `max_hold` base bars
 //! exits at the open of the next bar of its instrument, reason `time_exit`, in step 2

@@ -77,6 +77,10 @@ class SeriesStore:
         stop = self.visible()
         return {name: self._series[name][:stop] for name in FIELDS}
 
+    def view(self, name: str) -> SeriesView:
+        """The series view of one column (a futures series gives its own, `_spliced`)."""
+        return SeriesView(self, name)
+
     def times(self) -> pd.DatetimeIndex:
         """IST open of every bar of the run."""
         if self._times is None:
@@ -133,7 +137,7 @@ class InstrumentData:
 
     def __getattr__(self, name: str) -> SeriesView:
         if name in FIELDS:
-            return SeriesView(self._store, name)
+            return self._store.view(name)
         if name == "oi":
             raise NotImplementedError(
                 "open interest in strategy bars is not implemented yet (Phase 1 work in progress)"

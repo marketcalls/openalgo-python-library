@@ -4,7 +4,7 @@ Trend moving-average parity: the migrated _backend implementations vs the ORIGIN
 numba kernels (run pure-python via NUMBA_DISABLE_JIT) on real RELIANCE data.
 
 Covers the composite/standalone trend MAs whose wrappers were swapped to Rust:
-vwma, kama (TV), zlema, t3, trima, plus dema/tema/hma which compose the already
+vwma, kama (full window), zlema, t3, trima, plus dema/tema/hma which compose the already
 bit-exact ema/wma kernels (checked for finiteness + identical NaN mask vs a
 utils.ema reconstruction).
 """
@@ -52,7 +52,7 @@ def main():
     # Direct ports vs original numba kernels (bit-exact target)
     cmp("vwma(20)", b.vwma(c, v, 20), u.vwma_optimized(c, v, 20))
     # KAMA is recursive EMA-family (target 1e-12 rel); ~1e-13 abs drift is expected.
-    cmp("kama_tv(14)", b.kama_tv(c, 14, 2, 30), KAMA._calculate_kama_tv(c, 14, 2, 30), tol=1e-9)
+    cmp("kama_full_window(14)", b.kama_full_window(c, 14, 2, 30), KAMA._calculate_kama_full_window(c, 14, 2, 30), tol=1e-9)
     cmp("zlema(14)", b.zlema(c, 14), ZLEMA._calculate_zlema_optimized(c, 14))
     gd1 = T3._calculate_gd(c, 21, 0.7)
     gd2 = T3._calculate_gd(gd1, 21, 0.7)
@@ -92,10 +92,10 @@ def main():
     cmp("ckstop.long", ls, rls)
     cmp("ckstop.short", ss, rss)
     ic = b.ichimoku(h, lo, c, 9, 26, 52, 26)
-    ric = Ichimoku._calculate_ichimoku_tv(h, lo, c, 9, 26, 52, 26)
+    ric = Ichimoku._calculate_ichimoku(h, lo, c, 9, 26, 52, 26)
     for nm, g, r in zip(["conv", "base", "spanA", "spanB", "lag"], ic, ric):
         cmp(f"ichimoku.{nm}", g, r)
-    cmp("frama(26)", b.frama(h, lo, 26), FRAMA._calculate_frama_tv(h, lo, 26), tol=1e-8)
+    cmp("frama(26)", b.frama(h, lo, 26), FRAMA._calculate_frama(h, lo, 26), tol=1e-8)
 
     print("\nRESULT:", "ALL TREND PARITY PASS" if not FAILS else f"FAILURES: {FAILS}")
     return 1 if FAILS else 0

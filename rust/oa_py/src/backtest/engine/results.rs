@@ -258,6 +258,7 @@ pub(super) fn output<'py>(py: Python<'py>, output: &RunOutput) -> PyResult<Bound
         .collect();
     dict.set_item("stale_marks", stale)?;
     dict.set_item("charges", charges(py, &output.charges)?)?;
+    dict.set_item("futures", super::futures::output(py, &output.futures)?)?;
     dict.set_item("final_positions", finals(py, output)?)?;
     let g = output.gross_pnl;
     dict.set_item(

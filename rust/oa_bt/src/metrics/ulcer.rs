@@ -15,7 +15,7 @@
 //!   measure in portfolio optimization", International Journal of Theoretical and
 //!   Applied Finance 8(1)), at 95 percent: the mean of the close drawdowns at or below
 //!   their 5 percent quantile (`moments`), zero or negative.
-//! - Serenity index (the published serenity ratio):
+//! - Serenity index (excess return over drawdown-based risk):
 //!   `(CAGR - R) / (ulcer index x pitfall)`, with the pitfall indicator
 //!   `-CDaR / annualised volatility`: the excess return per unit of how long and how
 //!   badly the run stayed under water, and of how deep its worst drawdowns were against

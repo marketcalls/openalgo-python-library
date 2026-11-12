@@ -53,7 +53,8 @@ class OrderMethods:
         options an SL-M is sent as an SL with its limit 5 percent beyond the trigger).
         A LIMIT or stop order rests from the next base bar until it fills or its session
         closes. Quantity: `qty` units or `lots`, else `size=`, else the strategy's
-        `size`, else the engine default. Risk arguments attach to the position it opens
+        `size`, else the engine default. `leverage=` asks for intraday leverage, else the
+        strategy's `leverage`, else 1x. Risk arguments attach to the position it opens
         (an add may repeat them but not change them, SPEC-14); on CNC and NRML they are
         held as GTT orders. `validity="gtt"` rests it as a GTT until it fires or is
         cancelled (CNC and NRML only; it needs `price`, its trigger)."""
@@ -86,7 +87,7 @@ class OrderMethods:
     def _open(self, side: str, **args: Any) -> Order | None:
         ctx = self._ctx
         instrument = ctx.instrument_index(args["symbol"])
-        store = ctx.stores[ctx.symbol_of(instrument)]
+        store = ctx.sizing_store(instrument)
         rules = _orders.leg_rules(
             args["stop"],
             args["target"],
@@ -104,7 +105,7 @@ class OrderMethods:
             validity=_orders.validity(args["validity"]),
             reverse=bool(args["reverse"]),
             rules=rules,
-            leverage=args["leverage"],
+            leverage=order_leverage(args["leverage"], getattr(self, "leverage", None)),
             tag=args["tag"],
             **_orders.order_shape(args["price"], args["trigger_price"]),
         )
@@ -193,4 +194,10 @@ def locals_without_self(values: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in values.items() if key not in ("self", "__class__")}
 
 
-__all__ = ["OrderMethods"]
+def order_leverage(given: float | None, strategy_leverage: float | None) -> float | None:
+    """The intraday leverage an order asks for: its own `leverage=`, else the strategy's
+    class attribute `leverage` (14-strategy-api 2.4); None is 1x."""
+    return given if given is not None else strategy_leverage
+
+
+__all__ = ["OrderMethods", "order_leverage"]

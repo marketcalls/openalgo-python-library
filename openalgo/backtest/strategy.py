@@ -45,6 +45,7 @@ DECLARATIONS = (
     "symbols",
     "universe",
     "underlying",
+    "expiry",
     "exchange",
     "interval",
     "product",
@@ -79,12 +80,19 @@ class Strategy(OrderMethods):
     symbols: ClassVar[tuple[str, ...] | None] = None
     universe: ClassVar[Any] = None
     underlying: ClassVar[str | None] = None
+    expiry: ClassVar[str | None] = None
     exchange: ClassVar[str | None] = None
     interval: ClassVar[str | None] = None
     product: ClassVar[str | None] = None
     leverage: ClassVar[float | None] = None
     size: ClassVar[Any] = None
     pyramiding: ClassVar[int] = 0
+    # Scale-in limits (12-position-sizing 2; forms and units in `_scale_in`).
+    max_adds: ClassVar[int | None] = None
+    max_position: ClassVar[Any] = None
+    min_spacing: ClassVar[Any] = None
+    max_risk: ClassVar[Any] = None
+    allow_averaging_down: ClassVar[bool] = False
     max_daily_loss: ClassVar[float | None] = None
     entry_from: ClassVar[str | None] = None
     entry_until: ClassVar[str | None] = None
@@ -134,7 +142,8 @@ class Strategy(OrderMethods):
     def traded_symbols(cls) -> tuple[str, ...]:
         """What the class declares it trades. Raises ConfigError unless exactly one of
         symbol, symbols, universe, underlying is set; NotImplementedError for the forms
-        of later phases."""
+        of later phases. An underlying (futures, `expiry` naming the contract rank) is
+        resolved to its contracts by `_futures`."""
         declared = [n for n in ("symbol", "symbols", "universe", "underlying") if getattr(cls, n)]
         if len(declared) != 1:
             raise ConfigError(
@@ -144,6 +153,8 @@ class Strategy(OrderMethods):
             return (cls.symbol,)
         if declared[0] == "symbols":
             return tuple(cls.symbols)
+        if declared[0] == "underlying":
+            return (cls.underlying,)
         raise NotImplementedError(f"strategies on a {declared[0]} {NOT_BUILT}")
 
     @classmethod
@@ -229,8 +240,8 @@ class Strategy(OrderMethods):
 
     @property
     def positions(self) -> dict[str, PositionView]:
-        """Positions by symbol."""
-        return {symbol: self._ctx.position(symbol) for symbol in self._ctx.symbols}
+        """Positions by symbol (by underlying for futures: the contract it trades now)."""
+        return {symbol: self._ctx.position(symbol) for symbol in self._ctx.names}
 
     def _single_symbol(self) -> str:
         return self._ctx.symbol_of(self._ctx.instrument_index(None))

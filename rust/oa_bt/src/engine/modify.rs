@@ -68,7 +68,8 @@ impl Engine {
             Resolved::AtFill => 0.0,
             Resolved::Skipped(reason) => return Ok(Submission::Skipped(reason)),
         };
-        let good_until = match self.submission_checks(&request, units, &slice, decided_at)? {
+        let checked = self.submission_checks(&request, units, &slice, decided_at, Some(id))?;
+        let good_until = match checked {
             Ok(good_until) => good_until,
             Err(code) => return Ok(Submission::Rejected(id, code)),
         };

@@ -66,7 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`openalgo.backtest.backtest` and `openalgo.backtest.Strategy` (early preview).** The
   backtest kernel runs a strategy class through the Rust event loop and returns
   fills, positions, equity, trades and events as DataFrames. The entries below cover
-  each part. What is not built yet (the futures roll, walk-forward, `bt.live`) raises
+  each part. What is not built yet (walk-forward, `bt.live`) raises
   `NotImplementedError` naming its phase.
 - **Strategy and session risk rules in `bt.backtest` (early preview).** `max_daily_loss`
   measures the day's loss on `risk_basis` as the realized P&L of the strategy's runs
@@ -111,9 +111,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine default (1x the capital net of estimated costs, one lot for F&O);
   `bt.size.fixed_risk` and `bt.size.atr_risk` size to the stop; sized quantities are
   capped at the freeze quantity. `Result.performance`, `Result.metrics` and
-  `Result.tearsheet()` report the run. Charges for a delivery buy and sell of one scrip
-  on the same day, the margin of stock, BSE and MCX futures, and short options are not
-  built yet.
+  `Result.tearsheet()` report the run. A delivery (CNC) buy and sell of one scrip on the
+  same day is charged as intraday with no DP charge: the units a CNC fill matches
+  against the day's fills on the other side are charged at the intraday rates and the
+  earlier fills charged again. Short-option margin is not built yet.
 - **LIMIT, stop and GTT orders in `openalgo.backtest` (preview).** `buy` and `sell` take
   `price=` (LIMIT) and `trigger_price=` (SL with a price, SL-M without), OpenAlgo's
   order types. A LIMIT or stop order rests from the next base bar until it fills or its
@@ -173,6 +174,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `after_first_target`, `product`, `leverage` and `tag`; ATR distances and
   `bt.size.atr_risk` in them raise `NotImplementedError` until built. A condition
   strategy trades one symbol and has no callbacks or timers.
+- **Futures strategies in `openalgo.backtest` (preview).** A strategy names an
+  underlying (`underlying = "NIFTY"` with `exchange = "NFO"`, or underlying names in
+  `symbols`) and the contract rank in `expiry` (`"current_month"`, the default, or
+  `"next_month"`); the contracts come from `instrument=` or the reference tables (lot
+  size by contract expiry, final last trading days). `bt.backtest(roll=1)` (the
+  default) rolls a position N sessions before expiry at the roll session's first open:
+  near leg first, both legs charged, reason `roll`, stop, target, trail, breakeven and
+  the favourable extreme shifted by the spread of the two raw opens, a level crossed at
+  the near contract's open exits there instead, GTTs cancelled and placed again on the
+  next contract; a roll does not end a run for the daily loss limit. `roll=None` holds
+  the position to expiry and settles it at the close of the last trading day (reason
+  `expiry`, flagged, not charged). `on_bar` and every series view and `self.I`
+  indicator read one back-adjusted series per underlying, re-adjusted at each roll as
+  known at the decision point (point-in-time causality checks); the bar `on_bar` gets is
+  the contract's own. `Result.settlements` holds the daily futures mark to market (the
+  last close, flagged, where the data gives no settlement price) and `Result.rolls`
+  every switch with its spread. Trades are split at a roll (exit reason `roll`).
+  Condition strategies on an underlying and other intervals of a futures series raise
+  `NotImplementedError`.
+- **More futures margin in the dated table.** NSE stock futures (218 underlyings), BSE
+  BANKEX and the MCX commodities (30), each one day's observation of a broker's public
+  margin page and unverified, so a run using one warns. SENSEX and SENSEX50 futures have
+  no row yet (no public page read gave their margin) and still stop a run. A run whose
+  instrument has no margin row now stops before any data is loaded, with the engine's
+  message, instead of at its first entry.
+- **Ticks chosen by a price slab come from the run's data.** An NFO or BFO contract whose
+  tick follows a reference close (an index future's by the index close on the previous
+  month's last trading day, a stock derivative's by the share's) no longer asks for
+  `instrument=`: the backtest loads that close from its own source, the underlying's
+  when the source has it, else the contract's own close that day (said in the
+  Assumptions). It still asks when the data has neither, and refuses a tick that would
+  change during the run.
+- **Scale-in limits in `bt.backtest` (preview).** `max_adds`, `max_position` (units,
+  lots, rupees of value or percent of equity), `min_spacing` (base bars, or a price
+  distance in points, percent or ticks), `max_risk` (rupees or percent of equity) and
+  `allow_averaging_down` (default False) are checked on every add, at the decision
+  price, after the cooldown and maximum positions; a broken limit rejects the add
+  with code `scale_in_limit`. An entry from flat is never held to them. A class-level
+  `leverage` is the default of every order; `leverage=` on an order wins.
+- **No strategy setting or run argument is accepted and then ignored.** Each one
+  works, warns when it cannot apply to the run (`pyramiding` on an `on_bar`
+  strategy, intraday times on a delivery run, `client=` given with own data) or
+  raises; a test pins the audited lists. The Assumptions block states `entry_from`,
+  `leverage`, the scale-in limits, and the intraday times as they applied over the
+  whole run (one time, the rule they follow, or dated periods). Own data with naive
+  timestamps and `tz=` gives the run its dates; epoch numbers with `unit=` are UTC
+  and need no `tz=`. Every Result table keeps its columns when it has no rows.
 - **`openalgo.backtest.metrics` and `openalgo.backtest.report` (preview).** Performance
   metrics computed in the Rust core (returns, CAGR on calendar time, volatility, Sharpe
   and Sortino with a per-session risk-free rate, drawdowns, Calmar, exposure, trade
@@ -242,6 +290,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Backtest preview: adding to a losing position is refused unless the strategy sets
+  `allow_averaging_down = True`; `state` as a class attribute raises `ConfigError`
+  (use `self.state`); `after_risk_exit="allow_reentry"` raises `NotImplementedError`
+  until the combined risk rules it governs are built; `roll=1` is the default of
+  `bt.backtest`.
 - `closeposition()` and `cancelallorder()` are documented as what they are:
   account-wide. The server squares off every open position, or cancels every open
   order, of the account that owns the API key; the `strategy` argument is a label
@@ -252,8 +305,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sandbox order IDs are described correctly. They are plain numeric strings with no
   `SB-` prefix, so the `"mode": "analyze"` field is the only reliable marker of a
   simulated order.
-- Source comments, tests, audit notes and documentation describe this library in its
-  own terms and no longer name third-party backtesting engines used for comparison.
+- Source comments, docstrings, tests, benchmarks, audit notes and documentation describe
+  this library in its own terms and name no third-party product: each indicator is
+  described by its formula, seed and window. The benchmark scripts that compared against
+  an outside library are removed, and private kernels and one internal module are renamed
+  (`kama_full_window`, the `*_wilder_sum` kernels, `openalgo/indicators/classic.py`). The
+  public API and every indicator output are unchanged.
 - **Feed errors are never silent.** An exception raised inside an LTP, quote, depth
   or order callback, a frame that cannot be parsed, and a rejection from the server
   (for example an invalid API key) now reach `on_error` listeners, or an ERROR record
@@ -738,7 +795,7 @@ This release brings **complete technical analysis capabilities** to the OpenAlgo
 ### ✅ Added
 - **Complete Technical Indicators Library**: All 102 technical analysis functions now working perfectly
 - **High-Performance Implementation**: NumPy and Numba optimization for fast calculations
-- **TradingView-like Syntax**: Easy-to-use `ta.function()` interface
+- **Function-call Syntax**: Easy-to-use `ta.function()` interface
 - **Comprehensive Coverage**:
   - **19 Trend Indicators**: SMA, EMA, Supertrend, Ichimoku, HMA, etc.
   - **9 Momentum Indicators**: RSI, MACD, Stochastic, CCI, Williams %R, etc.

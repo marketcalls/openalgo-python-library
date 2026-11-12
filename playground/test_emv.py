@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Test Ease of Movement with TradingView defaults"""
+"""Test Ease of Movement with its default parameters"""
 
 import sys
 import os
@@ -39,13 +39,13 @@ def test_emv_basic():
     print(f"Price range: {prices.min():.2f} - {prices.max():.2f}")
     print(f"Volume range: {volume.min():,} - {volume.max():,}")
     
-    # Test with TradingView defaults: length=14, divisor=10000
+    # Test with the default parameters: length=14, divisor=10000
     length, divisor = 14, 10000
     
     # Calculate EMV
     emv = ta.emv(high, low, volume, length=length, divisor=divisor)
     
-    print(f"\nUsing TradingView defaults: length={length}, divisor={divisor}")
+    print(f"\nUsing default parameters: length={length}, divisor={divisor}")
     
     # Check for valid data
     valid_mask = ~np.isnan(emv)
@@ -202,7 +202,7 @@ def test_emv_volume_relationship():
     return False
 
 if __name__ == "__main__":
-    print("Ease of Movement Test - TradingView Implementation")
+    print("Ease of Movement Test")
     print("=" * 55)
     
     success1 = test_emv_basic()
@@ -211,10 +211,9 @@ if __name__ == "__main__":
     
     print(f"\nOverall Test: {'PASSED' if success1 and success2 and success3 else 'FAILED'}")
     print(f"\nEMV Implementation Summary:")
-    print(f"- Now matches TradingView Pine Script exactly")
     print(f"- Formula: EMV = SMA(div * change(hl2) * (high - low) / volume, length)")
-    print(f"- Default parameters: length=14, divisor=10000 (TradingView defaults)")
-    print(f"- Automatic SMA smoothing (TradingView always smooths)")
+    print(f"- Default parameters: length=14, divisor=10000")
+    print(f"- Automatic SMA smoothing (the output is always smoothed)")
     print(f"- change(hl2) = current HL2 - previous HL2")
     print(f"- HL2 = (high + low) / 2 (typical price)")
     print(f"- Higher volume leads to lower EMV magnitude")

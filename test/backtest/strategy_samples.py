@@ -112,8 +112,7 @@ class EmaCrossConditions(bt.Strategy):
 
 
 class EmaCrossIntraday(EmaCross):
-    """EmaCross on MIS, which the default charges price (a same-day CNC round trip is
-    not built yet)."""
+    """EmaCross on MIS (intraday product)."""
 
     product = "MIS"
 

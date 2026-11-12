@@ -81,7 +81,7 @@ def main():
     rcel, rces = ChandelierExit._calculate_chandelier(h, lo, c, 22, 3.0)
     cmp("chandelier.long", cel, rcel, tol=1e-9)
     cmp("chandelier.short", ces, rces, tol=1e-9)
-    cmp("hv", b.hv(c, 10, 365, 1), HistoricalVolatility._calculate_hv_tv(c, 10, 365, 1), tol=1e-9)
+    cmp("hv", b.hv(c, 10, 365, 1), HistoricalVolatility._calculate_hv(c, 10, 365, 1), tol=1e-9)
     cmp("ulcerindex", b.ulcerindex(c, 14, 14, 52, "SMA", False), _ulcer_ref(c, 14, 14))
     su, sm, sl = b.starc(h, lo, c, 5, 15, 1.33)
     cmp("starc.mid", sm, STARC._calculate_sma(c, 5))

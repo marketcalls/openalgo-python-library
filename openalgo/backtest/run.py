@@ -70,7 +70,7 @@ def backtest(
     cooldown: int | None = None,
     round_levels: bool = True,
     strict_config: bool = True,
-    roll: Any = None,
+    roll: int | None = 1,
     params: dict[str, Any] | None = None,
     now: Any = None,
 ) -> Result:
@@ -101,7 +101,12 @@ def backtest(
         round_levels, strict_config: risk settings (05-risk-management); strategy class
         attributes of the same names win. `max_daily_loss` is rupees (or bt.rupees),
         `drawdown_halt` percent from peak equity (bt.pct(x)), `cooldown` base bars.
-    roll: futures roll settings. params: parameter values for the strategy.
+    roll: sessions before expiry at which a futures position rolls to the next contract
+        (1, the session before the last trading day; 0 rolls on it), or None to hold it
+        to expiry and settle it there (04-execution 7). A futures strategy names its
+        underlying (`underlying`, or underlyings in `symbols`) and the contract rank in
+        `expiry` ("current_month" or "next_month"); see `_futures`.
+    params: parameter values for the strategy.
     now: the present (UTC nanoseconds, a datetime or an ISO string, naive is IST; the
         clock when None). The data load drops bars that have not closed by then.
 

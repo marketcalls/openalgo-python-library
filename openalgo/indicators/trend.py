@@ -279,13 +279,13 @@ class Supertrend(BaseIndicator):
     @jit(nopython=True)
     def _calculate_supertrend(high: np.ndarray, low: np.ndarray, close: np.ndarray, 
                              period: int, multiplier: float) -> Tuple[np.ndarray, np.ndarray]:
-        """Numba optimized Supertrend calculation - matches TradingView Pine Script logic"""
+        """Supertrend: hl2 +- multiplier * ATR bands that flip on a close through the active band"""
         n = len(close)
         
         # Calculate ATR
         atr = _calculate_atr(high, low, close, period)
         
-        # Calculate basic bands (src = hl2 in Pine Script)
+        # Calculate basic bands around hl2
         hl_avg = (high + low) / 2.0
         upper_band = hl_avg + multiplier * atr
         lower_band = hl_avg - multiplier * atr
@@ -303,11 +303,11 @@ class Supertrend(BaseIndicator):
         # Initialize first valid values
         final_upper[first_valid] = upper_band[first_valid]
         final_lower[first_valid] = lower_band[first_valid]
-        # Pine Script: if na(atr[1]) _direction := 1 (first bar is downtrend)
-        direction[first_valid] = 1.0  # downtrend (red in Pine Script)
+        # The first bar with an ATR has no previous ATR: it starts as a downtrend
+        direction[first_valid] = 1.0  # downtrend
         supertrend[first_valid] = final_upper[first_valid]
         
-        # Pine Script logic for subsequent bars
+        # Subsequent bars
         for i in range(first_valid + 1, n):
             # Final lower band: lowerBand > prevLowerBand or close[1] < prevLowerBand ? lowerBand : prevLowerBand
             if lower_band[i] > final_lower[i-1] or close[i-1] < final_lower[i-1]:
@@ -321,11 +321,11 @@ class Supertrend(BaseIndicator):
             else:
                 final_upper[i] = final_upper[i-1]
             
-            # Direction logic (Pine Script)
-            # if prevSuperTrend == prevUpperBand
-            #     _direction := close > upperBand ? -1 : 1
-            # else
-            #     _direction := close < lowerBand ? 1 : -1
+            # Direction logic
+            # if the previous supertrend was the upper band:
+            #     direction = -1 if close > upper band else 1
+            # else:
+            #     direction = 1 if close < lower band else -1
             if supertrend[i-1] == final_upper[i-1]:
                 # Previous was upper band (downtrend)
                 if close[i] > final_upper[i]:
@@ -371,7 +371,7 @@ class Supertrend(BaseIndicator):
         --------
         Union[Tuple[np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series]]
             (supertrend values, direction values) in the same format as input
-            Direction: -1 for uptrend (green), 1 for downtrend (red) - matches TradingView
+            Direction: -1 for uptrend, 1 for downtrend
         """
         high_data, input_type, index = self.validate_input(high)
         low_data, _, _ = self.validate_input(low)
@@ -390,12 +390,12 @@ class Supertrend(BaseIndicator):
 
 class Ichimoku(BaseIndicator):
     """
-    Ichimoku Cloud - matches TradingView exactly
+    Ichimoku Cloud
     
     The Ichimoku Cloud is a comprehensive indicator that defines support and resistance, 
     identifies trend direction, gauges momentum, and provides trading signals.
     
-    TradingView Components:
+    Components:
     - Conversion Line: donchian(conversionPeriods) = avg(highest(9), lowest(9))
     - Base Line: donchian(basePeriods) = avg(highest(26), lowest(26))  
     - Leading Span A: avg(conversionLine, baseLine), offset +displacement-1
@@ -407,16 +407,16 @@ class Ichimoku(BaseIndicator):
         super().__init__("Ichimoku")
     
     @staticmethod
-    def _calculate_ichimoku_tv(high: np.ndarray, low: np.ndarray, close: np.ndarray,
+    def _calculate_ichimoku(high: np.ndarray, low: np.ndarray, close: np.ndarray,
                               conversion_periods: int = 9, base_periods: int = 26,
                               lagging_span2_periods: int = 52, displacement: int = 26) -> Tuple[np.ndarray, ...]:
         """
-        Calculate Ichimoku using exact TradingView logic
-        TradingView formula:
-        donchian(len) => math.avg(ta.lowest(len), ta.highest(len))
+        Calculate Ichimoku
+        Formula:
+        donchian(len) = (lowest(low, len) + highest(high, len)) / 2
         conversionLine = donchian(conversionPeriods)
         baseLine = donchian(basePeriods)
-        leadLine1 = math.avg(conversionLine, baseLine)
+        leadLine1 = (conversionLine + baseLine) / 2
         leadLine2 = donchian(laggingSpan2Periods)
         """
         n = len(close)
@@ -427,15 +427,14 @@ class Ichimoku(BaseIndicator):
             low_values = lowest(data_low, period)
             return (high_values + low_values) / 2.0
         
-        # Calculate components using TradingView names and logic
+        # Calculate components
         conversion_line = donchian(high, low, conversion_periods)  # Tenkan-sen
         base_line = donchian(high, low, base_periods)             # Kijun-sen
         lead_line1 = (conversion_line + base_line) / 2.0          # Senkou Span A
         lead_line2 = donchian(high, low, lagging_span2_periods)   # Senkou Span B
         
-        # Apply TradingView offset logic
-        # TradingView: offset = displacement - 1 for leading spans
-        # TradingView: offset = -displacement + 1 for lagging span
+        # Offsets: leading spans move forward by displacement - 1 bars,
+        # the lagging span moves back by displacement - 1 bars
         
         # Leading Span A: offset = displacement - 1 (shift forward)
         leading_span_a = np.full(n, np.nan)
@@ -474,7 +473,7 @@ class Ichimoku(BaseIndicator):
                  conversion_periods: int = 9, base_periods: int = 26,
                  lagging_span2_periods: int = 52, displacement: int = 26) -> Union[Tuple[np.ndarray, ...], Tuple[pd.Series, ...]]:
         """
-        Calculate Ichimoku Cloud - matches TradingView exactly
+        Calculate Ichimoku Cloud
         
         Parameters:
         -----------
@@ -485,13 +484,13 @@ class Ichimoku(BaseIndicator):
         close : Union[np.ndarray, pd.Series, list]
             Closing prices
         conversion_periods : int, default=9
-            Conversion Line Length (TradingView: conversionPeriods)
+            Conversion Line Length
         base_periods : int, default=26
-            Base Line Length (TradingView: basePeriods)
+            Base Line Length
         lagging_span2_periods : int, default=52
-            Leading Span B Length (TradingView: laggingSpan2Periods)
+            Leading Span B Length
         displacement : int, default=26
-            Lagging Span displacement (TradingView: displacement)
+            Lagging Span displacement
             
         Returns:
         --------
@@ -505,7 +504,7 @@ class Ichimoku(BaseIndicator):
         # Align arrays
         high_data, low_data, close_data = self.align_arrays(high_data, low_data, close_data)
         
-        # Validate periods (use TradingView parameter names)
+        # Validate periods
         for period, name in [(conversion_periods, "conversion_periods"), 
                             (base_periods, "base_periods"), 
                             (lagging_span2_periods, "lagging_span2_periods")]:
@@ -679,18 +678,18 @@ class ALMA(BaseIndicator):
 
 class KAMA(BaseIndicator):
     """
-    Kaufman's Adaptive Moving Average - matches TradingView exactly
+    Kaufman's Adaptive Moving Average
     
     KAMA is a moving average designed to account for market noise or volatility.
     
-    TradingView Formula:
-    mom = abs(change(src, length))
-    volatility = sum(abs(change(src)), length)  
+    Formula:
+    mom = abs(src - src[length])
+    volatility = sum(abs(src - src[1]), length)  
     er = volatility != 0 ? mom / volatility : 0
     fastAlpha = 2 / (fastLength + 1)
     slowAlpha = 2 / (slowLength + 1)
     alpha = pow(er * (fastAlpha - slowAlpha) + slowAlpha, 2)
-    kama = alpha * src + (1 - alpha) * nz(kama[1], src)
+    kama = alpha * src + (1 - alpha) * kama[1], with kama[1] = src when undefined
     """
     
     def __init__(self):
@@ -698,9 +697,9 @@ class KAMA(BaseIndicator):
     
     @staticmethod
     @jit(nopython=True)
-    def _calculate_kama_tv(data: np.ndarray, length: int, fast_length: int, slow_length: int) -> np.ndarray:
+    def _calculate_kama_full_window(data: np.ndarray, length: int, fast_length: int, slow_length: int) -> np.ndarray:
         """
-        Calculate KAMA using exact TradingView logic
+        Calculate KAMA, summing the volatility over the full window at every bar
         """
         n = len(data)
         result = np.full(n, np.nan)
@@ -708,16 +707,16 @@ class KAMA(BaseIndicator):
         if n < length + 1:
             return result
         
-        # TradingView alpha calculations
+        # EMA alphas of the fast and slow lengths
         fast_alpha = 2.0 / (fast_length + 1)
         slow_alpha = 2.0 / (slow_length + 1)
         
         # Calculate for each period
         for i in range(length, n):
-            # mom = abs(change(src, length)) -> abs(data[i] - data[i-length])
+            # mom = abs(data[i] - data[i-length])
             mom = abs(data[i] - data[i - length])
             
-            # volatility = sum(abs(change(src)), length) -> sum of absolute changes over length
+            # volatility = sum of absolute one-bar changes over length
             volatility = 0.0
             for j in range(i - length + 1, i + 1):
                 if j > 0:
@@ -732,8 +731,8 @@ class KAMA(BaseIndicator):
             # alpha = pow(er * (fastAlpha - slowAlpha) + slowAlpha, 2)
             alpha = (er * (fast_alpha - slow_alpha) + slow_alpha) ** 2
             
-            # kama = alpha * src + (1 - alpha) * nz(kama[1], src)
-            # For first calculation, use current price as previous KAMA (nz logic)
+            # kama = alpha * src + (1 - alpha) * kama[1]
+            # For the first calculation, use the current price as the previous KAMA
             if i == length or np.isnan(result[i - 1]):
                 prev_kama = data[i]
             else:
@@ -746,18 +745,18 @@ class KAMA(BaseIndicator):
     def calculate(self, data: Union[np.ndarray, pd.Series, list],
                  length: int = 14, fast_length: int = 2, slow_length: int = 30) -> Union[np.ndarray, pd.Series]:
         """
-        Calculate Kaufman's Adaptive Moving Average - matches TradingView exactly
+        Calculate Kaufman's Adaptive Moving Average
         
         Parameters:
         -----------
         data : Union[np.ndarray, pd.Series, list]
             Source data (typically closing prices)
         length : int, default=14
-            Length for efficiency ratio calculation (TradingView default)
+            Length for efficiency ratio calculation
         fast_length : int, default=2
-            Fast EMA Length (TradingView: fastLength)
+            Fast EMA Length
         slow_length : int, default=30
-            Slow EMA Length (TradingView: slowLength)
+            Slow EMA Length
             
         Returns:
         --------
@@ -776,7 +775,7 @@ class KAMA(BaseIndicator):
         if fast_length >= slow_length:
             raise ValueError("Fast length must be less than slow length")
         
-        result = _backend.kama_tv(validated_data, length, fast_length, slow_length)
+        result = _backend.kama_full_window(validated_data, length, fast_length, slow_length)
         return self.format_output(result, input_type, index)
 
 
@@ -910,7 +909,7 @@ class FRAMA(BaseIndicator):
         super().__init__("FRAMA")
     
     @staticmethod
-    def _calculate_frama_tv(high: np.ndarray, low: np.ndarray, period: int) -> np.ndarray:
+    def _calculate_frama(high: np.ndarray, low: np.ndarray, period: int) -> np.ndarray:
         """FRAMA values: the shared kernel, `_backend.frama`"""
         return _backend.frama(high, low, period)
     
@@ -918,7 +917,7 @@ class FRAMA(BaseIndicator):
                  low: Union[np.ndarray, pd.Series, list],
                  period: int = 26) -> Union[np.ndarray, pd.Series]:
         """
-        Calculate Fractal Adaptive Moving Average - matches TradingView exactly
+        Calculate Fractal Adaptive Moving Average
         
         Parameters:
         -----------
@@ -927,7 +926,7 @@ class FRAMA(BaseIndicator):
         low : Union[np.ndarray, pd.Series, list]
             Low prices  
         period : int, default=26
-            Number of periods for FRAMA calculation (TradingView default)
+            Number of periods for FRAMA calculation
             Must be even number, minimum 2
             
         Returns:
@@ -994,12 +993,12 @@ class ChandeKrollStop(BaseIndicator):
     @jit(nopython=True)
     def _calculate_chande_kroll_stop(high: np.ndarray, low: np.ndarray, close: np.ndarray,
                                    p: int, x: float, q: int) -> Tuple[np.ndarray, np.ndarray]:
-        """Numba optimized Chande Kroll Stop calculation - matches TradingView Pine Script"""
+        """Chande Kroll Stop: highest/lowest of the ATR-offset extremes over q bars"""
         n = len(close)
         long_stop = np.full(n, np.nan)
         short_stop = np.full(n, np.nan)
         
-        # Calculate ATR using Wilder's method (matches TradingView ta.atr)
+        # Calculate ATR using Wilder's smoothing
         atr = atr_wilder(high, low, close, p)
         
         # Step 1: Calculate first_high_stop and first_low_stop
@@ -1011,14 +1010,14 @@ class ChandeKrollStop(BaseIndicator):
             highest_high = np.max(high[i - p + 1:i + 1])
             lowest_low = np.min(low[i - p + 1:i + 1])
             
-            # TradingView: first_high_stop = ta.highest(high, p) - x * ta.atr(p)
+            # first_high_stop = highest(high, p) - x * atr(p)
             first_high_stop[i] = highest_high - x * atr[i]
-            # TradingView: first_low_stop = ta.lowest(low, p) + x * ta.atr(p)
+            # first_low_stop = lowest(low, p) + x * atr(p)
             first_low_stop[i] = lowest_low + x * atr[i]
         
         # Step 2: Calculate final stops using highest/lowest of first stops over period q
-        # TradingView: stop_short = ta.highest(first_high_stop, q)
-        # TradingView: stop_long = ta.lowest(first_low_stop, q)
+        # stop_short = highest(first_high_stop, q)
+        # stop_long = lowest(first_low_stop, q)
         start_idx = p + q - 2  # Need both p and q periods to start
         
         for i in range(start_idx, n):
@@ -1044,7 +1043,7 @@ class ChandeKrollStop(BaseIndicator):
                  close: Union[np.ndarray, pd.Series, list],
                  p: int = 10, x: float = 1.0, q: int = 9) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series]]:
         """
-        Calculate Chande Kroll Stop - matches TradingView exactly
+        Calculate Chande Kroll Stop
         
         Parameters:
         -----------

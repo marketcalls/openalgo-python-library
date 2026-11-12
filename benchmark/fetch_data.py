@@ -5,13 +5,11 @@ Fetch benchmark / parity OHLCV data for the Rust-indicator migration.
 Source priority (first that returns data wins, per symbol+interval):
   1. OpenAlgo DuckDB / Historify  (source="db")   -- preferred once populated
   2. OpenAlgo broker history       (source="api")  -- Dhan etc. when subscribed
-  3. yfinance                                       -- fallback while brokers are down
 
 Output: benchmark/data/<SYMBOL>_<INTERVAL>.csv with columns
         timestamp, open, high, low, close, volume   (timestamp as index)
 
 Both Daily ("D") and 1-minute ("1m") series are fetched for RELIANCE and SBIN.
-yfinance only serves ~7 days of 1m history, which is plenty for parity testing.
 """
 import os
 os.environ.setdefault("NUMBA_DISABLE_JIT", "1")  # legacy numba stack is broken on numpy>=2
@@ -26,7 +24,6 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 SYMBOLS = ["RELIANCE", "SBIN"]
 INTERVALS = ["D", "1m"]
-YF_SUFFIX = ".NS"  # NSE on Yahoo Finance
 COLS = ["open", "high", "low", "close", "volume"]
 
 
@@ -49,27 +46,10 @@ def from_openalgo(symbol, interval, source):
     return None, None
 
 
-def from_yfinance(symbol, interval):
-    import yfinance as yf
-    ticker = symbol + YF_SUFFIX
-    if interval == "D":
-        raw = yf.download(ticker, period="max", interval="1d",
-                          auto_adjust=False, progress=False)
-    else:  # 1m -> Yahoo serves last ~7 days
-        raw = yf.download(ticker, period="7d", interval="1m",
-                          auto_adjust=False, progress=False)
-    if raw is None or raw.empty:
-        return None, None
-    if isinstance(raw.columns, pd.MultiIndex):
-        raw.columns = raw.columns.get_level_values(0)
-    return _normalize(raw), "yfinance"
-
-
 def fetch(symbol, interval):
     for loader, args in [
         (from_openalgo, (symbol, interval, "db")),
         (from_openalgo, (symbol, interval, "api")),
-        (from_yfinance, (symbol, interval)),
     ]:
         try:
             df, src = loader(*args)

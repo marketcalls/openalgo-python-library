@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-TA-Lib-compatible indicators added to OpenAlgo (Rust/numpy backend via _backend).
+Classic single-formula indicators (Rust/numpy backend via _backend).
 
-These fill gaps where TA-Lib had a function OpenAlgo lacked, and they match TA-Lib's
-values exactly (by definition). Price transforms, MIDPOINT/MIDPRICE, MOM, the ROC
-variants (ROCP/ROCR/ROCR100), and APO.
+Price transforms (AVGPRICE, MEDPRICE, TYPPRICE, WCLPRICE), MIDPOINT/MIDPRICE, MOM,
+the ROC variants (ROCP/ROCR/ROCR100), APO, the directional-movement family computed
+as Wilder running sums (PLUS_DM, MINUS_DM, DX, ADXR), the fast stochastic (STOCHF)
+and the regression angle and intercept. Each follows its textbook formula, stated
+on the matching `ta` method.
 """
 import numpy as np
 import pandas as pd
@@ -141,7 +143,8 @@ class AVGPRICE(BaseIndicator):
         return self.format_output(_backend.avgprice(o, h, l, c), input_type, index)
 
 
-# --- TA-Lib-faithful directional-movement family (matches TA-Lib, not TradingView) ---
+# --- Directional movement as Wilder running sums (seeded with the plain sum of the
+# first period-1 movements), kept apart from ADX/DMI, which average the first bars ---
 
 class PLUS_DM(_HLC):
     def __init__(self):

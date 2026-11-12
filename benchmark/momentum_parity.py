@@ -50,7 +50,7 @@ def main():
 
     hl2 = (h + lo) / 2.0
     f1, f2 = b.fisher(hl2, 9)
-    rf1, rf2 = Fisher._calculate_fisher_tv(hl2, 9)
+    rf1, rf2 = Fisher._calculate_fisher(hl2, 9)
     cmp("fisher.fish", f1, rf1, tol=1e-9)
     cmp("fisher.trig", f2, rf2, tol=1e-9)
 

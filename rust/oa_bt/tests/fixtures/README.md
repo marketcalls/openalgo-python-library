@@ -18,3 +18,15 @@ the last price). The test file lists the cases whose result differs by design an
 
 Update the copy only from the server's file, and record the new commit, date and hash
 here.
+
+## futures_margin_pages.csv
+
+One contract of every futures row of the dated margin table that came from a broker's
+margin calculator page: NSE stock futures from https://zerodha.com/margin-calculator/Futures/
+and MCX futures from https://zerodha.com/margin-calculator/Commodity/, both "Last updated:
+12 Nov 2026", read on 2026-11-12. Each line is the page's lot (quantity in units), price
+and NRML margin in rupees; for MCX the multiplier is the one the page's figures imply
+(margin = percent x price x lot x multiplier), since the page does not state it.
+`tests/futures_margin.rs` checks that every row's percent reproduces the page's rupee
+margin within the rounding of a two-decimal percent. Update it together with the table
+rows, from the same page read.

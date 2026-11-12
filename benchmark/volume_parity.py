@@ -58,7 +58,7 @@ def main():
     cmp("vroc", b.vroc(v, 25), VROC._calculate_vroc(v, 25))
     cmp("volosc", b.volosc(v, 5, 10), _volosc_ref(v, 5, 10))
     kk, kt = b.kvo(h, lo, c, v, 13, 34, 55)
-    rkk, rkt = KVO._calculate_kvo_tv(h, lo, c, v, 13, 34, 55)
+    rkk, rkt = KVO._calculate_kvo(h, lo, c, v, 13, 34, 55)
     cmp("kvo", kk, rkk)
     cmp("kvo.trig", kt, rkt)
     cmp("rvol", b.rvol(v, 20), RVOL._calculate_rvol(v, 20))

@@ -108,9 +108,16 @@ def test_a_delivery_sell_from_holdings_pays_the_dp_charge():
     assert result.trades.loc[0, "costs_rupees"] == pytest.approx(trip.total + dp, abs=1e-9)
 
 
-def test_a_delivery_buy_and_sell_on_one_day_is_not_built_yet():
-    with pytest.raises(NotImplementedError, match="same day"):
-        charged_round_trip(product="CNC")
+def test_a_delivery_buy_and_sell_on_one_day_is_charged_as_intraday_with_no_dp_charge():
+    # The worked example traded on CNC: bought and sold the same day, so brokers charge
+    # it as intraday (04-execution 2) and the note charges the intraday 200.62.
+    result = charged_round_trip(product="CNC")
+    trip = costs.round_trip_cost(ENTRY_PRICE, EXIT_PRICE, QTY, DAY, segment=INTRADAY)
+    assert result.trades.loc[0, "costs_rupees"] == pytest.approx(trip.total, abs=1e-9)
+    assert list(result.contract_notes["charged_total"]) == [200.62]
+    assert result.equity["costs_rupees"].iloc[-1] == pytest.approx(200.62, abs=1e-9)
+    assert list(result.costs["dp_charge"]) == [0.0, 0.0]
+    assert list(result.costs["segment"]) == [INTRADAY, INTRADAY]
 
 
 def test_a_cost_free_run_warns_on_the_result_and_on_the_tearsheet():

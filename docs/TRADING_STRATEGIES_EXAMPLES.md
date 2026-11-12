@@ -8,7 +8,7 @@ This document provides real-world trading strategy examples using OpenAlgo's **P
 - ✅ **104/104 indicators working** (100% success rate)
 - ✅ **Sub-millisecond execution** (0.322ms average)
 - ✅ **Institutional-grade reliability**
-- ✅ **Complete TradingView Pine Script compatibility**
+- **Signal utilities** for signal state and cross detection
 
 ## Table of Contents
 
@@ -18,8 +18,7 @@ This document provides real-world trading strategy examples using OpenAlgo's **P
 4. [Volatility Strategies](#volatility-strategies)
 5. [Volume-Based Strategies](#volume-based-strategies)
 6. [Multi-Timeframe Strategies](#multi-timeframe-strategies)
-7. [Pine Script Compatible Strategies (NEW)](#pine-script-compatible-strategies)
-8. [Machine Learning Enhanced Strategies](#machine-learning-enhanced-strategies)
+7. [Machine Learning Enhanced Strategies](#machine-learning-enhanced-strategies)
 
 ---
 

@@ -69,7 +69,7 @@ impl Engine {
             Resolved::AtFill => 0.0,
             Resolved::Skipped(reason) => return Ok(Submission::Skipped(reason)),
         };
-        let checked = self.submission_checks(&request, units, &slice, decided_at)?;
+        let checked = self.submission_checks(&request, units, &slice, decided_at, None)?;
         let id = self.book.next_id();
         let (action, kind, good_until, reject) = match checked {
             Ok(good_until) => (
@@ -183,13 +183,15 @@ impl Engine {
     }
 
     /// The submission checks, in order, at the decision instant `decided_at`; `Ok`
-    /// carries the order's `good_until`.
+    /// carries the order's `good_until`. `replacing` is the order a modification
+    /// replaces (the scale-in limits do not count it as waiting).
     pub(super) fn submission_checks(
         &mut self,
         request: &OrderRequest,
         units: f64,
         slice: &SliceInfo,
         decided_at: TsNanos,
+        replacing: Option<OrderId>,
     ) -> Result<Result<TsNanos, RejectCode>, KernelError> {
         let Some(spec) = self.instruments.get(request.instrument.index()) else {
             return Ok(Err(RejectCode::InstrumentUnknown));
@@ -223,13 +225,17 @@ impl Engine {
             }
         }
         // Pre-trade check order of 03-architecture 4.4: closed market (5), trading state
-        // and entry gates (6, 7), then an excess over the position without `reverse` (7).
+        // and entry gates (6, 7), the scale-in limits (7), then an excess over the
+        // position without `reverse` (7).
         let validity = match request.validity {
             Validity::Day => self.day_validity(slice, decided_at),
             Validity::Gtt => Ok(GTT_GOOD_UNTIL),
         };
         if opening && validity.is_ok() {
             if let Err(code) = self.entry_gates(key, held, slice) {
+                return Ok(Err(code));
+            }
+            if let Err(code) = self.scale_in_limits(request, units, slice, replacing)? {
                 return Ok(Err(code));
             }
         }

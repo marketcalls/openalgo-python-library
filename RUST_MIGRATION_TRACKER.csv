@@ -44,7 +44,7 @@ ID,Category,Indicator,Public_API,Class,Source_File,Inputs,Parameters,Outputs,TA_
 43,Volatility,Keltner Channel,ta.keltner,Keltner,volatility.py,"high,low,close","ema_period,atr_period,multiplier","upper,mid,lower",—,Yes,Medium,2,Migrated; parity PASS,1e-12 rel,EMA +/- ATR multiple
 44,Volatility,Donchian Channel,ta.donchian,Donchian,volatility.py,"high,low",period,"upper,mid,lower",—,No,Low,2,Migrated; parity PASS,bit-exact,Rolling hi/lo
 45,Volatility,Chaikin Volatility,ta.chaikin,Chaikin,volatility.py,"high,low","ema_period,roc_period",series,—,Yes,Medium,2,Migrated; parity PASS,1e-12 rel,ROC of EMA(high-low)
-46,Volatility,Mass Index,ta.massindex,MASS,volatility.py,"high,low",length,series,—,Yes,Medium,2,Migrated; parity PASS,1e-12 rel,EMA ratio sum (Pine v6)
+46,Volatility,Mass Index,ta.massindex,MASS,volatility.py,"high,low",length,series,—,Yes,Medium,2,Migrated; parity PASS,1e-12 rel,EMA ratio sum
 47,Volatility,Chandelier Exit,ta.chandelier_exit,ChandelierExit,volatility.py,"high,low,close","period,multiplier","long,short",—,Yes,High,3,Migrated; parity PASS,bit-exact,ATR trailing stop
 48,Volatility,Historical Volatility,ta.hv,HistoricalVolatility,volatility.py,close,"length,annual,per",series,—,No,Medium,3,Migrated; parity PASS,1e-12 rel,Annualized stdev of log returns
 49,Volatility,Ulcer Index,ta.ulcerindex,UlcerIndex,volatility.py,close,"length,smooth,signal,type",series,—,No,Medium,3,Migrated; parity PASS,1e-12 rel,Drawdown-based risk measure
@@ -105,6 +105,6 @@ ID,Category,Indicator,Public_API,Class,Source_File,Inputs,Parameters,Outputs,TA_
 103,Utility,Cross,(util),cross,utils.py,"series1,series2",—,bool series,—,No,Low,1,Kernel parity PASS,bit-exact,Either-direction cross
 104,Utility,Rising,(util),rising,utils.py,series,length,bool series,—,No,Low,1,Kernel parity PASS,bit-exact,Monotonic up over length
 105,Utility,Falling,(util),falling,utils.py,series,length,bool series,—,No,Low,1,Kernel parity PASS,bit-exact,Monotonic down over length
-106,Utility,ExRem,(util),exrem,utils.py,"primary,secondary",—,bool series,—,Yes,Low,1,Kernel parity PASS,bit-exact,Remove excess signals (AFL)
-107,Utility,Flip,(util),flip,utils.py,"primary,secondary",—,bool series,—,Yes,Low,1,Kernel parity PASS,bit-exact,Toggle/latch signal (AFL)
+106,Utility,ExRem,(util),exrem,utils.py,"primary,secondary",—,bool series,—,Yes,Low,1,Kernel parity PASS,bit-exact,Remove excess signals
+107,Utility,Flip,(util),flip,utils.py,"primary,secondary",—,bool series,—,Yes,Low,1,Kernel parity PASS,bit-exact,Toggle/latch signal
 108,Utility,ValueWhen,(util),valuewhen,utils.py,"condition,source,occurrence",—,series,—,Yes,Medium,1,Kernel parity PASS,bit-exact,Value at Nth prior true

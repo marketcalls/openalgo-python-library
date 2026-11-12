@@ -10,7 +10,7 @@ use oa_bt::engine::{BarColumns, Event, KernelError, RunOutput, Step, StrategyInt
 use oa_bt::exec::{FillAt, InstrumentId};
 use oa_bt::market::calendar::BaseInterval;
 use oa_bt::model::{Day, Side};
-use oa_bt::rms::{RiskScope, RmsError, StrategyRiskConfig};
+use oa_bt::rms::{RiskScope, RmsError, ScaleLimits, StrategyRiskConfig};
 use risk_support::*;
 
 const A: InstrumentId = InstrumentId(0);
@@ -103,8 +103,17 @@ fn the_drawdown_halt_latches_across_sessions() {
 fn a_drawdown_short_of_the_limit_does_not_halt() {
     // Equity falls to 990000.00, exactly 1 percent below the peak; with a 1.01 percent
     // limit the floor is 989900.00. The add decided on 2025-07-03 fills at 90.00, and on
-    // 2025-07-04 equity is 1000000.00 + (90.00 - 95.00) x 2000 = 990000.00 again.
-    let (output, script) = run_daily(drawdown(1.01));
+    // 2025-07-04 equity is 1000000.00 + (90.00 - 95.00) x 2000 = 990000.00 again. The
+    // add is decided at 90.00, below the average 100.00, so it averages down, which
+    // this strategy allows (12-position-sizing 2, SPEC-15).
+    let risk = StrategyRiskConfig {
+        scale: ScaleLimits {
+            allow_averaging_down: true,
+            ..ScaleLimits::default()
+        },
+        ..drawdown(1.01)
+    };
+    let (output, script) = run_daily(risk);
     let reasons: Vec<&str> = fills(&output).iter().map(|fill| fill.6).collect();
     assert_eq!(reasons, vec!["entry", "add"]);
     assert_eq!(

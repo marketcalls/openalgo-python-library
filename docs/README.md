@@ -84,7 +84,7 @@ The library provides indicators in 7 main categories:
 
 ## Key Features
 
-- **TradingView Pine Script-like syntax** - Familiar and intuitive
+- **Concise syntax** - Function calls such as `ta.sma(close, 20)`
 - **High performance** - NumPy vectorized operations with Numba JIT compilation
 - **Type flexible** - Works with numpy arrays, pandas Series, and Python lists
 - **Professional grade** - Accurate implementations matching industry standards

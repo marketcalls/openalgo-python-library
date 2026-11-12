@@ -87,18 +87,22 @@ def _first_line(error: Exception) -> str:
     return str(error).split(". ")[0].rstrip(".")
 
 
-def choose_base(plan: Any, args: dict[str, Any], client: Any, calendar: Any) -> BaseChoice:
+def choose_base(
+    plan: Any, args: dict[str, Any], client: Any, calendar: Any, windows: dict | None = None
+) -> BaseChoice:
     """The base interval of `plan` (resolved without data) and its bars, by the rule of
-    the module docstring. Raises the data layer's errors when the bars of the chosen
-    base cannot be loaded."""
+    the module docstring. `windows` gives some symbols their own (first, last) dates (a
+    futures contract is loaded for the dates it is traded). Raises the data layer's
+    errors when the bars of the chosen base cannot be loaded."""
 
     def load(symbol: str, interval: str, base: str | None = None) -> BarsResult:
+        start, end = (windows or {}).get(symbol, (plan.start, plan.end))
         return load_bars(
             symbol,
             plan.exchange,
             interval,
-            plan.start,
-            plan.end,
+            start,
+            end,
             source=args["source"],
             client=client,
             data=_data_for(args["data"], symbol),

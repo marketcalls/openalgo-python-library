@@ -77,7 +77,7 @@ def main():
     cmp("zigzag", b.zigzag(h, lo, c, 5.0), ZigZag._calculate_zigzag(h, lo, c, 5.0))
 
     fu, fd = b.williams_fractals(h, lo, 2)
-    rfu, rfd = WilliamsFractals._calculate_fractals_tv(h, lo, 2)
+    rfu, rfd = WilliamsFractals._calculate_fractals(h, lo, 2)
     cmpb("fractals.up", fu, rfu)
     cmpb("fractals.down", fd, rfd)
 
