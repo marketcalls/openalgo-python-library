@@ -52,11 +52,14 @@ pub enum RejectCode {
     RateLimit = 11,
     /// The order names an instrument the run does not know.
     InstrumentUnknown = 12,
+    /// A reducing order larger than the opposite position, without `reverse=True`
+    /// (14-strategy-api 2.4).
+    ReverseNotAllowed = 13,
 }
 
 impl RejectCode {
     /// Every code, in code order.
-    pub const ALL: [RejectCode; 13] = [
+    pub const ALL: [RejectCode; 14] = [
         RejectCode::QuantityRule,
         RejectCode::Tick,
         RejectCode::FreezeQty,
@@ -70,6 +73,7 @@ impl RejectCode {
         RejectCode::Halted,
         RejectCode::RateLimit,
         RejectCode::InstrumentUnknown,
+        RejectCode::ReverseNotAllowed,
     ];
 
     /// The code string used in events and results.
@@ -88,6 +92,7 @@ impl RejectCode {
             RejectCode::Halted => "halted",
             RejectCode::RateLimit => "rate_limit",
             RejectCode::InstrumentUnknown => "instrument_unknown",
+            RejectCode::ReverseNotAllowed => "reverse_not_allowed",
         }
     }
 }
@@ -238,7 +243,7 @@ mod tests {
     #[test]
     fn codes_are_the_ruled_vocabulary() {
         let codes: Vec<&str> = RejectCode::ALL.iter().map(|code| code.code()).collect();
-        assert_eq!(codes.len(), 13);
+        assert_eq!(codes.len(), 14);
         assert!(codes.contains(&"market_closed") && codes.contains(&"instrument_unknown"));
     }
 }

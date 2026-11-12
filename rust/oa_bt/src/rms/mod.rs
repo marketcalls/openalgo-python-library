@@ -10,12 +10,14 @@
 //! | Module | Responsibility |
 //! |---|---|
 //! | `rules` | `LegRules`, `Distance`, `TrailSpec`, `BreakevenSpec`, `StrategyRiskConfig`, scale-in limits |
-//! | `leg` | `LegState`: the levels in force on one leg and the calls each step makes |
+//! | `leg` | `LegState`: the levels in force on one leg (stop, targets, trail, breakeven) and the calls each step makes |
 //! | `trading_state` | `TradingState` (ACTIVE, REDUCING, HALTED) and its transition table |
 //! | `vocabulary` | `ExitReason`, `RiskEventName`, `RiskScope`, `RiskEvent` |
 //! | `error` | `RmsError` |
 //!
-//! Not built yet: the leg rules themselves (`leg`), the aggregate rules of step 6
+//! Built: the leg rules (stop, target and several targets, every trailing form,
+//! breakeven, `after_first_target`) on engine-held MIS legs. Not built yet: `max_hold`,
+//! leg rules held as GTT orders on CNC and NRML positions, the aggregate rules of step 6
 //! (combined stop and target, lock profit, daily loss limit, drawdown halt) and the
 //! pre-entry gates. The engine refuses a run that asks for them with a typed
 //! not-implemented error instead of ignoring them.
@@ -27,7 +29,7 @@ pub mod trading_state;
 pub mod vocabulary;
 
 pub use error::RmsError;
-pub use leg::{BarPrices, LegContext, LegState, LevelHit, LevelKind};
+pub use leg::{BarPrices, LegContext, LegState, LevelHit, LevelKind, RatchetOutcome, TickOutcome};
 pub use rules::{
     AfterFirstTarget, AfterRiskExit, BreakevenSpec, Distance, LegRules, RiskBasis, ScaleLimits,
     StrategyRiskConfig, TargetSpec, TrailSpec,

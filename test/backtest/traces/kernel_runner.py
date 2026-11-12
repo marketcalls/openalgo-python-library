@@ -13,6 +13,7 @@ cases the kernel runs. Only test code lives here; nothing of it ships in the pac
 from __future__ import annotations
 
 import datetime as dt
+import functools
 from typing import Any
 
 import pandas as pd
@@ -25,7 +26,11 @@ from openalgo.backtest.reference import Instrument
 from .timegrid import Case, format_ist, parse_ist
 
 # The calls the kernel runs today, with the arguments it accepts.
-SUPPORTED_ARGUMENTS = {"buy": {"qty", "lots"}, "sell": {"qty", "lots"}, "exit": set()}
+LEG_RULE_ARGUMENTS = {"stop", "target", "targets", "trail", "breakeven", "after_first_target"}
+OPENING_ARGUMENTS = {"qty", "lots", "size", "reverse"} | LEG_RULE_ARGUMENTS
+SUPPORTED_ARGUMENTS = {"buy": OPENING_ARGUMENTS, "sell": OPENING_ARGUMENTS, "exit": set()}
+# Leg rules on a carried product are held as GTT orders (04-execution 4.4).
+GTT_HELD_PRODUCTS = ("CNC", "NRML")
 FORWARDED_SETTINGS = (
     "base",
     "entry_from",
@@ -51,12 +56,27 @@ def unsupported_reason(case: Case, form: str) -> str | None:
         return "the daily loss limit"
     if len({instrument["exchange"] for instrument in case["instruments"]}) != 1:
         return "runs across exchanges"
+    carried = case["instruments"][0]["product"] in GTT_HELD_PRODUCTS
     for decision in case["strategy"]["decisions"]:
         call = decision["call"]
         allowed = SUPPORTED_ARGUMENTS.get(call["method"])
         if allowed is None or not set(call["arguments"]) <= allowed:
-            return f"{decision['python']} (leg rules, sizers or this order method)"
+            return f"{decision['python']} (sizers or this order method)"
+        if carried and set(call["arguments"]) & LEG_RULE_ARGUMENTS:
+            return f"{decision['python']} (leg rules held as GTT orders on CNC and NRML)"
     return None
+
+
+def _argument(value: Any) -> Any:
+    """A fixture's call argument as the Python value: {"bt": name, "args": [...]} is the
+    helper bt.<name>(*args) (a dotted name such as size.qty included), and a list is
+    targets= as (level, fraction) tuples."""
+    if isinstance(value, dict):
+        helper = functools.reduce(getattr, value["bt"].split("."), bt)
+        return helper(*(_argument(item) for item in value["args"]))
+    if isinstance(value, list):
+        return [tuple(_argument(part) for part in pair) for pair in value]
+    return value
 
 
 def _calendar(case: Case) -> Calendar:
@@ -127,7 +147,8 @@ def _scripted_strategy(case: Case, log: dict[str, Any]) -> type:
                 continue
             met = _condition_met(decision["if_position"], self.position)
             call = decision["call"]
-            order = getattr(self, call["method"])(**call["arguments"]) if met else None
+            arguments = {name: _argument(value) for name, value in call["arguments"].items()}
+            order = getattr(self, call["method"])(**arguments) if met else None
             log["decisions"][number] = (met, order)
 
     attributes["on_bar"] = on_bar

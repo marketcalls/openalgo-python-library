@@ -341,7 +341,8 @@ fn an_intraday_entry_after_entry_until_is_rejected() {
 }
 
 #[test]
-fn leg_rules_are_refused_as_not_built() {
+fn leg_rules_on_a_delivery_position_are_refused_as_not_built() {
+    // On CNC and NRML they are GTT orders (04-execution 4.4); MIS legs are engine-held.
     let rules = LegRules {
         stop: Some(Distance::Points(4.0)),
         ..LegRules::default()
@@ -352,7 +353,7 @@ fn leg_rules_are_refused_as_not_built() {
     };
     let mut kernel = engine(bars(45, &[]), Some(at(9, 59)));
     let mut script = Script::new(vec![(at(9, 15), Action::Order(Box::new(request)))]);
-    let error = run(&mut kernel, &mut script).expect_err("stops are not built yet");
+    let error = run(&mut kernel, &mut script).expect_err("GTT-held stops are not built yet");
     assert!(error.not_built_feature().is_some(), "{error}");
 }
 
