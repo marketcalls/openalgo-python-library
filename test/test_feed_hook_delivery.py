@@ -62,7 +62,41 @@ def test_listener_that_reconnects_keeps_the_order_with_auto_reconnect_on(server,
     server.last.drop()
     assert wait_for(lambda: len(seen) == 4)
     time.sleep(QUIET)
-    assert seen == [("connect", 1), ("disconnect", 1), ("connect", 2), ("reconnect", 2)]
+    # The listener's attempt (2) restores the feed, or the reconnect loop's (3)
+    # when that replaced the listener's attempt while it was still opening.
+    assert seen in (
+        [("connect", 1), ("disconnect", 1), ("connect", 2), ("reconnect", 2)],
+        [("connect", 1), ("disconnect", 1), ("connect", 3), ("reconnect", 3)],
+    )
+
+
+def test_listener_that_reconnects_keeps_the_order_when_the_reconnect_loop_replaces_its_attempt(
+    server, make_client
+):
+    client = make_client()
+    seen = []
+    calls = []
+
+    def reconnects_slowly(info):
+        calls.append(info)
+        if len(calls) == 1:
+            server.gate.clear()  # this attempt hangs until the reconnect loop has made its own
+            client.connect()
+
+    client.on_disconnect(reconnects_slowly)
+    client.on_connect(numbered(seen, "connect"))
+    client.on_reconnect(numbered(seen, "reconnect"))
+    client.on_disconnect(numbered(seen, "disconnect"))
+    assert client.connect() is True
+    # The close handler runs the listener, which waits for its attempt: drop elsewhere.
+    dropper = threading.Thread(target=server.last.drop)
+    dropper.start()
+    assert wait_for(lambda: len(server.sockets) == 3)  # the listener's attempt and the loop's
+    server.gate.set()
+    dropper.join(WAIT)
+    assert wait_for(lambda: len(seen) == 4)
+    time.sleep(QUIET)
+    assert seen == [("connect", 1), ("disconnect", 1), ("connect", 3), ("reconnect", 3)]
 
 
 def test_connect_listener_is_not_called_for_a_connection_an_earlier_listener_ended(

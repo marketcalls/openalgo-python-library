@@ -3,6 +3,7 @@
 import logging
 import os
 import sys
+import threading
 
 import pytest
 
@@ -14,6 +15,9 @@ from openalgo._feed_errors import ErrorReporter, FeedServerError, server_rejecti
 from openalgo._feed_hooks import HookRegistry  # noqa: E402
 
 WINDOW = 10.0
+WAIT = 5.0
+# The context of a failed order callback: its failures are never rate limited in the log.
+ORDER_FAILURE = {"kind": "callback", "callback": "order", "message": {}}
 
 
 class FakeTimers:
@@ -189,6 +193,46 @@ def test_error_hook_receives_every_tick_failure_without_rate_limit(hooks, report
     for _ in range(5):
         reporter.report(raised(ValueError("boom")), kind="callback", callback="ltp", message={})
     assert len(seen) == 5
+
+
+def test_error_is_logged_when_the_last_error_hook_is_removed_as_it_is_reported(
+    hooks, reporter, logged
+):
+    def listener(exc, context):
+        return None
+
+    hooks.add("error", listener)
+    post = hooks.post
+
+    def removed_just_before(*args, **kwargs):
+        hooks.remove(listener)  # what another thread may do at this moment
+        post(*args, **kwargs)
+
+    hooks.post = removed_just_before
+    reporter.report(raised(ValueError("boom")), **ORDER_FAILURE)
+    assert len(logged()) == 1
+
+
+def test_error_is_logged_when_the_last_error_hook_is_removed_before_its_turn(
+    hooks, reporter, logged
+):
+    in_listener = threading.Event()
+    release = threading.Event()
+
+    def slow(exc, context):
+        in_listener.set()
+        release.wait(WAIT)
+
+    hooks.add("error", slow)
+    error = raised(ValueError("first"))
+    deliverer = threading.Thread(target=reporter.report, args=(error,), kwargs=ORDER_FAILURE)
+    deliverer.start()
+    assert in_listener.wait(WAIT)
+    reporter.report(raised(ValueError("second")), **ORDER_FAILURE)  # queued behind the first
+    hooks.remove(slow)
+    release.set()
+    deliverer.join(WAIT)
+    assert [record.exc_info[1].args for record in logged()] == [("second",)]
 
 
 # -- the log, when no error hook is registered ----------------------------------
