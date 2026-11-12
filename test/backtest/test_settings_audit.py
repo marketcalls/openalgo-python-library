@@ -166,6 +166,13 @@ def test_after_risk_exit_other_than_the_default_is_not_built_yet():
         run(round_trip_strategy(qty=10), after_risk_exit="allow_reentry")
 
 
+def test_the_after_risk_exit_refusal_names_the_settings_whose_exits_it_governs():
+    # Those of combined_stop (exit reason overall_sl) and lock_profit.
+    rules = "the exits of the combined rules combined_stop and lock_profit"
+    with pytest.raises(NotImplementedError, match=rules):
+        run(round_trip_strategy(qty=10), after_risk_exit="allow_reentry")
+
+
 def test_pyramiding_on_an_on_bar_strategy_is_reported_as_unused():
     strategy = type("Pyramid", (round_trip_strategy(qty=10),), {"pyramiding": 2})
     warnings = run(strategy).warnings

@@ -53,12 +53,12 @@ def _caps_text(caps: dict[str, Any] | None) -> str | None:
     parts = []
     if caps["position"] is not None:
         kind, amount = caps["position"]
-        parts.append(f"position {amount:g} {_POSITION_UNITS[kind]}")
+        parts.append(f"position {amount:.15g} {_POSITION_UNITS[kind]}")
     if caps["leverage"] is not None:
-        parts.append(f"leverage {caps['leverage']:g}x")
+        parts.append(f"leverage {caps['leverage']:.15g}x")
     if caps["risk"] is not None:
         kind, amount = caps["risk"]
-        parts.append(f"risk {amount:g} {_RISK_UNITS[kind]}")
+        parts.append(f"risk {amount:.15g} {_RISK_UNITS[kind]}")
     return "; ".join(parts)
 
 

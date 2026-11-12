@@ -51,6 +51,18 @@ fn a_target_percent_is_of_the_sizing_equity() {
 }
 
 #[test]
+fn a_target_percent_of_a_negative_equity_is_flat_on_either_side() {
+    // A percent of an equity below zero is a percent of nothing, as for the sizers: a
+    // long percent must not turn into a short, nor a short percent into a long.
+    let underwater = SizingContext {
+        equity_rupees: -50_000.0,
+        ..context()
+    };
+    assert_eq!(target(TargetSize::PercentOfEquity(40.0), &underwater), 0.0);
+    assert_eq!(target(TargetSize::PercentOfEquity(-40.0), &underwater), 0.0);
+}
+
+#[test]
 fn a_fractional_target_value_is_not_rounded() {
     let fractional = SizingContext {
         fractional: true,

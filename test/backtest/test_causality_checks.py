@@ -97,3 +97,17 @@ def test_a_cut_too_short_for_the_indicator_is_not_counted():
     checks = check(needs_150_bars)
     # Cuts at 120, 140, 160 and 180: two are long enough.
     assert "truncation passed at 2 cuts" in checks.assumption()
+
+
+def test_an_indicator_no_cut_is_long_enough_for_is_reported_as_not_checked():
+    def needs_190_bars(start, stop):
+        if stop - start < 190:
+            raise ValueError("Period (190) cannot be greater than data length")
+        return causal_sum(start, stop)
+
+    # Cuts at 120, 140, 160 and 180: none is long enough, and no window of 16 to 128 bars.
+    assert check(needs_190_bars).assumption() == (
+        "window tolerance 1e-06 (relative); probe(SBIN.close): truncation not checked (no "
+        "cut leaves the bars it needs), no window settles within the tolerance: needs the "
+        "whole history"
+    )

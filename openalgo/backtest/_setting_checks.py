@@ -57,7 +57,8 @@ def refuse_unusable(strategy: type, args: dict[str, Any]) -> None:
     if args["after_risk_exit"] in AFTER_RISK_EXIT_NOT_BUILT:
         raise not_supported(
             f"after_risk_exit={args['after_risk_exit']!r}, which governs only the exits of "
-            "the combined rules (overall_sl, lock_profit)",
+            "the combined rules combined_stop and lock_profit (exit reasons overall_sl and "
+            "lock_profit)",
             "leave after_risk_exit at its default; the daily loss limit and the drawdown "
             "halt have their own rules",
         )

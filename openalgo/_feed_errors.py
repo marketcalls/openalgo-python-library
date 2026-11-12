@@ -103,12 +103,13 @@ class ErrorReporter:
         self._skipped: dict[tuple[Any, type], int] = {}
 
     def report(self, error: BaseException, **context: Any) -> None:
-        """Hand error and its context to the error hooks, or write it to the log."""
-        if self._hooks.has("error"):
-            self._hooks.post("error", error, context)
-            self._hooks.drain()
-        else:
-            self.log(error, context)
+        """
+        Hand error and its context to the error hooks, or write it to the log
+        when no error hook is registered, also when the last one is removed
+        while the error is on its way.
+        """
+        self._hooks.post("error", error, context, unheard=self.log)
+        self._hooks.drain()
 
     def log(self, error: BaseException, context: dict[str, Any]) -> None:
         """Write error to the log, subject to the rate limit for tick callbacks."""

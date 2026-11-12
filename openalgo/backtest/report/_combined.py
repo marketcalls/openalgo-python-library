@@ -5,6 +5,7 @@ from collections.abc import Mapping
 
 import pandas as pd
 
+from .._messages import counted
 from ..errors import ConfigError
 from . import _periods as periods
 from ._inputs import check_opening_wealth, series_columns
@@ -53,6 +54,12 @@ def return_correlation(strategies: Mapping[str, Performance | pd.Series]) -> pd.
         series = value.session_returns if isinstance(value, Performance) else value
         if not isinstance(series, pd.Series):
             raise ConfigError(f"{name!r} must be a Performance or a Series of session returns")
+        missing = int(series.isna().sum())
+        if missing:
+            raise ConfigError(
+                f"{name!r} has {counted(missing, 'missing session return')} (NaN): a missing "
+                "return is not a move of 0, so drop it or give its value"
+            )
         returns[name] = series
     # A session on which a strategy has no point left its equity unchanged: return 0.
     frame = pd.DataFrame(returns).sort_index().fillna(0.0)

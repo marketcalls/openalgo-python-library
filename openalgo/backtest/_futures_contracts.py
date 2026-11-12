@@ -19,8 +19,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import reference
+from ._instruments import given_instruments
 from ._messages import unsupported
-from .errors import ReferenceDataError
+from .errors import ConfigError, ReferenceDataError
 from .reference import Instrument, SymbolError, format_symbol, parse_symbol
 
 # Calendar days past the run's end for which the reference tables are asked for
@@ -42,21 +43,32 @@ class Contract:
     instrument: Instrument | None
 
 
-def _given(given: Any) -> list[Instrument]:
-    if isinstance(given, Instrument):
-        return [given]
-    if isinstance(given, dict):
-        return [value for value in given.values() if isinstance(value, Instrument)]
-    return []
-
-
-def _underlying_of(instrument: Instrument) -> str | None:
+def underlying_of(instrument: Instrument) -> str | None:
+    """The underlying of a contract: as given, else read from its OpenAlgo symbol; None
+    when it has none and the symbol is not a contract symbol."""
     if instrument.underlying:
         return instrument.underlying
     try:
         return parse_symbol(instrument.symbol, instrument.exchange).underlying
     except SymbolError:
         return None
+
+
+def check_given(given: Any, names: tuple[str, ...], exchange: str) -> None:
+    """Raise ConfigError for an `instrument=` no futures series of the run can use: one
+    `given_instruments` refuses, or an instrument that is not a future of one of the
+    underlyings `names` on `exchange`."""
+    for instrument in given_instruments(given).values():
+        if (
+            instrument.kind != "future"
+            or instrument.exchange != exchange
+            or underlying_of(instrument) not in names
+        ):
+            raise ConfigError(
+                f"instrument= gives {instrument.symbol} ({instrument.kind}, "
+                f"{instrument.exchange}), which is not a future of {', '.join(names)} on "
+                f"{exchange}: pass only the contracts of the underlyings the strategy trades"
+            )
 
 
 def _last_day(instrument: Instrument) -> dt.date:
@@ -89,8 +101,8 @@ def listed_contracts(name: str, plan: Any, given: Any, calendar: Any) -> list[Co
     underlying, else why they cannot."""
     mine = [
         i
-        for i in _given(given)
-        if i.kind == "future" and i.exchange == plan.exchange and _underlying_of(i) == name
+        for i in given_instruments(given).values()
+        if i.kind == "future" and i.exchange == plan.exchange and underlying_of(i) == name
     ]
     if mine:
         mine.sort(key=_last_day)
@@ -142,4 +154,11 @@ def record_expiries(
             )
 
 
-__all__ = ["LOOKAHEAD_DAYS", "Contract", "listed_contracts", "record_expiries"]
+__all__ = [
+    "LOOKAHEAD_DAYS",
+    "Contract",
+    "check_given",
+    "listed_contracts",
+    "record_expiries",
+    "underlying_of",
+]

@@ -24,7 +24,7 @@
 //! sessions and the information ratio also when the active return never varies.
 //! Treynor is NaN when beta is zero.
 
-use super::curve::check_length;
+use super::curve::{check_length, check_not_infinite};
 use super::error::MetricsError;
 use super::moments::varies;
 use super::ratios::{per_period_rate, sample_std};
@@ -59,15 +59,8 @@ pub fn benchmark_stats(
 ) -> Result<BenchmarkStats, MetricsError> {
     check_length(benchmark.len(), strategy.len(), "benchmark returns")?;
     let rf = per_period_rate(risk_free_annual, periods_per_year)?;
-    let infinite = |values: &[f64]| values.iter().position(|v| v.is_infinite());
-    if let Some(index) = infinite(strategy) {
-        let what = "strategy return";
-        return Err(MetricsError::NotFinite { what, index });
-    }
-    if let Some(index) = infinite(benchmark) {
-        let what = "benchmark return";
-        return Err(MetricsError::NotFinite { what, index });
-    }
+    check_not_infinite(strategy, "strategy return")?;
+    check_not_infinite(benchmark, "benchmark return")?;
     let pairs: Vec<(f64, f64)> = strategy
         .iter()
         .zip(benchmark)

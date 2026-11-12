@@ -9,7 +9,7 @@
 //! returns are known. The first `w - 1` sessions have no full window: NaN.
 
 use super::benchmark::benchmark_stats;
-use super::curve::{check_finite, check_length};
+use super::curve::{check_finite, check_length, check_not_infinite};
 use super::error::MetricsError;
 use super::ratios::return_stats;
 use super::sessions::session_stats;
@@ -33,8 +33,9 @@ pub struct RollingStats {
 /// `ratios`.
 ///
 /// Errors: `InvalidWindow` for a window below two sessions; `NotFinite` for a strategy
-/// return that is NaN or infinite; `LengthMismatch` for a benchmark of another length;
-/// those of `ratios::return_stats` and `benchmark::benchmark_stats`.
+/// return that is NaN or infinite, or an infinite benchmark return, at its session;
+/// `LengthMismatch` for a benchmark of another length; those of `ratios::return_stats`
+/// and `benchmark::benchmark_stats`.
 pub fn rolling_stats(
     returns: &[f64],
     benchmark: Option<&[f64]>,
@@ -48,6 +49,9 @@ pub fn rolling_stats(
     check_finite(returns, "session return")?;
     if let Some(bench) = benchmark {
         check_length(bench.len(), returns.len(), "benchmark returns")?;
+        // Checked over the whole series here, not window by window, so the error names
+        // the session's row and not its place in the window.
+        check_not_infinite(bench, "benchmark return")?;
     }
     let mut out = RollingStats {
         volatility: Vec::with_capacity(returns.len()),

@@ -202,6 +202,19 @@ def test_entry_arguments_outside_section_4_1_are_refused(argument):
         run_steps(Priced)
 
 
+def test_an_entry_in_another_product_than_the_run_is_refused():
+    # The conditions read the position in the run's product (MIS on 5-minute bars): a
+    # CNC entry would fill where they never look and enter again at every true bar.
+    class Delivery(bt.Strategy):
+        symbol, exchange, interval = "SBIN", "NSE", "5m"
+
+        def init(self):
+            self.entry_when(self.close > 502, qty=10, product="CNC")
+
+    with pytest.raises(ConfigError, match="entry_when order trades product CNC"):
+        run_steps(Delivery)
+
+
 def test_a_negative_pyramiding_is_refused():
     class Negative(Levels):
         pyramiding = -1
@@ -356,6 +369,33 @@ def test_from_signals_refuses_a_function_that_reads_later_bars():
 
     with pytest.raises(ConfigError, match="looks ahead"):
         run(bt.from_signals(tomorrow, "SBIN", "NSE", "5m", qty=10), DATA)
+
+
+def _reads_the_next_bar(frame):
+    return (frame.close.shift(-1) < frame.close).to_numpy()
+
+
+# On the whole run the function's last output reads the next bar; on fewer bars it is
+# left out, so no value of it can be compared bar by bar.
+FEWER_OUTPUTS = {
+    "an output becomes None": (
+        lambda frame: (crossings(frame)[0], _reads_the_next_bar(frame)),
+        lambda frame: (crossings(frame)[0], None),
+    ),
+    "four outputs become two": (
+        lambda frame: (*crossings(frame), _reads_the_next_bar(frame), crossings(frame)[0]),
+        crossings,
+    ),
+}
+
+
+@pytest.mark.parametrize(("whole", "fewer"), FEWER_OUTPUTS.values(), ids=FEWER_OUTPUTS.keys())
+def test_from_signals_refuses_outputs_that_change_when_later_bars_are_removed(whole, fewer):
+    def signals(frame):
+        return whole(frame) if len(frame) == len(DATA) else fewer(frame)
+
+    with pytest.raises(ConfigError, match="looks ahead: it returns"):
+        run(bt.from_signals(signals, "SBIN", "NSE", "5m", qty=10), DATA)
 
 
 def test_from_signals_needs_two_or_four_outputs():

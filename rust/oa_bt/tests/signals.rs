@@ -347,6 +347,39 @@ fn an_entry_order_on_the_wrong_side_is_refused() {
 }
 
 #[test]
+fn an_entry_order_in_another_product_than_the_strategy_is_refused() {
+    // The conditions read the position in the strategy's product (MIS). A CNC entry
+    // would fill into another position, so the strategy would stay flat and enter again
+    // at every bar its condition holds.
+    for name in ["entry_when", "short_when"] {
+        let mut signals = signals(
+            [
+                vec![false; BARS],
+                vec![false; BARS],
+                vec![false; BARS],
+                vec![false; BARS],
+            ],
+            0,
+            LegRules::default(),
+        );
+        let template = if name == "entry_when" {
+            signals.entry.as_mut()
+        } else {
+            signals.short.as_mut()
+        };
+        if let Some(signal) = template {
+            signal.order.product = Product::Cnc;
+        }
+        let error = run_signals(&mut engine_for(flat_bars()), &signals);
+        assert!(
+            matches!(error, Err(KernelError::InvalidConfig { ref reason, .. })
+                if reason.contains(&format!("{name} order trades product CNC"))),
+            "{name}: {error:?}"
+        );
+    }
+}
+
+#[test]
 fn arrays_that_miss_a_strategy_bar_stop_the_run_at_that_bar() {
     let mut signals = signals(
         [

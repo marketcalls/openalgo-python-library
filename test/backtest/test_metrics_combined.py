@@ -109,6 +109,14 @@ def test_a_session_without_a_point_counts_as_no_move():
     assert matrix.loc["a", "b"] == pytest.approx(cov / math.sqrt(var))
 
 
+def test_a_missing_return_is_refused_rather_than_read_as_no_move():
+    # The first value of a pct_change() is NaN: a return that is not known, not zero.
+    a = daily([0.01, -0.02, 0.03])
+    b = daily([math.nan, -0.02, 0.06])
+    with pytest.raises(ConfigError, match="'b' has 1 missing session return"):
+        metrics.return_correlation({"a": a, "b": b})
+
+
 def test_correlation_accepts_performances():
     p = metrics.analyse(NFO, exchanges="NFO")
     q = metrics.analyse(MCX, exchanges="MCX")

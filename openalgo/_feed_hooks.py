@@ -37,7 +37,8 @@ class HookRegistry:
         """on_failure(event, exception, arguments) is told when a listener raises."""
         self._lock = threading.Lock()
         self._listeners: dict[str, tuple[Callable, ...]] = {event: () for event in events}
-        self._queue: deque[tuple[str, tuple, Callable[[], bool] | None]] = deque()
+        # (event, arguments, still_current, unheard): see post().
+        self._queue: deque[tuple[str, tuple, Callable[[], bool] | None, Callable | None]] = deque()
         self._delivering = False
         self._on_failure = on_failure
 
@@ -59,21 +60,30 @@ class HookRegistry:
                 self._listeners[event] = kept
         return removed
 
-    def has(self, event: str) -> bool:
-        """True when at least one listener is registered for event."""
-        return bool(self._listeners[event])
-
-    def post(self, event: str, *args: Any, still_current: Callable[[], bool] | None = None) -> None:
+    def post(
+        self,
+        event: str,
+        *args: Any,
+        still_current: Callable[[], bool] | None = None,
+        unheard: Callable[..., None] | None = None,
+    ) -> None:
         """
         Queue event with the arguments its listeners receive.
 
         still_current, when given, is asked before each listener: once it
         answers False the listeners that have not been called yet are skipped,
         because what the event announces is already over.
+
+        unheard, when given, receives the arguments instead when no listener
+        is registered for event: at once when there is none now, or on the
+        delivering thread when the last one was removed before the event's turn.
         """
         with self._lock:
-            if self._listeners[event]:
-                self._queue.append((event, args, still_current))
+            heard = bool(self._listeners[event])
+            if heard:
+                self._queue.append((event, args, still_current, unheard))
+        if not heard and unheard is not None:
+            unheard(*args)
 
     def drain(self) -> None:
         """Deliver the queued events, unless another thread is already doing so."""
@@ -87,9 +97,12 @@ class HookRegistry:
                     if not self._queue:
                         self._delivering = False
                         return
-                    event, args, still_current = self._queue.popleft()
+                    event, args, still_current, unheard = self._queue.popleft()
                     listeners = self._listeners[event]
-                self._deliver(event, args, still_current, listeners)
+                if listeners or unheard is None:
+                    self._deliver(event, args, still_current, listeners)
+                else:
+                    unheard(*args)
         except BaseException:
             # A listener raised something like KeyboardInterrupt: let it
             # through, but do not leave the queue blocked for good.

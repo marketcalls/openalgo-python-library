@@ -18,6 +18,7 @@ at the close of 09-27 (filled on 09-30). With `roll=1` it rolls at the 09-25 ope
 spread of the two opens is 25,300.00 - 25,200.00 = 100.00.
 """
 
+import dataclasses
 import datetime as dt
 import warnings
 
@@ -233,6 +234,64 @@ def test_a_roll_set_by_an_expiry_after_the_check_date_warns(monkeypatch):
     assert "is being used for 2026-11-24" in found[0]
 
 
+class _GivenFutures(bt.Strategy):
+    underlying, exchange, interval = "NIFTY", "NFO", "D"
+
+
+def _given_plan(end: dt.date) -> type:
+    return type("Plan", (), {"exchange": "NFO", "start": dt.date(2024, 9, 20), "end": end})
+
+
+def _resolve_given(given, end: dt.date = dt.date(2024, 9, 30)):
+    """Resolve `_GivenFutures` with `instrument=given` and roll=1 from 2024-09-20."""
+    args = {"instrument": given, "roll": 1}
+    return _futures.resolve_futures(_GivenFutures, _given_plan(end), args, CALENDAR)
+
+
+def test_a_run_past_the_roll_session_of_the_last_given_contract_needs_the_next_one():
+    # October rolls (roll=1) at 2024-10-30, the session before its last trading day
+    # 10-31. A run to 10-30 trades November from that session, which is not given.
+    with pytest.raises(ReferenceDataError, match="no contract is known after NIFTY31OCT24FUT"):
+        _resolve_given(CONTRACTS, end=dt.date(2024, 10, 30))
+
+
+def test_a_run_that_ends_before_the_last_given_contracts_roll_session_holds_it():
+    series = _resolve_given(CONTRACTS, end=dt.date(2024, 10, 29)).series[0]
+    assert series.hand_over == (dt.date(2024, 9, 25), None)
+
+
+@pytest.mark.parametrize(
+    "given",
+    [[CONTRACTS[SEPTEMBER], CONTRACTS[OCTOBER]], {SEPTEMBER: "lot 25"}],
+    ids=["a list", "a dict of text"],
+)
+def test_futures_instrument_takes_instruments_only(given):
+    with pytest.raises(ConfigError, match="instrument= takes an Instrument or a dict of them"):
+        _resolve_given(given)
+
+
+def test_a_futures_instrument_keyed_by_another_symbol_is_refused():
+    swapped = {SEPTEMBER: CONTRACTS[OCTOBER], OCTOBER: CONTRACTS[SEPTEMBER]}
+    with pytest.raises(ConfigError, match=f"the key '{SEPTEMBER}' holds the Instrument of"):
+        _resolve_given(swapped)
+
+
+@pytest.mark.parametrize(
+    "stray",
+    [
+        dataclasses.replace(
+            CONTRACTS[SEPTEMBER], symbol="BANKNIFTY26SEP24FUT", underlying="BANKNIFTY"
+        ),
+        dataclasses.replace(CONTRACTS[SEPTEMBER], symbol="NIFTY26SEP24FUT-BFO", exchange="BFO"),
+        Instrument.cash_equity("NIFTY", "NSE"),
+    ],
+    ids=["another underlying", "another exchange", "not a future"],
+)
+def test_a_given_instrument_no_futures_series_of_the_run_can_use_is_refused(stray):
+    with pytest.raises(ConfigError, match=f"instrument= gives {stray.symbol} "):
+        _resolve_given({**CONTRACTS, stray.symbol: stray})
+
+
 def test_next_month_with_roll_none_is_refused():
     with pytest.raises(ConfigError, match="roll=N"):
         _resolved("next_month", None)
@@ -392,6 +451,49 @@ def test_positions_are_addressed_by_the_underlying():
     )
     assert seen[2] == (24, ["NIFTY"], SEPTEMBER)
     assert seen[3] == (25, ["NIFTY"], OCTOBER)
+
+
+def _run_class(strategy: type):
+    return bt.backtest(
+        strategy,
+        capital=1_000_000,
+        data={symbol: _frame(rows) for symbol, rows in BARS.items()},
+        instrument=CONTRACTS,
+        start=dt.date(2024, 9, 20),
+        end=dt.date(2024, 9, 30),
+        costs=None,
+        slippage=0,
+    )
+
+
+def test_a_truth_test_of_the_series_in_init_is_refused():
+    class Branches(bt.Strategy):
+        underlying, exchange, interval = "NIFTY", "NFO", "D"
+
+        def init(self):
+            if self.close > self.open:
+                self.state["rising"] = True
+
+        def on_bar(self, bar):
+            pass
+
+    rising = r"\(NIFTY\.close > NIFTY\.open\) was tested for truth in init"
+    with pytest.raises(ConfigError, match=rising):
+        _run_class(Branches)
+
+
+def test_on_bar_reads_a_condition_of_the_series():
+    seen = []
+
+    class Reads(bt.Strategy):
+        underlying, exchange, interval = "NIFTY", "NFO", "D"
+
+        def on_bar(self, bar):
+            seen.append(bool(self.close > 0))
+
+    _run_class(Reads)
+    # Seven sessions from 09-20 to 09-30, each close above zero.
+    assert seen == [True] * 7
 
 
 # ---------------------------------------------------------------- held to expiry

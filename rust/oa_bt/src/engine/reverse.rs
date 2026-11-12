@@ -4,14 +4,15 @@
 //! with its own costs and events (12-position-sizing 1); the order is `PartiallyFilled`
 //! between them.
 //!
-//! The opening part passes the fill-bar checks of any entry (the entry window for MIS,
-//! then margin) after the close has filled, as a separate entry order would. When it
-//! fails one, the close stands and the rest of the order is rejected with that code.
+//! The opening part passes the fill-bar checks of any entry (no delivery short for CNC,
+//! the entry window for MIS, then margin) after the close has filled, as a separate
+//! entry order would. When it fails one, the close stands and the rest of the order is
+//! rejected with that code.
 //! Without `reverse=True` the order is rejected whole with `reverse_not_allowed`, at
 //! submission (`submit`) and again at the fill bar (`fills::at_fill`).
 
 use crate::exec::{FillFlags, Order, OrderAction, RejectCode};
-use crate::model::Product;
+use crate::model::{Product, Side};
 use crate::portfolio::PositionKey;
 use crate::rms::{ExitReason, LegRules};
 
@@ -78,7 +79,7 @@ impl Engine {
     }
 
     /// The margin the opening part of a reversal blocks, or the fill-bar check that
-    /// refuses it: the entry window for MIS, then margin.
+    /// refuses it: no delivery short for CNC, the entry window for MIS, then margin.
     fn reversal_margin(
         &mut self,
         slice: &SliceInfo,
@@ -87,6 +88,11 @@ impl Engine {
         open_rupees: f64,
     ) -> Result<Result<f64, RejectCode>, KernelError> {
         let request = &order.request;
+        // Delivery cannot be shorted (04-execution 2): the opening part of a CNC sale is
+        // a delivery short, refused as `at_fill` refuses a CNC sale that opens one.
+        if request.product == Product::Cnc && request.side == Side::Sell {
+            return Ok(Err(RejectCode::ProductRule));
+        }
         if request.product == Product::Mis {
             if let Err(code) = self.session_times(slice.day)?.entry.check(slice.open) {
                 return Ok(Err(code));

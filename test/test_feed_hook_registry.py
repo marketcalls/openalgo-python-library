@@ -52,11 +52,6 @@ def test_add_rejects_something_that_is_not_callable(hooks):
         hooks.add("up", None)
 
 
-def test_has_tells_whether_an_event_has_listeners(hooks):
-    hooks.add("up", print)
-    assert (hooks.has("up"), hooks.has("down")) == (True, False)
-
-
 def test_listeners_are_called_in_registration_order(hooks):
     calls = []
     hooks.add("up", lambda payload: calls.append("first"))
@@ -232,6 +227,28 @@ def test_delivery_continues_after_a_listener_raised_a_base_exception(hooks):
         emit(hooks, "up", {})
     emit(hooks, "down", {"seq": 2})
     assert calls == [{"seq": 2}]
+
+
+def test_event_without_a_listener_goes_to_its_unheard_fallback_when_posted(hooks):
+    unheard = []
+    hooks.post("up", {"seq": 1}, unheard=unheard.append)
+    assert unheard == [{"seq": 1}]
+
+
+def test_event_whose_last_listener_is_removed_before_its_turn_goes_to_its_unheard_fallback(hooks):
+    unheard = []
+    hooks.add("up", print)
+    hooks.post("up", {"seq": 1}, unheard=unheard.append)
+    hooks.remove(print)
+    hooks.drain()
+    assert unheard == [{"seq": 1}]
+
+
+def test_event_that_a_listener_receives_does_not_reach_its_unheard_fallback(hooks):
+    unheard = []
+    hooks.add("up", lambda payload: None)
+    emit(hooks, "up", {"seq": 1}, unheard=unheard.append)
+    assert unheard == []
 
 
 def test_removed_listener_is_not_called(hooks):

@@ -211,7 +211,8 @@ def return_correlation(strategies: Mapping[str, Performance | pd.Series]) -> pd.
     indexed by IST date). Returns are aligned on the union of the session dates, and a
     strategy with no point on a date counts a return of 0 there (its equity did not
     move). A strategy whose returns never vary has NaN in its row and column. Raises
-    ConfigError for fewer than two strategies.
+    ConfigError for fewer than two strategies and for a missing (NaN) return given in
+    a Series, which is not known to be 0.
     """
     return _combined.return_correlation(strategies)
 

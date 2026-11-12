@@ -151,7 +151,8 @@ def _parse_seconds(value: Any) -> int | None:
     if not isinstance(value, str):
         return None
     parts = value.split(":")
-    if len(parts) not in (2, 3) or not all(part.isdigit() for part in parts):
+    # isdecimal, not isdigit: a superscript digit is a digit int() cannot read.
+    if len(parts) not in (2, 3) or not all(part.isdecimal() for part in parts):
         return None
     hours, minutes, seconds = (*map(int, parts), 0)[:3]
     if minutes > 59 or seconds > 59:

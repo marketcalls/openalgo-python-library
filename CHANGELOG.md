@@ -195,14 +195,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every switch with its spread. Trades are split at a roll (exit reason `roll`).
   Condition strategies on an underlying and other intervals of a futures series raise
   `NotImplementedError`.
-- **More futures margin in the dated table.** NSE stock futures (218 underlyings), BSE
-  BANKEX and the MCX commodities (30), each one day's observation of a broker's public
-  margin page and unverified, so a run using one warns. SENSEX and SENSEX50 futures have
-  no row yet (no public page read gave their margin) and still stop a run. A run whose
-  instrument has no margin row now stops before any data is loaded, with the engine's
-  message, instead of at its first entry.
-- **`margin=` in `bt.backtest` and `bt.optimize` (preview).** The futures margin of a
-  backtest can be the user's own: one value for every futures contract
+- **A missing margin rule stops a run before any data is loaded,** with the engine's
+  message, instead of at the first entry.
+- **Futures margin in backtests, and `margin=` in `bt.backtest` and `bt.optimize`
+  (preview).** Every futures contract, on any exchange, underlying and date, blocks 20
+  percent of its contract value (5x) by default, since real margins differ by underlying
+  and change every day; a run on the default does not warn, and the Assumptions block
+  states it. The futures margin of a backtest can be the user's own: one value for every
+  futures contract
   (`margin=bt.pct(15)`), or a dict by underlying symbol (`margin={"NIFTY": bt.pct(12),
   "CRUDEOIL": bt.rupees(450_000)}`) whose missing names keep the default. `bt.pct(x)` is
   x percent of the contract value (at most 100); `bt.rupees(x)` is x rupees per lot of
@@ -409,16 +409,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Bar`, the argument of `on_bar`, is now an immutable named tuple that also carries
   `ts_open` and `ts_close` (UTC nanoseconds), and makes `time` and `close_time` when
   they are read. `benchmark/backtest_speed.py --check` checks the speed targets.
-- **Backtest preview: futures margin is 20 percent of contract value (5x) by default.**
-  The per-underlying futures rows of the dated margin table (NSE index and stock futures,
-  NIFTYFPI, BSE BANKEX and the MCX commodities, each one day's observation of a broker's
-  page) are removed, since real margins differ by underlying and change every day. Every
-  futures contract, on any exchange and underlying and on any date, now blocks 20 percent
-  of its contract value unless `margin=` says otherwise, so SENSEX, SENSEX50 and every
-  other underlying have a margin and no longer stop a run. A run on the default does not
-  warn: the row's status is `default` and the Assumptions block states it. Futures runs
-  block a different margin wherever the old row was not 20 percent, and with it free
-  cash can allow different entries.
 - `closeposition()` and `cancelallorder()` are documented as what they are:
   account-wide. The server squares off every open position, or cancels every open
   order, of the account that owns the API key; the `strategy` argument is a label
@@ -589,6 +579,77 @@ across a NaN bar.
 - `result.orders` marks an order without a `reject_code`, `tag` or `sizer` with NaN in
   that column in every run; before, it was None when no order of the run had one and
   NaN when another did (an exit after an entry with the default size).
+- A CNC sell with `reverse=True` that meets a long reduced after it was placed (by
+  another sale filling first) closes the long and rejects the rest with `product_rule`;
+  before, the rest opened a delivery short.
+- A condition entry (`entry_when` or `short_when`) whose `product=` differs from the
+  run's product raises ConfigError before the run. Before, it filled into a position the
+  conditions never read, so the strategy stayed flat and entered again at every bar its
+  condition held, whatever `pyramiding` said.
+- `self.target(percent=...)` while the sizing equity is below zero asks for a flat
+  position; before, the negative equity flipped the side, so a long target became a
+  short one.
+- The report's rolling statistics name the session of an infinite benchmark return in
+  their error; before, they named the return's place in the first window that held it.
+- `costs.custom()` refuses a percent rule whose cap is NaN or negative infinity, as
+  `costs.percent()` does; before, such a cap silently meant no cap.
+- A user cost schedule that gives one segment twice under codes differing only in case
+  or spaces (`"nse_eq_delivery"` and `"NSE_EQ_DELIVERY"`) raises CostError; before, one
+  row silently replaced the other. A rate row's `notes`, `calculator_tax_base` or
+  `calculator_tax_unit` given as None takes its default; before, it was stored as the
+  text "None".
+- `costs.trade_costs` and `CostModel.trades` refuse None, booleans and text among the
+  prices and quantities, as a single trade does; before, a float cast took None as NaN,
+  True as 1 and "1100" as 1100.
+- `Result.rerun(params={...})` runs with the parameters given; before, it kept those of
+  the original run.
+- A truth test (`if`, `and`, `or`, `not`) of a futures strategy's series in `init`
+  raises the ConfigError that says to combine conditions with `&`, `|` and `~`, as it
+  does for a symbol's series; before, it read False.
+- `instrument=` is checked before the run: each dict key must be its Instrument's
+  symbol, an instrument of a symbol the strategy does not trade is refused, and a
+  futures strategy refuses anything but futures of its underlyings on its exchange (a
+  list, a value that is not an Instrument). Before, such entries were dropped and the
+  run used the generic or reference-table terms instead.
+- A futures run whose last given contract reaches its roll session (`roll=N`) inside
+  the run says that the next contract is needed; before, it held the last contract
+  past its roll.
+- `bt.from_signals` refuses a function whose outputs change in number, or become None,
+  once later bars are removed: they could not be checked for look-ahead. The docstring
+  now says the check samples three cut points.
+- An indicator that no cut of the truncation check is long enough for is reported as
+  "truncation not checked" in the Assumptions block, not "passed at 0 cuts".
+- `margin=` by underlying applies to a future given without `underlying=` whose symbol
+  names it (NIFTY24NOV26FUT is a NIFTY future); before, it kept the default margin and a
+  warning called NIFTY untraded.
+- The refusal of `after_risk_exit="allow_reentry"` names the settings it concerns,
+  `combined_stop` and `lock_profit`, and the `size_caps` line of the Assumptions block
+  shows every digit (1000000, not 1e+06).
+- `metrics.return_correlation` refuses a Series with a missing (NaN) return instead of
+  counting it as a return of 0.
+- With an installed extension older than a metric, the metrics raise the ImportError
+  that says to reinstall openalgo, not an AttributeError.
+- `bt.optimize` refuses, before running anything, an `objective` metric that is not a
+  number (a flag, a time or text, such as `"ruined"`).
+- A base of seconds (`base="30s"`) no longer stops an MIS run with ZeroDivisionError,
+  and the Assumptions block calls its bars 30-second bars (it said 0-hour).
+- A session time or an interval written with a digit that is not decimal (a superscript
+  two, for example) raises ConfigError instead of ValueError.
+- `benchmark/backtest_speed.py --rows` refuses an unknown row group, so `--check` cannot
+  pass without measuring anything.
+- When a reconnected socket opened, went live and dropped again before the reconnect
+  thread looked at it, the feed stayed down for the 5-second connect timeout before the
+  next attempt. A connection attempt now ends as soon as its socket is refused or
+  closes, so the next attempt follows its backoff, and `connect()` to a server that
+  refuses returns False at once instead of after the timeout.
+- A depth callback that edited a level of its update changed what `get_depth()`
+  returns. Data callbacks now receive their own copy of the update, nested levels
+  included.
+- An error reported while the last `on_error` hook was being removed reached neither a
+  hook nor the `openalgo.feed` logger. It is now logged.
+- An order callback received the very dict kept in the order history, and
+  `get_orders()` returned those dicts, so editing one changed what later
+  `get_orders()` calls returned. Both now hand out copies.
 
 ## [2.0.5] - 2026-09-11
 

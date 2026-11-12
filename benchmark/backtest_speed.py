@@ -329,6 +329,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rows", default=",".join(groups), help="row groups to run")
     args = parser.parse_args(argv)
     chosen = set(args.rows.split(","))
+    # A misspelt group would run no row, and --check would then pass on nothing.
+    unknown = sorted(chosen - set(groups))
+    if unknown:
+        parser.error(
+            f"unknown row group {', '.join(map(repr, unknown))}: choose from {', '.join(groups)}"
+        )
     # The runs are dated before the first cost schedule (backfilled) on a calendar with no
     # holiday list; the warnings saying so are expected here and would flood the table.
     warnings.simplefilter("ignore", UserWarning)

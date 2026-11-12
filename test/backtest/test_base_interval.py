@@ -121,6 +121,11 @@ def test_an_intraday_product_states_where_the_square_off_fills():
         ("15m", "15:10", "15-minute bar opens; a 15:10 square-off fills at the 15:15 open"),
         ("1h", "15:10", "1-hour bar opens; a 15:10 square-off fills at the 15:15 open"),
         ("5m", None, "5-minute bar opens"),
+        ("30s", "15:10", "30-second bar opens; a 15:10 square-off fills at the 15:10 open"),
+        # 21,300 seconds from 09:15 to 15:10 are 473 1/3 bars of 45 s: the 474th opens
+        # 21,330 s after 09:15, at 15:10:30.
+        ("45s", "15:10", "45-second bar opens; a 15:10 square-off fills at the 15:10:30 open"),
+        ("90s", None, "90-second bar opens"),
     ],
 )
 def test_the_meaning_of_an_intraday_base(base, square_off, expected_tail):

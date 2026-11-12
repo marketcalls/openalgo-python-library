@@ -39,6 +39,12 @@ def test_a_rerun_can_change_a_parameter():
     assert_same(rerun, backtest(params={"fast": 5}))
 
 
+def test_a_rerun_with_params_replaces_the_parameters_of_the_original_run():
+    # The original slow=15 is not carried over: slow is back at its default of 10.
+    rerun = backtest(params={"slow": 15}).rerun(params={"fast": 5})
+    assert rerun.manifest["strategy"]["parameters"] == {"fast": 5, "slow": 10}
+
+
 def test_a_rerun_can_change_a_run_argument():
     rerun = backtest().rerun(quantity_mode="venue")
     assert rerun.assumptions["quantity_mode"] == "venue"

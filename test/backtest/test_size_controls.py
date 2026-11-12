@@ -148,3 +148,9 @@ def test_the_assumptions_state_reinvest_and_the_caps():
     assumptions = run(first_entry(controls, **HALF)).assumptions
     assert assumptions["reinvest"] is False
     assert assumptions["size_caps"] == "position 10 percent of equity; leverage 1x"
+
+
+def test_the_assumptions_state_every_digit_of_a_large_cap():
+    caps = bt.size.caps(position=bt.rupees(1_000_000), risk=bt.rupees(1_234_567))
+    assumptions = run(first_entry({"size_caps": caps}, **HALF)).assumptions
+    assert assumptions["size_caps"] == "position 1000000 rupees; risk 1234567 rupees"
