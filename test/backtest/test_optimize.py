@@ -158,6 +158,15 @@ def test_unusable_settings_are_refused(settings, message):
         sweep(**settings)
 
 
+@pytest.mark.parametrize(
+    ("objective", "unit"),
+    [("ruined", "flag"), ("ruin_time", "timestamp"), ("annualisation_coverage", "text")],
+)
+def test_a_metric_that_is_not_a_number_is_refused_as_the_objective(objective, unit):
+    with pytest.raises(ConfigError, match=rf"objective '{objective}' is not a number \({unit}\)"):
+        sweep(objective=objective)
+
+
 def test_a_strategy_without_ranges_has_nothing_to_sweep():
     class Fixed(bt.Strategy):
         symbol, exchange, interval = "SBIN", "NSE", "5m"

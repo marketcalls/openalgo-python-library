@@ -575,6 +575,42 @@ across a NaN bar.
 - `costs.trade_costs` and `CostModel.trades` refuse None, booleans and text among the
   prices and quantities, as a single trade does; before, a float cast took None as NaN,
   True as 1 and "1100" as 1100.
+- `Result.rerun(params={...})` runs with the parameters given; before, it kept those of
+  the original run.
+- A truth test (`if`, `and`, `or`, `not`) of a futures strategy's series in `init`
+  raises the ConfigError that says to combine conditions with `&`, `|` and `~`, as it
+  does for a symbol's series; before, it read False.
+- `instrument=` is checked before the run: each dict key must be its Instrument's
+  symbol, an instrument of a symbol the strategy does not trade is refused, and a
+  futures strategy refuses anything but futures of its underlyings on its exchange (a
+  list, a value that is not an Instrument). Before, such entries were dropped and the
+  run used the generic or reference-table terms instead.
+- A futures run whose last given contract reaches its roll session (`roll=N`) inside
+  the run says that the next contract is needed; before, it held the last contract
+  past its roll.
+- `bt.from_signals` refuses a function whose outputs change in number, or become None,
+  once later bars are removed: they could not be checked for look-ahead. The docstring
+  now says the check samples three cut points.
+- An indicator that no cut of the truncation check is long enough for is reported as
+  "truncation not checked" in the Assumptions block, not "passed at 0 cuts".
+- `margin=` by underlying applies to a future given without `underlying=` whose symbol
+  names it (NIFTY24NOV26FUT is a NIFTY future); before, it kept the default margin and a
+  warning called NIFTY untraded.
+- The refusal of `after_risk_exit="allow_reentry"` names the settings it concerns,
+  `combined_stop` and `lock_profit`, and the `size_caps` line of the Assumptions block
+  shows every digit (1000000, not 1e+06).
+- `metrics.return_correlation` refuses a Series with a missing (NaN) return instead of
+  counting it as a return of 0.
+- With an installed extension older than a metric, the metrics raise the ImportError
+  that says to reinstall openalgo, not an AttributeError.
+- `bt.optimize` refuses, before running anything, an `objective` metric that is not a
+  number (a flag, a time or text, such as `"ruined"`).
+- A base of seconds (`base="30s"`) no longer stops an MIS run with ZeroDivisionError,
+  and the Assumptions block calls its bars 30-second bars (it said 0-hour).
+- A session time written with a digit that is not decimal (a superscript) raises
+  ConfigError instead of ValueError.
+- `benchmark/backtest_speed.py --rows` refuses an unknown row group, so `--check` cannot
+  pass without measuring anything.
 
 ## [2.0.5] - 2026-09-11
 

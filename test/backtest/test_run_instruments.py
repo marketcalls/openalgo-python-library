@@ -51,6 +51,20 @@ def test_instrument_takes_instruments_only():
         run(Quarterly, instrument={"SBIN": "lot 1"})
 
 
+INFY = Instrument("INFY", "NSE", "equity", lot_size=1, tick_size=0.05)
+
+
+def test_an_instrument_under_the_key_of_another_symbol_is_refused():
+    with pytest.raises(ConfigError, match="the key 'SBIN' holds the Instrument of 'INFY'"):
+        run(Quarterly, instrument={"SBIN": INFY})
+
+
+@pytest.mark.parametrize("given", [INFY, {"INFY": INFY}], ids=["an Instrument", "a dict"])
+def test_an_instrument_of_a_symbol_the_strategy_does_not_trade_is_refused(given):
+    with pytest.raises(ConfigError, match=r"instrument= gives INFY, which this strategy does not"):
+        run(Quarterly, instrument=given)
+
+
 def plan(symbol, day):
     return SimpleNamespace(symbols=(symbol,), exchange="NFO", start=day)
 

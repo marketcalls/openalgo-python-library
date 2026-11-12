@@ -37,7 +37,7 @@ from typing import Any
 from . import reference
 from ._calendar_convert import from_day, to_day
 from ._engine import call
-from ._futures_contracts import Contract, listed_contracts, record_expiries
+from ._futures_contracts import Contract, check_given, listed_contracts, record_expiries
 from ._messages import counted, not_supported
 from ._native import native
 from .errors import ConfigError, ReferenceDataError
@@ -204,8 +204,8 @@ def _select(
 
     The rank moves past the nearest contract still traded (the anchor) on its move day.
     A contract expiring before the run starts is never the anchor. When no contract
-    follows the one held, the series ends with it if the anchor expires after the run
-    (the run ends before the hand-over could need the next contract)."""
+    follows the one held, the series ends with it if the anchor's move day is after the
+    run (the run ends before the hand-over could need the next contract)."""
 
     def move(j: int) -> dt.date:
         return _move_day(contracts[j].last_day, roll, plan.exchange, calendar)
@@ -227,9 +227,6 @@ def _select(
         held = anchor + rank
         if held >= len(contracts):
             raise missing()
-        if held + 1 >= len(contracts) and contracts[anchor].last_day > plan.end:
-            chosen.append((contracts[held], None))
-            return chosen
         day = move(anchor)
         if day > plan.end:
             chosen.append((contracts[held], None))
@@ -314,11 +311,13 @@ def resolve_futures(
     """The futures plan of a run, or None when the strategy names no underlying.
 
     Raises ConfigError for an unusable `expiry` or `roll` (and for `next_month` with
-    `roll=None`), ReferenceDataError when the contracts cannot be listed, and the
-    reference tables' errors for a contract they do not cover."""
+    `roll=None`) and for an `instrument=` no series can use, ReferenceDataError when the
+    contracts cannot be listed, and the reference tables' errors for a contract they do
+    not cover."""
     names = underlying_names(strategy, plan.exchange)
     if not names:
         return None
+    check_given(args["instrument"], names, plan.exchange)
     rank = _rank(strategy)
     roll = check_roll(args["roll"])
     if roll is None and RANKS[rank] > 0:

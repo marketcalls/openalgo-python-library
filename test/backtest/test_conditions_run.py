@@ -371,6 +371,33 @@ def test_from_signals_refuses_a_function_that_reads_later_bars():
         run(bt.from_signals(tomorrow, "SBIN", "NSE", "5m", qty=10), DATA)
 
 
+def _reads_the_next_bar(frame):
+    return (frame.close.shift(-1) < frame.close).to_numpy()
+
+
+# On the whole run the function's last output reads the next bar; on fewer bars it is
+# left out, so no value of it can be compared bar by bar.
+FEWER_OUTPUTS = {
+    "an output becomes None": (
+        lambda frame: (crossings(frame)[0], _reads_the_next_bar(frame)),
+        lambda frame: (crossings(frame)[0], None),
+    ),
+    "four outputs become two": (
+        lambda frame: (*crossings(frame), _reads_the_next_bar(frame), crossings(frame)[0]),
+        crossings,
+    ),
+}
+
+
+@pytest.mark.parametrize(("whole", "fewer"), FEWER_OUTPUTS.values(), ids=FEWER_OUTPUTS.keys())
+def test_from_signals_refuses_outputs_that_change_when_later_bars_are_removed(whole, fewer):
+    def signals(frame):
+        return whole(frame) if len(frame) == len(DATA) else fewer(frame)
+
+    with pytest.raises(ConfigError, match="looks ahead: it returns"):
+        run(bt.from_signals(signals, "SBIN", "NSE", "5m", qty=10), DATA)
+
+
 def test_from_signals_needs_two_or_four_outputs():
     with pytest.raises(ConfigError, match=r"\(entries, exits\)"):
         run(bt.from_signals(lambda frame: frame.close > 0, "SBIN", "NSE", "5m"), DATA)

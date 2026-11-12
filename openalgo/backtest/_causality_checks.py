@@ -62,11 +62,17 @@ class CheckOutcome:
     note: str
 
     def describe(self) -> str:
-        """One line for the Assumptions block."""
+        """One line for the Assumptions block. No cut checked is stated as such, never
+        as a pass."""
         settled = (
             f"warm-up {counted(self.warm_up, 'bar')}" if self.warm_up is not None else self.note
         )
-        return f"{self.label}: truncation passed at {counted(self.cuts, 'cut')}, {settled}"
+        truncation = (
+            f"truncation passed at {counted(self.cuts, 'cut')}"
+            if self.cuts
+            else "truncation not checked (no cut leaves the bars it needs)"
+        )
+        return f"{self.label}: {truncation}, {settled}"
 
 
 def _agree(window: np.ndarray, whole: np.ndarray, tolerance: float, floor: float) -> bool:

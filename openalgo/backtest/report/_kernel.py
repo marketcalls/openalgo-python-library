@@ -23,8 +23,11 @@ def kernel(name: str) -> Callable[..., Any]:
 def call(name: str, *args: Any) -> Any:
     """Call `metrics_<name>`; input the kernel refuses becomes a ConfigError whose
     message names the row and says what to change."""
+    # Looked up first: an extension older than the function may lack the error type too,
+    # and reading it in the except clause would then replace the reinstall advice.
+    function = kernel(name)
     try:
-        return kernel(name)(*args)
+        return function(*args)
     except native.NativeMetricsError as exc:
         raise ConfigError(str(exc)) from None
 

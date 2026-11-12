@@ -83,6 +83,8 @@ class RunContext:
         if futures is not None:
             plan, switches = futures
             self.futures = SeriesContext(plan, switches, self.stores, self.symbols, run.interval)
+            for store in self.futures.stores:
+                self._marked(store)
 
     @property
     def names(self) -> tuple[str, ...]:
@@ -100,7 +102,8 @@ class RunContext:
         """End the declaration phase: `init` has returned and the driver runs. From here
         a view answers a truth test (in timers, callbacks, `on_bar` and `on_stop`)."""
         self.declaring = False
-        for store in (*self.stores.values(), *self.timeframes.values()):
+        spliced = () if self.futures is None else self.futures.stores
+        for store in (*self.stores.values(), *self.timeframes.values(), *spliced):
             self._marked(store)
 
     # ----- the clock and the bars ------------------------------------------------

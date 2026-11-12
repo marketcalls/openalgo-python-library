@@ -186,6 +186,12 @@ def test_session_times_must_be_ordered_and_end_by_midnight(cal, open_, close):
         cal.add_session("MCX", MONDAY, open_, close)
 
 
+def test_a_time_with_a_superscript_digit_is_a_config_error(cal):
+    # Superscript two (code point 0xB2) is a digit to str.isdigit, not a decimal int() reads.
+    with pytest.raises(ConfigError, match="as the session open time"):
+        cal.add_session("MCX", MONDAY, "09:1" + chr(0xB2), "23:30")
+
+
 def test_a_session_may_close_at_midnight(cal):
     cal.add_session("MCX", MONDAY, "18:00", "24:00")
     next_day = MONDAY + dt.timedelta(days=1)
