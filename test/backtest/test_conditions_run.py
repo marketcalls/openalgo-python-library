@@ -202,6 +202,19 @@ def test_entry_arguments_outside_section_4_1_are_refused(argument):
         run_steps(Priced)
 
 
+def test_an_entry_in_another_product_than_the_run_is_refused():
+    # The conditions read the position in the run's product (MIS on 5-minute bars): a
+    # CNC entry would fill where they never look and enter again at every true bar.
+    class Delivery(bt.Strategy):
+        symbol, exchange, interval = "SBIN", "NSE", "5m"
+
+        def init(self):
+            self.entry_when(self.close > 502, qty=10, product="CNC")
+
+    with pytest.raises(ConfigError, match="entry_when order trades product CNC"):
+        run_steps(Delivery)
+
+
 def test_a_negative_pyramiding_is_refused():
     class Negative(Levels):
         pyramiding = -1

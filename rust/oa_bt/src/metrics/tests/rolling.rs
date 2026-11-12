@@ -45,6 +45,20 @@ fn a_window_longer_than_the_run_leaves_every_value_undefined() {
 }
 
 #[test]
+fn an_infinite_benchmark_return_is_reported_at_its_own_session() {
+    // The infinite value is session 3 of the run; with windows of two sessions it is
+    // the second session of the window that first holds it.
+    let benchmark = [0.0, 0.01, f64::NAN, f64::INFINITY];
+    assert_eq!(
+        rolling_stats(&RETURNS, Some(&benchmark), 2, 4.0, 0.0),
+        Err(MetricsError::NotFinite {
+            what: "benchmark return",
+            index: 3
+        })
+    );
+}
+
+#[test]
 fn a_window_below_two_sessions_or_a_mismatched_benchmark_is_refused() {
     assert_eq!(
         rolling_stats(&RETURNS, None, 1, 4.0, 0.0),
