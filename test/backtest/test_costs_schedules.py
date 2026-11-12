@@ -72,7 +72,8 @@ EARLIER_VERSIONS = [
     ("IN-2021-03-01", dt.date(2021, 3, 1), dt.date(2021, 3, 31)),
     ("IN-2021-04-01", dt.date(2021, 4, 1), dt.date(2021, 4, 30)),
     ("IN-2021-05-01", dt.date(2021, 5, 1), dt.date(2022, 5, 1)),
-    ("IN-2022-05-02", dt.date(2022, 5, 2), dt.date(2022, 11, 30)),
+    ("IN-2022-05-02", dt.date(2022, 5, 2), dt.date(2022, 7, 17)),
+    ("IN-2022-07-18", dt.date(2022, 7, 18), dt.date(2022, 11, 30)),
     ("IN-2022-12-01", dt.date(2022, 12, 1), dt.date(2023, 3, 31)),
     ("IN-2023-04-01", dt.date(2023, 4, 1), dt.date(2023, 10, 31)),
     ("IN-2023-11-01", dt.date(2023, 11, 1), dt.date(2024, 5, 12)),
@@ -101,6 +102,36 @@ def test_a_trade_in_2022_is_priced_by_the_version_in_force_then():
         (345.01, 10.0, 10_000.0, 1_500.0)
     )
     assert (cost.schedules, cost.verified) == (("IN-2021-05-01",), True)
+
+
+@pytest.mark.parametrize("day, gst", [("2022-07-15", 62.1018), ("2022-07-18", 63.9018)])
+def test_gst_falls_on_the_sebi_fee_from_2022_07_18(day, gst):
+    # NSE delivery buy of Rs 1 crore (no brokerage): 18 percent of the exchange line
+    # 345.01, and from 2022-07-18 of the SEBI fee of Rs 10 too (SEBI circular
+    # SEBI/HO/GSD/TAD/CIR/P/2022/0097; the fee was exempt before).
+    cost = costs.trade_cost("BUY", 10_000_000, 1, day, segment="NSE_EQ_DELIVERY")
+    assert cost.gst == pytest.approx(gst)
+
+
+def test_each_built_in_version_says_whether_gst_falls_on_the_sebi_fee():
+    flags = {s["id"]: s["gst_on_sebi_fee"] for s in costs.schedules()}
+    assert [vid for vid, taxed in flags.items() if not taxed] == [
+        vid for vid, first, _ in EARLIER_VERSIONS if first < dt.date(2022, 7, 18)
+    ]
+
+
+@pytest.mark.parametrize("taxed, gst", [(True, 4.158), (False, 4.14)])
+def test_a_user_version_charges_gst_on_the_sebi_fee_unless_it_says_not(taxed, gst):
+    # An intraday sell of Rs 1,00,000: brokerage Rs 20, exchange 3.00, SEBI fee 0.10.
+    schedule = user_schedule("user-2019", "2019-04-01", "2020-06-30", gst_on_sebi_fee=taxed)
+    model = costs.CostModel(schedules=[schedule])
+    cost = quietly(model.trade, "SELL", 1000, 100, "2019-06-03", "NSE_EQ_INTRADAY")
+    assert cost.gst == pytest.approx(gst)
+
+
+def test_a_user_version_charges_gst_on_the_sebi_fee_by_default():
+    model = costs.CostModel(schedules=[user_schedule("user-2019", "2019-04-01", "2020-06-30")])
+    assert model.schedules()[0]["gst_on_sebi_fee"] is True
 
 
 def test_an_unverified_row_of_an_earlier_version_warns_with_its_reason():
@@ -366,6 +397,11 @@ MALFORMED = [
     ("stamp duty in percent units", broken(lambda s: row(s).update(stamp_buy_rate=0.015)), UNITS),
     ("the SEBI fee in percent units", broken(lambda s: row(s).update(sebi_rate=0.0001)), UNITS),
     ("GST in percent units", broken(lambda s: s.update(gst_rate=18)), UNITS),
+    (
+        "a GST base that is not True or False",
+        broken(lambda s: s.update(gst_on_sebi_fee="no")),
+        "gst_on_sebi_fee must be True or False",
+    ),
     (
         "a rate that is not a number",
         broken(lambda s: row(s).update(stt_sell_rate="0.1%")),

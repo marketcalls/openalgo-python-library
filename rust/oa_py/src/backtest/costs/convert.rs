@@ -34,12 +34,13 @@ pub(super) type RatesTuple = (f64, f64, f64, f64, f64, f64, f64);
 pub(super) type RowTuple = (String, RatesTuple, Option<i32>, String, String, String);
 
 /// One schedule version: id, valid_from and valid_to (IST days; valid_to None while
-/// in force), gst_rate, gst_verified_through, source, notes, rate rows.
+/// in force), gst_rate, gst_on_sebi_fee, gst_verified_through, source, notes, rate rows.
 pub(super) type ScheduleTuple = (
     String,
     i32,
     Option<i32>,
     f64,
+    bool,
     Option<i32>,
     String,
     String,
@@ -161,8 +162,17 @@ fn row_from_tuple(id: &str, row: RowTuple) -> PyResult<(Segment, SegmentRow)> {
 /// A schedule version from its tuple. Codes are checked here; the kernel validates
 /// the values and dates when the version joins a schedule book.
 pub(super) fn schedule_from_tuple(schedule: ScheduleTuple) -> PyResult<CostSchedule> {
-    let (id, valid_from, valid_to, gst_rate, gst_verified_through, source, notes, row_tuples) =
-        schedule;
+    let (
+        id,
+        valid_from,
+        valid_to,
+        gst_rate,
+        gst_on_sebi_fee,
+        gst_verified_through,
+        source,
+        notes,
+        row_tuples,
+    ) = schedule;
     let mut rows = std::array::from_fn(|_| None);
     for row_tuple in row_tuples {
         let (segment, row) = row_from_tuple(&id, row_tuple)?;
@@ -173,6 +183,7 @@ pub(super) fn schedule_from_tuple(schedule: ScheduleTuple) -> PyResult<CostSched
         valid_from,
         valid_to,
         gst_rate,
+        gst_on_sebi_fee,
         gst_verified_through,
         source,
         notes,
@@ -211,6 +222,7 @@ pub(super) fn schedule_to_tuple(schedule: &CostSchedule) -> ScheduleTuple {
         schedule.valid_from,
         schedule.valid_to,
         schedule.gst_rate,
+        schedule.gst_on_sebi_fee,
         schedule.gst_verified_through,
         schedule.source.clone(),
         schedule.notes.clone(),

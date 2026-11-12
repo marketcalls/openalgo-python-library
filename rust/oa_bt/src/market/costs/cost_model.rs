@@ -134,16 +134,14 @@ impl CostModel {
     ) -> CostBreakdown {
         let rule = self.brokerage.rule(segment.brokerage_class());
         let rates = &priced.row.rates;
-        let gst_rate = priced.schedule.gst_rate;
+        let gst = priced.schedule.gst_rule();
         match (self.rounding, side) {
-            (Rounding::ContractNote, _) => {
-                accrue_fill(rates, gst_rate, rule, side, price * quantity)
-            }
+            (Rounding::ContractNote, _) => accrue_fill(rates, gst, rule, side, price * quantity),
             (Rounding::Calculator, Side::Buy) => {
-                calculator_cost(rates, gst_rate, rule, price, 0.0, quantity)
+                calculator_cost(rates, gst, rule, price, 0.0, quantity)
             }
             (Rounding::Calculator, Side::Sell) => {
-                calculator_cost(rates, gst_rate, rule, 0.0, price, quantity)
+                calculator_cost(rates, gst, rule, 0.0, price, quantity)
             }
         }
     }
@@ -246,10 +244,9 @@ impl CostModel {
         check_amount("turnover", (buy_price + sell_price) * quantity)?;
         let priced = self.priced(segment, day)?;
         let rule = self.brokerage.rule(segment.brokerage_class());
-        let gst_rate = priced.schedule.gst_rate;
         Ok(calculator_cost(
             &priced.row.rates,
-            gst_rate,
+            priced.schedule.gst_rule(),
             rule,
             buy_price,
             sell_price,

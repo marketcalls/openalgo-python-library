@@ -132,8 +132,9 @@ class CostModel:
 
         Each is a dict with id, valid_from, valid_to and verified_through (dates;
         valid_to is None for the version in force, verified_through None when never
-        verified), gst_rate, source, notes and rates: a dict of segment code to a row
-        of rates (fractions of traded value) with the row's own verified_through.
+        verified), gst_rate, gst_on_sebi_fee, source, notes and rates: a dict of segment
+        code to a row of rates (fractions of traded value) with the row's own
+        verified_through.
         """
         return copy.deepcopy(list(self._views))
 

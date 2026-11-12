@@ -11,6 +11,7 @@
 //! | `verified_through` | Last trade date the row was checked for; empty when never verified |
 //! | `stt_buy_rate` to `stt_exercise_rate` | The seven rates of a segment, as fractions |
 //! | `gst_rate` | GST as a fraction; `*` row only |
+//! | `gst_on_sebi_fee` | `yes` or `no`: whether GST falls on the SEBI fee too; `*` row only |
 //! | `calculator_tax_base` | `sides` or `turnover`: what the calculator taxes |
 //! | `calculator_tax_unit` | `rupee` or `paise`: what the calculator rounds the tax to |
 //! | `source` | Where the version's figures came from; `*` row only |
@@ -34,9 +35,9 @@ const DATA: &str = include_str!("schedules.csv");
 
 const HEADER: &str = "schedule_id,valid_from,valid_to,segment,verified_through,stt_buy_rate,\
                       stt_sell_rate,exchange_txn_rate,ipft_rate,sebi_rate,stamp_buy_rate,\
-                      stt_exercise_rate,gst_rate,calculator_tax_base,calculator_tax_unit,source,\
-                      notes";
-const COLUMNS: usize = 17;
+                      stt_exercise_rate,gst_rate,gst_on_sebi_fee,calculator_tax_base,\
+                      calculator_tax_unit,source,notes";
+const COLUMNS: usize = 18;
 /// The `segment` value of a version's own row.
 const VERSION_ROW: &str = "*";
 
@@ -48,10 +49,11 @@ const SEGMENT: usize = 3;
 const VERIFIED_THROUGH: usize = 4;
 const FIRST_RATE: usize = 5;
 const GST_RATE: usize = 12;
-const TAX_BASE: usize = 13;
-const TAX_UNIT: usize = 14;
-const SOURCE: usize = 15;
-const NOTES: usize = 16;
+const GST_ON_SEBI_FEE: usize = 13;
+const TAX_BASE: usize = 14;
+const TAX_UNIT: usize = 15;
+const SOURCE: usize = 16;
+const NOTES: usize = 17;
 
 type Reason = String;
 
@@ -125,6 +127,15 @@ fn parse_rate(name: &str, text: &str) -> Result<f64, Reason> {
     }
 }
 
+/// The `gst_on_sebi_fee` of a version row: "yes" or "no".
+fn parse_yes_no(name: &str, text: &str) -> Result<bool, Reason> {
+    match text {
+        "yes" => Ok(true),
+        "no" => Ok(false),
+        _ => Err(format!("{name} {text:?} must be yes or no")),
+    }
+}
+
 /// Require the columns that belong to the other kind of row to be empty.
 fn require_empty(fields: &[String], columns: &[usize], row_kind: &str) -> Result<(), Reason> {
     match columns.iter().find(|&&column| !fields[column].is_empty()) {
@@ -145,6 +156,7 @@ fn version_row(fields: &[String]) -> Result<CostSchedule, Reason> {
         valid_from: parse_date(&fields[VALID_FROM])?,
         valid_to: optional_date(&fields[VALID_TO])?,
         gst_rate: parse_rate("gst_rate", &fields[GST_RATE])?,
+        gst_on_sebi_fee: parse_yes_no("gst_on_sebi_fee", &fields[GST_ON_SEBI_FEE])?,
         gst_verified_through: optional_date(&fields[VERIFIED_THROUGH])?,
         source: fields[SOURCE].clone(),
         notes: fields[NOTES].clone(),
@@ -154,7 +166,8 @@ fn version_row(fields: &[String]) -> Result<CostSchedule, Reason> {
 
 /// The segment and rates described by a segment row.
 fn segment_row(fields: &[String]) -> Result<(Segment, SegmentRow), Reason> {
-    require_empty(fields, &[VALID_FROM, VALID_TO, GST_RATE, SOURCE], "segment")?;
+    let version_only = [VALID_FROM, VALID_TO, GST_RATE, GST_ON_SEBI_FEE, SOURCE];
+    require_empty(fields, &version_only, "segment")?;
     let segment = Segment::from_code(&fields[SEGMENT]).map_err(|error| error.to_string())?;
     let rate = |offset: usize, name: &str| parse_rate(name, &fields[FIRST_RATE + offset]);
     let base = &fields[TAX_BASE];
