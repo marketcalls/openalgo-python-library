@@ -12,7 +12,8 @@ Four runs, each a different path through the engine:
     gtt_positional     a positional strategy on daily bars that buys a dip with a GTT
                        order and holds its stop and target as GTTs (CNC)
 
-Every run charges the default costs and slippage. The bars are made from integers only
+Every run charges the default costs and slippage (futures_roll at the cost schedules it
+was recorded with, see FUTURES_ROLL_SCHEDULES). The bars are made from integers only
 (a 64-bit linear congruential generator walking in ticks), so they are the same bits on
 every platform; prices are ticks divided by 20 (tick 0.05).
 
@@ -159,6 +160,13 @@ SEPTEMBER_2024 = "NIFTY26SEP24FUT"
 OCTOBER_2024 = "NIFTY31OCT24FUT"
 # The October contract trades about 100 points (2,000 ticks) above September.
 OCTOBER_PREMIUM_TICKS = 2_000
+# The run is pinned to the cost schedules it was first recorded with: the built-in
+# versions from 2024-10-01 on, with September 2024 backfilled at that version's rates.
+# Earlier built-in versions (added later) would reprice September; a pin follows the
+# engine, not the rate data.
+FUTURES_ROLL_SCHEDULES = [
+    schedule for schedule in bt.costs.schedules() if schedule["valid_from"] >= dt.date(2024, 10, 1)
+]
 
 
 def nifty_contract(symbol: str, last_trading_day: dt.date) -> Instrument:
@@ -200,8 +208,8 @@ def futures_roll() -> bt.Result:
     prices = ["open", "high", "low", "close"]
     october[prices] += OCTOBER_PREMIUM_TICKS / TICKS_PER_RUPEE
     with warnings.catch_warnings():
-        # Expected, and listed in the result's warnings: the built-in schedules start
-        # on 2024-10-01, so September is charged at the first schedule's rates.
+        # Expected, and listed in the result's warnings: September is charged at the
+        # rates of the 2024-10-01 schedule (backfill), see FUTURES_ROLL_SCHEDULES.
         warnings.simplefilter("ignore", bt.costs.UnverifiedScheduleWarning)
         return bt.backtest(
             NiftyTrend,
@@ -213,7 +221,9 @@ def futures_roll() -> bt.Result:
             start=dt.date(2024, 9, 2),
             end=dt.date(2024, 10, 25),
             capital=CAPITAL,
-            costs=bt.costs.CostModel(backfill=True),
+            costs=bt.costs.CostModel(
+                schedules=FUTURES_ROLL_SCHEDULES, include_builtin=False, backfill=True
+            ),
         )
 
 

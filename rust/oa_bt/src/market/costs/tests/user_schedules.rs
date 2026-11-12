@@ -43,10 +43,11 @@ fn user_version(id: &str, from: Day, to: Option<Day>, rate: f64) -> CostSchedule
     }
 }
 
-/// The built-in versions plus a user version for 2023-04-01 to 2024-09-30.
+/// The built-in versions plus a user version for 2019-04-01 to 2020-06-30, the
+/// day before the first built-in version.
 fn book_with_an_earlier_period() -> ScheduleBook {
-    let from = days_from_civil(2023, 4, 1);
-    let to = days_from_civil(2024, 9, 30);
+    let from = days_from_civil(2019, 4, 1);
+    let to = days_from_civil(2020, 6, 30);
     ScheduleBook::builtin_with(vec![user_version("user-2023", from, Some(to), 0.001)]).unwrap()
 }
 
@@ -63,7 +64,7 @@ fn version_id(book: &ScheduleBook, day: Day) -> Result<String, CostError> {
 fn a_user_version_for_an_earlier_period_is_used_on_its_dates() {
     // Rs 1,00,000 sold at a 0.1 percent tax and exchange rate: Rs 100 each.
     let model = zero_brokerage_model(book_with_an_earlier_period());
-    let day = days_from_civil(2024, 1, 15);
+    let day = days_from_civil(2020, 1, 15);
     let cost = model
         .fill_cost(Segment::NseEqIntraday, Side::Sell, 1_000.0, 100.0, day)
         .unwrap();
@@ -75,7 +76,7 @@ fn a_user_version_for_an_earlier_period_is_used_on_its_dates() {
 fn a_user_version_is_unverified_unless_it_says_otherwise() {
     let model = zero_brokerage_model(book_with_an_earlier_period());
     let status = model
-        .status(Segment::NseEqIntraday, days_from_civil(2024, 1, 15))
+        .status(Segment::NseEqIntraday, days_from_civil(2020, 1, 15))
         .unwrap();
     assert_eq!((status.schedule, status.trust), (0, Trust::Unverified));
 }
@@ -97,7 +98,7 @@ fn builtin_versions_still_answer_for_their_own_dates() {
 #[test]
 fn a_segment_missing_from_a_version_is_an_error_on_its_dates() {
     let model = zero_brokerage_model(book_with_an_earlier_period());
-    let day = days_from_civil(2024, 1, 15);
+    let day = days_from_civil(2020, 1, 15);
     assert_eq!(
         model.fill_cost(Segment::NfoFut, Side::Sell, 1_000.0, 100.0, day),
         Err(CostError::SegmentNotInSchedule {
@@ -110,7 +111,7 @@ fn a_segment_missing_from_a_version_is_an_error_on_its_dates() {
 #[test]
 fn a_date_before_the_earliest_user_version_is_still_an_error() {
     let book = book_with_an_earlier_period();
-    let day = days_from_civil(2023, 3, 31);
+    let day = days_from_civil(2019, 3, 31);
     assert!(matches!(
         book.lookup(day),
         Err(CostError::NoScheduleForDay { .. })
@@ -124,14 +125,16 @@ fn a_later_user_version_takes_over_from_the_open_builtin_version() {
         ScheduleBook::builtin_with(vec![user_version("user-2027", from, None, 0.002)]).unwrap();
     assert_eq!(version_id(&book, from - 1).unwrap(), "IN-2026-04-01");
     assert_eq!(version_id(&book, from).unwrap(), "user-2027");
-    assert_eq!(book.versions()[1].valid_to, Some(from - 1));
+    let (index, _) = book.lookup(from - 1).unwrap();
+    assert_eq!(book.versions()[index].valid_to, Some(from - 1));
 }
 
 #[test]
 fn merging_user_versions_leaves_the_builtin_data_untouched() {
     let from = days_from_civil(2027, 4, 1);
     ScheduleBook::builtin_with(vec![user_version("user-2027", from, None, 0.002)]).unwrap();
-    assert_eq!(builtin_schedules().unwrap()[1].valid_to, None);
+    let last = builtin_schedules().unwrap().last().map(|v| v.valid_to);
+    assert_eq!(last, Some(None));
 }
 
 #[test]
