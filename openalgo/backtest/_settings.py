@@ -10,8 +10,9 @@ charges; the per-segment slippage. Every value used is listed in the Assumptions
 
 Risk settings take the units of 14-strategy-api: `max_daily_loss` in rupees (a number or
 `bt.rupees`), `drawdown_halt` in percent (`bt.pct(x)` or a number of percent),
-`cooldown`, `max_hold` and `max_positions` as whole numbers (base bars, positions), and
-the scale-in limits as `_scale_in` reads them. The combined rules of a run are refused
+`cooldown`, `max_hold` and `max_positions` as whole numbers (base bars, positions), the
+scale-in limits as `_scale_in` reads them, and `reinvest` and `size_caps` as
+`_size_controls` reads them. The combined rules of a run are refused
 until Phase 3 builds them; no other setting is accepted and then ignored
 (`_setting_checks`).
 """
@@ -34,6 +35,8 @@ from ._scale_in import describe as describe_scale_limits
 from ._scale_in import scale_limits
 from ._series import IST
 from ._setting_checks import class_leverage, refuse_unusable, unused_settings
+from ._size_controls import describe as describe_size_controls
+from ._size_controls import size_controls
 from .data.own import Frame
 from .errors import ConfigError
 from .units import Distance
@@ -259,6 +262,7 @@ def _risk(strategy: type, args: dict[str, Any], overrides: dict[str, Any]) -> di
         "round_levels": bool(args["round_levels"]),
         "strict_config": bool(args["strict_config"]),
         **scale_limits(strategy),
+        **size_controls(strategy),
     }
 
 
@@ -346,6 +350,7 @@ def _risk_assumptions(plan: RunPlan) -> dict[str, Any]:
         "max_hold": risk["max_hold_bars"],
         "leverage": plan.leverage,
         **describe_scale_limits(risk),
+        **describe_size_controls(risk),
     }
     if risk["max_daily_loss"] is not None or risk["drawdown_halt"] is not None:
         block["risk_exit_fill"] = (

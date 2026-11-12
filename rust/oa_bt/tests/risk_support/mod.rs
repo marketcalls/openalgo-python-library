@@ -17,6 +17,7 @@ use oa_bt::market::margin::MarginModel;
 use oa_bt::market::slippage::SlippageSpec;
 use oa_bt::model::{days_from_civil, ts_from_ist, Day, Exchange, InstrumentKind, Product, Side};
 use oa_bt::rms::{StrategyRiskConfig, TradingState};
+use oa_bt::sizing::SizingControls;
 
 pub const MINUTES_15: i64 = 15 * 60_000_000_000;
 /// 09:15 IST, the NSE session open, in minutes since midnight.
@@ -125,6 +126,7 @@ pub fn config(
         margin: MarginModel,
         market: MarketFacts::default(),
         risk,
+        sizing: SizingControls::default(),
         intraday: IntradayOverrides::default(),
         deliver_events: false,
     }

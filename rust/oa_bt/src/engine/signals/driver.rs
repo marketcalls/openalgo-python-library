@@ -10,7 +10,7 @@ use super::super::kernel::Engine;
 use super::super::pause::{Driver, Pause};
 use super::super::submit::Submission;
 use super::decide::{decide, Decision, Holding};
-use super::{SignalArrays, SkippedEntry};
+use super::{EntrySignal, SignalArrays, SkippedEntry};
 
 /// Drives one condition strategy through `pause::run`.
 pub(super) struct SignalDriver<'a> {
@@ -78,10 +78,15 @@ impl Driver for SignalDriver<'_> {
         };
         let index = self.signals.bar_index(bar.ts_open)?;
         let holding = self.holding(engine);
+        let entry_at = |signal: Option<&EntrySignal>| {
+            signal
+                .map(|signal| signal.order_at(index, bar.ts_open))
+                .transpose()
+        };
         let order = match decide(holding, self.signals.at(index), self.signals.pyramiding) {
             Decision::Hold => None,
-            Decision::EnterLong => self.signals.entry.as_ref().map(|e| e.order.clone()),
-            Decision::EnterShort => self.signals.short.as_ref().map(|e| e.order.clone()),
+            Decision::EnterLong => entry_at(self.signals.entry.as_ref())?,
+            Decision::EnterShort => entry_at(self.signals.short.as_ref())?,
             Decision::Exit => Some(self.exit_order(holding)),
         };
         let Some(order) = order else {

@@ -131,7 +131,7 @@ fn level<'py>(py: Python<'py>, row: &LevelRow) -> PyResult<Bound<'py, PyDict>> {
     Ok(dict)
 }
 
-const TRADE_KEYS: [&str; 17] = [
+const TRADE_KEYS: [&str; 18] = [
     "trade_id",
     "instrument",
     "product",
@@ -149,6 +149,7 @@ const TRADE_KEYS: [&str; 17] = [
     "net_pnl_rupees",
     "exit_reason",
     "fills",
+    "initial_risk_rupees",
 ];
 
 fn trade<'py>(py: Python<'py>, t: &TradeRecord) -> PyResult<Bound<'py, PyDict>> {
@@ -175,6 +176,7 @@ fn trade<'py>(py: Python<'py>, t: &TradeRecord) -> PyResult<Bound<'py, PyDict>> 
     dict.set_item("net_pnl_rupees", t.net_pnl_rupees)?;
     dict.set_item("exit_reason", t.exit_reason.code())?;
     dict.set_item("fills", t.fills)?;
+    dict.set_item("initial_risk_rupees", t.initial_risk_rupees)?;
     Ok(dict)
 }
 

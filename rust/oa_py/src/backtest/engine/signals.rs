@@ -6,10 +6,13 @@
 //! The spec dict has the keys `instrument` (registration index), `product` (CNC, MIS
 //! or NRML), `bar_opens` (int64 UTC nanoseconds), `entry`, `exit`, `short`, `cover`
 //! (bool arrays, or None when not declared), `entry_order` and `short_order` (request
-//! dicts as `request.rs` reads them, or None) and `pyramiding`.
+//! dicts as `request.rs` reads them, or None), `entry_atr` and `short_atr` (the ATRs an
+//! order names, as (slot, target index or None, period, float64 values per bar); absent
+//! for none) and `pyramiding`. A slot is "stop", "target", "targets" (with its index),
+//! "trail_trigger", "trail_step", "breakeven_trigger", "breakeven_offset" or "sizer".
 
 use numpy::PyReadonlyArray1;
-use oa_bt::engine::{EntrySignal, SignalArrays};
+use oa_bt::engine::{AtrInput, AtrSlot, EntrySignal, SignalArrays};
 use oa_bt::exec::InstrumentId;
 use oa_bt::model::Product;
 use pyo3::prelude::*;
@@ -18,6 +21,45 @@ use pyo3::types::PyDict;
 use super::request::order_request;
 use super::setup::{field, optional, unknown};
 use super::NativeEngineInputError;
+
+/// One ATR as it crosses: (slot, target index, period, values per bar).
+type AtrTuple<'py> = (String, Option<usize>, u32, PyReadonlyArray1<'py, f64>);
+
+fn atr_slot(name: &str, index: Option<usize>) -> PyResult<AtrSlot> {
+    Ok(match (name, index) {
+        ("stop", None) => AtrSlot::Stop,
+        ("target", None) => AtrSlot::Target,
+        ("targets", Some(index)) => AtrSlot::Targets(index),
+        ("trail_trigger", None) => AtrSlot::TrailTrigger,
+        ("trail_step", None) => AtrSlot::TrailStep,
+        ("breakeven_trigger", None) => AtrSlot::BreakevenTrigger,
+        ("breakeven_offset", None) => AtrSlot::BreakevenOffset,
+        ("sizer", None) => AtrSlot::Sizer,
+        _ => {
+            return Err(unknown(
+                "ATR slot",
+                name,
+                "stop, target, targets (with an index), trail_trigger, trail_step, \
+                 breakeven_trigger, breakeven_offset or sizer",
+            ))
+        }
+    })
+}
+
+/// The ATRs of an entry order, or none when the key is absent.
+fn atr_inputs(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Vec<AtrInput>> {
+    let given: Vec<AtrTuple<'_>> = optional(dict, key)?.unwrap_or_default();
+    given
+        .into_iter()
+        .map(|(slot, index, period, values)| {
+            Ok(AtrInput {
+                slot: atr_slot(&slot, index)?,
+                period,
+                rupees: values.as_array().to_vec(),
+            })
+        })
+        .collect()
+}
 
 /// A bool array of the spec, or None when the condition was not declared.
 fn flags(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<Vec<bool>>> {
@@ -36,6 +78,7 @@ fn entry_signal(
         (Some(when), Some(order)) => Ok(Some(EntrySignal {
             when,
             order: order_request(&order)?,
+            atr: atr_inputs(dict, &format!("{key}_atr"))?,
         })),
         (None, None) => Ok(None),
         _ => Err(NativeEngineInputError::new_err(format!(

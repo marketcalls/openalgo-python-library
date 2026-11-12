@@ -213,6 +213,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   price, after the cooldown and maximum positions; a broken limit rejects the add
   with code `scale_in_limit`. An entry from flat is never held to them. A class-level
   `leverage` is the default of every order; `leverage=` on an order wins.
+- **Target positions, sizing functions, reinvest and size caps in `bt.backtest`
+  (preview).** `self.target(qty=, lots=, value=, percent=)` trades to a target position
+  (negative is short): units and lots as given, value and percent of equity converted
+  at the decision price and rounded towards zero to whole shares or lots. It sends one
+  market order for the difference to the position the strategy will hold once its
+  queued market orders fill (a reduction only reduces, a move to the other side
+  reverses in that order), returns None when there is none, and leaves resting limit,
+  stop and GTT orders working. `size=` (on an order or as the strategy's `size`)
+  accepts a function `size(ctx, order)` that returns units: `ctx` has the equity,
+  capital, cash, decision price, stop distance, lot size, multiplier and position,
+  `order` the symbol, side, product and tag; 0 skips the order. `reinvest = False`
+  sizes every sizer, percent cap and `target(percent=)` from the initial capital
+  instead of the current equity. `size_caps = bt.size.caps(position=, leverage=,
+  risk=)` cuts what any sizer gives to a largest position (units, lots, rupees or
+  percent of equity, counting what is held), a leverage on equity, and a largest loss
+  of the order at its stop; an order with no room left is skipped with reason `cap`.
+  Both are in the Assumptions block.
+- **R-multiples (preview).** `Result.trades` gains `initial_risk_rupees` (what the
+  opening fill would have lost at the stop its entry set) and `r_multiple` (net P&L
+  over it; NaN for a trade opened without a stop). `Result.r_summary` gives their count,
+  mean, median, standard deviation, best, worst, total, share above zero and the
+  distribution in one-R bins, and the full tearsheet has an R-multiples section.
+- **ATR rules in condition strategies (preview).** `bt.atr` distances, `bt.trail_atr`
+  and `bt.size.atr_risk` now work in `entry_when` and `short_when` (they raised
+  NotImplementedError): each entry takes the `openalgo.ta` ATR of the deciding bar, so
+  a condition strategy and the equivalent `on_bar` give the same fills. An entry
+  decided before the ATR has a value stops the run with a message, as in `on_bar`.
 - **No strategy setting or run argument is accepted and then ignored.** Each one
   works, warns when it cannot apply to the run (`pyramiding` on an `on_bar`
   strategy, intraday times on a delivery run, `client=` given with own data) or

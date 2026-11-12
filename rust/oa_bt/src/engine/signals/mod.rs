@@ -24,8 +24,10 @@
 //! Conditions are level-triggered. The orders go through `Engine::submit` exactly as
 //! the scripted `on_bar` places them (`buy(**entry_args)`, `exit()`), so both forms make
 //! the same decisions at the same pauses; the equivalence is the test of trace 11
-//! (`trace-11a-conditions-and-on-bar`) and of the property tests.
+//! (`trace-11a-conditions-and-on-bar`) and of the property tests. An order with ATR
+//! distances or the ATR-risk sizer takes the ATR of the deciding bar (`atr`).
 
+mod atr;
 mod decide;
 mod driver;
 
@@ -37,6 +39,7 @@ use super::error::KernelError;
 use super::kernel::Engine;
 use super::pause;
 
+pub use atr::{AtrInput, AtrSlot};
 pub use decide::{decide, BarSignals, Decision, Holding};
 
 /// An entry the sizer skipped (it gave no quantity, so no order was created), as
@@ -58,6 +61,18 @@ pub struct EntrySignal {
     /// order on the strategy's instrument, buy for `entry_when` and sell for
     /// `short_when`, with the order arguments of 14-strategy-api 4.1.
     pub order: OrderRequest,
+    /// The ATRs the order names, one value per strategy bar (empty when it names none).
+    pub atr: Vec<AtrInput>,
+}
+
+impl EntrySignal {
+    /// The order to submit at strategy bar `bar`, opening at `ts_open` (UTC
+    /// nanoseconds): the template with that bar's ATRs.
+    ///
+    /// Errors: `InvalidConfig` when an ATR distance has no value at that bar.
+    fn order_at(&self, bar: usize, ts_open: TsNanos) -> Result<OrderRequest, KernelError> {
+        atr::order_at(&self.order, &self.atr, bar, ts_open)
+    }
 }
 
 /// The arrays of one condition strategy on one instrument, aligned on its strategy
@@ -96,8 +111,9 @@ impl SignalArrays {
     ///
     /// Errors: `InvalidConfig` (field `conditions`) for an instrument the run does not
     /// have, bar opens that do not increase, an array whose length differs from the
-    /// number of bars, or an order template that is not a MARKET DAY order opening on
-    /// the right side of the strategy's instrument.
+    /// number of bars, an order template that is not a MARKET DAY order opening on the
+    /// right side of the strategy's instrument, or ATR values that do not match the
+    /// ATRs the template names.
     pub fn validate(&self, instrument_count: usize) -> Result<(), KernelError> {
         if self.instrument.index() >= instrument_count {
             return Err(invalid(format!(
@@ -135,9 +151,11 @@ impl SignalArrays {
         signal: Option<&EntrySignal>,
         side: Side,
     ) -> Result<(), KernelError> {
-        let Some(order) = signal.map(|signal| &signal.order) else {
+        let Some(signal) = signal else {
             return Ok(());
         };
+        atr::check_inputs(name, &signal.order, &signal.atr, self.bar_opens.len())?;
+        let order = &signal.order;
         let problem = if order.instrument != self.instrument {
             Some("trades another instrument than the strategy")
         } else if order.side != side {

@@ -31,6 +31,8 @@ AUDITED_DECLARATIONS = {
     "product",
     "leverage",
     "size",
+    "reinvest",
+    "size_caps",
     "pyramiding",
     "max_adds",
     "max_position",

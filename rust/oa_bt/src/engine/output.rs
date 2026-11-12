@@ -120,6 +120,10 @@ pub struct TradeRecord {
     pub exit_reason: FillReason,
     /// Number of fills.
     pub fills: u32,
+    /// What the opening fill would have lost at the stop its entry set, rupees; `None`
+    /// when the position opened with no stop (`initial_risk`). The R-multiple of the
+    /// trade is its P&L over this.
+    pub initial_risk_rupees: Option<f64>,
 }
 
 /// A position at the end of the run.
@@ -181,6 +185,7 @@ struct OpenTrade {
     gross: f64,
     costs: f64,
     fills: u32,
+    initial_risk: Option<f64>,
 }
 
 /// Builds the trades table from fills.
@@ -213,6 +218,7 @@ impl TradeBook {
                 gross: 0.0,
                 costs: 0.0,
                 fills: 0,
+                initial_risk: None,
             });
         }
         let Some(index) = self.open.iter().position(|trade| trade.key == key) else {
@@ -256,7 +262,15 @@ impl TradeBook {
             net_pnl_rupees: trade.gross - trade.costs,
             exit_reason: reason,
             fills: trade.fills,
+            initial_risk_rupees: trade.initial_risk,
         });
+    }
+
+    /// Note the initial risk of the open trade on `key`, which a fill has just opened.
+    pub fn set_initial_risk(&mut self, key: PositionKey, rupees: Option<f64>) {
+        if let Some(trade) = self.open.iter_mut().find(|trade| trade.key == key) {
+            trade.initial_risk = rupees;
+        }
     }
 
     /// The closed trades, in order of closing.

@@ -19,6 +19,7 @@ use oa_bt::market::margin::MarginModel;
 use oa_bt::market::slippage::SlippageSpec;
 use oa_bt::model::{days_from_civil, ts_from_ist, Day, Exchange, InstrumentKind, Product, Side};
 use oa_bt::rms::StrategyRiskConfig;
+use oa_bt::sizing::SizingControls;
 
 const MINUTE: i64 = 60_000_000_000;
 const SESSION_OPEN_MINUTE: u32 = 9 * 60 + 15;
@@ -98,6 +99,7 @@ fn config(
         margin: MarginModel,
         market: MarketFacts::default(),
         risk: StrategyRiskConfig::default(),
+        sizing: SizingControls::default(),
         intraday: IntradayOverrides::default(),
         deliver_events: false,
     }

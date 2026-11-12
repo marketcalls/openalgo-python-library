@@ -57,8 +57,10 @@ def tearsheet(
                    beta and win rate, the horizon summary, the yearly benchmark
                    comparison (with a benchmark), Monte Carlo (1,000 runs from the
                    session returns, fixed seed), the trade P&L distribution, the trade
-                   list, losing streaks, costs, the strategy comparison (when given),
-                   assumptions, and notes with every definition used
+                   list, losing streaks, costs, the R-multiples (when the trades carry
+                   an `r_multiple` and a closed trade has one), the strategy
+                   comparison (when given), assumptions, and notes with every
+                   definition used
         "basic"    headline and basic facts, equity, monthly and yearly returns, the
                    worst drawdowns, trades, costs, assumptions and notes
         "metrics"  every metric with its value and definition, and the assumptions

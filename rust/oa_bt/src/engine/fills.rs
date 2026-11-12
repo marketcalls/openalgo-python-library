@@ -404,6 +404,10 @@ impl Engine {
             fill,
         };
         self.record.trades.record(&record, effect);
+        if effect.kind == FillKind::Entry {
+            let risk = self.initial_risk(key, &fill);
+            self.record.trades.set_initial_risk(key, risk);
+        }
         self.record.fills.push(record);
         self.record.touch(key);
         Ok(())

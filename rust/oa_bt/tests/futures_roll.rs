@@ -22,6 +22,7 @@ use oa_bt::market::margin::MarginModel;
 use oa_bt::market::slippage::SlippageSpec;
 use oa_bt::model::{days_from_civil, ts_from_ist, Day, Exchange, InstrumentKind, Product, Side};
 use oa_bt::rms::{Distance, LegRules, StrategyRiskConfig};
+use oa_bt::sizing::SizingControls;
 
 const NEAR: InstrumentId = InstrumentId(0);
 const NEXT: InstrumentId = InstrumentId(1);
@@ -110,6 +111,7 @@ fn config() -> RunConfig {
             instruments: vec![nifty.clone(), nifty],
         },
         risk: StrategyRiskConfig::default(),
+        sizing: SizingControls::default(),
         intraday: IntradayOverrides::default(),
         deliver_events: false,
     }

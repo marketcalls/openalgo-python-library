@@ -15,6 +15,7 @@ use crate::market::margin::MarginModel;
 use crate::market::slippage::SlippageSpec;
 use crate::model::{Day, TsNanos, NANOS_PER_DAY};
 use crate::rms::StrategyRiskConfig;
+use crate::sizing::SizingControls;
 
 use super::error::KernelError;
 
@@ -112,6 +113,8 @@ pub struct RunConfig {
     pub market: MarketFacts,
     /// Strategy and session risk rules.
     pub risk: StrategyRiskConfig,
+    /// `reinvest` and the caps shared by every sizer.
+    pub sizing: SizingControls,
     /// Intraday time overrides.
     pub intraday: IntradayOverrides,
     /// Pause at step 7 when events are waiting even if no strategy bar closes (the
@@ -157,8 +160,8 @@ impl RunConfig {
     ///
     /// Errors: `InvalidConfig` for a reversed date range, capital that is not positive,
     /// or a strategy interval that is not a whole multiple of the base; `Rms` for an
-    /// unusable strategy or session risk rule; `NotBuilt` for `fill="close"` and period
-    /// intervals.
+    /// unusable strategy or session risk rule; `Sizing` for an unusable cap; `NotBuilt`
+    /// for `fill="close"` and period intervals.
     pub fn validate(&self) -> Result<(), KernelError> {
         if self.first_day > self.last_day {
             return Err(invalid("start", "the first day is after the last day"));
@@ -171,6 +174,7 @@ impl RunConfig {
             return Err(not_built("fill=\"close\""));
         }
         self.risk.validate()?;
+        self.sizing.validate()?;
         Ok(())
     }
 
