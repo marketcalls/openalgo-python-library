@@ -1,0 +1,603 @@
+{
+  "format": "openalgo.backtest.trace/1",
+  "id": "trace-02",
+  "roadmap_trace": 2,
+  "title": "A gap open through a stop, and an open beyond a target",
+  "phase": 1,
+  "cases": [
+    {
+      "id": "trace-02a-long",
+      "title": "Long: a gap open through the stop, an open beyond the target, and both levels inside one bar",
+      "depends_on": ["SPEC-21", "SPEC-22", "SPEC-33"],
+      "notes": [
+        "Prices are synthetic and the 09:27 and 09:31 bars are deliberately wide, so one bar holds both a target and a stop.",
+        "Each entry bar has high equal to open and stays inside its levels; no expectation depends on SPEC-01 or SPEC-02.",
+        "09:21 and 09:26 stop one tick short of the stop and of the target, which pins the comparisons at the boundary.",
+        "SPEC-33: at 09:27 the bar opens beyond the target and later reaches the stop. The fixture follows 03-architecture 4.2 step 3 (a level crossed at the open fills first). If 'within one leg, the stop is tested before the target' (05-risk-management 3) were applied to the whole bar instead, that exit would be a stop at its level and the gross P&L of this case would be 280.00 lower."
+      ],
+      "instruments": [
+        {"symbol": "ITC", "exchange": "NSE", "type": "equity", "tick_size_rupees": 0.05, "lot_size_units": 1, "product": "MIS", "expiry_date": null, "underlying": null}
+      ],
+      "calendar": {
+        "NSE": [
+          {"date": "2025-07-01", "open_ist": "09:15", "close_ist": "15:30"}
+        ]
+      },
+      "settings": {
+        "strategy_interval": "5m",
+        "base": "1m",
+        "entry_from": "09:15",
+        "entry_until": "15:00",
+        "square_off": "15:10",
+        "fill": "next_open",
+        "slippage": 0.0,
+        "costs": null,
+        "capital": 1000000,
+        "quantity_mode": "venue",
+        "round_levels": true,
+        "max_daily_loss": null,
+        "risk_basis": "gross",
+        "after_risk_exit": "lock_session",
+        "roll": null,
+        "first_slice_ist": "2025-07-01T09:15:00+05:30",
+        "last_slice_ist": "2025-07-01T09:34:00+05:30",
+        "documented_defaults": ["base", "product", "entry_until", "square_off", "fill", "risk_basis", "round_levels"]
+      },
+      "bars": {
+        "interval": "1m",
+        "derived_from_case": null,
+        "columns": ["time_ist", "open", "high", "low", "close", "volume"],
+        "rows": {
+          "ITC": [
+            ["2025-07-01T09:15:00+05:30", 419.0, 419.4, 418.8, 419.2, 1000],
+            ["2025-07-01T09:16:00+05:30", 419.2, 419.6, 419.0, 419.5, 1000],
+            ["2025-07-01T09:17:00+05:30", 419.5, 419.9, 419.3, 419.7, 1000],
+            ["2025-07-01T09:18:00+05:30", 419.7, 420.1, 419.5, 419.9, 1000],
+            ["2025-07-01T09:19:00+05:30", 419.9, 420.2, 419.7, 420.1, 1000],
+            ["2025-07-01T09:20:00+05:30", 420.0, 420.0, 419.5, 419.6, 1000],
+            ["2025-07-01T09:21:00+05:30", 419.6, 419.8, 418.05, 418.1, 1000],
+            ["2025-07-01T09:22:00+05:30", 417.2, 417.5, 416.8, 417.0, 1000],
+            ["2025-07-01T09:23:00+05:30", 417.0, 417.3, 416.7, 416.9, 1000],
+            ["2025-07-01T09:24:00+05:30", 416.9, 417.2, 416.6, 417.1, 1000],
+            ["2025-07-01T09:25:00+05:30", 417.0, 417.0, 416.6, 416.9, 1000],
+            ["2025-07-01T09:26:00+05:30", 416.9, 419.95, 416.8, 419.9, 1000],
+            ["2025-07-01T09:27:00+05:30", 420.6, 420.7, 414.5, 415.2, 1000],
+            ["2025-07-01T09:28:00+05:30", 415.2, 415.6, 414.9, 415.4, 1000],
+            ["2025-07-01T09:29:00+05:30", 415.4, 415.8, 415.1, 415.6, 1000],
+            ["2025-07-01T09:30:00+05:30", 415.5, 415.5, 415.2, 415.4, 1000],
+            ["2025-07-01T09:31:00+05:30", 415.4, 418.6, 413.4, 416.0, 1000],
+            ["2025-07-01T09:32:00+05:30", 416.0, 416.3, 415.7, 415.9, 1000],
+            ["2025-07-01T09:33:00+05:30", 415.9, 416.2, 415.6, 416.1, 1000],
+            ["2025-07-01T09:34:00+05:30", 416.1, 416.4, 415.8, 416.2, 1000]
+          ]
+        }
+      },
+      "missing_slices": [],
+      "strategy": {
+        "class_attributes": {"symbol": "ITC", "exchange": "NSE", "interval": "5m"},
+        "conditions": null,
+        "decisions": [
+          {
+            "bar_open_ist": "2025-07-01T09:15:00+05:30",
+            "decision_time_ist": "2025-07-01T09:20:00+05:30",
+            "decision_slice_ist": "2025-07-01T09:19:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "buy",
+              "arguments": {
+                "qty": 50,
+                "stop": {"bt": "points", "args": [2]},
+                "target": {"bt": "points", "args": [3]}
+              }
+            },
+            "python": "self.buy(qty=50, stop=bt.points(2), target=bt.points(3))"
+          },
+          {
+            "bar_open_ist": "2025-07-01T09:20:00+05:30",
+            "decision_time_ist": "2025-07-01T09:25:00+05:30",
+            "decision_slice_ist": "2025-07-01T09:24:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "buy",
+              "arguments": {
+                "qty": 50,
+                "stop": {"bt": "points", "args": [2]},
+                "target": {"bt": "points", "args": [3]}
+              }
+            },
+            "python": "self.buy(qty=50, stop=bt.points(2), target=bt.points(3))"
+          },
+          {
+            "bar_open_ist": "2025-07-01T09:25:00+05:30",
+            "decision_time_ist": "2025-07-01T09:30:00+05:30",
+            "decision_slice_ist": "2025-07-01T09:29:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "buy",
+              "arguments": {
+                "qty": 50,
+                "stop": {"bt": "points", "args": [2]},
+                "target": {"bt": "points", "args": [3]}
+              }
+            },
+            "python": "self.buy(qty=50, stop=bt.points(2), target=bt.points(3))"
+          }
+        ]
+      },
+      "expected": {
+        "assumptions": {"base": "1m", "product": "MIS", "entry_until": "15:00", "square_off": "15:10"},
+        "strategy_bars": [
+          {"bar_open_ist": "2025-07-01T09:15:00+05:30", "open": 419.0, "high": 420.2, "low": 418.8, "close": 420.1},
+          {"bar_open_ist": "2025-07-01T09:20:00+05:30", "open": 420.0, "high": 420.0, "low": 416.6, "close": 417.1},
+          {"bar_open_ist": "2025-07-01T09:25:00+05:30", "open": 417.0, "high": 420.7, "low": 414.5, "close": 415.6},
+          {"bar_open_ist": "2025-07-01T09:30:00+05:30", "open": 415.5, "high": 418.6, "low": 413.4, "close": 416.2}
+        ],
+        "decisions": [
+          {"decision": 0, "position_condition_met": true, "order_id": "o1", "outcome": "filled"},
+          {"decision": 1, "position_condition_met": true, "order_id": "o2", "outcome": "filled"},
+          {"decision": 2, "position_condition_met": true, "order_id": "o3", "outcome": "filled"}
+        ],
+        "fills": [
+          {"slice_ist": "2025-07-01T09:20:00+05:30", "step": 2, "instrument": "ITC", "side": "BUY", "quantity_units": 50, "price_rupees": 420.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": []},
+          {"slice_ist": "2025-07-01T09:22:00+05:30", "step": 3, "instrument": "ITC", "side": "SELL", "quantity_units": 50, "price_rupees": 417.2, "fill_at": "open", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": []},
+          {"slice_ist": "2025-07-01T09:25:00+05:30", "step": 2, "instrument": "ITC", "side": "BUY", "quantity_units": 50, "price_rupees": 417.0, "fill_at": "open", "reason": "entry", "order_id": "o2", "target_index": null, "flags": []},
+          {"slice_ist": "2025-07-01T09:27:00+05:30", "step": 3, "instrument": "ITC", "side": "SELL", "quantity_units": 50, "price_rupees": 420.6, "fill_at": "open", "reason": "leg_target", "order_id": null, "target_index": 0, "flags": [], "depends_on": ["SPEC-33"]},
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "instrument": "ITC", "side": "BUY", "quantity_units": 50, "price_rupees": 415.5, "fill_at": "open", "reason": "entry", "order_id": "o3", "target_index": null, "flags": []},
+          {"slice_ist": "2025-07-01T09:31:00+05:30", "step": 3, "instrument": "ITC", "side": "SELL", "quantity_units": 50, "price_rupees": 413.5, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": []}
+        ],
+        "levels": [
+          {
+            "slice_ist": "2025-07-01T09:20:00+05:30",
+            "instrument": "ITC",
+            "position_quantity_units": 50,
+            "average_price_rupees": 420.0,
+            "stop": {"level_rupees": 418.0, "quantity_units": 50},
+            "targets": [
+              {"index": 0, "level_rupees": 423.0, "quantity_units": 50, "state": "working"}
+            ],
+            "remainder_quantity_units": 0,
+            "trail": null,
+            "breakeven": null
+          },
+          {"slice_ist": "2025-07-01T09:22:00+05:30", "instrument": "ITC", "position_quantity_units": 0, "average_price_rupees": null, "stop": null, "targets": [], "remainder_quantity_units": 0, "trail": null, "breakeven": null},
+          {
+            "slice_ist": "2025-07-01T09:25:00+05:30",
+            "instrument": "ITC",
+            "position_quantity_units": 50,
+            "average_price_rupees": 417.0,
+            "stop": {"level_rupees": 415.0, "quantity_units": 50},
+            "targets": [
+              {"index": 0, "level_rupees": 420.0, "quantity_units": 50, "state": "working"}
+            ],
+            "remainder_quantity_units": 0,
+            "trail": null,
+            "breakeven": null
+          },
+          {"slice_ist": "2025-07-01T09:27:00+05:30", "instrument": "ITC", "position_quantity_units": 0, "average_price_rupees": null, "stop": null, "targets": [], "remainder_quantity_units": 0, "trail": null, "breakeven": null},
+          {
+            "slice_ist": "2025-07-01T09:30:00+05:30",
+            "instrument": "ITC",
+            "position_quantity_units": 50,
+            "average_price_rupees": 415.5,
+            "stop": {"level_rupees": 413.5, "quantity_units": 50},
+            "targets": [
+              {"index": 0, "level_rupees": 418.5, "quantity_units": 50, "state": "working"}
+            ],
+            "remainder_quantity_units": 0,
+            "trail": null,
+            "breakeven": null
+          },
+          {"slice_ist": "2025-07-01T09:31:00+05:30", "instrument": "ITC", "position_quantity_units": 0, "average_price_rupees": null, "stop": null, "targets": [], "remainder_quantity_units": 0, "trail": null, "breakeven": null}
+        ],
+        "events": [
+          {"slice_ist": "2025-07-01T09:19:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o1", "quantity_units": null, "price_rupees": null, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:20:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o1", "quantity_units": 50, "price_rupees": 420.0, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:20:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "ITC", "position_quantity_units": 50},
+          {"slice_ist": "2025-07-01T09:22:00+05:30", "step": 3, "type": "risk", "name": "leg_sl_hit", "scope": "leg", "instrument": "ITC", "level_rupees": 418.0, "target_index": null, "observed_rupees": null},
+          {"slice_ist": "2025-07-01T09:22:00+05:30", "step": 3, "type": "position", "name": "PositionClosed", "instrument": "ITC", "position_quantity_units": 0},
+          {"slice_ist": "2025-07-01T09:24:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o2", "quantity_units": null, "price_rupees": null, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:25:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o2", "quantity_units": 50, "price_rupees": 417.0, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:25:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "ITC", "position_quantity_units": 50},
+          {"slice_ist": "2025-07-01T09:27:00+05:30", "step": 3, "type": "risk", "name": "leg_target_hit", "scope": "leg", "instrument": "ITC", "level_rupees": 420.0, "target_index": 0, "observed_rupees": null, "depends_on": ["SPEC-33"]},
+          {"slice_ist": "2025-07-01T09:27:00+05:30", "step": 3, "type": "position", "name": "PositionClosed", "instrument": "ITC", "position_quantity_units": 0},
+          {"slice_ist": "2025-07-01T09:29:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o3", "quantity_units": null, "price_rupees": null, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o3", "quantity_units": 50, "price_rupees": 415.5, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "ITC", "position_quantity_units": 50},
+          {"slice_ist": "2025-07-01T09:31:00+05:30", "step": 3, "type": "risk", "name": "leg_sl_hit", "scope": "leg", "instrument": "ITC", "level_rupees": 413.5, "target_index": null, "observed_rupees": null},
+          {"slice_ist": "2025-07-01T09:31:00+05:30", "step": 3, "type": "position", "name": "PositionClosed", "instrument": "ITC", "position_quantity_units": 0}
+        ],
+        "stale_marks": [],
+        "final_positions": [
+          {"instrument": "ITC", "quantity_units": 0, "average_price_rupees": null}
+        ],
+        "gross_pnl": {"realized_rupees": -60.0, "unrealized_rupees": 0.0, "total_rupees": -60.0, "depends_on": ["SPEC-33"]}
+      },
+      "derivation": [
+        {
+          "n": 1,
+          "slice_ist": "2025-07-01T09:19:00+05:30",
+          "step": 7,
+          "text": "The 5-minute bar 09:15 closes at 09:20:00 (close of slice 09:19). Flat: decision 0 calls buy, o1 queued.",
+          "cites": ["03-architecture 4.2 step 7"]
+        },
+        {
+          "n": 2,
+          "slice_ist": "2025-07-01T09:20:00+05:30",
+          "step": 2,
+          "text": "BUY 50 at the open 420.00 (the decision close was 420.10). Stop 420.00 - 2 = 418.00, target 420.00 + 3 = 423.00.",
+          "cites": ["03-architecture 4.2 step 2", "05-risk-management 3"]
+        },
+        {
+          "n": 3,
+          "slice_ist": "2025-07-01T09:20:00+05:30",
+          "step": 3,
+          "text": "Range 419.50 to 420.00: no level reached.",
+          "cites": ["03-architecture 4.2 step 3"]
+        },
+        {
+          "n": 4,
+          "slice_ist": "2025-07-01T09:21:00+05:30",
+          "step": 3,
+          "text": "Low 418.05 is one tick above the stop 418.00. A long stop triggers at price <= stop, so nothing happens.",
+          "cites": ["05-risk-management 3", "vectors: long_stop_holds_above_stop"]
+        },
+        {
+          "n": 5,
+          "slice_ist": "2025-07-01T09:22:00+05:30",
+          "step": 3,
+          "text": "The open 417.20 is already at or below the stop 418.00: a level already crossed at the open fills at the open. SELL 50 at 417.20, reason leg_sl; the risk event reports the level 418.00. Realized (417.20 - 420.00) x 50 = -140.00.",
+          "cites": ["03-architecture 4.2 step 3", "04-execution 4.2", "vectors: long_stop_gapped_through"]
+        },
+        {
+          "n": 6,
+          "slice_ist": "2025-07-01T09:24:00+05:30",
+          "step": 7,
+          "text": "Bar 09:20 closes at 09:25:00. Flat: decision 1 calls buy, o2 queued.",
+          "cites": ["03-architecture 4.2 step 7"]
+        },
+        {
+          "n": 7,
+          "slice_ist": "2025-07-01T09:25:00+05:30",
+          "step": 2,
+          "text": "BUY 50 at the open 417.00. Stop 415.00, target 420.00.",
+          "cites": ["03-architecture 4.2 step 2"]
+        },
+        {
+          "n": 8,
+          "slice_ist": "2025-07-01T09:26:00+05:30",
+          "step": 3,
+          "text": "High 419.95 is one tick below the target 420.00 (long target: price >= target). Low 416.80 is above the stop. Nothing happens.",
+          "cites": ["05-risk-management 3", "vectors: long_target_holds_below"]
+        },
+        {
+          "n": 9,
+          "slice_ist": "2025-07-01T09:27:00+05:30",
+          "step": 3,
+          "text": "The open 420.60 is already at or beyond the target 420.00, so the target fills at the open, whether stop or target: SELL 50 at 420.60, reason leg_target. The same bar later trades down to 414.50, below the stop 415.00, but the open-cross rule comes first ('Otherwise ... the stop wins' applies only when no level is crossed at the open). Realized (420.60 - 417.00) x 50 = 180.00.",
+          "cites": ["03-architecture 4.2 step 3", "05-risk-management 6.2"]
+        },
+        {
+          "n": 10,
+          "slice_ist": "2025-07-01T09:29:00+05:30",
+          "step": 7,
+          "text": "Bar 09:25 closes at 09:30:00. Flat: decision 2 calls buy, o3 queued.",
+          "cites": ["03-architecture 4.2 step 7"]
+        },
+        {
+          "n": 11,
+          "slice_ist": "2025-07-01T09:30:00+05:30",
+          "step": 2,
+          "text": "BUY 50 at the open 415.50 (the decision close was 415.60). Stop 413.50, target 418.50. The entry bar's range 415.20 to 415.50 reaches neither.",
+          "cites": ["03-architecture 4.2 steps 2 and 3"]
+        },
+        {
+          "n": 12,
+          "slice_ist": "2025-07-01T09:31:00+05:30",
+          "step": 3,
+          "text": "The open 415.40 lies between the levels. The range 413.40 to 418.60 contains both the stop 413.50 and the target 418.50: the stop wins and fills at the level. SELL 50 at 413.50, reason leg_sl. Realized (413.50 - 415.50) x 50 = -100.00.",
+          "cites": ["03-architecture 4.2 step 3", "05-risk-management 3 and 6.2", "vectors: stop_wins_when_stop_and_target_both_hit"]
+        },
+        {
+          "n": 13,
+          "slice_ist": "2025-07-01T09:34:00+05:30",
+          "step": 7,
+          "text": "Bar 09:30 closes at 09:35:00; no decision. End of run: flat. Gross P&L -140.00 + 180.00 - 100.00 = -60.00.",
+          "cites": ["03-architecture 4.2 end of run"]
+        }
+      ]
+    },
+    {
+      "id": "trace-02b-short",
+      "title": "Short: the mirror image (stop above, target below)",
+      "depends_on": ["SPEC-21", "SPEC-22", "SPEC-23", "SPEC-33"],
+      "notes": [
+        "sell while flat opens a short position; the product is MIS, so shorting is allowed (CNC would raise).",
+        "Each entry bar has low equal to open, the short side's equivalent of a quiet entry bar.",
+        "SPEC-33: at 09:27 the bar opens beyond the target and later reaches the stop. The fixture follows 03-architecture 4.2 step 3 (a level crossed at the open fills first). If 'within one leg, the stop is tested before the target' (05-risk-management 3) were applied to the whole bar instead, that exit would be a stop at its level and the gross P&L of this case would be 280.00 lower."
+      ],
+      "instruments": [
+        {"symbol": "ITC", "exchange": "NSE", "type": "equity", "tick_size_rupees": 0.05, "lot_size_units": 1, "product": "MIS", "expiry_date": null, "underlying": null}
+      ],
+      "calendar": {
+        "NSE": [
+          {"date": "2025-07-01", "open_ist": "09:15", "close_ist": "15:30"}
+        ]
+      },
+      "settings": {
+        "strategy_interval": "5m",
+        "base": "1m",
+        "entry_from": "09:15",
+        "entry_until": "15:00",
+        "square_off": "15:10",
+        "fill": "next_open",
+        "slippage": 0.0,
+        "costs": null,
+        "capital": 1000000,
+        "quantity_mode": "venue",
+        "round_levels": true,
+        "max_daily_loss": null,
+        "risk_basis": "gross",
+        "after_risk_exit": "lock_session",
+        "roll": null,
+        "first_slice_ist": "2025-07-01T09:15:00+05:30",
+        "last_slice_ist": "2025-07-01T09:34:00+05:30",
+        "documented_defaults": ["base", "product", "entry_until", "square_off", "fill", "risk_basis", "round_levels"]
+      },
+      "bars": {
+        "interval": "1m",
+        "derived_from_case": null,
+        "columns": ["time_ist", "open", "high", "low", "close", "volume"],
+        "rows": {
+          "ITC": [
+            ["2025-07-01T09:15:00+05:30", 419.0, 419.4, 418.8, 419.2, 1000],
+            ["2025-07-01T09:16:00+05:30", 419.2, 419.6, 419.0, 419.5, 1000],
+            ["2025-07-01T09:17:00+05:30", 419.5, 419.9, 419.3, 419.7, 1000],
+            ["2025-07-01T09:18:00+05:30", 419.7, 420.1, 419.5, 419.9, 1000],
+            ["2025-07-01T09:19:00+05:30", 419.9, 420.2, 419.7, 420.1, 1000],
+            ["2025-07-01T09:20:00+05:30", 420.0, 420.4, 420.0, 420.3, 1000],
+            ["2025-07-01T09:21:00+05:30", 420.3, 421.95, 420.2, 421.9, 1000],
+            ["2025-07-01T09:22:00+05:30", 422.7, 423.1, 422.4, 422.9, 1000],
+            ["2025-07-01T09:23:00+05:30", 422.9, 423.2, 422.6, 423.0, 1000],
+            ["2025-07-01T09:24:00+05:30", 423.0, 423.3, 422.7, 422.9, 1000],
+            ["2025-07-01T09:25:00+05:30", 423.0, 423.4, 423.0, 423.2, 1000],
+            ["2025-07-01T09:26:00+05:30", 423.2, 423.3, 420.05, 420.1, 1000],
+            ["2025-07-01T09:27:00+05:30", 419.4, 425.5, 419.3, 425.0, 1000],
+            ["2025-07-01T09:28:00+05:30", 425.0, 425.4, 424.7, 425.1, 1000],
+            ["2025-07-01T09:29:00+05:30", 425.1, 425.5, 424.8, 425.2, 1000],
+            ["2025-07-01T09:30:00+05:30", 425.0, 425.3, 425.0, 425.1, 1000],
+            ["2025-07-01T09:31:00+05:30", 425.1, 427.1, 421.9, 426.0, 1000],
+            ["2025-07-01T09:32:00+05:30", 426.0, 426.3, 425.7, 425.9, 1000],
+            ["2025-07-01T09:33:00+05:30", 425.9, 426.2, 425.6, 426.1, 1000],
+            ["2025-07-01T09:34:00+05:30", 426.1, 426.4, 425.8, 426.2, 1000]
+          ]
+        }
+      },
+      "missing_slices": [],
+      "strategy": {
+        "class_attributes": {"symbol": "ITC", "exchange": "NSE", "interval": "5m"},
+        "conditions": null,
+        "decisions": [
+          {
+            "bar_open_ist": "2025-07-01T09:15:00+05:30",
+            "decision_time_ist": "2025-07-01T09:20:00+05:30",
+            "decision_slice_ist": "2025-07-01T09:19:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "sell",
+              "arguments": {
+                "qty": 50,
+                "stop": {"bt": "points", "args": [2]},
+                "target": {"bt": "points", "args": [3]}
+              }
+            },
+            "python": "self.sell(qty=50, stop=bt.points(2), target=bt.points(3))"
+          },
+          {
+            "bar_open_ist": "2025-07-01T09:20:00+05:30",
+            "decision_time_ist": "2025-07-01T09:25:00+05:30",
+            "decision_slice_ist": "2025-07-01T09:24:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "sell",
+              "arguments": {
+                "qty": 50,
+                "stop": {"bt": "points", "args": [2]},
+                "target": {"bt": "points", "args": [3]}
+              }
+            },
+            "python": "self.sell(qty=50, stop=bt.points(2), target=bt.points(3))"
+          },
+          {
+            "bar_open_ist": "2025-07-01T09:25:00+05:30",
+            "decision_time_ist": "2025-07-01T09:30:00+05:30",
+            "decision_slice_ist": "2025-07-01T09:29:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "sell",
+              "arguments": {
+                "qty": 50,
+                "stop": {"bt": "points", "args": [2]},
+                "target": {"bt": "points", "args": [3]}
+              }
+            },
+            "python": "self.sell(qty=50, stop=bt.points(2), target=bt.points(3))"
+          }
+        ]
+      },
+      "expected": {
+        "assumptions": {"base": "1m", "product": "MIS", "entry_until": "15:00", "square_off": "15:10"},
+        "strategy_bars": [
+          {"bar_open_ist": "2025-07-01T09:15:00+05:30", "open": 419.0, "high": 420.2, "low": 418.8, "close": 420.1},
+          {"bar_open_ist": "2025-07-01T09:20:00+05:30", "open": 420.0, "high": 423.3, "low": 420.0, "close": 422.9},
+          {"bar_open_ist": "2025-07-01T09:25:00+05:30", "open": 423.0, "high": 425.5, "low": 419.3, "close": 425.2},
+          {"bar_open_ist": "2025-07-01T09:30:00+05:30", "open": 425.0, "high": 427.1, "low": 421.9, "close": 426.2}
+        ],
+        "decisions": [
+          {"decision": 0, "position_condition_met": true, "order_id": "o1", "outcome": "filled"},
+          {"decision": 1, "position_condition_met": true, "order_id": "o2", "outcome": "filled"},
+          {"decision": 2, "position_condition_met": true, "order_id": "o3", "outcome": "filled"}
+        ],
+        "fills": [
+          {"slice_ist": "2025-07-01T09:20:00+05:30", "step": 2, "instrument": "ITC", "side": "SELL", "quantity_units": 50, "price_rupees": 420.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": []},
+          {"slice_ist": "2025-07-01T09:22:00+05:30", "step": 3, "instrument": "ITC", "side": "BUY", "quantity_units": 50, "price_rupees": 422.7, "fill_at": "open", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": []},
+          {"slice_ist": "2025-07-01T09:25:00+05:30", "step": 2, "instrument": "ITC", "side": "SELL", "quantity_units": 50, "price_rupees": 423.0, "fill_at": "open", "reason": "entry", "order_id": "o2", "target_index": null, "flags": []},
+          {"slice_ist": "2025-07-01T09:27:00+05:30", "step": 3, "instrument": "ITC", "side": "BUY", "quantity_units": 50, "price_rupees": 419.4, "fill_at": "open", "reason": "leg_target", "order_id": null, "target_index": 0, "flags": [], "depends_on": ["SPEC-33"]},
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "instrument": "ITC", "side": "SELL", "quantity_units": 50, "price_rupees": 425.0, "fill_at": "open", "reason": "entry", "order_id": "o3", "target_index": null, "flags": []},
+          {"slice_ist": "2025-07-01T09:31:00+05:30", "step": 3, "instrument": "ITC", "side": "BUY", "quantity_units": 50, "price_rupees": 427.0, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": []}
+        ],
+        "levels": [
+          {
+            "slice_ist": "2025-07-01T09:20:00+05:30",
+            "instrument": "ITC",
+            "position_quantity_units": -50,
+            "average_price_rupees": 420.0,
+            "stop": {"level_rupees": 422.0, "quantity_units": 50},
+            "targets": [
+              {"index": 0, "level_rupees": 417.0, "quantity_units": 50, "state": "working"}
+            ],
+            "remainder_quantity_units": 0,
+            "trail": null,
+            "breakeven": null
+          },
+          {"slice_ist": "2025-07-01T09:22:00+05:30", "instrument": "ITC", "position_quantity_units": 0, "average_price_rupees": null, "stop": null, "targets": [], "remainder_quantity_units": 0, "trail": null, "breakeven": null},
+          {
+            "slice_ist": "2025-07-01T09:25:00+05:30",
+            "instrument": "ITC",
+            "position_quantity_units": -50,
+            "average_price_rupees": 423.0,
+            "stop": {"level_rupees": 425.0, "quantity_units": 50},
+            "targets": [
+              {"index": 0, "level_rupees": 420.0, "quantity_units": 50, "state": "working"}
+            ],
+            "remainder_quantity_units": 0,
+            "trail": null,
+            "breakeven": null
+          },
+          {"slice_ist": "2025-07-01T09:27:00+05:30", "instrument": "ITC", "position_quantity_units": 0, "average_price_rupees": null, "stop": null, "targets": [], "remainder_quantity_units": 0, "trail": null, "breakeven": null},
+          {
+            "slice_ist": "2025-07-01T09:30:00+05:30",
+            "instrument": "ITC",
+            "position_quantity_units": -50,
+            "average_price_rupees": 425.0,
+            "stop": {"level_rupees": 427.0, "quantity_units": 50},
+            "targets": [
+              {"index": 0, "level_rupees": 422.0, "quantity_units": 50, "state": "working"}
+            ],
+            "remainder_quantity_units": 0,
+            "trail": null,
+            "breakeven": null
+          },
+          {"slice_ist": "2025-07-01T09:31:00+05:30", "instrument": "ITC", "position_quantity_units": 0, "average_price_rupees": null, "stop": null, "targets": [], "remainder_quantity_units": 0, "trail": null, "breakeven": null}
+        ],
+        "events": [
+          {"slice_ist": "2025-07-01T09:19:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o1", "quantity_units": null, "price_rupees": null, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:20:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o1", "quantity_units": 50, "price_rupees": 420.0, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:20:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "ITC", "position_quantity_units": -50},
+          {"slice_ist": "2025-07-01T09:22:00+05:30", "step": 3, "type": "risk", "name": "leg_sl_hit", "scope": "leg", "instrument": "ITC", "level_rupees": 422.0, "target_index": null, "observed_rupees": null},
+          {"slice_ist": "2025-07-01T09:22:00+05:30", "step": 3, "type": "position", "name": "PositionClosed", "instrument": "ITC", "position_quantity_units": 0},
+          {"slice_ist": "2025-07-01T09:24:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o2", "quantity_units": null, "price_rupees": null, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:25:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o2", "quantity_units": 50, "price_rupees": 423.0, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:25:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "ITC", "position_quantity_units": -50},
+          {"slice_ist": "2025-07-01T09:27:00+05:30", "step": 3, "type": "risk", "name": "leg_target_hit", "scope": "leg", "instrument": "ITC", "level_rupees": 420.0, "target_index": 0, "observed_rupees": null, "depends_on": ["SPEC-33"]},
+          {"slice_ist": "2025-07-01T09:27:00+05:30", "step": 3, "type": "position", "name": "PositionClosed", "instrument": "ITC", "position_quantity_units": 0},
+          {"slice_ist": "2025-07-01T09:29:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o3", "quantity_units": null, "price_rupees": null, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o3", "quantity_units": 50, "price_rupees": 425.0, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "ITC", "position_quantity_units": -50},
+          {"slice_ist": "2025-07-01T09:31:00+05:30", "step": 3, "type": "risk", "name": "leg_sl_hit", "scope": "leg", "instrument": "ITC", "level_rupees": 427.0, "target_index": null, "observed_rupees": null},
+          {"slice_ist": "2025-07-01T09:31:00+05:30", "step": 3, "type": "position", "name": "PositionClosed", "instrument": "ITC", "position_quantity_units": 0}
+        ],
+        "stale_marks": [],
+        "final_positions": [
+          {"instrument": "ITC", "quantity_units": 0, "average_price_rupees": null}
+        ],
+        "gross_pnl": {"realized_rupees": -55.0, "unrealized_rupees": 0.0, "total_rupees": -55.0, "depends_on": ["SPEC-33"]}
+      },
+      "derivation": [
+        {
+          "n": 1,
+          "slice_ist": "2025-07-01T09:19:00+05:30",
+          "step": 7,
+          "text": "Bar 09:15 closes at 09:20:00. Flat: decision 0 calls sell, which opens a short; o1 queued.",
+          "cites": ["03-architecture 4.2 step 7", "14-strategy-api 2.4"]
+        },
+        {
+          "n": 2,
+          "slice_ist": "2025-07-01T09:20:00+05:30",
+          "step": 2,
+          "text": "SELL 50 at the open 420.00. For a short the stop is above and the target below: stop 420.00 + 2 = 422.00, target 420.00 - 3 = 417.00.",
+          "cites": ["03-architecture 4.2 step 2", "05-risk-management 3", "strategy-module 3.1"]
+        },
+        {
+          "n": 3,
+          "slice_ist": "2025-07-01T09:21:00+05:30",
+          "step": 3,
+          "text": "High 421.95 is one tick below the stop 422.00 (short stop: price >= stop). Nothing happens.",
+          "cites": ["05-risk-management 3", "vectors: short_stop_holds_below_stop"]
+        },
+        {
+          "n": 4,
+          "slice_ist": "2025-07-01T09:22:00+05:30",
+          "step": 3,
+          "text": "The open 422.70 is already at or above the stop: BUY 50 at the open 422.70, reason leg_sl. Realized (420.00 - 422.70) x 50 = -135.00.",
+          "cites": ["03-architecture 4.2 step 3", "vectors: short_stop_exact_touch"]
+        },
+        {
+          "n": 5,
+          "slice_ist": "2025-07-01T09:24:00+05:30",
+          "step": 7,
+          "text": "Bar 09:20 closes. Flat: decision 1 calls sell, o2 queued.",
+          "cites": ["03-architecture 4.2 step 7"]
+        },
+        {
+          "n": 6,
+          "slice_ist": "2025-07-01T09:25:00+05:30",
+          "step": 2,
+          "text": "SELL 50 at the open 423.00. Stop 425.00, target 420.00.",
+          "cites": ["03-architecture 4.2 step 2"]
+        },
+        {
+          "n": 7,
+          "slice_ist": "2025-07-01T09:26:00+05:30",
+          "step": 3,
+          "text": "Low 420.05 is one tick above the target 420.00 (short target: price <= target). Nothing happens.",
+          "cites": ["05-risk-management 3", "vectors: short_target_holds_above"]
+        },
+        {
+          "n": 8,
+          "slice_ist": "2025-07-01T09:27:00+05:30",
+          "step": 3,
+          "text": "The open 419.40 is already at or below the target: BUY 50 at the open 419.40, reason leg_target, although the bar later trades up to 425.50, above the stop 425.00. Realized (423.00 - 419.40) x 50 = 180.00.",
+          "cites": ["03-architecture 4.2 step 3", "vectors: short_target_exact_touch"]
+        },
+        {
+          "n": 9,
+          "slice_ist": "2025-07-01T09:29:00+05:30",
+          "step": 7,
+          "text": "Bar 09:25 closes. Flat: decision 2 calls sell, o3 queued.",
+          "cites": ["03-architecture 4.2 step 7"]
+        },
+        {
+          "n": 10,
+          "slice_ist": "2025-07-01T09:30:00+05:30",
+          "step": 2,
+          "text": "SELL 50 at the open 425.00. Stop 427.00, target 422.00. The entry bar's range 425.00 to 425.30 reaches neither.",
+          "cites": ["03-architecture 4.2 steps 2 and 3"]
+        },
+        {
+          "n": 11,
+          "slice_ist": "2025-07-01T09:31:00+05:30",
+          "step": 3,
+          "text": "The open 425.10 lies between the levels and the range 421.90 to 427.10 contains both: the stop wins. BUY 50 at 427.00, reason leg_sl. Realized (425.00 - 427.00) x 50 = -100.00.",
+          "cites": ["03-architecture 4.2 step 3", "vectors: stop_wins_when_stop_and_target_both_hit"]
+        },
+        {
+          "n": 12,
+          "slice_ist": "2025-07-01T09:34:00+05:30",
+          "step": 7,
+          "text": "End of run: flat. Gross P&L -135.00 + 180.00 - 100.00 = -55.00.",
+          "cites": ["03-architecture 4.2 end of run"]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,336 @@
+{
+  "format": "openalgo.backtest.trace/1",
+  "id": "trace-12",
+  "roadmap_trace": 12,
+  "title": "A missing 1-minute bar at a strategy-bar boundary; a leg with no bar in a slice",
+  "phase": 1,
+  "cases": [
+    {
+      "id": "trace-12a-missing-last-base-bar",
+      "title": "The last 1-minute bar of a strategy bar is missing, and a later bar is missing while a position is open",
+      "depends_on": ["SPEC-07", "SPEC-21", "SPEC-22"],
+      "notes": [
+        "Two 1-minute bars are absent and declared in missing_slices: 09:29 (the last base bar of the strategy bar 09:15) and 09:37 (while the position is open).",
+        "SPEC-07 is a clarification, not a choice between readings: the kernel iterates the calendar grid, so 09:29 is a slice even though no instrument has a bar in it, and the strategy bar that closes there is built from the base bars that exist.",
+        "The entry bar's low 500.20 is above the stop (SPEC-02 does not matter) and there is no trail."
+      ],
+      "instruments": [
+        {"symbol": "DABUR", "exchange": "NSE", "type": "equity", "tick_size_rupees": 0.05, "lot_size_units": 1, "product": "MIS", "expiry_date": null, "underlying": null}
+      ],
+      "calendar": {
+        "NSE": [
+          {"date": "2025-07-01", "open_ist": "09:15", "close_ist": "15:30"}
+        ]
+      },
+      "settings": {
+        "strategy_interval": "15m",
+        "base": "1m",
+        "entry_from": "09:15",
+        "entry_until": "15:00",
+        "square_off": "15:10",
+        "fill": "next_open",
+        "slippage": 0.0,
+        "costs": null,
+        "capital": 1000000,
+        "quantity_mode": "venue",
+        "round_levels": true,
+        "max_daily_loss": null,
+        "risk_basis": "gross",
+        "after_risk_exit": "lock_session",
+        "roll": null,
+        "first_slice_ist": "2025-07-01T09:15:00+05:30",
+        "last_slice_ist": "2025-07-01T09:44:00+05:30",
+        "documented_defaults": ["base", "product", "entry_until", "square_off", "fill", "risk_basis", "round_levels"]
+      },
+      "bars": {
+        "interval": "1m",
+        "derived_from_case": null,
+        "columns": ["time_ist", "open", "high", "low", "close", "volume"],
+        "rows": {
+          "DABUR": [
+            ["2025-07-01T09:15:00+05:30", 499.0, 499.4, 498.8, 499.2, 1000],
+            ["2025-07-01T09:16:00+05:30", 499.2, 499.6, 499.0, 499.5, 1000],
+            ["2025-07-01T09:17:00+05:30", 499.5, 499.8, 499.3, 499.6, 1000],
+            ["2025-07-01T09:18:00+05:30", 499.6, 499.9, 499.4, 499.7, 1000],
+            ["2025-07-01T09:19:00+05:30", 499.7, 500.0, 499.5, 499.8, 1000],
+            ["2025-07-01T09:20:00+05:30", 499.8, 500.1, 499.6, 499.9, 1000],
+            ["2025-07-01T09:21:00+05:30", 499.9, 500.2, 499.7, 500.0, 1000],
+            ["2025-07-01T09:22:00+05:30", 500.0, 500.3, 499.8, 500.1, 1000],
+            ["2025-07-01T09:23:00+05:30", 500.1, 500.4, 499.9, 500.2, 1000],
+            ["2025-07-01T09:24:00+05:30", 500.2, 500.5, 500.0, 500.3, 1000],
+            ["2025-07-01T09:25:00+05:30", 500.3, 500.6, 500.1, 500.2, 1000],
+            ["2025-07-01T09:26:00+05:30", 500.2, 500.5, 500.0, 500.1, 1000],
+            ["2025-07-01T09:27:00+05:30", 500.1, 500.4, 499.9, 500.0, 1000],
+            ["2025-07-01T09:28:00+05:30", 500.0, 500.3, 499.8, 500.1, 1000],
+            ["2025-07-01T09:30:00+05:30", 500.4, 500.7, 500.2, 500.5, 1000],
+            ["2025-07-01T09:31:00+05:30", 500.5, 500.8, 500.1, 500.3, 1000],
+            ["2025-07-01T09:32:00+05:30", 500.3, 500.5, 499.7, 499.9, 1000],
+            ["2025-07-01T09:33:00+05:30", 499.9, 500.1, 499.2, 499.4, 1000],
+            ["2025-07-01T09:34:00+05:30", 499.4, 499.6, 498.7, 498.9, 1000],
+            ["2025-07-01T09:35:00+05:30", 498.9, 499.1, 498.2, 498.4, 1000],
+            ["2025-07-01T09:36:00+05:30", 498.4, 498.6, 498.0, 498.1, 1000],
+            ["2025-07-01T09:38:00+05:30", 496.9, 497.2, 496.5, 496.8, 1000],
+            ["2025-07-01T09:39:00+05:30", 496.8, 497.1, 496.4, 496.7, 1000],
+            ["2025-07-01T09:40:00+05:30", 496.7, 497.0, 496.3, 496.6, 1000],
+            ["2025-07-01T09:41:00+05:30", 496.6, 496.9, 496.2, 496.5, 1000],
+            ["2025-07-01T09:42:00+05:30", 496.5, 496.8, 496.1, 496.4, 1000],
+            ["2025-07-01T09:43:00+05:30", 496.4, 496.7, 496.0, 496.3, 1000],
+            ["2025-07-01T09:44:00+05:30", 496.3, 496.6, 495.9, 496.2, 1000]
+          ]
+        }
+      },
+      "missing_slices": [
+        {"instrument": "DABUR", "slice_ist": "2025-07-01T09:29:00+05:30"},
+        {"instrument": "DABUR", "slice_ist": "2025-07-01T09:37:00+05:30"}
+      ],
+      "strategy": {
+        "class_attributes": {"symbol": "DABUR", "exchange": "NSE", "interval": "15m"},
+        "conditions": null,
+        "decisions": [
+          {
+            "bar_open_ist": "2025-07-01T09:15:00+05:30",
+            "decision_time_ist": "2025-07-01T09:30:00+05:30",
+            "decision_slice_ist": "2025-07-01T09:29:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "buy",
+              "arguments": {
+                "qty": 100,
+                "stop": {"bt": "points", "args": [3]}
+              }
+            },
+            "python": "self.buy(qty=100, stop=bt.points(3))"
+          }
+        ]
+      },
+      "expected": {
+        "assumptions": {"base": "1m", "product": "MIS", "entry_until": "15:00", "square_off": "15:10"},
+        "strategy_bars": [
+          {"bar_open_ist": "2025-07-01T09:15:00+05:30", "open": 499.0, "high": 500.6, "low": 498.8, "close": 500.1},
+          {"bar_open_ist": "2025-07-01T09:30:00+05:30", "open": 500.4, "high": 500.8, "low": 495.9, "close": 496.2}
+        ],
+        "decisions": [
+          {"decision": 0, "position_condition_met": true, "order_id": "o1", "outcome": "filled"}
+        ],
+        "fills": [
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "instrument": "DABUR", "side": "BUY", "quantity_units": 100, "price_rupees": 500.4, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": []},
+          {"slice_ist": "2025-07-01T09:38:00+05:30", "step": 3, "instrument": "DABUR", "side": "SELL", "quantity_units": 100, "price_rupees": 496.9, "fill_at": "open", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": []}
+        ],
+        "levels": [
+          {
+            "slice_ist": "2025-07-01T09:30:00+05:30",
+            "instrument": "DABUR",
+            "position_quantity_units": 100,
+            "average_price_rupees": 500.4,
+            "stop": {"level_rupees": 497.4, "quantity_units": 100},
+            "targets": [],
+            "remainder_quantity_units": 100,
+            "trail": null,
+            "breakeven": null
+          },
+          {"slice_ist": "2025-07-01T09:38:00+05:30", "instrument": "DABUR", "position_quantity_units": 0, "average_price_rupees": null, "stop": null, "targets": [], "remainder_quantity_units": 0, "trail": null, "breakeven": null}
+        ],
+        "events": [
+          {"slice_ist": "2025-07-01T09:29:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o1", "quantity_units": null, "price_rupees": null, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o1", "quantity_units": 100, "price_rupees": 500.4, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:30:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "DABUR", "position_quantity_units": 100},
+          {"slice_ist": "2025-07-01T09:38:00+05:30", "step": 3, "type": "risk", "name": "leg_sl_hit", "scope": "leg", "instrument": "DABUR", "level_rupees": 497.4, "target_index": null, "observed_rupees": null},
+          {"slice_ist": "2025-07-01T09:38:00+05:30", "step": 3, "type": "position", "name": "PositionClosed", "instrument": "DABUR", "position_quantity_units": 0}
+        ],
+        "stale_marks": [
+          {"slice_ist": "2025-07-01T09:37:00+05:30", "instrument": "DABUR", "mark_price_rupees": 498.1}
+        ],
+        "final_positions": [
+          {"instrument": "DABUR", "quantity_units": 0, "average_price_rupees": null}
+        ],
+        "gross_pnl": {"realized_rupees": -350.0, "unrealized_rupees": 0.0, "total_rupees": -350.0}
+      },
+      "derivation": [
+        {
+          "n": 1,
+          "slice_ist": "2025-07-01T09:29:00+05:30",
+          "step": 7,
+          "text": "The grid slot 09:29 has no bar for the instrument, so steps 2 to 4 have nothing to do. The strategy bar 09:15 still closes at 09:30:00, decided by the clock and not by whether the last base bar exists: on_bar runs with the bar built from the fourteen base bars 09:15 to 09:28, O 499.00 H 500.60 L 498.80 C 500.10 (the close is the 09:28 close). Flat: decision 0 calls buy; o1 queued for the next slice's open.",
+          "cites": ["03-architecture 4.2 (grid and step 7)", "14-strategy-api 2.3"]
+        },
+        {
+          "n": 2,
+          "slice_ist": "2025-07-01T09:30:00+05:30",
+          "step": 2,
+          "text": "BUY 100 at the open 500.40. Stop 500.40 - 3 = 497.40.",
+          "cites": ["03-architecture 4.2 step 2", "05-risk-management 3"]
+        },
+        {
+          "n": 3,
+          "slice_ist": "2025-07-01T09:36:00+05:30",
+          "step": 3,
+          "text": "Slices 09:30 to 09:36: the lowest low is 498.00, above the stop. No exit.",
+          "cites": ["03-architecture 4.2 step 3"]
+        },
+        {
+          "n": 4,
+          "slice_ist": "2025-07-01T09:37:00+05:30",
+          "step": 5,
+          "text": "No bar for the instrument: the stop is not tested and nothing ratchets. The open position is marked at its last close, 498.10, and flagged stale.",
+          "cites": ["03-architecture 4.2 steps 3 and 5", "05-risk-management 6.2"]
+        },
+        {
+          "n": 5,
+          "slice_ist": "2025-07-01T09:38:00+05:30",
+          "step": 3,
+          "text": "Stop 497.40. The first bar after the gap opens at 496.90, already at or below the stop: the stop fills at the open. SELL 100 at 496.90, reason leg_sl; the risk event reports the level 497.40. Realized (496.90 - 500.40) x 100 = -350.00.",
+          "cites": ["03-architecture 4.2 step 3"]
+        },
+        {
+          "n": 6,
+          "slice_ist": "2025-07-01T09:44:00+05:30",
+          "step": 7,
+          "text": "The strategy bar 09:30 closes at 09:45:00, built from the fourteen base bars that exist (09:37 is absent): O 500.40 H 500.80 L 495.90 C 496.20. No decision. End of run: flat.",
+          "cites": ["03-architecture 4.2 step 7"]
+        }
+      ]
+    },
+    {
+      "id": "trace-12b-missing-fill-bar",
+      "title": "The bar an order should fill on is missing: the order fills at the open of the instrument's next bar; the run ends with the position open",
+      "depends_on": ["SPEC-06", "SPEC-07", "SPEC-21", "SPEC-22"],
+      "notes": [
+        "The 09:30 bar is absent and declared in missing_slices. The order placed at the 09:30 decision is queued for the next slice's open, but the instrument has no bar in that slice.",
+        "SPEC-06, recommended reading: the order stays queued (it is a DAY order) and fills at the open of the instrument's next bar in the session, 09:31. The other reading rejects or cancels an order with no bar to fill on; then there is no fill, the final position is flat and the gross P&L is 0.00.",
+        "The run ends inside the strategy bar 09:30 with the position open: it is marked at the last close and reported as open, not as a closed trade."
+      ],
+      "instruments": [
+        {"symbol": "DABUR", "exchange": "NSE", "type": "equity", "tick_size_rupees": 0.05, "lot_size_units": 1, "product": "MIS", "expiry_date": null, "underlying": null}
+      ],
+      "calendar": {
+        "NSE": [
+          {"date": "2025-07-01", "open_ist": "09:15", "close_ist": "15:30"}
+        ]
+      },
+      "settings": {
+        "strategy_interval": "15m",
+        "base": "1m",
+        "entry_from": "09:15",
+        "entry_until": "15:00",
+        "square_off": "15:10",
+        "fill": "next_open",
+        "slippage": 0.0,
+        "costs": null,
+        "capital": 1000000,
+        "quantity_mode": "venue",
+        "round_levels": true,
+        "max_daily_loss": null,
+        "risk_basis": "gross",
+        "after_risk_exit": "lock_session",
+        "roll": null,
+        "first_slice_ist": "2025-07-01T09:15:00+05:30",
+        "last_slice_ist": "2025-07-01T09:35:00+05:30",
+        "documented_defaults": ["base", "product", "entry_until", "square_off", "fill", "risk_basis", "round_levels"]
+      },
+      "bars": {
+        "interval": "1m",
+        "derived_from_case": null,
+        "columns": ["time_ist", "open", "high", "low", "close", "volume"],
+        "rows": {
+          "DABUR": [
+            ["2025-07-01T09:15:00+05:30", 499.0, 499.4, 498.8, 499.2, 1000],
+            ["2025-07-01T09:16:00+05:30", 499.2, 499.6, 499.0, 499.5, 1000],
+            ["2025-07-01T09:17:00+05:30", 499.5, 499.8, 499.3, 499.6, 1000],
+            ["2025-07-01T09:18:00+05:30", 499.6, 499.9, 499.4, 499.7, 1000],
+            ["2025-07-01T09:19:00+05:30", 499.7, 500.0, 499.5, 499.8, 1000],
+            ["2025-07-01T09:20:00+05:30", 499.8, 500.1, 499.6, 499.9, 1000],
+            ["2025-07-01T09:21:00+05:30", 499.9, 500.2, 499.7, 500.0, 1000],
+            ["2025-07-01T09:22:00+05:30", 500.0, 500.3, 499.8, 500.1, 1000],
+            ["2025-07-01T09:23:00+05:30", 500.1, 500.4, 499.9, 500.2, 1000],
+            ["2025-07-01T09:24:00+05:30", 500.2, 500.5, 500.0, 500.3, 1000],
+            ["2025-07-01T09:25:00+05:30", 500.3, 500.6, 500.1, 500.2, 1000],
+            ["2025-07-01T09:26:00+05:30", 500.2, 500.5, 500.0, 500.1, 1000],
+            ["2025-07-01T09:27:00+05:30", 500.1, 500.4, 499.9, 500.0, 1000],
+            ["2025-07-01T09:28:00+05:30", 500.0, 500.3, 499.8, 500.1, 1000],
+            ["2025-07-01T09:29:00+05:30", 500.1, 500.4, 499.9, 500.2, 1000],
+            ["2025-07-01T09:31:00+05:30", 500.6, 500.9, 500.4, 500.7, 1000],
+            ["2025-07-01T09:32:00+05:30", 500.7, 501.0, 500.5, 500.8, 1000],
+            ["2025-07-01T09:33:00+05:30", 500.8, 501.2, 500.6, 501.1, 1000],
+            ["2025-07-01T09:34:00+05:30", 501.1, 501.4, 500.9, 501.3, 1000],
+            ["2025-07-01T09:35:00+05:30", 501.3, 501.6, 501.1, 501.5, 1000]
+          ]
+        }
+      },
+      "missing_slices": [
+        {"instrument": "DABUR", "slice_ist": "2025-07-01T09:30:00+05:30"}
+      ],
+      "strategy": {
+        "class_attributes": {"symbol": "DABUR", "exchange": "NSE", "interval": "15m"},
+        "conditions": null,
+        "decisions": [
+          {
+            "bar_open_ist": "2025-07-01T09:15:00+05:30",
+            "decision_time_ist": "2025-07-01T09:30:00+05:30",
+            "decision_slice_ist": "2025-07-01T09:29:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "buy",
+              "arguments": {"qty": 100}
+            },
+            "python": "self.buy(qty=100)"
+          }
+        ]
+      },
+      "expected": {
+        "assumptions": {"base": "1m", "product": "MIS", "entry_until": "15:00", "square_off": "15:10"},
+        "strategy_bars": [
+          {"bar_open_ist": "2025-07-01T09:15:00+05:30", "open": 499.0, "high": 500.6, "low": 498.8, "close": 500.2}
+        ],
+        "decisions": [
+          {"decision": 0, "position_condition_met": true, "order_id": "o1", "outcome": "filled", "depends_on": ["SPEC-06"]}
+        ],
+        "fills": [
+          {"slice_ist": "2025-07-01T09:31:00+05:30", "step": 2, "instrument": "DABUR", "side": "BUY", "quantity_units": 100, "price_rupees": 500.6, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": [], "depends_on": ["SPEC-06"]}
+        ],
+        "levels": [
+          {"slice_ist": "2025-07-01T09:31:00+05:30", "instrument": "DABUR", "position_quantity_units": 100, "average_price_rupees": 500.6, "stop": null, "targets": [], "remainder_quantity_units": 100, "trail": null, "breakeven": null, "depends_on": ["SPEC-06"]}
+        ],
+        "events": [
+          {"slice_ist": "2025-07-01T09:29:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o1", "quantity_units": null, "price_rupees": null, "reject_code": null},
+          {"slice_ist": "2025-07-01T09:31:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o1", "quantity_units": 100, "price_rupees": 500.6, "reject_code": null, "depends_on": ["SPEC-06"]},
+          {"slice_ist": "2025-07-01T09:31:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "DABUR", "position_quantity_units": 100, "depends_on": ["SPEC-06"]}
+        ],
+        "stale_marks": [],
+        "final_positions": [
+          {"instrument": "DABUR", "quantity_units": 100, "average_price_rupees": 500.6, "depends_on": ["SPEC-06"]}
+        ],
+        "gross_pnl": {"realized_rupees": 0.0, "unrealized_rupees": 90.0, "total_rupees": 90.0, "depends_on": ["SPEC-06"]}
+      },
+      "derivation": [
+        {
+          "n": 1,
+          "slice_ist": "2025-07-01T09:29:00+05:30",
+          "step": 7,
+          "text": "The strategy bar 09:15 closes at 09:30:00 with all fifteen base bars: O 499.00 H 500.60 L 498.80 C 500.20. Flat: decision 0 calls buy(qty=100); o1 is queued for the next slice's open. The decision time 09:30 is inside the entry window.",
+          "cites": ["03-architecture 4.2 step 7 and entry window"]
+        },
+        {
+          "n": 2,
+          "slice_ist": "2025-07-01T09:30:00+05:30",
+          "step": 2,
+          "text": "The slice exists on the grid but the instrument has no bar in it, so there is no open to fill at. SPEC-06: the order stays queued. Nothing is marked: there is no position.",
+          "cites": ["03-architecture 4.2 steps 2 and 5"]
+        },
+        {
+          "n": 3,
+          "slice_ist": "2025-07-01T09:31:00+05:30",
+          "step": 2,
+          "text": "The instrument's next bar: BUY 100 at its open, 500.60. The fill bar opens at 09:31, before entry_until. No stop or target was given, so the leg has no levels.",
+          "cites": ["03-architecture 4.2 step 2 and entry window", "05-risk-management 3"]
+        },
+        {
+          "n": 4,
+          "slice_ist": "2025-07-01T09:35:00+05:30",
+          "step": 5,
+          "text": "End of run. The position is still open: it is marked at the last close 501.50 and reported as open. Unrealized (501.50 - 500.60) x 100 = 90.00; realized 0.00. The strategy bar 09:30 has not closed, so on_bar does not run for it.",
+          "cites": ["03-architecture 4.2 end of run and step 7"]
+        }
+      ]
+    }
+  ]
+}

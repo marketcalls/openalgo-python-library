@@ -1,0 +1,502 @@
+{
+  "format": "openalgo.backtest.trace/1",
+  "id": "trace-06",
+  "roadmap_trace": 6,
+  "title": "A daily CNC strategy: order at the close fills at the next open; stop tested on the daily range; gap fill",
+  "phase": 1,
+  "cases": [
+    {
+      "id": "trace-06a-daily-cnc",
+      "title": "Daily CNC: an order at the close fills at the next open, the stop is tested on the day's range, and a gap down fills at the open",
+      "depends_on": ["SPEC-21", "SPEC-22"],
+      "notes": [
+        "Daily bars carry the session open (09:15 IST) of their date as time_ist; a daily slice is the whole session.",
+        "On both entry days the low stays above the stop, so no expectation depends on SPEC-02.",
+        "On 2025-07-09 the close 1470.00 is above the stop 1460.00 and the low 1455.00 is below it: the stop is tested on the range, not on the close."
+      ],
+      "instruments": [
+        {"symbol": "INFY", "exchange": "NSE", "type": "equity", "tick_size_rupees": 0.05, "lot_size_units": 1, "product": "CNC", "expiry_date": null, "underlying": null}
+      ],
+      "calendar": {
+        "NSE": [
+          {"date": "2025-07-07", "open_ist": "09:15", "close_ist": "15:30"},
+          {"date": "2025-07-08", "open_ist": "09:15", "close_ist": "15:30"},
+          {"date": "2025-07-09", "open_ist": "09:15", "close_ist": "15:30"},
+          {"date": "2025-07-10", "open_ist": "09:15", "close_ist": "15:30"},
+          {"date": "2025-07-11", "open_ist": "09:15", "close_ist": "15:30"}
+        ]
+      },
+      "settings": {
+        "strategy_interval": "D",
+        "base": "D",
+        "entry_from": null,
+        "entry_until": null,
+        "square_off": null,
+        "fill": "next_open",
+        "slippage": 0.0,
+        "costs": null,
+        "capital": 1000000,
+        "quantity_mode": "venue",
+        "round_levels": true,
+        "max_daily_loss": null,
+        "risk_basis": "gross",
+        "after_risk_exit": "lock_session",
+        "roll": null,
+        "first_slice_ist": "2025-07-07T09:15:00+05:30",
+        "last_slice_ist": "2025-07-11T09:15:00+05:30",
+        "documented_defaults": ["base", "product", "fill", "risk_basis", "round_levels"]
+      },
+      "bars": {
+        "interval": "D",
+        "derived_from_case": null,
+        "columns": ["time_ist", "open", "high", "low", "close", "volume"],
+        "rows": {
+          "INFY": [
+            ["2025-07-07T09:15:00+05:30", 1500.0, 1512.0, 1495.0, 1508.0, 100000],
+            ["2025-07-08T09:15:00+05:30", 1510.0, 1510.0, 1480.0, 1490.0, 100000],
+            ["2025-07-09T09:15:00+05:30", 1485.0, 1492.0, 1455.0, 1470.0, 100000],
+            ["2025-07-10T09:15:00+05:30", 1475.0, 1478.0, 1462.0, 1468.0, 100000],
+            ["2025-07-11T09:15:00+05:30", 1410.0, 1418.0, 1402.0, 1415.0, 100000]
+          ]
+        }
+      },
+      "missing_slices": [],
+      "strategy": {
+        "class_attributes": {"symbol": "INFY", "exchange": "NSE", "interval": "D"},
+        "conditions": null,
+        "decisions": [
+          {
+            "bar_open_ist": "2025-07-07T09:15:00+05:30",
+            "decision_time_ist": "2025-07-07T15:30:00+05:30",
+            "decision_slice_ist": "2025-07-07T09:15:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "buy",
+              "arguments": {
+                "qty": 10,
+                "stop": {"bt": "points", "args": [50]}
+              }
+            },
+            "python": "self.buy(qty=10, stop=bt.points(50))"
+          },
+          {
+            "bar_open_ist": "2025-07-09T09:15:00+05:30",
+            "decision_time_ist": "2025-07-09T15:30:00+05:30",
+            "decision_slice_ist": "2025-07-09T09:15:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "buy",
+              "arguments": {
+                "qty": 10,
+                "stop": {"bt": "points", "args": [50]}
+              }
+            },
+            "python": "self.buy(qty=10, stop=bt.points(50))"
+          }
+        ]
+      },
+      "expected": {
+        "assumptions": {"base": "D", "product": "CNC", "entry_until": null, "square_off": null},
+        "strategy_bars": [
+          {"bar_open_ist": "2025-07-07T09:15:00+05:30", "open": 1500.0, "high": 1512.0, "low": 1495.0, "close": 1508.0},
+          {"bar_open_ist": "2025-07-08T09:15:00+05:30", "open": 1510.0, "high": 1510.0, "low": 1480.0, "close": 1490.0},
+          {"bar_open_ist": "2025-07-09T09:15:00+05:30", "open": 1485.0, "high": 1492.0, "low": 1455.0, "close": 1470.0},
+          {"bar_open_ist": "2025-07-10T09:15:00+05:30", "open": 1475.0, "high": 1478.0, "low": 1462.0, "close": 1468.0},
+          {"bar_open_ist": "2025-07-11T09:15:00+05:30", "open": 1410.0, "high": 1418.0, "low": 1402.0, "close": 1415.0}
+        ],
+        "decisions": [
+          {"decision": 0, "position_condition_met": true, "order_id": "o1", "outcome": "filled"},
+          {"decision": 1, "position_condition_met": true, "order_id": "o2", "outcome": "filled"}
+        ],
+        "fills": [
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "instrument": "INFY", "side": "BUY", "quantity_units": 10, "price_rupees": 1510.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": []},
+          {"slice_ist": "2025-07-09T09:15:00+05:30", "step": 3, "instrument": "INFY", "side": "SELL", "quantity_units": 10, "price_rupees": 1460.0, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": []},
+          {"slice_ist": "2025-07-10T09:15:00+05:30", "step": 2, "instrument": "INFY", "side": "BUY", "quantity_units": 10, "price_rupees": 1475.0, "fill_at": "open", "reason": "entry", "order_id": "o2", "target_index": null, "flags": []},
+          {"slice_ist": "2025-07-11T09:15:00+05:30", "step": 3, "instrument": "INFY", "side": "SELL", "quantity_units": 10, "price_rupees": 1410.0, "fill_at": "open", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": []}
+        ],
+        "levels": [
+          {
+            "slice_ist": "2025-07-08T09:15:00+05:30",
+            "instrument": "INFY",
+            "position_quantity_units": 10,
+            "average_price_rupees": 1510.0,
+            "stop": {"level_rupees": 1460.0, "quantity_units": 10},
+            "targets": [],
+            "remainder_quantity_units": 10,
+            "trail": null,
+            "breakeven": null
+          },
+          {"slice_ist": "2025-07-09T09:15:00+05:30", "instrument": "INFY", "position_quantity_units": 0, "average_price_rupees": null, "stop": null, "targets": [], "remainder_quantity_units": 0, "trail": null, "breakeven": null},
+          {
+            "slice_ist": "2025-07-10T09:15:00+05:30",
+            "instrument": "INFY",
+            "position_quantity_units": 10,
+            "average_price_rupees": 1475.0,
+            "stop": {"level_rupees": 1425.0, "quantity_units": 10},
+            "targets": [],
+            "remainder_quantity_units": 10,
+            "trail": null,
+            "breakeven": null
+          },
+          {"slice_ist": "2025-07-11T09:15:00+05:30", "instrument": "INFY", "position_quantity_units": 0, "average_price_rupees": null, "stop": null, "targets": [], "remainder_quantity_units": 0, "trail": null, "breakeven": null}
+        ],
+        "events": [
+          {"slice_ist": "2025-07-07T09:15:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o1", "quantity_units": null, "price_rupees": null, "reject_code": null},
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o1", "quantity_units": 10, "price_rupees": 1510.0, "reject_code": null},
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "INFY", "position_quantity_units": 10},
+          {"slice_ist": "2025-07-09T09:15:00+05:30", "step": 3, "type": "risk", "name": "leg_sl_hit", "scope": "leg", "instrument": "INFY", "level_rupees": 1460.0, "target_index": null, "observed_rupees": null},
+          {"slice_ist": "2025-07-09T09:15:00+05:30", "step": 3, "type": "position", "name": "PositionClosed", "instrument": "INFY", "position_quantity_units": 0},
+          {"slice_ist": "2025-07-09T09:15:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o2", "quantity_units": null, "price_rupees": null, "reject_code": null},
+          {"slice_ist": "2025-07-10T09:15:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o2", "quantity_units": 10, "price_rupees": 1475.0, "reject_code": null},
+          {"slice_ist": "2025-07-10T09:15:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "INFY", "position_quantity_units": 10},
+          {"slice_ist": "2025-07-11T09:15:00+05:30", "step": 3, "type": "risk", "name": "leg_sl_hit", "scope": "leg", "instrument": "INFY", "level_rupees": 1425.0, "target_index": null, "observed_rupees": null},
+          {"slice_ist": "2025-07-11T09:15:00+05:30", "step": 3, "type": "position", "name": "PositionClosed", "instrument": "INFY", "position_quantity_units": 0}
+        ],
+        "stale_marks": [],
+        "final_positions": [
+          {"instrument": "INFY", "quantity_units": 0, "average_price_rupees": null}
+        ],
+        "gross_pnl": {"realized_rupees": -1150.0, "unrealized_rupees": 0.0, "total_rupees": -1150.0}
+      },
+      "derivation": [
+        {
+          "n": 1,
+          "slice_ist": "2025-07-07T09:15:00+05:30",
+          "step": 7,
+          "text": "Daily strategy on a daily base (the base-interval table: daily or longer strategy, daily). on_bar runs at the close of 2025-07-07; flat, so decision 0 calls buy. For a daily interval an order placed at a session's close is valid for the next session only and fills at its first base-bar open. The session close step of this slice must not cancel it.",
+          "cites": ["03-architecture 4.1, 4.2 step 7, step 8 and order validity", "04-execution 4.2"]
+        },
+        {
+          "n": 2,
+          "slice_ist": "2025-07-08T09:15:00+05:30",
+          "step": 2,
+          "text": "BUY 10 at the open of 2025-07-08, 1510.00 (the decision close was 1508.00). Product CNC (the default for a daily equity strategy). Stop 1510.00 - 50 = 1460.00.",
+          "cites": ["03-architecture 4.2 step 2", "10-simple-path 2", "05-risk-management 3"]
+        },
+        {
+          "n": 3,
+          "slice_ist": "2025-07-08T09:15:00+05:30",
+          "step": 3,
+          "text": "The entry day's low 1480.00 is above the stop. No exit.",
+          "cites": ["03-architecture 4.2 step 3"]
+        },
+        {
+          "n": 4,
+          "slice_ist": "2025-07-09T09:15:00+05:30",
+          "step": 3,
+          "text": "Stop 1460.00. The open 1485.00 is above it and the day's low 1455.00 is at or below it: the stop fills at the level, SELL 10 at 1460.00, reason leg_sl ('base D: stops are tested on the day's range and fill at the stop level, or at the open on a gap'). The close 1470.00 plays no part. Realized (1460.00 - 1510.00) x 10 = -500.00.",
+          "cites": ["03-architecture 4.1 and 4.2 step 3", "04-execution 4.2"]
+        },
+        {
+          "n": 5,
+          "slice_ist": "2025-07-09T09:15:00+05:30",
+          "step": 7,
+          "text": "on_bar at the close of 2025-07-09 sees a flat position (the stop filled in step 3 of this slice). Decision 1 calls buy; o2 is valid for the next session.",
+          "cites": ["03-architecture 4.2 step 7 and order validity"]
+        },
+        {
+          "n": 6,
+          "slice_ist": "2025-07-10T09:15:00+05:30",
+          "step": 2,
+          "text": "BUY 10 at the open of 2025-07-10, 1475.00. Stop 1425.00. Step 3: low 1462.00, no exit.",
+          "cites": ["03-architecture 4.2 steps 2 and 3"]
+        },
+        {
+          "n": 7,
+          "slice_ist": "2025-07-11T09:15:00+05:30",
+          "step": 3,
+          "text": "The open of 2025-07-11, 1410.00, is already at or below the stop 1425.00: the stop fills at the open, SELL 10 at 1410.00, reason leg_sl; the risk event reports the level 1425.00. Realized (1410.00 - 1475.00) x 10 = -650.00.",
+          "cites": ["03-architecture 4.1 and 4.2 step 3", "vectors: long_stop_gapped_through"]
+        },
+        {
+          "n": 8,
+          "slice_ist": null,
+          "step": null,
+          "text": "End of run: flat. Gross P&L -500.00 - 650.00 = -1150.00.",
+          "cites": ["03-architecture 4.2 end of run"]
+        }
+      ]
+    },
+    {
+      "id": "trace-06b-percent-levels-rounded",
+      "title": "Percent stop and target that do not land on the tick grid are rounded to the nearest tick",
+      "depends_on": ["SPEC-03", "SPEC-21", "SPEC-22"],
+      "notes": [
+        "This case exists to pin SPEC-03. The engine default rounds levels to the tick size but the documents do not say how. The fixture uses the nearest tick.",
+        "The unrounded stop is 1504.00 x 0.98 = 1473.92, 0.4 of a tick above 1473.90: nearest gives 1473.90, rounding towards the entry (the tighter side) gives 1473.95, rounding down gives 1473.90. The unrounded target is 1504.00 x 1.035 = 1556.64, 0.8 of a tick above 1556.60: nearest gives 1556.65, rounding down gives 1556.60. The pair (1473.90, 1556.65) identifies nearest-tick rounding.",
+        "With the stop at 1473.95 the exit on 2025-07-09 would be at 1473.95 and the gross P&L -300.50."
+      ],
+      "instruments": [
+        {"symbol": "INFY", "exchange": "NSE", "type": "equity", "tick_size_rupees": 0.05, "lot_size_units": 1, "product": "CNC", "expiry_date": null, "underlying": null}
+      ],
+      "calendar": {
+        "NSE": [
+          {"date": "2025-07-07", "open_ist": "09:15", "close_ist": "15:30"},
+          {"date": "2025-07-08", "open_ist": "09:15", "close_ist": "15:30"},
+          {"date": "2025-07-09", "open_ist": "09:15", "close_ist": "15:30"}
+        ]
+      },
+      "settings": {
+        "strategy_interval": "D",
+        "base": "D",
+        "entry_from": null,
+        "entry_until": null,
+        "square_off": null,
+        "fill": "next_open",
+        "slippage": 0.0,
+        "costs": null,
+        "capital": 1000000,
+        "quantity_mode": "venue",
+        "round_levels": true,
+        "max_daily_loss": null,
+        "risk_basis": "gross",
+        "after_risk_exit": "lock_session",
+        "roll": null,
+        "first_slice_ist": "2025-07-07T09:15:00+05:30",
+        "last_slice_ist": "2025-07-09T09:15:00+05:30",
+        "documented_defaults": ["base", "product", "fill", "risk_basis", "round_levels"]
+      },
+      "bars": {
+        "interval": "D",
+        "derived_from_case": null,
+        "columns": ["time_ist", "open", "high", "low", "close", "volume"],
+        "rows": {
+          "INFY": [
+            ["2025-07-07T09:15:00+05:30", 1500.0, 1512.0, 1495.0, 1508.0, 100000],
+            ["2025-07-08T09:15:00+05:30", 1504.0, 1504.0, 1490.0, 1498.0, 100000],
+            ["2025-07-09T09:15:00+05:30", 1498.0, 1502.0, 1473.9, 1480.0, 100000]
+          ]
+        }
+      },
+      "missing_slices": [],
+      "strategy": {
+        "class_attributes": {"symbol": "INFY", "exchange": "NSE", "interval": "D"},
+        "conditions": null,
+        "decisions": [
+          {
+            "bar_open_ist": "2025-07-07T09:15:00+05:30",
+            "decision_time_ist": "2025-07-07T15:30:00+05:30",
+            "decision_slice_ist": "2025-07-07T09:15:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "buy",
+              "arguments": {
+                "qty": 10,
+                "stop": {"bt": "pct", "args": [2]},
+                "target": {"bt": "pct", "args": [3.5]}
+              }
+            },
+            "python": "self.buy(qty=10, stop=bt.pct(2), target=bt.pct(3.5))"
+          }
+        ]
+      },
+      "expected": {
+        "assumptions": {"base": "D", "product": "CNC", "entry_until": null, "square_off": null},
+        "strategy_bars": [
+          {"bar_open_ist": "2025-07-07T09:15:00+05:30", "open": 1500.0, "high": 1512.0, "low": 1495.0, "close": 1508.0},
+          {"bar_open_ist": "2025-07-08T09:15:00+05:30", "open": 1504.0, "high": 1504.0, "low": 1490.0, "close": 1498.0},
+          {"bar_open_ist": "2025-07-09T09:15:00+05:30", "open": 1498.0, "high": 1502.0, "low": 1473.9, "close": 1480.0}
+        ],
+        "decisions": [
+          {"decision": 0, "position_condition_met": true, "order_id": "o1", "outcome": "filled"}
+        ],
+        "fills": [
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "instrument": "INFY", "side": "BUY", "quantity_units": 10, "price_rupees": 1504.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": []},
+          {"slice_ist": "2025-07-09T09:15:00+05:30", "step": 3, "instrument": "INFY", "side": "SELL", "quantity_units": 10, "price_rupees": 1473.9, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "depends_on": ["SPEC-03"]}
+        ],
+        "levels": [
+          {
+            "slice_ist": "2025-07-08T09:15:00+05:30",
+            "instrument": "INFY",
+            "position_quantity_units": 10,
+            "average_price_rupees": 1504.0,
+            "stop": {"level_rupees": 1473.9, "quantity_units": 10},
+            "targets": [
+              {"index": 0, "level_rupees": 1556.65, "quantity_units": 10, "state": "working"}
+            ],
+            "remainder_quantity_units": 0,
+            "trail": null,
+            "breakeven": null,
+            "depends_on": ["SPEC-03"]
+          },
+          {"slice_ist": "2025-07-09T09:15:00+05:30", "instrument": "INFY", "position_quantity_units": 0, "average_price_rupees": null, "stop": null, "targets": [], "remainder_quantity_units": 0, "trail": null, "breakeven": null}
+        ],
+        "events": [
+          {"slice_ist": "2025-07-07T09:15:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o1", "quantity_units": null, "price_rupees": null, "reject_code": null},
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o1", "quantity_units": 10, "price_rupees": 1504.0, "reject_code": null},
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "INFY", "position_quantity_units": 10},
+          {"slice_ist": "2025-07-09T09:15:00+05:30", "step": 3, "type": "risk", "name": "leg_sl_hit", "scope": "leg", "instrument": "INFY", "level_rupees": 1473.9, "target_index": null, "observed_rupees": null, "depends_on": ["SPEC-03"]},
+          {"slice_ist": "2025-07-09T09:15:00+05:30", "step": 3, "type": "position", "name": "PositionClosed", "instrument": "INFY", "position_quantity_units": 0}
+        ],
+        "stale_marks": [],
+        "final_positions": [
+          {"instrument": "INFY", "quantity_units": 0, "average_price_rupees": null}
+        ],
+        "gross_pnl": {"realized_rupees": -301.0, "unrealized_rupees": 0.0, "total_rupees": -301.0, "depends_on": ["SPEC-03"]}
+      },
+      "derivation": [
+        {
+          "n": 1,
+          "slice_ist": "2025-07-07T09:15:00+05:30",
+          "step": 7,
+          "text": "on_bar at the close of 2025-07-07; flat; buy queued for the next session (o1).",
+          "cites": ["03-architecture 4.2 step 7 and order validity"]
+        },
+        {
+          "n": 2,
+          "slice_ist": "2025-07-08T09:15:00+05:30",
+          "step": 2,
+          "text": "BUY 10 at the open 1504.00. bt.pct is percent of the leg's fill average: stop distance 2 percent of 1504.00 = 30.08, level 1473.92; target distance 3.5 percent = 52.64, level 1556.64. Tick size 0.05. Levels are rounded to the tick size by default; SPEC-03, nearest tick: 1473.92 / 0.05 = 29478.4, so 29478 ticks = 1473.90; 1556.64 / 0.05 = 31132.8, so 31133 ticks = 1556.65.",
+          "cites": ["03-architecture 4.2 step 2", "03-architecture 7", "05-risk-management 3 and 8", "14-strategy-api 1", "strategy-module 3.1"]
+        },
+        {
+          "n": 3,
+          "slice_ist": "2025-07-08T09:15:00+05:30",
+          "step": 3,
+          "text": "Entry day range 1490.00 to 1504.00: no level reached.",
+          "cites": ["03-architecture 4.2 step 3"]
+        },
+        {
+          "n": 4,
+          "slice_ist": "2025-07-09T09:15:00+05:30",
+          "step": 3,
+          "text": "Stop 1473.90. Open 1498.00 above it; the low 1473.90 touches it exactly (price <= stop): SELL 10 at 1473.90, reason leg_sl. Realized (1473.90 - 1504.00) x 10 = -301.00.",
+          "cites": ["03-architecture 4.2 step 3", "vectors: long_stop_exact_touch"]
+        }
+      ]
+    },
+    {
+      "id": "trace-06c-stop-on-the-entry-day",
+      "title": "The stop is tested against the entry bar itself: bought at the open, stopped the same day",
+      "depends_on": ["SPEC-02", "SPEC-21", "SPEC-22"],
+      "notes": [
+        "This case exists to pin SPEC-02. The sequence runs step 2 (fill at the open) and then step 3 (levels against this bar) with no exemption for a leg that has just been opened, and the whole bar follows its open in time.",
+        "Under the other reading (levels are first tested in the slice after the entry) the exit is on 2025-07-09 at the open 1458.00 (already below the stop), gross P&L -520.00.",
+        "A CNC buy and sell on the same day is charged as intraday (04-execution 2); costs are zero here."
+      ],
+      "instruments": [
+        {"symbol": "INFY", "exchange": "NSE", "type": "equity", "tick_size_rupees": 0.05, "lot_size_units": 1, "product": "CNC", "expiry_date": null, "underlying": null}
+      ],
+      "calendar": {
+        "NSE": [
+          {"date": "2025-07-07", "open_ist": "09:15", "close_ist": "15:30"},
+          {"date": "2025-07-08", "open_ist": "09:15", "close_ist": "15:30"},
+          {"date": "2025-07-09", "open_ist": "09:15", "close_ist": "15:30"}
+        ]
+      },
+      "settings": {
+        "strategy_interval": "D",
+        "base": "D",
+        "entry_from": null,
+        "entry_until": null,
+        "square_off": null,
+        "fill": "next_open",
+        "slippage": 0.0,
+        "costs": null,
+        "capital": 1000000,
+        "quantity_mode": "venue",
+        "round_levels": true,
+        "max_daily_loss": null,
+        "risk_basis": "gross",
+        "after_risk_exit": "lock_session",
+        "roll": null,
+        "first_slice_ist": "2025-07-07T09:15:00+05:30",
+        "last_slice_ist": "2025-07-09T09:15:00+05:30",
+        "documented_defaults": ["base", "product", "fill", "risk_basis", "round_levels"]
+      },
+      "bars": {
+        "interval": "D",
+        "derived_from_case": null,
+        "columns": ["time_ist", "open", "high", "low", "close", "volume"],
+        "rows": {
+          "INFY": [
+            ["2025-07-07T09:15:00+05:30", 1500.0, 1512.0, 1495.0, 1508.0, 100000],
+            ["2025-07-08T09:15:00+05:30", 1510.0, 1515.0, 1452.0, 1458.0, 100000],
+            ["2025-07-09T09:15:00+05:30", 1458.0, 1470.0, 1450.0, 1465.0, 100000]
+          ]
+        }
+      },
+      "missing_slices": [],
+      "strategy": {
+        "class_attributes": {"symbol": "INFY", "exchange": "NSE", "interval": "D"},
+        "conditions": null,
+        "decisions": [
+          {
+            "bar_open_ist": "2025-07-07T09:15:00+05:30",
+            "decision_time_ist": "2025-07-07T15:30:00+05:30",
+            "decision_slice_ist": "2025-07-07T09:15:00+05:30",
+            "if_position": "flat",
+            "call": {
+              "method": "buy",
+              "arguments": {
+                "qty": 10,
+                "stop": {"bt": "points", "args": [50]}
+              }
+            },
+            "python": "self.buy(qty=10, stop=bt.points(50))"
+          }
+        ]
+      },
+      "expected": {
+        "assumptions": {"base": "D", "product": "CNC", "entry_until": null, "square_off": null},
+        "strategy_bars": [
+          {"bar_open_ist": "2025-07-07T09:15:00+05:30", "open": 1500.0, "high": 1512.0, "low": 1495.0, "close": 1508.0},
+          {"bar_open_ist": "2025-07-08T09:15:00+05:30", "open": 1510.0, "high": 1515.0, "low": 1452.0, "close": 1458.0},
+          {"bar_open_ist": "2025-07-09T09:15:00+05:30", "open": 1458.0, "high": 1470.0, "low": 1450.0, "close": 1465.0}
+        ],
+        "decisions": [
+          {"decision": 0, "position_condition_met": true, "order_id": "o1", "outcome": "filled"}
+        ],
+        "fills": [
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "instrument": "INFY", "side": "BUY", "quantity_units": 10, "price_rupees": 1510.0, "fill_at": "open", "reason": "entry", "order_id": "o1", "target_index": null, "flags": []},
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 3, "instrument": "INFY", "side": "SELL", "quantity_units": 10, "price_rupees": 1460.0, "fill_at": "level", "reason": "leg_sl", "order_id": null, "target_index": null, "flags": [], "depends_on": ["SPEC-02"]}
+        ],
+        "levels": [
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "instrument": "INFY", "position_quantity_units": 0, "average_price_rupees": null, "stop": null, "targets": [], "remainder_quantity_units": 0, "trail": null, "breakeven": null, "depends_on": ["SPEC-02"]}
+        ],
+        "events": [
+          {"slice_ist": "2025-07-07T09:15:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o1", "quantity_units": null, "price_rupees": null, "reject_code": null},
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o1", "quantity_units": 10, "price_rupees": 1510.0, "reject_code": null},
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "INFY", "position_quantity_units": 10},
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 3, "type": "risk", "name": "leg_sl_hit", "scope": "leg", "instrument": "INFY", "level_rupees": 1460.0, "target_index": null, "observed_rupees": null, "depends_on": ["SPEC-02"]},
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 3, "type": "position", "name": "PositionClosed", "instrument": "INFY", "position_quantity_units": 0, "depends_on": ["SPEC-02"]}
+        ],
+        "stale_marks": [],
+        "final_positions": [
+          {"instrument": "INFY", "quantity_units": 0, "average_price_rupees": null}
+        ],
+        "gross_pnl": {"realized_rupees": -500.0, "unrealized_rupees": 0.0, "total_rupees": -500.0, "depends_on": ["SPEC-02"]}
+      },
+      "derivation": [
+        {
+          "n": 1,
+          "slice_ist": "2025-07-07T09:15:00+05:30",
+          "step": 7,
+          "text": "on_bar at the close of 2025-07-07; flat; buy queued for the next session (o1).",
+          "cites": ["03-architecture 4.2 step 7 and order validity"]
+        },
+        {
+          "n": 2,
+          "slice_ist": "2025-07-08T09:15:00+05:30",
+          "step": 2,
+          "text": "BUY 10 at the open 1510.00. The leg has levels from the moment its entry fills: stop 1460.00.",
+          "cites": ["03-architecture 4.2 step 2", "05-risk-management 3"]
+        },
+        {
+          "n": 3,
+          "slice_ist": "2025-07-08T09:15:00+05:30",
+          "step": 3,
+          "text": "SPEC-02: the new leg's stop is tested against this bar. The open is the entry, so the level is not crossed at the open; the day's low 1452.00 is at or below 1460.00: SELL 10 at 1460.00, reason leg_sl, on the entry day. Realized -500.00. The level row at the end of this slice is flat.",
+          "cites": ["03-architecture 4.2 steps 2 and 3", "04-execution 2"]
+        },
+        {
+          "n": 4,
+          "slice_ist": "2025-07-09T09:15:00+05:30",
+          "step": null,
+          "text": "Flat; nothing happens. End of run.",
+          "cites": ["03-architecture 4.2 end of run"]
+        }
+      ]
+    }
+  ]
+}
