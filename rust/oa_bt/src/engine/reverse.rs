@@ -10,20 +10,22 @@
 //! Without `reverse=True` the order is rejected whole with `reverse_not_allowed`, at
 //! submission (`submit`) and again at the fill bar (`fills::at_fill`).
 
-use crate::exec::{FillAt, FillFlags, Order, OrderAction, RejectCode};
+use crate::exec::{FillFlags, Order, OrderAction, RejectCode};
 use crate::model::Product;
 use crate::portfolio::PositionKey;
 use crate::rms::{ExitReason, LegRules};
 
 use super::clock::SliceInfo;
 use super::error::KernelError;
-use super::event::{OrderEventKind, Step};
+use super::event::OrderEventKind;
 use super::fills::FillRequest;
 use super::kernel::Engine;
+use super::order_fill::OrderFill;
 
 impl Engine {
-    /// Fill a reversing order at the open: close `close_units`, then open `open_units`
-    /// on the order's side with its leg rules.
+    /// Fill a reversing order as `how` says (at the open, or at a point of the bar for a
+    /// resting order): close `close_units`, then open `open_units` on the order's side
+    /// with its leg rules.
     ///
     /// Errors: those of `execute_fill`, the session times and the margin model.
     pub(super) fn fill_reversal(
@@ -31,9 +33,10 @@ impl Engine {
         slice: &SliceInfo,
         order: &Order,
         (close_units, open_units): (f64, f64),
-        open_rupees: f64,
+        how: OrderFill,
     ) -> Result<(), KernelError> {
-        let stamp = Self::stamp(slice, Step::OpenFills);
+        let stamp = Self::stamp(slice, how.step);
+        let open_rupees = how.point.price_rupees;
         let request = &order.request;
         let key = PositionKey {
             instrument: request.instrument,
@@ -44,13 +47,15 @@ impl Engine {
             side: request.side,
             units: close_units,
             reference_rupees: open_rupees,
-            at: FillAt::Open,
+            at: how.point.at,
             order: Some(order.id),
             exit_reason: request.exit_reason.unwrap_or(ExitReason::Signal),
             flags: FillFlags::NONE,
             margin_rupees: 0.0,
             leg_rules: LegRules::default(),
             target_index: None,
+            pricing: how.pricing,
+            gtt: how.gtt,
         };
         self.execute_fill(stamp, close.clone())?;
         let margin = match self.reversal_margin(slice, order, open_units, open_rupees)? {

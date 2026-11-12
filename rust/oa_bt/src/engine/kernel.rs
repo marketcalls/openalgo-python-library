@@ -18,6 +18,7 @@ use super::clock::{SliceInfo, Timeline};
 use super::config::{RunConfig, RunSetup};
 use super::error::KernelError;
 use super::event::{Event, EventStamp, Step};
+use super::gtt::GttDesk;
 use super::market_data::MarketData;
 use super::output::{FinalPosition, GrossPnl, Recorder, RunOutput};
 use super::pause::Pause;
@@ -80,6 +81,8 @@ pub struct Engine {
     pub(super) risk: StrategyRisk,
     /// Charges, contract notes and the market-table rows used.
     pub(super) charges: ChargeBook,
+    /// GTT orders and the engine's exits after unfilled GTT children.
+    pub(super) gtts: GttDesk,
     /// Timers registered with `add_timer`.
     pub(super) timers: TimerBook,
 }
@@ -134,6 +137,7 @@ impl Engine {
             })?;
         Ok(Engine {
             charges: charge_book(&config.costs),
+            gtts: GttDesk::default(),
             last_close: vec![None; instruments.len()],
             risk: StrategyRisk::new(&config.risk, config.capital_rupees, instruments.len()),
             config,

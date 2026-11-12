@@ -13,9 +13,14 @@
 //!        |                         |  |---Trigger--> Triggered --Fill--> Filled
 //!        |                         |  |---Reject---> Rejected   (checks at the fill bar)
 //!        |                         |  |---Cancel---> Canceled   (strategy or engine)
-//!        |                         |  '---Expire---> Expired    (DAY validity ended)
+//!        |                         |  |---Expire---> Expired    (DAY validity ended)
+//!        |                         |  '---Modify---> Submitted  (a full replacement)
 //!        '--FailChecks--> Rejected (submission checks; Rejected is the only event)
 //! ```
+//!
+//! A modification replaces the order's request in full and keeps its id. A triggered
+//! stop order that is modified starts over as `Submitted`: its replacement must trigger
+//! again.
 
 use super::error::ExecError;
 
@@ -117,9 +122,25 @@ pub enum OrderAction {
     Cancel = 7,
     /// The order's validity ended.
     Expire = 8,
+    /// The strategy replaced the order's request (a full replacement, same id).
+    Modify = 9,
 }
 
 impl OrderAction {
+    /// Every action, in code order.
+    pub const ALL: [OrderAction; 10] = [
+        OrderAction::PassChecks,
+        OrderAction::FailChecks,
+        OrderAction::Accept,
+        OrderAction::Reject,
+        OrderAction::Trigger,
+        OrderAction::FillPart,
+        OrderAction::Fill,
+        OrderAction::Cancel,
+        OrderAction::Expire,
+        OrderAction::Modify,
+    ];
+
     /// The action name used in messages.
     pub fn code(self) -> &'static str {
         match self {
@@ -132,6 +153,7 @@ impl OrderAction {
             OrderAction::Fill => "Fill",
             OrderAction::Cancel => "Cancel",
             OrderAction::Expire => "Expire",
+            OrderAction::Modify => "Modify",
         }
     }
 }
@@ -140,7 +162,7 @@ use OrderAction as A;
 use OrderStatus as S;
 
 /// Every legal transition as (from, action, to). Anything not listed is illegal.
-pub const ORDER_TRANSITIONS: [(OrderStatus, OrderAction, OrderStatus); 25] = [
+pub const ORDER_TRANSITIONS: [(OrderStatus, OrderAction, OrderStatus); 28] = [
     (S::Initialized, A::PassChecks, S::Submitted),
     (S::Initialized, A::FailChecks, S::Rejected),
     (S::Submitted, A::Accept, S::Accepted),
@@ -150,17 +172,20 @@ pub const ORDER_TRANSITIONS: [(OrderStatus, OrderAction, OrderStatus); 25] = [
     (S::Submitted, A::Fill, S::Filled),
     (S::Submitted, A::Cancel, S::Canceled),
     (S::Submitted, A::Expire, S::Expired),
+    (S::Submitted, A::Modify, S::Submitted),
     (S::Accepted, A::Reject, S::Rejected),
     (S::Accepted, A::Trigger, S::Triggered),
     (S::Accepted, A::FillPart, S::PartiallyFilled),
     (S::Accepted, A::Fill, S::Filled),
     (S::Accepted, A::Cancel, S::Canceled),
     (S::Accepted, A::Expire, S::Expired),
+    (S::Accepted, A::Modify, S::Accepted),
     (S::Triggered, A::Reject, S::Rejected),
     (S::Triggered, A::FillPart, S::PartiallyFilled),
     (S::Triggered, A::Fill, S::Filled),
     (S::Triggered, A::Cancel, S::Canceled),
     (S::Triggered, A::Expire, S::Expired),
+    (S::Triggered, A::Modify, S::Submitted),
     (S::PartiallyFilled, A::FillPart, S::PartiallyFilled),
     (S::PartiallyFilled, A::Fill, S::Filled),
     (S::PartiallyFilled, A::Cancel, S::Canceled),
@@ -184,11 +209,68 @@ pub fn next_status(from: OrderStatus, action: OrderAction) -> Result<OrderStatus
 mod tests {
     use super::*;
 
+    /// The legal transitions, written out from the lifecycle above and 03-architecture
+    /// 4.5 (live adds `Accepted` and partial fills).
+    const LEGAL: [(OrderStatus, OrderAction, OrderStatus); 28] = [
+        (S::Initialized, A::PassChecks, S::Submitted),
+        (S::Initialized, A::FailChecks, S::Rejected),
+        (S::Submitted, A::Accept, S::Accepted),
+        (S::Submitted, A::Reject, S::Rejected),
+        (S::Submitted, A::Trigger, S::Triggered),
+        (S::Submitted, A::FillPart, S::PartiallyFilled),
+        (S::Submitted, A::Fill, S::Filled),
+        (S::Submitted, A::Cancel, S::Canceled),
+        (S::Submitted, A::Expire, S::Expired),
+        (S::Submitted, A::Modify, S::Submitted),
+        (S::Accepted, A::Reject, S::Rejected),
+        (S::Accepted, A::Trigger, S::Triggered),
+        (S::Accepted, A::FillPart, S::PartiallyFilled),
+        (S::Accepted, A::Fill, S::Filled),
+        (S::Accepted, A::Cancel, S::Canceled),
+        (S::Accepted, A::Expire, S::Expired),
+        (S::Accepted, A::Modify, S::Accepted),
+        (S::Triggered, A::Reject, S::Rejected),
+        (S::Triggered, A::FillPart, S::PartiallyFilled),
+        (S::Triggered, A::Fill, S::Filled),
+        (S::Triggered, A::Cancel, S::Canceled),
+        (S::Triggered, A::Expire, S::Expired),
+        (S::Triggered, A::Modify, S::Submitted),
+        (S::PartiallyFilled, A::FillPart, S::PartiallyFilled),
+        (S::PartiallyFilled, A::Fill, S::Filled),
+        (S::PartiallyFilled, A::Cancel, S::Canceled),
+        (S::PartiallyFilled, A::Expire, S::Expired),
+        (S::PartiallyFilled, A::Reject, S::Rejected),
+    ];
+
     #[test]
-    fn a_backtest_order_is_submitted_then_filled() {
-        let submitted = next_status(S::Initialized, A::PassChecks);
-        assert_eq!(submitted, Ok(S::Submitted));
-        assert_eq!(next_status(S::Submitted, A::Fill), Ok(S::Filled));
+    fn every_legal_transition_moves_the_order_as_documented() {
+        for (from, action, to) in LEGAL {
+            assert_eq!(
+                next_status(from, action),
+                Ok(to),
+                "{} --{}-->",
+                from.code(),
+                action.code()
+            );
+        }
+    }
+
+    #[test]
+    fn every_other_transition_is_illegal() {
+        for from in S::ALL {
+            for action in A::ALL {
+                if LEGAL.iter().any(|(s, a, _)| *s == from && *a == action) {
+                    continue;
+                }
+                assert_eq!(
+                    next_status(from, action),
+                    Err(ExecError::IllegalOrderTransition { from, action }),
+                    "{} --{}-->",
+                    from.code(),
+                    action.code()
+                );
+            }
+        }
     }
 
     #[test]
@@ -204,12 +286,6 @@ mod tests {
             let later = &ORDER_TRANSITIONS[index + 1..];
             assert!(!later.iter().any(|(s, a, _)| s == from && a == action));
         }
-    }
-
-    #[test]
-    fn an_illegal_transition_is_an_error() {
-        assert!(next_status(S::Filled, A::Cancel).is_err());
-        assert!(next_status(S::Initialized, A::Fill).is_err());
     }
 
     #[test]

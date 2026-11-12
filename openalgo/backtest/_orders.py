@@ -113,11 +113,18 @@ def quantity(
     return sizer.to_native()
 
 
-def order_shape(price: float | None) -> dict[str, Any]:
-    """MARKET without a price, LIMIT with one."""
-    if price is None:
-        return {"order_type": "MARKET", "price": None, "trigger": None}
-    return {"order_type": "LIMIT", "price": float(price), "trigger": None}
+def order_shape(price: float | None, trigger_price: float | None = None) -> dict[str, Any]:
+    """The order type from its prices (OpenAlgo's `pricetype`): MARKET without a price,
+    LIMIT with `price`, SL (stop-limit) with `price` and `trigger_price`, SL-M
+    (stop-market) with `trigger_price` alone. Prices are rupees; the kernel rejects one
+    off the tick grid with reject code `tick`."""
+    limit = None if price is None else float(price)
+    trigger = None if trigger_price is None else float(trigger_price)
+    if trigger is None:
+        order_type = "MARKET" if limit is None else "LIMIT"
+    else:
+        order_type = "SL-M" if limit is None else "SL"
+    return {"order_type": order_type, "price": limit, "trigger": trigger}
 
 
 def request(instrument: int, side: str, product: str, **fields: Any) -> dict[str, Any]:

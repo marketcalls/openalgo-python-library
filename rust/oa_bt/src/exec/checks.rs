@@ -11,15 +11,17 @@
 //! decided in. That covers the last-bar signal of an intraday strategy. Orders of daily
 //! and longer strategies are valid for the next session; GTT orders persist.
 //!
-//! Built: the quantity rule, the freeze quantity (deny), the product rule (no delivery
-//! short, no trading an index), the entry window and market closed; the trading-state
-//! gate (daily loss gate, halted), cooldown and maximum positions are risk rules
-//! (`rms::TradingLock`, `rms::entry_gates`). Not built yet: tick validity of limit and
-//! trigger prices, margin at submission and the order rate limit.
+//! Built: the quantity rule, tick validity of limit and trigger prices, the freeze
+//! quantity (deny), the product rules (no delivery short, no trading an index, no GTT
+//! on MIS), the entry window and market closed; the trading-state gate (daily loss
+//! gate, halted), cooldown and maximum positions are risk rules (`rms::TradingLock`,
+//! `rms::entry_gates`). Not built yet: margin at submission and the order rate limit.
 
 use crate::model::{Product, Side, TsNanos};
 
 use super::instrument::InstrumentSpec;
+use super::order::{OrderType, Validity};
+use super::price::is_on_tick;
 
 /// Why a check refused an order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -127,6 +129,38 @@ pub fn quantity_rule(
     }
 }
 
+/// Tick validity (03-architecture 4.4 item 2, 7): the limit and the trigger of an order
+/// must be whole numbers of the instrument's tick. A price that is not a usable price at
+/// all is refused before the checks (`engine::submit`), so here it counts as off the
+/// grid.
+pub fn tick_rule(order_type: OrderType, spec: &InstrumentSpec) -> Result<(), RejectCode> {
+    let prices = match order_type {
+        OrderType::Market => [None, None],
+        OrderType::Limit { limit_rupees } => [Some(limit_rupees), None],
+        OrderType::StopLimit {
+            trigger_rupees,
+            limit_rupees,
+        } => [Some(trigger_rupees), Some(limit_rupees)],
+        OrderType::StopMarket { trigger_rupees } => [Some(trigger_rupees), None],
+    };
+    let on_grid = |price: f64| is_on_tick(price, spec.tick_size_rupees).unwrap_or(false);
+    if prices.into_iter().flatten().all(on_grid) {
+        Ok(())
+    } else {
+        Err(RejectCode::Tick)
+    }
+}
+
+/// The GTT product rule (03-architecture 4.4 item 3): MIS cannot hold a GTT, so a GTT
+/// order on MIS is refused.
+pub fn gtt_rule(validity: Validity, product: Product) -> Result<(), RejectCode> {
+    if validity == Validity::Gtt && product == Product::Mis {
+        Err(RejectCode::ProductRule)
+    } else {
+        Ok(())
+    }
+}
+
 /// The freeze quantity: an order above it is denied (the default; sequential slicing
 /// is an option that is not built yet).
 pub fn freeze_rule(units: f64, spec: &InstrumentSpec) -> Result<(), RejectCode> {
@@ -228,6 +262,36 @@ mod tests {
         );
         let index_buy = product_rule(&index, Product::Mis, Side::Buy, 1.0, 0.0);
         assert_eq!(index_buy, Err(RejectCode::ProductRule));
+    }
+
+    #[test]
+    fn limit_and_trigger_prices_must_be_whole_ticks() {
+        let equity = spec(InstrumentKind::Equity, 1);
+        let limit = |price| OrderType::Limit {
+            limit_rupees: price,
+        };
+        assert_eq!(tick_rule(limit(501.05), &equity), Ok(()));
+        assert_eq!(tick_rule(limit(501.02), &equity), Err(RejectCode::Tick));
+        let stop = OrderType::StopLimit {
+            trigger_rupees: 500.0,
+            limit_rupees: 499.97,
+        };
+        assert_eq!(tick_rule(stop, &equity), Err(RejectCode::Tick));
+        let stop_market = OrderType::StopMarket {
+            trigger_rupees: 500.03,
+        };
+        assert_eq!(tick_rule(stop_market, &equity), Err(RejectCode::Tick));
+        assert_eq!(tick_rule(OrderType::Market, &equity), Ok(()));
+    }
+
+    #[test]
+    fn mis_cannot_hold_a_gtt() {
+        assert_eq!(
+            gtt_rule(Validity::Gtt, Product::Mis),
+            Err(RejectCode::ProductRule)
+        );
+        assert_eq!(gtt_rule(Validity::Gtt, Product::Cnc), Ok(()));
+        assert_eq!(gtt_rule(Validity::Day, Product::Mis), Ok(()));
     }
 
     #[test]

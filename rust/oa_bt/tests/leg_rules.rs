@@ -172,6 +172,7 @@ fn event_names(output: &RunOutput) -> Vec<(i64, Step, &'static str)> {
             Event::Position { stamp, change, .. } => (stamp.slice_ts, stamp.step, change.code()),
             Event::Risk { stamp, event, .. } => (stamp.slice_ts, stamp.step, event.name.code()),
             Event::TradingState { stamp, to, .. } => (stamp.slice_ts, stamp.step, to.code()),
+            Event::Gtt { stamp, event } => (stamp.slice_ts, stamp.step, event.name.code()),
         })
         .collect()
 }

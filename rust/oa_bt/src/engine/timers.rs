@@ -147,6 +147,7 @@ impl Engine {
                 continue;
             };
             self.risk_exits_at_open(slice, instrument, bar.open)?;
+            self.gtt_exits_at_open(slice, instrument, bar.open)?;
             for id in self.book.queued_for(instrument) {
                 self.fill_queued(slice, id, bar.open)?;
             }

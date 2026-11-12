@@ -3,12 +3,13 @@
 //! `submit` runs the submission checks against the decision instant and records the
 //! order with `Submitted`, or `Rejected` alone (SPEC-21), stamped in step 7 of the
 //! paused slice. The order then waits for the first base bar of its instrument that
-//! opens at or after that instant (SPEC-35).
+//! opens at or after that instant (SPEC-35). A GTT order (`validity="gtt"`) also places
+//! its GTT (`gtt_orders`); `modify` is in `modify`.
 
-use crate::exec::checks::{freeze_rule, product_rule, quantity_rule};
+use crate::exec::checks::{freeze_rule, gtt_rule, product_rule, quantity_rule, tick_rule};
 use crate::exec::{
-    ExecError, InstrumentId, Order, OrderAction, OrderId, OrderRequest, OrderStatus, OrderType,
-    QuantitySpec, RejectCode, Validity,
+    ExecError, InstrumentId, Order, OrderAction, OrderId, OrderRequest, OrderStatus, QuantitySpec,
+    RejectCode, Validity, GTT_GOOD_UNTIL,
 };
 use crate::model::{Product, Side, TsNanos};
 use crate::portfolio::PositionKey;
@@ -36,14 +37,10 @@ pub enum Submission {
 }
 
 /// The quantity of a request at submission.
-enum Resolved {
+pub(super) enum Resolved {
     Units(f64),
     AtFill,
     Skipped(SkipReason),
-}
-
-fn not_built(feature: &'static str) -> KernelError {
-    KernelError::NotBuilt { feature }
 }
 
 fn invalid(reason: &str) -> KernelError {
@@ -56,16 +53,17 @@ impl Engine {
     /// Place an order at the current decision point.
     ///
     /// Errors: `NotAtDecisionPoint` unless paused; `Exec(InvalidRequest)` for a
-    /// quantity that is not positive or a fraction outside (0, 1]; `Rms(InvalidRule)`
+    /// quantity that is not positive, a fraction outside (0, 1], a limit or trigger
+    /// that is not a usable price, or a GTT order without a price; `Rms(InvalidRule)`
     /// for contradictory leg rules, or an add whose leg rules differ from the
-    /// position's (SPEC-14); `NotBuilt` for order types, validities and
-    /// arguments not built yet. A market rule that refuses the order is not an error:
-    /// the result is `Submission::Rejected`.
+    /// position's (SPEC-14); `NotBuilt` for arguments not built yet. A market rule that
+    /// refuses the order is not an error: the result is `Submission::Rejected`.
     pub fn submit(&mut self, request: OrderRequest) -> Result<Submission, KernelError> {
         let Some((slice, decided_at, step)) = self.decision_point() else {
             return Err(KernelError::NotAtDecisionPoint);
         };
         self.check_buildable(&request)?;
+        let request = self.venue_request(request)?;
         let units = match self.resolve_units(&request, &slice)? {
             Resolved::Units(units) => units,
             Resolved::AtFill => 0.0,
@@ -105,6 +103,9 @@ impl Engine {
             order: id,
             kind,
         });
+        if reject.is_none() {
+            self.place_order_gtt(stamp, id)?;
+        }
         Ok(match reject {
             Some(code) => Submission::Rejected(id, code),
             None => Submission::Submitted(id),
@@ -132,35 +133,14 @@ impl Engine {
         Ok(OrderStatus::Canceled)
     }
 
-    /// Change a working order's quantity or prices.
-    ///
-    /// Errors: `NotBuilt` (modification arrives with LIMIT and stop orders).
-    pub fn modify(&mut self, _id: OrderId, _request: OrderRequest) -> Result<(), KernelError> {
-        Err(not_built("order modification"))
-    }
-
-    /// Refuse, with `NotBuilt`, the request shapes the kernel cannot run yet.
-    fn check_buildable(&self, request: &OrderRequest) -> Result<(), KernelError> {
-        if request.order_type != OrderType::Market {
-            return Err(not_built("LIMIT, SL and SL-M orders"));
-        }
-        if request.validity == Validity::Gtt {
-            return Err(not_built("GTT orders"));
-        }
+    /// Refuse a request that cannot be read: unusable prices, contradictory leg rules.
+    pub(super) fn check_buildable(&self, request: &OrderRequest) -> Result<(), KernelError> {
+        request.check_prices()?;
         request.leg_rules.validate(self.config.risk.strict_config)?;
-        if request.leg_rules.max_hold_bars.is_some() {
-            return Err(not_built("max_hold (the time exit)"));
-        }
-        if !request.leg_rules.is_empty() && request.product != Product::Mis {
-            return Err(not_built(
-                "stops, targets, trails and breakeven on CNC and NRML positions (held as \
-                 GTT orders, 04-execution 4.4)",
-            ));
-        }
         self.check_leg_rules(request)
     }
 
-    fn resolve_units(
+    pub(super) fn resolve_units(
         &self,
         request: &OrderRequest,
         slice: &SliceInfo,
@@ -204,7 +184,7 @@ impl Engine {
 
     /// The submission checks, in order, at the decision instant `decided_at`; `Ok`
     /// carries the order's `good_until`.
-    fn submission_checks(
+    pub(super) fn submission_checks(
         &mut self,
         request: &OrderRequest,
         units: f64,
@@ -224,12 +204,15 @@ impl Engine {
         let excess = reduces && !request.reduce_only && units > held.abs();
         let fractional = self.fractional(request.instrument);
         let rules = if units > 0.0 {
-            quantity_rule(units, spec, fractional).and_then(|()| freeze_rule(units, spec))
+            quantity_rule(units, spec, fractional)
+                .and_then(|()| tick_rule(request.order_type, spec))
+                .and_then(|()| freeze_rule(units, spec))
         } else {
-            Ok(())
+            tick_rule(request.order_type, spec)
         };
-        let checked =
-            rules.and_then(|()| product_rule(spec, request.product, request.side, units, held));
+        let checked = rules
+            .and_then(|()| product_rule(spec, request.product, request.side, units, held))
+            .and_then(|()| gtt_rule(request.validity, request.product));
         if let Err(code) = checked {
             return Ok(Err(code));
         }
@@ -241,7 +224,10 @@ impl Engine {
         }
         // Pre-trade check order of 03-architecture 4.4: closed market (5), trading state
         // and entry gates (6, 7), then an excess over the position without `reverse` (7).
-        let validity = self.day_validity(slice, decided_at);
+        let validity = match request.validity {
+            Validity::Day => self.day_validity(slice, decided_at),
+            Validity::Gtt => Ok(GTT_GOOD_UNTIL),
+        };
         if opening && validity.is_ok() {
             if let Err(code) = self.entry_gates(key, held, slice) {
                 return Ok(Err(code));

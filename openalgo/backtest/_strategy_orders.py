@@ -2,9 +2,11 @@
 
 `buy` and `sell` open, add or reduce; `exit` and `reduce` only reduce. Every method takes
 `symbol=None` (required with several instruments) and returns an `Order` handle, or None
-when there is nothing to do (an exit while flat) or a sizer skipped the order. Orders are
-queued for the next base-bar open at or after the decision. The kernel refuses what it
-cannot run yet with NotImplementedError.
+when there is nothing to do (an exit while flat) or a sizer skipped the order. A MARKET
+order fills at the next base-bar open at or after the decision; a LIMIT or stop order
+(`price=`, `trigger_price=`) rests from that bar until it fills or its session closes;
+a GTT order (`validity="gtt"`) rests until it fires or is cancelled. The kernel refuses
+what it cannot run yet with NotImplementedError.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ class OrderMethods:
         size: Any = None,
         lots: int | None = None,
         price: float | None = None,
+        trigger_price: float | None = None,
         stop: Any = None,
         target: Any = None,
         targets: Any = None,
@@ -45,11 +48,15 @@ class OrderMethods:
         validity: str = "day",
     ) -> Order | None:
         """Buy: open a long, add to it, or reduce a short (the excess over the short is
-        rejected unless `reverse=True`). `price=None` is MARKET, a price makes it LIMIT.
-        Quantity: `qty` units or `lots`, else `size=`, else the strategy's `size`, else
-        the engine default. Risk arguments attach to the position it opens (an add may
-        repeat them but not change them, SPEC-14). `validity="gtt"` rests it as a GTT
-        (CNC and NRML only)."""
+        rejected unless `reverse=True`). `price=None` is MARKET, a price makes it LIMIT;
+        `trigger_price` makes it a stop order, SL with a price and SL-M without (on
+        options an SL-M is sent as an SL with its limit 5 percent beyond the trigger).
+        A LIMIT or stop order rests from the next base bar until it fills or its session
+        closes. Quantity: `qty` units or `lots`, else `size=`, else the strategy's
+        `size`, else the engine default. Risk arguments attach to the position it opens
+        (an add may repeat them but not change them, SPEC-14); on CNC and NRML they are
+        held as GTT orders. `validity="gtt"` rests it as a GTT until it fires or is
+        cancelled (CNC and NRML only; it needs `price`, its trigger)."""
         return self._open("BUY", **locals_without_self(locals()))
 
     def sell(
@@ -59,6 +66,7 @@ class OrderMethods:
         size: Any = None,
         lots: int | None = None,
         price: float | None = None,
+        trigger_price: float | None = None,
         stop: Any = None,
         target: Any = None,
         targets: Any = None,
@@ -98,7 +106,7 @@ class OrderMethods:
             rules=rules,
             leverage=args["leverage"],
             tag=args["tag"],
-            **_orders.order_shape(args["price"]),
+            **_orders.order_shape(args["price"], args["trigger_price"]),
         )
         return ctx.submit(request)
 

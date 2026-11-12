@@ -222,15 +222,3 @@ fn a_roll_shifts_every_level_and_the_extreme() {
         Some(24_120.0)
     );
 }
-
-#[test]
-fn the_time_exit_is_not_built_yet() {
-    let rules = LegRules {
-        max_hold_bars: Some(10),
-        ..LegRules::default()
-    };
-    assert!(matches!(
-        open(rules, Side::Buy, 500.0, 10.0),
-        Err(RmsError::NotBuilt { .. })
-    ));
-}

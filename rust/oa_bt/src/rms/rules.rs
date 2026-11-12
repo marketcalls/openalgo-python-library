@@ -117,8 +117,6 @@ pub struct LegRules {
     pub breakeven: Option<BreakevenSpec>,
     /// Stop move after the first target.
     pub after_first_target: AfterFirstTarget,
-    /// Exit after this many base bars in the position (`max_hold`), reason `time_exit`.
-    pub max_hold_bars: Option<u32>,
 }
 
 impl LegRules {

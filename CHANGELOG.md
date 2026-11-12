@@ -95,8 +95,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the matching risk events. `bt.atr` distances use the ATR from `openalgo.ta` at
   the decision. `reverse=True` closes a position and opens the rest on the other side;
   without it an order larger than the opposite position is rejected with
-  `reverse_not_allowed`. Leg rules on CNC and NRML positions (GTT orders) and
-  `max_hold` raise `NotImplementedError` until built.
+  `reverse_not_allowed`. Leg rules on CNC and NRML positions are held as GTT orders
+  (see below); `max_hold` is the strategy-level time exit.
 - **Backtest accounting and results (early preview).** `bt.backtest` now runs on its
   defaults, `costs="zerodha"` and `slippage="default"`, with no server: every fill is
   charged by `openalgo.backtest.costs` at the rates of its trade date, the day's
@@ -115,6 +115,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Result.tearsheet()` report the run. Charges for a delivery buy and sell of one scrip
   on the same day, the margin of stock, BSE and MCX futures, and short options are not
   built yet.
+- **LIMIT, stop and GTT orders in `openalgo.backtest` (preview).** `buy` and `sell` take
+  `price=` (LIMIT) and `trigger_price=` (SL with a price, SL-M without), OpenAlgo's
+  order types. A LIMIT or stop order rests from the next base bar until it fills or its
+  session closes, and is matched on every base bar: the open first, then the range. A
+  LIMIT fills at the open or at its limit with no slippage; an SL-M fills at its
+  trigger, or at the open on a gap, plus slippage; an SL fills like a stop whose limit
+  then holds the price, and a stop-limit exit that triggers without filling becomes a
+  market order at the next bar's open. On options an SL-M is sent as an SL with its
+  limit 5 percent beyond the trigger. A limit or trigger off the tick grid is rejected
+  with `tick`. On CNC and NRML, `stop=`, `target=`, `targets=`, `trail=` and
+  `breakeven=` are now held as GTT orders: one SINGLE or OCO per target with a stop for
+  the rest, placed with the fill that opens the position, modified at most once per
+  base bar when a trail, breakeven or add moves a level by at least a tick, cancelled
+  before any other exit, and re-created when older than 360 days. A fired GTT places a
+  LIMIT child 1 percent beyond its trigger (5 percent for options); a child that a gap
+  leaves unfilled is cancelled and the engine exits at the next base-bar open, flagged
+  `gtt_child_unfilled`. `validity="gtt"` rests an order as a GTT across sessions (MIS
+  is rejected with `product_rule`). The event stream carries the GTT events
+  (`GttPlaced`, `GttModified`, `GttTriggered`, `GttChildFilled`, `GttChildCanceled`,
+  `GttCanceled`), fills carry `gtt_id`, and the orders table shows the type, prices and
+  validity. The kernel's `Engine.modify` replaces a working order in full.
 - **The strategy surface of `openalgo.backtest` (early preview).** `self.I(ta.x, ...)`
   registers an indicator from `openalgo.ta`, computed once in Rust and revealed bar by
   bar, with `[-1]`, slices, comparisons, arithmetic, `.crossed_above` and

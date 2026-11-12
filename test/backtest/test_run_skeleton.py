@@ -147,20 +147,15 @@ def test_an_exit_while_flat_places_no_order():
     assert handles and all(handle is None for handle in handles)
 
 
-@pytest.mark.parametrize(
-    "order_arguments",
-    [{"stop": bt.points(4)}, {"price": 501.0}, {"validity": "gtt"}],
-    ids=["leg stop", "limit order", "gtt"],
-)
-def test_parts_not_built_yet_say_so(order_arguments):
-    class Unbuilt(bt.Strategy):
+def test_target_resizing_is_not_built_yet():
+    class Resize(bt.Strategy):
         symbol, exchange, interval = "SBIN", "NSE", "15m"
 
         def on_bar(self, bar):
-            self.buy(qty=10, **order_arguments)
+            self.target(qty=10)
 
     with pytest.raises(NotImplementedError, match="not implemented yet"):
-        run(Unbuilt)
+        run(Resize)
 
 
 def test_live_is_phase_2():

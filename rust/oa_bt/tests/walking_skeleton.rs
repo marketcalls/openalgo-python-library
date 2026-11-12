@@ -11,7 +11,9 @@ use oa_bt::engine::{
     run, BarColumns, CostConfig, Driver, Engine, Event, FillTiming, IntradayOverrides, KernelError,
     Pause, QuantityMode, RunConfig, RunOutput, RunSetup, Step, StrategyInterval, Submission,
 };
-use oa_bt::exec::{InstrumentId, InstrumentSpec, OrderRequest, QuantitySpec, RejectCode};
+use oa_bt::exec::{
+    GttLegRole, GttStatus, InstrumentId, InstrumentSpec, OrderRequest, QuantitySpec, RejectCode,
+};
 use oa_bt::market::calendar::{BaseInterval, Calendar};
 use oa_bt::market::facts::MarketFacts;
 use oa_bt::market::margin::MarginModel;
@@ -266,6 +268,7 @@ fn event_names(output: &RunOutput) -> Vec<(i64, Step, &'static str)> {
             Event::Position { stamp, change, .. } => (stamp.slice_ts, stamp.step, change.code()),
             Event::Risk { stamp, event, .. } => (stamp.slice_ts, stamp.step, event.name.code()),
             Event::TradingState { stamp, to, .. } => (stamp.slice_ts, stamp.step, to.code()),
+            Event::Gtt { stamp, event } => (stamp.slice_ts, stamp.step, event.name.code()),
         })
         .collect()
 }
@@ -344,8 +347,10 @@ fn an_intraday_entry_after_entry_until_is_rejected() {
 }
 
 #[test]
-fn leg_rules_on_a_delivery_position_are_refused_as_not_built() {
-    // On CNC and NRML they are GTT orders (04-execution 4.4); MIS legs are engine-held.
+fn a_stop_on_a_delivery_position_is_held_as_a_gtt() {
+    // On CNC and NRML stops are GTT orders (04-execution 4.4); MIS legs are engine-held.
+    // Bought at the 09:30 open of 501.50 with a 4-point stop: a GTT at 497.50, which
+    // the bars (lows from 501.00 up) never reach.
     let rules = LegRules {
         stop: Some(Distance::Points(4.0)),
         ..LegRules::default()
@@ -356,8 +361,11 @@ fn leg_rules_on_a_delivery_position_are_refused_as_not_built() {
     };
     let mut kernel = engine(bars(45, &[]), Some(at(9, 59)));
     let mut script = Script::new(vec![(at(9, 15), Action::Order(Box::new(request)))]);
-    let error = run(&mut kernel, &mut script).expect_err("GTT-held stops are not built yet");
-    assert!(error.not_built_feature().is_some(), "{error}");
+    run(&mut kernel, &mut script).expect("the run completes");
+    let gtts = kernel.gtts();
+    assert_eq!(gtts.len(), 1);
+    assert_eq!(gtts[0].trigger(GttLegRole::Stop), Some(497.5));
+    assert_eq!(gtts[0].status, GttStatus::Active);
 }
 
 #[test]

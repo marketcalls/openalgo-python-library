@@ -12,6 +12,10 @@
 //! An order fills no earlier than the open of the first base bar of its instrument
 //! that opens at or after `Order::decided_at` (decision SPEC-35): the order of slices
 //! in the grid never moves a fill earlier than that.
+//!
+//! A GTT order (`Validity::Gtt`, CNC and NRML) has no session validity: its
+//! `good_until` is `GTT_GOOD_UNTIL` and it rests as a GTT until it fires or is
+//! cancelled (`gtt`).
 
 use std::fmt;
 
@@ -21,7 +25,9 @@ use crate::rms::vocabulary::ExitReason;
 use crate::sizing::SizerSpec;
 
 use super::checks::RejectCode;
+use super::error::ExecError;
 use super::instrument::InstrumentId;
+use super::price::MAX_PRICE_RUPEES;
 use super::state::OrderStatus;
 
 /// Identifier of an order, unique within a run, in submission order. Shown as `o1`,
@@ -34,6 +40,9 @@ impl fmt::Display for OrderId {
         write!(f, "o{}", self.0)
     }
 }
+
+/// The `good_until` of a GTT order: no session close ends it.
+pub const GTT_GOOD_UNTIL: TsNanos = TsNanos::MAX;
 
 /// How the order is priced (04-execution 4.1).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -52,6 +61,25 @@ pub enum OrderType {
 }
 
 impl OrderType {
+    /// The limit price, for LIMIT and SL, rupees.
+    pub fn limit_rupees(self) -> Option<f64> {
+        match self {
+            OrderType::Limit { limit_rupees } | OrderType::StopLimit { limit_rupees, .. } => {
+                Some(limit_rupees)
+            }
+            _ => None,
+        }
+    }
+
+    /// The trigger price, for SL and SL-M, rupees.
+    pub fn trigger_rupees(self) -> Option<f64> {
+        match self {
+            OrderType::StopLimit { trigger_rupees, .. }
+            | OrderType::StopMarket { trigger_rupees } => Some(trigger_rupees),
+            _ => None,
+        }
+    }
+
     /// The OpenAlgo `pricetype` string.
     pub fn code(self) -> &'static str {
         match self {
@@ -137,6 +165,33 @@ impl OrderRequest {
             tag: None,
         }
     }
+
+    /// Check that the request's prices can be read: a limit and a trigger are positive
+    /// finite rupees up to `price::MAX_PRICE_RUPEES`, and a GTT order has a price (its
+    /// trigger). Whether they lie on the tick grid is a submission check (`tick`).
+    ///
+    /// Errors: `InvalidRequest` saying which price is unusable.
+    pub fn check_prices(&self) -> Result<(), ExecError> {
+        let usable = |price: f64| price.is_finite() && price > 0.0 && price <= MAX_PRICE_RUPEES;
+        let order_type = self.order_type;
+        let prices = [order_type.limit_rupees(), order_type.trigger_rupees()];
+        if let Some(price) = prices.into_iter().flatten().find(|price| !usable(*price)) {
+            return Err(ExecError::InvalidRequest {
+                reason: format!(
+                    "price {price} is not usable: give a positive price in rupees (price= for \
+                     the limit, trigger_price= for the trigger)"
+                ),
+            });
+        }
+        if self.validity == Validity::Gtt && order_type == OrderType::Market {
+            return Err(ExecError::InvalidRequest {
+                reason: "a GTT order rests until a trigger: give price= (and optionally \
+                         trigger_price=)"
+                    .to_string(),
+            });
+        }
+        Ok(())
+    }
 }
 
 /// An order in the book.
@@ -151,7 +206,8 @@ pub struct Order {
     /// The instant it was decided, UTC nanoseconds: it fills no earlier than the open of
     /// a base bar at or after this instant (SPEC-35).
     pub decided_at: TsNanos,
-    /// The instant its DAY validity ends, UTC nanoseconds.
+    /// The instant its DAY validity ends, UTC nanoseconds (`GTT_GOOD_UNTIL` for a GTT
+    /// order).
     pub good_until: TsNanos,
     /// Quantity in units resolved at submission; 0 when it is resolved at the fill
     /// (`QuantitySpec::PositionFraction`).
@@ -178,5 +234,39 @@ mod tests {
             .code(),
             "SL-M"
         );
+    }
+
+    fn priced(order_type: OrderType, validity: Validity) -> OrderRequest {
+        OrderRequest {
+            order_type,
+            validity,
+            ..OrderRequest::market(InstrumentId(0), Side::Buy, QuantitySpec::Units(1.0))
+        }
+    }
+
+    #[test]
+    fn limit_and_trigger_prices_must_be_positive_finite_rupees() {
+        let negative = OrderType::Limit { limit_rupees: -1.0 };
+        let nan_trigger = OrderType::StopMarket {
+            trigger_rupees: f64::NAN,
+        };
+        let fine = OrderType::StopLimit {
+            trigger_rupees: 100.0,
+            limit_rupees: 100.5,
+        };
+        assert!(priced(negative, Validity::Day).check_prices().is_err());
+        assert!(priced(nan_trigger, Validity::Day).check_prices().is_err());
+        assert_eq!(priced(fine, Validity::Day).check_prices(), Ok(()));
+    }
+
+    #[test]
+    fn a_gtt_order_needs_a_price() {
+        assert!(priced(OrderType::Market, Validity::Gtt)
+            .check_prices()
+            .is_err());
+        let limit = OrderType::Limit {
+            limit_rupees: 1450.0,
+        };
+        assert_eq!(priced(limit, Validity::Gtt).check_prices(), Ok(()));
     }
 }
