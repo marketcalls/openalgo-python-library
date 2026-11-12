@@ -205,3 +205,7 @@ PKG-INFO
 !openalgo/backtest/**/*.json
 !test/backtest/**/*.csv
 !test/backtest/**/*.json
+# The kernel embeds its rate and calendar tables with include_str!, so cargo (and the
+# sdist, which cargo builds from the git file list) must see them.
+!rust/oa_bt/**/*.csv
+!rust/oa_bt/**/*.json

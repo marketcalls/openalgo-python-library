@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`get_subscriptions()`** returns the set of subscriptions the feed is asked to
   hold, which is exactly what a reconnect replays.
 - **`FeedServerError`** (`.code`, `.message`) describes a rejection sent by the server.
+- **`openalgo.backtest.costs` (preview).** Indian trading charges for NSE and BSE
+  equity (delivery and intraday), NFO and BFO futures and options, and MCX futures:
+  brokerage presets (`zerodha`, `flat`, `percent`, `zero_brokerage`, `custom`), STT or
+  CTT, exchange and IPFT charges, SEBI fee, stamp duty, GST, the depository charge and
+  STT on exercised options. Rates are dated data (`schedules()` lists each version and
+  whether it is verified), every trade is charged at the rates of its trade date, and
+  anything charged at unverified rates is flagged and warned about. `rounding="calculator"`
+  reproduces the broker calculator to the paisa for equity and F&O; the default
+  `"contract_note"` rounds per trade day and segment. Part of the backtest engine
+  being built; the interface may change before the backtest beta.
 
 ### Security
 
