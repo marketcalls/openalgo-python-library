@@ -11,7 +11,10 @@
 //! orders, filled in the ordinary pass) have credited their proceeds as the sale-credit
 //! rule allows (`sale_credit`). A buy the free cash does not cover at its fill is
 //! rejected `margin`, like any order. In a slice with a timer pause the rebalance buys
-//! fill after the timers' orders too.
+//! due at its open fill before the timers fire (`timers::fill_due_orders`): a timer that
+//! rebalances again sizes its orders from the position they made, not from orders still
+//! queued, whose reduce-only sales would find nothing to reduce. The buys of a timer's
+//! own rebalance fill after the timers' orders.
 //!
 //! A rebalance buy is also an intended add: the averaging-down refusal of the scale-in
 //! limits does not apply to it (`scale_in`).
@@ -57,9 +60,10 @@ impl Engine {
         self.submit(request).map(Some)
     }
 
-    /// Step 2, after every instrument's queued orders: fill the rebalance buys due at
-    /// this open, in id order (see the module documentation). One whose instrument has
-    /// no bar in the slice stays queued (SPEC-06).
+    /// Step 2, after every instrument's queued orders: fill the rebalance orders due at
+    /// this open that open or add (`waits_for_sales`; a rebalance never targets a short,
+    /// so these are its buys), in id order (see the module documentation). One whose
+    /// instrument has no bar in the slice stays queued (SPEC-06).
     ///
     /// Errors: those of `fill_order`.
     pub(super) fn fill_rebalance_buys(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {

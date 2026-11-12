@@ -52,3 +52,9 @@ def test_to_excel_writes_one_sheet_per_table_with_ist_times(result, tmp_path):
     assert set(sheets) == set(result.to_dataframes())
     expected = [pd.Timestamp("2026-11-04 09:30:00"), pd.Timestamp("2026-11-04 09:45:00")]
     assert list(sheets["fills"]["time"]) == expected
+
+
+def test_to_excel_creates_the_folder_it_writes_into(result, tmp_path):
+    pytest.importorskip("openpyxl")
+    path = result.to_excel(tmp_path / "reports" / "run.xlsx")
+    assert path.is_file()

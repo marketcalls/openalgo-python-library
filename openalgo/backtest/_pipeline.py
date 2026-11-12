@@ -315,7 +315,7 @@ def execute(
         _assumptions(prepared, calendar, checks, market),
         [
             *run_end_warnings(output["run_end"]),
-            *reject_warnings(output["orders"]),
+            *reject_warnings(output["orders"], [i.kind for i in prepared.instruments]),
             *prepared.warnings,
             *timer_warnings,
         ],

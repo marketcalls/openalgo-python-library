@@ -27,8 +27,9 @@ from data_fixtures.fakes import (
 )
 
 import openalgo.backtest as bt
+from openalgo.backtest._expired_contracts import expired_contracts
 from openalgo.backtest.errors import DataError, SymbolNotFoundError
-from openalgo.backtest.reference import ReferenceDataWarning
+from openalgo.backtest.reference import Instrument, ReferenceDataWarning
 
 OCTOBER = "NIFTY27OCT26FUT"
 # A week of the data layer's own tests: weekday sessions, read on the Monday after.
@@ -115,6 +116,28 @@ def test_a_contract_that_expired_before_today_says_so_and_what_to_do():
         "NIFTY27OCT26FUT and every other contract the run trades"
     )
     assert "not found for exchange" in str(caught.value.__cause__)
+
+
+def test_a_contract_past_its_last_trading_day_is_named_as_expired_on_that_day():
+    # A contract re-dated by a holiday: identified by 2026-10-27 but last traded on
+    # 2026-10-26, so on the evening of the 27th the server no longer lists it.
+    contract = Instrument(
+        symbol=OCTOBER,
+        exchange="NFO",
+        kind="future",
+        lot_size=75,
+        tick_size=0.05,
+        expiry=dt.date(2026, 10, 27),
+        last_trading_day=dt.date(2026, 10, 26),
+        underlying="NIFTY",
+        settlement="cash",
+    )
+    evening = at_ist(dt.date(2026, 10, 27), 18)
+    server = SymbolNotFoundError(f"HTTP 400: Symbol '{OCTOBER}' not found", OCTOBER, "NFO")
+    with pytest.raises(SymbolNotFoundError) as caught, expired_contracts([contract], evening):
+        raise server
+    assert "the contract expired on 2026-10-26" in str(caught.value)
+    assert "Start the run after 2026-10-26" in str(caught.value)
 
 
 def test_a_contract_not_yet_expired_keeps_the_servers_answer():

@@ -71,7 +71,9 @@ def check_given(given: Any, names: tuple[str, ...], exchange: str) -> None:
             )
 
 
-def _last_day(instrument: Instrument) -> dt.date:
+def last_day(instrument: Instrument) -> dt.date:
+    """The IST date a contract stops trading: its last trading day when known, else its
+    expiry (a contract re-dated by a holiday stops before the expiry its symbol names)."""
     return instrument.last_trading_day or instrument.expiry
 
 
@@ -105,8 +107,8 @@ def listed_contracts(name: str, plan: Any, given: Any, calendar: Any) -> list[Co
         if i.kind == "future" and i.exchange == plan.exchange and underlying_of(i) == name
     ]
     if mine:
-        mine.sort(key=_last_day)
-        return [Contract(i.symbol, _last_day(i), i) for i in mine]
+        mine.sort(key=last_day)
+        return [Contract(i.symbol, last_day(i), i) for i in mine]
     tables = reference.default_tables()
     last = plan.end + dt.timedelta(days=LOOKAHEAD_DAYS)
     try:
@@ -158,6 +160,7 @@ __all__ = [
     "LOOKAHEAD_DAYS",
     "Contract",
     "check_given",
+    "last_day",
     "listed_contracts",
     "record_expiries",
     "underlying_of",

@@ -5,8 +5,10 @@ once it has expired, and brokers stop serving its history, so the server answers
 history request for it as for a symbol it never knew (SymbolNotFoundError, raised by the
 data layer). That answer tells a user to check the symbol's spelling, which is no help
 for a futures run that starts before the last expiry. When the symbol is a contract of
-the run whose expiry is before the run's present (`now=`, the clock by default), the
-error says that the contract expired, on which date, and what to do.
+the run whose last trading day is before the run's present (`now=`, the clock by
+default), the error says that the contract expired, on which date, and what to do. The
+day a contract stops trading is its last trading day when known, else its expiry, as
+everywhere in the backtest (`_futures_contracts.last_day`).
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from ._futures_contracts import last_day
 from ._series import ist_time
 from .errors import SymbolNotFoundError
 from .reference import Instrument
@@ -22,17 +25,17 @@ from .reference import Instrument
 def _expired(
     instruments: list[Instrument], symbol: str | None, present_ns: int
 ) -> Instrument | None:
-    """The run's contract named `symbol` when it expired before the IST date of
-    `present_ns` (UTC nanoseconds), else None."""
+    """The run's contract named `symbol` when its last day of trading was before the IST
+    date of `present_ns` (UTC nanoseconds), else None."""
     today = ist_time(present_ns).date()
     for instrument in instruments:
         if instrument.symbol == symbol and instrument.expiry is not None:
-            return instrument if instrument.expiry < today else None
+            return instrument if last_day(instrument) < today else None
     return None
 
 
 def _message(contract: Instrument) -> str:
-    expiry = contract.expiry.isoformat()
+    expiry = last_day(contract).isoformat()
     return (
         f"{contract.exchange}:{contract.symbol}: the contract expired on {expiry} and the "
         "OpenAlgo server no longer lists it: brokers stop serving an expired contract's "

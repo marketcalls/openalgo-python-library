@@ -287,9 +287,9 @@ class Strategy(OrderMethods):
     @property
     def cash(self) -> float:
         """Free cash, rupees: equity not blocked as margin, with delivery (CNC) holdings
-        at the price paid (their open profit or loss is not cash until sold) and the
-        part of today's sales of holdings credited only on the next trading day left
-        out."""
+        of shares at the price paid (their open profit or loss is not cash until sold)
+        and the part of today's sales of those holdings credited only on the next trading
+        day left out. A future or an option on CNC blocks its margin, as on NRML."""
         return self._ctx.account()[1]
 
     # ----- scheduling and conditions -----------------------------------------------

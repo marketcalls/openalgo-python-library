@@ -37,7 +37,7 @@ def settlements_frame(output: dict[str, Any], symbols: list[str]) -> pd.DataFram
     frame = pd.DataFrame(output["futures"]["settlements"], columns=list(SETTLEMENT_COLUMNS))
     frame.insert(0, "symbol", [symbols[i] for i in frame["instrument"]])
     frame.insert(0, "date", [from_day(day) for day in frame["day"]])
-    frame.insert(0, "time", _ist(frame["slice_ts"]).to_numpy())
+    frame.insert(0, "time", _ist(frame["slice_ts"]))
     return frame.drop(columns=["day"])
 
 
@@ -60,7 +60,7 @@ def switches_frame(output: dict[str, Any], symbols: list[str]) -> pd.DataFrame:
     frame.insert(0, "to_symbol", [symbols[i] for i in frame["to"]])
     frame.insert(0, "from_symbol", [symbols[i] for i in frame["from"]])
     frame.insert(0, "date", [from_day(day) for day in frame["day"]])
-    frame.insert(0, "time", _ist(frame["slice_ts"]).to_numpy())
+    frame.insert(0, "time", _ist(frame["slice_ts"]))
     return frame.drop(columns=["day"])
 
 

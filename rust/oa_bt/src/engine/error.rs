@@ -12,6 +12,7 @@ use crate::data::resample::ResampleError;
 use crate::exec::{ExecError, OrderId};
 use crate::market::calendar::CalendarError;
 use crate::market::margin::MarginError;
+use crate::market::sale_credit::SaleCreditError;
 use crate::market::slippage::SlippageError;
 use crate::portfolio::PortfolioError;
 use crate::rms::RmsError;
@@ -40,6 +41,8 @@ pub enum KernelError {
     Margin(MarginError),
     /// Slippage.
     Slippage(SlippageError),
+    /// The credit for selling delivery holdings.
+    SaleCredit(SaleCreditError),
     /// An order call made while the engine is not paused at a decision point.
     NotAtDecisionPoint,
     /// `advance` called after the run finished.
@@ -104,6 +107,7 @@ impl fmt::Display for KernelError {
             KernelError::Sizing(inner) => inner.fmt(f),
             KernelError::Margin(inner) => inner.fmt(f),
             KernelError::Slippage(inner) => inner.fmt(f),
+            KernelError::SaleCredit(inner) => inner.fmt(f),
             KernelError::NotAtDecisionPoint => write!(
                 f,
                 "orders can only be placed, changed or cancelled while the engine is paused \
@@ -142,6 +146,7 @@ wrap!(
     SizingError => Sizing,
     MarginError => Margin,
     SlippageError => Slippage,
+    SaleCreditError => SaleCredit,
 );
 
 #[cfg(test)]

@@ -433,6 +433,14 @@ def test_from_arrays_with_shorts_given_by_position_says_to_name_them():
     assert "bt.from_arrays(entries, exits, shorts=shorts, covers=covers" in str(caught.value)
 
 
+def test_from_arrays_with_the_market_given_by_position_names_every_keyword():
+    with pytest.raises(ConfigError) as caught:
+        bt.from_arrays([True], [False], "SBIN", "NSE", "5m")
+    assert "got 5 values: pass symbol=, exchange=, interval=, shorts= and covers= by name" in str(
+        caught.value
+    )
+
+
 def test_an_array_of_the_wrong_length_names_the_bar_count():
     short_array = bt.from_arrays(
         np.ones(3, dtype=bool), None, symbol="SBIN", exchange="NSE", interval="5m"

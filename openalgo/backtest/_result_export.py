@@ -46,8 +46,9 @@ def to_csv(tables: dict[str, pd.DataFrame], folder: str | os.PathLike) -> list[P
 
 
 def to_excel(tables: dict[str, pd.DataFrame], path: str | os.PathLike) -> Path:
-    """Write each table to a sheet of its name in one workbook at `path` and return the
-    path. Raises MissingDependencyError (an ImportError) when openpyxl is missing."""
+    """Write each table to a sheet of its name in one workbook at `path` (its folder is
+    created when missing, as `to_csv` creates its own) and return the path. Raises
+    MissingDependencyError (an ImportError) when openpyxl is missing."""
     try:
         importlib.import_module(EXCEL_ENGINE)
     except ImportError as exc:
@@ -56,6 +57,7 @@ def to_excel(tables: dict[str, pd.DataFrame], path: str | os.PathLike) -> Path:
             "install: pip install openpyxl (or write CSV files with result.to_csv(folder))"
         ) from exc
     target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(target, engine=EXCEL_ENGINE) as writer:
         for name, frame in tables.items():
             plain_ist(frame).to_excel(writer, sheet_name=name, index=False)

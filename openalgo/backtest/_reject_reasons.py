@@ -1,10 +1,11 @@
 """What each reject code of the orders table means and what to do about it: the wording
 of the run's rejection warnings (`_rejections`).
 
-The codes are the kernel's (`RejectCode::code` in `rust/oa_bt/src/exec/checks.rs`). Each
+The codes are the kernel's (`RejectCode::code` in `rust/oa_bt/src/exec/checks.rs`), except
+`rate_limit`, which no kernel check makes: a backtest enforces no order rate limit. Each
 entry is (what happened, what to do). The product rule covers three refusals that need
-different advice, so it has one entry per case, told apart by the order
-(`_rejections.product_rule_case`).
+different advice, so it has one entry per case, told apart by the order and its
+instrument (`_rejections.product_rule_case`).
 """
 
 from __future__ import annotations
@@ -62,10 +63,6 @@ REASONS = MappingProxyType(
             "the trading state was REDUCING or HALTED and the order would have opened or "
             "added to a position",
             "result.risk_events shows what changed the state",
-        ),
-        "rate_limit": (
-            "the order rate limit was reached",
-            "place fewer orders a second",
         ),
         "instrument_unknown": (
             "the order named a symbol the run does not trade",
