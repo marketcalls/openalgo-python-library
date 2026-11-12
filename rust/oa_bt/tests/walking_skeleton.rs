@@ -21,6 +21,7 @@ use oa_bt::market::slippage::SlippageSpec;
 use oa_bt::model::{days_from_civil, ts_from_ist, Day, Exchange, InstrumentKind, Product, Side};
 use oa_bt::portfolio::PositionChange;
 use oa_bt::rms::{Distance, LegRules, StrategyRiskConfig};
+use oa_bt::sizing::SizingControls;
 
 const MINUTE: i64 = 60_000_000_000;
 const SESSION_OPEN_MINUTE: u32 = 9 * 60 + 15;
@@ -84,6 +85,7 @@ fn config(last_slice: Option<i64>) -> RunConfig {
         margin: MarginModel,
         market: MarketFacts::default(),
         risk: StrategyRiskConfig::default(),
+        sizing: SizingControls::default(),
         intraday: IntradayOverrides::default(),
         deliver_events: false,
     }

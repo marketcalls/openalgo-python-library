@@ -1,11 +1,13 @@
 //! Position sizing: from a sizer and the account to a quantity in units
 //! (12-position-sizing 5, 03-architecture 7).
 //!
-//! A sizer returns a quantity that is rounded down to the venue rule (whole lots; whole
-//! shares for cash equity unless the run is fractional) and capped at the instrument's
-//! freeze quantity (the largest whole-lot quantity at or below it); the engine then
-//! checks margin at the fill bar. A size that rounds to zero is not an error: the order
-//! is skipped with `SkipReason::RoundedToZero`, logged and counted in the result.
+//! A sizer returns a quantity that is reduced to the strategy's caps (`caps`), rounded
+//! down to the venue rule (whole lots; whole shares for cash equity unless the run is
+//! fractional) and capped at the instrument's freeze quantity (the largest whole-lot
+//! quantity at or below it); the engine then checks margin at the fill bar. A size
+//! that rounds to zero is not an error: the order is skipped with
+//! `SkipReason::RoundedToZero` (or `Cap` when a cap left no room), logged and counted
+//! in the result.
 //!
 //! Sizing uses the decision price; the engine re-checks the order at the fill price.
 //! Costs in a risk budget, and in the engine default, come from the Indian cost model's
@@ -17,9 +19,13 @@
 //! | `venue` | Rounding down to the venue rule, the freeze-quantity cap |
 //! | `risk` | Fixed risk to the stop, and ATR risk |
 //! | `default` | The engine default: 1x the capital net of estimated costs, 1 lot for F&O |
+//! | `caps` | `reinvest` and the caps shared by every sizer |
+//! | `target` | The position `target()` asks for, in units |
 
+mod caps;
 mod default;
 mod risk;
+mod target;
 mod venue;
 
 #[cfg(test)]
@@ -27,7 +33,9 @@ mod tests;
 
 use std::fmt;
 
+pub use caps::{SizeCaps, SizingControls};
 pub use default::{engine_default_units, VENUE_CASH_BUFFER};
+pub use target::{target_units, TargetSize};
 pub use venue::{cap_at_freeze, round_down_to_venue};
 
 /// What a percent sizer takes its percent of.
@@ -69,6 +77,10 @@ pub enum SizerSpec {
         multiple: f64,
         atr_rupees: f64,
     },
+    /// The quantity in units a strategy's own sizing function returned at the decision
+    /// (`size=` a function `size(ctx, order)`): 0 skips the order; then capped and
+    /// rounded as any sizer.
+    Function { units: f64 },
     /// The engine default of 03-architecture 7 (no `qty`, `lots` or `size`).
     EngineDefault,
 }
@@ -76,7 +88,8 @@ pub enum SizerSpec {
 /// What a sizer can see. Money is rupees, quantities units.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SizingContext {
-    /// Current equity of the strategy's sub-account, rupees.
+    /// Current equity of the strategy's sub-account, rupees (a sizer reads
+    /// `sizing_equity`, which follows `reinvest`).
     pub equity_rupees: f64,
     /// Capital allocated at the start, rupees.
     pub initial_capital_rupees: f64,
@@ -106,6 +119,25 @@ pub struct SizingContext {
     /// Fraction of the engine default's budget kept back as cash (`VENUE_CASH_BUFFER` in
     /// venue mode, 0 when the size is taken at the fill price).
     pub cash_buffer: f64,
+    /// Units held on the order's side: positive for a position on the same side,
+    /// negative for an opposite one, 0 when flat (read by the position caps).
+    pub held_on_side_units: f64,
+    /// Size from the current equity (true) or the initial capital (`reinvest`).
+    pub reinvest: bool,
+    /// Caps on the quantity (`caps`).
+    pub caps: SizeCaps,
+}
+
+impl SizingContext {
+    /// The equity a sizer sizes from, rupees: the current equity when reinvesting,
+    /// else the capital allocated at the start.
+    pub fn sizing_equity(&self) -> f64 {
+        if self.reinvest {
+            self.equity_rupees
+        } else {
+            self.initial_capital_rupees
+        }
+    }
 }
 
 /// Why a sized order was skipped.
@@ -183,7 +215,7 @@ pub(crate) fn unit_value(ctx: &SizingContext) -> Result<f64, SizingError> {
 
 fn basis_rupees(basis: SizingBasis, ctx: &SizingContext) -> f64 {
     match basis {
-        SizingBasis::Equity => ctx.equity_rupees,
+        SizingBasis::Equity => ctx.sizing_equity(),
         SizingBasis::InitialCapital => ctx.initial_capital_rupees,
         SizingBasis::FreeCash => ctx.free_cash_rupees,
     }
@@ -212,22 +244,36 @@ fn raw_units(spec: SizerSpec, ctx: &SizingContext) -> Result<f64, SizingError> {
             multiple,
             atr_rupees,
         } => risk::atr_risk_units(risk_percent, multiple, atr_rupees, ctx),
+        SizerSpec::Function { units } if units.is_finite() && units >= 0.0 => Ok(units),
+        SizerSpec::Function { units } => Err(SizingError::InvalidSizer {
+            reason: format!(
+                "the sizing function returned {units}: return a quantity in units, 0 or more \
+                 (0 skips the order)"
+            ),
+        }),
         SizerSpec::EngineDefault => engine_default_units(ctx),
     }
 }
 
-/// The quantity a sizer asks for, in units: rounded down to the venue rule and capped
-/// at the freeze quantity, or the reason it gives none.
+/// The quantity a sizer asks for, in units: reduced to the caps, rounded down to the
+/// venue rule and capped at the freeze quantity, or the reason it gives none
+/// (`RoundedToZero` when it asks for less than the venue's smallest quantity, `Cap`
+/// when a cap or the freeze quantity left no room).
 ///
 /// Errors: `InvalidSizer` for a non-positive amount, sizing price or multiplier, a
-/// fixed-risk sizer without a stop distance, or an ATR that is not a positive number.
+/// fixed-risk sizer without a stop distance, an ATR that is not a positive number, or
+/// a sizing function's quantity that is negative or not a number.
 pub fn size(spec: SizerSpec, ctx: &SizingContext) -> Result<SizeOutcome, SizingError> {
     let raw = raw_units(spec, ctx)?.max(0.0);
-    let rounded = round_down_to_venue(raw, ctx.lot_size_units, ctx.fractional);
+    if round_down_to_venue(raw, ctx.lot_size_units, ctx.fractional) <= 0.0 {
+        return Ok(SizeOutcome::Skipped(SkipReason::RoundedToZero));
+    }
+    let capped = raw.min(ctx.caps.room_units(ctx)?);
+    let rounded = round_down_to_venue(capped, ctx.lot_size_units, ctx.fractional);
     let units = cap_at_freeze(rounded, ctx.freeze_quantity_units, ctx.lot_size_units);
-    Ok(match (rounded > 0.0, units > 0.0) {
-        (_, true) => SizeOutcome::Units(units),
-        (true, false) => SizeOutcome::Skipped(SkipReason::Cap),
-        (false, false) => SizeOutcome::Skipped(SkipReason::RoundedToZero),
+    Ok(if units > 0.0 {
+        SizeOutcome::Units(units)
+    } else {
+        SizeOutcome::Skipped(SkipReason::Cap)
     })
 }

@@ -25,6 +25,7 @@ mod request;
 mod results;
 mod setup;
 mod signals;
+mod sizing;
 mod tables;
 
 use oa_bt::data::resample::CalendarUnit;
@@ -60,6 +61,18 @@ fn engine_error(error: KernelError) -> PyErr {
         NativeEngineInputError::new_err(message)
     } else {
         NativeEngineError::new_err(message)
+    }
+}
+
+/// A submission as (outcome, order id, code): ("submitted", id, None), ("rejected", id,
+/// reject code) or ("skipped", None, skip reason).
+type SubmissionTuple = (&'static str, Option<u64>, Option<&'static str>);
+
+fn submission_tuple(outcome: Submission) -> SubmissionTuple {
+    match outcome {
+        Submission::Submitted(id) => ("submitted", Some(id.0), None),
+        Submission::Rejected(id, code) => ("rejected", Some(id.0), Some(code.code())),
+        Submission::Skipped(reason) => ("skipped", None, Some(reason.code())),
     }
 }
 
@@ -125,17 +138,37 @@ impl NativeEngine {
     /// Place an order at the current decision point. Returns (outcome, order id, code):
     /// ("submitted", id, None), ("rejected", id, reject code) or ("skipped", None, skip
     /// reason).
-    fn submit(
-        &mut self,
-        request: &Bound<'_, PyDict>,
-    ) -> PyResult<(&'static str, Option<u64>, Option<&'static str>)> {
+    fn submit(&mut self, request: &Bound<'_, PyDict>) -> PyResult<SubmissionTuple> {
         let request = request::order_request(request)?;
         let outcome = self.engine_mut()?.submit(request).map_err(engine_error)?;
-        Ok(match outcome {
-            Submission::Submitted(id) => ("submitted", Some(id.0), None),
-            Submission::Rejected(id, code) => ("rejected", Some(id.0), Some(code.code())),
-            Submission::Skipped(reason) => ("skipped", None, Some(reason.code())),
-        })
+        Ok(submission_tuple(outcome))
+    }
+
+    /// Trade to a target position at the current decision point (`target()`, a target
+    /// dict as `sizing` reads it). Returns None when the position already is the
+    /// target, else the order's submission as `submit` returns it.
+    fn target(&mut self, request: &Bound<'_, PyDict>) -> PyResult<Option<SubmissionTuple>> {
+        let request = sizing::target_request(request)?;
+        let outcome = self
+            .engine_mut()?
+            .submit_target(request)
+            .map_err(engine_error)?;
+        Ok(outcome.map(submission_tuple))
+    }
+
+    /// What a sizer sees for an order request at the decision, as a dict (see
+    /// `sizing::inputs`): what a strategy's sizing function receives.
+    fn sizing_inputs<'py>(
+        &self,
+        py: Python<'py>,
+        request: &Bound<'_, PyDict>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let request = request::order_request(request)?;
+        let ctx = self
+            .engine()?
+            .sizing_inputs(&request)
+            .map_err(engine_error)?;
+        sizing::inputs(py, &ctx, request.side)
     }
 
     /// Cancel a working order; returns its state afterwards.

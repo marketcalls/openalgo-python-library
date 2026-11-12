@@ -2,8 +2,12 @@
 
 use super::*;
 
+mod controls;
+mod target;
+
 /// Equity 2,00,000; initial capital 1,00,000; free cash 50,000; price 800; cash equity
-/// in venue mode (whole shares); no costs, no freeze quantity.
+/// in venue mode (whole shares); no costs, no freeze quantity; flat; reinvesting, with
+/// no caps.
 fn context() -> SizingContext {
     SizingContext {
         equity_rupees: 200_000.0,
@@ -19,6 +23,9 @@ fn context() -> SizingContext {
         freeze_quantity_units: None,
         instruments: 1,
         cash_buffer: 0.0,
+        held_on_side_units: 0.0,
+        reinvest: true,
+        caps: SizeCaps::default(),
     }
 }
 

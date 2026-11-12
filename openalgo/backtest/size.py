@@ -1,12 +1,24 @@
-"""Sizers: `bt.size.qty`, `lots`, `value`, `percent`, `fixed_risk` and `atr_risk`
+"""Sizers: `bt.size.qty`, `lots`, `value`, `percent`, `fixed_risk` and `atr_risk`, a
+strategy's own sizing function, and the caps shared by every sizer, `bt.size.caps`
 (12-position-sizing section 5).
 
-A sizer is passed as `size=` on an order or set as the strategy's default. The kernel
-turns it into a quantity in units at the decision price, rounds it down to the venue
-rule (whole lots; whole shares unless the run is fractional), caps it at the freeze
-quantity (whole lots) and skips the order with a logged reason when it rounds to zero.
-Percent arguments are percent units (`percent(50)` is 50 percent). Raises ConfigError
-for a value that is not positive.
+A sizer is passed as `size=` on an order or set as the strategy's default (the class
+attribute `size`). The kernel turns it into a quantity in units at the decision price,
+cuts it to the strategy's caps (`size_caps`), rounds it down to the venue rule (whole
+lots; whole shares unless the run is fractional), caps it at the freeze quantity (whole
+lots) and skips the order with a logged reason when nothing is left ("rounded_to_zero",
+or "cap" when a cap left no room). Percent arguments are percent units (`percent(50)` is
+50 percent). Raises ConfigError for a value that is not positive.
+
+A sizing function is any callable `size(ctx, order) -> units`, called at the decision.
+`ctx` holds what the built-in sizers see (`_sizing_function.SizingInputs`: equity,
+capital, cash, price, stop_distance, lot_size, multiplier, fractional, position) and
+`order` the order being sized (symbol, side, product, tag). It returns a quantity in
+units, never lots: 0 skips the order, anything negative or not a number is a
+ConfigError. Condition strategies run in Rust and cannot call it.
+
+Equity means the sizing equity: the current equity (compounding), or the capital
+allocated at the start when the strategy sets `reinvest = False`.
 
 An order with no `qty`, `lots` or `size` (and no strategy `size`) takes the engine
 default (03-architecture 7): one lot for futures and options; for cash equity 1x the
@@ -17,19 +29,14 @@ mode and at the decision price with a 2 percent cash buffer in venue mode.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from typing import Any
 
-import numpy as np
-
-from ..indicators import ta
-from ._series import BarStore
+from ._atr import sizer_atr
+from ._series import SeriesStore
 from .errors import ConfigError
 
 BASES = ("equity", "capital", "cash")
-# The bar columns the ATR is computed from.
-HLC = ("high", "low", "close")
 
 
 def _positive(value: object, what: str) -> float:
@@ -99,23 +106,68 @@ def atr_risk(risk_pct: float, mult: float, period: int = 14) -> Sizer:
     return Sizer("atr_risk", _positive(risk_pct, "risk_pct"), options)
 
 
-def resolve_atr(quantity: dict[str, Any], store: BarStore) -> dict[str, Any]:
+@dataclass(frozen=True)
+class SizeCaps:
+    """Caps on what every sizer gives (`caps`): each as the kernel reads it, None for no
+    cap. `position` and `risk` are (kind, amount) pairs: kind "units", "lots",
+    "rupees" or "percent" (of the sizing equity) for the position, "rupees" or
+    "percent" for the risk; `leverage` is a multiple of the sizing equity."""
+
+    position: tuple[str, float] | None
+    leverage: float | None
+    risk: tuple[str, float] | None
+
+    def to_native(self) -> dict[str, Any]:
+        """The `size_caps` entry of the kernel's risk dict."""
+        return {"position": self.position, "leverage": self.leverage, "risk": self.risk}
+
+
+def caps(position: Any = None, leverage: float | None = None, risk: Any = None) -> SizeCaps:
+    """Caps on the quantity every sizer gives, for the class attribute `size_caps`
+    (12-position-sizing 5); the tightest wins:
+
+    * `position`: the largest position on the order's side after it, counting what is
+      held: units (a number or `bt.size.qty(n)`), `bt.size.lots(n)`, rupees of value at
+      the decision price (`bt.rupees(x)` or `bt.size.value(x)`) or a percent of equity
+      (`bt.pct(x)` or `bt.size.percent(x)`);
+    * `leverage`: the largest value of that position as a multiple of equity (1 is 1x);
+    * `risk`: the largest loss of the order at its stop: rupees (a number or
+      `bt.rupees(x)`) or `bt.pct(x)` of equity, below 100. An order with no stop has no
+      bounded loss, so under a risk cap it is skipped.
+
+    A cap cuts the sized quantity, which is then rounded down to the venue rule; when
+    nothing is left the order is skipped with reason "cap". Caps bound sizers only: an
+    explicit `qty=` or `lots=` and `target()` trade what they ask for. Raises
+    ConfigError for a value of the wrong kind or not positive, or when no cap is
+    given."""
+    # `_scale_in` reads `Sizer` from this module, so its parsers are imported here.
+    from ._scale_in import position_limit, risk_limit
+
+    if position is None and leverage is None and risk is None:
+        raise ConfigError("bt.size.caps needs at least one of position=, leverage= or risk=")
+    return SizeCaps(
+        position=position_limit(position, "caps position"),
+        leverage=None if leverage is None else _positive(leverage, "caps leverage"),
+        risk=risk_limit(risk, "caps risk"),
+    )
+
+
+def resolve_atr(quantity: dict[str, Any], store: SeriesStore) -> dict[str, Any]:
     """The quantity dict of a request with the ATR of an `atr_risk` sizer filled in from
-    the strategy bars revealed so far (`openalgo.ta.atr`, rupees). Any other quantity is
+    the strategy bars revealed so far (`_atr.sizer_atr`, rupees). Any other quantity is
     returned as it is. With fewer bars than the period the ATR is NaN and the kernel
     refuses the sizer with a message."""
     if quantity.get("sizer") != "atr_risk" or quantity.get("atr") is not None:
         return quantity
-    high, low, close = (np.asarray(store.columns[name], dtype=float) for name in HLC)
-    period = int(quantity["period"])
-    atr = ta.atr(high, low, close, period)[-1] if len(close) >= period else math.nan
-    return {**quantity, "atr": float(atr)}
+    return {**quantity, "atr": sizer_atr(store, int(quantity["period"]))}
 
 
 __all__ = [
     "BASES",
+    "SizeCaps",
     "Sizer",
     "atr_risk",
+    "caps",
     "fixed_risk",
     "lots",
     "percent",

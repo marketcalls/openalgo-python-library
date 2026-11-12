@@ -147,17 +147,6 @@ def test_an_exit_while_flat_places_no_order():
     assert handles and all(handle is None for handle in handles)
 
 
-def test_target_resizing_is_not_built_yet():
-    class Resize(bt.Strategy):
-        symbol, exchange, interval = "SBIN", "NSE", "15m"
-
-        def on_bar(self, bar):
-            self.target(qty=10)
-
-    with pytest.raises(NotImplementedError, match="not implemented yet"):
-        run(Resize)
-
-
 def test_live_is_phase_2():
     with pytest.raises(NotImplementedError, match="Phase 2"):
         bt.live(BuyThenExit, None, capital=CAPITAL, max_daily_loss=1_000)

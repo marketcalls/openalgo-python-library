@@ -90,11 +90,13 @@ fn signals(when: [Vec<bool>; 4], pyramiding: u32, rules: LegRules) -> SignalArra
         entry: Some(EntrySignal {
             when: entry,
             order: entry_order(Side::Buy, 10.0, rules.clone()),
+            atr: Vec::new(),
         }),
         exit: Some(exit),
         short: Some(EntrySignal {
             when: short,
             order: entry_order(Side::Sell, 10.0, rules),
+            atr: Vec::new(),
         }),
         cover: Some(cover),
         pyramiding,

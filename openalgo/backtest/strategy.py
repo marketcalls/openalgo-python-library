@@ -51,6 +51,8 @@ DECLARATIONS = (
     "product",
     "leverage",
     "size",
+    "reinvest",
+    "size_caps",
     "pyramiding",
     "max_adds",
     "max_position",
@@ -86,6 +88,9 @@ class Strategy(OrderMethods):
     product: ClassVar[str | None] = None
     leverage: ClassVar[float | None] = None
     size: ClassVar[Any] = None
+    # Sizing controls (12-position-sizing 5; forms and units in `_size_controls`).
+    reinvest: ClassVar[bool] = True
+    size_caps: ClassVar[Any] = None
     pyramiding: ClassVar[int] = 0
     # Scale-in limits (12-position-sizing 2; forms and units in `_scale_in`).
     max_adds: ClassVar[int | None] = None

@@ -19,6 +19,7 @@ from typing import Any
 
 import pandas as pd
 
+from . import _sizing_function as sizing_function
 from ._engine import call
 from ._futures_context import SeriesContext
 from ._orders import Order
@@ -26,7 +27,7 @@ from ._series import Bar, BarStore, PositionView, SeriesStore, ist_time
 from ._timers import Timers
 from .errors import ConfigError
 from .reference import Instrument
-from .size import Sizer, resolve_atr
+from .size import resolve_atr
 
 
 @dataclass(frozen=True)
@@ -51,7 +52,7 @@ class RunContext:
         engine: Any,
         instruments: list[Instrument],
         product: str,
-        default_size: Sizer | None,
+        default_size: Any,
         run: RunData,
         futures: tuple[Any, list[dict]] | None = None,
     ) -> None:
@@ -169,14 +170,26 @@ class RunContext:
     # ----- orders ----------------------------------------------------------------
 
     def submit(self, request: dict) -> Order | None:
-        """Place a request; returns its handle, or None when a sizer skipped it."""
+        """Place a request; returns its handle, or None when a sizer skipped it. A sizing
+        function is called here, at the decision (`_sizing_function`)."""
         store = self.sizing_store(request["instrument"])
+        symbol = self.symbols[request["instrument"]]
         request = {**request, "quantity": resolve_atr(request["quantity"], store)}
+        request = sizing_function.resolve(request, self.engine, symbol)
         outcome, number, code = call(self.engine.submit, request)
         if outcome == "skipped":
-            symbol = self.symbols[request["instrument"]]
             self.skipped.append((self.decided_at, symbol, code))
             return None
+        return Order(number, self.order, self.cancel)
+
+    def submit_target(self, request: dict) -> Order | None:
+        """Trade to a target position (`_orders.target` builds the request); returns the
+        handle of the order for the difference, or None when the position already is the
+        target."""
+        submitted = call(self.engine.target, request)
+        if submitted is None:
+            return None
+        _, number, _ = submitted
         return Order(number, self.order, self.cancel)
 
     def sizing_store(self, instrument: int) -> SeriesStore:

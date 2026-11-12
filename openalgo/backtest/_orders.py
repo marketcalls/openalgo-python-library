@@ -8,9 +8,12 @@ run, and anything not built yet comes back as NotImplementedError naming the fea
 
 from __future__ import annotations
 
+import math
+import numbers
 from collections.abc import Callable
 from typing import Any
 
+from . import _sizing_function as sizing_function
 from . import units
 from .errors import ConfigError
 from .size import Sizer
@@ -94,11 +97,11 @@ def leg_rules(
     return rules
 
 
-def quantity(
-    qty: float | None, lots: int | None, size: Sizer | None, default: Sizer | None
-) -> dict:
+def quantity(qty: float | None, lots: int | None, size: Any, default: Any) -> dict:
     """The quantity dict: qty or lots, else size, else the strategy default, else the
-    engine default (03-architecture 7). Raises ConfigError for qty together with lots."""
+    engine default (03-architecture 7). A size may be a `bt.size` sizer or a sizing
+    function `size(ctx, order)` (`_sizing_function`, resolved at submission). Raises
+    ConfigError for qty together with lots, or a size that is neither."""
     if qty is not None and lots is not None:
         raise ConfigError("give qty= or lots=, not both")
     if qty is not None:
@@ -108,9 +111,47 @@ def quantity(
     sizer = size if size is not None else default
     if sizer is None:
         return {"kind": "sizer", "sizer": "default", "amount": None}
-    if not isinstance(sizer, Sizer):
-        raise ConfigError("size= takes a sizer from bt.size (bt.size.percent(50), ...)")
-    return sizer.to_native()
+    if isinstance(sizer, Sizer):
+        return sizer.to_native()
+    if callable(sizer):
+        return sizing_function.quantity(sizer)
+    raise ConfigError(
+        "size= takes a sizer from bt.size (bt.size.percent(50), ...) or a sizing function "
+        "size(ctx, order) that returns units"
+    )
+
+
+# `target()` amounts: the keyword and the kind the binding reads
+# (`rust/oa_py/src/backtest/engine/sizing.rs`).
+TARGET_KINDS = {"qty": "units", "lots": "lots", "value": "rupees", "percent": "percent"}
+
+
+def target(
+    instrument: int, product: str, leverage: float | None, amounts: dict[str, Any]
+) -> dict[str, Any]:
+    """The kernel's target dict for `target(**amounts)`: exactly one of `qty`, `lots`,
+    `value` or `percent`, signed (negative is short). Raises ConfigError for none or
+    several, for an amount that is not a finite number, or for lots that are not a whole
+    number."""
+    given = {name: amount for name, amount in amounts.items() if amount is not None}
+    if len(given) != 1:
+        raise ConfigError(
+            "target takes exactly one of qty=, lots=, value= or percent=, got "
+            f"{sorted(given) or 'none'}"
+        )
+    ((name, amount),) = given.items()
+    whole = isinstance(amount, numbers.Integral) and not isinstance(amount, bool)
+    number = isinstance(amount, numbers.Real) and not isinstance(amount, bool)
+    if (name == "lots" and not whole) or not number or not math.isfinite(amount):
+        kind = "a whole number of lots" if name == "lots" else "a finite number"
+        raise ConfigError(f"target {name}= takes {kind} (negative for a short), got {amount!r}")
+    return {
+        "instrument": instrument,
+        "product": product,
+        "kind": TARGET_KINDS[name],
+        "amount": int(amount) if name == "lots" else float(amount),
+        "leverage": leverage,
+    }
 
 
 def order_shape(price: float | None, trigger_price: float | None = None) -> dict[str, Any]:
@@ -199,4 +240,13 @@ class Order:
         return f"Order({self.id}, {self.status})"
 
 
-__all__ = ["Order", "leg_rules", "order_shape", "quantity", "request", "validity"]
+__all__ = [
+    "TARGET_KINDS",
+    "Order",
+    "leg_rules",
+    "order_shape",
+    "quantity",
+    "request",
+    "target",
+    "validity",
+]

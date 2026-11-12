@@ -4,8 +4,9 @@
 //! - Futures and options: one lot.
 //! - Cash equity: 1x the strategy's capital at the sizing price, net of the estimated
 //!   costs of the order, split equally across the instruments of the strategy. The
-//!   capital is the current equity (compounding), never more than the free cash, so
-//!   no leverage is ever implied. In fractional mode the size is taken at the fill
+//!   capital is the sizing equity (the current equity, compounding, or the initial
+//!   capital without `reinvest`), never more than the free cash, so no leverage is
+//!   ever implied. In fractional mode the size is taken at the fill
 //!   price; in venue mode (and in live) at the decision price, with
 //!   `VENUE_CASH_BUFFER` kept back so a market order is not rejected on a move.
 
@@ -32,7 +33,7 @@ pub fn engine_default_units(ctx: &SizingContext) -> Result<f64, SizingError> {
             ),
         });
     }
-    let share = ctx.equity_rupees / f64::from(ctx.instruments.max(1));
+    let share = ctx.sizing_equity() / f64::from(ctx.instruments.max(1));
     let capital = share.min(ctx.free_cash_rupees).max(0.0);
     let budget = capital * (1.0 - ctx.cash_buffer) - ctx.estimated_cost_rupees;
     Ok(budget.max(0.0) / unit_value(ctx)?)

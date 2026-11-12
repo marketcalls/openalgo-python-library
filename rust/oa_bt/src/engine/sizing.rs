@@ -81,8 +81,19 @@ impl Engine {
             && !(request.product == Product::Cnc && request.side == Side::Sell)
     }
 
+    /// What a sizer sees for `request` at the decision: the last close as the sizing
+    /// price, no cash buffer, no cost estimate. A strategy's sizing function receives
+    /// these figures (`size=` a function).
+    ///
+    /// Errors: `Sizing` for a stop in `bt.rupees` (it depends on the quantity);
+    /// `Exec` for an instrument the run does not have.
+    pub fn sizing_inputs(&self, request: &OrderRequest) -> Result<SizingContext, KernelError> {
+        let price = self.last_close(request.instrument).unwrap_or(0.0);
+        self.sizing_context(request, price, 0.0)
+    }
+
     /// What a sizer sees for `request` at `price` (rupees).
-    fn sizing_context(
+    pub(super) fn sizing_context(
         &self,
         request: &OrderRequest,
         price: f64,
@@ -90,6 +101,10 @@ impl Engine {
     ) -> Result<SizingContext, KernelError> {
         let spec = self.spec(request.instrument)?;
         let account = self.account();
+        let key = crate::portfolio::PositionKey {
+            instrument: request.instrument,
+            product: request.product,
+        };
         Ok(SizingContext {
             equity_rupees: account.equity_rupees,
             initial_capital_rupees: self.config.capital_rupees,
@@ -108,6 +123,9 @@ impl Engine {
             freeze_quantity_units: spec.freeze_quantity_units,
             instruments: u32::try_from(self.instruments.len()).unwrap_or(u32::MAX),
             cash_buffer,
+            held_on_side_units: self.held_units(key) * request.side.sign(),
+            reinvest: self.config.sizing.reinvest,
+            caps: self.config.sizing.caps,
         })
     }
 
