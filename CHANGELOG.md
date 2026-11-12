@@ -7,8 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **WebSocket connection hooks.** `on_connect`, `on_disconnect`, `on_reconnect` and
+  `on_error` register listeners on the feed (`FeedAPI` and `api`); `remove_hook`
+  removes one. A connect fires after authentication, a disconnect carries the close
+  code, reason and whether a reconnect will follow, and a reconnect fires after the
+  server has answered the replayed subscriptions and lists what it accepted. Events
+  arrive in order, outside every SDK lock, and each payload has a connection
+  sequence number `seq`.
+- **`get_subscriptions()`** returns the set of subscriptions the feed is asked to
+  hold, which is exactly what a reconnect replays.
+- **`FeedServerError`** (`.code`, `.message`) describes a rejection sent by the server.
+
 ### Security
 
+- The feed no longer prints the first and last characters of the API key when
+  `verbose` is 1 or 2.
 - The example, playground, audit, benchmark and test scripts no longer carry API key
   literals. They read the key from the `OPENALGO_API_KEY` environment variable.
 
@@ -26,6 +41,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   simulated order.
 - Source comments, tests, audit notes and documentation describe this library in its
   own terms and no longer name third-party engines or libraries used for comparison.
+- **Feed errors are never silent.** An exception raised inside an LTP, quote, depth
+  or order callback, a frame that cannot be parsed, and a rejection from the server
+  (for example an invalid API key) now reach `on_error` listeners, or an ERROR record
+  on the `openalgo.feed` logger when none is registered, at every `verbose` level.
+  Repeated failures of a tick callback are rate limited; order-update failures are not.
+- **Subscriptions survive a reconnect as last requested.** A `subscribe_*` or
+  `unsubscribe_*` call made while the socket is down is remembered and applied when
+  the connection next authenticates (an unsubscribe during a reconnect used to be
+  lost and the instrument came back). The return value is unchanged: it still says
+  whether the frame was sent at that moment. The order-update stream follows the
+  same rule.
+- `disconnect()`, and a drop with `auto_reconnect=False`, forget the requested
+  subscriptions, so a later connection starts clean.
+- `connect()` on a feed that is already connected and authenticated returns True
+  without opening a second socket.
+- `disconnect()` called from inside a callback no longer stalls for two seconds.
+
+- **WebSocket URL for servers hosted on a domain.** When `host` is an `https://` URL
+  and neither `ws_url` nor `ws_port` is passed, the feed now connects to
+  `wss://<host>/ws`, the address the OpenAlgo installers serve behind TLS, instead of
+  `ws://<host>:8765`. Nothing changes for `http://` hosts or hosts without a scheme
+  (`ws://<host>:<ws_port>`, port 8765 by default), for an explicit `ws_url`, or for
+  an `https://` host with `ws_port` passed, which keeps `ws://<host>:<ws_port>`. If
+  your https deployment publishes the plain WebSocket port, pass `ws_port=8765` or
+  `ws_url="ws://<host>:8765"` to keep the old address. The `ws_port` parameter
+  default is now `None` so the SDK can tell a chosen port from the default;
+  `client.ws_port` still reads 8765 when none is passed. At `verbose=1` a failed
+  connection names the URL it tried.
+
+### Fixed
+
+- The WebSocket URL derived from an IPv6 literal host or from an upper-case scheme
+  was invalid.
 
 ## [2.0.5] - 2026-09-11
 

@@ -84,6 +84,17 @@ optional callback; polled snapshots are available via `get_ltp` / `get_quotes` /
 `get_depth`. Auto-reconnect (on by default) replays active subscriptions after a
 drop; `ping_interval`/`ping_timeout` guard against zombie sockets.
 
+Connection hooks: `on_connect`, `on_disconnect`, `on_reconnect` and `on_error` register
+listeners (`remove_hook` removes one). Events are delivered in order, one at a time,
+outside every SDK lock, and each payload carries a connection sequence number `seq`.
+An exception in a user callback, an unparseable frame or a server rejection reaches
+`on_error`, or the `openalgo.feed` logger when no listener is registered; it is never
+dropped. Subscribe and unsubscribe calls made while the socket is down update the
+requested set (see `get_subscriptions`), which is what a reconnect replays; their
+return value still says only whether the frame was sent now. The helpers live in
+`openalgo/_feed_*.py` (hooks, errors, replay, state, ticks, URL). The feed tests
+(`test/test_feed_*.py`) use an in-process fake socket and fail if a test opens a real one.
+
 ## Analyzer (sandbox) mode
 
 The server has an analyzer/sandbox mode where orders are simulated instead of being
@@ -192,9 +203,12 @@ Checks to run before committing:
     cargo fmt -p oa_bt --check --manifest-path rust/Cargo.toml
     cargo clippy -p oa_bt --all-targets --manifest-path rust/Cargo.toml -- -D warnings
     cargo test -p oa_bt --manifest-path rust/Cargo.toml
-    ruff check openalgo/backtest test/backtest
-    ruff format --check openalgo/backtest test/backtest
-    pytest test/backtest
+    ruff check
+    ruff format --check
+    pytest test/backtest test/test_feed_*.py
+
+`ruff` with no path covers the files listed under `[tool.ruff] include` in
+`pyproject.toml`; add new modules outside the backtest paths to that list.
 
 ## Bumping the version
 

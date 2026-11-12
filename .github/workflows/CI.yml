@@ -51,15 +51,16 @@ jobs:
         run: cargo clippy -p oa_bt --all-targets --manifest-path rust/Cargo.toml -- -D warnings
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
-      - name: ruff (openalgo/backtest, test/backtest)
+      - name: ruff (files listed under tool.ruff include in pyproject.toml)
         run: |
           pip install ruff
-          ruff check openalgo/backtest test/backtest
-          ruff format --check openalgo/backtest test/backtest
+          ruff check
+          ruff format --check
 
-  # ---------- Backtest package tests against a freshly built extension ----------
+  # ---------- Offline test suites against a freshly built extension ----------
+  # None of these contact a server: the feed tests use an in-process fake socket.
   backtest-tests:
-    name: Backtest package tests
+    name: Package tests (backtest, feed)
     runs-on: ubuntu-latest
     needs: rust-test
     steps:
@@ -76,10 +77,10 @@ jobs:
           . .venv/bin/activate
           pip install 'maturin>=1.7,<2.0' pytest hypothesis
           maturin develop
-      - name: pytest (test/backtest)
+      - name: pytest (test/backtest, feed)
         run: |
           . .venv/bin/activate
-          pytest test/backtest -q
+          pytest test/backtest test/test_feed_*.py -q
 
   # ---------- Build + import smoke test on Linux ----------
   smoke:

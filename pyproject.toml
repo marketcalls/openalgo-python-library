@@ -56,11 +56,19 @@ strip = true
 include = [{ path = "LICENSE", format = "sdist" }]
 
 [tool.ruff]
-# Lint and format gate for the backtest package and its tests. The older SDK modules
-# predate this configuration and are not reformatted.
+# Lint and format gate for new code: the backtest package, the feed helper modules and
+# their tests. The older SDK modules predate this configuration and are not reformatted;
+# `ruff check` and `ruff format --check` with no path cover exactly the files below.
 line-length = 100
 target-version = "py312"
-include = ["openalgo/backtest/**/*.py", "test/backtest/**/*.py"]
+include = [
+    "openalgo/backtest/**/*.py",
+    "openalgo/_feed_*.py",
+    "test/backtest/**/*.py",
+    "test/conftest.py",
+    "test/feed_*.py",
+    "test/test_feed_*.py",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "C90", "RUF100"]
