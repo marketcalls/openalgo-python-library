@@ -11,8 +11,8 @@ from ._performance import Performance
 
 #: The headline figures across the top of the report.
 HEADLINE = ("net_profit", "total_return", "cagr", "max_drawdown", "sharpe", "trades")
-#: The fact lists under the headline, by heading.
-FACTS = (
+#: The fact lists under the headline of the basic report, by heading.
+BASIC_FACTS = (
     (
         "Returns and risk",
         ("total_return", "cagr", "volatility", "sharpe", "sortino", "calmar", "exposure"),
@@ -61,6 +61,62 @@ FACTS = (
         ),
     ),
 )
+#: The fact lists of the full report: the basic ones, the benchmark's active-return
+#: figures, and the analysis groups.
+FACTS = (
+    *(
+        (heading, (*keys, "r_squared", "tracking_error", "information_ratio", "treynor_ratio"))
+        if heading == "Benchmark"
+        else (heading, keys)
+        for heading, keys in BASIC_FACTS
+    ),
+    (
+        "Risk-adjusted",
+        (
+            "smart_sharpe",
+            "smart_sortino",
+            "adjusted_sortino",
+            "probabilistic_sharpe",
+            "omega",
+            "gain_to_pain",
+            "ulcer_index",
+            "ulcer_performance_index",
+            "serenity_index",
+            "recovery_factor",
+            "risk_adjusted_return",
+        ),
+    ),
+    (
+        "Session returns",
+        (
+            "expected_return",
+            "average_session_return",
+            "best_session",
+            "worst_session",
+            "best_month",
+            "worst_month",
+            "best_year",
+            "worst_year",
+            "session_win_rate",
+            "max_consecutive_losing_sessions",
+        ),
+    ),
+    (
+        "Tail risk",
+        (
+            "skew",
+            "kurtosis",
+            "value_at_risk",
+            "expected_shortfall",
+            "conditional_drawdown",
+            "tail_ratio",
+        ),
+    ),
+    (
+        "Trade ratios",
+        ("win_loss_ratio", "kelly_criterion", "risk_of_ruin", "cpc_index", "common_sense_ratio"),
+    ),
+)
 #: Columns of the strategy comparison.
 COMPARISON = ("total_return", "cagr", "max_drawdown", "sharpe", "trades", "net_profit")
 
@@ -74,7 +130,7 @@ def section(anchor: str, title: str, body: str, lede: str = "") -> str:
     )
 
 
-def masthead(title: str, performance: Performance) -> str:
+def masthead(title: str, performance: Performance, kicker: str = "Backtest report") -> str:
     """Report kicker, title and the run in one line."""
     m = performance.metrics
     parts = (
@@ -85,7 +141,7 @@ def masthead(title: str, performance: Performance) -> str:
     )
     dek = "".join(f"<span>{part}</span>" for part in parts)
     return (
-        "<header class='masthead'><p class='kicker'>Backtest report</p>"
+        f"<header class='masthead'><p class='kicker'>{fmt.text(kicker)}</p>"
         f"<h1>{fmt.text(title)}</h1><p class='dek'>{dek}</p></header>"
     )
 
@@ -97,32 +153,35 @@ def _headline_figure(key: str, value: object) -> str:
     return fmt.figure(key, value)
 
 
+def _term(key: str, value: str) -> str:
+    """One label and value of a description list; the label is escaped (P&L)."""
+    return f"<div><dt>{fmt.text(DEFINITIONS[key].label)}</dt><dd>{value}</dd></div>"
+
+
 def headline(metrics: Mapping[str, object]) -> str:
     """The headline figures as one strip."""
-    cells = "".join(
-        f"<div><dt>{DEFINITIONS[k].label}</dt><dd>{_headline_figure(k, metrics[k])}</dd></div>"
-        for k in HEADLINE
-    )
+    cells = "".join(_term(k, _headline_figure(k, metrics[k])) for k in HEADLINE)
     return f"<dl class='figures'>{cells}</dl>"
 
 
-def facts(metrics: Mapping[str, object]) -> str:
-    """The fact lists; a group whose keys are all absent (no benchmark) is left out."""
+def facts(metrics: Mapping[str, object], lists: tuple = FACTS) -> str:
+    """The fact lists `lists` ((heading, keys) pairs); a group whose keys are all absent
+    (no benchmark) is left out."""
     groups = []
-    for heading, keys in FACTS:
+    for heading, keys in lists:
         present = [key for key in keys if key in metrics]
         if not present:
             continue
-        rows = "".join(
-            f"<div><dt>{DEFINITIONS[k].label}</dt><dd>{fmt.figure(k, metrics[k])}</dd></div>"
-            for k in present
-        )
+        rows = "".join(_term(k, fmt.figure(k, metrics[k])) for k in present)
         groups.append(f"<div class='group'><h3>{heading}</h3><dl>{rows}</dl></div>")
     return f"<div class='facts'>{''.join(groups)}</div>"
 
 
-def method_notes(metrics: Mapping[str, object], exchanges: tuple[str, ...]) -> str:
-    """How the figures were computed, in sentences, then the glossary."""
+def method_notes(
+    metrics: Mapping[str, object], exchanges: tuple[str, ...], lists: tuple = FACTS
+) -> str:
+    """How the figures were computed, in sentences, then the glossary of the keys of the
+    fact lists `lists`."""
     m = metrics
     notes = [
         "Returns are time weighted: cash flows move the equity but are not returns. Each "
@@ -147,11 +206,13 @@ def method_notes(metrics: Mapping[str, object], exchanges: tuple[str, ...]) -> s
         )
     if m["ruined"]:
         notes.append(f"The account was ruined on {fmt.moment(m['ruin_time'])}.")
-    shown = [key for _, keys in FACTS for key in keys if key in metrics]
-    glossary = "".join(
-        f"<div><dt>{DEFINITIONS[k].label}</dt><dd>{fmt.text(DEFINITIONS[k].definition)}</dd></div>"
-        for k in shown
+    notes.append(
+        "Every drawdown figure is a fall, so it is zero or negative, as a fraction or in "
+        "rupees. Every definition cites its source in the documentation of "
+        "openalgo.backtest.metrics."
     )
+    shown = [key for _, keys in lists for key in keys if key in metrics]
+    glossary = "".join(_term(k, fmt.text(DEFINITIONS[k].definition)) for k in shown)
     paragraphs = "".join(f"<p>{note}</p>" for note in notes)
     return f"{paragraphs}<dl class='glossary'>{glossary}</dl>"
 
@@ -180,7 +241,9 @@ def assumption_list(lines: list[str]) -> str:
 
 def comparison(strategies: Mapping[str, Performance], correlation: pd.DataFrame) -> str:
     """Key figures per strategy, and the correlation of their session returns."""
-    head = "".join(f"<th scope='col' class='num'>{DEFINITIONS[k].label}</th>" for k in COMPARISON)
+    head = "".join(
+        f"<th scope='col' class='num'>{fmt.text(DEFINITIONS[k].label)}</th>" for k in COMPARISON
+    )
     rows = "".join(
         f"<tr><th scope='row'>{fmt.text(name)}</th>"
         + "".join(f"<td class='num'>{fmt.figure(k, p.metrics[k])}</td>" for k in COMPARISON)
@@ -205,6 +268,7 @@ def comparison(strategies: Mapping[str, Performance], correlation: pd.DataFrame)
 
 
 __all__ = [
+    "BASIC_FACTS",
     "FACTS",
     "HEADLINE",
     "assumption_lines",

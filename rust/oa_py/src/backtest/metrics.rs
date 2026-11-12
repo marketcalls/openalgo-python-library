@@ -7,9 +7,13 @@
 //! - A drawdown episode is a tuple (peak or None, trough, recovery or None, depth,
 //!   duration): point positions (a peak of None is the opening wealth, before the first
 //!   point), the depth as a fraction and the duration in nanoseconds.
-//! - An opening wealth (rupees, the capital before the first point) is an optional
-//!   last argument; None takes the first point as the start (`oa_bt::metrics::curve`).
+//! - An opening wealth (rupees, the capital before the first point) and an opening time
+//!   (UTC nanoseconds, the instant the run opened with it) are optional last arguments;
+//!   None takes the first point as the start (`oa_bt::metrics::curve`, `drawdown`).
 //! - Several results come back as a dict whose keys are the kernel's field names.
+//!
+//! The distribution, trade-ratio, rolling and path statistics are in `analysis`, Monte
+//! Carlo and percentiles in `simulation`.
 //!
 //! Errors are raised as `NativeMetricsError`; the Python package converts them to its
 //! public error type.
@@ -19,6 +23,9 @@
 // not declare, and `#[pyfunction]` converts the error of every `PyResult` return with
 // `.into()`.
 #![allow(unexpected_cfgs, clippy::useless_conversion)]
+
+mod analysis;
+mod simulation;
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
 use oa_bt::metrics as mt;
@@ -44,15 +51,19 @@ type EpisodeTuple = (Option<usize>, usize, Option<usize>, f64, i64);
 /// A combined equity series: (int64 UTC nanoseconds, float64 rupees).
 type CombinedColumns<'py> = (Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<f64>>);
 
+fn episode_tuple(e: &mt::DrawdownEpisode) -> EpisodeTuple {
+    (e.peak, e.trough, e.recovery, e.depth, e.duration)
+}
+
 fn episode(value: Option<mt::DrawdownEpisode>) -> Option<EpisodeTuple> {
-    value.map(|e| (e.peak, e.trough, e.recovery, e.depth, e.duration))
+    value.as_ref().map(episode_tuple)
 }
 
 /// Wealth index, cumulative P&L, booked flows, ruin point, session returns and
-/// drawdowns of an equity series with its cash flows and optional opening wealth (see
-/// `oa_bt::metrics::curve`).
+/// drawdowns (with every episode) of an equity series with its cash flows, optional
+/// opening wealth and optional opening time (see `oa_bt::metrics::curve`).
 #[pyfunction]
-#[pyo3(signature = (ts, equity, flow_ts, flow_amount, opening_wealth=None))]
+#[pyo3(signature = (ts, equity, flow_ts, flow_amount, opening_wealth=None, opening_time=None))]
 fn metrics_curve<'py>(
     py: Python<'py>,
     ts: Times<'py>,
@@ -60,6 +71,7 @@ fn metrics_curve<'py>(
     flow_ts: Times<'py>,
     flow_amount: Values<'py>,
     opening_wealth: Option<f64>,
+    opening_time: Option<i64>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let ts = ts.as_slice()?;
     let curve = mt::EquityCurve {
@@ -72,7 +84,8 @@ fn metrics_curve<'py>(
     };
     let wealth = mt::wealth(&curve, &flows, opening_wealth).map_err(metrics_error)?;
     let sessions = mt::session_returns(ts, &wealth);
-    let drawdowns = mt::drawdowns(ts, &wealth.index, &wealth.pnl);
+    let drawdowns = mt::drawdowns(ts, &wealth.index, &wealth.pnl, opening_time);
+    let episodes: Vec<EpisodeTuple> = drawdowns.episodes.iter().map(episode_tuple).collect();
     let out = PyDict::new_bound(py);
     out.set_item("ruin", wealth.ruin)?;
     out.set_item("wealth", wealth.index.into_pyarray_bound(py))?;
@@ -83,6 +96,7 @@ fn metrics_curve<'py>(
     out.set_item("drawdown", drawdowns.series.into_pyarray_bound(py))?;
     out.set_item("max_drawdown", episode(drawdowns.max))?;
     out.set_item("longest_drawdown", episode(drawdowns.longest))?;
+    out.set_item("drawdown_episodes", episodes)?;
     out.set_item("max_drawdown_amount", drawdowns.max_amount)?;
     Ok(out)
 }
@@ -192,9 +206,18 @@ fn metrics_benchmark<'py>(
     )
     .map_err(metrics_error)?;
     let out = PyDict::new_bound(py);
-    out.set_item("alpha", stats.alpha)?;
-    out.set_item("beta", stats.beta)?;
-    out.set_item("correlation", stats.correlation)?;
+    let figures = [
+        ("alpha", stats.alpha),
+        ("beta", stats.beta),
+        ("correlation", stats.correlation),
+        ("r_squared", stats.r_squared),
+        ("tracking_error", stats.tracking_error),
+        ("information_ratio", stats.information_ratio),
+        ("treynor", stats.treynor),
+    ];
+    for (key, value) in figures {
+        out.set_item(key, value)?;
+    }
     out.set_item("sessions", stats.sessions)?;
     Ok(out)
 }
@@ -238,5 +261,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(metrics_exposure, m)?)?;
     m.add_function(wrap_pyfunction!(metrics_benchmark, m)?)?;
     m.add_function(wrap_pyfunction!(metrics_combine, m)?)?;
+    analysis::register(m)?;
+    simulation::register(m)?;
     Ok(())
 }

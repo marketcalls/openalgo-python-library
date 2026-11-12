@@ -43,6 +43,14 @@ pub enum MetricsError {
     InvalidRiskFreeRate { value: f64 },
     /// `combine_equity` called with no series.
     NothingToCombine,
+    /// A rolling window shorter than two sessions.
+    InvalidWindow { sessions: usize },
+    /// A probability (a quantile level) outside 0 to 1.
+    InvalidProbability { value: f64 },
+    /// A Monte Carlo study asked for no simulation.
+    NoSimulations,
+    /// A Monte Carlo study with no session return or no trade to draw from.
+    NothingToResample,
 }
 
 impl fmt::Display for MetricsError {
@@ -117,6 +125,24 @@ impl fmt::Display for MetricsError {
             MetricsError::NothingToCombine => {
                 write!(f, "no equity series to combine: pass at least one")
             }
+            MetricsError::InvalidWindow { sessions } => write!(
+                f,
+                "a rolling window of {sessions} session(s) has no deviation to measure: \
+                 use a window of at least 2 sessions"
+            ),
+            MetricsError::InvalidProbability { value } => write!(
+                f,
+                "a percentile level must be a fraction from 0 to 1 (0.95 is the 95th \
+                 percentile), got {value}"
+            ),
+            MetricsError::NoSimulations => {
+                write!(f, "a Monte Carlo study needs at least one simulation")
+            }
+            MetricsError::NothingToResample => write!(
+                f,
+                "there is nothing to resample: Monte Carlo needs at least one session \
+                 return (or, resampling trades, one closed trade)"
+            ),
         }
     }
 }

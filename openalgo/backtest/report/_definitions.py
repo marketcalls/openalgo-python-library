@@ -14,10 +14,17 @@ Units:
     timestamp   a pandas Timestamp in IST, or None
     text        a string
     flag        True or False
+
+Sign of a drawdown: every drawdown figure is a fall, so it is zero or negative, whether
+a fraction (max_drawdown, the drawdown series, episode depths, conditional_drawdown,
+the horizon and Monte Carlo drawdowns) or rupees (max_drawdown_amount). Durations are
+zero or positive, and so is the ulcer index, a root mean square.
 """
 
 from types import MappingProxyType
 from typing import NamedTuple
+
+from ._definitions_extra import BENCHMARK_EXTRA, RISK_ADJUSTED, SESSIONS, TAIL, TRADE_RATIOS
 
 
 class Definition(NamedTuple):
@@ -45,12 +52,17 @@ _RUN = {
     "start": (
         "Start",
         "timestamp",
-        "Time of the first equity point: the starting equity, or with an opening wealth "
-        "the first mark after it (the opening has no time of its own and is counted from "
+        "The opening time when one is given (the instant the run opened with its "
+        "capital); else the time of the first equity point: the starting equity, or with "
+        "an opening wealth the first mark after it (the opening is then counted from "
         "here).",
     ),
     "end": ("End", "timestamp", "Time of the last equity point."),
-    "elapsed_days": ("Elapsed", "days", "Calendar days from start to end."),
+    "elapsed_days": (
+        "Elapsed",
+        "days",
+        "Calendar days from start to end; CAGR is annualised over them.",
+    ),
     "sessions": (
         "Sessions",
         "count",
@@ -113,7 +125,8 @@ _RETURNS = {
         "Exposure",
         "fraction",
         "Share of the equity series' bars during which a position was open. A bar runs "
-        "from one equity point to the next; time before the first point is not a bar.",
+        "from one equity point to the next; with an opening time the first bar runs from "
+        "it to the first point, else time before the first point is not a bar.",
     ),
     "risk_free_rate": ("Risk-free rate", "fraction", "The annual risk-free rate supplied."),
     "risk_free_per_session": (
@@ -156,12 +169,14 @@ _DRAWDOWN = {
         "Maximum drawdown amount",
         "rupees",
         "Largest fall of cumulative P&L (equity less the start equity and cash flows) "
-        "from its running peak, which starts at 0.",
+        "from its running peak, which starts at 0. Zero or negative: a fall of 500 "
+        "rupees is -500.",
     ),
     "max_drawdown_peak": (
         "Drawdown peak",
         "timestamp",
-        "Peak before the maximum drawdown; the start when the peak is the opening wealth.",
+        "Peak before the maximum drawdown; the start when the peak is the opening wealth "
+        "(a drawdown from the opening is timed from the start).",
     ),
     "max_drawdown_trough": ("Drawdown trough", "timestamp", "Lowest point of it."),
     "max_drawdown_recovery": (
@@ -258,16 +273,28 @@ _BENCHMARK = {
     ),
     "beta": ("Beta", "ratio", "cov(strategy, benchmark) / var(benchmark), per session."),
     "correlation": ("Correlation", "ratio", "Pearson correlation of session returns."),
+    **BENCHMARK_EXTRA,
 }
+
+_GROUPS = (
+    ("Run", _RUN),
+    ("Returns and risk", _RETURNS),
+    ("Drawdown", _DRAWDOWN),
+    ("Trades", _TRADES),
+    ("Benchmark", _BENCHMARK),
+    ("Risk-adjusted ratios", RISK_ADJUSTED),
+    ("Session returns", SESSIONS),
+    ("Tail risk", TAIL),
+    ("Trade ratios", TRADE_RATIOS),
+)
 
 #: Every metric key, in report order, with its label, unit and definition.
 DEFINITIONS = MappingProxyType(
-    {
-        key: Definition(*row)
-        for group in (_RUN, _RETURNS, _DRAWDOWN, _TRADES, _BENCHMARK)
-        for key, row in group.items()
-    }
+    {key: Definition(*row) for _, group in _GROUPS for key, row in group.items()}
 )
+
+#: The metric keys by group heading, in report order (every key in exactly one group).
+GROUPS = MappingProxyType({heading: tuple(group) for heading, group in _GROUPS})
 
 #: Keys present only when a benchmark is given.
 BENCHMARK_KEYS = tuple(_BENCHMARK)
@@ -281,4 +308,4 @@ def as_text() -> str:
     return "\n".join(lines) + "\n"
 
 
-__all__ = ["BENCHMARK_KEYS", "DEFINITIONS", "UNITS", "Definition", "as_text"]
+__all__ = ["BENCHMARK_KEYS", "DEFINITIONS", "GROUPS", "UNITS", "Definition", "as_text"]
