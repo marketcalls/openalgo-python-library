@@ -59,10 +59,14 @@ Inputs
         A flow is taken to arrive at the next equity point; it changes the equity but
         is not a return.
     benchmark: a Series of positive index or price levels indexed by time (NIFTY 50
-        closes, or a total-return index). It is read as of the start and as of each
-        session's last equity point, never back-filled: a session whose previous
-        benchmark value is unknown has no benchmark return. With an opening wealth the
-        start is read as the benchmark's last value stamped before the first point.
+        closes, or a total-return index). It is read at the start and at each session's
+        last equity point, and only a close of that session's own IST date counts (for
+        the start, of the calendar session before the first): a missing session stays
+        missing and is never filled from a neighbouring day. A session has a benchmark
+        return only when it and the session before it both have a close, and the
+        benchmark figures pair the sessions with both returns (`benchmark_sessions`).
+        With an opening wealth the start is read at the opening time, else just before
+        the first point.
     risk_free_rate: the annual risk-free rate as a fraction (0.065 is 6.5 percent).
         It is converted to the per-session rate (1 + rate) ^ (1 / sessions per year) - 1
         before it is subtracted from session returns.

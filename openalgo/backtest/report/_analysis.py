@@ -153,8 +153,9 @@ def analyse(
     streaks = _extended_figures(figures, returns, (monthly, yearly), table, points, annual.value)
     benchmark_equity = bench_returns = None
     if benchmark is not None:
+        before_first = periods.previous_session_day(cal, codes, int(days[0]))
         extra, benchmark_equity, bench_returns = _benchmark(
-            benchmark, points, days, returns, annual.value, rate
+            benchmark, points, (days, before_first), returns, annual.value, rate
         )
         figures |= extra
     window = rolling.default_window(annual.value) if window is None else window
@@ -341,26 +342,27 @@ _BENCHMARK_KEYS = {
 def _benchmark(
     benchmark: pd.Series,
     points: EquityPoints,
-    days: np.ndarray,
+    sessions: tuple[np.ndarray, int | None],
     returns: pd.Series,
     sessions_per_year: float,
     rate: float,
 ) -> tuple[dict, pd.Series, pd.Series]:
     """Benchmark figures, the benchmark scaled to the starting equity, and its session
-    returns on the strategy's session dates.
+    returns on the strategy's session dates. `sessions` holds those dates and the
+    calendar session before the first (IST days since 1970-01-01, None when unknown).
 
-    The benchmark is read as of the start and as of each session's last equity point,
-    so each of its returns spans the same instants as the strategy's return; a session
-    whose previous benchmark value is unknown has no benchmark return. Without an
-    opening wealth the start is the first point, read at its instant. With one, the
-    first point is already a mark after the opening, so the start is read at the
-    opening time when it is given and otherwise as the last benchmark value stamped
-    before that point. The base is the first value known in the run: as of the start,
-    or else as of the first session end it covers (daily closes stamped after an
-    intraday start, for example). The return over the run is
+    The benchmark is read at the start and at each session's last equity point, so each
+    of its returns spans the same instants as the strategy's. Every level is a close of
+    its own session, NaN without one, never a neighbouring day's (`periods.benchmark_path`
+    states the rule), and a session's return needs its level and the previous one (the
+    start's, for the first); the paired figures use the sessions with both returns.
+    Without an opening wealth the start is the first point, read at its instant; with
+    one, the opening time when given, else just before the first point. The scaled
+    benchmark's base is its first level in the run; the return over the run is
     `periods.benchmark_growth`, the rule the horizons and the comparison table share.
     """
     bench_ts, bench_values = benchmark_columns(benchmark)
+    days, before = sessions
     ends = periods.session_end_times(points.marks, days)
     first = int(points.ts[0])
     if points.opening is None:
@@ -370,7 +372,8 @@ def _benchmark(
     else:
         # At or before one nanosecond earlier is strictly before the first point.
         start = first - 1
-    path = periods.benchmark_path(bench_ts, bench_values, start, ends)
+    floor = int(days[0]) if before is None else before
+    path = periods.benchmark_path(bench_ts, bench_values, start, floor, ends, days)
     bench_returns = path[1:] / path[:-1] - 1.0
     stats = call("benchmark", returns.to_numpy(), bench_returns, sessions_per_year, rate)
     known = np.flatnonzero(np.isfinite(path))

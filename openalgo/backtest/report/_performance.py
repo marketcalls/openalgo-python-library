@@ -29,8 +29,9 @@ class Performance:
         summed over closed trades.
     benchmark_equity: the benchmark scaled so that its first value in the run equals
         the starting equity, in rupees, at the start and at each session end (IST
-        index), NaN before it has a value; None without a benchmark. With an opening
-        wealth the start has no time of its own and is not a row.
+        index), NaN where it has no close of its own (never a neighbouring day's); None
+        without a benchmark. With an opening wealth the start has no time of its own and
+        is not a row.
     exchanges: the exchanges whose calendars annualise the ratios.
     wealth: the time-weighted wealth index at each equity point (1 at the opening, 0
         from ruin on), same index as `equity`; the cumulative return is `wealth - 1`.
@@ -43,12 +44,14 @@ class Performance:
         `metrics["rolling_window_sessions"]` sessions, indexed by session date:
         volatility, sharpe, sortino, win_rate and (with a benchmark) beta; NaN until a
         window is full.
-    benchmark_returns: the benchmark's session returns on the strategy's session dates
-        (NaN where unknown), or None without a benchmark.
+    benchmark_returns: the benchmark's session returns on the strategy's session dates,
+        NaN where the session or the one before it has no close of its own; None
+        without a benchmark.
     horizons: the horizon summary, one row per horizon the run covers (1M, 3M, 6M, 1Y,
         3Y, 5Y) and "Since start": from (the IST date the window starts after),
         sessions, total_return, cagr, volatility, sharpe, max_drawdown (on session
-        closes) and, with a benchmark, benchmark_return.
+        closes) and, with a benchmark, benchmark_return and benchmark_sessions (the
+        sessions with both a strategy and a benchmark return).
     losing_streaks: how many losing streaks of each length the run had, indexed by
         length: sessions (runs of losing sessions) and trades (runs of losing closed
         trades in exit order).
@@ -81,8 +84,8 @@ class Performance:
         """Strategy against benchmark per calendar "year" or "month": the compounded
         returns of both (fractions), excess (strategy minus benchmark) and beat (True
         when the strategy did better). A period's benchmark return follows the rule of
-        `benchmark_total_return`: from the benchmark's first value in the period to its
-        end; a period with no benchmark return has none, and its beat is NA. Years are
+        `benchmark_total_return`: compounded over its sessions that have a benchmark
+        return; a period with no benchmark return has none, and its beat is NA. Years are
         indexed by their number, months by period. Raises ConfigError without a
         benchmark or for another period."""
         return _tables_data.benchmark_comparison(

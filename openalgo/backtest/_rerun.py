@@ -6,7 +6,7 @@ replaces that argument (`quantity_mode="venue"`), a name of a strategy parameter
 replaces that parameter (`fast=20`). With no overrides the result is the original one
 bit for bit, because the kernel is deterministic and the data are the same; if the data
 the source returns have changed since (other partition hashes in the manifest), the
-rerun's warnings say so first.
+rerun's warnings say so first, and likewise when only the benchmark's closes changed.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import inspect
 from dataclasses import dataclass
 from typing import Any
 
+from ._benchmark import benchmark_partitions
 from .errors import ConfigError
 
 # Arguments that decide which bars a run reads.
@@ -55,6 +56,13 @@ class RunRecord:
         arguments["params"] = params or None
         result = backtest(self.strategy, client, **arguments)
         same_data = not any(name in overrides for name in (*DATA_ARGUMENTS, "client"))
+        other_closes = benchmark_partitions(result.manifest) != benchmark_partitions(manifest)
+        if same_data and "benchmark" not in overrides and other_closes:
+            result._warnings.insert(
+                0,
+                "The benchmark's data differ from those of the original run (other partition "
+                "hashes): its benchmark figures are not a reproduction of it",
+            )
         if same_data and result.manifest["data"] != manifest["data"]:
             result._warnings.insert(
                 0,
