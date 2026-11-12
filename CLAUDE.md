@@ -60,7 +60,8 @@ separate top-level exports.
 | `openalgo/strategy.py` | `Strategy`: standalone webhook poster for `/strategy/webhook/<token>` (own pooled client) |
 | `openalgo/strategy_api.py` | `StrategyAPI`: the API-key surface under `/api/v1/strategy/` (list, status, start, stop, close_all, close_leg, runs, orders, events) |
 | `openalgo/feed.py` | `FeedAPI`: WebSocket market-data feed (uses `websocket-client`, not httpx) |
-| `openalgo/indicators/` | `ta` technical indicators (Rust core via `_oaindicators`) |
+| `openalgo/indicators/` | `ta` technical indicators (Rust core via `_oaindicators`, NumPy fallback in `_backend.py`; one implementation per indicator) |
+| `openalgo/indicators/causality.py` | Registry of which `ta` outputs use only data up to the current bar; the backtest engine rejects the others |
 
 ## HTTP layer (connection pooling)
 
@@ -205,7 +206,7 @@ Checks to run before committing:
     cargo test -p oa_bt --manifest-path rust/Cargo.toml
     ruff check
     ruff format --check
-    pytest test/backtest test/test_feed_*.py
+    pytest test/backtest test/test_feed_*.py test/test_indicators_fixes.py test/test_indicators_causality.py
 
 `ruff` with no path covers the files listed under `[tool.ruff] include` in
 `pyproject.toml`; add new modules outside the backtest paths to that list.

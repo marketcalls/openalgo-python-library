@@ -12,21 +12,6 @@ from .utils import sma, ema, highest, lowest, rolling_sum, true_range, cmo_optim
 from . import _backend
 
 
-@jit(nopython=True)
-def _calculate_swma_helper(data: np.ndarray) -> np.ndarray:
-    """Helper function to calculate Symmetrically Weighted Moving Average (SWMA)
-    SWMA is a 4-period weighted moving average with weights [1, 2, 2, 1] / 6
-    """
-    n = len(data)
-    result = np.full(n, np.nan)
-    
-    for i in range(3, n):
-        # SWMA weights: [1, 2, 2, 1] / 6
-        result[i] = (data[i-3] + 2*data[i-2] + 2*data[i-1] + data[i]) / 6.0
-    
-    return result
-
-
 class ROC(BaseIndicator):
     """
     Rate of Change (Price Oscillator)
@@ -89,33 +74,9 @@ class CMO(BaseIndicator):
         super().__init__("CMO")
     
     @staticmethod
-    @jit(nopython=True)
     def _calculate_cmo(data: np.ndarray, period: int) -> np.ndarray:
-        """Numba optimized CMO calculation"""
-        n = len(data)
-        result = np.full(n, np.nan)
-        
-        # Calculate price changes
-        changes = np.diff(data)
-        
-        for i in range(period, n):
-            sum_up = 0.0
-            sum_down = 0.0
-            
-            for j in range(period):
-                change = changes[i - period + j]
-                if change > 0:
-                    sum_up += change
-                elif change < 0:
-                    sum_down += abs(change)
-            
-            total_movement = sum_up + sum_down
-            if total_movement > 0:
-                result[i] = 100 * (sum_up - sum_down) / total_movement
-            else:
-                result[i] = 0.0
-        
-        return result
+        """CMO values: the shared kernel, `_backend.cmo`"""
+        return _backend.cmo(data, period)
     
     def calculate(self, data: Union[np.ndarray, pd.Series, list], period: int = 14) -> Union[np.ndarray, pd.Series]:
         """
@@ -839,43 +800,9 @@ class RVI(BaseIndicator):
         super().__init__("RVI")
     
     @staticmethod
-    @jit(nopython=True)
     def _calculate_rvi(open_prices: np.ndarray, high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int) -> Tuple[np.ndarray, np.ndarray]:
-        """Numba optimized RVI calculation (TradingView Pine Script formula)"""
-        n = len(close)
-        rvi = np.full(n, np.nan)
-        signal = np.full(n, np.nan)
-        
-        # Calculate close-open and high-low differences
-        close_open_diff = close - open_prices
-        high_low_diff = high - low
-        
-        # Apply SWMA to the differences
-        swma_close_open = _calculate_swma_helper(close_open_diff)
-        swma_high_low = _calculate_swma_helper(high_low_diff)
-        
-        # Calculate RVI using TradingView formula: 
-        # rvi = math.sum(ta.swma(close-open), len) / math.sum(ta.swma(high-low), len)
-        for i in range(period + 2, n):  # +2 because SWMA needs 3 periods to start
-            # Sum of SWMA values over the period
-            numerator_sum = 0.0
-            denominator_sum = 0.0
-            
-            for j in range(i - period + 1, i + 1):
-                if not np.isnan(swma_close_open[j]):
-                    numerator_sum += swma_close_open[j]
-                if not np.isnan(swma_high_low[j]):
-                    denominator_sum += swma_high_low[j]
-            
-            if denominator_sum != 0.0:
-                rvi[i] = numerator_sum / denominator_sum
-            else:
-                rvi[i] = 0.0
-        
-        # Calculate signal line using SWMA of RVI (sig = ta.swma(rvi))
-        signal = _calculate_swma_helper(rvi)
-        
-        return rvi, signal
+        """(rvi, signal): the shared kernel, `_backend.rvi_vigor`"""
+        return _backend.rvi_vigor(open_prices, high, low, close, period)
     
     def calculate(self, open_prices: Union[np.ndarray, pd.Series, list],
                  high: Union[np.ndarray, pd.Series, list],

@@ -10,6 +10,7 @@ from typing import Union, Tuple, Optional
 from .base import BaseIndicator
 from .utils import true_range, ema_wilder
 from . import _backend
+from . import _anchors
 
 
 class ADX(BaseIndicator):
@@ -210,6 +211,11 @@ class PivotPoints(BaseIndicator):
     S2 = Pivot - (High - Low)
     R3 = High + 2 * (Pivot - Low)
     S3 = Low - 2 * (High - Pivot)
+
+    Without an anchor the formula is applied to each bar's own high, low and
+    close, so the levels on bar t are the levels for the next bar. With an
+    anchor every bar carries the levels of the previous completed period,
+    which is how floor pivots are traded.
     """
     
     def __init__(self):
@@ -246,7 +252,9 @@ class PivotPoints(BaseIndicator):
     
     def calculate(self, high: Union[np.ndarray, pd.Series, list],
                  low: Union[np.ndarray, pd.Series, list],
-                 close: Union[np.ndarray, pd.Series, list]) -> Union[Tuple[np.ndarray, ...], Tuple[pd.Series, ...]]:
+                 close: Union[np.ndarray, pd.Series, list],
+                 anchor: Optional[str] = None,
+                 timestamps: Optional[Union[np.ndarray, pd.DatetimeIndex]] = None) -> Union[Tuple[np.ndarray, ...], Tuple[pd.Series, ...]]:
         """
         Calculate Pivot Points
         
@@ -258,6 +266,16 @@ class PivotPoints(BaseIndicator):
             Low prices
         close : Union[np.ndarray, pd.Series, list]
             Closing prices
+        anchor : Optional[str], default=None
+            None uses each bar's own high, low and close. An anchor name
+            ("D" or "Session", "Week", "Month", "Quarter", "Year" and the
+            other anchors of `VWAP`) uses the high, low and close of the
+            previous completed period instead; bars of the first period are
+            NaN, and so are the bars after a period with a NaN high or low.
+            An anchor needs bar times: `timestamps`, or price Series whose
+            index holds dates.
+        timestamps : Optional[Union[np.ndarray, pd.DatetimeIndex]], default=None
+            Bar times, one per bar (see `_anchors.wall_seconds`)
             
         Returns:
         --------
@@ -269,6 +287,22 @@ class PivotPoints(BaseIndicator):
         close_data, _, _ = self.validate_input(close)
         
         high_data, low_data, close_data = self.align_arrays(high_data, low_data, close_data)
+        
+        if anchor is not None:
+            _anchors.check_anchor(anchor)
+            if timestamps is None:
+                timestamps = _anchors.bar_times(high, low, close)
+            if timestamps is None:
+                raise ValueError(
+                    "pivot_points with an anchor needs bar times: pass price Series "
+                    "indexed by date, or timestamps=")
+            starts = _anchors.anchor_starts(timestamps, anchor)
+            if len(starts) != len(close_data):
+                raise ValueError(
+                    f"timestamps has {len(starts)} values but the price data has "
+                    f"{len(close_data)}")
+            high_data, low_data, close_data = _anchors.previous_period_hlc(
+                high_data, low_data, close_data, starts)
         
         results = _backend.pivot_points(high_data, low_data, close_data)
         return self.format_multiple_outputs(results, input_type, index)
@@ -282,74 +316,21 @@ class SAR(BaseIndicator):
     
     Formula: SAR = SAR[prev] + AF × (EP - SAR[prev])
     Where: AF = Acceleration Factor, EP = Extreme Point
+
+    The exact order of the calculation, how the first trend is chosen and how
+    NaN bars are treated are documented on the kernel, `_backend.sar`.
+
+    Trend output: +1 while long (SAR below price), -1 while short.
     """
     
     def __init__(self):
         super().__init__("Parabolic SAR")
     
     @staticmethod
-    @jit(nopython=True)
     def _calculate_sar(high: np.ndarray, low: np.ndarray, 
                       acceleration: float, maximum: float) -> Tuple[np.ndarray, np.ndarray]:
-        """Numba optimized SAR calculation"""
-        n = len(high)
-        sar = np.empty(n)
-        trend = np.empty(n)  # 1 for uptrend, -1 for downtrend
-        
-        # Initialize
-        sar[0] = low[0]
-        trend[0] = 1
-        af = acceleration
-        ep = high[0]  # Extreme point
-        
-        for i in range(1, n):
-            prev_sar = sar[i-1]
-            prev_trend = trend[i-1]
-            
-            # Calculate new SAR
-            sar[i] = prev_sar + af * (ep - prev_sar)
-            
-            # Determine trend
-            if prev_trend == 1:  # Uptrend
-                if low[i] <= sar[i]:
-                    # Trend reversal to downtrend
-                    trend[i] = -1
-                    sar[i] = ep  # Set SAR to previous EP
-                    ep = low[i]  # New EP for downtrend
-                    af = acceleration  # Reset AF
-                else:
-                    # Continue uptrend
-                    trend[i] = 1
-                    if high[i] > ep:
-                        ep = high[i]
-                        af = min(af + acceleration, maximum)
-                    
-                    # SAR should not exceed previous two lows
-                    if i >= 2:
-                        sar[i] = min(sar[i], low[i-1], low[i-2])
-                    elif i >= 1:
-                        sar[i] = min(sar[i], low[i-1])
-            else:  # Downtrend
-                if high[i] >= sar[i]:
-                    # Trend reversal to uptrend
-                    trend[i] = 1
-                    sar[i] = ep  # Set SAR to previous EP
-                    ep = high[i]  # New EP for uptrend
-                    af = acceleration  # Reset AF
-                else:
-                    # Continue downtrend
-                    trend[i] = -1
-                    if low[i] < ep:
-                        ep = low[i]
-                        af = min(af + acceleration, maximum)
-                    
-                    # SAR should not fall below previous two highs
-                    if i >= 2:
-                        sar[i] = max(sar[i], high[i-1], high[i-2])
-                    elif i >= 1:
-                        sar[i] = max(sar[i], high[i-1])
-        
-        return sar, trend
+        """(sar, trend): the shared kernel, `_backend.sar`"""
+        return _backend.sar(high, low, acceleration, maximum)
     
     def calculate(self, high: Union[np.ndarray, pd.Series, list],
                  low: Union[np.ndarray, pd.Series, list],

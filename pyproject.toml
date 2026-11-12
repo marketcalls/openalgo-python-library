@@ -64,10 +64,14 @@ target-version = "py312"
 include = [
     "openalgo/backtest/**/*.py",
     "openalgo/_feed_*.py",
+    "openalgo/indicators/_anchors.py",
+    "openalgo/indicators/causality.py",
     "test/backtest/**/*.py",
     "test/conftest.py",
     "test/feed_*.py",
     "test/test_feed_*.py",
+    "test/test_indicators_causality.py",
+    "test/test_indicators_fixes.py",
 ]
 
 [tool.ruff.lint]

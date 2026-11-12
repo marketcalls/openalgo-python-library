@@ -60,7 +60,7 @@ jobs:
   # ---------- Offline test suites against a freshly built extension ----------
   # None of these contact a server: the feed tests use an in-process fake socket.
   backtest-tests:
-    name: Package tests (backtest, feed)
+    name: Package tests (backtest, feed, indicators)
     runs-on: ubuntu-latest
     needs: rust-test
     steps:
@@ -77,10 +77,10 @@ jobs:
           . .venv/bin/activate
           pip install 'maturin>=1.7,<2.0' pytest hypothesis
           maturin develop
-      - name: pytest (test/backtest, feed)
+      - name: pytest (test/backtest, feed, indicators)
         run: |
           . .venv/bin/activate
-          pytest test/backtest test/test_feed_*.py -q
+          pytest test/backtest test/test_feed_*.py test/test_indicators_fixes.py test/test_indicators_causality.py -q
 
   # ---------- Build + import smoke test on Linux ----------
   smoke:

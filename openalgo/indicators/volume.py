@@ -3,6 +3,8 @@
 OpenAlgo Technical Indicators - Volume Indicators
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 from openalgo.numba_shim import jit
@@ -11,6 +13,7 @@ from .base import BaseIndicator
 from .trend import SMA, EMA, WMA
 from .volatility import BollingerBands
 from . import _backend
+from . import _anchors
 
 
 class OBV(BaseIndicator):
@@ -245,107 +248,71 @@ class VWAP(BaseIndicator):
     @staticmethod
     def _calculate_session_vwap(source: np.ndarray, volume: np.ndarray, 
                                session_starts: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Calculate session-based VWAP with standard deviation
-        
-        Parameters:
-        -----------
-        source : np.ndarray
-            Source price data (typically hlc3)
-        volume : np.ndarray
-            Volume data
-        session_starts : np.ndarray
-            Boolean array indicating session start points
-            
-        Returns:
-        --------
-        Tuple[np.ndarray, np.ndarray]
-            (vwap, stdev) arrays
-        """
-        n = len(source)
-        vwap = np.full(n, np.nan)
-        stdev = np.full(n, np.nan)
-        
-        session_sum_pv = 0.0
-        session_sum_v = 0.0
-        session_sum_pv2 = 0.0  # For variance calculation
-        
-        for i in range(n):
-            # Check if new session starts
-            if session_starts[i] or i == 0:
-                session_sum_pv = 0.0
-                session_sum_v = 0.0
-                session_sum_pv2 = 0.0
-            
-            # Add current bar to session
-            pv = source[i] * volume[i]
-            session_sum_pv += pv
-            session_sum_v += volume[i]
-            session_sum_pv2 += (source[i] * source[i] * volume[i])
-            
-            if session_sum_v > 0:
-                # Calculate VWAP
-                vwap[i] = session_sum_pv / session_sum_v
-                
-                # Calculate variance and standard deviation
-                # Var = E[X²] - E[X]²
-                # Where E[X] = VWAP and E[X²] = sum(price² * volume) / sum(volume)
-                mean_squared_price = session_sum_pv2 / session_sum_v
-                variance = mean_squared_price - (vwap[i] ** 2)
-                stdev[i] = np.sqrt(max(0, variance))  # Ensure non-negative
-            else:
-                vwap[i] = source[i]
-                stdev[i] = 0.0
-        
-        return vwap, stdev
+        """(vwap, stdev) per anchor period: the shared kernel, `_backend.session_vwap`"""
+        return _backend.session_vwap(source, volume, session_starts)
     
     @staticmethod
-    def _detect_session_starts(timestamps: Optional[np.ndarray] = None, 
-                              session_length: int = 1440) -> np.ndarray:
+    def _anchor_starts(n: int, anchor: Optional[str],
+                       session_starts: Optional[Union[np.ndarray, list]],
+                       timestamps, inputs: tuple) -> np.ndarray:
         """
-        Detect session start points based on timestamps or fixed intervals
+        Mark the first bar of every anchor period
         
         Parameters:
         -----------
-        timestamps : Optional[np.ndarray]
-            Unix timestamps (if available)
-        session_length : int, default=1440
-            Session length in minutes (1440 = 1 day)
+        n : int
+            Number of bars
+        anchor : Optional[str]
+            One of the anchor names of `calculate`, or None for one period
+        session_starts : Optional[Union[np.ndarray, list]]
+            Explicit markers, True on the first bar of each period. They win
+            over `anchor` when given.
+        timestamps : optional
+            Bar times, one per bar (see `_anchors.wall_seconds`)
+        inputs : tuple
+            The price and volume arguments as passed. When `timestamps` is
+            None the bar times are read from them (see `_anchors.bar_times`).
             
         Returns:
         --------
         np.ndarray
-            Boolean array indicating session starts
+            Boolean array of length n. Without bar times the data carries no
+            calendar, so only bar 0 is marked: the whole input is one period.
+
+        Raises ValueError for an anchor that is not one of the documented names,
+        whatever the inputs are. Warns when every anchor period holds a single
+        bar, because the VWAP is then each bar's own price.
         """
-        if timestamps is not None:
-            n = len(timestamps)
-            session_starts = np.zeros(n, dtype=bool)
-            session_starts[0] = True
-            
-            # Detect new trading sessions (e.g., new trading day)
-            for i in range(1, n):
-                # Simple day change detection (this is simplified)
-                # In real implementation, would use proper timezone handling
-                current_day = int(timestamps[i] // 86400)  # 86400 seconds in a day
-                prev_day = int(timestamps[i-1] // 86400)
-                
-                if current_day != prev_day:
-                    session_starts[i] = True
-                    
-            return session_starts
-        else:
-            # For data without timestamps, use fixed intervals
-            n = 100  # Default assumption - will be resized
-            session_starts = np.zeros(n, dtype=bool)
-            session_starts[0] = True
-            return session_starts
+        if anchor is not None:
+            _anchors.check_anchor(anchor)
+        one_period = np.zeros(n, dtype=bool)
+        one_period[:1] = True
+        if session_starts is not None:
+            starts = np.array(session_starts, dtype=bool)
+            # Markers of the wrong length cannot be applied: one period.
+            return starts if len(starts) == n else one_period
+        if timestamps is None:
+            timestamps = _anchors.bar_times(*inputs)
+        if anchor is None or timestamps is None:
+            return one_period
+        starts = _anchors.anchor_starts(timestamps, anchor)
+        if len(starts) != n:
+            raise ValueError(
+                f"timestamps has {len(starts)} values but the price data has {n}")
+        if n > 1 and starts.all():
+            warnings.warn(
+                f"vwap: every {anchor!r} period holds a single bar, so the VWAP is each "
+                "bar's own price. Pass anchor=None for one cumulative VWAP, or a longer "
+                "anchor such as 'Week' or 'Month'.",
+                UserWarning, stacklevel=4)
+        return starts
     
     def calculate(self, high: Union[np.ndarray, pd.Series, list],
                  low: Union[np.ndarray, pd.Series, list],
                  close: Union[np.ndarray, pd.Series, list],
                  volume: Union[np.ndarray, pd.Series, list],
                  source_type: str = "hlc3",
-                 anchor: str = "Session",
+                 anchor: Optional[str] = "Session",
                  session_starts: Optional[Union[np.ndarray, list]] = None,
                  timestamps: Optional[Union[np.ndarray, pd.DatetimeIndex]] = None) -> Union[np.ndarray, pd.Series]:
         """
@@ -363,17 +330,31 @@ class VWAP(BaseIndicator):
             Volume data
         source_type : str, default="hlc3"
             Source calculation: "hlc3", "hl2", "ohlc4", "close"
-        anchor : str, default="Session"
-            Anchor period: "Session", "Week", "Month", etc.
+        anchor : Optional[str], default="Session"
+            Period the VWAP restarts on: "Session" or "D" (each calendar day),
+            "Week", "Month", "Quarter" or "3M", "6M", "Year" or "12M", and
+            the intraday spans "4H", "1H", "30m", "15m", "5m", "1m" (measured
+            from each day's first bar). None gives one running VWAP from the
+            first bar. Any other value raises ValueError.
+            The anchor is applied through the bar times: `timestamps`, or the
+            index of the first pandas Series among high, low, close and
+            volume when it is a DatetimeIndex, a PeriodIndex or holds only
+            date or datetime objects. NumPy arrays, lists and Series with any
+            other index carry no bar times: the whole input is one period.
         session_starts : Optional[Union[np.ndarray, list]]
-            Boolean array indicating session start points
+            Boolean array, True on the first bar of each period. Overrides
+            `anchor` and `timestamps`.
         timestamps : Optional[Union[np.ndarray, pd.DatetimeIndex]]
-            Timestamps for session detection
+            Bar times, one per bar. A timezone-aware index is read in its own
+            zone, so a session is a local calendar day. Plain numbers are
+            Unix epoch seconds (split on UTC days).
             
         Returns:
         --------
         Union[np.ndarray, pd.Series]
-            VWAP values in the same format as input
+            VWAP values in the same format as input. NaN on a bar whose price
+            or volume is NaN (the sums carry on from the bar before) and
+            while a period has no volume yet.
         """
         high_data, input_type, index = self.validate_input(high)
         low_data, _, _ = self.validate_input(low)
@@ -383,11 +364,6 @@ class VWAP(BaseIndicator):
         # Align arrays
         high_data, low_data, close_data, volume_data = self.align_arrays(
             high_data, low_data, close_data, volume_data)
-        
-        # TradingView-style volume validation
-        total_volume = np.sum(volume_data)
-        if total_volume == 0:
-            raise RuntimeError("No volume is provided by the data vendor.")
         
         # Calculate source based on type
         if source_type == "hlc3":
@@ -402,25 +378,8 @@ class VWAP(BaseIndicator):
         else:
             source = (high_data + low_data + close_data) / 3.0
         
-        # Handle session starts
-        if session_starts is not None:
-            session_starts_array = np.array(session_starts, dtype=bool)
-        else:
-            # Detect sessions based on timestamps or use simple method
-            if timestamps is not None:
-                timestamp_array = np.array(timestamps)
-                if hasattr(timestamps, 'values'):  # pandas DatetimeIndex
-                    timestamp_array = timestamps.values.astype('datetime64[s]').astype(int)
-                session_starts_array = self._detect_session_starts(timestamp_array)
-            else:
-                # Default: treat as single session (cumulative VWAP)
-                session_starts_array = np.zeros(len(source), dtype=bool)
-                session_starts_array[0] = True
-        
-        # Ensure session_starts array has correct length
-        if len(session_starts_array) != len(source):
-            session_starts_array = np.zeros(len(source), dtype=bool)
-            session_starts_array[0] = True
+        session_starts_array = self._anchor_starts(
+            len(source), anchor, session_starts, timestamps, (high, low, close, volume))
         
         # Calculate VWAP
         vwap, _ = _backend.session_vwap(source, volume_data, session_starts_array)
@@ -432,7 +391,7 @@ class VWAP(BaseIndicator):
                            close: Union[np.ndarray, pd.Series, list],
                            volume: Union[np.ndarray, pd.Series, list],
                            source_type: str = "hlc3",
-                           anchor: str = "Session",
+                           anchor: Optional[str] = "Session",
                            band_mode: str = "Standard Deviation",
                            band_multipliers: Tuple[float, ...] = (1.0, 2.0, 3.0),
                            session_starts: Optional[Union[np.ndarray, list]] = None,
@@ -446,16 +405,17 @@ class VWAP(BaseIndicator):
             OHLC and volume data
         source_type : str, default="hlc3"
             Source calculation type
-        anchor : str, default="Session"
-            Anchor period
+        anchor : Optional[str], default="Session"
+            Period the VWAP and its bands restart on (see `calculate`)
         band_mode : str, default="Standard Deviation"
             "Standard Deviation" or "Percentage"
         band_multipliers : Tuple[float, ...], default=(1.0, 2.0, 3.0)
             Multipliers for each band level
         session_starts : Optional[Union[np.ndarray, list]]
-            Session start indicators
+            Boolean array, True on the first bar of each period. Overrides
+            `anchor` and `timestamps`.
         timestamps : Optional[Union[np.ndarray, pd.DatetimeIndex]]
-            Timestamps for session detection
+            Bar times, from which the anchor periods are found (see `calculate`)
             
         Returns:
         --------
@@ -471,11 +431,6 @@ class VWAP(BaseIndicator):
         high_data, low_data, close_data, volume_data = self.align_arrays(
             high_data, low_data, close_data, volume_data)
         
-        # TradingView-style volume validation
-        total_volume = np.sum(volume_data)
-        if total_volume == 0:
-            raise RuntimeError("No volume is provided by the data vendor.")
-        
         # Calculate source
         if source_type == "hlc3":
             source = (high_data + low_data + close_data) / 3.0
@@ -486,23 +441,8 @@ class VWAP(BaseIndicator):
         else:
             source = (high_data + low_data + close_data) / 3.0
         
-        # Handle session starts
-        if session_starts is not None:
-            session_starts_array = np.array(session_starts, dtype=bool)
-        else:
-            if timestamps is not None:
-                timestamp_array = np.array(timestamps)
-                if hasattr(timestamps, 'values'):
-                    timestamp_array = timestamps.values.astype('datetime64[s]').astype(int)
-                session_starts_array = self._detect_session_starts(timestamp_array)
-            else:
-                session_starts_array = np.zeros(len(source), dtype=bool)
-                session_starts_array[0] = True
-        
-        # Ensure correct length
-        if len(session_starts_array) != len(source):
-            session_starts_array = np.zeros(len(source), dtype=bool)
-            session_starts_array[0] = True
+        session_starts_array = self._anchor_starts(
+            len(source), anchor, session_starts, timestamps, (high, low, close, volume))
         
         # Calculate VWAP and standard deviation
         vwap, stdev = _backend.session_vwap(source, volume_data, session_starts_array)
@@ -547,44 +487,10 @@ class MFI(BaseIndicator):
         super().__init__("MFI")
     
     @staticmethod
-    @jit(nopython=True)
     def _calculate_mfi(high: np.ndarray, low: np.ndarray, close: np.ndarray,
                       volume: np.ndarray, period: int) -> np.ndarray:
-        """Numba optimized MFI aligned with TA-Lib"""
-        n = len(close)
-        result = np.full(n, np.nan)
-        
-        tp = (high + low + close) / 3.0
-        rmf = tp * volume  # raw money flow
-        
-        # Pre-compute positive / negative flows per bar
-        pos_raw = np.zeros(n)
-        neg_raw = np.zeros(n)
-        for i in range(1, n):
-            if tp[i] > tp[i - 1]:
-                pos_raw[i] = rmf[i]
-            elif tp[i] < tp[i - 1]:
-                neg_raw[i] = rmf[i]
-        
-        # Rolling window sums
-        pos_sum = 0.0
-        neg_sum = 0.0
-        for i in range(1, n):
-            pos_sum += pos_raw[i]
-            neg_sum += neg_raw[i]
-            
-            if i >= period:
-                pos_sum -= pos_raw[i - period]
-                neg_sum -= neg_raw[i - period]
-            
-            if i >= period - 1:
-                if neg_sum == 0:
-                    result[i] = 100.0
-                else:
-                    m_ratio = pos_sum / neg_sum
-                    result[i] = 100.0 - (100.0 / (1.0 + m_ratio))
-        
-        return result
+        """MFI values: the shared kernel, `_backend.mfi`"""
+        return _backend.mfi(high, low, close, volume, period)
     
     def calculate(self, high: Union[np.ndarray, pd.Series, list],
                  low: Union[np.ndarray, pd.Series, list],
@@ -707,35 +613,10 @@ class CMF(BaseIndicator):
         super().__init__("CMF")
     
     @staticmethod
-    @jit(nopython=True)
     def _calculate_cmf(high: np.ndarray, low: np.ndarray, close: np.ndarray,
                       volume: np.ndarray, period: int) -> np.ndarray:
-        """Numba optimized CMF calculation"""
-        n = len(close)
-        result = np.full(n, np.nan)
-        
-        for i in range(period - 1, n):
-            sum_mfv = 0.0
-            sum_volume = 0.0
-            
-            for j in range(period):
-                idx = i - period + 1 + j
-                
-                if high[idx] != low[idx]:
-                    mfm = ((close[idx] - low[idx]) - (high[idx] - close[idx])) / (high[idx] - low[idx])
-                else:
-                    mfm = 0
-                
-                mfv = mfm * volume[idx]
-                sum_mfv += mfv
-                sum_volume += volume[idx]
-            
-            if sum_volume > 0:
-                result[i] = sum_mfv / sum_volume
-            else:
-                result[i] = 0
-        
-        return result
+        """CMF values: the shared kernel, `_backend.cmf`"""
+        return _backend.cmf(high, low, close, volume, period)
     
     def calculate(self, high: Union[np.ndarray, pd.Series, list],
                  low: Union[np.ndarray, pd.Series, list],

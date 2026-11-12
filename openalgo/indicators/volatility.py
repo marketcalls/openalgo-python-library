@@ -420,60 +420,16 @@ class RVI(BaseIndicator):
     """
     Relative Volatility Index
     
-    RVI applies the RSI calculation to standard deviation instead of price changes.
+    Relative Volatility Index of Donald Dorsey (1993): the share of recent
+    volatility that fell on rising bars.
     
-    Formula: RVI = RSI applied to standard deviation
+    Formula: RVI = 100 * U / (U + D)
+    Where: U, D = Wilder's smoothing of the rolling standard deviation on bars
+    that closed up and on bars that closed down (see `_backend.rvi_volatility`)
     """
     
     def __init__(self):
         super().__init__("RVI")
-    
-    @staticmethod
-    def _calculate_stdev(data: np.ndarray, period: int) -> np.ndarray:
-        """O(n) optimized standard deviation using utils"""
-        return stdev(data, period)
-    
-    @staticmethod
-    @jit(nopython=True)
-    def _calculate_rsi_on_stdev(stdev: np.ndarray, period: int) -> np.ndarray:
-        """Calculate RSI on standard deviation values"""
-        n = len(stdev)
-        result = np.full(n, np.nan)
-        
-        # Calculate changes in standard deviation
-        changes = np.diff(stdev)
-        gains = np.where(changes > 0, changes, 0)
-        losses = np.where(changes < 0, -changes, 0)
-        
-        if len(gains) < period:
-            return result
-        
-        # Calculate initial average gain and loss
-        avg_gain = np.mean(gains[:period])
-        avg_loss = np.mean(losses[:period])
-        
-        # Calculate first RSI value
-        if avg_loss == 0:
-            result[period] = 100.0
-        else:
-            rs = avg_gain / avg_loss
-            result[period] = 100.0 - (100.0 / (1.0 + rs))
-        
-        # Calculate subsequent RSI values
-        for i in range(period, len(changes)):
-            gain = gains[i] if i < len(gains) else 0
-            loss = losses[i] if i < len(losses) else 0
-            
-            avg_gain = (avg_gain * (period - 1) + gain) / period
-            avg_loss = (avg_loss * (period - 1) + loss) / period
-            
-            if avg_loss == 0:
-                result[i + 1] = 100.0
-            else:
-                rs = avg_gain / avg_loss
-                result[i + 1] = 100.0 - (100.0 / (1.0 + rs))
-        
-        return result
     
     def calculate(self, data: Union[np.ndarray, pd.Series, list],
                  stdev_period: int = 10, rsi_period: int = 14) -> Union[np.ndarray, pd.Series]:
@@ -485,9 +441,9 @@ class RVI(BaseIndicator):
         data : Union[np.ndarray, pd.Series, list]
             Price data (typically closing prices)
         stdev_period : int, default=10
-            Period for standard deviation calculation
+            Window, in bars, of the rolling population standard deviation
         rsi_period : int, default=14
-            Period for RSI calculation
+            Bars of Wilder's smoothing (the average the RSI uses)
             
         Returns:
         --------

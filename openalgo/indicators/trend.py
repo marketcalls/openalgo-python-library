@@ -188,30 +188,7 @@ class DEMA(BaseIndicator):
         """
         validated_data, input_type, index = self.validate_input(data)
         self.validate_period(period, len(validated_data))
-        
-        # Calculate first EMA using consolidated utility
-        ema1_data = _backend.ema(validated_data, period)
-        
-        # For second EMA, skip NaN values from first EMA
-        # Find first valid index in ema1
-        first_valid = period - 1
-        if first_valid >= len(ema1_data):
-            result = np.full_like(validated_data, np.nan)
-            return self.format_output(result, input_type, index)
-        
-        # Extract valid portion for second EMA calculation
-        valid_ema1 = ema1_data[first_valid:]
-        ema2_partial = _backend.ema(valid_ema1, period)
-        
-        # Reconstruct full ema2 array
-        ema2_data = np.full_like(validated_data, np.nan)
-        second_valid_start = first_valid + period - 1
-        if second_valid_start < len(ema2_data):
-            valid_length = min(len(ema2_partial[period-1:]), len(ema2_data) - second_valid_start)
-            ema2_data[second_valid_start:second_valid_start + valid_length] = ema2_partial[period-1:period-1 + valid_length]
-        
-        # DEMA = 2 * EMA - EMA(EMA)
-        result = 2 * ema1_data - ema2_data
+        result = _backend.dema(validated_data, period)
         return self.format_output(result, input_type, index)
 
 
@@ -246,41 +223,7 @@ class TEMA(BaseIndicator):
         """
         validated_data, input_type, index = self.validate_input(data)
         self.validate_period(period, len(validated_data))
-        
-        # Calculate first EMA
-        ema1_data = _backend.ema(validated_data, period)
-        
-        # Calculate second EMA from valid portion of first EMA
-        first_valid = period - 1
-        if first_valid >= len(ema1_data):
-            result = np.full_like(validated_data, np.nan)
-            return self.format_output(result, input_type, index)
-        
-        valid_ema1 = ema1_data[first_valid:]
-        ema2_partial = _backend.ema(valid_ema1, period)
-        
-        # Reconstruct full ema2 array
-        ema2_data = np.full_like(validated_data, np.nan)
-        second_valid_start = first_valid + period - 1
-        if second_valid_start < len(ema2_data):
-            valid_length = min(len(ema2_partial[period-1:]), len(ema2_data) - second_valid_start)
-            ema2_data[second_valid_start:second_valid_start + valid_length] = ema2_partial[period-1:period-1 + valid_length]
-        
-        # Calculate third EMA from valid portion of second EMA
-        ema3_data = np.full_like(validated_data, np.nan)
-        if second_valid_start < len(ema2_data):
-            valid_ema2 = ema2_data[second_valid_start:]
-            # Remove NaN values
-            valid_ema2_clean = valid_ema2[~np.isnan(valid_ema2)]
-            if len(valid_ema2_clean) >= period:
-                ema3_partial = _backend.ema(valid_ema2_clean, period)
-                third_valid_start = second_valid_start + period - 1
-                if third_valid_start < len(ema3_data):
-                    valid_length = min(len(ema3_partial[period-1:]), len(ema3_data) - third_valid_start)
-                    ema3_data[third_valid_start:third_valid_start + valid_length] = ema3_partial[period-1:period-1 + valid_length]
-        
-        # TEMA = 3 * EMA - 3 * EMA(EMA) + EMA(EMA(EMA))
-        result = 3 * ema1_data - 3 * ema2_data + ema3_data
+        result = _backend.tema(validated_data, period)
         return self.format_output(result, input_type, index)
 
 
@@ -967,105 +910,9 @@ class FRAMA(BaseIndicator):
         super().__init__("FRAMA")
     
     @staticmethod
-    @jit(nopython=True)
     def _calculate_frama_tv(high: np.ndarray, low: np.ndarray, period: int) -> np.ndarray:
-        """
-        Calculate FRAMA using exact TradingView logic
-        
-        This matches the TradingView FRAMA Channel implementation exactly:
-        1. Uses hl2 as price source
-        2. Calculates N1, N2, N3 exactly as in TV script
-        3. Uses TV fractal dimension and alpha formula
-        4. Applies SMA smoothing at the end
-        """
-        n = len(high)
-        filt = np.full(n, np.nan)
-        
-        # Calculate hl2 (price source)
-        price = (high + low) / 2.0
-        
-        # Set initial value
-        if n > 0:
-            filt[0] = price[0]
-        
-        for i in range(1, n):
-            if i >= period:
-                # Calculate N3 (range over full period N)
-                N3 = (np.max(high[i - period + 1:i + 1]) - np.min(low[i - period + 1:i + 1])) / period
-                
-                # Calculate N1 (first half)
-                half_period = period // 2
-                HH = high[i]
-                LL = low[i]
-                
-                # Loop to find HH and LL for first half
-                for count in range(0, half_period):
-                    idx = i - count
-                    if idx >= 0:
-                        if high[idx] > HH:
-                            HH = high[idx]
-                        if low[idx] < LL:
-                            LL = low[idx]
-                
-                N1 = (HH - LL) / half_period
-                
-                # Calculate N2 (second half)
-                HH = high[i - half_period] if i - half_period >= 0 else high[0]
-                LL = low[i - half_period] if i - half_period >= 0 else low[0]
-                
-                # Loop to find HH and LL for second half
-                for count in range(half_period, period):
-                    idx = i - count
-                    if idx >= 0:
-                        if high[idx] > HH:
-                            HH = high[idx]
-                        if low[idx] < LL:
-                            LL = low[idx]
-                
-                N2 = (HH - LL) / half_period
-                
-                # Calculate fractal dimension (TradingView formula)
-                if N1 > 0 and N2 > 0 and N3 > 0:
-                    Dimen = (np.log(N1 + N2) - np.log(N3)) / np.log(2)
-                else:
-                    Dimen = 1.0
-                
-                # Calculate alpha (TradingView formula)
-                alpha = np.exp(-4.6 * (Dimen - 1))
-                alpha = max(min(alpha, 1.0), 0.01)  # Clamp between 0.01 and 1
-                
-                # Calculate FRAMA filtered value
-                filt[i] = alpha * price[i] + (1 - alpha) * filt[i - 1]
-            else:
-                # For initial periods before we have enough data, use price
-                filt[i] = price[i]
-        
-        # Apply SMA(5) smoothing as in TradingView script
-        smoothed = np.full(n, np.nan)
-        
-        for i in range(n):
-            if i < period + 1:
-                # TradingView: ta.sma((bar_index < N + 1) ? price : Filt, 5)
-                # For early periods, use price directly
-                smoothed[i] = price[i]
-            else:
-                # Use the filtered value
-                if i >= 4:  # Need 5 periods for SMA
-                    window_start = max(0, i - 4)
-                    sma_sum = 0.0
-                    valid_count = 0
-                    for j in range(window_start, i + 1):
-                        if not np.isnan(filt[j]):
-                            sma_sum += filt[j]
-                            valid_count += 1
-                    if valid_count > 0:
-                        smoothed[i] = sma_sum / valid_count
-                    else:
-                        smoothed[i] = filt[i]
-                else:
-                    smoothed[i] = filt[i]
-        
-        return smoothed
+        """FRAMA values: the shared kernel, `_backend.frama`"""
+        return _backend.frama(high, low, period)
     
     def calculate(self, high: Union[np.ndarray, pd.Series, list],
                  low: Union[np.ndarray, pd.Series, list],

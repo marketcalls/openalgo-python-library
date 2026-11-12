@@ -567,66 +567,9 @@ class Fisher(BaseIndicator):
         super().__init__("Fisher Transform")
     
     @staticmethod
-    @jit(nopython=True)
-    def _round_value(val: float) -> float:
-        """TradingView round_ function: constrain value to avoid log division issues"""
-        if val > 0.99:
-            return 0.999
-        elif val < -0.99:
-            return -0.999
-        else:
-            return val
-    
-    @staticmethod
-    @jit(nopython=True)
     def _calculate_fisher_tv(data: np.ndarray, length: int) -> Tuple[np.ndarray, np.ndarray]:
-        """Calculate Fisher Transform - matches TradingView exactly"""
-        n = len(data)
-        fish1 = np.full(n, np.nan)
-        fish2 = np.full(n, np.nan)
-        
-        # Initialize recursive variables
-        value = 0.0
-        fish1_prev = 0.0
-        
-        for i in range(length - 1, n):
-            # Calculate highest and lowest over length period
-            # TradingView: high_ = ta.highest(hl2, len), low_ = ta.lowest(hl2, len)
-            window_start = i - length + 1
-            window = data[window_start:i + 1]
-            high_ = np.max(window)
-            low_ = np.min(window)
-            
-            if high_ != low_:
-                # TradingView: value := round_(.66 * ((hl2 - low_) / (high_ - low_) - .5) + .67 * nz(value[1]))
-                normalized = (data[i] - low_) / (high_ - low_) - 0.5
-                new_value = 0.66 * normalized + 0.67 * value
-                
-                # Apply round_ function inline (TradingView constraint)
-                if new_value > 0.99:
-                    value = 0.999
-                elif new_value < -0.99:
-                    value = -0.999
-                else:
-                    value = new_value
-                
-                # TradingView: fish1 := .5 * math.log((1 + value) / (1 - value)) + .5 * nz(fish1[1])
-                log_term = 0.5 * np.log((1 + value) / (1 - value))
-                fish1[i] = log_term + 0.5 * fish1_prev
-                
-                # Update previous value for next iteration
-                fish1_prev = fish1[i]
-            else:
-                # Handle case where high == low
-                fish1[i] = fish1_prev
-            
-            # TradingView: fish2 = fish1[1] (previous Fisher value)
-            if i > length - 1:
-                fish2[i] = fish1[i - 1]
-            else:
-                fish2[i] = 0.0
-        
-        return fish1, fish2
+        """(fisher, trigger): the shared kernel, `_backend.fisher`"""
+        return _backend.fisher(data, length)
     
     def calculate(self, high: Union[np.ndarray, pd.Series, list],
                  low: Union[np.ndarray, pd.Series, list],

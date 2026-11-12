@@ -19,6 +19,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`get_subscriptions()`** returns the set of subscriptions the feed is asked to
   hold, which is exactly what a reconnect replays.
 - **`FeedServerError`** (`.code`, `.message`) describes a rejection sent by the server.
+- **`ta.rvi_volatility(data, stdev_period=10, rsi_period=14)`**: the Relative
+  Volatility Index (Dorsey). `ta.rvi` remains the Relative Vigor Index.
+- **`ta.psar(..., return_trend=True)`** also returns the trend (+1 long, -1 short).
+- **`ta.vwap(..., timestamps=None, session_starts=None)`** and
+  **`ta.pivot_points(..., anchor=None, timestamps=None)`**: pass bar times explicitly
+  when the input is a plain array. `pivot_points(anchor="D")` (or W, M) gives the
+  previous completed period's levels on every bar.
+- **`openalgo.indicators.causality`**: `is_causal(name, output=None)`,
+  `non_causal()`, `outputs(name)` and `causality(name=None)` report which indicator
+  outputs use only data up to the current bar. The outputs that look ahead are
+  `ichimoku` lagging span, both `fractals` outputs and the `ZigZag` class. A test
+  across the whole library keeps this list complete.
 - **`openalgo.backtest.costs` (preview).** Indian trading charges for NSE and BSE
   equity (delivery and intraday), NFO and BFO futures and options, and MCX futures:
   brokerage presets (`zerodha`, `flat`, `percent`, `zero_brokerage`, `custom`), STT or
@@ -68,6 +80,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without opening a second socket.
 - `disconnect()` called from inside a callback no longer stalls for two seconds.
 
+#### Indicators: results that change on clean data
+
+- **`ta.vwap` honours `anchor`.** In 2.0.5 the anchor was ignored and the VWAP ran
+  from the first bar. It now restarts each anchor period (default `"Session"`) when
+  bar times are known: a pandas Series whose index holds dates, or `timestamps=`.
+  Plain arrays are unchanged. On daily, weekly or monthly bars every bar is its own
+  session, so the VWAP equals the bar's typical price, and a warning says so. Pass
+  `anchor=None` for the 2.0.5 result. An unknown anchor now raises `ValueError`, and
+  zero volume no longer raises `RuntimeError` (the bar is NaN until volume arrives).
+- **`ta.psar` and `SAR`**: on an outside bar that reverses the trend, the new stop
+  starts at that bar's extreme and is clamped to the two previous bars (2.0.5 used the
+  previous extreme point and did not clamp), and a bar that only touches the stop no
+  longer reverses. Values change from such a bar to the next reversal; ordinary bars
+  are unchanged. Each bar computes the new stop, tests the bar against it, then
+  clamps it to the two previous bars.
+- **`volatility.RVI` class** now computes the published Relative Volatility Index;
+  2.0.5 took an RSI of the standard deviation. Nearly every value changes.
+- **Invalid helper arguments**: a negative length in `change`, `rising` and
+  `falling` raises `ValueError` (was `IndexError`); `highest` and `lowest` with period
+  0, and `valuewhen` with n below 1, return all NaN.
+
+#### Indicators: results that change only around NaN input
+
+The 2.0.5 NaN contract now holds in every kernel these changes touch: a rolling
+window is NaN while it holds a NaN, and a recursive indicator carries its state
+across a NaN bar.
+
+- `cmf`, `mfi`, `cmo`, `rvi`, `highest`, `lowest`: only NaN positions move.
+- `fisher`, `frama`, `psar`, `vwap`: NaN while a NaN is in the window, then recover
+  (2.0.5 stayed NaN to the end of the series).
+- `dema`, `tema`: only the NaN bar is NaN. 2.0.5 `tema` dropped NaN bars before its
+  third average, so values after a gap depended on later bars (a look-ahead).
+
 - **WebSocket URL for servers hosted on a domain.** When `host` is an `https://` URL
   and neither `ws_url` nor `ws_port` is passed, the feed now connects to
   `wss://<host>/ws`, the address the OpenAlgo installers serve behind TLS, instead of
@@ -84,6 +129,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The WebSocket URL derived from an IPv6 literal host or from an upper-case scheme
   was invalid.
+- `ta.highest` and `ta.lowest` with a period far larger than the series tried to
+  allocate memory for the whole period and could abort the interpreter; they now
+  return NaN.
+- `ta.ulcerindex` returned NaN instead of 0 where rounding made the rolling mean of
+  squared drawdowns a hair below zero.
+- Without the compiled extension, `fisher`, `cmf`, `mfi`, `psar`, `cmo` and `frama`
+  raised an error; they now compute with NumPy, and `stochastic` returns one value per
+  bar on short input.
+- Crossover helpers (`crossover`, `crossunder`, `cross`, `valuewhen` and the others)
+  run in the Rust core: about 100 times faster on long series.
 
 ## [2.0.5] - 2026-09-11
 

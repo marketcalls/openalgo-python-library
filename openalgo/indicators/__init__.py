@@ -28,9 +28,11 @@ from .oscillators import (CMO, TRIX, UO, AO, AC, PPO, PO, DPO, AROONOSC,
 from .statistics import (LINREG, LRSLOPE, CORREL, BETA, VAR, TSF, MEDIAN, MODE, MedianBands)
 from .hybrid import (ADX, Aroon, PivotPoints, SAR, DMI,
                     WilliamsFractals, RWI)
-from .utils import (crossover, crossunder, highest, lowest, change, roc,
-                   sma as utils_sma, ema as utils_ema, stdev, validate_input,
-                   exrem, flip, valuewhen, rising, falling, cross)
+from .utils import (roc, sma as utils_sma, ema as utils_ema, stdev, validate_input)
+# Same helpers as their utils.py namesakes, computed in the Rust core (vectorised
+# NumPy without it) instead of a per-bar Python loop.
+from ._backend import (crossover, crossunder, cross, highest, lowest, change,
+                       exrem, flip, valuewhen, rising, falling)
 from .talib_extra import (MOM, ROCP, ROCR, ROCR100, MIDPOINT, APO,
                           MEDPRICE, TYPPRICE, WCLPRICE, MIDPRICE, AVGPRICE,
                           PLUS_DM, MINUS_DM, DX, ADXR, STOCHF,
@@ -106,6 +108,7 @@ class TechnicalAnalysis:
         self._chaikin_volatility = Chaikin()
         self._natr = NATR()
         self._rvi = RVI()  # Oscillator RVI (Relative Vigor Index)
+        self._rvi_volatility = VolatilityRVI()  # Relative Volatility Index
         self._rvol = RVOL()  # Relative Volume
         self._ultosc = ULTOSC()
         self._trange = TRANGE()
@@ -620,6 +623,40 @@ class TechnicalAnalysis:
         """Relative Volume"""
         return self._rvol.calculate(volume, period)
     
+    def rvi_volatility(self, data: Union[np.ndarray, pd.Series, list],
+                       stdev_period: int = 10,
+                       rsi_period: int = 14) -> Union[np.ndarray, pd.Series]:
+        """
+        Relative Volatility Index (Donald Dorsey, 1993)
+
+        RVI = 100 * U / (U + D): the share of recent volatility that fell on
+        rising bars. The rolling standard deviation of the price counts on the
+        up side on a bar that closes above the bar before and on the down side
+        on a bar that closes below it; U and D are those two sides under
+        Wilder's smoothing, the average the RSI uses (not the EMA some charting
+        platforms use). 50 when there is no volatility on either side.
+
+        Not to be confused with `ta.rvi`, the Relative Vigor Index, which takes
+        open, high, low and close.
+
+        Parameters:
+        -----------
+        data : Union[np.ndarray, pd.Series, list]
+            Price data (typically closing prices)
+        stdev_period : int, default=10
+            Window, in bars, of the rolling population standard deviation
+        rsi_period : int, default=14
+            Bars of Wilder's smoothing
+
+        Returns:
+        --------
+        Union[np.ndarray, pd.Series]
+            Values from 0 to 100 in the same format as input. The first value
+            is at bar stdev_period + rsi_period - 2. A bar is NaN while a NaN
+            is in its deviation window or on the bar before it.
+        """
+        return self._rvi_volatility.calculate(data, stdev_period, rsi_period)
+    
     def ultimate_oscillator(self, high: Union[np.ndarray, pd.Series, list],
                            low: Union[np.ndarray, pd.Series, list],
                            close: Union[np.ndarray, pd.Series, list],
@@ -697,14 +734,16 @@ class TechnicalAnalysis:
              low: Union[np.ndarray, pd.Series, list],
              close: Union[np.ndarray, pd.Series, list],
              volume: Union[np.ndarray, pd.Series, list],
-             anchor: str = "Session",
+             anchor: Optional[str] = "Session",
              source: str = "hlc3",
              stdev_mult_1: float = 1.0,
              stdev_mult_2: float = 2.0,
              stdev_mult_3: float = 3.0,
              percent_mult_1: float = 0.236,
              percent_mult_2: float = 0.382,
-             percent_mult_3: float = 0.618) -> np.ndarray:
+             percent_mult_3: float = 0.618,
+             timestamps: Optional[Union[np.ndarray, pd.DatetimeIndex, list]] = None,
+             session_starts: Optional[Union[np.ndarray, pd.Series, list]] = None) -> np.ndarray:
         """
         Volume Weighted Average Price - TradingView Pine Script v6 Implementation
         
@@ -721,9 +760,22 @@ class TechnicalAnalysis:
             Closing prices
         volume : Union[np.ndarray, pd.Series, list]
             Volume data
-        anchor : str, default="Session"
-            Session anchoring type: "Session", "Week", "Month", "Quarter", "Year", 
-            "12M", "6M", "3M", "D", "4H", "1H", "30m", "15m", "5m", "1m"
+        anchor : Optional[str], default="Session"
+            Period the VWAP restarts on: "Session", "Week", "Month", "Quarter",
+            "Year", "12M", "6M", "3M", "D", "4H", "1H", "30m", "15m", "5m",
+            "1m". None gives one running VWAP from the first bar. Any other
+            value raises ValueError.
+
+            The anchor is applied through the bar times. They are `timestamps`
+            when given, else the index of the first pandas Series among high,
+            low, close and volume, when that index is a DatetimeIndex (read in
+            its own time zone), a PeriodIndex or holds only date or datetime
+            objects. NumPy arrays, lists and Series with any other index carry
+            no bar times: the whole input is then one period.
+
+            On daily, weekly or monthly bars the default "Session" makes every
+            bar its own period, so the VWAP is the bar's own price and a
+            warning says so: pass anchor=None or a longer anchor there.
         source : str, default="hlc3"
             Price source: "hlc3", "hl2", "ohlc4", "close"
         stdev_mult_1 : float, default=1.0
@@ -738,11 +790,18 @@ class TechnicalAnalysis:
             Percentage multiplier for second percentage band
         percent_mult_3 : float, default=0.618
             Percentage multiplier for third percentage band
+        timestamps : Optional[Union[np.ndarray, pd.DatetimeIndex, list]], default=None
+            Bar times, one per bar, for inputs that carry none: datetimes, or
+            numbers read as Unix epoch seconds
+        session_starts : Optional[Union[np.ndarray, pd.Series, list]], default=None
+            Boolean array, True on the first bar of each period. Overrides
+            `anchor` and `timestamps`.
             
         Returns:
         --------
         np.ndarray
-            Array of VWAP values
+            Array of VWAP values. NaN on a bar whose price or volume is NaN
+            and while a period has no volume yet.
             
         Notes:
         ------
@@ -756,7 +815,8 @@ class TechnicalAnalysis:
         Use calculate_with_bands() method for band calculations:
         vwap_result = ta.vwap.calculate_with_bands(high, low, close, volume, ...)
         """
-        return self._vwap.calculate(high, low, close, volume, source, anchor)
+        return self._vwap.calculate(high, low, close, volume, source, anchor,
+                                    session_starts=session_starts, timestamps=timestamps)
     
     def mfi(self, high: Union[np.ndarray, pd.Series, list],
             low: Union[np.ndarray, pd.Series, list],
@@ -1053,9 +1113,36 @@ class TechnicalAnalysis:
     
     def pivot_points(self, high: Union[np.ndarray, pd.Series, list],
                      low: Union[np.ndarray, pd.Series, list],
-                     close: Union[np.ndarray, pd.Series, list]) -> Tuple[np.ndarray, ...]:
-        """Pivot Points (Pivot, R1, S1, R2, S2, R3, S3)"""
-        return self._pivot_points.calculate(high, low, close)
+                     close: Union[np.ndarray, pd.Series, list],
+                     anchor: Optional[str] = None,
+                     timestamps: Optional[Union[np.ndarray, pd.DatetimeIndex, list]] = None
+                     ) -> Tuple[np.ndarray, ...]:
+        """
+        Pivot Points (Pivot, R1, S1, R2, S2, R3, S3)
+
+        Parameters:
+        -----------
+        high, low, close : Union[np.ndarray, pd.Series, list]
+            High, low and closing prices
+        anchor : Optional[str], default=None
+            None applies the formula to each bar's own high, low and close.
+            The levels on bar t are then the levels for the next bar: they
+            are known only once bar t has closed.
+            "D" (or "Session"), "Week", "Month" and the other anchor names
+            of `vwap` return, on every bar, the levels of the previous
+            completed period (yesterday's high, low and close on intraday
+            bars). Bars of the first period are NaN. An anchor needs bar
+            times, found the way `vwap` finds them; without them it raises
+            ValueError.
+        timestamps : Optional[Union[np.ndarray, pd.DatetimeIndex, list]], default=None
+            Bar times, one per bar, for inputs that carry none
+
+        Returns:
+        --------
+        Tuple of seven arrays or Series, in the same format as `high`
+            (pivot, r1, s1, r2, s2, r3, s3)
+        """
+        return self._pivot_points.calculate(high, low, close, anchor, timestamps)
     
     def dmi(self, high: Union[np.ndarray, pd.Series, list],
                             low: Union[np.ndarray, pd.Series, list],
@@ -1066,9 +1153,33 @@ class TechnicalAnalysis:
     
     def psar(self, high: Union[np.ndarray, pd.Series, list],
              low: Union[np.ndarray, pd.Series, list],
-             acceleration: float = 0.02, maximum: float = 0.2) -> np.ndarray:
-        """Parabolic SAR (values only)"""
+             acceleration: float = 0.02, maximum: float = 0.2,
+             return_trend: bool = False) -> Union[np.ndarray, pd.Series, Tuple]:
+        """
+        Parabolic SAR
+
+        Parameters:
+        -----------
+        high, low : Union[np.ndarray, pd.Series, list]
+            High and low prices
+        acceleration : float, default=0.02
+            Acceleration factor: its starting value and its step
+        maximum : float, default=0.2
+            Largest acceleration factor
+        return_trend : bool, default=False
+            False returns the SAR values only, True returns (sar, trend)
+
+        Returns:
+        --------
+        SAR values in the same format as `high`, or (sar, trend)
+            Trend is +1.0 while long (SAR below price) and -1.0 while short,
+            the opposite sign of the Supertrend direction output. The first
+            bar always starts long. The order of the calculation is that of
+            TradingView's `ta.sar` and is spelled out on `_backend.sar`.
+        """
         sar_values, trend = self._sar.calculate(high, low, acceleration, maximum)
+        if return_trend:
+            return sar_values, trend
         return sar_values
     
     def ckstop(self, high: Union[np.ndarray, pd.Series, list],
@@ -1142,6 +1253,9 @@ class TechnicalAnalysis:
            period: int = 10) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[pd.Series, pd.Series]]:
         """
         Relative Vigor Index (TradingView Pine Script Implementation)
+
+        Not the Relative Volatility Index: that one is `ta.rvi_volatility`.
+        A bar is NaN while any bar feeding its window is NaN.
         
         Parameters:
         -----------
@@ -1413,7 +1527,8 @@ class TechnicalAnalysis:
         Returns:
         --------
         np.ndarray
-            Array of highest values
+            Array of highest values. NaN for the first period-1 bars and for
+            every window that holds a NaN (as pandas `.rolling(period).max()`).
         """
         data = validate_input(data)
         return highest(data, period)
@@ -1432,7 +1547,8 @@ class TechnicalAnalysis:
         Returns:
         --------
         np.ndarray
-            Array of lowest values
+            Array of lowest values. NaN for the first period-1 bars and for
+            every window that holds a NaN (as pandas `.rolling(period).min()`).
         """
         data = validate_input(data)
         return lowest(data, period)

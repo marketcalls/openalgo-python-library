@@ -47,6 +47,12 @@ fn first_clean_window(data: &[f64], period: usize) -> Option<usize> {
     None
 }
 
+/// Length of the shortest of several input series: the bars every one of them has.
+#[inline]
+fn shortest(lengths: &[usize]) -> usize {
+    lengths.iter().copied().min().unwrap_or(0)
+}
+
 #[inline]
 fn max3(a: f64, b: f64, c: f64) -> f64 {
     let m = if a > b { a } else { b };
@@ -496,11 +502,14 @@ pub fn roc(data: &[f64], length: usize) -> Vec<f64> {
 /// min. The deque of indices lives in a small power-of-two ring buffer (capacity
 /// >= period), indexed by masked monotonic head/tail counters - no heap alloc per
 /// op, no modulo, cache-resident. `want_max` is loop-invariant (predicted perfectly).
+///
+/// All NaN when the period is 0 or longer than the series: no window exists then,
+/// and nothing is allocated for one.
 #[inline]
 fn _roll_extreme(data: &[f64], period: usize, want_max: bool) -> Vec<f64> {
     let n = data.len();
     let mut result = nan_vec(n);
-    if period == 0 {
+    if period == 0 || period > n {
         return result;
     }
     let cap = period.next_power_of_two();
@@ -516,7 +525,7 @@ fn _roll_extreme(data: &[f64], period: usize, want_max: bool) -> Vec<f64> {
         if i >= period && data[i - period].is_nan() {
             nans -= 1;
         }
-        if head < tail && ring[head & mask] + period <= i {
+        if head < tail && i - ring[head & mask] >= period {
             head += 1;
         }
         let x = data[i];
@@ -607,11 +616,14 @@ pub fn vwma(data: &[f64], volume: &[f64], period: usize) -> Vec<f64> {
     result
 }
 
-/// Chande Momentum Oscillator (rolling sums of up/down changes).
+/// Chande Momentum Oscillator: 100 * (up - down) / (up + down), where `up` and
+/// `down` are the sums of the rises and of the falls among the last `period`
+/// bar-to-bar changes. 0.0 when nothing moved. NaN for the first `period` bars
+/// and while a NaN is among the `period + 1` bars those changes span.
 pub fn cmo(data: &[f64], period: usize) -> Vec<f64> {
     let n = data.len();
     let mut result = nan_vec(n);
-    if n < period + 1 {
+    if period >= n {
         return result;
     }
     let mut changes = vec![0.0f64; n - 1];
@@ -620,19 +632,28 @@ pub fn cmo(data: &[f64], period: usize) -> Vec<f64> {
     }
     let mut up = 0.0;
     let mut down = 0.0;
+    // A change next to a NaN bar is NaN: neither a rise nor a fall. Such changes
+    // are counted, and a window holding one publishes nothing.
+    let mut unknown = 0usize;
     for &ch in changes.iter().take(period) {
         if ch > 0.0 {
             up += ch;
         } else if ch < 0.0 {
             down += ch.abs();
         }
+        unknown += ch.is_nan() as usize;
     }
-    let total = up + down;
-    result[period] = if total > 0.0 {
-        ((up - down) / total) * 100.0
-    } else {
-        0.0
+    let oscillator = |up: f64, down: f64| {
+        let total = up + down;
+        if total > 0.0 {
+            ((up - down) / total) * 100.0
+        } else {
+            0.0
+        }
     };
+    if unknown == 0 {
+        result[period] = oscillator(up, down);
+    }
     for i in period + 1..n {
         let old = changes[i - period - 1];
         if old > 0.0 {
@@ -646,12 +667,11 @@ pub fn cmo(data: &[f64], period: usize) -> Vec<f64> {
         } else if new < 0.0 {
             down += new.abs();
         }
-        let total = up + down;
-        result[i] = if total > 0.0 {
-            ((up - down) / total) * 100.0
-        } else {
-            0.0
-        };
+        unknown += new.is_nan() as usize;
+        unknown -= old.is_nan() as usize;
+        if unknown == 0 {
+            result[i] = oscillator(up, down);
+        }
     }
     result
 }
@@ -920,19 +940,47 @@ pub fn chande_kroll_stop(
     (long_stop, short_stop)
 }
 
-/// FRAMA (TradingView fractal adaptive MA on hl2, with trailing SMA(5) smoothing).
+/// Bars of the trailing mean FRAMA applies to its filter.
+const FRAMA_SMOOTHING: usize = 5;
+
+/// FRAMA (TradingView fractal adaptive MA on hl2, with a trailing 5-bar mean).
 /// Uses log/exp so parity is transcendental-tolerance, not bit-exact.
+///
+/// Bars are counted from the first one that has a midpoint (high + low) / 2.
+/// For the first `period` bars the filter is the midpoint. After that the
+/// fractal dimension D = (ln(N1 + N2) - ln(N3)) / ln 2 compares the high-low
+/// range of the last `period` bars (N3, per bar) with the ranges of their newer
+/// and older halves (N1, N2, per bar of a half), D = 1 when a range is not
+/// positive, and filter = alpha * midpoint + (1 - alpha) * previous filter with
+/// alpha = exp(-4.6 * (D - 1)) held between 0.01 and 1. The output is the
+/// midpoint for the first `period + 1` bars and the 5-bar mean of the filter
+/// from then on.
+///
+/// The filter is NaN while a NaN bar is among the `period` bars of its ranges
+/// and resumes from its last value afterwards; the output is NaN while a NaN
+/// filter value is among the five it averages. Bars before the first midpoint
+/// and beyond the end of `low` are NaN.
 pub fn frama(high: &[f64], low: &[f64], period: usize) -> Vec<f64> {
-    let n = high.len();
-    let mut filt = nan_vec(n);
-    let price: Vec<f64> = (0..n).map(|i| (high[i] + low[i]) / 2.0).collect();
-    if n > 0 {
-        filt[0] = price[0];
+    let mut out = nan_vec(high.len());
+    let bars = high.len().min(low.len());
+    let price: Vec<f64> = (0..bars).map(|i| (high[i] + low[i]) / 2.0).collect();
+    let Some(first) = price.iter().position(|p| !p.is_nan()) else {
+        return out;
+    };
+    // NaN midpoints before each bar, so a window is checked with one subtraction.
+    let mut unknown_before = vec![0usize; bars + 1];
+    for i in 0..bars {
+        unknown_before[i + 1] = unknown_before[i] + price[i].is_nan() as usize;
     }
     let half = period / 2;
     let ln2 = 2.0_f64.ln();
-    for i in 1..n {
-        if i >= period && half > 0 {
+    let mut filt = nan_vec(bars);
+    let mut last_filt = f64::NAN;
+    for i in first..bars {
+        if i - first >= period && half > 0 {
+            if unknown_before[i + 1] != unknown_before[i + 1 - period] {
+                continue;
+            }
             let mut hmax = high[i + 1 - period];
             let mut lmin = low[i + 1 - period];
             for k in i + 1 - period..i + 1 {
@@ -975,31 +1023,30 @@ pub fn frama(high: &[f64], low: &[f64], period: usize) -> Vec<f64> {
             };
             let mut alpha = (-4.6 * (dimen - 1.0)).exp();
             alpha = alpha.min(1.0).max(0.01);
-            filt[i] = alpha * price[i] + (1.0 - alpha) * filt[i - 1];
+            filt[i] = alpha * price[i] + (1.0 - alpha) * last_filt;
         } else {
             filt[i] = price[i];
         }
-    }
-    let mut smoothed = nan_vec(n);
-    for i in 0..n {
-        if i < period + 1 {
-            smoothed[i] = price[i];
-        } else if i >= 4 {
-            let ws = i - 4;
-            let mut s = 0.0;
-            let mut cnt = 0usize;
-            for j in ws..i + 1 {
-                if !filt[j].is_nan() {
-                    s += filt[j];
-                    cnt += 1;
-                }
-            }
-            smoothed[i] = if cnt > 0 { s / cnt as f64 } else { filt[i] };
-        } else {
-            smoothed[i] = filt[i];
+        if !filt[i].is_nan() {
+            last_filt = filt[i];
         }
     }
-    smoothed
+    for i in first..bars {
+        let age = i - first;
+        if age <= period {
+            out[i] = price[i];
+        } else if age >= FRAMA_SMOOTHING - 1 {
+            // A NaN among the five makes the sum, and so the bar, NaN.
+            let mut s = 0.0;
+            for value in &filt[i + 1 - FRAMA_SMOOTHING..=i] {
+                s += value;
+            }
+            out[i] = s / FRAMA_SMOOTHING as f64;
+        } else {
+            out[i] = filt[i];
+        }
+    }
+    out
 }
 
 /// Ulcer Index (running-peak drawdown RMS * 100) over `period`.
@@ -1308,8 +1355,15 @@ pub fn williams_r(high: &[f64], low: &[f64], close: &[f64], period: usize) -> Ve
 // Volume indicators
 // ============================================================================
 
-/// Session-anchored VWAP. `starts[i] != 0` (or i==0) resets the running sums.
-/// Returns (vwap, stdev) where stdev = sqrt(max(0, E[p^2] - vwap^2)) within session.
+/// Anchored VWAP. `starts[i] != 0` (or i == 0) opens a new period and resets the
+/// running sums. Returns (vwap, stdev): vwap = sum(price * volume) / sum(volume)
+/// over the period so far, stdev = sqrt(max(0, E[price^2] - vwap^2)) with the
+/// same volume weights.
+///
+/// Both are NaN on a bar whose price or volume is NaN (the sums keep their state
+/// and the next bar continues from them) and while the period has no volume yet.
+/// The output has the length of `source`; bars beyond the end of `volume` are
+/// NaN and a missing `starts` entry does not open a period.
 pub fn session_vwap(source: &[f64], volume: &[f64], starts: &[f64]) -> (Vec<f64>, Vec<f64>) {
     let n = source.len();
     let mut vwap = nan_vec(n);
@@ -1317,11 +1371,14 @@ pub fn session_vwap(source: &[f64], volume: &[f64], starts: &[f64]) -> (Vec<f64>
     let mut spv = 0.0;
     let mut sv = 0.0;
     let mut spv2 = 0.0;
-    for i in 0..n {
-        if starts[i] != 0.0 || i == 0 {
+    for i in 0..n.min(volume.len()) {
+        if i == 0 || starts.get(i).is_some_and(|&s| s != 0.0) {
             spv = 0.0;
             sv = 0.0;
             spv2 = 0.0;
+        }
+        if source[i].is_nan() || volume[i].is_nan() {
+            continue;
         }
         spv += source[i] * volume[i];
         sv += volume[i];
@@ -1330,65 +1387,103 @@ pub fn session_vwap(source: &[f64], volume: &[f64], starts: &[f64]) -> (Vec<f64>
             vwap[i] = spv / sv;
             let variance = spv2 / sv - vwap[i].powf(2.0);
             sd[i] = variance.max(0.0).sqrt();
-        } else {
-            vwap[i] = source[i];
-            sd[i] = 0.0;
         }
     }
     (vwap, sd)
 }
 
-/// Parabolic SAR. Returns (sar, trend) where trend is +1 up / -1 down.
+/// Parabolic SAR. Returns (sar, trend), trend +1 while long (stop below price)
+/// and -1 while short.
+///
+/// State: the stop, the extreme point EP of the current trend and the
+/// acceleration factor AF. The first bar that has both a high and a low starts a
+/// long trend with stop = low, EP = high, AF = `acceleration`. No close series
+/// is taken, so the first trend is not read off the first two closes: it is
+/// always long, and a falling market reverses it on the next bar.
+///
+/// Every later bar, in this order (the order of TradingView's `ta.sar`
+/// reference script):
+/// 1. stop = stop + AF * (EP - stop).
+/// 2. Reversal, tested against that unclamped stop with strict comparisons.
+///    Long and stop > low: go short, stop = max(high, EP), EP = low, AF =
+///    `acceleration`. Short and stop < high: go long, stop = min(low, EP),
+///    EP = high, AF = `acceleration`. A bar that only touches the stop does not
+///    reverse.
+/// 3. Without a reversal, a new extreme (high > EP when long, low < EP when
+///    short) becomes EP and raises AF by `acceleration`, up to `maximum`.
+/// 4. Clamp, on reversal bars too: when long the stop is at most the lows of the
+///    two previous bars, when short at least their highs.
+///
+/// A bar with a NaN high or low is skipped: its outputs are NaN, the state is
+/// kept, and it does not count as one of the two previous bars. The output has
+/// the length of `high`; bars beyond the end of `low` are NaN.
 pub fn sar(high: &[f64], low: &[f64], acceleration: f64, maximum: f64) -> (Vec<f64>, Vec<f64>) {
     let n = high.len();
-    let mut sar = vec![0.0f64; n];
-    let mut trend = vec![0.0f64; n];
-    if n == 0 {
-        return (sar, trend);
-    }
-    sar[0] = low[0];
-    trend[0] = 1.0;
+    let mut sar = nan_vec(n);
+    let mut trend = nan_vec(n);
+    let mut long = true;
+    let mut stop = f64::NAN;
+    let mut ep = f64::NAN;
     let mut af = acceleration;
-    let mut ep = high[0];
-    for i in 1..n {
-        let prev_sar = sar[i - 1];
-        let prev_trend = trend[i - 1];
-        sar[i] = prev_sar + af * (ep - prev_sar);
-        if prev_trend == 1.0 {
-            if low[i] <= sar[i] {
-                trend[i] = -1.0;
-                sar[i] = ep;
-                ep = low[i];
+    // (high, low) of the last bar that had both, and of the one before it.
+    let mut prev: Option<(f64, f64)> = None;
+    let mut prev2: Option<(f64, f64)> = None;
+    for i in 0..n.min(low.len()) {
+        let (h, l) = (high[i], low[i]);
+        if h.is_nan() || l.is_nan() {
+            continue;
+        }
+        let Some((prev_high, prev_low)) = prev else {
+            stop = l;
+            ep = h;
+            sar[i] = stop;
+            trend[i] = 1.0;
+            prev = Some((h, l));
+            continue;
+        };
+        stop += af * (ep - stop);
+        let mut reversed = false;
+        if long {
+            if stop > l {
+                reversed = true;
+                long = false;
+                stop = h.max(ep);
+                ep = l;
                 af = acceleration;
-            } else {
-                trend[i] = 1.0;
-                if high[i] > ep {
-                    ep = high[i];
+            }
+        } else if stop < h {
+            reversed = true;
+            long = true;
+            stop = l.min(ep);
+            ep = h;
+            af = acceleration;
+        }
+        if !reversed {
+            if long {
+                if h > ep {
+                    ep = h;
                     af = (af + acceleration).min(maximum);
                 }
-                if i >= 2 {
-                    sar[i] = sar[i].min(low[i - 1]).min(low[i - 2]);
-                } else {
-                    sar[i] = sar[i].min(low[i - 1]);
-                }
-            }
-        } else if high[i] >= sar[i] {
-            trend[i] = 1.0;
-            sar[i] = ep;
-            ep = high[i];
-            af = acceleration;
-        } else {
-            trend[i] = -1.0;
-            if low[i] < ep {
-                ep = low[i];
+            } else if l < ep {
+                ep = l;
                 af = (af + acceleration).min(maximum);
             }
-            if i >= 2 {
-                sar[i] = sar[i].max(high[i - 1]).max(high[i - 2]);
-            } else {
-                sar[i] = sar[i].max(high[i - 1]);
+        }
+        if long {
+            stop = stop.min(prev_low);
+            if let Some((_, low2)) = prev2 {
+                stop = stop.min(low2);
+            }
+        } else {
+            stop = stop.max(prev_high);
+            if let Some((high2, _)) = prev2 {
+                stop = stop.max(high2);
             }
         }
+        sar[i] = stop;
+        trend[i] = if long { 1.0 } else { -1.0 };
+        prev2 = prev;
+        prev = Some((h, l));
     }
     (sar, trend)
 }
@@ -1430,44 +1525,62 @@ pub fn adl(high: &[f64], low: &[f64], close: &[f64], volume: &[f64]) -> Vec<f64>
     r
 }
 
-/// Chaikin Money Flow: sum(MFV, period) / sum(volume, period) per window.
+/// Chaikin Money Flow: sum(money flow volume, period) / sum(volume, period),
+/// where money flow volume is ((close - low) - (high - close)) / (high - low) *
+/// volume, zero on a bar without range. 0.0 when the window's volume is not
+/// positive. NaN for the first `period - 1` bars and while a NaN high, low,
+/// close or volume is in the window. Bars beyond the shortest input are NaN.
 pub fn cmf(high: &[f64], low: &[f64], close: &[f64], volume: &[f64], period: usize) -> Vec<f64> {
-    let n = close.len();
-    let mut r = nan_vec(n);
-    if period == 0 || n < period {
+    let mut r = nan_vec(close.len());
+    let bars = shortest(&[close.len(), high.len(), low.len(), volume.len()]);
+    if period == 0 || bars < period {
         return r;
     }
-    for i in period - 1..n {
+    for i in period - 1..bars {
         let mut smfv = 0.0;
         let mut sv = 0.0;
-        for j in 0..period {
-            let idx = i + 1 - period + j;
-            let mfm = if high[idx] != low[idx] {
-                ((close[idx] - low[idx]) - (high[idx] - close[idx])) / (high[idx] - low[idx])
-            } else {
-                0.0
-            };
-            smfv += mfm * volume[idx];
-            sv += volume[idx];
+        let mut known = true;
+        for idx in i + 1 - period..=i {
+            let (h, l, c, v) = (high[idx], low[idx], close[idx], volume[idx]);
+            if h.is_nan() || l.is_nan() || c.is_nan() || v.is_nan() {
+                known = false;
+                break;
+            }
+            let mfm = if h != l { ((c - l) - (h - c)) / (h - l) } else { 0.0 };
+            smfv += mfm * v;
+            sv += v;
         }
-        r[i] = if sv > 0.0 { smfv / sv } else { 0.0 };
+        if known {
+            r[i] = if sv > 0.0 { smfv / sv } else { 0.0 };
+        }
     }
     r
 }
 
-/// Money Flow Index (volume-weighted RSI), rolling window of pos/neg money flow.
+/// Money Flow Index: 100 - 100 / (1 + positive flow / negative flow) over the
+/// last `period` bars, 100 when the window has no negative flow. A bar's flow is
+/// typical price * volume, positive when the typical price rose from the bar
+/// before, negative when it fell, and zero when it did not move or when there is
+/// no bar before to compare with (bar 0, or the bar after a NaN one).
+///
+/// NaN on bar 0, for the first `period - 1` bars, and while a bar with a NaN
+/// price or volume is in the window. Bars beyond the shortest input are NaN.
 pub fn mfi(high: &[f64], low: &[f64], close: &[f64], volume: &[f64], period: usize) -> Vec<f64> {
-    let n = close.len();
-    let mut r = nan_vec(n);
+    let mut r = nan_vec(close.len());
+    let bars = shortest(&[close.len(), high.len(), low.len(), volume.len()]);
     if period == 0 {
         return r;
     }
-    let tp: Vec<f64> = (0..n)
+    let tp: Vec<f64> = (0..bars)
         .map(|i| (high[i] + low[i] + close[i]) / 3.0)
         .collect();
-    let mut pos = vec![0.0f64; n];
-    let mut neg = vec![0.0f64; n];
-    for i in 1..n {
+    let unknown = |i: usize| tp[i].is_nan() || volume[i].is_nan();
+    let mut pos = vec![0.0f64; bars];
+    let mut neg = vec![0.0f64; bars];
+    for i in 1..bars {
+        if unknown(i) || tp[i - 1].is_nan() {
+            continue;
+        }
         let rmf = tp[i] * volume[i];
         if tp[i] > tp[i - 1] {
             pos[i] = rmf;
@@ -1477,14 +1590,17 @@ pub fn mfi(high: &[f64], low: &[f64], close: &[f64], volume: &[f64], period: usi
     }
     let mut ps = 0.0;
     let mut ns = 0.0;
-    for i in 1..n {
+    let mut unknown_bars = if bars > 0 { unknown(0) as usize } else { 0 };
+    for i in 1..bars {
         ps += pos[i];
         ns += neg[i];
+        unknown_bars += unknown(i) as usize;
         if i >= period {
             ps -= pos[i - period];
             ns -= neg[i - period];
+            unknown_bars -= unknown(i - period) as usize;
         }
-        if i >= period - 1 {
+        if i >= period - 1 && unknown_bars == 0 {
             r[i] = if ns == 0.0 {
                 100.0
             } else {
@@ -1556,17 +1672,33 @@ pub fn bop(open_: &[f64], high: &[f64], low: &[f64], close: &[f64]) -> Vec<f64> 
 }
 
 /// Fisher Transform (TradingView). Input is the price source (hl2). Returns
-/// (fisher, trigger). Recursive value/fisher with log; window extrema over `length`.
+/// (fisher, trigger). Per bar, with the highest and lowest of the last `length`
+/// values: value = 0.66 * ((price - lowest) / (highest - lowest) - 0.5) + 0.67 *
+/// value[1], held at +-0.999 beyond +-0.99, and fisher = 0.5 * ln((1 + value) /
+/// (1 - value)) + 0.5 * fisher[1]. A window without range repeats the previous
+/// fisher. The trigger is the fisher value before the bar, 0.0 at the start.
+///
+/// Both are NaN for the first `length - 1` bars and while a NaN is in the
+/// window. `value` and `fisher` keep their state across such bars, so the first
+/// bar after a NaN warm-up starts exactly as bar `length - 1` of a clean series.
 pub fn fisher(data: &[f64], length: usize) -> (Vec<f64>, Vec<f64>) {
     let n = data.len();
-    let mut fish1 = nan_vec(n);
-    let mut fish2 = nan_vec(n);
+    let mut fish = nan_vec(n);
+    let mut trigger = nan_vec(n);
     if length == 0 || n < length {
-        return (fish1, fish2);
+        return (fish, trigger);
     }
     let mut value = 0.0;
-    let mut fish1_prev = 0.0;
+    let mut fish_prev = 0.0;
+    let mut nans = data[..length - 1].iter().filter(|x| x.is_nan()).count();
     for i in length - 1..n {
+        nans += data[i].is_nan() as usize;
+        if i >= length {
+            nans -= data[i - length].is_nan() as usize;
+        }
+        if nans > 0 {
+            continue;
+        }
         let ws = i + 1 - length;
         let mut hi = data[ws];
         let mut lo = data[ws];
@@ -1578,6 +1710,7 @@ pub fn fisher(data: &[f64], length: usize) -> (Vec<f64>, Vec<f64>) {
                 lo = data[k];
             }
         }
+        trigger[i] = fish_prev;
         if hi != lo {
             let normalized = (data[i] - lo) / (hi - lo) - 0.5;
             let new_value = 0.66 * normalized + 0.67 * value;
@@ -1589,14 +1722,11 @@ pub fn fisher(data: &[f64], length: usize) -> (Vec<f64>, Vec<f64>) {
                 new_value
             };
             let log_term = 0.5 * ((1.0 + value) / (1.0 - value)).ln();
-            fish1[i] = log_term + 0.5 * fish1_prev;
-            fish1_prev = fish1[i];
-        } else {
-            fish1[i] = fish1_prev;
+            fish_prev = log_term + 0.5 * fish_prev;
         }
-        fish2[i] = if i > length - 1 { fish1[i - 1] } else { 0.0 };
+        fish[i] = fish_prev;
     }
-    (fish1, fish2)
+    (fish, trigger)
 }
 
 /// Connors RSI up/down streak length (positive=up run, negative=down run, 0=flat).
@@ -2306,6 +2436,13 @@ fn swma_vec(data: &[f64]) -> Vec<f64> {
 }
 
 /// Relative Vigor Index (vigor): sum(swma(c-o))/sum(swma(h-l)) over period; signal=swma.
+/// Definition: John Ehlers, "Relative Vigor Index", Stocks & Commodities, 2002
+/// (the form TradingView publishes as `math.sum(ta.swma(close-open), len) /
+/// math.sum(ta.swma(high-low), len)`).
+///
+/// Window-local in NaN, like the rolling reductions above: `rvi[i]` is NaN while
+/// any bar feeding its window is NaN. All NaN when the window does not fit the
+/// series. Bars beyond the shortest input are NaN.
 pub fn rvi_vigor(
     open_: &[f64],
     high: &[f64],
@@ -2314,23 +2451,23 @@ pub fn rvi_vigor(
     period: usize,
 ) -> (Vec<f64>, Vec<f64>) {
     let n = close.len();
-    let co: Vec<f64> = (0..n).map(|i| close[i] - open_[i]).collect();
-    let hl: Vec<f64> = (0..n).map(|i| high[i] - low[i]).collect();
+    let bars = shortest(&[n, open_.len(), high.len(), low.len()]);
+    let co: Vec<f64> = (0..bars).map(|i| close[i] - open_[i]).collect();
+    let hl: Vec<f64> = (0..bars).map(|i| high[i] - low[i]).collect();
     let sco = swma_vec(&co);
     let shl = swma_vec(&hl);
     let mut rvi = nan_vec(n);
-    if n > period + 2 {
-        for i in period + 2..n {
-            let mut ns = 0.0;
-            let mut ds = 0.0;
-            for j in i + 1 - period..i + 1 {
-                if !sco[j].is_nan() {
-                    ns += sco[j];
-                }
-                if !shl[j].is_nan() {
-                    ds += shl[j];
-                }
-            }
+    // The first window ends at bar period + 2 (the swma needs three bars before
+    // it). A period too large for that has no window, and the loop does not run.
+    for i in period.saturating_add(2)..bars {
+        let mut ns = 0.0;
+        let mut ds = 0.0;
+        for j in i + 1 - period..i + 1 {
+            ns += sco[j];
+            ds += shl[j];
+        }
+        // A NaN sum means a NaN bar fed the window: leave the bar NaN.
+        if !ns.is_nan() && !ds.is_nan() {
             rvi[i] = if ds != 0.0 { ns / ds } else { 0.0 };
         }
     }
@@ -2419,31 +2556,33 @@ pub fn rwi(high: &[f64], low: &[f64], close: &[f64], period: usize) -> (Vec<f64>
     (rh, rl)
 }
 
+/// Largest `n` that `valuewhen` resolves.
+const VALUEWHEN_LOOKBACK_CAP: usize = 1000;
+
 /// valuewhen: value of `array` when `expr` (nonzero == true) was true the n-th most
-/// recent time. Mirrors the legacy kernel, including its 1000-entry lookback cap.
+/// recent time. NaN until `expr` has been true `n` times, and for every bar when
+/// `n` is 0 or above `min(VALUEWHEN_LOOKBACK_CAP, len)`. A bar whose value lies
+/// beyond the end of `array` is NaN.
 pub fn valuewhen(expr: &[f64], array: &[f64], n: usize) -> Vec<f64> {
     let length = expr.len();
     let mut result = nan_vec(length);
-    if n == 0 {
+    if n == 0 || n > std::cmp::min(VALUEWHEN_LOOKBACK_CAP, length) {
         return result;
     }
-    let max_lookback = std::cmp::min(1000, length);
-    let mut idx = vec![0usize; max_lookback.max(1)];
-    let mut count = 0usize;
+    // Only the last `n` true bars matter, so they live in a ring of `n` slots.
+    let mut ring = vec![0usize; n];
+    let mut count = 0usize; // true bars seen so far
     for i in 0..length {
         if expr[i] != 0.0 {
-            if count >= max_lookback {
-                for j in 0..max_lookback - 1 {
-                    idx[j] = idx[j + 1];
-                }
-                idx[max_lookback - 1] = i;
-            } else {
-                idx[count] = i;
-                count += 1;
-            }
+            ring[count % n] = i;
+            count += 1;
         }
         if count >= n {
-            result[i] = array[idx[count - n]];
+            // The n-th most recent true bar is the oldest of the last n, which
+            // is the slot the next true bar will overwrite.
+            if let Some(&value) = array.get(ring[count % n]) {
+                result[i] = value;
+            }
         }
     }
     result
@@ -3499,5 +3638,625 @@ mod tests {
         }
         approx(r[4], 3.0);
         approx(r[10], 9.0);
+    }
+
+    // ------------------------------------------------------------------
+    // Parabolic SAR. Expected values are worked out by hand from the order
+    // documented on `sar`, with acceleration 0.02 and maximum 0.2 unless a
+    // test says otherwise.
+    // ------------------------------------------------------------------
+
+    const SAR_STEP: f64 = 0.02;
+    const SAR_MAX: f64 = 0.2;
+    const UP: f64 = 1.0;
+    const DOWN: f64 = -1.0;
+
+    fn approx_all(got: &[f64], want: &[f64]) {
+        assert_eq!(got.len(), want.len());
+        for (i, (g, w)) in got.iter().zip(want).enumerate() {
+            assert!(
+                (g.is_nan() && w.is_nan()) || (g - w).abs() <= 1e-12,
+                "bar {i}: expected {w}, got {g}"
+            );
+        }
+    }
+
+    /// Five rising bars, then bar 5 is an outside bar: a new high (15, above the
+    /// extreme point 14) and a low (9.5) below the projected stop 9.93704.
+    fn outside_bar_ends_an_uptrend() -> ([f64; 9], [f64; 9]) {
+        (
+            [10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 14.5, 14.2, 14.0],
+            [9.0, 10.0, 11.0, 12.0, 13.0, 9.5, 13.5, 13.0, 12.5],
+        )
+    }
+
+    /// Bar 1 reverses the initial uptrend, bars 2 to 4 fall, then bar 5 is an
+    /// outside bar: a new low (14, below the extreme point 15) and a high (21.5)
+    /// above the projected stop 19.275424.
+    fn outside_bar_ends_a_downtrend() -> ([f64; 7], [f64; 7]) {
+        (
+            [20.0, 19.0, 18.0, 17.0, 16.0, 21.5, 20.0],
+            [19.0, 18.0, 17.0, 16.0, 15.0, 14.0, 14.6],
+        )
+    }
+
+    #[test]
+    fn sar_uptrend_follows_the_hand_computed_path() {
+        let (h, l) = outside_bar_ends_an_uptrend();
+        let (s, t) = sar(&h[..5], &l[..5], SAR_STEP, SAR_MAX);
+        // bar 1: 9 + 0.02*(10-9) = 9.02, capped at low[0] = 9
+        // bar 2: 9 + 0.04*(11-9) = 9.08, capped at low[0] = 9
+        // bar 3: 9 + 0.06*(12-9) = 9.18
+        // bar 4: 9.18 + 0.08*(13-9.18) = 9.4856
+        approx_all(&s, &[9.0, 9.0, 9.0, 9.18, 9.4856]);
+        approx_all(&t, &[UP; 5]);
+    }
+
+    #[test]
+    fn sar_reversal_to_short_starts_from_the_higher_of_the_high_and_the_extreme_point() {
+        let (h, l) = outside_bar_ends_an_uptrend();
+        let (s, t) = sar(&h, &l, SAR_STEP, SAR_MAX);
+        assert!(t[4] == UP && t[5] == DOWN);
+        approx(s[5], 15.0); // max(high 15, extreme point 14), above high[4] and high[3]
+    }
+
+    #[test]
+    fn sar_stays_short_while_the_high_is_below_the_projected_stop() {
+        let (h, l) = outside_bar_ends_an_uptrend();
+        let (s, t) = sar(&h, &l, SAR_STEP, SAR_MAX);
+        approx_all(&t[5..], &[DOWN; 4]);
+        // bar 6: 15 + 0.02*(9.5-15) = 14.89, raised to high[5] = 15
+        // bar 7: 14.89 again, raised to high[5] = 15
+        // bar 8: 14.89, above high[7] and high[6], so it stands
+        approx_all(&s[6..], &[15.0, 15.0, 14.89]);
+    }
+
+    #[test]
+    fn sar_downtrend_follows_the_hand_computed_path() {
+        let (h, l) = outside_bar_ends_a_downtrend();
+        let (s, t) = sar(&h[..5], &l[..5], SAR_STEP, SAR_MAX);
+        // bar 1: 19.02 is above low 18: reverse, max(high 19, extreme point 20) = 20
+        // bar 2: 20 + 0.02*(18-20) = 19.96, raised to high[0] = 20
+        // bar 3: 20 + 0.04*(17-20) = 19.88
+        // bar 4: 19.88 + 0.06*(16-19.88) = 19.6472
+        approx_all(&s, &[19.0, 20.0, 20.0, 19.88, 19.6472]);
+        approx_all(&t, &[UP, DOWN, DOWN, DOWN, DOWN]);
+    }
+
+    #[test]
+    fn sar_reversal_to_long_starts_from_the_lower_of_the_low_and_the_extreme_point() {
+        let (h, l) = outside_bar_ends_a_downtrend();
+        let (s, t) = sar(&h, &l, SAR_STEP, SAR_MAX);
+        assert!(t[4] == DOWN && t[5] == UP);
+        approx(s[5], 14.0); // min(low 14, extreme point 15), below low[4] and low[3]
+    }
+
+    #[test]
+    fn sar_stays_long_while_the_low_is_above_the_projected_stop() {
+        let (h, l) = outside_bar_ends_a_downtrend();
+        let (s, t) = sar(&h, &l, SAR_STEP, SAR_MAX);
+        assert!(t[6] == UP);
+        approx(s[6], 14.0); // 14 + 0.02*(21.5-14) = 14.15, capped at low[5] = 14
+    }
+
+    #[test]
+    fn sar_reversal_stop_is_clamped_to_the_bar_two_back() {
+        // Two reversals in a row: at bar 4 the new short stop is
+        // max(high 19.0, extreme point 19.6) = 19.6, then raised to high[2] = 19.7.
+        let h = [20.0, 19.5, 19.7, 19.6, 19.0];
+        let l = [19.0, 10.0, 9.0, 19.0, 9.0];
+        let (s, t) = sar(&h, &l, SAR_STEP, SAR_MAX);
+        // bar 1: 19.02 > low 10: short, max(19.5, 20) = 20
+        // bar 2: 19.8, not below high 19.7; raised to high[0] = 20
+        // bar 3: 20 + 0.04*(9-20) = 19.56 < high 19.6: long, min(low 19, extreme 9) = 9
+        // bar 4: 9 + 0.02*(19.6-9) = 9.212 > low 9: short, 19.6 raised to 19.7
+        approx_all(&s, &[19.0, 20.0, 20.0, 9.0, 19.7]);
+        approx_all(&t, &[UP, DOWN, DOWN, UP, DOWN]);
+    }
+
+    #[test]
+    fn sar_does_not_reverse_when_the_low_only_touches_the_stop() {
+        // Step 0.25 keeps the arithmetic exact: 8 + 0.25*(12-8) = 9 = low[1].
+        let (s, t) = sar(&[12.0, 13.0], &[8.0, 9.0], 0.25, 0.5);
+        approx_all(&s, &[8.0, 8.0]); // 9 capped at low[0]
+        approx_all(&t, &[UP, UP]);
+    }
+
+    #[test]
+    fn sar_does_not_reverse_when_the_high_only_touches_the_stop() {
+        // bar 1: 9 > low 7: short, stop max(high 11, extreme point 12) = 12
+        // bar 2: 12 + 0.25*(7-12) = 10.75 = high[2]: no reversal, raised to high[0]
+        let (s, t) = sar(&[12.0, 11.0, 10.75], &[8.0, 7.0, 9.0], 0.25, 0.5);
+        approx_all(&s, &[8.0, 12.0, 12.0]);
+        approx_all(&t, &[UP, DOWN, DOWN]);
+    }
+
+    #[test]
+    fn sar_of_a_constant_series_never_reverses() {
+        let (s, t) = sar(&[5.0; 6], &[5.0; 6], SAR_STEP, SAR_MAX);
+        approx_all(&s, &[5.0; 6]);
+        approx_all(&t, &[UP; 6]);
+    }
+
+    #[test]
+    fn sar_starts_at_the_first_bar_that_has_a_high_and_a_low() {
+        let nan = f64::NAN;
+        let h = [nan, 11.0, 12.0, 13.0, 9.0, 8.0];
+        let l = [9.0, 10.0, 11.0, 12.0, 7.0, 6.0];
+        let (s, t) = sar(&h, &l, SAR_STEP, SAR_MAX);
+        // Seeded at bar 1 (stop 10, extreme point 11).
+        // bar 2: 10.02 capped at low[1] = 10;  bar 3: 10.08 capped at 10
+        // bar 4: 10.18 > low 7: short, max(high 9, extreme 13) = 13
+        // bar 5: 13 + 0.02*(7-13) = 12.88, raised to high[3] = 13
+        approx_all(&s, &[nan, 10.0, 10.0, 10.0, 13.0, 13.0]);
+        approx_all(&t, &[nan, UP, UP, UP, DOWN, DOWN]);
+    }
+
+    #[test]
+    fn sar_skips_a_nan_bar_as_if_it_were_not_there() {
+        let (h, l) = outside_bar_ends_an_uptrend();
+        let (want_s, want_t) = sar(&h, &l, SAR_STEP, SAR_MAX);
+        // The same bars with an unknown bar inserted after bar 2.
+        let at = 3;
+        let mut gap_h = h.to_vec();
+        let mut gap_l = l.to_vec();
+        gap_h.insert(at, f64::NAN);
+        gap_l.insert(at, 11.5);
+        let (s, t) = sar(&gap_h, &gap_l, SAR_STEP, SAR_MAX);
+        assert!(s[at].is_nan() && t[at].is_nan());
+        approx_all(&[&s[..at], &s[at + 1..]].concat(), &want_s);
+        approx_all(&[&t[..at], &t[at + 1..]].concat(), &want_t);
+    }
+
+    #[test]
+    fn sar_reads_no_further_than_the_shorter_of_its_inputs() {
+        let (h, l) = outside_bar_ends_an_uptrend();
+        let (s, t) = sar(&h, &l[..7], SAR_STEP, SAR_MAX);
+        let (want_s, _) = sar(&h[..7], &l[..7], SAR_STEP, SAR_MAX);
+        assert_eq!(s.len(), h.len());
+        approx_all(&s[..7], &want_s);
+        assert!(s[7].is_nan() && s[8].is_nan() && t[7].is_nan() && t[8].is_nan());
+    }
+
+    #[test]
+    fn sar_keeps_clear_of_the_two_previous_bars_on_a_choppy_series() {
+        let n = 400usize;
+        let mid: Vec<f64> = (0..n)
+            .map(|i| 100.0 + 8.0 * ((i as f64) / 5.0).sin() + 3.0 * ((i as f64) / 1.7).cos())
+            .collect();
+        let h: Vec<f64> = (0..n).map(|i| mid[i] + 1.0 + ((i * 7) % 5) as f64 * 0.6).collect();
+        let l: Vec<f64> = (0..n).map(|i| mid[i] - 1.0 - ((i * 3) % 4) as f64 * 0.7).collect();
+        let (s, t) = sar(&h, &l, SAR_STEP, SAR_MAX);
+        let mut reversals = 0usize;
+        for i in 2..n {
+            reversals += (t[i] != t[i - 1]) as usize;
+            if t[i] == DOWN {
+                assert!(s[i] >= h[i - 1] && s[i] >= h[i - 2], "bar {i}: short stop {}", s[i]);
+            } else {
+                assert!(s[i] <= l[i - 1] && s[i] <= l[i - 2], "bar {i}: long stop {}", s[i]);
+            }
+        }
+        assert!(reversals > 10, "the series should reverse often, got {reversals}");
+    }
+
+    // ------------------------------------------------------------------
+    // Relative Vigor Index
+    // ------------------------------------------------------------------
+
+    /// Bars with close - open = 1 and high - low = 2: the RVI is exactly 0.5.
+    fn flat_bars(n: usize) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
+        (vec![10.0; n], vec![12.0; n], vec![10.0; n], vec![11.0; n])
+    }
+
+    #[test]
+    fn rvi_vigor_is_one_half_on_bars_whose_body_is_half_their_range() {
+        let period = 10;
+        let (o, h, l, c) = flat_bars(30);
+        let (r, s) = rvi_vigor(&o, &h, &l, &c, period);
+        // The 4-bar swma starts at bar 3, the sum of `period` of them at bar
+        // period + 2, and the signal (a swma of the RVI) three bars later.
+        for i in 0..30 {
+            if i < period + 2 {
+                assert!(r[i].is_nan(), "rvi[{i}] = {}", r[i]);
+            } else {
+                approx(r[i], 0.5);
+            }
+            if i < period + 5 {
+                assert!(s[i].is_nan(), "signal[{i}] = {}", s[i]);
+            } else {
+                approx(s[i], 0.5);
+            }
+        }
+    }
+
+    #[test]
+    fn rvi_vigor_equals_the_formula_evaluated_term_by_term() {
+        let o = [10.0, 10.5, 11.0, 10.8, 11.4, 11.9, 12.1, 11.7];
+        let h = [10.9, 11.4, 11.6, 11.7, 12.2, 12.6, 12.5, 12.4];
+        let l = [9.8, 10.2, 10.6, 10.5, 11.1, 11.6, 11.5, 11.3];
+        let c = [10.6, 11.1, 10.9, 11.5, 12.0, 12.2, 11.8, 12.3];
+        let (r, _) = rvi_vigor(&o, &h, &l, &c, 3);
+        let co: Vec<f64> = (0..8).map(|i| c[i] - o[i]).collect();
+        let hl: Vec<f64> = (0..8).map(|i| h[i] - l[i]).collect();
+        let swma = |x: &[f64], i: usize| (x[i - 3] + 2.0 * x[i - 2] + 2.0 * x[i - 1] + x[i]) / 6.0;
+        for v in r.iter().take(5) {
+            assert!(v.is_nan());
+        }
+        for (i, got) in r.iter().enumerate().skip(5) {
+            let num = swma(&co, i - 2) + swma(&co, i - 1) + swma(&co, i);
+            let den = swma(&hl, i - 2) + swma(&hl, i - 1) + swma(&hl, i);
+            approx(*got, num / den);
+        }
+    }
+
+    #[test]
+    fn rvi_vigor_is_nan_while_a_nan_bar_is_in_its_window() {
+        let period = 10;
+        let (mut o, h, l, c) = flat_bars(45);
+        o[20] = f64::NAN;
+        let (r, _) = rvi_vigor(&o, &h, &l, &c, period);
+        // The NaN is inside the swma of bars 20..=23 and so inside every sum
+        // window that touches one of them: bars 20..=23+period-1.
+        for (i, v) in r.iter().enumerate().skip(period + 2) {
+            if (20..=32).contains(&i) {
+                assert!(v.is_nan(), "rvi[{i}] = {v}, expected NaN");
+            } else {
+                approx(*v, 0.5);
+            }
+        }
+    }
+
+    #[test]
+    fn rvi_signal_recovers_three_bars_after_the_rvi() {
+        let (mut o, h, l, c) = flat_bars(45);
+        o[20] = f64::NAN;
+        let (_, s) = rvi_vigor(&o, &h, &l, &c, 10);
+        for (i, v) in s.iter().enumerate().take(36).skip(20) {
+            assert!(v.is_nan(), "signal[{i}] = {v}, expected NaN");
+        }
+        approx(s[19], 0.5);
+        approx(s[36], 0.5);
+    }
+
+    #[test]
+    fn rvi_vigor_waits_for_a_nan_warmup_to_leave_its_window() {
+        let (mut o, h, l, c) = flat_bars(30);
+        for v in o.iter_mut().take(4) {
+            *v = f64::NAN;
+        }
+        let (r, _) = rvi_vigor(&o, &h, &l, &c, 10);
+        // swma is NaN up to bar 6, so the first clean 10-bar window ends at 16.
+        for (i, v) in r.iter().enumerate().take(16) {
+            assert!(v.is_nan(), "rvi[{i}] = {v}, expected NaN");
+        }
+        for v in r.iter().skip(16) {
+            approx(*v, 0.5);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // A period no window can satisfy: all NaN, and no allocation sized by it
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn rolling_extremes_are_all_nan_when_the_period_exceeds_the_series() {
+        let d = [0.0, 1.0, 2.0, 3.0, 4.0];
+        for period in [6, 1_000_000_000_000, usize::MAX / 2 + 1, usize::MAX] {
+            assert!(highest(&d, period).iter().all(|v| v.is_nan()), "highest, period {period}");
+            assert!(lowest(&d, period).iter().all(|v| v.is_nan()), "lowest, period {period}");
+        }
+    }
+
+    #[test]
+    fn window_kernels_are_all_nan_when_the_period_exceeds_the_series() {
+        let (o, h, l, c) = flat_bars(6);
+        let v = vec![100.0; 6];
+        for period in [7, usize::MAX - 1, usize::MAX] {
+            assert!(cmo(&c, period).iter().all(|x| x.is_nan()), "cmo, period {period}");
+            assert!(cmf(&h, &l, &c, &v, period).iter().all(|x| x.is_nan()), "cmf, period {period}");
+            assert!(fisher(&c, period).0.iter().all(|x| x.is_nan()), "fisher, period {period}");
+            let (r, s) = rvi_vigor(&o, &h, &l, &c, period);
+            assert!(r.iter().chain(&s).all(|x| x.is_nan()), "rvi_vigor, period {period}");
+        }
+    }
+
+    #[test]
+    fn frama_is_the_midpoint_when_the_period_exceeds_the_series() {
+        let (_, h, l, _) = flat_bars(6);
+        for period in [8, usize::MAX - 1, usize::MAX] {
+            approx_all(&frama(&h, &l, period), &[11.0; 6]);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // NaN contract of the window and recursive kernels
+    // ------------------------------------------------------------------
+
+    /// Eight rising bars: high 10..17, low two below, close half a point below
+    /// the high, so the money-flow multiplier is 0.5 on every bar.
+    fn rising_bars() -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
+        let h: Vec<f64> = (10..18).map(|x| x as f64).collect();
+        let l: Vec<f64> = h.iter().map(|x| x - 2.0).collect();
+        let c: Vec<f64> = h.iter().map(|x| x - 0.5).collect();
+        (h, l, c, vec![100.0; 8])
+    }
+
+    #[test]
+    fn cmf_is_nan_while_a_nan_volume_is_in_its_window() {
+        let nan = f64::NAN;
+        let (h, l, c, mut v) = rising_bars();
+        v[3] = nan;
+        approx_all(&cmf(&h, &l, &c, &v, 3), &[nan, nan, 0.5, nan, nan, nan, 0.5, 0.5]);
+    }
+
+    #[test]
+    fn cmf_is_nan_for_a_nan_close_on_a_bar_without_range() {
+        let nan = f64::NAN;
+        let (mut h, l, mut c, v) = rising_bars();
+        h[3] = l[3]; // no range: the multiplier would be 0 whatever the close
+        c[3] = nan;
+        let r = cmf(&h, &l, &c, &v, 3);
+        assert!(r[3].is_nan() && r[4].is_nan() && r[5].is_nan());
+        approx(r[6], 0.5);
+    }
+
+    #[test]
+    fn mfi_is_nan_while_a_nan_price_is_in_its_window() {
+        let nan = f64::NAN;
+        let p = [10.0, 11.0, 10.0, nan, 12.0, 11.0, 13.0]; // high = low = close
+        let v = [1.0; 7];
+        // Flow per bar: +11, -10, unknown, none (no earlier price), -11, +13.
+        // Two-bar windows:
+        //   bar 1: +11                 -> 100
+        //   bar 2: +11, -10            -> 100 - 100/(1 + 11/10)
+        //   bars 3 and 4 hold the NaN  -> NaN
+        //   bar 5: none, -11           -> 0
+        //   bar 6: -11, +13            -> 100 - 100/(1 + 13/11)
+        let want =
+            [nan, 100.0, 100.0 - 100.0 / 2.1, nan, nan, 0.0, 100.0 - 100.0 / (1.0 + 13.0 / 11.0)];
+        approx_all(&mfi(&p, &p, &p, &v, 2), &want);
+    }
+
+    #[test]
+    fn mfi_recovers_after_a_nan_volume() {
+        let nan = f64::NAN;
+        let p = [10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0];
+        let v = [1.0, 1.0, nan, 1.0, 1.0, 1.0, 1.0];
+        // Prices only rise, so the index is 100 wherever its 2-bar window is known.
+        approx_all(&mfi(&p, &p, &p, &v, 2), &[nan, 100.0, nan, nan, 100.0, 100.0, 100.0]);
+    }
+
+    #[test]
+    fn cmo_is_nan_while_a_nan_is_among_the_bars_of_its_window() {
+        let nan = f64::NAN;
+        let d = [10.0, 11.0, 12.0, nan, 14.0, 15.0, 16.0, 17.0, 18.0];
+        // Three changes span four bars; the first window clear of bar 3 ends at 7.
+        approx_all(&cmo(&d, 3), &[nan, nan, nan, nan, nan, nan, nan, 100.0, 100.0]);
+    }
+
+    #[test]
+    fn fisher_carries_its_state_across_a_nan_bar() {
+        let nan = f64::NAN;
+        let d = [1.0, 2.0, nan, 2.0, 1.0, 2.0];
+        let (f, t) = fisher(&d, 2);
+        // bar 1: window (1, 2), position 1 -> value 0.33
+        let v1: f64 = 0.66 * 0.5;
+        let f1 = 0.5 * ((1.0 + v1) / (1.0 - v1)).ln();
+        // bars 2 and 3 hold the NaN. bar 4: window (2, 1), position 0
+        let v4 = 0.66 * -0.5 + 0.67 * v1;
+        let f4 = 0.5 * ((1.0 + v4) / (1.0 - v4)).ln() + 0.5 * f1;
+        // bar 5: window (1, 2), position 1
+        let v5 = 0.66 * 0.5 + 0.67 * v4;
+        let f5 = 0.5 * ((1.0 + v5) / (1.0 - v5)).ln() + 0.5 * f4;
+        approx_all(&f, &[nan, f1, nan, nan, f4, f5]);
+        // The trigger is the Fisher value before the bar: 0 at the start.
+        approx_all(&t, &[nan, 0.0, nan, nan, f1, f4]);
+    }
+
+    #[test]
+    fn fisher_after_a_nan_warmup_equals_the_series_without_it() {
+        let d: Vec<f64> = (0..30).map(|x| ((x as f64) * 0.7).sin() + 5.0).collect();
+        let (want_f, want_t) = fisher(&d, 9);
+        let mut padded = vec![f64::NAN; 3];
+        padded.extend_from_slice(&d);
+        let (f, t) = fisher(&padded, 9);
+        assert!(f[..3].iter().all(|x| x.is_nan()));
+        approx_all(&f[3..], &want_f);
+        approx_all(&t[3..], &want_t);
+    }
+
+    /// A straight line: low = bar number, high one above. Its fractal dimension
+    /// is 1, the filter weight 1, so FRAMA is the 5-bar mean of the midpoint:
+    /// the midpoint two bars back.
+    fn straight_line(n: usize) -> (Vec<f64>, Vec<f64>) {
+        ((0..n).map(|i| i as f64 + 1.0).collect(), (0..n).map(|i| i as f64).collect())
+    }
+
+    #[test]
+    fn frama_of_a_straight_line_is_the_five_bar_mean_of_the_midpoint() {
+        let period = 4;
+        let (h, l) = straight_line(12);
+        let want: Vec<f64> =
+            (0..12).map(|i| if i <= period { i as f64 + 0.5 } else { i as f64 - 1.5 }).collect();
+        approx_all(&frama(&h, &l, period), &want);
+    }
+
+    #[test]
+    fn frama_is_nan_only_while_a_nan_bar_is_in_its_windows() {
+        let period = 4;
+        let (mut h, l) = straight_line(20);
+        h[10] = f64::NAN;
+        let r = frama(&h, &l, period);
+        // The filter is unknown for the 4 bars whose range window holds bar 10,
+        // and its 5-bar mean for 4 bars more: bars 10..=17.
+        for (i, v) in r.iter().enumerate() {
+            if (10..=17).contains(&i) {
+                assert!(v.is_nan(), "frama[{i}] = {v}, expected NaN");
+            } else if i <= period {
+                approx(*v, i as f64 + 0.5);
+            } else {
+                approx(*v, i as f64 - 1.5);
+            }
+        }
+    }
+
+    #[test]
+    fn frama_after_a_nan_warmup_equals_the_series_without_it() {
+        let h: Vec<f64> = (0..40).map(|x| ((x as f64) * 0.9).sin() + 10.0).collect();
+        let l: Vec<f64> = h.iter().map(|x| x - 1.0).collect();
+        let want = frama(&h, &l, 8);
+        let mut pad_h = vec![f64::NAN; 3];
+        let mut pad_l = vec![f64::NAN; 3];
+        pad_h.extend_from_slice(&h);
+        pad_l.extend_from_slice(&l);
+        let r = frama(&pad_h, &pad_l, 8);
+        assert!(r[..3].iter().all(|x| x.is_nan()));
+        approx_all(&r[3..], &want);
+    }
+
+    #[test]
+    fn session_vwap_is_nan_until_the_period_has_volume() {
+        let nan = f64::NAN;
+        let (vwap, sd) =
+            session_vwap(&[9.0, 19.0, 29.0, 39.0], &[0.0, 0.0, 5.0, 5.0], &[1.0, 0.0, 0.0, 0.0]);
+        approx_all(&vwap, &[nan, nan, 29.0, 34.0]);
+        approx_all(&sd, &[nan, nan, 0.0, 5.0]); // sqrt((29^2 + 39^2)/2 - 34^2) = 5
+    }
+
+    #[test]
+    fn session_vwap_skips_a_nan_bar_and_keeps_its_sums() {
+        let nan = f64::NAN;
+        let src = [9.0, 19.0, 29.0, 39.0];
+        let (vwap, _) = session_vwap(&src, &[1.0, nan, 1.0, 1.0], &[1.0, 0.0, 0.0, 0.0]);
+        approx_all(&vwap, &[9.0, nan, 19.0, 77.0 / 3.0]); // (9+29)/2, (9+29+39)/3
+    }
+
+    #[test]
+    fn session_vwap_restarts_on_a_start_bar_that_is_itself_nan() {
+        let nan = f64::NAN;
+        let (vwap, _) =
+            session_vwap(&[9.0, nan, 29.0, 39.0], &[1.0, 1.0, 1.0, 1.0], &[1.0, 1.0, 0.0, 0.0]);
+        approx_all(&vwap, &[9.0, nan, 29.0, 34.0]);
+    }
+
+    #[test]
+    fn session_vwap_reads_no_further_than_its_shortest_input() {
+        let (vwap, sd) = session_vwap(&[9.0, 19.0, 29.0], &[1.0, 1.0], &[1.0]);
+        approx(vwap[0], 9.0);
+        approx(vwap[1], 14.0);
+        assert!(vwap[2].is_nan() && sd[2].is_nan());
+    }
+
+    // ------------------------------------------------------------------
+    // Signal helpers that the public `ta` utilities call
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn crossover_and_crossunder_need_a_strict_cross_from_the_other_side() {
+        let a = [1.0, 3.0, 2.0, 2.5, 1.0, 1.0, 5.0];
+        let b = [2.0, 2.0, 2.0, 2.0, 2.0, 1.0, 1.0];
+        // 1: up through 2. 2: a touch from above is not a cross under.
+        // 3: up from equal. 4: down through 2. 5: equal. 6: up from equal.
+        assert_eq!(crossover(&a, &b), vec![false, true, false, true, false, false, true]);
+        assert_eq!(crossunder(&a, &b), vec![false, false, false, false, true, false, false]);
+    }
+
+    #[test]
+    fn cross_is_crossover_or_crossunder() {
+        let a = [1.0, 3.0, 2.0, 2.5, 1.0, 1.0, 5.0];
+        let b = [2.0, 2.0, 2.0, 2.0, 2.0, 1.0, 1.0];
+        let (over, under) = (crossover(&a, &b), crossunder(&a, &b));
+        let either: Vec<bool> = (0..a.len()).map(|i| over[i] || under[i]).collect();
+        assert_eq!(cross(&a, &b), either);
+    }
+
+    #[test]
+    fn a_nan_on_the_bar_or_the_bar_before_blocks_every_cross() {
+        let a = [1.0, f64::NAN, 3.0, 1.0];
+        let b = [2.0, 2.0, 2.0, 2.0];
+        // Bar 2 is above after bar 0 was below, but bar 1 in between is unknown.
+        assert_eq!(crossover(&a, &b), vec![false, false, false, false]);
+        assert_eq!(crossunder(&a, &b), vec![false, false, false, true]);
+        assert_eq!(cross(&a, &b), vec![false, false, false, true]);
+    }
+
+    #[test]
+    fn rising_and_falling_compare_with_the_bar_length_back() {
+        let d = [1.0, 2.0, f64::NAN, 4.0, 3.0, 3.0];
+        assert_eq!(rising(&d, 1), vec![false, true, false, false, false, false]);
+        assert_eq!(falling(&d, 1), vec![false, false, false, false, true, false]);
+        assert_eq!(rising(&d, 2), vec![false, false, false, true, false, false]);
+    }
+
+    #[test]
+    fn rising_and_falling_are_all_false_when_the_lookback_exceeds_the_series() {
+        let d = [1.0, 2.0, 3.0];
+        assert_eq!(rising(&d, 10), vec![false; 3]);
+        assert_eq!(falling(&d, 10), vec![false; 3]);
+    }
+
+    #[test]
+    fn valuewhen_returns_the_value_at_the_nth_most_recent_true_bar() {
+        let expr = [0.0, 1.0, 0.0, 1.0, 0.0, 1.0];
+        let arr = [10.0, 11.0, 12.0, 13.0, 14.0, 15.0];
+        let latest = valuewhen(&expr, &arr, 1);
+        assert!(latest[0].is_nan());
+        for (i, want) in [(1, 11.0), (2, 11.0), (3, 13.0), (4, 13.0), (5, 15.0)] {
+            approx(latest[i], want);
+        }
+        let second = valuewhen(&expr, &arr, 2);
+        assert!(second[1].is_nan() && second[2].is_nan());
+        for (i, want) in [(3, 11.0), (4, 11.0), (5, 13.0)] {
+            approx(second[i], want);
+        }
+    }
+
+    /// Two bars in three are true, so 3000 bars hold 2000 true bars: twice the cap.
+    fn dense_condition() -> (Vec<f64>, Vec<f64>) {
+        let n = 3000usize;
+        (
+            (0..n).map(|i| if i % 3 != 0 { 1.0 } else { 0.0 }).collect(),
+            (0..n).map(|i| i as f64 * 0.5).collect(),
+        )
+    }
+
+    #[test]
+    fn valuewhen_matches_a_direct_scan_beyond_the_lookback_cap() {
+        let (expr, arr) = dense_condition();
+        for &k in &[1usize, 2, 7, VALUEWHEN_LOOKBACK_CAP - 1, VALUEWHEN_LOOKBACK_CAP] {
+            let got = valuewhen(&expr, &arr, k);
+            let mut hits: Vec<usize> = Vec::new();
+            for i in 0..expr.len() {
+                if expr[i] != 0.0 {
+                    hits.push(i);
+                }
+                if hits.len() >= k {
+                    approx(got[i], arr[hits[hits.len() - k]]);
+                } else {
+                    assert!(got[i].is_nan(), "n={k} bar {i}: expected NaN, got {}", got[i]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn valuewhen_never_resolves_an_n_of_zero_or_above_the_cap() {
+        let (expr, arr) = dense_condition();
+        let all_nan = |v: Vec<f64>| v.iter().all(|x| x.is_nan());
+        assert!(all_nan(valuewhen(&expr, &arr, 0)));
+        assert!(all_nan(valuewhen(&expr, &arr, VALUEWHEN_LOOKBACK_CAP + 1)));
+        // The cap is also the series length when that is shorter.
+        assert!(all_nan(valuewhen(&expr[..5], &arr[..5], 6)));
+    }
+
+    #[test]
+    fn valuewhen_leaves_nan_where_the_value_series_is_too_short() {
+        let expr = [1.0, 0.0, 1.0, 1.0];
+        let arr = [10.0, 11.0, 12.0]; // one value short of the condition
+        let got = valuewhen(&expr, &arr, 1);
+        approx(got[0], 10.0);
+        approx(got[1], 10.0);
+        approx(got[2], 12.0);
+        assert!(got[3].is_nan());
     }
 }
