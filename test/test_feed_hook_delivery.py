@@ -23,6 +23,9 @@ from feed_fakes import (
 )
 from feed_fixtures import *  # noqa: F403
 
+# Seconds a probe waits for an SDK lock that another thread holds for a moment.
+LOCK_PATIENCE = 1.0
+
 # ---------------------------------------------------------------------------
 # One ordered delivery path
 # ---------------------------------------------------------------------------
@@ -203,10 +206,14 @@ def test_no_sdk_lock_is_held_while_a_hook_or_callback_runs(server, client):
     def probe(*args):
         # Another thread can take a lock only if the thread running this hook
         # does not hold it (one of the locks is re-entrant, so trying from
-        # this thread would prove nothing).
+        # this thread would prove nothing). It waits up to LOCK_PATIENCE for
+        # each: another SDK thread (the reconnect thread checking its state)
+        # may hold a lock for a moment, which is allowed; a lock held across
+        # this hook stays held for as long as the hook waits for the helper
+        # (WAIT, longer than LOCK_PATIENCE), so it is still reported.
         def try_locks():
             for name, lock in sdk_locks(client).items():
-                if lock.acquire(blocking=False):
+                if lock.acquire(timeout=LOCK_PATIENCE):
                     lock.release()
                 else:
                     held.append(name)
