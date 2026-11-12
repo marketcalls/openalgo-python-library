@@ -165,9 +165,22 @@ def test_a_network_example_runs_only_when_the_network_flag_is_one(tmp_path, flag
 
 def test_a_network_example_runs_with_the_python_named_in_the_environment(tmp_path):
     (example,) = examples_of(NETWORK_PAGE, tmp_path)
-    other_python = str(Path("elsewhere", "python.exe"))
+    other_python = str(Path("elsewhere", "python.exe").resolve())
     assert interpreter(example, environ={PYTHON_ENV: other_python}) == other_python
     assert interpreter(example, environ={}) == sys.executable
+
+
+def test_a_relative_python_path_is_made_absolute_because_examples_run_elsewhere(tmp_path):
+    # The script runs with its own temporary folder as the working directory, where a
+    # relative path would point nowhere.
+    (example,) = examples_of(NETWORK_PAGE, tmp_path)
+    relative = str(Path("venv", "python.exe"))
+    assert interpreter(example, environ={PYTHON_ENV: relative}) == str(Path(relative).resolve())
+
+
+def test_a_python_given_by_command_name_is_kept_for_the_path_search(tmp_path):
+    (example,) = examples_of(NETWORK_PAGE, tmp_path)
+    assert interpreter(example, environ={PYTHON_ENV: "python3"}) == "python3"
 
 
 def test_an_example_without_the_network_marker_keeps_the_test_python(tmp_path):

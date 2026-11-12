@@ -27,6 +27,9 @@ on:
       - 'test/test_indicators_*.py'
       - 'test/indicator_references.py'
       - 'test/docs/**'
+      - 'test/conftest.py'
+      - 'test/live/**'
+      - 'benchmark/backtest_speed.py'
       # Dependency, build and lint settings change what the gate checks.
       - 'rust/Cargo.toml'
       - 'rust/Cargo.lock'
@@ -86,7 +89,7 @@ jobs:
         run: |
           python -m venv .venv
           . .venv/bin/activate
-          pip install 'maturin>=1.7,<2.0' pytest hypothesis ruff
+          pip install 'maturin>=1.7,<2.0' pytest hypothesis ruff openpyxl
           maturin develop --release
       - name: ruff check
         run: |

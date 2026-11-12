@@ -16,13 +16,17 @@ Backtesting fixes and additions, found while writing the beginner tutorial on re
 OpenAlgo data:
 
 - **Charges from 1 July 2020.** Backtests are charged at the rates of each trade date
-  (STT, exchange charges, SEBI fee, stamp duty, GST), each rate sourced; before, a run
-  that started before October 2024 stopped with a charges error.
-- **Portfolio rebalancing.** `self.rebalance({"RELIANCE": 25, "HDFCBANK": 25, ...})`
-  sells before it buys; delivery cash is counted at cost; same-day sale proceeds follow
-  the brokers' dated rules; `result.final_positions` shows each holding's weight.
+  (STT, exchange charges, SEBI fee, stamp duty, GST), each rate with its source; rates
+  not yet confirmed by a primary source are marked unverified and a run that uses them
+  warns (CHANGELOG lists them). Before, a run that started before October 2024 stopped
+  with a charges error.
+- **Portfolio rebalancing (preview).** `self.rebalance({"RELIANCE": 25, "HDFCBANK": 25, ...})`
+  sells before it buys, and sells to flat any symbol of the strategy that the weights
+  leave out; delivery cash is counted at cost; same-day sale proceeds follow the
+  brokers' dated rules; `result.final_positions` shows each holding's weight.
 - **Easier for beginners.** Every rejected order is reported with what to do,
-  `result.to_csv()` and `result.to_excel()` export the tables, result times are in IST,
+  `result.to_csv("results")` and `result.to_excel("backtest.xlsx")` (with openpyxl
+  installed) export the tables, result times are in IST,
   expired futures contracts are named as such, and error messages say what to pass.
 - **MCX charges.** CTT follows the exempt list of the CTT Rules (crude palm oil, mentha
   oil and rubber pay it), and every MCX futures contract pays the exchange charge MCX

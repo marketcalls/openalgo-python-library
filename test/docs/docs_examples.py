@@ -196,7 +196,12 @@ def interpreter(example: Example, environ: Mapping[str, str] = os.environ) -> st
     """The Python that runs `example`: OPENALGO_DOCS_PYTHON for a block that needs the
     network when it is set, otherwise the Python running the tests."""
     if REQUIRES_NETWORK in example.needs and environ.get(PYTHON_ENV):
-        return environ[PYTHON_ENV]
+        named = environ[PYTHON_ENV]
+        # A path is made absolute, because the script runs in its own temporary folder;
+        # a bare command name is left for the system's search path.
+        if any(separator in named for separator in ("/", "\\")):
+            return str(Path(named).resolve())
+        return named
     return sys.executable
 
 
