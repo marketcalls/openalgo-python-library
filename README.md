@@ -24,8 +24,9 @@ OpenAlgo data:
 - **Easier for beginners.** Every rejected order is reported with what to do,
   `result.to_csv()` and `result.to_excel()` export the tables, result times are in IST,
   expired futures contracts are named as such, and error messages say what to pass.
-- **Futures margin** is 20 percent of contract value by default, with `margin=` per
-  underlying. CTT on MCX follows the exempt list of the CTT Rules.
+- **MCX charges.** CTT follows the exempt list of the CTT Rules (crude palm oil, mentha
+  oil and rubber pay it), and every MCX futures contract pays the exchange charge MCX
+  set from 1 October 2024.
 
 The full list is in [CHANGELOG.md](CHANGELOG.md). Backtesting guide:
 https://docs.openalgo.in/trading-platform/python/backtesting
