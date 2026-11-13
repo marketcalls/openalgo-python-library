@@ -16,8 +16,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   percent), `bars_held`, `days_held`, `exit_reason` and `r_multiple`. The tearsheet's
   trade table shows the same rows. `Result.performance.trades` gains a `bars_held`
   column.
+- **`Result.summary()`**: a short plain-text summary to print after a run:
+
+      Net profit   : Rs 2,00,000.00
+      Return       : 4.00%
+      Max drawdown : -0.97%
+      Trades       : 1 (100% won)
+      Benchmark    : 3.52% return (NIFTY)
+
+  Net profit in rupees with Indian digit grouping, the return and the maximum drawdown
+  in percent, the closed trades with their win rate and any positions still open, and
+  the benchmark's return for a run with `benchmark=` ("given closes" for closes given
+  as a Series). A run with no closed trade (a buy-and-hold or rebalanced portfolio, or
+  one whose entries were all rejected) says "no closed trades" where the usual
+  `f"{m['win_rate']:.0%}"` printed "nan%"; the `win_rate` metric itself is unchanged
+  (undefined, NaN, with no trades). `print(result)` is still the full Assumptions block.
+- **Rejected orders are told on screen.** A `bt.backtest` run in which any order was
+  rejected ends with one `RejectedOrdersWarning` (a `UserWarning` in
+  `openalgo.backtest.errors`, so it can be filtered by its class), pointed at the line
+  that ran the backtest: how many orders were rejected, the most common reason in plain
+  words and its reject code, for example "3 of 3 orders were rejected because a
+  delivery (CNC) short is not allowed in Indian cash markets (reject_code
+  'product_rule'). See result.warnings." Before, a reader who printed only a few
+  metrics saw nothing: a daily CNC strategy whose shorts were all rejected just showed
+  0 trades. Once per run, not per order; `bt.optimize` does not issue it for its
+  combinations, in its own process or in its workers. `result.warnings` keeps the full
+  line per reject code, with what to do.
 
 ### Changed
+
+- **Daily and longer bars indexed by naive midnight dates need no `tz=`.** The daily
+  bars `client.history(...)` returns are indexed that way, and passing them as
+  `bt.backtest(..., data=df)` stopped with "the timestamps of the supplied data carry
+  no time zone". A naive index (or timestamp column, or CSV dates) whose times are all
+  midnight is a list of session dates, which no time zone can shift, so for D, W, M, Q
+  and Y bars it is read as IST session dates, as `tz="Asia/Kolkata"` reads it, and the
+  Assumptions block says so in one line ("timestamps: SBIN: naive midnight timestamps
+  read as IST session dates (daily bars need no tz=)"). Intraday naive timestamps, and
+  daily ones stamped at a time of day, still need `tz=`: a wrong guess there moves
+  every bar by 5 hours 30 minutes.
 
 - **The HTML tearsheet is a dashboard in the layout of OpenStatz's dashboard**
   (`result.tearsheet(path)`, `report.tearsheet`): a sticky header with section links,

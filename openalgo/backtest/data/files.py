@@ -38,7 +38,8 @@ class Files(Frame):
     read_options: keyword arguments for the reader (for CSV: `sep`, `header`,
         `names`, `usecols` and so on). The reader never parses dates: the timestamp
         column goes through the same explicit conversion as for `Frame`.
-    options: the arguments of `Frame`: `tz` (required for naive timestamps),
+    options: the arguments of `Frame`: `tz` (required for naive timestamps, except
+        daily or longer dates at midnight),
         `columns`, `label`, `unit`, `timestamp_format`, `symbol`, `exchange`,
         `interval`, `calendar`, `now`, `regular_session_only`.
 
