@@ -1,4 +1,5 @@
-"""Writing a `Result`'s tables to files: `Result.to_csv` and `Result.to_excel`.
+"""A `Result`'s tables by name and written to files: `Result.to_dataframes`, `to_csv` and
+`to_excel` (the mixin `ExportMethods`).
 
 A spreadsheet cell holds no time zone, and pandas refuses to write a time with one to
 Excel, so every time with a zone (the `time` columns and the equity table's index) is
@@ -20,6 +21,18 @@ from ._series import IST
 from .errors import MissingDependencyError
 
 EXCEL_ENGINE = "openpyxl"
+# The tables `to_dataframes` returns, in order: the `Result` properties of these names.
+EXPORTED_TABLES = (
+    "fills",
+    "orders",
+    "trades",
+    "positions",
+    "equity",
+    "events",
+    "stale_marks",
+    "costs",
+    "contract_notes",
+)
 
 
 def plain_ist(frame: pd.DataFrame) -> pd.DataFrame:
@@ -32,7 +45,7 @@ def plain_ist(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
-def to_csv(tables: dict[str, pd.DataFrame], folder: str | os.PathLike) -> list[Path]:
+def write_csv(tables: dict[str, pd.DataFrame], folder: str | os.PathLike) -> list[Path]:
     """Write each table to `<folder>/<name>.csv` (the folder is created when missing) and
     return the paths, in the order of `tables`."""
     target = Path(folder)
@@ -45,9 +58,9 @@ def to_csv(tables: dict[str, pd.DataFrame], folder: str | os.PathLike) -> list[P
     return written
 
 
-def to_excel(tables: dict[str, pd.DataFrame], path: str | os.PathLike) -> Path:
+def write_excel(tables: dict[str, pd.DataFrame], path: str | os.PathLike) -> Path:
     """Write each table to a sheet of its name in one workbook at `path` (its folder is
-    created when missing, as `to_csv` creates its own) and return the path. Raises
+    created when missing, as `write_csv` creates its own) and return the path. Raises
     MissingDependencyError (an ImportError) when openpyxl is missing."""
     try:
         importlib.import_module(EXCEL_ENGINE)
@@ -64,4 +77,29 @@ def to_excel(tables: dict[str, pd.DataFrame], path: str | os.PathLike) -> Path:
     return target
 
 
-__all__ = ["plain_ist", "to_csv", "to_excel"]
+class ExportMethods:
+    """`to_dataframes`, `to_csv` and `to_excel` of a `Result`, which has a property for
+    each name of `EXPORTED_TABLES`."""
+
+    def to_dataframes(self) -> dict[str, pd.DataFrame]:
+        """Every built table, by name."""
+        return {name: getattr(self, name) for name in EXPORTED_TABLES}
+
+    def to_csv(self, folder: str | os.PathLike) -> list[Path]:
+        """Write every table of `to_dataframes()` to `folder` (created when missing), one
+        CSV file per table named after it (`fills.csv`, ...), and return the paths. Times
+        are written as plain IST date-times, without the zone; the `*_ts` columns stay
+        UTC nanoseconds."""
+        return write_csv(self.to_dataframes(), folder)
+
+    def to_excel(self, path: str | os.PathLike) -> Path:
+        """Write every table of `to_dataframes()` to one Excel workbook at `path` (its
+        folder is created when missing), one sheet per table named after it, and return
+        the path. Times are written as plain IST date-times, without the zone (a cell
+        holds none); the `*_ts` columns stay UTC nanoseconds. Needs openpyxl, which
+        openalgo does not install: raises MissingDependencyError, an ImportError, saying
+        `pip install openpyxl` when it is missing."""
+        return write_excel(self.to_dataframes(), path)
+
+
+__all__ = ["EXPORTED_TABLES", "ExportMethods", "plain_ist", "write_csv", "write_excel"]

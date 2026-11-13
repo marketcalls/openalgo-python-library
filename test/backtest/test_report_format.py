@@ -25,6 +25,23 @@ def test_indian_digit_grouping(value, text):
     assert fmt.indian_digits(value) == text
 
 
+@pytest.mark.parametrize(
+    ("value", "text"),
+    [
+        (-0.004, "0.00"),  # a loss below half a paisa shows as zero, unsigned
+        (-0.006, "-0.01"),  # 0.6 paisa rounds to one paisa and keeps its sign
+        (-0.4, "0"),
+    ],
+)
+def test_a_negative_amount_that_rounds_to_zero_has_no_sign(value, text):
+    decimals = 0 if text == "0" else 2
+    assert fmt.indian_digits(value, decimals) == text
+
+
+def test_a_rupee_loss_that_rounds_to_zero_has_no_sign():
+    assert fmt.rupees(-0.004) == f"{R}0.00"
+
+
 def test_rupees_and_percentages():
     assert fmt.rupees(-500.0) == f"-{R}500.00"
     assert fmt.rupees(1_23_456.0, 0) == f"{R}1,23,456"

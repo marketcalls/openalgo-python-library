@@ -36,7 +36,7 @@ from typing import Any
 
 from ._messages import SEVERAL_STRATEGIES, not_supported
 from ._pipeline import execute, prepare
-from ._rejection_notice import announce_rejections
+from ._rejection_notice import announce_unplaced
 from ._rerun import RunRecord
 from .errors import ConfigError
 from .reference import Instrument
@@ -150,9 +150,10 @@ def backtest(
     instrument has, and `now`; equity, trades and metrics stop there, a position still
     open is reported open, and a warning names the end used when it is before `end`.
 
-    A run in which any order was rejected ends with one RejectedOrdersWarning: how many
-    and the most common reason, the details being in `result.warnings`
-    (`_rejection_notice`).
+    A run in which orders were rejected or skipped for a reason it did not ask for ends
+    with one OrdersNotPlacedWarning: how many and the most common reason, the details
+    being in `result.warnings` (`_rejection_notice`). Orders refused by the entry window
+    or another rule of the run working as it intends are told in `result.warnings` only.
 
     Raises ConfigError for unusable arguments, the data layer's errors for data, and
     NotImplementedError for any setting or feature the kernel does not run yet.
@@ -169,7 +170,7 @@ def _run(strategy: type[Strategy], client: Any, args: dict[str, Any]) -> Result:
     prepared = prepare(strategy, client, args)
     record = RunRecord(strategy, client, {k: v for k, v in args.items() if k != "client"})
     result = execute(strategy, prepared, args, record=record)
-    announce_rejections(result)
+    announce_unplaced(result)
     return result
 
 

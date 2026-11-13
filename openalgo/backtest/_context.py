@@ -83,7 +83,8 @@ class RunContext:
         self.product = product
         self.default_size = default_size
         self.decided_at: int | None = None
-        # (decision instant, symbol, reason) of every order a sizer skipped.
+        # (decision instant, symbol, reason) of every order skipped before it was placed:
+        # by a sizer or a sizing function, or a target that rounds to no units.
         self.skipped: list[tuple[int | None, str, str]] = []
         # The result's orders table once the run is over (`close`), and the row of each
         # order id in it, made on the first lookup.
@@ -203,20 +204,22 @@ class RunContext:
     def submit_target(self, request: dict) -> Order | None:
         """Trade to a target position (`_orders.target` builds the request); returns the
         handle of the order for the difference, or None when the position already is the
-        target."""
-        submitted = call(self.engine.target, request)
-        if submitted is None:
-            return None
-        _, number, _ = submitted
-        return Order(number, self.order, self.cancel)
+        target or the target rounds to no units (recorded as skipped)."""
+        return self._targeted(request, call(self.engine.target, request))
 
     def submit_rebalance(self, request: dict) -> Order | None:
         """`submit_target` for one trade of a rebalance (`_rebalance`): the order is
         tagged "rebalance" and, when it buys, fills after the slice's sales."""
-        submitted = call(self.engine.rebalance_target, request)
+        return self._targeted(request, call(self.engine.rebalance_target, request))
+
+    def _targeted(self, request: dict, submitted: tuple | None) -> Order | None:
+        """The handle of a target's submission, or None (a skip is recorded)."""
         if submitted is None:
             return None
-        _, number, _ = submitted
+        outcome, number, code = submitted
+        if outcome == "skipped":
+            self.skipped.append((self.decided_at, self.symbols[request["instrument"]], code))
+            return None
         return Order(number, self.order, self.cancel)
 
     def sizing_store(self, instrument: int) -> SeriesStore:

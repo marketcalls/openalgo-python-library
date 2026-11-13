@@ -4,7 +4,8 @@
 a target position; `rebalance` trades several symbols to target weights at once
 (`_rebalance`). Every other method takes `symbol=None` (required with several instruments)
 and returns an `Order` handle, or None when there is nothing to do (an exit while flat,
-a target already held) or a sizer skipped the order. A MARKET
+a target already held) or the order was skipped for a quantity of no share or lot (a
+sizer's, a sizing function's or a value or percent target's; `result.skipped`). A MARKET
 order fills at the next base-bar open at or after the decision; a LIMIT or stop order
 (`price=`, `trigger_price=`) rests from that bar until it fills or its session closes;
 a GTT order (`validity="gtt"`) rests until it fires or is cancelled. The kernel refuses
@@ -58,8 +59,16 @@ class OrderMethods:
         A LIMIT or stop order rests from the next base bar until it fills or its session
         closes. Quantity: `qty` units or `lots`, else `size=` (a `bt.size` sizer or a
         sizing function `size(ctx, order)`, see `bt.size`), else the strategy's `size`,
-        else the engine default. `leverage=` asks for intraday leverage, else the
-        strategy's `leverage`, else 1x. Risk arguments attach to the position it opens
+        else the engine default: one lot of a derivative, or for a share the strategy's
+        equity (split across its symbols, at most its free cash). With whole shares (the
+        default `quantity_mode="venue"`) the engine default is sized at the decision
+        close, keeps 2 percent of that budget in cash for the move to the next open and
+        takes the order's estimated charges off the rest: with no charges, 10,00,000 at
+        1,000.00 buys 980 shares, not 1,000. With `quantity_mode="fractional"` it is
+        sized at the fill price and spends the budget less the charges. A size that
+        rounds down to no share skips the order (`result.skipped`). `leverage=` asks for
+        intraday leverage, else the strategy's `leverage`, else 1x. Risk arguments
+        attach to the position it opens
         (an add may repeat them but not change them); on CNC and NRML they are
         held as GTT orders. `validity="gtt"` rests it as a GTT until it fires or is
         cancelled (CNC and NRML only; it needs `price`, its trigger)."""
@@ -86,7 +95,9 @@ class OrderMethods:
         after_first_target: str | None = None,
         validity: str = "day",
     ) -> Order | None:
-        """Sell: open a short, add to it, or reduce a long. Arguments as `buy`. A sell
+        """Sell: open a short, add to it, or reduce a long. Arguments as `buy`, and with
+        no quantity it is sized as `buy` sizes it (the engine default, with its 2 percent
+        cash buffer in whole shares). A sell
         larger than the long is rejected (reject code `reverse_not_allowed`) unless
         `reverse=True`, and then only the quantity beyond the long opens a short: long
         one lot, `sell(lots=1, reverse=True)` only closes it, and flipping to one lot
@@ -195,7 +206,9 @@ class OrderMethods:
 
         Sends one MARKET DAY order for the difference between the target and the
         position the strategy will hold once its queued market orders on the symbol
-        fill, and returns its handle; None when there is no difference. Going from one
+        fill, and returns its handle; None when there is no difference, or when a value
+        or percent target rounds to no share while nothing is held (recorded in
+        `result.skipped` with reason "rounded_to_zero"). Going from one
         side to the other closes and reverses in that order (two fills); a smaller
         position on the same side only reduces. Resting LIMIT, stop and GTT orders are
         left working and not counted. The order carries no leg rules: an add keeps the
@@ -229,7 +242,9 @@ class OrderMethods:
         not cover at its fill is rejected for margin and the next rebalance corrects
         it (see `_rebalance` for the rules and what is not built).
 
-        Returns the orders sent, by symbol (none for a symbol already at its target).
+        Returns the orders sent, by symbol (none for a symbol already at its target, or
+        whose weight rounds to no share while none is held, which `result.skipped`
+        records).
         Raises ConfigError for weights that are not a dict of numbers from 0 to 100
         adding up to 100 at most, a symbol the strategy does not trade, or a
         `cash_buffer` outside 0 to below 100."""

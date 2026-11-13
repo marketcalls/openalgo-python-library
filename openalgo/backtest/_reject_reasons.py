@@ -5,7 +5,13 @@ The codes are the kernel's (`RejectCode::code` in `rust/oa_bt/src/exec/checks.rs
 `rate_limit`, which no kernel check makes: a backtest enforces no order rate limit. Each
 entry is (what happened, what to do). The product rule covers three refusals that need
 different advice, so it has one entry per case, told apart by the order and its
-instrument (`_rejections.product_rule_case`).
+instrument (`_rejections.product_rule_case`). The entry window is the window working, not
+a mistake: its line names the window's times (`_rejections.entry_window_warning`).
+
+`RUN_RULE_CODES` are the refusals of a rule of the run working as it intends: the MIS
+entry window (given or the calendar's default) and the limits a strategy or run sets
+(max_daily_loss, drawdown_halt, cooldown, max_positions, and the REDUCING or HALTED
+state they lead to). The end-of-run notice leaves them out (`_rejection_notice`).
 """
 
 from __future__ import annotations
@@ -13,6 +19,8 @@ from __future__ import annotations
 from types import MappingProxyType
 
 PRODUCT_RULE = "product_rule"
+ENTRY_WINDOW = "entry_window"
+RUN_RULE_CODES = frozenset({ENTRY_WINDOW, "daily_loss_gate", "cooldown", "max_positions", "halted"})
 
 REASONS = MappingProxyType(
     {
@@ -35,11 +43,6 @@ REASONS = MappingProxyType(
             "the margin the order needed was more than the free cash",
             "raise capital, lower the size, or set size_caps, for example size_caps = "
             "bt.size.caps(leverage=1) for a position of at most 1x the equity",
-        ),
-        "entry_window": (
-            "orders after the MIS entry cut-off (entry_until) are rejected, and so are "
-            "entries before entry_from",
-            "check self.now or set entry_until",
         ),
         "market_closed": (
             "an intraday order decided at the session's last close could only fill in the "
@@ -98,4 +101,4 @@ PRODUCT_RULE_CASES = MappingProxyType(
     }
 )
 
-__all__ = ["PRODUCT_RULE", "PRODUCT_RULE_CASES", "REASONS"]
+__all__ = ["ENTRY_WINDOW", "PRODUCT_RULE", "PRODUCT_RULE_CASES", "REASONS", "RUN_RULE_CODES"]

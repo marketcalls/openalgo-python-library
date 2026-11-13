@@ -17,12 +17,18 @@ The runs, with no charges and no slippage:
   on the five sessions: 1.01 x 1.02 x 0.99 x 1.005 x 1.01 - 1 = 3.52%.
 - `SellsToOpen`: a daily stock strategy whose three delivery shorts are all rejected, so
   nothing ever trades.
+
+The wording rules are checked on `summary_text` with figures given by hand: a win rate
+never reads 0% or 100% unless it is exactly so, and an amount that rounds to zero has no
+minus sign.
 """
 
+import pytest
 from accounting_runs import CAPITAL, daily_bars, daily_round_trip
 from benchmark_runs import index_bars, nifty_closes, own_run, share_bars
 
 import openalgo.backtest as bt
+from openalgo.backtest._summary import summary_text
 
 
 class SellsToOpen(bt.Strategy):
@@ -74,3 +80,43 @@ def test_a_benchmark_given_as_closes_is_named_as_given():
 
 def test_a_run_without_a_benchmark_has_no_benchmark_line():
     assert "Benchmark" not in own_run().summary()
+
+
+def figures(**changed) -> dict:
+    """The metrics `summary_text` reads, for a run of 250 closed trades and none open
+    that made nothing; `changed` replaces some."""
+    base = {
+        "net_profit": 0.0,
+        "total_return": 0.0,
+        "max_drawdown": 0.0,
+        "trades": 250,
+        "open_trades": 0,
+        "win_rate": 0.5,
+        "benchmark_total_return": float("nan"),
+    }
+    return base | changed
+
+
+def trades_line(**changed) -> str:
+    return summary_text(figures(**changed), None).splitlines()[3]
+
+
+@pytest.mark.parametrize(
+    ("trades", "winners", "shown"),
+    [
+        (250, 1, "0.4%"),  # whole percent would read 0%
+        (250, 249, "99.6%"),  # whole percent would read 100%
+        (3_000, 1, "0.03%"),  # one decimal would still read 0.0%
+        (250, 0, "0%"),  # no winner at all
+        (250, 250, "100%"),  # every trade won
+        (250, 90, "36%"),  # whole percent where it does not mislead
+    ],
+)
+def test_the_win_rate_shows_zero_or_a_hundred_percent_only_when_exact(trades, winners, shown):
+    line = trades_line(trades=trades, win_rate=winners / trades)
+    assert line == f"Trades       : {trades} ({shown} won)"
+
+
+def test_a_loss_below_half_a_paisa_reads_as_zero_rupees():
+    lines = summary_text(figures(net_profit=-0.004), None).splitlines()
+    assert lines[0] == "Net profit   : Rs 0.00"

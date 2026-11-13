@@ -5,118 +5,52 @@ tz-aware IST datetime (the `time` column of each table, and `entry_time`, `exit_
 `decided_at`, `good_until`) and every date an IST date (`date` columns); the kernel's
 UTC nanoseconds are kept only in the `*_ts` columns beside them. Instruments are named
 by symbol. Prices and money are rupees, quantities units. Every
-table has the same columns whether or not it has rows.
+table has the same columns whether or not it has rows (`_result_tables`).
 
-Built: `fills`, `orders`, `trades`, `trade_list()` (`_trade_list`), `equity`, `returns`,
-`positions` (the position
+Built: `fills`, `orders`, `trades`, `equity`, `returns`, `positions` (the position
 history), `events`, `risk_events`, `stale_marks`, `final_positions`, `gross_pnl`,
-`costs`, `contract_notes`, `settlements` and `rolls` (futures), `performance`,
-`metrics`, `metrics_table()`, `monte_carlo()`, `tearsheet()` (full, basic, metrics or
-charts), `r_summary` (the R-multiples, `_result_r`), `summary()` (`_summary`), `assumptions`,
-`warnings`, `skipped`, `manifest` (see `_manifest`), `rerun()` (see `_rerun`),
-`to_dataframes()`, `to_csv()` and `to_excel()` (`_result_export`). Not supported in this
-version: the several-strategy views `strategy()`, `combined` and `correlation`, which
-raise NotImplementedError.
+`costs`, `contract_notes`, `settlements` and `rolls` (futures), `assumptions`,
+`warnings`, `skipped`, `r_summary` (the R-multiples, `_result_r`), `manifest` (see
+`_manifest`), `rerun()` (see `_rerun`); `trade_list()` (`_trade_list`), `performance`,
+`metrics`, `summary()` (`_summary`), `metrics_table()`, `monte_carlo()` and
+`tearsheet()` (full, basic, metrics or charts) from `_result_analysis`; and
+`to_dataframes()`, `to_csv()` and `to_excel()` from `_result_export`. Not supported in
+this version: the several-strategy views `strategy()`, `combined` and `correlation`,
+which raise NotImplementedError.
 """
 
 from __future__ import annotations
 
 import math
-import os
-from functools import cached_property
-from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
-from . import _rejections, _result_costs, _result_export, _result_futures, _result_r, _result_report
+from . import _rejections, _result_costs, _result_futures, _result_r, _result_report, _skips
 from ._messages import SEVERAL_STRATEGIES, not_supported
 from ._native import native
-from ._series import IST
-from ._summary import summary_text
-from ._trade_list import trade_list as closed_trade_list
+from ._result_analysis import AnalysisMethods
+from ._result_export import ExportMethods
+from ._result_tables import (
+    EVENT_COLUMNS,
+    FINAL_POSITION_COLUMNS,
+    FUTURE_KIND,
+    GTT_GOOD_UNTIL,
+    ORDER_TEXT_COLUMNS,
+    fixed_columns,
+    ist_times,
+    text_column,
+)
 from .errors import BacktestError
-from .metrics import MonteCarlo, analyse, monte_carlo
-from .report import _montecarlo, metrics_table
-from .report._performance import Performance
-
-# The keys an event can carry, in order: those of every kind of event the binding writes
-# (`rust/oa_py/src/backtest/engine/tables.rs`, `event`), so the events table has the
-# same columns whatever events a run had.
-EVENT_COLUMNS = (
-    "slice",
-    "slice_ts",
-    "step",
-    "type",
-    "name",
-    "order_id",
-    "quantity_units",
-    "price_rupees",
-    "reject_code",
-    "instrument",
-    "product",
-    "position_quantity_units",
-    "scope",
-    "level_rupees",
-    "target_index",
-    "observed_rupees",
-    "previous_state",
-    "trading_state",
-    "cause",
-    "gtt_id",
-    "stop_trigger_rupees",
-    "target_trigger_rupees",
-    "order_trigger_rupees",
-    "fired_leg",
-    "child_limit_rupees",
-)
-# The keys of a final position (`rust/oa_py/src/backtest/engine/results.rs`, `finals`).
-FINAL_POSITION_COLUMNS = (
-    "instrument",
-    "product",
-    "quantity_units",
-    "average_price_rupees",
-    "mark_rupees",
-    "unrealized_rupees",
-    "stale",
-)
-# The `Instrument.kind` of a futures contract, whose final position has no market value.
-FUTURE_KIND = "future"
-# The columns of the orders table that hold a string or nothing. A missing one is NaN in
-# an object column, as the events table marks a missing key, whatever the other rows
-# hold: left to pandas, a column of None alone stays None while one with a string turns
-# None into NaN, so the marker would depend on the run.
-ORDER_TEXT_COLUMNS = ("reject_code", "tag", "sizer")
-# The `good_until` of a GTT order in the kernel (`exec::GTT_GOOD_UNTIL`, the largest
-# int64): no session close ends it.
-GTT_GOOD_UNTIL = 2**63 - 1
 
 
-def _text(values: list[str | None]) -> pd.Series:
-    """An object column of strings with NaN, pandas' missing value, for each None."""
-    return pd.Series([math.nan if value is None else value for value in values], dtype=object)
+class Result(AnalysisMethods, ExportMethods):
+    """The result of one backtest. See the module docstring.
 
-
-def _times(values: Any, open_ended: int | None = None) -> pd.DatetimeIndex:
-    """IST times of int64 UTC nanoseconds, at nanosecond resolution even when there are
-    none (pandas reads an empty column at second resolution); `open_ended`, the
-    kernel's stand-in for "no end", becomes NaT."""
-    nanos = pd.Series(values, dtype="int64")
-    if open_ended is not None:
-        nanos = nanos.astype("Int64").mask(nanos == open_ended)
-    utc = pd.to_datetime(nanos, unit="ns", utc=True)
-    return pd.DatetimeIndex(utc).as_unit("ns").tz_convert(IST)
-
-
-def _fixed(rows: Any, columns: tuple[str, ...]) -> pd.DataFrame:
-    """A table with `columns` first, in order, then any key the rows have beyond them."""
-    frame = pd.DataFrame(rows)
-    extra = [name for name in frame.columns if name not in columns]
-    return frame.reindex(columns=[*columns, *extra])
-
-
-class Result:
-    """The result of one backtest. See the module docstring."""
+    `strategy_closes` holds the UTC nanosecond closes of each instrument's strategy
+    bars, by the kernel's instrument index, which count the bars a trade was held
+    (`_result_report.strategy_bars_held`)."""
 
     def __init__(
         self,
@@ -129,6 +63,8 @@ class Result:
         record: Any = None,
         calendar: Any = None,
         benchmark: pd.Series | None = None,
+        *,
+        strategy_closes: list[np.ndarray],
     ) -> None:
         self._output = output
         self._calendar = calendar
@@ -136,8 +72,18 @@ class Result:
         self._benchmark = benchmark
         self._symbols = symbols
         self._assumptions = assumptions
+        self._strategy_closes = strategy_closes
         schedules = manifest.get("cost_schedules", [])
-        self._warnings = [*warnings, *_result_costs.run_warnings(output, schedules)]
+        # Skips first: a run whose entries were all skipped has nothing else to show.
+        window = _rejections.entry_window_warning(
+            output["orders"], assumptions.get("entry_from"), assumptions.get("entry_until")
+        )
+        self._warnings = [
+            *_skips.skip_warnings(skipped),
+            *warnings,
+            *([] if window is None else [window]),
+            *_result_costs.run_warnings(output, schedules),
+        ]
         self._skipped = skipped
         self._manifest = manifest
         self._record = record
@@ -149,7 +95,7 @@ class Result:
         if "instrument" in frame.columns:
             frame.insert(0, "symbol", [self._symbols[i] for i in frame["instrument"]])
         if time_column is not None:
-            frame.insert(0, "time", _times(frame[time_column]))
+            frame.insert(0, "time", ist_times(frame[time_column]))
         return frame
 
     @property
@@ -168,12 +114,13 @@ class Result:
         engine default. `reject_code`, `tag` and `sizer` are NaN for an order without
         one (a quantity given in units, in lots or as a fraction of the position, as
         `qty=`, `lots=` and `exit()` give it, has no sizer); `tag` is "rebalance" on
-        every order of `rebalance()`."""
+        every order of `rebalance()`. An order skipped before it was placed is not here
+        but in `skipped`."""
         frame = self._table("orders", "decided_at")
         frame["decided_at"] = frame["time"]
-        frame["good_until"] = _times(frame["good_until"], open_ended=GTT_GOOD_UNTIL)
+        frame["good_until"] = ist_times(frame["good_until"], open_ended=GTT_GOOD_UNTIL)
         for name in ORDER_TEXT_COLUMNS:
-            frame[name] = _text(self._output["orders"][name])
+            frame[name] = text_column(self._output["orders"][name])
         return frame
 
     @property
@@ -183,21 +130,12 @@ class Result:
         entry set, and `r_multiple` the net P&L over it (NaN for a trade opened without
         a stop; `_result_r`)."""
         frame = self._table("trades", None)
-        frame.insert(1, "entry_time", _times(frame["entry_ts"]))
-        frame.insert(2, "exit_time", _times(frame["exit_ts"]))
+        frame.insert(1, "entry_time", ist_times(frame["entry_ts"]))
+        frame.insert(2, "exit_time", ist_times(frame["exit_ts"]))
         frame["initial_risk_rupees"] = frame["initial_risk_rupees"].astype(float)
         risk = frame["initial_risk_rupees"]
         frame["r_multiple"] = _result_r.r_values(frame["net_pnl_rupees"], risk)
         return frame
-
-    def trade_list(self) -> pd.DataFrame:
-        """The closed trades as a trader reads them, one row each, indexed by trade
-        number: symbol, direction, product, entry and exit time (IST), quantity in
-        units, entry and exit price, gross P&L, charges and net P&L in rupees,
-        return_pct, bars_held, days_held, exit_reason and r_multiple
-        (`_trade_list.trade_list` defines each column). The tearsheet's trade table
-        shows the same rows."""
-        return closed_trade_list(_result_report.closed_trades(self._output, self._symbols))
 
     @property
     def positions(self) -> pd.DataFrame:
@@ -209,7 +147,7 @@ class Result:
     def equity(self) -> pd.DataFrame:
         """The equity series, one row per slice, indexed by the IST close of the slice."""
         columns = dict(self._output["equity"])
-        index = pd.DatetimeIndex(_times(columns.pop("ts")), name="time")
+        index = pd.DatetimeIndex(ist_times(columns.pop("ts")), name="time")
         return pd.DataFrame(columns, index=index)
 
     @property
@@ -223,8 +161,8 @@ class Result:
     def events(self) -> pd.DataFrame:
         """The event stream: order, position and risk events in order of occurrence. A
         key an event does not carry is empty in its row."""
-        frame = _fixed(self._output["events"], EVENT_COLUMNS)
-        frame.insert(0, "time", _times(frame["slice_ts"]))
+        frame = fixed_columns(self._output["events"], EVENT_COLUMNS)
+        frame.insert(0, "time", ist_times(frame["slice_ts"]))
         return frame
 
     @property
@@ -240,7 +178,7 @@ class Result:
         columns = ("slice", "slice_ts", "instrument", "mark_rupees")
         frame = pd.DataFrame(self._output["stale_marks"], columns=list(columns))
         frame.insert(0, "symbol", [self._symbols[i] for i in frame["instrument"]])
-        frame.insert(0, "time", _times(frame["slice_ts"]))
+        frame.insert(0, "time", ist_times(frame["slice_ts"]))
         return frame
 
     @property
@@ -253,7 +191,7 @@ class Result:
         not bought with cash (the account holds its margin, and its open profit or loss
         is already in equity), so its contract value, often several times the equity,
         would read as a share of the portfolio; `equity["exposure_rupees"]` counts it."""
-        frame = _fixed(self._output["final_positions"], FINAL_POSITION_COLUMNS)
+        frame = fixed_columns(self._output["final_positions"], FINAL_POSITION_COLUMNS)
         frame.insert(0, "symbol", [self._symbols[i] for i in frame["instrument"]])
         kinds = [self._manifest["instruments"][i]["kind"] for i in frame["instrument"]]
         held = frame["quantity_units"] * frame["mark_rupees"]
@@ -269,73 +207,7 @@ class Result:
         realized, unrealized, total = self._output["gross_pnl"]
         return {"realized": realized, "unrealized": unrealized, "total": total}
 
-    # ----- context -------------------------------------------------------------------
-
-    @property
-    def assumptions(self) -> dict[str, Any]:
-        """The settings the run used, defaults resolved."""
-        return dict(self._assumptions)
-
-    @property
-    def warnings(self) -> list[str]:
-        """What the reader of the result must know, most important first."""
-        return list(self._warnings)
-
-    @property
-    def skipped(self) -> pd.DataFrame:
-        """Orders a sizer skipped: the IST decision instant, symbol and reason."""
-        frame = pd.DataFrame(self._skipped, columns=["decided_at", "symbol", "reason"])
-        frame["decided_at"] = _times(frame["decided_at"])
-        return frame
-
-    @property
-    def r_summary(self) -> dict[str, Any]:
-        """The R-multiples of the closed trades (`trades["r_multiple"]`): how many, how
-        many had an initial risk, their mean (the expectancy in R), median, standard
-        deviation, best, worst, total and share above zero, and the distribution in
-        one-R bins (`_result_r.r_summary`)."""
-        return _result_r.r_summary(self.trades["r_multiple"])
-
-    @property
-    def manifest(self) -> dict[str, Any]:
-        """Engine version, strategy and its source hash, every resolved argument, data
-        partition hashes, reference-table and cost-schedule versions, random seed and
-        platform: JSON types (`_manifest.RunManifest.from_dict` reads it back)."""
-        return {"engine_version": native.engine_version(), **self._manifest}
-
-    def to_dataframes(self) -> dict[str, pd.DataFrame]:
-        """Every built table, by name."""
-        names = (
-            "fills",
-            "orders",
-            "trades",
-            "positions",
-            "equity",
-            "events",
-            "stale_marks",
-            "costs",
-            "contract_notes",
-        )
-        return {name: getattr(self, name) for name in names}
-
-    def to_csv(self, folder: str | os.PathLike) -> list[Path]:
-        """Write every table of `to_dataframes()` to `folder` (created when missing), one
-        CSV file per table named after it (`fills.csv`, ...), and return the paths. Times
-        are written as plain IST date-times, without the zone; the `*_ts` columns stay
-        UTC nanoseconds (`_result_export`)."""
-        return _result_export.to_csv(self.to_dataframes(), folder)
-
-    def to_excel(self, path: str | os.PathLike) -> Path:
-        """Write every table of `to_dataframes()` to one Excel workbook at `path` (its
-        folder is created when missing), one sheet per table named after it, and return
-        the path. Times are written as plain
-        IST date-times, without the zone (a cell holds none); the `*_ts` columns stay UTC
-        nanoseconds. Needs openpyxl, which openalgo does not install: raises
-        MissingDependencyError, an ImportError, saying `pip install openpyxl` when it is
-        missing."""
-        return _result_export.to_excel(self.to_dataframes(), path)
-
-    # ----- charges and reports --------------------------------------------------------
+    # ----- charges and futures ----------------------------------------------------------
 
     @property
     def costs(self) -> pd.DataFrame:
@@ -375,92 +247,44 @@ class Result:
         rolled there (False with roll=None, where they are settled at expiry)."""
         return _result_futures.switches_frame(self._output, self._symbols)
 
-    @cached_property
-    def performance(self) -> Performance:
-        """Every metric of the run (`openalgo.backtest.metrics.analyse`) over its equity
-        series and trades, annualised by the traded exchange's calendar. The capital is
-        the opening wealth and the open of the first slice the opening time, so the P&L
-        of the first slice, the return of the first session and the time in the first
-        slice (elapsed time, CAGR, exposure) count. A result built without its run's
-        calendar times the opening at the first point. A run with `benchmark=` measures
-        the benchmark figures (alpha, beta, information ratio, the comparison tables and
-        charts) against its closes. Raises ConfigError when the run has no equity
-        point."""
-        trades = _result_report.trades_table(self._output, self._symbols)
-        equity = _result_report.equity_series(self.equity)
-        arguments = self._manifest["arguments"]
-        exchange, capital = arguments["exchange"], arguments["capital"]
-        opening = None
-        if len(equity):
-            first = int(self._output["equity"]["ts"][0])
-            opening = _result_report.opening_time(
-                first, arguments["base"], exchange, self._calendar
-            )
-        return analyse(
-            equity,
-            exchanges=exchange,
-            trades=trades,
-            benchmark=self._benchmark,
-            opening_wealth=capital,
-            opening_time=opening,
-        )
+    # ----- context -------------------------------------------------------------------
 
     @property
-    def metrics(self) -> Any:
-        """The metrics mapping of `performance`; keys, units and definitions are in
-        `openalgo.backtest.metrics.DEFINITIONS`."""
-        return self.performance.metrics
+    def assumptions(self) -> dict[str, Any]:
+        """The settings the run used, defaults resolved."""
+        return dict(self._assumptions)
 
-    def summary(self) -> str:
-        """A short plain-text summary to print: net profit in rupees with Indian digit
-        grouping ("Rs 1,23,456.78"), the return and the maximum drawdown in percent, the
-        closed trades and their win rate ("no closed trades" when there are none, where
-        the win rate is undefined) with the positions still open, and for a run with
-        `benchmark=` the benchmark's return (`_summary`). `print(result)` is the full
-        Assumptions block instead. Raises ConfigError when the run has no equity
-        point, as `performance` does."""
-        return summary_text(self.metrics, _result_report.benchmark_name(self._manifest))
+    @property
+    def warnings(self) -> list[str]:
+        """What the reader of the result must know, most important first: a line per
+        skip reason (`_skips`) and per reject code (`_rejections`) that occurred, with
+        what to do, among the others."""
+        return list(self._warnings)
 
-    def metrics_table(self) -> pd.DataFrame:
-        """Every metric as a DataFrame indexed by key: group, label, value, unit and
-        definition (`openalgo.backtest.report.metrics_table`)."""
-        return metrics_table(self.performance)
+    @property
+    def skipped(self) -> pd.DataFrame:
+        """Orders skipped before they were placed, so not in `orders`: the IST decision
+        instant, symbol and reason ("rounded_to_zero" when a sizer, a sizing function,
+        `target()` or `rebalance()` gave less than one share or lot, "cap" when a size
+        cap left no room)."""
+        frame = pd.DataFrame(self._skipped, columns=["decided_at", "symbol", "reason"])
+        frame["decided_at"] = ist_times(frame["decided_at"])
+        return frame
 
-    def monte_carlo(
-        self,
-        *,
-        simulations: int = _montecarlo.DEFAULT_SIMULATIONS,
-        seed: int = _montecarlo.DEFAULT_SEED,
-        resample: str = "sessions",
-        bust: float | None = None,
-        goal: float | None = None,
-    ) -> MonteCarlo:
-        """Monte Carlo by bootstrap of the run's session returns or closed trades
-        (`openalgo.backtest.metrics.monte_carlo`, which documents the arguments)."""
-        return monte_carlo(
-            self.performance,
-            simulations=simulations,
-            seed=seed,
-            resample=resample,
-            bust=bust,
-            goal=goal,
-        )
+    @property
+    def r_summary(self) -> dict[str, Any]:
+        """The R-multiples of the closed trades (`trades["r_multiple"]`): how many, how
+        many had an initial risk, their mean (the expectancy in R), median, standard
+        deviation, best, worst, total and share above zero, and the distribution in
+        one-R bins (`_result_r.r_summary`)."""
+        return _result_r.r_summary(self.trades["r_multiple"])
 
-    def tearsheet(
-        self, path: str | None = None, *, mode: str = "full", log_scale: bool = False
-    ) -> str:
-        """The HTML tearsheet, a dashboard in `mode` ("full", "basic", "metrics" or
-        "charts"; see `openalgo.backtest.report.tearsheet`): returned as a string, or
-        written to `path` (and the path returned). `log_scale` draws the cumulative
-        return on a log scale. Its trade table is `trade_list()`, its benchmark is named
-        by the run's `benchmark=`, and its Notes section lists the run's assumptions and
-        every warning, so a cost-free run says so on the report."""
-        lines = [f"{key}: {value}" for key, value in self._assumptions.items()]
-        lines += [f"warning: {text}" for text in self._warnings]
-        name = self._manifest["strategy"]["name"]
-        bench = _result_report.benchmark_name(self._manifest)
-        report = _result_report.Report(self.performance, name, lines, bench)
-        return _result_report.tearsheet(report, path, mode, log_scale)
+    @property
+    def manifest(self) -> dict[str, Any]:
+        """Engine version, strategy and its source hash, every resolved argument, data
+        partition hashes, reference-table and cost-schedule versions, random seed and
+        platform: JSON types (`_manifest.RunManifest.from_dict` reads it back)."""
+        return {"engine_version": native.engine_version(), **self._manifest}
 
     # ----- running again, and what is not built yet ----------------------------------
 
@@ -494,8 +318,11 @@ class Result:
         lines.append(f"  gross P&L: {pnl['total']:.2f} (realized {pnl['realized']:.2f})")
         charged = self.equity["costs_rupees"].iloc[-1] if len(self.equity) else 0.0
         lines.append(f"  charges: {charged:.2f}; net P&L: {pnl['total'] - charged:.2f}")
-        rejected = _rejections.rejected_summary(self._output["orders"])
-        lines += [] if rejected is None else [f"  {rejected}"]
+        counts = (
+            _rejections.rejected_summary(self._output["orders"]),
+            _skips.skipped_summary(self._skipped),
+        )
+        lines += [f"  {line}" for line in counts if line is not None]
         lines += [f"  warning: {text}" for text in self._warnings]
         return "\n".join(lines)
 

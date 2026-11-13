@@ -4,8 +4,9 @@ hand-worked round trips of `accounting_runs`.
 Intraday (MIS, 1-minute base, no charges, no slippage): 400 shares bought at the 09:30
 open at 1,000.00 and sold at the 09:45 open at 1,100.00, so the gross P&L is
 400 x 100 = 40,000.00 rupees on an entry value of 400 x 1,000 = 4,00,000.00, a return
-of 10 percent, held 15 one-minute bars, 15 minutes. Daily (CNC): bought at the second
-session's open and sold at the third session's, one bar and one calendar day apart.
+of 10 percent, held one bar of the strategy's 15 minutes (15 one-minute base bars),
+15 minutes. Daily (CNC): bought at the second session's open and sold at the third
+session's, one bar and one calendar day apart.
 """
 
 import datetime as dt
@@ -57,9 +58,57 @@ def test_the_return_is_the_net_pnl_over_the_entry_value_in_percent(long_trade):
     assert long_trade["return_pct"] == pytest.approx(10.0)
 
 
-def test_an_intraday_trade_is_held_fifteen_bars_and_fifteen_minutes(long_trade):
-    assert long_trade["bars_held"] == 15
+def test_an_intraday_trade_is_held_one_strategy_bar_and_fifteen_minutes(long_trade):
+    # A 15-minute strategy on 1-minute base bars: one 15-minute bar, not 15 base bars.
+    assert long_trade["bars_held"] == 1
     assert long_trade["days_held"] == pytest.approx(15 / (24 * 60))
+
+
+def five_minute_trade() -> bt.Result:
+    """A 5-minute strategy on 1-minute base bars that buys 400 shares at its first bar
+    close (09:20, filled at the 09:20 open) and exits at its 13th (10:20, filled at the
+    10:20 open): held 60 minutes, 12 five-minute bars, 60 one-minute bars."""
+
+    def on_bar(self, bar):
+        if len(self.close) == 1:
+            self.buy(qty=400)
+        elif len(self.close) == 13:
+            self.exit()
+
+    attributes = {"symbol": "SBIN", "exchange": "NSE", "interval": "5m", "on_bar": on_bar}
+    strategy = type("FiveMinuteTrip", (bt.Strategy,), attributes)
+    arguments = {"data": session_bars(), "capital": CAPITAL, "base": "1m", "product": "MIS"}
+    return bt.backtest(strategy, costs=None, slippage=0, **arguments)
+
+
+def test_each_trade_counts_the_strategy_bars_of_its_own_symbol():
+    # Two symbols on 15-minute bars: both bought at 09:30, AAA sold at 09:45 (one bar)
+    # and BBB at 10:00 (two bars).
+    class TwoSymbols(bt.Strategy):
+        symbols, exchange, interval, product = ("AAA", "BBB"), "NSE", "15m", "MIS"
+
+        def on_bar(self, bars):
+            closes = len(self.data["AAA"].close)
+            if closes == 1:
+                self.buy(qty=10, symbol="AAA")
+                self.buy(qty=10, symbol="BBB")
+            elif closes == 2:
+                self.exit("AAA")
+            elif closes == 3:
+                self.exit("BBB")
+
+    data = {"AAA": session_bars(), "BBB": session_bars()}
+    result = bt.backtest(TwoSymbols, data=data, capital=CAPITAL, base="1m", costs=None, slippage=0)
+    listing = result.trade_list().set_index("symbol")
+    assert (listing.loc["AAA", "bars_held"], listing.loc["BBB", "bars_held"]) == (1, 2)
+
+
+def test_bars_held_counts_the_strategys_bars_not_the_base_bars():
+    result = five_minute_trade()
+    trade = result.trade_list().iloc[0]
+    assert (trade["entry_time"], trade["exit_time"]) == (at(9, 20), at(10, 20))
+    assert trade["bars_held"] == 12
+    assert list(result.performance.trades["bars_held"]) == [12]
 
 
 def test_the_exit_reason_and_r_multiple_are_read(long_trade):

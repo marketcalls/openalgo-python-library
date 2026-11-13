@@ -17,7 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   P&L, charges and net P&L in rupees, `return_pct` (net P&L over the entry value, in
   percent), `bars_held`, `days_held`, `exit_reason` and `r_multiple`. The tearsheet's
   trade table shows the same rows. `Result.performance.trades` gains a `bars_held`
-  column.
+  column. `bars_held` counts bars of the strategy's own interval that closed while the
+  trade was open, not base bars: those whose close is after `entry_time` and at or
+  before `exit_time`, so a 5-minute strategy on 1-minute data held from 09:40 to 15:00
+  holds 64 bars, not 320, and a trade opened and closed inside one bar holds 0. A fill
+  at a slice's close (an expiry settlement) is timed at that slice's open, as
+  `exit_time` shows, so the bar it closes is not counted. A run has one strategy
+  interval for all its symbols (a futures series' contracts included), and each trade
+  counts the bars of its own instrument.
 - **`Result.summary()`**: a short plain-text summary to print after a run:
 
       Net profit   : Rs 2,00,000.00
@@ -30,20 +37,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in percent, the closed trades with their win rate and any positions still open, and
   the benchmark's return for a run with `benchmark=` ("given closes" for closes given
   as a Series). A run with no closed trade (a buy-and-hold or rebalanced portfolio, or
-  one whose entries were all rejected) says "no closed trades" where the usual
+  one whose entries were all rejected or skipped) says "no closed trades" where the usual
   `f"{m['win_rate']:.0%}"` printed "nan%"; the `win_rate` metric itself is unchanged
-  (undefined, NaN, with no trades). `print(result)` is still the full Assumptions block.
-- **Rejected orders are told on screen.** A `bt.backtest` run in which any order was
-  rejected ends with one `RejectedOrdersWarning` (a `UserWarning` in
-  `openalgo.backtest.errors`, so it can be filtered by its class), pointed at the line
-  that ran the backtest: how many orders were rejected, the most common reason in plain
-  words and its reject code, for example "3 of 3 orders were rejected because a
-  delivery (CNC) short is not allowed in Indian cash markets (reject_code
-  'product_rule'). See result.warnings." Before, a reader who printed only a few
-  metrics saw nothing: a daily CNC strategy whose shorts were all rejected just showed
-  0 trades. Once per run, not per order; `bt.optimize` does not issue it for its
-  combinations, in its own process or in its workers. `result.warnings` keeps the full
-  line per reject code, with what to do.
+  (undefined, NaN, with no trades). The win rate is in whole percent but never reads 0%
+  or 100% unless it is exactly so: 1 winner in 250 reads "0.4% won" and 249 in 250
+  "99.6% won" (the fewest decimals that keep it off the bound). A loss below half a
+  paisa reads "Rs 0.00", not "Rs -0.00" (in the tearsheet's rupee figures too).
+  `print(result)` is still the full Assumptions block.
+- **Orders that were not placed are told on screen.** A `bt.backtest` run in which
+  orders were rejected or skipped for a reason the run did not ask for ends with one
+  `OrdersNotPlacedWarning` (a `UserWarning` in `openalgo.backtest.errors`, so it can be
+  filtered by its class), pointed at the line that ran the backtest: how many orders,
+  the most common reason in plain words and its code, for example "3 of 3 orders were
+  rejected because a delivery (CNC) short is not allowed in Indian cash markets
+  (reject_code 'product_rule'). See result.warnings." or, for a share that costs more
+  than the capital in whole shares, "249 orders were skipped because the sized quantity
+  was less than one share or, for a derivative, one lot (skip reason 'rounded_to_zero').
+  See result.warnings." Before, a reader who printed only a few metrics saw nothing:
+  such a run just showed 0 trades. Orders a rule of the run refused as it intends do not
+  raise it: the MIS entry window (`entry_from`, `entry_until` or the default cut-off),
+  `max_daily_loss`, `drawdown_halt`, `cooldown`, `max_positions` and a size cap
+  (`size_caps`); a run with both kinds counts only the others and then gives no total
+  of orders ("1 order was rejected because ..."). A sizing function that returns 0 is
+  counted, as the kernel gives it the skip reason `rounded_to_zero`. Once per run, not
+  per order; `bt.optimize` does not issue it for its combinations, in its own process
+  or in its workers.
+- **Skipped orders are reported like rejected ones.** `result.warnings` gains one line
+  per skip reason that occurred (first, before the other warnings), with how many orders
+  it skipped, when the first was decided and what to do, for example "249 orders were
+  skipped with skip reason 'rounded_to_zero' (result.skipped), the first decided at
+  2025-01-01 15:30 IST: the sized quantity was less than one share or, for a
+  derivative, one lot; give the strategy more capital, size with a larger percent, trade
+  a cheaper share, or pass quantity_mode="fractional" for part shares ...", and
+  `print(result)` a "skipped orders: 249 (rounded_to_zero 249)" line.
+  The line for orders refused by the MIS entry window now says they were outside the
+  window, gives its times and says they were not placed, as the window intends: "4 of 4
+  orders were outside the MIS entry window, 09:15 to 09:20 (entry_from to entry_until),
+  and were not placed, as the window intends (reject_code 'entry_window' in
+  result.orders), the first decided at 2026-11-04 09:30 IST".
+- **The Assumptions block states how orders are sized** (`sizing`): with whole shares,
+  an order with no quantity is sized at the decision close and keeps 2 percent of its
+  budget in cash for the price's move to the next open (the engine's cash buffer, the
+  same in live trading; its value is unchanged), then takes its estimated charges off
+  the rest, which is why 10,00,000 at 1,000.00 with no charges buys 980 shares and not
+  1,000; `bt.size` sizers and `target()` keep no buffer and `rebalance` keeps its own
+  `cash_buffer`. With part shares it is sized at the fill price and spends the whole
+  budget less the charges. `Strategy.buy` and `sell` and `bt.size` document the same.
 
 ### Changed
 
@@ -76,6 +115,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (whole shares of cash equity, whole lots of derivatives) instead of "fractional", so
   every sizer, an order with no quantity, `target()` and `rebalance` round down to whole
   shares unless a run passes `quantity_mode="fractional"`, which stays for research.
+  A `target(value=...)` or `target(percent=...)`, or a rebalance weight, that rounds down
+  to no share while nothing is held is now a skipped order (`result.skipped`, reason
+  `rounded_to_zero`, and the warnings above) instead of passing silently; `target()`
+  still returns None for it.
 - **Daily and longer bars indexed by naive midnight dates need no `tz=`.** The daily
   bars `client.history(...)` returns are indexed that way, and passing them as
   `bt.backtest(..., data=df)` stopped with "the timestamps of the supplied data carry
@@ -106,6 +149,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   return bars, the trade P&L histogram or the trade losing-streak table:
   `Result.monte_carlo()`, `performance.session_returns`, `Result.trade_list()` and
   `performance.losing_streaks` keep them.
+- **Candles of a special session that opens off the bar lattice are told by the
+  session.** Intraday bars sit on a lattice from each date's regular open (09:15 IST on
+  NSE), special sessions included, and a source that starts a special session's candles
+  at the session's own open (15-minute broker candles of Muhurat trading from 14:20)
+  stopped the load with the general off-lattice message. When every off-lattice bar lies
+  in such a session, the TimestampError now names it from the calendar data and says
+  what to do: "NSE:SBIN 15m: 5 bars are not on the NSE bar lattice: the session of
+  2026-11-08 (Diwali Laxmi Pujan (Muhurat trading)) opens at 14:20 IST, off the 09:15
+  bar lattice, so 15-minute candles of that session cannot be placed. Pass 1-minute data
+  (the engine builds the session's 15-minute bars from it), or leave that session's bars
+  out." Own data and OpenAlgo data alike; nothing is loaded differently.
 
 ## [2.1.1] - 2026-11-13
 

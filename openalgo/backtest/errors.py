@@ -2,8 +2,8 @@
 
 Every error the engine raises on purpose derives from BacktestError, so callers can
 catch one type. Messages say what was wrong and what to do about it. The warning a run
-gives when orders were rejected, RejectedOrdersWarning, is here too, so it can be
-filtered by its class.
+gives when orders were rejected or skipped, OrdersNotPlacedWarning, is here too, so it
+can be filtered by its class.
 """
 
 
@@ -68,12 +68,16 @@ class CostError(BacktestError, ValueError):
     """A cost segment, preset or schedule is unknown or inconsistent."""
 
 
-class RejectedOrdersWarning(UserWarning):
-    """Orders of a run were rejected. `bt.backtest` issues it once, at the end of a run
-    in which any order was rejected, with how many and the most common reason; the
-    details of every reason are in `result.warnings`. A warning, not an error: the
-    result is still returned. Silence it with
-    `warnings.simplefilter("ignore", RejectedOrdersWarning)`."""
+class OrdersNotPlacedWarning(UserWarning):
+    """Orders of a run were not placed: rejected (margin, the product rule, a quantity
+    off the lot size, ...) or skipped before they were placed (a sized quantity of less
+    than one share or lot; the kernel gives a sizing function's 0 the same reason, so it
+    is counted too). `bt.backtest` issues it once, at the end of such a run, with how
+    many and the most common reason; the details of every reason are in
+    `result.warnings`. Orders a rule of the run refused as it intends (the MIS entry
+    window, a daily loss limit, a cooldown, max_positions, a size cap) do not raise it.
+    A warning, not an error: the result is still returned. Silence it with
+    `warnings.simplefilter("ignore", OrdersNotPlacedWarning)`."""
 
 
 __all__ = [
@@ -85,8 +89,8 @@ __all__ = [
     "DataQualityError",
     "MissingDependencyError",
     "NoDataError",
+    "OrdersNotPlacedWarning",
     "ReferenceDataError",
-    "RejectedOrdersWarning",
     "SymbolNotFoundError",
     "TimestampError",
 ]

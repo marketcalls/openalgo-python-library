@@ -148,7 +148,8 @@ impl NativeEngine {
 
     /// Trade to a target position at the current decision point (`target()`, a target
     /// dict as `sizing` reads it). Returns None when the position already is the
-    /// target, else the order's submission as `submit` returns it.
+    /// target, else the order's submission as `submit` returns it (("skipped", None,
+    /// "rounded_to_zero") for a value or percent target that rounds to no units).
     fn target(&mut self, request: &Bound<'_, PyDict>) -> PyResult<Option<SubmissionTuple>> {
         let request = sizing::target_request(request)?;
         let outcome = self
@@ -339,6 +340,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         py.get_type_bound::<NativeEngineInputError>(),
     )?;
     m.add_class::<NativeEngine>()?;
+    // The engine default's cash buffer in venue mode, a fraction, for the Assumptions.
+    m.add("VENUE_CASH_BUFFER", oa_bt::sizing::VENUE_CASH_BUFFER)?;
     futures::register(m)?;
     market::register(m)
 }

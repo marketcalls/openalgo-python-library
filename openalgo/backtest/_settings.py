@@ -40,6 +40,7 @@ from ._series import IST
 from ._setting_checks import class_leverage, refuse_unusable, unused_settings
 from ._size_controls import describe as describe_size_controls
 from ._size_controls import size_controls
+from ._sizing_assumption import sizing_assumption
 from .data._sessions import resolve_now
 from .data.loader import own_reader
 from .errors import ConfigError
@@ -346,6 +347,7 @@ def assumptions(plan: RunPlan, calendar: Any) -> dict[str, Any]:
     block.update(
         fill=plan.fill,
         quantity_mode=plan.quantity_mode,
+        sizing=sizing_assumption(plan.quantity_mode),
         costs=plan.costs,
         slippage=plan.slippage[0],
         capital=plan.capital,
