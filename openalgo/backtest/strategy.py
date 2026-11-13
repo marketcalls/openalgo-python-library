@@ -23,11 +23,11 @@ rules: first the callbacks for the events since the previous decision, then `on_
 Orders placed there are queued for the next base-bar open. Timers (`self.at`,
 `self.every`) run at a base-bar open, once the orders queued for it have filled, and
 their orders fill at that same open.
-Indicators come from `openalgo.ta` through `self.I` and warm up by themselves: each
-one's warm-up is measured on the engine's reference bars, they are computed over the
-history before `start` that it asks for, and no hook makes a decision before they are
-ready (`_warm_up`), so a strategy needs no warm-up guard. Parts not built yet raise
-NotImplementedError saying what to do instead.
+Indicators come from `openalgo.ta` through `self.I`, registered in `init`, and warm
+up by themselves: each one's warm-up is measured on the engine's reference bars, they
+are computed over the history before `start` that it asks for, and no hook makes a
+decision before they are ready (`_warm_up`), so a strategy needs no warm-up guard.
+Parts not built yet raise NotImplementedError saying what to do instead.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ from ._conditions import declare
 from ._messages import not_supported
 from ._series import Bar, InstrumentData, PositionView, SeriesView
 from ._strategy_orders import OrderMethods
-from .errors import ConfigError
+from .errors import ConfigError, IndicatorOutsideInitError
 from .reference import Instrument
 from .units import Param
 
@@ -183,11 +183,13 @@ class Strategy(OrderMethods):
     # ----- hooks ---------------------------------------------------------------------
 
     def init(self) -> None:
-        """Called once before the first bar: register indicators, timers, conditions.
-        No bar is visible yet; the history before `start` is joined to every series
-        and indicator after it. `bt.optimize` also runs it once per combination on the
-        engine's reference bars before loading any data (`_warm_up_probe`), so keep it
-        to declarations."""
+        """Register indicators, timers and conditions; no bar is visible yet. It runs
+        twice for every run, each time on a new instance: first on the engine's
+        reference bars, before any data is loaded, to learn what history the
+        indicators need (`_warm_up_probe`; `bt.optimize` does it for every
+        combination), then once on the run's series, which already hold that history
+        before `start`, so every indicator is computed over it. Keep it to
+        declarations: anything else it does (a print, a counter) happens twice."""
 
     def on_bar(self, bar: Bar | dict[str, Bar]) -> None:
         """Called at each strategy-bar close: the bar, or a mapping by symbol."""
@@ -253,10 +255,19 @@ class Strategy(OrderMethods):
         """Register an indicator from `openalgo.ta` (the name is fixed by the contract):
         `self.I(ta.ema, self.close, 20)`. Returns a view (`[-1]`, slices, `len()`,
         `.crossed_above`, `.crossed_below`, comparisons, arithmetic), or a tuple of views
-        for a function with several outputs. Raises ConfigError for a function outside
-        `openalgo.ta` and for an output that looks ahead (see `_indicators`)."""
+        for a function with several outputs. Register in `init`. Raises ConfigError for
+        a function outside `openalgo.ta` and for an output that looks ahead (see
+        `_indicators`), and IndicatorOutsideInitError when called after `init`."""
         from ._indicators import register
 
+        if not self._ctx.declaring:
+            name = getattr(func, "__name__", repr(func))
+            raise IndicatorOutsideInitError(
+                f"self.I({name}, ...) was called after init: register every indicator in "
+                "init (self.line = self.I(ta.ema, self.close, 20)) and read it in on_bar "
+                "(self.line[-1]). The history before start is loaded for the indicators "
+                "init registers, and the first decision waits for their warm-up"
+            )
         return register(self._ctx.run.checks, func, inputs, params)
 
     @property

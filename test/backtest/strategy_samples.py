@@ -24,6 +24,8 @@ from openalgo import ta
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 DAY = dt.date(2025, 7, 1)
 PREVIOUS_DAY = dt.date(2025, 6, 30)
+# The five sessions before the test day.
+EARLIER_DAYS = tuple(dt.date(2025, 6, day) for day in (24, 25, 26, 27, 30))
 SESSION_MINUTES = 375
 CAPITAL = 1_000_000
 
@@ -59,10 +61,12 @@ def wave_bars(count: int = SESSION_MINUTES, day: dt.date = DAY) -> pd.DataFrame:
 
 
 def wave_with_history() -> pd.DataFrame:
-    """`wave_bars` of the session before the test day, 2025-06-30, then of the test day:
-    a run from the test day has 75 five-minute bars of history, more than the 64 the
-    10-bar EMA of `EmaCross` needs, so it decides from its first bar (`_warm_up`)."""
-    return pd.concat([wave_bars(day=PREVIOUS_DAY), wave_bars()])
+    """`wave_bars` of the five sessions before the test day, 2025-06-24 to 2025-06-30,
+    then of the test day: a run from the test day has 375 five-minute bars of history,
+    more than the 128 and 256 the 10-bar and 20-bar EMAs of `EmaCross` need, so it
+    decides from its first bar (`_warm_up`), and a run over all of them trades with
+    every parameter of its grid."""
+    return pd.concat([*(wave_bars(day=day) for day in EARLIER_DAYS), wave_bars()])
 
 
 def daily_bars(days: list[dt.date]) -> pd.DataFrame:

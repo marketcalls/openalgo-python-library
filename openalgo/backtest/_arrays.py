@@ -20,10 +20,10 @@ a NumPy array or list in bar order, or a pandas Series indexed by bar open time 
 or tz-aware). A `from_signals` function receives the strategy bars as a DataFrame
 indexed by IST bar open (columns open, high, low, close, volume) and returns `(entries,
 exits)` or `(entries, exits, shorts, covers)`, any of which may be None. It runs in
-`init` on the run's bars, and once more when the history before `start` is joined
-(`_warm_up_attach`, the history of a 200-bar EMA, `_warm_up_probe`), on the history and
-the run's bars together, so its indicators are computed over the history; the values of
-the history bars are left out, as no decision is made before `start`.
+`init` on the strategy bars of the history before `start` (that of a 200-bar EMA,
+`_warm_up_probe`) and of the run together, so its indicators are computed over the
+history; the values of the history bars are left out, as no decision is made before
+`start`.
 
 Before the run the function is checked for look-ahead (03-architecture 5): it is run
 again on the run's bars cut at fixed points, and it must return the same outputs there (as
@@ -47,7 +47,6 @@ import numpy as np
 import pandas as pd
 
 from ._conditions import array_values, check_order_arguments, strategy_frame
-from ._series import FIELDS
 from ._views import TimelineView
 from .errors import ConfigError
 from .strategy import Strategy
@@ -170,9 +169,9 @@ def from_signals(
 ) -> type[Strategy]:
     """A strategy from a function of the strategy bars returning `(entries, exits)` or
     `(entries, exits, shorts, covers)` (see the module docstring). The function runs
-    once on the run's bars, once more on them with the history before `start` when
-    there is one, plus once per cut of the look-ahead check; the cuts are a sample of
-    three, so a function that reads a later bar only away from them passes. Raises
+    once on the history before `start` and the run's bars together, plus once per cut
+    of the look-ahead check; the cuts are a sample of three, so a function that reads a
+    later bar only away from them passes. Raises
     ConfigError for order arguments 4.1 does not list; when the run starts, ConfigError
     for a function that returns anything else or looks ahead."""
     if not callable(func):
@@ -183,7 +182,7 @@ def from_signals(
         frame = strategy_frame(self)
         arrays = _signals(func, frame)
         _check_causal(func, frame, arrays)
-        _declare(self, _signal_views(func, self._ctx.store(None), frame, arrays), order_args)
+        _declare(self, _signal_views(self._ctx.store(None), frame, arrays), order_args)
 
     name = f"FromSignals_{getattr(func, '__name__', 'function')}"
     settings = (pyramiding, product)
@@ -201,30 +200,13 @@ def _signals(func: Callable[..., Any], frame: pd.DataFrame) -> tuple[Any, ...]:
     return tuple(outputs)
 
 
-def _signal_views(
-    func: Callable[..., Any], store: Any, frame: pd.DataFrame, arrays: tuple[Any, ...]
-) -> tuple[Any, ...]:
-    """The function's outputs as views of the strategy bars (None where it gave None),
-    each with the recipe that runs the function again on other bars (`_views.Recipe`):
-    when the history before `start` is joined, the outputs are those of the function on
-    the history and the run together (`_warm_up_attach`)."""
-    last: list[tuple[Any, tuple[Any, ...]]] = []
-
-    def outputs(bars: Any) -> tuple[Any, ...]:
-        if not (last and last[0][0] is bars):
-            columns = {name: bars[name] for name in FIELDS}
-            last[:] = [(bars, _signals(func, pd.DataFrame(columns, index=bars["times"])))]
-        return last[0][1]
-
-    def recipe(k: int, name: str) -> Callable[[Any], np.ndarray]:
-        return lambda bars: array_values(outputs(bars)[k], bars["ts_open"], name)
-
+def _signal_views(store: Any, frame: pd.DataFrame, arrays: tuple[Any, ...]) -> tuple[Any, ...]:
+    """The function's outputs as views of the strategy bars, history and run (None
+    where it gave None)."""
     opens = frame.index.tz_convert("UTC").as_unit("ns").asi8
     return tuple(
-        None
-        if values is None
-        else TimelineView(store, array_values(values, opens, name), name, recipe(k, name))
-        for k, (name, values) in enumerate(zip(OUTPUT_NAMES, arrays, strict=False))
+        None if values is None else TimelineView(store, array_values(values, opens, name), name)
+        for name, values in zip(OUTPUT_NAMES, arrays, strict=False)
     )
 
 

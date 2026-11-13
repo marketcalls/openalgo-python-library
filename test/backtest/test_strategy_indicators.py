@@ -69,7 +69,9 @@ def test_nothing_of_an_indicator_is_visible_in_init():
                 self.average[-1]
 
     run(InInit)
-    assert found == [0]
+    # init runs twice, on the engine's reference bars and then on the run's series: in
+    # neither has a bar closed.
+    assert found == [0, 0]
 
 
 def test_a_slice_returns_the_revealed_values():

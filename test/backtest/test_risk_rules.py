@@ -78,7 +78,8 @@ def run_daily(strategy=BuyOnDays, **settings):
 
 
 def capture(strategy):
-    """A subclass that keeps its instance, so a test can read what it recorded."""
+    """A subclass that keeps its instances, so a test can read what it recorded: init
+    runs on a probe instance first (the reference bars), so the run's is the last."""
     instances = []
 
     class Captured(strategy):
@@ -101,7 +102,7 @@ def test_the_daily_loss_exit_fills_at_the_close_of_the_day_that_breached():
 def test_an_entry_after_the_breach_is_rejected_with_the_daily_loss_gate_until_the_next_day():
     strategy, instances = capture(BuyOnDays)
     run_daily(strategy, max_daily_loss=10_000)
-    handles = instances[0].handles
+    handles = instances[-1].handles
     assert [(order.status, order.reject_code) for order in handles] == [
         ("Filled", None),
         ("Rejected", "daily_loss_gate"),
@@ -114,14 +115,14 @@ def test_on_risk_event_receives_the_breach_and_the_trading_state_changes():
     run_daily(strategy, max_daily_loss=10_000)
     seen = [
         (event["name"], event.get("trading_state"), event.get("observed_rupees"))
-        for event in instances[0].risk_events
+        for event in instances[-1].risk_events
     ]
     assert seen == [
         ("daily_loss_limit_hit", None, -16125.0),
         ("trading_state_changed", "REDUCING", None),
         ("trading_state_changed", "ACTIVE", None),
     ]
-    assert instances[0].risk_events[2]["cause"] == "session_boundary"
+    assert instances[-1].risk_events[2]["cause"] == "session_boundary"
 
 
 def test_the_gross_pnl_is_the_loss_at_the_breach():
@@ -168,7 +169,7 @@ def test_a_drawdown_halt_given_in_percent_latches_and_rejects_entries_as_halted(
     strategy, instances = capture(BuyOnDays)
     result = run_daily(strategy, drawdown_halt=bt.pct(0.5))
     assert list(result.fills["reason"]) == ["entry", "drawdown_halt"]
-    codes = [order.reject_code for order in instances[0].handles]
+    codes = [order.reject_code for order in instances[-1].handles]
     assert codes == [None, "halted", "halted"]
 
 
@@ -225,7 +226,7 @@ def test_an_entry_inside_the_cooldown_is_rejected_with_the_cooldown_code():
 
     strategy, instances = capture(Cooling)
     run_intraday(strategy, cooldown=2)
-    codes = [order.reject_code for order in instances[0].handles]
+    codes = [order.reject_code for order in instances[-1].handles]
     assert codes == [None, None, "cooldown", "cooldown", None]
 
 

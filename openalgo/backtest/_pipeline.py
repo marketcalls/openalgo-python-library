@@ -5,11 +5,12 @@ first (the Python half of the design in `rust/oa_bt/src/engine/mod.rs`).
 settings (`_settings.resolve`), the calendar, the futures series (`_futures`), the
 instruments (`_instruments.resolve_instruments`) and, before any data is loaded, that the
 margin table prices them all (`_margin_check`) and what the indicators of each parameter
-set to be run need before `start` (`_warm_up_probe`); then the base interval and its bars
-(`_base_interval.choose_base`, through the data layer), the ticks chosen by a price slab
-(`_slab_ticks`, from the data) and the market settings (`_market`: the cost model, the
-slippage and the per-instrument facts), and the history before `start` for the largest
-of those needs (`_warm_up_history`). A sweep sends its `PreparedRun` to worker
+set to be run need before `start` (`_warm_up_probe`, `init` on the engine's reference
+bars: the run's parameters, or every combination of a sweep); then the base interval
+and its bars (`_base_interval.choose_base`, through the data layer), the ticks chosen by
+a price slab (`_slab_ticks`, from the data) and the market settings (`_market`: the cost
+model, the slippage and the per-instrument facts), and the history before `start` for
+the largest of those needs (`_warm_up_load`). A sweep sends its `PreparedRun` to worker
 processes without the market settings, which hold native objects, and each worker
 resolves them again from the `costs=` and `slippage=` arguments and the parsed `margin=`
 (`_futures_margin`). That needs those arguments to pickle and the run to use the shared
@@ -17,11 +18,13 @@ default calendar (a calendar of its own is a native object too); otherwise the s
 runs in this process. The benchmark's closes (`_benchmark`) are loaded last, after the
 strategy's bars, and sent along.
 
-`execute` keeps the history its parameters need (`_warm_up_history`), builds the native
-engine, binds a strategy instance to a `RunContext`, runs `init` and the driver to the
-end of the grid (the Rust signal driver for a condition strategy, `_conditions`),
-deciding only once the strategy's indicators are ready (`_warm_up`), and returns the
-`Result` with its Assumptions block, warnings and manifest.
+`execute` keeps the history its parameters need (the needs `prepare` learnt for them,
+`_warm_up_history`; checked where it meets the run's bars), builds the native engine,
+binds a strategy instance to a `RunContext` whose series hold that history before the
+run's bars, runs `init` once on them and the driver to the end of the grid (the Rust
+signal driver for a condition strategy, `_conditions`), deciding only once the
+strategy's indicators are ready (`_warm_up`), and returns the `Result` with its
+Assumptions block, warnings and manifest.
 """
 
 from __future__ import annotations
@@ -63,12 +66,11 @@ from ._run_end import run_end_warnings
 from ._session_dates import session_dates_note
 from ._settings import RunPlan, assumptions, resolve
 from ._slab_ticks import resolve_slab_ticks
-from ._warm_up import Readiness, readiness
-from ._warm_up_attach import attach as join_history
+from ._warm_up import Readiness, SeriesNeed, readiness
 from ._warm_up_history import LoadedHistory, RunHistory
-from ._warm_up_load import HistorySource, history_source, load_history
-from ._warm_up_probe import history_needs, probe_setup, sweep_needs
-from .errors import BacktestError
+from ._warm_up_load import history_source, load_history
+from ._warm_up_measure import WarmUp
+from ._warm_up_probe import combination_needs, largest, params_key, probe_needs, probe_setup
 from .reference import Instrument
 from .result import Result
 
@@ -100,11 +102,14 @@ class PreparedRun:
     # Declared splits and bonuses the bars are not adjusted for, which nothing may be
     # held across (`_run_corporate_actions`).
     unadjusted: tuple[UnadjustedEvent, ...] = ()
-    # A sweep's bars before `start`, loaded for the largest need of its combinations
-    # (`_warm_up_load`); None for a single run, which loads its own after `init` from
-    # `history_source`. Each run keeps what its own needs ask for (`_warm_up_history`).
+    # The bars before `start`, loaded for the largest need of the parameter sets
+    # probed (`_warm_up_load`); each run keeps what its own needs ask for
+    # (`_warm_up_history`). The needs of each parameter set probed, by
+    # `_warm_up_probe.params_key`, and the warm-ups measured on the reference bars, by
+    # indicator label, so that no run probes or measures again.
     history: LoadedHistory | None = None
-    history_source: HistorySource | None = None
+    needs: dict[tuple, tuple[SeriesNeed, ...]] = dataclasses.field(default_factory=dict)
+    measured: dict[str, WarmUp] = dataclasses.field(default_factory=dict)
 
     @property
     def portable(self) -> bool:
@@ -113,9 +118,8 @@ class PreparedRun:
         return self.calendar is None and _picklable(self.market_args)
 
     def for_workers(self) -> PreparedRun:
-        """This run without its market settings and its history source (it holds the
-        client), to send to worker processes: they keep the history loaded."""
-        return dataclasses.replace(self, market=None, history_source=None)
+        """This run without its market settings, to send to worker processes."""
+        return dataclasses.replace(self, market=None)
 
     def market_settings(self) -> MarketSettings:
         """The market settings, resolved again when this run came without them."""
@@ -184,6 +188,13 @@ def _instruments(plan: RunPlan, args: dict[str, Any], calendar: Any, futures: An
     return futures.instruments, futures.lines, futures.version
 
 
+def _probed(strategy: type, setup: Any, sets: list) -> tuple[dict, dict[str, WarmUp]]:
+    """(the needs of each parameter set, by `_warm_up_probe.params_key`; the warm-ups
+    measured to learn them), from `init` on the reference bars (`_warm_up_probe`)."""
+    checks = IndicatorChecks(strategy_source_hash(strategy) or strategy.__qualname__)
+    return probe_needs(strategy, setup, sets, checks), checks.measured()
+
+
 def prepare(
     strategy: type,
     client: Any,
@@ -191,11 +202,12 @@ def prepare(
     parameter_sets: list[dict[str, Any] | None] | None = None,
 ) -> PreparedRun:
     """Resolve a run of `strategy` with the arguments of `bt.backtest` up to the engine.
-    `parameter_sets` are the `params=` of every combination of a sweep, whose largest
-    need of history before `start` is loaded here (`_warm_up_probe.sweep_needs`); a
-    single run loads its history after `init`. Raises ConfigError for unusable
-    arguments, the data layer's and the reference tables' errors, NotImplementedError
-    for settings of later work, and, for a sweep, what the strategy's `init` raises."""
+    `parameter_sets` are the `params=` of every combination of a sweep (None for a
+    single run, whose own `params=` are probed); the largest need of history before
+    `start` over them is loaded here (`_warm_up_probe.probe_needs`). Raises ConfigError
+    for unusable arguments, the data layer's and the reference tables' errors,
+    NotImplementedError for settings of later work, and what the strategy's `init`
+    raises on the reference bars."""
     plan = resolve(strategy, args)
     # Checked before any data is loaded; loaded after the strategy's bars.
     wanted_benchmark = benchmark_request(args["benchmark"], plan.exchange)
@@ -206,9 +218,10 @@ def prepare(
     plan = plan if futures is None else dataclasses.replace(plan, symbols=futures.symbols)
     instruments, lines, version = _instruments(plan, args, calendar, futures)
     # Before any data is loaded: an instrument the margin table cannot price stops here,
-    # and a sweep's largest need before start is learnt on the reference bars.
+    # and the needs before start are learnt on the reference bars.
     check_margin(instruments, plan.product, (plan.start, plan.end))
-    needs = sweep_needs(strategy, plan, instruments, futures, parameter_sets)
+    sets = [args["params"]] if parameter_sets is None else parameter_sets
+    needs, measured = _probed(strategy, probe_setup(strategy, plan, instruments, futures), sets)
     with expired_contracts(instruments, plan.present):
         choice = choose_base(plan, args, client, calendar, windows)
     plan = dataclasses.replace(plan, base=choice.base)
@@ -243,8 +256,9 @@ def prepare(
         futures=futures,
         benchmark=benchmark,
         unadjusted=unadjusted_events(plan.symbols, loaded),
-        history=None if needs is None else load_history(plan, source, needs),
-        history_source=source,
+        history=load_history(plan, source, largest(needs.values())),
+        needs=needs,
+        measured=measured,
     )
 
 
@@ -301,37 +315,40 @@ def _arguments(
 
 
 def _kept_history(
-    strategy: type, prepared: PreparedRun, context: RunContext, checks: IndicatorChecks
+    strategy: type, prepared: PreparedRun, params: Any, checks: IndicatorChecks
 ) -> RunHistory:
-    """The history this run keeps: what the indicators its `init` registered need,
-    loaded now for a single run, cut from the sweep's load otherwise
-    (`_warm_up_history`)."""
+    """The history this run keeps: what its indicators need, learnt by its `init` on
+    the reference bars (in `prepare`, or now for parameters it did not probe), cut from
+    the history `prepare` loaded (`_warm_up_history`). Raises what the strategy's `init`
+    raises."""
     plan = prepared.plan
-    setup = probe_setup(strategy, plan, prepared.instruments, prepared.futures)
-    needs = history_needs(strategy, context.run.checks.outcomes, setup, checks)
-    loaded = prepared.history
-    if loaded is None:
-        if prepared.history_source is None:
-            raise BacktestError(
-                "this prepared run has no history and no source to load it from; please report this"
-            )
-        loaded = load_history(plan, prepared.history_source, needs)
-    return loaded.for_run(needs, plan, prepared.session_calendar())
+    needs = prepared.needs.get(params_key(params))
+    if needs is None:
+        setup = probe_setup(strategy, plan, prepared.instruments, prepared.futures)
+        needs = combination_needs(strategy, setup, params, checks)
+    loaded = prepared.history or LoadedHistory({})
+    run_bars = dict(zip(plan.symbols, prepared.frames, strict=True))
+    return loaded.for_run(needs, plan, prepared.session_calendar(), run_bars)
 
 
 def _bound(
-    strategy: type, prepared: PreparedRun, market: MarketSettings, checks: Any
+    strategy: type,
+    prepared: PreparedRun,
+    market: MarketSettings,
+    checks: Any,
+    history: RunHistory,
 ) -> tuple[Any, RunContext]:
-    """(the native engine, the run context over it; the history before `start` is
-    joined after `init`, `_warm_up_attach`)."""
+    """(the native engine, the run context over it, whose series hold `history`
+    before the run's bars)."""
     plan, calendar = prepared.plan, prepared.session_calendar()
     config = plan.native_config(deliver_events=strategy.wants_events()) | market.config
     engine = build_engine(calendar._cal, config, prepared.instruments, prepared.frames)
     futures = None
     if prepared.futures is not None:
         futures = (prepared.futures, attach(engine, prepared.futures, list(plan.symbols)))
-    base_bars = dict(zip(plan.symbols, prepared.frames, strict=True))
-    run = RunData(plan.exchange, plan.interval, plan.base, base_bars, calendar, checks)
+    frames = zip(plan.symbols, prepared.frames, strict=True)
+    base_bars = {symbol: history.with_base(symbol, bars) for symbol, bars in frames}
+    run = RunData(plan.exchange, plan.interval, plan.base, base_bars, calendar, checks, history)
     context = RunContext(engine, prepared.instruments, plan.product, strategy.size, run, futures)
     return engine, context
 
@@ -402,9 +419,12 @@ def execute(
     rerun itself; `on_path`, when given, is told the evaluation path the run took
     (`_conditions.evaluation_path`). Raises the kernel's and the strategy's errors
     unchanged."""
-    checks = checks or IndicatorChecks(strategy_source_hash(strategy) or strategy.__qualname__)
+    if checks is None:
+        name = strategy_source_hash(strategy) or strategy.__qualname__
+        checks = IndicatorChecks(name, measured=prepared.measured)
     market = prepared.market_settings()
-    engine, context = _bound(strategy, prepared, market, checks.for_run())
+    history = _kept_history(strategy, prepared, args["params"], checks)
+    engine, context = _bound(strategy, prepared, market, checks.for_run(), history)
     instance = strategy(**(args["params"] or {}))
     instance._ctx = context
     instance.init()
@@ -413,8 +433,6 @@ def execute(
             "a condition strategy on a futures underlying",
             "write the strategy with on_bar",
         )
-    history = _kept_history(strategy, prepared, context, checks)
-    join_history(context, history)
     state = readiness(context.run.checks.outcomes, context, history)
     if has_conditions(instance):
         drive_conditions(instance, engine, state.ready_at)

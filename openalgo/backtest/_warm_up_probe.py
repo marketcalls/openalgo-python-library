@@ -1,21 +1,21 @@
 """What a strategy's indicators need before `start` (decision D25; the rule is in
-`_warm_up`): from the run's own `init`, and for a sweep before any data is loaded.
+`_warm_up`), learnt before any data is loaded.
 
 A warm-up is a function of the indicator call alone, measured on the engine's reference
-bars (`_warm_up_reference`), so the history a run needs follows from the indicators its
-`init` registers (`history_needs`). A single run learns them from its own `init`, which
-runs once, on the run's bars; the history is loaded and joined afterwards
-(`_warm_up_attach`).
-
-A sweep must load the history once, for the largest need of all its combinations, before
-any combination runs (its worker processes load no data). So `init` of each combination
-is first run on a probe context (`probe_largest`): every series it reads (`self.close`,
+bars (`_warm_up_measure`), so the history a run needs follows from the indicators its
+`init` registers (`history_needs`). To know them before the history is loaded, `init`
+first runs on a probe context (`ProbeContext`): every series it reads (`self.close`,
 `self.data[symbol]`, `self.data[symbol, "W"]`) holds the reference bars, none of them
 visible yet, as in the run's own `init`, and each `self.I` records its warm-up. Nothing
 is traded and no data is loaded. Timers are accepted (the run checks them), positions
 are flat, the account holds the capital, no order is working, and an order raises
-BacktestError, as it does in the run's `init`. A sweep's `init` therefore runs twice for
-each combination: once here, once in its run.
+BacktestError, as it does in the run's `init`.
+
+So `init` runs twice for every run: once on a probe instance here, then once in the run,
+on the history and the run's bars together. A single run probes its own parameters, a
+sweep every combination's (`probe_needs`, by `params_key`; the history is loaded once,
+for the `largest` need of each series), and each run keeps what its own probe asked for,
+so a combination of a sweep keeps exactly what its single run keeps.
 
 A `bt.from_signals` function is never run on the probe: its indicators are its own, out
 of the engine's sight, so its series is given the history of `FUNCTION_LOOKBACK`, a
@@ -37,6 +37,7 @@ from ._causality_checks import CheckOutcome, IndicatorChecks
 from ._series import PositionView, SeriesStore
 from ._timers import Timers
 from ._warm_up import SeriesNeed, series_needs
+from ._warm_up_measure import ReferenceCall
 from .errors import BacktestError, ConfigError
 
 # The indicator whose warm-up a from_signals function's series is given: a 200-bar EMA
@@ -89,10 +90,11 @@ def _function_needs(
         return [np.asarray(values, dtype=float)]
 
     label = f"{function}({field}, {length})"
-    bars, _ = checks.warm_up(label, False, outputs)
-    if bars is None:
+    found = checks.warm_up(label, None, ReferenceCall(outputs))
+    if found.bars is None:
         return ()
-    return (SeriesNeed(name, interval, bars, f"the function of {strategy.__name__}, as {label}"),)
+    described = f"the function of {strategy.__name__}, as {label}"
+    return (SeriesNeed(name, interval, found.bars, described, more=found.more),)
 
 
 def history_needs(
@@ -101,8 +103,8 @@ def history_needs(
     setup: ProbeSetup,
     checks: IndicatorChecks,
 ) -> tuple[SeriesNeed, ...]:
-    """The bars each series needs before `start`: the warm-up of the `self.I`
-    indicators of `outcomes`, or the lookback of a from_signals function."""
+    """The needs of each series before `start`: those of the `self.I` indicators of
+    `outcomes`, or the lookback of a from_signals function."""
     if made_by(strategy) == FROM_SIGNALS:
         return _function_needs(strategy, setup.names[0], setup.interval, checks)
     return series_needs(outcomes)[0]
@@ -110,9 +112,11 @@ def history_needs(
 
 class _ReferenceStore(SeriesStore):
     """The reference bars as the series of one name and interval: no bar is visible in
-    `init`, as in a run's, and none is revealed."""
+    `init`, as in a run's, and none is revealed. `reference` tells an indicator's errors
+    where it was computed (`_indicators`)."""
 
     declaring = True
+    reference = True
 
     def visible(self) -> int:
         return 0
@@ -132,12 +136,16 @@ class _ProbeChecks:
         label: str,
         compute: Any,
         whole: Sequence[np.ndarray],
-        anchored: bool,
+        anchor: str | None,
         series: tuple[str, str] | None = None,
-        reference: Any = None,
+        reference: ReferenceCall | None = None,
     ) -> CheckOutcome:
-        warm_up, note = self._shared.warm_up(label, anchored, reference)
-        outcome = CheckOutcome(label, None, warm_up, note, series=series, anchored=anchored)
+        """`_causality_checks.RunChecks.check` without the truncation check: the
+        outcome of the indicator's warm-up, recorded."""
+        found = self._shared.warm_up(label, anchor, reference)
+        outcome = CheckOutcome(
+            label, None, found.bars, found.note, series=series, anchor=anchor, more=found.more
+        )
         self.outcomes.append(outcome)
         return outcome
 
@@ -165,11 +173,16 @@ class _Run:
 
 class ProbeContext:
     """The run context of the probe (module docstring): what `init` reads of a
-    `RunContext`, on the reference bars."""
+    `RunContext`, on the reference bars. `run.checks` records each indicator's warm-up;
+    `names` and `symbols` are what the strategy addresses, `instruments` their
+    instruments, `product` and `default_size` the run's, `timers` accepts timers, `now`
+    is None (no decision yet) and `declaring` is True (it is `init`)."""
+
+    declaring = True
 
     def __init__(self, setup: ProbeSetup, checks: IndicatorChecks) -> None:
         self._setup = setup
-        self._columns = checks.reference_columns()
+        self._checks = checks
         self._stores: dict[tuple[str, str], _ReferenceStore] = {}
         self.run = _Run(_ProbeChecks(checks))
         self.names = setup.names
@@ -182,16 +195,19 @@ class ProbeContext:
 
     def store(self, symbol: str | None, interval: str | None = None) -> _ReferenceStore:
         """The reference bars as the series of a name at an interval (the strategy's by
-        default). Raises ConfigError for a name the strategy does not trade."""
+        default), made on first use. Raises ConfigError for a name the strategy does not
+        trade."""
         name = self.symbols[self.instrument_index(symbol)]
         interval = interval or self._setup.interval
         key = (name, interval)
         if key not in self._stores:
             shown = name if interval == self._setup.interval else f"{name}[{interval}]"
-            self._stores[key] = _ReferenceStore(name, interval, self._columns, shown)
+            columns = self._checks.reference_columns()
+            self._stores[key] = _ReferenceStore(name, interval, columns, shown)
         return self._stores[key]
 
     def symbol_of(self, index: int) -> str:
+        """The name the strategy addresses at registration index `index`."""
         return self.symbols[index]
 
     def instrument_index(self, symbol: str | None) -> int:
@@ -206,16 +222,21 @@ class ProbeContext:
         return self.symbols.index(symbol)
 
     def position(self, symbol: str, product: str | None = None) -> PositionView:
+        """A flat position: nothing is traded on the probe."""
         return PositionView.flat(symbol)
 
     def account(self) -> tuple[float, float, float, float, float, float]:
+        """(equity, free cash, realized, unrealized, costs, margin) in rupees: the
+        capital, all of it free."""
         capital = self._setup.capital
         return (capital, capital, 0.0, 0.0, 0.0, 0.0)
 
     def working_orders(self) -> list:
+        """No order works on the probe."""
         return []
 
     def sizing_store(self, instrument: int) -> _ReferenceStore:
+        """The reference bars of the instrument at registration index `instrument`."""
         return self.store(self.symbols[instrument])
 
     def _refuse(self, *args: Any) -> Any:
@@ -224,41 +245,51 @@ class ProbeContext:
     submit = submit_target = submit_rebalance = order = cancel = _refuse
 
 
-def probe_largest(
-    strategy: type, setup: ProbeSetup, parameter_sets: Sequence[Mapping[str, Any] | None]
+def combination_needs(
+    strategy: type, setup: ProbeSetup, params: Mapping[str, Any] | None, checks: IndicatorChecks
 ) -> tuple[SeriesNeed, ...]:
-    """The largest need of each series of `strategy` over the parameter sets (see the
-    module docstring), in first-registration order. Raises what the strategy's `init`
-    raises."""
-    checks = IndicatorChecks("probe")
-    largest: dict[tuple[str, str], SeriesNeed] = {}
-    for params in parameter_sets:
-        context = ProbeContext(setup, checks)
-        if made_by(strategy) != FROM_SIGNALS:
-            instance = strategy(**(params or {}))
-            instance._ctx = context
-            instance.init()
-        for need in history_needs(strategy, context.run.checks.outcomes, setup, checks):
-            held = largest.get((need.symbol, need.interval))
-            if held is None or need.bars > held.bars:
-                largest[(need.symbol, need.interval)] = need
-    return tuple(largest.values())
+    """The needs of `strategy` with the parameter values `params` (module docstring),
+    measured with `checks`. Raises what the strategy's `init` raises."""
+    context = ProbeContext(setup, checks)
+    if made_by(strategy) != FROM_SIGNALS:
+        instance = strategy(**(params or {}))
+        instance._ctx = context
+        instance.init()
+    return history_needs(strategy, context.run.checks.outcomes, setup, checks)
 
 
-def sweep_needs(
+def params_key(params: Mapping[str, Any] | None) -> tuple:
+    """The key of a parameter set among the probed ones: its items, sorted (parameter
+    values are numbers, booleans and strings, `Strategy.parameters`)."""
+    return tuple(sorted((params or {}).items()))
+
+
+def largest(found: Iterable[tuple[SeriesNeed, ...]]) -> tuple[SeriesNeed, ...]:
+    """The largest need of each series and kind over the needs of several parameter sets,
+    in first-registration order: the most bars, and each anchor period."""
+    held: dict[tuple[str, str, str | None], SeriesNeed] = {}
+    for needs in found:
+        for need in needs:
+            key = (need.symbol, need.interval, need.anchor)
+            kept = held.get(key)
+            if kept is None or (need.bars, need.more) > (kept.bars, kept.more):
+                held[key] = need
+    return tuple(held.values())
+
+
+def probe_needs(
     strategy: type,
-    plan: Any,
-    instruments: list[Any],
-    futures: Any,
-    parameter_sets: Sequence[Mapping[str, Any] | None] | None,
-) -> tuple[SeriesNeed, ...] | None:
-    """The largest need of a sweep over its combinations' `parameter_sets`
-    (`probe_largest`); None for a single run (no parameter sets), which learns its
-    needs from its own `init`."""
-    if parameter_sets is None:
-        return None
-    setup = probe_setup(strategy, plan, instruments, futures)
-    return probe_largest(strategy, setup, parameter_sets)
+    setup: ProbeSetup,
+    parameter_sets: Sequence[Mapping[str, Any] | None],
+    checks: IndicatorChecks,
+) -> dict[tuple, tuple[SeriesNeed, ...]]:
+    """The needs of `strategy` with each of `parameter_sets` (one for a single run, every
+    combination's for a sweep), by `params_key`. Raises what the strategy's `init`
+    raises."""
+    return {
+        params_key(params): combination_needs(strategy, setup, params, checks)
+        for params in parameter_sets
+    }
 
 
 __all__ = [
@@ -266,8 +297,10 @@ __all__ = [
     "ORDERS_IN_INIT",
     "ProbeContext",
     "ProbeSetup",
+    "combination_needs",
     "history_needs",
-    "probe_largest",
+    "largest",
+    "params_key",
+    "probe_needs",
     "probe_setup",
-    "sweep_needs",
 ]

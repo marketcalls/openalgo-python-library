@@ -16,6 +16,13 @@ class ConfigError(BacktestError, ValueError):
     """An argument or combination of arguments is invalid."""
 
 
+class IndicatorOutsideInitError(ConfigError):
+    """`self.I` was called after `init` (in `on_bar`, a timer, a callback or `on_stop`).
+    Indicators are registered in `init`: the history before `start` is loaded for them
+    and the strategy waits for their warm-up before its first decision, both settled
+    before the first bar, so an indicator registered later would be neither."""
+
+
 class DataError(BacktestError):
     """Market data is missing, malformed or fails a quality check."""
 
@@ -96,6 +103,7 @@ __all__ = [
     "CostError",
     "DataError",
     "DataQualityError",
+    "IndicatorOutsideInitError",
     "MissingDependencyError",
     "NoDataError",
     "OrdersNotPlacedWarning",

@@ -1,35 +1,32 @@
 """Loading the bars before `start` that a run's indicators need (decision D25; the
 history's rules are in `_warm_up_history`).
 
-For each traded symbol with a need, the run's own source is asked for the base bars
-from the first day the needs ask for (`_warm_up_history.first_requested_day`) to the
-last bar before `start`: the source the run's bars came from (Historify or the broker,
-never both), the user's `data=`, or the run's data provider, as `HistorySource` records
-it. A source with fewer bars gives what it has, none when it has none (a new listing,
-own data that begins at `start`). A load that fails (a quality error, a suspected
-unadjusted split in the history) gives no history and says why; the run's own bars are
-unaffected. The load's own warnings join the run's, each named "<symbol> history before
-start". A futures series loads none (`_warm_up_history`).
+For each traded symbol with a need, and for every symbol after a datetime `start` (the
+morning before it), the run's own source is asked for the base bars from the first day
+the needs ask for (`_warm_up_days.first_requested_day`) to the last bar before
+`start`: the source the run's bars came from (Historify or the broker, never both), the
+user's `data=`, or the run's data provider, as `HistorySource` records it. A source with
+fewer bars gives what it has, none when it has none (a new listing, own data that begins
+at `start`). The load is not stopped by a quality error: each run checks the bars it
+keeps, joined to its own (`_warm_up_join`), so a problem outside them does not cost it
+its history. A load that fails otherwise (a timestamp the source gets wrong) gives no
+history and says why; the run's own bars are unaffected. The load's own warnings join
+the run's, each named "<symbol> history before start". A futures series loads none
+(`_warm_up_history`).
 """
 
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from ._base_interval import _data_for
 from ._run_corporate_actions import declared_for
 from ._warm_up import SeriesNeed
-from ._warm_up_history import (
-    LoadedHistory,
-    SymbolLoad,
-    by_symbol,
-    empty_base,
-    first_requested_day,
-    run_from,
-)
+from ._warm_up_days import by_symbol, first_requested_day, run_from
+from ._warm_up_history import LoadedHistory, SymbolLoad, empty_base
 from .data import BarsResult, load_bars
 from .errors import DataError, NoDataError
 
@@ -80,23 +77,30 @@ def _partition_key(result: BarsResult) -> str:
     return partitions[0]["key"].rsplit("/", 1)[0] if partitions else ""
 
 
-def load_symbol(
-    symbol: str, needs: Mapping[str, int], plan: Any, source: HistorySource
-) -> SymbolLoad:
-    """One symbol's load for `needs`, bars by interval. Raises ConfigError for an
-    interval the base bars cannot build or arguments the data layer refuses; a failed
-    load is a note, never an error."""
-    args = source.args
-    if any(interval != plan.interval for interval in needs):
-        # Imported here, as the run context does: a run on its own interval needs none.
-        from ._timeframes import _check_interval
+def _failure(error: DataError) -> str:
+    """Why a load failed, for the Assumptions block: the error's kind and message."""
+    return f"{type(error).__name__}: {error}"
 
-        for interval in needs:
-            _check_interval(interval, plan.base)
+
+def load_symbol(
+    symbol: str, needs: Sequence[SeriesNeed], plan: Any, source: HistorySource
+) -> SymbolLoad:
+    """One symbol's load for `needs`. Raises ConfigError for an interval the base bars
+    cannot build or arguments the data layer refuses; a failed load is a note, never an
+    error."""
+    # Imported here, as the run context does: a run on its own interval needs none.
+    from ._timeframes import _check_interval
+
+    args = source.args
+    for need in needs:
+        _check_interval(need.interval, plan.base)
     kind = "source" if args["data"] is None else "own"
-    origin, base_interval = source.origins[symbol]
+    declared = declared_for(args["corporate_actions"], symbol, plan.symbols)
     first_day, _ = first_requested_day(needs, plan, source.calendar)
     last_day = plan.start if plan.first_slice is not None else plan.start - dt.timedelta(days=1)
+    if first_day > last_day:
+        return SymbolLoad(empty_base(), kind, declared=declared)
+    origin, base_interval = source.origins[symbol]
     try:
         result = load_bars(
             symbol,
@@ -111,32 +115,33 @@ def load_symbol(
             tz=args["tz"],
             base=base_interval,
             now=plan.present,
-            corporate_actions=declared_for(args["corporate_actions"], symbol, plan.symbols),
+            strict=False,
+            corporate_actions=declared,
         )
     except NoDataError:
-        return SymbolLoad(empty_base(), kind)
-    except DataError as exc:
-        reason = str(exc).split(". ")[0].rstrip(".")
-        return SymbolLoad(empty_base(), kind, reason)
+        return SymbolLoad(empty_base(), kind, declared=declared)
+    except DataError as error:
+        return SymbolLoad(empty_base(), kind, _failure(error), declared=declared)
     base = result.bars[result.bars["ts_open"].to_numpy() < run_from(plan)]
     notes = [f"{symbol} history before start: {note}" for note in result.meta.warnings]
     # A source that returned less than was asked for says so in the first warning
     # (`data._finish`, short_history); a run repeats it only when it is short of a need.
     coverage = notes.pop(0) if result.meta.short_history and notes else ""
     key = _partition_key(result)
-    return SymbolLoad(base.reset_index(drop=True), kind, "", key, tuple(notes), coverage)
+    return SymbolLoad(base.reset_index(drop=True), kind, "", key, tuple(notes), coverage, declared)
 
 
-def load_history(plan: Any, source: HistorySource, needs: tuple[SeriesNeed, ...]) -> LoadedHistory:
+def load_history(plan: Any, source: HistorySource, needs: Sequence[SeriesNeed]) -> LoadedHistory:
     """The history of every symbol of `plan` that `needs` name (the needs of a run, or
-    the largest of a sweep's). Raises ConfigError as `load_symbol` does."""
+    the largest of a sweep's), and of every symbol after a datetime `start`. Raises
+    ConfigError as `load_symbol` does."""
     if source.futures:
         return LoadedHistory({}, futures=True)
     wanted = by_symbol(needs)
     loads = {
-        symbol: load_symbol(symbol, wanted[symbol], plan, source)
+        symbol: load_symbol(symbol, wanted.get(symbol, []), plan, source)
         for symbol in plan.symbols
-        if symbol in wanted
+        if symbol in wanted or plan.first_slice is not None
     }
     return LoadedHistory(loads)
 

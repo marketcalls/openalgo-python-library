@@ -25,7 +25,7 @@ from openalgo import ta
 # IST session dates of the run, inclusive.
 START, END = "2026-04-01", "2026-11-06"
 # The first session of the bars: those before START are history for the indicators.
-HISTORY_START = "2025-07-01"
+HISTORY_START = "2024-07-01"
 # Rupees allocated to the strategy.
 CAPITAL = 100_000
 
