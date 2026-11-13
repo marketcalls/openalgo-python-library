@@ -157,6 +157,10 @@ These are settled. Do not redesign around them without asking.
 - **Indian market rules are the default.** Charges, slippage, lot size, tick size,
   freeze quantity and session times apply without being asked for. Quantity is always
   in units, never lots.
+- **Indian markets only, for now.** The engine knows the Indian exchanges only; US
+  markets (exchanges, calendars, commissions) were considered on 2026-11-12 and
+  deferred by the maintainer. Data a user loads from elsewhere is backtested as an
+  Indian instrument with Indian charges.
 - **One Rust kernel, Python on top.** Backtest and live share the same kernel and the
   same rules; Python declares, Rust executes.
 - **Futures margin: 5x by default, the user's figure when given.** Every futures

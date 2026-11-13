@@ -50,6 +50,8 @@ def evaluate(result: Any, objective: str | Callable[[Any], float]) -> dict[str, 
     ConfigError when a function objective gives something other than a number."""
     figures = result.metrics
     row = {name: float(figures[name]) for name in KEY_METRICS}
+    # A count of trades reads as a whole number in the table (8, not 8.0).
+    row["trades"] = int(figures["trades"])
     value = objective(result) if callable(objective) else figures[objective]
     if isinstance(value, bool) or not isinstance(value, int | float | np.number):
         raise ConfigError(f"the objective gave {value!r}; it must give a number")

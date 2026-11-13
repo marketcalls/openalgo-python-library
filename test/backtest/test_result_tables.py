@@ -13,10 +13,12 @@ exit at the third, the first with `qty=10` (no order has a sizer), the second wi
 engine default size (the entry's sizer is "default", the exit has none).
 """
 
+import datetime as dt
 import math
 
+import pandas as pd
 import pytest
-from strategy_samples import CAPITAL, minute_bars
+from strategy_samples import CAPITAL, at, daily_bars, minute_bars
 
 import openalgo.backtest as bt
 
@@ -70,6 +72,49 @@ def test_a_table_has_the_same_columns_with_and_without_rows(name, quiet, busy):
 
 def test_an_empty_fills_table_has_an_ist_time_column(quiet, busy):
     assert quiet.fills["time"].dtype == busy.fills["time"].dtype
+
+
+IST_COLUMNS = (
+    ("orders", "decided_at"),
+    ("orders", "good_until"),
+    ("skipped", "decided_at"),
+    ("stale_marks", "time"),
+)
+
+
+@pytest.mark.parametrize("table, column", IST_COLUMNS)
+def test_a_time_column_holds_ist_datetimes_like_the_fills_time(table, column, quiet, busy):
+    ist = busy.fills["time"].dtype
+    for result in (quiet, busy):
+        assert getattr(result, table)[column].dtype == ist, (table, column)
+
+
+def test_an_order_is_decided_at_its_bar_close_and_valid_until_the_session_close(busy):
+    # Bought at the close of the first 1-minute bar, 09:16; a DAY order ends at 15:30.
+    first = busy.orders.iloc[0]
+    assert (first["decided_at"], first["good_until"]) == (at(9, 16), at(15, 30))
+
+
+def test_a_skipped_order_is_dated_at_its_decision(busy):
+    assert list(busy.skipped["decided_at"]) == [at(9, 16)]
+
+
+def test_a_stale_mark_is_dated_at_the_slice_without_a_bar(busy):
+    # The 09:18 bar is missing.
+    assert list(busy.stale_marks["time"]) == [at(9, 18)]
+
+
+def test_a_gtt_order_has_no_session_validity():
+    class RestingGtt(bt.Strategy):
+        symbol, exchange, interval, product = "SBIN", "NSE", "D", "CNC"
+
+        def on_bar(self, bar):
+            if len(self.close) == 1:
+                self.buy(qty=10, price=90.0, validity="gtt")
+
+    days = [dt.date(2025, 7, 1), dt.date(2025, 7, 2)]
+    result = bt.backtest(RestingGtt, data=daily_bars(days), capital=CAPITAL, costs=None)
+    assert pd.isna(result.orders["good_until"].iloc[0])
 
 
 class ExplicitQuantity(Quiet):

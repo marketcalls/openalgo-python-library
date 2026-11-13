@@ -24,6 +24,7 @@ use super::market_data::MarketData;
 use super::output::{FinalPosition, GrossPnl, Recorder, RunOutput};
 use super::pause::Pause;
 use super::run_end::{end_of_run, RunEnd};
+use super::sale_credit::SessionBuys;
 use super::session::SessionTimes;
 use super::strategy_risk::StrategyRisk;
 use super::timers::TimerBook;
@@ -47,7 +48,9 @@ pub(super) enum Phase {
 pub struct AccountView {
     /// Capital plus realized minus costs plus unrealized.
     pub equity_rupees: f64,
-    /// Equity not blocked as margin.
+    /// What the account can trade with (`Portfolio::free_cash_rupees`): equity not
+    /// blocked as margin, with delivery holdings of shares at their cost and sale
+    /// proceeds not yet credited left out.
     pub free_cash_rupees: f64,
     /// Gross P&L realized since the start.
     pub realized_rupees: f64,
@@ -91,6 +94,8 @@ pub struct Engine {
     pub(super) futures: FuturesDesk,
     /// Where the run ends (`run_end`).
     pub(super) run_end: RunEnd,
+    /// The session's CNC buys, for the credit of a sale (`sale_credit`).
+    pub(super) session_buys: SessionBuys,
 }
 
 /// The one exchange of a Phase 1 run.
@@ -164,6 +169,7 @@ impl Engine {
             timers: TimerBook::default(),
             futures: FuturesDesk::default(),
             run_end,
+            session_buys: SessionBuys::default(),
         })
     }
 
@@ -285,7 +291,7 @@ impl Engine {
         let account = &self.portfolio.account;
         AccountView {
             equity_rupees: self.portfolio.equity_rupees(),
-            free_cash_rupees: self.portfolio.free_cash_rupees(),
+            free_cash_rupees: self.free_cash_rupees(),
             realized_rupees: account.realized_rupees,
             unrealized_rupees: self.portfolio.unrealized_rupees(),
             costs_rupees: account.costs_rupees,

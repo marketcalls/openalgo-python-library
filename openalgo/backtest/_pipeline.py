@@ -39,15 +39,16 @@ from ._conditions import drive_conditions, evaluation_path, has_conditions
 from ._context import RunContext, RunData
 from ._driver import drive
 from ._engine import build_engine, call
+from ._expired_contracts import expired_contracts
 from ._futures import attach, resolve_futures
 from ._futures_margin import margin_assumption, margin_warnings
 from ._instruments import resolve_instruments
 from ._intraday_assumptions import one_clock_time
 from ._manifest import build_manifest, strategy_source_hash
 from ._margin_check import check_margin
-from ._margin_rejections import margin_rejections
 from ._market import MarketSettings, market_settings
 from ._messages import not_supported
+from ._rejections import reject_warnings
 from ._run_corporate_actions import (
     UnadjustedEvent,
     check_crossings,
@@ -104,7 +105,8 @@ class PreparedRun:
         """The market settings, resolved again when this run came without them."""
         if self.market is not None:
             return self.market
-        return market_settings(self.plan, self.instruments, self.market_args)
+        # Unverified rates were announced when the run was prepared (`_market`).
+        return market_settings(self.plan, self.instruments, self.market_args, announce=False)
 
     def session_calendar(self) -> calendar_module.Calendar:
         """The run's calendar."""
@@ -159,7 +161,8 @@ def prepare(strategy: type, client: Any, args: dict[str, Any]) -> PreparedRun:
         instruments, lines, version = futures.instruments, futures.lines, futures.version
     # Before any data is loaded: an instrument the margin table cannot price stops here.
     check_margin(instruments, plan.product, (plan.start, plan.end))
-    choice = choose_base(plan, args, client, calendar, windows)
+    with expired_contracts(instruments, plan.present):
+        choice = choose_base(plan, args, client, calendar, windows)
     plan = dataclasses.replace(plan, base=choice.base)
     instruments, lines = resolve_slab_ticks(
         instruments, lines, plan, args, client, calendar, windows
@@ -312,7 +315,7 @@ def execute(
         _assumptions(prepared, calendar, checks, market),
         [
             *run_end_warnings(output["run_end"]),
-            *margin_rejections(output["orders"]),
+            *reject_warnings(output["orders"], [i.kind for i in prepared.instruments]),
             *prepared.warnings,
             *timer_warnings,
         ],

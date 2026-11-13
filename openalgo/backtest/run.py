@@ -193,8 +193,7 @@ def rebalance(*args: Any, **settings: Any) -> Any:
     NotImplementedError."""
     raise not_supported(
         "bt.rebalance",
-        "write the rebalance in on_bar of a strategy on several symbols, with "
-        "self.target(percent=...) for each symbol",
+        "call self.rebalance(weights) in on_bar of a strategy on several symbols",
     )
 
 
@@ -206,12 +205,17 @@ def from_signals(func: Any, symbol: str, exchange: str, interval: str, **setting
     return build(func, symbol, exchange, interval, **settings)
 
 
-def from_arrays(entries: Any, exits: Any = None, **settings: Any) -> Any:
+def from_arrays(entries: Any, exits: Any = None, *extra: Any, **settings: Any) -> Any:
     """A strategy from boolean entry and exit arrays, one value per strategy bar, for
-    `bt.backtest`; read by the rules of conditions (`_arrays.from_arrays`)."""
+    `bt.backtest`; read by the rules of conditions (`_arrays.from_arrays`). Everything
+    after `exits` is a keyword, and `symbol`, `exchange` and `interval` are required:
+    `bt.from_arrays(entries, exits, symbol="SBIN", exchange="NSE", interval="5m")`.
+    Raises ConfigError, with that example, when one is missing or more values are given
+    by position (`symbol=`, `exchange=`, `interval=`, `shorts=` and `covers=` are
+    keywords)."""
     from ._arrays import from_arrays as build
 
-    return build(entries, exits, **settings)
+    return build(entries, exits, *extra, **settings)
 
 
 __all__ = [

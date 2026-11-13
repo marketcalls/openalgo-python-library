@@ -8,11 +8,12 @@ use super::super::{builtin_schedules, CostError, Segment, TaxBase, TaxUnit};
 
 const HEADER: &str = "schedule_id,valid_from,valid_to,segment,verified_through,stt_buy_rate,\
                       stt_sell_rate,exchange_txn_rate,ipft_rate,sebi_rate,stamp_buy_rate,\
-                      stt_exercise_rate,gst_rate,calculator_tax_base,calculator_tax_unit,source,\
-                      notes";
-const VERSION: &str = "T1,2025-01-01,,*,2025-06-30,,,,,,,,0.18,,,\"a source, with a comma\",note";
+                      stt_exercise_rate,gst_rate,gst_on_sebi_fee,calculator_tax_base,\
+                      calculator_tax_unit,source,notes";
+const VERSION: &str =
+    "T1,2025-01-01,,*,2025-06-30,,,,,,,,0.18,yes,,,\"a source, with a comma\",note";
 const ROW: &str = "T1,,,NSE_EQ_INTRADAY,2025-06-30,0,0.00025,0.0000297,0.000001,0.000001,\
-                   0.00003,0,,sides,rupee,,";
+                   0.00003,0,,,sides,rupee,,";
 
 fn file(lines: &[&str]) -> String {
     let mut text = String::from(HEADER);
@@ -33,7 +34,7 @@ fn failure(lines: &[&str]) -> (usize, String) {
 
 #[test]
 fn the_embedded_data_file_parses() {
-    assert_eq!(builtin_schedules().map(<[_]>::len), Ok(2));
+    assert_eq!(builtin_schedules().map(<[_]>::len), Ok(13));
 }
 
 #[test]
@@ -48,12 +49,20 @@ fn a_well_formed_file_becomes_schedule_versions() {
         version.gst_verified_through,
         Some(days_from_civil(2025, 6, 30))
     );
+    assert!(version.gst_on_sebi_fee);
     assert_eq!(version.source, "a source, with a comma");
     let row = version.row(Segment::NseEqIntraday).unwrap();
     assert_eq!(row.rates.stt_sell_rate, 0.00025);
     assert_eq!(row.rates.calculator_tax_base, TaxBase::Sides);
     assert_eq!(row.rates.calculator_tax_unit, TaxUnit::Rupee);
     assert_eq!(row.verified_through, Some(days_from_civil(2025, 6, 30)));
+}
+
+#[test]
+fn a_version_says_whether_gst_falls_on_the_sebi_fee() {
+    let exempt = VERSION.replace("0.18,yes", "0.18,no");
+    let versions = parse_schedules(&file(&[&exempt, ROW])).unwrap();
+    assert!(!versions[0].gst_on_sebi_fee);
 }
 
 #[test]
@@ -95,7 +104,21 @@ fn a_malformed_value_is_reported_with_its_line_number() {
     let bad_base = ROW.replace("sides", "both");
     let bad_unit = ROW.replace("rupee", "rupees");
     let bad_segment = ROW.replace("NSE_EQ_INTRADAY", "NSE_EQ");
+    let bad_gst_base = VERSION.replace("0.18,yes", "0.18,maybe");
+    let no_gst_base = VERSION.replace("0.18,yes", "0.18,");
     assert_failures(&[
+        (
+            "an unknown GST base",
+            vec![&bad_gst_base],
+            2,
+            "gst_on_sebi_fee \"maybe\" must be yes or no",
+        ),
+        (
+            "a version without its GST base",
+            vec![&no_gst_base],
+            2,
+            "gst_on_sebi_fee \"\" must be yes or no",
+        ),
         (
             "a rate that is not a number",
             vec![VERSION, &bad_rate],
@@ -136,12 +159,19 @@ fn a_misplaced_row_or_field_is_reported_with_its_line_number() {
     let dated_row = ROW.replacen("T1,,", "T1,2025-01-01,", 1);
     let rate_on_version = VERSION.replacen(",,,,,,,,0.18", ",0.001,,,,,,,0.18", 1);
     let open_quote = VERSION.replace("note", "\"note");
+    let gst_base_on_row = ROW.replace("0,,,sides", "0,,yes,sides");
     assert_failures(&[
+        (
+            "a GST base on a segment row",
+            vec![VERSION, &gst_base_on_row],
+            3,
+            "must be empty",
+        ),
         (
             "too few columns",
             vec![VERSION, &wrong_columns],
             3,
-            "expected 17 columns",
+            "expected 18 columns",
         ),
         (
             "a segment row before its version row",

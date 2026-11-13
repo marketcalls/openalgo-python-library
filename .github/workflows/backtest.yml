@@ -15,6 +15,21 @@ on:
       - 'test/backtest/**'
       - 'examples/backtest_quickstart.py'
       - '.github/workflows/backtest.yml'
+      # The rest of what the gate runs: the indicator core and package, the feed, and
+      # their tests.
+      - 'rust/oa_core/**'
+      - 'rust/oa_py/src/**'
+      - 'openalgo/indicators/**'
+      - 'openalgo/feed.py'
+      - 'openalgo/_feed_*.py'
+      - 'test/test_feed_*.py'
+      - 'test/feed_*.py'
+      - 'test/test_indicators_*.py'
+      - 'test/indicator_references.py'
+      - 'test/docs/**'
+      - 'test/conftest.py'
+      - 'test/live/**'
+      - 'benchmark/backtest_speed.py'
       # Dependency, build and lint settings change what the gate checks.
       - 'rust/Cargo.toml'
       - 'rust/Cargo.lock'
@@ -28,7 +43,7 @@ permissions:
 
 env:
   # The branch of marketcalls/openalgo-docs whose backtesting examples must run.
-  DOCS_BRANCH: feat/python-sdk-backtesting
+  DOCS_BRANCH: main
   # pyo3 0.22 predates Python 3.13 and 3.14; the abi3 build is forward compatible.
   PYO3_USE_ABI3_FORWARD_COMPATIBILITY: '1'
   CARGO_TERM_COLOR: always
@@ -74,7 +89,7 @@ jobs:
         run: |
           python -m venv .venv
           . .venv/bin/activate
-          pip install 'maturin>=1.7,<2.0' pytest hypothesis ruff
+          pip install 'maturin>=1.7,<2.0' pytest hypothesis ruff openpyxl
           maturin develop --release
       - name: ruff check
         run: |

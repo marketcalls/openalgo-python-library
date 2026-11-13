@@ -9,18 +9,18 @@ use crate::model::Side;
 use super::breakdown::CostBreakdown;
 use super::brokerage::BrokerageRule;
 use super::rounding::{calculator_paise, calculator_rupee};
-use super::schedule::{SegmentRates, TaxBase, TaxUnit};
+use super::schedule::{GstRule, SegmentRates, TaxBase, TaxUnit};
 
 /// Unrounded cost of one fill worth `value` rupees (price times quantity in units;
 /// premium value for an option).
 ///
 /// STT or CTT falls on the side the rates say, stamp duty on the buy side, exchange
-/// charge and SEBI fee on both sides, and GST (`gst_rate`, a fraction) on brokerage
-/// plus exchange charge plus SEBI fee, never on STT or stamp duty.
+/// charge and SEBI fee on both sides, and GST (`gst`) on brokerage plus exchange charge,
+/// plus the SEBI fee when the version taxes it, never on STT or stamp duty.
 #[inline]
 pub(super) fn accrue_fill(
     rates: &SegmentRates,
-    gst_rate: f64,
+    gst: GstRule,
     rule: &BrokerageRule,
     side: Side,
     value: f64,
@@ -32,7 +32,7 @@ pub(super) fn accrue_fill(
     };
     let exchange_txn = value * rates.exchange_total_rate();
     let sebi_fee = value * rates.sebi_rate;
-    let gst = gst_rate * (brokerage + exchange_txn + sebi_fee);
+    let gst = gst.on(brokerage, exchange_txn, sebi_fee);
     CostBreakdown {
         brokerage,
         stt,
@@ -76,7 +76,8 @@ fn calculator_brokerage(rule: &BrokerageRule, value: f64) -> f64 {
 ///   turnover and rounded to the paisa, then added.
 /// - The SEBI fee is computed on the turnover and rounded to the paisa.
 /// - GST is the rate times (brokerage + exchange charge + SEBI fee) as rounded
-///   above, rounded to the paisa.
+///   above, rounded to the paisa. For a version that leaves the SEBI fee out of the
+///   GST base (trades before 2022-07-18) it is left out here too.
 /// - Stamp duty is on the buy value, rounded to the paisa and then to the rupee.
 /// - The total is the sum of the lines rounded to the paisa
 ///   (`CostModel::reported_total`).
@@ -92,7 +93,7 @@ fn calculator_brokerage(rule: &BrokerageRule, value: f64) -> f64 {
 /// with a price but zero quantity).
 pub(super) fn calculator_cost(
     rates: &SegmentRates,
-    gst_rate: f64,
+    gst: GstRule,
     rule: &BrokerageRule,
     buy_price: f64,
     sell_price: f64,
@@ -120,7 +121,7 @@ pub(super) fn calculator_cost(
             + calculator_paise(turnover * rates.ipft_rate),
     );
     let sebi_fee = calculator_paise(turnover * rates.sebi_rate);
-    let gst = calculator_paise(gst_rate * (brokerage + exchange_txn + sebi_fee));
+    let gst = calculator_paise(gst.on(brokerage, exchange_txn, sebi_fee));
     let stamp_duty = calculator_rupee(calculator_paise(buy_value * rates.stamp_buy_rate));
 
     CostBreakdown {

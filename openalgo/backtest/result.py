@@ -1,8 +1,10 @@
 """`Result`: what `bt.backtest` returns.
 
-The tables are pandas DataFrames built from the kernel's result columns. Times are IST
-(`time` columns, tz-aware) next to the kernel's UTC nanoseconds (`*_ts` columns);
-instruments are named by symbol. Prices and money are rupees, quantities units. Every
+The tables are pandas DataFrames built from the kernel's result columns. Every time is a
+tz-aware IST datetime (the `time` column of each table, and `entry_time`, `exit_time`,
+`decided_at`, `good_until`) and every date an IST date (`date` columns); the kernel's
+UTC nanoseconds are kept only in the `*_ts` columns beside them. Instruments are named
+by symbol. Prices and money are rupees, quantities units. Every
 table has the same columns whether or not it has rows.
 
 Built: `fills`, `orders`, `trades`, `equity`, `returns`, `positions` (the position
@@ -11,19 +13,22 @@ history), `events`, `risk_events`, `stale_marks`, `final_positions`, `gross_pnl`
 `metrics`, `metrics_table()`, `monte_carlo()`, `tearsheet()` (full, basic, metrics or
 charts), `r_summary` (the R-multiples, `_result_r`), `assumptions`,
 `warnings`, `skipped`, `manifest` (see `_manifest`), `rerun()` (see `_rerun`),
-`to_dataframes()`. Not supported in this version: the several-strategy views
-`strategy()`, `combined` and `correlation`, which raise NotImplementedError.
+`to_dataframes()`, `to_csv()` and `to_excel()` (`_result_export`). Not supported in this
+version: the several-strategy views `strategy()`, `combined` and `correlation`, which
+raise NotImplementedError.
 """
 
 from __future__ import annotations
 
 import math
+import os
 from functools import cached_property
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-from . import _result_costs, _result_futures, _result_r, _result_report
+from . import _rejections, _result_costs, _result_export, _result_futures, _result_r, _result_report
 from ._messages import SEVERAL_STRATEGIES, not_supported
 from ._native import native
 from ._series import IST
@@ -72,11 +77,16 @@ FINAL_POSITION_COLUMNS = (
     "unrealized_rupees",
     "stale",
 )
+# The `Instrument.kind` of a futures contract, whose final position has no market value.
+FUTURE_KIND = "future"
 # The columns of the orders table that hold a string or nothing. A missing one is NaN in
 # an object column, as the events table marks a missing key, whatever the other rows
 # hold: left to pandas, a column of None alone stays None while one with a string turns
 # None into NaN, so the marker would depend on the run.
 ORDER_TEXT_COLUMNS = ("reject_code", "tag", "sizer")
+# The `good_until` of a GTT order in the kernel (`exec::GTT_GOOD_UNTIL`, the largest
+# int64): no session close ends it.
+GTT_GOOD_UNTIL = 2**63 - 1
 
 
 def _text(values: list[str | None]) -> pd.Series:
@@ -84,10 +94,14 @@ def _text(values: list[str | None]) -> pd.Series:
     return pd.Series([math.nan if value is None else value for value in values], dtype=object)
 
 
-def _times(values: Any) -> pd.DatetimeIndex:
+def _times(values: Any, open_ended: int | None = None) -> pd.DatetimeIndex:
     """IST times of int64 UTC nanoseconds, at nanosecond resolution even when there are
-    none (pandas reads an empty column at second resolution)."""
-    utc = pd.to_datetime(pd.Series(values, dtype="int64"), unit="ns", utc=True)
+    none (pandas reads an empty column at second resolution); `open_ended`, the
+    kernel's stand-in for "no end", becomes NaT."""
+    nanos = pd.Series(values, dtype="int64")
+    if open_ended is not None:
+        nanos = nanos.astype("Int64").mask(nanos == open_ended)
+    utc = pd.to_datetime(nanos, unit="ns", utc=True)
     return pd.DatetimeIndex(utc).as_unit("ns").tz_convert(IST)
 
 
@@ -143,13 +157,18 @@ class Result:
 
     @property
     def orders(self) -> pd.DataFrame:
-        """Every order with its final state and reject code. `sizer` names what set the
-        quantity: a `bt.size` sizer ("qty", "lots", "value", "percent", "fixed_risk",
-        "atr_risk"), "function" for a sizing function or "default" for the engine
-        default. `reject_code`, `tag` and `sizer` are NaN for an order without one (a
-        quantity given in units, in lots or as a fraction of the position, as `qty=`,
-        `lots=` and `exit()` give it, has no sizer)."""
+        """Every order with its final state and reject code. `time` and `decided_at` are
+        the IST instant it was decided, `good_until` the IST instant its DAY validity
+        ends (NaT for a GTT order, which no session close ends). `sizer` names what set
+        the quantity: a `bt.size` sizer ("qty", "lots", "value", "percent",
+        "fixed_risk", "atr_risk"), "function" for a sizing function or "default" for the
+        engine default. `reject_code`, `tag` and `sizer` are NaN for an order without
+        one (a quantity given in units, in lots or as a fraction of the position, as
+        `qty=`, `lots=` and `exit()` give it, has no sizer); `tag` is "rebalance" on
+        every order of `rebalance()`."""
         frame = self._table("orders", "decided_at")
+        frame["decided_at"] = frame["time"]
+        frame["good_until"] = _times(frame["good_until"], open_ended=GTT_GOOD_UNTIL)
         for name in ORDER_TEXT_COLUMNS:
             frame[name] = _text(self._output["orders"][name])
         return frame
@@ -204,17 +223,32 @@ class Result:
 
     @property
     def stale_marks(self) -> pd.DataFrame:
-        """Open positions marked at a last close for want of a bar."""
+        """Open positions marked at a last close for want of a bar; `time` is the IST
+        open of the slice."""
         columns = ("slice", "slice_ts", "instrument", "mark_rupees")
         frame = pd.DataFrame(self._output["stale_marks"], columns=list(columns))
         frame.insert(0, "symbol", [self._symbols[i] for i in frame["instrument"]])
+        frame.insert(0, "time", _times(frame["slice_ts"]))
         return frame
 
     @property
     def final_positions(self) -> pd.DataFrame:
-        """Every position at the end of the run, open ones marked at the last close."""
+        """Every position at the end of the run, open ones marked at the last close.
+
+        `value_rupees` is the signed market value at the mark (units x mark, negative
+        for a short) and `weight_pct` that value in percent of the run's final equity,
+        so a portfolio's end weights read off directly. Both are NaN for a future: it is
+        not bought with cash (the account holds its margin, and its open profit or loss
+        is already in equity), so its contract value, often several times the equity,
+        would read as a share of the portfolio; `equity["exposure_rupees"]` counts it."""
         frame = _fixed(self._output["final_positions"], FINAL_POSITION_COLUMNS)
         frame.insert(0, "symbol", [self._symbols[i] for i in frame["instrument"]])
+        kinds = [self._manifest["instruments"][i]["kind"] for i in frame["instrument"]]
+        held = frame["quantity_units"] * frame["mark_rupees"]
+        frame["value_rupees"] = held.mask(pd.Series(kinds, index=frame.index) == FUTURE_KIND)
+        equity = self.equity["equity_rupees"]
+        final_equity = float(equity.iloc[-1]) if len(equity) else math.nan
+        frame["weight_pct"] = frame["value_rupees"] / final_equity * 100
         return frame
 
     @property
@@ -237,8 +271,10 @@ class Result:
 
     @property
     def skipped(self) -> pd.DataFrame:
-        """Orders a sizer skipped: decision instant, symbol and reason."""
-        return pd.DataFrame(self._skipped, columns=["decided_at", "symbol", "reason"])
+        """Orders a sizer skipped: the IST decision instant, symbol and reason."""
+        frame = pd.DataFrame(self._skipped, columns=["decided_at", "symbol", "reason"])
+        frame["decided_at"] = _times(frame["decided_at"])
+        return frame
 
     @property
     def r_summary(self) -> dict[str, Any]:
@@ -269,6 +305,23 @@ class Result:
             "contract_notes",
         )
         return {name: getattr(self, name) for name in names}
+
+    def to_csv(self, folder: str | os.PathLike) -> list[Path]:
+        """Write every table of `to_dataframes()` to `folder` (created when missing), one
+        CSV file per table named after it (`fills.csv`, ...), and return the paths. Times
+        are written as plain IST date-times, without the zone; the `*_ts` columns stay
+        UTC nanoseconds (`_result_export`)."""
+        return _result_export.to_csv(self.to_dataframes(), folder)
+
+    def to_excel(self, path: str | os.PathLike) -> Path:
+        """Write every table of `to_dataframes()` to one Excel workbook at `path` (its
+        folder is created when missing), one sheet per table named after it, and return
+        the path. Times are written as plain
+        IST date-times, without the zone (a cell holds none); the `*_ts` columns stay UTC
+        nanoseconds. Needs openpyxl, which openalgo does not install: raises
+        MissingDependencyError, an ImportError, saying `pip install openpyxl` when it is
+        missing."""
+        return _result_export.to_excel(self.to_dataframes(), path)
 
     # ----- charges and reports --------------------------------------------------------
 
@@ -417,6 +470,8 @@ class Result:
         lines.append(f"  gross P&L: {pnl['total']:.2f} (realized {pnl['realized']:.2f})")
         charged = self.equity["costs_rupees"].iloc[-1] if len(self.equity) else 0.0
         lines.append(f"  charges: {charged:.2f}; net P&L: {pnl['total'] - charged:.2f}")
+        rejected = _rejections.rejected_summary(self._output["orders"])
+        lines += [] if rejected is None else [f"  {rejected}"]
         lines += [f"  warning: {text}" for text in self._warnings]
         return "\n".join(lines)
 

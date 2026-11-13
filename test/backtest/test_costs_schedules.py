@@ -64,14 +64,80 @@ def user_schedule(identifier, valid_from, valid_to=None, intraday_stt_rate=0.001
     }
 
 
+# Each version before 2024-10-01 starts the day a rate changed and has its GST verified
+# through its last day: (id, first day, last day).
+EARLIER_VERSIONS = [
+    ("IN-2020-07-01", dt.date(2020, 7, 1), dt.date(2020, 12, 31)),
+    ("IN-2021-01-01", dt.date(2021, 1, 1), dt.date(2021, 2, 28)),
+    ("IN-2021-03-01", dt.date(2021, 3, 1), dt.date(2021, 3, 31)),
+    ("IN-2021-04-01", dt.date(2021, 4, 1), dt.date(2021, 4, 30)),
+    ("IN-2021-05-01", dt.date(2021, 5, 1), dt.date(2022, 5, 1)),
+    ("IN-2022-05-02", dt.date(2022, 5, 2), dt.date(2022, 7, 17)),
+    ("IN-2022-07-18", dt.date(2022, 7, 18), dt.date(2022, 11, 30)),
+    ("IN-2022-12-01", dt.date(2022, 12, 1), dt.date(2023, 3, 31)),
+    ("IN-2023-04-01", dt.date(2023, 4, 1), dt.date(2023, 10, 31)),
+    ("IN-2023-11-01", dt.date(2023, 11, 1), dt.date(2024, 5, 12)),
+    ("IN-2024-05-13", dt.date(2024, 5, 13), dt.date(2024, 9, 30)),
+]
+
+
 def test_the_built_in_versions_and_how_far_each_is_verified():
     listed = [
         (s["id"], s["valid_from"], s["valid_to"], s["verified_through"]) for s in costs.schedules()
     ]
     assert listed == [
-        ("IN-2024-10-01", dt.date(2024, 10, 1), dt.date(2026, 3, 31), None),
+        *((vid, first, last, last) for vid, first, last in EARLIER_VERSIONS),
+        ("IN-2024-10-01", dt.date(2024, 10, 1), dt.date(2026, 3, 31), dt.date(2026, 3, 31)),
         ("IN-2026-04-01", dt.date(2026, 4, 1), None, SNAPSHOT_DATE),
     ]
+
+
+def test_a_trade_in_2022_is_priced_by_the_version_in_force_then():
+    # NSE delivery buy of Rs 1 crore on 2022-01-03 (IN-2021-05-01): exchange Rs 3.45 per lakh
+    # plus IPFT Rs 0.01 per crore = 345.01, SEBI Rs 10, STT Rs 10,000, stamp Rs 1,500.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        cost = costs.trade_cost("BUY", 10_000_000, 1, "2022-01-03", segment="NSE_EQ_DELIVERY")
+    assert (cost.exchange_txn, cost.sebi_fee, cost.stt, cost.stamp_duty) == pytest.approx(
+        (345.01, 10.0, 10_000.0, 1_500.0)
+    )
+    assert (cost.schedules, cost.verified) == (("IN-2021-05-01",), True)
+
+
+@pytest.mark.parametrize("day, gst", [("2022-07-15", 62.1018), ("2022-07-18", 63.9018)])
+def test_gst_falls_on_the_sebi_fee_from_2022_07_18(day, gst):
+    # NSE delivery buy of Rs 1 crore (no brokerage): 18 percent of the exchange line
+    # 345.01, and from 2022-07-18 of the SEBI fee of Rs 10 too (SEBI circular
+    # SEBI/HO/GSD/TAD/CIR/P/2022/0097; the fee was exempt before).
+    cost = costs.trade_cost("BUY", 10_000_000, 1, day, segment="NSE_EQ_DELIVERY")
+    assert cost.gst == pytest.approx(gst)
+
+
+def test_each_built_in_version_says_whether_gst_falls_on_the_sebi_fee():
+    flags = {s["id"]: s["gst_on_sebi_fee"] for s in costs.schedules()}
+    assert [vid for vid, taxed in flags.items() if not taxed] == [
+        vid for vid, first, _ in EARLIER_VERSIONS if first < dt.date(2022, 7, 18)
+    ]
+
+
+@pytest.mark.parametrize("taxed, gst", [(True, 4.158), (False, 4.14)])
+def test_a_user_version_charges_gst_on_the_sebi_fee_unless_it_says_not(taxed, gst):
+    # An intraday sell of Rs 1,00,000: brokerage Rs 20, exchange 3.00, SEBI fee 0.10.
+    schedule = user_schedule("user-2019", "2019-04-01", "2020-06-30", gst_on_sebi_fee=taxed)
+    model = costs.CostModel(schedules=[schedule])
+    cost = quietly(model.trade, "SELL", 1000, 100, "2019-06-03", "NSE_EQ_INTRADAY")
+    assert cost.gst == pytest.approx(gst)
+
+
+def test_a_user_version_charges_gst_on_the_sebi_fee_by_default():
+    model = costs.CostModel(schedules=[user_schedule("user-2019", "2019-04-01", "2020-06-30")])
+    assert model.schedules()[0]["gst_on_sebi_fee"] is True
+
+
+def test_an_unverified_row_of_an_earlier_version_warns_with_its_reason():
+    with pytest.warns(costs.UnverifiedScheduleWarning, match="IN-2021-05-01.*group ZP"):
+        cost = costs.trade_cost("BUY", 100, 10, "2022-01-03", segment="BSE_EQ_DELIVERY_X")
+    assert cost.verified is False
 
 
 def test_every_built_in_version_records_its_source_and_caveats():
@@ -92,21 +158,39 @@ def test_schedule_rates_are_fractions_named_with_a_rate_suffix():
     assert current["rates"]["NSE_EQ_DELIVERY"]["stt_sell_rate"] == 0.001
 
 
-def test_only_the_unconfirmed_bse_options_row_of_the_current_version_is_unverified():
-    rows = costs.schedules()[-1]["rates"]
-    unverified = [code for code, row in rows.items() if row["verified_through"] is None]
-    assert unverified == ["BFO_OPT_OTHER"]
+# The rows of the last two versions that no primary source confirms: BSE groups X (ZP
+# pays ten times the row) and SS (no longer on the BSE fee page).
+UNCONFIRMED_SINCE_2024_10_01 = [
+    "BSE_EQ_DELIVERY_X",
+    "BSE_EQ_INTRADAY_X",
+    "BSE_EQ_DELIVERY_SS",
+    "BSE_EQ_INTRADAY_SS",
+]
+
+
+@pytest.mark.parametrize(
+    "version, last_day, also_unconfirmed",
+    [
+        ("IN-2024-10-01", dt.date(2026, 3, 31), []),
+        ("IN-2026-04-01", SNAPSHOT_DATE, ["BFO_OPT_OTHER"]),
+    ],
+)
+def test_the_last_two_versions_leave_unverified_only_the_rows_no_source_confirms(
+    version, last_day, also_unconfirmed
+):
+    rows = next(s for s in costs.schedules() if s["id"] == version)["rates"]
+    unverified = {code for code, row in rows.items() if row["verified_through"] is None}
+    assert unverified == {*UNCONFIRMED_SINCE_2024_10_01, *also_unconfirmed}
+    assert all(row["notes"] for code, row in rows.items() if code in unverified)
     assert all(
-        row["verified_through"] == SNAPSHOT_DATE
-        for code, row in rows.items()
-        if code != "BFO_OPT_OTHER"
+        row["verified_through"] == last_day for code, row in rows.items() if code not in unverified
     )
 
 
 def test_listed_schedules_are_copies():
     listed = costs.schedules()
-    listed[1]["rates"]["NFO_FUT"]["stt_sell_rate"] = 0.5
-    assert costs.schedules()[1]["rates"]["NFO_FUT"]["stt_sell_rate"] == 0.0005
+    listed[-1]["rates"]["NFO_FUT"]["stt_sell_rate"] = 0.5
+    assert costs.schedules()[-1]["rates"]["NFO_FUT"]["stt_sell_rate"] == 0.0005
 
 
 # F&O STT on a Rs 1 crore sell: (segment, before 2026-04-01, from 2026-04-01).
@@ -129,8 +213,7 @@ def test_a_trade_is_charged_at_the_rates_in_force_on_its_trade_date(segment, bef
 def test_exercise_stt_changed_with_the_fno_stt_rates():
     # 0.125 percent before, 0.15 percent from 2026-04-01, on Rs 1,00,000 of intrinsic value.
     model = costs.CostModel()
-    with pytest.warns(costs.UnverifiedScheduleWarning):
-        before = model.exercise_stt(100, 1000, LAST_OLD_DAY)
+    before = model.exercise_stt(100, 1000, LAST_OLD_DAY)
     assert (before, model.exercise_stt(100, 1000, FIRST_NEW_DAY)) == pytest.approx((125.0, 150.0))
 
 
@@ -150,16 +233,32 @@ def test_a_trade_after_the_last_verified_day_is_charged_but_flagged(date):
     assert (cost.stt, cost.verified, cost.backfilled) == (pytest.approx(1.0), False, False)
 
 
-def test_a_trade_in_the_older_version_warns_and_is_flagged():
-    with pytest.warns(costs.UnverifiedScheduleWarning, match="IN-2024-10-01.*never verified"):
+def test_a_trade_in_the_older_version_is_priced_by_it_and_verified():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
         cost = costs.trade_cost("BUY", 100, 10, "2025-06-02", segment="NSE_EQ_DELIVERY")
+    assert (cost.schedules, cost.verified) == (("IN-2024-10-01",), True)
+
+
+def test_an_unconfirmed_row_of_the_older_version_warns_with_its_reason():
+    with pytest.warns(costs.UnverifiedScheduleWarning, match="IN-2024-10-01.*group ZP"):
+        cost = costs.trade_cost("BUY", 100, 10, "2025-06-02", segment="BSE_EQ_DELIVERY_X")
     assert (cost.schedules, cost.verified) == (("IN-2024-10-01",), False)
 
 
-def test_the_unconfirmed_bse_options_rate_is_flagged_with_its_conflicting_sources():
-    # Rs 500 per crore of premium, from the BSE notice of 2024-09-27 as reported by a
-    # broker; the Zerodha page lists a single BSE options rate.
-    with pytest.warns(costs.UnverifiedScheduleWarning, match="Angel One.*Zerodha"):
+def test_kapas_pays_the_uniform_mcx_charge_from_2024_10_01():
+    # MCX/F&A/631/2024: Rs 2.10 per lakh for every futures contract from 2024-10-01, so a
+    # Rs 1 crore KAPAS sale pays 210 (the Rs 2.60 per lakh of 2024-09-30 was its own rate).
+    before = costs.trade_cost("SELL", 10_000_000, 1, "2024-09-30", segment="MCX_FUT_KAPAS")
+    after = costs.trade_cost("SELL", 10_000_000, 1, "2024-10-01", segment="MCX_FUT_KAPAS")
+    assert (before.exchange_txn, after.exchange_txn) == pytest.approx((260.0, 210.0))
+    assert after.verified is True
+
+
+def test_the_unconfirmed_bse_options_rate_is_flagged_with_its_notice_and_the_gap():
+    # Rs 500 per crore of premium, from BSE notice 20240927-37 of 2024-09-27; no source
+    # covers the dates from 2026-04-01.
+    with pytest.warns(costs.UnverifiedScheduleWarning, match="20240927-37.*2026-04-01"):
         cost = costs.trade_cost("SELL", 10_000_000, 1, SNAPSHOT, segment="BFO_OPT_OTHER")
     assert (cost.exchange_txn, cost.verified) == (pytest.approx(500.0), False)
 
@@ -169,9 +268,9 @@ def test_sensex_and_bankex_options_pay_3250_rupees_per_crore():
     assert (cost.exchange_txn, cost.verified) == (pytest.approx(3250.0), True)
 
 
-def test_a_trade_before_the_first_version_raises():
-    with pytest.raises(CostError, match="2024-09-30.*first schedule version starts on 2024-10-01"):
-        costs.trade_cost("BUY", 100, 10, "2024-09-30", segment="NSE_EQ_DELIVERY")
+def test_a_trade_before_the_first_version_raises_saying_from_when_charges_are_available():
+    with pytest.raises(CostError, match="2020-06-30: charges are available from 2020-07-01"):
+        costs.trade_cost("BUY", 100, 10, "2020-06-30", segment="NSE_EQ_DELIVERY")
 
 
 def test_the_dp_charge_before_the_first_version_raises():
@@ -183,46 +282,46 @@ def test_backfill_charges_early_trades_at_the_first_version_rates():
     model = costs.CostModel(backfill=True)
     with pytest.warns(costs.UnverifiedScheduleWarning, match="backfill"):
         early = model.trade("SELL", 10_000_000, 1, "2019-06-03", "NFO_FUT")
-    # The first version's futures STT: 0.02 percent.
-    assert (early.stt, early.verified, early.backfilled) == (pytest.approx(2000.0), False, True)
+    # The first version's futures STT: 0.01 percent (NSE/FATAX/56235, rate up to 2023-03-31).
+    assert (early.stt, early.verified, early.backfilled) == (pytest.approx(1000.0), False, True)
 
 
 def test_a_round_trip_across_the_boundary_charges_each_leg_at_its_own_rates():
     # Buy on the old day, sell Rs 1 crore on the new day: STT at 0.05 percent.
-    with pytest.warns(costs.UnverifiedScheduleWarning):
-        cost = costs.round_trip_cost(
-            10_000_000, 10_000_000, 1, LAST_OLD_DAY, sell_date=FIRST_NEW_DAY, segment="NFO_FUT"
-        )
+    cost = costs.round_trip_cost(
+        10_000_000, 10_000_000, 1, LAST_OLD_DAY, sell_date=FIRST_NEW_DAY, segment="NFO_FUT"
+    )
     assert cost.stt == pytest.approx(5000.0)
-    assert (cost.schedules, cost.verified) == (("IN-2024-10-01", "IN-2026-04-01"), False)
+    assert (cost.schedules, cost.verified) == (("IN-2024-10-01", "IN-2026-04-01"), True)
 
 
 def test_a_user_version_for_an_earlier_period_is_used_on_its_dates():
     # Rs 1,00,000 sold at the user version's 0.1 percent STT.
-    model = costs.CostModel(schedules=[user_schedule("user-2023", "2023-04-01", "2024-09-30")])
-    cost = quietly(model.trade, "SELL", 1000, 100, "2024-01-15", "NSE_EQ_INTRADAY")
-    assert (cost.stt, cost.schedules) == (pytest.approx(100.0), ("user-2023",))
+    model = costs.CostModel(schedules=[user_schedule("user-2019", "2019-04-01", "2020-06-30")])
+    cost = quietly(model.trade, "SELL", 1000, 100, "2020-01-15", "NSE_EQ_INTRADAY")
+    assert (cost.stt, cost.schedules) == (pytest.approx(100.0), ("user-2019",))
 
 
 def test_user_versions_are_listed_with_the_built_in_ones():
-    model = costs.CostModel(schedules=[user_schedule("user-2023", "2023-04-01", "2024-09-30")])
-    assert [s["id"] for s in model.schedules()] == ["user-2023", "IN-2024-10-01", "IN-2026-04-01"]
+    model = costs.CostModel(schedules=[user_schedule("user-2019", "2019-04-01", "2020-06-30")])
+    listed = [s["id"] for s in model.schedules()]
+    assert listed == ["user-2019"] + [s["id"] for s in costs.schedules()]
 
 
 def test_a_user_version_is_unverified_unless_it_says_how_far_it_was_checked():
-    plain = user_schedule("plain", "2023-04-01", "2023-12-31")
-    checked = user_schedule("checked", "2024-01-01", "2024-09-30", verified_through="2024-06-30")
+    plain = user_schedule("plain", "2018-04-01", "2018-12-31")
+    checked = user_schedule("checked", "2019-01-01", "2020-06-30", verified_through="2019-06-30")
     model = costs.CostModel(schedules=[plain, checked])
     trade = ("SELL", 1000, 100)
     flags = [
         quietly(model.trade, *trade, date, "NSE_EQ_INTRADAY").verified
-        for date in ("2023-06-01", "2024-06-30", "2024-07-01")
+        for date in ("2018-06-01", "2019-06-30", "2019-07-01")
     ]
     assert flags == [False, True, False]
 
 
 def test_a_user_row_defaults_its_optional_fields():
-    model = costs.CostModel(schedules=[user_schedule("user-2023", "2023-04-01", "2024-09-30")])
+    model = costs.CostModel(schedules=[user_schedule("user-2019", "2019-04-01", "2020-06-30")])
     row = model.schedules()[0]["rates"]["NSE_EQ_INTRADAY"]
     defaults = ("ipft_rate", "stt_exercise_rate", "calculator_tax_base", "calculator_tax_unit")
     assert [row[name] for name in defaults] == [0.0, 0.0, "sides", "rupee"]
@@ -240,14 +339,14 @@ def test_a_user_row_given_none_for_a_text_field_takes_its_default(field, default
 
 
 def test_a_segment_missing_from_a_user_version_raises_on_its_dates():
-    model = costs.CostModel(schedules=[user_schedule("user-2023", "2023-04-01", "2024-09-30")])
+    model = costs.CostModel(schedules=[user_schedule("user-2019", "2019-04-01", "2020-06-30")])
     with pytest.raises(CostError, match="has no rates for segment NFO_FUT"):
-        model.trade("SELL", 1000, 100, "2024-01-15", "NFO_FUT")
+        model.trade("SELL", 1000, 100, "2020-01-15", "NFO_FUT")
 
 
 def test_a_later_user_version_takes_over_from_the_open_built_in_version():
     model = costs.CostModel(schedules=[user_schedule("user-2027", dt.date(2027, 4, 1))])
-    ranges = [(s["id"], s["valid_to"]) for s in model.schedules()[1:]]
+    ranges = [(s["id"], s["valid_to"]) for s in model.schedules()[-2:]]
     assert ranges == [("IN-2026-04-01", dt.date(2027, 3, 31)), ("user-2027", None)]
 
 
@@ -276,7 +375,7 @@ def test_a_date_outside_the_supported_range_never_reaches_the_kernel_as_a_panic(
 
 def broken(change):
     """A valid user schedule with one thing wrong."""
-    schedule = user_schedule("broken", "2023-04-01", "2024-09-30")
+    schedule = user_schedule("broken", "2019-04-01", "2020-06-30")
     change(schedule)
     return schedule
 
@@ -289,7 +388,7 @@ UNITS = "rates are fractions: 0.001 is 0.1 percent"
 
 # (what is wrong, the schedule, text the message must contain)
 MALFORMED = [
-    ("a misspelt field", broken(lambda s: s.update(valid_until="2024-09-30")), "unknown field"),
+    ("a misspelt field", broken(lambda s: s.update(valid_until="2020-06-30")), "unknown field"),
     ("the old gst key", broken(lambda s: s.update(gst=0.18)), "unknown field 'gst'"),
     ("a missing field", broken(lambda s: s.pop("gst_rate")), "missing field 'gst_rate'"),
     ("a missing rate", broken(lambda s: row(s).pop("sebi_rate")), "missing rate 'sebi_rate'"),
@@ -298,6 +397,11 @@ MALFORMED = [
     ("stamp duty in percent units", broken(lambda s: row(s).update(stamp_buy_rate=0.015)), UNITS),
     ("the SEBI fee in percent units", broken(lambda s: row(s).update(sebi_rate=0.0001)), UNITS),
     ("GST in percent units", broken(lambda s: s.update(gst_rate=18)), UNITS),
+    (
+        "a GST base that is not True or False",
+        broken(lambda s: s.update(gst_on_sebi_fee="no")),
+        "gst_on_sebi_fee must be True or False",
+    ),
     (
         "a rate that is not a number",
         broken(lambda s: row(s).update(stt_sell_rate="0.1%")),
@@ -319,7 +423,7 @@ MALFORMED = [
         "'NSE_EQ_INTRADAY' and 'nse_eq_intraday' are both segment NSE_EQ_INTRADAY",
     ),
     ("no rates", broken(lambda s: s.update(rates={})), "no segment rates"),
-    ("an end before the start", broken(lambda s: s.update(valid_to="2023-01-01")), "cannot end"),
+    ("an end before the start", broken(lambda s: s.update(valid_to="2019-01-01")), "cannot end"),
     ("a day-first date", broken(lambda s: s.update(valid_from="01-04-2023")), "ISO date"),
     ("a date out of range", broken(lambda s: s.update(valid_to="9999-12-31")), "supported range"),
     ("an overlap with a built-in version", user_schedule("clash", "2025-01-01"), "same dates"),

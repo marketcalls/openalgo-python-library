@@ -49,7 +49,8 @@ impl Engine {
     }
 
     /// Step 2: queued orders fill at the open; then the square-off timer; then the
-    /// futures rolls due at this open (`roll`).
+    /// rebalance buys, after every instrument's sales (`rebalance`); then the futures
+    /// rolls due at this open (`roll`).
     fn step_open_fills(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         for index in 0..self.instruments.len() {
             let instrument = InstrumentId(index as u32);
@@ -64,6 +65,7 @@ impl Engine {
             self.time_exit_at_open(slice, instrument, bar.open)?;
             self.square_off_at_open(slice, instrument, bar.open)?;
         }
+        self.fill_rebalance_buys(slice)?;
         self.roll_due_futures(slice)
     }
 
@@ -135,8 +137,9 @@ impl Engine {
 
     /// Step 8 when the session ends at this slice (expiry of DAY orders, the `eod`
     /// close, futures expiry and mark to market (`settlement`), the day's contract
-    /// notes), the contract notes of a run that ends before its session close
-    /// (`run_end`), then the end-of-slice records.
+    /// notes, the credit of the day's withheld sale proceeds (`sale_credit`)), the
+    /// contract notes of a run that ends before its session close (`run_end`), then the
+    /// end-of-slice records.
     pub(super) fn close_slice(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         if slice.closes_session {
             self.expire_day_orders(slice)?;
@@ -144,6 +147,7 @@ impl Engine {
             self.close_intraday_positions(slice)?;
             self.settle_futures(slice)?;
             self.settle_contract_notes(slice);
+            self.credit_withheld_sales();
         }
         self.settle_at_run_end(slice);
         self.record_levels(slice);

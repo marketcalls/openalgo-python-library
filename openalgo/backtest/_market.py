@@ -11,21 +11,31 @@ facts the kernel's market rules read (`rust/oa_py/src/backtest/engine/market.rs`
 The cost segment of each instrument is checked here for the run's product, and the cost
 model is asked for the run's first and last day, so an instrument or a date the model
 cannot price stops the run before it starts (CostError) rather than at its first fill.
+The underlying that sets the segment of an MCX future or a BFO option is the
+instrument's own, else the one its OpenAlgo symbol names (`_futures_contracts.
+underlying_of`, the rule the futures margin uses too).
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import functools
+import os
+import warnings
 from dataclasses import dataclass
 from typing import Any
 
 from . import costs as costs_module
 from . import slippage as slippage_module
+from ._futures_contracts import underlying_of
 from ._futures_margin import MarginSetting, own_margin
 from .errors import CostError, ReferenceDataError
 from .reference import Instrument, default_tables
 
 DERIVATIVE_EXCHANGES = ("NFO", "BFO")
+# Frames inside openalgo.backtest are skipped when a warning is attributed, so it points
+# at the caller's line (as the cost model's own warnings do).
+PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 # The cost model's instrument codes (`costs.segment_for`) by Instrument.kind.
 SEGMENT_KINDS = {"equity": "EQ", "future": "FUT", "option": "OPT"}
 
@@ -79,12 +89,14 @@ def _costs_label(model: costs_module.CostModel | None) -> str:
 
 def _check_costs(
     model: costs_module.CostModel, instruments: list[Instrument], product: str, days: tuple
-) -> None:
+) -> dict[str, str]:
     """Check that the model prices every instrument on the run's first and last day.
 
-    Raises CostError naming the instrument; warns (UnverifiedScheduleWarning) when the
-    rates of those days are not verified.
+    Returns the rates of those days that are not verified, the full text of each by its
+    short text (one entry per schedule, segment and reason). Raises CostError naming the
+    instrument.
     """
+    unverified: dict[str, str] = {}
     for instrument in instruments:
         if instrument.kind not in SEGMENT_KINDS:
             continue  # an index is never traded, so never charged
@@ -94,15 +106,32 @@ def _check_costs(
                 product,
                 SEGMENT_KINDS[instrument.kind],
                 None,
-                instrument.underlying,
+                underlying_of(instrument),
             )
             for day in dict.fromkeys(days):
-                model.trade("BUY", 1.0, 1.0, day, segment)
+                texts = model._unverified(segment, day)
+                if texts is not None:
+                    unverified.setdefault(*texts)
         except CostError as exc:
             raise CostError(
                 f"{instrument.symbol}: the charges cannot be priced ({exc}); pass costs=None to "
                 "run without charges"
             ) from None
+    return unverified
+
+
+@functools.cache
+def announce_once(short: str) -> None:
+    """Warn `short` (an UnverifiedScheduleWarning) the first time this process meets it,
+    and never again: every run would repeat it, and its details are in each run's
+    warnings. The cache is the record of what was said; it changes what is printed,
+    never a result. Python's own once-per-place record is not enough: it is cleared
+    whenever any code changes the warning filters, as pandas does inside many calls."""
+    warnings.warn(
+        f"{short} (details in result.warnings)",
+        costs_module.UnverifiedScheduleWarning,
+        skip_file_prefixes=(PACKAGE_DIR,),
+    )
 
 
 def _slippage_class(instrument: Instrument, table: Any, day: dt.date) -> tuple[str | None, str]:
@@ -142,7 +171,8 @@ def _facts(
             own = None if override is None else override.to_native()
         facts.append(
             {
-                "underlying": instrument.underlying,
+                # The cost segment of an MCX future or a BFO option depends on it.
+                "underlying": underlying_of(instrument),
                 "bse_group": None,
                 "slippage_class": class_code,
                 "slippage": own,
@@ -153,14 +183,22 @@ def _facts(
 
 
 def market_settings(
-    plan: Any, instruments: list[Instrument], args: dict[str, Any]
+    plan: Any, instruments: list[Instrument], args: dict[str, Any], announce: bool = True
 ) -> MarketSettings:
     """The market settings of a run of `plan` on `instruments` with the run arguments
     `args` (`costs`, `slippage`, and `margin`, the parsed `margin=`, absent for the
-    default). Raises CostError or ConfigError for settings that cannot be used."""
+    default). Rates of the run's first or last day that are not verified are in the
+    warnings in full and, with `announce`, an UnverifiedScheduleWarning in short, once
+    per process (`announce_once`); a sweep's workers resolve the settings again without
+    it, as the parent announced them. Raises CostError or ConfigError for settings that
+    cannot be used."""
     model = cost_model(args["costs"])
+    unverified: dict[str, str] = {}
     if model is not None:
-        _check_costs(model, instruments, plan.product, (plan.start, plan.end))
+        unverified = _check_costs(model, instruments, plan.product, (plan.start, plan.end))
+    if announce:
+        for short in unverified:
+            announce_once(short)
     slippage = slippage_module.resolve(args["slippage"])
     facts, notes = _facts(instruments, slippage, plan.start, args.get("margin"))
     run_form = (
@@ -178,8 +216,8 @@ def market_settings(
         model,
         _costs_label(model),
         slippage_module.label(args["slippage"]),
-        tuple(notes),
+        (*notes, *(f"charges: {full}" for full in unverified.values())),
     )
 
 
-__all__ = ["MarketSettings", "cost_model", "market_settings"]
+__all__ = ["MarketSettings", "announce_once", "cost_model", "market_settings"]

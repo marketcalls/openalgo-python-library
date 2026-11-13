@@ -12,7 +12,7 @@ tests are skipped.
 from pathlib import Path
 
 import pytest
-from docs_examples import DOCS_ENV, check, collect, docs_dir
+from docs_examples import DOCS_ENV, check, collect, docs_dir, skip_reason
 
 SECTION = Path("trading-platform", "python", "indicators")
 
@@ -28,4 +28,7 @@ def test_the_section_has_runnable_examples():
 
 @pytest.mark.parametrize("example", EXAMPLES, ids=[example.name for example in EXAMPLES])
 def test_the_example_runs_and_prints_what_the_page_shows(example, tmp_path):
+    reason = skip_reason(example)
+    if reason is not None:
+        pytest.skip(reason)
     check(example, tmp_path)

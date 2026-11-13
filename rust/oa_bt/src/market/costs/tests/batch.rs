@@ -2,7 +2,9 @@
 
 use crate::model::{days_from_civil, Day, Side};
 
-use super::super::{CostColumns, CostError, CostModel, Segment, Trust, SEGMENT_COUNT};
+use super::super::{
+    builtin_schedules, CostColumns, CostError, CostModel, Segment, Trust, SEGMENT_COUNT,
+};
 use super::{accrual_model, calculator_model, snapshot_day, Lcg};
 
 /// Owned output columns for a batch of `rows` fills.
@@ -139,8 +141,9 @@ fn batch_equals_per_fill_in_calculator_mode() {
 
 #[test]
 fn a_batch_reports_which_version_priced_each_row_and_how_far_it_is_verified() {
-    // Old version (never verified), the snapshot day (verified), the day after
-    // (past the verified-through date), and BSE stock options (unverified row).
+    // Old version (verified through its last day), the snapshot day (verified), the
+    // day after (past the verified-through date), and BSE stock options (unverified
+    // row).
     let mut batch = Batch::valid();
     batch.days = [
         days_from_civil(2025, 6, 2),
@@ -151,9 +154,14 @@ fn a_batch_reports_which_version_priced_each_row_and_how_far_it_is_verified() {
     batch.segments[3] = Segment::BfoOptOther as u8;
     let mut out = Columns::new(4);
     batch.cost_into(&mut out).unwrap();
-    assert_eq!(out.schedule, [0, 1, 1, 1]);
+    let position = |id: &str| {
+        let versions = builtin_schedules().unwrap();
+        versions.iter().position(|v| v.id == id).unwrap() as u16
+    };
+    let (old, current) = (position("IN-2024-10-01"), position("IN-2026-04-01"));
+    assert_eq!(out.schedule, [old, current, current, current]);
     let trust = [
-        Trust::Unverified,
+        Trust::Verified,
         Trust::Verified,
         Trust::PastVerification,
         Trust::Unverified,

@@ -25,12 +25,17 @@ import pandas as pd
 
 from .._layout import BAR_COLUMNS, NANOS_PER_SECOND, PRICE_COLUMNS
 from .._messages import counted
-from ..errors import ConfigError, DataError, TimestampError
+from ..errors import ConfigError, DataError, SymbolNotFoundError, TimestampError
 from ._sessions import ist_days
 
 HTTP_OK = 200
+HTTP_BAD_REQUEST = 400
 HTTP_NOT_FOUND = 404
 HTTP_TOO_MANY_REQUESTS = 429
+# How the server's history service words its HTTP 400 for a symbol its master contract
+# does not hold: "Symbol 'X' not found for exchange 'NSE'. Please verify ..."
+# (`validate_symbol_exchange` in services/history_service.py of the OpenAlgo server).
+UNKNOWN_SYMBOL_MARK = "not found for exchange"
 
 # A raw history row as the server returns it: epoch seconds and the bar values.
 # Volume and open interest are NaN when the server sent none.
@@ -313,8 +318,9 @@ class HistoryFetcher:
         An empty array means the source has no rows for the window (Historify says
         so with a JSON 404).
 
-        Raises DataError for every other answer that is not a success, naming the
-        HTTP status, and for transport and rate-limit failures.
+        Raises SymbolNotFoundError when the server answers that its master contract
+        does not hold the symbol, DataError for every other answer that is not a
+        success, naming the HTTP status, and for transport and rate-limit failures.
         """
         symbol, exchange, interval = series
         payload = {
@@ -335,10 +341,13 @@ class HistoryFetcher:
         detail = reply.message()
         if reply.body is None:
             detail = "the body is not JSON; check the host of the client"
-        raise DataError(
+        message = (
             f"{tag}: the OpenAlgo history request for {window[0]} to {window[1]} "
             f"(source={source!r}) failed (HTTP {reply.status}: {detail})"
         )
+        if reply.status == HTTP_BAD_REQUEST and UNKNOWN_SYMBOL_MARK in detail:
+            raise SymbolNotFoundError(message, symbol, exchange)
+        raise DataError(message)
 
     def collect(
         self,

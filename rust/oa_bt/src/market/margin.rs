@@ -12,7 +12,9 @@
 //! percent of the contract value, or rupees per lot of the contract traded. It is a
 //! backtest assumption only: in live trading the broker computes margin. Zero defaults
 //! are forbidden: a kind and product with no row is an error, never free. Short options
-//! are Phase 3.
+//! are Phase 3. What the free cash is (delivery holdings at their cost, sale proceeds a
+//! broker credits only on the next trading day left out) is `Portfolio::free_cash_rupees`
+//! and `market::sale_credit`.
 
 use std::fmt;
 

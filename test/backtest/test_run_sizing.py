@@ -22,6 +22,10 @@ def entry_units(result):
     return result.fills.loc[0, "quantity_units"]
 
 
+def margin_warnings(result):
+    return [text for text in result.warnings if "reject_code 'margin'" in text]
+
+
 def test_the_engine_default_spends_the_capital_at_the_fill_in_fractional_mode():
     result = round_trip(costs=None, slippage=0)
     assert entry_units(result) == CAPITAL / PRICE
@@ -120,11 +124,12 @@ def test_a_sizer_asking_for_more_than_the_margin_is_rejected_and_the_result_says
         ["margin"],
         ["atr_risk"],
     )
+    (warning,) = margin_warnings(result)
     assert (
-        "1 order sized by bt.size.atr_risk was rejected for margin (reject_code 'margin' in "
-        "result.orders): the sizer asked for more than the margin allows"
-    ) in result.warnings[0]
-    assert "size_caps = bt.size.caps(leverage=1)" in result.warnings[0]
+        "the margin the order needed was more than the free cash (sized by "
+        "bt.size.atr_risk, which asked for more than the margin allows)"
+    ) in warning
+    assert "size_caps = bt.size.caps(leverage=1)" in warning
 
 
 def test_size_caps_bound_the_sizer_to_what_the_margin_allows():
@@ -132,14 +137,15 @@ def test_size_caps_bound_the_sizer_to_what_the_margin_allows():
     capped = type("Capped", (WideAtrRisk,), {"size_caps": bt.size.caps(leverage=1)})
     result = _delivery_run(capped)
     assert entry_units(result) == 1_000.0
-    assert not any("rejected for margin" in text for text in result.warnings)
+    assert margin_warnings(result) == []
 
 
 def test_an_explicit_quantity_rejected_for_margin_names_no_sizer():
     result = round_trip({"qty": 5_000}, costs=None, slippage=0, product="CNC")
     assert result.orders["reject_code"].tolist()[0] == "margin"
     assert result.orders["sizer"].isna().all()
-    assert not any("rejected for margin" in text for text in result.warnings)
+    (warning,) = margin_warnings(result)
+    assert "sized by" not in warning
 
 
 def test_atr_risk_puts_the_stop_a_multiple_of_the_atr_away():

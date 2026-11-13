@@ -24,6 +24,7 @@ import warnings
 
 import pandas as pd
 import pytest
+from accounting_runs import daily_round_trip
 
 import openalgo.backtest as bt
 from openalgo import ta
@@ -385,6 +386,29 @@ def test_the_roll_fills_carry_the_contracts_and_reason_roll():
     ]
 
 
+def test_a_switch_and_a_settlement_are_dated_in_ist():
+    # The roll fills at the 09-25 open; the first posting is at the 09-23 session close.
+    result = _run()
+    switch = result.rolls.iloc[0]
+    assert (switch["date"], switch["time"].tz.utcoffset(None)) == (
+        dt.date(2024, 9, 25),
+        dt.timedelta(hours=5, minutes=30),
+    )
+    assert "day" not in result.rolls.columns
+    first = result.settlements.iloc[0]
+    assert (first["date"], first["time"].date()) == (dt.date(2024, 9, 23),) * 2
+
+
+@pytest.mark.parametrize("table", ["rolls", "settlements"])
+def test_the_time_column_is_an_ist_datetime_in_a_run_with_no_futures(table):
+    # A stock run has no switch and no settlement: the empty column keeps its type, so
+    # `.dt` works on it as on any other run's.
+    times = getattr(daily_round_trip(costs=None), table)["time"]
+    assert times.empty
+    assert isinstance(times.dtype, pd.DatetimeTZDtype)
+    assert times.dt.tz.utcoffset(None) == dt.timedelta(hours=5, minutes=30)
+
+
 def test_on_bar_sees_each_contracts_own_bar_and_the_series_re_adjusted_at_the_roll():
     # On 09-24: close[-2] is 25,100.00 and sma(2) 25,150.00. On 09-25 (the roll): the
     # bar is October's, close[-2] is 25,200.00 + 100.00 = 25,300.00 and sma(2)
@@ -420,13 +444,12 @@ def test_the_daily_mark_to_market_posts_each_sessions_change():
     assert result.settlements["last_close_used"].all()
 
 
-# The built-in cost schedules start on 2024-10-01; these September 2024 trades are
-# charged at the first version's rates (backfill).
-BACKFILLED = bt.costs.CostModel(backfill=True)
+# These September 2024 trades are charged at the built-in rates of their trade dates.
+CHARGED = bt.costs.CostModel()
 
 
 def test_both_roll_legs_are_charged():
-    result = _run(costs=BACKFILLED)
+    result = _run(costs=CHARGED)
     charged = result.fills.loc[result.fills["reason"] == "roll", "costs_rupees"]
     assert len(charged) == 2 and (charged > 0).all()
 
@@ -524,5 +547,5 @@ def test_with_roll_none_the_series_is_adjusted_by_the_last_trading_days_closes()
 
 
 def test_settlement_at_expiry_is_not_charged():
-    result = _run(roll=None, costs=BACKFILLED)
+    result = _run(roll=None, costs=CHARGED)
     assert result.fills.iloc[-1]["costs_rupees"] == 0.0

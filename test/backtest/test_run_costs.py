@@ -129,14 +129,27 @@ def test_a_cost_free_run_warns_on_the_result_and_on_the_tearsheet():
 
 
 def test_a_run_before_the_first_cost_schedule_stops_before_it_starts():
-    # The first built-in schedule starts on 2024-10-01.
-    with pytest.raises(CostError, match="pass costs=None"):
-        round_trip({"qty": QTY}, data=session_bars(dt.date(2024, 7, 1)))
+    # The first built-in schedule starts on 2020-07-01.
+    with pytest.raises(CostError, match="charges are available from 2020-07-01.*pass costs=None"):
+        round_trip({"qty": QTY}, data=session_bars(dt.date(2019, 7, 1)))
+
+
+def test_a_run_in_2022_is_charged_at_the_rates_of_2022():
+    # The worked example's trade on 2022-01-03 (schedule IN-2021-05-01): exchange Rs 3.45
+    # per lakh of 8,40,000 = 28.98 plus IPFT Rs 0.00084, SEBI Rs 10 per crore = 0.84, GST
+    # 18 percent of (40 + 28.98084) = 12.4165512 (the SEBI fee was exempt from GST until
+    # 2022-07-17); brokerage 40, STT 110, stamp 12.
+    # Total 40 + 110 + 28.98 + 0.84 + 12 + 12.42 = 204.24.
+    result = round_trip({"qty": QTY}, slippage=0, data=session_bars(dt.date(2022, 1, 3)))
+    assert list(result.contract_notes["charged_total"]) == [204.24]
+    assert set(result.costs["schedule"]) == {"IN-2021-05-01"}
 
 
 def test_fills_on_unverified_rates_are_named_in_the_warnings():
-    # The rates of schedule IN-2024-10-01 were never verified for NSE intraday.
+    # The rates of schedule IN-2026-04-01 are verified only up to 2026-11-12.
+    day = dt.date(2026, 12, 1)
     with pytest.warns(costs.UnverifiedScheduleWarning):
-        result = round_trip({"qty": QTY}, slippage=0, data=session_bars(dt.date(2025, 7, 1)))
-    assert any("IN-2024-10-01" in text and "unverified" in text for text in result.warnings)
+        result = round_trip({"qty": QTY}, slippage=0, data=session_bars(day), now="2026-12-10")
+    named = "IN-2026-04-01 are past verification for 2 fills, from 2026-12-01"
+    assert any(named in text for text in result.warnings)
     assert not result.costs["verified"].any()

@@ -110,7 +110,7 @@ impl Engine {
             open_rupees,
             request.leverage,
         )?;
-        if margin > self.portfolio.free_cash_rupees() {
+        if margin > self.free_cash_rupees() {
             return Ok(Err(RejectCode::Margin));
         }
         Ok(Ok(margin))

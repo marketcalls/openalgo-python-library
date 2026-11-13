@@ -176,7 +176,9 @@ SEGMENT_FOR = [
     ("BFO", "NRML", "OPT", {"underlying": "SENSEX50"}, "BFO_OPT_OTHER"),
     ("BFO", "MIS", "OPT", {"underlying": "RELIANCE"}, "BFO_OPT_OTHER"),
     ("MCX", "NRML", "FUT", {"underlying": "CRUDEOIL"}, "MCX_FUT"),
-    ("MCX", "MIS", "FUT", {"underlying": "MENTHAOIL"}, "MCX_FUT_AGRI"),
+    ("MCX", "MIS", "FUT", {"underlying": "CARDAMOM"}, "MCX_FUT_AGRI"),
+    ("MCX", "MIS", "FUT", {"underlying": "MENTHAOIL"}, "MCX_FUT_AGRI_CTT"),
+    ("MCX", "NRML", "FUT", {"underlying": "CPO"}, "MCX_FUT_AGRI_CTT"),
     ("MCX", "NRML", "FUT", {"underlying": "KAPAS"}, "MCX_FUT_KAPAS"),
 ]
 
@@ -219,9 +221,11 @@ def test_a_bse_trade_without_its_scrip_group_is_not_charged_as_group_a():
     # there is no charge to assume (group A would be Rs 3.75).
     with pytest.raises(CostError, match="scrip group"):
         costs.trade_cost("BUY", 100_000, 1, SNAPSHOT, exchange="BSE", product="CNC")
-    cost = costs.trade_cost(
-        "BUY", 100_000, 1, SNAPSHOT, exchange="BSE", product="CNC", bse_group="Z"
-    )
+    # The group X row is not verified (the same row charges ZP, which pays more).
+    with pytest.warns(costs.UnverifiedScheduleWarning, match="BSE_EQ_DELIVERY_X"):
+        cost = costs.trade_cost(
+            "BUY", 100_000, 1, SNAPSHOT, exchange="BSE", product="CNC", bse_group="Z"
+        )
     assert (cost.exchange_txn, cost.gst) == pytest.approx((100.0, 18.018))
 
 
@@ -250,7 +254,7 @@ def test_the_segment_table_lists_every_segment_once():
     table = costs.segments()
     assert [row["code"] for row in table] == list(costs.SEGMENTS)
     assert [row["id"] for row in table] == list(range(len(costs.SEGMENTS)))
-    assert len(set(costs.SEGMENTS)) == 21
+    assert len(set(costs.SEGMENTS)) == 22
 
 
 def test_components_are_listed_in_output_order():
@@ -387,7 +391,7 @@ def test_a_dp_charge_says_whose_fee_it_charged(brokerage, fee, source):
     assert (brokerage.dp_fee, brokerage.dp_fee_source) == (fee, source)
 
 
-@pytest.mark.parametrize("date", ["2025-06-02", "2031-01-01"])
+@pytest.mark.parametrize("date", ["2026-11-13", "2031-01-01"])
 def test_dp_charge_warns_when_gst_is_not_verified_for_the_date(date):
     with pytest.warns(costs.UnverifiedScheduleWarning, match="GST"):
         charge = costs.dp_charge(date)
