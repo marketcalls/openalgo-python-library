@@ -1,21 +1,24 @@
-"""The history a backtest loads before `start`, so that its indicators are ready when
+"""The history a backtest keeps before `start`, so that its indicators are ready when
 trading begins (decision D25; the rule is in `_warm_up`).
 
 Two steps, so that every run of the same strategy and parameters keeps the same bars:
 
 1. **Load** (`_warm_up_load`): for each traded symbol the needs of its series
-   (`_warm_up_probe`) are turned into the first calendar day asked for
-   (`_warm_up_days.first_requested_day`), and the run's own source is asked for the base
-   bars from that day to the last bar before `start`, once: for the run's needs, or for
-   the largest needs of a sweep's combinations.
-2. **Keep**, per run (`LoadedHistory.for_run`, from `_pipeline.execute`). A run keeps,
-   of the bars loaded, those from the first day its own needs ask for, cut to the whole
-   sessions that hold the last `need` bars of each of its series (from the start of an
-   anchor period, the morning of a datetime start). The kept bars and the run's first
-   session are then checked as one series (`data.quality.check_bars`): a quality error
-   there, such as a suspected unadjusted split between the history and the run, leaves
-   the run without history and says why. A combination of a sweep therefore keeps and
-   checks exactly the bars its single run does, whatever else the sweep loaded.
+   (`_warm_up_probe`) are turned into requests (`_warm_up_days.requests`), and the run's
+   own source is asked for the base bars from the first day of a request to the last bar
+   before `start`, further back while they fall short of a need: for the run's needs,
+   or once for the largest needs of a sweep's combinations, in which each combination
+   finds the request its single run makes.
+2. **Keep**, per run (`keep`, from `_warm_up_load.LoadedHistory.for_run`). A run keeps,
+   of the bars of its request, the whole sessions that hold the last `need` bars of each
+   of its series (from the start of the first anchor period an anchored need reads, the
+   morning of a datetime start). The kept bars and the run's first base bar are then
+   checked as one series (`_warm_up_join`): a quality error there, such as a suspected
+   unadjusted split between the history and the run, leaves the run without history and
+   says why, and a declared split or bonus the history is not adjusted for is adjusted
+   for in it (prices before its ex-date divided by its factor, volume multiplied), which
+   the Assumptions line says. A combination of a sweep therefore keeps and checks exactly
+   the bars its single run does, whatever else the sweep loaded.
 
 The kept bars are joined before `init` runs (`RunHistory.joined`, `with_base`): the base
 bars in front of the run's (every other interval is built from both), and the strategy
@@ -30,14 +33,15 @@ from `start` only, so the strategy waits inside the run). A run on one explicit
 contract (`symbol = "NIFTY23NOV26FUT"`) is an ordinary symbol and loads its own bars
 before `start` when the source has them. A source with fewer bars gives what it has,
 own data that begins at `start` none. The load's own warnings join the run's. The
-strategy then waits inside the run (`_warm_up`).
+strategy then waits inside the run (`_warm_up`). A need the run's `init` registers but
+did not register on the reference bars was loaded for by nothing, and its wait says so.
 """
 
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import numpy as np
@@ -46,16 +50,13 @@ import pandas as pd
 from ._messages import counted
 from ._series import FIELDS, TIMES, ist_time
 from ._warm_up import HISTORY_YEARS_CAP, SeriesNeed
-from ._warm_up_anchor import period_start
-from ._warm_up_days import by_symbol, first_requested_day, run_from
-from ._warm_up_join import Opening, join_failure, opening_part
+from ._warm_up_anchor import first_day
+from ._warm_up_days import FIRST_BAR_SLACK_DAYS, Request, run_from
+from ._warm_up_join import Opening, join, opening_part
 from .data._finish import _hash_by_month
 from .data._sessions import day_start_ns
 from .resample import resample_bars
 
-# A first bar within a week of the day asked for is the first session on or after it
-# (weekends, holidays); later, the source has no bars between the two, which is said.
-FIRST_BAR_SLACK_DAYS = 7
 FUTURES_NOTE = "none (a futures series is built from start: its contracts and their rolls)"
 FUTURES_REASON = "a futures series is built from start, from its contracts and their rolls"
 NO_NEED = "none (no indicator of it needs bars before start)"
@@ -96,17 +97,19 @@ def _count_back(
     return int(closed["ts_open"].iloc[max(len(closed) - bars, 0)]), len(closed) >= bars
 
 
-def _first_kept(
+def first_kept(
     base: pd.DataFrame, needs: Sequence[SeriesNeed], plan: Any, calendar: Any
 ) -> tuple[int, bool]:
-    """(the first instant a run keeps, UTC nanoseconds, before its day is taken whole;
-    True when the bar needs are met), see the module docstring."""
+    """(the first instant a run keeps of the non-empty base bars `base`, UTC nanoseconds,
+    before its day is taken whole; True when every need that counts bars has them), see
+    the module docstring."""
     instants, enough = [], True
     if plan.first_slice is not None:
         instants.append(int(day_start_ns(plan.start)))
     for need in needs:
         if need.anchor is not None:
-            instants.append(int(day_start_ns(period_start(plan.start, need.anchor))))
+            day = first_day(plan.start, need.anchor, calendar, plan.exchange)
+            instants.append(int(day_start_ns(day)))
         elif need.more:
             instants.append(int(base["ts_open"].iloc[0]))
             enough = False
@@ -120,13 +123,14 @@ def _first_kept(
 @dataclass(frozen=True)
 class SymbolHistory:
     """One symbol's history kept by a run: its base bars (canonical layout, possibly
-    empty), the strategy bars they make (the columns of `_series`, for `BarStore`), what
-    the Assumptions block says of it, the manifest hashes of the bars kept, what to
-    say when they fall short of a need (`shortfall`): `kind` is "own" (the user's
-    data), "source" (a client source), "failed", or "unprobed" (the needs learnt on the
-    reference bars asked for none), `detail` the failure;
-    the load's warnings for the run; and the part before `start` of the strategy bar
-    that straddles a datetime `start` (`opening`, None without one)."""
+    empty, adjusted for the declared splits and bonuses inside it), the strategy bars
+    they make (the columns of `_series`, for `BarStore`), what the Assumptions block says
+    of it, the manifest hashes of the bars kept as the source gave them, what to say when
+    they fall short of a need (`shortfall`): `kind` is "own" (the user's data), "source"
+    (a client source), "failed" or "unprobed" (no need of it was learnt on the reference
+    bars), `detail` the failure; the load's warnings for the run; and the part before
+    `start` of the strategy bar that straddles a datetime `start` (`opening`, None
+    without one)."""
 
     symbol: str
     base: pd.DataFrame
@@ -140,12 +144,11 @@ class SymbolHistory:
     opening: Opening | None = None
 
     def shortfall(self, first_day: dt.date | None, start: Any) -> str:
-        """Why the history of this symbol did not meet a need; `first_day` is the IST
-        date of its first bar, history or run."""
+        """Why the history of this symbol did not meet a need its run learnt on the
+        reference bars; `first_day` is the IST date of the first bar of the need's
+        series, history or run."""
         if self.kind == "failed":
             return f"its bars before {start} could not be used ({self.detail})"
-        if self.kind == "unprobed":
-            return NOT_PROBED
         if self.capped:
             return f"the history reaches back at most {HISTORY_YEARS_CAP} years before start"
         if self.kind == "own":
@@ -164,20 +167,33 @@ def empty_base() -> pd.DataFrame:
     return base
 
 
-def _empty(symbol: str, note: str, kind: str, detail: str = "") -> SymbolHistory:
+def empty_history(symbol: str, note: str, kind: str, detail: str = "") -> SymbolHistory:
+    """A symbol's history of no bars: `note` for the Assumptions block, its kind and
+    failure (`SymbolHistory`)."""
     base = empty_base()
     strategy = {name: base[name].to_numpy() for name in (*TIMES, *FIELDS)}
     return SymbolHistory(symbol, base, strategy, note, kind, detail)
 
 
+def _covered(need: SeriesNeed, probed: Sequence[SeriesNeed]) -> bool:
+    """True when a need learnt on the reference bars (`probed`) asked for at least
+    `need`: so its history was loaded for it."""
+    return any(
+        held.key() == need.key() and (held.bars, held.more) >= (need.bars, need.more)
+        for held in probed
+    )
+
+
 @dataclass(frozen=True)
 class RunHistory:
-    """The history one run keeps, by traded symbol in registration order; `futures`
-    is True for a futures series, which has none."""
+    """The history one run keeps, by traded symbol in registration order; the needs it
+    was kept for (`probed`, learnt on the reference bars); `futures` is True for a
+    futures series, which has none."""
 
     symbols: dict[str, SymbolHistory]
     start: Any
     futures: bool = False
+    probed: tuple[SeriesNeed, ...] = ()
 
     @property
     def warnings(self) -> list[str]:
@@ -219,11 +235,14 @@ class RunHistory:
             return FUTURES_NOTE
         return ", ".join(f"{symbol} {history.note}" for symbol, history in self.symbols.items())
 
-    def shortfall(self, symbol: str, first_day: dt.date | None) -> str:
-        """Why the history of `symbol` (or a futures underlying) did not meet a need."""
-        if self.futures or symbol not in self.symbols:
+    def shortfall(self, need: SeriesNeed, first_day: dt.date | None) -> str:
+        """Why the history did not meet `need` of a symbol (or a futures underlying);
+        `first_day` is the IST date of the first bar of its series."""
+        if self.futures or need.symbol not in self.symbols:
             return FUTURES_REASON
-        return self.symbols[symbol].shortfall(first_day, self.start)
+        if need.computed and not _covered(need, self.probed):
+            return NOT_PROBED
+        return self.symbols[need.symbol].shortfall(first_day, self.start)
 
 
 @dataclass(frozen=True)
@@ -245,14 +264,22 @@ class SymbolLoad:
     coverage: str = ""
     declared: Any = None
 
+    def since(self, day: dt.date) -> SymbolLoad:
+        """This load's bars from `day` on (IST), as a load from `day` gives them."""
+        opens = self.base["ts_open"].to_numpy()
+        first = int(np.searchsorted(opens, day_start_ns(day), side="left"))
+        if not first:
+            return self
+        return replace(self, base=self.base.iloc[first:].reset_index(drop=True))
 
-def _asked(day: dt.date, base: pd.DataFrame, capped: bool) -> str:
+
+def _asked(request: Request, base: pd.DataFrame) -> str:
     """How the Assumptions block says what was asked for and what came back."""
-    told = f"asked from {day}"
-    if capped:
+    told = f"asked from {request.day}"
+    if request.capped:
         told += f", {HISTORY_YEARS_CAP} years before start at most"
     first = ist_time(int(base["ts_open"].iloc[0])).date() if not base.empty else None
-    if first is not None and first > day + dt.timedelta(days=FIRST_BAR_SLACK_DAYS):
+    if first is not None and first > request.day + dt.timedelta(days=FIRST_BAR_SLACK_DAYS):
         told += f"; the source returned bars from {first}"
     return told
 
@@ -273,82 +300,54 @@ def keep(
     plan: Any,
     calendar: Any,
     run_base: pd.DataFrame,
+    request: Request,
 ) -> SymbolHistory:
-    """The history one run keeps of a symbol's load for its own `needs`, checked joined
-    to the run's base bars `run_base`; see the module docstring."""
+    """The history one run keeps of a symbol's load for its own `needs` (the bars of
+    its `request`), checked and adjusted where it meets the run's base bars `run_base`;
+    see the module docstring."""
     kind = load.kind if needs else "unprobed"
     if not needs and plan.first_slice is None:
-        return _empty(symbol, NO_NEED, kind)
+        return empty_history(symbol, NO_NEED, kind)
     if load.failure:
         note = f"none (the bars before {plan.start} could not be loaded: {load.failure})"
-        return _empty(symbol, note, "failed", load.failure)
-    day, capped = first_requested_day(needs, plan, calendar)
-    base = load.base[load.base["ts_open"].to_numpy() >= day_start_ns(day)]
+        return empty_history(symbol, note, "failed", load.failure)
+    base = load.base
     if base.empty:
-        note = f"none ({_asked(day, base, capped)}; the source has no bars before {plan.start})"
-        return _empty(symbol, note, kind)
-    asked = _asked(day, base, capped)
-    cut, enough = _first_kept(base, needs, plan, calendar)
+        note = f"none ({_asked(request, base)}; the source has no bars before {plan.start})"
+        return empty_history(symbol, note, kind)
+    cut, enough = first_kept(base, needs, plan, calendar)
     kept_from = day_start_ns(ist_time(cut).date())
     base = base[base["ts_open"].to_numpy() >= kept_from].reset_index(drop=True)
-    failure = join_failure(symbol, base, run_base, load.declared, plan, calendar)
-    if failure:
-        note = f"none (the bars before {plan.start} could not be used: {failure})"
-        return _empty(symbol, note, "failed", failure)
-    frame = _frame(base, plan.interval, plan, calendar)
+    joined = join(symbol, base, run_base, load.declared, plan, calendar)
+    if joined.failure:
+        note = f"none (the bars before {plan.start} could not be used: {joined.failure})"
+        return empty_history(symbol, note, "failed", joined.failure)
+    frame = _frame(joined.base, plan.interval, plan, calendar)
     strategy = _closed(frame, plan)
     hashes = {entry["key"]: entry["sha256"] for entry in _hash_by_month(base, load.key)}
     warnings = (*load.notes, *((load.coverage,) if not enough and load.coverage else ()))
+    told = "; ".join((_asked(request, load.base), *joined.adjusted))
     return SymbolHistory(
         symbol,
-        base,
+        joined.base,
         {name: strategy[name].to_numpy() for name in (*TIMES, *FIELDS)},
-        f"{_shown(strategy)} ({asked})",
+        f"{_shown(strategy)} ({told})",
         kind,
-        capped=capped,
+        capped=request.capped,
         partitions=hashes,
         warnings=warnings,
         opening=opening_part(frame, run_from(plan)),
     )
 
 
-@dataclass(frozen=True)
-class LoadedHistory:
-    """The bars before `start` loaded for a run or a sweep (`_warm_up_load`): each
-    traded symbol's load (none for a symbol nothing needed, nor for a futures series,
-    `futures` True)."""
-
-    loads: dict[str, SymbolLoad]
-    futures: bool = False
-
-    def for_run(
-        self,
-        needs: Sequence[SeriesNeed],
-        plan: Any,
-        calendar: Any,
-        run_bars: Mapping[str, pd.DataFrame],
-    ) -> RunHistory:
-        """The history a run with `needs` keeps (module docstring); `run_bars` are the
-        run's base bars by symbol."""
-        if self.futures:
-            return RunHistory({}, plan.start, futures=True)
-        wanted = by_symbol(needs)
-        kept = {}
-        for symbol in plan.symbols:
-            load = self.loads.get(symbol)
-            if load is None:
-                kept[symbol] = _empty(symbol, NO_NEED, "unprobed")
-                continue
-            mine = wanted.get(symbol, [])
-            kept[symbol] = keep(symbol, load, mine, plan, calendar, run_bars[symbol])
-        return RunHistory(kept, plan.start)
-
-
 __all__ = [
-    "LoadedHistory",
+    "NO_NEED",
+    "NOT_PROBED",
     "RunHistory",
     "SymbolHistory",
     "SymbolLoad",
     "empty_base",
+    "empty_history",
+    "first_kept",
     "keep",
 ]

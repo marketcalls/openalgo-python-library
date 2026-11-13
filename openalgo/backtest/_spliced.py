@@ -247,7 +247,7 @@ class IndicatorAdapter:
 
     def _outputs(self, epoch: int, start: int, stop: int) -> list[np.ndarray]:
         """Every output on bars [start, stop) with the inputs as re-adjusted in `epoch`."""
-        from ._indicators import _outputs
+        from ._indicator_values import outputs_of
 
         times = self._store.times()[start:stop]
         arguments = [
@@ -257,7 +257,7 @@ class IndicatorAdapter:
             for value in self._call.inputs
         ]
         returned = self._call.func(*arguments, **self._call.params)
-        return _outputs(returned, stop - start, self._call.label)
+        return outputs_of(returned, stop - start, self._call.label)
 
     def outputs_at(self, epoch: int) -> list[np.ndarray]:
         """Every output of the whole run in `epoch` (cached for the last epoch asked)."""

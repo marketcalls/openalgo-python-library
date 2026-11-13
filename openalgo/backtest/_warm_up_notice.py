@@ -27,12 +27,8 @@ from .errors import WarmUpWarning
 SEE_DETAILS = "See result.warnings for why."
 
 
-def wait_notice(record: dict[str, Any]) -> str | None:
-    """The text of the warning for the warm-up a manifest records, or None when the
-    strategy decided from `start`. For example "The strategy waited inside the run for
-    its indicators to warm up and made its first decision at 2026-01-22 15:30 IST (SBIN
-    waited 15 strategy bars): signals before then were not taken. See result.warnings
-    for why." """
+def _waits(record: dict[str, Any]) -> str | None:
+    """The sentence of a wait inside the run, None without one."""
     waited = [(name, bars) for name, bars in record["waited"].items() if bars]
     if not waited:
         return None
@@ -40,13 +36,33 @@ def wait_notice(record: dict[str, Any]) -> str | None:
     if record["first_decision"] == NEVER_DECIDED:
         return (
             "The strategy made no decision: its indicators did not finish their warm-up "
-            f"within the run's bars ({counts}). {SEE_DETAILS}"
+            f"within the run's bars ({counts})."
         )
     return (
         "The strategy waited inside the run for its indicators to warm up and made its "
         f"first decision at {record['first_decision']} ({counts}): signals before then were "
-        f"not taken. {SEE_DETAILS}"
+        "not taken."
     )
+
+
+def wait_notice(record: dict[str, Any]) -> str | None:
+    """The text of the warning for the warm-up a manifest records, or None when the
+    strategy decided from `start` for every symbol. For example "The strategy waited
+    inside the run for its indicators to warm up and made its first decision at
+    2026-01-22 15:30 IST (SBIN waited 15 strategy bars): signals before then were not
+    taken. See result.warnings for why." A symbol left out (`no_decision`) adds "The
+    strategy made no decision for BBB: its indicators were never ready within its
+    bars." """
+    told = [_waits(record)]
+    left_out = record.get("no_decision", [])
+    if left_out:
+        whose = "its" if len(left_out) == 1 else "their"
+        told.append(
+            f"The strategy made no decision for {', '.join(left_out)}: {whose} indicators "
+            f"were never ready within {whose} bars."
+        )
+    sentences = [sentence for sentence in told if sentence]
+    return " ".join([*sentences, SEE_DETAILS]) if sentences else None
 
 
 def announce_wait(result: Any) -> None:

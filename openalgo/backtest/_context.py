@@ -24,6 +24,7 @@ from ._engine import call
 from ._futures_context import SeriesContext
 from ._orders import Order
 from ._series import Bar, BarStore, PositionView, SeriesStore, ist_time
+from ._skip_reasons import NOT_READY
 from ._timers import Timers
 from .errors import ConfigError
 from .reference import Instrument
@@ -76,8 +77,13 @@ class RunContext:
         self.default_size = default_size
         self.decided_at: int | None = None
         # (decision instant, symbol, reason) of every order skipped before it was placed:
-        # by a sizer or a sizing function, or a target that rounds to no units.
+        # by a sizer or a sizing function, a target that rounds to no units, or a symbol
+        # left out.
         self.skipped: list[tuple[int | None, str, str]] = []
+        # The names the strategy makes no decision for, their indicators never ready
+        # (`_warm_up.Readiness.left_out`): their bars are not passed on, their orders are
+        # skipped.
+        self.left_out: frozenset[str] = frozenset()
         # The result's orders table once the run is over (`close`), and the row of each
         # order id in it, made on the first lookup.
         self._final_orders: dict[str, list] | None = None
@@ -136,7 +142,9 @@ class RunContext:
             symbol = self.symbols[row[0]]
             revealed[symbol] = self.stores[symbol].reveal(row)
         if self.futures is not None:
-            return self.futures.reveal(revealed, self.stores, self.decided_at)
+            revealed = self.futures.reveal(revealed, self.stores, self.decided_at)
+        if self.left_out:
+            revealed = {name: bar for name, bar in revealed.items() if name not in self.left_out}
         return revealed
 
     @property
@@ -191,9 +199,24 @@ class RunContext:
 
     # ----- orders ----------------------------------------------------------------
 
+    def _skip_left_out(self, request: dict) -> bool:
+        """True, with the order recorded as skipped (`NOT_READY`), when it is on a name
+        the strategy makes no decision for (`left_out`)."""
+        if not self.left_out:
+            return False
+        symbol = self.symbols[request["instrument"]]
+        spliced = None if self.futures is None else self.futures.store_of(symbol)
+        if (symbol if spliced is None else spliced.symbol) not in self.left_out:
+            return False
+        self.skipped.append((self.decided_at, symbol, NOT_READY))
+        return True
+
     def submit(self, request: dict) -> Order | None:
-        """Place a request; returns its handle, or None when a sizer skipped it. A sizing
-        function is called here, at the decision (`_sizing_function`)."""
+        """Place a request; returns its handle, or None when a sizer skipped it or its
+        symbol is left out. A sizing function is called here, at the decision
+        (`_sizing_function`)."""
+        if self._skip_left_out(request):
+            return None
         store = self.sizing_store(request["instrument"])
         symbol = self.symbols[request["instrument"]]
         request = {**request, "quantity": resolve_atr(request["quantity"], store)}
@@ -207,12 +230,17 @@ class RunContext:
     def submit_target(self, request: dict) -> Order | None:
         """Trade to a target position (`_orders.target` builds the request); returns the
         handle of the order for the difference, or None when the position already is the
-        target or the target rounds to no units (recorded as skipped)."""
+        target or the target rounds to no units or its symbol is left out (recorded as
+        skipped)."""
+        if self._skip_left_out(request):
+            return None
         return self._targeted(request, call(self.engine.target, request))
 
     def submit_rebalance(self, request: dict) -> Order | None:
         """`submit_target` for one trade of a rebalance (`_rebalance`): the order is
         tagged "rebalance" and, when it buys, fills after the slice's sales."""
+        if self._skip_left_out(request):
+            return None
         return self._targeted(request, call(self.engine.rebalance_target, request))
 
     def _targeted(self, request: dict, submitted: tuple | None) -> Order | None:

@@ -161,12 +161,14 @@ def test_on_openalgo_data_the_daily_bars_of_the_whole_range_are_read_from_histor
     # bars of the range (the coverage probe); it holds every session, so the bars are
     # then read from it. Then the history before the range, from the same source, for
     # what the 20-session EMA needs, 256 sessions (the longer of the two):
-    # 256 x 7/5 x 1.1 = 394.24, so 395 calendar days and a week more, 402, before
-    # 2026-04-01 is Monday 2025-02-24; 2026-03-31 is an NSE holiday, so the last session
-    # asked for is 2026-03-30. Only the read-only history endpoint is called.
+    # 256 x 7/5 x 1.1 = 394.24, so 395 calendar days and a week more, 402, which the
+    # ladder of spans (16 days, each step a quarter longer, rounded up: ..., 304, 380,
+    # 475) rounds up to 475 days: before 2026-04-01 that is 2024-12-12; 2026-03-31 is an
+    # NSE holiday, so the last session asked for is 2026-03-30. Only the read-only history
+    # endpoint is called.
     _, client = openalgo_run
     whole_range = ("db", "D", QUICKSTART.START, QUICKSTART.END)
-    history = ("db", "D", "2025-02-24", "2026-03-30")
+    history = ("db", "D", "2024-12-12", "2026-03-30")
     assert client.history_calls() == [whole_range, whole_range, history]
     assert client.endpoints() == {"history"}
     assert client.keys_seen == {FakeClient.api_key}

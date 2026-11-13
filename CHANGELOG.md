@@ -89,9 +89,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that ran the backtest: the first decision and the strategy bars each symbol waited,
   for example "The strategy waited inside the run for its indicators to warm up and
   made its first decision at 2026-01-22 15:30 IST (SBIN waited 15 strategy bars):
-  signals before then were not taken. See result.warnings for why.", or that it made no
-  decision at all. Once per run; `bt.optimize` does not issue it. `result.warnings`
-  keeps the full line, with why and what to do.
+  signals before then were not taken. See result.warnings for why.", that it made no
+  decision at all, or that it made none for a symbol whose indicators were never ready.
+  Once per run; `bt.optimize` does not issue it. `result.warnings` keeps the full line,
+  with why and what to do.
+- **The causality registry records anchored indicators** (`causality.Anchor`, the
+  `anchor` of an `Indicator` row): the argument that names the anchor period, the whole
+  periods before the current one a value reads (0 for `ta.vwap`, 1 for
+  `ta.pivot_points`) and the arguments that supply bar times of the user's own.
+  `causality.causality()` records gain an "anchor" key, None for every other
+  indicator; a test checks that every `ta` function with an `anchor` parameter has one.
 
 ### Changed
 
@@ -111,9 +118,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   warm-up of each common indicator against eight differently shaped price series. An
   indicator of other views needs theirs before its own (a crossing over
   `self.close.rolling_max(100).shift(1)` needs at least 102 bars). An anchored
-  indicator (`ta.vwap` with anchor Session, Week, Month, Quarter or Year) needs the bars
-  since the start of its anchor period: they are loaded, and when the data begin inside
-  the period the strategy waits for the next one. One that needs more than the longest
+  indicator, as the causality registry marks it (`ta.vwap` with anchor Session, Week,
+  Month, Quarter or Year, and `ta.pivot_points` with an anchor), needs the bars since
+  the start of the first anchor period it reads: a VWAP its own period, floor pivots the
+  whole period before their own as well (monthly pivots on 15-minute bars keep the
+  whole previous month, and daily pivots after a 14:00 datetime `start` keep the
+  previous session). They are loaded, and when the data begin inside the period the
+  strategy waits for the next one. One that needs more than the longest
   window (an EMA of 10,000 bars) says so, gets up to 30 years of history and waits that
   window at least. Live trading keeps the same windows. A backtest learns what its
   indicators need before it loads any data, by running `init` once on the reference
@@ -121,14 +132,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run's own source (Historify or the broker its bars came from, or the bars of
   `data=`), the bars before `start` each series needs, in that series' own interval (a
   weekly EMA(50) gets its 512 weeks, a monthly EMA(10) its 128 months), at most 30 years
-  back; with a datetime `start` the bars of that day before it are history too, so a
+  back. They are asked for in steps of a fixed ladder of spans, from the span the need
+  fills at full session density, and further back while the bars returned fall short
+  of a need and the source has more (a thinly traded share whose minutes without a
+  trade have no candle), so a need is met whenever the source holds the bars; with a
+  datetime `start` the bars of that day before it are history too, so a
   daily view and a strategy bar cut by `start` hold the whole day. Every series holds
   the history before `init` runs on the data, so every indicator is computed over it
   (`init` itself sees no bar, so `len(self.close)` is 0 there and on the probe)
   and one longer than the run (a 200-day EMA on a run of 60 days, or in a
-  `from_signals` function) works. The history kept and the run's first session are
-  checked as one series: a suspected unadjusted split at the join leaves the run
-  without history and says why. `on_bar`, timers, conditions and arrays wait alike;
+  `from_signals` function) works. The history kept and the run's first base bar are
+  checked as one series, and no later bar, so the afternoon of the start day cannot
+  decide whether its morning trades: a suspected unadjusted split at the join leaves
+  the run without history and says why. A split or bonus declared with
+  `corporate_actions=` that the history is not adjusted for is adjusted for in it, as a
+  split-adjusted chart shows the bars before it (prices before the ex-date divided by
+  its factor, volume multiplied by it), so the indicators at `start` are those of the
+  adjusted series, and the Assumptions line says so ("adjusted for a split (2 shares
+  for every 1) on 2024-12-17: prices before it divided by 2, volume multiplied by 2");
+  the run's own bars and an ex-date inside the run are handled as before. `on_bar`,
+  timers, conditions and arrays wait alike;
   `from_arrays` arrays are read for the run's bars only, an indicator over an array of
   the user's own is computed on the run's bars, and a `from_signals` function is
   computed over the history a 200-bar EMA needs (its indicators are its own, so the
@@ -136,22 +159,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still start at `start`. When the source has fewer bars before `start` (own data that
   begins at `start`, a new listing, a futures series rolled from contract to contract,
   which is built from `start`), the strategy waits inside the run until its indicators
-  are ready, and makes no decision at all in a run with fewer bars than a need; a
-  warning counts the strategy bars each symbol waited and says why (for own data, to
-  give earlier bars; for a source, "the source has no bars of BBB before 2026-02-02"),
-  and `bt.backtest` ends with a `WarmUpWarning`. A run on one explicit futures contract
+  are ready; a warning counts the strategy bars each symbol waited and says why (for own
+  data, to give earlier bars, naming the day they begin; for a source, "the source has
+  no bars of BBB before 2026-02-02"; for an indicator the run's `init` registers but did
+  not register on the reference bars, that no history was loaded for it), and
+  `bt.backtest` ends with a `WarmUpWarning`. The strategy makes no decision for a symbol
+  whose series has fewer bars than a need of its own: an indicator whose series is
+  shorter than its own window (`period`, `length`) or, for one without a single window
+  (MACD), its warm-up is not
+  computed (its values are unknown; a 100-bar average on 60 bars of own data stopped the
+  run with a ConfigError before, and now makes no decision with a warning, as an RSI
+  did). The series length decides, not the error the call raises. In a
+  run of several symbols the others decide once their indicators are ready: the one
+  left out gets no bar in `on_bar` and its orders are skipped (skip reason "not_ready"),
+  and the manifest lists it under `no_decision`. Any other error of an indicator still
+  stops the run. A run on one explicit futures contract
   loads that contract's own bars before `start`. The Assumptions block gains `warm_up`
   (the rule, each series' need in its own bars, the history kept with the day asked
   from and, when later, the day the source's bars began, and the first decision), the
   manifest records the warm-up under `arguments["warm_up"]` (the needs, with `since`
-  for an anchor period and `more_than` for a need longer than the longest window, the
-  indicators not waited for, the first decision and the strategy bars each symbol
-  waited) and the partition hashes of the history kept under `data["<symbol>
-  history"]`; the history load's own warnings join the run's. `bt.optimize` learns each
-  combination's needs on the reference bars before any data is loaded, loads the
-  history once for the largest, and each combination keeps and checks exactly the bars
+  for an anchor period, `periods_before` for one that reads whole periods before its
+  own, `more_than` for a need longer than the longest window and `computed` false for
+  an indicator its series was too short to compute, the indicators not waited for, the
+  first decision, the strategy bars each symbol waited and the symbols left out) and
+  the partition hashes of the history kept, as the source gave the bars, under
+  `data["<symbol> history"]`; the history load's own warnings join the run's.
+  `bt.optimize` learns each combination's needs on the reference bars before any data is
+  loaded, loads the history once for the largest, in which each combination finds the
+  request its single run makes, and each combination keeps and checks exactly the bars
   its single run does (a data problem outside its own history does not cost it that
-  history), so the table, `select()` and `rerun()` reproduce single runs. A strategy's
+  history; when the larger load fails, as one bar off the lattice far before `start`
+  makes it, each combination's history is loaded on its own), so the table, `select()`
+  and `rerun()` reproduce single runs. Needs are keyed on the parameter values frozen
+  in order, so a list, tuple or dict value works as a number does (a list raised
+  TypeError). A strategy's
   own warm-up guard (`if len(self.close) < self.slow: return`) still works; it is no
   longer needed. An indicator no window settles (a running sum such as on-balance
   volume), one over an array of the user's own, and one the reference bars cannot

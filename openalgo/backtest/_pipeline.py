@@ -10,7 +10,8 @@ bars: the run's parameters, or every combination of a sweep); then the base inte
 and its bars (`_base_interval.choose_base`, through the data layer), the ticks chosen by
 a price slab (`_slab_ticks`, from the data) and the market settings (`_market`: the cost
 model, the slippage and the per-instrument facts), and the history before `start` for
-the largest of those needs (`_warm_up_load`). A sweep sends its `PreparedRun` to worker
+those needs (`_warm_up_load`: once for the largest, in which each parameter set finds
+the request its single run makes). A sweep sends its `PreparedRun` to worker
 processes without the market settings, which hold native objects, and each worker
 resolves them again from the `costs=` and `slippage=` arguments and the parsed `margin=`
 (`_futures_margin`). That needs those arguments to pickle and the run to use the shared
@@ -67,10 +68,10 @@ from ._session_dates import session_dates_note
 from ._settings import RunPlan, assumptions, resolve
 from ._slab_ticks import resolve_slab_ticks
 from ._warm_up import Readiness, SeriesNeed, readiness
-from ._warm_up_history import LoadedHistory, RunHistory
-from ._warm_up_load import history_source, load_history
+from ._warm_up_history import RunHistory
+from ._warm_up_load import LoadedHistory, history_source, load_history
 from ._warm_up_measure import WarmUp
-from ._warm_up_probe import combination_needs, largest, params_key, probe_needs, probe_setup
+from ._warm_up_probe import combination_needs, params_key, probe_needs, probe_setup
 from .reference import Instrument
 from .result import Result
 
@@ -102,8 +103,8 @@ class PreparedRun:
     # Declared splits and bonuses the bars are not adjusted for, which nothing may be
     # held across (`_run_corporate_actions`).
     unadjusted: tuple[UnadjustedEvent, ...] = ()
-    # The bars before `start`, loaded for the largest need of the parameter sets
-    # probed (`_warm_up_load`); each run keeps what its own needs ask for
+    # The bars before `start`, loaded for the needs of the parameter sets probed
+    # (`_warm_up_load`); each run keeps what its own needs ask for
     # (`_warm_up_history`). The needs of each parameter set probed, by
     # `_warm_up_probe.params_key`, and the warm-ups measured on the reference bars, by
     # indicator label, so that no run probes or measures again.
@@ -256,7 +257,7 @@ def prepare(
         futures=futures,
         benchmark=benchmark,
         unadjusted=unadjusted_events(plan.symbols, loaded),
-        history=load_history(plan, source, largest(needs.values())),
+        history=load_history(plan, source, needs.values()),
         needs=needs,
         measured=measured,
     )
@@ -434,6 +435,7 @@ def execute(
             "write the strategy with on_bar",
         )
     state = readiness(context.run.checks.outcomes, context, history)
+    context.left_out = frozenset(state.left_out)
     if has_conditions(instance):
         drive_conditions(instance, engine, state.ready_at)
     else:

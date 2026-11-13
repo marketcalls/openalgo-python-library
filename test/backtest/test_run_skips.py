@@ -16,8 +16,10 @@ import openalgo.backtest as bt
 from openalgo.backtest._skip_reasons import SKIP_REASONS
 
 # Every reason the kernel skips a sized order with (`SkipReason::code` in
-# rust/oa_bt/src/sizing/mod.rs).
+# rust/oa_bt/src/sizing/mod.rs), and the run context's for a symbol left out because its
+# indicators are never ready.
 KERNEL_SKIP_REASONS = {"rounded_to_zero", "cap", "margin"}
+CONTEXT_SKIP_REASONS = {"not_ready"}
 ROUNDED_TO_ZERO = (
     "the sized quantity was less than one share or, for a derivative, one lot; give the "
     "strategy more capital, size with a larger percent, trade a cheaper share, or pass "
@@ -46,7 +48,7 @@ def daily(strategy: type, capital: float = CAPITAL) -> bt.Result:
 
 
 def test_every_kernel_skip_reason_has_a_meaning_and_what_to_do():
-    assert set(SKIP_REASONS) == KERNEL_SKIP_REASONS
+    assert set(SKIP_REASONS) == KERNEL_SKIP_REASONS | CONTEXT_SKIP_REASONS
     assert all(len(meaning) == 2 and all(meaning) for meaning in SKIP_REASONS.values())
 
 

@@ -37,7 +37,8 @@ from ._causality_checks import CheckOutcome, IndicatorChecks
 from ._series import PositionView, SeriesStore
 from ._timers import Timers
 from ._warm_up import SeriesNeed, series_needs
-from ._warm_up_measure import ReferenceCall
+from ._warm_up_anchor import PeriodAnchor
+from ._warm_up_measure import ReferenceCall, WarmUp
 from .errors import BacktestError, ConfigError
 
 # The indicator whose warm-up a from_signals function's series is given: a 200-bar EMA
@@ -136,18 +137,33 @@ class _ProbeChecks:
         label: str,
         compute: Any,
         whole: Sequence[np.ndarray],
-        anchor: str | None,
+        anchor: PeriodAnchor | None,
         series: tuple[str, str] | None = None,
         reference: ReferenceCall | None = None,
+        *,
+        required: int | None = None,
     ) -> CheckOutcome:
         """`_causality_checks.RunChecks.check` without the truncation check: the
         outcome of the indicator's warm-up, recorded."""
         found = self._shared.warm_up(label, anchor, reference)
         outcome = CheckOutcome(
-            label, None, found.bars, found.note, series=series, anchor=anchor, more=found.more
+            label,
+            None,
+            found.bars,
+            found.note,
+            series=series,
+            anchor=anchor,
+            more=found.more,
+            required=required,
         )
         self.outcomes.append(outcome)
         return outcome
+
+    def warm_up(
+        self, label: str, anchor: PeriodAnchor | None, reference: ReferenceCall | None
+    ) -> WarmUp:
+        """`_causality_checks.IndicatorChecks.warm_up`, on the shared checks."""
+        return self._shared.warm_up(label, anchor, reference)
 
 
 class _ProbeEngine:
@@ -258,19 +274,44 @@ def combination_needs(
     return history_needs(strategy, context.run.checks.outcomes, setup, checks)
 
 
+def _frozen(value: Any) -> Any:
+    """A hashable form of a parameter value that tells apart what differs: a list or
+    tuple keeps its order and its type, a mapping its items by key and a set its
+    members, each frozen in turn; an array its type, shape and bytes. Raises ConfigError
+    for any other value that cannot be hashed."""
+    if isinstance(value, Mapping):
+        items = sorted(value.items(), key=lambda item: repr(item[0]))
+        return (type(value).__name__, tuple((key, _frozen(item)) for key, item in items))
+    if isinstance(value, list | tuple):
+        return (type(value).__name__, tuple(_frozen(item) for item in value))
+    if isinstance(value, set | frozenset):
+        return (type(value).__name__, tuple(sorted((_frozen(item) for item in value), key=repr)))
+    if isinstance(value, np.ndarray):
+        return ("ndarray", value.dtype.str, value.shape, value.tobytes())
+    try:
+        hash(value)
+    except TypeError:
+        raise ConfigError(
+            f"a parameter value of type {type(value).__name__} cannot be told apart from "
+            "another: use numbers, booleans, strings, or lists, tuples or dicts of them"
+        ) from None
+    return value
+
+
 def params_key(params: Mapping[str, Any] | None) -> tuple:
-    """The key of a parameter set among the probed ones: its items, sorted (parameter
-    values are numbers, booleans and strings, `Strategy.parameters`)."""
-    return tuple(sorted((params or {}).items()))
+    """The key of a parameter set among the probed ones: its items sorted by name, each
+    value frozen (`_frozen`), so that a list value keys as well as a number. Raises
+    ConfigError for a value that cannot be frozen."""
+    return tuple((name, _frozen(value)) for name, value in sorted((params or {}).items()))
 
 
 def largest(found: Iterable[tuple[SeriesNeed, ...]]) -> tuple[SeriesNeed, ...]:
     """The largest need of each series and kind over the needs of several parameter sets,
-    in first-registration order: the most bars, and each anchor period."""
-    held: dict[tuple[str, str, str | None], SeriesNeed] = {}
+    in first-registration order: the most bars, and each anchor (`SeriesNeed.key`)."""
+    held: dict[tuple, SeriesNeed] = {}
     for needs in found:
         for need in needs:
-            key = (need.symbol, need.interval, need.anchor)
+            key = need.key()
             kept = held.get(key)
             if kept is None or (need.bars, need.more) > (kept.bars, kept.more):
                 held[key] = need

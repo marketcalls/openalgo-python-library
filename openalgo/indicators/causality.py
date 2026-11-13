@@ -49,6 +49,7 @@ from openalgo.indicators import ta as _ta
 
 __all__ = [
     "REGISTRY",
+    "Anchor",
     "Indicator",
     "causality",
     "indicator_names",
@@ -58,6 +59,29 @@ __all__ = [
 ]
 
 _NO_LOOKAHEAD: Mapping[str, str] = MappingProxyType({})
+
+
+@dataclass(frozen=True)
+class Anchor:
+    """How an anchored indicator restarts on calendar periods (`_anchors`).
+
+    An anchored value is replayed from the start of a period (a session, a week, a
+    month), not computed over a rolling window of bars, so how many bars it needs
+    depends on the calendar.
+
+    argument:       the parameter that names the anchor period. A call that leaves
+                    it None runs over the whole input as one period.
+    periods_before: the whole anchor periods before the current one that a value
+                    reads: 0 when it reads the bars of its own period since that
+                    began (a session VWAP), 1 when it reads the previous period
+                    (floor pivots drawn from the previous day, week or month).
+    overrides:      the parameters that, when given, supply the bar times or the
+                    period starts in place of the input's own dates.
+    """
+
+    argument: str = "anchor"
+    periods_before: int = 0
+    overrides: tuple[str, ...] = ("timestamps",)
 
 
 @dataclass(frozen=True)
@@ -71,12 +95,15 @@ class Indicator:
                 output not named here is causal.
     notes:      what a user of a causal output still has to know, if anything.
     on_ta:      False for an indicator class that has no `ta` function.
+    anchor:     how the indicator restarts on calendar periods, None for one that
+                does not (`Anchor`).
     """
 
     outputs: tuple[str, ...] = ("value",)
     non_causal: Mapping[str, str] = field(default=_NO_LOOKAHEAD)
     notes: str | None = None
     on_ta: bool = True
+    anchor: Anchor | None = None
 
 
 # Single-output, causal: the common case.
@@ -164,6 +191,7 @@ REGISTRY: Mapping[str, Indicator] = MappingProxyType(
                 "rolling window. The anchor needs bar times; without them the whole "
                 "input is one period."
             ),
+            anchor=Anchor(overrides=("timestamps", "session_starts")),
         ),
         "mfi": _PLAIN,
         "adl": _PLAIN,
@@ -223,6 +251,7 @@ REGISTRY: Mapping[str, Indicator] = MappingProxyType(
                 "only when bar t closes. Pass anchor='D' (or 'Week', 'Month') with bar times "
                 "to get the previous period's levels on every bar."
             ),
+            anchor=Anchor(periods_before=1),
         ),
         "psar": Indicator(outputs=("sar", "trend")),  # trend: return_trend
         "fractals": Indicator(
@@ -377,6 +406,7 @@ def non_causal() -> dict[str, tuple[str, ...]]:
 
 def _record(key: str) -> dict:
     row = REGISTRY[key]
+    anchor = row.anchor
     return {
         "name": key,
         "on_ta": row.on_ta,
@@ -384,6 +414,13 @@ def _record(key: str) -> dict:
         "causal": not row.non_causal,
         "non_causal": dict(row.non_causal),
         "notes": row.notes,
+        "anchor": None
+        if anchor is None
+        else {
+            "argument": anchor.argument,
+            "periods_before": anchor.periods_before,
+            "overrides": anchor.overrides,
+        },
     }
 
 
@@ -392,8 +429,10 @@ def causality(name=None) -> dict:
 
     name: a `ta` function name or the function itself, or None for everything.
     Returns one record {"name", "on_ta", "outputs", "causal",
-    "non_causal": {output name: reason}, "notes"}, or {name: record} for every
-    row, including indicator classes that have no `ta` function.
+    "non_causal": {output name: reason}, "notes", "anchor"}, or {name: record}
+    for every row, including indicator classes that have no `ta` function.
+    "anchor" is None, or {"argument", "periods_before", "overrides"} for an
+    indicator that restarts on calendar periods (`Anchor`).
     """
     if name is not None:
         return _record(_key(name))

@@ -1,7 +1,8 @@
 """The history before `start` is in the strategy's series before `init` runs (decision
 D25, `_warm_up_history`, `_warm_up_join`): an indicator longer than the run is computed
 over it, a view of another interval holds whole bars, a strategy bar cut by a datetime
-`start` holds the bars before it, and a split between the history and the run is caught.
+`start` holds the bars before it, a split between the history and the run is caught, a
+declared one is adjusted for, and the check reads no bar after the first decision.
 
 The bars are the seeded walks of `warm_up_bars`. Expected values are the full-history
 ones: the indicator computed by `openalgo.ta` over all the bars given, or the bars of a
@@ -19,6 +20,7 @@ from warm_up_bars import IST, SETTINGS, intraday, walk
 
 import openalgo.backtest as bt
 from openalgo import ta
+from openalgo.backtest.data import CorporateAction
 
 # A 200-bar EMA's warm-up is within the window tolerance of the full-history value.
 WINDOW_TOLERANCE = 1e-6
@@ -180,3 +182,98 @@ def test_a_split_inside_the_history_but_before_what_the_run_keeps_costs_it_nothi
     result = bt.backtest(Average, data=data, start=SPLIT_DAY, **SETTINGS)
     assert result.assumptions["warm_up"].endswith("ready at start")
     assert np.isfinite(result.metrics["net_profit"])
+
+
+# ----- a declared split inside the history: the history is adjusted for it --------------
+
+PRICES = ["open", "high", "low", "close"]
+ADJUSTED = walk("2018-01-01", "2026-06-30", seed=1)
+# Ten sessions before start, the bars before EX_DATE are left at twice their adjusted
+# prices with half their volume: a 1:2 split (face value 10 to 5) the data are not
+# adjusted for.
+EX_DATE = ADJUSTED.index[ADJUSTED.index.searchsorted(pd.Timestamp(SPLIT_DAY, tz=IST)) - 10]
+UNADJUSTED = ADJUSTED.copy()
+UNADJUSTED.loc[UNADJUSTED.index < EX_DATE, PRICES] *= 2.0
+UNADJUSTED.loc[UNADJUSTED.index < EX_DATE, "volume"] /= 2.0
+DECLARED = [CorporateAction.split(EX_DATE.date(), 10, 5)]
+
+
+class Ema50(bt.Strategy):
+    """Reads a 50-bar EMA and the bars it is computed over."""
+
+    symbol, exchange, interval, product = "SBIN", "NSE", "D", "CNC"
+
+    def init(self):
+        self.line = self.I(ta.ema, self.close, 50)
+
+    def record(self):
+        return self.line[-1], self.history(None, len(self.close))
+
+
+def test_a_declared_split_inside_the_history_gives_the_adjusted_series_indicators():
+    bar, (value, _) = first_decision(
+        Ema50, data=UNADJUSTED, start=SPLIT_DAY, corporate_actions=DECLARED
+    )
+    row = ADJUSTED.index.get_loc(pd.Timestamp(bar.time))
+    expected = float(ta.ema(ADJUSTED.close.to_numpy(), 50)[row])
+    assert bar.time.date() == SPLIT_DAY
+    assert value == pytest.approx(expected, rel=WINDOW_TOLERANCE)
+
+
+def test_the_history_before_a_declared_ex_date_is_back_adjusted_by_its_factor():
+    # Prices before the ex-date divided by 2 and volume multiplied by 2: the adjusted bars.
+    _, (_, seen) = first_decision(
+        Ema50, data=UNADJUSTED, start=SPLIT_DAY, corporate_actions=DECLARED
+    )
+    history = seen[seen.index < pd.Timestamp(SPLIT_DAY, tz=IST)]
+    # By day: a special session's bar is stamped at that session's open, not at 09:15.
+    expected = ADJUSTED[np.isin(ADJUSTED.index.date, history.index.date)]
+    assert len(history) == len(expected) > 50
+    assert np.array_equal(history[PRICES].to_numpy(), expected[PRICES].to_numpy())
+    assert np.array_equal(history["volume"].to_numpy(), expected["volume"].to_numpy())
+
+
+def test_the_assumptions_say_the_history_was_adjusted_for_the_declared_split():
+    run = {"data": UNADJUSTED, "start": SPLIT_DAY, "corporate_actions": DECLARED}
+    result = bt.backtest(Ema50, **run, **SETTINGS)
+    assert (
+        f"adjusted for a split (2 shares for every 1) on {EX_DATE.date()}: prices before it "
+        "divided by 2, volume multiplied by 2"
+    ) in result.assumptions["warm_up"]
+    assert result.assumptions["warm_up"].endswith("ready at start")
+
+
+# ----- the join is checked with the bars up to the first decision only ------------------
+
+JOIN_DAY = dt.date(2026, 3, 10)
+QUARTER_HOURS = intraday("2026-02-02", "2026-03-13", minutes=15)
+RUN_END = {"end": "2026-03-13", **SETTINGS}
+
+
+def fallen_at_open(recovers_at_noon: bool) -> pd.DataFrame:
+    """QUARTER_HOURS with prices halved from the open of JOIN_DAY on, and, when
+    `recovers_at_noon`, restored from 12:00 that day: the two are the same bars up to
+    12:00 on JOIN_DAY."""
+    bars = QUARTER_HOURS.copy()
+    bars.loc[bars.index.date >= JOIN_DAY, PRICES] *= 0.5
+    if recovers_at_noon:
+        later = bars.index >= pd.Timestamp(dt.datetime.combine(JOIN_DAY, dt.time(12, 0)), tz=IST)
+        bars.loc[later, PRICES] *= 2.0
+    return bars
+
+
+class QuarterHourAverage(bt.Strategy):
+    symbol, exchange, interval, product = "SBIN", "NSE", "15m", "MIS"
+
+    def init(self):
+        self.line = self.I(ta.ema, self.close, 10)
+
+
+def test_whether_the_history_is_kept_does_not_depend_on_bars_after_the_first_decision():
+    holds, recovers = (
+        bt.backtest(QuarterHourAverage, data=fallen_at_open(recovered), start=JOIN_DAY, **RUN_END)
+        for recovered in (False, True)
+    )
+    assert holds.assumptions["warm_up"] == recovers.assumptions["warm_up"]
+    assert holds.manifest["arguments"]["warm_up"] == recovers.manifest["arguments"]["warm_up"]
+    assert "could not be used: 1 suspected unadjusted split" in holds.assumptions["warm_up"]
