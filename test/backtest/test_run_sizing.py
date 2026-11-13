@@ -27,14 +27,15 @@ def margin_warnings(result):
 
 
 def test_the_engine_default_spends_the_capital_at_the_fill_in_fractional_mode():
-    result = round_trip(costs=None, slippage=0)
+    result = round_trip(costs=None, slippage=0, quantity_mode="fractional")
     assert entry_units(result) == CAPITAL / PRICE
 
 
 def test_the_engine_default_is_net_of_the_estimated_costs():
-    # The estimate prices the 1,000 shares the capital buys before costs.
+    # The estimate prices the 1,000 shares the capital buys before costs; fractional
+    # mode shows the net amount without rounding.
     estimate = costs.trade_cost("BUY", PRICE, CAPITAL / PRICE, DAY, segment="NSE_EQ_INTRADAY")
-    result = round_trip(slippage=0)
+    result = round_trip(slippage=0, quantity_mode="fractional")
     assert entry_units(result) == pytest.approx((CAPITAL - estimate.total) / PRICE)
 
 

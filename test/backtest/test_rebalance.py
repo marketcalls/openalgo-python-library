@@ -111,8 +111,8 @@ def averaging_down_run(method: str) -> bt.Result:
     """AAA and BBB at 49.5 percent each (495 units at 1,000.00, 10,000 of cash left);
     AAA then closes at 800.00 and BBB at 1,200.00, and the portfolio is put back to
     49.5 percent each with `method`: equity 10,000 + 3,96,000 + 5,94,000 = 10,00,000, so
-    4,95,000 each: 618.75 AAA (buy 123.75 for 99,000, below AAA's average of 1,000.00)
-    and 412.5 BBB (sell 82.5 for 99,000)."""
+    4,95,000 each: 618.75 AAA, 618 whole shares (buy 123, below AAA's average of
+    1,000.00), and 412.5 BBB, 412 whole shares (sell 83)."""
     data = {
         "AAA": daily([1_000, 1_000, 800, 800], [1_000, 800, 800, 800]),
         "BBB": daily([1_000, 1_000, 1_200, 1_200], [1_000, 1_200, 1_200, 1_200]),
@@ -135,8 +135,8 @@ def averaging_down_run(method: str) -> bt.Result:
 def test_a_rebalance_buy_below_the_average_price_is_an_intended_add():
     result = averaging_down_run("rebalance")
     assert fills(result)[2:] == [
-        (DAYS[2], "BBB", "SELL", 82.5, "signal"),
-        (DAYS[2], "AAA", "BUY", 123.75, "add"),
+        (DAYS[2], "BBB", "SELL", 83.0, "signal"),
+        (DAYS[2], "AAA", "BUY", 123.0, "add"),
     ]
 
 
@@ -278,12 +278,13 @@ class QuarterlyEqualWeight(bt.Strategy):
 @pytest.fixture(scope="module")
 def quarterly() -> bt.Result:
     # 2024-10-07 to the fill of the 2026-07-01 rebalance (the session after it), with
-    # the default charges and slippage.
+    # the default charges and slippage. Part shares, so that every quarter trades every
+    # symbol: with whole shares a weight that moved by less than a share sends no order.
     days = sessions("2024-10-07", "2026-07-31")
     last_fill = days[days.index(dt.date(2026, 7, 1)) + 1]
     days = days[: days.index(last_fill) + 1]
     data = {symbol: walk(*PATHS[symbol], days) for symbol in FOUR}
-    return bt.backtest(QuarterlyEqualWeight, data=data, capital=CAPITAL)
+    return bt.backtest(QuarterlyEqualWeight, data=data, capital=CAPITAL, quantity_mode="fractional")
 
 
 def test_a_quarterly_rebalance_has_no_rejected_order(quarterly):

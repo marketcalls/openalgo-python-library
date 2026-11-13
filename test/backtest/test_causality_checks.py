@@ -82,10 +82,37 @@ def test_a_key_is_checked_once():
     assert first > 0 and len(calls) == first + 1  # only the whole-series call of the second
 
 
-def test_keys_checked_elsewhere_are_skipped():
+def test_a_key_checked_elsewhere_skips_its_truncation_check_but_measures_its_warm_up():
+    # The look-ahead of the centred average goes unnoticed (an earlier run of the sweep
+    # checked the key), but its warm-up is still measured: each run waits for it.
     known = IndicatorChecks("sha256:strategy").keys | {"sha256:strategy:k"}
     checks = check(centred_average, checks=IndicatorChecks("sha256:strategy", frozenset(known)))
-    assert checks.assumption() is None
+    assert checks.assumption() == (
+        "window tolerance 1e-06 (relative); probe(SBIN.close): truncation checked by an "
+        "earlier run of the sweep, no window settles within the tolerance: needs the "
+        "whole history"
+    )
+
+
+def test_the_warm_up_is_measured_for_each_label_and_the_truncation_once_per_key():
+    calls = []
+
+    def counted(start, stop):
+        calls.append((start, stop))
+        return causal_sum(start, stop)
+
+    checks = IndicatorChecks("sha256:strategy")
+    whole = counted(0, BARS)
+    checks.check("k", "probe(SBIN.close, 20)", counted, whole, False)
+    after_first = len(calls)
+    checks.check("k", "probe(SBIN.close, 30)", counted, whole, False)
+    # The second label runs only the window check: none of the truncation cuts (bars
+    # 120, 140, 160 and 180 of 200) is computed again.
+    cuts = {(0, cut) for cut in (120, 140, 160, 180)}
+    assert cuts <= set(calls[:after_first])
+    assert not cuts & set(calls[after_first:])
+    assert len(calls) > after_first
+    assert checks.assumption().count("warm-up 32 bars") == 2
 
 
 def test_a_cut_too_short_for_the_indicator_is_not_counted():

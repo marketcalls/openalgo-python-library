@@ -45,6 +45,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Indicators warm up automatically** (changes results). A backtest loads history
+  before `start` from the run's own source (the source its bars came from, Historify
+  or the broker, or the bars of `data=` before `start`): up to 2,048 strategy bars at
+  the run's base interval. Every `self.I` indicator, every condition and every
+  `from_signals` function is computed over it (`from_arrays` arrays are read for the
+  run's bars only). The strategy makes no decision before `start` and none before its
+  `self.I` indicators are ready: an indicator is ready once its series has closed its
+  warm-up of bars, the length the window-stability check already measured and printed
+  in the Assumptions block (for example 128 bars for a 20-day EMA, 512 for a 50-day
+  one, 16 for a 3-bar average), the same window live trading keeps. `on_bar`, timers,
+  conditions and arrays wait alike. Equity, trades, charges, metrics and the benchmark
+  still start at `start`. When the source has fewer bars before
+  `start` (own data that begins at `start`, a new listing, a futures series, which is
+  built from `start`), the strategy waits inside the run until its indicators are
+  ready, and a warning says how many strategy bars it waited and why. The Assumptions
+  block gains `warm_up` (the rule, each series' need, the history loaded and the first
+  decision), the manifest records the warm-up used under `arguments["warm_up"]` and the
+  history's partition hashes under `data["<symbol> history"]`, and `bt.optimize`,
+  `rerun()` and the single runs of a sweep's combinations use the same history. A
+  strategy's own warm-up guard (`if len(self.close) < self.slow: return`) still works;
+  it is no longer needed. An indicator no window settles (a cumulative series such as
+  on-balance volume) is not waited for, with a warning. Each indicator's warm-up is now
+  measured with its parameters: `ema(close, 20)` and `ema(close, 50)` each get their
+  own (the truncation check still runs once per function and data). The first trades
+  of runs on short own data move later; the golden pins were regenerated for this.
+- **Whole shares by default** (changes results): `quantity_mode` defaults to "venue"
+  (whole shares of cash equity, whole lots of derivatives) instead of "fractional", so
+  every sizer, an order with no quantity, `target()` and `rebalance` round down to whole
+  shares unless a run passes `quantity_mode="fractional"`, which stays for research.
 - **Daily and longer bars indexed by naive midnight dates need no `tz=`.** The daily
   bars `client.history(...)` returns are indexed that way, and passing them as
   `bt.backtest(..., data=df)` stopped with "the timestamps of the supplied data carry
@@ -55,7 +84,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read as IST session dates (daily bars need no tz=)"). Intraday naive timestamps, and
   daily ones stamped at a time of day, still need `tz=`: a wrong guess there moves
   every bar by 5 hours 30 minutes.
-
 - **The HTML tearsheet is a dashboard in the layout of OpenStatz's dashboard**
   (`result.tearsheet(path)`, `report.tearsheet`): a sticky header with section links,
   Export PDF and a light and dark toggle, then numbered sections: Overview (headline

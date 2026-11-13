@@ -18,8 +18,10 @@ conditions and are read with the same level-triggered rules of 14-strategy-api 4
 Arrays hold one boolean per strategy bar of the run, the value at that bar's close:
 a NumPy array or list in bar order, or a pandas Series indexed by bar open time (IST,
 or tz-aware). A `from_signals` function receives the strategy bars as a DataFrame
-indexed by IST bar open (columns open, high, low, close, volume) and returns
-`(entries, exits)` or `(entries, exits, shorts, covers)`, any of which may be None.
+indexed by IST bar open (columns open, high, low, close, volume), the history loaded
+before `start` first, so its indicators are computed over it, and returns `(entries,
+exits)` or `(entries, exits, shorts, covers)`, any of which may be None; the values of
+the history bars are left out, as no decision is made before `start`.
 
 Before the run the function is checked for look-ahead (03-architecture 5): it is run
 again on the bars cut at fixed points, and it must return the same outputs there (as
@@ -176,7 +178,7 @@ def from_signals(
         frame = strategy_frame(self)
         arrays = _signals(func, frame)
         _check_causal(func, frame, arrays)
-        _declare(self, arrays, order_args)
+        _declare(self, tuple(_by_bar_open(values, frame.index) for values in arrays), order_args)
 
     name = f"FromSignals_{getattr(func, '__name__', 'function')}"
     settings = (pyramiding, product)
@@ -192,6 +194,20 @@ def _signals(func: Callable[..., Any], frame: pd.DataFrame) -> tuple[Any, ...]:
             "(entries, exits, shorts, covers)"
         )
     return tuple(outputs)
+
+
+def _by_bar_open(values: Any, opens: pd.DatetimeIndex) -> Any:
+    """An output in bar order as a Series indexed by the bars' open times, so that it is
+    read by time and the history bars before `start` drop out (`array_values`); a
+    Series indexed by time, None, or an output of the wrong length is kept as it is."""
+    if values is None or (
+        isinstance(values, pd.Series) and isinstance(values.index, pd.DatetimeIndex)
+    ):
+        return values
+    array = np.asarray(values)
+    if array.ndim != 1 or len(array) != len(opens):
+        return values
+    return pd.Series(array, index=opens)
 
 
 def _given(outputs: Sequence[Any]) -> str:

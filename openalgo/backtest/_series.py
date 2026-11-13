@@ -70,7 +70,10 @@ class Bar(NamedTuple):
 class SeriesStore:
     """The bars of one instrument and interval over the whole run, as arrays: `ts_open`
     and `ts_close` int64 UTC nanoseconds, prices in rupees, volume in units. A subclass
-    says how many are visible. `name` prefixes the labels of its views."""
+    says how many are visible. `name` prefixes the labels of its views. `history_bars`
+    counts the bars before the run's start at the front of the arrays (`BarStore`)."""
+
+    history_bars = 0
 
     def __init__(
         self, symbol: str, interval: str, series: dict[str, np.ndarray], name: str | None = None
@@ -118,11 +121,24 @@ class SeriesStore:
 
 
 class BarStore(SeriesStore):
-    """The strategy bars of one instrument, revealed by the kernel's pauses."""
+    """The strategy bars of one instrument, revealed by the kernel's pauses. `history`,
+    when given, holds the strategy bars before the run's start (the warm-up history,
+    `_warm_up_history`) with the same columns: they come first and are visible from the
+    beginning; the kernel never delivers them."""
 
-    def __init__(self, symbol: str, interval: str, series: dict[str, np.ndarray]) -> None:
+    def __init__(
+        self,
+        symbol: str,
+        interval: str,
+        series: dict[str, np.ndarray],
+        history: dict[str, np.ndarray] | None = None,
+    ) -> None:
+        if history is not None:
+            columns = (*TIMES, *FIELDS)
+            series = {name: np.concatenate((history[name], series[name])) for name in columns}
         super().__init__(symbol, interval, series)
-        self._count = 0
+        self.history_bars = 0 if history is None else len(history["ts_open"])
+        self._count = self.history_bars
         self._opens = self._series["ts_open"]
         self._size = len(self._opens)
 

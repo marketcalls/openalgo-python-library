@@ -7,6 +7,10 @@ history from OpenAlgo (Historify when it holds the whole range, else your broker
 
     result = bt.backtest(EmaCross, client, start=START, end=END, capital=CAPITAL)
 
+The indicators warm up by themselves: the backtest computes them over the bars before
+`start` (here the sessions from HISTORY_START; with a client it loads them) and trades
+from `start`, so the strategy needs no warm-up guard of its own. It buys whole shares.
+
 Run it from the repository root:
 
     python examples/backtest_quickstart.py
@@ -20,11 +24,13 @@ from openalgo import ta
 
 # IST session dates of the run, inclusive.
 START, END = "2026-04-01", "2026-11-06"
+# The first session of the bars: those before START are history for the indicators.
+HISTORY_START = "2025-07-01"
 # Rupees allocated to the strategy.
 CAPITAL = 100_000
 
 
-def daily_bars(start: str = START, end: str = END) -> pd.DataFrame:
+def daily_bars(start: str = HISTORY_START, end: str = END) -> pd.DataFrame:
     """Synthetic daily bars, one per NSE session from `start` to `end`: a slow rise with
     two waves on it, prices in rupees, indexed by the IST session date."""
     sessions = bt.calendar.default_calendar().sessions("NSE", start, end)
@@ -55,17 +61,15 @@ class EmaCross(bt.Strategy):
         self.slow_ema = self.I(ta.ema, self.close, self.slow)
 
     def on_bar(self, bar):
-        if len(self.close) <= self.slow:  # let the slow EMA warm up first
-            return
         if self.position.is_flat and self.fast_ema.crossed_above(self.slow_ema):
-            self.buy()  # as many shares as the capital allows after estimated charges
+            self.buy()  # as many whole shares as the capital allows after estimated charges
         elif self.position.is_long and self.fast_ema.crossed_below(self.slow_ema):
             self.exit()
 
 
 def main() -> None:
     """Run the backtest and print the result summary and the headline figures."""
-    result = bt.backtest(EmaCross, data=daily_bars(), capital=CAPITAL)
+    result = bt.backtest(EmaCross, data=daily_bars(), start=START, capital=CAPITAL)
     print(result)
     metrics = result.metrics
     print(f"Net profit   : Rs {metrics['net_profit']:,.2f}")

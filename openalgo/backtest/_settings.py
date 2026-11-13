@@ -5,8 +5,9 @@ Precedence (lead ruling): a strategy class attribute wins over the run argument 
 same name, which wins over the documented default. The documented defaults are those of
 03-architecture 4.1 and 04-execution 2: product MIS for intraday intervals, CNC for daily
 equity and NRML for daily derivatives; entry window and square-off from the calendar's
-dated table (MIS only, SPEC-32); fill at the next open; fractional quantities; Zerodha
-charges; the per-segment slippage. Every value used is listed in the Assumptions block.
+dated table (MIS only, SPEC-32); fill at the next open; whole shares and lots (the venue
+rule, decision D26); Zerodha charges; the per-segment slippage. Every value used is
+listed in the Assumptions block.
 
 Risk settings take the units of 14-strategy-api: `max_daily_loss` in rupees (a number or
 `bt.rupees`), `drawdown_halt` in percent (`bt.pct(x)` or a number of percent),

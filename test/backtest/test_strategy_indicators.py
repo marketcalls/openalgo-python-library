@@ -2,8 +2,11 @@
 2.2), with look-ahead outputs rejected (03-architecture 5).
 
 The run is `strategy_samples.minute_bars` on a 5-minute strategy: the 5-minute bar j
-closes at 500.45 + 0.50 j (the close of minute 5 j + 4), so a 3-bar average of closes
-is 500.95 at bar 2 and 501.45 at bar 3.
+closes at 500.45 + 0.50 j (the close of minute 5 j + 4). The strategy registers a 3-bar
+average, which the window check settles in its first window, 16 bars, so the strategy
+decides from bar 15 on, once 16 bars have closed (`_warm_up`); `Recorder` records its
+first four decisions, bars 15 to 18. The 3-bar average of closes is NaN at bars 0 and
+1, 507.45 at bar 15 (500.45 + 0.50 x 14) and 0.50 more at each later bar.
 """
 
 import math
@@ -18,7 +21,7 @@ from openalgo.backtest.errors import ConfigError
 
 
 class Recorder(bt.Strategy):
-    """Calls `probe(self)` at each of the first four strategy bars and keeps the result."""
+    """Calls `probe(self)` at each of its first four decisions and keeps the result."""
 
     symbol, exchange, interval = "SBIN", "NSE", "5m"
     product = "CNC"
@@ -48,11 +51,11 @@ def recorded(probe, strategy=Recorder, **settings):
 
 
 def test_an_indicator_shows_its_value_at_the_latest_closed_bar():
-    seen = recorded(lambda s: (len(s.average), s.average[-1]))
-    assert [length for length, _ in seen] == [1, 2, 3, 4]
-    assert math.isnan(seen[0][1]) and math.isnan(seen[1][1])
-    assert seen[2][1] == pytest.approx(500.95)
-    assert seen[3][1] == pytest.approx(501.45)
+    seen = recorded(lambda s: (len(s.average), s.average[-1], s.average[0], s.average[1]))
+    assert [length for length, *_ in seen] == [16, 17, 18, 19]
+    assert math.isnan(seen[0][2]) and math.isnan(seen[0][3])
+    assert seen[0][1] == pytest.approx(507.45)
+    assert seen[1][1] == pytest.approx(507.95)
 
 
 def test_nothing_of_an_indicator_is_visible_in_init():
@@ -70,15 +73,16 @@ def test_nothing_of_an_indicator_is_visible_in_init():
 
 
 def test_a_slice_returns_the_revealed_values():
+    # At bar 18 the last two averages are those of bars 17 and 18.
     seen = recorded(lambda s: s.average[-2:])
-    np.testing.assert_allclose(seen[3], [500.95, 501.45])
+    np.testing.assert_allclose(seen[3], [508.45, 508.95])
 
 
 def test_arithmetic_with_a_series_builds_a_view():
-    # Bar 2: close 501.45 minus the average 500.95.
+    # Bar 17: close 508.95 minus the average 508.45.
     seen = recorded(lambda s: ((s.close - s.average)[-1], (2 * s.average)[-1]))
     assert seen[2][0] == pytest.approx(0.5)
-    assert seen[2][1] == pytest.approx(1001.9)
+    assert seen[2][1] == pytest.approx(1016.9)
 
 
 def test_a_comparison_is_a_view_of_booleans_true_at_its_latest_value():
@@ -96,14 +100,14 @@ def test_a_view_of_numbers_has_no_truth_value():
 
 
 def test_crossed_above_is_true_on_the_bar_of_the_cross():
-    # Closes 500.45, 500.95, 501.45, 501.95: above 501 from bar 2.
-    seen = recorded(lambda s: bool(s.close.crossed_above(501.0)))
-    assert seen == [False, False, True, False]
+    # Closes 507.95, 508.45, 508.95, 509.45 at bars 15 to 18: above 508.20 from bar 16.
+    seen = recorded(lambda s: bool(s.close.crossed_above(508.2)))
+    assert seen == [False, True, False, False]
 
 
 def test_crossed_below_is_true_on_the_bar_of_the_cross():
-    seen = recorded(lambda s: bool((-s.close).crossed_below(-501.0)))
-    assert seen == [False, False, True, False]
+    seen = recorded(lambda s: bool((-s.close).crossed_below(-508.2)))
+    assert seen == [False, True, False, False]
 
 
 def test_a_function_outside_openalgo_ta_is_refused():
@@ -216,5 +220,7 @@ def test_an_indicator_on_another_interval_follows_that_interval():
             seen.extend(self.seen)
 
     run(Quarterly)
-    # 5-minute closes at 09:20, 09:25, 09:30, 09:35: the first 15-minute bar closes at 09:30.
-    assert seen == [0, 0, 1, 1]
+    # The 1-bar average of 15-minute closes settles in 16 of its bars, so the strategy
+    # is ready when the 16th 15-minute bar closes, at 13:15: decisions at 13:15, 13:20,
+    # 13:25 and 13:30 see 16, 16, 16 and then 17 of them (the 17th closes at 13:30).
+    assert seen == [16, 16, 16, 17]

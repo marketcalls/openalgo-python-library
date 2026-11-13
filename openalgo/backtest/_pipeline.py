@@ -7,7 +7,8 @@ instruments (`_instruments.resolve_instruments`) and, before any data is loaded,
 margin table prices them all (`_margin_check`); then the base interval and its bars
 (`_base_interval.choose_base`, through the data layer), the ticks chosen by a price slab
 (`_slab_ticks`, from the data) and the market settings (`_market`: the cost model, the
-slippage and the per-instrument facts). A sweep sends its `PreparedRun` to worker
+slippage and the per-instrument facts), and the history before `start` the strategy's
+indicators are computed over (`_warm_up_history`). A sweep sends its `PreparedRun` to worker
 processes without the market settings, which hold native objects, and each worker
 resolves them again from the `costs=` and `slippage=` arguments and the parsed `margin=`
 (`_futures_margin`). That needs those arguments to pickle and the run to use the shared
@@ -17,8 +18,9 @@ strategy's bars, and sent along.
 
 `execute` builds the native engine, binds a strategy instance to a `RunContext`, runs
 `init` and the driver to the end of the grid (the Rust signal driver for a condition
-strategy, `_conditions`), and returns the `Result` with its
-Assumptions block, warnings and manifest.
+strategy, `_conditions`), deciding only once the strategy's indicators are ready
+(`_warm_up`), and returns the `Result` with its Assumptions block, warnings and
+manifest.
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ import pandas as pd
 from . import calendar as calendar_module
 from ._base_interval import choose_base, meaning
 from ._benchmark import benchmark_request, load_benchmark
-from ._causality_checks import IndicatorChecks
+from ._causality_checks import IndicatorChecks, RunChecks
 from ._conditions import drive_conditions, evaluation_path, has_conditions
 from ._context import RunContext, RunData
 from ._driver import drive
@@ -60,6 +62,8 @@ from ._run_end import run_end_warnings
 from ._session_dates import session_dates_note
 from ._settings import RunPlan, assumptions, resolve
 from ._slab_ticks import resolve_slab_ticks
+from ._warm_up import readiness
+from ._warm_up_history import History, load_history, no_history
 from .reference import Instrument
 from .result import Result
 
@@ -91,6 +95,8 @@ class PreparedRun:
     # Declared splits and bonuses the bars are not adjusted for, which nothing may be
     # held across (`_run_corporate_actions`).
     unadjusted: tuple[UnadjustedEvent, ...] = ()
+    # The bars before `start` the indicators are computed over (`_warm_up_history`).
+    history: History | None = None
 
     @property
     def portable(self) -> bool:
@@ -185,6 +191,8 @@ def prepare(strategy: type, client: Any, args: dict[str, Any]) -> PreparedRun:
     warnings += market.warnings
     warnings += [] if futures is None else list(futures.warnings)
     frames = [_cut(result.bars, plan) for result in loaded]
+    by_symbol = dict(zip(plan.symbols, loaded, strict=True))
+    history = load_history(plan, args, client, calendar, by_symbol, futures)
     benchmark = load_benchmark(wanted_benchmark, plan, args, client, calendar, frames)
     warnings += [] if benchmark is None else list(benchmark.warnings)
     return PreparedRun(
@@ -195,7 +203,8 @@ def prepare(strategy: type, client: Any, args: dict[str, Any]) -> PreparedRun:
         partitions={
             symbol: result.meta.partition_hashes()
             for symbol, result in zip(plan.symbols, loaded, strict=True)
-        },
+        }
+        | history.partitions(),
         notes={
             "base_rule": choice.reason,
             "instruments": "; ".join(lines.values()),
@@ -208,11 +217,12 @@ def prepare(strategy: type, client: Any, args: dict[str, Any]) -> PreparedRun:
         futures=futures,
         benchmark=benchmark,
         unadjusted=unadjusted_events(plan.symbols, loaded),
+        history=history,
     )
 
 
 def _assumptions(
-    prepared: PreparedRun, calendar: Any, checks: IndicatorChecks, market: MarketSettings
+    prepared: PreparedRun, calendar: Any, checks: RunChecks, market: MarketSettings
 ) -> dict:
     plan = prepared.plan
     block = assumptions(plan, calendar) | market.assumptions
@@ -279,15 +289,28 @@ def execute(
     plan = prepared.plan
     calendar = prepared.session_calendar()
     checks = checks or IndicatorChecks(strategy_source_hash(strategy) or strategy.__qualname__)
+    run_checks = checks.for_run()
+    history = prepared.history or no_history(plan.symbols, "none")
     market = prepared.market_settings()
     config = plan.native_config(deliver_events=strategy.wants_events()) | market.config
     engine = build_engine(calendar._cal, config, prepared.instruments, prepared.frames)
     futures = None
     if prepared.futures is not None:
         futures = (prepared.futures, attach(engine, prepared.futures, list(plan.symbols)))
-    base_bars = dict(zip(plan.symbols, prepared.frames, strict=True))
-    run = RunData(plan.exchange, plan.interval, plan.base, base_bars, calendar, checks)
-    context = RunContext(engine, prepared.instruments, plan.product, strategy.size, run, futures)
+    base_bars = {
+        symbol: history.with_base(symbol, frame)
+        for symbol, frame in zip(plan.symbols, prepared.frames, strict=True)
+    }
+    run = RunData(plan.exchange, plan.interval, plan.base, base_bars, calendar, run_checks)
+    context = RunContext(
+        engine,
+        prepared.instruments,
+        plan.product,
+        strategy.size,
+        run,
+        futures,
+        history.strategy_bars(),
+    )
     instance = strategy(**(args["params"] or {}))
     instance._ctx = context
     instance.init()
@@ -296,10 +319,13 @@ def execute(
             "a condition strategy on a futures underlying",
             "write the strategy with on_bar",
         )
+    state = readiness(
+        run_checks.outcomes, context.store, context.store(context.names[0]), history.describe()
+    )
     if has_conditions(instance):
-        drive_conditions(instance, engine)
+        drive_conditions(instance, engine, state.ready_at)
     else:
-        drive(instance, engine, context)
+        drive(instance, engine, context, state.ready_at)
     if on_path is not None:
         on_path(evaluation_path(instance))
     timer_warnings = context.timers.warnings()
@@ -310,7 +336,7 @@ def execute(
     manifest = build_manifest(
         strategy,
         parameters,
-        _arguments(prepared, args, market),
+        _arguments(prepared, args, market) | {"warm_up": state.manifest()},
         [instrument.to_dict() for instrument in prepared.instruments],
         prepared.partitions,
         prepared.reference_tables,
@@ -319,10 +345,11 @@ def execute(
     return Result(
         output,
         list(plan.symbols),
-        _assumptions(prepared, calendar, checks, market),
+        _assumptions(prepared, calendar, run_checks, market) | {"warm_up": state.assumption()},
         [
             *run_end_warnings(output["run_end"]),
             *reject_warnings(output["orders"], [i.kind for i in prepared.instruments]),
+            *state.warnings(plan.start),
             *prepared.warnings,
             *timer_warnings,
         ],

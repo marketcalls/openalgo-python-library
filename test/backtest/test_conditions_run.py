@@ -12,7 +12,16 @@ import sys
 import numpy as np
 import pandas as pd
 import pytest
-from condition_runs import IST, SBIN_5M, assert_same_result, bars_from_closes, run, walk_bars
+from condition_runs import (
+    BARS_PER_SESSION,
+    IST,
+    SBIN_5M,
+    SESSIONS,
+    assert_same_result,
+    bars_from_closes,
+    run,
+    walk_bars,
+)
 
 import openalgo.backtest as bt
 from openalgo import ta
@@ -307,23 +316,35 @@ def crossings(frame: pd.DataFrame) -> tuple:
 
 
 DATA = walk_bars([6, 5, -3, 4, -8, -6, 3, -2, 7, -1, -9, 2])
+# The comparisons below run from the second session: the first is history, 75 strategy
+# bars, more than the 64 the 12-bar EMA needs (`_warm_up`), so the condition strategy
+# decides from the first bar of the run, as arrays and functions do, and the forms can
+# be compared bar by bar. Arrays in bar order hold the bars of the run only.
+RUN_START = SESSIONS[1]
+RUN_BARS = slice(BARS_PER_SESSION, None)
+
+
+def run_from_second_session(strategy: type):
+    return run(strategy, DATA, start=RUN_START)
 
 
 def test_from_signals_gives_the_result_of_the_same_conditions():
     signals = bt.from_signals(crossings, "SBIN", "NSE", "5m", qty=10, stop=bt.points(3))
-    assert_same_result(run(signals, DATA), run(EmaCross, DATA))
-    assert len(run(signals, DATA).fills) > 2
+    result = run_from_second_session(signals)
+    assert_same_result(result, run_from_second_session(EmaCross))
+    assert len(result.fills) > 2
 
 
 def test_from_arrays_gives_the_result_of_the_same_conditions():
-    entries, exits = crossings(DATA)
+    entries, exits = (np.asarray(values)[RUN_BARS] for values in crossings(DATA))
     arrays = bt.from_arrays(
         entries, exits, symbol="SBIN", exchange="NSE", interval="5m", qty=10, stop=bt.points(3)
     )
-    assert_same_result(run(arrays, DATA), run(EmaCross, DATA))
+    assert_same_result(run_from_second_session(arrays), run_from_second_session(EmaCross))
 
 
 def test_from_arrays_takes_a_series_indexed_by_bar_open():
+    # Indexed by time, the values of the history bars are not read.
     entries, exits = crossings(DATA)
     by_time = bt.from_arrays(
         pd.Series(entries, index=DATA.index),
@@ -334,7 +355,7 @@ def test_from_arrays_takes_a_series_indexed_by_bar_open():
         qty=10,
         stop=bt.points(3),
     )
-    assert_same_result(run(by_time, DATA), run(EmaCross, DATA))
+    assert_same_result(run_from_second_session(by_time), run_from_second_session(EmaCross))
 
 
 def test_from_arrays_shorts_and_covers_follow_the_short_branch():
@@ -352,14 +373,14 @@ def test_from_arrays_shorts_and_covers_follow_the_short_branch():
     arrays = bt.from_arrays(
         None,
         None,
-        shorts=exits,
-        covers=entries,
+        shorts=np.asarray(exits)[RUN_BARS],
+        covers=np.asarray(entries)[RUN_BARS],
         symbol="SBIN",
         exchange="NSE",
         interval="5m",
         qty=10,
     )
-    assert_same_result(run(arrays, DATA), run(ShortCross, DATA))
+    assert_same_result(run_from_second_session(arrays), run_from_second_session(ShortCross))
 
 
 def test_from_signals_refuses_a_function_that_reads_later_bars():
