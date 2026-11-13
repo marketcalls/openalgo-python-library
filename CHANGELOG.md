@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-11-13
+
 ### Added
 
 - **`Result.trade_list()`**: the closed trades as a pandas DataFrame a trader reads,

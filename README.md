@@ -10,6 +10,31 @@ A Python library for algorithmic trading using OpenAlgo's REST APIs and WebSocke
 - General Documentation: https://docs.openalgo.in
 - Source: https://github.com/marketcalls/openalgo-python-library
 
+## What's New in 2.2.0
+
+Backtesting made simpler for beginners. Two changes move results, so a run on 2.2.0 can
+differ slightly from the same run on 2.1.1:
+
+- **Indicators warm up automatically** (changes results). A backtest loads enough
+  history before `start` for the strategy's indicators to be ready, and trading begins
+  on `start`. Strategies no longer need their own warm-up line such as
+  `if len(self.close) < self.slow: return`. When the data has no history before
+  `start`, the strategy waits inside the run and a warning says for how long.
+- **Whole shares by default** (changes results). Orders with no quantity, the sizers,
+  `target()` and `rebalance` trade whole shares and whole lots. Part shares need
+  `quantity_mode="fractional"`.
+- **`result.summary()`** prints net profit, return, maximum drawdown, trades and win
+  rate (and the benchmark's return), and says "no closed trades" instead of "nan%".
+- **Rejected orders are told on screen** with one `RejectedOrdersWarning` per run: how
+  many, and the most common reason.
+- **A dashboard tearsheet.** `result.tearsheet("report.html")` writes one offline HTML
+  dashboard (light and dark) with sections for performance, risk, monthly returns,
+  distribution, every metric and a sortable trade list. `result.trade_list()` gives the
+  closed trades as a clean pandas table.
+- **Daily bars from `client.history`** can be passed as `data=` without `tz=`.
+
+The full list is in [CHANGELOG.md](CHANGELOG.md).
+
 ## What's New in 2.1.1
 
 Backtesting fixes and additions, found while writing the beginner tutorial on real

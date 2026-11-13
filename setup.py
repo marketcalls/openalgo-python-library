@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="openalgo",
-    version="2.1.1",
+    version="2.2.0",
     author="Rajandran R",
     author_email="rajandran@openalgo.in",
     description="A Python library for interacting with OpenAlgo's trading APIs with high-performance technical indicators",
