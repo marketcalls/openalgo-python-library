@@ -9,6 +9,11 @@ The three things a user must say when the data does not say them itself:
 
 Numeric timestamps are epoch values: they count from 1970-01-01 UTC, so they need no
 `tz`, and a `tz` other than UTC contradicts them.
+
+One case is not a guess: daily and longer bars whose naive timestamps all fall at
+midnight (the way `client.history` returns daily bars) are a list of session dates, and
+a date has no clock time to shift. With `session_dates=True` they are read as IST dates
+without `tz`, as `tz='Asia/Kolkata'` would read them. Intraday timestamps never are.
 """
 
 import datetime as _dt
@@ -17,10 +22,14 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from .._calendar_convert import IST
 from .._messages import counted
 from ..errors import ConfigError, TimestampError
 
 EPOCH_UNITS = ("s", "ms", "us", "ns")
+# How naive midnight timestamps read as IST session dates are described (the start of a
+# load's `timestamp_convention`).
+SESSION_DATES = "naive midnight, read as IST session dates"
 
 # What pandas, zoneinfo and the conversion to nanoseconds raise for bad input.
 _CONVERSION_ERRORS = (ValueError, TypeError, KeyError, OverflowError)
@@ -33,6 +42,7 @@ def to_utc_ns(
     unit: str | None = None,
     fmt: str | None = None,
     what: str = "timestamps",
+    session_dates: bool = False,
 ) -> tuple[np.ndarray, str]:
     """Convert user-supplied timestamps to int64 UTC nanoseconds.
 
@@ -43,6 +53,9 @@ def to_utc_ns(
     unit: "s", "ms", "us" or "ns" for numeric values (epoch values, UTC).
     fmt: strptime pattern for strings that are not ISO 8601.
     what: how to name the values in error messages.
+    session_dates: True for daily and longer bars: naive values that all fall at
+        midnight are then read as IST session dates when `tz` is not given (the module
+        docstring), described as `SESSION_DATES`.
 
     Returns (nanoseconds, a description of the convention that was applied).
 
@@ -59,6 +72,9 @@ def to_utc_ns(
     if index.tz is not None:
         _check_declared_zone(index, tz, what)
         described = f"tz-aware ({index.tz})"
+    elif tz is None and session_dates and _all_midnight(index):
+        index = index.tz_localize(IST)
+        described = SESSION_DATES
     else:
         index = _localise(index, tz, what)
         described = f"naive, declared tz={tz}"
@@ -98,6 +114,11 @@ def _check_declared_zone(index: pd.DatetimeIndex, tz: str | None, what: str) -> 
             f"{what} are already time-zone aware ({index.tz}) and tz={tz!r} says something "
             "else. Drop tz=, or convert the data first."
         )
+
+
+def _all_midnight(index: pd.DatetimeIndex) -> bool:
+    """True when there are values and every one falls at midnight: a list of dates."""
+    return len(index) > 0 and bool((index == index.normalize()).all())
 
 
 def _localise(index: pd.DatetimeIndex, tz: str | None, what: str) -> pd.DatetimeIndex:

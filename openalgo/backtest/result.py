@@ -12,7 +12,7 @@ Built: `fills`, `orders`, `trades`, `trade_list()` (`_trade_list`), `equity`, `r
 history), `events`, `risk_events`, `stale_marks`, `final_positions`, `gross_pnl`,
 `costs`, `contract_notes`, `settlements` and `rolls` (futures), `performance`,
 `metrics`, `metrics_table()`, `monte_carlo()`, `tearsheet()` (full, basic, metrics or
-charts), `r_summary` (the R-multiples, `_result_r`), `assumptions`,
+charts), `r_summary` (the R-multiples, `_result_r`), `summary()` (`_summary`), `assumptions`,
 `warnings`, `skipped`, `manifest` (see `_manifest`), `rerun()` (see `_rerun`),
 `to_dataframes()`, `to_csv()` and `to_excel()` (`_result_export`). Not supported in this
 version: the several-strategy views `strategy()`, `combined` and `correlation`, which
@@ -33,6 +33,7 @@ from . import _rejections, _result_costs, _result_export, _result_futures, _resu
 from ._messages import SEVERAL_STRATEGIES, not_supported
 from ._native import native
 from ._series import IST
+from ._summary import summary_text
 from ._trade_list import trade_list as closed_trade_list
 from .errors import BacktestError
 from .metrics import MonteCarlo, analyse, monte_carlo
@@ -409,6 +410,16 @@ class Result:
         """The metrics mapping of `performance`; keys, units and definitions are in
         `openalgo.backtest.metrics.DEFINITIONS`."""
         return self.performance.metrics
+
+    def summary(self) -> str:
+        """A short plain-text summary to print: net profit in rupees with Indian digit
+        grouping ("Rs 1,23,456.78"), the return and the maximum drawdown in percent, the
+        closed trades and their win rate ("no closed trades" when there are none, where
+        the win rate is undefined) with the positions still open, and for a run with
+        `benchmark=` the benchmark's return (`_summary`). `print(result)` is the full
+        Assumptions block instead. Raises ConfigError when the run has no equity
+        point, as `performance` does."""
+        return summary_text(self.metrics, _result_report.benchmark_name(self._manifest))
 
     def metrics_table(self) -> pd.DataFrame:
         """Every metric as a DataFrame indexed by key: group, label, value, unit and

@@ -36,6 +36,7 @@ from typing import Any
 
 from ._messages import SEVERAL_STRATEGIES, not_supported
 from ._pipeline import execute, prepare
+from ._rejection_notice import announce_rejections
 from ._rerun import RunRecord
 from .errors import ConfigError
 from .reference import Instrument
@@ -149,6 +150,10 @@ def backtest(
     instrument has, and `now`; equity, trades and metrics stop there, a position still
     open is reported open, and a warning names the end used when it is before `end`.
 
+    A run in which any order was rejected ends with one RejectedOrdersWarning: how many
+    and the most common reason, the details being in `result.warnings`
+    (`_rejection_notice`).
+
     Raises ConfigError for unusable arguments, the data layer's errors for data, and
     NotImplementedError for any setting or feature the kernel does not run yet.
     """
@@ -163,7 +168,9 @@ def _run(strategy: type[Strategy], client: Any, args: dict[str, Any]) -> Result:
     """Steps 1 to 5 of the module docstring for one strategy (`_pipeline`)."""
     prepared = prepare(strategy, client, args)
     record = RunRecord(strategy, client, {k: v for k, v in args.items() if k != "client"})
-    return execute(strategy, prepared, args, record=record)
+    result = execute(strategy, prepared, args, record=record)
+    announce_rejections(result)
+    return result
 
 
 def live(
