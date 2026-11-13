@@ -191,6 +191,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A broker history load no longer stops at a holiday the calendar does not know, and
+  loses no older bars.** The calendar's holiday lists begin in 2019, so an earlier
+  holiday such as 2018-12-25 counts as a session. The cache recorded only dates that
+  returned rows, so such a holiday was asked for again on every load as a range of its
+  own, and the broker walk (newest first) stopped at the first empty window that had a
+  session, before the older range was asked for: a load of SBIN daily bars from
+  2016-10-27 to 2018-12-31 over a cache holding 2018 returned the 245 sessions of 2018
+  instead of the broker's 537 bars, with a short-history warning that blamed
+  2018-12-25. An empty window now ends the walk only in the oldest range asked for (a
+  later range lies after sessions the cache has settled, so an empty window there is a
+  gap), and the reason says what was concluded: "the broker returned no bars for
+  2024-02-02 to 2024-04-01, so the history is taken to start after 2024-04-01; nothing
+  older was asked for". A session the broker answered with no bars, later than the
+  oldest session with bars, is now recorded in the cache as fetched with none and is
+  not asked for again once settled. Sessions before the first bar (where the broker's
+  history starts) and every empty answer from Historify (which downloads fill later)
+  are still asked for again. The cache format is unchanged, so caches written by
+  earlier versions are read as they are, with no migration: a holiday they lack is
+  asked for once more, then recorded. `FetchReport` gains `answered`, the windows
+  answered as ISO date pairs.
 - **No false "The run ends at" warning when every session's bars stop at 15:15.** From
   2026-08-03 continuous trading in a stock with derivatives ends at 15:15 IST (the
   closing auction makes no candle), while the calendar keeps 15:30 for every stock, so

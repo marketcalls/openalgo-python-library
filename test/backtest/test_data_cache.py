@@ -44,6 +44,7 @@ CAL = FakeCalendar()
 JAN_1 = dt.date(2024, 1, 1)  # a Monday
 JAN_5 = dt.date(2024, 1, 5)
 JAN_8 = dt.date(2024, 1, 8)
+JAN_10 = dt.date(2024, 1, 10)
 JAN_12 = dt.date(2024, 1, 12)
 JAN_19 = dt.date(2024, 1, 19)
 LONG_AFTER = at_ist(dt.date(2024, 6, 3), 18)  # every session of the tests has settled
@@ -307,6 +308,45 @@ def test_sessions_a_broker_does_not_hold_are_asked_again_with_one_request(tmp_pa
     assert _windows(client, "api") == [("2024-01-01", "2024-01-05")]
     assert first.meta.short_history and second.meta.short_history
     assert second.meta.warnings[0].startswith("Short history: 2024-01-01 to 2024-01-19")
+
+
+def _without(rows, *days):
+    return [row for row in rows if ist_date_of(row["timestamp"]) not in days]
+
+
+def test_session_the_broker_answered_with_no_bars_is_not_asked_for_again(tmp_path):
+    # Wednesday 2024-01-10 is a session by the calendar, but the broker has no bars for it.
+    client = _broker(_without(_rows(JAN_1, JAN_19), JAN_10))
+    _load(client, tmp_path, first=JAN_8, last=JAN_19, source="api")
+    client.calls.clear()
+    _load(client, tmp_path, first=JAN_1, last=JAN_19, source="api")
+    assert _windows(client, "api") == [("2024-01-01", "2024-01-05")]
+
+
+def test_month_the_broker_answered_with_no_bars_is_not_asked_for_again(tmp_path):
+    march_29 = dt.date(2024, 3, 29)
+    february = days_between(dt.date(2024, 2, 1), dt.date(2024, 2, 29))
+    client = _broker(_without(_rows(JAN_1, march_29), *february))
+    _load(client, tmp_path, last=march_29, source="api")
+    client.calls.clear()
+    again = _load(client, tmp_path, last=march_29, source="api")
+    assert (again.meta.cache, _windows(client, "api")) == ("hit", [])
+
+
+def test_session_historify_answered_with_no_bars_is_asked_for_again(tmp_path):
+    # Historify is filled by downloads, so a day it lacks may be there next time.
+    client = _db(_without(_rows(JAN_1, JAN_19), JAN_10))
+    _load(client, tmp_path, first=JAN_8, last=JAN_19)
+    client.calls.clear()
+    _load(client, tmp_path, first=JAN_8, last=JAN_19)
+    assert _windows(client) == [("2024-01-10", "2024-01-10")]
+
+
+def test_refresh_does_not_call_a_session_cached_without_bars_kept(tmp_path):
+    client = _broker(_without(_rows(JAN_8, JAN_19), JAN_10))
+    _load(client, tmp_path, first=JAN_8, last=JAN_19, source="api")
+    result = _load(client, tmp_path, first=JAN_8, last=JAN_19, source="api", refresh=True)
+    assert not any("the cached rows were kept" in line for line in result.meta.warnings)
 
 
 def test_empty_source_with_an_empty_cache_is_a_no_data_error(tmp_path):

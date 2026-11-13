@@ -159,7 +159,8 @@ def test_short_broker_history_is_announced_first_and_points_to_historify():
         "source='api') returned 2024-04-10 to 2024-05-31, 38 of 109 sessions. A broker keeps "
         "only a limited history for this interval. Download the series into Historify and use "
         "source='db' for a longer range. The fetch stopped going back because the broker "
-        "returned no bars for 2024-02-02 to 2024-04-01."
+        "returned no bars for 2024-02-02 to 2024-04-01, so the history is taken to start "
+        "after 2024-04-01; nothing older was asked for."
     )
 
 
