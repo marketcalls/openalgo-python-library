@@ -126,9 +126,15 @@ class IntradayEmaCross(bt.Strategy):
 
 
 def intraday_mis() -> bt.Result:
+    # The 15-bar EMA needs 128 five-minute bars before the strategy decides (`_warm_up`):
+    # the two sessions before the run, 2026-10-30 and 11-02 (a walk of their own from the
+    # same price), are history, so it trades from the first bar of 11-03.
+    before = [dt.date(2026, 10, 30), dt.date(2026, 11, 2)]
+    history = TickWalk(seed=12).bars(minute_stamps(before), 16_000, 20, 45)
     days = [dt.date(2026, 11, 3), dt.date(2026, 11, 4)]
     bars = TickWalk(seed=11).bars(minute_stamps(days), 16_000, 20, 45)
-    return bt.backtest(IntradayEmaCross, data=bars, capital=CAPITAL, base="1m")
+    data = pd.concat([history, bars])
+    return bt.backtest(IntradayEmaCross, data=data, start=days[0], capital=CAPITAL, base="1m")
 
 
 # ----- condition_cnc -------------------------------------------------------------------
