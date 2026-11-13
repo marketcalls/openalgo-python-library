@@ -149,6 +149,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   return bars, the trade P&L histogram or the trade losing-streak table:
   `Result.monte_carlo()`, `performance.session_returns`, `Result.trade_list()` and
   `performance.losing_streaks` keep them.
+- **Candles of a special session that opens off the bar lattice are told by the
+  session.** Intraday bars sit on a lattice from each date's regular open (09:15 IST on
+  NSE), special sessions included, and a source that starts a special session's candles
+  at the session's own open (15-minute broker candles of Muhurat trading from 14:20)
+  stopped the load with the general off-lattice message. When every off-lattice bar lies
+  in such a session, the TimestampError now names it from the calendar data and says
+  what to do: "NSE:SBIN 15m: 5 bars are not on the NSE bar lattice: the session of
+  2026-11-08 (Diwali Laxmi Pujan (Muhurat trading)) opens at 14:20 IST, off the 09:15
+  bar lattice, so 15-minute candles of that session cannot be placed. Pass 1-minute data
+  (the engine builds the session's 15-minute bars from it), or leave that session's bars
+  out." Own data and OpenAlgo data alike; nothing is loaded differently.
 
 ## [2.1.1] - 2026-11-13
 

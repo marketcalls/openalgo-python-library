@@ -24,6 +24,7 @@ from .._calendar_types import PLACEMENTS
 from .._layout import IST_OFFSET_NANOS
 from .._messages import counted
 from ..errors import TimestampError
+from ._off_lattice import special_session_error
 from ._sessions import Sessions, day_start_ns, format_span, ist_days
 
 IN_SESSION = PLACEMENTS.index("in_session")
@@ -81,15 +82,20 @@ def check_intraday(
     tag names the series in messages; hints are appended to an error, keyed by the
     calendar's `finding` or "other". Bars on a closed day are counted, not an error.
 
-    Raises TimestampError for what the calendar rejects, for bars coarser than the
-    declared interval and for label="close" bars that are stamped at their open.
+    Raises TimestampError for what the calendar rejects (candles of a special session
+    that opens off the bar lattice with a message of their own, `_off_lattice`), for
+    bars coarser than the declared interval and for label="close" bars that are stamped
+    at their open.
     """
     native, options = sessions.native, {"exchange": sessions.exchange, "interval": interval}
     try:
         counts = native.validate_intraday(ts_open, allow_closed_days=True, **options)
     except TimestampError as exc:
-        finding = native.check_intraday(ts_open, **options)["finding"] or "other"
-        hint = hints.get(finding, hints.get("other", ""))
+        report = native.check_intraday(ts_open, **options)
+        special = special_session_error(report, ts_open, step_ns, sessions, tag)
+        if special is not None:
+            raise TimestampError(special) from exc
+        hint = hints.get(report["finding"] or "other", hints.get("other", ""))
         raise TimestampError(f"{tag}: {exc}. {hint}".rstrip(" .") + ".") from exc
     in_session = counts["placement"] == IN_SESSION
     opens, session_closes, has = sessions.bounds(ts_open)
