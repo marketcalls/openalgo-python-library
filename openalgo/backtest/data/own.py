@@ -6,7 +6,8 @@ Three things must be declared, and none is guessed:
   `columns={"timestamp": "Date", "open": "Open", ...}`. An ambiguous or missing
   column is a ConfigError that lists what is available;
 - the time zone: a tz-aware index or column, or `tz=` for naive timestamps. There
-  is no default;
+  is no default, except that daily and longer bars whose naive timestamps are all at
+  midnight are session dates, read as IST dates (`_stamps`);
 - the bar label: `label="open"` (the stamp is the instant the bar opens, the
   default and the OpenAlgo convention) or `label="close"`.
 
@@ -23,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 from .._calendar_convert import DateLike, format_ist
-from .._layout import BAR_COLUMNS, PRICE_COLUMNS, parse_interval
+from .._layout import BAR_COLUMNS, PRICE_COLUMNS, is_intraday, parse_interval
 from .._messages import counted
 from .._protocols import SessionCalendar
 from ..errors import ConfigError, DataError, NoDataError
@@ -163,7 +164,8 @@ class Frame:
         NumPy array with `columns=[names in order]`, or a polars DataFrame (read
         through its `to_dict`, so pyarrow is not needed).
     tz: time zone of naive timestamps, for example "Asia/Kolkata". Required unless
-        the timestamps are tz-aware. No default.
+        the timestamps are tz-aware, or the bars are daily or longer and every naive
+        timestamp is at midnight (session dates, read as IST dates). No default.
     columns: mapping from canonical field to the name in the data. Fields:
         timestamp, open, high, low, close, volume, oi, symbol, exchange. The
         timestamp may be a pair `(date_column, time_column)`.
@@ -251,7 +253,7 @@ class Frame:
         table, origin = self._read_table(symbol, exchange, interval)
         fields = _resolve_columns(table, self._columns)
         table = _select_rows(table, fields, {"symbol": symbol, "exchange": exchange}, origin)
-        stamps_ns, described, canonical = self._stamps(table, fields, origin)
+        stamps_ns, described, canonical = self._stamps(table, fields, origin, interval)
         margin_ns = _LABEL_MARGIN_DAYS[parse_interval(interval)[0]] * NANOS_PER_DAY
         low, high = day_start_ns(start) - margin_ns, day_start_ns(end) + NANOS_PER_DAY + margin_ns
         rows = np.flatnonzero((stamps_ns >= low) & (stamps_ns < high))
@@ -297,7 +299,7 @@ class Frame:
         table, origin = self._read_table(symbol, exchange, interval)
         fields = _resolve_columns(table, self._columns)
         table = _select_rows(table, fields, {"symbol": symbol, "exchange": exchange}, origin)
-        stamps_ns, _, _ = self._stamps(table, fields, origin)
+        stamps_ns, _, _ = self._stamps(table, fields, origin, interval)
         if len(stamps_ns) == 0:
             raise NoDataError(f"{exchange}:{symbol} {interval}: {origin} has no rows")
         return int(stamps_ns.min()), int(stamps_ns.max())
@@ -309,9 +311,10 @@ class Frame:
         return self._table, "the supplied data"
 
     def _stamps(
-        self, table: pd.DataFrame, fields: dict[str, ColumnSource], origin: str
+        self, table: pd.DataFrame, fields: dict[str, ColumnSource], origin: str, interval: str
     ) -> tuple[np.ndarray, str, bool]:
-        """(UTC nanosecond stamps, the convention applied, whether already canonical)."""
+        """(UTC nanosecond stamps, the convention applied, whether already canonical).
+        Daily and longer `interval`s read naive midnight stamps as IST session dates."""
         source = fields["timestamp"]
         if source == _CANONICAL:
             raw = table["ts_open"]
@@ -331,7 +334,12 @@ class Frame:
             values = table[source]
         what = f"the timestamps of {origin}"
         stamps_ns, described = to_utc_ns(
-            values, tz=self._tz, unit=self._unit, fmt=self._format, what=what
+            values,
+            tz=self._tz,
+            unit=self._unit,
+            fmt=self._format,
+            what=what,
+            session_dates=not is_intraday(interval),
         )
         return stamps_ns, described, False
 

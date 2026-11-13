@@ -1,7 +1,9 @@
 """Exception types shared by the backtest package.
 
 Every error the engine raises on purpose derives from BacktestError, so callers can
-catch one type. Messages say what was wrong and what to do about it.
+catch one type. Messages say what was wrong and what to do about it. The warning a run
+gives when orders were rejected, RejectedOrdersWarning, is here too, so it can be
+filtered by its class.
 """
 
 
@@ -66,6 +68,14 @@ class CostError(BacktestError, ValueError):
     """A cost segment, preset or schedule is unknown or inconsistent."""
 
 
+class RejectedOrdersWarning(UserWarning):
+    """Orders of a run were rejected. `bt.backtest` issues it once, at the end of a run
+    in which any order was rejected, with how many and the most common reason; the
+    details of every reason are in `result.warnings`. A warning, not an error: the
+    result is still returned. Silence it with
+    `warnings.simplefilter("ignore", RejectedOrdersWarning)`."""
+
+
 __all__ = [
     "BacktestError",
     "CalendarError",
@@ -76,6 +86,7 @@ __all__ = [
     "MissingDependencyError",
     "NoDataError",
     "ReferenceDataError",
+    "RejectedOrdersWarning",
     "SymbolNotFoundError",
     "TimestampError",
 ]

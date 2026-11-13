@@ -57,6 +57,7 @@ from ._run_corporate_actions import (
     unadjusted_events,
 )
 from ._run_end import run_end_warnings
+from ._session_dates import session_dates_note
 from ._settings import RunPlan, assumptions, resolve
 from ._slab_ticks import resolve_slab_ticks
 from .reference import Instrument
@@ -195,7 +196,11 @@ def prepare(strategy: type, client: Any, args: dict[str, Any]) -> PreparedRun:
             symbol: result.meta.partition_hashes()
             for symbol, result in zip(plan.symbols, loaded, strict=True)
         },
-        notes={"base_rule": choice.reason, "instruments": "; ".join(lines.values())},
+        notes={
+            "base_rule": choice.reason,
+            "instruments": "; ".join(lines.values()),
+            **session_dates_note(plan.symbols, loaded),
+        },
         warnings=warnings,
         reference_tables=version,
         market_args=market_args,
@@ -220,6 +225,8 @@ def _assumptions(
     rule = meaning(plan.base, square_off, session_open)
     block["base_rule"] = f"base {plan.base} ({prepared.notes['base_rule']}): {rule}"
     block["instruments"] = prepared.notes["instruments"]
+    if "timestamps" in prepared.notes:
+        block["timestamps"] = prepared.notes["timestamps"]
     if prepared.futures is not None:
         block["futures"] = prepared.futures.assumption()
     futures_margin = margin_assumption(plan.margin, prepared.instruments, plan.start)
