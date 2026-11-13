@@ -240,7 +240,9 @@ class FetchReport:
     window_days: the chunk window used. windows_planned, windows_fetched: windows
     the range was split into and windows that were answered. stopped: why a broker
     walk stopped before the oldest window (None when every window was read).
-    requests, retries: totals of the fetcher after this fetch.
+    requests, retries: totals of the fetcher after this fetch. answered: the
+    (first, last) IST dates of each answered window as ISO strings, in the order
+    asked (strings keep the report JSON-ready, as `LoadMetadata.to_dict` needs).
     """
 
     window_days: int
@@ -249,6 +251,7 @@ class FetchReport:
     stopped: str | None = None
     requests: int = 0
     retries: int = 0
+    answered: list[tuple[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -361,26 +364,35 @@ class HistoryFetcher:
         """Fetch the inclusive IST date `ranges` window by window.
 
         Historify ("db") is read oldest first, every window. A broker ("api") is
-        read newest first and the walk stops at the first window that holds nothing
-        although `completed_sessions(first, last)` says a session has closed in it:
-        that is where the broker's history ends. A window without such a session (a
-        weekend, a holiday, today before the close) never ends the walk.
+        read newest first and the walk stops at the first window of the oldest range
+        that holds nothing although `completed_sessions(first, last)` says a session
+        has closed in it: that is where the broker's history ends. A window without
+        such a session (a weekend, a holiday, today before the close) never ends the
+        walk, and neither does one in a later range: sessions the cache has settled
+        lie before it, so it is a gap (a holiday the calendar does not know), not the
+        start of the broker's history.
 
         Returns (rows sorted by timestamp, FetchReport). Raises DataError when any
         window fails: a failure is never taken for the end of history.
         """
         windows = [
-            w for date_range in sorted(ranges) for w in plan_chunks(*date_range, window_days)
+            (number, window)
+            for number, date_range in enumerate(sorted(ranges))
+            for window in plan_chunks(*date_range, window_days)
         ]
         report = FetchReport(window_days, len(windows))
         parts = []
-        for window in windows if source == "db" else reversed(windows):
+        for number, window in windows if source == "db" else reversed(windows):
             records = self.history(series, window, source, spacing_seconds)
             report.windows_fetched += 1
+            report.answered.append((window[0].isoformat(), window[1].isoformat()))
             if len(records):
                 parts.append(records)
-            elif source == "api" and completed_sessions(*window):
-                report.stopped = f"the broker returned no bars for {window[0]} to {window[1]}"
+            elif source == "api" and number == 0 and completed_sessions(*window):
+                report.stopped = (
+                    f"the broker returned no bars for {window[0]} to {window[1]}, so the "
+                    f"history is taken to start after {window[1]}; nothing older was asked for"
+                )
                 break
         report.requests, report.retries = self.requests, self.retries
         records = np.concatenate(parts) if parts else np.zeros(0, dtype=RAW_DTYPE)

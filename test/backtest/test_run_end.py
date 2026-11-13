@@ -109,6 +109,35 @@ def test_data_that_reach_the_end_of_the_range_give_no_end_warning():
     assert end_warnings(result) == []
 
 
+def two_sessions(first_count: int, second_count: int) -> pd.DataFrame:
+    """1-minute bars from 09:15 on Monday 2025-06-30 for `first_count` minutes, then on
+    Tuesday 2025-07-01 for `second_count` minutes."""
+    monday = minute_bars(first_count)
+    monday.index = monday.index - pd.Timedelta(days=1)
+    return pd.concat([monday, minute_bars(second_count)])
+
+
+# Bars from 09:15 to 15:14: from 2026-08-03 continuous trading in a stock with
+# derivatives ends at 15:15 and the closing auction makes no candle.
+UNTIL_THE_CLOSING_AUCTION = 360
+
+
+def test_sessions_that_all_stop_at_1515_give_no_end_warning_and_end_at_1530():
+    bars = two_sessions(UNTIL_THE_CLOSING_AUCTION, UNTIL_THE_CLOSING_AUCTION)
+    result = run(UNTIL_NOON, data=bars)
+    assert end_warnings(result) == []
+    assert result.equity.index[-1] == at(15, 30)
+
+
+def test_a_last_session_that_stops_at_noon_after_a_full_one_still_warns():
+    result = run(UNTIL_NOON, data=two_sessions(SESSION_MINUTES, UNTIL_NOON))
+    assert end_warnings(result) == [
+        "The run ends at 2025-07-01 12:00 IST, the close of the last bar in the data, "
+        "before the end of its range at 2025-07-01 15:30 IST: equity, trades and metrics "
+        "stop there, and positions still open are reported open"
+    ]
+
+
 def test_the_manifest_records_no_present_for_a_run_on_the_clock():
     assert run(UNTIL_NOON).manifest["arguments"]["now"] is None
 
