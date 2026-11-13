@@ -16,6 +16,11 @@ the built-in calendar:
 A strategy buys one lot at the close of 09-20 (filled at 25,000.00 on 09-23) and exits
 at the close of 09-27 (filled on 09-30). With `roll=1` it rolls at the 09-25 open: the
 spread of the two opens is 25,300.00 - 25,200.00 = 100.00.
+
+Its 2-bar average needs 16 bars of the series before it decides (`_warm_up`), and a
+futures series has no history before `start`, so its runs start on 2024-08-30 with
+September bars at a flat (24950, 25000, 24900, 24950) for the 15 sessions to 09-19: the
+16th bar is 09-20's, whose close is the first decision.
 """
 
 import dataclasses
@@ -64,6 +69,25 @@ def _frame(rows: dict[int, tuple]) -> pd.DataFrame:
     return frame
 
 
+# The run of the module docstring that waits for the 2-bar average: it starts 15 sessions
+# before 09-20, on September bars at a flat price.
+WARM_UP_START = dt.date(2024, 8, 30)
+FLAT = (24950.0, 25000.0, 24900.0, 24950.0)
+
+
+def _warm_up_frames() -> dict[str, pd.DataFrame]:
+    """The bars of both contracts, September's from WARM_UP_START."""
+    days = CALENDAR.sessions("NFO", WARM_UP_START, dt.date(2024, 9, 19))["date"]
+    index = pd.DatetimeIndex(
+        [dt.datetime.combine(day, dt.time(9, 15), tzinfo=IST) for day in days], name="timestamp"
+    )
+    early = pd.DataFrame([FLAT] * len(index), index=index, columns=["open", "high", "low", "close"])
+    early["volume"] = 1_000.0
+    frames = {symbol: _frame(rows) for symbol, rows in BARS.items()}
+    frames[SEPTEMBER] = pd.concat([early, frames[SEPTEMBER]])
+    return frames
+
+
 def _contract(symbol: str, last_day: dt.date) -> Instrument:
     return Instrument(
         symbol=symbol,
@@ -107,9 +131,9 @@ def _run(roll=1, log=None, **settings):
     return bt.backtest(
         _strategy(log),
         capital=1_000_000,
-        data={symbol: _frame(rows) for symbol, rows in BARS.items()},
+        data=_warm_up_frames(),
         instrument=CONTRACTS,
-        start=dt.date(2024, 9, 20),
+        start=WARM_UP_START,
         end=dt.date(2024, 9, 30),
         costs=settings.pop("costs", None),
         slippage=0,
@@ -465,9 +489,9 @@ def test_positions_are_addressed_by_the_underlying():
     bt.backtest(
         Watch,
         capital=1_000_000,
-        data={symbol: _frame(rows) for symbol, rows in BARS.items()},
+        data=_warm_up_frames(),
         instrument=CONTRACTS,
-        start=dt.date(2024, 9, 20),
+        start=WARM_UP_START,
         end=dt.date(2024, 9, 30),
         costs=None,
         slippage=0,

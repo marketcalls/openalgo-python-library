@@ -11,6 +11,7 @@ closed bar. Other intervals (`self.data[symbol, "15m"]`) are in `_timeframes`.
 from __future__ import annotations
 
 import datetime as dt
+import weakref
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -20,7 +21,7 @@ import pandas as pd
 from ._calendar_convert import format_ist
 from ._layout import IST_OFFSET_NANOS, NANOS_PER_SECOND
 from ._messages import not_supported
-from ._views import TimelineView
+from ._views import TimelineView, field_recipe
 from .errors import BacktestError
 
 IST = dt.timezone(dt.timedelta(seconds=IST_OFFSET_NANOS // NANOS_PER_SECOND), "IST")
@@ -71,7 +72,9 @@ class SeriesStore:
     """The bars of one instrument and interval over the whole run, as arrays: `ts_open`
     and `ts_close` int64 UTC nanoseconds, prices in rupees, volume in units. A subclass
     says how many are visible. `name` prefixes the labels of its views. `history_bars`
-    counts the bars before the run's start at the front of the arrays (`BarStore`)."""
+    counts the bars before the run's start at the front of the arrays (`BarStore`).
+    `views` holds weak references to the views made while the store is declaring
+    (`_views`), which `_warm_up_attach` computes again once the history is joined."""
 
     history_bars = 0
 
@@ -83,6 +86,21 @@ class SeriesStore:
         self.name = name or symbol
         self._series = {name: np.asarray(series[name]) for name in (*TIMES, *FIELDS)}
         self._times: pd.DatetimeIndex | None = None
+        self.views: list[weakref.ref] = []
+
+    def rebase(self, series: dict[str, np.ndarray], history_bars: int) -> None:
+        """Replace the bars by `series` (the same columns), of which the first
+        `history_bars` lie before the run's start: the history joined after `init`
+        (`_warm_up_attach`). The views are not touched."""
+        self._series = {name: np.asarray(series[name]) for name in (*TIMES, *FIELDS)}
+        self._times = None
+        self.history_bars = history_bars
+
+    def fields(self) -> dict[str, object]:
+        """Every bar's fields as a view's recipe reads them (`_views.Recipe`)."""
+        fields: dict[str, object] = dict(self._series)
+        fields["times"] = self.times()
+        return fields
 
     def visible(self) -> int:
         """How many bars are revealed now."""
@@ -121,24 +139,20 @@ class SeriesStore:
 
 
 class BarStore(SeriesStore):
-    """The strategy bars of one instrument, revealed by the kernel's pauses. `history`,
-    when given, holds the strategy bars before the run's start (the warm-up history,
-    `_warm_up_history`) with the same columns: they come first and are visible from the
-    beginning; the kernel never delivers them."""
+    """The strategy bars of one instrument, revealed by the kernel's pauses. The strategy
+    bars before the run's start (the warm-up history, `_warm_up_history`) are joined in
+    front once `init` has run (`rebase`): they are visible from then on; the kernel
+    never delivers them."""
 
-    def __init__(
-        self,
-        symbol: str,
-        interval: str,
-        series: dict[str, np.ndarray],
-        history: dict[str, np.ndarray] | None = None,
-    ) -> None:
-        if history is not None:
-            columns = (*TIMES, *FIELDS)
-            series = {name: np.concatenate((history[name], series[name])) for name in columns}
+    def __init__(self, symbol: str, interval: str, series: dict[str, np.ndarray]) -> None:
         super().__init__(symbol, interval, series)
-        self.history_bars = 0 if history is None else len(history["ts_open"])
-        self._count = self.history_bars
+        self._count = 0
+        self._opens = self._series["ts_open"]
+        self._size = len(self._opens)
+
+    def rebase(self, series: dict[str, np.ndarray], history_bars: int) -> None:
+        super().rebase(series, history_bars)
+        self._count = history_bars
         self._opens = self._series["ts_open"]
         self._size = len(self._opens)
 
@@ -167,7 +181,7 @@ class SeriesView(TimelineView):
     work, `.values` is a NumPy copy; arithmetic and comparisons as `TimelineView`."""
 
     def __init__(self, store: SeriesStore, name: str) -> None:
-        super().__init__(store, store.column(name), f"{store.name}.{name}")
+        super().__init__(store, store.column(name), f"{store.name}.{name}", field_recipe(name))
 
 
 class InstrumentData:

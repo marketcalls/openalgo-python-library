@@ -50,7 +50,11 @@ class ClockCondition:
 
     def on(self, store: Any) -> TimelineView:
         """The condition as a view of a store's bars."""
-        return TimelineView(store, self.values(store.column("ts_close")), self.label)
+
+        def recipe(bars: Any) -> np.ndarray:
+            return self.values(bars["ts_close"])
+
+        return TimelineView(store, self.values(store.column("ts_close")), self.label, recipe)
 
     def _combine(self, other: Any, function: Callable, symbol: str) -> Any:
         if isinstance(other, ClockCondition):

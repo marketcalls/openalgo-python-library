@@ -10,11 +10,12 @@ an order decided at bar k's close fills at bar k + 1's open, which is bar k + 1'
 
 Worked by hand (the textbook recursion e[k] = e[k-1] + a (c[k] - e[k-1]), seeded with
 the first close, a = 2/3 and 1/2): the fast EMA crosses above the slow one at bars 4,
-12, 20, 28 and 36 and below it at bars 8, 16, 24 and 32. Both EMAs settle in the first
-window the check tries, 16 bars: over 15 steps a seed gap of at most 2.00 (the price
-range) shrinks to at most 2.00 x (1/2)^15 = 0.00006, inside the tolerance 1e-6 x 99.00.
-So the strategy is ready at the close of bar 15 (16 bars closed, bars before `start`
-counted).
+12, 20, 28 and 36 and below it at bars 8, 16, 24 and 32, whichever bar the EMAs are
+seeded at before them. Both EMAs settle in the first window the check tries, 16 bars,
+on the engine's reference bars: over 15 steps the seed gap shrinks by (1/2)^15 =
+0.00003, inside the tolerance 1e-6 for a gap below 3 percent of the price. So the
+strategy is ready at the close of the 16th bar of its series, bars before `start`
+counted, and a run keeps those 16 bars of history before `start`.
 """
 
 from __future__ import annotations
@@ -126,12 +127,13 @@ def test_an_ema_crossover_before_the_warm_up_no_longer_trades():
 def test_own_data_that_begins_at_start_waits_inside_the_run_and_says_so():
     result = bt.backtest(EmaCross, data=zigzag(), **SETTINGS)
     (warning,) = [text for text in result.warnings if "waited" in text]
-    assert warning.startswith(
-        "The strategy waited 15 strategy bars inside the run for its indicators, to "
-        f"{DAYS[15]} 15:30 IST: SBIN D needs 16 bars (ema(SBIN.close, 2)) and 0 bars "
-        f"closed before {DAYS[0]}."
+    assert warning == (
+        "The strategy waited inside the run for its indicators: SBIN waited 15 strategy "
+        f"bars, to {DAYS[15]} 15:30 IST. ema(SBIN.close, 2) needs 16 D bars of SBIN and 0 "
+        f"bars closed before {DAYS[0]}: the bars given for SBIN begin on {DAYS[0]}; give "
+        f"earlier ones to decide from {DAYS[0]}."
     )
-    assert result.manifest["arguments"]["warm_up"]["waited_bars"] == 15
+    assert result.manifest["arguments"]["warm_up"]["waited"] == {"SBIN": 15}
 
 
 def test_the_first_decision_is_at_the_close_of_the_warm_up_bar():
@@ -148,9 +150,10 @@ def test_history_before_start_lets_the_strategy_trade_from_start():
     assert "ready at start" in result.assumptions["warm_up"]
 
 
-def test_the_indicators_are_computed_over_the_history():
-    # At the first decision, bar 20, the fast EMA is the one seeded at bar 0, and the
-    # 20 bars of history count in len(self.close).
+def test_the_indicators_are_computed_over_the_history_they_need():
+    # The run keeps the 16 bars before bar 20 its EMAs need, bars 4 to 19: at the first
+    # decision, bar 20, the fast EMA is the one seeded at bar 4, and the 16 bars of
+    # history count in len(self.close).
     seen = []
 
     class Recording(EmaCross):
@@ -161,8 +164,8 @@ def test_the_indicators_are_computed_over_the_history():
 
     bt.backtest(Recording, data=zigzag(), start=DAYS[20], **SETTINGS)
     ((day, fast, closed),) = seen
-    assert (day, closed) == (DAYS[20], 21)
-    assert fast == pytest.approx(textbook_ema(CLOSES, 2)[20], abs=1e-12)
+    assert (day, closed) == (DAYS[20], 17)
+    assert fast == pytest.approx(textbook_ema(CLOSES[4:], 2)[16], abs=1e-12)
 
 
 def test_without_history_the_same_start_waits_again():
@@ -189,11 +192,17 @@ def test_a_strategy_that_keeps_its_own_guard_still_works():
 
 
 def test_the_assumptions_state_the_rule_the_need_and_the_history():
+    # 16 sessions x 7/5 x 1.1 = 24.64, so 25 days and a week more, 32, before start are
+    # asked for; the data begin later than a week after that day, which is said.
     result = bt.backtest(EmaCross, data=zigzag(), start=DAYS[20], **SETTINGS)
     text = result.assumptions["warm_up"]
+    asked = DAYS[20] - dt.timedelta(days=32)
     assert text.startswith("automatic: no decision before start, nor before every self.I")
-    assert "SBIN D needs 16 bars (ema(SBIN.close, 2))" in text
-    assert f"history before start: SBIN 20 strategy bars from {DAYS[0]} to {DAYS[19]}" in text
+    assert "ema(SBIN.close, 2) needs 16 D bars of SBIN" in text
+    assert (
+        f"history before start: SBIN 16 strategy bars from {DAYS[4]} to {DAYS[19]} (asked "
+        f"from {asked})"
+    ) in text
 
 
 def test_each_indicator_has_its_own_warm_up_in_the_checks():
@@ -209,7 +218,11 @@ def test_the_manifest_records_the_warm_up_used():
     assert warm_up["needs"] == [
         {"symbol": "SBIN", "interval": "D", "bars": WARM_UP_BARS, "indicator": "ema(SBIN.close, 2)"}
     ]
-    assert (warm_up["first_decision"], warm_up["waited_bars"]) == (None, 0)
+    assert (warm_up["first_decision"], warm_up["waited"], warm_up["not_waited_for"]) == (
+        None,
+        {},
+        [],
+    )
     assert "SBIN history" in result.manifest["data"]
 
 
@@ -244,7 +257,7 @@ def test_the_longest_warm_up_of_the_strategy_sets_the_wait():
     # 32-bar one: ready at bar 31, so the first trade is the crossover at bar 36.
     result = bt.backtest(WithAverage, data=zigzag(), **SETTINGS)
     assert fills(result) == at_bar((37, "BUY"))
-    assert "SBIN D needs 32 bars (sma(SBIN.close, 30))" in result.assumptions["warm_up"]
+    assert "sma(SBIN.close, 30) needs 32 D bars of SBIN" in result.assumptions["warm_up"]
 
 
 class Cumulative(EmaCross):
@@ -256,15 +269,19 @@ class Cumulative(EmaCross):
 
 
 def test_an_indicator_no_window_settles_is_not_waited_for_and_the_result_says_so():
-    # Volume 1,000 + 10 k^2 at bar k: each eight-bar zigzag moves the balance by
-    # 10 x (-1 - 4 + 9 + 16 + 25 + 36 - 49 - 64) = -320, so a window that starts later
-    # never reaches the running sum.
-    data = zigzag()
-    data["volume"] = 1_000.0 + 10.0 * np.arange(BARS) ** 2
-    result = bt.backtest(Cumulative, data=data, **SETTINGS)
+    # On-balance volume is a running sum of signed volumes: a window that starts later
+    # never reaches it, on the reference bars as on any.
+    result = bt.backtest(Cumulative, data=zigzag(), **SETTINGS)
     assert fills(result) == AFTER_THE_WARM_UP
     (warning,) = [text for text in result.warnings if "does not settle" in text]
-    assert warning.startswith("obv(SBIN.close, SBIN.volume) does not settle within the bars")
+    assert warning == (
+        "obv(SBIN.close, SBIN.volume) does not settle on the engine's reference bars (it "
+        "depends on its whole history, as a running sum does): the strategy did not wait "
+        "for it."
+    )
+    assert result.manifest["arguments"]["warm_up"]["not_waited_for"] == [
+        "obv(SBIN.close, SBIN.volume)"
+    ]
 
 
 def test_a_strategy_without_indicators_decides_from_start():

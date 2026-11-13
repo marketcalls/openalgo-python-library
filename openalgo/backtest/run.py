@@ -38,6 +38,7 @@ from ._messages import SEVERAL_STRATEGIES, not_supported
 from ._pipeline import execute, prepare
 from ._rejection_notice import announce_unplaced
 from ._rerun import RunRecord
+from ._warm_up_notice import announce_wait
 from .errors import ConfigError
 from .reference import Instrument
 from .result import Result
@@ -89,10 +90,12 @@ def backtest(
     capital: rupees allocated to the strategy (required).
     start, end: IST dates (inclusive); a datetime also bounds the run to slices opening
         at or after `start` and at or before `end`. Taken from `data=` when omitted.
-        The sessions before `start` are history: up to 2,048 strategy bars of them are
-        loaded from the run's source and the indicators are computed over them, and the
-        strategy decides from `start` on, once its indicators have closed their warm-up
-        (`_warm_up`; the Assumptions block and the warnings say what was waited for).
+        The sessions before `start` are history: as many bars as the strategy's `self.I`
+        indicators need (each one's warm-up, measured on the engine's reference bars)
+        are loaded from the run's source and the indicators are computed over them, and
+        the strategy decides from `start` on, once its indicators have closed their
+        warm-up (`_warm_up`; the Assumptions block and the warnings say what was waited
+        for).
     data: own bars (a DataFrame, a CSV, Parquet or Feather file path, or a dict of them
         by symbol) at the base interval.
     benchmark: what the reports compare the strategy with (alpha, beta, information
@@ -154,6 +157,9 @@ def backtest(
     with one OrdersNotPlacedWarning: how many and the most common reason, the details
     being in `result.warnings` (`_rejection_notice`). Orders refused by the entry window
     or another rule of the run working as it intends are told in `result.warnings` only.
+    A run in which the strategy waited inside the run for its indicators ends with one
+    WarmUpWarning: the first decision and the strategy bars each symbol waited
+    (`_warm_up_notice`).
 
     Raises ConfigError for unusable arguments, the data layer's errors for data, and
     NotImplementedError for any setting or feature the kernel does not run yet.
@@ -171,6 +177,7 @@ def _run(strategy: type[Strategy], client: Any, args: dict[str, Any]) -> Result:
     record = RunRecord(strategy, client, {k: v for k, v in args.items() if k != "client"})
     result = execute(strategy, prepared, args, record=record)
     announce_unplaced(result)
+    announce_wait(result)
     return result
 
 

@@ -18,6 +18,8 @@ gets no `on_bar` call.
 
 Until the strategy's indicators are ready (`ready_at`, `_warm_up`) the pauses only
 reveal their bars and deliver their events: no timer runs and `on_bar` is not called.
+A `ready_at` later than every bar (`_warm_up.NEVER`, a series with fewer bars than its
+need) waits through the whole run.
 """
 
 from __future__ import annotations

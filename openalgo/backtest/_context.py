@@ -34,8 +34,8 @@ from .size import resolve_atr
 class RunData:
     """The run's facts a strategy's data views need: the exchange, the strategy and base
     intervals, the base bars by symbol (canonical layout, cut to the run's slices, after
-    the history loaded before `start`), the calendar, and the indicator checks of the run
-    (`_causality_checks.RunChecks`)."""
+    the history before `start` once it is joined, `_warm_up_attach`), the calendar, and
+    the indicator checks of the run (`_causality_checks.RunChecks`)."""
 
     exchange: str
     interval: str
@@ -56,7 +56,6 @@ class RunContext:
         default_size: Any,
         run: RunData,
         futures: tuple[Any, list[dict]] | None = None,
-        history: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self.engine = engine
         self.instruments = {instrument.symbol: instrument for instrument in instruments}
@@ -65,17 +64,8 @@ class RunContext:
         self.run = run
         # True while `init` declares the strategy; see the module docstring.
         self.declaring = True
-        # The strategy bars before `start` by symbol (`_warm_up_history`), shown first.
-        history = history or {}
         self.stores = {
-            symbol: self._marked(
-                BarStore(
-                    symbol,
-                    run.interval,
-                    call(engine.strategy_bars, number),
-                    history.get(symbol),
-                )
-            )
+            symbol: self._marked(BarStore(symbol, run.interval, call(engine.strategy_bars, number)))
             for number, symbol in enumerate(self.symbols)
         }
         self.timeframes: dict[tuple[str, str], SeriesStore] = {}

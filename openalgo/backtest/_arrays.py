@@ -18,13 +18,15 @@ conditions and are read with the same level-triggered rules of 14-strategy-api 4
 Arrays hold one boolean per strategy bar of the run, the value at that bar's close:
 a NumPy array or list in bar order, or a pandas Series indexed by bar open time (IST,
 or tz-aware). A `from_signals` function receives the strategy bars as a DataFrame
-indexed by IST bar open (columns open, high, low, close, volume), the history loaded
-before `start` first, so its indicators are computed over it, and returns `(entries,
-exits)` or `(entries, exits, shorts, covers)`, any of which may be None; the values of
+indexed by IST bar open (columns open, high, low, close, volume) and returns `(entries,
+exits)` or `(entries, exits, shorts, covers)`, any of which may be None. It runs in
+`init` on the run's bars, and once more when the history before `start` is joined
+(`_warm_up_attach`, the history of a 200-bar EMA, `_warm_up_probe`), on the history and
+the run's bars together, so its indicators are computed over the history; the values of
 the history bars are left out, as no decision is made before `start`.
 
 Before the run the function is checked for look-ahead (03-architecture 5): it is run
-again on the bars cut at fixed points, and it must return the same outputs there (as
+again on the run's bars cut at fixed points, and it must return the same outputs there (as
 many, None where it gave None) with every value up to a cut the same as on the whole
 series. A function that reads later bars stops the run with ConfigError. The cuts are a
 sample (CUT_FRACTIONS): a value that reads a later bar shows only at the bar just before
@@ -45,6 +47,8 @@ import numpy as np
 import pandas as pd
 
 from ._conditions import array_values, check_order_arguments, strategy_frame
+from ._series import FIELDS
+from ._views import TimelineView
 from .errors import ConfigError
 from .strategy import Strategy
 
@@ -166,7 +170,8 @@ def from_signals(
 ) -> type[Strategy]:
     """A strategy from a function of the strategy bars returning `(entries, exits)` or
     `(entries, exits, shorts, covers)` (see the module docstring). The function runs
-    once per run, plus once per cut of the look-ahead check; the cuts are a sample of
+    once on the run's bars, once more on them with the history before `start` when
+    there is one, plus once per cut of the look-ahead check; the cuts are a sample of
     three, so a function that reads a later bar only away from them passes. Raises
     ConfigError for order arguments 4.1 does not list; when the run starts, ConfigError
     for a function that returns anything else or looks ahead."""
@@ -178,7 +183,7 @@ def from_signals(
         frame = strategy_frame(self)
         arrays = _signals(func, frame)
         _check_causal(func, frame, arrays)
-        _declare(self, tuple(_by_bar_open(values, frame.index) for values in arrays), order_args)
+        _declare(self, _signal_views(func, self._ctx.store(None), frame, arrays), order_args)
 
     name = f"FromSignals_{getattr(func, '__name__', 'function')}"
     settings = (pyramiding, product)
@@ -196,18 +201,31 @@ def _signals(func: Callable[..., Any], frame: pd.DataFrame) -> tuple[Any, ...]:
     return tuple(outputs)
 
 
-def _by_bar_open(values: Any, opens: pd.DatetimeIndex) -> Any:
-    """An output in bar order as a Series indexed by the bars' open times, so that it is
-    read by time and the history bars before `start` drop out (`array_values`); a
-    Series indexed by time, None, or an output of the wrong length is kept as it is."""
-    if values is None or (
-        isinstance(values, pd.Series) and isinstance(values.index, pd.DatetimeIndex)
-    ):
-        return values
-    array = np.asarray(values)
-    if array.ndim != 1 or len(array) != len(opens):
-        return values
-    return pd.Series(array, index=opens)
+def _signal_views(
+    func: Callable[..., Any], store: Any, frame: pd.DataFrame, arrays: tuple[Any, ...]
+) -> tuple[Any, ...]:
+    """The function's outputs as views of the strategy bars (None where it gave None),
+    each with the recipe that runs the function again on other bars (`_views.Recipe`):
+    when the history before `start` is joined, the outputs are those of the function on
+    the history and the run together (`_warm_up_attach`)."""
+    last: list[tuple[Any, tuple[Any, ...]]] = []
+
+    def outputs(bars: Any) -> tuple[Any, ...]:
+        if not (last and last[0][0] is bars):
+            columns = {name: bars[name] for name in FIELDS}
+            last[:] = [(bars, _signals(func, pd.DataFrame(columns, index=bars["times"])))]
+        return last[0][1]
+
+    def recipe(k: int, name: str) -> Callable[[Any], np.ndarray]:
+        return lambda bars: array_values(outputs(bars)[k], bars["ts_open"], name)
+
+    opens = frame.index.tz_convert("UTC").as_unit("ns").asi8
+    return tuple(
+        None
+        if values is None
+        else TimelineView(store, array_values(values, opens, name), name, recipe(k, name))
+        for k, (name, values) in enumerate(zip(OUTPUT_NAMES, arrays, strict=False))
+    )
 
 
 def _given(outputs: Sequence[Any]) -> str:

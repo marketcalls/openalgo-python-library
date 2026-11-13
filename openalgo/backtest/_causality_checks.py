@@ -1,35 +1,39 @@
 """The run-time causality checks of `self.I` indicators (03-architecture 5).
 
 The registry `openalgo.indicators.causality` says which `ta` outputs look ahead; those
-are rejected before anything here runs. These checks verify, on the run's own data,
-what the registry claims for the rest:
+are rejected before anything here runs. These checks verify what the registry claims
+for the rest:
 
-- **Truncation.** The indicator is computed again on the series cut at sampled points;
-  every value up to a cut must equal the value computed on the whole series (within
-  `TRUNCATION_AGREEMENT`, relative and absolute, as the library's own causality test).
-  An indicator that fails reads later bars and is rejected with a ConfigError.
-- **Window stability**, for live trading. A value computed from a rolling window ending
-  at a bar is compared with the whole-series value at that bar within a relative
+- **Truncation**, on the run's own data. The indicator is computed again on the series
+  cut at sampled points; every value up to a cut must equal the value computed on the
+  whole series (within `TRUNCATION_AGREEMENT`, relative and absolute, as the library's
+  own causality test). An indicator that fails reads later bars and is rejected with a
+  ConfigError. It only rejects: it never moves a decision.
+- **Window stability**, the warm-up (`settle_length`), on the engine's reference bars
+  (`_warm_up_reference`), never on the run's: a value computed from a rolling window
+  ending at a bar is compared with the whole-series value at that bar within a relative
   tolerance (`WINDOW_TOLERANCE`, printed in the Assumptions block); the window doubles
   from `FIRST_WINDOW` bars until every sampled bar agrees. The length found is the
-  warm-up a live run needs. Anchored indicators (the registry's notes say so) are
-  replayed from their anchor instead, and an indicator no window settles (a cumulative
-  series) needs its whole history; both are stated, neither is an error.
+  warm-up the strategy waits for (`_warm_up`), the window live trading keeps. Anchored
+  indicators (the registry's notes say so) are replayed from their anchor instead; an
+  indicator no window settles (a cumulative series), or one that reads values of the
+  user's own which the reference bars cannot reproduce, has no warm-up length. Each is
+  stated, none is an error.
 
 An `IndicatorChecks` remembers what it has checked. The truncation check, the costly one,
 runs once per strategy and data: it is keyed by strategy source hash, function, inputs
 and data digest, never by parameter value, so the combinations of a sweep share it. The
 warm-up depends on the parameters (a 50-bar EMA settles later than a 20-bar one), so it
-is measured once per indicator as labelled (`ema(SBIN.close, 50)`), which is cheap: the
-windows are short. The warm-up of every indicator of a run is what `_warm_up` waits for;
-`for_run` gives the recorder of one run's indicators. Cut points and sampled bars are
-fixed by the series length: nothing is random.
+is measured once per indicator as labelled (`ema(SBIN.close, 50)`). `for_run` gives the
+recorder of one run's indicators. Cut points and sampled bars are fixed by the series
+length: nothing is random.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -49,6 +53,19 @@ FIRST_WINDOW = 16
 
 # compute(start, stop): the indicator's outputs on the input bars [start, stop).
 Compute = Callable[[int, int], list[np.ndarray]]
+# The causal outputs of an indicator computed on any bars: it takes the bar fields as a
+# view's recipe reads them (`_views.Recipe`).
+Outputs = Callable[[Mapping[str, Any]], list[np.ndarray]]
+# Why an indicator has no warm-up length (`CheckOutcome.note`).
+ANCHORED = "anchored, replayed from its anchor"
+NEVER_SETTLES = (
+    "does not settle on the engine's reference bars (it depends on its whole history, as a "
+    "running sum does)"
+)
+OWN_VALUES = (
+    "reads values of your own (an array, or a view the reference bars cannot reproduce), "
+    "so its warm-up cannot be measured"
+)
 
 
 @dataclass(frozen=True)
@@ -57,8 +74,9 @@ class CheckOutcome:
 
     label: the indicator as named in messages. cuts: truncation cut points checked, or
     None when an earlier run of the same sweep checked them. warm_up: bars of rolling
-    window that reproduce the whole-series values within the tolerance, or None.
-    note: why there is no warm-up length, or "". series: the (symbol, interval) of the
+    window that reproduce the whole-series values of the reference bars within the
+    tolerance, or None. note: why there is no warm-up length (ANCHORED, NEVER_SETTLES or
+    OWN_VALUES), or "". series: the (symbol, interval) of the
     bars the indicator is computed on, None when not given. anchored: True for an
     indicator replayed from its anchor.
     """
@@ -113,12 +131,41 @@ def _sample(first: int, last: int) -> list[int]:
     return sorted({first + (last - first) * k // steps for k in range(WINDOW_POINTS)})
 
 
+def _stable(
+    compute: Compute, whole: Sequence[np.ndarray], window: int, length: int, tolerance: float
+) -> bool:
+    for bar in _sample(window - 1, length - 1):
+        try:
+            parts = compute(bar - window + 1, bar + 1)
+        except ValueError:
+            return False  # the indicator needs more bars than the window holds
+        for part, values in zip(parts, whole, strict=True):
+            if not _agree(part[-1:], values[bar : bar + 1], tolerance, 0.0):
+                return False
+    return True
+
+
+def settle_length(
+    compute: Compute, whole: Sequence[np.ndarray], length: int, tolerance: float
+) -> int | None:
+    """The window-stability rule (module docstring): the shortest window, doubling from
+    `FIRST_WINDOW` bars and shorter than `length`, whose last value at every sampled bar
+    agrees with `whole` (the outputs on all `length` bars) within `tolerance`, relative;
+    None when none does. `compute(start, stop)` gives the outputs on bars [start, stop)."""
+    window = FIRST_WINDOW
+    while window < length:
+        if _stable(compute, whole, window, length, tolerance):
+            return window
+        window *= 2
+    return None
+
+
 class IndicatorChecks:
     """The checks of one run or one sweep. See the module docstring.
 
     strategy_hash: the strategy's source hash. known: truncation keys checked elsewhere
     (a sweep's first combination), whose truncation check is skipped here; their warm-up
-    is still measured, as each run needs it. tolerance: the window-stability tolerance.
+    is still taken, as each run needs it. tolerance: the window-stability tolerance.
     """
 
     def __init__(
@@ -127,11 +174,14 @@ class IndicatorChecks:
         known: frozenset[str] = frozenset(),
         tolerance: float = WINDOW_TOLERANCE,
     ) -> None:
+        from ._warm_up_reference import ReferenceNeeds  # it measures with settle_length
+
         self.strategy_hash = strategy_hash
         self.tolerance = tolerance
         self._known = known
         self._cuts: dict[str, int] = {}
         self._outcomes: dict[str, CheckOutcome] = {}
+        self._needs = ReferenceNeeds(tolerance)
 
     @property
     def keys(self) -> frozenset[str]:
@@ -142,6 +192,11 @@ class IndicatorChecks:
         """The recorder of one run's indicators, sharing these checks."""
         return RunChecks(self)
 
+    def reference_columns(self) -> dict[str, np.ndarray]:
+        """The reference bars the warm-ups are measured on, as store columns
+        (`_warm_up_reference`)."""
+        return self._needs.columns()
+
     def check(
         self,
         key: str,
@@ -150,11 +205,14 @@ class IndicatorChecks:
         whole: Sequence[np.ndarray],
         anchored: bool,
         series: tuple[str, str] | None = None,
+        reference: Outputs | None = None,
     ) -> CheckOutcome:
         """Run both checks for an indicator, each unless done before (truncation by
-        `key`, the warm-up by `key` and `label`); `whole` are its causal outputs on the
-        whole series, `compute` recomputes them on a part, `series` names the bars they
-        are computed on. Returns what the checks found.
+        `key`, the warm-up by `label`); `whole` are its causal outputs on the whole
+        series, `compute` recomputes them on a part, `series` names the bars they are
+        computed on, and `reference` computes them on any bars (the reference bars of the
+        warm-up), None when its inputs hold values of the user's own. Returns what the
+        checks found.
 
         Raises ConfigError when a value changes once later bars are removed."""
         truncation_key = f"{self.strategy_hash}:{key}"
@@ -167,13 +225,22 @@ class IndicatorChecks:
             if truncation_key not in self._cuts:
                 self._cuts[truncation_key] = self._truncation(label, compute, whole, length)
             cuts = self._cuts[truncation_key]
-        if anchored:
-            settled: tuple[int | None, str] = (None, "anchored, replayed from its anchor")
-        else:
-            settled = self._window(compute, whole, length)
-        outcome = CheckOutcome(label, cuts, *settled, series=series, anchored=anchored)
+        warm_up, note = self.warm_up(label, anchored, reference)
+        outcome = CheckOutcome(label, cuts, warm_up, note, series=series, anchored=anchored)
         self._outcomes[window_key] = outcome
         return outcome
+
+    def warm_up(
+        self, label: str, anchored: bool, reference: Outputs | None
+    ) -> tuple[int | None, str]:
+        """(the warm-up in bars measured on the reference bars, None without one; why
+        there is none, else "") of the indicator labelled `label` (see `check`)."""
+        if anchored:
+            return None, ANCHORED
+        if reference is None:
+            return None, OWN_VALUES
+        bars = self._needs.need(label, reference)
+        return (bars, "") if bars is not None else (None, NEVER_SETTLES)
 
     def _truncation(
         self, label: str, compute: Compute, whole: Sequence[np.ndarray], length: int
@@ -192,33 +259,6 @@ class IndicatorChecks:
                         "bars after it are removed, so it cannot be used in a strategy"
                     )
         return checked
-
-    def _window(
-        self, compute: Compute, whole: Sequence[np.ndarray], length: int
-    ) -> tuple[int | None, str]:
-        window = FIRST_WINDOW
-        while window < length:
-            if self._stable(compute, whole, window, length):
-                return window, ""
-            window *= 2
-        return None, "no window settles within the tolerance: needs the whole history"
-
-    def _stable(
-        self, compute: Compute, whole: Sequence[np.ndarray], window: int, length: int
-    ) -> bool:
-        for bar in _sample(window - 1, length - 1):
-            try:
-                parts = compute(bar - window + 1, bar + 1)
-            except ValueError:
-                return False
-            for part, values in zip(parts, whole, strict=True):
-                if not _agree(part[-1:], values[bar : bar + 1], self.tolerance, 0.0):
-                    return False
-        return True
-
-    def assumption(self) -> str | None:
-        """The Assumptions line: the tolerance and each indicator's outcome."""
-        return describe_outcomes(self.tolerance, list(self._outcomes.values()))
 
 
 def describe_outcomes(tolerance: float, outcomes: Sequence[CheckOutcome]) -> str | None:
@@ -246,9 +286,10 @@ class RunChecks:
         whole: Sequence[np.ndarray],
         anchored: bool,
         series: tuple[str, str] | None = None,
+        reference: Outputs | None = None,
     ) -> CheckOutcome:
         """`IndicatorChecks.check`, recording the outcome for this run."""
-        outcome = self._shared.check(key, label, compute, whole, anchored, series)
+        outcome = self._shared.check(key, label, compute, whole, anchored, series, reference)
         self._outcomes.setdefault((outcome.label, series), outcome)
         return outcome
 
@@ -263,12 +304,17 @@ class RunChecks:
 
 
 __all__ = [
+    "ANCHORED",
     "FIRST_WINDOW",
+    "NEVER_SETTLES",
+    "OWN_VALUES",
     "TRUNCATION_AGREEMENT",
     "TRUNCATION_CUTS",
     "WINDOW_TOLERANCE",
     "CheckOutcome",
     "IndicatorChecks",
+    "Outputs",
     "RunChecks",
     "describe_outcomes",
+    "settle_length",
 ]
