@@ -25,8 +25,10 @@ differ slightly from the same run on 2.1.1:
   `quantity_mode="fractional"`.
 - **`result.summary()`** prints net profit, return, maximum drawdown, trades and win
   rate (and the benchmark's return), and says "no closed trades" instead of "nan%".
-- **Rejected orders are told on screen** with one `RejectedOrdersWarning` per run: how
-  many, and the most common reason.
+- **Rejected and skipped orders are told on screen** with one `OrdersNotPlacedWarning`
+  per run: how many, and the most common reason (a share dearer than the capital in
+  whole shares, a delivery short, margin, ...). `result.warnings` has a line per reason
+  with what to do.
 - **A dashboard tearsheet.** `result.tearsheet("report.html")` writes one offline HTML
   dashboard (light and dark) with sections for performance, risk, monthly returns,
   distribution, every metric and a sortable trade list. `result.trade_list()` gives the

@@ -358,6 +358,7 @@ def execute(
         record=record,
         calendar=calendar,
         benchmark=None if prepared.benchmark is None else prepared.benchmark.closes,
+        strategy_closes=[store.column("ts_close") for store in context.stores.values()],
     )
 
 

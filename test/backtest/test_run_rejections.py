@@ -1,6 +1,8 @@
 """Rejected orders are reported: one warning per reject code that occurred, with how many
 of the run's orders it refused, when the first was decided (IST), what the code means and
-what to do; and a line in `print(result)`.
+what to do; and a line in `print(result)`. Orders refused by the MIS entry window are the
+window working: their line gives the window's times and says they were not placed, as the
+window intends.
 
 The runs use the bars of `accounting_runs`: one NSE session on 2026-11-04 in 1-minute
 bars (a 15-minute strategy decides at 09:30, 09:45, ...), and the daily bars of
@@ -15,7 +17,7 @@ from accounting_runs import CAPITAL, at, daily_bars, round_trip, session_bars
 
 import openalgo.backtest as bt
 from openalgo.backtest._reject_reasons import PRODUCT_RULE_CASES, REASONS
-from openalgo.backtest._rejections import reject_warnings
+from openalgo.backtest._rejections import entry_window_warning, reject_warnings
 from openalgo.backtest.reference import Instrument
 
 # Every code a kernel check can reject an order with (`RejectCode` in
@@ -90,7 +92,8 @@ def intraday(strategy: type, **settings) -> bt.Result:
 
 
 def test_every_kernel_reject_code_has_a_meaning_and_what_to_do():
-    assert set(REASONS) | {"product_rule"} == KERNEL_REJECT_CODES
+    # The product rule has one meaning per case; the entry window's line is its own.
+    assert set(REASONS) | {"product_rule", "entry_window"} == KERNEL_REJECT_CODES
     assert set(PRODUCT_RULE_CASES) == {"delivery_short", "gtt_on_mis", "index"}
 
 
@@ -104,25 +107,48 @@ def test_an_order_rejected_for_margin_is_a_warning_with_what_to_do():
     ]
 
 
+def window_warnings(result: bt.Result) -> list[str]:
+    return [text for text in result.warnings if "outside the MIS entry window" in text]
+
+
 def test_each_reject_code_gets_one_warning_in_the_order_it_first_occurred():
-    # 09:30: 5,000 shares on MIS at 1x need 50,00,000 (margin). 09:45: after the
-    # 09:40 entry cut-off (entry_window).
-    result = intraday(BuysTwice, entry_until="09:40")
+    # 09:30: 5,000 shares on MIS at 1x need 50,00,000 (margin), then 5,000 again at
+    # 09:45 (margin).
+    result = intraday(BuysTwice)
     texts = rejection_warnings(result)
-    assert [text.split("'")[1] for text in texts] == ["margin", "entry_window"]
-    assert texts[1].startswith(
-        "1 of 2 orders was rejected with reject_code 'entry_window' (result.orders), "
-        "decided at 2026-11-04 09:45 IST"
-    )
+    assert [text.split("'")[1] for text in texts] == ["margin"]
+    assert texts[0].startswith("2 of 2 orders were rejected with reject_code 'margin'")
 
 
-def test_many_entry_window_rejections_are_one_line():
+def test_an_order_outside_the_entry_window_is_told_as_the_window_working():
+    # 09:30: margin. 09:45: after the 09:40 entry cut-off, with the window's times.
+    result = intraday(BuysTwice, entry_until="09:40")
+    assert [text.split("'")[1] for text in rejection_warnings(result)] == ["margin"]
+    assert window_warnings(result) == [
+        "1 of 2 orders was outside the MIS entry window, 09:15 to 09:40 (entry_from to "
+        "entry_until), and was not placed, as the window intends (reject_code "
+        "'entry_window' in result.orders), decided at 2026-11-04 09:45 IST"
+    ]
+
+
+def test_many_orders_outside_the_entry_window_are_one_line():
     result = intraday(BuysFourTimes, entry_until="09:20")
-    assert rejection_warnings(result) == [
-        "4 of 4 orders were rejected with reject_code 'entry_window' (result.orders), the "
-        "first decided at 2026-11-04 09:30 IST: orders after the MIS entry cut-off "
-        "(entry_until) are rejected, and so are entries before entry_from; check self.now "
-        "or set entry_until"
+    assert rejection_warnings(result) == []
+    assert window_warnings(result) == [
+        "4 of 4 orders were outside the MIS entry window, 09:15 to 09:20 (entry_from to "
+        "entry_until), and were not placed, as the window intends (reject_code "
+        "'entry_window' in result.orders), the first decided at 2026-11-04 09:30 IST"
+    ]
+
+
+def test_the_entry_window_line_follows_the_window_the_run_used():
+    # The 09:30 entry is before the window opens and the 10:15 add after it closes;
+    # the 09:45 entry and the 10:00 add are inside it.
+    result = intraday(BuysFourTimes, entry_from="09:40", entry_until="10:05")
+    assert window_warnings(result) == [
+        "2 of 4 orders were outside the MIS entry window, 09:40 to 10:05 (entry_from to "
+        "entry_until), and were not placed, as the window intends (reject_code "
+        "'entry_window' in result.orders), the first decided at 2026-11-04 09:30 IST"
     ]
 
 
@@ -188,6 +214,17 @@ def margin_rejection(decided_at: Any) -> dict[str, Any]:
         "validity": "DAY",
         "sizer": None,
     }
+
+
+def test_an_mis_order_of_a_run_without_an_entry_window_is_told_the_calendars_window():
+    # A delivery run states no entry_from or entry_until; its MIS orders had the window
+    # the calendar sets for their session.
+    refused = {**margin_rejection(at(15, 10)), "reject_code": "entry_window"}
+    assert entry_window_warning(kernel_orders(refused), None, None) == (
+        "1 of 1 order was outside the MIS entry window the calendar sets for each session, "
+        "and was not placed, as the window intends (reject_code 'entry_window' in "
+        "result.orders), decided at 2026-11-04 15:10 IST"
+    )
 
 
 def test_the_first_decided_at_is_the_earliest_decision_whatever_the_order_ids():

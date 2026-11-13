@@ -53,6 +53,25 @@ def test_an_order_without_a_quantity_buys_whole_shares_by_default():
     assert entry_units(round_trip(**NO_COSTS)) == 980.0
 
 
+def test_the_assumptions_say_whole_shares_keep_a_two_percent_cash_buffer():
+    assert round_trip(**NO_COSTS).assumptions["sizing"] == (
+        "whole shares and whole lots; an order with no quantity is sized at the decision "
+        "close and keeps 2 percent of its budget in cash for the move to the next open "
+        "(the engine's cash buffer, the same in live trading), then takes off its "
+        "estimated charges; bt.size sizers and target() keep no buffer, and rebalance "
+        "keeps its own cash_buffer"
+    )
+
+
+def test_the_assumptions_say_part_shares_spend_the_whole_budget_at_the_fill():
+    result = round_trip(quantity_mode="fractional", **NO_COSTS)
+    assert result.assumptions["sizing"] == (
+        "part shares of cash equity, whole lots of derivatives; an order with no quantity "
+        "is sized at the fill price and spends its whole budget less its estimated "
+        "charges, with no cash buffer"
+    )
+
+
 def test_a_target_value_trades_whole_shares_by_default():
     # 10,000 rupees at the decision price 500.05 is 19.998 shares: 19.
     class Target(bt.Strategy):

@@ -63,8 +63,10 @@ def trade_list(trades: pd.DataFrame | None) -> pd.DataFrame:
         net_pnl       gross_pnl - charges, rupees
         return_pct    net_pnl over the value of the entry (entry_price x quantity), in
                       percent: 10.0 is ten percent; for a short, of the value sold
-        bars_held     base bars from the opening fill's bar to the closing fill's bar (a
-                      daily run: sessions); NA when the table does not record bars
+        bars_held     bars of the strategy's interval that closed while the trade was
+                      open, after entry_time and up to exit_time (a daily strategy:
+                      sessions; `_result_report.strategy_bars_held`); NA when the
+                      table does not record bars
         days_held     calendar days from entry_time to exit_time, fractional
         exit_reason   why the closing fill happened ("signal", "stop", "target", ...)
         r_multiple    net_pnl over the trade's initial risk; NaN without a stop

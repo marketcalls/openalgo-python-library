@@ -14,8 +14,9 @@ The kernel's tables are turned into the inputs `metrics.analyse` documents:
              side of the entry ("BUY" long, "SELL" short), quantity the units bought (or
              sold) to build it, net_pnl = gross_pnl - costs. The charges of each closed
              trade are broken down into the cost components and the DP charge, its
-             R-multiple is in `r_multiple` (`_result_r`; NaN for an open trade) and the
-             base bars from its opening fill to its closing fill in `bars_held`.
+             R-multiple is in `r_multiple` (`_result_r`; NaN for an open trade) and in
+             `bars_held` the bars of the strategy's interval that closed while it was
+             open (`strategy_bars_held`), not the base bars.
 """
 
 from __future__ import annotations
@@ -42,8 +43,32 @@ def _times(values: Any) -> pd.Series:
     return pd.to_datetime(nanos, utc=True).dt.tz_convert(IST)
 
 
-def closed_trades(output: dict[str, Any], symbols: list[str]) -> pd.DataFrame:
-    """The kernel's closed trades in the metrics layout, with their cost breakdown."""
+def strategy_bars_held(raw: pd.DataFrame, strategy_closes: list[np.ndarray]) -> pd.Series:
+    """For each of the kernel's trades, the bars of the strategy's interval that closed
+    while it was open: those of its instrument whose close is after its `entry_ts` and
+    at or before its `exit_ts` (UTC nanoseconds), so a 5-minute strategy on 1-minute
+    base bars that holds from 09:40 to 15:00 holds 64 bars, and a trade opened and
+    closed inside one bar holds 0. The kernel times a fill at the open of the slice it
+    filled in, so the bar a fill at a slice's close ends (an expiry settlement) is not
+    counted. A run has one strategy interval for every instrument, a futures contract
+    included. `strategy_closes` holds the UTC nanosecond closes of each instrument's
+    strategy bars, sorted, by the kernel's instrument index."""
+    instruments = raw["instrument"].to_numpy()
+    entries, exits = raw["entry_ts"].to_numpy(), raw["exit_ts"].to_numpy()
+    held = np.zeros(len(raw), dtype=np.int64)
+    for instrument in np.unique(instruments):
+        rows = instruments == instrument
+        closes = strategy_closes[instrument]
+        after_exit = np.searchsorted(closes, exits[rows], side="right")
+        held[rows] = after_exit - np.searchsorted(closes, entries[rows], side="right")
+    return pd.Series(held, index=raw.index, dtype="Int64")
+
+
+def closed_trades(
+    output: dict[str, Any], symbols: list[str], strategy_closes: list[np.ndarray]
+) -> pd.DataFrame:
+    """The kernel's closed trades in the metrics layout, with their cost breakdown and
+    the strategy bars each was held (`strategy_bars_held`)."""
     raw = pd.DataFrame(output["trades"])
     if not len(raw):
         return pd.DataFrame()
@@ -63,7 +88,7 @@ def closed_trades(output: dict[str, Any], symbols: list[str]) -> pd.DataFrame:
             "net_pnl": raw["net_pnl_rupees"],
             "exit_reason": raw["exit_reason"],
             "r_multiple": r_values(raw["net_pnl_rupees"], raw["initial_risk_rupees"]),
-            "bars_held": raw["exit_slice"] - raw["entry_slice"],
+            "bars_held": strategy_bars_held(raw, strategy_closes),
         }
     )
     charges = trade_charges(output)
@@ -110,11 +135,12 @@ def open_trades(output: dict[str, Any], symbols: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def trades_table(output: dict[str, Any], symbols: list[str]) -> pd.DataFrame | None:
+def trades_table(
+    output: dict[str, Any], symbols: list[str], strategy_closes: list[np.ndarray]
+) -> pd.DataFrame | None:
     """Closed and open trades in the metrics layout, or None when there are none."""
-    parts = [
-        part for part in (closed_trades(output, symbols), open_trades(output, symbols)) if len(part)
-    ]
+    closed = closed_trades(output, symbols, strategy_closes)
+    parts = [part for part in (closed, open_trades(output, symbols)) if len(part)]
     if not parts:
         return None
     frame = pd.concat(parts, ignore_index=True)
@@ -198,6 +224,7 @@ __all__ = [
     "open_trades",
     "opening_time",
     "slice_returns",
+    "strategy_bars_held",
     "tearsheet",
     "trades_table",
 ]

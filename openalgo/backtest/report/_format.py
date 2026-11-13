@@ -39,9 +39,16 @@ def _special(value: float) -> str | None:
     return None
 
 
+def _rounds_to_zero(value: float, decimals: int) -> bool:
+    """True when `value` shown with `decimals` places reads as zero (a loss below half a
+    paisa at 2 places), so it carries no minus sign."""
+    return float(f"{abs(value):.{decimals}f}") == 0.0
+
+
 def indian_digits(value: float, decimals: int = 2) -> str:
-    """A number with Indian grouping: 1234567.891 is "12,34,567.89"."""
-    sign = "-" if value < 0 else ""
+    """A number with Indian grouping: 1234567.891 is "12,34,567.89". A negative number
+    that rounds to zero at `decimals` places reads "0.00", without a sign."""
+    sign = "-" if value < 0 and not _rounds_to_zero(value, decimals) else ""
     whole, _, fraction = f"{abs(value):.{decimals}f}".partition(".")
     head, tail = whole[:-3], whole[-3:]
     groups = []
@@ -55,11 +62,12 @@ def indian_digits(value: float, decimals: int = 2) -> str:
 
 
 def rupees(value: float, decimals: int = 2) -> str:
-    """A rupee amount: "&#8377;12,34,567.89", negative as "-&#8377;500.00"."""
+    """A rupee amount: "&#8377;12,34,567.89", negative as "-&#8377;500.00"; a loss that
+    rounds to zero has no sign."""
     special = _special(value)
     if special is not None:
         return special
-    sign = "-" if value < 0 else ""
+    sign = "-" if value < 0 and not _rounds_to_zero(value, decimals) else ""
     return f"{sign}{RUPEE}{indian_digits(abs(value), decimals)}"
 
 

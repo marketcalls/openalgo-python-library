@@ -23,9 +23,18 @@ allocated at the start when the strategy sets `reinvest = False`.
 An order with no `qty`, `lots` or `size` (and no strategy `size`) takes the engine
 default: one lot for futures and options; for cash equity 1x the
 strategy's equity (never more than its free cash, split equally across its
-instruments) net of the order's estimated costs, sized at the decision price with a 2
-percent cash buffer in venue mode (the default, whole shares) and at the fill price in
-fractional mode.
+instruments) net of the order's estimated costs. In venue mode (the default, whole
+shares) it is sized at the decision close and keeps 2 percent of that budget in cash for
+the price's move to the next open (the kernel's `VENUE_CASH_BUFFER`, the same in live
+trading; the Assumptions block's `sizing` line states it), the estimated costs coming off
+the rest: with no charges, 10,00,000 at 1,000.00 buys 980 shares, not 1,000. In
+fractional mode it is sized at the fill price and spends the whole budget less the
+costs.
+
+The sizers here keep no cash buffer. They size at the decision close, so a budget of the
+whole equity (`percent(100)`) can need more than the cash when the next open is higher,
+and the order is then rejected for margin; leave room (`percent(95)`) or use the engine
+default.
 """
 
 from __future__ import annotations
@@ -73,12 +82,15 @@ def lots(count: int) -> Sizer:
 
 
 def value(rupees: float) -> Sizer:
-    """Rupees of notional: rupees / (price x multiplier)."""
+    """Rupees of notional: rupees / (price x multiplier) at the decision close, with no
+    cash buffer."""
     return Sizer("value", _positive(rupees, "value"))
 
 
 def percent(p: float, basis: str = "equity") -> Sizer:
-    """p percent of equity (default), initial capital ("capital") or free cash ("cash")."""
+    """p percent of equity (default), initial capital ("capital") or free cash ("cash")
+    at the decision close, with no cash buffer: `percent(100)` can be rejected for margin
+    when the next open is higher (see the module docstring)."""
     if basis not in BASES:
         raise ConfigError(f"unknown sizing basis {basis!r}: use one of {BASES}")
     return Sizer("percent", _positive(p, "percent"), {"basis": basis})
