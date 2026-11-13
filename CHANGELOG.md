@@ -124,6 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back; with a datetime `start` the bars of that day before it are history too, so a
   daily view and a strategy bar cut by `start` hold the whole day. Every series holds
   the history before `init` runs on the data, so every indicator is computed over it
+  (`init` itself sees no bar, so `len(self.close)` is 0 there and on the probe)
   and one longer than the run (a 200-day EMA on a run of 60 days, or in a
   `from_signals` function) works. The history kept and the run's first session are
   checked as one series: a suspected unadjusted split at the join leaves the run

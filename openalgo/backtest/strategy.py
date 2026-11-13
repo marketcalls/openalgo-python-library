@@ -262,6 +262,8 @@ class Strategy(OrderMethods):
 
         if not self._ctx.declaring:
             name = getattr(func, "__name__", repr(func))
+            if getattr(func, "__module__", "").startswith("openalgo"):
+                name = f"ta.{name}"
             raise IndicatorOutsideInitError(
                 f"self.I({name}, ...) was called after init: register every indicator in "
                 "init (self.line = self.I(ta.ema, self.close, 20)) and read it in on_bar "
