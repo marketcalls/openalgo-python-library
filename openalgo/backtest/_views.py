@@ -21,18 +21,19 @@ its stores (`declaring`, see `Store`), so the rule needs no state of its own.
 
 A view also carries its recipe (`Recipe`): how its values are computed from the bar
 fields, so that the same computation can run on other bars. The warm-up of an indicator
-is measured by running its recipe on the engine's reference bars (`_warm_up_reference`),
-and the views `init` makes are computed again by their recipes once the history before
-`start` is joined to their store (`_warm_up_attach`). A field's view has one, so has a
-clock condition's, and so has every view built from views that have one; an indicator
-over values of the user's own (an array) has none. A view made while its store is
-declaring is recorded on the store (`views`, weakly), so that it can be found again.
+is measured by running its recipe on the engine's reference bars (`_warm_up_measure`). A
+field's view has one, so has a clock condition's, and so has every view built from views
+that have one; an indicator over values of the user's own (an array) has none. And it
+carries its need (`need`): the bars of its series before its values are those of all
+the history, 1 for a bar field. `shift(n)` adds n, `rolling_max(n)` and
+`rolling_min(n)` add n - 1, a crossing adds the bar before, other operations take the
+larger of their operands', and an indicator's view has the indicator's warm-up
+(`_indicators`), so an indicator of views needs at least theirs.
 """
 
 from __future__ import annotations
 
 import operator
-import weakref
 from collections.abc import Callable, Mapping
 from typing import Any, Protocol
 
@@ -78,6 +79,12 @@ def field_recipe(name: str) -> Recipe:
     return recipe
 
 
+def need_of(*parts: Any) -> int:
+    """The largest need of the views among `parts` (1 for constants, and for a view whose
+    need is unknown)."""
+    return max((part.need or 1 for part in parts if isinstance(part, TimelineView)), default=1)
+
+
 def _recipe(compute: Callable[..., np.ndarray], *parts: Any) -> Recipe | None:
     """The recipe of `compute` applied to `parts`, each a view (its values on the bars)
     or a constant; None when a view among them has no recipe."""
@@ -117,21 +124,25 @@ def _bar_count(value: Any, what: str, minimum: int = 1) -> int:
 
 class TimelineView:
     """Values aligned to a store's bars; see the module docstring. `recipe` computes the
-    same values on other bars, None when they cannot be."""
+    same values on other bars, None when they cannot be; `need` is the bars of the series
+    before they are those of all the history (None when no length is known)."""
 
     # Views compare element-wise, so they are not hashable.
     __hash__ = None  # type: ignore[assignment]
 
     def __init__(
-        self, store: Store, values: np.ndarray, label: str, recipe: Recipe | None = None
+        self,
+        store: Store,
+        values: np.ndarray,
+        label: str,
+        recipe: Recipe | None = None,
+        need: int | None = 1,
     ) -> None:
         self._store = store
         self._values = values
         self._label = label
         self._recipe = recipe
-        made = getattr(store, "views", None)
-        if made is not None and getattr(store, "declaring", False):
-            made.append(weakref.ref(self))
+        self.need = need
 
     @property
     def label(self) -> str:
@@ -190,12 +201,17 @@ class TimelineView:
         names = (name, self._label) if flip else (self._label, name)
         label = f"({names[0]} {symbol} {names[1]})"
         values = compute(self._values, operand)
-        return TimelineView(self._store, values, label, _recipe(compute, self, other))
+        recipe = _recipe(compute, self, other)
+        return TimelineView(self._store, values, label, recipe, need_of(self, other))
 
-    def _unary(self, compute: Callable[[np.ndarray], np.ndarray], label: str) -> TimelineView:
-        """The view of `compute` applied to this view's values."""
+    def _unary(
+        self, compute: Callable[[np.ndarray], np.ndarray], label: str, added: int = 0
+    ) -> TimelineView:
+        """The view of `compute` applied to this view's values, which needs `added` bars
+        more than this one."""
         values = compute(self._values)
-        return TimelineView(self._store, values, label, _recipe(compute, self))
+        recipe = _recipe(compute, self)
+        return TimelineView(self._store, values, label, recipe, need_of(self) + added)
 
     def __add__(self, other: Any) -> TimelineView:
         return self._derive(other, operator.add, "+")
@@ -269,7 +285,9 @@ class TimelineView:
         label = other.label if isinstance(other, TimelineView) else repr(other)
         values = compute(self._values, operand)
         recipe = _recipe(compute, self, other)
-        return TimelineView(self._store, values, f"{self._label}.{name}({label})", recipe)
+        # A crossing reads the bar before as well.
+        need = need_of(self, other) + 1
+        return TimelineView(self._store, values, f"{self._label}.{name}({label})", recipe, need)
 
     # ----- combining conditions, and the windows of 14-strategy-api 4.2 ----------------
 
@@ -314,7 +332,7 @@ class TimelineView:
                 values[count:] = source[: len(values) - count]
             return values
 
-        return self._unary(shifted, f"{self._label}.shift({count})")
+        return self._unary(shifted, f"{self._label}.shift({count})", count)
 
     def rolling_max(self, bars: int) -> TimelineView:
         """The highest of the last `bars` values, this bar's included (`ta.highest`);
@@ -336,7 +354,7 @@ class TimelineView:
             source = np.ascontiguousarray(values, dtype=float)
             return np.asarray(getattr(ta, function)(source, count), dtype=float)
 
-        return self._unary(extreme, f"{self._label}.{name}({count})")
+        return self._unary(extreme, f"{self._label}.{name}({count})", count - 1)
 
     def __bool__(self) -> bool:
         if getattr(self._store, "declaring", False):
@@ -352,4 +370,4 @@ class TimelineView:
         return f"{type(self).__name__}({self._label}, {counted(len(self), 'bar')})"
 
 
-__all__ = ["Recipe", "Store", "TimelineView", "field_recipe"]
+__all__ = ["Recipe", "Store", "TimelineView", "field_recipe", "need_of"]

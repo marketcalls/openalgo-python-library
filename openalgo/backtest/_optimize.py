@@ -14,8 +14,8 @@ How it runs: the inputs (settings, base interval, bars, instruments, the benchma
 closes) are prepared once, so every combination is measured against the same benchmark.
 The history before `start` is loaded once for the largest need of the combinations
 (each is probed on the reference bars first, `_warm_up_probe`), and each combination
-keeps what its own indicators need and waits for their warm-up, as its single run does
-(`_warm_up`, `_warm_up_history`). The first
+keeps and checks what its own indicators need and waits for their warm-up, as its
+single run does (`_warm_up`, `_warm_up_history`). The first
 combination runs in this process. It runs the indicator truncation checks for the whole
 sweep (they are never repeated per combination; the warm-up, which depends on the
 parameters, is measured once per indicator on the reference bars) and shows which evaluation
@@ -253,7 +253,8 @@ def optimize(
     arguments = _run_arguments(client, run_settings)
     names, combinations = grid(strategy, ranges, arguments["params"])
     prepared = prepare(strategy, client, arguments, combinations)
-    checks = IndicatorChecks(strategy_source_hash(strategy) or strategy.__qualname__)
+    name = strategy_source_hash(strategy) or strategy.__qualname__
+    checks = IndicatorChecks(name, measured=prepared.measured)
     light = {key: arguments[key] for key in ("source", "tz")}
     light["data"] = None if arguments["data"] is None else "given"
     light["now"] = None if arguments["now"] is None else "given"

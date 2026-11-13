@@ -34,8 +34,9 @@ from .size import resolve_atr
 class RunData:
     """The run's facts a strategy's data views need: the exchange, the strategy and base
     intervals, the base bars by symbol (canonical layout, cut to the run's slices, after
-    the history before `start` once it is joined, `_warm_up_attach`), the calendar, and
-    the indicator checks of the run (`_causality_checks.RunChecks`)."""
+    the history before `start`), the calendar, the indicator checks of the run
+    (`_causality_checks.RunChecks`) and the history kept before `start`, which the
+    strategy bars begin with (`_warm_up_history.RunHistory`, None for none)."""
 
     exchange: str
     interval: str
@@ -43,6 +44,7 @@ class RunData:
     base_bars: dict[str, pd.DataFrame]
     calendar: Any
     checks: Any
+    history: Any = None
 
 
 class RunContext:
@@ -65,7 +67,7 @@ class RunContext:
         # True while `init` declares the strategy; see the module docstring.
         self.declaring = True
         self.stores = {
-            symbol: self._marked(BarStore(symbol, run.interval, call(engine.strategy_bars, number)))
+            symbol: self._marked(self._bar_store(symbol, number))
             for number, symbol in enumerate(self.symbols)
         }
         self.timeframes: dict[tuple[str, str], SeriesStore] = {}
@@ -100,10 +102,21 @@ class RunContext:
         store.declaring = self.declaring
         return store
 
+    def _bar_store(self, symbol: str, number: int) -> BarStore:
+        """The strategy bars of a symbol: the kernel's, after the history kept before
+        `start` (`_warm_up_history.RunHistory.joined`)."""
+        bars = call(self.engine.strategy_bars, number)
+        if self.run.history is None:
+            return BarStore(symbol, self.run.interval, bars)
+        return BarStore(symbol, self.run.interval, *self.run.history.joined(symbol, bars))
+
     def begin_run(self) -> None:
         """End the declaration phase: `init` has returned and the driver runs. From here
-        a view answers a truth test (in timers, callbacks, `on_bar` and `on_stop`)."""
+        the history before `start` is visible and a view answers a truth test (in timers,
+        callbacks, `on_bar` and `on_stop`)."""
         self.declaring = False
+        for store in self.stores.values():
+            store.begin()
         spliced = () if self.futures is None else self.futures.stores
         for store in (*self.stores.values(), *self.timeframes.values(), *spliced):
             self._marked(store)

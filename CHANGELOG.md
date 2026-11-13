@@ -98,47 +98,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Indicators warm up automatically** (changes results). The strategy makes no
   decision before `start` and none before its `self.I` indicators are ready: an
   indicator is ready once its series has closed its warm-up of bars. The warm-up is the
-  window-stability length measured on the engine's own reference bars (16,384 bars made
-  from integers, the same on every platform), never on the run's data: it depends on
-  the indicator call alone (the function, its parameters and the bar fields it reads)
-  and is counted in the bars of the indicator's own series, so no decision depends on a
-  later bar, a different `end=` leaves the early trades alone, and the same call needs
-  the same bars on daily and on 15-minute data. For example 128 bars for a 20-bar EMA,
-  512 for a 50-bar one, 2,048 for a 200-bar one, 64 for a 50-bar simple average, 256
-  for a 14-bar RSI and for MACD 12/26/9, 128 for Supertrend 10/3, 16 for a 3-bar
-  average; live trading keeps the same window. A backtest loads, from the run's own
-  source (Historify or the broker its bars came from, or the bars of `data=`), the bars
-  before `start` each series needs, in that series' own interval (a weekly EMA(50) gets
-  its 512 weeks, a monthly EMA(20) its 128 months), at most 30 years back; with a
-  datetime `start` the bars of that day before it are history too. `init` runs once,
-  on the run's bars, and every series, indicator and condition it made is computed
-  again over the history joined in front. `on_bar`, timers, conditions and arrays wait
-  alike; `from_arrays` arrays are read for the run's bars only, and a `from_signals`
-  function is computed over the history a 200-bar EMA needs (its indicators are its
-  own, so the strategy does not wait for them). Equity, trades, charges, metrics and
-  the benchmark still start at `start`. When the source has fewer bars before `start`
-  (own data that begins at `start`, a new listing, a futures series rolled from
-  contract to contract, which is built from `start`), the strategy waits inside the run
-  until its indicators are ready, and makes no decision at all in a run with fewer bars
-  than a need; a warning counts the strategy bars each symbol waited and says why (for
-  own data, to give earlier bars; for a source, "the source has no bars of BBB before
-  2026-02-02"), and `bt.backtest` ends with a `WarmUpWarning`. A run on one explicit
-  futures contract loads that contract's own bars before `start`. The Assumptions block
-  gains `warm_up` (the rule, each series' need in its own bars, the history kept with
-  the day asked from and, when later, the day the source's bars began, and the first
-  decision), the manifest records the warm-up under `arguments["warm_up"]` (the needs,
-  the indicators not waited for, the first decision and the strategy bars each symbol
+  window-stability length measured on the engine's own reference bars (65,536 bars made
+  from integers, the same on every platform, with long trends, ranges, reversals and
+  opening gaps; each window compared at 1,024 bars, and at the events of a condition),
+  never on the run's data: it depends on the indicator call alone (the function, its
+  parameters and the bar fields it reads) and is counted in the bars of the indicator's
+  own series, so no decision depends on a later bar, a different `end=` leaves the early
+  trades alone, and the same call needs the same bars on daily and on 15-minute data.
+  For example 256 bars for a 20-bar EMA, 512 for a 50-bar one, 2,048 for a 200-bar one,
+  64 for a 50-bar simple average, 256 for a 14-bar RSI, 512 for MACD 12/26/9 and for
+  Supertrend 10/3, 128 for the parabolic SAR, 16 for a 3-bar average; a test checks the
+  warm-up of each common indicator against eight differently shaped price series. An
+  indicator of other views needs theirs before its own (a crossing over
+  `self.close.rolling_max(100).shift(1)` needs at least 102 bars). An anchored
+  indicator (`ta.vwap` with anchor Session, Week, Month, Quarter or Year) needs the bars
+  since the start of its anchor period: they are loaded, and when the data begin inside
+  the period the strategy waits for the next one. One that needs more than the longest
+  window (an EMA of 10,000 bars) says so, gets up to 30 years of history and waits that
+  window at least. Live trading keeps the same windows. A backtest learns what its
+  indicators need before it loads any data, by running `init` once on the reference
+  bars, so `init` runs twice: there, then once on the data. It then loads, from the
+  run's own source (Historify or the broker its bars came from, or the bars of
+  `data=`), the bars before `start` each series needs, in that series' own interval (a
+  weekly EMA(50) gets its 512 weeks, a monthly EMA(10) its 128 months), at most 30 years
+  back; with a datetime `start` the bars of that day before it are history too, so a
+  daily view and a strategy bar cut by `start` hold the whole day. Every series holds
+  the history before `init` runs on the data, so every indicator is computed over it
+  and one longer than the run (a 200-day EMA on a run of 60 days, or in a
+  `from_signals` function) works. The history kept and the run's first session are
+  checked as one series: a suspected unadjusted split at the join leaves the run
+  without history and says why. `on_bar`, timers, conditions and arrays wait alike;
+  `from_arrays` arrays are read for the run's bars only, an indicator over an array of
+  the user's own is computed on the run's bars, and a `from_signals` function is
+  computed over the history a 200-bar EMA needs (its indicators are its own, so the
+  strategy does not wait for them). Equity, trades, charges, metrics and the benchmark
+  still start at `start`. When the source has fewer bars before `start` (own data that
+  begins at `start`, a new listing, a futures series rolled from contract to contract,
+  which is built from `start`), the strategy waits inside the run until its indicators
+  are ready, and makes no decision at all in a run with fewer bars than a need; a
+  warning counts the strategy bars each symbol waited and says why (for own data, to
+  give earlier bars; for a source, "the source has no bars of BBB before 2026-02-02"),
+  and `bt.backtest` ends with a `WarmUpWarning`. A run on one explicit futures contract
+  loads that contract's own bars before `start`. The Assumptions block gains `warm_up`
+  (the rule, each series' need in its own bars, the history kept with the day asked
+  from and, when later, the day the source's bars began, and the first decision), the
+  manifest records the warm-up under `arguments["warm_up"]` (the needs, with `since`
+  for an anchor period and `more_than` for a need longer than the longest window, the
+  indicators not waited for, the first decision and the strategy bars each symbol
   waited) and the partition hashes of the history kept under `data["<symbol>
-  history"]`; the history load's own warnings join the run's. `bt.optimize` runs each
-  combination's `init` once on the reference bars before any data is loaded, loads the
-  history once for the largest need, and each combination keeps exactly the bars its
-  single run loads, so the table, `select()` and `rerun()` reproduce single runs. A
-  strategy's own warm-up guard (`if len(self.close) < self.slow: return`) still works;
-  it is no longer needed. An indicator no window settles on the reference bars (a
-  cumulative series such as on-balance volume), or one over an array of the user's own,
-  is not waited for, with a warning. The truncation check still runs on the run's bars,
-  once per function and data. The first trades of runs on short own data move later;
-  the intraday golden run gains two sessions of history and its pins were regenerated.
+  history"]`; the history load's own warnings join the run's. `bt.optimize` learns each
+  combination's needs on the reference bars before any data is loaded, loads the
+  history once for the largest, and each combination keeps and checks exactly the bars
+  its single run does (a data problem outside its own history does not cost it that
+  history), so the table, `select()` and `rerun()` reproduce single runs. A strategy's
+  own warm-up guard (`if len(self.close) < self.slow: return`) still works; it is no
+  longer needed. An indicator no window settles (a running sum such as on-balance
+  volume), one over an array of the user's own, and one the reference bars cannot
+  compute are not waited for, with a warning that says which. `self.I` called after
+  `init` raises `IndicatorOutsideInitError` (a `ConfigError`, in
+  `openalgo.backtest.errors`): indicators are registered in `init`, where their history
+  and readiness are settled. The truncation check still runs on the run's bars, once
+  per function and data. The first trades of runs on short own data move later; the
+  intraday golden run gains two sessions of history and the condition golden run
+  thirteen months instead of seven, and their pins were regenerated.
 - **Whole shares by default** (changes results): `quantity_mode` defaults to "venue"
   (whole shares of cash equity, whole lots of derivatives) instead of "fractional", so
   every sizer, an order with no quantity, `target()` and `rebalance` round down to whole

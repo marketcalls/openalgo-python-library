@@ -12,12 +12,12 @@ depends on where the series starts, so no window settles it.
 import numpy as np
 import pytest
 
-from openalgo.backtest._causality_checks import (
-    ANCHORED,
+from openalgo.backtest._causality_checks import ANCHORED, IndicatorChecks
+from openalgo.backtest._warm_up_measure import (
     NEVER_SETTLES,
     OWN_VALUES,
     WINDOW_TOLERANCE,
-    IndicatorChecks,
+    ReferenceCall,
     settle_length,
 )
 from openalgo.backtest.errors import ConfigError
@@ -58,15 +58,16 @@ def count_of_bars(bars) -> list[np.ndarray]:
     return [np.arange(1, len(bars["close"]) + 1, dtype=float)]
 
 
-def check(compute, key="k", anchored=False, checks=None, reference=sum_of_closes):
+def check(compute, key="k", anchor=None, checks=None, reference=sum_of_closes):
     checks = checks or IndicatorChecks("sha256:strategy")
     recorder = checks.for_run()
-    recorder.check(key, LABEL, compute, compute(0, BARS), anchored, reference=reference)
+    measured = None if reference is None else ReferenceCall(reference)
+    recorder.check(key, LABEL, compute, compute(0, BARS), anchor, reference=measured)
     return recorder
 
 
 def settled(compute) -> int | None:
-    return settle_length(compute, compute(0, BARS), BARS, WINDOW_TOLERANCE)
+    return settle_length(compute, compute(0, BARS), BARS, WINDOW_TOLERANCE).bars
 
 
 def test_an_indicator_that_reads_the_next_bar_fails_the_truncation_check():
@@ -117,9 +118,10 @@ def test_an_indicator_over_values_of_the_users_own_has_no_warm_up():
     assert (outcome.warm_up, outcome.note) == (None, OWN_VALUES)
 
 
-def test_an_anchored_indicator_is_replayed_from_its_anchor():
-    (outcome,) = check(causal_sum, anchored=True).outcomes
-    assert (outcome.warm_up, outcome.note, outcome.anchored) == (None, ANCHORED, True)
+def test_an_anchored_indicator_is_replayed_from_the_start_of_its_anchor_period():
+    (outcome,) = check(causal_sum, anchor="Month").outcomes
+    assert (outcome.warm_up, outcome.note, outcome.anchor) == (None, ANCHORED, "Month")
+    assert outcome.describe().endswith("warm-up since the start of its Month")
 
 
 def test_a_key_is_checked_once():
@@ -170,9 +172,10 @@ def test_the_truncation_is_checked_once_per_key_whatever_the_label():
 
     checks = IndicatorChecks("sha256:strategy").for_run()
     whole = counted(0, BARS)
-    checks.check("k", "probe(SBIN.close, 20)", counted, whole, False, reference=sum_of_closes)
+    reference = ReferenceCall(sum_of_closes)
+    checks.check("k", "probe(SBIN.close, 20)", counted, whole, None, reference=reference)
     after_first = len(calls)
-    checks.check("k", "probe(SBIN.close, 30)", counted, whole, False, reference=sum_of_closes)
+    checks.check("k", "probe(SBIN.close, 30)", counted, whole, None, reference=reference)
     # The cuts at bars 120, 140, 160 and 180 of 200 ran for the first label only.
     cuts = {(0, cut) for cut in (120, 140, 160, 180)}
     assert cuts <= set(calls[:after_first])

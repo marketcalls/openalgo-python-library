@@ -53,8 +53,9 @@ class SplicedView(TimelineView):
         label: str,
         at_epoch: EpochValues,
         recipe: Recipe | None = None,
+        need: int | None = 1,
     ) -> None:
-        super().__init__(store, values, label, recipe)
+        super().__init__(store, values, label, recipe, need)
         self._compute_at = at_epoch
         self._cached: tuple[int, np.ndarray] | None = None
         self._epoch = store.epoch
@@ -95,7 +96,9 @@ class SplicedView(TimelineView):
             rebuilt = getattr(TimelineView, method)(plain(self), *(plain(a) for a in args))
             return rebuilt._values
 
-        return SplicedView(self._store, built._values, built.label, at_epoch, built._recipe)
+        return SplicedView(
+            self._store, built._values, built.label, at_epoch, built._recipe, built.need
+        )
 
     def _derive(self, other: Any, function: Callable, symbol: str, flip: bool = False) -> Any:
         return self._wrap("_derive", other, function, symbol, flip)
@@ -301,7 +304,8 @@ class IndicatorAdapter:
             if isinstance(view, TimelineView):
                 values = np.array(self.outputs_at(epoch)[k], copy=True)
                 at_epoch = self._output_of(k)
-                view = SplicedView(self._store, values, view.label, at_epoch, view._recipe)
+                recipe, need = view._recipe, view.need
+                view = SplicedView(self._store, values, view.label, at_epoch, recipe, need)
             adopted.append(view)
         return adopted
 

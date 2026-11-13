@@ -315,13 +315,14 @@ def crossings(frame: pd.DataFrame) -> tuple:
     return ta.crossover(fast, slow), ta.crossunder(fast, slow)
 
 
-DATA = walk_bars([6, 5, -3, 4, -8, -6, 3, -2, 7, -1, -9, 2])
-# The comparisons below run from the second session: the first is history, 75 strategy
-# bars, more than the 64 the 12-bar EMA needs (`_warm_up`), so the condition strategy
-# decides from the first bar of the run, as arrays and functions do, and the forms can
-# be compared bar by bar. Arrays in bar order hold the bars of the run only.
-RUN_START = SESSIONS[1]
-RUN_BARS = slice(BARS_PER_SESSION, None)
+# The comparisons below run from the third session: the first two are history, 150
+# strategy bars, more than the 128 the 12-bar EMA needs (`_warm_up`), so the condition
+# strategy decides from the first bar of the run, as arrays and functions do, and the
+# forms can be compared bar by bar. Arrays in bar order hold the bars of the run only.
+ARRAY_SESSIONS = (*SESSIONS, dt.date(2025, 7, 3))
+DATA = walk_bars([6, 5, -3, 4, -8, -6, 3, -2, 7, -1, -9, 2], sessions=ARRAY_SESSIONS)
+RUN_START = ARRAY_SESSIONS[2]
+RUN_BARS = slice(2 * BARS_PER_SESSION, None)
 
 
 def run_from_second_session(strategy: type):
@@ -466,5 +467,5 @@ def test_an_array_of_the_wrong_length_names_the_bar_count():
     short_array = bt.from_arrays(
         np.ones(3, dtype=bool), None, symbol="SBIN", exchange="NSE", interval="5m"
     )
-    with pytest.raises(ConfigError, match="3 values and the run has 150 strategy bars"):
+    with pytest.raises(ConfigError, match="3 values and the run has 225 strategy bars"):
         run(short_array, DATA)

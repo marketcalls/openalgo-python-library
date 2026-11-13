@@ -2,7 +2,7 @@
 strategy's indicators have closed their warm-up of bars, history before `start` loaded
 and counted, a wait inside the run when the history is short.
 
-The bars: 40 NSE sessions from 2026-01-01, each opening and closing at the price of an
+The bars: 72 NSE sessions from 2026-01-01, each opening and closing at the price of an
 eight-bar zigzag, 100.00, 99.50, 99.00, 99.50, 100.00, 100.50, 101.00, 100.50 (high and
 low 1.00 either side). The strategy buys 10 shares when the 2-bar EMA crosses above the
 3-bar EMA and exits when it crosses below, delivery (CNC), no charges, no slippage, so
@@ -10,12 +10,13 @@ an order decided at bar k's close fills at bar k + 1's open, which is bar k + 1'
 
 Worked by hand (the textbook recursion e[k] = e[k-1] + a (c[k] - e[k-1]), seeded with
 the first close, a = 2/3 and 1/2): the fast EMA crosses above the slow one at bars 4,
-12, 20, 28 and 36 and below it at bars 8, 16, 24 and 32, whichever bar the EMAs are
-seeded at before them. Both EMAs settle in the first window the check tries, 16 bars,
-on the engine's reference bars: over 15 steps the seed gap shrinks by (1/2)^15 =
-0.00003, inside the tolerance 1e-6 for a gap below 3 percent of the price. So the
-strategy is ready at the close of the 16th bar of its series, bars before `start`
-counted, and a run keeps those 16 bars of history before `start`.
+12, 20, ..., 68 and below it at bars 8, 16, ..., 64, whichever bar the EMAs are seeded
+at before them. On the engine's reference bars the 2-bar EMA settles in the first window
+the check tries, 16 bars, and the 3-bar EMA in the second, 32: over 15 steps its seed
+gap shrinks by (1/2)^15 = 0.00003, inside the tolerance 1e-6 only for a gap below 3
+percent of the price, and the reference bars open with gaps of up to 8 percent. So the
+strategy is ready at the close of the 32nd bar of its series, bars before `start`
+counted, and a run keeps those 32 bars of history before `start`.
 """
 
 from __future__ import annotations
@@ -31,15 +32,15 @@ from openalgo import ta
 
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 ZIGZAG = (100.0, 99.5, 99.0, 99.5, 100.0, 100.5, 101.0, 100.5)
-BARS = 40
-DAYS = list(bt.calendar.default_calendar().sessions("NSE", "2026-01-01", "2026-03-31")["date"])[
+BARS = 72
+DAYS = list(bt.calendar.default_calendar().sessions("NSE", "2026-01-01", "2026-05-31")["date"])[
     :BARS
 ]
 CLOSES = [ZIGZAG[k % len(ZIGZAG)] for k in range(BARS)]
-# Bars at whose close the fast EMA crosses above, and below, the slow one.
-CROSSES_ABOVE = (4, 12, 20, 28, 36)
-CROSSES_BELOW = (8, 16, 24, 32)
-WARM_UP_BARS = 16
+WARM_UP_BARS = 32
+# The first bar of the runs that start with history: a crossing above, after more bars
+# than the warm-up needs.
+START = 36
 SETTINGS = {"capital": 100_000, "costs": None, "slippage": 0}
 
 
@@ -110,16 +111,16 @@ def at_bar(*bars_and_sides: tuple[int, str]) -> list[tuple[dt.date, str]]:
     return [(DAYS[bar], side) for bar, side in bars_and_sides]
 
 
-# A strategy ready at bar 15 decides first at the crossunder of bar 16 (flat: nothing),
-# then buys at bar 20 (fill 21), exits at 24 (fill 25), buys at 28 (fill 29), exits at
-# 32 (fill 33) and buys at 36 (fill 37).
+# A strategy ready at bar 31 decides first at the crossunder of bar 32 (flat: nothing),
+# then buys at bar 36 (fill 37), exits at 40 (fill 41), and so on every 4 bars to the buy
+# at bar 68 (fill 69).
 AFTER_THE_WARM_UP = at_bar(
-    (21, "BUY"), (25, "SELL"), (29, "BUY"), (33, "SELL"), (37, "BUY")
-)  # fmt: skip
+    *((bar, "BUY" if (bar - 37) % 8 == 0 else "SELL") for bar in range(37, BARS, 4))
+)
 
 
 def test_an_ema_crossover_before_the_warm_up_no_longer_trades():
-    # Without the warm-up the crossover at bar 4 bought at bar 5's open.
+    # Without the warm-up the crossover at bar 4 would buy at bar 5's open.
     result = bt.backtest(EmaCross, data=zigzag(), **SETTINGS)
     assert fills(result) == AFTER_THE_WARM_UP
 
@@ -128,31 +129,31 @@ def test_own_data_that_begins_at_start_waits_inside_the_run_and_says_so():
     result = bt.backtest(EmaCross, data=zigzag(), **SETTINGS)
     (warning,) = [text for text in result.warnings if "waited" in text]
     assert warning == (
-        "The strategy waited inside the run for its indicators: SBIN waited 15 strategy "
-        f"bars, to {DAYS[15]} 15:30 IST. ema(SBIN.close, 2) needs 16 D bars of SBIN and 0 "
+        "The strategy waited inside the run for its indicators: SBIN waited 31 strategy "
+        f"bars, to {DAYS[31]} 15:30 IST. ema(SBIN.close, 3) needs 32 D bars of SBIN and 0 "
         f"bars closed before {DAYS[0]}: the bars given for SBIN begin on {DAYS[0]}; give "
         f"earlier ones to decide from {DAYS[0]}."
     )
-    assert result.manifest["arguments"]["warm_up"]["waited"] == {"SBIN": 15}
+    assert result.manifest["arguments"]["warm_up"]["waited"] == {"SBIN": 31}
 
 
 def test_the_first_decision_is_at_the_close_of_the_warm_up_bar():
     result = bt.backtest(EmaCross, data=zigzag(), **SETTINGS)
-    assert f"first decision {DAYS[15]} 15:30 IST" in result.assumptions["warm_up"]
+    assert f"first decision {DAYS[31]} 15:30 IST" in result.assumptions["warm_up"]
 
 
 def test_history_before_start_lets_the_strategy_trade_from_start():
-    # Start at bar 20: the 20 bars before it are history, more than the 16 needed, so
-    # the crossover at bar 20, the first bar of the run, buys at bar 21's open.
-    result = bt.backtest(EmaCross, data=zigzag(), start=DAYS[20], **SETTINGS)
+    # Start at bar 36: the 36 bars before it are history, more than the 32 needed, so
+    # the crossover at bar 36, the first bar of the run, buys at bar 37's open.
+    result = bt.backtest(EmaCross, data=zigzag(), start=DAYS[START], **SETTINGS)
     assert fills(result) == AFTER_THE_WARM_UP
     assert not [text for text in result.warnings if "waited" in text]
     assert "ready at start" in result.assumptions["warm_up"]
 
 
 def test_the_indicators_are_computed_over_the_history_they_need():
-    # The run keeps the 16 bars before bar 20 its EMAs need, bars 4 to 19: at the first
-    # decision, bar 20, the fast EMA is the one seeded at bar 4, and the 16 bars of
+    # The run keeps the 32 bars before bar 36 its EMAs need, bars 4 to 35: at the first
+    # decision, bar 36, the fast EMA is the one seeded at bar 4, and the 32 bars of
     # history count in len(self.close).
     seen = []
 
@@ -162,23 +163,23 @@ def test_the_indicators_are_computed_over_the_history_they_need():
                 seen.append((bar.time.date(), self.fast_line[-1], len(self.close)))
             super().on_bar(bar)
 
-    bt.backtest(Recording, data=zigzag(), start=DAYS[20], **SETTINGS)
+    bt.backtest(Recording, data=zigzag(), start=DAYS[START], **SETTINGS)
     ((day, fast, closed),) = seen
-    assert (day, closed) == (DAYS[20], 17)
-    assert fast == pytest.approx(textbook_ema(CLOSES[4:], 2)[16], abs=1e-12)
+    assert (day, closed) == (DAYS[START], 33)
+    assert fast == pytest.approx(textbook_ema(CLOSES[4:], 2)[32], abs=1e-12)
 
 
 def test_without_history_the_same_start_waits_again():
-    # The same run with no bars before bar 20: ready at bar 35, so the crossover at bar
-    # 36 is the first trade.
-    result = bt.backtest(EmaCross, data=zigzag(20), **SETTINGS)
-    assert fills(result) == at_bar((37, "BUY"))
+    # The same run with no bars before bar 36: ready at its 32nd bar, bar 67, so the
+    # crossover at bar 68 is the first trade.
+    result = bt.backtest(EmaCross, data=zigzag(START), **SETTINGS)
+    assert fills(result) == at_bar((69, "BUY"))
 
 
 def test_equity_starts_at_start_with_the_history_left_out():
-    result = bt.backtest(EmaCross, data=zigzag(), start=DAYS[20], **SETTINGS)
-    assert result.equity.index[0].date() == DAYS[20]
-    assert len(result.equity) == BARS - 20
+    result = bt.backtest(EmaCross, data=zigzag(), start=DAYS[START], **SETTINGS)
+    assert result.equity.index[0].date() == DAYS[START]
+    assert len(result.equity) == BARS - START
 
 
 def test_a_condition_strategy_waits_as_on_bar_does():
@@ -192,15 +193,15 @@ def test_a_strategy_that_keeps_its_own_guard_still_works():
 
 
 def test_the_assumptions_state_the_rule_the_need_and_the_history():
-    # 16 sessions x 7/5 x 1.1 = 24.64, so 25 days and a week more, 32, before start are
-    # asked for; the data begin later than a week after that day, which is said.
-    result = bt.backtest(EmaCross, data=zigzag(), start=DAYS[20], **SETTINGS)
+    # 32 sessions x 7/5 x 1.1 = 49.28, so 50 days and a week more, 57, before start are
+    # asked for.
+    result = bt.backtest(EmaCross, data=zigzag(), start=DAYS[START], **SETTINGS)
     text = result.assumptions["warm_up"]
-    asked = DAYS[20] - dt.timedelta(days=32)
+    asked = DAYS[START] - dt.timedelta(days=57)
     assert text.startswith("automatic: no decision before start, nor before every self.I")
-    assert "ema(SBIN.close, 2) needs 16 D bars of SBIN" in text
+    assert "ema(SBIN.close, 3) needs 32 D bars of SBIN" in text
     assert (
-        f"history before start: SBIN 16 strategy bars from {DAYS[4]} to {DAYS[19]} (asked "
+        f"history before start: SBIN 32 strategy bars from {DAYS[4]} to {DAYS[35]} (asked "
         f"from {asked})"
     ) in text
 
@@ -213,10 +214,10 @@ def test_each_indicator_has_its_own_warm_up_in_the_checks():
 
 
 def test_the_manifest_records_the_warm_up_used():
-    result = bt.backtest(EmaCross, data=zigzag(), start=DAYS[20], **SETTINGS)
+    result = bt.backtest(EmaCross, data=zigzag(), start=DAYS[START], **SETTINGS)
     warm_up = result.manifest["arguments"]["warm_up"]
     assert warm_up["needs"] == [
-        {"symbol": "SBIN", "interval": "D", "bars": WARM_UP_BARS, "indicator": "ema(SBIN.close, 2)"}
+        {"symbol": "SBIN", "interval": "D", "bars": WARM_UP_BARS, "indicator": "ema(SBIN.close, 3)"}
     ]
     assert (warm_up["first_decision"], warm_up["waited"], warm_up["not_waited_for"]) == (
         None,
@@ -227,7 +228,7 @@ def test_the_manifest_records_the_warm_up_used():
 
 
 def test_a_rerun_waits_the_same_way():
-    result = bt.backtest(EmaCross, data=zigzag(), start=DAYS[20], **SETTINGS)
+    result = bt.backtest(EmaCross, data=zigzag(), start=DAYS[START], **SETTINGS)
     again = result.rerun()
     assert fills(again) == fills(result)
     assert again.manifest["arguments"]["warm_up"] == result.manifest["arguments"]["warm_up"]
@@ -235,29 +236,29 @@ def test_a_rerun_waits_the_same_way():
 
 def test_every_combination_of_a_sweep_is_its_single_run():
     swept = bt.optimize(
-        EmaCross, data=zigzag(), start=DAYS[20], workers=1, fast=(2, 3), slow=(3, 5), **SETTINGS
+        EmaCross, data=zigzag(), start=DAYS[START], workers=1, fast=(2, 3), slow=(3, 5), **SETTINGS
     )
     for row in swept.table.itertuples():
         params = {"fast": int(row.fast), "slow": int(row.slow)}
-        alone = bt.backtest(EmaCross, data=zigzag(), start=DAYS[20], params=params, **SETTINGS)
+        alone = bt.backtest(EmaCross, data=zigzag(), start=DAYS[START], params=params, **SETTINGS)
         assert row.trades == len(alone.trades)
         assert row.objective == alone.metrics["net_profit"]
 
 
 class WithAverage(EmaCross):
-    """EmaCross with a 30-bar simple average registered too."""
+    """EmaCross with a 40-bar simple average registered too."""
 
     def init(self):
         super().init()
-        self.mean = self.I(ta.sma, self.close, 30)
+        self.mean = self.I(ta.sma, self.close, 40)
 
 
 def test_the_longest_warm_up_of_the_strategy_sets_the_wait():
-    # A 30-bar average is unknown (NaN) in a 16-bar window and settled exactly by a
-    # 32-bar one: ready at bar 31, so the first trade is the crossover at bar 36.
+    # A 40-bar average is unknown (NaN) in a 32-bar window and settled exactly by a
+    # 64-bar one: ready at bar 63, so the first trade is the crossover at bar 68.
     result = bt.backtest(WithAverage, data=zigzag(), **SETTINGS)
-    assert fills(result) == at_bar((37, "BUY"))
-    assert "sma(SBIN.close, 30) needs 32 D bars of SBIN" in result.assumptions["warm_up"]
+    assert fills(result) == at_bar((69, "BUY"))
+    assert "sma(SBIN.close, 40) needs 64 D bars of SBIN" in result.assumptions["warm_up"]
 
 
 class Cumulative(EmaCross):

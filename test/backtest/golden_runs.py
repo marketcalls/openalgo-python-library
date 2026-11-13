@@ -6,7 +6,7 @@ Four runs, each a different path through the engine:
     intraday_mis       an `on_bar` EMA crossover on 5-minute bars of a 1-minute base,
                        long and short on MIS with a stop and a target, two sessions
     condition_cnc      a condition strategy (`entry_when`, `exit_when`) on daily bars,
-                       delivery (CNC), about seven months after seven months of
+                       delivery (CNC), about seven months after thirteen months of
                        history that its indicators are computed over
     futures_roll       an `on_bar` strategy on the NIFTY futures series, daily, across
                        the roll from the September to the October 2024 contract
@@ -155,10 +155,11 @@ class ConditionEmaCross(bt.Strategy):
 
 
 def condition_cnc() -> bt.Result:
-    # The 20-day EMA needs 128 bars before the strategy decides (`_warm_up`): the
-    # sessions from 2025-09-01 are history, so it trades from 2026-04-01.
-    stamps = session_dates("NSE", "2025-09-01", "2026-10-30")
-    bars = TickWalk(seed=23).bars(stamps, 70_000, 400, 25)
+    # The 20-day EMA needs 256 bars before the strategy decides (`_warm_up`): the 266
+    # sessions from 2025-03-03 are history, so it trades from 2026-04-01. The walk of
+    # seed 24 crosses often enough in the run to pin seven round trips.
+    stamps = session_dates("NSE", "2025-03-03", "2026-10-30")
+    bars = TickWalk(seed=24).bars(stamps, 70_000, 400, 25)
     return bt.backtest(ConditionEmaCross, data=bars, start=dt.date(2026, 4, 1), capital=CAPITAL)
 
 
