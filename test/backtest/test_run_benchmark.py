@@ -270,8 +270,8 @@ def test_the_yearly_comparison_compounds_the_benchmark():
 
 def test_the_tearsheet_compares_with_the_benchmark_and_names_it():
     page = client_run(fake_client(), benchmark="NIFTY").tearsheet()
-    assert "Against the benchmark" in page and "Benchmark sessions" in page
-    assert "benchmark: NIFTY on NSE_INDEX: 6 daily closes from Historify" in page
+    assert "vs Benchmark &#183; NIFTY" in page and "Benchmark sessions" in page
+    assert "NIFTY on NSE_INDEX: 6 daily closes from Historify" in page
 
 
 # ----- manifest, rerun and sweeps -----------------------------------------------------

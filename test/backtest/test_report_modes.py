@@ -1,7 +1,8 @@
 """Report modes: full, basic, metrics only (also as a DataFrame) and charts only, on
 `openalgo.backtest.report` and on `Result`. Every mode is one self-contained,
-well-formed page: no script, no external URL, light and dark, phone width."""
+well-formed page: no external URL, light and dark, phone width."""
 
+import html
 import math
 
 import numpy as np
@@ -15,30 +16,14 @@ from openalgo.backtest.errors import ConfigError
 from openalgo.backtest.metrics import DEFINITIONS, GROUPS
 
 IST = "Asia/Kolkata"
-FORBIDDEN = ("<script", "http://", "https://", "@import", "url(", "<link", "<iframe", "<img")
+FORBIDDEN = ("http://", "https://", "@import", "url(http", "<link", "<iframe", "<img", "src=")
 MODE_SECTIONS = {
-    "basic": [
-        "summary",
-        "equity",
-        "monthly",
-        "yearly",
-        "drawdowns",
-        "trades",
-        "costs",
-        "assumptions",
-        "notes",
-    ],
-    "metrics": ["metrics", "assumptions"],
-    "charts": [
-        "equity",
-        "cumulative",
-        "daily",
-        "return-distribution",
-        "rolling",
-        "montecarlo",
-        "distribution",
-    ],
+    "basic": ["overview", "performance", "risk", "monthly", "trades", "notes"],
+    "metrics": ["metrics", "notes"],
+    "charts": ["performance", "risk", "monthly", "distribution"],
 }
+# The charts of a page: time series, and bars and box plots.
+CHARTS = ("<svg class='ts-pane'", "<svg class='bars'")
 
 
 @pytest.fixture(scope="module")
@@ -69,21 +54,25 @@ def test_each_mode_has_its_sections_in_order(performance, mode):
 
 def test_the_charts_mode_draws_every_chart_and_no_table(performance):
     page = report.tearsheet(performance, mode="charts")
-    assert "<table" not in page
-    # Equity and drawdown, cumulative, bars, box plot, four rolling statistics, the band.
-    assert Structure(page).tags["svg"] == 10
+    assert "<table" not in page and "class='stats'" not in page
+    # Cumulative and three rolling statistics; drawdown and losing streaks (no benchmark,
+    # so no rolling beta); yearly bars; histogram and box plot.
+    assert sum(page.count(chart) for chart in CHARTS) == 9
 
 
 def test_the_metrics_mode_lists_every_metric_with_its_definition(performance):
     page = report.tearsheet(performance, mode="metrics")
-    assert "<svg" not in page
+    assert not any(chart in page for chart in CHARTS)
     for key in performance.metrics:
-        assert DEFINITIONS[key].label.replace("&", "&amp;") in page, key
+        entry = DEFINITIONS[key]
+        assert f">{html.escape(entry.label)}</td>" in page, key
+        assert f"<td class='l def'>{html.escape(entry.definition)}</td>" in page, key
 
 
 def test_the_cumulative_return_can_be_drawn_on_a_log_scale(performance):
-    assert "Cumulative return, log scale" in report.tearsheet(performance, log_scale=True)
-    assert "Cumulative return, log scale" not in report.tearsheet(performance)
+    subtitle = "Compounded growth, indexed to start, log scale"
+    assert subtitle in report.tearsheet(performance, log_scale=True)
+    assert subtitle not in report.tearsheet(performance)
 
 
 def test_an_unknown_mode_is_refused(performance):
