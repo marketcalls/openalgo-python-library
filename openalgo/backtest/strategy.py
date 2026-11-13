@@ -23,7 +23,9 @@ rules: first the callbacks for the events since the previous decision, then `on_
 Orders placed there are queued for the next base-bar open. Timers (`self.at`,
 `self.every`) run at a base-bar open, once the orders queued for it have filled, and
 their orders fill at that same open.
-Indicators come from `openalgo.ta` through `self.I`. Parts not built yet raise
+Indicators come from `openalgo.ta` through `self.I` and warm up by themselves: they are
+computed over the history before `start`, and no hook makes a decision before they are
+ready (`_warm_up`), so a strategy needs no warm-up guard. Parts not built yet raise
 NotImplementedError saying what to do instead.
 """
 

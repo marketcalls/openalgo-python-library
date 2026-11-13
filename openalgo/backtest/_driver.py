@@ -15,6 +15,9 @@ pause delivers no events (SPEC-31). Events are dicts with the kernel's keys plus
 `symbol` and `time` (the IST open of the slice the event happened in). A strategy bar
 with no base bar present is not delivered (SPEC-07): a single-instrument strategy then
 gets no `on_bar` call.
+
+Until the strategy's indicators are ready (`ready_at`, `_warm_up`) the pauses only
+reveal their bars and deliver their events: no timer runs and `on_bar` is not called.
 """
 
 from __future__ import annotations
@@ -50,16 +53,41 @@ def deliver(strategy: Any, ctx: RunContext, events: list[dict]) -> None:
             strategy.on_risk_event(payload)
 
 
-def drive(strategy: Any, engine: Any, ctx: RunContext) -> None:
-    """Run the strategy to the end of the grid. Errors of the kernel and of the strategy
+def _wait(strategy: Any, advance: Any, ctx: RunContext, ready_at: int) -> bool:
+    """Reveal the pauses before `ready_at` (UTC nanoseconds) and deliver their events,
+    deciding nothing, then decide at the first pause at or after it as the main loop
+    would; returns True when the run ended first."""
+    while True:
+        kind, decided_at, rows, events, timers = call(advance)
+        bars = ctx.reveal(decided_at, rows)
+        if events:
+            deliver(strategy, ctx, events)
+        if kind == "finished":
+            strategy.on_stop()
+            return True
+        if decided_at >= ready_at:
+            if kind == "timers":
+                ctx.timers.fire(timers)
+            elif bars:
+                single = strategy.symbol is not None or strategy.underlying is not None
+                strategy.on_bar(next(iter(bars.values())) if single else bars)
+            return False
+
+
+def drive(strategy: Any, engine: Any, ctx: RunContext, ready_at: int | None = None) -> None:
+    """Run the strategy to the end of the grid, deciding from `ready_at` (UTC
+    nanoseconds, None from the first pause). Errors of the kernel and of the strategy
     propagate unchanged (a strategy exception stops the run).
 
     This loop runs once per strategy-bar close, so its own cost is part of every
     callback (NFR-PERF-04): the kernel hands each pause over as a tuple (kind, decision
     instant, bar rows, events, timer ids) and nothing is built that the strategy does
-    not receive."""
+    not receive. The wait for `ready_at` is a loop of its own, so it costs nothing once
+    the strategy decides."""
     single = strategy.symbol is not None or strategy.underlying is not None
     advance = engine.advance
+    if ready_at is not None and _wait(strategy, advance, ctx, ready_at):
+        return
     while True:
         kind, decided_at, rows, events, timers = call(advance)
         if kind == "timers":

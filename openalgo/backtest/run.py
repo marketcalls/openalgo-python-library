@@ -8,16 +8,18 @@ How a backtest runs (the Python half of the design in `rust/oa_bt/src/engine/mod
 2. **Inputs** (`_pipeline.prepare`): the calendar (`calendar.default_calendar()` unless
    given), the base interval and its bars from the data layer (`_base_interval`: the
    1-minute coverage probe; `data.load_bars`: OpenAlgo through `client`, or the user's
-   `data=`), the instruments (`_instruments`: `instrument=`, the generic cash-equity
-   instrument, or the reference tables) and the market settings (`_market`: charges,
-   slippage, per-instrument facts), each stated in the Assumptions block.
+   `data=`), the history before `start` from the same source (`_warm_up_history`), the
+   instruments (`_instruments`: `instrument=`, the generic cash-equity instrument, or
+   the reference tables) and the market settings (`_market`: charges, slippage,
+   per-instrument facts), each stated in the Assumptions block.
 3. **Engine** (`_engine.build_engine`): the native `Engine` validates everything and
    refuses, with NotImplementedError naming the feature, any setting it cannot honour
    yet. Nothing is ignored.
 4. **Drive** (`_pipeline.execute`, `_driver.drive`): the strategy instance is bound to a
    `RunContext`, `init` runs (indicators, timers), then the loop `advance` -> timers or
    callbacks -> `on_bar` -> orders runs to the end of the grid, one Python call per
-   strategy-bar close. Condition and array strategies (`entry_when`, `bt.from_arrays`,
+   strategy-bar close once the strategy's indicators are ready (`_warm_up`). Condition
+   and array strategies (`entry_when`, `bt.from_arrays`,
    `bt.from_signals`) instead run the same kernel through the Rust signal driver with
    no Python call per bar (`_conditions.drive_conditions`).
 5. **Result** (`result.Result`): the kernel's result columns as DataFrames, with the
@@ -58,7 +60,7 @@ def backtest(
     corporate_actions: Any = None,
     base: str | None = None,
     fill: str = "next_open",
-    quantity_mode: str = "fractional",
+    quantity_mode: str = "venue",
     costs: str | None = "zerodha",
     slippage: Any = "default",
     margin: Any = None,
@@ -86,6 +88,10 @@ def backtest(
     capital: rupees allocated to the strategy (required).
     start, end: IST dates (inclusive); a datetime also bounds the run to slices opening
         at or after `start` and at or before `end`. Taken from `data=` when omitted.
+        The sessions before `start` are history: up to 2,048 strategy bars of them are
+        loaded from the run's source and the indicators are computed over them, and the
+        strategy decides from `start` on, once its indicators have closed their warm-up
+        (`_warm_up`; the Assumptions block and the warnings say what was waited for).
     data: own bars (a DataFrame, a CSV, Parquet or Feather file path, or a dict of them
         by symbol) at the base interval.
     benchmark: what the reports compare the strategy with (alpha, beta, information
@@ -107,7 +113,10 @@ def backtest(
     base: the base interval ("1m", "D", ...); default "D" for daily strategies, and for
         intraday ones 1 minute when 1-minute data covers the run for every instrument,
         else the strategy interval (`_base_interval`; the Assumptions say which and why).
-    fill, quantity_mode: "next_open"; "fractional" or "venue".
+    fill: "next_open".
+    quantity_mode: "venue" (the default: whole shares of cash equity and whole lots of
+        derivatives, as an exchange accepts) or "fractional" (part shares of cash
+        equity, for research; derivatives stay in whole lots).
     costs: "zerodha" (the default) or another preset name, a preset from bt.costs, a
         bt.costs.CostModel, or None (no charges, with a warning on every report); see
         `_market`.

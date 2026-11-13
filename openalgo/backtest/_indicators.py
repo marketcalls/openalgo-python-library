@@ -12,7 +12,9 @@ Outputs the causality registry marks as looking ahead are rejected by name: a fu
 whose outputs all look ahead (`ta.fractals`) is refused when registered, and a
 look-ahead output of a function with causal ones (`ta.ichimoku`'s lagging span) is a
 `LookaheadOutput` that raises ConfigError on any use. The causal outputs then go
-through the truncation and window-stability checks of `_causality_checks`.
+through the truncation and window-stability checks of `_causality_checks`, whose
+warm-up the run waits for (`_warm_up`). The series include the history loaded before
+`start`, so an indicator is computed over it.
 """
 
 from __future__ import annotations
@@ -209,7 +211,7 @@ def register(checks: Any, func: Any, inputs: tuple, params: dict) -> Any:
     if adapter is not None:
         adapter = adapter(call, names, causal)
         compute, whole = adapter.compute, adapter.whole
-    checks.check(key, label, compute, whole, anchored)
+    checks.check(key, label, compute, whole, anchored, series=(store.symbol, store.interval))
     views = [
         LookaheadOutput(name, n, lookahead[n], causal)
         if n in lookahead

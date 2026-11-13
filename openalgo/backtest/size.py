@@ -4,10 +4,11 @@ strategy's own sizing function, and the caps shared by every sizer, `bt.size.cap
 A sizer is passed as `size=` on an order or set as the strategy's default (the class
 attribute `size`). The kernel turns it into a quantity in units at the decision price,
 cuts it to the strategy's caps (`size_caps`), rounds it down to the venue rule (whole
-lots; whole shares unless the run is fractional), caps it at the freeze quantity (whole
-lots) and skips the order with a logged reason when nothing is left ("rounded_to_zero",
-or "cap" when a cap left no room). Percent arguments are percent units (`percent(50)` is
-50 percent). Raises ConfigError for a value that is not positive.
+lots; whole shares, the default, unless the run is `quantity_mode="fractional"`), caps
+it at the freeze quantity (whole lots) and skips the order with a logged reason when
+nothing is left ("rounded_to_zero", or "cap" when a cap left no room). Percent
+arguments are percent units (`percent(50)` is 50 percent). Raises ConfigError for a
+value that is not positive.
 
 A sizing function is any callable `size(ctx, order) -> units`, called at the decision.
 `ctx` holds what the built-in sizers see (`_sizing_function.SizingInputs`: equity,
@@ -22,8 +23,9 @@ allocated at the start when the strategy sets `reinvest = False`.
 An order with no `qty`, `lots` or `size` (and no strategy `size`) takes the engine
 default: one lot for futures and options; for cash equity 1x the
 strategy's equity (never more than its free cash, split equally across its
-instruments) net of the order's estimated costs, sized at the fill price in fractional
-mode and at the decision price with a 2 percent cash buffer in venue mode.
+instruments) net of the order's estimated costs, sized at the decision price with a 2
+percent cash buffer in venue mode (the default, whole shares) and at the fill price in
+fractional mode.
 """
 
 from __future__ import annotations

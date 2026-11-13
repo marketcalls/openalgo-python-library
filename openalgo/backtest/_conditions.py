@@ -24,7 +24,10 @@ ConfigError saying to use `on_bar`.
 The run (`drive_conditions`, called in place of the `on_bar` driver):
 
 1. each condition becomes a bool array over the strategy bars of the instrument, the
-   bars the pauses deliver (`Engine.strategy_bars`);
+   bars the pauses deliver (`Engine.strategy_bars`): views are computed over the
+   history before `start` as well and cut to these bars, and every array is false
+   before the strategy's indicators are ready (`_warm_up`), as `on_bar` would not be
+   called then;
 2. the arrays and the order templates go to the Rust signal driver
    (`oa_bt::engine::signals`), which runs the whole grid with no Python call per bar and
    makes, at every strategy-bar close, the decision of the equivalent `on_bar` of 4.1;
@@ -229,9 +232,10 @@ def _entry_request(ctx: Any, side: str, args: dict[str, Any], what: str) -> dict
 
 
 def strategy_frame(strategy: Any) -> pd.DataFrame:
-    """Every strategy bar of the strategy's instrument over the run, as a DataFrame
-    indexed by IST bar open (open, high, low, close in rupees, volume in units): what a
-    `from_signals` function receives."""
+    """Every strategy bar of the strategy's instrument over the run, after the history
+    before `start` (`_warm_up_history`), as a DataFrame indexed by IST bar open (open,
+    high, low, close in rupees, volume in units): what a `from_signals` function
+    receives."""
     store = strategy._ctx.store(None)
     return pd.DataFrame({name: store.column(name) for name in FIELDS}, index=store.times())
 
@@ -289,14 +293,16 @@ def _view_values(view: TimelineView, store: Any, what: str) -> np.ndarray:
 
 def condition_values(condition: Any, store: Any, what: str) -> np.ndarray:
     """A condition as a contiguous bool array, one value per bar of `store` (the strategy
-    bars). Raises ConfigError for anything outside the grammar."""
+    bars) from `start` on: the history before it is left out. Raises ConfigError for
+    anything outside the grammar."""
     _check_condition(condition, what)
+    run = store.history_bars
     if isinstance(condition, TimelineView):
-        values = _view_values(condition, store, what)
+        values = _view_values(condition, store, what)[run:]
     elif isinstance(condition, ClockCondition):
-        values = condition.values(store.column("ts_close"))
+        values = condition.values(store.column("ts_close")[run:])
     else:
-        values = array_values(condition, store.column("ts_open"), what)
+        values = array_values(condition, store.column("ts_open")[run:], what)
     return np.ascontiguousarray(values, dtype=bool)
 
 
@@ -307,36 +313,52 @@ def _pyramiding(cls: type) -> int:
     return value
 
 
-def signal_spec(strategy: Any) -> dict[str, Any]:
+def _decided(values: np.ndarray, waiting: np.ndarray | None) -> np.ndarray:
+    """A condition's values, false at the bars the strategy waits through."""
+    return values if waiting is None else np.ascontiguousarray(values & ~waiting)
+
+
+def signal_spec(strategy: Any, ready_at: int | None = None) -> dict[str, Any]:
     """The spec dict the engine's `run_signals` reads: the condition arrays (None when
-    not declared), the entry order templates and the ATRs they name, the product and
-    `pyramiding`. Raises ConfigError when the causality registry does not clear the
-    ATR."""
+    not declared), false at every bar closing before `ready_at` (UTC nanoseconds, None
+    for none), the entry order templates and the ATRs they name, the product and
+    `pyramiding`, all over the strategy bars from `start` on. Raises ConfigError when the
+    causality registry does not clear the ATR."""
     declared: dict[str, Declared] = strategy.__dict__.get("_conditions", {})
     ctx = strategy._ctx
     store = ctx.store(None)
+    run = store.history_bars
+    closes = store.column("ts_close")[run:]
+    waiting = None if ready_at is None else closes < ready_at
     spec: dict[str, Any] = {
         "instrument": ctx.instrument_index(None),
         "product": ctx.product,
-        "bar_opens": np.ascontiguousarray(store.column("ts_open"), dtype=np.int64),
+        "bar_opens": np.ascontiguousarray(store.column("ts_open")[run:], dtype=np.int64),
         "pyramiding": _pyramiding(type(strategy)),
     }
     for kind in KINDS:
         entry = declared.get(kind)
         what = f"{kind}_when"
-        spec[kind] = None if entry is None else condition_values(entry.condition, store, what)
+        spec[kind] = (
+            None
+            if entry is None
+            else _decided(condition_values(entry.condition, store, what), waiting)
+        )
         if kind in ENTRY_SIDES:
             spec[f"{kind}_order"] = None if entry is None else entry.order
-            spec[f"{kind}_atr"] = [] if entry is None else atr_inputs(list(entry.atr), store)
+            atr = [] if entry is None else atr_inputs(list(entry.atr), store)
+            # Each ATR is computed over the history too; the driver reads the run's bars.
+            spec[f"{kind}_atr"] = [(*named, per_bar[run:]) for *named, per_bar in atr]
     return spec
 
 
-def drive_conditions(strategy: Any, engine: Any) -> None:
+def drive_conditions(strategy: Any, engine: Any, ready_at: int | None = None) -> None:
     """Run a condition strategy to the end of the grid: evaluate its conditions once,
-    hand them to the Rust signal driver, record the entries a sizer skipped as `on_bar`
-    would, then call `on_stop`. Raises ConfigError for timers (they call Python during
-    the run); errors of the evaluation and of the kernel propagate (ConfigError,
-    BacktestError, NotImplementedError)."""
+    hand them to the Rust signal driver (deciding nothing before `ready_at`, UTC
+    nanoseconds), record the entries a sizer skipped as `on_bar` would, then call
+    `on_stop`. Raises ConfigError for timers (they call Python during the run); errors
+    of the evaluation and of the kernel propagate (ConfigError, BacktestError,
+    NotImplementedError)."""
     strategy._ctx.begin_run()
     if call(engine.timer_counts):
         raise ConfigError(
@@ -345,7 +367,7 @@ def drive_conditions(strategy: Any, engine: Any) -> None:
         )
     ctx = strategy._ctx
     symbol = ctx.symbol_of(ctx.instrument_index(None))
-    for decided_at, reason in call(engine.run_signals, signal_spec(strategy)):
+    for decided_at, reason in call(engine.run_signals, signal_spec(strategy, ready_at)):
         ctx.skipped.append((decided_at, symbol, reason))
     strategy.on_stop()
 
