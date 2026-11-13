@@ -152,6 +152,8 @@ def backtest(
     The run ends at the earliest of `end`, the close of the last base bar any
     instrument has, and `now`; equity, trades and metrics stop there, a position still
     open is reported open, and a warning names the end used when it is before `end`.
+    Empty slots at the end of the last session do not end it early when the session
+    before ended its bars as early (15:15 IST for a stock with a closing auction).
 
     A run in which orders were rejected or skipped for a reason it did not ask for ends
     with one OrdersNotPlacedWarning: how many and the most common reason, the details

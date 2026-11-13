@@ -189,6 +189,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (the engine builds the session's 15-minute bars from it), or leave that session's bars
   out." Own data and OpenAlgo data alike; nothing is loaded differently.
 
+### Fixed
+
+- **No false "The run ends at" warning when every session's bars stop at 15:15.** From
+  2026-08-03 continuous trading in a stock with derivatives ends at 15:15 IST (the
+  closing auction makes no candle), while the calendar keeps 15:30 for every stock, so
+  every intraday run that ended on such a stock warned that its data ended early, its
+  equity stopped at 15:15 and an MIS position still open was reported open instead of
+  being squared off at the session close as on every other day. A run now ends at the
+  close of its last bar only when the last session's bars stop earlier, before its
+  session close, than those of the latest earlier session with bars; otherwise the empty
+  slots stay slices and the run ends at the end of its range or at the present. A run of
+  one session, or whose last session is cut short by the range, keeps the plain rule.
+
 ## [2.1.1] - 2026-11-13
 
 ### Added
