@@ -11,9 +11,9 @@
   trading keeps the same window (08-live-trading 11). An indicator of other views needs
   their warm-up too. One that needs more than the longest window measured waits that
   long at least, and a warning says it may need more.
-- **An anchored indicator** (session or monthly VWAP) restarts at each anchor period:
-  it needs the bars since the start of its period, and is ready from there
-  (`_warm_up_anchor`).
+- **An anchored indicator** (session or monthly VWAP, floor pivots) restarts at each
+  anchor period: it needs the bars since the start of the first period it reads (its
+  own, or the whole one before for pivots), and is ready from there (`_warm_up_anchor`).
 - **What does not count**: an indicator no window settles (a running sum) cannot be made
   ready by any history, and one that reads values of the user's own (an array) or
   cannot be computed on the reference bars cannot be measured: the strategy does not
@@ -28,6 +28,12 @@
   nothing, and never decides when the run has fewer bars than a need; a warning counts
   the strategy bars each symbol waited and says why, and `bt.backtest` raises a
   `WarmUpWarning` (`_warm_up_notice`).
+- **A symbol never ready** (a series shorter than a need of its own, or too short to
+  compute an indicator at all, `_indicators`): in a run of several symbols it is left
+  out (`Readiness.left_out`): the strategy makes no decision for it (its bars are not
+  passed to `on_bar` and its orders are skipped with skip reason "not_ready",
+  `_context`), the other symbols decide once their indicators are ready, and a warning
+  says why. When every symbol is never ready the strategy makes no decision at all.
 
 A strategy that keeps its own guard (`if len(self.close) < self.slow: return`) still
 works: the history counts in `len`, so it returns early less often.
@@ -46,7 +52,7 @@ from ._calendar_convert import format_ist
 from ._causality_checks import CheckOutcome
 from ._messages import counted
 from ._series import ist_time
-from ._warm_up_anchor import anchored_ready_at
+from ._warm_up_anchor import PeriodAnchor, anchored_ready_at
 
 # The Assumptions line of the rule, ahead of what the run measured.
 RULE = (
@@ -69,27 +75,35 @@ HISTORY_YEARS_CAP = 30
 class SeriesNeed:
     """The bars one series must close before the strategy decides: its symbol (or
     futures underlying) and interval, the longest warm-up of its indicators in bars of
-    that interval, and the indicator that needs it. `anchor` names the anchor period of
-    an anchored indicator, whose need is the bars since that period began (`bars` 0);
-    `more` is True when the indicator needs more than `bars`, the longest window
-    measured."""
+    that interval, and the indicator that needs it. `anchor` is the anchor of an
+    anchored indicator, whose need is the bars since the first period it reads began
+    (`bars` 0); `more` is True when the indicator needs more than `bars`, the longest
+    window measured; `computed` is False for an indicator its series was too short to
+    compute at all (`bars` is then what it needs to be computed), which is never
+    ready."""
 
     symbol: str
     interval: str
     bars: int
     label: str
-    anchor: str | None = None
+    anchor: PeriodAnchor | None = None
     more: bool = False
+    computed: bool = True
+
+    def key(self) -> tuple:
+        """What needs of one kind on one series share: the longest of them is kept."""
+        return (self.symbol, self.interval, self.anchor, self.computed)
 
     def describe(self) -> str:
         """For example "ema(SBIN.close, 50) needs 512 D bars of SBIN"."""
         if self.anchor is not None:
             return (
-                f"{self.label} needs the {self.interval} bars of {self.symbol} since the "
-                f"start of its {self.anchor}"
+                f"{self.label} needs the {self.interval} bars of {self.symbol} since "
+                f"{self.anchor.since()}"
             )
         bars = counted(self.bars, f"{self.interval} bar")
-        return f"{self.label} needs {'more than ' if self.more else ''}{bars} of {self.symbol}"
+        told = f"{self.label} needs {'more than ' if self.more else ''}{bars} of {self.symbol}"
+        return told if self.computed else f"{told} to be computed at all"
 
     def manifest(self) -> dict[str, Any]:
         """The need as the run manifest records it."""
@@ -97,36 +111,48 @@ class SeriesNeed:
         record["bars"] = None if self.anchor is not None else self.bars
         record["indicator"] = self.label
         if self.anchor is not None:
-            record["since"] = self.anchor
+            record["since"] = self.anchor.period
+            if self.anchor.periods_before:
+                record["periods_before"] = self.anchor.periods_before
         if self.more:
             record["more_than"] = True
+        if not self.computed:
+            record["computed"] = False
         return record
+
+
+def _need_of(outcome: CheckOutcome) -> SeriesNeed | None:
+    """The need an indicator's outcome sets, None when it has no warm-up length."""
+    if outcome.series is None:
+        return None
+    symbol, interval = outcome.series
+    if outcome.anchor is not None:
+        return SeriesNeed(symbol, interval, 0, outcome.label, outcome.anchor)
+    if outcome.warm_up is not None:
+        return SeriesNeed(symbol, interval, outcome.warm_up, outcome.label, more=outcome.more)
+    if outcome.required is not None:
+        return SeriesNeed(symbol, interval, outcome.required, outcome.label, computed=False)
+    return None
 
 
 def series_needs(
     outcomes: Iterable[CheckOutcome],
 ) -> tuple[tuple[SeriesNeed, ...], tuple[CheckOutcome, ...]]:
-    """(the needs of each series in first-registration order: its longest warm-up, and
-    one for each anchor period its anchored indicators restart on; the outcomes of the
-    indicators with no warm-up length, which set no need)."""
-    needs: dict[tuple[str, str, str | None], SeriesNeed] = {}
+    """(the needs of each series in first-registration order: its longest warm-up, one
+    for each anchor its anchored indicators restart on, and the longest of those its
+    series was too short to compute; the outcomes of the indicators with no warm-up
+    length, which set no need)."""
+    needs: dict[tuple, SeriesNeed] = {}
     unsettled: list[CheckOutcome] = []
     for outcome in outcomes:
-        if outcome.series is None:
+        found = _need_of(outcome)
+        if found is None:
+            if outcome.series is not None:
+                unsettled.append(outcome)
             continue
-        symbol, interval = outcome.series
-        if outcome.anchor is not None:
-            key = (symbol, interval, outcome.anchor)
-            needs.setdefault(key, SeriesNeed(symbol, interval, 0, outcome.label, outcome.anchor))
-            continue
-        if outcome.warm_up is None:
-            unsettled.append(outcome)
-            continue
-        key = (symbol, interval, None)
-        held = needs.get(key)
-        found = SeriesNeed(symbol, interval, outcome.warm_up, outcome.label, more=outcome.more)
+        held = needs.get(found.key())
         if held is None or (found.bars, found.more) > (held.bars, held.more):
-            needs[key] = found
+            needs[found.key()] = found
     return tuple(needs.values()), tuple(unsettled)
 
 
@@ -152,10 +178,12 @@ class Readiness:
 
     needs: the needs of each series. unsettled: indicators with no warm-up length.
     ready_at: UTC nanoseconds from which decisions are made, None when the strategy
-    decides from `start` on, NEVER when a series has fewer bars than its need. waited:
-    (name, strategy bars of the run that closed before then) for each symbol or futures
-    underlying, in order. short: the needs not met by `start`. history: what the run
-    kept before `start` (`_warm_up_history`).
+    decides from `start` on, NEVER when every symbol has a series with fewer bars than
+    its need. waited: (name, strategy bars of the run that closed before then) for each
+    symbol or futures underlying the strategy decides for, in order. short: the needs
+    not met by `start`. history: what the run kept before `start` (`_warm_up_history`).
+    left_out: the names never ready in a run whose other names are, in order (module
+    docstring).
     """
 
     needs: tuple[SeriesNeed, ...]
@@ -164,6 +192,7 @@ class Readiness:
     waited: tuple[tuple[str, int], ...]
     short: tuple[Shortfall, ...]
     history: str
+    left_out: tuple[str, ...] = ()
 
     def assumption(self) -> str:
         """The Assumptions line: the rule, each series' need, the history and when the
@@ -173,6 +202,8 @@ class Readiness:
             parts.append("no indicator needs a warm-up")
         parts += [need.describe() for need in self.needs]
         parts.append(f"history before start: {self.history}")
+        if self.left_out:
+            parts.append(f"no decision for {', '.join(self.left_out)}: never ready")
         if self.ready_at == NEVER:
             parts.append("no decision: the indicators were never ready")
         elif self.ready_at is not None:
@@ -189,11 +220,27 @@ class Readiness:
         told = [f"{name} waited {counted(bars, 'strategy bar')}"]
         return ", ".join([*told, *(f"{other} {count}" for other, count in rest)])
 
+    def _reasons(self, start: Any, of_left_out: bool) -> str:
+        """The shortfalls of the names left out, or of the others."""
+        found = [s for s in self.short if (s.need.symbol in self.left_out) == of_left_out]
+        return " ".join(f"{short.describe(start)}." for short in found)
+
+    def _left_out_note(self, start: Any) -> str:
+        """The warning for the names left out (module docstring)."""
+        names = ", ".join(self.left_out)
+        whose = "its" if len(self.left_out) == 1 else "their"
+        return (
+            f"The strategy made no decision for {names}: {whose} indicators were never ready "
+            f"within {whose} bars, so {whose} orders were skipped while the other symbols "
+            f"traded. {self._reasons(start, True)}"
+        )
+
     def warnings(self, start: Any) -> list[str]:
-        """What the reader must know: a wait inside the run, a need longer than the
-        longest window measured, and indicators the strategy did not wait for."""
-        notes = []
-        reasons = " ".join(f"{short.describe(start)}." for short in self.short)
+        """What the reader must know: a wait inside the run, the names left out, a need
+        longer than the longest window measured, and indicators the strategy did not
+        wait for."""
+        notes = [self._left_out_note(start)] if self.left_out else []
+        reasons = self._reasons(start, False)
         if self.ready_at == NEVER:
             notes.append(
                 "The strategy made no decision: its indicators were never ready within the "
@@ -220,12 +267,15 @@ class Readiness:
     def manifest(self) -> dict[str, Any]:
         """The warm-up used, as the run manifest records it."""
         first = None if self.ready_at is None else format_ist(self.ready_at)
-        return {
+        record = {
             "needs": [need.manifest() for need in self.needs],
             "not_waited_for": [outcome.label for outcome in self.unsettled],
             "first_decision": NEVER_DECIDED if self.ready_at == NEVER else first,
             "waited": dict(self.waited),
         }
+        if self.left_out:
+            record["no_decision"] = list(self.left_out)
+        return record
 
 
 def _run_part(store: Any) -> tuple[np.ndarray, np.ndarray]:
@@ -236,8 +286,11 @@ def _run_part(store: Any) -> tuple[np.ndarray, np.ndarray]:
 
 def _ready_at(need: SeriesNeed, context: Any) -> int:
     """The close of the bar from which the need is met, history included: the need-th
-    bar of its series, or for an anchored need the bar from which its period is whole
-    (`_warm_up_anchor`); NEVER when the series has no such bar."""
+    bar of its series, or for an anchored need the bar from which the periods it reads
+    are whole (`_warm_up_anchor`); NEVER when the series has no such bar, and for an
+    indicator its series was too short to compute."""
+    if not need.computed:
+        return NEVER
     store = context.store(need.symbol, need.interval)
     if need.anchor is not None:
         run = context.run
@@ -252,32 +305,45 @@ def _shortfall(need: SeriesNeed, context: Any, history: Any, run_open: int) -> S
     had = int(np.searchsorted(store.column("ts_close"), run_open, side="right"))
     opens = store.column("ts_open")
     first_day: dt.date | None = ist_time(int(opens[0])).date() if len(opens) else None
-    return Shortfall(need, had, history.shortfall(need.symbol, first_day))
+    return Shortfall(need, had, history.shortfall(need, first_day))
+
+
+def _left_out(needs: Iterable[SeriesNeed], at: dict, names: tuple[str, ...]) -> tuple[str, ...]:
+    """The names with a need never met, when some other name has none (module
+    docstring); none when every name has one."""
+    never = {need.symbol for need in needs if at[need] == NEVER}
+    if not never or all(name in never for name in names):
+        return ()
+    return tuple(name for name in names if name in never)
 
 
 def readiness(outcomes: Iterable[CheckOutcome], context: Any, history: Any) -> Readiness:
     """The readiness of a run (see the module docstring) from its indicators'
     `outcomes`, its `RunContext` (the stores by symbol and interval, the names it
     trades, the calendar and exchange) and its history before `start`
-    (`_warm_up_history.RunHistory`: `describe()` and `shortfall(symbol, first bar day)`)."""
+    (`_warm_up_history.RunHistory`: `describe()` and `shortfall(need, first bar day)`)."""
     needs, unsettled = series_needs(outcomes)
-    runs = {name: _run_part(context.store(name)) for name in context.names}
+    at = {need: _ready_at(need, context) for need in needs}
+    left_out = _left_out(needs, at, context.names)
+    named = [name for name in context.names if name not in left_out]
+    runs = {name: _run_part(context.store(name)) for name in named}
     first_closes = [int(closes[0]) for _, closes in runs.values() if len(closes)]
     first_opens = [int(opens[0]) for opens, _ in runs.values() if len(opens)]
-    at = {need: _ready_at(need, context) for need in needs}
-    latest = max(at.values(), default=None)
+    latest = max((at[need] for need in needs if need.symbol not in left_out), default=None)
     described = history.describe()
-    if latest is None or not first_closes or latest <= min(first_closes):
-        return Readiness(needs, unsettled, None, (), (), described)
+    if not first_closes:
+        return Readiness(needs, unsettled, None, (), (), described, left_out)
     decided_from, run_open = min(first_closes), min(first_opens)
     short = tuple(
         _shortfall(need, context, history, run_open) for need in needs if at[need] > decided_from
     )
+    if latest is None or latest <= decided_from:
+        return Readiness(needs, unsettled, None, (), short, described, left_out)
     waited = tuple(
         (name, int(np.searchsorted(closes, latest, side="left")))
         for name, (_, closes) in runs.items()
     )
-    return Readiness(needs, unsettled, latest, waited, short, described)
+    return Readiness(needs, unsettled, latest, waited, short, described, left_out)
 
 
 __all__ = [

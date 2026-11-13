@@ -1,14 +1,22 @@
 """Where the history before `start` meets the run's bars (decision D25; the history is
 in `_warm_up_history`).
 
-- **The join is checked** (`join_failure`): the bars a run keeps before `start` and the
-  run's first session are one series to the data quality checks (`data.quality.
-  check_bars`), with the corporate actions the run declares for the symbol. The run's
-  own bars were checked when they were loaded and the history's range is the history's
-  own, so what this finds is at the join or inside the history kept: a suspected
-  unadjusted split between the last bar before `start` and the first after it, a price
-  that is not a price. Any error of error severity leaves the run without history, and
-  its messages say why.
+- **The join is checked** (`join`): the bars a run keeps before `start` and the run's
+  first base bar are one series to the data quality checks (`data.quality.check_bars`),
+  with the corporate actions the run declares for the symbol. Only those: the first
+  decision is made at the close of the first strategy bar, so no bar after it may
+  decide whether the history is kept (a check that read the whole first session would
+  let the afternoon decide whether the morning trades). The run's own bars were checked
+  when they were loaded and the history's range is the history's own, so what this
+  finds is at the join or inside the history kept: a suspected unadjusted split between
+  the last bar before `start` and the first after it, a price that is not a price. Any
+  error of error severity leaves the run without history, and its messages say why.
+- **A declared split or bonus inside the history** (or at the join), which the bars are
+  not adjusted for, is adjusted for in the history, as a split-adjusted chart shows the
+  bars before it: their prices divided by its factor and their volume multiplied by it,
+  so the indicators at `start` are those of the adjusted series. The Assumptions line of
+  the warm-up says so. The run's own bars, and an ex-date inside the run, stay as they
+  are (`_run_corporate_actions`).
 - **The bar that straddles a datetime `start`** (`Opening`): with `start` at 10:00 a
   09:15 to 10:15 strategy bar opens before the run and closes in it. The kernel builds it
   from the base bars of the run, from 10:00; the history holds the morning's. The
@@ -25,8 +33,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from .data._sessions import ist_days
 from .data.quality import check_bars
+from .data.splits import UNADJUSTED, PriceGap
+
+PRICES = ("open", "high", "low", "close")
 
 
 @dataclass(frozen=True)
@@ -68,32 +78,63 @@ def opening_part(frame: pd.DataFrame, run_from: int) -> Opening | None:
     return Opening(int(last["ts_open"]), *values)
 
 
-def _first_session(run_base: pd.DataFrame) -> pd.DataFrame:
-    """The run's base bars of its first IST day."""
-    if run_base.empty:
-        return run_base
-    days = ist_days(run_base["ts_open"].to_numpy())
-    return run_base[days == days[0]]
+@dataclass(frozen=True)
+class Joined:
+    """The history as joined to the run (module docstring): `failure` says why it cannot
+    be ("" when it can); `base` is its base bars, adjusted for the declared splits and
+    bonuses before the run; `adjusted` says what was adjusted, one clause per action."""
+
+    failure: str
+    base: pd.DataFrame
+    adjusted: tuple[str, ...] = ()
 
 
-def join_failure(
+def _adjusted_for(gap: PriceGap) -> str:
+    """For example "adjusted for a split (2 shares for every 1) on 2024-12-17: prices
+    before it divided by 2, volume multiplied by 2"."""
+    return (
+        f"adjusted for {gap.reading} on {gap.ex_date}: prices before it divided by "
+        f"{gap.factor:g}, volume multiplied by {gap.factor:g}"
+    )
+
+
+def _back_adjusted(history: pd.DataFrame, gaps: list[PriceGap]) -> pd.DataFrame:
+    """`history` with the bars before each gap's ex-date divided by its factor (prices)
+    and multiplied by it (volume)."""
+    if not gaps:
+        return history
+    opens = history["ts_open"].to_numpy()
+    factor = np.ones(len(history))
+    for gap in gaps:
+        factor[opens < gap.ex_open_ns] *= gap.factor
+    adjusted = history.copy()
+    for name in PRICES:
+        adjusted[name] = history[name].to_numpy(dtype=float) / factor
+    adjusted["volume"] = history["volume"].to_numpy(dtype=float) * factor
+    return adjusted
+
+
+def join(
     symbol: str,
     history: pd.DataFrame,
     run_base: pd.DataFrame,
     declared: Any,
     plan: Any,
     calendar: Any,
-) -> str:
-    """Why the base bars `history` cannot be joined to `run_base`, the run's base bars
-    of `symbol` (module docstring); "" when they can. `declared` are the corporate
-    actions the run declares for the symbol, `plan` the run's (`_settings.RunPlan`) and
-    `calendar` its calendar."""
+) -> Joined:
+    """The base bars `history` joined to `run_base`, the run's base bars of `symbol`
+    (module docstring). `declared` are the corporate actions the run declares for the
+    symbol, `plan` the run's (`_settings.RunPlan`) and `calendar` its calendar."""
     if history.empty or run_base.empty:
-        return ""
-    joined = pd.concat([history, _first_session(run_base)], ignore_index=True)
+        return Joined("", history)
+    joined = pd.concat([history, run_base.iloc[:1]], ignore_index=True)
     joined.attrs = {"symbol": symbol, "exchange": plan.exchange, "interval": plan.base}
     report = check_bars(joined, calendar=calendar, now_ns=plan.present, corporate_actions=declared)
-    return "; ".join(issue.message for issue in report.errors)
+    failure = "; ".join(issue.message for issue in report.errors)
+    if failure:
+        return Joined(failure, history)
+    gaps = [gap for gap in report.price_gaps if gap.status == UNADJUSTED]
+    return Joined("", _back_adjusted(history, gaps), tuple(_adjusted_for(gap) for gap in gaps))
 
 
-__all__ = ["Opening", "join_failure", "opening_part"]
+__all__ = ["Joined", "Opening", "join", "opening_part"]

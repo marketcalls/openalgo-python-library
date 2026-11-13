@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from openalgo.backtest._causality_checks import ANCHORED, IndicatorChecks
+from openalgo.backtest._warm_up_anchor import PeriodAnchor
 from openalgo.backtest._warm_up_measure import (
     NEVER_SETTLES,
     OWN_VALUES,
@@ -119,9 +120,15 @@ def test_an_indicator_over_values_of_the_users_own_has_no_warm_up():
 
 
 def test_an_anchored_indicator_is_replayed_from_the_start_of_its_anchor_period():
-    (outcome,) = check(causal_sum, anchor="Month").outcomes
-    assert (outcome.warm_up, outcome.note, outcome.anchor) == (None, ANCHORED, "Month")
+    month = PeriodAnchor("Month")
+    (outcome,) = check(causal_sum, anchor=month).outcomes
+    assert (outcome.warm_up, outcome.note, outcome.anchor) == (None, ANCHORED, month)
     assert outcome.describe().endswith("warm-up since the start of its Month")
+
+
+def test_an_indicator_that_reads_the_period_before_is_replayed_from_its_start():
+    (outcome,) = check(causal_sum, anchor=PeriodAnchor("Week", periods_before=1)).outcomes
+    assert outcome.describe().endswith("warm-up since the start of the Week before its own")
 
 
 def test_a_key_is_checked_once():

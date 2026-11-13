@@ -13,10 +13,12 @@ for the rest:
   (`_warm_up_measure`, with its relative tolerance `WINDOW_TOLERANCE` printed in the
   Assumptions block). The length found is the warm-up the strategy waits for
   (`_warm_up`), the window live trading keeps. An anchored indicator (the registry's
-  notes say so) needs the bars since the start of its anchor period instead (its
-  `anchor`, `_warm_up_anchor`). An indicator no window settles (a running sum), one that
-  needs more than the longest window, one that cannot be computed on the reference bars
-  and one that reads values of the user's own are each stated; none is an error.
+  `anchor`) needs the bars since the start of the first anchor period it reads instead
+  (its `anchor`, `_warm_up_anchor`). An indicator no window settles (a running sum), one
+  that needs more than the longest window, one that cannot be computed on the reference
+  bars and one that reads values of the user's own are each stated; none is an error.
+  Nor is a series too short for its indicator (`_indicators`): it was not computed, its
+  truncation is not checked, and its outcome says how many bars it needs.
 
 An `IndicatorChecks` remembers what it has checked. The truncation check, the costly one,
 runs once per strategy and data: it is keyed by strategy source hash, function, inputs
@@ -35,6 +37,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from ._messages import counted
+from ._warm_up_anchor import PeriodAnchor
 from ._warm_up_measure import (
     NEVER_SETTLES,
     OWN_VALUES,
@@ -66,8 +69,10 @@ class CheckOutcome:
     before it is ready, or None. note: why there is no warm-up length (ANCHORED,
     NEVER_SETTLES, OWN_VALUES or a failure on the reference bars), or "". series: the
     (symbol, interval) of the bars the indicator is computed on, None when not given.
-    anchor: the anchor period of an anchored indicator ("Month"), else None. more: True
-    when it needs more than `warm_up` bars, the longest window measured.
+    anchor: the anchor of an anchored indicator (`_warm_up_anchor.PeriodAnchor`), else
+    None. more: True when it needs more than `warm_up` bars, the longest window
+    measured. required: the bars its series must hold for it to be computed, when the
+    series holds fewer and it was not computed; else None.
     """
 
     label: str
@@ -75,14 +80,20 @@ class CheckOutcome:
     warm_up: int | None
     note: str
     series: tuple[str, str] | None = None
-    anchor: str | None = None
+    anchor: PeriodAnchor | None = None
     more: bool = False
+    required: int | None = None
 
     def describe(self) -> str:
         """One line for the Assumptions block. No cut checked is stated as such, never
         as a pass."""
-        if self.anchor is not None:
-            settled = f"warm-up since the start of its {self.anchor}"
+        if self.required is not None:
+            settled = (
+                f"not computed: its series holds fewer than the {counted(self.required, 'bar')} "
+                "it needs"
+            )
+        elif self.anchor is not None:
+            settled = f"warm-up since {self.anchor.since()}"
         elif self.warm_up is None:
             settled = self.note
         else:
@@ -164,16 +175,20 @@ class IndicatorChecks:
         label: str,
         compute: Compute,
         whole: Sequence[np.ndarray],
-        anchor: str | None,
+        anchor: PeriodAnchor | None,
         series: tuple[str, str] | None = None,
         reference: ReferenceCall | None = None,
+        *,
+        required: int | None = None,
     ) -> CheckOutcome:
         """Run both checks for an indicator, each unless done before (truncation by
         `key`, the warm-up by `label`); `whole` are its causal outputs on the whole
-        series, `compute` recomputes them on a part, `anchor` is its anchor period when
-        it is anchored, `series` names the bars they are computed on, and `reference`
+        series, `compute` recomputes them on a part, `anchor` is its anchor when it is
+        anchored, `series` names the bars they are computed on, and `reference`
         computes them on any bars (the reference bars of the warm-up), None when its
-        inputs hold values of the user's own. Returns what the checks found.
+        inputs hold values of the user's own. `required` is the bars a series too short
+        for the indicator lacks (it was not computed, so no truncation is checked and
+        none is recorded for the key). Returns what the checks found.
 
         Raises ConfigError when a value changes once later bars are removed."""
         truncation_key = f"{self.strategy_hash}:{key}"
@@ -182,18 +197,29 @@ class IndicatorChecks:
             return self._outcomes[window_key]
         length = len(whole[0]) if whole else 0
         cuts: int | None = None
-        if truncation_key not in self._known:
+        if required is not None:
+            cuts = 0
+        elif truncation_key not in self._known:
             if truncation_key not in self._cuts:
                 self._cuts[truncation_key] = self._truncation(label, compute, whole, length)
             cuts = self._cuts[truncation_key]
         found = self.warm_up(label, anchor, reference)
         outcome = CheckOutcome(
-            label, cuts, found.bars, found.note, series=series, anchor=anchor, more=found.more
+            label,
+            cuts,
+            found.bars,
+            found.note,
+            series=series,
+            anchor=anchor,
+            more=found.more,
+            required=required,
         )
         self._outcomes[window_key] = outcome
         return outcome
 
-    def warm_up(self, label: str, anchor: str | None, reference: ReferenceCall | None) -> WarmUp:
+    def warm_up(
+        self, label: str, anchor: PeriodAnchor | None, reference: ReferenceCall | None
+    ) -> WarmUp:
         """The warm-up of the indicator labelled `label` (see `check`): none for an
         anchored one (its need is its anchor period), none for one over values of the
         user's own, else measured on the reference bars (`_warm_up_measure`)."""
@@ -245,14 +271,24 @@ class RunChecks:
         label: str,
         compute: Compute,
         whole: Sequence[np.ndarray],
-        anchor: str | None,
+        anchor: PeriodAnchor | None,
         series: tuple[str, str] | None = None,
         reference: ReferenceCall | None = None,
+        *,
+        required: int | None = None,
     ) -> CheckOutcome:
         """`IndicatorChecks.check`, recording the outcome for this run."""
-        outcome = self._shared.check(key, label, compute, whole, anchor, series, reference)
+        outcome = self._shared.check(
+            key, label, compute, whole, anchor, series, reference, required=required
+        )
         self._outcomes.setdefault((outcome.label, series), outcome)
         return outcome
+
+    def warm_up(
+        self, label: str, anchor: PeriodAnchor | None, reference: ReferenceCall | None
+    ) -> WarmUp:
+        """`IndicatorChecks.warm_up`, on the shared checks."""
+        return self._shared.warm_up(label, anchor, reference)
 
     @property
     def outcomes(self) -> tuple[CheckOutcome, ...]:
