@@ -10,13 +10,15 @@ with `bt.param(default, values)` and not fixed by `params=`, in the order the cl
 declares them; the others keep their defaults (or their `params=` values). Every
 other keyword is a run argument of `bt.backtest`, the same for every combination.
 
-How it runs: the inputs (settings, base interval, bars, the history before `start`,
-instruments, the benchmark's closes) are prepared once, so every combination is measured
-against the same benchmark and computes its indicators over the same history; each
-waits for its own indicators' warm-up, as its single run does (`_warm_up`). The first
+How it runs: the inputs (settings, base interval, bars, instruments, the benchmark's
+closes) are prepared once, so every combination is measured against the same benchmark.
+The history before `start` is loaded once for the largest need of the combinations
+(each is probed on the reference bars first, `_warm_up_probe`), and each combination
+keeps what its own indicators need and waits for their warm-up, as its single run does
+(`_warm_up`, `_warm_up_history`). The first
 combination runs in this process. It runs the indicator truncation checks for the whole
 sweep (they are never repeated per combination; the warm-up, which depends on the
-parameters, is measured per combination over short windows) and shows which evaluation
+parameters, is measured once per indicator on the reference bars) and shows which evaluation
 path of 03-architecture 5 the strategy takes (`OptimizeResult.path`):
 
 - "event": `on_bar` (and timers and callbacks) runs in Python at every decision; the
@@ -250,7 +252,7 @@ def optimize(
     run_settings, ranges = _split_settings(strategy, settings)
     arguments = _run_arguments(client, run_settings)
     names, combinations = grid(strategy, ranges, arguments["params"])
-    prepared = prepare(strategy, client, arguments)
+    prepared = prepare(strategy, client, arguments, combinations)
     checks = IndicatorChecks(strategy_source_hash(strategy) or strategy.__qualname__)
     light = {key: arguments[key] for key in ("source", "tz")}
     light["data"] = None if arguments["data"] is None else "given"

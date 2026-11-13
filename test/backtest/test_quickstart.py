@@ -3,14 +3,16 @@ OpenAlgo data through a client (09-roadmap, Phase 1 exit criteria).
 
 The example is `examples/backtest_quickstart.py`: an EMA crossover (5 and 20 sessions)
 on SBIN delivery with synthetic daily bars from 2025-07-01, a run from 2026-04-01 to
-2026-11-06 and Rs 1,00,000. The bars before 2026-04-01 are history: the EMAs are computed
-over them, so they are ready when the run starts and the strategy decides from its
-first session. The OpenAlgo run serves the same bars from an in-process fake client as
-Historify (`source="db"`) rows, so it opens no socket. The expected trade dates are
-worked from the closes with an EMA written here (alpha 2 / (n + 1), started at the first
-close of the history), not by the engine: a long opens at the open of the session after
-the fast EMA crosses above the slow one at a close of the run, and closes at the open
-after it crosses below.
+2026-11-06 and Rs 1,00,000. The bars before 2026-04-01 are history: the run keeps the
+128 sessions its 20-session EMA needs, the EMAs are computed over them, so they are
+ready when the run starts and the strategy decides from its first session. The
+OpenAlgo run serves the same bars from an in-process fake client as Historify
+(`source="db"`) rows, so it opens no socket. The expected trade dates are worked from
+the closes with an EMA written here (alpha 2 / (n + 1), started at the first close of
+the bars, 2025-07-01), not by the engine: by 128 sessions the two starts agree within
+the warm-up's tolerance, so the crossings are the same. A long opens at the open of the
+session after the fast EMA crosses above the slow one at a close of the run, and closes
+at the open after it crosses below.
 """
 
 import importlib.util
@@ -157,14 +159,14 @@ def test_on_openalgo_data_the_daily_bars_of_the_whole_range_are_read_from_histor
 ):
     # A daily strategy runs on daily bars. "auto" first asks Historify for the daily
     # bars of the range (the coverage probe); it holds every session, so the bars are
-    # then read from it. Then the history before the range, from the same source: 2,048
-    # sessions x 7/5 x 1.1 = 3,154 calendar days before 2026-04-01 is Saturday
-    # 2017-08-12, so the first session asked for is Monday 2017-08-14, and 2026-03-31
-    # is an NSE holiday, so the last is 2026-03-30. Only the read-only history endpoint
-    # is called.
+    # then read from it. Then the history before the range, from the same source, for
+    # what the 20-session EMA needs, 128 sessions (the longer of the two):
+    # 128 x 7/5 x 1.1 = 197.12, so 198 calendar days and a week more, 205, before
+    # 2026-04-01 is Monday 2025-09-08; 2026-03-31 is an NSE holiday, so the last session
+    # asked for is 2026-03-30. Only the read-only history endpoint is called.
     _, client = openalgo_run
     whole_range = ("db", "D", QUICKSTART.START, QUICKSTART.END)
-    history = ("db", "D", "2017-08-14", "2026-03-30")
+    history = ("db", "D", "2025-09-08", "2026-03-30")
     assert client.history_calls() == [whole_range, whole_range, history]
     assert client.endpoints() == {"history"}
     assert client.keys_seen == {FakeClient.api_key}

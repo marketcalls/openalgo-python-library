@@ -25,9 +25,9 @@ The run (`drive_conditions`, called in place of the `on_bar` driver):
 
 1. each condition becomes a bool array over the strategy bars of the instrument, the
    bars the pauses deliver (`Engine.strategy_bars`): views are computed over the
-   history before `start` as well and cut to these bars, and every array is false
-   before the strategy's indicators are ready (`_warm_up`), as `on_bar` would not be
-   called then;
+   history before `start` as well (joined after `init`, `_warm_up_attach`) and cut to
+   these bars, and every array is false before the strategy's indicators are ready
+   (`_warm_up`), as `on_bar` would not be called then;
 2. the arrays and the order templates go to the Rust signal driver
    (`oa_bt::engine::signals`), which runs the whole grid with no Python call per bar and
    makes, at every strategy-bar close, the decision of the equivalent `on_bar` of 4.1;
@@ -232,10 +232,10 @@ def _entry_request(ctx: Any, side: str, args: dict[str, Any], what: str) -> dict
 
 
 def strategy_frame(strategy: Any) -> pd.DataFrame:
-    """Every strategy bar of the strategy's instrument over the run, after the history
-    before `start` (`_warm_up_history`), as a DataFrame indexed by IST bar open (open,
-    high, low, close in rupees, volume in units): what a `from_signals` function
-    receives."""
+    """Every strategy bar of the strategy's instrument its store holds (in `init`, the
+    run's bars; the history before `start` is joined after it, `_warm_up_attach`), as a
+    DataFrame indexed by IST bar open (open, high, low, close in rupees, volume in
+    units): what a `from_signals` function receives."""
     store = strategy._ctx.store(None)
     return pd.DataFrame({name: store.column(name) for name in FIELDS}, index=store.times())
 

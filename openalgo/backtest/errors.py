@@ -1,9 +1,10 @@
 """Exception types shared by the backtest package.
 
 Every error the engine raises on purpose derives from BacktestError, so callers can
-catch one type. Messages say what was wrong and what to do about it. The warning a run
-gives when orders were rejected, RejectedOrdersWarning, is here too, so it can be
-filtered by its class.
+catch one type. Messages say what was wrong and what to do about it. The warnings a run
+gives when orders were rejected (RejectedOrdersWarning) and when the strategy waited
+inside the run for its indicators (WarmUpWarning) are here too, so they can be filtered
+by their class.
 """
 
 
@@ -76,6 +77,14 @@ class RejectedOrdersWarning(UserWarning):
     `warnings.simplefilter("ignore", RejectedOrdersWarning)`."""
 
 
+class WarmUpWarning(UserWarning):
+    """The strategy waited inside the run for its indicators to warm up, so it made no
+    decision for a part of the run (or none at all). `bt.backtest` issues it once, at the
+    end of such a run, with the first decision and the strategy bars each symbol waited;
+    why, and what to do, is in `result.warnings`. A warning, not an error: the result is
+    still returned. Silence it with `warnings.simplefilter("ignore", WarmUpWarning)`."""
+
+
 __all__ = [
     "BacktestError",
     "CalendarError",
@@ -89,4 +98,5 @@ __all__ = [
     "RejectedOrdersWarning",
     "SymbolNotFoundError",
     "TimestampError",
+    "WarmUpWarning",
 ]

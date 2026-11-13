@@ -35,7 +35,7 @@ import numpy as np
 import pandas as pd
 
 from ._series import FIELDS, TIMES, Bar, BarStore, SeriesStore
-from ._views import TimelineView
+from ._views import Recipe, TimelineView, field_recipe
 
 PRICE_FIELDS = ("open", "high", "low", "close")
 EpochValues = Callable[[int], np.ndarray]
@@ -47,9 +47,14 @@ class SplicedView(TimelineView):
     own values are those of the store's epoch, recomputed in place when it is read."""
 
     def __init__(
-        self, store: SplicedStore, values: np.ndarray, label: str, at_epoch: EpochValues
+        self,
+        store: SplicedStore,
+        values: np.ndarray,
+        label: str,
+        at_epoch: EpochValues,
+        recipe: Recipe | None = None,
     ) -> None:
-        super().__init__(store, values, label)
+        super().__init__(store, values, label, recipe)
         self._compute_at = at_epoch
         self._cached: tuple[int, np.ndarray] | None = None
         self._epoch = store.epoch
@@ -90,7 +95,7 @@ class SplicedView(TimelineView):
             rebuilt = getattr(TimelineView, method)(plain(self), *(plain(a) for a in args))
             return rebuilt._values
 
-        return SplicedView(self._store, built._values, built.label, at_epoch)
+        return SplicedView(self._store, built._values, built.label, at_epoch, built._recipe)
 
     def _derive(self, other: Any, function: Callable, symbol: str, flip: bool = False) -> Any:
         return self._wrap("_derive", other, function, symbol, flip)
@@ -209,7 +214,11 @@ class SplicedStore(SeriesStore):
         """The view of one column; it shares the store's live column, which `advance`
         re-adjusts in place."""
         return SplicedView(
-            self, self.column(name), f"{self.name}.{name}", lambda e: self.column_at(name, e)
+            self,
+            self.column(name),
+            f"{self.name}.{name}",
+            lambda e: self.column_at(name, e),
+            field_recipe(name),
         )
 
     def indicator_adapter(self, call: Any, names: list[str], causal: tuple[str, ...]) -> Any:
@@ -291,7 +300,8 @@ class IndicatorAdapter:
         for k, view in enumerate(views):
             if isinstance(view, TimelineView):
                 values = np.array(self.outputs_at(epoch)[k], copy=True)
-                view = SplicedView(self._store, values, view.label, self._output_of(k))
+                at_epoch = self._output_of(k)
+                view = SplicedView(self._store, values, view.label, at_epoch, view._recipe)
             adopted.append(view)
         return adopted
 

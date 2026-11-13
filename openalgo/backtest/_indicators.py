@@ -12,14 +12,19 @@ Outputs the causality registry marks as looking ahead are rejected by name: a fu
 whose outputs all look ahead (`ta.fractals`) is refused when registered, and a
 look-ahead output of a function with causal ones (`ta.ichimoku`'s lagging span) is a
 `LookaheadOutput` that raises ConfigError on any use. The causal outputs then go
-through the truncation and window-stability checks of `_causality_checks`, whose
-warm-up the run waits for (`_warm_up`). The series include the history loaded before
-`start`, so an indicator is computed over it.
+through the checks of `_causality_checks`: truncation on the run's bars, and the
+window-stability warm-up on the engine's reference bars, computed there from the
+inputs' recipes (`_views.Recipe`), which the run waits for (`_warm_up`). An input of
+the user's own (a NumPy array, a pandas Series or DataFrame) has no counterpart on the
+reference bars, so such an indicator has no warm-up length and is not waited for; the
+run says so. The series include the history loaded before `start`, so an indicator is
+computed over it.
 """
 
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import numpy as np
@@ -28,11 +33,16 @@ import pandas as pd
 from openalgo.indicators import causality
 
 from ._messages import counted, not_supported
-from ._views import TimelineView
+from ._views import Recipe, TimelineView
 from .errors import ConfigError
 
 # The registry's word for an indicator replayed from an anchor, not a rolling window.
 ANCHORED_NOTE = "Anchored"
+# Plain inputs that are values of the user's own, one per bar: they have no counterpart
+# on the reference bars the warm-up is measured on (`_warm_up_reference`).
+OWN_VALUES = (np.ndarray, pd.Series, pd.DataFrame)
+# Every output of an indicator computed on any bars (`_Call.on_bars`).
+OnBars = Callable[[Mapping[str, Any]], list[np.ndarray]]
 
 
 class LookaheadOutput:
@@ -168,6 +178,55 @@ class _Call:
                 hasher.update(np.ascontiguousarray(value._values).tobytes())
         return hasher.hexdigest()[:16]
 
+    def on_bars(self) -> OnBars | None:
+        """Every output computed on any bars from the inputs' recipes (`_views.Recipe`),
+        or None when an input holds values of the user's own: an array, or a view
+        without a recipe. The outputs of the last bars asked for are kept, so that the
+        views of several outputs compute the indicator once."""
+        recipes: list[Recipe | None] = []
+        for value in self.inputs:
+            if isinstance(value, OWN_VALUES):
+                return None
+            if isinstance(value, TimelineView):
+                if value._recipe is None:
+                    return None
+                recipes.append(value._recipe)
+            else:
+                recipes.append(None)
+        last: list[tuple[Mapping[str, Any], list[np.ndarray]]] = []
+
+        def outputs(bars: Mapping[str, Any]) -> list[np.ndarray]:
+            if last and last[0][0] is bars:
+                return last[0][1]
+            times = bars["times"]
+            arguments = [
+                value if recipe is None else pd.Series(recipe(bars), index=times)
+                for value, recipe in zip(self.inputs, recipes, strict=True)
+            ]
+            found = _outputs(self.func(*arguments, **self.params), len(times), self.label)
+            last[:] = [(bars, found)]
+            return found
+
+        return outputs
+
+
+def _causal_part(on_bars: OnBars, names: list[str], causal: tuple[str, ...]) -> OnBars:
+    """The causal outputs of `on_bars`, in order."""
+
+    def outputs(bars: Mapping[str, Any]) -> list[np.ndarray]:
+        return [part for n, part in zip(names, on_bars(bars), strict=True) if n in causal]
+
+    return outputs
+
+
+def _output_recipe(on_bars: OnBars, index: int) -> Recipe:
+    """The recipe of output `index` of an indicator."""
+
+    def recipe(bars: Mapping[str, Any]) -> np.ndarray:
+        return on_bars(bars)[index]
+
+    return recipe
+
 
 def register(checks: Any, func: Any, inputs: tuple, params: dict) -> Any:
     """Register an indicator (see the module docstring): a view, or a tuple of views for
@@ -211,12 +270,20 @@ def register(checks: Any, func: Any, inputs: tuple, params: dict) -> Any:
     if adapter is not None:
         adapter = adapter(call, names, causal)
         compute, whole = adapter.compute, adapter.whole
-    checks.check(key, label, compute, whole, anchored, series=(store.symbol, store.interval))
+    on_bars = call.on_bars()
+    reference = None if on_bars is None else _causal_part(on_bars, names, causal)
+    series_of = (store.symbol, store.interval)
+    checks.check(key, label, compute, whole, anchored, series=series_of, reference=reference)
     views = [
         LookaheadOutput(name, n, lookahead[n], causal)
         if n in lookahead
-        else TimelineView(store, values, label if len(outputs) == 1 else f"{label}.{n}")
-        for n, values in zip(names, outputs, strict=True)
+        else TimelineView(
+            store,
+            values,
+            label if len(outputs) == 1 else f"{label}.{n}",
+            None if on_bars is None else _output_recipe(on_bars, k),
+        )
+        for k, (n, values) in enumerate(zip(names, outputs, strict=True))
     ]
     if adapter is not None:
         views = adapter.adopt(views)
