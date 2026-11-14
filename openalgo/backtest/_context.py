@@ -10,6 +10,12 @@ context's creation until the driver starts the run (the first pause of the event
 or the start of the condition driver, `begin_run`). The context marks the phase on every
 store it makes, so a view can refuse a truth test while conditions are declared
 (`_views`).
+
+A symbol not ready yet (`waiting`) is held back three ways until its indicators have
+closed their warm-up: its bars are not passed on, its orders are skipped, and the
+context marks every store of it (its strategy bars, its other intervals, the spliced
+series of a futures underlying and the bars of that series' contracts) so that its
+views other than bar fields read unknown (`_views`), wherever they are read.
 """
 
 from __future__ import annotations
@@ -67,6 +73,9 @@ class RunContext:
         self.run = run
         # True while `init` declares the strategy; see the module docstring.
         self.declaring = True
+        # The names not ready yet (`waiting`).
+        self._waiting: dict[str, int] = {}
+        self.futures = None
         self.stores = {
             symbol: self._marked(self._bar_store(symbol, number))
             for number, symbol in enumerate(self.symbols)
@@ -80,16 +89,11 @@ class RunContext:
         # by a sizer or a sizing function, a target that rounds to no units, or a symbol
         # not ready yet.
         self.skipped: list[tuple[int | None, str, str]] = []
-        # The names not ready yet, with the instant (UTC nanoseconds) each is ready from
-        # (`_warm_up.Readiness.waiting`): until then their bars are not passed on and
-        # their orders are skipped. A name leaves once a decision reaches its instant.
-        self.waiting: dict[str, int] = {}
         # The result's orders table once the run is over (`close`), and the row of each
         # order id in it, made on the first lookup.
         self._final_orders: dict[str, list] | None = None
         self._final_rows: dict[int, int] | None = None
         # Futures series by underlying, from (`_futures.FuturesPlan`, the kernel's switches).
-        self.futures = None
         if futures is not None:
             plan, switches = futures
             self.futures = SeriesContext(plan, switches, self.stores, self.symbols, run.interval)
@@ -104,9 +108,37 @@ class RunContext:
     # ----- the phase of the run ----------------------------------------------------
 
     def _marked(self, store: SeriesStore) -> SeriesStore:
-        """`store`, marked with the run's phase for its views."""
+        """`store`, marked with the run's phase and whether its name waits, for its
+        views."""
         store.declaring = self.declaring
+        store.waiting = self._waits(store)
         return store
+
+    def _waits(self, store: SeriesStore) -> bool:
+        """True while the name a store belongs to is not ready (`waiting`): its symbol,
+        or the underlying of the futures series its contract belongs to."""
+        if not self._waiting:
+            return False
+        spliced = None if self.futures is None else self.futures.store_of(store.symbol)
+        return (store.symbol if spliced is None else spliced.symbol) in self._waiting
+
+    def _all_stores(self) -> tuple[SeriesStore, ...]:
+        """Every store the run has made: strategy bars, other intervals, spliced series."""
+        spliced = () if self.futures is None else self.futures.stores
+        return (*self.stores.values(), *self.timeframes.values(), *spliced)
+
+    @property
+    def waiting(self) -> dict[str, int]:
+        """The names not ready yet, with the instant (UTC nanoseconds) each is ready from
+        (`_warm_up.Readiness.waiting`): until then they are held back (module docstring).
+        A name leaves once a decision reaches its instant. Setting it marks the stores."""
+        return self._waiting
+
+    @waiting.setter
+    def waiting(self, waiting: dict[str, int]) -> None:
+        self._waiting = waiting
+        for store in self._all_stores():
+            self._marked(store)
 
     def _bar_store(self, symbol: str, number: int) -> BarStore:
         """The strategy bars of a symbol: the kernel's, after the history kept before
@@ -123,8 +155,7 @@ class RunContext:
         self.declaring = False
         for store in self.stores.values():
             store.begin()
-        spliced = () if self.futures is None else self.futures.stores
-        for store in (*self.stores.values(), *self.timeframes.values(), *spliced):
+        for store in self._all_stores():
             self._marked(store)
 
     # ----- the clock and the bars ------------------------------------------------
@@ -143,17 +174,17 @@ class RunContext:
             revealed[symbol] = self.stores[symbol].reveal(row)
         if self.futures is not None:
             revealed = self.futures.reveal(revealed, self.stores, self.decided_at)
-        if self.waiting:
+        if self._waiting:
             self._end_waits()
-            revealed = {name: bar for name, bar in revealed.items() if name not in self.waiting}
+            revealed = {name: bar for name, bar in revealed.items() if name not in self._waiting}
         return revealed
 
     def _end_waits(self) -> None:
-        """Drop from `waiting` the names ready at the decision instant: decisions only
-        move forward, so a name that is ready stays ready."""
+        """Drop from `waiting` the names ready at the decision instant, which unmarks
+        their stores: decisions only move forward, so a name that is ready stays ready."""
         now = self.decided_at
-        if now is not None:
-            self.waiting = {name: at for name, at in self.waiting.items() if now < at}
+        if now is not None and any(now >= at for at in self._waiting.values()):
+            self.waiting = {name: at for name, at in self._waiting.items() if now < at}
 
     @property
     def now(self):
@@ -212,11 +243,11 @@ class RunContext:
         sent; it is recorded as skipped (`NOT_READY`) when it would have sent an order:
         always for an order, and for a `target` request only when it would trade
         (`_target_trades`)."""
-        if not self.waiting:
+        if not self._waiting:
             return False
         symbol = self.symbols[request["instrument"]]
         spliced = None if self.futures is None else self.futures.store_of(symbol)
-        ready_from = self.waiting.get(symbol if spliced is None else spliced.symbol)
+        ready_from = self._waiting.get(symbol if spliced is None else spliced.symbol)
         if ready_from is None or self.decided_at is None or self.decided_at >= ready_from:
             return False
         if not target or self._target_trades(request):

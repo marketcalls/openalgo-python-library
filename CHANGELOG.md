@@ -171,7 +171,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flat, sends nothing while it is flat and is no skip), it joins at the first bar it is
   ready, and the symbols
   that are ready trade; nothing is decided before the first symbol is ready, so a run
-  of one symbol simply waits. When the source has fewer bars before `start` (own data
+  of one symbol simply waits. An indicator of a symbol that is not ready yet reads NaN,
+  or false for a signal, wherever it is read (deciding for another symbol, in a timer,
+  through another interval of it or a futures series), as does every other view
+  computed from its bars (a comparison, a shift, a crossing); its bar fields (open,
+  high, low, close, volume) and `self.history` stay readable. A filter on a symbol not
+  ready yet (trade SBIN while NIFTYBEES closes above its EMA) therefore does not trade
+  on it: before, its values were shown, and they could depend on how many bars followed
+  (a 20-bar EMA is not computed on fewer than 20 bars and is computed from the first bar
+  on 20 or more), so a later `end=` could add a trade in January. The values are kept:
+  once the symbol is ready, its lookbacks (`line[-2]`) read them. When the source has
+  fewer bars before `start` (own data
   that begins at `start`, a new listing, a futures series rolled from contract to
   contract, which is built from `start`), the symbol waits inside the run until its
   indicators are ready; a warning counts the strategy bars each symbol waited and says
@@ -194,9 +204,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (a period of 0) still stops the run. A run on one explicit futures contract
   loads that contract's own bars before `start`. The Assumptions block gains `warm_up`
   (the rule, each series' need in its own bars, the history kept with the day asked
-  from and, when later, the day the source's bars began, and the first decision of each
-  symbol), the manifest records the warm-up under `arguments["warm_up"]` (the needs,
-  with `since` for an anchor period, `periods_before` for one that reads whole periods
+  from and, when later, the day the source's bars began, for a symbol with none the day
+  its bars begin ("the bars given for BBB begin on 2026-02-02"), and the first decision
+  of each symbol), the manifest records the warm-up under `arguments["warm_up"]` (the
+  needs, with `since` for an anchor period, `periods_before` for one that reads whole periods
   before its own and `more_than` for a need longer than the longest window, the
   indicators not waited for, the run's first decision and each symbol's
   (`first_decisions`, None for a symbol ready at start), the strategy bars waited by

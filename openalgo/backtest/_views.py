@@ -12,6 +12,17 @@ make the condition grammar of 14-strategy-api 4.2 (`_conditions`). A view of boo
 is true when its latest value is (false before any bar); a numeric view has no truth
 value, so `if view:` is an error that points to `view[-1]`.
 
+While a symbol is not ready (its indicators have not closed their warm-up, `_warm_up`),
+every view of its stores other than a bar field (open, high, low, close, volume) reads
+unknown: NaN, or false for a condition, at every bar shown, and its truth value is false.
+An indicator is computed over the whole series, so a value shown before its symbol is
+ready could depend on how many bars follow (`ta.ema` of 20 bars is not computed on fewer
+than 20); masking it when it is read keeps every decision on it causal, wherever it is
+read (deciding for another symbol, in a timer). The values themselves are kept: the
+views built from them in `init` and the indicators of indicators are computed from them,
+and once the symbol is ready its lookbacks (`line[-2]`) read them. The run context marks
+the stores of a symbol not ready (`waiting`, see `Store`).
+
 While the strategy's `init` declares it, no view has a truth value: `and`, `or`, `not`,
 `if` and a chained comparison such as `a < b < c` need one true or false, a condition
 over the whole run has none, and reading "false, no bar has closed" would quietly drop
@@ -49,10 +60,12 @@ class Store(Protocol):
 
     A store of a run also carries `declaring`, true while the strategy's `init` runs
     (`_context.RunContext` sets it on every store it makes); a store without it, such as
-    one built outside a run, is never declaring."""
+    one built outside a run, is never declaring. `waiting` is true while the symbol the
+    store belongs to is not ready (module docstring); the run context keeps it."""
 
     symbol: str
     interval: str
+    waiting: bool
 
     def visible(self) -> int:
         """How many bars are revealed now."""
@@ -114,6 +127,14 @@ def _truth_in_init(label: str) -> str:
     )
 
 
+def _unknown(shown: np.ndarray) -> np.ndarray:
+    """What a view of a symbol not ready shows for the values `shown`: false for a
+    condition, else NaN, one per bar (module docstring)."""
+    if shown.dtype == np.bool_:
+        return np.zeros(len(shown), dtype=bool)
+    return np.full(len(shown), np.nan)
+
+
 def _bar_count(value: Any, what: str, minimum: int = 1) -> int:
     """A whole number of bars, `minimum` or more. Raises ConfigError otherwise."""
     if isinstance(value, bool) or not isinstance(value, int | np.integer) or value < minimum:
@@ -125,7 +146,9 @@ def _bar_count(value: Any, what: str, minimum: int = 1) -> int:
 class TimelineView:
     """Values aligned to a store's bars; see the module docstring. `recipe` computes the
     same values on other bars, None when they cannot be; `need` is the bars of the series
-    before they are those of all the history (None when no length is known)."""
+    before they are those of all the history (None when no length is known); `bar_field`
+    is True for the view of a bar field, which shows its values while its symbol is not
+    ready."""
 
     # Views compare element-wise, so they are not hashable.
     __hash__ = None  # type: ignore[assignment]
@@ -137,12 +160,14 @@ class TimelineView:
         label: str,
         recipe: Recipe | None = None,
         need: int | None = 1,
+        bar_field: bool = False,
     ) -> None:
         self._store = store
         self._values = values
         self._label = label
         self._recipe = recipe
         self.need = need
+        self.bar_field = bar_field
 
     @property
     def label(self) -> str:
@@ -150,7 +175,11 @@ class TimelineView:
         return self._label
 
     def _shown(self) -> np.ndarray:
-        return self._values[: self._store.visible()]
+        store = self._store
+        shown = self._values[: store.visible()]
+        if store.waiting and not self.bar_field:
+            return _unknown(shown)
+        return shown
 
     def __len__(self) -> int:
         return len(self._shown())

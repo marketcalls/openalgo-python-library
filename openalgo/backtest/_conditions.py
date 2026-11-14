@@ -27,7 +27,8 @@ The run (`drive_conditions`, called in place of the `on_bar` driver):
    bars the pauses deliver (`Engine.strategy_bars`): views are computed over the
    history before `start` as well (the series hold it before `init` runs) and cut to
    these bars, and every array is false before the strategy's indicators are ready
-   (`_warm_up`), as `on_bar` would not be called then;
+   (`_warm_up`), as `on_bar` would not be called then and as a view of a symbol not
+   ready reads (`_views`);
 2. the arrays and the order templates go to the Rust signal driver
    (`oa_bt::engine::signals`), which runs the whole grid with no Python call per bar and
    makes, at every strategy-bar close, the decision of the equivalent `on_bar` of 4.1;
