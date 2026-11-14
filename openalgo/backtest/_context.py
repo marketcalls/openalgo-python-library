@@ -207,10 +207,11 @@ class RunContext:
 
     # ----- orders ----------------------------------------------------------------
 
-    def _not_ready(self, request: dict, trades: bool = True) -> bool:
+    def _not_ready(self, request: dict, target: bool = False) -> bool:
         """True when the request is on a name not ready yet (`waiting`), so it is not
-        sent; it is recorded as skipped (`NOT_READY`) when it would have sent an order
-        (`trades`)."""
+        sent; it is recorded as skipped (`NOT_READY`) when it would have sent an order:
+        always for an order, and for a `target` request only when it would trade
+        (`_target_trades`)."""
         if not self.waiting:
             return False
         symbol = self.symbols[request["instrument"]]
@@ -218,7 +219,7 @@ class RunContext:
         ready_from = self.waiting.get(symbol if spliced is None else spliced.symbol)
         if ready_from is None or self.decided_at is None or self.decided_at >= ready_from:
             return False
-        if trades:
+        if not target or self._target_trades(request):
             self.skipped.append((self.decided_at, symbol, NOT_READY))
         return True
 
@@ -243,16 +244,26 @@ class RunContext:
         handle of the order for the difference, or None when the position already is the
         target or the target rounds to no units or its symbol is not ready yet (recorded
         as skipped)."""
-        if self._not_ready(request):
+        if self._not_ready(request, target=True):
             return None
         return self._targeted(request, call(self.engine.target, request))
 
     def submit_rebalance(self, request: dict) -> Order | None:
         """`submit_target` for one trade of a rebalance (`_rebalance`): the order is
         tagged "rebalance" and, when it buys, fills after the slice's sales."""
-        if self._not_ready(request):
+        if self._not_ready(request, target=True):
             return None
         return self._targeted(request, call(self.engine.rebalance_target, request))
+
+    def _target_trades(self, request: dict) -> bool:
+        """True when a target request would send an order: a target other than flat, or
+        flat while a position is held. A flat symbol with a zero target sends none, so
+        it is no skip."""
+        if request["amount"] != 0:
+            return True
+        symbol = self.symbols[request["instrument"]]
+        native = call(self.engine.position, request["instrument"], request["product"])
+        return PositionView.from_native(symbol, native).qty != 0
 
     def _targeted(self, request: dict, submitted: tuple | None) -> Order | None:
         """The handle of a target's submission, or None (a skip is recorded)."""

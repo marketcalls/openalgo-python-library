@@ -161,7 +161,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   warm-up, counting only the bars up to that bar, so it never depends on a later bar or
   on how many bars follow (a later `end=` cannot stop another symbol from trading in
   January). A symbol not ready yet gets no bar in `on_bar` and its orders are skipped
-  (skip reason "not_ready"), it joins at the first bar it is ready, and the symbols
+  (skip reason "not_ready"; a rebalance that gives it no weight, or a `target()` of
+  flat, sends nothing while it is flat and is no skip), it joins at the first bar it is
+  ready, and the symbols
   that are ready trade; nothing is decided before the first symbol is ready, so a run
   of one symbol simply waits. When the source has fewer bars before `start` (own data
   that begins at `start`, a new listing, a futures series rolled from contract to
