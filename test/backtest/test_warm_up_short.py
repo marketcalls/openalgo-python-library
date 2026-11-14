@@ -15,6 +15,7 @@ compute it).
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 from warm_up_bars import SETTINGS, walk
 
@@ -67,9 +68,12 @@ def test_an_indicator_longer_than_its_series_makes_no_decision_and_says_so(name)
     assert f"{name}(SBIN." in warning
 
 
-def test_an_indicator_over_values_of_your_own_shorter_than_its_period_makes_no_decision():
-    # Its warm-up cannot be measured (an array of the user's own), so its period decides.
+def test_an_indicator_over_values_of_your_own_too_short_to_compute_is_unknown_not_waited_for():
+    # Its warm-up cannot be measured (an array of the user's own), so the strategy does
+    # not wait for it on a series of any length: on one too short for it its values are
+    # unknown, and the result says so.
     volumes = SHORT.volume.to_numpy()
+    seen = []
 
     class OwnWeights(bt.Strategy):
         symbol, exchange, interval, product = "SBIN", "NSE", "D", "CNC"
@@ -78,11 +82,16 @@ def test_an_indicator_over_values_of_your_own_shorter_than_its_period_makes_no_d
             self.line = self.I(ta.vwma, self.close, volumes, 100)
 
         def on_bar(self, bar):
-            self.buy(qty=1)
+            seen.append(self.line[-1])
 
     result = bt.backtest(OwnWeights, data=SHORT, **SETTINGS)
-    assert result.orders.empty
-    assert warm_up(result)["first_decision"] == "never"
+    assert warm_up(result)["first_decision"] is None
+    assert len(seen) == len(SHORT) and np.isnan(seen).all()
+    (warning,) = [note for note in result.warnings if "values of your own" in note]
+    assert warning.endswith(
+        f"and its series of {len(SHORT)} bars is too short to compute it, so its values are "
+        "unknown: the strategy did not wait for it."
+    )
 
 
 def test_any_other_error_of_an_indicator_still_stops_the_run():
@@ -128,6 +137,72 @@ def test_a_symbol_left_out_is_told_on_screen():
         "The strategy made no decision for BBB: its indicators were never ready within its "
         "bars. See result.warnings for why."
     )
+
+
+# Functions that refuse a series shorter than a length of their own, longer than their
+# period: a 20-bar ulcer index checks for 52 bars, the others for one bar more than
+# their period. Each fails on such a series and computes on a longer one.
+INNER_LENGTHS = [
+    pytest.param(ta.ulcerindex, 15, id="ulcerindex on 15 bars"),
+    pytest.param(ta.ulcerindex, 30, id="ulcerindex on 30 bars"),
+    pytest.param(ta.ulcerindex, 51, id="ulcerindex on 51 bars"),
+    pytest.param(ta.kama, 20, id="kama on 20 bars"),
+    pytest.param(ta.cmo, 20, id="cmo on 20 bars"),
+    pytest.param(ta.hv, 20, id="hv on 20 bars"),
+    pytest.param(ta.lrslope, 20, id="lrslope on 20 bars"),
+    pytest.param(ta.vidya, 20, id="vidya on 20 bars"),
+]
+
+
+@pytest.mark.parametrize(("function", "bars"), INNER_LENGTHS)
+def test_a_series_shorter_than_its_function_checks_for_makes_no_decision_for_it(function, bars):
+    class Inner(Pair):
+        def init(self):
+            self.lines = {s: self.I(function, self.data[s].close, 20) for s in self.symbols}
+
+    result = bt.backtest(
+        Inner, data={"AAA": LONG, "BBB": SHORT.iloc[:bars]}, start="2026-01-01", **SETTINGS
+    )
+    assert warm_up(result)["no_decision"] == ["BBB"]
+    assert set(result.orders["symbol"]) == {"AAA"}
+    label = f"{function.__name__}(BBB.close, 20)"
+    assert f"{label}: truncation not checked" in result.assumptions["indicator_checks"]
+    assert (
+        f"not computed: its series of {bars} bars is too short for it"
+        in (result.assumptions["indicator_checks"])
+    )
+
+
+def targeting(trade) -> type[bt.Strategy]:
+    """Pair, calling `trade(self)` at every decision instead of buying."""
+
+    class Targeting(Pair):
+        def on_bar(self, bars):
+            trade(self)
+
+    return Targeting
+
+
+@pytest.mark.parametrize(
+    "trade",
+    [
+        pytest.param(lambda s: s.rebalance({"AAA": 50}), id="rebalance with no weight for it"),
+        pytest.param(lambda s: s.target(qty=0, symbol="BBB"), id="target of zero units"),
+        pytest.param(lambda s: s.target(value=0, symbol="BBB"), id="target of zero rupees"),
+    ],
+)
+def test_a_flat_symbol_not_ready_with_a_target_of_flat_sends_nothing_and_skips_nothing(trade):
+    data = {"AAA": LONG, "BBB": SHORT}
+    result = bt.backtest(targeting(trade), data=data, start="2026-01-01", **SETTINGS)
+    assert result.skipped.empty
+    assert set(result.orders["symbol"]) <= {"AAA"}
+
+
+def test_a_target_that_would_trade_a_symbol_not_ready_is_skipped():
+    trade = targeting(lambda s: s.target(qty=1, symbol="BBB"))
+    result = bt.backtest(trade, data={"AAA": LONG, "BBB": SHORT}, start="2026-01-01", **SETTINGS)
+    assert len(result.skipped) == len(LONG.loc["2026-01-01":])
+    assert set(result.skipped["reason"]) == {"not_ready"}
 
 
 # ----- parameters the needs are keyed on -------------------------------------------------

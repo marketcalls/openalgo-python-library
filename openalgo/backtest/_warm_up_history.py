@@ -240,7 +240,7 @@ class RunHistory:
         `first_day` is the IST date of the first bar of its series."""
         if self.futures or need.symbol not in self.symbols:
             return FUTURES_REASON
-        if need.computed and not _covered(need, self.probed):
+        if not _covered(need, self.probed):
             return NOT_PROBED
         return self.symbols[need.symbol].shortfall(first_day, self.start)
 

@@ -141,7 +141,7 @@ class _ProbeChecks:
         series: tuple[str, str] | None = None,
         reference: ReferenceCall | None = None,
         *,
-        required: int | None = None,
+        too_short: int | None = None,
     ) -> CheckOutcome:
         """`_causality_checks.RunChecks.check` without the truncation check: the
         outcome of the indicator's warm-up, recorded."""
@@ -154,7 +154,7 @@ class _ProbeChecks:
             series=series,
             anchor=anchor,
             more=found.more,
-            required=required,
+            too_short=too_short,
         )
         self.outcomes.append(outcome)
         return outcome

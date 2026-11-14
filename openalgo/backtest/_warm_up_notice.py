@@ -4,9 +4,9 @@ indicators (decision D25, `_warm_up`).
 Why the strategy waited and what to do is a line of `result.warnings`, but a reader who
 prints only a few metrics sees none of it: own data that begins at `start` just shows
 fewer trades. So a run in which any symbol waited ends with one `WarmUpWarning` that
-gives the first decision and the strategy bars each symbol waited, and points to
-`result.warnings` for the rest. Library code never prints; a warning reaches the screen
-and can be filtered by its class.
+gives the first decision of each symbol that waited and the strategy bars it waited, and
+points to `result.warnings` for the rest. Library code never prints; a warning reaches
+the screen and can be filtered by its class.
 
 It is issued once per run, by `bt.backtest` only (and so by `Result.rerun`, which calls
 it): the combinations of `bt.optimize` run through `_pipeline.execute` directly and never
@@ -45,15 +45,38 @@ def _waits(record: dict[str, Any]) -> str | None:
     )
 
 
+def _symbol_waits(record: dict[str, Any]) -> str | None:
+    """The sentence of the symbols of a run of several that waited and then decided,
+    None without one."""
+    waiting = [
+        (name, when)
+        for name, when in record["first_decisions"].items()
+        if when not in (None, NEVER_DECIDED)
+    ]
+    if not waiting:
+        return None
+    names = ", ".join(name for name, _ in waiting)
+    each = "; ".join(
+        f"{name} waited {counted(record['waited'][name], 'strategy bar')} and decided from {when}"
+        for name, when in waiting
+    )
+    return (
+        f"The strategy waited inside the run for the indicators of {names} to warm up "
+        f"({each}): the signals of a symbol before its first decision were not taken."
+    )
+
+
 def wait_notice(record: dict[str, Any]) -> str | None:
     """The text of the warning for the warm-up a manifest records, or None when the
     strategy decided from `start` for every symbol. For example "The strategy waited
     inside the run for its indicators to warm up and made its first decision at
     2026-01-22 15:30 IST (SBIN waited 15 strategy bars): signals before then were not
-    taken. See result.warnings for why." A symbol left out (`no_decision`) adds "The
-    strategy made no decision for BBB: its indicators were never ready within its
+    taken. See result.warnings for why." In a run of several symbols each that waited
+    is named with its own first decision, and a symbol never ready (`no_decision`) adds
+    "The strategy made no decision for BBB: its indicators were never ready within its
     bars." """
-    told = [_waits(record)]
+    one = len(record["first_decisions"]) == 1 or record["first_decision"] == NEVER_DECIDED
+    told = [_waits(record) if one else _symbol_waits(record)]
     left_out = record.get("no_decision", [])
     if left_out:
         whose = "its" if len(left_out) == 1 else "their"

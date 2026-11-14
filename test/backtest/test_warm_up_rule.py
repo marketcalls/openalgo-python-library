@@ -263,14 +263,14 @@ def pair(order: tuple[str, str]) -> type[bt.Strategy]:
 @pytest.mark.parametrize("order", [("AAA", "BBB"), ("BBB", "AAA")])
 def test_each_symbol_counts_the_strategy_bars_it_waited_whatever_the_order(order):
     # BBB lists on 2026-02-02, within the run; its 20-bar average needs 32 bars, so the
-    # strategy decides from the close of BBB's 32nd session. AAA has years of history.
+    # strategy decides for BBB from the close of its 32nd session. AAA has years of
+    # history: it is ready at start and waits for nothing.
     data = {"AAA": walk("2020-01-01", "2026-06-30", 3), "BBB": walk("2026-02-02", "2026-06-30", 4)}
     result = bt.backtest(pair(order), data=data, start="2026-01-01", **SETTINGS)
-    listed = sessions("2026-02-02", "2026-06-30")
-    ready = listed[31]
-    waited_aaa = len(sessions("2026-01-01", (ready - dt.timedelta(days=1)).isoformat()))
-    assert warm_up(result)["waited"] == {"AAA": waited_aaa, "BBB": 31}
-    assert warm_up(result)["first_decision"] == f"{ready} 15:30 IST"
+    ready = sessions("2026-02-02", "2026-06-30")[31]
+    assert warm_up(result)["waited"] == {"BBB": 31}
+    assert warm_up(result)["first_decision"] is None
+    assert warm_up(result)["first_decisions"] == {"AAA": None, "BBB": f"{ready} 15:30 IST"}
 
 
 def test_own_data_that_lists_late_is_advised_to_begin_earlier():

@@ -339,10 +339,10 @@ def _checked(
 ) -> tuple[Any, Any]:
     """(the outcome of the checks of a call, the futures adapter of its series or None).
     `outputs` are its outputs on its series, `found` its anchor, reference call and, for
-    a series too short for it, the bars it needs (it was not computed, so neither its
-    truncation is checked nor an adapter made). Raises ConfigError as `checks.check`
+    a series too short for it, the bars of that series (it was not computed, so neither
+    its truncation is checked nor an adapter made). Raises ConfigError as `checks.check`
     does."""
-    anchor, reference, required = found
+    anchor, reference, too_short = found
     names, causal = _causal_names(record, outputs)
     whole = [values for n, values in zip(names, outputs, strict=True) if n in causal]
     # The function, its series inputs and their data: never a parameter value, so the
@@ -356,15 +356,15 @@ def _checked(
 
     # A futures series is re-adjusted at each roll: its indicators are checked point in
     # time and recomputed at every roll (`_spliced`).
-    adapter = None if required is not None else getattr(call.store, "indicator_adapter", None)
+    adapter = None if too_short is not None else getattr(call.store, "indicator_adapter", None)
     if adapter is not None:
         adapter = adapter(call, names, causal)
         compute, whole = adapter.compute, adapter.whole
-    if required is not None:
+    if too_short is not None:
         whole = []
     series_of = (call.store.symbol, call.store.interval)
     outcome = checks.check(
-        key, call.label, compute, whole, anchor, series_of, reference, required=required
+        key, call.label, compute, whole, anchor, series_of, reference, too_short=too_short
     )
     return outcome, adapter
 
@@ -388,14 +388,14 @@ def register(checks: Any, func: Any, inputs: tuple, params: dict) -> Any:
     anchor = _anchor(record, func, inputs, params)
     found = checks.warm_up(label, anchor, reference)
     required = required_bars(found, _bound(func, inputs, params))
-    if required is not None and span < required:
+    too_short = span if required is not None and span < required else None
+    if too_short is not None:
         several, outputs = _short(call, span, required)
     else:
-        required = None
         returned = _computed(call, span)
         several, outputs = isinstance(returned, tuple | list), outputs_of(returned, span, label)
     names, causal = _causal_names(record, outputs)
-    outcome, adapter = _checked(checks, call, record, outputs, (anchor, reference, required))
+    outcome, adapter = _checked(checks, call, record, outputs, (anchor, reference, too_short))
     on_bars = None if reference is None else call.on_bars()
     views = [
         LookaheadOutput(name, n, lookahead[n], causal)

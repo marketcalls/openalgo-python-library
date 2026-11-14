@@ -94,7 +94,8 @@ def sparse(bars: pd.DataFrame, share: float, seed: int) -> pd.DataFrame:
 @dataclass(frozen=True)
 class Scenario:
     """A run: its strategy (made afresh for each run), its bars by symbol, its `start`
-    and `end`, and the instants t at which it is cut (day closes) or changed after."""
+    and `end`, the instants t at which it is cut (day closes) and changed after, and the
+    length of its bars in minutes (None for daily bars)."""
 
     make: object
     data: dict[str, pd.DataFrame]
@@ -102,6 +103,7 @@ class Scenario:
     end: str
     cuts: tuple[pd.Timestamp, ...]
     changes: tuple[pd.Timestamp, ...] = ()
+    minutes: int | None = None
 
     def run(self, data: dict[str, pd.DataFrame] | None = None, end: str | None = None):
         strategy = self.make()
@@ -112,22 +114,36 @@ class Scenario:
         )
         return strategy, result
 
+    def cut_end(self, t: pd.Timestamp) -> pd.Timestamp:
+        """Where a run cut at the day of `t` ends: at `t`, or at the close of the last bar
+        on or before that day when it closes earlier (a thin share's last minutes)."""
+        closes = []
+        for frame in self.data.values():
+            before = frame.index[frame.index.date <= t.date()]
+            if len(before):
+                last = before[-1]
+                step = pd.Timedelta(minutes=self.minutes) if self.minutes else None
+                closes.append(day_close(str(last.date())) if step is None else last + step)
+        return min(t, max(closes))
+
 
 def day_close(day: str) -> pd.Timestamp:
     """15:30 IST on `day`: the close of its last bar."""
     return pd.Timestamp(f"{day} 15:30", tz=IST)
 
 
-DAILY_CUTS = tuple(day_close(day) for day in ("2026-01-14", "2026-02-18", "2026-04-09"))
-# For bars that begin on 2026-02-02: a run cut before then has no bars at all.
-LATE_CUTS = tuple(day_close(day) for day in ("2026-02-18", "2026-03-17", "2026-04-09"))
-LONG = walk("2025-06-02", "2026-06-30", seed=3)
-FROM_START = walk("2026-01-01", "2026-06-30", seed=4)
-LISTED_LATE = walk("2026-02-02", "2026-06-30", seed=5)
-MINUTES = intraday("2026-01-01", "2026-01-30", minutes=15, seed=6)
-EARLIER_MINUTES = intraday("2025-12-15", "2026-01-30", minutes=15, seed=7)
-THIN = sparse(intraday("2025-12-01", "2026-01-30", minutes=5, seed=8), 0.3, 1)
-INTRADAY_CUTS = tuple(day_close(day) for day in ("2026-01-02", "2026-01-06", "2026-01-15"))
+DAILY_CUTS = (day_close("2026-01-14"), day_close("2026-02-18"))
+# For bars that begin on 2026-02-02 (a run cut before then has no bars at all): before
+# and after their 32nd session, 2026-03-18.
+LATE_CUTS = (day_close("2026-03-17"), day_close("2026-03-25"))
+END = "2026-04-30"
+LONG = walk("2025-06-02", END, seed=3)
+FROM_START = walk("2026-01-01", END, seed=4)
+LISTED_LATE = walk("2026-02-02", END, seed=1)
+MINUTES = intraday("2026-01-01", "2026-01-16", minutes=15, seed=6)
+EARLIER_MINUTES = intraday("2025-12-22", "2026-01-16", minutes=15, seed=7)
+THIN = sparse(intraday("2025-12-15", "2026-01-16", minutes=5, seed=8), 0.3, 1)
+INTRADAY_CUTS = (day_close("2026-01-02"), day_close("2026-01-08"))
 INTRADAY_CHANGES = (pd.Timestamp("2026-01-05 12:00", tz=IST),)
 
 
@@ -139,66 +155,45 @@ def two(interval: str = "D", product: str = "CNC"):
     return lambda: crossing(("AAA", "BBB"), interval, product)
 
 
+def daily(make, data: dict[str, pd.DataFrame], cuts=DAILY_CUTS) -> Scenario:
+    return Scenario(make, data, "2026-01-01", END, cuts)
+
+
+def minutes(make, data: dict[str, pd.DataFrame], start: str, length: int) -> Scenario:
+    return Scenario(
+        make, data, start, "2026-01-16", INTRADAY_CUTS, INTRADAY_CHANGES, minutes=length
+    )
+
+
 SCENARIOS = {
-    "one symbol, own data from start": Scenario(
-        one(), {"SBIN": FROM_START}, "2026-01-01", "2026-06-30", DAILY_CUTS
+    "one symbol, own data from start": daily(one(), {"SBIN": FROM_START}),
+    "one symbol, own data before start": daily(one(), {"SBIN": LONG}),
+    "one symbol, own data after start": daily(one(), {"SBIN": LISTED_LATE}, LATE_CUTS),
+    "two symbols, one with own data from start": daily(two(), {"AAA": LONG, "BBB": FROM_START}),
+    "two symbols, one listed after start": daily(
+        two(), {"AAA": LONG, "BBB": LISTED_LATE}, LATE_CUTS
     ),
-    "one symbol, own data before start": Scenario(
-        one(), {"SBIN": LONG}, "2026-01-01", "2026-06-30", DAILY_CUTS
+    "two symbols, one shorter than its need": daily(
+        two(), {"AAA": LONG, "BBB": FROM_START.iloc[:25]}
     ),
-    "one symbol, own data after start": Scenario(
-        one(), {"SBIN": LISTED_LATE}, "2026-01-01", "2026-06-30", LATE_CUTS
+    "two symbols, one too short to compute": daily(
+        two(), {"AAA": LONG, "BBB": FROM_START.iloc[:12]}
     ),
-    "two symbols, one with own data from start": Scenario(
-        two(), {"AAA": LONG, "BBB": FROM_START}, "2026-01-01", "2026-06-30", DAILY_CUTS
+    "intraday, own data from start": minutes(
+        one("15m", "MIS"), {"SBIN": MINUTES}, "2026-01-01", 15
     ),
-    "two symbols, one listed after start": Scenario(
-        two(), {"AAA": LONG, "BBB": LISTED_LATE}, "2026-01-01", "2026-06-30", LATE_CUTS
-    ),
-    "two symbols, one shorter than its need": Scenario(
-        two(), {"AAA": LONG, "BBB": FROM_START.iloc[:25]}, "2026-01-01", "2026-06-30", DAILY_CUTS
-    ),
-    "two symbols, one too short to compute": Scenario(
-        two(), {"AAA": LONG, "BBB": FROM_START.iloc[:12]}, "2026-01-01", "2026-06-30", DAILY_CUTS
-    ),
-    "intraday, own data from start": Scenario(
-        one("15m", "MIS"),
-        {"SBIN": MINUTES},
-        "2026-01-01",
-        "2026-01-30",
-        INTRADAY_CUTS,
-        INTRADAY_CHANGES,
-    ),
-    "sparse bars, history before start": Scenario(
-        one("5m", "MIS"),
-        {"SBIN": THIN},
-        "2026-01-02",
-        "2026-01-30",
-        INTRADAY_CUTS,
-        INTRADAY_CHANGES,
-    ),
-    "two symbols intraday, one sparse from start": Scenario(
+    "sparse bars, history before start": minutes(one("5m", "MIS"), {"SBIN": THIN}, "2026-01-01", 5),
+    "two symbols intraday, one sparse from start": minutes(
         two("15m", "MIS"),
         {"AAA": EARLIER_MINUTES, "BBB": sparse(MINUTES, 0.3, 2)},
         "2026-01-01",
-        "2026-01-30",
-        INTRADAY_CUTS,
-        INTRADAY_CHANGES,
+        15,
     ),
-    "conditions, own data from start": Scenario(
-        lambda: crossing_conditions("D", "CNC"),
-        {"SBIN": FROM_START},
-        "2026-01-01",
-        "2026-06-30",
-        DAILY_CUTS,
+    "conditions, own data from start": daily(
+        lambda: crossing_conditions("D", "CNC"), {"SBIN": FROM_START}
     ),
-    "conditions intraday, own data from start": Scenario(
-        lambda: crossing_conditions("15m", "MIS"),
-        {"SBIN": MINUTES},
-        "2026-01-01",
-        "2026-01-30",
-        INTRADAY_CUTS,
-        INTRADAY_CHANGES,
+    "conditions intraday, own data from start": minutes(
+        lambda: crossing_conditions("15m", "MIS"), {"SBIN": MINUTES}, "2026-01-01", 15
     ),
 }
 
@@ -219,21 +214,13 @@ def up_to(strategy: type, result: bt.Result, t: pd.Timestamp) -> dict[str, list]
     orders = orders[orders["decided_at"] <= t]
     skipped = skipped[skipped["decided_at"] <= t]
     fills = fills[fills["time"] < t]
+    order_columns = ("decided_at", "symbol", "side", "quantity_units")
+    fill_columns = ("time", "symbol", "side", "quantity_units", "price_rupees")
     return {
         "decisions": [entry for entry in strategy.seen if entry[0] <= t],
-        "orders": list(
-            zip(orders["decided_at"], orders["symbol"], orders["side"], orders["quantity_units"])
-        ),
-        "skipped": list(zip(skipped["decided_at"], skipped["symbol"], skipped["reason"])),
-        "fills": list(
-            zip(
-                fills["time"],
-                fills["symbol"],
-                fills["side"],
-                fills["quantity_units"],
-                fills["price_rupees"],
-            )
-        ),
+        "orders": list(orders[list(order_columns)].itertuples(index=False, name=None)),
+        "skipped": list(skipped.itertuples(index=False, name=None)),
+        "fills": list(fills[list(fill_columns)].itertuples(index=False, name=None)),
     }
 
 
@@ -249,13 +236,23 @@ def test_every_scenario_decides_for_its_symbols(whole):
     assert len(result.orders) + len(result.skipped) > 0
 
 
+# The runs wait and skip on purpose; what they say on screen is tested below.
+QUIET = pytest.mark.filterwarnings(
+    "ignore::openalgo.backtest.errors.WarmUpWarning",
+    "ignore::openalgo.backtest.errors.OrdersNotPlacedWarning",
+)
+
+
+@QUIET
 def test_cutting_end_earlier_changes_nothing_at_or_before_the_cut(whole):
     scenario, strategy, result = whole
     for t in scenario.cuts:
         cut_strategy, cut = scenario.run(end=t.date().isoformat())
-        assert up_to(cut_strategy, cut, t) == up_to(strategy, result, t), t
+        ends = scenario.cut_end(t)
+        assert up_to(cut_strategy, cut, ends) == up_to(strategy, result, ends), t
 
 
+@QUIET
 def test_changing_the_bars_after_t_changes_nothing_at_or_before_t(whole):
     scenario, strategy, result = whole
     for k, t in enumerate(scenario.cuts + scenario.changes):
@@ -267,12 +264,33 @@ def test_changing_the_bars_after_t_changes_nothing_at_or_before_t(whole):
 
 # ----- each symbol decides from its own readiness ----------------------------------------
 
-LISTED = sessions("2026-02-02", "2026-06-30")
+LISTED = sessions("2026-02-02", END)
 READY = LISTED[READY_BARS - 1]
 
 
+def holder() -> type[bt.Strategy]:
+    """Buys one share of every symbol of AAA and BBB while flat, at every decision; each
+    decision is recorded in `seen`."""
+
+    class Holder(bt.Strategy):
+        symbols, exchange, interval, product = ("AAA", "BBB"), "NSE", "D", "CNC"
+        seen: list[tuple[pd.Timestamp, tuple[str, ...]]] = []
+
+        def init(self):
+            self.lines = {s: self.I(ta.sma, self.data[s].close, SLOW) for s in self.symbols}
+
+        def on_bar(self, bars):
+            type(self).seen.append((self.now, tuple(sorted(bars))))
+            for s in self.symbols:
+                if self.positions[s].is_flat:
+                    self.buy(symbol=s, qty=1)
+
+    return Holder
+
+
 def listed_late():
-    strategy = crossing(("AAA", "BBB"), "D", "CNC")
+    """A run of AAA, with years of bars, and BBB, listed on 2026-02-02 within the run."""
+    strategy = holder()
     result = bt.backtest(
         strategy, data={"AAA": LONG, "BBB": LISTED_LATE}, start="2026-01-01", **SETTINGS
     )
@@ -302,7 +320,7 @@ def test_orders_on_a_symbol_not_ready_yet_are_skipped_until_it_is():
     assert set(skipped["reason"]) == {"not_ready"} and set(skipped["symbol"]) == {"BBB"}
     assert skipped["decided_at"].max().date() < READY
     bbb = result.orders[result.orders["symbol"] == "BBB"]
-    assert bbb["decided_at"].min().date() >= READY
+    assert [day.date() for day in bbb["decided_at"]] == [READY]
 
 
 def test_a_symbol_that_waited_is_told_on_screen_with_its_first_decision():
