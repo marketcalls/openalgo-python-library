@@ -38,7 +38,7 @@ from ._series import PositionView, SeriesStore
 from ._timers import Timers
 from ._warm_up import SeriesNeed, series_needs
 from ._warm_up_anchor import PeriodAnchor
-from ._warm_up_measure import ReferenceCall, WarmUp
+from ._warm_up_measure import ReferenceCall
 from .errors import BacktestError, ConfigError
 
 # The indicator whose warm-up a from_signals function's series is given: a 200-bar EMA
@@ -141,7 +141,7 @@ class _ProbeChecks:
         series: tuple[str, str] | None = None,
         reference: ReferenceCall | None = None,
         *,
-        required: int | None = None,
+        too_short: int | None = None,
     ) -> CheckOutcome:
         """`_causality_checks.RunChecks.check` without the truncation check: the
         outcome of the indicator's warm-up, recorded."""
@@ -154,16 +154,10 @@ class _ProbeChecks:
             series=series,
             anchor=anchor,
             more=found.more,
-            required=required,
+            too_short=too_short,
         )
         self.outcomes.append(outcome)
         return outcome
-
-    def warm_up(
-        self, label: str, anchor: PeriodAnchor | None, reference: ReferenceCall | None
-    ) -> WarmUp:
-        """`_causality_checks.IndicatorChecks.warm_up`, on the shared checks."""
-        return self._shared.warm_up(label, anchor, reference)
 
 
 class _ProbeEngine:

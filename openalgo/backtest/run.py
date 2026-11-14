@@ -88,8 +88,9 @@ def backtest(
         version).
     client: an `openalgo.api` client for OpenAlgo data; not needed with `data=`.
     capital: rupees allocated to the strategy (required).
-    start, end: IST dates (inclusive); a datetime also bounds the run to slices opening
-        at or after `start` and at or before `end`. Taken from `data=` when omitted.
+    start, end: IST dates (inclusive); a datetime, or a string with a time of day
+        ("2026-03-10 11:00", naive in IST), also bounds the run to slices opening at or
+        after `start` and at or before `end`. Taken from `data=` when omitted.
         The sessions before `start` are history: as many bars as the strategy's `self.I`
         indicators need (each one's warm-up, measured on the engine's reference bars)
         are loaded from the run's source and the indicators are computed over them, and

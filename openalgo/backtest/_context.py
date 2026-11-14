@@ -78,12 +78,12 @@ class RunContext:
         self.decided_at: int | None = None
         # (decision instant, symbol, reason) of every order skipped before it was placed:
         # by a sizer or a sizing function, a target that rounds to no units, or a symbol
-        # left out.
+        # not ready yet.
         self.skipped: list[tuple[int | None, str, str]] = []
-        # The names the strategy makes no decision for, their indicators never ready
-        # (`_warm_up.Readiness.left_out`): their bars are not passed on, their orders are
-        # skipped.
-        self.left_out: frozenset[str] = frozenset()
+        # The names not ready yet, with the instant (UTC nanoseconds) each is ready from
+        # (`_warm_up.Readiness.waiting`): until then their bars are not passed on and
+        # their orders are skipped. A name leaves once a decision reaches its instant.
+        self.waiting: dict[str, int] = {}
         # The result's orders table once the run is over (`close`), and the row of each
         # order id in it, made on the first lookup.
         self._final_orders: dict[str, list] | None = None
@@ -143,9 +143,17 @@ class RunContext:
             revealed[symbol] = self.stores[symbol].reveal(row)
         if self.futures is not None:
             revealed = self.futures.reveal(revealed, self.stores, self.decided_at)
-        if self.left_out:
-            revealed = {name: bar for name, bar in revealed.items() if name not in self.left_out}
+        if self.waiting:
+            self._end_waits()
+            revealed = {name: bar for name, bar in revealed.items() if name not in self.waiting}
         return revealed
+
+    def _end_waits(self) -> None:
+        """Drop from `waiting` the names ready at the decision instant: decisions only
+        move forward, so a name that is ready stays ready."""
+        now = self.decided_at
+        if now is not None:
+            self.waiting = {name: at for name, at in self.waiting.items() if now < at}
 
     @property
     def now(self):
@@ -199,23 +207,27 @@ class RunContext:
 
     # ----- orders ----------------------------------------------------------------
 
-    def _skip_left_out(self, request: dict) -> bool:
-        """True, with the order recorded as skipped (`NOT_READY`), when it is on a name
-        the strategy makes no decision for (`left_out`)."""
-        if not self.left_out:
+    def _not_ready(self, request: dict, target: bool = False) -> bool:
+        """True when the request is on a name not ready yet (`waiting`), so it is not
+        sent; it is recorded as skipped (`NOT_READY`) when it would have sent an order:
+        always for an order, and for a `target` request only when it would trade
+        (`_target_trades`)."""
+        if not self.waiting:
             return False
         symbol = self.symbols[request["instrument"]]
         spliced = None if self.futures is None else self.futures.store_of(symbol)
-        if (symbol if spliced is None else spliced.symbol) not in self.left_out:
+        ready_from = self.waiting.get(symbol if spliced is None else spliced.symbol)
+        if ready_from is None or self.decided_at is None or self.decided_at >= ready_from:
             return False
-        self.skipped.append((self.decided_at, symbol, NOT_READY))
+        if not target or self._target_trades(request):
+            self.skipped.append((self.decided_at, symbol, NOT_READY))
         return True
 
     def submit(self, request: dict) -> Order | None:
         """Place a request; returns its handle, or None when a sizer skipped it or its
-        symbol is left out. A sizing function is called here, at the decision
+        symbol is not ready yet. A sizing function is called here, at the decision
         (`_sizing_function`)."""
-        if self._skip_left_out(request):
+        if self._not_ready(request):
             return None
         store = self.sizing_store(request["instrument"])
         symbol = self.symbols[request["instrument"]]
@@ -230,18 +242,28 @@ class RunContext:
     def submit_target(self, request: dict) -> Order | None:
         """Trade to a target position (`_orders.target` builds the request); returns the
         handle of the order for the difference, or None when the position already is the
-        target or the target rounds to no units or its symbol is left out (recorded as
-        skipped)."""
-        if self._skip_left_out(request):
+        target or the target rounds to no units or its symbol is not ready yet (recorded
+        as skipped)."""
+        if self._not_ready(request, target=True):
             return None
         return self._targeted(request, call(self.engine.target, request))
 
     def submit_rebalance(self, request: dict) -> Order | None:
         """`submit_target` for one trade of a rebalance (`_rebalance`): the order is
         tagged "rebalance" and, when it buys, fills after the slice's sales."""
-        if self._skip_left_out(request):
+        if self._not_ready(request, target=True):
             return None
         return self._targeted(request, call(self.engine.rebalance_target, request))
+
+    def _target_trades(self, request: dict) -> bool:
+        """True when a target request would send an order: a target other than flat, or
+        flat while a position is held. A flat symbol with a zero target sends none, so
+        it is no skip."""
+        if request["amount"] != 0:
+            return True
+        symbol = self.symbols[request["instrument"]]
+        native = call(self.engine.position, request["instrument"], request["product"])
+        return PositionView.from_native(symbol, native).qty != 0
 
     def _targeted(self, request: dict, submitted: tuple | None) -> Order | None:
         """The handle of a target's submission, or None (a skip is recorded)."""

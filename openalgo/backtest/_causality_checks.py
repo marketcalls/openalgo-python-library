@@ -18,7 +18,7 @@ for the rest:
   that needs more than the longest window, one that cannot be computed on the reference
   bars and one that reads values of the user's own are each stated; none is an error.
   Nor is a series too short for its indicator (`_indicators`): it was not computed, its
-  truncation is not checked, and its outcome says how many bars it needs.
+  truncation is not checked, and its outcome says how many bars its series had.
 
 An `IndicatorChecks` remembers what it has checked. The truncation check, the costly one,
 runs once per strategy and data: it is keyed by strategy source hash, function, inputs
@@ -71,8 +71,8 @@ class CheckOutcome:
     (symbol, interval) of the bars the indicator is computed on, None when not given.
     anchor: the anchor of an anchored indicator (`_warm_up_anchor.PeriodAnchor`), else
     None. more: True when it needs more than `warm_up` bars, the longest window
-    measured. required: the bars its series must hold for it to be computed, when the
-    series holds fewer and it was not computed; else None.
+    measured. too_short: the bars of its series when they were too few to compute it at
+    all (it was not computed, `_indicators`); else None.
     """
 
     label: str
@@ -82,16 +82,14 @@ class CheckOutcome:
     series: tuple[str, str] | None = None
     anchor: PeriodAnchor | None = None
     more: bool = False
-    required: int | None = None
+    too_short: int | None = None
 
     def describe(self) -> str:
         """One line for the Assumptions block. No cut checked is stated as such, never
         as a pass."""
-        if self.required is not None:
-            settled = (
-                f"not computed: its series holds fewer than the {counted(self.required, 'bar')} "
-                "it needs"
-            )
+        if self.too_short is not None:
+            bars = counted(self.too_short, "bar")
+            settled = f"not computed: its series of {bars} is too short for it"
         elif self.anchor is not None:
             settled = f"warm-up since {self.anchor.since()}"
         elif self.warm_up is None:
@@ -106,6 +104,19 @@ class CheckOutcome:
         else:
             truncation = "truncation not checked (no cut leaves the bars it needs)"
         return f"{self.label}: {truncation}, {settled}"
+
+    def unsettled(self) -> str:
+        """Why an indicator with no warm-up length is not waited for: its label and
+        note, and, when its series was too short to compute it, that its values are
+        unknown."""
+        told = f"{self.label} {self.note}"
+        if self.too_short is None:
+            return told
+        bars = counted(self.too_short, "bar")
+        return (
+            f"{told}, and its series of {bars} is too short to compute it, so its values are "
+            "unknown"
+        )
 
 
 def _agree(window: np.ndarray, whole: np.ndarray, tolerance: float, floor: float) -> bool:
@@ -179,16 +190,16 @@ class IndicatorChecks:
         series: tuple[str, str] | None = None,
         reference: ReferenceCall | None = None,
         *,
-        required: int | None = None,
+        too_short: int | None = None,
     ) -> CheckOutcome:
         """Run both checks for an indicator, each unless done before (truncation by
         `key`, the warm-up by `label`); `whole` are its causal outputs on the whole
         series, `compute` recomputes them on a part, `anchor` is its anchor when it is
         anchored, `series` names the bars they are computed on, and `reference`
         computes them on any bars (the reference bars of the warm-up), None when its
-        inputs hold values of the user's own. `required` is the bars a series too short
-        for the indicator lacks (it was not computed, so no truncation is checked and
-        none is recorded for the key). Returns what the checks found.
+        inputs hold values of the user's own. `too_short` is the bars of a series too
+        short to compute the indicator (it was not computed, so no truncation is checked
+        and none is recorded for the key). Returns what the checks found.
 
         Raises ConfigError when a value changes once later bars are removed."""
         truncation_key = f"{self.strategy_hash}:{key}"
@@ -197,7 +208,7 @@ class IndicatorChecks:
             return self._outcomes[window_key]
         length = len(whole[0]) if whole else 0
         cuts: int | None = None
-        if required is not None:
+        if too_short is not None:
             cuts = 0
         elif truncation_key not in self._known:
             if truncation_key not in self._cuts:
@@ -212,7 +223,7 @@ class IndicatorChecks:
             series=series,
             anchor=anchor,
             more=found.more,
-            required=required,
+            too_short=too_short,
         )
         self._outcomes[window_key] = outcome
         return outcome
@@ -275,20 +286,14 @@ class RunChecks:
         series: tuple[str, str] | None = None,
         reference: ReferenceCall | None = None,
         *,
-        required: int | None = None,
+        too_short: int | None = None,
     ) -> CheckOutcome:
         """`IndicatorChecks.check`, recording the outcome for this run."""
         outcome = self._shared.check(
-            key, label, compute, whole, anchor, series, reference, required=required
+            key, label, compute, whole, anchor, series, reference, too_short=too_short
         )
         self._outcomes.setdefault((outcome.label, series), outcome)
         return outcome
-
-    def warm_up(
-        self, label: str, anchor: PeriodAnchor | None, reference: ReferenceCall | None
-    ) -> WarmUp:
-        """`IndicatorChecks.warm_up`, on the shared checks."""
-        return self._shared.warm_up(label, anchor, reference)
 
     @property
     def outcomes(self) -> tuple[CheckOutcome, ...]:

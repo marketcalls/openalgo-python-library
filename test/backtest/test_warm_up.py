@@ -200,7 +200,10 @@ def test_the_assumptions_state_the_rule_the_need_and_the_history():
     result = bt.backtest(EmaCross, data=zigzag(), start=DAYS[START], **SETTINGS)
     text = result.assumptions["warm_up"]
     asked = DAYS[START] - dt.timedelta(days=63)
-    assert text.startswith("automatic: no decision before start, nor before every self.I")
+    assert text.startswith(
+        "automatic: no decision before start, nor for a symbol before every self.I indicator "
+        "of it has closed its warm-up of bars"
+    )
     assert "ema(SBIN.close, 3) needs 32 D bars of SBIN" in text
     assert (
         f"history before start: SBIN 32 strategy bars from {DAYS[4]} to {DAYS[35]} (asked "

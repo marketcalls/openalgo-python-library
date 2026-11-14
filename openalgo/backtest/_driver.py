@@ -16,10 +16,12 @@ pause delivers no events (SPEC-31). Events are dicts with the kernel's keys plus
 with no base bar present is not delivered (SPEC-07): a single-instrument strategy then
 gets no `on_bar` call.
 
-Until the strategy's indicators are ready (`ready_at`, `_warm_up`) the pauses only
-reveal their bars and deliver their events: no timer runs and `on_bar` is not called.
-A `ready_at` later than every bar (`_warm_up.NEVER`, a series with fewer bars than its
-need) waits through the whole run.
+Until the indicators of the first symbol are ready (`ready_at`, the run's first
+decision, `_warm_up`) the pauses only reveal their bars and deliver their events: no
+timer runs and `on_bar` is not called. A `ready_at` later than every bar
+(`_warm_up.NEVER`, no symbol with as many bars as its need) waits through the whole run.
+From then on the run context passes on the bars of the symbols that are ready only
+(`RunContext.waiting`), so a symbol joins `on_bar` at the first bar it is ready.
 """
 
 from __future__ import annotations

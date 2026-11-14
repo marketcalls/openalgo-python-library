@@ -5,33 +5,33 @@
   condition and everything else as floats.
 - `padded`: unknown values in front of an indicator computed on part of its series (the
   run's bars of a call over values of the user's own): NaN, or false for a condition.
-- **A series too short for its call** (decision D25): `required_bars` is what decides it,
-  the call's own window (`period`, `length`), else its warm-up when it has a length, so
-  the series length decides and never the error a call raises; `short_outputs` gives
-  such a call unknown values of the right kind and number without computing it on the
-  series.
+- **A series too short for its call** (decision D25): a call that raises ValueError on
+  its series is tried once more on the same inputs with bars in front, up to
+  `LENGTH_TEST_BARS` (`short_outputs`). When it computes there, more bars cure it, so
+  the series was too short for it: its values are unknown, of the kind and number the
+  function returns. When it fails there too, the failure is not the length (a parameter
+  it refuses, values it cannot take) and the run stops on the original error. Nothing is
+  guessed from the names of the call's arguments: a function that checks a length of its
+  own, longer than its period (a 20-bar ulcer index checks for 52 bars), is told apart
+  from a bad parameter by what it does on a longer series.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from ._messages import counted
-from ._warm_up_measure import WarmUp
+from ._warm_up_reference import REFERENCE_BARS
 from .errors import ConfigError
 
-# The arguments a `ta` function names its one window in bars with (`ta.sma`'s `period`,
-# `ta.roc`'s `length`), which a series shorter than it cannot compute (`required_bars`).
-# A function of several windows (`ta.macd`'s fast, slow and signal periods) has none.
-WINDOW_ARGUMENTS = ("period", "length")
-# A series too short for its call is shaped on its inputs filled in front to this many
-# times the bars it needs (`short_outputs`): enough for a function that checks one bar
-# more than its period.
-SHAPE_BARS_FACTOR = 2
+# The bars a call that failed on its series is tried on again (`short_outputs`): as many
+# as the reference bars hold, the longest series a warm-up is measured on, so a call
+# with a warm-up computes on them.
+LENGTH_TEST_BARS = REFERENCE_BARS
 
 
 def outputs_of(returned: Any, length: int, label: str) -> list[np.ndarray]:
@@ -63,20 +63,6 @@ def padded(values: np.ndarray, added: int) -> np.ndarray:
     return np.concatenate((np.full(added, np.nan), values))
 
 
-def required_bars(found: WarmUp, arguments: Mapping[str, Any]) -> int | None:
-    """The bars a series must hold for a call to be computed: its own window (an
-    argument of `WINDOW_ARGUMENTS`, from `arguments` by name, defaults included), or
-    without one its warm-up `found`; None when neither is known. The window comes first,
-    so a call its series can compute is computed even when the series is shorter than
-    its warm-up (it is then never ready, `_warm_up`); the warm-up is never shorter than
-    the window."""
-    for name in WINDOW_ARGUMENTS:
-        window = arguments.get(name)
-        if isinstance(window, int) and not isinstance(window, bool):
-            return window
-    return found.bars
-
-
 def _filled_in_front(value: Any, added: int, span: int) -> Any:
     """`value` with `added` copies of its first value in front when it is a series of
     the call's `span` bars (a pandas Series or a 1-D array); any other value as it is."""
@@ -96,19 +82,23 @@ def short_outputs(
     arguments: list[Any],
     params: dict[str, Any],
     span: int,
-    required: int,
     label: str,
-) -> tuple[bool, list[np.ndarray]]:
-    """(True when the function returns several outputs, its outputs on a series of
-    `span` bars too short for it, `required` bars: all unknown, NaN or false for a
-    condition). `arguments` and `params` are the call's on that series. The kind and
-    number of outputs are those the function returns on them filled in front to
-    `SHAPE_BARS_FACTOR` times `required` bars, whose values are dropped. Raises
-    ValueError when that call fails, and ConfigError for an output of another shape."""
-    added = SHAPE_BARS_FACTOR * max(required, 1) - span
+) -> tuple[bool, list[np.ndarray]] | None:
+    """For a call that raised ValueError on its series of `span` bars (`arguments` and
+    `params` are the call's there): (True when the function returns several outputs,
+    its outputs on that series, all unknown, NaN or false for a condition) when the
+    series was too short for it, else None (module docstring). The call is tried on its
+    inputs filled in front to `LENGTH_TEST_BARS` bars, each series input repeating its
+    first value. Raises ConfigError for an output of another shape."""
+    added = LENGTH_TEST_BARS - span
+    if added <= 0:
+        return None
     filled = [_filled_in_front(value, added, span) for value in arguments]
     named = {name: _filled_in_front(value, added, span) for name, value in params.items()}
-    returned = call(*filled, **named)
+    try:
+        returned = call(*filled, **named)
+    except ValueError:
+        return None
     shaped = outputs_of(returned, span + added, label)
     unknown = [
         np.zeros(span, dtype=bool) if part.dtype == np.bool_ else np.full(span, np.nan)
@@ -117,11 +107,4 @@ def short_outputs(
     return isinstance(returned, tuple | list), unknown
 
 
-__all__ = [
-    "SHAPE_BARS_FACTOR",
-    "WINDOW_ARGUMENTS",
-    "outputs_of",
-    "padded",
-    "required_bars",
-    "short_outputs",
-]
+__all__ = ["LENGTH_TEST_BARS", "outputs_of", "padded", "short_outputs"]

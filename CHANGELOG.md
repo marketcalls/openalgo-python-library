@@ -134,8 +134,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   weekly EMA(50) gets its 512 weeks, a monthly EMA(10) its 128 months), at most 30 years
   back. They are asked for in steps of a fixed ladder of spans, from the span the need
   fills at full session density, and further back while the bars returned fall short
-  of a need and the source has more (a thinly traded share whose minutes without a
-  trade have no candle), so a need is met whenever the source holds the bars; with a
+  of a need and a step returned bars older than the one before it (a thinly traded
+  share whose minutes without a trade have no candle, a suspension across the first day
+  of a step), so a need is met whenever the source holds the bars. Each step asks only
+  for the days before those already loaded, so a symbol whose bars never meet a need
+  asks for the thirty years once in all, in at most 31 requests. A step that fails
+  (a bar off the lattice) ends the steps but keeps the bars of the steps before it and
+  says why loading stopped, and when own data falls short the warning names the first
+  bar the data holds and, when the history stopped at a gap in it, the gap. With a
   datetime `start` the bars of that day before it are history too, so a
   daily view and a strategy bar cut by `start` hold the whole day. Every series holds
   the history before `init` runs on the data, so every indicator is computed over it
@@ -156,40 +162,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the user's own is computed on the run's bars, and a `from_signals` function is
   computed over the history a 200-bar EMA needs (its indicators are its own, so the
   strategy does not wait for them). Equity, trades, charges, metrics and the benchmark
-  still start at `start`. When the source has fewer bars before `start` (own data that
-  begins at `start`, a new listing, a futures series rolled from contract to contract,
-  which is built from `start`), the strategy waits inside the run until its indicators
-  are ready; a warning counts the strategy bars each symbol waited and says why (for own
-  data, to give earlier bars, naming the day they begin; for a source, "the source has
-  no bars of BBB before 2026-02-02"; for an indicator the run's `init` registers but did
-  not register on the reference bars, that no history was loaded for it), and
-  `bt.backtest` ends with a `WarmUpWarning`. The strategy makes no decision for a symbol
-  whose series has fewer bars than a need of its own: an indicator whose series is
-  shorter than its own window (`period`, `length`) or, for one without a single window
-  (MACD), its warm-up is not
-  computed (its values are unknown; a 100-bar average on 60 bars of own data stopped the
-  run with a ConfigError before, and now makes no decision with a warning, as an RSI
-  did). The series length decides, not the error the call raises. In a
-  run of several symbols the others decide once their indicators are ready: the one
-  left out gets no bar in `on_bar` and its orders are skipped (skip reason "not_ready"),
-  and the manifest lists it under `no_decision`. Any other error of an indicator still
-  stops the run. A run on one explicit futures contract
+  still start at `start`. Readiness is per symbol and causal: at each strategy bar a
+  symbol (or futures underlying) is ready once its own indicators have closed their
+  warm-up, counting only the bars up to that bar, so it never depends on a later bar or
+  on how many bars follow (a later `end=` cannot stop another symbol from trading in
+  January). A symbol not ready yet gets no bar in `on_bar` and its orders are skipped
+  (skip reason "not_ready"; a rebalance that gives it no weight, or a `target()` of
+  flat, sends nothing while it is flat and is no skip), it joins at the first bar it is
+  ready, and the symbols
+  that are ready trade; nothing is decided before the first symbol is ready, so a run
+  of one symbol simply waits. When the source has fewer bars before `start` (own data
+  that begins at `start`, a new listing, a futures series rolled from contract to
+  contract, which is built from `start`), the symbol waits inside the run until its
+  indicators are ready; a warning counts the strategy bars each symbol waited and says
+  why (for own data, to give earlier bars, naming the day they begin; for a source, "the
+  source has no bars of BBB before 2026-02-02"; for an indicator the run's `init`
+  registers but did not register on the reference bars, that no history was loaded for
+  it), and `bt.backtest` ends with a `WarmUpWarning` that gives the first decision of
+  each symbol that waited. A symbol whose series has fewer bars than a need of its own
+  makes no decision, and the manifest lists it under `no_decision`. An indicator whose
+  series is too short for its function is not computed, and its values are unknown: a
+  call that raises on its series and computes on the same values with more bars in
+  front was refused for the length (a 100-bar average on 60 bars of own data, a 20-bar
+  ulcer index on fewer than the 52 bars it checks for, a 20-bar KAMA, CMO, historical
+  volatility, regression slope or VIDYA on exactly 20 bars stopped the run with a
+  ConfigError before, and now make no decision for that symbol with a warning, as an
+  RSI did). Its warm-up is longer than the series, so the symbol is not ready at any of
+  its bars, as it would not be by then on a longer series. One over values of the
+  user's own is not waited for on a series of any length, so on one too short for it its
+  values are unknown and a warning says so. A call that fails on the longer series too
+  (a period of 0) still stops the run. A run on one explicit futures contract
   loads that contract's own bars before `start`. The Assumptions block gains `warm_up`
   (the rule, each series' need in its own bars, the history kept with the day asked
-  from and, when later, the day the source's bars began, and the first decision), the
-  manifest records the warm-up under `arguments["warm_up"]` (the needs, with `since`
-  for an anchor period, `periods_before` for one that reads whole periods before its
-  own, `more_than` for a need longer than the longest window and `computed` false for
-  an indicator its series was too short to compute, the indicators not waited for, the
-  first decision, the strategy bars each symbol waited and the symbols left out) and
+  from and, when later, the day the source's bars began, and the first decision of each
+  symbol), the manifest records the warm-up under `arguments["warm_up"]` (the needs,
+  with `since` for an anchor period, `periods_before` for one that reads whole periods
+  before its own and `more_than` for a need longer than the longest window, the
+  indicators not waited for, the run's first decision and each symbol's
+  (`first_decisions`, None for a symbol ready at start), the strategy bars waited by
+  each symbol that waited, and the symbols never ready in a run whose others decided) and
   the partition hashes of the history kept, as the source gave the bars, under
   `data["<symbol> history"]`; the history load's own warnings join the run's.
   `bt.optimize` learns each combination's needs on the reference bars before any data is
   loaded, loads the history once for the largest, in which each combination finds the
   request its single run makes, and each combination keeps and checks exactly the bars
   its single run does (a data problem outside its own history does not cost it that
-  history; when the larger load fails, as one bar off the lattice far before `start`
-  makes it, each combination's history is loaded on its own), so the table, `select()`
+  history; when a step of the larger load fails, as one bar off the lattice far before
+  `start` makes it, a combination whose steps stop short of it keeps its own, and one
+  that reaches it keeps the steps before it, as its single run does), so the table,
+  `select()`
   and `rerun()` reproduce single runs. Needs are keyed on the parameter values frozen
   in order, so a list, tuple or dict value works as a number does (a list raised
   TypeError). A strategy's
@@ -285,6 +306,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session close, than those of the latest earlier session with bars; otherwise the empty
   slots stay slices and the run ends at the end of its range or at the present. A run of
   one session, or whose last session is cut short by the range, keeps the plain rule.
+- **A `start=` or `end=` string with a time of day is a datetime bound.**
+  `start="2026-03-10 11:00"` was read as the plain date 2026-03-10, so the run began at
+  the open and the morning was traded instead of being history. A string with a time of
+  day other than midnight is now read as the datetime it names (naive in IST, or with
+  its offset), as `datetime(2026, 3, 10, 11, 0)` is, and both run the same; a date
+  string, or one at midnight, is still the date. The date of a datetime bound with an
+  offset is taken in IST.
 
 ## [2.1.1] - 2026-11-13
 

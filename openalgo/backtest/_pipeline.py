@@ -435,11 +435,11 @@ def execute(
             "write the strategy with on_bar",
         )
     state = readiness(context.run.checks.outcomes, context, history)
-    context.left_out = frozenset(state.left_out)
+    context.waiting = state.waiting()
     if has_conditions(instance):
-        drive_conditions(instance, engine, state.ready_at)
+        drive_conditions(instance, engine, state.first_decision)
     else:
-        drive(instance, engine, context, state.ready_at)
+        drive(instance, engine, context, state.first_decision)
     if on_path is not None:
         on_path(evaluation_path(instance))
     timer_warnings = context.timers.warnings()

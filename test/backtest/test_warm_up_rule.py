@@ -220,6 +220,33 @@ def test_history_ends_at_the_last_bar_before_a_datetime_start():
     assert list(seen) == expected
 
 
+@pytest.mark.parametrize("given", ["2026-01-05 11:00", "2026-01-05T11:00:00+05:30"])
+def test_a_start_string_with_a_time_runs_as_a_datetime_start_does(given):
+    stamps = [
+        dt.datetime.combine(day, dt.time(9, 15), tzinfo=IST) + dt.timedelta(minutes=15 * k)
+        for day in sessions("2025-12-01", "2026-01-09")
+        for k in range(25)
+    ]
+    closes = 100.0 + np.sin(np.arange(len(stamps)) / 7.0)
+    bars = pd.DataFrame(
+        {"open": closes, "high": closes + 0.5, "low": closes - 0.5, "close": closes,
+         "volume": 1_000.0},
+        index=pd.DatetimeIndex(stamps, name="timestamp"),
+    )  # fmt: skip
+
+    class Intraday(above_average(10)):
+        interval, product = "15m", "MIS"
+
+    moment = dt.datetime(2026, 1, 5, 11, 0, tzinfo=IST)
+    as_datetime = bt.backtest(Intraday, data=bars, start=moment, end="2026-01-09", **SETTINGS)
+    as_text = bt.backtest(Intraday, data=bars, start=given, end="2026-01-09", **SETTINGS)
+    # The first slice of the run is the 11:00 to 11:15 bar, its equity stamped at 11:15.
+    assert as_datetime.equity.index[0] == pd.Timestamp(moment) + pd.Timedelta(minutes=15)
+    assert as_text.equity.index.equals(as_datetime.equity.index)
+    assert as_text.assumptions["warm_up"] == as_datetime.assumptions["warm_up"]
+    assert as_text.fills.equals(as_datetime.fills)
+
+
 def test_a_run_on_one_explicit_contract_keeps_the_contracts_own_bars_before_start():
     days = list(CALENDAR.sessions("NFO", "2026-08-03", "2026-11-12")["date"])
     closes = 25_000.0 + 10.0 * np.arange(len(days))
@@ -263,14 +290,14 @@ def pair(order: tuple[str, str]) -> type[bt.Strategy]:
 @pytest.mark.parametrize("order", [("AAA", "BBB"), ("BBB", "AAA")])
 def test_each_symbol_counts_the_strategy_bars_it_waited_whatever_the_order(order):
     # BBB lists on 2026-02-02, within the run; its 20-bar average needs 32 bars, so the
-    # strategy decides from the close of BBB's 32nd session. AAA has years of history.
+    # strategy decides for BBB from the close of its 32nd session. AAA has years of
+    # history: it is ready at start and waits for nothing.
     data = {"AAA": walk("2020-01-01", "2026-06-30", 3), "BBB": walk("2026-02-02", "2026-06-30", 4)}
     result = bt.backtest(pair(order), data=data, start="2026-01-01", **SETTINGS)
-    listed = sessions("2026-02-02", "2026-06-30")
-    ready = listed[31]
-    waited_aaa = len(sessions("2026-01-01", (ready - dt.timedelta(days=1)).isoformat()))
-    assert warm_up(result)["waited"] == {"AAA": waited_aaa, "BBB": 31}
-    assert warm_up(result)["first_decision"] == f"{ready} 15:30 IST"
+    ready = sessions("2026-02-02", "2026-06-30")[31]
+    assert warm_up(result)["waited"] == {"BBB": 31}
+    assert warm_up(result)["first_decision"] is None
+    assert warm_up(result)["first_decisions"] == {"AAA": None, "BBB": f"{ready} 15:30 IST"}
 
 
 def test_own_data_that_lists_late_is_advised_to_begin_earlier():

@@ -2,11 +2,11 @@
 the run's skip warnings (`_skips`) and of its end-of-run notice (`_rejection_notice`).
 
 The reasons are the kernel's (`SkipReason::code` in rust/oa_bt/src/sizing/mod.rs), and
-`NOT_READY`, the run context's for an order on a symbol the strategy makes no decision
-for (`_warm_up`, a symbol whose indicators are never ready). A skipped order was never
-placed, so it has no order id and is not in `result.orders`: a sizer, a sizing function,
-`target()` or `rebalance()` gave it no quantity, or its symbol was left out. Each entry
-is (what happened, what to do).
+`NOT_READY`, the run context's for an order on a symbol whose indicators had not closed
+their warm-up at the decision (`_warm_up`). A skipped order was never placed, so it has
+no order id and is not in `result.orders`: a sizer, a sizing function, `target()` or
+`rebalance()` gave it no quantity, or its symbol was not ready yet. Each entry is (what
+happened, what to do).
 
 `RUN_RULE_REASONS` are the skips of a rule the strategy set working as it intends: a size
 cap (`size_caps`). The end-of-run notice leaves them out (`_rejection_notice`).
@@ -40,8 +40,8 @@ SKIP_REASONS = MappingProxyType(
             "raise capital or lower the size",
         ),
         NOT_READY: (
-            "the indicators of its symbol were never ready within its bars, so the strategy "
-            "makes no decision for it",
+            "the indicators of its symbol had not closed their warm-up, so the strategy "
+            "made no decision for that symbol yet",
             "give bars of that symbol that begin early enough for its indicators (data=), "
             "or leave it out of the run",
         ),

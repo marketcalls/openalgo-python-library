@@ -148,8 +148,31 @@ def _slippage(value: Any) -> tuple[str, float, int]:
     return resolved.to_native()
 
 
+def _bound(value: Any) -> Any:
+    """A `start` or `end` as the run reads it: a string with a time of day other than
+    midnight ("2026-03-10 11:00", or with an offset) is the datetime it names, naive in
+    IST, as a datetime object is; any other string is the date it names, and anything
+    else is as given."""
+    if not isinstance(value, str):
+        return value
+    moment = pd.Timestamp(value)
+    if moment.tzinfo is None and moment == moment.normalize():
+        return moment.date()
+    return moment.to_pydatetime()
+
+
+def _ist_day(value: Any) -> dt.date:
+    """The IST date of a `start` or `end` (`_bound`)."""
+    value = _bound(value)
+    if isinstance(value, dt.datetime):
+        return (value.astimezone(IST) if value.tzinfo is not None else value).date()
+    return value if isinstance(value, dt.date) else pd.Timestamp(value).date()
+
+
 def _instant(value: Any) -> int | None:
-    """UTC nanoseconds of a datetime bound (naive is IST), or None for a plain date."""
+    """UTC nanoseconds of a datetime bound (naive is IST, a string with a time of day
+    too, `_bound`), or None for a plain date."""
+    value = _bound(value)
     if isinstance(value, dt.datetime):
         moment = value if value.tzinfo is not None else value.replace(tzinfo=IST)
         return int(pd.Timestamp(moment).value)
@@ -188,10 +211,7 @@ def _dates(strategy: type, args: dict[str, Any]) -> tuple[dt.date, dt.date]:
         first, last = _frame_range(strategy, args)
         start = first if start is None else start
         end = last if end is None else end
-    first_day = pd.Timestamp(start).date() if not isinstance(start, dt.date) else start
-    last_day = pd.Timestamp(end).date() if not isinstance(end, dt.date) else end
-    first_day = first_day.date() if isinstance(first_day, dt.datetime) else first_day
-    last_day = last_day.date() if isinstance(last_day, dt.datetime) else last_day
+    first_day, last_day = _ist_day(start), _ist_day(end)
     if first_day > last_day:
         raise ConfigError(f"start {first_day} is after end {last_day}")
     return first_day, last_day
