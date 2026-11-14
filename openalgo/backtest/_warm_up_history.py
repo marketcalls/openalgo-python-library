@@ -6,9 +6,10 @@ Two steps, so that every run of the same strategy and parameters keeps the same 
 1. **Load** (`_warm_up_load`): for each traded symbol the needs of its series
    (`_warm_up_probe`) are turned into requests (`_warm_up_days.requests`), and the run's
    own source is asked for the base bars from the first day of a request to the last bar
-   before `start`, further back while they fall short of a need: for the run's needs,
-   or once for the largest needs of a sweep's combinations, in which each combination
-   finds the request its single run makes.
+   before `start`, each further request asking only for the older days, while they fall
+   short of a need: for the run's needs, or for the largest needs of a sweep's
+   combinations first, in whose bars each combination finds the request its single run
+   makes.
 2. **Keep**, per run (`keep`, from `_warm_up_load.LoadedHistory.for_run`). A run keeps,
    of the bars of its request, the whole sessions that hold the last `need` bars of each
    of its series (from the start of the first anchor period an anchored need reads, the
@@ -128,9 +129,11 @@ class SymbolHistory:
     of it, the manifest hashes of the bars kept as the source gave them, what to say when
     they fall short of a need (`shortfall`): `kind` is "own" (the user's data), "source"
     (a client source), "failed" or "unprobed" (no need of it was learnt on the reference
-    bars), `detail` the failure; the load's warnings for the run; and the part before
+    bars), `detail` the failure; the load's warnings for the run; the part before
     `start` of the strategy bar that straddles a datetime `start` (`opening`, None
-    without one)."""
+    without one); why stepping back stopped early (`stopped`, "" when it did not); the
+    first day the run's request asked for (`asked_from`) and the IST date of the first
+    bar of the user's own data (`given_from`, None for a source)."""
 
     symbol: str
     base: pd.DataFrame
@@ -142,21 +145,34 @@ class SymbolHistory:
     partitions: dict[str, str] = field(default_factory=dict)
     warnings: tuple[str, ...] = ()
     opening: Opening | None = None
+    stopped: str = ""
+    asked_from: dt.date | None = None
+    given_from: dt.date | None = None
 
     def shortfall(self, first_day: dt.date | None, start: Any) -> str:
         """Why the history of this symbol did not meet a need its run learnt on the
         reference bars; `first_day` is the IST date of the first bar of the need's
-        series, history or run."""
+        series, history or run. Own data names the first bar it holds, which lies
+        before `first_day` when the history stopped at a gap in it."""
         if self.kind == "failed":
             return f"its bars before {start} could not be used ({self.detail})"
+        if self.stopped:
+            return f"{self.stopped}, so the bars kept begin on {first_day}"
         if self.capped:
             return f"the history reaches back at most {HISTORY_YEARS_CAP} years before start"
-        if self.kind == "own":
+        if self.kind != "own":
+            return f"the source has no bars of {self.symbol} before {first_day}"
+        given = self.given_from
+        if given is not None and first_day is not None and given < first_day:
             return (
-                f"the bars given for {self.symbol} begin on {first_day}; give earlier ones to "
-                f"decide from {start}"
+                f"the bars given for {self.symbol} begin on {given} but hold none from "
+                f"{self.asked_from} to {first_day}, where the history stopped; give bars "
+                f"without the gap to decide from {start}"
             )
-        return f"the source has no bars of {self.symbol} before {first_day}"
+        return (
+            f"the bars given for {self.symbol} begin on {first_day}; give earlier ones to "
+            f"decide from {start}"
+        )
 
 
 def empty_base() -> pd.DataFrame:
@@ -254,7 +270,10 @@ class SymbolLoad:
     load's warnings, and `coverage` the one that says the source returned less than was
     asked for, which a run gives only when its history falls short of a need: the
     Assumptions block says what was asked for and what came back. `declared` are the
-    corporate actions the run declares for the symbol, which the join is checked with."""
+    corporate actions the run declares for the symbol, which the join is checked with.
+    `stopped` says why stepping further back stopped early (a request that failed), ""
+    when it did not; `given_from` is the IST date of the first bar the user's own data
+    holds, None for a source."""
 
     base: pd.DataFrame
     kind: str
@@ -263,6 +282,8 @@ class SymbolLoad:
     notes: tuple[str, ...] = ()
     coverage: str = ""
     declared: Any = None
+    stopped: str = ""
+    given_from: dt.date | None = None
 
     def since(self, day: dt.date) -> SymbolLoad:
         """This load's bars from `day` on (IST), as a load from `day` gives them."""
@@ -271,6 +292,25 @@ class SymbolLoad:
         if not first:
             return self
         return replace(self, base=self.base.iloc[first:].reset_index(drop=True))
+
+    def after(self, older: SymbolLoad) -> SymbolLoad:
+        """This load with `older`, the bars of the days before it, joined in front: its
+        notes added, and its coverage when it holds bars (it is the front now)."""
+        if older.base.empty:
+            return replace(self, notes=_merged(self.notes, older.notes))
+        base = older.base if self.base.empty else pd.concat([older.base, self.base])
+        return replace(
+            self,
+            base=base.reset_index(drop=True),
+            key=self.key or older.key,
+            notes=_merged(self.notes, older.notes),
+            coverage=older.coverage,
+        )
+
+
+def _merged(notes: tuple[str, ...], more: tuple[str, ...]) -> tuple[str, ...]:
+    """`notes`, then each of `more` not among them."""
+    return (*notes, *(note for note in more if note not in notes))
 
 
 def _asked(request: Request, base: pd.DataFrame) -> str:
@@ -312,9 +352,10 @@ def keep(
         note = f"none (the bars before {plan.start} could not be loaded: {load.failure})"
         return empty_history(symbol, note, "failed", load.failure)
     base = load.base
+    known = {"asked_from": request.day, "given_from": load.given_from}
     if base.empty:
         note = f"none ({_asked(request, base)}; the source has no bars before {plan.start})"
-        return empty_history(symbol, note, kind)
+        return replace(empty_history(symbol, note, kind), **known)
     cut, enough = first_kept(base, needs, plan, calendar)
     kept_from = day_start_ns(ist_time(cut).date())
     base = base[base["ts_open"].to_numpy() >= kept_from].reset_index(drop=True)
@@ -325,18 +366,22 @@ def keep(
     frame = _frame(joined.base, plan.interval, plan, calendar)
     strategy = _closed(frame, plan)
     hashes = {entry["key"]: entry["sha256"] for entry in _hash_by_month(base, load.key)}
-    warnings = (*load.notes, *((load.coverage,) if not enough and load.coverage else ()))
-    told = "; ".join((_asked(request, load.base), *joined.adjusted))
+    stopped = (load.stopped,) if load.stopped else ()
+    told = [f"{symbol} history before start: {why}; the bars before it are kept" for why in stopped]
+    warnings = (*load.notes, *told, *((load.coverage,) if not enough and load.coverage else ()))
+    asked = "; ".join((_asked(request, load.base), *stopped, *joined.adjusted))
     return SymbolHistory(
         symbol,
         joined.base,
         {name: strategy[name].to_numpy() for name in (*TIMES, *FIELDS)},
-        f"{_shown(strategy)} ({told})",
+        f"{_shown(strategy)} ({asked})",
         kind,
         capped=request.capped,
         partitions=hashes,
         warnings=warnings,
         opening=opening_part(frame, run_from(plan)),
+        stopped=load.stopped,
+        **known,
     )
 
 

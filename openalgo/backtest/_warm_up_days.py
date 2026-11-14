@@ -14,14 +14,15 @@ each the first IST date asked for, tried in order until one meets them:
   Q, Y), the longest such period n + 1 times, as the oldest period is usually cut by the
   first day. That span is rounded up to a step of a fixed ladder (`SPANS`: from
   FIRST_SPAN_DAYS, each step a quarter longer than the one before), and while the bars
-  returned fall short of a need and the source has bars from that step's first day
-  (thinly traded shares whose candles are missing for minutes without a trade), the next
-  step is asked for, up to `HISTORY_YEARS_CAP` years. A need longer than the longest
-  window measured asks from the cap at once.
+  returned fall short of a need (thinly traded shares whose candles are missing for
+  minutes without a trade) and the step returned older bars, the next step is asked for,
+  up to `HISTORY_YEARS_CAP` years (`_warm_up_load.reach`, which asks each step for its
+  older days only). A need longer than the longest window measured asks from the cap
+  at once.
 
 The ladder is the same for every set of needs, so a smaller need is met on a step no
-later than a larger one: a sweep that loads for its largest need holds every step its
-combinations ask for, each as its single run asks for it (`_warm_up_load`).
+later than a larger one: a sweep that loads for its largest need holds the bars of every
+step its combinations ask for, each as its single run asks for it (`_warm_up_load`).
 """
 
 from __future__ import annotations

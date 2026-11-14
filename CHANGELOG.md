@@ -134,8 +134,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   weekly EMA(50) gets its 512 weeks, a monthly EMA(10) its 128 months), at most 30 years
   back. They are asked for in steps of a fixed ladder of spans, from the span the need
   fills at full session density, and further back while the bars returned fall short
-  of a need and the source has more (a thinly traded share whose minutes without a
-  trade have no candle), so a need is met whenever the source holds the bars; with a
+  of a need and a step returned bars older than the one before it (a thinly traded
+  share whose minutes without a trade have no candle, a suspension across the first day
+  of a step), so a need is met whenever the source holds the bars. Each step asks only
+  for the days before those already loaded, so a symbol whose bars never meet a need
+  asks for the thirty years once in all, in at most 31 requests. A step that fails
+  (a bar off the lattice) ends the steps but keeps the bars of the steps before it and
+  says why loading stopped, and when own data falls short the warning names the first
+  bar the data holds and, when the history stopped at a gap in it, the gap. With a
   datetime `start` the bars of that day before it are history too, so a
   daily view and a strategy bar cut by `start` hold the whole day. Every series holds
   the history before `init` runs on the data, so every indicator is computed over it
@@ -201,8 +207,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loaded, loads the history once for the largest, in which each combination finds the
   request its single run makes, and each combination keeps and checks exactly the bars
   its single run does (a data problem outside its own history does not cost it that
-  history; when the larger load fails, as one bar off the lattice far before `start`
-  makes it, each combination's history is loaded on its own), so the table, `select()`
+  history; when a step of the larger load fails, as one bar off the lattice far before
+  `start` makes it, a combination whose steps stop short of it keeps its own, and one
+  that reaches it keeps the steps before it, as its single run does), so the table,
+  `select()`
   and `rerun()` reproduce single runs. Needs are keyed on the parameter values frozen
   in order, so a list, tuple or dict value works as a number does (a list raised
   TypeError). A strategy's
