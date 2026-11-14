@@ -298,6 +298,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session close, than those of the latest earlier session with bars; otherwise the empty
   slots stay slices and the run ends at the end of its range or at the present. A run of
   one session, or whose last session is cut short by the range, keeps the plain rule.
+- **A `start=` or `end=` string with a time of day is a datetime bound.**
+  `start="2026-03-10 11:00"` was read as the plain date 2026-03-10, so the run began at
+  the open and the morning was traded instead of being history. A string with a time of
+  day other than midnight is now read as the datetime it names (naive in IST, or with
+  its offset), as `datetime(2026, 3, 10, 11, 0)` is, and both run the same; a date
+  string, or one at midnight, is still the date. The date of a datetime bound with an
+  offset is taken in IST.
 
 ## [2.1.1] - 2026-11-13
 
