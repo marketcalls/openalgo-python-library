@@ -1,7 +1,7 @@
 """While a symbol is not ready (decision D25, `_warm_up`), its indicators read NaN, or
 false for a condition, wherever they are read: in `on_bar` deciding for another symbol,
-through another interval of it or through a futures series. Its bar fields stay
-readable.
+in a timer, through another interval of it or through a futures series. Its bar fields
+stay readable.
 
 Why: an indicator is computed over the whole series, so a value shown before its symbol
 is ready can depend on how many bars follow. `ta.ema(close, 20)` is not computed on
@@ -269,6 +269,36 @@ def test_once_ready_a_symbols_lookbacks_read_the_values_before_it_joined(read):
     assert joined["symbols"] == ("AAA", "BBB")
     assert joined["slow"] == pytest.approx(expected, rel=1e-12)
     assert joined["gap"] == pytest.approx(expected[-1] - closes[31], rel=1e-12)
+
+
+def nested_reader() -> type[bt.Strategy]:
+    """AAA, and BBB (listed within the run) with a 3-bar average of its 20-bar average:
+    its first decision for BBB records the bars of BBB and the nested average."""
+
+    class Nested(bt.Strategy):
+        symbols, exchange, interval, product = ("AAA", "BBB"), "NSE", "D", "CNC"
+        seen: list = []
+
+        def init(self):
+            self.slow = self.I(ta.sma, self.data["BBB"].close, 20)
+            self.smooth = self.I(ta.sma, self.slow, 3)
+
+        def on_bar(self, bars):
+            if "BBB" in bars and not type(self).seen:
+                type(self).seen.append((len(self.data["BBB"].close), self.smooth[-1]))
+
+    return Nested
+
+
+def test_an_indicator_of_a_waiting_symbols_indicator_reads_its_values_once_ready():
+    strategy = nested_reader()
+    bt.backtest(
+        strategy, data={"AAA": LONG, "BBB": LISTED}, start="2026-01-01", end=END, **SETTINGS
+    )
+    ((bars, smooth),) = strategy.seen
+    closes = LISTED["close"].to_numpy()
+    slow = [float(np.mean(closes[k - 19 : k + 1])) for k in range(bars - 3, bars)]
+    assert smooth == pytest.approx(float(np.mean(slow)), rel=1e-12)
 
 
 def timed_reader() -> type[bt.Strategy]:
