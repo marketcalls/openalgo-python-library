@@ -27,6 +27,11 @@ Indicators come from `openalgo.ta` through `self.I`, registered in `init`, and w
 up by themselves: each one's warm-up is measured on the engine's reference bars, they
 are computed over the history before `start` that it asks for, and no hook makes a
 decision before they are ready (`_warm_up`), so a strategy needs no warm-up guard.
+Readiness is per symbol: until the indicators of a symbol are ready its bars are not
+passed to `on_bar`, its orders are skipped, and an indicator of it reads NaN, or false
+for a signal, wherever it is read (deciding for another symbol included), as does every
+other view computed from its bars (a comparison, a shift, a crossing); its bar fields
+(open, high, low, close, volume) and `self.history` stay readable.
 Parts not built yet raise NotImplementedError saying what to do instead.
 """
 
@@ -255,9 +260,11 @@ class Strategy(OrderMethods):
         """Register an indicator from `openalgo.ta` (the name is fixed by the contract):
         `self.I(ta.ema, self.close, 20)`. Returns a view (`[-1]`, slices, `len()`,
         `.crossed_above`, `.crossed_below`, comparisons, arithmetic), or a tuple of views
-        for a function with several outputs. Register in `init`. Raises ConfigError for
-        a function outside `openalgo.ta` and for an output that looks ahead (see
-        `_indicators`), and IndicatorOutsideInitError when called after `init`."""
+        for a function with several outputs. Register in `init`. While the indicator's
+        symbol is not ready, the view reads NaN, or false for a signal (module
+        docstring). Raises ConfigError for a function outside `openalgo.ta` and for an
+        output that looks ahead (see `_indicators`), and IndicatorOutsideInitError when
+        called after `init`."""
         from ._indicators import register
 
         if not self._ctx.declaring:

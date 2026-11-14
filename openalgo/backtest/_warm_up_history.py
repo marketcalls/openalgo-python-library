@@ -324,6 +324,16 @@ def _asked(request: Request, base: pd.DataFrame) -> str:
     return told
 
 
+def _none_before(symbol: str, kind: str, run_base: pd.DataFrame, start: dt.date) -> str:
+    """What the Assumptions block says of a symbol that has no bars before `start`: from
+    the first bar of its run (`run_base`), which lies after `start` for a symbol listed or
+    given from a later day (`start` for a run with no bar of it)."""
+    first = ist_time(int(run_base["ts_open"].iloc[0])).date() if not run_base.empty else start
+    if kind == "own":
+        return f"the bars given for {symbol} begin on {first}"
+    return f"the source has no bars of {symbol} before {first}"
+
+
 def _shown(frame: pd.DataFrame) -> str:
     """The strategy bars kept, as the Assumptions block counts them."""
     shown = counted(len(frame), "strategy bar")
@@ -354,7 +364,8 @@ def keep(
     base = load.base
     known = {"asked_from": request.day, "given_from": load.given_from}
     if base.empty:
-        note = f"none ({_asked(request, base)}; the source has no bars before {plan.start})"
+        before = _none_before(symbol, load.kind, run_base, plan.start)
+        note = f"none ({_asked(request, base)}; {before})"
         return replace(empty_history(symbol, note, kind), **known)
     cut, enough = first_kept(base, needs, plan, calendar)
     kept_from = day_start_ns(ist_time(cut).date())

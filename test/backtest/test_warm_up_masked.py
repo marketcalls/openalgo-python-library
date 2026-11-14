@@ -271,6 +271,38 @@ def test_once_ready_a_symbols_lookbacks_read_the_values_before_it_joined(read):
     assert joined["gap"] == pytest.approx(expected[-1] - closes[31], rel=1e-12)
 
 
+def timed_reader() -> type[bt.Strategy]:
+    """AAA (ready at start) and BBB (listed within the run): a timer at each session's
+    open records BBB's 20-bar average."""
+
+    class Timed(bt.Strategy):
+        symbols, exchange, interval, product = ("AAA", "BBB"), "NSE", "D", "CNC"
+        seen: list = []
+
+        def init(self):
+            self.slow = self.I(ta.sma, self.data["BBB"].close, 20)
+            self.at("09:15", self.read)
+
+        def read(self):
+            line = unknown(self.slow[-1]) if len(self.slow) else None
+            type(self).seen.append((self.now, len(self.slow), line))
+
+    return Timed
+
+
+def test_a_timer_reads_nan_for_a_symbol_not_ready():
+    strategy = timed_reader()
+    bt.backtest(
+        strategy, data={"AAA": LONG, "BBB": LISTED}, start="2026-01-01", end=END, **SETTINGS
+    )
+    # The timer at the open after BBB's 32nd close is the first that BBB is ready for.
+    waiting = [entry for entry in strategy.seen if entry[0].date() <= LISTED_READY]
+    ready = [entry for entry in strategy.seen if entry[0].date() > LISTED_READY]
+    assert max(bars for _, bars, _ in waiting) == 31
+    assert {line for _, _, line in waiting} == {None}
+    assert ready[0][2] == pytest.approx(float(np.mean(LISTED["close"].to_numpy()[12:32])))
+
+
 # ----- another interval of a waiting symbol ---------------------------------------------
 
 # BBB's only indicator is a 5-week average of its weekly bars, which needs 16 weeks: BBB

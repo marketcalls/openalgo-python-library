@@ -19,6 +19,8 @@ What is known changes with the decision point, so the values do too:
   re-adjusted history the first time it is read in a new epoch (`SplicedView`);
 - the bar handed to `on_bar` is the contract's own bar, so values recorded in the result
   (decisions, logs) are those used and are never revised;
+- while the underlying is not ready, every view of its series but a bar field reads
+  unknown, as for any symbol (`_views`);
 - the causality checks of an indicator run point in time: each bar's value is the one
   computed on the history known at that bar's close, and a truncated computation must
   reproduce it (03-architecture 5).
@@ -44,7 +46,8 @@ EpochValues = Callable[[int], np.ndarray]
 class SplicedView(TimelineView):
     """A view of a spliced series whose values follow the epoch (module docstring).
     `at_epoch(e)` gives the values of the whole run as computed in epoch `e`; the view's
-    own values are those of the store's epoch, recomputed in place when it is read."""
+    own values are those of the store's epoch, recomputed in place when it is read.
+    `bar_field` is True for the view of a bar field (`TimelineView`)."""
 
     def __init__(
         self,
@@ -54,8 +57,9 @@ class SplicedView(TimelineView):
         at_epoch: EpochValues,
         recipe: Recipe | None = None,
         need: int | None = 1,
+        bar_field: bool = False,
     ) -> None:
-        super().__init__(store, values, label, recipe, need)
+        super().__init__(store, values, label, recipe, need, bar_field)
         self._compute_at = at_epoch
         self._cached: tuple[int, np.ndarray] | None = None
         self._epoch = store.epoch
@@ -222,6 +226,7 @@ class SplicedStore(SeriesStore):
             f"{self.name}.{name}",
             lambda e: self.column_at(name, e),
             field_recipe(name),
+            bar_field=True,
         )
 
     def indicator_adapter(self, call: Any, names: list[str], causal: tuple[str, ...]) -> Any:

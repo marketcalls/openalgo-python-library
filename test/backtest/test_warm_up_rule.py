@@ -14,6 +14,7 @@ reference bars: 128 bars for a 10-bar EMA, 256 for a 20-bar one, 512 for a 50-ba
 from __future__ import annotations
 
 import datetime as dt
+import re
 import warnings
 
 import numpy as np
@@ -310,7 +311,24 @@ def test_own_data_that_lists_late_is_advised_to_begin_earlier():
     )
 
 
-def test_a_client_source_without_bars_before_start_says_the_source_has_none(tmp_path):
+def history_note(result: bt.Result, symbol: str) -> str:
+    """What the Assumptions line says of a symbol that kept no history, after what was
+    asked for."""
+    found = re.search(
+        rf"{symbol} none \(asked from [0-9-]+; (.*?)\)", result.assumptions["warm_up"]
+    )
+    assert found is not None, result.assumptions["warm_up"]
+    return found.group(1)
+
+
+def test_the_assumptions_name_the_first_bar_of_own_data_that_lists_late():
+    data = {"AAA": walk("2020-01-01", "2026-06-30", 3), "BBB": walk("2026-02-02", "2026-06-30", 4)}
+    result = bt.backtest(pair(("AAA", "BBB")), data=data, start="2026-01-01", **SETTINGS)
+    assert history_note(result, "BBB") == "the bars given for BBB begin on 2026-02-02"
+
+
+def listed_from_source(tmp_path) -> bt.Result:
+    """A run of BBB from a client source whose bars begin on 2026-02-02, within the run."""
     from data_fixtures.fakes import FakeClient, historify_shape
 
     bars = walk("2026-02-02", "2026-06-30", 4)
@@ -338,14 +356,23 @@ def test_a_client_source_without_bars_before_start_says_the_source_has_none(tmp_
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("OPENALGO_BT_CACHE", str(tmp_path))
-        result = bt.backtest(
+        return bt.backtest(
             Listed, client, start="2026-01-01", end="2026-06-30", source="db", **SETTINGS
         )
+
+
+def test_a_client_source_without_bars_before_start_says_the_source_has_none(tmp_path):
+    result = listed_from_source(tmp_path)
     (warning,) = [text for text in result.warnings if "waited" in text]
     assert warning.endswith(
         "sma(BBB.close, 20) needs 32 D bars of BBB and 0 bars closed before 2026-01-01: the "
         "source has no bars of BBB before 2026-02-02."
     )
+
+
+def test_the_assumptions_name_the_first_bar_of_a_source_that_lists_late(tmp_path):
+    result = listed_from_source(tmp_path)
+    assert history_note(result, "BBB") == "the source has no bars of BBB before 2026-02-02"
 
 
 # ----- the wait is told on screen ------------------------------------------------------

@@ -71,9 +71,12 @@ class SeriesStore:
     """The bars of one instrument and interval over the whole run, as arrays: `ts_open`
     and `ts_close` int64 UTC nanoseconds, prices in rupees, volume in units. A subclass
     says how many are visible. `name` prefixes the labels of its views. `history_bars`
-    counts the bars before the run's start at the front of the arrays (`BarStore`)."""
+    counts the bars before the run's start at the front of the arrays (`BarStore`).
+    `waiting` is True while its symbol is not ready, set by the run context: its views
+    other than bar fields then read unknown (`_views`)."""
 
     history_bars = 0
+    waiting = False
 
     def __init__(
         self, symbol: str, interval: str, series: dict[str, np.ndarray], name: str | None = None
@@ -176,7 +179,8 @@ class SeriesView(TimelineView):
     work, `.values` is a NumPy copy; arithmetic and comparisons as `TimelineView`."""
 
     def __init__(self, store: SeriesStore, name: str) -> None:
-        super().__init__(store, store.column(name), f"{store.name}.{name}", field_recipe(name))
+        values, label = store.column(name), f"{store.name}.{name}"
+        super().__init__(store, values, label, field_recipe(name), bar_field=True)
 
 
 class InstrumentData:

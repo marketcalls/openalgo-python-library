@@ -30,12 +30,16 @@
   which the periods it reads are whole. That bar is found from the bars up to it alone,
   so whether a symbol is ready at a bar never depends on a later bar or on how many bars
   follow. At a decision a symbol not ready yet is left out: its bar is not passed to
-  `on_bar` and its orders are skipped with skip reason "not_ready" (`_context`); it
-  joins at the first bar it is ready, and the symbols that are ready trade. Nothing is
-  decided before the first symbol is ready (no timer, no `on_bar`, no condition), so a
-  run of one symbol simply waits. A series too short to compute an indicator at all
-  (`_indicators`) has fewer bars than the warm-up of that indicator, so it is not ready
-  at any of its bars, as a series long enough to compute it would not be by then.
+  `on_bar`, its orders are skipped with skip reason "not_ready" (`_context`), and its
+  indicators read NaN, or false for a condition, wherever they are read (`_views`), so
+  a decision for another symbol cannot rest on a value that the bars after it decide
+  (an EMA of 20 bars is not computed on fewer than 20, and is from the first bar on
+  more); its bar fields stay readable. It joins at the first bar it is ready, and the
+  symbols that are ready trade. Nothing is decided before the first symbol is ready (no
+  timer, no `on_bar`, no condition), so a run of one symbol simply waits. A series too
+  short to compute an indicator at all (`_indicators`) has fewer bars than the warm-up of
+  that indicator, so it is not ready at any of its bars, as a series long enough to
+  compute it would not be by then.
 - **Too little history** (own data that begins at `start`, a new listing, a futures
   series): the symbol waits inside the run until its indicators are ready, and one whose
   needs are not met by its last bar makes no decision at all; a warning counts the
