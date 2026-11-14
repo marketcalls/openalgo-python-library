@@ -1,12 +1,12 @@
 """A series shorter than its indicators need, and parameters the needs are keyed on
 (decision D25, `_indicators`, `_warm_up`, `_warm_up_probe`).
 
-An indicator whose series has fewer bars than its own window (`period`, `length`), or
-than its warm-up when it has no single window, is not computed there; one its series
-can compute but whose warm-up
-is longer than the series is never ready. Either way the strategy makes no decision for
-that symbol and a warning says so, while the other symbols of the run trade. Any other
-error of an indicator still stops the run.
+An indicator whose function refuses its series for its length (it raises there and
+computes on the same values with more bars in front) is not computed there, its values
+unknown; one its series can compute but whose warm-up is longer than the series is never
+ready. Either way the warm-up is longer than the series, so the strategy makes no
+decision for that symbol and a warning says so, while the other symbols of the run
+trade. Any other error of an indicator still stops the run.
 
 The bars are the seeded walks of `warm_up_bars`. The warm-ups used are those of the
 engine's reference bars: 128 bars for a 100-bar simple average (a window of 64 cannot
@@ -35,8 +35,7 @@ TOO_LONG = {
     "donchian": lambda s: s.I(ta.donchian, s.high, s.low, 100),
     "rsi": lambda s: s.I(ta.rsi, s.close, 14),
     "supertrend": lambda s: s.I(ta.supertrend, s.high, s.low, s.close, 10, 3),
-    # No single window: its warm-up decides, and its slow average of 100 bars could not
-    # be computed on 60.
+    # Several windows: its slow average of 100 bars cannot be computed on 60.
     "macd": lambda s: s.I(ta.macd, s.close, 12, 100, 9),
 }
 

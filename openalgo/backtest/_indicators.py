@@ -28,13 +28,13 @@ loaded before `start`, so an indicator is computed over it; one over values of t
 user's own, which hold one value per bar of the run, is computed on the run's bars and
 unknown (NaN, or false for a condition) on the history's.
 
-**A series too short for its indicator**: when the bars an indicator is computed on are
-fewer than its own window (its `period` or `length` argument), or, for a call without
-one, than its warm-up, it is not computed (`_indicator_values.short_outputs`): every
-value is unknown and its
-outcome records the bars it needs (`CheckOutcome.required`), so the strategy makes no
-decision for that symbol (`_warm_up`). The series length decides, never the error a call
-raises: any other error of the call stops the run with a ConfigError.
+**A series too short for its indicator**: when the call raises ValueError on the bars it
+is computed on and computes on the same inputs with more bars in front, the series was
+too short for it (`_indicator_values.short_outputs`): every value is unknown and its
+outcome records the bars the series had (`CheckOutcome.too_short`). Its warm-up is then
+longer than the series (a window that settles it computes it), so the symbol is not
+ready at any of its bars (`_warm_up`); one with no warm-up length is not waited for, its
+values unknown. Any other error of the call stops the run with a ConfigError.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ import pandas as pd
 
 from openalgo.indicators import causality
 
-from ._indicator_values import outputs_of, padded, required_bars, short_outputs
+from ._indicator_values import outputs_of, padded, short_outputs
 from ._messages import counted, not_supported
 from ._views import Recipe, TimelineView, need_of
 from ._warm_up_anchor import PeriodAnchor
@@ -298,23 +298,20 @@ def _failure(call: _Call, bars: int, exc: ValueError) -> ConfigError:
     return ConfigError(f"{call.label} failed on {where}: {exc}")
 
 
-def _computed(call: _Call, span: int) -> Any:
-    """What the function returns on the last `span` bars of its series. Raises
-    ConfigError when it fails there (`_failure`)."""
-    try:
-        return call.func(*call.arguments(0, span), **call.params)
-    except ValueError as exc:
-        raise _failure(call, span, exc) from exc
-
-
-def _short(call: _Call, span: int, required: int) -> tuple[bool, list[np.ndarray]]:
-    """`_indicator_values.short_outputs` of a call on the last `span` bars of a series
-    too short for it. Raises ConfigError when the call fails (`_failure`)."""
+def _computed(call: _Call, span: int) -> tuple[bool, list[np.ndarray], int | None]:
+    """(True when the function returns several outputs, its outputs on the last `span`
+    bars of its series, `span` when they were too few to compute it and the outputs are
+    unknown, else None): see `_indicator_values.short_outputs`. Raises ConfigError when
+    it fails there for any other reason (`_failure`)."""
     arguments = call.arguments(0, span)
     try:
-        return short_outputs(call.func, arguments, call.params, span, required, call.label)
+        returned = call.func(*arguments, **call.params)
     except ValueError as exc:
-        raise _failure(call, span, exc) from exc
+        unknown = short_outputs(call.func, arguments, call.params, span, call.label)
+        if unknown is None:
+            raise _failure(call, span, exc) from exc
+        return (*unknown, span)
+    return isinstance(returned, tuple | list), outputs_of(returned, span, call.label), None
 
 
 def _causal_names(record: dict, outputs: list[np.ndarray]) -> tuple[list[str], tuple[str, ...]]:
@@ -386,14 +383,7 @@ def register(checks: Any, func: Any, inputs: tuple, params: dict) -> Any:
     call = _Call(func, inputs, params, store, label, length - span)
     reference = call.reference(record)
     anchor = _anchor(record, func, inputs, params)
-    found = checks.warm_up(label, anchor, reference)
-    required = required_bars(found, _bound(func, inputs, params))
-    too_short = span if required is not None and span < required else None
-    if too_short is not None:
-        several, outputs = _short(call, span, required)
-    else:
-        returned = _computed(call, span)
-        several, outputs = isinstance(returned, tuple | list), outputs_of(returned, span, label)
+    several, outputs, too_short = _computed(call, span)
     names, causal = _causal_names(record, outputs)
     outcome, adapter = _checked(checks, call, record, outputs, (anchor, reference, too_short))
     on_bars = None if reference is None else call.on_bars()

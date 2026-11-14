@@ -295,12 +295,6 @@ class RunChecks:
         self._outcomes.setdefault((outcome.label, series), outcome)
         return outcome
 
-    def warm_up(
-        self, label: str, anchor: PeriodAnchor | None, reference: ReferenceCall | None
-    ) -> WarmUp:
-        """`IndicatorChecks.warm_up`, on the shared checks."""
-        return self._shared.warm_up(label, anchor, reference)
-
     @property
     def outcomes(self) -> tuple[CheckOutcome, ...]:
         """The outcome of each indicator of this run, in registration order."""

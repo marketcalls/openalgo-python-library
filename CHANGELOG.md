@@ -175,15 +175,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it), and `bt.backtest` ends with a `WarmUpWarning` that gives the first decision of
   each symbol that waited. A symbol whose series has fewer bars than a need of its own
   makes no decision, and the manifest lists it under `no_decision`. An indicator whose
-  series is shorter than its own window (`period`, `length`) or, for one without a
-  single window (MACD), its warm-up is not computed (its values are unknown; a 100-bar
-  average on 60 bars of own data stopped the run with a ConfigError before, and now
-  makes no decision with a warning, as an RSI did): its warm-up is longer than the
-  series, so the symbol is not ready at any of its bars, as it would not be by then on a
-  longer series. One over values of the user's own is not waited for on a series of any
-  length, so on one too short for it its values are unknown and a warning says so. The
-  series length decides, not the error the call raises. Any other error of an indicator
-  still stops the run. A run on one explicit futures contract
+  series is too short for its function is not computed, and its values are unknown: a
+  call that raises on its series and computes on the same values with more bars in
+  front was refused for the length (a 100-bar average on 60 bars of own data, a 20-bar
+  ulcer index on fewer than the 52 bars it checks for, a 20-bar KAMA, CMO, historical
+  volatility, regression slope or VIDYA on exactly 20 bars stopped the run with a
+  ConfigError before, and now make no decision for that symbol with a warning, as an
+  RSI did). Its warm-up is longer than the series, so the symbol is not ready at any of
+  its bars, as it would not be by then on a longer series. One over values of the
+  user's own is not waited for on a series of any length, so on one too short for it its
+  values are unknown and a warning says so. A call that fails on the longer series too
+  (a period of 0) still stops the run. A run on one explicit futures contract
   loads that contract's own bars before `start`. The Assumptions block gains `warm_up`
   (the rule, each series' need in its own bars, the history kept with the day asked
   from and, when later, the day the source's bars began, and the first decision of each
