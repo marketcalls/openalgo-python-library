@@ -178,7 +178,8 @@ class JournalLike(Protocol):
         unbound intent the order book does not hold."""
 
     def unbound(self) -> list[OrderIntent]:
-        """The intents still unbound, oldest first."""
+        """The intents of the session's trading day still unbound, oldest first. The
+        session starts its day on the journal before the order path asks."""
 
     def record_update(self, update: OrderUpdate) -> None:
         """Write an order update."""
