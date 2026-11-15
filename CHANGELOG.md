@@ -50,6 +50,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server is silent. An order queued for approval in OpenAlgo's Action Center stays
   queued across a restart. fivepaisa is not supported for live trading until its
   tradebook order IDs match its orders'. The SDK's `api` gains no method in this change.
+- `api.ping()`: checks the API key and returns the broker OpenAlgo is logged in to
+  (`{"status": "success", "data": {"broker": ..., "message": "pong"}}`).
+- The live layer's preflight (private): the checks before a live session. One session per
+  account and per OpenAlgo server; the broker login proven by ping, funds and one quote
+  (the quote reaches the broker in sandbox mode too); a supported broker; funds against
+  capital (available cash); each symbol's lot size, tick size and freeze quantity; the
+  interval and 1-minute candles offered; MIS only; the risk limits; the trading day and
+  the MIS entry window; the computer's clock against a remote server's; and a delivered
+  test alert in LIVE mode. Every failed check is reported together, with what to fix.
 
 ## [2.2.1] - 2026-11-15
 
