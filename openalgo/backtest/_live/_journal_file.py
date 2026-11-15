@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from pathlib import Path
+from types import MappingProxyType
 
 from ..errors import JournalError
 
@@ -19,23 +20,27 @@ SCHEMA_VERSION = 1
 #: The environment variable naming the folder (absolute) that holds the journals instead
 #: of `~/.openalgo/live`.
 LIVE_DIR_VARIABLE = "OPENALGO_LIVE_DIR"
+#: The name of the journal file in an account's folder.
 JOURNAL_FILE_NAME = "journal.sqlite"
 
 # Windows' rules for a file or folder name (its file naming conventions): these
 # characters, control characters, a trailing dot or space, and the device names, with
-# or without an extension.
+# or without an extension, their digit also written as a superscript.
 _NOT_IN_FOLDER_NAME = '<>:"/\\|?*'
 _DEVICE_NAMES = frozenset(
     {"CON", "PRN", "AUX", "NUL"}
     | {f"COM{number}" for number in range(1, 10)}
     | {f"LPT{number}" for number in range(1, 10)}
 )
+_SUPERSCRIPT_DIGITS = str.maketrans("¹²³⁴⁵⁶⁷⁸⁹", "123456789")
 _FIRST_PRINTABLE = 32
 
 # Every table is STRICT, so a value of the wrong type is refused instead of kept. Each
-# has a `ledger` column, the `Mode` value of the handle that wrote the row, and `day` is
-# an IST trading day, YYYY-MM-DD. An intent's `state` is "recorded" until its outcome is
-# known, then "bound" to its order, "unbound" (outcome unknown) or "not_placed".
+# has a `ledger` column, a `Mode` value: the mode of the handle that wrote the row, or
+# for an update the mode it was handled in. `day` is an IST trading day, YYYY-MM-DD; a
+# broker may give an order ID again on a later day, so an order ID is unique in a day.
+# An intent's `state` is "recorded" until its outcome is known, then "bound" to its
+# order, "unbound" (outcome unknown) or "not_placed".
 _SCHEMA = (
     "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT",
     """CREATE TABLE intents (
@@ -46,16 +51,16 @@ _SCHEMA = (
         created_ns INTEGER NOT NULL, price REAL NOT NULL, trigger_price REAL NOT NULL,
         state TEXT NOT NULL, order_id TEXT, reason TEXT NOT NULL,
         changed_ns INTEGER NOT NULL) STRICT""",
-    "CREATE UNIQUE INDEX intents_by_order ON intents (ledger, order_id)",
+    "CREATE UNIQUE INDEX intents_by_order ON intents (ledger, day, order_id)",
     "CREATE INDEX intents_by_day ON intents (ledger, day, state, seq)",
     """CREATE TABLE updates (
-        seq INTEGER PRIMARY KEY, ledger TEXT NOT NULL, order_id TEXT NOT NULL,
-        symbol TEXT NOT NULL, exchange TEXT NOT NULL, action TEXT NOT NULL,
-        quantity INTEGER NOT NULL, filled_quantity INTEGER NOT NULL,
+        seq INTEGER PRIMARY KEY, ledger TEXT NOT NULL, day TEXT NOT NULL,
+        order_id TEXT NOT NULL, symbol TEXT NOT NULL, exchange TEXT NOT NULL,
+        action TEXT NOT NULL, quantity INTEGER NOT NULL, filled_quantity INTEGER NOT NULL,
         pending_quantity INTEGER NOT NULL, average_price REAL NOT NULL,
         status TEXT NOT NULL, terminal INTEGER NOT NULL, rejection_reason TEXT NOT NULL,
         mode TEXT NOT NULL, ts_recv_ns INTEGER NOT NULL, source TEXT NOT NULL) STRICT""",
-    "CREATE INDEX updates_by_order ON updates (ledger, order_id, terminal, seq)",
+    "CREATE INDEX updates_by_order ON updates (ledger, day, order_id, terminal, seq)",
     """CREATE TABLE stops (
         ledger TEXT NOT NULL, day TEXT NOT NULL, strategy TEXT NOT NULL,
         symbol TEXT NOT NULL, exchange TEXT NOT NULL, order_id TEXT NOT NULL,
@@ -73,15 +78,27 @@ _SCHEMA = (
         starts INTEGER NOT NULL, PRIMARY KEY (ledger, day)) STRICT""",
 )
 
-# What to do after each kind of SQLite error.
+# What to do after each kind of SQLite error, by its primary result code.
 _REFUSED = "a value was refused: pass the field SQLite names, as the type the journal keeps"
-_DAMAGED = (
-    "the file is damaged or is not a journal: move it away and start the session again "
-    "(the broker's order book and positions still show what is open)"
-)
-_DISK = (
-    "check that the disk has space and no other program holds the file, then start the "
-    "session again"
+_DISK = "check that the disk works and the file can be written, then start the session again"
+_ADVICE = MappingProxyType(
+    {
+        "SQLITE_BUSY": (
+            "another program holds the file (another session of this account, or a tool "
+            "reading it): stop it, then start the session again"
+        ),
+        "SQLITE_LOCKED": "the file is locked by this program: start the session again",
+        "SQLITE_FULL": "the disk is full: free some space, then start the session again",
+        "SQLITE_READONLY": (
+            f"the file is read-only: make it writable, or point {LIVE_DIR_VARIABLE} at a "
+            "folder you can write, then start the session again"
+        ),
+        "SQLITE_CORRUPT": (
+            "the file is damaged: move it away and start the session again (the broker's "
+            "order book and positions still show what is open)"
+        ),
+        "SQLITE_NOTADB": "the file is not a journal: move it away or open another path",
+    }
 )
 
 
@@ -141,17 +158,18 @@ def check_name(what: str, value: str) -> None:
 
 def failure(error: sqlite3.Error, action: str, path: Path) -> JournalError:
     """The `JournalError` for a SQLite error met while trying to `action`: what happened
-    (a refused value, a damaged file, or a disk or lock problem) and what to do."""
+    (a refused value; a busy, locked, full, read-only, damaged or foreign file; another
+    disk problem) and what to do."""
     name = getattr(error, "sqlite_errorname", None) or ""
+    # An extended code (SQLITE_READONLY_DBMOVED) names its primary one first.
+    primary = "_".join(name.split("_")[:2])
     refused = (sqlite3.IntegrityError, sqlite3.DataError, sqlite3.InterfaceError)
-    if isinstance(error, refused) or name.startswith("SQLITE_CONSTRAINT"):
+    if isinstance(error, refused) or primary == "SQLITE_CONSTRAINT":
         advice = _REFUSED
     elif isinstance(error, sqlite3.ProgrammingError) and not name:
         advice = _REFUSED  # raised by Python's sqlite3 for a value it cannot bind
-    elif name in ("SQLITE_NOTADB", "SQLITE_CORRUPT"):
-        advice = _DAMAGED
     else:
-        advice = _DISK
+        advice = _ADVICE.get(primary, _DISK)
     return JournalError(
         f"cannot {action} in the live journal at {path} (SQLite: {error}): {advice}"
     )
@@ -167,10 +185,11 @@ def _check_folder_name(account: str) -> None:
             f"account {account!r} must be a plain folder name: no {_NOT_IN_FOLDER_NAME} or "
             "control characters, and no dot or space at the end"
         )
-    if account.split(".")[0].rstrip(" ").upper() in _DEVICE_NAMES:
+    stem = account.split(".")[0].rstrip(" ").translate(_SUPERSCRIPT_DIGITS).upper()
+    if stem in _DEVICE_NAMES:
         raise JournalError(
             f"account {account!r} is a device name on Windows (CON, PRN, AUX, NUL, COM1 to "
-            "COM9, LPT1 to LPT9): choose another name"
+            "COM9, LPT1 to LPT9, their digit also as a superscript): choose another name"
         )
 
 
@@ -185,6 +204,9 @@ def _prepare(connection: sqlite3.Connection, path: Path, account: str, broker: s
             if _check_version(connection, path) == 0:
                 _create(connection, account, broker)
             _check_binding(connection, path, account, broker)
+            # A write that changes nothing: a file that cannot be written (read-only)
+            # is refused now, before the session, not at its first order.
+            connection.execute("UPDATE meta SET value = value WHERE key = 'broker'")
             connection.execute("COMMIT")
         except BaseException:
             if connection.in_transaction:

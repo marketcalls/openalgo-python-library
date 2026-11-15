@@ -85,3 +85,18 @@ def an_update(order_id="o1", status=OrderStatus.OPEN, **changes):
 def a_bound_order(journal, intent_id, order_id, **changes):
     journal.record_intent(an_intent(intent_id, **changes))
     journal.bind(intent_id, order_id)
+
+
+def a_stop_intent(order_id, leg=LEG, **changes):
+    """The intent of the stop order `order_id` of `leg` (strategy, symbol, exchange)."""
+    strategy, symbol, exchange = leg
+    values = {"strategy": strategy, "symbol": symbol, "exchange": exchange, "action": "SELL"}
+    stop = {"price_type": "SL-M", "purpose": Purpose.STOP}
+    return an_intent(f"intent-of-{order_id}", **values | stop | changes)
+
+
+def a_stop_order(journal, order_id, leg=LEG, **changes):
+    """A bound order sent as the stop of `leg` (strategy, symbol, exchange)."""
+    intent = a_stop_intent(order_id, leg, **changes)
+    journal.record_intent(intent)
+    journal.bind(intent.intent_id, order_id)

@@ -1,8 +1,8 @@
 """The live journal's order record (08-live-trading 6.1 and 7): intents written before
-their orders are sent, bindings, order updates, the values each field keeps, the trading
-day each intent belongs to, and one ledger per mode."""
+their orders are sent, bindings and order updates (the trading day and the mode are in
+`test_journal_days.py`)."""
 
-from datetime import timedelta
+import inspect
 
 import pytest
 from journal_samples import (
@@ -11,18 +11,17 @@ from journal_samples import (
     DAY_NS,
     LEG,
     NEXT_DAY,
-    ManualClock,
     a_bound_order,
+    a_stop_order,
     an_intent,
     an_update,
-    ist_ns,
     journal_path,
     open_journal,
     started_journal,
 )
 
-from openalgo.backtest._live._types import JournalLike, Mode, OrderStatus, Purpose
-from openalgo.backtest._live.journal import Journal, JournalOrder
+from openalgo.backtest._live._types import BoundOrder, JournalLike, Mode, OrderStatus
+from openalgo.backtest._live.journal import Journal
 from openalgo.backtest.errors import JournalError
 
 
@@ -37,10 +36,13 @@ def journal(path):
         yield handle
 
 
-def test_the_journal_offers_what_the_order_path_needs():
-    needed = [name for name in vars(JournalLike) if not name.startswith("_")]
-    assert "mark_not_placed" in needed
-    assert all(callable(getattr(Journal, name, None)) for name in needed)
+@pytest.mark.parametrize("name", [name for name in vars(JournalLike) if not name.startswith("_")])
+def test_the_journal_has_every_method_of_the_contract_with_its_parameters(name):
+    wanted = list(inspect.signature(getattr(JournalLike, name)).parameters.values())
+    offered = list(inspect.signature(getattr(Journal, name)).parameters.values())
+    assert [p.name for p in offered[: len(wanted)]] == [p.name for p in wanted]
+    extra = offered[len(wanted) :]
+    assert all(p.kind is p.KEYWORD_ONLY and p.default is not p.empty for p in extra)
 
 
 # Intents and bindings
@@ -67,17 +69,21 @@ def mark_an_intent_not_placed(journal):
 
 
 def set_a_stop(journal):
-    a_bound_order(journal, "s1", "o9", purpose=Purpose.STOP)
+    a_stop_order(journal, "o9")
     journal.set_stop(*LEG, "o9")
 
 
 COMMITTED_WRITES = [
     pytest.param(record_an_intent, lambda j: j.unbound(day=DAY) == [an_intent()], id="intent"),
     pytest.param(bind_an_intent, lambda j: j.order_id_of("i1") == "o1", id="binding"),
-    pytest.param(mark_an_intent_not_placed, lambda j: j.unbound(day=DAY) == [], id="not placed"),
+    pytest.param(
+        mark_an_intent_not_placed,
+        lambda j: j.intent("i1") is not None and j.unbound(day=DAY) == [],
+        id="not placed",
+    ),
     pytest.param(
         lambda j: j.record_update(an_update()),
-        lambda j: j.last_update("o1") == an_update(),
+        lambda j: j.last_update("o1", day=DAY) == an_update(),
         id="update",
     ),
     pytest.param(set_a_stop, lambda j: j.stop_of(*LEG, day=DAY) == "o9", id="stop"),
@@ -88,12 +94,12 @@ COMMITTED_WRITES = [
     ),
     pytest.param(
         lambda j: j.put_user_state("ema", {"entries": 1}),
-        lambda j: j.user_state("ema").state == {"entries": 1},
+        lambda j: getattr(j.user_state("ema"), "state", None) == {"entries": 1},
         id="user state",
     ),
     pytest.param(
-        lambda j: j.start_session(DAY, Mode.SANDBOX, BROKER),
-        lambda j: j.session(DAY) is not None,
+        lambda j: j.start_session(NEXT_DAY, Mode.SANDBOX, BROKER),
+        lambda j: j.session(NEXT_DAY) is not None,
         id="session",
     ),
 ]
@@ -102,6 +108,7 @@ COMMITTED_WRITES = [
 @pytest.mark.parametrize(("write", "is_visible"), COMMITTED_WRITES)
 def test_every_write_is_committed_before_it_returns(path, write, is_visible):
     with started_journal(path) as writer, open_journal(path) as reader:
+        assert not is_visible(reader)
         write(writer)
         assert is_visible(reader)
 
@@ -142,14 +149,7 @@ def test_a_bound_intent_maps_to_its_order_and_back(journal):
 
 
 def test_an_intent_reads_back_as_it_was_recorded(journal):
-    stop = an_intent(
-        "s1",
-        action="SELL",
-        price_type="SL",
-        purpose=Purpose.STOP,
-        price=95.25,
-        trigger_price=100.25,
-    )
+    stop = an_intent("s1", action="SELL", price_type="SL", price=95.25, trigger_price=100.25)
     journal.record_intent(stop)
     assert journal.intent("s1") == stop
 
@@ -171,7 +171,7 @@ def test_binding_an_intent_to_a_second_order_is_refused(journal):
         journal.bind("i1", "o2")
 
 
-def test_binding_an_order_to_a_second_intent_is_refused(journal):
+def test_binding_an_order_to_a_second_intent_on_its_day_is_refused(journal):
     a_bound_order(journal, "i1", "o1")
     journal.record_intent(an_intent("i2"))
     with pytest.raises(JournalError, match="order 'o1' is already bound to intent 'i1'"):
@@ -245,17 +245,20 @@ def test_an_update_arriving_after_a_terminal_one_is_stale(journal):
     assert journal.last_update("o1") == an_update(status=OrderStatus.CANCELLED)
 
 
+def test_the_first_terminal_update_wins_over_a_later_terminal_one(journal):
+    filled = {"status": OrderStatus.COMPLETE, "filled_quantity": 10, "pending_quantity": 0}
+    streamed = an_update(**filled, average_price=812.4, source="stream")
+    polled = an_update(**filled, average_price=0.0, source="poll", ts_recv_ns=DAY_NS + 9_000)
+    journal.record_update(streamed)
+    journal.record_update(polled)
+    assert journal.last_update("o1") == streamed
+
+
 def test_an_update_may_arrive_before_its_order_is_bound(journal):
     journal.record_intent(an_intent())
     journal.record_update(an_update())
     journal.bind("i1", "o1")
-    assert journal.open_orders() == [JournalOrder("o1", an_intent(), an_update())]
-
-
-def test_an_update_from_another_mode_is_refused(journal):
-    with pytest.raises(JournalError, match="updated in live mode, and this is the sandbox ledger"):
-        journal.record_update(an_update(mode=Mode.LIVE))
-    assert journal.updates("o1") == []
+    assert journal.open_orders() == [BoundOrder(an_intent(), "o1", an_update())]
 
 
 def test_open_orders_are_the_bound_orders_with_no_terminal_update(journal):
@@ -267,8 +270,8 @@ def test_open_orders_are_the_bound_orders_with_no_terminal_update(journal):
     journal.record_update(an_update("o4", OrderStatus.REJECTED))
     journal.record_update(an_update("o5", OrderStatus.OPEN))  # an order the engine did not send
     assert journal.open_orders() == [
-        JournalOrder("o1", an_intent("i1"), None),
-        JournalOrder("o2", an_intent("i2"), an_update("o2", OrderStatus.TRIGGER_PENDING)),
+        BoundOrder(an_intent("i1"), "o1", None),
+        BoundOrder(an_intent("i2"), "o2", an_update("o2", OrderStatus.TRIGGER_PENDING)),
     ]
 
 
@@ -276,89 +279,5 @@ def test_a_filled_order_stays_in_the_bound_orders(journal):
     filled = an_update(status=OrderStatus.COMPLETE, filled_quantity=10, average_price=812.4)
     a_bound_order(journal, "i1", "o1")
     journal.record_update(filled)
-    assert journal.bound_orders() == [JournalOrder("o1", an_intent(), filled)]
+    assert journal.bound_orders() == [BoundOrder(an_intent(), "o1", filled)]
     assert journal.open_orders() == []
-
-
-# The trading day
-
-
-def test_an_intent_belongs_to_the_ist_trading_day_it_was_created_on(path):
-    # 00:30 IST on DAY is 19:00 UTC the day before: the IST day is the one that counts.
-    just_after_midnight = an_intent(created_ns=ist_ns(DAY, 0, 30))
-    with open_journal(path) as journal:
-        journal.record_intent(just_after_midnight)
-        assert journal.unbound(day=DAY) == [just_after_midnight]
-        assert journal.unbound(day=DAY - timedelta(days=1)) == []
-
-
-def test_the_unbound_intents_are_those_of_the_sessions_day(journal):
-    journal.record_intent(an_intent("today"))
-    journal.record_intent(an_intent("tomorrow", created_ns=ist_ns(NEXT_DAY, 10)))
-    assert [intent.intent_id for intent in journal.unbound()] == ["today"]
-
-
-def test_the_orders_are_those_of_the_sessions_day(path):
-    with started_journal(path) as journal:
-        a_bound_order(journal, "i1", "o1")
-    with started_journal(path, day=NEXT_DAY, now=ManualClock(ist_ns(NEXT_DAY, 9))) as next_day:
-        a_bound_order(next_day, "i2", "o2", created_ns=ist_ns(NEXT_DAY, 10))
-        assert next_day.open_orders() == [
-            JournalOrder("o2", an_intent("i2", created_ns=ist_ns(NEXT_DAY, 10)), None)
-        ]
-        assert next_day.bound_orders(day=DAY) == [JournalOrder("o1", an_intent("i1"), None)]
-
-
-@pytest.mark.parametrize(
-    "read",
-    [
-        Journal.unbound,
-        Journal.open_orders,
-        Journal.bound_orders,
-        Journal.snapshot,
-        lambda j: j.stop_of(*LEG),
-        lambda j: j.clear_stop(*LEG),
-        lambda j: j.rms_state("ema"),
-        lambda j: j.put_rms_state("ema", {}),
-    ],
-    ids=[
-        "unbound",
-        "open_orders",
-        "bound_orders",
-        "snapshot",
-        "stop_of",
-        "clear_stop",
-        "rms_state",
-        "put_rms_state",
-    ],
-)
-def test_what_belongs_to_a_day_needs_the_session_or_a_day(path, read):
-    with (
-        open_journal(path) as journal,
-        pytest.raises(JournalError, match="no trading day: call start_session first, or pass day="),
-    ):
-        read(journal)
-
-
-# Modes
-
-
-def test_an_intent_id_is_unique_across_both_ledgers(path):
-    with open_journal(path, mode=Mode.SANDBOX) as sandbox:
-        sandbox.record_intent(an_intent())
-    with (
-        open_journal(path, mode=Mode.LIVE) as live,
-        pytest.raises(JournalError, match="'i1' is already in the journal"),
-    ):
-        live.record_intent(an_intent())
-
-
-def test_an_order_of_one_ledger_is_unknown_in_the_other(path):
-    with open_journal(path, mode=Mode.SANDBOX) as sandbox:
-        a_bound_order(sandbox, "i1", "o1")
-    with open_journal(path, mode=Mode.LIVE) as live:
-        assert (live.intent("i1"), live.intent_of("o1"), live.bound_orders(day=DAY)) == (
-            None,
-            None,
-            [],
-        )

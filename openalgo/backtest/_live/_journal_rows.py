@@ -15,9 +15,10 @@ import math
 import numbers
 import operator
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import fields
 from datetime import date, datetime
+from types import MappingProxyType
 from typing import Any
 
 from .._series import ist_time
@@ -31,19 +32,26 @@ _INTENT_TEMPLATE = (
     "VALUES ({values}, :ledger, :day, 'recorded', '', :now)"
 )
 _UPDATE_TEMPLATE = (
-    "INSERT INTO updates ({names}, ledger, terminal) VALUES ({values}, :ledger, :terminal)"
+    "INSERT INTO updates ({names}, ledger, day, terminal) "
+    "VALUES ({values}, :ledger, :day, :terminal)"
 )
+# SQLite keeps an INTEGER as a signed 64-bit number.
+_SMALLEST_INTEGER, _LARGEST_INTEGER = -(2**63), 2**63 - 1
 
 
 def whole_number(name: str, value: Any) -> int:
     """`value` as an int (a NumPy integer too). Raises `JournalError` naming `name` for
-    None, a bool, a fraction or anything else that is not a whole number."""
+    None, a bool, a fraction, anything else that is not a whole number, or one outside the
+    signed 64-bit range SQLite keeps."""
     if isinstance(value, bool):
         raise JournalError(f"{name} must be a whole number, not {value!r}")
     try:
-        return operator.index(value)
+        number = operator.index(value)
     except TypeError as error:
         raise JournalError(f"{name} must be a whole number, not {value!r}") from error
+    if not _SMALLEST_INTEGER <= number <= _LARGEST_INTEGER:
+        raise JournalError(f"{name} must fit in a signed 64-bit integer, not {number}")
+    return number
 
 
 def finite_number(name: str, value: Any) -> float:
@@ -74,19 +82,19 @@ def _member_of(kind: type[enum.Enum]) -> Callable[[str, Any], Any]:
 
 # The check of each field, by the type its shared dataclass declares. A field of a type
 # missing here fails loudly at import, until the journal learns to keep it.
-_WRITERS: dict[str, Callable[[str, Any], Any]] = {
-    "str": _text,
-    "int": whole_number,
-    "float": finite_number,
-    "Purpose": _member_of(Purpose),
-    "OrderStatus": _member_of(OrderStatus),
-    "Mode": _member_of(Mode),
-}
-_READERS: dict[str, Callable[[Any], Any]] = {
-    "Purpose": Purpose,
-    "OrderStatus": OrderStatus,
-    "Mode": Mode,
-}
+_WRITERS: Mapping[str, Callable[[str, Any], Any]] = MappingProxyType(
+    {
+        "str": _text,
+        "int": whole_number,
+        "float": finite_number,
+        "Purpose": _member_of(Purpose),
+        "OrderStatus": _member_of(OrderStatus),
+        "Mode": _member_of(Mode),
+    }
+)
+_READERS: Mapping[str, Callable[[Any], Any]] = MappingProxyType(
+    {"Purpose": Purpose, "OrderStatus": OrderStatus, "Mode": Mode}
+)
 
 
 def _field_types(kind: type) -> tuple[tuple[str, str], ...]:
@@ -98,7 +106,9 @@ def _field_types(kind: type) -> tuple[tuple[str, str], ...]:
     return found
 
 
-_FIELDS = {kind: _field_types(kind) for kind in (OrderIntent, OrderUpdate)}
+_FIELDS: Mapping[type, tuple[tuple[str, str], ...]] = MappingProxyType(
+    {kind: _field_types(kind) for kind in (OrderIntent, OrderUpdate)}
+)
 
 
 def _insert(template: str, kind: type) -> str:
@@ -108,7 +118,7 @@ def _insert(template: str, kind: type) -> str:
 
 #: Write a new intent: its fields, then `:ledger`, `:day` and `:now` (UTC nanoseconds).
 INSERT_INTENT = _insert(_INTENT_TEMPLATE, OrderIntent)
-#: Write an order update: its fields, then `:ledger` and `:terminal`.
+#: Write an order update: its fields, then `:ledger`, `:day` and `:terminal`.
 INSERT_UPDATE = _insert(_UPDATE_TEMPLATE, OrderUpdate)
 
 
@@ -127,9 +137,12 @@ def intent_values(intent: OrderIntent) -> dict[str, Any]:
 
 
 def update_values(update: OrderUpdate) -> dict[str, Any]:
-    """The named values of `INSERT_UPDATE` from `update`, with `terminal` from its status.
+    """The named values of `INSERT_UPDATE` from `update`: `ledger` is the mode it was
+    handled in, `day` the trading day of its `ts_recv_ns`, and `terminal` from its status.
     Raises `JournalError` naming a field of the wrong type."""
-    return _values(OrderUpdate, update) | {"terminal": int(update.status.terminal)}
+    values = _values(OrderUpdate, update)
+    filed = {"ledger": values["mode"], "day": trading_day(values["ts_recv_ns"]).isoformat()}
+    return values | filed | {"terminal": int(update.status.terminal)}
 
 
 def _from_row(kind: type, row: sqlite3.Row) -> Any:
@@ -167,7 +180,8 @@ def unreadable(what: str, error: Exception) -> str:
 
 def trading_day(ts_ns: int) -> date:
     """The trading day of an instant in UTC nanoseconds: its IST calendar day. An MIS order
-    is made in market hours, so its calendar day is its trading day."""
+    is made and updated in market hours, so its calendar day is its trading day. Every
+    signed 64-bit instant (years 1677 to 2262) has one."""
     return ist_time(ts_ns).date()
 
 

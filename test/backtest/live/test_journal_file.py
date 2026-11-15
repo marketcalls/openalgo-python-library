@@ -3,6 +3,7 @@ the account and broker it is bound to, closing it, the thread it belongs to, and
 error each failure raises."""
 
 import sqlite3
+import stat
 import threading
 from pathlib import Path
 
@@ -11,7 +12,6 @@ from journal_samples import (
     ACCOUNT,
     DAY,
     LEG,
-    a_bound_order,
     an_intent,
     journal_path,
     open_journal,
@@ -21,6 +21,9 @@ from journal_samples import (
 from openalgo.backtest._live._journal_file import failure
 from openalgo.backtest._live.journal import default_journal_path
 from openalgo.backtest.errors import JournalError
+
+# SQLite's value of PRAGMA synchronous for FULL: every commit is synced to the disk.
+SYNCHRONOUS_FULL = 2
 
 
 @pytest.fixture
@@ -109,11 +112,30 @@ def test_a_sqlite_file_that_is_not_a_journal_is_refused_and_left_as_it_was(path)
     assert (read_pragma(path, "journal_mode"), read_pragma(path, "user_version")) == ("delete", 0)
 
 
-def test_a_file_that_is_not_sqlite_is_refused_as_damaged(path):
+def test_a_file_that_is_not_sqlite_is_refused_as_not_a_journal(path):
     path.parent.mkdir(parents=True)
     path.write_bytes(b"symbol,close\nSBIN,812.5\n" * 20)
-    with pytest.raises(JournalError, match="file is not a database.*damaged or is not a journal"):
+    with pytest.raises(JournalError, match="file is not a database.*the file is not a journal"):
         open_journal(path)
+
+
+def test_a_read_only_journal_is_refused_when_it_is_opened_saying_so(path):
+    open_journal(path).close()
+    path.chmod(stat.S_IREAD)
+    try:
+        with pytest.raises(JournalError, match="the file is read-only: make it writable"):
+            open_journal(path)
+    finally:
+        path.chmod(stat.S_IREAD | stat.S_IWRITE)
+
+
+def test_the_handle_syncs_every_commit_and_keeps_a_write_ahead_log(path):
+    with open_journal(path) as journal:
+        # Both are settings of the handle's own connection, so only it can show them.
+        connection = journal._connection
+        synchronous = connection.execute("PRAGMA synchronous").fetchone()[0]
+        journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+    assert (synchronous, journal_mode) == (SYNCHRONOUS_FULL, "wal")
 
 
 def test_a_folder_in_place_of_the_file_is_refused(path):
@@ -139,24 +161,68 @@ def test_a_mode_that_is_not_a_mode_is_refused(path):
 
 
 def test_a_value_sqlite_refuses_names_the_field(path):
-    with started_journal(path) as journal:
-        a_bound_order(journal, "s1", "o1")
-        with pytest.raises(JournalError, match="stops.strategy.*a value was refused") as raised:
-            journal.set_stop(None, "SBIN", "NSE", "o1")
+    refused = "risk_states.strategy.*a value was refused"
+    with started_journal(path) as journal, pytest.raises(JournalError, match=refused) as raised:
+        journal.put_rms_state(None, {})
     assert isinstance(raised.value.__cause__, sqlite3.IntegrityError)
 
 
-@pytest.mark.parametrize(
-    ("error", "advice"),
-    [
-        (sqlite3.OperationalError("database is locked"), "no other program holds the file"),
-        (sqlite3.OperationalError("database or disk is full"), "check that the disk has space"),
-        (sqlite3.IntegrityError("NOT NULL constraint failed: stops.symbol"), "a value was refused"),
-    ],
-    ids=["locked", "disk full", "refused value"],
-)
+def a_sqlite_error(kind, message, code):
+    """A SQLite error as SQLite raises it: its message and the name of its result code."""
+    error = kind(message)
+    error.sqlite_errorname = code
+    return error
+
+
+ERRORS_AND_ADVICE = [
+    pytest.param(
+        a_sqlite_error(sqlite3.OperationalError, "database is locked", "SQLITE_BUSY"),
+        "another program holds the file",
+        id="locked",
+    ),
+    pytest.param(
+        a_sqlite_error(sqlite3.OperationalError, "database or disk is full", "SQLITE_FULL"),
+        "the disk is full: free some space",
+        id="disk full",
+    ),
+    pytest.param(
+        a_sqlite_error(
+            sqlite3.OperationalError, "attempt to write a readonly database", "SQLITE_READONLY"
+        ),
+        "the file is read-only",
+        id="read-only",
+    ),
+    pytest.param(
+        a_sqlite_error(sqlite3.DatabaseError, "database disk image is malformed", "SQLITE_CORRUPT"),
+        "the file is damaged",
+        id="damaged",
+    ),
+    pytest.param(
+        a_sqlite_error(sqlite3.OperationalError, "disk I/O error", "SQLITE_IOERR_WRITE"),
+        "check that the disk works",
+        id="disk error",
+    ),
+    pytest.param(
+        a_sqlite_error(
+            sqlite3.IntegrityError, "NOT NULL constraint failed: stops.symbol", "SQLITE_CONSTRAINT"
+        ),
+        "a value was refused",
+        id="refused value",
+    ),
+]
+
+
+@pytest.mark.parametrize(("error", "advice"), ERRORS_AND_ADVICE)
 def test_a_sqlite_error_says_what_happened_and_what_to_do(error, advice):
     assert advice in str(failure(error, "record the stop", Path("journal.sqlite")))
+
+
+def test_each_kind_of_sqlite_error_gets_advice_of_its_own():
+    messages = [
+        str(failure(row.values[0], "record the stop", Path("journal.sqlite")))
+        for row in ERRORS_AND_ADVICE
+    ]
+    assert len(set(messages)) == len(messages)
 
 
 @pytest.mark.parametrize(
@@ -291,7 +357,11 @@ def test_an_account_that_is_not_a_plain_folder_name_is_refused(home, account):
         default_journal_path(account)
 
 
-@pytest.mark.parametrize("account", ["CON", "con", "Nul", "aux.journal", "COM1", "LPT9", "prn.txt"])
+@pytest.mark.parametrize(
+    "account",
+    ["CON", "con", "Nul", "aux.journal", "COM1", "LPT9", "prn.txt", "COM¹", "lpt³"]
+    + ["COM⁹.journal"],
+)
 def test_an_account_named_like_a_windows_device_is_refused(home, account):
     with pytest.raises(JournalError, match="is a device name on Windows"):
         default_journal_path(account)

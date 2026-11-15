@@ -5,8 +5,8 @@ The order path writes an intent before its HTTP call, then binds it to the broke
 ID, or marks it unbound when the outcome is unknown (a 502, a timeout, a disconnect) so
 that it is resolved against the order book before anything else is sent. Every order
 update is kept, in arrival order. The journal also holds each leg's broker-held stop
-(D31: one exit owner per leg), the risk rules' state (extremes, trail level, daily
-realized P&L) and the strategy's own `self.state`.
+(one exit owner per leg, `_journal_stops`), the risk rules' state (extremes, trail level,
+daily realized P&L) and the strategy's own `self.state`.
 
 Every write is committed, and synced to disk, before its method returns: an intent is
 durable before its order is sent. The file (`_journal_file`) uses write-ahead logging
@@ -16,13 +16,16 @@ A journal is bound to one account and one broker: an exit sent to another broker
 open a new position instead of closing the old one, so opening it with another broker is
 refused. It keeps one ledger per mode: a handle reads and writes the ledger of the mode
 it was opened in, so a sandbox session never restores, reconciles or exits a live
-position, nor the reverse. Intent IDs are unique across both ledgers.
+position, nor the reverse. An order update is filed under the mode it was handled in:
+OpenAlgo sends every update of the account to every session (manual orders, its own
+strategies), so one of the other mode is kept there and never changes this ledger's
+orders. Intent IDs are unique across both ledgers.
 
-Tier 1 trades MIS only, so what a restart restores is one IST trading day's: an intent
-belongs to the day of its `created_ns`, a stop to its order's day, and the risk state
-(the daily realized P&L with it) is kept per day. The day is that of the session started
-on the handle (`start_session`), or a `day=` argument. Only `self.state` carries across
-days. A handle is used from the thread that opened it, the session's loop.
+Tier 1 trades MIS only, so what a restart restores is one IST trading day's: the day of
+the session started on the handle (`start_session`), or a `day=` argument. An intent is
+recorded, and a stop set, only on the session's day; an order ID is unique within a day
+(a broker may give it again later), and the risk state is kept per day. Only
+`self.state` carries across days. A handle is used from the thread that opened it.
 
 Times are UTC nanoseconds. Every failure raises `JournalError` saying what to do.
 """
@@ -46,7 +49,7 @@ from ._journal_file import (
     default_journal_path,
 )
 from ._journal_handle import JournalHandle
-from ._journal_reads import JournalOrder, JournalSession, JournalSnapshot, SavedState
+from ._journal_reads import JournalSession, JournalSnapshot, SavedState
 from ._journal_rows import (
     INSERT_INTENT,
     INSERT_UPDATE,
@@ -56,7 +59,8 @@ from ._journal_rows import (
     state_json,
     update_values,
 )
-from ._types import Mode, Now, OrderIntent, OrderUpdate
+from ._journal_stops import needs_recording
+from ._types import BoundOrder, Mode, Now, OrderIntent, OrderUpdate
 
 _START_SESSION = (
     "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, 1) ON CONFLICT (ledger, day) "
@@ -80,9 +84,9 @@ class Journal(JournalHandle):
         bound to `broker`, reading and writing the ledger of `mode`; `now` gives the UTC
         nanoseconds of the times it records.
 
-        Raises `JournalError` when the file cannot be opened, is not a journal, was
-        written by a newer version or has an unknown schema version, belongs to another
-        account or is bound to another broker.
+        Raises `JournalError` when the file cannot be opened or written, is not a journal,
+        was written by a newer version or has an unknown schema version, belongs to
+        another account or is bound to another broker.
         """
         if not isinstance(mode, Mode):
             raise JournalError(f"mode must be Mode.SANDBOX or Mode.LIVE, not {mode!r}")
@@ -90,11 +94,19 @@ class Journal(JournalHandle):
         return cls(connect(path, account, broker), path, mode, broker, now)
 
     def record_intent(self, intent: OrderIntent) -> None:
-        """Write `intent` before its HTTP call, for the trading day of its `created_ns`; it
-        is unbound until `bind` or a mark. Raises `JournalError` when its `intent_id` is
-        already in the journal or a field has the wrong type (None, NaN, a fraction)."""
+        """Write `intent` before its HTTP call; it is unbound until `bind` or a mark.
+        Raises `JournalError` when a field has the wrong type (None, NaN, a fraction), its
+        `intent_id` is already in the journal, or its `created_ns` is not on the IST day of
+        the session started on this handle."""
         values = intent_values(intent) | {"ledger": self._ledger, "now": self._now_ns()}
+        key = self._day_key(None, "record an intent")
+        if values["day"] != key:
+            raise JournalError(
+                f"intent {intent.intent_id!r} was created on {values['day']} (IST) and the "
+                f"session is of {key}: start the session for the trading day it trades"
+            )
         with self._sql("record the intent") as sql:
+            # Across both ledgers: an intent ID is unique in the account's journal.
             known = "SELECT 1 FROM intents WHERE intent_id = ?"
             if sql.execute(known, (values["intent_id"],)).fetchone():
                 raise JournalError(
@@ -106,20 +118,20 @@ class Journal(JournalHandle):
     def bind(self, intent_id: str, order_id: str) -> None:
         """Bind an intent to the broker's order ID (binding the same pair again changes
         nothing). Raises `JournalError` when the intent is unknown, is bound to another
-        order, or the order is bound to another intent."""
+        order, or the order is bound to another intent on the intent's day."""
         check_name("order_id", order_id)
         now = self._now_ns()
         with self._sql("bind the intent") as sql:
-            bound = self._bound_order(sql, intent_id)
-            if bound == order_id:
+            row = self._intent(sql, intent_id)
+            if row["order_id"] == order_id:
                 return
-            if bound is not None:
+            if row["order_id"] is not None:
                 raise JournalError(
-                    f"intent {intent_id!r} is already bound to order {bound!r}, not "
+                    f"intent {intent_id!r} is already bound to order {row['order_id']!r}, not "
                     f"{order_id!r}: one intent sends one order, so look for a duplicate in "
                     "the order book"
                 )
-            owner = reads.intent_row(sql, self._ledger, "order_id", order_id)
+            owner = reads.intent_by_order(sql, self._ledger, row["day"], order_id)
             if owner is not None:
                 raise JournalError(
                     f"order {order_id!r} is already bound to intent {owner['intent_id']!r}: "
@@ -152,85 +164,72 @@ class Journal(JournalHandle):
     def intent(self, intent_id: str) -> OrderIntent | None:
         """The recorded intent, or None."""
         with self._sql("read the intent") as sql:
-            row = reads.intent_row(sql, self._ledger, "intent_id", intent_id)
+            row = reads.intent_by_id(sql, self._ledger, intent_id)
             return None if row is None else intent_from(row)
 
     def order_id_of(self, intent_id: str) -> str | None:
         """The order ID an intent is bound to, or None while it is not bound (or unknown)."""
         with self._sql("read the order ID") as sql:
-            row = reads.intent_row(sql, self._ledger, "intent_id", intent_id)
+            row = reads.intent_by_id(sql, self._ledger, intent_id)
             return None if row is None else row["order_id"]
 
-    def intent_of(self, order_id: str) -> OrderIntent | None:
-        """The intent an order ID is bound to, or None for an order the engine did not send."""
+    def intent_of(self, order_id: str, *, day: date | None = None) -> OrderIntent | None:
+        """The intent an order ID is bound to on the day, or None for an order the engine
+        did not send. Raises `JournalError` with no `day` before `start_session`."""
+        key = self._day_key(day, "find the intent of an order")
         with self._sql("read the intent of the order") as sql:
-            row = reads.intent_row(sql, self._ledger, "order_id", order_id)
+            row = reads.intent_by_order(sql, self._ledger, key, order_id)
             return None if row is None else intent_from(row)
 
     def record_update(self, update: OrderUpdate) -> None:
-        """Keep an order update, after every earlier one; it may arrive before its order is
-        bound, or be of an order the engine did not send. Raises `JournalError` for an
-        update handled in another mode than the ledger's (a sandbox update must never
-        close a live order with the same ID) or a field of the wrong type."""
-        values = update_values(update) | {"ledger": self._ledger}
-        if values["mode"] != self._ledger:
-            raise JournalError(
-                f"order {update.order_id!r} was updated in {values['mode']} mode, and this is "
-                f"the {self._ledger} ledger: OpenAlgo's mode changed, so the session must "
-                "stop and be started again in the mode wanted"
-            )
+        """Keep an order update, after every earlier one, under the ledger of the mode it
+        was handled in and the IST day it arrived on. It may arrive before its order is
+        bound, or be of an order the engine did not send or of the other mode: it is kept
+        all the same, and changes only the order bound to its ID in its own ledger and day.
+        Raises `JournalError` for a field of the wrong type."""
+        values = update_values(update)
         with self._sql("record the order update") as sql:
             sql.execute(INSERT_UPDATE, values)
 
-    def updates(self, order_id: str) -> list[OrderUpdate]:
-        """Every update of an order, in arrival order."""
+    def updates(self, order_id: str, *, day: date | None = None) -> list[OrderUpdate]:
+        """Every update of an order on the day, in arrival order. Raises `JournalError`
+        with no `day` before `start_session`."""
+        key = self._day_key(day, "read the order updates")
         with self._sql("read the order updates") as sql:
-            return reads.updates(sql, self._ledger, order_id)
+            return reads.updates(sql, self._ledger, key, order_id)
 
-    def last_update(self, order_id: str) -> OrderUpdate | None:
-        """An order's latest update to arrive, or None. Once a terminal update (complete,
-        rejected, cancelled) has arrived, a later one is stale and ignored."""
+    def last_update(self, order_id: str, *, day: date | None = None) -> OrderUpdate | None:
+        """The update of an order on the day that counts, or None: the first terminal one
+        (complete, rejected, cancelled), later ones being stale, or with none terminal the
+        latest. Raises `JournalError` with no `day` before `start_session`."""
+        key = self._day_key(day, "read the last order update")
         with self._sql("read the last order update") as sql:
-            return reads.last_update(sql, self._ledger, order_id)
+            return reads.last_update(sql, self._ledger, key, order_id)
 
-    def bound_orders(self, *, day: date | None = None) -> list[JournalOrder]:
+    def bound_orders(self, *, day: date | None = None) -> list[BoundOrder]:
         """Every bound order of the day with its last update, terminal ones included,
-        oldest first: what the reconciler matches against the broker's books. Raises
-        `JournalError` with no `day` before `start_session`."""
+        oldest first: what a restart takes back and the reconciler matches against the
+        broker's books. Raises `JournalError` with no `day` before `start_session`."""
         key = self._day_key(day, "list the orders")
         with self._sql("read the orders") as sql:
             return reads.bound_orders(sql, self._ledger, key)
 
-    def open_orders(self, *, day: date | None = None) -> list[JournalOrder]:
+    def open_orders(self, *, day: date | None = None) -> list[BoundOrder]:
         """The day's bound orders with no terminal update (none at all, or not yet
         terminal), oldest first. Raises `JournalError` with no `day` before `start_session`."""
         return [order for order in self.bound_orders(day=day) if not order.terminal]
 
     def set_stop(self, strategy: str, symbol: str, exchange: str, order_id: str) -> None:
-        """Record the broker-held stop of a leg, for its order's trading day (setting the
-        same one again changes nothing). Raises `JournalError` when the order is not bound
-        to an intent in this ledger, or the leg has another stop: one exit owner per leg."""
-        now = self._now_ns()
+        """Record the broker-held stop of a leg on the session's day (setting the same one
+        again changes nothing). Raises `JournalError` when the order is not bound on the
+        session's day in this ledger, was sent for another leg or not with `Purpose.STOP`,
+        or the leg has another stop: one exit owner per leg."""
+        key, now = self._day_key(None, "record the stop"), self._now_ns()
+        leg = (strategy, symbol, exchange)
         with self._sql("record the stop") as sql:
-            owner = reads.intent_row(sql, self._ledger, "order_id", order_id)
-            if owner is None:
-                raise JournalError(
-                    f"stop order {order_id!r} is not bound to an intent in the {self._ledger} "
-                    "ledger: record the stop's intent and bind it to the order, then record "
-                    "the stop"
-                )
-            leg = (strategy, symbol, exchange)
-            held = reads.stop_of(sql, self._ledger, owner["day"], leg)
-            if held == order_id:
-                return
-            if held is not None:
-                raise JournalError(
-                    f"strategy {strategy!r} on {exchange}:{symbol} already has stop order "
-                    f"{held!r}: a leg has one exit owner, so cancel that stop, wait for the "
-                    f"cancel to be confirmed and clear_stop it before recording {order_id!r}"
-                )
-            row = (self._ledger, owner["day"], *leg, order_id, now)
-            sql.execute("INSERT INTO stops VALUES (?, ?, ?, ?, ?, ?, ?)", row)
+            if needs_recording(sql, self._ledger, key, leg, order_id):
+                row = (self._ledger, key, *leg, order_id, now)
+                sql.execute("INSERT INTO stops VALUES (?, ?, ?, ?, ?, ?, ?)", row)
 
     def stop_of(
         self, strategy: str, symbol: str, exchange: str, *, day: date | None = None
@@ -267,8 +266,9 @@ class Journal(JournalHandle):
             sql.execute("INSERT OR REPLACE INTO risk_states VALUES (?, ?, ?, ?, ?)", row)
 
     def rms_state(self, strategy: str, *, day: date | None = None) -> dict[str, Any] | None:
-        """A strategy's risk state of the day, or None: a new day starts with none. Raises
-        `JournalError` with no `day` before `start_session`."""
+        """A strategy's risk state of the day, or None: a new day starts with none; an
+        earlier day's (see `session_days`) is read with `day=`. Raises `JournalError` with
+        no `day` before `start_session`."""
         key = self._day_key(day, "read the risk state")
         with self._sql("read the risk state") as sql:
             return reads.rms_state(sql, self._ledger, strategy, key)
@@ -309,6 +309,12 @@ class Journal(JournalHandle):
         with self._sql("read the session") as sql:
             return reads.session(sql, self._ledger, day)
 
+    def session_days(self) -> list[date]:
+        """The IST trading days with a started session in the journal's mode, oldest
+        first: the days whose risk state `rms_state(strategy, day=...)` can read."""
+        with self._sql("read the session days") as sql:
+            return reads.session_days(sql, self._ledger)
+
     def snapshot(self, *, day: date | None = None) -> JournalSnapshot:
         """What a restart restores for the day: see `JournalSnapshot`. Raises
         `JournalError` with no `day` before `start_session`."""
@@ -325,19 +331,19 @@ class Journal(JournalHandle):
                 user_states=reads.user_states(sql, self._ledger),
             )
 
-    def _bound_order(self, sql: sqlite3.Connection, intent_id: str) -> str | None:
-        row = reads.intent_row(sql, self._ledger, "intent_id", intent_id)
+    def _intent(self, sql: sqlite3.Connection, intent_id: str) -> sqlite3.Row:
+        row = reads.intent_by_id(sql, self._ledger, intent_id)
         if row is None:
             raise JournalError(
                 f"intent {intent_id!r} is not in the {self._ledger} ledger of the journal: "
                 "record it with record_intent before its order is sent"
             )
-        return row["order_id"]
+        return row
 
     def _resolve(self, intent_id: str, state: str, reason: str) -> None:
         now = self._now_ns()
         with self._sql(f"mark the intent {state}") as sql:
-            bound = self._bound_order(sql, intent_id)
+            bound = self._intent(sql, intent_id)["order_id"]
             if bound is not None:
                 raise JournalError(
                     f"intent {intent_id!r} is bound to order {bound!r}, so it reached the "
@@ -354,7 +360,6 @@ __all__ = [
     "LIVE_DIR_VARIABLE",
     "SCHEMA_VERSION",
     "Journal",
-    "JournalOrder",
     "JournalSession",
     "JournalSnapshot",
     "SavedState",

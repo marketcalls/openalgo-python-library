@@ -15,6 +15,8 @@ from journal_samples import (
     NEXT_DAY,
     ManualClock,
     a_bound_order,
+    a_stop_intent,
+    a_stop_order,
     an_intent,
     an_update,
     ist_ns,
@@ -23,14 +25,11 @@ from journal_samples import (
     started_journal,
 )
 
-from openalgo.backtest._live._types import Mode, OrderStatus, Purpose
-from openalgo.backtest._live.journal import (
-    JournalOrder,
-    JournalSession,
-    JournalSnapshot,
-    SavedState,
-)
+from openalgo.backtest._live._types import BoundOrder, Mode, OrderStatus, Purpose
+from openalgo.backtest._live.journal import JournalSession, JournalSnapshot, SavedState
 from openalgo.backtest.errors import JournalError
+
+NEXT_DAY_NS = ist_ns(NEXT_DAY, 10)
 
 
 @pytest.fixture
@@ -44,8 +43,8 @@ def journal(path):
         yield handle
 
 
-def a_stop_order(journal, order_id, **changes):
-    a_bound_order(journal, f"intent-of-{order_id}", order_id, purpose=Purpose.STOP, **changes)
+def next_day_journal(path):
+    return started_journal(path, day=NEXT_DAY, now=ManualClock(NEXT_DAY_NS))
 
 
 # Stops
@@ -74,6 +73,33 @@ def test_a_stop_bound_in_the_other_ledger_is_refused(path):
         sandbox.set_stop(*LEG, "s1")
 
 
+def test_a_stop_bound_on_an_earlier_day_is_refused(path):
+    with started_journal(path) as journal:
+        a_stop_order(journal, "s1")
+    with (
+        next_day_journal(path) as next_day,
+        pytest.raises(JournalError, match="bound on 2026-11-16 and the session is of 2026-11-17"),
+    ):
+        next_day.set_stop(*LEG, "s1")
+
+
+@pytest.mark.parametrize(
+    "sent_for", [("orb", "SBIN", "NSE"), ("ema", "INFY", "NSE"), ("ema", "SBIN", "BSE")]
+)
+def test_a_stop_sent_for_another_leg_is_refused(journal, sent_for):
+    a_stop_order(journal, "s1", leg=sent_for)
+    refused = "'s1' was sent for strategy .*: record a stop on the leg its order protects"
+    with pytest.raises(JournalError, match=refused):
+        journal.set_stop(*LEG, "s1")
+    assert journal.stop_of(*LEG) is None
+
+
+def test_an_order_not_sent_as_a_stop_is_refused_as_one(journal):
+    a_bound_order(journal, "entry", "o1", purpose=Purpose.ENTRY)
+    with pytest.raises(JournalError, match="'o1' was sent with purpose 'entry', not as a stop"):
+        journal.set_stop(*LEG, "o1")
+
+
 def test_a_second_stop_on_a_leg_is_refused(journal):
     a_stop_order(journal, "s1")
     a_stop_order(journal, "s2")
@@ -94,7 +120,7 @@ def test_recording_the_same_stop_twice_changes_nothing(journal):
 )
 def test_each_leg_has_its_own_stop(journal, other_leg):
     a_stop_order(journal, "s1")
-    a_stop_order(journal, "s2")
+    a_stop_order(journal, "s2", leg=other_leg)
     journal.set_stop(*LEG, "s1")
     journal.set_stop(*other_leg, "s2")
     assert (journal.stop_of(*LEG), journal.stop_of(*other_leg)) == ("s1", "s2")
@@ -109,8 +135,8 @@ def test_a_stop_belongs_to_the_trading_day_of_its_order(path):
     with started_journal(path) as journal:
         a_stop_order(journal, "s1")
         journal.set_stop(*LEG, "s1")
-    with started_journal(path, day=NEXT_DAY) as next_day:
-        a_stop_order(next_day, "s2", created_ns=ist_ns(NEXT_DAY, 10))
+    with next_day_journal(path) as next_day:
+        a_stop_order(next_day, "s2", created_ns=NEXT_DAY_NS)
         next_day.set_stop(*LEG, "s2")
         assert (next_day.stop_of(*LEG), next_day.stop_of(*LEG, day=DAY)) == ("s2", "s1")
 
@@ -234,6 +260,28 @@ def test_each_day_has_its_own_session(journal):
     assert journal.session(NEXT_DAY) is None
 
 
+def test_the_session_days_are_the_days_started_in_this_mode_oldest_first(path):
+    with started_journal(path, day=NEXT_DAY):
+        pass
+    with started_journal(path, day=DAY):
+        pass
+    with started_journal(path, day=date(2026, 11, 18), mode=Mode.LIVE):
+        pass
+    with open_journal(path) as sandbox:
+        assert sandbox.session_days() == [DAY, NEXT_DAY]
+
+
+def test_an_earlier_days_risk_state_is_read_through_the_session_days(path):
+    with started_journal(path) as journal:
+        journal.put_rms_state("ema", {"daily_realized": 1_500.0})
+    with next_day_journal(path) as next_day:
+        next_day.put_rms_state("ema", {"daily_realized": -400.0})
+        realized = [
+            next_day.rms_state("ema", day=day)["daily_realized"] for day in next_day.session_days()
+        ]
+        assert realized == [1_500.0, -400.0]
+
+
 @pytest.mark.parametrize(
     ("mode", "broker"), [(Mode.LIVE, BROKER), (Mode.SANDBOX, "dhan")], ids=["mode", "broker"]
 )
@@ -264,7 +312,8 @@ def fill_for_a_restart(journal):
     a_bound_order(journal, "i3", "o3")
     journal.record_update(an_update("o3", OrderStatus.COMPLETE, filled_quantity=10))
     journal.record_intent(an_intent("i4"))
-    journal.set_stop(*LEG, "o2")
+    a_stop_order(journal, "s2")
+    journal.set_stop(*LEG, "s2")
     journal.put_rms_state("ema", {"peak": 104.5, "daily_realized": -250.0})
     journal.put_user_state("ema", {"entries": 1})
 
@@ -272,16 +321,17 @@ def fill_for_a_restart(journal):
 def test_a_snapshot_holds_what_a_restart_restores(path):
     with started_journal(path, now=ManualClock(ist_ns(DAY, 11))) as journal:
         fill_for_a_restart(journal)
-        working = JournalOrder("o2", an_intent("i2"), an_update("o2", OrderStatus.TRIGGER_PENDING))
-        filled = JournalOrder(
-            "o3", an_intent("i3"), an_update("o3", OrderStatus.COMPLETE, filled_quantity=10)
+        working = BoundOrder(an_intent("i2"), "o2", an_update("o2", OrderStatus.TRIGGER_PENDING))
+        filled = BoundOrder(
+            an_intent("i3"), "o3", an_update("o3", OrderStatus.COMPLETE, filled_quantity=10)
         )
+        stop = BoundOrder(a_stop_intent("s2"), "s2", None)
         assert journal.snapshot() == JournalSnapshot(
             day=DAY,
             unbound=(an_intent("i1"), an_intent("i4")),
-            open_orders=(working,),
-            bound_orders=(working, filled),
-            stops={LEG: "o2"},
+            open_orders=(working, stop),
+            bound_orders=(working, filled, stop),
+            stops={LEG: "s2"},
             rms_states={"ema": {"peak": 104.5, "daily_realized": -250.0}},
             user_states={"ema": SavedState({"entries": 1}, ist_ns(DAY, 11))},
         )

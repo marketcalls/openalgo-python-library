@@ -61,14 +61,20 @@ class JournalHandle:
     def _sql(self, action: str) -> Iterator[sqlite3.Connection]:
         """The connection, to `action` with; a SQLite error raised in the block becomes the
         `JournalError` that says what happened."""
+        connection = self._usable(action)
+        with self._guard(action):
+            yield connection
+
+    def _usable(self, action: str) -> sqlite3.Connection:
+        """The connection, or `JournalError` when the handle is closed or is called from
+        another thread than the one that opened it."""
         if self._connection is None:
             raise JournalError(
                 f"cannot {action}: the live journal at {self._path} is closed; open it again "
                 "with Journal.open"
             )
         self._check_thread(action)
-        with self._guard(action):
-            yield self._connection
+        return self._connection
 
     @contextmanager
     def _guard(self, action: str) -> Iterator[None]:
@@ -87,6 +93,7 @@ class JournalHandle:
 
     def _day_key(self, day: date | None, action: str) -> str:
         """The key of `day`, or of the session's day when `day` is None."""
+        self._usable(action)
         if day is not None:
             return day_key(day)
         if self._session_day is None:
