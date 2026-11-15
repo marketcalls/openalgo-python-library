@@ -33,7 +33,9 @@ use crate::model::{is_supported_day, Day};
 use super::breakdown::{CostBreakdown, COMPONENT_NAMES};
 use super::cost_model::check_amount;
 use super::error::CostError;
-use super::rounding::{from_picos, round_half_up, to_picos, Grid, Picos, Unit, PICOS_PER_PAISA};
+use super::rounding::{
+    from_picos, paise_to_rupees, round_half_up, to_picos, Grid, Picos, Unit, PICOS_PER_PAISA,
+};
 use super::segment::{NoteGroup, Segment};
 
 /// The rounding rule the aggregator applies, in one sentence, for result metadata.
@@ -43,9 +45,6 @@ pub const CONTRACT_NOTE_RULE: &str =
      charge is summed over the day's trades, STT or CTT and stamp duty are rounded to the \
      nearest rupee (50 paise up) and brokerage, exchange charge, SEBI fee and GST to the \
      nearest paisa";
-
-/// Paise in a rupee, for a share counted in paise.
-const PAISE_PER_RUPEE: f64 = 100.0;
 
 /// The grid and rounding unit of each component, in `COMPONENT_NAMES` order: tax
 /// lines (STT or CTT, stamp duty) go to the rupee, the rest to the paisa.
@@ -264,10 +263,7 @@ fn whole_paise(exact: &[Picos], target: Picos) -> Vec<f64> {
     for &at in order.iter().take(usize::try_from(rest).unwrap_or(0)) {
         paise[at] = paise[at].saturating_add(1);
     }
-    paise
-        .into_iter()
-        .map(|share| share as f64 / PAISE_PER_RUPEE)
-        .collect()
+    paise.into_iter().map(paise_to_rupees).collect()
 }
 
 /// Round a batch of per-fill costs into contract notes.

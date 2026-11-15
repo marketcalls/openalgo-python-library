@@ -300,7 +300,8 @@ class HistoryFetcher:
                     f"the OpenAlgo server kept answering HTTP 429 (rate limited) for "
                     f"'{endpoint}' after {counted(attempt, 'retry', 'retries')}: "
                     f"{reply.message()} Raise pacing= "
-                    "or try again later."
+                    "or try again later.",
+                    rate_limited=True,
                 )
             wait = self.backoff_base_seconds * (2**attempt)
             if reply.retry_after_seconds is not None and reply.retry_after_seconds > 0:
@@ -372,7 +373,7 @@ class HistoryFetcher:
         lie before it, so it is a gap (a holiday the calendar does not know), not the
         start of the broker's history.
 
-        Returns (rows sorted by timestamp, FetchReport). Raises DataError when any
+        Returns (rows sorted by timestamp, FetchReport). Raises ServerError when any
         window fails: a failure is never taken for the end of history.
         """
         windows = [

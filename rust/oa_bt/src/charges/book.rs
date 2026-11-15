@@ -2,15 +2,15 @@
 
 use crate::exec::{InstrumentId, InstrumentSpec};
 use crate::market::costs::{
-    apportion, ContractNoteAggregator, CostBreakdown, CostModel, DpCharge, NoteGroup, NoteLine,
-    RateStatus, Rounding, Segment,
+    ContractNoteAggregator, CostBreakdown, CostModel, DpCharge, NoteGroup, RateStatus, Rounding,
+    Segment,
 };
 use crate::market::facts::InstrumentMarket;
 use crate::market::table_rows::RowMeta;
 use crate::model::{Day, Exchange, InstrumentKind, Product, Side};
 use crate::portfolio::{round_to_paise, FillEffect, FillKind, PositionChange, PositionKey};
 
-use super::notes::{settle, SettledNote};
+use super::notes::{settle, share_note, SettledNote};
 use super::same_day::{difference, split_cost, Repriced, SameDayBook, Segments};
 use super::usage::{MarketTable, TableUse};
 use super::{fill_segment, ChargeError};
@@ -324,7 +324,7 @@ impl ChargeBook {
     }
 
     /// Settle the contract notes of the IST trade date `day` (step 8 of its session's
-    /// last slice) and share each over its fills (`share_note`). Returns the
+    /// last slice) and share each over its fills (`notes::share_note`). Returns the
     /// adjustments to post to the ledger, rupees, one per note.
     pub fn settle_day(&mut self, day: Day) -> Vec<f64> {
         let mut adjustments = Vec::new();
@@ -346,36 +346,11 @@ impl ChargeBook {
             if let Some(line) = self.notes.note(note_day, group) {
                 let settled = settle(line, posted);
                 adjustments.push(settled.adjustment_rupees);
-                self.share_note(&line);
+                share_note(&mut self.output.fills, &line);
                 self.output.notes.push(settled);
             }
         }
         adjustments
-    }
-
-    /// Give each fill of a settled note its share of what the note charges
-    /// (`apportion`). The note's fills are among the last records: fills are recorded
-    /// in time order and a note settles at the close of its day.
-    fn share_note(&mut self, note: &NoteLine) {
-        let of_day = self
-            .output
-            .fills
-            .iter()
-            .rposition(|record| record.day < note.day)
-            .map_or(0, |last_earlier| last_earlier + 1);
-        let on_note: Vec<usize> = (of_day..self.output.fills.len())
-            .filter(|&index| {
-                let record = &self.output.fills[index];
-                record.day == note.day && record.segment.note_group() == note.group
-            })
-            .collect();
-        let costs: Vec<CostBreakdown> = on_note
-            .iter()
-            .map(|&index| self.output.fills[index].cost)
-            .collect();
-        for (index, share) in on_note.into_iter().zip(apportion(note, &costs)) {
-            self.output.fills[index].charged_rupees = share;
-        }
     }
 
     /// Note that the run used a row of a dated market table on `day`.

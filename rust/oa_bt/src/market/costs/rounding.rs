@@ -116,6 +116,11 @@ pub(super) fn round_half_up(picos: Picos, unit: Unit) -> f64 {
     from_picos(nudged / step * step)
 }
 
+/// A whole number of paise as rupees.
+pub(super) fn paise_to_rupees(paise: Picos) -> f64 {
+    paise as f64 / PAISE_PER_RUPEE as f64
+}
+
 /// Round a float sum of whole-paise amounts, or a single charge, to `unit`.
 pub(super) fn round_sum(rupees: f64, unit: Unit) -> f64 {
     round_half_up(to_picos(rupees, Grid::Charge), unit)

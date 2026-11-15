@@ -4,8 +4,10 @@ The bars of the run come from the local cache, filled by an earlier run that nee
 history. Then the broker login expires, and the server answers every history request
 with HTTP 500. A run that needs history for its indicators stops with ServerError
 instead of trading from the cached bars alone and waiting inside them for its
-indicators. A broker that refuses only older dates still answers for the run's own
-days: the run keeps going with the history it could load, and says why.
+indicators. Before it stops, the run asks the server for the symbol's most recent
+sessions without the cache: a broker that refuses only older dates (before a listing,
+or beyond the recent history it keeps) answers those, so that run keeps going with the
+history it could load, and says why. A rate limit stops the run with its own advice.
 """
 
 import datetime as dt
@@ -16,6 +18,7 @@ from data_fixtures.fakes import FakeClient, FakeResponse
 from test_quickstart import QUICKSTART, historify_rows
 
 import openalgo.backtest as bt
+from openalgo.backtest._warm_up_source import RECENT_DAYS, check_server
 from openalgo.backtest.errors import DataError, ServerError, WarmUpWarning
 
 SERIES = ("SBIN", "NSE", "D")
@@ -81,12 +84,20 @@ def test_a_server_that_cannot_answer_stops_a_run_that_needs_history(expired_afte
     assert "access_token" in message
 
 
-def test_the_server_is_asked_for_the_runs_first_day_before_the_run_stops(expired_after_caching):
+def recent_sessions_asked(client) -> list[tuple[dt.date, dt.date]]:
+    """The requests for a week up to the present that `client` was sent."""
+    asked = [
+        (dt.date.fromisoformat(first), dt.date.fromisoformat(last))
+        for _, _, first, last in client.history_calls(source="api")
+    ]
+    end = dt.date.fromisoformat(QUICKSTART.END)
+    return [(first, last) for first, last in asked if last - first == RECENT_DAYS and last > end]
+
+
+def test_the_server_is_asked_for_recent_sessions_before_the_run_stops(expired_after_caching):
     with pytest.raises(ServerError):
         run(QUICKSTART.EmaCross, expired_after_caching)
-    first_day = QUICKSTART.START
-    asked = expired_after_caching.history_calls(source="api")
-    assert asked[-1] == ("api", "D", first_day, first_day)
+    assert len(recent_sessions_asked(expired_after_caching)) == 1
 
 
 def test_a_run_that_needs_no_history_still_runs_from_the_cache(expired_after_caching):
@@ -102,8 +113,30 @@ def test_a_broker_that_refuses_only_older_dates_leaves_the_run_its_warning(cache
     with pytest.warns(WarmUpWarning):
         result = run(QUICKSTART.EmaCross, client)
     assert any("could not be used (ServerError" in line for line in result.warnings)
-    first_day = QUICKSTART.START
-    assert ("api", "D", first_day, first_day) in client.history_calls(source="api")
+    assert len(recent_sessions_asked(client)) == 1
+
+
+def test_a_broker_that_keeps_only_recent_history_does_not_stop_a_run_on_cached_bars(cache):
+    # The run's bars were cached while the broker still kept them; it now refuses every
+    # request that ends before June 2026, the run's own first days included, but answers
+    # recent ones.
+    client = FakeClient(api={SERIES: historify_rows(QUICKSTART.daily_bars())})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        run(Idle, client)
+    client.api_fail_before = dt.date(2026, 6, 1)
+    with pytest.warns(WarmUpWarning):
+        result = run(QUICKSTART.EmaCross, client)
+    assert any("could not be used (ServerError" in line for line in result.warnings)
+
+
+def test_a_rate_limit_stops_the_run_with_its_own_advice_and_no_further_request():
+    limited = ServerError("kept answering HTTP 429 ... Raise pacing= or try again later.",
+                          rate_limited=True)  # fmt: skip
+    with pytest.raises(ServerError, match="Raise pacing=") as raised:
+        check_server("SBIN", plan=None, source=None, failure=limited)
+    assert raised.value.rate_limited
+    assert "logged in" not in str(raised.value)
 
 
 def test_a_server_error_is_a_data_error():

@@ -62,8 +62,8 @@ def trade_list(trades: pd.DataFrame | None) -> pd.DataFrame:
         exit_price    quantity-weighted average price of the closing fills, rupees
         gross_pnl     P&L before charges, rupees, to the paisa
         charges       what the account paid for every fill of the trade, rupees, to
-                      the paisa (in a run, contract-note rounding included, so the
-                      trades add up to the run's charges)
+                      the paisa (in a run, contract-note rounding included, so with no
+                      position open at the end the trades add up to the run's charges)
         net_pnl       gross_pnl - charges, rupees, to the paisa
         return_pct    net_pnl over the value of the entry (entry_price x quantity), in
                       percent: 10.0 is ten percent; for a short, of the value sold

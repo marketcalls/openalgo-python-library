@@ -114,7 +114,8 @@ pub struct TradeRecord {
     /// the paisa, as the ledger posts it.
     pub gross_pnl_rupees: f64,
     /// Charges of every fill of the trade, whole paise: what the account paid for
-    /// them, contract-note rounding included (`settle_trade_charges`).
+    /// them, contract-note rounding included, set when the run finishes
+    /// (`settle_trade_charges`).
     pub costs_rupees: f64,
     /// Gross P&L less charges, whole paise.
     pub net_pnl_rupees: f64,
@@ -188,7 +189,6 @@ struct OpenTrade {
     exit_value: f64,
     max_units: f64,
     gross: f64,
-    costs: f64,
     fills: u32,
     initial_risk: Option<f64>,
 }
@@ -221,7 +221,6 @@ impl TradeBook {
                 exit_value: 0.0,
                 max_units: 0.0,
                 gross: 0.0,
-                costs: 0.0,
                 fills: 0,
                 initial_risk: None,
             });
@@ -231,7 +230,6 @@ impl TradeBook {
         };
         let trade = &mut self.open[index];
         trade.fills += 1;
-        trade.costs += fill.costs_rupees;
         if effect.kind == FillKind::Reduce {
             trade.exit_units += fill.quantity_units;
             trade.exit_value += fill.quantity_units * fill.price_rupees;
@@ -250,7 +248,7 @@ impl TradeBook {
 
     fn close(&mut self, trade: OpenTrade, stamp: EventStamp, reason: FillReason) {
         let average = |value: f64, units: f64| if units > 0.0 { value / units } else { 0.0 };
-        let (gross, costs) = (round_to_paise(trade.gross), round_to_paise(trade.costs));
+        let gross = round_to_paise(trade.gross);
         self.closed.push(TradeRecord {
             number: self.closed.len() as u32 + 1,
             instrument: trade.key.instrument,
@@ -265,8 +263,10 @@ impl TradeBook {
             entry_price_rupees: average(trade.entry_value, trade.entry_units),
             exit_price_rupees: average(trade.exit_value, trade.exit_units),
             gross_pnl_rupees: gross,
-            costs_rupees: costs,
-            net_pnl_rupees: round_to_paise(gross - costs),
+            // Charged when the run finishes, once its contract notes are settled
+            // (`settle_trade_charges`); a cost-free run keeps these.
+            costs_rupees: 0.0,
+            net_pnl_rupees: gross,
             exit_reason: reason,
             fills: trade.fills,
             initial_risk_rupees: trade.initial_risk,
@@ -292,6 +292,11 @@ impl TradeBook {
 /// trade the sum over its fills, its net P&L its gross P&L less that. The fills then
 /// add up to the account's charges, and so do the trades when no position is open at
 /// the end. A cost-free run has no charge records and is left as it is.
+///
+/// The charge book numbers round trips as this table does (in order of closing, from
+/// the same fills), so every record of a closed trade names a trade of the table and
+/// every trade has at least its opening fill charged; the debug checks hold the two
+/// numberings to that.
 pub(super) fn settle_trade_charges(
     fills: &mut [FillRecord],
     trades: &mut [TradeRecord],
@@ -300,19 +305,33 @@ pub(super) fn settle_trade_charges(
     if charges.rounding.is_none() {
         return;
     }
-    let mut trade_costs = vec![0.0; trades.len()];
+    let mut trade_costs: Vec<Option<f64>> = vec![None; trades.len()];
     for record in &charges.fills {
         let paid = record.paid_rupees();
         if let Some(fill) = fills.get_mut(record.fill as usize) {
             fill.fill.costs_rupees = paid;
         }
-        let slot = record.trade.and_then(|number| number.checked_sub(1));
-        if let Some(costs) = slot.and_then(|at| trade_costs.get_mut(at as usize)) {
-            *costs += paid;
+        let Some(number) = record.trade else {
+            continue;
+        };
+        let slot = number
+            .checked_sub(1)
+            .and_then(|at| trade_costs.get_mut(at as usize));
+        debug_assert!(
+            slot.is_some(),
+            "charge record of trade {number}, not in the table"
+        );
+        if let Some(costs) = slot {
+            *costs = Some(costs.unwrap_or(0.0) + paid);
         }
     }
     for (trade, costs) in trades.iter_mut().zip(trade_costs) {
-        trade.costs_rupees = round_to_paise(costs);
+        debug_assert!(
+            costs.is_some(),
+            "trade {} has no charged fill",
+            trade.number
+        );
+        trade.costs_rupees = round_to_paise(costs.unwrap_or(0.0));
         trade.net_pnl_rupees = round_to_paise(trade.gross_pnl_rupees - trade.costs_rupees);
     }
 }

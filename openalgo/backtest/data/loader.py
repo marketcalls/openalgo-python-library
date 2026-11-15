@@ -121,8 +121,9 @@ def load_bars(
     derivative contract among them), NoDataError when the
     source has nothing for the range, TimestampError when bars do not fit the
     session calendar, CalendarError for a calendar that cannot answer,
-    DataQualityError (with strict) for failed quality checks and DataError for
-    server failures and a cache that cannot be repaired.
+    DataQualityError (with strict) for failed quality checks, ServerError (a
+    DataError) for a request the OpenAlgo server could not answer, and DataError for a
+    cache that cannot be repaired.
     """
     start, end = to_date(start, "start"), to_date(end, "end")
     if start > end:
@@ -371,9 +372,11 @@ def _through_cache(
     except DataError as exc:
         if not cached.notes:
             raise
-        # A server that cannot answer stays a ServerError, so a caller can tell it apart.
-        error = ServerError if isinstance(exc, ServerError) else DataError
-        raise error(f"{' '.join(cached.notes)}. Fetching them again failed: {exc}") from exc
+        message = f"{' '.join(cached.notes)}. Fetching them again failed: {exc}"
+        if isinstance(exc, ServerError):
+            # A server that cannot answer stays a ServerError, so a caller can tell it apart.
+            raise ServerError(message, rate_limited=exc.rate_limited) from exc
+        raise DataError(message) from exc
     served = set(bucket_days(records).tolist())
     cached_days = set(bucket_days(cached.records).tolist())
     kept = [day for day in unsettled if to_day(day) in cached_days and to_day(day) not in served]

@@ -14,18 +14,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A server that cannot answer stops the run.** When the OpenAlgo server fails a
   request for the bars before `start` that the indicators need (it cannot be reached,
   keeps answering HTTP 429 after the retries, or answers with an error, such as a
-  broker login that has expired), the run asks it once more for the symbol's first day
-  of run bars, without the local cache. If that fails too, `bt.backtest` and
-  `bt.optimize` raise the new `ServerError`: "SBIN: the OpenAlgo server cannot answer
-  history requests. The bars before start that the indicators need failed (...), and
-  so did the run's first day, 2026-04-01, asked again without the local cache. Check
-  that OpenAlgo is running and logged in to the broker, then run the backtest again."
-  Before, a run whose own bars came from the local cache went on without its history
-  and waited inside its bars for its indicators: a NIFTY futures run with an expired
-  broker login finished with 0 trades and only a `WarmUpWarning`. A broker that refuses
-  only older dates (before a listing, or beyond what it keeps) still answers for the
-  run's own days, so that run keeps the history it could load and says why, as before.
-  A run that needs no history still runs from the cache.
+  broker login that has expired), the run asks it once more for the symbol's most recent
+  sessions (the week up to the present), without the local cache. If that fails too,
+  `bt.backtest` and `bt.optimize` raise the new `ServerError`: "SBIN: the OpenAlgo
+  server cannot answer history requests. The bars before start that the indicators
+  need failed (...), and so did a request for its most recent sessions (2026-11-08 to
+  2026-11-15), asked without the local cache. Check that OpenAlgo is running and logged
+  in to the broker, then run the backtest again." Before, a run whose own bars came
+  from the local cache went on without its history and waited inside its bars for its
+  indicators: a NIFTY futures run with an expired broker login finished with 0 trades
+  and only a `WarmUpWarning`. A broker that refuses only older dates (before a listing,
+  or beyond the recent history it keeps) still answers its recent sessions, so that run
+  keeps the history it could load and says why, as before. A server that keeps
+  answering HTTP 429 stops the run at once, with its own advice to raise `pacing=` or
+  try again later. A run that needs no history still runs from the cache.
 - **A trade's charges are what the account paid for its fills.** Each day's contract
   note rounds STT (CTT on MCX) and stamp duty to the rupee, and the ledger is charged
   the note, but the trades table, `trade_list()` and the trade metrics added up each
@@ -39,17 +41,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   P&L its gross P&L less that, so the trades add up to the account's charges and, with
   no position open at the end, to its net profit, to the paisa: Rs 3,322.91 and
   Rs 53,941.09 in that run. The account, the equity curve and every return and
-  drawdown figure are unchanged. The trade figures (`total_costs`, `net_pnl`, average
-  win and loss, profit factor, expectancy and the rest) move by the rounding: a few
-  paise to under a rupee per trade. A trade's gross P&L now adds each closing fill's
-  realized P&L rounded to the paisa, as the ledger posts it.
+  drawdown figure are unchanged, but for a paisa in a run where a CNC sale and a buy of
+  the same share fall on one day (see Changed). The trade figures (`total_costs`,
+  `net_pnl`, average win and loss, profit factor, expectancy and the rest) move by the
+  rounding: up to about Rs 1.50 per trade, the rupee rounding of STT and stamp duty on
+  its notes. A trade's gross P&L now adds each closing fill's realized P&L rounded to
+  the paisa, as the ledger posts it.
 
 ### Added
 
 - **`ServerError`** (`openalgo.backtest.errors`), a `DataError`: raised for every
   history request the OpenAlgo server could not answer (no response, HTTP 429 after
   the retries, or an error reply), where a plain `DataError` was raised before. Code
-  that catches `DataError` still catches it.
+  that catches `DataError` still catches it. `rate_limited` is True when the server
+  kept answering HTTP 429.
 - **`Result.costs` gains `charged`**: what the account paid for the fill, whole paise:
   its share of its contract note plus its DP charge. The column adds up to the run's
   charges. `cost` and `total` stay the unrounded accrual.

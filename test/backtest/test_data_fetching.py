@@ -369,11 +369,12 @@ def test_backoff_gives_up_after_max_retries_with_a_server_error():
     client = _client(days=DAYS[:10])
     for _ in range(3):
         client.queue(429, BUSY)
-    with pytest.raises(ServerError, match="HTTP 429.*after 2 retries"):
+    with pytest.raises(ServerError, match="HTTP 429.*after 2 retries") as raised:
         _load(
             client, end=dt.date(2024, 1, 10), clock=clock, broker="zerodha",
             provider_options={"max_retries": 2},
         )  # fmt: skip
+    assert raised.value.rate_limited
     assert clock.sleeps == [1.0, 2.0]
 
 

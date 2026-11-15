@@ -30,13 +30,14 @@ series loads none (`_warm_up_history`).
 
 **A server that cannot answer** stops the run: when the OpenAlgo server fails a request
 (`ServerError`: it cannot be reached, keeps rate limiting, or answers with an error such
-as an expired broker login), the run asks it once more for the symbol's first day of run
-bars, bypassing the local cache (`_warm_up_source.check_server`). If that fails too, the
-server cannot serve history at all just now, and a run without its history would trade
-from bars the cache happened to hold, waiting inside them for its indicators:
+as an expired broker login), the run asks it once more for the symbol's most recent
+sessions, bypassing the local cache (`_warm_up_source.check_server`). If that fails too,
+the server cannot serve history at all just now, and a run without its history would
+trade from bars the cache happened to hold, waiting inside them for its indicators:
 `ServerError` is raised. If the server answers it, the failure is about the older days (a
-broker that refuses dates before a listing or beyond what it keeps), and the steps end
-as above.
+broker that refuses dates before a listing or beyond the recent history it keeps), and
+the steps end as above. A rate limit stops the run at once, with its own advice (raise
+`pacing=`): its history exists but was not sent.
 
 **A sweep** loads once per symbol, stepping for the largest need of each series over
 its combinations first, and each combination then steps through the same loads as its

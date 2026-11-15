@@ -13,29 +13,29 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-import pandas as pd
-
 from ._base_interval import _data_for
 from ._series import ist_time
 from .data import BarsResult, load_bars
 from .errors import DataError, ServerError
 
 SERVER_SOURCES = ("db", "api")
+# The days up to the present the server check asks for: a week holds a completed
+# session but in the longest market closures, and a broker that keeps only recent
+# history (minute bars of the last weeks) still holds it.
+RECENT_DAYS = dt.timedelta(days=7)
 
 
 @dataclass(frozen=True)
 class HistorySource:
     """Where a run's history is read from: the run's `data=`, `source=`, `tz=` and
     `corporate_actions=` arguments, its client and calendar, the (source, base
-    interval) each symbol's run bars came from, the IST day of each symbol's first run
-    bar (None without one), and True for a futures series (none is read). It holds the
-    client, so it stays in the process that prepared the run."""
+    interval) each symbol's run bars came from, and True for a futures series (none is
+    read). It holds the client, so it stays in the process that prepared the run."""
 
     args: Mapping[str, Any]
     client: Any
     calendar: Any
     origins: Mapping[str, tuple[str | None, str | None]]
-    first_days: Mapping[str, dt.date | None]
     futures: bool = False
 
     def kind(self) -> str:
@@ -56,16 +56,8 @@ def history_source(
     origins = {
         symbol: (result.meta.source, result.meta.base_interval) for symbol, result in loaded.items()
     }
-    first_days = {symbol: _first_day(result.bars) for symbol, result in loaded.items()}
     given = {name: args[name] for name in names}
-    return HistorySource(given, client, calendar, origins, first_days, futures is not None)
-
-
-def _first_day(bars: pd.DataFrame) -> dt.date | None:
-    """The IST day of the first of a symbol's run bars, None without a bar."""
-    if bars.empty:
-        return None
-    return ist_time(int(bars["ts_open"].iloc[0])).date()
+    return HistorySource(given, client, calendar, origins, futures is not None)
 
 
 def _history_from(args: Mapping[str, Any], origin: str | None) -> Any:
@@ -104,24 +96,32 @@ def load_range(
 
 def check_server(symbol: str, plan: Any, source: HistorySource, failure: ServerError) -> None:
     """Raise ServerError when the server that failed a request of `symbol`'s history
-    (`failure`) cannot answer for the symbol's first day of run bars either, asked
-    without the local cache (`_warm_up_load`). Returns when it answers, rows or none,
-    or when the run has no bar of the symbol to ask for."""
-    first_day = source.first_days.get(symbol)
-    if first_day is None:
-        return
+    (`failure`) cannot answer at all (`_warm_up_load`): at once for a rate limit, whose
+    advice is to raise `pacing=`, and otherwise when it cannot answer for the symbol's
+    most recent sessions either (the `RECENT_DAYS` up to the run's present), asked
+    without the local cache. Returns when it answers them, rows or none."""
+    if failure.rate_limited:
+        raise ServerError(
+            f"{symbol}: the bars before start that the indicators need could not be "
+            f"loaded: {failure}",
+            rate_limited=True,
+        ) from failure
+    last = ist_time(plan.present).date()
+    first = last - RECENT_DAYS
     try:
-        load_range(symbol, first_day, first_day, plan, source, cache=False)
+        load_range(symbol, first, last, plan, source, cache=False)
     except ServerError as again:
         raise ServerError(
             f"{symbol}: the OpenAlgo server cannot answer history requests. The bars before "
-            f"start that the indicators need failed ({failure}), and so did the run's first "
-            f"day, {first_day}, asked again without the local cache. Check that OpenAlgo is "
-            "running and logged in to the broker, then run the backtest again."
+            f"start that the indicators need failed ({failure}), and so did a request for "
+            f"its most recent sessions ({first} to {last}), asked without the local cache. "
+            "Check that OpenAlgo is running and logged in to the broker, then run the "
+            "backtest again."
         ) from again
     except DataError:
-        # The server answered (no rows, or rows that fail a check): the failure is about
-        # the older days, and the caller records it as a note.
+        # The server answered (no rows, an unknown symbol, or rows that fail a check):
+        # it is up, and the failure is about the older days, which the caller records
+        # as a note.
         return
 
 
