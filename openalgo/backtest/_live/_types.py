@@ -161,6 +161,21 @@ class OrderUpdate:
     source: str
 
 
+@dataclass(frozen=True)
+class BoundOrder:
+    """An intent that became a broker order: the intent, the broker's order ID, and the
+    order's last update (None before any update arrived)."""
+
+    intent: OrderIntent
+    order_id: str
+    last_update: OrderUpdate | None
+
+    @property
+    def terminal(self) -> bool:
+        """True once the order's last update is complete, rejected or cancelled."""
+        return self.last_update is not None and self.last_update.status.terminal
+
+
 class JournalLike(Protocol):
     """What the order path needs of the journal (`journal.Journal`)."""
 
@@ -183,6 +198,11 @@ class JournalLike(Protocol):
 
     def record_update(self, update: OrderUpdate) -> None:
         """Write an order update."""
+
+    def bound_orders(self) -> list[BoundOrder]:
+        """The session's trading day's bound orders, terminal ones included, oldest
+        first: after a restart the order path takes them back, and never binds an
+        unbound intent to an order another intent already owns."""
 
 
 class GuardLike(Protocol):
@@ -222,6 +242,7 @@ __all__ = [
     "SANDBOX_MODE_FIELD",
     "AlertKind",
     "AlertsLike",
+    "BoundOrder",
     "GuardLike",
     "JournalLike",
     "LiveBar",
