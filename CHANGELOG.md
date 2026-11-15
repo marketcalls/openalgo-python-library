@@ -40,6 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has no bar, as in the broker's history. After a mid-session start or a feed outage the
   partial minutes only set the starting level. Broker candles are compared with the
   bars minute by minute, and feed health tells a dead feed from a quiet symbol.
+- The live layer's order path (private): each order is written to the journal before it
+  is sent, sent once and never retried, at most 5 orders a second. Fills come from
+  OpenAlgo's order-updates stream, with polling only as a fallback, and are priced and
+  confirmed from the tradebook where a status answer cannot be trusted; a fill is never
+  taken at price 0. An order whose outcome is unknown (a timeout, a dropped connection,
+  a gateway error) is resolved against the order book after the server's broker window
+  before anything more is sent for that instrument, or for any instrument while the
+  server is silent. An order queued for approval in OpenAlgo's Action Center stays
+  queued across a restart. fivepaisa is not supported for live trading until its
+  tradebook order IDs match its orders'. The SDK's `api` gains no method in this change.
 
 ## [2.2.1] - 2026-11-15
 
