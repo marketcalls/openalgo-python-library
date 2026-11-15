@@ -271,6 +271,25 @@ compiling the Rust core from the sdist.
 
     git tag vX.Y.Z && git push origin vX.Y.Z
 
+### GitHub release after PyPI
+
+Every version published to PyPI gets a GitHub release (maintainer, 2026-11-15). Create
+it once the tag's CI run has succeeded and the version is on PyPI, never before:
+
+1. Confirm the CI run for the tag passed, including "Publish to PyPI", and that
+   `https://pypi.org/pypi/openalgo/X.Y.Z/json` lists the five wheels and the sdist.
+2. Write the notes from the version's `CHANGELOG.md` section (and the README's "What's
+   New in X.Y.Z"): what changed for a user, any change in results, the checks run, a
+   link to the changelog, and an Install section (`pip install -U openalgo`). Plain text
+   rules apply: no emoji, no em or en dashes.
+3. Publish it from the existing tag, as the latest release, with no assets (the wheels
+   live on PyPI):
+
+       gh release create vX.Y.Z --verify-tag --latest \
+           --title "vX.Y.Z - short summary" --notes-file <notes.md>
+
+4. Check `gh release list`: the new release is marked Latest.
+
 ## Running / testing locally
 
 - Live tests need a running OpenAlgo server on `:5000` (and the WS proxy on `:8765`)
