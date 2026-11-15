@@ -6,8 +6,9 @@ in part, report a fill at price 0).
 Every change of an order becomes an order update, sent on the feed once the venue's lock
 is released (`flush`), so a REST answer and the updates it caused never wait on each
 other's locks. Prices work the broker's orders whatever the switch says, and the
-sandbox's only while the switch is on: the server stops the sandbox's execution engine
-while it is off (services/analyzer_service.py, `_reconcile_sandbox`).
+sandbox's only while the switch is on (the server stops the sandbox's execution engine
+while it is off, services/analyzer_service.py, `_reconcile_sandbox`) and the broker's
+login holds (the sandbox prices every fill from the broker's quotes).
 
 Prices are rupees, quantities units, times UTC nanoseconds.
 """
@@ -80,6 +81,7 @@ class Venue:
         self.analyzer = analyzer
         self.semi_auto = False
         self.session_expired = False
+        self.login_revoked = False
         self.telegram_linked = {username}
         self.telegram_bot_active = True
         self.telegram_sent: list[TelegramMessage] = []
@@ -103,9 +105,28 @@ class Venue:
         """The book the analyzer switch selects now."""
         return self.books[self.mode]
 
+    @property
+    def broker_reachable(self) -> bool:
+        """Whether the broker answers OpenAlgo: its login has neither expired nor been
+        revoked. The sandbox prices its orders from the broker's quotes, so it cannot
+        fill without it."""
+        return not (self.session_expired or self.login_revoked)
+
     def market(self, symbol: str, exchange: str) -> MarketState | None:
         """The price path of an instrument, None when the broker does not know it."""
         return self.markets.get((symbol, exchange))
+
+    def has_position_row(self, book: Book, symbol: str, exchange: str, product: str) -> bool:
+        """Whether `book` has a position row (open or flat) for an instrument and product,
+        priced by a trade: the sandbox prices a MARKET order from it when no quote comes
+        (sandbox/order_manager.py:323-333)."""
+        market = self.market(symbol, exchange)
+        if market is None or market.last_price is None:
+            return False
+        return any(
+            (row.symbol, row.exchange, row.product) == (symbol, exchange, product)
+            for row in book.positions.rows()
+        )
 
     def next_pending_order_id(self) -> int:
         """The ID the Action Center gives the next queued order (database/
@@ -140,24 +161,37 @@ class Venue:
             market.trade(self.clock.now(), price, volume, bid, ask)
             for book in self._working_books():
                 for order in book.working_orders(symbol, exchange):
-                    self._publish_all(book, self._work(book, order, market))
+                    self._publish_all(book, self._work(book, order, market, arriving=False))
         self.feed.tick(market)
         self.flush()
 
     # -- orders -----------------------------------------------------------
 
-    def accept(self, book: Book, terms: OrderTerms) -> FakeOrder:
+    def accept(self, book: Book, terms: OrderTerms, *, priced: bool = True) -> FakeOrder:
         """Accept an order into `book`, announce it, apply a rejection the test asked
-        for, and work it against the last price. Returns the order."""
+        for (a broker's only), and work it against the market. With `priced` False (the
+        sandbox could fetch no quote) the order rests unworked, a stop trigger pending.
+        Returns the order."""
         market = self._known(terms.symbol, terms.exchange)
-        placed = book.place(terms, self.clock.now(), market)
+        placed = book.place(terms, self.clock.now(), market.last_price if priced else None)
         order = book.orders[placed.order.order_id]
         self._publish(book, placed)
-        rejection = self.take_rejection(terms.price_type, at_placement=False)
+        rejection = None
+        if book.mode is Mode.LIVE:
+            rejection = self.take_rejection(terms.price_type, at_placement=False)
         if rejection is not None:
             self._publish(book, book.reject(order, rejection.reason))
-            return order
-        self._publish_all(book, self._work(book, order, market))
+        elif priced:
+            self._publish_all(book, self._work(book, order, market, arriving=True))
+        return order
+
+    def reject_on_arrival(self, book: Book, terms: OrderTerms, reason: str) -> FakeOrder:
+        """Record an order the sandbox refuses at placement: kept as rejected with no
+        units pending, and announced as rejected only (sandbox/order_manager.py:632-680).
+        Returns the order."""
+        placed = book.place(terms, self.clock.now(), None)
+        order = book.orders[placed.order.order_id]
+        self._publish(book, book.reject(order, reason))
         return order
 
     def modify(
@@ -171,14 +205,18 @@ class Venue:
         trigger: float,
     ) -> None:
         """Change a working order's terms, announce it (a broker does; the sandbox does
-        not, sandbox/order_manager.py) and work it against the last price."""
+        not, sandbox/order_manager.py) and work it against the market. At a broker the
+        modified order arrives anew; the sandbox leaves it to its engine, which fills a
+        limit at its limit (sandbox/execution_engine.py:532-540)."""
         change = book.modify(
             order, quantity=quantity, price_type=price_type, price=price, trigger=trigger
         )
-        if book.mode is Mode.LIVE:
+        live = book.mode is Mode.LIVE
+        if live:
             self._publish(book, change)
-        market = self._known(order.symbol, order.exchange)
-        self._publish_all(book, self._work(book, order, market))
+        if book in self._working_books():
+            market = self._known(order.symbol, order.exchange)
+            self._publish_all(book, self._work(book, order, market, arriving=live))
 
     def cancel(self, book: Book, order: FakeOrder) -> None:
         """Cancel a working order and announce it."""
@@ -213,8 +251,15 @@ class Venue:
         return None
 
     def schedule_rejection(self, rejection: Rejection) -> None:
-        """Have the broker refuse the next order that fits `rejection`."""
+        """Have the broker refuse the next order that fits `rejection`. Raises ValueError
+        for a rejection after acceptance in sandbox mode: the sandbox refuses only at
+        placement (sandbox/order_manager.py:670-680)."""
         with self.lock:
+            if self.mode is Mode.SANDBOX and not rejection.at_placement:
+                raise ValueError(
+                    "the OpenAlgo sandbox refuses an order only at placement: pass "
+                    "at_placement=True"
+                )
             self._rejections.append(rejection)
 
     def split_next_fill(self, units: int) -> None:
@@ -238,8 +283,9 @@ class Venue:
     # -- switches ---------------------------------------------------------
 
     def set_switch(self, name: str, on: bool) -> None:
-        """Flip the analyzer switch, the semi-auto switch, the broker's login ("expired")
-        or the Telegram bot ("telegram_bot")."""
+        """Flip the analyzer switch, the semi-auto switch, the broker's login expiring
+        ("expired"), OpenAlgo revoking it ("revoked") or the Telegram bot
+        ("telegram_bot")."""
         with self.lock:
             if name == "analyzer":
                 self.analyzer = on
@@ -247,10 +293,13 @@ class Venue:
                 self.semi_auto = on
             elif name == "expired":
                 self.session_expired = on
+            elif name == "revoked":
+                self.login_revoked = on
             elif name == "telegram_bot":
                 self.telegram_bot_active = on
             else:
                 raise ValueError(f"unknown switch {name!r}")
+            self.feed.set_login(self.broker_reachable)
             self.log.record(self.clock.now(), SWITCH, name, on=on)
 
     # -- delivery ---------------------------------------------------------
@@ -267,16 +316,19 @@ class Venue:
                 self.feed.order_update(message)
 
     def _working_books(self) -> list[Book]:
-        """The books whose orders prices work now: the broker's, and the sandbox's while
-        the switch is on."""
+        """The books whose orders prices work now: the broker's always (the exchange
+        holds them), the sandbox's while the switch is on and the broker answers its
+        quote requests (sandbox/execution_engine.py, `_fetch_quote`)."""
         books = [self.books[Mode.LIVE]]
-        if self.analyzer:
+        if self.analyzer and self.broker_reachable:
             books.append(self.books[Mode.SANDBOX])
         return books
 
-    def _work(self, book: Book, order: FakeOrder, market: MarketState) -> list[Change]:
+    def _work(
+        self, book: Book, order: FakeOrder, market: MarketState, *, arriving: bool
+    ) -> list[Change]:
         cap = self._split_next if book.mode is Mode.LIVE else None
-        changes = book.work(order, market, cap, self.clock.now())
+        changes = book.work(order, market, cap, self.clock.now(), arriving=arriving)
         if any(change.event == FILLED for change in changes):
             self._split_next = None
         return changes

@@ -23,6 +23,7 @@ TIMEOUT = "timeout"
 BAD_GATEWAY_PAGE = "bad_gateway_page"
 GATEWAY_ERROR = "gateway_error"
 DROPPED_CONNECTION = "dropped_connection"
+REFUSED_CONNECTION = "refused_connection"
 LOST_ANSWER = "lost_answer"
 SLOW_ANSWER = "slow_answer"
 RATE_LIMITED = "rate_limited"
@@ -57,9 +58,15 @@ class Faults:
     # -- REST -------------------------------------------------------------
 
     def timeout(self, endpoint: str, *, reached_broker: bool = False) -> None:
-        """The next call to `endpoint` times out in the client: the SDK answers its
-        "timeout_error"."""
+        """The next call to `endpoint` times out in the client: the fake's clock moves on
+        by the client's read timeout (the SDK's 120 seconds by default), then the SDK
+        answers its "timeout_error"."""
         self._schedule(RestFault(TIMEOUT, endpoint, reached_broker))
+
+    def refuse_connection(self, endpoint: str) -> None:
+        """The next call to `endpoint` finds no server to connect to: the SDK answers its
+        "connection_error", and nothing reached the server."""
+        self._schedule(RestFault(REFUSED_CONNECTION, endpoint))
 
     def bad_gateway_page(self, endpoint: str, *, reached_broker: bool = False) -> None:
         """The next call to `endpoint` is answered HTTP 502 with a gateway's HTML page."""
@@ -87,14 +94,19 @@ class Faults:
         """The next order write succeeds at the broker but the server loses the broker's
         answer: HTTP 502 with the server's "may have been placed" words for a placement
         (services/place_order_service.py), HTTP 500 "due to internal error" for a modify
-        or cancel. Raises ValueError for an endpoint that writes no order."""
+        or cancel. Raises ValueError for an endpoint that writes no order, and in sandbox
+        mode, which sends nothing to a broker."""
         if endpoint not in ORDER_WRITES:
             raise ValueError(f"only {sorted(ORDER_WRITES)} can lose a broker's answer")
+        if self._venue.analyzer:
+            raise ValueError("the OpenAlgo sandbox sends nothing to a broker: no answer to lose")
         self._schedule(RestFault(LOST_ANSWER, endpoint, reached_broker=True))
 
     def slow(self, endpoint: str, seconds: float) -> None:
         """The next call to `endpoint` takes `seconds`: the fake's clock moves on by that
-        much before it answers as usual."""
+        much before it answers as usual. An answer slower than the client's read timeout
+        is a timeout: the server still does the work, the clock moves on by the timeout,
+        and the SDK answers its "timeout_error"."""
         if seconds <= 0:
             raise ValueError(f"a slow answer takes more than 0 seconds, not {seconds}")
         self._schedule(RestFault(SLOW_ANSWER, endpoint, seconds=seconds))
@@ -105,9 +117,11 @@ class Faults:
         self._schedule(RestFault(RATE_LIMITED, endpoint))
 
     def expire_session(self) -> None:
-        """The broker's login expires: `ping` still answers, while the broker's calls
-        fail as the server reports them (funds empty, quotes, history, orders and books
-        refused)."""
+        """The broker's login expires while OpenAlgo still holds it: `ping` still
+        answers, while the broker's calls fail as the server reports them (funds empty,
+        quotes, history, orders and books refused), the sandbox, which prices from the
+        broker's quotes, fills nothing, and the feed stops ticking, until
+        `restore_session`."""
         self._venue.set_switch("expired", True)
         self._venue.log.record(self._venue.clock.now(), FAULT, "session_expired")
 
@@ -115,6 +129,20 @@ class Faults:
         """The broker's login is valid again (the user logged in)."""
         self._venue.set_switch("expired", False)
         self._venue.log.record(self._venue.clock.now(), FAULT, "session_restored")
+
+    def revoke_login(self) -> None:
+        """OpenAlgo revokes the broker's login, as at the daily session rollover
+        (app.py:572-583): every call that needs it, `ping` and `analyzerstatus` included,
+        answers HTTP 403 "Invalid openalgo apikey", and the feed stops ticking, until
+        `restore_login`. `telegram/notify` checks the API key alone and still answers
+        (restx_api/telegram_bot.py, SendNotification)."""
+        self._venue.set_switch("revoked", True)
+        self._venue.log.record(self._venue.clock.now(), FAULT, "login_revoked")
+
+    def restore_login(self) -> None:
+        """The user logged in to the broker again through OpenAlgo."""
+        self._venue.set_switch("revoked", False)
+        self._venue.log.record(self._venue.clock.now(), FAULT, "login_restored")
 
     def take(self, endpoint: str) -> RestFault | None:
         """The next fault scheduled on `endpoint`, taken off the schedule."""
@@ -194,6 +222,7 @@ __all__ = [
     "LOST_ANSWER",
     "ORDER_WRITES",
     "RATE_LIMITED",
+    "REFUSED_CONNECTION",
     "SLOW_ANSWER",
     "TIMEOUT",
     "Faults",

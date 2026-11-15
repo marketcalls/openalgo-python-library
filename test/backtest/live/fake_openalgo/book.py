@@ -25,6 +25,7 @@ from .orders import (
     TRIGGER_PENDING,
     FakeOrder,
     Fill,
+    Quote,
     fill_price,
     reached,
     released_by,
@@ -90,16 +91,18 @@ class Book:
         self.fills: list[Fill] = []
         self.positions = Positions()
 
-    def place(self, terms: OrderTerms, now_ns: int, market: MarketState) -> Change:
+    def place(self, terms: OrderTerms, now_ns: int, last_price: float | None) -> Change:
         """Accept an order. A stop whose trigger the last price already reached starts
-        open, as the sandbox does (sandbox/order_manager.py, place_order)."""
+        open, as the sandbox does (sandbox/order_manager.py, place_order); `last_price`
+        is None when no price could be had (none traded, or the broker's login is gone),
+        and a stop then rests trigger pending."""
         order = FakeOrder(
             order_id=self._ids.order_id(now_ns),
             placed_ns=now_ns,
             **dataclasses.asdict(terms),
         )
-        triggered_now = market.last_price is not None and reached(
-            order.action, order.trigger_price, market.last_price
+        triggered_now = last_price is not None and reached(
+            order.action, order.trigger_price, last_price
         )
         if order.price_type in STOP_TYPES and not triggered_now:
             order.status = TRIGGER_PENDING
@@ -137,17 +140,25 @@ class Book:
         return self._change(order, MODIFIED)
 
     def work(
-        self, order: FakeOrder, market: MarketState, units_cap: int | None, now_ns: int
+        self,
+        order: FakeOrder,
+        market: MarketState,
+        units_cap: int | None,
+        now_ns: int,
+        *,
+        arriving: bool,
     ) -> list[Change]:
-        """Work one order against the last price at `now_ns`: release a triggered stop,
-        then fill what the price allows (no more than `units_cap` units when given)."""
+        """Work one order against the market at `now_ns`: release a triggered stop,
+        then fill what the price allows (no more than `units_cap` units when given).
+        `arriving`: the order has just reached the book (`orders.fill_price`)."""
         price = market.last_price
         if not order.working or price is None:
             return []
         released = released_by(order, price)
         if released:
             order.status = OPEN
-        at = fill_price(order, price)
+        quote = Quote(price, market.bid, market.ask)
+        at = fill_price(order, quote, arriving=arriving, at_broker=self.mode is Mode.LIVE)
         if at is None:
             # A stop-limit the price ran through: now resting open, unfilled.
             return [self._change(order, TRIGGERED)] if released else []

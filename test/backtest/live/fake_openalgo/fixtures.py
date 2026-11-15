@@ -11,8 +11,9 @@ since pytest finds a fixture by its name in the module that uses it.
   WebSocket module is never reachable from `openalgo.feed`.
 - `fake_openalgo`: a `FakeOpenAlgo` on Monday 2026-11-16 10:15:00 IST in live mode, its
   proxy installed for `openalgo.feed`; `make_fake_openalgo(**options)` builds one with
-  other options. At the end the fake's clients are retired and the test fails if the
-  fake logged a problem.
+  other options. Either keeps the test offline even in a module that took no other
+  fixture. At the end the fake's clients are retired and the test fails if the fake
+  logged a problem.
 """
 
 from __future__ import annotations
@@ -45,38 +46,55 @@ class ConnectionGuard:
         raise ConnectionRefusedError(f"a test tried to open a network connection to {target!r}")
 
 
-@pytest.fixture(autouse=True)
-def offline(monkeypatch: pytest.MonkeyPatch) -> Iterator[ConnectionGuard]:
-    """Refuse every network connection for the test; fail it if one was tried."""
+def guard_connections(monkeypatch: pytest.MonkeyPatch) -> ConnectionGuard:
+    """Refuse, for the rest of the test, every connection and every host-name lookup
+    (a lookup would send a DNS query off this computer). Returns the guard, which keeps
+    the attempts."""
     guard = ConnectionGuard()
 
     def connect(sock: socket.socket, address: object) -> None:
         guard.refuse(address)
 
-    def create_connection(address: object, *args: Any, **kwargs: Any) -> socket.socket:
-        guard.refuse(address)
+    def refused(target: object, *args: Any, **kwargs: Any) -> Any:
+        guard.refuse(target)
         raise AssertionError("unreachable: the guard raised")
 
     def getaddrinfo(host: object, port: object, *args: Any, **kwargs: Any) -> list[Any]:
-        # A name lookup would send a DNS query off this computer.
         guard.refuse((host, port))
         raise AssertionError("unreachable: the guard raised")
 
     monkeypatch.setattr(socket.socket, "connect", connect)
     monkeypatch.setattr(socket.socket, "connect_ex", connect)
-    monkeypatch.setattr(socket, "create_connection", create_connection)
+    monkeypatch.setattr(socket, "create_connection", refused)
     monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
-    yield guard
+    for lookup in ("gethostbyname", "gethostbyname_ex", "gethostbyaddr"):
+        monkeypatch.setattr(socket, lookup, refused)
+    return guard
+
+
+def _check(guard: ConnectionGuard) -> None:
     assert guard.attempts == [], f"the test tried to open network connections: {guard.attempts}"
+
+
+@pytest.fixture(autouse=True)
+def offline(monkeypatch: pytest.MonkeyPatch) -> Iterator[ConnectionGuard]:
+    """Refuse every network connection and lookup for the test; fail it if one was
+    tried."""
+    guard = guard_connections(monkeypatch)
+    yield guard
+    _check(guard)
 
 
 @pytest.fixture
 def make_fake_openalgo(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
 ) -> Iterator[Callable[..., FakeOpenAlgo]]:
     """Build a `FakeOpenAlgo` (options as its constructor's, `start_ns` defaulting to
     `SESSION_START_NS`) and install its proxy as `openalgo.feed`'s WebSocket module.
-    One per test: the last one built owns the feed."""
+    One per test: the last one built owns the feed. The test is offline either way:
+    through `offline` when its module took it, else through a guard of its own (a
+    fixture is found by name only in a module that imported it)."""
+    own_guard = None if "offline" in request.fixturenames else guard_connections(monkeypatch)
     built: list[FakeOpenAlgo] = []
 
     def build(**options: Any) -> FakeOpenAlgo:
@@ -91,6 +109,8 @@ def make_fake_openalgo(
         fake.close()
     problems = [entry for fake in built for entry in fake.log.problems()]
     assert problems == [], f"the fake OpenAlgo logged problems: {problems}"
+    if own_guard is not None:
+        _check(own_guard)
 
 
 @pytest.fixture
@@ -103,6 +123,7 @@ __all__ = [
     "SESSION_START_NS",
     "ConnectionGuard",
     "fake_openalgo",
+    "guard_connections",
     "make_fake_openalgo",
     "no_real_sockets",
     "offline",

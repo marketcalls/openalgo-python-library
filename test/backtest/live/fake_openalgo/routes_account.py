@@ -2,10 +2,10 @@
 SDK's `analyzerstatus`) and `ping`, each a function of the venue and the request's JSON
 that returns (body, HTTP status), run under the venue's lock.
 
-Live mode reads the broker: an expired login fails the books with the broker's message
-(HTTP 500, services/orderbook_service.py, tradebook_service.py, positionbook_service.py)
-and answers funds with success and no data (the broker's margin call returns nothing,
-broker/zerodha/api/funds.py, `get_margin_data`). Sandbox mode reads the sandbox's own
+Live mode reads the broker: an expired login fails the books with the HTTP client's error
+(HTTP 500, `_broker_failed`) and answers funds with success and no data (the broker's
+margin call returns nothing, broker/zerodha/api/funds.py, `get_margin_data`). Sandbox
+mode reads the sandbox's own
 books, whatever the broker's login. `ping` and `analyzer` ask OpenAlgo only, so they
 answer while the broker's login has expired (services/ping_service.py,
 services/analyzer_service.py).
@@ -17,7 +17,7 @@ from typing import Any
 
 from openalgo.backtest._live._types import Mode
 
-from .answers import EXPIRED_TOKEN
+from .answers import BOOK_PATHS, broker_http_error
 from .rows import funds_data, order_row, order_statistics, position_row, trade_row
 from .venue import Venue
 
@@ -36,7 +36,7 @@ def orderbook(venue: Venue, payload: dict[str, Any]) -> Answer:
         data = {"orders": rows, "statistics": order_statistics(orders, Mode.SANDBOX)}
         return {"status": "success", "data": data, **_ANALYZE}, 200
     if venue.session_expired:
-        return _broker_failed()
+        return _broker_failed("orders")
     rows = [order_row(order, Mode.LIVE) for order in orders]
     data = {"orders": rows, "statistics": order_statistics(orders, Mode.LIVE)}
     return {"status": "success", "data": data}, 200
@@ -51,7 +51,7 @@ def tradebook(venue: Venue, payload: dict[str, Any]) -> Answer:
         rows = [trade_row(fill, Mode.SANDBOX) for fill in reversed(book.fills)]
         return {"status": "success", "data": rows, **_ANALYZE}, 200
     if venue.session_expired:
-        return _broker_failed()
+        return _broker_failed("trades")
     return {"status": "success", "data": [trade_row(fill, Mode.LIVE) for fill in book.fills]}, 200
 
 
@@ -65,7 +65,7 @@ def positionbook(venue: Venue, payload: dict[str, Any]) -> Answer:
     ]
     if book.mode is Mode.LIVE:
         if venue.session_expired:
-            return _broker_failed()
+            return _broker_failed("positions")
         return {"status": "success", "data": rows}, 200
     unrealized = sum(row["unrealized_pnl"] for row in rows)
     realized = sum(row["today_realized_pnl"] for row in rows)
@@ -111,8 +111,12 @@ def ping(venue: Venue, payload: dict[str, Any]) -> Answer:
     return {"status": "success", "data": {"message": "pong", "broker": venue.broker}}, 200
 
 
-def _broker_failed() -> Answer:
-    return {"status": "error", "message": EXPIRED_TOKEN}, 500
+def _broker_failed(book: str) -> Answer:
+    """A book the broker refused for an expired login: the HTTP client's error, re-raised
+    by the broker module (broker/zerodha/api/order_api.py:76-91) and answered as its text
+    with HTTP 500 (services/orderbook_service.py:182-184, tradebook_service.py:135-137,
+    positionbook_service.py:148-150)."""
+    return {"status": "error", "message": broker_http_error(403, BOOK_PATHS[book])}, 500
 
 
 __all__ = ["analyzer", "funds", "orderbook", "ping", "positionbook", "tradebook"]

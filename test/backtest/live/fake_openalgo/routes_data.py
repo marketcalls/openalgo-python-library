@@ -4,7 +4,8 @@
 
 Quotes and history come from the broker in either mode, so an expired login fails them
 (services/quotes_service.py and history_service.py answer the broker's exception with
-HTTP 500, in the reference broker's words: broker/zerodha/api/data.py). `symbol` and
+HTTP 500, in the reference broker's words: broker/zerodha/api/data.py); an instrument
+not in the master contract is refused with HTTP 400 before the broker is asked. `symbol` and
 `intervals` read OpenAlgo's own tables. A schema refusal of these routes carries the
 field errors as an object (restx_api/symbol.py, quotes.py, history.py). History is
 modelled for 1-minute candles from the broker (`source` "api") only.
@@ -17,7 +18,7 @@ from typing import Any
 
 from openalgo.backtest._layout import NANOS_PER_SECOND
 
-from .answers import EXPIRED_TOKEN, Unmodelled
+from .answers import EXPIRED_TOKEN, UNKNOWN_SYMBOL, Unmodelled
 from .log import TELEGRAM
 from .rows import symbol_row
 from .schema import VALID_EXCHANGES
@@ -79,15 +80,12 @@ def intervals(venue: Venue, payload: dict[str, Any]) -> Answer:
 
 def quotes(venue: Venue, payload: dict[str, Any]) -> Answer:
     """`quotes`: the broker's quote of an instrument (services/quotes_service.py)."""
-    refused = _instrument_fields(payload)
+    refused = _instrument_fields(payload) or _unknown_symbol(venue, payload)
     if refused:
         return refused
     if venue.session_expired:
         return {"status": "error", "message": _QUOTES_FAILED + _BROKER_TOKEN}, 500
-    market = venue.market(payload["symbol"], payload["exchange"])
-    if market is None:
-        words = f"Could not find exchange token for {payload['exchange']}:{payload['symbol']}"
-        return {"status": "error", "message": _QUOTES_FAILED + words}, 500
+    market = venue.markets[(payload["symbol"], payload["exchange"])]
     data = {
         "ask": market.best_ask,
         "bid": market.best_bid,
@@ -96,7 +94,7 @@ def quotes(venue: Venue, payload: dict[str, Any]) -> Answer:
         "ltp": market.last_price or 0.0,
         "open": market.day_open,
         "prev_close": market.prev_close,
-        "volume": market.day_volume,
+        "volume": int(market.day_volume),
         "oi": 0,
     }
     return {"status": "success", "data": data}, 200
@@ -114,12 +112,12 @@ def history(venue: Venue, payload: dict[str, Any]) -> Answer:
             f"history is modelled for interval {CANDLE_INTERVAL!r} from source 'api', not "
             f"{payload['interval']!r} from {payload.get('source')!r}"
         )
+    refused = _unknown_symbol(venue, payload)
+    if refused:
+        return refused
     if venue.session_expired:
         return {"status": "error", "message": _HISTORY_FAILED + _BROKER_TOKEN}, 500
-    market = venue.market(payload["symbol"], payload["exchange"])
-    if market is None:
-        words = f"Could not find instrument token for {payload['exchange']}:{payload['symbol']}"
-        return {"status": "error", "message": _HISTORY_FAILED + words}, 500
+    market = venue.markets[(payload["symbol"], payload["exchange"])]
     rows = [
         {
             "timestamp": candle.start_ns // NANOS_PER_SECOND,
@@ -158,6 +156,17 @@ def telegram_notify(venue: Venue, payload: dict[str, Any]) -> Answer:
     if payload.get("wait_for_delivery"):
         return {"status": "success", "message": "Notification sent successfully"}, 200
     return {"status": "success", "message": "Notification queued for delivery"}, 200
+
+
+def _unknown_symbol(venue: Venue, payload: dict[str, Any]) -> Answer | None:
+    """The 400 of quotes and history for an instrument not in the master contract,
+    before the broker is asked (services/quotes_service.py:118-120,
+    services/history_service.py:132-134)."""
+    symbol, exchange = payload["symbol"], payload["exchange"]
+    if venue.market(symbol, exchange) is not None:
+        return None
+    words = UNKNOWN_SYMBOL.format(symbol=symbol, exchange=exchange)
+    return {"status": "error", "message": words}, 400
 
 
 def _instrument_fields(payload: dict[str, Any]) -> Answer | None:

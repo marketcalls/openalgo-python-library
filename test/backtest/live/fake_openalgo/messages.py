@@ -6,8 +6,9 @@
   broker/zerodha/streaming/zerodha_adapter.py, `_transform_regular_tick`).
 - Order updates: the payload of subscribers/wsproxy_subscriber.py (`on_order_update`),
   relayed as it is (websocket_proxy/server.py, `_handle_order_update`). A live broker's
-  status words are those of the order adapters, "trigger_pending" with an underscore
-  (websocket_proxy/order_adapter.py, `normalize`); the sandbox writes "trigger pending".
+  status words are its order adapter's: a resting stop is "trigger pending" with a space
+  (broker/zerodha/streaming/zerodha_order_adapter.py:72, through the status map of
+  broker/zerodha/mapping/order_data.py:34-48), as the sandbox writes it too.
   The sandbox announces a placement, a trigger and a cancellation without fill figures
   (filled, pending and average all 0, the event's defaults: sandbox/order_manager.py
   and sandbox/execution_engine.py, `_publish_order_update_event`) and a fill as complete
@@ -21,19 +22,18 @@ from __future__ import annotations
 
 from typing import Any
 
+from openalgo.backtest._layout import NANOS_PER_SECOND
 from openalgo.backtest._live._types import Mode
 
-from .book import FILLED, Change
+from .book import FILLED, MODIFIED, Change
 from .clock import epoch_ms
 from .market import MarketState
-from .orders import TRIGGER_PENDING
+from .orders import OPEN
 
 #: The `broker` the sandbox's order updates carry.
 SANDBOX_BROKER = "sandbox"
 #: The `mode` of an order update in each mode (subscribers/wsproxy_subscriber.py).
 UPDATE_MODES = {Mode.LIVE: "live", Mode.SANDBOX: "analyze"}
-#: The live stream's word for a stop resting in the stop-loss book.
-_STREAM_TRIGGER_PENDING = "trigger_pending"
 #: The feed modes and the name a broker's adapter gives each.
 LTP, QUOTE, DEPTH = 1, 2, 3
 _ADAPTER_MODES = {LTP: "ltp", QUOTE: "quote", DEPTH: "full"}
@@ -67,8 +67,11 @@ def order_update(
         "rejection_reason": order.rejection_reason,
     }
     if mode is Mode.LIVE:
-        if order.status == TRIGGER_PENDING:
-            message["order_status"] = _STREAM_TRIGGER_PENDING
+        if change.event == MODIFIED:
+            # A broker reports a modification as UPDATE, which the adapter reads as
+            # open, even for a stop still resting (broker/zerodha/mapping/
+            # order_data.py:39).
+            message["order_status"] = OPEN
         return message
     if change.event == FILLED and change.fill is not None:
         message.update(filled_quantity=order.quantity, pending_quantity=0)
@@ -84,18 +87,24 @@ def market_data(market: MarketState, mode: int, *, broker: str, ts_ns: int) -> d
     if mode not in _ADAPTER_MODES:
         raise ValueError(f"the feed's modes are 1 (LTP), 2 (Quote) and 3 (Depth), not {mode!r}")
     instrument = market.instrument
+    # The adapter stamps a tick with its own time in milliseconds
+    # (broker/zerodha/streaming/zerodha_websocket.py:740), and gives the last trade time
+    # as that stamp unless the packet carries the exchange's, which only a depth packet
+    # does, in epoch seconds (zerodha_websocket.py:826; zerodha_adapter.py:677-680).
     stamp = epoch_ms(ts_ns)
+    trade_ns = market.last_trade_ns or ts_ns
     data: dict[str, Any] = {
         "symbol": instrument.symbol,
         "exchange": instrument.exchange,
         "mode": _ADAPTER_MODES[mode],
         "ltp": market.last_price,
-        "ltt": epoch_ms(market.last_trade_ns or ts_ns),
+        "ltt": trade_ns // NANOS_PER_SECOND if mode == DEPTH else stamp,
         "timestamp": stamp,
     }
     if mode >= QUOTE:
         data.update(
-            volume=market.day_volume,
+            # The packet's quantities are integers (zerodha_websocket.py:779-780).
+            volume=int(market.day_volume),
             last_quantity=0,
             average_price=0,
             total_buy_quantity=0,
@@ -132,6 +141,34 @@ def auth_reply(broker: str, user_id: str) -> dict[str, Any]:
     }
 
 
+#: The proxy's names of the feed modes (websocket_proxy/mode_utils.py, MODE_CANONICAL),
+#: and the depth it reports for a subscription.
+_MODE_LABELS = {LTP: "LTP", QUOTE: "Quote", DEPTH: "Depth"}
+_DEPTH_LEVELS = 5
+
+
+def subscribe_reply(entries: list[tuple[str, str, int, str]], broker: str) -> dict[str, Any]:
+    """The proxy's answer to a `subscribe` frame: each (symbol, exchange, mode, refusal)
+    accepted when its refusal is "", refused with it otherwise, and the answer "partial"
+    when any was refused (websocket_proxy/server.py, subscribe_client)."""
+    rows = []
+    for symbol, exchange, mode, refusal in entries:
+        base = {"symbol": symbol, "exchange": exchange}
+        if refusal:
+            rows.append(base | {"status": "error", "message": refusal, "broker": broker})
+        else:
+            label = _MODE_LABELS.get(mode, mode)
+            accepted = {"status": "success", "mode": label, "depth": _DEPTH_LEVELS}
+            rows.append(base | accepted | {"broker": broker})
+    return {
+        "type": "subscribe",
+        "status": "partial" if any(entry[3] for entry in entries) else "success",
+        "subscriptions": rows,
+        "message": "Subscription processing complete",
+        "broker": broker,
+    }
+
+
 def orders_reply(action: str) -> dict[str, Any]:
     """The proxy's answer to `subscribe_orders` or `unsubscribe_orders`."""
     words = "Subscribed to" if action == "subscribe_orders" else "Unsubscribed from"
@@ -148,4 +185,5 @@ __all__ = [
     "market_data",
     "order_update",
     "orders_reply",
+    "subscribe_reply",
 ]

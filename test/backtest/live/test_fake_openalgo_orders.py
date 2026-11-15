@@ -140,17 +140,44 @@ def test_a_limit_order_rests_until_the_price_reaches_it_then_fills_at_its_limit(
     assert (data["order_status"], data["average_price"]) == ("complete", 800.0)
 
 
-def test_an_sl_m_stop_rests_trigger_pending_then_fills_at_the_last_price(broker):
+def test_a_resting_live_stop_shows_open_in_the_book_and_orderstatus(broker):
+    # broker/zerodha/mapping/order_data.py:194-195 rewrites "trigger pending" as open.
     client = broker.client()
     order_id = place(client, action="SELL", price_type="SL-M", trigger_price=800.0)["orderid"]
-    assert status_of(client, order_id)["order_status"] == "trigger pending"
 
     broker.trade("SBIN", "NSE", 801.0)
+
+    assert status_of(client, order_id)["order_status"] == "open"
+    assert client.orderbook()["data"]["orders"][0]["order_status"] == "open"
+    assert broker.orders()[0].status == "trigger pending"
+
+
+def test_a_resting_sandbox_stop_shows_trigger_pending(sandbox):
+    # sandbox/order_manager.py:694-696 keeps the stop-loss book's word.
+    client = sandbox.client()
+
+    order_id = place(client, action="SELL", price_type="SL-M", trigger_price=800.0)["orderid"]
+
     assert status_of(client, order_id)["order_status"] == "trigger pending"
+
+
+def test_an_sl_m_stop_fills_at_the_last_price_once_triggered(broker):
+    client = broker.client()
+    order_id = place(client, action="SELL", price_type="SL-M", trigger_price=800.0)["orderid"]
+
     broker.trade("SBIN", "NSE", 797.0)
 
     data = status_of(client, order_id)
     assert (data["order_status"], data["average_price"]) == ("complete", 797.0)
+
+
+def test_a_live_sl_m_stop_fills_at_the_best_bid_given_with_its_trigger(broker):
+    client = broker.client()
+    order_id = place(client, action="SELL", price_type="SL-M", trigger_price=800.0)["orderid"]
+
+    broker.trade("SBIN", "NSE", 797.0, bid=796.5, ask=797.5)
+
+    assert status_of(client, order_id)["average_price"] == 796.5
 
 
 def test_a_stop_limit_the_price_runs_through_stays_open_unfilled(broker):
@@ -198,7 +225,15 @@ def test_a_stop_limit_modified_to_a_marketable_limit_fills_at_the_last_price(bro
     assert status_of(client, order["orderid"])["average_price"] == 797.0
 
 
-def test_a_cancelled_order_cannot_be_cancelled_again(broker):
+def cancel_refusal(order_id, status=400, phrase="Bad Request"):
+    """The body of a live cancel the broker refused (broker/zerodha/api/order_api.py:520,
+    536): the HTTP client's error, without the line naming its documentation."""
+    url = f"https://broker.invalid/orders/regular/{order_id}"
+    words = f"Failed to cancel order: Client error '{status} {phrase}' for url '{url}'"
+    return {"status": "error", "message": words}
+
+
+def test_a_live_cancel_of_a_cancelled_order_is_the_brokers_500(broker):
     client = broker.client()
     order_id = place(client, price_type="LIMIT", price=800.0)["orderid"]
 
@@ -207,7 +242,99 @@ def test_a_cancelled_order_cannot_be_cancelled_again(broker):
 
     assert first == {"status": "success", "orderid": order_id}
     assert status_of(client, order_id)["order_status"] == "cancelled"
-    assert again["code"] == 400
+    assert again["code"] == 500
+    assert http_body(again) == cancel_refusal(order_id)
+
+
+def test_a_live_cancel_that_a_fill_beat_is_the_brokers_500(broker):
+    client = broker.client()
+    order_id = place(client, price_type="LIMIT", price=800.0)["orderid"]
+    broker.trade("SBIN", "NSE", 799.0)
+
+    answer = client.cancelorder(order_id=order_id, strategy=STRATEGY)
+
+    assert (answer["code"], http_body(answer)) == (500, cancel_refusal(order_id))
+    assert status_of(client, order_id)["order_status"] == "complete"
+
+
+def test_a_live_cancel_of_an_unknown_order_is_the_brokers_500(broker):
+    answer = broker.client().cancelorder(order_id="999", strategy=STRATEGY)
+
+    assert (answer["code"], http_body(answer)) == (500, cancel_refusal("999"))
+
+
+def test_a_live_cancel_with_an_expired_login_is_the_brokers_500(broker):
+    client = broker.client()
+    order_id = place(client, price_type="LIMIT", price=800.0)["orderid"]
+    broker.faults.expire_session()
+
+    answer = client.cancelorder(order_id=order_id, strategy=STRATEGY)
+
+    assert http_body(answer) == cancel_refusal(order_id, 403, "Forbidden")
+    assert broker.orders()[0].status == "open"
+
+
+def test_a_cancelled_sandbox_order_keeps_its_pending_quantity(sandbox):
+    # sandbox/order_manager.py:1139-1142 changes the status only.
+    client = sandbox.client()
+    order_id = place(client, price_type="LIMIT", price=800.0)["orderid"]
+
+    client.cancelorder(order_id=order_id, strategy=STRATEGY)
+
+    data = status_of(client, order_id)
+    assert (data["order_status"], data["filled_quantity"], data["pending_quantity"]) == (
+        "cancelled",
+        0,
+        10,
+    )
+
+
+# -- fill prices -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("action", "price", "expected"),
+    [("BUY", 1500.0, 812.1), ("SELL", 100.0, 811.9)],
+    ids=["buy at the ask", "sell at the bid"],
+)
+def test_a_marketable_live_limit_fills_at_the_market_not_its_limit(broker, action, price, expected):
+    broker.trade("SBIN", "NSE", 812.0, bid=811.9, ask=812.1)
+
+    place(broker.client(), action=action, price_type="LIMIT", price=price)
+
+    assert [fill.price for fill in broker.fills()] == [expected]
+
+
+def test_a_marketable_live_limit_fills_at_the_last_price_with_no_quote_given(broker):
+    place(broker.client(), price_type="LIMIT", price=1500.0)
+
+    assert [fill.price for fill in broker.fills()] == [812.0]
+
+
+def test_a_marketable_sandbox_limit_fills_at_the_last_price(sandbox):
+    # sandbox/order_manager.py:769-773 fills a marketable limit at the quote's LTP.
+    sandbox.trade("SBIN", "NSE", 812.0, bid=811.9, ask=812.1)
+
+    place(sandbox.client(), price_type="LIMIT", price=1500.0)
+
+    assert [fill.price for fill in sandbox.fills()] == [812.0]
+
+
+@pytest.mark.parametrize("analyzer", [False, True], ids=["live", "sandbox"])
+@pytest.mark.parametrize(
+    ("action", "expected"), [("BUY", 813.0), ("SELL", 811.0)], ids=["buy", "sell"]
+)
+def test_a_market_order_takes_the_ask_or_the_bid_given(
+    make_fake_openalgo, analyzer, action, expected
+):
+    # sandbox/execution_engine.py:520-529: a BUY at the ask, a SELL at the bid.
+    fake = make_fake_openalgo(analyzer=analyzer)
+    fake.add_instrument("SBIN", "NSE")
+    fake.trade("SBIN", "NSE", 812.0, bid=811.0, ask=813.0)
+
+    place(fake.client(), action=action)
+
+    assert [fill.price for fill in fake.fills()] == [expected]
 
 
 # -- part fills and rejections on request --------------------------------------------
@@ -274,6 +401,30 @@ def test_the_broker_refuses_the_next_stop_at_placement(broker):
     assert http_body(stop) == {"status": "error", "message": "Trigger price too close"}
 
 
+def test_the_sandbox_never_rejects_an_order_it_accepted(sandbox):
+    with pytest.raises(ValueError, match="only at placement"):
+        sandbox.reject_next("RMS: margin exceeds")
+
+
+def test_a_sandbox_refusal_at_placement_keeps_the_rejected_order(sandbox):
+    # sandbox/order_manager.py:632-680: the order is kept rejected, its ID in the answer.
+    client = sandbox.client()
+    sandbox.reject_next("Insufficient holdings", at_placement=True)
+
+    answer = place(client, action="SELL")
+
+    [order] = sandbox.orders()
+    assert answer["code"] == 400
+    assert http_body(answer) == {
+        "status": "error",
+        "orderid": order.order_id,
+        "message": "Insufficient holdings",
+        "mode": "analyze",
+    }
+    row = status_of(client, order.order_id)
+    assert (row["order_status"], row["pending_quantity"]) == ("rejected", 0)
+
+
 def test_an_option_refuses_an_sl_m_order_at_a_live_broker(broker):
     broker.add_instrument(OPTION, "NFO", lot_size=75, instrument_type="CE")
     client = broker.client()
@@ -297,7 +448,9 @@ def test_an_option_takes_a_stop_limit_order_at_a_live_broker(broker):
         price_type="SL", trigger_price=90.0, price=85.5,
     )  # fmt: skip
 
-    assert status_of(client, answer["orderid"])["order_status"] == "trigger pending"
+    assert answer["status"] == "success"
+    [order] = broker.orders()
+    assert (order.price_type, order.status) == ("SL", "trigger pending")
 
 
 def test_the_sandbox_accepts_an_sl_m_order_on_an_option(sandbox):
@@ -352,6 +505,19 @@ def test_semi_auto_queues_a_placement_for_the_action_center(broker):
         "pending_order_id": 1,
     }
     assert broker.orders() == []
+
+
+def test_semi_auto_checks_the_schema_before_queueing(broker):
+    # restx_api/place_order.py:31-35 loads the schema before the service queues.
+    broker.set_semi_auto(True)
+
+    answer = place(broker.client(), quantity=0)
+
+    assert answer["code"] == 400
+    assert http_body(answer) == {
+        "status": "error",
+        "message": "{'quantity': ['Quantity must be a positive number.']}",
+    }
 
 
 def test_semi_auto_refuses_a_cancel_in_live_mode(broker):

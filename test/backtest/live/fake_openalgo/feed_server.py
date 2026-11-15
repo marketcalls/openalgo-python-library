@@ -4,66 +4,105 @@ they are).
 
 `FeedServer` is installed as the `websocket` module of `openalgo.feed` (the fixture does
 it), so the SDK's connect builds a `FakeSocket`. It answers the SDK's frames as
-websocket_proxy/server.py does, and tells which socket is open and what it subscribed
-from the frames the SDK sent on it.
+websocket_proxy/server.py does: the key is checked, a subscription to an instrument the
+broker does not know is refused in the broker adapter's words
+(broker/zerodha/streaming/zerodha_adapter.py:282-284) and never ticks, and the
+order-stream replies are the proxy's own. It tells which sockets are open and
+authenticated, and what each subscribed, from the frames the SDK sent on it and what it
+answered them.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from feed_fakes import KEY_REFUSED, FakeServer, FakeSocket
 
-from .messages import auth_reply, orders_reply
+from .messages import auth_reply, orders_reply, subscribe_reply
 
 _ORDER_ACTIONS = ("subscribe_orders", "unsubscribe_orders")
 
 
 class FeedServer(FakeServer):
-    """The proxy: its authentication reply names the broker and the user, a key other
-    than `api_key` is refused, and the order-stream replies are the proxy's own words.
-    Market-data subscriptions are answered by `FakeServer`, in the proxy's shape."""
+    """The proxy for one user: `api_key` is the only key it accepts, `knows(symbol,
+    exchange)` says whether the broker has the instrument."""
 
-    def __init__(self, api_key: str, broker: str, user_id: str) -> None:
+    def __init__(
+        self, api_key: str, broker: str, user_id: str, knows: Callable[[str, str], bool]
+    ) -> None:
         super().__init__()
         self._api_key = api_key
+        self._broker = broker
+        self._knows = knows
         self.auth_reply = auth_reply(broker, user_id)
+        # What the proxy answered each frame, by the frame's identity: a frame stays in
+        # its socket's `sent` list, so the identity holds while the socket lives.
+        self._accepted: dict[int, set[tuple[str, str, int]]] = {}
+        self._authenticated: set[int] = set()
 
     def reply_to(self, frame: dict[str, Any]) -> dict[str, Any] | None:
         """The proxy's reply to a frame the SDK sent (None: no reply)."""
         action = frame.get("action")
-        if action == "authenticate" and frame.get("api_key") != self._api_key:
-            return KEY_REFUSED
+        if action == "authenticate":
+            if frame.get("api_key") != self._api_key:
+                return KEY_REFUSED
+            self._authenticated.add(id(frame))
+            return self.auth_reply
+        if action == "subscribe" and self.answer_subscribe:
+            return self._subscribed(frame)
         if action in _ORDER_ACTIONS:
             return orders_reply(action)
         return super().reply_to(frame)
 
+    def open_sockets(self) -> list[FakeSocket]:
+        """Every socket that is open and whose key the proxy accepted, oldest first."""
+        return [
+            sock
+            for sock in list(self.sockets)
+            if not sock.finished.is_set()
+            and any(id(frame) in self._authenticated for frame in sock.frames("authenticate"))
+        ]
+
     def live_socket(self) -> FakeSocket | None:
-        """The newest socket, when it is open and has authenticated; else None."""
+        """The newest socket, when it is open and authenticated; else None."""
         if not self.sockets:
             return None
         newest = self.sockets[-1]
-        if newest.finished.is_set() or not newest.frames("authenticate"):
-            return None
-        return newest
+        return newest if newest in self.open_sockets() else None
 
-    @staticmethod
-    def subscriptions(sock: FakeSocket) -> tuple[set[tuple[str, str, int]], bool]:
-        """What a socket subscribed: its (symbol, exchange, mode) entries and whether it
-        takes order updates, from the frames the SDK sent on it, in order."""
+    def subscriptions(self, sock: FakeSocket) -> tuple[set[tuple[str, str, int]], bool]:
+        """What a socket subscribed: its accepted (symbol, exchange, mode) entries and
+        whether it takes order updates, from its frames in order."""
         entries: set[tuple[str, str, int]] = set()
         orders = False
         for frame in list(sock.sent):
             action = frame.get("action")
-            symbols = frame.get("symbols", [])
-            keys = {(s["symbol"], s["exchange"], frame.get("mode")) for s in symbols}
             if action == "subscribe":
-                entries |= keys
+                entries |= self._accepted.get(id(frame), set())
             elif action == "unsubscribe":
-                entries -= keys
+                mode = frame.get("mode")
+                entries -= {(s["symbol"], s["exchange"], mode) for s in frame.get("symbols", [])}
             elif action in _ORDER_ACTIONS:
                 orders = action == "subscribe_orders"
         return entries, orders
+
+    def _subscribed(self, frame: dict[str, Any]) -> dict[str, Any]:
+        mode = frame.get("mode")
+        accepted: set[tuple[str, str, int]] = set()
+        entries = []
+        for instrument in frame.get("symbols", []):
+            symbol, exchange = instrument["symbol"], instrument["exchange"]
+            refusal = (
+                ""
+                if self._knows(symbol, exchange)
+                else (f"Token not found for {symbol} on {exchange}")
+            )
+            if not refusal:
+                accepted.add((symbol, exchange, mode))
+            entries.append((symbol, exchange, mode, refusal))
+        self._accepted[id(frame)] = accepted
+        return subscribe_reply(entries, self._broker)
 
 
 __all__ = ["FeedServer"]

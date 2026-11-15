@@ -5,7 +5,8 @@ server's code.
 Live rows are those every broker's `transform_*_data` writes (broker/zerodha/mapping/
 order_data.py), formatted by services/orderbook_service.py, tradebook_service.py and
 positionbook_service.py (amounts to 2 decimals, quantities whole). A live order-book row
-carries no filled quantity and no average price: the fills are in the trade book, and
+shows a resting stop as "open" and carries no filled quantity and no average price: the
+fills are in the trade book, and
 `orderstatus` takes the average price from the first trade-book row of the order
 (services/orderstatus_service.py). Sandbox rows are sandbox/order_manager.py's
 (get_orderbook, get_order_status) and sandbox/position_manager.py's (get_tradebook,
@@ -23,7 +24,16 @@ from openalgo.backtest._live._types import Mode
 from .book import Book
 from .clock import book_time
 from .market import Instrument, MarketState
-from .orders import COMPLETE, MARKET, OPEN, REJECTED, TRIGGER_PENDING, FakeOrder, Fill
+from .orders import (
+    CANCELLED,
+    COMPLETE,
+    MARKET,
+    OPEN,
+    REJECTED,
+    TRIGGER_PENDING,
+    FakeOrder,
+    Fill,
+)
 from .positions import Position
 
 #: Decimals of the amounts the server's books write.
@@ -70,7 +80,10 @@ def order_row(order: FakeOrder, mode: Mode) -> dict[str, Any]:
             "order_status": order.status,
             "average_price": _amount(order.average_price),
             "filled_quantity": order.filled,
-            "pending_quantity": order.pending,
+            # A cancel changes the status only, so the cancelled order keeps its pending
+            # units (sandbox/order_manager.py:1139-1142); a fill or a rejection at
+            # placement leaves none.
+            "pending_quantity": order.remaining if order.status == CANCELLED else order.pending,
             "rejection_reason": order.rejection_reason,
             "timestamp": book_time(order.placed_ns),
             "strategy": order.strategy,
@@ -86,7 +99,9 @@ def order_row(order: FakeOrder, mode: Mode) -> dict[str, Any]:
         "pricetype": order.price_type,
         "product": order.product,
         "orderid": order.order_id,
-        "order_status": order.status,
+        # The REST book shows a resting stop as open, its working state
+        # (broker/zerodha/mapping/order_data.py:194-195); the stream keeps the word.
+        "order_status": OPEN if order.status == TRIGGER_PENDING else order.status,
         "timestamp": book_time(order.placed_ns),
     }
 

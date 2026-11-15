@@ -49,6 +49,22 @@ def test_a_host_name_lookup_is_refused_and_recorded(offline):
     offline.attempts.clear()
 
 
+@pytest.mark.parametrize(
+    ("lookup", "argument"),
+    [
+        ("gethostbyname", "openalgo.invalid"),
+        ("gethostbyname_ex", "openalgo.invalid"),
+        ("gethostbyaddr", NOWHERE[0]),
+    ],
+)
+def test_the_older_name_lookups_are_refused_and_recorded(offline, lookup, argument):
+    with pytest.raises(ConnectionRefusedError):
+        getattr(socket, lookup)(argument)
+
+    assert offline.attempts == [repr(argument)]
+    offline.attempts.clear()
+
+
 def test_an_sdk_client_off_the_fakes_transport_reaches_nothing(offline):
     client = api(api_key="placeholder-key", host=f"http://{NOWHERE[0]}:{NOWHERE[1]}", timeout=1.0)
     try:

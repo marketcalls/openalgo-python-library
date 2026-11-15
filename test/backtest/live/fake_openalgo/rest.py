@@ -2,9 +2,11 @@
 `openalgo.api` sends its calls to, so the SDK's own request and error handling runs
 unchanged and nothing leaves the process.
 
-Each call: the scheduled fault of its endpoint (`faults`), the API key, then the route,
-under the venue's lock; the order updates the route caused are sent once the lock is
-released. Every answer carries an HTTP `Date` from the fake's clock, which the
+Each call: the scheduled fault of its endpoint (`faults`), the route's rate limit on the
+fake's clock (`limiter`), the API key and OpenAlgo's hold on the broker's login, then the
+route, under the venue's lock; the order updates the route caused are sent once the lock
+is released. A timeout costs the client's read timeout on the fake's clock. Every answer
+carries an HTTP `Date` from the fake's clock, which the
 preflight's clock check reads, and so does a HEAD of the server's root (the web app's
 page, blueprints/react_app.py). A call the fake does not model, and any failure inside
 the fake, is logged as a problem and raised: the SDK turns a raised error into an
@@ -15,6 +17,7 @@ from __future__ import annotations
 
 import email.utils
 import json
+import math
 from collections.abc import Callable
 from typing import Any
 
@@ -28,6 +31,7 @@ from .answers import (
     DROPPED_WORDS,
     INVALID_KEY,
     MODIFY_FAILED,
+    REFUSED_WORDS,
     TIMEOUT_WORDS,
     UNANSWERED_ORDER_MESSAGE,
     Unmodelled,
@@ -43,11 +47,13 @@ from .faults import (
     GATEWAY_ERROR,
     LOST_ANSWER,
     RATE_LIMITED,
+    REFUSED_CONNECTION,
     SLOW_ANSWER,
     TIMEOUT,
     Faults,
     RestFault,
 )
+from .limiter import RateLimiter
 from .log import CALL, FAULT, PROBLEM
 from .venue import Venue
 
@@ -93,13 +99,15 @@ class RestHandler:
         self._venue = venue
         self._faults = faults
         self._api_key = api_key
+        self._limiter = RateLimiter()
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
-        """The answer to one request; raises the client's own errors for a timeout or a
-        dropped connection, and re-raises (after logging a problem) anything else."""
+        """The answer to one request; raises the client's own transport errors for a
+        timeout, a dropped or a refused connection (the faults), and re-raises (after
+        logging a problem) anything else."""
         try:
             return self._answer(request)
-        except (httpx.TimeoutException, httpx.RemoteProtocolError):
+        except httpx.TransportError:
             raise
         except Exception as error:
             now = self._venue.clock.now()
@@ -118,33 +126,49 @@ class RestHandler:
         fault = self._faults.take(endpoint)
         if fault is not None:
             self._venue.log.record(self._venue.clock.now(), FAULT, fault.name, endpoint=endpoint)
-            if fault.name == SLOW_ANSWER:
-                self._venue.clock.advance(fault.seconds)
-            elif fault.name == RATE_LIMITED:
-                return self._sent(endpoint, payload, rate_limited(endpoint), None)
+            if fault.name == REFUSED_CONNECTION:
+                self._note(endpoint, payload, 0, None, fault=fault.name)
+                raise httpx.ConnectError(REFUSED_WORDS, request=request)
+            if fault.name == LOST_ANSWER and self._venue.analyzer:
+                raise Unmodelled("the OpenAlgo sandbox sends nothing to a broker to lose")
+        if fault is not None and fault.name == RATE_LIMITED:
+            return self._sent(endpoint, payload, rate_limited(endpoint), None)
+        if not self._limiter.allow(endpoint, self._venue.clock.now()):
+            return self._sent(endpoint, payload, rate_limited(endpoint), None, limited=True)
+        read_timeout = _read_timeout(request)
+        times_out = fault is not None and (
+            fault.name == TIMEOUT or (fault.name == SLOW_ANSWER and fault.seconds > read_timeout)
+        )
+        if fault is not None and fault.name == SLOW_ANSWER and not times_out:
+            self._venue.clock.advance(fault.seconds)
         body, status = None, 0
         acts = fault is None or fault.name == SLOW_ANSWER or fault.reached_broker
         if acts:
             body, status = self._route(endpoint, payload)
             self._venue.flush()
-        if fault is not None and fault.name not in (SLOW_ANSWER, RATE_LIMITED):
-            return self._faulty(request, endpoint, payload, fault)
+        if times_out:
+            # The client gives up after its read timeout, whatever the server does.
+            self._venue.clock.advance(read_timeout)
+            self._note(endpoint, payload, 0, None, fault=TIMEOUT)
+            raise httpx.ReadTimeout(TIMEOUT_WORDS, request=request)
+        if fault is not None and fault.name != SLOW_ANSWER:
+            return self._faulty(endpoint, payload, fault, request)
         return self._sent(endpoint, payload, service(body, status), body)
 
     def _route(self, endpoint: str, payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
-        if payload.get("apikey") != self._api_key:
-            if endpoint == _TELEGRAM:
+        if endpoint == _TELEGRAM:
+            # The notify route checks the API key alone (restx_api/telegram_bot.py).
+            if payload.get("apikey") != self._api_key:
                 return _TELEGRAM_KEY_REFUSED
+        elif payload.get("apikey") != self._api_key or self._venue.login_revoked:
+            # services/*: no key, or a login OpenAlgo revoked (get_auth_token_broker).
             return {"status": "error", "message": INVALID_KEY}, 403
         with self._venue.lock:
             return ROUTES[endpoint](self._venue, payload)
 
     def _faulty(
-        self, request: httpx.Request, endpoint: str, payload: dict[str, Any], fault: RestFault
+        self, endpoint: str, payload: dict[str, Any], fault: RestFault, request: httpx.Request
     ) -> httpx.Response:
-        if fault.name == TIMEOUT:
-            self._note(endpoint, payload, 0, None, fault=fault.name)
-            raise httpx.ReadTimeout(TIMEOUT_WORDS, request=request)
         if fault.name == DROPPED_CONNECTION:
             self._note(endpoint, payload, 0, None, fault=fault.name)
             raise httpx.RemoteProtocolError(DROPPED_WORDS, request=request)
@@ -163,8 +187,10 @@ class RestHandler:
         payload: dict[str, Any],
         answer: tuple[int, str, str],
         body: dict[str, Any] | None,
+        **detail: Any,
     ) -> httpx.Response:
-        self._note(endpoint, payload, answer[0], body if body is not None else answer[2])
+        shown = body if body is not None else answer[2]
+        self._note(endpoint, payload, answer[0], shown, **detail)
         return response(answer, self._date())
 
     def _note(
@@ -184,6 +210,13 @@ class RestHandler:
 
     def _date(self) -> str:
         return email.utils.formatdate(self._venue.clock.now() // NANOS_PER_SECOND, usegmt=True)
+
+
+def _read_timeout(request: httpx.Request) -> float:
+    """The seconds the client waits for an answer (the SDK passes its `timeout`, 120 by
+    default, openalgo/base.py); infinite when it set none."""
+    seconds = request.extensions.get("timeout", {}).get("read")
+    return math.inf if seconds is None else float(seconds)
 
 
 __all__ = ["API_PREFIX", "ROUTES", "RestHandler"]

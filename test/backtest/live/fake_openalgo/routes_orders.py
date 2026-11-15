@@ -18,11 +18,14 @@ from openalgo.backtest._live._types import Mode
 
 from . import schema
 from .answers import (
+    BOOK_PATHS,
+    CANCEL_REFUSED,
     EXPIRED_TOKEN,
     QUEUED_FOR_APPROVAL,
     SEMI_AUTO_MODE,
     SEMI_AUTO_NO_CANCEL,
     SEMI_AUTO_NO_MODIFY,
+    broker_http_error,
 )
 from .book import OrderTerms
 from .orders import LIMIT_TYPES, MARKET, STOP_MARKET, STOP_TYPES, FakeOrder
@@ -30,6 +33,10 @@ from .rows import order_status_data
 from .venue import Venue
 
 Answer = tuple[dict[str, Any], int]
+
+#: The sandbox's waits between its three tries for a quote, seconds: 0.3 after the
+#: first, 0.6 after the second (sandbox/order_manager.py:319-320, 395-396, 487-488).
+SANDBOX_QUOTE_RETRY_SECONDS = 0.3 + 0.6
 
 #: The fake broker's refusals at placement and on a modify or cancel (HTTP 400).
 BROKER_WORDS = {
@@ -47,7 +54,11 @@ BROKER_WORDS = {
 
 
 def place(venue: Venue, payload: dict[str, Any]) -> Answer:
-    """`placeorder` (services/place_order_service.py)."""
+    """`placeorder`: the REST layer's schema first (restx_api/place_order.py:31-35), then
+    semi-auto's queue (services/place_order_service.py), then the switch's book."""
+    loaded, problem = schema.load(schema.PLACE, payload)
+    if problem:
+        return {"status": "error", "message": problem}, 400
     if venue.semi_auto:
         queued = {
             "status": "success",
@@ -56,9 +67,6 @@ def place(venue: Venue, payload: dict[str, Any]) -> Answer:
             "pending_order_id": venue.next_pending_order_id(),
         }
         return queued, 200
-    loaded, problem = schema.load(schema.PLACE, payload)
-    if problem:
-        return {"status": "error", "message": problem}, 400
     price_type = loaded["pricetype"]
     terms = OrderTerms(
         strategy=loaded["strategy"],
@@ -73,16 +81,46 @@ def place(venue: Venue, payload: dict[str, Any]) -> Answer:
         price=loaded["price"] if price_type in LIMIT_TYPES else 0.0,
         trigger_price=loaded["trigger_price"] if price_type in STOP_TYPES else 0.0,
     )
-    sandbox = venue.mode is Mode.SANDBOX
-    if not sandbox and venue.session_expired:
+    if venue.mode is Mode.SANDBOX:
+        return _sandbox_place(venue, terms)
+    if venue.session_expired:
         return {"status": "error", "message": EXPIRED_TOKEN}, 403
-    refusal = _sandbox_refusal(venue, terms) if sandbox else _broker_refusal(venue, terms)
+    refusal = _broker_refusal(venue, terms)
     if not refusal:
         rejection = venue.take_rejection(price_type, at_placement=True)
         refusal = rejection.reason if rejection is not None else ""
     if refusal:
-        return _marked(venue, {"status": "error", "message": refusal}), 400
+        return {"status": "error", "message": refusal}, 400
     order = venue.accept(venue.book, terms)
+    return {"status": "success", "orderid": order.order_id}, 200
+
+
+def _sandbox_place(venue: Venue, terms: OrderTerms) -> Answer:
+    """The sandbox's placement (sandbox/order_manager.py, place_order). It prices the
+    order from the broker's quote, tried three times with waits between
+    (`SANDBOX_QUOTE_RETRY_SECONDS`); with no quote a MARKET order is priced from the
+    position's last price when it has a position row, and refused otherwise
+    (order_manager.py:306, 323-347), and no order fills at placement."""
+    refusal = _sandbox_refusal(venue, terms)
+    if refusal:
+        return _marked(venue, {"status": "error", "message": refusal}), 400
+    market = venue.market(terms.symbol, terms.exchange)
+    quoted = venue.broker_reachable and market is not None and market.last_price is not None
+    if not quoted:
+        venue.clock.advance(SANDBOX_QUOTE_RETRY_SECONDS)
+        held = venue.has_position_row(venue.book, terms.symbol, terms.exchange, terms.product)
+        if terms.price_type == MARKET and not held:
+            words = (
+                f"Cannot place MARKET order for {terms.symbol} - unable to fetch current "
+                "price. Please try again later or use LIMIT order with a specific price."
+            )
+            return _marked(venue, {"status": "error", "message": words}), 400
+    rejection = venue.take_rejection(terms.price_type, at_placement=True)
+    if rejection is not None:
+        order = venue.reject_on_arrival(venue.book, terms, rejection.reason)
+        refused = {"status": "error", "orderid": order.order_id, "message": rejection.reason}
+        return _marked(venue, refused), 400
+    order = venue.accept(venue.book, terms, priced=quoted)
     return _marked(venue, {"status": "success", "orderid": order.order_id}), 200
 
 
@@ -135,11 +173,19 @@ def cancel(venue: Venue, payload: dict[str, Any]) -> Answer:
         venue.cancel(venue.book, order)
         done = {"status": "success", "orderid": order_id, "message": "Order cancelled successfully"}
         return _marked(venue, done), 200
+    # The broker refuses a cancel of an order it no longer works (gone, final, or filled
+    # in the meantime) with HTTP 400, and an expired login with 403; its cancel turns
+    # either into the HTTP client's error, answered 500 (broker/zerodha/api/
+    # order_api.py:520, 536).
     if venue.session_expired:
-        return {"status": "error", "message": EXPIRED_TOKEN}, 403
-    refusal = _unchangeable(order, order_id)
-    if refusal:
-        return {"status": "error", "message": refusal}, 400
+        refused = 403
+    elif order is None or not order.working:
+        refused = 400
+    else:
+        refused = 0
+    if refused:
+        words = CANCEL_REFUSED + broker_http_error(refused, f"/orders/regular/{order_id}")
+        return {"status": "error", "message": words}, 500
     venue.cancel(venue.book, order)
     return {"status": "success", "orderid": order_id}, 200
 
@@ -151,7 +197,7 @@ def status(venue: Venue, payload: dict[str, Any]) -> Answer:
     if problem:
         return _marked(venue, {"status": "error", "message": problem}), 400
     if venue.mode is Mode.LIVE and venue.session_expired:
-        return {"status": "error", "message": EXPIRED_TOKEN}, 500
+        return {"status": "error", "message": broker_http_error(403, BOOK_PATHS["orders"])}, 500
     order = venue.book.orders.get(loaded["orderid"])
     if order is None:
         return _not_found(venue, loaded["orderid"]), 404
@@ -186,24 +232,15 @@ def _sandbox_modify(venue: Venue, loaded: dict[str, Any]) -> Answer:
 
 
 def _sandbox_refusal(venue: Venue, terms: OrderTerms) -> str:
-    """The sandbox's refusals, in its order (sandbox/order_manager.py, `_validate_order`
-    then place_order)."""
+    """The sandbox's refusals before it fetches a quote, in its order
+    (sandbox/order_manager.py, `_validate_order` then place_order)."""
     if terms.price_type in LIMIT_TYPES and not terms.price:
         return f"{terms.price_type} orders require price"
     if terms.price_type in STOP_TYPES and not terms.trigger_price:
         return f"{terms.price_type} orders require trigger_price"
-    market = venue.market(terms.symbol, terms.exchange)
-    if market is None:
+    if venue.market(terms.symbol, terms.exchange) is None:
         return f"Symbol {terms.symbol} not found on {terms.exchange}"
-    lot = _lot_problem(venue, terms.symbol, terms.exchange, terms.quantity)
-    if lot:
-        return lot
-    if terms.price_type == MARKET and market.last_price is None:
-        return (
-            f"Cannot place MARKET order for {terms.symbol} - unable to fetch current price. "
-            "Please try again later or use LIMIT order with a specific price."
-        )
-    return ""
+    return _lot_problem(venue, terms.symbol, terms.exchange, terms.quantity)
 
 
 def _broker_refusal(venue: Venue, terms: OrderTerms) -> str:

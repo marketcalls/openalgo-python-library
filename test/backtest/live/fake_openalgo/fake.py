@@ -69,7 +69,7 @@ class FakeOpenAlgo:
     ) -> None:
         self.clock = ManualClock(start_ns)
         self.log = FakeLog()
-        self.feed_server = FeedServer(API_KEY, broker, username)
+        self.feed_server = FeedServer(API_KEY, broker, username, knows=self._knows)
         feed = Feed(self.feed_server, self.log, self.clock.now, broker)
         self._venue = Venue(
             clock=self.clock,
@@ -110,6 +110,11 @@ class FakeOpenAlgo:
     def mode(self) -> Mode:
         """The mode the analyzer switch selects now."""
         return self._venue.mode
+
+    def _knows(self, symbol: str, exchange: str) -> bool:
+        """Whether the broker knows an instrument (for the proxy's subscriptions)."""
+        with self._venue.lock:
+            return self._venue.market(symbol, exchange) is not None
 
     # -- the market -------------------------------------------------------
 
@@ -179,8 +184,11 @@ class FakeOpenAlgo:
         self, reason: str, *, price_type: str | None = None, at_placement: bool = False
     ) -> None:
         """The broker refuses the next order (of `price_type` when given) with `reason`:
-        at placement (the place call answers HTTP 400) or, by default, right after
-        accepting it (an order ID, then a rejected update)."""
+        at placement (the place call answers HTTP 400; in sandbox mode with the order ID
+        of the rejected order it keeps, sandbox/order_manager.py:670-680) or, by default,
+        right after accepting it (an order ID, then a rejected update). Raises
+        ValueError for a rejection after acceptance in sandbox mode, which refuses only
+        at placement."""
         self._venue.schedule_rejection(Rejection(reason, price_type, at_placement))
 
     def set_analyzer(self, on: bool) -> None:

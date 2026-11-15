@@ -11,6 +11,8 @@ import pytest
 from fake_openalgo import BROKER, USERNAME, FakeOpenAlgo
 from fake_openalgo.fixtures import *  # noqa: F403
 from fake_openalgo.fixtures import SESSION_START_NS
+from fake_openalgo.market import Instrument, MarketState
+from fake_openalgo.messages import DEPTH, LTP, QUOTE, market_data
 from feed_fakes import shorten, wait_for
 
 from openalgo import feed as feed_module
@@ -114,6 +116,81 @@ def test_a_depth_tick_carries_the_best_bid_and_ask(connected, market):
     assert (depth["buy"][0]["price"], depth["sell"][0]["price"]) == (811.95, 812.05)
 
 
+@pytest.mark.parametrize(
+    ("mode", "ltt"),
+    [(LTP, START_MS), (QUOTE, START_MS), (DEPTH, SESSION_START_NS // 1_000_000_000)],
+    ids=["ltp", "quote", "depth"],
+)
+def test_a_ticks_last_trade_time_is_milliseconds_but_seconds_in_depth(mode, ltt):
+    # The adapter's own stamp in milliseconds (zerodha_websocket.py:740), the exchange's
+    # in seconds in a depth packet (zerodha_websocket.py:826). The SDK keeps `ltt` from
+    # LTP ticks only, so the proxy's message is read here.
+    state = MarketState(Instrument("SBIN", "NSE"))
+    state.trade(SESSION_START_NS, 812.0, 3)
+
+    message = market_data(state, mode, broker=BROKER, ts_ns=SESSION_START_NS)
+
+    assert (message["data"]["ltt"], message["data"]["timestamp"]) == (ltt, START_MS)
+
+
+def test_a_quote_ticks_volume_is_a_whole_number(connected, market):
+    # The packet's quantities are integers (zerodha_websocket.py:779-780).
+    ticks = []
+    connected.subscribe_quote([SBIN], ticks.append)
+
+    market.trade("SBIN", "NSE", 812.0, volume=3)
+
+    volume = ticks[-1]["data"]["volume"]
+    assert (volume, type(volume)) == (3, int)
+
+
+def test_a_subscription_to_an_unknown_instrument_is_refused_and_never_ticks(connected, market):
+    # broker/zerodha/streaming/zerodha_adapter.py:282-284 finds no token.
+    nope = {"exchange": "NSE", "symbol": "NOPE"}
+    ticks = []
+
+    connected.subscribe_ltp([nope, SBIN], ticks.append)
+
+    sock = market.feed_server.live_socket()
+    entries, _ = market.feed_server.subscriptions(sock)
+    assert entries == {("SBIN", "NSE", 1)}
+    market.add_instrument("NOPE", "NSE")
+    market.trade("NOPE", "NSE", 10.0)
+    assert ticks == []
+
+
+def test_the_proxy_answers_a_refused_subscription_in_the_adapters_words(market):
+    nope = {"exchange": "NSE", "symbol": "NOPE"}
+    frame = {"action": "subscribe", "symbols": [nope, SBIN], "mode": 1, "depth": 5}
+
+    reply = market.feed_server.reply_to(frame)
+
+    assert reply["status"] == "partial"
+    assert reply["subscriptions"][0] == {
+        "symbol": "NOPE",
+        "exchange": "NSE",
+        "status": "error",
+        "message": "Token not found for NOPE on NSE",
+        "broker": BROKER,
+    }
+
+
+def test_ticks_and_updates_reach_every_subscribed_socket(market):
+    # websocket_proxy/server.py:2102-2147 fans a tick out to every subscriber.
+    first, second = market.client(), market.client()
+    ticks, updates = [], []
+    for client in (first, second):
+        assert client.connect() is True
+        client.subscribe_ltp([SBIN], ticks.append)
+        client.subscribe_orders(updates.append)
+
+    market.trade("SBIN", "NSE", 812.0)
+    buy(first)
+
+    assert [tick["data"]["ltp"] for tick in ticks] == [812.0, 812.0]
+    assert [u["order_status"] for u in updates] == ["open", "open", "complete", "complete"]
+
+
 def test_a_trade_sends_no_tick_for_an_instrument_not_subscribed(connected, market):
     ticks = []
     connected.subscribe_ltp([SBIN], ticks.append)
@@ -155,12 +232,45 @@ def test_a_live_fill_is_announced_open_then_complete(connected, market):
     }
 
 
-def test_a_live_stop_is_announced_trigger_pending_with_an_underscore(connected, market):
+def test_a_live_stop_is_announced_trigger_pending_with_a_space(connected, market):
+    # broker/zerodha/streaming/zerodha_order_adapter.py:72 maps "TRIGGER PENDING" so.
     market.trade("SBIN", "NSE", 812.0)
 
     buy(connected, action="SELL", price_type="SL-M", trigger_price=800.0)
 
-    assert [u["order_status"] for u in connected.updates] == ["trigger_pending"]
+    assert [u["order_status"] for u in connected.updates] == ["trigger pending"]
+
+
+def test_a_live_modify_is_announced_open_even_for_a_resting_stop(connected, market):
+    # The broker reports a modification as UPDATE, read as open (order_data.py:39).
+    market.trade("SBIN", "NSE", 812.0)
+    order_id = buy(connected, action="SELL", price_type="SL-M", trigger_price=800.0)["orderid"]
+
+    connected.modifyorder(
+        order_id=order_id, strategy=STRATEGY, symbol="SBIN", action="SELL", exchange="NSE",
+        price_type="SL-M", product="MIS", quantity=10, price=0, trigger_price=799.0,
+    )  # fmt: skip
+
+    assert [u["order_status"] for u in connected.updates] == ["trigger pending", "open"]
+    assert market.orders()[0].status == "trigger pending"
+
+
+def test_a_sandbox_refusal_at_placement_is_announced_rejected_only(make_fake_openalgo):
+    # sandbox/order_manager.py:666-668 publishes the rejection, nothing before it.
+    fake = make_fake_openalgo(analyzer=True)
+    fake.add_instrument("SBIN", "NSE")
+    fake.trade("SBIN", "NSE", 812.0)
+    client = fake.client()
+    client.connect()
+    updates = []
+    client.subscribe_orders(updates.append)
+    fake.reject_next("Insufficient holdings", at_placement=True)
+
+    buy(client, action="SELL")
+
+    assert [(u["order_status"], u["rejection_reason"]) for u in updates] == [
+        ("rejected", "Insufficient holdings")
+    ]
 
 
 def test_a_live_part_fill_is_announced_with_its_filled_and_pending_units(connected, market):
@@ -300,6 +410,25 @@ def test_the_sandbox_reports_every_fill_at_its_price(make_fake_openalgo):
 
 
 # -- the market-data feed's faults --------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("lose", "restore"),
+    [("expire_session", "restore_session"), ("revoke_login", "restore_login")],
+    ids=["expired", "revoked"],
+)
+def test_a_lost_broker_login_stops_the_ticks_until_restored(connected, market, lose, restore):
+    ticks = []
+    connected.subscribe_ltp([SBIN], ticks.append)
+    getattr(market.faults, lose)()
+    market.trade("SBIN", "NSE", 812.0)
+    assert ticks == []
+
+    getattr(market.faults, restore)()
+    market.trade("SBIN", "NSE", 813.0)
+
+    assert [tick["data"]["ltp"] for tick in ticks] == [813.0]
+    assert market.log.of("tick")[0].detail["reason"] == "broker login gone"
 
 
 def test_a_dead_feed_sends_no_ticks_while_the_connection_stays_up(connected, market):

@@ -151,14 +151,35 @@ def test_quotes_carry_the_best_bid_and_ask_given_with_the_trade(fake_openalgo):
     assert (data["bid"], data["ask"]) == (815.4, 815.6)
 
 
-def test_quotes_of_an_unknown_instrument_fail_in_the_brokers_words(fake_openalgo):
+UNKNOWN_NOPE = {
+    "status": "error",
+    "message": "Symbol 'NOPE' not found for exchange 'NSE'. Please verify the symbol name "
+    "and ensure master contracts are downloaded.",
+}
+
+
+def test_quotes_of_an_unknown_instrument_are_the_servers_400(fake_openalgo):
+    # services/quotes_service.py:118-120, before the broker is asked.
     answer = fake_openalgo.client().quotes(symbol="NOPE", exchange="NSE")
 
-    assert answer["code"] == 500
-    assert http_body(answer) == {
-        "status": "error",
-        "message": "Error fetching quotes: Could not find exchange token for NSE:NOPE",
-    }
+    assert (answer["code"], http_body(answer)) == (400, UNKNOWN_NOPE)
+
+
+def test_history_of_an_unknown_instrument_is_the_servers_400(fake_openalgo):
+    # services/history_service.py:132-134, before the broker is asked.
+    answer = fake_openalgo.client().history(
+        symbol="NOPE", exchange="NSE", interval="1m", start_date="2026-11-16", end_date="2026-11-16"
+    )
+
+    assert (answer["code"], http_body(answer)) == (400, UNKNOWN_NOPE)
+
+
+def test_an_unknown_instrument_is_refused_before_the_expired_login_is_found(fake_openalgo):
+    fake_openalgo.faults.expire_session()
+
+    answer = fake_openalgo.client().quotes(symbol="NOPE", exchange="NSE")
+
+    assert (answer["code"], http_body(answer)) == (400, UNKNOWN_NOPE)
 
 
 def test_history_gives_one_minute_candles_stamped_at_their_start_in_ist(fake_openalgo):

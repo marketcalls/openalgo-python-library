@@ -9,8 +9,6 @@ import pytest
 from fake_openalgo import USERNAME
 from fake_openalgo.fixtures import *  # noqa: F403
 
-from openalgo.backtest._live._types import Mode
-
 STRATEGY = "ema_cross"
 #: The SDK's own answers when no answer came back (openalgo/orders.py, _make_request).
 SDK_TIMEOUT = {
@@ -23,6 +21,13 @@ SDK_DROPPED = {
     "message": "HTTP error occurred: Server disconnected without sending a response.",
     "error_type": "http_error",
 }
+SDK_REFUSED = {
+    "status": "error",
+    "message": "Failed to connect to the server. Please check if the server is running.",
+    "error_type": "connection_error",
+}
+NS = 1_000_000_000
+INVALID_KEY = '{"message":"Invalid openalgo apikey","status":"error"}\n'
 UNANSWERED = (
     "The connection to the broker dropped after the order was sent, so it may have been "
     "placed. Check the order book before placing it again."
@@ -58,6 +63,38 @@ def test_a_timeout_is_the_sdks_timeout_answer_and_places_nothing(broker):
 
     assert answer == SDK_TIMEOUT
     assert broker.orders() == []
+
+
+def test_a_timeout_costs_the_clients_read_timeout_on_the_clock(broker):
+    before = broker.clock.now()
+    broker.faults.timeout("orderbook")
+
+    broker.client().orderbook()
+
+    # The SDK waits its `timeout`, 120 seconds by default (openalgo/base.py).
+    assert broker.clock.now() - before == 120 * NS
+
+
+def test_a_slow_answer_past_the_read_timeout_is_a_timeout_after_the_work(broker):
+    before = broker.clock.now()
+    broker.faults.slow("placeorder", 600)
+
+    answer = buy(broker.client())
+
+    assert answer == SDK_TIMEOUT
+    assert broker.clock.now() - before == 120 * NS
+    [order] = broker.orders()
+    assert order.status == "complete"
+
+
+def test_a_refused_connection_is_the_sdks_connection_error_and_reaches_nothing(broker):
+    broker.faults.refuse_connection("placeorder")
+
+    answer = buy(broker.client())
+
+    assert answer == SDK_REFUSED
+    assert broker.orders() == []
+    assert broker.log.faults() == ["refused_connection"]
 
 
 def test_a_timeout_after_the_broker_took_the_order_leaves_it_placed(broker):
@@ -142,6 +179,13 @@ def test_a_lost_answer_to_a_modify_is_the_servers_500_and_the_change_is_made(bro
 def test_only_an_order_write_can_lose_the_brokers_answer(broker):
     with pytest.raises(ValueError, match="lose a broker's answer"):
         broker.faults.lose_answer("orderbook")
+
+
+def test_the_sandbox_has_no_brokers_answer_to_lose(make_fake_openalgo):
+    fake = make_fake_openalgo(analyzer=True)
+
+    with pytest.raises(ValueError, match="sends nothing to a broker"):
+        fake.faults.lose_answer("placeorder")
 
 
 def test_a_slow_answer_moves_the_clock_on_before_answering(broker):
@@ -236,25 +280,94 @@ def test_an_expired_login_fails_quotes_in_the_brokers_words(broker):
     assert answer == sdk_http_error(500, f'{{"message":"{message}","status":"error"}}\n')
 
 
-def test_an_expired_login_refuses_orders_and_fails_the_books(broker):
+def test_an_expired_login_refuses_a_placement_in_the_brokers_words(broker):
     broker.faults.expire_session()
-    client = broker.client()
 
-    assert buy(client)["code"] == 403
-    assert client.orderbook()["code"] == 500
+    answer = buy(broker.client())
+
+    assert answer == sdk_http_error(403, f'{{"message":"{EXPIRED}","status":"error"}}\n')
     assert broker.orders() == []
 
 
-def test_an_expired_login_leaves_the_sandboxs_own_books_alone(make_fake_openalgo):
+@pytest.mark.parametrize(
+    ("book", "path"),
+    [("orderbook", "/orders"), ("tradebook", "/trades"), ("positionbook", "/portfolio/positions")],
+)
+def test_an_expired_login_fails_a_book_with_the_http_clients_error(broker, book, path):
+    # broker/zerodha/api/order_api.py:76-91 re-raises; services/orderbook_service.py:182-184.
+    broker.faults.expire_session()
+
+    answer = getattr(broker.client(), book)()
+
+    words = f"Client error '403 Forbidden' for url 'https://broker.invalid{path}'"
+    assert answer == sdk_http_error(500, f'{{"message":"{words}","status":"error"}}\n')
+
+
+@pytest.fixture
+def sandbox(make_fake_openalgo):
+    """The fake in sandbox mode, SBIN known and last traded at 812.0."""
     fake = make_fake_openalgo(analyzer=True)
     fake.add_instrument("SBIN", "NSE")
     fake.trade("SBIN", "NSE", 812.0)
-    fake.faults.expire_session()
+    return fake
 
-    answer = buy(fake.client())
+
+def test_an_expired_login_refuses_a_sandbox_market_order_with_no_position(sandbox):
+    # sandbox/order_manager.py:306, 338-347: no quote and no position to price it from.
+    before = sandbox.clock.now()
+    sandbox.faults.expire_session()
+
+    answer = buy(sandbox.client())
+
+    assert answer["code"] == 400
+    assert "Cannot place MARKET order for SBIN - unable to fetch current price" in answer["message"]
+    assert sandbox.orders() == []
+    # Three tries for a quote, 0.3 and 0.6 seconds apart (order_manager.py:319-320).
+    assert sandbox.clock.now() - before == 900_000_000
+
+
+def test_an_expired_login_takes_a_sandbox_market_order_with_a_position_unfilled(sandbox):
+    # sandbox/order_manager.py:323-333: priced from the position's last price, no fill.
+    client = sandbox.client()
+    buy(client)
+    sandbox.faults.expire_session()
+
+    answer = buy(client, quantity=5)
 
     assert (answer["status"], answer["mode"]) == ("success", "analyze")
-    assert len(fake.orders(Mode.SANDBOX)) == 1
+    assert [order.status for order in sandbox.orders()] == ["complete", "open"]
+    assert len(sandbox.fills()) == 1
+
+
+def test_an_expired_login_stops_resting_sandbox_orders_filling_until_restored(sandbox):
+    client = sandbox.client()
+    order_id = client.placeorder(
+        strategy=STRATEGY, symbol="SBIN", action="BUY", exchange="NSE",
+        price_type="LIMIT", product="MIS", quantity=10, price=800.0,
+    )["orderid"]  # fmt: skip
+    sandbox.faults.expire_session()
+
+    sandbox.trade("SBIN", "NSE", 799.0)
+    assert sandbox.orders()[0].status == "open"
+    sandbox.faults.restore_session()
+    sandbox.trade("SBIN", "NSE", 799.0)
+
+    [order] = sandbox.orders()
+    assert (order.order_id, order.status, order.average_price) == (order_id, "complete", 800.0)
+
+
+def test_an_expired_login_leaves_the_sandboxs_books_readable(sandbox):
+    client = sandbox.client()
+    buy(client)
+    sandbox.faults.expire_session()
+
+    answer = client.orderbook()
+
+    assert (answer["status"], answer["mode"], len(answer["data"]["orders"])) == (
+        "success",
+        "analyze",
+        1,
+    )
 
 
 def test_a_restored_login_answers_funds_again(broker):
@@ -263,3 +376,92 @@ def test_a_restored_login_answers_funds_again(broker):
 
     assert broker.client().funds()["data"]["availablecash"] == "250000.00"
     assert broker.log.faults() == ["session_expired", "session_restored"]
+
+
+# -- OpenAlgo revokes the broker's login ---------------------------------------------------
+
+
+@pytest.mark.parametrize("call", ["ping", "analyzerstatus", "funds", "orderbook", "intervals"])
+def test_a_revoked_login_refuses_every_call_with_403(broker, call):
+    # app.py:572-583 revokes the token; get_auth_token_broker then finds none.
+    broker.faults.revoke_login()
+
+    answer = getattr(broker.client(), call)()
+
+    assert answer == sdk_http_error(403, INVALID_KEY)
+
+
+def test_a_revoked_login_refuses_a_placement_and_places_nothing(broker):
+    broker.faults.revoke_login()
+
+    assert buy(broker.client())["code"] == 403
+    assert broker.orders() == []
+
+
+def test_a_revoked_login_leaves_telegram_notify_answering(broker):
+    # restx_api/telegram_bot.py, SendNotification, checks the API key alone.
+    broker.faults.revoke_login()
+
+    answer = broker.client().telegram(username=USERNAME, message="login lost")
+
+    assert answer["status"] == "success"
+
+
+def test_a_restored_login_answers_ping_again(broker):
+    broker.faults.revoke_login()
+    broker.faults.restore_login()
+
+    assert broker.client().ping()["status"] == "success"
+    assert broker.log.faults() == ["login_revoked", "login_restored"]
+
+
+# -- the server's rate limits, on the manual clock ------------------------------------------
+
+
+def test_the_eleventh_call_of_a_route_within_a_second_is_refused_with_429(broker):
+    # limiter.py's moving window; restx_api/orderbook.py: "10 per second".
+    client = broker.client()
+
+    answers = [client.orderbook() for _ in range(11)]
+
+    assert [a["status"] for a in answers[:10]] == ["success"] * 10
+    assert answers[10] == sdk_http_error(429, '{"message": "10 per 1 second"}\n')
+
+
+def test_a_route_takes_calls_again_once_the_window_has_passed(broker):
+    client = broker.client()
+    for _ in range(10):
+        client.orderbook()
+
+    broker.clock.advance(1.001)
+
+    assert client.orderbook()["status"] == "success"
+
+
+def test_each_route_has_its_own_rate_limit(broker):
+    client = broker.client()
+    for _ in range(10):
+        client.orderbook()
+
+    assert client.tradebook()["status"] == "success"
+
+
+def test_a_refused_call_does_not_count_against_the_window(broker):
+    client = broker.client()
+    for _ in range(10):
+        client.orderbook()
+    client.orderbook()
+    broker.clock.advance(1.001)
+
+    answers = [client.orderbook() for _ in range(10)]
+
+    assert [a["status"] for a in answers] == ["success"] * 10
+
+
+def test_telegram_notify_takes_thirty_calls_a_minute(broker):
+    client = broker.client()
+
+    answers = [client.telegram(username=USERNAME, message=f"m{i}") for i in range(31)]
+
+    assert [a["status"] for a in answers[:30]] == ["success"] * 30
+    assert answers[30] == sdk_http_error(429, '{"message": "30 per 1 minute"}\n')

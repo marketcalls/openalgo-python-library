@@ -15,10 +15,13 @@ it write them, and the server's own words in them.
 
 from __future__ import annotations
 
+import http
 import json
 from typing import Any
 
 import httpx
+
+from .limiter import limit_of
 
 #: services/*: an API key the server does not know, or a session it revoked.
 INVALID_KEY = "Invalid openalgo apikey"
@@ -49,6 +52,32 @@ SEMI_AUTO_NO_CANCEL = (
 #: A broker's refusal of a token it no longer honours (an expired or replaced login),
 #: in the words of the reference broker (broker/zerodha/api/data.py, funds.py).
 EXPIRED_TOKEN = "Incorrect `api_key` or `access_token`."
+#: Where the broker's API stands in the client errors the server passes on: the real
+#: text names the reference broker's own API address.
+BROKER_API = "https://broker.invalid"
+#: The paths of the reference broker's books (broker/zerodha/api/order_api.py:93-102).
+BOOK_PATHS = {"orders": "/orders", "trades": "/trades", "positions": "/portfolio/positions"}
+#: The reference broker's cancel refuses through its HTTP client's error, wrapped
+#: (broker/zerodha/api/order_api.py:520, 536); the server answers it HTTP 500.
+CANCEL_REFUSED = "Failed to cancel order: "
+#: The words of quotes and history for an instrument not in the master contract
+#: (services/quotes_service.py and history_service.py, validate_symbol_exchange).
+UNKNOWN_SYMBOL = (
+    "Symbol '{symbol}' not found for exchange '{exchange}'. Please verify the symbol name "
+    "and ensure master contracts are downloaded."
+)
+#: The client's names of HTTP error classes (its `raise_for_status`).
+_ERROR_CLASSES = {4: "Client error", 5: "Server error"}
+
+
+def broker_http_error(status: int, path: str) -> str:
+    """The first line of the client's words for a broker's HTTP error on `path`, which
+    the server passes on (broker/zerodha/api/order_api.py:76-91 re-raises it for the
+    books; services/orderbook_service.py:182-184 answers `str(error)`)."""
+    phrase = http.HTTPStatus(status).phrase
+    return f"{_ERROR_CLASSES[status // 100]} '{status} {phrase}' for url '{BROKER_API}{path}'"
+
+
 #: A gateway's JSON body for a request it gave up on.
 GATEWAY_TIMEOUT_BODY = {"message": "Endpoint request timed out"}
 #: The HTML page a gateway answers a 502 with.
@@ -56,14 +85,11 @@ BAD_GATEWAY_PAGE = (
     "<html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n"
     "<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n"
 )
-#: The rate limits of the REST routes, as the limiter describes them: the order and data
-#: routes ("10 per second", restx_api/place_order.py and the others) and the Telegram
-#: routes ("30 per minute", restx_api/telegram_bot.py).
-DEFAULT_LIMIT = "10 per 1 second"
-ROUTE_LIMITS = {"telegram/notify": "30 per 1 minute"}
-#: The client's words when a request times out or the connection drops (httpx).
+#: The client's words when a request times out, the connection drops, or no connection
+#: can be made (httpx).
 TIMEOUT_WORDS = "timed out"
 DROPPED_WORDS = "Server disconnected without sending a response."
+REFUSED_WORDS = "[Errno 111] Connection refused"
 
 
 class Unmodelled(Exception):
@@ -82,7 +108,7 @@ def service(body: dict[str, Any], status: int) -> tuple[int, str, str]:
 
 def rate_limited(endpoint: str) -> tuple[int, str, str]:
     """The limiter's 429 on `endpoint`."""
-    body = {"message": ROUTE_LIMITS.get(endpoint, DEFAULT_LIMIT)}
+    body = {"message": limit_of(endpoint).words}
     return 429, "application/json", json.dumps(body) + "\n"
 
 
@@ -105,23 +131,27 @@ def response(answer: tuple[int, str, str], date: str) -> httpx.Response:
 
 __all__ = [
     "BAD_GATEWAY_PAGE",
+    "BOOK_PATHS",
+    "BROKER_API",
     "CANCEL_FAILED",
-    "DEFAULT_LIMIT",
+    "CANCEL_REFUSED",
     "DROPPED_WORDS",
     "EXPIRED_TOKEN",
     "GATEWAY_TIMEOUT_BODY",
     "INVALID_KEY",
     "MODIFY_FAILED",
     "QUEUED_FOR_APPROVAL",
-    "ROUTE_LIMITS",
+    "REFUSED_WORDS",
     "SANDBOX_INVALID_KEY",
     "SEMI_AUTO_MODE",
     "SEMI_AUTO_NO_CANCEL",
     "SEMI_AUTO_NO_MODIFY",
     "TIMEOUT_WORDS",
     "UNANSWERED_ORDER_MESSAGE",
+    "UNKNOWN_SYMBOL",
     "Unmodelled",
     "bad_gateway_page",
+    "broker_http_error",
     "gateway_json",
     "rate_limited",
     "response",
