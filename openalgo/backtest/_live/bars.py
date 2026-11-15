@@ -6,8 +6,8 @@ at their close, the check against the broker's candles, and the health of the fe
   session is built on (`Engine::new_session`). Slices open at IST midnight plus the
   exchange's regular open plus whole intervals, so the first one may open before the
   open of a special session, and the last is cut at the session close. A bar is the
-  base bar of the slice that opens at its `ts_open_ns` (`Engine::add_bar`), and is
-  given out once the clock has passed its `ts_close_ns`, the slice's close.
+  base bar of the slice that opens at its `ts_open_ns` (`Engine::add_bar`); `close_due`
+  says which slices it closed, so the session releases exactly those to the kernel.
 - `candle_bar` reads a broker candle row as a bar, and `CandleCheck` compares a
   tick-built bar with the broker's candle of the same slice: the differences go to the
   drift log, and indicators continue from the candle when it covers the same slice.
@@ -25,6 +25,7 @@ import datetime as dt
 import logging
 import math
 import numbers
+from dataclasses import dataclass
 
 import pandas as pd
 
@@ -32,6 +33,7 @@ from .._calendar_convert import IST, DateLike, from_day, to_day
 from .._layout import NANOS_PER_SECOND
 from ..calendar import NO_BAR, Calendar, default_calendar
 from ..errors import CalendarError, ConfigError
+from ..reference.symbols import INDEX_EXCHANGES
 from ._bars_candle import (
     CANDLE_SOURCE,
     TICKS_SOURCE,
@@ -47,14 +49,25 @@ from ._types import LOGGER_NAME, LiveBar, Tick
 #: The interval of the bars when none is given: one minute, the interval of the broker
 #: candles the bars are checked against (08-live-trading section 5, rule 2).
 DEFAULT_INTERVAL_NS = 60 * NANOS_PER_SECOND
-#: Seconds after a slice's close before its bars are given out, so that ticks of the
-#: slice still on their way are counted in it.
+#: Seconds after a slice's close during which a tick of the slice still on its way is
+#: counted in it; a tick received later is late.
 DEFAULT_CLOSE_GRACE_S = 1.0
 #: How far a tick's exchange time may be from the instant it was received and still be
-#: used to place it: beyond it, the time is stale or in another unit or zone.
+#: used to place it.
 EVENT_TIME_TOLERANCE_NS = 5 * NANOS_PER_SECOND
+_TOLERANCE_S = EVENT_TIME_TOLERANCE_NS // NANOS_PER_SECOND
 
 logger = logging.getLogger(LOGGER_NAME)
+
+
+@dataclass(frozen=True)
+class ClosedSlices:
+    """What one `close_due` call closed: `slices`, the (open, close) of every slice it
+    closed in order (UTC nanoseconds), which the session releases to the kernel, and
+    `bars`, the bars of their trades in time order, symbols in registration order."""
+
+    slices: tuple[tuple[int, int], ...]
+    bars: tuple[LiveBar, ...]
 
 
 def _usable(tick: Tick) -> bool:
@@ -95,24 +108,29 @@ class TickBarBuilder:
     while the feed gives none) and `source` is "ticks". A slice without a trade makes no
     bar for its symbol, as a backtest runs a missing bar.
 
-    A tick is placed by `ts_event_ns` when that time is plausible: within
-    `EVENT_TIME_TOLERANCE_NS` of `ts_recv_ns` and on the session's IST day. Otherwise it
-    is placed by `ts_recv_ns` and counted (`event_time_rejected`), with one warning per
-    symbol. A slice closes only by the clock (`close_due`), `close_grace_s` after its
-    close; until then a tick for it is taken whatever order it arrives in, so a recorded
-    replay driven by receive times gives the same bars.
+    A tick is placed by `ts_event_ns` when it is within `EVENT_TIME_TOLERANCE_NS` of
+    `ts_recv_ns` and on the session's IST day. An older time on that day (the last trade
+    of an illiquid stock, the pre-open's) is simply placed by `ts_recv_ns`; any other
+    time (ahead of receipt, 0, milliseconds, another day) is too, and is counted
+    (`event_time_rejected`) with one warning per symbol.
+
+    A tick is late when it was received at or after its slice's close plus
+    `close_grace_s`: it is dropped and, when it was a trade, counted (`late_ticks`) with
+    one warning per symbol (the local clock may be ahead of the exchange). The session
+    loop hands over every tick received up to `now` before it calls `close_due(now)`, so
+    the bars depend on the ticks' receive times only, and a replay driven by receive
+    times gives the live bars.
 
     `watching_from_ns` is the instant the session started watching the feed. From the
-    session open or earlier, every slice is whole and a symbol's volume counts from 0.
-    After a start in the middle of the session, the slice in which watching began (and
-    any before it) makes no bar: its ticks only seed each symbol's volume level, last
-    trade time and last price, and bars start with the next whole slice.
+    session open or earlier, every slice is whole and a symbol's volume counts from 0; a
+    tick before the open seeds its symbol's last known LTP. After a start in the middle
+    of the session, the slice in which watching began (and any before it) makes no bar:
+    its ticks only seed each symbol's volume level and last known LTP. `resume` does the
+    same after a feed outage.
 
-    Ticks outside the session are ignored and counted (`outside_ticks`); a tick for a
-    slice already closed is dropped and counted (`late_ticks`); a tick with an LTP that
-    is not a positive number, or a cumulative volume that is negative or not a number,
-    is dropped and counted (`invalid_ticks`). A symbol is registered by its first tick
-    taken; bars given out together come in time order, symbols in registration order.
+    Ticks outside the session are counted (`outside_ticks`); a tick with an LTP that is
+    not a positive number, or a cumulative volume that is negative or not a number, is
+    dropped and counted (`invalid_ticks`). A symbol is registered by its first tick.
 
     `exchange` is an OpenAlgo exchange code and `day` an IST date (`datetime.date` or ISO
     string); `calendar` is the package default calendar when None. Raises ConfigError
@@ -141,28 +159,25 @@ class TickBarBuilder:
                 f"{exchange} has no session on {day}: live bars are built on a trading day "
                 "only; check the date, or add the session to the calendar"
             )
-        base = f"{interval_ns // NANOS_PER_SECOND}s"
-        grid = calendar.union_grid([exchange], day, day, base=base)
+        grid = calendar.union_grid([exchange], day, day, base=f"{interval_ns // NANOS_PER_SECOND}s")
         closes = grid[f"close_{grid.attrs['exchanges'][0]}"].to_numpy()
         has_bar = closes != NO_BAR
         self._exchange = exchange
+        self._index = exchange in INDEX_EXCHANGES
         self._session = session
         self._day_ns = _ist_day_bounds(day)
         self._opens: list[int] = grid["ts"].to_numpy()[has_bar].tolist()
         self._closes: list[int] = closes[has_bar].tolist()
         self._from_open = watching_from_ns <= session[0]
-        self._watch_start_ns = max(session[0], watching_from_ns)
-        # Slices before this one were not watched whole: their ticks only seed.
-        self._first_whole = (
-            0 if self._from_open else bisect.bisect_left(self._opens, watching_from_ns)
-        )
+        # The last slice that only seeds: the one watching began in, and any before it.
+        self._seed_through = -1
+        if not self._from_open:
+            self._seed_through = bisect.bisect_left(self._opens, watching_from_ns) - 1
         self._symbols: dict[str, SymbolTrades] = {}
-        # Slices whose close plus the grace the clock has passed: closed for every symbol.
         self._due_slots = 0
         self._arrivals = 0
         self._late = self._outside = self._invalid = self._event_rejected = 0
-        self._noted_event: set[str] = set()
-        self._noted_outside: set[str] = set()
+        self._noted: set[tuple[str, str]] = set()
 
     @property
     def exchange(self) -> str:
@@ -182,12 +197,13 @@ class TickBarBuilder:
 
     @property
     def late_ticks(self) -> int:
-        """Ticks dropped because their slice had already closed."""
+        """Trades dropped because they were received after their slice's close plus the
+        grace."""
         return self._late
 
     @property
     def outside_ticks(self) -> int:
-        """Ticks ignored because they fall outside the session."""
+        """Ticks outside the session."""
         return self._outside
 
     @property
@@ -197,11 +213,12 @@ class TickBarBuilder:
 
     @property
     def event_time_rejected(self) -> int:
-        """Ticks placed by their receive time because their event time was implausible."""
+        """Ticks whose event time was implausible (ahead of receipt, 0, milliseconds or
+        another day), placed by their receive time."""
         return self._event_rejected
 
     def on_tick(self, tick: Tick) -> None:
-        """Hold a tick for the slice its time falls in; bars come from `close_due`.
+        """Take a tick for the slice its time falls in; bars come from `close_due`.
 
         Raises ConfigError for a tick of another exchange.
         """
@@ -214,67 +231,101 @@ class TickBarBuilder:
             self._invalid += 1
             logger.debug("tick dropped, unusable LTP or volume: %r", tick)
             return
-        at_ns, trade_ns, time_rejected = self._place(tick)
+        at_ns = self._place(tick)
+        symbol = self._symbol(tick.symbol)
+        ltp = float(tick.ltp)
+        volume = float(tick.volume) if tick.volume else None
         if not self._session[0] <= at_ns < self._session[1]:
             self._outside += 1
-            if tick.symbol not in self._noted_outside:
-                self._noted_outside.add(tick.symbol)
-                logger.debug("%s ticks outside the session are ignored: %r", tick.symbol, tick)
+            self._note_once("outside", tick, logging.DEBUG, "ticks outside the session")
+            if at_ns < self._session[0]:
+                symbol.seed(at_ns, ltp, volume)
             return
         slot = bisect.bisect_right(self._opens, at_ns) - 1
-        if slot < self._due_slots:
-            self._late += 1
-            logger.debug("late tick dropped: %r", tick)
+        if tick.ts_recv_ns >= self._closes[slot] + self._grace_ns or slot < self._due_slots:
+            if symbol.late_trade(ltp, volume):
+                self._late += 1
+                self._note_once(
+                    "late",
+                    tick,
+                    logging.WARNING,
+                    "trades received after their slice closed (plus close_grace_s) are "
+                    "dropped; the local clock may be ahead of the exchange",
+                )
             return
-        symbol = self._symbols.get(tick.symbol)
-        if symbol is None:
-            symbol = SymbolTrades(watch_start_ns=self._watch_start_ns, from_open=self._from_open)
-            self._symbols[tick.symbol] = symbol
-        volume = float(tick.volume) if tick.volume else None
         self._arrivals += 1
-        placed = PlacedTick(at_ns, self._arrivals, float(tick.ltp), volume, trade_ns, time_rejected)
-        symbol.add(slot, placed)
+        symbol.add(slot, PlacedTick(at_ns, tick.ts_recv_ns, self._arrivals, ltp, volume))
 
-    def close_due(self, now_ns: int) -> list[LiveBar]:
+    def close_due(self, now_ns: int) -> ClosedSlices:
         """Close every slice whose close plus the grace is at or before `now_ns` (UTC
-        nanoseconds) and give out the bars of its trades. From then on a tick for a
-        closed slice is late."""
+        nanoseconds) and give out the bars of its trades. The loop hands over every tick
+        received up to `now_ns` first."""
+        first = self._due_slots
         due = bisect.bisect_right(self._closes, now_ns - self._grace_ns)
-        self._due_slots = max(self._due_slots, due)
+        self._due_slots = max(first, due)
         bars = [
             self._bar(name, slot, trades)
             for name, symbol in self._symbols.items()
             for slot, trades in symbol.close_before(self._due_slots)
-            if slot >= self._first_whole
+            if slot > self._seed_through
         ]
         bars.sort(key=lambda bar: bar.ts_open_ns)
-        return bars
-
-    def _place(self, tick: Tick) -> tuple[int, int | None, bool]:
-        """(the instant the tick is placed at, its plausible trade time or None, whether
-        it carried a trade time other than 0 that is not plausible)."""
-        event_ns = tick.ts_event_ns
-        if event_ns is None:
-            return tick.ts_recv_ns, None, False
-        near = abs(event_ns - tick.ts_recv_ns) <= EVENT_TIME_TOLERANCE_NS
-        if near and self._day_ns[0] <= event_ns < self._day_ns[1]:
-            return event_ns, event_ns, False
-        self._event_rejected += 1
-        if tick.symbol not in self._noted_event:
-            self._noted_event.add(tick.symbol)
-            logger.warning(
-                "%s:%s: the feed's event time %d is not within %d s of the receive time %d "
-                "on the session's day (stale, or in another unit or zone); its ticks with "
-                "such times are placed by their receive time",
-                tick.exchange,
-                tick.symbol,
-                event_ns,
-                EVENT_TIME_TOLERANCE_NS // NANOS_PER_SECOND,
-                tick.ts_recv_ns,
+        closed = tuple(
+            zip(
+                self._opens[first : self._due_slots],
+                self._closes[first : self._due_slots],
+                strict=True,
             )
-        # A 0 is a missing time, as a 0 volume is a missing count: counted and warned
-        # above, but the tick is judged as one that carries no trade time.
-        return tick.ts_recv_ns, None, event_ns != 0
+        )
+        return ClosedSlices(closed, tuple(bars))
+
+    def resume(self, now_ns: int) -> None:
+        """The feed resumed at `now_ns` (UTC nanoseconds) after an outage. Every slice
+        begun by then and not yet closed only seeds, and every symbol's volume level and
+        last known LTP start again, as after a start in the middle of the session, so
+        the outage's volume never lands on one bar. Before the open or after the close it
+        changes nothing."""
+        if not self._session[0] <= now_ns < self._session[1]:
+            return
+        self._seed_through = max(self._seed_through, bisect.bisect_right(self._opens, now_ns) - 1)
+        self._from_open = False
+        for symbol in self._symbols.values():
+            symbol.restart()
+
+    def _symbol(self, name: str) -> SymbolTrades:
+        symbol = self._symbols.get(name)
+        if symbol is None:
+            symbol = SymbolTrades(index=self._index, from_open=self._from_open)
+            self._symbols[name] = symbol
+        return symbol
+
+    def _place(self, tick: Tick) -> int:
+        """The instant a tick is placed at: its event time when plausible, else its
+        receive time."""
+        event_ns, recv_ns = tick.ts_event_ns, tick.ts_recv_ns
+        if event_ns is None:
+            return recv_ns
+        on_day = self._day_ns[0] <= event_ns < self._day_ns[1]
+        if on_day and abs(event_ns - recv_ns) <= EVENT_TIME_TOLERANCE_NS:
+            return event_ns
+        if on_day and event_ns < recv_ns:
+            return recv_ns
+        self._event_rejected += 1
+        self._note_once(
+            "event",
+            tick,
+            logging.WARNING,
+            f"event times ahead of receipt by more than {_TOLERANCE_S} s, 0, in "
+            "milliseconds or of another day are not used; such ticks are placed by their "
+            "receive time",
+        )
+        return recv_ns
+
+    def _note_once(self, kind: str, tick: Tick, level: int, text: str) -> None:
+        """Log `text` for the tick's symbol the first time `kind` happens to it."""
+        if (kind, tick.symbol) not in self._noted:
+            self._noted.add((kind, tick.symbol))
+            logger.log(level, "%s:%s: %s (first: %r)", tick.exchange, tick.symbol, text, tick)
 
     def _bar(self, symbol: str, slot: int, trades: SliceTrades) -> LiveBar:
         return LiveBar(
@@ -301,6 +352,7 @@ __all__ = [
     "TICKS_SOURCE",
     "BarDrift",
     "CandleCheck",
+    "ClosedSlices",
     "FeedHealth",
     "TickBarBuilder",
     "candle_bar",

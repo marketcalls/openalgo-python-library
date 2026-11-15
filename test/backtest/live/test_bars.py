@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import math
+from dataclasses import FrozenInstanceError
 
 import pytest
 
@@ -70,8 +71,13 @@ def run(builder: TickBarBuilder, events: list) -> list[LiveBar]:
         if isinstance(event, Tick):
             builder.on_tick(event)
         else:
-            bars += builder.close_due(ist(event))
+            bars += builder.close_due(ist(event)).bars
     return bars
+
+
+def due(builder: TickBarBuilder, clock: str, day: dt.date = MONDAY) -> list[LiveBar]:
+    """The bars `close_due` gives out at `clock` IST."""
+    return list(builder.close_due(ist(clock, day)).bars)
 
 
 def builder_at(day: dt.date = MONDAY, **options) -> TickBarBuilder:
@@ -126,6 +132,41 @@ def test_a_special_session_off_the_lattice_starts_with_the_slice_that_holds_its_
     closes = [ist(clock, SATURDAY) for clock in ("18:30", "18:45", "19:00", "19:15", "19:20")]
     assert builder.slices == tuple(zip(opens, closes, strict=True))
     assert builder.session == (ist("18:20", SATURDAY), ist("19:20", SATURDAY))
+
+
+def test_the_muhurat_session_of_the_built_in_calendar_starts_with_the_slice_holding_its_open():
+    muhurat = dt.date(2026, 11, 8)
+
+    builder = TickBarBuilder(
+        "NSE", muhurat, watching_from_ns=ist("14:00", muhurat), interval_ns=15 * MINUTE_NS
+    )
+
+    assert builder.session == (ist("14:20", muhurat), ist("15:30", muhurat))
+    opens = [ist(clock, muhurat) for clock in ("14:15", "14:30", "14:45", "15:00", "15:15")]
+    closes = [ist(clock, muhurat) for clock in ("14:30", "14:45", "15:00", "15:15", "15:30")]
+    assert builder.slices == tuple(zip(opens, closes, strict=True))
+    builder.on_tick(Tick("SBIN", "NSE", 800.0, ist("14:21", muhurat), volume=50))
+    assert [(b.ts_open_ns, b.ts_close_ns) for b in due(builder, "14:31", muhurat)] == [
+        (ist("14:15", muhurat), ist("14:30", muhurat))
+    ]
+
+
+def test_an_mcx_evening_bar_lies_on_the_mcx_session():
+    mcx = TickBarBuilder("MCX", MONDAY, watching_from_ns=ist("08:30"))
+    crude = [
+        Tick("CRUDEOIL", "MCX", 5400.0, ist("23:54:30"), volume=900),
+        Tick("CRUDEOIL", "MCX", 5401.0, ist("23:55:00"), volume=950),
+    ]
+    for one in crude:
+        mcx.on_tick(one)
+
+    bars = list(mcx.close_due(ist("23:56")).bars)
+
+    expected = LiveBar(
+        "CRUDEOIL", "MCX", ist("23:54"), ist("23:55"), *(5400.0,) * 4, 900.0, 1, "ticks"
+    )
+    assert bars == [expected]
+    assert mcx.outside_ticks == 1
 
 
 def test_a_day_without_a_session_raises_calendar_error():
@@ -216,7 +257,7 @@ def test_bars_given_out_together_come_in_time_order_then_symbols_in_registration
     ]
     run(nse, events)
 
-    bars = nse.close_due(ist("09:17:01"))
+    bars = due(nse, "09:17:01")
 
     assert [(b.symbol, b.ts_open_ns) for b in bars] == [
         ("SBIN", ist("09:15")),
@@ -231,40 +272,58 @@ def test_bars_given_out_together_come_in_time_order_then_symbols_in_registration
 def test_a_bar_is_given_out_once_the_clock_passes_its_close_plus_the_grace(nse):
     nse.on_tick(tick("SBIN", "09:15:10", 800.0, 10))
 
-    assert nse.close_due(ist("09:16:00.999999")) == []
-    assert nse.close_due(ist("09:16:01")) == [bar("SBIN", "09:15", "09:16", (800.0,) * 4, 10.0, 1)]
+    assert due(nse, "09:16:00.999999") == []
+    assert due(nse, "09:16:01") == [bar("SBIN", "09:15", "09:16", (800.0,) * 4, 10.0, 1)]
 
 
 @pytest.mark.parametrize(
-    ("grace", "early", "due"), [(0, None, "09:16"), (2.5, "09:16:02.4", "09:16:02.5")]
+    ("grace", "early", "closes_at"), [(0, None, "09:16"), (2.5, "09:16:02.4", "09:16:02.5")]
 )
-def test_the_grace_is_settable(grace, early, due):
+def test_the_grace_is_settable(grace, early, closes_at):
     builder = builder_at(close_grace_s=grace)
     builder.on_tick(tick("SBIN", "09:15:10", 800.0, 10))
 
     if early is not None:
-        assert builder.close_due(ist(early)) == []
-    assert [b.ts_open_ns for b in builder.close_due(ist(due))] == [ist("09:15")]
+        assert due(builder, early) == []
+    assert [b.ts_open_ns for b in due(builder, closes_at)] == [ist("09:15")]
+
+
+def test_close_due_tells_which_slices_it_closed_with_or_without_bars(nse):
+    nse.on_tick(tick("SBIN", "09:16:10", 800.0, 10))
+
+    first = nse.close_due(ist("09:17:01"))
+    second = nse.close_due(ist("09:17:30"))
+    third = nse.close_due(ist("09:18:01"))
+
+    assert first.slices == ((ist("09:15"), ist("09:16")), (ist("09:16"), ist("09:17")))
+    assert [b.ts_open_ns for b in first.bars] == [ist("09:16")]
+    assert (second.slices, second.bars) == ((), ())
+    assert (third.slices, third.bars) == (((ist("09:17"), ist("09:18")),), ())
+
+
+def test_closed_slices_are_frozen(nse):
+    with pytest.raises(FrozenInstanceError):
+        nse.close_due(ist("09:16:01")).bars = ()  # type: ignore[misc]
 
 
 def test_a_tick_of_a_later_slice_does_not_close_the_earlier_bar(nse):
     nse.on_tick(tick("SBIN", "09:15:10", 800.0, 10))
 
     assert nse.on_tick(tick("SBIN", "09:16:00.100", 801.0, 20)) is None
-    assert nse.close_due(ist("09:16:00.500")) == []
+    assert due(nse, "09:16:00.500") == []
 
 
-def test_a_tick_arriving_after_a_later_one_still_counts_in_its_slice_until_it_closes(nse):
+def test_a_tick_arriving_after_a_later_one_still_counts_in_its_slice_within_the_grace(nse):
     events = [
-        tick("SBIN", "10:00:30", 800.0),
-        tick("SBIN", "10:01:00.010", 805.0, received="10:01:00.050"),
-        tick("SBIN", "10:00:59.990", 803.0, received="10:01:00.060"),
+        tick("SBIN", "10:00:30", 800.0, 100),
+        tick("SBIN", "10:01:00.010", 805.0, 130, received="10:01:00.050"),
+        tick("SBIN", "10:00:59.990", 803.0, 120, received="10:01:00.060"),
         "10:02:01",
     ]
 
     assert run(nse, events) == [
-        bar("SBIN", "10:00", "10:01", (800.0, 803.0, 800.0, 803.0), 0.0, 2),
-        bar("SBIN", "10:01", "10:02", (805.0,) * 4, 0.0, 1),
+        bar("SBIN", "10:00", "10:01", (800.0, 803.0, 800.0, 803.0), 120.0, 2),
+        bar("SBIN", "10:01", "10:02", (805.0,) * 4, 10.0, 1),
     ]
     assert nse.late_ticks == 0
 
@@ -286,32 +345,117 @@ def test_the_bars_do_not_depend_on_the_order_the_ticks_arrived_in():
     assert bars_shuffled == bars_in_order
 
 
+# A trade at 09:15:59.990 received 1.06 s later, after its slice's close plus the grace.
+IN_FLIGHT = [
+    tick("SBIN", "09:15:30", 800.0, 1000),
+    tick("SBIN", "09:15:59.990", 803.0, 1200, received="09:16:01.050"),
+    tick("SBIN", "09:16:20", 801.0, 1300),
+]
+IN_FLIGHT_BARS = [
+    bar("SBIN", "09:15", "09:16", (800.0,) * 4, 1000.0, 1),
+    bar("SBIN", "09:16", "09:17", (801.0,) * 4, 300.0, 1),
+]
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        [IN_FLIGHT[0], IN_FLIGHT[1], "09:16:01.100", IN_FLIGHT[2], "09:17:01"],
+        [IN_FLIGHT[0], "09:16:01.100", IN_FLIGHT[1], IN_FLIGHT[2], "09:17:01"],
+    ],
+    ids=["ticks-handed-over-first", "close-due-called-first"],
+)
+def test_a_tick_is_late_by_its_receive_time_whenever_close_due_runs(events):
+    builder = builder_at()
+
+    assert run(builder, events) == IN_FLIGHT_BARS
+    assert builder.late_ticks == 1
+
+
 def test_a_replay_driven_by_receive_times_gives_the_bars_of_the_live_session():
-    ticks = [
-        tick("SBIN", "09:15:05", 800.0, 100),
-        tick("INFY", "09:15:59.990", 1500.0, 50, received="09:16:00.600"),
-        tick("SBIN", "09:16:10", 801.0, 150),
-        tick("INFY", "09:17:30", 1501.0, 70),
-    ]
-    live = run(builder_at(), [ticks[0], ticks[1], "09:16:01", ticks[2], ticks[3], "09:18:01"])
-
     replay, replayed = builder_at(), []
-    for recorded in ticks:
-        replayed += replay.close_due(recorded.ts_recv_ns)
+    for recorded in IN_FLIGHT:
+        replayed += replay.close_due(recorded.ts_recv_ns).bars
         replay.on_tick(recorded)
-    replayed += replay.close_due(ist("09:18:01"))
+    replayed += due(replay, "09:17:01")
 
-    assert replayed == live
+    assert replayed == IN_FLIGHT_BARS
+    assert replay.late_ticks == 1
+
+
+def test_a_late_tick_that_was_no_trade_is_not_counted(nse):
+    nse.on_tick(tick("SBIN", "09:15:30", 800.0, 1000))
+    due(nse, "09:16:01")
+
+    for received in ("09:16:01.500", "09:16:02", "09:16:03"):
+        nse.on_tick(tick("SBIN", "09:15:59.500", 800.0, 1000, received=received))
+
+    assert nse.late_ticks == 0
+
+
+def test_a_late_trade_is_counted_and_warned_once_per_symbol(nse, caplog):
+    for minute in (15, 16, 17):
+        clock = f"09:{minute}:58.700"
+        received = f"09:{minute + 1}:01.240"
+        nse.on_tick(tick("SBIN", f"09:{minute}:10", 800.0 + minute, minute * 100))
+        nse.on_tick(tick("SBIN", clock, 810.0 + minute, minute * 100 + 58, received=received))
+
+    bars = due(nse, "09:18:10")
+
+    assert [b.close for b in bars] == [815.0, 816.0, 817.0]
+    assert nse.late_ticks == 3
+    warned = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warned) == 1
+    assert "clock may be ahead" in warned[0].getMessage()
+
+
+# ----- a feed outage ----------------------------------------------------------
+
+
+def test_after_the_feed_resumes_its_slice_only_seeds_so_the_gap_volume_lands_on_no_bar(nse):
+    nse.on_tick(tick("SBIN", "09:16:10", 800.0, 200000))
+    nse.on_tick(tick("SBIN", "09:16:20", 801.0, 201000))
+    due(nse, "09:17:01")
+
+    nse.resume(ist("10:30:00.200"))
+    events = [
+        tick("SBIN", "10:30:00.100", 812.0, 4200000, received="10:30:00.300"),
+        tick("SBIN", "10:30:40", 812.5, 4203000),
+        tick("SBIN", "10:31:05", 813.0, 4203500),
+        "10:32:01",
+    ]
+
+    assert run(nse, events) == [bar("SBIN", "10:31", "10:32", (813.0,) * 4, 500.0, 1)]
+
+
+def test_after_the_feed_resumes_a_first_count_only_sets_the_level(nse):
+    nse.on_tick(tick("SBIN", "09:16:10", 800.0, 200000))
+    due(nse, "09:17:01")
+
+    nse.resume(ist("10:30:00"))
+    events = [tick("SBIN", "10:31:05", 813.0, 4200000), tick("SBIN", "10:31:20", 813.5, 4200300)]
+
+    assert run(nse, [*events, "10:32:01"]) == [
+        bar("SBIN", "10:31", "10:32", (813.5,) * 4, 300.0, 1)
+    ]
+
+
+def test_a_resume_before_the_open_changes_nothing(nse):
+    nse.resume(ist("09:10"))
+
+    assert run(nse, [tick("SBIN", "09:15:05", 800.0, 400), "09:16:01"]) == [
+        bar("SBIN", "09:15", "09:16", (800.0,) * 4, 400.0, 1)
+    ]
 
 
 def test_a_tick_for_a_slice_the_clock_has_closed_is_dropped_and_counted_late(nse):
     nse.on_tick(tick("SBIN", "09:15:10", 800.0, 10))
-    nse.close_due(ist("09:16:01"))
+    due(nse, "09:16:01")
 
     nse.on_tick(tick("SBIN", "09:15:59", 790.0, 20, received="09:16:01.200"))
 
     assert nse.late_ticks == 1
-    assert nse.close_due(ist("09:17:01")) == []
+    assert due(nse, "09:17:01") == []
 
 
 # ----- the session edges ------------------------------------------------------
@@ -368,7 +512,7 @@ def test_a_tick_before_a_special_sessions_open_is_outside_though_its_slice_start
 
     builder.on_tick(Tick("SBIN", "NSE", 800.0, ist("18:17", SATURDAY), volume=10))
     builder.on_tick(Tick("SBIN", "NSE", 801.0, ist("18:21", SATURDAY), volume=20))
-    bars = builder.close_due(ist("18:31", SATURDAY))
+    bars = due(builder, "18:31", SATURDAY)
 
     assert [(b.ts_open_ns, b.ts_close_ns, b.open, b.volume) for b in bars] == [
         (ist("18:15", SATURDAY), ist("18:30", SATURDAY), 801.0, 20.0)
@@ -394,7 +538,7 @@ def test_a_tick_with_an_unusable_ltp_or_volume_is_dropped_and_counted(nse, ltp, 
     nse.on_tick(tick("SBIN", "09:15:05", ltp, volume))
 
     assert nse.invalid_ticks == 1
-    assert nse.close_due(ist("09:16:01")) == []
+    assert due(nse, "09:16:01") == []
 
 
 def test_a_tick_of_another_exchange_raises_config_error(nse):

@@ -3,25 +3,26 @@ Part of `bars`: `TickBarBuilder` places the ticks in the slices and closes them.
 
 A bar is made of trades only, as the broker's candles and the backtest's bars are: a
 quote update with nothing traded makes no bar, so a minute without trades has none. The
-ticks of a slice are judged when the slice closes, in the order of their times (ties in
-the order they arrived), so the bars do not depend on the order the ticks arrived in.
-A tick is a trade when:
+ticks of a slice are judged when the slice closes, in the order of their times (ties by
+receive time, then arrival), so the bars do not depend on the order the ticks arrived in.
 
-1. it carries a positive cumulative volume (the day's count) and that count rose. The
-   count never falls, so a value at or below the highest seen is no trade. A symbol's
-   first count rises from 0 when the session was watched from its open; after a start
-   in the middle of the session it only sets the level later counts rise from.
-2. else (no volume, or 0, which the SDK sends for a missing count) it carries a
-   plausible last trade time and that time advanced: past the symbol's last one, or for
-   its first one, at or after the instant watching began.
-3. else its LTP differs from the symbol's previous LTP. A symbol's first tick in the
-   session is a trade when the session was watched from its open and the tick carries
-   no trade time at all (an index such as NIFTY): its first LTP opens its bar. The first
-   LTP only seeds in the partial slice after a start in the middle of the session, and
-   when the tick carries a trade time that is not plausible (a stale one, such as the
-   previous day's last trade of an option not traded yet today).
+The feed's trade time never decides a trade: the SDK fills a missing field with 0, and
+the server may set it to the packet's time or its own clock. A tick is a trade when:
 
-Prices are rupees, volume units, times UTC nanoseconds.
+- for a tradable instrument, its cumulative volume rose (when the feed gives a volume)
+  or its LTP changed from the last known LTP. The first LTP only seeds the last known
+  LTP, so an option not traded today, quoting the previous close with volume 0, makes
+  no bar.
+- for an index (on NSE_INDEX, BSE_INDEX or another index exchange), its value changed;
+  when watching began at or before the open, its first tick in the session opens its
+  bar.
+
+Volume is the day's cumulative count, which never falls: a value at or below the highest
+seen adds nothing, and 0 (which the SDK sends for a missing count) is no value. Watched
+from the open, a symbol's count rises from 0. After a start in the middle of the session
+(or the feed's resumption) the first count only sets the level: a trade it comes with
+still makes the bar, with that trade's volume unknown (0.0; the candle check corrects
+it). Prices are rupees, volume units, times UTC nanoseconds.
 """
 
 from __future__ import annotations
@@ -32,17 +33,14 @@ from dataclasses import dataclass
 @dataclass(frozen=True, slots=True)
 class PlacedTick:
     """A tick placed in time. `at_ns` is its event time when plausible, else its receive
-    time; `arrival` numbers the ticks in the order they arrived; `volume` is its positive
-    cumulative volume or None; `trade_ns` its plausible last trade time or None;
-    `time_rejected` is True when it carried a trade time (not 0, which means none) that
-    was not plausible."""
+    time `recv_ns`; `arrival` numbers the ticks in the order they arrived; `volume` is
+    its positive cumulative volume or None."""
 
     at_ns: int
+    recv_ns: int
     arrival: int
     ltp: float
     volume: float | None
-    trade_ns: int | None
-    time_rejected: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,23 +58,52 @@ class SliceTrades:
 
 class SymbolTrades:
     """One symbol's ticks of the slices not closed yet, and what the closed ones left:
-    the highest cumulative volume, the last trade time and the last LTP.
+    the highest cumulative volume (the level) and the last known LTP.
 
-    `watch_start_ns` is the later of the session open and the instant watching began;
-    `from_open` is True when watching began at or before the session open.
+    `index` is True for an index; `from_open` is True when watching began at or before
+    the session open.
     """
 
-    def __init__(self, *, watch_start_ns: int, from_open: bool) -> None:
-        self._watch_start_ns = watch_start_ns
-        self._from_open = from_open
+    def __init__(self, *, index: bool, from_open: bool) -> None:
+        self._index = index
         self._level: float | None = 0.0 if from_open else None
-        self._last_trade_ns: int | None = None
         self._last_price: float | None = None
+        # An index watched from the open: its first tick in the session opens its bar.
+        self._first_opens = index and from_open
+        # The latest tick before the open (time, LTP): the first known LTP.
+        self._pre_open: tuple[int, float] | None = None
         self._pending: dict[int, list[PlacedTick]] = {}
+        # What the ticks taken so far show, to judge a tick that came too late.
+        self._seen_volume: float | None = None
+        self._seen_price: float | None = None
+
+    def seed(self, at_ns: int, ltp: float, volume: float | None) -> None:
+        """Take a tick from before the session open: it only seeds the last known LTP."""
+        if self._pre_open is None or at_ns >= self._pre_open[0]:
+            self._pre_open = (at_ns, ltp)
+        self._observe(ltp, volume)
 
     def add(self, slot: int, tick: PlacedTick) -> None:
         """Hold a tick for its slice until the slice closes."""
         self._pending.setdefault(slot, []).append(tick)
+        self._observe(tick.ltp, tick.volume)
+
+    def late_trade(self, ltp: float, volume: float | None) -> bool:
+        """Whether a tick that came after its slice closed was a trade, judged against
+        the ticks taken so far (its volume above their highest, or its LTP other than the
+        last one's; an index by its value)."""
+        rose = volume is not None and self._seen_volume is not None and volume > self._seen_volume
+        changed = self._seen_price is not None and ltp != self._seen_price
+        self._observe(ltp, volume)
+        return changed if self._index else (rose or changed)
+
+    def restart(self) -> None:
+        """Forget the level and the last known LTP, as after a start in the middle of the
+        session: the feed resumed after an outage whose trades were not seen."""
+        self._level = None
+        self._last_price = None
+        self._pre_open = None
+        self._first_opens = False
 
     def close_before(self, end_slot: int) -> list[tuple[int, SliceTrades]]:
         """Judge the ticks of every held slice before `end_slot`, oldest slice first, and
@@ -88,8 +115,15 @@ class SymbolTrades:
                 closed.append((slot, trades))
         return closed
 
+    def _observe(self, ltp: float, volume: float | None) -> None:
+        self._seen_price = ltp
+        if volume is not None:
+            self._seen_volume = max(volume, self._seen_volume or volume)
+
     def _judge(self, ticks: list[PlacedTick]) -> SliceTrades | None:
-        ticks.sort(key=lambda tick: (tick.at_ns, tick.arrival))
+        ticks.sort(key=lambda tick: (tick.at_ns, tick.recv_ns, tick.arrival))
+        if self._last_price is None and self._pre_open is not None:
+            self._last_price = self._pre_open[1]
         prices: list[float] = []
         volume = 0.0
         for tick in ticks:
@@ -103,26 +137,18 @@ class SymbolTrades:
         return SliceTrades(prices[0], max(prices), min(prices), prices[-1], volume, len(prices))
 
     def _volume_if_trade(self, tick: PlacedTick) -> float | None:
-        """The volume a trade adds (0.0 for a trade judged without a count), or None
-        when the tick is no trade. Moves the symbol's level and last trade time."""
-        last_trade_ns = self._last_trade_ns
-        if tick.trade_ns is not None:
-            self._last_trade_ns = max(tick.trade_ns, last_trade_ns or tick.trade_ns)
+        """The volume a trade adds (0.0 when its count is unknown), or None when the tick
+        is no trade. Moves the symbol's level."""
+        rise = 0.0
         if tick.volume is not None:
-            level = self._level
-            if level is None or tick.volume <= level:
-                self._level = tick.volume if level is None else level
-                return None
-            self._level = tick.volume
-            return tick.volume - level
-        if tick.trade_ns is not None:
-            if last_trade_ns is None:
-                return 0.0 if tick.trade_ns >= self._watch_start_ns else None
-            return 0.0 if tick.trade_ns > last_trade_ns else None
-        if self._last_price is None:
-            first_is_trade = self._from_open and not tick.time_rejected
-            return 0.0 if first_is_trade else None
-        return 0.0 if tick.ltp != self._last_price else None
+            if self._level is None:
+                self._level = tick.volume
+            elif tick.volume > self._level:
+                rise, self._level = tick.volume - self._level, tick.volume
+        first, self._first_opens = self._first_opens, False
+        changed = self._last_price is not None and tick.ltp != self._last_price
+        traded = (first or changed) if self._index else (rise > 0 or changed)
+        return rise if traded else None
 
 
 __all__ = ["PlacedTick", "SliceTrades", "SymbolTrades"]
