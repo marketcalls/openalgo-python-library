@@ -1,6 +1,6 @@
 """The health of the feed (08-live-trading section 8): a dead feed (no tick on any symbol,
 which locks entries) told apart from a quiet symbol (an illiquid one while the others
-tick), on a manual clock.
+tick), on a manual clock. Ticks count at their receive time.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ def health_at(clock: str, **options) -> tuple[FeedHealth, ManualClock]:
 
 def test_the_feed_lives_while_some_symbol_ticks_within_dead_after_s():
     health, now = health_at("10:00:00")
-    health.on_tick("SBIN", "NSE")
+    health.on_tick("SBIN", "NSE", now())
 
     now.at("10:00:09.999")
 
@@ -59,9 +59,9 @@ def test_the_feed_lives_while_some_symbol_ticks_within_dead_after_s():
 
 def test_the_feed_is_dead_once_no_symbol_has_ticked_for_dead_after_s():
     health, now = health_at("10:00:00")
-    health.on_tick("SBIN", "NSE")
+    health.on_tick("SBIN", "NSE", now())
     now.at("10:00:05")
-    health.on_tick("INFY", "NSE")
+    health.on_tick("INFY", "NSE", now())
 
     now.at("10:00:15")
 
@@ -91,7 +91,7 @@ def test_a_tick_brings_a_dead_feed_back():
     now.at("10:00:30")
     assert health.feed_dead()
 
-    health.on_tick("SBIN", "NSE")
+    health.on_tick("SBIN", "NSE", now())
 
     assert not health.feed_dead()
 
@@ -107,7 +107,7 @@ def test_the_feed_is_never_dead_outside_the_session(clock):
 
 def test_dead_after_s_sets_how_long_the_feed_may_be_silent():
     health, now = health_at("10:00:00", dead_after_s=2.5)
-    health.on_tick("SBIN", "NSE")
+    health.on_tick("SBIN", "NSE", now())
 
     now.at("10:00:02.499")
     assert not health.feed_dead()
@@ -115,14 +115,33 @@ def test_dead_after_s_sets_how_long_the_feed_may_be_silent():
     assert health.feed_dead()
 
 
+def test_a_tick_counts_at_its_receive_time_so_a_busy_loop_does_not_kill_a_live_feed():
+    health, now = health_at("10:00:00")
+    now.at("10:00:08")
+    health.on_tick("SBIN", "NSE", ist("10:00:07.500"))
+
+    now.at("10:00:17.499")
+    assert not health.feed_dead()
+    now.at("10:00:17.500")
+    assert health.feed_dead()
+
+
+def test_a_tick_handled_after_a_later_one_leaves_the_later_receive_time():
+    health, _ = health_at("10:00:10")
+    health.on_tick("SBIN", "NSE", ist("10:00:09"))
+    health.on_tick("SBIN", "NSE", ist("10:00:05"))
+
+    assert health.last_tick_ns("SBIN", "NSE") == ist("10:00:09")
+
+
 # ----- quiet symbols ----------------------------------------------------------
 
 
 def test_a_symbol_is_quiet_when_it_has_not_ticked_for_the_seconds_while_others_tick():
     health, now = health_at("10:00:00")
-    health.on_tick("ILLIQUID", "NFO")
+    health.on_tick("ILLIQUID", "NFO", now())
     now.at("10:00:30")
-    health.on_tick("SBIN", "NSE")
+    health.on_tick("SBIN", "NSE", now())
 
     assert health.quiet("ILLIQUID", "NFO", 30.0)
     assert not health.quiet("ILLIQUID", "NFO", 30.001)
@@ -132,7 +151,7 @@ def test_a_symbol_is_quiet_when_it_has_not_ticked_for_the_seconds_while_others_t
 def test_a_symbol_that_never_ticked_is_quiet_counted_from_the_open():
     health, now = health_at("09:00:00")
     now.at("09:15:20")
-    health.on_tick("SBIN", "NSE")
+    health.on_tick("SBIN", "NSE", now())
 
     assert health.quiet("ILLIQUID", "NFO", 20.0)
     assert not health.quiet("ILLIQUID", "NFO", 21.0)
@@ -140,7 +159,7 @@ def test_a_symbol_that_never_ticked_is_quiet_counted_from_the_open():
 
 def test_no_symbol_is_quiet_while_the_feed_is_dead():
     health, now = health_at("10:00:00")
-    health.on_tick("SBIN", "NSE")
+    health.on_tick("SBIN", "NSE", now())
 
     now.at("10:01:00")
 
@@ -150,29 +169,29 @@ def test_no_symbol_is_quiet_while_the_feed_is_dead():
 
 def test_no_symbol_is_quiet_outside_the_session():
     health, now = health_at("15:00:00")
-    health.on_tick("SBIN", "NSE")
+    health.on_tick("SBIN", "NSE", now())
     now.at("15:30:05")
-    health.on_tick("INFY", "NSE")
+    health.on_tick("INFY", "NSE", now())
 
     assert not health.quiet("SBIN", "NSE", 60.0)
 
 
 def test_symbols_are_told_apart_by_exchange():
     health, now = health_at("10:00:00")
-    health.on_tick("SBIN", "BSE")
+    health.on_tick("SBIN", "BSE", now())
     now.at("10:00:40")
-    health.on_tick("SBIN", "NSE")
+    health.on_tick("SBIN", "NSE", now())
 
     assert health.quiet("SBIN", "BSE", 30.0)
     assert not health.quiet("SBIN", "NSE", 30.0)
 
 
-def test_last_tick_ns_is_none_before_a_symbols_first_tick_then_the_clock_at_its_last():
+def test_last_tick_ns_is_none_before_a_symbols_first_tick_then_its_last_receive_time():
     health, now = health_at("10:00:00")
     assert health.last_tick_ns("SBIN", "NSE") is None
 
     now.at("10:00:01.250")
-    health.on_tick("SBIN", "NSE")
+    health.on_tick("SBIN", "NSE", now())
 
     assert health.last_tick_ns("SBIN", "NSE") == ist("10:00:01.250")
 

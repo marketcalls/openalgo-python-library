@@ -47,8 +47,11 @@ class FeedHealth:
     open, and locks entries; "quiet" is one symbol without a tick while the feed lives
     (an illiquid symbol), so the two never hold at once. Silence is counted from the
     later of the last tick, the session open and the moment the health was created, so
-    a session that starts late gives the feed its full time. Ticks are timed by the
-    injected clock `now` (UTC nanoseconds) when `on_tick` is called.
+    a session that starts late gives the feed its full time. A tick counts at its
+    receive time (`Tick.ts_recv_ns`), so a loop busy with other work does not read a
+    live feed as dead; the injected clock `now` (UTC nanoseconds) says how long ago that
+    was. A session whose symbols are all illiquid cannot tell a quiet market from a dead
+    feed: with no symbol ticking, both read as dead.
 
     `session` is (open, close) of the session, UTC nanoseconds (`Calendar.session`,
     `TickBarBuilder.session`). Raises ConfigError for a `dead_after_s` that is not a
@@ -69,14 +72,16 @@ class FeedHealth:
         self._last_tick_ns: dict[tuple[str, str], int] = {}
         self._last_any_ns: int | None = None
 
-    def on_tick(self, symbol: str, exchange: str) -> None:
-        """Note a tick of a symbol, now."""
-        at_ns = self._now()
-        self._last_tick_ns[(symbol, exchange)] = at_ns
-        self._last_any_ns = at_ns
+    def on_tick(self, symbol: str, exchange: str, ts_recv_ns: int) -> None:
+        """Note a tick of a symbol received at `ts_recv_ns` (UTC nanoseconds). A tick
+        handled after a later one of the same symbol leaves the later time standing."""
+        key = (symbol, exchange)
+        self._last_tick_ns[key] = max(ts_recv_ns, self._last_tick_ns.get(key, ts_recv_ns))
+        self._last_any_ns = max(ts_recv_ns, self._last_any_ns or ts_recv_ns)
 
     def last_tick_ns(self, symbol: str, exchange: str) -> int | None:
-        """When the symbol's last tick came (UTC nanoseconds), None before its first."""
+        """When the symbol's last tick was received (UTC nanoseconds), None before its
+        first."""
         return self._last_tick_ns.get((symbol, exchange))
 
     def feed_dead(self) -> bool:
