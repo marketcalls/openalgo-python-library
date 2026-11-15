@@ -1,7 +1,8 @@
 """The preflight checks that read OpenAlgo's answers (`preflight`, 08-live-trading section
 4): the broker's session (`ping` and `funds`), the broker, the mode funds was answered
-in, the funds against the capital, each instrument's facts (`symbol`) and the interval
-(`intervals`).
+in, the funds against the capital, each instrument's facts (`symbol`; an index is
+refused, since it cannot be traded) and the intervals (`intervals`): the strategy's, and
+the 1-minute candles the live bars are checked against (D27).
 
 The answers are read as the SDK returns them (openalgo/account.py, openalgo/data.py): the
 server's JSON on HTTP 200, else the SDK's own error, whose message "HTTP <code>: <body>"
@@ -17,21 +18,34 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from .._layout import parse_interval
+import httpx
+
+from .._layout import NANOS_PER_MINUTE, parse_interval
 from ..errors import ConfigError
+from ..reference.symbols import INDEX_EXCHANGES
 from ._guard_answers import SUCCESS
 from ._order_answers import server_answer
 from ._order_trades import UNSUPPORTED_BROKERS
 from ._preflight_plan import Check, InstrumentFacts, PreflightPlan, positive_amount
 from ._types import Mode, mode_of
+from .bars import DEFAULT_INTERVAL_NS
 
+#: The interval of the broker candles the live bars are checked against (D27), as
+#: OpenAlgo writes it: "1m".
+CANDLE_INTERVAL = f"{DEFAULT_INTERVAL_NS // NANOS_PER_MINUTE}m"
 #: The most characters of an answer quoted in a message: a gateway's error page in front
 #: of OpenAlgo can run to kilobytes of HTML.
 _MAX_QUOTED_CHARS = 200
 
 
 class PreflightClient(Protocol):
-    """What the preflight needs of an `openalgo.api` client."""
+    """What the preflight needs of an `openalgo.api` client: four of its REST calls, and
+    for the clock check its pooled HTTP client and the URL of its API."""
+
+    #: The SDK's pooled HTTP client (`BaseAPI.client`).
+    client: httpx.Client
+    #: The URL of the API, "<host>/api/v1/" (`BaseAPI.base_url`).
+    base_url: str
 
     def ping(self) -> Mapping[str, Any]:
         """The server's answer to `/api/v1/ping`."""
@@ -97,7 +111,8 @@ def _ping_failed(ping: Mapping[str, Any]) -> Check:
         False,
         f"OpenAlgo's ping failed ({reason}): check that OpenAlgo is running at the client's "
         "host, that the API key is right and that you are logged in to your broker in "
-        "OpenAlgo. The funds, symbol and interval checks and the test alert wait for ping",
+        "OpenAlgo. The funds, symbol, interval and clock checks and the test alert wait for "
+        "ping",
     )
 
 
@@ -152,14 +167,15 @@ def _funds_check(available: float, capital: float, mode: Mode) -> Check:
         return Check(
             "funds",
             True,
-            f"{available:,.2f} rupees available cover the capital of {capital:,.2f} rupees",
+            f"{available:,.2f} rupees of available cash cover the capital of {capital:,.2f} rupees",
         )
     where = "the sandbox's funds in OpenAlgo" if mode is Mode.SANDBOX else "the broker account"
     return Check(
         "funds",
         False,
-        f"OpenAlgo reports {available:,.2f} rupees available, less than the capital of "
-        f"{capital:,.2f} rupees: lower capital, or add funds to {where}",
+        f"OpenAlgo reports {available:,.2f} rupees of available cash (collateral not "
+        f"counted), less than the capital of {capital:,.2f} rupees: lower capital, or add "
+        f"funds to {where}",
     )
 
 
@@ -167,6 +183,13 @@ def _symbol_check(
     client: PreflightClient, symbol: str, exchange: str
 ) -> tuple[Check, InstrumentFacts | None]:
     name = f"symbol:{exchange}:{symbol}"
+    if exchange in INDEX_EXCHANGES:
+        return Check(
+            name,
+            False,
+            f"{exchange}:{symbol} is an index, which cannot be traded: trade its futures or "
+            "options instead",
+        ), None
     answer = client.symbol(symbol=symbol, exchange=exchange)
     data = answer.get("data") if answer.get("status") == SUCCESS else None
     if not isinstance(data, Mapping):
@@ -227,13 +250,28 @@ def _interval_check(answer: Mapping[str, Any], interval: Any) -> Check:
             "is logged in to the broker, then start the session again",
         )
     offered = [item for group in data.values() if isinstance(group, list) for item in group]
-    if interval in offered:
-        return Check("interval", True, f"the broker offers {interval} candles")
+    needed = list(dict.fromkeys((interval, CANDLE_INTERVAL)))
+    missing = [step for step in needed if step not in offered]
+    if not missing:
+        return Check(
+            "interval",
+            True,
+            f"the broker offers {' and '.join(needed)} candles (the strategy's interval, and "
+            f"{CANDLE_INTERVAL} to check the live bars against)",
+        )
+    advice = []
+    if interval in missing:
+        advice.append("choose one of those as the strategy's interval")
+    if CANDLE_INTERVAL in missing:
+        advice.append(
+            f"the session checks its tick-built bars against the broker's {CANDLE_INTERVAL} "
+            "candles, so trade live through a broker that offers them"
+        )
     return Check(
         "interval",
         False,
-        f"the broker offers no {interval} candles (it offers {', '.join(offered) or 'none'}): "
-        "choose one of those as the strategy's interval",
+        f"the broker offers no {' and no '.join(missing)} candles (it offers "
+        f"{', '.join(offered) or 'none'}): {'; '.join(advice)}",
     )
 
 
@@ -267,4 +305,4 @@ def _clip(text: str) -> str:
     return text if len(text) <= _MAX_QUOTED_CHARS else f"{text[:_MAX_QUOTED_CHARS]}..."
 
 
-__all__ = ["PreflightClient", "ServerFindings", "read_server"]
+__all__ = ["CANDLE_INTERVAL", "PreflightClient", "ServerFindings", "read_server"]

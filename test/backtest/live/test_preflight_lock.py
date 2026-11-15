@@ -3,11 +3,17 @@ per OpenAlgo account. Where the lock file lives (beside the account's journal, b
 journal's folder rules), a second holder refused, the lock free again once its holder
 leaves, and the names and folders refused.
 
-The tests hold the lock twice in one process: each AccountLock opens the file on its own,
-and the operating system refuses the second lock as it would one of another process.
+Most tests hold the lock twice in one process: each AccountLock opens the file on its own,
+and the operating system refuses the second lock as it would one of another process. One
+test tries it from another Python process.
 """
 
 from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -15,12 +21,49 @@ from openalgo.backtest._live.preflight import LOCK_FILE_NAME, AccountLock
 from openalgo.backtest.errors import LiveError, PreflightError
 
 ACCOUNT = "trader_one"
+#: The root of the checkout, so another process imports this copy of openalgo.
+ROOT = Path(__file__).resolve().parents[3]
+#: Seconds another process may take to start, import openalgo and try the lock.
+CHILD_TIMEOUT_S = 10
+#: What the other process runs: it tries the lock once and says what happened.
+CHILD = """
+import sys
+from openalgo.backtest._live.preflight import AccountLock
+from openalgo.backtest.errors import PreflightError
+try:
+    with AccountLock(sys.argv[1], folder=sys.argv[2]):
+        sys.stdout.write("held")
+except PreflightError:
+    sys.stdout.write("refused")
+"""
 
 
 @pytest.fixture(autouse=True)
 def no_live_dir(monkeypatch):
     """Each test sets OPENALGO_LIVE_DIR itself, or runs without it."""
     monkeypatch.delenv("OPENALGO_LIVE_DIR", raising=False)
+
+
+def try_in_another_process(folder: Path) -> str:
+    """What another Python process gets when it tries the account's lock under `folder`:
+    "held" or "refused"."""
+    finished = subprocess.run(
+        [sys.executable, "-c", CHILD, ACCOUNT, str(folder)],
+        capture_output=True,
+        text=True,
+        timeout=CHILD_TIMEOUT_S,
+        cwd=ROOT,
+        env={**os.environ, "PYTHONPATH": str(ROOT)},
+        check=True,
+    )
+    return finished.stdout
+
+
+def test_another_process_is_refused_while_the_lock_is_held_and_gets_it_once_released(tmp_path):
+    with AccountLock(ACCOUNT, folder=tmp_path):
+        assert try_in_another_process(tmp_path) == "refused"
+
+    assert try_in_another_process(tmp_path) == "held"
 
 
 def test_the_lock_file_is_engine_lock_in_the_accounts_folder_of_the_folder_given(tmp_path):

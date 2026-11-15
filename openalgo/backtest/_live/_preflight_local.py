@@ -1,6 +1,6 @@
 """The preflight checks that need no answer from OpenAlgo's REST API (`preflight`): the risk
-limits, the product, each exchange's trading day, the clock and the alert channel
-(08-live-trading section 4; the alert rule of 15-phase2-plan section 6).
+limits, the product, each exchange's trading day and the alert channel (08-live-trading
+section 4; the alert rule of 15-phase2-plan section 6).
 
 Amounts are rupees; instants UTC nanoseconds, shown as IST.
 """
@@ -20,9 +20,6 @@ from ._types import AlertsLike, Mode
 #: The one product this release trades live: intraday MIS (Tier 1, 08-live-trading
 #: section 1). CNC and NRML wait for overnight stops and holdings reconciliation.
 LIVE_PRODUCT = "MIS"
-#: The most the local clock may differ from the exchange's, in seconds (08-live-trading
-#: section 4).
-MAX_CLOCK_SKEW_SECONDS = 2
 # The calendar's coverage of a date it holds no holiday list for: the weekday rule only.
 _TEMPLATE_COVERAGE = "template"
 
@@ -62,20 +59,6 @@ def trading_day_checks(exchanges: Iterable[str], now_ns: int, calendar: Calendar
     for the year, since a holiday would then go unseen."""
     day = ist_time(now_ns).date()
     return [_trading_day(exchange, day, now_ns, calendar) for exchange in dict.fromkeys(exchanges)]
-
-
-def clock_check() -> Check:
-    """The clock check, which passes with a warning: OpenAlgo's REST answers carry no time
-    of the server's (ping, funds, symbol, intervals, analyzerstatus, quotes; the SDK keeps
-    no response header), so the local clock cannot be compared with it."""
-    return Check(
-        "clock",
-        True,
-        f"{WARNING}the local clock could not be compared with the server's, as none of "
-        "OpenAlgo's answers carries the server's time: keep this computer's clock "
-        "synchronised with an internet time server, since the session needs it within "
-        f"{MAX_CLOCK_SKEW_SECONDS} seconds of the exchange's",
-    )
 
 
 def alerts_check(alerts: AlertsLike | None, mode: Mode) -> Check:
@@ -167,9 +150,7 @@ def _ist_clock(ts_ns: int) -> str:
 
 __all__ = [
     "LIVE_PRODUCT",
-    "MAX_CLOCK_SKEW_SECONDS",
     "alerts_check",
-    "clock_check",
     "limit_checks",
     "product_check",
     "trading_day_checks",

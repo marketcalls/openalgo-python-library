@@ -1,7 +1,7 @@
 """In-process fakes for the preflight's tests: an OpenAlgo client that answers `ping`,
-`funds`, `symbol` and `intervals` as the SDK returns the server's answers, an alert
-channel whose test alert is scripted, and a plan to change one field at a time. Nothing
-here contacts a server.
+`funds`, `symbol` and `intervals` as the SDK returns the server's answers and dates its
+HTTP answers by a clock of its own, an alert channel whose test alert is scripted, and a
+plan to change one field at a time. Nothing here contacts a server.
 
 The answers are shaped as the server writes them (services/ping_service.py,
 services/funds_service.py and the brokers' get_margin_data, sandbox/fund_manager.py,
@@ -14,8 +14,11 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+import email.utils
 import json
 from typing import Any
+
+import httpx
 
 from openalgo.backtest._live._types import AlertKind, Mode
 from openalgo.backtest._live.preflight import PreflightPlan
@@ -113,10 +116,26 @@ INTERVALS = {
 }
 
 
+#: The URL of the fake's API, as the SDK builds it ("<host>/api/v1/").
+BASE_URL = "http://openalgo.invalid/api/v1/"
+
+
+def http_date(ts_ns: int) -> str:
+    """The HTTP `Date` of an instant: its whole second, in GMT."""
+    return email.utils.formatdate(ts_ns // NS, usegmt=True)
+
+
 class FakeOpenAlgo:
     """Answers the preflight's calls with the answers given; `symbols` maps (symbol,
-    exchange) to an answer, and an instrument not in it is not found. `calls` lists every
-    call in order. Any other call fails the test."""
+    exchange) to an answer, and an instrument not in it is not found. Any other call
+    fails the test.
+
+    Its `client` is an HTTP client whose transport answers in-process, as the server's
+    WSGI server would: any request gets a 404 dated `server_ns` (the server's clock, UTC
+    nanoseconds), or with `head_headers` when given (a `Date` left out or garbled), or
+    raises `head_error`. `calls` lists every call in order, a request as its method and
+    URL; `requests` keeps the requests themselves.
+    """
 
     def __init__(
         self,
@@ -125,6 +144,9 @@ class FakeOpenAlgo:
         funds: dict[str, Any] | None = None,
         symbols: dict[tuple[str, str], dict[str, Any]] | None = None,
         intervals: dict[str, Any] | None = None,
+        server_ns: int = NOW_NS,
+        head_headers: dict[str, str] | None = None,
+        head_error: Exception | None = None,
     ) -> None:
         self._ping = pong() if ping is None else ping
         self._funds = live_funds() if funds is None else funds
@@ -132,7 +154,23 @@ class FakeOpenAlgo:
             {("SBIN", "NSE"): symbol_found("SBIN", "NSE")} if symbols is None else symbols
         )
         self._intervals = INTERVALS if intervals is None else intervals
+        self.server_ns = server_ns
+        self._head_headers = head_headers
+        self._head_error = head_error
         self.calls: list[tuple[str, ...]] = []
+        self.requests: list[httpx.Request] = []
+        self.client = httpx.Client(transport=httpx.MockTransport(self._answer))
+        self.base_url = BASE_URL
+
+    def _answer(self, request: httpx.Request) -> httpx.Response:
+        self.calls.append((request.method, str(request.url)))
+        self.requests.append(request)
+        if self._head_error is not None:
+            raise self._head_error
+        headers = self._head_headers
+        if headers is None:
+            headers = {"Date": http_date(self.server_ns)}
+        return httpx.Response(404, headers=headers)
 
     def ping(self) -> dict[str, Any]:
         self.calls.append(("ping",))

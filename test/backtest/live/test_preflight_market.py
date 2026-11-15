@@ -1,7 +1,7 @@
 """The market checks of a live session's preflight (08-live-trading section 4): each
-symbol found with its lot size, tick size and freeze quantity, the MIS product, an
-interval the broker offers, today a trading day whose session has not closed, and the
-clock check that could not be measured.
+symbol found with its lot size, tick size and freeze quantity (an index refused), the
+MIS product, the strategy's interval and the 1-minute candles offered by the broker, and
+today a trading day whose session has not closed.
 
 The trading days come from the package's calendar: 2026-11-16 is a Monday on which NSE
 and NFO trade from 09:15 to 15:30 IST, 2026-11-14 a Saturday and 2026-11-24 a holiday.
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 from preflight_fakes import (
+    INTERVALS,
     NOW_NS,
     FakeOpenAlgo,
     ist_ns,
@@ -28,13 +29,23 @@ from openalgo.backtest._live.preflight import (
 )
 from openalgo.backtest.calendar import Calendar
 from openalgo.backtest.errors import PreflightError
+from openalgo.backtest.reference.symbols import INDEX_EXCHANGES
 
 NIFTY_FUTURE = ("NIFTY30DEC25FUT", "NFO")
 
 
 def preflight(client=None, *, at_ns=NOW_NS, calendar=None, **changes) -> PreflightReport:
+    """The preflight of `make_plan(**changes)` at `at_ns`, the server's clock in step."""
     client = FakeOpenAlgo() if client is None else client
+    client.server_ns = at_ns
     return run_preflight(client, make_plan(**changes), now=lambda: at_ns, calendar=calendar)
+
+
+def without_minutes(*dropped: str) -> dict:
+    """The intervals answer of a broker that offers none of the `dropped` minute steps."""
+    data = dict(INTERVALS["data"])
+    data["minutes"] = [step for step in data["minutes"] if step not in dropped]
+    return {"status": "success", "data": data}
 
 
 def failures_of(client=None, **options) -> tuple[str, ...]:
@@ -120,6 +131,19 @@ def test_every_unknown_symbol_is_reported():
     assert [failure.split(" ")[0] for failure in failures] == ["NSE:TYPO", "BSE:OTHER"]
 
 
+@pytest.mark.parametrize("exchange", INDEX_EXCHANGES)
+def test_an_instrument_on_an_index_exchange_is_refused_without_asking_openalgo(exchange):
+    client = FakeOpenAlgo()
+
+    failures = failures_of(client, instruments=[("NIFTY", exchange)])
+
+    assert (
+        f"{exchange}:NIFTY is an index, which cannot be traded: trade its futures or options "
+        "instead"
+    ) in failures
+    assert ("symbol", "NIFTY", exchange) not in client.calls
+
+
 @pytest.mark.parametrize(
     ("facts", "problem"),
     [
@@ -159,11 +183,16 @@ def test_a_product_other_than_mis_fails(product):
 # ----- the interval ------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("interval", ["1m", "15m", "D"])
-def test_an_interval_the_broker_offers_passes(interval):
+@pytest.mark.parametrize(
+    ("interval", "offered"), [("15m", "15m and 1m"), ("D", "D and 1m"), ("1m", "1m")]
+)
+def test_an_interval_the_broker_offers_passes_with_its_1m_candles(interval, offered):
     report = preflight(interval=interval)
 
-    assert check_named(report, "interval").message == f"the broker offers {interval} candles"
+    assert check_named(report, "interval").message == (
+        f"the broker offers {offered} candles (the strategy's interval, and 1m to check the "
+        "live bars against)"
+    )
 
 
 def test_an_interval_the_broker_does_not_offer_fails_and_lists_the_ones_it_offers():
@@ -172,6 +201,27 @@ def test_an_interval_the_broker_does_not_offer_fails_and_lists_the_ones_it_offer
     assert failure == (
         "the broker offers no 2m candles (it offers 1m, 3m, 5m, 15m, 30m, 60m, D): choose "
         "one of those as the strategy's interval"
+    )
+
+
+def test_a_broker_without_1m_candles_fails_even_for_an_interval_it_offers():
+    (failure,) = failures_of(FakeOpenAlgo(intervals=without_minutes("1m")), interval="5m")
+
+    assert failure == (
+        "the broker offers no 1m candles (it offers 3m, 5m, 15m, 30m, 60m, D): the session "
+        "checks its tick-built bars against the broker's 1m candles, so trade live through a "
+        "broker that offers them"
+    )
+
+
+def test_an_interval_and_the_1m_candles_both_missing_are_reported_in_one_message():
+    client = FakeOpenAlgo(intervals=without_minutes("1m", "5m"))
+
+    (failure,) = failures_of(client, interval="5m")
+
+    assert failure.startswith(
+        "the broker offers no 5m and no 1m candles (it offers 3m, 15m, 30m, 60m, D): choose "
+        "one of those as the strategy's interval; the session checks its tick-built bars"
     )
 
 
@@ -267,14 +317,3 @@ def test_a_year_the_calendar_holds_no_holiday_list_for_passes_with_a_warning():
     assert check.message.endswith(
         "but the calendar holds no holiday list for 2026: check that today is not a holiday of NSE"
     )
-
-
-# ----- the clock ---------------------------------------------------------------------
-
-
-def test_the_clock_check_passes_with_a_warning_that_the_skew_could_not_be_measured():
-    check = check_named(preflight(), "clock")
-
-    assert check.ok
-    assert check.message.startswith(f"{WARNING}the local clock could not be compared")
-    assert "within 2 seconds" in check.message

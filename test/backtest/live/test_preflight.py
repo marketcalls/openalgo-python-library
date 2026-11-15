@@ -14,6 +14,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 from preflight_fakes import (
+    BASE_URL,
     EXPIRED_FUNDS,
     KEY_REFUSED,
     NOW_NS,
@@ -93,7 +94,7 @@ def test_a_passed_preflight_reports_every_check_in_the_order_it_ran():
     assert all(check.ok for check in report.checks)
 
 
-def test_the_preflight_asks_openalgo_for_ping_funds_each_symbol_and_the_intervals_only():
+def test_the_preflight_asks_openalgo_for_ping_funds_each_symbol_the_intervals_and_its_time():
     client = FakeOpenAlgo(
         symbols={
             ("SBIN", "NSE"): symbol_found("SBIN", "NSE"),
@@ -109,15 +110,22 @@ def test_the_preflight_asks_openalgo_for_ping_funds_each_symbol_and_the_interval
         ("symbol", "SBIN", "NSE"),
         ("symbol", "INFY", "NSE"),
         ("intervals",),
+        ("HEAD", BASE_URL),
     ]
 
 
 def test_the_report_lists_the_warnings_of_the_checks_that_passed_with_one():
-    report = preflight(FakeOpenAlgo(funds=sandbox_funds()), mode=Mode.SANDBOX, alerts=None)
+    client = FakeOpenAlgo(funds=sandbox_funds(), head_headers={})
+
+    report = preflight(client, mode=Mode.SANDBOX, alerts=None)
 
     clock, alerts = check_named(report, "clock"), check_named(report, "alerts")
     assert report.warnings == (clock.message, alerts.message)
     assert all(message.startswith(WARNING) for message in report.warnings)
+
+
+def test_a_preflight_without_warnings_lists_none():
+    assert preflight().warnings == ()
 
 
 def test_a_report_is_frozen():
@@ -234,8 +242,9 @@ def test_funds_below_the_capital_fail_with_both_amounts():
     (failure,) = failures_of(FakeOpenAlgo(funds=live_funds("99999.50")), capital=100_000)
 
     assert failure == (
-        "OpenAlgo reports 99,999.50 rupees available, less than the capital of 100,000.00 "
-        "rupees: lower capital, or add funds to the broker account"
+        "OpenAlgo reports 99,999.50 rupees of available cash (collateral not counted), less "
+        "than the capital of 100,000.00 rupees: lower capital, or add funds to the broker "
+        "account"
     )
 
 

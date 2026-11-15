@@ -16,17 +16,23 @@ each of them, not only the first. The checks, by name:
 - `capital`, `max_daily_loss`: given and positive (both mandatory for `bt.live`), and
   `account_max_daily_loss` positive when given;
 - `symbol:<EXCHANGE>:<SYMBOL>`: each instrument found, with its lot size, tick size and
-  freeze quantity;
+  freeze quantity; an instrument on an index exchange is refused, as an index cannot be
+  traded;
 - `product`: MIS, the only product of this release (Tier 1);
-- `interval`: a candle interval the broker offers (`intervals`);
+- `interval`: the broker offers candles of the strategy's interval and the 1-minute
+  candles the live bars are checked against (`intervals`, D27);
 - `trading_day:<EXCHANGE>`: the exchange trades today and its session has not closed
   (the package calendar);
-- `clock`: the local clock against the server's. OpenAlgo's answers carry no server
-  time, so it passes with a warning saying it could not be measured;
+- `clock`: the local clock within 2 seconds of the server's, read from the `Date`
+  header of one HEAD request (`_preflight_clock`); it fails only when the clock is
+  certainly off, and warns when it cannot tell;
 - `alerts`: a test alert delivered; required in LIVE mode, a warning in SANDBOX mode.
 
-The causality and window-stability checks of the strategy belong to the strategy layer,
-which runs them before the session builds its plan. Amounts are rupees, quantities units
+Not checked: whether OpenAlgo streams order updates. No API call reports it
+(`ORDER_UPDATES_ENABLED` is a server setting), and the order path needs no check of it:
+it polls `orderstatus` whenever the stream is silent for an order. The causality and
+window-stability checks of the strategy belong to the strategy layer, which runs them
+before the session builds its plan. Amounts are rupees, quantities units
 (never lots), instants UTC nanoseconds. Nothing here prints: the session passes its
 printer to `countdown`, and the checks are logged to the live layer's logger.
 """
@@ -39,13 +45,8 @@ from collections.abc import Callable
 
 from ..calendar import Calendar, default_calendar
 from ..errors import ConfigError, PreflightError
-from ._preflight_local import (
-    alerts_check,
-    clock_check,
-    limit_checks,
-    product_check,
-    trading_day_checks,
-)
+from ._preflight_clock import clock_check
+from ._preflight_local import alerts_check, limit_checks, product_check, trading_day_checks
 from ._preflight_lock import LOCK_FILE_NAME, AccountLock
 from ._preflight_plan import WARNING, Check, InstrumentFacts, PreflightPlan, PreflightReport
 from ._preflight_server import PreflightClient, read_server
@@ -64,9 +65,10 @@ def run_preflight(
 ) -> PreflightReport:
     """Run every check of `plan` (see the module docstring) against `client`, an
     `openalgo.api` client of which only `ping`, `funds`, `symbol` and `intervals` are
-    called; the plan's alert channel sends one test alert once `ping` has succeeded. `now`
-    gives the present in UTC nanoseconds, and `calendar` the sessions (the package's
-    default calendar when None).
+    called, and its pooled HTTP client for one HEAD request (the clock check); the plan's
+    alert channel sends one test alert once `ping` has succeeded. `now` gives the present
+    in UTC nanoseconds, and `calendar` the sessions (the package's default calendar when
+    None).
 
     Returns the report of a preflight in which every check passed. Raises PreflightError
     when any failed, its `failures` holding the message of each failed check in order,
@@ -82,10 +84,11 @@ def run_preflight(
         *limit_checks(plan.capital, plan.max_daily_loss, plan.account_max_daily_loss),
         product_check(plan.product),
         *trading_day_checks((exchange for _, exchange in plan.instruments), now_ns, calendar),
-        clock_check(),
     ]
-    # The test alert goes through OpenAlgo, so it waits for ping to succeed; a missing
-    # channel is known without it.
+    # The clock is read from OpenAlgo's server and the test alert goes through it, so both
+    # wait for ping to succeed; a missing alert channel is known without it.
+    if server.broker is not None:
+        checks.append(clock_check(client, now))
     if plan.alerts is None or server.broker is not None:
         checks.append(alerts_check(plan.alerts, plan.mode))
     _log(checks)
