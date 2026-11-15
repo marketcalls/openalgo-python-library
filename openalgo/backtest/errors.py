@@ -107,7 +107,7 @@ class PreflightError(LiveError):
 class ModeChangedError(LiveError):
     """OpenAlgo's analyzer switch changed during a live session (or semi-auto mode
     appeared): the session sends nothing more, and is started again in the mode the
-    user wants (D21)."""
+    user wants. The mode is chosen inside OpenAlgo, never in code."""
 
 
 class JournalError(LiveError):
