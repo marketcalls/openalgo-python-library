@@ -3,14 +3,18 @@ response and order update, the polled and pre-entry reads of OpenAlgo's analyzer
 failed reads, the breach and its alert, the banner, and semi-auto (08-live-trading
 section 3; D21, D30).
 
-The fake OpenAlgo below answers `analyzerstatus` as the server does
-(services/analyzer_service.py) and fails the test if the guard calls anything else; the
-responses are shaped as the server's order services and the SDK's own errors give them.
+The fake OpenAlgo below answers `analyzerstatus` as the SDK returns the server's answer
+(services/analyzer_service.py, openalgo/account.py) and fails the test if the guard calls
+anything else. Order responses are shaped as the order path passes them: a 200 answer as
+the SDK returns it, a non-200 answer as the server's own body with its HTTP status added
+as "code" (the order path takes it out of the SDK's "HTTP <code>: <body>" wrapper), and a
+transport failure as the SDK's own error, which carries no code.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import json
 import math
 from dataclasses import FrozenInstanceError
 
@@ -24,27 +28,71 @@ from openalgo.backtest.errors import ConfigError, LiveError, ModeChangedError
 SESSION_OPEN_NS = int(dt.datetime(2026, 11, 16, 3, 45, tzinfo=dt.UTC).timestamp()) * 10**9
 SECOND_NS = 10**9
 
-# The SDK's answer when the server cannot be reached (openalgo/account.py).
+# The SDK's own errors when no answer came back (openalgo/orders.py, openalgo/account.py).
 UNREACHABLE = {
     "status": "error",
     "message": "Failed to connect to the server. Please check if the server is running.",
     "error_type": "connection_error",
-}
-# Order responses as the server's services give them.
-SANDBOX_PLACED = {"status": "success", "orderid": "26111600000001", "mode": "analyze"}
-LIVE_PLACED = {"status": "success", "orderid": "1100000012345"}
-SANDBOX_REJECTED = {"status": "error", "message": "Insufficient funds", "mode": "analyze"}
-QUEUED_IN_ACTION_CENTER = {
-    "status": "success",
-    "message": "Order queued for approval in Action Center",
-    "mode": "semi_auto",
-    "pending_order_id": 41,
 }
 TIMED_OUT = {
     "status": "error",
     "message": "Request timed out. The server took too long to respond.",
     "error_type": "timeout_error",
 }
+TRANSPORT_FAILED = {
+    "status": "error",
+    "message": "HTTP error occurred: Server disconnected without sending a response.",
+    "error_type": "http_error",
+}
+# 200 answers of the server's order services, as the SDK returns them.
+SANDBOX_PLACED = {"status": "success", "orderid": "26111600000001", "mode": "analyze"}
+LIVE_PLACED = {"status": "success", "orderid": "1100000012345"}
+QUEUED_IN_ACTION_CENTER = {
+    "status": "success",
+    "message": "Order queued for approval in Action Center",
+    "mode": "semi_auto",
+    "pending_order_id": 41,
+}
+# Non-200 answers: the server's body with its HTTP status as "code".
+SANDBOX_REJECTED = {
+    "status": "error",
+    "message": "Insufficient funds. Required: ₹8125.0, Available: ₹5000.0, Shortage: ₹3125.0",
+    "mode": "analyze",
+    "code": 400,
+}
+KEY_REJECTED = {"status": "error", "message": "Invalid openalgo apikey", "code": 403}
+RATE_LIMITED = {
+    "status": "error",
+    "message": "Rate limit exceeded. Please slow down your requests.",
+    "retry_after": 60,
+    "code": 429,
+}
+# The refusals of services/modify_order_service.py and services/cancel_order_service.py
+# while semi-auto is on in live mode.
+MODIFY_REFUSED_IN_SEMI_AUTO = {
+    "status": "error",
+    "message": "Modify order operation is not allowed in Semi-Auto mode. "
+    "Please switch to Auto mode to modify orders.",
+    "code": 403,
+}
+CANCEL_REFUSED_IN_SEMI_AUTO = {
+    "status": "error",
+    "message": "Cancel order operation is not allowed in Semi-Auto mode. "
+    "Please switch to Auto mode to cancel orders.",
+    "code": 403,
+}
+
+
+def sdk_wrapper(body: dict) -> dict:
+    """A non-200 answer as the SDK's order calls return it, before the order path takes
+    the server's body back out (openalgo/orders.py, _handle_response)."""
+    server_body = {key: value for key, value in body.items() if key != "code"}
+    return {
+        "status": "error",
+        "message": f"HTTP {body['code']}: {json.dumps(server_body)}\n",
+        "code": body["code"],
+        "error_type": "http_error",
+    }
 
 
 class ManualClock:
@@ -155,7 +203,7 @@ def test_start_raises_live_error_telling_to_check_openalgo_when_it_cannot_be_rea
 @pytest.mark.parametrize(
     "answer",
     [
-        {"status": "error", "message": "Invalid openalgo apikey"},
+        sdk_wrapper(KEY_REJECTED),
         {"status": "success"},
         {"status": "success", "data": {"mode": "live"}},
         {"status": "success", "data": {"analyze_mode": "false"}},
@@ -258,10 +306,19 @@ def test_a_successful_order_without_the_sandbox_marker_locks_a_sandbox_session()
 
 @pytest.mark.parametrize(
     "response",
-    [TIMED_OUT, UNREACHABLE, {"status": "error", "message": "Invalid openalgo apikey"}],
-    ids=["timeout", "unreachable", "rejected key"],
+    [TIMED_OUT, UNREACHABLE, TRANSPORT_FAILED],
+    ids=["timeout", "unreachable", "disconnected"],
 )
-def test_an_error_without_a_mode_does_not_lock_a_sandbox_session(response):
+def test_an_sdk_transport_error_does_not_lock_a_sandbox_session(response):
+    guard, _, _, _ = started_guard(Mode.SANDBOX)
+    guard.check_response(response)
+    assert not guard.locked
+
+
+@pytest.mark.parametrize(
+    "response", [KEY_REJECTED, RATE_LIMITED], ids=["rejected key", "rate limited"]
+)
+def test_a_server_error_given_in_both_modes_does_not_lock_a_sandbox_session(response):
     guard, _, _, _ = started_guard(Mode.SANDBOX)
     guard.check_response(response)
     assert not guard.locked
@@ -665,7 +722,7 @@ def test_the_semi_auto_alert_names_the_pending_order_and_says_to_reject_it_and_t
     guard, _, _, alerts = started_guard(Mode.LIVE)
     guard.check_response(QUEUED_IN_ACTION_CENTER)
     text = alerts.of(AlertKind.MODE_BREACH)[0]
-    assert "pending order 41" in text
+    assert "Pending order 41 is waiting for approval" in text
     assert "reject it in the Action Center" in text
     assert "order mode back to auto" in text
     assert "sends nothing more" in text
@@ -687,3 +744,93 @@ def test_a_mode_breach_is_not_semi_auto():
         orders_after=(),
     )
     assert not breach.semi_auto
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        MODIFY_REFUSED_IN_SEMI_AUTO,
+        CANCEL_REFUSED_IN_SEMI_AUTO,
+        sdk_wrapper(MODIFY_REFUSED_IN_SEMI_AUTO),
+        sdk_wrapper(CANCEL_REFUSED_IN_SEMI_AUTO),
+    ],
+    ids=["modify", "cancel", "modify, SDK wrapper", "cancel, SDK wrapper"],
+)
+def test_a_modify_or_cancel_refused_for_semi_auto_locks_the_guard_as_semi_auto(response):
+    guard, _, _, _ = started_guard(Mode.LIVE)
+    guard.check_response(response)
+    assert guard.locked
+    assert guard.breach.semi_auto
+    assert guard.breach.pending_order_id is None
+
+
+def test_the_semi_auto_refusal_alert_says_semi_auto_is_on_and_to_turn_it_off():
+    guard, _, _, alerts = started_guard(Mode.LIVE)
+    guard.check_response(MODIFY_REFUSED_IN_SEMI_AUTO)
+    text = alerts.of(AlertKind.MODE_BREACH)[0]
+    assert "OpenAlgo is in semi-auto mode" in text
+    assert "refuses to modify or cancel" in text
+    assert "order mode back to auto" in text
+    assert "pending order" not in text
+
+
+def test_another_error_answer_of_a_modify_does_not_lock_the_guard():
+    guard, _, _, _ = started_guard(Mode.LIVE)
+    guard.check_response(
+        {"status": "error", "message": "Order 1100000012345 is already complete", "code": 400}
+    )
+    assert not guard.locked
+
+
+# Intents left in doubt: an order that may have reached the server with no order ID.
+
+
+def test_the_breach_lists_the_intents_left_in_doubt_since_the_last_good_read():
+    guard, server, clock, _ = started_guard(Mode.SANDBOX)
+    guard.note_order_in_doubt("intent-before-the-good-read")
+    clock.advance(5)
+    guard.poll()
+    guard.note_order_in_doubt("intent-timed-out")
+    guard.note_order_in_doubt("intent-502")
+    flip(server)
+    clock.advance(5)
+    guard.poll()
+    assert guard.breach.intents_in_doubt == ("intent-timed-out", "intent-502")
+
+
+def test_the_breach_alert_names_the_intents_as_orders_with_no_order_id():
+    guard, server, _, alerts = started_guard(Mode.LIVE)
+    guard.note_order_in_doubt("intent-timed-out")
+    flip(server)
+    with pytest.raises(ModeChangedError):
+        guard.before_entry()
+    text = alerts.of(AlertKind.MODE_BREACH)[0]
+    assert "may have reached the server with no order ID" in text
+    assert "intent-timed-out" in text
+
+
+def test_the_breach_alert_names_no_intents_when_none_are_in_doubt():
+    guard, _, _, alerts = started_guard(Mode.LIVE)
+    guard.check_response(SANDBOX_PLACED)
+    assert "no order ID" not in alerts.of(AlertKind.MODE_BREACH)[0]
+
+
+def test_an_intent_noted_in_doubt_after_the_lock_is_added_to_the_breach_without_an_alert():
+    guard, _, _, alerts = started_guard(Mode.LIVE)
+    guard.check_response(SANDBOX_PLACED)
+    guard.note_order_in_doubt("intent-after-the-lock")
+    guard.note_order_in_doubt("intent-after-the-lock")
+    assert guard.breach.intents_in_doubt == ("intent-after-the-lock",)
+    assert len(alerts.of(AlertKind.MODE_BREACH)) == 1
+
+
+def test_an_empty_intent_id_raises_config_error():
+    guard, _, _, _ = started_guard(Mode.SANDBOX)
+    with pytest.raises(ConfigError, match="intent"):
+        guard.note_order_in_doubt("")
+
+
+def test_an_intent_in_doubt_does_not_lock_the_guard():
+    guard, _, _, _ = started_guard(Mode.SANDBOX)
+    guard.note_order_in_doubt("intent-timed-out")
+    assert not guard.locked

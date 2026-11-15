@@ -15,26 +15,26 @@ in the other book, so a session is never carried across a change.
 
 Semi-auto (the Action Center mode, set per user on the API key page of OpenAlgo's web
 interface) answers a placed order with a pending order id: nothing reaches the broker
-until someone approves it there, in sandbox mode as well as in live mode. No call made
-with an API key reports it (only the logged-in API key page shows it, and the analyzer
-toggle, which the engine never calls, refuses while it is on), so `start` cannot refuse
-it; the first order response that carries a pending order id locks the guard.
+until someone approves it there, in sandbox mode as well as in live mode. In live mode it
+also refuses every modify and cancel. No call made with an API key reports it (only the
+logged-in API key page shows it, and the analyzer toggle, which the engine never calls,
+refuses while it is on), so `start` cannot refuse it; the first order response that
+carries a pending order id, or a semi-auto refusal, locks the guard.
 
 Not thread-safe: the session loop owns the guard, as it owns the engine.
 """
 
 from __future__ import annotations
 
-import enum
 import logging
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Any, Protocol
 
-from .._calendar_convert import format_ist
 from .._layout import NANOS_PER_SECOND
 from ..errors import ConfigError, LiveError, ModeChangedError
+from ._guard_breach import ModeBreach, SeenIn, breach_text
 from ._types import LOGGER_NAME, AlertKind, AlertsLike, Mode, Now, OrderUpdate, mode_of
 
 #: Seconds between two `analyzerstatus` reads (08-live-trading section 3).
@@ -49,43 +49,14 @@ _PENDING_ORDER_ID_FIELD = "pending_order_id"
 _SEMI_AUTO_MODE_FIELD = "semi_auto"
 _ORDER_ID_FIELD = "orderid"
 _SUCCESS = "success"
+# Lower case, part of the message of the 403 that refuses a modify or cancel while
+# semi-auto is on in live mode ("Modify order operation is not allowed in Semi-Auto
+# mode. ...": services/modify_order_service.py and services/cancel_order_service.py,
+# the semi-auto check of their API-key path). Matched in the server's body and in the
+# SDK's "HTTP 403: <body>" wrapper alike.
+_SEMI_AUTO_REFUSAL = "is not allowed in semi-auto mode"
 
 logger = logging.getLogger(LOGGER_NAME)
-
-
-class SeenIn(enum.Enum):
-    """Where the guard saw what locked it; the value is how its alert says it."""
-
-    POLL = "the analyzerstatus poll"
-    BEFORE_ENTRY = "the analyzerstatus read before an entry"
-    RESPONSE = "an order response"
-    UPDATE = "an order update"
-
-
-@dataclass(frozen=True)
-class ModeBreach:
-    """Why the guard locked.
-
-    `session_mode` is the mode adopted at start. `seen_mode` is the other mode the guard
-    saw, or None when it saw semi-auto: then `pending_order_id` is the Action Center's id
-    of the queued order. `seen_ns` is when it was seen (UTC nanoseconds) and `seen_in`
-    where. `orders_after` are the order IDs whose book is in doubt, in the order they
-    were sent: those sent since the switch was last read in the session's mode and not
-    confirmed by their own response or update, the order in the response that showed
-    the other mode, and any order noted after the lock.
-    """
-
-    session_mode: Mode
-    seen_mode: Mode | None
-    seen_ns: int
-    seen_in: SeenIn
-    orders_after: tuple[str, ...]
-    pending_order_id: str | None = None
-
-    @property
-    def semi_auto(self) -> bool:
-        """True when the guard locked on an order queued in the Action Center."""
-        return self.seen_mode is None
 
 
 class _StatusClient(Protocol):
@@ -127,11 +98,13 @@ class ModeGuard:
         self._failed_reads = 0
         self._breach: ModeBreach | None = None
         # Orders this session sent, the ones whose own response or update showed the
-        # session's mode, and (ordered, as a dict) the ones sent since the switch was
-        # last read in the session's mode that nothing has confirmed yet.
+        # session's mode, and (ordered, as dicts) the ones sent and the intents left in
+        # doubt since the switch was last read in the session's mode that nothing has
+        # confirmed yet.
         self._own_orders: set[str] = set()
         self._confirmed_orders: set[str] = set()
         self._unconfirmed_orders: dict[str, None] = {}
+        self._intents_in_doubt: dict[str, None] = {}
 
     @property
     def locked(self) -> bool:
@@ -220,23 +193,24 @@ class ModeGuard:
                     f"not confirmed. Check that OpenAlgo is running."
                 ) from error
         if self._breach is not None:
-            raise ModeChangedError(_breach_text(self._breach))
+            raise ModeChangedError(breach_text(self._breach))
 
     def check_response(self, response: Mapping[str, Any]) -> None:
         """Check the mode of an order response; lock on a change or on semi-auto.
 
         Pass the responses of the calls the analyzer switch routes (place, modify and
-        cancel orders, order status, the order, trade and position books, funds): a
-        market-data response carries no mode in either. A response marked "analyze" was
-        handled in the sandbox; a success without it went to the broker. An error
-        without it says nothing (the client's timeouts, the rate limiter and the key
-        check answer that way in both modes) and is left to the next read. Raises
-        LiveError before `start`.
+        cancel orders, order status, the order, trade and position books, funds), a
+        non-200 answer as the server's own body: a market-data response carries no mode
+        in either. A response marked "analyze" was handled in the sandbox; a success
+        without it went to the broker. An error without it says nothing (the SDK's
+        transport errors, the rate limiter and the key check answer that way in both
+        modes) and is left to the next read. A pending order id or a semi-auto refusal
+        locks the guard as semi-auto. Raises LiveError before `start`.
         """
         session_mode = self._started()
         if self._breach is not None:
             return
-        if _PENDING_ORDER_ID_FIELD in response or response.get("mode") == _SEMI_AUTO_MODE_FIELD:
+        if _semi_auto_seen(response):
             pending = response.get(_PENDING_ORDER_ID_FIELD)
             self._lock(None, SeenIn.RESPONSE, None if pending is None else str(pending))
             return
@@ -298,6 +272,24 @@ class ModeGuard:
         self._breach = replace(self._breach, orders_after=(*self._breach.orders_after, order_id))
         logger.error("order %s was sent after the mode guard locked", order_id)
 
+    def note_order_in_doubt(self, intent_id: str) -> None:
+        """Record an intent whose order may have reached the server with no order ID to
+        show for it (a timeout, an HTTP 502, a lost connection), so that a breach names
+        it. It does not lock the guard. An intent noted after the lock is added to
+        `breach`; no second alert is sent.
+
+        Raises ConfigError for an empty ID and LiveError before `start`.
+        """
+        self._started()
+        if not intent_id:
+            raise ConfigError("note_order_in_doubt takes the intent ID of the journal")
+        if self._breach is None:
+            self._intents_in_doubt[intent_id] = None
+        elif intent_id not in self._breach.intents_in_doubt:
+            in_doubt = (*self._breach.intents_in_doubt, intent_id)
+            self._breach = replace(self._breach, intents_in_doubt=in_doubt)
+            logger.error("intent %s was left in doubt after the mode guard locked", intent_id)
+
     def _started(self) -> Mode:
         """The session's mode. Raises LiveError before `start`."""
         if self._session_mode is None:
@@ -327,6 +319,7 @@ class ModeGuard:
         self._failed_reads = 0
         if mode is self._session_mode:
             self._unconfirmed_orders.clear()
+            self._intents_in_doubt.clear()
         else:
             self._lock(mode, seen_in, seen_ns=read_ns)
 
@@ -356,8 +349,9 @@ class ModeGuard:
             seen_in=seen_in,
             orders_after=tuple(self._unconfirmed_orders),
             pending_order_id=pending_order_id,
+            intents_in_doubt=tuple(self._intents_in_doubt),
         )
-        text = _breach_text(self._breach)
+        text = breach_text(self._breach)
         logger.error(text)
         self._alert(AlertKind.MODE_BREACH, text)
 
@@ -381,30 +375,16 @@ def _switch_mode(response: Mapping[str, Any]) -> Mode:
     return Mode.SANDBOX if analyze_mode else Mode.LIVE
 
 
-def _breach_text(breach: ModeBreach) -> str:
-    """The alert, and the ModeChangedError message, for a breach."""
-    orders = ", ".join(breach.orders_after) if breach.orders_after else "none"
-    if breach.seen_mode is None:
-        queued = (
-            f"pending order {breach.pending_order_id}" if breach.pending_order_id else "the order"
-        )
-        what = (
-            f"OpenAlgo queued an order in its Action Center instead of sending it "
-            f"(semi-auto mode is on), seen in {breach.seen_in.value} at "
-            f"{format_ist(breach.seen_ns)}: {queued} is waiting for approval and is not "
-            f"placed; reject it in the Action Center."
-        )
-        again = "Set the order mode back to auto on OpenAlgo's API key page, then start it"
-    else:
-        what = (
-            f"OpenAlgo's analyzer switch changed during the session: it started in "
-            f"{breach.session_mode.name} mode and {breach.seen_mode.name} mode was seen in "
-            f"{breach.seen_in.value} at {format_ist(breach.seen_ns)}."
-        )
-        again = "Start it"
+def _semi_auto_seen(response: Mapping[str, Any]) -> bool:
+    """True for an answer of semi-auto mode: an order queued in the Action Center, or a
+    modify or cancel the server refused because semi-auto is on."""
+    if _PENDING_ORDER_ID_FIELD in response or response.get("mode") == _SEMI_AUTO_MODE_FIELD:
+        return True
+    message = response.get("message")
     return (
-        f"{what} Orders sent after the change (since the mode was last confirmed): "
-        f"{orders}. The session sends nothing more. {again} again in the mode you want."
+        response.get("status") != _SUCCESS
+        and isinstance(message, str)
+        and _SEMI_AUTO_REFUSAL in message.lower()
     )
 
 
