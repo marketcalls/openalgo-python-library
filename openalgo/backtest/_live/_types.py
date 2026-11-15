@@ -204,6 +204,10 @@ class GuardLike(Protocol):
         """Record an order the session sent, so a breach can list the orders sent after
         the change, and so the guard judges updates of the session's own orders only."""
 
+    def note_order_in_doubt(self, intent_id: str) -> None:
+        """Record an intent whose order may have reached the server with no order ID to
+        show for it (a timeout, an HTTP 502, a lost connection), so a breach lists it."""
+
 
 class AlertsLike(Protocol):
     """What the modules need of the alerts (`alerts.Alerts`)."""
