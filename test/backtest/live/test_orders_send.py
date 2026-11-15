@@ -313,15 +313,40 @@ def test_a_502_is_never_retried():
     ],
     ids=["send", "modify", "cancel"],
 )
-def test_nothing_is_sent_while_an_intent_is_unbound(request_while_unbound):
+def test_nothing_is_sent_for_the_instrument_of_an_unbound_intent(request_while_unbound):
     rig = placed_rig(placeorder=[TIMEOUT])
     rig.path.send(make_intent("i-unbound"))
     calls = len(rig.client.calls)
 
-    with pytest.raises(LiveError, match="i-unbound is unbound"):
+    with pytest.raises(LiveError, match=r"i-unbound of SBIN on NSE \(MIS\) is unbound"):
         request_while_unbound(rig.path)
 
     assert len(rig.client.calls) == calls
+
+
+def test_a_trailing_modify_of_another_instruments_stop_is_not_held_back():
+    stop = make_intent("i-stop", symbol="INFY", purpose=Purpose.STOP, action="SELL")
+    rig = make_rig(placeorder=[placed("1"), TIMEOUT], modifyorder=[placed("1")])
+    rig.path.send(stop)
+    rig.path.send(make_intent("i-unbound"))
+
+    outcome = rig.path.modify("1", **{**MODIFY_FIELDS, "symbol": "INFY"})
+
+    assert outcome.kind is Outcome.ACCEPTED
+
+
+@pytest.mark.parametrize(
+    "other",
+    [{"symbol": "INFY"}, {"exchange": "BSE"}, {"product": "CNC"}],
+    ids=["symbol", "exchange", "product"],
+)
+def test_a_send_for_another_instrument_or_product_goes_ahead(other):
+    rig = make_rig(placeorder=[TIMEOUT, placed("2")])
+    rig.path.send(make_intent("i-unbound"))
+
+    outcome = rig.path.send(make_intent("i-2", **other))
+
+    assert outcome.order_id == "2"
 
 
 @pytest.mark.parametrize(

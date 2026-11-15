@@ -30,19 +30,11 @@ from ._order_answers import (
     server_answer,
     server_has_finished,
 )
-from ._order_book import CLOCK_SKEW_LIMIT_NS, Resolution, Resolved
-from ._order_follow import HELD_ALERT_AFTER_NS, MAX_POLLS_PER_ROUND, OrderFollower
-from ._order_rate import MAX_ORDERS_PER_SECOND, OPENALGO_ORDERS_PER_SECOND, RateBudget
-from ._order_resolve import (
-    BOOK_READ_EVERY_NS,
-    BROKER_QUEUE_MARGIN_NS,
-    BROKER_WINDOW_NS,
-    NOT_PLACED_AFTER_NS,
-    NOT_PLACED_MISSES,
-    SERVER_BROKER_TIMEOUT_NS,
-    UnboundResolver,
-)
-from ._order_state import POLL_AFTER_NS, POLL_EVERY_NS, SAFETY_POLL_EVERY_NS, HeldFill
+from ._order_book import Resolution, Resolved
+from ._order_follow import OrderFollower
+from ._order_rate import RateBudget
+from ._order_resolve import BROKER_WINDOW_NS, NOT_PLACED_AFTER_NS, UnboundResolver, same_leg
+from ._order_state import HeldFill
 from ._order_trades import UNSUPPORTED_BROKERS
 from ._order_updates import normalize_update
 from ._types import (
@@ -113,15 +105,12 @@ class OrderPath:
         even with nothing to take back. Raises LiveError (and takes back nothing) before
         the guard has started, and JournalError before the journal's session has.
         """
-        try:
-            # GuardLike tells nothing of having started: an answer that carries nothing
-            # asks it, and the guard raises LiveError before start() (guard.py).
-            self._guard.check_response({})
-        except LiveError as error:
+        if not self._guard.started:
             raise LiveError(
-                "restore() takes back orders the mode guard must judge: call guard.start(), "
-                f"then journal.start_session(...), then restore() ({error})"
-            ) from error
+                "restore() takes back orders the mode guard must judge, and the guard has "
+                "not read OpenAlgo's mode yet: call guard.start(), then "
+                "journal.start_session(...), then restore()"
+            )
         self._follower.restore(self._journal.bound_orders())
         for queued in self._journal.queued():
             self._resolver.alert_queued(queued)
@@ -136,10 +125,10 @@ class OrderPath:
 
         Raises ModeChangedError when the guard is locked or (for an entry or add)
         `guard.before_entry` finds the mode changed; LiveError when the mode cannot be
-        read before an entry, or an intent is unbound; JournalError when the journal
-        cannot be written. Nothing is sent then.
+        read before an entry, or an intent of the same symbol, exchange and product is
+        unbound; JournalError when the journal cannot be written. Nothing is sent then.
         """
-        self._check_can_send(f"intent {intent.intent_id}")
+        self._check_can_send(f"intent {intent.intent_id}", intent)
         self._wait_for_budget()
         if intent.purpose in _ENTRY_PURPOSES:
             self._guard.before_entry()
@@ -186,8 +175,9 @@ class OrderPath:
     def modify(self, order_id: str, **fields: Any) -> SendOutcome:
         """Change an order of this session once, with `modifyorder`'s keyword arguments
         (symbol, action, exchange, price_type, product, quantity, price, trigger_price,
-        and optionally disclosed_quantity). Raises as `send` does (no mode read), and
-        LiveError for an order this session did not send or a missing or unknown field."""
+        and optionally disclosed_quantity). Raises as `send` does (no mode read, and
+        the hold is the order's instrument's), and LiveError for an order this session
+        did not send or a missing or unknown field."""
         missing = _MODIFY_REQUIRED - fields.keys()
         unknown = fields.keys() - _MODIFY_REQUIRED - _MODIFY_OPTIONAL
         if missing or unknown:
@@ -195,11 +185,11 @@ class OrderPath:
                 f"modify takes {sorted(_MODIFY_REQUIRED)}: missing {sorted(missing)}, "
                 f"unknown {sorted(unknown)}"
             )
-        strategy = self._strategy(order_id)
-        self._check_can_send(f"the change to order {order_id}")
+        sent_for = self._intent_of(order_id)
+        self._check_can_send(f"the change to order {order_id}", sent_for)
         self._wait_for_budget()
         self._rate.take()
-        sent = self._client.modifyorder(order_id=order_id, strategy=strategy, **fields)
+        sent = self._client.modifyorder(order_id=order_id, strategy=sent_for.strategy, **fields)
         outcome = self._settle_request(order_id, server_answer(sent))
         if outcome.kind is Outcome.ACCEPTED:
             self._follower.changed_price_type(order_id, str(fields["price_type"]))
@@ -207,28 +197,32 @@ class OrderPath:
 
     def cancel(self, order_id: str) -> SendOutcome:
         """Cancel an order of this session once. Raises as `modify` does."""
-        strategy = self._strategy(order_id)
-        self._check_can_send(f"the cancel of order {order_id}")
+        sent_for = self._intent_of(order_id)
+        self._check_can_send(f"the cancel of order {order_id}", sent_for)
         self._wait_for_budget()
         self._rate.take()
-        sent = self._client.cancelorder(order_id=order_id, strategy=strategy)
+        sent = self._client.cancelorder(order_id=order_id, strategy=sent_for.strategy)
         return self._settle_request(order_id, server_answer(sent))
 
     def on_update(self, update: OrderUpdate) -> OrderUpdate | None:
-        """Take an order update from the stream: returned, journaled and checked by the
-        guard when it is news of an order of this session with its fills priced
-        (`_order_news`); None for a duplicate, a stale update, a fill whose price is not
-        known yet (held until it is), or an order this session has not bound (kept
+        """Take an order update from the stream: returned with its status as reported,
+        journaled and checked by the guard, when it is news of an order of this session
+        with its fills priced (`_order_news`); None for a duplicate (a word that repeats
+        exactly what is known is journaled, so a restart knows the stream spoke), a stale
+        update, a fill whose price or a cancel whose fills the tradebook has not
+        confirmed yet (held until it does), or an order this session has not bound (kept
         aside in case an unbound intent turns out to be it; otherwise ignored)."""
         return self._follower.on_update(update)
 
     def due_polls(self) -> list[OrderUpdate]:
-        """The polling fallback (`_order_follow`): at most one round a second, polling
-        `orderstatus` every second for an order with no word 2 seconds after it was sent
-        or working but not resting, and every 30 seconds for a resting one the stream
-        has spoken for, with fills priced and cancels confirmed from the tradebook. A
-        hold past 10 seconds sends one ERROR alert. Returns the news; nothing while the
-        guard is locked."""
+        """The polling fallback (`_order_follow`), in rounds of at most one a second and
+        three orders: `orderstatus` every second for an order with no word from 2 seconds
+        after it was sent, or a market order still working; a resting order every 30
+        seconds once the stream has spoken for it, else backing off from 1 s to 2 s to
+        5 s (2 s for an entry or an add). Fills are priced, and cancels confirmed, from
+        the tradebook, read at most once a round with its own back-off; a hold past 10
+        seconds sends one ERROR alert. Returns the news; nothing while the guard is
+        locked."""
         return self._follower.due_polls()
 
     def held_fills(self) -> list[HeldFill]:
@@ -248,69 +242,56 @@ class OrderPath:
         An intent is bound to the one order of its shape placed at or after it (the
         Resolution carries the order's latest update when one arrived before), and never
         to an order another intent owns. It is marked not placed after two reads miss it,
-        the first at least 5 seconds after it was sent (after a client timeout, or for an
-        intent left unbound before a restart, 5 seconds after the server's own broker
-        timeout). A queued intent (semi-auto) is not unbound and is never touched.
-        Orders it cannot be told from (AMBIGUOUS), or a book that cannot be read, keep
-        it unbound and send one ERROR alert per intent. Nothing is read while the guard
-        is locked, and a book that locks it settles nothing.
+        counted from 5 seconds after the answer when the server had finished with the
+        request (`server_has_finished`), else from its send plus `BROKER_WINDOW_NS` (150
+        seconds; from its creation for an intent left unbound before a restart). A queued
+        intent (semi-auto) is not unbound and is never touched. While an intent is
+        unbound nothing is sent for its symbol, exchange and product. Orders it cannot be
+        told from (AMBIGUOUS), or a book that cannot be read, keep it unbound and send one
+        ERROR alert per intent. Nothing is read while the guard is locked, and a book
+        that locks it settles nothing.
         """
         return self._resolver.resolve()
 
-    def _check_can_send(self, what: str) -> None:
+    def _check_can_send(self, what: str, sent_for: OrderIntent) -> None:
         if self._guard.locked:
             raise ModeChangedError(
                 f"{what} is not sent: the mode guard is locked (OpenAlgo's analyzer switch "
                 "changed, or semi-auto appeared), so the session sends nothing more; "
                 "start it again in the mode you want"
             )
-        unbound = self._journal.unbound()
-        if unbound:
+        held = [intent for intent in self._journal.unbound() if same_leg(intent, sent_for)]
+        if held:
             raise LiveError(
-                f"{what} is not sent: intent {unbound[0].intent_id} is unbound (its order "
-                "may be at the broker), so call resolve_unbound() first"
+                f"{what} is not sent: intent {held[0].intent_id} of {sent_for.symbol} on "
+                f"{sent_for.exchange} ({sent_for.product}) is unbound (its order may be at "
+                "the broker), so nothing is sent for that instrument until resolve_unbound() "
+                "settles it"
             )
 
     def _wait_for_budget(self) -> None:
         while (wait := self._rate.wait_seconds()) > 0:
             self._sleep(wait)
 
-    def _strategy(self, order_id: str) -> str:
-        strategy = self._follower.strategy_of(order_id)
-        if strategy is None:
+    def _intent_of(self, order_id: str) -> OrderIntent:
+        intent = self._follower.intent_of(order_id)
+        if intent is None:
             raise LiveError(
                 f"order {order_id} was not sent by this session: it changes its own orders "
                 "only (after a restart, call restore() first)"
             )
-        return strategy
+        return intent
 
     def _settle_request(self, order_id: str, answer: Mapping[str, Any]) -> SendOutcome:
         outcome = outcome_of(answer, order_id)
         self._guard.check_response(answer)
-        if outcome.kind in (Outcome.ACCEPTED, Outcome.UNANSWERED):
-            # The broker may report the change itself as open (a stop being modified or
-            # cancelled): until the stream says the stop waits again, that is no trigger.
-            self._follower.changed_by_session(order_id)
         if outcome.kind is not Outcome.ACCEPTED:
             logger.warning("a request on order %s is %s: %s", order_id, outcome.kind.value, outcome)
         return outcome
 
 
 __all__ = [
-    "BOOK_READ_EVERY_NS",
-    "BROKER_QUEUE_MARGIN_NS",
     "BROKER_WINDOW_NS",
-    "CLOCK_SKEW_LIMIT_NS",
-    "HELD_ALERT_AFTER_NS",
-    "MAX_ORDERS_PER_SECOND",
-    "MAX_POLLS_PER_ROUND",
-    "NOT_PLACED_AFTER_NS",
-    "NOT_PLACED_MISSES",
-    "OPENALGO_ORDERS_PER_SECOND",
-    "POLL_AFTER_NS",
-    "POLL_EVERY_NS",
-    "SAFETY_POLL_EVERY_NS",
-    "SERVER_BROKER_TIMEOUT_NS",
     "UNSUPPORTED_BROKERS",
     "HeldFill",
     "OrderPath",

@@ -15,7 +15,7 @@ from orders_fakes import (
     update,
 )
 
-from openalgo.backtest._live._types import AlertKind, OrderStatus
+from openalgo.backtest._live._types import AlertKind, OrderStatus, Purpose
 from openalgo.backtest._live.orders import UNSUPPORTED_BROKERS, HeldFill
 from openalgo.backtest.errors import LiveError
 
@@ -175,8 +175,17 @@ def test_a_held_fill_stays_held_while_the_tradebook_does_not_cover_it():
     assert [held.filled_quantity for held in rig.path.held_fills()] == [10]
 
 
-def test_a_held_fills_tradebook_retries_back_off_to_five_seconds():
-    rig = sent_rig(tradebook=[trades(("1", 6, 812.0))] * 10)
+@pytest.mark.parametrize(
+    ("purpose", "reads"),
+    [
+        (Purpose.ENTRY, [1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20]),
+        (Purpose.EXIT, [1, 2, 4, 9, 14, 19]),
+    ],
+    ids=["entry", "exit"],
+)
+def test_a_held_fills_tradebook_retries_back_off_as_its_polls_do(purpose, reads):
+    rig = make_rig(placeorder=[placed("1")], tradebook=[trades(("1", 6, 812.0))] * 20)
+    rig.path.send(make_intent("i-1", price_type="LIMIT", price=812.0, purpose=purpose))
     rig.path.on_update(update("1", OrderStatus.COMPLETE, 10, price=0.0))
     read_at = []
     rig.client.before_call = lambda name, kwargs: read_at.append(rig.clock.now_ns // NS)
@@ -185,10 +194,10 @@ def test_a_held_fills_tradebook_retries_back_off_to_five_seconds():
     for _ in range(20):
         next_round(rig)
 
-    assert [second - start_s for second in read_at] == [1, 2, 4, 9, 14, 19]
+    assert [second - start_s for second in read_at] == reads
 
 
-def test_fivepaisa_is_refused_since_its_tradebook_names_trades_by_another_order_id():
+def test_the_unsupported_brokers_name_fivepaisa_for_its_order_ids_and_are_read_only():
     assert "ExchOrderID" in UNSUPPORTED_BROKERS["fivepaisa"]
     with pytest.raises(TypeError):
         UNSUPPORTED_BROKERS["groww"] = "writable"  # type: ignore[index]

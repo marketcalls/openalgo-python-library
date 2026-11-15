@@ -2,6 +2,7 @@
 working but not resting, every 30 seconds for a resting order the stream has spoken for,
 in rounds of at most one a second and three orders."""
 
+import pytest
 from orders_fakes import (
     NS,
     STRATEGY,
@@ -92,14 +93,52 @@ def test_a_resting_order_no_stream_speaks_for_backs_off_to_five_seconds():
     assert poll_times(rig, until_seconds=20) == [2.0, 3.0, 5.0, 10.0, 15.0, 20.0]
 
 
-def test_news_from_a_poll_starts_the_back_off_again():
+def test_an_entrys_back_off_stops_at_two_seconds():
+    # An entry's fill places the protective stop.
     limit = make_intent("i-1", price_type="LIMIT", price=811.0)
+    rig = sent_rig(limit, orderstatus=[status_answer("1", "open", filled_quantity=0)] * 6)
+
+    assert poll_times(rig, until_seconds=11) == [2.0, 3.0, 5.0, 7.0, 9.0, 11.0]
+
+
+@pytest.mark.parametrize("purpose", [Purpose.ENTRY, Purpose.ADD], ids=["entry", "add"])
+def test_entries_and_adds_back_off_to_two_seconds_and_the_rest_to_five(purpose):
+    limit = make_intent("i-1", price_type="LIMIT", price=811.0, purpose=purpose)
+    exit_limit = make_intent("i-2", price_type="LIMIT", price=811.0, purpose=Purpose.EXIT)
+    rig = make_rig(
+        placeorder=[placed("1"), placed("2")],
+        orderstatus=[status_answer(order_id, "open", filled_quantity=0) for order_id in "12"] * 5,
+    )
+    rig.path.send(limit)
+    rig.path.send(exit_limit)
+
+    poll_times(rig, until_seconds=10)
+
+    polled = [kwargs["order_id"] for kwargs in rig.client.calls_to("orderstatus")]
+    assert (polled.count("1"), polled.count("2")) == (5, 4)
+
+
+def test_news_from_a_poll_starts_the_back_off_again():
+    limit = make_intent("i-1", price_type="LIMIT", price=811.0, purpose=Purpose.EXIT)
     answers = [status_answer("1", "open", filled_quantity=0)] * 3 + [
         status_answer("1", "open", filled_quantity=4, average_price=811.0)
     ]
     rig = sent_rig(limit, orderstatus=[*answers, *answers[:2]], tradebook=[trades(("1", 4, 811.0))])
 
     assert poll_times(rig, until_seconds=13) == [2.0, 3.0, 5.0, 10.0, 11.0, 13.0]
+
+
+def test_a_resting_order_modified_into_a_market_order_is_polled_every_second():
+    limit = make_intent("i-1", price_type="LIMIT", price=811.0, purpose=Purpose.EXIT)
+    fields = {"symbol": "SBIN", "action": "BUY", "exchange": "NSE", "product": "MIS"}
+    rig = sent_rig(
+        limit,
+        modifyorder=[placed("1")],
+        orderstatus=[status_answer("1", "open", filled_quantity=0)] * 6,
+    )
+    rig.path.modify("1", **fields, price_type="MARKET", quantity=10, price=0, trigger_price=0)
+
+    assert poll_times(rig, until_seconds=6) == [2.0, 3.0, 4.0, 5.0, 6.0]
 
 
 def test_a_terminal_stream_update_stops_the_polls():

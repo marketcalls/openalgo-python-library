@@ -1,15 +1,18 @@
 """Following the session's orders once they are bound, for the order path (`orders`).
 
-The engine is handed each order's news once (`_order_news`), every fill with its price,
-and nothing of orders the session did not send. A fill found by polling, a fill with no
-price and a cancel that reports no fill wait for the tradebook (`_order_trades`); a wait
+The engine is handed each order's news once (`_order_news`), with its status as the
+broker reported it, every fill with its price, and nothing of orders the session did not
+send. A fill found by polling, a fill with no price and a cancel that reports no fill
+wait for the tradebook (`_order_trades`), whose reads back off as the polls do; a wait
 longer than 10 seconds is alerted, and the session may release the fill at a price.
 
-The order-updates stream is the source. `orderstatus` is polled as a fallback: once a
-second while an order has no word, or is working but not resting, and every 30 seconds
-as a safety net while it rests (a LIMIT order open, a stop waiting for its trigger) once
-the stream has spoken for it. Polling runs in rounds of at most one a second, each
-polling a few orders and reading the tradebook at most once.
+The order-updates stream is the source; `orderstatus` is polled as a fallback
+(`_order_state`): once a second while an order has no word yet (from 2 s after the send)
+or is a market order still working; for a resting order (any other order open, or one
+waiting for a trigger), every 30 seconds as a safety net once the stream has spoken for
+it, else backing off from 1 s to 2 s to 5 s (2 s for an entry or an add). Polling runs
+in rounds of at most one a second, each polling at most 3 orders and reading the
+tradebook at most once.
 
 Times are UTC nanoseconds, quantities units, prices rupees.
 """
@@ -26,14 +29,8 @@ from typing import Any
 from .._layout import NANOS_PER_SECOND
 from ..errors import LiveError
 from ._order_answers import server_answer
-from ._order_news import is_newer, is_news, is_priceless
-from ._order_state import (
-    POLL_EVERY_NS,
-    Followed,
-    HeldFill,
-    as_followed,
-    with_floor,
-)
+from ._order_news import is_newer, is_news, is_priceless, repeats
+from ._order_state import POLL_EVERY_NS, Followed, HeldFill, with_floor
 from ._order_trades import Fills, Polled, needs_trades, read_fills, wants_trades, with_fills
 from ._order_updates import fills_given, normalize_update
 from ._types import (
@@ -45,7 +42,6 @@ from ._types import (
     JournalLike,
     Now,
     OrderIntent,
-    OrderStatus,
     OrderUpdate,
 )
 
@@ -94,28 +90,19 @@ class OrderFollower:
         """The IDs of the orders followed, terminal ones included."""
         return set(self._orders)
 
-    def strategy_of(self, order_id: str) -> str | None:
-        """The strategy of a followed order, or None for an order not followed."""
+    def intent_of(self, order_id: str) -> OrderIntent | None:
+        """The intent of a followed order, or None for an order not followed."""
         order = self._orders.get(order_id)
-        return None if order is None else order.strategy
+        return None if order is None else order.intent
 
     def follow(self, order_id: str, intent: OrderIntent, *, sent_ns: int) -> None:
         """Follow an order just bound in the journal, and note it with the guard."""
         self._guard.note_order_sent(order_id)
-        self._orders[order_id] = Followed(intent.strategy, intent.price_type, sent_ns)
+        self._orders[order_id] = Followed.of(intent, sent_ns=sent_ns)
 
     def changed_price_type(self, order_id: str, price_type: str) -> None:
         """Keep the price type of a followed order that a modify changed."""
         self._orders[order_id].price_type = price_type
-
-    def changed_by_session(self, order_id: str) -> None:
-        """The session modified or cancelled the order (or may have: no answer came). A
-        broker reports such a change of a waiting stop as open (zerodha's UPDATE, MODIFY
-        PENDING, CANCEL PENDING; angel's AB04, AB11), so the stream's word that the stop
-        waits must come again before its "open" counts as the trigger."""
-        order = self._orders.get(order_id)
-        if order is not None:
-            order.stream_pending = False
 
     def claim(self, order_id: str) -> OrderUpdate | None:
         """Hand over the latest update of a newly followed order that arrived before it
@@ -130,12 +117,8 @@ class OrderFollower:
             self._guard.note_order_sent(bound.order_id)
         for bound in bound_orders:
             last = bound.last_update
-            streamed = last is not None and last.source == "stream"
-            order = Followed(
-                bound.intent.strategy, bound.intent.price_type, bound.intent.created_ns
-            )
-            order.seen, order.streamed = last, streamed
-            order.stream_pending = streamed and last.status is OrderStatus.TRIGGER_PENDING
+            order = Followed.of(bound.intent, sent_ns=bound.intent.created_ns)
+            order.seen, order.streamed = last, last is not None and last.source == "stream"
             self._orders[bound.order_id] = order
 
     def on_update(self, update: OrderUpdate) -> OrderUpdate | None:
@@ -233,16 +216,14 @@ class OrderFollower:
     def _take(
         self, order: Followed, update: OrderUpdate, *, checked: bool = False
     ) -> OrderUpdate | None:
-        update = as_followed(order, update)
         if update.source == "stream":
             order.streamed = True
-            order.stream_pending |= update.status is OrderStatus.TRIGGER_PENDING
         floored = with_floor(order, update)
         if not is_news(order.seen, floored):
-            if update.source == "stream" and _repeats(order.seen, floored):
-                # Kept all the same: after a restart it tells what the stream said (that a
-                # stop waits, say, when a poll said so first). A stale word is not kept,
-                # since the journal's last word is the latest to arrive.
+            if update.source == "stream" and repeats(order.seen, floored):
+                # Kept all the same: after a restart it tells that the stream spoke for the
+                # order. A word that only loses information is not kept, since the
+                # journal's last word is the latest to arrive.
                 self._journal.record_update(floored)
                 self._guard.check_update(floored)
             logger.debug("an update that is not news: %s", floored)
@@ -346,19 +327,6 @@ class OrderFollower:
             logger.warning("the tradebook could not be read: %s", answer.get("message"))
             return {}
         return read_fills(trades, order_ids)
-
-
-def _repeats(seen: OrderUpdate | None, update: OrderUpdate) -> bool:
-    """Whether a word that is not news repeats what is known: the same status, fills and
-    quantity as the last word handed over, or anything after a terminal one."""
-    if seen is None:
-        return False
-    same = (seen.status, seen.filled_quantity, seen.quantity) == (
-        update.status,
-        update.filled_quantity,
-        update.quantity,
-    )
-    return same or seen.status.terminal
 
 
 __all__ = [

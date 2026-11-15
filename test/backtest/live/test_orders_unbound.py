@@ -87,9 +87,11 @@ def test_an_unbound_intent_is_not_placed_after_two_reads_that_miss_it():
     [
         SERVER_502,
         http_error(500, server_error("Failed to place order due to internal error")),
+        http_error(503, server_error("Service unavailable")),
+        {"status": "success"},
         CONNECTION_LOST,
     ],
-    ids=["openalgo 502", "openalgo 500", "connection refused"],
+    ids=["openalgo 502", "openalgo 500", "openalgo 503", "success, no ID", "connection refused"],
 )
 def test_when_the_server_has_finished_misses_count_from_five_seconds(answer):
     rig = make_rig(placeorder=[answer], orderbook=[book(), book()])
@@ -102,8 +104,8 @@ def test_when_the_server_has_finished_misses_count_from_five_seconds(answer):
 
 @pytest.mark.parametrize(
     "answer",
-    [TIMEOUT, DROPPED, PROXY_504, http_error(502), {"status": "success"}],
-    ids=["timeout", "dropped connection", "proxy page", "502 page", "success, no ID"],
+    [TIMEOUT, DROPPED, PROXY_504, http_error(502)],
+    ids=["timeout", "dropped connection", "proxy page", "502 page"],
 )
 def test_otherwise_misses_count_only_after_the_servers_broker_window(answer):
     rig = make_rig(placeorder=[answer], orderbook=[book()] * 3)
@@ -254,7 +256,7 @@ def test_an_ambiguous_intent_sends_one_error_alert_naming_it():
     ((kind, text),) = rig.alerts.sent
     assert kind is AlertKind.ERROR
     assert "i-1" in text
-    assert "Nothing more is sent until it is resolved" in text
+    assert "Nothing more is sent for SBIN on NSE (MIS) until it is resolved" in text
 
 
 def test_a_matching_row_whose_time_cannot_be_read_leaves_the_intent_ambiguous():

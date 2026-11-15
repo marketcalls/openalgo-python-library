@@ -107,6 +107,7 @@ class FakeGuard:
 
     def __init__(self, *, mode: Mode = Mode.LIVE, entry_error: Exception | None = None) -> None:
         self.mode = mode
+        self.started = True
         self.locked = False
         self.entry_error = entry_error
         self.entry_checks = 0

@@ -34,18 +34,18 @@ logger = logging.getLogger(LOGGER_NAME)
 #: An unbound intent is declared not placed only after this many order-book reads miss
 #: it, once misses count: a broker's book can show a new order a few seconds late.
 NOT_PLACED_MISSES = 2
-#: When the server has finished with the request (it refused the connection, or answered
-#: 500 or 502 in its own JSON), misses count from this long after its answer.
+#: When the server has finished with the request (`server_has_finished`: it was never
+#: reached, or it answered in its own JSON), misses count from this long after the answer.
 NOT_PLACED_AFTER_NS = 5 * NANOS_PER_SECOND
 #: Otherwise the server may still be placing the order. It waits this long for each
 #: phase of the broker's answer (`REQUEST_TIMEOUT_SECONDS`, 120, utils/httpx_client.py on
 #: the server) ...
-SERVER_BROKER_TIMEOUT_NS = 120 * NANOS_PER_SECOND
+_SERVER_BROKER_TIMEOUT_NS = 120 * NANOS_PER_SECOND
 #: ... after the broker's pacing queue, which has no ceiling under eventlet
 #: (utils/broker_backpressure.py): this margin covers an order queued behind others.
-BROKER_QUEUE_MARGIN_NS = 30 * NANOS_PER_SECOND
+_BROKER_QUEUE_MARGIN_NS = 30 * NANOS_PER_SECOND
 #: So misses of such an intent count only from its send plus this window.
-BROKER_WINDOW_NS = SERVER_BROKER_TIMEOUT_NS + BROKER_QUEUE_MARGIN_NS
+BROKER_WINDOW_NS = _SERVER_BROKER_TIMEOUT_NS + _BROKER_QUEUE_MARGIN_NS
 #: The order book is read at most this often while an intent is unbound (the session
 #: asks on every turn of its loop; OpenAlgo answers 10 reads a second).
 BOOK_READ_EVERY_NS = 1 * NANOS_PER_SECOND
@@ -167,9 +167,10 @@ class UnboundResolver:
         """Alert an intent that stays unbound for a reason the path cannot settle."""
         self._alert_once(
             intent,
-            f"may or may not be at the broker: {why}. Nothing more is sent until it is "
-            "resolved; check the broker's order book, and stop the session with Ctrl+C if "
-            "it cannot be settled",
+            f"may or may not be at the broker: {why}. Nothing more is sent for "
+            f"{intent.symbol} on {intent.exchange} ({intent.product}) until it is resolved; "
+            "check the broker's order book, and stop the session with Ctrl+C if it cannot "
+            "be settled",
         )
 
     def _alert_once(self, intent: OrderIntent, says: str) -> None:
@@ -185,6 +186,16 @@ class UnboundResolver:
         self._alerts.send(AlertKind.ERROR, text)
 
 
+def same_leg(intent: OrderIntent, other: OrderIntent) -> bool:
+    """Whether two intents trade the same symbol, exchange and product: an unbound intent
+    holds back only the sends of its own instrument and product."""
+    return (intent.symbol, intent.exchange, intent.product) == (
+        other.symbol,
+        other.exchange,
+        other.product,
+    )
+
+
 def _rows_or_none(answer: Mapping[str, Any]) -> list[Mapping[str, Any]] | None:
     """The rows of a successful order-book answer, or None when it cannot be read."""
     if answer.get("status") != "success":
@@ -198,10 +209,9 @@ def _rows_or_none(answer: Mapping[str, Any]) -> list[Mapping[str, Any]] | None:
 
 __all__ = [
     "BOOK_READ_EVERY_NS",
-    "BROKER_QUEUE_MARGIN_NS",
     "BROKER_WINDOW_NS",
     "NOT_PLACED_AFTER_NS",
     "NOT_PLACED_MISSES",
-    "SERVER_BROKER_TIMEOUT_NS",
+    "same_leg",
     "UnboundResolver",
 ]

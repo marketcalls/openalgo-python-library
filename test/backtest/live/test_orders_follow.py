@@ -1,9 +1,10 @@
-"""Following orders once sent: news taken once and in order, a stop read as waiting for
-its trigger until the stream says otherwise, updates of orders not bound kept aside, and
-the orders taken back after a restart."""
+"""Following orders once sent: news taken once and in order with its status as the broker
+reported it, words that repeat or lose what is known, updates of orders not bound kept
+aside, and the orders taken back after a restart."""
 
 import pytest
 from orders_fakes import (
+    NS,
     STRATEGY,
     TIMEOUT,
     http_error,
@@ -19,16 +20,16 @@ from orders_fakes import (
 from openalgo.backtest._live._types import OrderStatus, Purpose
 
 NOT_FOUND = http_error(404, server_error("Order 1 not found"))
-STOP_ROW = {"pricetype": "SL-M", "action": "SELL"}
+STOP_ROW = {"pricetype": "SL", "action": "SELL"}
 #: A trailing modify of the stop: its trigger moved up.
 TRAIL = {
     "symbol": "SBIN",
     "action": "SELL",
     "exchange": "NSE",
-    "price_type": "SL-M",
+    "price_type": "SL",
     "product": "MIS",
     "quantity": 10,
-    "price": 0,
+    "price": 768.0,
     "trigger_price": 808.0,
 }
 
@@ -41,10 +42,15 @@ def sent_rig(**answers):
 
 
 def stop_rig(**answers):
-    """A rig whose stop i-stop, an SL-M sell, was placed as order 1."""
+    """A rig whose stop i-stop, an SL sell, was placed as order 1."""
     rig = make_rig(placeorder=[placed("1")], **answers)
     stop = make_intent(
-        "i-stop", purpose=Purpose.STOP, action="SELL", price_type="SL-M", trigger_price=806.5
+        "i-stop",
+        purpose=Purpose.STOP,
+        action="SELL",
+        price_type="SL",
+        price=760.0,
+        trigger_price=800.0,
     )
     rig.path.send(stop)
     return rig
@@ -66,13 +72,54 @@ def test_a_duplicate_update_is_dropped():
     assert rig.path.on_update(update("1", OrderStatus.OPEN, 4)) is None
 
 
-def test_a_change_of_quantity_with_the_same_status_and_fills_is_news():
+@pytest.mark.parametrize(
+    "changed",
+    [
+        update("1", OrderStatus.TRIGGER_PENDING, 0, quantity=20),
+        update("1", OrderStatus.TRIGGER_PENDING, 0, price=1.0),
+        update("1", OrderStatus.OPEN, 0),
+    ],
+    ids=["order quantity", "average price", "status"],
+)
+def test_a_change_of_the_reported_status_quantity_or_price_is_news(changed):
     rig = stop_rig()
     rig.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0))
 
-    modified = update("1", OrderStatus.TRIGGER_PENDING, 0, quantity=20)
+    assert rig.path.on_update(changed) is changed
 
-    assert rig.path.on_update(modified) is modified
+
+def test_a_status_is_passed_on_as_reported_whichever_way_it_changes():
+    rig = stop_rig()
+    words = [
+        update("1", OrderStatus.TRIGGER_PENDING, 0),
+        update("1", OrderStatus.OPEN, 0, source="poll"),
+        update("1", OrderStatus.TRIGGER_PENDING, 0),
+    ]
+
+    taken = [rig.path.on_update(word) for word in words]
+
+    assert taken == words
+
+
+def test_an_open_after_the_sessions_own_modify_of_a_stop_is_passed_on_as_reported():
+    # A broker reports a modify of a waiting stop (zerodha's MODIFY PENDING) as open: the
+    # order path does not read a trigger into it, nor out of it.
+    rig = stop_rig(modifyorder=[placed("1")])
+    rig.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0))
+    rig.path.modify("1", **TRAIL)
+
+    told = rig.path.on_update(update("1", OrderStatus.OPEN, 0))
+
+    assert told.status is OrderStatus.OPEN
+
+
+def test_a_poll_saying_open_for_a_stop_is_passed_on_as_open():
+    rig = stop_rig(orderstatus=[status_answer("1", "open", **STOP_ROW)], tradebook=[trades()])
+    rig.clock.advance(2)
+
+    (first,) = rig.path.due_polls()
+
+    assert first.status is OrderStatus.OPEN
 
 
 def test_an_update_with_a_lower_filled_quantity_than_seen_is_stale():
@@ -120,137 +167,23 @@ def test_a_stream_word_that_repeats_what_is_known_is_journaled_but_not_returned(
     assert rig.journal.updates == [first, again]
 
 
-def test_after_a_restart_the_trigger_is_seen_when_the_stream_spoke_after_a_poll():
-    first = stop_rig(orderstatus=[status_answer("1", "trigger pending", **STOP_ROW)])
-    first.clock.advance(2)
-    first.path.due_polls()
-    first.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0))
-    rig = make_rig(journal=first.journal)
-    rig.path.restore()
+def test_a_word_without_the_price_of_fills_known_at_a_price_is_neither_news_nor_journaled():
+    rig = sent_rig()
+    priced = update("1", OrderStatus.OPEN, 4, price=812.0)
+    rig.path.on_update(priced)
 
-    triggered = rig.path.on_update(update("1", OrderStatus.OPEN, 0))
-
-    assert triggered.status is OrderStatus.OPEN
+    assert rig.path.on_update(update("1", OrderStatus.OPEN, 4, price=0.0)) is None
+    assert rig.journal.updates == [priced]
 
 
-def test_a_stop_the_stream_reports_waiting_then_open_is_triggered():
-    rig = stop_rig()
-    rig.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0))
+def test_a_word_after_a_terminal_status_is_not_journaled():
+    rig = sent_rig()
+    done = update("1", OrderStatus.COMPLETE, 10)
+    rig.path.on_update(done)
 
-    triggered = rig.path.on_update(update("1", OrderStatus.OPEN, 0))
+    rig.path.on_update(update("1", OrderStatus.COMPLETE, 10))
 
-    assert triggered.status is OrderStatus.OPEN
-
-
-def test_a_stop_polled_open_before_the_stream_spoke_is_waiting_for_its_trigger():
-    # Some brokers' books write a stop waiting for its trigger as open.
-    rig = stop_rig(
-        orderstatus=[status_answer("1", "open", pricetype="SL-M", action="SELL")],
-        tradebook=[trades()],
-    )
-    rig.clock.advance(2)
-
-    (first,) = rig.path.due_polls()
-
-    assert first.status is OrderStatus.TRIGGER_PENDING
-
-
-def test_the_streams_word_that_a_stop_waits_is_not_taken_as_going_back():
-    rig = stop_rig(
-        orderstatus=[status_answer("1", "open", pricetype="SL-M", action="SELL")],
-        tradebook=[trades()],
-    )
-    rig.clock.advance(2)
-    rig.path.due_polls()
-
-    rig.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0))
-    triggered = rig.path.on_update(update("1", OrderStatus.OPEN, 0))
-
-    assert rig.journal.updates[-1].status is OrderStatus.OPEN
-    assert triggered is not None
-
-
-def test_a_stop_the_stream_reports_open_with_no_word_of_waiting_still_waits():
-    rig = stop_rig()
-
-    first = rig.path.on_update(update("1", OrderStatus.OPEN, 0))
-
-    assert first.status is OrderStatus.TRIGGER_PENDING
-
-
-def test_a_poll_saying_open_for_a_stop_the_stream_said_waits_is_not_news():
-    rig = stop_rig()
-    rig.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0))
-
-    assert rig.path.on_update(update("1", OrderStatus.OPEN, 0, source="poll")) is None
-
-
-def test_a_fill_of_a_stop_is_news_whatever_word_its_book_uses():
-    rig = stop_rig()
-    rig.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0))
-
-    filled = rig.path.on_update(update("1", OrderStatus.OPEN, 4))
-
-    assert (filled.status, filled.filled_quantity) == (OrderStatus.OPEN, 4)
-
-
-@pytest.mark.parametrize(
-    "change",
-    [
-        lambda path: path.modify("1", **TRAIL),
-        lambda path: path.cancel("1"),
-    ],
-    ids=["trailing modify", "cancel"],
-)
-@pytest.mark.parametrize("answer", [placed("1"), TIMEOUT], ids=["accepted", "unanswered"])
-def test_a_stops_open_after_the_sessions_own_change_is_not_a_trigger(change, answer):
-    # zerodha reports UPDATE, MODIFY PENDING and CANCEL PENDING of a waiting stop as open.
-    rig = stop_rig(modifyorder=[answer], cancelorder=[answer])
-    rig.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0))
-    change(rig.path)
-
-    assert rig.path.on_update(update("1", OrderStatus.OPEN, 0)) is None
-    assert rig.journal.updates[-1].status is OrderStatus.TRIGGER_PENDING
-
-
-def test_the_streams_word_that_the_stop_waits_again_makes_its_open_a_trigger():
-    rig = stop_rig(modifyorder=[placed("1")])
-    rig.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0))
-    rig.path.modify("1", **TRAIL)
-    rig.path.on_update(update("1", OrderStatus.OPEN, 0))
-    rig.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0))
-
-    triggered = rig.path.on_update(update("1", OrderStatus.OPEN, 0))
-
-    assert triggered.status is OrderStatus.OPEN
-
-
-def test_a_refused_modify_leaves_the_stops_trigger_reading_as_it_was():
-    rig = stop_rig(modifyorder=[http_error(400, server_error("Order cannot be modified"))])
-    rig.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0))
-    rig.path.modify("1", **TRAIL)
-
-    triggered = rig.path.on_update(update("1", OrderStatus.OPEN, 0))
-
-    assert triggered.status is OrderStatus.OPEN
-
-
-def test_a_status_never_moves_back_from_open_to_trigger_pending():
-    rig = stop_rig()
-    rig.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0))
-    rig.path.on_update(update("1", OrderStatus.OPEN, 0))
-
-    assert rig.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0)) is None
-
-
-def test_a_modify_that_changes_the_price_type_changes_how_the_order_is_read():
-    rig = stop_rig(modifyorder=[placed("1")])
-    fields = {"symbol": "SBIN", "action": "SELL", "exchange": "NSE", "product": "MIS"}
-    rig.path.modify("1", **fields, price_type="LIMIT", quantity=10, price=806.0, trigger_price=0)
-
-    now_open = rig.path.on_update(update("1", OrderStatus.OPEN, 0))
-
-    assert now_open.status is OrderStatus.OPEN
+    assert rig.journal.updates == [done]
 
 
 def test_an_update_of_an_order_the_session_never_sent_is_ignored():
@@ -287,15 +220,23 @@ def test_restored_working_orders_are_polled_and_terminal_ones_are_not():
     assert [kwargs["order_id"] for kwargs in rig.client.calls_to("orderstatus")] == ["1"]
 
 
-def test_a_restored_stop_the_stream_said_waits_is_triggered_by_the_streams_open():
-    first = stop_rig()
-    first.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0))
-    rig = make_rig(journal=first.journal)
+def test_after_a_restart_an_order_the_stream_spoke_for_keeps_its_safety_net_poll():
+    # A poll said the stop waits before the stream did; the stream's repeat is journaled,
+    # so the restored order is known to the stream and is not polled every second.
+    first = stop_rig(orderstatus=[status_answer("1", "trigger pending", **STOP_ROW)])
+    first.clock.advance(2)
+    first.path.due_polls()
+    first.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0, ts_recv_ns=first.clock.now_ns))
+    rig = make_rig(journal=first.journal, clock=first.clock, orderstatus=[NOT_FOUND])
     rig.path.restore()
 
-    triggered = rig.path.on_update(update("1", OrderStatus.OPEN, 0))
+    rig.clock.advance(29)
+    assert rig.path.due_polls() == []
+    rig.clock.advance(1)
+    rig.path.due_polls()
 
-    assert triggered.status is OrderStatus.OPEN
+    assert len(rig.client.calls_to("orderstatus")) == 1
+    assert rig.clock.now_ns - first.journal.updates[-1].ts_recv_ns == 30 * NS
 
 
 def test_a_restored_order_takes_its_fills_from_the_tradebook_like_one_sent():
@@ -308,3 +249,13 @@ def test_a_restored_order_takes_its_fills_from_the_tradebook_like_one_sent():
     (cancelled,) = rig.path.due_polls()
 
     assert (cancelled.filled_quantity, cancelled.average_price) == (4, 812.0)
+
+
+def test_an_unanswered_cancel_changes_nothing_of_how_the_order_is_read():
+    rig = stop_rig(cancelorder=[TIMEOUT])
+    rig.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0))
+    rig.path.cancel("1")
+
+    told = rig.path.on_update(update("1", OrderStatus.OPEN, 0))
+
+    assert told.status is OrderStatus.OPEN
