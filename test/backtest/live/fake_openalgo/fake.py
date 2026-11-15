@@ -1,0 +1,231 @@
+"""`FakeOpenAlgo`: an in-process OpenAlgo server, broker and sandbox for the live layer's
+tests, with every fault the fault suite schedules.
+
+A test builds one (through the `fake_openalgo` fixture, which installs its WebSocket
+proxy and fails the test on any problem), gets real SDK clients from `client()`, pushes
+prices with `trade`, and drives the broker and the switches. The live layer runs against
+it unchanged: REST through the SDK's own HTTP client on an in-process transport, ticks
+and order updates through the SDK's own `FeedAPI` on the feed tests' in-process socket.
+Nothing opens a socket.
+
+Times are UTC nanoseconds on the fake's manual clock, prices rupees, quantities units
+(never lots).
+"""
+
+from __future__ import annotations
+
+import dataclasses
+from collections.abc import Iterable
+
+import httpx
+from feed_fakes import retire, shorten
+
+from openalgo import api
+from openalgo.backtest._live._types import Mode
+
+from .clock import ManualClock
+from .faults import Faults
+from .feed import Feed
+from .feed_server import FeedServer
+from .log import FakeLog
+from .market import Candle, Instrument
+from .orders import FakeOrder, Fill
+from .rest import ROUTES, RestHandler
+from .venue import Rejection, TelegramMessage, Venue
+
+#: The fake's API key: a placeholder, never a real key.
+API_KEY = "fake-openalgo-key-not-a-real-one"
+#: The host the clients are built for: a name that cannot resolve, so a request that
+#: escaped the in-process transport could reach nothing.
+HOST = "http://openalgo.invalid"
+#: The broker OpenAlgo is logged in to, and the OpenAlgo user.
+BROKER = "zerodha"
+USERNAME = "trader1"
+#: Each book's available cash, rupees: a broker account and the sandbox's default pool.
+LIVE_CASH = 250_000.0
+SANDBOX_CASH = 10_000_000.0
+#: The feed's waits made short for tests, seconds (the SDK's one test seam).
+_FEED_TIMING = {"poll": 0.002, "backoff": (0.01,), "backoff_slice": 0.005}
+
+
+class FakeOpenAlgo:
+    """The fake server. `start_ns` starts its clock (UTC nanoseconds); `analyzer` is the
+    analyzer switch at the start (False: live mode).
+
+    Attributes: `clock` (the manual clock to hand the live layer as `Now` and `Sleep`),
+    `log` (everything that happened), `faults` (the faults a test schedules) and
+    `feed_server` (the WebSocket proxy, installed by the fixture).
+    """
+
+    def __init__(
+        self,
+        *,
+        start_ns: int,
+        analyzer: bool = False,
+        broker: str = BROKER,
+        username: str = USERNAME,
+        live_cash: float = LIVE_CASH,
+        sandbox_cash: float = SANDBOX_CASH,
+    ) -> None:
+        self.clock = ManualClock(start_ns)
+        self.log = FakeLog()
+        self.feed_server = FeedServer(API_KEY, broker, username)
+        feed = Feed(self.feed_server, self.log, self.clock.now, broker)
+        self._venue = Venue(
+            clock=self.clock,
+            log=self.log,
+            feed=feed,
+            broker=broker,
+            username=username,
+            live_cash=live_cash,
+            sandbox_cash=sandbox_cash,
+            analyzer=analyzer,
+        )
+        self.faults = Faults(self._venue, feed, frozenset(ROUTES))
+        self._handler = RestHandler(self._venue, self.faults, API_KEY)
+        self._clients: list[api] = []
+
+    # -- wiring -----------------------------------------------------------
+
+    def client(self, *, api_key: str = API_KEY, auto_reconnect: bool = True) -> api:
+        """A real `openalgo.api` whose REST calls this fake answers in-process, and whose
+        feed connects to its proxy (installed by the fixture). Closed by `close`. A key
+        other than `API_KEY` is refused as the server refuses an unknown one."""
+        client = api(api_key=api_key, host=HOST, auto_reconnect=auto_reconnect)
+        client.client.close()
+        client.client = httpx.Client(transport=httpx.MockTransport(self._handler))
+        shorten(client, **_FEED_TIMING)
+        self._clients.append(client)
+        return client
+
+    def close(self) -> None:
+        """Retire every client: their feed threads end and nothing reconnects."""
+        self.feed_server.answer_close = True
+        self.feed_server.gate.set()
+        for client in self._clients:
+            retire(client)
+        self._clients.clear()
+
+    @property
+    def mode(self) -> Mode:
+        """The mode the analyzer switch selects now."""
+        return self._venue.mode
+
+    # -- the market -------------------------------------------------------
+
+    def add_instrument(
+        self,
+        symbol: str,
+        exchange: str,
+        *,
+        lot_size: int = 1,
+        tick_size: float = 0.05,
+        freeze_qty: int = 0,
+        instrument_type: str = "EQ",
+        expiry: str = "",
+        strike: float = 0.0,
+    ) -> None:
+        """Make an instrument known to the broker and OpenAlgo's symbol table (sizes in
+        units, prices in rupees; see `market.Instrument`)."""
+        instrument = Instrument(
+            symbol, exchange, lot_size, tick_size, freeze_qty, instrument_type, expiry, strike
+        )
+        self._venue.add_instrument(instrument)
+
+    def trade(
+        self,
+        symbol: str,
+        exchange: str,
+        price: float,
+        *,
+        volume: float = 0.0,
+        bid: float | None = None,
+        ask: float | None = None,
+    ) -> None:
+        """A trade of `volume` units at `price` rupees now: orders are worked, the candle
+        grows and a tick is sent to the subscribers (`bid` and `ask`: the best quotes,
+        else the price)."""
+        self._venue.trade(symbol, exchange, price, volume=volume, bid=bid, ask=ask)
+
+    def seed_candles(
+        self,
+        symbol: str,
+        exchange: str,
+        candles: Iterable[tuple[int, float, float, float, float, float]],
+    ) -> None:
+        """Put in broker candles of the past for `history`: each (start UTC nanoseconds on
+        the minute, open, high, low, close, volume in units)."""
+        with self._venue.lock:
+            market = self._venue.market(symbol, exchange)
+            if market is None:
+                raise ValueError(f"the fake broker does not know {exchange}:{symbol}")
+            for start, open_, high, low, close, volume in candles:
+                market.seed(Candle(start, open_, high, low, close, volume))
+
+    # -- the broker -------------------------------------------------------
+
+    def fill(self, order_id: str, units: int | None = None, *, price: float | None = None) -> None:
+        """Fill a working order of either book now: all that is pending (or `units` of
+        it, live only), at the last price (or `price`). Raises ValueError for an unknown
+        or finished order or when no price has traded yet."""
+        self._venue.fill(order_id, units, price)
+
+    def split_next_fill(self, units: int) -> None:
+        """The next fill of a live order takes only `units`; the rest fills at a later
+        price. Raises ValueError in sandbox mode, which fills whole orders only."""
+        self._venue.split_next_fill(units)
+
+    def reject_next(
+        self, reason: str, *, price_type: str | None = None, at_placement: bool = False
+    ) -> None:
+        """The broker refuses the next order (of `price_type` when given) with `reason`:
+        at placement (the place call answers HTTP 400) or, by default, right after
+        accepting it (an order ID, then a rejected update)."""
+        self._venue.schedule_rejection(Rejection(reason, price_type, at_placement))
+
+    def set_analyzer(self, on: bool) -> None:
+        """Flip OpenAlgo's analyzer switch (True: sandbox mode)."""
+        self._venue.set_switch("analyzer", on)
+
+    def set_semi_auto(self, on: bool) -> None:
+        """Turn semi-auto (Action Center) mode on or off."""
+        self._venue.set_switch("semi_auto", on)
+
+    def set_telegram_bot(self, on: bool) -> None:
+        """Start or stop OpenAlgo's Telegram bot."""
+        self._venue.set_switch("telegram_bot", on)
+
+    # -- what the test reads ------------------------------------------------
+
+    def orders(self, mode: Mode | None = None) -> list[FakeOrder]:
+        """Copies of a book's orders (the selected one by default), oldest first."""
+        book = self._venue.books[mode or self.mode]
+        with self._venue.lock:
+            return [dataclasses.replace(order) for order in book.orders.values()]
+
+    def fills(self, mode: Mode | None = None) -> list[Fill]:
+        """A book's fills (the selected one by default), oldest first."""
+        with self._venue.lock:
+            return list(self._venue.books[mode or self.mode].fills)
+
+    def position(self, symbol: str, exchange: str, mode: Mode | None = None) -> int:
+        """A book's net position in an instrument, signed units."""
+        with self._venue.lock:
+            return self._venue.books[mode or self.mode].positions.net(symbol, exchange)
+
+    @property
+    def telegram_sent(self) -> list[TelegramMessage]:
+        """The notifications the Telegram endpoint took, oldest first."""
+        with self._venue.lock:
+            return list(self._venue.telegram_sent)
+
+
+__all__ = [
+    "API_KEY",
+    "BROKER",
+    "HOST",
+    "LIVE_CASH",
+    "SANDBOX_CASH",
+    "USERNAME",
+    "FakeOpenAlgo",
+]
