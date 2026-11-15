@@ -91,6 +91,29 @@ class CostError(BacktestError, ValueError):
     """A cost segment, preset or schedule is unknown or inconsistent."""
 
 
+class LiveError(BacktestError):
+    """A live session (`bt.live`) cannot start or go on; the message says what to do."""
+
+
+class PreflightError(LiveError):
+    """A check before a live session failed. `failures` holds the message of every
+    failed check, each saying what to fix."""
+
+    def __init__(self, message, failures=()):
+        super().__init__(message)
+        self.failures = tuple(failures)
+
+
+class ModeChangedError(LiveError):
+    """OpenAlgo's analyzer switch changed during a live session (or semi-auto mode
+    appeared): the session sends nothing more, and is started again in the mode the
+    user wants (D21)."""
+
+
+class JournalError(LiveError):
+    """The live session's journal cannot be opened, read or written."""
+
+
 class OrdersNotPlacedWarning(UserWarning):
     """Orders of a run were not placed: rejected (margin, the product rule, a quantity
     off the lot size, ...) or skipped before they were placed (a sized quantity of less
@@ -119,9 +142,13 @@ __all__ = [
     "DataError",
     "DataQualityError",
     "IndicatorOutsideInitError",
+    "JournalError",
+    "LiveError",
     "MissingDependencyError",
+    "ModeChangedError",
     "NoDataError",
     "OrdersNotPlacedWarning",
+    "PreflightError",
     "ReferenceDataError",
     "ServerError",
     "SymbolNotFoundError",
