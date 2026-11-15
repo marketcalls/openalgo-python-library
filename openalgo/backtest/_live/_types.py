@@ -196,6 +196,10 @@ class GuardLike(Protocol):
     def check_update(self, update: OrderUpdate) -> None:
         """Check the mode of an order update; locks the guard on a change."""
 
+    def note_order_sent(self, order_id: str) -> None:
+        """Record an order the session sent, so a breach can list the orders sent after
+        the change, and so the guard judges updates of the session's own orders only."""
+
 
 class AlertsLike(Protocol):
     """What the modules need of the alerts (`alerts.Alerts`)."""
