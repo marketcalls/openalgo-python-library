@@ -25,12 +25,12 @@ from collections.abc import Mapping
 from typing import Any
 
 from ..errors import LiveError, ModeChangedError
+from ._answers import server_answer
 from ._order_answers import (
     Outcome,
     SendOutcome,
     ServerWatch,
     outcome_of,
-    server_answer,
     server_has_finished,
 )
 from ._order_book import Resolution, Resolved
