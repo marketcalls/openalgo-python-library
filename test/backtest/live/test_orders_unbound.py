@@ -1,34 +1,56 @@
 """Unbound intents (a 502, a timeout, a lost connection) settled against OpenAlgo's order
-book: bound to their order, marked not placed, or left for the operator."""
+book: bound to their order, marked not placed after two reads that miss it, or left for
+the operator with an alert."""
 
 import datetime as dt
 
 import pytest
 from orders_fakes import (
     NS,
+    START_IST,
     START_NS,
     TIMEOUT,
+    Clock,
+    FakeJournal,
     book,
     book_row,
     http_error,
     make_intent,
     make_rig,
     placed,
+    server_error,
     status_answer,
+    update,
 )
 
 from openalgo.backtest._live._order_book import book_time_ns
+from openalgo.backtest._live._order_follow import MAX_UNCLAIMED_UPDATES
+from openalgo.backtest._live._types import AlertKind, OrderStatus
 from openalgo.backtest._live.orders import Resolution, Resolved
-from openalgo.backtest.errors import LiveError
+
+SEMI_AUTO = {
+    "status": "success",
+    "message": "Order queued for approval in Action Center",
+    "mode": "semi_auto",
+    "pending_order_id": 17,
+}
 
 
-def unbound_rig(*rows, intent=None, **answers):
+def unbound_rig(*rows, intent=None, reads=2, **answers):
     """A rig whose intent (i-1 unless given) was sent and answered 502, with an order
-    book holding `rows`."""
+    book holding `rows` for `reads` reads."""
     rig = make_rig(placeorder=[http_error(502), *answers.pop("placeorder", [])], **answers)
-    rig.client.answers["orderbook"] = [book(*rows)]
+    rig.client.answers["orderbook"] = [book(*rows) for _ in range(reads)]
     rig.path.send(intent or make_intent("i-1"))
     return rig
+
+
+def settle(rig):
+    """Read the order book 5 and 6 seconds after now, and return every resolution."""
+    rig.clock.advance(5)
+    resolutions = rig.path.resolve_unbound()
+    rig.clock.advance(1)
+    return resolutions + rig.path.resolve_unbound()
 
 
 def test_an_unbound_intent_found_in_the_order_book_is_bound_to_its_order():
@@ -42,14 +64,37 @@ def test_an_unbound_intent_found_in_the_order_book_is_bound_to_its_order():
     assert rig.guard.sent == ["2611160001"]
 
 
-def test_an_unbound_intent_missing_from_the_order_book_is_marked_not_placed():
+def test_an_unbound_intent_is_not_placed_after_two_reads_that_miss_it():
     rig = unbound_rig()
+    rig.clock.advance(5)
 
+    assert rig.path.resolve_unbound() == []
+    assert rig.journal.not_placed == {}
+    rig.clock.advance(1)
     (resolution,) = rig.path.resolve_unbound()
 
     assert resolution.kind is Resolved.NOT_PLACED
     assert "order book" in rig.journal.not_placed["i-1"]
     assert rig.journal.unbound() == []
+
+
+def test_a_read_sooner_than_five_seconds_after_the_send_does_not_count_as_a_miss():
+    rig = unbound_rig(reads=3)
+    for seconds in (1, 3.5, 1):
+        rig.clock.advance(seconds)
+        assert rig.path.resolve_unbound() == []
+
+    assert rig.journal.not_placed == {}
+
+
+def test_the_order_book_is_read_at_most_once_a_second():
+    rig = unbound_rig()
+
+    for _ in range(10):
+        rig.clock.advance(0.1)
+        rig.path.resolve_unbound()
+
+    assert len(rig.client.calls_to("orderbook")) == 1
 
 
 def test_orders_are_sent_again_once_the_unbound_intent_is_settled():
@@ -76,7 +121,7 @@ def test_orders_are_sent_again_once_the_unbound_intent_is_settled():
 def test_a_row_that_differs_in_any_field_is_not_the_intents_order(difference):
     rig = unbound_rig(book_row("2611160001", **difference))
 
-    (resolution,) = rig.path.resolve_unbound()
+    (resolution,) = settle(rig)
 
     assert resolution.kind is Resolved.NOT_PLACED
 
@@ -117,7 +162,7 @@ def test_an_order_placed_before_the_intent_beyond_the_clock_skew_limit_is_not_it
     intent = make_intent("i-1", created_ns=START_NS + 400_000_000)
     rig = unbound_rig(book_row("2611160001", timestamp=placed_at), intent=intent)
 
-    (resolution,) = rig.path.resolve_unbound()
+    (resolution,) = settle(rig)
 
     assert resolution.kind is kind
 
@@ -132,33 +177,34 @@ def test_two_matching_orders_leave_the_intent_unbound_for_the_operator():
     assert [intent.intent_id for intent in rig.journal.unbound()] == ["i-1"]
 
 
-def test_an_order_this_session_bound_is_not_matched_to_another_intent():
-    rig = make_rig(placeorder=[placed("2611160001"), TIMEOUT])
-    rig.client.answers["orderbook"] = [book(book_row("2611160001"))]
-    rig.path.send(make_intent("i-1"))
-    rig.path.send(make_intent("i-2"))
+def test_an_ambiguous_intent_sends_one_error_alert_naming_it():
+    rig = unbound_rig(book_row("2611160001"), book_row("2611160002"))
+
+    settle(rig)
+
+    ((kind, text),) = rig.alerts.sent
+    assert kind is AlertKind.ERROR
+    assert "i-1" in text
+    assert "Nothing more is sent until it is resolved" in text
+
+
+def test_a_matching_row_whose_time_cannot_be_read_leaves_the_intent_ambiguous():
+    rig = unbound_rig(book_row("2611160001", timestamp="16/11/26 10.15"))
 
     (resolution,) = rig.path.resolve_unbound()
 
-    assert (resolution.intent.intent_id, resolution.kind) == ("i-2", Resolved.NOT_PLACED)
-
-
-def test_a_matching_row_whose_time_cannot_be_read_raises_and_changes_nothing():
-    rig = unbound_rig(book_row("2611160001", timestamp="16/11/26 10.15"))
-
-    with pytest.raises(LiveError, match="'16/11/26 10.15' cannot be read"):
-        rig.path.resolve_unbound()
-
+    assert (resolution.kind, resolution.candidates) == (Resolved.AMBIGUOUS, ("2611160001",))
     assert rig.journal.order_of == {}
     assert rig.journal.not_placed == {}
 
 
-def test_an_order_book_that_cannot_be_read_resolves_nothing():
-    rig = unbound_rig()
-    rig.client.answers["orderbook"] = [TIMEOUT]
+def test_an_order_book_that_cannot_be_read_keeps_the_intent_and_sends_one_alert():
+    rig = unbound_rig(reads=0)
+    rig.client.answers["orderbook"] = [TIMEOUT, TIMEOUT]
 
-    assert rig.path.resolve_unbound() == []
+    assert settle(rig) == []
     assert [intent.intent_id for intent in rig.journal.unbound()] == ["i-1"]
+    assert [kind for kind, _ in rig.alerts.sent] == [AlertKind.ERROR]
 
 
 def test_with_nothing_unbound_the_order_book_is_not_read():
@@ -167,6 +213,97 @@ def test_with_nothing_unbound_the_order_book_is_not_read():
 
     assert rig.path.resolve_unbound() == []
     assert rig.client.calls_to("orderbook") == []
+
+
+def test_nothing_is_resolved_while_the_guard_is_locked():
+    rig = unbound_rig()
+    rig.guard.locked = True
+
+    assert settle(rig) == []
+    assert rig.client.calls_to("orderbook") == []
+
+
+def test_a_book_of_the_other_mode_settles_nothing():
+    rig = unbound_rig(reads=0)
+    sandbox_book = {**book(), "mode": "analyze"}
+    rig.client.answers["orderbook"] = [sandbox_book, sandbox_book]
+
+    assert settle(rig) == []
+    assert rig.guard.locked
+    assert rig.guard.responses[-1] is sandbox_book
+    assert rig.journal.not_placed == {}
+
+
+def test_a_semi_auto_queued_intent_is_never_marked_not_placed():
+    rig = make_rig(placeorder=[SEMI_AUTO])
+    rig.path.send(make_intent("i-1"))
+    rig.guard.locked = False
+    rig.client.answers["orderbook"] = [book(), book()]
+
+    assert settle(rig) == []
+    assert rig.journal.not_placed == {}
+
+
+def test_an_order_this_session_bound_is_not_matched_to_another_intent():
+    rig = make_rig(placeorder=[placed("2611160001"), TIMEOUT])
+    rig.client.answers["orderbook"] = [book(book_row("2611160001"))] * 2
+    rig.path.send(make_intent("i-1"))
+    rig.path.send(make_intent("i-2"))
+
+    (resolution,) = settle(rig)
+
+    assert (resolution.intent.intent_id, resolution.kind) == ("i-2", Resolved.NOT_PLACED)
+
+
+def test_an_order_another_intent_owns_in_the_journal_is_never_bound_after_a_restart():
+    journal = FakeJournal()
+    journal.record_intent(make_intent("i-A"))
+    journal.bind("i-A", "111")
+    journal.record_intent(make_intent("i-B", created_ns=START_NS + NS))
+    journal.mark_unbound("i-B", "timeout")
+    rig = make_rig(journal=journal, clock=Clock(START_NS + 30 * NS))
+    rig.client.answers["orderbook"] = [book(book_row("111", timestamp=START_IST))] * 2
+
+    resolutions = rig.path.resolve_unbound()
+    rig.clock.advance(1)
+    resolutions += rig.path.resolve_unbound()
+
+    assert [(r.intent.intent_id, r.kind) for r in resolutions] == [("i-B", Resolved.NOT_PLACED)]
+    assert journal.order_of == {"i-A": "111"}
+
+
+def test_an_update_of_an_order_not_bound_is_neither_returned_nor_journaled():
+    rig = unbound_rig(book_row("555"))
+
+    assert rig.path.on_update(update("555", OrderStatus.COMPLETE, 10)) is None
+    assert rig.journal.updates == []
+    assert rig.guard.updates == []
+
+
+def test_the_resolution_carries_the_latest_update_of_the_order_it_binds():
+    rig = unbound_rig(book_row("555"), orderstatus=[status_answer("555", "complete")])
+    rig.path.on_update(update("555", OrderStatus.OPEN, 0))
+    done = update("555", OrderStatus.COMPLETE, 10)
+    rig.path.on_update(done)
+
+    (resolution,) = rig.path.resolve_unbound()
+
+    assert (resolution.kind, resolution.update) == (Resolved.BOUND, done)
+    assert rig.journal.updates == [done]
+    rig.clock.advance(5)
+    assert rig.path.due_polls() == []
+    assert rig.client.calls_to("orderstatus") == []
+
+
+def test_only_the_latest_updates_of_so_many_orders_not_bound_are_kept():
+    rig = unbound_rig(book_row("555"))
+    rig.path.on_update(update("555", OrderStatus.COMPLETE, 10))
+    for n in range(MAX_UNCLAIMED_UPDATES):
+        rig.path.on_update(update(f"manual-{n}", OrderStatus.COMPLETE, 10))
+
+    (resolution,) = rig.path.resolve_unbound()
+
+    assert (resolution.kind, resolution.update) == (Resolved.BOUND, None)
 
 
 def test_an_order_found_in_the_book_is_polled_like_one_sent():
@@ -179,6 +316,17 @@ def test_an_order_found_in_the_book_is_polled_like_one_sent():
     rig.path.due_polls()
 
     assert [kwargs["order_id"] for kwargs in rig.client.calls_to("orderstatus")] == ["2611160001"]
+
+
+def test_a_sandbox_order_book_error_reaches_the_guard_as_the_server_wrote_it():
+    rig = unbound_rig(reads=0)
+    rig.client.answers["orderbook"] = [
+        http_error(500, server_error("Error getting orderbook", mode="analyze"))
+    ]
+
+    rig.path.resolve_unbound()
+
+    assert rig.guard.responses[-1]["mode"] == "analyze"
 
 
 @pytest.mark.parametrize(

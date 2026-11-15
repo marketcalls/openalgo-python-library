@@ -13,7 +13,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from openalgo.backtest._live._types import Mode, OrderIntent, OrderStatus, OrderUpdate, Purpose
+from openalgo.backtest._live._types import (
+    AlertKind,
+    BoundOrder,
+    Mode,
+    OrderIntent,
+    OrderStatus,
+    OrderUpdate,
+    Purpose,
+    mode_of,
+)
 from openalgo.backtest._live.orders import OrderPath, RateBudget
 
 NS = 1_000_000_000
@@ -71,12 +80,21 @@ class FakeJournal:
     def record_update(self, update: OrderUpdate) -> None:
         self.updates.append(update)
 
+    def bound_orders(self) -> list[BoundOrder]:
+        bound = []
+        for intent_id, order_id in self.order_of.items():
+            own = [update for update in self.updates if update.order_id == order_id]
+            bound.append(BoundOrder(self.intents[intent_id], order_id, own[-1] if own else None))
+        return bound
+
 
 class FakeGuard:
-    """Records what reaches it. `before_entry` raises `entry_error` when one is set, and
-    a semi-auto answer locks it, as the mode guard does."""
+    """Records what reaches it. `before_entry` raises `entry_error` when one is set; a
+    semi-auto answer, or an answer of the other mode than `mode`, locks it, as the mode
+    guard does (an error without a mode says nothing)."""
 
-    def __init__(self, *, entry_error: Exception | None = None) -> None:
+    def __init__(self, *, mode: Mode = Mode.LIVE, entry_error: Exception | None = None) -> None:
+        self.mode = mode
         self.locked = False
         self.entry_error = entry_error
         self.entry_checks = 0
@@ -92,7 +110,9 @@ class FakeGuard:
 
     def check_response(self, response: dict[str, Any]) -> None:
         self.responses.append(response)
-        if "pending_order_id" in response:
+        seen = mode_of(response)
+        says_nothing = seen is Mode.LIVE and response.get("status") != "success"
+        if "pending_order_id" in response or not (says_nothing or seen is self.mode):
             self.locked = True
 
     def check_update(self, update: OrderUpdate) -> None:
@@ -103,6 +123,16 @@ class FakeGuard:
 
     def note_order_in_doubt(self, intent_id: str) -> None:
         self.in_doubt.append(intent_id)
+
+
+class FakeAlerts:
+    """Keeps every alert sent."""
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[AlertKind, str]] = []
+
+    def send(self, kind: AlertKind, text: str) -> None:
+        self.sent.append((kind, text))
 
 
 class FakeClient:
@@ -154,23 +184,32 @@ class Rig:
     journal: FakeJournal
     guard: FakeGuard
     clock: Clock
+    alerts: FakeAlerts
 
 
-def make_rig(*, guard: FakeGuard | None = None, **answers: list[dict[str, Any]]) -> Rig:
+def make_rig(
+    *,
+    guard: FakeGuard | None = None,
+    journal: FakeJournal | None = None,
+    clock: Clock | None = None,
+    **answers: list[dict[str, Any]],
+) -> Rig:
     """An order path over fakes, with `answers` scripted per client method."""
     client = FakeClient(**answers)
-    journal = FakeJournal()
+    journal = journal or FakeJournal()
     guard = guard or FakeGuard()
-    clock = Clock()
+    clock = clock or Clock()
+    alerts = FakeAlerts()
     path = OrderPath(
         client,
         journal=journal,
         guard=guard,
+        alerts=alerts,
         now=clock.now,
         sleep=clock.sleep,
         rate=RateBudget(clock.now),
     )
-    return Rig(path, client, journal, guard, clock)
+    return Rig(path, client, journal, guard, clock, alerts)
 
 
 def make_intent(
@@ -284,24 +323,40 @@ def status_answer(order_id: str, status: str, **row: Any) -> dict[str, Any]:
 
 
 def update(
-    order_id: str, status: OrderStatus, filled: int, *, source: str = "stream"
+    order_id: str,
+    status: OrderStatus,
+    filled: int,
+    *,
+    source: str = "stream",
+    quantity: int = 10,
+    price: float | None = None,
+    ts_recv_ns: int = START_NS,
 ) -> OrderUpdate:
-    """An order update of a live buy of 10 SBIN."""
+    """An order update of a live buy of SBIN, its fills at 812.35 unless `price` says."""
     return OrderUpdate(
         order_id=order_id,
         symbol="SBIN",
         exchange="NSE",
         action="BUY",
-        quantity=10,
+        quantity=quantity,
         filled_quantity=filled,
-        pending_quantity=0 if status.terminal else 10 - filled,
-        average_price=812.35 if filled else 0.0,
+        pending_quantity=0 if status.terminal else quantity - filled,
+        average_price=(812.35 if filled else 0.0) if price is None else price,
         status=status,
         rejection_reason="",
         mode=Mode.LIVE,
-        ts_recv_ns=START_NS,
+        ts_recv_ns=ts_recv_ns,
         source=source,
     )
+
+
+def trades(*fills: tuple[str, int, float]) -> dict[str, Any]:
+    """A `tradebook` answer holding one trade per (order ID, quantity, price)."""
+    rows = [
+        {"orderid": order_id, "quantity": quantity, "average_price": price}
+        for order_id, quantity, price in fills
+    ]
+    return {"status": "success", "data": rows}
 
 
 def book_row(order_id: str, *, timestamp: str = START_IST, **changes: Any) -> dict[str, Any]:

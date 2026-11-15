@@ -116,9 +116,18 @@ def test_an_unknown_status_raises_naming_it():
 
 def test_a_complete_order_reported_with_no_fills_has_filled_all_of_it():
     # The server's polled stream sends 0 for a book row without a filled quantity.
-    message = stream_message("1", "complete", 0, pending_quantity=0)
+    message = stream_message("1", "complete", 0, pending_quantity=0, average_price=812.35)
 
-    assert normalize_update(message, ts_recv_ns=START_NS, source="stream").filled_quantity == 10
+    update = normalize_update(message, ts_recv_ns=START_NS, source="stream")
+
+    assert (update.filled_quantity, update.average_price) == (10, 812.35)
+
+
+def test_a_fill_reported_without_its_price_is_read_with_price_zero():
+    # Read as OpenAlgo wrote it; the order path holds such a fill until it is priced.
+    message = stream_message("1", "complete", 10, average_price=0.0)
+
+    assert normalize_update(message, ts_recv_ns=START_NS, source="stream").average_price == 0.0
 
 
 @pytest.mark.parametrize("status", ["rejected", "trigger pending"])

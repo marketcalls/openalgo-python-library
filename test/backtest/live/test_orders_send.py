@@ -256,6 +256,37 @@ def test_server_answer_returns_an_answer_without_a_server_body_unchanged(answer)
     assert server_answer(answer) is answer
 
 
+@pytest.mark.parametrize(
+    "answer", [{}, {"message": "accepted"}, {"status": "queued"}], ids=["empty", "no status", "odd"]
+)
+def test_an_answer_with_no_status_of_success_or_error_leaves_the_intent_unbound(answer):
+    rig = make_rig(placeorder=[answer])
+
+    outcome = rig.path.send(make_intent("i-1"))
+
+    assert outcome.kind is Outcome.UNANSWERED
+    assert rig.journal.not_placed == {}
+
+
+def test_the_mode_is_read_after_the_budget_wait_just_before_the_call():
+    rig = placed_rig(placeorder=[placed(str(n)) for n in range(2, 7)])
+    for n in range(2, 6):
+        rig.path.send(make_intent(f"i-{n}", purpose=Purpose.EXIT))
+    events = []
+    before_entry = rig.guard.before_entry
+
+    def reading():
+        events.append(("mode read", rig.clock.now_ns - START_NS))
+        before_entry()
+
+    rig.guard.before_entry = reading
+    rig.client.before_call = lambda name, kwargs: events.append((name, rig.clock.now_ns - START_NS))
+
+    rig.path.send(make_intent("i-6"))
+
+    assert events == [("mode read", NS), ("placeorder", NS)]
+
+
 def test_a_success_without_an_order_id_leaves_the_intent_unbound():
     rig = make_rig(placeorder=[{"status": "success"}])
 
@@ -436,7 +467,8 @@ def test_a_rejected_modify_returns_the_servers_message():
     assert outcome == SendOutcome(Outcome.REJECTED, reason="Order cannot be modified")
 
 
-def test_every_answer_of_place_modify_cancel_and_orderstatus_reaches_the_guard_and_no_other():
+def test_every_answer_the_analyzer_switch_routes_reaches_the_guard():
+    # Orders and books alike: the switch routes the reads too.
     answers = {
         "placeorder": [placed("1"), http_error(502)],
         "modifyorder": [http_error(400, "Order cannot be modified")],
@@ -450,7 +482,9 @@ def test_every_answer_of_place_modify_cancel_and_orderstatus_reaches_the_guard_a
         answers["modifyorder"][0],
         answers["cancelorder"][0],
         answers["orderstatus"][0],
+        answers["tradebook"][0],
         answers["placeorder"][1],
+        answers["orderbook"][0],
     ]
     rig = make_rig(**answers)
 
@@ -464,8 +498,6 @@ def test_every_answer_of_place_modify_cancel_and_orderstatus_reaches_the_guard_a
 
     assert len(rig.guard.responses) == len(expected)
     assert all(seen is sent for seen, sent in zip(rig.guard.responses, expected, strict=True))
-    assert rig.client.calls_to("tradebook") == [{}]
-    assert rig.client.calls_to("orderbook") == [{}]
 
 
 def test_place_modify_and_cancel_share_one_budget_of_five_a_second():

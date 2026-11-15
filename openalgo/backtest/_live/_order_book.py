@@ -3,7 +3,7 @@
 An intent is unbound when the answer to its `placeorder` was lost (a 502, a timeout, a
 lost connection): its order may or may not be at the broker. The order book settles it:
 the one order of the intent's shape placed at or after it is the intent's, and no such
-order means it was never placed. Times are UTC nanoseconds, quantities units.
+order, read twice, means it was never placed. Times are UTC nanoseconds, quantities units.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import Any
 from .._layout import IST_OFFSET_NANOS, NANOS_PER_SECOND
 from ..errors import LiveError
 from ._order_updates import units
-from ._types import OrderIntent
+from ._types import OrderIntent, OrderUpdate
 
 #: The preflight refuses a local clock more than 2 seconds off (08-live-trading section
 #: 4), so an order-book time up to this much before an intent can be the intent's order.
@@ -34,21 +34,35 @@ class Resolved(enum.Enum):
 
     #: One order matched: the intent is bound to it.
     BOUND = "bound"
-    #: No order matched: the intent never became an order.
+    #: Two reads found no order: the intent never became an order.
     NOT_PLACED = "not_placed"
-    #: Several orders matched: the intent stays unbound and the operator settles it.
+    #: Orders matched that the path cannot tell apart: the intent stays unbound and the
+    #: operator settles it.
     AMBIGUOUS = "ambiguous"
 
 
 @dataclass(frozen=True)
 class Resolution:
-    """An unbound intent checked against the order book: `order_id` when BOUND, the
-    matching order IDs in `candidates` when AMBIGUOUS."""
+    """An unbound intent settled against the order book: `order_id` when BOUND, with
+    `update`, the order's latest update when one arrived before it was bound (None
+    otherwise, or while its fill's price is not known); the order IDs that may be the
+    intent's in `candidates` when AMBIGUOUS."""
 
     intent: OrderIntent
     kind: Resolved
     order_id: str = ""
+    update: OrderUpdate | None = None
     candidates: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class BookMatch:
+    """The order-book rows that may be an unbound intent's order: `orders` placed at or
+    after it, and `unsure` ones matching on every field but a quantity or a time that
+    cannot be read."""
+
+    orders: tuple[str, ...] = ()
+    unsure: tuple[str, ...] = ()
 
 
 def book_rows(answer: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -61,38 +75,35 @@ def book_rows(answer: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     return rows
 
 
-def match_unbound(
-    intent: OrderIntent, rows: list[Mapping[str, Any]], taken: set[str]
-) -> Resolution:
-    """Match one unbound intent against the order book's rows, leaving out the orders in
-    `taken` (bound to other intents).
+def match_unbound(intent: OrderIntent, rows: list[Mapping[str, Any]], taken: set[str]) -> BookMatch:
+    """The rows that may be an unbound intent's order, leaving out the orders in `taken`
+    (owned by other intents).
 
     A row matches on the intent's strategy (when the row names one: brokers' books do
     not), symbol, exchange, action, price type and quantity, placed no earlier than the
-    intent's second less `CLOCK_SKEW_LIMIT_NS`. Raises LiveError when a row matching on
-    the rest has a quantity or a time that cannot be read.
+    intent's second less `CLOCK_SKEW_LIMIT_NS`.
     """
     earliest_ns = intent.created_ns - intent.created_ns % NANOS_PER_SECOND - CLOCK_SKEW_LIMIT_NS
-    candidates = []
+    orders: list[str] = []
+    unsure: list[str] = []
     for row in rows:
         order_id = str(row.get("orderid") or "")
         if not order_id or order_id in taken or not _same_shape(intent, row):
             continue
-        if units(row, "quantity", order_id) != intent.quantity:
+        try:
+            quantity = units(row, "quantity", order_id)
+        except LiveError:
+            # It may be the intent's order: the operator is told, never guessed for.
+            unsure.append(order_id)
+            continue
+        if quantity != intent.quantity:
             continue
         placed_ns = book_time_ns(row.get("timestamp"))
         if placed_ns is None:
-            raise LiveError(
-                f"order {order_id} in the order book may be intent {intent.intent_id}, but "
-                f"its time {row.get('timestamp')!r} cannot be read: settle it by hand"
-            )
-        if placed_ns >= earliest_ns:
-            candidates.append(order_id)
-    if not candidates:
-        return Resolution(intent, Resolved.NOT_PLACED)
-    if len(candidates) == 1:
-        return Resolution(intent, Resolved.BOUND, order_id=candidates[0])
-    return Resolution(intent, Resolved.AMBIGUOUS, candidates=tuple(candidates))
+            unsure.append(order_id)
+        elif placed_ns >= earliest_ns:
+            orders.append(order_id)
+    return BookMatch(tuple(orders), tuple(unsure))
 
 
 def book_time_ns(text: Any) -> int | None:
@@ -131,6 +142,7 @@ def _parse_book_time(text: str) -> dt.datetime | None:
 
 __all__ = [
     "CLOCK_SKEW_LIMIT_NS",
+    "BookMatch",
     "Resolution",
     "Resolved",
     "book_rows",

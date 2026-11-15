@@ -84,18 +84,24 @@ def server_answer(answer: Mapping[str, Any]) -> Mapping[str, Any]:
 def outcome_of(answer: Mapping[str, Any], order_id: str = "") -> SendOutcome:
     """The outcome an answer gives; `order_id` is the order a modify or cancel was for.
 
-    A success without an order ID is UNANSWERED: the order it reports cannot be found
-    by its ID, so it is looked for in the order book like a lost answer.
+    A success without an order ID, and an answer with neither "success" nor "error" as
+    its status, are UNANSWERED: they say nothing of the order, so it is looked for in the
+    order book like a lost answer.
     """
+    status = answer.get("status")
     if _PENDING_ORDER_ID in answer or answer.get("mode") == _SEMI_AUTO_MODE:
         pending = str(answer.get(_PENDING_ORDER_ID, ""))
         reason = f"queued for approval in OpenAlgo's Action Center (semi-auto), as {pending}"
         return SendOutcome(Outcome.QUEUED, reason=reason, pending_order_id=pending)
-    if answer.get("status") == "success":
+    if status == "success":
         accepted = str(answer.get("orderid") or order_id)
         if accepted:
             return SendOutcome(Outcome.ACCEPTED, order_id=accepted)
         return SendOutcome(Outcome.UNANSWERED, reason="OpenAlgo answered success, no order ID")
+    if status != "error":
+        return SendOutcome(
+            Outcome.UNANSWERED, reason=f"OpenAlgo's answer has no status: {dict(answer)!r}"
+        )
     reason = str(answer.get("message") or "OpenAlgo answered an error with no message")
     kind = Outcome.UNANSWERED if _unanswered(answer) else Outcome.REJECTED
     return SendOutcome(kind, reason=reason)
