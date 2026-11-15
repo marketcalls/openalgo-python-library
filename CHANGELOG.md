@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   state of each strategy and trading day, and the strategy's own `self.state` across
   days. The first final update of an order stands, except that a fill with a price
   replaces one reported at price 0.
+- The live layer's bars (private): 1-minute bars built from OpenAlgo's WebSocket ticks on
+  the same calendar slices a live session runs, stamped at their close and closed by the
+  clock one second after it. A tick counts as a trade only when the day's volume rose or
+  the last traded price changed (every print for an index), so a minute without trades
+  has no bar, as in the broker's history. After a mid-session start or a feed outage the
+  partial minutes only set the starting level. Broker candles are compared with the
+  bars minute by minute, and feed health tells a dead feed from a quiet symbol.
 
 ## [2.2.1] - 2026-11-15
 
