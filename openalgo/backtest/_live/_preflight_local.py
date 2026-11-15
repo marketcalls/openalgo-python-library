@@ -11,8 +11,9 @@ import datetime as dt
 from collections.abc import Iterable
 from typing import Any
 
+from .._protocols import COVERAGE_LEVELS
 from .._series import ist_time
-from ..calendar import Calendar
+from ..calendar import Calendar, IntradayTimes, SessionInfo
 from ..errors import CalendarError
 from ._preflight_plan import WARNING, Check, positive_amount
 from ._types import AlertsLike, Mode
@@ -20,8 +21,9 @@ from ._types import AlertsLike, Mode
 #: The one product this release trades live: intraday MIS (Tier 1, 08-live-trading
 #: section 1). CNC and NRML wait for overnight stops and holdings reconciliation.
 LIVE_PRODUCT = "MIS"
-# The calendar's coverage of a date it holds no holiday list for: the weekday rule only.
-_TEMPLATE_COVERAGE = "template"
+# The calendar's coverage levels of a date that need a note: no holiday list (the weekday
+# rule only), and holiday data not confirmed. The last level, "sourced", needs none.
+_TEMPLATE_COVERAGE, _UNVERIFIED_COVERAGE, _ = COVERAGE_LEVELS
 
 
 def limit_checks(
@@ -55,8 +57,9 @@ def product_check(product: Any) -> Check:
 def trading_day_checks(exchanges: Iterable[str], now_ns: int, calendar: Calendar) -> list[Check]:
     """One check per exchange (first seen first): the exchange trades on the IST date of
     `now_ns` (UTC nanoseconds) and its session has not closed yet. Before the open is
-    fine, the session waits for it. A pass warns when the calendar holds no holiday list
-    for the year, since a holiday would then go unseen."""
+    fine, the session waits for it. A pass warns after the day's MIS `entry_until` (no new
+    entries, the session only manages and squares off positions) or square-off, and when
+    the calendar does not confirm the day's holiday data or session hours."""
     day = ist_time(now_ns).date()
     return [_trading_day(exchange, day, now_ns, calendar) for exchange in dict.fromkeys(exchanges)]
 
@@ -117,31 +120,68 @@ def _account_limit(value: Any) -> Check:
 def _trading_day(exchange: str, day: dt.date, now_ns: int, calendar: Calendar) -> Check:
     name = f"trading_day:{exchange}"
     try:
-        session = calendar.session(exchange, day)
+        info = calendar.session_info(exchange, day)
+        times = calendar.intraday_times(exchange, day)
     except CalendarError as error:
         return Check(name, False, f"the trading day of {exchange} cannot be told: {error}")
-    if session is None:
+    if info is None or times is None:
         return Check(
             name,
             False,
             f"{exchange} does not trade today, {day} (IST): start the session on a trading day",
         )
-    open_ns, close_ns = session
-    if now_ns >= close_ns:
+    if now_ns >= info.close:
         return Check(
             name,
             False,
-            f"the {exchange} session of {day} closed at {_ist_clock(close_ns)} IST: start the "
-            "session on a trading day, before the close",
+            f"the {exchange} session of {day} closed at {_ist_clock(info.close)} IST: start "
+            "the session on a trading day, before the close",
         )
-    message = f"{exchange} trades today, {day}, from {_ist_clock(open_ns)} to "
-    message += f"{_ist_clock(close_ns)} IST"
-    if calendar.coverage(exchange, day) == _TEMPLATE_COVERAGE:
-        message = (
-            f"{WARNING}{message}, but the calendar holds no holiday list for {day.year}: "
-            f"check that today is not a holiday of {exchange}"
-        )
+    message = f"{exchange} trades today, {day}, from {_ist_clock(info.open)} to "
+    message += f"{_ist_clock(info.close)} IST"
+    notes = [*_mis_notes(times, now_ns), *_calendar_notes(info)]
+    if notes:
+        message = f"{WARNING}{message}, but {'; '.join(notes)}"
     return Check(name, True, message)
+
+
+def _mis_notes(times: IntradayTimes, now_ns: int) -> list[str]:
+    """What an MIS session started at `now_ns` can still do today (Tier 1 trades MIS
+    only): after `entry_until` no new entry, after the square-off nothing but closing."""
+    square_off = _ist_clock(times.square_off)
+    if now_ns >= times.square_off:
+        return [
+            f"the MIS square-off time, {square_off} IST, has passed: the session takes no new "
+            "entries today and only squares off what is still open"
+        ]
+    if now_ns >= times.entry_until:
+        return [
+            f"MIS entries stop at {_ist_clock(times.entry_until)} IST: the session takes no "
+            f"new entries today and only manages its positions and squares them off at "
+            f"{square_off} IST"
+        ]
+    return []
+
+
+def _calendar_notes(info: SessionInfo) -> list[str]:
+    """What the calendar does not confirm of the day: its holiday data or its hours."""
+    notes = []
+    if info.coverage == _TEMPLATE_COVERAGE:
+        notes.append(
+            f"the calendar holds no holiday list for {info.date.year}: check that today is "
+            f"not a holiday of {info.exchange}"
+        )
+    elif info.coverage == _UNVERIFIED_COVERAGE:
+        notes.append(
+            f"the calendar's holiday data for {info.date.year} is not confirmed by an "
+            f"exchange document: check that today is not a holiday of {info.exchange}"
+        )
+    if info.hours_unverified:
+        notes.append(
+            f"today's session hours of {info.exchange} are not confirmed by an exchange "
+            "document: check them"
+        )
+    return notes
 
 
 def _ist_clock(ts_ns: int) -> str:

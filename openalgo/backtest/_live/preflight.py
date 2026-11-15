@@ -1,5 +1,5 @@
 """The checks before a live session (08-live-trading section 4, D28 to D31): the account
-lock, the preflight, and the countdown before the first order.
+and server locks, the preflight, and the countdown before the first order.
 
 `bt.live` runs the same preflight in SANDBOX and in LIVE mode, and fails closed: every
 check runs (those that need an answer from OpenAlgo once `ping` has succeeded), and any
@@ -7,25 +7,31 @@ failure stops the session with one `PreflightError` whose `failures` say what to
 each of them, not only the first. The checks, by name:
 
 - `broker_session`: `ping` names the broker OpenAlgo is logged in to, and `funds`
-  answers with the available cash (a broker whose login expired answers with none);
+  answers with the available cash. Neither proves the broker's login: ping only checks
+  the API key, and in SANDBOX mode funds are the sandbox's own;
 - `broker_supported`: the order path can trade through that broker (`UNSUPPORTED_BROKERS`
   of `orders`, refused with the reason);
 - `mode`: `funds` was answered in the session's mode, so the analyzer switch has not
   moved since the mode guard read it;
 - `funds`: the available cash covers `capital`;
-- `capital`, `max_daily_loss`: given and positive (both mandatory for `bt.live`), and
-  `account_max_daily_loss` positive when given;
 - `symbol:<EXCHANGE>:<SYMBOL>`: each instrument found, with its lot size, tick size and
-  freeze quantity; an instrument on an index exchange is refused, as an index cannot be
-  traded;
-- `product`: MIS, the only product of this release (Tier 1);
+  freeze quantity, in an answer for that instrument; an instrument on an index exchange
+  is refused, as an index cannot be traded;
+- `broker_quotes`: the broker quotes the first instrument found at a positive price,
+  which shows its login works in both modes (OpenAlgo asks the broker for a quote
+  whatever its analyzer switch);
 - `interval`: the broker offers candles of the strategy's interval and the 1-minute
   candles the live bars are checked against (`intervals`, D27);
+- `capital`, `max_daily_loss`: given and positive (both mandatory for `bt.live`), and
+  `account_max_daily_loss` positive when given;
+- `product`: MIS, the only product of this release (Tier 1);
 - `trading_day:<EXCHANGE>`: the exchange trades today and its session has not closed
-  (the package calendar);
+  (the package calendar); a warning after the day's MIS entry cut-off, and when the
+  calendar does not confirm the day;
 - `clock`: the local clock within 2 seconds of the server's, read from the `Date`
-  header of one HEAD request (`_preflight_clock`); it fails only when the clock is
-  certainly off, and warns when it cannot tell;
+  header of one HEAD request to the server's root (`_preflight_clock`); it fails only
+  when a clock is certainly off, and warns when it cannot tell, as for a server on this
+  computer;
 - `alerts`: a test alert delivered; required in LIVE mode, a warning in SANDBOX mode.
 
 Not checked: whether OpenAlgo streams order updates. No API call reports it
@@ -64,8 +70,9 @@ def run_preflight(
     client: PreflightClient, plan: PreflightPlan, *, now: Now, calendar: Calendar | None = None
 ) -> PreflightReport:
     """Run every check of `plan` (see the module docstring) against `client`, an
-    `openalgo.api` client of which only `ping`, `funds`, `symbol` and `intervals` are
-    called, and its pooled HTTP client for one HEAD request (the clock check); the plan's
+    `openalgo.api` client of which only `ping`, `funds`, `symbol`, `quotes` (once) and
+    `intervals` are called, and its pooled HTTP client for one HEAD request to the
+    server's root (the clock check, not sent to a server on this computer); the plan's
     alert channel sends one test alert once `ping` has succeeded. `now` gives the present
     in UTC nanoseconds, and `calendar` the sessions (the package's default calendar when
     None).

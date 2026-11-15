@@ -1,14 +1,17 @@
 """The preflight checks that read OpenAlgo's answers (`preflight`, 08-live-trading section
-4): the broker's session (`ping` and `funds`), the broker, the mode funds was answered
+4): the OpenAlgo session (`ping` and `funds`), the broker, the mode funds was answered
 in, the funds against the capital, each instrument's facts (`symbol`; an index is
-refused, since it cannot be traded) and the intervals (`intervals`): the strategy's, and
-the 1-minute candles the live bars are checked against (D27).
+refused, since it cannot be traded), the broker's login (one `quotes` call), and the
+intervals (`intervals`): the strategy's, and the 1-minute candles the live bars are
+checked against (D27).
 
 The answers are read as the SDK returns them (openalgo/account.py, openalgo/data.py): the
 server's JSON on HTTP 200, else the SDK's own error, whose message "HTTP <code>: <body>"
-holds the server's answer (`server_answer` takes it back out). A broker whose login has
-expired still answers funds with success, but with no data (broker/*/api/funds.py on the
-server), so the session counts as valid only when funds gives the available cash.
+holds the server's answer (`server_answer` takes it back out). Funds do not prove the
+broker's login: a broker whose login has expired may still answer them with success and
+no data, or with zeros (broker/*/api/funds.py on the server), and in SANDBOX mode they
+are the sandbox's own and never reach the broker. A quote does, in both modes: the
+server asks the broker for it whatever its analyzer switch (services/quotes_service.py).
 """
 
 from __future__ import annotations
@@ -39,7 +42,7 @@ _MAX_QUOTED_CHARS = 200
 
 
 class PreflightClient(Protocol):
-    """What the preflight needs of an `openalgo.api` client: four of its REST calls, and
+    """What the preflight needs of an `openalgo.api` client: five of its REST calls, and
     for the clock check its pooled HTTP client and the URL of its API."""
 
     #: The SDK's pooled HTTP client (`BaseAPI.client`).
@@ -55,6 +58,9 @@ class PreflightClient(Protocol):
 
     def symbol(self, *, symbol: str, exchange: str) -> Mapping[str, Any]:
         """The server's answer to `/api/v1/symbol`."""
+
+    def quotes(self, *, symbol: str, exchange: str) -> Mapping[str, Any]:
+        """The server's answer to `/api/v1/quotes`."""
 
     def intervals(self) -> Mapping[str, Any]:
         """The server's answer to `/api/v1/intervals`."""
@@ -90,8 +96,12 @@ def read_server(client: PreflightClient, plan: PreflightPlan) -> ServerFindings:
             checks.append(_funds_check(available, capital, plan.mode))
     found = [_symbol_check(client, symbol, exchange) for symbol, exchange in plan.instruments]
     checks += [check for check, _ in found]
-    checks.append(_interval_check(client.intervals(), plan.interval))
     facts = tuple(facts for _, facts in found if facts is not None)
+    # One quote shows the broker answers. With no instrument found there is none to ask
+    # for, and their own checks have failed.
+    if facts:
+        checks.append(_quotes_check(client, facts[0]))
+    checks.append(_interval_check(client.intervals(), plan.interval))
     return ServerFindings(tuple(checks), broker, available, facts)
 
 
@@ -111,8 +121,8 @@ def _ping_failed(ping: Mapping[str, Any]) -> Check:
         False,
         f"OpenAlgo's ping failed ({reason}): check that OpenAlgo is running at the client's "
         "host, that the API key is right and that you are logged in to your broker in "
-        "OpenAlgo. The funds, symbol, interval and clock checks and the test alert wait for "
-        "ping",
+        "OpenAlgo. The funds, symbol, quote, interval and clock checks and the test alert "
+        "wait for ping",
     )
 
 
@@ -170,12 +180,19 @@ def _funds_check(available: float, capital: float, mode: Mode) -> Check:
             f"{available:,.2f} rupees of available cash cover the capital of {capital:,.2f} rupees",
         )
     where = "the sandbox's funds in OpenAlgo" if mode is Mode.SANDBOX else "the broker account"
+    # Some brokers answer an expired login with zeros instead of an error.
+    expired = (
+        ". No cash at all is also what some brokers report for an expired login: if the "
+        "account holds funds, log in to OpenAlgo again"
+        if available == 0
+        else ""
+    )
     return Check(
         "funds",
         False,
         f"OpenAlgo reports {available:,.2f} rupees of available cash (collateral not "
         f"counted), less than the capital of {capital:,.2f} rupees: lower capital, or add "
-        f"funds to {where}",
+        f"funds to {where}{expired}",
     )
 
 
@@ -200,6 +217,15 @@ def _symbol_check(
             f"{exchange}:{symbol} was not found ({reason}): write the symbol as OpenAlgo "
             "does (SBIN on NSE, say) and check that the broker's master contract is "
             "downloaded in OpenAlgo",
+        ), None
+    answered = (str(data.get("symbol")).upper(), str(data.get("exchange")).upper())
+    if answered != (symbol.upper(), exchange.upper()):
+        return Check(
+            name,
+            False,
+            f"OpenAlgo answered the lookup of {exchange}:{symbol} with "
+            f"{data.get('exchange')}:{data.get('symbol')}: check that the symbol is written as "
+            "OpenAlgo writes it, and download the broker's master contract again in OpenAlgo",
         ), None
     facts = _facts(symbol, exchange, data)
     if isinstance(facts, str):
@@ -233,6 +259,27 @@ def _facts(symbol: str, exchange: str, data: Mapping[str, Any]) -> InstrumentFac
     if freeze is None or freeze < 0 or not freeze.is_integer():
         return f"no usable freeze quantity ({given!r})"
     return InstrumentFacts(symbol, exchange, int(lot_size), tick_size, int(freeze) or None)
+
+
+def _quotes_check(client: PreflightClient, facts: InstrumentFacts) -> Check:
+    """Passes when the broker quotes the instrument at a positive last traded price."""
+    instrument = f"{facts.exchange}:{facts.symbol}"
+    answer = client.quotes(symbol=facts.symbol, exchange=facts.exchange)
+    data = answer.get("data") if answer.get("status") == SUCCESS else None
+    ltp = _number(data.get("ltp")) if isinstance(data, Mapping) else None
+    if ltp is not None and ltp > 0:
+        return Check("broker_quotes", True, f"the broker quoted {instrument} at {ltp} rupees")
+    if answer.get("status") != SUCCESS:
+        reason = _reason(answer)
+    else:
+        reason = f"it answered without a positive price: {_quoted(answer)}"
+    return Check(
+        "broker_quotes",
+        False,
+        f"the broker gave no quote for {instrument} ({reason}): its login may have expired "
+        "(it ends around 03:00 IST each day), which funds do not show in SANDBOX mode. Log "
+        "in to OpenAlgo again, then start the session again",
+    )
 
 
 def _interval_check(answer: Mapping[str, Any], interval: Any) -> Check:

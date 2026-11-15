@@ -3,15 +3,19 @@ the local clock against the OpenAlgo server's, read from the HTTP `Date` header.
 
 No answer of OpenAlgo's REST API carries the server's time in its body, but every
 response of its WSGI server carries a `Date` header. The check sends one HEAD request to
-the API's URL through the SDK's own pooled client (any status will do, and no API key is
-sent), noting the local time before (t0) and after (t1). `Date` holds whole seconds, so
-the server's time when it answered was in [D, D + 1 s), at some local instant in
-[t0, t1]: the local clock minus the server's lies in (t0 - D - 1 s, t1 - D].
+the server's root (not to the API, whose 404 the server would log against this computer's
+address) through the SDK's own pooled client, following no redirect: any status will do,
+and no API key is sent. It notes the local time before (t0) and after (t1). `Date` holds
+whole seconds, so the server's time when it answered was in [D, D + 1 s), at some local
+instant in [t0, t1]: the local clock minus the server's lies in (t0 - D - 1 s, t1 - D].
 
-The check fails only when that whole interval is beyond 2 seconds either way (the clock
-is certainly off), passes when it lies within, and passes with a warning, saying why,
-when it straddles the limit, when the header is missing or unreadable, or when the
-request fails. Instants are UTC nanoseconds.
+The check fails only when that whole interval is beyond 2 seconds either way (one of the
+two clocks is certainly off), passes when it lies within, and passes with a warning,
+saying why, when it straddles the limit, when the header is missing or unreadable, or
+when the request fails. A server on this computer (a loopback host) dates its answers by
+this computer's own clock, so nothing is measured: the check passes with a warning, and
+the session checks the clock against the exchange times of the feed's ticks instead.
+Instants are UTC nanoseconds.
 """
 
 from __future__ import annotations
@@ -24,8 +28,10 @@ from dataclasses import dataclass
 import httpx
 
 from .._layout import NANOS_PER_SECOND
+from ..errors import ConfigError
 from ._preflight_plan import WARNING, Check
 from ._preflight_server import PreflightClient
+from ._preflight_url import ServerAddress
 from ._types import Now
 
 #: The most the local clock may differ from the server's, in seconds (08-live-trading
@@ -34,10 +40,15 @@ MAX_CLOCK_SKEW_SECONDS = 2
 _MAX_SKEW_NS = MAX_CLOCK_SKEW_SECONDS * NANOS_PER_SECOND
 # An HTTP date has whole seconds (RFC 9110, section 5.6.7).
 _DATE_RESOLUTION_NS = NANOS_PER_SECOND
-# The longest wait for the HEAD request, seconds: over a longer round trip the interval is
-# too wide to show a skew within the limit, so waiting longer could tell nothing more.
+# The wait for the HEAD request, seconds. httpx applies it to each phase of a request
+# (taking a pooled connection, connecting, sending, waiting for the answer), so a slow
+# server can hold the request longer in all. A longer round trip only widens the interval:
+# it can still show a clock certainly off, but not one within the limit, which takes a
+# round trip under 3 seconds (the interval is the round trip plus a second wide, and the
+# limit spans 4 seconds). 5 seconds leaves a slow but working server time to answer.
 _REQUEST_TIMEOUT_SECONDS = 5.0
-_SYNC_ADVICE = "synchronise this computer's clock with an internet time server"
+_SYNC_THIS_COMPUTER = "synchronise this computer's clock with an internet time server"
+_SYNC_EITHER = "synchronise this computer's clock or the server's with an internet time server"
 
 
 class Skew(enum.Enum):
@@ -45,7 +56,7 @@ class Skew(enum.Enum):
 
     #: Within the limit, whatever the skew in the interval is.
     WITHIN = "within"
-    #: Beyond the limit, whatever the skew in the interval is: the clock is off.
+    #: Beyond the limit, whatever the skew in the interval is: a clock is off.
     BEYOND = "beyond"
     #: The interval straddles the limit.
     UNSURE = "unsure"
@@ -76,13 +87,21 @@ class SkewBounds:
 
 
 def clock_check(client: PreflightClient, now: Now) -> Check:
-    """Measure the local clock against the server's with one HEAD request to
+    """Measure the local clock against the server's with one HEAD request to the root of
     `client.base_url` through `client.client`, timed by `now` (UTC nanoseconds), and
-    judge it (see the module docstring)."""
+    judge it (see the module docstring). Never raises for the request or its answer."""
+    try:
+        server = ServerAddress.of(client.base_url)
+    except ConfigError as error:
+        return _unmeasured(f"its URL could not be read ({error})")
+    if server.on_this_computer:
+        return _on_this_computer(server)
     t0_ns = now()
     try:
-        response = client.client.head(client.base_url, timeout=_REQUEST_TIMEOUT_SECONDS)
-    except httpx.HTTPError as error:
+        response = client.client.head(
+            server.root, timeout=_REQUEST_TIMEOUT_SECONDS, follow_redirects=False
+        )
+    except (httpx.HTTPError, httpx.InvalidURL) as error:
         return _unmeasured(f"the request for its time failed ({type(error).__name__}: {error})")
     t1_ns = now()
     date = response.headers.get("date")
@@ -127,7 +146,7 @@ def _judged(bounds: SkewBounds, round_trip_ns: int) -> Check:
             "clock",
             False,
             f"the local clock is {off} OpenAlgo's server, more than the "
-            f"{MAX_CLOCK_SKEW_SECONDS} seconds allowed: {_SYNC_ADVICE}, then start the "
+            f"{MAX_CLOCK_SKEW_SECONDS} seconds allowed: {_SYNC_EITHER}, then start the "
             "session again",
         )
     return Check(
@@ -135,7 +154,18 @@ def _judged(bounds: SkewBounds, round_trip_ns: int) -> Check:
         True,
         f"{WARNING}the local clock is {low:+.1f} to {high:+.1f} seconds off OpenAlgo's "
         f"server (the request took {round_trip_ns / NANOS_PER_SECOND:.1f} seconds), so it "
-        f"may be more than the {MAX_CLOCK_SKEW_SECONDS} seconds allowed: {_SYNC_ADVICE}",
+        f"may be more than the {MAX_CLOCK_SKEW_SECONDS} seconds allowed: {_SYNC_EITHER}",
+    )
+
+
+def _on_this_computer(server: ServerAddress) -> Check:
+    return Check(
+        "clock",
+        True,
+        f"{WARNING}the local clock cannot be measured against OpenAlgo's server, which runs "
+        f"on this computer ({server.host}) and so tells this computer's own time: the "
+        "session checks the clock against the exchange times of the feed's ticks instead. "
+        f"Keep it right: {_SYNC_THIS_COMPUTER}",
     )
 
 
@@ -144,8 +174,8 @@ def _unmeasured(why: str) -> Check:
         "clock",
         True,
         f"{WARNING}the local clock could not be compared with OpenAlgo's server, as {why}: "
-        f"{_SYNC_ADVICE}, since the session needs it within {MAX_CLOCK_SKEW_SECONDS} "
-        "seconds of the exchange's",
+        f"{_SYNC_THIS_COMPUTER}, since the session needs it within {MAX_CLOCK_SKEW_SECONDS} "
+        "seconds of the OpenAlgo server's",
     )
 
 

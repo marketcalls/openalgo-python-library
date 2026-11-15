@@ -14,16 +14,17 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 from preflight_fakes import (
-    BASE_URL,
     EXPIRED_FUNDS,
     KEY_REFUSED,
     NOW_NS,
+    ROOT_URL,
     UNREACHABLE,
     FakeAlerts,
     FakeOpenAlgo,
     live_funds,
     make_plan,
     pong,
+    quote,
     sandbox_funds,
     sdk_http_error,
     symbol_found,
@@ -82,6 +83,7 @@ def test_a_passed_preflight_reports_every_check_in_the_order_it_ran():
         "mode",
         "funds",
         "symbol:NSE:SBIN",
+        "broker_quotes",
         "interval",
         "capital",
         "max_daily_loss",
@@ -94,7 +96,7 @@ def test_a_passed_preflight_reports_every_check_in_the_order_it_ran():
     assert all(check.ok for check in report.checks)
 
 
-def test_the_preflight_asks_openalgo_for_ping_funds_each_symbol_the_intervals_and_its_time():
+def test_the_preflight_asks_for_ping_funds_each_symbol_one_quote_the_intervals_and_the_time():
     client = FakeOpenAlgo(
         symbols={
             ("SBIN", "NSE"): symbol_found("SBIN", "NSE"),
@@ -109,8 +111,9 @@ def test_the_preflight_asks_openalgo_for_ping_funds_each_symbol_the_intervals_an
         ("funds",),
         ("symbol", "SBIN", "NSE"),
         ("symbol", "INFY", "NSE"),
+        ("quotes", "SBIN", "NSE"),
         ("intervals",),
-        ("HEAD", BASE_URL),
+        ("HEAD", ROOT_URL),
     ]
 
 
@@ -268,6 +271,73 @@ def test_without_a_usable_capital_the_funds_are_not_compared():
 
     assert len(raised.value.failures) == 1
     assert raised.value.failures[0].startswith("capital is required")
+
+
+def test_no_available_cash_at_all_also_points_at_an_expired_broker_login():
+    (failure,) = failures_of(FakeOpenAlgo(funds=live_funds("0.00")))
+
+    assert failure.startswith("OpenAlgo reports 0.00 rupees of available cash")
+    assert failure.endswith(
+        "No cash at all is also what some brokers report for an expired login: if the "
+        "account holds funds, log in to OpenAlgo again"
+    )
+
+
+def test_funds_short_of_the_capital_but_above_zero_do_not_point_at_the_login():
+    (failure,) = failures_of(FakeOpenAlgo(funds=live_funds("50.00")))
+
+    assert "expired login" not in failure
+
+
+# ----- the broker's login, by a quote ------------------------------------------------
+
+
+def test_a_quote_at_a_positive_price_shows_the_brokers_login_works():
+    report = preflight()
+
+    assert check_named(report, "broker_quotes").message == (
+        "the broker quoted NSE:SBIN at 812.5 rupees"
+    )
+
+
+def test_a_sandbox_session_whose_broker_gives_no_quote_fails_as_an_expired_login():
+    failed = sdk_http_error(500, {"status": "error", "message": "Invalid session token"})
+    client = FakeOpenAlgo(funds=sandbox_funds(), quotes=failed)
+
+    (failure,) = failures_of(client, mode=Mode.SANDBOX)
+
+    assert failure == (
+        "the broker gave no quote for NSE:SBIN (HTTP 500: Invalid session token): its login "
+        "may have expired (it ends around 03:00 IST each day), which funds do not show in "
+        "SANDBOX mode. Log in to OpenAlgo again, then start the session again"
+    )
+
+
+@pytest.mark.parametrize("ltp", [0, 0.0, "0", None, -1, "nan"])
+def test_a_quote_without_a_positive_price_fails_the_broker_login(ltp):
+    (failure,) = failures_of(FakeOpenAlgo(quotes=quote(ltp=ltp)))
+
+    assert failure.startswith(
+        "the broker gave no quote for NSE:SBIN (it answered without a positive price: "
+    )
+
+
+def test_the_quote_is_asked_of_the_first_instrument_found():
+    client = FakeOpenAlgo(symbols={("INFY", "NSE"): symbol_found("INFY", "NSE")})
+
+    with pytest.raises(PreflightError):
+        preflight(client, instruments=[("SBIN", "NSE"), ("INFY", "NSE")])
+
+    assert [call for call in client.calls if call[0] == "quotes"] == [("quotes", "INFY", "NSE")]
+
+
+def test_no_quote_is_asked_when_no_instrument_is_found():
+    client = FakeOpenAlgo(symbols={})
+
+    with pytest.raises(PreflightError):
+        preflight(client)
+
+    assert [call for call in client.calls if call[0] == "quotes"] == []
 
 
 # ----- the risk limits ---------------------------------------------------------------

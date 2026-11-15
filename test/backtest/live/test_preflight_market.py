@@ -1,10 +1,12 @@
 """The market checks of a live session's preflight (08-live-trading section 4): each
-symbol found with its lot size, tick size and freeze quantity (an index refused), the
-MIS product, the strategy's interval and the 1-minute candles offered by the broker, and
-today a trading day whose session has not closed.
+symbol found with its lot size, tick size and freeze quantity, in an answer for it (an
+index refused), the MIS product, the strategy's interval and the 1-minute candles offered
+by the broker, and today a trading day whose session has not closed, with a warning after
+the MIS entry cut-off and for what the calendar does not confirm.
 
 The trading days come from the package's calendar: 2026-11-16 is a Monday on which NSE
-and NFO trade from 09:15 to 15:30 IST, 2026-11-14 a Saturday and 2026-11-24 a holiday.
+trades from 09:15 to 15:30 IST (MIS entries until 14:50, square-off at 15:00) and NFO to
+15:40 (MIS entries until 15:00), 2026-11-14 a Saturday and 2026-11-24 a holiday.
 """
 
 from __future__ import annotations
@@ -129,6 +131,20 @@ def test_every_unknown_symbol_is_reported():
     failures = failures_of(instruments=[("SBIN", "NSE"), ("TYPO", "NSE"), ("OTHER", "BSE")])
 
     assert [failure.split(" ")[0] for failure in failures] == ["NSE:TYPO", "BSE:OTHER"]
+
+
+def test_an_answer_for_another_instrument_fails_naming_both():
+    client = FakeOpenAlgo(symbols={("SBIN", "NSE"): symbol_found("INFY", "BSE")})
+
+    (failure,) = failures_of(client)
+
+    assert failure.startswith("OpenAlgo answered the lookup of NSE:SBIN with BSE:INFY: ")
+
+
+def test_an_answer_for_the_instrument_asked_matches_whatever_its_case():
+    client = FakeOpenAlgo(symbols={("SBIN", "NSE"): symbol_found("sbin", "nse")})
+
+    assert check_named(preflight(client), "symbol:NSE:SBIN").ok
 
 
 @pytest.mark.parametrize("exchange", INDEX_EXCHANGES)
@@ -283,10 +299,78 @@ def test_a_day_without_a_session_still_to_come_fails(at_ns, reason):
     assert failure.startswith(reason)
 
 
-def test_one_second_before_the_close_the_trading_day_passes():
-    report = preflight(at_ns=ist_ns(2026, 11, 16, 15, 29, 59))
+def test_until_the_mis_entry_cut_off_the_trading_day_passes_without_a_warning():
+    report = preflight(at_ns=ist_ns(2026, 11, 16, 14, 49, 59))
 
-    assert check_named(report, "trading_day:NSE").ok
+    assert not check_named(report, "trading_day:NSE").message.startswith(WARNING)
+
+
+@pytest.mark.parametrize(
+    ("at_ns", "note"),
+    [
+        (
+            ist_ns(2026, 11, 16, 14, 50),
+            "but MIS entries stop at 14:50 IST: the session takes no new entries today and "
+            "only manages its positions and squares them off at 15:00 IST",
+        ),
+        (
+            ist_ns(2026, 11, 16, 15, 0),
+            "but the MIS square-off time, 15:00 IST, has passed: the session takes no new "
+            "entries today and only squares off what is still open",
+        ),
+        (
+            ist_ns(2026, 11, 16, 15, 29, 59),
+            "but the MIS square-off time, 15:00 IST, has passed: the session takes no new "
+            "entries today and only squares off what is still open",
+        ),
+    ],
+)
+def test_after_the_mis_entry_cut_off_and_before_the_close_the_day_passes_with_a_warning(
+    at_ns, note
+):
+    check = check_named(preflight(at_ns=at_ns), "trading_day:NSE")
+
+    assert check.ok
+    assert (
+        check.message == f"{WARNING}NSE trades today, 2026-11-16, from 09:15 to 15:30 IST, {note}"
+    )
+
+
+def test_each_exchange_has_its_own_mis_cut_off():
+    client = with_symbols(symbol_found("SBIN", "NSE"), symbol_found(*NIFTY_FUTURE))
+
+    report = preflight(
+        client, at_ns=ist_ns(2026, 11, 16, 14, 55), instruments=[("SBIN", "NSE"), NIFTY_FUTURE]
+    )
+
+    assert check_named(report, "trading_day:NSE").message.startswith(WARNING)
+    assert check_named(report, "trading_day:NFO").message == (
+        "NFO trades today, 2026-11-16, from 09:15 to 15:40 IST"
+    )
+
+
+def test_a_day_whose_holiday_data_is_not_confirmed_passes_with_a_warning():
+    client = with_symbols(symbol_found("SBIN", "BSE"))
+
+    check = check_named(preflight(client, instruments=[("SBIN", "BSE")]), "trading_day:BSE")
+
+    assert check.ok
+    assert check.message.endswith(
+        "but the calendar's holiday data for 2026 is not confirmed by an exchange document: "
+        "check that today is not a holiday of BSE"
+    )
+
+
+def test_a_day_whose_session_hours_are_not_confirmed_passes_with_a_warning():
+    crude = ("CRUDEOIL18NOV26FUT", "MCX")
+    client = with_symbols(symbol_found(*crude, lotsize=100, tick_size=1.0))
+
+    check = check_named(preflight(client, instruments=[crude]), "trading_day:MCX")
+
+    assert check.ok
+    assert check.message.endswith(
+        "; today's session hours of MCX are not confirmed by an exchange document: check them"
+    )
 
 
 def test_each_exchange_of_the_instruments_is_checked_once():

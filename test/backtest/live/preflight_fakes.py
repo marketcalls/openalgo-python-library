@@ -1,5 +1,5 @@
 """In-process fakes for the preflight's tests: an OpenAlgo client that answers `ping`,
-`funds`, `symbol` and `intervals` as the SDK returns the server's answers and dates its
+`funds`, `symbol`, `quotes` and `intervals` as the SDK returns the server's answers and dates its
 HTTP answers by a clock of its own, an alert channel whose test alert is scripted, and a
 plan to change one field at a time. Nothing here contacts a server.
 
@@ -116,8 +116,16 @@ INTERVALS = {
 }
 
 
-#: The URL of the fake's API, as the SDK builds it ("<host>/api/v1/").
+def quote(ltp: Any = 812.5) -> dict[str, Any]:
+    """The broker's quote of an instrument (services/quotes_service.py)."""
+    data = {"ask": 812.6, "bid": 812.4, "high": 815.0, "low": 806.1, "ltp": ltp}
+    return {"status": "success", "data": data | {"open": 808.0, "prev_close": 807.2}}
+
+
+#: The URL of the fake's API, as the SDK builds it ("<host>/api/v1/"), on a host that is
+#: not this computer, and the root of that server.
 BASE_URL = "http://openalgo.invalid/api/v1/"
+ROOT_URL = "http://openalgo.invalid/"
 
 
 def http_date(ts_ns: int) -> str:
@@ -127,14 +135,15 @@ def http_date(ts_ns: int) -> str:
 
 class FakeOpenAlgo:
     """Answers the preflight's calls with the answers given; `symbols` maps (symbol,
-    exchange) to an answer, and an instrument not in it is not found. Any other call
-    fails the test.
+    exchange) to an answer, and an instrument not in it is not found; `quotes` answers
+    every quote. Any other call fails the test.
 
     Its `client` is an HTTP client whose transport answers in-process, as the server's
-    WSGI server would: any request gets a 404 dated `server_ns` (the server's clock, UTC
-    nanoseconds), or with `head_headers` when given (a `Date` left out or garbled), or
-    raises `head_error`. `calls` lists every call in order, a request as its method and
-    URL; `requests` keeps the requests themselves.
+    WSGI server would: any request gets `head_status` (404) dated `server_ns` (the
+    server's clock, UTC nanoseconds), or with `head_headers` when given (a `Date` left
+    out or garbled, a `Location`), or raises `head_error`. `base_url` is the API's URL.
+    `calls` lists every call in order, a request as its method and URL; `requests` keeps
+    the requests themselves.
     """
 
     def __init__(
@@ -143,24 +152,29 @@ class FakeOpenAlgo:
         ping: dict[str, Any] | None = None,
         funds: dict[str, Any] | None = None,
         symbols: dict[tuple[str, str], dict[str, Any]] | None = None,
+        quotes: dict[str, Any] | None = None,
         intervals: dict[str, Any] | None = None,
         server_ns: int = NOW_NS,
+        head_status: int = 404,
         head_headers: dict[str, str] | None = None,
         head_error: Exception | None = None,
+        base_url: str = BASE_URL,
     ) -> None:
         self._ping = pong() if ping is None else ping
         self._funds = live_funds() if funds is None else funds
         self._symbols = (
             {("SBIN", "NSE"): symbol_found("SBIN", "NSE")} if symbols is None else symbols
         )
+        self._quotes = quote() if quotes is None else quotes
         self._intervals = INTERVALS if intervals is None else intervals
         self.server_ns = server_ns
+        self._head_status = head_status
         self._head_headers = head_headers
         self._head_error = head_error
         self.calls: list[tuple[str, ...]] = []
         self.requests: list[httpx.Request] = []
         self.client = httpx.Client(transport=httpx.MockTransport(self._answer))
-        self.base_url = BASE_URL
+        self.base_url = base_url
 
     def _answer(self, request: httpx.Request) -> httpx.Response:
         self.calls.append((request.method, str(request.url)))
@@ -170,7 +184,7 @@ class FakeOpenAlgo:
         headers = self._head_headers
         if headers is None:
             headers = {"Date": http_date(self.server_ns)}
-        return httpx.Response(404, headers=headers)
+        return httpx.Response(self._head_status, headers=headers)
 
     def ping(self) -> dict[str, Any]:
         self.calls.append(("ping",))
@@ -183,6 +197,10 @@ class FakeOpenAlgo:
     def symbol(self, *, symbol: str, exchange: str) -> dict[str, Any]:
         self.calls.append(("symbol", symbol, exchange))
         return self._symbols.get((symbol, exchange), symbol_missing(symbol, exchange))
+
+    def quotes(self, *, symbol: str, exchange: str) -> dict[str, Any]:
+        self.calls.append(("quotes", symbol, exchange))
+        return self._quotes
 
     def intervals(self) -> dict[str, Any]:
         self.calls.append(("intervals",))
