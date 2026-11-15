@@ -163,6 +163,35 @@ def test_a_tick_before_the_open_seeds_the_last_known_ltp():
     assert summary(bars) == [("09:15", 800.0, 802.0, 800.0, 802.0, 0.0, 2)]
 
 
+def test_a_stale_quote_received_before_a_trade_is_judged_before_it():
+    builder = watching_from("09:00")
+    ticks = [
+        Tick("ILLQ", "NSE", 800.0, ist("10:00:50.340"), ts_event_ns=ist("10:00:50"), volume=1000),
+        Tick("ILLQ", "NSE", 800.0, ist("10:01:00.030"), ts_event_ns=ist("10:00:50"), volume=1000),
+        Tick("ILLQ", "NSE", 801.0, ist("10:01:00.440"), ts_event_ns=ist("10:01:00"), volume=1100),
+    ]
+
+    bars = bars_of(builder, ticks, "10:02:01")
+
+    assert summary(bars) == [
+        ("10:00", 800.0, 800.0, 800.0, 800.0, 1000.0, 1),
+        ("10:01", 801.0, 801.0, 801.0, 801.0, 100.0, 1),
+    ]
+
+
+def test_a_lagged_burst_is_judged_in_the_order_it_was_received():
+    lags = [("09:15:06.100", "09:15:01", 800.0, 5000), ("09:15:06.200", "09:15:02", 801.0, 5200)]
+    lags.append(("09:15:06.300", "09:15:03", 802.0, 5300))
+    ticks = [
+        Tick("SBIN", "NSE", ltp, ist(received), ts_event_ns=ist(traded_at), volume=volume)
+        for received, traded_at, ltp, volume in lags
+    ]
+
+    bars = bars_of(watching_from("09:00"), ticks, "09:16:01")
+
+    assert summary(bars) == [("09:15", 800.0, 802.0, 800.0, 802.0, 5300.0, 3)]
+
+
 # ----- trades only: indices ---------------------------------------------------
 
 
@@ -182,20 +211,38 @@ def test_an_index_watched_from_the_open_gets_its_first_bar_from_its_first_in_ses
 
     bars = bars_of(watching_from("09:00", "NSE_INDEX"), ticks, "09:16:01")
 
-    assert summary(bars) == [("09:15", 25010.0, 25020.0, 25010.0, 25020.0, 0.0, 2)]
+    assert summary(bars) == [("09:15", 25010.0, 25020.0, 25010.0, 25020.0, 0.0, 3)]
 
 
-def test_an_index_tick_is_a_trade_when_its_value_changed():
+def test_every_index_tick_of_a_watched_slice_is_a_print_changed_or_not():
     ticks = [
-        quoted("NIFTY", "10:00:01", 25000.0, exchange="NSE_INDEX"),
-        quoted("NIFTY", "10:00:02", 25000.0, exchange="NSE_INDEX"),
-        quoted("NIFTY", "10:00:03", 25010.0, exchange="NSE_INDEX"),
-        quoted("NIFTY", "10:01:30", 25010.0, exchange="NSE_INDEX"),
+        quoted("NIFTY", "10:00:10", 25000.0, exchange="NSE_INDEX"),
+        quoted("NIFTY", "10:00:59.500", 25004.0, exchange="NSE_INDEX"),
+        quoted("NIFTY", "10:01:00.500", 25004.0, exchange="NSE_INDEX"),
+        quoted("NIFTY", "10:01:01.500", 25010.0, exchange="NSE_INDEX"),
+        quoted("NIFTY", "10:01:30", 25012.0, exchange="NSE_INDEX"),
     ]
 
     bars = bars_of(watching_from("09:00", "NSE_INDEX"), ticks, "10:02:01")
 
-    assert summary(bars) == [("10:00", 25000.0, 25010.0, 25000.0, 25010.0, 0.0, 2)]
+    assert summary(bars) == [
+        ("10:00", 25000.0, 25004.0, 25000.0, 25004.0, 0.0, 2),
+        ("10:01", 25004.0, 25012.0, 25004.0, 25012.0, 0.0, 3),
+    ]
+
+
+def test_an_index_minute_whose_value_never_changes_still_has_its_bar():
+    ticks = [quoted("INDIAVIX", "10:00:10", 12.5, exchange="NSE_INDEX")]
+    ticks += [
+        quoted("INDIAVIX", f"10:01:{s:02d}", 12.5, exchange="NSE_INDEX") for s in range(0, 60, 5)
+    ]
+
+    bars = bars_of(watching_from("09:00", "NSE_INDEX"), ticks, "10:02:01")
+
+    assert summary(bars) == [
+        ("10:00", 12.5, 12.5, 12.5, 12.5, 0.0, 1),
+        ("10:01", 12.5, 12.5, 12.5, 12.5, 0.0, 12),
+    ]
 
 
 def test_after_a_mid_session_start_an_index_value_in_the_partial_slice_only_seeds():
@@ -207,7 +254,7 @@ def test_after_a_mid_session_start_an_index_value_in_the_partial_slice_only_seed
 
     bars = bars_of(watching_from("11:00:30", "NSE_INDEX"), ticks, "11:02:01")
 
-    assert summary(bars) == [("11:01", 25005.0, 25005.0, 25005.0, 25005.0, 0.0, 1)]
+    assert summary(bars) == [("11:01", 25000.0, 25005.0, 25000.0, 25005.0, 0.0, 2)]
 
 
 # ----- volume -----------------------------------------------------------------
@@ -306,7 +353,7 @@ def test_after_a_mid_session_start_a_symbols_first_tick_only_seeds_its_count_and
     assert summary(bars) == [("11:00", 800.5, 800.5, 800.5, 800.5, 50.0, 1)]
 
 
-def test_after_a_mid_session_start_a_trade_with_the_first_count_makes_the_bar_with_volume_0():
+def test_after_a_mid_session_start_a_trade_with_the_first_count_adds_no_volume_to_its_bar():
     ticks = [
         quoted("SBIN", "11:00:40", 800.0),
         traded("SBIN", "11:01:10", 801.0, 900000),
@@ -316,6 +363,49 @@ def test_after_a_mid_session_start_a_trade_with_the_first_count_makes_the_bar_wi
     bars = bars_of(watching_from("11:00:30"), ticks, "11:02:01")
 
     assert summary(bars) == [("11:01", 801.0, 801.5, 801.0, 801.5, 40.0, 2)]
+
+
+@pytest.mark.parametrize("price", [12.5, 12.6])
+def test_after_a_mid_session_start_a_symbol_that_reported_0_counts_its_first_trade_volume(price):
+    quotes = [
+        Tick("OPT", "NFO", 12.5, ist(clock), ts_event_ns=0, volume=0)
+        for clock in ("11:00:40", "11:05:00", "11:39:50")
+    ]
+    first_trade = traded("OPT", "11:40:10", price, 75, exchange="NFO")
+
+    bars = bars_of(watching_from("11:00:30", "NFO"), [*quotes, first_trade], "11:41:01")
+
+    assert summary(bars) == [("11:40", price, price, price, price, 75.0, 1)]
+
+
+def test_after_a_resume_a_symbol_that_reported_0_counts_its_first_trade_volume():
+    builder = watching_from("09:00", "NFO")
+    builder.close_due(ist("10:00:01"))
+    builder.resume(ist("10:00:10"), ist("10:10:00"))
+    ticks = [
+        Tick("OPT", "NFO", 12.5, ist("10:10:05"), ts_event_ns=0, volume=0),
+        traded("OPT", "10:20:10", 12.5, 75, exchange="NFO"),
+    ]
+
+    assert summary(bars_of(builder, ticks, "10:21:01")) == [
+        ("10:20", 12.5, 12.5, 12.5, 12.5, 75.0, 1)
+    ]
+
+
+def test_after_a_resume_a_0_from_a_symbol_that_traded_today_is_a_missing_count():
+    builder = watching_from("09:00")
+    builder.on_tick(traded("SBIN", "10:00:05", 800.0, 4000000))
+    builder.close_due(ist("10:01:01"))
+    builder.resume(ist("10:01:10"), ist("10:30:00"))
+    ticks = [
+        quoted("SBIN", "10:30:05", 810.0, 0),
+        traded("SBIN", "10:31:05", 810.0, 4800000),
+        traded("SBIN", "10:31:20", 810.5, 4800300),
+    ]
+
+    bars = bars_of(builder, ticks, "10:32:01")
+
+    assert summary(bars) == [("10:31", 810.5, 810.5, 810.5, 810.5, 300.0, 1)]
 
 
 def test_watching_from_the_session_open_makes_the_first_slice_whole():
@@ -365,13 +455,12 @@ def test_an_event_time_up_to_five_seconds_ahead_of_receipt_is_used(
 @pytest.mark.parametrize(
     "event_ns",
     [
-        0,
         ist("10:00:30") // 1_000_000,
         ist("10:00:30") + (5 * 3600 + 1800) * SECOND_NS,
         ist("10:05:30"),
-        ist("10:00:30") - DAY_NS,
+        ist("10:00:30") + DAY_NS,
     ],
-    ids=["zero", "milliseconds", "5h30-ahead", "5-minutes-ahead", "previous-day"],
+    ids=["milliseconds", "5h30-ahead", "5-minutes-ahead", "next-day"],
 )
 def test_an_implausible_event_time_is_rejected_and_the_tick_placed_by_its_receive_time(event_ns):
     builder = watching_from("09:00")
@@ -395,6 +484,38 @@ def test_an_old_trade_time_of_the_day_is_placed_by_receive_time_without_a_warnin
     assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
 
 
+def test_an_event_time_of_zero_is_missing_and_not_warned(caplog):
+    builder = watching_from("09:00")
+    builder.on_tick(Tick("SBIN", "NSE", 800.0, ist("10:00:30"), ts_event_ns=0, volume=10))
+
+    assert [b.ts_open_ns for b in builder.close_due(ist("10:01:01")).bars] == [ist("10:00")]
+    assert builder.event_time_rejected == 0
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+def test_a_snapshot_of_the_previous_session_is_no_trade():
+    yesterday = ist("15:29:58") - 3 * DAY_NS
+    snapshot = Tick("OPT", "NFO", 12.5, ist("09:15:00.300"), ts_event_ns=yesterday, volume=250000)
+
+    builder = watching_from("09:00", "NFO")
+
+    assert bars_of(builder, [snapshot], "09:16:01") == []
+    assert builder.event_time_rejected == 1
+
+
+def test_a_snapshot_seeds_the_last_known_ltp():
+    yesterday = ist("15:29:58") - DAY_NS
+    ticks = [
+        Tick("OPT", "NFO", 12.5, ist("09:15:00.300"), ts_event_ns=yesterday, volume=250000),
+        quoted("OPT", "09:15:20", 12.5, exchange="NFO"),
+        quoted("OPT", "09:15:40", 12.8, exchange="NFO"),
+    ]
+
+    bars = bars_of(watching_from("09:00", "NFO"), ticks, "09:16:01")
+
+    assert summary(bars) == [("09:15", 12.8, 12.8, 12.8, 12.8, 0.0, 1)]
+
+
 def test_a_glitched_event_time_does_not_cut_the_minute_short():
     builder = watching_from("09:00")
     ticks = [
@@ -414,16 +535,18 @@ def test_a_glitched_event_time_does_not_cut_the_minute_short():
 
 def test_an_implausible_event_time_is_warned_once_per_symbol(caplog):
     builder = watching_from("09:00")
+    ahead = 60 * SECOND_NS
     for second in range(3):
-        builder.on_tick(Tick("SBIN", "NSE", 800.0, ist(f"10:00:0{second}"), ts_event_ns=0))
-    builder.on_tick(Tick("INFY", "NSE", 1500.0, ist("10:00:05"), ts_event_ns=0))
+        received = ist(f"10:00:0{second}")
+        builder.on_tick(Tick("SBIN", "NSE", 800.0, received, ts_event_ns=received + ahead))
+    builder.on_tick(Tick("INFY", "NSE", 1500.0, ist("10:00:05"), ts_event_ns=ist("10:01:05")))
 
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert [r.getMessage().split(":")[1] for r in warnings] == ["SBIN", "INFY"]
     assert builder.event_time_rejected == 4
 
 
-def test_a_tick_out_of_order_inside_its_bar_sets_the_open_and_close_by_its_time():
+def test_a_slices_ticks_are_judged_in_receive_order_whatever_order_they_are_handed_over():
     ticks = [
         traded("SBIN", "09:15:20", 801.0, 20),
         traded("SBIN", "09:15:05", 800.0, 10),

@@ -328,7 +328,7 @@ def test_a_tick_arriving_after_a_later_one_still_counts_in_its_slice_within_the_
     assert nse.late_ticks == 0
 
 
-def test_the_bars_do_not_depend_on_the_order_the_ticks_arrived_in():
+def test_the_bars_do_not_depend_on_the_order_the_ticks_are_handed_over_in():
     ticks = [
         tick("SBIN", "09:15:05", 800.0, 100),
         tick("SBIN", "09:15:40", 802.0, 180),
@@ -412,12 +412,12 @@ def test_a_late_trade_is_counted_and_warned_once_per_symbol(nse, caplog):
 # ----- a feed outage ----------------------------------------------------------
 
 
-def test_after_the_feed_resumes_its_slice_only_seeds_so_the_gap_volume_lands_on_no_bar(nse):
+def test_after_an_outage_its_slices_only_seed_so_its_volume_lands_on_no_bar(nse):
     nse.on_tick(tick("SBIN", "09:16:10", 800.0, 200000))
     nse.on_tick(tick("SBIN", "09:16:20", 801.0, 201000))
     due(nse, "09:17:01")
 
-    nse.resume(ist("10:30:00.200"))
+    nse.resume(ist("09:16:30"), ist("10:30:00.200"))
     events = [
         tick("SBIN", "10:30:00.100", 812.0, 4200000, received="10:30:00.300"),
         tick("SBIN", "10:30:40", 812.5, 4203000),
@@ -428,11 +428,11 @@ def test_after_the_feed_resumes_its_slice_only_seeds_so_the_gap_volume_lands_on_
     assert run(nse, events) == [bar("SBIN", "10:31", "10:32", (813.0,) * 4, 500.0, 1)]
 
 
-def test_after_the_feed_resumes_a_first_count_only_sets_the_level(nse):
+def test_after_an_outage_a_first_count_only_sets_the_level(nse):
     nse.on_tick(tick("SBIN", "09:16:10", 800.0, 200000))
     due(nse, "09:17:01")
 
-    nse.resume(ist("10:30:00"))
+    nse.resume(ist("09:16:30"), ist("10:30:00"))
     events = [tick("SBIN", "10:31:05", 813.0, 4200000), tick("SBIN", "10:31:20", 813.5, 4200300)]
 
     assert run(nse, [*events, "10:32:01"]) == [
@@ -440,12 +440,45 @@ def test_after_the_feed_resumes_a_first_count_only_sets_the_level(nse):
     ]
 
 
-def test_a_resume_before_the_open_changes_nothing(nse):
-    nse.resume(ist("09:10"))
+def test_a_slice_completed_before_the_outage_keeps_its_bar_though_not_closed_yet(nse):
+    nse.on_tick(tick("SBIN", "10:29:10", 800.0, 1000))
+    nse.on_tick(tick("SBIN", "10:29:59.900", 801.0, 1100))
+
+    nse.resume(ist("10:30:00"), ist("10:30:00.200"))
+    closed = nse.close_due(ist("10:30:01"))
+
+    assert closed.slices[-1] == (ist("10:29"), ist("10:30"))
+    assert list(closed.bars) == [
+        bar("SBIN", "10:29", "10:30", (800.0, 801.0, 800.0, 801.0), 1100.0, 2)
+    ]
+
+
+def test_slices_before_the_outage_keep_their_bars_when_the_loop_is_behind(nse):
+    nse.on_tick(tick("SBIN", "10:28:10", 800.0, 1000))
+    nse.on_tick(tick("SBIN", "10:29:10", 801.0, 1100))
+
+    nse.resume(ist("10:29:20"), ist("10:29:30"))
+
+    assert due(nse, "10:30:01") == [bar("SBIN", "10:28", "10:29", (800.0,) * 4, 1000.0, 1)]
+
+
+@pytest.mark.parametrize(
+    ("outage", "ended"),
+    [("09:05", "09:10"), ("15:30", "15:40")],
+    ids=["before-open", "after-close"],
+)
+def test_an_outage_outside_the_session_changes_nothing(nse, outage, ended):
+    nse.resume(ist(outage), ist(ended))
 
     assert run(nse, [tick("SBIN", "09:15:05", 800.0, 400), "09:16:01"]) == [
         bar("SBIN", "09:15", "09:16", (800.0,) * 4, 400.0, 1)
     ]
+
+
+@pytest.mark.parametrize("ended_ns", [ist("10:29"), float(ist("10:31"))], ids=["reversed", "float"])
+def test_an_outage_must_be_two_instants_with_its_start_first(nse, ended_ns):
+    with pytest.raises(ConfigError, match="outage|now_ns"):
+        nse.resume(ist("10:30"), ended_ns)
 
 
 def test_a_tick_for_a_slice_the_clock_has_closed_is_dropped_and_counted_late(nse):
@@ -461,7 +494,7 @@ def test_a_tick_for_a_slice_the_clock_has_closed_is_dropped_and_counted_late(nse
 # ----- the session edges ------------------------------------------------------
 
 
-def test_ticks_before_the_open_and_from_the_close_on_are_ignored_and_counted(nse):
+def test_ticks_outside_the_session_make_no_bar_and_are_counted(nse):
     events = [
         tick("SBIN", "09:14:59.999", 799.0, 5),
         tick("SBIN", "09:15:00", 800.0, 10),

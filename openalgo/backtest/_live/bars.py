@@ -56,6 +56,9 @@ DEFAULT_CLOSE_GRACE_S = 1.0
 #: used to place it.
 EVENT_TIME_TOLERANCE_NS = 5 * NANOS_PER_SECOND
 _TOLERANCE_S = EVENT_TIME_TOLERANCE_NS // NANOS_PER_SECOND
+# An event time before 2000 is no time of a trade (a value in milliseconds, say), so it
+# marks no snapshot of an earlier session.
+_EARLIEST_EVENT_NS = int(dt.datetime(2000, 1, 1, tzinfo=dt.UTC).timestamp()) * NANOS_PER_SECOND
 
 logger = logging.getLogger(LOGGER_NAME)
 
@@ -103,30 +106,34 @@ class TickBarBuilder:
 
     Bar `k` covers the slice `[open_k, close_k)` of `slices` and is made of the trades of
     its symbol in that slice (`_bars_trades` says which ticks are trades): open and close
-    are the first and last trade by time, high and low over all of them, `ticks` counts
+    are the first and last trade received, high and low over all of them, `ticks` counts
     them, `volume` is the rise of the day's cumulative volume they carry (a float, 0.0
     while the feed gives none) and `source` is "ticks". A slice without a trade makes no
     bar for its symbol, as a backtest runs a missing bar.
 
-    A tick is placed by `ts_event_ns` when it is within `EVENT_TIME_TOLERANCE_NS` of
-    `ts_recv_ns` and on the session's IST day. An older time on that day (the last trade
-    of an illiquid stock, the pre-open's) is simply placed by `ts_recv_ns`; any other
-    time (ahead of receipt, 0, milliseconds, another day) is too, and is counted
+    A tick's time places it in a slice: `ts_event_ns` when it is within
+    `EVENT_TIME_TOLERANCE_NS` of `ts_recv_ns` and on the session's IST day, else
+    `ts_recv_ns`. An event time of 0 is a missing one, and an older time of that day (the
+    last trade of an illiquid stock, the pre-open's) is simply not used. A time of an
+    earlier day marks a snapshot of an earlier session, which only seeds; it and any
+    other time (ahead of receipt, before 2000, a later day) are counted
     (`event_time_rejected`) with one warning per symbol.
 
     A tick is late when it was received at or after its slice's close plus
     `close_grace_s`: it is dropped and, when it was a trade, counted (`late_ticks`) with
-    one warning per symbol (the local clock may be ahead of the exchange). The session
-    loop hands over every tick received up to `now` before it calls `close_due(now)`, so
-    the bars depend on the ticks' receive times only, and a replay driven by receive
-    times gives the live bars.
+    one warning per symbol (the local clock may be ahead of the exchange).
+
+    The session loop has two duties, so that the bars depend on the ticks' receive times
+    only and a replay driven by receive times gives the live bars: it stamps
+    `ts_recv_ns` when it takes the tick off its queue, and it hands over every tick
+    received up to `now` before it calls `close_due(now)`.
 
     `watching_from_ns` is the instant the session started watching the feed. From the
     session open or earlier, every slice is whole and a symbol's volume counts from 0; a
     tick before the open seeds its symbol's last known LTP. After a start in the middle
     of the session, the slice in which watching began (and any before it) makes no bar:
     its ticks only seed each symbol's volume level and last known LTP. `resume` does the
-    same after a feed outage.
+    same for the slices of a feed outage.
 
     Ticks outside the session are counted (`outside_ticks`); a tick with an LTP that is
     not a positive number, or a cumulative volume that is negative or not a number, is
@@ -169,10 +176,11 @@ class TickBarBuilder:
         self._opens: list[int] = grid["ts"].to_numpy()[has_bar].tolist()
         self._closes: list[int] = closes[has_bar].tolist()
         self._from_open = watching_from_ns <= session[0]
-        # The last slice that only seeds: the one watching began in, and any before it.
-        self._seed_through = -1
+        # Ranges of slices that only seed, first and last inclusive: the slice watching
+        # began in and any before it, then the slices of each feed outage.
+        self._seeding: list[tuple[int, int]] = []
         if not self._from_open:
-            self._seed_through = bisect.bisect_left(self._opens, watching_from_ns) - 1
+            self._seeding.append((0, bisect.bisect_left(self._opens, watching_from_ns) - 1))
         self._symbols: dict[str, SymbolTrades] = {}
         self._due_slots = 0
         self._arrivals = 0
@@ -213,8 +221,8 @@ class TickBarBuilder:
 
     @property
     def event_time_rejected(self) -> int:
-        """Ticks whose event time was implausible (ahead of receipt, 0, milliseconds or
-        another day), placed by their receive time."""
+        """Ticks whose event time was not used for being ahead of receipt or of another
+        day (a snapshot, a value in the wrong unit), placed by their receive time."""
         return self._event_rejected
 
     def on_tick(self, tick: Tick) -> None:
@@ -231,19 +239,19 @@ class TickBarBuilder:
             self._invalid += 1
             logger.debug("tick dropped, unusable LTP or volume: %r", tick)
             return
-        at_ns = self._place(tick)
+        at_ns, snapshot = self._place(tick)
         symbol = self._symbol(tick.symbol)
         ltp = float(tick.ltp)
-        volume = float(tick.volume) if tick.volume else None
+        volume = None if tick.volume is None else float(tick.volume)
         if not self._session[0] <= at_ns < self._session[1]:
             self._outside += 1
             self._note_once("outside", tick, logging.DEBUG, "ticks outside the session")
             if at_ns < self._session[0]:
-                symbol.seed(at_ns, ltp, volume)
+                symbol.seed(tick.ts_recv_ns, ltp, volume)
             return
         slot = bisect.bisect_right(self._opens, at_ns) - 1
         if tick.ts_recv_ns >= self._closes[slot] + self._grace_ns or slot < self._due_slots:
-            if symbol.late_trade(ltp, volume):
+            if not snapshot and symbol.late_trade(ltp, volume):
                 self._late += 1
                 self._note_once(
                     "late",
@@ -254,7 +262,7 @@ class TickBarBuilder:
                 )
             return
         self._arrivals += 1
-        symbol.add(slot, PlacedTick(at_ns, tick.ts_recv_ns, self._arrivals, ltp, volume))
+        symbol.add(slot, PlacedTick(tick.ts_recv_ns, self._arrivals, ltp, volume, snapshot))
 
     def close_due(self, now_ns: int) -> ClosedSlices:
         """Close every slice whose close plus the grace is at or before `now_ns` (UTC
@@ -267,7 +275,7 @@ class TickBarBuilder:
             self._bar(name, slot, trades)
             for name, symbol in self._symbols.items()
             for slot, trades in symbol.close_before(self._due_slots)
-            if slot > self._seed_through
+            if not any(first <= slot <= last for first, last in self._seeding)
         ]
         bars.sort(key=lambda bar: bar.ts_open_ns)
         closed = tuple(
@@ -279,18 +287,27 @@ class TickBarBuilder:
         )
         return ClosedSlices(closed, tuple(bars))
 
-    def resume(self, now_ns: int) -> None:
-        """The feed resumed at `now_ns` (UTC nanoseconds) after an outage. Every slice
-        begun by then and not yet closed only seeds, and every symbol's volume level and
-        last known LTP start again, as after a start in the middle of the session, so
-        the outage's volume never lands on one bar. Before the open or after the close it
-        changes nothing."""
-        if not self._session[0] <= now_ns < self._session[1]:
+    def resume(self, outage_start_ns: int, now_ns: int) -> None:
+        """The feed, out since `outage_start_ns`, resumed at `now_ns` (UTC nanoseconds).
+        The slices from the one the outage began in to the one it ended in only seed, and
+        from the first of them every symbol's volume level and last known LTP start
+        again, as after a start in the middle of the session: slices completed before the
+        outage keep their bars, and its volume lands on no bar. An outage that ended
+        before the open or began at or after the close changes nothing.
+
+        Raises ConfigError unless both are ints with the outage starting first.
+        """
+        start_ns = _instant(outage_start_ns, "outage_start_ns")
+        if not start_ns <= _instant(now_ns, "now_ns"):
+            raise ConfigError(f"the outage starts after it ends: {start_ns} > {now_ns}")
+        if now_ns < self._session[0] or start_ns >= self._session[1]:
             return
-        self._seed_through = max(self._seed_through, bisect.bisect_right(self._opens, now_ns) - 1)
+        first = bisect.bisect_right(self._opens, max(start_ns, self._session[0])) - 1
+        last = bisect.bisect_right(self._opens, min(now_ns, self._session[1] - 1)) - 1
+        self._seeding.append((first, last))
         self._from_open = False
         for symbol in self._symbols.values():
-            symbol.restart()
+            symbol.restart_from(first)
 
     def _symbol(self, name: str) -> SymbolTrades:
         symbol = self._symbols.get(name)
@@ -299,27 +316,27 @@ class TickBarBuilder:
             self._symbols[name] = symbol
         return symbol
 
-    def _place(self, tick: Tick) -> int:
-        """The instant a tick is placed at: its event time when plausible, else its
-        receive time."""
+    def _place(self, tick: Tick) -> tuple[int, bool]:
+        """(the instant a tick is placed at, whether it is a snapshot of an earlier
+        session): its event time when plausible, else its receive time."""
         event_ns, recv_ns = tick.ts_event_ns, tick.ts_recv_ns
-        if event_ns is None:
-            return recv_ns
+        if not event_ns:
+            return recv_ns, False
         on_day = self._day_ns[0] <= event_ns < self._day_ns[1]
         if on_day and abs(event_ns - recv_ns) <= EVENT_TIME_TOLERANCE_NS:
-            return event_ns
+            return event_ns, False
         if on_day and event_ns < recv_ns:
-            return recv_ns
+            return recv_ns, False
         self._event_rejected += 1
         self._note_once(
             "event",
             tick,
             logging.WARNING,
-            f"event times ahead of receipt by more than {_TOLERANCE_S} s, 0, in "
-            "milliseconds or of another day are not used; such ticks are placed by their "
-            "receive time",
+            f"event times ahead of receipt by more than {_TOLERANCE_S} s or of another "
+            "day are not used, and a tick of an earlier day is a snapshot that only seeds; "
+            "such ticks are placed by their receive time",
         )
-        return recv_ns
+        return recv_ns, _EARLIEST_EVENT_NS <= event_ns < self._day_ns[0]
 
     def _note_once(self, kind: str, tick: Tick, level: int, text: str) -> None:
         """Log `text` for the tick's symbol the first time `kind` happens to it."""
