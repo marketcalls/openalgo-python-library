@@ -227,6 +227,10 @@ class GuardLike(Protocol):
     """What the order path needs of the mode guard (`guard.ModeGuard`)."""
 
     @property
+    def started(self) -> bool:
+        """True once `start` has adopted OpenAlgo's mode for the session."""
+
+    @property
     def locked(self) -> bool:
         """True once the mode changed or semi-auto appeared: nothing more is sent."""
 
