@@ -10,6 +10,21 @@ A Python library for algorithmic trading using OpenAlgo's REST APIs and WebSocke
 - General Documentation: https://docs.openalgo.in
 - Source: https://github.com/marketcalls/openalgo-python-library
 
+## What's New in 2.2.1
+
+Two backtesting fixes:
+
+- **A server that cannot answer stops the run.** When OpenAlgo cannot serve the history
+  before `start` that the indicators need (for example, the broker login has expired)
+  and cannot answer for the run's own first day either, the backtest stops with a
+  `ServerError` that says to log in to the broker. Before, a run whose bars came from
+  the local cache went on without its history and could end with 0 trades.
+- **Trades add up to the account.** A trade's charges now include its share of the
+  contract-note rounding (STT and stamp duty are rounded to the rupee on each day's
+  note), so the trades' charges and net P&L add up to the account's charges and net
+  profit, to the paisa. Net profit, the equity curve and the returns are unchanged;
+  trade figures move by a few paise to under a rupee per trade.
+
 ## What's New in 2.2.0
 
 Backtesting made simpler for beginners. Two changes move results, so a run on 2.2.0 can
