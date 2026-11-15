@@ -50,8 +50,9 @@ Inputs
                                 traded value
         side                    "BUY" for a long trade, "SELL" for a short one
         gross_pnl, net_pnl, costs   rupees; net_pnl = gross_pnl - costs to the paisa
-        Optional cost columns brokerage, stt, exchange_txn, sebi_fee, stamp_duty, gst
-        and dp_charge (rupees) are summed into `Performance.cost_breakdown`. Other
+        Optional cost columns brokerage, stt, exchange_txn, sebi_fee, stamp_duty, gst,
+        dp_charge and note_rounding (the contract-note rounding shared to the trade's
+        fills; rupees) are summed into `Performance.cost_breakdown`. Other
         columns (symbol, exit_reason, ...) are kept for the report. Trade statistics
         count closed trades only; an open trade counts for exposure and turnover.
     cash_flows: a Series of deposits (positive) and withdrawals (negative) in rupees,

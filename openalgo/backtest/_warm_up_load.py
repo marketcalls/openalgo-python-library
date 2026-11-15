@@ -28,6 +28,17 @@ no history when the first request failed; the run's own bars are unaffected. The
 own warnings join the run's, each named "<symbol> history before start". A futures
 series loads none (`_warm_up_history`).
 
+**A server that cannot answer** stops the run: when the OpenAlgo server fails a request
+(`ServerError`: it cannot be reached, keeps rate limiting, or answers with an error such
+as an expired broker login), the run asks it once more for the symbol's most recent
+sessions, bypassing the local cache (`_warm_up_source.check_server`). If that fails too,
+the server cannot serve history at all just now, and a run without its history would
+trade from bars the cache happened to hold, waiting inside them for its indicators:
+`ServerError` is raised. If the server answers it, the failure is about the older days (a
+broker that refuses dates before a listing or beyond the recent history it keeps), and
+the steps end as above. A rate limit stops the run at once, with its own advice (raise
+`pacing=`): its history exists but was not sent.
+
 **A sweep** loads once per symbol, stepping for the largest need of each series over
 its combinations first, and each combination then steps through the same loads as its
 single run steps through its source: every day a combination asks for is either held
@@ -59,68 +70,21 @@ from ._warm_up_history import (
     keep,
 )
 from ._warm_up_probe import largest
-from .data import BarsResult, load_bars
+from ._warm_up_source import HistorySource, check_server, load_range
+from .data import BarsResult
 from .data._sessions import day_start_ns
 from .data.loader import own_reader
-from .errors import DataError, NoDataError
+from .errors import DataError, NoDataError, ServerError
 
-SERVER_SOURCES = ("db", "api")
 ONE_DAY = dt.timedelta(days=1)
 # The bars from a first IST day to the last bar before `start`.
 Fetch = Callable[[dt.date], SymbolLoad]
-
-
-@dataclass(frozen=True)
-class HistorySource:
-    """Where a run's history is read from: the run's `data=`, `source=`, `tz=` and
-    `corporate_actions=` arguments, its client and calendar, the (source, base
-    interval) each symbol's run bars came from, and True for a futures series (none
-    is read). It holds the client, so it stays in the process that prepared the run."""
-
-    args: Mapping[str, Any]
-    client: Any
-    calendar: Any
-    origins: Mapping[str, tuple[str | None, str | None]]
-    futures: bool = False
-
-    def kind(self) -> str:
-        """The kind of source: "own" for the user's `data=`, else "source"."""
-        return "source" if self.args["data"] is None else "own"
-
-
-def history_source(
-    args: Mapping[str, Any],
-    client: Any,
-    calendar: Any,
-    loaded: Mapping[str, BarsResult],
-    futures: Any,
-) -> HistorySource:
-    """The source of a run's history from its arguments, client, calendar, its own
-    loads by symbol and its futures plan (None without one)."""
-    names = ("data", "source", "tz", "corporate_actions")
-    origins = {
-        symbol: (result.meta.source, result.meta.base_interval) for symbol, result in loaded.items()
-    }
-    given = {name: args[name] for name in names}
-    return HistorySource(given, client, calendar, origins, futures is not None)
-
-
-def _source(args: Mapping[str, Any], origin: str | None) -> Any:
-    """The source the history is read from: the one the run's bars came from."""
-    if args["data"] is None and args["source"] == "auto" and origin in SERVER_SOURCES:
-        return origin
-    return args["source"]
 
 
 def _partition_key(result: BarsResult) -> str:
     """The partition key prefix of a load (its keys without the month)."""
     partitions = result.meta.partitions
     return partitions[0]["key"].rsplit("/", 1)[0] if partitions else ""
-
-
-def _failure(error: DataError) -> str:
-    """Why a load failed, for the Assumptions block: the error's kind and message."""
-    return f"{type(error).__name__}: {error}"
 
 
 def _given_from(symbol: str, plan: Any, source: HistorySource) -> dt.date | None:
@@ -139,13 +103,19 @@ def _given_from(symbol: str, plan: Any, source: HistorySource) -> dt.date | None
     return ist_time(first).date()
 
 
+def _failure(error: DataError) -> str:
+    """Why a load failed, for the Assumptions block: the error's kind and message."""
+    return f"{type(error).__name__}: {error}"
+
+
 def load_symbol(
     symbol: str, day: dt.date, plan: Any, source: HistorySource, until: dt.date | None = None
 ) -> SymbolLoad:
     """One symbol's base bars from `day` to `until` (IST dates, both included; by
     default the last day before `start`, or `start`'s own day before a datetime
-    `start`). Raises ConfigError for arguments the data layer refuses; a failed load is
-    a note, never an error."""
+    `start`). Raises ConfigError for arguments the data layer refuses, and ServerError
+    when the OpenAlgo server cannot answer at all (`check_server`); any other failed
+    load is a note."""
     args = source.args
     kind = source.kind()
     declared = declared_for(args["corporate_actions"], symbol, plan.symbols)
@@ -153,26 +123,13 @@ def load_symbol(
     last_day = last_day if until is None else min(last_day, until)
     if day > last_day:
         return SymbolLoad(empty_base(), kind, declared=declared)
-    origin, base_interval = source.origins[symbol]
     try:
-        result = load_bars(
-            symbol,
-            plan.exchange,
-            plan.base,
-            day,
-            last_day,
-            source=_source(args, origin),
-            client=source.client,
-            data=_data_for(args["data"], symbol),
-            calendar=source.calendar,
-            tz=args["tz"],
-            base=base_interval,
-            now=plan.present,
-            strict=False,
-            corporate_actions=declared,
-        )
+        result = load_range(symbol, day, last_day, plan, source, corporate_actions=declared)
     except NoDataError:
         return SymbolLoad(empty_base(), kind, declared=declared)
+    except ServerError as error:
+        check_server(symbol, plan, source, error)
+        return SymbolLoad(empty_base(), kind, _failure(error), declared=declared)
     except DataError as error:
         return SymbolLoad(empty_base(), kind, _failure(error), declared=declared)
     base = result.bars[result.bars["ts_open"].to_numpy() < run_from(plan)]
@@ -352,7 +309,8 @@ def load_history(
     """The history of every symbol of `plan` that the needs of the parameter sets probed
     name (one set for a run, every combination's for a sweep), and of every symbol after
     a datetime `start`. Raises ConfigError for an interval the base bars cannot build
-    or arguments the data layer refuses."""
+    or arguments the data layer refuses, and ServerError when the OpenAlgo server
+    cannot answer (`load_symbol`)."""
     # Imported here, as the run context does: a run on its own interval needs none.
     from ._timeframes import _check_interval
 
@@ -371,10 +329,8 @@ def load_history(
 
 
 __all__ = [
-    "HistorySource",
     "LoadedHistory",
     "SymbolLoads",
-    "history_source",
     "load_history",
     "load_symbol",
     "reach",

@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-11-15
+
+### Fixed
+
+- **A server that cannot answer stops the run.** When the OpenAlgo server fails a
+  request for the bars before `start` that the indicators need (it cannot be reached,
+  keeps answering HTTP 429 after the retries, or answers with an error, such as a
+  broker login that has expired), the run asks it once more for the symbol's most recent
+  sessions (the week up to the present), without the local cache. If that fails too,
+  `bt.backtest` and `bt.optimize` raise the new `ServerError`: "SBIN: the OpenAlgo
+  server cannot answer history requests. The bars before start that the indicators
+  need failed (...), and so did a request for its most recent sessions (2026-11-08 to
+  2026-11-15), asked without the local cache. Check that OpenAlgo is running and logged
+  in to the broker, then run the backtest again." Before, a run whose own bars came
+  from the local cache went on without its history and waited inside its bars for its
+  indicators: a NIFTY futures run with an expired broker login finished with 0 trades
+  and only a `WarmUpWarning`. A broker that refuses only older dates (before a listing,
+  or beyond the recent history it keeps) still answers its recent sessions, so that run
+  keeps the history it could load and says why, as before. A server that keeps
+  answering HTTP 429 stops the run at once, with its own advice to raise `pacing=` or
+  try again later. A run that needs no history still runs from the cache.
+- **A trade's charges are what the account paid for its fills.** Each day's contract
+  note rounds STT (CTT on MCX) and stamp duty to the rupee, and the ledger is charged
+  the note, but the trades table, `trade_list()` and the trade metrics added up each
+  fill's unrounded charges, so the trades did not add up to the account. In the SBIN
+  EMA 20/50 run of the tutorial (daily, 2021-01-01 to 2026-11-11, Rs 1,00,000) the
+  trades' net P&L came to Rs 53,942.35 against a net profit of Rs 53,941.09, and their
+  charges to Rs 3,321.65 against Rs 3,322.91. Now each line of a settled note is shared
+  over the fills on it in proportion to what each fill accrued of it (the STT rounding
+  goes to the fills that paid STT, the stamp duty rounding to the buys), in whole paise
+  that add up to the note. A trade's charges are the sum over its fills, and its net
+  P&L its gross P&L less that, so the trades add up to the account's charges and, with
+  no position open at the end, to its net profit, to the paisa: Rs 3,322.91 and
+  Rs 53,941.09 in that run. The account, the equity curve and every return and
+  drawdown figure are unchanged, but for a paisa in a run where a CNC sale and a buy of
+  the same share fall on one day (see Changed). The trade figures (`total_costs`,
+  `net_pnl`, average win and loss, profit factor, expectancy and the rest) move by the
+  rounding: up to about Rs 1.50 per trade, the rupee rounding of STT and stamp duty on
+  its notes. A trade's gross P&L now adds each closing fill's realized P&L rounded to
+  the paisa, as the ledger posts it.
+
+### Added
+
+- **`ServerError`** (`openalgo.backtest.errors`), a `DataError`: raised for every
+  history request the OpenAlgo server could not answer (no response, HTTP 429 after
+  the retries, or an error reply), where a plain `DataError` was raised before. Code
+  that catches `DataError` still catches it. `rate_limited` is True when the server
+  kept answering HTTP 429.
+- **`Result.costs` gains `charged`**: what the account paid for the fill, whole paise:
+  its share of its contract note plus its DP charge. The column adds up to the run's
+  charges. `cost` and `total` stay the unrounded accrual.
+
+### Changed
+
+- `result.fills["costs_rupees"]` is what the account paid for the fill (`charged`).
+  Before, it was the fill's unrounded charges, and a CNC sale that turned the day's
+  earlier buys into intraday trades also carried their change in charges.
+- The tearsheet's charges table and `Performance.cost_breakdown` itemise the
+  contract-note rounding ("Contract-note rounding", column `note_rounding` of
+  `result.performance.trades` in contract-note rounding), so the components add up to
+  the total charges instead of leaving a "Not itemised" row.
+- `Result.trade_list()` gives `gross_pnl`, `charges` and `net_pnl` rounded to the
+  paisa, and `return_pct` from the rounded net P&L.
+- The ledger posts a fill's charges and its DP charge each rounded to the paisa, where
+  it rounded their sum once, so it equals the contract notes plus the DP charges
+  exactly. A run's charges can differ by a paisa from 2.2.0 only where a CNC sale and
+  a buy of the same share fell on one day.
+
 ## [2.2.0] - 2026-11-15
 
 ### Added

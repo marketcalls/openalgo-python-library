@@ -52,7 +52,7 @@ impl Rounding {
 pub(super) type Picos = i128;
 
 const PICOS_PER_RUPEE: Picos = 1_000_000_000_000;
-const PICOS_PER_PAISA: Picos = PICOS_PER_RUPEE / 100;
+pub(super) const PICOS_PER_PAISA: Picos = PICOS_PER_RUPEE / 100;
 
 /// The decimal grid a float amount is snapped to when it becomes `Picos`.
 #[derive(Clone, Copy)]
@@ -114,6 +114,11 @@ pub(super) fn round_half_up(picos: Picos, unit: Unit) -> f64 {
         picos.saturating_sub(half)
     };
     from_picos(nudged / step * step)
+}
+
+/// A whole number of paise as rupees.
+pub(super) fn paise_to_rupees(paise: Picos) -> f64 {
+    paise as f64 / PAISE_PER_RUPEE as f64
 }
 
 /// Round a float sum of whole-paise amounts, or a single charge, to `unit`.

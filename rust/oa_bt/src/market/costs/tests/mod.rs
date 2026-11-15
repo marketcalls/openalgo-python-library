@@ -4,6 +4,7 @@
 //! section and row are named in each test) or are worked out by hand in the test's
 //! comment. None is produced by running the engine.
 
+mod apportion;
 mod batch;
 mod charges;
 mod contract_note;

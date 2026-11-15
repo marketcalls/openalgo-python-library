@@ -4,7 +4,9 @@ the session close, presets, calculator rounding, the DP charge and costs=None.
 Expected figures come from `openalgo.backtest.costs` for the same trades (the cost
 engine is tested against Zerodha's calculator in test_costs*.py) and from the worked
 example of the reference note: an intraday round trip of 400 shares bought at 1,000.00
-and sold at 1,100.00 on a 2026 trade date costs 200.62. See accounting_runs for the bars.
+and sold at 1,100.00 on a 2026 trade date costs 200.62. A fill pays its share of its
+day's contract note (`charged`) and a trade what its fills paid, so a trade costs what its
+notes charge. See accounting_runs for the bars.
 """
 
 import datetime as dt
@@ -26,28 +28,40 @@ from openalgo.backtest.errors import CostError
 
 INTRADAY = "NSE_EQ_INTRADAY"
 QTY = 400
+# The most contract-note rounding moves a round trip's charges: STT and stamp duty are
+# rounded to the rupee, half a rupee each at most, on each of its notes.
+NOTE_ROUNDING = 1.0
 
 
 def charged_round_trip(**settings):
     return round_trip({"qty": QTY}, slippage=0, **settings)
 
 
-def test_each_fill_is_charged_what_the_cost_engine_charges_that_trade():
+def test_each_fill_accrues_what_the_cost_engine_charges_that_trade():
     result = charged_round_trip()
     expected = [
         costs.trade_cost(side, price, QTY, DAY, segment=INTRADAY).total
         for side, price in (("BUY", ENTRY_PRICE), ("SELL", EXIT_PRICE))
     ]
     assert list(result.costs["total"]) == pytest.approx(expected, abs=1e-9)
-    assert list(result.fills["costs_rupees"]) == pytest.approx(expected, abs=1e-9)
 
 
-def test_a_trades_charges_equal_the_round_trip_cost():
+def test_each_fill_pays_its_share_of_the_days_contract_note():
+    result = charged_round_trip()
+    charged = result.costs["charged"]
+    assert list(result.fills["costs_rupees"]) == list(charged)
+    assert all(round(paid, 2) == paid for paid in charged)
+    assert charged.sum() == pytest.approx(200.62, abs=1e-9)
+    assert (charged - result.costs["total"]).abs().max() < NOTE_ROUNDING
+
+
+def test_a_trade_costs_what_its_contract_note_charges():
     result = charged_round_trip()
     trip = costs.round_trip_cost(ENTRY_PRICE, EXIT_PRICE, QTY, DAY, segment=INTRADAY)
-    assert result.trades.loc[0, "costs_rupees"] == pytest.approx(trip.total, abs=1e-9)
+    assert result.trades.loc[0, "costs_rupees"] == pytest.approx(200.62, abs=1e-9)
+    assert abs(result.trades.loc[0, "costs_rupees"] - trip.total) < NOTE_ROUNDING
     gross = result.trades.loc[0, "gross_pnl_rupees"]
-    assert result.trades.loc[0, "net_pnl_rupees"] == pytest.approx(gross - trip.total)
+    assert result.trades.loc[0, "net_pnl_rupees"] == pytest.approx(gross - 200.62)
 
 
 def test_the_ledger_charges_the_worked_example_contract_note():
@@ -105,15 +119,19 @@ def test_a_delivery_sell_from_holdings_pays_the_dp_charge():
         sell_date=DAILY_DAYS[2],
         segment="NSE_EQ_DELIVERY",
     )
-    assert result.trades.loc[0, "costs_rupees"] == pytest.approx(trip.total + dp, abs=1e-9)
+    # The buy's note and the sale's note, each rounded on its own day, plus the DP charge.
+    notes = result.contract_notes["charged_total"].sum()
+    paid = result.trades.loc[0, "costs_rupees"]
+    assert paid == pytest.approx(notes + dp, abs=1e-9)
+    assert paid == pytest.approx(result.equity["costs_rupees"].iloc[-1], abs=1e-9)
+    assert abs(paid - (trip.total + dp)) < 2 * NOTE_ROUNDING
 
 
 def test_a_delivery_buy_and_sell_on_one_day_is_charged_as_intraday_with_no_dp_charge():
     # The worked example traded on CNC: bought and sold the same day, so brokers charge
     # it as intraday (04-execution 2) and the note charges the intraday 200.62.
     result = charged_round_trip(product="CNC")
-    trip = costs.round_trip_cost(ENTRY_PRICE, EXIT_PRICE, QTY, DAY, segment=INTRADAY)
-    assert result.trades.loc[0, "costs_rupees"] == pytest.approx(trip.total, abs=1e-9)
+    assert result.trades.loc[0, "costs_rupees"] == pytest.approx(200.62, abs=1e-9)
     assert list(result.contract_notes["charged_total"]) == [200.62]
     assert result.equity["costs_rupees"].iloc[-1] == pytest.approx(200.62, abs=1e-9)
     assert list(result.costs["dp_charge"]) == [0.0, 0.0]

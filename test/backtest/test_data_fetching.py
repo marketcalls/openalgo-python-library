@@ -26,7 +26,7 @@ from hypothesis import strategies as st
 
 from openalgo.backtest.data.brokers import BROKER_PROFILES, DEFAULT_PROFILE, broker_profile
 from openalgo.backtest.data.fetching import plan_chunks, rows_to_records
-from openalgo.backtest.errors import ConfigError, DataError, TimestampError
+from openalgo.backtest.errors import ConfigError, DataError, ServerError, TimestampError
 
 START = dt.date(2024, 1, 1)
 END = dt.date(2024, 5, 31)  # 152 days after START, inclusive
@@ -255,19 +255,19 @@ def test_window_of_todays_unfinished_session_does_not_end_the_broker_walk():
 @pytest.mark.parametrize(
     "status, body", [(401, {"status": "error", "message": "Session expired"}), (502, None)]
 )
-def test_failure_of_an_older_window_is_an_error_not_short_history(status, body):
+def test_failure_of_an_older_window_is_a_server_error_not_short_history(status, body):
     client = _client()
     newest = broker_shape(truth_rows(CAL, "NSE", [END], step=300))
     client.queue(200, {"status": "success", "data": newest})
     client.queue(status, body)
-    with pytest.raises(DataError, match=rf"2024-02-02 to 2024-04-01 .* failed \(HTTP {status}"):
+    with pytest.raises(ServerError, match=rf"2024-02-02 to 2024-04-01 .* failed \(HTTP {status}"):
         _load(client, broker="zerodha")
 
 
 def test_not_json_404_from_the_store_is_reported_as_what_it_is():
     client = FakeClient()
     client.queue(404, None)
-    with pytest.raises(DataError, match="HTTP 404: the body is not JSON"):
+    with pytest.raises(ServerError, match="HTTP 404: the body is not JSON"):
         _load(client, source="db")
 
 
@@ -364,16 +364,17 @@ def test_retry_after_header_lengthens_the_wait_up_to_the_cap(retry_after, waited
     assert clock.sleeps == [waited]
 
 
-def test_backoff_gives_up_after_max_retries_with_a_data_error():
+def test_backoff_gives_up_after_max_retries_with_a_server_error():
     clock = FakeClock()
     client = _client(days=DAYS[:10])
     for _ in range(3):
         client.queue(429, BUSY)
-    with pytest.raises(DataError, match="HTTP 429.*after 2 retries"):
+    with pytest.raises(ServerError, match="HTTP 429.*after 2 retries") as raised:
         _load(
             client, end=dt.date(2024, 1, 10), clock=clock, broker="zerodha",
             provider_options={"max_retries": 2},
         )  # fmt: skip
+    assert raised.value.rate_limited
     assert clock.sleeps == [1.0, 2.0]
 
 

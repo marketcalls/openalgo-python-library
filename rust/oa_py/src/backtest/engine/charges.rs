@@ -2,8 +2,10 @@
 //!
 //! - `rounding`: "contract_note", "calculator", or None for a cost-free run;
 //! - `fills`: columns, one row per charged fill: `fill` (row of the fills table), `day`,
-//!   `segment`, the six components, `cost`, `dp_charge`, `total`, `schedule` (position of
-//!   the schedule version in the run's cost model), `trust` and `trade`;
+//!   `segment`, the six components, `cost`, `dp_charge`, `total`, `charged` (what the
+//!   account paid for the fill: its share of its contract note plus its DP charge, whole
+//!   paise), `schedule` (position of the schedule version in the run's cost model),
+//!   `trust` and `trade`;
 //! - `notes`: columns, one row per contract note: `day`, `group`, `fills`, the six
 //!   charged lines, `charged_total`, `accrued_total`, `posted`, `adjustment`, `settled`;
 //! - `tables`: one (table, row id, status, first day, source, notes) per dated
@@ -56,6 +58,11 @@ fn fills<'py>(py: Python<'py>, rows: &[FillCharge]) -> PyResult<Bound<'py, PyDic
         &dict,
         "total",
         rows.iter().map(FillCharge::total_rupees).collect(),
+    )?;
+    put(
+        &dict,
+        "charged",
+        rows.iter().map(FillCharge::paid_rupees).collect(),
     )?;
     put(
         &dict,

@@ -15,9 +15,12 @@ cash) are part of the draw. For every run:
    every final position.
 3. Each fill's charges are the sum of their six components (brokerage, STT or CTT,
    exchange charge, SEBI fee, stamp duty, GST) plus the DP charge, and each trade's
-   charges are the sum of its fills' charges.
+   charges are what the account paid for its fills (`charged`: their shares of their
+   contract notes).
 4. Over the whole run, the ledger's cash change equals the realized P&L less the charges,
    and the realized P&L is the sum of the trades' gross P&L.
+5. The fills' `charged` add up to the ledger's charges, and the trades' net P&L to the
+   account's net P&L.
 
 Tolerance: the ledger posts realized P&L rounded to the paisa at each fill (decision D6),
 so a sum of fills differs from it by at most half a paisa per fill. Everything else is
@@ -203,7 +206,7 @@ def test_each_position_equals_the_sum_of_its_fills(scenario):
 
 @given(scenarios())
 @SETTINGS
-def test_charges_are_the_sum_of_their_components_per_fill_and_per_trade(scenario):
+def test_charges_are_the_sum_of_their_components_and_a_trade_pays_its_fills_charges(scenario):
     result = run(scenario)
     costs = result.costs
     for _, charged in costs.iterrows():
@@ -211,9 +214,22 @@ def test_charges_are_the_sum_of_their_components_per_fill_and_per_trade(scenario
         assert abs(charged["cost"] - lines) <= FLOAT_NOISE
         assert abs(charged["total"] - (lines + charged["dp_charge"])) <= FLOAT_NOISE
     for _, trade in result.trades.iterrows():
-        own = costs.loc[costs["trade_id"] == trade["trade_id"], "total"].sum()
+        own = costs.loc[costs["trade_id"] == trade["trade_id"], "charged"].sum()
         assert abs(trade["costs_rupees"] - own) <= FLOAT_NOISE
         assert abs(trade["net_pnl_rupees"] - (trade["gross_pnl_rupees"] - own)) <= FLOAT_NOISE
+
+
+@given(scenarios())
+@SETTINGS
+def test_the_trades_add_up_to_the_accounts_charges_and_net_pnl(scenario):
+    result = run(scenario)
+    assert (result.final_positions["quantity_units"] == 0).all()
+    equity = result.equity
+    ledger_costs = equity["costs_rupees"].iloc[-1]
+    assert abs(result.costs["charged"].sum() - ledger_costs) <= FLOAT_NOISE
+    assert abs(result.trades["costs_rupees"].sum() - ledger_costs) <= FLOAT_NOISE
+    net = equity["equity_rupees"].iloc[-1] - CAPITAL
+    assert abs(result.trades["net_pnl_rupees"].sum() - net) <= FLOAT_NOISE
 
 
 @given(scenarios())

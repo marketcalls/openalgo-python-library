@@ -32,6 +32,7 @@ COST_COLUMNS = (
     "cost",
     "dp_charge",
     "total",
+    "charged",
     "schedule",
     "verified",
     "trade_id",
@@ -48,6 +49,10 @@ NOTE_COLUMNS = (
     "adjustment",
     "settled",
 )
+#: The cost model's rounding mode whose contract notes are shared over their fills.
+CONTRACT_NOTE_ROUNDING = "contract_note"
+#: The per-trade column of the contract-note rounding shared to a trade's fills.
+NOTE_ROUNDING = "note_rounding"
 _EPOCH = dt.date(1970, 1, 1)
 _VERIFIED = "verified"
 _UNVERIFIED = "unverified"
@@ -74,7 +79,7 @@ def cost_frame(output: dict[str, Any], symbols: list[str], schedules: list[str])
                 "reason": fills["reason"],
                 "date": _dates(rows["day"]),
                 **{name: rows[name] for name in ("segment", *COMPONENTS)},
-                **{name: rows[name] for name in ("cost", "dp_charge", "total")},
+                **{name: rows[name] for name in ("cost", "dp_charge", "total", "charged")},
                 "schedule": [schedules[i] for i in rows["schedule"]],
                 "verified": rows["trust"] == _VERIFIED,
                 "trade_id": rows["trade"].astype("Int64"),
@@ -122,11 +127,17 @@ def run_warnings(output: dict[str, Any], schedules: list[str]) -> list[str]:
 
 
 def trade_charges(output: dict[str, Any]) -> pd.DataFrame:
-    """The components and the DP charge summed per closed trade, indexed by trade id."""
+    """The components and the DP charge summed per closed trade, indexed by trade id,
+    and in contract-note rounding the note's rounding shared to the trade's fills
+    ("note_rounding", what was charged less the accrued total), so the columns add up
+    to the trade's charges."""
     rows = pd.DataFrame(output["charges"]["fills"])
     columns = [*COMPONENTS, "dp_charge"]
+    if output["charges"]["rounding"] == CONTRACT_NOTE_ROUNDING:
+        columns.append(NOTE_ROUNDING)
     if not len(rows):
         return pd.DataFrame(columns=columns, dtype=float)
+    rows[NOTE_ROUNDING] = rows["charged"] - rows["total"]
     closed = rows[rows["trade"].notna()]
     return closed.groupby(closed["trade"].astype(np.int64))[columns].sum()
 
@@ -142,12 +153,13 @@ def open_charges(output: dict[str, Any], instrument: int, product: str) -> float
         & (fills["instrument"] == instrument).to_numpy()
         & (fills["product"] == product).to_numpy()
     )
-    return float(rows.loc[mask, "total"].sum())
+    return float(rows.loc[mask, "charged"].sum())
 
 
 __all__ = [
     "COST_COLUMNS",
     "NOTE_COLUMNS",
+    "NOTE_ROUNDING",
     "cost_frame",
     "notes_frame",
     "open_charges",

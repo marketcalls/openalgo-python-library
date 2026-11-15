@@ -214,7 +214,10 @@ class Result(AnalysisMethods, ExportMethods):
         """What each fill was charged, rupees: the fill (time, symbol, product, side,
         units, price, reason), its IST trade date and cost segment, the six components
         (unrounded accruals in contract-note rounding), `cost` (their reported total),
-        `dp_charge` (on the first delivery sell of a scrip in a day), `total`, the cost
+        `dp_charge` (on the first delivery sell of a scrip in a day), `total`, `charged`
+        (what the account paid for the fill, whole paise: its share of its contract
+        note, so the note's rounding of STT and stamp duty is shared over the fills that
+        paid them, plus its DP charge; the column adds up to the run's charges), the cost
         schedule version, whether its rates are verified for the date, and the trade id
         once the trade has closed. Empty for a run with costs=None; `attrs["rounding"]`
         is the rounding mode."""

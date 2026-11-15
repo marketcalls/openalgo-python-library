@@ -19,6 +19,7 @@ use oa_bt::market::facts::MarketFacts;
 use oa_bt::market::margin::MarginModel;
 use oa_bt::market::slippage::SlippageSpec;
 use oa_bt::model::{days_from_civil, ts_from_ist, Day, Exchange, InstrumentKind, Product, Side};
+use oa_bt::portfolio::round_to_paise;
 use oa_bt::rms::StrategyRiskConfig;
 use oa_bt::sizing::{SizerSpec, SizingControls};
 
@@ -157,8 +158,12 @@ fn charged(units: f64) -> RunOutput {
     run_trip(config, buy(units, Product::Mis)).0
 }
 
+/// The most the contract-note rounding moves a fill's charges: STT and stamp duty are
+/// rounded to the rupee (half a rupee each), the other lines to the paisa.
+const NOTE_ROUNDING_RUPEES: f64 = 1.0;
+
 #[test]
-fn each_fill_costs_what_the_cost_model_prices_it_at() {
+fn each_fill_pays_its_share_of_the_days_contract_note() {
     let output = charged(400.0);
     let model = model();
     let price = |side, price| {
@@ -166,12 +171,26 @@ fn each_fill_costs_what_the_cost_model_prices_it_at() {
         cost.map(|c| c.total()).expect("priced")
     };
     let costs: Vec<f64> = output.fills.iter().map(|r| r.fill.costs_rupees).collect();
-    assert_eq!(
-        costs,
-        vec![price(Side::Buy, 1_000.0), price(Side::Sell, 1_100.0)]
-    );
-    let trade_costs = output.trades[0].costs_rupees;
-    assert!((trade_costs - costs.iter().sum::<f64>()).abs() < 1e-9);
+    let priced = [price(Side::Buy, 1_000.0), price(Side::Sell, 1_100.0)];
+    for (cost, priced) in costs.iter().zip(priced) {
+        assert_eq!(*cost, round_to_paise(*cost), "a whole number of paise");
+        assert!(
+            (cost - priced).abs() < NOTE_ROUNDING_RUPEES,
+            "{cost} vs {priced}"
+        );
+    }
+    let note = output.charges.notes[0].note.charged_total;
+    assert!((costs.iter().sum::<f64>() - note).abs() < 1e-9);
+}
+
+#[test]
+fn a_trade_costs_what_the_account_paid_for_its_fills() {
+    let output = charged(400.0);
+    let trade = &output.trades[0];
+    let charged = output.equity.costs_rupees.last().copied();
+    assert_eq!(Some(trade.costs_rupees), charged);
+    let net = trade.gross_pnl_rupees - trade.costs_rupees;
+    assert!((trade.net_pnl_rupees - net).abs() < 1e-9);
 }
 
 #[test]

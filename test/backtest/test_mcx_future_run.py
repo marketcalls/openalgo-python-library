@@ -167,13 +167,14 @@ def test_each_days_contract_note_rounds_its_lines(result, row, note):
         assert charged[name] == pytest.approx(expected, abs=1e-9), name
 
 
-def test_the_ledger_is_charged_the_contract_notes_and_the_trade_its_fills(result):
+def test_the_ledger_and_the_trade_are_charged_the_contract_notes(result):
     assert result.equity["costs_rupees"].iloc[-1] == pytest.approx(LEDGER_COSTS, abs=1e-9)
     trade = result.trades.iloc[0]
-    fills_total = BUY_LINES["total"] + SELL_LINES["total"]
-    assert trade["costs_rupees"] == pytest.approx(fills_total, abs=1e-9)
+    assert trade["costs_rupees"] == pytest.approx(LEDGER_COSTS, abs=1e-9)
     assert trade["gross_pnl_rupees"] == GROSS_PNL
-    assert trade["net_pnl_rupees"] == pytest.approx(GROSS_PNL - fills_total, abs=1e-9)
+    assert trade["net_pnl_rupees"] == pytest.approx(GROSS_PNL - LEDGER_COSTS, abs=1e-9)
+    # Each fill alone on its note pays the note.
+    assert list(result.costs["charged"]) == [46.65, 87.84]
 
 
 def test_the_margin_is_twenty_percent_of_the_contract_value_while_held(result):

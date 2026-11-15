@@ -158,7 +158,9 @@ pub struct Fill {
     pub target_index: Option<u16>,
     /// Qualifiers.
     pub flags: FillFlags,
-    /// Modelled charges of this fill in rupees (0 when the run is cost-free).
+    /// Modelled charges of this fill in rupees (0 when the run is cost-free). In a
+    /// run's output, what the account paid for it, whole paise, contract-note rounding
+    /// included; while the run advances, what the ledger posted when it filled.
     pub costs_rupees: f64,
 }
 

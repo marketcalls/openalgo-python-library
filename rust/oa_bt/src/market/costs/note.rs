@@ -25,6 +25,7 @@
 //! exact value is Rs 1.50 is Rs 1.50 and rounds to Rs 2, whatever the float that
 //! carried each fill looked like.
 
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
 
 use crate::model::{is_supported_day, Day};
@@ -32,7 +33,9 @@ use crate::model::{is_supported_day, Day};
 use super::breakdown::{CostBreakdown, COMPONENT_NAMES};
 use super::cost_model::check_amount;
 use super::error::CostError;
-use super::rounding::{from_picos, round_half_up, to_picos, Grid, Picos, Unit};
+use super::rounding::{
+    from_picos, paise_to_rupees, round_half_up, to_picos, Grid, Picos, Unit, PICOS_PER_PAISA,
+};
 use super::segment::{NoteGroup, Segment};
 
 /// The rounding rule the aggregator applies, in one sentence, for result metadata.
@@ -190,6 +193,77 @@ impl ContractNoteAggregator {
     pub fn is_empty(&self) -> bool {
         self.notes.is_empty()
     }
+}
+
+/// Share what a contract note charges among the fills accrued into it: rupees, whole
+/// paise, one share per entry of `fills` (each fill's unrounded cost, as accrued), in
+/// the same order.
+///
+/// Each line of the note is shared in proportion to what each fill accrued of it, so
+/// the rounding of a line goes to the fills that paid that charge (the STT rounding to
+/// the fills that paid STT, the stamp duty rounding to the buys). The paise left over
+/// when the shares are rounded go to the shares with the largest remainders, the
+/// earlier fill first on a tie, so the shares add up to `note.charged_total` exactly.
+/// A line that no fill of `fills` accrued goes to the first fill. Empty when `fills` is.
+pub fn apportion(note: &NoteLine, fills: &[CostBreakdown]) -> Vec<f64> {
+    if fills.is_empty() {
+        return Vec::new();
+    }
+    let accrued: Vec<[Picos; 6]> = fills
+        .iter()
+        .map(|cost| {
+            let parts = cost.components();
+            std::array::from_fn(|index| to_picos(parts[index], LINES[index].0))
+        })
+        .collect();
+    let charged = note.charged.components();
+    let mut exact: Vec<Picos> = vec![0; fills.len()];
+    for (index, charged_rupees) in charged.into_iter().enumerate() {
+        let line = to_picos(charged_rupees, Grid::Charge);
+        let total = accrued
+            .iter()
+            .map(|parts| parts[index])
+            .fold(0, Picos::saturating_add);
+        if total <= 0 {
+            exact[0] = exact[0].saturating_add(line);
+            continue;
+        }
+        // What rounding the line added or took away: at most half a rupee, so the
+        // product below stays far inside the integer range.
+        let rounding = line.saturating_sub(total);
+        for (share, parts) in exact.iter_mut().zip(&accrued) {
+            let part = parts[index].saturating_add(rounding.saturating_mul(parts[index]) / total);
+            *share = share.saturating_add(part);
+        }
+    }
+    whole_paise(&exact, to_picos(note.charged_total, Grid::Charge))
+}
+
+/// Exact shares rounded to whole paise that add up to `target` (a whole number of
+/// paise, as picos): each share rounded down, and the paise left over given to the
+/// largest remainders, the earlier share first on a tie. Rupees, in share order.
+fn whole_paise(exact: &[Picos], target: Picos) -> Vec<f64> {
+    let mut paise: Vec<Picos> = exact
+        .iter()
+        .map(|share| share.div_euclid(PICOS_PER_PAISA))
+        .collect();
+    let mut order: Vec<usize> = (0..exact.len()).collect();
+    order.sort_by_key(|&at| (Reverse(exact[at].rem_euclid(PICOS_PER_PAISA)), at));
+    let held = paise
+        .iter()
+        .fold(0, |sum: Picos, share| sum.saturating_add(*share));
+    let left = target.div_euclid(PICOS_PER_PAISA).saturating_sub(held);
+    // Between 0 and one paisa per share when the shares add up to the target; the
+    // general split keeps the sum exact whatever they add up to.
+    let count = Picos::try_from(exact.len()).unwrap_or(Picos::MAX);
+    let (each, rest) = (left.div_euclid(count), left.rem_euclid(count));
+    for share in &mut paise {
+        *share = share.saturating_add(each);
+    }
+    for &at in order.iter().take(usize::try_from(rest).unwrap_or(0)) {
+        paise[at] = paise[at].saturating_add(1);
+    }
+    paise.into_iter().map(paise_to_rupees).collect()
 }
 
 /// Round a batch of per-fill costs into contract notes.

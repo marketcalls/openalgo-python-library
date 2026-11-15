@@ -21,7 +21,7 @@ use super::event::{Event, EventStamp, Step};
 use super::futures::FuturesDesk;
 use super::gtt::GttDesk;
 use super::market_data::MarketData;
-use super::output::{FinalPosition, GrossPnl, Recorder, RunOutput};
+use super::output::{settle_trade_charges, FinalPosition, GrossPnl, Recorder, RunOutput};
 use super::pause::Pause;
 use super::run_end::{end_of_run, RunEnd};
 use super::sale_credit::SessionBuys;
@@ -323,17 +323,21 @@ impl Engine {
             .collect();
         let realized = self.portfolio.account.realized_rupees;
         let unrealized = self.portfolio.unrealized_rupees();
+        let charges = self.charges.into_output();
+        let mut fills = self.record.fills;
+        let mut trades = self.record.trades.into_closed();
+        settle_trade_charges(&mut fills, &mut trades, &charges);
         Ok(RunOutput {
             capital_rupees: self.config.capital_rupees,
             instruments: self.instruments,
-            fills: self.record.fills,
+            fills,
             levels: self.record.levels,
             equity: self.record.equity,
-            trades: self.record.trades.into_closed(),
+            trades,
             orders: self.book.orders().to_vec(),
             events: self.record.events,
             stale_marks: self.record.stale_marks,
-            charges: self.charges.into_output(),
+            charges,
             futures: self.futures.into_output(),
             final_positions,
             gross_pnl: GrossPnl {
