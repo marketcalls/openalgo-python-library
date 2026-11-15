@@ -26,6 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one alert listing the orders sent and the orders in doubt after the change. New errors
   in `openalgo.backtest.errors`: `LiveError`, `PreflightError`, `ModeChangedError`,
   `JournalError`.
+- The live layer's journal (private): a SQLite file per account, bound to its broker,
+  with one record for sandbox and one for live. Each order intent is written and synced
+  before the order is sent, so a restart knows every order whose outcome is unknown; it
+  also keeps each order's updates, the broker-held stop of each position, the risk
+  state of each strategy and trading day, and the strategy's own `self.state` across
+  days. The first final update of an order stands, except that a fill with a price
+  replaces one reported at price 0.
 
 ## [2.2.1] - 2026-11-15
 
