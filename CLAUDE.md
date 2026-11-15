@@ -173,6 +173,12 @@ These are settled. Do not redesign around them without asking.
   2026-11-13).
 - **Whole shares by default.** `quantity_mode` defaults to "venue" (whole shares and lots);
   part shares only with `quantity_mode="fractional"` (maintainer, 2026-11-13).
+- **Live trading (Phase 2), decided 2026-11-15.** Live bars are built from WebSocket
+  ticks and stamped at their close, verified against broker candles (D27). Live mode is
+  allowed in the first live release, 2.3.0 (D28). A running `bt.live` is controlled by
+  Ctrl+C only, a safe stop (D29). No `expect_mode` change to the OpenAlgo server: the
+  mode guard uses each response's `mode` field and `analyzerstatus` polling (D30). The
+  plan is PRD 15-phase2-plan.md.
 - **Speed targets.** An empty `on_bar` makes at least 300k callbacks per second; an
   array or condition strategy over 1M bars, with charges, slippage and every metric,
   takes at most 2 seconds on a current desktop core (`benchmark/backtest_speed.py`).
