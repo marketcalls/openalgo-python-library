@@ -80,6 +80,34 @@ class AccountAPI(BaseAPI):
                 'error_type': 'unknown_error'
             }
 
+    def ping(self, **kwargs):
+        """
+        Check that the API key is valid and see which broker OpenAlgo is logged in to.
+
+        Parameters:
+        - **kwargs: Optional additional parameters for future API extensions.
+
+        Returns:
+        dict: JSON response with format:
+            {
+                "data": {
+                    "broker": "broker_name",
+                    "message": "pong"
+                },
+                "status": "success"
+            }
+        An unknown API key, or a broker session that was logged out, is answered
+        with HTTP 403 ("Invalid openalgo apikey").
+        """
+        payload = {
+            "apikey": self.api_key
+        }
+        # Add any additional kwargs
+        for key, value in kwargs.items():
+            if value is not None:
+                payload[key] = value
+        return self._make_request("ping", payload)
+
     def funds(self, **kwargs):
         """
         Get funds and margin details of the connected trading account.
