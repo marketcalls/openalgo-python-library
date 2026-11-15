@@ -218,11 +218,13 @@ def test_a_sqlite_error_says_what_happened_and_what_to_do(error, advice):
 
 
 def test_each_kind_of_sqlite_error_gets_advice_of_its_own():
-    messages = [
-        str(failure(row.values[0], "record the stop", Path("journal.sqlite")))
+    # One SQLite message for every kind, so only the advice can tell them apart.
+    errors = [
+        a_sqlite_error(type(row.values[0]), "failed", row.values[0].sqlite_errorname)
         for row in ERRORS_AND_ADVICE
     ]
-    assert len(set(messages)) == len(messages)
+    messages = {str(failure(error, "record the stop", Path("journal.sqlite"))) for error in errors}
+    assert len(messages) == len(errors)
 
 
 @pytest.mark.parametrize(
