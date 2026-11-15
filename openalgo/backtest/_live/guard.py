@@ -34,6 +34,7 @@ from typing import Any, Protocol
 
 from .._layout import NANOS_PER_SECOND
 from ..errors import ConfigError, LiveError, ModeChangedError
+from ._guard_answers import PENDING_ORDER_ID_FIELD, SUCCESS, semi_auto_seen, switch_mode
 from ._guard_breach import ModeBreach, SeenIn, breach_text
 from ._types import LOGGER_NAME, AlertKind, AlertsLike, Mode, Now, OrderUpdate, mode_of
 
@@ -43,18 +44,8 @@ DEFAULT_POLL_SECONDS = 5.0
 #: brief, Phase 2 step 4): one failure is a blip, three mean the switch is unwatched.
 FAILED_READS_BEFORE_ALERT = 3
 
-# The fields OpenAlgo puts on an order it queued in the Action Center instead of sending
-# it (services/order_router_service.py, queue_order), and on every order it placed.
-_PENDING_ORDER_ID_FIELD = "pending_order_id"
-_SEMI_AUTO_MODE_FIELD = "semi_auto"
+#: The field of the order ID on every order OpenAlgo placed.
 _ORDER_ID_FIELD = "orderid"
-_SUCCESS = "success"
-# Lower case, part of the message of the 403 that refuses a modify or cancel while
-# semi-auto is on in live mode ("Modify order operation is not allowed in Semi-Auto
-# mode. ...": services/modify_order_service.py and services/cancel_order_service.py,
-# the semi-auto check of their API-key path). Matched in the server's body and in the
-# SDK's "HTTP 403: <body>" wrapper alike.
-_SEMI_AUTO_REFUSAL = "is not allowed in semi-auto mode"
 
 logger = logging.getLogger(LOGGER_NAME)
 
@@ -112,6 +103,11 @@ class ModeGuard:
         return self._breach is not None
 
     @property
+    def started(self) -> bool:
+        """True once `start` has adopted OpenAlgo's mode for the session."""
+        return self._session_mode is not None
+
+    @property
     def breach(self) -> ModeBreach | None:
         """Why the guard locked, or None while it is open."""
         return self._breach
@@ -132,7 +128,7 @@ class ModeGuard:
             raise LiveError("the mode guard has started already: a session starts it once")
         read_ns = self._now()
         try:
-            mode = _switch_mode(self._client.analyzerstatus())
+            mode = switch_mode(self._client.analyzerstatus())
         except LiveError as error:
             raise LiveError(
                 f"{error}. Check that OpenAlgo is running and the API key is valid, then "
@@ -210,12 +206,12 @@ class ModeGuard:
         session_mode = self._started()
         if self._breach is not None:
             return
-        if _semi_auto_seen(response):
-            pending = response.get(_PENDING_ORDER_ID_FIELD)
+        if semi_auto_seen(response):
+            pending = response.get(PENDING_ORDER_ID_FIELD)
             self._lock(None, SeenIn.RESPONSE, None if pending is None else str(pending))
             return
         seen = mode_of(response)
-        if seen is Mode.LIVE and response.get("status") != _SUCCESS:
+        if seen is Mode.LIVE and response.get("status") != SUCCESS:
             logger.debug("an error response without a mode says nothing of the switch")
             return
         order_id = str(response.get(_ORDER_ID_FIELD) or "")
@@ -310,7 +306,7 @@ class ModeGuard:
         read_ns = self._now()
         self._next_read_ns = read_ns + self._poll_ns
         try:
-            mode = _switch_mode(self._client.analyzerstatus())
+            mode = switch_mode(self._client.analyzerstatus())
         except LiveError as error:
             self._count_failed_read(error)
             raise
@@ -358,34 +354,6 @@ class ModeGuard:
     def _alert(self, kind: AlertKind, text: str) -> None:
         if self._alerts is not None:
             self._alerts.send(kind, text)
-
-
-def _switch_mode(response: Mapping[str, Any]) -> Mode:
-    """The mode an `analyzerstatus` answer reports: `data.analyze_mode`, a boolean
-    (services/analyzer_service.py). Raises LiveError for an error or any other answer."""
-    if response.get("status") != _SUCCESS:
-        reason = response.get("message") or "an error without a message"
-        raise LiveError(f"OpenAlgo did not report its mode (analyzerstatus: {reason})")
-    data = response.get("data")
-    analyze_mode = data.get("analyze_mode") if isinstance(data, Mapping) else None
-    if not isinstance(analyze_mode, bool):
-        raise LiveError(
-            "OpenAlgo did not report its mode (analyzerstatus answered without data.analyze_mode)"
-        )
-    return Mode.SANDBOX if analyze_mode else Mode.LIVE
-
-
-def _semi_auto_seen(response: Mapping[str, Any]) -> bool:
-    """True for an answer of semi-auto mode: an order queued in the Action Center, or a
-    modify or cancel the server refused because semi-auto is on."""
-    if _PENDING_ORDER_ID_FIELD in response or response.get("mode") == _SEMI_AUTO_MODE_FIELD:
-        return True
-    message = response.get("message")
-    return (
-        response.get("status") != _SUCCESS
-        and isinstance(message, str)
-        and _SEMI_AUTO_REFUSAL in message.lower()
-    )
 
 
 __all__ = [

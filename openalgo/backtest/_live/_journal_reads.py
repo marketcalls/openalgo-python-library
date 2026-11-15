@@ -16,13 +16,14 @@ from typing import Any
 
 from ..errors import JournalError
 from ._journal_rows import day_key, intent_from, state_from, unreadable, update_from
-from ._types import BoundOrder, Mode, OrderIntent, OrderStatus, OrderUpdate
+from ._types import BoundOrder, Mode, OrderIntent, OrderStatus, OrderUpdate, QueuedIntent
 
 _UNRESOLVED = (
     "SELECT * FROM intents WHERE ledger = ? AND day = ? AND state IN ('recorded', 'unbound') "
     "ORDER BY seq"
 )
 _BOUND = "SELECT * FROM intents WHERE ledger = ? AND day = ? AND state = 'bound' ORDER BY seq"
+_QUEUED = "SELECT * FROM intents WHERE ledger = ? AND day = ? AND state = 'queued' ORDER BY seq"
 _OF_ORDER = "SELECT * FROM updates WHERE ledger = ? AND day = ? AND order_id = ?"
 _TERMINAL_UPDATES = f"{_OF_ORDER} AND terminal ORDER BY seq"
 _LATEST_UPDATE = f"{_OF_ORDER} ORDER BY seq DESC LIMIT 1"
@@ -102,6 +103,13 @@ def bound_day(
 def unbound(sql: sqlite3.Connection, ledger: str, day: str) -> list[OrderIntent]:
     """The day's intents neither bound nor marked not placed, oldest first."""
     return [intent_from(row) for row in sql.execute(_UNRESOLVED, (ledger, day))]
+
+
+def queued(sql: sqlite3.Connection, ledger: str, day: str) -> list[QueuedIntent]:
+    """The day's intents semi-auto mode queued and not bound since, with their pending
+    order IDs (a queued intent's `reason`), oldest first."""
+    rows = sql.execute(_QUEUED, (ledger, day))
+    return [QueuedIntent(intent_from(row), row["reason"]) for row in rows]
 
 
 def bound_orders(sql: sqlite3.Connection, ledger: str, day: str) -> list[BoundOrder]:
@@ -232,6 +240,7 @@ __all__ = [
     "intent_by_id",
     "intent_by_order",
     "last_update",
+    "queued",
     "rms_state",
     "rms_states",
     "session",

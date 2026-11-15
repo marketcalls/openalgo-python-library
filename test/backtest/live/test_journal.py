@@ -20,7 +20,13 @@ from journal_samples import (
     started_journal,
 )
 
-from openalgo.backtest._live._types import BoundOrder, JournalLike, Mode, OrderStatus
+from openalgo.backtest._live._types import (
+    BoundOrder,
+    JournalLike,
+    Mode,
+    OrderStatus,
+    QueuedIntent,
+)
 from openalgo.backtest._live.journal import Journal
 from openalgo.backtest.errors import JournalError
 
@@ -136,6 +142,33 @@ def test_an_intent_marked_not_placed_leaves_the_unbound_list(journal):
     assert journal.unbound() == []
 
 
+def test_a_queued_intent_leaves_the_unbound_list_for_the_queued_list(journal):
+    journal.record_intent(an_intent())
+    journal.mark_queued("i1", "17")
+    assert (journal.unbound(), journal.queued()) == ([], [QueuedIntent(an_intent(), "17")])
+
+
+def test_a_queued_intent_is_found_queued_after_a_reopen(path):
+    with started_journal(path) as journal:
+        journal.record_intent(an_intent())
+        journal.mark_queued("i1", "17")
+    with started_journal(path) as reopened:
+        assert reopened.queued() == [QueuedIntent(an_intent(), "17")]
+
+
+def test_a_queued_intent_whose_order_is_approved_is_bound_and_leaves_the_queued_list(journal):
+    journal.record_intent(an_intent())
+    journal.mark_queued("i1", "17")
+    journal.bind("i1", "o1")
+    assert (journal.queued(), journal.order_id_of("i1")) == ([], "o1")
+
+
+def test_the_queued_intents_are_of_the_sessions_day(journal):
+    journal.record_intent(an_intent())
+    journal.mark_queued("i1", "17")
+    assert journal.queued(day=NEXT_DAY) == []
+
+
 def test_an_unbound_intent_found_in_the_order_book_is_bound(journal):
     journal.record_intent(an_intent())
     journal.mark_unbound("i1", "timeout")
@@ -190,14 +223,18 @@ def test_binding_to_a_blank_order_id_is_refused(journal):
         journal.bind("i1", "")
 
 
-@pytest.mark.parametrize("mark", [Journal.mark_unbound, Journal.mark_not_placed])
+@pytest.mark.parametrize(
+    "mark", [Journal.mark_unbound, Journal.mark_not_placed, Journal.mark_queued]
+)
 def test_a_bound_intent_cannot_be_marked(journal, mark):
     a_bound_order(journal, "i1", "o1")
     with pytest.raises(JournalError, match="bound to order 'o1', so it reached the broker"):
         mark(journal, "i1", "timeout")
 
 
-@pytest.mark.parametrize("mark", [Journal.mark_unbound, Journal.mark_not_placed])
+@pytest.mark.parametrize(
+    "mark", [Journal.mark_unbound, Journal.mark_not_placed, Journal.mark_queued]
+)
 def test_marking_an_unknown_intent_is_refused(journal, mark):
     with pytest.raises(JournalError, match="'i9' is not in the sandbox ledger"):
         mark(journal, "i9", "timeout")

@@ -40,7 +40,8 @@ _FIRST_PRINTABLE = 32
 # for an update the mode it was handled in. `day` is an IST trading day, YYYY-MM-DD; a
 # broker may give an order ID again on a later day, so an order ID is unique in a day.
 # An intent's `state` is "recorded" until its outcome is known, then "bound" to its
-# order, "unbound" (outcome unknown) or "not_placed".
+# order, "unbound" (outcome unknown), "queued" (semi-auto put it in the Action Center;
+# its `reason` is then the pending order ID there) or "not_placed".
 _SCHEMA = (
     "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT",
     """CREATE TABLE intents (

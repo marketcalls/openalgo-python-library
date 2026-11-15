@@ -162,6 +162,15 @@ class OrderUpdate:
 
 
 @dataclass(frozen=True)
+class QueuedIntent:
+    """An intent semi-auto mode queued for approval in OpenAlgo's Action Center, with the
+    pending order ID it has there (to approve or reject it)."""
+
+    intent: OrderIntent
+    pending_order_id: str
+
+
+@dataclass(frozen=True)
 class BoundOrder:
     """An intent that became a broker order: the intent, the broker's order ID, and the
     order's last update (None before any update arrived)."""
@@ -192,9 +201,18 @@ class JournalLike(Protocol):
         """Close an intent that never became a broker order: a definite refusal, or an
         unbound intent the order book does not hold."""
 
+    def mark_queued(self, intent_id: str, pending_order_id: str) -> None:
+        """Note an intent that semi-auto mode queued for approval in OpenAlgo's Action
+        Center as `pending_order_id`: not a broker order (yet), and not unbound."""
+
+    def queued(self) -> list[QueuedIntent]:
+        """The intents of the session's trading day that semi-auto mode queued, with
+        their pending order IDs, oldest first."""
+
     def unbound(self) -> list[OrderIntent]:
-        """The intents of the session's trading day still unbound, oldest first. The
-        session starts its day on the journal before the order path asks."""
+        """The intents of the session's trading day still unbound, oldest first (queued
+        ones are not). The session starts its day on the journal before the order path
+        asks."""
 
     def record_update(self, update: OrderUpdate) -> None:
         """Write an order update."""
@@ -207,6 +225,10 @@ class JournalLike(Protocol):
 
 class GuardLike(Protocol):
     """What the order path needs of the mode guard (`guard.ModeGuard`)."""
+
+    @property
+    def started(self) -> bool:
+        """True once `start` has adopted OpenAlgo's mode for the session."""
 
     @property
     def locked(self) -> bool:
@@ -252,6 +274,7 @@ __all__ = [
     "OrderStatus",
     "OrderUpdate",
     "Purpose",
+    "QueuedIntent",
     "Sleep",
     "Tick",
     "mode_of",

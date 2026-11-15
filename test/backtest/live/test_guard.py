@@ -193,6 +193,26 @@ def test_start_adopts_the_mode_of_the_analyzer_switch(analyze_mode, mode):
     assert guard.start() is mode
 
 
+def test_the_guard_is_started_once_start_has_adopted_the_mode():
+    guard = ModeGuard(FakeOpenAlgo(analyze_mode=False), now=ManualClock())
+    before = guard.started
+
+    guard.start()
+
+    assert (before, guard.started) == (False, True)
+
+
+def test_a_start_that_cannot_read_the_mode_leaves_the_guard_not_started():
+    server = FakeOpenAlgo(analyze_mode=True)
+    server.down = True
+    guard = ModeGuard(server, now=ManualClock())
+
+    with pytest.raises(LiveError):
+        guard.start()
+
+    assert not guard.started
+
+
 def test_start_raises_live_error_telling_to_check_openalgo_when_it_cannot_be_reached():
     server = FakeOpenAlgo(analyze_mode=True)
     server.down = True
