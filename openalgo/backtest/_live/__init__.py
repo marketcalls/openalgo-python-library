@@ -14,7 +14,8 @@ attribute of its parent, which would replace the `bt.live` function.
 | `orders` | The order path: journal first, send once, resolve from the stream or by polling |
 | `preflight` | The checks before a session, the account lock, the countdown |
 | `alerts` | Alerts through OpenAlgo's Telegram, the daily summary, the session logs |
-| `recorder` | The tick recorder behind `bt.record` |
+| `ticks` | The tick adapter: one feed message as a `Tick`, the last trade time read by one rule |
+| `recorder` | The tick recorder behind `bt.record`: record, finalize, and the verified reads |
 
 Times are UTC nanoseconds, prices rupees and quantities units, never lots. No module
 prints: they log to the `openalgo.backtest.live` logger, and a session's own output goes
