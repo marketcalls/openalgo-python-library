@@ -2,18 +2,19 @@
 
 The loop puts alerts on it and never waits; the sender takes them highest priority
 first, oldest first within a priority. A routine alert (below `urgent_from`) leaves with
-every other routine alert waiting, in the order they were sent, as long as their text
-fits one Telegram message, so a burst costs one post; an urgent alert always leaves
-alone. A post that failed for a while puts its alerts back at the head of their
-priority. A full queue makes room by dropping the oldest alert of the lowest priority,
-the new one included: a queue full of urgent alerts keeps them and drops a routine one.
-Thread-safe.
+every other routine alert waiting that fits beside it in one Telegram message, in the
+order they were sent, so a burst costs one post; an urgent alert always leaves alone.
+The batch the sender took is held as in flight, under the queue's lock, until the sender
+settles it, so a `close` at any moment finds it. A post that failed for a while puts its
+alerts back at the head of their priority. A full queue makes room by dropping the
+oldest alert of the lowest priority, the new one included: a queue full of urgent
+alerts keeps them and drops a routine one. Thread-safe.
 """
 
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ._types import AlertKind
 
@@ -34,6 +35,16 @@ class QueuedAlert:
     first_posted_ns: int | None = None
 
 
+@dataclass(frozen=True)
+class Abandoned:
+    """What `abandon` found: the alerts posted before and waiting for another try, the
+    batch in flight (posted, no answer yet), and how many were never posted."""
+
+    retried: list[QueuedAlert]
+    in_flight: list[QueuedAlert]
+    never_posted: int
+
+
 class AlertQueue:
     """At most `size` alerts waiting for the sender. `urgent_from` is the least priority
     that leaves alone and `max_chars` the longest text of one post.
@@ -47,6 +58,7 @@ class AlertQueue:
         self._urgent_from = urgent_from
         self._max_chars = max_chars
         self._alerts: list[QueuedAlert] = []
+        self._in_flight: list[QueuedAlert] = []
         self._ready = threading.Condition()
         self._closed = False
         self._abandoned = False
@@ -68,6 +80,12 @@ class AlertQueue:
         with self._ready:
             return len(self._alerts)
 
+    def head_priority(self) -> int | None:
+        """The priority of the alert `take` would hand out first, or None when none
+        waits."""
+        with self._ready:
+            return max((alert.priority for alert in self._alerts), default=None)
+
     def put(self, alert: QueuedAlert) -> QueuedAlert | None:
         """Queue `alert` without waiting. Returns the alert dropped for it (`alert` itself
         when it has the lowest priority, or when the queue is closed), or None."""
@@ -85,10 +103,12 @@ class AlertQueue:
             self._ready.notify()
             return dropped
 
-    def take(self) -> list[QueuedAlert]:
-        """The next post's alerts in the order they were sent, taken off the queue: the
-        head alone when it is urgent, else every routine alert that fits beside it. Empty
-        when nothing waits or the queue was abandoned."""
+    def take(self, now_ns: int) -> list[QueuedAlert]:
+        """The next post's alerts in the order they were sent, taken off the queue and
+        held as in flight until `settle`: the head alone when it is urgent, else every
+        routine alert that fits beside it. Each is stamped as first posted at `now_ns`
+        (UTC nanoseconds) unless it was posted before. Empty when nothing waits or the
+        queue was abandoned."""
         with self._ready:
             if self._abandoned or not self._alerts:
                 return []
@@ -98,6 +118,28 @@ class AlertQueue:
                 batch = self._routine_batch(head)
             for alert in batch:
                 self._alerts.remove(alert)
+            self._in_flight = [
+                alert
+                if alert.first_posted_ns is not None
+                else replace(alert, first_posted_ns=now_ns)
+                for alert in batch
+            ]
+            return self._in_flight
+
+    def settle(self, batch: list[QueuedAlert]) -> bool:
+        """End the flight of `batch` once its post answered. False when `abandon` took it
+        meanwhile (it was counted then, and its answer is to be ignored)."""
+        with self._ready:
+            if self._in_flight is not batch:
+                return False
+            self._in_flight = []
+            return True
+
+    def end_flight(self) -> list[QueuedAlert]:
+        """End whatever flight is open and return its batch (empty when none): after a
+        fault of the sender, which never settled it."""
+        with self._ready:
+            batch, self._in_flight = self._in_flight, []
             return batch
 
     def put_back(self, alerts: list[QueuedAlert]) -> bool:
@@ -121,42 +163,44 @@ class AlertQueue:
             return not self._stopping()
 
     def close(self) -> None:
-        """Take in nothing more; the sender delivers what is left, then stops."""
+        """Take in nothing more, and wake the sender: it delivers what is left, then
+        stops."""
         with self._ready:
             self._closed = True
             self._ready.notify_all()
 
-    def abandon(self) -> tuple[list[QueuedAlert], int]:
-        """Empty the queue and stop the sender after its current post. Returns the alerts
-        posted before and waiting for another try, for the sender to count as failed, and
-        how many were never posted, which are counted as dropped."""
+    def abandon(self) -> Abandoned:
+        """Empty the queue, take the batch in flight and stop the sender after its current
+        post. The alerts never posted are counted as dropped; the others are returned, for
+        the sender to count as failed."""
         with self._ready:
-            posted = [alert for alert in self._alerts if alert.first_posted_ns is not None]
-            never_posted = len(self._alerts) - len(posted)
+            retried = [alert for alert in self._alerts if alert.first_posted_ns is not None]
+            never_posted = len(self._alerts) - len(retried)
             self._dropped += never_posted
+            in_flight, self._in_flight = self._in_flight, []
             self._alerts.clear()
             self._closed = self._abandoned = True
             self._ready.notify_all()
-            return posted, never_posted
+            return Abandoned(retried, in_flight, never_posted)
 
     def _stopping(self) -> bool:
         return self._abandoned or (self._closed and not self._alerts)
 
     def _routine_batch(self, head: QueuedAlert) -> list[QueuedAlert]:
-        """The routine alerts waiting, in the order they were sent, up to the first that
-        would not fit one post beside the head (which always goes)."""
+        """The routine alerts waiting that fit one post beside the head (which always
+        goes), taken in the order they were sent; one too long is skipped for a later
+        post, not a stop to the merging."""
         routine = sorted(
             (alert for alert in self._alerts if alert.priority < self._urgent_from),
             key=lambda alert: alert.seq,
         )
         batch, length = [head], len(head.message)
         for alert in routine:
-            if alert is head:
+            added = len(ALERT_SEPARATOR) + len(alert.message)
+            if alert is head or length + added > self._max_chars:
                 continue
-            length += len(ALERT_SEPARATOR) + len(alert.message)
-            if length > self._max_chars:
-                break
             batch.append(alert)
+            length += added
         return sorted(batch, key=lambda alert: alert.seq)
 
     def _make_room(self, alert: QueuedAlert) -> QueuedAlert:
@@ -178,4 +222,4 @@ def _head_order(alert: QueuedAlert) -> tuple[int, int]:
     return (-alert.priority, alert.seq)
 
 
-__all__ = ["ALERT_SEPARATOR", "AlertQueue", "QueuedAlert"]
+__all__ = ["ALERT_SEPARATOR", "Abandoned", "AlertQueue", "QueuedAlert"]

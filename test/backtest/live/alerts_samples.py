@@ -50,18 +50,23 @@ KEY_REFUSED = server_error(401, "Invalid or missing API key")
 FORBIDDEN = server_error(403, "Invalid openalgo apikey")
 NOT_LINKED = server_error(404, "User not found or not linked to Telegram")
 BOT_STOPPED = server_error(409, "Telegram bot is stopped. Start the bot to send notifications.")
-# Transient failures: the server's rate limiter (app.py, its 429 handler), a server or
-# gateway failure, and the SDK's own errors when no answer came back.
-RATE_LIMITED = sdk_wrapper(
-    429,
-    json.dumps(
-        {
-            "status": "error",
-            "message": "Rate limit exceeded. Please slow down your requests.",
-            "retry_after": 60,
-        }
-    ),
-)
+# Transient failures: the server's rate limiter, a server or gateway failure, and the
+# SDK's own errors when no answer came back. The notify route's 429 is the REST layer's
+# own body, with no status and no retry_after (checked with the server's libraries).
+RATE_LIMITED = sdk_wrapper(429, json.dumps({"message": "30 per 1 minute"}) + "\n")
+
+
+def rate_limited_after(seconds: float) -> dict:
+    """A 429 that names its wait, in the shape of the server's application-wide 429
+    handler (app.py), which adds `retry_after`."""
+    body = {
+        "status": "error",
+        "message": "Rate limit exceeded. Please slow down your requests.",
+        "retry_after": seconds,
+    }
+    return sdk_wrapper(429, json.dumps(body))
+
+
 SERVER_DOWN = server_error(503, "Service Unavailable")
 PROXY_PAGE = sdk_wrapper(502, "<html><body>Bad Gateway</body></html>")
 BROKEN_OFF = {

@@ -10,10 +10,19 @@ both underscores. The text is escaped so it arrives exactly as written, and cut 
 Telegram's 4096-character limit (the full alert stays in the log).
 
 An answer that failed is worth another try when it says nothing of the alert itself:
-the rate limiter's HTTP 429 (whose `retry_after` says how long to wait, app.py), a
-server or gateway failure from HTTP 500 on, the client's own timeout, or a connection
-refused or broken off. Any other failure is a refusal that another try would repeat: a
-bad field (400), the key (401, 403), a user not linked (404), the bot stopped (409).
+the rate limiter's HTTP 429, a server or gateway failure from HTTP 500 on, the client's
+own timeout, or a connection refused or broken off. Any other failure is a refusal that
+another try would repeat: a bad field (400), the key (401, 403), a user not linked
+(404), the bot stopped (409).
+
+The 429 of the notify route is the REST layer's own answer, `{"message": "30 per 1
+minute"}`, with no `status` and no `retry_after` (the server's application-wide 429
+handler, which adds `"retry_after": 60`, does not answer for its REST routes), so the
+SDK passes it on as "HTTP 429: <that body>". A `retry_after` is read when an answer has
+one; the sender decides how long to wait.
+
+A failure reason is one line: the message is stripped and its runs of whitespace
+collapsed, so a body ending in a newline or an HTML page reads on one log line.
 """
 
 from __future__ import annotations
@@ -56,11 +65,13 @@ _HTTP_ERROR_TYPE = "http_error"
 @dataclass(frozen=True)
 class PostResult:
     """What became of one post. `reason` is None when OpenAlgo took it, else why not in
-    words; `transient` is True when another try may succeed, and `retry_after_seconds`
-    is the wait a rate-limited answer asked for, when it gave one."""
+    words; `transient` is True when another try may succeed, `rate_limited` when the
+    answer was the rate limiter's 429, and `retry_after_seconds` the wait that answer
+    asked for, when it gave one (the notify route's own 429 gives none)."""
 
     reason: str | None
     transient: bool = False
+    rate_limited: bool = False
     retry_after_seconds: float | None = None
 
     @property
@@ -86,7 +97,11 @@ def read_post(answer: Any) -> PostResult:
     answer = server_answer(answer)
     if not _transient(answer):
         return PostResult(reason)
-    return PostResult(reason, transient=True, retry_after_seconds=_retry_after(answer))
+    if answer.get("code") != _RATE_LIMITED:
+        return PostResult(reason, transient=True)
+    return PostResult(
+        reason, transient=True, rate_limited=True, retry_after_seconds=_retry_after(answer)
+    )
 
 
 def failure_reason(answer: Any) -> str | None:
@@ -94,7 +109,7 @@ def failure_reason(answer: Any) -> str | None:
 
     The reason is the server's own message, with its HTTP status when the SDK wrapped it
     (`_answers.server_answer`); otherwise the SDK's message, which for a reply that is
-    not OpenAlgo's JSON already reads "HTTP <code>: <text>".
+    not OpenAlgo's JSON already reads "HTTP <code>: <text>". It is one line, shortened.
     """
     if not isinstance(answer, Mapping):
         return f"OpenAlgo's answer was not a JSON object: {answer!r}"
@@ -102,7 +117,8 @@ def failure_reason(answer: Any) -> str | None:
     if answer.get("status") == _SUCCESS:
         return None
     message = answer.get("message")
-    if not isinstance(message, str) or not message.strip():
+    message = " ".join(message.split()) if isinstance(message, str) else ""
+    if not message:
         message = "an error without a message"
     elif len(message) > _MAX_REASON_CHARS:
         message = message[:_MAX_REASON_CHARS] + "..."
@@ -133,11 +149,11 @@ def _transient(answer: Mapping[str, Any]) -> bool:
 
 
 def _retry_after(answer: Mapping[str, Any]) -> float | None:
-    """The seconds a 429 asked to wait, when it gave a positive number."""
+    """The seconds a 429 asked to wait, when it gave a positive finite number."""
     value = answer.get("retry_after")
-    if answer.get("code") != _RATE_LIMITED or isinstance(value, bool):
+    if isinstance(value, bool) or not isinstance(value, int | float):
         return None
-    if not isinstance(value, int | float) or not math.isfinite(value) or value <= 0:
+    if not math.isfinite(value) or value <= 0:
         return None
     return float(value)
 

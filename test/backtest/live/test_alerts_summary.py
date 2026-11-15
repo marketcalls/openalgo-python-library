@@ -139,6 +139,26 @@ def test_a_figure_that_is_not_a_finite_number_is_refused(field, value):
         replace(A_GOOD_DAY, **{field: value})
 
 
+@pytest.mark.parametrize("field", ["gross_pnl", "charges", "unprotected_seconds"])
+def test_only_the_slippage_may_be_missing(field):
+    with pytest.raises(ConfigError, match=f"the session summary's {field} must be a finite"):
+        replace(A_GOOD_DAY, **{field: None})
+
+
+def test_negative_seconds_unprotected_are_refused():
+    with pytest.raises(ConfigError, match="unprotected_seconds cannot be negative"):
+        replace(A_GOOD_DAY, unprotected_seconds=-3.5)
+
+
+@pytest.mark.parametrize(
+    "field", ["closed_trades", "rejected_orders", "reconcile_mismatches", "undelivered_alerts"]
+)
+@pytest.mark.parametrize("value", [-1, 1.5, None], ids=["negative", "a fraction", "none"])
+def test_a_count_that_is_not_a_whole_number_of_at_least_zero_is_refused(field, value):
+    with pytest.raises(ConfigError, match=f"the session summary's {field} must be a whole"):
+        replace(A_GOOD_DAY, **{field: value})
+
+
 def test_the_summary_is_plain_ascii_text():
     assert summary_text(A_GOOD_DAY).isascii()
     assert summary_text(A_BAD_DAY).isascii()

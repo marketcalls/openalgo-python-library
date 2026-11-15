@@ -1,18 +1,21 @@
 """The queue and the sender of the alerts: highest priority first, routine alerts leaving
-together, at most 20 posts a minute, a transient failure tried again after the server's
-wait or a back-off, a refusal counted at once, a full queue dropping the oldest alert of
-the lowest priority, and a `close` that posts what is queued, gives up on a server that
-does not answer and is safe to call twice. The sender thread starts on the first send.
+together, 20 posts a minute below priority 10 and 25 for it, a transient failure tried
+again after the server's window or a back-off, a refusal counted at once, a full queue
+dropping the oldest alert of the lowest priority, and a `close` that wakes the sender,
+posts what is queued, gives up on a server that does not answer and is safe to call
+twice. The sender thread starts on the first send, again when it ended, and survives a
+fault.
 
 The queue tests start no thread: they post with `deliver_queued` and move the session's
 clock by hand, so every wait is on the injected clock. The thread tests start the real
-sender and wait only on events the fake OpenAlgo sets, never on a timer.
+sender and wait only on events the fake OpenAlgo or the sender sets, never on a timer.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
+import time
 
 import pytest
 from alerts_samples import (
@@ -29,14 +32,29 @@ from alerts_samples import (
     Hold,
     ManualClock,
     make_alerts,
+    rate_limited_after,
     sender_threads_since,
     threaded_alerts,
 )
 
+from openalgo.backtest._live import _alerts_sender
 from openalgo.backtest._live._alerts_queue import AlertQueue, QueuedAlert
 from openalgo.backtest._live._alerts_sender import Sender
 from openalgo.backtest._live._types import LOGGER_NAME, AlertKind
-from openalgo.backtest._live.alerts import QUEUE_SIZE, TELEGRAM_MAX_CHARS, URGENT_PRIORITY
+from openalgo.backtest._live.alerts import (
+    PRIORITY_HIGHEST,
+    QUEUE_SIZE,
+    TELEGRAM_MAX_CHARS,
+    URGENT_PRIORITY,
+)
+
+# The longest a close that wakes its sender may take here, seconds: far below the 5 s
+# it waits for a sender that does not wake.
+WAKE_LIMIT_SECONDS = 2.0
+
+
+def refuse_to_start(thread):
+    raise RuntimeError("can't create new thread at interpreter shutdown")
 
 
 @pytest.fixture
@@ -136,11 +154,19 @@ def test_a_burst_of_entries_costs_one_post_after_the_mode_breach(alerts, client)
     assert client.messages[1].count("\n") == 29
 
 
-# Pacing: at most 20 posts in any minute, on the session's clock
+def test_a_routine_alert_too_long_to_join_the_head_is_skipped_not_a_stop(alerts, client):
+    alerts.send(AlertKind.SESSION, "x" * 4080)
+    fill(alerts, AlertKind.ENTRY, 30)
+    assert alerts.deliver_queued() == 2
+    assert client.messages[0].count("\n") == 29
+    assert client.messages[1] == "SANDBOX: " + "x" * 4080
 
 
-def test_at_most_20_posts_go_in_any_minute(alerts, clock):
-    fill(alerts, AlertKind.MODE_BREACH, 25)
+# Pacing on the session's clock: 20 posts a minute below priority 10, 25 for it
+
+
+def test_at_most_20_posts_below_priority_10_go_in_any_minute(alerts, clock):
+    fill(alerts, AlertKind.REJECT, 25)
     assert alerts.deliver_queued() == 20
     clock.advance(59.999)
     assert alerts.deliver_queued() == 0
@@ -149,13 +175,42 @@ def test_at_most_20_posts_go_in_any_minute(alerts, clock):
 
 
 def test_the_posting_budget_frees_as_posts_leave_the_minute(alerts, clock):
-    fill(alerts, AlertKind.MODE_BREACH, 10)
+    fill(alerts, AlertKind.REJECT, 10)
     alerts.deliver_queued()
     clock.advance(30)
-    fill(alerts, AlertKind.MODE_BREACH, 13, start=10)
+    fill(alerts, AlertKind.REJECT, 13, start=10)
     assert alerts.deliver_queued() == 10
     clock.advance(30)
     assert alerts.deliver_queued() == 3
+
+
+def test_a_priority_10_alert_still_goes_when_lower_ones_used_their_20(alerts):
+    fill(alerts, AlertKind.REJECT, 25)
+    assert alerts.deliver_queued() == 20
+    alerts.send(AlertKind.MODE_BREACH, "the analyzer switch changed")
+    assert alerts.deliver_queued() == 1
+
+
+def test_priority_10_may_use_up_to_25_posts_in_any_minute(alerts, clock):
+    fill(alerts, AlertKind.MODE_BREACH, 30)
+    assert alerts.deliver_queued() == 25
+    clock.advance(60)
+    assert alerts.deliver_queued() == 5
+
+
+def test_below_priority_10_waits_until_the_minute_holds_fewer_than_20_posts(alerts, clock):
+    fill(alerts, AlertKind.MODE_BREACH, 5)
+    alerts.deliver_queued()
+    clock.advance(10)
+    fill(alerts, AlertKind.MODE_BREACH, 20, start=5)
+    alerts.deliver_queued()
+    alerts.send(AlertKind.REJECT, "SBIN entry refused")
+    # 25 posts: five at 0 s and twenty at 10 s. Fewer than 20 remain once six have left
+    # the minute, the sixth at 10 s + 60 s.
+    clock.advance(59.999)
+    assert alerts.deliver_queued() == 0
+    clock.advance(0.001)
+    assert alerts.deliver_queued() == 1
 
 
 # Retries
@@ -177,12 +232,26 @@ def test_a_transient_failure_is_tried_again_and_not_counted(clock, answer):
     assert alerts.failures == 0
 
 
-def test_a_rate_limited_post_waits_as_long_as_the_server_asked(clock):
-    client = FakeOpenAlgo(RATE_LIMITED, QUEUED)
-    alerts = make_alerts(client, clock)
+@pytest.mark.parametrize(
+    ("answer", "wait"),
+    [
+        (RATE_LIMITED, 60),
+        (rate_limited_after(10), 10),
+        (rate_limited_after(3600), 60),
+        (rate_limited_after(1e300), 60),
+    ],
+    ids=[
+        "no retry_after: the server's window",
+        "a shorter retry_after",
+        "a longer retry_after: cut to the window",
+        "a huge retry_after: cut to the window",
+    ],
+)
+def test_a_rate_limited_post_waits_the_retry_after_up_to_the_servers_window(clock, answer, wait):
+    alerts = make_alerts(FakeOpenAlgo(answer, QUEUED), clock)
     alerts.send(AlertKind.MODE_BREACH, "the analyzer switch changed")
     alerts.deliver_queued()
-    clock.advance(59.999)
+    clock.advance(wait - 0.001)
     assert alerts.deliver_queued() == 0
     clock.advance(0.001)
     assert alerts.deliver_queued() == 1
@@ -265,8 +334,8 @@ def test_a_transient_failure_is_logged_with_the_wait(clock, caplog):
     alerts.send(AlertKind.MODE_BREACH, "the analyzer switch changed")
     alerts.deliver_queued()
     assert caplog.messages[-1] == (
-        "alert mode_breach not delivered yet (Rate limit exceeded. Please slow down your "
-        "requests. (HTTP 429)): trying again in 60 s"
+        'alert mode_breach not delivered yet (HTTP 429: {"message": "30 per 1 minute"}): '
+        "trying again in 60 s"
     )
 
 
@@ -338,17 +407,39 @@ def test_at_close_an_alert_waiting_for_another_try_counts_as_failed(clock):
     assert alerts.last_failure == "still failing when the alerts closed"
 
 
-def test_a_transient_failure_answered_after_the_queue_was_abandoned_counts_as_failed(clock):
+def test_a_transient_failure_settled_just_before_the_queue_was_abandoned_counts_as_failed(
+    clock, monkeypatch
+):
     queue = AlertQueue(QUEUE_SIZE, urgent_from=URGENT_PRIORITY, max_chars=TELEGRAM_MAX_CHARS)
+    settle = queue.settle
 
-    def post_while_closing(text, priority):
+    def settle_then_abandon(batch):
+        settled = settle(batch)
         queue.abandon()
-        return UNREACHABLE
+        return settled
 
-    sender = Sender(queue, post_while_closing, clock)
+    monkeypatch.setattr(queue, "settle", settle_then_abandon)
+    sender = Sender(
+        queue, lambda text, priority: UNREACHABLE, clock, highest_priority=PRIORITY_HIGHEST
+    )
     queue.put(QueuedAlert(AlertKind.FEED_DEAD, "SANDBOX: no tick for 30 s", 10, seq=1))
     sender.step()
     assert (sender.failures, sender.last_failure) == (1, "still failing when the alerts closed")
+
+
+def test_a_close_right_after_the_sender_took_a_batch_counts_it_once(alerts, monkeypatch):
+    take = alerts._queue.take
+
+    def take_then_close(now_ns):
+        batch = take(now_ns)
+        alerts.close(wait_seconds=0)
+        return batch
+
+    monkeypatch.setattr(alerts._queue, "take", take_then_close)
+    alerts.send(AlertKind.DAILY_SUMMARY, "Session of 2026-11-16 (IST)")
+    alerts.deliver_queued()
+    assert (alerts.failures, alerts.dropped, alerts.undelivered) == (1, 0, 1)
+    assert alerts.last_failure == "still being posted when the alerts closed"
 
 
 def test_an_alert_sent_after_close_is_logged_and_dropped(alerts, caplog):
@@ -478,3 +569,101 @@ def test_a_post_in_flight_at_close_is_logged_by_name_and_counted_once(clock, cap
         "not arrive: SANDBOX: Session of 2026-11-16 (IST)"
     )
     assert (alerts.failures, alerts.undelivered) == (1, 1)
+
+
+def test_close_wakes_a_waiting_sender_at_once(client, clock, monkeypatch):
+    waiting = threading.Event()
+    before = set(threading.enumerate())
+    alerts = threaded_alerts(client, clock)
+    wait = alerts._queue.wait
+
+    def wait_and_tell(timeout_seconds):
+        waiting.set()
+        return wait(timeout_seconds)
+
+    monkeypatch.setattr(alerts._queue, "wait", wait_and_tell)
+    alerts.send(AlertKind.REJECT, "SBIN entry refused")
+    threads = sender_threads_since(before)
+    assert waiting.wait(WAIT_SECONDS)
+    started = time.monotonic()
+    alerts.close(wait_seconds=5.0)
+    assert time.monotonic() - started < WAKE_LIMIT_SECONDS
+    assert [thread.is_alive() for thread in threads] == [False]
+
+
+def test_a_sender_thread_that_cannot_start_is_logged_and_send_does_not_raise(
+    client, clock, monkeypatch, caplog
+):
+    alerts = threaded_alerts(client, clock)
+    monkeypatch.setattr(threading.Thread, "start", refuse_to_start)
+    caplog.set_level(logging.ERROR, logger=LOGGER_NAME)
+    alerts.send(AlertKind.REJECT, "SBIN entry refused")
+    assert caplog.messages == [
+        "the alert sender thread could not start (can't create new thread at interpreter "
+        "shutdown): alerts wait in the queue until a later send starts it"
+    ]
+    alerts.close(wait_seconds=0)
+    assert alerts.dropped == 1
+
+
+def test_a_later_send_starts_the_sender_that_could_not_start(client, clock, monkeypatch):
+    alerts = threaded_alerts(client, clock)
+    start = threading.Thread.start
+    monkeypatch.setattr(threading.Thread, "start", refuse_to_start)
+    alerts.send(AlertKind.REJECT, "SBIN entry refused")
+    monkeypatch.setattr(threading.Thread, "start", start)
+    before = set(threading.enumerate())
+    alerts.send(AlertKind.REJECT, "INFY entry refused")
+    finish(alerts, sender_threads_since(before))
+    assert client.messages == ["SANDBOX: SBIN entry refused", "SANDBOX: INFY entry refused"]
+
+
+def test_a_send_after_the_sender_thread_ended_starts_a_new_one(client, clock, monkeypatch):
+    runs = []
+    run = Sender.run
+
+    def end_at_once_the_first_time(sender):
+        runs.append(sender)
+        if len(runs) > 1:
+            run(sender)
+
+    monkeypatch.setattr(Sender, "run", end_at_once_the_first_time)
+    before = set(threading.enumerate())
+    alerts = threaded_alerts(client, clock)
+    alerts.send(AlertKind.REJECT, "SBIN entry refused")
+    for thread in sender_threads_since(before):
+        thread.join(WAIT_SECONDS)
+    alerts.send(AlertKind.REJECT, "INFY entry refused")
+    finish(alerts, sender_threads_since(before))
+    assert len(runs) == 2
+    assert client.messages == ["SANDBOX: SBIN entry refused", "SANDBOX: INFY entry refused"]
+
+
+def test_a_fault_in_the_sender_thread_is_logged_counts_its_post_and_the_sender_goes_on(
+    client, clock, monkeypatch, caplog
+):
+    texts = []
+    telegram_text = _alerts_sender.telegram_text
+
+    def fail_the_first(message):
+        texts.append(message)
+        if len(texts) == 1:
+            raise ValueError("a fault in the sender")
+        return telegram_text(message)
+
+    monkeypatch.setattr(_alerts_sender, "telegram_text", fail_the_first)
+    caplog.set_level(logging.WARNING, logger=LOGGER_NAME)
+    before = set(threading.enumerate())
+    alerts = threaded_alerts(client, clock)
+    alerts.send(AlertKind.REJECT, "SBIN entry refused")
+    alerts.send(AlertKind.REJECT, "INFY entry refused")
+    finish(alerts, sender_threads_since(before))
+    assert client.messages == ["SANDBOX: INFY entry refused"]
+    assert (alerts.failures, alerts.last_failure) == (
+        1,
+        "the sender failed while posting it (the error is in the log)",
+    )
+    faults = [record for record in caplog.records if record.exc_info]
+    assert [(record.name, record.getMessage()) for record in faults] == [
+        (LOGGER_NAME, "the alert sender failed; it goes on")
+    ]

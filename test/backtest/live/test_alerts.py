@@ -175,9 +175,7 @@ REFUSALS = [
 # Transient failures, which the sender tries again (test_alerts_sender.py); the test
 # alert, which is not retried, reports them at once.
 TRANSIENTS = [
-    pytest.param(
-        RATE_LIMITED, "Rate limit exceeded. Please slow down your requests. (HTTP 429)", id="429"
-    ),
+    pytest.param(RATE_LIMITED, 'HTTP 429: {"message": "30 per 1 minute"}', id="429"),
     pytest.param(PROXY_PAGE, "HTTP 502: <html><body>Bad Gateway</body></html>", id="502"),
     pytest.param(UNREACHABLE, UNREACHABLE["message"], id="unreachable"),
     pytest.param(TIMED_OUT, TIMED_OUT["message"], id="timed out"),
@@ -205,6 +203,12 @@ def test_a_refused_send_is_logged_as_a_warning_with_its_reason(clock, caplog):
         "alert feed_dead: SANDBOX: no tick for 30 s",
         "alert feed_dead not delivered: User not found or not linked to Telegram (HTTP 404)",
     ]
+
+
+def test_a_failure_reason_is_one_line(clock):
+    page = sdk_wrapper(400, "<html>\n  <body>Bad   Request</body>\n</html>\n")
+    alerts = posted_once(page, clock)
+    assert alerts.last_failure == "HTTP 400: <html> <body>Bad Request</body> </html>"
 
 
 def test_a_long_reply_is_shortened_in_the_reason(clock):

@@ -10,9 +10,10 @@ dead feed, a reconciliation mismatch and an error are the most urgent.
 
 An alert never raises into the session loop and never makes it wait. `send` logs the
 alert and puts it on a bounded queue (`_alerts_queue`); one sender thread, a daemon
-started by the first `send`, posts the queue highest priority first, paced to the
-server's limit and tried again after a transient failure (`_alerts_sender`), so a server
-that does not answer holds the sender, not the loop. Routine alerts waiting together
+started by the first `send` (and by a later one when it could not start or ended),
+posts the queue highest priority first, paced below the server's limit with a reserve
+for priority 10, and tries again after a transient failure (`_alerts_sender`), so a
+server that does not answer holds the sender, not the loop. Routine alerts waiting together
 leave as one message. A refused or abandoned alert is logged and counted in `failures`;
 a full queue drops the oldest alert of the lowest priority, counted in `dropped`. A
 repeated condition (`REPEATED_CONDITIONS`) is queued at most once in
@@ -150,7 +151,7 @@ class Alerts:
         self._queue = AlertQueue(
             QUEUE_SIZE, urgent_from=URGENT_PRIORITY, max_chars=TELEGRAM_MAX_CHARS
         )
-        self._sender = Sender(self._queue, self._post, now)
+        self._sender = Sender(self._queue, self._post, now, highest_priority=PRIORITY_HIGHEST)
         self._start_sender = start_sender
         self._thread: threading.Thread | None = None
 
@@ -256,12 +257,12 @@ class Alerts:
         self._queue.close()
         if self._thread is not None:
             self._thread.join(wait_seconds)
-        retried, never_posted = self._queue.abandon()
-        self._sender.give_up(retried)
-        if never_posted:
+        abandoned = self._queue.abandon()
+        self._sender.give_up(abandoned)
+        if abandoned.never_posted:
             logger.warning(
                 "%d alert(s) not sent: OpenAlgo had not taken them when the alerts closed",
-                never_posted,
+                abandoned.never_posted,
             )
 
     def __enter__(self) -> Alerts:
@@ -276,11 +277,26 @@ class Alerts:
         )
 
     def _start_thread(self) -> None:
-        if self._thread is None and self._start_sender and not self._queue.closed:
-            self._thread = threading.Thread(
-                target=self._sender.run, name=SENDER_THREAD_NAME, daemon=True
+        """Start the sender thread unless one is alive. Kept only once it started, so
+        `close` joins only a started thread; a thread that cannot start is logged and the
+        alerts wait in the queue for the next `send` to try again."""
+        if not self._start_sender or self._queue.closed:
+            return
+        if self._thread is not None and self._thread.is_alive():
+            return
+        thread = threading.Thread(target=self._sender.run, name=SENDER_THREAD_NAME, daemon=True)
+        try:
+            thread.start()
+        # `send` never raises: a thread refused (at interpreter shutdown, or with no
+        # resources left) is reported and tried again on the next send.
+        except Exception as error:
+            logger.error(
+                "the alert sender thread could not start (%s): alerts wait in the queue "
+                "until a later send starts it",
+                error,
             )
-            self._thread.start()
+            return
+        self._thread = thread
 
     def _repeated(self, kind: AlertKind, message: str, now_ns: int) -> bool:
         """True when this condition was queued within the repeat window, else records it

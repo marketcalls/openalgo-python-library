@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+import numbers
 from dataclasses import dataclass
 
 from .._summary import _rupees
@@ -31,6 +32,8 @@ from ._types import Mode
 
 # Rupee text has two decimals (paise); a slippage that rounds to zero there is none.
 _PAISE_DECIMALS = 2
+# The fields that count something: whole numbers of at least zero.
+_COUNTS = ("closed_trades", "rejected_orders", "reconcile_mismatches", "undelivered_alerts")
 
 
 @dataclass(frozen=True)
@@ -53,7 +56,8 @@ class SessionSummary:
     ended with no open position.
 
     Raises ConfigError when a rupee figure or the seconds unprotected is not a finite
-    number (NaN or infinite).
+    number (None is allowed for `slippage` only), when the seconds unprotected are
+    negative, or when a count is not a whole number of at least zero.
     """
 
     day: dt.date
@@ -71,18 +75,18 @@ class SessionSummary:
     flat: bool
 
     def __post_init__(self) -> None:
-        figures = {
-            "gross_pnl": self.gross_pnl,
-            "charges": self.charges,
-            "slippage": self.slippage,
-            "unprotected_seconds": self.unprotected_seconds,
-        }
-        for name, value in figures.items():
-            if value is not None and not math.isfinite(value):
-                raise ConfigError(
-                    f"the session summary's {name} must be a finite number, got {value!r}: "
-                    f"a figure the session could not measure is a fault to fix, not a total"
-                )
+        _check_figure("gross_pnl", self.gross_pnl)
+        _check_figure("charges", self.charges)
+        if self.slippage is not None:
+            _check_figure("slippage", self.slippage)
+        _check_figure("unprotected_seconds", self.unprotected_seconds)
+        if self.unprotected_seconds < 0:
+            raise ConfigError(
+                f"the session summary's unprotected_seconds cannot be negative, got "
+                f"{self.unprotected_seconds!r}: it counts seconds a position had no stop"
+            )
+        for name in _COUNTS:
+            _check_count(name, getattr(self, name))
 
     @property
     def net_pnl(self) -> float:
@@ -114,6 +118,23 @@ def summary_text(summary: SessionSummary) -> str:
         f"broker {summary.broker}"
     )
     return "\n".join([title, *(f"{label:<{width}} : {value}" for label, value in lines)])
+
+
+def _check_figure(name: str, value: object) -> None:
+    """Raise ConfigError unless `value` is a finite number (a bool is not a figure)."""
+    if isinstance(value, bool) or not isinstance(value, numbers.Real) or not math.isfinite(value):
+        raise ConfigError(
+            f"the session summary's {name} must be a finite number, got {value!r}: a figure "
+            f"the session could not measure is a fault to fix, not a total"
+        )
+
+
+def _check_count(name: str, value: object) -> None:
+    """Raise ConfigError unless `value` is a whole number of at least zero."""
+    if isinstance(value, bool) or not isinstance(value, numbers.Integral) or value < 0:
+        raise ConfigError(
+            f"the session summary's {name} must be a whole number of at least zero, got {value!r}"
+        )
 
 
 def _slippage(slippage: float | None) -> str:
