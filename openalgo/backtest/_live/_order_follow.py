@@ -28,8 +28,8 @@ from typing import Any
 
 from .._layout import NANOS_PER_SECOND
 from ..errors import LiveError
-from ._order_answers import server_answer
-from ._order_news import is_newer, is_news, is_priceless, repeats
+from ._order_answers import ServerWatch, server_answer
+from ._order_news import is_newer, is_news, is_priceless, repeats, with_known_price
 from ._order_state import POLL_EVERY_NS, Followed, HeldFill, with_floor
 from ._order_trades import Fills, Polled, needs_trades, read_fills, wants_trades, with_fills
 from ._order_updates import fills_given, normalize_update
@@ -51,9 +51,9 @@ logger = logging.getLogger(LOGGER_NAME)
 #: restx_api/orderstatus.py on the server); a round polls at most 3, well under it.
 MAX_POLLS_PER_ROUND = 3
 #: The stream carries every update of the account (manual orders, the server's own
-#: strategy runs), and only an unbound intent's order is ever claimed from them. Nothing
-#: else is sent while an intent is unbound and its order shows within seconds, so a few
-#: recent orders suffice; 256 bounds the memory over a busy day of other trading.
+#: strategy runs, the session's other instruments), and only an unbound intent's order
+#: is ever claimed from them, within seconds of its send: the latest words of the 256
+#: orders heard of most recently cover that wait on a busy account, and bound the memory.
 MAX_UNCLAIMED_UPDATES = 256
 #: A fill held this long for its price (or a cancel for the tradebook's word) is alerted.
 HELD_ALERT_AFTER_NS = 10 * NANOS_PER_SECOND
@@ -75,12 +75,14 @@ class OrderFollower:
         journal: JournalLike,
         guard: GuardLike,
         alerts: AlertsLike,
+        watch: ServerWatch,
         now: Now,
     ) -> None:
         self._client = client
         self._journal = journal
         self._guard = guard
         self._alerts = alerts
+        self._watch = watch
         self._now = now
         self._orders: dict[str, Followed] = {}
         self._unclaimed: collections.OrderedDict[str, OrderUpdate] = collections.OrderedDict()
@@ -219,7 +221,8 @@ class OrderFollower:
         if update.source == "stream":
             order.streamed = True
         floored = with_floor(order, update)
-        if not is_news(order.seen, floored):
+        priced = with_known_price(order.seen, floored)
+        if not is_news(order.seen, priced):
             if update.source == "stream" and repeats(order.seen, floored):
                 # Kept all the same: after a restart it tells that the stream spoke for the
                 # order. A word that only loses information is not kept, since the
@@ -228,6 +231,8 @@ class OrderFollower:
                 self._guard.check_update(floored)
             logger.debug("an update that is not news: %s", floored)
             return None
+        # Whether the tradebook must confirm it is judged on the word as it came: a known
+        # price stands for the engine's fills, but confirms no new word about them.
         if (
             floored is not update
             or (not checked and needs_trades(floored))
@@ -235,7 +240,7 @@ class OrderFollower:
         ):
             self._hold(order, floored)
             return None
-        return self._deliver(order, floored)
+        return self._deliver(order, priced)
 
     def _hold(self, order: Followed, update: OrderUpdate) -> None:
         held = order.held
@@ -299,6 +304,7 @@ class OrderFollower:
             answer = server_answer(
                 self._client.orderstatus(order_id=order_id, strategy=order.strategy)
             )
+            self._watch.note(answer, now)
             self._guard.check_response(answer)
             if self._guard.locked:
                 return None
@@ -319,6 +325,7 @@ class OrderFollower:
         """The orders' fills in the tradebook: none when it cannot be read, None when its
         answer locked the guard."""
         answer = server_answer(self._client.tradebook())
+        self._watch.note(answer, self._now())
         self._guard.check_response(answer)
         if self._guard.locked:
             return None

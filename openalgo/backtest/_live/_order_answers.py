@@ -16,6 +16,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from ._guard_answers import PENDING_ORDER_ID_FIELD, SEMI_AUTO_MODE_FIELD
+
 #: The SDK's `error_type` when its own timeout ended the wait (openalgo/orders.py).
 _TIMEOUT_ERROR_TYPE = "timeout_error"
 #: The SDK's `error_type` when no connection could be made: the request never left.
@@ -31,12 +33,9 @@ _HTTP_ERROR_TYPE = "http_error"
 #: From HTTP 500 on, the server failed part way or the broker did not answer (a 502 is the
 #: server's "may have been placed", services/place_order_service.py).
 _FIRST_SERVER_ERROR_CODE = 500
-#: The statuses of an answer OpenAlgo wrote itself (as `server_answer` recovers it).
+#: The statuses of an answer OpenAlgo wrote itself: every answer on the order path has its
+#: own `status` (restx_api/place_order.py, services/place_order_service.py).
 _SERVER_STATUSES = frozenset({"success", "error"})
-#: Semi-auto mode queues an order in the Action Center instead of placing it
-#: (services/order_router_service.py `queue_order`).
-_SEMI_AUTO_MODE = "semi_auto"
-_PENDING_ORDER_ID = "pending_order_id"
 #: The SDK's message for a non-200 reply: "HTTP <code>: <the reply's text>"
 #: (openalgo/orders.py `_handle_response`).
 _SDK_HTTP_MESSAGE = re.compile(r"HTTP (\d{3}): (.*)", re.DOTALL)
@@ -72,8 +71,10 @@ def server_answer(answer: Mapping[str, Any]) -> Mapping[str, Any]:
 
     For a non-200 reply the SDK keeps only "HTTP <code>: <text>" as the message, which
     hides the server's JSON body: its `mode` ("analyze" on a sandbox rejection) and its
-    own message. That body is returned when the text is a JSON object, and `answer`
-    unchanged otherwise (a success, a transport failure, a body that is not JSON).
+    own message. That body is returned when the text is a JSON object with OpenAlgo's
+    own `status`, and `answer` unchanged otherwise: a success, a transport failure, a
+    body that is not JSON, or a JSON body without a status, which a gateway in front of
+    OpenAlgo writes (`{"message": "Endpoint request timed out"}` on a 504).
     """
     found = _SDK_HTTP_MESSAGE.fullmatch(str(answer.get("message") or ""))
     if answer.get("status") != "error" or found is None:
@@ -82,9 +83,9 @@ def server_answer(answer: Mapping[str, Any]) -> Mapping[str, Any]:
         body = json.loads(found.group(2))
     except ValueError:
         return answer
-    if not isinstance(body, dict):
+    if not isinstance(body, dict) or body.get("status") not in _SERVER_STATUSES:
         return answer
-    return {"status": "error", **body, "code": int(found.group(1))}
+    return {**body, "code": int(found.group(1))}
 
 
 def outcome_of(answer: Mapping[str, Any], order_id: str = "") -> SendOutcome:
@@ -95,8 +96,8 @@ def outcome_of(answer: Mapping[str, Any], order_id: str = "") -> SendOutcome:
     order book like a lost answer.
     """
     status = answer.get("status")
-    if _PENDING_ORDER_ID in answer or answer.get("mode") == _SEMI_AUTO_MODE:
-        pending = str(answer.get(_PENDING_ORDER_ID, ""))
+    if PENDING_ORDER_ID_FIELD in answer or answer.get("mode") == SEMI_AUTO_MODE_FIELD:
+        pending = str(answer.get(PENDING_ORDER_ID_FIELD, ""))
         reason = f"queued for approval in OpenAlgo's Action Center (semi-auto), as {pending}"
         return SendOutcome(Outcome.QUEUED, reason=reason, pending_order_id=pending)
     if status == "success":
@@ -116,14 +117,48 @@ def outcome_of(answer: Mapping[str, Any], order_id: str = "") -> SendOutcome:
 def server_has_finished(answer: Mapping[str, Any]) -> bool:
     """Whether an answer that leaves a placement unknown shows the server is no longer
     working on it: the connection was refused (the request never reached the server), or
-    OpenAlgo answered in its own JSON, whatever its status code (a success with no order
-    ID, a 500 or a 502 as `server_answer` recovers it, with no SDK `error_type`). The
-    SDK's own words show nothing of the kind: a client timeout, a dropped connection, a
-    5xx page that is not JSON (a proxy's 504 or 524). The server may still be placing it."""
+    OpenAlgo answered in its own JSON (`answered_by_server`). The SDK's own words show
+    nothing of the kind: a client timeout, a dropped connection, a 5xx page or a
+    gateway's JSON without a status. The server may still be placing it."""
+    return answer.get("error_type") == _CONNECTION_ERROR_TYPE or answered_by_server(answer)
+
+
+def answered_by_server(answer: Mapping[str, Any]) -> bool:
+    """Whether OpenAlgo itself wrote the answer, whatever its status code: it carries its
+    own `status` and no SDK `error_type` (`server_answer` recovers a non-200 one)."""
+    return "error_type" not in answer and answer.get("status") in _SERVER_STATUSES
+
+
+def went_silent(answer: Mapping[str, Any]) -> bool:
+    """Whether the answer shows the server may be hung: the client's own timeout, or a
+    connection that broke off with no status code."""
     error_type = answer.get("error_type")
-    if error_type is not None:
-        return error_type == _CONNECTION_ERROR_TYPE
-    return answer.get("status") in _SERVER_STATUSES
+    if error_type == _TIMEOUT_ERROR_TYPE:
+        return True
+    return error_type == _HTTP_ERROR_TYPE and answer.get("code") is None
+
+
+class ServerWatch:
+    """Whether OpenAlgo has fallen silent: a call of the order path ended in a client
+    timeout or a dropped connection, and no call has been answered in OpenAlgo's own JSON
+    since (`silent_since_ns`, UTC nanoseconds, else None). A hung server may still be
+    placing what it was sent, so nothing is sent for any instrument meanwhile."""
+
+    def __init__(self) -> None:
+        self.silent_since_ns: int | None = None
+
+    @property
+    def silent(self) -> bool:
+        """True while OpenAlgo has not answered since a timeout or a dropped connection."""
+        return self.silent_since_ns is not None
+
+    def note(self, answer: Mapping[str, Any], now_ns: int) -> None:
+        """Take in the answer to a call made at `now_ns`."""
+        if went_silent(answer):
+            if self.silent_since_ns is None:
+                self.silent_since_ns = now_ns
+        elif answered_by_server(answer):
+            self.silent_since_ns = None
 
 
 def _unanswered(answer: Mapping[str, Any]) -> bool:
@@ -141,7 +176,10 @@ def _unanswered(answer: Mapping[str, Any]) -> bool:
 __all__ = [
     "Outcome",
     "SendOutcome",
+    "ServerWatch",
+    "answered_by_server",
     "outcome_of",
     "server_answer",
     "server_has_finished",
+    "went_silent",
 ]

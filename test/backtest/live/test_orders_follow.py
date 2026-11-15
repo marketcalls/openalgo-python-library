@@ -76,12 +76,11 @@ def test_a_duplicate_update_is_dropped():
     "changed",
     [
         update("1", OrderStatus.TRIGGER_PENDING, 0, quantity=20),
-        update("1", OrderStatus.TRIGGER_PENDING, 0, price=1.0),
         update("1", OrderStatus.OPEN, 0),
     ],
-    ids=["order quantity", "average price", "status"],
+    ids=["order quantity", "status"],
 )
-def test_a_change_of_the_reported_status_quantity_or_price_is_news(changed):
+def test_a_change_of_the_reported_status_or_order_quantity_is_news(changed):
     rig = stop_rig()
     rig.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0))
 
@@ -120,6 +119,33 @@ def test_a_poll_saying_open_for_a_stop_is_passed_on_as_open():
     (first,) = rig.path.due_polls()
 
     assert first.status is OrderStatus.OPEN
+
+
+def test_a_change_of_the_average_price_alone_is_not_news():
+    rig = sent_rig()
+    rig.path.on_update(update("1", OrderStatus.OPEN, 4, price=812.35))
+
+    assert rig.path.on_update(update("1", OrderStatus.OPEN, 4, price=812.30)) is None
+
+
+def test_a_tradebook_mean_never_reprices_a_fill_the_engine_has():
+    limit = make_intent("i-1", price_type="LIMIT", price=812.0)
+    rig = make_rig(
+        placeorder=[placed("1")],
+        orderstatus=[status_answer("1", "cancelled", filled_quantity=4)],
+        tradebook=[trades(("1", 2, 812.25), ("1", 2, 812.35))],
+    )
+    rig.path.send(limit)
+    rig.path.on_update(update("1", OrderStatus.OPEN, 4, price=812.35))
+    rig.clock.advance(30)
+
+    (cancelled,) = rig.path.due_polls()
+
+    assert (cancelled.status, cancelled.filled_quantity, cancelled.average_price) == (
+        OrderStatus.CANCELLED,
+        4,
+        812.35,
+    )
 
 
 def test_an_update_with_a_lower_filled_quantity_than_seen_is_stale():
@@ -231,7 +257,8 @@ def test_after_a_restart_an_order_the_stream_spoke_for_keeps_its_safety_net_poll
     rig.path.restore()
 
     rig.clock.advance(29)
-    assert rig.path.due_polls() == []
+    rig.path.due_polls()
+    assert rig.client.calls_to("orderstatus") == []
     rig.clock.advance(1)
     rig.path.due_polls()
 

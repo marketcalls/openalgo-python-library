@@ -13,7 +13,7 @@ from ._types import Mode
 #: The field and the mode OpenAlgo puts on an order it queued in the Action Center
 #: instead of sending it (services/order_router_service.py, queue_order).
 PENDING_ORDER_ID_FIELD = "pending_order_id"
-_SEMI_AUTO_MODE_FIELD = "semi_auto"
+SEMI_AUTO_MODE_FIELD = "semi_auto"
 #: The status of an answer that succeeded.
 SUCCESS = "success"
 # Lower case, part of the message of the 403 that refuses a modify or cancel while
@@ -42,7 +42,7 @@ def switch_mode(response: Mapping[str, Any]) -> Mode:
 def semi_auto_seen(response: Mapping[str, Any]) -> bool:
     """True for an answer of semi-auto mode: an order queued in the Action Center, or a
     modify or cancel the server refused because semi-auto is on."""
-    if PENDING_ORDER_ID_FIELD in response or response.get("mode") == _SEMI_AUTO_MODE_FIELD:
+    if PENDING_ORDER_ID_FIELD in response or response.get("mode") == SEMI_AUTO_MODE_FIELD:
         return True
     message = response.get("message")
     return (
@@ -52,4 +52,10 @@ def semi_auto_seen(response: Mapping[str, Any]) -> bool:
     )
 
 
-__all__ = ["PENDING_ORDER_ID_FIELD", "SUCCESS", "semi_auto_seen", "switch_mode"]
+__all__ = [
+    "PENDING_ORDER_ID_FIELD",
+    "SEMI_AUTO_MODE_FIELD",
+    "SUCCESS",
+    "semi_auto_seen",
+    "switch_mode",
+]

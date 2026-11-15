@@ -104,8 +104,15 @@ def test_when_the_server_has_finished_misses_count_from_five_seconds(answer):
 
 @pytest.mark.parametrize(
     "answer",
-    [TIMEOUT, DROPPED, PROXY_504, http_error(502)],
-    ids=["timeout", "dropped connection", "proxy page", "502 page"],
+    [
+        TIMEOUT,
+        DROPPED,
+        PROXY_504,
+        http_error(502),
+        http_error(504, {"message": "Endpoint request timed out"}),
+        http_error(502, {"message": "An invalid response was received from the upstream"}),
+    ],
+    ids=["timeout", "dropped connection", "proxy page", "502 page", "gateway 504", "gateway 502"],
 )
 def test_otherwise_misses_count_only_after_the_servers_broker_window(answer):
     rig = make_rig(placeorder=[answer], orderbook=[book()] * 3)
@@ -257,6 +264,18 @@ def test_an_ambiguous_intent_sends_one_error_alert_naming_it():
     assert kind is AlertKind.ERROR
     assert "i-1" in text
     assert "Nothing more is sent for SBIN on NSE (MIS) until it is resolved" in text
+
+
+def test_while_openalgo_is_silent_the_stuck_alert_says_nothing_is_sent_for_any_instrument():
+    rig = make_rig(placeorder=[TIMEOUT], orderbook=[TIMEOUT])
+    rig.path.send(make_intent("i-1"))
+    rig.clock.advance(1)
+
+    rig.path.resolve_unbound()
+
+    ((kind, text),) = rig.alerts.sent
+    assert kind is AlertKind.ERROR
+    assert "Nothing is sent for any instrument until OpenAlgo answers again" in text
 
 
 def test_a_matching_row_whose_time_cannot_be_read_leaves_the_intent_ambiguous():

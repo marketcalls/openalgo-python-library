@@ -8,6 +8,8 @@ Every rule compares two updates of one order. Quantities are units, prices rupee
 
 from __future__ import annotations
 
+import dataclasses
+
 from ._types import OrderUpdate
 
 
@@ -15,9 +17,9 @@ def is_news(seen: OrderUpdate | None, update: OrderUpdate) -> bool:
     """Whether `update` tells more of its order than `seen`, the last update taken.
 
     More units filled is news, fewer is stale. With the same fills, a terminal status or
-    any change of the reported status, order quantity or average price is news; a word
-    with no price for fills already known at a price changes nothing, and a duplicate is
-    not news. Once terminal, nothing is.
+    a change of the reported status or of the order quantity is news; a change of the
+    average price alone is not (`with_known_price`), and a duplicate is not news. Once
+    terminal, nothing is.
     """
     if seen is None:
         return True
@@ -27,12 +29,22 @@ def is_news(seen: OrderUpdate | None, update: OrderUpdate) -> bool:
         return update.filled_quantity > seen.filled_quantity
     if update.status.terminal:
         return True
-    price = seen.average_price if _loses_the_price(seen, update) else update.average_price
-    return (update.status, update.quantity, price) != (
-        seen.status,
-        seen.quantity,
-        seen.average_price,
-    )
+    return (update.status, update.quantity) != (seen.status, seen.quantity)
+
+
+def with_known_price(seen: OrderUpdate | None, update: OrderUpdate) -> OrderUpdate:
+    """`update` at the price already known for its filled quantity: once those units have
+    a positive price, it stands for them, so neither a word without a price nor a
+    tradebook mean that differs from the broker's own average re-prices a fill the
+    engine has."""
+    if (
+        seen is None
+        or seen.average_price <= 0
+        or seen.filled_quantity != update.filled_quantity
+        or seen.average_price == update.average_price
+    ):
+        return update
+    return dataclasses.replace(update, average_price=seen.average_price)
 
 
 def is_priceless(update: OrderUpdate) -> bool:
@@ -68,8 +80,4 @@ def repeats(seen: OrderUpdate | None, update: OrderUpdate) -> bool:
     )
 
 
-def _loses_the_price(seen: OrderUpdate, update: OrderUpdate) -> bool:
-    return is_priceless(update) and seen.average_price > 0
-
-
-__all__ = ["is_news", "is_newer", "is_priceless", "repeats"]
+__all__ = ["is_news", "is_newer", "is_priceless", "repeats", "with_known_price"]

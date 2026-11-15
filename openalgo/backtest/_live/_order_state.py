@@ -24,7 +24,8 @@ SAFETY_POLL_EVERY_NS = 30 * NANOS_PER_SECOND
 BACKOFF_NS = (1 * NANOS_PER_SECOND, 2 * NANOS_PER_SECOND, 5 * NANOS_PER_SECOND)
 #: An entry's or an add's fill places the protective stop, so its back-off stops at 2 s.
 ENTRY_BACKOFF_NS = (1 * NANOS_PER_SECOND, 2 * NANOS_PER_SECOND)
-_ENTRY_PURPOSES = frozenset({Purpose.ENTRY, Purpose.ADD})
+#: The purposes that open or add to a position: an entry and an add.
+ENTRY_PURPOSES = frozenset({Purpose.ENTRY, Purpose.ADD})
 #: A market order reported open is working, not resting: it is polled every second.
 _MARKET = "MARKET"
 
@@ -114,7 +115,7 @@ class Followed:
         self.held, self.trades_read_ns, self.trade_reads = None, None, 0
 
     def _backoff_ns(self, tries: int) -> int:
-        steps = ENTRY_BACKOFF_NS if self.intent.purpose in _ENTRY_PURPOSES else BACKOFF_NS
+        steps = ENTRY_BACKOFF_NS if self.intent.purpose in ENTRY_PURPOSES else BACKOFF_NS
         return steps[min(max(tries, 0), len(steps) - 1)]
 
 
@@ -133,6 +134,7 @@ def with_floor(order: Followed, update: OrderUpdate) -> OrderUpdate:
 __all__ = [
     "BACKOFF_NS",
     "ENTRY_BACKOFF_NS",
+    "ENTRY_PURPOSES",
     "POLL_AFTER_NS",
     "POLL_EVERY_NS",
     "SAFETY_POLL_EVERY_NS",

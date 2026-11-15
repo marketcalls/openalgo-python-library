@@ -5,7 +5,10 @@ rate budget."""
 import pytest
 from orders_fakes import (
     CONNECTION_LOST,
+    DROPPED,
     NS,
+    PROXY_504,
+    SERVER_502,
     START_NS,
     STRATEGY,
     TIMEOUT,
@@ -314,7 +317,7 @@ def test_a_502_is_never_retried():
     ids=["send", "modify", "cancel"],
 )
 def test_nothing_is_sent_for_the_instrument_of_an_unbound_intent(request_while_unbound):
-    rig = placed_rig(placeorder=[TIMEOUT])
+    rig = placed_rig(placeorder=[SERVER_502])
     rig.path.send(make_intent("i-unbound"))
     calls = len(rig.client.calls)
 
@@ -326,7 +329,7 @@ def test_nothing_is_sent_for_the_instrument_of_an_unbound_intent(request_while_u
 
 def test_a_trailing_modify_of_another_instruments_stop_is_not_held_back():
     stop = make_intent("i-stop", symbol="INFY", purpose=Purpose.STOP, action="SELL")
-    rig = make_rig(placeorder=[placed("1"), TIMEOUT], modifyorder=[placed("1")])
+    rig = make_rig(placeorder=[placed("1"), SERVER_502], modifyorder=[placed("1")])
     rig.path.send(stop)
     rig.path.send(make_intent("i-unbound"))
 
@@ -341,12 +344,66 @@ def test_a_trailing_modify_of_another_instruments_stop_is_not_held_back():
     ids=["symbol", "exchange", "product"],
 )
 def test_a_send_for_another_instrument_or_product_goes_ahead(other):
-    rig = make_rig(placeorder=[TIMEOUT, placed("2")])
+    rig = make_rig(placeorder=[SERVER_502, placed("2")])
     rig.path.send(make_intent("i-unbound"))
 
     outcome = rig.path.send(make_intent("i-2", **other))
 
     assert outcome.order_id == "2"
+
+
+@pytest.mark.parametrize("silence", [TIMEOUT, DROPPED], ids=["timeout", "dropped"])
+def test_five_legs_after_a_timeout_or_a_dropped_connection_make_one_call(silence):
+    rig = make_rig(placeorder=[silence] * 5)
+    refused = 0
+
+    for symbol in ("SBIN", "INFY", "TCS", "HDFCBANK", "RELIANCE"):
+        try:
+            rig.path.send(make_intent(f"i-{symbol}", symbol=symbol, purpose=Purpose.EXIT))
+        except LiveError as error:
+            assert "until it answers a call again" in str(error)
+            refused += 1
+
+    assert (len(rig.client.calls_to("placeorder")), refused) == (1, 4)
+
+
+def test_after_a_timeout_even_another_instruments_trailing_modify_is_held():
+    stop = make_intent("i-stop", symbol="INFY", purpose=Purpose.STOP, action="SELL")
+    rig = make_rig(placeorder=[placed("1"), TIMEOUT], modifyorder=[placed("1")])
+    rig.path.send(stop)
+    rig.path.send(make_intent("i-1"))
+
+    with pytest.raises(LiveError, match="nothing is sent for any instrument"):
+        rig.path.modify("1", **{**MODIFY_FIELDS, "symbol": "INFY"})
+
+    assert rig.client.calls_to("modifyorder") == []
+
+
+def test_other_instruments_are_sent_again_once_openalgo_answers_a_call():
+    rig = make_rig(placeorder=[TIMEOUT, placed("2")], orderbook=[book()])
+    rig.path.send(make_intent("i-1"))
+    rig.clock.advance(1)
+    rig.path.resolve_unbound()
+
+    outcome = rig.path.send(make_intent("i-2", symbol="INFY"))
+
+    assert outcome.order_id == "2"
+
+
+@pytest.mark.parametrize(
+    "answer", [SERVER_502, PROXY_504, CONNECTION_LOST], ids=["openalgo 502", "proxy", "refused"]
+)
+def test_any_other_unknown_outcome_holds_only_its_instrument(answer):
+    rig = make_rig(placeorder=[answer, placed("2")])
+    rig.path.send(make_intent("i-1"))
+
+    assert rig.path.send(make_intent("i-2", symbol="INFY")).order_id == "2"
+
+
+def test_a_gateways_json_without_a_status_is_not_taken_for_openalgos_answer():
+    gateway = http_error(504, {"message": "Endpoint request timed out"})
+
+    assert server_answer(gateway) is gateway
 
 
 @pytest.mark.parametrize(

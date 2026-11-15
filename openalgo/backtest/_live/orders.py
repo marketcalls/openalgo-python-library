@@ -4,8 +4,10 @@ section 8): journal first, send once, resolve from the stream or by polling.
 Every placement is written to the journal before its HTTP call and sent exactly once;
 place, modify and cancel are never retried. An answer that leaves the outcome unknown (a
 502, a timeout, a lost connection) leaves the intent unbound, and nothing more is sent
-until `resolve_unbound` has found it in the order book or, after two reads that miss it,
-marked it not placed (`_order_resolve`). Order status comes from the order-updates
+for its symbol, exchange and product until `resolve_unbound` has found it in the order
+book or, after two reads that miss it, marked it not placed (`_order_resolve`). After a
+client timeout or a dropped connection nothing is sent for any instrument until
+OpenAlgo answers a call again (`ServerWatch`). Order status comes from the order-updates
 stream, with polling as the fallback and fills confirmed from the tradebook
 (`_order_follow`, `_order_state`, `_order_trades`).
 
@@ -26,6 +28,7 @@ from ..errors import LiveError, ModeChangedError
 from ._order_answers import (
     Outcome,
     SendOutcome,
+    ServerWatch,
     outcome_of,
     server_answer,
     server_has_finished,
@@ -34,7 +37,7 @@ from ._order_book import Resolution, Resolved
 from ._order_follow import OrderFollower
 from ._order_rate import RateBudget
 from ._order_resolve import BROKER_WINDOW_NS, NOT_PLACED_AFTER_NS, UnboundResolver, same_leg
-from ._order_state import HeldFill
+from ._order_state import ENTRY_PURPOSES, HeldFill
 from ._order_trades import UNSUPPORTED_BROKERS
 from ._order_updates import normalize_update
 from ._types import (
@@ -45,14 +48,11 @@ from ._types import (
     Now,
     OrderIntent,
     OrderUpdate,
-    Purpose,
     Sleep,
 )
 
 logger = logging.getLogger(LOGGER_NAME)
 
-#: The purposes `guard.before_entry` reads the mode for, just before they are sent.
-_ENTRY_PURPOSES = frozenset({Purpose.ENTRY, Purpose.ADD})
 #: The keyword arguments `modifyorder` takes besides the order ID and strategy.
 _MODIFY_REQUIRED = frozenset(
     {"symbol", "action", "exchange", "price_type", "product", "quantity", "price", "trigger_price"}
@@ -91,9 +91,18 @@ class OrderPath:
         self._now = now
         self._sleep = sleep
         self._rate = rate
-        self._follower = OrderFollower(client, journal=journal, guard=guard, alerts=alerts, now=now)
+        self._watch = ServerWatch()
+        self._follower = OrderFollower(
+            client, journal=journal, guard=guard, alerts=alerts, watch=self._watch, now=now
+        )
         self._resolver = UnboundResolver(
-            client, journal=journal, guard=guard, alerts=alerts, follower=self._follower, now=now
+            client,
+            journal=journal,
+            guard=guard,
+            alerts=alerts,
+            follower=self._follower,
+            watch=self._watch,
+            now=now,
         )
 
     def restore(self) -> None:
@@ -125,12 +134,13 @@ class OrderPath:
 
         Raises ModeChangedError when the guard is locked or (for an entry or add)
         `guard.before_entry` finds the mode changed; LiveError when the mode cannot be
-        read before an entry, or an intent of the same symbol, exchange and product is
-        unbound; JournalError when the journal cannot be written. Nothing is sent then.
+        read before an entry, an intent of the same symbol, exchange and product is
+        unbound, or OpenAlgo has not answered since a client timeout or a dropped
+        connection; JournalError when the journal cannot be written. Nothing is sent then.
         """
         self._check_can_send(f"intent {intent.intent_id}", intent)
         self._wait_for_budget()
-        if intent.purpose in _ENTRY_PURPOSES:
+        if intent.purpose in ENTRY_PURPOSES:
             self._guard.before_entry()
         self._rate.take()
         self._journal.record_intent(intent)
@@ -147,6 +157,7 @@ class OrderPath:
             trigger_price=intent.trigger_price,
         )
         answer = server_answer(sent)
+        self._watch.note(answer, self._now())
         outcome = outcome_of(answer)
         # The journal hears first, so the order's fate is kept even if a later step fails.
         if outcome.kind is Outcome.ACCEPTED:
@@ -260,6 +271,13 @@ class OrderPath:
                 "changed, or semi-auto appeared), so the session sends nothing more; "
                 "start it again in the mode you want"
             )
+        if self._watch.silent:
+            raise LiveError(
+                f"{what} is not sent: OpenAlgo has not answered since a client timeout or a "
+                "dropped connection, so it may be hung and still placing what it was sent; "
+                "nothing is sent for any instrument until it answers a call again (the polls "
+                "and the order-book reads ask it)"
+            )
         held = [intent for intent in self._journal.unbound() if same_leg(intent, sent_for)]
         if held:
             raise LiveError(
@@ -283,6 +301,7 @@ class OrderPath:
         return intent
 
     def _settle_request(self, order_id: str, answer: Mapping[str, Any]) -> SendOutcome:
+        self._watch.note(answer, self._now())
         outcome = outcome_of(answer, order_id)
         self._guard.check_response(answer)
         if outcome.kind is not Outcome.ACCEPTED:

@@ -1,10 +1,12 @@
 """Settling unbound intents against OpenAlgo's order book, for the order path (`orders`).
 
 An intent is unbound when the answer to its `placeorder` was lost: its order may or may
-not be at the broker, and nothing more is sent until the order book settles it. The one
-order of its shape placed at or after it is its order (`_order_book`); none, read twice
-and late enough for the order to have shown, means it was never placed. What the path
-cannot settle alone is alerted once per intent. Times are UTC nanoseconds.
+not be at the broker, and nothing more is sent for its symbol, exchange and product until
+the order book settles it (nothing for any instrument while OpenAlgo has not answered
+since a timeout or a dropped connection: `ServerWatch`). The one order of its shape
+placed at or after it is its order (`_order_book`); none, read twice and late enough for
+the order to have shown, means it was never placed. What the path cannot settle alone is
+alerted once per intent. Times are UTC nanoseconds.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from typing import Any
 
 from .._layout import NANOS_PER_SECOND
 from ..errors import LiveError
-from ._order_answers import server_answer
+from ._order_answers import ServerWatch, server_answer
 from ._order_book import BookMatch, Resolution, Resolved, book_rows, match_unbound
 from ._order_follow import OrderFollower
 from ._types import (
@@ -63,6 +65,7 @@ class UnboundResolver:
         guard: GuardLike,
         alerts: AlertsLike,
         follower: OrderFollower,
+        watch: ServerWatch,
         now: Now,
     ) -> None:
         self._client = client
@@ -70,6 +73,7 @@ class UnboundResolver:
         self._guard = guard
         self._alerts = alerts
         self._follower = follower
+        self._watch = watch
         self._now = now
         self._misses_count_from_ns: dict[str, int] = {}
         self._misses: dict[str, int] = {}
@@ -104,6 +108,7 @@ class UnboundResolver:
             return []
         self._book_read_ns = now
         answer = server_answer(self._client.orderbook())
+        self._watch.note(answer, now)
         self._guard.check_response(answer)
         if self._guard.locked:
             logger.error("the order book answered in the other mode: it settles no intent")
@@ -164,13 +169,22 @@ class UnboundResolver:
         self._alerted.discard(intent_id)
 
     def _alert_stuck(self, intent: OrderIntent, why: str) -> None:
-        """Alert an intent that stays unbound for a reason the path cannot settle."""
+        """Alert an intent that stays unbound for a reason the path cannot settle, saying
+        which hold applies: its instrument's, or every instrument's while OpenAlgo is
+        silent."""
+        leg = f"{intent.symbol} on {intent.exchange} ({intent.product})"
+        if self._watch.silent:
+            hold = (
+                "Nothing is sent for any instrument until OpenAlgo answers again (it has "
+                f"not since a timeout or a dropped connection), nor for {leg} until it is "
+                "resolved"
+            )
+        else:
+            hold = f"Nothing more is sent for {leg} until it is resolved"
         self._alert_once(
             intent,
-            f"may or may not be at the broker: {why}. Nothing more is sent for "
-            f"{intent.symbol} on {intent.exchange} ({intent.product}) until it is resolved; "
-            "check the broker's order book, and stop the session with Ctrl+C if it cannot "
-            "be settled",
+            f"may or may not be at the broker: {why}. {hold}; check the broker's order "
+            "book, and stop the session with Ctrl+C if it cannot be settled",
         )
 
     def _alert_once(self, intent: OrderIntent, says: str) -> None:
