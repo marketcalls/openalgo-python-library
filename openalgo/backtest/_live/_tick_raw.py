@@ -1,18 +1,23 @@
 """A recording's raw file (private to `recorder`): what the writer appends to while a
-recording runs, and what finalize reads back.
+recording runs, and what finalize reads back. Readers of a day never open it.
 
 A raw file is a header (`RAW_MAGIC`, then the length of a JSON document and the document:
-the recording's number, the file's part, the IST day, the recording's start in UTC
-nanoseconds and the list of its instruments) followed by records of `RAW_DTYPE`, in the
-order the writer took them. Every append ends with an fsync, so a power loss costs at
-most the last flush.
+the recording's number and identity, the file's part, the IST day, the recording's start
+in UTC nanoseconds and the list of its instruments) followed by frames, one per flush. A
+frame is a small header (`_FRAME_MAGIC`, the record count, the CRC-32 of the records and
+the CRC-32 of those three) followed by the records of `RAW_DTYPE`, in the order the
+writer took them. Every append ends with an fsync, so a power loss costs at most the
+last flush.
 
-What a crash or a power loss can leave is cut off or skipped on read, never guessed: a
-part of the last record (counted in bytes), and records that cannot be the recording's
-(counted): a zero-filled tail, records of another recording number, a sequence number
-that does not increase from 1, an instrument the header does not list, a last price that
-is not a finite positive number. After a write that failed, the next append first cuts
-the file back to its last whole record, so a tear is only ever at the end of a file.
+What a crash or a power loss can leave is dropped whole and counted, never guessed: a
+frame whose records are cut short or do not match their CRC (a zero-filled page inside
+it) is dropped and reading goes on at the next frame, since its header says where that
+is; a frame header that cannot be read (torn, zero-filled) ends the file, its bytes
+counted. In the frames that verify, a record that cannot be the recording's (another
+recording number, an instrument the header does not list, a last price that is not a
+finite positive number, a sequence number below 1) is skipped and counted. After a write
+that failed, the next append first cuts the file back to the end of its last whole
+frame, so a tear is only ever at the end of a file.
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ import datetime as dt
 import json
 import os
 import struct
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -28,23 +34,29 @@ from typing import Any, BinaryIO
 import numpy as np
 
 from ..errors import DataError
-from ._tick_files import RAW_DTYPE
+from ._tick_files import RAW_DTYPE, is_identity
 
 #: The first bytes of a raw file; the digit is the version of the layout.
-RAW_MAGIC = b"OA-TICKS-RAW-v3\n"
+RAW_MAGIC = b"OA-TICKS-RAW-v4\n"
 _LENGTH = struct.Struct("<I")  # bytes of the header's JSON document
 _PREFIX = len(RAW_MAGIC) + _LENGTH.size
 # A header longer than this is no header of ours (a list of 10 000 instruments is less).
 _MAX_HEADER_BYTES = 4 * 1024 * 1024
+#: The first bytes of every frame.
+_FRAME_MAGIC = b"OAFR"
+_FRAME_FIELDS = struct.Struct("<4sII")  # magic, record count, CRC-32 of the records
+_FRAME_CHECK = struct.Struct("<I")  # CRC-32 of the three fields before it
+FRAME_HEADER_SIZE = _FRAME_FIELDS.size + _FRAME_CHECK.size
 
 
 @dataclass(frozen=True)
 class RawHeader:
-    """What a raw file says about itself: its recording's number, its part (0 first),
-    the IST day, the recording's start (UTC nanoseconds) and the (exchange, symbol) of
-    each instrument, whose index the records carry."""
+    """What a raw file says about itself: its recording's number and random identity,
+    its part (0 first), the IST day, the recording's start (UTC nanoseconds) and the
+    (exchange, symbol) of each instrument, whose index the records carry."""
 
     recording: int
+    identity: str
     part: int
     day: dt.date
     start_ns: int
@@ -54,6 +66,7 @@ class RawHeader:
         """The header as the file begins."""
         document = {
             "recording": self.recording,
+            "identity": self.identity,
             "part": self.part,
             "day": self.day.isoformat(),
             "start_ns": self.start_ns,
@@ -65,23 +78,32 @@ class RawHeader:
 
 @dataclass(frozen=True)
 class RawContent:
-    """What a raw file holds: its header, its records that can be the recording's (in
-    file order), how many records were skipped as not the recording's, and the bytes of
-    a torn last record cut off."""
+    """What a raw file holds: its header; the records of its verified frames that can be
+    the recording's, in file order; `rejected`, the records skipped (those of frames
+    dropped whole, and those that could not be the recording's); `dropped_frames`, the
+    frames dropped; and `torn_bytes`, the bytes after the last readable frame header."""
 
     header: RawHeader
     records: np.ndarray
     rejected: int
+    dropped_frames: int
     torn_bytes: int
+
+
+def frame_of(records: np.ndarray) -> bytes:
+    """One flush's records as a frame."""
+    body = np.ascontiguousarray(records, dtype=RAW_DTYPE).tobytes()
+    fields = _FRAME_FIELDS.pack(_FRAME_MAGIC, len(records), zlib.crc32(body))
+    return fields + _FRAME_CHECK.pack(zlib.crc32(fields)) + body
 
 
 class RawFile:
     """A raw file open for appending, made by `create`. Only the writer that made it
     writes it.
 
-    After a write that failed, the next append first cuts the file back to its last
-    whole record; when that cut fails too, `cut_failed` is set and nothing more may be
-    written to it: the writer goes on in the recording's next part.
+    After a write that failed, the next append first cuts the file back to the end of
+    its last whole frame; when that cut fails too, `cut_failed` is set and nothing more
+    may be written to it: the writer goes on in the recording's next part.
     """
 
     def __init__(self, path: Path, handle: BinaryIO, header: RawHeader, body_start: int) -> None:
@@ -89,7 +111,7 @@ class RawFile:
         self.header = header
         self.cut_failed = False
         self._handle = handle
-        self._body_start = body_start
+        self._whole_end = body_start  # the end of the last frame written and synced
         self._torn = False
 
     @classmethod
@@ -115,19 +137,20 @@ class RawFile:
         return self._handle.closed
 
     def append(self, records: np.ndarray) -> None:
-        """Append records and sync them to the disk. Raises OSError when they cannot be
-        written or synced, or when the end a failed write tore cannot be cut off
-        (`cut_failed` is then set)."""
+        """Append records as one frame and sync it to the disk. Raises OSError when it
+        cannot be written or synced, or when the end a failed write tore cannot be cut
+        off (`cut_failed` is then set)."""
         if self._torn:
             self._cut_torn_end()
-        data = memoryview(np.ascontiguousarray(records, dtype=RAW_DTYPE).tobytes())
+        frame = frame_of(records)
         try:
-            self._write_bytes(data)
+            self._write_bytes(memoryview(frame))
             self._sync()
         except BaseException:
-            # Part of the batch may be in the file: the next append cuts back first.
+            # Part of the frame may be in the file: the next append cuts back first.
             self._torn = True
             raise
+        self._whole_end += len(frame)
 
     def close(self) -> None:
         """Close the file (once; a second call does nothing); it stays for finalize.
@@ -136,7 +159,7 @@ class RawFile:
             self._handle.close()
 
     def _write_bytes(self, data: memoryview) -> None:
-        """Write every byte of `data`: the one write of records."""
+        """Write every byte of `data`: the one write of a frame."""
         _write_all(self._handle, data)
 
     def _sync(self) -> None:
@@ -149,11 +172,8 @@ class RawFile:
 
     def _cut_torn_end(self) -> None:
         try:
-            size = os.fstat(self._handle.fileno()).st_size
-            body = max(size - self._body_start, 0)
-            whole = self._body_start + body - body % RAW_DTYPE.itemsize
-            if size != whole:
-                self._truncate(whole)
+            if os.fstat(self._handle.fileno()).st_size != self._whole_end:
+                self._truncate(self._whole_end)
             self._handle.seek(0, os.SEEK_END)
         except OSError:
             self.cut_failed = True
@@ -167,26 +187,41 @@ def _write_all(handle: BinaryIO, data: memoryview) -> None:
         data = data[written:]
 
 
-def read_raw_header(path: Path) -> RawHeader:
-    """The header of a raw file. Raises DataError when it is not a raw file's of this
-    version, OSError when it cannot be read."""
-    with open(path, "rb") as handle:
-        length = _header_length(path, handle.read(_PREFIX))
-        return _header(path, handle.read(length))
-
-
 def read_raw(path: Path) -> RawContent:
-    """A raw file's header and the records that can be the recording's (see the module
-    docstring). Raises DataError when its header is not a raw file's of this version,
-    OSError when it cannot be read."""
+    """A raw file's header and the records of its verified frames that can be the
+    recording's (see the module docstring). Raises DataError when its header is not a
+    raw file's of this version, OSError when it cannot be read."""
     blob = path.read_bytes()
     length = _header_length(path, blob[:_PREFIX])
     header = _header(path, blob[_PREFIX : _PREFIX + length])
-    body = memoryview(blob)[_PREFIX + length :]
-    whole = len(body) - len(body) % RAW_DTYPE.itemsize
-    records = np.frombuffer(body[:whole], dtype=RAW_DTYPE)
+    frames, dropped, dropped_records, torn = _frames(memoryview(blob), _PREFIX + length)
+    records = np.concatenate(frames) if frames else np.zeros(0, dtype=RAW_DTYPE)
     keep = _possible(records, header)
-    return RawContent(header, records[keep].copy(), int((~keep).sum()), len(body) - whole)
+    rejected = dropped_records + int((~keep).sum())
+    return RawContent(header, records[keep].copy(), rejected, dropped, torn)
+
+
+def _frames(blob: memoryview, start: int) -> tuple[list[np.ndarray], int, int, int]:
+    """(the records of each verified frame, frames dropped, their records, torn bytes)."""
+    frames, dropped, dropped_records = [], 0, 0
+    position = start
+    while position < len(blob):
+        fields = bytes(blob[position : position + _FRAME_FIELDS.size])
+        check = bytes(blob[position + _FRAME_FIELDS.size : position + FRAME_HEADER_SIZE])
+        if len(check) < _FRAME_CHECK.size or _FRAME_CHECK.unpack(check)[0] != zlib.crc32(fields):
+            break  # a frame header that cannot be read ends the file
+        magic, count, crc = _FRAME_FIELDS.unpack(fields)
+        if magic != _FRAME_MAGIC:
+            break
+        body_start = position + FRAME_HEADER_SIZE
+        end = body_start + count * RAW_DTYPE.itemsize
+        body = blob[body_start:end]
+        position = end
+        if end > len(blob) or zlib.crc32(body) != crc:
+            dropped, dropped_records = dropped + 1, dropped_records + count
+            continue
+        frames.append(np.frombuffer(body, dtype=RAW_DTYPE))
+    return frames, dropped, dropped_records, max(len(blob) - position, 0)
 
 
 def _header_length(path: Path, prefix: bytes) -> int:
@@ -203,8 +238,12 @@ def _header(path: Path, payload: bytes) -> RawHeader:
     """The header from its document (a torn one cannot be parsed)."""
     try:
         document = json.loads(bytes(payload).decode("utf-8"))
+        identity = document["identity"]
+        if not is_identity(identity):
+            raise ValueError(f"{identity!r} is no identity")
         header = RawHeader(
             recording=_count(document["recording"]),
+            identity=identity,
             part=_count(document["part"]),
             day=dt.date.fromisoformat(document["day"]),
             start_ns=_count(document["start_ns"]),
@@ -224,43 +263,41 @@ def _count(value: Any) -> int:
 
 
 def _instrument(item: Any) -> tuple[str, str]:
-    if not (
-        isinstance(item, list) and len(item) == 2 and all(isinstance(v, str) and v for v in item)
-    ):
+    named = isinstance(item, list) and len(item) == 2
+    if not (named and all(isinstance(value, str) and value for value in item)):
         raise ValueError(f"{item!r} is no instrument")
     return item[0], item[1]
 
 
 def _possible(records: np.ndarray, header: RawHeader) -> np.ndarray:
     """Which records can be the recording's: its number, an instrument it lists, a
-    finite positive last price, and a sequence number of 1 or more above every earlier
-    such record's (a batch written twice keeps its first copy)."""
+    finite positive last price and a sequence number of 1 or more."""
     ltp = records["ltp"]
-    keep = (
+    return (
         (records["recording"] == header.recording)
         & (records["instrument"] < len(header.instruments))
         & np.isfinite(ltp)
         & (ltp > 0)
         & (records["seq"] >= 1)
     )
-    return increasing(records, keep)
 
 
-def increasing(records: np.ndarray, keep: np.ndarray | None = None) -> np.ndarray:
-    """Which of the records (those `keep` allows, all when None) have a sequence number
-    above every earlier one's: a batch written twice keeps its first copy."""
-    keep = np.ones(len(records), dtype=bool) if keep is None else keep
-    seqs = np.where(keep, records["seq"], 0)
+def increasing(records: np.ndarray) -> np.ndarray:
+    """Which records have a sequence number above every earlier one's: a batch written
+    twice (a Ctrl+C right after its write, a part that repeats a torn batch) keeps its
+    first copy."""
+    seqs = records["seq"]
     before = np.concatenate([[0], np.maximum.accumulate(seqs)[:-1]]) if len(seqs) else seqs
-    return keep & (seqs > before)
+    return seqs > before
 
 
 __all__ = [
+    "FRAME_HEADER_SIZE",
     "RAW_MAGIC",
     "RawContent",
     "RawFile",
     "RawHeader",
+    "frame_of",
     "increasing",
     "read_raw",
-    "read_raw_header",
 ]

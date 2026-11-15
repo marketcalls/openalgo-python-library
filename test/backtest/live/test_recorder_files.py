@@ -7,8 +7,10 @@ recording writes them, so these tests need no feed.
 
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import json
+import logging
 import math
 import os
 import pathlib
@@ -18,6 +20,7 @@ import numpy as np
 import pytest
 from recorder_fakes import DAY, NS, ist_ns
 
+import openalgo.backtest._live._tick_finalize as tick_finalize
 from openalgo.backtest._live._tick_files import (
     NO_EVENT_TIME,
     RAW_DTYPE,
@@ -27,11 +30,19 @@ from openalgo.backtest._live._tick_files import (
     next_recording_number,
     raw_path,
     records_of,
+    start_path,
+    stop_path,
     tick_row,
     ticks_root,
 )
-from openalgo.backtest._live._tick_finalize import StopFacts, write_stop
-from openalgo.backtest._live._tick_raw import RawFile, RawHeader, read_raw
+from openalgo.backtest._live._tick_finalize import StartFacts, StopFacts, write_start, write_stop
+from openalgo.backtest._live._tick_raw import (
+    FRAME_HEADER_SIZE,
+    RawFile,
+    RawHeader,
+    frame_of,
+    read_raw,
+)
 from openalgo.backtest._live._types import Tick
 from openalgo.backtest._live.recorder import (
     Coverage,
@@ -46,7 +57,7 @@ from openalgo.backtest._live.recorder import (
 from openalgo.backtest.errors import DataError
 
 #: The hash in a sidecar covers this versioned header, then the records' bytes.
-HASH_HEADER = b"openalgo.backtest recorded ticks v3\n"
+HASH_HEADER = b"openalgo.backtest recorded ticks v4\n"
 SBIN, INFY = ("NSE", "SBIN"), ("NSE", "INFY")
 
 
@@ -66,13 +77,21 @@ def folder_of(tmp_path, symbol="SBIN"):
     return instrument_folder(root_of(tmp_path), "NSE", symbol)
 
 
-def write_raw(tmp_path, ticks, *, number=1, start="10:00:00", instruments=(SBIN,), part=0, seq=1):
-    """A recording's raw file as the writer leaves it: the header, then one record per
-    tick (of the instrument its symbol names), sequence numbers from `seq`."""
-    header = RawHeader(number, part, DAY, ist_ns(start), tuple(instruments))
-    raw = RawFile.create(raw_path(root_of(tmp_path), DAY, number, part), header)
+def facts_of(number=1, start="10:00:00", instruments=(SBIN,)) -> StartFacts:
+    """What a recording records; its identity, made from its number, is fixed here."""
+    return StartFacts(number, f"{number:016x}", DAY, ist_ns(start), tuple(instruments))
+
+
+def header_of(number=1, start="10:00:00", instruments=(SBIN,), part=0) -> RawHeader:
+    facts = facts_of(number, start, instruments)
+    return RawHeader(number, facts.identity, part, DAY, facts.start_ns, facts.instruments)
+
+
+def rows_of(ticks, *, instruments=(SBIN,), number=1, seq=1) -> list[tuple]:
+    """One raw row per tick (of the instrument its symbol names), sequence numbers from
+    `seq`."""
     index = {symbol: n for n, (_, symbol) in enumerate(instruments)}
-    rows = [
+    return [
         tick_row(
             tick,
             instrument=index[tick.symbol],
@@ -82,15 +101,35 @@ def write_raw(tmp_path, ticks, *, number=1, start="10:00:00", instruments=(SBIN,
         )
         for n, tick in enumerate(ticks)
     ]
+
+
+def write_raw(tmp_path, ticks, *, number=1, start="10:00:00", instruments=(SBIN,), part=0, seq=1):
+    """A recording's start sidecar and raw file as the writer leaves them: the header,
+    then one frame holding one record per tick."""
+    if part == 0:
+        write_start(root_of(tmp_path), facts_of(number, start, instruments))
+    header = header_of(number, start, instruments, part)
+    raw = RawFile.create(raw_path(root_of(tmp_path), DAY, number, part), header)
+    rows = rows_of(ticks, instruments=instruments, number=number, seq=seq)
     if rows:
         raw.append(records_of(rows))
     raw.close()
     return raw.path
 
 
-def stopped(tmp_path, *, number=1, stopped_by=Stop.STOP_AT, stop="10:01:00", outages=()):
+def stopped(
+    tmp_path,
+    *,
+    number=1,
+    start="10:00:00",
+    instruments=(SBIN,),
+    stopped_by=Stop.STOP_AT,
+    stop="10:01:00",
+    outages=(),
+):
     """The stop sidecar a recording writes before it finalizes."""
-    write_stop(root_of(tmp_path), DAY, number, StopFacts(stopped_by, ist_ns(stop), tuple(outages)))
+    facts = StopFacts(stopped_by, ist_ns(stop), tuple(outages))
+    write_stop(root_of(tmp_path), facts_of(number, start, instruments), facts)
 
 
 def files_of(tmp_path, number=1, symbol="SBIN"):
@@ -160,7 +199,7 @@ def test_a_torn_last_record_is_cut_off_on_read(tmp_path):
     assert (len(content.records), content.torn_bytes) == (2, 10)
 
 
-def test_a_zero_filled_tail_left_by_a_power_loss_is_skipped_and_counted(tmp_path):
+def test_a_zero_filled_tail_left_by_a_power_loss_ends_the_file_and_is_counted(tmp_path):
     path = write_raw(tmp_path, TWO[:1])
     with open(path, "ab") as handle:
         handle.write(bytes(3 * RAW_DTYPE.itemsize))
@@ -168,30 +207,71 @@ def test_a_zero_filled_tail_left_by_a_power_loss_is_skipped_and_counted(tmp_path
 
     report = finalize(DAY, cache_dir=tmp_path)
 
-    assert (ltps(tmp_path), report.rejected) == ([812.4], 3)
+    assert (ltps(tmp_path), report.torn_bytes) == ([812.4], 3 * RAW_DTYPE.itemsize)
 
 
-def test_records_of_another_recording_or_out_of_sequence_are_skipped_and_counted(tmp_path):
+@pytest.mark.parametrize("cut", [2, 6, 10, 30, 44, 50, 60, 74])
+def test_a_flush_a_power_loss_zero_filled_inside_is_dropped_whole_never_a_wrong_tick(tmp_path, cut):
+    # The page boundary falls `cut` bytes into the frame's last record; the zeros go on.
+    path = write_raw(tmp_path, TWO)
+    blob = bytearray(path.read_bytes())
+    last = len(blob) - RAW_DTYPE.itemsize
+    blob[last + cut :] = bytes(len(blob) - last - cut)
+    path.write_bytes(bytes(blob) + bytes(2 * RAW_DTYPE.itemsize))
+
+    report = finalize(DAY, cache_dir=tmp_path)
+
+    assert (ltps(tmp_path), report.rejected) == ([], 2)
+
+
+def test_reading_goes_on_after_a_frame_whose_records_do_not_match_their_crc(tmp_path):
+    path = write_raw(tmp_path, TWO[:1])
+    later = [sbin("10:00:02", 812.5), sbin("10:00:03", 812.6)]
+    torn, whole = (
+        frame_of(records_of(rows_of([tick], seq=n))) for n, tick in ((2, later[0]), (3, later[1]))
+    )
+    damaged = torn[:FRAME_HEADER_SIZE] + bytes(len(torn) - FRAME_HEADER_SIZE)
+    with open(path, "ab") as handle:
+        handle.write(damaged + whole)
+
+    content = read_raw(path)
+
+    assert (content.records["ltp"].tolist(), content.dropped_frames, content.rejected) == (
+        [812.4, 812.6],
+        1,
+        1,
+    )
+
+
+def test_records_that_cannot_be_the_recordings_are_skipped_and_counted(tmp_path):
     path = write_raw(tmp_path, TWO)
     stray = [
         tick_row(sbin("10:00:03", 1.0), instrument=0, recording=9, seq=3, queued_ns=0),
-        tick_row(sbin("10:00:04", 2.0), instrument=0, recording=1, seq=2, queued_ns=0),
         tick_row(sbin("10:00:05", math.nan), instrument=0, recording=1, seq=4, queued_ns=0),
         tick_row(sbin("10:00:06", 3.0), instrument=7, recording=1, seq=5, queued_ns=0),
     ]
     with open(path, "ab") as handle:
-        handle.write(records_of(stray).tobytes())
+        handle.write(frame_of(records_of(stray)))
 
     content = read_raw(path)
 
-    assert (content.records["ltp"].tolist(), content.rejected) == ([812.4, 812.5], 4)
+    assert (content.records["ltp"].tolist(), content.rejected) == ([812.4, 812.5], 3)
+
+
+def test_a_batch_written_twice_is_kept_once_and_counted_as_duplicates_not_rejected(tmp_path):
+    path = write_raw(tmp_path, TWO)
+    with open(path, "ab") as handle:
+        handle.write(frame_of(records_of(rows_of(TWO))))
+
+    report = finalize(DAY, cache_dir=tmp_path)
+
+    assert (ltps(tmp_path), report.duplicates, report.rejected) == ([812.4, 812.5], 2, 0)
 
 
 def test_after_a_write_cut_short_the_next_append_first_cuts_the_file_to_whole_records(
     tmp_path, monkeypatch
 ):
-    header = RawHeader(1, 0, DAY, ist_ns("10:00:00"), (SBIN,))
-    raw = RawFile.create(raw_path(root_of(tmp_path), DAY, 1, 0), header)
+    raw = RawFile.create(raw_path(root_of(tmp_path), DAY, 1, 0), header_of())
     rows = [
         tick_row(t, instrument=0, recording=1, seq=n + 1, queued_ns=0) for n, t in enumerate(TWO)
     ]
@@ -221,11 +301,11 @@ def test_after_a_write_cut_short_the_next_append_first_cuts_the_file_to_whole_re
 def test_every_append_ends_with_a_sync_to_the_disk(tmp_path, monkeypatch):
     synced = []
     monkeypatch.setattr(RawFile, "_sync", lambda raw: synced.append(raw.path))
-    header = RawHeader(1, 0, DAY, ist_ns("10:00:00"), (SBIN,))
-    raw = RawFile.create(raw_path(root_of(tmp_path), DAY, 1, 0), header)
+    raw = RawFile.create(raw_path(root_of(tmp_path), DAY, 1, 0), header_of())
 
     for tick in TWO:
         raw.append(records_of([tick_row(tick, instrument=0, recording=1, seq=1, queued_ns=0)]))
+    raw.close()
 
     assert synced == [raw.path, raw.path]
 
@@ -327,7 +407,7 @@ def test_a_later_recording_never_rewrites_an_earlier_recordings_file(tmp_path):
     earlier = files_of(tmp_path)[0]
     before = (earlier.read_bytes(), earlier.stat().st_mtime_ns)
     write_raw(tmp_path, [sbin("11:00:00", 815.0)], number=2, start="10:59:00")
-    stopped(tmp_path, number=2, stop="11:01:00")
+    stopped(tmp_path, number=2, start="10:59:00", stop="11:01:00")
 
     finalize(DAY, cache_dir=tmp_path)
 
@@ -439,14 +519,91 @@ def test_a_symbol_with_characters_unsafe_in_a_path_round_trips(tmp_path, symbol)
 def test_recording_numbers_count_up_across_the_cache(tmp_path):
     root = root_of(tmp_path)
 
-    assert [next_recording_number(root) for _ in range(3)] == [1, 2, 3]
+    assert [next_recording_number(root, DAY) for _ in range(3)] == [1, 2, 3]
 
 
 def test_a_lost_counter_never_gives_a_number_a_file_of_the_cache_has(tmp_path):
     write_raw(tmp_path, TWO, number=7)
     finalize(DAY, cache_dir=tmp_path)
 
-    assert next_recording_number(root_of(tmp_path)) == 8
+    assert next_recording_number(root_of(tmp_path), DAY + dt.timedelta(days=1)) == 8
+
+
+def test_a_counter_behind_the_days_files_never_gives_a_number_of_that_day(tmp_path):
+    root = root_of(tmp_path)
+    next_recording_number(root, DAY)  # the counter says 1, as a copy of the cache did
+    write_raw(tmp_path, TWO, number=5)
+    finalize(DAY, cache_dir=tmp_path)
+    (root / "recordings.json").write_text('{"last": 1}', "utf-8")
+
+    assert next_recording_number(root, DAY) == 6
+
+
+def test_a_counter_that_cannot_be_parsed_is_warned_of_and_the_files_decide(tmp_path, caplog):
+    write_raw(tmp_path, TWO, number=4)
+    finalize(DAY, cache_dir=tmp_path)
+    (root_of(tmp_path) / "recordings.json").write_text("{torn", "utf-8")
+
+    with caplog.at_level(logging.WARNING, logger="openalgo.backtest.live"):
+        number = next_recording_number(root_of(tmp_path), DAY + dt.timedelta(days=1))
+
+    assert (number, any("cannot be parsed" in r.getMessage() for r in caplog.records)) == (5, True)
+
+
+def test_a_finalized_file_another_recording_wrote_under_the_same_number_is_a_conflict(
+    tmp_path, caplog
+):
+    finalized_two(tmp_path)
+    # A recording numbered 1 again (the counter restored from a copy), started at 11:00.
+    later = [sbin("11:00:01", 815.0)]
+    raw = RawFile.create(raw_path(root_of(tmp_path), DAY, 1, 0), header_of(start="11:00:00"))
+    raw.append(records_of(rows_of(later)))
+    raw.close()
+
+    with caplog.at_level(logging.WARNING, logger="openalgo.backtest.live"):
+        report = finalize(DAY, cache_dir=tmp_path)
+
+    logged = any("conflict" in record.getMessage() for record in caplog.records)
+    assert (report.pending, raw.path.exists(), ltps(tmp_path), logged) == (
+        (1,),
+        True,
+        [812.4, 812.5],
+        True,
+    )
+
+
+def test_a_stop_sidecar_that_cannot_be_parsed_leaves_the_recording_crashed(tmp_path):
+    write_raw(tmp_path, TWO)
+    stop_path(root_of(tmp_path), DAY, 1).write_text("{torn", "utf-8")
+
+    report = finalize(DAY, cache_dir=tmp_path)
+
+    (span,) = read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).spans
+    noted = any("stop sidecar" in note for note in report.notes)
+    assert (span.ended_by, span.stop_ns, noted) == (Stop.CRASH, ist_ns("10:00:02"), True)
+
+
+def test_sidecars_left_once_their_raw_file_is_gone_are_removed_by_the_next_finalize(
+    tmp_path, monkeypatch
+):
+    write_raw(tmp_path, TWO)
+    stopped(tmp_path)
+    sidecar = stop_path(root_of(tmp_path), DAY, 1)
+    unlink = pathlib.Path.unlink
+
+    def held_open_elsewhere(file, missing_ok=False):
+        if file == sidecar:
+            raise PermissionError(13, "The process cannot access the file", str(file))
+        unlink(file, missing_ok=missing_ok)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", held_open_elsewhere)
+    finalize(DAY, cache_dir=tmp_path)
+    monkeypatch.setattr(pathlib.Path, "unlink", unlink)
+
+    report = finalize(DAY, cache_dir=tmp_path)
+
+    raw_folder = sidecar.parent
+    assert (report.pending, list(raw_folder.iterdir())) == ((), [])
 
 
 # ----- readers verify and never write -------------------------------------------------
@@ -505,14 +662,54 @@ def test_a_file_that_cannot_be_read_now_raises_an_os_error_naming_it(tmp_path, m
         read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path)
 
 
-def test_a_day_says_when_a_raw_file_of_it_is_still_pending(tmp_path):
+def test_a_day_names_the_recordings_of_it_still_pending(tmp_path):
     finalized_two(tmp_path)
     write_raw(tmp_path, [sbin("11:00:00", 815.0)], number=2, start="10:59:00")
 
     pending = read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).pending
     finalize(DAY, cache_dir=tmp_path)
 
-    assert (pending, read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).pending) == (True, False)
+    assert (pending, read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).pending) == ((2,), ())
+
+
+def test_a_reader_learns_what_is_pending_without_opening_a_raw_file(tmp_path, monkeypatch):
+    finalized_two(tmp_path)
+    write_raw(tmp_path, [sbin("11:00:00", 815.0)], number=2, start="10:59:00")
+    opened = []
+    real_open, read_bytes = open, pathlib.Path.read_bytes
+
+    def watched_open(file, *args, **kwargs):
+        opened.append(str(file))
+        return real_open(file, *args, **kwargs)
+
+    def watched_read(path):
+        opened.append(str(path))
+        return read_bytes(path)
+
+    monkeypatch.setattr("builtins.open", watched_open)
+    monkeypatch.setattr(pathlib.Path, "read_bytes", watched_read)
+
+    pending = read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).pending
+
+    assert (pending, [name for name in opened if name.endswith(".raw")]) == ((2,), [])
+
+
+def test_a_raw_file_without_a_start_sidecar_is_pending_for_every_instrument(tmp_path):
+    finalized_two(tmp_path)
+    write_raw(
+        tmp_path, [infy("11:00:00", 1_500.0)], number=2, start="10:59:00", instruments=(INFY,)
+    )
+    start_path(root_of(tmp_path), DAY, 2).unlink()
+
+    assert read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).pending == (2,)
+
+
+def test_a_day_read_skipping_damaged_files_returns_what_verifies_and_lists_them(tmp_path):
+    damaged_first_of_two(tmp_path)
+
+    day = read_day("NSE", "SBIN", DAY, cache_dir=tmp_path, skip_damaged=True)
+
+    assert (day.records["ltp"].tolist(), day.damaged) == ([815.0], (files_of(tmp_path)[0],))
 
 
 def test_reading_a_day_never_recorded_says_to_record_it(tmp_path):
@@ -562,8 +759,7 @@ def test_a_volume_of_0_is_stored_and_read_back_as_0(tmp_path):
 
 
 def test_the_queued_time_is_kept_beside_the_receive_time(tmp_path):
-    header = RawHeader(1, 0, DAY, ist_ns("10:00:00"), (SBIN,))
-    raw = RawFile.create(raw_path(root_of(tmp_path), DAY, 1, 0), header)
+    raw = RawFile.create(raw_path(root_of(tmp_path), DAY, 1, 0), header_of())
     tick = sbin("10:00:01.250", 812.4)
     raw.append(
         records_of([tick_row(tick, instrument=0, recording=1, seq=1, queued_ns=ist_ns("10:00:01"))])
@@ -587,7 +783,55 @@ def test_the_merged_read_follows_the_sequence_across_instruments(tmp_path):
 
     merged = read_merged_ticks(instruments, DAY, cache_dir=tmp_path)
 
-    assert [tick.ltp for tick in merged] == [812.4, 1_500.0, 812.5]
+    assert [tick.ltp for tick in merged.ticks] == [812.4, 1_500.0, 812.5]
+
+
+def half_finalized_second_recording(tmp_path, monkeypatch) -> None:
+    """Recording 1 of SBIN and INFY finalized; recording 2's finalize cut short after
+    SBIN's file, so its raw file waits."""
+    both = (SBIN, INFY)
+    write_raw(tmp_path, [sbin("10:00:01", 801.0), infy("10:00:02", 1501.0)], instruments=both)
+    stopped(tmp_path, instruments=both)
+    finalize(DAY, cache_dir=tmp_path)
+    second = [sbin("11:00:01", 802.0), infy("11:00:02", 1502.0)]
+    write_raw(tmp_path, second, number=2, start="11:00:00", instruments=both)
+    stopped(tmp_path, number=2, start="11:00:00", instruments=both, stop="11:01:00")
+    finalize_instrument = tick_finalize._finalize_instrument
+
+    def cut_after_sbin(root, start, exchange, symbol, *rest):
+        if symbol == "INFY":
+            raise KeyboardInterrupt
+        return finalize_instrument(root, start, exchange, symbol, *rest)
+
+    monkeypatch.setattr(tick_finalize, "_finalize_instrument", cut_after_sbin)
+    with pytest.raises(KeyboardInterrupt):
+        finalize(DAY, cache_dir=tmp_path)
+    monkeypatch.setattr(tick_finalize, "_finalize_instrument", finalize_instrument)
+
+
+def test_the_merged_read_leaves_out_a_recording_pending_for_any_instrument(tmp_path, monkeypatch):
+    half_finalized_second_recording(tmp_path, monkeypatch)
+    instruments = [{"exchange": "NSE", "symbol": "SBIN"}, {"exchange": "NSE", "symbol": "INFY"}]
+
+    merged = read_merged_ticks(instruments, DAY, cache_dir=tmp_path)
+
+    assert ([(tick.symbol, tick.ltp) for tick in merged.ticks], merged.left_out) == (
+        [("SBIN", 801.0), ("INFY", 1501.0)],
+        (2,),
+    )
+
+
+def test_the_merged_read_skipping_damaged_files_lists_them(tmp_path):
+    damaged_first_of_two(tmp_path)
+
+    merged = read_merged_ticks(
+        [{"exchange": "NSE", "symbol": "SBIN"}], DAY, cache_dir=tmp_path, skip_damaged=True
+    )
+
+    assert ([tick.ltp for tick in merged.ticks], merged.damaged) == (
+        [815.0],
+        (files_of(tmp_path)[0],),
+    )
 
 
 def test_a_moment_inside_a_crashed_recordings_span_has_unknown_coverage(tmp_path):
@@ -613,7 +857,7 @@ def test_a_moment_outside_every_span_is_not_recorded(tmp_path):
 def damaged_first_of_two(tmp_path) -> None:
     finalized_two(tmp_path)
     write_raw(tmp_path, [sbin("11:00:00", 815.0)], number=2, start="10:59:00")
-    stopped(tmp_path, number=2, stop="11:01:00")
+    stopped(tmp_path, number=2, start="10:59:00", stop="11:01:00")
     finalize(DAY, cache_dir=tmp_path)
     damage(files_of(tmp_path)[0])
 
@@ -621,27 +865,46 @@ def damaged_first_of_two(tmp_path) -> None:
 def test_repair_moves_a_damaged_file_aside_and_the_days_other_recordings_read(tmp_path):
     damaged_first_of_two(tmp_path)
 
-    moved = repair(DAY, cache_dir=tmp_path)
+    report = repair(DAY, cache_dir=tmp_path)
 
+    moved = report.moved
     assert (len(moved), all(path.exists() for path in moved), ltps(tmp_path)) == (2, True, [815.0])
 
 
-def test_a_file_repair_cannot_move_raises_an_os_error_naming_it(tmp_path, monkeypatch):
-    damaged_first_of_two(tmp_path)
-    ticks_path = files_of(tmp_path)[0]
+def held_open_by_a_reader(monkeypatch, held):
     replace = os.replace
 
     def held_open(source, target):
-        if pathlib.Path(source) == ticks_path:
+        if pathlib.Path(source) == held:
             raise PermissionError(13, "The process cannot access the file", str(source))
         replace(source, target)
 
     monkeypatch.setattr(os, "replace", held_open)
 
-    with pytest.raises(PermissionError, match="00000001.npy") as caught:
+
+def test_repair_reports_a_move_that_failed_and_still_makes_the_others(tmp_path, monkeypatch):
+    damaged_first_of_two(tmp_path)
+    ticks_path, sidecar_path = files_of(tmp_path)
+    held_open_by_a_reader(monkeypatch, sidecar_path)
+
+    report = repair(DAY, cache_dir=tmp_path)
+
+    (failed, why) = report.failed[0]
+    assert (failed, ticks_path.exists(), len(report.moved)) == (sidecar_path, False, 1)
+    assert "delete" not in why.lower()
+
+
+def test_repair_logs_every_file_it_moved_and_every_move_that_failed(tmp_path, monkeypatch, caplog):
+    damaged_first_of_two(tmp_path)
+    ticks_path, sidecar_path = files_of(tmp_path)
+    held_open_by_a_reader(monkeypatch, sidecar_path)
+
+    with caplog.at_level(logging.WARNING, logger="openalgo.backtest.live"):
         repair(DAY, cache_dir=tmp_path)
 
-    assert "delete" not in str(caught.value).lower() and ticks_path.exists()
+    messages = [(record.levelname, record.getMessage()) for record in caplog.records]
+    assert any(level == "WARNING" and "was moved aside" in text for level, text in messages)
+    assert any(level == "ERROR" and sidecar_path.name in text for level, text in messages)
 
 
 def test_a_recording_whose_damaged_file_was_moved_aside_finalizes_again_from_its_raw_file(

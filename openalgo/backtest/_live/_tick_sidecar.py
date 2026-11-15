@@ -2,9 +2,10 @@
 of a finalized file against it that finalize, the readers and repair all use.
 
 Beside each `<day>.<number>.npy` (one recording's ticks of one instrument) a
-`<day>.<number>.json` records the instrument, the day, the recording's number, the
-file's SHA-256 content hash, the tick count, the first and last receive time and the
-recording's span (its start and stop, how it stopped, its outages). The sidecar is
+`<day>.<number>.json` records the instrument, the day, the recording's number and
+random identity, the file's SHA-256 content hash, the tick count, the first and last
+receive time and the recording's span (its start and stop, how it stopped, its
+outages). The sidecar is
 written after the ticks, so it is the mark that a finalized file is whole. Only two
 things are damage: a hash that does not match, and a file that cannot be parsed (a
 ticks file without a sidecar is not finalized yet). An OSError other than a missing
@@ -24,14 +25,14 @@ from typing import Any
 
 import numpy as np
 
-from ._tick_files import TICK_DTYPE
+from ._tick_files import TICK_DTYPE, is_identity
 from ._tick_spans import Span, outages_to_json, span_from_json
 
 #: The version of a finalized file's sidecar.
-SIDECAR_VERSION = 3
+SIDECAR_VERSION = 4
 _KIND = "recorded_ticks"
 # Mixed into every hash, so that a change of the stored form changes the hashes.
-_HASH_HEADER = b"openalgo.backtest recorded ticks v3\n"
+_HASH_HEADER = b"openalgo.backtest recorded ticks v4\n"
 _HASH_PREFIX = "sha256:"
 
 
@@ -43,9 +44,16 @@ class Finalized:
     symbol: str
     day: dt.date
     recording: int
+    identity: str
     sha256: str
     ticks: int
     span: Span
+
+    def written_by(self, identity: str, start_ns: int, exchange: str, symbol: str) -> bool:
+        """Whether the recording of this identity and start wrote it, for the instrument:
+        a number reused (a counter restored from a copy of the cache) never matches."""
+        same_instrument = (self.exchange, self.symbol) == (exchange, symbol)
+        return self.identity == identity and self.span.start_ns == start_ns and same_instrument
 
 
 class State(enum.Enum):
@@ -75,7 +83,7 @@ def tick_hash(records: np.ndarray) -> str:
 
 
 def sidecar_bytes(
-    exchange: str, symbol: str, day: dt.date, records: np.ndarray, span: Span
+    exchange: str, symbol: str, day: dt.date, identity: str, records: np.ndarray, span: Span
 ) -> bytes:
     """The sidecar of finalized `records` (in receive order) of one recording."""
     receipts = records["ts_recv_ns"]
@@ -86,6 +94,7 @@ def sidecar_bytes(
         "symbol": symbol,
         "day": day.isoformat(),
         "recording": span.recording,
+        "identity": identity,
         "sha256": tick_hash(records),
         "ticks": len(records),
         "first_recv_ns": int(receipts[0]) if len(records) else None,
@@ -149,15 +158,18 @@ def _parsed(blob: bytes, day: dt.date, number: int) -> Finalized | str:
         same = stored["version"] == SIDECAR_VERSION and stored["kind"] == _KIND
         if not (same and stored["day"] == day.isoformat() and stored["recording"] == number):
             raise ValueError("it belongs to another day, recording or format")
-        sha, ticks = stored["sha256"], stored["ticks"]
+        sha, ticks, identity = stored["sha256"], stored["ticks"], stored["identity"]
         counted = isinstance(ticks, int) and not isinstance(ticks, bool) and ticks >= 0
         if not (isinstance(sha, str) and sha.startswith(_HASH_PREFIX) and counted):
             raise ValueError("its hash or tick count is malformed")
+        if not is_identity(identity):
+            raise ValueError("its recording's identity is malformed")
         return Finalized(
             exchange=_text(stored["exchange"]),
             symbol=_text(stored["symbol"]),
             day=day,
             recording=number,
+            identity=identity,
             sha256=sha,
             ticks=ticks,
             span=span_from_json(stored, number),

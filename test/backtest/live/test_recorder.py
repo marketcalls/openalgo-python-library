@@ -111,7 +111,7 @@ def test_an_instrument_without_a_tick_reads_back_as_a_recorded_day_with_none(tmp
     assert read_ticks("NSE", "INFY", DAY, cache_dir=tmp_path) == []
 
 
-def test_the_summary_lists_the_day_file_of_each_instrument(tmp_path):
+def test_the_summary_lists_the_finalized_file_of_each_instrument(tmp_path):
     clocks, feed, script = recording()
     push_at(script, feed, "10:00:01", quote("SBIN", 812.4))
 
@@ -213,7 +213,7 @@ def test_the_merged_read_orders_ticks_of_one_instant_as_they_were_taken(tmp_path
     run(tmp_path, clocks, feed, script, (SBIN, INFY))
 
     merged = read_merged_ticks([SBIN, INFY], DAY, cache_dir=tmp_path)
-    assert [tick.symbol for tick in merged] == ["INFY", "SBIN"]
+    assert [tick.symbol for tick in merged.ticks] == ["INFY", "SBIN"]
 
 
 def test_the_merged_read_keeps_the_receive_order_when_the_wall_clock_steps_back(tmp_path):
@@ -226,7 +226,7 @@ def test_the_merged_read_keeps_the_receive_order_when_the_wall_clock_steps_back(
     run(tmp_path, clocks, feed, script, (SBIN, INFY))
 
     merged = read_merged_ticks([INFY, SBIN], DAY, cache_dir=tmp_path)
-    assert [(tick.symbol, tick.ts_recv_ns) for tick in merged] == [
+    assert [(tick.symbol, tick.ts_recv_ns) for tick in merged.ticks] == [
         ("SBIN", ist_ns("10:00:01")),
         ("INFY", ist_ns("09:50:02")),
     ]
@@ -249,7 +249,7 @@ def test_the_recordings_of_a_day_merge_in_the_order_they_ran_whatever_the_wall_c
 
     merged = read_merged_ticks([SBIN], DAY, cache_dir=tmp_path)
 
-    assert [tick.ltp for tick in merged] == [1.0, 2.0]
+    assert [tick.ltp for tick in merged.ticks] == [1.0, 2.0]
 
 
 # ----- stopping -----------------------------------------------------------------------
@@ -705,6 +705,79 @@ def test_ticks_of_an_instrument_not_asked_for_are_counted_and_not_recorded(tmp_p
     summary = run(tmp_path, clocks, feed, script)
 
     assert (summary.not_asked, summary.lost, ltps(tmp_path)) == (1, 0, [])
+
+
+def test_a_counter_restored_from_a_copy_never_makes_a_recording_reuse_a_number_of_its_day(
+    tmp_path,
+):
+    def recorded(start: str, ltp: float):
+        clocks, feed, script = recording(start=start)
+        script.at(ist_ns(start) + NS // 2, lambda: feed.push(quote("SBIN", ltp)))
+        return run(tmp_path, clocks, feed, script, stop_at_ns=ist_ns(start) + 5 * NS)
+
+    first = recorded("09:30:00", 801.0)
+    counter = ticks_root(tmp_path) / "recordings.json"
+    copy = counter.read_bytes()
+    second = recorded("10:00:00", 802.0)
+    counter.write_bytes(copy)  # restored from a copy of the cache
+
+    third = recorded("11:00:00", 803.0)
+
+    numbers = [summary.recording for summary in (first, second, third)]
+    assert (numbers, ltps(tmp_path)) == ([1, 2, 3], [801.0, 802.0, 803.0])
+
+
+# ----- a Ctrl+C before recording, and errors while finalizing --------------------------
+
+
+class InterruptedWhile(FakeFeed):
+    """A feed whose `connect` or `subscribe_quote` is interrupted by a Ctrl+C."""
+
+    def __init__(self, call: str) -> None:
+        super().__init__()
+        self.interrupted_call = call
+
+    def connect(self) -> bool:
+        if self.interrupted_call == "connect":
+            raise KeyboardInterrupt
+        return super().connect()
+
+    def subscribe_quote(self, instruments, on_data_received=None) -> bool:
+        if self.interrupted_call == "subscribe":
+            raise KeyboardInterrupt
+        return super().subscribe_quote(instruments, on_data_received)
+
+
+@pytest.mark.parametrize("call", ["connect", "subscribe"])
+def test_a_ctrl_c_while_connecting_or_subscribing_returns_the_summary(tmp_path, call):
+    clocks, _, script = recording()
+
+    summary = run(tmp_path, clocks, InterruptedWhile(call), script)
+
+    assert (summary.stopped_by, summary.started_ns) == (Stop.INTERRUPT, ist_ns(START))
+
+
+@pytest.mark.parametrize("call", ["connect", "subscribe"])
+def test_a_ctrl_c_while_connecting_or_subscribing_is_written_as_interrupted(tmp_path, call):
+    clocks, _, script = recording()
+
+    summary = run(tmp_path, clocks, InterruptedWhile(call), script)
+
+    (span,) = read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).spans
+    assert (span.ended_by, span.start_ns) == (Stop.INTERRUPT, summary.started_ns)
+
+
+def test_an_error_of_any_kind_while_finalizing_is_kept_in_the_summary(tmp_path, monkeypatch):
+    clocks, feed, script = recording()
+
+    def broken(*args):
+        raise ValueError("a bug")
+
+    monkeypatch.setattr(recorder_loop, "finalize_pending", broken)
+
+    summary = run(tmp_path, clocks, feed, script)
+
+    assert isinstance(summary.error, ValueError)
 
 
 # ----- where the cache is -------------------------------------------------------------

@@ -130,7 +130,34 @@ def test_a_second_ctrl_c_while_the_last_ticks_are_written_loses_no_tick(tmp_path
     assert ltps(tmp_path) == [812.4]
 
 
-def test_a_batch_written_twice_after_a_ctrl_c_right_after_its_write_is_kept_once(
+def test_a_batch_written_twice_after_a_ctrl_c_right_after_its_append_is_kept_once(
+    tmp_path, monkeypatch
+):
+    clocks, feed, script = recording()
+    script.at(ist_ns("10:00:00.500"), lambda: feed.push(quote("SBIN", 812.4)))
+    append = RawFile.append
+    appends = []
+
+    def append_then_ctrl_c(raw, records):
+        append(raw, records)
+        appends.append(len(records))
+        if len(appends) == 1:
+            raise KeyboardInterrupt  # the frame is whole on disk; the batch is still held
+
+    monkeypatch.setattr(RawFile, "append", append_then_ctrl_c)
+
+    summary = run(tmp_path, clocks, feed, script)
+
+    # The raw file held the batch twice; the second copy does not increase the sequence.
+    assert (len(appends), ltps(tmp_path), summary.duplicates, summary.rejected) == (
+        2,
+        [812.4],
+        1,
+        0,
+    )
+
+
+def test_a_ctrl_c_in_the_middle_of_a_write_cuts_the_frame_off_before_writing_it_again(
     tmp_path, monkeypatch
 ):
     clocks, feed, script = recording()
@@ -142,14 +169,18 @@ def test_a_batch_written_twice_after_a_ctrl_c_right_after_its_write_is_kept_once
         write(raw, data)
         writes.append(len(data))
         if len(writes) == 1:
-            raise KeyboardInterrupt
+            raise KeyboardInterrupt  # before the write was synced and counted whole
 
     monkeypatch.setattr(RawFile, "_write_bytes", write_then_ctrl_c)
 
     summary = run(tmp_path, clocks, feed, script)
 
-    # The raw file held the batch twice; the second copy does not increase the sequence.
-    assert (len(writes), ltps(tmp_path), summary.rejected) == (2, [812.4], 1)
+    assert (len(writes), ltps(tmp_path), summary.duplicates, summary.rejected) == (
+        2,
+        [812.4],
+        0,
+        0,
+    )
 
 
 # ----- write failures -----------------------------------------------------------------
@@ -200,6 +231,27 @@ def test_after_a_write_cut_short_the_raw_file_is_cut_back_to_its_last_whole_reco
 
     # Half a record was cut off before the batch was written again: nothing is skipped.
     assert (ltps(tmp_path), summary.rejected) == ([812.4], 0)
+
+
+def test_after_the_final_write_failed_too_the_summary_counts_what_reached_the_disk(
+    tmp_path, monkeypatch
+):
+    # Two torn writes, and no tear can be cut off: the recording goes on in part 1, whose
+    # one frame is torn as well. Nothing whole reached the disk.
+    clocks, feed, script = recording()
+    script.at(ist_ns("10:00:00.200"), lambda: feed.push(quote("SBIN", 812.4)))
+    script.at(ist_ns("10:00:00.400"), lambda: feed.push(quote("SBIN", 812.5)))
+    failing_writes(monkeypatch, fail=2, partial=True)
+
+    def cannot_truncate(raw, size):
+        raise OSError(errno.EACCES, "Access is denied")
+
+    monkeypatch.setattr(RawFile, "_truncate", cannot_truncate)
+
+    summary = run(tmp_path, clocks, feed, script)
+
+    read_back = ltps(tmp_path)
+    assert (summary.ticks[("NSE", "SBIN")], summary.lost) == (len(read_back), 2 - len(read_back))
 
 
 def test_when_a_tear_cannot_be_cut_off_writing_moves_to_a_new_raw_file(tmp_path, monkeypatch):

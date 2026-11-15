@@ -30,8 +30,23 @@ from pathlib import Path
 from typing import Any
 
 from .._layout import NANOS_PER_SECOND
-from ._tick_files import instrument_key, ist_day, raw_path, records_of, tick_row
-from ._tick_finalize import RecordingFinalized, StopFacts, finalize_pending, write_stop
+from ._tick_files import (
+    instrument_key,
+    ist_day,
+    new_identity,
+    raw_path,
+    records_of,
+    start_path,
+    tick_row,
+)
+from ._tick_finalize import (
+    RecordingFinalized,
+    StartFacts,
+    StopFacts,
+    finalize_pending,
+    write_start,
+    write_stop,
+)
 from ._tick_raw import RawFile, RawHeader
 from ._tick_spans import Outage, Stop
 from ._types import LOGGER_NAME, Now, Sleep
@@ -74,6 +89,7 @@ class Recording:
         queue_size: int,
     ) -> None:
         self.number = number
+        self.identity = new_identity()
         self.started_ns: int | None = None
         self.stopped_ns: int | None = None
         self.notes: list[str] = []
@@ -92,6 +108,7 @@ class Recording:
         self._outages: list[Outage] = []
         self._tally = TickTally()
         self._header: RawHeader | None = None
+        self._start: StartFacts | None = None
         self._file: RawFile | None = None
         self._parts: list[RawFile] = []
         self._kept: list[tuple] = []
@@ -133,12 +150,34 @@ class Recording:
     # ----- the writer's thread --------------------------------------------------------
 
     def open(self) -> None:
-        """Start the recording now: create its raw file, whose header lists the
-        instruments. Raises OSError when it cannot be made."""
+        """Start the recording now: write its start sidecar (what readers learn pending
+        from), then create its raw file, whose header lists the instruments. Raises OSError
+        when either cannot be made (the start sidecar is then removed again)."""
         self.started_ns = self._now()
         day = ist_day(self.started_ns)
-        self._header = RawHeader(self.number, 0, day, self.started_ns, self._instruments)
-        self._file = self._create(0)
+        self._start = StartFacts(
+            self.number, self.identity, day, self.started_ns, self._instruments
+        )
+        self._header = RawHeader(
+            self.number, self.identity, 0, day, self.started_ns, self._instruments
+        )
+        write_start(self._root, self._start)
+        try:
+            self._file = self._create(0)
+        except BaseException:
+            start_path(self._root, day, self.number).unlink(missing_ok=True)
+            raise
+
+    def discard(self) -> None:
+        """Remove the files of a recording that never took a message (its feed did not
+        connect): an empty raw file and its start sidecar hold no tick. Raises OSError when
+        one cannot be removed."""
+        if self._header is None or self._taken:
+            return
+        self.close()
+        for part in self._parts:
+            part.path.unlink(missing_ok=True)
+        start_path(self._root, self._header.day, self.number).unlink(missing_ok=True)
 
     def run_until(self, stop_ns: int) -> bool:
         """Take the queued ticks into the raw file until the wall clock reaches
@@ -176,7 +215,7 @@ class Recording:
         finalize knows its stop and outages. Raises OSError when it cannot be written."""
         if self._header is not None:
             facts = StopFacts(stopped_by, self.stopped_ns, self.outages)
-            write_stop(self._root, self._header.day, self.number, facts)
+            write_stop(self._root, self._start, facts)
 
     def close(self) -> None:
         """Close every raw file part not closed yet; a failure is noted."""
@@ -198,8 +237,14 @@ class Recording:
 
     @property
     def ticks(self) -> dict[tuple[str, str], int]:
-        """Ticks written per (exchange, symbol)."""
+        """Ticks the writer wrote per (exchange, symbol), by its own count (the summary
+        counts the finalized files instead, when there are)."""
         return dict(self._ticks)
+
+    @property
+    def taken(self) -> int:
+        """Messages taken off the queue."""
+        return self._taken
 
     @property
     def not_asked(self) -> int:
@@ -290,8 +335,9 @@ class Recording:
             self._file.append(records)
 
     def _create(self, part: int) -> RawFile:
+        start = self._start
         header = RawHeader(
-            self.number, part, self._header.day, self._header.start_ns, self._instruments
+            self.number, self.identity, part, start.day, start.start_ns, self._instruments
         )
         file = RawFile.create(raw_path(self._root, header.day, self.number, part), header)
         self._parts.append(file)

@@ -7,17 +7,23 @@ absolute folder here: recorded ticks cannot be fetched again), names made safe w
 
     v2/ticks/recorder.lock                                 held while one writes
     v2/ticks/recordings.json                               the last recording number
+    v2/ticks/raw/<YYYY-MM-DD>.<number>.start.json          what a recording records
     v2/ticks/raw/<YYYY-MM-DD>.<number>.p<part>.raw         a recording's raw file
     v2/ticks/raw/<YYYY-MM-DD>.<number>.stop.json           how it stopped
     v2/ticks/exchange=<X>/symbol=<S>/<YYYY-MM-DD>.<number>.npy    finalized ticks
     v2/ticks/exchange=<X>/symbol=<S>/<YYYY-MM-DD>.<number>.json   their sidecar
 
 Every recording has a number, a counter for the whole cache taken under the recorder's
-lock when it starts: recordings are ordered by it, never by the wall clock. A recording
-covers one IST day and writes one raw file with all its instruments (another part only
-when a torn end cannot be cut off); finalizing turns it into one `.npy` and one sidecar
-per instrument, written once and never rewritten. Exchanges and symbols are upper case,
-as OpenAlgo writes them, so one instrument has one folder on any disk.
+lock when it starts (above the counter file and every number on the start day's files,
+so a counter restored from a copy reuses none): recordings are ordered by it, never by
+the wall clock. It also has a random identity, which its raw file and every sidecar
+carry, so that a file is matched to the recording that wrote it exactly. A recording
+covers one IST day; its start sidecar lists its instruments, so that a reader learns
+what is pending from it and the directory listing, never opening a raw file. It writes
+one raw file with all its instruments (another part only when a torn end cannot be cut
+off); finalizing turns it into one `.npy` and one sidecar per instrument, written once
+and never rewritten. Exchanges and symbols are upper case, as OpenAlgo writes them, so
+one instrument has one folder on any disk.
 
 A finalized tick is one record of `TICK_DTYPE`; a raw record (`RAW_DTYPE`) also carries
 the index of its instrument in the raw file's header. `recording` is the recording's
@@ -78,11 +84,14 @@ TICKS_FOLDER = "ticks"
 RAW_FOLDER = "raw"
 COUNTER_NAME = "recordings.json"
 RAW_SUFFIX = ".raw"
+START_SUFFIX = ".start.json"
 STOP_SUFFIX = ".stop.json"
 DAY_SUFFIX = ".npy"
 SIDECAR_SUFFIX = ".json"
 # Digits of a recording number in a file name: names of one day sort by number.
 _NUMBER_DIGITS = 8
+# Hex characters of a recording's identity: 64 random bits, so two never share one.
+_IDENTITY_CHARS = 16
 # Hex characters of the suffix that keeps a moved-aside file's name unique.
 _ASIDE_CHARS = 8
 _NANOS_PER_DAY = SECONDS_PER_DAY * NANOS_PER_SECOND
@@ -152,6 +161,22 @@ def stop_path(root: Path, day: dt.date, number: int) -> Path:
     return root / RAW_FOLDER / f"{day.isoformat()}.{number_text(number)}{STOP_SUFFIX}"
 
 
+def start_path(root: Path, day: dt.date, number: int) -> Path:
+    """The sidecar that says what a recording records, beside its raw file."""
+    return root / RAW_FOLDER / f"{day.isoformat()}.{number_text(number)}{START_SUFFIX}"
+
+
+def sidecar_numbers(root: Path, day: dt.date) -> list[int]:
+    """The recordings of an IST day with a start or stop sidecar in the raw folder."""
+    numbers = set()
+    for suffix in (START_SUFFIX, STOP_SUFFIX):
+        for path in (root / RAW_FOLDER).glob(f"{day.isoformat()}.*{suffix}"):
+            piece = path.name.split(".")[1]
+            if piece.isdecimal():
+                numbers.add(int(piece))
+    return sorted(numbers)
+
+
 def raw_parts_of(root: Path, day: dt.date) -> dict[int, list[Path]]:
     """The raw files of an IST day by recording number, each recording's parts in
     order."""
@@ -181,10 +206,13 @@ def finalized_numbers(folder: Path, day: dt.date) -> list[int]:
     return sorted(numbers)
 
 
-def next_recording_number(root: Path) -> int:
-    """Take the next recording number for the cache, under the recorder's lock: one more
-    than the last taken and than any number a file of the cache carries (so a lost
-    counter file never reuses one). Raises OSError when the counter cannot be written."""
+def next_recording_number(root: Path, day: dt.date) -> int:
+    """Take the next recording number for the cache, under the recorder's lock, for a
+    recording that starts on the IST day `day`: one more than the last taken, than any
+    number of a raw file, and than any number of that day's finalized files (so a lost
+    counter, or one restored from a copy of the cache, never reuses a number of the day;
+    without a readable counter every finalized file is looked at). Raises OSError when
+    the counter cannot be written."""
     counter = root / COUNTER_NAME
     try:
         last = json.loads(counter.read_bytes().decode("utf-8"))["last"]
@@ -201,6 +229,8 @@ def next_recording_number(root: Path) -> int:
         )
     last = last if known else 0
     numbers = [last, *_numbers_in(root / RAW_FOLDER)]
+    for folder in instrument_folders(root):
+        numbers.extend(_numbers_in(folder, pattern=f"{day.isoformat()}.*"))
     if not known:  # the counter is gone or unreadable: every finalized file is looked at
         numbers.extend(_numbers_in(root, recursive=True))
     number = max(numbers) + 1
@@ -210,10 +240,26 @@ def next_recording_number(root: Path) -> int:
     return number
 
 
-def _numbers_in(folder: Path, *, recursive: bool = False) -> list[int]:
-    paths = folder.rglob("????-??-??.*") if recursive else folder.glob("????-??-??.*")
+def _numbers_in(
+    folder: Path, *, pattern: str = "????-??-??.*", recursive: bool = False
+) -> list[int]:
+    paths = folder.rglob(pattern) if recursive else folder.glob(pattern)
     pieces = (path.name.split(".") for path in paths)
     return [int(piece[1]) for piece in pieces if len(piece) >= 3 and piece[1].isdecimal()]
+
+
+def new_identity() -> str:
+    """A recording's random identity: 16 hex digits."""
+    return uuid.uuid4().hex[:_IDENTITY_CHARS]
+
+
+def is_identity(text: object) -> bool:
+    """Whether `text` is an identity `new_identity` could have made."""
+    return (
+        isinstance(text, str)
+        and len(text) == _IDENTITY_CHARS
+        and set(text) <= set("0123456789abcdef")
+    )
 
 
 def ist_day(instant_ns: int) -> dt.date:
@@ -298,6 +344,7 @@ __all__ = [
     "RAW_FOLDER",
     "RAW_SUFFIX",
     "SIDECAR_SUFFIX",
+    "START_SUFFIX",
     "STOP_SUFFIX",
     "TICKS_FOLDER",
     "TICK_DTYPE",
@@ -309,13 +356,17 @@ __all__ = [
     "instrument_folders",
     "instrument_key",
     "instrument_of",
+    "is_identity",
     "ist_day",
+    "new_identity",
     "next_recording_number",
     "number_text",
     "raw_parts_of",
     "raw_path",
     "records_of",
     "set_aside",
+    "sidecar_numbers",
+    "start_path",
     "stop_path",
     "tick_row",
     "ticks_of",

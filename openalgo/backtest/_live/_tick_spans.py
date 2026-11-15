@@ -14,6 +14,7 @@ import datetime as dt
 import enum
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -76,9 +77,11 @@ class RecordedDay:
     """One instrument's recorded ticks of an IST day.
 
     `records` are of `TICK_DTYPE`, in receive order (by recording number, each in its
-    sequence); `spans` the recordings that wrote them, in the same order; `pending` is
-    True when a raw file of the day that lists the instrument waits to be finalized (a
-    recording runs, or one crashed): its ticks are not in `records` yet.
+    sequence); `spans` the recordings that wrote them, in the same order; `pending` the
+    recordings of the day whose raw file lists the instrument and waits to be finalized
+    (one runs, or one crashed or was cut short while finalizing): their ticks may be
+    missing from `records`. `damaged` lists the files skipped as damaged, only when read
+    with `skip_damaged=True` (otherwise a damaged file raises).
     """
 
     exchange: str
@@ -86,7 +89,8 @@ class RecordedDay:
     day: dt.date
     records: np.ndarray
     spans: tuple[Span, ...]
-    pending: bool
+    pending: tuple[int, ...]
+    damaged: tuple[Path, ...] = ()
 
     @property
     def outages(self) -> tuple[Outage, ...] | None:
