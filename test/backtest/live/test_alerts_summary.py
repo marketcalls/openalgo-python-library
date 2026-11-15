@@ -23,6 +23,7 @@ A_GOOD_DAY = SessionSummary(
     rejected_orders=1,
     unprotected_seconds=0.0,
     reconcile_mismatches=0,
+    undelivered_alerts=0,
     flat=True,
 )
 
@@ -38,6 +39,7 @@ A_BAD_DAY = SessionSummary(
     rejected_orders=2,
     unprotected_seconds=12.4,
     reconcile_mismatches=1,
+    undelivered_alerts=2,
     flat=False,
 )
 
@@ -79,8 +81,17 @@ def test_a_live_day_with_a_loss_that_ended_open_reads_so():
         "Rejected    : 2 orders\n"
         "Unprotected : 12 s without a stop at the broker\n"
         "Reconcile   : 1 mismatch\n"
+        "Alerts      : 2 not delivered\n"
         "End state   : not flat: a position is still open"
     )
+
+
+def test_the_alerts_line_is_left_out_when_every_alert_reached_openalgo():
+    assert "Alerts" not in summary_text(A_GOOD_DAY)
+
+
+def test_one_alert_not_delivered_is_shown():
+    assert line(replace(A_GOOD_DAY, undelivered_alerts=1), "Alerts") == "1 not delivered"
 
 
 def test_the_net_pnl_is_the_gross_pnl_less_the_modelled_charges():

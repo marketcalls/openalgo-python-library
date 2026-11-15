@@ -7,30 +7,28 @@ or "LIVE"), and the session's strategies when known, so a message read on a phon
 be taken for the other mode. Each kind of alert has a priority (`ALERT_PRIORITY`); a mode
 breach, a dead feed, a reconciliation mismatch and an error are the most urgent.
 
-An alert never raises into the session loop. A send that fails (an error answer, a
-transport failure, an exception from the client) is logged and counted in `failures`.
-The same alert is sent at most once in `REPEAT_WINDOW_SECONDS` by the session's clock,
-counted in `suppressed`, so a condition the loop reports on every tick reaches the phone
-once a minute. Without an OpenAlgo username alerts go to the log only.
-
-OpenAlgo sends the text with Telegram's legacy Markdown parse mode
-(services/telegram_alert_service.py, send_alert_sync), where the underscore, the
-asterisk, the backtick and the opening bracket start formatting: the text between a
-strategy named "ema_cross" and a symbol with an underscore would turn italic and lose
-both underscores. The text is escaped so it arrives exactly as written, and cut to
-Telegram's 4096-character limit (the full alert stays in the log).
+An alert never raises into the session loop and never makes it wait. `send` logs the
+alert and puts it on a bounded queue (`_alerts_queue`); one sender thread, a daemon
+started with the alerts, posts it, so a server that does not answer holds the sender,
+not the loop. A send that fails (an error answer, a transport failure, an exception from
+the client) is logged and counted in `failures` by the sender; a full queue drops the
+oldest alert of the lowest priority, counted in `dropped`. The same alert is queued at
+most once in `REPEAT_WINDOW_SECONDS` by the session's clock, counted in `suppressed`, so
+a condition the loop reports on every tick reaches the phone once a minute. Without an
+OpenAlgo username alerts go to the log only and no thread is started. The text is
+escaped for Telegram and cut to its limit as `_alerts_telegram` describes.
 
 `SessionSummary` and `summary_text` (in `_alerts_summary`) and `SessionLogs` and
 `configure_session_logs` (in `_alerts_logs`) are re-exported here.
 
-Not thread-safe: the session loop owns its alerts, as it owns the engine.
+The session loop calls `send`, `test` and `close`; the counts may be read from any
+thread.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import re
+import threading
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Any, Protocol
@@ -38,7 +36,9 @@ from typing import Any, Protocol
 from .._layout import NANOS_PER_SECOND
 from ..errors import ConfigError
 from ._alerts_logs import SessionLogs, configure_session_logs
+from ._alerts_queue import AlertQueue, QueuedAlert
 from ._alerts_summary import SessionSummary, summary_text
+from ._alerts_telegram import TELEGRAM_MAX_CHARS, delivery_failure, failure_reason, telegram_text
 from ._types import LOGGER_NAME, AlertKind, Mode, Now
 
 #: The priorities OpenAlgo's notify endpoint accepts, low to urgent; it sends any other
@@ -66,31 +66,20 @@ ALERT_PRIORITY: Mapping[AlertKind, int] = MappingProxyType(
 
 #: Seconds within which the same alert is not sent again (the alerts brief, Phase 2 step 8).
 REPEAT_WINDOW_SECONDS = 60
-#: The longest text Telegram's sendMessage takes, in characters (Telegram Bot API; also
-#: in the SDK's `telegram` docstring).
-TELEGRAM_MAX_CHARS = 4096
+#: The most alerts waiting for the sender: two minutes of alerts at the notify endpoint's
+#: rate limit of 30 a minute (restx_api/telegram_bot.py, TELEGRAM_RATE_LIMIT).
+QUEUE_SIZE = 60
+#: Seconds `close` waits for the sender to post what is queued: a server that answers
+#: takes a few alerts in well under that, and a stopping session is not held longer.
+CLOSE_WAIT_SECONDS = 5.0
+#: The name of the sender thread.
+SENDER_THREAD_NAME = "openalgo-live-alerts"
 
 TEST_ALERT_TEXT = "Test alert from bt.live: the alerts of this session reach you here."
 
 # Alerts of at least this priority are logged as warnings, the rest as information.
 _WARNING_PRIORITY = 9
 _REPEAT_WINDOW_NS = REPEAT_WINDOW_SECONDS * NANOS_PER_SECOND
-# No Markdown character in it, so a cut text is exactly the limit long.
-_CUT_MARKER = "\n(cut to fit Telegram: the full alert is in the session log)"
-# The characters that start formatting in Telegram's legacy Markdown, escaped with a
-# backslash to be shown as written (Telegram Bot API, "Markdown style").
-_MARKDOWN_SPECIAL = re.compile(r"([_*`\[])")
-# The SDK's wrapper of a non-200 answer: "HTTP <code>: <body>" (openalgo/telegram.py,
-# _handle_response); the body is the server's JSON answer.
-_HTTP_WRAPPER = re.compile(r"HTTP (\d{3}): (.*)", re.DOTALL)
-# What the notify endpoint answers when it waited for Telegram and Telegram took the
-# message (restx_api/telegram_bot.py, SendNotification, wait_for_delivery). Without the
-# wait, or when Telegram refused, it answers "Notification queued for delivery".
-_DELIVERED_MESSAGE = "Notification sent successfully"
-# The longest server body quoted in a failure reason, in characters: an HTML error page
-# of a proxy says nothing more past its first line.
-_MAX_REASON_CHARS = 200
-_SUCCESS = "success"
 _NO_USERNAME = "no OpenAlgo username was given, so alerts go to the log only"
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -106,11 +95,13 @@ class _TelegramClient(Protocol):
 class Alerts:
     """The alerts of one live session (implements `AlertsLike`).
 
-    `client` is an `openalgo.api` client; only `telegram()` is called. `username` is the
-    OpenAlgo login username linked to the Telegram bot (not the Telegram handle), or None
-    to send alerts to the log only. `mode` is the mode adopted at the session's start,
-    `now` gives the present in UTC nanoseconds, and `strategies` names the session's
-    strategies for the start of every alert.
+    `client` is an `openalgo.api` client; only `telegram()` is called, from the sender
+    thread and from `test`. `username` is the OpenAlgo login username linked to the
+    Telegram bot (not the Telegram handle), or None to send alerts to the log only.
+    `mode` is the mode adopted at the session's start, `now` gives the present in UTC
+    nanoseconds, and `strategies` names the session's strategies for the start of every
+    alert. With `start_sender` False no thread is started and the queue is delivered by
+    calling `deliver_queued` (how the tests drive it). Call `close` at the session's end.
 
     Raises ConfigError for a `username` that is neither None nor a non-empty string, a
     `mode` that is not a `Mode`, or `strategies` that are not a sequence of names.
@@ -124,6 +115,7 @@ class Alerts:
         mode: Mode,
         now: Now,
         strategies: Sequence[str] = (),
+        start_sender: bool = True,
     ) -> None:
         if username is not None and (not isinstance(username, str) or not username.strip()):
             raise ConfigError(
@@ -145,14 +137,35 @@ class Alerts:
         self._now = now
         self._prefix = _prefix(mode, names)
         self._last_sent_ns: dict[tuple[AlertKind, str], int] = {}
-        self._failures = 0
         self._suppressed = 0
+        self._queue = AlertQueue(QUEUE_SIZE)
+        # The sender writes the failure counts while the loop may read them.
+        self._counts = threading.Lock()
+        self._failures = 0
         self._last_failure: str | None = None
+        self._sender: threading.Thread | None = None
+        if username is not None and start_sender:
+            self._sender = threading.Thread(target=self._run, name=SENDER_THREAD_NAME, daemon=True)
+            self._sender.start()
 
     @property
     def failures(self) -> int:
-        """Sends that failed, the test alert's included."""
-        return self._failures
+        """Alerts the sender posted and OpenAlgo did not take (the test alert is not
+        counted)."""
+        with self._counts:
+            return self._failures
+
+    @property
+    def dropped(self) -> int:
+        """Alerts never posted: dropped from a full queue, sent after `close`, or still
+        queued when `close` stopped waiting."""
+        return self._queue.dropped
+
+    @property
+    def undelivered(self) -> int:
+        """Alerts of the session that did not reach OpenAlgo: `failures` plus `dropped`
+        (the daily summary's figure)."""
+        return self.failures + self.dropped
 
     @property
     def suppressed(self) -> int:
@@ -162,15 +175,16 @@ class Alerts:
     @property
     def last_failure(self) -> str | None:
         """Why the last send or test alert failed, in words, or None when none failed."""
-        return self._last_failure
+        with self._counts:
+            return self._last_failure
 
     def send(self, kind: AlertKind, text: str) -> None:
-        """Send an alert of `kind`, its text starting with the mode and the strategies.
+        """Queue an alert of `kind`, its text starting with the mode and the strategies.
 
-        Logged, as a warning from priority 9 up, and sent through Telegram when a username
-        was given. The same kind and text again within `REPEAT_WINDOW_SECONDS` of the last
-        time it went out is counted in `suppressed`, logged at debug level only and not
-        sent. Never raises: a failed send is logged and counted in `failures`, and a `kind`
+        Logged at once, as a warning from priority 9 up, and queued for the sender when a
+        username was given; it never waits for OpenAlgo. The same kind and text again
+        within `REPEAT_WINDOW_SECONDS` of the last time it was queued is counted in
+        `suppressed`, logged at debug level only and not queued. Never raises: a `kind`
         that is not an `AlertKind` is sent as an ERROR alert.
         """
         if not isinstance(kind, AlertKind):
@@ -185,30 +199,64 @@ class Alerts:
         self._last_sent_ns[(kind, message)] = now_ns
         logger.log(_log_level(kind), "alert %s: %s", kind.value, message)
         if self._username is not None:
-            self._note(kind, self._deliver(kind, message, wait=False))
+            self._enqueue(QueuedAlert(kind, message, ALERT_PRIORITY[kind]))
 
     def test(self) -> bool:
-        """Send a test alert and wait for OpenAlgo to say Telegram took it.
+        """Send a test alert now, on the calling thread, and wait for OpenAlgo to say
+        Telegram took it.
 
         True only when Telegram confirmed the delivery; False with no username, for an
         error answer, or when OpenAlgo only queued the message (the bot could not reach
         Telegram), with the reason in `last_failure`. The preflight requires it in LIVE
         mode and warns without it in SANDBOX mode. It waits as long as OpenAlgo waits on
         Telegram (within the client's timeout), so it belongs before the session, not in
-        its loop. Bypasses the repeat window and never raises.
+        its loop. Bypasses the repeat window and the queue, and never raises.
         """
         message = f"{self._prefix}{TEST_ALERT_TEXT}"
-        if self._username is None:
-            self._last_failure = _NO_USERNAME
-            logger.warning("test alert not sent: %s", _NO_USERNAME)
-            return False
-        logger.info("test alert: %s", message)
-        failure = self._deliver(AlertKind.SESSION, message, wait=True)
-        self._note(AlertKind.SESSION, failure)
-        return failure is None
+        failure = _NO_USERNAME
+        if self._username is not None:
+            logger.info("test alert: %s", message)
+            failure = self._deliver(AlertKind.SESSION, message, wait=True)
+            if failure is None:
+                return True
+        with self._counts:
+            self._last_failure = failure
+        logger.warning("test alert not delivered: %s", failure)
+        return False
+
+    def deliver_queued(self) -> int:
+        """Post every queued alert on the calling thread, oldest first; returns how many.
+        The sender thread does this work: call it only on alerts made with
+        `start_sender=False`."""
+        posted = 0
+        while (alert := self._queue.take(wait=False)) is not None:
+            self._deliver_queued(alert)
+            posted += 1
+        return posted
+
+    def close(self, wait_seconds: float = CLOSE_WAIT_SECONDS) -> None:
+        """Stop taking alerts and give the sender up to `wait_seconds` to post what is
+        queued; what it has not posted by then is dropped, counted and logged. Alerts sent
+        afterwards are logged and dropped. Safe to call twice."""
+        if self._queue.closed:
+            return
+        self._queue.close()
+        if self._sender is not None:
+            self._sender.join(wait_seconds)
+        left = self._queue.abandon()
+        if left:
+            logger.warning(
+                "%d alert(s) not sent: OpenAlgo had not taken them when the alerts closed", left
+            )
+
+    def _run(self) -> None:
+        """The sender thread: post each alert as it is queued, until the queue is closed
+        and empty or abandoned."""
+        while (alert := self._queue.take(wait=True)) is not None:
+            self._deliver_queued(alert)
 
     def _repeated(self, kind: AlertKind, message: str, now_ns: int) -> bool:
-        """True when this alert went out within the repeat window; forgets the alerts
+        """True when this alert was queued within the repeat window; forgets the alerts
         whose window has passed, so the record stays as small as a minute's alerts."""
         self._last_sent_ns = {
             key: sent_ns
@@ -217,6 +265,22 @@ class Alerts:
         }
         return (kind, message) in self._last_sent_ns
 
+    def _enqueue(self, alert: QueuedAlert) -> None:
+        dropped = self._queue.put(alert)
+        if dropped is None:
+            return
+        why = "the alerts are closed" if self._queue.closed else f"{QUEUE_SIZE} alerts wait"
+        logger.warning("alert %s dropped (%s): %s", dropped.kind.value, why, dropped.message)
+
+    def _deliver_queued(self, alert: QueuedAlert) -> None:
+        failure = self._deliver(alert.kind, alert.message, wait=False)
+        if failure is None:
+            return
+        with self._counts:
+            self._failures += 1
+            self._last_failure = failure
+        logger.warning("alert %s not delivered: %s", alert.kind.value, failure)
+
     def _deliver(self, kind: AlertKind, message: str, *, wait: bool) -> str | None:
         """Post the alert; the reason it failed, or None. `wait` asks OpenAlgo to answer
         only once Telegram took the message."""
@@ -224,7 +288,7 @@ class Alerts:
         try:
             answer = self._client.telegram(
                 username=self._username,
-                message=_telegram_text(message),
+                message=telegram_text(message),
                 priority=ALERT_PRIORITY[kind],
                 **extra,
             )
@@ -232,20 +296,7 @@ class Alerts:
         # and kept in `last_failure`, never dropped.
         except Exception as error:
             return f"the client raised {type(error).__name__}: {error}"
-        reason = _failure_reason(answer)
-        if reason is None and wait and answer.get("message") != _DELIVERED_MESSAGE:
-            return (
-                "OpenAlgo accepted the alert but Telegram did not confirm delivery (it is "
-                "queued for retry): check the bot token and that OpenAlgo can reach Telegram"
-            )
-        return reason
-
-    def _note(self, kind: AlertKind, failure: str | None) -> None:
-        if failure is None:
-            return
-        self._failures += 1
-        self._last_failure = failure
-        logger.warning("alert %s not delivered: %s", kind.value, failure)
+        return delivery_failure(answer) if wait else failure_reason(answer)
 
 
 def _prefix(mode: Mode, strategies: tuple[str, ...]) -> str:
@@ -259,53 +310,14 @@ def _log_level(kind: AlertKind) -> int:
     return logging.WARNING if ALERT_PRIORITY[kind] >= _WARNING_PRIORITY else logging.INFO
 
 
-def _telegram_text(message: str) -> str:
-    """The message cut to Telegram's limit and escaped for its legacy Markdown. The limit
-    counts the text after parsing, so the escapes do not count against it."""
-    if len(message) > TELEGRAM_MAX_CHARS:
-        message = message[: TELEGRAM_MAX_CHARS - len(_CUT_MARKER)] + _CUT_MARKER
-    return _MARKDOWN_SPECIAL.sub(r"\\\1", message)
-
-
-def _failure_reason(answer: Any) -> str | None:
-    """Why an answer of `client.telegram` is not a success, or None for a success.
-
-    The SDK passes the server's own error answer on, wraps a non-200 answer as
-    `{"status": "error", "message": "HTTP <code>: <body>", "code": <code>}`, and reports
-    a transport failure as an error with its own message. The reason is the server's
-    message, with the HTTP status when there is one.
-    """
-    if not isinstance(answer, Mapping):
-        return f"OpenAlgo's answer was not a JSON object: {answer!r}"
-    if answer.get("status") == _SUCCESS:
-        return None
-    message = answer.get("message")
-    if not isinstance(message, str) or not message.strip():
-        message = "an error without a message"
-    wrapped = _HTTP_WRAPPER.fullmatch(message)
-    if wrapped is None:
-        code = answer.get("code")
-        return f"{message} (HTTP {code})" if code is not None else message
-    return f"{_server_message(wrapped.group(2))} (HTTP {wrapped.group(1)})"
-
-
-def _server_message(body: str) -> str:
-    """The `message` of the server's JSON body, or the body itself, shortened."""
-    try:
-        parsed = json.loads(body)
-    except ValueError:
-        parsed = None
-    if isinstance(parsed, Mapping) and isinstance(parsed.get("message"), str):
-        return parsed["message"]
-    text = body.strip() or "an empty answer"
-    return text if len(text) <= _MAX_REASON_CHARS else text[:_MAX_REASON_CHARS] + "..."
-
-
 __all__ = [
     "ALERT_PRIORITY",
+    "CLOSE_WAIT_SECONDS",
     "PRIORITY_HIGHEST",
     "PRIORITY_LOWEST",
+    "QUEUE_SIZE",
     "REPEAT_WINDOW_SECONDS",
+    "SENDER_THREAD_NAME",
     "TELEGRAM_MAX_CHARS",
     "TEST_ALERT_TEXT",
     "Alerts",

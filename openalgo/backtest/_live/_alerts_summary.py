@@ -13,8 +13,9 @@ style of `Result.summary()`:
     Reconcile   : 0 mismatches
     End state   : flat
 
-Rupees are written as `Result.summary()` writes them (Indian digit grouping, a loss as
-"Rs -500.00"). `alerts` re-exports both names.
+An "Alerts : 2 not delivered" line comes before the end state when an alert of the
+session did not reach OpenAlgo. Rupees are written as `Result.summary()` writes them
+(Indian digit grouping, a loss as "Rs -500.00"). `alerts` re-exports both names.
 """
 
 from __future__ import annotations
@@ -44,7 +45,9 @@ class SessionSummary:
     compared. `rejected_orders` counts the orders the broker or OpenAlgo refused,
     `unprotected_seconds` the seconds a position had no stop at the broker, and
     `reconcile_mismatches` the reconciliations whose broker position differed from the
-    engine's. `flat` is True when the session ended with no open position.
+    engine's. `undelivered_alerts` counts the session's alerts that did not reach
+    OpenAlgo, failed or dropped (`Alerts.undelivered`). `flat` is True when the session
+    ended with no open position.
     """
 
     day: dt.date
@@ -58,6 +61,7 @@ class SessionSummary:
     rejected_orders: int
     unprotected_seconds: float
     reconcile_mismatches: int
+    undelivered_alerts: int
     flat: bool
 
     @property
@@ -68,7 +72,8 @@ class SessionSummary:
 
 def summary_text(summary: SessionSummary) -> str:
     """The summary of the module docstring: a title line, then one line per figure with
-    the colons aligned. Plain text, no emoji."""
+    the colons aligned, the alerts line only when an alert was not delivered. Plain
+    text, no emoji."""
     lines = [
         ("Strategies", ", ".join(summary.strategies) or "none"),
         ("Trades", f"{summary.closed_trades} closed"),
@@ -79,8 +84,10 @@ def summary_text(summary: SessionSummary) -> str:
         ("Rejected", _count(summary.rejected_orders, "order")),
         ("Unprotected", f"{round(summary.unprotected_seconds)} s without a stop at the broker"),
         ("Reconcile", _count(summary.reconcile_mismatches, "mismatch", "mismatches")),
-        ("End state", "flat" if summary.flat else "not flat: a position is still open"),
     ]
+    if summary.undelivered_alerts:
+        lines.append(("Alerts", f"{summary.undelivered_alerts} not delivered"))
+    lines.append(("End state", "flat" if summary.flat else "not flat: a position is still open"))
     width = max(len(label) for label, _ in lines)
     title = (
         f"Session of {summary.day.isoformat()} (IST): {summary.mode.name} mode, "
