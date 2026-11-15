@@ -9,21 +9,22 @@
 use crate::charges::ChargeBook;
 use crate::exec::{InstrumentId, InstrumentSpec, Order, OrderBook, OrderId};
 use crate::market::calendar::Calendar;
-use crate::model::{Exchange, Product, TsNanos};
+use crate::model::{Product, TsNanos};
 use crate::portfolio::{Portfolio, Position, PositionKey};
 use crate::rms::LegState;
 
 use super::accounting::charge_book;
-use super::clock::{SliceInfo, Timeline};
+use super::clock::{single_exchange, SliceInfo, Timeline};
 use super::config::{RunConfig, RunSetup};
 use super::error::KernelError;
 use super::event::{Event, EventStamp, Step};
 use super::futures::FuturesDesk;
 use super::gtt::GttDesk;
+use super::live_clock::range_end;
 use super::market_data::MarketData;
 use super::output::{settle_trade_charges, FinalPosition, GrossPnl, Recorder, RunOutput};
 use super::pause::Pause;
-use super::run_end::{end_of_run, RunEnd};
+use super::run_end::{end_of_run, Ending, RunEnd};
 use super::sale_credit::SessionBuys;
 use super::session::SessionTimes;
 use super::strategy_risk::StrategyRisk;
@@ -101,26 +102,6 @@ pub struct Engine {
     pub(super) released: Option<usize>,
 }
 
-/// The one exchange of a Phase 1 run.
-fn single_exchange(instruments: &[InstrumentSpec]) -> Result<Exchange, KernelError> {
-    let Some(first) = instruments.first() else {
-        return Err(KernelError::InvalidConfig {
-            field: "symbol",
-            reason: "a run needs at least one instrument".to_string(),
-        });
-    };
-    if instruments
-        .iter()
-        .any(|spec| spec.exchange != first.exchange)
-    {
-        return Err(KernelError::NotBuilt {
-            feature: "a run across several exchanges",
-            instead: "run the instruments of each exchange in a backtest of their own",
-        });
-    }
-    Ok(first.exchange)
-}
-
 impl Engine {
     /// Build a run: validate the configuration, the instruments and the bars, build the
     /// grid and the strategy bars. The engine starts before the first slice.
@@ -129,6 +110,12 @@ impl Engine {
     /// `Calendar`, `Resample`, `Portfolio` (capital), and `NotBuilt` for settings the
     /// kernel cannot honour yet.
     pub fn new(setup: RunSetup) -> Result<Engine, KernelError> {
+        Engine::assemble(setup, Ending::AtLastBar)
+    }
+
+    /// Build a run that ends as `ending` says (`new` for a backtest, `new_session` for
+    /// a live session); the errors of `new`.
+    pub(super) fn assemble(setup: RunSetup, ending: Ending) -> Result<Engine, KernelError> {
         let RunSetup {
             config,
             calendar,
@@ -142,8 +129,15 @@ impl Engine {
         }
         let mut timeline = Timeline::build(&calendar, exchange, &config)?;
         let market = MarketData::build(bars, &instruments, &timeline, &calendar, &config)?;
-        let (slices, run_end) = end_of_run(&timeline, &market, instruments.len(), config.present)?;
-        timeline.end_after(slices);
+        let run_end = match ending {
+            Ending::AtLastBar => {
+                let (slices, run_end) =
+                    end_of_run(&timeline, &market, instruments.len(), config.present)?;
+                timeline.end_after(slices);
+                run_end
+            }
+            Ending::AtRangeEnd => range_end(&timeline)?,
+        };
         let portfolio = Portfolio::new(config.capital_rupees)?;
         config
             .market
@@ -175,28 +169,6 @@ impl Engine {
             session_buys: SessionBuys::default(),
             released: None,
         })
-    }
-
-    /// Hold before every slice not released yet: from now on `advance` runs only the
-    /// slices released with `release`, and returns `Pause::Waiting` before the first
-    /// one that is not. Live trading holds, and releases each slice once it has closed;
-    /// a backtest never holds. A paused slice still completes on the next `advance`.
-    pub fn hold(&mut self) {
-        let next = match self.phase {
-            Phase::Ready(index) => index,
-            Phase::Paused(slice) | Phase::Timers(slice) => slice.index + 1,
-            Phase::Finished => self.timeline.len(),
-        };
-        self.released = Some(self.released.map_or(next, |released| released.max(next)));
-    }
-
-    /// Release the slices before index `slices` of the grid to an engine that holds
-    /// (`hold`). Releasing fewer than already released changes nothing; an engine that
-    /// does not hold runs every slice anyway.
-    pub fn release(&mut self, slices: usize) {
-        if let Some(released) = self.released.as_mut() {
-            *released = (*released).max(slices);
-        }
     }
 
     /// Run the slice sequence to the next decision point.

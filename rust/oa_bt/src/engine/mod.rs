@@ -43,7 +43,8 @@
 //! | `Engine::submit_rebalance(TargetRequest)` | while paused | the same order as part of a rebalance (`rebalance`) |
 //! | `position`, `leg`, `order`, `working_orders`, `gtts`, `has_pending_entry`, `account`, `last_close`, `decision_instant`, `trading_state`, `strategy_bars`, `timer_counts` | any time | queries |
 //! | `Engine::add_timer(TimerSpec)` | before the first `advance` | register `self.at` or `self.every` |
-//! | `Engine::hold()`, `Engine::release(slices)` | any time | live clock: run only the slices released; `advance` returns `Pause::Waiting` before the first one that is not (a backtest never holds) |
+//! | `Engine::new_session(RunSetup)` | once | live clock (`live_clock`): a session built before its bars, ending at the end of its range, holding |
+//! | `Engine::add_bar(InstrumentId, BaseBar)`, `Engine::release(slices)`, `Engine::hold()` | any time | live clock: hand over a closed slice's bars, then release it; `advance` returns `Pause::Waiting` before the first slice not released (a backtest never holds) |
 //! | `Engine::finish()` | after `Pause::Finished` | the `RunOutput` |
 //! | `pause::run(engine, driver)` | Rust drivers | the loop above, for a `Driver` |
 //!
@@ -102,6 +103,7 @@
 //! | `run_end` | Where the run ends: the end of its range, its last bar or the present |
 //! | `market_data` | Base bars aligned to the grid; strategy bars via `data::resample` |
 //! | `kernel` | `Engine`, `advance`, queries, `finish` |
+//! | `live_clock` | A live session: built before its bars, given each bar as its slice closes, holding before the slices not released |
 //! | `steps` | Steps 1 to 8 |
 //! | `fills` | Step 2 fills of queued orders, `execute_fill` |
 //! | `legs` | Leg rules in steps 3 and 4, the add rule of SPEC-14 |
@@ -181,6 +183,7 @@ mod history;
 mod initial_risk;
 pub mod kernel;
 mod legs;
+mod live_clock;
 pub mod market_data;
 mod modify;
 mod order_fill;
@@ -215,7 +218,7 @@ pub use futures::{
     SettlementKind, SettlementRecord, Switch,
 };
 pub use kernel::{AccountView, Engine};
-pub use market_data::StrategyBar;
+pub use market_data::{BaseBar, StrategyBar};
 pub use output::{
     EquityColumns, FillRecord, FinalPosition, GrossPnl, LevelRow, RunOutput, StaleMark, TradeRecord,
 };

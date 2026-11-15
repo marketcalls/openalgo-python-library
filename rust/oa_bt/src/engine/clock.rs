@@ -11,11 +11,32 @@
 //! hours (Phase 3) keep this type and add one strategy-close list per exchange; their
 //! decisions and fills are then ordered by instant (SPEC-35), never by slice position.
 
+use crate::exec::InstrumentSpec;
 use crate::market::calendar::{union_grid, BaseInterval, Calendar, UnionGrid};
 use crate::model::{Day, Exchange, TsNanos};
 
 use super::config::{RunConfig, StrategyInterval, PERIOD_INTERVALS, PERIOD_INTERVALS_INSTEAD};
 use super::error::KernelError;
+
+/// The one exchange of a Phase 1 run.
+pub(super) fn single_exchange(instruments: &[InstrumentSpec]) -> Result<Exchange, KernelError> {
+    let Some(first) = instruments.first() else {
+        return Err(KernelError::InvalidConfig {
+            field: "symbol",
+            reason: "a run needs at least one instrument".to_string(),
+        });
+    };
+    if instruments
+        .iter()
+        .any(|spec| spec.exchange != first.exchange)
+    {
+        return Err(KernelError::NotBuilt {
+            feature: "a run across several exchanges",
+            instead: "run the instruments of each exchange in a backtest of their own",
+        });
+    }
+    Ok(first.exchange)
+}
 
 /// What the steps need to know about one slice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

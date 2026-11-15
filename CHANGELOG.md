@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the slices not released yet (`Engine::hold`, `Engine::release`, `Pause::Waiting`), the
   base of the live clock. A backtest released one slice at a time gives the same result
   as one run straight through.
+- A live session in the kernel (`Engine::new_session`, `Engine::add_bar`, `BaseBar`): built
+  before its bars from the calendar's grid of its day, given each instrument's base bar
+  as its slice closes (checked: on the grid, for a slice that has not run, in order, a
+  valid OHLC bar), its strategy bars rebuilt by the backtest's resampler, and ending at
+  the end of its day. A session given its bars minute by minute gives the same result as
+  the backtest of those bars.
 
 ## [2.2.1] - 2026-11-15
 
