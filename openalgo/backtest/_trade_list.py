@@ -34,6 +34,8 @@ TRADE_LIST_COLUMNS = (
 DIRECTIONS = {"BUY": "long", "SELL": "short"}
 SECONDS_PER_DAY = 86_400
 PERCENT = 100.0
+#: Decimals of the money columns: rupees to the paisa.
+PAISA_DECIMALS = 2
 
 
 def _optional(frame: pd.DataFrame, name: str, missing: object = np.nan) -> pd.Series:
@@ -58,9 +60,11 @@ def trade_list(trades: pd.DataFrame | None) -> pd.DataFrame:
                       included; never lots
         entry_price   quantity-weighted average price of the opening fills, rupees
         exit_price    quantity-weighted average price of the closing fills, rupees
-        gross_pnl     P&L before charges, rupees
-        charges       charges of every fill of the trade, rupees
-        net_pnl       gross_pnl - charges, rupees
+        gross_pnl     P&L before charges, rupees, to the paisa
+        charges       what the account paid for every fill of the trade, rupees, to
+                      the paisa (in a run, contract-note rounding included, so the
+                      trades add up to the run's charges)
+        net_pnl       gross_pnl - charges, rupees, to the paisa
         return_pct    net_pnl over the value of the entry (entry_price x quantity), in
                       percent: 10.0 is ten percent; for a short, of the value sold
         bars_held     bars of the strategy's interval that closed while the trade was
@@ -81,6 +85,9 @@ def trade_list(trades: pd.DataFrame | None) -> pd.DataFrame:
     closed = trades[trades["exit_time"].notna()]
     quantity = closed["quantity"].astype(float)
     entry_price = closed["entry_price"].astype(float)
+    gross = closed["gross_pnl"].astype(float).round(PAISA_DECIMALS)
+    charges = closed["costs"].astype(float).round(PAISA_DECIMALS)
+    net = closed["net_pnl"].astype(float).round(PAISA_DECIMALS)
     held = closed["exit_time"] - closed["entry_time"]
     frame = pd.DataFrame(
         {
@@ -92,10 +99,10 @@ def trade_list(trades: pd.DataFrame | None) -> pd.DataFrame:
             "quantity": quantity,
             "entry_price": entry_price,
             "exit_price": closed["exit_price"].astype(float),
-            "gross_pnl": closed["gross_pnl"].astype(float),
-            "charges": closed["costs"].astype(float),
-            "net_pnl": closed["net_pnl"].astype(float),
-            "return_pct": closed["net_pnl"].astype(float) / (entry_price * quantity) * PERCENT,
+            "gross_pnl": gross,
+            "charges": charges,
+            "net_pnl": net,
+            "return_pct": net / (entry_price * quantity) * PERCENT,
             "bars_held": _optional(closed, "bars_held").astype("Int64"),
             "days_held": held.dt.total_seconds() / SECONDS_PER_DAY,
             "exit_reason": _optional(closed, "exit_reason"),

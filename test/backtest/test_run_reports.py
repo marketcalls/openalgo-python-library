@@ -58,7 +58,7 @@ def test_a_position_still_open_at_the_end_is_an_open_trade():
     trades = result.performance.trades
     assert result.metrics["open_trades"] == 1 and result.metrics["trades"] == 0
     assert pd.isna(trades.loc[0, "exit_time"]) and trades.loc[0, "entry_time"] == at(9, 30)
-    assert trades.loc[0, "costs"] == pytest.approx(result.costs["total"].sum())
+    assert trades.loc[0, "costs"] == pytest.approx(result.costs["charged"].sum())
 
 
 def test_the_tearsheet_is_returned_or_written_with_the_assumptions(charged, tmp_path):

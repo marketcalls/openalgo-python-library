@@ -31,8 +31,10 @@ TRADE_COLUMNS = (
 #: Trade sides: the side of the entry order, so "BUY" is a long trade.
 SIDES = ("BUY", "SELL")
 #: Optional per-trade cost columns summed into the cost breakdown, in rupees: the six
-#: components of `openalgo.backtest.costs` plus the depository charge on delivery sells.
-COST_COLUMNS = (*COMPONENTS, "dp_charge")
+#: components of `openalgo.backtest.costs`, the depository charge on delivery sells and
+#: the contract-note rounding shared to the trade's fills (a run's trades table holds
+#: it in contract-note rounding).
+COST_COLUMNS = (*COMPONENTS, "dp_charge", "note_rounding")
 #: The exit time the kernel reads as "still held at the end of the run".
 OPEN_EXIT_NANOS = int(np.iinfo(np.int64).max)
 #: Integer timestamps before 1980-01-01 UTC are refused. Seconds, milliseconds or

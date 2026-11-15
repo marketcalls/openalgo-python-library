@@ -81,14 +81,91 @@ fn charge(book: &mut ChargeBook, model: &CostModel, fill: &FillToCharge<'_>) -> 
     }
 }
 
+/// Half a paisa per rounded amount, and the float error of adding them.
+const PAISA_ROUNDING: f64 = 0.005 + 1e-9;
+/// What the lines rounded to the paisa can move a share: a few paise at most.
+const FEW_PAISE: f64 = 0.03;
+
 #[test]
-fn a_fill_costs_what_the_cost_model_prices_it_at() {
+fn a_fill_posts_what_the_cost_model_prices_it_at_rounded_to_the_paisa() {
     let (model, spec) = (model(Rounding::ContractNote), sbin());
     let mut book = ChargeBook::new(Some(Rounding::ContractNote));
     let buy = fill(&spec, Product::Mis, Side::Buy, 1_000.0, day(), opening());
     let expected = model.fill_cost(Segment::NseEqIntraday, Side::Buy, 1_000.0, 400.0, day());
     let expected = expected.map(|cost| cost.total()).unwrap_or(f64::NAN);
-    assert_eq!(charge(&mut book, &model, &buy), expected);
+    let posted = charge(&mut book, &model, &buy);
+    assert_eq!(posted, crate::portfolio::round_to_paise(posted));
+    assert!(
+        (posted - expected).abs() < PAISA_ROUNDING,
+        "{posted} vs {expected}"
+    );
+}
+
+#[test]
+fn the_fills_of_a_settled_note_pay_what_the_note_charges() {
+    // The intraday round trip of the reference note: 200.62 shared over its buy and
+    // its sale, each a whole number of paise.
+    let (model, spec) = (model(Rounding::ContractNote), sbin());
+    let mut book = ChargeBook::new(Some(Rounding::ContractNote));
+    for trade in [
+        fill(&spec, Product::Mis, Side::Buy, 1_000.0, day(), opening()),
+        fill(&spec, Product::Mis, Side::Sell, 1_100.0, day(), closing()),
+    ] {
+        charge(&mut book, &model, &trade);
+    }
+    book.settle_day(day());
+    let output = book.into_output();
+    let paid: Vec<f64> = output.fills.iter().map(FillCharge::paid_rupees).collect();
+    assert!(paid
+        .iter()
+        .all(|&rupees| rupees == crate::portfolio::round_to_paise(rupees)));
+    assert!((paid.iter().sum::<f64>() - 200.62).abs() < 1e-9, "{paid:?}");
+}
+
+#[test]
+fn each_line_rounding_of_an_intraday_note_goes_to_the_fill_that_paid_the_charge() {
+    // Intraday STT is charged on the sale only and stamp duty on the buy only. The
+    // sale's STT, 0.025 percent of 4,40,520, is Rs 110.13 and the note charges Rs 110.
+    let (model, spec) = (model(Rounding::ContractNote), sbin());
+    let mut book = ChargeBook::new(Some(Rounding::ContractNote));
+    for trade in [
+        fill(&spec, Product::Mis, Side::Buy, 1_000.0, day(), opening()),
+        fill(&spec, Product::Mis, Side::Sell, 1_101.3, day(), closing()),
+    ] {
+        charge(&mut book, &model, &trade);
+    }
+    book.settle_day(day());
+    let output = book.into_output();
+    let (buy, sale, note) = (&output.fills[0], &output.fills[1], &output.notes[0].note);
+    assert_eq!(buy.cost.stt, 0.0);
+    assert_eq!(sale.cost.stamp_duty, 0.0);
+    // The buy alone paid stamp duty and the sale alone STT: each takes its line's
+    // rounding, give or take the paise of the lines rounded to the paisa.
+    let expected_buy = buy.cost_rupees + note.charged.stamp_duty - buy.cost.stamp_duty;
+    let expected_sale = sale.cost_rupees + note.charged.stt - sale.cost.stt;
+    for (record, expected) in [(buy, expected_buy), (sale, expected_sale)] {
+        let off = (record.charged_rupees - expected).abs();
+        assert!(off < FEW_PAISE, "{} vs {expected}", record.charged_rupees);
+    }
+    assert!(
+        (note.charged.stt - sale.cost.stt).abs() > FEW_PAISE,
+        "the STT line was rounded"
+    );
+}
+
+#[test]
+fn a_fill_of_a_note_not_settled_is_charged_its_cost_rounded_to_the_paisa() {
+    let (model, spec) = (model(Rounding::ContractNote), sbin());
+    let mut book = ChargeBook::new(Some(Rounding::ContractNote));
+    let buy = fill(&spec, Product::Mis, Side::Buy, 1_000.0, day(), opening());
+    charge(&mut book, &model, &buy);
+    let output = book.into_output();
+    let record = &output.fills[0];
+    assert!(!output.notes[0].settled);
+    assert_eq!(
+        record.charged_rupees,
+        crate::portfolio::round_to_paise(record.cost_rupees)
+    );
 }
 
 #[test]
@@ -127,8 +204,10 @@ fn a_delivery_round_trip_on_two_days_costs_the_round_trip_plus_the_dp_charge() {
     );
     let trip = model.round_trip_cost(Segment::NseEqDelivery, 1_000.0, 1_100.0, 400.0, day(), next);
     let trip = trip.map(|cost| cost.total()).unwrap_or(f64::NAN);
-    // Zerodha's DP charge: Rs 13 plus 18 percent GST, 15.34.
-    assert!((paid - (trip + 15.34)).abs() < 1e-9, "{paid} vs {trip}");
+    // Zerodha's DP charge: Rs 13 plus 18 percent GST, 15.34. Each fill posts its cost
+    // rounded to the paisa.
+    let rounding = 2.0 * PAISA_ROUNDING;
+    assert!((paid - (trip + 15.34)).abs() < rounding, "{paid} vs {trip}");
 }
 
 #[test]
@@ -217,8 +296,9 @@ fn a_sale_from_holdings_bought_back_the_same_day_refunds_its_dp_charge() {
         )
         .map(|cost| cost.total())
         .unwrap_or(f64::NAN);
+    // Each posting is a whole number of paise.
     assert!(
-        (on_sale + on_buy - intraday).abs() < 1e-9,
+        (on_sale + on_buy - intraday).abs() < 2.0 * PAISA_ROUNDING,
         "{on_sale} + {on_buy}"
     );
     assert!(on_sale > dp, "the sale paid the DP charge first");

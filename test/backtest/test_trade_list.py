@@ -141,12 +141,20 @@ def test_a_short_trade_loses_when_the_price_rises():
     assert trade["return_pct"] == pytest.approx(-10.0)
 
 
-def test_charges_are_the_charges_of_the_trades_fills():
+def test_charges_are_what_the_account_paid_for_the_trades_fills():
     result = round_trip({"qty": 400})
     trade = result.trade_list().iloc[0]
     assert trade["charges"] > 0
-    assert trade["charges"] == pytest.approx(result.costs["total"].sum())
+    assert trade["charges"] == pytest.approx(result.costs["charged"].sum())
+    assert trade["charges"] == pytest.approx(result.equity["costs_rupees"].iloc[-1])
     assert trade["net_pnl"] == pytest.approx(trade["gross_pnl"] - trade["charges"])
+
+
+def test_the_money_columns_are_rounded_to_the_paisa():
+    result = round_trip({"qty": 400})
+    trade = result.trade_list().iloc[0]
+    for name in ("gross_pnl", "charges", "net_pnl"):
+        assert trade[name] == round(trade[name], 2), name
 
 
 def test_a_daily_delivery_trade_is_held_one_bar_and_one_day():

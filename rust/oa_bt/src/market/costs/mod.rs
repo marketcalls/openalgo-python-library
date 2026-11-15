@@ -80,7 +80,7 @@ pub use brokerage::{Brokerage, BrokerageRule, DpFeeSource};
 pub use builtin::builtin_schedules;
 pub use cost_model::CostModel;
 pub use error::{CostError, NameKind};
-pub use note::{contract_notes, ContractNoteAggregator, NoteLine, CONTRACT_NOTE_RULE};
+pub use note::{apportion, contract_notes, ContractNoteAggregator, NoteLine, CONTRACT_NOTE_RULE};
 pub use rounding::Rounding;
 pub use schedule::{CostSchedule, SegmentRates, SegmentRow, TaxBase, TaxUnit};
 pub use segment::{BrokerageClass, NoteGroup, Segment, SEGMENT_COUNT};

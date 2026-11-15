@@ -52,7 +52,7 @@ impl Rounding {
 pub(super) type Picos = i128;
 
 const PICOS_PER_RUPEE: Picos = 1_000_000_000_000;
-const PICOS_PER_PAISA: Picos = PICOS_PER_RUPEE / 100;
+pub(super) const PICOS_PER_PAISA: Picos = PICOS_PER_RUPEE / 100;
 
 /// The decimal grid a float amount is snapped to when it becomes `Picos`.
 #[derive(Clone, Copy)]

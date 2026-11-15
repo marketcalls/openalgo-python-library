@@ -2,8 +2,8 @@
 
 use crate::exec::{InstrumentId, InstrumentSpec};
 use crate::market::costs::{
-    ContractNoteAggregator, CostBreakdown, CostModel, DpCharge, NoteGroup, RateStatus, Rounding,
-    Segment,
+    apportion, ContractNoteAggregator, CostBreakdown, CostModel, DpCharge, NoteGroup, NoteLine,
+    RateStatus, Rounding, Segment,
 };
 use crate::market::facts::InstrumentMarket;
 use crate::market::table_rows::RowMeta;
@@ -29,6 +29,11 @@ pub struct FillCharge {
     pub cost: CostBreakdown,
     /// The model's reported total of `cost`.
     pub cost_rupees: f64,
+    /// What the fill is charged on its contract note, rupees, whole paise: once the
+    /// note is settled, the fill's share of each line of it (`apportion`), so the
+    /// note's rounding is shared over its fills; until then, and in calculator
+    /// rounding, `cost_rupees` rounded to the paisa. The DP charge is not included.
+    pub charged_rupees: f64,
     /// The DP charge, on the first delivery sell of a scrip in a day.
     pub dp_charge: Option<DpCharge>,
     /// Which schedule version priced the fill and whether its rates are verified.
@@ -42,6 +47,13 @@ impl FillCharge {
     /// What the fill costs in all, rupees: the cost plus the DP charge.
     pub fn total_rupees(&self) -> f64 {
         self.cost_rupees + self.dp_charge.map_or(0.0, |dp| dp.total())
+    }
+
+    /// What the account pays for the fill, rupees, whole paise: `charged_rupees` plus
+    /// the DP charge rounded to the paisa. The fills of a run add up to its charges.
+    pub fn paid_rupees(&self) -> f64 {
+        let dp = self.dp_charge.map_or(0.0, |dp| round_to_paise(dp.total()));
+        round_to_paise(self.charged_rupees + dp)
     }
 }
 
@@ -111,10 +123,11 @@ impl ChargeBook {
         }
     }
 
-    /// Charge one fill under `model`; returns the rupees to post to the ledger (the
-    /// fill's cost plus any DP charge, unrounded; the ledger rounds to the paisa). A CNC
-    /// fill of cash equity is charged by the same-day rule (`same_day`): its rupees also
-    /// carry the new charges of the earlier fills of the day it turned into intraday.
+    /// Charge one fill under `model`; returns the rupees to post to the ledger, whole
+    /// paise (the fill's cost and its DP charge, each rounded to the paisa, as
+    /// `FillCharge::paid_rupees` before its note is settled). A CNC fill of cash equity
+    /// is charged by the same-day rule (`same_day`): its rupees also carry the change in
+    /// the charges of the earlier fills of the day it turned into intraday.
     ///
     /// Errors: `Cost` when the fill cannot be priced.
     pub fn charge(
@@ -131,7 +144,7 @@ impl ChargeBook {
     }
 
     /// Record a priced fill: its note accrual, the record, its round trip. Returns what
-    /// it costs in all.
+    /// the ledger posts for it, whole paise.
     fn book_fill(
         &mut self,
         model: &CostModel,
@@ -155,15 +168,16 @@ impl ChargeBook {
             segment,
             cost,
             cost_rupees,
+            charged_rupees: round_to_paise(cost_rupees),
             dp_charge,
             status,
             trade: None,
         };
-        let total = record.total_rupees();
+        let paid = record.paid_rupees();
         self.output.fills.push(record);
         let index = self.output.fills.len() - 1;
         self.track_trade(fill.key, fill.effect, Some(index));
-        Ok(total)
+        Ok(paid)
     }
 
     /// A CNC fill of cash equity: the units matched against the day's other side at the
@@ -214,8 +228,9 @@ impl ChargeBook {
         Ok(self.book_fill(model, fill, segment, cost, dp_charge)? + repriced)
     }
 
-    /// Charge an earlier fill of the day again with its new split; returns the change,
-    /// rupees, which the note and the ledger take with the fill that caused it.
+    /// Charge an earlier fill of the day again with its new split; returns the change
+    /// in what it is charged, whole paise, which the note and the ledger take with the
+    /// fill that caused it. The record keeps the fill's own new charges.
     fn charge_again(
         &mut self,
         model: &CostModel,
@@ -236,18 +251,17 @@ impl ChargeBook {
             day,
         )?;
         let cost_rupees = model.reported_total(&cost);
-        let change = cost_rupees - old.cost_rupees;
+        let charged_rupees = round_to_paise(cost_rupees);
+        let change = round_to_paise(charged_rupees - old.charged_rupees);
         if model.rounding() == Rounding::ContractNote {
             self.notes
                 .amend(day, segments.intraday, &difference(&cost, &old.cost));
-            self.add_posted(
-                (day, segments.intraday.note_group()),
-                round_to_paise(change),
-            );
+            self.add_posted((day, segments.intraday.note_group()), change);
         }
         if let Some(record) = self.output.fills.get_mut(earlier.record) {
             record.cost = cost;
             record.cost_rupees = cost_rupees;
+            record.charged_rupees = charged_rupees;
             if earlier.delivery_units <= 0.0 {
                 record.segment = segments.intraday;
             }
@@ -256,7 +270,8 @@ impl ChargeBook {
     }
 
     /// Refund the scrip's DP charge of `day` once no unit of it is sold from holdings
-    /// that day any more; returns the change, rupees (0 or minus the charge).
+    /// that day any more; returns the change, rupees (0 or minus the charge as the
+    /// ledger posted it, whole paise).
     fn refund_dp(&mut self, instrument: InstrumentId, day: Day) -> f64 {
         if self.same_day.delivery_sold(instrument, day) > 0.0 {
             return 0.0;
@@ -270,7 +285,7 @@ impl ChargeBook {
             .fills
             .get_mut(record)
             .and_then(|charge| charge.dp_charge.take());
-        refunded.map_or(0.0, |dp| -dp.total())
+        refunded.map_or(0.0, |dp| -round_to_paise(dp.total()))
     }
 
     fn add_posted(&mut self, note: (Day, NoteGroup), rupees: f64) {
@@ -309,7 +324,8 @@ impl ChargeBook {
     }
 
     /// Settle the contract notes of the IST trade date `day` (step 8 of its session's
-    /// last slice). Returns the adjustments to post to the ledger, rupees, one per note.
+    /// last slice) and share each over its fills (`share_note`). Returns the
+    /// adjustments to post to the ledger, rupees, one per note.
     pub fn settle_day(&mut self, day: Day) -> Vec<f64> {
         let mut adjustments = Vec::new();
         let due: Vec<(Day, NoteGroup)> = self
@@ -330,10 +346,36 @@ impl ChargeBook {
             if let Some(line) = self.notes.note(note_day, group) {
                 let settled = settle(line, posted);
                 adjustments.push(settled.adjustment_rupees);
+                self.share_note(&line);
                 self.output.notes.push(settled);
             }
         }
         adjustments
+    }
+
+    /// Give each fill of a settled note its share of what the note charges
+    /// (`apportion`). The note's fills are among the last records: fills are recorded
+    /// in time order and a note settles at the close of its day.
+    fn share_note(&mut self, note: &NoteLine) {
+        let of_day = self
+            .output
+            .fills
+            .iter()
+            .rposition(|record| record.day < note.day)
+            .map_or(0, |last_earlier| last_earlier + 1);
+        let on_note: Vec<usize> = (of_day..self.output.fills.len())
+            .filter(|&index| {
+                let record = &self.output.fills[index];
+                record.day == note.day && record.segment.note_group() == note.group
+            })
+            .collect();
+        let costs: Vec<CostBreakdown> = on_note
+            .iter()
+            .map(|&index| self.output.fills[index].cost)
+            .collect();
+        for (index, share) in on_note.into_iter().zip(apportion(note, &costs)) {
+            self.output.fills[index].charged_rupees = share;
+        }
     }
 
     /// Note that the run used a row of a dated market table on `day`.

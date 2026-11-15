@@ -28,6 +28,7 @@ COST_LABELS = {
     "stamp_duty": "Stamp duty",
     "gst": "GST",
     "dp_charge": "DP charge",
+    "note_rounding": "Contract-note rounding",
 }
 # Breakdown and trade costs may differ by rounding; a larger gap is shown as a row.
 UNITEMISED_TOLERANCE_RUPEES = 0.01
