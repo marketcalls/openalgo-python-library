@@ -16,7 +16,7 @@ from orders_fakes import (
 )
 
 from openalgo.backtest._live._types import AlertKind, OrderStatus
-from openalgo.backtest._live.orders import HeldFill
+from openalgo.backtest._live.orders import UNSUPPORTED_BROKERS, HeldFill
 from openalgo.backtest.errors import LiveError
 
 BROKER_BUSY = {"status": "error", "message": "broker busy"}
@@ -94,7 +94,7 @@ def test_a_terminal_update_with_fewer_fills_than_known_keeps_them_for_the_tradeb
     )
 
 
-def test_a_cancel_with_fewer_fills_than_the_tradebook_has_seen_waits_for_it_to_catch_up():
+def test_a_cancel_waits_while_the_tradebook_has_fewer_fills_than_the_stream_reported():
     rig = sent_rig(tradebook=[trades(("1", 3, 812.0)), trades(("1", 5, 812.0))])
     rig.path.on_update(update("1", OrderStatus.OPEN, 5, price=812.0))
     rig.path.on_update(update("1", OrderStatus.CANCELLED, 0))
@@ -173,6 +173,25 @@ def test_a_held_fill_stays_held_while_the_tradebook_does_not_cover_it():
 
     assert next_round(rig) == []
     assert [held.filled_quantity for held in rig.path.held_fills()] == [10]
+
+
+def test_a_held_fills_tradebook_retries_back_off_to_five_seconds():
+    rig = sent_rig(tradebook=[trades(("1", 6, 812.0))] * 10)
+    rig.path.on_update(update("1", OrderStatus.COMPLETE, 10, price=0.0))
+    read_at = []
+    rig.client.before_call = lambda name, kwargs: read_at.append(rig.clock.now_ns // NS)
+    start_s = rig.clock.now_ns // NS
+
+    for _ in range(20):
+        next_round(rig)
+
+    assert [second - start_s for second in read_at] == [1, 2, 4, 9, 14, 19]
+
+
+def test_fivepaisa_is_refused_since_its_tradebook_names_trades_by_another_order_id():
+    assert "ExchOrderID" in UNSUPPORTED_BROKERS["fivepaisa"]
+    with pytest.raises(TypeError):
+        UNSUPPORTED_BROKERS["groww"] = "writable"  # type: ignore[index]
 
 
 def test_held_fills_lists_each_held_fill_with_its_units_and_since_when():

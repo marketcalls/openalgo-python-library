@@ -7,13 +7,13 @@ from dataclasses import dataclass
 import pytest
 from journal_samples import ACCOUNT, BROKER, DAY, journal_path
 from orders_fakes import (
+    SERVER_502,
     START_IST,
     Clock,
     FakeAlerts,
     FakeClient,
     book,
     book_row,
-    http_error,
     make_intent,
     placed,
 )
@@ -94,7 +94,7 @@ def test_a_restart_takes_back_an_order_from_the_journal_file_to_cancel_it(start)
 
 def test_an_unbound_intent_is_bound_in_the_journal_file_from_the_order_book(start):
     clock = Clock()
-    start(LiveClient(placeorder=[http_error(502)]), clock).path.send(make_intent("i-1"))
+    start(LiveClient(placeorder=[SERVER_502]), clock).path.send(make_intent("i-1"))
     restarted = start(LiveClient(orderbook=[book(book_row("555", timestamp=START_IST))]), clock)
     restarted.path.restore()
 
@@ -106,7 +106,7 @@ def test_an_unbound_intent_is_bound_in_the_journal_file_from_the_order_book(star
 
 def test_an_order_another_intent_owns_in_the_file_is_never_bound_after_a_restart(start):
     clock = Clock()
-    first = start(LiveClient(placeorder=[placed("111"), http_error(502)]), clock)
+    first = start(LiveClient(placeorder=[placed("111"), SERVER_502]), clock)
     first.path.send(make_intent("i-1"))
     first.path.send(make_intent("i-2", purpose=Purpose.EXIT))
     clock.advance(200)
@@ -137,10 +137,17 @@ def test_a_semi_auto_intent_stays_queued_across_a_restart_and_is_never_marked_no
 
     assert resolutions == []
     assert client.calls_to("orderbook") == []
-    assert [intent.intent_id for intent in restarted.journal.queued()] == ["i-1"]
+    assert [queued.intent.intent_id for queued in restarted.journal.queued()] == ["i-1"]
     ((kind, text),) = restarted.alerts.sent
     assert kind is AlertKind.ERROR
-    assert "i-1" in text and "Action Center" in text
+    assert "i-1" in text and "reject pending order 17" in text
+
+
+def test_restore_with_nothing_to_take_back_still_needs_the_guard_started(start):
+    restarted = start(LiveClient(), Clock(), start_guard=False)
+
+    with pytest.raises(LiveError, match=r"call guard\.start\(\)"):
+        restarted.path.restore()
 
 
 def test_restore_before_the_guard_has_started_raises_and_takes_back_nothing(start):

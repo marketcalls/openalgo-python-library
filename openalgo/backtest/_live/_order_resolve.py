@@ -18,19 +18,34 @@ from ..errors import LiveError
 from ._order_answers import server_answer
 from ._order_book import BookMatch, Resolution, Resolved, book_rows, match_unbound
 from ._order_follow import OrderFollower
-from ._types import LOGGER_NAME, AlertKind, AlertsLike, GuardLike, JournalLike, Now, OrderIntent
+from ._types import (
+    LOGGER_NAME,
+    AlertKind,
+    AlertsLike,
+    GuardLike,
+    JournalLike,
+    Now,
+    OrderIntent,
+    QueuedIntent,
+)
 
 logger = logging.getLogger(LOGGER_NAME)
 
 #: An unbound intent is declared not placed only after this many order-book reads miss
-#: it, the first of them at least `NOT_PLACED_AFTER_NS` after it was sent: a broker's
-#: book can show a new order a few seconds late.
+#: it, once misses count: a broker's book can show a new order a few seconds late.
 NOT_PLACED_MISSES = 2
+#: When the server has finished with the request (it refused the connection, or answered
+#: 500 or 502 in its own JSON), misses count from this long after its answer.
 NOT_PLACED_AFTER_NS = 5 * NANOS_PER_SECOND
-#: After the client's own timeout the server may still be placing the order: it waits
-#: this long for the broker (`REQUEST_TIMEOUT_SECONDS`, 120, utils/httpx_client.py on the
-#: server), so misses count only from then. A 502 or a refused connection keeps 5 s.
+#: Otherwise the server may still be placing the order. It waits this long for each
+#: phase of the broker's answer (`REQUEST_TIMEOUT_SECONDS`, 120, utils/httpx_client.py on
+#: the server) ...
 SERVER_BROKER_TIMEOUT_NS = 120 * NANOS_PER_SECOND
+#: ... after the broker's pacing queue, which has no ceiling under eventlet
+#: (utils/broker_backpressure.py): this margin covers an order queued behind others.
+BROKER_QUEUE_MARGIN_NS = 30 * NANOS_PER_SECOND
+#: So misses of such an intent count only from its send plus this window.
+BROKER_WINDOW_NS = SERVER_BROKER_TIMEOUT_NS + BROKER_QUEUE_MARGIN_NS
 #: The order book is read at most this often while an intent is unbound (the session
 #: asks on every turn of its loop; OpenAlgo answers 10 reads a second).
 BOOK_READ_EVERY_NS = 1 * NANOS_PER_SECOND
@@ -56,24 +71,26 @@ class UnboundResolver:
         self._alerts = alerts
         self._follower = follower
         self._now = now
-        self._doubt_since_ns: dict[str, int] = {}
+        self._misses_count_from_ns: dict[str, int] = {}
         self._misses: dict[str, int] = {}
         self._alerted: set[str] = set()
         self._book_read_ns: int | None = None
 
-    def note_doubt(self, intent_id: str, *, since_ns: int) -> None:
-        """Count the order-book misses of an unbound intent from `since_ns` on, plus
-        `NOT_PLACED_AFTER_NS`."""
-        self._doubt_since_ns[intent_id] = since_ns
+    def note_doubt(self, intent_id: str, *, misses_count_from_ns: int) -> None:
+        """Count the order-book misses of an unbound intent from `misses_count_from_ns`
+        on. An intent the path has no note of (left unbound before a restart) waits the
+        whole `BROKER_WINDOW_NS` from its creation."""
+        self._misses_count_from_ns[intent_id] = misses_count_from_ns
 
-    def alert_queued(self, intent: OrderIntent) -> None:
-        """Alert an intent semi-auto queued before a restart: approved, it would become a
-        broker order the session does not follow."""
+    def alert_queued(self, queued: QueuedIntent) -> None:
+        """Alert an intent semi-auto queued before a restart, naming its pending order:
+        approved, it would become a broker order the session does not follow."""
+        pending = queued.pending_order_id or "(no pending order ID was given)"
         self._alert_once(
-            intent,
-            "was queued for approval in OpenAlgo's Action Center (semi-auto) before the "
-            "restart: approved, it becomes a broker order this session does not follow, "
-            "so reject it in the Action Center",
+            queued.intent,
+            f"was queued for approval in OpenAlgo's Action Center (semi-auto) as pending "
+            f"order {pending} before the restart: approved, it becomes a broker order this "
+            f"session does not follow, so reject pending order {pending} in the Action Center",
         )
 
     def resolve(self) -> list[Resolution]:
@@ -126,9 +143,10 @@ class UnboundResolver:
             self._forget(intent_id)
             update = self._follower.claim(order_id)
             return Resolution(intent, Resolved.BOUND, order_id=order_id, update=update)
-        # An intent left unbound before a restart may have timed out: wait as for one.
-        since_ns = self._doubt_since_ns.get(intent_id, intent.created_ns + SERVER_BROKER_TIMEOUT_NS)
-        if now - since_ns < NOT_PLACED_AFTER_NS:
+        counts_from_ns = self._misses_count_from_ns.get(
+            intent_id, intent.created_ns + BROKER_WINDOW_NS
+        )
+        if now < counts_from_ns:
             return None
         self._misses[intent_id] = self._misses.get(intent_id, 0) + 1
         if self._misses[intent_id] < NOT_PLACED_MISSES:
@@ -141,7 +159,7 @@ class UnboundResolver:
 
     def _forget(self, intent_id: str) -> None:
         """Drop what was kept of an intent that is settled."""
-        self._doubt_since_ns.pop(intent_id, None)
+        self._misses_count_from_ns.pop(intent_id, None)
         self._misses.pop(intent_id, None)
         self._alerted.discard(intent_id)
 
@@ -180,6 +198,8 @@ def _rows_or_none(answer: Mapping[str, Any]) -> list[Mapping[str, Any]] | None:
 
 __all__ = [
     "BOOK_READ_EVERY_NS",
+    "BROKER_QUEUE_MARGIN_NS",
+    "BROKER_WINDOW_NS",
     "NOT_PLACED_AFTER_NS",
     "NOT_PLACED_MISSES",
     "SERVER_BROKER_TIMEOUT_NS",

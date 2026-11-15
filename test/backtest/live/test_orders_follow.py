@@ -5,6 +5,7 @@ the orders taken back after a restart."""
 import pytest
 from orders_fakes import (
     STRATEGY,
+    TIMEOUT,
     http_error,
     make_intent,
     make_rig,
@@ -18,6 +19,18 @@ from orders_fakes import (
 from openalgo.backtest._live._types import OrderStatus, Purpose
 
 NOT_FOUND = http_error(404, server_error("Order 1 not found"))
+STOP_ROW = {"pricetype": "SL-M", "action": "SELL"}
+#: A trailing modify of the stop: its trigger moved up.
+TRAIL = {
+    "symbol": "SBIN",
+    "action": "SELL",
+    "exchange": "NSE",
+    "price_type": "SL-M",
+    "product": "MIS",
+    "quantity": 10,
+    "price": 0,
+    "trigger_price": 808.0,
+}
 
 
 def sent_rig(**answers):
@@ -86,15 +99,38 @@ def test_a_further_fill_with_the_same_status_is_new():
     assert rig.path.on_update(update("1", OrderStatus.OPEN, 7)) is not None
 
 
-def test_a_dropped_update_is_neither_journaled_nor_checked():
+def test_a_stale_update_is_neither_journaled_nor_checked():
     rig = sent_rig()
-    first = update("1", OrderStatus.OPEN, 4)
+    first = update("1", OrderStatus.OPEN, 6)
     rig.path.on_update(first)
 
     rig.path.on_update(update("1", OrderStatus.OPEN, 4))
 
     assert rig.journal.updates == [first]
     assert rig.guard.updates == [first]
+
+
+def test_a_stream_word_that_repeats_what_is_known_is_journaled_but_not_returned():
+    rig = sent_rig()
+    first = update("1", OrderStatus.OPEN, 4)
+    rig.path.on_update(first)
+    again = update("1", OrderStatus.OPEN, 4)
+
+    assert rig.path.on_update(again) is None
+    assert rig.journal.updates == [first, again]
+
+
+def test_after_a_restart_the_trigger_is_seen_when_the_stream_spoke_after_a_poll():
+    first = stop_rig(orderstatus=[status_answer("1", "trigger pending", **STOP_ROW)])
+    first.clock.advance(2)
+    first.path.due_polls()
+    first.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0))
+    rig = make_rig(journal=first.journal)
+    rig.path.restore()
+
+    triggered = rig.path.on_update(update("1", OrderStatus.OPEN, 0))
+
+    assert triggered.status is OrderStatus.OPEN
 
 
 def test_a_stop_the_stream_reports_waiting_then_open_is_triggered():
@@ -156,6 +192,47 @@ def test_a_fill_of_a_stop_is_news_whatever_word_its_book_uses():
     filled = rig.path.on_update(update("1", OrderStatus.OPEN, 4))
 
     assert (filled.status, filled.filled_quantity) == (OrderStatus.OPEN, 4)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda path: path.modify("1", **TRAIL),
+        lambda path: path.cancel("1"),
+    ],
+    ids=["trailing modify", "cancel"],
+)
+@pytest.mark.parametrize("answer", [placed("1"), TIMEOUT], ids=["accepted", "unanswered"])
+def test_a_stops_open_after_the_sessions_own_change_is_not_a_trigger(change, answer):
+    # zerodha reports UPDATE, MODIFY PENDING and CANCEL PENDING of a waiting stop as open.
+    rig = stop_rig(modifyorder=[answer], cancelorder=[answer])
+    rig.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0))
+    change(rig.path)
+
+    assert rig.path.on_update(update("1", OrderStatus.OPEN, 0)) is None
+    assert rig.journal.updates[-1].status is OrderStatus.TRIGGER_PENDING
+
+
+def test_the_streams_word_that_the_stop_waits_again_makes_its_open_a_trigger():
+    rig = stop_rig(modifyorder=[placed("1")])
+    rig.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0))
+    rig.path.modify("1", **TRAIL)
+    rig.path.on_update(update("1", OrderStatus.OPEN, 0))
+    rig.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0))
+
+    triggered = rig.path.on_update(update("1", OrderStatus.OPEN, 0))
+
+    assert triggered.status is OrderStatus.OPEN
+
+
+def test_a_refused_modify_leaves_the_stops_trigger_reading_as_it_was():
+    rig = stop_rig(modifyorder=[http_error(400, server_error("Order cannot be modified"))])
+    rig.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0))
+    rig.path.modify("1", **TRAIL)
+
+    triggered = rig.path.on_update(update("1", OrderStatus.OPEN, 0))
+
+    assert triggered.status is OrderStatus.OPEN
 
 
 def test_a_status_never_moves_back_from_open_to_trigger_pending():

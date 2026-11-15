@@ -108,6 +108,15 @@ class OrderFollower:
         """Keep the price type of a followed order that a modify changed."""
         self._orders[order_id].price_type = price_type
 
+    def changed_by_session(self, order_id: str) -> None:
+        """The session modified or cancelled the order (or may have: no answer came). A
+        broker reports such a change of a waiting stop as open (zerodha's UPDATE, MODIFY
+        PENDING, CANCEL PENDING; angel's AB04, AB11), so the stream's word that the stop
+        waits must come again before its "open" counts as the trigger."""
+        order = self._orders.get(order_id)
+        if order is not None:
+            order.stream_pending = False
+
     def claim(self, order_id: str) -> OrderUpdate | None:
         """Hand over the latest update of a newly followed order that arrived before it
         was bound, or None (none arrived, or it waits for the tradebook)."""
@@ -161,7 +170,7 @@ class OrderFollower:
             dataclasses.replace(held, average_price=average_price) if held.filled_quantity else held
         )
         if not is_news(order.seen, released):
-            order.held = None
+            order.release()
             return None
         return self._deliver(order, released)
 
@@ -184,18 +193,29 @@ class OrderFollower:
             if (due_ns := order.poll_due_ns()) is not None and due_ns <= now
         )[:MAX_POLLS_PER_ROUND]
         held = [order_id for order_id, order in self._orders.items() if order.held is not None]
-        if not due and not held:
+        held_due = [order_id for order_id in held if self._orders[order_id].trades_due_ns() <= now]
+        if not due and not held_due:
             return []
         self._round_ns = now
         polled = self._poll([order_id for _, order_id in due], now)
         if polled is None:
             return []
         wanted = {order_id for order_id, word in polled.items() if wants_trades(word)}
-        fills = self._read_trades(wanted | set(held)) if wanted or held else {}
+        if not wanted and not held_due:
+            return self._complete_all(polled, [], {}, now)
+        fills = self._read_trades(wanted | set(held))
         if fills is None:
             return []
-        words = [(order_id, word) for order_id, word in polled.items()]
-        new = [self._complete(order_id, word, fills, now) for order_id, word in words]
+        for order_id in held:
+            order = self._orders[order_id]
+            order.trades_read_ns, order.trade_reads = now, order.trade_reads + 1
+        return self._complete_all(polled, held, fills, now)
+
+    def _complete_all(
+        self, polled: dict[str, Polled], held: list[str], fills: dict[str, Fills], now: int
+    ) -> list[OrderUpdate]:
+        """The news of a round: each polled word, then each held one, with their fills."""
+        new = [self._complete(order_id, word, fills, now) for order_id, word in polled.items()]
         for order_id in held:
             word = self._orders[order_id].held
             if word is not None:
@@ -219,7 +239,13 @@ class OrderFollower:
             order.stream_pending |= update.status is OrderStatus.TRIGGER_PENDING
         floored = with_floor(order, update)
         if not is_news(order.seen, floored):
-            logger.debug("dropped an update that is not news: %s", floored)
+            if update.source == "stream" and _repeats(order.seen, floored):
+                # Kept all the same: after a restart it tells what the stream said (that a
+                # stop waits, say, when a poll said so first). A stale word is not kept,
+                # since the journal's last word is the latest to arrive.
+                self._journal.record_update(floored)
+                self._guard.check_update(floored)
+            logger.debug("an update that is not news: %s", floored)
             return None
         if (
             floored is not update
@@ -234,14 +260,12 @@ class OrderFollower:
         held = order.held
         if held is not None and not is_newer(held, update):
             return
-        order.held = update
-        if held is None:
-            order.held_since_ns, order.alerted = self._now(), False
+        order.hold(update, self._now())
         logger.debug("order %s waits for the tradebook: %s", update.order_id, update)
 
     def _deliver(self, order: Followed, update: OrderUpdate) -> OrderUpdate:
         self._journal.record_update(update)
-        order.seen = update
+        order.seen, order.quiet_polls = update, 0
         held = order.held
         # A terminal held word (a cancel the tradebook must confirm) outlives a working one.
         if (
@@ -249,7 +273,7 @@ class OrderFollower:
             and update.filled_quantity >= held.filled_quantity
             and (update.status.terminal or not held.status.terminal)
         ):
-            order.held = None
+            order.release()
         self._guard.check_update(update)
         return update
 
@@ -290,7 +314,7 @@ class OrderFollower:
         polled: dict[str, Polled] = {}
         for order_id in order_ids:
             order = self._orders[order_id]
-            order.polled_ns = now
+            order.polled_ns, order.quiet_polls = now, order.quiet_polls + 1
             answer = server_answer(
                 self._client.orderstatus(order_id=order_id, strategy=order.strategy)
             )
@@ -322,6 +346,19 @@ class OrderFollower:
             logger.warning("the tradebook could not be read: %s", answer.get("message"))
             return {}
         return read_fills(trades, order_ids)
+
+
+def _repeats(seen: OrderUpdate | None, update: OrderUpdate) -> bool:
+    """Whether a word that is not news repeats what is known: the same status, fills and
+    quantity as the last word handed over, or anything after a terminal one."""
+    if seen is None:
+        return False
+    same = (seen.status, seen.filled_quantity, seen.quantity) == (
+        update.status,
+        update.filled_quantity,
+        update.quantity,
+    )
+    return same or seen.status.terminal
 
 
 __all__ = [

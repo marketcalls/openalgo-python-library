@@ -85,11 +85,21 @@ def test_a_stop_the_stream_reports_waiting_is_polled_every_thirty_seconds():
     assert poll_times(rig, until_seconds=59) == [30.0]
 
 
-def test_a_resting_order_only_a_poll_has_seen_is_polled_every_second():
+def test_a_resting_order_no_stream_speaks_for_backs_off_to_five_seconds():
     stop = make_intent("i-1", purpose=Purpose.STOP, action="SELL", price_type="SL-M")
-    rig = sent_rig(stop, orderstatus=[status_answer("1", "trigger pending")] * 3)
+    rig = sent_rig(stop, orderstatus=[status_answer("1", "trigger pending")] * 6)
 
-    assert poll_times(rig, until_seconds=4) == [2.0, 3.0, 4.0]
+    assert poll_times(rig, until_seconds=20) == [2.0, 3.0, 5.0, 10.0, 15.0, 20.0]
+
+
+def test_news_from_a_poll_starts_the_back_off_again():
+    limit = make_intent("i-1", price_type="LIMIT", price=811.0)
+    answers = [status_answer("1", "open", filled_quantity=0)] * 3 + [
+        status_answer("1", "open", filled_quantity=4, average_price=811.0)
+    ]
+    rig = sent_rig(limit, orderstatus=[*answers, *answers[:2]], tradebook=[trades(("1", 4, 811.0))])
+
+    assert poll_times(rig, until_seconds=13) == [2.0, 3.0, 5.0, 10.0, 11.0, 13.0]
 
 
 def test_a_terminal_stream_update_stops_the_polls():

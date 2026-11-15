@@ -3,9 +3,10 @@
 The tradebook is the one source that gives every trade of an order: `orderstatus` prices
 a complete order at its first trade (services/orderstatus_service.py on the server), a
 broker's book often has no filled quantity, and on the brokers the server polls itself
-(groww, fivepaisa: `_POLLING_BROKERS` in services/order_update_service.py) every stream
+(groww and samco; `_POLLING_BROKERS` in services/order_update_service.py) every stream
 message says 0 filled. So a polled fill is priced, and a cancel's fills confirmed, from
-the tradebook. Quantities are units, prices rupees.
+the tradebook. A broker whose tradebook names orders by another ID cannot be served
+(`UNSUPPORTED_BROKERS`). Quantities are units, prices rupees.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any
 
 from ..errors import LiveError
@@ -27,6 +29,18 @@ logger = logging.getLogger(LOGGER_NAME)
 Polled = OrderUpdate | Mapping[str, Any]
 #: An order's units filled and their quantity-weighted average price in the tradebook.
 Fills = tuple[int, float]
+#: The brokers the order path cannot trade through, by OpenAlgo's broker name, with why:
+#: the preflight refuses them.
+UNSUPPORTED_BROKERS = MappingProxyType(
+    {
+        "fivepaisa": (
+            "its tradebook names each trade by the exchange's order ID (ExchOrderID) while "
+            "its orders, order book and order stream use the broker's (BrokerOrderId), so "
+            "a fill cannot be matched to its order (broker/fivepaisa/mapping/order_data.py "
+            "on the OpenAlgo server)"
+        ),
+    }
+)
 
 
 def needs_trades(update: OrderUpdate) -> bool:
@@ -99,4 +113,12 @@ def with_fills(word: Polled, fills: Fills | None, now: int) -> tuple[OrderUpdate
     return dataclasses.replace(word, average_price=average_price), True
 
 
-__all__ = ["Fills", "Polled", "needs_trades", "read_fills", "wants_trades", "with_fills"]
+__all__ = [
+    "UNSUPPORTED_BROKERS",
+    "Fills",
+    "Polled",
+    "needs_trades",
+    "read_fills",
+    "wants_trades",
+    "with_fills",
+]

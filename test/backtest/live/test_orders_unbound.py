@@ -7,7 +7,10 @@ import datetime as dt
 import pytest
 from orders_fakes import (
     CONNECTION_LOST,
+    DROPPED,
     NS,
+    PROXY_504,
+    SERVER_502,
     START_IST,
     START_NS,
     TIMEOUT,
@@ -27,7 +30,7 @@ from orders_fakes import (
 from openalgo.backtest._live._order_book import book_time_ns
 from openalgo.backtest._live._order_follow import MAX_UNCLAIMED_UPDATES
 from openalgo.backtest._live._types import AlertKind, OrderStatus
-from openalgo.backtest._live.orders import SERVER_BROKER_TIMEOUT_NS, Resolution, Resolved
+from openalgo.backtest._live.orders import BROKER_WINDOW_NS, Resolution, Resolved
 
 SEMI_AUTO = {
     "status": "success",
@@ -38,9 +41,9 @@ SEMI_AUTO = {
 
 
 def unbound_rig(*rows, intent=None, reads=2, **answers):
-    """A rig whose intent (i-1 unless given) was sent and answered 502, with an order
-    book holding `rows` for `reads` reads."""
-    rig = make_rig(placeorder=[http_error(502), *answers.pop("placeorder", [])], **answers)
+    """A rig whose intent (i-1 unless given) was sent and answered with OpenAlgo's own
+    502, with an order book holding `rows` for `reads` reads."""
+    rig = make_rig(placeorder=[SERVER_502, *answers.pop("placeorder", [])], **answers)
     rig.client.answers["orderbook"] = [book(*rows) for _ in range(reads)]
     rig.path.send(intent or make_intent("i-1"))
     return rig
@@ -80,9 +83,15 @@ def test_an_unbound_intent_is_not_placed_after_two_reads_that_miss_it():
 
 
 @pytest.mark.parametrize(
-    "answer", [http_error(502), CONNECTION_LOST], ids=["502", "connection refused"]
+    "answer",
+    [
+        SERVER_502,
+        http_error(500, server_error("Failed to place order due to internal error")),
+        CONNECTION_LOST,
+    ],
+    ids=["openalgo 502", "openalgo 500", "connection refused"],
 )
-def test_after_a_502_or_a_refused_connection_misses_count_from_five_seconds(answer):
+def test_when_the_server_has_finished_misses_count_from_five_seconds(answer):
     rig = make_rig(placeorder=[answer], orderbook=[book(), book()])
     rig.path.send(make_intent("i-1"))
 
@@ -91,27 +100,46 @@ def test_after_a_502_or_a_refused_connection_misses_count_from_five_seconds(answ
     assert resolution.kind is Resolved.NOT_PLACED
 
 
-def test_after_a_client_timeout_misses_count_from_the_servers_broker_timeout():
-    rig = make_rig(placeorder=[TIMEOUT], orderbook=[book()] * 4)
+@pytest.mark.parametrize(
+    "answer",
+    [TIMEOUT, DROPPED, PROXY_504, http_error(502), {"status": "success"}],
+    ids=["timeout", "dropped connection", "proxy page", "502 page", "success, no ID"],
+)
+def test_otherwise_misses_count_only_after_the_servers_broker_window(answer):
+    rig = make_rig(placeorder=[answer], orderbook=[book()] * 3)
+    rig.path.send(make_intent("i-1"))
+
+    rig.clock.advance(BROKER_WINDOW_NS / NS - 1)
+    before_the_window = rig.path.resolve_unbound()
+    rig.clock.advance(1)
+    first_miss = rig.path.resolve_unbound()
+    rig.clock.advance(1)
+    second_miss = rig.path.resolve_unbound()
+
+    assert (before_the_window, first_miss) == ([], [])
+    assert [resolution.kind for resolution in second_miss] == [Resolved.NOT_PLACED]
+
+
+def test_the_broker_window_runs_from_the_send_not_from_the_answer():
+    rig = make_rig(placeorder=[TIMEOUT], orderbook=[book()] * 2)
     rig.client.before_call = lambda name, kwargs: name == "placeorder" and rig.clock.advance(10)
     rig.path.send(make_intent("i-1"))
 
-    early = settle(rig)
-    rig.clock.advance(SERVER_BROKER_TIMEOUT_NS / NS - 16)
-    late = settle(rig)
+    rig.clock.advance(BROKER_WINDOW_NS / NS - 10)
+    rig.path.resolve_unbound()
+    rig.clock.advance(1)
 
-    assert early == []
-    assert [resolution.kind for resolution in late] == [Resolved.NOT_PLACED]
+    assert [resolution.kind for resolution in rig.path.resolve_unbound()] == [Resolved.NOT_PLACED]
 
 
-def test_an_intent_left_unbound_before_a_restart_waits_as_one_that_timed_out():
+def test_an_intent_left_unbound_before_a_restart_waits_the_whole_broker_window():
     journal = FakeJournal()
     journal.record_intent(make_intent("i-1"))
     journal.mark_unbound("i-1", "Request timed out.")
     rig = make_rig(journal=journal, clock=Clock(START_NS + 30 * NS), orderbook=[book()] * 4)
 
     early = settle(rig)
-    rig.clock.advance(SERVER_BROKER_TIMEOUT_NS / NS)
+    rig.clock.advance(BROKER_WINDOW_NS / NS)
     late = settle(rig)
 
     assert early == []
@@ -276,7 +304,7 @@ def test_a_book_of_the_other_mode_settles_nothing():
 
 
 def test_an_order_this_session_bound_is_not_matched_to_another_intent():
-    rig = make_rig(placeorder=[placed("2611160001"), http_error(502)])
+    rig = make_rig(placeorder=[placed("2611160001"), SERVER_502])
     rig.client.answers["orderbook"] = [book(book_row("2611160001"))] * 2
     rig.path.send(make_intent("i-1"))
     rig.path.send(make_intent("i-2"))

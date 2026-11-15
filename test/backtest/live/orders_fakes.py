@@ -21,6 +21,7 @@ from openalgo.backtest._live._types import (
     OrderStatus,
     OrderUpdate,
     Purpose,
+    QueuedIntent,
     mode_of,
 )
 from openalgo.backtest._live.orders import OrderPath, RateBudget
@@ -77,8 +78,12 @@ class FakeJournal:
     def mark_queued(self, intent_id: str, pending_order_id: str) -> None:
         self.queued_as[intent_id] = pending_order_id
 
-    def queued(self) -> list[OrderIntent]:
-        return [self.intents[key] for key in self.queued_as if key not in self.order_of]
+    def queued(self) -> list[QueuedIntent]:
+        return [
+            QueuedIntent(self.intents[key], pending)
+            for key, pending in self.queued_as.items()
+            if key not in self.order_of
+        ]
 
     def unbound(self) -> list[OrderIntent]:
         settled = self.order_of.keys() | self.not_placed.keys() | self.queued_as.keys()
@@ -273,6 +278,25 @@ TIMEOUT = {
     "message": "Request timed out. The server took too long to respond.",
     "error_type": "timeout_error",
 }
+#: The SDK's answer when the connection broke off after the request was sent (an
+#: httpx.RemoteProtocolError or ReadError, caught as httpx.HTTPError).
+DROPPED = {
+    "status": "error",
+    "message": "HTTP error occurred: Server disconnected without sending a response.",
+    "error_type": "http_error",
+}
+#: OpenAlgo's own JSON answer when the broker's answer to the order was lost (HTTP 502,
+#: utils/httpx_client.py UNANSWERED_ORDER_MESSAGE), as the SDK wraps it.
+SERVER_502 = http_error(
+    502,
+    {
+        "status": "error",
+        "message": "The connection to the broker dropped after the order was sent, so it "
+        "may have been placed. Check the order book before placing it again.",
+    },
+)
+#: A proxy's own error page in front of the server (a gateway timeout), as the SDK wraps it.
+PROXY_504 = http_error(504, "<html><body>504 Gateway Time-out</body></html>")
 CONNECTION_LOST = {
     "status": "error",
     "message": "Failed to connect to the server. Please check if the server is running.",

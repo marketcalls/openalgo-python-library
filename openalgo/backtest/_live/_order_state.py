@@ -17,6 +17,11 @@ POLL_EVERY_NS = 1 * NANOS_PER_SECOND
 #: A resting order the stream has spoken for is polled this often, as a safety net for a
 #: stream that falls silent.
 SAFETY_POLL_EVERY_NS = 30 * NANOS_PER_SECOND
+#: A resting order no stream speaks for (18 brokers have no order stream, or the server
+#: runs with ORDER_UPDATES_ENABLED=FALSE), and a held fill's tradebook retries, back off
+#: through these waits and stay at the last. Every exit cancels the stop first and waits
+#: for the cancel's word, so a fill seen up to 5 s late is never exited twice.
+BACKOFF_NS = (1 * NANOS_PER_SECOND, 2 * NANOS_PER_SECOND, 5 * NANOS_PER_SECOND)
 #: The price types of a stop: some brokers' books write one waiting for its trigger as
 #: open, so it counts as triggered only on the stream's word or a fill.
 STOP_PRICE_TYPES = frozenset({"SL", "SL-M"})
@@ -48,9 +53,17 @@ class Followed:
     streamed: bool = False
     stream_pending: bool = False
     polled_ns: int | None = None
+    quiet_polls: int = 0
+    trades_read_ns: int | None = None
+    trade_reads: int = 0
 
     def poll_due_ns(self) -> int | None:
-        """When the order is next polled; None once its last word is terminal."""
+        """When the order is next polled; None once its last word is terminal.
+
+        No word yet: from 2 s after the send, every second. Resting (a LIMIT order open,
+        a stop waiting): every 30 s once the stream has spoken for it, else backing off
+        (`BACKOFF_NS`) while polls bring no news. Any other working order: every second.
+        """
         word = self.held or self.seen
         if word is None:
             if self.polled_ns is None:
@@ -58,11 +71,39 @@ class Followed:
             return self.polled_ns + POLL_EVERY_NS
         if word.status.terminal:
             return None
+        last_ns = max(self.polled_ns or 0, word.ts_recv_ns)
         rests = (self.price_type == "LIMIT" and word.status is OrderStatus.OPEN) or (
             self.price_type in STOP_PRICE_TYPES and word.status is OrderStatus.TRIGGER_PENDING
         )
-        every = SAFETY_POLL_EVERY_NS if rests and self.streamed else POLL_EVERY_NS
-        return max(self.polled_ns or 0, word.ts_recv_ns) + every
+        if not rests:
+            return last_ns + POLL_EVERY_NS
+        if self.streamed:
+            return last_ns + SAFETY_POLL_EVERY_NS
+        return last_ns + _backoff_ns(self.quiet_polls)
+
+    def trades_due_ns(self) -> int | None:
+        """When the tradebook is next read for the held word; None with nothing held.
+        The first read is at once, later ones back off (`BACKOFF_NS`)."""
+        if self.held is None:
+            return None
+        if self.trades_read_ns is None:
+            return self.held_since_ns
+        return self.trades_read_ns + _backoff_ns(self.trade_reads - 1)
+
+    def hold(self, update: OrderUpdate, now: int) -> None:
+        """Hold `update` for the tradebook; a first hold starts its clock and retries."""
+        if self.held is None:
+            self.held_since_ns, self.alerted = now, False
+            self.trades_read_ns, self.trade_reads = None, 0
+        self.held = update
+
+    def release(self) -> None:
+        """Nothing is held any more."""
+        self.held, self.trades_read_ns, self.trade_reads = None, None, 0
+
+
+def _backoff_ns(tries: int) -> int:
+    return BACKOFF_NS[min(max(tries, 0), len(BACKOFF_NS) - 1)]
 
 
 def as_followed(order: Followed, update: OrderUpdate) -> OrderUpdate:
@@ -92,6 +133,7 @@ def with_floor(order: Followed, update: OrderUpdate) -> OrderUpdate:
 
 
 __all__ = [
+    "BACKOFF_NS",
     "POLL_AFTER_NS",
     "POLL_EVERY_NS",
     "SAFETY_POLL_EVERY_NS",

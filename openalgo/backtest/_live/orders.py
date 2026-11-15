@@ -23,18 +23,27 @@ from collections.abc import Mapping
 from typing import Any
 
 from ..errors import LiveError, ModeChangedError
-from ._order_answers import Outcome, SendOutcome, outcome_of, server_answer, timed_out
+from ._order_answers import (
+    Outcome,
+    SendOutcome,
+    outcome_of,
+    server_answer,
+    server_has_finished,
+)
 from ._order_book import CLOCK_SKEW_LIMIT_NS, Resolution, Resolved
 from ._order_follow import HELD_ALERT_AFTER_NS, MAX_POLLS_PER_ROUND, OrderFollower
 from ._order_rate import MAX_ORDERS_PER_SECOND, OPENALGO_ORDERS_PER_SECOND, RateBudget
 from ._order_resolve import (
     BOOK_READ_EVERY_NS,
+    BROKER_QUEUE_MARGIN_NS,
+    BROKER_WINDOW_NS,
     NOT_PLACED_AFTER_NS,
     NOT_PLACED_MISSES,
     SERVER_BROKER_TIMEOUT_NS,
     UnboundResolver,
 )
 from ._order_state import POLL_AFTER_NS, POLL_EVERY_NS, SAFETY_POLL_EVERY_NS, HeldFill
+from ._order_trades import UNSUPPORTED_BROKERS
 from ._order_updates import normalize_update
 from ._types import (
     LOGGER_NAME,
@@ -100,20 +109,22 @@ class OrderPath:
         modified, cancelled and polled. An intent semi-auto queued before the restart
         sends one ERROR alert: approved, it would become an order nobody follows.
 
-        Call it after `guard.start()` and `journal.start_session(...)`, in that order.
-        Raises LiveError (and takes back nothing) before the guard has started, and
-        JournalError before the journal's session has.
+        Call it after `guard.start()` and `journal.start_session(...)`, in that order,
+        even with nothing to take back. Raises LiveError (and takes back nothing) before
+        the guard has started, and JournalError before the journal's session has.
         """
-        bound = self._journal.bound_orders()
         try:
-            self._follower.restore(bound)
+            # GuardLike tells nothing of having started: an answer that carries nothing
+            # asks it, and the guard raises LiveError before start() (guard.py).
+            self._guard.check_response({})
         except LiveError as error:
             raise LiveError(
                 "restore() takes back orders the mode guard must judge: call guard.start(), "
                 f"then journal.start_session(...), then restore() ({error})"
             ) from error
-        for intent in self._journal.queued():
-            self._resolver.alert_queued(intent)
+        self._follower.restore(self._journal.bound_orders())
+        for queued in self._journal.queued():
+            self._resolver.alert_queued(queued)
 
     def send(self, intent: OrderIntent) -> SendOutcome:
         """Place `intent`'s order once: journal first, then one `placeorder` call.
@@ -163,9 +174,11 @@ class OrderPath:
             logger.info("intent %s is order %s", intent.intent_id, outcome.order_id)
             return outcome
         if outcome.kind is not Outcome.REJECTED:
-            late_ns = SERVER_BROKER_TIMEOUT_NS if timed_out(answer) else 0
-            since_ns = max(self._now(), sent_ns + late_ns)
-            self._resolver.note_doubt(intent.intent_id, since_ns=since_ns)
+            if server_has_finished(answer):
+                counts_from_ns = self._now() + NOT_PLACED_AFTER_NS
+            else:
+                counts_from_ns = sent_ns + BROKER_WINDOW_NS
+            self._resolver.note_doubt(intent.intent_id, misses_count_from_ns=counts_from_ns)
             self._guard.note_order_in_doubt(intent.intent_id)
         logger.warning("intent %s is %s: %s", intent.intent_id, outcome.kind.value, outcome)
         return outcome
@@ -274,6 +287,10 @@ class OrderPath:
     def _settle_request(self, order_id: str, answer: Mapping[str, Any]) -> SendOutcome:
         outcome = outcome_of(answer, order_id)
         self._guard.check_response(answer)
+        if outcome.kind in (Outcome.ACCEPTED, Outcome.UNANSWERED):
+            # The broker may report the change itself as open (a stop being modified or
+            # cancelled): until the stream says the stop waits again, that is no trigger.
+            self._follower.changed_by_session(order_id)
         if outcome.kind is not Outcome.ACCEPTED:
             logger.warning("a request on order %s is %s: %s", order_id, outcome.kind.value, outcome)
         return outcome
@@ -281,6 +298,8 @@ class OrderPath:
 
 __all__ = [
     "BOOK_READ_EVERY_NS",
+    "BROKER_QUEUE_MARGIN_NS",
+    "BROKER_WINDOW_NS",
     "CLOCK_SKEW_LIMIT_NS",
     "HELD_ALERT_AFTER_NS",
     "MAX_ORDERS_PER_SECOND",
@@ -292,6 +311,7 @@ __all__ = [
     "POLL_EVERY_NS",
     "SAFETY_POLL_EVERY_NS",
     "SERVER_BROKER_TIMEOUT_NS",
+    "UNSUPPORTED_BROKERS",
     "HeldFill",
     "OrderPath",
     "Outcome",

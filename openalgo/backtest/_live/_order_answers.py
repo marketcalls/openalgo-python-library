@@ -16,10 +16,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+#: The SDK's `error_type` when its own timeout ended the wait (openalgo/orders.py).
+TIMEOUT_ERROR_TYPE = "timeout_error"
+#: The SDK's `error_type` when no connection could be made: the request never left.
+CONNECTION_ERROR_TYPE = "connection_error"
 #: The SDK's `error_type` for an answer that never came from OpenAlgo's order service: a
-#: timeout, a lost connection, an unreadable body or an unexpected failure in the client.
+#: timeout, a refused connection, an unreadable body or an unexpected client failure.
 _TRANSPORT_ERROR_TYPES = frozenset(
-    {"timeout_error", "connection_error", "json_error", "unknown_error"}
+    {TIMEOUT_ERROR_TYPE, CONNECTION_ERROR_TYPE, "json_error", "unknown_error"}
 )
 #: The SDK's `error_type` for an HTTP failure: with a status code the server answered,
 #: without one the exchange broke off (openalgo/orders.py `_make_request`).
@@ -27,6 +31,10 @@ _HTTP_ERROR_TYPE = "http_error"
 #: From HTTP 500 on, the server failed part way or the broker did not answer (a 502 is the
 #: server's "may have been placed", services/place_order_service.py).
 _FIRST_SERVER_ERROR_CODE = 500
+#: The HTTP codes of OpenAlgo's own JSON answers that leave a placement unknown: 502 (the
+#: broker's answer was lost) and 500 (the server failed part way). The server answered,
+#: so it has finished with the request (services/place_order_service.py).
+_SERVER_FINISHED_CODES = frozenset({500, 502})
 #: Semi-auto mode queues an order in the Action Center instead of placing it
 #: (services/order_router_service.py `queue_order`).
 _SEMI_AUTO_MODE = "semi_auto"
@@ -107,10 +115,15 @@ def outcome_of(answer: Mapping[str, Any], order_id: str = "") -> SendOutcome:
     return SendOutcome(kind, reason=reason)
 
 
-def timed_out(answer: Mapping[str, Any]) -> bool:
-    """Whether the SDK gave up waiting for the answer (its own timeout): the server may
-    still be placing the order."""
-    return answer.get("error_type") == "timeout_error"
+def server_has_finished(answer: Mapping[str, Any]) -> bool:
+    """Whether an answer that leaves a placement unknown shows the server is no longer
+    working on it: the connection was refused (the request never reached the server),
+    or OpenAlgo answered HTTP 500 or 502 in its own JSON (`server_answer` recovers it, and
+    it carries no SDK `error_type`). A timeout, a dropped connection or a proxy's error
+    page (a 504 or 524) shows nothing of the kind: the server may still be placing it."""
+    if answer.get("error_type") == CONNECTION_ERROR_TYPE:
+        return True
+    return answer.get("code") in _SERVER_FINISHED_CODES and "error_type" not in answer
 
 
 def _unanswered(answer: Mapping[str, Any]) -> bool:
@@ -125,4 +138,12 @@ def _unanswered(answer: Mapping[str, Any]) -> bool:
     return answer.get("error_type") == _HTTP_ERROR_TYPE
 
 
-__all__ = ["Outcome", "SendOutcome", "outcome_of", "server_answer", "timed_out"]
+__all__ = [
+    "CONNECTION_ERROR_TYPE",
+    "TIMEOUT_ERROR_TYPE",
+    "Outcome",
+    "SendOutcome",
+    "outcome_of",
+    "server_answer",
+    "server_has_finished",
+]
