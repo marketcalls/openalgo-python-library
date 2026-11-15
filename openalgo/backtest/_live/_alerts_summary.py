@@ -21,9 +21,11 @@ session did not reach OpenAlgo. Rupees are written as `Result.summary()` writes 
 from __future__ import annotations
 
 import datetime as dt
+import math
 from dataclasses import dataclass
 
 from .._summary import _rupees
+from ..errors import ConfigError
 from ..report._format import MISSING
 from ._types import Mode
 
@@ -43,11 +45,15 @@ class SessionSummary:
     `slippage` is rupees the live fills cost beyond the fills the backtest models for
     the same orders (negative when live did better), or None when no backtest was
     compared. `rejected_orders` counts the orders the broker or OpenAlgo refused,
-    `unprotected_seconds` the seconds a position had no stop at the broker, and
+    `unprotected_seconds` the seconds a position had no stop at the broker (shown
+    rounded up, so any exposure shows), and
     `reconcile_mismatches` the reconciliations whose broker position differed from the
     engine's. `undelivered_alerts` counts the session's alerts that did not reach
     OpenAlgo, failed or dropped (`Alerts.undelivered`). `flat` is True when the session
     ended with no open position.
+
+    Raises ConfigError when a rupee figure or the seconds unprotected is not a finite
+    number (NaN or infinite).
     """
 
     day: dt.date
@@ -63,6 +69,20 @@ class SessionSummary:
     reconcile_mismatches: int
     undelivered_alerts: int
     flat: bool
+
+    def __post_init__(self) -> None:
+        figures = {
+            "gross_pnl": self.gross_pnl,
+            "charges": self.charges,
+            "slippage": self.slippage,
+            "unprotected_seconds": self.unprotected_seconds,
+        }
+        for name, value in figures.items():
+            if value is not None and not math.isfinite(value):
+                raise ConfigError(
+                    f"the session summary's {name} must be a finite number, got {value!r}: "
+                    f"a figure the session could not measure is a fault to fix, not a total"
+                )
 
     @property
     def net_pnl(self) -> float:
@@ -82,7 +102,7 @@ def summary_text(summary: SessionSummary) -> str:
         ("Net P&L", _rupees(summary.net_pnl)),
         ("Slippage", _slippage(summary.slippage)),
         ("Rejected", _count(summary.rejected_orders, "order")),
-        ("Unprotected", f"{round(summary.unprotected_seconds)} s without a stop at the broker"),
+        ("Unprotected", f"{math.ceil(summary.unprotected_seconds)} s without a stop at the broker"),
         ("Reconcile", _count(summary.reconcile_mismatches, "mismatch", "mismatches")),
     ]
     if summary.undelivered_alerts:

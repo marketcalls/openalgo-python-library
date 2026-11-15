@@ -44,9 +44,31 @@ def server_error(code: int, message: str) -> dict:
     return sdk_wrapper(code, json.dumps({"status": "error", "message": message}) + "\n")
 
 
+# Refusals: another try would be refused the same way.
+MISSING_FIELD = server_error(400, "Username and message are required")
+KEY_REFUSED = server_error(401, "Invalid or missing API key")
+FORBIDDEN = server_error(403, "Invalid openalgo apikey")
 NOT_LINKED = server_error(404, "User not found or not linked to Telegram")
 BOT_STOPPED = server_error(409, "Telegram bot is stopped. Start the bot to send notifications.")
+# Transient failures: the server's rate limiter (app.py, its 429 handler), a server or
+# gateway failure, and the SDK's own errors when no answer came back.
+RATE_LIMITED = sdk_wrapper(
+    429,
+    json.dumps(
+        {
+            "status": "error",
+            "message": "Rate limit exceeded. Please slow down your requests.",
+            "retry_after": 60,
+        }
+    ),
+)
+SERVER_DOWN = server_error(503, "Service Unavailable")
 PROXY_PAGE = sdk_wrapper(502, "<html><body>Bad Gateway</body></html>")
+BROKEN_OFF = {
+    "status": "error",
+    "message": "HTTP error occurred: Server disconnected without sending a response.",
+    "error_type": "http_error",
+}
 UNREACHABLE = {
     "status": "error",
     "message": "Failed to connect to the server. Please check if the server is running.",
@@ -122,13 +144,15 @@ def make_alerts(client, clock, *, username=USERNAME, mode=Mode.SANDBOX, strategi
     )
 
 
-def started_alerts(client, clock, *, username=USERNAME):
-    """Alerts with their sender thread running, and that thread."""
-    before = set(threading.enumerate())
-    alerts = Alerts(client, username=username, mode=Mode.SANDBOX, now=clock)
-    started = [
+def threaded_alerts(client, clock, *, username=USERNAME):
+    """Alerts that start their sender thread on the first send."""
+    return Alerts(client, username=username, mode=Mode.SANDBOX, now=clock)
+
+
+def sender_threads_since(before: set[threading.Thread]) -> list[threading.Thread]:
+    """The sender threads started since `before` was taken (`threading.enumerate()`)."""
+    return [
         thread
         for thread in threading.enumerate()
         if thread not in before and thread.name == SENDER_THREAD_NAME
     ]
-    return alerts, started

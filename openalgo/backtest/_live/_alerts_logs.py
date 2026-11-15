@@ -96,8 +96,8 @@ class SessionLogs:
         return self._events_path
 
     def event(self, kind: str, **fields: Any) -> None:
-        """Append one event line: `{"ts_ns": <now>, "kind": kind, **fields}`, written to
-        disk before it returns. A field named like a key or token is written as
+        """Append one event line: `{"ts_ns": <now>, "kind": kind, **fields}`, flushed to
+        the file before it returns. A field named like a key or token is written as
         "[redacted]".
 
         Raises ConfigError for an empty `kind` or a field named `ts_ns`, and LiveError

@@ -146,7 +146,7 @@ def test_an_event_line_holds_the_utc_nanosecond_time_the_kind_and_the_fields(log
     ]
 
 
-def test_each_event_is_one_line_on_disk_before_the_call_returns(logs, clock):
+def test_each_event_is_one_line_flushed_before_the_call_returns(logs, clock):
     logs.event("session_start")
     clock.ns += 10**9
     logs.event("bar", symbol="SBIN")

@@ -1,11 +1,12 @@
 """The alerts of a live session through OpenAlgo's Telegram bot: a priority per kind, the
-mode and the strategies at the start of every alert, a failed send that never raises, the
-one-minute repeat window, the log-only mode without a username, and the test alert
-(08-live-trading sections 4 and 8).
+mode and the strategies at the start of every alert, a refused send that never raises,
+the one-minute repeat window of repeated conditions, the log-only mode without a
+username, and the test alert (08-live-trading sections 4 and 8).
 
 The alerts here start no sender thread: each test posts the queue itself with
-`deliver_queued`, so nothing waits. The queue and the sender thread are specified in
-`test_alerts_sender.py`; the fake OpenAlgo is in `alerts_samples.py`.
+`deliver_queued`, so nothing waits. The queue, the pacing, the retries and the sender
+thread are specified in `test_alerts_sender.py`; the fake OpenAlgo is in
+`alerts_samples.py`.
 """
 
 from __future__ import annotations
@@ -15,10 +16,15 @@ import logging
 import pytest
 from alerts_samples import (
     BOT_STOPPED,
+    BROKEN_OFF,
     DELIVERED,
+    FORBIDDEN,
+    KEY_REFUSED,
+    MISSING_FIELD,
     NOT_LINKED,
     PROXY_PAGE,
     QUEUED,
+    RATE_LIMITED,
     TIMED_OUT,
     UNREACHABLE,
     UNWRAPPED_ERROR,
@@ -35,6 +41,7 @@ from openalgo.backtest._live.alerts import (
     ALERT_PRIORITY,
     PRIORITY_HIGHEST,
     PRIORITY_LOWEST,
+    REPEATED_CONDITIONS,
     TELEGRAM_MAX_CHARS,
 )
 from openalgo.backtest.errors import ConfigError
@@ -55,7 +62,7 @@ def alerts(client, clock):
     return make_alerts(client, clock)
 
 
-def failed_once(answer, clock):
+def posted_once(answer, clock):
     """Alerts whose one alert got `answer`."""
     alerts = make_alerts(FakeOpenAlgo(answer), clock)
     alerts.send(AlertKind.FEED_DEAD, "no tick for 30 s")
@@ -145,21 +152,19 @@ def test_an_alert_cut_for_telegram_is_logged_whole(alerts, caplog):
     assert f"alert error: SANDBOX: {'x' * 5000}" in caplog.messages
 
 
-# A failed send
+# A refused send: counted as failed at once, never tried again
 
-FAILED_SENDS = [
-    pytest.param(
-        NOT_LINKED, "User not found or not linked to Telegram (HTTP 404)", id="not linked"
-    ),
+REFUSALS = [
+    pytest.param(MISSING_FIELD, "Username and message are required (HTTP 400)", id="400"),
+    pytest.param(KEY_REFUSED, "Invalid or missing API key (HTTP 401)", id="401"),
+    pytest.param(FORBIDDEN, "Invalid openalgo apikey (HTTP 403)", id="403"),
+    pytest.param(NOT_LINKED, "User not found or not linked to Telegram (HTTP 404)", id="404"),
     pytest.param(
         BOT_STOPPED,
         "Telegram bot is stopped. Start the bot to send notifications. (HTTP 409)",
-        id="bot stopped",
+        id="409",
     ),
-    pytest.param(PROXY_PAGE, "HTTP 502: <html><body>Bad Gateway</body></html>", id="proxy page"),
     pytest.param(UNWRAPPED_ERROR, "Username and message are required", id="error answer"),
-    pytest.param(UNREACHABLE, UNREACHABLE["message"], id="unreachable"),
-    pytest.param(TIMED_OUT, TIMED_OUT["message"], id="timed out"),
     pytest.param(
         ClientRaised("socket closed"),
         "the client raised ClientRaised: socket closed",
@@ -167,21 +172,32 @@ FAILED_SENDS = [
     ),
     pytest.param(None, "OpenAlgo's answer was not a JSON object: None", id="no JSON object"),
 ]
+# Transient failures, which the sender tries again (test_alerts_sender.py); the test
+# alert, which is not retried, reports them at once.
+TRANSIENTS = [
+    pytest.param(
+        RATE_LIMITED, "Rate limit exceeded. Please slow down your requests. (HTTP 429)", id="429"
+    ),
+    pytest.param(PROXY_PAGE, "HTTP 502: <html><body>Bad Gateway</body></html>", id="502"),
+    pytest.param(UNREACHABLE, UNREACHABLE["message"], id="unreachable"),
+    pytest.param(TIMED_OUT, TIMED_OUT["message"], id="timed out"),
+    pytest.param(BROKEN_OFF, BROKEN_OFF["message"], id="broken off"),
+]
 
 
-@pytest.mark.parametrize(("answer", "reason"), FAILED_SENDS)
-def test_a_failed_send_does_not_raise_and_is_counted(clock, answer, reason):
-    assert failed_once(answer, clock).failures == 1
+@pytest.mark.parametrize(("answer", "reason"), REFUSALS)
+def test_a_refused_send_does_not_raise_and_is_counted_at_once(clock, answer, reason):
+    assert posted_once(answer, clock).failures == 1
 
 
-@pytest.mark.parametrize(("answer", "reason"), FAILED_SENDS)
-def test_a_failed_send_keeps_the_reason_in_the_servers_words(clock, answer, reason):
-    assert failed_once(answer, clock).last_failure == reason
+@pytest.mark.parametrize(("answer", "reason"), REFUSALS)
+def test_a_refused_send_keeps_the_reason_in_the_servers_words(clock, answer, reason):
+    assert posted_once(answer, clock).last_failure == reason
 
 
-def test_a_failed_send_is_logged_as_a_warning_with_its_reason(clock, caplog):
+def test_a_refused_send_is_logged_as_a_warning_with_its_reason(clock, caplog):
     caplog.set_level(logging.INFO, logger=LOGGER_NAME)
-    failed_once(NOT_LINKED, clock)
+    posted_once(NOT_LINKED, clock)
     warnings = [
         record.getMessage() for record in caplog.records if record.levelno == logging.WARNING
     ]
@@ -192,8 +208,8 @@ def test_a_failed_send_is_logged_as_a_warning_with_its_reason(clock, caplog):
 
 
 def test_a_long_reply_is_shortened_in_the_reason(clock):
-    alerts = failed_once(sdk_wrapper(502, "y" * 500), clock)
-    assert alerts.last_failure == "HTTP 502: " + "y" * 190 + "..."
+    alerts = posted_once(sdk_wrapper(400, "y" * 500), clock)
+    assert alerts.last_failure == "HTTP 400: " + "y" * 190 + "..."
 
 
 def test_a_delivered_alert_counts_no_failure(alerts):
@@ -211,7 +227,15 @@ def test_an_alert_of_unknown_kind_is_sent_as_an_error_alert(alerts, client):
 # The repeat window
 
 
-def test_the_same_alert_within_a_minute_is_not_sent_again(alerts, client, clock):
+def test_the_repeated_conditions_are_a_dead_feed_a_reconcile_mismatch_and_an_error():
+    assert set(REPEATED_CONDITIONS) == {
+        AlertKind.FEED_DEAD,
+        AlertKind.RECONCILE_MISMATCH,
+        AlertKind.ERROR,
+    }
+
+
+def test_the_same_condition_within_a_minute_is_not_sent_again(alerts, client, clock):
     alerts.send(AlertKind.FEED_DEAD, "no tick for 30 s")
     clock.advance(59.999)
     alerts.send(AlertKind.FEED_DEAD, "no tick for 30 s")
@@ -220,7 +244,7 @@ def test_the_same_alert_within_a_minute_is_not_sent_again(alerts, client, clock)
     assert alerts.suppressed == 1
 
 
-def test_the_same_alert_is_sent_again_a_minute_after_it_went_out(alerts, client, clock):
+def test_the_same_condition_is_sent_again_a_minute_after_it_went_out(alerts, client, clock):
     alerts.send(AlertKind.FEED_DEAD, "no tick for 30 s")
     clock.advance(60)
     alerts.send(AlertKind.FEED_DEAD, "no tick for 30 s")
@@ -231,37 +255,36 @@ def test_the_same_alert_is_sent_again_a_minute_after_it_went_out(alerts, client,
 
 def test_the_minute_counts_from_the_last_send_not_the_last_repeat(alerts, client, clock):
     for _ in range(3):
-        alerts.send(AlertKind.SESSION, "still not flat")
+        alerts.send(AlertKind.ERROR, "still not flat")
+        alerts.deliver_queued()
         clock.advance(30)
-    alerts.deliver_queued()
     assert len(client.calls) == 2
     assert alerts.suppressed == 1
 
 
-def test_another_text_within_a_minute_is_sent(alerts, client, clock):
-    alerts.send(AlertKind.ENTRY, "Bought 10 SBIN")
+def test_another_text_of_a_condition_within_a_minute_is_sent(alerts, client, clock):
+    alerts.send(AlertKind.ERROR, "SBIN: order path failed")
     clock.advance(1)
-    alerts.send(AlertKind.ENTRY, "Bought 5 INFY")
+    alerts.send(AlertKind.ERROR, "INFY: order path failed")
     alerts.deliver_queued()
     assert len(client.calls) == 2
 
 
-def test_the_same_text_of_another_kind_within_a_minute_is_sent(alerts, client):
-    alerts.send(AlertKind.ERROR, "SBIN: order refused")
-    alerts.send(AlertKind.REJECT, "SBIN: order refused")
+def test_the_same_text_of_another_condition_within_a_minute_is_sent(alerts, client):
+    alerts.send(AlertKind.ERROR, "SBIN: no answer")
+    alerts.send(AlertKind.FEED_DEAD, "SBIN: no answer")
     alerts.deliver_queued()
     assert len(client.calls) == 2
 
 
-def test_a_failed_send_is_not_tried_again_within_a_minute(clock):
-    client = FakeOpenAlgo(UNREACHABLE, UNREACHABLE)
-    alerts = make_alerts(client, clock)
-    alerts.send(AlertKind.FEED_DEAD, "no tick for 30 s")
+def test_two_equal_events_within_a_minute_are_two_alerts(alerts, client, clock):
+    alerts.send(AlertKind.EXIT, "Sold 10 SBIN at 815.00")
     alerts.deliver_queued()
-    clock.advance(10)
-    alerts.send(AlertKind.FEED_DEAD, "no tick for 30 s")
+    clock.advance(5)
+    alerts.send(AlertKind.EXIT, "Sold 10 SBIN at 815.00")
     alerts.deliver_queued()
-    assert (len(client.calls), alerts.failures, alerts.suppressed) == (1, 1, 1)
+    assert client.messages == ["SANDBOX: Sold 10 SBIN at 815.00"] * 2
+    assert alerts.suppressed == 0
 
 
 def test_a_suppressed_repeat_is_not_logged_as_an_alert(alerts, caplog):
@@ -347,11 +370,20 @@ def test_a_test_alert_openalgo_only_queued_is_not_delivered(clock):
     )
 
 
-@pytest.mark.parametrize(("answer", "reason"), FAILED_SENDS)
+@pytest.mark.parametrize(("answer", "reason"), REFUSALS + TRANSIENTS)
 def test_a_test_alert_that_failed_is_not_delivered_and_says_why(clock, answer, reason):
     alerts = make_alerts(FakeOpenAlgo(answer), clock)
     assert alerts.test() is False
     assert alerts.last_failure == reason
+
+
+def test_a_test_alert_that_failed_is_not_tried_again(clock):
+    client = FakeOpenAlgo(UNREACHABLE)
+    alerts = make_alerts(client, clock)
+    alerts.test()
+    clock.advance(60)
+    alerts.deliver_queued()
+    assert len(client.calls) == 1
 
 
 def test_a_failed_test_alert_is_not_counted_among_the_sessions_failures(clock):
@@ -399,3 +431,11 @@ def test_a_mode_that_is_not_a_mode_is_refused(client, clock):
 def test_a_single_strategy_name_is_refused_rather_than_read_letter_by_letter(client, clock):
     with pytest.raises(ConfigError, match=r"pass \['ema_cross'\] for one strategy"):
         make_alerts(client, clock, strategies="ema_cross")
+
+
+@pytest.mark.parametrize(
+    "strategies", [None, 42, ["orb", 7]], ids=["none", "a number", "a number among names"]
+)
+def test_strategies_that_are_not_names_are_refused(client, clock, strategies):
+    with pytest.raises(ConfigError, match="strategies must be a list of strategy names"):
+        make_alerts(client, clock, strategies=strategies)

@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import datetime as dt
+import math
 from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
 from openalgo.backtest._live._types import Mode
 from openalgo.backtest._live.alerts import SessionSummary, summary_text
+from openalgo.backtest.errors import ConfigError
 
 A_GOOD_DAY = SessionSummary(
     day=dt.date(2026, 11, 16),
@@ -79,7 +81,7 @@ def test_a_live_day_with_a_loss_that_ended_open_reads_so():
         "Net P&L     : Rs -1,445.25\n"
         "Slippage    : Rs 12.50 better than the backtest\n"
         "Rejected    : 2 orders\n"
-        "Unprotected : 12 s without a stop at the broker\n"
+        "Unprotected : 13 s without a stop at the broker\n"
         "Reconcile   : 1 mismatch\n"
         "Alerts      : 2 not delivered\n"
         "End state   : not flat: a position is still open"
@@ -119,10 +121,22 @@ def test_a_session_with_no_strategy_names_says_none():
     assert line(replace(A_GOOD_DAY, strategies=()), "Strategies") == "none"
 
 
-def test_the_seconds_unprotected_are_whole_seconds():
-    assert line(replace(A_GOOD_DAY, unprotected_seconds=7.6), "Unprotected") == (
-        "8 s without a stop at the broker"
+@pytest.mark.parametrize(
+    ("seconds", "shown"),
+    [(0.0, "0 s"), (0.4, "1 s"), (7.6, "8 s"), (12.0, "12 s")],
+    ids=["none", "under a second", "a part second", "whole seconds"],
+)
+def test_the_seconds_unprotected_round_up_so_any_exposure_shows(seconds, shown):
+    assert line(replace(A_GOOD_DAY, unprotected_seconds=seconds), "Unprotected") == (
+        f"{shown} without a stop at the broker"
     )
+
+
+@pytest.mark.parametrize("field", ["gross_pnl", "charges", "slippage", "unprotected_seconds"])
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "-inf"])
+def test_a_figure_that_is_not_a_finite_number_is_refused(field, value):
+    with pytest.raises(ConfigError, match=f"the session summary's {field} must be a finite"):
+        replace(A_GOOD_DAY, **{field: value})
 
 
 def test_the_summary_is_plain_ascii_text():

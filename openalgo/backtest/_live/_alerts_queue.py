@@ -1,40 +1,52 @@
 """The bounded queue between a live session's loop and its alert sender (`alerts`).
 
-The loop puts alerts on it and never waits; one sender thread takes them, oldest first,
-and posts them to OpenAlgo. A full queue makes room by dropping the oldest alert of the
-lowest priority, the new one included: a queue full of urgent alerts keeps them and
-drops a routine one. Thread-safe.
+The loop puts alerts on it and never waits; the sender takes them highest priority
+first, oldest first within a priority. A routine alert (below `urgent_from`) leaves with
+every other routine alert waiting, in the order they were sent, as long as their text
+fits one Telegram message, so a burst costs one post; an urgent alert always leaves
+alone. A post that failed for a while puts its alerts back at the head of their
+priority. A full queue makes room by dropping the oldest alert of the lowest priority,
+the new one included: a queue full of urgent alerts keeps them and drops a routine one.
+Thread-safe.
 """
 
 from __future__ import annotations
 
 import threading
-from collections import deque
 from dataclasses import dataclass
 
 from ._types import AlertKind
+
+# The text between two alerts posted together.
+ALERT_SEPARATOR = "\n"
 
 
 @dataclass(frozen=True)
 class QueuedAlert:
     """An alert waiting for the sender: its kind, its message (the mode and strategies
-    already in front) and its Telegram priority."""
+    already in front), its Telegram priority, its place in the order alerts were sent
+    (`seq`), and when it was first posted (UTC nanoseconds, None before)."""
 
     kind: AlertKind
     message: str
     priority: int
+    seq: int
+    first_posted_ns: int | None = None
 
 
 class AlertQueue:
-    """At most `size` alerts waiting for the sender, oldest first.
+    """At most `size` alerts waiting for the sender. `urgent_from` is the least priority
+    that leaves alone and `max_chars` the longest text of one post.
 
-    `dropped` counts the alerts it let go: to make room, put after `close`, or left when
-    the sender was given up on (`abandon`).
+    `dropped` counts the alerts it let go without a post: to make room, put after
+    `close`, or never posted when the sender was given up on (`abandon`).
     """
 
-    def __init__(self, size: int) -> None:
+    def __init__(self, size: int, *, urgent_from: int, max_chars: int) -> None:
         self._size = size
-        self._alerts: deque[QueuedAlert] = deque()
+        self._urgent_from = urgent_from
+        self._max_chars = max_chars
+        self._alerts: list[QueuedAlert] = []
         self._ready = threading.Condition()
         self._closed = False
         self._abandoned = False
@@ -51,6 +63,10 @@ class AlertQueue:
         """True once `close` was called: nothing more is taken in."""
         with self._ready:
             return self._closed
+
+    def __len__(self) -> int:
+        with self._ready:
+            return len(self._alerts)
 
     def put(self, alert: QueuedAlert) -> QueuedAlert | None:
         """Queue `alert` without waiting. Returns the alert dropped for it (`alert` itself
@@ -69,16 +85,40 @@ class AlertQueue:
             self._ready.notify()
             return dropped
 
-    def take(self, *, wait: bool) -> QueuedAlert | None:
-        """The oldest alert, or None when there is none to send: at once when the queue is
-        empty and `wait` is False; with `wait`, once the queue is closed and empty or
-        abandoned. A closed queue still gives the alerts it holds."""
+    def take(self) -> list[QueuedAlert]:
+        """The next post's alerts in the order they were sent, taken off the queue: the
+        head alone when it is urgent, else every routine alert that fits beside it. Empty
+        when nothing waits or the queue was abandoned."""
         with self._ready:
-            while wait and not self._alerts and not self._closed:
-                self._ready.wait()
             if self._abandoned or not self._alerts:
-                return None
-            return self._alerts.popleft()
+                return []
+            head = min(self._alerts, key=_head_order)
+            batch = [head]
+            if head.priority < self._urgent_from:
+                batch = self._routine_batch(head)
+            for alert in batch:
+                self._alerts.remove(alert)
+            return batch
+
+    def put_back(self, alerts: list[QueuedAlert]) -> bool:
+        """Return alerts a failed post took: they keep their place (their `seq`), so they
+        go first again within their priority, even past the size of a full queue. False,
+        and nothing returned, once the queue was abandoned."""
+        with self._ready:
+            if self._abandoned:
+                return False
+            self._alerts.extend(alerts)
+            self._ready.notify()
+            return True
+
+    def wait(self, timeout_seconds: float | None) -> bool:
+        """Wait until an alert is put, the queue is closed or `timeout_seconds` pass (None:
+        no limit; at once when alerts wait and there is no limit). False once the sender
+        should stop: the queue is abandoned, or closed with nothing left."""
+        with self._ready:
+            if not self._stopping() and (timeout_seconds is not None or not self._alerts):
+                self._ready.wait(timeout_seconds)
+            return not self._stopping()
 
     def close(self) -> None:
         """Take in nothing more; the sender delivers what is left, then stops."""
@@ -86,16 +126,38 @@ class AlertQueue:
             self._closed = True
             self._ready.notify_all()
 
-    def abandon(self) -> int:
-        """Drop every alert still waiting and stop the sender after its current one;
-        returns how many were dropped."""
+    def abandon(self) -> tuple[list[QueuedAlert], int]:
+        """Empty the queue and stop the sender after its current post. Returns the alerts
+        posted before and waiting for another try, for the sender to count as failed, and
+        how many were never posted, which are counted as dropped."""
         with self._ready:
-            left = len(self._alerts)
+            posted = [alert for alert in self._alerts if alert.first_posted_ns is not None]
+            never_posted = len(self._alerts) - len(posted)
+            self._dropped += never_posted
             self._alerts.clear()
-            self._dropped += left
             self._closed = self._abandoned = True
             self._ready.notify_all()
-            return left
+            return posted, never_posted
+
+    def _stopping(self) -> bool:
+        return self._abandoned or (self._closed and not self._alerts)
+
+    def _routine_batch(self, head: QueuedAlert) -> list[QueuedAlert]:
+        """The routine alerts waiting, in the order they were sent, up to the first that
+        would not fit one post beside the head (which always goes)."""
+        routine = sorted(
+            (alert for alert in self._alerts if alert.priority < self._urgent_from),
+            key=lambda alert: alert.seq,
+        )
+        batch, length = [head], len(head.message)
+        for alert in routine:
+            if alert is head:
+                continue
+            length += len(ALERT_SEPARATOR) + len(alert.message)
+            if length > self._max_chars:
+                break
+            batch.append(alert)
+        return sorted(batch, key=lambda alert: alert.seq)
 
     def _make_room(self, alert: QueuedAlert) -> QueuedAlert:
         """Remove and return the oldest alert of the lowest priority, or return `alert`
@@ -103,10 +165,17 @@ class AlertQueue:
         lowest = min(queued.priority for queued in self._alerts)
         if alert.priority < lowest:
             return alert
-        index = next(i for i, queued in enumerate(self._alerts) if queued.priority == lowest)
-        dropped = self._alerts[index]
-        del self._alerts[index]
+        dropped = min(
+            (queued for queued in self._alerts if queued.priority == lowest),
+            key=lambda queued: queued.seq,
+        )
+        self._alerts.remove(dropped)
         return dropped
 
 
-__all__ = ["AlertQueue", "QueuedAlert"]
+def _head_order(alert: QueuedAlert) -> tuple[int, int]:
+    """Highest priority first, oldest first within a priority."""
+    return (-alert.priority, alert.seq)
+
+
+__all__ = ["ALERT_SEPARATOR", "AlertQueue", "QueuedAlert"]
