@@ -173,6 +173,10 @@ class JournalLike(Protocol):
     def mark_unbound(self, intent_id: str, reason: str) -> None:
         """Note an intent whose outcome is unknown (a 502, a timeout, a disconnect)."""
 
+    def mark_not_placed(self, intent_id: str, reason: str) -> None:
+        """Close an intent that never became a broker order: a definite refusal, or an
+        unbound intent the order book does not hold."""
+
     def unbound(self) -> list[OrderIntent]:
         """The intents still unbound, oldest first."""
 
