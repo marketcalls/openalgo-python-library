@@ -16,7 +16,7 @@ from typing import Any
 
 from ..errors import JournalError
 from ._journal_rows import day_key, intent_from, state_from, unreadable, update_from
-from ._types import BoundOrder, Mode, OrderIntent, OrderStatus, OrderUpdate
+from ._types import BoundOrder, Mode, OrderIntent, OrderStatus, OrderUpdate, QueuedIntent
 
 _UNRESOLVED = (
     "SELECT * FROM intents WHERE ledger = ? AND day = ? AND state IN ('recorded', 'unbound') "
@@ -105,9 +105,11 @@ def unbound(sql: sqlite3.Connection, ledger: str, day: str) -> list[OrderIntent]
     return [intent_from(row) for row in sql.execute(_UNRESOLVED, (ledger, day))]
 
 
-def queued(sql: sqlite3.Connection, ledger: str, day: str) -> list[OrderIntent]:
-    """The day's intents semi-auto mode queued and not bound since, oldest first."""
-    return [intent_from(row) for row in sql.execute(_QUEUED, (ledger, day))]
+def queued(sql: sqlite3.Connection, ledger: str, day: str) -> list[QueuedIntent]:
+    """The day's intents semi-auto mode queued and not bound since, with their pending
+    order IDs (a queued intent's `reason`), oldest first."""
+    rows = sql.execute(_QUEUED, (ledger, day))
+    return [QueuedIntent(intent_from(row), row["reason"]) for row in rows]
 
 
 def bound_orders(sql: sqlite3.Connection, ledger: str, day: str) -> list[BoundOrder]:

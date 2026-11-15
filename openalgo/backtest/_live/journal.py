@@ -61,7 +61,7 @@ from ._journal_rows import (
     update_values,
 )
 from ._journal_stops import needs_recording
-from ._types import BoundOrder, Mode, Now, OrderIntent, OrderUpdate
+from ._types import BoundOrder, Mode, Now, OrderIntent, OrderUpdate, QueuedIntent
 
 _START_SESSION = (
     "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, 1) ON CONFLICT (ledger, day) "
@@ -160,13 +160,13 @@ class Journal(JournalHandle):
         Center as `pending_order_id`: not a broker order (yet), so it leaves `unbound()`
         for `queued()`; approved, its order is bound as any other. Raises `JournalError`
         when the intent is unknown or already bound."""
-        pending = pending_order_id or "with no pending order ID given"
-        reason = f"queued for approval in OpenAlgo's Action Center (semi-auto) as {pending}"
-        self._resolve(intent_id, "queued", reason)
+        # A queued intent's reason is its pending order ID, which `queued()` gives back.
+        self._resolve(intent_id, "queued", pending_order_id)
 
-    def queued(self, *, day: date | None = None) -> list[OrderIntent]:
-        """The day's intents that semi-auto mode queued and that are not bound since,
-        oldest first. Raises `JournalError` with no `day` before `start_session`."""
+    def queued(self, *, day: date | None = None) -> list[QueuedIntent]:
+        """The day's intents that semi-auto mode queued and that are not bound since, with
+        their pending order IDs, oldest first. Raises `JournalError` with no `day` before
+        `start_session`."""
         key = self._day_key(day, "list the queued intents")
         with self._sql("read the queued intents") as sql:
             return reads.queued(sql, self._ledger, key)

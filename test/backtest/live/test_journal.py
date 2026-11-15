@@ -20,7 +20,13 @@ from journal_samples import (
     started_journal,
 )
 
-from openalgo.backtest._live._types import BoundOrder, JournalLike, Mode, OrderStatus
+from openalgo.backtest._live._types import (
+    BoundOrder,
+    JournalLike,
+    Mode,
+    OrderStatus,
+    QueuedIntent,
+)
 from openalgo.backtest._live.journal import Journal
 from openalgo.backtest.errors import JournalError
 
@@ -139,7 +145,7 @@ def test_an_intent_marked_not_placed_leaves_the_unbound_list(journal):
 def test_a_queued_intent_leaves_the_unbound_list_for_the_queued_list(journal):
     journal.record_intent(an_intent())
     journal.mark_queued("i1", "17")
-    assert (journal.unbound(), journal.queued()) == ([], [an_intent()])
+    assert (journal.unbound(), journal.queued()) == ([], [QueuedIntent(an_intent(), "17")])
 
 
 def test_a_queued_intent_is_found_queued_after_a_reopen(path):
@@ -147,7 +153,7 @@ def test_a_queued_intent_is_found_queued_after_a_reopen(path):
         journal.record_intent(an_intent())
         journal.mark_queued("i1", "17")
     with started_journal(path) as reopened:
-        assert reopened.queued() == [an_intent()]
+        assert reopened.queued() == [QueuedIntent(an_intent(), "17")]
 
 
 def test_a_queued_intent_whose_order_is_approved_is_bound_and_leaves_the_queued_list(journal):
