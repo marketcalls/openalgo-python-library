@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   valid OHLC bar), its strategy bars rebuilt by the backtest's resampler, and ending at
   the end of its day. A session given its bars minute by minute gives the same result as
   the backtest of those bars.
+- The live layer's mode guard (private, not used by `bt.live` yet): OpenAlgo's sandbox or
+  live mode read at the start of a session, checked on every order answer and update of
+  the session's own orders, and polled every 5 seconds and before each entry. A change of
+  mode, or OpenAlgo's semi-auto mode, locks the session (nothing more is sent) and sends
+  one alert listing the orders sent and the orders in doubt after the change. New errors
+  in `openalgo.backtest.errors`: `LiveError`, `PreflightError`, `ModeChangedError`,
+  `JournalError`.
 
 ## [2.2.1] - 2026-11-15
 
