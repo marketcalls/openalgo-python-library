@@ -110,7 +110,26 @@ def test_with_neither_volume_nor_trade_time_a_change_of_ltp_is_a_trade():
 
     bars = bars_of(watching_from("09:00"), ticks, "10:02:01")
 
-    assert summary(bars) == [("10:00", 25010.0, 25010.0, 25005.0, 25005.0, 0.0, 2)]
+    assert summary(bars) == [("10:00", 25000.0, 25010.0, 25000.0, 25005.0, 0.0, 3)]
+
+
+@pytest.mark.parametrize(("volume", "event_ns"), [(None, None), (0, 0)], ids=["none", "sdk-zeros"])
+def test_an_index_watched_from_the_open_gets_its_first_bar_from_its_first_in_session_ltp(
+    volume, event_ns
+):
+    ticks = [
+        Tick("NIFTY", "NSE", ltp, ist(clock), ts_event_ns=event_ns, volume=volume)
+        for clock, ltp in [
+            ("09:14:58", 24990.0),
+            ("09:15:00.500", 25010.0),
+            ("09:15:20", 25010.0),
+            ("09:15:40", 25020.0),
+        ]
+    ]
+
+    bars = bars_of(watching_from("09:00"), ticks, "09:16:01")
+
+    assert summary(bars) == [("09:15", 25010.0, 25020.0, 25010.0, 25020.0, 0.0, 2)]
 
 
 def test_a_quote_before_a_symbols_first_trade_of_the_day_makes_no_bar():

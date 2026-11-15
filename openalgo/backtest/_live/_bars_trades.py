@@ -14,7 +14,12 @@ A tick is a trade when:
 2. else (no volume, or 0, which the SDK sends for a missing count) it carries a
    plausible last trade time and that time advanced: past the symbol's last one, or for
    its first one, at or after the instant watching began.
-3. else its LTP differs from the symbol's previous LTP (the first LTP only seeds).
+3. else its LTP differs from the symbol's previous LTP. A symbol's first tick in the
+   session is a trade when the session was watched from its open and the tick carries
+   no trade time at all (an index such as NIFTY): its first LTP opens its bar. The first
+   LTP only seeds in the partial slice after a start in the middle of the session, and
+   when the tick carries a trade time that is not plausible (a stale one, such as the
+   previous day's last trade of an option not traded yet today).
 
 Prices are rupees, volume units, times UTC nanoseconds.
 """
@@ -28,13 +33,16 @@ from dataclasses import dataclass
 class PlacedTick:
     """A tick placed in time. `at_ns` is its event time when plausible, else its receive
     time; `arrival` numbers the ticks in the order they arrived; `volume` is its positive
-    cumulative volume or None; `trade_ns` its plausible last trade time or None."""
+    cumulative volume or None; `trade_ns` its plausible last trade time or None;
+    `time_rejected` is True when it carried a trade time (not 0, which means none) that
+    was not plausible."""
 
     at_ns: int
     arrival: int
     ltp: float
     volume: float | None
     trade_ns: int | None
+    time_rejected: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +68,7 @@ class SymbolTrades:
 
     def __init__(self, *, watch_start_ns: int, from_open: bool) -> None:
         self._watch_start_ns = watch_start_ns
+        self._from_open = from_open
         self._level: float | None = 0.0 if from_open else None
         self._last_trade_ns: int | None = None
         self._last_price: float | None = None
@@ -110,8 +119,10 @@ class SymbolTrades:
             if last_trade_ns is None:
                 return 0.0 if tick.trade_ns >= self._watch_start_ns else None
             return 0.0 if tick.trade_ns > last_trade_ns else None
-        changed = self._last_price is not None and tick.ltp != self._last_price
-        return 0.0 if changed else None
+        if self._last_price is None:
+            first_is_trade = self._from_open and not tick.time_rejected
+            return 0.0 if first_is_trade else None
+        return 0.0 if tick.ltp != self._last_price else None
 
 
 __all__ = ["PlacedTick", "SliceTrades", "SymbolTrades"]

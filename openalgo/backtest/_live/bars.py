@@ -214,7 +214,7 @@ class TickBarBuilder:
             self._invalid += 1
             logger.debug("tick dropped, unusable LTP or volume: %r", tick)
             return
-        at_ns, trade_ns = self._place(tick)
+        at_ns, trade_ns, time_rejected = self._place(tick)
         if not self._session[0] <= at_ns < self._session[1]:
             self._outside += 1
             if tick.symbol not in self._noted_outside:
@@ -232,7 +232,8 @@ class TickBarBuilder:
             self._symbols[tick.symbol] = symbol
         volume = float(tick.volume) if tick.volume else None
         self._arrivals += 1
-        symbol.add(slot, PlacedTick(at_ns, self._arrivals, float(tick.ltp), volume, trade_ns))
+        placed = PlacedTick(at_ns, self._arrivals, float(tick.ltp), volume, trade_ns, time_rejected)
+        symbol.add(slot, placed)
 
     def close_due(self, now_ns: int) -> list[LiveBar]:
         """Close every slice whose close plus the grace is at or before `now_ns` (UTC
@@ -249,14 +250,15 @@ class TickBarBuilder:
         bars.sort(key=lambda bar: bar.ts_open_ns)
         return bars
 
-    def _place(self, tick: Tick) -> tuple[int, int | None]:
-        """(the instant the tick is placed at, its plausible trade time or None)."""
+    def _place(self, tick: Tick) -> tuple[int, int | None, bool]:
+        """(the instant the tick is placed at, its plausible trade time or None, whether
+        it carried a trade time other than 0 that is not plausible)."""
         event_ns = tick.ts_event_ns
         if event_ns is None:
-            return tick.ts_recv_ns, None
+            return tick.ts_recv_ns, None, False
         near = abs(event_ns - tick.ts_recv_ns) <= EVENT_TIME_TOLERANCE_NS
         if near and self._day_ns[0] <= event_ns < self._day_ns[1]:
-            return event_ns, event_ns
+            return event_ns, event_ns, False
         self._event_rejected += 1
         if tick.symbol not in self._noted_event:
             self._noted_event.add(tick.symbol)
@@ -270,7 +272,9 @@ class TickBarBuilder:
                 EVENT_TIME_TOLERANCE_NS // NANOS_PER_SECOND,
                 tick.ts_recv_ns,
             )
-        return tick.ts_recv_ns, None
+        # A 0 is a missing time, as a 0 volume is a missing count: counted and warned
+        # above, but the tick is judged as one that carries no trade time.
+        return tick.ts_recv_ns, None, event_ns != 0
 
     def _bar(self, symbol: str, slot: int, trades: SliceTrades) -> LiveBar:
         return LiveBar(
