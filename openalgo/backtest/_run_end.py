@@ -2,9 +2,10 @@
 
 The kernel ends a run at the earliest of the end of its range (`end=`), the close of
 the last base bar any instrument has, and the present (`now=`, the clock by default);
-see `rust/oa_bt/src/engine/run_end.rs`. When that is before the end of the range, the
-equity, the trades and the metrics stop there and a position still open is reported
-open, so the result says where the run ended and why.
+see `rust/oa_bt/src/engine/run_end.rs`, which also says when empty slots at the end of
+the last session are the usual end of the data rather than an early one. When the run
+ends before the end of the range, the equity, the trades and the metrics stop there and
+a position still open is reported open, so the result says where the run ended and why.
 """
 
 from __future__ import annotations

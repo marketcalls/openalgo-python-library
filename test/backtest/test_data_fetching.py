@@ -209,7 +209,26 @@ def test_broker_walk_stops_at_the_first_empty_window_that_had_a_session():
     result = _load(client)
     # zerodha windows: Apr 2 to May 31 has bars, Feb 2 to Apr 1 is empty, the oldest is not asked
     assert _windows(client) == [("2024-04-02", "2024-05-31"), ("2024-02-02", "2024-04-01")]
-    assert result.meta.fetch.stopped == "the broker returned no bars for 2024-02-02 to 2024-04-01"
+    assert result.meta.fetch.stopped == (
+        "the broker returned no bars for 2024-02-02 to 2024-04-01, so the history is taken "
+        "to start after 2024-04-01; nothing older was asked for"
+    )
+
+
+def test_empty_window_between_cached_sessions_does_not_end_the_broker_walk(tmp_path):
+    # The broker has no bars for Wednesday 2024-01-10, a session by the calendar (as a
+    # holiday the calendar does not know), and the cache holds the sessions around it.
+    wednesday, friday = dt.date(2024, 1, 10), dt.date(2024, 1, 19)
+    client = _client(days=[day for day in days_between(START, friday) if day != wednesday])
+    cached = {"source": "api", "cache_dir": tmp_path}
+    for first, last in [(dt.date(2024, 1, 8), dt.date(2024, 1, 9)), (dt.date(2024, 1, 11), friday)]:
+        server_load(client, "5m", first, last, calendar=CAL, now_ns=NOW, **cached)
+    client.calls.clear()
+    result = server_load(client, "5m", START, friday, calendar=CAL, now_ns=NOW, **cached)
+    assert _windows(client) == [("2024-01-10", "2024-01-10"), ("2024-01-01", "2024-01-05")]
+    assert result.meta.fetch.stopped is None
+    assert result.meta.short_history is False
+    assert len(result.bars) == 14 * BARS_PER_DAY_5M  # 15 weekdays, Wednesday 10th without bars
 
 
 @pytest.mark.parametrize("chunk_days", [1, 2, 3])

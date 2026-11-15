@@ -50,10 +50,10 @@ pub enum FillTiming {
 /// The quantity rule of a backtest (03-architecture 7).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum QuantityMode {
-    /// Fractional cash equity (the backtest default); derivatives stay in whole lots.
-    #[default]
+    /// Fractional cash equity (research only); derivatives stay in whole lots.
     Fractional,
-    /// The venue rule: whole shares, whole lots.
+    /// The venue rule: whole shares, whole lots (the backtest default, decision D26).
+    #[default]
     Venue,
 }
 

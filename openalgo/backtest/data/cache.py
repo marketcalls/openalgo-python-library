@@ -20,7 +20,11 @@ What is trusted:
 
 - A date counts as complete only when it is settled (`is_settled`): its rows were
   fetched a safety margin after its session closed and, for a broker, on a later IST
-  date. Anything else is fetched again by the loader.
+  date. Anything else is fetched again by the loader. A date the source answered with
+  no rows can be recorded the same way, with no rows in its month file, so that a
+  holiday the calendar does not know is not asked for on every load (which dates the
+  loader records is `_empty_answers`). Caches written before that are read as they
+  are: such a date is asked for once more, then recorded.
 - Every read verifies the hash, including the read that precedes a merge. A file
   that fails is moved aside (quarantined), never served and never deleted, and its
   dates are fetched again.
@@ -187,14 +191,16 @@ class RawCache:
         *,
         source: str,
         broker: str | None,
+        empty_days: Iterable[dt.date] = (),
     ) -> list[str]:
         """Store the rows a source returned for the inclusive IST date `ranges`.
 
         The rows of every date that received at least one row replace the cached
         rows of that date; dates that received nothing keep what they had, and rows
         outside `ranges` are ignored. `fetched_at_s` (epoch seconds) is recorded for
-        each date that was replaced. Returns notes about files that failed
-        verification while merging.
+        each date that was replaced, and for each of `empty_days` (dates the source
+        answered with no rows) that has no cached rows. Returns notes about files
+        that failed verification while merging.
 
         Raises ConfigError when the cache directory cannot be used.
         """
@@ -214,10 +220,14 @@ class RawCache:
             asked |= (days >= to_day(first)) & (days <= to_day(last))
         records, days = records[asked], days[asked]
         months = np.array([from_day(day).strftime("%Y-%m") for day in days], dtype=object)
-        for month in sorted(set(months.tolist())):
+        empty_by_month: dict[str, list[int]] = {}
+        for day in empty_days:
+            empty_by_month.setdefault(day.strftime("%Y-%m"), []).append(to_day(day))
+        for month in sorted(set(months.tolist()) | set(empty_by_month)):
             of_month = months == month
+            empty = empty_by_month.get(month, [])
             self._merge(
-                folder, index, month, records[of_month], days[of_month], fetched_at_s, notes
+                folder, index, month, records[of_month], days[of_month], empty, fetched_at_s, notes
             )
         index.update(source=source, broker=broker)
         self._save_index(folder, index)
@@ -230,10 +240,12 @@ class RawCache:
         month: str,
         fresh: np.ndarray,
         fresh_days: np.ndarray,
+        empty_days: list[int],
         fetched_at_s: int,
         notes: list[str],
     ) -> None:
-        """Replace, in one month partition, the rows of the dates that `fresh` covers."""
+        """Replace, in one month partition, the rows of the dates that `fresh` covers,
+        and record the `empty_days` (day numbers) that have no rows as fetched."""
         cached = self._partition(folder, index, month, notes)
         fetched = dict(index["partitions"].get(month, {}).get("fetched", {}))
         pieces = [fresh]
@@ -241,9 +253,13 @@ class RawCache:
             pieces.append(cached[~np.isin(bucket_days(cached), fresh_days)])
         merged = np.concatenate(pieces)
         merged = merged[np.argsort(merged["timestamp"], kind="stable")]
+        with_rows = set(bucket_days(merged).tolist())
+        recorded = [*np.unique(fresh_days).tolist(), *(d for d in empty_days if d not in with_rows)]
+        if not recorded:
+            return
         path = folder / f"{month}.npy"
         atomic_write(path, lambda handle: np.save(handle, merged, allow_pickle=False))
-        fetched.update({str(from_day(day)): fetched_at_s for day in np.unique(fresh_days)})
+        fetched.update({str(from_day(day)): fetched_at_s for day in recorded})
         index["partitions"][month] = {
             "file": path.name,
             "sha256": content_hash(merged),

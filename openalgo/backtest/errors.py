@@ -1,7 +1,10 @@
 """Exception types shared by the backtest package.
 
 Every error the engine raises on purpose derives from BacktestError, so callers can
-catch one type. Messages say what was wrong and what to do about it.
+catch one type. Messages say what was wrong and what to do about it. The warnings a run
+gives when orders were rejected or skipped (OrdersNotPlacedWarning) and when the strategy
+waited inside the run for its indicators (WarmUpWarning) are here too, so they can be
+filtered by their class.
 """
 
 
@@ -11,6 +14,13 @@ class BacktestError(Exception):
 
 class ConfigError(BacktestError, ValueError):
     """An argument or combination of arguments is invalid."""
+
+
+class IndicatorOutsideInitError(ConfigError):
+    """`self.I` was called after `init` (in `on_bar`, a timer, a callback or `on_stop`).
+    Indicators are registered in `init`: the history before `start` is loaded for them
+    and the strategy waits for their warm-up before its first decision, both settled
+    before the first bar, so an indicator registered later would be neither."""
 
 
 class DataError(BacktestError):
@@ -66,6 +76,26 @@ class CostError(BacktestError, ValueError):
     """A cost segment, preset or schedule is unknown or inconsistent."""
 
 
+class OrdersNotPlacedWarning(UserWarning):
+    """Orders of a run were not placed: rejected (margin, the product rule, a quantity
+    off the lot size, ...) or skipped before they were placed (a sized quantity of less
+    than one share or lot; the kernel gives a sizing function's 0 the same reason, so it
+    is counted too). `bt.backtest` issues it once, at the end of such a run, with how
+    many and the most common reason; the details of every reason are in
+    `result.warnings`. Orders a rule of the run refused as it intends (the MIS entry
+    window, a daily loss limit, a cooldown, max_positions, a size cap) do not raise it.
+    A warning, not an error: the result is still returned. Silence it with
+    `warnings.simplefilter("ignore", OrdersNotPlacedWarning)`."""
+
+
+class WarmUpWarning(UserWarning):
+    """The strategy waited inside the run for its indicators to warm up, so it made no
+    decision for a part of the run (or none at all). `bt.backtest` issues it once, at the
+    end of such a run, with the first decision and the strategy bars each symbol waited;
+    why, and what to do, is in `result.warnings`. A warning, not an error: the result is
+    still returned. Silence it with `warnings.simplefilter("ignore", WarmUpWarning)`."""
+
+
 __all__ = [
     "BacktestError",
     "CalendarError",
@@ -73,9 +103,12 @@ __all__ = [
     "CostError",
     "DataError",
     "DataQualityError",
+    "IndicatorOutsideInitError",
     "MissingDependencyError",
     "NoDataError",
+    "OrdersNotPlacedWarning",
     "ReferenceDataError",
     "SymbolNotFoundError",
     "TimestampError",
+    "WarmUpWarning",
 ]

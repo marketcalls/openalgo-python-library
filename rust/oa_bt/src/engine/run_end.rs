@@ -14,6 +14,16 @@
 //! Slots without a bar inside the run stay slices (SPEC-07); only the slots after the
 //! last bar of every instrument are dropped. The kernel reads no clock: the present is a
 //! value the caller resolved (the Python layer's `now=`).
+//!
+//! The data end before their last session closes only when that session stops earlier
+//! than the data usually do. Some sessions always end with empty slots: from 2026-08-03
+//! continuous trading in a stock with derivatives ends at 15:15 IST, the closing auction
+//! makes no candle, and the calendar keeps 15:30 for every stock. So the empty slots
+//! after the last bar stay slices, and the run ends at the end of its range (or at the
+//! present), when they all lie in the last bar's session and that bar closes no earlier
+//! before its session close than the last bar of the latest earlier session with a bar
+//! did. A run with one session, or whose last session is cut short by the range, keeps
+//! the plain rule.
 
 use crate::exec::InstrumentId;
 use crate::model::TsNanos;
@@ -87,8 +97,12 @@ pub(super) fn end_of_run(
                 .to_string(),
         });
     };
-    let close = closes[last_bar];
-    let cause = if last_bar + 1 < closed {
+    let last = if usual_empty_tail(timeline, &has_bar, last_bar, closed) {
+        closed - 1
+    } else {
+        last_bar
+    };
+    let cause = if last + 1 < closed {
         Some(RunEndCause::LastBar)
     } else if closed < closes.len() {
         Some(RunEndCause::Present)
@@ -96,11 +110,53 @@ pub(super) fn end_of_run(
         None
     };
     let end = RunEnd {
-        close,
+        close: closes[last],
         range_close,
         cause,
     };
-    Ok((last_bar + 1, end))
+    Ok((last + 1, end))
+}
+
+/// Whether the closed slots after `last_bar` (up to slice `closed`, exclusive) are the
+/// empty end every session of the data has (module docs): they all lie in the last
+/// bar's session, and that bar closes no earlier before its session close than the
+/// last bar of the latest earlier session with a bar.
+fn usual_empty_tail(
+    timeline: &Timeline,
+    has_bar: &impl Fn(usize) -> bool,
+    last_bar: usize,
+    closed: usize,
+) -> bool {
+    let day = |slice: usize| timeline.slice(slice).map(|info| info.day);
+    if last_bar + 1 >= closed || day(closed - 1) != day(last_bar) {
+        return false;
+    }
+    let session_start = (0..last_bar)
+        .rev()
+        .find(|&slice| day(slice) != day(last_bar))
+        .map_or(0, |slice| slice + 1);
+    let Some(earlier_bar) = (0..session_start).rev().find(|&slice| has_bar(slice)) else {
+        return false;
+    };
+    match (
+        time_left_in_session(timeline, last_bar),
+        time_left_in_session(timeline, earlier_bar),
+    ) {
+        (Some(last_gap), Some(earlier_gap)) => last_gap <= earlier_gap,
+        _ => false,
+    }
+}
+
+/// Nanoseconds from the close of `slice` to the close of its session, or `None` when
+/// the timeline does not reach that session's close (a range that ends inside it).
+fn time_left_in_session(timeline: &Timeline, slice: usize) -> Option<i64> {
+    let info = timeline.slice(slice)?;
+    let session_end = (slice..timeline.len())
+        .map_while(|index| timeline.slice(index).filter(|next| next.day == info.day))
+        .last()?;
+    session_end
+        .closes_session
+        .then_some(session_end.close - info.close)
 }
 
 impl Engine {

@@ -68,7 +68,7 @@ class api(OrderAPI, GTTAPI, DataAPI, AccountAPI, FeedAPI, OptionsAPI,
         # (with the helper FeedAPI.__init__ also runs, so the two cannot drift apart)
         self._init_feed(host, ws_port, ws_url, verbose, auto_reconnect)
 
-__version__ = "2.1.1"
+__version__ = "2.2.0"
 
 # Export main components for easy access
 __all__ = ['api', 'Strategy', 'ta', 'nbjit', 'prange', 'HAS_NUMBA']

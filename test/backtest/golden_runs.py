@@ -6,7 +6,8 @@ Four runs, each a different path through the engine:
     intraday_mis       an `on_bar` EMA crossover on 5-minute bars of a 1-minute base,
                        long and short on MIS with a stop and a target, two sessions
     condition_cnc      a condition strategy (`entry_when`, `exit_when`) on daily bars,
-                       delivery (CNC), about seven months
+                       delivery (CNC), about seven months after thirteen months of
+                       history that its indicators are computed over
     futures_roll       an `on_bar` strategy on the NIFTY futures series, daily, across
                        the roll from the September to the October 2024 contract
     gtt_positional     a positional strategy on daily bars that buys a dip with a GTT
@@ -125,9 +126,15 @@ class IntradayEmaCross(bt.Strategy):
 
 
 def intraday_mis() -> bt.Result:
+    # The 15-bar EMA needs 128 five-minute bars before the strategy decides (`_warm_up`):
+    # the two sessions before the run, 2026-10-30 and 11-02 (a walk of their own from the
+    # same price), are history, so it trades from the first bar of 11-03.
+    before = [dt.date(2026, 10, 30), dt.date(2026, 11, 2)]
+    history = TickWalk(seed=12).bars(minute_stamps(before), 16_000, 20, 45)
     days = [dt.date(2026, 11, 3), dt.date(2026, 11, 4)]
     bars = TickWalk(seed=11).bars(minute_stamps(days), 16_000, 20, 45)
-    return bt.backtest(IntradayEmaCross, data=bars, capital=CAPITAL, base="1m")
+    data = pd.concat([history, bars])
+    return bt.backtest(IntradayEmaCross, data=data, start=days[0], capital=CAPITAL, base="1m")
 
 
 # ----- condition_cnc -------------------------------------------------------------------
@@ -148,9 +155,12 @@ class ConditionEmaCross(bt.Strategy):
 
 
 def condition_cnc() -> bt.Result:
-    stamps = session_dates("NSE", "2026-04-01", "2026-10-30")
-    bars = TickWalk(seed=23).bars(stamps, 70_000, 400, 25)
-    return bt.backtest(ConditionEmaCross, data=bars, capital=CAPITAL)
+    # The 20-day EMA needs 256 bars before the strategy decides (`_warm_up`): the 266
+    # sessions from 2025-03-03 are history, so it trades from 2026-04-01. The walk of
+    # seed 24 crosses often enough in the run to pin seven round trips.
+    stamps = session_dates("NSE", "2025-03-03", "2026-10-30")
+    bars = TickWalk(seed=24).bars(stamps, 70_000, 400, 25)
+    return bt.backtest(ConditionEmaCross, data=bars, start=dt.date(2026, 4, 1), capital=CAPITAL)
 
 
 # ----- futures_roll --------------------------------------------------------------------

@@ -12,18 +12,40 @@ make the condition grammar of 14-strategy-api 4.2 (`_conditions`). A view of boo
 is true when its latest value is (false before any bar); a numeric view has no truth
 value, so `if view:` is an error that points to `view[-1]`.
 
+While a symbol is not ready (its indicators have not closed their warm-up, `_warm_up`),
+every view of its stores other than a bar field (open, high, low, close, volume) reads
+unknown: NaN, or false for a condition, at every bar shown, and its truth value is false.
+An indicator is computed over the whole series, so a value shown before its symbol is
+ready could depend on how many bars follow (`ta.ema` of 20 bars is not computed on fewer
+than 20); masking it when it is read keeps every decision on it causal, wherever it is
+read (deciding for another symbol, in a timer). The values themselves are kept: the
+views built from them in `init` and the indicators of indicators are computed from them,
+and once the symbol is ready its lookbacks (`line[-2]`) read them. The run context marks
+the stores of a symbol not ready (`waiting`, see `Store`).
+
 While the strategy's `init` declares it, no view has a truth value: `and`, `or`, `not`,
 `if` and a chained comparison such as `a < b < c` need one true or false, a condition
 over the whole run has none, and reading "false, no bar has closed" would quietly drop
 part of a condition (`a and b` would become `a`). A truth test then raises ConfigError
 saying to combine conditions with `&`, `|` and `~`. The run context marks the phase on
 its stores (`declaring`, see `Store`), so the rule needs no state of its own.
+
+A view also carries its recipe (`Recipe`): how its values are computed from the bar
+fields, so that the same computation can run on other bars. The warm-up of an indicator
+is measured by running its recipe on the engine's reference bars (`_warm_up_measure`). A
+field's view has one, so has a clock condition's, and so has every view built from views
+that have one; an indicator over values of the user's own (an array) has none. And it
+carries its need (`need`): the bars of its series before its values are those of all
+the history, 1 for a bar field. `shift(n)` adds n, `rolling_max(n)` and
+`rolling_min(n)` add n - 1, a crossing adds the bar before, other operations take the
+larger of their operands', and an indicator's view has the indicator's warm-up
+(`_indicators`), so an indicator of views needs at least theirs.
 """
 
 from __future__ import annotations
 
 import operator
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, Protocol
 
 import numpy as np
@@ -38,10 +60,12 @@ class Store(Protocol):
 
     A store of a run also carries `declaring`, true while the strategy's `init` runs
     (`_context.RunContext` sets it on every store it makes); a store without it, such as
-    one built outside a run, is never declaring."""
+    one built outside a run, is never declaring. `waiting` is true while the symbol the
+    store belongs to is not ready (module docstring); the run context keeps it."""
 
     symbol: str
     interval: str
+    waiting: bool
 
     def visible(self) -> int:
         """How many bars are revealed now."""
@@ -50,6 +74,46 @@ class Store(Protocol):
     def times(self) -> pd.DatetimeIndex:
         """IST open of every bar of the run."""
         ...
+
+
+# A view's values computed on other bars: it takes the bar fields (open, high, low, close
+# and volume as float arrays of one length, ts_open and ts_close as int64 UTC
+# nanoseconds, and "times", the IST opens as a DatetimeIndex) and returns the view's
+# values on those bars.
+Recipe = Callable[[Mapping[str, Any]], np.ndarray]
+
+
+def field_recipe(name: str) -> Recipe:
+    """The recipe of the view of one bar field (`open`, ..., `volume`)."""
+
+    def recipe(bars: Mapping[str, Any]) -> np.ndarray:
+        return bars[name]
+
+    return recipe
+
+
+def need_of(*parts: Any) -> int:
+    """The largest need of the views among `parts` (1 for constants, and for a view whose
+    need is unknown)."""
+    return max((part.need or 1 for part in parts if isinstance(part, TimelineView)), default=1)
+
+
+def _recipe(compute: Callable[..., np.ndarray], *parts: Any) -> Recipe | None:
+    """The recipe of `compute` applied to `parts`, each a view (its values on the bars)
+    or a constant; None when a view among them has no recipe."""
+    recipes: list[Recipe] = []
+    for part in parts:
+        if isinstance(part, TimelineView):
+            if part._recipe is None:
+                return None
+            recipes.append(part._recipe)
+        else:
+            recipes.append(lambda bars, constant=part: constant)
+
+    def recipe(bars: Mapping[str, Any]) -> np.ndarray:
+        return compute(*(part(bars) for part in recipes))
+
+    return recipe
 
 
 def _truth_in_init(label: str) -> str:
@@ -63,6 +127,14 @@ def _truth_in_init(label: str) -> str:
     )
 
 
+def _unknown(shown: np.ndarray) -> np.ndarray:
+    """What a view of a symbol not ready shows for the values `shown`: false for a
+    condition, else NaN, one per bar (module docstring)."""
+    if shown.dtype == np.bool_:
+        return np.zeros(len(shown), dtype=bool)
+    return np.full(len(shown), np.nan)
+
+
 def _bar_count(value: Any, what: str, minimum: int = 1) -> int:
     """A whole number of bars, `minimum` or more. Raises ConfigError otherwise."""
     if isinstance(value, bool) or not isinstance(value, int | np.integer) or value < minimum:
@@ -72,15 +144,30 @@ def _bar_count(value: Any, what: str, minimum: int = 1) -> int:
 
 
 class TimelineView:
-    """Values aligned to a store's bars; see the module docstring."""
+    """Values aligned to a store's bars; see the module docstring. `recipe` computes the
+    same values on other bars, None when they cannot be; `need` is the bars of the series
+    before they are those of all the history (None when no length is known); `bar_field`
+    is True for the view of a bar field, which shows its values while its symbol is not
+    ready."""
 
     # Views compare element-wise, so they are not hashable.
     __hash__ = None  # type: ignore[assignment]
 
-    def __init__(self, store: Store, values: np.ndarray, label: str) -> None:
+    def __init__(
+        self,
+        store: Store,
+        values: np.ndarray,
+        label: str,
+        recipe: Recipe | None = None,
+        need: int | None = 1,
+        bar_field: bool = False,
+    ) -> None:
         self._store = store
         self._values = values
         self._label = label
+        self._recipe = recipe
+        self.need = need
+        self.bar_field = bar_field
 
     @property
     def label(self) -> str:
@@ -88,7 +175,11 @@ class TimelineView:
         return self._label
 
     def _shown(self) -> np.ndarray:
-        return self._values[: self._store.visible()]
+        store = self._store
+        shown = self._values[: store.visible()]
+        if store.waiting and not self.bar_field:
+            return _unknown(shown)
+        return shown
 
     def __len__(self) -> int:
         return len(self._shown())
@@ -129,12 +220,27 @@ class TimelineView:
         operand = self._operand(other)
         if operand is NotImplemented:
             return NotImplemented
-        left, right = (operand, self._values) if flip else (self._values, operand)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            values = function(left, right)
+
+        def compute(mine: np.ndarray, theirs: Any) -> np.ndarray:
+            left, right = (theirs, mine) if flip else (mine, theirs)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                return np.asarray(function(left, right))
+
         name = other.label if isinstance(other, TimelineView) else repr(other)
         names = (name, self._label) if flip else (self._label, name)
-        return TimelineView(self._store, np.asarray(values), f"({names[0]} {symbol} {names[1]})")
+        label = f"({names[0]} {symbol} {names[1]})"
+        values = compute(self._values, operand)
+        recipe = _recipe(compute, self, other)
+        return TimelineView(self._store, values, label, recipe, need_of(self, other))
+
+    def _unary(
+        self, compute: Callable[[np.ndarray], np.ndarray], label: str, added: int = 0
+    ) -> TimelineView:
+        """The view of `compute` applied to this view's values, which needs `added` bars
+        more than this one."""
+        values = compute(self._values)
+        recipe = _recipe(compute, self)
+        return TimelineView(self._store, values, label, recipe, need_of(self) + added)
 
     def __add__(self, other: Any) -> TimelineView:
         return self._derive(other, operator.add, "+")
@@ -161,10 +267,10 @@ class TimelineView:
         return self._derive(other, operator.truediv, "/", flip=True)
 
     def __neg__(self) -> TimelineView:
-        return TimelineView(self._store, -self._values, f"-{self._label}")
+        return self._unary(np.negative, f"-{self._label}")
 
     def __abs__(self) -> TimelineView:
-        return TimelineView(self._store, np.abs(self._values), f"abs({self._label})")
+        return self._unary(np.abs, f"abs({self._label})")
 
     def __lt__(self, other: Any) -> TimelineView:
         return self._derive(other, operator.lt, "<")
@@ -199,10 +305,18 @@ class TimelineView:
         operand = self._operand(other)
         if operand is NotImplemented:
             raise ConfigError(f"{name} takes a number or a series view, got {type(other).__name__}")
-        line = np.broadcast_to(np.asarray(operand, dtype=float), self._values.shape)
-        values = np.asarray(getattr(ta, function)(self._values, np.ascontiguousarray(line)))
+
+        def compute(mine: np.ndarray, theirs: Any) -> np.ndarray:
+            line = np.broadcast_to(np.asarray(theirs, dtype=float), mine.shape)
+            crossed = getattr(ta, function)(mine, np.ascontiguousarray(line))
+            return np.asarray(crossed).astype(bool)
+
         label = other.label if isinstance(other, TimelineView) else repr(other)
-        return TimelineView(self._store, values.astype(bool), f"{self._label}.{name}({label})")
+        values = compute(self._values, operand)
+        recipe = _recipe(compute, self, other)
+        # A crossing reads the bar before as well.
+        need = need_of(self, other) + 1
+        return TimelineView(self._store, values, f"{self._label}.{name}({label})", recipe, need)
 
     # ----- combining conditions, and the windows of 14-strategy-api 4.2 ----------------
 
@@ -233,17 +347,21 @@ class TimelineView:
     def __invert__(self) -> TimelineView:
         if self._values.dtype != np.bool_:
             raise ConfigError(f"~ negates a condition; {self._label} is a series of numbers")
-        return TimelineView(self._store, ~self._values, f"~{self._label}")
+        return self._unary(np.invert, f"~{self._label}")
 
     def shift(self, bars: int) -> TimelineView:
         """The value `bars` bars earlier (0 or more): NaN for numbers and false for a
         condition before the first bar. A negative shift would read a later bar."""
         count = _bar_count(bars, "shift", minimum=0)
-        condition = self._values.dtype == np.bool_
-        values = np.full(len(self._values), False if condition else np.nan)
-        if count < len(values):
-            values[count:] = self._values[: len(values) - count]
-        return TimelineView(self._store, values, f"{self._label}.shift({count})")
+
+        def shifted(source: np.ndarray) -> np.ndarray:
+            condition = source.dtype == np.bool_
+            values = np.full(len(source), False if condition else np.nan)
+            if count < len(values):
+                values[count:] = source[: len(values) - count]
+            return values
+
+        return self._unary(shifted, f"{self._label}.shift({count})", count)
 
     def rolling_max(self, bars: int) -> TimelineView:
         """The highest of the last `bars` values, this bar's included (`ta.highest`);
@@ -260,9 +378,12 @@ class TimelineView:
         count = _bar_count(bars, name)
         if self._values.dtype == np.bool_:
             raise ConfigError(f"{name} takes a series of numbers; {self._label} is a condition")
-        source = np.ascontiguousarray(self._values, dtype=float)
-        values = np.asarray(getattr(ta, function)(source, count), dtype=float)
-        return TimelineView(self._store, values, f"{self._label}.{name}({count})")
+
+        def extreme(values: np.ndarray) -> np.ndarray:
+            source = np.ascontiguousarray(values, dtype=float)
+            return np.asarray(getattr(ta, function)(source, count), dtype=float)
+
+        return self._unary(extreme, f"{self._label}.{name}({count})", count - 1)
 
     def __bool__(self) -> bool:
         if getattr(self._store, "declaring", False):
@@ -278,4 +399,4 @@ class TimelineView:
         return f"{type(self).__name__}({self._label}, {counted(len(self), 'bar')})"
 
 
-__all__ = ["Store", "TimelineView"]
+__all__ = ["Recipe", "Store", "TimelineView", "field_recipe", "need_of"]

@@ -1,7 +1,9 @@
 """`bt.optimize` (14-strategy-api 5.1 and 5.2; 03-architecture 5).
 
 The strategy is `strategy_samples.EmaCross` on `wave_bars`, a 3 by 3 grid declared with
-`bt.param` (fast 3, 5, 8; slow 10, 15, 20). Worker processes use spawn, the only start
+`bt.param` (fast 3, 5, 8; slow 10, 15, 20); the sweeps compared trade by trade run on
+`wave_with_history`, six sessions, so that every combination is ready to trade within
+them. Worker processes use spawn, the only start
 method Windows has, so these tests exercise the Windows path on every platform.
 """
 
@@ -20,6 +22,7 @@ from strategy_samples import (
     final_equity,
     process_id,
     wave_bars,
+    wave_with_history,
 )
 
 import openalgo.backtest as bt
@@ -34,11 +37,12 @@ SETTINGS = {"capital": CAPITAL, "costs": None, "slippage": 0}
 
 
 def sweep(**settings):
-    return bt.optimize(EmaCross, data=wave_bars(), **{**SETTINGS, **settings})
+    return bt.optimize(EmaCross, data=wave_with_history(), **{**SETTINGS, **settings})
 
 
 def single(fast, slow):
-    return bt.backtest(EmaCross, data=wave_bars(), params={"fast": fast, "slow": slow}, **SETTINGS)
+    data = wave_with_history()
+    return bt.backtest(EmaCross, data=data, params={"fast": fast, "slow": slow}, **SETTINGS)
 
 
 @pytest.fixture(scope="module")
@@ -204,7 +208,7 @@ def test_a_run_with_its_own_calendar_sweeps_in_this_process():
 def test_a_sweep_with_the_default_charges_and_slippage_matches_the_single_runs():
     # Workers resolve the cost model and the slippage table again from costs="zerodha"
     # and slippage="default".
-    data = wave_bars()
+    data = wave_with_history()
     swept = bt.optimize(EmaCrossIntraday, data=data, capital=CAPITAL, workers=2, slow=(10,))
     for row in swept.table.itertuples():
         params = {"fast": int(row.fast)}
@@ -252,7 +256,7 @@ def test_a_large_event_grid_suggests_the_condition_form():
 def by_conditions():
     lines = []
     result = bt.optimize(
-        EmaCrossConditions, data=wave_bars(), workers=2, progress=lines.append, **SETTINGS
+        EmaCrossConditions, data=wave_with_history(), workers=2, progress=lines.append, **SETTINGS
     )
     return result, lines
 

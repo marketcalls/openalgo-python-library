@@ -12,12 +12,36 @@ Outputs the causality registry marks as looking ahead are rejected by name: a fu
 whose outputs all look ahead (`ta.fractals`) is refused when registered, and a
 look-ahead output of a function with causal ones (`ta.ichimoku`'s lagging span) is a
 `LookaheadOutput` that raises ConfigError on any use. The causal outputs then go
-through the truncation and window-stability checks of `_causality_checks`.
+through the checks of `_causality_checks`: truncation on the run's bars, and the
+window-stability warm-up on the engine's reference bars, computed there from the
+inputs' recipes (`_views.Recipe`), which the run waits for (`_warm_up`). An indicator of
+views with a need of their own (`self.close.rolling_max(100).shift(1)`, another
+indicator) needs theirs before its own (`_warm_up_measure.ReferenceCall`), and its views
+carry the result as their need. An anchored indicator (the registry's `anchor`:
+`ta.vwap`, `ta.pivot_points`) needs the bars since the start of the first anchor period
+it reads, by the call's `anchor` (its default when not given; `anchor=None` is one
+running period, or no anchor at all, measured as any other). An input of the user's own
+(a NumPy array, a pandas Series or DataFrame, as a series or as a keyword such as
+`timestamps=`) has no counterpart on the reference bars, so such an indicator has no
+warm-up length and is not waited for; the run says so. The series include the history
+loaded before `start`, so an indicator is computed over it; one over values of the
+user's own, which hold one value per bar of the run, is computed on the run's bars and
+unknown (NaN, or false for a condition) on the history's.
+
+**A series too short for its indicator**: when the call raises ValueError on the bars it
+is computed on and computes on the same inputs with more bars in front, the series was
+too short for it (`_indicator_values.short_outputs`): every value is unknown and its
+outcome records the bars the series had (`CheckOutcome.too_short`). Its warm-up is then
+longer than the series (a window that settles it computes it), so the symbol is not
+ready at any of its bars (`_warm_up`); one with no warm-up length is not waited for, its
+values unknown. Any other error of the call stops the run with a ConfigError.
 """
 
 from __future__ import annotations
 
 import hashlib
+import inspect
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import numpy as np
@@ -25,12 +49,18 @@ import pandas as pd
 
 from openalgo.indicators import causality
 
+from ._indicator_values import outputs_of, padded, short_outputs
 from ._messages import counted, not_supported
-from ._views import TimelineView
+from ._views import Recipe, TimelineView, need_of
+from ._warm_up_anchor import PeriodAnchor
+from ._warm_up_measure import ReferenceCall, fixed_inputs
 from .errors import ConfigError
 
-# The registry's word for an indicator replayed from an anchor, not a rolling window.
-ANCHORED_NOTE = "Anchored"
+# Plain inputs that are values of the user's own, one per bar: they have no counterpart
+# on the reference bars the warm-up is measured on (`_warm_up_reference`).
+OWN_VALUES = (np.ndarray, pd.Series, pd.DataFrame)
+# Every output of an indicator computed on any bars (`_Call.on_bars`).
+OnBars = Callable[[Mapping[str, Any]], list[np.ndarray]]
 
 
 class LookaheadOutput:
@@ -117,38 +147,36 @@ def _label(name: str, inputs: tuple, params: dict) -> str:
     return f"{name}({', '.join(shown)})"
 
 
-def _outputs(returned: Any, length: int, label: str) -> list[np.ndarray]:
-    """The function's outputs as 1-D arrays of the series length."""
-    if isinstance(returned, pd.DataFrame):
-        parts = [returned[column] for column in returned.columns]
-    elif isinstance(returned, tuple | list):
-        parts = list(returned)
-    else:
-        parts = [returned]
-    arrays = []
-    for part in parts:
-        array = np.asarray(part)
-        if array.dtype != np.bool_:
-            array = array.astype(float)
-        if array.ndim != 1 or len(array) != length:
-            raise ConfigError(f"{label} returned {array.shape} values for {counted(length, 'bar')}")
-        arrays.append(array)
-    return arrays
+def _own_span(inputs: tuple, params: dict, length: int) -> int:
+    """The bars at the end of a series of `length` an indicator is computed on: as many as
+    its values of the user's own hold (one per bar of the run, whose series has the
+    history before `start` in front), else all of them."""
+    sizes = [
+        len(value)
+        for value in (*inputs, *params.values())
+        if isinstance(value, OWN_VALUES) and np.ndim(value) == 1
+    ]
+    return min(sizes[0], length) if sizes else length
 
 
 class _Call:
     """One indicator call: the function, its inputs and parameters, on any part of the
-    input series."""
+    input series from bar `offset` on (`_own_span`)."""
 
-    def __init__(self, func: Any, inputs: tuple, params: dict, store: Any, label: str) -> None:
+    def __init__(
+        self, func: Any, inputs: tuple, params: dict, store: Any, label: str, offset: int = 0
+    ) -> None:
         self.func, self.inputs, self.params, self.store = func, inputs, params, store
         self.label = label
+        self.offset = offset
 
     def arguments(self, start: int, stop: int) -> list[Any]:
-        """The inputs on bars [start, stop): series as pandas Series by IST bar open."""
-        times = self.store.times()[start:stop]
+        """The inputs on bars [start, stop) after `offset`: series as pandas Series by IST
+        bar open."""
+        first, last = self.offset + start, self.offset + stop
+        times = self.store.times()[first:last]
         return [
-            pd.Series(value._values[start:stop], index=times)
+            pd.Series(value._values[first:last], index=times)
             if isinstance(value, TimelineView)
             else value
             for value in self.inputs
@@ -156,7 +184,7 @@ class _Call:
 
     def __call__(self, start: int, stop: int) -> list[np.ndarray]:
         returned = self.func(*self.arguments(start, stop), **self.params)
-        return _outputs(returned, stop - start, self.label)
+        return outputs_of(returned, stop - start, self.label)
 
     def digest(self) -> str:
         """SHA-256 of the series inputs: the data part of the check key."""
@@ -166,38 +194,158 @@ class _Call:
                 hasher.update(np.ascontiguousarray(value._values).tobytes())
         return hasher.hexdigest()[:16]
 
+    def own_values(self) -> bool:
+        """True when an input or a keyword holds values of the user's own (an array, or
+        a view without a recipe): the reference bars cannot reproduce them."""
+        values = (*self.inputs, *self.params.values())
+        if any(isinstance(value, OWN_VALUES) for value in values):
+            return True
+        return any(isinstance(v, TimelineView) and v._recipe is None for v in self.inputs)
 
-def register(checks: Any, func: Any, inputs: tuple, params: dict) -> Any:
-    """Register an indicator (see the module docstring): a view, or a tuple of views for
-    a function with several outputs. Raises ConfigError for a function outside
-    openalgo.ta, an indicator that looks ahead, or a call that fails on the run's bars."""
-    record = _record(func)
-    name = record["name"]
-    lookahead = record["non_causal"]
-    if set(record["outputs"]) <= set(lookahead):
-        reasons = "; ".join(f"{n}: {lookahead[n]}" for n in record["outputs"])
-        raise ConfigError(f"ta.{name} cannot be used in a strategy, it looks ahead ({reasons})")
-    store = _store_of(inputs)
-    label = _label(name, inputs, params)
-    call = _Call(func, inputs, params, store, label)
-    length = len(store.column("ts_open"))
+    def on_any_bars(self) -> tuple[Callable[[Mapping[str, Any]], list[Any]], Callable]:
+        """(the call's arguments on any bars, from the inputs' recipes (`_views.Recipe`),
+        series as pandas Series by IST bar open; the outputs from such arguments)."""
+        recipes = [v._recipe if isinstance(v, TimelineView) else None for v in self.inputs]
+
+        def arguments(bars: Mapping[str, Any]) -> list[Any]:
+            times = bars["times"]
+            return [
+                value if recipe is None else pd.Series(recipe(bars), index=times)
+                for value, recipe in zip(self.inputs, recipes, strict=True)
+            ]
+
+        def apply(values: list[Any]) -> list[np.ndarray]:
+            length = next(len(v) for v in values if isinstance(v, pd.Series))
+            return outputs_of(self.func(*values, **self.params), length, self.label)
+
+        return arguments, apply
+
+    def on_bars(self) -> OnBars:
+        """Every output computed on any bars (`on_any_bars`). The outputs of the last bars
+        asked for are kept, so that the views of several outputs compute the indicator
+        once."""
+        arguments, apply = self.on_any_bars()
+        last: list[tuple[Mapping[str, Any], list[np.ndarray]]] = []
+
+        def outputs(bars: Mapping[str, Any]) -> list[np.ndarray]:
+            if last and last[0][0] is bars:
+                return last[0][1]
+            found = apply(arguments(bars))
+            last[:] = [(bars, found)]
+            return found
+
+        return outputs
+
+    def reference(self, record: dict) -> ReferenceCall | None:
+        """The call as the reference bars measure it (`_warm_up_measure.ReferenceCall`):
+        its causal outputs by the registry `record` and the largest need of its series
+        inputs; None when it reads values of the user's own."""
+        if self.own_values():
+            return None
+        arguments, apply = self.on_any_bars()
+
+        def causal_outputs(values: list[Any]) -> list[np.ndarray]:
+            outputs = apply(values)
+            names, causal = _causal_names(record, outputs)
+            return [part for n, part in zip(names, outputs, strict=True) if n in causal]
+
+        input_need = need_of(*self.inputs)
+        fixed = fixed_inputs(arguments, causal_outputs) if input_need > 1 else None
+        return ReferenceCall(lambda bars: causal_outputs(arguments(bars)), input_need, fixed)
+
+
+def _output_recipe(on_bars: OnBars, index: int) -> Recipe:
+    """The recipe of output `index` of an indicator."""
+
+    def recipe(bars: Mapping[str, Any]) -> np.ndarray:
+        return on_bars(bars)[index]
+
+    return recipe
+
+
+def _bound(func: Any, inputs: tuple, params: dict) -> dict[str, Any]:
+    """Every argument of the call by name, defaults included."""
+    bound = inspect.signature(func).bind_partial(*inputs, **params)
+    bound.apply_defaults()
+    return bound.arguments
+
+
+def _anchor(record: dict, func: Any, inputs: tuple, params: dict) -> PeriodAnchor | None:
+    """The anchor of an anchored indicator call (module docstring, the registry's
+    `anchor`), None for any other call, for one that names no anchor period, and for one
+    whose bar times or period starts are the user's own."""
+    anchored = record["anchor"]
+    if anchored is None:
+        return None
+    arguments = _bound(func, inputs, params)
+    if any(arguments.get(name) is not None for name in anchored["overrides"]):
+        return None
+    period = arguments.get(anchored["argument"])
+    return None if period is None else PeriodAnchor(period, anchored["periods_before"])
+
+
+def _failure(call: _Call, bars: int, exc: ValueError) -> ConfigError:
+    """The error of a call that failed on `bars` bars: of the run's series, history
+    included, or of the engine's reference bars, where `init` first runs to learn the
+    needs."""
+    counted_bars = counted(bars, "bar")
+    where = (
+        f"the engine's {counted_bars} of reference bars (init runs on them first to learn "
+        "what history to load)"
+        if getattr(call.store, "reference", False)
+        else f"the {counted_bars} of its series, the history before start included"
+    )
+    return ConfigError(f"{call.label} failed on {where}: {exc}")
+
+
+def _computed(call: _Call, span: int) -> tuple[bool, list[np.ndarray], int | None]:
+    """(True when the function returns several outputs, its outputs on the last `span`
+    bars of its series, `span` when they were too few to compute it and the outputs are
+    unknown, else None): see `_indicator_values.short_outputs`. Raises ConfigError when
+    it fails there for any other reason (`_failure`)."""
+    arguments = call.arguments(0, span)
     try:
-        returned = func(*call.arguments(0, length), **params)
+        returned = call.func(*arguments, **call.params)
     except ValueError as exc:
-        bars = counted(length, "bar")
-        raise ConfigError(f"{label} failed on the run's {bars}: {exc}") from exc
-    outputs = _outputs(returned, length, label)
+        unknown = short_outputs(call.func, arguments, call.params, span, call.label)
+        if unknown is None:
+            raise _failure(call, span, exc) from exc
+        return (*unknown, span)
+    return isinstance(returned, tuple | list), outputs_of(returned, span, call.label), None
+
+
+def _causal_names(record: dict, outputs: list[np.ndarray]) -> tuple[list[str], tuple[str, ...]]:
+    """(the name of each output, the causal ones). Raises ConfigError when none is."""
+    lookahead = record["non_causal"]
     names = [*record["outputs"], *(f"output_{k}" for k in range(len(outputs)))][: len(outputs)]
     causal = tuple(n for n in names if n not in lookahead)
     if not causal:
         reasons = "; ".join(f"{n}: {lookahead[n]}" for n in names)
-        raise ConfigError(f"ta.{name} cannot be used in a strategy, it looks ahead ({reasons})")
+        raise ConfigError(
+            f"ta.{record['name']} cannot be used in a strategy, it looks ahead ({reasons})"
+        )
+    return names, causal
+
+
+def _checked(
+    checks: Any,
+    call: _Call,
+    record: dict,
+    outputs: list[np.ndarray],
+    found: tuple[PeriodAnchor | None, ReferenceCall | None, int | None],
+) -> tuple[Any, Any]:
+    """(the outcome of the checks of a call, the futures adapter of its series or None).
+    `outputs` are its outputs on its series, `found` its anchor, reference call and, for
+    a series too short for it, the bars of that series (it was not computed, so neither
+    its truncation is checked nor an adapter made). Raises ConfigError as `checks.check`
+    does."""
+    anchor, reference, too_short = found
+    names, causal = _causal_names(record, outputs)
     whole = [values for n, values in zip(names, outputs, strict=True) if n in causal]
-    anchored = ANCHORED_NOTE in (record["notes"] or "")
     # The function, its series inputs and their data: never a parameter value, so the
     # combinations of a sweep share one check.
-    series = ",".join(value.label for value in inputs if isinstance(value, TimelineView))
-    key = f"{name}:{series}:{call.digest()}"
+    series = ",".join(value.label for value in call.inputs if isinstance(value, TimelineView))
+    key = f"{record['name']}:{series}:{call.digest()}"
 
     def compute(start: int, stop: int) -> list[np.ndarray]:
         parts = call(start, stop)
@@ -205,20 +353,55 @@ def register(checks: Any, func: Any, inputs: tuple, params: dict) -> Any:
 
     # A futures series is re-adjusted at each roll: its indicators are checked point in
     # time and recomputed at every roll (`_spliced`).
-    adapter = getattr(store, "indicator_adapter", None)
+    adapter = None if too_short is not None else getattr(call.store, "indicator_adapter", None)
     if adapter is not None:
         adapter = adapter(call, names, causal)
         compute, whole = adapter.compute, adapter.whole
-    checks.check(key, label, compute, whole, anchored)
+    if too_short is not None:
+        whole = []
+    series_of = (call.store.symbol, call.store.interval)
+    outcome = checks.check(
+        key, call.label, compute, whole, anchor, series_of, reference, too_short=too_short
+    )
+    return outcome, adapter
+
+
+def register(checks: Any, func: Any, inputs: tuple, params: dict) -> Any:
+    """Register an indicator (see the module docstring): a view, or a tuple of views for
+    a function with several outputs. Raises ConfigError for a function outside
+    openalgo.ta, an indicator that looks ahead, or a call that fails on its series for
+    any reason but its length."""
+    record = _record(func)
+    name, lookahead = record["name"], record["non_causal"]
+    if set(record["outputs"]) <= set(lookahead):
+        reasons = "; ".join(f"{n}: {lookahead[n]}" for n in record["outputs"])
+        raise ConfigError(f"ta.{name} cannot be used in a strategy, it looks ahead ({reasons})")
+    store = _store_of(inputs)
+    label = _label(name, inputs, params)
+    length = len(store.column("ts_open"))
+    span = _own_span(inputs, params, length)
+    call = _Call(func, inputs, params, store, label, length - span)
+    reference = call.reference(record)
+    anchor = _anchor(record, func, inputs, params)
+    several, outputs, too_short = _computed(call, span)
+    names, causal = _causal_names(record, outputs)
+    outcome, adapter = _checked(checks, call, record, outputs, (anchor, reference, too_short))
+    on_bars = None if reference is None else call.on_bars()
     views = [
         LookaheadOutput(name, n, lookahead[n], causal)
         if n in lookahead
-        else TimelineView(store, values, label if len(outputs) == 1 else f"{label}.{n}")
-        for n, values in zip(names, outputs, strict=True)
+        else TimelineView(
+            store,
+            padded(values, length - span),
+            label if len(outputs) == 1 else f"{label}.{n}",
+            None if on_bars is None else _output_recipe(on_bars, k),
+            outcome.warm_up,
+        )
+        for k, (n, values) in enumerate(zip(names, outputs, strict=True))
     ]
     if adapter is not None:
         views = adapter.adopt(views)
-    return views[0] if len(views) == 1 and not isinstance(returned, tuple | list) else tuple(views)
+    return views[0] if len(views) == 1 and not several else tuple(views)
 
 
 __all__ = ["LookaheadOutput", "register"]

@@ -18,11 +18,15 @@ conditions and are read with the same level-triggered rules of 14-strategy-api 4
 Arrays hold one boolean per strategy bar of the run, the value at that bar's close:
 a NumPy array or list in bar order, or a pandas Series indexed by bar open time (IST,
 or tz-aware). A `from_signals` function receives the strategy bars as a DataFrame
-indexed by IST bar open (columns open, high, low, close, volume) and returns
-`(entries, exits)` or `(entries, exits, shorts, covers)`, any of which may be None.
+indexed by IST bar open (columns open, high, low, close, volume) and returns `(entries,
+exits)` or `(entries, exits, shorts, covers)`, any of which may be None. It runs in
+`init` on the strategy bars of the history before `start` (that of a 200-bar EMA,
+`_warm_up_probe`) and of the run together, so its indicators are computed over the
+history; the values of the history bars are left out, as no decision is made before
+`start`.
 
 Before the run the function is checked for look-ahead (03-architecture 5): it is run
-again on the bars cut at fixed points, and it must return the same outputs there (as
+again on the run's bars cut at fixed points, and it must return the same outputs there (as
 many, None where it gave None) with every value up to a cut the same as on the whole
 series. A function that reads later bars stops the run with ConfigError. The cuts are a
 sample (CUT_FRACTIONS): a value that reads a later bar shows only at the bar just before
@@ -43,6 +47,7 @@ import numpy as np
 import pandas as pd
 
 from ._conditions import array_values, check_order_arguments, strategy_frame
+from ._views import TimelineView
 from .errors import ConfigError
 from .strategy import Strategy
 
@@ -164,8 +169,9 @@ def from_signals(
 ) -> type[Strategy]:
     """A strategy from a function of the strategy bars returning `(entries, exits)` or
     `(entries, exits, shorts, covers)` (see the module docstring). The function runs
-    once per run, plus once per cut of the look-ahead check; the cuts are a sample of
-    three, so a function that reads a later bar only away from them passes. Raises
+    once on the history before `start` and the run's bars together, plus once per cut
+    of the look-ahead check; the cuts are a sample of three, so a function that reads a
+    later bar only away from them passes. Raises
     ConfigError for order arguments 4.1 does not list; when the run starts, ConfigError
     for a function that returns anything else or looks ahead."""
     if not callable(func):
@@ -176,7 +182,7 @@ def from_signals(
         frame = strategy_frame(self)
         arrays = _signals(func, frame)
         _check_causal(func, frame, arrays)
-        _declare(self, arrays, order_args)
+        _declare(self, _signal_views(self._ctx.store(None), frame, arrays), order_args)
 
     name = f"FromSignals_{getattr(func, '__name__', 'function')}"
     settings = (pyramiding, product)
@@ -192,6 +198,16 @@ def _signals(func: Callable[..., Any], frame: pd.DataFrame) -> tuple[Any, ...]:
             "(entries, exits, shorts, covers)"
         )
     return tuple(outputs)
+
+
+def _signal_views(store: Any, frame: pd.DataFrame, arrays: tuple[Any, ...]) -> tuple[Any, ...]:
+    """The function's outputs as views of the strategy bars, history and run (None
+    where it gave None)."""
+    opens = frame.index.tz_convert("UTC").as_unit("ns").asi8
+    return tuple(
+        None if values is None else TimelineView(store, array_values(values, opens, name), name)
+        for name, values in zip(OUTPUT_NAMES, arrays, strict=False)
+    )
 
 
 def _given(outputs: Sequence[Any]) -> str:

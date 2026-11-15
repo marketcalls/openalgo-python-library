@@ -22,6 +22,7 @@ from .._layout import NANOS_PER_SECOND, parse_interval
 from .._messages import counted
 from .._protocols import SessionCalendar
 from ..errors import ConfigError, DataError, NoDataError
+from ._empty_answers import empty_sessions_to_record
 from ._finish import PERIOD_UNITS, BarsResult, LoadMetadata, LoadRequest, finish
 from ._sessions import NowLike, Sessions, ist_days, resolve_now, to_date
 from .cache import RawCache, SeriesKey, is_settled
@@ -372,15 +373,19 @@ def _through_cache(
             raise
         raise DataError(f"{' '.join(cached.notes)}. Fetching them again failed: {exc}") from exc
     served = set(bucket_days(records).tolist())
-    kept = [day for day in unsettled if day in cached.fetched_at and to_day(day) not in served]
+    cached_days = set(bucket_days(cached.records).tolist())
+    kept = [day for day in unsettled if to_day(day) in cached_days and to_day(day) not in served]
     if kept:
         meta.warnings.append(
             "the source returned no rows for "
             f"{counted(len(kept), 'session that is', 'sessions that are')} in the cache "
             f"({kept[0]} to {kept[-1]}); the cached rows were kept"
         )
+    empty = empty_sessions_to_record(source, meta.fetch.answered, unsettled, served | cached_days)
     fetched_at_s = now_ns // NANOS_PER_SECOND
-    store.write(key, records, ranges, fetched_at_s, source=source, broker=meta.broker)
+    store.write(
+        key, records, ranges, fetched_at_s, source=source, broker=meta.broker, empty_days=empty
+    )
     return store.read(key, request.start, request.end).records
 
 

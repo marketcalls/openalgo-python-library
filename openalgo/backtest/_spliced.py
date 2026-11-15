@@ -19,6 +19,8 @@ What is known changes with the decision point, so the values do too:
   re-adjusted history the first time it is read in a new epoch (`SplicedView`);
 - the bar handed to `on_bar` is the contract's own bar, so values recorded in the result
   (decisions, logs) are those used and are never revised;
+- while the underlying is not ready, every view of its series but a bar field reads
+  unknown, as for any symbol (`_views`);
 - the causality checks of an indicator run point in time: each bar's value is the one
   computed on the history known at that bar's close, and a truncated computation must
   reproduce it (03-architecture 5).
@@ -35,7 +37,7 @@ import numpy as np
 import pandas as pd
 
 from ._series import FIELDS, TIMES, Bar, BarStore, SeriesStore
-from ._views import TimelineView
+from ._views import Recipe, TimelineView, field_recipe
 
 PRICE_FIELDS = ("open", "high", "low", "close")
 EpochValues = Callable[[int], np.ndarray]
@@ -44,12 +46,20 @@ EpochValues = Callable[[int], np.ndarray]
 class SplicedView(TimelineView):
     """A view of a spliced series whose values follow the epoch (module docstring).
     `at_epoch(e)` gives the values of the whole run as computed in epoch `e`; the view's
-    own values are those of the store's epoch, recomputed in place when it is read."""
+    own values are those of the store's epoch, recomputed in place when it is read.
+    `bar_field` is True for the view of a bar field (`TimelineView`)."""
 
     def __init__(
-        self, store: SplicedStore, values: np.ndarray, label: str, at_epoch: EpochValues
+        self,
+        store: SplicedStore,
+        values: np.ndarray,
+        label: str,
+        at_epoch: EpochValues,
+        recipe: Recipe | None = None,
+        need: int | None = 1,
+        bar_field: bool = False,
     ) -> None:
-        super().__init__(store, values, label)
+        super().__init__(store, values, label, recipe, need, bar_field)
         self._compute_at = at_epoch
         self._cached: tuple[int, np.ndarray] | None = None
         self._epoch = store.epoch
@@ -90,7 +100,9 @@ class SplicedView(TimelineView):
             rebuilt = getattr(TimelineView, method)(plain(self), *(plain(a) for a in args))
             return rebuilt._values
 
-        return SplicedView(self._store, built._values, built.label, at_epoch)
+        return SplicedView(
+            self._store, built._values, built.label, at_epoch, built._recipe, built.need
+        )
 
     def _derive(self, other: Any, function: Callable, symbol: str, flip: bool = False) -> Any:
         return self._wrap("_derive", other, function, symbol, flip)
@@ -209,7 +221,12 @@ class SplicedStore(SeriesStore):
         """The view of one column; it shares the store's live column, which `advance`
         re-adjusts in place."""
         return SplicedView(
-            self, self.column(name), f"{self.name}.{name}", lambda e: self.column_at(name, e)
+            self,
+            self.column(name),
+            f"{self.name}.{name}",
+            lambda e: self.column_at(name, e),
+            field_recipe(name),
+            bar_field=True,
         )
 
     def indicator_adapter(self, call: Any, names: list[str], causal: tuple[str, ...]) -> Any:
@@ -235,7 +252,7 @@ class IndicatorAdapter:
 
     def _outputs(self, epoch: int, start: int, stop: int) -> list[np.ndarray]:
         """Every output on bars [start, stop) with the inputs as re-adjusted in `epoch`."""
-        from ._indicators import _outputs
+        from ._indicator_values import outputs_of
 
         times = self._store.times()[start:stop]
         arguments = [
@@ -245,7 +262,7 @@ class IndicatorAdapter:
             for value in self._call.inputs
         ]
         returned = self._call.func(*arguments, **self._call.params)
-        return _outputs(returned, stop - start, self._call.label)
+        return outputs_of(returned, stop - start, self._call.label)
 
     def outputs_at(self, epoch: int) -> list[np.ndarray]:
         """Every output of the whole run in `epoch` (cached for the last epoch asked)."""
@@ -291,7 +308,9 @@ class IndicatorAdapter:
         for k, view in enumerate(views):
             if isinstance(view, TimelineView):
                 values = np.array(self.outputs_at(epoch)[k], copy=True)
-                view = SplicedView(self._store, values, view.label, self._output_of(k))
+                at_epoch = self._output_of(k)
+                recipe, need = view._recipe, view.need
+                view = SplicedView(self._store, values, view.label, at_epoch, recipe, need)
             adopted.append(view)
         return adopted
 

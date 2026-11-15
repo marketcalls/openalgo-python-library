@@ -710,6 +710,32 @@ def test_causality_record_is_plain_data():
         "causal": True,
         "non_causal": {},
         "notes": None,
+        "anchor": None,
+    }
+
+
+def _anchor_parameters(name: str) -> set[str]:
+    """The parameters of a `ta` function that name a calendar period: `anchor`."""
+    return {"anchor"} & set(inspect.signature(getattr(ta, name)).parameters)
+
+
+def test_every_ta_function_with_an_anchor_parameter_has_an_anchor_row():
+    with_parameter = {name for name in causality.indicator_names() if _anchor_parameters(name)}
+    with_row = {name for name in causality.indicator_names() if causality.causality(name)["anchor"]}
+    assert with_parameter == with_row == {"pivot_points", "vwap"}
+
+
+@pytest.mark.parametrize(
+    ("name", "periods_before", "overrides"),
+    [("vwap", 0, ("timestamps", "session_starts")), ("pivot_points", 1, ("timestamps",))],
+)
+def test_an_anchor_row_says_which_periods_a_value_reads(name, periods_before, overrides):
+    # A session VWAP reads its own period since it began; floor pivots read the whole
+    # period before the current one.
+    assert causality.causality(name)["anchor"] == {
+        "argument": "anchor",
+        "periods_before": periods_before,
+        "overrides": overrides,
     }
 
 

@@ -5,7 +5,9 @@ and the run goes on, so a run whose entries were all refused can end with no tra
 nothing else to say why. The result therefore says, for each reject code that occurred,
 how many of the run's orders it refused, when the earliest of them was decided (IST),
 what the code means and what to do (`_reject_reasons`). One line per code, however many
-orders it refused: an entry cut-off can refuse an order at every bar after it.
+orders it refused: an entry cut-off can refuse an order at every bar after it. The MIS
+entry window refusing an order is the window working, so its line says so and gives the
+window's times (`entry_window_warning`), which the `Result` knows from its Assumptions.
 
 Orders a sizer sized and the margin refused get one more clause: a risk sizer
 (`bt.size.atr_risk`, `bt.size.fixed_risk`) on intraday bars, whose stop is close to the
@@ -21,7 +23,7 @@ from typing import Any
 
 from ._calendar_convert import format_ist
 from ._messages import counted
-from ._reject_reasons import PRODUCT_RULE, PRODUCT_RULE_CASES, REASONS
+from ._reject_reasons import ENTRY_WINDOW, PRODUCT_RULE, PRODUCT_RULE_CASES, REASONS
 
 MARGIN = "margin"
 # The `Instrument.kind` of an index, which the kernel refuses every order for.
@@ -86,26 +88,57 @@ def _explanation(code: str, rows: list[dict[str, Any]], kinds: Sequence[str]) ->
     return f"{meaning}{detail}; {advice}"
 
 
+def _first(rows: list[dict[str, Any]]) -> str:
+    """When the earliest of `rows` was decided (UTC nanoseconds, shown in IST)."""
+    first = "decided at" if len(rows) == 1 else "the first decided at"
+    return f"{first} {format_ist(min(row['decided_at'] for row in rows))}"
+
+
 def reject_warnings(orders: dict[str, list[Any]], kinds: Sequence[str]) -> list[str]:
-    """One warning per reject code that occurred, in the order the codes first occurred:
-    for example "4 of 28 orders were rejected with reject_code 'margin'
-    (result.orders), the first decided at 2026-10-05 10:15 IST: ...", the first being
-    the earliest decision (UTC nanoseconds `decided_at`, shown in IST) among them.
+    """One warning per reject code that occurred but the entry window's
+    (`entry_window_warning`), in the order the codes first occurred: for example "4 of
+    28 orders were rejected with reject_code 'margin' (result.orders), the first decided
+    at 2026-10-05 10:15 IST: ...", the first being the earliest decision among them.
     `orders` is the kernel's orders table, a list per column; `kinds` is the
     `Instrument.kind` of each of the run's instruments, by the kernel's instrument
     index."""
     total = len(orders["reject_code"])
     lines = []
     for code, rows in _rejected_by_code(orders).items():
+        if code == ENTRY_WINDOW:
+            continue
         were = "was" if len(rows) == 1 else "were"
-        first = "decided at" if len(rows) == 1 else "the first decided at"
-        earliest = min(row["decided_at"] for row in rows)
         lines.append(
             f"{len(rows)} of {counted(total, 'order')} {were} rejected with reject_code "
-            f"'{code}' (result.orders), {first} {format_ist(earliest)}: "
-            f"{_explanation(code, rows, kinds)}"
+            f"'{code}' (result.orders), {_first(rows)}: {_explanation(code, rows, kinds)}"
         )
     return lines
+
+
+def entry_window_warning(
+    orders: dict[str, list[Any]], entry_from: str | None, entry_until: str | None
+) -> str | None:
+    """The line for the orders the MIS entry window refused, or None when it refused
+    none: "4 of 4 orders were outside the MIS entry window, 09:15 to 09:20 (entry_from to
+    entry_until), and were not placed, as the window intends (reject_code 'entry_window'
+    in result.orders), the first decided at 2026-11-04 09:30 IST". `entry_from` and
+    `entry_until` are the window as the Assumptions block states it (a clock time, a
+    rule or dated periods); None when the run is not MIS, whose MIS orders then had the
+    window the calendar sets for each session, as the line says. `orders` is the
+    kernel's orders table."""
+    rows = _rejected_by_code(orders).get(ENTRY_WINDOW)
+    if rows is None:
+        return None
+    if entry_from is None or entry_until is None:
+        window = " the calendar sets for each session"
+    else:
+        window = f", {entry_from} to {entry_until} (entry_from to entry_until)"
+    were = "was" if len(rows) == 1 else "were"
+    return (
+        f"{len(rows)} of {counted(len(orders['reject_code']), 'order')} {were} outside the "
+        f"MIS entry window{window}, and {were} not placed, as the window intends "
+        f"(reject_code '{ENTRY_WINDOW}' in result.orders), {_first(rows)}"
+    )
 
 
 def rejected_summary(orders: dict[str, list[Any]]) -> str | None:
@@ -119,4 +152,4 @@ def rejected_summary(orders: dict[str, list[Any]]) -> str | None:
     return f"rejected orders: {rejected} of {len(orders['reject_code'])} ({counts})"
 
 
-__all__ = ["product_rule_case", "rejected_summary", "reject_warnings"]
+__all__ = ["entry_window_warning", "product_rule_case", "rejected_summary", "reject_warnings"]

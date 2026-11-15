@@ -104,7 +104,7 @@ def run_combinations(
 
 def run_chunk(chunk: Chunk) -> list[dict[str, float]]:
     """A worker's entry point: run one chunk."""
-    checks = IndicatorChecks(chunk.strategy_hash, chunk.checked)
+    checks = IndicatorChecks(chunk.strategy_hash, chunk.checked, measured=chunk.prepared.measured)
     return run_combinations(
         _restore(chunk.strategy),
         _restore(chunk.objective),

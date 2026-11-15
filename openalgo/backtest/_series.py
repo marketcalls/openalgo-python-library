@@ -20,7 +20,7 @@ import pandas as pd
 from ._calendar_convert import format_ist
 from ._layout import IST_OFFSET_NANOS, NANOS_PER_SECOND
 from ._messages import not_supported
-from ._views import TimelineView
+from ._views import TimelineView, field_recipe
 from .errors import BacktestError
 
 IST = dt.timezone(dt.timedelta(seconds=IST_OFFSET_NANOS // NANOS_PER_SECOND), "IST")
@@ -70,7 +70,13 @@ class Bar(NamedTuple):
 class SeriesStore:
     """The bars of one instrument and interval over the whole run, as arrays: `ts_open`
     and `ts_close` int64 UTC nanoseconds, prices in rupees, volume in units. A subclass
-    says how many are visible. `name` prefixes the labels of its views."""
+    says how many are visible. `name` prefixes the labels of its views. `history_bars`
+    counts the bars before the run's start at the front of the arrays (`BarStore`).
+    `waiting` is True while its symbol is not ready, set by the run context: its views
+    other than bar fields then read unknown (`_views`)."""
+
+    history_bars = 0
+    waiting = False
 
     def __init__(
         self, symbol: str, interval: str, series: dict[str, np.ndarray], name: str | None = None
@@ -118,16 +124,35 @@ class SeriesStore:
 
 
 class BarStore(SeriesStore):
-    """The strategy bars of one instrument, revealed by the kernel's pauses."""
+    """The strategy bars of one instrument, revealed by the kernel's pauses. The first
+    `history_bars` lie before the run's start (the warm-up history, `_warm_up_history`):
+    the kernel never delivers them, and they are visible once the run begins (`begin`),
+    not in `init`, which sees no bar, as on the engine's reference bars. When `rebuilt`
+    is True the first bar of the run is the store's own, not the kernel's (a bar that
+    straddles a datetime `start`, built with the base bars before it, `_warm_up_join`),
+    and is handed to the strategy as the store holds it."""
 
-    def __init__(self, symbol: str, interval: str, series: dict[str, np.ndarray]) -> None:
+    def __init__(
+        self,
+        symbol: str,
+        interval: str,
+        series: dict[str, np.ndarray],
+        history_bars: int = 0,
+        rebuilt: bool = False,
+    ) -> None:
         super().__init__(symbol, interval, series)
+        self.history_bars = history_bars
         self._count = 0
         self._opens = self._series["ts_open"]
         self._size = len(self._opens)
+        self._rebuilt = history_bars if rebuilt else -1
 
     def visible(self) -> int:
         return self._count
+
+    def begin(self) -> None:
+        """Show the history before `start`: `init` has returned and the run begins."""
+        self._count = self.history_bars
 
     def reveal(self, row: tuple) -> Bar:
         """Reveal the next bar from the kernel's tuple (index, ts_open, ts_close, o, h, l,
@@ -141,6 +166,9 @@ class BarStore(SeriesStore):
                 "this"
             )
         self._count = count + 1
+        if count == self._rebuilt:
+            values = (self._series[name].item(count) for name in (*TIMES, *FIELDS))
+            return Bar(self.symbol, *values)
         # The row has the fields of a Bar after the instrument; tuple.__new__ is what
         # Bar._make calls, without its frame and length check, once per callback.
         return tuple.__new__(Bar, (self.symbol, *row[1:]))
@@ -151,7 +179,8 @@ class SeriesView(TimelineView):
     work, `.values` is a NumPy copy; arithmetic and comparisons as `TimelineView`."""
 
     def __init__(self, store: SeriesStore, name: str) -> None:
-        super().__init__(store, store.column(name), f"{store.name}.{name}")
+        values, label = store.column(name), f"{store.name}.{name}"
+        super().__init__(store, values, label, field_recipe(name), bar_field=True)
 
 
 class InstrumentData:

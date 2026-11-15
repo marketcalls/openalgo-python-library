@@ -168,6 +168,11 @@ These are settled. Do not redesign around them without asking.
   `margin=` (one value, or per underlying, as a percent of contract value or rupees per
   lot). Real margins differ by underlying and over time, so no per-underlying table is
   kept. In live trading the broker computes margin.
+- **Indicators warm up automatically.** A backtest loads enough history before `start` for
+  the strategy's indicators to be ready, and trading begins on `start` (maintainer,
+  2026-11-13).
+- **Whole shares by default.** `quantity_mode` defaults to "venue" (whole shares and lots);
+  part shares only with `quantity_mode="fractional"` (maintainer, 2026-11-13).
 - **Speed targets.** An empty `on_bar` makes at least 300k callbacks per second; an
   array or condition strategy over 1M bars, with charges, slippage and every metric,
   takes at most 2 seconds on a current desktop core (`benchmark/backtest_speed.py`).

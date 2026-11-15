@@ -6,7 +6,7 @@ import platform
 import numpy as np
 import pandas as pd
 import pytest
-from strategy_samples import CAPITAL, EmaCross, wave_bars
+from strategy_samples import CAPITAL, DAY, EmaCross, wave_bars, wave_with_history
 
 import openalgo.backtest as bt
 from openalgo.backtest._manifest import RunManifest, strategy_source_hash
@@ -28,7 +28,9 @@ def assert_same(first, second):
 
 
 def test_a_rerun_without_overrides_reproduces_the_result_bit_for_bit():
-    result = backtest()
+    # A session of history: the strategy decides from the first bar of the run and
+    # trades (on the test day alone its 10-bar EMA would keep it waiting most of it).
+    result = backtest(data=wave_with_history(), start=DAY)
     assert len(result.fills) > 0
     assert_same(result, result.rerun())
 

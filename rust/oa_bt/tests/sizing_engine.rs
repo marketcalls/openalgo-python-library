@@ -201,6 +201,37 @@ fn a_target_value_is_rounded_down_to_whole_shares_at_the_decision_price() {
 }
 
 #[test]
+fn a_target_value_below_one_share_while_flat_is_skipped_as_rounded_to_zero() {
+    // 50 rupees at 100.00 is half a share: 0, so the target asks for nothing it can buy.
+    let (output, plan) = run_plan(vec![(close_of(0), Step::Target(TargetSize::Rupees(50.0)))]);
+    assert_eq!(
+        plan.targets,
+        vec![Some(Submission::Skipped(SkipReason::RoundedToZero))]
+    );
+    assert!(output.orders.is_empty());
+}
+
+#[test]
+fn a_target_value_below_one_share_while_holding_sells_to_flat() {
+    // Holding 50, a target of 50 rupees (0 shares) only reduces: the position is sold.
+    let (output, _) = run_plan(vec![
+        (close_of(0), units(50.0)),
+        (close_of(2), Step::Target(TargetSize::Rupees(50.0))),
+    ]);
+    assert_eq!(
+        trades_of(&output),
+        vec![(Side::Buy, 50.0, "entry"), (Side::Sell, 50.0, "signal")]
+    );
+}
+
+#[test]
+fn a_target_of_zero_units_while_flat_sends_nothing_and_skips_nothing() {
+    let (output, plan) = run_plan(vec![(close_of(0), units(0.0))]);
+    assert_eq!(plan.targets, vec![None]);
+    assert!(output.orders.is_empty());
+}
+
+#[test]
 fn a_target_percent_is_of_the_equity() {
     // 1 percent of 1,00,00,000 is 1,00,000 at 100.00: 1,000 shares.
     let percent = Step::Target(TargetSize::PercentOfEquity(1.0));

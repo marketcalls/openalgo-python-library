@@ -1,5 +1,5 @@
 """The tables of a `Performance` as DataFrames: drawdown episodes and the worst of
-them, losing streaks, the benchmark comparison and returns by period."""
+them, losing streaks, the benchmark comparison and returns compounded by period."""
 
 import numbers
 
@@ -22,15 +22,6 @@ EPISODE_COLUMNS = (
 )
 #: The periods a benchmark comparison groups by, with their pandas period codes.
 COMPARISON_PERIODS = {"year": "Y", "month": "M"}
-#: The periods of the return distribution, with their pandas period codes (None for
-#: the session itself).
-DISTRIBUTION_PERIODS = (
-    ("Session", None),
-    ("Week", "W"),
-    ("Month", "M"),
-    ("Quarter", "Q"),
-    ("Year", "Y"),
-)
 
 
 def drawdown_episodes(episodes: list[tuple], ts: np.ndarray, start_ns: int) -> pd.DataFrame:
@@ -121,22 +112,12 @@ def benchmark_comparison(
     return frame
 
 
-def returns_by_period(returns: pd.Series) -> dict[str, np.ndarray]:
-    """Compounded returns per session, week, month, quarter and year, as arrays."""
-    return {
-        name: compound(returns, code).dropna().to_numpy(dtype=float)
-        for name, code in DISTRIBUTION_PERIODS
-    }
-
-
 __all__ = [
     "COMPARISON_PERIODS",
-    "DISTRIBUTION_PERIODS",
     "EPISODE_COLUMNS",
     "benchmark_comparison",
     "compound",
     "drawdown_episodes",
     "losing_streaks",
-    "returns_by_period",
     "worst_drawdowns",
 ]

@@ -179,6 +179,14 @@ impl NativeCalendar {
         Ok(self.inner.session(exchange, day).map(session_tuple))
     }
 
+    /// The origin of the bar lattice on a date, UTC nanoseconds: IST midnight plus the
+    /// regular open in force that date (special sessions included); None for an
+    /// unsupported date.
+    fn lattice_anchor(&self, exchange: &str, day: PyDay) -> PyResult<Option<i64>> {
+        let (exchange, day) = exchange_and_day(exchange, day)?;
+        Ok(self.inner.lattice_anchor(exchange, day))
+    }
+
     /// Sessions from `from_day` to `to_day` (inclusive) as columns.
     fn sessions(
         &self,

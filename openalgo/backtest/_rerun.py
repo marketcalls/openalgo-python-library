@@ -2,7 +2,7 @@
 
 A rerun calls `bt.backtest` with the strategy class, the client and every argument of
 the original call, then applies the overrides: a name of a `bt.backtest` argument
-replaces that argument (`quantity_mode="venue"`), a name of a strategy parameter
+replaces that argument (`quantity_mode="fractional"`), a name of a strategy parameter
 replaces that parameter (`fast=20`). With no overrides the result is the original one
 bit for bit, because the kernel is deterministic and the data are the same; if the data
 the source returns have changed since (other partition hashes in the manifest), the

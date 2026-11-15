@@ -29,7 +29,7 @@ use super::error::KernelError;
 use super::kernel::Engine;
 use super::order_fill::OrderFill;
 use super::submit::Submission;
-use super::target::TargetRequest;
+use super::target::{TargetOrder, TargetRequest};
 
 /// The tag of every order of a rebalance, shown in the orders table.
 const REBALANCE_TAG: &str = "rebalance";
@@ -41,16 +41,19 @@ pub(super) fn waits_for_sales(order: &Order) -> bool {
 
 impl Engine {
     /// Trade to `target` as part of a rebalance: the order of `submit_target`, marked as
-    /// a rebalance order and tagged `rebalance`. Returns `None` when the position
-    /// already is the target, else the outcome of its submission.
+    /// a rebalance order and tagged `rebalance`. Returns what `submit_target` returns:
+    /// `None` when the position already is the target, `Submission::Skipped` for a
+    /// weight that rounds to no units from flat, else the outcome of its submission.
     ///
     /// Errors: those of `submit_target`.
     pub fn submit_rebalance(
         &mut self,
         target: TargetRequest,
     ) -> Result<Option<Submission>, KernelError> {
-        let Some(request) = self.target_order(target)? else {
-            return Ok(None);
+        let request = match self.target_order(target)? {
+            TargetOrder::Send(request) => *request,
+            TargetOrder::AtTarget => return Ok(None),
+            TargetOrder::Skipped(reason) => return Ok(Some(Submission::Skipped(reason))),
         };
         let request = OrderRequest {
             rebalance: true,

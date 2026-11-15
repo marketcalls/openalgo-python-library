@@ -7,6 +7,324 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-11-15
+
+### Added
+
+- **`Result.trade_list()`**: the closed trades as a pandas DataFrame a trader reads,
+  one row each, indexed by trade number: symbol, direction ("long" or "short"),
+  product, entry and exit time (IST), quantity in units, entry and exit price, gross
+  P&L, charges and net P&L in rupees, `return_pct` (net P&L over the entry value, in
+  percent), `bars_held`, `days_held`, `exit_reason` and `r_multiple`. The tearsheet's
+  trade table shows the same rows. `Result.performance.trades` gains a `bars_held`
+  column. `bars_held` counts bars of the strategy's own interval that closed while the
+  trade was open, not base bars: those whose close is after `entry_time` and at or
+  before `exit_time`, so a 5-minute strategy on 1-minute data held from 09:40 to 15:00
+  holds 64 bars, not 320, and a trade opened and closed inside one bar holds 0. A fill
+  at a slice's close (an expiry settlement) is timed at that slice's open, as
+  `exit_time` shows, so the bar it closes is not counted. A run has one strategy
+  interval for all its symbols (a futures series' contracts included), and each trade
+  counts the bars of its own instrument.
+- **`Result.summary()`**: a short plain-text summary to print after a run:
+
+      Net profit   : Rs 2,00,000.00
+      Return       : 4.00%
+      Max drawdown : -0.97%
+      Trades       : 1 (100% won)
+      Benchmark    : 3.52% return (NIFTY)
+
+  Net profit in rupees with Indian digit grouping, the return and the maximum drawdown
+  in percent, the closed trades with their win rate and any positions still open, and
+  the benchmark's return for a run with `benchmark=` ("given closes" for closes given
+  as a Series). A run with no closed trade (a buy-and-hold or rebalanced portfolio, or
+  one whose entries were all rejected or skipped) says "no closed trades" where the usual
+  `f"{m['win_rate']:.0%}"` printed "nan%"; the `win_rate` metric itself is unchanged
+  (undefined, NaN, with no trades). The win rate is in whole percent but never reads 0%
+  or 100% unless it is exactly so: 1 winner in 250 reads "0.4% won" and 249 in 250
+  "99.6% won" (the fewest decimals that keep it off the bound). A loss below half a
+  paisa reads "Rs 0.00", not "Rs -0.00" (in the tearsheet's rupee figures too).
+  `print(result)` is still the full Assumptions block.
+- **Orders that were not placed are told on screen.** A `bt.backtest` run in which
+  orders were rejected or skipped for a reason the run did not ask for ends with one
+  `OrdersNotPlacedWarning` (a `UserWarning` in `openalgo.backtest.errors`, so it can be
+  filtered by its class), pointed at the line that ran the backtest: how many orders,
+  the most common reason in plain words and its code, for example "3 of 3 orders were
+  rejected because a delivery (CNC) short is not allowed in Indian cash markets
+  (reject_code 'product_rule'). See result.warnings." or, for a share that costs more
+  than the capital in whole shares, "249 orders were skipped because the sized quantity
+  was less than one share or, for a derivative, one lot (skip reason 'rounded_to_zero').
+  See result.warnings." Before, a reader who printed only a few metrics saw nothing:
+  such a run just showed 0 trades. Orders a rule of the run refused as it intends do not
+  raise it: the MIS entry window (`entry_from`, `entry_until` or the default cut-off),
+  `max_daily_loss`, `drawdown_halt`, `cooldown`, `max_positions` and a size cap
+  (`size_caps`); a run with both kinds counts only the others and then gives no total
+  of orders ("1 order was rejected because ..."). A sizing function that returns 0 is
+  counted, as the kernel gives it the skip reason `rounded_to_zero`. Once per run, not
+  per order; `bt.optimize` does not issue it for its combinations, in its own process
+  or in its workers.
+- **Skipped orders are reported like rejected ones.** `result.warnings` gains one line
+  per skip reason that occurred (first, before the other warnings), with how many orders
+  it skipped, when the first was decided and what to do, for example "249 orders were
+  skipped with skip reason 'rounded_to_zero' (result.skipped), the first decided at
+  2025-01-01 15:30 IST: the sized quantity was less than one share or, for a
+  derivative, one lot; give the strategy more capital, size with a larger percent, trade
+  a cheaper share, or pass quantity_mode="fractional" for part shares ...", and
+  `print(result)` a "skipped orders: 249 (rounded_to_zero 249)" line.
+  The line for orders refused by the MIS entry window now says they were outside the
+  window, gives its times and says they were not placed, as the window intends: "4 of 4
+  orders were outside the MIS entry window, 09:15 to 09:20 (entry_from to entry_until),
+  and were not placed, as the window intends (reject_code 'entry_window' in
+  result.orders), the first decided at 2026-11-04 09:30 IST".
+- **The Assumptions block states how orders are sized** (`sizing`): with whole shares,
+  an order with no quantity is sized at the decision close and keeps 2 percent of its
+  budget in cash for the price's move to the next open (the engine's cash buffer, the
+  same in live trading; its value is unchanged), then takes its estimated charges off
+  the rest, which is why 10,00,000 at 1,000.00 with no charges buys 980 shares and not
+  1,000; `bt.size` sizers and `target()` keep no buffer and `rebalance` keeps its own
+  `cash_buffer`. With part shares it is sized at the fill price and spends the whole
+  budget less the charges. `Strategy.buy` and `sell` and `bt.size` document the same.
+- **A wait for the indicators is told on screen.** A `bt.backtest` run in which the
+  strategy waited inside the run for its indicators to warm up ends with one
+  `WarmUpWarning` (a `UserWarning` in `openalgo.backtest.errors`), pointed at the line
+  that ran the backtest: the first decision and the strategy bars each symbol waited,
+  for example "The strategy waited inside the run for its indicators to warm up and
+  made its first decision at 2026-01-22 15:30 IST (SBIN waited 15 strategy bars):
+  signals before then were not taken. See result.warnings for why.", that it made no
+  decision at all, or that it made none for a symbol whose indicators were never ready.
+  Once per run; `bt.optimize` does not issue it. `result.warnings` keeps the full line,
+  with why and what to do.
+- **The causality registry records anchored indicators** (`causality.Anchor`, the
+  `anchor` of an `Indicator` row): the argument that names the anchor period, the whole
+  periods before the current one a value reads (0 for `ta.vwap`, 1 for
+  `ta.pivot_points`) and the arguments that supply bar times of the user's own.
+  `causality.causality()` records gain an "anchor" key, None for every other
+  indicator; a test checks that every `ta` function with an `anchor` parameter has one.
+
+### Changed
+
+- **Indicators warm up automatically** (changes results). The strategy makes no
+  decision before `start` and none before its `self.I` indicators are ready: an
+  indicator is ready once its series has closed its warm-up of bars. The warm-up is the
+  window-stability length measured on the engine's own reference bars (65,536 bars made
+  from integers, the same on every platform, with long trends, ranges, reversals and
+  opening gaps; each window compared at 1,024 bars, and at the events of a condition),
+  never on the run's data: it depends on the indicator call alone (the function, its
+  parameters and the bar fields it reads) and is counted in the bars of the indicator's
+  own series, so no decision depends on a later bar, a different `end=` leaves the early
+  trades alone, and the same call needs the same bars on daily and on 15-minute data.
+  For example 256 bars for a 20-bar EMA, 512 for a 50-bar one, 2,048 for a 200-bar one,
+  64 for a 50-bar simple average, 256 for a 14-bar RSI, 512 for MACD 12/26/9 and for
+  Supertrend 10/3, 128 for the parabolic SAR, 16 for a 3-bar average; a test checks the
+  warm-up of each common indicator against eight differently shaped price series. An
+  indicator of other views needs theirs before its own (a crossing over
+  `self.close.rolling_max(100).shift(1)` needs at least 102 bars). An anchored
+  indicator, as the causality registry marks it (`ta.vwap` with anchor Session, Week,
+  Month, Quarter or Year, and `ta.pivot_points` with an anchor), needs the bars since
+  the start of the first anchor period it reads: a VWAP its own period, floor pivots the
+  whole period before their own as well (monthly pivots on 15-minute bars keep the
+  whole previous month, and daily pivots after a 14:00 datetime `start` keep the
+  previous session). They are loaded, and when the data begin inside the period the
+  strategy waits for the next one. One that needs more than the longest
+  window (an EMA of 10,000 bars) says so, gets up to 30 years of history and waits that
+  window at least. Live trading keeps the same windows. A backtest learns what its
+  indicators need before it loads any data, by running `init` once on the reference
+  bars, so `init` runs twice: there, then once on the data. It then loads, from the
+  run's own source (Historify or the broker its bars came from, or the bars of
+  `data=`), the bars before `start` each series needs, in that series' own interval (a
+  weekly EMA(50) gets its 512 weeks, a monthly EMA(10) its 128 months), at most 30 years
+  back. They are asked for in steps of a fixed ladder of spans, from the span the need
+  fills at full session density, and further back while the bars returned fall short
+  of a need and a step returned bars older than the one before it (a thinly traded
+  share whose minutes without a trade have no candle, a suspension across the first day
+  of a step), so a need is met whenever the source holds the bars. Each step asks only
+  for the days before those already loaded, so a symbol whose bars never meet a need
+  asks for the thirty years once in all, in at most 31 requests. A step that fails
+  (a bar off the lattice) ends the steps but keeps the bars of the steps before it and
+  says why loading stopped, and when own data falls short the warning names the first
+  bar the data holds and, when the history stopped at a gap in it, the gap. With a
+  datetime `start` the bars of that day before it are history too, so a
+  daily view and a strategy bar cut by `start` hold the whole day. Every series holds
+  the history before `init` runs on the data, so every indicator is computed over it
+  (`init` itself sees no bar, so `len(self.close)` is 0 there and on the probe)
+  and one longer than the run (a 200-day EMA on a run of 60 days, or in a
+  `from_signals` function) works. The history kept and the run's first base bar are
+  checked as one series, and no later bar, so the afternoon of the start day cannot
+  decide whether its morning trades: a suspected unadjusted split at the join leaves
+  the run without history and says why. A split or bonus declared with
+  `corporate_actions=` that the history is not adjusted for is adjusted for in it, as a
+  split-adjusted chart shows the bars before it (prices before the ex-date divided by
+  its factor, volume multiplied by it), so the indicators at `start` are those of the
+  adjusted series, and the Assumptions line says so ("adjusted for a split (2 shares
+  for every 1) on 2024-12-17: prices before it divided by 2, volume multiplied by 2");
+  the run's own bars and an ex-date inside the run are handled as before. `on_bar`,
+  timers, conditions and arrays wait alike;
+  `from_arrays` arrays are read for the run's bars only, an indicator over an array of
+  the user's own is computed on the run's bars, and a `from_signals` function is
+  computed over the history a 200-bar EMA needs (its indicators are its own, so the
+  strategy does not wait for them). Equity, trades, charges, metrics and the benchmark
+  still start at `start`. Readiness is per symbol and causal: at each strategy bar a
+  symbol (or futures underlying) is ready once its own indicators have closed their
+  warm-up, counting only the bars up to that bar, so it never depends on a later bar or
+  on how many bars follow (a later `end=` cannot stop another symbol from trading in
+  January). A symbol not ready yet gets no bar in `on_bar` and its orders are skipped
+  (skip reason "not_ready"; a rebalance that gives it no weight, or a `target()` of
+  flat, sends nothing while it is flat and is no skip), it joins at the first bar it is
+  ready, and the symbols
+  that are ready trade; nothing is decided before the first symbol is ready, so a run
+  of one symbol simply waits. An indicator of a symbol that is not ready yet reads NaN,
+  or false for a signal, wherever it is read (deciding for another symbol, in a timer,
+  through another interval of it or a futures series), as does every other view
+  computed from its bars (a comparison, a shift, a crossing); its bar fields (open,
+  high, low, close, volume) and `self.history` stay readable. A filter on a symbol not
+  ready yet (trade SBIN while NIFTYBEES closes above its EMA) therefore does not trade
+  on it: before, its values were shown, and they could depend on how many bars followed
+  (a 20-bar EMA is not computed on fewer than 20 bars and is computed from the first bar
+  on 20 or more), so a later `end=` could add a trade in January. The values are kept:
+  once the symbol is ready, its lookbacks (`line[-2]`) read them. When the source has
+  fewer bars before `start` (own data
+  that begins at `start`, a new listing, a futures series rolled from contract to
+  contract, which is built from `start`), the symbol waits inside the run until its
+  indicators are ready; a warning counts the strategy bars each symbol waited and says
+  why (for own data, to give earlier bars, naming the day they begin; for a source, "the
+  source has no bars of BBB before 2026-02-02"; for an indicator the run's `init`
+  registers but did not register on the reference bars, that no history was loaded for
+  it), and `bt.backtest` ends with a `WarmUpWarning` that gives the first decision of
+  each symbol that waited. A symbol whose series has fewer bars than a need of its own
+  makes no decision, and the manifest lists it under `no_decision`. An indicator whose
+  series is too short for its function is not computed, and its values are unknown: a
+  call that raises on its series and computes on the same values with more bars in
+  front was refused for the length (a 100-bar average on 60 bars of own data, a 20-bar
+  ulcer index on fewer than the 52 bars it checks for, a 20-bar KAMA, CMO, historical
+  volatility, regression slope or VIDYA on exactly 20 bars stopped the run with a
+  ConfigError before, and now make no decision for that symbol with a warning, as an
+  RSI did). Its warm-up is longer than the series, so the symbol is not ready at any of
+  its bars, as it would not be by then on a longer series. One over values of the
+  user's own is not waited for on a series of any length, so on one too short for it its
+  values are unknown and a warning says so. A call that fails on the longer series too
+  (a period of 0) still stops the run. A run on one explicit futures contract
+  loads that contract's own bars before `start`. The Assumptions block gains `warm_up`
+  (the rule, each series' need in its own bars, the history kept with the day asked
+  from and, when later, the day the source's bars began, for a symbol with none the day
+  its bars begin ("the bars given for BBB begin on 2026-02-02"), and the first decision
+  of each symbol), the manifest records the warm-up under `arguments["warm_up"]` (the
+  needs, with `since` for an anchor period, `periods_before` for one that reads whole periods
+  before its own and `more_than` for a need longer than the longest window, the
+  indicators not waited for, the run's first decision and each symbol's
+  (`first_decisions`, None for a symbol ready at start), the strategy bars waited by
+  each symbol that waited, and the symbols never ready in a run whose others decided) and
+  the partition hashes of the history kept, as the source gave the bars, under
+  `data["<symbol> history"]`; the history load's own warnings join the run's.
+  `bt.optimize` learns each combination's needs on the reference bars before any data is
+  loaded, loads the history once for the largest, in which each combination finds the
+  request its single run makes, and each combination keeps and checks exactly the bars
+  its single run does (a data problem outside its own history does not cost it that
+  history; when a step of the larger load fails, as one bar off the lattice far before
+  `start` makes it, a combination whose steps stop short of it keeps its own, and one
+  that reaches it keeps the steps before it, as its single run does), so the table,
+  `select()`
+  and `rerun()` reproduce single runs. Needs are keyed on the parameter values frozen
+  in order, so a list, tuple or dict value works as a number does (a list raised
+  TypeError). A strategy's
+  own warm-up guard (`if len(self.close) < self.slow: return`) still works; it is no
+  longer needed. An indicator no window settles (a running sum such as on-balance
+  volume), one over an array of the user's own, and one the reference bars cannot
+  compute are not waited for, with a warning that says which. `self.I` called after
+  `init` raises `IndicatorOutsideInitError` (a `ConfigError`, in
+  `openalgo.backtest.errors`): indicators are registered in `init`, where their history
+  and readiness are settled. The truncation check still runs on the run's bars, once
+  per function and data. The first trades of runs on short own data move later; the
+  intraday golden run gains two sessions of history and the condition golden run
+  thirteen months instead of seven, and their pins were regenerated.
+- **Whole shares by default** (changes results): `quantity_mode` defaults to "venue"
+  (whole shares of cash equity, whole lots of derivatives) instead of "fractional", so
+  every sizer, an order with no quantity, `target()` and `rebalance` round down to whole
+  shares unless a run passes `quantity_mode="fractional"`, which stays for research.
+  A `target(value=...)` or `target(percent=...)`, or a rebalance weight, that rounds down
+  to no share while nothing is held is now a skipped order (`result.skipped`, reason
+  `rounded_to_zero`, and the warnings above) instead of passing silently; `target()`
+  still returns None for it.
+- **Daily and longer bars indexed by naive midnight dates need no `tz=`.** The daily
+  bars `client.history(...)` returns are indexed that way, and passing them as
+  `bt.backtest(..., data=df)` stopped with "the timestamps of the supplied data carry
+  no time zone". A naive index (or timestamp column, or CSV dates) whose times are all
+  midnight is a list of session dates, which no time zone can shift, so for D, W, M, Q
+  and Y bars it is read as IST session dates, as `tz="Asia/Kolkata"` reads it, and the
+  Assumptions block says so in one line ("timestamps: SBIN: naive midnight timestamps
+  read as IST session dates (daily bars need no tz=)"). Intraday naive timestamps, and
+  daily ones stamped at a time of day, still need `tz=`: a wrong guess there moves
+  every bar by 5 hours 30 minutes.
+- **The HTML tearsheet is a dashboard in the layout of OpenStatz's dashboard**
+  (`result.tearsheet(path)`, `report.tearsheet`): a sticky header with section links,
+  Export PDF and a light and dark toggle, then numbered sections: Overview (headline
+  tiles), Performance (cumulative return against the benchmark, rolling Sharpe,
+  volatility and win rate, CAGR, maximum drawdown and Sharpe by horizon, period
+  returns), Risk (drawdown chart, risk tiles, the benchmark tiles and rolling beta, the
+  ten worst drawdowns, losing streaks), Monthly (monthly and weekly heatmaps, monthly
+  tiles, yearly returns against the benchmark), Distribution (tiles, histogram, box
+  plot), Metrics (every metric, the benchmark's beside it, sortable), Trades (trade
+  tiles, the sortable and paged trade list, charges by component, the R-multiples) and
+  Notes (how the figures were computed, the assumptions and warnings). A tile's
+  subline is the benchmark's figure measured as the strategy's is, where a benchmark
+  has one. It is still one offline file: inline CSS and SVG, plus a small inline script
+  for the toggle, sorting, paging, the weekly year picker and a chart crosshair; it
+  reads in full with script turned off. `mode="basic" | "metrics" | "charts"` and
+  `log_scale=` show subsets of the same layout.
+- The tearsheet no longer draws the Monte Carlo band and histograms, the session
+  return bars, the trade P&L histogram or the trade losing-streak table:
+  `Result.monte_carlo()`, `performance.session_returns`, `Result.trade_list()` and
+  `performance.losing_streaks` keep them.
+- **Candles of a special session that opens off the bar lattice are told by the
+  session.** Intraday bars sit on a lattice from each date's regular open (09:15 IST on
+  NSE), special sessions included, and a source that starts a special session's candles
+  at the session's own open (15-minute broker candles of Muhurat trading from 14:20)
+  stopped the load with the general off-lattice message. When every off-lattice bar lies
+  in such a session, the TimestampError now names it from the calendar data and says
+  what to do: "NSE:SBIN 15m: 5 bars are not on the NSE bar lattice: the session of
+  2026-11-08 (Diwali Laxmi Pujan (Muhurat trading)) opens at 14:20 IST, off the 09:15
+  bar lattice, so 15-minute candles of that session cannot be placed. Pass 1-minute data
+  (the engine builds the session's 15-minute bars from it), or leave that session's bars
+  out." Own data and OpenAlgo data alike; nothing is loaded differently.
+
+### Fixed
+
+- **A broker history load no longer stops at a holiday the calendar does not know, and
+  loses no older bars.** The calendar's holiday lists begin in 2019, so an earlier
+  holiday such as 2018-12-25 counts as a session. The cache recorded only dates that
+  returned rows, so such a holiday was asked for again on every load as a range of its
+  own, and the broker walk (newest first) stopped at the first empty window that had a
+  session, before the older range was asked for: a load of SBIN daily bars from
+  2016-10-27 to 2018-12-31 over a cache holding 2018 returned the 245 sessions of 2018
+  instead of the broker's 537 bars, with a short-history warning that blamed
+  2018-12-25. An empty window now ends the walk only in the oldest range asked for (a
+  later range lies after sessions the cache has settled, so an empty window there is a
+  gap), and the reason says what was concluded: "the broker returned no bars for
+  2024-02-02 to 2024-04-01, so the history is taken to start after 2024-04-01; nothing
+  older was asked for". A session the broker answered with no bars, later than the
+  oldest session with bars, is now recorded in the cache as fetched with none and is
+  not asked for again once settled. Sessions before the first bar (where the broker's
+  history starts) and every empty answer from Historify (which downloads fill later)
+  are still asked for again. The cache format is unchanged, so caches written by
+  earlier versions are read as they are, with no migration: a holiday they lack is
+  asked for once more, then recorded. `FetchReport` gains `answered`, the windows
+  answered as ISO date pairs.
+- **No false "The run ends at" warning when every session's bars stop at 15:15.** From
+  2026-08-03 continuous trading in a stock with derivatives ends at 15:15 IST (the
+  closing auction makes no candle), while the calendar keeps 15:30 for every stock, so
+  every intraday run that ended on such a stock warned that its data ended early, its
+  equity stopped at 15:15 and an MIS position still open was reported open instead of
+  being squared off at the session close as on every other day. A run now ends at the
+  close of its last bar only when the last session's bars stop earlier, before its
+  session close, than those of the latest earlier session with bars; otherwise the empty
+  slots stay slices and the run ends at the end of its range or at the present. A run of
+  one session, or whose last session is cut short by the range, keeps the plain rule.
+- **A `start=` or `end=` string with a time of day is a datetime bound.**
+  `start="2026-03-10 11:00"` was read as the plain date 2026-03-10, so the run began at
+  the open and the morning was traded instead of being history. A string with a time of
+  day other than midnight is now read as the datetime it names (naive in IST, or with
+  its offset), as `datetime(2026, 3, 10, 11, 0)` is, and both run the same; a date
+  string, or one at midnight, is still the date. The date of a datetime bound with an
+  offset is taken in IST.
+
 ## [2.1.1] - 2026-11-13
 
 ### Added

@@ -175,6 +175,89 @@ fn bars_that_reach_the_end_of_the_range_end_the_run_there_with_no_cause() {
     );
 }
 
+/// Monday 2025-06-30, the NSE session before the test day.
+fn monday() -> Day {
+    days_from_civil(2025, 6, 30)
+}
+
+/// Base bars from 09:15 on Monday 2025-06-30 for `monday_count` minutes, then on the
+/// test day for `tuesday_count` minutes.
+fn two_sessions(monday_count: u32, tuesday_count: u32) -> BarColumns {
+    let mut columns = BarColumns::default();
+    for (session, count) in [(monday(), monday_count), (day(), tuesday_count)] {
+        for k in 0..count {
+            let open = 500.0 + 0.10 * f64::from(k);
+            columns
+                .ts_open
+                .push(ts_from_ist(session, SESSION_OPEN_MINUTE + k));
+            columns.open.push(open);
+            columns.high.push(open + 0.50);
+            columns.low.push(open - 0.50);
+            columns.close.push(open + 0.05);
+            columns.volume.push(1_000.0);
+        }
+    }
+    columns
+}
+
+/// A run over Monday and the test day.
+fn run_two_sessions(bars: BarColumns, present: Option<i64>) -> RunOutput {
+    let calendar = Calendar::new().expect("the embedded calendar tables parse");
+    let mut kernel = Engine::new(RunSetup {
+        config: RunConfig {
+            first_day: monday(),
+            ..config(present)
+        },
+        calendar,
+        instruments: vec![sbin()],
+        bars: vec![bars],
+    })
+    .expect("a valid setup");
+    run(&mut kernel, &mut BuyAndHold { bought: false }).expect("the run completes");
+    kernel.finish().expect("the run finished")
+}
+
+/// Bars from 09:15 to 15:14 IST: the last opens at 15:14 and closes at 15:15, as a
+/// stock with a closing auction trades continuously only until 15:15.
+const UNTIL_THE_CLOSING_AUCTION: u32 = 360;
+
+#[test]
+fn sessions_whose_bars_all_stop_at_the_same_time_end_the_run_at_the_end_of_its_range() {
+    let bars = two_sessions(UNTIL_THE_CLOSING_AUCTION, UNTIL_THE_CLOSING_AUCTION);
+    let output = run_two_sessions(bars, None);
+    assert_eq!(output.equity.ts.last(), Some(&at(15, 30)));
+    assert_eq!(
+        output.run_end,
+        RunEnd {
+            close: at(15, 30),
+            range_close: at(15, 30),
+            cause: None,
+        }
+    );
+}
+
+#[test]
+fn a_last_session_that_stops_earlier_than_the_one_before_ends_the_run_at_its_last_bar() {
+    // Monday is complete; on the test day the last bar opens at 11:59 and closes at 12:00.
+    let output = run_two_sessions(two_sessions(SESSION_MINUTES, 165), None);
+    assert_eq!(
+        output.run_end,
+        RunEnd {
+            close: at(12, 0),
+            range_close: at(15, 30),
+            cause: Some(RunEndCause::LastBar),
+        }
+    );
+}
+
+#[test]
+fn the_present_after_the_usual_last_bar_ends_the_run_at_the_present_not_at_the_bar() {
+    let bars = two_sessions(UNTIL_THE_CLOSING_AUCTION, UNTIL_THE_CLOSING_AUCTION);
+    let output = run_two_sessions(bars, Some(at(15, 20) + 30 * SECOND));
+    assert_eq!(output.run_end.close, at(15, 20));
+    assert_eq!(output.run_end.cause, Some(RunEndCause::Present));
+}
+
 #[test]
 fn a_missing_bar_inside_the_run_is_still_a_slice() {
     let output = run_to_end(bars(165, &[100]), None);

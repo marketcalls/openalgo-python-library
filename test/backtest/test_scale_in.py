@@ -71,7 +71,8 @@ def reject_codes(script: dict, prices=None, **limits) -> list:
     for name, value in {"script": script, **limits}.items():
         setattr(Run, name, value)
     bt.backtest(Run, data=bars(prices), capital=1_000_000, costs=None, slippage=0, base="15m")
-    return [order.reject_code for order in instances[0].handles]
+    # init runs on a probe instance first (the reference bars), then on the run's.
+    return [order.reject_code for order in instances[-1].handles]
 
 
 TEN = {"qty": 10}

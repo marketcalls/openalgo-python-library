@@ -13,7 +13,10 @@
 //! | a larger position on the target's side | a smaller one, or flat | only reduces (`reduce_only`) |
 //! | a position on one side | a position on the other | `reverse=True`: closes, then opens the rest (two fills, two sets of costs) |
 //!
-//! No order is sent when the position already is the target. Resting orders (LIMIT, SL,
+//! No order is sent when the position already is the target. A value or percent target
+//! that rounds to no units while nothing is held or queued asks for less than the venue's
+//! smallest quantity: it is skipped with `SkipReason::RoundedToZero`, as a sizer's order
+//! is, so the result counts it. Resting orders (LIMIT, SL,
 //! SL-M and GTT orders) are not counted and stay working: they may never fill, and the
 //! next `target()` corrects the position after one does. The order carries no leg
 //! rules: an add keeps the position's (SPEC-14), a reduction shrinks them to the
@@ -23,7 +26,9 @@
 use crate::exec::{InstrumentId, OrderRequest, OrderType, QuantitySpec, Validity};
 use crate::model::{Product, Side};
 use crate::portfolio::PositionKey;
-use crate::sizing::{round_down_to_venue, target_units, SizeOutcome, SizerSpec, TargetSize};
+use crate::sizing::{
+    round_down_to_venue, target_units, SizeOutcome, SizerSpec, SkipReason, TargetSize,
+};
 
 use super::clock::SliceInfo;
 use super::config::QuantityMode;
@@ -35,6 +40,25 @@ use super::submit::Submission;
 /// unit), below which the position already is the target: a residue of fractional
 /// arithmetic sends no order.
 const TARGET_TOLERANCE: f64 = 1.0e-9;
+
+/// The order a target leads to (`Engine::target_order`).
+pub(super) enum TargetOrder {
+    /// The order for the difference (boxed: a request is far larger than the others).
+    Send(Box<OrderRequest>),
+    /// The position already is the target: nothing to send.
+    AtTarget,
+    /// The target rounds to no units from flat (see the module documentation).
+    Skipped(SkipReason),
+}
+
+/// True for a target given as a non-zero value or percent: one the venue rule rounds.
+fn asks_for_value(size: TargetSize) -> bool {
+    match size {
+        TargetSize::Rupees(rupees) => rupees != 0.0,
+        TargetSize::PercentOfEquity(percent) => percent != 0.0,
+        TargetSize::Units(_) | TargetSize::Lots(_) => false,
+    }
+}
 
 /// What `target()` asks for on one instrument and product.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -51,8 +75,9 @@ pub struct TargetRequest {
 
 impl Engine {
     /// Trade to `target` at the current decision point (see the module documentation).
-    /// Returns `None` when the position already is the target, else the outcome of the
-    /// order's submission.
+    /// Returns `None` when the position already is the target, `Submission::Skipped`
+    /// for a value or percent target that rounds to no units from flat, else the outcome
+    /// of the order's submission.
     ///
     /// Errors: `NotAtDecisionPoint` unless paused; `Sizing` for an amount that is not a
     /// finite number, or a value or percent target with no sizing price yet; `Exec`
@@ -62,17 +87,15 @@ impl Engine {
         target: TargetRequest,
     ) -> Result<Option<Submission>, KernelError> {
         match self.target_order(target)? {
-            Some(request) => self.submit(request).map(Some),
-            None => Ok(None),
+            TargetOrder::Send(request) => self.submit(*request).map(Some),
+            TargetOrder::AtTarget => Ok(None),
+            TargetOrder::Skipped(reason) => Ok(Some(Submission::Skipped(reason))),
         }
     }
 
-    /// The order `submit_target` sends for `target`, or `None` when the position
-    /// already is the target. Errors: those of `submit_target` before it submits.
-    pub(super) fn target_order(
-        &self,
-        target: TargetRequest,
-    ) -> Result<Option<OrderRequest>, KernelError> {
+    /// The order `submit_target` sends for `target`, or why it sends none. Errors:
+    /// those of `submit_target` before it submits.
+    pub(super) fn target_order(&self, target: TargetRequest) -> Result<TargetOrder, KernelError> {
         let Some((slice, _, _)) = self.decision_point() else {
             return Err(KernelError::NotAtDecisionPoint);
         };
@@ -91,7 +114,10 @@ impl Engine {
         let difference = wanted - expected;
         let scale = wanted.abs().max(expected.abs()).max(1.0);
         if difference.abs() <= TARGET_TOLERANCE * scale {
-            return Ok(None);
+            if wanted == 0.0 && asks_for_value(target.size) {
+                return Ok(TargetOrder::Skipped(SkipReason::RoundedToZero));
+            }
+            return Ok(TargetOrder::AtTarget);
         }
         let side = if difference > 0.0 {
             Side::Buy
@@ -100,7 +126,7 @@ impl Engine {
         };
         let crosses = expected != 0.0 && wanted != 0.0 && (wanted > 0.0) != (expected > 0.0);
         let reduces = expected != 0.0 && !crosses && wanted.abs() < expected.abs();
-        Ok(Some(OrderRequest {
+        Ok(TargetOrder::Send(Box::new(OrderRequest {
             product: target.product,
             reduce_only: reduces,
             reverse: crosses,
@@ -110,7 +136,7 @@ impl Engine {
                 side,
                 QuantitySpec::Units(difference.abs()),
             )
-        }))
+        })))
     }
 
     /// Signed units the queued MARKET DAY orders on `key` add to the position when they

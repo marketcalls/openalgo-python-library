@@ -12,8 +12,13 @@ other keyword is a run argument of `bt.backtest`, the same for every combination
 
 How it runs: the inputs (settings, base interval, bars, instruments, the benchmark's
 closes) are prepared once, so every combination is measured against the same benchmark.
-The first combination runs in this process. It runs the indicator causality checks for
-the whole sweep (they are never repeated per combination) and shows which evaluation
+The history before `start` is loaded once for the largest need of the combinations
+(each is probed on the reference bars first, `_warm_up_probe`), and each combination
+keeps and checks what its own indicators need and waits for their warm-up, as its
+single run does (`_warm_up`, `_warm_up_history`). The first
+combination runs in this process. It runs the indicator truncation checks for the whole
+sweep (they are never repeated per combination; the warm-up, which depends on the
+parameters, is measured once per indicator on the reference bars) and shows which evaluation
 path of 03-architecture 5 the strategy takes (`OptimizeResult.path`):
 
 - "event": `on_bar` (and timers and callbacks) runs in Python at every decision; the
@@ -247,8 +252,9 @@ def optimize(
     run_settings, ranges = _split_settings(strategy, settings)
     arguments = _run_arguments(client, run_settings)
     names, combinations = grid(strategy, ranges, arguments["params"])
-    prepared = prepare(strategy, client, arguments)
-    checks = IndicatorChecks(strategy_source_hash(strategy) or strategy.__qualname__)
+    prepared = prepare(strategy, client, arguments, combinations)
+    name = strategy_source_hash(strategy) or strategy.__qualname__
+    checks = IndicatorChecks(name, measured=prepared.measured)
     light = {key: arguments[key] for key in ("source", "tz")}
     light["data"] = None if arguments["data"] is None else "given"
     light["now"] = None if arguments["now"] is None else "given"

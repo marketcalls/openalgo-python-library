@@ -4,10 +4,11 @@ strategy's own sizing function, and the caps shared by every sizer, `bt.size.cap
 A sizer is passed as `size=` on an order or set as the strategy's default (the class
 attribute `size`). The kernel turns it into a quantity in units at the decision price,
 cuts it to the strategy's caps (`size_caps`), rounds it down to the venue rule (whole
-lots; whole shares unless the run is fractional), caps it at the freeze quantity (whole
-lots) and skips the order with a logged reason when nothing is left ("rounded_to_zero",
-or "cap" when a cap left no room). Percent arguments are percent units (`percent(50)` is
-50 percent). Raises ConfigError for a value that is not positive.
+lots; whole shares, the default, unless the run is `quantity_mode="fractional"`), caps
+it at the freeze quantity (whole lots) and skips the order with a logged reason when
+nothing is left ("rounded_to_zero", or "cap" when a cap left no room). Percent
+arguments are percent units (`percent(50)` is 50 percent). Raises ConfigError for a
+value that is not positive.
 
 A sizing function is any callable `size(ctx, order) -> units`, called at the decision.
 `ctx` holds what the built-in sizers see (`_sizing_function.SizingInputs`: equity,
@@ -22,8 +23,18 @@ allocated at the start when the strategy sets `reinvest = False`.
 An order with no `qty`, `lots` or `size` (and no strategy `size`) takes the engine
 default: one lot for futures and options; for cash equity 1x the
 strategy's equity (never more than its free cash, split equally across its
-instruments) net of the order's estimated costs, sized at the fill price in fractional
-mode and at the decision price with a 2 percent cash buffer in venue mode.
+instruments) net of the order's estimated costs. In venue mode (the default, whole
+shares) it is sized at the decision close and keeps 2 percent of that budget in cash for
+the price's move to the next open (the kernel's `VENUE_CASH_BUFFER`, the same in live
+trading; the Assumptions block's `sizing` line states it), the estimated costs coming off
+the rest: with no charges, 10,00,000 at 1,000.00 buys 980 shares, not 1,000. In
+fractional mode it is sized at the fill price and spends the whole budget less the
+costs.
+
+The sizers here keep no cash buffer. They size at the decision close, so a budget of the
+whole equity (`percent(100)`) can need more than the cash when the next open is higher,
+and the order is then rejected for margin; leave room (`percent(95)`) or use the engine
+default.
 """
 
 from __future__ import annotations
@@ -71,12 +82,15 @@ def lots(count: int) -> Sizer:
 
 
 def value(rupees: float) -> Sizer:
-    """Rupees of notional: rupees / (price x multiplier)."""
+    """Rupees of notional: rupees / (price x multiplier) at the decision close, with no
+    cash buffer."""
     return Sizer("value", _positive(rupees, "value"))
 
 
 def percent(p: float, basis: str = "equity") -> Sizer:
-    """p percent of equity (default), initial capital ("capital") or free cash ("cash")."""
+    """p percent of equity (default), initial capital ("capital") or free cash ("cash")
+    at the decision close, with no cash buffer: `percent(100)` can be rejected for margin
+    when the next open is higher (see the module docstring)."""
     if basis not in BASES:
         raise ConfigError(f"unknown sizing basis {basis!r}: use one of {BASES}")
     return Sizer("percent", _positive(p, "percent"), {"basis": basis})

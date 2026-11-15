@@ -111,7 +111,9 @@ def trade_order(changes: dict[str, float]) -> list[str]:
 def rebalance(ctx: Any, weights: Any, cash_buffer: Any, leverage: float | None) -> dict[str, Order]:
     """Send the orders of one rebalance (see the module docstring) through the run
     context `ctx`; returns the orders sent by symbol (a symbol already at its target
-    has none). Raises ConfigError as `target_weights` and `cash_buffer_fraction`."""
+    has none, and so has one whose weight rounds to no share while none is held, which
+    the context records as skipped). Raises ConfigError as `target_weights` and
+    `cash_buffer_fraction`."""
     symbols = tuple(ctx.names)
     wanted = target_weights(weights, symbols)
     invested = 1.0 - cash_buffer_fraction(cash_buffer)
