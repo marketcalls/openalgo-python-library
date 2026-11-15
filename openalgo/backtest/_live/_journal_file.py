@@ -1,5 +1,6 @@
 """The file of the live journal (`journal.Journal`): where it lives, its layout and version,
-and the checks made each time it is opened (08-live-trading section 7).
+the checks made each time it is opened (08-live-trading section 7), and what a SQLite
+error met while using it means.
 
 A journal is bound to the account and the broker it was created for. Its layout version
 is kept in `PRAGMA user_version`, which SQLite reads as 0 in a file never given one.
@@ -15,46 +16,72 @@ from ..errors import JournalError
 
 #: The layout of the journal file this version reads and writes.
 SCHEMA_VERSION = 1
-#: The environment variable naming the folder that holds the journals instead of
-#: `~/.openalgo/live`.
+#: The environment variable naming the folder (absolute) that holds the journals instead
+#: of `~/.openalgo/live`.
 LIVE_DIR_VARIABLE = "OPENALGO_LIVE_DIR"
 JOURNAL_FILE_NAME = "journal.sqlite"
-# Path separators, and the drive mark that would move the path to another drive on Windows.
-_NOT_IN_FOLDER_NAME = ("/", "\\", ":")
 
-# Each table has a `ledger` column, the `Mode` value of the handle that wrote the row.
-# An intent's `state` is "recorded" until its outcome is known, then "bound" to its
-# order, "unbound" (outcome unknown) or "not_placed".
+# Windows' rules for a file or folder name (its file naming conventions): these
+# characters, control characters, a trailing dot or space, and the device names, with
+# or without an extension.
+_NOT_IN_FOLDER_NAME = '<>:"/\\|?*'
+_DEVICE_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{number}" for number in range(1, 10)}
+    | {f"LPT{number}" for number in range(1, 10)}
+)
+_FIRST_PRINTABLE = 32
+
+# Every table is STRICT, so a value of the wrong type is refused instead of kept. Each
+# has a `ledger` column, the `Mode` value of the handle that wrote the row, and `day` is
+# an IST trading day, YYYY-MM-DD. An intent's `state` is "recorded" until its outcome is
+# known, then "bound" to its order, "unbound" (outcome unknown) or "not_placed".
 _SCHEMA = (
-    "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+    "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT",
     """CREATE TABLE intents (
         seq INTEGER PRIMARY KEY, intent_id TEXT NOT NULL UNIQUE, ledger TEXT NOT NULL,
-        strategy TEXT NOT NULL, symbol TEXT NOT NULL, exchange TEXT NOT NULL,
-        action TEXT NOT NULL, quantity INTEGER NOT NULL, price_type TEXT NOT NULL,
-        product TEXT NOT NULL, purpose TEXT NOT NULL, created_ns INTEGER NOT NULL,
-        price REAL NOT NULL, trigger_price REAL NOT NULL, state TEXT NOT NULL,
-        order_id TEXT, reason TEXT NOT NULL, changed_ns INTEGER NOT NULL)""",
+        day TEXT NOT NULL, strategy TEXT NOT NULL, symbol TEXT NOT NULL,
+        exchange TEXT NOT NULL, action TEXT NOT NULL, quantity INTEGER NOT NULL,
+        price_type TEXT NOT NULL, product TEXT NOT NULL, purpose TEXT NOT NULL,
+        created_ns INTEGER NOT NULL, price REAL NOT NULL, trigger_price REAL NOT NULL,
+        state TEXT NOT NULL, order_id TEXT, reason TEXT NOT NULL,
+        changed_ns INTEGER NOT NULL) STRICT""",
     "CREATE UNIQUE INDEX intents_by_order ON intents (ledger, order_id)",
+    "CREATE INDEX intents_by_day ON intents (ledger, day, state, seq)",
     """CREATE TABLE updates (
         seq INTEGER PRIMARY KEY, ledger TEXT NOT NULL, order_id TEXT NOT NULL,
         symbol TEXT NOT NULL, exchange TEXT NOT NULL, action TEXT NOT NULL,
         quantity INTEGER NOT NULL, filled_quantity INTEGER NOT NULL,
         pending_quantity INTEGER NOT NULL, average_price REAL NOT NULL,
         status TEXT NOT NULL, terminal INTEGER NOT NULL, rejection_reason TEXT NOT NULL,
-        mode TEXT NOT NULL, ts_recv_ns INTEGER NOT NULL, source TEXT NOT NULL)""",
+        mode TEXT NOT NULL, ts_recv_ns INTEGER NOT NULL, source TEXT NOT NULL) STRICT""",
     "CREATE INDEX updates_by_order ON updates (ledger, order_id, terminal, seq)",
     """CREATE TABLE stops (
-        ledger TEXT NOT NULL, strategy TEXT NOT NULL, symbol TEXT NOT NULL,
-        exchange TEXT NOT NULL, order_id TEXT NOT NULL, set_ns INTEGER NOT NULL,
-        PRIMARY KEY (ledger, strategy, symbol, exchange))""",
-    """CREATE TABLE states (
-        ledger TEXT NOT NULL, kind TEXT NOT NULL, strategy TEXT NOT NULL,
+        ledger TEXT NOT NULL, day TEXT NOT NULL, strategy TEXT NOT NULL,
+        symbol TEXT NOT NULL, exchange TEXT NOT NULL, order_id TEXT NOT NULL,
+        set_ns INTEGER NOT NULL, PRIMARY KEY (ledger, day, strategy, symbol, exchange)) STRICT""",
+    """CREATE TABLE risk_states (
+        ledger TEXT NOT NULL, strategy TEXT NOT NULL, day TEXT NOT NULL,
         state TEXT NOT NULL, saved_ns INTEGER NOT NULL,
-        PRIMARY KEY (ledger, kind, strategy))""",
+        PRIMARY KEY (ledger, strategy, day)) STRICT""",
+    """CREATE TABLE user_states (
+        ledger TEXT NOT NULL, strategy TEXT NOT NULL, state TEXT NOT NULL,
+        saved_ns INTEGER NOT NULL, PRIMARY KEY (ledger, strategy)) STRICT""",
     """CREATE TABLE sessions (
         ledger TEXT NOT NULL, day TEXT NOT NULL, broker TEXT NOT NULL,
         first_started_ns INTEGER NOT NULL, last_started_ns INTEGER NOT NULL,
-        starts INTEGER NOT NULL, PRIMARY KEY (ledger, day))""",
+        starts INTEGER NOT NULL, PRIMARY KEY (ledger, day)) STRICT""",
+)
+
+# What to do after each kind of SQLite error.
+_REFUSED = "a value was refused: pass the field SQLite names, as the type the journal keeps"
+_DAMAGED = (
+    "the file is damaged or is not a journal: move it away and start the session again "
+    "(the broker's order book and positions still show what is open)"
+)
+_DISK = (
+    "check that the disk has space and no other program holds the file, then start the "
+    "session again"
 )
 
 
@@ -63,15 +90,19 @@ def default_journal_path(account: str) -> Path:
     `<folder>/<account>/journal.sqlite` when the environment variable `OPENALGO_LIVE_DIR`
     names a folder (a blank value counts as unset).
 
-    Raises `JournalError` when `account` is not a plain folder name.
+    Raises `JournalError` when `account` cannot be a folder name on Windows, Linux and
+    macOS alike, or when `OPENALGO_LIVE_DIR` is a relative path.
     """
-    check_name("account", account)
-    if any(mark in account for mark in _NOT_IN_FOLDER_NAME) or account in (".", ".."):
-        raise JournalError(
-            f"account {account!r} must be a plain folder name, with no / \\ or : in it"
-        )
+    _check_folder_name(account)
     folder = os.environ.get(LIVE_DIR_VARIABLE, "").strip()
-    root = Path(folder).expanduser() if folder else Path.home() / ".openalgo" / "live"
+    if not folder:
+        return Path.home() / ".openalgo" / "live" / account / JOURNAL_FILE_NAME
+    root = Path(folder).expanduser()
+    if not root.is_absolute():
+        raise JournalError(
+            f"{LIVE_DIR_VARIABLE} must name an absolute folder, not {folder!r}: a relative "
+            "one would move with the folder the session is started from"
+        )
     return root / account / JOURNAL_FILE_NAME
 
 
@@ -108,24 +139,65 @@ def check_name(what: str, value: str) -> None:
         raise JournalError(f"{what} must be a non-empty string, not {value!r}")
 
 
+def failure(error: sqlite3.Error, action: str, path: Path) -> JournalError:
+    """The `JournalError` for a SQLite error met while trying to `action`: what happened
+    (a refused value, a damaged file, or a disk or lock problem) and what to do."""
+    name = getattr(error, "sqlite_errorname", None) or ""
+    refused = (sqlite3.IntegrityError, sqlite3.DataError, sqlite3.InterfaceError)
+    if isinstance(error, refused) or name.startswith("SQLITE_CONSTRAINT"):
+        advice = _REFUSED
+    elif isinstance(error, sqlite3.ProgrammingError) and not name:
+        advice = _REFUSED  # raised by Python's sqlite3 for a value it cannot bind
+    elif name in ("SQLITE_NOTADB", "SQLITE_CORRUPT"):
+        advice = _DAMAGED
+    else:
+        advice = _DISK
+    return JournalError(
+        f"cannot {action} in the live journal at {path} (SQLite: {error}): {advice}"
+    )
+
+
+def _check_folder_name(account: str) -> None:
+    check_name("account", account)
+    unfit = [
+        mark for mark in account if mark in _NOT_IN_FOLDER_NAME or ord(mark) < _FIRST_PRINTABLE
+    ]
+    if unfit or account.endswith((".", " ")):
+        raise JournalError(
+            f"account {account!r} must be a plain folder name: no {_NOT_IN_FOLDER_NAME} or "
+            "control characters, and no dot or space at the end"
+        )
+    if account.split(".")[0].rstrip(" ").upper() in _DEVICE_NAMES:
+        raise JournalError(
+            f"account {account!r} is a device name on Windows (CON, PRN, AUX, NUL, COM1 to "
+            "COM9, LPT1 to LPT9): choose another name"
+        )
+
+
 def _prepare(connection: sqlite3.Connection, path: Path, account: str, broker: str) -> None:
     try:
-        version = _check_version(connection, path)
+        # FULL syncs every commit to disk, so an intent survives a power cut.
+        connection.execute("PRAGMA synchronous = FULL")
+        # The version is read in the transaction that creates the layout, so two
+        # processes opening a new file cannot both create it.
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            if _check_version(connection, path) == 0:
+                _create(connection, account, broker)
+            _check_binding(connection, path, account, broker)
+            connection.execute("COMMIT")
+        except BaseException:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise
+        # After the checks, so a file that is not a journal is left as it was.
         if connection.execute("PRAGMA journal_mode = WAL").fetchone()[0] != "wal":
             raise JournalError(
                 f"SQLite cannot keep a write-ahead log at {path}: put the journal on a "
                 f"local disk with the {LIVE_DIR_VARIABLE} environment variable"
             )
-        # FULL syncs every commit to disk, so an intent survives a power cut.
-        connection.execute("PRAGMA synchronous = FULL")
-        if version == 0:
-            _create(connection, account, broker)
-        _check_binding(connection, path, account, broker)
     except sqlite3.Error as error:
-        raise JournalError(
-            f"cannot open the live journal at {path} (SQLite: {error}): if the file is not a "
-            "journal, move it away; otherwise check the disk and that no other program holds it"
-        ) from error
+        raise failure(error, "open the journal", path) from error
 
 
 def _check_version(connection: sqlite3.Connection, path: Path) -> int:
@@ -150,19 +222,12 @@ def _check_version(connection: sqlite3.Connection, path: Path) -> int:
 
 
 def _create(connection: sqlite3.Connection, account: str, broker: str) -> None:
-    connection.execute("BEGIN IMMEDIATE")
-    try:
-        for statement in _SCHEMA:
-            connection.execute(statement)
-        connection.executemany(
-            "INSERT INTO meta VALUES (?, ?)", (("account", account), ("broker", broker))
-        )
-        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-        connection.execute("COMMIT")
-    except BaseException:
-        if connection.in_transaction:
-            connection.execute("ROLLBACK")
-        raise
+    for statement in _SCHEMA:
+        connection.execute(statement)
+    connection.executemany(
+        "INSERT INTO meta VALUES (?, ?)", (("account", account), ("broker", broker))
+    )
+    connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
 def _check_binding(connection: sqlite3.Connection, path: Path, account: str, broker: str) -> None:
@@ -177,8 +242,9 @@ def _check_binding(connection: sqlite3.Connection, path: Path, account: str, bro
         raise JournalError(
             f"the live journal at {path} is bound to broker {bound!r}, and OpenAlgo is now "
             f"logged in to {broker!r}. An exit sent to {broker!r} would open a new position "
-            f"instead of closing one held at {bound!r}: close the positions at {bound!r}, "
-            f"then move this journal away to start a new one for {broker!r}"
+            f"instead of closing one held at {bound!r}: close the positions at {bound!r} "
+            f"first, then give {broker!r} a journal of its own by setting the "
+            f"{LIVE_DIR_VARIABLE} environment variable to another folder"
         )
 
 
@@ -189,4 +255,5 @@ __all__ = [
     "check_name",
     "connect",
     "default_journal_path",
+    "failure",
 ]
