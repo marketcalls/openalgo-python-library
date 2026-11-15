@@ -1,15 +1,14 @@
-"""The recorder's files: raw files of fixed-size records that a crash can tear, finalize
-turning them into one verified day file per instrument with its index, readers that
-verify and never write, and the repairs (moving a damaged file aside, rebuilding an
-index) that only a locked finalize makes. Raw files are written here as a recording
-writes them, so these tests need no feed.
+"""The recorder's files, written once: one raw file per recording that a crash or a
+power loss can tear, finalize turning it into one verified file and sidecar per
+instrument and removing it only then, readers that verify and never write, and the
+explicit repair that moves a damaged file aside. Raw files are written here as a
+recording writes them, so these tests need no feed.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import math
 import os
 import pathlib
@@ -17,54 +16,70 @@ import shutil
 
 import numpy as np
 import pytest
-from recorder_fakes import DAY, NS, ist_ns, raw_files
+from recorder_fakes import DAY, NS, ist_ns
 
-import openalgo.backtest._live._tick_days as tick_days
 from openalgo.backtest._live._tick_files import (
     NO_EVENT_TIME,
+    RAW_DTYPE,
     TICK_DTYPE,
-    RawFile,
+    finalized_paths,
     instrument_folder,
-    read_raw,
-    recording_number,
+    next_recording_number,
+    raw_path,
     records_of,
     tick_row,
     ticks_root,
 )
+from openalgo.backtest._live._tick_finalize import StopFacts, write_stop
+from openalgo.backtest._live._tick_raw import RawFile, RawHeader, read_raw
 from openalgo.backtest._live._types import Tick
 from openalgo.backtest._live.recorder import (
     Coverage,
-    Ending,
+    Outage,
+    Stop,
     finalize,
     read_day,
     read_merged_ticks,
     read_ticks,
+    repair,
 )
 from openalgo.backtest.errors import DataError
 
-#: The hash of a day file covers this versioned header, then the records' bytes.
-HASH_HEADER = b"openalgo.backtest recorded ticks v2\n"
-#: Two recordings' ids, as a recording names itself (16 hex digits).
-EARLY, LATE = "00000000000000a1", "00000000000000b2"
+#: The hash in a sidecar covers this versioned header, then the records' bytes.
+HASH_HEADER = b"openalgo.backtest recorded ticks v3\n"
+SBIN, INFY = ("NSE", "SBIN"), ("NSE", "INFY")
 
 
 def sbin(clock: str, ltp: float, **fields) -> Tick:
     return Tick("SBIN", "NSE", ltp, ist_ns(clock), **fields)
 
 
+def infy(clock: str, ltp: float) -> Tick:
+    return Tick("INFY", "NSE", ltp, ist_ns(clock))
+
+
+def root_of(tmp_path):
+    return ticks_root(tmp_path)
+
+
 def folder_of(tmp_path, symbol="SBIN"):
-    return instrument_folder(ticks_root(tmp_path), "NSE", symbol)
+    return instrument_folder(root_of(tmp_path), "NSE", symbol)
 
 
-def write_raw(tmp_path, ticks, *, symbol="SBIN", recording=EARLY, start="10:00:00", seq=1):
-    """A raw file as a recording leaves it: the header, then one record per tick, with
-    sequence numbers from `seq`."""
-    raw = RawFile.create(
-        folder_of(tmp_path, symbol), DAY, recording=recording, start_ns=ist_ns(start)
-    )
-    number = recording_number(recording)
+def write_raw(tmp_path, ticks, *, number=1, start="10:00:00", instruments=(SBIN,), part=0, seq=1):
+    """A recording's raw file as the writer leaves it: the header, then one record per
+    tick (of the instrument its symbol names), sequence numbers from `seq`."""
+    header = RawHeader(number, part, DAY, ist_ns(start), tuple(instruments))
+    raw = RawFile.create(raw_path(root_of(tmp_path), DAY, number, part), header)
+    index = {symbol: n for n, (_, symbol) in enumerate(instruments)}
     rows = [
-        tick_row(tick, recording=number, seq=seq + n, queued_ns=tick.ts_recv_ns)
+        tick_row(
+            tick,
+            instrument=index[tick.symbol],
+            recording=number,
+            seq=seq + n,
+            queued_ns=tick.ts_recv_ns,
+        )
         for n, tick in enumerate(ticks)
     ]
     if rows:
@@ -73,17 +88,17 @@ def write_raw(tmp_path, ticks, *, symbol="SBIN", recording=EARLY, start="10:00:0
     return raw.path
 
 
-def index_path(tmp_path, symbol="SBIN"):
-    return folder_of(tmp_path, symbol) / "index.json"
+def stopped(tmp_path, *, number=1, stopped_by=Stop.STOP_AT, stop="10:01:00", outages=()):
+    """The stop sidecar a recording writes before it finalizes."""
+    write_stop(root_of(tmp_path), DAY, number, StopFacts(stopped_by, ist_ns(stop), tuple(outages)))
 
 
-def index_of(tmp_path, symbol="SBIN") -> dict:
-    return json.loads(index_path(tmp_path, symbol).read_text("utf-8"))
+def files_of(tmp_path, number=1, symbol="SBIN"):
+    return finalized_paths(folder_of(tmp_path, symbol), DAY, number)
 
 
-def day_file(tmp_path):
-    (path,) = folder_of(tmp_path).glob("*.npy")
-    return path
+def sidecar_of(tmp_path, number=1, symbol="SBIN") -> dict:
+    return json.loads(files_of(tmp_path, number, symbol)[1].read_text("utf-8"))
 
 
 def damage(path) -> None:
@@ -103,10 +118,36 @@ TWO = [sbin("10:00:01", 812.4, volume=1_000.0), sbin("10:00:02", 812.5, volume=1
 
 def finalized_two(tmp_path) -> None:
     write_raw(tmp_path, TWO)
+    stopped(tmp_path)
     finalize(DAY, cache_dir=tmp_path)
 
 
+def ltps(tmp_path, symbol="SBIN") -> list[float]:
+    return [tick.ltp for tick in read_ticks("NSE", symbol, DAY, cache_dir=tmp_path)]
+
+
 # ----- raw files ----------------------------------------------------------------------
+
+
+def test_a_records_layouts_are_fixed_fields_in_utc_nanoseconds_and_rupees():
+    assert [(name, TICK_DTYPE[name].str) for name in TICK_DTYPE.names] == [
+        ("recording", "<u8"),
+        ("seq", "<i8"),
+        ("ts_recv_ns", "<i8"),
+        ("ts_queued_ns", "<i8"),
+        ("ts_event_ns", "<i8"),
+        ("ltp", "<f8"),
+        ("volume", "<f8"),
+        ("bid", "<f8"),
+        ("ask", "<f8"),
+    ]
+    assert RAW_DTYPE.names == ("instrument", *TICK_DTYPE.names)
+
+
+def test_a_raw_files_header_lists_the_recordings_instruments(tmp_path):
+    path = write_raw(tmp_path, [], instruments=(SBIN, INFY))
+
+    assert read_raw(path).header.instruments == (SBIN, INFY)
 
 
 def test_a_torn_last_record_is_cut_off_on_read(tmp_path):
@@ -119,23 +160,40 @@ def test_a_torn_last_record_is_cut_off_on_read(tmp_path):
     assert (len(content.records), content.torn_bytes) == (2, 10)
 
 
-def test_finalize_drops_a_torn_last_record_and_reports_its_bytes(tmp_path):
-    path = write_raw(tmp_path, TWO)
+def test_a_zero_filled_tail_left_by_a_power_loss_is_skipped_and_counted(tmp_path):
+    path = write_raw(tmp_path, TWO[:1])
     with open(path, "ab") as handle:
-        handle.write(b"\x01" * (TICK_DTYPE.itemsize - 1))
+        handle.write(bytes(3 * RAW_DTYPE.itemsize))
+    stopped(tmp_path)
 
-    (written,) = finalize(DAY, cache_dir=tmp_path).files
+    report = finalize(DAY, cache_dir=tmp_path)
 
-    assert (written.ticks, written.torn_bytes) == (2, TICK_DTYPE.itemsize - 1)
+    assert (ltps(tmp_path), report.rejected) == ([812.4], 3)
+
+
+def test_records_of_another_recording_or_out_of_sequence_are_skipped_and_counted(tmp_path):
+    path = write_raw(tmp_path, TWO)
+    stray = [
+        tick_row(sbin("10:00:03", 1.0), instrument=0, recording=9, seq=3, queued_ns=0),
+        tick_row(sbin("10:00:04", 2.0), instrument=0, recording=1, seq=2, queued_ns=0),
+        tick_row(sbin("10:00:05", math.nan), instrument=0, recording=1, seq=4, queued_ns=0),
+        tick_row(sbin("10:00:06", 3.0), instrument=7, recording=1, seq=5, queued_ns=0),
+    ]
+    with open(path, "ab") as handle:
+        handle.write(records_of(stray).tobytes())
+
+    content = read_raw(path)
+
+    assert (content.records["ltp"].tolist(), content.rejected) == ([812.4, 812.5], 4)
 
 
 def test_after_a_write_cut_short_the_next_append_first_cuts_the_file_to_whole_records(
     tmp_path, monkeypatch
 ):
-    raw = RawFile.create(folder_of(tmp_path), DAY, recording=EARLY, start_ns=ist_ns("10:00:00"))
+    header = RawHeader(1, 0, DAY, ist_ns("10:00:00"), (SBIN,))
+    raw = RawFile.create(raw_path(root_of(tmp_path), DAY, 1, 0), header)
     rows = [
-        tick_row(tick, recording=recording_number(EARLY), seq=n, queued_ns=0)
-        for n, tick in enumerate(TWO)
+        tick_row(t, instrument=0, recording=1, seq=n + 1, queued_ns=0) for n, t in enumerate(TWO)
     ]
     raw.append(records_of(rows[:1]))
     write = RawFile._write_bytes
@@ -153,21 +211,334 @@ def test_after_a_write_cut_short_the_next_append_first_cuts_the_file_to_whole_re
     raw.close()
 
     content = read_raw(raw.path)
-    assert (content.records["ltp"].tolist(), content.torn_bytes) == ([812.4, 812.5], 0)
+    assert (content.records["ltp"].tolist(), content.torn_bytes, content.rejected) == (
+        [812.4, 812.5],
+        0,
+        0,
+    )
 
 
-def test_a_record_is_72_bytes_of_fixed_fields_in_utc_nanoseconds_and_rupees():
-    assert [(name, TICK_DTYPE[name].str) for name in TICK_DTYPE.names] == [
-        ("recording", "<u8"),
-        ("seq", "<i8"),
-        ("ts_recv_ns", "<i8"),
-        ("ts_queued_ns", "<i8"),
-        ("ts_event_ns", "<i8"),
-        ("ltp", "<f8"),
-        ("volume", "<f8"),
-        ("bid", "<f8"),
-        ("ask", "<f8"),
-    ]
+def test_every_append_ends_with_a_sync_to_the_disk(tmp_path, monkeypatch):
+    synced = []
+    monkeypatch.setattr(RawFile, "_sync", lambda raw: synced.append(raw.path))
+    header = RawHeader(1, 0, DAY, ist_ns("10:00:00"), (SBIN,))
+    raw = RawFile.create(raw_path(root_of(tmp_path), DAY, 1, 0), header)
+
+    for tick in TWO:
+        raw.append(records_of([tick_row(tick, instrument=0, recording=1, seq=1, queued_ns=0)]))
+
+    assert synced == [raw.path, raw.path]
+
+
+# ----- finalize -----------------------------------------------------------------------
+
+
+def test_finalize_writes_one_file_and_sidecar_per_instrument_of_the_recording(tmp_path):
+    write_raw(
+        tmp_path, [sbin("10:00:01", 812.4), infy("10:00:02", 1_500.0)], instruments=(SBIN, INFY)
+    )
+    stopped(tmp_path)
+
+    finalize(DAY, cache_dir=tmp_path)
+
+    assert all(path.exists() for path in (*files_of(tmp_path), *files_of(tmp_path, symbol="INFY")))
+    assert (ltps(tmp_path), ltps(tmp_path, "INFY")) == ([812.4], [1_500.0])
+
+
+def test_finalize_removes_the_raw_file_and_its_stop_sidecar(tmp_path):
+    path = write_raw(tmp_path, TWO)
+    stopped(tmp_path)
+
+    finalize(DAY, cache_dir=tmp_path)
+
+    assert list(path.parent.iterdir()) == []
+
+
+def test_the_sidecar_holds_the_files_hash_over_its_records(tmp_path):
+    finalized_two(tmp_path)
+
+    records = np.load(files_of(tmp_path)[0], allow_pickle=False)
+    expected = "sha256:" + hashlib.sha256(HASH_HEADER + records.tobytes()).hexdigest()
+    assert sidecar_of(tmp_path)["sha256"] == expected
+
+
+def test_the_sidecar_holds_the_tick_count_and_the_first_and_last_receive_time(tmp_path):
+    finalized_two(tmp_path)
+
+    sidecar = sidecar_of(tmp_path)
+
+    assert (sidecar["ticks"], sidecar["first_recv_ns"], sidecar["last_recv_ns"]) == (
+        2,
+        ist_ns("10:00:01"),
+        ist_ns("10:00:02"),
+    )
+
+
+def test_a_recording_that_wrote_how_it_stopped_spans_to_its_stop_with_its_outages(tmp_path):
+    write_raw(tmp_path, TWO)
+    outage = Outage(ist_ns("10:00:10"), ist_ns("10:00:20"))
+    stopped(tmp_path, stopped_by=Stop.INTERRUPT, stop="10:00:30", outages=[outage])
+    finalize(DAY, cache_dir=tmp_path)
+
+    (span,) = read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).spans
+
+    assert (span.recording, span.start_ns, span.stop_ns, span.ended_by, span.outages) == (
+        1,
+        ist_ns("10:00:00"),
+        ist_ns("10:00:30"),
+        Stop.INTERRUPT,
+        (outage,),
+    )
+
+
+def test_a_recording_that_did_not_say_how_it_stopped_crashed_at_its_greatest_receive_time(
+    tmp_path,
+):
+    # The wall clock stepped back: the last record was received before an earlier one.
+    write_raw(tmp_path, [sbin("10:00:02", 812.4), sbin("10:00:01.500", 812.5)])
+    finalize(DAY, cache_dir=tmp_path)
+
+    (span,) = read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).spans
+
+    assert (span.stop_ns, span.ended_by, span.outages) == (ist_ns("10:00:02"), Stop.CRASH, None)
+
+
+def test_a_crashed_recording_without_a_tick_spans_no_time(tmp_path):
+    write_raw(tmp_path, [], start="10:00:00")
+    finalize(DAY, cache_dir=tmp_path)
+
+    (span,) = read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).spans
+
+    assert (span.start_ns, span.stop_ns) == (ist_ns("10:00:00"), ist_ns("10:00:00"))
+
+
+def test_a_tick_taken_after_the_stop_is_inside_the_span(tmp_path):
+    write_raw(tmp_path, [sbin("10:01:00.050", 812.4)])
+    stopped(tmp_path, stop="10:01:00")
+    finalize(DAY, cache_dir=tmp_path)
+
+    day = read_day("NSE", "SBIN", DAY, cache_dir=tmp_path)
+
+    assert day.coverage(ist_ns("10:01:00.050")) is Coverage.RECORDED
+
+
+def test_a_later_recording_never_rewrites_an_earlier_recordings_file(tmp_path):
+    finalized_two(tmp_path)
+    earlier = files_of(tmp_path)[0]
+    before = (earlier.read_bytes(), earlier.stat().st_mtime_ns)
+    write_raw(tmp_path, [sbin("11:00:00", 815.0)], number=2, start="10:59:00")
+    stopped(tmp_path, number=2, stop="11:01:00")
+
+    finalize(DAY, cache_dir=tmp_path)
+
+    assert (earlier.read_bytes(), earlier.stat().st_mtime_ns) == before
+
+
+def test_a_day_reads_every_recordings_file_in_the_order_of_their_numbers(tmp_path):
+    write_raw(tmp_path, [sbin("11:00:00", 815.0)], number=2, start="10:59:00")
+    write_raw(tmp_path, TWO, number=1)
+    finalize(DAY, cache_dir=tmp_path)
+
+    assert ltps(tmp_path) == [812.4, 812.5, 815.0]
+
+
+def test_finalizing_a_raw_file_whose_files_exist_and_verify_only_removes_it(tmp_path):
+    path = write_raw(tmp_path, TWO)
+    kept = shutil.copy(path, tmp_path / "copy.raw")
+    finalize(DAY, cache_dir=tmp_path)
+    written = files_of(tmp_path)[0]
+    before = (written.read_bytes(), written.stat().st_mtime_ns)
+    shutil.copy(kept, path)  # the crash came before the raw file was removed
+
+    finalize(DAY, cache_dir=tmp_path)
+
+    assert ((written.read_bytes(), written.stat().st_mtime_ns), path.exists()) == (before, False)
+
+
+def test_a_finalize_cut_short_between_instruments_is_finished_by_the_next(tmp_path):
+    write_raw(
+        tmp_path, [sbin("10:00:01", 812.4), infy("10:00:02", 1_500.0)], instruments=(SBIN, INFY)
+    )
+    finalize(DAY, cache_dir=tmp_path)
+    for path in files_of(tmp_path, symbol="INFY"):
+        path.unlink()  # as if the crash came before INFY's file was written
+    raw = write_raw(
+        tmp_path, [sbin("10:00:01", 812.4), infy("10:00:02", 1_500.0)], instruments=(SBIN, INFY)
+    )
+
+    finalize(DAY, cache_dir=tmp_path)
+
+    assert (ltps(tmp_path), ltps(tmp_path, "INFY"), raw.exists()) == ([812.4], [1_500.0], False)
+
+
+def test_the_raw_file_stays_while_a_finalized_file_of_it_is_damaged(tmp_path):
+    path = write_raw(tmp_path, TWO)
+    kept = shutil.copy(path, tmp_path / "copy.raw")
+    finalize(DAY, cache_dir=tmp_path)
+    damage(files_of(tmp_path)[0])
+    shutil.copy(kept, path)
+
+    report = finalize(DAY, cache_dir=tmp_path)
+
+    assert (path.exists(), report.pending, any("damaged" in note for note in report.notes)) == (
+        True,
+        (1,),
+        True,
+    )
+
+
+def test_a_raw_file_that_cannot_be_removed_stays_and_its_span_does_not_change(
+    tmp_path, monkeypatch
+):
+    path = write_raw(tmp_path, TWO)
+    outage = Outage(ist_ns("10:00:10"), ist_ns("10:00:20"))
+    stopped(tmp_path, outages=[outage])
+    unlink = pathlib.Path.unlink
+
+    def held_open_elsewhere(file, missing_ok=False):
+        if file == path:
+            raise PermissionError(13, "The process cannot access the file", str(file))
+        unlink(file, missing_ok=missing_ok)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", held_open_elsewhere)
+    report = finalize(DAY, cache_dir=tmp_path)
+    monkeypatch.setattr(pathlib.Path, "unlink", unlink)
+
+    finalize(DAY, cache_dir=tmp_path)
+
+    (span,) = read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).spans
+    assert (report.pending, path.exists(), span.ended_by, span.outages) == (
+        (1,),
+        False,
+        Stop.STOP_AT,
+        (outage,),
+    )
+
+
+def test_finalize_moves_aside_a_file_that_is_not_a_raw_file(tmp_path):
+    path = raw_path(root_of(tmp_path), DAY, 1, 0)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"not ticks")
+
+    report = finalize(DAY, cache_dir=tmp_path)
+
+    moved = list(path.parent.glob(f"{path.name}.damaged-*"))
+    assert (report.files, len(moved), "not a raw tick file" in report.notes[0]) == ((), 1, True)
+
+
+@pytest.mark.parametrize("symbol", ["M&M", "BAJAJ-AUTO", "NIFTY 50", "SBIN/EQ"])
+def test_a_symbol_with_characters_unsafe_in_a_path_round_trips(tmp_path, symbol):
+    tick = Tick(symbol, "NSE", 100.0, ist_ns("10:00:01"))
+    write_raw(tmp_path, [tick], instruments=(("NSE", symbol),))
+
+    (written,) = finalize(DAY, cache_dir=tmp_path).files
+
+    assert (written.symbol, read_ticks("NSE", symbol, DAY, cache_dir=tmp_path)) == (symbol, [tick])
+
+
+def test_recording_numbers_count_up_across_the_cache(tmp_path):
+    root = root_of(tmp_path)
+
+    assert [next_recording_number(root) for _ in range(3)] == [1, 2, 3]
+
+
+def test_a_lost_counter_never_gives_a_number_a_file_of_the_cache_has(tmp_path):
+    write_raw(tmp_path, TWO, number=7)
+    finalize(DAY, cache_dir=tmp_path)
+
+    assert next_recording_number(root_of(tmp_path)) == 8
+
+
+# ----- readers verify and never write -------------------------------------------------
+
+
+def test_a_damaged_file_fails_verification_on_read_naming_it(tmp_path):
+    finalized_two(tmp_path)
+    damage(files_of(tmp_path)[0])
+
+    with pytest.raises(DataError, match=r"2026-11-16\.00000001\.npy.*do not match the hash"):
+        read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path)
+
+
+def test_a_reader_leaves_a_damaged_file_where_it_is(tmp_path):
+    finalized_two(tmp_path)
+    damage(files_of(tmp_path)[0])
+    before = snapshot(folder_of(tmp_path))
+
+    with pytest.raises(DataError):
+        read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path)
+
+    assert snapshot(folder_of(tmp_path)) == before
+
+
+def test_a_reader_of_a_sidecar_that_cannot_be_parsed_raises_and_moves_nothing(tmp_path):
+    finalized_two(tmp_path)
+    files_of(tmp_path)[1].write_text("{not json", "utf-8")
+    before = snapshot(folder_of(tmp_path))
+
+    with pytest.raises(DataError, match="cannot be parsed"):
+        read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path)
+
+    assert snapshot(folder_of(tmp_path)) == before
+
+
+def test_a_ticks_file_without_a_sidecar_and_no_raw_file_cannot_be_verified(tmp_path):
+    finalized_two(tmp_path)
+    files_of(tmp_path)[1].unlink()
+
+    with pytest.raises(DataError, match="no sidecar"):
+        read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path)
+
+
+def test_a_file_that_cannot_be_read_now_raises_an_os_error_naming_it(tmp_path, monkeypatch):
+    finalized_two(tmp_path)
+    read_bytes = pathlib.Path.read_bytes
+
+    def busy(path):
+        if path.suffix == ".json":
+            raise PermissionError(13, "The process cannot access the file")
+        return read_bytes(path)
+
+    monkeypatch.setattr(pathlib.Path, "read_bytes", busy)
+
+    with pytest.raises(PermissionError, match=r"2026-11-16\.00000001\.json"):
+        read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path)
+
+
+def test_a_day_says_when_a_raw_file_of_it_is_still_pending(tmp_path):
+    finalized_two(tmp_path)
+    write_raw(tmp_path, [sbin("11:00:00", 815.0)], number=2, start="10:59:00")
+
+    pending = read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).pending
+    finalize(DAY, cache_dir=tmp_path)
+
+    assert (pending, read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).pending) == (True, False)
+
+
+def test_reading_a_day_never_recorded_says_to_record_it(tmp_path):
+    with pytest.raises(DataError, match="record that day first"):
+        read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path)
+
+
+def test_reading_a_day_whose_raw_file_waits_says_to_finalize_it(tmp_path):
+    write_raw(tmp_path, TWO)
+
+    with pytest.raises(DataError, match="finalize 2026-11-16 first"):
+        read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path)
+
+
+def test_an_instrument_reads_the_same_in_any_case(tmp_path):
+    finalized_two(tmp_path)
+
+    assert read_ticks("nse", "sbin", DAY, cache_dir=tmp_path) == TWO
+
+
+def test_ticks_read_back_carry_their_event_time_volume_bid_and_ask(tmp_path):
+    tick = sbin("10:00:01", 812.4, ts_event_ns=ist_ns("10:00:00"), volume=5.0, bid=812.3, ask=812.5)
+    write_raw(tmp_path, [tick])
+    finalize(DAY, cache_dir=tmp_path)
+
+    assert read_ticks("NSE", "SBIN", "2026-11-16", cache_dir=tmp_path) == [tick]
 
 
 def test_missing_values_are_stored_as_0_and_nan_and_read_back_as_none(tmp_path):
@@ -190,427 +561,13 @@ def test_a_volume_of_0_is_stored_and_read_back_as_0(tmp_path):
     assert tick.volume == 0.0
 
 
-# ----- finalize -----------------------------------------------------------------------
-
-
-def test_finalize_turns_the_days_raw_file_into_a_day_file_that_reads_back(tmp_path):
-    finalized_two(tmp_path)
-
-    assert read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path) == TWO
-
-
-def test_finalize_removes_the_raw_file(tmp_path):
-    path = write_raw(tmp_path, TWO)
-
-    finalize(DAY, cache_dir=tmp_path)
-
-    assert not path.exists()
-
-
-def test_the_index_holds_the_files_hash_over_its_records(tmp_path):
-    finalized_two(tmp_path)
-
-    records = np.load(day_file(tmp_path), allow_pickle=False)
-    expected = "sha256:" + hashlib.sha256(HASH_HEADER + records.tobytes()).hexdigest()
-    assert index_of(tmp_path)["days"]["2026-11-16"]["sha256"] == expected
-
-
-def test_the_index_holds_the_tick_count_and_the_first_and_last_receive_time(tmp_path):
-    finalized_two(tmp_path)
-
-    entry = index_of(tmp_path)["days"]["2026-11-16"]
-
-    assert (entry["ticks"], entry["first_recv_ns"], entry["last_recv_ns"]) == (
-        2,
-        ist_ns("10:00:01"),
-        ist_ns("10:00:02"),
-    )
-
-
-def test_a_recording_finalized_from_its_raw_file_alone_ended_by_a_crash_at_its_last_tick(
-    tmp_path,
-):
-    finalized_two(tmp_path)
-
-    (span,) = read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).spans
-
-    assert (span.recording, span.start_ns, span.stop_ns, span.ended_by, span.outages) == (
-        EARLY,
-        ist_ns("10:00:00"),
-        ist_ns("10:00:02"),
-        Ending.CRASH,
-        None,
-    )
-
-
-def test_a_crashed_recording_without_a_tick_spans_no_time(tmp_path):
-    write_raw(tmp_path, [], start="10:00:00")
-    finalize(DAY, cache_dir=tmp_path)
-
-    (span,) = read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).spans
-
-    assert (span.start_ns, span.stop_ns) == (ist_ns("10:00:00"), ist_ns("10:00:00"))
-
-
-def test_a_later_recordings_raw_file_is_appended_after_the_first(tmp_path):
-    finalized_two(tmp_path)
-    later = sbin("11:00:00", 815.0)
-    write_raw(tmp_path, [later], recording=LATE, start="10:59:00")
-
-    finalize(DAY, cache_dir=tmp_path)
-
-    assert read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path) == [*TWO, later]
-
-
-def test_a_merged_day_keeps_one_day_file(tmp_path):
-    finalized_two(tmp_path)
-    write_raw(tmp_path, [sbin("11:00:00", 815.0)], recording=LATE, start="10:59:00")
-
-    finalize(DAY, cache_dir=tmp_path)
-
-    assert len(list(folder_of(tmp_path).glob("*.npy"))) == 1
-
-
-def test_a_record_found_in_two_raw_files_of_its_recording_is_kept_once(tmp_path):
-    write_raw(tmp_path, TWO)
-    write_raw(tmp_path, TWO[1:], seq=2)  # the batch a recording wrote again elsewhere
-
-    finalize(DAY, cache_dir=tmp_path)
-
-    assert read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path) == TWO
-
-
-def test_a_raw_file_finalized_before_a_crash_removed_it_is_not_merged_twice(tmp_path):
-    path = write_raw(tmp_path, TWO)
-    kept = shutil.copy(path, tmp_path / "copy.raw")
-    finalize(DAY, cache_dir=tmp_path)
-    shutil.copy(kept, path)  # the crash came after the index was saved
-
-    finalize(DAY, cache_dir=tmp_path)
-
-    assert (len(read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path)), path.exists()) == (2, False)
-
-
-def test_a_day_without_a_tick_reads_back_as_an_empty_list(tmp_path):
-    write_raw(tmp_path, [])
-
-    finalize(DAY, cache_dir=tmp_path)
-
-    assert read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path) == []
-
-
-def test_finalize_moves_aside_a_file_that_is_not_a_raw_file(tmp_path):
-    path = folder_of(tmp_path) / "2026-11-16.0123456789abcdef.raw"
-    path.parent.mkdir(parents=True)
-    path.write_bytes(b"not ticks")
-
-    report = finalize(DAY, cache_dir=tmp_path)
-
-    moved = list(path.parent.glob(f"{path.name}.quarantined-*"))
-    assert (report.files, len(moved), "not a raw tick file" in report.notes[0]) == ((), 1, True)
-
-
-@pytest.mark.parametrize("symbol", ["M&M", "BAJAJ-AUTO", "NIFTY 50", "SBIN/EQ"])
-def test_a_symbol_with_characters_unsafe_in_a_path_round_trips(tmp_path, symbol):
-    tick = Tick(symbol, "NSE", 100.0, ist_ns("10:00:01"))
-    write_raw(tmp_path, [tick], symbol=symbol)
-
-    (written,) = finalize(DAY, cache_dir=tmp_path).files
-
-    assert (written.symbol, read_ticks("NSE", symbol, DAY, cache_dir=tmp_path)) == (symbol, [tick])
-
-
-def test_an_old_day_file_that_cannot_be_removed_stays_until_a_later_finalize(tmp_path, monkeypatch):
-    finalized_two(tmp_path)
-    old = day_file(tmp_path)
-    write_raw(tmp_path, [sbin("11:00:00", 815.0)], recording=LATE, start="10:59:00")
-    unlink = pathlib.Path.unlink
-
-    def held_open_elsewhere(path, missing_ok=False):
-        if path == old:
-            raise PermissionError(13, "The process cannot access the file", str(path))
-        unlink(path, missing_ok=missing_ok)
-
-    monkeypatch.setattr(pathlib.Path, "unlink", held_open_elsewhere)
-    report = finalize(DAY, cache_dir=tmp_path)
-    monkeypatch.setattr(pathlib.Path, "unlink", unlink)
-    stayed = old.exists()
-
-    finalize(DAY, cache_dir=tmp_path)
-
-    assert (stayed, any(old.name in note for note in report.notes), old.exists()) == (
-        True,
-        True,
-        False,
-    )
-
-
-def test_the_day_reads_back_whole_while_an_old_day_file_stays(tmp_path, monkeypatch):
-    finalized_two(tmp_path)
-    old = day_file(tmp_path)
-    write_raw(tmp_path, [sbin("11:00:00", 815.0)], recording=LATE, start="10:59:00")
-    unlink = pathlib.Path.unlink
-
-    def held_open_elsewhere(path, missing_ok=False):
-        if path == old:
-            raise PermissionError(13, "The process cannot access the file", str(path))
-        unlink(path, missing_ok=missing_ok)
-
-    monkeypatch.setattr(pathlib.Path, "unlink", held_open_elsewhere)
-
-    finalize(DAY, cache_dir=tmp_path)
-
-    assert len(read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path)) == 3
-
-
-# ----- spans, pending files, the merged read -------------------------------------------
-
-
-def test_a_day_says_when_a_raw_file_of_it_is_still_pending(tmp_path):
-    finalized_two(tmp_path)
-    write_raw(tmp_path, [sbin("11:00:00", 815.0)], recording=LATE, start="10:59:00")
-
-    pending = read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).pending
-    finalize(DAY, cache_dir=tmp_path)
-
-    assert (pending, read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).pending) == (True, False)
-
-
-def test_a_moment_inside_a_span_whose_outages_are_not_known_has_unknown_coverage(tmp_path):
-    finalized_two(tmp_path)
-
-    coverage = read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).coverage(ist_ns("10:00:01"))
-
-    assert coverage is Coverage.UNKNOWN
-
-
-def test_a_moment_outside_every_known_span_is_not_recorded(tmp_path):
-    finalized_two(tmp_path)
-
-    coverage = read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).coverage(ist_ns("12:00:00"))
-
-    assert coverage is Coverage.NOT_RECORDED
-
-
-def test_the_merged_read_follows_the_sequence_across_instruments(tmp_path):
-    # Three ticks received at one instant: SBIN, INFY, SBIN, by their sequence numbers.
-    write_raw(tmp_path, [sbin("10:00:01", 812.4)], seq=1)
-    write_raw(tmp_path, [Tick("INFY", "NSE", 1_500.0, ist_ns("10:00:01"))], symbol="INFY", seq=2)
-    write_raw(tmp_path, [sbin("10:00:01", 812.5)], seq=3)
-    finalize(DAY, cache_dir=tmp_path)
-    instruments = [{"exchange": "NSE", "symbol": "INFY"}, {"exchange": "NSE", "symbol": "SBIN"}]
-
-    merged = read_merged_ticks(instruments, DAY, cache_dir=tmp_path)
-
-    assert [tick.ltp for tick in merged] == [812.4, 1_500.0, 812.5]
-
-
-# ----- readers verify and never write -------------------------------------------------
-
-
-def test_a_changed_day_file_fails_verification_on_read(tmp_path):
-    finalized_two(tmp_path)
-    damage(day_file(tmp_path))
-
-    with pytest.raises(DataError, match="does not match the hash"):
-        read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path)
-
-
-def test_a_reader_leaves_a_changed_day_file_and_the_index_as_they_are(tmp_path):
-    finalized_two(tmp_path)
-    damage(day_file(tmp_path))
-    before = snapshot(folder_of(tmp_path))
-
-    with pytest.raises(DataError):
-        read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path)
-
-    assert snapshot(folder_of(tmp_path)) == before
-
-
-def test_finalize_moves_a_changed_day_file_aside_never_deleting_it(tmp_path):
-    finalized_two(tmp_path)
-    path = day_file(tmp_path)
-    damage(path)
-
-    report = finalize(DAY, cache_dir=tmp_path)
-
-    moved = list(path.parent.glob(f"{path.name}.quarantined-*"))
-    assert (len(moved), any("does not match the hash" in note for note in report.notes)) == (
-        1,
-        True,
-    )
-
-
-def test_a_day_whose_file_was_moved_aside_is_no_longer_read(tmp_path):
-    finalized_two(tmp_path)
-    damage(day_file(tmp_path))
-    finalize(DAY, cache_dir=tmp_path)
-
-    with pytest.raises(DataError, match="no ticks of NSE:SBIN were recorded on 2026-11-16"):
-        read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path)
-
-
-def test_a_day_file_replaced_by_other_ticks_fails_verification(tmp_path):
-    finalized_two(tmp_path)
-    with open(day_file(tmp_path), "wb") as handle:
-        np.save(handle, np.zeros(2, dtype=TICK_DTYPE), allow_pickle=False)
-
-    with pytest.raises(DataError, match="does not match the hash"):
-        read_day("NSE", "SBIN", DAY, cache_dir=tmp_path)
-
-
-def test_a_reader_of_an_unparseable_index_raises_and_moves_nothing(tmp_path):
-    finalized_two(tmp_path)
-    index_path(tmp_path).write_text("{not json", "utf-8")
-    before = snapshot(folder_of(tmp_path))
-
-    with pytest.raises(DataError, match="cannot be parsed"):
-        read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path)
-
-    assert snapshot(folder_of(tmp_path)) == before
-
-
-def test_finalize_moves_an_unparseable_index_aside_and_rebuilds_it_from_the_day_files(
-    tmp_path, caplog
-):
-    finalized_two(tmp_path)
-    index_path(tmp_path).write_text("{not json", "utf-8")
-
-    with caplog.at_level(logging.WARNING, logger="openalgo.backtest.live"):
-        finalize(DAY, cache_dir=tmp_path)
-
-    moved = list(folder_of(tmp_path).glob("index.json.quarantined-*"))
-    rebuilt = any("rebuilt" in record.getMessage() for record in caplog.records)
-    assert (len(moved), rebuilt, read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path)) == (
-        1,
-        True,
-        TWO,
-    )
-
-
-def test_a_rebuilt_index_marks_the_spans_and_outages_of_the_day_unknown(tmp_path):
-    finalized_two(tmp_path)
-    index_path(tmp_path).write_text("[]", "utf-8")
-    finalize(DAY, cache_dir=tmp_path)
-
-    (span,) = read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).spans
-
-    assert (span.recording, span.start_ns, span.stop_ns, span.ended_by, span.outages) == (
-        EARLY,
-        None,
-        None,
-        Ending.UNKNOWN,
-        None,
-    )
-
-
-def test_a_rebuilt_index_takes_the_newest_day_file_of_a_day(tmp_path):
-    finalized_two(tmp_path)
-    two_ticks = day_file(tmp_path).read_bytes()
-    write_raw(tmp_path, [sbin("11:00:00", 815.0)], recording=LATE, start="10:59:00")
-    finalize(DAY, cache_dir=tmp_path)
-    current = day_file(tmp_path)
-    # An older day file of the day that a removal missed, written ten seconds earlier.
-    stale = current.with_name("2026-11-16.00000000000000ff.npy")
-    stale.write_bytes(two_ticks)
-    earlier_ns = current.stat().st_mtime_ns - 10 * NS
-    os.utime(stale, ns=(earlier_ns, earlier_ns))
-    index_path(tmp_path).write_text("{not json", "utf-8")
-
-    finalize(DAY, cache_dir=tmp_path)
-
-    assert len(read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path)) == 3
-
-
-def test_an_index_entry_pointing_outside_its_folder_fails_verification(tmp_path):
-    finalized_two(tmp_path)
-    index = index_of(tmp_path)
-    index["days"]["2026-11-16"]["file"] = "../../elsewhere.npy"
-    index_path(tmp_path).write_text(json.dumps(index), "utf-8")
-
-    with pytest.raises(DataError, match="cannot be parsed"):
-        read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path)
-
-
-def test_a_file_that_cannot_be_opened_now_raises_an_os_error_naming_it(tmp_path, monkeypatch):
-    finalized_two(tmp_path)
-    read_bytes = pathlib.Path.read_bytes
-
-    def busy(path):
-        if path.name == "index.json":
-            raise PermissionError(13, "The process cannot access the file")
-        return read_bytes(path)
-
-    monkeypatch.setattr(pathlib.Path, "read_bytes", busy)
-
-    with pytest.raises(PermissionError, match="index.json"):
-        read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path)
-
-
-def test_a_file_that_cannot_be_opened_now_is_neither_moved_nor_lost(tmp_path, monkeypatch):
-    finalized_two(tmp_path)
-    before = snapshot(folder_of(tmp_path))
-    read_bytes = pathlib.Path.read_bytes
-
-    def busy(path):
-        if path.suffix == ".npy":
-            raise PermissionError(13, "The process cannot access the file")
-        return read_bytes(path)
-
-    monkeypatch.setattr(pathlib.Path, "read_bytes", busy)
-    with pytest.raises(PermissionError):
-        finalize(DAY, cache_dir=tmp_path)
-    monkeypatch.setattr(pathlib.Path, "read_bytes", read_bytes)
-
-    assert (snapshot(folder_of(tmp_path)), read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path)) == (
-        before,
-        TWO,
-    )
-
-
-def test_a_reader_whose_day_file_a_finalize_replaced_meanwhile_reads_the_new_one(
-    tmp_path, monkeypatch
-):
-    finalized_two(tmp_path)
-    write_raw(tmp_path, [sbin("11:00:00", 815.0)], recording=LATE, start="10:59:00")
-    read_index = tick_days.read_index
-
-    def then_a_finalize(*args):
-        index = read_index(*args)
-        monkeypatch.setattr(tick_days, "read_index", read_index)
-        finalize(DAY, cache_dir=tmp_path)  # it removes the day file this index names
-        return index
-
-    monkeypatch.setattr(tick_days, "read_index", then_a_finalize)
-
-    assert len(read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path)) == 3
-
-
-def test_reading_a_day_never_recorded_says_to_record_it(tmp_path):
-    with pytest.raises(DataError, match="record that day first"):
-        read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path)
-
-
-def test_reading_a_day_whose_raw_file_waits_says_to_finalize_it(tmp_path):
-    write_raw(tmp_path, TWO)
-
-    with pytest.raises(DataError, match="finalize 2026-11-16 first"):
-        read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path)
-
-
-def test_ticks_read_back_carry_their_event_time_volume_bid_and_ask(tmp_path):
-    tick = sbin("10:00:01", 812.4, ts_event_ns=ist_ns("10:00:00"), volume=5.0, bid=812.3, ask=812.5)
-    write_raw(tmp_path, [tick])
-    finalize(DAY, cache_dir=tmp_path)
-
-    assert read_ticks("NSE", "SBIN", "2026-11-16", cache_dir=tmp_path) == [tick]
-
-
 def test_the_queued_time_is_kept_beside_the_receive_time(tmp_path):
-    raw = RawFile.create(folder_of(tmp_path), DAY, recording=EARLY, start_ns=ist_ns("10:00:00"))
+    header = RawHeader(1, 0, DAY, ist_ns("10:00:00"), (SBIN,))
+    raw = RawFile.create(raw_path(root_of(tmp_path), DAY, 1, 0), header)
     tick = sbin("10:00:01.250", 812.4)
-    row = tick_row(tick, recording=recording_number(EARLY), seq=1, queued_ns=ist_ns("10:00:01"))
-    raw.append(records_of([row]))
+    raw.append(
+        records_of([tick_row(tick, instrument=0, recording=1, seq=1, queued_ns=ist_ns("10:00:01"))])
+    )
     raw.close()
     finalize(DAY, cache_dir=tmp_path)
 
@@ -619,7 +576,84 @@ def test_the_queued_time_is_kept_beside_the_receive_time(tmp_path):
     assert int(records["ts_recv_ns"][0] - records["ts_queued_ns"][0]) == NS // 4
 
 
-def test_raw_files_are_found_wherever_a_recording_put_them(tmp_path):
-    write_raw(tmp_path, TWO)
+def test_the_merged_read_follows_the_sequence_across_instruments(tmp_path):
+    # Three ticks received at one instant: SBIN, INFY, SBIN, by their sequence numbers.
+    at = "10:00:01"
+    write_raw(
+        tmp_path, [sbin(at, 812.4), infy(at, 1_500.0), sbin(at, 812.5)], instruments=(SBIN, INFY)
+    )
+    finalize(DAY, cache_dir=tmp_path)
+    instruments = [{"exchange": "NSE", "symbol": "INFY"}, {"exchange": "NSE", "symbol": "SBIN"}]
 
-    assert len(raw_files(tmp_path)) == 1
+    merged = read_merged_ticks(instruments, DAY, cache_dir=tmp_path)
+
+    assert [tick.ltp for tick in merged] == [812.4, 1_500.0, 812.5]
+
+
+def test_a_moment_inside_a_crashed_recordings_span_has_unknown_coverage(tmp_path):
+    write_raw(tmp_path, TWO)
+    finalize(DAY, cache_dir=tmp_path)
+
+    coverage = read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).coverage(ist_ns("10:00:01"))
+
+    assert coverage is Coverage.UNKNOWN
+
+
+def test_a_moment_outside_every_span_is_not_recorded(tmp_path):
+    finalized_two(tmp_path)
+
+    coverage = read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).coverage(ist_ns("12:00:00"))
+
+    assert coverage is Coverage.NOT_RECORDED
+
+
+# ----- repair -------------------------------------------------------------------------
+
+
+def damaged_first_of_two(tmp_path) -> None:
+    finalized_two(tmp_path)
+    write_raw(tmp_path, [sbin("11:00:00", 815.0)], number=2, start="10:59:00")
+    stopped(tmp_path, number=2, stop="11:01:00")
+    finalize(DAY, cache_dir=tmp_path)
+    damage(files_of(tmp_path)[0])
+
+
+def test_repair_moves_a_damaged_file_aside_and_the_days_other_recordings_read(tmp_path):
+    damaged_first_of_two(tmp_path)
+
+    moved = repair(DAY, cache_dir=tmp_path)
+
+    assert (len(moved), all(path.exists() for path in moved), ltps(tmp_path)) == (2, True, [815.0])
+
+
+def test_a_file_repair_cannot_move_raises_an_os_error_naming_it(tmp_path, monkeypatch):
+    damaged_first_of_two(tmp_path)
+    ticks_path = files_of(tmp_path)[0]
+    replace = os.replace
+
+    def held_open(source, target):
+        if pathlib.Path(source) == ticks_path:
+            raise PermissionError(13, "The process cannot access the file", str(source))
+        replace(source, target)
+
+    monkeypatch.setattr(os, "replace", held_open)
+
+    with pytest.raises(PermissionError, match="00000001.npy") as caught:
+        repair(DAY, cache_dir=tmp_path)
+
+    assert "delete" not in str(caught.value).lower() and ticks_path.exists()
+
+
+def test_a_recording_whose_damaged_file_was_moved_aside_finalizes_again_from_its_raw_file(
+    tmp_path,
+):
+    path = write_raw(tmp_path, TWO)
+    kept = shutil.copy(path, tmp_path / "copy.raw")
+    finalize(DAY, cache_dir=tmp_path)
+    damage(files_of(tmp_path)[0])
+    shutil.copy(kept, path)
+    repair(DAY, cache_dir=tmp_path)
+
+    finalize(DAY, cache_dir=tmp_path)
+
+    assert (ltps(tmp_path), path.exists()) == ([812.4, 812.5], False)

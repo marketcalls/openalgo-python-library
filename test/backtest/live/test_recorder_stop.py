@@ -21,7 +21,7 @@ from recorder_fakes import (
     raw_files,
 )
 
-from openalgo.backtest._live._tick_files import RawFile, read_raw
+from openalgo.backtest._live._tick_raw import RawFile, read_raw
 from openalgo.backtest._live.recorder import Stop, read_ticks, record
 
 STOP = "10:01:00"
@@ -130,7 +130,9 @@ def test_a_second_ctrl_c_while_the_last_ticks_are_written_loses_no_tick(tmp_path
     assert ltps(tmp_path) == [812.4]
 
 
-def test_a_ctrl_c_right_after_a_batch_was_written_never_writes_it_twice(tmp_path, monkeypatch):
+def test_a_batch_written_twice_after_a_ctrl_c_right_after_its_write_is_kept_once(
+    tmp_path, monkeypatch
+):
     clocks, feed, script = recording()
     script.at(ist_ns("10:00:00.500"), lambda: feed.push(quote("SBIN", 812.4)))
     write = RawFile._write_bytes
@@ -144,9 +146,10 @@ def test_a_ctrl_c_right_after_a_batch_was_written_never_writes_it_twice(tmp_path
 
     monkeypatch.setattr(RawFile, "_write_bytes", write_then_ctrl_c)
 
-    run(tmp_path, clocks, feed, script)
+    summary = run(tmp_path, clocks, feed, script)
 
-    assert ltps(tmp_path) == [812.4]
+    # The raw file held the batch twice; the second copy does not increase the sequence.
+    assert (len(writes), ltps(tmp_path), summary.rejected) == (2, [812.4], 1)
 
 
 # ----- write failures -----------------------------------------------------------------
@@ -195,8 +198,8 @@ def test_after_a_write_cut_short_the_raw_file_is_cut_back_to_its_last_whole_reco
 
     summary = run(tmp_path, clocks, feed, script)
 
-    (written,) = summary.files
-    assert (ltps(tmp_path), written.torn_bytes) == ([812.4], 0)
+    # Half a record was cut off before the batch was written again: nothing is skipped.
+    assert (ltps(tmp_path), summary.rejected) == ([812.4], 0)
 
 
 def test_when_a_tear_cannot_be_cut_off_writing_moves_to_a_new_raw_file(tmp_path, monkeypatch):

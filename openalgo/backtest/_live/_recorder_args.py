@@ -12,7 +12,7 @@ from typing import Any
 from .._calendar_convert import format_ist
 from ..calendar import Calendar, default_calendar
 from ..errors import CalendarError, ConfigError
-from ._tick_files import ist_day
+from ._tick_files import day_bounds, instrument_key, ist_day
 
 #: The feed modes a recording can subscribe in: LTP, quote (the default) and depth. The
 #: SDK's depth data carries no volume and no last trade time; quote data no bid or ask.
@@ -22,8 +22,10 @@ _FEED_CALLS = ("connect", "disconnect", "on_disconnect", "on_reconnect", "remove
 
 
 def instruments_of(instruments: Any) -> tuple[tuple[str, str], ...]:
-    """(exchange, symbol) of each instrument, in order, without repeats. Raises
-    ConfigError unless `instruments` is a non-empty list of {"exchange", "symbol"}."""
+    """(exchange, symbol) of each instrument in upper case (OpenAlgo writes both so, and
+    "nse"/"sbin" is then the same folder as "NSE"/"SBIN" on any disk), in order, without
+    repeats. Raises ConfigError unless `instruments` is a non-empty list of {"exchange",
+    "symbol"}."""
     if isinstance(instruments, str | Mapping) or not isinstance(instruments, Iterable):
         raise ConfigError(
             "instruments is a list of {'exchange': ..., 'symbol': ...}, got "
@@ -38,7 +40,7 @@ def instruments_of(instruments: Any) -> tuple[tuple[str, str], ...]:
                 f"each instrument is {{'exchange': ..., 'symbol': ...}} with both named, as "
                 f"OpenAlgo writes them; got {item!r}"
             )
-        pairs.append((exchange, symbol))
+        pairs.append(instrument_key(exchange, symbol))
     if not pairs:
         raise ConfigError("instruments is empty: name at least one {'exchange', 'symbol'}")
     return tuple(dict.fromkeys(pairs))
@@ -74,9 +76,10 @@ def stop_instant(
     calendar: Calendar | None,
 ) -> int:
     """The instant the recording stops, UTC nanoseconds: `stop_at_ns`, or when None the
-    latest close of the instruments' exchanges on the IST day of the start. Raises
-    ConfigError for a stop that is not an int or not after the start, CalendarError
-    when no exchange of the instruments has a session that day."""
+    latest close of the instruments' exchanges on the IST day of the start. One
+    recording is one IST day, so nothing it records crosses midnight. Raises ConfigError
+    for a stop that is not an int, not after the start or after the end of the start's
+    day; CalendarError when no exchange of the instruments has a session that day."""
     if stop_at_ns is None:
         stop_ns = _close_of_day(wanted, started_ns, calendar)
         if stop_ns <= started_ns:
@@ -93,6 +96,14 @@ def stop_instant(
         raise ConfigError(
             f"stop_at_ns ({format_ist(int(stop_at_ns))}) is not after the start "
             f"({format_ist(started_ns)}): pass a later instant"
+        )
+    day = ist_day(started_ns)
+    day_end_ns = day_bounds(day)[1]
+    if stop_at_ns > day_end_ns:
+        raise ConfigError(
+            f"stop_at_ns ({format_ist(int(stop_at_ns))}) is after the end of {day}, the IST "
+            f"day the recording starts on: one recording is one day, so stop it by "
+            f"{format_ist(day_end_ns)} and record the next day apart"
         )
     return int(stop_at_ns)
 

@@ -27,7 +27,7 @@ from recorder_fakes import (
     raw_files,
 )
 
-from openalgo.backtest._live.recorder import Ending, finalize, read_day, read_ticks, record
+from openalgo.backtest._live.recorder import Stop, finalize, read_day, read_ticks, record
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
@@ -78,7 +78,7 @@ def test_a_killed_recordings_span_ends_at_its_last_tick_by_a_crash(cache):
     assert (span.start_ns, span.stop_ns, span.ended_by) == (
         ist_ns("10:00:00"),
         ist_ns("10:00:00.500"),
-        Ending.CRASH,
+        Stop.CRASH,
     )
 
 
@@ -100,5 +100,5 @@ def test_the_next_recording_recovers_a_killed_recordings_ticks_before_its_own(ca
     day = read_day("NSE", "SBIN", DAY, cache_dir=cache)
     assert (day.records["ltp"].tolist(), [span.ended_by for span in day.spans]) == (
         [812.4, 812.5, 815.0],
-        [Ending.CRASH, Ending.STOP],
+        [Stop.CRASH, Stop.STOP_AT],
     )

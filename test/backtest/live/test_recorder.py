@@ -7,6 +7,8 @@ socket is opened.
 
 from __future__ import annotations
 
+import datetime as dt
+import logging
 import threading
 
 import pytest
@@ -24,11 +26,12 @@ from recorder_fakes import (
     raw_files,
 )
 
-from openalgo.backtest._live._tick_files import read_raw
+import openalgo.backtest._live._recorder_loop as recorder_loop
+from openalgo.backtest._live._tick_files import raw_path, ticks_root
+from openalgo.backtest._live._tick_raw import read_raw
 from openalgo.backtest._live._types import Tick
 from openalgo.backtest._live.recorder import (
     Coverage,
-    Ending,
     Outage,
     Span,
     Stop,
@@ -229,16 +232,24 @@ def test_the_merged_read_keeps_the_receive_order_when_the_wall_clock_steps_back(
     ]
 
 
-def test_the_merged_read_puts_the_recordings_of_a_day_in_the_order_of_their_start(tmp_path):
-    # The 12:00 recording is written first, the 10:00 one after it.
-    for start, first, second in (("12:00:00", "INFY", "SBIN"), ("10:00:00", "SBIN", "INFY")):
-        clocks, feed, script = recording(start=start)
-        script.at(clocks.mono_ns + NS, lambda f=feed, s=first: f.push(quote(s, 1.0)))
-        script.at(clocks.mono_ns + 2 * NS, lambda f=feed, s=second: f.push(quote(s, 2.0)))
-        run(tmp_path, clocks, feed, script, (SBIN, INFY), stop_at_ns=clocks.wall_ns + 10 * NS)
+def test_the_recordings_of_a_day_merge_in_the_order_they_ran_whatever_the_wall_clock_says(
+    tmp_path,
+):
+    # A takes a tick at 10:00:00.500, the clock is stepped back 5 s, A stops at wall
+    # 09:59:56; B starts right after, at wall 09:59:57, and takes a tick.
+    clocks, feed, script = recording()
+    push_at(script, feed, "10:00:00.500", quote("SBIN", 1.0))
+    script.at(ist_ns("10:00:00.600"), lambda: clocks.step_wall(-5 * NS))
+    script.at(ist_ns("10:00:01"), interrupt)
+    run(tmp_path, clocks, feed, script)
+    clocks.advance(NS)
+    feed, script = FakeFeed(), Script(clocks)
+    script.at(clocks.mono_ns + NS // 2, lambda: feed.push(quote("SBIN", 2.0)))
+    run(tmp_path, clocks, feed, script, stop_at_ns=clocks.wall_ns + 2 * NS)
 
-    merged = read_merged_ticks([SBIN, INFY], DAY, cache_dir=tmp_path)
-    assert [tick.symbol for tick in merged] == ["SBIN", "INFY", "INFY", "SBIN"]
+    merged = read_merged_ticks([SBIN], DAY, cache_dir=tmp_path)
+
+    assert [tick.ltp for tick in merged] == [1.0, 2.0]
 
 
 # ----- stopping -----------------------------------------------------------------------
@@ -352,7 +363,7 @@ def test_the_recordings_span_and_outages_are_kept_with_the_day(tmp_path):
     summary = run(tmp_path, clocks, feed, script)
 
     outage = Outage(ist_ns("10:00:10"), ist_ns("10:00:25"))
-    span = Span(summary.recording, ist_ns(START), ist_ns(STOP), Ending.STOP, (outage,))
+    span = Span(summary.recording, ist_ns(START), ist_ns(STOP), Stop.STOP_AT, (outage,))
     assert read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).spans == (span,)
 
 
@@ -433,7 +444,8 @@ def test_a_feed_that_does_not_connect_leaves_no_tick_file(tmp_path):
     with pytest.raises(LiveError):
         run(tmp_path, clocks, feed, script)
 
-    assert [path.name for path in tmp_path.rglob("*") if path.is_file()] == ["recorder.lock"]
+    written = sorted(path.name for path in tmp_path.rglob("*") if path.is_file())
+    assert written == ["recorder.lock", "recordings.json"]
 
 
 @pytest.mark.parametrize(
@@ -563,8 +575,8 @@ def test_the_span_of_a_recording_that_did_not_finalize_ended_by_a_crash(tmp_path
 
     spans = read_day("NSE", "SBIN", DAY, cache_dir=tmp_path).spans
     assert [(span.start_ns, span.stop_ns, span.ended_by) for span in spans] == [
-        (ist_ns("09:30:00"), ist_ns("09:30:01"), Ending.CRASH),
-        (ist_ns(START), ist_ns(STOP), Ending.STOP),
+        (ist_ns("09:30:00"), ist_ns("09:30:01"), Stop.CRASH),
+        (ist_ns(START), ist_ns(STOP), Stop.STOP_AT),
     ]
 
 
@@ -580,8 +592,119 @@ def test_a_day_with_a_recording_that_did_not_finalize_has_no_known_outages(tmp_p
 def test_a_recording_that_did_not_finalize_leaves_its_raw_file_and_no_day(tmp_path):
     stopped_without_finalizing(tmp_path)
 
-    with pytest.raises(DataError, match="its raw file is waiting"):
+    with pytest.raises(DataError, match="a raw file of it is waiting"):
         read_ticks("NSE", "SBIN", DAY, cache_dir=tmp_path)
+
+
+def test_what_finalize_found_while_recording_is_logged(tmp_path, caplog):
+    leftover = raw_path(ticks_root(tmp_path), DAY, 1, 0)
+    leftover.parent.mkdir(parents=True)
+    leftover.write_bytes(b"not a raw file")  # a part whose header a crash tore
+    clocks, feed, script = recording()
+
+    with caplog.at_level(logging.WARNING, logger="openalgo.backtest.live"):
+        run(tmp_path, clocks, feed, script)
+
+    assert any("was moved to" in record.getMessage() for record in caplog.records)
+
+
+# ----- finalizing cut short -----------------------------------------------------------
+
+
+def cut_short_while_finalizing(tmp_path, monkeypatch):
+    """A recording with an outage 10:00:03 to 10:00:05, stopped by Ctrl+C at 10:00:10,
+    and a second Ctrl+C as it starts to finalize."""
+    clocks, feed, script = recording()
+    push_at(script, feed, "10:00:00.200", quote("SBIN", 812.4))
+    script.at(ist_ns("10:00:03"), feed.drop)
+    script.at(ist_ns("10:00:05"), feed.restore)
+    script.at(ist_ns("10:00:10"), interrupt)
+    finalize_pending = recorder_loop.finalize_pending
+
+    def second_ctrl_c(*args):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(recorder_loop, "finalize_pending", second_ctrl_c)
+    summary = run(tmp_path, clocks, feed, script)
+    monkeypatch.setattr(recorder_loop, "finalize_pending", finalize_pending)
+    return summary
+
+
+def test_a_ctrl_c_while_finalizing_still_returns_the_summary(tmp_path, monkeypatch):
+    summary = cut_short_while_finalizing(tmp_path, monkeypatch)
+
+    assert summary.stopped_by is Stop.INTERRUPT
+    assert any("finalizing was cut short" in note for note in summary.notes)
+
+
+def test_a_recording_cut_short_while_finalizing_keeps_its_raw_file(tmp_path, monkeypatch):
+    cut_short_while_finalizing(tmp_path, monkeypatch)
+
+    assert len(raw_files(tmp_path)) == 1
+
+
+def test_a_later_finalize_knows_how_a_recording_cut_short_while_finalizing_stopped(
+    tmp_path, monkeypatch
+):
+    cut_short_while_finalizing(tmp_path, monkeypatch)
+
+    finalize(DAY, cache_dir=tmp_path)
+
+    day = read_day("NSE", "SBIN", DAY, cache_dir=tmp_path)
+    assert ([span.ended_by for span in day.spans], day.coverage(ist_ns("10:00:04"))) == (
+        [Stop.INTERRUPT],
+        Coverage.OUTAGE,
+    )
+
+
+# ----- numbers, days, names -----------------------------------------------------------
+
+
+def test_each_recording_takes_the_next_number_of_the_cache(tmp_path):
+    numbers = []
+    for start in ("10:00:00", "11:00:00"):
+        clocks, feed, script = recording(start=start)
+        numbers.append(
+            run(tmp_path, clocks, feed, script, stop_at_ns=clocks.wall_ns + NS).recording
+        )
+
+    assert numbers == [1, 2]
+
+
+def test_a_stop_after_the_end_of_the_day_the_recording_starts_on_is_refused(tmp_path):
+    clocks, feed, script = recording(start="23:50:00")
+    next_day = DAY + dt.timedelta(days=1)
+
+    with pytest.raises(ConfigError, match="one recording is one day"):
+        run(tmp_path, clocks, feed, script, stop_at_ns=ist_ns("00:20:00", next_day))
+
+
+def test_a_stop_at_the_end_of_the_day_is_allowed(tmp_path):
+    clocks, feed, script = recording(start="23:59:58")
+
+    summary = run(
+        tmp_path, clocks, feed, script, stop_at_ns=ist_ns("00:00:00", DAY + dt.timedelta(days=1))
+    )
+
+    assert summary.stopped_by is Stop.STOP_AT
+
+
+def test_instruments_are_recorded_under_their_upper_case_names(tmp_path):
+    clocks, feed, script = recording()
+    push_at(script, feed, "10:00:01", quote("sbin", 812.4, exchange="nse"))
+
+    run(tmp_path, clocks, feed, script, ({"exchange": "nse", "symbol": "sbin"},))
+
+    assert (feed.requests["subscribe_quote"], ltps(tmp_path)) == ([SBIN], [812.4])
+
+
+def test_ticks_of_an_instrument_not_asked_for_are_counted_and_not_recorded(tmp_path):
+    clocks, feed, script = recording()
+    push_at(script, feed, "10:00:01", quote("INFY", 1_500.0))
+
+    summary = run(tmp_path, clocks, feed, script)
+
+    assert (summary.not_asked, summary.lost, ltps(tmp_path)) == (1, 0, [])
 
 
 # ----- where the cache is -------------------------------------------------------------
