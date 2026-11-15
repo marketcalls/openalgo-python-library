@@ -245,13 +245,39 @@ def test_an_update_arriving_after_a_terminal_one_is_stale(journal):
     assert journal.last_update("o1") == an_update(status=OrderStatus.CANCELLED)
 
 
+FILLED = {"status": OrderStatus.COMPLETE, "filled_quantity": 10, "pending_quantity": 0}
+LATER_NS = DAY_NS + 9_000
+
+
 def test_the_first_terminal_update_wins_over_a_later_terminal_one(journal):
-    filled = {"status": OrderStatus.COMPLETE, "filled_quantity": 10, "pending_quantity": 0}
-    streamed = an_update(**filled, average_price=812.4, source="stream")
-    polled = an_update(**filled, average_price=0.0, source="poll", ts_recv_ns=DAY_NS + 9_000)
+    streamed = an_update(**FILLED, average_price=812.4, source="stream")
+    polled = an_update(**FILLED, average_price=0.0, source="poll", ts_recv_ns=LATER_NS)
     journal.record_update(streamed)
     journal.record_update(polled)
     assert journal.last_update("o1") == streamed
+
+
+def test_a_priced_fill_replaces_an_earlier_fill_reported_at_price_0(journal):
+    polled = an_update(**FILLED, average_price=0.0, source="poll")
+    streamed = an_update(**FILLED, average_price=812.4, source="stream", ts_recv_ns=LATER_NS)
+    journal.record_update(polled)
+    journal.record_update(streamed)
+    assert journal.last_update("o1") == streamed
+
+
+@pytest.mark.parametrize(
+    "later",
+    [
+        an_update(**FILLED | {"filled_quantity": 6}, average_price=812.4, ts_recv_ns=LATER_NS),
+        an_update(status=OrderStatus.CANCELLED, average_price=0.0, ts_recv_ns=LATER_NS),
+    ],
+    ids=["fewer units filled", "no price either"],
+)
+def test_a_fill_at_price_0_stays_final_against_a_later_update_that_gives_no_better(journal, later):
+    polled = an_update(**FILLED, average_price=0.0, source="poll")
+    journal.record_update(polled)
+    journal.record_update(later)
+    assert journal.last_update("o1") == polled
 
 
 def test_an_update_may_arrive_before_its_order_is_bound(journal):

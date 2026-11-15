@@ -32,7 +32,7 @@ _DEVICE_NAMES = frozenset(
     | {f"COM{number}" for number in range(1, 10)}
     | {f"LPT{number}" for number in range(1, 10)}
 )
-_SUPERSCRIPT_DIGITS = str.maketrans("¹²³⁴⁵⁶⁷⁸⁹", "123456789")
+_SUPERSCRIPT_DIGITS = MappingProxyType(str.maketrans("¹²³⁴⁵⁶⁷⁸⁹", "123456789"))
 _FIRST_PRINTABLE = 32
 
 # Every table is STRICT, so a value of the wrong type is refused instead of kept. Each

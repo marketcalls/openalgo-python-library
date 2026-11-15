@@ -79,6 +79,29 @@ def test_the_orders_are_those_of_the_sessions_day(path):
         assert next_day.bound_orders(day=DAY) == [BoundOrder(an_intent("i1"), "o1", None)]
 
 
+ONE_SECOND_NS = 1_000_000_000
+NEXT_DAY_MIDNIGHT_NS = ist_ns(NEXT_DAY, 0)
+
+
+def test_an_update_after_midnight_of_an_evening_order_stays_with_its_session(path):
+    # An MCX order bound at 23:50 IST, cancelled by the exchange a second after midnight.
+    crude = {"exchange": "MCX", "symbol": "CRUDEOIL"}
+    evening = an_intent(**crude, created_ns=ist_ns(DAY, 23, 50))
+    after_midnight = NEXT_DAY_MIDNIGHT_NS + ONE_SECOND_NS
+    cancel = an_update(**crude, status=OrderStatus.CANCELLED, ts_recv_ns=after_midnight)
+    with started_journal(path, now=ManualClock(ist_ns(DAY, 23, 50))) as journal:
+        journal.record_intent(evening)
+        journal.bind("i1", "o1")
+        journal.record_update(cancel)
+        assert (journal.open_orders(), journal.last_update("o1")) == ([], cancel)
+
+
+def test_an_update_of_an_order_never_bound_is_kept_under_the_day_it_arrived(journal):
+    arrived = an_update("o9", ts_recv_ns=NEXT_DAY_MIDNIGHT_NS + ONE_SECOND_NS)
+    journal.record_update(arrived)
+    assert (journal.updates("o9"), journal.updates("o9", day=NEXT_DAY)) == ([], [arrived])
+
+
 def test_an_order_id_given_again_on_a_later_day_is_bound_again(path):
     with started_journal(path) as journal:
         a_bound_order(journal, "i1", "o1")

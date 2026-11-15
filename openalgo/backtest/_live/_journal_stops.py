@@ -49,7 +49,7 @@ def needs_recording(
 
 
 def _not_bound(sql: sqlite3.Connection, ledger: str, day: str, order_id: str) -> str:
-    bound_on = reads.last_day_of_order(sql, ledger, order_id)
+    bound_on = reads.bound_day(sql, ledger, order_id)
     if bound_on is not None:
         return (
             f"stop order {order_id!r} was bound on {bound_on} and the session is of {day}: "

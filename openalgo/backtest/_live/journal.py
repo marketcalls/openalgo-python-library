@@ -183,13 +183,17 @@ class Journal(JournalHandle):
 
     def record_update(self, update: OrderUpdate) -> None:
         """Keep an order update, after every earlier one, under the ledger of the mode it
-        was handled in and the IST day it arrived on. It may arrive before its order is
-        bound, or be of an order the engine did not send or of the other mode: it is kept
-        all the same, and changes only the order bound to its ID in its own ledger and day.
-        Raises `JournalError` for a field of the wrong type."""
+        was handled in, and under the day its order was bound, so an evening order's
+        cancel that arrives after midnight stays with its session; an update of an order
+        that ledger never bound (yet) is kept under the IST day it arrived on. It changes
+        only the order bound to its ID in its own ledger and day. Raises `JournalError`
+        for a field of the wrong type."""
         values = update_values(update)
         with self._sql("record the order update") as sql:
-            sql.execute(INSERT_UPDATE, values)
+            bound_on = reads.bound_day(
+                sql, values["ledger"], values["order_id"], on_or_before=values["day"]
+            )
+            sql.execute(INSERT_UPDATE, values | {"day": bound_on or values["day"]})
 
     def updates(self, order_id: str, *, day: date | None = None) -> list[OrderUpdate]:
         """Every update of an order on the day, in arrival order. Raises `JournalError`
@@ -200,8 +204,9 @@ class Journal(JournalHandle):
 
     def last_update(self, order_id: str, *, day: date | None = None) -> OrderUpdate | None:
         """The update of an order on the day that counts, or None: the first terminal one
-        (complete, rejected, cancelled), later ones being stale, or with none terminal the
-        latest. Raises `JournalError` with no `day` before `start_session`."""
+        (complete, rejected, cancelled), later ones being stale, except that a COMPLETE at
+        average price 0 gives way to a later terminal one with a price; with none terminal,
+        the latest. Raises `JournalError` with no `day` before `start_session`."""
         key = self._day_key(day, "read the last order update")
         with self._sql("read the last order update") as sql:
             return reads.last_update(sql, self._ledger, key, order_id)

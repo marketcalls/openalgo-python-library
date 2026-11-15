@@ -16,20 +16,17 @@ from typing import Any
 
 from ..errors import JournalError
 from ._journal_rows import day_key, intent_from, state_from, unreadable, update_from
-from ._types import BoundOrder, Mode, OrderIntent, OrderUpdate
+from ._types import BoundOrder, Mode, OrderIntent, OrderStatus, OrderUpdate
 
 _UNRESOLVED = (
     "SELECT * FROM intents WHERE ledger = ? AND day = ? AND state IN ('recorded', 'unbound') "
     "ORDER BY seq"
 )
 _BOUND = "SELECT * FROM intents WHERE ledger = ? AND day = ? AND state = 'bound' ORDER BY seq"
-# The first terminal update is final and any later one stale (a poll that reports the
-# fill again at another price), so it comes first; with none, the latest update.
-_LAST_UPDATE = (
-    "SELECT * FROM updates WHERE ledger = ? AND day = ? AND order_id = ? "
-    "ORDER BY terminal DESC, CASE WHEN terminal THEN seq ELSE -seq END LIMIT 1"
-)
-_UPDATES = "SELECT * FROM updates WHERE ledger = ? AND day = ? AND order_id = ? ORDER BY seq"
+_OF_ORDER = "SELECT * FROM updates WHERE ledger = ? AND day = ? AND order_id = ?"
+_TERMINAL_UPDATES = f"{_OF_ORDER} AND terminal ORDER BY seq"
+_LATEST_UPDATE = f"{_OF_ORDER} ORDER BY seq DESC LIMIT 1"
+_UPDATES = f"{_OF_ORDER} ORDER BY seq"
 _LEG = "ledger = ? AND day = ? AND strategy = ? AND symbol = ? AND exchange = ?"
 _SESSION = "SELECT * FROM sessions WHERE ledger = ? AND day = ?"
 
@@ -76,22 +73,29 @@ class JournalSnapshot:
     user_states: dict[str, SavedState]
 
 
-def intent_by_id(sql: sqlite3.Connection, ledger: str, intent_id: str) -> Any:
-    """The `intents` row of an intent ID, or None."""
+def intent_by_id(sql: sqlite3.Connection, ledger: str, intent_id: str) -> sqlite3.Row | None:
+    """The `intents` row of an intent ID (its intent, `day`, `state` and `order_id`), or
+    None."""
     query = "SELECT * FROM intents WHERE ledger = ? AND intent_id = ?"
     return sql.execute(query, (ledger, intent_id)).fetchone()
 
 
-def intent_by_order(sql: sqlite3.Connection, ledger: str, day: str, order_id: str) -> Any:
+def intent_by_order(
+    sql: sqlite3.Connection, ledger: str, day: str, order_id: str
+) -> sqlite3.Row | None:
     """The `intents` row bound to an order ID on the day, or None."""
     query = "SELECT * FROM intents WHERE ledger = ? AND day = ? AND order_id = ?"
     return sql.execute(query, (ledger, day, order_id)).fetchone()
 
 
-def last_day_of_order(sql: sqlite3.Connection, ledger: str, order_id: str) -> str | None:
-    """The latest trading day an order ID was bound on, or None."""
-    query = "SELECT day FROM intents WHERE ledger = ? AND order_id = ? ORDER BY seq DESC"
-    row = sql.execute(query, (ledger, order_id)).fetchone()
+def bound_day(
+    sql: sqlite3.Connection, ledger: str, order_id: str, *, on_or_before: str | None = None
+) -> str | None:
+    """The latest trading day an order ID was bound on (no later than `on_or_before`
+    when given), or None for an order ID the ledger never bound."""
+    query = "SELECT day FROM intents WHERE ledger = ? AND order_id = ? AND day <= ?"
+    latest = on_or_before if on_or_before is not None else date.max.isoformat()
+    row = sql.execute(f"{query} ORDER BY seq DESC", (ledger, order_id, latest)).fetchone()
     return None if row is None else row["day"]
 
 
@@ -111,11 +115,34 @@ def bound_orders(sql: sqlite3.Connection, ledger: str, day: str) -> list[BoundOr
     return orders
 
 
-def last_update(sql: sqlite3.Connection, ledger: str, day: str, order_id: str) -> Any:
-    """The order's update of the day that counts, or None: the first terminal one, or
-    with none terminal the latest to arrive."""
-    row = sql.execute(_LAST_UPDATE, (ledger, day, order_id)).fetchone()
+def last_update(
+    sql: sqlite3.Connection, ledger: str, day: str, order_id: str
+) -> OrderUpdate | None:
+    """The order's update of the day that counts, or None: the terminal one that stands
+    (`_final`), or with none terminal the latest to arrive."""
+    key = (ledger, day, order_id)
+    terminal = [update_from(row) for row in sql.execute(_TERMINAL_UPDATES, key)]
+    if terminal:
+        return _final(terminal)
+    row = sql.execute(_LATEST_UPDATE, key).fetchone()
     return None if row is None else update_from(row)
+
+
+def _final(terminal: list[OrderUpdate]) -> OrderUpdate:
+    """Of an order's terminal updates, in arrival order, the one that stands: the first,
+    later ones being stale, except that a COMPLETE at average price 0 (a poll that saw
+    the fill before its price) gives way to a later terminal update with a positive
+    average price and as many units filled or more."""
+    final = terminal[0]
+    for later in terminal[1:]:
+        if (
+            final.status is OrderStatus.COMPLETE
+            and final.average_price == 0
+            and later.average_price > 0
+            and later.filled_quantity >= final.filled_quantity
+        ):
+            final = later
+    return final
 
 
 def updates(sql: sqlite3.Connection, ledger: str, day: str, order_id: str) -> list[OrderUpdate]:
@@ -123,7 +150,9 @@ def updates(sql: sqlite3.Connection, ledger: str, day: str, order_id: str) -> li
     return [update_from(row) for row in sql.execute(_UPDATES, (ledger, day, order_id))]
 
 
-def stop_of(sql: sqlite3.Connection, ledger: str, day: str, leg: tuple[str, str, str]) -> Any:
+def stop_of(
+    sql: sqlite3.Connection, ledger: str, day: str, leg: tuple[str, str, str]
+) -> str | None:
     """The order ID of the stop of `leg` (strategy, symbol, exchange) on the day, or None."""
     row = sql.execute(f"SELECT order_id FROM stops WHERE {_LEG}", (ledger, day, *leg)).fetchone()
     return None if row is None else row["order_id"]
@@ -135,7 +164,9 @@ def stops(sql: sqlite3.Connection, ledger: str, day: str) -> dict[tuple[str, str
     return {(row["strategy"], row["symbol"], row["exchange"]): row["order_id"] for row in rows}
 
 
-def rms_state(sql: sqlite3.Connection, ledger: str, strategy: str, day: str) -> Any:
+def rms_state(
+    sql: sqlite3.Connection, ledger: str, strategy: str, day: str
+) -> dict[str, Any] | None:
     """A strategy's risk state of the day, or None."""
     query = "SELECT state FROM risk_states WHERE ledger = ? AND strategy = ? AND day = ?"
     row = sql.execute(query, (ledger, strategy, day)).fetchone()
@@ -196,10 +227,10 @@ __all__ = [
     "JournalSession",
     "JournalSnapshot",
     "SavedState",
+    "bound_day",
     "bound_orders",
     "intent_by_id",
     "intent_by_order",
-    "last_day_of_order",
     "last_update",
     "rms_state",
     "rms_states",

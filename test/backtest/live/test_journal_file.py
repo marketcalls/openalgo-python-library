@@ -193,9 +193,19 @@ ERRORS_AND_ADVICE = [
         id="read-only",
     ),
     pytest.param(
+        a_sqlite_error(sqlite3.OperationalError, "database table is locked", "SQLITE_LOCKED"),
+        "the file is locked by this program",
+        id="locked by this program",
+    ),
+    pytest.param(
         a_sqlite_error(sqlite3.DatabaseError, "database disk image is malformed", "SQLITE_CORRUPT"),
         "the file is damaged",
         id="damaged",
+    ),
+    pytest.param(
+        a_sqlite_error(sqlite3.DatabaseError, "file is not a database", "SQLITE_NOTADB"),
+        "the file is not a journal",
+        id="not a database",
     ),
     pytest.param(
         a_sqlite_error(sqlite3.OperationalError, "disk I/O error", "SQLITE_IOERR_WRITE"),
