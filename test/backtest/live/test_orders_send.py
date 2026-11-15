@@ -391,7 +391,8 @@ def test_a_semi_auto_answer_is_queued_and_not_bound():
 
     assert (outcome.kind, outcome.order_id, outcome.pending_order_id) == (Outcome.QUEUED, "", "17")
     assert rig.journal.order_of == {}
-    assert "i-1" in rig.journal.unbound_reasons
+    assert rig.journal.queued_as == {"i-1": "17"}
+    assert rig.journal.unbound() == []
     assert rig.guard.responses == [answer]
     assert rig.guard.sent == []
     assert rig.guard.in_doubt == ["i-1"]

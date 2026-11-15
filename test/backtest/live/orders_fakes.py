@@ -52,13 +52,14 @@ class Clock:
 
 class FakeJournal:
     """Keeps what the order path writes. An intent is unbound from when it is recorded
-    until it is bound or marked not placed, as in the SQLite journal."""
+    until it is bound, queued or marked not placed, as in the SQLite journal."""
 
     def __init__(self) -> None:
         self.intents: dict[str, OrderIntent] = {}
         self.order_of: dict[str, str] = {}
         self.unbound_reasons: dict[str, str] = {}
         self.not_placed: dict[str, str] = {}
+        self.queued_as: dict[str, str] = {}
         self.updates: list[OrderUpdate] = []
 
     def record_intent(self, intent: OrderIntent) -> None:
@@ -73,8 +74,14 @@ class FakeJournal:
     def mark_not_placed(self, intent_id: str, reason: str) -> None:
         self.not_placed[intent_id] = reason
 
+    def mark_queued(self, intent_id: str, pending_order_id: str) -> None:
+        self.queued_as[intent_id] = pending_order_id
+
+    def queued(self) -> list[OrderIntent]:
+        return [self.intents[key] for key in self.queued_as if key not in self.order_of]
+
     def unbound(self) -> list[OrderIntent]:
-        settled = self.order_of.keys() | self.not_placed.keys()
+        settled = self.order_of.keys() | self.not_placed.keys() | self.queued_as.keys()
         return [intent for key, intent in self.intents.items() if key not in settled]
 
     def record_update(self, update: OrderUpdate) -> None:

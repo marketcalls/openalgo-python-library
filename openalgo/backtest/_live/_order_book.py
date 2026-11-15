@@ -80,8 +80,8 @@ def match_unbound(intent: OrderIntent, rows: list[Mapping[str, Any]], taken: set
     (owned by other intents).
 
     A row matches on the intent's strategy (when the row names one: brokers' books do
-    not), symbol, exchange, action, price type and quantity, placed no earlier than the
-    intent's second less `CLOCK_SKEW_LIMIT_NS`.
+    not), symbol, exchange, action, price type, product and quantity, placed no earlier
+    than the intent's second less `CLOCK_SKEW_LIMIT_NS`.
     """
     earliest_ns = intent.created_ns - intent.created_ns % NANOS_PER_SECOND - CLOCK_SKEW_LIMIT_NS
     orders: list[str] = []
@@ -128,6 +128,7 @@ def _same_shape(intent: OrderIntent, row: Mapping[str, Any]) -> bool:
         and row.get("exchange") == intent.exchange
         and str(row.get("action") or "").upper() == intent.action
         and str(price_type).upper() == intent.price_type
+        and str(row.get("product") or "").upper() == intent.product
     )
 
 

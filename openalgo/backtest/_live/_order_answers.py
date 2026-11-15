@@ -107,6 +107,12 @@ def outcome_of(answer: Mapping[str, Any], order_id: str = "") -> SendOutcome:
     return SendOutcome(kind, reason=reason)
 
 
+def timed_out(answer: Mapping[str, Any]) -> bool:
+    """Whether the SDK gave up waiting for the answer (its own timeout): the server may
+    still be placing the order."""
+    return answer.get("error_type") == "timeout_error"
+
+
 def _unanswered(answer: Mapping[str, Any]) -> bool:
     """Whether an error answer leaves it unknown if the request reached the broker. A 4xx,
     or an error OpenAlgo answered with 200, is a refusal of a request that went no further
@@ -119,4 +125,4 @@ def _unanswered(answer: Mapping[str, Any]) -> bool:
     return answer.get("error_type") == _HTTP_ERROR_TYPE
 
 
-__all__ = ["Outcome", "SendOutcome", "outcome_of", "server_answer"]
+__all__ = ["Outcome", "SendOutcome", "outcome_of", "server_answer", "timed_out"]

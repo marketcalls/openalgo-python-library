@@ -1,10 +1,15 @@
 """Following the session's orders once they are bound, for the order path (`orders`).
 
 The engine is handed each order's news once (`_order_news`), every fill with its price,
-and nothing of orders the session did not send. The order-updates stream is the source;
-`orderstatus` is polled only as a fallback: every second while an order has no word at
-all, and every 30 seconds as a safety net while it rests. Polling runs in rounds of at
-most one a second, each polling a few orders and reading the tradebook at most once.
+and nothing of orders the session did not send. A fill found by polling, a fill with no
+price and a cancel that reports no fill wait for the tradebook (`_order_trades`); a wait
+longer than 10 seconds is alerted, and the session may release the fill at a price.
+
+The order-updates stream is the source. `orderstatus` is polled as a fallback: once a
+second while an order has no word, or is working but not resting, and every 30 seconds
+as a safety net while it rests (a LIMIT order open, a stop waiting for its trigger) once
+the stream has spoken for it. Polling runs in rounds of at most one a second, each
+polling a few orders and reading the tradebook at most once.
 
 Times are UTC nanoseconds, quantities units, prices rupees.
 """
@@ -14,77 +19,74 @@ from __future__ import annotations
 import collections
 import dataclasses
 import logging
+import math
 from collections.abc import Mapping
-from dataclasses import dataclass
 from typing import Any
 
 from .._layout import NANOS_PER_SECOND
 from ..errors import LiveError
 from ._order_answers import server_answer
 from ._order_news import is_newer, is_news, is_priceless
-from ._order_updates import fills_given, normalize_update, number, units
-from ._types import LOGGER_NAME, GuardLike, JournalLike, Now, OrderUpdate
+from ._order_state import (
+    POLL_EVERY_NS,
+    Followed,
+    HeldFill,
+    as_followed,
+    with_floor,
+)
+from ._order_trades import Fills, Polled, needs_trades, read_fills, wants_trades, with_fills
+from ._order_updates import fills_given, normalize_update
+from ._types import (
+    LOGGER_NAME,
+    AlertKind,
+    AlertsLike,
+    BoundOrder,
+    GuardLike,
+    JournalLike,
+    Now,
+    OrderIntent,
+    OrderStatus,
+    OrderUpdate,
+)
 
 logger = logging.getLogger(LOGGER_NAME)
 
-#: An order with no word 2 seconds after it was sent is polled (08-live-trading 6.1) ...
-POLL_AFTER_NS = 2 * NANOS_PER_SECOND
-#: ... then once a second until a word of it arrives; polling rounds are this far apart.
-POLL_EVERY_NS = 1 * NANOS_PER_SECOND
-#: A resting order (open, or a stop waiting for its trigger) is polled this often as a
-#: safety net for a stream that falls silent; the stream is its source.
-SAFETY_POLL_EVERY_NS = 30 * NANOS_PER_SECOND
 #: OpenAlgo answers `orderstatus` 10 times a second per client IP (`API_RATE_LIMIT`,
 #: restx_api/orderstatus.py on the server); a round polls at most 3, well under it.
 MAX_POLLS_PER_ROUND = 3
 #: The stream carries every update of the account (manual orders, the server's own
-#: strategy runs); the latest of this many orders not yet bound are kept, in case an
-#: unbound intent turns out to be one of them.
+#: strategy runs), and only an unbound intent's order is ever claimed from them. Nothing
+#: else is sent while an intent is unbound and its order shows within seconds, so a few
+#: recent orders suffice; 256 bounds the memory over a busy day of other trading.
 MAX_UNCLAIMED_UPDATES = 256
-
-#: A polled order's word: its update, or the `orderstatus` answer whose fills are to be
-#: read from the tradebook.
-_Polled = OrderUpdate | Mapping[str, Any]
-
-
-@dataclass
-class _Followed:
-    """An order of the session: its strategy, when it was sent, the last update handed to
-    the engine, a fill waiting for its price, and when it was last polled."""
-
-    strategy: str
-    sent_ns: int
-    seen: OrderUpdate | None = None
-    held: OrderUpdate | None = None
-    polled_ns: int | None = None
-
-    def poll_due_ns(self) -> int | None:
-        """When the order is next polled; None once it is terminal."""
-        if self.seen is not None and self.seen.status.terminal:
-            return None
-        last = self.seen or self.held
-        if last is None:
-            if self.polled_ns is None:
-                return self.sent_ns + POLL_AFTER_NS
-            return self.polled_ns + POLL_EVERY_NS
-        return max(self.polled_ns or 0, last.ts_recv_ns) + SAFETY_POLL_EVERY_NS
+#: A fill held this long for its price (or a cancel for the tradebook's word) is alerted.
+HELD_ALERT_AFTER_NS = 10 * NANOS_PER_SECOND
 
 
 class OrderFollower:
     """The session's orders once bound, their updates and the polling fallback.
 
-    `client` is an `openalgo.api`; `journal` and `guard` the session's; `now` gives UTC
-    nanoseconds. Every `orderstatus` and `tradebook` answer goes to the guard as the
-    server wrote it, and no poll is made while the guard is locked: the analyzer switch
-    routes the reads too, so they would answer from the other book.
+    `client` is an `openalgo.api`; `journal`, `guard` and `alerts` the session's; `now`
+    gives UTC nanoseconds. Every `orderstatus` and `tradebook` answer goes to the guard
+    as the server wrote it, and no poll is made while the guard is locked: the analyzer
+    switch routes the reads too, so they would answer from the other book.
     """
 
-    def __init__(self, client: Any, *, journal: JournalLike, guard: GuardLike, now: Now) -> None:
+    def __init__(
+        self,
+        client: Any,
+        *,
+        journal: JournalLike,
+        guard: GuardLike,
+        alerts: AlertsLike,
+        now: Now,
+    ) -> None:
         self._client = client
         self._journal = journal
         self._guard = guard
+        self._alerts = alerts
         self._now = now
-        self._orders: dict[str, _Followed] = {}
+        self._orders: dict[str, Followed] = {}
         self._unclaimed: collections.OrderedDict[str, OrderUpdate] = collections.OrderedDict()
         self._round_ns: int | None = None
 
@@ -97,41 +99,81 @@ class OrderFollower:
         order = self._orders.get(order_id)
         return None if order is None else order.strategy
 
-    def follow(self, order_id: str, strategy: str, *, sent_ns: int) -> None:
+    def follow(self, order_id: str, intent: OrderIntent, *, sent_ns: int) -> None:
         """Follow an order just bound in the journal, and note it with the guard."""
         self._guard.note_order_sent(order_id)
-        self._orders[order_id] = _Followed(strategy, sent_ns)
+        self._orders[order_id] = Followed(intent.strategy, intent.price_type, sent_ns)
+
+    def changed_price_type(self, order_id: str, price_type: str) -> None:
+        """Keep the price type of a followed order that a modify changed."""
+        self._orders[order_id].price_type = price_type
 
     def claim(self, order_id: str) -> OrderUpdate | None:
         """Hand over the latest update of a newly followed order that arrived before it
-        was bound, or None (none arrived, or its fill has no price yet)."""
+        was bound, or None (none arrived, or it waits for the tradebook)."""
         update = self._unclaimed.pop(order_id, None)
         return None if update is None else self._take(self._orders[order_id], update)
 
-    def restore(self) -> None:
+    def restore(self, bound_orders: list[BoundOrder]) -> None:
         """Follow the journal's bound orders again after a restart, from their last
-        updates: they can be modified, cancelled and polled."""
-        for bound in self._journal.bound_orders():
-            self.follow(bound.order_id, bound.intent.strategy, sent_ns=bound.intent.created_ns)
-            self._orders[bound.order_id].seen = bound.last_update
+        updates. Raises LiveError (and follows none) before the guard has started."""
+        for bound in bound_orders:
+            self._guard.note_order_sent(bound.order_id)
+        for bound in bound_orders:
+            last = bound.last_update
+            streamed = last is not None and last.source == "stream"
+            order = Followed(
+                bound.intent.strategy, bound.intent.price_type, bound.intent.created_ns
+            )
+            order.seen, order.streamed = last, streamed
+            order.stream_pending = streamed and last.status is OrderStatus.TRIGGER_PENDING
+            self._orders[bound.order_id] = order
 
     def on_update(self, update: OrderUpdate) -> OrderUpdate | None:
-        """The update if it is news of a followed order with its price, journaled and
-        checked by the guard; None otherwise (kept aside for an order not bound)."""
+        """The update if it is news of a followed order and needs no tradebook word,
+        journaled and checked by the guard; None otherwise (kept aside for an order not
+        bound, held for one that waits for the tradebook)."""
         order = self._orders.get(update.order_id)
         if order is None:
             self._keep_unclaimed(update)
             return None
         return self._take(order, update)
 
-    def due_polls(self) -> list[OrderUpdate]:
-        """Run a polling round when one is due and return its news (`source` "poll").
+    def held_fills(self) -> list[HeldFill]:
+        """The updates waiting for their price or the tradebook's confirmation."""
+        return [
+            HeldFill(order_id, order.held.filled_quantity, order.held_since_ns)
+            for order_id, order in self._orders.items()
+            if order.held is not None
+        ]
 
-        A round polls the most overdue orders (at most `MAX_POLLS_PER_ROUND`) and reads
-        the tradebook once when a fill lacks its quantity or price. A failed or
-        unreadable answer is logged and the order is polled again later.
+    def release_fill(self, order_id: str, average_price: float) -> OrderUpdate | None:
+        """Hand over a held update at `average_price` (rupees; the feed's last traded
+        price, say), or as reported when it has no fill; None when it is no longer news.
+        Raises LiveError when the order holds nothing, or the price is not positive."""
+        order = self._orders.get(order_id)
+        held = None if order is None else order.held
+        if order is None or held is None:
+            raise LiveError(f"order {order_id} holds no fill to release")
+        if held.filled_quantity and not (math.isfinite(average_price) and average_price > 0):
+            raise LiveError(f"a fill is released at a positive price, not {average_price!r}")
+        released = (
+            dataclasses.replace(held, average_price=average_price) if held.filled_quantity else held
+        )
+        if not is_news(order.seen, released):
+            order.held = None
+            return None
+        return self._deliver(order, released)
+
+    def due_polls(self) -> list[OrderUpdate]:
+        """Run a polling round when one is due and return its news.
+
+        A round polls the most overdue orders (at most `MAX_POLLS_PER_ROUND`), reads the
+        tradebook once for the words that wait for it, and alerts the holds past their
+        deadline. A failed or unreadable answer is logged and asked again later.
         """
         now = self._now()
+        self._alert_overdue(now)
         if self._guard.locked or (
             self._round_ns is not None and now - self._round_ns < POLL_EVERY_NS
         ):
@@ -148,40 +190,90 @@ class OrderFollower:
         polled = self._poll([order_id for _, order_id in due], now)
         if polled is None:
             return []
-        wanted = {order_id for order_id, update in polled.items() if _lacks_fills(update)}
-        trades = self._trades(wanted | set(held)) if wanted or held else {}
-        if trades is None:
+        wanted = {order_id for order_id, word in polled.items() if wants_trades(word)}
+        fills = self._read_trades(wanted | set(held)) if wanted or held else {}
+        if fills is None:
             return []
-        new = []
-        for order_id in dict.fromkeys([*polled, *held]):
-            order = self._orders[order_id]
-            word = polled.get(order_id) or order.held
-            update = None if word is None else _with_trades(word, trades.get(order_id), now)
-            taken = None if update is None else self._take(order, update)
-            if taken is not None:
-                new.append(taken)
-        return new
+        words = [(order_id, word) for order_id, word in polled.items()]
+        new = [self._complete(order_id, word, fills, now) for order_id, word in words]
+        for order_id in held:
+            word = self._orders[order_id].held
+            if word is not None:
+                new.append(self._complete(order_id, word, fills, now))
+        return [update for update in new if update is not None]
 
-    def _take(self, order: _Followed, update: OrderUpdate) -> OrderUpdate | None:
-        if not is_news(order.seen, update):
-            logger.debug("dropped an update that is not news: %s", update)
+    def _complete(
+        self, order_id: str, word: Polled, fills: dict[str, Fills], now: int
+    ) -> OrderUpdate | None:
+        update, checked = with_fills(word, fills.get(order_id), now)
+        return (
+            None if update is None else self._take(self._orders[order_id], update, checked=checked)
+        )
+
+    def _take(
+        self, order: Followed, update: OrderUpdate, *, checked: bool = False
+    ) -> OrderUpdate | None:
+        update = as_followed(order, update)
+        if update.source == "stream":
+            order.streamed = True
+            order.stream_pending |= update.status is OrderStatus.TRIGGER_PENDING
+        floored = with_floor(order, update)
+        if not is_news(order.seen, floored):
+            logger.debug("dropped an update that is not news: %s", floored)
             return None
-        if is_priceless(update):
-            seen = order.seen
-            if seen is None or seen.filled_quantity != update.filled_quantity:
-                if order.held is None or is_newer(order.held, update):
-                    order.held = update
-                logger.info("order %s has a fill with no price yet: it is held", update.order_id)
-                return None
-            update = dataclasses.replace(update, average_price=seen.average_price)
+        if (
+            floored is not update
+            or (not checked and needs_trades(floored))
+            or is_priceless(floored)
+        ):
+            self._hold(order, floored)
+            return None
+        return self._deliver(order, floored)
+
+    def _hold(self, order: Followed, update: OrderUpdate) -> None:
+        held = order.held
+        if held is not None and not is_newer(held, update):
+            return
+        order.held = update
+        if held is None:
+            order.held_since_ns, order.alerted = self._now(), False
+        logger.debug("order %s waits for the tradebook: %s", update.order_id, update)
+
+    def _deliver(self, order: Followed, update: OrderUpdate) -> OrderUpdate:
         self._journal.record_update(update)
         order.seen = update
-        if order.held is not None and (
-            update.status.terminal or update.filled_quantity >= order.held.filled_quantity
+        held = order.held
+        # A terminal held word (a cancel the tradebook must confirm) outlives a working one.
+        if (
+            held is not None
+            and update.filled_quantity >= held.filled_quantity
+            and (update.status.terminal or not held.status.terminal)
         ):
             order.held = None
         self._guard.check_update(update)
         return update
+
+    def _alert_overdue(self, now: int) -> None:
+        for order_id, order in self._orders.items():
+            held = order.held
+            if held is None or order.alerted or now - order.held_since_ns < HELD_ALERT_AFTER_NS:
+                continue
+            order.alerted = True
+            seconds = (now - order.held_since_ns) // NANOS_PER_SECOND
+            what = f"order {order_id} ({held.action} {held.symbol} {held.exchange})"
+            if held.filled_quantity:
+                text = (
+                    f"The price of {held.filled_quantity} units filled on {what} is not known "
+                    f"after {seconds} seconds: neither the stream nor the tradebook gives it. "
+                    "The engine holds the fill; the session can release it at the last price."
+                )
+            else:
+                text = (
+                    f"OpenAlgo reported {what} {held.status.value}, and the tradebook has not "
+                    f"confirmed its fills after {seconds} seconds: the engine holds it."
+                )
+            logger.error(text)
+            self._alerts.send(AlertKind.ERROR, text)
 
     def _keep_unclaimed(self, update: OrderUpdate) -> None:
         kept = self._unclaimed.get(update.order_id)
@@ -192,11 +284,10 @@ class OrderFollower:
         while len(self._unclaimed) > MAX_UNCLAIMED_UPDATES:
             self._unclaimed.popitem(last=False)
 
-    def _poll(self, order_ids: list[str], now: int) -> dict[str, _Polled] | None:
-        """The `orderstatus` answers of a round, keyed by order: an `OrderUpdate`, or the
-        answer itself when its fills are to be read from the tradebook. None when an
-        answer locked the guard: the round is then dropped."""
-        polled: dict[str, _Polled] = {}
+    def _poll(self, order_ids: list[str], now: int) -> dict[str, Polled] | None:
+        """The round's `orderstatus` words by order; None when an answer locked the
+        guard, which drops the round."""
+        polled: dict[str, Polled] = {}
         for order_id in order_ids:
             order = self._orders[order_id]
             order.polled_ns = now
@@ -219,60 +310,23 @@ class OrderFollower:
                 logger.error("orderstatus of %s cannot be read: %s", order_id, error)
         return polled
 
-    def _trades(self, order_ids: set[str]) -> dict[str, tuple[int, float]] | None:
-        """Each order's filled quantity and average price in the tradebook. None when it
-        cannot be read, or when its answer locked the guard."""
+    def _read_trades(self, order_ids: set[str]) -> dict[str, Fills] | None:
+        """The orders' fills in the tradebook: none when it cannot be read, None when its
+        answer locked the guard."""
         answer = server_answer(self._client.tradebook())
         self._guard.check_response(answer)
-        trades = answer.get("data")
         if self._guard.locked:
             return None
+        trades = answer.get("data")
         if answer.get("status") != "success" or not isinstance(trades, list):
             logger.warning("the tradebook could not be read: %s", answer.get("message"))
             return {}
-        fills = {}
-        for order_id in order_ids:
-            own = [trade for trade in trades if str(trade.get("orderid")) == order_id]
-            try:
-                filled = sum(units(trade, "quantity", order_id) for trade in own)
-                value = sum(
-                    units(trade, "quantity", order_id) * number(trade, "average_price", order_id)
-                    for trade in own
-                )
-            except LiveError as error:
-                logger.error("the trades of order %s cannot be read: %s", order_id, error)
-                continue
-            fills[order_id] = (filled, value / filled if filled else 0.0)
-        return fills
-
-
-def _lacks_fills(update: _Polled) -> bool:
-    """Whether a polled answer needs the tradebook: no fills given, or no price."""
-    return not isinstance(update, OrderUpdate) or is_priceless(update)
-
-
-def _with_trades(update: _Polled, fills: tuple[int, float] | None, now: int) -> OrderUpdate | None:
-    """An update completed from the order's trades: a polled answer without its fills
-    takes theirs, and a fill without its price takes theirs when they add up to it."""
-    if not isinstance(update, OrderUpdate):
-        if fills is None:
-            return None
-        data = {**update["data"], "filled_quantity": fills[0], "average_price": fills[1]}
-        try:
-            return normalize_update({**update, "data": data}, ts_recv_ns=now, source="poll")
-        except LiveError as error:
-            logger.error("an orderstatus answer cannot be read: %s", error)
-            return None
-    if is_priceless(update) and fills is not None and fills[0] == update.filled_quantity:
-        return dataclasses.replace(update, average_price=fills[1])
-    return update
+        return read_fills(trades, order_ids)
 
 
 __all__ = [
+    "HELD_ALERT_AFTER_NS",
     "MAX_POLLS_PER_ROUND",
     "MAX_UNCLAIMED_UPDATES",
-    "POLL_AFTER_NS",
-    "POLL_EVERY_NS",
-    "SAFETY_POLL_EVERY_NS",
     "OrderFollower",
 ]
