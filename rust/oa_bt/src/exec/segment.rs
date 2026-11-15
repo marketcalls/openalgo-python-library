@@ -5,7 +5,7 @@
 //! | Segment | Stop order |
 //! |---|---|
 //! | Cash equity, futures | SL-M, as asked |
-//! | Options | SL with the limit `OPTIONS_STOP_LIMIT_BUFFER_PERCENT` beyond the trigger (exchanges reject SL-M on NFO options) |
+//! | Options | SL with the limit `OPTIONS_STOP_LIMIT_BUFFER_PERCENT` beyond the trigger (NFO and BFO options accept only stop-limit orders, never SL-M) |
 
 use crate::model::{InstrumentKind, Side};
 
