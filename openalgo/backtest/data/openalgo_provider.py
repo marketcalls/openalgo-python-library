@@ -162,7 +162,7 @@ class OpenAlgoProvider:
     def broker_name(self) -> str | None:
         """The broker behind the server, asked once through `ping`; None if unknown.
 
-        Raises DataError when the server cannot be reached.
+        Raises ServerError when the server cannot be reached.
         """
         if self._broker is None:
             reply = self.fetcher.request("ping", {}, self._spacing("db"))
@@ -270,7 +270,8 @@ class OpenAlgoProvider:
         """The raw rows of the inclusive IST date `ranges` from `source` ("db" or
         "api"), with a report of the fetch (see `HistoryFetcher.collect`).
 
-        Raises DataError when a request fails or is rate limited beyond the retries.
+        Raises ServerError when a request fails or is rate limited beyond the retries,
+        and DataError for rows it cannot read.
         """
         profile = DB_PROFILE if source == "db" else broker_profile(self.broker_name())
         window_days = self._chunk_days or profile.window_days(series[2])

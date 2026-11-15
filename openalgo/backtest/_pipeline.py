@@ -69,9 +69,10 @@ from ._settings import RunPlan, assumptions, resolve
 from ._slab_ticks import resolve_slab_ticks
 from ._warm_up import Readiness, SeriesNeed, readiness
 from ._warm_up_history import RunHistory
-from ._warm_up_load import LoadedHistory, history_source, load_history
+from ._warm_up_load import LoadedHistory, load_history
 from ._warm_up_measure import WarmUp
 from ._warm_up_probe import combination_needs, params_key, probe_needs, probe_setup
+from ._warm_up_source import history_source
 from .reference import Instrument
 from .result import Result
 

@@ -25,7 +25,7 @@ import pandas as pd
 
 from .._layout import BAR_COLUMNS, NANOS_PER_SECOND, PRICE_COLUMNS
 from .._messages import counted
-from ..errors import ConfigError, DataError, SymbolNotFoundError, TimestampError
+from ..errors import ConfigError, DataError, ServerError, SymbolNotFoundError, TimestampError
 from ._sessions import ist_days
 
 HTTP_OK = 200
@@ -115,7 +115,7 @@ class Transport:
     def post(self, endpoint: str, payload: dict) -> Reply:
         """POST `payload` (plus the API key) to `endpoint` and return the Reply.
 
-        Raises DataError when no HTTP response arrives. The API key is never part
+        Raises ServerError when no HTTP response arrives. The API key is never part
         of an error message.
         """
         client = self._client
@@ -134,7 +134,7 @@ class Transport:
             # Any failure of the HTTP library (timeout, refused connection, TLS)
             # means the same to the caller. Its message names the URL, never the
             # request body, so the API key cannot leak through it.
-            raise DataError(
+            raise ServerError(
                 f"could not reach the OpenAlgo server for '{endpoint}': {type(exc).__name__}: {exc}"
             ) from exc
         try:
@@ -157,7 +157,7 @@ class Transport:
         if "code" in data:
             return Reply(int(data["code"]), data, str(data.get("raw_response") or ""))
         if data.get("status") != "success" and data.get("error_type") in _SDK_TRANSPORT_FAILURES:
-            raise DataError(
+            raise ServerError(
                 f"could not reach the OpenAlgo server for '{endpoint}': {data.get('message')}"
             )
         return Reply(HTTP_OK, data)
@@ -279,7 +279,7 @@ class HistoryFetcher:
     def request(self, endpoint: str, payload: dict, spacing_seconds: float) -> Reply:
         """Send one request, at least `spacing_seconds` after the previous one.
 
-        HTTP 429 is retried after a backoff wait. Raises DataError when the server
+        HTTP 429 is retried after a backoff wait. Raises ServerError when the server
         cannot be reached or keeps answering 429 after the allowed retries.
         """
         attempt = 0
@@ -296,7 +296,7 @@ class HistoryFetcher:
             if reply.status != HTTP_TOO_MANY_REQUESTS:
                 return reply
             if attempt >= self.max_retries:
-                raise DataError(
+                raise ServerError(
                     f"the OpenAlgo server kept answering HTTP 429 (rate limited) for "
                     f"'{endpoint}' after {counted(attempt, 'retry', 'retries')}: "
                     f"{reply.message()} Raise pacing= "
@@ -322,7 +322,7 @@ class HistoryFetcher:
         so with a JSON 404).
 
         Raises SymbolNotFoundError when the server answers that its master contract
-        does not hold the symbol, DataError for every other answer that is not a
+        does not hold the symbol, ServerError for every other answer that is not a
         success, naming the HTTP status, and for transport and rate-limit failures.
         """
         symbol, exchange, interval = series
@@ -350,7 +350,7 @@ class HistoryFetcher:
         )
         if reply.status == HTTP_BAD_REQUEST and UNKNOWN_SYMBOL_MARK in detail:
             raise SymbolNotFoundError(message, symbol, exchange)
-        raise DataError(message)
+        raise ServerError(message)
 
     def collect(
         self,

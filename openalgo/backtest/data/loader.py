@@ -21,7 +21,7 @@ from .._calendar_convert import DateLike, from_day, to_day
 from .._layout import NANOS_PER_SECOND, parse_interval
 from .._messages import counted
 from .._protocols import SessionCalendar
-from ..errors import ConfigError, DataError, NoDataError
+from ..errors import ConfigError, DataError, NoDataError, ServerError
 from ._empty_answers import empty_sessions_to_record
 from ._finish import PERIOD_UNITS, BarsResult, LoadMetadata, LoadRequest, finish
 from ._sessions import NowLike, Sessions, ist_days, resolve_now, to_date
@@ -371,7 +371,9 @@ def _through_cache(
     except DataError as exc:
         if not cached.notes:
             raise
-        raise DataError(f"{' '.join(cached.notes)}. Fetching them again failed: {exc}") from exc
+        # A server that cannot answer stays a ServerError, so a caller can tell it apart.
+        error = ServerError if isinstance(exc, ServerError) else DataError
+        raise error(f"{' '.join(cached.notes)}. Fetching them again failed: {exc}") from exc
     served = set(bucket_days(records).tolist())
     cached_days = set(bucket_days(cached.records).tolist())
     kept = [day for day in unsettled if to_day(day) in cached_days and to_day(day) not in served]

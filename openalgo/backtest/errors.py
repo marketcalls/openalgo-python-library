@@ -56,6 +56,13 @@ class SymbolNotFoundError(DataError):
         self.exchange = exchange
 
 
+class ServerError(DataError):
+    """The OpenAlgo server could not answer a history request: it could not be reached,
+    it kept answering that requests were too frequent (HTTP 429), or it answered with an
+    error, such as a broker login that has expired. Check that OpenAlgo is running and
+    logged in to the broker, then run again."""
+
+
 class TimestampError(DataError):
     """Timestamps do not match the declared convention or the session calendar."""
 
@@ -108,6 +115,7 @@ __all__ = [
     "NoDataError",
     "OrdersNotPlacedWarning",
     "ReferenceDataError",
+    "ServerError",
     "SymbolNotFoundError",
     "TimestampError",
     "WarmUpWarning",

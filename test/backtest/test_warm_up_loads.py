@@ -16,7 +16,7 @@ import pandas as pd
 from warm_up_bars import IST, SETTINGS, intraday, walk
 
 import openalgo.backtest as bt
-import openalgo.backtest._warm_up_load as wl
+import openalgo.backtest._warm_up_source as ws
 from openalgo import ta
 
 # The share of minutes with a trade in a thinly traded share's one-minute bars.
@@ -229,13 +229,13 @@ def test_each_step_back_asks_only_for_the_days_before_the_last_one(monkeypatch):
     # ladder that returns older bars is taken: each asks for the days before the one
     # the step before it began on, and none is asked for twice.
     asked = []
-    loading = wl.load_bars
+    loading = ws.load_bars
 
     def recording(symbol, exchange, interval, start, end, **options):
         asked.append((start, end))
         return loading(symbol, exchange, interval, start, end, **options)
 
-    monkeypatch.setattr(wl, "load_bars", recording)
+    monkeypatch.setattr(ws, "load_bars", recording)
     bt.backtest(LongDaily, data=daily_holes("2008-01-01", "2026-03-31", 0.4), start="2026-01-01",
                 end="2026-03-31", **SETTINGS)  # fmt: skip
     assert len(asked) > 3
