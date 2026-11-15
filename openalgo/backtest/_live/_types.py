@@ -192,9 +192,18 @@ class JournalLike(Protocol):
         """Close an intent that never became a broker order: a definite refusal, or an
         unbound intent the order book does not hold."""
 
+    def mark_queued(self, intent_id: str, pending_order_id: str) -> None:
+        """Note an intent that semi-auto mode queued for approval in OpenAlgo's Action
+        Center as `pending_order_id`: not a broker order (yet), and not unbound."""
+
+    def queued(self) -> list[OrderIntent]:
+        """The intents of the session's trading day that semi-auto mode queued, oldest
+        first."""
+
     def unbound(self) -> list[OrderIntent]:
-        """The intents of the session's trading day still unbound, oldest first. The
-        session starts its day on the journal before the order path asks."""
+        """The intents of the session's trading day still unbound, oldest first (queued
+        ones are not). The session starts its day on the journal before the order path
+        asks."""
 
     def record_update(self, update: OrderUpdate) -> None:
         """Write an order update."""

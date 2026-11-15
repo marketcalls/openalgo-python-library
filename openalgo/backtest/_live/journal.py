@@ -3,10 +3,11 @@ OpenAlgo account, holding what a restart needs.
 
 The order path writes an intent before its HTTP call, then binds it to the broker's order
 ID, or marks it unbound when the outcome is unknown (a 502, a timeout, a disconnect) so
-that it is resolved against the order book before anything else is sent. Every order
-update is kept, in arrival order. The journal also holds each leg's broker-held stop
-(one exit owner per leg, `_journal_stops`), the risk rules' state (extremes, trail level,
-daily realized P&L) and the strategy's own `self.state`.
+that it is resolved against the order book before anything else is sent, or queued when
+semi-auto mode put it in OpenAlgo's Action Center. Every order update is kept, in
+arrival order. The journal also holds each leg's broker-held stop (one exit owner per
+leg, `_journal_stops`), the risk rules' state (extremes, trail level, daily realized
+P&L) and the strategy's own `self.state`.
 
 Every write is committed, and synced to disk, before its method returns: an intent is
 durable before its order is sent. The file (`_journal_file`) uses write-ahead logging
@@ -154,9 +155,25 @@ class Journal(JournalHandle):
         intent is unknown or already bound."""
         self._resolve(intent_id, "not_placed", reason)
 
+    def mark_queued(self, intent_id: str, pending_order_id: str) -> None:
+        """Note an intent that semi-auto mode queued for approval in OpenAlgo's Action
+        Center as `pending_order_id`: not a broker order (yet), so it leaves `unbound()`
+        for `queued()`; approved, its order is bound as any other. Raises `JournalError`
+        when the intent is unknown or already bound."""
+        pending = pending_order_id or "with no pending order ID given"
+        reason = f"queued for approval in OpenAlgo's Action Center (semi-auto) as {pending}"
+        self._resolve(intent_id, "queued", reason)
+
+    def queued(self, *, day: date | None = None) -> list[OrderIntent]:
+        """The day's intents that semi-auto mode queued and that are not bound since,
+        oldest first. Raises `JournalError` with no `day` before `start_session`."""
+        key = self._day_key(day, "list the queued intents")
+        with self._sql("read the queued intents") as sql:
+            return reads.queued(sql, self._ledger, key)
+
     def unbound(self, *, day: date | None = None) -> list[OrderIntent]:
-        """The day's intents neither bound nor marked not placed, oldest first. Raises
-        `JournalError` with no `day` before `start_session`."""
+        """The day's intents neither bound, queued nor marked not placed, oldest first.
+        Raises `JournalError` with no `day` before `start_session`."""
         key = self._day_key(day, "list the unbound intents")
         with self._sql("read the unbound intents") as sql:
             return reads.unbound(sql, self._ledger, key)
