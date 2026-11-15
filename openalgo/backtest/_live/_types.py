@@ -258,6 +258,10 @@ class AlertsLike(Protocol):
     def send(self, kind: AlertKind, text: str) -> None:
         """Send an alert; never raises into the session loop."""
 
+    def test(self) -> bool:
+        """Send a test alert and say whether it was delivered (the preflight requires it
+        in LIVE mode and warns without it in SANDBOX mode)."""
+
 
 __all__ = [
     "LOGGER_NAME",
