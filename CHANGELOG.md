@@ -59,6 +59,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interval and 1-minute candles offered; MIS only; the risk limits; the trading day and
   the MIS entry window; the computer's clock against a remote server's; and a delivered
   test alert in LIVE mode. Every failed check is reported together, with what to fix.
+- The live layer's alerts, daily summary and session logs (private): alerts through
+  OpenAlgo's Telegram endpoint, each starting with the session's mode (SANDBOX or LIVE)
+  and strategies. Sending never blocks or stops a session: one background sender posts
+  at most 20 alerts a minute (25 for the most urgent) under the server's limit of 30,
+  most urgent first, merges routine alerts that pile up into one message, retries a
+  rate limit, timeout or server error for up to 5 minutes, and counts every alert not
+  delivered. The same alert is held back for a minute only for conditions that repeat
+  (feed dead, reconciliation mismatch, errors). The daily summary reads like
+  `Result.summary()`; the session's log file and JSON-lines event stream redact any
+  field named like a key or token.
 
 ## [2.2.1] - 2026-11-15
 
