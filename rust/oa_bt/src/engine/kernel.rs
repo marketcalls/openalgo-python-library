@@ -96,6 +96,9 @@ pub struct Engine {
     pub(super) run_end: RunEnd,
     /// The session's CNC buys, for the credit of a sale (`sale_credit`).
     pub(super) session_buys: SessionBuys,
+    /// The slices `advance` may run, as the index of the first one it may not: `None`
+    /// runs them all (a backtest), `Some` holds before that slice (`hold`, `release`).
+    pub(super) released: Option<usize>,
 }
 
 /// The one exchange of a Phase 1 run.
@@ -170,7 +173,30 @@ impl Engine {
             futures: FuturesDesk::default(),
             run_end,
             session_buys: SessionBuys::default(),
+            released: None,
         })
+    }
+
+    /// Hold before every slice not released yet: from now on `advance` runs only the
+    /// slices released with `release`, and returns `Pause::Waiting` before the first
+    /// one that is not. Live trading holds, and releases each slice once it has closed;
+    /// a backtest never holds. A paused slice still completes on the next `advance`.
+    pub fn hold(&mut self) {
+        let next = match self.phase {
+            Phase::Ready(index) => index,
+            Phase::Paused(slice) | Phase::Timers(slice) => slice.index + 1,
+            Phase::Finished => self.timeline.len(),
+        };
+        self.released = Some(self.released.map_or(next, |released| released.max(next)));
+    }
+
+    /// Release the slices before index `slices` of the grid to an engine that holds
+    /// (`hold`). Releasing fewer than already released changes nothing; an engine that
+    /// does not hold runs every slice anyway.
+    pub fn release(&mut self, slices: usize) {
+        if let Some(released) = self.released.as_mut() {
+            *released = (*released).max(slices);
+        }
     }
 
     /// Run the slice sequence to the next decision point.
@@ -179,7 +205,8 @@ impl Engine {
     /// of step 2 onwards; from step 7, step 8). It returns `Pause::Timers` in step 2 of
     /// a slice where timers are due, `Pause::BarClose` at step 7 of a slice where a
     /// strategy bar closes (or events are waiting and `deliver_events` is set), and
-    /// `Pause::Finished` once the grid is exhausted.
+    /// `Pause::Finished` once the grid is exhausted, and `Pause::Waiting` before a slice
+    /// not released to an engine that holds (`hold`).
     ///
     /// Errors: `RunFinished` after `Pause::Finished`; any error of a step.
     pub fn advance(&mut self) -> Result<Pause, KernelError> {
@@ -196,6 +223,10 @@ impl Engine {
                     slice
                 }
                 Phase::Ready(index) => {
+                    let held = self.released.is_some_and(|released| index >= released);
+                    if held && index < self.timeline.len() {
+                        return Ok(Pause::Waiting { next_slice: index });
+                    }
                     let Some(slice) = self.timeline.slice(index) else {
                         self.phase = Phase::Finished;
                         let events = std::mem::take(&mut self.undelivered);

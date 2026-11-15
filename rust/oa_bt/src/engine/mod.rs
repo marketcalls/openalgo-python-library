@@ -43,6 +43,7 @@
 //! | `Engine::submit_rebalance(TargetRequest)` | while paused | the same order as part of a rebalance (`rebalance`) |
 //! | `position`, `leg`, `order`, `working_orders`, `gtts`, `has_pending_entry`, `account`, `last_close`, `decision_instant`, `trading_state`, `strategy_bars`, `timer_counts` | any time | queries |
 //! | `Engine::add_timer(TimerSpec)` | before the first `advance` | register `self.at` or `self.every` |
+//! | `Engine::hold()`, `Engine::release(slices)` | any time | live clock: run only the slices released; `advance` returns `Pause::Waiting` before the first one that is not (a backtest never holds) |
 //! | `Engine::finish()` | after `Pause::Finished` | the `RunOutput` |
 //! | `pause::run(engine, driver)` | Rust drivers | the loop above, for a `Driver` |
 //!
@@ -54,10 +55,11 @@
 //! timer pause carries none (SPEC-31). Events of step 8 and of submissions are
 //! delivered with the next step 7 pause.
 //!
-//! In live trading (Phase 2) the same machine runs with a live clock: the adapter feeds
-//! bars or ticks before calling `advance`, and tick mode runs steps 3 to 6 for one
-//! instrument per tick (03-architecture 4.2, last paragraph). The order and risk rules
-//! do not change.
+//! In live trading (Phase 2) the same machine runs with a live clock: the engine holds
+//! (`hold`) and the adapter releases each slice once it has closed and its bars are in,
+//! and tick mode runs steps 3 to 6 for one instrument per tick (03-architecture 4.2, last
+//! paragraph; PRD 15-phase2-plan section 2). A run released one slice at a time is the
+//! same run. The order and risk rules do not change.
 //!
 //! # The eight steps of a slice (03-architecture 4.2)
 //!

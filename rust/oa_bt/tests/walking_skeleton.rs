@@ -378,6 +378,68 @@ fn the_same_inputs_give_the_same_result() {
     assert_eq!(first.0, second.0);
 }
 
+/// Run `kernel` with `script`, releasing one slice each time the engine waits.
+fn run_released_one_by_one(kernel: &mut Engine, script: &mut Script) -> usize {
+    let mut waits = 0;
+    loop {
+        match kernel.advance().expect("the slice runs") {
+            Pause::Waiting { next_slice } => {
+                waits += 1;
+                kernel.release(next_slice + 1);
+            }
+            Pause::Finished { .. } => return waits,
+            pause => script.on_pause(kernel, &pause).expect("the script acts"),
+        }
+    }
+}
+
+#[test]
+fn a_run_released_one_slice_at_a_time_is_the_same_run() {
+    let (whole, _) = run_script(bars(375, &[40, 41]), None, buy_then_exit());
+    let mut kernel = engine(bars(375, &[40, 41]), None);
+    let mut script = Script::new(buy_then_exit());
+    kernel.hold();
+    let waits = run_released_one_by_one(&mut kernel, &mut script);
+    assert_eq!(waits, 375, "one wait before each slice of the session");
+    assert_eq!(kernel.finish().expect("the run finished"), whole);
+}
+
+#[test]
+fn an_engine_that_holds_waits_before_the_first_slice_until_released() {
+    let mut kernel = engine(bars(45, &[]), Some(at(9, 59)));
+    kernel.hold();
+    for _ in 0..2 {
+        assert_eq!(kernel.advance(), Ok(Pause::Waiting { next_slice: 0 }));
+    }
+    kernel.release(1);
+    assert_eq!(kernel.advance(), Ok(Pause::Waiting { next_slice: 1 }));
+}
+
+#[test]
+fn releasing_fewer_slices_than_released_changes_nothing() {
+    let mut kernel = engine(bars(45, &[]), Some(at(9, 59)));
+    let mut script = Script::new(Vec::new());
+    kernel.hold();
+    kernel.release(10);
+    kernel.release(5);
+    run(&mut kernel, &mut script).expect("the released slices run");
+    assert_eq!(kernel.advance(), Ok(Pause::Waiting { next_slice: 10 }));
+}
+
+#[test]
+fn run_stops_where_the_engine_waits_and_continues_after_a_release() {
+    let (whole, _) = run_script(bars(45, &[]), Some(at(9, 59)), buy_then_exit());
+    let mut kernel = engine(bars(45, &[]), Some(at(9, 59)));
+    let mut script = Script::new(buy_then_exit());
+    kernel.hold();
+    kernel.release(20);
+    run(&mut kernel, &mut script).expect("the released slices run");
+    assert!(!kernel.is_finished());
+    kernel.release(usize::MAX);
+    run(&mut kernel, &mut script).expect("the rest runs");
+    assert_eq!(kernel.finish().expect("the run finished"), whole);
+}
+
 #[test]
 fn orders_are_refused_outside_a_decision_point() {
     let mut kernel = engine(bars(45, &[]), Some(at(9, 59)));

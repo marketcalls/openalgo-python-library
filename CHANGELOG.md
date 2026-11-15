@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Phase 2 (live trading) groundwork, no change to backtests: the kernel can hold before
+  the slices not released yet (`Engine::hold`, `Engine::release`, `Pause::Waiting`), the
+  base of the live clock. A backtest released one slice at a time gives the same result
+  as one run straight through.
+
 ## [2.2.1] - 2026-11-15
 
 ### Fixed

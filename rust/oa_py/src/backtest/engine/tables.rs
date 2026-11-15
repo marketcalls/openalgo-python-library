@@ -144,7 +144,8 @@ pub(super) type PauseTuple<'py> = (
 );
 
 /// A pause as a tuple (kind, decided_at, bars, events, timers): `kind` "bar_close",
-/// "timers" or "finished" (interned, so the driver compares it by identity first), the
+/// "timers", "finished" or "waiting" (an engine that holds, before a slice not
+/// released; interned, so the driver compares it by identity first), the
 /// decision instant (UTC nanoseconds, None when finished), the strategy bars as tuples
 /// (instrument, ts_open, ts_close, open, high, low, close, volume), the events as dicts
 /// and the timer ids (timer pauses). A tuple, not a dict: the event driver unpacks one
@@ -183,6 +184,13 @@ pub(super) fn pause<'py>(py: Python<'py>, pause: &Pause) -> PyResult<PauseTuple<
         }
         Pause::Finished { .. } => (
             intern!(py, "finished").clone(),
+            None,
+            none(),
+            events,
+            none(),
+        ),
+        Pause::Waiting { .. } => (
+            intern!(py, "waiting").clone(),
             None,
             none(),
             events,
