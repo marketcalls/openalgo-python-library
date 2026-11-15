@@ -1,288 +1,314 @@
 """The finished day files of recorded ticks (private to `recorder`): finalize turns raw
-files into them, and reads verify them.
+files into them under the recorder's lock, and readers verify them without writing.
 
 Each instrument's folder (see `_tick_files`) holds one `.npy` per IST day, a structured
-array of `TICK_DTYPE` without pickle, in receive order, and an `index.json` that records
-per day: the file, its SHA-256 content hash, the tick count, the first and last receive
-time, the feed outages of the day (None when they are not known: a day finalized from
-raw files a crashed recording left), and the ids of the raw files merged into it.
+array of `TICK_DTYPE` without pickle, in receive order: the recordings in the order of
+their start, each in its own sequence. Its index (`_tick_index`) holds the file's hash
+and the spans of the recordings that wrote it.
 
-Writes follow the cache's rules (`data.cache.atomic_write`): a file is written under a
-temporary name and moved into place. A day file is written under a new name, then the
-index, then the old day file and the raw file are removed; so a crash at any point leaves
-either the old day and its raw file, or the new day, and a raw file whose id the index
-lists as merged is only removed, never merged twice. A file that fails verification is
-moved aside (`data.cache._quarantine`), never served and never deleted.
+Finalizing a raw file merges its records into the day: a record already there (the same
+recording and sequence number, from a batch written twice or a raw file merged before a
+crash removed it) is kept once. The new day file is written under a new name, then the
+index, then the old day file and the raw file are removed; a removal that fails (a file
+another process holds open) is noted and left to a later finalize, which removes every
+file of the day older than the index's. So a crash at any point leaves the old day and
+its raw file, or the new day, and never loses or doubles a tick.
 """
 
 from __future__ import annotations
 
 import datetime as dt
-import hashlib
-import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
-from ..data.cache import _READ_ERRORS, INDEX_NAME, _quarantine, atomic_write
+from ..data.cache import _quarantine, atomic_write
 from ..errors import DataError
 from ._tick_files import (
-    RAW_SUFFIX,
-    TICK_DTYPE,
+    DAY_SUFFIX,
+    RawContent,
+    day_bounds,
+    day_files,
     instrument_folder,
+    instrument_folders,
     instrument_of,
+    new_id,
+    pending_raw_files,
     raw_files_of,
-    raw_path,
     read_raw,
+    recording_name,
+    recording_number,
+    ticks_of,
 )
-
-#: The version of the index of an instrument's recorded ticks.
-TICK_INDEX_VERSION = 1
-_INDEX_KIND = "ticks"
-# Mixed into every hash, so that a change of the stored form changes the hashes.
-_HASH_HEADER = b"openalgo.backtest recorded ticks v1\n"
-_DAY_SUFFIX = ".npy"
-
-
-@dataclass(frozen=True)
-class Outage:
-    """A span in which the feed was down, UTC nanoseconds: from the feed's disconnect to
-    its reconnect, or to the end of the recording when it was still down then."""
-
-    start_ns: int
-    end_ns: int
-
-
-@dataclass(frozen=True)
-class RecordedDay:
-    """One instrument's recorded ticks of an IST day: `records` of `TICK_DTYPE` in receive
-    order, and the feed outages of the day (None when they are not known)."""
-
-    exchange: str
-    symbol: str
-    day: dt.date
-    records: np.ndarray
-    outages: tuple[Outage, ...] | None
+from ._tick_index import (
+    Days,
+    check_day,
+    day_entry,
+    load_index_locked,
+    read_index,
+    save_index,
+)
+from ._tick_spans import Ending, Outage, RecordedDay, Span, joined
+from ._types import Tick
 
 
 @dataclass(frozen=True)
 class DayWritten:
-    """One day file that finalize wrote: its path, its instrument and its tick count
-    (the whole day's), and the bytes of a torn last record cut off its raw file."""
+    """A day file finalize wrote: its path, instrument and IST day, its tick count (the
+    whole day's), and the bytes of torn last records cut off the raw files merged."""
 
     path: Path
     exchange: str
     symbol: str
+    day: dt.date
     ticks: int
     torn_bytes: int
 
 
-def tick_hash(records: np.ndarray) -> str:
-    """SHA-256 of recorded ticks, as 'sha256:<hex>'."""
-    digest = hashlib.sha256(_HASH_HEADER)
-    digest.update(np.ascontiguousarray(records, dtype=TICK_DTYPE).tobytes())
-    return "sha256:" + digest.hexdigest()
+@dataclass(frozen=True)
+class RecordingFacts:
+    """What a recording knows of itself when it finalizes its own raw files: its start
+    and stop (UTC nanoseconds) and its feed outages."""
 
-
-def finalize_day(
-    root: Path, day: dt.date, outages: tuple[Outage, ...] | None, notes: list[str]
-) -> list[DayWritten]:
-    """Turn every raw file of an IST day in `root` into its instrument's day file, with
-    `outages` as the day's feed outages (None: not known). What failed verification on
-    the way is added to `notes`. Raises OSError when a file cannot be written."""
-    written = []
-    for path in raw_files_of(root, day):
-        result = finalize_raw(path, day, outages, notes)
-        if result is not None:
-            written.append(result)
-    return written
+    start_ns: int
+    stop_ns: int
+    outages: tuple[Outage, ...]
 
 
 def finalize_raw(
-    path: Path, day: dt.date, outages: tuple[Outage, ...] | None, notes: list[str]
+    path: Path, day: dt.date, facts: Mapping[str, RecordingFacts], notes: list[str]
 ) -> DayWritten | None:
-    """Merge one raw file into its instrument's day file (see the module docstring).
-    Returns None when the raw file was already merged or was not a raw file (it is then
-    moved aside and noted). Raises OSError when a file cannot be written."""
+    """Merge one raw file into its instrument's day file, under the recorder's lock (see
+    the module docstring). `facts` holds what the recordings finalizing their own files
+    know; any other recording's raw file is one that crashed. Returns None for a file
+    that is not a raw file (it is moved aside and noted). Raises OSError naming the path
+    when a file cannot be read or written."""
     try:
         raw = read_raw(path)
     except DataError as exc:
-        moved = _quarantine(path)
-        notes.append(f"{exc}; it was moved to {moved.name}")
+        notes.append(f"{exc}; it was moved to {_quarantine(path).name}")
         return None
     folder = path.parent
     exchange, symbol = instrument_of(folder)
-    index = load_index(folder, exchange, symbol, notes)
     key = day.isoformat()
-    entry = index["days"].get(key)
-    if isinstance(entry, dict) and raw.raw_id in entry.get("merged", ()):
-        path.unlink()
-        return None
-    earlier = load_day(folder, index, key, notes)
-    if entry is not None and earlier is None:
-        # The day's earlier ticks were moved aside: the day is incomplete, and the
-        # outages of the part that remains are not known either.
-        outages, entry = None, None
-    records = raw.records if earlier is None else np.concatenate([earlier, raw.records])
-    file_name = f"{key}.{raw.raw_id}{_DAY_SUFFIX}"
+    days = load_index_locked(folder, exchange, symbol, notes)
+    earlier, spans = _earlier(folder, days, key, notes)
+    combined = raw.records if earlier is None else np.concatenate([earlier, raw.records])
+    records, spans = _in_receive_order(combined, (*spans, _span_of(raw, day, facts)))
+    file_name = f"{key}.{new_id()}{DAY_SUFFIX}"
     atomic_write(folder / file_name, lambda handle: np.save(handle, records, allow_pickle=False))
-    index["days"][key] = _day_entry(file_name, records, _joined(entry, outages), entry, raw.raw_id)
-    save_index(folder, index)
-    if entry is not None and entry["file"] != file_name:
-        (folder / entry["file"]).unlink(missing_ok=True)
-    path.unlink()
-    return DayWritten(folder / file_name, exchange, symbol, len(records), raw.torn_bytes)
+    days[key] = day_entry(file_name, records, spans)
+    save_index(folder, exchange, symbol, days)
+    _remove_stale(folder, key, file_name, notes)
+    _remove(path, "the raw file, merged already,", notes)
+    return DayWritten(folder / file_name, exchange, symbol, day, len(records), raw.torn_bytes)
+
+
+def finalize_day(root: Path, day: dt.date, notes: list[str]) -> list[DayWritten]:
+    """Under the recorder's lock: merge every raw file of an IST day (none of them is a
+    running recording's, so each is one that crashed), then check every instrument's
+    day file of that day, moving a corrupt one aside and removing stale ones. What was
+    found on the way is added to `notes`. Raises OSError naming the path when a file
+    cannot be read or written."""
+    written = [finalize_raw(path, day, {}, notes) for path in raw_files_of(root, day)]
+    for folder in instrument_folders(root):
+        _check_locked(folder, day.isoformat(), notes)
+    return [result for result in written if result is not None]
 
 
 def read_day(root: Path, exchange: str, symbol: str, day: dt.date) -> RecordedDay:
-    """One instrument's verified ticks of an IST day. Raises DataError when the day was
-    not recorded (or not finalized yet) and when its file or index fails verification
-    (the file is then moved aside)."""
+    """One instrument's verified ticks of an IST day. Never writes. Raises DataError when
+    the day was not recorded (or not finalized yet) and when its file or index is
+    corrupt (both are left as they are), OSError naming the path when a file cannot be
+    read."""
     folder = instrument_folder(root, exchange, symbol)
-    notes: list[str] = []
-    index = load_index(folder, exchange, symbol, notes)
     key = day.isoformat()
-    entry = index["days"].get(key)
-    if entry is None:
-        raise DataError(_not_recorded(root, exchange, symbol, day, notes))
-    records = load_day(folder, index, key, notes)
-    if records is None:
-        raise DataError("; ".join(notes))
-    outages = entry.get("outages")
-    known = None if outages is None else tuple(Outage(*span) for span in outages)
-    return RecordedDay(exchange, symbol, day, records, known)
-
-
-def load_index(folder: Path, exchange: str, symbol: str, notes: list[str]) -> dict:
-    """The index of an instrument's folder; a fresh one when there is none, and when it
-    is unusable (it is then moved aside and noted)."""
-    fresh = {
-        "version": TICK_INDEX_VERSION,
-        "kind": _INDEX_KIND,
-        "exchange": exchange,
-        "symbol": symbol,
-        "days": {},
-    }
-    path = folder / INDEX_NAME
-    try:
-        index = json.loads(path.read_bytes().decode("utf-8"))
-    except (FileNotFoundError, NotADirectoryError):
-        return fresh
-    except (OSError, ValueError) as exc:
-        problem = f"it cannot be read ({exc})"
-    else:
-        same = isinstance(index, dict) and all(
-            index.get(name) == value for name, value in fresh.items() if name != "days"
+    for attempt in range(2):
+        entry = read_index(folder, exchange, symbol).get(key)
+        if entry is None:
+            raise DataError(_not_recorded(folder, exchange, symbol, day))
+        try:
+            loaded = check_day(folder, entry)
+            break
+        except FileNotFoundError:
+            # A finalize replaced the day file after the index was read: read it again.
+            if attempt:
+                raise
+    if isinstance(loaded, str):
+        raise DataError(
+            f"the recorded ticks of {exchange}:{symbol} on {day} in {folder / entry.file} "
+            f"failed verification ({loaded}); they are left as they are: a finalize of the day "
+            "moves the file aside. Recorded ticks cannot be fetched again: keep a copy of the "
+            "cache to restore it from"
         )
-        if same and isinstance(index.get("days"), dict):
-            return index
-        problem = "it belongs to another instrument or format"
-    moved = _quarantine(path)
-    notes.append(
-        f"the tick index {path} failed verification ({problem}); it was moved to "
-        f"{moved.name}, and the day files it described are kept but can no longer be verified"
-    )
-    return fresh
+    pending = bool(pending_raw_files(folder, day))
+    return RecordedDay(exchange, symbol, day, loaded, entry.spans, pending)
 
 
-def save_index(folder: Path, index: dict) -> None:
-    """Write an instrument's index. Raises OSError when it cannot be written."""
-    payload = json.dumps(index, indent=1, sort_keys=True).encode("utf-8")
-    atomic_write(folder / INDEX_NAME, lambda handle: handle.write(payload))
+def read_merged(root: Path, instruments: Sequence[tuple[str, str]], day: dt.date) -> list[Tick]:
+    """The ticks of several instruments' IST day, merged in the order they were received:
+    the recordings by their start, each by its sequence numbers. Raises as `read_day`."""
+    recorded = [read_day(root, exchange, symbol, day) for exchange, symbol in instruments]
+    starts: dict[int, int] = {}
+    for one in recorded:
+        for span, first_ns in zip(one.spans, _first_receipts(one), strict=True):
+            number = recording_number(span.recording)
+            known = span.start_ns if span.start_ns is not None else first_ns
+            starts[number] = min(starts.get(number, known), known)
+    rank = {number: n for n, number in enumerate(sorted(starts, key=lambda n: (starts[n], n)))}
+    ranks, seqs, owners, rows = [], [], [], []
+    for owner, one in enumerate(recorded):
+        ranks.append(np.array([rank[n] for n in one.records["recording"].tolist()], dtype=np.int64))
+        seqs.append(one.records["seq"])
+        owners.append(np.full(len(one.records), owner))
+        rows.append(np.arange(len(one.records)))
+    order = np.lexsort((np.concatenate(seqs), np.concatenate(ranks)))
+    ticks = [ticks_of(one.records, one.exchange, one.symbol) for one in recorded]
+    owner_of, row_of = np.concatenate(owners)[order], np.concatenate(rows)[order]
+    return [
+        ticks[owner][row] for owner, row in zip(owner_of.tolist(), row_of.tolist(), strict=True)
+    ]
 
 
-def load_day(folder: Path, index: dict, key: str, notes: list[str]) -> np.ndarray | None:
-    """The verified records of the day `key` (an ISO date), or None when the index has
-    no such day, or when its file fails verification: the file is then moved aside, the
-    day left out of the index and the failure added to `notes`."""
-    entry = index["days"].get(key)
+def _earlier(
+    folder: Path, days: Days, key: str, notes: list[str]
+) -> tuple[np.ndarray | None, tuple[Span, ...]]:
+    """The day's records and spans finalized so far, checked again under the lock; a
+    corrupt day file is moved aside and dropped from the index (its spans with it)."""
+    entry = days.get(key)
     if entry is None:
-        return None
-    name = entry.get("file") if isinstance(entry, dict) else None
-    # Only a plain file name of this folder is read, so an edited index cannot point
-    # the read (or the move aside) anywhere else.
-    if not (isinstance(name, str) and Path(name).name == name and name.endswith(_DAY_SUFFIX)):
-        return _failed(folder, index, key, None, "its index entry is malformed", notes)
-    path = folder / name
-    try:
-        records = np.load(path, allow_pickle=False)
-        matches = records.dtype == TICK_DTYPE and tick_hash(records) == entry.get("sha256")
-        problem = None if matches else "its content does not match the hash in the index"
-    except _READ_ERRORS as exc:
-        problem = f"it cannot be read ({exc})"
-    if problem is None:
-        return records
-    return _failed(folder, index, key, path, problem, notes)
+        return None, ()
+    loaded = check_day(folder, entry)
+    if isinstance(loaded, str):
+        _set_aside(folder, days, key, loaded, notes)
+        return None, ()
+    return loaded, entry.spans
 
 
-def _failed(
-    folder: Path, index: dict, key: str, path: Path | None, problem: str, notes: list[str]
-) -> None:
-    """Move a day file that failed verification aside (`path`, None when the index names
-    no file of this folder), drop its day from the index and note it."""
-    moved = None if path is None else _quarantine(path)
-    del index["days"][key]
-    save_index(folder, index)
-    where = f"; it was moved to {moved.name}" if moved is not None else ""
+def _span_of(raw: RawContent, day: dt.date, facts: Mapping[str, RecordingFacts]) -> Span:
+    """The span a raw file's recording covered on the day, cut to the day."""
+    day_start, day_end = day_bounds(day)
+    known = facts.get(raw.recording)
+    if known is None:
+        # A recording that crashed: it ran from its start to its last tick.
+        start = max(raw.start_ns, day_start)
+        last = int(raw.records["ts_recv_ns"][-1]) if len(raw.records) else start
+        return Span(raw.recording, start, max(last, start), Ending.CRASH, None)
+    start = max(known.start_ns, day_start)
+    stop = max(min(known.stop_ns, day_end), start)
+    outages = tuple(outage for outage in known.outages if day_start <= outage.start_ns < day_end)
+    return Span(raw.recording, start, stop, Ending.STOP, outages)
+
+
+def _in_receive_order(
+    records: np.ndarray, spans: Sequence[Span]
+) -> tuple[np.ndarray, tuple[Span, ...]]:
+    """The records in receive order with each (recording, seq) once, and their spans in
+    the order of their start (a span whose start is not known by its first tick)."""
+    spans = joined(spans)
+    numbers = records["recording"]
+    named = {recording_number(span.recording) for span in spans}
+    for number in dict.fromkeys(numbers.tolist()):
+        if number not in named:  # records of a recording no span names: times unknown
+            spans.append(Span(recording_name(number), None, None, Ending.UNKNOWN, None))
+    first_ns = _first_receipt_by_number(records)
+
+    def started(span: Span) -> tuple[float, str]:
+        start = (
+            span.start_ns
+            if span.start_ns is not None
+            else first_ns.get(recording_number(span.recording), float("inf"))
+        )
+        return start, span.recording
+
+    ordered = tuple(sorted(spans, key=started))
+    rank = {recording_number(span.recording): n for n, span in enumerate(ordered)}
+    ranks = np.array([rank[number] for number in numbers.tolist()], dtype=np.int64)
+    order = np.lexsort((records["seq"], ranks))
+    records, ranks = records[order], ranks[order]
+    first_of_kind = np.ones(len(records), dtype=bool)
+    first_of_kind[1:] = (ranks[1:] != ranks[:-1]) | (records["seq"][1:] != records["seq"][:-1])
+    return records[first_of_kind], ordered
+
+
+def _first_receipt_by_number(records: np.ndarray) -> dict[int, int]:
+    numbers, first = np.unique(records["recording"], return_index=True)
+    receipts = records["ts_recv_ns"][first]
+    return dict(zip(numbers.tolist(), receipts.tolist(), strict=True))
+
+
+def _first_receipts(recorded: RecordedDay) -> list[float]:
+    """Per span of a day, the receive time of its recording's first tick (infinity when
+    it has none)."""
+    first = _first_receipt_by_number(recorded.records)
+    return [first.get(recording_number(span.recording), float("inf")) for span in recorded.spans]
+
+
+def _check_locked(folder: Path, key: str, notes: list[str]) -> None:
+    """Under the lock: check an instrument's day file of `key`; move a corrupt one aside,
+    remove the stale ones."""
+    exchange, symbol = instrument_of(folder)
+    days = load_index_locked(folder, exchange, symbol, notes)
+    entry = days.get(key)
+    if entry is None:
+        return
+    loaded = check_day(folder, entry)
+    if isinstance(loaded, str):
+        _set_aside(folder, days, key, loaded, notes)
+    else:
+        _remove_stale(folder, key, entry.file, notes)
+
+
+def _set_aside(folder: Path, days: Days, key: str, problem: str, notes: list[str]) -> None:
+    """Move a corrupt day file aside (never delete it), drop its day from the index and
+    note it."""
+    path = folder / days[key].file
+    moved = _quarantine(path)
+    del days[key]
+    exchange, symbol = instrument_of(folder)
+    save_index(folder, exchange, symbol, days)
     notes.append(
-        f"the recorded ticks of {key} in {folder} failed verification ({problem}){where}, "
-        "and that day is no longer read"
+        f"the recorded ticks of {key} in {path} failed verification ({problem}); the file was "
+        f"moved to {moved.name}, and that day is no longer read"
     )
 
 
-def _day_entry(
-    file_name: str,
-    records: np.ndarray,
-    outages: list[list[int]] | None,
-    earlier: dict | None,
-    raw_id: str,
-) -> dict[str, Any]:
-    receipts = records["ts_recv_ns"]
-    return {
-        "file": file_name,
-        "sha256": tick_hash(records),
-        "ticks": len(records),
-        "first_recv_ns": int(receipts[0]) if len(records) else None,
-        "last_recv_ns": int(receipts[-1]) if len(records) else None,
-        "outages": outages,
-        "merged": [*(earlier or {}).get("merged", []), raw_id],
-    }
+def _remove_stale(folder: Path, key: str, current: str, notes: list[str]) -> None:
+    """Remove the files of the day `key` older than its current day file `current`."""
+    current_ns = (folder / current).stat().st_mtime_ns
+    for path in day_files(folder, key):
+        if path.name != current and path.stat().st_mtime_ns <= current_ns:
+            _remove(path, "the replaced day file", notes)
 
 
-def _joined(earlier: dict | None, outages: tuple[Outage, ...] | None) -> list[list[int]] | None:
-    """The day's outages as stored: the earlier entry's and these, in start order; None
-    when either is not known."""
-    before = [] if earlier is None else earlier.get("outages")
-    if before is None or outages is None:
-        return None
-    spans = [*map(tuple, before), *((o.start_ns, o.end_ns) for o in outages)]
-    return [list(span) for span in sorted(spans)]
+def _remove(path: Path, what: str, notes: list[str]) -> None:
+    """Remove a file whose content is kept elsewhere; a failure is noted, and a later
+    finalize removes it."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        notes.append(
+            f"{what} {path.name} could not be removed ({exc}); a later finalize removes it"
+        )
 
 
-def _not_recorded(root: Path, exchange: str, symbol: str, day: dt.date, notes: list[str]) -> str:
-    waiting = raw_path(root, exchange, symbol, day).exists()
+def _not_recorded(folder: Path, exchange: str, symbol: str, day: dt.date) -> str:
+    waiting = bool(pending_raw_files(folder, day))
     advice = (
         f"its raw file is waiting: finalize {day} first (a recording finalizes when it stops)"
         if waiting
         else "record that day first"
     )
-    found = "; ".join([*notes, f"no ticks of {exchange}:{symbol} were recorded on {day}"])
-    return f"{found}: {advice}"
+    return f"no ticks of {exchange}:{symbol} were recorded on {day}: {advice}"
 
 
 __all__ = [
-    "RAW_SUFFIX",
-    "TICK_INDEX_VERSION",
     "DayWritten",
-    "Outage",
-    "RecordedDay",
+    "RecordingFacts",
     "finalize_day",
     "finalize_raw",
-    "load_day",
-    "load_index",
     "read_day",
-    "save_index",
-    "tick_hash",
+    "read_merged",
 ]

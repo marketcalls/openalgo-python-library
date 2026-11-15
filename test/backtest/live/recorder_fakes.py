@@ -1,6 +1,7 @@
-"""In-process fakes for the recorder's tests: a manual clock, a feed with the SDK's feed
-calls whose ticks and outages a test plays, and a script that plays them while the
-recorder waits. Nothing here opens a socket.
+"""In-process fakes for the recorder's tests: manual clocks, a feed with the SDK's feed
+calls whose ticks and outages a test plays, a script that plays them while the recorder
+waits, and the recording a test runs in a child process and kills. Nothing here opens a
+socket.
 
 The feed's calls and hook payloads are shaped as the SDK's `FeedAPI` makes them
 (openalgo/feed.py): `connect` returns whether the server accepted the API key,
@@ -13,7 +14,9 @@ The data messages are those of the SDK's quote callback (openalgo/_feed_ticks.py
 from __future__ import annotations
 
 import datetime as dt
+import os
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 NS = 1_000_000_000
@@ -22,6 +25,8 @@ IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 DAY = dt.date(2026, 11, 16)
 SBIN = {"exchange": "NSE", "symbol": "SBIN"}
 INFY = {"exchange": "NSE", "symbol": "INFY"}
+#: The exit code of the child process the kill test ends with `os._exit`.
+KILLED_EXIT_CODE = 9
 _MODES = {1: "ltp", 2: "quote", 3: "depth"}
 
 
@@ -53,14 +58,34 @@ def quote(symbol: str, ltp: float, *, volume: int = 0, ltt: Any = 0, exchange: s
     return {"type": "market_data", "symbol": symbol, "exchange": exchange, "mode": 2, "data": data}
 
 
-class ManualClock:
-    """The injected `Now`: it moves only when a test or the script moves it."""
+def raw_files(cache_dir: Path) -> list[Path]:
+    """Every raw tick file under a cache directory."""
+    return sorted(Path(cache_dir).rglob("*.raw"))
 
-    def __init__(self, at_ns: int) -> None:
-        self.ns = at_ns
 
-    def __call__(self) -> int:
-        return self.ns
+class Clocks:
+    """The injected clocks of a recording: `wall`, the UTC clock (`Now`), which a test may
+    step as a system clock is corrected, and `mono`, a monotonic clock that never steps.
+    Both start at `start_ns` and move together unless the wall clock is stepped."""
+
+    def __init__(self, start_ns: int) -> None:
+        self.wall_ns = start_ns
+        self.mono_ns = start_ns
+
+    def wall(self) -> int:
+        return self.wall_ns
+
+    def mono(self) -> int:
+        return self.mono_ns
+
+    def advance(self, ns: int) -> None:
+        """Time passes: both clocks move on."""
+        self.wall_ns += ns
+        self.mono_ns += ns
+
+    def step_wall(self, ns: int) -> None:
+        """The system clock is corrected by `ns` (negative: back)."""
+        self.wall_ns += ns
 
 
 class FakeFeed:
@@ -177,12 +202,12 @@ class FakeFeed:
 
 class Script:
     """The injected `wait` of a recording: it plays scripted events at their instants on
-    a manual clock. A wait returns right after the first event due before it would end,
-    as the recorder's own wait wakes when a tick arrives; else it moves the clock by the
-    time it was given."""
+    the monotonic clock (the wall clock's instants while it is not stepped). A wait
+    returns right after the first event due before it would end, as the recorder's own
+    wait wakes when a tick arrives; else time passes by what it was given."""
 
-    def __init__(self, clock: ManualClock) -> None:
-        self.clock = clock
+    def __init__(self, clocks: Clocks) -> None:
+        self.clocks = clocks
         self._events: list[tuple[int, int, Callable[[], None]]] = []
 
     def at(self, at_ns: int, action: Callable[[], None]) -> None:
@@ -191,12 +216,12 @@ class Script:
         self._events.sort(key=lambda event: event[:2])
 
     def __call__(self, seconds: float) -> None:
-        until_ns = self.clock.ns + round(seconds * NS)
+        until_ns = self.clocks.mono_ns + round(seconds * NS)
         if not self._events or self._events[0][0] > until_ns:
-            self.clock.ns = until_ns
+            self.clocks.advance(until_ns - self.clocks.mono_ns)
             return
         due_ns = self._events[0][0]
-        self.clock.ns = max(self.clock.ns, due_ns)
+        self.clocks.advance(max(due_ns - self.clocks.mono_ns, 0))
         while self._events and self._events[0][0] == due_ns:
             self._events.pop(0)[2]()
 
@@ -204,3 +229,26 @@ class Script:
 def interrupt() -> None:
     """Ctrl+C, as Python raises it in the waiting thread."""
     raise KeyboardInterrupt
+
+
+def killed_recording(cache_dir: str) -> None:
+    """A recording of SBIN from 10:00:00 that receives two ticks (taken at 10:00:00.200
+    and 10:00:00.500, on disk by the flush at 10:00:01) and is killed at 10:00:02 without
+    a chance to clean up. Run in a child process: it never returns."""
+    from openalgo.backtest._live.recorder import record
+
+    clocks = Clocks(ist_ns("10:00:00"))
+    feed = FakeFeed()
+    script = Script(clocks)
+    script.at(ist_ns("10:00:00.200"), lambda: feed.push(quote("SBIN", 812.4)))
+    script.at(ist_ns("10:00:00.500"), lambda: feed.push(quote("SBIN", 812.5)))
+    script.at(ist_ns("10:00:02"), lambda: os._exit(KILLED_EXIT_CODE))
+    record(
+        feed,
+        [SBIN],
+        now=clocks.wall,
+        monotonic=clocks.mono,
+        wait=script,
+        cache_dir=cache_dir,
+        stop_at_ns=ist_ns("10:01:00"),
+    )

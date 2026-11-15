@@ -113,14 +113,16 @@ def tick_from_feed(
     `message` is what a data callback of `FeedAPI` receives (see the module docstring);
     `recv_ns` is when the loop took it off its queue, UTC nanoseconds, and becomes
     `Tick.ts_recv_ns`. `ts_event_ns` is the last trade time by the rule of the module
-    docstring; `volume` the day's cumulative volume when the data holds one (the SDK's
-    quote data holds 0 when the server sent none); `bid` and `ask` the best levels of
-    the book in depth mode, None for an empty side or a level priced 0.
+    docstring; `volume` the day's cumulative volume when the data holds one, None when
+    it holds none, and 0 when it holds 0 (the SDK fills a quote volume the server left
+    out with 0; the live bars apply their own rule to it); `bid` and `ask` the best
+    levels of the book in depth mode, None for an empty side or a level priced 0.
 
     Returns None for a message that is no market data of an instrument and for one
     whose LTP is not a positive finite number or whose volume, bid or ask is present
-    but not a usable number; `tally`, when given, counts them and every implausible
-    last trade time. Never raises for the content of a message.
+    but not a usable number (a number too large to convert among them); `tally`, when
+    given, counts them and every implausible last trade time. Never raises for the
+    content of a message.
     """
     tally = TickTally() if tally is None else tally
     parts = _market_data(message)
@@ -158,10 +160,14 @@ def _market_data(message: Any) -> tuple[str, str, int, Mapping[str, Any]] | None
 
 
 def _real(value: Any) -> float | None:
-    """`value` as a finite float when it is a real number (never a bool), else None."""
+    """`value` as a finite float when it is a real number (never a bool), else None: also
+    for one too large for a float."""
     if isinstance(value, bool) or not isinstance(value, numbers.Real):
         return None
-    number = float(value)
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):
+        return None
     return number if math.isfinite(number) else None
 
 
@@ -206,9 +212,15 @@ def _best(levels: Any) -> float | None:
 
 def _count(value: Any) -> int | float | None:
     """A last trade time as a number: an int, a finite float or a string of decimal
-    digits; None for anything else."""
+    digits; None for anything else, a string of more digits than Python reads into an
+    int among them."""
     if isinstance(value, str):
-        return int(value) if value.isascii() and value.isdecimal() else None
+        if not (value.isascii() and value.isdecimal()):
+            return None
+        try:
+            return int(value)
+        except ValueError:
+            return None
     if isinstance(value, numbers.Integral) and not isinstance(value, bool):
         return int(value)
     return _real(value)

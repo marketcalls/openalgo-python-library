@@ -284,6 +284,34 @@ def test_a_message_that_is_no_market_data_of_an_instrument_makes_no_tick_and_is_
     assert (tick, tally.not_ticks, tally.unusable) == (None, 1, 0)
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        pytest.param(ltp_message({"ltp": 10**400}), id="an LTP too large for a float"),
+        pytest.param(quote_message(volume=10**400), id="a volume too large for a float"),
+        pytest.param(depth_message([level(10**400)], []), id="a bid too large for a float"),
+    ],
+)
+def test_a_number_too_large_to_convert_makes_no_tick_and_is_counted(message):
+    tick, tally = adapt(message)
+
+    assert (tick, tally.unusable) == (None, 1)
+
+
+@pytest.mark.parametrize(
+    "ltt",
+    [
+        pytest.param("9" * 5_000, id="a string of more digits than an int may be read from"),
+        pytest.param(10**400, id="an int beyond every unit"),
+        pytest.param(1e300, id="a float beyond every unit"),
+    ],
+)
+def test_a_last_trade_time_too_large_to_convert_is_dropped_and_counted(ltt):
+    tick, tally = adapt(ltp_message({"ltp": 812.4, "ltt": ltt}))
+
+    assert (tick.ts_event_ns, tally.event_times_rejected) == (None, 1)
+
+
 def test_the_tally_counts_the_messages_that_made_no_tick_as_dropped():
     tally = TickTally()
     for message in (quote_message(ltp=0), {"type": "subscribe"}, quote_message()):
