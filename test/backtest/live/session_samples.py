@@ -26,7 +26,7 @@ from fake_openalgo import USERNAME, FakeOpenAlgo
 from plan_samples import DAY, candles, ist, market
 
 import openalgo.backtest as bt
-from openalgo.backtest._live._session_loop import StopFlag
+from openalgo.backtest._live._session_parts import StopFlag
 from openalgo.backtest._live._types import LOGGER_NAME
 from openalgo.backtest._live.clients import (
     ALERTS_CLIENT_TIMEOUT_S,
@@ -211,6 +211,12 @@ class BuyAndHold(bt.Strategy):
             self.done = True
 
 
+class Hold(BuyAndHold):
+    """Buys at its first decision and never sells (the square-off or a stop does)."""
+
+    hold = 0
+
+
 class BuyWhenFlat(bt.Strategy):
     """Buys `qty` units at every decision at which it holds none."""
 
@@ -249,6 +255,8 @@ __all__ = [
     "TRADE_EVERY_S",
     "WAIT_MAX_S",
     "BuyAndHold",
+    "Hold",
+    "StopFlag",
     "alerts",
     "BuyWhenFlat",
     "Raises",

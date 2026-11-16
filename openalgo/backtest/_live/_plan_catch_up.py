@@ -89,7 +89,12 @@ class StrategyPlan:
         return tuple(opened for opened, _ in self._settled(read_ns, before))
 
     def catch_up(
-        self, bars: Iterable[LiveBar], read_ns: int, *, before: int | None = None
+        self,
+        bars: Iterable[LiveBar],
+        read_ns: int,
+        *,
+        before: int | None = None,
+        refuse_orders: bool = True,
     ) -> tuple[int, ...]:
         """Catch up to a read of today's candles begun at `read_ns` (UTC nanoseconds; the
         start of the read, not its end, since a slice that settled during it may be
@@ -99,10 +104,13 @@ class StrategyPlan:
         of the `plan` module docstring, each run deciding nothing, and a candle of a
         slice marked missing is taken by the series. Candles of the other slices
         released already are left alone. Returns the opens of the slices it marked
-        missing, oldest first.
+        missing, oldest first. Once the session trades (`refuse_orders` False) the
+        kernel's commands are the session's to take: an exit sent when a cancel ends, an
+        engine exit.
 
         Raises ConfigError for a bar that is not a candle of the strategy's instrument,
-        and LiveError when the catch-up made an order or the exchange's session ended."""
+        and LiveError when the catch-up made an order (with `refuse_orders`) or the
+        exchange's session ended."""
         candles = self._candles(bars)
         for opened in self.missing:
             if opened in candles:
@@ -117,7 +125,7 @@ class StrategyPlan:
                 self.series.mark_missing(release.opened)
             self._release()
             self._drive()
-        if found:
+        if found and refuse_orders:
             self._refuse_orders()
         return tuple(release.opened for release in found if release.kind == MISSING)
 

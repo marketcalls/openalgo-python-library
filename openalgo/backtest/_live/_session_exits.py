@@ -22,12 +22,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .._engine import call
 from .._layout import NANOS_PER_SECOND
-from ._plan_catch_up import INSTRUMENT
 from ._session_trader import Trader
 from ._types import LOGGER_NAME, AlertKind, OrderIntent, Purpose
-from ._venue_requests import LIVE_PRODUCT
 
 logger = logging.getLogger(LOGGER_NAME)
 
@@ -64,7 +61,10 @@ class ExitRetries:
         rejections = self._rejections.get(name, 0) + 1
         self._rejections[name] = rejections
         session.event("exit_rejected", strategy=name, attempt=rejections, reason=why)
-        if rejections >= EXIT_ATTEMPTS:
+        if rejections > EXIT_ATTEMPTS:
+            # The kernel's own re-send at a later open, rejected again: alerted already.
+            return
+        if rejections == EXIT_ATTEMPTS:
             self._due_ns.pop(name, None)
             if trader.lock(EXIT_FAILED_LOCK):
                 session.event("lock", strategy=name, reason=EXIT_FAILED_LOCK)
@@ -91,7 +91,7 @@ class ExitRetries:
             if due_ns is None or now_ns < due_ns or session.locked:
                 continue
             del self._due_ns[name]
-            what = call(trader.engine.request_exit, INSTRUMENT, LIVE_PRODUCT, self._reason[name])
+            what = trader.request_exit(self._reason[name])
             session.event("exit_retried", strategy=name, outcome=what)
             logger.info("%s: exit asked for again (%s)", name, what)
 

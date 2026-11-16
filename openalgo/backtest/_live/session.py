@@ -22,7 +22,7 @@ The sequence:
    the banner and the countdown while the loop turns, the feed, then trading.
 4. **The loop** (`_session_loop.Session.step`) until `Control` (`_session_stop`) gives its
    verdict: the end of the day, Ctrl+C's safe stop, a mode breach.
-5. **The close** (`_session_stop.close_session`): the kernel sessions stopped where they
+5. **The close** (`_session_close.close_session`): the kernel sessions stopped where they
    stand, the summary, everything closed. Returns a `SessionOutcome`.
 
 Errors mid-session (3.5): a strategy's exception stops the session safely by `on_stop`,
@@ -48,10 +48,12 @@ from typing import Any
 
 from ..errors import JournalError, LiveError
 from ..strategy import Strategy
-from ._session_loop import LOOP_WAIT_MAX_S, Session, SessionStopped, StopFlag
+from ._session_close import SessionOutcome, close_session
+from ._session_loop import LOOP_WAIT_MAX_S, Session
 from ._session_news import WorkerFailedError
+from ._session_parts import SessionStopped, StopFlag
 from ._session_start import StartSettings, begin_trading, open_session
-from ._session_stop import CTRL_C, ERROR, Control, SessionOutcome, close_session
+from ._session_stop import CTRL_C, ERROR, Control
 from ._session_trader import StrategyFailed
 from ._types import LOGGER_NAME, AlertKind, Now, Sleep
 from .clients import SessionClients
@@ -113,7 +115,7 @@ def run_session(
     session = open_session(strategy, client, settings, arguments)
     handlers = _stop_handlers(settings.stop) if signals else contextlib.nullcontext()
     with handlers:
-        return _run(session, settings, arguments.get("on_stop", "flatten"))
+        return _run(session, settings, session.parts.spec.arguments.on_stop)
 
 
 def _run(session: Session, settings: StartSettings, on_stop: str) -> SessionOutcome:

@@ -39,7 +39,6 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
-from .._calendar_convert import format_ist
 from .._engine import call
 from .._layout import NANOS_PER_SECOND
 from ..calendar import default_calendar
@@ -48,14 +47,16 @@ from ..strategy import Strategy
 from ._alerts_logs import configure_session_logs
 from ._journal_file import DEFAULT_BUSY_TIMEOUT_S
 from ._preflight_lock import live_root
-from ._session_loop import Session, SessionParts, StopFlag
+from ._session_banner import BANNER_ALERT_LINES, banner_lines
+from ._session_loop import Session
+from ._session_parts import SessionParts, StopFlag
 from ._session_trader import Trader, ist_instant
 from ._shared_alerts import SharedAlerts
 from ._types import LOGGER_NAME, AlertKind, Mode, Now, Sleep
 from .alerts import Alerts
 from .clients import SessionClients, derive
 from .data_worker import DataWorker
-from .feedlink import FeedSource
+from .feedlink import FeedLink, FeedSource
 from .guard import ModeGuard
 from .inbox import Inbox, WorkerFailed, WorkerReady
 from .journal import JOURNAL_FILE_NAME, Journal
@@ -129,15 +130,16 @@ def _open(
     guard = ModeGuard(clients.guard, now=now, alerts=shared)
     mode = guard.start()
     names = tuple(each.name for each in spec.strategies)
-    sender = Alerts(
-        clients.alerts,
-        username=options.alerts_to,
-        mode=mode,
-        now=now,
-        strategies=names,
-        start_sender=settings.threads,
+    sender = stack.enter_context(
+        Alerts(
+            clients.alerts,
+            username=options.alerts_to,
+            mode=mode,
+            now=now,
+            strategies=names,
+            start_sender=settings.threads,
+        )
     )
-    stack.callback(sender.close)
     shared.attach(sender)
     broker = _broker(clients.data, options.account)
     account = spec.account_name(broker)
@@ -146,7 +148,8 @@ def _open(
     )
     folder = live_root(account, options.live_dir) / account
     logs = stack.enter_context(configure_session_logs(folder / LOGS_FOLDER, spec.day, now=now))
-    # The alerts close before the logs, so what they say at their end is in the day's log.
+    # The alerts close before the logs (closing them twice is safe), so what they say at
+    # their end is in the day's log.
     stack.callback(sender.close)
     report = _preflight(spec, clients, mode, shared, settings)
     banner = guard.banner(report.broker)
@@ -197,7 +200,6 @@ def _open(
         worker=worker,
         inbox=inbox,
         stack=stack,
-        traders=(),
     )
     session = Session(
         parts,
@@ -208,7 +210,7 @@ def _open(
         emit=settings.emit,
         wait_max_s=settings.wait_max_s,
     )
-    parts.traders = session.traders = _traders(session, report.funds_available)
+    session.traders = _traders(session, report.funds_available)
     for note in (*report.warnings, *plan.warnings):
         session.warn(note)
     return session
@@ -218,11 +220,13 @@ def _broker(client: Any, account: str | None) -> str:
     """The broker `ping` names (3.1 step 5). Raises LiveError when OpenAlgo does not
     answer it."""
     answer = client.ping()
-    data = answer.get("data") if isinstance(answer, Mapping) else None
+    if not isinstance(answer, Mapping):
+        answer = {"message": repr(answer)}
+    data = answer.get("data")
     broker = data.get("broker") if isinstance(data, Mapping) else None
     if answer.get("status") == "success" and isinstance(broker, str) and broker.strip():
         return broker.strip()
-    words = answer.get("message") if isinstance(answer, Mapping) else answer
+    words = answer.get("message")
     raise LiveError(
         f"OpenAlgo did not answer ping with its broker ({words}): check that OpenAlgo is "
         "running, the API key is valid and the broker is logged in, then start again"
@@ -352,57 +356,26 @@ def begin_trading(session: Session, source: FeedSource) -> None:
         session.emit(line)
     session.alert(AlertKind.SESSION, "\n".join(lines[:BANNER_ALERT_LINES]))
     countdown(COUNTDOWN_SECONDS, emit=session.emit, sleep=session.pause)
-    session.watch(source)
+    instruments = [{"symbol": t.symbol, "exchange": t.exchange} for t in session.traders]
+    link = FeedLink(
+        source,
+        instruments=instruments,
+        inbox=parts.inbox,
+        updates=parts.worker.updates,
+        now=session.now,
+        sleep=session.pause,
+        threads=session.threads,
+    )
+    parts.stack.callback(link.close)
+    link.connect()
+    session.watch(link)
     for trader in session.traders:
         trader.unlock(STARTING_LOCK)
     session.trading = True
     session.event("trading")
 
 
-#: The banner's lines a SESSION alert carries.
-BANNER_ALERT_LINES = 4
-
-
-def banner_lines(session: Session) -> list[str]:
-    """The start banner (3.1 step 13): the mode first, then the funds, each strategy's
-    limits, the account's, the entry window and square-off, each instrument's freeze
-    cap, the cost model, the warnings."""
-    parts = session.parts
-    spec, report = parts.spec, parts.report
-    lines = [parts.banner, f"Funds available: Rs {report.funds_available:,.2f}"]
-    facts = {(fact.symbol, fact.exchange): fact for fact in report.instruments}
-    for each, trader in zip(spec.strategies, session.traders, strict=True):
-        lines.append(
-            f"{each.name}: {each.exchange}:{each.symbol} every {each.interval}, capital "
-            f"Rs {each.capital:,.2f}, daily loss limit Rs {each.max_daily_loss:,.2f}, "
-            f"square-off {_clock(trader.square_off_ns)} IST"
-        )
-        fact = facts.get((each.symbol, each.exchange))
-        freeze = None if fact is None else fact.freeze_quantity
-        lines.append(
-            f"{each.symbol}: freeze quantity {freeze if freeze else 'none'}; positions "
-            "opened without stop= have no stop at the broker"
-        )
-    if spec.arguments.account_max_daily_loss is not None:
-        limit = spec.arguments.account_max_daily_loss
-        lines.append(f"Account daily loss limit: Rs {limit:,.2f}")
-    costs = spec.strategies[0].plan.costs
-    lines.append(f"Charges modelled with: {costs or 'no cost model'}")
-    if parts.mode is Mode.SANDBOX:
-        lines.append(
-            "SANDBOX: OpenAlgo simulates the fills at its own prices; nothing reaches the broker"
-        )
-    lines += [f"Warning: {note}" for note in session.warnings]
-    return lines
-
-
-def _clock(ts_ns: int) -> str:
-    """ "HH:MM" of an instant, IST."""
-    return format_ist(ts_ns)[-9:-4]
-
-
 __all__ = [
-    "BANNER_ALERT_LINES",
     "LOGIN_ALERT_AT",
     "LOGIN_RETRY_EVERY_S",
     "LOGS_FOLDER",
@@ -410,7 +383,6 @@ __all__ = [
     "STARTING_LOCK",
     "WORKER_READY_TIMEOUT_S",
     "StartSettings",
-    "banner_lines",
     "begin_trading",
     "open_session",
 ]

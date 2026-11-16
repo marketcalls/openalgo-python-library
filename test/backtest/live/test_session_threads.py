@@ -6,13 +6,14 @@ These tests run the session's own threads (`threads=True`): the loop on the test
 thread, the order worker, the data worker and the alert sender on theirs. The fake's
 clock runs `SPEED` times faster than the wall clock, moved on by a driver thread that
 also plays the script (the trades, and the release of a blocked call), so a fake minute
-lasts a couple of real seconds. A client double holds one call of the order worker on
-an event until the script releases it.
+lasts a couple of real seconds. A client double holds one call of the order worker for
+a span of fake seconds.
 
-Two strategies trade: `Early` buys 10 SBIN at its first decision (14:42:01 IST) and
-sells them at its second (14:43:01); `Late` buys 10 INFY at its second decision
-(14:43:01). The session starts at 14:40:05 and is stopped with Ctrl+C at 14:47. The
-start runs on the wall clock too, so the first decision is read from what happened.
+Two strategies trade: `Early` buys 10 SBIN at its first decision and sells them at its
+second; `Late` buys 10 INFY at its second decision. The session starts at 14:40:05 IST
+and is stopped with Ctrl+C at 14:47. The start runs on the sped-up clock too, so when the
+first decision comes depends on how fast the start ran: the tests read it from what
+happened, and time the held call from it.
 """
 
 from __future__ import annotations

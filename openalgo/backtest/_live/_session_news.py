@@ -16,7 +16,7 @@ kernel, broker candles to the strategies, the feed's events to the feed link.
   strategy's entries locked, an ERROR alert).
 - `HeldFills`: kept for the stops supervisor.
 - `GuardLocked`: the session's guard lock (`Session.guard_locked`).
-- `Candles`: to the strategy of the instrument (`Trader.take_candles`).
+- `Candles`: to the strategy of the instrument (`Trader.candles`).
 - `FeedEvent`: to the feed link; a recovery resumes every bar builder over the outage and
   asks the worker to poll the orders the stream may have missed.
 - `WorkerFailed`: raised as `WorkerFailedError`, which stops the session (3.5).
@@ -297,6 +297,15 @@ class News:
             session.hand_over(list(handled.requests))
             if handled.applied is Applied.BOUND and resolution.update is not None:
                 self.apply_update(trader, resolution.update)
+            elif handled.applied is Applied.REJECTED:
+                session.rejected += 1
+                session.alert(
+                    AlertKind.REJECT,
+                    f"{_order_words(intent)} order was not placed: the order book does not "
+                    f"hold it (intent {intent.intent_id})",
+                )
+                kernel_order = trader.venue.kernel_order_of_intent(intent.intent_id)
+                session.exits.rejected(trader, kernel_order, intent, "not placed")
             elif resolution.kind is Resolved.AMBIGUOUS:
                 self._ambiguous(trader, intent, resolution.candidates)
 
@@ -326,7 +335,7 @@ class News:
                 "candles of %s:%s, which no strategy trades", message.exchange, message.symbol
             )
             return
-        for note in trader.take_candles(message.rows, message.read_ns):
+        for note in trader.candles.take(message.rows, message.read_ns):
             session.warn(note)
 
     def _data_failed(self, message: DataFailed) -> None:

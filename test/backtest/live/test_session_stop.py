@@ -17,7 +17,7 @@ import logging
 import pytest
 from fake_openalgo import BROKER, HOST
 from fake_openalgo.fixtures import *  # noqa: F403
-from session_samples import NS, BuyAndHold, Raises, alerts, ist, rig
+from session_samples import NS, BuyAndHold, Hold, Raises, alerts, ist, rig
 
 import openalgo.backtest as bt
 from openalgo.backtest._live import _session_trader
@@ -42,12 +42,6 @@ def lock_is_free(world) -> bool:
 
 def actions(world) -> list[tuple[str, int]]:
     return [(order.action, order.quantity) for order in world.orders()]
-
-
-class Hold(BuyAndHold):
-    """Buys and never sells."""
-
-    hold = 0
 
 
 class RestingEntry(bt.Strategy):

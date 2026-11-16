@@ -6,8 +6,8 @@ venue map, the slices it releases live, its decisions and its broker candles.
   each slice is released to the kernel once the bar builder has closed it, in order,
   with its bar built from ticks or none (a minute without a trade runs as a missing bar).
   The slices before it that the plan's catch-up has not released yet are released from
-  the broker's candles first (`take_candles`), or given up on at their last candle check
-  (`give_up`); a live slice waits behind them. After a start in the middle of the
+  the broker's candles first (`candles`), or given up on at their last candle check; a
+  live slice waits behind them. After a start in the middle of the
   session, the slice watching began in only seeds the bar builder: it is released with no
   bar and marked missing until its candle is read.
 - **Decisions** (`drive`): at each strategy bar close the bars are revealed and the
@@ -17,13 +17,8 @@ venue map, the slices it releases live, its decisions and its broker candles.
   is logged, and kept when it was skipped for missing data. An exception of the
   strategy's code is raised as `StrategyFailed`, after which the strategy is called no
   more.
-- **Candles** (`take_candles`): a candle of a slice before `first_live` goes to the
-  plan's catch-up; one of a live slice is taken by the series, checked against the
-  slice's tick bar when it has one (`CandleCheck.accepted`, the drift kept), and skipped
-  when it equals the bar the series has. A slice whose candle no read holds, while a read
-  made `CANDLE_LAST_READ_S` or more after its close holds a later one, had no trade: its
-  missing mark is lifted without a bar (`LiveSeries.no_trade`). `wanted` lists the slices
-  the next candle check asks for.
+- **Candles**: the strategy's broker candles are `candles`, a `_session_candles.
+  CandleKeeper`.
 
 Times are UTC nanoseconds, prices rupees, quantities units. Used by the loop only.
 """
@@ -43,14 +38,11 @@ from .._driver import deliver
 from .._engine import call
 from .._layout import NANOS_PER_SECOND
 from ..errors import JournalError
-from ._bars_candle import BarDrift, CandleCheck, candle_bar
 from ._journal_rows import state_json
-from ._order_state import ENTRY_PURPOSES
 from ._plan_catch_up import INSTRUMENT, StrategyPlan
-from ._plan_release import CANDLE_LAST_READ_S, missing_note
+from ._session_candles import CandleKeeper
 from ._types import LOGGER_NAME, LiveBar, Now
 from ._venue_requests import LIVE_PRODUCT, OrderRequest
-from .bars import DEFAULT_INTERVAL_NS
 from .venue_map import VenueMap
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -61,7 +53,6 @@ SLOW_CALLBACK_WARN_S = 1.0
 #: Why a decision was skipped (`Skipped.reason`).
 SKIP_MISSING = "missing data"
 
-_LAST_READ_NS = round(CANDLE_LAST_READ_S * NANOS_PER_SECOND)
 _SLOW_NS = round(SLOW_CALLBACK_WARN_S * NANOS_PER_SECOND)
 
 
@@ -112,17 +103,17 @@ class Trader:
         self.square_off_ns, self.close_ns = square_off_ns, close_ns
         self._now, self._event = now, event
         self._opens = [opened for opened, _ in part.slices]
-        self._closes = {opened: closed for opened, closed in part.slices}
+        self.candles = CandleKeeper(part, event=event)
         self.first_live: int | None = None
         self.decide_from_ns: int | None = None
         self._seed: int | None = None
         self._closed: dict[int, LiveBar | None] = {}
-        self._needs: set[int] = set()
-        self.checks = CandleCheck()
         self.skipped: list[Skipped] = []
         #: The kernel's reason of each risk exit placed, by kernel order.
         self.reasons: dict[int, str] = {}
         self.failed = False
+        #: True once the kernel session has finished: it takes no call that changes it.
+        self.finished = False
         self._slow_warned = self._state_warned = False
         self._state_text = self._state_json()
 
@@ -130,11 +121,6 @@ class Trader:
     def engine(self) -> Any:
         """The strategy's kernel session."""
         return self.part.engine
-
-    @property
-    def drifts(self) -> list[BarDrift]:
-        """The drift of every broker candle accepted for a tick bar, in order."""
-        return self.checks.drifts
 
     # ----- releases ----------------------------------------------------------------
 
@@ -154,6 +140,7 @@ class Trader:
             else:
                 first = seed = max(0, index - 1)
         self.first_live, self._seed = first, seed
+        self.candles.watch(first)
         whole = first if seed is None else first + 1
         self.decide_from_ns = closes[min(whole, len(closes) - 1)]
 
@@ -166,7 +153,7 @@ class Trader:
             if self.first_live is None or index < self.first_live:
                 continue
             self._closed[index] = mine.get(opened)
-            self._needs.add(opened)
+            self.candles.closed(opened)
 
     def release_due(self) -> int:
         """Release every closed live slice that is next in order; how many."""
@@ -178,102 +165,28 @@ class Trader:
             released += 1
         return released
 
-    # ----- candles -----------------------------------------------------------------
-
-    def wanted(self, now_ns: int) -> tuple[int, ...]:
-        """The opens of the slices the next candle check asks for: the live slices
-        closed without an accepted candle, the slices marked missing, and the slices
-        before `first_live` closed by `now_ns` that are not released yet."""
-        part = self.part
-        gap = {
-            opened
-            for opened, closed in part.slices[part.released : self.first_live or 0]
-            if closed <= now_ns
-        }
-        return tuple(sorted(self._needs | set(part.missing) | gap))
-
-    def take_candles(self, rows: Iterable[Any], read_ns: int) -> list[str]:
-        """Take a read of the broker's candles begun at `read_ns` (module docstring);
-        returns the warnings of the slices the catch-up marked missing."""
-        part, calendar = self.part, self.part.calendar
-        candles = [
-            candle_bar(self.symbol, self.exchange, row, DEFAULT_INTERVAL_NS, calendar=calendar)
-            for row in rows
-        ]
-        marked = part.catch_up(candles, read_ns, before=self.first_live)
-        for candle in candles:
-            index = bisect.bisect_left(self._opens, candle.ts_open_ns)
-            if self.first_live is not None and self.first_live <= index < part.released:
-                self._live_candle(candle)
-        self._no_trade({candle.ts_open_ns for candle in candles}, read_ns)
-        return self._notes(marked, none_today=not candles)
-
-    def give_up(self, now_ns: int) -> list[str]:
-        """Release, as a read with no candle begun at `now_ns` would, the slices before
-        `first_live` whose last candle check has passed with none found; their warnings."""
-        part = self.part
-        pending = part.slices[part.released : self.first_live or 0]
-        if not pending or now_ns < pending[0][1] + _LAST_READ_NS:
-            return []
-        return self._notes(part.catch_up((), now_ns, before=self.first_live), none_today=True)
-
-    def _live_candle(self, candle: LiveBar) -> None:
-        series, opened = self.part.series, candle.ts_open_ns
-        if series.bar(opened) == candle:
-            self._needs.discard(opened)
-            return
-        tick_bar = series.tick_bar(opened)
-        if tick_bar is None:
-            series.take(candle)
-            self._needs.discard(opened)
-            return
-        if self.checks.accepted(tick_bar, candle) is candle:
-            series.take(candle)
-            self._needs.discard(opened)
-            drift = self.checks.drifts[-1]
-            self._event(
-                "drift",
-                strategy=self.name,
-                slice_open_ns=opened,
-                open=drift.open,
-                high=drift.high,
-                low=drift.low,
-                close=drift.close,
-                volume=drift.volume,
-            )
-
-    def _no_trade(self, read: set[int], read_ns: int) -> None:
-        if not read:
-            return
-        latest, part = max(read), self.part
-        released = set(self._opens[: part.released])
-        for opened in sorted(self._needs | set(part.missing)):
-            done = read_ns >= self._closes[opened] + _LAST_READ_NS
-            if opened in released and opened < latest and opened not in read and done:
-                part.series.no_trade(opened)
-                self._needs.discard(opened)
-
-    def _notes(self, marked: tuple[int, ...], *, none_today: bool) -> list[str]:
-        if not marked:
-            return []
-        return [missing_note(self.name, self.symbol, self.exchange, marked, none_today=none_today)]
-
     # ----- decisions ---------------------------------------------------------------
 
-    def drive(self, *, deciding: bool) -> bool:
-        """Run the kernel's pauses until it waits (module docstring); True when it
-        finished. `deciding` False reveals and delivers but decides nothing (the session
-        is stopping). Raises StrategyFailed for an exception of the strategy's code."""
+    def drive(self, *, deciding: bool) -> None:
+        """Run the kernel's pauses until it waits (module docstring). `deciding` False
+        reveals and delivers but decides nothing (the session is stopping). A kernel
+        session that finished by itself (the exchange's close, with nothing working) calls
+        `on_stop`, as a backtest's end does, and is driven no more (`finished`). Raises
+        StrategyFailed for an exception of the strategy's code."""
         part, decide_from_ns = self.part, self.decide_from_ns
-        while True:
+        while not self.finished:
             kind, decided_at, rows, events, timers = call(part.engine.advance)
             if kind == "waiting":
-                return False
+                return
             bars = part.context.reveal(decided_at, rows)
             if events and not self.failed:
                 self._calling(deliver, part.strategy, part.context, events)
             if kind == "finished":
-                return True
+                self.finished = True
+                logger.info("%s: the session's close ended its kernel session", self.name)
+                if not self.failed:
+                    self._calling(part.strategy.on_stop)
+                return
             decides = deciding and not self.failed
             decides = decides and decide_from_ns is not None and decided_at >= decide_from_ns
             if kind == "timers":
@@ -326,6 +239,8 @@ class Trader:
     def commands(self) -> list[OrderRequest]:
         """The kernel's commands since the last call, as the order worker's requests; the
         reason of each risk exit placed is kept (`reasons`)."""
+        if self.finished:
+            return []
         commands = call(self.engine.take_commands)
         for command in commands:
             if command.get("command") == "place" and command.get("reason"):
@@ -347,22 +262,34 @@ class Trader:
         return self.open_units() == 0 and not self.working()
 
     def entry_orders(self) -> list[int]:
-        """The working orders that open or add to the position."""
-        found = []
-        for kernel_order in self.working():
-            intent = self.venue.intent_of(kernel_order)
-            if intent.purpose in ENTRY_PURPOSES:
-                found.append(kernel_order)
-        return found
+        """The working orders that open or add to the position: those not reduce-only
+        (the kernel classes a sale beyond what closes the position as an entry too)."""
+        return [
+            kernel_order
+            for kernel_order in self.working()
+            if not call(self.engine.order, kernel_order)["reduce_only"]
+        ]
 
     def lock(self, reason: str) -> bool:
         """Lock the strategy's entries for `reason`; True when they were not locked for
-        it."""
-        return bool(call(self.engine.lock_entries, reason))
+        it (False once the kernel session finished: it takes no entry)."""
+        return not self.finished and bool(call(self.engine.lock_entries, reason))
 
     def unlock(self, reason: str) -> bool:
         """Lift the entry lock of `reason`; True when it was set."""
-        return bool(call(self.engine.unlock_entries, reason))
+        return not self.finished and bool(call(self.engine.unlock_entries, reason))
+
+    def request_exit(self, reason: str) -> str | None:
+        """Ask the kernel to exit the position for `reason` (one of its RISK_EXIT_REASONS);
+        what it did (its EXIT_REQUESTS), or None once the kernel session finished."""
+        if self.finished:
+            return None
+        return str(call(self.engine.request_exit, INSTRUMENT, LIVE_PRODUCT, reason))
+
+    def cancel(self, kernel_order: int) -> None:
+        """Ask the kernel to cancel a working order (nothing once it finished)."""
+        if not self.finished:
+            call(self.engine.cancel, kernel_order)
 
     def state_changed(self) -> dict[str, Any] | None:
         """The strategy's `self.state` when it changed since the last call, else None. A

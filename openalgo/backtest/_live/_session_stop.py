@@ -1,5 +1,5 @@
-"""How a live session stops (16-session-design 3.3 to 3.5, 6.2; unit 8): the duties by time
-that end it (`Control`), and the common close (`close_session`).
+"""When a live session stops (16-session-design 3.3 to 3.5, 6.2; unit 8): the duties by
+time that end it (`Control`). The common close is `_session_close`.
 
 **Control** runs in the loop's step D once the session trades:
 
@@ -22,32 +22,17 @@ that end it (`Control`), and the common close (`close_session`).
 - **A strategy's exception** (3.5): an ERROR alert, then the safe stop by `on_stop`.
 - The slices the plan's catch-up still owns are given up on at their last candle check.
 
-**The common close** (3.3 step 5): `self.state` saved, the order worker stopped, each
-kernel session stopped where it stands (`stop_session`, R20) with its last events
-delivered, `on_stop` called and `finish` read, the DAILY_SUMMARY alert, then everything
-the start opened closed in reverse (the feed, the data worker, journal L, the logs, the
-alerts, the lock). A journal failure or another error closes the same way without the
-flatten. What the reconciler (unit 12) adds is not done yet: no final book read.
-
 Times are UTC nanoseconds, quantities units.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Any
 
-from .._driver import deliver
-from .._engine import call
 from .._layout import NANOS_PER_SECOND
-from ._alerts_summary import SessionSummary, summary_text
-from ._plan_catch_up import INSTRUMENT
 from ._session_loop import Session
-from ._session_trader import Skipped, StrategyFailed, Trader
+from ._session_trader import StrategyFailed, Trader
 from ._types import LOGGER_NAME, AlertKind
-from ._venue_requests import LIVE_PRODUCT
-from .bars import BarDrift
 
 logger = logging.getLogger(LOGGER_NAME)
 
@@ -68,48 +53,6 @@ OPERATOR_STOP = "operator_stop"
 SESSION_END, CTRL_C, MODE_BREACH, ERROR = "session_end", "ctrl_c", "mode_breach", "error"
 
 _NS = NANOS_PER_SECOND
-
-
-@dataclass(frozen=True)
-class OpenPosition:
-    """A position still open when the session ended: the strategy, the instrument, its
-    signed units, and a note for the operator."""
-
-    strategy: str
-    symbol: str
-    exchange: str
-    units: float
-    note: str
-
-
-@dataclass(frozen=True)
-class SessionOutcome:
-    """What one run of a live session leaves (the public `SessionResult` is built from it
-    in a later unit): the `mode` ("sandbox" or "live"), `broker`, `account`, IST `day`,
-    `started_ns` and `ended_ns`, `stopped_by` ("session_end", "ctrl_c", "mode_breach",
-    "error"), `restarts`, the `strategies` in call order, `outputs` (each kernel
-    session's `finish()` tables by strategy), `summary` (the day's figures),
-    `open_positions`, `mode_breach` (the guard's text or None), `warnings`,
-    `skipped_decisions`, `drift` (the accepted candles' drift) and `paths` (journal,
-    log, events)."""
-
-    mode: str
-    broker: str
-    account: str
-    day: Any
-    started_ns: int
-    ended_ns: int
-    stopped_by: str
-    restarts: int
-    strategies: tuple[str, ...]
-    outputs: dict[str, Any]
-    summary: SessionSummary
-    open_positions: tuple[OpenPosition, ...]
-    mode_breach: str | None
-    warnings: tuple[str, ...]
-    skipped_decisions: tuple[Skipped, ...]
-    drift: tuple[BarDrift, ...]
-    paths: dict[str, str] = field(default_factory=dict)
 
 
 class Control:
@@ -150,10 +93,10 @@ class Control:
         """Step D's stop and end-of-day duties."""
         session = self._session
         for trader in session.traders:
-            for note in trader.give_up(now_ns):
+            for note in trader.candles.give_up(now_ns):
                 session.warn(note)
         session.exits.duties(now_ns)
-        if self.verdict is not None:
+        if self.verdict is not None or not session.trading:
             return
         requested = session.stop.count
         if requested and not self.stopping:
@@ -180,14 +123,14 @@ class Control:
         for trader in session.traders:
             trader.lock(OPERATOR_STOP)
             for kernel_order in trader.entry_orders():
-                call(trader.engine.cancel, kernel_order)
+                trader.cancel(kernel_order)
         if session.locked:
             self.verdict = MODE_BREACH
             return
         if self._on_stop == "flatten":
             for trader in session.traders:
                 if trader.open_units():
-                    what = call(trader.engine.request_exit, INSTRUMENT, LIVE_PRODUCT, OPERATOR_STOP)
+                    what = trader.request_exit(OPERATOR_STOP)
                     session.event("exit_requested", strategy=trader.name, outcome=what)
 
     def _stop_due(self, now_ns: int) -> None:
@@ -268,118 +211,6 @@ def _open_lines(traders: tuple[Trader, ...], what: str) -> list[str]:
     ]
 
 
-def close_session(
-    session: Session, stopped_by: str, *, journal_works: bool = True
-) -> SessionOutcome:
-    """The common close (module docstring); returns the session's outcome. Every part is
-    closed whatever another does; a failure is logged, and the first is raised once all
-    are closed (as `LiveError` from the stack)."""
-    parts = session.parts
-    open_positions = _open_positions(session)
-    if journal_works:
-        _save_states(session)
-    parts.worker.close()
-    outputs: dict[str, Any] = {}
-    figures = [0.0, 0.0, 0]
-    for trader in session.traders:
-        outputs[trader.name] = _stop_engine(trader, figures)
-    flat = not open_positions
-    summary = SessionSummary(
-        day=parts.spec.day,
-        mode=parts.mode,
-        broker=parts.broker,
-        strategies=tuple(t.name for t in session.traders),
-        closed_trades=int(figures[2]),
-        gross_pnl=figures[0],
-        charges=figures[1],
-        slippage=None,
-        rejected_orders=session.rejected,
-        unprotected_seconds=0.0,
-        reconcile_mismatches=session.mismatches,
-        undelivered_alerts=parts.sender.undelivered,
-        flat=flat,
-    )
-    session.alert(AlertKind.DAILY_SUMMARY, summary_text(summary))
-    if not session.threads:
-        # Under the test seam no sender thread posts: the queue goes now, as it would.
-        parts.sender.deliver_queued()
-    session.event("closed", stopped_by=stopped_by)
-    ended_ns = session.now()
-    paths = {
-        "journal": str(parts.journal.path),
-        "log": str(parts.logs.log_path),
-        "events": str(parts.logs.events_path),
-    }
-    parts.stack.close()
-    return SessionOutcome(
-        mode=parts.mode.value,
-        broker=parts.broker,
-        account=parts.account,
-        day=parts.spec.day,
-        started_ns=session.started_ns,
-        ended_ns=ended_ns,
-        stopped_by=stopped_by,
-        restarts=parts.journal_session.starts - 1,
-        strategies=tuple(t.name for t in session.traders),
-        outputs=outputs,
-        summary=summary,
-        open_positions=open_positions,
-        mode_breach=None if session.breach is None else session.breach_text,
-        warnings=tuple(session.warnings),
-        skipped_decisions=tuple(s for t in session.traders for s in t.skipped),
-        drift=tuple(d for t in session.traders for d in t.drifts),
-        paths=paths,
-    )
-
-
-def _open_positions(session: Session) -> tuple[OpenPosition, ...]:
-    note = (
-        "known as of the mode breach"
-        if session.locked
-        else "no stop at the broker: close it by hand"
-    )
-    return tuple(
-        OpenPosition(trader.name, trader.symbol, trader.exchange, units, note)
-        for trader in session.traders
-        if (units := trader.open_units()) != 0
-    )
-
-
-def _save_states(session: Session) -> None:
-    for trader in session.traders:
-        state = trader.state_changed()
-        if state is not None:
-            try:
-                session.parts.journal.put_user_state(trader.name, state)
-            # The close goes on: the error is the session's to report, not to stop it.
-            except Exception:
-                logger.exception("%s: self.state not saved at the close", trader.name)
-
-
-def _stop_engine(trader: Trader, figures: list[float]) -> Any:
-    """Stop a kernel session where it stands, deliver its last events, call `on_stop`,
-    and return its `finish()` tables; adds its gross P&L, charges and closed trades to
-    `figures`."""
-    engine, part = trader.engine, trader.part
-    _equity, _cash, realized, unrealized, costs, _margin = call(engine.account)
-    kind, decided_at, rows, events, _timers = call(engine.stop_session)
-    part.context.reveal(decided_at, rows)
-    if not trader.failed:
-        try:
-            if events:
-                deliver(part.strategy, part.context, events)
-            part.strategy.on_stop()
-        # The close goes on whatever the strategy does at its end; its error is logged.
-        except Exception:
-            logger.exception("%s raised in its last callbacks", trader.name)
-    output = call(engine.finish)
-    figures[0] += realized + unrealized
-    figures[1] += costs
-    figures[2] += len(output["trades"]["trade_id"])
-    logger.info("%s stopped where it stood (%s)", trader.name, kind)
-    return output
-
-
 def _s(seconds: float) -> int:
     return round(seconds * _NS)
 
@@ -397,7 +228,4 @@ __all__ = [
     "SQUARE_OFF_VERIFY_AFTER_S",
     "UNPROTECTED_REMINDER_EVERY_S",
     "Control",
-    "OpenPosition",
-    "SessionOutcome",
-    "close_session",
 ]

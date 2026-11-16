@@ -103,3 +103,17 @@ def test_a_decision_on_a_bar_with_a_minute_of_no_data_is_skipped(
         (ist(14, 45), "missing data")
     ]
     assert any("marked missing" in warning for warning in outcome.warnings)
+
+
+def test_a_seed_minute_with_no_trade_is_lifted_once_a_later_candle_is_read(
+    make_fake_openalgo, monkeypatch, tmp_path
+):
+    Every5.seen = []
+    world = rig(make_fake_openalgo, monkeypatch, tmp_path, start=(14, 40, 58), trades_until=None)
+    # SBIN trades at the start, then not in the 14:41 minute, then every 10 s.
+    world.script.trade()
+    world.script.trades(ist(14, 42), ist(15, 2))
+    world.stop_at(ist(14, 51))
+    outcome = world.run(Every5)
+    assert Every5.seen == [ist(14, 45), ist(14, 50)]
+    assert outcome.skipped_decisions == ()

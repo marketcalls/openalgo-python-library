@@ -18,6 +18,7 @@ import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from session_samples import BuyAndHold, BuyWhenFlat, alerts, ist, rig
 
+import openalgo.backtest as bt
 from openalgo.backtest._live._types import LOGGER_NAME
 
 
@@ -136,3 +137,32 @@ def test_F89_an_entry_whose_fill_is_late_blocks_a_second_entry_live_in_flight(wo
     orders = outcome.outputs["BuyWhenFlat"]["orders"]
     assert "live_in_flight" in orders["reject_code"]
     assert world.fake.position("SBIN", "NSE") == 0
+
+
+class RestingBuy(bt.Strategy):
+    """Rests a LIMIT buy of 10 SBIN far below the market at its first decision."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "1m"
+
+    def on_bar(self, bar):
+        if not self.orders and not self.position.qty:
+            self.buy(10, price=400.0)
+
+
+def test_a_fill_the_kernel_refuses_locks_the_strategys_entries_and_is_alerted(world, caplog):
+    def overfill():
+        # The stream reports 15 units filled of the resting order of 10.
+        sent = world.fake.log.of("order_update", "sent")
+        message = dict(sent[-1].detail["message"])
+        message.update(quantity=15, filled_quantity=15, pending_quantity=0, average_price=400.0)
+        message["order_status"] = "complete"
+        world.feed.deliver_update(message)
+
+    world.script.at(ist(14, 43, 30), overfill)
+    world.stop_at(ist(14, 45))
+    outcome = world.run(RestingBuy)
+    assert len(alerts(caplog, "reconcile_mismatch")) == 1
+    assert outcome.summary.reconcile_mismatches == 1
+    locks = [r.getMessage() for r in caplog.records if "too_many_units" in r.getMessage()]
+    assert locks
+    assert [order.action for order in world.orders()] == ["BUY"]

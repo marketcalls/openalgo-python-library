@@ -25,35 +25,26 @@ to the worker; the ERROR alert lists each position. Times are UTC nanoseconds.
 from __future__ import annotations
 
 import collections
-import contextlib
 import logging
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from typing import Any
 
 from .._calendar_convert import format_ist
 from .._layout import NANOS_PER_SECOND
 from ..errors import LiveError
 from ._guard_breach import ModeBreach, breach_text
-from ._journal_reads import JournalSession
-from ._preflight_plan import PreflightReport
 from ._session_exits import ExitRetries
 from ._session_news import News
+from ._session_parts import SessionParts, SessionStopped, StopFlag
 from ._session_trader import Trader
-from ._types import LOGGER_NAME, AlertKind, Mode, Now, Sleep, Tick
+from ._types import LOGGER_NAME, AlertKind, Now, Sleep, Tick
 from ._venue_requests import CancelRequest, ModifyRequest, PlaceRequest
 from ._worker_queue import Request
-from .alerts import Alerts
 from .bars import DEFAULT_CLOSE_GRACE_S, TickBarBuilder
-from .clients import SessionClients
 from .data_worker import DataWorker
-from .feedlink import FeedLink, FeedSource
-from .guard import ModeGuard
-from .inbox import Envelope, Inbox
-from .journal import Journal
-from .plan import SessionPlan, SessionSpec
+from .feedlink import FeedLink
+from .inbox import Envelope
 from .ticks import TickTally
-from .worker import OrderWorker
 
 logger = logging.getLogger(LOGGER_NAME)
 
@@ -77,58 +68,6 @@ MODE_BREACH_LOCK = "mode_breach"
 _NS = NANOS_PER_SECOND
 
 
-class SessionStopped(Exception):
-    """The stop flag was set during a wait of the start (the countdown, the feed's
-    connect): the session stops safely from there."""
-
-
-class StopFlag:
-    """Ctrl+C for a session: `request` counts a request (the signal handler calls it, as
-    a test does); the loop reads `count`. No lock: a signal handler runs on the main
-    thread between two of its instructions, and only it writes."""
-
-    def __init__(self) -> None:
-        self._count = 0
-
-    def request(self) -> None:
-        """Ask the session to stop (a second call is the second Ctrl+C)."""
-        self._count += 1
-
-    @property
-    def count(self) -> int:
-        """How many stops were asked for."""
-        return self._count
-
-
-@dataclass
-class SessionParts:
-    """What the start sequence built (16-session-design 3.1 steps 1 to 11), owned by the
-    loop: the resolved `spec` and the built `plan`, the `mode` adopted, the `broker` and
-    `account`, the guard's `banner` line and the preflight's `report`, the `clients`,
-    the `guard`, the shared `alerts` and their `sender`, the session `logs`, journal
-    handle L (`journal`) and its `journal_session`, the order `worker`, the loop's
-    `inbox`, `stack` (closes what was opened, in reverse) and the `traders`."""
-
-    spec: SessionSpec
-    plan: SessionPlan
-    mode: Mode
-    broker: str
-    account: str
-    banner: str
-    report: PreflightReport
-    clients: SessionClients
-    guard: ModeGuard
-    alerts: Any
-    sender: Alerts
-    logs: Any
-    journal: Journal
-    journal_session: JournalSession
-    worker: OrderWorker
-    inbox: Inbox
-    stack: contextlib.ExitStack
-    traders: tuple[Trader, ...]
-
-
 class Session:
     """The loop of one live session (module docstring), over `parts`. `now` gives UTC
     nanoseconds and `sleep` waits seconds; `threads` False is the test seam; `stop` is
@@ -150,7 +89,8 @@ class Session:
         self.now, self._sleep, self.threads = now, sleep, threads
         self.stop, self.emit = stop, emit
         self._wait_max_ns = round(wait_max_s * _NS)
-        self.traders = parts.traders
+        #: The strategies, in call order (set by the start once their venue maps exist).
+        self.traders: tuple[Trader, ...] = ()
         self.news = News(self)
         self.exits = ExitRetries(self)
         self.control: Any = None
@@ -267,13 +207,19 @@ class Session:
         released = self._close_slices(now_ns)
         for trader in self.traders:
             trader.drive(deciding=self.deciding)
+        # The decisions' commands are mapped before the duties, which may cancel or
+        # look up the orders just made; theirs follow them to the worker.
+        requests = self._commands()
         if self.control is not None:
             self.control.duties(self.now())
-        for trader in self.traders:
-            self.hand_over(trader.commands())
+        self.hand_over(requests + self._commands())
         if released:
             self._save_states(released)
         self._wait(until_ns)
+
+    def _commands(self) -> list[Request]:
+        """Every strategy's commands since the last call, as requests (E)."""
+        return [request for trader in self.traders for request in trader.commands()]
 
     def pause(self, seconds: float) -> None:
         """Wait `seconds` while the loop keeps turning (the start's waits: the countdown,
@@ -361,7 +307,7 @@ class Session:
         return {t.name for t in self.traders if t.part.released != before[t.name]}
 
     def _check_candles(self, trader: Trader, closed_ns: int) -> None:
-        wanted = trader.wanted(closed_ns)
+        wanted = trader.candles.wanted(closed_ns)
         if wanted and self.data is not None:
             self.data.check_candles(trader.symbol, trader.exchange, wanted, closed_ns)
 
@@ -370,7 +316,7 @@ class Session:
         owns and of those marked missing (3.1 step 14)."""
         now_ns = self.now()
         for trader in self.traders:
-            wanted = trader.wanted(now_ns)
+            wanted = trader.candles.wanted(now_ns)
             if wanted:
                 closes = [closed for opened, closed in trader.part.slices if opened in wanted]
                 self._check_candles(trader, max(closes))
@@ -400,24 +346,10 @@ class Session:
 
     # ----- the start phase's steps 14 and 15 -------------------------------------------
 
-    def watch(self, source: FeedSource) -> None:
-        """Connect the feed and start watching it (3.1 step 14): the bar builders, the
-        first decision, the live releases, the first candle checks. Raises LiveError when
-        the feed does not connect in time, SessionStopped on a stop meanwhile."""
-        instruments = [
-            {"symbol": trader.symbol, "exchange": trader.exchange} for trader in self.traders
-        ]
-        link = FeedLink(
-            source,
-            instruments=instruments,
-            inbox=self.parts.inbox,
-            updates=self.parts.worker.updates,
-            now=self.now,
-            sleep=self.pause,
-            threads=self.threads,
-        )
-        self.parts.stack.callback(link.close)
-        link.connect()
+    def watch(self, link: FeedLink) -> None:
+        """Start watching the connected feed (3.1 step 14): a bar builder per exchange
+        from now, each strategy's first live slice and first decision, and the first
+        candle checks."""
         self.link = link
         watching_ns = self.now()
         day = self.parts.spec.day
@@ -459,7 +391,4 @@ __all__ = [
     "LOOP_WAIT_MIN_S",
     "MODE_BREACH_LOCK",
     "Session",
-    "SessionParts",
-    "SessionStopped",
-    "StopFlag",
 ]
