@@ -30,7 +30,8 @@ Two schedules, quotes first:
 
 A read that fails reaches the loop as `DataFailed` with its request and the error's
 text, so it is logged and, for quotes, alerted (6.5: the broker login may have
-expired); a candle check that failed is read again on its schedule.
+expired); a candle check that failed is read again on its schedule. The reads and what
+their answers carry are `_data_reads`.
 
 `step` does what is due and says when the next read is due; the worker's thread
 (`start`) runs it and waits between steps, woken by each request. The session's test
@@ -45,7 +46,6 @@ nanoseconds from the injected clock, prices rupees.
 from __future__ import annotations
 
 import logging
-import math
 import numbers
 import queue
 import threading
@@ -53,11 +53,10 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
-import pandas as pd
-
 from .._calendar_convert import DateLike, from_day, to_day
 from .._layout import NANOS_PER_SECOND
 from ..errors import ConfigError
+from ._data_reads import ReadFailed, call, candle_rows, ltp_of
 from ._types import LOGGER_NAME, Now
 from .clients import DATA_CLIENT_TIMEOUT_S
 from .inbox import Candles, DataFailed, Inbox, Quote
@@ -97,7 +96,6 @@ _HISTORY_SPACING_NS = NANOS_PER_SECOND // HISTORY_CALLS_PER_SECOND
 _QUOTE_EVERY_NS = round(QUOTE_FALLBACK_EVERY_S * NANOS_PER_SECOND)
 _QUOTE_SPACING_NS = NANOS_PER_SECOND // QUOTE_CALLS_PER_SECOND
 _OFFSETS_NS = tuple(round(offset * NANOS_PER_SECOND) for offset in CANDLE_READ_OFFSETS_S)
-_PRICES = ("open", "high", "low", "close")
 
 logger = logging.getLogger(LOGGER_NAME)
 
@@ -134,10 +132,6 @@ class _Pending:
     @property
     def due_ns(self) -> int:
         return self.read.closed_ns + _OFFSETS_NS[self.reads]
-
-
-class _ReadFailed(Exception):
-    """An answer that is not the data asked for; the text says what it was."""
 
 
 def _instant(value: Any, name: str) -> int:
@@ -306,8 +300,8 @@ class DataWorker:
         read, self._round = self._round[0], self._round[1:]
         self._quote_pace_ns = now_ns + _QUOTE_SPACING_NS
         try:
-            ltp = _ltp(self._call("quotes", symbol=read.symbol, exchange=read.exchange))
-        except _ReadFailed as failed:
+            ltp = ltp_of(call(self._client, "quotes", symbol=read.symbol, exchange=read.exchange))
+        except ReadFailed as failed:
             self._inbox.put(DataFailed(read, str(failed)))
             return
         self._inbox.put(Quote(read.symbol, read.exchange, ltp, self._now()))
@@ -316,7 +310,8 @@ class DataWorker:
         read = pending.read
         self._next_history_ns = now_ns + _HISTORY_SPACING_NS
         try:
-            answer = self._call(
+            answer = call(
+                self._client,
                 "history",
                 symbol=read.symbol,
                 exchange=read.exchange,
@@ -325,8 +320,8 @@ class DataWorker:
                 end_date=self._day,
                 source=HISTORY_SOURCE,
             )
-            rows = _rows_of(answer, set(read.slices))
-        except _ReadFailed as failed:
+            rows = candle_rows(answer, set(read.slices))
+        except ReadFailed as failed:
             self._inbox.put(DataFailed(read, str(failed)))
             rows = {}
         if rows:
@@ -337,17 +332,6 @@ class DataWorker:
             self._checks[key] = _Pending(replace(read, slices=missing), pending.reads + 1)
         else:
             del self._checks[key]
-
-    def _call(self, endpoint: str, **arguments: Any) -> Any:
-        """The client's answer to one read. Raises _ReadFailed when the client raised:
-        the SDK answers HTTP and transport errors with a dict, so an exception is
-        unexpected, and is logged with its traceback."""
-        try:
-            return getattr(self._client, endpoint)(**arguments)
-        # One failed read must not stop the others: it reaches the loop as DataFailed.
-        except Exception as error:
-            logger.exception("the data client raised on %s %r", endpoint, arguments)
-            raise _ReadFailed(f"{type(error).__name__}: {error}") from error
 
     # ----- the thread -------------------------------------------------------------
 
@@ -388,46 +372,6 @@ class DataWorker:
             self._thread.join(wait_s)
             if self._thread.is_alive():
                 logger.warning("the data worker's thread did not end within %s s", wait_s)
-
-
-def _ltp(answer: Any) -> float:
-    """The last traded price of a quote answer, rupees. Raises _ReadFailed for an error
-    answer or a quote without a positive LTP (none traded yet)."""
-    if not isinstance(answer, dict) or answer.get("status") != "success":
-        raise _ReadFailed(_words(answer))
-    data = answer.get("data")
-    ltp = data.get("ltp") if isinstance(data, dict) else None
-    usable = isinstance(ltp, numbers.Real) and not isinstance(ltp, bool)
-    if not (usable and math.isfinite(ltp) and ltp > 0):
-        raise _ReadFailed(f"the quote carries no positive last traded price (ltp {ltp!r})")
-    return float(ltp)
-
-
-def _rows_of(answer: Any, wanted: set[int]) -> dict[int, dict[str, Any]]:
-    """The candle rows of the slices opening at `wanted` (UTC nanoseconds) in a history
-    answer, by open: each an aware IST "timestamp", prices and volume, as
-    `bars.candle_bar` reads a row. "No data" is an answer without rows. Raises
-    _ReadFailed for an error answer or a frame whose times have no zone."""
-    if isinstance(answer, dict) and answer.get("error_type") == "no_data":
-        return {}
-    if not isinstance(answer, pd.DataFrame):
-        raise _ReadFailed(_words(answer))
-    if getattr(answer.index, "tz", None) is None:
-        raise _ReadFailed("the history rows carry times without a zone: no candle is placed")
-    rows: dict[int, dict[str, Any]] = {}
-    for stamp, row in answer.iterrows():
-        opened = int(pd.Timestamp(stamp).value)
-        if opened in wanted:
-            prices = {name: row[name] for name in _PRICES if name in row}
-            rows[opened] = {"timestamp": stamp, **prices, "volume": row.get("volume")}
-    return rows
-
-
-def _words(answer: Any) -> str:
-    """What an answer that is not the data said."""
-    if isinstance(answer, dict):
-        return str(answer.get("message") or answer)
-    return f"an answer of type {type(answer).__name__}"
 
 
 __all__ = [
