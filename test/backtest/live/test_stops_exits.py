@@ -293,6 +293,37 @@ def test_a_rejected_partial_target_beside_a_full_exit_places_the_stop_again(worl
     check_invariants(world.timeline, strategy="TwoTargets")
 
 
+def test_a_rejected_partial_target_heard_after_the_others_fill_is_still_not_sent_again(
+    world, caplog
+):
+    # As above, but the words of the two sales arrive newest first: the second's fill,
+    # then the first's rejection, when the 5 units it was for are all that is left. The
+    # target was for part of the position when the engine sent it, so it is not retried.
+    at_price(world, ist(14, 44), 502.0)
+    world.script.at(
+        ist(14, 43, 50), lambda: world.fake.reject_next("RMS: blocked", price_type="MARKET")
+    )
+    world.script.at(ist(14, 44, 6) + NS // 2, world.fake.faults.hold_order_updates)
+    world.script.at(
+        ist(14, 44, 9), lambda: world.fake.faults.release_order_updates(newest_first=True)
+    )
+    world.stop_at(ist(14, 45))
+    outcome = world.run(TwoTargets, on_stop="keep")
+
+    assert sells(world) == [
+        (10, "SL-M", "cancelled"),
+        (5, "MARKET", "rejected"),
+        (5, "MARKET", "complete"),
+        (5, "SL-M", "trigger pending"),
+    ]
+    assert events(outcome, "exit_retried") == []
+    assert any(
+        "no stop at the broker" in t and "placed again" in t for t in alerts(caplog, "error")
+    )
+    assert outcome.open_positions[0].stop_confirmed
+    check_invariants(world.timeline, strategy="TwoTargets")
+
+
 # ----- trailing: modifying the broker's stop ----------------------------------------------
 
 

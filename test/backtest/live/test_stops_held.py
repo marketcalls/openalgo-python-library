@@ -24,7 +24,8 @@ from openalgo.backtest._live._stops_held import (
     HeldWords,
 )
 from openalgo.backtest._live._types import LOGGER_NAME
-from openalgo.backtest._live._worker_queue import ReadPositions, ReleaseFill
+from openalgo.backtest._live._worker_queue import ReadPositions, ReleaseCancel, ReleaseFill
+from openalgo.backtest._live.inbox import PositionRows
 
 #: The tick at which SBIN reaches `TargetHold`'s target.
 TARGET_TICK = ist(14, 44, 5)
@@ -205,3 +206,85 @@ def test_a_held_cancel_after_a_held_fill_of_the_same_order_was_released_is_still
     for second in range(100, 130):
         held.due(second * NS)
     assert ReadPositions() in session.handed
+
+
+class _Leg:
+    """A strategy holding 10 units of `symbol` in the kernel, whose orders are
+    `orders`: broker order ID to (kernel order, units, units the kernel has filled)."""
+
+    exchange = "NSE"
+
+    def __init__(self, name, symbol, orders):
+        self.name, self.symbol = name, symbol
+        self._orders = orders
+        self.venue, self.engine = self, self
+
+    def kernel_order_of(self, order_id):
+        found = self._orders.get(order_id)
+        return None if found is None else found[0]
+
+    def order_id_of(self, kernel_order):
+        return next((o for o, (k, _, _) in self._orders.items() if k == kernel_order), "")
+
+    def order(self, kernel_order):
+        _, units, filled = next(v for v in self._orders.values() if v[0] == kernel_order)
+        return {"quantity_units": units, "filled_units": filled, "trigger_rupees": 497.0}
+
+    def open_units(self):
+        return 10.0
+
+
+class _TwoLegs(_Session):
+    """Two strategies: A's stop "SA", and B's stop "SB" and add "AB" of 5 units."""
+
+    def __init__(self):
+        super().__init__()
+        self.traders = (
+            _Leg("A", "SBIN", {"SA": (2, 10, 0)}),
+            _Leg("B", "INFY", {"SB": (2, 10, 0), "AB": (3, 5, 0)}),
+        )
+        self.alerts = []
+
+    def alert(self, kind, text):
+        self.alerts.append(text)
+
+
+def book(sbin: int, infy: int) -> PositionRows:
+    """A position-book answer with the broker's net MIS units of SBIN and INFY, read at
+    3.5 s, half a second after the read was asked for."""
+    rows = [
+        {"symbol": symbol, "exchange": "NSE", "product": "MIS", "quantity": units}
+        for symbol, units in (("SBIN", sbin), ("INFY", infy))
+    ]
+    return PositionRows({"status": "success", "data": rows}, round(3.5 * NS))
+
+
+def released(session) -> list[str]:
+    return [r.order_id for r in session.handed if isinstance(r, ReleaseCancel)]
+
+
+def test_a_position_read_decides_no_held_cancel_still_inside_its_wait():
+    session = _TwoLegs()
+    held = HeldWords(session)
+    # A's cancel is past its wait at 3 s and asks for the read; B's was held at 2 s.
+    held.update((HeldFill("SA", 0, 0), HeldFill("SB", 0, 2 * NS)))
+    held.due(round(HELD_CANCEL_DECIDE_AFTER_S * NS))
+    assert ReadPositions() in session.handed
+
+    held.positions(book(sbin=10, infy=10))
+
+    assert released(session) == ["SA"]
+
+
+def test_a_position_read_decides_no_held_cancel_beside_another_held_word_of_its_leg():
+    session = _TwoLegs()
+    held = HeldWords(session)
+    # B's add filled 5 units the kernel does not have yet (held for its price); the
+    # broker's book counts them, so it cannot tell B's stop's fills from them.
+    held.update((HeldFill("SA", 0, 0), HeldFill("SB", 0, 0), HeldFill("AB", 5, 0)))
+    held.due(round(HELD_CANCEL_DECIDE_AFTER_S * NS))
+
+    held.positions(book(sbin=10, infy=15))
+
+    assert released(session) == ["SA"]
+    assert session.alerts == []

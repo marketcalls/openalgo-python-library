@@ -112,27 +112,32 @@ class HeldWords:
             if not self._is_cancel(trader, word):
                 if now_ns - word.held_since_ns >= round(HELD_FILL_RELEASE_AFTER_S * _NS):
                     self._release(trader, kernel_order, word, word.filled_quantity, now_ns)
-            elif self._waits(word, now_ns) and (
-                sum(self._leg_of(w) == trader.name for w in self._held) == 1
-            ):
+            elif self._decidable(trader, word, now_ns):
                 cancels.append(word)
         if cancels and (self._read_due_ns is None or now_ns >= self._read_due_ns):
             self._read_due_ns = now_ns + round(POSITION_READ_EVERY_S * _NS)
             self._session.hand_over([ReadPositions()])
 
-    def _waits(self, word: HeldFill, now_ns: int) -> bool:
-        """Whether a held cancel past its wait is still to be decided: not released yet
-        (the worker's next word of the held list drops it)."""
+    def _decidable(self, trader: Trader, word: HeldFill, now_ns: int) -> bool:
+        """Whether the position book may decide a held cancel of `trader` at `now_ns`: past
+        its wait, not released yet (the worker's next word of the held list drops it),
+        and the only held word of its leg (with another, a fill the kernel does not have
+        yet, the broker's net units cannot tell what the cancelled order filled)."""
         waited = now_ns - word.held_since_ns >= round(HELD_CANCEL_DECIDE_AFTER_S * _NS)
-        return waited and _key(word) not in self._released
+        if not waited or _key(word) in self._released:
+            return False
+        return sum(self._leg_of(w) == trader.name for w in self._held) == 1
 
     def positions(self, message: PositionRows) -> None:
-        """A position-book read: decide each held cancel past its wait."""
+        """A position-book read: decide each held cancel the book may decide at the
+        read's time (`_decidable`), whichever leg asked for it."""
         for word in self._held:
             owner = self._owner(word.order_id)
             if owner is None or not self._is_cancel(owner[0], word):
                 continue
             trader, kernel_order = owner
+            if not self._decidable(trader, word, message.read_ns):
+                continue
             net = _net_units(message.positionbook, trader.symbol, trader.exchange)
             filled = self._decide(trader, kernel_order, net)
             if filled is None:

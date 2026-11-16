@@ -11,7 +11,9 @@ rest fill, the units it was for have no stop and nothing to close them until the
 square-off. The partial exit is not asked for again (`_session_exits`: it would close
 more than the strategy asked for); instead the session places the leg's stop again over
 what is left (`protect`, R7) and sends an ERROR alert, once each time the leg is left
-bare. A leg that never had a stop, one protect by state holds, and every leg once the
+bare. The alert says what the leg is (units with no stop and nothing working to close
+them), not how it got there: an exit filled in part and then cancelled leaves it bare
+the same way. A leg that never had a stop, one protect by state holds, and every leg once the
 safe stop has begun (its flatten exits the position) are left to their own rules.
 
 Quantities are units. Used by the loop only.
@@ -72,9 +74,8 @@ class BareLegs:
             logger.warning("%s: a bare leg's stop not placed again (%s)", name, outcome)
         session.alert(
             AlertKind.ERROR,
-            f"{name}: {units:g} {trader.symbol} {trader.exchange} were left with no stop at "
-            "the broker and nothing working to close them (an exit of part of the position "
-            f"ended unfilled while the rest closed): {what}",
+            f"{name}: {units:g} {trader.symbol} {trader.exchange} have no stop at the broker "
+            f"and nothing working to close them: {what}",
         )
 
 

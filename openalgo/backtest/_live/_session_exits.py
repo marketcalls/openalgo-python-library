@@ -19,8 +19,11 @@ A partial exit is not asked for again (decided for unit 10): `request_exit`, the
 retry call, exits the whole position, so a rejected sale of part of it (a `reduce()`, an
 EXIT order for fewer units than the position, a partial target) stays rejected, as the
 strategy saw it in `on_order`, with the REJECT alert sent for every rejection. Turning
-it into a full exit would close more than the strategy asked for. The units it was for
-stay protected: when the partial exit alone was working, the kernel cut the stop down
+it into a full exit would close more than the strategy asked for. Part or all is judged
+against the position when the exit was placed (`Trader.units_at_place`), so the outcome
+does not depend on whether another exit's fill is heard before the rejection. The units
+it was for stay protected: when the partial exit alone was working, the kernel cut the
+stop down
 only for its units and puts it back over the whole position once it has ended unfilled
 (R4); when it and the exits beside it closed the whole position (two targets on one
 tick, a `reduce()` then an `exit()`), the kernel cancelled the stop for them and does
@@ -78,7 +81,9 @@ class ExitRetries:
         if intent.purpose not in EXIT_PURPOSES or units == 0:
             return
         session, name = self._session, trader.name
-        if intent.purpose is Purpose.EXIT and intent.quantity < units:
+        if intent.purpose is Purpose.EXIT and intent.quantity < _units_at_place(
+            trader, kernel_order, units
+        ):
             session.event("reduce_rejected", strategy=name, units=intent.quantity, reason=why)
             logger.info(
                 "%s: a reduce of %d units was rejected: not asked for again", name, intent.quantity
@@ -156,6 +161,13 @@ class ExitRetries:
             what = trader.request_exit(self._reason[name])
             session.event("exit_retried", strategy=name, outcome=what)
             logger.info("%s: exit asked for again (%s)", name, what)
+
+
+def _units_at_place(trader: Trader, kernel_order: int, units_now: float) -> float:
+    """The position's units when the exit was placed, which tell an exit of part of it
+    from one of all of it whatever came between (another exit's fill heard before this
+    one's rejection); the units now for an order the session did not see placed."""
+    return trader.units_at_place.get(kernel_order, units_now)
 
 
 __all__ = [
