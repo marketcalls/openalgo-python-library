@@ -71,6 +71,20 @@ def test_F40_the_lock_lifts_at_the_close_of_the_first_whole_slice_after_the_feed
     assert [e["ts_ns"] for e in unlocks] == [ist(14, 45)]
 
 
+def test_a_feed_back_on_a_slice_open_lifts_the_lock_at_the_close_of_the_next_slice(world):
+    # The feed dies at 14:43:30 and lives again at 14:43:58; its first tick back is a
+    # trade at 14:44:00.000, taken by the loop at that instant. The 14:44 slice then only
+    # seeds the bar builders and has no bar, so the first whole slice is 14:45.
+    world.script.at(ist(14, 43, 30), world.fake.faults.feed_dead)
+    world.script.at(ist(14, 43, 58), world.fake.faults.feed_alive)
+    world.script.at(ist(14, 44), world.script.trade)
+    world.stop_at(ist(14, 46, 30))
+    outcome = run(world, Hold)
+    assert [e["ts_ns"] for e in events(outcome, "feed_back")] == [ist(14, 44)]
+    unlocks = [e for e in events(outcome, "unlock") if e["reason"] == "feed_dead"]
+    assert [e["ts_ns"] for e in unlocks] == [ist(14, 46)]
+
+
 def test_F40_quotes_are_read_every_2_s_while_the_feed_is_dead(dead_feed):
     run(dead_feed, HoldWithTarget)
     reads = [call.ts_ns for call in calls_between(dead_feed, "quotes", DEAD_AT, BACK_AT)]
@@ -192,6 +206,8 @@ def test_F38_the_session_ends_with_the_engine_and_the_broker_flat(expired, caplo
     outcome = run(expired, Hold)
     assert expired.fake.position("SBIN", "NSE") == 0
     assert outcome.open_positions == ()
+    # Row F38's "reconciliation clean": no session reconciles yet (unit 12), so this
+    # check can only fail once the reconciler runs.
     assert alerts(caplog, "reconcile_mismatch") == []
 
 

@@ -111,6 +111,19 @@ def test_F46_the_kill_switch_reports_each_strategy_flat_at_the_broker(world, cap
     assert len(reports) == 2
 
 
+def test_F46_a_flat_report_waits_for_a_read_begun_after_the_strategy_went_flat(world, caplog):
+    # OpenAlgo's limiter refuses SBIN's exit twice, so it fills on a retry at about
+    # 14:44:08, after INFY's exit (14:44:03) and after the read asked once INFY was flat
+    # began (14:44:05), while SBIN still held its 10 units.
+    world.script.at(ist(14, 44), lambda: world.fake.faults.rate_limit("placeorder"))
+    world.script.at(ist(14, 44, 4), lambda: world.fake.faults.rate_limit("placeorder"))
+    run(world, [HoldSbin, HoldInfy], account_max_daily_loss=ACCOUNT_LIMIT)
+    assert (world.fake.position("SBIN", "NSE"), world.fake.position("INFY", "NSE")) == (0, 0)
+    reports = [text for text in alerts(caplog, "error") if " is flat in " in text]
+    assert len(reports) == 2
+    assert all("flat at the broker too" in text for text in reports)
+
+
 def test_a_partly_filled_kill_switch_exit_is_never_sent_twice(world):
     # The exit's first fill takes 4 units; its other 6 fill at the next trade.
     world.script.at(ist(14, 43, 50), lambda: world.fake.split_next_fill(4))
@@ -211,9 +224,41 @@ def test_the_kill_switch_alerts_once_when_the_broker_and_the_engine_disagree(
     assert "holds 10 units of SBIN NSE" in errors[0] and "shows 4 units" in errors[0]
 
 
+def test_with_on_stop_keep_the_disagreement_alert_names_only_the_square_off(
+    reduced_by_hand, caplog
+):
+    run(reduced_by_hand, HoldSbin, account_max_daily_loss=50.0, on_stop="keep")
+    [error] = [text for text in alerts(caplog, "error") if "no exit is sent until" in text]
+    assert "the square-off at 15:00 IST would sell all 10 units" in error
+    assert "Ctrl+C" not in error
+
+
+def test_the_disagreement_alert_says_what_the_default_safe_stop_will_still_sell(
+    reduced_by_hand, caplog
+):
+    # With the default on_stop="flatten", the Ctrl+C at 14:47 exits the engine's whole
+    # position, as the alert warns: the broker is left 6 units short.
+    outcome = run(reduced_by_hand, HoldSbin, account_max_daily_loss=50.0)
+    [error] = [text for text in alerts(caplog, "error") if "no exit is sent until" in text]
+    assert (
+        'a Ctrl+C (on_stop="flatten") and the square-off at 15:00 IST would sell all 10 '
+        "units, leaving -6 at the broker"
+    ) in error
+    assert events(outcome, "kill_exit") == []
+    assert reduced_by_hand.fake.position("SBIN", "NSE") == -6
+
+
 def test_after_a_mode_change_the_kill_switch_alerts_and_sends_nothing(world, caplog):
     world.script.at(ist(14, 43, 30), lambda: world.fake.set_analyzer(True))
     run(world, HoldSbin, account_max_daily_loss=50.0)
     assert placed_after(world, "SELL", ist(14, 43, 30)) == []
     errors = [text for text in alerts(caplog, "error") if "cannot act" in text]
     assert len(errors) == 1
+
+
+def test_after_a_mode_change_the_account_limit_alert_promises_no_exit(world, caplog):
+    world.script.at(ist(14, 43, 30), lambda: world.fake.set_analyzer(True))
+    run(world, HoldSbin, account_max_daily_loss=50.0)
+    [error] = [text for text in alerts(caplog, "error") if "account's daily loss" in text]
+    assert "exits every strategy's position" not in error
+    assert "OpenAlgo's mode changed" in error

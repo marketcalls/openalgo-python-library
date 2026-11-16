@@ -14,9 +14,11 @@ estimates the skew from the ticks' exchange times where the feed gives them:
 - **Feeds that cannot be measured.** A broker whose feed adapter stamps the last trade
   time with the OpenAlgo server's own clock (`SERVER_CLOCK_LTT_BROKERS`) gives samples
   that read near 0 for a server on this computer whatever the true skew: none is taken,
-  and `unmeasurable_note` is the banner's warning. A feed that gives no exchange time at
-  all is found from its ticks: a window in which an instrument traded liquidly with no
-  exchange time on any of its trades sets `untimed`.
+  and `unmeasurable_note` is the banner's warning. A broker whose feed is known to give no
+  exchange time the tick adapter can read (`NO_EXCHANGE_TIME_BROKERS`) gets the banner's
+  warning too. Any feed that gives none is also found from its ticks: a window in which an
+  instrument traded liquidly with no exchange time on any of its trades sets `untimed`,
+  whose warning is the same words, so the session keeps it once.
 
 Beyond `SKEW_ALERT_S` either way the session alerts (`skew_words`); a skew locks
 nothing. Times are UTC nanoseconds. Used by the loop only.
@@ -41,6 +43,35 @@ SKEW_ALERT_S = 2.0
 #: (the tick adapter's per-broker survey, merge notes "tick adapter and recorder done";
 #: broker/zerodha/streaming/zerodha_websocket.py:740 in the OpenAlgo server).
 SERVER_CLOCK_LTT_BROKERS = frozenset({"zerodha"})
+#: The brokers whose feed adapter in the OpenAlgo server gives a tick no last trade time
+#: the tick adapter (`ticks`) can read: none at all (shoonya, flattrade, zebu, tradesmart,
+#: fyers, motilal, nubra, deltaexchange), seconds counted from 1980, which it rejects as
+#: implausible (compositedge, jainamxts, wisdom, iifl, ibulls, fivepaisaxts, rmoney), or
+#: text (tradejini, dhan_sandbox). Source: the tick adapter's per-broker survey of the
+#: server's adapters (merge notes "tick adapter and recorder done"), checked on a sample by
+#: the recorder review. Their ticks are still sampled: a server that starts to send the
+#: time is then measured.
+NO_EXCHANGE_TIME_BROKERS = frozenset(
+    {
+        "shoonya",
+        "flattrade",
+        "zebu",
+        "tradesmart",
+        "fyers",
+        "motilal",
+        "nubra",
+        "deltaexchange",
+        "compositedge",
+        "jainamxts",
+        "wisdom",
+        "iifl",
+        "ibulls",
+        "fivepaisaxts",
+        "rmoney",
+        "tradejini",
+        "dhan_sandbox",
+    }
+)
 
 _WINDOW_NS = round(SKEW_WINDOW_S * NANOS_PER_SECOND)
 _Key = tuple[str, str]
@@ -87,8 +118,13 @@ class ClockSkew:
         self._window: _Window | None = None
 
     def unmeasurable_note(self) -> str | None:
-        """The banner's warning when the broker's feed cannot be measured, else None."""
-        return None if self.measurable else unmeasured_words(self.broker)
+        """The banner's warning when the broker's feed cannot be measured (its last trade
+        time is the server's clock, or it gives no exchange time), else None."""
+        if not self.measurable:
+            return unmeasured_words(self.broker)
+        if self.broker.strip().lower() in NO_EXCHANGE_TIME_BROKERS:
+            return unmeasured_words(self.broker, untimed=True)
+        return None
 
     def start(self, now_ns: int) -> None:
         """Begin the first window at `now_ns` (the session starts watching the feed)."""
@@ -161,6 +197,7 @@ def unmeasured_words(broker: str, *, untimed: bool = False) -> str:
 
 
 __all__ = [
+    "NO_EXCHANGE_TIME_BROKERS",
     "SERVER_CLOCK_LTT_BROKERS",
     "SKEW_ALERT_S",
     "SKEW_MIN_TRADES",

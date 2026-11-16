@@ -11,12 +11,14 @@ from __future__ import annotations
 import pytest
 
 from openalgo.backtest._live._clock_skew import (
+    NO_EXCHANGE_TIME_BROKERS,
     SERVER_CLOCK_LTT_BROKERS,
     SKEW_MIN_TRADES,
     SKEW_WINDOW_S,
     ClockSkew,
     SkewEstimate,
     skew_words,
+    unmeasured_words,
 )
 from openalgo.backtest._live._types import Tick
 
@@ -120,6 +122,18 @@ def test_a_broker_whose_last_trade_time_is_the_servers_clock_is_never_measured(b
     Feed(skew).trades("SBIN", liquid(3.0))
     assert skew.close_due(WINDOW_NS) is None
     assert broker in skew.unmeasurable_note()
+
+
+@pytest.mark.parametrize("broker", sorted(NO_EXCHANGE_TIME_BROKERS))
+def test_a_broker_whose_feed_gives_no_exchange_time_is_named_in_the_banner(broker):
+    note = ClockSkew(broker).unmeasurable_note()
+    assert note is not None and broker in note and "no exchange time" in note
+
+
+def test_the_banner_note_of_a_feed_without_exchange_times_is_its_runtime_warning_too():
+    # The session keeps a warning once, so the result does not repeat it when a window
+    # of the session finds the ticks untimed as well.
+    assert ClockSkew("fyers").unmeasurable_note() == unmeasured_words("fyers", untimed=True)
 
 
 def test_a_measurable_broker_has_no_banner_note(skew):

@@ -188,6 +188,27 @@ def test_F88_the_session_ends_once_both_are_flat(two_exchanges):
     )
 
 
+OPTIONS_ONLY = (
+    "every instrument of the session is an option: a quiet market cannot be told from a "
+    "dead feed, so a long quiet spell locks entries and asks for REST quotes"
+)
+
+
+def test_a_session_of_options_only_warns_that_a_quiet_market_looks_like_a_dead_feed(
+    two_exchanges,
+):
+    two_exchanges.stop_at(ist(14, 43))
+    outcome = run(two_exchanges, HoldOption)
+    assert f"Warning: {OPTIONS_ONLY}" in two_exchanges.lines
+    assert OPTIONS_ONLY in outcome.warnings
+
+
+def test_a_session_with_an_equity_gets_no_options_only_warning(two_exchanges):
+    two_exchanges.stop_at(ist(14, 43))
+    outcome = run(two_exchanges, [BuyAndHold, HoldOption])
+    assert OPTIONS_ONLY not in outcome.warnings
+
+
 def test_F88_sbin_falling_silent_after_its_square_off_is_no_dead_feed(two_exchanges, caplog):
     outcome = run(two_exchanges, [Hold, HoldOption])
     assert events(outcome, "feed_dead") == []

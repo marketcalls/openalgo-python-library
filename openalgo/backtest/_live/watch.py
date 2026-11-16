@@ -59,8 +59,6 @@ QUIET_AFTER_S = DEFAULT_DEAD_AFTER_S
 #: The kernel's refusals of a price that are races, not defects: the engine paused at a
 #: bar close, or its session over.
 _PRICE_RACES = frozenset({"at_bar_close", "session_over"})
-#: The instrument kind of an option in the plan's instruments.
-_OPTION = "option"
 
 _Span = tuple[int, int | None]
 
@@ -94,8 +92,9 @@ class RiskWatch:
         note = self.skew.unmeasurable_note()
         if note is not None:
             session.warn(note)
-        kinds = {part.setup.instruments[0].kind for part in session.parts.plan.strategies}
-        if kinds == {_OPTION}:
+        # Only an option carries an option type (`reference.instruments`).
+        instruments = [part.setup.instruments[0] for part in session.parts.plan.strategies]
+        if all(instrument.option_type is not None for instrument in instruments):
             session.warn(
                 "every instrument of the session is an option: a quiet market cannot be told "
                 "from a dead feed, so a long quiet spell locks entries and asks for REST quotes"
@@ -239,12 +238,13 @@ class RiskWatch:
         logger.info("the feed ticks again after %.1f s", (now_ns - since) / NANOS_PER_SECOND)
 
     def _first_whole_close(self, now_ns: int) -> int | None:
-        """The close of the first slice opening at or after `now_ns`, the earliest across
-        the exchanges; None when no slice opens after it."""
+        """The close of the first slice opening after `now_ns`, the earliest across the
+        exchanges; None when no slice opens after it. A slice opening at `now_ns` itself
+        is one `resume` keeps for seeding only, with no bar, so it is not whole."""
         closes = []
         for builder in self._session.builders.values():
             slices = builder.slices
-            index = bisect.bisect_left([opened for opened, _ in slices], now_ns)
+            index = bisect.bisect_right([opened for opened, _ in slices], now_ns)
             if index < len(slices):
                 closes.append(slices[index][1])
         return min(closes, default=None)
@@ -286,11 +286,16 @@ class RiskWatch:
             return
         self._account_hit = True
         session.event("account_loss", measure=measure, limit=limit)
+        # After a mode change nothing is sent: the kill switch only alerts (`_kill_switch`).
+        exits = (
+            "nothing is exited, as OpenAlgo's mode changed: close the positions by hand in OpenAlgo"
+            if session.locked
+            else "the kill switch exits every strategy's position"
+        )
         session.alert(
             AlertKind.ERROR,
             f"the account's daily loss Rs {-measure:,.2f} is at or past its limit Rs "
-            f"{limit:,.2f}: the kill switch exits every strategy's position and locks its "
-            "entries for the day",
+            f"{limit:,.2f}: every strategy's entries are locked for the day and {exits}",
         )
         for trader in session.traders:
             self.kill.fire(trader, ACCOUNT_LOSS)
