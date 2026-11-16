@@ -68,7 +68,7 @@ pub(super) fn result_step(order: &Order) -> Step {
 }
 
 /// Refuse units and a price that cannot be a fill.
-fn check_fill(units: f64, price_rupees: f64) -> Result<(), VenueError> {
+pub(super) fn check_fill(units: f64, price_rupees: f64) -> Result<(), VenueError> {
     if !(units.is_finite() && units > 0.0) {
         return Err(VenueError::InvalidFill {
             reason: format!("{units} units: pass the units newly filled, above 0"),

@@ -312,6 +312,12 @@ impl ChargeBook {
         self.track_trade(key, effect, None);
     }
 
+    /// Carry a round trip a live session opened before its restart: its later fills are
+    /// numbered with it, as the trades table numbers the trade.
+    pub fn resume_trade(&mut self, key: PositionKey) {
+        self.open_trades.push((key, Vec::new()));
+    }
+
     /// Number the round trips the way the trades table does: in order of closing.
     /// `record` is the charge record of the fill, `None` for an uncharged one.
     fn track_trade(&mut self, key: PositionKey, effect: FillEffect, record: Option<usize>) {

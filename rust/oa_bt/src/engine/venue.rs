@@ -230,6 +230,8 @@ pub(super) struct VenueDesk {
     /// fill's time, or the open of a slice it reached. The throttle of a stop's
     /// modifications reads it (`venue_legs`).
     pub(super) clock_ns: TsNanos,
+    /// The session took a saved state (`venue_state`): it takes one once.
+    pub(super) restored: bool,
 }
 
 impl VenueDesk {

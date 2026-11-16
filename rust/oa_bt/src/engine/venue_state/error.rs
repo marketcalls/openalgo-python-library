@@ -1,0 +1,67 @@
+//! Why a live session's saved state was not restored (`Engine::restore_live_state`).
+//! Nothing of a refused state is restored.
+
+use std::fmt;
+
+/// Why a saved state was not restored.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LiveStateError {
+    /// A field of the state is missing or cannot be read.
+    Malformed {
+        /// Where, as "live_state.positions[0].tranches".
+        path: String,
+        /// What is wrong with it.
+        reason: String,
+    },
+    /// The state was written in another layout than this kernel reads.
+    Version {
+        /// The layout the state names.
+        found: i64,
+    },
+    /// The state is of another session: another trading day or other instruments.
+    OtherSession {
+        /// What differs.
+        reason: String,
+    },
+    /// The session cannot take a state now: it has traded or been restored already, its
+    /// close has begun, or it stands before the instant the state was saved at.
+    NotRestorable {
+        /// Why, and what to do.
+        reason: String,
+    },
+}
+
+impl LiveStateError {
+    /// True for an error in the state given (as opposed to a call at the wrong time).
+    pub fn is_input_error(&self) -> bool {
+        !matches!(self, LiveStateError::NotRestorable { .. })
+    }
+}
+
+impl fmt::Display for LiveStateError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LiveStateError::Malformed { path, reason } => write!(
+                f,
+                "the saved live state cannot be restored: {path} {reason}; pass the state \
+                 live_state() returned, unchanged"
+            ),
+            LiveStateError::Version { found } => write!(
+                f,
+                "the saved live state has layout {found}, and this kernel reads layout {}: \
+                 restore it with the version of openalgo that saved it",
+                super::LIVE_STATE_LAYOUT
+            ),
+            LiveStateError::OtherSession { reason } => write!(
+                f,
+                "the saved live state is of another session ({reason}): restore it into a \
+                 session of the same day and instruments"
+            ),
+            LiveStateError::NotRestorable { reason } => {
+                write!(f, "the live state cannot be restored now: {reason}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for LiveStateError {}

@@ -33,7 +33,7 @@ use super::kernel::Engine;
 /// order the scrips were first bought.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct SessionBuys {
-    bought: Vec<(InstrumentId, f64)>,
+    pub(super) bought: Vec<(InstrumentId, f64)>,
 }
 
 impl SessionBuys {

@@ -214,6 +214,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose bars, views and indicators equal a backtest's at every decision; and a data
   worker that reads quotes and broker candles on its own thread under the server's rate
   limits.
+- A live session's state saved and restored in the kernel (no change to backtests):
+  `Engine::live_state` writes the session's state as plain data that survives a JSON round
+  trip (in Python a dict of None, bool, int, float, str, list and dict, written by
+  `json.dumps` and read back equal): where it stands, the cash, the positions with their
+  tranches, the legs, every working order with its role, request, units, filled units and
+  what its fills were charged, the cancellations and modifications waiting for the
+  broker's answer, the exits and the legs' broker-held stops, the targets fired, the
+  daily loss totals, the trading state, the cooldown and time exit counters, the entry
+  locks and the commands not yet taken. `Engine::restore_live_state` gives it to a session
+  built for a restart, once, after its catch-up and before any order; the saved working
+  orders are numbered from o1 again and the call returns each one's saved and new id. A
+  session restored at any point of the day goes on exactly as the uninterrupted one: the
+  same commands, states, fills, trades and P&L. Each start's result covers that start:
+  the contract notes are settled per start, and a CNC sale after a restart is not matched
+  with a same-day CNC buy before it for the intraday rates. A state of another day, other
+  instruments or another capital, of another layout, or one that cannot be read (the
+  error names the field) is refused whole, and so is a restore into a session that has
+  traded, was restored already, or stands before the saved point.
+- A live session's fill with no order of its own in the kernel (no change to backtests):
+  `Engine::apply_external_fill` records the broker closing or reducing a position by
+  itself (its square-off, a position closed by hand) through the one fill path, at the
+  broker's price, with the exit reason given and the fill flag `external`; the orders
+  working to close the position follow it (a leg's stop is cut down, or cancelled once the
+  position is flat). A fill that would not only close or reduce the position (on its
+  side, of a flat position, through zero) is refused whole: `VenueRefusalError` of the
+  new kind `beyond_position`.
 
 ### Changed
 

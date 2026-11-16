@@ -39,11 +39,14 @@ pub mod scale_in;
 pub mod trading_state;
 pub mod vocabulary;
 
-pub use daily_loss::{is_breached, AccountTotals, DailyLossMeasure};
+pub use daily_loss::{is_breached, AccountTotals, DailyLossMeasure, DailyLossTotals};
 pub use drawdown::{DrawdownBreach, DrawdownWatch};
 pub use entry_gates::{cooldown_gate, max_positions_gate};
 pub use error::RmsError;
-pub use leg::{BarPrices, LegContext, LegState, LevelHit, LevelKind, RatchetOutcome, TickOutcome};
+pub use leg::{
+    BarPrices, LegContext, LegLevels, LegMemory, LegState, LevelHit, LevelKind, RatchetOutcome,
+    TickOutcome, TrailPlan,
+};
 pub use rules::{
     AfterFirstTarget, AfterRiskExit, BreakevenSpec, Distance, LegRules, RiskBasis, ScaleLimits,
     StrategyRiskConfig, TargetSpec, TrailSpec,

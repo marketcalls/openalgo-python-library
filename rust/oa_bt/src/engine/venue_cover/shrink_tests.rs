@@ -5,13 +5,19 @@
 //!
 //! The room on a position's closing side keeps the session's own fills from shrinking it
 //! under its closing orders (`closing_room`); the broker can, with a sale of its own
-//! (`venue_test_kit::sold_at_the_broker`). Each test holds 100 units of SBIN in MIS bought
-//! at 500.10 in minute 1 (`venue_test_kit::holding_100`), decides at the close of minute 2,
-//! and the broker sells while the session waits before slice 3.
+//! (`Engine::apply_external_fill`, `venue_test_kit::sold_at_the_broker`). Each test holds
+//! 100 units of SBIN in MIS bought at 500.10 in minute 1 (`venue_test_kit::holding_100`),
+//! decides at the close of minute 2, and the broker sells while the session waits before
+//! slice 3.
 
 use crate::engine::venue_test_kit::{
     held, holding_100, market, minute, sold_at_the_broker, wait_before,
 };
+
+/// The instant of the broker's sale: inside slice 3, which the session waits for.
+fn in_slice_3() -> i64 {
+    minute(3) + 1
+}
 use crate::engine::{Engine, KernelError, Submission, VenueCommand, VenueError};
 use crate::exec::{OrderId, OrderRequest, OrderStatus, OrderType};
 use crate::market::margin::MarginError;
@@ -68,7 +74,7 @@ fn shrunk_by(resting: &[OrderRequest], sold: f64) -> Engine {
     }
     wait_before(&mut kernel, 3);
     kernel.take_commands();
-    sold_at_the_broker(&mut kernel, sold, 500.3);
+    sold_at_the_broker(&mut kernel, sold, 500.3, in_slice_3());
     kernel
 }
 
@@ -136,7 +142,7 @@ fn a_partly_filled_reduce_only_order_that_no_longer_fits_is_cancelled() {
     let stopped = minute(3) + 1;
     assert!(kernel.apply_fill(OrderId(2), 30.0, 450.0, stopped).is_ok());
     assert!(kernel.take_commands().is_empty(), "70 left of 70 still fit");
-    sold_at_the_broker(&mut kernel, 20.0, 450.0);
+    sold_at_the_broker(&mut kernel, 20.0, 450.0, in_slice_3());
     let cancel = VenueCommand::Cancel { order: OrderId(2) };
     assert_eq!(kernel.take_commands(), [cancel]);
 }
@@ -157,7 +163,7 @@ fn a_cut_waits_for_the_answer_to_a_modification_already_sent() {
     );
     wait_before(&mut kernel, 3);
     kernel.take_commands();
-    sold_at_the_broker(&mut kernel, 40.0, 500.3);
+    sold_at_the_broker(&mut kernel, 40.0, 500.3, in_slice_3());
     assert!(kernel.take_commands().is_empty());
     assert!(kernel.apply_modify(OrderId(2)).is_ok());
     let cut = VenueCommand::Modify {

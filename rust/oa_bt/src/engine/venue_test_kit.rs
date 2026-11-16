@@ -1,11 +1,10 @@
-//! A harness for the unit tests of a live session that need what no public call can do
-//! yet: one NSE day (2025-07-01) of 1-minute bars of SBIN, bar k opening at 500.00 +
-//! 0.10 k, a session holding 100 units, and changes to a position that the session's own
-//! orders cannot make. A position restored from an earlier session or adopted from the
-//! broker (16-session-design R14), and one the broker closes or reduces by itself (R15),
-//! bring them; those calls are not built, so the tests make the changes here.
+//! A harness for the unit tests of a live session: one NSE day (2025-07-01) of 1-minute
+//! bars of SBIN, bar k opening at 500.00 + 0.10 k, a session holding 100 units, that
+//! session restarted from its saved state (16-session-design R14) on an SBIN whose freeze
+//! quantity has changed, and the broker selling part of the position by itself (R15):
+//! changes to a position the session's own orders cannot make.
 
-use crate::exec::{FillAt, InstrumentId, InstrumentSpec, OrderId, OrderRequest, QuantitySpec};
+use crate::exec::{InstrumentId, InstrumentSpec, OrderId, OrderRequest, QuantitySpec};
 use crate::market::calendar::{BaseInterval, Calendar};
 use crate::market::facts::MarketFacts;
 use crate::market::margin::MarginModel;
@@ -19,8 +18,6 @@ use super::config::{
     BarColumns, CostConfig, FillTiming, IntradayOverrides, QuantityMode, RunConfig, RunSetup,
     StrategyInterval,
 };
-use super::event::Step;
-use super::fills::FillRequest;
 use super::kernel::Engine;
 use super::market_data::BaseBar;
 use super::pause::Pause;
@@ -143,13 +140,7 @@ pub(super) fn market(side: Side, units: f64) -> OrderRequest {
 /// filled at 500.10 at the open of minute 1; paused at the close of minute 2 with no
 /// command left to take.
 pub(super) fn holding_100() -> Engine {
-    let setup = RunSetup {
-        config: config(),
-        calendar: Calendar::new().expect("the embedded calendar tables parse"),
-        instruments: vec![sbin()],
-        bars: vec![BarColumns::default()],
-    };
-    let mut kernel = Engine::new_session(setup).expect("a valid session");
+    let mut kernel = session_of(sbin());
     pause_at_close(&mut kernel, 0);
     let buy = kernel.submit(market(Side::Buy, 100.0));
     assert_eq!(buy, Ok(Submission::Submitted(OrderId(1))));
@@ -187,26 +178,46 @@ pub(super) fn placed(commands: &[VenueCommand]) -> Vec<(OrderId, Side, f64, Orde
         .collect()
 }
 
-/// The broker sells `units` of the long at `price_rupees` with no order of the session's,
-/// as a sale made by hand at the broker does (module docs: R15 will record it). It goes
-/// through the one fill path in the slice in progress, and then the session fits its
-/// closing orders and moves its exits on, as after any result from its venue.
-pub(super) fn sold_at_the_broker(kernel: &mut Engine, units: f64, price_rupees: f64) {
-    let slice = kernel.result_slice().expect("the session waits");
-    let key = PositionKey {
-        instrument: SBIN,
-        product: Product::Mis,
-    };
-    let sale = FillRequest {
+/// The broker sells `units` of the long at `price_rupees` at `at` (UTC nanoseconds) with
+/// no order of the session's, as a sale made by hand at the broker does: the session
+/// records it (`apply_external_fill`), then fits its closing orders and moves its exits
+/// on, as after any result from its venue.
+pub(super) fn sold_at_the_broker(kernel: &mut Engine, units: f64, price_rupees: f64, at: i64) {
+    let sold = kernel.apply_external_fill(
+        SBIN,
+        Product::Mis,
+        Side::Sell,
         units,
-        at: FillAt::Level,
-        ..FillRequest::engine_exit(key, held(kernel), price_rupees, ExitReason::Manual)
+        price_rupees,
+        at,
+        ExitReason::Manual,
+    );
+    assert!(sold.is_ok(), "{sold:?}");
+}
+
+/// A live session of the test day trading `instrument`, before its first slice.
+fn session_of(instrument: InstrumentSpec) -> Engine {
+    let setup = RunSetup {
+        config: config(),
+        calendar: Calendar::new().expect("the embedded calendar tables parse"),
+        instruments: vec![instrument],
+        bars: vec![BarColumns::default()],
     };
-    let stamp = Engine::stamp(&slice, Step::Levels);
+    Engine::new_session(setup).expect("a valid session")
+}
+
+/// `holding_100` saved (`live_state`) and restored into a session restarted at the close
+/// of minute 2 on an SBIN whose freeze quantity is now `freeze_units`, as a restart reads
+/// the day's freeze quantity again: it holds the 100 units and has no order (the buy had
+/// ended), so its next order is o1.
+pub(super) fn holding_100_restarted(freeze_units: Option<u32>) -> Engine {
+    let saved = holding_100().live_state();
+    let mut kernel = session_of(InstrumentSpec {
+        freeze_quantity_units: freeze_units,
+        ..sbin()
+    });
+    pause_at_close(&mut kernel, 2);
+    let restored = kernel.restore_live_state(&saved);
+    assert_eq!(restored, Ok(Vec::new()));
     kernel
-        .execute_fill(stamp, sale)
-        .expect("the sale is recorded");
-    kernel
-        .after_result(&slice)
-        .expect("the session fits its orders");
 }

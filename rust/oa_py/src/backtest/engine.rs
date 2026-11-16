@@ -7,7 +7,8 @@
 //! returns the result tables. Conversions live in `setup` (inputs), `request` (orders)
 //! `tables` (pauses, events, positions, orders) and `results` (the result tables). A
 //! live session, its commands and its venue's results are in `venue`, its controls in
-//! `session`, its legs (ticks, the broker-held stops, the price rule's calls) in `legs`.
+//! `session`, its legs (ticks, the broker-held stops, the price rule's calls) in `legs`,
+//! its saved state and the broker's own fills in `live_state`.
 //!
 //! Errors: a part that is not built yet raises Python's `NotImplementedError`; bad
 //! configuration, data or requests raise `NativeEngineInputError`; anything else
@@ -26,6 +27,7 @@ mod columns;
 mod errors;
 mod futures;
 mod legs;
+mod live_state;
 mod market;
 mod request;
 mod results;
@@ -155,6 +157,49 @@ impl NativeEngine {
     fn apply_modify_refused(&mut self, py: Python<'_>, order_id: u64) -> PyResult<()> {
         let engine = self.engine_mut()?;
         venue::answered(py, engine.apply_modify_refused(OrderId(order_id)))
+    }
+
+    /// Record the broker's own fill of a live session's position, with no order: `units`
+    /// on `side` at `price` rupees at `at` (UTC nanoseconds) for the exit `reason`;
+    /// returns the stamp (`live_state`).
+    #[allow(clippy::too_many_arguments)]
+    fn apply_external_fill(
+        &mut self,
+        py: Python<'_>,
+        instrument: u32,
+        product: &str,
+        side: &str,
+        units: f64,
+        price: f64,
+        at: i64,
+        reason: &str,
+    ) -> PyResult<StampTuple> {
+        let fill = live_state::ExternalFill {
+            instrument,
+            product,
+            side,
+            units,
+            price,
+            at,
+            reason,
+        };
+        live_state::apply_external_fill(py, self.engine_mut()?, fill)
+    }
+
+    /// A live session's state as plain data that survives a JSON round trip
+    /// (`live_state`).
+    fn live_state(&self, py: Python<'_>) -> PyResult<PyObject> {
+        live_state::live_state(py, self.engine()?)
+    }
+
+    /// Restore a saved state into a session built for a restart; `{saved id: new id}` of
+    /// the restored working orders (`live_state`).
+    fn restore_live_state<'py>(
+        &mut self,
+        py: Python<'py>,
+        state: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        live_state::restore_live_state(py, self.engine_mut()?, state)
     }
 
     /// Exit a live session's position for a reason of the session's; what it did, one of

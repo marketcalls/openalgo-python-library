@@ -128,6 +128,7 @@ VENUE_REFUSAL_KINDS = frozenset(
         "not_pending",
         "modify_below_filled",
         "would_reverse",
+        "beyond_position",
         "at_bar_close",
         "session_over",
     }
@@ -145,9 +146,11 @@ class VenueRefusalError(LiveError):
     "not_sent" (an exit still waiting for the orders it cancels), "too_many_units" (more
     than the order has left: pass the units newly filled), "invalid_fill" (units or a
     price not above 0), "not_pending" (no cancellation or modification of the order
-    waits for an answer), "modify_below_filled", "at_bar_close" (the engine is paused at a
-    bar close: advance it first), "session_over" (the session has finished) and
-    "not_external" (the engine is a backtest's).
+    waits for an answer), "modify_below_filled", "beyond_position" (a fill the broker made
+    with no order of the session's, `apply_external_fill`, that would not only close or
+    reduce the position: on its side, of a flat position, or through zero), "at_bar_close"
+    (the engine is paused at a bar close: advance it first), "session_over" (the session
+    has finished) and "not_external" (the engine is a backtest's).
 
     The exception is "would_reverse": the broker filled an order that may not reverse
     the position (reduce-only, or without reverse=True) beyond it, in a race. The units

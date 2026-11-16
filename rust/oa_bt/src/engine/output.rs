@@ -176,27 +176,27 @@ pub struct RunOutput {
     pub run_end: RunEnd,
 }
 
-/// A round trip still open.
+/// A round trip still open (a live session's saved state carries it, `venue_state`).
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct OpenTrade {
-    key: PositionKey,
-    direction: Side,
-    entry_slice: u32,
-    entry_ts: TsNanos,
-    entry_units: f64,
-    entry_value: f64,
-    exit_units: f64,
-    exit_value: f64,
-    max_units: f64,
-    gross: f64,
-    fills: u32,
-    initial_risk: Option<f64>,
+pub(super) struct OpenTrade {
+    pub(super) key: PositionKey,
+    pub(super) direction: Side,
+    pub(super) entry_slice: u32,
+    pub(super) entry_ts: TsNanos,
+    pub(super) entry_units: f64,
+    pub(super) entry_value: f64,
+    pub(super) exit_units: f64,
+    pub(super) exit_value: f64,
+    pub(super) max_units: f64,
+    pub(super) gross: f64,
+    pub(super) fills: u32,
+    pub(super) initial_risk: Option<f64>,
 }
 
 /// Builds the trades table from fills.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TradeBook {
-    open: Vec<OpenTrade>,
+    pub(super) open: Vec<OpenTrade>,
     closed: Vec<TradeRecord>,
 }
 

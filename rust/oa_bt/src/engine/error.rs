@@ -19,6 +19,7 @@ use crate::rms::RmsError;
 use crate::sizing::SizingError;
 
 use super::venue_error::VenueError;
+use super::venue_state::LiveStateError;
 
 /// Why the kernel stopped.
 #[derive(Clone, Debug, PartialEq)]
@@ -47,6 +48,8 @@ pub enum KernelError {
     SaleCredit(SaleCreditError),
     /// A result from the venue of a live session that cannot be recorded (`venue`).
     Venue(VenueError),
+    /// A live session's saved state that was not restored (`venue_state`).
+    LiveState(LiveStateError),
     /// An order call made while the engine is not paused at a decision point.
     NotAtDecisionPoint,
     /// `advance` called after the run finished.
@@ -96,7 +99,7 @@ impl KernelError {
                 | KernelError::Slippage(SlippageError::InvalidSpec { .. })
                 | KernelError::Venue(VenueError::InvalidFill { .. })
                 | KernelError::Venue(VenueError::TooManyUnits { .. })
-        )
+        ) || matches!(self, KernelError::LiveState(error) if error.is_input_error())
     }
 }
 
@@ -115,6 +118,7 @@ impl fmt::Display for KernelError {
             KernelError::Slippage(inner) => inner.fmt(f),
             KernelError::SaleCredit(inner) => inner.fmt(f),
             KernelError::Venue(inner) => inner.fmt(f),
+            KernelError::LiveState(inner) => inner.fmt(f),
             KernelError::NotAtDecisionPoint => write!(
                 f,
                 "orders can only be placed, changed or cancelled while the engine is paused \
@@ -155,6 +159,7 @@ wrap!(
     SlippageError => Slippage,
     SaleCreditError => SaleCredit,
     VenueError => Venue,
+    LiveStateError => LiveState,
 );
 
 #[cfg(test)]

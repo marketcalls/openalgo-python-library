@@ -55,6 +55,9 @@
 //! | `Engine::reprice_exit(OrderId, limit)` | while paused or waiting | a live session modifies a leg's stop (or the engine's exit) to a LIMIT at `limit` rupees for the order's total units, partly filled or not; sent now (true) or with the answer to the modification that waits (false); the repriced stop exits the position (`venue_protect`) |
 //! | `Engine::lock_entries(reason)`, `Engine::unlock_entries(reason)`, `entry_locks` | any time | a live session's entry locks, reasons in a set (names with no spaces around them): while any is set, entries and adds are rejected `live_lock` (`venue_gates`) |
 //! | `Engine::cap_sizing_equity(rupees)`, `Engine::daily_loss_measure()` | any time | a live session's cap on the engine default's sizing equity; the strategy's daily loss measure (`venue_session`) |
+//! | `Engine::apply_external_fill(InstrumentId, Product, Side, units, price, at, ExitReason)` | as `apply_fill` | a live session's fill with no order of its own (`venue_external`): the broker closed or reduced the position by itself; recorded through `execute_fill`, flagged `external`, then the closing orders are fitted to what is left; refused whole unless it only closes or reduces (`beyond_position`) |
+//! | `Engine::live_state()` | any time | a live session's state as plain data that survives a JSON round trip (`venue_state`): positions with tranches, legs, working orders with roles and terms, pending modifies and cancels, exits and leg stops, the daily loss totals, the trading state, counters, cash |
+//! | `Engine::restore_live_state(&StateValue)` | once, in a session built for a restart, after its catch-up and before any order | the saved state put back as it stood (`venue_state`); returns (saved id, new id) of each restored working order; refused whole (`LiveStateError`) |
 //! | `Engine::stop_session()` | any time | a live session ends where it stands: nothing is sent, working orders and open positions are reported as they are (a strategy exit never sent ends `Canceled`), the undelivered events are returned (`venue_session`) |
 //! | `Engine::finish()` | after `Pause::Finished` or `stop_session` | the `RunOutput` |
 //! | `pause::run(engine, driver)` | Rust drivers | the loop above, for a `Driver` |
@@ -134,6 +137,8 @@
 //! | `venue_cover` | Reduce-only orders never reverse a position: the room on its closing side, the cover rule at submission (`exit_cover`), cut down or cancelled when the position shrinks |
 //! | `venue_checks` | What the fill path could not record, refused at submission with the backtest's codes and errors; the free cash net of the working orders |
 //! | `venue_fills` | A live session's fills from its venue (none beyond the position of an order that may not reverse it, nor of one sent to close) |
+//! | `venue_external` | A live session's fill with no order: the broker closed or reduced a position by itself |
+//! | `venue_state` | A live session's state saved as plain data and restored after a restart; its parts in `venue_state/` (`value`, `requests`, `orders`, `book`, `legs`, `desk`, `risk`, `error`) |
 //! | `venue_ends` | Its rejections and cancellations, and the slice every venue result is recorded in |
 //! | `venue_answers` | The venue's answers to the cancellations and modifications it was sent |
 //! | `venue_clock` | The end of a slice: a session close that waits for the venue to end its orders, the next open reached at the close of the slice before |
@@ -255,6 +260,7 @@ mod venue_ends;
 mod venue_error;
 mod venue_exit_orders;
 mod venue_exits;
+mod venue_external;
 mod venue_fills;
 mod venue_gates;
 mod venue_legs;
@@ -264,6 +270,7 @@ mod venue_protect;
 mod venue_requests;
 mod venue_roles;
 mod venue_session;
+mod venue_state;
 mod venue_stop_terms;
 #[cfg(test)]
 mod venue_test_kit;
@@ -297,3 +304,4 @@ pub use venue_error::{Pending, VenueError, UNKNOWN_ORDER_KIND, VENUE_REFUSAL_KIN
 pub use venue_protect::Protect;
 pub use venue_roles::{EngineExit, OrderRole, RiskExitReason};
 pub use venue_session::ExitRequest;
+pub use venue_state::{LiveStateError, StateValue, LIVE_STATE_LAYOUT};
