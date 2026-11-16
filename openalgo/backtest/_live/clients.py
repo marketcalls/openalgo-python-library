@@ -27,8 +27,6 @@ The API key is never logged, printed or put in an error message.
 from __future__ import annotations
 
 import logging
-import math
-import numbers
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -36,6 +34,7 @@ from typing import Any
 
 from ... import api
 from ..errors import ConfigError, LiveError
+from ._preflight_plan import positive_amount
 from ._types import LOGGER_NAME
 
 #: Seconds the mode guard's client waits for an answer: the guard reads `analyzerstatus`
@@ -109,7 +108,7 @@ def settings_of(client: Any) -> ClientSettings:
             f"{_PASS_A_CLIENT}"
         )
     timeout = getattr(client, "timeout", None)
-    if not _positive_seconds(timeout):
+    if positive_amount(timeout) is None:
         raise ConfigError(
             f"the client's timeout must be a positive number of seconds (the SDK's default "
             f"is 120), got {timeout!r}: a call that waits for ever would hold every stop"
@@ -200,13 +199,6 @@ def _close_each(clients: Iterable[tuple[str, Any]]) -> list[tuple[str, Exception
         except Exception as error:
             failures.append((f"the {role} client", error))
     return failures
-
-
-def _positive_seconds(value: Any) -> bool:
-    """True for a finite real number of seconds above 0 (never a bool)."""
-    if isinstance(value, bool) or not isinstance(value, numbers.Real):
-        return False
-    return math.isfinite(value) and value > 0
 
 
 __all__ = [
