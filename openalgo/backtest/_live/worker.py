@@ -33,7 +33,8 @@ first. So is any exception nothing expected, the same inline (`step`) as on the 
 end without taking another request. `busy_since_ns` is set around every call that may
 reach the server, and `raw_pending` counts the order words not yet posted, those waiting
 in the raw FIFO and those in the worker's hands (`_worker_news`); the loop reads both
-(4.2). Times are UTC nanoseconds.
+(4.2), and the order path's silence (`silent_since_ns`, `asked_ns`, 4.9). Times are UTC
+nanoseconds.
 """
 
 from __future__ import annotations
@@ -160,6 +161,22 @@ class OrderWorker:
         """The order words not yet posted to the loop (4.2): the raw updates waiting to be
         drained, and the words the worker took in and has not posted (`_worker_news`)."""
         return self._news.pending
+
+    @property
+    def silent_since_ns(self) -> int | None:
+        """Since when (UTC nanoseconds) OpenAlgo has not answered the order path after a
+        client timeout or a dropped connection (`OrderPath.silent_since_ns`); None while
+        it answers, and before the start-up. Read from the loop's thread (4.9)."""
+        started = self._started
+        return None if started is None else started.path.silent_since_ns
+
+    @property
+    def asked_ns(self) -> int | None:
+        """When (UTC nanoseconds) the order path last called OpenAlgo, whatever the
+        answer (`OrderPath.asked_ns`); None before its first call. Read from the loop's
+        thread (4.9)."""
+        started = self._started
+        return None if started is None else started.path.asked_ns
 
     @property
     def unreadable_updates(self) -> int:

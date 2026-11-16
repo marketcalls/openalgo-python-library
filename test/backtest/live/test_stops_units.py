@@ -249,7 +249,7 @@ class _Trader:
 
 
 class _Worker:
-    busy_since_ns, raw_pending = None, 0
+    busy_since_ns, raw_pending, silent_since_ns, asked_ns = None, 0, None, None
 
 
 class _Exits:

@@ -21,7 +21,8 @@ runs, on the loop's thread, the rules about the broker's behaviour in time:
   once, 4.10); a STOP_MOVED alert for a trailing modify the broker accepted (4.3).
 - Held fills and held cancels (`_stops_held`, 4.11), refused cancels sent again
   (`_stops_cancels`, 4.5), a guarded leg left bare given its stop again (`_stops_bare`),
-  and protect by state (`_stops_protect`, 3.3).
+  a silent OpenAlgo probed and alerted while a stop or an exit waits (`_stops_silent`,
+  4.9), and protect by state (`_stops_protect`, 3.3).
 
 The loop calls the hooks as it takes each message, `duties` in its step D, and `review`
 after the commands are handed over (E), so a window opens at the receive time of the
@@ -59,6 +60,7 @@ from ._stops_kernel import order_of, push_price
 from ._stops_orders import LegOrders, Sent
 from ._stops_price import PriceRule
 from ._stops_protect import Protection
+from ._stops_silent import SilentServer
 from ._types import LOGGER_NAME, AlertKind, OrderIntent, OrderStatus, OrderUpdate, Purpose
 from ._venue_requests import (
     STOP_TYPES,
@@ -76,7 +78,7 @@ logger = logging.getLogger(LOGGER_NAME)
 
 class StopsSupervisor:
     """The stops supervisor of `session`, a `_session_loop.Session` (module docstring).
-    `windows`, `prices`, `held`, `cancels` and `protection` are its parts."""
+    `windows`, `prices`, `held`, `cancels`, `silence` and `protection` are its parts."""
 
     def __init__(self, session: Any) -> None:
         self._session = session
@@ -93,6 +95,7 @@ class StopsSupervisor:
         self.protection = Protection(session, self)
         self.bare = BareLegs(session, self)
         self.deadlines = Deadlines(session, self)
+        self.silence = SilentServer(session, self)
 
     def leg(self, trader: Trader) -> LegOrders:
         """What the supervisor knows of `trader`'s leg."""
@@ -139,6 +142,7 @@ class StopsSupervisor:
     def sent(self, trader: Trader, message: SendResult) -> None:
         """The worker's answer to a request it sent."""
         request = self._requests.pop(message.request_id, None)
+        self.silence.done(message.request_id)
         if request is None:
             return
         now_ns, outcome = self._session.now(), message.outcome
@@ -164,8 +168,11 @@ class StopsSupervisor:
         if not isinstance(request, PlaceRequest | ModifyRequest | CancelRequest):
             return
         held = message.reason in HELD_REASONS
-        if not held:
+        if held:
+            self.silence.held(request)
+        else:
             self._requests.pop(request.request_id, None)
+            self.silence.done(request.request_id)
         self.leg(trader).not_sent(request, message.reason)
         self._touch(trader, self._session.now())
         if held:
@@ -209,9 +216,9 @@ class StopsSupervisor:
 
     def duties(self, now_ns: int, *, protecting: bool = False) -> None:
         """Step D: the unprotected deadline, the price rule, held words, cancels sent
-        again, bare legs, protect by state. With `protecting` (the emergency stop's turns)
-        a part that fails is logged and skipped from then on, so protect by state, the
-        last, still runs."""
+        again, bare legs, a silent OpenAlgo, protect by state. With `protecting` (the
+        emergency stop's turns) a part that fails is logged and skipped from then on, so
+        protect by state, the last, still runs."""
         if self._session.locked:
             return
         parts = (
@@ -220,6 +227,7 @@ class StopsSupervisor:
             self.held.due,
             self.cancels.due,
             self.bare.due,
+            self.silence.due,
         )
         for part in parts:
             if not protecting:

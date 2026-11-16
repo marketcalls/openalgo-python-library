@@ -303,9 +303,13 @@ class OrderPath:
     @property
     def silent_since_ns(self) -> int | None:
         """Since when (UTC nanoseconds) OpenAlgo has not answered a call after a client
-        timeout or a dropped connection, during which nothing is sent; None while it
-        answers."""
+        timeout or a dropped connection (nothing is sent then); None while it answers."""
         return self._watch.silent_since_ns
+
+    @property
+    def asked_ns(self) -> int | None:
+        """When (UTC nanoseconds) the order path last called OpenAlgo; None before."""
+        return self._watch.asked_ns
 
     def probe(self) -> bool:
         """Ask OpenAlgo whether it answers again with one `orderbook` read, its answer

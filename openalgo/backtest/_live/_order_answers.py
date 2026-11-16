@@ -107,10 +107,14 @@ class ServerWatch:
     """Whether OpenAlgo has fallen silent: a call of the order path ended in a client
     timeout or a dropped connection, and no call has been answered in OpenAlgo's own JSON
     since (`silent_since_ns`, UTC nanoseconds, else None). A hung server may still be
-    placing what it was sent, so nothing is sent for any instrument meanwhile."""
+    placing what it was sent, so nothing is sent for any instrument meanwhile.
+    `asked_ns` is when the last call noted was made, whatever its answer (None before
+    the first): the session probes a silent OpenAlgo only when no other call was made
+    lately (16-session-design 4.9)."""
 
     def __init__(self) -> None:
         self.silent_since_ns: int | None = None
+        self.asked_ns: int | None = None
 
     @property
     def silent(self) -> bool:
@@ -119,6 +123,7 @@ class ServerWatch:
 
     def note(self, answer: Mapping[str, Any], now_ns: int) -> None:
         """Take in the answer to a call made at `now_ns`."""
+        self.asked_ns = now_ns
         if went_silent(answer):
             if self.silent_since_ns is None:
                 self.silent_since_ns = now_ns
