@@ -8,16 +8,19 @@ callback puts the market-data message on the loop's inbox as a `FeedTick` with t
 read when it ran; the order callback puts the order update on the order worker's
 `RawUpdates` as a `RawOrderUpdate`; each hook puts a `FeedEvent` with the hook's payload
 and its connection number `seq`. They take no lock, make no call to the feed and never
-wait: both queues are unbounded. `connect`, `note` and `close` run on the loop's thread.
+wait: both queues are unbounded. `connect`, `note` and `close` run on the loop's thread,
+and the feed's own first `connect()` on a short-lived thread (`_feedlink_connect`), so
+the loop keeps turning while the SDK waits for its socket.
 
-Outages. The loop hands each `FeedEvent` it takes to `note`, in order. A disconnect the
-session did not ask for opens an outage at the loop's clock (a second drop while one is
-open keeps its start), and the reconnect that restores the session closes it: `note`
-returns the `Outage`, for the loop to `resume` every bar builder over it and to ask the
-order worker for `stream_gap(outage.start_ns)`. The ticks' receive times come from the
-same clock as the loop takes them, so no tick taken before the disconnect or after the
-reconnect falls inside the span. A feed that stops ticking while its connection stays up
-is dead, not down: the bars' `FeedHealth` finds that from the ticks (6.5).
+Outages. The loop hands each `FeedEvent` it takes to `note`, in order. A drop opens an
+outage; the connect of the connection that restores the session (its payload's
+`reconnect` is True) ends it, and the SDK's reconnect hook after it says the order
+stream is back (`_feedlink_outages`): `note` returns a `Recovery` for each, for the loop
+to `resume` every bar builder over the outage and to ask the order worker for its
+stream gap. The events the hooks put before `connect` had subscribed (a connection that
+came up and dropped while the link waited) concern no bar builder, and `connect`'s own
+subscription sends everything: they are logged, an error counted. The inbox keeps their
+order, so they are the first the loop hands over. After `close` nothing is acted on.
 
 Subscriptions. `connect` registers the hooks, connects and subscribes the instruments in
 quote mode (08-live-trading section 9 step 6) and the order stream. After a reconnect
@@ -35,6 +38,8 @@ from typing import Any, Protocol
 
 from .._layout import NANOS_PER_SECOND
 from ..errors import ConfigError, LiveError
+from ._feedlink_connect import FirstConnect
+from ._feedlink_outages import Outages, Recovery
 from ._preflight_plan import positive_amount
 from ._recorder_args import instruments_of
 from ._tick_spans import Outage
@@ -67,7 +72,9 @@ logger = logging.getLogger(LOGGER_NAME)
 
 class FeedSource(Protocol):
     """What the link needs of a feed: the `FeedAPI` of an `openalgo.api` client (the
-    session's own feed client), or the fake OpenAlgo's direct feed in tests."""
+    session's own feed client), or the fake OpenAlgo's direct feed in tests. Besides the
+    calls, the link reads `authenticated` (the feed is connected and its API key taken,
+    now) and `ws_url` (named when the start fails)."""
 
     ws_url: str
     authenticated: bool
@@ -109,10 +116,13 @@ class FeedLink:
     `[{"exchange": "NSE", "symbol": "SBIN"}, ...]` (upper-cased as OpenAlgo writes them);
     `inbox` the loop's inbox and `updates` the order worker's raw updates; `now` the
     session's clock and `sleep` its wait (the session passes one that keeps its loop
-    turning); `connect_timeout_s` the most seconds `connect` waits.
+    turning); `connect_timeout_s` the most seconds `connect` waits; `threads` False runs
+    the feed's own `connect()` on the calling thread, for a feed whose `connect()` never
+    waits (the fake's direct feed under the session's test seam, 2.11).
 
-    Raises ConfigError for a source without the feed calls a link makes, unusable
-    instruments, or a timeout that is not a positive number of seconds.
+    Raises ConfigError for a source without the feed calls or flags a link uses,
+    unusable instruments, a timeout that is not a positive number of seconds, or
+    `threads` that is not a bool.
     """
 
     def __init__(
@@ -125,8 +135,9 @@ class FeedLink:
         now: Now,
         sleep: Sleep,
         connect_timeout_s: float = FEED_CONNECT_TIMEOUT_S,
+        threads: bool = True,
     ) -> None:
-        missing = [name for name in _FEED_CALLS if not callable(getattr(source, name, None))]
+        missing = _missing(source)
         if missing:
             raise ConfigError(
                 f"the feed has no {', '.join(missing)}: give the session's openalgo.api feed client"
@@ -135,22 +146,28 @@ class FeedLink:
             raise ConfigError(
                 f"connect_timeout_s is a positive number of seconds, got {connect_timeout_s!r}"
             )
+        if not isinstance(threads, bool):
+            raise ConfigError(f"threads is True or False, got {threads!r}")
         self._source = source
         self._instruments = instruments_of(instruments)
         self._inbox, self._updates = inbox, updates
         self._now, self._sleep = now, sleep
         self._timeout_s = float(connect_timeout_s)
+        self._threads = threads
         self._hooks = (
             (source.on_connect, self._on_connect),
             (source.on_disconnect, self._on_disconnect),
             (source.on_reconnect, self._on_reconnect),
             (source.on_error, self._on_error),
         )
-        self._connected = False
-        self._closed = False  # read by the callbacks
+        self._connected = False  # read by the hooks
+        self._closed = False  # read by the callbacks and the connect thread
         self._last_error: str | None = None  # written by the error hook
-        self._down_since_ns: int | None = None
-        self._outages: list[Outage] = []
+        # Events the hooks put before connect() subscribed (written by the hooks, which
+        # the feed delivers one at a time), and how many of them `note` has taken.
+        self._early_events = 0
+        self._early_noted = 0
+        self._outages = Outages(now)
         self._errors = 0
         self._resubscriptions = 0
 
@@ -165,12 +182,12 @@ class FeedLink:
     def down_since_ns(self) -> int | None:
         """When the outage under way began by the loop's clock, or None while the feed is
         up (or was never connected)."""
-        return self._down_since_ns
+        return self._outages.down_since_ns
 
     @property
     def outages(self) -> tuple[Outage, ...]:
         """The outages that ended, in order."""
-        return tuple(self._outages)
+        return self._outages.ended
 
     @property
     def errors(self) -> int:
@@ -189,16 +206,19 @@ class FeedLink:
         """Register the hooks, connect the feed, and subscribe the instruments in quote
         mode and the order stream.
 
-        Waits at most `connect_timeout_s` by the session's clock. When the feed's own
-        `connect()` (which waits up to its own connect and authentication times) does not
-        succeed, the SDK goes on trying by itself, and the link looks every
-        `CONNECT_POLL_S` seconds, through `sleep`, whether it has. A subscription that
-        could not be sent now is logged: the feed sends it when it connects again.
+        The feed's own `connect()` runs on a thread of its own (see `threads`), so the
+        loop keeps turning through `sleep` while the SDK waits for the socket and the API
+        key (5 s each by default). When it does not succeed, the SDK goes on trying by
+        itself, and the link looks every `CONNECT_POLL_S` seconds, through `sleep`,
+        whether it has. A subscription that could not be sent now is logged: the feed
+        sends it when it connects again.
 
-        Raises LiveError when the feed is not connected in time, naming the feed's last
-        error, and when the link was connected or closed before. Then, and on anything
-        `sleep` or the feed raises (the session's stop), the feed is disconnected (so it
-        stops trying) and the hooks are removed before the error goes on.
+        Raises LiveError when the feed is not connected once `connect_timeout_s` has
+        passed by the session's clock and the feed's own `connect()` has returned (the
+        SDK bounds it by its wait times), naming the feed's last error; and when the link
+        was connected or closed before. Then, and on anything `sleep` or the feed raises
+        (the session's stop), the feed is disconnected (it stops trying, and its own
+        `connect()` stops waiting) and the hooks are removed before the error goes on.
         """
         if self._connected or self._closed:
             raise LiveError("the feed link connects once: a new session makes a new link")
@@ -212,30 +232,43 @@ class FeedLink:
             raise
         self._connected = True
 
-    def note(self, event: FeedEvent) -> Outage | None:
-        """Take in a feed event the loop took off its inbox, in the order they came.
+    def note(self, event: FeedEvent) -> Recovery | None:
+        """Take in a feed event the loop took off its inbox: each one, in the order they
+        came.
 
-        Returns the outage a reconnect closed, else None. A disconnect the session did
-        not ask for opens an outage now, by the session's clock; a reconnect closes it
-        and subscribes again what the server did not take back; an error is counted.
-        Each is logged. Raises TypeError for anything but a `FeedEvent`.
+        Returns what the loop does as the feed comes back, else None. A disconnect the
+        session did not ask for opens an outage now, by the session's clock; the connect
+        of the connection that restores the session ends it (`Recovery.outage`); the
+        reconnect that follows subscribes again what the server did not take back and
+        asks for the stream gap (`Recovery.stream_gap_since_ns`); an error is counted.
+        Each is logged. Events from before `connect` subscribed, and every event after
+        `close`, change nothing (see the module docstring). Raises TypeError for anything
+        but a `FeedEvent`.
         """
         if not isinstance(event, FeedEvent):
             raise TypeError(f"note takes a FeedEvent, not {type(event).__name__}")
+        if self._closed:
+            return None
+        if self._early_noted < self._early_events:
+            self._early_noted += 1
+            self._before_subscribing(event)
+            return None
         if event.kind is FeedEventKind.DISCONNECT:
-            self._went_down(event)
-        elif event.kind is FeedEventKind.RECONNECT:
-            return self._came_back(event)
-        elif event.kind is FeedEventKind.ERROR:
-            self._errors += 1
-            logger.warning(
-                "feed error (%s, connection %s): %s",
-                event.payload.get("kind"),
-                event.seq,
-                event.error,
-            )
-        else:
+            if not event.requested:
+                payload = event.payload
+                self._outages.dropped(
+                    event.seq, payload.get("reason"), bool(payload.get("will_reconnect"))
+                )
+        elif event.kind is FeedEventKind.CONNECT:
+            if event.payload.get("reconnect") is True:
+                return self._outages.restored(event.seq)
             logger.info("the feed connected (connection %s)", event.seq)
+        elif event.kind is FeedEventKind.RECONNECT:
+            recovery = self._outages.stream_back(event.seq)
+            self._resubscribe(event.payload.get("subscriptions"))
+            return recovery
+        else:
+            self._count_error(event)
         return None
 
     def close(self) -> None:
@@ -245,26 +278,37 @@ class FeedLink:
         feed's disconnect is raised once the hooks are removed."""
         if self._closed:
             return
-        if self._down_since_ns is not None:
-            self._end_outage()
+        self._outages.close()
         self._stop_feed()
 
     # ----- inside, on the loop's thread -------------------------------------------------
 
     def _wait_connected(self) -> None:
         deadline_ns = self._now() + round(self._timeout_s * NANOS_PER_SECOND)
-        if self._source.connect():
-            return
-        while self._now() < deadline_ns:
-            self._sleep(CONNECT_POLL_S)
-            if self._source.authenticated:
+        attempt = FirstConnect(self._source, stopped=lambda: self._closed)
+        if self._threads:
+            attempt.start()
+        else:
+            attempt.run()
+        # The deadline counts once the feed's own connect() has returned, so what the
+        # link decides does not depend on how the threads ran meanwhile. `returned` is
+        # read before the connection: a connect() that returns in between is seen
+        # connected, never timed out.
+        while True:
+            returned = attempt.returned
+            if attempt.connected or self._source.authenticated:
                 return
-        last = f" (its last error: {self._last_error})" if self._last_error else ""
-        raise LiveError(
-            f"the feed did not connect to {self._source.ws_url} within {self._timeout_s:g} s"
-            f"{last}: check that OpenAlgo and its WebSocket proxy are running and that the "
-            "API key is valid, then start the session again"
-        )
+            if attempt.error is not None:
+                raise attempt.error
+            if returned and self._now() >= deadline_ns:
+                last = f" (its last error: {self._last_error})" if self._last_error else ""
+                raise LiveError(
+                    f"the feed did not connect to {self._source.ws_url} within "
+                    f"{self._timeout_s:g} s{last}: check that OpenAlgo and its WebSocket "
+                    "proxy are running and that the API key is valid, then start the "
+                    "session again"
+                )
+            self._sleep(CONNECT_POLL_S)
 
     def _subscribe(self) -> None:
         quotes_sent = self._source.subscribe_quote(_requests(self._instruments), self._on_quote)
@@ -283,38 +327,21 @@ class FeedLink:
             for _, hook in self._hooks:
                 self._source.remove_hook(hook)
 
-    def _went_down(self, event: FeedEvent) -> None:
-        if event.requested or self._down_since_ns is not None:
+    def _before_subscribing(self, event: FeedEvent) -> None:
+        if event.kind is FeedEventKind.ERROR:
+            self._count_error(event)
             return
-        self._down_since_ns = self._now()
-        will = (
-            "it reconnects by itself"
-            if event.payload.get("will_reconnect")
-            else "nothing reconnects it"
-        )
-        logger.warning(
-            "the feed is down (connection %s: %s); %s",
+        logger.info(
+            "the feed's %s (connection %s) came before the session subscribed: nothing to do",
+            event.kind.value,
             event.seq,
-            event.payload.get("reason"),
-            will,
         )
 
-    def _came_back(self, event: FeedEvent) -> Outage | None:
-        outage = None if self._down_since_ns is None else self._end_outage()
-        if outage is not None:
-            seconds = (outage.end_ns - outage.start_ns) / NANOS_PER_SECOND
-            logger.warning("the feed is back (connection %s) after %.1f s down", event.seq, seconds)
-        self._resubscribe(event.payload.get("subscriptions"))
-        return outage
-
-    def _end_outage(self) -> Outage:
-        start_ns = self._down_since_ns
-        # The wall clock may step back between two reads: an outage never ends before it
-        # starts, or the bar builders would refuse it.
-        outage = Outage(start_ns, max(self._now(), start_ns))
-        self._outages.append(outage)
-        self._down_since_ns = None
-        return outage
+    def _count_error(self, event: FeedEvent) -> None:
+        self._errors += 1
+        logger.warning(
+            "feed error (%s, connection %s): %s", event.payload.get("kind"), event.seq, event.error
+        )
 
     def _resubscribe(self, accepted: Any) -> None:
         """Subscribe again what the reconnect's accepted subscriptions (the SDK's
@@ -365,8 +392,21 @@ class FeedLink:
     def _event(
         self, kind: FeedEventKind, payload: dict[str, Any], error: BaseException | None = None
     ) -> None:
-        if not self._closed:
-            self._inbox.put(FeedEvent(kind, payload, payload.get("seq"), self._now(), error))
+        if self._closed:
+            return
+        if not self._connected:
+            self._early_events += 1
+        self._inbox.put(FeedEvent(kind, payload, payload.get("seq"), self._now(), error))
+
+
+def _missing(source: Any) -> list[str]:
+    """The feed calls and flags a link uses that `source` lacks, in order."""
+    missing = [name for name in _FEED_CALLS if not callable(getattr(source, name, None))]
+    if not hasattr(source, "authenticated"):
+        missing.append("authenticated")
+    if not isinstance(getattr(source, "ws_url", None), str):
+        missing.append("ws_url")
+    return missing
 
 
 def _requests(pairs: Sequence[tuple[str, str]]) -> list[dict[str, str]]:
@@ -374,4 +414,4 @@ def _requests(pairs: Sequence[tuple[str, str]]) -> list[dict[str, str]]:
     return [{"exchange": exchange, "symbol": symbol} for exchange, symbol in pairs]
 
 
-__all__ = ["CONNECT_POLL_S", "FEED_CONNECT_TIMEOUT_S", "FeedLink", "FeedSource"]
+__all__ = ["CONNECT_POLL_S", "FEED_CONNECT_TIMEOUT_S", "FeedLink", "FeedSource", "Recovery"]

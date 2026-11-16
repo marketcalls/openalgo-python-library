@@ -123,10 +123,14 @@ class Feed:
 
     def refuse_connections(self, refuse: bool) -> None:
         """Refuse every new connection from now, of a socket and of a direct feed (True),
-        or accept them again; one already open stays open."""
+        or accept them again, when a direct feed whose connect was refused connects (as
+        the SDK's retry gets through on the socket); one already open stays open."""
         self._refusing = refuse
         self.server.accept = not refuse
         self._fault("refuse_feed" if refuse else "accept_feed")
+        if not refuse:
+            for receiver in list(self._direct):
+                receiver.connections_accepted()
 
     # -- the stream's faults ----------------------------------------------
 

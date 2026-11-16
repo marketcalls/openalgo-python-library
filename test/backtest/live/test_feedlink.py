@@ -1,8 +1,10 @@
 """The session's feed link (16-session-design 2.3, 2.5 A.12, 3.1 step 14) on the fake
-OpenAlgo's direct feed, which delivers on the test's thread with no socket: the callbacks
-only queue and stamp, the hooks become events with their connection number, the
-subscriptions, the start that fails when the feed does not connect, the outage spans
-`note` makes of the events, the subscriptions sent again after a reconnect, and close.
+OpenAlgo's direct feed, which delivers on the test's thread with no socket (the link runs
+the feed's connect there too: `threads=False`): the callbacks only queue and stamp, the
+hooks become events with their connection number, the subscriptions, the start that
+fails when the feed does not connect, the outage spans and stream gaps `note` makes of
+the events, the subscriptions sent again after a reconnect, what `note` leaves alone (the
+events before the link subscribed, and after close), and close.
 
 The feed's own threads, a real drop and the SDK's replay are in
 `test_feedlink_outages.py`, over the SDK's `FeedAPI` on the fake's in-process socket.
@@ -10,12 +12,21 @@ The feed's own threads, a real drop and the SDK's replay are in
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
+from feed_fakes import WAIT
 
 from openalgo.backtest._layout import NANOS_PER_SECOND
+from openalgo.backtest._live._feedlink_connect import CONNECT_THREAD_NAME
 from openalgo.backtest._live._tick_spans import Outage
-from openalgo.backtest._live.feedlink import CONNECT_POLL_S, FEED_CONNECT_TIMEOUT_S, FeedLink
+from openalgo.backtest._live.feedlink import (
+    CONNECT_POLL_S,
+    FEED_CONNECT_TIMEOUT_S,
+    FeedLink,
+    Recovery,
+)
 from openalgo.backtest._live.inbox import (
     FeedEvent,
     FeedEventKind,
@@ -63,7 +74,7 @@ def market(fake_openalgo):
 
 class Wiring:
     """A feed link on a direct feed of the fake, with its inbox and raw updates, on the
-    fake's manual clock."""
+    fake's manual clock, the feed's connect run on the test's thread."""
 
     def __init__(self, fake, *, instruments=(SBIN, INFY), sleep=None, **options):
         self.fake = fake
@@ -77,15 +88,22 @@ class Wiring:
             updates=self.updates,
             now=fake.clock.now,
             sleep=fake.clock.sleep if sleep is None else sleep,
+            threads=False,
             **options,
         )
+
+    def take(self) -> list:
+        """Take what waits on the inbox, oldest first, as the loop does: each feed event
+        goes to `note`. Returns what `note` returned for them."""
+        return [self.link.note(m) for m in taken(self.inbox) if isinstance(m, FeedEvent)]
 
 
 @pytest.fixture
 def wired(market):
-    """The link, connected."""
+    """The link, connected, its loop past the connect event."""
     wiring = Wiring(market)
     wiring.link.connect()
+    wiring.take()
     return wiring
 
 
@@ -156,13 +174,12 @@ def test_a_feed_that_connects_on_its_own_retry_while_the_link_waits_is_taken(mar
     sleeps = []
 
     def sleep(seconds):
-        # The SDK goes on trying by itself after a refused connect: here, on the third
-        # look, the server takes the connection again.
+        # The feed goes on trying by itself after a refused connect: here, on the third
+        # look, the server takes connections again and the feed's retry gets through.
         sleeps.append(seconds)
         market.clock.sleep(seconds)
         if len(sleeps) == 3:
             market.accept_feed()
-            wiring.source.connect()
 
     wiring = Wiring(market, sleep=sleep)
     market.refuse_feed()
@@ -186,6 +203,71 @@ def test_the_sessions_stop_while_waiting_stops_the_feed_and_goes_on(market):
     market.accept_feed()
     wiring.source.connect()
     assert taken(wiring.inbox) == []
+
+
+class ReturnsBetweenLooks:
+    """A feed whose connect() returns True while the link reads `authenticated` once
+    `armed`, and which reads as not connected until then."""
+
+    ws_url = "test://between-looks"
+
+    def __init__(self):
+        self._go = threading.Event()
+        self.armed = False
+        self.subscribed = False
+
+    @property
+    def authenticated(self):
+        if self.armed and not self._go.is_set():
+            self._go.set()
+            for thread in threading.enumerate():
+                if thread.name == CONNECT_THREAD_NAME:
+                    thread.join(WAIT)
+        return False
+
+    def connect(self):
+        return self._go.wait(WAIT)
+
+    def disconnect(self):
+        pass
+
+    def on_connect(self, callback):
+        return callback
+
+    on_disconnect = on_reconnect = on_error = on_connect
+
+    def remove_hook(self, callback):
+        return True
+
+    def subscribe_quote(self, instruments, on_data_received=None):
+        self.subscribed = True
+        return True
+
+    def subscribe_orders(self, on_order_update=None):
+        return True
+
+
+def test_a_connect_that_returns_while_the_link_looks_is_taken_not_timed_out(market):
+    # The feed's own connect() runs on the link's connect thread (threads=True) and
+    # returns between two of the link's reads, once the deadline has passed.
+    source = ReturnsBetweenLooks()
+
+    def sleep(seconds):
+        market.clock.advance(FEED_CONNECT_TIMEOUT_S + 1)
+        source.armed = True
+
+    link = FeedLink(
+        source,
+        instruments=[SBIN],
+        inbox=Inbox(market.clock.now),
+        updates=RawUpdates(),
+        now=market.clock.now,
+        sleep=sleep,
+    )
+
+    link.connect()
+
+    assert source.subscribed
 
 
 def test_a_link_connects_once(wired):
@@ -270,40 +352,87 @@ def test_a_subscription_the_broker_refuses_arrives_as_an_error_event(market):
 # -- outages and reconnects: what note makes of the events -------------------------------------
 
 
-def test_a_drop_opens_an_outage_at_the_loops_clock_and_the_reconnect_closes_it(wired, market):
+def test_a_drop_opens_an_outage_and_the_restoring_connections_connect_ends_it(wired, market):
     wired.link.note(event("disconnect", requested=False, will_reconnect=True))
     down_at = market.clock.now()
     market.clock.advance(7)
 
-    outage = wired.link.note(
-        event("reconnect", seq=2, subscriptions=wired.source.get_subscriptions())
-    )
+    recovery = wired.link.note(event("connect", seq=2, reconnect=True))
 
-    assert outage == Outage(down_at, down_at + 7 * NANOS_PER_SECOND)
+    outage = Outage(down_at, down_at + 7 * NANOS_PER_SECOND)
+    assert recovery == Recovery(outage=outage, stream_gap_since_ns=None)
     assert (wired.link.outages, wired.link.down_since_ns) == ((outage,), None)
 
 
-def test_the_feed_is_down_from_the_drop_until_the_reconnect(wired, market):
+def test_the_reconnect_asks_for_the_stream_gap_from_the_drop(wired, market):
+    wired.link.note(event("disconnect", requested=False))
+    down_at = market.clock.now()
+    market.clock.advance(7)
+    wired.link.note(event("connect", seq=2, reconnect=True))
+    market.clock.advance(3)
+
+    recovery = wired.link.note(
+        event("reconnect", seq=2, subscriptions=wired.source.get_subscriptions())
+    )
+
+    assert recovery == Recovery(outage=None, stream_gap_since_ns=down_at)
+
+
+def test_the_feed_is_down_from_the_drop_until_the_restoring_connection_is_up(wired, market):
     before = wired.link.down_since_ns
 
     wired.link.note(event("disconnect", requested=False))
+    down = wired.link.down_since_ns
+    wired.link.note(event("connect", seq=2, reconnect=True))
 
-    assert (before, wired.link.down_since_ns) == (None, market.clock.now())
+    assert (before, down, wired.link.down_since_ns) == (None, market.clock.now(), None)
 
 
-def test_a_second_drop_while_down_keeps_the_outages_start(wired, market):
+def test_a_second_drop_noted_while_down_keeps_the_outages_start(wired, market):
     wired.link.note(event("disconnect", requested=False))
     down_at = market.clock.now()
+    market.clock.advance(3)
+    wired.link.note(event("disconnect", requested=False))
+    market.clock.advance(4)
+
+    recovery = wired.link.note(event("connect", seq=2, reconnect=True))
+
+    assert recovery.outage == Outage(down_at, down_at + 7 * NANOS_PER_SECOND)
+
+
+def test_a_drop_before_the_reconnect_keeps_the_stream_gap_from_the_first_drop(wired, market):
+    # The order stream is not known to be back until a reconnect: a connection that came
+    # up and dropped again before its reconnect leaves the gap open from the first drop.
+    wired.link.note(event("disconnect", requested=False))
+    first_drop = market.clock.now()
     market.clock.advance(3)
     wired.link.note(event("connect", seq=2, reconnect=True))
     wired.link.note(event("disconnect", seq=2, requested=False))
     market.clock.advance(4)
+    wired.link.note(event("connect", seq=3, reconnect=True))
 
-    outage = wired.link.note(
+    recovery = wired.link.note(
         event("reconnect", seq=3, subscriptions=wired.source.get_subscriptions())
     )
 
-    assert outage == Outage(down_at, down_at + 7 * NANOS_PER_SECOND)
+    assert recovery == Recovery(outage=None, stream_gap_since_ns=first_drop)
+    assert wired.link.outages == (
+        Outage(first_drop, first_drop + 3 * NANOS_PER_SECOND),
+        Outage(first_drop + 3 * NANOS_PER_SECOND, first_drop + 7 * NANOS_PER_SECOND),
+    )
+
+
+def test_a_reconnect_while_still_down_ends_the_outage_and_asks_for_the_stream_gap(wired, market):
+    wired.link.note(event("disconnect", requested=False))
+    down_at = market.clock.now()
+    market.clock.advance(5)
+
+    recovery = wired.link.note(
+        event("reconnect", seq=2, subscriptions=wired.source.get_subscriptions())
+    )
+
+    outage = Outage(down_at, down_at + 5 * NANOS_PER_SECOND)
+    assert recovery == Recovery(outage=outage, stream_gap_since_ns=down_at)
 
 
 @pytest.mark.parametrize(
@@ -311,9 +440,10 @@ def test_a_second_drop_while_down_keeps_the_outages_start(wired, market):
     [
         [event("disconnect", requested=True)],
         [event("connect")],
+        [event("connect", seq=2, reconnect=True)],
         [event("error", kind="frame")],
     ],
-    ids=["the session's own disconnect", "a connect", "an error"],
+    ids=["the session's own disconnect", "a connect", "a reconnecting connect", "an error"],
 )
 def test_events_that_are_no_drop_open_no_outage(wired, events):
     for one in events:
@@ -322,12 +452,12 @@ def test_events_that_are_no_drop_open_no_outage(wired, events):
     assert wired.link.down_since_ns is None
 
 
-def test_a_reconnect_with_no_drop_noted_closes_no_outage(wired):
-    outage = wired.link.note(
+def test_a_reconnect_with_no_drop_noted_asks_for_nothing(wired):
+    recovery = wired.link.note(
         event("reconnect", seq=2, subscriptions=wired.source.get_subscriptions())
     )
 
-    assert (outage, wired.link.outages) == (None, ())
+    assert (recovery, wired.link.outages) == (None, ())
 
 
 def test_a_reconnect_subscribes_again_what_the_server_did_not_take_back(wired):
@@ -380,6 +510,25 @@ def test_each_error_is_counted(wired):
 def test_note_takes_feed_events_only(wired):
     with pytest.raises(TypeError, match="FeedEvent"):
         wired.link.note({"event": "connect"})
+
+
+def test_events_noted_after_close_change_nothing(wired):
+    wired.link.close()
+
+    noted = [
+        wired.link.note(event("disconnect", requested=False, will_reconnect=True)),
+        wired.link.note(event("reconnect", seq=2, subscriptions={"quote": [], "orders": False})),
+    ]
+
+    assert noted == [None, None]
+    assert (wired.link.down_since_ns, wired.link.outages, wired.link.resubscriptions) == (
+        None,
+        (),
+        0,
+    )
+    assert wired.source.get_subscriptions() == {
+        "ltp": [], "quote": [], "depth": [], "orders": False,
+    }  # fmt: skip
 
 
 # -- closing -----------------------------------------------------------------------------------
@@ -441,16 +590,51 @@ class NotAFeed:
         return True
 
 
+class NoFlags:
+    """Has every call a link makes of a feed, but not the feed's `authenticated` and
+    `ws_url`, which the link reads too."""
+
+    def connect(self):
+        return False
+
+    def disconnect(self):
+        pass
+
+    def on_connect(self, callback):
+        return callback
+
+    on_disconnect = on_reconnect = on_error = on_connect
+
+    def remove_hook(self, callback):
+        return True
+
+    def subscribe_quote(self, instruments, on_data_received=None):
+        return True
+
+    def subscribe_orders(self, on_order_update=None):
+        return True
+
+
 @pytest.mark.parametrize(
     ("changes", "says"),
     [
         ({"source": NotAFeed()}, "the feed has no disconnect, on_connect"),
+        ({"source": NoFlags()}, "the feed has no authenticated, ws_url"),
         ({"instruments": []}, "instruments is empty"),
         ({"instruments": [{"exchange": "NSE"}]}, "both named"),
         ({"connect_timeout_s": 0}, "positive number of seconds"),
         ({"connect_timeout_s": float("nan")}, "positive number of seconds"),
+        ({"threads": "no"}, "threads is True or False"),
     ],
-    ids=["not a feed", "no instrument", "no symbol", "a zero timeout", "a timeout of nan"],
+    ids=[
+        "not a feed",
+        "no connection flags",
+        "no instrument",
+        "no symbol",
+        "a zero timeout",
+        "a timeout of nan",
+        "threads not a bool",
+    ],
 )
 def test_unusable_arguments_are_refused_saying_what_to_give(market, changes, says):
     arguments = {
@@ -460,6 +644,7 @@ def test_unusable_arguments_are_refused_saying_what_to_give(market, changes, say
         "updates": RawUpdates(),
         "now": market.clock.now,
         "sleep": market.clock.sleep,
+        "threads": False,
     }
     arguments.update(changes)
     source = arguments.pop("source")

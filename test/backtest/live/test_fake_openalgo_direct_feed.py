@@ -139,6 +139,31 @@ def test_a_refused_feed_does_not_connect_and_fires_nothing_until_accepted(market
     assert market.log.faults()[-2:] == ["refuse_feed", "accept_feed"]
 
 
+def test_a_refused_feed_connects_when_the_fake_accepts_again_as_the_sdks_retry_does(market):
+    feed = market.direct_feed()
+    received = Received(feed)
+    feed.subscribe_quote([SBIN])
+    market.refuse_feed()
+    feed.connect()
+
+    market.accept_feed()
+
+    assert (feed.authenticated, received.names()) == (True, ["connect"])
+    assert [frame["action"] for frame in feed.frames] == ["subscribe"]
+
+
+def test_a_refused_feed_disconnected_since_stays_down_when_the_fake_accepts_again(market):
+    feed = market.direct_feed()
+    received = Received(feed)
+    market.refuse_feed()
+    feed.connect()
+    feed.disconnect()
+
+    market.accept_feed()
+
+    assert (feed.authenticated, received.names()) == (False, [])
+
+
 def test_a_refused_feed_refuses_the_sdks_socket_too(market):
     client = market.client(auto_reconnect=False)
     market.refuse_feed()

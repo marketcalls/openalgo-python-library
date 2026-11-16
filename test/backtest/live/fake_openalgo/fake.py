@@ -121,7 +121,9 @@ class FakeOpenAlgo:
         self._venue.feed.refuse_connections(True)
 
     def accept_feed(self) -> None:
-        """Accept feed connections again after `refuse_feed`."""
+        """Accept feed connections again after `refuse_feed`: the SDK's own retry gets
+        through, and a direct feed whose last `connect()` was refused (and that was not
+        disconnected since) connects at once, as that retry would."""
         self._venue.feed.refuse_connections(False)
 
     def close(self) -> None:

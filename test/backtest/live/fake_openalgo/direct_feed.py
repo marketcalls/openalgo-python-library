@@ -16,7 +16,11 @@ tick, then the order updates the trade caused. Every fault of the stream and of 
 market data acts on it as on the socket (`feed.Feed`), and `FakeOpenAlgo.refuse_feed`
 refuses its connections. While it delivers, a call into the fake from the same thread is
 refused as one from the socket's thread is: a callback must only queue. It never drops
-and reconnects by itself: a dropped connection is the socket's (`Faults.drop_feed`).
+by itself: a dropped connection is the socket's (`Faults.drop_feed`).
+
+A `connect()` the fake refused is retried as the SDK retries one, but at once: when the
+fake accepts connections again (`FakeOpenAlgo.accept_feed`), a direct feed whose last
+`connect()` was refused, and that was not disconnected since, connects.
 
 Prices are rupees, quantities units, times as the proxy's messages carry them.
 """
@@ -77,18 +81,20 @@ class DirectFeed:
         self._orders = False
         self._quote_callback: Callable | None = None
         self._order_callback: Callable | None = None
+        self._retrying = False  # the last connect() was refused, and no disconnect since
         self._here = threading.local()
 
     # -- the FeedAPI surface a session uses -----------------------------------
 
     def connect(self) -> bool:
-        """Connect: refused (False, nothing fires) while the fake refuses connections;
-        else the connection gets the next `seq`, the connect hooks fire, and the
-        subscriptions requested before are answered, as the SDK sends them on
-        authentication. True while connected."""
+        """Connect: refused (False, nothing fires, and it is retried when the fake
+        accepts again) while the fake refuses connections; else the connection gets the
+        next `seq`, the connect hooks fire, and the subscriptions requested before are
+        answered, as the SDK sends them on authentication. True while connected."""
         if self.authenticated:
             return True
-        if self._refusing():
+        self._retrying = self._refusing()
+        if self._retrying:
             return False
         self._seq += 1
         self.connected = self.authenticated = True
@@ -114,7 +120,7 @@ class DirectFeed:
         forgotten, and a connection that was up fires the disconnect hooks with
         `requested` True."""
         was_up = self.authenticated
-        self.connected = self.authenticated = False
+        self.connected = self.authenticated = self._retrying = False
         self._quotes.clear()
         self._accepted.clear()
         self._orders = False
@@ -219,6 +225,12 @@ class DirectFeed:
     def deliver_update(self, message: dict[str, Any]) -> None:
         """Hand an order update to the order callback, as its own copy."""
         self._call("order", self._order_callback, fresh_copy(message), message)
+
+    def connections_accepted(self) -> None:
+        """The fake accepts connections again: connect now when the last `connect()` was
+        refused and the feed was not disconnected since, as the SDK's own retry does."""
+        if self._retrying:
+            self.connect()
 
     def delivering_here(self) -> bool:
         """Whether this thread is inside one of its deliveries now."""
