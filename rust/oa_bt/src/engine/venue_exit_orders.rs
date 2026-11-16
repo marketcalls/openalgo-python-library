@@ -67,6 +67,35 @@ impl Engine {
         Ok((units > 0.0 && units < open).then_some(units))
     }
 
+    /// True when the exits of `key` that wait, one after another as a backtest fills them,
+    /// ask for all of the `open` units left to exit: an engine exit, or strategy exits
+    /// whose units add up to them (`venue_owner`).
+    ///
+    /// Errors: `UnknownOrder`; those of the instrument's spec.
+    pub(super) fn waiting_exits_close_all(
+        &self,
+        key: PositionKey,
+        open: f64,
+    ) -> Result<bool, KernelError> {
+        let mut left = open;
+        let waiting = self
+            .venue
+            .exits
+            .iter()
+            .filter(|exit| exit.key == key && exit.sent.is_empty());
+        for exit in waiting {
+            if left <= 0.0 {
+                break;
+            }
+            let ExitBy::Strategy(id) = exit.by else {
+                return Ok(true);
+            };
+            let order = self.book.get(id).ok_or(KernelError::UnknownOrder(id))?;
+            left -= self.exit_wanted(order, left)?.min(left);
+        }
+        Ok(left <= 0.0)
+    }
+
     /// `units` of `key`'s instrument in pieces of at most its freeze quantity
     /// (`freeze_pieces`). The entry gates keep a position the session builds within one
     /// piece (`venue_gates`).
@@ -93,7 +122,8 @@ impl Engine {
 
     /// Send the strategy's exit `id` of `exit`'s position of `held` signed units: sized on
     /// what the earlier exits leave, dropped when nothing is left or it no longer closes,
-    /// `market_closed` when no session is left.
+    /// `market_closed` when no session is left. A reversal the owner held while the leg's
+    /// stop was cancelled for it (`venue_roles`) goes whole, as an entry.
     ///
     /// Errors: `UnknownOrder`; those of the order book and of `fills::end_order`.
     pub(super) fn send_strategy_exit(
@@ -108,6 +138,15 @@ impl Engine {
         };
         if order.request.side != closing_side(held) {
             return self.drop_exit(at, exit, OrderEventKind::Canceled);
+        }
+        if let Some(role) = self.order_role(id).filter(|role| role.opens()) {
+            if self.day_validity(&at.slice, at.decided_at).is_err() {
+                let kind = OrderEventKind::Rejected(RejectCode::MarketClosed);
+                return self.drop_exit(at, exit, kind);
+            }
+            self.place(id, role);
+            self.set_sent(exit, vec![id]);
+            return Ok(());
         }
         let open = held.abs() - self.left_to_exit(exit.key);
         let units = if open > 0.0 {

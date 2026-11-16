@@ -19,8 +19,8 @@ use oa_bt::model::{days_from_civil, Exchange, InstrumentKind, Product, Side};
 use oa_bt::rms::ExitReason;
 use venue_support::{
     at_second, bars, entry_waiting, exit, holding_with, limit, market, minute, modified,
-    nifty_call, pause_at_close, placed_roles, run_to_end, sbin, stop_market, stop_points, Script,
-    SBIN,
+    nifty_call, order, pause_at_close, placed_roles, run_to_end, sbin, stop_market, stop_points,
+    Script, SBIN,
 };
 
 const ENTRY: OrderId = OrderId(1);
@@ -325,17 +325,18 @@ fn deciding_beside_the_stop() -> Engine {
 
 #[test]
 fn the_stop_counts_in_the_room_on_the_positions_closing_side() {
-    // A plain sale beside the stop could leave the position short if both filled, so it is
-    // an entry; a reduce-only order for the position beside it does not fit.
+    // A plain sale resting beside the stop could leave the position short if both filled,
+    // so it is an entry; a reduce-only order for the position beside it does not fit. (A
+    // plain MARKET sale goes once the stop has made way for it: venue_leg_room.rs.)
     let rows = [
         (
-            "a plain sale of the position",
-            market(Side::Sell, 100.0),
+            "a plain resting sale of the position",
+            order(Side::Sell, 100.0, limit(510.0), Product::Mis),
             Some(OrderRole::Entry),
         ),
         (
-            "a plain sale of part of it",
-            market(Side::Sell, 40.0),
+            "a plain resting sale of part of it",
+            order(Side::Sell, 40.0, limit(510.0), Product::Mis),
             Some(OrderRole::Entry),
         ),
         (
@@ -368,9 +369,10 @@ fn the_stop_counts_in_the_room_on_the_positions_closing_side() {
 
 #[test]
 fn a_stop_fill_beyond_the_position_records_the_closing_part_and_refuses_the_rest() {
-    // A plain sale fills first (the stop is cut down or cancelled for it), then the broker
-    // fills the stop's 100 on its old terms: only what was still open is recorded
-    // (16-session-design R19, reconciled with the partial record of `venue_fills`).
+    // A plain sale resting beside the stop fills first (the stop is cut down or cancelled
+    // for it), then the broker fills the stop's 100 on its old terms: only what was still
+    // open is recorded (16-session-design R19, reconciled with the partial record of
+    // `venue_fills`).
     // (units sold, the stop's units recorded, refused, the stop afterwards)
     let rows = [
         (60.0, 40.0, 60.0, OrderStatus::Filled),
@@ -379,7 +381,8 @@ fn a_stop_fill_beyond_the_position_records_the_closing_part_and_refuses_the_rest
     for (sold, recorded, refused, status) in rows {
         let mut kernel = deciding_beside_the_stop();
         let sale = OrderId(3);
-        assert!(kernel.submit(market(Side::Sell, sold)).is_ok());
+        let resting = order(Side::Sell, sold, limit(500.5), Product::Mis);
+        assert!(kernel.submit(resting).is_ok());
         assert!(matches!(kernel.advance(), Ok(Pause::Waiting { .. })));
         assert!(kernel.apply_fill(sale, sold, 500.5, minute(2)).is_ok());
         let result = kernel.apply_fill(STOP, 100.0, 497.0, at_second(2, 5));

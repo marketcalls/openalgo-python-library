@@ -6,7 +6,8 @@ stop-market rule.
 The strategy buys 75 units at the close of minute 0 (09:15 IST on 2025-07-01) with a stop
 3 points below, so the position opens at 500.10 at the open of minute 1 with its stop at
 497.10 and, for the option, a limit 5 percent below that, 472.245, down to the tick 472.20.
-The bars rise 0.10 a minute from 500.00 until a row overrides them. No costs, no slippage.
+The bars rise 0.10 a minute from 500.00 until a row overrides them. No costs, and no
+slippage but where a test says otherwise.
 """
 
 from __future__ import annotations
@@ -46,8 +47,8 @@ NIFTY_CALL = {
 GAPPED_FOR_THE_BAR = {5: (470.0, 471.0, 469.0, 470.5), 6: (468.0, 469.0, 467.0, 468.5)}
 
 
-def config() -> dict[str, Any]:
-    """A cost-free, slippage-free 1-minute run on 1-minute bars of DAY."""
+def config(slippage: tuple = ("zero", 0.0, 0)) -> dict[str, Any]:
+    """A cost-free 1-minute run on 1-minute bars of DAY, slippage-free unless given."""
     return {
         "first_day": to_day(DAY),
         "last_day": to_day(DAY),
@@ -57,7 +58,7 @@ def config() -> dict[str, Any]:
         "quantity_mode": "venue",
         "capital": 1_000_000.0,
         "costs": None,
-        "slippage": ("zero", 0.0, 0),
+        "slippage": slippage,
         "risk": {
             "risk_basis": "gross",
             "after_risk_exit": "lock_session",
@@ -81,10 +82,16 @@ def bars(overrides: dict[int, tuple[float, float, float, float]]) -> tuple:
     return (ts, prices[:, 0], prices[:, 1], prices[:, 2], prices[:, 3], volume)
 
 
-def backtest(instrument: dict[str, Any], overrides: dict) -> dict[str, Any]:
-    """The backtest's result tables for the buy with its stop."""
+def backtest(
+    instrument: dict[str, Any],
+    overrides: dict,
+    run_config: dict[str, Any] | None = None,
+    stop_points: float = 3.0,
+) -> dict[str, Any]:
+    """The backtest's result tables for the buy with its stop `stop_points` below."""
     engine_class = native_attr("Engine")
-    engine = engine_class(default_calendar()._cal, config(), [instrument], [bars(overrides)])
+    calendar = default_calendar()._cal
+    engine = engine_class(calendar, run_config or config(), [instrument], [bars(overrides)])
     buy = {
         "instrument": 0,
         "side": "BUY",
@@ -94,7 +101,7 @@ def backtest(instrument: dict[str, Any], overrides: dict) -> dict[str, Any]:
         "product": "MIS",
         "reduce_only": False,
         "reverse": False,
-        "rules": {"stop": ("points", 3.0, None)},
+        "rules": {"stop": ("points", stop_points, None)},
     }
     while (pause := engine.advance())[0] != "finished":
         if pause[0] == "bar_close" and pause[1] == OPEN_NS + MINUTE_NS:
@@ -126,3 +133,19 @@ def test_an_option_legs_stop_fills_as_the_stop_limit_the_exchange_takes(
     assert fills["slice_ts"][-1] == OPEN_NS + minute * MINUTE_NS
     assert fills["price_rupees"][-1] == pytest.approx(price, abs=1e-9)
     assert (fills["fill_at"][-1], fills["reason"][-1]) == (where, "leg_sl")
+
+
+@pytest.mark.parametrize(
+    ("instrument", "price"),
+    [(NIFTY_CALL, 465.6), (SBIN, 460.6)],
+    ids=["option: held at its limit", "share: the slipped open"],
+)
+def test_slippage_never_takes_an_option_legs_stop_past_its_limit(instrument, price):
+    # 2 percent slippage: the buy fills at 510.15, its stop 20 points below at 490.15 and
+    # the option's limit at 465.60. Minute 5 gaps to 470.00, between the two; slipped, the
+    # open would sell at 460.60.
+    slipping = config(slippage=("percent", 2.0, 0))
+    gap = {5: (470.0, 471.0, 469.0, 470.5)}
+    fills = backtest(instrument, gap, slipping, stop_points=20.0)["fills"]
+    assert fills["slice_ts"][-1] == OPEN_NS + 5 * MINUTE_NS
+    assert fills["price_rupees"][-1] == pytest.approx(price, abs=1e-9)

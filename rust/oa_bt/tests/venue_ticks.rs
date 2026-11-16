@@ -227,7 +227,9 @@ fn a_partial_target_whose_exit_the_venue_rejects_leaves_the_stop_on_the_position
         .push_tick(SBIN, 502.1, at_second(1, 1))
         .expect("the tick is taken");
     assert_eq!(kernel.take_commands(), [cut]);
-    kernel.apply_modify(STOP).expect("the venue confirms the cut");
+    kernel
+        .apply_modify(STOP)
+        .expect("the venue confirms the cut");
     let exit = vec![(OrderId(3), Side::Sell, 50.0, OrderRole::Exit)];
     assert_eq!(placed_roles(&kernel.take_commands()), exit);
     kernel

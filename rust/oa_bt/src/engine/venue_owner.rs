@@ -1,7 +1,9 @@
 //! The exits of a position in an external session (`venue`): cancel, then exit.
 //!
-//! An exit is the strategy's `exit()` or `reduce()` (a reduce-only MARKET order), a leg's
-//! target (`venue_ticks`, made for the strategy), or one of the engine's exits
+//! An exit is the strategy's `exit()` or `reduce()` (a reduce-only MARKET order), a plain
+//! MARKET order against a position whose leg's stop rests (a sale, a reversal:
+//! `venue_roles`), a leg's target (`venue_ticks`, made for the strategy), or one of the
+//! engine's exits
 //! (`venue_exits`, and the session's own, `venue_session`). No working order counts as
 //! covering the position, so an exit first sends `Cancel` for every working order of its
 //! position on the closing side but the position's exits and the orders sent for them,
@@ -13,9 +15,13 @@
 //! 4.5, requirement R4): a strategy exit that asks for part of the position keeps the
 //! stop, which is modified down to what stays open first (`venue_legs`), and is sent once
 //! the venue has confirmed that; meanwhile it waits. A full exit cancels the stop like
-//! any order on the closing side. A stop repriced to a LIMIT (`venue_protect`) is exiting
-//! the whole position: it counts among the position's exits for the strategy's, which are
-//! sized on what it leaves (nothing), and an engine exit cancels it first.
+//! any order on the closing side, and so do a partial exit and the later exits waiting
+//! behind it when together they close the whole position (a `reduce()` then an `exit()`):
+//! nothing is left for the stop to protect, and a later exit never waits forever behind a
+//! cut of the stop the venue keeps refusing. A stop repriced to a LIMIT (`venue_protect`)
+//! is exiting the whole position: it counts among the position's exits for the
+//! strategy's, which are sized on what it leaves (nothing), and an engine exit cancels it
+//! first.
 //!
 //! The strategy's exits of a position add up, as a backtest fills them one after another
 //! at the next open: each is sized when it is sent, on the position less what the earlier
@@ -150,7 +156,12 @@ impl Engine {
         }
         let open = held.abs() - self.left_to_exit(exit.key);
         let partial = self.partial_exit_units(exit, open)?;
-        let kept_stop = partial.and(self.resting_leg_stop(exit.key));
+        let keeps_stop = partial.is_some() && !self.waiting_exits_close_all(exit.key, open)?;
+        let kept_stop = if keeps_stop {
+            self.resting_leg_stop(exit.key)
+        } else {
+            None
+        };
         let blocking: Vec<OrderId> = self
             .blocking(exit, closing_side(held))
             .into_iter()
@@ -181,19 +192,7 @@ impl Engine {
     /// stop repriced to exit the position (module docs).
     fn blocking(&self, exit: &PositionExit, side: Side) -> Vec<OrderId> {
         let key = exit.key;
-        let mut exits: Vec<OrderId> = self
-            .venue
-            .exits
-            .iter()
-            .filter(|exit| exit.key == key)
-            .flat_map(|exit| {
-                let own = match exit.by {
-                    ExitBy::Strategy(id) => Some(id),
-                    ExitBy::Engine(_) => None,
-                };
-                own.into_iter().chain(exit.sent.iter().copied())
-            })
-            .collect();
+        let mut exits = self.exit_orders_of(key);
         if matches!(exit.by, ExitBy::Strategy(_)) {
             exits.extend(self.repriced_leg_stop(key));
         }
@@ -206,6 +205,23 @@ impl Engine {
                     && !exits.contains(&order.id)
             })
             .map(|order| order.id)
+            .collect()
+    }
+
+    /// The orders of `key`'s exits: each strategy exit's own order and the orders sent for
+    /// every exit.
+    pub(super) fn exit_orders_of(&self, key: PositionKey) -> Vec<OrderId> {
+        self.venue
+            .exits
+            .iter()
+            .filter(|exit| exit.key == key)
+            .flat_map(|exit| {
+                let own = match exit.by {
+                    ExitBy::Strategy(id) => Some(id),
+                    ExitBy::Engine(_) => None,
+                };
+                own.into_iter().chain(exit.sent.iter().copied())
+            })
             .collect()
     }
 
@@ -243,10 +259,12 @@ impl Engine {
         }
     }
 
-    /// The units the orders sent for the exits of `key` still have to fill, with a leg
-    /// stop repriced to exit the position (module docs).
+    /// The units the orders sent for the exits of `key` still have to fill on its closing
+    /// side, with a leg stop repriced to exit the position (module docs). A reversal's
+    /// units left once it has taken the position through zero add to the new one.
     pub(super) fn left_to_exit(&self, key: PositionKey) -> f64 {
         let repriced = self.repriced_leg_stop(key);
+        let side = closing_side(self.held_units(key));
         self.venue
             .exits
             .iter()
@@ -254,6 +272,7 @@ impl Engine {
             .flat_map(|exit| exit.sent.iter())
             .chain(repriced.iter())
             .filter_map(|id| self.book.get(*id))
+            .filter(|order| order.request.side == side)
             .map(|order| self.units_to_fill(order))
             .sum()
     }

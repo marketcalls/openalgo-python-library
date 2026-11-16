@@ -245,10 +245,23 @@ def test_a_partial_exit_cuts_the_stop_down_before_it_goes():
     assert (partial["role"], partial["quantity_units"]) == ("exit", 5.0)
 
 
-def test_a_stop_fill_beyond_the_position_is_refused_as_would_reverse():
+def test_a_plain_market_sale_beside_the_stop_goes_once_the_stop_is_cancelled():
     engine = holding_with_stop()
     assert release_minute(engine, 1)[0] == "bar_close"
     outcome, sale, _ = engine.submit(order("SELL", 10))
+    assert outcome == "submitted"
+    assert engine.take_commands() == [{"command": "cancel", "order_id": STOP}]
+    assert engine.advance()[0] == "waiting"
+    engine.apply_cancel(STOP)
+    (sent,) = placed(engine)
+    assert (sent["order_id"], sent["role"], sent["quantity_units"]) == (sale, "exit", 10.0)
+
+
+def test_a_stop_fill_beyond_the_position_is_refused_as_would_reverse():
+    # A plain sale resting beside the stop fills first; the broker then fills the stop.
+    engine = holding_with_stop()
+    assert release_minute(engine, 1)[0] == "bar_close"
+    outcome, sale, _ = engine.submit(order("SELL", 10, order_type="LIMIT", price=500.0))
     assert outcome == "submitted"
     assert engine.advance()[0] == "waiting"
     engine.apply_fill(sale, 10, 500.0, at(2))
@@ -291,6 +304,15 @@ def test_reprice_exit_modifies_the_stop_to_a_limit_for_its_total_units():
 
 def test_reprice_exit_refuses_an_order_that_is_neither_a_stop_nor_an_engine_exit():
     engine = holding_with_stop()
+    assert release_minute(engine, 1)[0] == "bar_close"
+    outcome, add, _ = engine.submit(order("BUY", 10, order_type="LIMIT", price=495.0))
+    assert outcome == "submitted"
+    with pytest.raises(native_attr("NativeEngineInputError"), match="neither"):
+        engine.reprice_exit(add, 495.0)
+
+
+def test_reprice_exit_refuses_an_order_that_has_ended_or_a_limit_off_the_tick():
+    engine = holding_with_stop()
     with pytest.raises(VenueRefusalError) as ended:
         engine.reprice_exit(ENTRY, 495.0)
     assert ended.value.kind == "order_ended"
@@ -309,9 +331,29 @@ def test_an_exit_at_a_limit_cancels_the_stop_then_goes_as_a_limit_order():
     assert (limit_exit["role"], limit_exit["reason"]) == ("risk_exit", "stop_unfilled")
 
 
+def test_protect_waits_while_a_resting_sale_is_cancelled_for_the_stops_room():
+    engine = holding_with_stop()
+    engine.request_exit(0, "MIS", "kill_switch")
+    engine.apply_cancel(STOP)
+    (kill,) = placed(engine)
+    engine.apply_reject(kill["order_id"], "venue")
+    assert release_minute(engine, 1)[0] == "bar_close"
+    target = order("SELL", 10, order_type="LIMIT", price=520.0, reduce_only=True)
+    outcome, sale, _ = engine.submit(target)
+    assert outcome == "submitted"
+    assert engine.advance()[0] == "waiting"
+    engine.take_commands()
+    assert engine.protect(0, "MIS") == "waits_for_cancels"
+    assert engine.take_commands() == [{"command": "cancel", "order_id": sale}]
+    engine.apply_cancel(sale)
+    (stop,) = placed(engine)
+    assert (stop["role"], stop["quantity_units"]) == ("leg_stop", 10.0)
+
+
 def test_the_protect_vocabulary_is_the_kernels():
     assert native_attr("PROTECT_OUTCOMES") == (
         "placed",
+        "waits_for_cancels",
         "stop_works",
         "exiting",
         "no_stop_level",

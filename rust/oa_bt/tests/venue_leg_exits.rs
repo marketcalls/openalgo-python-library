@@ -13,7 +13,9 @@ use oa_bt::engine::{
     Engine, EngineExit, ExitRequest, KernelError, OrderRole, Pause, Protect, RiskExitReason,
     Submission, VenueCommand, VenueError,
 };
-use oa_bt::exec::{ExecError, OrderId, OrderRequest, OrderType, QuantitySpec, RejectCode};
+use oa_bt::exec::{
+    ExecError, OrderId, OrderRequest, OrderStatus, OrderType, QuantitySpec, RejectCode,
+};
 use oa_bt::model::{Product, Side};
 use oa_bt::rms::{AfterFirstTarget, Distance, ExitReason, LegRules, TargetSpec, TrailSpec};
 use venue_support::{
@@ -124,6 +126,72 @@ fn a_stop_the_broker_cancels_while_a_partial_exit_waits_is_placed_again_for_the_
     let expected = vec![
         (OrderId(4), Side::Sell, 50.0, OrderRole::LegStop),
         (OrderId(3), Side::Sell, 50.0, OrderRole::Exit),
+    ];
+    assert_eq!(placed_roles(&kernel.take_commands()), expected);
+}
+
+#[test]
+fn a_cut_confirmed_after_the_stop_filled_its_new_units_exits_the_rest_of_the_leg() {
+    // reduce(0.5) cuts the stop to 50. The broker applies the cut and fills the stop's 50
+    // at 497 before the cut's answer arrives: the cut then completes the stop, the leg's
+    // stop level was reached, and the 50 left go at market instead of the reduce.
+    let mut kernel = deciding();
+    assert_eq!(
+        kernel.submit(reduce(0.5)),
+        Ok(Submission::Submitted(OrderId(3)))
+    );
+    waiting(&mut kernel);
+    kernel.take_commands();
+    kernel
+        .apply_fill(STOP, 50.0, 497.0, at_second(2, 5))
+        .expect("the stop fills its new units");
+    assert!(kernel.take_commands().is_empty(), "the cut is not answered");
+    kernel
+        .apply_modify(STOP)
+        .expect("the venue confirms the cut");
+    let expected = vec![(
+        OrderId(4),
+        Side::Sell,
+        50.0,
+        OrderRole::RiskExit(RiskExitReason::StopUnfilled),
+    )];
+    assert_eq!(placed_roles(&kernel.take_commands()), expected);
+    let stop = kernel.order(STOP).expect("the stop");
+    assert_eq!(stop.status, OrderStatus::Filled);
+    let reduced = kernel.order(OrderId(3)).expect("the reduce");
+    assert_eq!(reduced.status, OrderStatus::Canceled);
+}
+
+#[test]
+fn a_full_exit_behind_a_partial_one_waiting_for_its_cut_cancels_the_stop_and_both_go() {
+    // The venue refuses the cut the reduce waits for; exit() of the rest then takes the
+    // stop away for both, and they go one after the other as a backtest fills them.
+    let mut kernel = deciding();
+    assert_eq!(
+        kernel.submit(reduce(0.5)),
+        Ok(Submission::Submitted(OrderId(3)))
+    );
+    waiting(&mut kernel);
+    kernel.take_commands();
+    kernel
+        .apply_modify_refused(STOP)
+        .expect("the venue refuses the cut");
+    pause_at_close(&mut kernel, &bars(&[], &[]), 2);
+    kernel.take_commands();
+    assert_eq!(
+        kernel.submit(reduce(1.0)),
+        Ok(Submission::Submitted(OrderId(4)))
+    );
+    assert_eq!(
+        kernel.take_commands(),
+        [VenueCommand::Cancel { order: STOP }]
+    );
+    waiting(&mut kernel);
+    kernel.take_commands();
+    kernel.apply_cancel(STOP).expect("the stop is cancelled");
+    let expected = vec![
+        (OrderId(3), Side::Sell, 50.0, OrderRole::Exit),
+        (OrderId(4), Side::Sell, 50.0, OrderRole::Exit),
     ];
     assert_eq!(placed_roles(&kernel.take_commands()), expected);
 }
@@ -249,6 +317,44 @@ fn a_filled_first_target_moves_the_stop_to_breakeven_after_the_throttle() {
         ),
     ];
     run_steps(&mut kernel, steps);
+}
+
+/// The slice after the test day's last (374): where a session waits while its close does.
+const AFTER_THE_DAY: usize = 375;
+
+#[test]
+fn protect_finds_the_market_closed_once_the_session_close_waits() {
+    // The venue refuses every cancellation of the stop, so the square-off waits for it all
+    // day. At the close the venue cancels the stop: the square-off is dropped (no session
+    // is left to fill it in), the leg is open with no stop, and none can be placed.
+    let mut kernel = holding(stop_points(3.0));
+    loop {
+        match kernel.advance().expect("the slice runs") {
+            Pause::Waiting { next_slice } if next_slice >= AFTER_THE_DAY => break,
+            Pause::Waiting { next_slice } => {
+                for command in kernel.take_commands() {
+                    if let VenueCommand::Cancel { order } = command {
+                        kernel
+                            .apply_cancel_refused(order)
+                            .expect("the venue refuses the cancel");
+                    }
+                }
+                kernel.release(next_slice + 1);
+            }
+            Pause::Finished { .. } => panic!("the session finished with its stop working"),
+            _ => {}
+        }
+    }
+    kernel.take_commands();
+    kernel
+        .apply_cancel(STOP)
+        .expect("the venue cancels the stop");
+    assert!(placed_roles(&kernel.take_commands()).is_empty());
+    assert_eq!(
+        kernel.protect(SBIN, Product::Mis).map(Protect::code),
+        Ok("market_closed")
+    );
+    assert!(kernel.take_commands().is_empty(), "nothing is sent");
 }
 
 #[test]

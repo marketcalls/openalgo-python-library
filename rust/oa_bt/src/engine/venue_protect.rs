@@ -4,7 +4,7 @@
 //!
 //! | Call | What |
 //! |---|---|
-//! | `protect(instrument, product)` | place the leg's stop again at its level for what the position's exits leave, when no stop of it works and no exit of the position waits or holds it; says what it did (`Protect`) |
+//! | `protect(instrument, product)` | place the leg's stop again at its level for what the position's exits leave, when no stop of it works and no exit of the position waits or holds it; a resting order sent only to close the position is cancelled first for the room the stop takes (`venue_stop_terms`); says what it did (`Protect`) |
 //! | `reprice_exit(order, limit_rupees)` | modify a leg's stop the price has reached and not filled (or an engine exit at a limit) to a LIMIT at `limit_rupees`, for the order's total units (a broker's modify takes the total), a partly filled one too; sent now, or with the venue's answer to a modification of it that waits |
 //! | `request_limit_exit(instrument, product, exit, limit_rupees)` | `request_exit` (`venue_session`) whose orders are LIMIT orders at `limit_rupees`: the price rule's marketable fallback |
 //!
@@ -28,6 +28,9 @@ use super::venue_session::ExitRequest;
 pub enum Protect {
     /// The leg's stop was placed.
     Placed,
+    /// The leg's stop is placed once the resting orders sent only to close the position,
+    /// cancelled for its room, have ended (`venue_stop_terms`).
+    WaitsForCancels,
     /// A stop of the leg works already.
     StopWorks,
     /// An exit of the position waits or works: it closes what the stop would cover.
@@ -42,8 +45,9 @@ pub enum Protect {
 
 impl Protect {
     /// Every outcome's code, in the order of the variants.
-    pub const CODES: [&'static str; 6] = [
+    pub const CODES: [&'static str; 7] = [
         "placed",
+        "waits_for_cancels",
         "stop_works",
         "exiting",
         "no_stop_level",
@@ -55,6 +59,7 @@ impl Protect {
     pub fn code(self) -> &'static str {
         match self {
             Protect::Placed => "placed",
+            Protect::WaitsForCancels => "waits_for_cancels",
             Protect::StopWorks => "stop_works",
             Protect::Exiting => "exiting",
             Protect::NoStopLevel => "no_stop_level",
@@ -106,8 +111,12 @@ impl Engine {
         if self.day_validity(&at.slice, at.decided_at).is_err() {
             return Ok(Protect::MarketClosed);
         }
-        self.place_leg_stop(at, key, cover, false)?;
-        Ok(Protect::Placed)
+        self.renew_leg_stop(key, false);
+        self.sync_leg_stop(at, key)?;
+        Ok(match self.working_leg_stop(key) {
+            Some(_) => Protect::Placed,
+            None => Protect::WaitsForCancels,
+        })
     }
 
     /// Modify order `order` to a LIMIT at `limit_rupees` (module docs). True when the

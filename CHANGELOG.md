@@ -102,31 +102,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   futures, and for NFO and BFO options an SL with its limit 5 percent beyond the trigger;
   each further fill or add modifies its units at once, and a trail or breakeven moves its
   trigger once the move is at least 0.25 percent of the trigger the broker last confirmed,
-  at most once every 5 seconds and one modification at a time (the newest terms go with
-  the answer). The kernel executes nothing when the price reaches the stop: the stop's own
+  at most once every 5 seconds and one modification at a time (the newest terms go once
+  the answer has come and 5 seconds have passed). The kernel executes nothing when the
+  price reaches the stop: the stop's own
   fill closes the leg (`leg_sl_hit`, reason `leg_sl`), and a stop's fill beyond the
   position records the units that closed it and refuses the rest (`would_reverse`; the
   session design asked for such a fill to be refused whole, and the closing part is kept
-  instead, so the session's books hold every unit the broker closed). A plain sale beside
-  the stop is an entry and a resting reduce-only order beside it is rejected
-  `exit_cover`, as beside any order closing the position. A partial exit (`reduce()`, a
-  partial target) cuts the stop down to what stays open first and is sent once the broker
-  confirms that (a refusal leaves it waiting, the cut sent again 5 seconds later); a full
-  exit cancels the stop first. A stop the broker rejects while its leg is open exits the
+  instead, so the session's books hold every unit the broker closed). The stop never
+  works beside more than the position: a resting reduce-only order beside it is rejected
+  `exit_cover` and a plain resting sale beside it is an entry, as beside any order
+  closing the position, and a stop placed later (a trail or breakeven arming, `protect`,
+  a re-placed stop) cancels the resting orders sent only to close the position and covers
+  their units once they have ended. A partial exit (`reduce()`, a partial target) cuts the
+  stop down to what stays open first and is sent once the broker confirms that (a refusal
+  leaves it waiting, the cut sent again 5 seconds later); a full exit cancels the stop
+  first, and so does a partial exit followed by exits that close the rest (`reduce()`
+  then `exit()`), which then go one after the other. A plain MARKET order against the
+  position (`sell()` of the long, a reversal, a `target()` that flips) goes the same way,
+  the stop cut down or cancelled first, so it and the stop never both fill at the
+  broker. A stop the broker rejects while its leg is open exits the
   leg at market (`stop_rejected`); one the broker cancels of its own accord, or that could
   not be placed (reported with `apply_cancel`), is placed again once, and a re-placed stop
   that ends without a fill exits at market (`stop_rejected`, or `unprotected`); a stop that
-  filled while its leg holds more (an add not covered yet) exits the rest
-  (`stop_unfilled`). The kernel holds the targets, the trail and the breakeven on the
-  session's ticks: `push_tick(instrument, price, at)` ratchets the legs, exits a target it
-  reaches through the position's exit owner, marks the position and tests the daily loss
+  filled while its leg holds more (an add not covered yet, or a cut the broker applied
+  before it filled) exits the rest (`stop_unfilled`). A stop a closed leg left working
+  (its cancellation refused) keeps new entries of the instrument out (`live_in_flight`).
+  The kernel holds the targets, the trail and the breakeven on the session's ticks:
+  `push_tick(instrument, price, at)` ratchets the legs, exits a target it reaches through
+  the position's exit owner (once per leg: an exit the broker rejects is not made again
+  on the next tick, the session retries it), marks the position and tests the daily loss
   limit and the drawdown halt on that mark; a session no longer ratchets on its bars. New
-  session calls: `protect` places a leg's stop again (native `PROTECT_OUTCOMES`),
+  session calls: `protect` places a leg's stop again (native `PROTECT_OUTCOMES`, with
+  `waits_for_cancels` when resting orders sent to close are cancelled for its room),
   `reprice_exit` modifies a stop the price has passed (or the engine's exit) to a
   marketable LIMIT for the order's total units, and `request_exit(..., limit_rupees=)`
   exits with LIMIT orders. A session on recorded ticks whose broker fills where the
-  simulator does trades as the backtest of its bars: the same fills, trades, equity,
-  position history and charges.
+  simulator does, and applies a confirmed stop modification only from the next bar, trades
+  as the backtest of its bars (the same fills, trades, equity, position history and
+  charges) as long as no daily loss limit or drawdown halt is breached by a tick inside a
+  bar where no bar close breaches it: a real broker fills a moved stop within the bar that
+  moved it, and the session tests its loss limits on every tick.
 - The live layer's mode guard (private, not used by `bt.live` yet): OpenAlgo's sandbox or
   live mode read at the start of a session, checked on every order answer and update of
   the session's own orders, and polled every 5 seconds and before each entry. A change of

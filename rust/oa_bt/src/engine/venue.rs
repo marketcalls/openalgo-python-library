@@ -32,7 +32,8 @@
 //! - **Reduce-only orders never reverse** (`venue_cover`). The orders working on a
 //!   position's closing side may not hold more units than it has: a reduce-only order
 //!   beyond that is rejected (`exit_cover`), and any other order against the position
-//!   beyond it is an entry (`venue_roles`). Reduce-only orders are cut down or cancelled
+//!   beyond it is an entry (`venue_roles`), but a MARKET one, which the exit owner sends
+//!   once the leg's stop has made way for it. Reduce-only orders are cut down or cancelled
 //!   when the position shrinks, and a fill of an order sent to close beyond the position
 //!   is recorded only up to it (`VenueError::WouldReverse`).
 //! - **Results in**: fills (`venue_fills`), rejections and cancellations (`venue_ends`),
@@ -219,6 +220,9 @@ pub(super) struct VenueDesk {
     pub(super) leg_stops: Vec<LegStop>,
     /// The target each of the engine's target exits fills, by order (`venue_ticks`).
     pub(super) target_exits: Vec<(OrderId, u16)>,
+    /// The targets of the open legs whose exit has been made, by position: a target fires
+    /// once per leg (`venue_ticks`).
+    pub(super) fired_targets: Vec<(PositionKey, u16)>,
     /// The LIMIT, rupees, a reprice wants for an order whose last modification waits for
     /// the venue's answer, sent with that answer (`venue_protect`).
     pub(super) reprices: Vec<(OrderId, f64)>,

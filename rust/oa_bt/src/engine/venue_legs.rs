@@ -91,11 +91,15 @@ pub(super) enum StopEnd {
 }
 
 impl Engine {
-    /// A leg opened at `key`: its stop is placed once it has a level (module docs); a stop
-    /// of an earlier leg of the position is no longer the leg's.
+    /// A leg opened at `key`: its stop is placed once it has a level (module docs), and
+    /// none of its targets has fired (`venue_ticks`). A stop of an earlier leg of the
+    /// position is no longer the leg's: a new leg opens from flat only once no such stop
+    /// works (`venue_gates`), and a reversal cancels it first or leaves it on the side that
+    /// no longer closes, where it is cancelled (`venue_cover`).
     pub(super) fn open_leg_stop(&mut self, key: PositionKey) {
         self.venue.leg_stops.retain(|stop| stop.key != key);
         self.venue.leg_stops.push(LegStop::new(key));
+        self.venue.fired_targets.retain(|(known, _)| *known != key);
     }
 
     /// The leg's stop record of `key`, if the session keeps one.
@@ -109,6 +113,19 @@ impl Engine {
 
     pub(super) fn leg_stop_mut(&mut self, key: PositionKey) -> Option<&mut LegStop> {
         self.venue.leg_stops.iter_mut().find(|stop| stop.key == key)
+    }
+
+    /// Ask for a new stop of `key`'s leg, `replaced` for the kernel's re-placement (R3):
+    /// it is placed by `sync_leg_stop` within the room it has (`venue_stop_terms`).
+    pub(super) fn renew_leg_stop(&mut self, key: PositionKey, replaced: bool) {
+        let renewed = LegStop {
+            replaced,
+            ..LegStop::new(key)
+        };
+        match self.leg_stop_mut(key) {
+            Some(stop) => *stop = renewed,
+            None => self.venue.leg_stops.push(renewed),
+        }
     }
 
     /// The working stop order of `key`'s leg, repriced or not.
@@ -290,9 +307,8 @@ impl Engine {
         let reason = match (how, stop.replaced) {
             (StopEnd::Canceled { requested: true }, _) => return Ok(()),
             (StopEnd::Canceled { requested: false }, false) => {
-                let cover = self.stop_cover_units(key)?;
-                self.place_leg_stop(at, key, cover, true)?;
-                return Ok(());
+                self.renew_leg_stop(key, true);
+                return self.sync_leg_stop(at, key);
             }
             (StopEnd::Canceled { requested: false }, true) => RiskExitReason::Unprotected,
             (StopEnd::Rejected, _) => RiskExitReason::StopRejected,
@@ -301,24 +317,19 @@ impl Engine {
         self.request_engine_exit(at, key, EngineExit::Risk(reason), None)
     }
 
-    /// True when an exit closes all of `key`'s position: the engine's exit holds it, an
-    /// exit of it that waits asks for all that is open, or its exits sent leave nothing.
+    /// True when an exit closes all of `key`'s position: the engine's exit holds it, the
+    /// exits of it that wait ask for all that is open, or its exits sent leave nothing.
     ///
-    /// Errors: those of `partial_exit_units`.
-    fn exit_closes_leg(&self, key: PositionKey) -> Result<bool, KernelError> {
+    /// Errors: those of `waiting_exits_close_all`.
+    pub(super) fn exit_closes_leg(&self, key: PositionKey) -> Result<bool, KernelError> {
         if self.has_engine_exit(key) {
             return Ok(true);
         }
         let open = self.held_units(key).abs() - self.left_to_exit(key);
-        let waiting = self
-            .venue
-            .exits
-            .iter()
-            .find(|exit| exit.key == key && exit.sent.is_empty());
-        Ok(match waiting {
-            Some(exit) => self.partial_exit_units(exit, open)?.is_none(),
-            None => open <= 0.0,
-        })
+        if !self.has_waiting_exit(key) {
+            return Ok(open <= 0.0);
+        }
+        self.waiting_exits_close_all(key, open)
     }
 
     /// Mark `key`'s working stop as repriced (`venue_protect`): it exits the position.

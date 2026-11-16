@@ -7,10 +7,16 @@
 //! |---|---|---|
 //! | `Entry` | `entry` | opens a position from flat, reverses one (`reverse=True` beyond it: the rest opens the other side), or goes against it beyond the room its closing side has (`venue_cover::closing_room`): the other orders working on that side could leave the position flat, and this one would then open the other side |
 //! | `Add` | `add` | adds to an open position on its side |
-//! | `LegStop` | `leg_stop` | a leg's broker-held stop (decision D31); no order takes it until the broker-held stops are built |
+//! | `LegStop` | `leg_stop` | a leg's broker-held stop (decision D31, `venue_legs`) |
 //! | `Exit` | `exit` | the strategy's order that only reduces: `exit()`, `reduce()`, a reduce-only order resting to close, an order against the position within the room its closing side has, and the further orders of such an exit above the freeze quantity |
 //! | `RiskExit(reason)` | `risk_exit` | the engine's exit of the whole position for a risk reason |
 //! | `SquareOff` | `square_off` | the engine's exit at the square-off time |
+//!
+//! A MARKET order against a position whose leg's stop rests is judged in the room the stop
+//! makes for it: the position's exit owner sends it once the stop is cut down to what stays
+//! open, or cancelled for a sale of the whole position or a reversal (`venue_owner`), so
+//! the order and the stop never both fill at the broker (16-session-design 4.5). A resting
+//! order against it (LIMIT, SL, SL-M) is judged beside the stop, which keeps working.
 //!
 //! A strategy order's role is decided when it passes the submission checks, from the
 //! position then held and the orders working to close it; the engine's orders take the
@@ -31,13 +37,19 @@
 //! | `stop_unfilled` | `leg_sl`: the leg's stop level was reached |
 //! | `unprotected`, `stop_rejected`, `kill_switch`, `account_loss`, `operator_stop` | `manual`: neither the strategy nor a kernel rule made it |
 
-use crate::exec::{ExecError, Order, OrderId, OrderRequest};
+use crate::exec::{ExecError, Order, OrderId, OrderRequest, OrderType};
 use crate::model::Side;
 use crate::portfolio::PositionKey;
 use crate::rms::ExitReason;
 
 use super::error::KernelError;
 use super::kernel::Engine;
+use super::venue::is_exit;
+
+/// True when an order on `side` goes against a position of `held` signed units.
+fn goes_against(held: f64, side: Side) -> bool {
+    held != 0.0 && (held > 0.0) != (side == Side::Buy)
+}
 
 /// Why the engine of an external session exits a whole position for risk (module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -223,14 +235,50 @@ impl Engine {
             product: request.product,
         };
         let held = self.held_units(key);
-        let against = held != 0.0 && (held > 0.0) != (request.side == Side::Buy);
+        let against = goes_against(held, request.side);
+        let room = || self.closing_room(key, except) + self.room_the_stop_makes(request, except);
         match (request.reduce_only, against) {
             (true, _) => OrderRole::Exit,
-            (false, true) if units <= self.closing_room(key, except) => OrderRole::Exit,
+            (false, true) if units <= room() => OrderRole::Exit,
             (false, true) => OrderRole::Entry,
             (false, false) if held == 0.0 => OrderRole::Entry,
             (false, false) => OrderRole::Add,
         }
+    }
+
+    /// The units of the leg's resting stop of `request`'s position when `request` is a
+    /// MARKET order against the position that the exit owner sends (module docs); 0 for
+    /// any other order, and for the stop itself (`except`).
+    fn room_the_stop_makes(&self, request: &OrderRequest, except: Option<OrderId>) -> f64 {
+        if request.order_type != OrderType::Market {
+            return 0.0;
+        }
+        let key = PositionKey {
+            instrument: request.instrument,
+            product: request.product,
+        };
+        match self.resting_leg_stop(key) {
+            Some(stop) if Some(stop) != except => {
+                self.book.get(stop).map_or(0.0, |o| self.units_to_fill(o))
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// True for an order the exit owner of its position sends (`venue_owner`): an exit
+    /// (`exit()`, `reduce()`), and a plain MARKET order against a position whose leg's
+    /// stop rests (module docs). Any other order is sent at once.
+    pub(super) fn owner_sends(&self, request: &OrderRequest) -> bool {
+        if is_exit(request) {
+            return true;
+        }
+        let key = PositionKey {
+            instrument: request.instrument,
+            product: request.product,
+        };
+        request.order_type == OrderType::Market
+            && goes_against(self.held_units(key), request.side)
+            && self.resting_leg_stop(key).is_some()
     }
 
     /// Refuse, in an external session, a replacement `request` of `units` for order `id`

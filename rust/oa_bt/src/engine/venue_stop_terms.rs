@@ -3,9 +3,15 @@
 //! under a throttle.
 //!
 //! The stop covers the position less what the position's exits sent still have to fill,
-//! and less the units of a partial exit that waits for it (`venue_owner`). When those units
-//! change (a further fill of the entry, an add, a partial exit, an exit that ended
-//! unfilled) the kernel sends `Modify` of its units at once. When the leg's level moves (a
+//! and less the units of a partial exit that waits for it (`venue_owner`). It never works
+//! beyond the room the other orders sent only to close the position leave on its closing
+//! side (`venue_cover`), and it takes that room from them: when it wants more than they
+//! leave (a trail or breakeven arms beside a resting sale, `protect`, a re-placed stop),
+//! they are cancelled, the stop goes out (or stays) at what they leave, and it covers the
+//! rest once they have ended. So the two rules never undo each other: the cover fit keeps
+//! the stop first and cuts the others (`venue_cover`). When its units change (a further
+//! fill of the entry, an add, a partial exit, an exit that ended unfilled, a resting sale
+//! cancelled) the kernel sends `Modify` of its units at once. When the leg's level moves (a
 //! trail, a breakeven) it sends `Modify` of its trigger once the move is at least
 //! `TRAIL_MODIFY_MIN_BASIS_POINTS` of the trigger the venue last confirmed and
 //! `MODIFY_EVERY_NS` have passed since its last modification was sent, by the session's
@@ -27,6 +33,7 @@ use crate::portfolio::PositionKey;
 use super::error::KernelError;
 use super::kernel::Engine;
 use super::venue::{Replacement, SendAt};
+use super::venue_owner::closing_side;
 
 /// The least move of a stop's trigger worth a modification, in basis points (0.25
 /// percent) of the trigger the venue last confirmed (08-live-trading 6.2, requirement R6).
@@ -64,11 +71,13 @@ impl Engine {
             return Ok(());
         }
         let positions = &self.portfolio;
-        self.venue.leg_stops.retain(|stop| {
+        let open = |key: PositionKey| {
             positions
-                .position(stop.key)
+                .position(key)
                 .is_some_and(|position| !position.is_flat())
-        });
+        };
+        self.venue.leg_stops.retain(|stop| open(stop.key));
+        self.venue.fired_targets.retain(|(key, _)| open(*key));
         let keys: Vec<PositionKey> = self.venue.leg_stops.iter().map(|stop| stop.key).collect();
         for key in keys {
             self.sync_leg_stop(at, key)?;
@@ -76,17 +85,27 @@ impl Engine {
         Ok(())
     }
 
-    fn sync_leg_stop(&mut self, at: SendAt, key: PositionKey) -> Result<(), KernelError> {
+    /// Keep `key`'s leg stop on its leg (`sync_leg_stops`): a stop not placed yet (the leg
+    /// has had none, or `renew_leg_stop` asked for a new one) is placed once the leg has a
+    /// level and no exit closing the whole position waits.
+    ///
+    /// Errors: those of `sync_leg_stops`.
+    pub(super) fn sync_leg_stop(
+        &mut self,
+        at: SendAt,
+        key: PositionKey,
+    ) -> Result<(), KernelError> {
         let Some(stop) = self.leg_stop_of(key) else {
             return Ok(());
         };
         let Some(trigger) = self.stop_trigger(key)? else {
             return Ok(());
         };
-        let cover = self.stop_cover_units(key)?;
+        let wanted = self.stop_cover_units(key)?;
         let Some(id) = stop.order else {
-            if !self.has_waiting_exit(key) {
-                self.place_leg_stop(at, key, cover, false)?;
+            if wanted > 0.0 && !self.exit_closes_leg(key)? {
+                let units = self.take_room_for_stop(at, key, None, wanted)?;
+                self.place_leg_stop(at, key, units, stop.replaced)?;
             }
             return Ok(());
         };
@@ -101,8 +120,13 @@ impl Engine {
         if stop.repriced || answer_pending {
             return Ok(());
         }
-        if cover <= 0.0 {
+        if wanted <= 0.0 {
             self.withdraw_order(at.stamp(), id)?;
+            return Ok(());
+        }
+        let cover = self.take_room_for_stop(at, key, Some(id), wanted)?;
+        if cover <= 0.0 {
+            // The orders in its way are being cancelled; it is never cancelled for them.
             return Ok(());
         }
         let units = order.filled_units + cover;
@@ -131,6 +155,60 @@ impl Engine {
             stop.refused = false;
         }
         Ok(())
+    }
+
+    /// The units `key`'s leg stop (`stop`, once it is in the book) may cover now, at most
+    /// `wanted` (module docs): the position less what its exits still have to fill and
+    /// less what the other orders sent only to close it may fill on its closing side.
+    /// When that leaves less than `wanted`, those orders are cancelled, decided and
+    /// stamped as `at` says, so the stop covers the rest once they have ended.
+    ///
+    /// Errors: those of `withdraw_order`.
+    fn take_room_for_stop(
+        &mut self,
+        at: SendAt,
+        key: PositionKey,
+        stop: Option<OrderId>,
+        wanted: f64,
+    ) -> Result<f64, KernelError> {
+        let others = self.closing_orders_beside_stop(key, stop);
+        let taken: f64 = others.iter().map(|(_, units)| units).sum();
+        let room = (self.held_units(key).abs() - self.left_to_exit(key) - taken).max(0.0);
+        if wanted > room {
+            for (id, _) in others {
+                self.withdraw_order(at.stamp(), id)?;
+            }
+        }
+        Ok(wanted.min(room))
+    }
+
+    /// The working orders of `key`'s position on its closing side sent only to close it
+    /// (`Engine::sent_to_close`) that are neither its leg stop `stop` nor one of its exits
+    /// (`venue_owner`), with the units each may still fill.
+    fn closing_orders_beside_stop(
+        &self,
+        key: PositionKey,
+        stop: Option<OrderId>,
+    ) -> Vec<(OrderId, f64)> {
+        let held = self.held_units(key);
+        if held == 0.0 {
+            return Vec::new();
+        }
+        let side = closing_side(held);
+        let mut exits = self.exit_orders_of(key);
+        exits.extend(self.repriced_leg_stop(key));
+        self.book
+            .working()
+            .filter(|order| {
+                order.request.instrument == key.instrument
+                    && order.request.product == key.product
+                    && order.request.side == side
+                    && Some(order.id) != stop
+                    && !exits.contains(&order.id)
+                    && self.sent_to_close(order)
+            })
+            .map(|order| (order.id, self.units_to_fill(order)))
+            .collect()
     }
 
     /// The venue answered the modification of order `id`: confirmed, or refused (module

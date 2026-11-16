@@ -15,8 +15,11 @@
 //!   with the exit reason `leg_target`, taken by the position's exit owner (`venue_owner`)
 //!   as a strategy exit: a full one cancels the stop first, a partial one waits for the
 //!   stop to be modified down (R4). Its fill marks the target filled, and
-//!   `after_first_target="breakeven"` then moves the stop. A target is not exited twice
-//!   while its exit works.
+//!   `after_first_target="breakeven"` then moves the stop. A target fires once per leg:
+//!   an exit of it that ends without filling (rejected by the broker, cancelled) is not
+//!   made again on a later tick, so a broker that keeps refusing it is not sent one exit
+//!   per tick and the stop is not cut and restored each time; the session retries a
+//!   failed exit on its own schedule (16-session-design 4.8).
 //! - **Mark and aggregate rules** (steps 5 and 6): the instrument's open positions are
 //!   marked at the price, then the daily loss limit and the drawdown halt are tested on
 //!   that mark (`aggregate`); their exits go through the exit owner.
@@ -114,7 +117,7 @@ impl Engine {
     }
 
     /// A target of `key`'s leg reached on a tick: its event, and the strategy's exit of its
-    /// units, unless an exit of it works already (module docs).
+    /// units, unless the target has fired already for the leg (module docs).
     ///
     /// Errors: those of the order book and of the exit owner.
     fn exit_at_target(
@@ -124,13 +127,7 @@ impl Engine {
         hit: LevelHit,
         index: u16,
     ) -> Result<(), KernelError> {
-        let book = &self.book;
-        let exiting = self.venue.target_exits.iter().any(|(id, target)| {
-            *target == index
-                && book
-                    .get(*id)
-                    .is_some_and(|o| o.status.is_working() && same_position(o, key))
-        });
+        let fired = self.venue.fired_targets.contains(&(key, index));
         let held = self.held_units(key);
         let units = hit.quantity_units.min(held.abs());
         // The engine's exit, or exits already sent for the whole position, close what the
@@ -139,7 +136,7 @@ impl Engine {
         let Ok(good_until) = self.day_validity(&at.slice, at.decided_at) else {
             return Ok(());
         };
-        if exiting || covered || units <= 0.0 {
+        if fired || covered || units <= 0.0 {
             return Ok(());
         }
         let stamp = Self::stamp(&at.slice, Step::Levels);
@@ -157,6 +154,7 @@ impl Engine {
         let id = self.insert_engine_order(at, request, units, good_until)?;
         self.record_role(id, OrderRole::Exit);
         self.venue.target_exits.push((id, index));
+        self.venue.fired_targets.push((key, index));
         self.own_strategy_exit(at, id)
     }
 
@@ -195,9 +193,4 @@ impl Engine {
         }
         Ok(())
     }
-}
-
-/// True when `order` trades `key`'s instrument and product.
-fn same_position(order: &Order, key: PositionKey) -> bool {
-    order.request.instrument == key.instrument && order.request.product == key.product
 }

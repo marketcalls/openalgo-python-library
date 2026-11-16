@@ -13,7 +13,11 @@
 //!   the breakeven moves it, at most once every 5 s and only for a move of at least 0.25
 //!   percent of the trigger the venue last confirmed; one "modify" of it waits for its
 //!   answer at a time. A partial exit ("reduce", a partial target) modifies the stop down
-//!   first and is placed once `apply_modify` confirms that; a full exit cancels it first.
+//!   first and is placed once `apply_modify` confirms that; a full exit cancels it first,
+//!   and so does a partial exit with the exits behind it when together they close the
+//!   position. A plain "MARKET" order against the position is sent the same way (an
+//!   "exit", or an "entry" for a reversal), and a resting order sent only to close the
+//!   position is cancelled when the stop needs its room. A target fires once per leg.
 //!   Its fill closes the leg (a fill beyond the position raises `VenueRefusalError` of
 //!   kind "would_reverse" after recording the units that closed it).
 //! - A stop that ends without a fill while its leg is open: `apply_reject` exits the leg
@@ -29,7 +33,9 @@
 //!   left to the broker. A price that is not above 0 raises `NativeEngineInputError`; a
 //!   call at a bar close, after the session or in a backtest raises `VenueRefusalError`.
 //! - `protect(instrument, product)`: the leg's stop placed again at its level, for what
-//!   the position's exits leave; returns one of `PROTECT_OUTCOMES`: "placed", and nothing
+//!   the position's exits leave; returns one of `PROTECT_OUTCOMES`: "placed";
+//!   "waits_for_cancels" when resting orders sent only to close the position take its
+//!   room (they are cancelled, and the stop is placed once they have ended); and nothing
 //!   placed for "stop_works", "exiting" (an exit of the position waits or works),
 //!   "no_stop_level", "flat" and "market_closed".
 //! - `reprice_exit(order_id, limit_rupees)`: a leg's stop (or the engine's exit) modified

@@ -52,7 +52,10 @@ fn holding_beside(rules: LegRules, resting: OrderRequest) -> Engine {
     let mut kernel = holding_with(100.0, rules);
     kernel.take_commands();
     pause_at_close(&mut kernel, &bars(&[], &[]), 1);
-    assert!(matches!(kernel.submit(resting), Ok(Submission::Submitted(_))));
+    assert!(matches!(
+        kernel.submit(resting),
+        Ok(Submission::Submitted(_))
+    ));
     waiting(&mut kernel);
     kernel.take_commands();
     kernel
@@ -100,7 +103,11 @@ fn a_stop_that_arms_beside_a_resting_order_sent_to_close_takes_its_room_first() 
     ];
     for (what, resting, armed, after_cancel) in rows {
         let mut kernel = holding_beside(trail_only(), resting);
-        assert_eq!(kernel.order_role(OrderId(2)), Some(OrderRole::Exit), "{what}");
+        assert_eq!(
+            kernel.order_role(OrderId(2)),
+            Some(OrderRole::Exit),
+            "{what}"
+        );
         kernel
             .push_tick(SBIN, 502.2, at_second(2, 5))
             .expect("the tick is taken");
