@@ -107,13 +107,20 @@ class HeldWords:
             if not self._is_cancel(trader, word):
                 if now_ns - word.held_since_ns >= round(HELD_FILL_RELEASE_AFTER_S * _NS):
                     self._release(trader, kernel_order, word, word.filled_quantity, now_ns)
-            elif now_ns - word.held_since_ns >= round(HELD_CANCEL_DECIDE_AFTER_S * _NS) and (
+            elif self._waits(word, now_ns) and (
                 sum(self._leg_of(w) == trader.name for w in self._held) == 1
             ):
                 cancels.append(word)
         if cancels and (self._read_due_ns is None or now_ns >= self._read_due_ns):
             self._read_due_ns = now_ns + round(POSITION_READ_EVERY_S * _NS)
             self._session.hand_over([ReadPositions()])
+
+    def _waits(self, word: HeldFill, now_ns: int) -> bool:
+        """Whether a held cancel past its wait is still to be decided: not released yet
+        (the worker's next word of the held list drops it)."""
+        released = any(order_id == word.order_id for order_id, _ in self._released)
+        waited = now_ns - word.held_since_ns >= round(HELD_CANCEL_DECIDE_AFTER_S * _NS)
+        return waited and not released
 
     def positions(self, message: PositionRows) -> None:
         """A position-book read: decide each held cancel past its wait."""

@@ -86,6 +86,16 @@ def order_of(trader: Trader, kernel_order: int) -> dict[str, Any] | None:
     return None if found is None else dict(found)
 
 
+def cancelling(trader: Trader) -> frozenset[int]:
+    """The kernel orders whose cancel the kernel has decided and the venue not answered:
+    those of its saved state's desk (`live_state`, R14), which lists a cancel from the
+    moment it is decided, before its command is taken."""
+    if trader.finished:
+        return frozenset()
+    desk = call(trader.engine.live_state)["desk"]
+    return frozenset(int(kernel_order) for kernel_order in desk["cancelling"])
+
+
 def tick_size(trader: Trader) -> float:
     """The tick of `trader`'s instrument, rupees (the preflight's facts)."""
     return float(trader.part.setup.instruments[INSTRUMENT].tick_size)
@@ -107,6 +117,7 @@ def marketable_limit(price: float, side: str, tick: float) -> float:
 __all__ = [
     "OPTIONS_STOP_LIMIT_BUFFER_PERCENT",
     "PROTECT_PLACED",
+    "cancelling",
     "marketable_limit",
     "order_of",
     "protect",

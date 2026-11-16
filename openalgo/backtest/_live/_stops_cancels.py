@@ -47,8 +47,9 @@ class CancelRetries:
         self._halted: set[str] = set()
 
     def reason(self, trader: Trader, kernel_order: int, why: str) -> None:
-        """A cancel of the order was refused or unanswered for `why` (kept for the alert)."""
-        self._reasons[(trader.name, kernel_order)] = why or "no reason given"
+        """A cancel of the order was refused or unanswered for `why` (kept for the alert, on
+        one line: an HTTP body may carry line breaks)."""
+        self._reasons[(trader.name, kernel_order)] = " ".join(why.split()) or "no reason given"
 
     def refused(self, trader: Trader, kernel_order: int, name: str, now_ns: int) -> None:
         """The order (named `name` in alerts) works on after its cancel was refused:

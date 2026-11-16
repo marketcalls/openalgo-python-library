@@ -1,0 +1,237 @@
+"""Protect by state, on the fake OpenAlgo (`_live/_stops_protect.py`, `_live/_session_stop.py`,
+`_live/session.py`; 16-session-design 3.3, 3.5 and 7.2 rows F57 (its variant), F74, F77
+and F80): when a session must end with a leg whose stop the broker holds, it never leaves
+the leg with neither a stop nor an exit while one can be sent, and never has a stop and
+an exit working at once.
+
+`StopHold` buys 10 SBIN at 14:42:01 IST with a stop at 497.00, `TargetHold` with a target
+at 502.00 too, which SBIN reaches at 14:44:05 (`stops_samples`).
+"""
+
+from __future__ import annotations
+
+import logging
+
+import pytest
+from fake_openalgo.fixtures import *  # noqa: F403
+from session_samples import NS, alerts, ist
+from stops_samples import (
+    StopHold,
+    TargetHold,
+    at_price,
+    check_invariants,
+    stop_world,
+)
+
+from openalgo.backtest._live import _session_trader, _stops_protect
+from openalgo.backtest._live._session_exits import EXIT_ATTEMPTS
+from openalgo.backtest._live._session_stop import (
+    SAFE_STOP_FLATTEN_S,
+    SAFE_STOP_STATE_WAIT_S,
+    UNPROTECTED_REMINDER_EVERY_S,
+)
+from openalgo.backtest._live._types import LOGGER_NAME
+
+
+@pytest.fixture
+def world(make_fake_openalgo, monkeypatch, tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+    return stop_world(make_fake_openalgo, monkeypatch, tmp_path)
+
+
+def kinds(world) -> list[tuple]:
+    """Each live order at the fake: action, price type, status."""
+    return [(o.action, o.price_type, o.status) for o in world.orders()]
+
+
+def test_F57_ctrl_c_mid_position_cancels_the_stop_then_exits_flat(world):
+    world.stop_at(ist(14, 43, 30))
+    outcome = world.run(StopHold)
+
+    assert kinds(world) == [
+        ("BUY", "MARKET", "complete"),
+        ("SELL", "SL-M", "cancelled"),
+        ("SELL", "MARKET", "complete"),
+    ]
+    assert outcome.stopped_by == "ctrl_c"
+    assert outcome.open_positions == ()
+    check_invariants(world.timeline, strategy="StopHold")
+
+
+def test_F57_a_second_ctrl_c_right_after_the_stops_cancel_protects_instead_of_exiting(world):
+    world.stop_at(ist(14, 43, 30))
+    # The first Ctrl+C's cancel of the stop is sent at 14:43:31; its word is taken, and
+    # the exit made, at 14:43:32.
+    world.stop_at(ist(14, 43, 31) + NS // 2)
+    outcome = world.run(StopHold)
+
+    assert kinds(world) == [
+        ("BUY", "MARKET", "complete"),
+        ("SELL", "SL-M", "cancelled"),
+        ("SELL", "SL-M", "trigger pending"),
+    ]
+    assert outcome.stopped_by == "ctrl_c"
+    (left,) = outcome.open_positions
+    assert (left.units, left.stop_confirmed) == (10.0, True)
+    assert left.stop_order_id == world.orders()[-1].order_id
+    assert outcome.ended_ns < ist(14, 43, 31) + SAFE_STOP_STATE_WAIT_S * NS + NS
+    check_invariants(world.timeline, strategy="StopHold")
+
+
+def test_two_ctrl_c_at_once_on_a_leg_with_a_stop_leave_it_protected_with_no_exit(world):
+    world.stop_at(ist(14, 43, 30))
+    world.stop_at(ist(14, 43, 30))
+    outcome = world.run(StopHold)
+
+    assert [kind for _, kind, _ in kinds(world)] == ["MARKET", "SL-M", "SL-M"]
+    assert outcome.open_positions[0].stop_confirmed
+    check_invariants(world.timeline, strategy="StopHold")
+
+
+def test_ctrl_c_with_keep_leaves_the_position_with_its_confirmed_stop(world):
+    world.stop_at(ist(14, 43, 30))
+    outcome = world.run(StopHold, on_stop="keep")
+
+    assert kinds(world)[1] == ("SELL", "SL-M", "trigger pending")
+    assert outcome.open_positions[0].stop_confirmed
+    assert outcome.ended_ns < ist(14, 43, 32)
+    assert any("confirmed at the broker" in line for line in world.lines)
+    check_invariants(world.timeline, strategy="StopHold")
+
+
+def test_the_safe_stops_timeout_leaves_a_leg_whose_exits_fail_with_its_stop(world, caplog):
+    def refuse_exits():
+        for _ in range(EXIT_ATTEMPTS + 5):
+            world.fake.reject_next("RMS: blocked", price_type="MARKET")
+
+    world.script.at(ist(14, 43, 20), refuse_exits)
+    world.stop_at(ist(14, 43, 30))
+    outcome = world.run(StopHold)
+
+    exits = [o for o in world.orders() if o.price_type == "MARKET" and o.action == "SELL"]
+    assert [o.status for o in exits] == ["rejected"] * EXIT_ATTEMPTS
+    assert kinds(world)[-1] == ("SELL", "SL-M", "trigger pending")
+    assert outcome.stopped_by == "ctrl_c"
+    assert outcome.ended_ns >= ist(14, 43, 30) + SAFE_STOP_FLATTEN_S * NS
+    assert outcome.open_positions[0].stop_confirmed
+    check_invariants(world.timeline, strategy="StopHold")
+
+
+def test_F74_a_safe_stop_whose_exit_is_unanswered_places_no_stop_and_reminds_each_minute(
+    world, caplog
+):
+    def exit_unanswered_and_openalgo_silent():
+        world.fake.faults.timeout("placeorder", reached_broker=True)
+        for _ in range(150):
+            world.fake.faults.gateway_error("orderbook", status=504)
+
+    world.script.at(ist(14, 43, 32), exit_unanswered_and_openalgo_silent)
+    world.stop_at(ist(14, 43, 30))
+    outcome = world.run(StopHold)
+
+    assert kinds(world) == [
+        ("BUY", "MARKET", "complete"),
+        ("SELL", "SL-M", "cancelled"),
+        ("SELL", "MARKET", "complete"),
+    ]
+    assert any("in flight, no stop at the broker" in t for t in alerts(caplog, "error"))
+    reminders = [m.ts_ns for m in world.fake.telegram_sent if "safe stop:" in m.message]
+    assert len(reminders) >= 2
+    gaps = [b - a for a, b in zip(reminders, reminders[1:], strict=False)]
+    assert all(gap >= UNPROTECTED_REMINDER_EVERY_S * NS for gap in gaps)
+    assert any("not flat yet" in line for line in world.lines)
+    assert world.fake.position("SBIN", "NSE") == 0
+    assert outcome.stopped_by == "ctrl_c"
+    assert outcome.open_positions == ()
+    check_invariants(world.timeline, strategy="StopHold")
+
+
+def raise_once_after_the_stop_is_cancelled(monkeypatch) -> None:
+    """The next kernel call of the loop after the stop's cancel was applied raises."""
+    original = _session_trader.Trader.drive
+    raised = []
+
+    def drive(self, *, deciding):
+        stop = self.engine.order(2)
+        if not raised and stop is not None and stop["status"] == "Canceled":
+            raised.append(True)
+            raise RuntimeError("a defect of the loop")
+        return original(self, deciding=deciding)
+
+    monkeypatch.setattr(_session_trader.Trader, "drive", drive)
+
+
+def test_F77_an_error_mid_cancel_then_exit_drops_the_exit_and_places_the_stop_again(
+    world, monkeypatch, caplog
+):
+    at_price(world, ist(14, 44), 502.0)
+    raise_once_after_the_stop_is_cancelled(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="a defect of the loop"):
+        world.run(TargetHold)
+
+    assert kinds(world) == [
+        ("BUY", "MARKET", "complete"),
+        ("SELL", "SL-M", "cancelled"),
+        ("SELL", "SL-M", "trigger pending"),
+    ]
+    stop = world.orders()[-1]
+    stopped = [t for t in alerts(caplog, "error") if "the session stops on an error" in t]
+    assert len(stopped) == 1 and f"stop {stop.order_id} confirmed at the broker" in stopped[0]
+    check_invariants(world.timeline, strategy="TargetHold")
+
+
+def test_F77_when_the_kernels_protect_fails_too_the_alert_lists_the_leg_without_a_stop(
+    world, monkeypatch, caplog
+):
+    at_price(world, ist(14, 44), 502.0)
+    raise_once_after_the_stop_is_cancelled(monkeypatch)
+
+    def fails(trader):
+        raise RuntimeError("the kernel's protect failed")
+
+    monkeypatch.setattr(_stops_protect, "protect", fails)
+    with pytest.raises(RuntimeError, match="a defect of the loop"):
+        world.run(TargetHold)
+
+    assert [kind for _, kind, _ in kinds(world)] == ["MARKET", "SL-M"]
+    stopped = [t for t in alerts(caplog, "error") if "the session stops on an error" in t]
+    assert len(stopped) == 1 and "10 units, no stop at the broker" in stopped[0]
+    check_invariants(world.timeline, strategy="TargetHold", unprotected_at_end=True)
+
+
+def test_F80_an_ambiguous_stop_placement_leaves_the_leg_marked_and_sends_nothing_more(
+    world, caplog
+):
+    other = world.fake.client()
+
+    def the_same_stop_by_another_client():
+        other.placeorder(
+            strategy="StopHold",
+            symbol="SBIN",
+            action="SELL",
+            exchange="NSE",
+            price_type="SL-M",
+            product="MIS",
+            quantity=10,
+            trigger_price=497.0,
+        )
+
+    def the_stops_answer_is_lost():
+        # The other client's stop comes first, just after the session decided its own.
+        the_same_stop_by_another_client()
+        world.fake.faults.bad_gateway_page("placeorder", reached_broker=True)
+
+    world.script.at(ist(14, 42, 3) + NS // 2, the_stops_answer_is_lost)
+    world.stop_at(ist(14, 46))
+    world.stop_at(ist(14, 47))
+    outcome = world.run(StopHold)
+
+    sent = [c for c in world.fake.log.calls("placeorder") if c.ts_ns > ist(14, 42, 4)]
+    assert sent == []
+    assert world.fake.log.calls("cancelorder") == []
+    ambiguous = [t for t in alerts(caplog, "error") if "cannot be told apart" in t]
+    assert len(ambiguous) == 1
+    (left,) = outcome.open_positions
+    assert "ambiguous stop order" in left.note and not left.stop_confirmed
+    assert "ambiguous order" in [w.reason for w in outcome.unprotected]

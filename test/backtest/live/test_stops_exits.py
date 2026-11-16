@@ -145,6 +145,26 @@ def test_F66_a_rate_limited_cancel_is_sent_again_a_second_after_its_read(world):
     check_invariants(world.timeline, strategy="TargetHold")
 
 
+def test_a_cancel_refused_three_times_is_alerted_and_sent_again_every_5_seconds(world, caplog):
+    target_reached(world)
+
+    def refuse_three():
+        for _ in range(3):
+            world.fake.faults.rate_limit("cancelorder")
+
+    world.script.at(ist(14, 44, 4), refuse_three)
+    world.run(TargetHold)
+
+    times = [call.ts_ns for call in calls_of(world, "cancelorder")]
+    gaps = [(b - a) / NS for a, b in zip(times, times[1:], strict=False)]
+    assert len(times) == 4
+    assert all(gap >= delay for gap, delay in zip(gaps, CANCEL_RETRY_DELAYS_S, strict=True))
+    refused = [t for t in alerts(caplog, "error") if "was refused 3 times" in t]
+    assert len(refused) == 1 and "(HTTP 429:" in refused[0]
+    assert sells(world) == [(10, "SL-M", "cancelled"), (10, "MARKET", "complete")]
+    check_invariants(world.timeline, strategy="TargetHold")
+
+
 def test_F67_a_cancel_refused_while_the_login_is_expired_leaves_the_stop_working(world, caplog):
     # The login expires right after the tick that reaches the target (the feed stops
     # ticking while it is expired), so the stop's cancel meets the expired login.
