@@ -36,6 +36,10 @@ SANDBOX_BROKER = "sandbox"
 UPDATE_MODES = {Mode.LIVE: "live", Mode.SANDBOX: "analyze"}
 #: The feed modes and the name a broker's adapter gives each.
 LTP, QUOTE, DEPTH = 1, 2, 3
+#: The brokers whose adapter gives the last trade time of an LTP or quote tick as its
+#: own clock's stamp (the reference broker's); the fake plays any other broker's adapter
+#: as giving the trade's exchange time in milliseconds.
+STAMPING_BROKERS = frozenset({"zerodha"})
 _ADAPTER_MODES = {LTP: "ltp", QUOTE: "quote", DEPTH: "full"}
 
 
@@ -91,14 +95,22 @@ def market_data(market: MarketState, mode: int, *, broker: str, ts_ns: int) -> d
     # (broker/zerodha/streaming/zerodha_websocket.py:740), and gives the last trade time
     # as that stamp unless the packet carries the exchange's, which only a depth packet
     # does, in epoch seconds (zerodha_websocket.py:826; zerodha_adapter.py:677-680).
+    # Another broker is played as most adapters are: the trade's exchange time in
+    # milliseconds in every mode (16-session-design 7.3, for F61).
     stamp = epoch_ms(ts_ns)
     trade_ns = market.last_trade_ns or ts_ns
+    if broker not in STAMPING_BROKERS:
+        ltt = epoch_ms(trade_ns)
+    elif mode == DEPTH:
+        ltt = trade_ns // NANOS_PER_SECOND
+    else:
+        ltt = stamp
     data: dict[str, Any] = {
         "symbol": instrument.symbol,
         "exchange": instrument.exchange,
         "mode": _ADAPTER_MODES[mode],
         "ltp": market.last_price,
-        "ltt": trade_ns // NANOS_PER_SECOND if mode == DEPTH else stamp,
+        "ltt": ltt,
         "timestamp": stamp,
     }
     if mode >= QUOTE:
@@ -186,6 +198,7 @@ __all__ = [
     "LTP",
     "QUOTE",
     "SANDBOX_BROKER",
+    "STAMPING_BROKERS",
     "UPDATE_MODES",
     "auth_reply",
     "market_data",

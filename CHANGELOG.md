@@ -243,6 +243,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A journal failure stops the session at once; a strategy error stops it the safe way.
   Strategies without leg rules only in this version: stops, targets and trailing come
   with the stops supervisor.
+- The live session's risk watch and kill switch (private): a feed with no tick on any
+  instrument for 10 seconds is dead, with one alert, entries locked, the strategies'
+  prices read by quote every 2 seconds and the slices it covered marked missing (no bar
+  is made from part of a slice); entries open again at the close of the first whole
+  slice after ticks return. A quiet instrument with an open position is priced by quote
+  without a lock. A refused quote read alerts that the broker's login may have expired.
+  The clock skew between this computer and the exchange is estimated from the trades'
+  exchange times in the first minute and alerted beyond 2 seconds; a broker whose ticks
+  carry no exchange time is named in the start banner or the result's warnings. The
+  account's daily loss limit, across every strategy of the session, fires the kill
+  switch: entries locked for the day, working entries cancelled, then each position
+  exited only when OpenAlgo's position book holds at least the strategy's units on the
+  same side (otherwise nothing is sent and the disagreement is alerted), and each
+  strategy reported against the broker's book once flat.
 - A live session's state saved and restored in the kernel (no change to backtests):
   `Engine::live_state` writes the session's state as plain data that survives a JSON round
   trip (in Python a dict of None, bool, int, float, str, list and dict, written by

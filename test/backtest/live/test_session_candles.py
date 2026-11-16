@@ -6,7 +6,9 @@ minutes come from candles, and a decision skipped for missing data.
 
 SBIN trades every 10 s from the start; in the tick gap test the price climbs by 0.50
 with each trade of a minute, so a bar missing its first trades has another open than the
-broker's candle.
+broker's candle. That test also trades INFY, whose ticks go on through SBIN's gap: with
+no tick on any instrument for 10 s the feed would be dead, and the gap's slice would make
+no tick bar at all (16-session-design 6.5).
 """
 
 from __future__ import annotations
@@ -33,6 +35,15 @@ class Opens(bt.Strategy):
         type(self).seen.append((bar.ts_close, float(self.open[-2])))
 
 
+class InfyTicks(bt.Strategy):
+    """Trades nothing: its instrument, INFY, keeps the feed ticking."""
+
+    symbol, exchange, interval = "INFY", "NSE", "1m"
+
+    def on_bar(self, bar):
+        return None
+
+
 class Every5(bt.Strategy):
     """A 5-minute strategy that keeps the closes of its decisions."""
 
@@ -54,13 +65,15 @@ def climbing(now_ns: int) -> float:
 
 
 def kernel_opens(monkeypatch) -> dict[int, float]:
-    """The open of each strategy bar the kernel closes, by its open (UTC nanoseconds),
-    as its rows hand them to the series: (instrument, ts_open, ts_close, open, ...)."""
+    """The open of each SBIN strategy bar the kernel closes, by its open (UTC
+    nanoseconds), as its rows hand them to the series: (instrument, ts_open, ts_close,
+    open, ...)."""
     opens: dict[int, float] = {}
     reveal = LiveStore.reveal
 
     def keep(self, row):
-        opens[row[1]] = row[3]
+        if self.symbol == "SBIN":
+            opens[row[1]] = row[3]
         return reveal(self, row)
 
     monkeypatch.setattr(LiveStore, "reveal", keep)
@@ -72,16 +85,17 @@ def test_F42_a_tick_gap_is_drift_and_the_series_continues_from_the_candle(
 ):
     Opens.seen = []
     kernel = kernel_opens(monkeypatch)
-    world = rig(make_fake_openalgo, monkeypatch, tmp_path)
+    world = rig(make_fake_openalgo, monkeypatch, tmp_path, symbols=("SBIN", "INFY"))
     world.script.price = climbing
-    # The first three trades of the 14:43 minute send no tick.
+    # The first three trades of SBIN in the 14:43 minute send no tick.
     world.script.at(ist(14, 42, 59), lambda: world.fake.faults.tick_gap("SBIN", "NSE", trades=3))
     world.stop_at(ist(14, 46))
-    outcome = world.run(Opens)
-    gap = [d for d in outcome.drift if d.ts_open_ns == ist(14, 43)]
+    outcome = world.run([Opens, InfyTicks])
+    drift = [d for d in outcome.drift if d.symbol == "SBIN"]
+    gap = [d for d in drift if d.ts_open_ns == ist(14, 43)]
     assert len(gap) == 1
     assert gap[0].open == pytest.approx(-1.5)
-    others = [d for d in outcome.drift if d.ts_open_ns != ist(14, 43)]
+    others = [d for d in drift if d.ts_open_ns != ist(14, 43)]
     assert others and all(d.open == 0 and d.close == 0 for d in others)
     # Decided at 14:45:01, the 14:43 bar reads as the broker's candle (it opened at 500).
     assert (ist(14, 45), PRICE) in Opens.seen

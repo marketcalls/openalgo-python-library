@@ -133,6 +133,18 @@ def test_a_ticks_last_trade_time_is_milliseconds_but_seconds_in_depth(mode, ltt)
     assert (message["data"]["ltt"], message["data"]["timestamp"]) == (ltt, START_MS)
 
 
+@pytest.mark.parametrize("mode", [LTP, QUOTE, DEPTH], ids=["ltp", "quote", "depth"])
+def test_another_brokers_tick_carries_the_trades_time_in_milliseconds(mode):
+    # The flavour of 16-session-design 7.3 (F61): most adapters give the exchange's last
+    # trade time in milliseconds. The message is sent 2 s after the trade.
+    state = MarketState(Instrument("SBIN", "NSE"))
+    state.trade(SESSION_START_NS, 812.0, 3)
+
+    message = market_data(state, mode, broker="angel", ts_ns=SESSION_START_NS + 2 * 10**9)
+
+    assert (message["data"]["ltt"], message["data"]["timestamp"]) == (START_MS, START_MS + 2000)
+
+
 def test_a_quote_ticks_volume_is_a_whole_number(connected, market):
     # The packet's quantities are integers (zerodha_websocket.py:779-780).
     ticks = []

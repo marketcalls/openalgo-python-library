@@ -2,8 +2,8 @@
 8): ticks to the bar builders, the order worker's answers to the venue maps and the
 kernel, broker candles to the strategies, the feed's events to the feed link.
 
-- `FeedTick`: adapted, its receive time stamped now, and handed to its exchange's bar
-  builder.
+- `FeedTick`: adapted, its receive time stamped now, given to the risk watch (`watch`),
+  then handed to its exchange's bar builder.
 - `OrderNews`: through the order's venue map and fill ledger to the kernel; ENTRY, EXIT
   and REJECT alerts with the order IDs; a fill the kernel refuses is a reconciliation
   mismatch: the strategy's entries are locked and a RECONCILE_MISMATCH alert sent.
@@ -20,10 +20,11 @@ kernel, broker candles to the strategies, the feed's events to the feed link.
 - `FeedEvent`: to the feed link; a recovery resumes every bar builder over the outage and
   asks the worker to poll the orders the stream may have missed.
 - `WorkerFailed`: raised as `WorkerFailedError`, which stops the session (3.5).
+- `Quote`, `DataFailed` and `PositionRows`: to the risk watch (its quote fallback, and
+  the kill switch's position reads).
 
-Not handled yet, logged: `Books` and `PositionRows` (the reconciler's), `Quote` (the risk
-watch's), `DataFailed`. Times are UTC nanoseconds, prices rupees, quantities units. Used
-by the loop only.
+Not handled yet, logged: `Books` (the reconciler's). Times are UTC nanoseconds, prices
+rupees, quantities units. Used by the loop only.
 """
 
 from __future__ import annotations
@@ -52,6 +53,8 @@ from .inbox import (
     NotSent,
     NotSentReason,
     OrderNews,
+    PositionRows,
+    Quote,
     Resolutions,
     SendResult,
     Settled,
@@ -104,6 +107,7 @@ class News:
         tick = tick_from_feed(message.message, recv_ns=session.now(), tally=session.tally)
         if tick is None:
             return
+        session.risk.tick(tick, message.arrived_ns)
         builder = session.builders.get(tick.exchange)
         if builder is not None:
             builder.on_tick(tick)
@@ -345,7 +349,13 @@ class News:
             session.warn(note)
 
     def _data_failed(self, message: DataFailed) -> None:
-        logger.warning("a data read failed (%r): %s", message.request, message.error)
+        self._session.risk.data_failed(message)
+
+    def _quote(self, message: Quote) -> None:
+        self._session.risk.quote(message)
+
+    def _position_rows(self, message: PositionRows) -> None:
+        self._session.risk.positions(message)
 
     def _worker_failed(self, message: WorkerFailed) -> None:
         raise WorkerFailedError(message.error)
@@ -389,6 +399,8 @@ _HANDLERS: Mapping[type, Any] = MappingProxyType(
         GuardLocked: News._guard_locked,
         Candles: News._candles,
         DataFailed: News._data_failed,
+        Quote: News._quote,
+        PositionRows: News._position_rows,
         WorkerFailed: News._worker_failed,
     }
 )
