@@ -65,6 +65,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session whose orders are filled where the simulator fills them gives the same result as
   the backtest, field for field. The native `Engine` gains `session`, `add_bar`,
   `release`, `venue`, `take_commands`, `modify` and the `apply_*` calls.
+- A live session's controls in the kernel (no change to backtests). Every order sent
+  carries its role (`OrderRole`: entry, add, the strategy's exit, the engine's risk exit
+  with its reason, the square-off; `Engine::order_role`), and the native "place" command
+  gains `role` and `reason` (`ORDER_ROLES`, `RISK_EXIT_REASONS`). `request_exit` exits a
+  whole position for the session's own reason (an operator stop, the kill switch, the
+  account's loss limit, an unprotected leg, a stop rejected or unfilled, or the
+  square-off) through the position's exit owner, cancelling the orders on its closing
+  side first; `cancel` is taken while the session waits and sends a cancellation again
+  after the broker refused it. `lock_entries` and `unlock_entries` keep entry locks as
+  reasons in a set: while any is set, entries and adds are rejected with the new reject
+  code `live_lock`, and exits are not. A session also rejects an entry or add while
+  another order of the symbol and product works (new reject code `live_in_flight`) and one
+  that would take the position above the freeze quantity (`freeze_qty`), so a session's
+  position fits in one order. `cap_sizing_equity` makes the engine default size from the
+  lesser of the equity and the account's available cash; `daily_loss_measure` reads the
+  strategy's daily loss measure for the account's limit; `stop_session` ends a session
+  where it stands, sending nothing and reporting its working orders and open positions as
+  they are, with the day's contract note settled, so `finish` can be called.
 - The live layer's mode guard (private, not used by `bt.live` yet): OpenAlgo's sandbox or
   live mode read at the start of a session, checked on every order answer and update of
   the session's own orders, and polled every 5 seconds and before each entry. A change of

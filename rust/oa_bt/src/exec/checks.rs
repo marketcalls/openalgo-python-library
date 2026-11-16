@@ -33,7 +33,8 @@ pub enum RejectCode {
     QuantityRule = 0,
     /// A limit or trigger price off the tick grid.
     Tick = 1,
-    /// Above the exchange's freeze quantity (deny is the default).
+    /// Above the exchange's freeze quantity (deny is the default); in a live session also
+    /// an entry or add that would take its position above it (`engine::venue_gates`).
     FreezeQty = 2,
     /// A product rule: a delivery (CNC) sale that would open or increase a short, a GTT
     /// on MIS, an order for an index.
@@ -69,11 +70,17 @@ pub enum RejectCode {
     /// a position above the position, so that the broker could fill them all and reverse
     /// it (`engine::venue_cover`).
     ExitCover = 16,
+    /// In a live session, an entry or add while the session has locked entries
+    /// (`Engine::lock_entries`; `engine::venue_gates`).
+    LiveLock = 17,
+    /// In a live session, an entry or add while another order of its instrument and
+    /// product is in flight at the venue (`engine::venue_gates`).
+    LiveInFlight = 18,
 }
 
 impl RejectCode {
     /// Every code, in code order.
-    pub const ALL: [RejectCode; 17] = [
+    pub const ALL: [RejectCode; 19] = [
         RejectCode::QuantityRule,
         RejectCode::Tick,
         RejectCode::FreezeQty,
@@ -91,6 +98,8 @@ impl RejectCode {
         RejectCode::ScaleInLimit,
         RejectCode::Venue,
         RejectCode::ExitCover,
+        RejectCode::LiveLock,
+        RejectCode::LiveInFlight,
     ];
 
     /// The code string used in events and results.
@@ -113,6 +122,8 @@ impl RejectCode {
             RejectCode::ScaleInLimit => "scale_in_limit",
             RejectCode::Venue => "venue",
             RejectCode::ExitCover => "exit_cover",
+            RejectCode::LiveLock => "live_lock",
+            RejectCode::LiveInFlight => "live_in_flight",
         }
     }
 
@@ -332,10 +343,11 @@ mod tests {
     #[test]
     fn codes_are_the_ruled_vocabulary() {
         let codes: Vec<&str> = RejectCode::ALL.iter().map(|code| code.code()).collect();
-        assert_eq!(codes.len(), 17);
+        assert_eq!(codes.len(), 19);
         assert!(codes.contains(&"market_closed") && codes.contains(&"instrument_unknown"));
         assert!(codes.contains(&"scale_in_limit") && codes.contains(&"venue"));
         assert!(codes.contains(&"exit_cover"));
+        assert!(codes.contains(&"live_lock") && codes.contains(&"live_in_flight"));
     }
 
     #[test]

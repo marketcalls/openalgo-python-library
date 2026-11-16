@@ -10,7 +10,7 @@
 
 mod venue_support;
 
-use oa_bt::engine::{Engine, KernelError, Submission, VenueCommand, VenueError};
+use oa_bt::engine::{Engine, KernelError, OrderRole, Submission, VenueCommand, VenueError};
 use oa_bt::exec::{OrderId, OrderRequest, OrderStatus, OrderType, QuantitySpec, RejectCode};
 use oa_bt::model::{Product, Side};
 use venue_support::{
@@ -23,26 +23,21 @@ fn to_wait(kernel: &mut Engine, slice: usize) {
     wait_before(kernel, &bars(&[], &[]), &mut Script::new(Vec::new()), slice);
 }
 
-/// A session holding 100 units bought in `buys` orders of equal size, paused at the
-/// close of minute 2 with no command left to take.
-fn holding_100_in(mut kernel: Engine, buys: u32) -> Engine {
-    let units = 100.0 / f64::from(buys);
-    let acts = (0..buys)
-        .map(|_| at_close(0, Act::Submit(market(Side::Buy, units))))
-        .collect();
+/// `kernel` holding 100 units bought in one order (o1), paused at the close of minute 2
+/// with no command left to take.
+fn holding_100_on(mut kernel: Engine) -> Engine {
+    let acts = vec![at_close(0, Act::Submit(market(Side::Buy, 100.0)))];
     wait_before(&mut kernel, &bars(&[], &[]), &mut Script::new(acts), 1);
-    for id in 1..=u64::from(buys) {
-        kernel
-            .apply_fill(OrderId(id), units, 500.1, minute(1))
-            .expect("the buy fills");
-    }
+    kernel
+        .apply_fill(OrderId(1), 100.0, 500.1, minute(1))
+        .expect("the buy fills");
     pause_at_close(&mut kernel, &bars(&[], &[]), 2);
     kernel.take_commands();
     kernel
 }
 
 fn holding_100() -> Engine {
-    holding_100_in(session(config()), 1)
+    holding_100_on(session(config()))
 }
 
 fn submit(kernel: &mut Engine, request: OrderRequest) -> Submission {
@@ -129,6 +124,7 @@ fn a_reduce_only_order_placed_while_an_exit_waits_for_its_cancels_is_refused() {
                 side: Side::Sell,
                 units: 50.0,
                 order_type: limit(600.0),
+                role: OrderRole::Exit,
             },
             VenueCommand::Cancel { order: OrderId(2) },
         ]
@@ -314,14 +310,19 @@ fn modifying_an_exit_counts_the_other_exits_of_its_position() {
 }
 
 #[test]
-fn modifying_an_exit_piece_above_the_freeze_quantity_is_refused() {
-    // A freeze quantity of 40: exit() of 100 goes out as o5 (40), o6 (40) and o7 (20).
-    let mut kernel = holding_100_in(session_of(config(), frozen_at(40)), 4);
-    assert_eq!(submit(&mut kernel, whole_exit()), submitted(5));
-    assert_eq!(kernel.take_commands().len(), 3);
-    let larger = exit(Side::Sell, 60.0, OrderType::Market);
-    assert_eq!(
-        kernel.modify(OrderId(5), larger),
-        Ok(refused(5, RejectCode::FreezeQty))
-    );
+fn modifying_an_exit_of_a_position_at_the_freeze_quantity_is_held_to_the_position() {
+    // A freeze quantity of 100: the position may not go above it (`venue_gates`), so
+    // exit() of the 100 is one order (o2), and a modification asking for 160 replaces it
+    // with the 100 held, within the freeze quantity.
+    let mut kernel = holding_100_on(session_of(config(), frozen_at(100)));
+    assert_eq!(submit(&mut kernel, whole_exit()), submitted(2));
+    assert_eq!(kernel.take_commands().len(), 1);
+    let larger = exit(Side::Sell, 160.0, OrderType::Market);
+    assert_eq!(kernel.modify(OrderId(2), larger), Ok(submitted(2)));
+    let held_to_it = VenueCommand::Modify {
+        order: OrderId(2),
+        units: 100.0,
+        order_type: OrderType::Market,
+    };
+    assert_eq!(kernel.take_commands(), vec![held_to_it]);
 }

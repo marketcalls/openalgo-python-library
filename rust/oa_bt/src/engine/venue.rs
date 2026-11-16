@@ -43,6 +43,13 @@
 //! - **What the fill path cannot record** is refused at submission (`venue_checks`), and a
 //!   fill is checked whole before anything of it is recorded. The free cash a submission
 //!   is checked against counts what the session's working entries would block.
+//! - **Roles** (`venue_roles`). Every order sent carries what it is for: an entry, an add,
+//!   the strategy's exit, the engine's risk exit with its reason, the square-off.
+//! - **The session's controls** (`venue_session`): an exit the live layer asks for, a
+//!   cancellation while waiting, the entry locks, the cap on the sizing equity, the daily
+//!   loss measure, and the stop of the session where it stands. **The entry gates** a
+//!   session adds at submission (`venue_gates`): the entry locks, nothing in flight on the
+//!   instrument, a position at most the freeze quantity.
 //! - **Not built yet** (`KernelError::NotBuilt`): leg rules (`stop=`, `target=`, trailing
 //!   and breakeven, held by the broker and on ticks in the next unit, decision D31), GTT
 //!   orders, futures series and rebalancing.
@@ -56,13 +63,14 @@ use crate::charges::OrderCharges;
 use crate::exec::{ExecError, InstrumentId, Order, OrderId, OrderRequest, OrderType, Validity};
 use crate::model::{Product, Side, TsNanos};
 use crate::portfolio::PositionKey;
-use crate::rms::ExitReason;
 
 use super::clock::SliceInfo;
 use super::config::{QuantityMode, RunConfig};
 use super::error::KernelError;
 use super::event::{EventStamp, Step};
 use super::kernel::Engine;
+use super::venue_roles::{EngineExit, OrderRole};
+use super::venue_session::SessionControls;
 
 /// Who fills a run's orders.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -101,6 +109,8 @@ pub enum VenueCommand {
         units: f64,
         /// MARKET, LIMIT, SL or SL-M, with its limit and trigger prices.
         order_type: OrderType,
+        /// What the order is for (`venue_roles`).
+        role: OrderRole,
     },
     /// Replace a working order's units, type, limit and trigger (a full replacement).
     Modify {
@@ -123,8 +133,8 @@ pub enum VenueCommand {
 pub(super) enum ExitBy {
     /// The strategy's exit order (`exit()`, `reduce()`).
     Strategy(OrderId),
-    /// One of the engine's exits, with the backtest's reason.
-    Engine(ExitReason),
+    /// One of the engine's exits: the square-off or a risk exit (`venue_roles`).
+    Engine(EngineExit),
 }
 
 /// One exit of a position, the strategy's or the engine's (`venue_owner`).
@@ -182,6 +192,10 @@ pub(super) struct VenueDesk {
     pub(super) exits: Vec<PositionExit>,
     /// What each order's fills have been charged so far.
     pub(super) charged: Vec<(ChargePart, OrderCharges)>,
+    /// The role of every order the session accepted, in id order (`venue_roles`).
+    pub(super) roles: Vec<(OrderId, OrderRole)>,
+    /// The session's entry locks and sizing cap (`venue_session`).
+    pub(super) controls: SessionControls,
 }
 
 impl VenueDesk {

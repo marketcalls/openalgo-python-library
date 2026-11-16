@@ -11,6 +11,7 @@ use super::error::KernelError;
 use super::event::{EventStamp, OrderEventKind};
 use super::kernel::Engine;
 use super::venue::{is_exit, Replacement, SendAt, VenueCommand};
+use super::venue_roles::OrderRole;
 
 impl Engine {
     /// The units an order is sent with: in a backtest `units` as resolved; in an external
@@ -44,10 +45,10 @@ impl Engine {
     }
 
     /// In an external session, after an order has passed the checks (`at` is its
-    /// decision): an exit becomes the latest of its position's exits (`venue_owner`), any
-    /// other order is sent at once. An order with no units ends `Canceled` and sends
-    /// nothing. Then every waiting exit moves on, so it also cancels an order just placed
-    /// on its closing side. A backtest sends nothing.
+    /// decision): its role is recorded (`venue_roles`), an exit becomes the latest of its
+    /// position's exits (`venue_owner`), any other order is sent at once. An order with no
+    /// units ends `Canceled` and sends nothing. Then every waiting exit moves on, so it
+    /// also cancels an order just placed on its closing side. A backtest sends nothing.
     ///
     /// Errors: those of `fills::end_order` and of the exits.
     pub(super) fn send_order(&mut self, at: SendAt, id: OrderId) -> Result<(), KernelError> {
@@ -60,16 +61,20 @@ impl Engine {
             let kind = OrderEventKind::Canceled;
             return self.end_order(at.stamp(), id, OrderAction::Cancel, kind);
         }
+        let role = self.submission_role(&order.request, order.quantity_units);
         if exit {
+            self.record_role(id, role);
             self.own_strategy_exit(at, id)?;
         } else {
-            self.place(id);
+            self.place(id, role);
         }
         self.progress_exits(at)
     }
 
-    /// Send an order to the venue with its units and type as they stand.
-    pub(super) fn place(&mut self, id: OrderId) {
+    /// Send an order to the venue with its units and type as they stand, for `role`
+    /// (recorded, `venue_roles`).
+    pub(super) fn place(&mut self, id: OrderId, role: OrderRole) {
+        self.record_role(id, role);
         if let Some(order) = self.book.get(id) {
             let command = VenueCommand::Place {
                 order: id,
@@ -78,6 +83,7 @@ impl Engine {
                 side: order.request.side,
                 units: order.quantity_units,
                 order_type: order.request.order_type,
+                role,
             };
             self.venue.commands.push(command);
         }

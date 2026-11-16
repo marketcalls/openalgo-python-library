@@ -21,19 +21,24 @@
 //!
 //! A command crosses as a dict with `command` ("place", "modify" or "cancel") and
 //! `order_id` (the kernel order, an integer; Python shows `o<n>`); "place" adds
-//! `instrument` (the registration index), `product` ("CNC", "MIS", "NRML") and `side`
-//! ("BUY", "SELL"); "place" and "modify" add `quantity_units` (units, never lots),
+//! `instrument` (the registration index), `product` ("CNC", "MIS", "NRML"), `side`
+//! ("BUY", "SELL"), `role` (what the order is for, one of `ORDER_ROLES`: "entry", "add",
+//! "leg_stop", "exit", "risk_exit", "square_off") and `reason` (the risk reason of a
+//! "risk_exit", one of `RISK_EXIT_REASONS`; None for any other role); "place" and
+//! "modify" add `quantity_units` (units, never lots),
 //! `order_type` ("MARKET", "LIMIT", "SL", "SL-M"), `price` (the limit in rupees, None for
 //! MARKET and SL-M) and `trigger_price` (rupees, None for MARKET and LIMIT). A result
 //! returns the stamp it was recorded with as (slice index, slice open in UTC nanoseconds,
-//! step number).
+//! step number). The session's own controls (an exit it asks for, the entry locks, the
+//! sizing cap, the stop) are in `session`.
 
-use oa_bt::engine::{BaseBar, EventStamp, KernelError, VenueCommand};
+use oa_bt::engine::{BaseBar, EventStamp, KernelError, VenueCommand, VENUE_REFUSAL_KINDS};
 use oa_bt::exec::{OrderType, RejectCode};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyDict, PyList, PyTuple};
 
 use super::errors::venue_result_error;
+use super::session::role_codes;
 use super::setup::unknown;
 
 /// A base bar as it crosses: (ts_open UTC nanoseconds, open, high, low, close, volume).
@@ -66,6 +71,15 @@ pub(super) fn recorded(
 /// A venue answer that records no stamp, or the error it was refused with.
 pub(super) fn answered(py: Python<'_>, result: Result<(), KernelError>) -> PyResult<()> {
     result.map_err(|error| venue_result_error(py, error))
+}
+
+/// Add every kind of `VenueRefusalError` to the module as `VENUE_REFUSAL_KINDS`, from the
+/// kernel's one list of them.
+pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add(
+        "VENUE_REFUSAL_KINDS",
+        PyTuple::new_bound(m.py(), VENUE_REFUSAL_KINDS),
+    )
 }
 
 /// The commands as a list of dicts (module docs).
@@ -107,12 +121,16 @@ fn command<'py>(py: Python<'py>, command: &VenueCommand) -> PyResult<Bound<'py, 
             side,
             units,
             order_type,
+            role,
         } => {
             dict.set_item("command", "place")?;
             dict.set_item("order_id", order.0)?;
             dict.set_item("instrument", instrument.0)?;
             dict.set_item("product", product.code())?;
             dict.set_item("side", side.code())?;
+            let (role, reason) = role_codes(role);
+            dict.set_item("role", role)?;
+            dict.set_item("reason", reason)?;
             order_type_into(&dict, units, order_type)?;
         }
         VenueCommand::Modify {

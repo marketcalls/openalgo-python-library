@@ -22,10 +22,10 @@ from openalgo.backtest.reference import Instrument
 
 # Every code the kernel can reject an order with (`RejectCode` in
 # rust/oa_bt/src/exec/checks.rs): those of its checks, "venue", a live session's broker
-# refusing an order, and "exit_cover", a live session's reduce-only order that would
-# leave more units resting to close a position than it has. `RejectCode::RateLimit` is
-# left out: no kernel check makes it, because no order rate limit is enforced in a
-# backtest.
+# refusing an order, "exit_cover", a live session's reduce-only order that would leave
+# more units resting to close a position than it has, and "live_lock" and
+# "live_in_flight", a live session's entry gates. `RejectCode::RateLimit` is left out: no
+# kernel check makes it, because no order rate limit is enforced in a backtest.
 KERNEL_REJECT_CODES = {
     "quantity_rule",
     "tick",
@@ -43,6 +43,8 @@ KERNEL_REJECT_CODES = {
     "scale_in_limit",
     "venue",
     "exit_cover",
+    "live_lock",
+    "live_in_flight",
 }
 NIFTY_INDEX = Instrument(
     symbol="NIFTY", exchange="NSE_INDEX", kind="index", tick_size=0.05, settlement="none"

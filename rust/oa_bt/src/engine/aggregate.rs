@@ -50,6 +50,7 @@ use super::event::{Event, EventStamp, Step};
 use super::fills::FillRequest;
 use super::kernel::Engine;
 use super::venue::SendAt;
+use super::venue_roles::{EngineExit, RiskExitReason};
 
 impl Engine {
     /// Step 1: a later session ends REDUCING and restarts the daily loss measure.
@@ -65,7 +66,7 @@ impl Engine {
     /// documentation).
     pub(super) fn step_aggregate_rules(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         let stamp = Self::stamp(slice, Step::AggregateRules);
-        let mut exit_reason = None;
+        let mut exit = None;
         if let Some(event) = self.daily_loss_breach() {
             self.emit(Event::Risk {
                 stamp,
@@ -73,7 +74,7 @@ impl Engine {
                 event,
             });
             self.change_trading_state(stamp, TradingStateCause::DailyLossBreach);
-            exit_reason = Some(ExitReason::DailyLossLimit);
+            exit = Some(EngineExit::Risk(RiskExitReason::DailyLoss));
         }
         if let Some(event) = self.drawdown_breach() {
             self.emit(Event::Risk {
@@ -82,12 +83,12 @@ impl Engine {
                 event,
             });
             self.change_trading_state(stamp, TradingStateCause::DrawdownHalt);
-            exit_reason.get_or_insert(ExitReason::DrawdownHalt);
+            exit.get_or_insert(EngineExit::Risk(RiskExitReason::Drawdown));
         }
-        match exit_reason {
-            Some(reason) => {
+        match exit {
+            Some(exit) => {
                 self.cancel_working_entries(stamp)?;
-                self.exit_every_position(slice, stamp, reason)
+                self.exit_every_position(slice, stamp, exit)
             }
             None => Ok(()),
         }
@@ -207,15 +208,17 @@ impl Engine {
         Ok(())
     }
 
-    /// Exit every open position, in instrument registration order: at once at the last
-    /// close when the slice closes the session, otherwise at the next open. In a live
-    /// session the exits are sent to the venue now (`venue_exits`).
+    /// Exit every open position, in instrument registration order, with the exit reason
+    /// of `exit` (`EngineExit::exit_reason`): at once at the last close when the slice
+    /// closes the session, otherwise at the next open. In a live session the exits are
+    /// sent to the venue now (`venue_exits`).
     fn exit_every_position(
         &mut self,
         slice: &SliceInfo,
         stamp: EventStamp,
-        reason: ExitReason,
+        exit: EngineExit,
     ) -> Result<(), KernelError> {
+        let reason = exit.exit_reason();
         let mut open: Vec<PositionKey> = self
             .portfolio
             .positions()
@@ -231,7 +234,7 @@ impl Engine {
                     step: stamp.step,
                     decided_at: slice.close,
                 };
-                self.request_engine_exit(at, key, reason)?;
+                self.request_engine_exit(at, key, exit)?;
             } else if slice.closes_session {
                 self.exit_at_last_close(stamp, key, reason)?;
             } else {

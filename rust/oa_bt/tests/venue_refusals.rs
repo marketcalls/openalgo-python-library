@@ -253,21 +253,23 @@ fn an_order_whose_margin_is_above_the_free_cash_is_rejected_as_in_a_backtest() {
 #[test]
 fn an_entry_the_working_orders_leave_no_cash_for_is_rejected_as_in_a_backtest() {
     // Two buys of 12,000 near 500.00 in one bar, 60 lakh each, against a capital of 1
-    // crore: a backtest fills the first and rejects the second `margin` at their fill
-    // bar, a session rejects the second when it is submitted.
-    let buy = || market(Side::Buy, 12_000.0);
+    // crore, on MIS and on CNC (two positions, so nothing is in flight on the second's):
+    // a backtest fills the first and rejects the second `margin` at their fill bar, a
+    // session rejects the second when it is submitted.
+    let buy = |product| order(Side::Buy, 12_000.0, OrderType::Market, product);
     let acts = vec![
-        at_close(0, Act::Submit(buy())),
-        at_close(0, Act::Submit(buy())),
+        at_close(0, Act::Submit(buy(Product::Mis))),
+        at_close(0, Act::Submit(buy(Product::Cnc))),
     ];
     let simulated = venue_support::run_backtest(config(), &bars(&[], &[]), &mut Script::new(acts));
     let codes: Vec<Option<RejectCode>> = simulated.orders.iter().map(|o| o.reject_code).collect();
     assert_eq!(codes[..2], [None, Some(RejectCode::Margin)]);
     let mut kernel = session(config());
     pause_at_close(&mut kernel, &bars(&[], &[]), 0);
-    assert_eq!(kernel.submit(buy()), Ok(Submission::Submitted(OrderId(1))));
+    let first = kernel.submit(buy(Product::Mis));
+    assert_eq!(first, Ok(Submission::Submitted(OrderId(1))));
     assert_eq!(
-        kernel.submit(buy()),
+        kernel.submit(buy(Product::Cnc)),
         Ok(Submission::Rejected(OrderId(2), RejectCode::Margin))
     );
 }

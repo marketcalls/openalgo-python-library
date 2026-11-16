@@ -221,17 +221,24 @@ impl Engine {
     ///
     /// Errors: those of `fit_exit_cover` and of `progress_exits`.
     pub(super) fn after_result(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
+        let at = self.waiting_at(slice);
+        self.fit_exit_cover(at)?;
+        self.progress_exits(at)
+    }
+
+    /// Where the engine decides while an external session waits: in `slice`, the slice in
+    /// progress (`result_slice`), at its open, or at its close when it is the session's
+    /// closing slice waiting for its orders to end (`venue_clock`); stamped in step 2.
+    pub(super) fn waiting_at(&self, slice: &SliceInfo) -> SendAt {
         let decided_at = match self.phase {
             Phase::Closing(_) => slice.close,
             _ => slice.open,
         };
-        let at = SendAt {
+        SendAt {
             slice: *slice,
             step: Step::OpenFills,
             decided_at,
-        };
-        self.fit_exit_cover(at)?;
-        self.progress_exits(at)
+        }
     }
 
     /// The slice a venue's result is recorded in (module docs).
