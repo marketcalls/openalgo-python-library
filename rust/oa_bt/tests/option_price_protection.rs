@@ -14,6 +14,10 @@
 //! GTT child and a reprice are plain limits, met by the bands measured from a market
 //! price. How far that market price may drift from the order's price before the limit
 //! leaves a band is stated in 04-execution 4.1, not tested here.
+//!
+//! One exception: a band with no rupee minimum (BSE stock options during a cooling-off)
+//! is narrower than one tick at a premium of three ticks or less, where no limit off the
+//! premium fits inside it whatever the buffer. Those premiums are left out of the check.
 
 use oa_bt::exec::gtt::child_limit;
 use oa_bt::exec::price::{is_on_tick, round_away_from_trader, PRICE_UNITS_PER_RUPEE};
@@ -31,8 +35,9 @@ const PRICE_PROTECTION_CSV: &str =
 const OPTION_TICKS_RUPEES: [f64; 2] = [0.05, 0.01];
 
 /// Every premium on the grid is tried up to here, so both sides of each band's switch
-/// from its rupee minimum to its percent (50 rupees in every row) are covered tick by tick.
-const DENSE_UP_TO_RUPEES: f64 = 100.0;
+/// from its rupee minimum to its percent (25 to 100 rupees in the table) are covered tick
+/// by tick.
+const DENSE_UP_TO_RUPEES: f64 = 200.0;
 
 /// Above `DENSE_UP_TO_RUPEES` premiums go up about one percent at a time to here, beyond
 /// the dearest option traded on either exchange.
@@ -50,20 +55,36 @@ const TRIGGER_BASIS: &str = "trigger_price";
 /// How many failures an assertion message lists.
 const FAILURES_SHOWN: usize = 20;
 
+/// The premiums at or below which a band with no rupee minimum may be narrower than one
+/// tick, in ticks: the BSE cooling-off band (30 percent) is narrower than a tick up to
+/// 3 ticks.
+const NARROW_UP_TO_TICKS: f64 = 3.0;
+
 /// One row of `price_protection.csv`.
 struct Band {
     exchange: String,
     segment: String,
     check: String,
+    underlying: String,
+    days: String,
     percent: f64,
-    min_rupees: f64,
+    /// None for a band with no rupee minimum (an empty cell).
+    min_rupees: Option<f64>,
     basis: String,
 }
 
 impl Band {
     /// The band in rupees around `basis_rupees`: the larger of the percent and the minimum.
     fn rupees(&self, basis_rupees: f64) -> f64 {
-        (self.percent / 100.0 * basis_rupees).max(self.min_rupees)
+        let percent = self.percent / 100.0 * basis_rupees;
+        self.min_rupees
+            .map_or(percent, |minimum| percent.max(minimum))
+    }
+
+    /// True when the band around `basis_rupees` is at least one tick wide, so a limit one
+    /// tick off the basis can lie inside it.
+    fn holds_a_tick(&self, basis_rupees: f64, tick_rupees: f64) -> bool {
+        self.rupees(basis_rupees) + HALF_PRICE_UNIT_RUPEES >= tick_rupees
     }
 
     /// True when a limit of `side` at `limit_rupees` lies inside the band around
@@ -83,13 +104,18 @@ impl Band {
         self.basis != TRIGGER_BASIS
     }
 
-    /// The premium at which the band stops being its rupee minimum and becomes its percent.
-    fn switch_rupees(&self) -> f64 {
-        self.min_rupees / (self.percent / 100.0)
+    /// The premium at which the band stops being its rupee minimum and becomes its percent
+    /// (None without a minimum).
+    fn switch_rupees(&self) -> Option<f64> {
+        self.min_rupees
+            .map(|minimum| minimum / (self.percent / 100.0))
     }
 
     fn name(&self) -> String {
-        format!("{} {} {}", self.exchange, self.segment, self.check)
+        format!(
+            "{} {} {} {} {}",
+            self.exchange, self.segment, self.check, self.underlying, self.days
+        )
     }
 }
 
@@ -110,6 +136,8 @@ fn bands() -> Vec<Band> {
         column("exchange"),
         column("segment"),
         column("check"),
+        column("underlying"),
+        column("days"),
         column("band_percent"),
         column("band_min_rupees"),
         column("basis"),
@@ -123,13 +151,16 @@ fn bands() -> Vec<Band> {
             let cells: Vec<&str> = line.split(',').collect();
             assert_eq!(cells.len(), header.len(), "{line}");
             let number = |index: usize| -> f64 { cells[index].parse().expect(line) };
+            let minimum = at[6];
             Band {
                 exchange: cells[at[0]].to_owned(),
                 segment: cells[at[1]].to_owned(),
                 check: cells[at[2]].to_owned(),
-                percent: number(at[3]),
-                min_rupees: number(at[4]),
-                basis: cells[at[5]].to_owned(),
+                underlying: cells[at[3]].to_owned(),
+                days: cells[at[4]].to_owned(),
+                percent: number(at[5]),
+                min_rupees: (!cells[minimum].is_empty()).then(|| number(minimum)),
+                basis: cells[at[7]].to_owned(),
             }
         })
         .collect()
@@ -181,15 +212,19 @@ fn gtt_child_limit(trigger_rupees: f64, side: Side, tick_rupees: f64) -> f64 {
 
 /// The limit a stop the price has passed is repriced to: the last price moved
 /// `OPTIONS_STOP_LIMIT_BUFFER_PERCENT` against the trader, rounded to the tick away from
-/// the trader (16-session-design 4.6, open decision 8).
+/// the trader (16-session-design 4.6, open decision 8). The session prices the reprice
+/// (the stops supervisor, unit 10) and the kernel only takes the price
+/// (`Engine::reprice_exit`), so this is the rule as the design states it: a change to the
+/// session's pricing must be made here too.
 fn reprice_limit(last_price_rupees: f64, side: Side, tick_rupees: f64) -> f64 {
     let moved = last_price_rupees * (1.0 + side.sign() * OPTIONS_STOP_LIMIT_BUFFER_PERCENT / 100.0);
     round_away_from_trader(moved, tick_rupees, side).expect("a reprice limit")
 }
 
 /// Every limit `price` gives at every premium of both ticks and both sides is a positive
-/// price on the grid and lies inside each of `bands`, measured from the premium it was
-/// priced from. Fails listing the first limits that do not.
+/// price on the grid and lies inside each of `bands` that is at least one tick wide there,
+/// measured from the premium it was priced from. Fails listing the first limits that do
+/// not.
 fn assert_inside(bands: &[&Band], price: fn(f64, Side, f64) -> f64) {
     assert!(!bands.is_empty(), "no band to check against");
     let mut failures = Vec::new();
@@ -202,10 +237,9 @@ fn assert_inside(bands: &[&Band], price: fn(f64, Side, f64) -> f64) {
                         "{side:?} at {premium} tick {tick}: {limit} off the grid"
                     ));
                 }
-                for band in bands
-                    .iter()
-                    .filter(|band| !band.admits(side, limit, premium))
-                {
+                for band in bands.iter().filter(|band| {
+                    band.holds_a_tick(premium, tick) && !band.admits(side, limit, premium)
+                }) {
                     failures.push(format!(
                         "{}: {side:?} at {premium} tick {tick}: {limit} outside",
                         band.name()
@@ -223,27 +257,51 @@ fn assert_inside(bands: &[&Band], price: fn(f64, Side, f64) -> f64) {
 }
 
 #[test]
-fn the_table_holds_the_option_bands_of_both_exchanges_each_switching_inside_the_sweep() {
+fn the_table_holds_the_option_bands_of_both_exchanges_each_minimum_switching_inside_the_sweep() {
     let bands = bands();
     for wanted in [
-        "NFO index_option lpp",
-        "NFO stock_option lpp",
-        "NFO index_option stop_limit_range",
-        "NFO stock_option stop_limit_range",
-        "NFO stock_option cooling_off",
-        "BFO index_option lpp",
-        "BFO stock_option lpp",
-        "BFO index_option stop_limit_range",
+        "NFO index_option lpp ALL every_day",
+        "NFO stock_option lpp ALL every_day",
+        "NFO index_option stop_limit_range ALL every_day",
+        "NFO stock_option stop_limit_range ALL every_day",
+        "NFO stock_option cooling_off ALL every_day",
+        "BFO index_option lpp ALL every_day",
+        // The narrowest BSE index option band: 40 percent with a 10 rupee minimum.
+        "BFO index_option lpp SENSEX expiry_day",
+        "BFO index_option lpp FOCIT every_day",
+        "BFO stock_option lpp ALL every_day",
+        "BFO stock_option cooling_off ALL every_day",
+        "BFO index_option stop_limit_range ALL every_day",
     ] {
         assert!(bands.iter().any(|band| band.name() == wanted), "{wanted}");
     }
     for band in &bands {
-        let switch = band.switch_rupees();
-        assert!(
-            switch > OPTION_TICKS_RUPEES[0] && switch < DENSE_UP_TO_RUPEES,
-            "{}: switches at {switch}",
-            band.name()
-        );
+        if let Some(switch) = band.switch_rupees() {
+            assert!(
+                switch > OPTION_TICKS_RUPEES[0] && switch < DENSE_UP_TO_RUPEES,
+                "{}: switches at {switch}",
+                band.name()
+            );
+        }
+    }
+}
+
+#[test]
+fn only_a_band_without_a_rupee_minimum_is_narrower_than_a_tick_and_only_up_to_three_ticks() {
+    for band in bands() {
+        for tick in OPTION_TICKS_RUPEES {
+            for premium in premiums(tick) {
+                let up_to_three_ticks =
+                    premium <= NARROW_UP_TO_TICKS * tick + HALF_PRICE_UNIT_RUPEES;
+                let expected = band.min_rupees.is_none() && up_to_three_ticks;
+                assert_eq!(
+                    !band.holds_a_tick(premium, tick),
+                    expected,
+                    "{} at {premium} tick {tick}",
+                    band.name()
+                );
+            }
+        }
     }
 }
 

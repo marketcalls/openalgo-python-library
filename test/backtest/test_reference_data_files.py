@@ -158,6 +158,15 @@ def test_nse_price_bands_switch_from_their_rupee_minimum_to_their_percent_at_a_p
             assert percent / 100 * 50 == pytest.approx(rupees), record
 
 
+def test_price_bands_hold_on_every_day_or_on_an_expiry_day_and_the_all_rows_on_every_day():
+    # The header's lookup order (the underlying's expiry_day row, then its every_day row,
+    # then ALL) leaves every option a row only when the ALL rows hold on every day.
+    for record in _records("price_protection.csv"):
+        assert record["days"] in {"every_day", "expiry_day"}, record
+        if record["underlying"] == "ALL":
+            assert record["days"] == "every_day", record
+
+
 def test_broker_unit_rows_are_all_marked_unverified():
     assert {record["status"] for record in _records("broker_units.csv")} == {"unverified"}
 
