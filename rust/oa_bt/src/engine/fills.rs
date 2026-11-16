@@ -1,20 +1,21 @@
 //! Fills: queued orders at the open (step 2), an order filled at a point of its bar
-//! (`fill_order`, also step 3 for resting orders and GTT children), and the one path
-//! every fill takes into the portfolio, the leg states and the records.
+//! (`fill_order`, also step 3 for resting orders and GTT children; its fill-bar checks
+//! are `fill_bar`), and the one path every fill takes into the portfolio, the leg states
+//! and the records.
 
 use crate::exec::{
     Fill, FillAt, FillFlags, FillPricing, FillReason, GttId, Order, OrderAction, OrderId,
-    QuantitySpec, RejectCode,
+    RejectCode,
 };
-use crate::model::{Product, Side};
+use crate::model::Side;
 use crate::portfolio::{FillEffect, FillKind, PositionChange, PositionKey};
 use crate::rms::{ExitReason, LegContext, LegRules, LegState};
-use crate::sizing::round_down_to_venue;
 
 use super::clock::SliceInfo;
 use super::config::QuantityMode;
 use super::error::KernelError;
 use super::event::{Event, EventStamp, OrderEventKind};
+use super::fill_bar::AtFill;
 use super::futures::FillOrigin;
 use super::kernel::Engine;
 use super::order_fill::OrderFill;
@@ -89,18 +90,6 @@ impl FillRequest {
         let flags = self.flags.with(flags);
         FillRequest { flags, ..self }
     }
-}
-
-/// What a queued order does at its fill bar.
-enum AtFill {
-    /// Fill this many units; `true` when it opens or adds.
-    Fill(f64, bool),
-    /// Refused by a check at the fill bar.
-    Reject(RejectCode),
-    /// Nothing left to reduce: cancelled.
-    Cancel,
-    /// `reverse=True` beyond the position: close these units, then open these.
-    Reverse(f64, f64),
 }
 
 impl Engine {
@@ -206,59 +195,6 @@ impl Engine {
             kind,
         });
         Ok(())
-    }
-
-    /// Resolve a queued order against the position and the checks of the fill bar.
-    fn at_fill(
-        &mut self,
-        slice: &SliceInfo,
-        order: &Order,
-        key: PositionKey,
-    ) -> Result<AtFill, KernelError> {
-        let request = &order.request;
-        let held = self.held_units(key);
-        let reduces = held != 0.0 && (held > 0.0) != (request.side == Side::Buy);
-        if request.reduce_only {
-            if !reduces {
-                return Ok(AtFill::Cancel);
-            }
-            let spec = self.spec(key.instrument)?;
-            let fractional =
-                self.config.quantity_mode == QuantityMode::Fractional && !spec.is_derivative();
-            let wanted = match request.quantity {
-                QuantitySpec::PositionFraction(fraction) => {
-                    round_down_to_venue(held.abs() * fraction, spec.lot_size_units, fractional)
-                }
-                _ => order.quantity_units,
-            };
-            let units = wanted.min(held.abs());
-            return Ok(if units > 0.0 {
-                AtFill::Fill(units, false)
-            } else {
-                AtFill::Cancel
-            });
-        }
-        if reduces {
-            if order.quantity_units > held.abs() {
-                return Ok(if request.reverse {
-                    AtFill::Reverse(held.abs(), order.quantity_units - held.abs())
-                } else {
-                    AtFill::Reject(RejectCode::ReverseNotAllowed)
-                });
-            }
-            return Ok(AtFill::Fill(order.quantity_units, false));
-        }
-        if request.product == Product::Mis {
-            if let Err(code) = self.session_times(slice.day)?.entry.check(slice.open) {
-                return Ok(AtFill::Reject(code));
-            }
-        }
-        // Delivery cannot be shorted (04-execution 2): a resting sale whose long was
-        // closed after it was placed must not open a short.
-        if request.product == Product::Cnc && request.side == Side::Sell {
-            return Ok(AtFill::Reject(RejectCode::ProductRule));
-        }
-        Ok(AtFill::Fill(order.quantity_units, true))
     }
 
     /// Execute one fill: price it, apply it to the position and the account, charge it,

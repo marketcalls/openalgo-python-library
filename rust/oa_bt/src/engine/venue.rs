@@ -22,8 +22,9 @@
 //!   reduce-only MARKET order) or one of the engine's exits (`venue_exits`: the daily loss
 //!   limit and drawdown halt, the square-off, the time exit). No working order counts as
 //!   covering a position: an exit first cancels every working order of its position on
-//!   the closing side and is sent once they have all ended, for the position then open.
-//!   Meanwhile it is the position's one exit owner: no second exit order is made.
+//!   the closing side and is sent once they have all ended, for the position then open,
+//!   in orders of at most the freeze quantity. Meanwhile it is the position's one exit
+//!   owner: a later strategy exit takes its place, for the larger of the two.
 //! - **Results in** (`venue_fills`): fills, rejections, cancellations, and the venue's
 //!   answers to a cancellation or modification it refused.
 //! - **The clock** (`venue_clock`). What a backtest does at the open of a slice (the
@@ -126,6 +127,9 @@ pub(super) struct ExitOwner {
     pub(super) by: ExitBy,
     /// The orders sent for it; empty while it waits for the orders it cancels.
     pub(super) sent: Vec<OrderId>,
+    /// The strategy's earlier exits of the position it took the place of: it closes at
+    /// least what the largest of them asks for.
+    pub(super) superseded: Vec<OrderId>,
 }
 
 /// A modification sent to the venue and not yet confirmed.

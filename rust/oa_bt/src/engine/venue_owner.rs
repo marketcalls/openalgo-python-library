@@ -5,23 +5,31 @@
 //! position, so an exit first sends `Cancel` for every working order of its position on
 //! the closing side, and is sent once they have all ended (cancelled, or filled), for the
 //! position then open: nothing when they filled it. While it waits it is the position's
-//! one exit owner, and it stays so until the orders sent for it have ended: a strategy
-//! exit of a position that has an owner ends `Canceled` at once, and the engine makes no
-//! second exit of it. An order placed on the closing side while an exit waits is
-//! cancelled too.
+//! one exit owner, and it stays so until the orders sent for it have ended; an order
+//! placed on the closing side while an exit waits is cancelled too.
+//!
+//! A later strategy exit of the position takes the owner's place (`reduce()` then
+//! `exit()` in one bar, say): an earlier exit still waiting ends `Canceled`, as nothing
+//! of it was sent; one already sent is a working order on the closing side, so it is
+//! cancelled (or fills) first. The later exit then closes the larger of what the two ask
+//! for, of the position then open, so the position is closed as a backtest closes it. A
+//! strategy exit of a position the engine's exit owns ends `Canceled` (that exit closes
+//! the whole position), and the engine makes no second exit of a position that has an
+//! owner.
 //!
 //! When it is sent, the strategy's exit takes the units it asks for (a fraction of the
 //! position then open, rounded down to the venue quantity, or its units) up to the
-//! position and the freeze quantity, on the order the strategy holds. The engine's exit
-//! closes the whole position in orders of at most the freeze quantity each, separate
-//! orders sent one after another (never one split call). An exit due when the market is
-//! closed is not sent: the strategy's ends `Rejected` with `market_closed`.
+//! position; the engine's exit takes the whole position. Either goes out in orders of at
+//! most the freeze quantity each, separate orders sent one after another (never one split
+//! call): the strategy's own order carries the first, the engine makes the others with
+//! its exit reason. An exit due when the market is closed is not sent: the strategy's
+//! ends `Rejected` with `market_closed`.
 
 use crate::exec::state::next_status;
 use crate::exec::{
     Order, OrderAction, OrderId, OrderRequest, OrderStatus, QuantitySpec, RejectCode,
 };
-use crate::model::Side;
+use crate::model::{Side, TsNanos};
 use crate::portfolio::PositionKey;
 use crate::rms::ExitReason;
 use crate::sizing::{cap_at_freeze, round_down_to_venue};
@@ -41,6 +49,40 @@ fn closing_side(held: f64) -> Side {
 }
 
 impl Engine {
+    /// The strategy's exit `id`, decided as `at` says: the position's exit owner, in the
+    /// place of an earlier strategy exit (module docs); `Canceled` when the engine's exit
+    /// owns the position.
+    ///
+    /// Errors: those of `fills::end_order`.
+    pub(super) fn own_strategy_exit(&mut self, at: SendAt, id: OrderId) -> Result<(), KernelError> {
+        let order = self.book.get(id).ok_or(KernelError::UnknownOrder(id))?;
+        let key = PositionKey {
+            instrument: order.request.instrument,
+            product: order.request.product,
+        };
+        let mut superseded = Vec::new();
+        if let Some(owner) = self.exit_owner(key).cloned() {
+            let ExitBy::Strategy(earlier) = owner.by else {
+                let kind = OrderEventKind::Canceled;
+                return self.end_order(at.stamp(), id, OrderAction::Cancel, kind);
+            };
+            superseded = owner.superseded;
+            superseded.push(earlier);
+            self.venue.exits.retain(|known| known.key != key);
+            if owner.sent.is_empty() {
+                let kind = OrderEventKind::Canceled;
+                self.end_order(at.stamp(), earlier, OrderAction::Cancel, kind)?;
+            }
+        }
+        self.venue.exits.push(ExitOwner {
+            key,
+            by: ExitBy::Strategy(id),
+            sent: Vec::new(),
+            superseded,
+        });
+        Ok(())
+    }
+
     /// The engine's exit of `key` for `reason`, decided as `at` says: the position's exit
     /// owner, unless it is flat or has one already (module docs).
     ///
@@ -58,6 +100,7 @@ impl Engine {
             key,
             by: ExitBy::Engine(reason),
             sent: Vec::new(),
+            superseded: Vec::new(),
         });
         self.progress_exits(at)
     }
@@ -139,12 +182,31 @@ impl Engine {
         }
     }
 
-    /// The largest piece of `units` an order may carry: the freeze quantity in whole
-    /// lots, or all of it when the instrument has none.
-    fn piece_of(&self, key: PositionKey, units: f64) -> Result<f64, KernelError> {
+    /// `units` in pieces of at most the freeze quantity in whole lots (all of it in one
+    /// when the instrument has none), in order.
+    fn pieces_of(&self, key: PositionKey, units: f64) -> Result<Vec<f64>, KernelError> {
         let spec = self.spec(key.instrument)?;
-        let piece = cap_at_freeze(units, spec.freeze_quantity_units, spec.lot_size_units);
-        Ok(if piece > 0.0 { piece } else { units })
+        let mut pieces = Vec::new();
+        let mut left = units;
+        while left > 0.0 {
+            let piece = cap_at_freeze(left, spec.freeze_quantity_units, spec.lot_size_units);
+            let piece = if piece > 0.0 { piece } else { left };
+            pieces.push(piece);
+            left -= piece;
+        }
+        Ok(pieces)
+    }
+
+    /// What a strategy exit asks for of a position of `held` signed units: a fraction of
+    /// it rounded down to the venue quantity, or its units.
+    fn exit_wanted(&self, order: &Order, held: f64) -> Result<f64, KernelError> {
+        Ok(match order.request.quantity {
+            QuantitySpec::PositionFraction(fraction) => {
+                let lot = self.spec(order.request.instrument)?.lot_size_units;
+                round_down_to_venue(held.abs() * fraction, lot, false)
+            }
+            _ => order.quantity_units,
+        })
     }
 
     fn send_strategy_exit(
@@ -160,14 +222,13 @@ impl Engine {
         if order.request.side != closing_side(held) {
             return self.drop_exit(at, owner, OrderEventKind::Canceled);
         }
-        let wanted = match order.request.quantity {
-            QuantitySpec::PositionFraction(fraction) => {
-                let lot = self.spec(owner.key.instrument)?.lot_size_units;
-                round_down_to_venue(held.abs() * fraction, lot, false)
+        let mut wanted = self.exit_wanted(&order, held)?;
+        for earlier in &owner.superseded {
+            if let Some(earlier) = self.book.get(*earlier) {
+                wanted = wanted.max(self.exit_wanted(earlier, held)?);
             }
-            _ => order.quantity_units,
-        };
-        let units = self.piece_of(owner.key, wanted.min(held.abs()))?;
+        }
+        let units = wanted.min(held.abs());
         if units <= 0.0 {
             return self.drop_exit(at, owner, OrderEventKind::Canceled);
         }
@@ -175,11 +236,24 @@ impl Engine {
             let kind = OrderEventKind::Rejected(RejectCode::MarketClosed);
             return self.drop_exit(at, owner, kind);
         }
+        let pieces = self.pieces_of(owner.key, units)?;
+        let (first, rest) = pieces
+            .split_first()
+            .map_or((units, &[][..]), |(f, r)| (*f, r));
         if let Some(sending) = self.book.get_mut(id) {
-            sending.quantity_units = units;
+            sending.quantity_units = first;
         }
         self.place(id);
-        self.set_sent(owner.key, vec![id]);
+        let mut sent = vec![id];
+        let terms = (
+            closing_side(held),
+            order.request.exit_reason,
+            order.good_until,
+        );
+        for units in rest {
+            sent.push(self.make_exit_order(at, owner.key, terms, *units)?);
+        }
+        self.set_sent(owner.key, sent);
         Ok(())
     }
 
@@ -196,42 +270,51 @@ impl Engine {
             Ok(good_until) => good_until,
             Err(_market_closed) => return self.drop_exit(at, owner, OrderEventKind::Canceled),
         };
-        let mut left = held.abs();
+        let terms = (closing_side(held), Some(reason), good_until);
         let mut sent = Vec::new();
-        while left > 0.0 {
-            let units = self.piece_of(owner.key, left)?;
-            let request = OrderRequest {
-                product: owner.key.product,
-                reduce_only: true,
-                exit_reason: Some(reason),
-                ..OrderRequest::market(
-                    owner.key.instrument,
-                    closing_side(held),
-                    QuantitySpec::Units(units),
-                )
-            };
-            let id = self.book.next_id();
-            self.book.insert(Order {
-                id,
-                request,
-                status: next_status(OrderStatus::Initialized, OrderAction::PassChecks)?,
-                decided_at: at.decided_at,
-                good_until,
-                quantity_units: units,
-                filled_units: 0.0,
-                average_fill_rupees: 0.0,
-                reject_code: None,
-            })?;
-            self.emit(Event::Order {
-                stamp: at.stamp(),
-                order: id,
-                kind: OrderEventKind::Submitted,
-            });
-            self.place(id);
-            sent.push(id);
-            left -= units;
+        for units in self.pieces_of(owner.key, held.abs())? {
+            sent.push(self.make_exit_order(at, owner.key, terms, units)?);
         }
         self.set_sent(owner.key, sent);
         Ok(())
+    }
+
+    /// Make and send one of the engine's exit orders of `key`: a reduce-only MARKET DAY
+    /// order of `units` with `(side, exit reason, good until)`, decided and stamped as
+    /// `at` says.
+    ///
+    /// Errors: those of the order book.
+    fn make_exit_order(
+        &mut self,
+        at: SendAt,
+        key: PositionKey,
+        (side, exit_reason, good_until): (Side, Option<ExitReason>, TsNanos),
+        units: f64,
+    ) -> Result<OrderId, KernelError> {
+        let request = OrderRequest {
+            product: key.product,
+            reduce_only: true,
+            exit_reason,
+            ..OrderRequest::market(key.instrument, side, QuantitySpec::Units(units))
+        };
+        let id = self.book.next_id();
+        self.book.insert(Order {
+            id,
+            request,
+            status: next_status(OrderStatus::Initialized, OrderAction::PassChecks)?,
+            decided_at: at.decided_at,
+            good_until,
+            quantity_units: units,
+            filled_units: 0.0,
+            average_fill_rupees: 0.0,
+            reject_code: None,
+        })?;
+        self.emit(Event::Order {
+            stamp: at.stamp(),
+            order: id,
+            kind: OrderEventKind::Submitted,
+        });
+        self.place(id);
+        Ok(id)
     }
 }

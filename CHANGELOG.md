@@ -32,10 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cancel, then exit: an exit (`exit()`, `reduce()`, the daily loss limit, the drawdown
   halt, the square-off, the time exit) first cancels every working order of the position
   on the closing side and is sent once they have ended, for the position then open; it is
-  the position's one exit owner meanwhile. The engine's exits are sent where a backtest
-  makes them (the square-off and time exit as the session reaches their open, with or
-  without a bar), again at the next open while they apply (a rejected exit, a position a
-  cancel race reopened), and above the freeze quantity as several orders of at most it.
+  the position's one exit owner meanwhile, and a later strategy exit (`reduce()` then
+  `exit()` in one bar) takes its place for the larger of the two, so the position closes
+  as in a backtest. Every exit goes out above the freeze quantity as several orders of at
+  most it. The engine's exits are sent where a backtest makes them (the square-off and
+  time exit as the session reaches their open, with or without a bar), and again at the
+  next open while they apply (a rejected exit, a position a cancel race reopened).
   MIS entries still working when entries stop are cancelled. Timers fire as the session
   reaches their open. At a session close the DAY orders are cancelled through the broker
   and the session does not finish while an order works; a position still open is

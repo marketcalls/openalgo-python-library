@@ -123,6 +123,7 @@
 //! | `queries` | `AccountView` and the queries of positions, legs, orders and the account |
 //! | `steps` | Steps 1 to 8 |
 //! | `fills` | Step 2 fills of queued orders, `execute_fill` |
+//! | `fill_bar` | The checks of an order at its fill bar: the position (reduce, reverse), the entry window, no delivery short |
 //! | `legs` | Leg rules in steps 3 and 4, the add rule of SPEC-14 |
 //! | `reverse` | `reverse=True`: close, then open the rest |
 //! | `resting` | Step 3: resting LIMIT, SL and SL-M DAY orders, the stop-limit exit conversion |
@@ -189,6 +190,7 @@ pub mod config;
 mod entry_rules;
 pub mod error;
 pub mod event;
+mod fill_bar;
 mod fills;
 mod futures;
 mod futures_plan;

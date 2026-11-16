@@ -12,7 +12,7 @@
 mod venue_support;
 
 use oa_bt::engine::{Engine, RunConfig, RunOutput, Step, VenueCommand};
-use oa_bt::exec::{FillFlags, OrderId, OrderStatus, OrderType};
+use oa_bt::exec::{FillFlags, OrderId, OrderRequest, OrderStatus, OrderType, QuantitySpec};
 use oa_bt::model::{Product, Side};
 use oa_bt::rms::{ExitReason, StrategyRiskConfig};
 use venue_support::{
@@ -262,6 +262,61 @@ fn an_engine_exit_above_the_freeze_quantity_goes_out_in_orders_of_at_most_it() {
             (OrderId(6), Side::Sell, 20.0),
         ]
     );
+}
+
+#[test]
+fn a_strategy_exit_above_the_freeze_quantity_goes_out_in_orders_of_at_most_it() {
+    // A freeze quantity of 40: exit() of 100 is its own order of 40 and two more, 40 and 20.
+    let columns = bars(&[], &[]);
+    let mut kernel = venue_support::session_of(config(), venue_support::frozen_at(40));
+    let acts = vec![
+        at_close(0, Act::Submit(market(Side::Buy, 40.0))),
+        at_close(1, Act::Submit(market(Side::Buy, 40.0))),
+        at_close(2, Act::Submit(market(Side::Buy, 20.0))),
+        at_close(5, Act::Submit(whole_exit())),
+    ];
+    let mut echo = Echo::default();
+    echo_until(&mut kernel, &columns, &mut Script::new(acts), &mut echo, 6);
+    assert_eq!(
+        placed(&kernel.take_commands()),
+        [
+            (OrderId(4), Side::Sell, 40.0),
+            (OrderId(5), Side::Sell, 40.0),
+            (OrderId(6), Side::Sell, 20.0),
+        ]
+    );
+}
+
+#[test]
+fn reduce_then_exit_in_one_bar_closes_the_position_as_a_backtest_does() {
+    let columns = bars(&[], &[]);
+    let mut acts = buy_100_at_the_open();
+    let half = OrderRequest {
+        quantity: QuantitySpec::PositionFraction(0.5),
+        ..whole_exit()
+    };
+    acts.push(at_close(5, Act::Submit(half)));
+    acts.push(at_close(5, Act::Submit(whole_exit())));
+    let backtest = run_backtest(config(), &columns, &mut Script::new(acts.clone()));
+    let closed = backtest.fills.last().expect("the backtest's exits");
+    assert_eq!(closed.stamp.slice_ts, slice_open(6), "flat at minute 6");
+    // Long before the square-off (minute 355): the session is flat by minute 10 too.
+    let (kernel, _) = echoed_until(config(), &columns, acts, 10);
+    let held = kernel.position(venue_support::SBIN, Product::Mis);
+    assert_eq!(held.map(|p| p.quantity_units), Some(0.0));
+}
+
+/// `exit()`: a reduce-only MARKET sale of the whole MIS position.
+fn whole_exit() -> OrderRequest {
+    OrderRequest {
+        reduce_only: true,
+        product: Product::Mis,
+        ..OrderRequest::market(
+            venue_support::SBIN,
+            Side::Sell,
+            QuantitySpec::PositionFraction(1.0),
+        )
+    }
 }
 
 /// A crash at minute 10: open 494.00, close 494.05, a loss of about 605 on 100 units

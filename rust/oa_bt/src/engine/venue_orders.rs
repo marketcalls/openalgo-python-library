@@ -10,7 +10,7 @@ use crate::sizing::round_down_to_venue;
 use super::error::KernelError;
 use super::event::{EventStamp, OrderEventKind};
 use super::kernel::Engine;
-use super::venue::{is_exit, ExitBy, ExitOwner, Replacement, SendAt, VenueCommand};
+use super::venue::{is_exit, Replacement, SendAt, VenueCommand};
 
 impl Engine {
     /// The units an order is sent with: in a backtest `units` as resolved; in an external
@@ -45,10 +45,9 @@ impl Engine {
 
     /// In an external session, after an order has passed the checks (`at` is its
     /// decision): an exit becomes its position's exit owner (`venue_owner`), any other
-    /// order is sent at once. An order with no units, or an exit of a position another
-    /// exit owns, ends `Canceled` and sends nothing. Then every exit owner moves on, so a
-    /// waiting exit also cancels an order just placed on its closing side. A backtest
-    /// sends nothing.
+    /// order is sent at once. An order with no units ends `Canceled` and sends nothing.
+    /// Then every exit owner moves on, so a waiting exit also cancels an order just
+    /// placed on its closing side. A backtest sends nothing.
     ///
     /// Errors: those of `fills::end_order` and of the exit owners.
     pub(super) fn send_order(&mut self, at: SendAt, id: OrderId) -> Result<(), KernelError> {
@@ -56,21 +55,13 @@ impl Engine {
             return Ok(());
         }
         let order = self.book.get(id).ok_or(KernelError::UnknownOrder(id))?;
-        let key = PositionKey {
-            instrument: order.request.instrument,
-            product: order.request.product,
-        };
         let exit = is_exit(&order.request);
-        if order.quantity_units <= 0.0 || (exit && self.exit_owner(key).is_some()) {
+        if order.quantity_units <= 0.0 {
             let kind = OrderEventKind::Canceled;
             return self.end_order(at.stamp(), id, OrderAction::Cancel, kind);
         }
         if exit {
-            self.venue.exits.push(ExitOwner {
-                key,
-                by: ExitBy::Strategy(id),
-                sent: Vec::new(),
-            });
+            self.own_strategy_exit(at, id)?;
         } else {
             self.place(id);
         }

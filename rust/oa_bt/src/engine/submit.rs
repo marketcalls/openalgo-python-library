@@ -20,7 +20,7 @@ use super::config::QuantityMode;
 use super::error::KernelError;
 use super::event::{Event, OrderEventKind};
 use super::kernel::Engine;
-use super::venue::SendAt;
+use super::venue::{is_exit, SendAt};
 
 /// Days searched for the next session of a daily strategy's order before it counts as
 /// having no session to fill in: longer than any run of Indian market holidays.
@@ -221,10 +221,16 @@ impl Engine {
         // Beyond the opposite position: reversed with `reverse=True`, else rejected.
         let excess = reduces && !request.reduce_only && units > held.abs();
         let fractional = self.fractional(request.instrument);
+        // A live session's exit is sized when it is sent, in orders of at most the freeze
+        // quantity (`venue_owner`); entries keep the freeze rule.
+        let splits = self.is_external() && is_exit(request);
         let rules = if units > 0.0 {
             quantity_rule(units, spec, fractional)
                 .and_then(|()| tick_rule(request.order_type, spec))
-                .and_then(|()| freeze_rule(units, spec))
+                .and_then(|()| match splits {
+                    true => Ok(()),
+                    false => freeze_rule(units, spec),
+                })
         } else {
             tick_rule(request.order_type, spec)
         };
