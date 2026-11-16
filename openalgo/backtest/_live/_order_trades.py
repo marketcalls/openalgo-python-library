@@ -18,9 +18,11 @@ from types import MappingProxyType
 from typing import Any
 
 from ..errors import LiveError
+from ._answers import server_answer
+from ._order_answers import ServerWatch
 from ._order_news import is_priceless
 from ._order_updates import normalize_update, number, units
-from ._types import LOGGER_NAME, OrderStatus, OrderUpdate
+from ._types import LOGGER_NAME, GuardLike, OrderStatus, OrderUpdate
 
 logger = logging.getLogger(LOGGER_NAME)
 
@@ -78,6 +80,24 @@ def read_fills(trades: list[Mapping[str, Any]], order_ids: set[str]) -> dict[str
     return fills
 
 
+def read_tradebook(
+    client: Any, *, guard: GuardLike, watch: ServerWatch, order_ids: set[str], now: int
+) -> dict[str, Fills] | None:
+    """The fills of `order_ids` in one `tradebook` read at `now`, its answer noted by
+    `watch` and checked by `guard`: none when it cannot be read (logged), None when its
+    answer locked the guard (it came from the other mode's book)."""
+    answer = server_answer(client.tradebook())
+    watch.note(answer, now)
+    guard.check_response(answer)
+    if guard.locked:
+        return None
+    trades = answer.get("data")
+    if answer.get("status") != "success" or not isinstance(trades, list):
+        logger.warning("the tradebook could not be read: %s", answer.get("message"))
+        return {}
+    return read_fills(trades, order_ids)
+
+
 def with_fills(word: Polled, fills: Fills | None, now: int) -> tuple[OrderUpdate | None, bool]:
     """A word completed from the order's fills, and whether the tradebook confirmed it.
 
@@ -119,6 +139,7 @@ __all__ = [
     "Polled",
     "needs_trades",
     "read_fills",
+    "read_tradebook",
     "wants_trades",
     "with_fills",
 ]

@@ -13,14 +13,15 @@ each of them, not only the first. The checks, by name:
   of `orders`, refused with the reason);
 - `mode`: `funds` was answered in the session's mode, so the analyzer switch has not
   moved since the mode guard read it;
-- `funds`: the available cash covers `capital`;
+- `funds`: the available cash covers `capital`; no cash at all, with ping working, is
+  what some brokers answer for an expired login, so it is a login failure as well;
 - `symbol:<EXCHANGE>:<SYMBOL>`: each instrument found, with its lot size, tick size and
   freeze quantity, in an answer for that instrument; an instrument on an index exchange
   is refused, as an index cannot be traded;
 - `broker_quotes`: the broker quotes the first instrument found at a positive price,
   which shows its login works in both modes (OpenAlgo asks the broker for a quote
   whatever its analyzer switch);
-- `interval`: the broker offers candles of the strategy's interval and the 1-minute
+- `interval`: the broker offers candles of each strategy's interval and the 1-minute
   candles the live bars are checked against (`intervals`, D27);
 - `capital`, `max_daily_loss`: given and positive (both mandatory for `bt.live`), and
   `account_max_daily_loss` positive when given;
@@ -33,6 +34,12 @@ each of them, not only the first. The checks, by name:
   when a clock is certainly off, and warns when it cannot tell, as for a server on this
   computer;
 - `alerts`: a test alert delivered; required in LIVE mode, a warning in SANDBOX mode.
+  It is sent once a session: a later run while the broker's login is awaited reports
+  the first run's check (`PreflightPlan.tested_alerts`).
+
+The failures of `broker_session` and `broker_quotes`, and of `funds` with no cash at all,
+are login failures (`Check.login`): a session started before the open runs the
+preflight again while they are its only failures (`PreflightOutcome.waits_for_login`).
 
 Not checked: whether OpenAlgo streams order updates. No API call reports it
 (`ORDER_UPDATES_ENABLED` is a server setting), and the order path needs no check of it:
@@ -50,11 +57,18 @@ import numbers
 from collections.abc import Callable
 
 from ..calendar import Calendar, default_calendar
-from ..errors import ConfigError, PreflightError
+from ..errors import ConfigError
 from ._preflight_clock import clock_check
 from ._preflight_local import alerts_check, limit_checks, product_check, trading_day_checks
 from ._preflight_lock import LOCK_FILE_NAME, AccountLock
-from ._preflight_plan import WARNING, Check, InstrumentFacts, PreflightPlan, PreflightReport
+from ._preflight_plan import (
+    WARNING,
+    Check,
+    InstrumentFacts,
+    PreflightOutcome,
+    PreflightPlan,
+    PreflightReport,
+)
 from ._preflight_server import PreflightClient, read_server
 from ._types import LOGGER_NAME, Now, Sleep
 
@@ -69,17 +83,31 @@ logger = logging.getLogger(LOGGER_NAME)
 def run_preflight(
     client: PreflightClient, plan: PreflightPlan, *, now: Now, calendar: Calendar | None = None
 ) -> PreflightReport:
-    """Run every check of `plan` (see the module docstring) against `client`, an
-    `openalgo.api` client of which only `ping`, `funds`, `symbol`, `quotes` (once) and
-    `intervals` are called, and its pooled HTTP client for one HEAD request to the
-    server's root (the clock check, not sent to a server on this computer); the plan's
-    alert channel sends one test alert once `ping` has succeeded. `now` gives the present
-    in UTC nanoseconds, and `calendar` the sessions (the package's default calendar when
-    None).
+    """Run every check of `plan` (see `check_preflight`).
 
     Returns the report of a preflight in which every check passed. Raises PreflightError
     when any failed, its `failures` holding the message of each failed check in order,
     and ConfigError when `plan` is not a `PreflightPlan`.
+    """
+    return check_preflight(client, plan, now=now, calendar=calendar).report()
+
+
+def check_preflight(
+    client: PreflightClient, plan: PreflightPlan, *, now: Now, calendar: Calendar | None = None
+) -> PreflightOutcome:
+    """Run every check of `plan` (see the module docstring) against `client`, an
+    `openalgo.api` client of which only `ping`, `funds`, `symbol`, `quotes` (once) and
+    `intervals` are called, and its pooled HTTP client for one HEAD request to the
+    server's root (the clock check, not sent to a server on this computer); the plan's
+    alert channel sends one test alert once `ping` has succeeded, unless the plan carries
+    the alerts check of an earlier run (`tested_alerts`), which is reported again. `now`
+    gives the present in UTC nanoseconds, and `calendar` the sessions (the package's
+    default calendar when None).
+
+    Returns every check, passed or failed (`PreflightOutcome`): its `waits_for_login`
+    tells a session started before the open to run the preflight again, and its
+    `report()` gives the `PreflightReport` or raises PreflightError. Raises ConfigError
+    when `plan` is not a `PreflightPlan`.
     """
     if not isinstance(plan, PreflightPlan):
         raise ConfigError(f"plan must be a PreflightPlan, not {type(plan).__name__}")
@@ -96,16 +124,14 @@ def run_preflight(
     # wait for ping to succeed; a missing alert channel is known without it.
     if server.broker is not None:
         checks.append(clock_check(client, now))
-    if plan.alerts is None or server.broker is not None:
+    if plan.tested_alerts is not None:
+        checks.append(plan.tested_alerts)
+    elif plan.alerts is None or server.broker is not None:
         checks.append(alerts_check(plan.alerts, plan.mode))
     _log(checks)
-    failures = tuple(check.message for check in checks if not check.ok)
-    broker, available = server.broker, server.funds_available
-    # A broker or funds missing fails the broker session check, so both are known here
-    # whenever every check passed.
-    if failures or broker is None or available is None:
-        raise PreflightError(_failed_text(failures), failures)
-    return PreflightReport(tuple(checks), broker, available, server.instruments)
+    return PreflightOutcome(
+        tuple(checks), server.broker, server.funds_available, server.instruments
+    )
 
 
 def countdown(seconds: int, *, emit: Callable[[str], None], sleep: Sleep) -> None:
@@ -134,12 +160,6 @@ def _log(checks: list[Check]) -> None:
         logger.log(level, "preflight %s: %s", check.name, check.message)
 
 
-def _failed_text(failures: tuple[str, ...]) -> str:
-    count = f"{len(failures)} preflight check{'' if len(failures) == 1 else 's'} failed"
-    lines = "\n".join(f"- {message}" for message in failures)
-    return f"the live session cannot start: {count}. Fix each, then start it again:\n{lines}"
-
-
 __all__ = [
     "COUNTDOWN_SECONDS",
     "LOCK_FILE_NAME",
@@ -148,8 +168,10 @@ __all__ = [
     "Check",
     "InstrumentFacts",
     "PreflightClient",
+    "PreflightOutcome",
     "PreflightPlan",
     "PreflightReport",
+    "check_preflight",
     "countdown",
     "run_preflight",
 ]

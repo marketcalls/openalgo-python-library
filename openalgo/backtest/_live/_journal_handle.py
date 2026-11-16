@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Self
 
 from ..errors import JournalError
-from ._journal_file import failure
+from ._journal_file import DEFAULT_BUSY_TIMEOUT_S, failure
 from ._journal_rows import day_key, whole_number
 from ._types import Mode, Now
 
@@ -24,12 +24,19 @@ class JournalHandle:
     it (the session's loop). It keeps the trading day of the session started on it."""
 
     def __init__(
-        self, connection: sqlite3.Connection, path: Path, mode: Mode, broker: str, now: Now
+        self,
+        connection: sqlite3.Connection,
+        path: Path,
+        mode: Mode,
+        broker: str,
+        now: Now,
+        busy_timeout_s: float = DEFAULT_BUSY_TIMEOUT_S,
     ) -> None:
-        """Wrap `connection`, already checked by `_journal_file.connect`; `now` gives UTC
-        nanoseconds."""
+        """Wrap `connection`, already checked by `_journal_file.connect` and waiting
+        `busy_timeout_s` seconds for a lock; `now` gives UTC nanoseconds."""
         self._connection: sqlite3.Connection | None = connection
         self._path = path
+        self._busy_timeout_s = busy_timeout_s
         self._mode = mode
         self._ledger = mode.value
         self._broker = broker
@@ -81,7 +88,7 @@ class JournalHandle:
         try:
             yield
         except sqlite3.Error as error:
-            raise failure(error, action, self._path) from error
+            raise failure(error, action, self._path, self._busy_timeout_s) from error
 
     def _check_thread(self, action: str) -> None:
         if threading.get_ident() != self._thread:

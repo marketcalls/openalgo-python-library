@@ -140,6 +140,14 @@ def test_a_cancelled_order_whose_status_omits_its_fills_reads_them_from_the_trad
     assert polled.average_price == pytest.approx((3 * 100.0 + 2 * 101.0) / 5)
 
 
+def test_a_polled_cancel_whose_status_omits_its_fills_is_held_while_the_tradebook_fails():
+    rig = sent_rig(orderstatus=[status_answer("1", "cancelled")], tradebook=[BROKER_BUSY])
+
+    assert next_round(rig, 2) == []
+    assert rig.path.held_fills() == [HeldFill("1", 0, rig.clock.now_ns)]
+    assert rig.path.last_known("1").status is OrderStatus.CANCELLED
+
+
 def test_a_fill_with_no_price_is_held_not_returned_nor_journaled():
     rig = sent_rig()
 
