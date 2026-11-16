@@ -39,7 +39,10 @@ build and the start of watching the feed (3.1 steps 11 to 14), reading each stra
 most once, so a call ends however slow the reads; a strategy's `catch_up` takes candles
 read elsewhere (the data worker's). What is left after the last call before watching is
 for the session's candle checks: each strategy's `missing` slices, and those still
-`uncaught` when watching begins. A restart builds the plan again from the same
+`uncaught` when watching begins, which the catch-up releases from those checks' candles
+(`before` the slice watching began in); from that slice on, the session loop releases
+each slice as it closes (`StrategyPlan.release_next`, in `_plan_catch_up`, the module
+of a strategy's part of the plan). A restart builds the plan again from the same
 arguments: a fresh engine is caught up from the open, and the kernel's saved state is
 restored after the catch-up (3.6, K4).
 
@@ -49,43 +52,26 @@ thread-safe: the main thread builds the plan, and the session loop owns it after
 
 from __future__ import annotations
 
-import bisect
 import datetime as dt
-import logging
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
 
-from .._calendar_convert import format_ist, interval_nanos
-from .._driver import deliver
-from .._engine import call
-from .._warm_up import _ready_at
+from .._calendar_convert import interval_nanos
 from ..calendar import Calendar, default_calendar
-from ..errors import ConfigError, LiveError
 from ..strategy import Strategy
-from ._bars_candle import CANDLE_SOURCE, candle_bar
+from ._bars_candle import candle_bar
 from ._plan_args import LiveArguments, live_arguments
+from ._plan_catch_up import INSTRUMENT, StrategyPlan
 from ._plan_engine import bind_strategy, check_grid, session_engine
-from ._plan_release import (
-    CANDLE_LAST_READ_S,
-    CANDLE_SETTLE_S,
-    MISSING,
-    SETTLE_NS,
-    missing_note,
-    releases,
-)
+from ._plan_release import CANDLE_LAST_READ_S, CANDLE_SETTLE_S, missing_note
 from ._plan_setup import StrategySetup, read_today, strategy_setup
 from ._plan_strategies import StrategySpec, ist_day, refuse_shared_legs, strategy_spec
 from ._preflight_plan import InstrumentFacts
-from ._types import LOGGER_NAME, LiveBar, Now
-from .series import DEFAULT_BASE, LiveRunContext, LiveSeries
-
-#: Each strategy trades one instrument, registered first (1.1).
-INSTRUMENT = 0
-
-logger = logging.getLogger(LOGGER_NAME)
+from ._types import LiveBar, Now
+from .series import DEFAULT_BASE, LiveSeries
 
 
 @dataclass(frozen=True)
@@ -143,143 +129,6 @@ def specify(
     )
     refuse_shared_legs(specs)
     return SessionSpec(checked, day, specs)
-
-
-class StrategyPlan:
-    """One strategy's part of the plan (module docstring): its `spec`, its `setup`, its
-    kernel session (`engine`), its live `series`, the strategy instance and its live run
-    `context`. `released` counts the slices of the day caught up and released to the
-    kernel; the session loop releases the later ones."""
-
-    def __init__(
-        self,
-        spec: StrategySpec,
-        setup: StrategySetup,
-        engine: Any,
-        series: LiveSeries,
-        strategy: Strategy,
-        context: LiveRunContext,
-        calendar: Calendar,
-    ) -> None:
-        self.spec, self.setup, self.engine = spec, setup, engine
-        self.series, self.strategy, self.context = series, strategy, context
-        self.calendar = calendar
-        self._slices = series.slices
-        self._closes = [close for _, close in self._slices]
-        self._released = 0
-
-    @property
-    def released(self) -> int:
-        """How many slices of the day, from the open, are caught up and released."""
-        return self._released
-
-    @property
-    def missing(self) -> tuple[int, ...]:
-        """The opens (UTC nanoseconds) of the slices the catch-up released marked missing
-        whose candle has not been read since, oldest first: the session's candle checks
-        ask for them (2.5 B)."""
-        if not self._released:
-            return ()
-        return self.series.missing_slices(self._slices[0][0], self._closes[self._released - 1])
-
-    def uncaught(self, read_ns: int) -> tuple[int, ...]:
-        """The opens of the slices settled at a read of the broker's candles begun at
-        `read_ns` (UTC nanoseconds), those closed by `read_ns` less `CANDLE_SETTLE_S`,
-        that are not caught up yet, oldest first."""
-        return tuple(opened for opened, _ in self._settled(read_ns))
-
-    def catch_up(self, bars: Iterable[LiveBar], read_ns: int) -> tuple[int, ...]:
-        """Catch up to a read of today's candles begun at `read_ns` (UTC nanoseconds; the
-        start of the read, not its end, since a slice that settled during it may be
-        missing from it) whose candles are `bars` (the strategy's broker candles of
-        today, `source` "candle"; none for a read that held none). The slices settled at
-        the read (`uncaught`) are released by the rule of the module docstring, each run
-        deciding nothing, and a candle of a slice marked missing is taken by the series.
-        Candles of the other slices caught up already are left alone. Returns the opens
-        of the slices it marked missing, oldest first.
-
-        Raises ConfigError for a bar that is not a candle of the strategy's instrument,
-        and LiveError when the catch-up made an order or the exchange's session ended."""
-        candles = self._candles(bars)
-        for opened in self.missing:
-            if opened in candles:
-                self.series.take(candles[opened])
-        found = releases(self._settled(read_ns), candles, read_ns)
-        for release in found:
-            bar = release.bar
-            if bar is not None:
-                self.series.take(bar)
-                prices = (bar.open, bar.high, bar.low, bar.close, bar.volume)
-                call(self.engine.add_bar, INSTRUMENT, (bar.ts_open_ns, *prices))
-            elif release.kind == MISSING:
-                self.series.mark_missing(release.opened)
-            self._released += 1
-            call(self.engine.release, self._released)
-            self._drive()
-        if found:
-            self._refuse_orders()
-        return tuple(release.opened for release in found if release.kind == MISSING)
-
-    def indicators_ready(self, decided_at_ns: int) -> bool:
-        """True when every indicator need of the strategy is met by the bars closed at
-        the decision `decided_at_ns` (D25: the need-th bar of its series, history
-        counted, or for an anchored need its whole periods), as the backtest's warm-up
-        rule finds it (`_warm_up`): the session decides only then (2.5 C)."""
-        return all(_ready_at(need, self.context) <= decided_at_ns for need in self.spec.needs)
-
-    def _settled(self, read_ns: int) -> list[tuple[int, int]]:
-        """(open, close) of the slices settled at a read begun at `read_ns` and not
-        caught up yet, oldest first."""
-        end = bisect.bisect_right(self._closes, read_ns - SETTLE_NS)
-        return list(self._slices[self._released : end])
-
-    def _candles(self, bars: Iterable[LiveBar]) -> dict[int, LiveBar]:
-        """`bars` by open, each checked to be a broker candle of the instrument."""
-        found: dict[int, LiveBar] = {}
-        for bar in bars:
-            if bar.source != CANDLE_SOURCE:
-                raise ConfigError(f"the catch-up takes broker candles, not {bar.source!r} bars")
-            if (bar.symbol, bar.exchange) != (self.spec.symbol, self.spec.exchange):
-                raise ConfigError(
-                    f"a candle of {bar.exchange}:{bar.symbol} reached the catch-up of "
-                    f"{self.spec.name}, which trades {self.spec.exchange}:{self.spec.symbol}"
-                )
-            found[bar.ts_open_ns] = bar
-        return found
-
-    def _drive(self) -> None:
-        """Run the kernel's pauses until it waits, revealing bars and delivering events,
-        deciding nothing (no `on_bar`, no timer)."""
-        while True:
-            kind, decided_at, rows, events, _timers = call(self.engine.advance)
-            if kind == "waiting":
-                return
-            self.context.reveal(decided_at, rows)
-            if events:
-                deliver(self.strategy, self.context, events)
-            if kind == "finished":
-                raise LiveError(
-                    f"{self.spec.exchange}'s session of {self.spec.plan.start} ended before "
-                    f"the plan of {self.spec.name} was built: nothing is left to trade today"
-                )
-            if kind == "timers":
-                logger.info(
-                    "%s: the timers due at %s were missed before the session started and are "
-                    "skipped",
-                    self.spec.name,
-                    format_ist(decided_at),
-                )
-
-    def _refuse_orders(self) -> None:
-        """Raise LiveError when the catch-up made an order: a catch-up sends nothing, and
-        an order from a callback run on a past bar is not a decision of now."""
-        commands = call(self.engine.take_commands)
-        if commands:
-            raise LiveError(
-                f"{self.spec.name}: {len(commands)} orders were made while the session caught "
-                "up on today's past bars, and a catch-up sends nothing: place orders in "
-                "on_bar, which runs once the session trades"
-            )
 
 
 class SessionPlan:
@@ -389,6 +238,7 @@ def build(
 __all__ = [
     "CANDLE_LAST_READ_S",
     "CANDLE_SETTLE_S",
+    "INSTRUMENT",
     "SessionPlan",
     "SessionSpec",
     "StrategyPlan",
