@@ -57,7 +57,7 @@ def test_registry_names_every_built_in_table_and_its_file():
 @pytest.mark.parametrize("table", BUILTIN_TABLES)
 def test_registry_gives_each_table_an_iso_as_of_date_and_a_description(table):
     entry = _registry()[table]
-    assert dt.date.fromisoformat(entry["as_of"]) <= dt.date(2026, 11, 12)
+    assert dt.date.fromisoformat(entry["as_of"]) <= dt.date(2026, 11, 17)
     assert entry["description"]
 
 
@@ -146,6 +146,25 @@ def test_monthly_expiry_rules_start_and_end_on_month_boundaries_where_the_weekda
                 continue
             end = dt.date.fromisoformat(before["valid_to"])
             assert (end + dt.timedelta(days=1)).day == 1, (before, after)
+
+
+def test_nse_price_bands_switch_from_their_rupee_minimum_to_their_percent_at_a_premium_of_50():
+    # NSE circulars write each band as two premium ranges, a rupee figure up to 50 and a
+    # percent above it; the table writes the larger of the two, which is the same rule only
+    # when the percent of 50 equals the rupee figure.
+    for record in _records("price_protection.csv"):
+        if record["exchange"] == "NFO":
+            percent, rupees = float(record["band_percent"]), float(record["band_min_rupees"])
+            assert percent / 100 * 50 == pytest.approx(rupees), record
+
+
+def test_price_bands_hold_on_every_day_or_on_an_expiry_day_and_the_all_rows_on_every_day():
+    # The header's lookup order (the underlying's expiry_day row, then its every_day row,
+    # then ALL) leaves every option a row only when the ALL rows hold on every day.
+    for record in _records("price_protection.csv"):
+        assert record["days"] in {"every_day", "expiry_day"}, record
+        if record["underlying"] == "ALL":
+            assert record["days"] == "every_day", record
 
 
 def test_broker_unit_rows_are_all_marked_unverified():
