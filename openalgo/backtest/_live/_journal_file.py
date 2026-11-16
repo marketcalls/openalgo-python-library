@@ -1,6 +1,7 @@
 """The file of the live journal (`journal.Journal`): where it lives, its layout and version,
-the checks made each time it is opened (08-live-trading section 7), and what a SQLite
-error met while using it means.
+the checks made each time it is opened (08-live-trading section 7), how long a write
+waits for a lock another connection holds, and what a SQLite error met while using it
+means.
 
 A journal is bound to the account and the broker it was created for. Its layout version
 is kept in `PRAGMA user_version`, which SQLite reads as 0 in a file never given one.
@@ -8,6 +9,8 @@ is kept in `PRAGMA user_version`, which SQLite reads as 0 in a file never given 
 
 from __future__ import annotations
 
+import math
+import numbers
 import os
 import sqlite3
 from pathlib import Path
@@ -17,6 +20,11 @@ from ..errors import JournalError
 
 #: The layout of the journal file this version reads and writes.
 SCHEMA_VERSION = 1
+#: Seconds a statement waits for a lock another connection holds before SQLite gives up
+#: with SQLITE_BUSY: 5, Python's own default for `sqlite3.connect(timeout=...)`. A
+#: session writes one file from two threads, each through its own handle, and every
+#: write commits in milliseconds, so one waits on the other well within it.
+DEFAULT_BUSY_TIMEOUT_S = 5.0
 #: The environment variable naming the folder (absolute) that holds the journals instead
 #: of `~/.openalgo/live`.
 LIVE_DIR_VARIABLE = "OPENALGO_LIVE_DIR"
@@ -79,15 +87,13 @@ _SCHEMA = (
         starts INTEGER NOT NULL, PRIMARY KEY (ledger, day)) STRICT""",
 )
 
-# What to do after each kind of SQLite error, by its primary result code.
+# What to do after each kind of SQLite error, by its primary result code; SQLITE_BUSY's
+# advice names the busy timeout (`_busy_advice`).
+_BUSY = "SQLITE_BUSY"
 _REFUSED = "a value was refused: pass the field SQLite names, as the type the journal keeps"
 _DISK = "check that the disk works and the file can be written, then start the session again"
 _ADVICE = MappingProxyType(
     {
-        "SQLITE_BUSY": (
-            "another program holds the file (another session of this account, or a tool "
-            "reading it): stop it, then start the session again"
-        ),
         "SQLITE_LOCKED": "the file is locked by this program: start the session again",
         "SQLITE_FULL": "the disk is full: free some space, then start the session again",
         "SQLITE_READONLY": (
@@ -124,19 +130,24 @@ def default_journal_path(account: str) -> Path:
     return root / account / JOURNAL_FILE_NAME
 
 
-def connect(path: Path, account: str, broker: str) -> sqlite3.Connection:
+def connect(
+    path: Path, account: str, broker: str, *, busy_timeout_s: float = DEFAULT_BUSY_TIMEOUT_S
+) -> sqlite3.Connection:
     """Open the journal file at `path` for `account` bound to `broker`, creating its
     folders and, in a new file, its layout. The connection commits every statement as it
-    runs, syncs each commit to disk and gives rows as `sqlite3.Row`.
+    runs, syncs each commit to disk, gives rows as `sqlite3.Row`, and waits up to
+    `busy_timeout_s` seconds for a lock another connection holds.
 
-    Raises `JournalError` when the file cannot be opened, is not a journal, has a newer
-    or unknown schema version, belongs to another account or is bound to another broker.
+    Raises `JournalError` when `busy_timeout_s` is not a positive number, or the file
+    cannot be opened, is not a journal, has a newer or unknown schema version, belongs to
+    another account or is bound to another broker.
     """
     check_name("account", account)
     check_name("broker", broker)
+    _check_busy_timeout(busy_timeout_s)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(path, autocommit=True)
+        connection = sqlite3.connect(path, autocommit=True, timeout=busy_timeout_s)
     except (OSError, sqlite3.Error) as error:
         raise JournalError(
             f"cannot open the live journal at {path} ({error}): choose a folder you can "
@@ -144,11 +155,21 @@ def connect(path: Path, account: str, broker: str) -> sqlite3.Connection:
         ) from error
     try:
         connection.row_factory = sqlite3.Row
-        _prepare(connection, path, account, broker)
+        _prepare(connection, path, account, broker, busy_timeout_s)
     except BaseException:
         connection.close()
         raise
     return connection
+
+
+def _check_busy_timeout(busy_timeout_s: float) -> None:
+    """Raise `JournalError` unless `busy_timeout_s` is a finite number of seconds above 0."""
+    number = isinstance(busy_timeout_s, numbers.Real) and not isinstance(busy_timeout_s, bool)
+    if not (number and math.isfinite(busy_timeout_s) and busy_timeout_s > 0):
+        raise JournalError(
+            "busy_timeout_s is how many seconds a write waits for a lock another connection "
+            f"holds, a number above 0 such as {DEFAULT_BUSY_TIMEOUT_S:g}, not {busy_timeout_s!r}"
+        )
 
 
 def check_name(what: str, value: str) -> None:
@@ -157,10 +178,16 @@ def check_name(what: str, value: str) -> None:
         raise JournalError(f"{what} must be a non-empty string, not {value!r}")
 
 
-def failure(error: sqlite3.Error, action: str, path: Path) -> JournalError:
+def failure(
+    error: sqlite3.Error,
+    action: str,
+    path: Path,
+    busy_timeout_s: float = DEFAULT_BUSY_TIMEOUT_S,
+) -> JournalError:
     """The `JournalError` for a SQLite error met while trying to `action`: what happened
     (a refused value; a busy, locked, full, read-only, damaged or foreign file; another
-    disk problem) and what to do."""
+    disk problem) and what to do. `busy_timeout_s` is how long the connection waited for
+    a lock, which a busy file's advice names."""
     name = getattr(error, "sqlite_errorname", None) or ""
     # An extended code (SQLITE_READONLY_DBMOVED) names its primary one first.
     primary = "_".join(name.split("_")[:2])
@@ -169,10 +196,20 @@ def failure(error: sqlite3.Error, action: str, path: Path) -> JournalError:
         advice = _REFUSED
     elif isinstance(error, sqlite3.ProgrammingError) and not name:
         advice = _REFUSED  # raised by Python's sqlite3 for a value it cannot bind
+    elif primary == _BUSY:
+        advice = _busy_advice(busy_timeout_s)
     else:
         advice = _ADVICE.get(primary, _DISK)
     return JournalError(
         f"cannot {action} in the live journal at {path} (SQLite: {error}): {advice}"
+    )
+
+
+def _busy_advice(busy_timeout_s: float) -> str:
+    return (
+        "another program holds the file (another session of this account, or a tool "
+        f"reading it) and kept it locked past the {busy_timeout_s:g} seconds a write waits "
+        "(busy_timeout_s): stop it, then start the session again"
     )
 
 
@@ -194,7 +231,9 @@ def _check_folder_name(account: str) -> None:
         )
 
 
-def _prepare(connection: sqlite3.Connection, path: Path, account: str, broker: str) -> None:
+def _prepare(
+    connection: sqlite3.Connection, path: Path, account: str, broker: str, busy_timeout_s: float
+) -> None:
     try:
         # FULL syncs every commit to disk, so an intent survives a power cut.
         connection.execute("PRAGMA synchronous = FULL")
@@ -220,7 +259,7 @@ def _prepare(connection: sqlite3.Connection, path: Path, account: str, broker: s
                 f"local disk with the {LIVE_DIR_VARIABLE} environment variable"
             )
     except sqlite3.Error as error:
-        raise failure(error, "open the journal", path) from error
+        raise failure(error, "open the journal", path, busy_timeout_s) from error
 
 
 def _check_version(connection: sqlite3.Connection, path: Path) -> int:
@@ -272,6 +311,7 @@ def _check_binding(connection: sqlite3.Connection, path: Path, account: str, bro
 
 
 __all__ = [
+    "DEFAULT_BUSY_TIMEOUT_S",
     "JOURNAL_FILE_NAME",
     "LIVE_DIR_VARIABLE",
     "SCHEMA_VERSION",

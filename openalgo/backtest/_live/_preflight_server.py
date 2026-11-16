@@ -101,7 +101,7 @@ def read_server(client: PreflightClient, plan: PreflightPlan) -> ServerFindings:
     # for, and their own checks have failed.
     if facts:
         checks.append(_quotes_check(client, facts[0]))
-    checks.append(_interval_check(client.intervals(), plan.interval))
+    checks.append(_interval_check(client.intervals(), plan.bar_intervals))
     return ServerFindings(tuple(checks), broker, available, facts)
 
 
@@ -123,6 +123,7 @@ def _ping_failed(ping: Mapping[str, Any]) -> Check:
         "host, that the API key is right and that you are logged in to your broker in "
         "OpenAlgo. The funds, symbol, quote, interval and clock checks and the test alert "
         "wait for ping",
+        login=True,
     )
 
 
@@ -144,6 +145,7 @@ def _session_check(broker: str, funds: Mapping[str, Any], available: float | Non
         f"OpenAlgo is logged in to {broker}, but the funds call failed ({reason}): the "
         "broker's login may have expired (it ends around 03:00 IST each day). Log in to "
         f"{broker} again in OpenAlgo, then start the session again",
+        login=True,
     )
 
 
@@ -193,6 +195,8 @@ def _funds_check(available: float, capital: float, mode: Mode) -> Check:
         f"OpenAlgo reports {available:,.2f} rupees of available cash (collateral not "
         f"counted), less than the capital of {capital:,.2f} rupees: lower capital, or add "
         f"funds to {where}{expired}",
+        # The sandbox's funds never reach the broker: only a broker's zero hints at it.
+        login=available == 0 and mode is Mode.LIVE,
     )
 
 
@@ -279,14 +283,21 @@ def _quotes_check(client: PreflightClient, facts: InstrumentFacts) -> Check:
         f"the broker gave no quote for {instrument} ({reason}): its login may have expired "
         "(it ends around 03:00 IST each day), which funds do not show in SANDBOX mode. Log "
         "in to OpenAlgo again, then start the session again",
+        login=True,
     )
 
 
-def _interval_check(answer: Mapping[str, Any], interval: Any) -> Check:
-    try:
-        parse_interval(interval)
-    except ConfigError as error:
-        return Check("interval", False, str(error))
+def _interval_check(answer: Mapping[str, Any], intervals: tuple[Any, ...]) -> Check:
+    """Passes when the broker offers candles of each of `intervals` (the strategies') and
+    the 1-minute candles."""
+    wrong = []
+    for interval in intervals:
+        try:
+            parse_interval(interval)
+        except ConfigError as error:
+            wrong.append(str(error))
+    if wrong:
+        return Check("interval", False, "; ".join(wrong))
     data = answer.get("data") if answer.get("status") == SUCCESS else None
     if not isinstance(data, Mapping):
         reason = _reason(answer) if answer.get("status") != SUCCESS else _quoted(answer)
@@ -297,18 +308,20 @@ def _interval_check(answer: Mapping[str, Any], interval: Any) -> Check:
             "is logged in to the broker, then start the session again",
         )
     offered = [item for group in data.values() if isinstance(group, list) for item in group]
-    needed = list(dict.fromkeys((interval, CANDLE_INTERVAL)))
+    needed = list(dict.fromkeys((*intervals, CANDLE_INTERVAL)))
     missing = [step for step in needed if step not in offered]
+    one = len(intervals) == 1
     if not missing:
+        whose = "the strategy's interval" if one else "the strategies' intervals"
         return Check(
             "interval",
             True,
-            f"the broker offers {' and '.join(needed)} candles (the strategy's interval, and "
+            f"the broker offers {' and '.join(needed)} candles ({whose}, and "
             f"{CANDLE_INTERVAL} to check the live bars against)",
         )
     advice = []
-    if interval in missing:
-        advice.append("choose one of those as the strategy's interval")
+    if any(interval in missing for interval in intervals):
+        advice.append(f"choose one of those as {'the' if one else 'each'} strategy's interval")
     if CANDLE_INTERVAL in missing:
         advice.append(
             f"the session checks its tick-built bars against the broker's {CANDLE_INTERVAL} "

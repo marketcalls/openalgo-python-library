@@ -11,11 +11,11 @@ OpenAlgo answers a call again (`ServerWatch`). Order status comes from the order
 stream, with polling as the fallback and fills confirmed from the tradebook
 (`_order_follow`, `_order_state`, `_order_trades`).
 
-Reading answers, updates and the order book lives in `_order_answers`, `_order_updates`,
-`_order_news` and `_order_book`, the budget in `_order_rate`; their public names are
-exported here. Times are UTC nanoseconds, prices rupees, quantities units. One loop owns
-an `OrderPath`: it is not thread-safe, and the feed's thread only queues the updates it
-receives.
+Reading answers, updates, the order book and one order's row lives in `_order_answers`,
+`_order_updates`, `_order_news`, `_order_book` and `_order_check`, the budget in
+`_order_rate`; their public names are exported here. Times are UTC nanoseconds, prices
+rupees, quantities units. One loop owns an `OrderPath`: it is not thread-safe, and the
+feed's thread only queues the updates it receives.
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ from ._order_answers import (
     server_has_finished,
 )
 from ._order_book import Resolution, Resolved
+from ._order_check import OrderCheck
 from ._order_follow import OrderFollower
 from ._order_rate import RateBudget
 from ._order_resolve import BROKER_WINDOW_NS, NOT_PLACED_AFTER_NS, UnboundResolver, same_leg
@@ -247,6 +248,68 @@ class OrderPath:
         news. Raises LiveError when the order holds nothing or the price is not positive."""
         return self._follower.release_fill(order_id, average_price)
 
+    def release_cancel(
+        self, order_id: str, filled_quantity: int, average_price: float
+    ) -> OrderUpdate | None:
+        """Hand over a held cancel (CANCELLED, its fills not confirmed by the tradebook)
+        as having filled `filled_quantity` units in all before it ended (cumulative, as
+        every update counts them: those already handed over included), at `average_price`
+        rupees, the average of all of them (an estimate, unused for 0 units; a price
+        already known for that many units stands), journaled and checked by the guard;
+        None when it is no longer news. The session finds the units from the position
+        book. Raises LiveError when the order holds no cancel, the units are not whole,
+        fewer than those already reported filled or more than the order's, or a fill's
+        price is not positive."""
+        return self._follower.release_cancel(order_id, filled_quantity, average_price)
+
+    def last_known(self, order_id: str) -> OrderUpdate | None:
+        """The latest word of an order of this session, as reported: the one held for the
+        tradebook when there is one, else the last handed over. None before any word, and
+        for an order this session did not send. A terminal one means a modify or a cancel
+        of it has nothing left to change."""
+        return self._follower.last_known(order_id)
+
+    def check_order(self, order_id: str) -> OrderCheck:
+        """Read one order of this session with one `orderstatus` call, through the guard
+        and the server watch (an answer in OpenAlgo's own JSON lifts the hold of a silent
+        server), whatever its polling schedule: the row's status, quantity, filled
+        quantity when given, price, trigger price and price type (`OrderCheck`), or why
+        it could not be read. Its news is taken as a poll's and returned in the check: a
+        fill or a cancel waits for the tradebook, which the next polling round reads.
+
+        Raises ModeChangedError when the guard is locked, before the read or by its
+        answer (a row of the other mode's book says nothing of this order), and LiveError
+        for an order this session did not send.
+        """
+        return self._follower.check(order_id)
+
+    def stream_gap(self, since_ns: int) -> None:
+        """The order-updates stream may have missed words since `since_ns` (UTC
+        nanoseconds: a feed outage's start, or the journal snapshot's time at a restart):
+        every followed order still working that the stream has not spoken for since then
+        is polled once, in the next rounds of `due_polls` (at most three orders a round,
+        one round a second). Nothing is read here."""
+        self._follower.stream_gap(since_ns)
+
+    @property
+    def silent_since_ns(self) -> int | None:
+        """Since when (UTC nanoseconds) OpenAlgo has not answered a call after a client
+        timeout or a dropped connection, during which nothing is sent; None while it
+        answers."""
+        return self._watch.silent_since_ns
+
+    def probe(self) -> bool:
+        """Ask OpenAlgo whether it answers again with one `orderbook` read, its answer
+        checked by the guard: an answer in OpenAlgo's own JSON (a success, or its own
+        error) lifts the hold on sending of a silent server; a timeout, a dropped
+        connection or a page from a gateway in front of it does not. Nothing is read while
+        the guard is locked. Returns True when OpenAlgo is not silent afterwards."""
+        if not self._guard.locked:
+            answer = server_answer(self._client.orderbook())
+            self._watch.note(answer, self._now())
+            self._guard.check_response(answer)
+        return not self._watch.silent
+
     def resolve_unbound(self) -> list[Resolution]:
         """Look for the unbound intents in OpenAlgo's order book, at most once a second.
 
@@ -313,6 +376,7 @@ __all__ = [
     "BROKER_WINDOW_NS",
     "UNSUPPORTED_BROKERS",
     "HeldFill",
+    "OrderCheck",
     "OrderPath",
     "Outcome",
     "RateBudget",

@@ -1,13 +1,17 @@
 """What the order path (`orders`) knows of each order it follows: when it is next polled,
-when the tradebook is next read for a held word, and a terminal update with fewer fills
-than known. Times are UTC nanoseconds, quantities units."""
+when the tradebook is next read for a held word, a terminal update with fewer fills than
+known, and a held cancel handed over with the fills the session found for it. Times are
+UTC nanoseconds, quantities units, prices rupees."""
 
 from __future__ import annotations
 
 import dataclasses
+import math
+import numbers
 from dataclasses import dataclass
 
 from .._layout import NANOS_PER_SECOND
+from ..errors import LiveError
 from ._types import OrderIntent, OrderStatus, OrderUpdate, Purpose
 
 #: An order with no word 2 seconds after it was sent is polled (08-live-trading 6.1) ...
@@ -34,19 +38,23 @@ _MARKET = "MARKET"
 class HeldFill:
     """An order update the engine has not been given yet: `filled_quantity` units (as
     reported; 0 for a cancel the tradebook has not confirmed), held since `held_since_ns`
-    (UTC nanoseconds) for its price or the tradebook's confirmation."""
+    (UTC nanoseconds) for its price or the tradebook's confirmation. `average_price` is
+    the held word's own average price in rupees (a polled fill carries `orderstatus`'s),
+    0.0 when it gives none: the price to release it at when positive."""
 
     order_id: str
     filled_quantity: int
     held_since_ns: int
+    average_price: float = 0.0
 
 
 @dataclass
 class Followed:
     """An order of the session and what is known of it: its intent, when it was sent, the
-    last update handed over (`seen`), the one waiting for the tradebook (`held`), whether
-    the stream has spoken for it, and its polls and tradebook reads. `price_type` is the
-    order's now (a modify may change it): a market order open is working, not resting."""
+    last update handed over (`seen`), the one waiting for the tradebook (`held`), when the
+    stream last spoke for it, its polls (and a poll asked for out of turn) and its
+    tradebook reads. `price_type` is the order's now (a modify may change it): a market
+    order open is working, not resting."""
 
     intent: OrderIntent
     sent_ns: int
@@ -55,8 +63,9 @@ class Followed:
     held: OrderUpdate | None = None
     held_since_ns: int = 0
     alerted: bool = False
-    streamed: bool = False
+    streamed_ns: int | None = None
     polled_ns: int | None = None
+    poll_asked_ns: int | None = None
     quiet_polls: int = 0
     trades_read_ns: int | None = None
     trade_reads: int = 0
@@ -71,21 +80,60 @@ class Followed:
         """The strategy the order was sent for."""
         return self.intent.strategy
 
+    @property
+    def streamed(self) -> bool:
+        """True once the stream has spoken for the order."""
+        return self.streamed_ns is not None
+
+    @property
+    def last_word(self) -> OrderUpdate | None:
+        """The latest word of the order: the one held for the tradebook when there is one
+        (a word is held only when it tells more than the last one handed over), else the
+        last handed over."""
+        return self.held or self.seen
+
+    def heard_from_stream(self, ts_recv_ns: int) -> None:
+        """Note a word of the stream received at `ts_recv_ns`."""
+        self.streamed_ns = max(self.streamed_ns or ts_recv_ns, ts_recv_ns)
+
+    def polled(self, now: int) -> None:
+        """Note a poll made at `now`: it answers any poll asked for out of turn."""
+        self.polled_ns, self.quiet_polls, self.poll_asked_ns = now, self.quiet_polls + 1, None
+
+    def ask_poll(self, now: int) -> None:
+        """Make the order due for a poll from `now`, whatever its schedule."""
+        self.poll_asked_ns = now if self.poll_asked_ns is None else min(self.poll_asked_ns, now)
+
+    def missed_since(self, since_ns: int) -> bool:
+        """Whether the stream may have missed news of the working order since `since_ns`:
+        no stream word of it has arrived since then. A word of the stream gives the
+        order's whole state (its cumulative fills), so one after a gap covers it."""
+        word = self.last_word
+        if word is not None and word.status.terminal:
+            return False
+        return self.streamed_ns is None or self.streamed_ns < since_ns
+
     def poll_due_ns(self) -> int | None:
         """When the order is next polled; None once its last word is terminal.
 
         No word yet: from 2 s after the send, every second. Resting (open or waiting for
         a trigger, as reported, and not a market order): every 30 s once the stream has
         spoken for it, else backing off (`BACKOFF_NS`, `ENTRY_BACKOFF_NS`) while polls
-        bring no news. Any other working order: every second.
+        bring no news. Any other working order: every second. A poll asked for out of
+        turn (`ask_poll`) is due from when it was asked, whichever comes first.
         """
-        word = self.held or self.seen
+        word = self.last_word
+        if word is not None and word.status.terminal:
+            return None
+        due_ns = self._scheduled_ns(word)
+        return due_ns if self.poll_asked_ns is None else min(due_ns, self.poll_asked_ns)
+
+    def _scheduled_ns(self, word: OrderUpdate | None) -> int:
+        """When the order's schedule polls it next (see `poll_due_ns`)."""
         if word is None:
             if self.polled_ns is None:
                 return self.sent_ns + POLL_AFTER_NS
             return self.polled_ns + POLL_EVERY_NS
-        if word.status.terminal:
-            return None
         last_ns = max(self.polled_ns or 0, word.ts_recv_ns)
         rests = word.status is OrderStatus.TRIGGER_PENDING or self.price_type != _MARKET
         if not rests:
@@ -131,6 +179,51 @@ def with_floor(order: Followed, update: OrderUpdate) -> OrderUpdate:
     return dataclasses.replace(update, filled_quantity=known, pending_quantity=0, average_price=0.0)
 
 
+def released_fill(held: OrderUpdate, average_price: float) -> OrderUpdate:
+    """A held word at `average_price` rupees, or as it is when it reports no fill. Raises
+    LiveError for a fill at a price that is not a positive number."""
+    if not held.filled_quantity:
+        return held
+    _check_price(average_price)
+    return dataclasses.replace(held, average_price=average_price)
+
+
+def released_cancel(held: OrderUpdate, filled_quantity: int, average_price: float) -> OrderUpdate:
+    """A held cancel with the `filled_quantity` units the session found it filled in all
+    before it ended (from the position book), at `average_price` rupees, their average
+    (unused for 0 units).
+
+    Raises LiveError unless `held` is a cancel, `filled_quantity` is a whole number from
+    the units already reported filled up to the order's units, and the price of a fill is
+    a positive number.
+    """
+    if held.status is not OrderStatus.CANCELLED:
+        raise LiveError(
+            f"order {held.order_id} holds a {held.status.value} word, not a cancel: release "
+            "it with release_fill"
+        )
+    whole = isinstance(filled_quantity, numbers.Integral) and not isinstance(filled_quantity, bool)
+    if not (whole and held.filled_quantity <= filled_quantity <= held.quantity):
+        raise LiveError(
+            f"a cancel of order {held.order_id} is released with a whole number of units "
+            f"from the {held.filled_quantity} reported filled up to its {held.quantity}, not "
+            f"{filled_quantity!r}"
+        )
+    if filled_quantity:
+        _check_price(average_price)
+    return dataclasses.replace(
+        held,
+        filled_quantity=int(filled_quantity),
+        pending_quantity=0,
+        average_price=average_price if filled_quantity else 0.0,
+    )
+
+
+def _check_price(average_price: float) -> None:
+    if not (math.isfinite(average_price) and average_price > 0):
+        raise LiveError(f"a fill is released at a positive price, not {average_price!r}")
+
+
 __all__ = [
     "BACKOFF_NS",
     "ENTRY_BACKOFF_NS",
@@ -140,5 +233,7 @@ __all__ = [
     "SAFETY_POLL_EVERY_NS",
     "Followed",
     "HeldFill",
+    "released_cancel",
+    "released_fill",
     "with_floor",
 ]

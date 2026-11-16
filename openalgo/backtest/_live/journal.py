@@ -42,6 +42,7 @@ from typing import Any
 from ..errors import JournalError
 from . import _journal_reads as reads
 from ._journal_file import (
+    DEFAULT_BUSY_TIMEOUT_S,
     JOURNAL_FILE_NAME,
     LIVE_DIR_VARIABLE,
     SCHEMA_VERSION,
@@ -79,20 +80,30 @@ class Journal(JournalHandle):
 
     @classmethod
     def open(
-        cls, path: str | os.PathLike[str], *, account: str, broker: str, mode: Mode, now: Now
+        cls,
+        path: str | os.PathLike[str],
+        *,
+        account: str,
+        broker: str,
+        mode: Mode,
+        now: Now,
+        busy_timeout_s: float = DEFAULT_BUSY_TIMEOUT_S,
     ) -> Journal:
         """Create or open the journal at `path` (its folders are created) for `account`,
         bound to `broker`, reading and writing the ledger of `mode`; `now` gives the UTC
-        nanoseconds of the times it records.
+        nanoseconds of the times it records. A statement waits up to `busy_timeout_s`
+        seconds for a lock another connection holds (the session's other handle, say).
 
-        Raises `JournalError` when the file cannot be opened or written, is not a journal,
-        was written by a newer version or has an unknown schema version, belongs to
-        another account or is bound to another broker.
+        Raises `JournalError` when `busy_timeout_s` is not a positive number, or the file
+        cannot be opened or written, is not a journal, was written by a newer version or
+        has an unknown schema version, belongs to another account or is bound to another
+        broker, and on any later call that finds it locked past `busy_timeout_s`.
         """
         if not isinstance(mode, Mode):
             raise JournalError(f"mode must be Mode.SANDBOX or Mode.LIVE, not {mode!r}")
         path = Path(path)
-        return cls(connect(path, account, broker), path, mode, broker, now)
+        connection = connect(path, account, broker, busy_timeout_s=busy_timeout_s)
+        return cls(connection, path, mode, broker, now, busy_timeout_s)
 
     def record_intent(self, intent: OrderIntent) -> None:
         """Write `intent` before its HTTP call; it is unbound until `bind` or a mark.
