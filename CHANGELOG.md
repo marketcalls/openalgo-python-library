@@ -69,6 +69,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (feed dead, reconciliation mismatch, errors). The daily summary reads like
   `Result.summary()`; the session's log file and JSON-lines event stream redact any
   field named like a key or token.
+- The live layer's tick adapter and tick recorder (private; `bt.record` is wired with
+  `bt.live`): each WebSocket message becomes a tick, with the exchange's last trade time
+  when the broker's feed gives one in a readable unit (otherwise the receive time is
+  used, and the tick is counted). A recording writes its ticks to disk at least once a
+  second in checksummed blocks, so a crash or power loss costs at most the last second
+  and never leaves a wrong tick; each finished recording is saved once per instrument
+  and never rewritten, and a day is read by merging its recordings in the exact order
+  they were received. Feed outages and each recording's start and stop are kept, so a
+  replay can tell a dead feed from a gap in the recording.
 
 ## [2.2.1] - 2026-11-15
 
