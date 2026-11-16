@@ -418,7 +418,11 @@ fn holding_100() -> (Engine, Script) {
         .apply_fill(OrderId(1), 100.0, 500.1, minute(1))
         .is_ok());
     wait_before(&mut kernel, &bars(&[], &[]), &mut script, 3);
-    assert_eq!(kernel.take_commands().len(), 1);
+    assert_eq!(
+        kernel.take_commands(),
+        [],
+        "the buy has filled: its Place, never taken, is not handed out"
+    );
     (kernel, script)
 }
 

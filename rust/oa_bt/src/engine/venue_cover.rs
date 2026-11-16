@@ -14,16 +14,19 @@
 //!   neither do a stop and a plain sale of the long. An exit (`exit()`, `reduce()`) is
 //!   sized to fit when it is sent (`venue_owner`) and is checked here only when it is
 //!   modified. An order against the position that is not reduce-only counts as an exit
-//!   only within the room (`venue_roles`).
+//!   only within the room (`venue_roles`); a MARKET one also within the room the leg's
+//!   resting stop makes for it, since the exit owner cuts the stop down or cancels it for
+//!   it first (`venue_owner`).
 //! - **When the position shrinks** (after every venue result, and at each open the session
 //!   reaches). The orders sent only to close it (`Engine::sent_to_close`: reduce-only, or a
 //!   plain order whose role is an exit) are fitted to it. The session's own fills keep them
 //!   within it, by the room above; a position restored, adopted or reduced at the broker
 //!   may not. Those of a flat position, and those on a side that no longer closes it, are
-//!   cancelled. On the closing side, in the order they were placed, each keeps what still
-//!   fits in the position: one that fits only in part is cut down to that with a
-//!   modification (one at a time, as `modify`: a waiting one is answered first), and one
-//!   that has partly filled, or has nothing left to fit, is cancelled. An order whose
+//!   cancelled. On the closing side, the leg's resting stop first and the others in the
+//!   order they were placed, each keeps what still fits in the position: one that fits
+//!   only in part is cut down to that with a modification (one at a time, as `modify`: a
+//!   waiting one is answered first), and one that has partly filled, or has nothing left
+//!   to fit, is cancelled. An order whose
 //!   cancellation waits counts at what it may still fill.
 //! - **A fill beyond the position**, from a race at the broker, is recorded up to the
 //!   position and the rest refused (`venue_fills`, `VenueError::WouldReverse`).
@@ -127,7 +130,7 @@ impl Engine {
     fn fit_position_cover(&mut self, at: SendAt, key: PositionKey) -> Result<(), KernelError> {
         let held = self.held_units(key);
         let closing = (held != 0.0).then(|| closing_side(held));
-        let orders: Vec<Order> = self
+        let mut orders: Vec<Order> = self
             .book
             .working()
             .filter(|order| {
@@ -137,6 +140,11 @@ impl Engine {
             })
             .cloned()
             .collect();
+        // The leg's resting stop keeps its room before the others, as it takes it from
+        // them when it is placed or grows (`venue_stop_terms`): the two never undo each
+        // other. The sort is stable: the others stay in the order they were placed.
+        let stop = self.resting_leg_stop(key);
+        orders.sort_by_key(|order| Some(order.id) != stop);
         let mut room = held.abs();
         for order in orders {
             if Some(order.request.side) != closing {

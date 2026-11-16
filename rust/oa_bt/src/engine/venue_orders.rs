@@ -11,7 +11,7 @@ use crate::sizing::round_down_to_venue;
 use super::error::KernelError;
 use super::event::{EventStamp, OrderEventKind};
 use super::kernel::Engine;
-use super::venue::{is_exit, Replacement, SendAt, VenueCommand};
+use super::venue::{Replacement, SendAt, VenueCommand};
 use super::venue_roles::OrderRole;
 
 impl Engine {
@@ -46,10 +46,12 @@ impl Engine {
     }
 
     /// In an external session, after an order has passed the checks (`at` is its
-    /// decision): its role is recorded (`venue_roles`), an exit becomes the latest of its
-    /// position's exits (`venue_owner`), any other order is sent at once. An order with no
-    /// units ends `Canceled` and sends nothing. Then every waiting exit moves on, so it
-    /// also cancels an order just placed on its closing side. A backtest sends nothing.
+    /// decision): its role is recorded (`venue_roles`), an order the exit owner sends (an
+    /// exit, a plain MARKET order against a position whose leg's stop rests:
+    /// `Engine::owner_sends`) becomes the latest of its position's exits (`venue_owner`),
+    /// any other order is sent at once. An order with no units ends `Canceled` and sends
+    /// nothing. Then every waiting exit moves on, so it also cancels an order just placed
+    /// on its closing side. A backtest sends nothing.
     ///
     /// Errors: those of `fills::end_order` and of the exits.
     pub(super) fn send_order(&mut self, at: SendAt, id: OrderId) -> Result<(), KernelError> {
@@ -57,7 +59,7 @@ impl Engine {
             return Ok(());
         }
         let order = self.book.get(id).ok_or(KernelError::UnknownOrder(id))?;
-        let exit = is_exit(&order.request);
+        let exit = self.owner_sends(&order.request);
         if order.quantity_units <= 0.0 {
             let kind = OrderEventKind::Canceled;
             return self.end_order(at.stamp(), id, OrderAction::Cancel, kind);

@@ -240,9 +240,9 @@ def test_a_modification_takes_effect_once_the_venue_confirms_it():
     assert engine.order(order_id)["quantity_units"] == 20.0
 
 
-def test_a_stop_on_an_order_in_a_session_is_not_built_yet():
+def test_a_stop_on_an_mis_order_in_a_session_is_taken():
+    # The broker holds it once the order fills (test_kernel_legs.py).
     engine = new_session()
     assert release_minute(engine, 0)[0] == "bar_close"
     with_stop = buy(10, rules={"stop": ("points", 4.0, None)})
-    with pytest.raises(NotImplementedError, match="in a live session"):
-        engine.submit(with_stop)
+    assert engine.submit(with_stop)[0] == "submitted"

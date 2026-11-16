@@ -57,8 +57,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   could not record: a leverage the margin table does not allow, a short option, a margin
   above the free cash net of what the session's working entries would block (`margin`),
   a fill the cost model cannot price. Not supported in a
-  session yet (NotImplementedError): `stop=`, `target=`, trailing and breakeven, GTT
-  orders, futures series and `rebalance()`; fractional quantities are refused. A broker's
+  session yet (NotImplementedError): `stop=`, `target=`, trailing and breakeven on CNC
+  and NRML (MIS legs are below), GTT orders, futures series and `rebalance()`; fractional
+  quantities are refused. A broker's
   own rejection has the new reject code `venue`; a result the kernel refuses raises
   `openalgo.backtest.errors.VenueRefusalError` with its `kind` (`VENUE_REFUSAL_KINDS`,
   the same list the native module exports). A
@@ -95,6 +96,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and reporting its working orders and open positions as they are (a strategy exit that
   waited for its cancels, never sent, ends canceled), with the day's contract note
   settled, so `finish` can be called.
+- A leg's stop, targets, trail and breakeven in a live session (MIS; backtests change only
+  for option stops, below). The broker holds the stop (decision D31): the fill that opens
+  a leg with a stop level places it for the units filled, SL-M for cash equity and
+  futures, and for NFO and BFO options an SL with its limit 5 percent beyond the trigger;
+  each further fill or add modifies its units at once, and a trail or breakeven moves its
+  trigger once the move is at least 0.25 percent of the trigger the broker last confirmed,
+  at most once every 5 seconds and one modification at a time (the newest terms go once
+  the answer has come and 5 seconds have passed). The kernel executes nothing when the
+  price reaches the stop: the stop's own
+  fill closes the leg (`leg_sl_hit`, reason `leg_sl`), and a stop's fill beyond the
+  position records the units that closed it and refuses the rest (`would_reverse`; the
+  session design asked for such a fill to be refused whole, and the closing part is kept
+  instead, so the session's books hold every unit the broker closed). The stop never
+  works beside more than the position: a resting reduce-only order beside it is rejected
+  `exit_cover` and a plain resting sale beside it is an entry, as beside any order
+  closing the position, and a stop placed later (a trail or breakeven arming, `protect`,
+  a re-placed stop) cancels the resting orders sent only to close the position and covers
+  their units once they have ended. A partial exit (`reduce()`, a partial target) cuts the
+  stop down to what stays open first and is sent once the broker confirms that (a refusal
+  leaves it waiting, the cut sent again 5 seconds later); a full exit cancels the stop
+  first, and so does a partial exit followed by exits that close the rest (`reduce()`
+  then `exit()`), which then go one after the other. A plain MARKET order against the
+  position (`sell()` of the long, a reversal, a `target()` that flips) goes the same way,
+  the stop cut down or cancelled first, so it and the stop never both fill at the
+  broker; a reversal whose stop fills before its cancellation ends canceled and opens
+  nothing, and the strategy decides again at its next bar. A stop the broker rejects while its leg is open exits the
+  leg at market (`stop_rejected`); one the broker cancels of its own accord, or that could
+  not be placed (reported with `apply_cancel`), is placed again once, and a re-placed stop
+  that ends without a fill exits at market (`stop_rejected`, or `unprotected`); a stop that
+  filled while its leg holds more (an add not covered yet, or a cut the broker applied
+  before it filled) exits the rest (`stop_unfilled`). A stop a closed leg left working
+  (its cancellation refused) keeps new entries of the instrument out (`live_in_flight`).
+  The kernel holds the targets, the trail and the breakeven on the session's ticks:
+  `push_tick(instrument, price, at)` ratchets the legs, exits a target it reaches through
+  the position's exit owner (once per leg: an exit the broker rejects is not made again
+  on the next tick, the session retries it), marks the position and tests the daily loss
+  limit and the drawdown halt on that mark; a session no longer ratchets on its bars. New
+  session calls: `protect` places a leg's stop again (native `PROTECT_OUTCOMES`, with
+  `waits_for_cancels` when resting orders sent to close are cancelled for its room),
+  `reprice_exit` modifies a stop the price has passed (or the engine's exit) to a
+  marketable LIMIT for the order's total units, and `request_exit(..., limit_rupees=)`
+  exits with LIMIT orders. A session on recorded ticks whose broker fills where the
+  simulator does, and applies a confirmed stop modification only from the next bar, trades
+  as the backtest of its bars (the same fills, trades, equity, position history and
+  charges) as long as no daily loss limit or drawdown halt is breached by a tick inside a
+  bar where no bar close breaches it, and the strategy rests no order to close a leg that
+  has a stop, a trail or a breakeven (use `target=` instead; a session rejects or cancels
+  such an order for the stop's room, where a backtest keeps it): a real broker fills a
+  moved stop within the bar that moved it, and the session tests its loss limits on every
+  tick.
 - The live layer's mode guard (private, not used by `bt.live` yet): OpenAlgo's sandbox or
   live mode read at the start of a session, checked on every order answer and update of
   the session's own orders, and polled every 5 seconds and before each entry. A change of
@@ -173,6 +224,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   catches up from the open without deciding or sending anything. `max_daily_loss` must
   be given in the `bt.live` call: a limit set only on the strategy class is not taken as
   the live limit, and a class limit that differs from the call's stops the start.
+- A live session's state saved and restored in the kernel (no change to backtests):
+  `Engine::live_state` writes the session's state as plain data that survives a JSON round
+  trip (in Python a dict of None, bool, int, float, str, list and dict, written by
+  `json.dumps` and read back equal): where it stands, the cash, the positions with their
+  tranches, the legs, every working order with its role, request, units, filled units and
+  what its fills were charged, the cancellations and modifications waiting for the
+  broker's answer, the exits and the legs' broker-held stops, the targets fired, the
+  daily loss totals, the trading state, the cooldown and time exit counters, the entry
+  locks and the commands not yet taken. Each saved order says whether it was sent: a
+  strategy exit that waits for its cancels was not, and the restart's order check skips
+  it. `Engine::restore_live_state` gives it to a session built for a restart, once, after
+  its catch-up and before any order; the saved working orders are numbered from o1 again
+  and the call returns each one's saved and new id. Later orders take the ids after them,
+  which the earlier start may have given to orders that have since ended, so the live
+  layer rebuilds its map of broker orders from the returned pairs alone. A session restored
+  at a point of its trading day goes on as the uninterrupted one in its commands, states,
+  fills, trades and P&L, with these limits: the events recorded after the last pause and
+  not yet delivered are not saved, so the restarted strategy's `on_fill`, `on_order` and
+  `on_position` never run for them; the entry locks are not restored (the session keeps
+  its own, and the live layer sets again, from the saved state, those that last the day);
+  a sizing cap the restarted session has set already is kept, being the fresher figure;
+  and a state saved while the session closed is refused, since no session resumes at its
+  close. Each start's result covers that start: the contract notes are settled per start,
+  and a CNC sale after a restart is not matched with a same-day CNC buy before it for the
+  intraday rates. A state of another day, other instruments or another capital, of
+  another layout, one that cannot be read, or one whose parts do not hold together (a
+  position its tranches or its leg do not match, an open position without its leg, an
+  order filled beyond its units, a leg's stop that is not one; the error names the field)
+  is refused whole, and so is a restore into a session that has traded, was restored
+  already, or stands before the saved point. Through the binding, a state nested deeper
+  than any saved one is refused before it is read.
+- A live session hands out no command of an order that has ended: `Engine::take_commands`
+  drops the Place, Modify or Cancel of an order that was rejected, cancelled or filled
+  whole since the command was made, such as a restored order the restart's order check
+  ends before its commands are taken.
+- A live session's fill with no order of its own in the kernel (no change to backtests):
+  `Engine::apply_external_fill` records the broker closing or reducing a position by
+  itself (its square-off, a position closed by hand) through the one fill path, at the
+  broker's price, with the exit reason given and the fill flag `external`; the orders
+  working to close the position follow it (a leg's stop is cut down, or cancelled once the
+  position is flat). A fill that would not only close or reduce the position (on its
+  side, of a flat position, through zero) is refused whole: `VenueRefusalError` of the
+  new kind `beyond_position`.
+
+### Changed
+
+- Backtests: an option leg's stop (`stop=` on an MIS option position) is now the
+  stop-limit order the exchange takes for it, its limit 5 percent beyond the stop (NFO and
+  BFO options accept no SL-M), as a strategy's own SL-M order on an option already was. A
+  stop reached inside a bar still fills at the stop, and a bar that opens between the stop
+  and its limit at the open; a bar that opens beyond the limit fills at the limit when it
+  trades back to it, and otherwise the leg exits at the next bar's open, where it used to
+  fill at the gapped open. Slippage on an option stop's fill is held at its limit. Change
+  in results: only backtests of MIS option legs with a stop that a bar opens more than 5
+  percent through (or whose slippage would pass the limit) change; cash equity and
+  futures stops, and CNC and NRML legs (their stops are GTTs with the same buffer), are
+  unchanged. None of the four golden runs holds an option leg with a stop, so no pin
+  changed.
 
 ## [2.2.1] - 2026-11-15
 

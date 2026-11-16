@@ -34,6 +34,7 @@ mod targets;
 mod tests;
 mod types;
 
+pub use ratchet::TrailPlan;
 pub use types::{
     BarPrices, BreakevenState, LegContext, LevelHit, LevelInForce, LevelKind, RatchetOutcome,
     TargetLevel, TargetState, TickOutcome, TrailState,
@@ -42,7 +43,41 @@ pub use types::{
 use super::error::RmsError;
 use super::rules::{Distance, LegRules};
 use levels::{favour, points, positive, round_level};
-use ratchet::TrailPlan;
+
+/// What a leg keeps beyond the fields it reports: saved with a live session's state and
+/// given back to the leg when the session restarts (`LegState::memory`,
+/// `LegState::resume`; 16-session-design R14).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LegMemory {
+    /// Units held (the position's absolute quantity).
+    pub held_units: f64,
+    /// Best price seen since the entry, rupees.
+    pub extreme_rupees: f64,
+    /// The trail's distances, fixed at the entry.
+    pub trail_plan: Option<TrailPlan>,
+    /// The fixed stop at the current reference, rupees: the stepped trail's anchor.
+    pub anchor_rupees: Option<f64>,
+    /// `after_first_target` has acted.
+    pub after_first_target_done: bool,
+}
+
+/// The fields a leg reports besides its rules and context, as `LegState::resume` takes
+/// them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LegLevels {
+    /// The reference price of every level, rupees.
+    pub reference_rupees: f64,
+    /// The stop in force.
+    pub stop: Option<LevelInForce>,
+    /// The targets.
+    pub targets: Vec<TargetLevel>,
+    /// Units assigned to no working target.
+    pub remainder_units: f64,
+    /// The trail, as reported.
+    pub trail: Option<TrailState>,
+    /// The breakeven move.
+    pub breakeven: Option<BreakevenState>,
+}
 
 /// The levels of one leg.
 #[derive(Clone, Debug, PartialEq)]
@@ -122,6 +157,42 @@ impl LegState {
         }
         leg.settle();
         Ok(leg)
+    }
+
+    /// What the leg keeps beyond the fields it reports (`LegMemory`).
+    pub fn memory(&self) -> LegMemory {
+        LegMemory {
+            held_units: self.held_units,
+            extreme_rupees: self.extreme_rupees,
+            trail_plan: self.trail_plan,
+            anchor_rupees: self.anchor_rupees,
+            after_first_target_done: self.after_first_target_done,
+        }
+    }
+
+    /// The leg as a live session saved it (`memory` and the reported fields), unchanged:
+    /// nothing is recomputed, so the restored leg moves on exactly as the saved one would.
+    pub fn resume(
+        rules: LegRules,
+        context: LegContext,
+        levels: LegLevels,
+        memory: LegMemory,
+    ) -> LegState {
+        LegState {
+            rules,
+            context,
+            reference_rupees: levels.reference_rupees,
+            stop: levels.stop,
+            targets: levels.targets,
+            remainder_units: levels.remainder_units,
+            trail: levels.trail,
+            breakeven: levels.breakeven,
+            held_units: memory.held_units,
+            extreme_rupees: memory.extreme_rupees,
+            trail_plan: memory.trail_plan,
+            anchor_rupees: memory.anchor_rupees,
+            after_first_target_done: memory.after_first_target_done,
+        }
     }
 
     /// True when the leg has no rule: it has no level and only follows the quantity.

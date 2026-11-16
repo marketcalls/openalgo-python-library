@@ -36,6 +36,12 @@ impl Portfolio {
         })
     }
 
+    /// The portfolio a live session saved: its account and its positions as they stood,
+    /// in the order they were first opened (16-session-design R14).
+    pub fn resume(account: SubAccount, positions: Vec<Position>) -> Portfolio {
+        Portfolio { account, positions }
+    }
+
     /// The position for a key, if one was ever opened.
     pub fn position(&self, key: PositionKey) -> Option<&Position> {
         self.positions.iter().find(|position| position.key == key)

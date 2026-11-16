@@ -37,7 +37,7 @@
 //! changes.
 
 use crate::exec::{FillAt, FillFlags, InstrumentId, OrderId};
-use crate::model::Side;
+use crate::model::{Side, TsNanos};
 use crate::portfolio::PositionKey;
 use crate::rms::{
     is_breached, AccountTotals, ExitReason, RiskBasis, RiskEvent, RiskEventName, RiskScope,
@@ -65,6 +65,16 @@ impl Engine {
     /// Step 6: the daily loss limit, then the drawdown halt (see the module
     /// documentation).
     pub(super) fn step_aggregate_rules(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
+        self.aggregate_rules_at(slice, slice.close)
+    }
+
+    /// Step 6 in `slice`, its exits decided at `decided_at`: the slice's close, or in a live
+    /// session the open of the slice in progress for a tick's mark (`venue_ticks`).
+    pub(super) fn aggregate_rules_at(
+        &mut self,
+        slice: &SliceInfo,
+        decided_at: TsNanos,
+    ) -> Result<(), KernelError> {
         let stamp = Self::stamp(slice, Step::AggregateRules);
         let mut exit = None;
         if let Some(event) = self.daily_loss_breach() {
@@ -88,7 +98,7 @@ impl Engine {
         match exit {
             Some(exit) => {
                 self.cancel_working_entries(stamp)?;
-                self.exit_every_position(slice, stamp, exit)
+                self.exit_every_position(slice, (stamp, decided_at), exit)
             }
             None => Ok(()),
         }
@@ -211,11 +221,11 @@ impl Engine {
     /// Exit every open position, in instrument registration order, with the exit reason
     /// of `exit` (`EngineExit::exit_reason`): at once at the last close when the slice
     /// closes the session, otherwise at the next open. In a live session the exits are
-    /// sent to the venue now (`venue_exits`).
+    /// sent to the venue now (`venue_exits`), decided at `decided_at`.
     fn exit_every_position(
         &mut self,
         slice: &SliceInfo,
-        stamp: EventStamp,
+        (stamp, decided_at): (EventStamp, TsNanos),
         exit: EngineExit,
     ) -> Result<(), KernelError> {
         let reason = exit.exit_reason();
@@ -232,9 +242,9 @@ impl Engine {
                 let at = SendAt {
                     slice: *slice,
                     step: stamp.step,
-                    decided_at: slice.close,
+                    decided_at,
                 };
-                self.request_engine_exit(at, key, exit)?;
+                self.request_engine_exit(at, key, exit, None)?;
             } else if slice.closes_session {
                 self.exit_at_last_close(stamp, key, reason)?;
             } else {

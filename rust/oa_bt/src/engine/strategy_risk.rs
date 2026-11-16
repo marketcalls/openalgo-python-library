@@ -40,19 +40,19 @@ pub(super) struct StrategyRisk {
     /// ACTIVE, REDUCING or HALTED, with the cause.
     pub(super) lock: TradingLock,
     /// The IST session date of the slice being run (`None` before the first).
-    session_day: Option<Day>,
+    pub(super) session_day: Option<Day>,
     /// The daily loss measure (SPEC-16).
     pub(super) daily_loss: DailyLossMeasure,
     /// The drawdown halt, when the run sets one.
     pub(super) drawdown: Option<DrawdownWatch>,
     /// Slice of the last exit that left each instrument flat, by registration index.
-    last_exit_slice: Vec<Option<usize>>,
+    pub(super) last_exit_slice: Vec<Option<usize>>,
     /// Slice in which each open position was entered, in the order they opened.
-    entered_at: Vec<(PositionKey, usize)>,
+    pub(super) entered_at: Vec<(PositionKey, usize)>,
     /// Entry slice of a position closed by a roll, handed to the contract it rolls to.
-    roll_carry: Option<usize>,
+    pub(super) roll_carry: Option<usize>,
     /// Exits of the aggregate rules waiting for an open, in the order they were queued.
-    pending_exits: Vec<PendingExit>,
+    pub(super) pending_exits: Vec<PendingExit>,
 }
 
 impl StrategyRisk {

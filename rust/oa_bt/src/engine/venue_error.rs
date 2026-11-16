@@ -9,6 +9,8 @@
 use std::fmt;
 
 use crate::exec::{OrderId, OrderStatus};
+use crate::model::Side;
+use crate::portfolio::PositionKey;
 
 /// What a refused result was waiting for (`VenueError::NotPending`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,6 +89,19 @@ pub enum VenueError {
         /// Units of the fill beyond the open position, not recorded.
         excess_units: f64,
     },
+    /// A fill with no order (`Engine::apply_external_fill`) that does not only close or
+    /// reduce the position: on its side, of a flat position, or through zero. Nothing of
+    /// it is recorded.
+    BeyondPosition {
+        /// The position the fill names.
+        key: PositionKey,
+        /// The fill's side.
+        side: Side,
+        /// Units of the refused fill.
+        units: f64,
+        /// The signed units the session holds.
+        held_units: f64,
+    },
     /// The engine is paused at a bar close (step 7): the slice must complete first.
     AtBarClose,
     /// The session has finished: no result can be recorded any more.
@@ -99,7 +114,7 @@ pub const UNKNOWN_ORDER_KIND: &str = "unknown_order";
 
 /// Every kind of refusal a venue result can meet: the kinds of `VenueError` and
 /// `UNKNOWN_ORDER_KIND`. The bindings export it, so the Python list cannot drift from it.
-pub const VENUE_REFUSAL_KINDS: [&str; 11] = [
+pub const VENUE_REFUSAL_KINDS: [&str; 12] = [
     "not_external",
     UNKNOWN_ORDER_KIND,
     "order_ended",
@@ -109,6 +124,7 @@ pub const VENUE_REFUSAL_KINDS: [&str; 11] = [
     "not_pending",
     "modify_below_filled",
     "would_reverse",
+    "beyond_position",
     "at_bar_close",
     "session_over",
 ];
@@ -125,6 +141,7 @@ impl VenueError {
             VenueError::NotPending { .. } => "not_pending",
             VenueError::ModifyBelowFilled { .. } => "modify_below_filled",
             VenueError::WouldReverse { .. } => "would_reverse",
+            VenueError::BeyondPosition { .. } => "beyond_position",
             VenueError::AtBarClose => "at_bar_close",
             VenueError::SessionOver => "session_over",
         }
@@ -183,6 +200,21 @@ impl fmt::Display for VenueError {
                 "the fill of order {order} goes {excess_units} units beyond the open \
                  position: the units that closed it are recorded, these are not; the \
                  broker's position differs from the session's"
+            ),
+            VenueError::BeyondPosition {
+                key,
+                side,
+                units,
+                held_units,
+            } => write!(
+                f,
+                "a fill with no order of {units} units {} of instrument {} {} is beyond the \
+                 position of {held_units} units the session holds: such a fill only closes \
+                 or reduces the position, at most its units; nothing was recorded, and the \
+                 broker's position differs from the session's",
+                side.code(),
+                key.instrument.0,
+                key.product.code()
             ),
             VenueError::AtBarClose => write!(
                 f,
@@ -246,6 +278,15 @@ mod tests {
             VenueError::WouldReverse {
                 order,
                 excess_units: 1.0,
+            },
+            VenueError::BeyondPosition {
+                key: PositionKey {
+                    instrument: crate::exec::InstrumentId(0),
+                    product: crate::model::Product::Mis,
+                },
+                side: Side::Sell,
+                units: 2.0,
+                held_units: 1.0,
             },
             VenueError::AtBarClose,
             VenueError::SessionOver,

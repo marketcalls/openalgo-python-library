@@ -7,7 +7,8 @@
 //! returns the result tables. Conversions live in `setup` (inputs), `request` (orders)
 //! `tables` (pauses, events, positions, orders) and `results` (the result tables). A
 //! live session, its commands and its venue's results are in `venue`, its controls in
-//! `session`.
+//! `session`, its legs (ticks, the broker-held stops, the price rule's calls) in `legs`,
+//! its saved state and the broker's own fills in `live_state`.
 //!
 //! Errors: a part that is not built yet raises Python's `NotImplementedError`; bad
 //! configuration, data or requests raise `NativeEngineInputError`; anything else
@@ -25,6 +26,8 @@ mod charges;
 mod columns;
 mod errors;
 mod futures;
+mod legs;
+mod live_state;
 mod market;
 mod request;
 mod results;
@@ -36,13 +39,13 @@ mod tables;
 mod venue;
 
 use oa_bt::data::resample::CalendarUnit;
-use oa_bt::engine::{Engine, ExitRequest, KernelError, Pause, TimerSpec};
+use oa_bt::engine::{Engine, ExitRequest, KernelError, Pause, Protect, TimerSpec};
 use oa_bt::exec::{InstrumentId, OrderId};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use super::calendar::NativeCalendar;
-use errors::{engine_error, NativeEngineInputError};
+use errors::{engine_error, venue_result_error, NativeEngineInputError};
 use request::{submission_tuple, SubmissionTuple};
 use setup::{parse_product, run_setup, BarArrays};
 use venue::StampTuple;
@@ -156,18 +159,89 @@ impl NativeEngine {
         venue::answered(py, engine.apply_modify_refused(OrderId(order_id)))
     }
 
+    /// Record the broker's own fill of a live session's position, with no order: `units`
+    /// on `side` at `price` rupees at `at` (UTC nanoseconds) for the exit `reason`;
+    /// returns the stamp (`live_state`).
+    #[allow(clippy::too_many_arguments)]
+    fn apply_external_fill(
+        &mut self,
+        py: Python<'_>,
+        instrument: u32,
+        product: &str,
+        side: &str,
+        units: f64,
+        price: f64,
+        at: i64,
+        reason: &str,
+    ) -> PyResult<StampTuple> {
+        let fill = live_state::ExternalFill {
+            instrument,
+            product,
+            side,
+            units,
+            price,
+            at,
+            reason,
+        };
+        live_state::apply_external_fill(py, self.engine_mut()?, fill)
+    }
+
+    /// A live session's state as plain data that survives a JSON round trip
+    /// (`live_state`).
+    fn live_state(&self, py: Python<'_>) -> PyResult<PyObject> {
+        live_state::live_state(py, self.engine()?)
+    }
+
+    /// Restore a saved state into a session built for a restart; `{saved id: new id}` of
+    /// the restored working orders (`live_state`).
+    fn restore_live_state<'py>(
+        &mut self,
+        py: Python<'py>,
+        state: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        live_state::restore_live_state(py, self.engine_mut()?, state)
+    }
+
     /// Exit a live session's position for a reason of the session's; what it did, one of
-    /// `EXIT_REQUESTS` (`session`).
+    /// `EXIT_REQUESTS` (`session`); at market, or as LIMIT orders at `limit_rupees`
+    /// (`legs`).
+    #[pyo3(signature = (instrument, product, reason, limit_rupees=None))]
     fn request_exit(
         &mut self,
         instrument: u32,
         product: &str,
         reason: &str,
+        limit_rupees: Option<f64>,
     ) -> PyResult<&'static str> {
         let (product, exit) = (parse_product(product)?, session::engine_exit(reason)?);
-        let engine = self.engine_mut()?;
-        let asked = engine.request_exit(InstrumentId(instrument), product, exit);
+        let (engine, instrument) = (self.engine_mut()?, InstrumentId(instrument));
+        let asked = match limit_rupees {
+            None => engine.request_exit(instrument, product, exit),
+            Some(limit) => engine.request_limit_exit(instrument, product, exit, limit),
+        };
         asked.map(ExitRequest::code).map_err(engine_error)
+    }
+
+    /// Hand a live session its last price of an instrument, rupees at `at` (UTC
+    /// nanoseconds): tick mode (`legs`).
+    fn push_tick(&mut self, py: Python<'_>, instrument: u32, price: f64, at: i64) -> PyResult<()> {
+        let engine = self.engine_mut()?;
+        venue::answered(py, engine.push_tick(InstrumentId(instrument), price, at))
+    }
+
+    /// Place a leg's stop again; what it did, one of `PROTECT_OUTCOMES` (`legs`).
+    fn protect(&mut self, instrument: u32, product: &str) -> PyResult<&'static str> {
+        let (product, engine) = (parse_product(product)?, self.engine_mut()?);
+        let done = engine.protect(InstrumentId(instrument), product);
+        done.map(Protect::code).map_err(engine_error)
+    }
+
+    /// Reprice a leg's stop or an engine exit to a LIMIT at `limit_rupees`; True when the
+    /// modification was sent now, False when it waits for an earlier one's answer (`legs`).
+    fn reprice_exit(&mut self, py: Python<'_>, order_id: u64, limit_rupees: f64) -> PyResult<bool> {
+        let engine = self.engine_mut()?;
+        let repriced = engine.reprice_exit(OrderId(order_id), limit_rupees);
+        repriced.map_err(|error| venue_result_error(py, error))
     }
 
     /// Lock a live session's entries for a reason; True when they were not locked for it.
@@ -396,6 +470,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("VENUE_CASH_BUFFER", oa_bt::sizing::VENUE_CASH_BUFFER)?;
     venue::register(m)?;
     session::register(m)?;
+    legs::register(m)?;
     futures::register(m)?;
     market::register(m)
 }

@@ -294,7 +294,9 @@ fn not_built(result: Result<(), KernelError>) -> &'static str {
 }
 
 #[test]
-fn leg_rules_are_refused_in_a_session_until_they_are_built() {
+fn leg_rules_on_mis_are_taken_in_a_session_and_on_carry_products_refused() {
+    // MIS legs are held by the broker and on ticks (`venue_legs`, `venue_ticks`); CNC and
+    // NRML legs would be GTTs, which a session does not carry.
     let points = |value| Distance::Points(value);
     let rows = [
         LegRules {
@@ -323,15 +325,26 @@ fn leg_rules_are_refused_in_a_session_until_they_are_built() {
         },
     ];
     for rules in rows {
-        let request = OrderRequest {
+        let mis = OrderRequest {
             leg_rules: rules.clone(),
             ..market(Side::Buy, 10.0)
         };
-        let feature = not_built(submitted_in_session(request));
-        assert!(
-            feature.starts_with("stop=, target="),
-            "{rules:?}: {feature}"
+        assert_eq!(
+            not_built(submitted_in_session(mis)),
+            "accepted",
+            "{rules:?}"
         );
+        for product in [Product::Cnc, Product::Nrml] {
+            let carry = OrderRequest {
+                leg_rules: rules.clone(),
+                ..order(Side::Buy, 10.0, OrderType::Market, product)
+            };
+            let feature = not_built(submitted_in_session(carry));
+            assert!(
+                feature.starts_with("stop=, target=, trailing and breakeven on CNC or NRML"),
+                "{rules:?} on {product:?}: {feature}"
+            );
+        }
     }
 }
 

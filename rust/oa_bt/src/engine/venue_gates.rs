@@ -7,7 +7,7 @@
 //! | Gate | Rejects the entry or add | Code |
 //! |---|---|---|
 //! | Entry locks | while any reason locks entries (`Engine::lock_entries`) | `live_lock` |
-//! | Nothing in flight | while any other order of its instrument and product works, but the leg's resting stop, which keeps it out too while a modification or cancellation of the stop waits for the venue | `live_in_flight` |
+//! | Nothing in flight | while any other order of its instrument and product works, but the open leg's resting stop, which keeps it out too while a modification or cancellation of the stop waits for the venue and once the stop is repriced to exit (`venue_protect`); a stop a closed leg left working (its cancellation refused) keeps it out, since a new leg's stop beside it would make two | `live_in_flight` |
 //! | Freeze cap | when it would take the position above the instrument's freeze quantity | `freeze_qty` |
 //!
 //! Why: a backtest fills a MARKET entry at the next open, before the next decision, but a
@@ -23,7 +23,6 @@ use crate::portfolio::PositionKey;
 use super::clock::SliceInfo;
 use super::error::KernelError;
 use super::kernel::Engine;
-use super::venue_roles::OrderRole;
 
 fn key_of(request: &OrderRequest) -> PositionKey {
     PositionKey {
@@ -33,10 +32,11 @@ fn key_of(request: &OrderRequest) -> PositionKey {
 }
 
 /// True when a working order keeps an entry or add of its instrument and product out
-/// (module docs): any order but a leg's resting stop, and that stop too while the venue
-/// has not answered a modification or cancellation of it.
-fn holds_entries(role: Option<OrderRole>, answer_pending: bool) -> bool {
-    role != Some(OrderRole::LegStop) || answer_pending
+/// (module docs): any order but the open leg's resting stop (`legs_stop`), and that stop
+/// too while it is busy (the venue has not answered a modification or cancellation of
+/// it, or it was repriced to exit).
+fn holds_entries(legs_stop: bool, stop_busy: bool) -> bool {
+    !legs_stop || stop_busy
 }
 
 impl Engine {
@@ -75,10 +75,13 @@ impl Engine {
             return Err(RejectCode::LiveLock);
         }
         let key = key_of(request);
+        let legs_stop = self
+            .resting_leg_stop(key)
+            .filter(|_| self.held_units(key) != 0.0);
         let in_flight = |order: &Order| {
             key_of(&order.request) == key
                 && Some(order.id) != replacing
-                && holds_entries(self.order_role(order.id), self.answer_pending(order.id))
+                && holds_entries(legs_stop == Some(order.id), self.stop_busy(key, order.id))
         };
         if self.book.working().any(in_flight) {
             return Err(RejectCode::LiveInFlight);
@@ -95,38 +98,32 @@ impl Engine {
     }
 
     /// True while a cancellation or modification of order `id` waits for the venue's
-    /// answer.
-    fn answer_pending(&self, id: OrderId) -> bool {
-        self.venue.cancelling.contains(&id) || self.venue.modifying.iter().any(|(m, _)| *m == id)
+    /// answer, or once it is `key`'s leg stop repriced to exit (`venue_protect`).
+    fn stop_busy(&self, key: PositionKey, id: OrderId) -> bool {
+        self.venue.cancelling.contains(&id)
+            || self.venue.modifying.iter().any(|(m, _)| *m == id)
+            || self.repriced_leg_stop(key) == Some(id)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::RiskExitReason;
 
     #[test]
-    fn every_working_order_but_a_resting_leg_stop_keeps_entries_out() {
+    fn every_working_order_but_the_open_legs_resting_stop_keeps_entries_out() {
+        // (the open leg's stop, busy at the venue, keeps entries out)
         let table = [
-            (Some(OrderRole::LegStop), false, false),
-            (Some(OrderRole::LegStop), true, true),
-            (Some(OrderRole::Entry), false, true),
-            (Some(OrderRole::Add), false, true),
-            (Some(OrderRole::Exit), false, true),
-            (Some(OrderRole::SquareOff), false, true),
-            (
-                Some(OrderRole::RiskExit(RiskExitReason::OperatorStop)),
-                false,
-                true,
-            ),
-            (None, false, true),
+            (true, false, false),
+            (true, true, true),
+            (false, false, true),
+            (false, true, true),
         ];
-        for (role, answer_pending, keeps_out) in table {
+        for (legs_stop, stop_busy, keeps_out) in table {
             assert_eq!(
-                holds_entries(role, answer_pending),
+                holds_entries(legs_stop, stop_busy),
                 keeps_out,
-                "{role:?}, answer pending {answer_pending}"
+                "the leg's stop {legs_stop}, busy {stop_busy}"
             );
         }
     }
