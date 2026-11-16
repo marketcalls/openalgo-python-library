@@ -111,6 +111,13 @@ def _broker_of(ping: Mapping[str, Any]) -> str | None:
     return broker.strip() if isinstance(broker, str) and broker.strip() else None
 
 
+#: The HTTP status OpenAlgo answers `ping` with when it refuses the API key: a wrong key,
+#: or a key whose OpenAlgo session ended at the daily login reset (database/auth_db.py of
+#: the server). Only this ping failure may be fixed by logging in; a refused connection,
+#: a timeout, a server error or a wrong path fails the preflight at once.
+_KEY_REFUSED_STATUS = 403
+
+
 def _ping_failed(ping: Mapping[str, Any]) -> Check:
     if ping.get("status") == SUCCESS:
         reason = f"it answered without naming the broker: {_quoted(ping)}"
@@ -123,7 +130,7 @@ def _ping_failed(ping: Mapping[str, Any]) -> Check:
         "host, that the API key is right and that you are logged in to your broker in "
         "OpenAlgo. The funds, symbol, quote, interval and clock checks and the test alert "
         "wait for ping",
-        login=True,
+        login=ping.get("code") == _KEY_REFUSED_STATUS,
     )
 
 

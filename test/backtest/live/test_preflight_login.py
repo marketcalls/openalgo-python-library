@@ -11,12 +11,14 @@ from preflight_fakes import (
     EXPIRED_FUNDS,
     KEY_REFUSED,
     NOW_NS,
+    UNREACHABLE,
     FakeAlerts,
     FakeOpenAlgo,
     live_funds,
     make_plan,
     quote,
     sandbox_funds,
+    sdk_http_error,
 )
 
 from openalgo.backtest._live._types import Mode
@@ -92,6 +94,32 @@ def test_a_failure_a_broker_login_may_fix_waits_for_the_login(client, check):
 
     assert outcome.check(check).login
     assert outcome.waits_for_login
+
+
+#: The SDK's own answer when its client timed out waiting for OpenAlgo.
+PING_TIMED_OUT = {
+    "status": "error",
+    "message": "Request timed out. The server took too long to respond.",
+    "error_type": "timeout_error",
+}
+
+
+@pytest.mark.parametrize(
+    "ping",
+    [
+        UNREACHABLE,
+        PING_TIMED_OUT,
+        sdk_http_error(500, {"status": "error", "message": "An unexpected error occurred"}),
+        sdk_http_error(404, {"message": "Not found"}),
+        {"status": "success", "data": {"message": "pong"}},
+    ],
+    ids=["not running", "timed out", "server error", "wrong host or path", "no broker named"],
+)
+def test_a_ping_failure_other_than_the_key_refused_fails_at_once(ping):
+    outcome = outcome_of(FakeOpenAlgo(ping=ping))
+
+    assert outcome.check("broker_session").login is False
+    assert outcome.waits_for_login is False
 
 
 def test_zero_funds_with_a_working_ping_are_a_login_failure_of_the_funds_check():

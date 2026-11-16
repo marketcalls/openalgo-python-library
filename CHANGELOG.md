@@ -78,6 +78,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and never rewritten, and a day is read by merging its recordings in the exact order
   they were received. Feed outages and each recording's start and stop are kept, so a
   replay can tell a dead feed from a gap in the recording.
+- The live layer's order path, preflight and journal gain what the session needs (private):
+  a check of one order's status, a probe of a silent server, polls of the orders a
+  stream outage may have missed, the release of a held cancel at the fills found; the
+  preflight checks every strategy's interval, sends its test alert once, and waits for
+  the broker login only for the failures a login can fix (a refused API key, no funds or
+  no quote), failing at once when OpenAlgo cannot be reached; the journal's wait for a
+  lock is set by `busy_timeout_s`.
 
 ## [2.2.1] - 2026-11-15
 
