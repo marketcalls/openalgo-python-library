@@ -4,22 +4,29 @@ time that end it (`Control`). The common close is `_session_close`.
 **Control** runs in the loop's step D once the session trades:
 
 - **Ctrl+C, the safe stop (D29).** The first stop request locks every strategy's entries
-  ("operator_stop") and cancels its working entries and adds. With `on_stop="flatten"`
-  each open position is then exited (`request_exit`, "operator_stop"), and the session
-  waits until every strategy is flat with nothing working, at most `SAFE_STOP_FLATTEN_S`;
-  after that it keeps running, with an ERROR alert and a console line naming each leg
+  ("operator_stop") and cancels its working entries and adds (one decided in the same
+  loop step is withdrawn before it is sent: `Trader.commands`). With `on_stop="flatten"`
+  each open position is then exited (`request_exit`, "operator_stop"), asked again at
+  each step for a position whose exit is not on the retry schedule (`_session_exits`),
+  so an entry that fills after the stop began is exited too (the kernel answers
+  "already_exiting" while its exit works); the session waits until every strategy is
+  flat with nothing working, at most `SAFE_STOP_FLATTEN_S`; after that it keeps running,
+  with an ERROR alert and a console line naming each leg and what works toward its exit
   every `UNPROTECTED_REMINDER_EVERY_S`, until flat, a second Ctrl+C, or the exchange's
   close plus `SESSION_END_GRACE_S`. With `"keep"` the session waits at most
   `SAFE_STOP_STATE_WAIT_S` for the cancels and leaves the positions open. A second
-  Ctrl+C prints one line per leg left open and stops. After a guard lock nothing can be
-  sent: a Ctrl+C stops at once.
+  Ctrl+C prints one line per leg left open and stops (two requests made before the loop
+  looked are a second Ctrl+C too). After a guard lock nothing can be sent: a Ctrl+C
+  stops at once.
 - **The end of the day.** Once every strategy is past its MIS square-off, flat and with
   nothing working, the session ends ("session_end"). From the square-off plus
   `SQUARE_OFF_VERIFY_AFTER_S` a strategy not flat gets the ERROR alert "still not flat
   after square-off", each minute while it lasts. A leg still open at the exchange's close
   plus `SESSION_END_GRACE_S` ends the session too, with an ERROR alert to close it by
   hand. After a guard lock the session ends at that same time ("mode_breach").
-- **A strategy's exception** (3.5): an ERROR alert, then the safe stop by `on_stop`.
+- **A strategy's exception** (3.5): an ERROR alert, then the safe stop by `on_stop`. The
+  operator's first Ctrl+C, before or after it, asks for the stop already under way: only
+  a second one is the second Ctrl+C.
 - The slices the plan's catch-up still owns are given up on at their last candle check.
 
 Times are UTC nanoseconds, quantities units.
@@ -49,8 +56,12 @@ SQUARE_OFF_VERIFY_AFTER_S = 30.0
 NOT_FLAT_REPEAT_S = 60.0
 #: The entry lock, and the exit reason, of the safe stop (the kernel's RISK_EXIT_REASONS).
 OPERATOR_STOP = "operator_stop"
+#: The stop requests that make the second Ctrl+C (3.3 step 4).
+SECOND_CTRL_C = 2
 #: How a session ended (1.4 `stopped_by`).
 SESSION_END, CTRL_C, MODE_BREACH, ERROR = "session_end", "ctrl_c", "mode_breach", "error"
+#: What `request_exit` answers when it made or readied an exit (its EXIT_REQUESTS).
+_EXIT_MADE = frozenset({"sent", "waits_for_cancels"})
 
 _NS = NANOS_PER_SECOND
 
@@ -65,8 +76,9 @@ class Control:
         self.verdict: str | None = None
         self.failure: StrategyFailed | None = None
         self._stopping_ns: int | None = None
-        self._stops_seen = 0
         self._remind_ns: int | None = None
+        # The kernel's last answer to the safe stop's exit request, by strategy.
+        self._asked: dict[str, str | None] = {}
         self._not_flat_ns = {
             t.name: t.square_off_ns + _s(SQUARE_OFF_VERIFY_AFTER_S) for t in session.traders
         }
@@ -78,7 +90,8 @@ class Control:
         return self._stopping_ns is not None
 
     def strategy_failed(self, failed: StrategyFailed) -> None:
-        """A strategy's code raised (3.5): an ERROR alert, then the safe stop."""
+        """A strategy's code raised (3.5): an ERROR alert, then the safe stop (module
+        docstring)."""
         if self.failure is None:
             self.failure = failed
         self._session.alert(
@@ -100,11 +113,10 @@ class Control:
             return
         requested = session.stop.count
         if requested and not self.stopping:
-            self._stops_seen = requested
             self._begin(now_ns)
             if self.verdict is not None:
                 return
-        elif self.stopping and requested > self._stops_seen:
+        if self.stopping and requested >= SECOND_CTRL_C:
             self._second()
             return
         if self.stopping:
@@ -128,10 +140,19 @@ class Control:
             self.verdict = MODE_BREACH
             return
         if self._on_stop == "flatten":
-            for trader in session.traders:
-                if trader.open_units():
-                    what = trader.request_exit(OPERATOR_STOP)
-                    session.event("exit_requested", strategy=trader.name, outcome=what)
+            self._ask_exits()
+
+    def _ask_exits(self) -> None:
+        """Ask the kernel to exit each open position whose exit is not on the retry
+        schedule (which asks by its own times, and gives up after its last attempt)."""
+        session = self._session
+        for trader in session.traders:
+            if trader.open_units() == 0 or session.exits.owns(trader.name):
+                continue
+            what = trader.request_exit(OPERATOR_STOP)
+            self._asked[trader.name] = what
+            if what in _EXIT_MADE:
+                session.event("exit_requested", strategy=trader.name, outcome=what)
 
     def _stop_due(self, now_ns: int) -> None:
         traders = self._session.traders
@@ -144,6 +165,8 @@ class Control:
         if all(trader.flat for trader in traders):
             self.verdict = self._stopped_by()
             return
+        if not self._session.locked:
+            self._ask_exits()
         if now_ns >= self._end_ns:
             self._left_open()
             self.verdict = self._stopped_by()
@@ -157,9 +180,30 @@ class Control:
 
     def _remind(self) -> None:
         session = self._session
-        for line in _open_lines(session.traders, "not flat yet, the exit is retried"):
+        for trader in session.traders:
+            units = trader.open_units()
+            if units == 0:
+                continue
+            line = (
+                f"{trader.name} {trader.symbol} {trader.exchange} {units:g} units: not flat "
+                f"yet, {self._exit_state(trader)}"
+            )
             session.emit(line)
             session.alert(AlertKind.ERROR, f"safe stop: {line}")
+
+    def _exit_state(self, trader: Trader) -> str:
+        """What works toward the exit of `trader`'s position, as a reminder says it."""
+        session = self._session
+        exits = [trader.order_name(kernel_order) for kernel_order in trader.exit_orders()]
+        if exits:
+            return f"order {', '.join(exits)} working to close it"
+        if session.locked:
+            return "nothing can be sent after OpenAlgo's mode changed"
+        if session.exits.retry_due(trader.name):
+            return "its rejected exit is asked for again shortly"
+        if session.exits.owns(trader.name):
+            return "its exit failed every attempt, close it by hand"
+        return f"no exit works (the engine answered {self._asked.get(trader.name)})"
 
     def _left_open(self) -> None:
         session = self._session
@@ -194,7 +238,7 @@ class Control:
                 self._not_flat(trader)
 
     def _not_flat(self, trader: Trader) -> None:
-        exits = [trader.venue.order_id_of(order) or f"o{order}" for order in trader.working()]
+        exits = [trader.order_name(kernel_order) for kernel_order in trader.working()]
         self._session.alert(
             AlertKind.ERROR,
             f"still not flat after square-off: {trader.name} {trader.symbol} "
@@ -223,6 +267,7 @@ __all__ = [
     "OPERATOR_STOP",
     "SAFE_STOP_FLATTEN_S",
     "SAFE_STOP_STATE_WAIT_S",
+    "SECOND_CTRL_C",
     "SESSION_END",
     "SESSION_END_GRACE_S",
     "SQUARE_OFF_VERIFY_AFTER_S",

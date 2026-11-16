@@ -6,6 +6,7 @@ login before the open.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 
@@ -95,3 +96,70 @@ def test_before_the_open_a_failed_login_is_checked_again_each_minute(
     assert any("not logged in" in text for text in errors)
     assert outcome.stopped_by == "ctrl_c"
     assert [order.action for order in world.orders()] == ["BUY", "SELL"]
+
+
+HOOKS = ("connect", "disconnect", "reconnect", "error")
+
+
+class FiredFeed:
+    """The fake's direct feed, keeping the hooks the session registers, so a test fires
+    them as the feed's own thread would (a direct feed never drops by itself)."""
+
+    def __init__(self, feed) -> None:
+        self._feed = feed
+        self.hooks: dict[str, list] = {hook: [] for hook in HOOKS}
+
+    def __getattr__(self, name: str):
+        return getattr(self._feed, name)
+
+    def on_connect(self, callback):
+        self.hooks["connect"].append(callback)
+        return self._feed.on_connect(callback)
+
+    def on_disconnect(self, callback):
+        self.hooks["disconnect"].append(callback)
+        return self._feed.on_disconnect(callback)
+
+    def on_reconnect(self, callback):
+        self.hooks["reconnect"].append(callback)
+        return self._feed.on_reconnect(callback)
+
+    def on_error(self, callback):
+        self.hooks["error"].append(callback)
+        return self._feed.on_error(callback)
+
+    def fire(self, hook: str, *payload) -> None:
+        for callback in self.hooks[hook]:
+            callback(*payload)
+
+    def drop(self) -> None:
+        self.fire("disconnect", {"seq": 1, "requested": False, "will_reconnect": True})
+
+    def come_back(self) -> None:
+        self.fire("connect", {"seq": 2, "reconnect": True})
+        self.fire("reconnect", {"seq": 2, "subscriptions": self._feed.get_subscriptions()})
+
+
+def session_events(outcome) -> list[dict]:
+    with open(outcome.paths["events"], encoding="utf-8") as stream:
+        return [json.loads(line) for line in stream]
+
+
+def test_a_feed_event_taken_while_the_feed_connects_leaves_the_first_drop_an_outage(world):
+    feed = FiredFeed(world.fake.direct_feed())
+    world.feed = feed
+    world.fake.refuse_feed()
+    # The feed connects from about 14:40:15 (after the countdown), refused until 14:40:25.
+    refused = ConnectionRefusedError("the feed refused the connection")
+    world.script.at(ist(14, 40, 20), lambda: feed.fire("error", refused, {"seq": 0}))
+    world.script.at(ist(14, 40, 25), world.fake.accept_feed)
+    world.script.at(ist(14, 43), feed.drop)
+    world.script.at(ist(14, 43, 20), feed.come_back)
+    world.stop_at(ist(14, 45))
+    events = session_events(world.run(BuyAndHold))
+    outages = [event for event in events if event["kind"] == "outage"]
+    assert [(event["start_ns"], event["end_ns"]) for event in outages] == [
+        (ist(14, 43), ist(14, 43, 20))
+    ]
+    gaps = [e for e in events if e["kind"] == "request" and e["type"] == "StreamGap"]
+    assert len(gaps) == 1

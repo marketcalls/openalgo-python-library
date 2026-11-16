@@ -26,11 +26,12 @@ The sequence:
    stand, the summary, everything closed. Returns a `SessionOutcome`.
 
 Errors mid-session (3.5): a strategy's exception stops the session safely by `on_stop`,
-then is raised again; a journal failure (the worker's or journal L's) stops sending at
-once and closes without the flatten, then is raised again; any other error of the loop
-does the same after an ERROR alert and locking every strategy's entries. A stop asked
-for during the countdown stops at once (nothing was sent); a feed that does not connect
-in time closes the session and raises LiveError.
+then is raised again (a failure during that safe stop takes the emergency stop below, and
+the strategy's exception is still the one raised); a journal failure (the worker's or
+journal L's) stops sending at once and closes without the flatten, then is raised again;
+any other error of the loop does the same after an ERROR alert and locking every
+strategy's entries. A stop asked for during the countdown stops at once (nothing was
+sent); a feed that does not connect in time closes the session and raises LiveError.
 
 Times are UTC nanoseconds, amounts rupees.
 """
@@ -136,19 +137,23 @@ def _run(session: Session, settings: StartSettings, on_stop: str) -> SessionOutc
 
 
 def _loop(session: Session, control: Control) -> SessionOutcome:
-    while True:
-        try:
-            while control.verdict is None:
+    try:
+        while control.verdict is None:
+            try:
                 session.step()
-            break
-        except StrategyFailed as failed:
-            control.strategy_failed(failed)
-        except BaseException as error:
-            failure = _cause(error)
-            _abort(session, failure, journal_works=not isinstance(failure, JournalError))
-            if failure is error:
-                raise
-            raise failure from error
+            except StrategyFailed as failed:
+                control.strategy_failed(failed)
+    except BaseException as error:
+        failure = _cause(error)
+        _abort(session, failure, journal_works=not isinstance(failure, JournalError))
+        # A failure during the safe stop of a strategy's exception: the strategy's error
+        # stopped the session first and is the one raised; the failure is in the log and
+        # the alert, and chained as the error's context.
+        if control.failure is not None:
+            raise control.failure.error  # noqa: B904
+        if failure is error:
+            raise
+        raise failure from error
     outcome = close_session(session, control.verdict)
     if control.failure is not None:
         raise control.failure.error

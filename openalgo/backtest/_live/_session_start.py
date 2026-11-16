@@ -367,6 +367,9 @@ def begin_trading(session: Session, source: FeedSource) -> None:
         threads=session.threads,
     )
     parts.stack.callback(link.close)
+    # Set before the connect: the loop turns while the feed connects, and every feed
+    # event it takes goes to the link, which counts those from before it subscribed.
+    session.link = link
     link.connect()
     session.watch(link)
     for trader in session.traders:

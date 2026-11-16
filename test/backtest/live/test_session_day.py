@@ -15,6 +15,7 @@ import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from session_samples import BuyAndHold, Hold, alerts, ist, rig
 
+from openalgo.backtest._live import _session_stop
 from openalgo.backtest._live._types import LOGGER_NAME
 
 
@@ -68,4 +69,23 @@ def test_a_position_still_open_after_the_square_off_is_alerted_each_minute_until
     assert len(not_flat) >= 2
     assert outcome.stopped_by == "session_end"
     assert ist(15, 35) <= outcome.ended_ns < ist(15, 36)
+    assert [(p.symbol, p.units) for p in outcome.open_positions] == [("SBIN", 10.0)]
+
+
+@pytest.mark.parametrize("verify_after_s", [4.0, 8.0, 15.0])
+def test_the_not_flat_alert_due_on_an_exit_retry_names_the_exit_and_the_session_goes_on(
+    world, caplog, monkeypatch, verify_after_s
+):
+    # The alert falls on a step whose retry has just asked the kernel for a new exit.
+    monkeypatch.setattr(_session_stop, "SQUARE_OFF_VERIFY_AFTER_S", verify_after_s)
+
+    def refuse_exits():
+        for _ in range(100):
+            world.fake.reject_next("RMS: blocked", price_type="MARKET")
+
+    world.script.at(ist(14, 59, 50), refuse_exits)
+    outcome = world.run(Hold)
+    not_flat = [text for text in alerts(caplog, "error") if "still not flat" in text]
+    assert not_flat
+    assert outcome.stopped_by == "session_end"
     assert [(p.symbol, p.units) for p in outcome.open_positions] == [("SBIN", 10.0)]

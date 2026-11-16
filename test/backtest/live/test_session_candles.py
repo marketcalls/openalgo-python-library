@@ -18,6 +18,7 @@ from fake_openalgo.fixtures import *  # noqa: F403
 from session_samples import NS, PRICE, ist, rig
 
 import openalgo.backtest as bt
+from openalgo.backtest._live._series_store import LiveStore
 from openalgo.backtest._live._types import LOGGER_NAME
 
 
@@ -52,10 +53,25 @@ def climbing(now_ns: int) -> float:
     return PRICE + 0.5 * ((now_ns // NS) % 60 // 10)
 
 
+def kernel_opens(monkeypatch) -> dict[int, float]:
+    """The open of each strategy bar the kernel closes, by its open (UTC nanoseconds),
+    as its rows hand them to the series: (instrument, ts_open, ts_close, open, ...)."""
+    opens: dict[int, float] = {}
+    reveal = LiveStore.reveal
+
+    def keep(self, row):
+        opens[row[1]] = row[3]
+        return reveal(self, row)
+
+    monkeypatch.setattr(LiveStore, "reveal", keep)
+    return opens
+
+
 def test_F42_a_tick_gap_is_drift_and_the_series_continues_from_the_candle(
     make_fake_openalgo, monkeypatch, tmp_path
 ):
     Opens.seen = []
+    kernel = kernel_opens(monkeypatch)
     world = rig(make_fake_openalgo, monkeypatch, tmp_path)
     world.script.price = climbing
     # The first three trades of the 14:43 minute send no tick.
@@ -69,6 +85,8 @@ def test_F42_a_tick_gap_is_drift_and_the_series_continues_from_the_candle(
     assert others and all(d.open == 0 and d.close == 0 for d in others)
     # Decided at 14:45:01, the 14:43 bar reads as the broker's candle (it opened at 500).
     assert (ist(14, 45), PRICE) in Opens.seen
+    # The kernel keeps the tick bar it ran: its first trade was the minute's fourth.
+    assert kernel[ist(14, 43)] == pytest.approx(PRICE + 1.5)
 
 
 def test_a_start_mid_minute_catches_the_minutes_before_it_up_from_candles(

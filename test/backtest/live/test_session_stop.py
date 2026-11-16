@@ -20,7 +20,7 @@ from fake_openalgo.fixtures import *  # noqa: F403
 from session_samples import NS, BuyAndHold, Hold, Raises, alerts, ist, rig
 
 import openalgo.backtest as bt
-from openalgo.backtest._live import _session_trader
+from openalgo.backtest._live import _session_stop, _session_trader
 from openalgo.backtest._live._alerts_logs import SessionLogs
 from openalgo.backtest._live._types import LOGGER_NAME, Mode
 from openalgo.backtest._live.journal import Journal
@@ -177,4 +177,83 @@ def test_an_error_of_the_loop_locks_entries_alerts_and_is_raised(world, monkeypa
         world.run(Hold)
     assert actions(world) == [("BUY", 10)]
     assert any("SBIN NSE 10 units" in text for text in alerts(caplog, "error"))
+    assert lock_is_free(world)
+
+
+@pytest.mark.parametrize("on_stop", ["flatten", "keep"])
+def test_ctrl_c_noticed_at_the_entry_decision_sends_no_entry(world, on_stop):
+    # Hold decides its entry at 14:42:01, in the loop step that notices the stop.
+    world.stop_at(ist(14, 42, 1))
+    outcome = world.run(Hold, on_stop=on_stop)
+    assert world.fake.log.calls("placeorder") == []
+    assert outcome.stopped_by == "ctrl_c"
+    assert outcome.open_positions == ()
+    assert list(outcome.outputs["Hold"]["orders"]["status"]) == ["Canceled"]
+
+
+def test_an_entry_that_fills_after_the_safe_stop_began_is_exited(world, caplog):
+    # The entry decided at 14:42:01 goes out before the loop notices the stop.
+    world.stop_at(ist(14, 42, 1) + NS // 2)
+    outcome = world.run(Hold)
+    assert actions(world) == [("BUY", 10), ("SELL", 10)]
+    assert world.fake.position("SBIN", "NSE") == 0
+    assert outcome.stopped_by == "ctrl_c"
+    assert world.orders()[-1].placed_ns < ist(14, 42, 10)
+    assert not [text for text in alerts(caplog, "error") if text.startswith("safe stop")]
+
+
+class RaisesAsItsEntryFills(bt.Strategy):
+    """Rests a LIMIT buy of 10 SBIN at 400 at its first decision; at its second the
+    order fills while `on_bar` runs (`fill_now`), and `on_bar` raises."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "1m"
+    fill_now = None
+
+    def init(self):
+        self.calls = 0
+
+    def on_bar(self, bar):
+        self.calls += 1
+        if self.calls == 1:
+            self.buy(10, price=400.0)
+            return
+        type(self).fill_now()
+        raise RuntimeError("the strategy's own error")
+
+
+def test_a_fill_that_arrives_while_on_bar_raises_reaches_the_kernel_and_is_exited(world, caplog):
+    def fill_the_resting_entry():
+        world.fake.fill(world.orders()[0].order_id, price=400.0)
+
+    RaisesAsItsEntryFills.fill_now = fill_the_resting_entry
+    with pytest.raises(RuntimeError, match="the strategy's own error"):
+        world.run(RaisesAsItsEntryFills)
+    assert actions(world) == [("BUY", 10), ("SELL", 10)]
+    assert world.fake.position("SBIN", "NSE") == 0
+    assert alerts(caplog, "reconcile_mismatch") == []
+
+
+def test_one_ctrl_c_during_a_flatten_a_strategy_error_began_does_not_end_it(world):
+    # Raises raises at 14:43:01; the flatten's first SELL is refused and asked for again.
+    world.script.at(
+        ist(14, 43), lambda: world.fake.reject_next("RMS: blocked", price_type="MARKET")
+    )
+    world.stop_at(ist(14, 43, 2) + NS // 2)
+    with pytest.raises(RuntimeError, match="the strategy's own error"):
+        world.run(Raises)
+    assert actions(world) == [("BUY", 10), ("SELL", 10), ("SELL", 10)]
+    assert world.fake.position("SBIN", "NSE") == 0
+    assert not any("close it by hand" in line for line in world.lines)
+
+
+def test_a_failure_as_the_safe_stop_begins_closes_the_session_and_raises_the_strategys_error(
+    world, monkeypatch, caplog
+):
+    def fail(self, now_ns):
+        raise LiveError("a defect of the safe stop")
+
+    monkeypatch.setattr(_session_stop.Control, "_begin", fail)
+    with pytest.raises(RuntimeError, match="the strategy's own error"):
+        world.run(Raises)
+    assert any("a defect of the safe stop" in text for text in alerts(caplog, "error"))
     assert lock_is_free(world)

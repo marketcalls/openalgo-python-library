@@ -28,6 +28,7 @@ from fake_openalgo.fixtures import *  # noqa: F403
 from session_samples import NS, alerts, ist, rig
 
 import openalgo.backtest as bt
+from openalgo.backtest._live._series_store import LiveStore
 from openalgo.backtest._live._types import LOGGER_NAME
 from openalgo.backtest._live.session import run_session
 
@@ -172,7 +173,25 @@ def first_decision(world) -> int:
     return min(close for close, _ in Late.decided)
 
 
-def test_F63_while_an_order_call_hangs_slices_close_and_decisions_are_made_on_time(world):
+def kernel_volumes(monkeypatch) -> dict[tuple[str, int], float]:
+    """The volume of each strategy bar the kernel closes, by (symbol, its open), as its
+    rows hand them to the series: (instrument, ts_open, ts_close, open, high, low, close,
+    volume)."""
+    volumes: dict[tuple[str, int], float] = {}
+    reveal = LiveStore.reveal
+
+    def keep(self, row):
+        volumes[(self.symbol, row[1])] = row[7]
+        return reveal(self, row)
+
+    monkeypatch.setattr(LiveStore, "reveal", keep)
+    return volumes
+
+
+def test_F63_while_an_order_call_hangs_slices_close_and_decisions_are_made_on_time(
+    world, monkeypatch
+):
+    volumes = kernel_volumes(monkeypatch)
     blocking = Blocking(
         world.fake.client(), "placeorder", when=lambda: True, hold_s=150, now=world.fake.clock.now
     )
@@ -180,13 +199,19 @@ def test_F63_while_an_order_call_hangs_slices_close_and_decisions_are_made_on_ti
     first = first_decision(world)
     assert blocking.held_at is not None and blocking.held_at - first < 5 * NS
     late = dict(Late.decided)
-    # Decided within a few fake seconds of each close while the call was held.
+    # Decided within a few fake seconds of each close while the call was held, on bars
+    # built from the minute's ticks (INFY trades 10 units every 10 s).
     for close in (first + 60 * NS, first + 120 * NS):
         assert late[close] - close < 5 * NS
+        assert volumes[("INFY", close - 60 * NS)] == 60
     buys = [order for order in world.orders() if order.action == "BUY"]
     assert buys[0].symbol == "SBIN"
     assert buys[0].placed_ns >= blocking.held_at + 150 * NS
-    # Late's entry, decided while the call was held, waited too long and was dropped.
+    # Once freed, the held call goes first; Late's entry, decided while the call was
+    # held, waited too long and was dropped unsent; the sale is the Ctrl+C's at 14:47.
+    calls = world.fake.log.calls("placeorder")
+    sent = [(call.detail["request"]["symbol"], call.detail["request"]["action"]) for call in calls]
+    assert sent == [("SBIN", "BUY"), ("SBIN", "SELL")]
     assert list(outcome.outputs["Late"]["orders"]["status"]) == ["Rejected"]
 
 

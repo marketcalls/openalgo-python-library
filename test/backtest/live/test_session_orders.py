@@ -16,6 +16,7 @@ import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from session_samples import NS, BuyAndHold, alerts, ist, rig
 
+import openalgo.backtest as bt
 from openalgo.backtest._live._types import LOGGER_NAME
 from openalgo.backtest._live.orders import BROKER_WINDOW_NS
 
@@ -186,10 +187,42 @@ def test_F60_an_entry_the_book_cannot_tell_apart_locks_the_instrument(world, cap
         )
 
     world.script.at(ist(14, 42, 2) + NS // 2, same_order_by_another_client)
-    outcome = world.run(BuyAndHold)
+    # The safe stop then cancels the entry it cannot tell apart, and must not send it.
+    world.stop_at(ist(14, 45))
+    outcome = world.run(BuyAndHold, on_stop="keep")
     ambiguous = [text for text in alerts(caplog, "error") if "cannot be told apart" in text]
     assert len(ambiguous) == 1
     # The session's placement and the other client's, and nothing more afterwards.
     assert len(placements(world)) == 2
-    assert placements(world, "SELL") == []
+    assert world.fake.log.calls("cancelorder") == []
+    assert world.fake.log.calls("modifyorder") == []
     assert outcome.outputs["BuyAndHold"]["orders"]["status"] == ["Submitted"]
+
+
+class Reduces(bt.Strategy):
+    """Buys 10 SBIN at its first decision and sells 5 of them at its third."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "1m"
+
+    def init(self):
+        self.calls = 0
+
+    def on_bar(self, bar):
+        self.calls += 1
+        if self.calls == 1:
+            self.buy(10)
+        elif self.calls == 3:
+            self.sell(5)
+
+
+def test_a_rejected_reduce_is_not_asked_for_again_as_an_exit_of_the_whole_position(world):
+    # The reduce decided at 14:44:01 is the first MARKET order after 14:43.
+    world.script.at(
+        ist(14, 43), lambda: world.fake.reject_next("RMS: blocked", price_type="MARKET")
+    )
+    outcome = world.run(Reduces)
+    sells = [(order.quantity, order.status) for order in world.orders() if order.action == "SELL"]
+    # The reduce, rejected; then the square-off of the 10 units still held at 15:00.
+    assert sells == [(5, "rejected"), (10, "complete")]
+    assert world.orders()[-1].placed_ns >= ist(15, 0)
+    assert outcome.stopped_by == "session_end"

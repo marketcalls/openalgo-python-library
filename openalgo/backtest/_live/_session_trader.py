@@ -15,8 +15,12 @@ venue map, the slices it releases live, its decisions and its broker candles.
   (the decision at or after `decide_from_ns`), its indicators are ready, and no base
   slice of the bar is marked missing. Timers fire on the same terms. A skipped decision
   is logged, and kept when it was skipped for missing data. An exception of the
-  strategy's code is raised as `StrategyFailed`, after which the strategy is called no
-  more.
+  strategy's code is raised as `StrategyFailed` once the kernel waits again (it refuses
+  the venue's results at a bar close), after which the strategy is called no more.
+- **Commands** (`commands`): the kernel's commands as the order worker's requests. A
+  placement the kernel cancelled before the loop took it (the safe stop's cancel of an
+  entry decided in the same loop step) is withdrawn: it is never sent, and the kernel is
+  told it was cancelled (`apply_cancel`).
 - **Candles**: the strategy's broker candles are `candles`, a `_session_candles.
   CandleKeeper`.
 
@@ -37,7 +41,7 @@ from .._calendar_convert import IST, format_ist
 from .._driver import deliver
 from .._engine import call
 from .._layout import NANOS_PER_SECOND
-from ..errors import JournalError
+from ..errors import JournalError, LiveError
 from ._journal_rows import state_json
 from ._plan_catch_up import INSTRUMENT, StrategyPlan
 from ._session_candles import CandleKeeper
@@ -172,30 +176,55 @@ class Trader:
         reveals and delivers but decides nothing (the session is stopping). A kernel
         session that finished by itself (the exchange's close, with nothing working) calls
         `on_stop`, as a backtest's end does, and is driven no more (`finished`). Raises
-        StrategyFailed for an exception of the strategy's code."""
-        part, decide_from_ns = self.part, self.decide_from_ns
+        StrategyFailed for an exception of the strategy's code, once the kernel waits
+        again: the pauses after it are run through without calling the strategy, so the
+        order news the loop takes next is never refused at a bar close."""
+        failure: StrategyFailed | None = None
         while not self.finished:
-            kind, decided_at, rows, events, timers = call(part.engine.advance)
-            if kind == "waiting":
-                return
-            bars = part.context.reveal(decided_at, rows)
-            if events and not self.failed:
-                self._calling(deliver, part.strategy, part.context, events)
-            if kind == "finished":
-                self.finished = True
-                logger.info("%s: the session's close ended its kernel session", self.name)
-                if not self.failed:
-                    self._calling(part.strategy.on_stop)
-                return
-            decides = deciding and not self.failed
-            decides = decides and decide_from_ns is not None and decided_at >= decide_from_ns
-            if kind == "timers":
-                if decides:
-                    self._calling(part.context.timers.fire, timers)
-                else:
-                    logger.info("%s: timers due at %s skipped", self.name, format_ist(decided_at))
-            elif bars and decides:
-                self._decide(next(iter(bars.values())), decided_at)
+            pause = call(self.part.engine.advance)
+            if pause[0] == "waiting":
+                break
+            try:
+                self._pause(*pause, deciding=deciding)
+            except StrategyFailed as failed:
+                failure = failure or failed
+        if failure is not None:
+            raise failure
+
+    def _pause(
+        self,
+        kind: str,
+        decided_at: int,
+        rows: list[tuple],
+        events: list[Any],
+        timers: Any,
+        *,
+        deciding: bool,
+    ) -> None:
+        """One pause of the kernel: reveal its bars, deliver its events, then decide."""
+        part = self.part
+        bars = part.context.reveal(decided_at, rows)
+        if kind == "finished":
+            # Set first: a callback that raises here must leave no call to a finished
+            # kernel session behind it (the safe stop's exit, say).
+            self.finished = True
+            logger.info("%s: the session's close ended its kernel session", self.name)
+        if events and not self.failed:
+            self._calling(deliver, part.strategy, part.context, events)
+        if kind == "finished":
+            if not self.failed:
+                self._calling(part.strategy.on_stop)
+            return
+        decide_from_ns = self.decide_from_ns
+        decides = deciding and not self.failed
+        decides = decides and decide_from_ns is not None and decided_at >= decide_from_ns
+        if kind == "timers":
+            if decides:
+                self._calling(part.context.timers.fire, timers)
+            else:
+                logger.info("%s: timers due at %s skipped", self.name, format_ist(decided_at))
+        elif bars and decides:
+            self._decide(next(iter(bars.values())), decided_at)
 
     def _decide(self, bar: Any, decided_at: int) -> None:
         part = self.part
@@ -237,15 +266,35 @@ class Trader:
     # ----- orders and positions ----------------------------------------------------
 
     def commands(self) -> list[OrderRequest]:
-        """The kernel's commands since the last call, as the order worker's requests; the
+        """The kernel's commands since the last call, as the order worker's requests (a
+        placement the kernel cancelled before this call withdrawn: module docstring); the
         reason of each risk exit placed is kept (`reasons`)."""
         if self.finished:
             return []
+        requests: list[OrderRequest] = []
         commands = call(self.engine.take_commands)
-        for command in commands:
-            if command.get("command") == "place" and command.get("reason"):
-                self.reasons[int(command["order_id"])] = str(command["reason"])
-        return self.venue.requests(commands)
+        while commands:
+            kept = self._withdraw_cancelled(commands)
+            for command in kept:
+                if command.get("command") == "place" and command.get("reason"):
+                    self.reasons[int(command["order_id"])] = str(command["reason"])
+            requests += self.venue.requests(kept)
+            # A withdrawal ends an order in the kernel, which may free an exit that waited
+            # for it: its commands go out in this same call.
+            commands = call(self.engine.take_commands) if len(kept) < len(commands) else []
+        return requests
+
+    def _withdraw_cancelled(self, commands: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """`commands` without those of the orders both placed and cancelled in them, each
+        such order confirmed cancelled to the kernel (it never reached the broker)."""
+        placed = {int(c["order_id"]) for c in commands if c.get("command") == "place"}
+        cancelled = {int(c["order_id"]) for c in commands if c.get("command") == "cancel"}
+        withdrawn = placed & cancelled
+        for kernel_order in sorted(withdrawn):
+            call(self.engine.apply_cancel, kernel_order)
+            logger.info("%s: order o%d was cancelled before it was sent", self.name, kernel_order)
+            self._event("withdrawn", strategy=self.name, kernel_order=kernel_order)
+        return [c for c in commands if int(c["order_id"]) not in withdrawn]
 
     def open_units(self) -> float:
         """The kernel's position in the strategy's instrument, signed units (0 flat)."""
@@ -255,6 +304,22 @@ class Trader:
     def working(self) -> list[int]:
         """The kernel orders that can still fill."""
         return list(call(self.engine.working_orders))
+
+    def order_name(self, kernel_order: int) -> str:
+        """How an alert names a kernel order: the broker's order ID once bound, else
+        "o<n>" (also for an order the kernel made in this loop step, which the venue map
+        has not taken yet)."""
+        try:
+            order_id = self.venue.order_id_of(kernel_order)
+        # The venue map knows only the orders whose commands it has taken.
+        except LiveError:
+            order_id = ""
+        return order_id or f"o{kernel_order}"
+
+    def exit_orders(self) -> list[int]:
+        """The working orders that close the position (reduce-only)."""
+        entries = set(self.entry_orders())
+        return [kernel_order for kernel_order in self.working() if kernel_order not in entries]
 
     @property
     def flat(self) -> bool:

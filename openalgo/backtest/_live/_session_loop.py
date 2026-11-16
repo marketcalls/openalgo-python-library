@@ -207,12 +207,11 @@ class Session:
         released = self._close_slices(now_ns)
         for trader in self.traders:
             trader.drive(deciding=self.deciding)
-        # The decisions' commands are mapped before the duties, which may cancel or
-        # look up the orders just made; theirs follow them to the worker.
-        requests = self._commands()
+        # The commands are taken after the duties, so an entry the safe stop cancels in
+        # the step that decided it is withdrawn before it reaches the worker.
         if self.control is not None:
             self.control.duties(self.now())
-        self.hand_over(requests + self._commands())
+        self.hand_over(self._commands())
         if released:
             self._save_states(released)
         self._wait(until_ns)

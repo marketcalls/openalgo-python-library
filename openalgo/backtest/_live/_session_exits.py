@@ -4,7 +4,10 @@ OpenAlgo rejects while its position is still open is asked for again, on a sched
 An exit (a signal exit, a risk exit, a square-off) that ends rejected while its strategy
 still holds a position starts the schedule: the session asks the kernel for the exit again
 (`request_exit`) after `EXIT_RETRY_DELAYS_S` (1, 2, 5, 10 seconds after each rejection),
-so five attempts in all (08-live-trading section 6.3). After the fifth rejection the
+so five attempts in all (08-live-trading section 6.3). `request_exit` exits the whole
+position, so only an exit that closes all of it is asked for again: a strategy's sale of
+part of its position (a reduce, an EXIT order for fewer units than the position) stays
+rejected, as the strategy saw it in `on_order`. After the fifth rejection the
 strategy's entries are locked for the rest of the session ("exit_failed") and an ERROR
 alert says to close the position by hand in OpenAlgo. The schedule starts again once the
 position is flat. A risk exit is asked for again with its own reason; a signal exit or a
@@ -53,11 +56,19 @@ class ExitRetries:
 
     def rejected(self, trader: Trader, kernel_order: int, intent: OrderIntent, why: str) -> None:
         """An order of `trader` (kernel order `kernel_order`, placed as `intent`) ended
-        rejected for `why`: an exit of an open position is asked for again on the
-        schedule, or given up on after the last attempt."""
-        if intent.purpose not in EXIT_PURPOSES or trader.open_units() == 0:
+        rejected for `why`: an exit of the whole open position is asked for again on the
+        schedule, or given up on after the last attempt; a reduce is not (module
+        docstring)."""
+        units = abs(trader.open_units())
+        if intent.purpose not in EXIT_PURPOSES or units == 0:
             return
         session, name = self._session, trader.name
+        if intent.purpose is Purpose.EXIT and intent.quantity < units:
+            session.event("reduce_rejected", strategy=name, units=intent.quantity, reason=why)
+            logger.info(
+                "%s: a reduce of %d units was rejected: not asked for again", name, intent.quantity
+            )
+            return
         rejections = self._rejections.get(name, 0) + 1
         self._rejections[name] = rejections
         session.event("exit_rejected", strategy=name, attempt=rejections, reason=why)
@@ -77,6 +88,15 @@ class ExitRetries:
         delay_ns = round(EXIT_RETRY_DELAYS_S[rejections - 1] * NANOS_PER_SECOND)
         self._due_ns[name] = session.now() + delay_ns
         self._reason[name] = trader.reasons.get(kernel_order) or RETRY_REASON
+
+    def owns(self, name: str) -> bool:
+        """True while the exit of strategy `name` is on the schedule: a retry is due, or
+        every attempt failed. The schedule ends once the strategy is flat."""
+        return name in self._rejections
+
+    def retry_due(self, name: str) -> bool:
+        """True while a retry of the exit of strategy `name` is due."""
+        return name in self._due_ns
 
     def duties(self, now_ns: int) -> None:
         """Ask again for each exit whose retry is due; forget the schedule of a strategy
