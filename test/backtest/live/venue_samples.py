@@ -25,8 +25,14 @@ from openalgo.backtest.reference import Instrument
 DAY = dt.date(2025, 7, 1)
 STRATEGY = "ema_cross"
 MINUTE_NS = 60 * 1_000_000_000
-# 09:15 IST is 03:45 UTC.
-OPEN_NS = int(dt.datetime(2025, 7, 1, 3, 45, tzinfo=dt.UTC).timestamp()) * 10**9
+
+
+def open_ns(day: dt.date) -> int:
+    """09:15 IST (03:45 UTC) of `day`, UTC nanoseconds."""
+    return int(dt.datetime(day.year, day.month, day.day, 3, 45, tzinfo=dt.UTC).timestamp()) * 10**9
+
+
+OPEN_NS = open_ns(DAY)
 SBIN = Instrument.cash_equity("SBIN", "NSE")
 _NO_BARS = (np.array([], dtype=np.int64), *(np.array([], dtype=np.float64) for _ in range(5)))
 
@@ -36,10 +42,10 @@ def journal_session(mode: Mode = Mode.LIVE, starts: int = 1) -> JournalSession:
     return JournalSession(DAY, mode, "zerodha", OPEN_NS, OPEN_NS, starts)
 
 
-def _config() -> dict[str, Any]:
+def _config(day: dt.date) -> dict[str, Any]:
     return {
-        "first_day": to_day(DAY),
-        "last_day": to_day(DAY),
+        "first_day": to_day(day),
+        "last_day": to_day(day),
         "base_nanos": MINUTE_NS,
         "strategy_interval": MINUTE_NS,
         "fill": "next_open",
@@ -57,8 +63,8 @@ def _config() -> dict[str, Any]:
     }
 
 
-def new_session() -> Any:
-    """A kernel session of SBIN on DAY, before its first slice."""
+def new_session(day: dt.date = DAY) -> Any:
+    """A kernel session of SBIN on `day`, before its first slice."""
     instrument = {
         "symbol": "SBIN",
         "exchange": "NSE",
@@ -70,13 +76,15 @@ def new_session() -> Any:
         "last_trading_day": None,
     }
     engine_class = native_attr("Engine")
-    return engine_class.session(default_calendar()._cal, _config(), [instrument], [_NO_BARS])
+    return engine_class.session(default_calendar()._cal, _config(day), [instrument], [_NO_BARS])
 
 
-def release_minute(engine: Any, minute: int) -> str:
-    """Hand the session the bar of `minute` after 09:15, release it, return the pause."""
+def release_minute(engine: Any, minute: int, *, day: dt.date = DAY, price: float = 500.0) -> str:
+    """Hand the session of `day` the bar of `minute` after 09:15, flat at `price`, release
+    it, return the pause."""
     assert engine.advance()[0] == "waiting"
-    engine.add_bar(0, (OPEN_NS + minute * MINUTE_NS, 500.0, 500.0, 500.0, 500.0, 1_000.0))
+    bar_open = open_ns(day) + minute * MINUTE_NS
+    engine.add_bar(0, (bar_open, price, price, price, price, 1_000.0))
     engine.release(minute + 1)
     return engine.advance()[0]
 
