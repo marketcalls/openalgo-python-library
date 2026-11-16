@@ -208,13 +208,18 @@ class OrderPath:
         return outcome
 
     def cancel(self, order_id: str) -> SendOutcome:
-        """Cancel an order of this session once. Raises as `modify` does."""
+        """Cancel an order of this session once; once accepted, the order is polled each
+        second for a while, so a lost cancel word is found (`due_polls`). Raises as
+        `modify` does."""
         sent_for = self._intent_of(order_id)
         self._check_can_send(f"the cancel of order {order_id}", sent_for)
         self._wait_for_budget()
         self._rate.take()
         sent = self._client.cancelorder(order_id=order_id, strategy=sent_for.strategy)
-        return self._settle_request(order_id, server_answer(sent))
+        outcome = self._settle_request(order_id, server_answer(sent))
+        if outcome.kind is Outcome.ACCEPTED:
+            self._follower.cancel_accepted(order_id)
+        return outcome
 
     def on_update(self, update: OrderUpdate) -> OrderUpdate | None:
         """Take an order update from the stream: returned with its status as reported,
@@ -229,7 +234,8 @@ class OrderPath:
     def due_polls(self) -> list[OrderUpdate]:
         """The polling fallback (`_order_follow`), in rounds of at most one a second and
         three orders: `orderstatus` every second for an order with no word from 2 seconds
-        after it was sent, or a market order still working; a resting order every 30
+        after it was sent, a market order still working, or an order whose cancel was
+        accepted (for 10 seconds while no word ends it); a resting order every 30
         seconds once the stream has spoken for it, else backing off from 1 s to 2 s to
         5 s (2 s for an entry or an add). Fills are priced, and cancels confirmed, from
         the tradebook, read at most once a round with its own back-off; a hold past 10

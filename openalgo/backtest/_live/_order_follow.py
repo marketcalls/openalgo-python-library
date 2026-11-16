@@ -8,9 +8,10 @@ longer than 10 seconds is alerted, and the session may release the fill at a pri
 
 The order-updates stream is the source; `orderstatus` is polled as a fallback
 (`_order_state`): once a second while an order has no word yet (from 2 s after the send)
-or is a market order still working; for a resting order (any other order open, or one
-waiting for a trigger), every 30 seconds as a safety net once the stream has spoken for
-it, else backing off from 1 s to 2 s to 5 s (2 s for an entry or an add). Polling runs
+or is a market order still working, and for 10 seconds after a cancel of it was accepted
+while no word ends it; for a resting order (any other order open, or one waiting for a
+trigger), every 30 seconds as a safety net once the stream has spoken for it, else
+backing off from 1 s to 2 s to 5 s (2 s for an entry or an add). Polling runs
 in rounds of at most one a second, each polling at most 3 orders and reading the
 tradebook at most once. A gap in the stream, and a targeted read of an open row that
 gives no fills, ask for polls out of turn, which the next rounds make until a polled
@@ -108,6 +109,11 @@ class OrderFollower:
         """Follow an order just bound in the journal, and note it with the guard."""
         self._guard.note_order_sent(order_id)
         self._orders[order_id] = Followed.of(intent, sent_ns=sent_ns)
+
+    def cancel_accepted(self, order_id: str) -> None:
+        """A cancel of a followed order was accepted: it is polled each second for a
+        while (`Followed.cancel_accepted`), so a lost cancel word is found."""
+        self._orders[order_id].cancel_accepted(self._now())
 
     def changed_price_type(self, order_id: str, price_type: str) -> None:
         """Keep the price type of a followed order that a modify changed."""

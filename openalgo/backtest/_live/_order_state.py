@@ -28,6 +28,10 @@ SAFETY_POLL_EVERY_NS = 30 * NANOS_PER_SECOND
 BACKOFF_NS = (1 * NANOS_PER_SECOND, 2 * NANOS_PER_SECOND, 5 * NANOS_PER_SECOND)
 #: An entry's or an add's fill places the protective stop, so its back-off stops at 2 s.
 ENTRY_BACKOFF_NS = (1 * NANOS_PER_SECOND, 2 * NANOS_PER_SECOND)
+#: An order whose cancel the broker accepted is polled every second, from a second after
+#: the acceptance, for this long while no word ends it: a lost cancel word must not hold
+#: the exit that waits for it until the next safety poll (16-session-design 4.5, 3.3).
+CANCEL_POLL_FOR_NS = 10 * NANOS_PER_SECOND
 #: The purposes that open or add to a position: an entry and an add.
 ENTRY_PURPOSES = frozenset({Purpose.ENTRY, Purpose.ADD})
 #: A market order reported open is working, not resting: it is polled every second.
@@ -67,6 +71,7 @@ class Followed:
     streamed_ns: int | None = None
     polled_ns: int | None = None
     poll_asked_ns: int | None = None
+    cancel_accepted_ns: int | None = None
     quiet_polls: int = 0
     trades_read_ns: int | None = None
     trade_reads: int = 0
@@ -111,6 +116,11 @@ class Followed:
         polled word answers it (`heard`): a read that fails or gives no word does not."""
         self.polled_ns, self.quiet_polls = now, self.quiet_polls + 1
 
+    def cancel_accepted(self, now: int) -> None:
+        """Note that a cancel of the order was accepted at `now`: it is polled every
+        second for `CANCEL_POLL_FOR_NS` while no word ends it."""
+        self.cancel_accepted_ns = now
+
     def ask_poll(self, now: int) -> None:
         """Make the order due for a poll from `now`, whatever its schedule."""
         self.poll_asked_ns = now if self.poll_asked_ns is None else min(self.poll_asked_ns, now)
@@ -127,10 +137,12 @@ class Followed:
     def poll_due_ns(self) -> int | None:
         """When the order is next polled; None once its last word is terminal.
 
-        No word yet: from 2 s after the send, every second. Resting (open or waiting for
-        a trigger, as reported, and not a market order): every 30 s once the stream has
-        spoken for it, else backing off (`BACKOFF_NS`, `ENTRY_BACKOFF_NS`) while polls
-        bring no news. Any other working order: every second. A poll asked for out of
+        No word yet: from 2 s after the send, every second. A cancel of it accepted:
+        every second from a second after the acceptance, for `CANCEL_POLL_FOR_NS`. Resting
+        (open or waiting for a trigger, as reported, and not a market order): every 30 s
+        once the stream has spoken for it, else backing off (`BACKOFF_NS`,
+        `ENTRY_BACKOFF_NS`) while polls bring no news. Any other working order: every
+        second. A poll asked for out of
         turn (`ask_poll`) is due from when it was asked, whichever comes first, and a
         second after each poll since that did not answer it, so it takes its turn in the
         rounds with the other orders.
@@ -153,6 +165,9 @@ class Followed:
                 return self.sent_ns + POLL_AFTER_NS
             return self.polled_ns + POLL_EVERY_NS
         last_ns = max(self.polled_ns or 0, word.ts_recv_ns)
+        cancelled_ns = self.cancel_accepted_ns
+        if cancelled_ns is not None and last_ns < cancelled_ns + CANCEL_POLL_FOR_NS:
+            return max(last_ns, cancelled_ns) + POLL_EVERY_NS
         rests = word.status is OrderStatus.TRIGGER_PENDING or self.price_type != _MARKET
         if not rests:
             return last_ns + POLL_EVERY_NS
@@ -260,6 +275,7 @@ def _check_price(average_price: float) -> None:
 
 __all__ = [
     "BACKOFF_NS",
+    "CANCEL_POLL_FOR_NS",
     "ENTRY_BACKOFF_NS",
     "ENTRY_PURPOSES",
     "POLL_AFTER_NS",
