@@ -24,6 +24,7 @@ from openalgo import api
 from openalgo.backtest._live._types import Mode
 
 from .clock import ManualClock
+from .direct_feed import DirectFeed
 from .faults import Faults
 from .feed import Feed
 from .feed_server import FeedServer
@@ -97,6 +98,33 @@ class FakeOpenAlgo:
         shorten(client, **_FEED_TIMING)
         self._clients.append(client)
         return client
+
+    def direct_feed(self) -> DirectFeed:
+        """A feed the fake calls directly, with the part of the SDK's `FeedAPI` a live
+        session uses: it delivers ticks (quote mode) and order updates synchronously on
+        the thread of the fake's call that caused them, in a fixed order, with no socket
+        and no thread (see `direct_feed`). Each call makes a new one."""
+        venue = self._venue
+        direct = DirectFeed(
+            broker=venue.broker,
+            user_id=venue.username,
+            knows=self._knows,
+            refusing=lambda: venue.feed.refusing,
+        )
+        venue.feed.add_direct(direct)
+        return direct
+
+    def refuse_feed(self) -> None:
+        """Refuse every new feed connection from now, of the SDK's socket and of a direct
+        feed alike, until `accept_feed`: the SDK's `connect()` answers False and its own
+        retries fail too (a connection already open stays open)."""
+        self._venue.feed.refuse_connections(True)
+
+    def accept_feed(self) -> None:
+        """Accept feed connections again after `refuse_feed`: the SDK's own retry gets
+        through, and a direct feed whose last `connect()` was refused (and that was not
+        disconnected since) connects at once, as that retry would."""
+        self._venue.feed.refuse_connections(False)
 
     def close(self) -> None:
         """Retire every client: their feed threads end and nothing reconnects."""
