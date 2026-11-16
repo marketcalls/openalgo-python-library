@@ -5,7 +5,8 @@ one for its total units; a reprice the broker refuses exits the rest at a limit.
 
 The strategy is `OptionHold`: one lot (65 units) of the option bought at 120.00 at 14:42:01
 IST with a stop 10 points below, an SL at 110.00 whose limit is 104.50 (`stops_samples`).
-The option trades every 10 seconds at the test's price.
+The option trades every 10 seconds at the test's price. A stop whose cancel the engine
+has decided is never repriced: the cancel's word decides.
 """
 
 from __future__ import annotations
@@ -110,3 +111,26 @@ def test_F72_a_reprice_refused_exits_the_rest_at_a_marketable_limit(option, capl
     assert any("did not fill" in text for text in alerts(caplog, "error"))
     assert option.fake.position(OPTION, "NFO") == 0
     check_invariants(option.timeline, strategy="TwoLots")
+
+
+def test_a_crossed_stop_the_daily_loss_cancels_is_not_repriced_while_its_cancel_word_is_lost(
+    option,
+):
+    falls_to(option, 100.0)
+    # The tick through the stop also breaches the daily loss (65 x 20.00 = 1300): the
+    # engine cancels the stop for its exit, and the cancel's word is lost on the stream.
+    option.script.at(CROSSED_AT, option.fake.faults.drop_next_order_update)
+    outcome = option.run(OptionHold, max_daily_loss=1000)
+
+    assert option.fake.log.calls("modifyorder") == []
+    assert sells(option) == [
+        (OPTION_LOT, "SL", 0, "cancelled"),
+        (OPTION_LOT, "MARKET", OPTION_LOT, "complete"),
+    ]
+    # A read of the stop finds its cancel a second after the cancel was accepted, so the
+    # exit does not wait for the 30-second safety poll.
+    exit_ = next(o for o in option.orders() if o.price_type == "MARKET" and o.action == "SELL")
+    assert exit_.placed_ns < CROSSED_AT + 5 * NS
+    assert option.fake.position(OPTION, "NFO") == 0
+    assert outcome.open_positions == ()
+    check_invariants(option.timeline, strategy="OptionHold")

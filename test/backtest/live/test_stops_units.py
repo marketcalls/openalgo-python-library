@@ -1,6 +1,7 @@
 """The stops supervisor's parts on their own (`_live/_stops_kernel.py`, `_stops_cover.py`,
-`_stops_orders.py`; 16-session-design 4.2 and 4.6): the marketable limit of the price
-rule, the unprotected windows, and what the supervisor knows of a leg's orders.
+`_stops_orders.py`, `stops.py`; 16-session-design 4.2 and 4.6): the marketable limit of
+the price rule, the unprotected windows, what the supervisor knows of a leg's orders, and
+the deadline of a stop never confirmed under protect by state.
 
 The marketable limit is checked against the kernel's own option stop (`test_kernel_legs`'
 session, no server): both use the one 5 percent buffer.
@@ -19,6 +20,7 @@ from openalgo.backtest._live._stops_orders import LegOrders, Sent
 from openalgo.backtest._live._types import Mode, OrderIntent, OrderStatus, OrderUpdate, Purpose
 from openalgo.backtest._live._venue_requests import PlaceRequest, Priority
 from openalgo.backtest._live.inbox import NotSentReason
+from openalgo.backtest._live.stops import UNPROTECTED_EXIT_AFTER_S, StopsSupervisor
 
 LEG = ("ema_cross", "SBIN", "NSE")
 
@@ -206,3 +208,94 @@ def test_a_flat_leg_is_no_longer_guarded():
     leg.flat()
 
     assert (leg.guarded, leg.unbound_add_units) == (False, 0)
+
+
+class _Engine:
+    """A kernel session whose leg stop o2 (an SL-M of 10 units) works, no cancel decided."""
+
+    def order(self, kernel_order):
+        return {"order_type": "SL-M", "quantity_units": 10, "filled_units": 0}
+
+    def live_state(self):
+        return {"desk": {"cancelling": []}}
+
+
+class _Venue:
+    def order_id_of(self, kernel_order):
+        return "S1"
+
+
+class _Trader:
+    """A strategy holding 10 SBIN with its stop o2 working."""
+
+    name, symbol, exchange, finished = "ema_cross", "SBIN", "NSE", False
+
+    def __init__(self):
+        self.engine, self.venue = _Engine(), _Venue()
+        self.exits_asked: list[str] = []
+
+    def open_units(self):
+        return 10.0
+
+    def working(self):
+        return [2]
+
+    def exit_orders(self):
+        return [2]
+
+    def request_exit(self, reason):
+        self.exits_asked.append(reason)
+        return "waits_for_cancels"
+
+
+class _Worker:
+    busy_since_ns, raw_pending = None, 0
+
+
+class _Exits:
+    """No exit of the session's retry schedule."""
+
+    def halt(self, strategy=None):
+        pass
+
+    def owns(self, name):
+        return False
+
+
+class _Session:
+    """A session of one strategy, its order worker idle; `clock` is its time."""
+
+    locked, inbox_waiting, control = False, 0, None
+
+    def __init__(self):
+        self.parts = type("Parts", (), {"worker": _Worker()})()
+        self.exits = _Exits()
+        self.traders = (_Trader(),)
+        self.alerts: list[str] = []
+        self.clock = 0
+
+    def now(self):
+        return self.clock
+
+    def event(self, kind, **fields):
+        pass
+
+    def alert(self, kind, text):
+        self.alerts.append(text)
+
+
+def test_the_unconfirmed_stop_deadline_asks_no_exit_of_a_leg_protected_by_state():
+    session = _Session()
+    (trader,) = session.traders
+    stops = StopsSupervisor(session)
+    stops.handed([PlaceRequest(1, 2, intent(Purpose.STOP), Priority.PROTECT)])
+    stops.leg(trader).placed(2, Outcome.ACCEPTED, "S1", 0)
+    stops.protection.begin([trader], 0)
+
+    session.clock = round((UNPROTECTED_EXIT_AFTER_S + 1) * 10**9)
+    stops.duties(session.clock)
+
+    assert trader.exits_asked == []
+    assert any(
+        "not confirmed" in text and "check the order book" in text for text in session.alerts
+    )

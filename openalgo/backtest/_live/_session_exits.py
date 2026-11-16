@@ -19,12 +19,15 @@ A partial exit is not asked for again (decided for unit 10): `request_exit`, the
 retry call, exits the whole position, so a rejected sale of part of it (a `reduce()`, an
 EXIT order for fewer units than the position, a partial target) stays rejected, as the
 strategy saw it in `on_order`, with the REJECT alert sent for every rejection. Turning
-it into a full exit would close more than the strategy asked for, while nothing is left
-unprotected: the kernel cut the stop down only for the exit's units, and puts it back
-over the whole position once the exit has ended unfilled (R4), so the leg's stop, its
-other targets and its trail still hold it. After the second Ctrl+C, or once protect by
-state holds a leg (`halt`), no exit is asked for again: the session only waits for what
-is in flight (16-session-design 3.3).
+it into a full exit would close more than the strategy asked for. The units it was for
+stay protected: when the partial exit alone was working, the kernel cut the stop down
+only for its units and puts it back over the whole position once it has ended unfilled
+(R4); when it and the exits beside it closed the whole position (two targets on one
+tick, a `reduce()` then an `exit()`), the kernel cancelled the stop for them and does
+not place it again, so the stops supervisor does (`_stops_bare`: `protect`, R7, with an
+ERROR alert) once the leg holds units with nothing working to close them. After the
+second Ctrl+C, or once protect by state holds a leg (`halt`), no exit is asked for again:
+the session only waits for what is in flight (16-session-design 3.3).
 
 Times are UTC nanoseconds. Used by the loop only.
 """

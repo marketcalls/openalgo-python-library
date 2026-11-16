@@ -225,7 +225,7 @@ class Session:
             released = self._close_slices(self.now())
             for trader in self.traders:
                 trader.drive(deciding=self.deciding)
-        self.stops.duties(self.now())
+        self.stops.duties(self.now(), protecting=protecting)
         # The commands are taken after the duties, so an entry the safe stop cancels in
         # the step that decided it is withdrawn before it reaches the worker.
         if self.control is not None and not protecting:

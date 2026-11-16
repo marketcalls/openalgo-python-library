@@ -261,6 +261,38 @@ def test_a_rejected_partial_target_is_not_sent_again_and_the_stop_covers_the_pos
     check_invariants(world.timeline, strategy="TwoTargets")
 
 
+def test_a_rejected_partial_target_beside_a_full_exit_places_the_stop_again(world, caplog):
+    # SBIN jumps to 502.00: both targets fire on one tick, so the engine cancels the stop
+    # for the two sales, and the first sale is refused. The second fills: 5 units are left
+    # with no stop and nothing working to close them.
+    at_price(world, ist(14, 44), 502.0)
+    world.script.at(
+        ist(14, 43, 50), lambda: world.fake.reject_next("RMS: blocked", price_type="MARKET")
+    )
+    stops_at = []
+    world.script.at(
+        ist(14, 44, 30),
+        lambda: stops_at.append(
+            [(o.quantity, o.status) for o in world.orders() if o.price_type == "SL-M"]
+        ),
+    )
+    world.stop_at(ist(14, 45))
+    outcome = world.run(TwoTargets, on_stop="keep")
+
+    assert sells(world) == [
+        (10, "SL-M", "cancelled"),
+        (5, "MARKET", "rejected"),
+        (5, "MARKET", "complete"),
+        (5, "SL-M", "trigger pending"),
+    ]
+    assert stops_at == [[(10, "cancelled"), (5, "trigger pending")]]
+    assert any(
+        "no stop at the broker" in t and "placed again" in t for t in alerts(caplog, "error")
+    )
+    assert outcome.open_positions[0].stop_confirmed
+    check_invariants(world.timeline, strategy="TwoTargets")
+
+
 # ----- trailing: modifying the broker's stop ----------------------------------------------
 
 

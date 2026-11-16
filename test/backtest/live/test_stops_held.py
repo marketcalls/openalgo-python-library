@@ -17,11 +17,14 @@ from fake_openalgo.fixtures import *  # noqa: F403
 from session_samples import NS, PRICE, alerts, ist
 from stops_samples import StopHold, TargetHold, at_price, check_invariants, events, stop_world
 
+from openalgo.backtest._live._order_state import HeldFill
 from openalgo.backtest._live._stops_held import (
     HELD_CANCEL_DECIDE_AFTER_S,
     HELD_FILL_RELEASE_AFTER_S,
+    HeldWords,
 )
 from openalgo.backtest._live._types import LOGGER_NAME
+from openalgo.backtest._live._worker_queue import ReadPositions, ReleaseFill
 
 #: The tick at which SBIN reaches `TargetHold`'s target.
 TARGET_TICK = ist(14, 44, 5)
@@ -130,3 +133,75 @@ def test_a_held_cancel_the_position_book_cannot_tell_is_alerted_and_read_again(w
     assert any("cancelled, its fills not confirmed" in t for t in alerts(caplog, "error"))
     assert world.fake.position("SBIN", "NSE") == 0
     check_invariants(world.timeline, strategy="TargetHold")
+
+
+class _Venue:
+    """The venue map of one stop: kernel order 2 is broker order "S1"."""
+
+    def kernel_order_of(self, order_id):
+        return 2 if order_id == "S1" else None
+
+    def order_id_of(self, kernel_order):
+        return "S1" if kernel_order == 2 else ""
+
+
+class _Engine:
+    """A kernel session holding 10 units, its stop of 10 with `filled_units` filled."""
+
+    def __init__(self):
+        self.filled_units = 0
+
+    def order(self, kernel_order):
+        return {
+            "quantity_units": 10,
+            "filled_units": self.filled_units,
+            "limit_rupees": 0.0,
+            "trigger_rupees": 497.0,
+        }
+
+
+class _Trader:
+    name, symbol, exchange = "StopHold", "SBIN", "NSE"
+
+    def __init__(self):
+        self.venue, self.engine = _Venue(), _Engine()
+
+    def open_units(self):
+        return 10.0 - self.engine.filled_units
+
+
+class _Session:
+    """What the held words read of a session: one strategy, its last tick, and the
+    requests handed to the order worker."""
+
+    def __init__(self):
+        self.traders = (_Trader(),)
+        self.last_tick = {}
+        self.handed = []
+
+    def hand_over(self, requests):
+        self.handed.extend(requests)
+
+    def event(self, kind, **fields):
+        pass
+
+    def alert(self, kind, text):
+        pass
+
+
+def test_a_held_cancel_after_a_held_fill_of_the_same_order_was_released_is_still_decided():
+    session = _Session()
+    (trader,) = session.traders
+    held = HeldWords(session)
+    # The stop's fill of 4 units has no price: released at its estimate after 2 s.
+    held.update((HeldFill("S1", 4, 0, 0.0),))
+    held.due(round(HELD_FILL_RELEASE_AFTER_S * NS))
+    assert [type(r) for r in session.handed] == [ReleaseFill]
+    trader.engine.filled_units = 4
+    # Later the stop is cancelled for an exit; its cancel waits for the tradebook (the
+    # worker's held list goes from the one word to the other between two of its posts).
+    session.handed.clear()
+    held.update((HeldFill("S1", 4, 100 * NS, 0.0),))
+    for second in range(100, 130):
+        held.due(second * NS)
+    assert ReadPositions() in session.handed

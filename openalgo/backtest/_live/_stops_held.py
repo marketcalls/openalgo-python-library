@@ -19,8 +19,10 @@ protect.
   read, an ERROR alert at once and a read again.
 
 A word is held's when its filled units are above what the kernel has of the order (a
-fill), else its terminal word waits (a cancel). Times are UTC nanoseconds, prices
-rupees, quantities units. Used by the loop only.
+fill), else its terminal word waits (a cancel). Each held word is released once: it is
+known by its order and the time it was first held, so a later word of the same order (a
+fill released, then the order's cancel held) is a word of its own. Times are UTC
+nanoseconds, prices rupees, quantities units. Used by the loop only.
 """
 
 from __future__ import annotations
@@ -72,6 +74,8 @@ class HeldWords:
     def __init__(self, session: Any) -> None:
         self._session = session
         self._held: tuple[HeldFill, ...] = ()
+        # The held words released, by order ID and the time each was first held; kept
+        # while the worker's held list still shows them (it catches up a step later).
         self._released: set[tuple[str, int]] = set()
         self._read_due_ns: int | None = None
         self._alerted: set[str] = set()
@@ -81,6 +85,7 @@ class HeldWords:
     def update(self, held: tuple[HeldFill, ...]) -> None:
         """The order path's held words, as the worker last posted them."""
         self._held = held
+        self._released &= {_key(word) for word in held}
 
     def held_cancel(self, trader: Trader, kernel_order: int) -> bool:
         """True while the order's cancel is held (it is gone at the broker)."""
@@ -118,9 +123,8 @@ class HeldWords:
     def _waits(self, word: HeldFill, now_ns: int) -> bool:
         """Whether a held cancel past its wait is still to be decided: not released yet
         (the worker's next word of the held list drops it)."""
-        released = any(order_id == word.order_id for order_id, _ in self._released)
         waited = now_ns - word.held_since_ns >= round(HELD_CANCEL_DECIDE_AFTER_S * _NS)
-        return waited and not released
+        return waited and _key(word) not in self._released
 
     def positions(self, message: PositionRows) -> None:
         """A position-book read: decide each held cancel past its wait."""
@@ -155,9 +159,9 @@ class HeldWords:
     def _release(
         self, trader: Trader, kernel_order: int, word: HeldFill, filled: int, now_ns: int
     ) -> None:
-        if (word.order_id, filled) in self._released:
+        if _key(word) in self._released:
             return
-        self._released.add((word.order_id, filled))
+        self._released.add(_key(word))
         price = self._price(trader, kernel_order, word)
         if self._is_cancel(trader, word):
             request: Any = ReleaseCancel(word.order_id, filled, price)
@@ -213,6 +217,11 @@ class HeldWords:
     def _leg_of(self, word: HeldFill) -> str | None:
         owner = self._owner(word.order_id)
         return None if owner is None else owner[0].name
+
+
+def _key(word: HeldFill) -> tuple[str, int]:
+    """What tells one held word from another: its order and when it was first held."""
+    return word.order_id, word.held_since_ns
 
 
 def _net_units(answer: Mapping[str, Any], symbol: str, exchange: str) -> int | None:

@@ -1,8 +1,9 @@
 """Protect by state, on the fake OpenAlgo (`_live/_stops_protect.py`, `_live/_session_stop.py`,
 `_live/session.py`; 16-session-design 3.3, 3.5 and 7.2 rows F57 (its variant), F74, F77
 and F80): when a session must end with a leg whose stop the broker holds, it never leaves
-the leg with neither a stop nor an exit while one can be sent, and never has a stop and
-an exit working at once.
+the leg with neither a stop nor an exit while one can be sent, never has a stop and an
+exit working at once, finishes placing a stop it began within its bounded wait, and
+never reports a stop whose cancel has no answer as confirmed.
 
 `StopHold` buys 10 SBIN at 14:42:01 IST with a stop at 497.00, `TargetHold` with a target
 at 502.00 too, which SBIN reaches at 14:44:05 (`stops_samples`).
@@ -23,7 +24,7 @@ from stops_samples import (
     stop_world,
 )
 
-from openalgo.backtest._live import _session_trader, _stops_protect
+from openalgo.backtest._live import _session_trader, _stops_price, _stops_protect
 from openalgo.backtest._live._session_exits import EXIT_ATTEMPTS
 from openalgo.backtest._live._session_stop import (
     SAFE_STOP_FLATTEN_S,
@@ -235,3 +236,149 @@ def test_F80_an_ambiguous_stop_placement_leaves_the_leg_marked_and_sends_nothing
     (left,) = outcome.open_positions
     assert "ambiguous stop order" in left.note and not left.stop_confirmed
     assert "ambiguous order" in [w.reason for w in outcome.unprotected]
+
+
+def test_two_ctrl_c_with_the_stops_cancel_word_lost_place_the_stop_again_before_the_end(world):
+    # The flatten cancels the stop; the broker's word of the cancel is lost on the stream,
+    # so only a read of the order tells the session that the stop is gone.
+    world.script.at(ist(14, 43, 35), world.fake.faults.drop_next_order_update)
+    world.stop_at(ist(14, 43, 35))
+    world.stop_at(ist(14, 43, 35))
+    outcome = world.run(StopHold)
+
+    assert kinds(world) == [
+        ("BUY", "MARKET", "complete"),
+        ("SELL", "SL-M", "cancelled"),
+        ("SELL", "SL-M", "trigger pending"),
+    ]
+    (left,) = outcome.open_positions
+    assert (left.stop_order_id, left.stop_confirmed) == (world.orders()[-1].order_id, True)
+    # The loop's step that ends the wait still waits its turn (1 s here) before the close.
+    assert outcome.ended_ns <= ist(14, 43, 35) + SAFE_STOP_STATE_WAIT_S * NS + NS
+    check_invariants(world.timeline, strategy="StopHold")
+
+
+def test_a_stop_whose_cancel_has_no_word_at_the_end_is_not_reported_confirmed(world):
+    def cancel_word_lost_and_reads_failing():
+        world.fake.faults.drop_next_order_update()
+        for _ in range(20):
+            world.fake.faults.gateway_error("orderstatus", status=503)
+
+    world.script.at(ist(14, 43, 35), cancel_word_lost_and_reads_failing)
+    world.stop_at(ist(14, 43, 35))
+    world.stop_at(ist(14, 43, 35))
+    outcome = world.run(StopHold)
+
+    cancelled = world.orders()[1]
+    assert (cancelled.price_type, cancelled.status) == ("SL-M", "cancelled")
+    (left,) = outcome.open_positions
+    assert not left.stop_confirmed
+    assert f"stop {cancelled.order_id} being cancelled" in left.note
+    assert "confirmed at the broker" not in left.note
+    assert "check the order book" in left.note
+
+
+def test_a_stop_placed_again_in_the_last_step_of_the_second_ctrl_c_wait_reaches_the_broker(
+    world,
+):
+    # The flatten's cancel of the stop is accepted at 14:43:31; its word lags on the stream
+    # until 14:43:33.5 and the reads of the order fail, so the stop is placed again in the
+    # step at 14:43:35 that ends the second Ctrl+C's wait of 5 seconds: it must still be
+    # sent, and its first word taken.
+    def stream_lags_and_reads_fail():
+        world.fake.faults.hold_order_updates()
+        for _ in range(5):
+            world.fake.faults.gateway_error("orderstatus", status=503)
+
+    world.script.at(ist(14, 43, 29), stream_lags_and_reads_fail)
+    world.script.at(ist(14, 43, 33) + NS // 2, world.fake.faults.release_order_updates)
+    world.stop_at(ist(14, 43, 30))
+    world.stop_at(ist(14, 43, 30))
+    outcome = world.run(StopHold)
+
+    assert kinds(world) == [
+        ("BUY", "MARKET", "complete"),
+        ("SELL", "SL-M", "cancelled"),
+        ("SELL", "SL-M", "trigger pending"),
+    ]
+    (left,) = outcome.open_positions
+    assert (left.stop_order_id, left.stop_confirmed) == (world.orders()[-1].order_id, True)
+    check_invariants(world.timeline, strategy="StopHold")
+
+
+def test_a_supervisor_part_that_fails_does_not_keep_the_emergency_stop_from_protecting(
+    world, monkeypatch, caplog
+):
+    at_price(world, ist(14, 44), 502.0)
+    original = _stops_price.PriceRule.due
+
+    def due(self, now_ns):
+        (trader,) = self._session.traders
+        stop = trader.engine.order(2)
+        if stop is not None and stop["status"] == "Canceled":
+            raise RuntimeError("a defect of the price rule")
+        return original(self, now_ns)
+
+    monkeypatch.setattr(_stops_price.PriceRule, "due", due)
+    with pytest.raises(RuntimeError, match="a defect of the price rule"):
+        world.run(TargetHold)
+
+    assert kinds(world) == [
+        ("BUY", "MARKET", "complete"),
+        ("SELL", "SL-M", "cancelled"),
+        ("SELL", "SL-M", "trigger pending"),
+    ]
+    stopped = [t for t in alerts(caplog, "error") if "the session stops on an error" in t]
+    assert len(stopped) == 1
+    assert f"stop {world.orders()[-1].order_id} confirmed at the broker" in stopped[0]
+    check_invariants(world.timeline, strategy="TargetHold")
+
+
+#: The tick at which SBIN reaches `TargetHold`'s target: the engine cancels the stop.
+TARGET_TICK = ist(14, 44, 5)
+
+
+def test_keep_while_the_stops_cancel_word_is_lost_places_the_stop_again(world):
+    at_price(world, ist(14, 44), 502.0)
+    world.script.at(TARGET_TICK, world.fake.faults.drop_next_order_update)
+    world.stop_at(TARGET_TICK + NS // 2)
+    outcome = world.run(TargetHold, on_stop="keep")
+
+    assert kinds(world) == [
+        ("BUY", "MARKET", "complete"),
+        ("SELL", "SL-M", "cancelled"),
+        ("SELL", "SL-M", "trigger pending"),
+    ]
+    (left,) = outcome.open_positions
+    assert (left.stop_order_id, left.stop_confirmed) == (world.orders()[-1].order_id, True)
+    check_invariants(world.timeline, strategy="TargetHold")
+
+
+def test_the_emergency_stop_while_the_stops_cancel_word_is_lost_places_the_stop_again(
+    world, monkeypatch, caplog
+):
+    at_price(world, ist(14, 44), 502.0)
+    world.script.at(TARGET_TICK, world.fake.faults.drop_next_order_update)
+    original = _session_trader.Trader.drive
+    raised = []
+
+    def drive(self, *, deciding):
+        cancelling = self.engine.live_state()["desk"]["cancelling"]
+        if not raised and 2 in cancelling:
+            raised.append(True)
+            raise RuntimeError("a defect of the loop")
+        return original(self, deciding=deciding)
+
+    monkeypatch.setattr(_session_trader.Trader, "drive", drive)
+    with pytest.raises(RuntimeError, match="a defect of the loop"):
+        world.run(TargetHold)
+
+    assert kinds(world) == [
+        ("BUY", "MARKET", "complete"),
+        ("SELL", "SL-M", "cancelled"),
+        ("SELL", "SL-M", "trigger pending"),
+    ]
+    stopped = [t for t in alerts(caplog, "error") if "the session stops on an error" in t]
+    assert len(stopped) == 1
+    assert f"stop {world.orders()[-1].order_id} confirmed at the broker" in stopped[0]
+    check_invariants(world.timeline, strategy="TargetHold")

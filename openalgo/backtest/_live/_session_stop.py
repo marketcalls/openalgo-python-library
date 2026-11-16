@@ -18,18 +18,19 @@ time that end it (`Control`). The common close is `_session_close`.
   toward its exit every `UNPROTECTED_REMINDER_EVERY_S`, until every leg is flat or
   protected, a second Ctrl+C, or the exchange's close plus `SESSION_END_GRACE_S`. With
   `"keep"` every leg is protected by state at once, and the session waits at most
-  `SAFE_STOP_STATE_WAIT_S` for the cancels and the stops' words, then leaves the
-  positions open with their broker-held stops.
+  `SAFE_STOP_STATE_WAIT_S` for the cancels and the stops' words (longer only to finish a
+  step of protect by state's own, `Protection.may_end`), then leaves the positions open
+  with their broker-held stops.
 - **The second Ctrl+C** (3.3 step 4) asks for nothing more (no exit, no retry: the
   schedule is halted) and protects every leg by state. It waits at most
-  `SAFE_STOP_STATE_WAIT_S` for each leg to be protected, and for the orders of a leg with
-  no stop rule to end (with "flatten" every working order, the exits in flight among
-  them; with "keep" the entries it cancelled), so a fill on the way is known, then
-  prints one line per leg left open, naming its stop and an exit still in flight, and
-  stops. Two requests the loop sees at once act as the first followed by the second
-  (decided for unit 10: how fast the keys were pressed must not change the outcome),
-  so the flatten's exits are asked for and the second's bounded wait follows. After a
-  guard lock nothing can be sent: a first Ctrl+C stops at once.
+  `SAFE_STOP_STATE_WAIT_S` (bounded as with "keep") for each leg to be protected, and for
+  the orders of a leg with no stop rule to end (with "flatten" every working order, the
+  exits in flight among them; with "keep" the entries it cancelled), so a fill on the
+  way is known, then prints one line per leg left open, naming its stop and an exit
+  still in flight, and stops. Two requests the loop sees at once act as the first
+  followed by the second (decided for unit 10: how fast the keys were pressed must not
+  change the outcome), so the flatten's exits are asked for and the second's bounded
+  wait follows. After a guard lock nothing can be sent: a first Ctrl+C stops at once.
 - **The end of the day.** Once every strategy is past its MIS square-off, flat and with
   nothing working, the session ends ("session_end"). From the square-off plus
   `SQUARE_OFF_VERIFY_AFTER_S` a strategy not flat gets the ERROR alert "still not flat
@@ -198,8 +199,7 @@ class Control:
     def _stop_due(self, now_ns: int) -> None:
         traders = self._session.traders
         if self._on_stop == "keep":
-            waiting = any(self._waiting(trader) for trader in traders)
-            if not waiting or now_ns >= self._stopping_ns + _s(SAFE_STOP_STATE_WAIT_S):
+            if self._wait_over(now_ns, self._stopping_ns):
                 self._left_open()
                 self.verdict = self._stopped_by()
             return
@@ -222,11 +222,19 @@ class Control:
         """After the second Ctrl+C: once every leg is protected by state and the orders
         the stop waits on have ended, or `SAFE_STOP_STATE_WAIT_S` after it, list each leg
         left open and stop."""
-        waiting = any(self._waiting(trader) for trader in self._session.traders)
-        if waiting and now_ns < self._second_ns + _s(SAFE_STOP_STATE_WAIT_S):
+        if not self._wait_over(now_ns, self._second_ns):
             return
         self._left_open()
         self.verdict = self._stopped_by()
+
+    def _wait_over(self, now_ns: int, since_ns: int) -> bool:
+        """Whether the bounded wait begun at `since_ns` is over: nothing waits any more,
+        or protect by state lets it end (`Protection.may_end`)."""
+        session = self._session
+        if not any(self._waiting(trader) for trader in session.traders):
+            return True
+        until_ns = since_ns + _s(SAFE_STOP_STATE_WAIT_S)
+        return session.stops.protection.may_end(now_ns, until_ns)
 
     def _protected(self, trader: Trader) -> bool:
         """True once protect by state holds the leg and its stop covers it."""

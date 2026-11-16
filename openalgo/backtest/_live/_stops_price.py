@@ -18,6 +18,10 @@ terms until `apply_modify`):
   exited at a marketable LIMIT (`request_exit(stop_unfilled, limit_rupees=...)`), with an
   ERROR alert; the owner cancels the stop first, and that LIMIT exit is repriced by this
   same rule while it does not fill (its clock runs from its acceptance).
+- An order whose cancel the kernel has decided (its exit owner's, for an exit of the
+  position) is neither repriced nor fallen back from: the kernel takes no modify of it,
+  and the cancel's word decides. Its clock is kept: a cancel refused lets the rule run on
+  at once, an order ended forgets it.
 
 Times are UTC nanoseconds, prices rupees. Used by the loop only.
 """
@@ -32,7 +36,7 @@ from .._engine import call
 from .._layout import NANOS_PER_SECOND
 from ._plan_catch_up import INSTRUMENT
 from ._session_trader import Trader
-from ._stops_kernel import marketable_limit, order_of, reprice, tick_size
+from ._stops_kernel import cancelling, marketable_limit, order_of, reprice, tick_size
 from ._types import LOGGER_NAME, AlertKind
 from ._venue_requests import LIVE_PRODUCT, STOP_TYPES
 
@@ -108,7 +112,7 @@ class PriceRule:
     def refused(self, trader: Trader, kernel_order: int) -> None:
         """A reprice of the order was refused: exit the position at a limit now."""
         clock = self._clocks.get((trader.name, kernel_order))
-        if clock is not None:
+        if clock is not None and kernel_order not in cancelling(trader):
             self._fall_back(trader, clock, "its reprice was refused")
 
     def due(self, now_ns: int) -> None:
@@ -118,6 +122,8 @@ class PriceRule:
             if clock.due_ns > now_ns:
                 continue
             trader = self._session.trader_named(clock.strategy)
+            if clock.kernel_order in cancelling(trader):
+                continue
             limit = self._limit(trader, clock.kernel_order)
             if limit is None:
                 del self._clocks[key]

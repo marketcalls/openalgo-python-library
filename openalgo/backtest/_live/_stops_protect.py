@@ -18,7 +18,12 @@ one can be sent. The rule throughout: never a working exit and a new stop at onc
 It begins for every leg at the second Ctrl+C, at the safe stop's timeout, with
 `on_stop="keep"`, and in the emergency stop (`protect_and_wait`). From then on the leg's
 exits are not asked for again and its refused cancels are not sent again. The caller
-bounds the wait; `settled` says when a leg needs nothing more.
+bounds the wait; `settled` says when a leg needs nothing more, and `may_end` when a
+bounded wait may end: at its bound, unless a step of protect by state's own is left
+(`acting`: an exit to withdraw, a stop to place, a stop placed that the order worker
+has not answered, or whose first word it has not passed on yet), which the wait
+finishes for at most `PROTECT_FINISH_WAIT_S` more. A stop placed in the wait's last step
+would otherwise be handed to a worker that closes before it sends it.
 
 Times are UTC nanoseconds, quantities units. Used by the loop only.
 """
@@ -32,7 +37,7 @@ from typing import Any
 from .._layout import NANOS_PER_SECOND
 from ._session_trader import Trader
 from ._stops_kernel import PROTECT_PLACED, cancelling, order_of, protect
-from ._stops_orders import IN_FLIGHT, LegOrders
+from ._stops_orders import IN_FLIGHT, LegOrders, Sent
 from ._types import LOGGER_NAME, AlertKind
 from ._venue_requests import STOP_TYPES
 
@@ -43,10 +48,16 @@ FLAT, NO_STOP_RULE, PROTECTED = "flat", "no stop rule", "protected"
 CANCEL_WAITS, STOP_WAITS = "cancel waits", "stop waits"
 EXIT_UNSENT, EXIT_IN_FLIGHT, EXIT_WORKING = "exit unsent", "exit in flight", "exit working"
 NO_COVER = "no cover"
+#: Seconds a bounded wait goes on past its bound while a step of protect by state's own
+#: is left (module docstring): the order worker sends a protective placement within a
+#: step, unless it is inside a call, which this bounds.
+PROTECT_FINISH_WAIT_S = 5.0
 #: The legs that need nothing more.
 _SETTLED = frozenset({FLAT, NO_STOP_RULE, PROTECTED})
 #: What `protect` answers when nothing can be placed for the leg.
 _GIVEN_UP = frozenset({"no_stop_level", "market_closed", "flat"})
+
+_FINISH_NS = round(PROTECT_FINISH_WAIT_S * NANOS_PER_SECOND)
 
 
 class Protection:
@@ -90,6 +101,45 @@ class Protection:
         can be placed for it."""
         state = self.state(trader)
         return state in _SETTLED or (state == NO_COVER and self._gave_up(trader))
+
+    def acting(self, trader: Trader) -> bool:
+        """True while protect by state holds the leg and has a step of its own left, with
+        no answer of the broker to wait for: an exit to withdraw, a stop to place, a stop
+        placed and not answered yet by the order worker, or one accepted whose first word
+        may be among the words the worker or the loop has not taken yet."""
+        if trader.name not in self._protecting:
+            return False
+        state = self.state(trader)
+        if state == EXIT_UNSENT or (state == NO_COVER and not self._gave_up(trader)):
+            return True
+        if state != STOP_WAITS:
+            return False
+        leg = self._stops.leg(trader)
+        stop = leg.orders.get(leg.stop) if leg.stop is not None else None
+        if stop is not None and leg.stop in trader.working():
+            return stop.state is Sent.HANDED or (stop.state is Sent.BOUND and self._words_wait())
+        return any(
+            kernel_order not in leg.orders and _is_stop(trader, kernel_order)
+            for kernel_order in trader.exit_orders()
+        )
+
+    def _words_wait(self) -> bool:
+        """Whether order words may wait to be taken: the worker is inside a call, holds
+        words it has not posted, or the loop's inbox holds messages (as for the deadline
+        of a stop, `_stops_deadline`)."""
+        session = self._session
+        worker = session.parts.worker
+        return worker.busy_since_ns is not None or bool(worker.raw_pending or session.inbox_waiting)
+
+    def may_end(self, now_ns: int, until_ns: int) -> bool:
+        """Whether a bounded wait due to end at `until_ns` may end at `now_ns`: from
+        `until_ns` once no leg has a step of protect by state's own left (`acting`), and
+        `PROTECT_FINISH_WAIT_S` after it in any case."""
+        if now_ns < until_ns:
+            return False
+        if now_ns >= until_ns + _FINISH_NS:
+            return True
+        return not any(self.acting(trader) for trader in self._session.traders)
 
     def state(self, trader: Trader) -> str:
         """What the leg is now (module docstring)."""
@@ -171,14 +221,15 @@ def _is_stop(trader: Trader, kernel_order: int) -> bool:
 def protect_and_wait(session: Any, wait_s: float) -> None:
     """The emergency stop's protect by state (16-session-design 3.5): every leg protected
     by state, then the loop turns with no slice released and no strategy called until
-    each leg is settled or `wait_s` seconds have passed."""
-    stops = session.stops
-    stops.protection.begin(session.traders, session.now())
+    each leg is settled or the wait of `wait_s` seconds may end (`may_end`)."""
+    protection = session.stops.protection
+    protection.begin(session.traders, session.now())
     until_ns = session.now() + round(wait_s * NANOS_PER_SECOND)
-    while session.now() < until_ns and not all(
-        stops.protection.settled(trader) for trader in session.traders
-    ):
-        session.step(until_ns, protecting=True)
+    while not all(protection.settled(trader) for trader in session.traders):
+        now_ns = session.now()
+        if protection.may_end(now_ns, until_ns):
+            return
+        session.step(until_ns if now_ns < until_ns else until_ns + _FINISH_NS, protecting=True)
 
 
 __all__ = [
@@ -190,6 +241,7 @@ __all__ = [
     "NO_COVER",
     "NO_STOP_RULE",
     "PROTECTED",
+    "PROTECT_FINISH_WAIT_S",
     "STOP_WAITS",
     "Protection",
     "protect_and_wait",
