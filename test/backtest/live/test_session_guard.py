@@ -10,6 +10,7 @@ at Ctrl+C with what it knew.
 
 from __future__ import annotations
 
+import json
 import logging
 
 import pytest
@@ -104,8 +105,13 @@ def test_F70_a_sandbox_session_then_a_live_one_on_one_journal_keep_their_own_int
     assert live.mode == "live"
     assert live.paths["journal"] == sandbox.paths["journal"]
     assert [order.action for order in world.fake.orders(Mode.LIVE)] == ["BUY", "SELL"]
-    intents = {call.detail["request"]["strategy"] for call in world.fake.log.calls("placeorder")}
-    assert intents == {"BuyAndHold"}
+    with open(live.paths["events"], encoding="utf-8") as stream:
+        sent = [json.loads(line) for line in stream if '"kind": "sent"' in line]
+    entries = {event["intent_id"] for event in sent if event["intent_id"].endswith("-o1")}
+    assert entries == {
+        "20261116-sandbox-1-BuyAndHold-o1",
+        "20261116-live-1-BuyAndHold-o1",
+    }
 
 
 def test_F84_a_hung_guard_read_does_not_hold_back_an_exit_that_is_due(world, caplog):

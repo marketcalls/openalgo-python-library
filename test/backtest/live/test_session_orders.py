@@ -167,3 +167,29 @@ def _event_time(outcome, kind: str) -> int:
             if event["kind"] == kind:
                 return event["ts_ns"]
     raise AssertionError(f"no {kind} event")
+
+
+def test_F60_an_entry_the_book_cannot_tell_apart_locks_the_instrument(world, caplog):
+    world.fake.faults.bad_gateway_page("placeorder", reached_broker=True)
+    other = world.fake.client()
+
+    def same_order_by_another_client():
+        # The same order, under the same strategy name, right after the session's.
+        other.placeorder(
+            strategy="BuyAndHold",
+            symbol="SBIN",
+            action="BUY",
+            exchange="NSE",
+            price_type="MARKET",
+            product="MIS",
+            quantity=10,
+        )
+
+    world.script.at(ist(14, 42, 2) + NS // 2, same_order_by_another_client)
+    outcome = world.run(BuyAndHold)
+    ambiguous = [text for text in alerts(caplog, "error") if "cannot be told apart" in text]
+    assert len(ambiguous) == 1
+    # The session's placement and the other client's, and nothing more afterwards.
+    assert len(placements(world)) == 2
+    assert placements(world, "SELL") == []
+    assert outcome.outputs["BuyAndHold"]["orders"]["status"] == ["Submitted"]

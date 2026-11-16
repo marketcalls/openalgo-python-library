@@ -103,7 +103,7 @@ def test_F33_a_fill_reported_at_price_0_is_priced_from_the_tradebook(world):
     world.fake.faults.zero_price_next_fill()
     outcome = world.run(BuyAndHold)
     assert fills_of(outcome)[0] == (10.0, 500.0)
-    assert fill_events(outcome)[0]["estimated"] is False
+    assert fill_events(outcome)[0]["derived_from_average"] is False
 
 
 def test_F59_another_clients_orders_on_the_stream_change_nothing(world, baseline):

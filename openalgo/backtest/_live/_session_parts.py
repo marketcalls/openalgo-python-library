@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
-from typing import Any
 
+from ._alerts_logs import SessionLogs
 from ._journal_reads import JournalSession
 from ._preflight_plan import PreflightReport
+from ._shared_alerts import SharedAlerts
 from ._types import Mode
 from .alerts import Alerts
 from .clients import SessionClients
@@ -45,7 +46,7 @@ class StopFlag:
         return self._count
 
 
-@dataclass
+@dataclass(frozen=True)
 class SessionParts:
     """What the start sequence built (16-session-design 3.1 steps 1 to 11), owned by the
     loop: the resolved `spec` and the built `plan`, the `mode` adopted, the `broker` and
@@ -63,9 +64,9 @@ class SessionParts:
     report: PreflightReport
     clients: SessionClients
     guard: ModeGuard
-    alerts: Any
+    alerts: SharedAlerts
     sender: Alerts
-    logs: Any
+    logs: SessionLogs
     journal: Journal
     journal_session: JournalSession
     worker: OrderWorker

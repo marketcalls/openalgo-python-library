@@ -87,6 +87,7 @@ class News:
         self._session = session
         #: The fills the order path holds, as last posted (the stops supervisor's).
         self.held: tuple[Any, ...] = ()
+        self._ambiguous_seen: set[str] = set()
 
     def take(self, message: Message) -> None:
         """Handle one message. Raises WorkerFailedError for `WorkerFailed`."""
@@ -173,7 +174,7 @@ class News:
             units=increment.units,
             price=increment.price,
             source=update.source,
-            estimated=increment.derived_from_average,
+            derived_from_average=increment.derived_from_average,
         )
         self._session.alert(
             kind,
@@ -310,6 +311,11 @@ class News:
                 self._ambiguous(trader, intent, resolution.candidates)
 
     def _ambiguous(self, trader: Trader, intent: OrderIntent, candidates: tuple[str, ...]) -> None:
+        """Lock the strategy's entries and alert, once per intent: the resolver reports
+        the same intent at each book read while it stays unsettled."""
+        if intent.intent_id in self._ambiguous_seen:
+            return
+        self._ambiguous_seen.add(intent.intent_id)
         session = self._session
         if trader.lock(AMBIGUOUS_LOCK):
             session.event("lock", strategy=trader.name, reason=AMBIGUOUS_LOCK)
