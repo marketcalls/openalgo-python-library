@@ -225,6 +225,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   catches up from the open without deciding or sending anything. `max_daily_loss` must
   be given in the `bt.live` call: a limit set only on the strategy class is not taken as
   the live limit, and a class limit that differs from the call's stops the start.
+- The live session's order worker (private): the kernel's orders turned into OpenAlgo
+  requests and each answer into the one kernel call it calls for (the venue map); every
+  fill of the session's own orders reaches the kernel once, as the units newly filled
+  and their price, however many sources report it (the stream, a poll, the tradebook);
+  and one worker thread that sends the orders by priority (stops first), settles
+  unanswered or refused modifications and cancellations by reading the order, and keeps
+  the journal's record of each leg's stop.
+- The live session itself, first version (private; the public `bt.live` comes with the
+  session's result): the start sequence (mode, locks, logs, preflight, the order worker,
+  warm-up and catch-up, the countdown), the loop that closes bars by the clock, drives
+  each strategy's kernel session and hands its orders to the worker, the square-off by
+  the clock, the end of the day, and the common close. Ctrl+C is the safe stop: entries
+  locked and working entries cancelled, then with `on_stop="flatten"` (the default)
+  every open position exited and waited for, or with `on_stop="keep"` the positions left
+  open; a second Ctrl+C waits briefly for what is in flight and lists what is left open.
+  A journal failure stops the session at once; a strategy error stops it the safe way.
+  Strategies without leg rules only in this version: stops, targets and trailing come
+  with the stops supervisor.
 - A live session's state saved and restored in the kernel (no change to backtests):
   `Engine::live_state` writes the session's state as plain data that survives a JSON round
   trip (in Python a dict of None, bool, int, float, str, list and dict, written by

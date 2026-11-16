@@ -325,7 +325,7 @@ class DataWorker:
             self._inbox.put(DataFailed(read, str(failed)))
             rows = {}
         if rows:
-            self._inbox.put(Candles(read.symbol, read.exchange, tuple(rows.values()), self._now()))
+            self._inbox.put(Candles(read.symbol, read.exchange, tuple(rows.values()), now_ns))
         missing = tuple(opened for opened in read.slices if opened not in rows)
         key = (read.symbol, read.exchange)
         if missing and pending.reads + 1 < len(_OFFSETS_NS):

@@ -211,6 +211,15 @@ class LiveSeries:
             )
         self._missing.add(slot)
 
+    def no_trade(self, slice_open_ns: int) -> None:
+        """Lift the missing mark of today's slice opening at `slice_open_ns` without a
+        bar: the broker's candles show it had no trade (a read made after its last
+        candle check held a candle of a later slice and none of it), so the slice is a
+        minute without a trade, as a backtest runs a missing bar. A slice not marked
+        changes nothing. Raises ConfigError for an instant that opens no slice of the
+        day."""
+        self._missing.discard(self._slot(slice_open_ns))
+
     def missing_slices(self, ts_open_ns: int, ts_close_ns: int) -> tuple[int, ...]:
         """The opens (UTC nanoseconds) of the slices marked missing that open in
         [ts_open_ns, ts_close_ns), oldest first: a strategy bar with any is not decided

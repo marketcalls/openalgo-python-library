@@ -225,7 +225,9 @@ class WorkerFailed:
 @dataclass(frozen=True)
 class Candles:
     """Today's closed 1-minute broker candles of one instrument that were asked for, each
-    a row `bars.candle_bar` reads, and when they were read."""
+    a row `bars.candle_bar` reads, and `read_ns`, when the read began: a slice that
+    settled while the read was under way may be missing from it (the session plan's
+    catch-up counts from the start)."""
 
     symbol: str
     exchange: str
