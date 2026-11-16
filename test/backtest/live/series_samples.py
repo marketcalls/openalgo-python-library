@@ -4,9 +4,10 @@
 The bars: 1-minute NSE bars of the twelve sessions from 2025-06-16 to 2025-07-01, a
 seeded random walk from 500.00 (each bar opens at the last close, moves by a normal step
 of 0.40 rupees rounded to the paisa, high and low 0.30 beyond open and close, volume
-1,000 plus the bar's number in its session). The last session is the live day; the ones
-before it are the history. Nothing is fitted to the code: the expected values come from
-a backtest of the same bars, or from `openalgo.ta` on the expected closes.
+1,000 plus the bar's number in its session). The live day is the last session unless a
+test names another; the sessions before it are the history. Nothing is fitted to the
+code: the expected values come from a backtest of the same bars, or from `openalgo.ta`
+on the expected closes.
 """
 
 from __future__ import annotations
@@ -100,30 +101,39 @@ def live_bar(row: Any, source: str = "ticks") -> LiveBar:
     )
 
 
-def backtest_views(strategy: type, bars: pd.DataFrame, read: Callable) -> list[tuple]:
+def backtest_views(
+    strategy: type, bars: pd.DataFrame, read: Callable, day: dt.date = LIVE_DAY
+) -> list[tuple]:
     """(decision instant, bar, what `read(strategy)` returns) at every `on_bar` of a
-    backtest of `strategy` over `bars`, from the live day on."""
+    backtest of `strategy` on the live `day`, over the bars up to its end."""
     seen: list[tuple] = []
 
     class Recording(strategy):
         def on_bar(self, bar):
             seen.append((self._ctx.decided_at, tuple(bar), read(self)))
 
-    bt.backtest(Recording, data=user_frame(bars), start=LIVE_DAY, end=LIVE_DAY, **SETTINGS)
+    data = user_frame(pd.concat((before(bars, day), on_day(bars, day)), ignore_index=True))
+    bt.backtest(Recording, data=data, start=day, end=day, **SETTINGS)
     return seen
 
 
 class LiveRun:
-    """A strategy in a live run context on a kernel session of the live day, driven as
+    """A strategy in a live run context on a kernel session of the live `day`, driven as
     the session loop drives it (16-session-design 2.5 B and C): each closed slice's bar
     goes to the kernel and to the series, the slice is released, and the kernel's pauses
     reveal the bars and call `on_bar`. No server is involved."""
 
-    def __init__(self, strategy: type, history: pd.DataFrame, interval_minutes: int) -> None:
-        self.series = LiveSeries("SBIN", "NSE", LIVE_DAY, history=history)
+    def __init__(
+        self,
+        strategy: type,
+        history: pd.DataFrame,
+        interval_minutes: int,
+        day: dt.date = LIVE_DAY,
+    ) -> None:
+        self.series = LiveSeries("SBIN", "NSE", day, history=history)
         config = {
-            "first_day": to_day(LIVE_DAY),
-            "last_day": to_day(LIVE_DAY),
+            "first_day": to_day(day),
+            "last_day": to_day(day),
             "base_nanos": MINUTE_NS,
             "strategy_interval": interval_minutes * MINUTE_NS,
             "fill": "next_open",

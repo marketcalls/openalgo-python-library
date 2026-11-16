@@ -6,14 +6,20 @@ candles that replace tick-built bars, and missing-data marks.
   (the warm-up's broker candles, 08-live-trading section 5 rule 6) and today's closed
   base slices, each a bar built from ticks or a broker candle. A candle replaces the
   tick bar of its slice for later closes: the accepted candle feeds the strategy's
-  series while the kernel keeps the tick bar it ran (D27; merge notes, bars review). A
-  slice that closed while the feed was dead with no bar is marked missing until a bar
-  of it arrives (2.5 B and C).
-- `LiveStore` is the series at one interval as a strategy reads it: the history's bars,
-  then today's bars closed by the decision instant, built from the base bars with the
-  resampler a backtest builds its bars with (`resample.resample_bars`), so the store
-  equals a backtest's store of the same bars bar by bar. Its views and `self.I`
-  indicators (`_series_indicators`) recompute once per change of the store.
+  series while the kernel keeps the tick bar it ran (D27; merge notes, bars review). The
+  slice's tick bar stays at hand (`tick_bar`), so the loop checks every candle of a
+  slice against it (`CandleCheck.accepted`) and takes what the check gives; it skips a
+  candle equal to the bar the slice has (a candle read again), so the drift log keeps
+  each candle once. A slice that closed while the feed was dead with no bar is marked
+  missing until a bar of it arrives (2.5 B and C).
+- `LiveStore` is the series at one interval as a strategy reads it: the bars closed by
+  the decision instant, built from the base bars with the resampler a backtest builds
+  its bars with (`resample.resample_bars`), so the store equals a backtest's store of
+  the same bars bar by bar. The history's bars are built once; the bar of a period that
+  today continues (a week, month, quarter or year still forming) is built with today's
+  from all its base bars, the history's and today's, as a backtest builds it, and like
+  every bar it is shown only once it has closed. Its views and `self.I` indicators
+  (`_series_indicators`) recompute once per change of the store.
 - `LiveRunContext` (`_series_context`, re-exported here) is the backtest's run context
   over live stores: the same strategy class reads, orders and registers indicators
   through it, a bar is visible once the kernel's decision instant passes its close, and
@@ -130,7 +136,11 @@ class LiveSeries:
         self._calendar = default_calendar() if calendar is None else calendar
         self._opens, self._closes = _session_slices(self._calendar, exchange, day, base_ns)
         self._history = _history(history, symbol, int(self._opens[0]))
+        # Per interval: the history's bars closed by today's first open, and the history's
+        # base bars of the period today continues (`_split`).
+        self._splits: dict[str, tuple[dict[str, np.ndarray], pd.DataFrame]] = {}
         self._bars: dict[int, LiveBar] = {}
+        self._tick_bars: dict[int, LiveBar] = {}
         self._missing: set[int] = set()
         self._version = 0
 
@@ -148,11 +158,13 @@ class LiveSeries:
         """Take today's closed base bar of one slice: a bar built from ticks, given once
         and before any candle of its slice, or a broker candle, which replaces whatever
         bar the slice had (a candle accepted by `CandleCheck`, or the candle of a slice
-        that made no tick bar). Either lifts the slice's missing-data mark.
+        that made no tick bar). Either lifts the slice's missing-data mark. The slice's
+        own tick bar again (what `CandleCheck.accepted` gives back for a candle that does
+        not cover the slice) and a candle equal to the slice's bar change nothing.
 
         Raises ConfigError for a bar of another instrument, of a source other than
         "ticks" or "candle", that is not one of today's base slices, or a tick bar for a
-        slice that already has a bar.
+        slice that already has another bar.
         """
         if (bar.symbol, bar.exchange) != (self.symbol, self.exchange):
             raise ConfigError(
@@ -167,11 +179,17 @@ class LiveSeries:
                 f"the {self.symbol} bar opening at {bar.ts_open_ns} closes at "
                 f"{bar.ts_close_ns}, not at its slice's close {int(self._closes[slot])}"
             )
-        if bar.source == TICKS_SOURCE and slot in self._bars:
-            raise ConfigError(
-                f"the {self.symbol} slice opening at {bar.ts_open_ns} has a bar already: a "
-                "slice's tick bar is given once, before any candle of it"
-            )
+        if bar.source == TICKS_SOURCE:
+            if self._tick_bars.get(slot) == bar:
+                return
+            if slot in self._bars:
+                raise ConfigError(
+                    f"the {self.symbol} slice opening at {bar.ts_open_ns} has a bar already: "
+                    "a slice's tick bar is given once, before any candle of it"
+                )
+            self._tick_bars[slot] = bar
+        elif self._bars.get(slot) == bar:
+            return
         self._bars[slot] = bar
         self._missing.discard(slot)
         self._version += 1
@@ -180,6 +198,13 @@ class LiveSeries:
         """The bar today's slice opening at `slice_open_ns` has now, None when it has
         none. Raises ConfigError for an instant that opens no slice of the day."""
         return self._bars.get(self._slot(slice_open_ns))
+
+    def tick_bar(self, slice_open_ns: int) -> LiveBar | None:
+        """The bar built from ticks that today's slice opening at `slice_open_ns` was
+        given, kept after a candle replaced it: what each candle of the slice is checked
+        against. None when the slice made none. Raises ConfigError for an instant that
+        opens no slice of the day."""
+        return self._tick_bars.get(self._slot(slice_open_ns))
 
     def mark_missing(self, slice_open_ns: int) -> None:
         """Mark today's slice opening at `slice_open_ns` missing: it closed while the
@@ -217,11 +242,14 @@ class LiveSeries:
         return LiveStore(self, interval, clock, name)
 
     def history_columns(self, interval: str) -> dict[str, np.ndarray]:
-        """The bars of `interval` the history makes, as store columns."""
-        return self._columns(self._history, interval)
+        """The bars of `interval` the history makes that have closed when today's first
+        slice opens, as store columns. The bar of a period today continues is not among
+        them: `today_columns` builds it."""
+        return self._split(interval)[0]
 
     def today_columns(self, interval: str) -> dict[str, np.ndarray]:
-        """The bars of `interval` today's base bars make now, as store columns; the last
+        """The bars of `interval` today's base bars make now, the bar of a period today
+        continues built with the history's base bars of it, as store columns; the last
         may still be forming (a store shows the closed ones only)."""
         rows = [self._bars[slot] for slot in sorted(self._bars)]
         frame = pd.DataFrame(
@@ -235,7 +263,30 @@ class LiveSeries:
                 "oi": np.full(len(rows), np.nan),
             }
         )
+        carried = self._split(interval)[1]
+        if len(carried):
+            frame = pd.concat((carried, frame), ignore_index=True)
         return self._columns(frame, interval)
+
+    def _split(self, interval: str) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
+        """(the history's bars of `interval` closed by today's first open, as columns;
+        the history's base bars of the period today continues, empty for none), made
+        once per interval: the history never changes. Only the history's last bar can
+        close after today's first open, and only for a period interval: an intraday or a
+        daily bar ends with its session."""
+        split = self._splits.get(interval)
+        if split is None:
+            columns = self._columns(self._history, interval)
+            closed = int(np.searchsorted(columns["ts_close"], self._opens[0], "right"))
+            base = self._history.loc[:, list(BAR_COLUMNS)]
+            if closed < len(columns["ts_open"]):
+                base = base[base["ts_open"] >= columns["ts_open"][closed]]
+            else:
+                base = base.iloc[:0]
+            settled = {name: values[:closed] for name, values in columns.items()}
+            split = (settled, base.reset_index(drop=True))
+            self._splits[interval] = split
+        return split
 
     def _columns(self, frame: pd.DataFrame, interval: str) -> dict[str, np.ndarray]:
         """The bars of `interval` the base bars `frame` make, built as a backtest builds
@@ -265,10 +316,11 @@ class LiveSeries:
 
 class LiveStore(SeriesStore):
     """One instrument's bars at one interval in a live session (module docstring): the
-    history's bars (`history_bars` of them), then today's bars closed by the decision
-    instant `clock` gives. None from `clock` (no decision yet, `init` running) shows no
-    bar, and every bar the store holds is visible once a decision has come, as in a
-    backtest, where `init` sees none and the history is visible from the first pause.
+    history's bars closed before today (`history_bars` of them), then the bars today
+    makes, each held once the decision instant `clock` gives is at or after its close.
+    None from `clock` (no decision yet, `init` running) holds the history's bars and
+    shows none, and every bar the store holds is visible once a decision has come, as in
+    a backtest, where `init` sees none and the history is visible from the first pause.
 
     `version` changes whenever the bars change: a decision revealed a bar, or a candle
     replaced a base bar. Its views (`view`) and indicators are live views that recompute
@@ -283,10 +335,11 @@ class LiveStore(SeriesStore):
         self._history = dict(self._series)
         self._source = series
         self._clock = clock
-        # The series' version the today part was built at, today's bars, how many of them
-        # the store holds, the store's own version and the recipe input of that version.
+        # The series' version the bars were built at, every bar built (history first),
+        # how many of them the store holds, the store's own version and the recipe input
+        # of that version.
         self._built_at = -1
-        self._today = _empty_columns()
+        self._all = self._history
         self._held = 0
         self._version = 0
         self._bars_of: tuple[int, dict[str, Any]] | None = None
@@ -299,19 +352,21 @@ class LiveStore(SeriesStore):
 
     def _sync(self) -> None:
         """Bring the bars up to the series and the clock: today's bars rebuilt when the
-        series took a bar, then cut at the decision instant."""
+        series took a bar, then every bar, the history's too, cut at the decision
+        instant, so the store holds a bar once the decision is at or after its close."""
         source = self._source
         rebuilt = source.version != self._built_at
         if rebuilt:
-            self._today = source.today_columns(self.interval)
+            today = source.today_columns(self.interval)
+            self._all = {
+                name: np.concatenate((self._history[name], today[name])) for name in _COLUMNS
+            }
             self._built_at = source.version
         now = self._clock()
-        held = 0 if now is None else int(np.searchsorted(self._today["ts_close"], now, "right"))
+        closes = self._all["ts_close"]
+        held = self.history_bars if now is None else int(np.searchsorted(closes, now, "right"))
         if rebuilt or held != self._held:
-            self._series = {
-                name: np.concatenate((self._history[name], self._today[name][:held]))
-                for name in _COLUMNS
-            }
+            self._series = {name: values[:held] for name, values in self._all.items()}
             self._times = None
             self._held = held
             self._version += 1

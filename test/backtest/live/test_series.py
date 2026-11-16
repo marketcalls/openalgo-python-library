@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 from series_samples import LIVE_DAY, MINUTE_NS, before, live_bar, minute_bars, on_day
 
+from openalgo.backtest._live.bars import CandleCheck
 from openalgo.backtest._live.series import LiveSeries
 from openalgo.backtest.errors import CalendarError, ConfigError, LiveError
 
@@ -129,9 +130,17 @@ def test_the_candle_of_a_slice_with_no_tick_bar_fills_the_store():
     assert store.column("close")[0] == TODAY.close.iloc[4]
 
 
-def test_a_tick_bar_after_a_bar_of_its_slice_is_refused():
+def test_another_tick_bar_for_a_slice_with_one_is_refused():
     series = series_with(1)
+    other = dataclasses.replace(live_bar(TODAY.iloc[0]), volume=TODAY.volume.iloc[0] + 1)
     with pytest.raises(ConfigError, match="given once"):
+        series.take(other)
+
+
+def test_a_tick_bar_after_the_candle_of_its_slice_is_refused():
+    series = series_with(0)
+    series.take(live_bar(TODAY.iloc[0], "candle"))
+    with pytest.raises(ConfigError, match="before any candle"):
         series.take(live_bar(TODAY.iloc[0]))
 
 
@@ -169,6 +178,50 @@ def test_the_bar_a_slice_has_now_is_given():
     series.take(live_bar(TODAY.iloc[0], "candle"))
     assert series.bar(int(TODAY.ts_open.iloc[0])).source == "candle"
     assert series.bar(int(TODAY.ts_open.iloc[1])) is None
+
+
+def test_the_tick_bar_of_a_slice_stays_at_hand_after_a_candle_replaces_it():
+    series = series_with(1)
+    series.take(live_bar(TODAY.iloc[0], "candle"))
+    assert series.tick_bar(int(TODAY.ts_open.iloc[0])) == live_bar(TODAY.iloc[0])
+
+
+def test_a_slice_with_only_a_candle_has_no_tick_bar():
+    series = series_with(0)
+    series.take(live_bar(TODAY.iloc[0], "candle"))
+    assert series.tick_bar(int(TODAY.ts_open.iloc[0])) is None
+
+
+def test_a_second_candle_of_a_slice_is_checked_against_its_tick_bar():
+    series = series_with(1)
+    opened = int(TODAY.ts_open.iloc[0])
+    check = CandleCheck()
+    series.take(check.accepted(series.tick_bar(opened), live_bar(TODAY.iloc[0], "candle")))
+    later = dataclasses.replace(live_bar(TODAY.iloc[0], "candle"), volume=TODAY.volume.iloc[0] + 7)
+    series.take(check.accepted(series.tick_bar(opened), later))
+    assert series.bar(opened) == later
+
+
+def test_a_candle_equal_to_the_bar_its_slice_has_changes_nothing():
+    series = series_with(1)
+    candle = live_bar(TODAY.iloc[0], "candle")
+    series.take(candle)
+    before_again = series.version
+    series.take(candle)
+    assert series.version == before_again
+
+
+def test_the_tick_bar_a_check_gives_back_for_another_slices_candle_changes_nothing():
+    series = series_with(1)
+    opened = int(TODAY.ts_open.iloc[0])
+    # A two-minute candle opening with the slice does not cover it: the check gives the
+    # tick bar back, and the slice keeps it.
+    wide = dataclasses.replace(
+        live_bar(TODAY.iloc[0], "candle"), ts_close_ns=int(TODAY.ts_close.iloc[1])
+    )
+    before_check = series.version
+    series.take(CandleCheck().accepted(series.tick_bar(opened), wide))
+    assert (series.version, series.bar(opened)) == (before_check, live_bar(TODAY.iloc[0]))
 
 
 @pytest.mark.parametrize(

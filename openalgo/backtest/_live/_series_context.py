@@ -7,7 +7,8 @@ Every store's clock is the decision instant of the kernel's latest pause, so a b
 visible from the decision at or after its close, at the strategy interval and at any
 other (`self.data[symbol, "15m"]`), as in a backtest. `self.I` is registered in `init`
 only: the strategy's own rule (`Strategy.I` raises `IndicatorOutsideInitError` once the
-context has left its declaration phase), which the live context keeps unchanged.
+context has left its declaration phase), which the live context keeps unchanged. A
+history too short for an indicator refuses the start (`check_history`).
 """
 
 from __future__ import annotations
@@ -76,11 +77,14 @@ class LiveRunContext(RunContext):
             self.timeframes[key] = self._marked(store)
         return self.timeframes[key]
 
-    def begin_run(self) -> None:
-        """End the declaration phase (`RunContext.begin_run`). Raises ConfigError first
-        when an indicator could not be computed at all on the bars `init` saw (a series
-        too short for it, `_indicators`): a backtest leaves its values unknown for the
-        whole run, and they would never follow the session's bars."""
+    def check_history(self) -> None:
+        """Refuse the start when an indicator `init` registered could not be computed at
+        all on the bars it saw, the history (a series too short for it, `_indicators`): a
+        backtest leaves its values unknown for the whole run, and they would never follow
+        the session's bars. The session plan calls it right after `init` (16-session-
+        design 3.1 step 11), so a start before the open, which has no catch-up pause, is
+        refused before the session trades. Raises ConfigError naming each indicator and
+        the bars it had."""
         short = [o for o in self.run.checks.outcomes if o.too_short is not None]
         if short:
             named = "; ".join(f"{o.label} on {o.too_short} bars" for o in short)
@@ -88,6 +92,13 @@ class LiveRunContext(RunContext):
                 f"the history before today is too short to compute {named}: a live session "
                 "needs enough broker history for every indicator to compute at the start"
             )
+
+    def begin_run(self) -> None:
+        """End the declaration phase (`RunContext.begin_run`) after `check_history` once
+        more, so a run whose start skipped the check is refused at its first pause rather
+        than run with indicators that never follow its bars. Raises ConfigError as
+        `check_history` does."""
+        self.check_history()
         super().begin_run()
 
 

@@ -93,13 +93,25 @@ def test_an_indicator_over_values_of_your_own_is_refused():
         live_run(Own)
 
 
-def test_an_indicator_too_short_for_the_history_stops_the_start():
-    class Long(OneMinute):
-        def init(self):
-            self.line = self.I(ta.sma, self.close, 100)
+class LongAverage(OneMinute):
+    def init(self):
+        self.line = self.I(ta.sma, self.close, 100)
 
+
+def test_an_indicator_too_short_for_the_history_refuses_a_start_before_the_open():
+    # init has run and no slice has closed: there is no catch-up before the open.
+    run = live_run(LongAverage, history=HISTORY.iloc[:30])
     with pytest.raises(ConfigError, match="too short to compute sma"):
-        live_run(Long, slices=1, history=HISTORY.iloc[:30])
+        run.context.check_history()
+
+
+def test_a_history_long_enough_for_every_indicator_passes_the_start_check():
+    live_run(LongAverage).context.check_history()
+
+
+def test_a_run_whose_start_skipped_the_history_check_is_refused_at_its_first_pause():
+    with pytest.raises(ConfigError, match="too short to compute sma"):
+        live_run(LongAverage, slices=1, history=HISTORY.iloc[:30])
 
 
 def test_an_indicator_is_recomputed_once_per_change_of_the_store():
