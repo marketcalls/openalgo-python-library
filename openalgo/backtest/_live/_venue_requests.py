@@ -1,6 +1,7 @@
 """The order requests the loop hands the order worker, built from the kernel's command dicts
-(16-session-design 2.7), with their priorities (2.4), and the verdicts a targeted read of
-an order gives on a modify or a cancel whose answer was lost or refused (4.3, 4.5).
+(16-session-design 2.7), with their priorities (2.4), the verdicts a targeted read of an
+order gives on a modify or a cancel whose answer was lost or refused (4.3, 4.5), and the
+kernel call the venue map made for each answer (`Applied`, `Handled`).
 
 A command crosses the binding as a dict (rust/oa_py/src/backtest/engine/venue.rs):
 `command` ("place", "modify", "cancel") and `order_id` (the kernel order); "place" adds
@@ -143,6 +144,35 @@ class Verdict(enum.Enum):
     UNSETTLED = "unsettled"
 
 
+class Applied(enum.Enum):
+    """The kernel call the venue map made for an answer of the worker."""
+
+    #: None: the answer waits for another (a hold, a read to come, a CANCELLED news), or
+    #: the request had its result already.
+    NOTHING = "nothing"
+    #: The placement is bound to the broker's order ID.
+    BOUND = "bound"
+    #: `apply_reject(order, "venue")`: the placement was refused or never placed (a leg
+    #: stop never placed: `apply_cancel`, which the kernel places again once, R3).
+    REJECTED = "rejected"
+    #: `apply_modify`: the broker holds the modify's terms.
+    MODIFIED = "modified"
+    #: `apply_modify_refused`: the old terms stand.
+    MODIFY_REFUSED = "modify_refused"
+    #: `apply_cancel_refused`: the order works on, and the session sends the cancel again
+    #: after its retry wait (4.5).
+    CANCEL_REFUSED = "cancel_refused"
+
+
+@dataclass(frozen=True)
+class Handled:
+    """What the venue map did with an answer: the kernel call it `applied`, and the
+    `requests` a bind released (the modifies and cancels that waited for it, in order)."""
+
+    applied: Applied
+    requests: tuple[OrderRequest, ...] = ()
+
+
 def intent_id(session: JournalSession, strategy: str, kernel_order: int) -> str:
     """The intent ID of kernel order `kernel_order` of `strategy` in `session` (module
     docstring)."""
@@ -277,7 +307,9 @@ __all__ = [
     "ROLE_PURPOSES",
     "SAME_PRICE_RUPEES",
     "STOP_TYPES",
+    "Applied",
     "CancelRequest",
+    "Handled",
     "ModifyRequest",
     "OrderRequest",
     "OrderTerms",

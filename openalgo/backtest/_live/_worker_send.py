@@ -16,6 +16,11 @@ a request"), split from `worker` so each module keeps one job.
   request refused for any other reason (an order the session does not follow, a field the
   order path refuses) is a defect that no wait cures: an ERROR alert names it. A
   `JournalError` is raised: nothing may be sent once an intent cannot be written first.
+- Settling (`settle_due`, 2.4 step 7): each unsettled order due a read is read with
+  `check_order`, and the row's verdict posted as `Settled`; a modify past its deadline is
+  settled with no row and an ERROR alert. An order the order path cannot read at all (it
+  does not follow it, so no read will ever settle it) is settled with no row at once,
+  taken as refused: its one ERROR alert was its refusal's.
 - A release of a held fill or cancel hands its news over (`_worker_news`, counted in hand
   from before the word leaves the order path's hold); the book reads go to the guard
   answer by answer and are posted as `Books` or `PositionRows`, or `NotSent(locked)` once
@@ -35,6 +40,7 @@ from .._layout import NANOS_PER_SECOND
 from ..errors import JournalError, LiveError, ModeChangedError
 from ._answers import server_answer
 from ._order_answers import Outcome
+from ._order_check import OrderCheck
 from ._order_resolve import same_leg
 from ._types import LOGGER_NAME, AlertKind, AlertsLike, OrderIntent, Purpose
 from ._venue_requests import CancelRequest, ModifyRequest, PlaceRequest, Priority
@@ -51,10 +57,10 @@ from ._worker_queue import (
     is_stale,
     order_key,
 )
-from ._worker_settle import Change, Settlements
+from ._worker_settle import Change, Settlements, Unsettled, expired_text
 from ._worker_stops import StopBook
 from .guard import ModeGuard
-from .inbox import Books, Message, NotSent, NotSentReason, PositionRows, SendResult
+from .inbox import Books, Message, NotSent, NotSentReason, PositionRows, SendResult, Settled
 from .journal import Journal
 from .orders import OrderPath
 
@@ -67,6 +73,8 @@ REQUEUE_AFTER_S = 0.5
 HELD_NOTICE_EVERY_S = 5.0
 _REQUEUE_NS = round(REQUEUE_AFTER_S * NANOS_PER_SECOND)
 _NOTICE_NS = round(HELD_NOTICE_EVERY_S * NANOS_PER_SECOND)
+#: How an alert names a protective request that is not a placement.
+_CHANGE_WORDS = {ModifyRequest: "modify", CancelRequest: "cancel"}
 #: The books a reconciliation reads, as `inbox.Books` names them (5.2).
 _BOOKS = ("positionbook", "orderbook", "tradebook", "funds")
 
@@ -127,6 +135,42 @@ class Sender:
             self._path.stream_gap(request.since_ns)
         else:
             raise LiveError(f"the order worker takes requests, not {request!r}")
+
+    def settle_due(self) -> None:
+        """Settle what is due (module docstring). Stops at a guard lock, which the worker
+        notices next. Raises JournalError when the journal fails."""
+        now = self._now()
+        for waiting in self._settle.expired(now):
+            text = expired_text(waiting, now)
+            logger.error(text)
+            self._alerts.send(AlertKind.ERROR, text)
+            self._queue.release(order_key(waiting.request))
+            self._post(Settled(waiting.request, None))
+        for waiting in self._settle.due(now):
+            order_id = waiting.request.order_id
+            try:
+                with self._calling():
+                    check = self._path.check_order(order_id)
+                    self._news.taken(int(check.news is not None))
+            except ModeChangedError:
+                return
+            except JournalError:
+                raise
+            except LiveError as error:
+                logger.error("order %s cannot be read, taken as refused: %s", order_id, error)
+                self._settle.ended(order_id)
+                self._queue.release(order_key(waiting.request))
+                self._post(Settled(waiting.request, None))
+                continue
+            self._judge(waiting, check)
+
+    def _judge(self, waiting: Unsettled, check: OrderCheck) -> None:
+        settled = self._settle.judge(waiting, check, self._now())
+        if check.news is not None:
+            self._news.hand_over(check.news, self._stops)
+        if settled is not None:
+            self._queue.release(order_key(waiting.request))
+            self._post(settled)
 
     def unsettle(self, request: Change) -> None:
         """Hold `request`'s order until a read settles its modify or cancel."""
@@ -213,8 +257,9 @@ class Sender:
 
     def _refused_alert(self, request: PlaceRequest | Change, error: LiveError) -> None:
         intent = request.intent
+        what = _CHANGE_WORDS.get(type(request), "placement")
         text = (
-            f"a protective {type(request).__name__} of {intent.strategy} on "
+            f"a protective {what} of {intent.strategy} on "
             f"{intent.exchange}:{intent.symbol} ({intent.intent_id}) cannot be sent: {error}. "
             "The engine is told it was refused; check the leg in OpenAlgo"
         )

@@ -22,7 +22,8 @@ builds and restores the order path, and posts `inbox.WorkerReady`. Then each `st
 5. resolves unbound intents, posting `inbox.Resolutions` (a STOP bound records its stop);
 6. posts the held fills (`inbox.HeldFills`) when they changed;
 7. settles the orders whose modify or cancel was unanswered or refused, posting the
-   check's news and `inbox.Settled` (an expired modify with an ERROR alert);
+   check's news and `inbox.Settled` (an expired modify with an ERROR alert; one the order
+   path cannot read at all, refused at once: `_worker_send`);
 8. executes one ready request of any priority, after draining the updates.
 
 A `JournalError` (any but a refused stop record, which is only alerted) is posted as
@@ -46,17 +47,16 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date
 
-from ..errors import JournalError, LiveError, ModeChangedError
+from ..errors import JournalError, LiveError
 from ._journal_file import DEFAULT_BUSY_TIMEOUT_S
 from ._journal_reads import JournalSession
-from ._order_check import OrderCheck
 from ._order_state import HeldFill
-from ._types import LOGGER_NAME, AlertKind, AlertsLike, Mode, Now, Purpose, Sleep
+from ._types import LOGGER_NAME, AlertsLike, Mode, Now, Purpose, Sleep
 from ._venue_requests import Priority
 from ._worker_news import NewsHandover
-from ._worker_queue import Request, WorkerQueue, order_key
+from ._worker_queue import Request, WorkerQueue
 from ._worker_send import Sender
-from ._worker_settle import Settlements, expired_text
+from ._worker_settle import Settlements
 from ._worker_stops import StopBook
 from .guard import ModeGuard
 from .inbox import (
@@ -66,7 +66,6 @@ from .inbox import (
     Message,
     RawUpdates,
     Resolutions,
-    Settled,
     WorkerFailed,
     WorkerReady,
 )
@@ -226,11 +225,13 @@ class OrderWorker:
     def step(self) -> bool:
         """One iteration (module docstring); True when it took a request, so the thread
         steps again at once. A failure is posted as `WorkerFailed`, never raised, and
-        nothing is done after one. Raises LiveError before `start_up`."""
+        nothing is done after one, nor after `close`. Raises LiveError before
+        `start_up`."""
         started = self._started
         if started is None:
             raise LiveError("the order worker steps after start_up()")
-        if self._failed:
+        if self._failed or self._stopping:
+            # Closed (journal W with it): a step now would only meet the closed journal.
             return False
         try:
             return self._step(started)
@@ -267,7 +268,8 @@ class OrderWorker:
         if held != self._held:
             self._held = held
             self._post(HeldFills(held))
-        self._settle_due(started)
+        started.sender.settle_due()
+        self._notice_lock()
         return self._run_next(started, Priority.UPKEEP) or took
 
     def _run_next(self, started: _Started, most: Priority) -> bool:
@@ -303,35 +305,6 @@ class OrderWorker:
             ended = update is not None and update.status.terminal
             if resolution.order_id and resolution.intent.purpose is Purpose.STOP and not ended:
                 started.stops.bound(resolution.intent, resolution.order_id)
-
-    def _settle_due(self, started: _Started) -> None:
-        now = self._now()
-        for waiting in self._settle.expired(now):
-            text = expired_text(waiting, now)
-            logger.error(text)
-            self._alerts.send(AlertKind.ERROR, text)
-            self._queue.release(order_key(waiting.request))
-            self._post(Settled(waiting.request, None))
-        for waiting in self._settle.due(now):
-            order_id = waiting.request.order_id
-            try:
-                with self._calling():
-                    check = started.path.check_order(order_id)
-                    self._news.taken(int(check.news is not None))
-            except ModeChangedError:
-                self._notice_lock()
-                return
-            except JournalError:
-                raise
-            except LiveError as error:
-                logger.error("order %s cannot be read to settle it: %s", order_id, error)
-                check = OrderCheck(order_id, reason=str(error))
-            settled = self._settle.judge(waiting, check, self._now())
-            if check.news is not None:
-                self._news.hand_over(check.news, started.stops)
-            if settled is not None:
-                self._queue.release(order_key(waiting.request))
-                self._post(settled)
 
     def _notice_lock(self) -> None:
         breach = self._guard.breach
