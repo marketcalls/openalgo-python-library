@@ -9,14 +9,15 @@
 mod venue_support;
 
 use oa_bt::engine::{
-    run, BarColumns, Engine, EngineExit, OrderRole, RiskExitReason, RunConfig, Submission,
+    run, BarColumns, Engine, EngineExit, ExitRequest, KernelError, OrderRole, RiskExitReason,
+    RunConfig, Submission, VenueCommand,
 };
-use oa_bt::exec::{OrderId, OrderRequest, OrderType, QuantitySpec};
+use oa_bt::exec::{ExecError, OrderId, OrderRequest, OrderType, QuantitySpec};
 use oa_bt::model::{Product, Side};
 use oa_bt::rms::{ExitReason, StrategyRiskConfig};
 use venue_support::{
-    at_close, backtest, bars, config, echo_until, exit, holding_on, limit, market, pause_at_close,
-    placed_roles, session, stop_market, wait_before, Act, Echo, Ohlc, Script, SBIN,
+    at_close, backtest, bars, config, echo_until, exit, holding_on, limit, market, order,
+    pause_at_close, placed_roles, session, stop_market, wait_before, Act, Echo, Ohlc, Script, SBIN,
 };
 
 /// The slice that opens at the square-off, 15:10.
@@ -109,6 +110,58 @@ fn a_strategy_order_carries_the_role_the_position_gives_it() {
     for (what, held, request, role) in table {
         assert_eq!(role_of(held, request), (role, Some(role)), "{what}");
     }
+}
+
+/// Holding 100 with a plain LIMIT sale of the 100 at 520.00 (o2, an exit), paused at the
+/// close of minute 2 with no command left to take.
+fn holding_with_a_plain_target() -> Engine {
+    let mut kernel = paused_holding(100.0);
+    let sale = order(Side::Sell, 100.0, limit(520.0), Product::Mis);
+    assert_eq!(kernel.submit(sale), Ok(Submission::Submitted(OrderId(2))));
+    kernel.take_commands();
+    kernel
+}
+
+#[test]
+fn a_modification_that_would_change_an_orders_role_is_refused() {
+    // Into a reversal: 250 with reverse=True would open a short of 150.
+    let mut kernel = holding_with_a_plain_target();
+    let reversal = OrderRequest {
+        reverse: true,
+        ..order(Side::Sell, 250.0, limit(520.0), Product::Mis)
+    };
+    let refused = kernel.modify(OrderId(2), reversal);
+    assert!(
+        matches!(
+            refused,
+            Err(KernelError::Exec(ExecError::InvalidRequest { .. }))
+        ),
+        "{refused:?}"
+    );
+    assert!(kernel.take_commands().is_empty(), "nothing is sent");
+    assert_eq!(kernel.order_role(OrderId(2)), Some(OrderRole::Exit));
+    let order = kernel.order(OrderId(2)).expect("the sale");
+    assert_eq!(
+        (order.quantity_units, order.request.reverse),
+        (100.0, false)
+    );
+}
+
+#[test]
+fn a_modification_that_keeps_an_orders_role_is_sent() {
+    let mut kernel = holding_with_a_plain_target();
+    let lower = order(Side::Sell, 100.0, limit(515.0), Product::Mis);
+    assert_eq!(
+        kernel.modify(OrderId(2), lower),
+        Ok(Submission::Submitted(OrderId(2)))
+    );
+    let modify = VenueCommand::Modify {
+        order: OrderId(2),
+        units: 100.0,
+        order_type: limit(515.0),
+    };
+    assert_eq!(kernel.take_commands(), [modify]);
+    assert_eq!(kernel.order_role(OrderId(2)), Some(OrderRole::Exit));
 }
 
 #[test]
@@ -274,9 +327,8 @@ fn an_exit_the_session_asks_for_carries_its_reason() {
             &mut Script::new(Vec::new()),
             3,
         );
-        kernel
-            .request_exit(SBIN, Product::Mis, exit)
-            .expect("the session asks for the exit");
+        let asked = kernel.request_exit(SBIN, Product::Mis, exit);
+        assert_eq!(asked, Ok(ExitRequest::Sent), "{exit:?}");
         assert_eq!(
             placed_roles(&kernel.take_commands()),
             [(OrderId(2), Side::Sell, 100.0, role)],

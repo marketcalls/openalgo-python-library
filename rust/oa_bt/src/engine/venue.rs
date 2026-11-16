@@ -13,12 +13,13 @@
 //! open). The parts:
 //!
 //! - **Commands out** (`venue_orders`). An order that passes the checks is sent at once as
-//!   `VenueCommand::Place`, except an exit (below). `cancel`, and the engine's own
-//!   withdrawals, send `Cancel`, at most once in a slice; the order works on until the
-//!   venue's result, since a fill may come first. `modify` sends `Modify` and the order
-//!   keeps its old terms until the venue confirms the new ones (`apply_modify`) or refuses
-//!   them. The adapter takes the commands with `Engine::take_commands`, in the order they
-//!   were made.
+//!   `VenueCommand::Place`, except an exit (below). The engine's own withdrawals send
+//!   `Cancel` at most once in a slice; `cancel` sends it at once, again after the venue
+//!   refused it, but never twice while one waits for the venue's answer. The order works
+//!   on until the venue's result, since a fill may come first. `modify` sends `Modify`
+//!   and the order keeps its old terms until the venue confirms the new ones
+//!   (`apply_modify`) or refuses them. The adapter takes the commands with
+//!   `Engine::take_commands`, in the order they were made.
 //! - **Exits** (`venue_owner`). An exit is the strategy's `exit()` or `reduce()` (a
 //!   reduce-only MARKET order) or one of the engine's exits (`venue_exits`: the daily loss
 //!   limit and drawdown halt, the square-off, the time exit). An exit first cancels every
@@ -26,10 +27,12 @@
 //!   all ended, in orders of at most the freeze quantity. The strategy's exits of a
 //!   position add up as in a backtest, each sized on what the earlier ones leave; an
 //!   engine exit takes over from them and closes the whole position.
-//! - **Reduce-only orders never reverse** (`venue_cover`). The reduce-only orders resting
-//!   on a position's closing side may not hold more units than it has (`exit_cover`), are
-//!   cut down or cancelled when it shrinks, and a fill of one beyond the position is
-//!   recorded only up to it (`VenueError::WouldReverse`).
+//! - **Reduce-only orders never reverse** (`venue_cover`). The orders working on a
+//!   position's closing side may not hold more units than it has: a reduce-only order
+//!   beyond that is rejected (`exit_cover`), and any other order against the position
+//!   beyond it is an entry (`venue_roles`). Reduce-only orders are cut down or cancelled
+//!   when the position shrinks, and a fill of an order sent to close beyond the position
+//!   is recorded only up to it (`VenueError::WouldReverse`).
 //! - **Results in** (`venue_fills`): fills, rejections, cancellations; and the venue's
 //!   answers to the cancellations and modifications it was sent (`venue_answers`).
 //! - **The clock** (`venue_clock`). What a backtest does at the open of a slice (the
@@ -183,7 +186,8 @@ pub(super) struct VenueDesk {
     /// Working orders whose cancellation has been sent and not yet answered.
     pub(super) cancelling: Vec<OrderId>,
     /// The slice index in which each working order's last cancellation was sent: one the
-    /// venue refused is sent again in a later slice, not in that one (`withdraw_order`).
+    /// venue refused is sent again by the engine's own withdrawals in a later slice, not
+    /// in that one (`withdraw_order`), and by `cancel` at once (`cancel_on_request`).
     pub(super) cancels_sent: Vec<(OrderId, u32)>,
     /// Working orders whose modification has been sent and not yet answered.
     pub(super) modifying: Vec<(OrderId, Replacement)>,

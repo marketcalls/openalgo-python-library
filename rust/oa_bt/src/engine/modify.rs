@@ -46,8 +46,10 @@ impl Engine {
     /// Errors: `NotAtDecisionPoint` unless paused; `UnknownOrder`; `Exec(InvalidRequest)`
     /// for an order that no longer works or a replacement that changes what identifies
     /// the order, and in a live session for an order whose last modification the venue
-    /// has not answered or an exit not sent yet; `NotBuilt` for a partly filled order in
-    /// a live session; the errors of `submit` for the replacement itself.
+    /// has not answered, an exit not sent yet, or a replacement that passes the backtest's
+    /// checks but would change what the order is for (its role, `venue_roles`); `NotBuilt`
+    /// for a partly filled order in a live session; the errors of `submit` for the
+    /// replacement itself.
     pub fn modify(
         &mut self,
         id: OrderId,
@@ -80,9 +82,11 @@ impl Engine {
         let units = self.venue_units(&request, units);
         self.check_replacement_units(units)?;
         let checked = match self.submission_checks(&request, units, &slice, decided_at, Some(id))? {
-            Ok(good_until) => self
-                .live_checks(&request, units, &slice, Some(id))?
-                .map(|()| good_until),
+            Ok(good_until) => {
+                self.check_replacement_role(id, &request, units)?;
+                self.live_checks(&request, units, &slice, Some(id))?
+                    .map(|()| good_until)
+            }
             Err(code) => Err(code),
         };
         let good_until = match checked {

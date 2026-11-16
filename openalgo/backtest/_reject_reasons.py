@@ -112,9 +112,13 @@ REASONS = MappingProxyType(
         "live_in_flight": (
             "a live session sends no entry or add while another order of the symbol is "
             "working (an entry whose fill is not reported yet, a resting order), so that "
-            "a fill reported late cannot double the position",
-            "enter or add once the earlier order has filled or been cancelled: check "
-            "self.orders and self.position in on_bar",
+            "a fill reported late cannot double the position; a sale or buy against the "
+            "position beyond what the orders already working to close it leave counts as "
+            "an entry, since their fills could leave the position flat and it would then "
+            "open the other side",
+            "enter, add or close once the earlier order has filled or been cancelled: "
+            "check self.orders and self.position in on_bar, and close a position with "
+            "self.exit(), which cancels the orders on its closing side first",
         ),
     }
 )

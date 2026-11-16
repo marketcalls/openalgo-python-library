@@ -10,10 +10,10 @@
 mod venue_support;
 
 use oa_bt::engine::{
-    Engine, EngineExit, Event, KernelError, OrderEventKind, RiskExitReason, VenueCommand,
-    VenueError,
+    Engine, EngineExit, Event, EventStamp, KernelError, OrderEventKind, RiskExitReason, Step,
+    VenueCommand, VenueError,
 };
-use oa_bt::exec::{OrderId, OrderStatus};
+use oa_bt::exec::{OrderId, OrderRequest, OrderStatus, OrderType, QuantitySpec};
 use oa_bt::model::{Product, Side};
 use venue_support::{
     at_close, backtest, bars, charged_config, config, exit, holding_on, limit, market, minute,
@@ -53,6 +53,52 @@ fn a_stopped_session_sends_nothing_and_reports_its_working_orders_and_position_o
 }
 
 #[test]
+fn a_strategy_exit_never_sent_ends_canceled_at_the_stop() {
+    // exit() (o3) waits for the cancellation of the target (o2) when the session stops:
+    // nothing of it is at the venue, so it is not reported working.
+    let mut kernel = holding_with_a_target();
+    let whole = OrderRequest {
+        quantity: QuantitySpec::PositionFraction(1.0),
+        ..exit(Side::Sell, 1.0, OrderType::Market)
+    };
+    assert!(kernel.submit(whole).is_ok());
+    assert!(placed(&kernel.take_commands()).is_empty(), "o3 waits");
+    to_wait(&mut kernel, 5);
+    let events = kernel.stop_session().expect("the session stops");
+    let canceled = Event::Order {
+        stamp: EventStamp {
+            slice: 5,
+            slice_ts: minute(5),
+            step: Step::OpenFills,
+        },
+        order: OrderId(3),
+        kind: OrderEventKind::Canceled,
+    };
+    assert_eq!(events.last(), Some(&canceled));
+    assert!(kernel.take_commands().is_empty(), "no cancel, no exit");
+    let output = kernel.finish().expect("a stopped session finishes");
+    let statuses: Vec<OrderStatus> = output.orders.iter().map(|order| order.status).collect();
+    assert_eq!(
+        statuses,
+        [
+            OrderStatus::Filled,
+            OrderStatus::Submitted,
+            OrderStatus::Canceled
+        ]
+    );
+}
+
+fn placed(commands: &[VenueCommand]) -> Vec<OrderId> {
+    commands
+        .iter()
+        .filter_map(|command| match command {
+            VenueCommand::Place { order, .. } => Some(*order),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
 fn a_session_can_be_stopped_wherever_it_stands() {
     // Waiting before a slice, paused at a bar close, and waiting at the session close for
     // the venue to end its orders (the target and the unfilled square-off).
@@ -83,7 +129,8 @@ fn a_stopped_session_takes_no_more_results_or_requests_and_runs_no_more_slices()
     let fill = kernel.apply_fill(OrderId(2), 100.0, 600.0, minute(5));
     assert_eq!(fill.map(|_| ()), session_over);
     let stop = EngineExit::Risk(RiskExitReason::OperatorStop);
-    assert_eq!(kernel.request_exit(SBIN, Product::Mis, stop), session_over);
+    let asked = kernel.request_exit(SBIN, Product::Mis, stop);
+    assert_eq!(asked.map(|_| ()), session_over);
     assert_eq!(kernel.cancel(OrderId(2)).map(|_| ()), session_over);
     assert_eq!(kernel.advance(), Err(KernelError::RunFinished));
 }

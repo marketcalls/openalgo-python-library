@@ -5,16 +5,19 @@
 //!
 //! | Role | Code | The order |
 //! |---|---|---|
-//! | `Entry` | `entry` | opens a position from flat, or reverses one (`reverse=True` beyond it: the rest opens the other side) |
+//! | `Entry` | `entry` | opens a position from flat, reverses one (`reverse=True` beyond it: the rest opens the other side), or goes against it beyond the room its closing side has (`venue_cover::closing_room`): the other orders working on that side could leave the position flat, and this one would then open the other side |
 //! | `Add` | `add` | adds to an open position on its side |
 //! | `LegStop` | `leg_stop` | a leg's broker-held stop (decision D31); no order takes it until the broker-held stops are built |
-//! | `Exit` | `exit` | the strategy's order that only reduces: `exit()`, `reduce()`, a reduce-only order resting to close, an order against the position within it, and the further orders of such an exit above the freeze quantity |
+//! | `Exit` | `exit` | the strategy's order that only reduces: `exit()`, `reduce()`, a reduce-only order resting to close, an order against the position within the room its closing side has, and the further orders of such an exit above the freeze quantity |
 //! | `RiskExit(reason)` | `risk_exit` | the engine's exit of the whole position for a risk reason |
 //! | `SquareOff` | `square_off` | the engine's exit at the square-off time |
 //!
 //! A strategy order's role is decided when it passes the submission checks, from the
-//! position then held; the engine's orders take the role of the exit they are made for
-//! (`EngineExit`).
+//! position then held and the orders working to close it; the engine's orders take the
+//! role of the exit they are made for (`EngineExit`). A role, once filed with the order's
+//! `Place`, stands: a modification that would change it is refused (cancel the order and
+//! place a new one), and the fill of an order whose role only closes is never recorded
+//! beyond the position (`venue_fills`).
 //!
 //! The risk reasons are the kernel's own rules (`daily_loss`, `drawdown`, `time_exit`) and
 //! those the live layer names when it asks for an exit (`Engine::request_exit`:
@@ -28,11 +31,12 @@
 //! | `stop_unfilled` | `leg_sl`: the leg's stop level was reached |
 //! | `unprotected`, `stop_rejected`, `kill_switch`, `account_loss`, `operator_stop` | `manual`: neither the strategy nor a kernel rule made it |
 
-use crate::exec::{OrderId, OrderRequest};
+use crate::exec::{ExecError, Order, OrderId, OrderRequest};
 use crate::model::Side;
 use crate::portfolio::PositionKey;
 use crate::rms::ExitReason;
 
+use super::error::KernelError;
 use super::kernel::Engine;
 
 /// Why the engine of an external session exits a whole position for risk (module docs).
@@ -205,20 +209,67 @@ impl Engine {
     }
 
     /// The role of the strategy's `request` for `units`, against the position held now
-    /// (module docs).
-    pub(super) fn submission_role(&self, request: &OrderRequest, units: f64) -> OrderRole {
-        let held = self.held_units(PositionKey {
+    /// and the orders working to close it (module docs). `except` is the order judged,
+    /// once it is in the book (a modification's own order), so that its own units leave
+    /// the room it is judged in.
+    pub(super) fn submission_role(
+        &self,
+        request: &OrderRequest,
+        units: f64,
+        except: Option<OrderId>,
+    ) -> OrderRole {
+        let key = PositionKey {
             instrument: request.instrument,
             product: request.product,
-        });
+        };
+        let held = self.held_units(key);
         let against = held != 0.0 && (held > 0.0) != (request.side == Side::Buy);
         match (request.reduce_only, against) {
             (true, _) => OrderRole::Exit,
-            (false, true) if units <= held.abs() => OrderRole::Exit,
+            (false, true) if units <= self.closing_room(key, except) => OrderRole::Exit,
             (false, true) => OrderRole::Entry,
             (false, false) if held == 0.0 => OrderRole::Entry,
             (false, false) => OrderRole::Add,
         }
+    }
+
+    /// Refuse, in an external session, a replacement `request` of `units` for order `id`
+    /// that would change the role filed with its `Place` (module docs): the live layer
+    /// keeps the order under that purpose, with its checks before sending. A backtest
+    /// passes.
+    ///
+    /// Errors: `Exec(InvalidRequest)` naming both roles and saying to cancel the order and
+    /// place a new one.
+    pub(super) fn check_replacement_role(
+        &self,
+        id: OrderId,
+        request: &OrderRequest,
+        units: f64,
+    ) -> Result<(), KernelError> {
+        if !self.is_external() {
+            return Ok(());
+        }
+        let placed = self.order_role(id);
+        let replaced = self.submission_role(request, units, Some(id));
+        if placed == Some(replaced) {
+            return Ok(());
+        }
+        let was = placed.map_or("none", OrderRole::code);
+        Err(KernelError::Exec(ExecError::InvalidRequest {
+            reason: format!(
+                "a modification keeps what the order is for: it was placed as {was} and the \
+                 replacement would make it {}; cancel the order and place a new one instead",
+                replaced.code()
+            ),
+        }))
+    }
+
+    /// True for an order sent only to close its position: a reduce-only order, or one whose
+    /// role does not open (module docs). Its fills are never recorded beyond the position
+    /// (`venue_fills`), and it is fitted to the position when that shrinks (`venue_cover`).
+    pub(super) fn sent_to_close(&self, order: &Order) -> bool {
+        let role = self.order_role(order.id);
+        order.request.reduce_only || role.is_some_and(|role| !role.opens())
     }
 
     /// Record the role of order `id`; a role once recorded stands.

@@ -8,10 +8,12 @@
 //!   order: it sends `Cancel` for the DAY orders a backtest would expire (every working
 //!   order at the session's last slice) and keeps them working; the rest of step 8 and
 //!   the slice's records wait until the venue has ended them all (`Phase::Closing`, the
-//!   engine returns `Pause::Waiting` meanwhile). A cancellation is sent at most once in a
-//!   slice (`withdraw_order`), so one the venue refuses at the close is not sent again:
-//!   the close waits for the venue's own end of the order (a broker ends every DAY order
-//!   at the close, or reports the fill that made it refuse). So the session cannot finish
+//!   engine returns `Pause::Waiting` meanwhile). The close's own cancellation is sent at
+//!   most once in a slice (`withdraw_order`), so one the venue refuses at the close is not
+//!   sent again by the engine: the close waits for the venue's own end of the order (a
+//!   broker ends every DAY order at the close, or reports the fill that made it refuse),
+//!   unless the session asks again with `cancel`, which sends it at once
+//!   (`venue_session`). So the session cannot finish
 //!   while an order works, and a fill the venue reports before the cancellation is
 //!   recorded in the closing slice.
 //! - **The next open is reached at the close of the slice before it.** A live session runs

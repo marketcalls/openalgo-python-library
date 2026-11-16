@@ -131,9 +131,11 @@ fn entries_locked_while_the_session_waits_are_rejected_at_the_next_decision() {
 }
 
 #[test]
-fn a_lock_names_its_reason() {
+fn a_lock_names_its_reason_with_no_spaces_around_it() {
+    // "feed_dead " and "feed_dead" would be two locks, and the first would stand after
+    // the second was lifted.
     let mut kernel = session(config());
-    for blank in ["", "   "] {
+    for blank in ["", "   ", "feed_dead ", " feed_dead"] {
         for result in [kernel.lock_entries(blank), kernel.unlock_entries(blank)] {
             assert!(
                 matches!(

@@ -201,22 +201,21 @@ def test_the_refusal_kinds_are_the_kernels():
     assert frozenset(native_attr("VENUE_REFUSAL_KINDS")) == VENUE_REFUSAL_KINDS
 
 
-def test_a_reduce_only_fill_beyond_the_position_is_refused_for_the_excess():
-    # Long 10 with a reduce-only LIMIT sale of 10 resting; a plain sale of 4 fills first,
-    # then the broker fills the resting 10: 6 close the position, 4 are refused.
+def test_no_sale_is_sent_that_could_take_the_long_beyond_flat():
+    # Long 10 with a reduce-only LIMIT sale of 10 resting: a plain sale of 4 beside it is
+    # held back, so the broker can never fill more than the 10 held. (A fill beyond the
+    # position, refused "would_reverse", needs a position changed at the broker; the
+    # kernel's own tests make one.)
     engine, bought = session_with_order(buy(10))
     engine.apply_fill(bought, 10.0, 500.0, OPEN_NS + MINUTE_NS)
     assert release_minute(engine, 1)[0] == "bar_close"
     sell = {"side": "SELL", "quantity": {"kind": "units", "value": 10.0}}
-    _, resting, _ = engine.submit(buy(10, order_type="LIMIT", price=505.0, reduce_only=True) | sell)
-    _, sale, _ = engine.submit(buy(4) | {"side": "SELL"})
-    assert engine.advance()[0] == "waiting"
-    second_minute = OPEN_NS + 2 * MINUTE_NS
-    engine.apply_fill(sale, 4.0, 500.0, second_minute)
-    kind = refusal_kind(engine.apply_fill, resting, 10.0, 505.0, second_minute + 1)
-    assert kind == "would_reverse"
-    assert engine.position(0, "MIS")["quantity_units"] == 0.0
-    assert engine.order(resting)["filled_units"] == 6.0
+    outcome, resting, _ = engine.submit(
+        buy(10, order_type="LIMIT", price=505.0, reduce_only=True) | sell
+    )
+    assert outcome == "submitted"
+    assert engine.submit(buy(4) | {"side": "SELL"})[0::2] == ("rejected", "live_in_flight")
+    assert engine.order(resting)["status"] == "Submitted"
 
 
 def test_a_cancellation_the_venue_refuses_leaves_the_order_working():

@@ -78,11 +78,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code `live_lock`, and exits are not. A session also rejects an entry or add while
   another order of the symbol and product works (new reject code `live_in_flight`) and one
   that would take the position above the freeze quantity (`freeze_qty`), so a session's
-  position fits in one order. `cap_sizing_equity` makes the engine default size from the
-  lesser of the equity and the account's available cash; `daily_loss_measure` reads the
-  strategy's daily loss measure for the account's limit; `stop_session` ends a session
-  where it stands, sending nothing and reporting its working orders and open positions as
-  they are, with the day's contract note settled, so `finish` can be called.
+  position fits in one order. The orders working on a position's closing side never hold
+  more units than it: a plain sale or buy against the position is an exit only within
+  what the others working to close it leave, and beyond that an entry, which those gates
+  judge (so two plain sales of a long whose first fill is reported late, or a sale during
+  the session's own exit, can no longer open a short); a reduce-only order beyond it is
+  rejected `exit_cover`, counting plain closing orders too; the fill of an order sent to
+  close is never recorded beyond the position, even from a flat one; and a modification
+  that would change an order's role is refused (cancel it and place a new one).
+  `request_exit` returns what it did (`sent`, `waits_for_cancels`, `already_exiting`,
+  `flat`, `market_closed`; native `EXIT_REQUESTS`), and an exit asked for when the market
+  has closed sends nothing. A lock reason with spaces around it is refused.
+  `cap_sizing_equity` makes the engine default size from the lesser of the equity and the
+  account's available cash; `daily_loss_measure` reads the strategy's daily loss measure
+  for the account's limit; `stop_session` ends a session where it stands, sending nothing
+  and reporting its working orders and open positions as they are (a strategy exit that
+  waited for its cancels, never sent, ends canceled), with the day's contract note
+  settled, so `finish` can be called.
 - The live layer's mode guard (private, not used by `bt.live` yet): OpenAlgo's sandbox or
   live mode read at the start of a session, checked on every order answer and update of
   the session's own orders, and polled every 5 seconds and before each entry. A change of

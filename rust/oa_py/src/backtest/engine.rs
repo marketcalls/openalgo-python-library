@@ -36,7 +36,7 @@ mod tables;
 mod venue;
 
 use oa_bt::data::resample::CalendarUnit;
-use oa_bt::engine::{Engine, KernelError, Pause, TimerSpec};
+use oa_bt::engine::{Engine, ExitRequest, KernelError, Pause, TimerSpec};
 use oa_bt::exec::{InstrumentId, OrderId};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -156,12 +156,18 @@ impl NativeEngine {
         venue::answered(py, engine.apply_modify_refused(OrderId(order_id)))
     }
 
-    /// Exit a live session's position for a reason of the session's (`session`).
-    fn request_exit(&mut self, instrument: u32, product: &str, reason: &str) -> PyResult<()> {
+    /// Exit a live session's position for a reason of the session's; what it did, one of
+    /// `EXIT_REQUESTS` (`session`).
+    fn request_exit(
+        &mut self,
+        instrument: u32,
+        product: &str,
+        reason: &str,
+    ) -> PyResult<&'static str> {
         let (product, exit) = (parse_product(product)?, session::engine_exit(reason)?);
         let engine = self.engine_mut()?;
         let asked = engine.request_exit(InstrumentId(instrument), product, exit);
-        asked.map_err(engine_error)
+        asked.map(ExitRequest::code).map_err(engine_error)
     }
 
     /// Lock a live session's entries for a reason; True when they were not locked for it.

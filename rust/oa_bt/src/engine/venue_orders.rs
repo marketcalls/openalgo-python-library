@@ -1,6 +1,7 @@
 //! Commands out of an external session (`venue`): the units an order is sent with, the
 //! order sent at once or made its position's exit, a modification sent and held until the
-//! venue answers, and a cancellation sent at most once in a slice.
+//! venue answers, and a cancellation, which the engine's own withdrawals send at most once
+//! in a slice (`cancel` sends it again at once after a refusal: `venue_session`).
 
 use crate::exec::{OrderAction, OrderId, OrderRequest, OrderStatus, QuantitySpec};
 use crate::model::Side;
@@ -61,7 +62,7 @@ impl Engine {
             let kind = OrderEventKind::Canceled;
             return self.end_order(at.stamp(), id, OrderAction::Cancel, kind);
         }
-        let role = self.submission_role(&order.request, order.quantity_units);
+        let role = self.submission_role(&order.request, order.quantity_units, Some(id));
         if exit {
             self.record_role(id, role);
             self.own_strategy_exit(at, id)?;
@@ -106,7 +107,8 @@ impl Engine {
     /// sends `Cancel` and leaves the order working until the venue's result: once while
     /// it waits for that result, and at most once in a slice, so one the venue refused
     /// (`apply_cancel_refused`) goes again in a later slice (`stamp.slice` is the slice
-    /// in progress). An exit not sent yet has nothing at the venue and ends `Canceled`
+    /// in progress), or at once on a `cancel` (`cancel_on_request` forgets the slice it
+    /// was sent in). An exit not sent yet has nothing at the venue and ends `Canceled`
     /// now. Returns the order's state afterwards.
     ///
     /// Errors: `UnknownOrder`; those of `fills::end_order`.

@@ -12,8 +12,8 @@
 mod venue_support;
 
 use oa_bt::engine::{
-    run, Engine, EngineExit, KernelError, OrderRole, RiskExitReason, RunConfig, Submission,
-    VenueCommand, VenueError,
+    run, Engine, EngineExit, ExitRequest, KernelError, OrderRole, RiskExitReason, RunConfig,
+    Submission, VenueCommand, VenueError,
 };
 use oa_bt::exec::{InstrumentId, OrderId, OrderRequest, OrderStatus, OrderType, QuantitySpec};
 use oa_bt::model::{Product, Side};
@@ -21,8 +21,8 @@ use oa_bt::rms::{RiskBasis, StrategyRiskConfig};
 use oa_bt::sizing::{SizerSpec, SkipReason};
 use venue_support::{
     at_close, backtest, bars, charged_config, close_of, config, exit, holding_on, limit, market,
-    minute, order, pause_at_close, placed_roles, session, stop_market, wait_before, Act, Ohlc,
-    Script, SBIN,
+    minute, order, pause_at_close, placed_roles, run_to_end, session, stop_market, wait_before,
+    Act, Ohlc, Script, SBIN,
 };
 
 const OPERATOR_STOP: EngineExit = EngineExit::Risk(RiskExitReason::OperatorStop);
@@ -62,7 +62,7 @@ fn status(kernel: &Engine, id: u64) -> Option<OrderStatus> {
 fn an_exit_asked_for_while_waiting_sells_the_whole_position_at_market() {
     let mut kernel = waiting_with_100();
     let asked = kernel.request_exit(SBIN, Product::Mis, OPERATOR_STOP);
-    assert_eq!(asked, Ok(()));
+    assert_eq!(asked, Ok(ExitRequest::Sent));
     assert_eq!(
         placed_roles(&kernel.take_commands()),
         [(OrderId(2), Side::Sell, 100.0, OPERATOR_STOP_ROLE)]
@@ -77,7 +77,7 @@ fn an_exit_asked_for_while_waiting_sells_the_whole_position_at_market() {
 fn an_exit_asked_for_at_a_bar_close_is_decided_at_that_close() {
     let mut kernel = holding_on(session(config()), 100.0);
     let asked = kernel.request_exit(SBIN, Product::Mis, OPERATOR_STOP);
-    assert_eq!(asked, Ok(()));
+    assert_eq!(asked, Ok(ExitRequest::Sent));
     let sent = kernel.order(OrderId(2)).expect("the exit");
     assert_eq!(sent.decided_at, close_of(2));
 }
@@ -90,7 +90,7 @@ fn an_exit_asked_for_cancels_the_orders_on_the_closing_side_first() {
     kernel.take_commands();
     assert_eq!(
         kernel.request_exit(SBIN, Product::Mis, OPERATOR_STOP),
-        Ok(())
+        Ok(ExitRequest::WaitsForCancels)
     );
     let cancel = VenueCommand::Cancel { order: OrderId(2) };
     assert_eq!(kernel.take_commands(), vec![cancel], "no exit order yet");
@@ -112,7 +112,7 @@ fn an_exit_asked_for_takes_over_from_the_strategys_exit() {
     kernel.take_commands();
     assert_eq!(
         kernel.request_exit(SBIN, Product::Mis, OPERATOR_STOP),
-        Ok(())
+        Ok(ExitRequest::WaitsForCancels)
     );
     assert_eq!(status(&kernel, 3), Some(OrderStatus::Canceled));
     assert!(
@@ -132,7 +132,7 @@ fn an_exit_asked_for_a_flat_position_sends_nothing() {
     to_wait(&mut kernel, 3);
     assert_eq!(
         kernel.request_exit(SBIN, Product::Mis, OPERATOR_STOP),
-        Ok(())
+        Ok(ExitRequest::Flat)
     );
     assert!(kernel.take_commands().is_empty());
 }
@@ -142,11 +142,11 @@ fn an_exit_asked_for_a_position_an_engine_exit_holds_sends_nothing_more() {
     let mut kernel = waiting_with_100();
     assert_eq!(
         kernel.request_exit(SBIN, Product::Mis, OPERATOR_STOP),
-        Ok(())
+        Ok(ExitRequest::Sent)
     );
     kernel.take_commands();
     let again = kernel.request_exit(SBIN, Product::Mis, EngineExit::SquareOff);
-    assert_eq!(again, Ok(()));
+    assert_eq!(again, Ok(ExitRequest::AlreadyExiting));
     assert!(kernel.take_commands().is_empty());
     assert_eq!(kernel.order_role(OrderId(2)), Some(OPERATOR_STOP_ROLE));
 }
@@ -168,6 +168,70 @@ fn an_exit_is_asked_for_only_of_a_live_session_in_progress() {
     assert!(kernel.stop_session().is_ok());
     let stopped = kernel.request_exit(SBIN, Product::Mis, OPERATOR_STOP);
     assert_eq!(stopped, Err(VenueError::SessionOver.into()));
+}
+
+/// The slice after the test day's last (374): where a session waits while its close does.
+const AFTER_THE_DAY: usize = 375;
+
+/// A CNC long of 100 bought by o1 at the close of minute 0 and filled at 500.10 at the
+/// open of minute 1, with a reduce-only LIMIT sale of the 100 at 900.00 (o2) resting from
+/// the close of minute 2: a position the square-off leaves alone. Run on until the session
+/// waits before `slice`, with no command left to take.
+fn cnc_long_with_a_target_waiting_before(slice: usize) -> Engine {
+    let mut kernel = session(config());
+    let buy = order(Side::Buy, 100.0, OrderType::Market, Product::Cnc);
+    wait_before(
+        &mut kernel,
+        &bars(&[], &[]),
+        &mut Script::new(vec![at_close(0, Act::Submit(buy))]),
+        1,
+    );
+    assert!(kernel
+        .apply_fill(OrderId(1), 100.0, 500.1, minute(1))
+        .is_ok());
+    pause_at_close(&mut kernel, &bars(&[], &[]), 2);
+    let target = OrderRequest {
+        reduce_only: true,
+        ..order(Side::Sell, 100.0, limit(900.0), Product::Cnc)
+    };
+    assert!(kernel.submit(target).is_ok());
+    to_wait(&mut kernel, slice);
+    kernel.take_commands();
+    kernel
+}
+
+#[test]
+fn an_exit_asked_for_while_the_session_close_waits_finds_the_market_closed() {
+    // The close has sent the cancellation of the target (o2) and waits for it.
+    let mut kernel = cnc_long_with_a_target_waiting_before(AFTER_THE_DAY);
+    assert_eq!(
+        kernel.request_exit(SBIN, Product::Cnc, OPERATOR_STOP),
+        Ok(ExitRequest::MarketClosed)
+    );
+    assert!(kernel.take_commands().is_empty(), "nothing is sent");
+    assert_eq!(status(&kernel, 2), Some(OrderStatus::Submitted));
+}
+
+#[test]
+fn an_exit_still_waiting_at_the_session_close_is_dropped_and_the_position_stays_open() {
+    // Asked for while the last slice (374) waits: the target's cancel goes out, and the
+    // venue confirms it only once the close waits. No exit order is ever sent.
+    let mut kernel = cnc_long_with_a_target_waiting_before(374);
+    assert_eq!(
+        kernel.request_exit(SBIN, Product::Cnc, OPERATOR_STOP),
+        Ok(ExitRequest::WaitsForCancels)
+    );
+    to_wait(&mut kernel, AFTER_THE_DAY);
+    assert!(kernel.apply_cancel(OrderId(2)).is_ok());
+    assert!(placed_roles(&kernel.take_commands()).is_empty());
+    assert_eq!(
+        kernel.request_exit(SBIN, Product::Cnc, OPERATOR_STOP),
+        Ok(ExitRequest::MarketClosed)
+    );
+    run_to_end(&mut kernel, &bars(&[], &[]), &mut Script::new(Vec::new()));
+    let output = kernel.finish().expect("the session finished");
+    let open = output.final_positions.first().map(|p| p.quantity_units);
+    assert_eq!(open, Some(100.0));
 }
 
 /// A session with a resting LIMIT buy of 10 at 450.00 (o1) decided at the close of

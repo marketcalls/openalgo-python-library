@@ -4,7 +4,8 @@ the session asks for exits, cancels while it waits, locks entries, caps the engi
 default's sizing equity, reads the daily loss measure and stops where it stands; and it
 rejects at submission an entry or add while entries are locked ("live_lock"), while
 another order of the symbol works ("live_in_flight"), or beyond the freeze quantity
-("freeze_qty").
+("freeze_qty"); a plain sale beyond what the orders closing the position leave is such an
+entry, and a modification keeps an order's role.
 
 No server is involved: the test plays the venue. The session is the NSE day 2025-07-01
 on 1-minute slices from 09:15 IST, one instrument (SBIN), a 1-minute strategy, a capital
@@ -181,14 +182,23 @@ def test_an_exit_the_session_asks_for_sells_the_whole_position_with_its_reason(
 ):
     engine = holding(100.0)
     assert engine.advance()[0] == "waiting"
-    assert engine.request_exit(0, "MIS", reason) is None
+    assert engine.request_exit(0, "MIS", reason) == "sent"
     assert places(engine) == [(2, "SELL", 100.0, role, risk_reason)]
+
+
+def test_an_exit_asked_for_says_what_it_did():
+    engine = holding(100.0)
+    assert engine.submit(STOP)[0] == "submitted"
+    assert engine.advance()[0] == "waiting"
+    engine.take_commands()
+    assert engine.request_exit(0, "MIS", "operator_stop") == "waits_for_cancels"
+    assert engine.request_exit(0, "MIS", "kill_switch") == "already_exiting"
 
 
 def test_an_exit_asked_for_a_flat_position_sends_nothing():
     engine = flat()
     assert engine.advance()[0] == "waiting"
-    engine.request_exit(0, "MIS", "operator_stop")
+    assert engine.request_exit(0, "MIS", "operator_stop") == "flat"
     assert engine.take_commands() == []
 
 
@@ -262,15 +272,31 @@ def test_entry_locks_are_reasons_in_a_set():
     assert engine.submit(order("BUY", 10.0))[0] == "submitted"
 
 
-def test_a_blank_lock_reason_is_an_input_error():
+@pytest.mark.parametrize("reason", [" ", "feed_dead ", " feed_dead"])
+def test_a_blank_lock_reason_or_one_with_spaces_around_it_is_an_input_error(reason):
     with pytest.raises(native_attr("NativeEngineInputError"), match="entry_lock"):
-        new_session().lock_entries(" ")
+        new_session().lock_entries(reason)
 
 
 def test_an_entry_while_another_order_of_the_symbol_works_is_rejected_live_in_flight():
     engine = flat()
     assert engine.submit(order("BUY", 10.0, order_type="LIMIT", price=450.0))[0] == "submitted"
     assert engine.submit(order("BUY", 10.0))[2] == "live_in_flight"
+
+
+def test_a_plain_sale_beyond_what_the_orders_closing_the_long_leave_is_held_back():
+    engine = holding(100.0)
+    assert engine.submit(order("SELL", 100.0))[0] == "submitted"
+    assert engine.submit(order("SELL", 100.0))[2] == "live_in_flight"
+
+
+def test_a_modification_that_would_change_an_orders_role_is_an_input_error():
+    engine = holding(100.0)
+    outcome, order_id, _ = engine.submit(order("SELL", 100.0, order_type="LIMIT", price=520.0))
+    assert outcome == "submitted"
+    reversal = order("SELL", 250.0, order_type="LIMIT", price=520.0, reverse=True)
+    with pytest.raises(native_attr("NativeEngineInputError"), match="keeps what the order is for"):
+        engine.modify(order_id, reversal)
 
 
 def test_an_add_beyond_the_freeze_quantity_is_rejected_freeze_qty():
@@ -358,6 +384,13 @@ def test_the_role_and_reason_vocabularies_are_the_kernels():
         "kill_switch",
         "account_loss",
         "operator_stop",
+    )
+    assert native_attr("EXIT_REQUESTS") == (
+        "sent",
+        "waits_for_cancels",
+        "already_exiting",
+        "flat",
+        "market_closed",
     )
 
 

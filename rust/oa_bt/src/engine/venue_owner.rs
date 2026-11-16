@@ -374,6 +374,9 @@ impl Engine {
 }
 
 #[cfg(test)]
+mod freeze_split_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

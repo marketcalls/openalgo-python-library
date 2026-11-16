@@ -4,9 +4,9 @@
 //!
 //! | Call | When | What |
 //! |---|---|---|
-//! | `request_exit(instrument, product, exit)` | paused at a decision point, or waiting | the engine's exit of the whole position for the session's reason (`venue_owner`): the orders on its closing side are cancelled, then it exits; nothing for a flat position, or one an engine exit holds already |
+//! | `request_exit(instrument, product, exit)` | paused at a decision point, or waiting | the engine's exit of the whole position for the session's reason (`venue_owner`): the orders on its closing side are cancelled, then it exits; it says what it did (`ExitRequest`, below) |
 //! | `cancel(order)` (`submit`) | the same | `Cancel` is sent, and sent again for an order whose cancellation the venue refused, even in the slice it was refused in; not twice while one waits for the venue's answer |
-//! | `lock_entries(reason)`, `unlock_entries(reason)`, `entry_locks()` | any time | entry locks are reasons in a set: while it is not empty, entries and adds are rejected at submission with `live_lock`, and exits are not (`venue_gates`) |
+//! | `lock_entries(reason)`, `unlock_entries(reason)`, `entry_locks()` | any time | entry locks are reasons in a set: while it is not empty, entries and adds are rejected at submission with `live_lock`, and exits are not (`venue_gates`); a reason is a name with no spaces around it |
 //! | `cap_sizing_equity(rupees)` | any time | the engine default sizes from the lesser of the strategy's sizing equity and the cap, the account's available cash |
 //! | `daily_loss_measure()` | any time | the strategy's daily loss measure, rupees on its risk basis: what the account's limit adds up |
 //! | `stop_session()` | any time | the session ends where it stands (below) |
@@ -17,9 +17,19 @@
 //! queries `entry_locks` and `daily_loss_measure` is refused in a backtest
 //! (`VenueError::NotExternal`); `cancel` keeps a backtest's rule, at a decision point only.
 //!
+//! A session's exit is sent once the orders on the position's closing side have ended, so
+//! `request_exit` may leave it waiting (`ExitRequest::WaitsForCancels`). If the market has
+//! closed by the time they end, the exit is not sent and the position stays open, as for
+//! an exit asked for when the market is closed already (`ExitRequest::MarketClosed`).
+//! Asking again says where the position stands: `AlreadyExiting` while the exit works or
+//! waits, `Flat` once it has closed the position, and a new exit once it has ended
+//! without closing it (rejected by the venue, or dropped at the close).
+//!
 //! `stop_session` ends the session at once: nothing is sent (no cancellation, no exit),
 //! the working orders keep their state and the open positions stay open, marked at their
-//! last close, so `finish` reports them as they stand. The slice in progress does not run:
+//! last close, so `finish` reports them as they stand. A strategy exit that waits for its
+//! cancels was never sent, so nothing of it is at the venue: it ends `Canceled`, and an
+//! engine exit that waits is dropped. The slice in progress does not run:
 //! what was recorded in it (fills while waiting) is in the fills and positions, while the
 //! position history and the equity series end at the last slice that ran. Its contract
 //! notes are settled, as at a run's end (`run_end`), so every fill carries its charges.
@@ -29,18 +39,56 @@
 
 use std::collections::BTreeSet;
 
-use crate::exec::{InstrumentId, OrderId, OrderStatus};
+use crate::exec::{InstrumentId, OrderAction, OrderId, OrderStatus};
 use crate::model::Product;
 use crate::portfolio::PositionKey;
 use crate::sizing::{SizerSpec, SizingContext};
 
 use super::clock::SliceInfo;
 use super::error::KernelError;
-use super::event::{Event, EventStamp};
+use super::event::{Event, EventStamp, OrderEventKind};
 use super::kernel::{Engine, Phase};
-use super::venue::SendAt;
+use super::venue::{ExitBy, SendAt};
 use super::venue_error::VenueError;
 use super::venue_roles::EngineExit;
+
+/// What `Engine::request_exit` did (module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExitRequest {
+    /// The exit's orders were sent.
+    Sent,
+    /// The exit waits for the cancellation of the orders on the position's closing side,
+    /// sent now; it is sent once they have all ended, if the market is open then.
+    WaitsForCancels,
+    /// An engine exit holds the position already, sent or waiting: no second exit.
+    AlreadyExiting,
+    /// The position is flat: nothing to exit.
+    Flat,
+    /// The market is closed: no exit can be sent, and the position stays open.
+    MarketClosed,
+}
+
+impl ExitRequest {
+    /// Every outcome's code, in the order of the variants.
+    pub const CODES: [&'static str; 5] = [
+        "sent",
+        "waits_for_cancels",
+        "already_exiting",
+        "flat",
+        "market_closed",
+    ];
+
+    /// The code the bindings use.
+    pub fn code(self) -> &'static str {
+        match self {
+            ExitRequest::Sent => "sent",
+            ExitRequest::WaitsForCancels => "waits_for_cancels",
+            ExitRequest::AlreadyExiting => "already_exiting",
+            ExitRequest::Flat => "flat",
+            ExitRequest::MarketClosed => "market_closed",
+        }
+    }
+}
 
 /// What the live layer has set on an external session.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -51,14 +99,20 @@ pub(super) struct SessionControls {
     pub(super) sizing_cap_rupees: Option<f64>,
 }
 
-/// A lock reason as given, refused when it names nothing.
+/// A lock reason as given, refused when it names nothing or has spaces around it: two
+/// reasons that differ only in those would be two locks, and one would stand after the
+/// other was lifted.
 ///
-/// Errors: `InvalidConfig` naming `entry_lock` for an empty or blank reason.
+/// Errors: `InvalidConfig` naming `entry_lock` for an empty or blank reason, and for one
+/// with spaces around it.
 fn lock_reason(reason: &str) -> Result<&str, KernelError> {
-    if reason.trim().is_empty() {
+    if reason.trim().is_empty() || reason.trim() != reason {
         return Err(KernelError::InvalidConfig {
             field: "entry_lock",
-            reason: "name why entries are locked, for example \"feed_dead\"".to_string(),
+            reason: format!(
+                "{reason:?}: name why entries are locked, with no spaces around it, for \
+                 example \"feed_dead\""
+            ),
         });
     }
     Ok(reason)
@@ -69,8 +123,9 @@ impl Engine {
     /// docs): the square-off, or a risk exit for the session's reason. It goes through the
     /// position's exit owner (`venue_owner`): it takes over from the strategy's exits,
     /// cancels the working orders on the closing side and is sent once they have ended,
-    /// for the position then open. A flat position, and one an engine exit holds already,
-    /// get nothing.
+    /// for the position then open. Returns what it did: `Sent` or `WaitsForCancels`, and
+    /// nothing at all for a position an engine exit holds already (`AlreadyExiting`), a
+    /// flat one (`Flat`) and a closed market (`MarketClosed`).
     ///
     /// Errors: `Venue(NotExternal)` in a backtest; `Venue(SessionOver)` after the session;
     /// `InvalidConfig` naming `symbol` for an instrument the session does not trade; those
@@ -80,18 +135,29 @@ impl Engine {
         instrument: InstrumentId,
         product: Product,
         exit: EngineExit,
-    ) -> Result<(), KernelError> {
+    ) -> Result<ExitRequest, KernelError> {
         self.require_session()?;
         self.spec(instrument)?;
         let at = self.control_point()?;
-        self.request_engine_exit(
-            at,
-            PositionKey {
-                instrument,
-                product,
-            },
-            exit,
-        )
+        let key = PositionKey {
+            instrument,
+            product,
+        };
+        if self.held_units(key) == 0.0 {
+            return Ok(ExitRequest::Flat);
+        }
+        if self.has_engine_exit(key) {
+            return Ok(ExitRequest::AlreadyExiting);
+        }
+        if self.day_validity(&at.slice, at.decided_at).is_err() {
+            return Ok(ExitRequest::MarketClosed);
+        }
+        self.request_engine_exit(at, key, exit)?;
+        Ok(if self.has_waiting_exit(key) {
+            ExitRequest::WaitsForCancels
+        } else {
+            ExitRequest::Sent
+        })
     }
 
     /// Lock entries for `reason`: entries and adds are rejected at submission while any
@@ -160,10 +226,37 @@ impl Engine {
     pub fn stop_session(&mut self) -> Result<Vec<Event>, KernelError> {
         self.require_session()?;
         if let Some(slice) = self.slice_in_progress() {
+            self.drop_unsent_exits()?;
             self.settle_contract_notes(&slice);
         }
         self.phase = Phase::Finished;
         Ok(std::mem::take(&mut self.undelivered))
+    }
+
+    /// At the stop, drop every exit that waits for its cancels: none was sent (module
+    /// docs). The strategy's end `Canceled`, stamped where a session control acts.
+    ///
+    /// Errors: those of `control_point` and of `fills::end_order`.
+    fn drop_unsent_exits(&mut self) -> Result<(), KernelError> {
+        let unsent: Vec<OrderId> = self
+            .venue
+            .exits
+            .iter()
+            .filter(|exit| exit.sent.is_empty())
+            .filter_map(|exit| match exit.by {
+                ExitBy::Strategy(id) => Some(id),
+                ExitBy::Engine(_) => None,
+            })
+            .collect();
+        self.venue.exits.retain(|exit| !exit.sent.is_empty());
+        if unsent.is_empty() {
+            return Ok(());
+        }
+        let stamp = self.control_point()?.stamp();
+        for id in unsent {
+            self.end_order(stamp, id, OrderAction::Cancel, OrderEventKind::Canceled)?;
+        }
+        Ok(())
     }
 
     /// Where a session control acts (module docs): the decision point the engine is paused

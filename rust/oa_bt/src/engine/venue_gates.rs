@@ -1,7 +1,8 @@
 //! The entry gates an external session adds (`venue`; 16-session-design 6.6, requirements
 //! R9, R16 and R17; 08-live-trading section 6.1). They judge an order that opens or adds
 //! (`OrderRole::opens`) at submission and at modification, after the backtest's checks, in
-//! this order:
+//! this order. That includes an order against the position beyond what the orders working
+//! to close it leave (`venue_roles`): it could open the other side.
 //!
 //! | Gate | Rejects the entry or add | Code |
 //! |---|---|---|
@@ -67,7 +68,7 @@ impl Engine {
         units: f64,
         replacing: Option<OrderId>,
     ) -> Result<(), RejectCode> {
-        if !self.is_external() || !self.submission_role(request, units).opens() {
+        if !self.is_external() || !self.submission_role(request, units, replacing).opens() {
             return Ok(());
         }
         if !self.venue.controls.entry_locks.is_empty() {
