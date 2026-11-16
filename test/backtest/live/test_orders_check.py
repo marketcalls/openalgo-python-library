@@ -18,13 +18,24 @@ from orders_fakes import (
     update,
 )
 
-from openalgo.backtest._live._types import Mode, OrderStatus, Purpose
-from openalgo.backtest._live.orders import OrderCheck
+from openalgo.backtest._live._types import AlertKind, Mode, OrderStatus, Purpose
+from openalgo.backtest._live.orders import HeldFill, OrderCheck
 from openalgo.backtest.errors import LiveError, ModeChangedError
 
 STOP = make_intent("i-1", purpose=Purpose.STOP, action="SELL", price_type="SL-M", trigger_price=805)
 STOP_ROW = {"action": "SELL", "pricetype": "SL-M", "trigger_price": 805.0}
+#: The stop's terms as `modifyorder` takes them, without its price type and trigger price.
+STOP_TERMS = {
+    "symbol": "SBIN",
+    "action": "SELL",
+    "exchange": "NSE",
+    "product": "MIS",
+    "quantity": 10,
+    "price": 0,
+}
 NOT_FOUND = http_error(404, server_error("Order 1 not found"))
+#: A gateway's own error page in front of OpenAlgo, as the SDK wraps it.
+GATEWAY_502 = http_error(502, "<html><body>502 Bad Gateway</body></html>")
 
 
 def stop_rig(**answers):
@@ -140,10 +151,10 @@ def test_a_cancel_found_by_a_check_waits_for_the_tradebook_to_confirm_its_fills(
     assert [held.filled_quantity for held in rig.path.held_fills()] == [0]
 
 
-def test_a_row_without_its_fills_asks_the_next_round_to_poll_it_with_the_tradebook():
+def test_an_open_row_without_its_fills_asks_the_next_round_to_poll_it_with_the_tradebook():
     # The stream spoke for the stop, so without the check its next poll is 30 s away.
     rig = stop_rig(
-        orderstatus=[stop_answer("cancelled"), stop_answer("cancelled")],
+        orderstatus=[stop_answer("open"), stop_answer("open")],
         tradebook=[trades(("1", 3, 804.0))],
     )
     rig.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0))
@@ -152,7 +163,75 @@ def test_a_row_without_its_fills_asks_the_next_round_to_poll_it_with_the_tradebo
 
     (news,) = rig.path.due_polls()
 
-    assert (news.status, news.filled_quantity) == (OrderStatus.CANCELLED, 3)
+    assert (news.status, news.filled_quantity) == (OrderStatus.OPEN, 3)
+
+
+# ----- a cancelled row without its fills ---------------------------------------------
+
+
+def cancelled_rig(tradebook):
+    """The stream reported the stop waiting, then a check read a broker's cancelled row,
+    which gives no fills; the tradebook answers `tradebook` in turn."""
+    rig = stop_rig(orderstatus=[stop_answer("cancelled")], tradebook=tradebook)
+    rig.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0))
+    rig.path.check_order("1")
+    return rig
+
+
+def test_a_cancelled_row_without_its_fills_is_held_while_the_tradebook_cannot_be_read():
+    rig = cancelled_rig(tradebook=[GATEWAY_502])
+    checked_ns = rig.clock.now_ns
+    rig.clock.advance(1)
+
+    assert rig.path.due_polls() == []
+    assert rig.path.held_fills() == [HeldFill("1", 0, checked_ns)]
+    assert rig.path.last_known("1").status is OrderStatus.CANCELLED
+    assert len(rig.client.calls_to("orderstatus")) == 1
+
+
+def test_a_cancelled_row_held_for_the_tradebook_is_handed_over_once_the_tradebook_reads():
+    rig = cancelled_rig(tradebook=[GATEWAY_502, trades(("1", 3, 804.0))])
+    rig.clock.advance(1)
+    rig.path.due_polls()
+    rig.clock.advance(1)
+
+    (news,) = rig.path.due_polls()
+
+    assert (news.status, news.filled_quantity, news.average_price) == (
+        OrderStatus.CANCELLED,
+        3,
+        804.0,
+    )
+
+
+def test_a_cancelled_row_held_past_ten_seconds_sends_one_error_alert():
+    rig = cancelled_rig(tradebook=[GATEWAY_502] * 20)
+    for _ in range(11):
+        rig.clock.advance(1)
+        rig.path.due_polls()
+
+    ((kind, text),) = rig.alerts.sent
+    assert kind is AlertKind.ERROR
+    assert "order 1" in text and "cancelled" in text
+
+
+# ----- the price type the row gives --------------------------------------------------
+
+
+def test_a_check_keeps_the_price_type_of_the_row_after_a_modify_whose_answer_was_lost():
+    # The stop was modified to MARKET, its answer lost; the row shows it working as one.
+    market = stop_answer("open", pricetype="MARKET", trigger_price=0.0, filled_quantity=0)
+    rig = stop_rig(modifyorder=[TIMEOUT], orderstatus=[market, market])
+    rig.path.on_update(update("1", OrderStatus.TRIGGER_PENDING, 0))
+    rig.path.modify("1", **STOP_TERMS, price_type="MARKET", trigger_price=0)
+    check = rig.path.check_order("1")
+    rig.clock.advance(1)
+
+    rig.path.due_polls()
+
+    # A market order still working is polled every second, not every 30 seconds.
+    assert check.price_type == "MARKET"
+    assert len(rig.client.calls_to("orderstatus")) == 2
 
 
 # ----- answers that cannot be read ---------------------------------------------------

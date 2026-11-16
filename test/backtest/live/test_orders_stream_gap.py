@@ -3,9 +3,12 @@ followed order still working that the stream has not spoken for since the gap be
 polled once, in the polling rounds (at most three orders a round, one round a second),
 instead of waiting for its 30-second safety poll."""
 
+import pytest
 from orders_fakes import (
     NS,
+    PROXY_504,
     START_NS,
+    TIMEOUT,
     FakeJournal,
     make_intent,
     make_rig,
@@ -98,6 +101,37 @@ def test_after_its_gap_poll_an_order_waits_for_its_safety_poll_again():
     polled = polled_per_round(rig, rounds=31)
 
     assert [n for n, orders in enumerate(polled) if orders] == [0, 30]
+
+
+@pytest.mark.parametrize(
+    "failed",
+    [TIMEOUT, PROXY_504, status_answer("1", "after market order req received")],
+    ids=["timeout", "gateway page", "unreadable row"],
+)
+def test_a_gap_poll_that_gives_no_word_is_made_again_in_the_next_round(failed):
+    rig = streamed_rig(["1"], orderstatus=[failed, resting("1")])
+    rig.clock.advance(5)
+    rig.path.stream_gap(START_NS + 1 * NS)
+
+    assert polled_per_round(rig, rounds=3) == [["1"], ["1"], []]
+
+
+def test_a_check_that_gives_no_word_leaves_the_gap_poll_due_in_the_next_round():
+    rig = streamed_rig(["1"], orderstatus=[TIMEOUT, resting("1")])
+    rig.clock.advance(5)
+    rig.path.stream_gap(START_NS + 1 * NS)
+    rig.path.check_order("1")
+    rig.clock.advance(1)
+
+    assert polled_per_round(rig, rounds=2) == [["1"], []]
+
+
+def test_a_gap_poll_that_keeps_failing_takes_its_turn_with_the_others():
+    rig = streamed_rig(["1", "2", "3", "4"], orderstatus=[TIMEOUT] * 6)
+    rig.clock.advance(5)
+    rig.path.stream_gap(START_NS + 1 * NS)
+
+    assert polled_per_round(rig, rounds=2) == [["1", "2", "3"], ["4", "1", "2"]]
 
 
 def test_a_gap_poll_hands_over_a_fill_the_stream_missed():

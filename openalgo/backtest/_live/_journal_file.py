@@ -25,6 +25,13 @@ SCHEMA_VERSION = 1
 #: session writes one file from two threads, each through its own handle, and every
 #: write commits in milliseconds, so one waits on the other well within it.
 DEFAULT_BUSY_TIMEOUT_S = 5.0
+# Python's sqlite3 hands the wait to SQLite (`sqlite3_busy_timeout`) as whole
+# milliseconds in a C int, and SQLite takes 0 or less as no wait at all: a wait under
+# 1 ms, or past 2**31 - 1 ms (about 24.8 days), would silently become none.
+#: The shortest busy timeout SQLite keeps as a wait, in seconds: one millisecond.
+MIN_BUSY_TIMEOUT_S = 0.001
+#: The longest, in seconds: the largest C int of milliseconds.
+MAX_BUSY_TIMEOUT_S = (2**31 - 1) / 1_000
 #: The environment variable naming the folder (absolute) that holds the journals instead
 #: of `~/.openalgo/live`.
 LIVE_DIR_VARIABLE = "OPENALGO_LIVE_DIR"
@@ -138,9 +145,10 @@ def connect(
     runs, syncs each commit to disk, gives rows as `sqlite3.Row`, and waits up to
     `busy_timeout_s` seconds for a lock another connection holds.
 
-    Raises `JournalError` when `busy_timeout_s` is not a positive number, or the file
-    cannot be opened, is not a journal, has a newer or unknown schema version, belongs to
-    another account or is bound to another broker.
+    Raises `JournalError` when `busy_timeout_s` is not a number of seconds from
+    `MIN_BUSY_TIMEOUT_S` to `MAX_BUSY_TIMEOUT_S`, or the file cannot be opened, is not a
+    journal, has a newer or unknown schema version, belongs to another account or is
+    bound to another broker.
     """
     check_name("account", account)
     check_name("broker", broker)
@@ -163,12 +171,19 @@ def connect(
 
 
 def _check_busy_timeout(busy_timeout_s: float) -> None:
-    """Raise `JournalError` unless `busy_timeout_s` is a finite number of seconds above 0."""
+    """Raise `JournalError` unless `busy_timeout_s` is a number of seconds SQLite keeps as
+    a wait: from `MIN_BUSY_TIMEOUT_S` to `MAX_BUSY_TIMEOUT_S`."""
     number = isinstance(busy_timeout_s, numbers.Real) and not isinstance(busy_timeout_s, bool)
     if not (number and math.isfinite(busy_timeout_s) and busy_timeout_s > 0):
         raise JournalError(
             "busy_timeout_s is how many seconds a write waits for a lock another connection "
             f"holds, a number above 0 such as {DEFAULT_BUSY_TIMEOUT_S:g}, not {busy_timeout_s!r}"
+        )
+    if not MIN_BUSY_TIMEOUT_S <= busy_timeout_s <= MAX_BUSY_TIMEOUT_S:
+        raise JournalError(
+            f"busy_timeout_s is {busy_timeout_s!r} seconds, which SQLite would keep as no wait "
+            f"at all (it counts whole milliseconds): give from {MIN_BUSY_TIMEOUT_S:g} (one "
+            f"millisecond) to {MAX_BUSY_TIMEOUT_S} seconds, such as {DEFAULT_BUSY_TIMEOUT_S:g}"
         )
 
 
@@ -314,6 +329,8 @@ __all__ = [
     "DEFAULT_BUSY_TIMEOUT_S",
     "JOURNAL_FILE_NAME",
     "LIVE_DIR_VARIABLE",
+    "MAX_BUSY_TIMEOUT_S",
+    "MIN_BUSY_TIMEOUT_S",
     "SCHEMA_VERSION",
     "check_name",
     "connect",

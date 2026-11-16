@@ -37,10 +37,11 @@ _MARKET = "MARKET"
 @dataclass(frozen=True)
 class HeldFill:
     """An order update the engine has not been given yet: `filled_quantity` units (as
-    reported; 0 for a cancel the tradebook has not confirmed), held since `held_since_ns`
-    (UTC nanoseconds) for its price or the tradebook's confirmation. `average_price` is
-    the held word's own average price in rupees (a polled fill carries `orderstatus`'s),
-    0.0 when it gives none: the price to release it at when positive."""
+    reported, or the units already handed over when a terminal word reports fewer; 0 for
+    a cancel the tradebook has not confirmed, of an order with nothing handed over), held
+    since `held_since_ns` (UTC nanoseconds) for its price or the tradebook's confirmation.
+    `average_price` is the held word's own average price in rupees (a polled fill carries
+    `orderstatus`'s), 0.0 when it gives none: the price to release it at when positive."""
 
     order_id: str
     filled_quantity: int
@@ -96,9 +97,19 @@ class Followed:
         """Note a word of the stream received at `ts_recv_ns`."""
         self.streamed_ns = max(self.streamed_ns or ts_recv_ns, ts_recv_ns)
 
+    def heard(self, update: OrderUpdate) -> None:
+        """Note a word of the order as it is taken: a stream word tells when the stream
+        last spoke for it; a polled word read at or after a poll was asked for out of turn
+        answers that poll (it gives the order's whole state at that time)."""
+        if update.source == "stream":
+            self.heard_from_stream(update.ts_recv_ns)
+        elif self.poll_asked_ns is not None and update.ts_recv_ns >= self.poll_asked_ns:
+            self.poll_asked_ns = None
+
     def polled(self, now: int) -> None:
-        """Note a poll made at `now`: it answers any poll asked for out of turn."""
-        self.polled_ns, self.quiet_polls, self.poll_asked_ns = now, self.quiet_polls + 1, None
+        """Note a poll made at `now`. A poll asked for out of turn stays asked until a
+        polled word answers it (`heard`): a read that fails or gives no word does not."""
+        self.polled_ns, self.quiet_polls = now, self.quiet_polls + 1
 
     def ask_poll(self, now: int) -> None:
         """Make the order due for a poll from `now`, whatever its schedule."""
@@ -120,13 +131,20 @@ class Followed:
         a trigger, as reported, and not a market order): every 30 s once the stream has
         spoken for it, else backing off (`BACKOFF_NS`, `ENTRY_BACKOFF_NS`) while polls
         bring no news. Any other working order: every second. A poll asked for out of
-        turn (`ask_poll`) is due from when it was asked, whichever comes first.
+        turn (`ask_poll`) is due from when it was asked, whichever comes first, and a
+        second after each poll since that did not answer it, so it takes its turn in the
+        rounds with the other orders.
         """
         word = self.last_word
         if word is not None and word.status.terminal:
             return None
         due_ns = self._scheduled_ns(word)
-        return due_ns if self.poll_asked_ns is None else min(due_ns, self.poll_asked_ns)
+        asked_ns = self.poll_asked_ns
+        if asked_ns is None:
+            return due_ns
+        if self.polled_ns is not None and self.polled_ns >= asked_ns:
+            asked_ns = self.polled_ns + POLL_EVERY_NS
+        return min(due_ns, asked_ns)
 
     def _scheduled_ns(self, word: OrderUpdate | None) -> int:
         """When the order's schedule polls it next (see `poll_due_ns`)."""
@@ -161,6 +179,22 @@ class Followed:
     def release(self) -> None:
         """Nothing is held any more."""
         self.held, self.trades_read_ns, self.trade_reads = None, None, 0
+
+    def handed_over(self, update: OrderUpdate) -> None:
+        """Note `update` handed to the engine. A held word it tells as much as is released,
+        but a terminal held word (a cancel the tradebook must confirm) outlives a working
+        update, and takes the fills handed over since it was held (`with_floor`), so it is
+        never released with fewer."""
+        self.seen, self.quiet_polls = update, 0
+        held = self.held
+        if held is None:
+            return
+        if update.filled_quantity >= held.filled_quantity and (
+            update.status.terminal or not held.status.terminal
+        ):
+            self.release()
+        else:
+            self.held = with_floor(self, held)
 
     def _backoff_ns(self, tries: int) -> int:
         steps = ENTRY_BACKOFF_NS if self.intent.purpose in ENTRY_PURPOSES else BACKOFF_NS

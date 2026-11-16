@@ -94,9 +94,9 @@ class Journal(JournalHandle):
         nanoseconds of the times it records. A statement waits up to `busy_timeout_s`
         seconds for a lock another connection holds (the session's other handle, say).
 
-        Raises `JournalError` when `busy_timeout_s` is not a positive number, or the file
-        cannot be opened or written, is not a journal, was written by a newer version or
-        has an unknown schema version, belongs to another account or is bound to another
+        Raises `JournalError` when `busy_timeout_s` is not 0.001 to 2147483.647 (the waits SQLite
+        keeps), or the file cannot be opened or written, is not a journal, was written by a newer
+        version or has an unknown schema version, belongs to another account or is bound to another
         broker, and on any later call that finds it locked past `busy_timeout_s`.
         """
         if not isinstance(mode, Mode):

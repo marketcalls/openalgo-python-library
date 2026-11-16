@@ -129,6 +129,61 @@ def test_a_price_already_known_for_the_units_stands():
     assert (released.filled_quantity, released.average_price) == (5, 804.75)
 
 
+# ----- a fill handed over after the cancel was held ----------------------------------
+
+
+def late_fill_rig():
+    """The stop's cancel is held, then a late stream word hands over 3 units at 804."""
+    rig = stop_rig()
+    held_cancel(rig)
+    rig.path.on_update(update("1", OrderStatus.OPEN, 3, price=804.0))
+    return rig
+
+
+def test_a_held_cancel_keeps_the_fills_handed_over_after_it_was_held():
+    rig = late_fill_rig()
+
+    assert [held.filled_quantity for held in rig.path.held_fills()] == [3]
+    known = rig.path.last_known("1")
+    assert (known.status, known.filled_quantity) == (OrderStatus.CANCELLED, 3)
+
+
+@pytest.mark.parametrize("units", [0, 2], ids=["none", "fewer"])
+def test_release_cancel_refuses_fewer_units_than_handed_over_after_the_cancel_was_held(units):
+    rig = late_fill_rig()
+
+    with pytest.raises(LiveError, match="from the 3 reported filled"):
+        rig.path.release_cancel("1", units, 805.0)
+    assert [held.order_id for held in rig.path.held_fills()] == ["1"]
+
+
+def test_release_cancel_hands_over_a_cancel_held_before_a_late_fill_at_the_known_price():
+    rig = late_fill_rig()
+
+    released = rig.path.release_cancel("1", 3, 805.0)
+
+    assert (released.status, released.filled_quantity, released.average_price) == (
+        OrderStatus.CANCELLED,
+        3,
+        804.0,
+    )
+    assert rig.journal.updates[-1] == released
+
+
+def test_release_fill_hands_over_a_cancel_held_before_a_late_fill_at_the_known_price():
+    rig = late_fill_rig()
+
+    released = rig.path.release_fill("1", 805.0)
+
+    assert (released.status, released.filled_quantity, released.average_price) == (
+        OrderStatus.CANCELLED,
+        3,
+        804.0,
+    )
+    assert rig.path.last_known("1") == released
+    assert rig.path.held_fills() == []
+
+
 def test_release_cancel_refuses_an_order_holding_nothing():
     rig = stop_rig()
 

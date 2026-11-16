@@ -70,8 +70,11 @@ def read_status(
 
 def polled_word(answer: Mapping[str, Any], order_id: str, now: int) -> Polled | None:
     """The word an `orderstatus` answer received at `now` gives the follower: the order's
-    update, or the answer itself when its fills are to be read from the tradebook. None
-    (logged) for a failed answer or a row that cannot be read."""
+    update, or the answer itself when an open row's fills are to be read from the
+    tradebook. A cancelled row without its fills is a cancel that reports none, which the
+    follower holds until the tradebook confirms its fills, so a tradebook that cannot be
+    read leaves the cancel known and held, not lost. None (logged) for a failed answer or
+    a row that cannot be read."""
     data = answer.get("data")
     if answer.get("status") != "success" or not isinstance(data, Mapping):
         logger.warning("orderstatus of %s failed: %s", order_id, answer.get("message"))
@@ -79,6 +82,9 @@ def polled_word(answer: Mapping[str, Any], order_id: str, now: int) -> Polled | 
     try:
         if fills_given(data, order_id):
             return normalize_update(answer, ts_recv_ns=now, source="poll")
+        if status_of(data, order_id) is OrderStatus.CANCELLED:
+            unfilled = {**data, "filled_quantity": 0, "average_price": 0.0}
+            return normalize_update({**answer, "data": unfilled}, ts_recv_ns=now, source="poll")
         return answer
     except LiveError as error:
         logger.error("orderstatus of %s cannot be read: %s", order_id, error)

@@ -244,8 +244,9 @@ class OrderPath:
 
     def release_fill(self, order_id: str, average_price: float) -> OrderUpdate | None:
         """Hand over a held fill at `average_price` (rupees, such as the feed's last
-        traded price), journaled and checked by the guard; None when it is no longer
-        news. Raises LiveError when the order holds nothing or the price is not positive."""
+        traded price; a price already known for its units stands), journaled and checked
+        by the guard; None when it is no longer news. Raises LiveError when the order
+        holds nothing or the price is not positive."""
         return self._follower.release_fill(order_id, average_price)
 
     def release_cancel(
@@ -275,7 +276,9 @@ class OrderPath:
         server), whatever its polling schedule: the row's status, quantity, filled
         quantity when given, price, trigger price and price type (`OrderCheck`), or why
         it could not be read. Its news is taken as a poll's and returned in the check: a
-        fill or a cancel waits for the tradebook, which the next polling round reads.
+        fill or a cancel waits for the tradebook, which the next polling round reads. The
+        row's price type becomes the order's for its polling (a modify whose answer was
+        lost may have changed it).
 
         Raises ModeChangedError when the guard is locked, before the read or by its
         answer (a row of the other mode's book says nothing of this order), and LiveError

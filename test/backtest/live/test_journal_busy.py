@@ -89,6 +89,23 @@ def test_a_busy_timeout_that_is_not_a_positive_number_of_seconds_is_refused(path
     assert not path.exists()
 
 
+# SQLite takes the wait in whole milliseconds, a C int: under 1 ms or past 2**31 - 1 ms
+# it would be 0, no wait at all.
+@pytest.mark.parametrize("seconds", [0.0009, 2_147_483.648, 3e6], ids=str)
+def test_a_busy_timeout_sqlite_would_keep_as_no_wait_is_refused(path, seconds):
+    with pytest.raises(JournalError, match=r"from 0\.001 \(one millisecond\) to 2147483\.647"):
+        open_journal(path, busy_timeout_s=seconds)
+    assert not path.exists()
+
+
+@pytest.mark.parametrize(
+    ("seconds", "milliseconds"), [(0.001, 1), (2_147_483.647, 2**31 - 1)], ids=["least", "most"]
+)
+def test_a_busy_timeout_at_the_bounds_sqlite_keeps_is_taken(path, seconds, milliseconds):
+    with open_journal(path, busy_timeout_s=seconds) as journal:
+        assert busy_timeout_ms(journal) == milliseconds
+
+
 def test_the_advice_for_a_busy_file_names_the_wait():
     error = sqlite3.OperationalError("database is locked")
     error.sqlite_errorname = "SQLITE_BUSY"

@@ -12,8 +12,9 @@ or is a market order still working; for a resting order (any other order open, o
 waiting for a trigger), every 30 seconds as a safety net once the stream has spoken for
 it, else backing off from 1 s to 2 s to 5 s (2 s for an entry or an add). Polling runs
 in rounds of at most one a second, each polling at most 3 orders and reading the
-tradebook at most once. A gap in the stream, and a targeted read whose row gives no
-fills, ask for polls out of turn, which the next rounds make.
+tradebook at most once. A gap in the stream, and a targeted read of an open row that
+gives no fills, ask for polls out of turn, which the next rounds make until a polled
+word answers them.
 
 Times are UTC nanoseconds, quantities units, prices rupees.
 """
@@ -181,7 +182,11 @@ class OrderFollower:
         elif word is not None:
             # Its fills are in the tradebook, which the next round reads with a poll.
             order.ask_poll(now)
-        return check_of(answer, order_id, news)
+        check = check_of(answer, order_id, news)
+        if check.price_type is not None:
+            # The broker's own row: a modify whose answer was lost may have changed it.
+            order.price_type = check.price_type
+        return check
 
     def held_fills(self) -> list[HeldFill]:
         """The updates waiting for their price or the tradebook's confirmation."""
@@ -195,8 +200,9 @@ class OrderFollower:
 
     def release_fill(self, order_id: str, average_price: float) -> OrderUpdate | None:
         """Hand over a held update at `average_price` (rupees; the feed's last traded
-        price, say), or as reported when it has no fill; None when it is no longer news.
-        Raises LiveError when the order holds nothing, or the price is not positive."""
+        price, say; a price already known for its units stands), or as reported when it
+        has no fill; None when it is no longer news. Raises LiveError when the order
+        holds nothing, or the price is not positive."""
         order = self._orders.get(order_id)
         held = None if order is None else order.held
         if order is None or held is None:
@@ -212,14 +218,14 @@ class OrderFollower:
         held = None if order is None else order.held
         if order is None or held is None:
             raise LiveError(f"order {order_id} holds no cancel to release")
-        released = released_cancel(held, filled_quantity, average_price)
-        return self._release(order, with_known_price(order.seen, released))
+        return self._release(order, released_cancel(held, filled_quantity, average_price))
 
     def _release(self, order: Followed, released: OrderUpdate) -> OrderUpdate | None:
-        if not is_news(order.seen, released):
+        priced = with_known_price(order.seen, released)
+        if not is_news(order.seen, priced):
             order.release()
             return None
-        return self._deliver(order, released)
+        return self._deliver(order, priced)
 
     def due_polls(self) -> list[OrderUpdate]:
         """Run a polling round when one is due and return its news.
@@ -286,8 +292,7 @@ class OrderFollower:
     def _take(
         self, order: Followed, update: OrderUpdate, *, checked: bool = False
     ) -> OrderUpdate | None:
-        if update.source == "stream":
-            order.heard_from_stream(update.ts_recv_ns)
+        order.heard(update)
         floored = with_floor(order, update)
         priced = with_known_price(order.seen, floored)
         if not is_news(order.seen, priced):
@@ -319,15 +324,7 @@ class OrderFollower:
 
     def _deliver(self, order: Followed, update: OrderUpdate) -> OrderUpdate:
         self._journal.record_update(update)
-        order.seen, order.quiet_polls = update, 0
-        held = order.held
-        # A terminal held word (a cancel the tradebook must confirm) outlives a working one.
-        if (
-            held is not None
-            and update.filled_quantity >= held.filled_quantity
-            and (update.status.terminal or not held.status.terminal)
-        ):
-            order.release()
+        order.handed_over(update)
         self._guard.check_update(update)
         return update
 
