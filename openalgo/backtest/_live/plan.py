@@ -19,18 +19,29 @@ Two calls, at two steps of the start:
   start merged in). Then the catch-up.
 
 **The catch-up** brings each kernel session and live series from the open to the
-present: each slice of today whose broker candle was read at or after its close plus
-`CANDLE_SETTLE_S` is given its candle (or none, for a minute without a trade), released,
-and run. Its pauses reveal the bars and deliver the kernel's events, but decide nothing:
-no `on_bar`, no timer (08-live-trading section 5 rule 7: missed bars refresh indicators
-only), and a catch-up that made an order raises rather than send it. A slice that closes
-while the plan is built is caught up too: `build` reads again while a slice completed
-during the reads; `SessionPlan.catch_up` does the same later, for the slices that close
-between the build and the start of watching the feed (3.1 steps 11 to 14), and a
-strategy's `catch_up` takes candles read elsewhere (the data worker's). No slice is
-released before a read of its candle was made, so none is skipped. A restart builds the
-plan again from the same arguments: a fresh engine is caught up from the open, and the
-kernel's saved state is restored after the catch-up (3.6, K4).
+present, slice by slice, from reads of today's broker candles. A read releases the
+slices settled at it (closed `CANDLE_SETTLE_S` or more before it began), oldest first:
+each with its candle, as a minute without a trade when the read holds a candle of a
+later slice, or marked missing (`LiveSeries.mark_missing`: no decision on a bar holding
+it, 2.5 C) when the read began `CANDLE_LAST_READ_S` or more after its close; any other
+slice waits, with the later ones, for a later read, since the broker's latest candle
+often lags its close (`_plan_release`). A read with no candle of today thus marks the
+slices it gives up on missing. Each marking is a warning, and a candle read later for a
+slice marked missing is taken by its series (the kernel keeps the slice it ran, as with
+the session's candle checks, 2.5 A step 10). The pauses reveal the bars and deliver the
+kernel's events, but decide nothing: no `on_bar`, no timer (08-live-trading section 5
+rule 7: missed bars refresh indicators only), and a catch-up that made an order raises
+rather than send it.
+
+`build` catches each strategy up to its setup's read, then reads it once more for the
+slices that settled meanwhile. `SessionPlan.catch_up` does the same later, between the
+build and the start of watching the feed (3.1 steps 11 to 14), reading each strategy at
+most once, so a call ends however slow the reads; a strategy's `catch_up` takes candles
+read elsewhere (the data worker's). What is left after the last call before watching is
+for the session's candle checks: each strategy's `missing` slices, and those still
+`uncaught` when watching begins. A restart builds the plan again from the same
+arguments: a fresh engine is caught up from the open, and the kernel's saved state is
+restored after the catch-up (3.6, K4).
 
 Times are UTC nanoseconds, prices rupees, quantities units (never lots). Not
 thread-safe: the main thread builds the plan, and the session loop owns it afterwards.
@@ -50,7 +61,6 @@ import pandas as pd
 from .._calendar_convert import format_ist, interval_nanos
 from .._driver import deliver
 from .._engine import call
-from .._layout import NANOS_PER_SECOND
 from .._warm_up import _ready_at
 from ..calendar import Calendar, default_calendar
 from ..errors import ConfigError, LiveError
@@ -58,21 +68,22 @@ from ..strategy import Strategy
 from ._bars_candle import CANDLE_SOURCE, candle_bar
 from ._plan_args import LiveArguments, live_arguments
 from ._plan_engine import bind_strategy, check_grid, session_engine
+from ._plan_release import (
+    CANDLE_LAST_READ_S,
+    CANDLE_SETTLE_S,
+    MISSING,
+    SETTLE_NS,
+    missing_note,
+    releases,
+)
 from ._plan_setup import StrategySetup, read_today, strategy_setup
 from ._plan_strategies import StrategySpec, ist_day, refuse_shared_legs, strategy_spec
 from ._preflight_plan import InstrumentFacts
 from ._types import LOGGER_NAME, LiveBar, Now
-from .data_worker import CANDLE_READ_OFFSETS_S
 from .series import DEFAULT_BASE, LiveRunContext, LiveSeries
 
-#: Seconds after a slice's close from which a read of the broker's candles holds the
-#: slice's candle: the first read of the candle checks (08-live-trading section 5 rule
-#: 2), so the catch-up and the checks trust a candle from the same instant.
-CANDLE_SETTLE_S = CANDLE_READ_OFFSETS_S[0]
 #: Each strategy trades one instrument, registered first (1.1).
 INSTRUMENT = 0
-
-_SETTLE_NS = round(CANDLE_SETTLE_S * NANOS_PER_SECOND)
 
 logger = logging.getLogger(LOGGER_NAME)
 
@@ -162,44 +173,52 @@ class StrategyPlan:
         """How many slices of the day, from the open, are caught up and released."""
         return self._released
 
-    def uncaught(self, read_ns: int) -> tuple[int, ...]:
-        """The opens of the slices a read of the broker's candles begun at `read_ns`
-        (UTC nanoseconds) holds, those closed by `read_ns` less `CANDLE_SETTLE_S`, that
-        are not caught up yet, oldest first."""
-        end = bisect.bisect_right(self._closes, read_ns - _SETTLE_NS)
-        return tuple(opened for opened, _ in self._slices[self._released : end])
+    @property
+    def missing(self) -> tuple[int, ...]:
+        """The opens (UTC nanoseconds) of the slices the catch-up released marked missing
+        whose candle has not been read since, oldest first: the session's candle checks
+        ask for them (2.5 B)."""
+        if not self._released:
+            return ()
+        return self.series.missing_slices(self._slices[0][0], self._closes[self._released - 1])
 
-    def catch_up(self, bars: Iterable[LiveBar], read_ns: int) -> None:
-        """Catch up every slice a read of today's candles begun at `read_ns` (UTC
-        nanoseconds; the start of the read, not its end, since a slice that settled
-        during it may be missing from it) holds (`uncaught`): each in order is given its
-        candle among `bars` (the strategy's broker candles of today, `source` "candle";
-        a slice without one ran no trade), released and run, deciding nothing (module
-        docstring). Candles of slices caught up already, or not held by the read, are
-        left alone.
+    def uncaught(self, read_ns: int) -> tuple[int, ...]:
+        """The opens of the slices settled at a read of the broker's candles begun at
+        `read_ns` (UTC nanoseconds), those closed by `read_ns` less `CANDLE_SETTLE_S`,
+        that are not caught up yet, oldest first."""
+        return tuple(opened for opened, _ in self._settled(read_ns))
+
+    def catch_up(self, bars: Iterable[LiveBar], read_ns: int) -> tuple[int, ...]:
+        """Catch up to a read of today's candles begun at `read_ns` (UTC nanoseconds; the
+        start of the read, not its end, since a slice that settled during it may be
+        missing from it) whose candles are `bars` (the strategy's broker candles of
+        today, `source` "candle"; none for a read that held none). The slices settled at
+        the read (`uncaught`) are released by the rule of the module docstring, each run
+        deciding nothing, and a candle of a slice marked missing is taken by the series.
+        Candles of the other slices caught up already are left alone. Returns the opens
+        of the slices it marked missing, oldest first.
 
         Raises ConfigError for a bar that is not a candle of the strategy's instrument,
         and LiveError when the catch-up made an order or the exchange's session ended."""
-        due = self.uncaught(read_ns)
-        if not due:
-            return
-        wanted = set(due)
-        by_open: dict[int, LiveBar] = {}
-        for bar in bars:
-            if bar.source != CANDLE_SOURCE:
-                raise ConfigError(f"the catch-up takes broker candles, not {bar.source!r} bars")
-            if bar.ts_open_ns in wanted:
-                by_open[bar.ts_open_ns] = bar
-        for opened in due:
-            bar = by_open.get(opened)
+        candles = self._candles(bars)
+        for opened in self.missing:
+            if opened in candles:
+                self.series.take(candles[opened])
+        found = releases(self._settled(read_ns), candles, read_ns)
+        for release in found:
+            bar = release.bar
             if bar is not None:
                 self.series.take(bar)
                 prices = (bar.open, bar.high, bar.low, bar.close, bar.volume)
                 call(self.engine.add_bar, INSTRUMENT, (bar.ts_open_ns, *prices))
+            elif release.kind == MISSING:
+                self.series.mark_missing(release.opened)
             self._released += 1
             call(self.engine.release, self._released)
             self._drive()
-        self._refuse_orders()
+        if found:
+            self._refuse_orders()
+        return tuple(release.opened for release in found if release.kind == MISSING)
 
     def indicators_ready(self, decided_at_ns: int) -> bool:
         """True when every indicator need of the strategy is met by the bars closed at
@@ -207,6 +226,26 @@ class StrategyPlan:
         counted, or for an anchored need its whole periods), as the backtest's warm-up
         rule finds it (`_warm_up`): the session decides only then (2.5 C)."""
         return all(_ready_at(need, self.context) <= decided_at_ns for need in self.spec.needs)
+
+    def _settled(self, read_ns: int) -> list[tuple[int, int]]:
+        """(open, close) of the slices settled at a read begun at `read_ns` and not
+        caught up yet, oldest first."""
+        end = bisect.bisect_right(self._closes, read_ns - SETTLE_NS)
+        return list(self._slices[self._released : end])
+
+    def _candles(self, bars: Iterable[LiveBar]) -> dict[int, LiveBar]:
+        """`bars` by open, each checked to be a broker candle of the instrument."""
+        found: dict[int, LiveBar] = {}
+        for bar in bars:
+            if bar.source != CANDLE_SOURCE:
+                raise ConfigError(f"the catch-up takes broker candles, not {bar.source!r} bars")
+            if (bar.symbol, bar.exchange) != (self.spec.symbol, self.spec.exchange):
+                raise ConfigError(
+                    f"a candle of {bar.exchange}:{bar.symbol} reached the catch-up of "
+                    f"{self.spec.name}, which trades {self.spec.exchange}:{self.spec.symbol}"
+                )
+            found[bar.ts_open_ns] = bar
+        return found
 
     def _drive(self) -> None:
         """Run the kernel's pauses until it waits, revealing bars and delivering events,
@@ -256,24 +295,26 @@ class SessionPlan:
 
     @property
     def warnings(self) -> tuple[str, ...]:
-        """The setups' warnings, then any a later read of today's candles gave."""
+        """The setups' warnings, then those of the reads of today's candles (the data
+        layer's, and each marking of slices missing), in order."""
         return tuple(self._warnings)
 
     def catch_up(self, client: Any, clock: Now) -> None:
-        """Catch every strategy up to the present: read today's candles of each strategy
-        with uncaught slices through `client` (the session's data client, on the thread
-        that owns it) and catch up to the read, again while a slice completed during the
-        reads (module docstring). Raises the data layer's errors, and what `catch_up`
-        raises."""
-        while True:
-            behind = [plan for plan in self.strategies if plan.uncaught(clock())]
-            if not behind:
-                return
-            for plan in behind:
-                read_ns = clock()
+        """Catch every strategy up to the present (module docstring): each one with
+        slices settled and not caught up at a fresh read of `clock`, or slices marked
+        missing, has today's candles read once through `client` (the session's data
+        client, on the thread that owns it) and is caught up to the read. Slices that
+        settle during the reads, or wait for a later read, are left to the next call.
+        Raises the data layer's errors, and what `StrategyPlan.catch_up` raises."""
+        for plan in self.strategies:
+            read_ns = clock()
+            if plan.uncaught(read_ns) or plan.missing:
                 frame, notes = read_today(plan.spec, client, plan.calendar, read_ns)
-                self._warnings += [note for note in notes if note not in self._warnings]
-                plan.catch_up(candles(frame, plan.spec, plan.calendar), read_ns)
+                self._add(notes)
+                self._add(_caught_up(plan, frame, read_ns))
+
+    def _add(self, notes: Iterable[str]) -> None:
+        self._warnings += [note for note in notes if note not in self._warnings]
 
 
 def candles(frame: pd.DataFrame, spec: StrategySpec, calendar: Calendar) -> list[LiveBar]:
@@ -284,6 +325,18 @@ def candles(frame: pd.DataFrame, spec: StrategySpec, calendar: Calendar) -> list
         candle_bar(spec.symbol, spec.exchange, row, interval_ns, calendar=calendar)
         for row in frame.to_dict("records")
     ]
+
+
+def _caught_up(plan: StrategyPlan, frame: pd.DataFrame, read_ns: int) -> tuple[str, ...]:
+    """Catch `plan` up to a read of today's candles begun at `read_ns` (UTC nanoseconds)
+    that gave `frame` (the bars layout, empty for a read with no candle of today), and
+    return its warnings: one naming the slices it marked missing, if any. Raises what
+    `StrategyPlan.catch_up` raises."""
+    marked = plan.catch_up(candles(frame, plan.spec, plan.calendar), read_ns)
+    if not marked:
+        return ()
+    spec = plan.spec
+    return (missing_note(spec.name, spec.symbol, spec.exchange, marked, none_today=frame.empty),)
 
 
 def _strategy_plan(
@@ -325,15 +378,16 @@ def build(
     for each in spec.strategies:
         setup = strategy_setup(each, client, facts, present_ns, calendar)
         plans.append(_strategy_plan(each, setup, calendar, saved.get(each.name)))
-        warnings += [note for note in setup.warnings if note not in warnings]
-    session = SessionPlan(spec.day, tuple(plans), warnings)
+        warnings += setup.warnings
     for plan in plans:
-        plan.catch_up(candles(plan.setup.today, plan.spec, calendar), plan.setup.read_ns)
+        warnings += _caught_up(plan, plan.setup.today, plan.setup.read_ns)
+    session = SessionPlan(spec.day, tuple(plans), tuple(dict.fromkeys(warnings)))
     session.catch_up(client, clock)
     return session
 
 
 __all__ = [
+    "CANDLE_LAST_READ_S",
     "CANDLE_SETTLE_S",
     "SessionPlan",
     "SessionSpec",

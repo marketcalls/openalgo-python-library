@@ -100,7 +100,8 @@ def refuse_unsupported(strategy: type[Strategy]) -> None:
     if strategy.underlying is not None:
         raise not_supported(
             "a futures series (underlying with expiry) in a live session",
-            "name the contract as the strategy's symbol, for example NIFTY26NOVFUT on NFO",
+            "name the contract as the strategy's symbol in OpenAlgo's form "
+            "[underlying][DDMMMYY]FUT, for example NIFTY29DEC26FUT on NFO",
         )
     if strategy.interval and parse_interval(strategy.interval)[0] != "intraday":
         raise not_supported(

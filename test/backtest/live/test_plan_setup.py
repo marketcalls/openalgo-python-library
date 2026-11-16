@@ -6,7 +6,9 @@ same fake OpenAlgo, with the arguments `bt.backtest` passes it (its own defaults
 history, a 1-minute base, start and end today, `now` the present), and its history is
 kept as its run keeps it. The plan is built at 10:15:05 IST on the market of
 `plan_samples`; its instruments carry OpenAlgo's facts, equal there to the reference
-tables' generic cash-equity terms, so only the facts tests change them.
+tables' generic cash-equity terms, so only the facts tests change them. The facts of a
+futures contract are given to `with_facts` on the reference tables' NIFTY29DEC26FUT,
+whose freeze quantity the tables know and whose tick they leave to a price slab.
 """
 
 from __future__ import annotations
@@ -26,10 +28,12 @@ from plan_samples import (
 )
 
 import openalgo.backtest as bt
+from openalgo.backtest._live._plan_setup import FACTS_SOURCE, FACTS_STATUS, with_facts
 from openalgo.backtest._live._preflight_plan import InstrumentFacts
 from openalgo.backtest._pipeline import prepare
 from openalgo.backtest._warm_up_probe import params_key
 from openalgo.backtest.errors import ConfigError
+from openalgo.backtest.reference import default_tables
 
 BUILT_AT = ist(10, 15, 5)
 
@@ -164,3 +168,70 @@ def test_an_instrument_the_facts_do_not_cover_refuses_the_plan(fake):
     other = InstrumentFacts("INFY", "NSE", lot_size=1, tick_size=0.05, freeze_quantity=None)
     with pytest.raises(ConfigError, match="no preflight facts of NSE:SBIN"):
         build(fake, facts=(other,))
+
+
+#: A futures contract of the reference tables, which give its freeze quantity (1800) and
+#: leave its tick to a price slab (tick_size None).
+FUTURE = "NIFTY29DEC26FUT"
+
+
+@pytest.fixture
+def future():
+    return default_tables().instrument(FUTURE, "NFO", DAY)
+
+
+def future_facts(future, **changes) -> InstrumentFacts:
+    """OpenAlgo's facts of the futures contract: the tables' lot size, a 0.1 tick and no
+    freeze quantity unless `changes` say otherwise."""
+    facts = {"lot_size": future.lot_size, "tick_size": 0.1, "freeze_quantity": None}
+    return InstrumentFacts(FUTURE, "NFO", **(facts | changes))
+
+
+def test_without_a_freeze_quantity_from_openalgo_the_reference_tables_one_stands(future):
+    [instrument], _ = with_facts([future], [future_facts(future)])
+    assert (future.freeze_qty, instrument.freeze_qty) == (1800, 1800)
+
+
+def test_a_freeze_quantity_the_tables_keep_is_a_warning_naming_the_underlying(future):
+    _, notes = with_facts([future], [future_facts(future)])
+    assert (
+        "NIFTY29DEC26FUT: OpenAlgo has no freeze quantity configured for NIFTY, so the "
+        "reference tables' 1800 is used for the session"
+    ) in notes
+
+
+def test_a_freeze_quantity_from_openalgo_replaces_the_tables(future):
+    [instrument], notes = with_facts([future], [future_facts(future, freeze_quantity=1200)])
+    assert instrument.freeze_qty == 1200
+    assert (
+        "NIFTY29DEC26FUT: OpenAlgo's freeze_qty 1200 replaces 1800 of the reference tables "
+        "for the session"
+    ) in notes
+
+
+def test_a_tick_the_tables_leave_to_a_price_slab_is_openalgos_without_a_difference(future):
+    [instrument], notes = with_facts([future], [future_facts(future)])
+    assert instrument.tick_size == 0.1
+    assert not [note for note in notes if "tick_size" in note and "replaces" in note]
+    assert (
+        "NIFTY29DEC26FUT: OpenAlgo's tick_size 0.1 is used for the session (the reference "
+        "tables give the tick by price slab)"
+    ) in notes
+
+
+def test_the_provenance_of_the_facts_is_openalgos_and_the_rest_is_kept_in_order(future):
+    [instrument], _ = with_facts([future], [future_facts(future, freeze_quantity=1200)])
+    replaced = {"lot_size", "tick_size", "freeze_qty"}
+    expected = [
+        (name, FACTS_SOURCE, FACTS_STATUS) if name in replaced else (name, source, status)
+        for name, source, status in future.provenance
+    ]
+    assert list(instrument.provenance) == expected
+
+
+def test_a_freeze_quantity_the_tables_keep_keeps_its_provenance(future):
+    [instrument], _ = with_facts([future], [future_facts(future)])
+    sources = {name: source for name, source, _ in instrument.provenance}
+    kept = {name: source for name, source, _ in future.provenance}
+    assert sources["freeze_qty"] == kept["freeze_qty"]
+    assert sources["last_trading_day"] == kept["last_trading_day"]

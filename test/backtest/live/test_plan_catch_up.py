@@ -146,6 +146,13 @@ def test_a_minute_without_a_trade_is_released_without_a_bar(
     )
 
 
+def test_a_minute_without_a_trade_is_not_marked_missing(make_fake_openalgo, monkeypatch, tmp_path):
+    quiet = ist(9, 40)
+    fake = market(make_fake_openalgo, monkeypatch, tmp_path, at=ist(10, 15, 5), skip=(quiet,))
+    part = build(fake).strategies[0]
+    assert part.missing == ()
+
+
 def test_before_the_open_nothing_is_caught_up(plan_at):
     _, plan = plan_at(ist(9, 0), until=None)
     part = plan.strategies[0]
@@ -199,6 +206,16 @@ def test_the_catch_up_takes_broker_candles_only(plan_at):
     ticks = LiveBar("SBIN", "NSE", row[0], row[0] + MINUTE_NS, *row[1:], ticks=3, source="ticks")
     with pytest.raises(ConfigError, match="the catch-up takes broker candles, not 'ticks' bars"):
         plan.strategies[0].catch_up([ticks], fake.clock.now())
+
+
+def test_the_catch_up_takes_candles_of_the_strategys_instrument_only(plan_at):
+    fake, plan = plan_at(ist(10, 15, 5), until=(10, 16))
+    fake.clock.advance(60)
+    start, *prices = today(candles(today_until=(10, 16)))[-1]
+    fields = dict(zip(("open", "high", "low", "close", "volume"), prices, strict=True))
+    other = candle_bar("INFY", "NSE", {"ts_open": start, **fields}, MINUTE_NS)
+    with pytest.raises(ConfigError, match="a candle of NSE:INFY reached the catch-up of EmaTrend"):
+        plan.strategies[0].catch_up([other], fake.clock.now())
 
 
 class Ordering:

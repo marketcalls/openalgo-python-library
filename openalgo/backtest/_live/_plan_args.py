@@ -14,6 +14,10 @@ and 3.1 step 1; decisions 3 and 9 of its section 10.0; unit 7). Part of `plan`.
   source of this release, is accepted; `bars="candles"` is not built yet.
 - The account the journal, logs and locks are kept under defaults to the broker name
   `ping` reports (decision 9; `LiveArguments.account_name`).
+- The settings a live session shares with `bt.backtest` take `bt.backtest`'s own
+  defaults, read from its signature (`BACKTEST_DEFAULT`), so the two cannot drift
+  apart. `capital` is mandatory; `max_daily_loss` is mandatory for each strategy, from
+  the call or the class attribute, which wins as in a backtest (`_plan_strategies`).
 
 Every other value is checked where `bt.backtest` checks it, when the plan resolves each
 strategy's settings (`_plan_strategies`), so a live session and a backtest refuse the
@@ -31,7 +35,6 @@ from typing import Any
 
 from .._messages import not_supported
 from ..errors import ConfigError
-from ..run import backtest
 from ..strategy import Strategy
 from ._preflight_plan import positive_amount
 from .data_worker import HISTORY_SOURCE
@@ -75,9 +78,27 @@ NOT_LIVE = MappingProxyType(
 )
 
 
+class _BacktestDefault:
+    """The default of a setting a live session shares with `bt.backtest`: the one
+    `bt.backtest`'s signature gives it, read when the settings are resolved."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "<bt.backtest's default>"
+
+
+#: Stands in the signature of `live_arguments` for `bt.backtest`'s default of a shared
+#: setting (module docstring).
+BACKTEST_DEFAULT: Any = _BacktestDefault()
+
+
 def _backtest_defaults() -> dict[str, Any]:
     """`bt.backtest`'s keyword arguments with their defaults: one source of the defaults
-    a live session shares with a backtest."""
+    a live session shares with a backtest. `bt.backtest` is imported here rather than
+    with the module, so the run module can import the live session without a cycle."""
+    from ..run import backtest
+
     return {
         name: parameter.default
         for name, parameter in inspect.signature(backtest).parameters.items()
@@ -92,8 +113,9 @@ class LiveArguments:
     `strategies` are the strategy classes in call order and `names` their class names.
     `capital`, `max_daily_loss` and `params` are each strategy's values as given, by
     name (`max_daily_loss` None where only the class may set it). `settings` are the
-    `bt.backtest` settings every strategy shares (`costs` and the risk settings, which a
-    strategy's class attributes of the same names override as in a backtest). The rest are
+    `bt.backtest` settings every strategy shares that the call gave (`costs` and the risk
+    settings, which a strategy's class attributes of the same names override as in a
+    backtest); the others take `bt.backtest`'s defaults (`backtest_arguments`). The rest are
     the session's own: `account_max_daily_loss` in rupees, `alerts_to`, `account`,
     `live_dir` and `on_stop`.
     """
@@ -235,23 +257,23 @@ def _session_options(
 def live_arguments(
     strategy: type[Strategy] | Sequence[type[Strategy]],
     *,
-    capital: float | Mapping[str, float],
-    max_daily_loss: Any,
+    capital: float | Mapping[str, float] | None = None,
+    max_daily_loss: Any = None,
     account_max_daily_loss: float | None = None,
     alerts_to: str | None = None,
     account: str | None = None,
     params: Mapping[str, Any] | None = None,
-    costs: Any = "zerodha",
-    risk_basis: str = "gross",
-    after_risk_exit: str = "lock_session",
-    entry_from: str | None = None,
-    entry_until: str | None = None,
-    square_off: str | None = None,
-    max_positions: int | None = None,
-    drawdown_halt: Any = None,
-    cooldown: int | None = None,
-    round_levels: bool = True,
-    strict_config: bool = True,
+    costs: Any = BACKTEST_DEFAULT,
+    risk_basis: str = BACKTEST_DEFAULT,
+    after_risk_exit: str = BACKTEST_DEFAULT,
+    entry_from: str | None = BACKTEST_DEFAULT,
+    entry_until: str | None = BACKTEST_DEFAULT,
+    square_off: str | None = BACKTEST_DEFAULT,
+    max_positions: int | None = BACKTEST_DEFAULT,
+    drawdown_halt: Any = BACKTEST_DEFAULT,
+    cooldown: int | None = BACKTEST_DEFAULT,
+    round_levels: bool = BACKTEST_DEFAULT,
+    strict_config: bool = BACKTEST_DEFAULT,
     live_dir: str | os.PathLike[str] | None = None,
     on_stop: str = "flatten",
     **not_live: Any,
@@ -261,15 +283,20 @@ def live_arguments(
 
     Raises ConfigError for an argument `bt.live` does not take (a mode choice, a
     `bt.backtest` argument with no meaning live, an unknown name), for a strategy that is
-    not a `bt.Strategy` subclass, for a dict of values keyed by a name the session does
-    not run or, for `capital`, missing one, and for an unusable `account_max_daily_loss`,
-    `alerts_to`, `account`, `live_dir` or `on_stop`; NotImplementedError for
-    `bars="candles"` and for two strategies with the same name."""
+    not a `bt.Strategy` subclass, for no `capital`, for a dict of values keyed by a name
+    the session does not run or, for `capital`, missing one, and for an unusable
+    `account_max_daily_loss`, `alerts_to`, `account`, `live_dir` or `on_stop`;
+    NotImplementedError for `bars="candles"` and for two strategies with the same name."""
     _refuse_not_live(not_live)
     strategies = _strategies(strategy)
     names = _names(strategies)
+    if capital is None:
+        raise ConfigError(
+            "bt.live needs capital=: the rupees allocated to each strategy, one number for "
+            "every strategy or a dict by strategy class name (a risk limit, mandatory live)"
+        )
     _session_options(account_max_daily_loss, alerts_to, account, live_dir, on_stop)
-    settings = {
+    shared = {
         "costs": costs,
         "risk_basis": risk_basis,
         "after_risk_exit": after_risk_exit,
@@ -288,7 +315,7 @@ def live_arguments(
         capital=_by_name(capital, names, "capital", required=True),
         max_daily_loss=_by_name(max_daily_loss, names, "max_daily_loss", required=False),
         params=_params(params, names),
-        settings=settings,
+        settings={name: value for name, value in shared.items() if value is not BACKTEST_DEFAULT},
         account_max_daily_loss=positive_amount(account_max_daily_loss),
         alerts_to=alerts_to,
         account=account,
@@ -298,6 +325,7 @@ def live_arguments(
 
 
 __all__ = [
+    "BACKTEST_DEFAULT",
     "BARS_FROM_CANDLES",
     "BARS_FROM_TICKS",
     "MODE_ARGUMENTS",

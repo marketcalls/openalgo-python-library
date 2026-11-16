@@ -8,13 +8,19 @@ strategy's `init` runs on the engine's reference bars only.
 
 from __future__ import annotations
 
+import inspect
+import re
+
 import pytest
-from plan_samples import LIMITS, EmaTrend, specify
+from plan_samples import DAY, LIMITS, EmaTrend, ist, specify
 
 import openalgo.backtest as bt
 from openalgo import ta
+from openalgo.backtest import run
+from openalgo.backtest._live import plan as plan_module
 from openalgo.backtest._live._plan_args import MODE_ARGUMENTS, NOT_LIVE
 from openalgo.backtest.errors import ConfigError
+from openalgo.backtest.reference import default_tables
 
 
 class Crossing(bt.Strategy):
@@ -100,6 +106,14 @@ def test_bars_from_the_feeds_ticks_are_the_bars_a_session_runs_on():
 def test_a_strategy_a_live_session_does_not_run_is_refused_saying_what_to_do(attributes, words):
     with pytest.raises(NotImplementedError, match=words):
         specify(subclass(**attributes))
+
+
+def test_the_contract_a_futures_series_refusal_gives_as_an_example_is_a_valid_symbol():
+    series = subclass(symbol=None, underlying="NIFTY", expiry="current_month", exchange="NFO")
+    with pytest.raises(NotImplementedError) as refused:
+        specify(series)
+    example = re.search(r"for example (\S+) on NFO", str(refused.value)).group(1)
+    assert default_tables().instrument(example, "NFO", DAY).kind == "future"
 
 
 def test_a_strategy_from_arrays_is_refused_pointing_to_a_strategy_class():
@@ -213,3 +227,45 @@ def test_the_preflight_is_asked_for_every_strategys_instrument_interval_and_limi
     spec = specify(capital=LIMITS["capital"])
     assert (spec.instruments, spec.intervals) == ((("SBIN", "NSE"),), ("5m",))
     assert (spec.capital, spec.max_daily_loss) == (1_000_000, 5_000)
+
+
+def specify_without(name: str):
+    """`plan.specify` of EmaTrend with the session's limits but `name` left out."""
+    given = {key: value for key, value in LIMITS.items() if key != name}
+    return plan_module.specify(EmaTrend, clock=lambda: ist(10, 15), **given)
+
+
+def test_without_capital_bt_live_is_refused_naming_the_argument():
+    with pytest.raises(ConfigError, match="bt.live needs capital=: the rupees allocated"):
+        specify_without("capital")
+
+
+def test_without_a_daily_loss_limit_on_the_call_or_the_class_bt_live_is_refused():
+    with pytest.raises(
+        ConfigError, match="EmaTrend: max_daily_loss is mandatory in a live session; pass"
+    ):
+        specify_without("max_daily_loss")
+
+
+def test_a_daily_loss_limit_set_on_the_class_needs_no_argument():
+    spec = plan_module.specify(
+        subclass(max_daily_loss=1_500), clock=lambda: ist(10, 15), capital=LIMITS["capital"]
+    )
+    assert spec.strategies[0].max_daily_loss == 1_500
+
+
+def test_a_default_shared_with_bt_backtest_follows_bt_backtests_own(monkeypatch):
+    signature = inspect.signature(run.backtest)
+    changed = signature.replace(
+        parameters=[
+            parameter.replace(default="net") if parameter.name == "risk_basis" else parameter
+            for parameter in signature.parameters.values()
+        ]
+    )
+
+    def backtest(*args, **kwargs):
+        raise AssertionError("a live session's plan never runs a backtest")
+
+    backtest.__signature__ = changed
+    monkeypatch.setattr(run, "backtest", backtest)
+    assert specify().strategies[0].plan.risk["risk_basis"] == "net"
