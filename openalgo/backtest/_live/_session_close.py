@@ -6,8 +6,10 @@ and what a session leaves (`SessionOutcome`).
 the DAILY_SUMMARY alert, then everything the start opened closed in reverse (the feed,
 the data worker, journal L, the logs, the alerts, the lock). A journal failure or another
 error closes the same way without the flatten (journal L is not written after a journal
-failure). The reconciler (unit 12) adds a final book read; the public `SessionResult`
-(unit 13) is built from the outcome.
+failure). A position left open is reported with its broker-held stop and what works
+toward its exit (`_stops_report.left_open`), and the day's unprotected seconds
+are the supervisor's windows. The reconciler (unit 12) adds a final book read; the public
+`SessionResult` (unit 13) is built from the outcome.
 
 Times are UTC nanoseconds, quantities units, amounts rupees.
 """
@@ -24,6 +26,9 @@ from ..errors import JournalError
 from ._alerts_summary import SessionSummary, summary_text
 from ._session_loop import Session
 from ._session_trader import Skipped, Trader
+from ._stops_cover import Unprotected
+from ._stops_held import Estimate
+from ._stops_report import left_open, stop_state
 from ._types import LOGGER_NAME, AlertKind
 from .bars import BarDrift
 
@@ -33,13 +38,16 @@ logger = logging.getLogger(LOGGER_NAME)
 @dataclass(frozen=True)
 class OpenPosition:
     """A position still open when the session ended: the strategy, the instrument, its
-    signed units, and a note for the operator."""
+    signed units, a note for the operator, its stop's broker order ID ("" for none, or one
+    not bound) and whether that stop was confirmed working at the broker."""
 
     strategy: str
     symbol: str
     exchange: str
     units: float
     note: str
+    stop_order_id: str = ""
+    stop_confirmed: bool = False
 
 
 @dataclass(frozen=True)
@@ -50,8 +58,9 @@ class SessionOutcome:
     "error"), `restarts`, the `strategies` in call order, `outputs` (each kernel
     session's `finish()` tables by strategy), `summary` (the day's figures),
     `open_positions`, `mode_breach` (the guard's text or None), `warnings`,
-    `skipped_decisions`, `drift` (the accepted candles' drift) and `paths` (journal,
-    log, events)."""
+    `skipped_decisions`, `drift` (the accepted candles' drift), `paths` (journal, log,
+    events), `unprotected` (each window a leg had no confirmed stop at the broker) and
+    `estimated` (the fills released at a price the books did not confirm)."""
 
     mode: str
     broker: str
@@ -70,6 +79,8 @@ class SessionOutcome:
     skipped_decisions: tuple[Skipped, ...]
     drift: tuple[BarDrift, ...]
     paths: dict[str, str] = field(default_factory=dict)
+    unprotected: tuple[Unprotected, ...] = ()
+    estimated: tuple[Estimate, ...] = ()
 
 
 def close_session(
@@ -82,11 +93,12 @@ def close_session(
     parts = session.parts
     try:
         open_positions = _open_positions(session)
+        unprotected_s = session.stops.windows.seconds(session.now())
         if journal_works:
             _save_states(session)
         parts.worker.close()
         outputs = {trader.name: _stop_engine(trader) for trader in session.traders}
-        summary = _summary(session, outputs, flat=not open_positions)
+        summary = _summary(session, outputs, unprotected_s, flat=not open_positions)
         session.alert(AlertKind.DAILY_SUMMARY, summary_text(summary))
         if not session.threads:
             # Under the test seam no sender thread posts: the queue goes now, as it would.
@@ -117,10 +129,14 @@ def close_session(
             "log": str(parts.logs.log_path),
             "events": str(parts.logs.events_path),
         },
+        unprotected=session.stops.windows.rows(),
+        estimated=tuple(session.stops.held.estimates),
     )
 
 
-def _summary(session: Session, outputs: dict[str, Any], *, flat: bool) -> SessionSummary:
+def _summary(
+    session: Session, outputs: dict[str, Any], unprotected_s: float, *, flat: bool
+) -> SessionSummary:
     """The day's figures of this start: the trades the kernel sessions closed, their
     gross P&L and modelled charges (the broker's trade book carries none)."""
     parts = session.parts
@@ -135,34 +151,23 @@ def _summary(session: Session, outputs: dict[str, Any], *, flat: bool) -> Sessio
         charges=sum(charges for _, (_, charges) in outputs.values()),
         slippage=None,
         rejected_orders=session.rejected,
-        unprotected_seconds=0.0,
+        unprotected_seconds=unprotected_s,
         reconcile_mismatches=session.mismatches,
         undelivered_alerts=parts.sender.undelivered,
         flat=flat,
     )
 
 
-def left_open_note(trader: Trader) -> str:
-    """What the operator is told of `trader`'s position left open at the stop: the exit
-    orders still working (in flight: one may fill, so the order book comes first), or that
-    nothing works to close it."""
-    exits = [trader.order_name(kernel_order) for kernel_order in trader.exit_orders()]
-    if exits:
-        return (
-            f"exit order {', '.join(exits)} in flight, check the order book before closing "
-            "it by hand"
-        )
-    return "no stop at the broker, close it by hand"
-
-
 def _open_positions(session: Session) -> tuple[OpenPosition, ...]:
+    stops = session.stops
     return tuple(
         OpenPosition(
             trader.name,
             trader.symbol,
             trader.exchange,
             units,
-            "known as of the mode breach" if session.locked else left_open_note(trader),
+            "known as of the mode breach" if session.locked else left_open(stops, trader),
+            *stop_state(stops, trader),
         )
         for trader in session.traders
         if (units := trader.open_units()) != 0
@@ -204,4 +209,4 @@ def _stop_engine(trader: Trader) -> tuple[Any, tuple[float, float]]:
     return call(engine.finish), (realized + unrealized, costs)
 
 
-__all__ = ["OpenPosition", "SessionOutcome", "close_session", "left_open_note"]
+__all__ = ["OpenPosition", "SessionOutcome", "close_session"]

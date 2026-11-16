@@ -20,8 +20,8 @@ def banner_lines(session: Any) -> list[str]:
     """The start banner of `session` (a `_session_loop.Session` whose strategies are
     set): the guard's mode line first ("OpenAlgo is in LIVE mode: orders go to
     zerodha"), then the funds, each strategy's instrument, interval, capital, daily loss
-    limit, entry cut-off and square-off, each instrument's freeze cap and that a
-    position opened without `stop=` has no stop at the broker (decision 4), the
+    limit, entry cut-off and square-off, each instrument's freeze cap and a warning that
+    an entry without `stop=` has no stop at the broker (allowed, decided 2026-11-16), the
     account's limit, the cost model, the sandbox's difference, and the warnings."""
     parts = session.parts
     spec, report = parts.spec, parts.report
@@ -40,9 +40,10 @@ def banner_lines(session: Any) -> list[str]:
         )
         fact = facts.get((each.symbol, each.exchange))
         freeze = None if fact is None else fact.freeze_quantity
+        lines.append(f"{each.symbol}: freeze quantity {freeze if freeze else 'none'}")
         lines.append(
-            f"{each.symbol}: freeze quantity {freeze if freeze else 'none'}; a position opened "
-            "without stop= has no stop at the broker"
+            f"Warning: {each.name}: an entry without stop= has no stop at the broker until a "
+            "trail or breakeven sets one (allowed; the result names such positions)"
         )
     if spec.arguments.account_max_daily_loss is not None:
         limit = spec.arguments.account_max_daily_loss

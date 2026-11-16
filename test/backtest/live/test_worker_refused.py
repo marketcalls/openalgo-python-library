@@ -76,6 +76,22 @@ def test_a_cancel_no_read_can_settle_is_settled_as_refused_once(rig):
     assert rig.alerts.kinds() == [AlertKind.ERROR]
 
 
+def test_a_cancel_its_reads_cannot_settle_is_alerted_once_after_the_third_read(rig):
+    place = rig.place(price_type="LIMIT", price=700.0)
+    (answer,) = [m for m in rig.run(place) if not isinstance(m, NotSent)][:1]
+    order_id = answer.outcome.order_id
+    rig.fake.faults.expire_session()
+    cancel = rig.cancel(place, order_id, Priority.PROTECT)
+
+    posted = rig.run(cancel) + steps(rig, 20.0)
+
+    reads = rig.fake.log.calls("orderstatus")
+    errors = [text for kind, text in rig.alerts.sent if kind is AlertKind.ERROR]
+    assert len(reads) >= 4
+    assert len(errors) == 1 and order_id in errors[0]
+    assert [m for m in posted if isinstance(m, Settled)] == []
+
+
 def test_a_step_after_close_posts_nothing_and_calls_nothing(rig):
     rig.fake.faults.bad_gateway_page("placeorder")
     rig.run(rig.place())

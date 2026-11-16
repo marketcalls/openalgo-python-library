@@ -239,6 +239,21 @@ def terms_of(command: Mapping[str, Any]) -> OrderTerms:
     )
 
 
+def request_fields(request: object) -> dict[str, Any]:
+    """What the session's event stream notes of a request handed to the order worker (an
+    order request, or one of the worker's own)."""
+    fields: dict[str, Any] = {"type": type(request).__name__}
+    if isinstance(request, PlaceRequest | ModifyRequest | CancelRequest):
+        fields.update(
+            request_id=request.request_id,
+            strategy=request.intent.strategy,
+            kernel_order=request.kernel_order,
+            purpose=request.intent.purpose.value,
+            priority=int(request.priority),
+        )
+    return fields
+
+
 def place_priority(intent: OrderIntent) -> Priority:
     """An entry or add at ENTER; a stop or any exit at PROTECT."""
     return Priority.ENTER if intent.purpose in ENTRY_PURPOSES else Priority.PROTECT
@@ -323,5 +338,6 @@ __all__ = [
     "modify_priority",
     "modify_verdict",
     "place_priority",
+    "request_fields",
     "terms_of",
 ]

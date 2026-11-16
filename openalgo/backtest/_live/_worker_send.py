@@ -18,9 +18,10 @@ a request"), split from `worker` so each module keeps one job.
   `JournalError` is raised: nothing may be sent once an intent cannot be written first.
 - Settling (`settle_due`, 2.4 step 7): each unsettled order due a read is read with
   `check_order`, and the row's verdict posted as `Settled`; a modify past its deadline is
-  settled with no row and an ERROR alert. An order the order path cannot read at all (it
-  does not follow it, so no read will ever settle it) is settled with no row at once,
-  taken as refused: its one ERROR alert was its refusal's.
+  settled with no row and an ERROR alert, and a cancel no read settles is alerted once.
+  An order the order path cannot read at all (it does not follow it, so no read will
+  ever settle it) is settled with no row at once, taken as refused: its one ERROR alert
+  was its refusal's.
 - A release of a held fill or cancel hands its news over (`_worker_news`, counted in hand
   from before the word leaves the order path's hold); the book reads go to the guard
   answer by answer and are posted as `Books` or `PositionRows`, or `NotSent(locked)` once
@@ -57,7 +58,14 @@ from ._worker_queue import (
     is_stale,
     order_key,
 )
-from ._worker_settle import Change, Settlements, Unsettled, expired_text
+from ._worker_settle import (
+    CANCEL_READS_ALERT,
+    Change,
+    Settlements,
+    Unsettled,
+    expired_text,
+    unsettled_cancel_text,
+)
 from ._worker_stops import StopBook
 from .guard import ModeGuard
 from .inbox import Books, Message, NotSent, NotSentReason, PositionRows, SendResult, Settled
@@ -166,6 +174,11 @@ class Sender:
 
     def _judge(self, waiting: Unsettled, check: OrderCheck) -> None:
         settled = self._settle.judge(waiting, check, self._now())
+        cancel = isinstance(waiting.request, CancelRequest)
+        if settled is None and cancel and waiting.reads == CANCEL_READS_ALERT:
+            text = unsettled_cancel_text(waiting)
+            logger.error(text)
+            self._alerts.send(AlertKind.ERROR, text)
         if check.news is not None:
             self._news.hand_over(check.news, self._stops)
         if settled is not None:

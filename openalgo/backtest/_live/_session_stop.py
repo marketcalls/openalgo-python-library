@@ -11,19 +11,25 @@ time that end it (`Control`). The common close is `_session_close`.
   attempt of the retry schedule is asked once more). At each later step a position whose
   exit is not on the retry schedule (`_session_exits`) is asked again, so an entry that
   fills after the stop began is exited too. The session waits until every strategy is
-  flat with nothing working, at most `SAFE_STOP_FLATTEN_S`; after that it keeps running,
-  with an ERROR alert and a console line naming each leg and what works toward its exit
-  every `UNPROTECTED_REMINDER_EVERY_S`, until flat, a second Ctrl+C, or the exchange's
-  close plus `SESSION_END_GRACE_S`. With `"keep"` the session waits at most
-  `SAFE_STOP_STATE_WAIT_S` for the cancels and leaves the positions open.
+  flat with nothing working, at most `SAFE_STOP_FLATTEN_S`; then each leg not flat is
+  protected by state (`_stops_protect`: its broker-held stop placed again where it can
+  be, and its exit asked for no more), and the session keeps running, with an ERROR
+  alert and a console line naming each leg without a confirmed stop and what works
+  toward its exit every `UNPROTECTED_REMINDER_EVERY_S`, until every leg is flat or
+  protected, a second Ctrl+C, or the exchange's close plus `SESSION_END_GRACE_S`. With
+  `"keep"` every leg is protected by state at once, and the session waits at most
+  `SAFE_STOP_STATE_WAIT_S` for the cancels and the stops' words, then leaves the
+  positions open with their broker-held stops.
 - **The second Ctrl+C** (3.3 step 4) asks for nothing more (no exit, no retry: the
-  schedule is halted). It waits at most `SAFE_STOP_STATE_WAIT_S` for the orders the stop
-  waits on to end (with "flatten" every working order, the exits in flight among them;
-  with "keep" the entries it cancelled), so a fill on the way is known, then prints one
-  line per leg left open, naming an exit still in flight, and stops. Two requests made
-  before the loop looked begin the stop with no exit asked for (the operator asked to
-  stop now), then end it the same way. After a guard lock nothing can be sent: a first
-  Ctrl+C stops at once.
+  schedule is halted) and protects every leg by state. It waits at most
+  `SAFE_STOP_STATE_WAIT_S` for each leg to be protected, and for the orders of a leg with
+  no stop rule to end (with "flatten" every working order, the exits in flight among
+  them; with "keep" the entries it cancelled), so a fill on the way is known, then
+  prints one line per leg left open, naming its stop and an exit still in flight, and
+  stops. Two requests the loop sees at once act as the first followed by the second
+  (decided for unit 10: how fast the keys were pressed must not change the outcome),
+  so the flatten's exits are asked for and the second's bounded wait follows. After a
+  guard lock nothing can be sent: a first Ctrl+C stops at once.
 - **The end of the day.** Once every strategy is past its MIS square-off, flat and with
   nothing working, the session ends ("session_end"). From the square-off plus
   `SQUARE_OFF_VERIFY_AFTER_S` a strategy not flat gets the ERROR alert "still not flat
@@ -41,11 +47,13 @@ Times are UTC nanoseconds, quantities units.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 
 from .._layout import NANOS_PER_SECOND
-from ._session_close import left_open_note
 from ._session_loop import Session
 from ._session_trader import StrategyFailed, Trader
+from ._stops_protect import PROTECTED
+from ._stops_report import left_open
 from ._types import LOGGER_NAME, AlertKind
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -88,6 +96,7 @@ class Control:
         self._stopping_ns: int | None = None
         self._second_ns: int | None = None
         self._remind_ns: int | None = None
+        self._protecting = False
         # The kernel's last answer to the safe stop's exit request, by strategy.
         self._asked: dict[str, str | None] = {}
         self._not_flat_ns = {
@@ -135,19 +144,25 @@ class Control:
 
     def _take_requests(self, now_ns: int) -> None:
         """The operator's stop requests: the first begins the safe stop, the second ends
-        it; two seen at once begin it with no exit asked for (module docstring). The
-        retry schedule is halted before its duties run, so no retry is asked for in the
-        step that saw the second."""
+        it; two seen at once act as the first followed by the second (module docstring).
+        The retry schedule is halted before its duties run, so no retry is asked for in
+        the step that saw the second."""
         session = self._session
         requested = session.stop.count
         if requested and not self.stopping:
-            self._begin(now_ns, exits=requested < SECOND_CTRL_C)
+            self._begin(now_ns)
         if self.verdict is None and requested >= SECOND_CTRL_C and self._second_ns is None:
             self._second_ns = now_ns
             session.exits.halt()
             session.event("second_stop")
+            self._protect(session.traders, now_ns)
 
-    def _begin(self, now_ns: int, *, exits: bool = True) -> None:
+    def _protect(self, traders: Sequence[Trader], now_ns: int) -> None:
+        """Protect `traders`' legs by state from now (3.3)."""
+        self._protecting = True
+        self._session.stops.protection.begin(traders, now_ns)
+
+    def _begin(self, now_ns: int) -> None:
         session = self._session
         self._stopping_ns = now_ns
         self._remind_ns = now_ns + _s(SAFE_STOP_FLATTEN_S)
@@ -160,8 +175,10 @@ class Control:
         if session.locked:
             self.verdict = MODE_BREACH
             return
-        if self._on_stop == "flatten" and exits:
+        if self._on_stop == "flatten":
             self._ask_exits(retried_too=True)
+        else:
+            self._protect(session.traders, now_ns)
 
     def _ask_exits(self, *, retried_too: bool) -> None:
         """Ask the kernel to exit each open position. `retried_too` False skips one whose
@@ -169,7 +186,7 @@ class Control:
         last attempt; the stop's first request asks for every position."""
         session = self._session
         for trader in session.traders:
-            if trader.open_units() == 0:
+            if trader.open_units() == 0 or session.stops.protection.holds(trader):
                 continue
             if not retried_too and session.exits.owns(trader.name):
                 continue
@@ -181,12 +198,13 @@ class Control:
     def _stop_due(self, now_ns: int) -> None:
         traders = self._session.traders
         if self._on_stop == "keep":
-            waiting = any(trader.entry_orders() for trader in traders)
+            waiting = any(self._waiting(trader) for trader in traders)
             if not waiting or now_ns >= self._stopping_ns + _s(SAFE_STOP_STATE_WAIT_S):
                 self._left_open()
                 self.verdict = self._stopped_by()
             return
-        if all(trader.flat for trader in traders):
+        if all(trader.flat or self._protected(trader) for trader in traders):
+            self._left_open()
             self.verdict = self._stopped_by()
             return
         if not self._session.locked:
@@ -195,29 +213,43 @@ class Control:
             self._left_open()
             self.verdict = self._stopped_by()
         elif now_ns >= self._remind_ns:
+            if not self._protecting:
+                self._protect([trader for trader in traders if not trader.flat], now_ns)
             self._remind_ns = now_ns + _s(UNPROTECTED_REMINDER_EVERY_S)
             self._remind()
 
     def _second_due(self, now_ns: int) -> None:
-        """After the second Ctrl+C: once the orders the stop waits on have ended, or
-        `SAFE_STOP_STATE_WAIT_S` after it, list each leg left open and stop."""
-        waiting = any(self._waits_on(trader) for trader in self._session.traders)
+        """After the second Ctrl+C: once every leg is protected by state and the orders
+        the stop waits on have ended, or `SAFE_STOP_STATE_WAIT_S` after it, list each leg
+        left open and stop."""
+        waiting = any(self._waiting(trader) for trader in self._session.traders)
         if waiting and now_ns < self._second_ns + _s(SAFE_STOP_STATE_WAIT_S):
             return
         self._left_open()
         self.verdict = self._stopped_by()
 
-    def _waits_on(self, trader: Trader) -> list[int]:
-        """The orders of `trader` whose end the second Ctrl+C waits for: with "flatten"
-        every working order (the exits, and the entries the stop cancels), with "keep"
-        the entries it cancels (the strategy's resting exits stay)."""
-        return trader.working() if self._on_stop == "flatten" else trader.entry_orders()
+    def _protected(self, trader: Trader) -> bool:
+        """True once protect by state holds the leg and its stop covers it."""
+        protection = self._session.stops.protection
+        return protection.holds(trader) and protection.state(trader) == PROTECTED
+
+    def _waiting(self, trader: Trader) -> bool:
+        """Whether the stop still waits on `trader`'s leg: protect by state is not done,
+        or orders of a leg it does not protect work on (with "flatten" every working
+        order, the exits and the entries the stop cancels; with "keep" the entries it
+        cancels, since the strategy's resting exits stay)."""
+        protection = self._session.stops.protection
+        if not protection.settled(trader):
+            return True
+        if self._on_stop == "keep":
+            return bool(trader.entry_orders())
+        return not self._protected(trader) and bool(trader.working())
 
     def _remind(self) -> None:
         session = self._session
         for trader in session.traders:
             units = trader.open_units()
-            if units == 0:
+            if units == 0 or self._protected(trader):
                 continue
             line = f"{_leg(trader, units)}: not flat yet, {self._exit_state(trader)}"
             session.emit(line)
@@ -226,7 +258,9 @@ class Control:
     def _exit_state(self, trader: Trader) -> str:
         """What works toward the exit of `trader`'s position, as a reminder says it."""
         session = self._session
-        exits = [trader.order_name(kernel_order) for kernel_order in trader.exit_orders()]
+        stop = session.stops.leg(trader).stop
+        closing = [kernel_order for kernel_order in trader.exit_orders() if kernel_order != stop]
+        exits = [trader.order_name(kernel_order) for kernel_order in closing]
         if exits:
             return f"order {', '.join(exits)} working to close it"
         if trader.finished:
@@ -251,7 +285,7 @@ class Control:
             units = trader.open_units()
             if units == 0:
                 continue
-            line = f"{_leg(trader, units)}: {left_open_note(trader)}"
+            line = f"{_leg(trader, units)}: {left_open(session.stops, trader)}"
             session.emit(line)
             session.alert(AlertKind.ERROR, line)
 

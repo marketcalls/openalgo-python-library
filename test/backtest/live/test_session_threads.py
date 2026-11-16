@@ -285,29 +285,32 @@ def alone(make_fake_openalgo, monkeypatch, tmp_path, caplog):
     return made
 
 
-def test_two_ctrl_c_at_once_leave_the_position_open_and_say_so(alone):
+def test_two_ctrl_c_at_once_send_the_flatten_exit_and_stop_flat(alone):
+    # Decided for unit 10: two presses seen together act as the first followed by the
+    # second, as presses a moment apart do.
     PressesStop.presses = 2
     passing = Blocking(
         alone.fake.client(), "placeorder", when=lambda: False, hold_s=0, now=alone.fake.clock.now
     )
     outcome = run_threaded(alone, passing, "orders", (PressesStop,))
     assert outcome.stopped_by == "ctrl_c"
-    assert [order.action for order in alone.orders()] == ["BUY"]
-    assert alone.fake.position("SBIN", "NSE") == 10
-    assert [(p.symbol, p.units) for p in outcome.open_positions] == [("SBIN", 10.0)]
-    assert any("SBIN NSE 10 units: no stop at the broker" in line for line in alone.lines)
+    assert [order.action for order in alone.orders()] == ["BUY", "SELL"]
+    assert alone.fake.position("SBIN", "NSE") == 0
+    assert outcome.open_positions == ()
+    assert not any("close it by hand" in line for line in alone.lines)
 
 
 def test_a_second_ctrl_c_while_the_exit_is_sent_waits_for_its_fill(alone):
-    # The safe stop's SELL is held in its call for 3 fake seconds; the second Ctrl+C
-    # comes as the hold begins.
+    # The safe stop's SELL is held in its call for 1 fake second, well inside the second
+    # Ctrl+C's bounded wait at any real-time pace of the run; the second Ctrl+C comes as
+    # the hold begins.
     PressesStop.presses = 1
     clock = alone.fake.clock
     held = Blocking(
         alone.fake.client(),
         "placeorder",
         when=lambda: alone.stop.count >= 1,
-        hold_s=3,
+        hold_s=1,
         now=clock.now,
         on_hold=alone.stop.request,
     )
