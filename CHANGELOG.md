@@ -222,16 +222,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   what its fills were charged, the cancellations and modifications waiting for the
   broker's answer, the exits and the legs' broker-held stops, the targets fired, the
   daily loss totals, the trading state, the cooldown and time exit counters, the entry
-  locks and the commands not yet taken. `Engine::restore_live_state` gives it to a session
-  built for a restart, once, after its catch-up and before any order; the saved working
-  orders are numbered from o1 again and the call returns each one's saved and new id. A
-  session restored at any point of the day goes on exactly as the uninterrupted one: the
-  same commands, states, fills, trades and P&L. Each start's result covers that start:
-  the contract notes are settled per start, and a CNC sale after a restart is not matched
-  with a same-day CNC buy before it for the intraday rates. A state of another day, other
-  instruments or another capital, of another layout, or one that cannot be read (the
-  error names the field) is refused whole, and so is a restore into a session that has
-  traded, was restored already, or stands before the saved point.
+  locks and the commands not yet taken. Each saved order says whether it was sent: a
+  strategy exit that waits for its cancels was not, and the restart's order check skips
+  it. `Engine::restore_live_state` gives it to a session built for a restart, once, after
+  its catch-up and before any order; the saved working orders are numbered from o1 again
+  and the call returns each one's saved and new id. Later orders take the ids after them,
+  which the earlier start may have given to orders that have since ended, so the live
+  layer rebuilds its map of broker orders from the returned pairs alone. A session restored
+  at a point of its trading day goes on as the uninterrupted one in its commands, states,
+  fills, trades and P&L, with these limits: the events recorded after the last pause and
+  not yet delivered are not saved, so the restarted strategy's `on_fill`, `on_order` and
+  `on_position` never run for them; the entry locks are not restored (the session keeps
+  its own, and the live layer sets again, from the saved state, those that last the day);
+  a sizing cap the restarted session has set already is kept, being the fresher figure;
+  and a state saved while the session closed is refused, since no session resumes at its
+  close. Each start's result covers that start: the contract notes are settled per start,
+  and a CNC sale after a restart is not matched with a same-day CNC buy before it for the
+  intraday rates. A state of another day, other instruments or another capital, of
+  another layout, one that cannot be read, or one whose parts do not hold together (a
+  position its tranches or its leg do not match, an open position without its leg, an
+  order filled beyond its units, a leg's stop that is not one; the error names the field)
+  is refused whole, and so is a restore into a session that has traded, was restored
+  already, or stands before the saved point. Through the binding, a state nested deeper
+  than any saved one is refused before it is read.
+- A live session hands out no command of an order that has ended: `Engine::take_commands`
+  drops the Place, Modify or Cancel of an order that was rejected, cancelled or filled
+  whole since the command was made, such as a restored order the restart's order check
+  ends before its commands are taken.
 - A live session's fill with no order of its own in the kernel (no change to backtests):
   `Engine::apply_external_fill` records the broker closing or reducing a position by
   itself (its square-off, a position closed by hand) through the one fill path, at the

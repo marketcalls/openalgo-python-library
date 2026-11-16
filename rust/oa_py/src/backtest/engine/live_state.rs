@@ -7,21 +7,33 @@
 //!   keys: "layout" (the layout version), "day", "slice" and "stage" (where the session
 //!   stands), "clock_ns", "instruments", "account" (the cash), "positions" (with their
 //!   tranches), "legs", "orders" (each working order with its "order" id, "role",
-//!   "reason", "request", "status", units, filled units and what its fills were charged),
-//!   "desk" (cancellations and modifications waiting for the broker's answer, the exits
-//!   of the positions, the legs' stops, the targets fired, the entry locks, the sizing
-//!   cap), "commands" (not yet taken), "risk" (trading state, daily loss totals, drawdown
-//!   peak, the cooldown and time exit counters), "open_trades" and "session_buys". An
-//!   order is named by its id while it works and by "ended" once it has ended.
+//!   "reason", "sent", "request", "status", units, filled units and what its fills were
+//!   charged), "desk" (cancellations and modifications waiting for the broker's answer,
+//!   the exits of the positions, the legs' stops, the targets fired, the entry locks, the
+//!   sizing cap), "commands" (not yet taken), "risk" (trading state, daily loss totals,
+//!   drawdown peak, the cooldown and time exit counters), "open_trades" and
+//!   "session_buys". An order is named by its id while it works and by "ended" once it
+//!   has ended. An order's "sent" is False only for a strategy exit that waits for the
+//!   cancellation of the orders on its position's closing side: nothing of it is at the
+//!   broker, so the restart's order check (16-session-design 3.6) skips it.
 //! - `restore_live_state(state)`: give a saved state to a session built for a restart,
 //!   once, after its catch-up and before any order. Returns `{saved id: new id}` for
-//!   every restored working order (the saved orders are numbered from o1 again), so the
-//!   live layer re-keys its venue map. A state of another day, other instruments or
-//!   another capital, of another layout, or one that cannot be read (the message names
+//!   every restored working order (the saved orders are numbered from o1 again). The live
+//!   layer rebuilds its venue map from these pairs alone: later orders take the next ids,
+//!   which the earlier start may have given to orders that have ended since. The saved
+//!   "commands" come back for `take_commands`, which drops those of an order the restart
+//!   ends first (a rejection, a cancellation or a whole fill applied before they are
+//!   taken); whether one still to send reached the broker before the crash is for the
+//!   journal to say. The saved entry locks are not restored (the session keeps its own;
+//!   the live layer sets again those that last the day, read from "desk"), and the saved
+//!   sizing cap only into a session that has none. The events the saved session had
+//!   recorded and not yet delivered are lost with it. A state of another day, other
+//!   instruments or another capital, of another layout, one that cannot be read, nests
+//!   deeper than any saved state, or whose parts do not hold together (the message names
 //!   the field) raises `NativeEngineInputError`; a session that has orders or positions
 //!   of its own, was restored already, has begun its close or stands before the saved
-//!   point, and a backtest, raise `NativeEngineError`. Nothing of a refused state is
-//!   restored.
+//!   point, a state saved while the session closed, and a backtest, raise
+//!   `NativeEngineError`. Nothing of a refused state is restored.
 //! - `apply_external_fill(instrument, product, side, units, price, at, reason)`: the
 //!   broker closed or reduced the position by itself (its square-off, a position closed
 //!   by hand): `units` (above 0) on `side` ("BUY", "SELL") at `price` rupees at `at` (UTC
@@ -81,8 +93,25 @@ fn not_plain(path: &str, value: &Bound<'_, PyAny>) -> PyErr {
     ))
 }
 
-/// A Python value of a saved state as the kernel's plain data; `path` names it in errors.
-fn from_python(value: &Bound<'_, PyAny>, path: &str) -> PyResult<StateValue> {
+/// How deep a saved state's values may nest. The deepest value `live_state()` writes is
+/// about 10 levels down (the state, its desk, a modification waiting, its request, the
+/// leg rules, a target, its distance, the distance's value); a value much deeper is not a
+/// saved state, and reading it level by level would exhaust the stack.
+const MAX_STATE_DEPTH: usize = 32;
+
+/// A Python value of a saved state as the kernel's plain data; `path` names it in errors,
+/// and `depth` is how far below the state it sits (the state itself is 0).
+///
+/// Errors: `NativeEngineInputError` for a value that is not plain data or nests deeper
+/// than `MAX_STATE_DEPTH`; `OverflowError` for a whole number beyond 64 bits.
+fn from_python(value: &Bound<'_, PyAny>, path: &str, depth: usize) -> PyResult<StateValue> {
+    if depth > MAX_STATE_DEPTH {
+        return Err(NativeEngineInputError::new_err(format!(
+            "the saved live state cannot be restored: {path} is nested deeper than \
+             {MAX_STATE_DEPTH} levels, which no saved state is; pass the state live_state() \
+             returned, unchanged or read back from JSON"
+        )));
+    }
     if value.is_none() {
         return Ok(StateValue::Null);
     }
@@ -104,7 +133,7 @@ fn from_python(value: &Bound<'_, PyAny>, path: &str) -> PyResult<StateValue> {
         let items = value
             .iter()?
             .enumerate()
-            .map(|(index, item)| from_python(&item?, &format!("{path}[{index}]")))
+            .map(|(index, item)| from_python(&item?, &format!("{path}[{index}]"), depth + 1))
             .collect::<PyResult<Vec<_>>>()?;
         return Ok(StateValue::List(items));
     }
@@ -115,7 +144,7 @@ fn from_python(value: &Bound<'_, PyAny>, path: &str) -> PyResult<StateValue> {
                 return Err(not_plain(&format!("a key of {path}"), &key));
             };
             let key = key.to_cow()?.into_owned();
-            let item = from_python(&item, &format!("{path}.{key}"))?;
+            let item = from_python(&item, &format!("{path}.{key}"), depth + 1)?;
             entries.push((key, item));
         }
         return Ok(StateValue::Map(entries));
@@ -137,7 +166,7 @@ pub(super) fn restore_live_state<'py>(
     engine: &mut Engine,
     state: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let state = from_python(state, "live_state")?;
+    let state = from_python(state, "live_state", 0)?;
     let pairs = engine.restore_live_state(&state).map_err(engine_error)?;
     let ids = PyDict::new_bound(py);
     for (saved, new) in pairs {

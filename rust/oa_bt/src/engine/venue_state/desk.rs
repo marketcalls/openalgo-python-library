@@ -5,19 +5,20 @@
 //! fired and the exits made for them, the reprices waiting, and the session's controls
 //! (entry locks, the sizing cap).
 //!
+//! Of the controls, a restore takes only the sizing cap, and only into a session that has
+//! none (`Engine::restore_live_state`): the entry locks are written for the live layer to
+//! read and are checked for their shape, nothing more.
+//!
 //! What names a working order names it by its saved id; what names an order that has
 //! ended is saved only where it tells something (an exit's orders, a leg's last stop
 //! order: `orders::write_ref`), and dropped where nothing looks it up any more, as the
 //! session itself forgets it (`Engine::tidy_venue`).
-
-use std::collections::BTreeSet;
 
 use crate::exec::{OrderBook, OrderId};
 
 use super::super::venue::{ExitBy, PositionExit, Replacement, VenueDesk};
 use super::super::venue_legs::LegStop;
 use super::super::venue_roles::{EngineExit, OrderRole};
-use super::super::venue_session::SessionControls;
 use super::error::LiveStateError;
 use super::orders::{write_ref, Ids};
 use super::requests::{key_fields, read_key, read_request, write_request};
@@ -34,7 +35,8 @@ pub(super) struct SavedDesk {
     pub(super) target_exits: Vec<(OrderId, u16)>,
     pub(super) fired_targets: Vec<(crate::portfolio::PositionKey, u16)>,
     pub(super) reprices: Vec<(OrderId, f64)>,
-    pub(super) controls: SessionControls,
+    /// The saved cap on the engine default's sizing equity, rupees.
+    pub(super) sizing_cap_rupees: Option<f64>,
 }
 
 fn engine_exit_code(exit: EngineExit) -> &'static str {
@@ -194,10 +196,10 @@ pub(super) fn read_desk(
     instruments: usize,
 ) -> Result<SavedDesk, LiveStateError> {
     let each = |key: &str| read.items_of(key);
-    let entry_locks = each("entry_locks")?
-        .iter()
-        .map(|reason| reason.text().map(str::to_string))
-        .collect::<Result<BTreeSet<String>, _>>()?;
+    // Their shape only: the saved locks are the live layer's to re-apply (module docs).
+    for reason in each("entry_locks")? {
+        reason.text()?;
+    }
     Ok(SavedDesk {
         cancelling: each("cancelling")?
             .iter()
@@ -249,9 +251,6 @@ pub(super) fn read_desk(
                 ))
             })
             .collect::<Result<_, LiveStateError>>()?,
-        controls: SessionControls {
-            entry_locks,
-            sizing_cap_rupees: read.opt_f64_of("sizing_cap_rupees")?,
-        },
+        sizing_cap_rupees: read.opt_f64_of("sizing_cap_rupees")?,
     })
 }

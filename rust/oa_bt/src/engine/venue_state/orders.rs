@@ -1,7 +1,9 @@
 //! The orders of a live session's saved state (`venue_state`): every working order with
-//! its role, request, status, units, filled units and fill price, its times and what its
-//! fills have been charged so far (a partly filled order is costed on its total), and the
-//! commands the adapter has not taken yet.
+//! its role, request, status, units, filled units and fill price, its times, what its
+//! fills have been charged so far (a partly filled order is costed on its total) and
+//! whether it was sent (a strategy exit that waits for the cancellation of the orders on
+//! its position's closing side was not: nothing of it is at the venue, and the restart's
+//! order check has no intent to look for), and the commands the adapter has not taken yet.
 //!
 //! A restored order takes a new id: the session restarts with an empty book and the
 //! saved working orders are numbered from o1 in the order of their saved ids (`Ids`). A
@@ -93,11 +95,12 @@ fn read_cost(read: &Read<'_>) -> Result<CostBreakdown, LiveStateError> {
     })
 }
 
-/// A working order with its role and what its fills were charged (`charged`, the
-/// session's charges of every order part).
+/// A working order with its role, whether it was `sent` (module docs) and what its fills
+/// were charged (`charged`, the session's charges of every order part).
 pub(super) fn write_order(
     order: &Order,
     role: Option<OrderRole>,
+    sent: bool,
     charged: &[(ChargePart, OrderCharges)],
 ) -> StateValue {
     let parts = charged.iter().filter(|((id, _), _)| *id == order.id);
@@ -110,6 +113,7 @@ pub(super) fn write_order(
                 .map(RiskExitReason::code)
                 .into(),
         ),
+        ("sent", sent.into()),
         ("request", write_request(&order.request)),
         ("status", order.status.code().into()),
         ("decided_at_ns", order.decided_at.into()),
@@ -153,13 +157,23 @@ fn read_role(read: &Read<'_>) -> Result<Option<OrderRole>, LiveStateError> {
     role.code(&plain, OrderRole::code).map(Some)
 }
 
-/// A restored working order: the order under its new id, its role, and what each part of
-/// its fills was charged so far.
-pub(super) type SavedOrder = (Order, Option<OrderRole>, Vec<(ChargePart, OrderCharges)>);
+/// A restored working order (`read_order`).
+pub(super) struct SavedOrder {
+    /// The order under its new id.
+    pub(super) order: Order,
+    /// What it is for (`venue_roles`); `None` for an order the session made no role for.
+    pub(super) role: Option<OrderRole>,
+    /// Whether it was sent (module docs), checked against the saved exits
+    /// (`checks::check_sent`).
+    pub(super) sent: bool,
+    /// What each part of its fills was charged so far.
+    pub(super) charged: Vec<(ChargePart, OrderCharges)>,
+}
 
 /// A working order as `write_order` wrote it, under its new id `id`.
 ///
-/// Errors: `Malformed` for a field missing or unusable, or a status that does not work.
+/// Errors: `Malformed` for a field missing or unusable, a status that does not work, or
+/// units that are not above 0 or filled units outside 0 to its units.
 pub(super) fn read_order(
     read: &Read<'_>,
     id: OrderId,
@@ -188,27 +202,40 @@ pub(super) fn read_order(
             Ok(((id, part.bool_of("opening")?), so_far))
         })
         .collect::<Result<_, LiveStateError>>()?;
+    let quantity_units = read.f64_of("quantity_units")?;
+    let filled_units = read.f64_of("filled_units")?;
+    if quantity_units <= 0.0 || !(0.0..=quantity_units).contains(&filled_units) {
+        return Err(read.malformed(format!(
+            "has {filled_units} units filled of {quantity_units}: an order has units above 0 \
+             and filled units from 0 to them"
+        )));
+    }
     let order = Order {
         id,
         request: read_request(&read.field("request")?, instruments)?,
         status,
         decided_at: read.whole_of("decided_at_ns")?,
         good_until: read.whole_of("good_until_ns")?,
-        quantity_units: read.f64_of("quantity_units")?,
-        filled_units: read.f64_of("filled_units")?,
+        quantity_units,
+        filled_units,
         average_fill_rupees: read.f64_of("average_fill_rupees")?,
         reject_code: None,
     };
-    Ok((order, read_role(read)?, charged))
+    Ok(SavedOrder {
+        order,
+        role: read_role(read)?,
+        sent: read.bool_of("sent")?,
+        charged,
+    })
 }
 
 /// A command the adapter has not taken, `None` for one naming an order that has ended
 /// (module docs).
 pub(super) fn write_command(book: &OrderBook, command: &VenueCommand) -> Option<StateValue> {
-    let (VenueCommand::Place { order, .. }
-    | VenueCommand::Modify { order, .. }
-    | VenueCommand::Cancel { order }) = *command;
-    if !book.get(order).is_some_and(|o| o.status.is_working()) {
+    let works = book
+        .get(command.order())
+        .is_some_and(|o| o.status.is_working());
+    if !works {
         return None;
     }
     let terms = |units: f64, order_type: crate::exec::OrderType| {

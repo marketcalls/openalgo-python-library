@@ -1,8 +1,9 @@
 #![cfg(all(feature = "costs", feature = "time"))]
 //! What a live session's saved state is refused for (`Engine::restore_live_state`,
 //! `LiveStateError`; 16-session-design R14): a session that cannot take a state now, a
-//! state of another session, and a state that cannot be read. A refused state is refused
-//! whole: the session is left as it was, and the right state is restored afterwards.
+//! state of another session, a state that cannot be read or whose parts do not hold
+//! together, and a state saved while the session closed. A refused state is refused whole:
+//! the session is left as it was, and the right state is restored afterwards.
 //!
 //! The saved state is a session holding 100 units of SBIN bought by o1 at 500.10 with a
 //! stop 2 points below (its stop o2 working), paused at the close of minute 2.
@@ -13,10 +14,11 @@ use oa_bt::engine::{
     Engine, KernelError, LiveStateError, Pause, RunConfig, StateValue, Submission, VenueError,
 };
 use oa_bt::exec::OrderId;
-use oa_bt::model::{days_from_civil, Side};
+use oa_bt::model::{days_from_civil, Product, Side};
 use venue_support::{
-    backtest, bars, config, holding_with, market, nifty_call, pause_at_close, session, session_of,
-    stop_points, wait_before, Script, CAPITAL,
+    at_close, backtest, bars, config, holding_with, limit, market, nifty_call, order,
+    pause_at_close, run_to_end, session, session_of, stop_points, wait_before, Act, Script,
+    CAPITAL, SESSION_SLICES,
 };
 
 /// How a table row builds the session it gives the state to.
@@ -52,20 +54,30 @@ fn kind(result: Result<Vec<(OrderId, OrderId)>, KernelError>) -> String {
     }
 }
 
-/// `value` with the value at `path` (map keys from the root) replaced by `new`.
+/// `value` with the value at `path` (map keys, and list indices as "0", from the root)
+/// replaced by `new`.
 fn with(value: &StateValue, path: &[&str], new: StateValue) -> StateValue {
-    let StateValue::Map(entries) = value else {
-        panic!("not a map at {path:?}");
+    let replaced = |at: &str, item: &StateValue| match path {
+        [first] if at == *first => new.clone(),
+        [first, rest @ ..] if at == *first => with(item, rest, new.clone()),
+        _ => item.clone(),
     };
-    let entries = entries
-        .iter()
-        .map(|(key, item)| match path {
-            [first] if key == first => (key.clone(), new.clone()),
-            [first, rest @ ..] if key == first => (key.clone(), with(item, rest, new.clone())),
-            _ => (key.clone(), item.clone()),
-        })
-        .collect();
-    StateValue::Map(entries)
+    match value {
+        StateValue::Map(entries) => StateValue::Map(
+            entries
+                .iter()
+                .map(|(key, item)| (key.clone(), replaced(key, item)))
+                .collect(),
+        ),
+        StateValue::List(items) => StateValue::List(
+            items
+                .iter()
+                .enumerate()
+                .map(|(index, item)| replaced(&index.to_string(), item))
+                .collect(),
+        ),
+        other => panic!("not a map or a list at {path:?}: {other:?}"),
+    }
 }
 
 /// `value` without the top-level field `key`.
@@ -233,15 +245,116 @@ fn a_state_that_cannot_be_read_is_refused_whole_naming_the_field() {
 }
 
 #[test]
-fn a_restored_session_keeps_the_entry_locks_it_set_and_adds_the_saved_ones() {
-    let mut first = holding_with(100.0, stop_points(2.0));
-    first.lock_entries("reconcile").expect("a lock reason");
-    pause_at_close(&mut first, &bars(&[], &[]), 2);
+fn a_state_that_does_not_hold_together_is_refused_naming_where() {
+    let state = saved();
+    // (what, the path changed, its new value, where the refusal points)
+    let table: [(&str, &[&str], StateValue, &str); 7] = [
+        (
+            "a position its tranches do not add up to",
+            &["positions", "0", "quantity_units"],
+            80.0.into(),
+            "live_state.positions[0]",
+        ),
+        (
+            "a leg on the other side of its position",
+            &["positions", "0", "quantity_units"],
+            (-100.0).into(),
+            "live_state.legs[0]",
+        ),
+        (
+            "a leg holding other units than its position",
+            &["legs", "0", "held_units"],
+            50.0.into(),
+            "live_state.legs[0]",
+        ),
+        (
+            "an open position without its leg",
+            &["legs"],
+            StateValue::List(Vec::new()),
+            "live_state.positions[0]",
+        ),
+        (
+            "an order filled beyond its units",
+            &["orders", "0", "filled_units"],
+            500.0.into(),
+            "live_state.orders[0]",
+        ),
+        (
+            "a leg's stop that is not a leg stop order",
+            &["orders", "0", "role"],
+            "exit".into(),
+            "live_state.desk.leg_stops[0]",
+        ),
+        (
+            "an order saved as not sent that no exit waits with",
+            &["orders", "0", "sent"],
+            false.into(),
+            "live_state.orders[0]",
+        ),
+    ];
+    for (what, path, new, at) in table {
+        let mut kernel = restarted_at(config(), 2);
+        let refused = with(&state, path, new);
+        let expected = format!("malformed at {at}");
+        assert_eq!(
+            kind(kernel.restore_live_state(&refused)),
+            expected,
+            "{what}"
+        );
+        assert!(
+            kernel.working_orders().is_empty(),
+            "{what}: nothing restored"
+        );
+    }
+}
+
+#[test]
+fn a_state_saved_while_the_session_closed_is_refused_saying_so() {
+    // A resting CNC LIMIT DAY order, placed at the venue, keeps the session close waiting
+    // for the venue to end it; the state is saved there.
+    let resting = order(Side::Buy, 10.0, limit(400.0), Product::Cnc);
+    let mut first = session(config());
+    let mut script = Script::new(vec![at_close(0, Act::Submit(resting))]);
+    wait_before(&mut first, &bars(&[], &[]), &mut script, 1);
+    assert_eq!(first.take_commands().len(), 1, "the order's Place");
+    let close = SESSION_SLICES as usize;
+    wait_before(&mut first, &bars(&[], &[]), &mut script, close);
+    first.take_commands();
     let state = first.live_state();
-    let mut kernel = restarted_at(config(), 2);
-    kernel.lock_entries("starting").expect("a lock reason");
-    assert_eq!(kind(kernel.restore_live_state(&state)), "restored");
-    assert_eq!(kernel.entry_locks(), ["reconcile", "starting"]);
+    assert_eq!(
+        state_field(&state, "stage"),
+        &StateValue::from("closing"),
+        "saved at the close"
+    );
+    let finished = {
+        let mut kernel = session(config());
+        run_to_end(&mut kernel, &bars(&[], &[]), &mut Script::new(Vec::new()));
+        kernel
+    };
+    // (what, the session given the state)
+    let table = [
+        ("a session caught up to minute 2", restarted_at(config(), 2)),
+        ("a session that has finished", finished),
+    ];
+    for (what, mut kernel) in table {
+        let refused = kernel.restore_live_state(&state);
+        let Err(KernelError::LiveState(LiveStateError::NotRestorable { reason })) = refused else {
+            panic!("{what}: {refused:?}");
+        };
+        assert!(
+            reason.contains("saved while the session closed"),
+            "{what}: {reason}"
+        );
+    }
+}
+
+/// The top-level field `key` of a saved state.
+fn state_field<'a>(state: &'a StateValue, key: &str) -> &'a StateValue {
+    let StateValue::Map(entries) = state else {
+        panic!("not a map");
+    };
+    let found = entries.iter().find(|(known, _)| known == key);
+    &found.unwrap_or_else(|| panic!("no {key}")).1
 }
 
 #[test]

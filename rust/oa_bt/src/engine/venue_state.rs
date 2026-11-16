@@ -11,7 +11,7 @@
 //! | `account` | the cash: capital, realized P&L, charges, margin blocked, sale proceeds withheld |
 //! | `positions` | every position with its tranches, adds, realized P&L, margin and mark |
 //! | `legs` | each open position's leg state whole (levels, targets, trail, breakeven and what the leg keeps besides) |
-//! | `orders` | every working order: its role, request, status, units, filled units, fill price, times and what its fills were charged so far |
+//! | `orders` | every working order: its role, whether it was sent, request, status, units, filled units, fill price, times and what its fills were charged so far |
 //! | `desk` | the cancellations and modifications waiting for the venue's answer (a modification with its terms), the exits of the positions, the legs' broker-held stops, the targets fired, the reprices waiting, the entry locks and the sizing cap |
 //! | `commands` | the commands the adapter has not taken yet |
 //! | `risk` | the trading state and its cause, the daily loss totals, the drawdown peak, the slices the cooldown and time exit count from, the engine exits waiting for an open |
@@ -20,14 +20,33 @@
 //! `Engine::restore_live_state` gives a saved state to a session built for the restart,
 //! once, after its catch-up (the day's bars added and released, nothing decided) and
 //! before any order: the session must be external, of the same day and instruments and
-//! capital, not closing, and stand at or after the point the state was saved at. The
-//! saved working orders take new ids, from o1 in the order of their saved ids
-//! (`orders::Ids`), returned as (saved id, new id) pairs so the live layer re-keys its
-//! venue map. Nothing is sent and no event is written: the restored session is where the
-//! saved one was, and from there it decides, sends and records as the saved one would
-//! have. The entry locks set before the restore (the live layer's "starting") stay, with
-//! the saved ones added. A state that cannot be restored is refused whole
-//! (`LiveStateError`): nothing of it is restored.
+//! capital, and stand at or after the point the state was saved at and before its own
+//! close; a state saved while the session closed is refused (`standing`). A state that
+//! cannot be read, or whose parts do not hold together (`checks`), is refused whole
+//! (`LiveStateError`): nothing of it is restored. Nothing is sent and no event is written:
+//! the restored session is where the saved one was, and from there it decides, sends and
+//! records as the saved one would have, but for the events below.
+//!
+//! - **Ids.** The saved working orders take new ids, from o1 in the order of their saved
+//!   ids (`orders::Ids`), returned as (saved id, new id) pairs. Later orders take the ids
+//!   after them, which the earlier start may have given to orders that have ended since:
+//!   the live layer rebuilds its venue map from the pairs alone, since a key it kept for
+//!   an ended order of the earlier start names another order now.
+//! - **Commands.** The commands the saved session had not handed out come back, to be
+//!   taken first. Section 3.6 saves the state before each batch of commands, so each may
+//!   or may not have reached the venue before the crash, which only the journal tells (the
+//!   restart's order check, 3.6). The result the check gives an order ends it, and
+//!   `take_commands` then gives none of its commands (`venue` module docs); a restored
+//!   Place still to be taken is the live layer's to send or not, by its journal. A saved
+//!   order's `sent` is false for a strategy exit that waits for its cancels: nothing of it
+//!   can be at the venue, and the check has no intent to look for.
+//! - **Controls.** The entry locks are not restored: the session keeps those set before
+//!   the restore (the live layer's "starting"), and the saved ones stay readable in the
+//!   state (`desk.entry_locks`) for the live layer to set again those that last the day
+//!   (16-session-design 6.2: a reconciliation mismatch, failed exits, the account's daily
+//!   loss; not the mode guard's, the dead feed's or Ctrl+C's, which a new start lifts). The
+//!   sizing cap is restored only into a session that has none: a cap set at the restart
+//!   comes from fresher funds (6.6).
 //!
 //! Not saved, so a restarted session's run begins at the restart (16-session-design 1.4:
 //! each start's result covers that start): the fills, events, position history and
@@ -36,41 +55,47 @@
 //! after the restart make a note of their own, rounded on its own), and a CNC sale after
 //! the restart is not matched against a CNC buy of the same scrip before it for the
 //! intraday rates (`charges::same_day`; the session's buys still count for the sale
-//! credit). Timers, GTT orders and futures series are not part of a session's state
-//! (missed timers are skipped; the other two are refused in a session).
+//! credit). The events recorded since the session's last pause (the fills and results it
+//! took while waiting), which its next pause would have delivered, are not saved either:
+//! the restored session never delivers them, so the strategy's `on_fill`, `on_order` and
+//! `on_position` do not run for them, and a strategy that keeps state in those callbacks
+//! can differ from the uninterrupted run (the books do not: they hold every fill). Timers,
+//! GTT orders and futures series are not part of a session's state (missed timers are
+//! skipped; the other two are refused in a session).
 
 mod book;
+mod checks;
 mod desk;
 mod error;
 mod legs;
 mod orders;
 mod requests;
 mod risk;
+mod standing;
 mod value;
 
 pub use error::LiveStateError;
 pub use value::StateValue;
 
 use crate::charges::OrderCharges;
-use crate::exec::{InstrumentId, Order, OrderId};
-use crate::model::Day;
+use crate::exec::{InstrumentId, OrderId};
 use crate::portfolio::{Portfolio, PositionKey};
 use crate::rms::LegState;
 
 use super::error::KernelError;
-use super::kernel::{Engine, Phase};
+use super::kernel::Engine;
 use super::output::OpenTrade;
 use super::strategy_risk::StrategyRisk;
 use super::venue::{ChargePart, VenueCommand};
 use super::venue_error::VenueError;
-use super::venue_roles::OrderRole;
 use book::{
     read_account, read_buy, read_open_trade, read_position, repeats, write_account, write_buy,
     write_open_trade, write_position,
 };
+use checks::{check_parts, Parts};
 use desk::{read_desk, write_desk, SavedDesk};
 use legs::{read_leg, write_leg};
-use orders::{read_command, read_order, write_command, write_order, Ids};
+use orders::{read_command, read_order, write_command, write_order, Ids, SavedOrder};
 use risk::{read_risk, write_risk};
 use value::{list, map, Read};
 
@@ -78,48 +103,12 @@ use value::{list, map, Read};
 /// is refused (`LiveStateError::Version`).
 pub const LIVE_STATE_LAYOUT: i64 = 1;
 
-/// How far into a slice a session stands, in the order a slice runs them: the timers
-/// due at its open fired ahead of it, before it, at its timer pause, paused at its close,
-/// waiting at its session close, and after the last slice.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum Stage {
-    Ahead,
-    Ready,
-    Timers,
-    Paused,
-    Closing,
-    Finished,
-}
-
-const STAGES: [Stage; 6] = [
-    Stage::Ahead,
-    Stage::Ready,
-    Stage::Timers,
-    Stage::Paused,
-    Stage::Closing,
-    Stage::Finished,
-];
-
-impl Stage {
-    fn code(self) -> &'static str {
-        match self {
-            Stage::Ahead => "ahead",
-            Stage::Ready => "ready",
-            Stage::Timers => "timers",
-            Stage::Paused => "paused",
-            Stage::Closing => "closing",
-            Stage::Finished => "finished",
-        }
-    }
-}
-
 /// A saved state read whole, before any of it is applied.
 struct Saved {
     clock_ns: i64,
     portfolio: Portfolio,
     legs: Vec<(PositionKey, LegState)>,
-    orders: Vec<(Order, Option<OrderRole>)>,
-    charged: Vec<(ChargePart, OrderCharges)>,
+    orders: Vec<SavedOrder>,
     desk: SavedDesk,
     commands: Vec<VenueCommand>,
     risk: StrategyRisk,
@@ -129,24 +118,6 @@ struct Saved {
 }
 
 impl Engine {
-    /// The slice the session stands at and how far into it (`Stage`).
-    fn standing(&self) -> (usize, Stage) {
-        match self.phase {
-            Phase::Ahead(slice) => (slice.index, Stage::Ahead),
-            Phase::Ready(index) => (index, Stage::Ready),
-            Phase::Timers(slice) => (slice.index, Stage::Timers),
-            Phase::Paused(slice) => (slice.index, Stage::Paused),
-            Phase::Closing(slice) => (slice.index, Stage::Closing),
-            Phase::Finished => (self.timeline.len(), Stage::Finished),
-        }
-    }
-
-    /// The IST trading day of the slice at `index` (the last slice's after the end).
-    fn day_at(&self, index: usize) -> Option<Day> {
-        let last = self.timeline.len().checked_sub(1)?;
-        self.timeline.slice(index.min(last)).map(|slice| slice.day)
-    }
-
     /// The session's state as plain data (module docs), to save before each batch of
     /// commands is sent and at each slice release, and to give to `restore_live_state`
     /// after a restart. A backtest writes its state the same way.
@@ -160,7 +131,8 @@ impl Engine {
             ])
         });
         let orders = list(book.working(), |order| {
-            write_order(order, self.order_role(order.id), &self.venue.charged)
+            let (role, sent) = (self.order_role(order.id), !self.is_unsent(order.id));
+            write_order(order, role, sent, &self.venue.charged)
         });
         let commands = self.venue.commands.iter();
         map([
@@ -196,8 +168,10 @@ impl Engine {
     ///
     /// Errors: `Venue(NotExternal)` in a backtest; `LiveState` when the state is refused,
     /// whole: `NotRestorable` for a session that has traded, was restored already, has
-    /// begun its close or stands before the saved point; `Version`, `OtherSession` (another
-    /// day, other instruments, another capital) and `Malformed` for the state itself.
+    /// begun its close or stands before the saved point, and for a state saved while the
+    /// session closed; `Version`, `OtherSession` (another day, other instruments, another
+    /// capital) and `Malformed` (a field that cannot be read, or parts that do not hold
+    /// together) for the state itself.
     pub fn restore_live_state(
         &mut self,
         state: &StateValue,
@@ -208,87 +182,6 @@ impl Engine {
         self.check_restorable()?;
         let saved = self.read_saved(&Read::root(state))?;
         self.apply_saved(saved)
-    }
-
-    /// Refuse a session that cannot take a state now (module docs).
-    fn check_restorable(&self) -> Result<(), LiveStateError> {
-        let refuse = |reason: &str| {
-            Err(LiveStateError::NotRestorable {
-                reason: reason.to_string(),
-            })
-        };
-        if self.venue.restored {
-            return refuse("the session was restored already (a state is restored once)");
-        }
-        let traded = !self.book.orders().is_empty()
-            || !self.portfolio.positions().is_empty()
-            || !self.record.fills.is_empty();
-        if traded {
-            return refuse(
-                "the session has orders or positions of its own: restore into a session \
-                 built for the restart, after its catch-up and before any order",
-            );
-        }
-        if matches!(self.phase, Phase::Closing(_) | Phase::Finished) {
-            return refuse("the session's close has begun: restore before the session close");
-        }
-        Ok(())
-    }
-
-    /// Check that `read` is a state of this session saved at or before where it stands.
-    fn check_session(&self, read: &Read<'_>) -> Result<(), LiveStateError> {
-        let layout: i64 = read.whole_of("layout")?;
-        if layout != LIVE_STATE_LAYOUT {
-            return Err(LiveStateError::Version { found: layout });
-        }
-        let other = |reason: String| Err(LiveStateError::OtherSession { reason });
-        let saved = read.items_of("instruments")?;
-        let named: Vec<(String, String)> = saved
-            .iter()
-            .map(|item| {
-                let symbol = item.field("symbol")?.text()?.to_string();
-                Ok((symbol, item.field("exchange")?.text()?.to_string()))
-            })
-            .collect::<Result<_, LiveStateError>>()?;
-        let ours: Vec<(String, String)> = self
-            .instruments
-            .iter()
-            .map(|spec| (spec.symbol.clone(), spec.exchange.code().to_string()))
-            .collect();
-        if named != ours {
-            return other(format!("instruments {named:?}, the session's {ours:?}"));
-        }
-        let (slice, stage) = self.standing();
-        let saved_day: Option<Day> = read.opt_whole_of("day")?;
-        if saved_day != self.day_at(slice) {
-            return other(format!(
-                "day {saved_day:?}, the session's {:?}",
-                self.day_at(slice)
-            ));
-        }
-        let saved_capital = read.field("account")?.f64_of("capital_rupees")?;
-        if saved_capital != self.config.capital_rupees {
-            let ours = self.config.capital_rupees;
-            return other(format!(
-                "capital {saved_capital} rupees, the session's {ours}"
-            ));
-        }
-        let saved_at = (
-            read.whole_of::<usize>("slice")?,
-            read.field("stage")?.code(&STAGES, Stage::code)?,
-        );
-        if (slice, stage) < saved_at {
-            return Err(LiveStateError::NotRestorable {
-                reason: format!(
-                    "the session stands at slice {slice} ({}), before the saved slice {} ({}): \
-                     catch it up first",
-                    stage.code(),
-                    saved_at.0,
-                    saved_at.1.code()
-                ),
-            });
-        }
-        Ok(())
     }
 
     /// Read the whole state (module docs), applying nothing.
@@ -305,13 +198,11 @@ impl Engine {
             }
             ids.pairs.push((saved, OrderId(first + offset)));
         }
-        let mut orders = Vec::new();
-        let mut charged = Vec::new();
-        for (order, (_, id)) in saved_orders.iter().zip(&ids.pairs) {
-            let (order, role, parts) = read_order(order, *id, count)?;
-            orders.push((order, role));
-            charged.extend(parts);
-        }
+        let orders = saved_orders
+            .iter()
+            .zip(&ids.pairs)
+            .map(|(order, (_, id))| read_order(order, *id, count))
+            .collect::<Result<Vec<_>, _>>()?;
         let positions = read
             .items_of("positions")?
             .iter()
@@ -325,14 +216,22 @@ impl Engine {
         if repeats(positions.iter().map(|p| p.key)) || repeats(legs.iter().map(|(key, _)| *key)) {
             return Err(read.malformed("names one position twice"));
         }
+        let desk = read_desk(&read.field("desk")?, &ids, count)?;
+        let parts = Parts {
+            positions: &positions,
+            legs: &legs,
+            orders: &orders,
+            exits: &desk.exits,
+            leg_stops: &desk.leg_stops,
+        };
+        check_parts(read, &parts)?;
         let drawdown_limit = self.config.risk.drawdown_halt_percent;
         Ok(Saved {
             clock_ns: read.whole_of("clock_ns")?,
             portfolio: Portfolio::resume(read_account(&read.field("account")?)?, positions),
             legs,
             orders,
-            charged,
-            desk: read_desk(&read.field("desk")?, &ids, count)?,
+            desk,
             commands: read
                 .items_of("commands")?
                 .iter()
@@ -359,17 +258,25 @@ impl Engine {
     /// book's next id (`read_saved`), so the book takes every order, before anything else
     /// is changed.
     fn apply_saved(&mut self, saved: Saved) -> Result<Vec<(OrderId, OrderId)>, KernelError> {
-        for (order, role) in saved.orders {
+        let mut charged: Vec<(ChargePart, OrderCharges)> = Vec::new();
+        for SavedOrder {
+            order,
+            role,
+            charged: parts,
+            ..
+        } in saved.orders
+        {
             let id = self.book.insert(order)?;
             if let Some(role) = role {
                 self.venue.roles.push((id, role));
             }
+            charged.extend(parts);
         }
         self.portfolio = saved.portfolio;
         self.legs = saved.legs;
         let desk = saved.desk;
         let venue = &mut self.venue;
-        venue.charged = saved.charged;
+        venue.charged = charged;
         venue.cancelling = desk.cancelling;
         venue.cancels_sent = desk.cancels_sent;
         venue.modifying = desk.modifying;
@@ -378,9 +285,8 @@ impl Engine {
         venue.target_exits = desk.target_exits;
         venue.fired_targets = desk.fired_targets;
         venue.reprices = desk.reprices;
-        venue.controls.entry_locks.extend(desk.controls.entry_locks);
-        if desk.controls.sizing_cap_rupees.is_some() {
-            venue.controls.sizing_cap_rupees = desk.controls.sizing_cap_rupees;
+        if venue.controls.sizing_cap_rupees.is_none() {
+            venue.controls.sizing_cap_rupees = desk.sizing_cap_rupees;
         }
         venue.commands.extend(saved.commands);
         venue.clock_ns = venue.clock_ns.max(saved.clock_ns);

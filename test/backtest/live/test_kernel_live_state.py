@@ -188,6 +188,18 @@ def test_a_state_that_cannot_be_read_is_refused_naming_the_field(what, path, val
     assert restarted.working_orders() == [], f"{what}: nothing restored"
 
 
+def test_a_state_nested_far_deeper_than_any_saved_one_is_refused_and_the_process_lives():
+    nested: list[Any] = []
+    for _ in range(5_000):
+        nested = [nested]
+    state = holding().live_state()
+    state["instruments"] = nested
+    restarted = caught_up()
+    with pytest.raises(native_attr("NativeEngineInputError"), match="nested deeper than"):
+        restarted.restore_live_state(state)
+    assert restarted.working_orders() == []
+
+
 def test_a_session_that_cannot_take_a_state_now_refuses_it():
     state = holding().live_state()
     restored = caught_up()

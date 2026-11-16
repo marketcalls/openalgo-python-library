@@ -13,15 +13,15 @@
 use crate::engine::venue_test_kit::{
     held, holding_100, market, minute, sold_at_the_broker, wait_before,
 };
+use crate::engine::{Engine, KernelError, Submission, VenueCommand, VenueError};
+use crate::exec::{OrderId, OrderRequest, OrderStatus, OrderType};
+use crate::market::margin::MarginError;
+use crate::model::Side;
 
 /// The instant of the broker's sale: inside slice 3, which the session waits for.
 fn in_slice_3() -> i64 {
     minute(3) + 1
 }
-use crate::engine::{Engine, KernelError, Submission, VenueCommand, VenueError};
-use crate::exec::{OrderId, OrderRequest, OrderStatus, OrderType};
-use crate::market::margin::MarginError;
-use crate::model::Side;
 
 const STOP: OrderType = OrderType::StopMarket {
     trigger_rupees: 450.0,

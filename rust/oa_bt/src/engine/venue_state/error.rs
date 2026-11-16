@@ -6,7 +6,8 @@ use std::fmt;
 /// Why a saved state was not restored.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LiveStateError {
-    /// A field of the state is missing or cannot be read.
+    /// A field of the state is missing or cannot be read, or the parts of the state do not
+    /// hold together (`checks`).
     Malformed {
         /// Where, as "live_state.positions[0].tranches".
         path: String,
@@ -18,13 +19,15 @@ pub enum LiveStateError {
         /// The layout the state names.
         found: i64,
     },
-    /// The state is of another session: another trading day or other instruments.
+    /// The state is of another session: another trading day, other instruments or another
+    /// capital.
     OtherSession {
         /// What differs.
         reason: String,
     },
-    /// The session cannot take a state now: it has traded or been restored already, its
-    /// close has begun, or it stands before the instant the state was saved at.
+    /// The session cannot take this state now: it has traded or been restored already, its
+    /// close has begun, or it stands before the instant the state was saved at; or the
+    /// state was saved while the session closed, which no session resumes from.
     NotRestorable {
         /// Why, and what to do.
         reason: String,

@@ -19,7 +19,12 @@
 //!   on until the venue's result, since a fill may come first. `modify` sends `Modify`
 //!   and the order keeps its old terms until the venue confirms the new ones
 //!   (`apply_modify`) or refuses them. The adapter takes the commands with
-//!   `Engine::take_commands`, in the order they were made.
+//!   `Engine::take_commands`, in the order they were made. A command never outlives its
+//!   order: one whose order has ended by the time it is taken is dropped, since nothing of
+//!   the order is left to place, modify or cancel (a saved state's commands come back with
+//!   it, and the restart may end their orders before they are taken: `venue_state`). An
+//!   order withdrawn before its Place is taken is cancelled through the venue all the
+//!   same, so the adapter that takes both sends the Place, then the Cancel.
 //! - **Exits** (`venue_owner`, `venue_exit_orders`). An exit is the strategy's `exit()` or
 //!   `reduce()` (a reduce-only MARKET order), a leg's target (`venue_ticks`), or one of
 //!   the engine's exits (`venue_exits`: the daily loss limit and drawdown halt, the
@@ -142,6 +147,17 @@ pub enum VenueCommand {
         /// The kernel order to cancel.
         order: OrderId,
     },
+}
+
+impl VenueCommand {
+    /// The kernel order the command is for.
+    pub fn order(&self) -> OrderId {
+        match *self {
+            VenueCommand::Place { order, .. }
+            | VenueCommand::Modify { order, .. }
+            | VenueCommand::Cancel { order } => order,
+        }
+    }
 }
 
 /// Who asked for an exit (`venue_owner`).
@@ -283,9 +299,19 @@ impl Engine {
     }
 
     /// The commands made since the last call, in the order they were made (none in a
-    /// backtest).
+    /// backtest). The commands of an order that has ended since they were made are
+    /// dropped: the order has nothing at the venue to place, modify or cancel any more
+    /// (module docs, "Commands out").
     pub fn take_commands(&mut self) -> Vec<VenueCommand> {
-        std::mem::take(&mut self.venue.commands)
+        let commands = std::mem::take(&mut self.venue.commands);
+        let book = &self.book;
+        commands
+            .into_iter()
+            .filter(|command| {
+                let order = book.get(command.order());
+                order.is_some_and(|order| order.status.is_working())
+            })
+            .collect()
     }
 
     /// True in a live session: a broker fills the orders.
