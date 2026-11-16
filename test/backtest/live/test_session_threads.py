@@ -14,6 +14,10 @@ second; `Late` buys 10 INFY at its second decision. The session starts at 14:40:
 and is stopped with Ctrl+C at 14:47. The start runs on the sped-up clock too, so when the
 first decision comes depends on how fast the start ran: the tests read it from what
 happened, and time the held call from it.
+
+The safe stop's tests (16-session-design 3.3 step 4) run `PressesStop` alone: it buys 10
+SBIN and, once it holds them, presses Ctrl+C from `on_bar`, on the loop's thread, where
+the signal handler runs too, so presses made together are seen together by the loop.
 """
 
 from __future__ import annotations
@@ -73,13 +77,43 @@ class Late(bt.Strategy):
             self.buy(10)
 
 
+class PressesStop(bt.Strategy):
+    """Buys 10 SBIN at its first decision; at its second, holding them, asks the session's
+    stop flag `flag` to stop `presses` times."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "1m"
+    presses = 1
+    flag: Any = None
+
+    def init(self):
+        self.calls = 0
+
+    def on_bar(self, bar):
+        self.calls += 1
+        if self.calls == 1:
+            self.buy(10)
+        elif self.calls == 2 and self.position.qty:
+            for _ in range(type(self).presses):
+                type(self).flag.request()
+
+
 class Blocking:
     """A client that holds its first call of `method` made once `when()` is true for
-    `hold_s` fake seconds (by `now`), then makes it."""
+    `hold_s` fake seconds (by `now`), then makes it; `on_hold` runs as the hold begins."""
 
-    def __init__(self, client: Any, method: str, *, when: Any, hold_s: float, now: Any) -> None:
+    def __init__(
+        self,
+        client: Any,
+        method: str,
+        *,
+        when: Any,
+        hold_s: float,
+        now: Any,
+        on_hold: Any = None,
+    ) -> None:
         self._client, self._method, self._when = client, method, when
         self._hold_ns, self._now = round(hold_s * NS), now
+        self._on_hold = on_hold
         self.held_at: int | None = None
         self.freed = threading.Event()
 
@@ -91,6 +125,8 @@ class Blocking:
         def call(*args: Any, **kwargs: Any) -> Any:
             if self.held_at is None and self._when():
                 self.held_at = self._now()
+                if self._on_hold is not None:
+                    self._on_hold()
                 limit = time.perf_counter() + BLOCK_LIMIT_S
                 while self._now() < self.held_at + self._hold_ns and not self.freed.is_set():
                     if time.perf_counter() > limit:
@@ -119,8 +155,10 @@ class Driver(threading.Thread):
             last = now
 
 
-def run_threaded(world: Any, blocking: Blocking, role: str) -> Any:
-    """Run `Early` and `Late` with the session's threads, `blocking` standing in for the
+def run_threaded(
+    world: Any, blocking: Blocking, role: str, strategies: tuple[Any, ...] = (Early, Late)
+) -> Any:
+    """Run `strategies` with the session's threads, `blocking` standing in for the
     session's `role` client."""
     clients = world.clients()
     clients = type(clients)(**{**clients.__dict__, role: blocking})
@@ -135,7 +173,7 @@ def run_threaded(world: Any, blocking: Blocking, role: str) -> Any:
     driver.start()
     try:
         return run_session(
-            [Early, Late],
+            list(strategies),
             world.fake.client(),
             clients=clients,
             feed=world.fake.direct_feed(),
@@ -236,3 +274,47 @@ def test_F64_an_entry_queued_behind_a_blocked_worker_expires_and_the_exit_goes(w
     assert [order.symbol for order in world.orders() if order.action == "BUY"] == ["SBIN"]
     assert list(outcome.outputs["Late"]["orders"]["status"]) == ["Rejected"]
     assert any("stale" in text for text in alerts(caplog, "reject"))
+
+
+@pytest.fixture
+def alone(make_fake_openalgo, monkeypatch, tmp_path, caplog):
+    """A rig for `PressesStop` alone, which stops the session itself."""
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+    made = rig(make_fake_openalgo, monkeypatch, tmp_path, start=(14, 40, 5))
+    PressesStop.flag = made.stop
+    return made
+
+
+def test_two_ctrl_c_at_once_leave_the_position_open_and_say_so(alone):
+    PressesStop.presses = 2
+    passing = Blocking(
+        alone.fake.client(), "placeorder", when=lambda: False, hold_s=0, now=alone.fake.clock.now
+    )
+    outcome = run_threaded(alone, passing, "orders", (PressesStop,))
+    assert outcome.stopped_by == "ctrl_c"
+    assert [order.action for order in alone.orders()] == ["BUY"]
+    assert alone.fake.position("SBIN", "NSE") == 10
+    assert [(p.symbol, p.units) for p in outcome.open_positions] == [("SBIN", 10.0)]
+    assert any("SBIN NSE 10 units: no stop at the broker" in line for line in alone.lines)
+
+
+def test_a_second_ctrl_c_while_the_exit_is_sent_waits_for_its_fill(alone):
+    # The safe stop's SELL is held in its call for 3 fake seconds; the second Ctrl+C
+    # comes as the hold begins.
+    PressesStop.presses = 1
+    clock = alone.fake.clock
+    held = Blocking(
+        alone.fake.client(),
+        "placeorder",
+        when=lambda: alone.stop.count >= 1,
+        hold_s=3,
+        now=clock.now,
+        on_hold=alone.stop.request,
+    )
+    outcome = run_threaded(alone, held, "orders", (PressesStop,))
+    assert held.held_at is not None
+    assert outcome.stopped_by == "ctrl_c"
+    assert [order.action for order in alone.orders()] == ["BUY", "SELL"]
+    assert alone.fake.position("SBIN", "NSE") == 0
+    assert outcome.open_positions == ()
+    assert not any("close it by hand" in line for line in alone.lines)

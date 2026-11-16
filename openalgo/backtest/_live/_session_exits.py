@@ -15,7 +15,8 @@ square-off with "operator_stop", the kernel's reason for an exit the session ask
 (its trade's exit reason reads "manual"). The kernel's own re-send of a rejected engine
 exit at each later open stays as a backstop; its exit owner keeps the two from
 overlapping. The broker-held stop the design re-places after the fifth failure comes with
-the stops supervisor (unit 10).
+the stops supervisor (unit 10). After the second Ctrl+C (`halt`) no exit is asked for
+again: the session only waits for what is in flight (16-session-design 3.3 step 4).
 
 Times are UTC nanoseconds. Used by the loop only.
 """
@@ -53,6 +54,7 @@ class ExitRetries:
         self._rejections: dict[str, int] = {}
         self._due_ns: dict[str, int] = {}
         self._reason: dict[str, str] = {}
+        self._halted = False
 
     def rejected(self, trader: Trader, kernel_order: int, intent: OrderIntent, why: str) -> None:
         """An order of `trader` (kernel order `kernel_order`, placed as `intent`) ended
@@ -85,6 +87,8 @@ class ExitRetries:
                 f"{name}'s entries are locked; close the position by hand in OpenAlgo",
             )
             return
+        if self._halted:
+            return
         delay_ns = round(EXIT_RETRY_DELAYS_S[rejections - 1] * NANOS_PER_SECOND)
         self._due_ns[name] = session.now() + delay_ns
         self._reason[name] = trader.reasons.get(kernel_order) or RETRY_REASON
@@ -97,6 +101,12 @@ class ExitRetries:
     def retry_due(self, name: str) -> bool:
         """True while a retry of the exit of strategy `name` is due."""
         return name in self._due_ns
+
+    def halt(self) -> None:
+        """Ask for no exit again from now (the second Ctrl+C): the retries due are
+        dropped, and a later rejection is counted but not asked for again."""
+        self._halted = True
+        self._due_ns.clear()
 
     def duties(self, now_ns: int) -> None:
         """Ask again for each exit whose retry is due; forget the schedule of a strategy

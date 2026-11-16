@@ -22,6 +22,7 @@ from session_samples import NS, BuyAndHold, Hold, Raises, alerts, ist, rig
 import openalgo.backtest as bt
 from openalgo.backtest._live import _session_stop, _session_trader
 from openalgo.backtest._live._alerts_logs import SessionLogs
+from openalgo.backtest._live._session_exits import EXIT_ATTEMPTS
 from openalgo.backtest._live._types import LOGGER_NAME, Mode
 from openalgo.backtest._live.journal import Journal
 from openalgo.backtest._live.preflight import AccountLock
@@ -96,6 +97,114 @@ def test_a_second_ctrl_c_stops_with_a_line_per_leg_left_open(world, caplog):
     assert any("close it by hand" in line for line in world.lines)
     assert any("safe stop" in text for text in alerts(caplog, "error"))
     assert any("failed 5 times" in text for text in alerts(caplog, "error"))
+
+
+def test_two_ctrl_c_before_the_loop_looks_ask_for_no_exit(world):
+    world.stop_at(ist(14, 43, 30))
+    world.stop_at(ist(14, 43, 30))
+    outcome = world.run(Hold)
+    assert outcome.stopped_by == "ctrl_c"
+    assert list(outcome.outputs["Hold"]["orders"]["status"]) == ["Filled"]
+    assert actions(world) == [("BUY", 10)]
+    assert [(p.symbol, p.units) for p in outcome.open_positions] == [("SBIN", 10.0)]
+    assert any("SBIN NSE 10 units: no stop at the broker" in line for line in world.lines)
+
+
+def test_a_second_ctrl_c_waits_for_the_exit_in_flight_and_stops_flat(world):
+    # The safe stop's SELL goes at about 14:43:31 and fills at once; its update is held
+    # until 14:43:33, after the second Ctrl+C.
+    world.script.at(ist(14, 43, 29), world.fake.faults.hold_order_updates)
+    world.stop_at(ist(14, 43, 30))
+    world.stop_at(ist(14, 43, 31) + NS // 2)
+    world.script.at(ist(14, 43, 33), world.fake.faults.release_order_updates)
+    outcome = world.run(Hold)
+    assert actions(world) == [("BUY", 10), ("SELL", 10)]
+    assert world.fake.position("SBIN", "NSE") == 0
+    assert outcome.stopped_by == "ctrl_c"
+    assert outcome.open_positions == ()
+    assert not any("close it by hand" in line for line in world.lines)
+    assert outcome.ended_ns < ist(14, 43, 31) + _session_stop.SAFE_STOP_STATE_WAIT_S * NS + NS
+
+
+def test_a_second_ctrl_c_names_the_exit_still_in_flight_at_its_bound(world):
+    # The safe stop's SELL never reaches the broker and its answer is lost: the session
+    # cannot tell for the broker's window whether it was placed.
+    world.script.at(ist(14, 43, 29), lambda: world.fake.faults.bad_gateway_page("placeorder"))
+    world.stop_at(ist(14, 43, 30))
+    world.stop_at(ist(14, 43, 33))
+    outcome = world.run(Hold)
+    assert outcome.stopped_by == "ctrl_c"
+    bound = ist(14, 43, 33) + _session_stop.SAFE_STOP_STATE_WAIT_S * NS
+    assert bound <= outcome.ended_ns < bound + 2 * NS
+    [left] = outcome.open_positions
+    assert (left.symbol, left.units) == ("SBIN", 10.0)
+    assert "in flight" in left.note and "check the order book" in left.note
+    [line] = [line for line in world.lines if "SBIN NSE 10 units" in line]
+    assert "exit order" in line and "in flight" in line
+    assert "no stop at the broker" not in line
+
+
+def test_ctrl_c_asks_again_for_an_exit_that_failed_every_attempt(world):
+    # BuyAndHold's exit at 14:45:01 is refused five times: the retry schedule gives up.
+    def refuse_five_exits():
+        for _ in range(EXIT_ATTEMPTS):
+            world.fake.reject_next("RMS: blocked", price_type="MARKET")
+
+    world.script.at(ist(14, 44, 30), refuse_five_exits)
+    world.stop_at(ist(14, 47))
+    outcome = world.run(BuyAndHold)
+    sells = [order for order in world.orders() if order.action == "SELL"]
+    assert [order.status for order in sells] == ["rejected"] * EXIT_ATTEMPTS + ["complete"]
+    assert ist(14, 47) <= sells[-1].placed_ns <= ist(14, 47, 3)
+    assert world.fake.position("SBIN", "NSE") == 0
+    assert outcome.stopped_by == "ctrl_c"
+
+
+class SellsBeyondItsPosition(bt.Strategy):
+    """Buys 10 SBIN at its first decision (14:42:01); at its second (14:43:01) rests a
+    LIMIT sale of 20 at 600 that would reverse its position (`reverse=True`): an entry
+    the safe stop cancels, and which an exit of the position waits for."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "1m"
+
+    def init(self):
+        self.calls = 0
+
+    def on_bar(self, bar):
+        self.calls += 1
+        if self.calls == 1:
+            self.buy(10)
+        elif self.calls == 2:
+            self.sell(20, price=600.0, reverse=True)
+
+
+def test_a_reminder_names_the_cancel_the_safe_stops_exit_waits_for(world, caplog):
+    # The sale's answer is lost and it never reached the broker: its cancel cannot be
+    # sent until the broker's window has passed, so the exit waits past the first reminder.
+    world.script.at(ist(14, 42, 30), lambda: world.fake.faults.bad_gateway_page("placeorder"))
+    world.stop_at(ist(14, 43, 30))
+    outcome = world.run(SellsBeyondItsPosition)
+    reminders = [text for text in alerts(caplog, "error") if "safe stop:" in text]
+    assert reminders
+    assert all("its exit waits for the cancel of order o2" in text for text in reminders)
+    assert world.fake.position("SBIN", "NSE") == 0
+    assert outcome.stopped_by == "ctrl_c"
+
+
+def test_a_reminder_after_the_close_ended_the_engine_session_says_so(world, caplog):
+    def refuse_exits():
+        for _ in range(100):
+            world.fake.reject_next("RMS: blocked", price_type="MARKET")
+
+    world.script.at(ist(14, 59, 50), refuse_exits)
+    world.stop_at(ist(15, 29))
+    outcome = world.run(Hold)
+    reminders = [text for text in alerts(caplog, "error") if "safe stop:" in text]
+    after_the_close = [text for text in reminders if "the exchange's close ended" in text]
+    assert after_the_close
+    assert not any("answered None" in text for text in reminders)
+    assert outcome.stopped_by == "ctrl_c"
+    assert [(p.symbol, p.units) for p in outcome.open_positions] == [("SBIN", 10.0)]
 
 
 def test_F58_ctrl_c_in_the_countdown_sends_nothing_and_stops_within_a_second(world):
@@ -199,7 +308,7 @@ def test_an_entry_that_fills_after_the_safe_stop_began_is_exited(world, caplog):
     assert world.fake.position("SBIN", "NSE") == 0
     assert outcome.stopped_by == "ctrl_c"
     assert world.orders()[-1].placed_ns < ist(14, 42, 10)
-    assert not [text for text in alerts(caplog, "error") if text.startswith("safe stop")]
+    assert not [text for text in alerts(caplog, "error") if "safe stop:" in text]
 
 
 class RaisesAsItsEntryFills(bt.Strategy):

@@ -142,14 +142,28 @@ def _summary(session: Session, outputs: dict[str, Any], *, flat: bool) -> Sessio
     )
 
 
+def left_open_note(trader: Trader) -> str:
+    """What the operator is told of `trader`'s position left open at the stop: the exit
+    orders still working (in flight: one may fill, so the order book comes first), or that
+    nothing works to close it."""
+    exits = [trader.order_name(kernel_order) for kernel_order in trader.exit_orders()]
+    if exits:
+        return (
+            f"exit order {', '.join(exits)} in flight, check the order book before closing "
+            "it by hand"
+        )
+    return "no stop at the broker, close it by hand"
+
+
 def _open_positions(session: Session) -> tuple[OpenPosition, ...]:
-    note = (
-        "known as of the mode breach"
-        if session.locked
-        else "no stop at the broker: close it by hand"
-    )
     return tuple(
-        OpenPosition(trader.name, trader.symbol, trader.exchange, units, note)
+        OpenPosition(
+            trader.name,
+            trader.symbol,
+            trader.exchange,
+            units,
+            "known as of the mode breach" if session.locked else left_open_note(trader),
+        )
         for trader in session.traders
         if (units := trader.open_units()) != 0
     )
@@ -190,4 +204,4 @@ def _stop_engine(trader: Trader) -> tuple[Any, tuple[float, float]]:
     return call(engine.finish), (realized + unrealized, costs)
 
 
-__all__ = ["OpenPosition", "SessionOutcome", "close_session"]
+__all__ = ["OpenPosition", "SessionOutcome", "close_session", "left_open_note"]
