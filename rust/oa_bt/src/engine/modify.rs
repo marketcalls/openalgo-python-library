@@ -81,7 +81,7 @@ impl Engine {
         self.check_replacement_units(units)?;
         let checked = match self.submission_checks(&request, units, &slice, decided_at, Some(id))? {
             Ok(good_until) => self
-                .venue_checks(&request, units, &slice)?
+                .venue_checks(&request, units, &slice, Some(id))?
                 .map(|()| good_until),
             Err(code) => Err(code),
         };

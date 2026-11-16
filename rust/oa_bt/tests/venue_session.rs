@@ -505,43 +505,36 @@ fn an_exit_that_waits_takes_no_venue_result() {
 }
 
 #[test]
-fn a_later_exit_supersedes_one_waiting_behind_its_cancels() {
-    // Holding 100 behind a take-profit (o2): reduce(0.5) (o3) waits for o2's cancel, then
-    // exit() (o4) in the same bar takes its place, for the larger of the two.
+fn exits_waiting_behind_their_cancels_are_sent_in_order_each_on_what_the_last_leaves() {
+    // Holding 100 behind a take-profit (o2): reduce(0.5) (o3) and exit() (o4) in one bar
+    // wait for o2's cancel, then go out as a backtest fills them: 50, then the 50 left.
     let (mut kernel, mut script) = holding_100();
     let columns = bars(&[], &[]);
     pause_at_close(&mut kernel, &columns, 3);
     assert!(kernel.submit(exit(Side::Sell, 100.0, limit(600.0))).is_ok());
     assert!(kernel.submit(fraction_exit(0.5)).is_ok());
     assert!(kernel.submit(fraction_exit(1.0)).is_ok());
-    assert_eq!(
-        status(&kernel, 3),
-        OrderStatus::Canceled,
-        "superseded, never sent"
-    );
     wait_before(&mut kernel, &columns, &mut script, 4);
     kernel.take_commands();
     assert!(kernel.apply_cancel(OrderId(2)).is_ok());
-    assert_eq!(placed_units(&mut kernel), [(OrderId(4), 100.0)]);
+    assert_eq!(
+        placed_units(&mut kernel),
+        [(OrderId(3), 50.0), (OrderId(4), 50.0)]
+    );
 }
 
 #[test]
 fn a_later_exit_in_the_same_bar_closes_what_a_sent_one_leaves() {
-    // reduce(0.5) (o2) is sent at once; exit() (o3) in the same bar cancels it and, once
-    // the reduce has filled, closes the 50 left.
-    let (mut kernel, mut script) = holding_100();
-    let columns = bars(&[], &[]);
-    pause_at_close(&mut kernel, &columns, 3);
+    // reduce(0.5) (o2) is sent at once; exit() (o3) in the same bar leaves it working and
+    // closes the 50 it leaves.
+    let (mut kernel, _) = holding_100();
+    pause_at_close(&mut kernel, &bars(&[], &[]), 3);
     assert!(kernel.submit(fraction_exit(0.5)).is_ok());
     assert!(kernel.submit(fraction_exit(1.0)).is_ok());
-    assert_ne!(status(&kernel, 3), OrderStatus::Canceled);
-    let commands = kernel.take_commands();
-    assert!(commands.contains(&VenueCommand::Cancel { order: OrderId(2) }));
-    wait_before(&mut kernel, &columns, &mut script, 4);
-    assert!(kernel
-        .apply_fill(OrderId(2), 50.0, 500.4, minute(4))
-        .is_ok());
-    assert_eq!(placed_units(&mut kernel), [(OrderId(3), 50.0)]);
+    assert_eq!(
+        placed_units(&mut kernel),
+        [(OrderId(2), 50.0), (OrderId(3), 50.0)]
+    );
 }
 
 #[test]

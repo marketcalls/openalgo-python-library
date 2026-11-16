@@ -1,17 +1,22 @@
 //! Results from the venue of an external session (`venue`): its fills, rejections and
-//! cancellations, recorded as a backtest records its own, and its answers to the
-//! cancellations and modifications it was sent.
+//! cancellations, recorded as a backtest records its own. Its answers to the
+//! cancellations and modifications it was sent are in `venue_answers`.
 //!
 //! A fill takes the one fill path, `fills::execute_fill` (position, ledger, the cost
 //! model's charges, the trade book, `Filled` and the position event), at the venue's price
 //! exactly: no slippage model, and the fill is never re-priced. The units are those newly
 //! filled (fills are increments), so partial fills accumulate, are costed once on their
 //! total (`charges::parts`), and the order completes when its units are filled. A fill
-//! that takes a position through zero is recorded as a backtest records a reversal: the
-//! close, then the open on the other side. The first fill of a stop order (SL, SL-M)
-//! writes `Triggered` before it, since the venue filled it only once its trigger was
-//! reached. A fill is checked whole before anything of it is recorded (the margin rule
-//! and the charges of each of its parts): it is recorded all or nothing.
+//! that takes a position through zero is recorded as a backtest records a reversal (the
+//! close, then the open on the other side) for an order with `reverse=True`; for any other
+//! order that reduces the position, and for every reduce-only order, the units beyond the
+//! position are not recorded, as a backtest fills or allows none of them at the fill bar
+//! (`fill_bar`): the order's units shrink by them and the fill is refused for them
+//! (`VenueError::WouldReverse`), after the units that closed the position are recorded.
+//! The first fill of a stop order (SL, SL-M) writes `Triggered` before it, since the venue
+//! filled it only once its trigger was reached. A fill is checked whole before anything of
+//! it is recorded (the margin rule and the charges of each of its parts): what is recorded
+//! of it is recorded all or nothing.
 //!
 //! Every result is recorded in the slice in progress: the first slice that has not run,
 //! the slice of a timer pause, or the session-closing slice that waits for its orders to
@@ -22,14 +27,16 @@
 //! fills that kind of order: 2 for a MARKET order, 3 for LIMIT, SL and SL-M. A fill at the
 //! slice's open instant is at the `Open`, any other at a `Level`. A result is refused
 //! while the engine is paused at a bar close (step 7): the paused slice completes with
-//! `advance` first. After a result the exit owners move on (`venue_owner`): an exit
-//! waiting for this order is sent once nothing blocks it.
+//! `advance` first. After a result the reduce-only orders are fitted to their positions
+//! (`venue_cover`) and the waiting exits move on (`venue_owner`): an exit waiting for this
+//! order is sent once nothing blocks it.
 //!
 //! The contract for the live layer: every fill of an order is delivered before its
 //! terminal result (`apply_cancel`, `apply_reject`); after it the order takes no more.
 
 use crate::exec::{
-    FillAt, FillFlags, FillPricing, Order, OrderAction, OrderId, OrderStatus, OrderType, RejectCode,
+    FillAt, FillFlags, FillPricing, Order, OrderAction, OrderId, OrderRequest, OrderStatus,
+    OrderType, RejectCode,
 };
 use crate::model::{Side, TsNanos};
 use crate::portfolio::PositionKey;
@@ -42,10 +49,10 @@ use super::fills::FillRequest;
 use super::futures::FillOrigin;
 use super::kernel::{Engine, Phase};
 use super::venue::SendAt;
-use super::venue_error::{Pending, VenueError};
+use super::venue_error::VenueError;
 
 /// The step in which a backtest fills an order of this kind.
-fn result_step(order: &Order) -> Step {
+pub(super) fn result_step(order: &Order) -> Step {
     match order.request.order_type {
         OrderType::Market => Step::OpenFills,
         _ => Step::Levels,
@@ -67,6 +74,19 @@ fn check_fill(units: f64, price_rupees: f64) -> Result<(), VenueError> {
     Ok(())
 }
 
+/// The units of a fill of `request` with `(closing, opening)` parts that may not be
+/// recorded: the opening part of a reduce-only order, and of any order that reduces the
+/// position without `reverse=True` (module docs).
+fn beyond_position(request: &OrderRequest, (closing, opening): (f64, f64)) -> f64 {
+    let may_reverse = request.reverse && !request.reduce_only;
+    let goes_through_zero = request.reduce_only || closing > 0.0;
+    if goes_through_zero && !may_reverse {
+        opening
+    } else {
+        0.0
+    }
+}
+
 impl Engine {
     /// Record a fill of `units` (the units newly filled, above 0) of `order` at
     /// `price_rupees` (above 0), filled at `at` (UTC nanoseconds) by the venue of an
@@ -77,7 +97,12 @@ impl Engine {
     /// for units or a price that is not finite or not above 0; `UnknownOrder`;
     /// `Venue(OrderEnded)` for an order that has ended and `Venue(NotSent)` for an exit not
     /// sent; `Venue(TooManyUnits)` for more units than the order has left; and those of
-    /// the margin rule and the cost model, before anything is recorded.
+    /// the margin rule and the cost model, before anything is recorded. The one refusal
+    /// that records something is `Venue(WouldReverse)`, for a fill beyond the position of
+    /// an order that may not reverse it: the units up to the position are recorded (none
+    /// when it was flat already), the order's units shrink by the rest, and an order left
+    /// with nothing to fill and no fill recorded ends `Canceled`. The broker's position
+    /// then differs from the session's by those units.
     pub fn apply_fill(
         &mut self,
         order: OrderId,
@@ -97,25 +122,61 @@ impl Engine {
             }
             .into());
         }
-        let parts = self.fill_parts(&placed, units);
+        let (closing, opening) = self.fill_parts(&placed, units);
+        let excess_units = beyond_position(&placed.request, (closing, opening));
+        let parts = (closing, opening - excess_units);
         self.check_recordable(&placed, parts, price_rupees, &slice)?;
         let stamp = Self::stamp(&slice, result_step(&placed));
-        let fill_at = if at == slice.open {
-            FillAt::Open
-        } else {
-            FillAt::Level
-        };
-        self.trigger_before_fill(stamp, &placed)?;
-        let fill = VenueFill {
-            slice,
-            stamp,
-            parts,
-            price_rupees,
-            at: fill_at,
-        };
-        self.record_venue_fill(&placed, fill)?;
+        if excess_units > 0.0 {
+            self.shrink_order(stamp, order, excess_units, parts)?;
+        }
+        if parts.0 + parts.1 > 0.0 {
+            let fill_at = if at == slice.open {
+                FillAt::Open
+            } else {
+                FillAt::Level
+            };
+            self.trigger_before_fill(stamp, &placed)?;
+            let fill = VenueFill {
+                slice,
+                stamp,
+                parts,
+                price_rupees,
+                at: fill_at,
+            };
+            self.record_venue_fill(&placed, fill)?;
+        }
         self.after_result(&slice)?;
+        if excess_units > 0.0 {
+            return Err(VenueError::WouldReverse {
+                order,
+                excess_units,
+            }
+            .into());
+        }
         Ok(stamp)
+    }
+
+    /// Take `excess_units` of a fill beyond the position off `order`'s units, before the
+    /// `parts` of the fill that are recorded; an order left with nothing to fill and
+    /// nothing to record ends `Canceled` (`apply_fill`).
+    fn shrink_order(
+        &mut self,
+        stamp: EventStamp,
+        order: OrderId,
+        excess_units: f64,
+        (closing, opening): (f64, f64),
+    ) -> Result<(), KernelError> {
+        let Some(shrunk) = self.book.get_mut(order) else {
+            return Err(KernelError::UnknownOrder(order));
+        };
+        shrunk.quantity_units -= excess_units;
+        let nothing_left = shrunk.quantity_units <= shrunk.filled_units;
+        if nothing_left && closing + opening <= 0.0 {
+            let kind = OrderEventKind::Canceled;
+            self.end_order(stamp, order, OrderAction::Cancel, kind)?;
+        }
+        Ok(())
     }
 
     /// Record that the venue of an external session rejected `order` (`Rejected` with
@@ -141,77 +202,6 @@ impl Engine {
         self.end_at_venue(order, OrderAction::Cancel, OrderEventKind::Canceled)
     }
 
-    /// Record that the venue refused to cancel `order`: it works on, and may be cancelled
-    /// again (an exit waiting for it sends the cancellation again at the next open).
-    ///
-    /// Errors: those of `apply_fill` for the session, the engine's state and the order;
-    /// `Venue(NotPending)` when no cancellation of it was sent.
-    pub fn apply_cancel_refused(&mut self, order: OrderId) -> Result<(), KernelError> {
-        self.result_slice()?;
-        self.live_order(order)?;
-        if !self.venue.cancelling.contains(&order) {
-            let what = Pending::Cancel;
-            return Err(VenueError::NotPending { order, what }.into());
-        }
-        self.venue.cancelling.retain(|id| *id != order);
-        Ok(())
-    }
-
-    /// Record that the venue confirmed the modification of `order` it was sent: the
-    /// order takes the replacement's terms in full (`Modified`). Returns the stamp.
-    ///
-    /// Errors: those of `apply_fill` for the session, the engine's state and the order;
-    /// `Venue(NotPending)` when no modification of it was sent; `Venue(ModifyBelowFilled)`
-    /// when the replacement has fewer units than the order has filled.
-    pub fn apply_modify(&mut self, order: OrderId) -> Result<EventStamp, KernelError> {
-        let slice = self.result_slice()?;
-        let filled_units = self.live_order(order)?.filled_units;
-        let Some(slot) = self.venue.modifying.iter().position(|(id, _)| *id == order) else {
-            let what = Pending::Modify;
-            return Err(VenueError::NotPending { order, what }.into());
-        };
-        let units = self.venue.modifying[slot].1.units;
-        if units < filled_units {
-            return Err(VenueError::ModifyBelowFilled {
-                order,
-                units,
-                filled_units,
-            }
-            .into());
-        }
-        let (_, replacement) = self.venue.modifying.remove(slot);
-        self.book.replace(
-            order,
-            replacement.request,
-            replacement.decided_at,
-            replacement.good_until,
-            replacement.units,
-        )?;
-        let stamp = Self::stamp(&slice, self.live_order(order).map(result_step)?);
-        self.emit(Event::Order {
-            stamp,
-            order,
-            kind: OrderEventKind::Modified,
-        });
-        self.after_result(&slice)?;
-        Ok(stamp)
-    }
-
-    /// Record that the venue refused the modification of `order` it was sent: the order
-    /// keeps its old terms.
-    ///
-    /// Errors: those of `apply_modify`, but for the units.
-    pub fn apply_modify_refused(&mut self, order: OrderId) -> Result<(), KernelError> {
-        self.result_slice()?;
-        self.live_order(order)?;
-        if !self.venue.modifying.iter().any(|(id, _)| *id == order) {
-            let what = Pending::Modify;
-            return Err(VenueError::NotPending { order, what }.into());
-        }
-        self.venue.modifying.retain(|(id, _)| *id != order);
-        Ok(())
-    }
-
     fn end_at_venue(
         &mut self,
         order: OrderId,
@@ -225,9 +215,12 @@ impl Engine {
         Ok(stamp)
     }
 
-    /// After a venue result: the exit owners move on, decided now in the slice in
-    /// progress (at its close when it is the session's closing slice).
-    fn after_result(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
+    /// After a venue result, decided now in the slice in progress (at its close when it is
+    /// the session's closing slice): the reduce-only orders are fitted to their positions,
+    /// then the waiting exits move on.
+    ///
+    /// Errors: those of `fit_exit_cover` and of `progress_exits`.
+    pub(super) fn after_result(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         let decided_at = match self.phase {
             Phase::Closing(_) => slice.close,
             _ => slice.open,
@@ -237,11 +230,15 @@ impl Engine {
             step: Step::OpenFills,
             decided_at,
         };
+        self.fit_exit_cover(at)?;
         self.progress_exits(at)
     }
 
     /// The slice a venue's result is recorded in (module docs).
-    fn result_slice(&self) -> Result<SliceInfo, KernelError> {
+    ///
+    /// Errors: `Venue(NotExternal)` in a backtest, `Venue(AtBarClose)` while paused at a
+    /// bar close, `Venue(SessionOver)` after the session.
+    pub(super) fn result_slice(&self) -> Result<SliceInfo, KernelError> {
         if !self.is_external() {
             return Err(VenueError::NotExternal.into());
         }
@@ -257,7 +254,9 @@ impl Engine {
     }
 
     /// The order a result is for: it works and was sent.
-    fn live_order(&self, id: OrderId) -> Result<&Order, KernelError> {
+    ///
+    /// Errors: `UnknownOrder`, `Venue(OrderEnded)`, `Venue(NotSent)`.
+    pub(super) fn live_order(&self, id: OrderId) -> Result<&Order, KernelError> {
         let order = self.book.get(id).ok_or(KernelError::UnknownOrder(id))?;
         if !order.status.is_working() {
             let status = order.status;

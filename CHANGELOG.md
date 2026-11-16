@@ -27,28 +27,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   charges, an order filled in parts charged once on its total; recorded all or nothing),
   `apply_reject`, `apply_cancel`, and the broker's answers `apply_cancel_refused`,
   `apply_modify` and `apply_modify_refused`. A cancelled order works on until the broker's
-  result; a modified one keeps its old terms until the broker confirms the new ones.
-  Every fill of an order comes before its terminal result.
+  result, and a cancellation the broker refuses is sent again in a later slice, at most
+  once in each; a modified one keeps its old terms until the broker confirms the new
+  ones, and one cut to the units it has filled meanwhile completes. Every fill of an
+  order comes before its terminal result.
 - Cancel, then exit: an exit (`exit()`, `reduce()`, the daily loss limit, the drawdown
-  halt, the square-off, the time exit) first cancels every working order of the position
-  on the closing side and is sent once they have ended, for the position then open; it is
-  the position's one exit owner meanwhile, and a later strategy exit (`reduce()` then
-  `exit()` in one bar) takes its place for the larger of the two, so the position closes
-  as in a backtest. Every exit goes out above the freeze quantity as several orders of at
-  most it. The engine's exits are sent where a backtest makes them (the square-off and
-  time exit as the session reaches their open, with or without a bar), and again at the
-  next open while they apply (a rejected exit, a position a cancel race reopened).
-  MIS entries still working when entries stop are cancelled. Timers fire as the session
-  reaches their open. At a session close the DAY orders are cancelled through the broker
-  and the session does not finish while an order works; a position still open is
-  reported open (no closing fill is invented).
+  halt, the square-off, the time exit) first cancels every other working order of the
+  position on the closing side and is sent once they have ended. The strategy's exits of
+  a position add up as a backtest fills them: each is sized when it is sent, on the
+  position less what the earlier ones still have to fill, so two `reduce(0.5)` close
+  three quarters, `reduce()` of 50 then of 10 units close 60, and `reduce()` then
+  `exit()` close it all. The engine's exits take over from the strategy's (their exits
+  are cancelled first) and close the whole position. Every exit goes out above the
+  freeze quantity as several orders of at most it. The engine's exits are sent where a
+  backtest makes them (the square-off and time exit as the session reaches their open,
+  with or without a bar), and again at the next open while they apply (a rejected exit,
+  a position a cancel race reopened). MIS entries still working when entries stop are
+  cancelled. Timers fire as the session reaches their open. At a session close the DAY
+  orders are cancelled through the broker and the session does not finish while an
+  order works; a position still open is reported open (no closing fill is invented).
+- Reduce-only orders never reverse a position in a session: the reduce-only orders
+  resting on its closing side may not hold more units than it has (new reject code
+  `exit_cover`: one stop for the whole position rests, a stop and a target for it both
+  do not), they are cut down or cancelled when the position shrinks, and a broker's fill
+  beyond the position of an order that may not reverse it (reduce-only, or without
+  `reverse=True`) is recorded up to the position and refused for the rest
+  (`VenueRefusalError` of kind `would_reverse`).
 - Refused at submission in a session, with the backtest's codes and errors, what a fill
   could not record: a leverage the margin table does not allow, a short option, a margin
-  above the free cash (`margin`), a fill the cost model cannot price. Not supported in a
+  above the free cash net of what the session's working entries would block (`margin`),
+  a fill the cost model cannot price. Not supported in a
   session yet (NotImplementedError): `stop=`, `target=`, trailing and breakeven, GTT
   orders, futures series and `rebalance()`; fractional quantities are refused. A broker's
   own rejection has the new reject code `venue`; a result the kernel refuses raises
-  `openalgo.backtest.errors.VenueRefusalError` with its `kind` (`VENUE_REFUSAL_KINDS`). A
+  `openalgo.backtest.errors.VenueRefusalError` with its `kind` (`VENUE_REFUSAL_KINDS`,
+  the same list the native module exports). A
   session whose orders are filled where the simulator fills them gives the same result as
   the backtest, field for field. The native `Engine` gains `session`, `add_bar`,
   `release`, `venue`, `take_commands`, `modify` and the `apply_*` calls.

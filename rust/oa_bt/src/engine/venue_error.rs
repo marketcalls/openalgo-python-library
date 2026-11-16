@@ -1,8 +1,10 @@
 //! Why a result from the venue of a live session was refused (`venue`, `venue_fills`).
 //!
-//! A refused result changes nothing. Each refusal has a kind (`VenueError::kind`), so the
-//! live layer tells a race it expects (a result for an order that has just ended) from a
-//! defect without reading the message.
+//! A refused result changes nothing, but for `WouldReverse`: a fill beyond the position
+//! is recorded up to it before the rest is refused. Each refusal has a kind
+//! (`VenueError::kind`, all of them in `VENUE_REFUSAL_KINDS`), so the live layer tells a
+//! race it expects (a result for an order that has just ended) from a defect without
+//! reading the message.
 
 use std::fmt;
 
@@ -74,17 +76,44 @@ pub enum VenueError {
         /// Units the order has filled.
         filled_units: f64,
     },
+    /// A fill of an order that closes the position (reduce-only, or one without
+    /// `reverse=True`) beyond the open position, from a race at the broker: the units that
+    /// closed the position were recorded, these were not. The broker's position now differs
+    /// from the session's.
+    WouldReverse {
+        /// The kernel order the fill was for.
+        order: OrderId,
+        /// Units of the fill beyond the open position, not recorded.
+        excess_units: f64,
+    },
     /// The engine is paused at a bar close (step 7): the slice must complete first.
     AtBarClose,
     /// The session has finished: no result can be recorded any more.
     SessionOver,
 }
 
+/// The kind of an unknown order's refusal (`KernelError::UnknownOrder`), as the bindings
+/// report it alongside `VenueError::kind`.
+pub const UNKNOWN_ORDER_KIND: &str = "unknown_order";
+
+/// Every kind of refusal a venue result can meet: the kinds of `VenueError` and
+/// `UNKNOWN_ORDER_KIND`. The bindings export it, so the Python list cannot drift from it.
+pub const VENUE_REFUSAL_KINDS: [&str; 11] = [
+    "not_external",
+    UNKNOWN_ORDER_KIND,
+    "order_ended",
+    "not_sent",
+    "too_many_units",
+    "invalid_fill",
+    "not_pending",
+    "modify_below_filled",
+    "would_reverse",
+    "at_bar_close",
+    "session_over",
+];
+
 impl VenueError {
-    /// The kind of refusal, as the bindings report it: "not_external", "order_ended",
-    /// "not_sent", "too_many_units", "invalid_fill", "not_pending", "modify_below_filled",
-    /// "at_bar_close" or "session_over" (an unknown order is `KernelError::UnknownOrder`,
-    /// kind "unknown_order").
+    /// The kind of refusal, as the bindings report it, one of `VENUE_REFUSAL_KINDS`.
     pub fn kind(&self) -> &'static str {
         match self {
             VenueError::NotExternal => "not_external",
@@ -94,6 +123,7 @@ impl VenueError {
             VenueError::InvalidFill { .. } => "invalid_fill",
             VenueError::NotPending { .. } => "not_pending",
             VenueError::ModifyBelowFilled { .. } => "modify_below_filled",
+            VenueError::WouldReverse { .. } => "would_reverse",
             VenueError::AtBarClose => "at_bar_close",
             VenueError::SessionOver => "session_over",
         }
@@ -142,6 +172,15 @@ impl fmt::Display for VenueError {
                 "the modification of order {order} to {units} units is below the \
                  {filled_units} units it has filled: the venue refuses it \
                  (apply_modify_refused)"
+            ),
+            VenueError::WouldReverse {
+                order,
+                excess_units,
+            } => write!(
+                f,
+                "the fill of order {order} goes {excess_units} units beyond the open \
+                 position: the units that closed it are recorded, these are not; the \
+                 broker's position differs from the session's"
             ),
             VenueError::AtBarClose => write!(
                 f,
@@ -202,12 +241,20 @@ mod tests {
                 units: 1.0,
                 filled_units: 2.0,
             },
+            VenueError::WouldReverse {
+                order,
+                excess_units: 1.0,
+            },
             VenueError::AtBarClose,
             VenueError::SessionOver,
         ];
         let mut kinds: Vec<&str> = all.iter().map(VenueError::kind).collect();
+        kinds.push(UNKNOWN_ORDER_KIND);
         kinds.sort_unstable();
         kinds.dedup();
-        assert_eq!(kinds.len(), all.len());
+        assert_eq!(kinds.len(), all.len() + 1);
+        let mut listed = VENUE_REFUSAL_KINDS.to_vec();
+        listed.sort_unstable();
+        assert_eq!(kinds, listed, "VENUE_REFUSAL_KINDS lists every kind once");
     }
 }

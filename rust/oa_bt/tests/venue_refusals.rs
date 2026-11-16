@@ -251,10 +251,33 @@ fn an_order_whose_margin_is_above_the_free_cash_is_rejected_as_in_a_backtest() {
 }
 
 #[test]
+fn an_entry_the_working_orders_leave_no_cash_for_is_rejected_as_in_a_backtest() {
+    // Two buys of 12,000 near 500.00 in one bar, 60 lakh each, against a capital of 1
+    // crore: a backtest fills the first and rejects the second `margin` at their fill
+    // bar, a session rejects the second when it is submitted.
+    let buy = || market(Side::Buy, 12_000.0);
+    let acts = vec![
+        at_close(0, Act::Submit(buy())),
+        at_close(0, Act::Submit(buy())),
+    ];
+    let simulated = venue_support::run_backtest(config(), &bars(&[], &[]), &mut Script::new(acts));
+    let codes: Vec<Option<RejectCode>> = simulated.orders.iter().map(|o| o.reject_code).collect();
+    assert_eq!(codes[..2], [None, Some(RejectCode::Margin)]);
+    let mut kernel = session(config());
+    pause_at_close(&mut kernel, &bars(&[], &[]), 0);
+    assert_eq!(kernel.submit(buy()), Ok(Submission::Submitted(OrderId(1))));
+    assert_eq!(
+        kernel.submit(buy()),
+        Ok(Submission::Rejected(OrderId(2), RejectCode::Margin))
+    );
+}
+
+#[test]
 fn a_fill_the_margin_rule_refuses_is_recorded_not_at_all() {
-    // Long 10; an exit with leverage 50 (o2) and a LIMIT sale of 5 (o3) are sent; o3
-    // fills, so o2's 10 units would close 5 and open 5 short at a leverage the margin
-    // table refuses: nothing of the fill is recorded, not even its closing part.
+    // Long 10; a sale of 10 that may reverse, with leverage 50 (o2), and a LIMIT sale of
+    // 5 (o3) are sent; o3 fills, so o2's 10 units would close 5 and open 5 short at a
+    // leverage the margin table refuses: nothing of the fill is recorded, not even its
+    // closing part.
     let mut kernel = session(config());
     let columns = bars(&[], &[]);
     let mut script = Script::new(vec![at_close(0, Act::Submit(market(Side::Buy, 10.0)))]);
@@ -263,12 +286,12 @@ fn a_fill_the_margin_rule_refuses_is_recorded_not_at_all() {
         .apply_fill(OrderId(1), 10.0, 500.0, minute(1))
         .is_ok());
     pause_at_close(&mut kernel, &columns, 1);
-    let leveraged_exit = OrderRequest {
-        reduce_only: true,
+    let leveraged_sale = OrderRequest {
+        reverse: true,
         leverage: Some(50.0),
         ..market(Side::Sell, 10.0)
     };
-    assert!(kernel.submit(leveraged_exit).is_ok());
+    assert!(kernel.submit(leveraged_sale).is_ok());
     assert!(kernel
         .submit(order(Side::Sell, 5.0, limit(500.0), Product::Mis))
         .is_ok());
@@ -281,9 +304,9 @@ fn a_fill_the_margin_rule_refuses_is_recorded_not_at_all() {
         .position(SBIN, Product::Mis)
         .map(|p| p.quantity_units);
     assert_eq!(held, Some(5.0));
-    let exit = kernel.order(OrderId(2)).expect("the exit");
+    let sale = kernel.order(OrderId(2)).expect("the sale");
     assert_eq!(
-        (exit.status, exit.filled_units),
+        (sale.status, sale.filled_units),
         (OrderStatus::Submitted, 0.0)
     );
 }

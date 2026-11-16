@@ -1,6 +1,6 @@
 //! Commands out of an external session (`venue`): the units an order is sent with, the
-//! order sent at once or made an exit owner, a modification sent and held until the
-//! venue answers, and a cancellation sent once.
+//! order sent at once or made its position's exit, a modification sent and held until the
+//! venue answers, and a cancellation sent at most once in a slice.
 
 use crate::exec::{OrderAction, OrderId, OrderRequest, OrderStatus, QuantitySpec};
 use crate::model::Side;
@@ -44,12 +44,12 @@ impl Engine {
     }
 
     /// In an external session, after an order has passed the checks (`at` is its
-    /// decision): an exit becomes its position's exit owner (`venue_owner`), any other
-    /// order is sent at once. An order with no units ends `Canceled` and sends nothing.
-    /// Then every exit owner moves on, so a waiting exit also cancels an order just
-    /// placed on its closing side. A backtest sends nothing.
+    /// decision): an exit becomes the latest of its position's exits (`venue_owner`), any
+    /// other order is sent at once. An order with no units ends `Canceled` and sends
+    /// nothing. Then every waiting exit moves on, so it also cancels an order just placed
+    /// on its closing side. A backtest sends nothing.
     ///
-    /// Errors: those of `fills::end_order` and of the exit owners.
+    /// Errors: those of `fills::end_order` and of the exits.
     pub(super) fn send_order(&mut self, at: SendAt, id: OrderId) -> Result<(), KernelError> {
         if !self.is_external() {
             return Ok(());
@@ -97,10 +97,11 @@ impl Engine {
     }
 
     /// Withdraw a working order. A backtest ends it `Canceled` now. An external session
-    /// sends `Cancel` once (again only after the venue refused it,
-    /// `apply_cancel_refused`) and leaves the order working until the venue's result; an
-    /// exit not sent yet has nothing at the venue and ends `Canceled` now. Returns the
-    /// order's state afterwards.
+    /// sends `Cancel` and leaves the order working until the venue's result: once while
+    /// it waits for that result, and at most once in a slice, so one the venue refused
+    /// (`apply_cancel_refused`) goes again in a later slice (`stamp.slice` is the slice
+    /// in progress). An exit not sent yet has nothing at the venue and ends `Canceled`
+    /// now. Returns the order's state afterwards.
     ///
     /// Errors: `UnknownOrder`; those of `fills::end_order`.
     pub(super) fn withdraw_order(
@@ -125,10 +126,14 @@ impl Engine {
             self.tidy_venue();
             return Ok(OrderStatus::Canceled);
         }
-        if !self.venue.cancelling.contains(&id) {
-            self.venue.cancelling.push(id);
-            self.venue.commands.push(VenueCommand::Cancel { order: id });
+        let sent_this_slice = self.venue.cancels_sent.contains(&(id, stamp.slice));
+        if self.venue.cancelling.contains(&id) || sent_this_slice {
+            return Ok(status);
         }
+        self.venue.cancelling.push(id);
+        self.venue.cancels_sent.retain(|(known, _)| *known != id);
+        self.venue.cancels_sent.push((id, stamp.slice));
+        self.venue.commands.push(VenueCommand::Cancel { order: id });
         Ok(status)
     }
 }

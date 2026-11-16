@@ -4,7 +4,7 @@
 //! package's `VenueRefusalError` for a result of a live session's venue the kernel
 //! refused (`venue`).
 
-use oa_bt::engine::KernelError;
+use oa_bt::engine::{KernelError, UNKNOWN_ORDER_KIND};
 use pyo3::create_exception;
 use pyo3::exceptions::{PyException, PyNotImplementedError};
 use pyo3::prelude::*;
@@ -55,7 +55,7 @@ const ERRORS_MODULE: &str = "openalgo.backtest.errors";
 pub(super) fn venue_result_error(py: Python<'_>, error: KernelError) -> PyErr {
     let kind = match &error {
         KernelError::Venue(refusal) => refusal.kind(),
-        KernelError::UnknownOrder(_) => "unknown_order",
+        KernelError::UnknownOrder(_) => UNKNOWN_ORDER_KIND,
         _ => return engine_error(error),
     };
     let refusal = py

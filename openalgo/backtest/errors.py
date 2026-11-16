@@ -115,7 +115,8 @@ class JournalError(LiveError):
 
 
 #: Why the kernel of a live session refused a result from the broker
-#: (`VenueRefusalError.kind`).
+#: (`VenueRefusalError.kind`). The kernel's binding exports the same list, and a test
+#: holds the two equal.
 VENUE_REFUSAL_KINDS = frozenset(
     {
         "not_external",
@@ -126,6 +127,7 @@ VENUE_REFUSAL_KINDS = frozenset(
         "invalid_fill",
         "not_pending",
         "modify_below_filled",
+        "would_reverse",
         "at_bar_close",
         "session_over",
     }
@@ -135,7 +137,7 @@ VENUE_REFUSAL_KINDS = frozenset(
 class VenueRefusalError(LiveError):
     """The kernel of a live session refused a result from the broker (a fill, a
     rejection, a cancellation, or the answer to a cancellation or modification it was
-    sent) and changed nothing.
+    sent) and changed nothing, with one exception below.
 
     `kind` says why, one of `VENUE_REFUSAL_KINDS`, so the live layer tells a race it
     expects from a defect without reading the message: "order_ended" (the order had
@@ -146,6 +148,11 @@ class VenueRefusalError(LiveError):
     waits for an answer), "modify_below_filled", "at_bar_close" (the engine is paused at a
     bar close: advance it first), "session_over" (the session has finished) and
     "not_external" (the engine is a backtest's).
+
+    The exception is "would_reverse": the broker filled an order that may not reverse
+    the position (reduce-only, or without reverse=True) beyond it, in a race. The units
+    that closed the position were recorded; the rest were not, so the broker's position
+    now differs from the session's by them.
     """
 
     def __init__(self, message, kind):

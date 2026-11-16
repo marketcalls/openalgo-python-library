@@ -65,11 +65,15 @@ pub enum RejectCode {
     /// The venue of a live session (the broker or the exchange) refused the order for a
     /// reason of its own (`Engine::apply_reject`); no kernel check makes it.
     Venue = 15,
+    /// In a live session, a reduce-only order that would take the units resting to close
+    /// a position above the position, so that the broker could fill them all and reverse
+    /// it (`engine::venue_cover`).
+    ExitCover = 16,
 }
 
 impl RejectCode {
     /// Every code, in code order.
-    pub const ALL: [RejectCode; 16] = [
+    pub const ALL: [RejectCode; 17] = [
         RejectCode::QuantityRule,
         RejectCode::Tick,
         RejectCode::FreezeQty,
@@ -86,6 +90,7 @@ impl RejectCode {
         RejectCode::ReverseNotAllowed,
         RejectCode::ScaleInLimit,
         RejectCode::Venue,
+        RejectCode::ExitCover,
     ];
 
     /// The code string used in events and results.
@@ -107,6 +112,7 @@ impl RejectCode {
             RejectCode::ReverseNotAllowed => "reverse_not_allowed",
             RejectCode::ScaleInLimit => "scale_in_limit",
             RejectCode::Venue => "venue",
+            RejectCode::ExitCover => "exit_cover",
         }
     }
 
@@ -326,9 +332,10 @@ mod tests {
     #[test]
     fn codes_are_the_ruled_vocabulary() {
         let codes: Vec<&str> = RejectCode::ALL.iter().map(|code| code.code()).collect();
-        assert_eq!(codes.len(), 16);
+        assert_eq!(codes.len(), 17);
         assert!(codes.contains(&"market_closed") && codes.contains(&"instrument_unknown"));
         assert!(codes.contains(&"scale_in_limit") && codes.contains(&"venue"));
+        assert!(codes.contains(&"exit_cover"));
     }
 
     #[test]

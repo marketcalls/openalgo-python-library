@@ -73,13 +73,28 @@ fn a_fill_the_venue_reports_before_the_cancellation_is_recorded_in_the_closing_s
 }
 
 #[test]
-fn a_cancellation_the_venue_refuses_at_the_close_is_sent_again() {
+fn a_cancellation_the_venue_refuses_at_the_close_is_not_sent_again_in_that_slice() {
+    let mut kernel = resting_at_the_close(config());
+    kernel.take_commands();
+    assert!(kernel.apply_cancel_refused(OrderId(1)).is_ok());
+    for _ in 0..3 {
+        assert!(matches!(kernel.advance(), Ok(Pause::Waiting { .. })));
+    }
+    assert!(kernel.take_commands().is_empty());
+    assert_eq!(status(&kernel), OrderStatus::Submitted);
+}
+
+#[test]
+fn a_close_whose_cancellation_was_refused_completes_once_the_venue_ends_the_order() {
     let mut kernel = resting_at_the_close(config());
     kernel.take_commands();
     assert!(kernel.apply_cancel_refused(OrderId(1)).is_ok());
     assert!(matches!(kernel.advance(), Ok(Pause::Waiting { .. })));
-    let cancel = VenueCommand::Cancel { order: OrderId(1) };
-    assert_eq!(kernel.take_commands(), vec![cancel]);
+    assert!(
+        kernel.apply_cancel(OrderId(1)).is_ok(),
+        "the broker's end of day"
+    );
+    assert!(matches!(kernel.advance(), Ok(Pause::Finished { .. })));
 }
 
 #[test]

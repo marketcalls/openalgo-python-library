@@ -8,9 +8,12 @@
 //!   order: it sends `Cancel` for the DAY orders a backtest would expire (every working
 //!   order at the session's last slice) and keeps them working; the rest of step 8 and
 //!   the slice's records wait until the venue has ended them all (`Phase::Closing`, the
-//!   engine returns `Pause::Waiting` meanwhile, and sends a cancellation again that the
-//!   venue refused). So the session cannot finish while an order works, and a fill the
-//!   venue reports before the cancellation is recorded in the closing slice.
+//!   engine returns `Pause::Waiting` meanwhile). A cancellation is sent at most once in a
+//!   slice (`withdraw_order`), so one the venue refuses at the close is not sent again:
+//!   the close waits for the venue's own end of the order (a broker ends every DAY order
+//!   at the close, or reports the fill that made it refuse). So the session cannot finish
+//!   while an order works, and a fill the venue reports before the cancellation is
+//!   recorded in the closing slice.
 //! - **The next open is reached at the close of the slice before it.** A live session runs
 //!   a slice once it has closed, which is the moment the next one opens. So what a
 //!   backtest does at that open happens then: the timers due at it fire (`Pause::Timers`,
@@ -43,15 +46,15 @@ impl Engine {
         self.reach_next_open(slice)
     }
 
-    /// A session close waiting for the venue to end its orders (module docs): send the
-    /// cancellations again that were refused, and complete the close once none works.
+    /// A session close waiting for the venue to end its orders (module docs): its
+    /// cancellations went out when the slice closed and are not sent twice in it, so the
+    /// close completes once no order works.
     ///
-    /// Errors: those of `withdraw_order` and of the steps.
+    /// Errors: those of the steps.
     pub(super) fn wait_for_close(
         &mut self,
         slice: &SliceInfo,
     ) -> Result<Option<Pause>, KernelError> {
-        self.end_day_orders(slice)?;
         if self.session_close_waits(slice) {
             return Ok(Some(Pause::Waiting {
                 next_slice: slice.index + 1,

@@ -15,7 +15,9 @@
 //! `apply_modify_refused(order_id)`. Every fill of an order is passed before its terminal
 //! result (`apply_cancel`, `apply_reject`): after it the order takes no more. A result the
 //! kernel refuses raises `openalgo.backtest.errors.VenueRefusalError`, whose `kind` says
-//! why, and changes nothing.
+//! why (one of the module's `VENUE_REFUSAL_KINDS`), and changes nothing, except a fill
+//! beyond the position of an order that may not reverse it (kind "would_reverse"): the
+//! units that closed the position are recorded, the rest are not.
 //!
 //! A command crosses as a dict with `command` ("place", "modify" or "cancel") and
 //! `order_id` (the kernel order, an integer; Python shows `o<n>`); "place" adds

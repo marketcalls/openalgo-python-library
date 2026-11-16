@@ -76,7 +76,7 @@ impl Engine {
         let units = self.venue_units(&request, units);
         let checked = match self.submission_checks(&request, units, &slice, decided_at, None)? {
             Ok(good_until) => self
-                .venue_checks(&request, units, &slice)?
+                .venue_checks(&request, units, &slice, None)?
                 .map(|()| good_until),
             Err(code) => Err(code),
         };
@@ -222,8 +222,9 @@ impl Engine {
         let excess = reduces && !request.reduce_only && units > held.abs();
         let fractional = self.fractional(request.instrument);
         // A live session's exit is sized when it is sent, in orders of at most the freeze
-        // quantity (`venue_owner`); entries keep the freeze rule.
-        let splits = self.is_external() && is_exit(request);
+        // quantity (`venue_owner`); entries keep the freeze rule, and so does a
+        // modification, which replaces one order.
+        let splits = self.is_external() && is_exit(request) && replacing.is_none();
         let rules = if units > 0.0 {
             quantity_rule(units, spec, fractional)
                 .and_then(|()| tick_rule(request.order_type, spec))

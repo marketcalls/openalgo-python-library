@@ -14,19 +14,24 @@
 //!
 //! - **Commands out** (`venue_orders`). An order that passes the checks is sent at once as
 //!   `VenueCommand::Place`, except an exit (below). `cancel`, and the engine's own
-//!   withdrawals, send `Cancel`; the order works on until the venue's result, since a fill
-//!   may come first. `modify` sends `Modify` and the order keeps its old terms until the
-//!   venue confirms the new ones (`apply_modify`) or refuses them. The adapter takes the
-//!   commands with `Engine::take_commands`, in the order they were made.
+//!   withdrawals, send `Cancel`, at most once in a slice; the order works on until the
+//!   venue's result, since a fill may come first. `modify` sends `Modify` and the order
+//!   keeps its old terms until the venue confirms the new ones (`apply_modify`) or refuses
+//!   them. The adapter takes the commands with `Engine::take_commands`, in the order they
+//!   were made.
 //! - **Exits** (`venue_owner`). An exit is the strategy's `exit()` or `reduce()` (a
 //!   reduce-only MARKET order) or one of the engine's exits (`venue_exits`: the daily loss
-//!   limit and drawdown halt, the square-off, the time exit). No working order counts as
-//!   covering a position: an exit first cancels every working order of its position on
-//!   the closing side and is sent once they have all ended, for the position then open,
-//!   in orders of at most the freeze quantity. Meanwhile it is the position's one exit
-//!   owner: a later strategy exit takes its place, for the larger of the two.
-//! - **Results in** (`venue_fills`): fills, rejections, cancellations, and the venue's
-//!   answers to a cancellation or modification it refused.
+//!   limit and drawdown halt, the square-off, the time exit). An exit first cancels every
+//!   other working order of its position on the closing side and is sent once they have
+//!   all ended, in orders of at most the freeze quantity. The strategy's exits of a
+//!   position add up as in a backtest, each sized on what the earlier ones leave; an
+//!   engine exit takes over from them and closes the whole position.
+//! - **Reduce-only orders never reverse** (`venue_cover`). The reduce-only orders resting
+//!   on a position's closing side may not hold more units than it has (`exit_cover`), are
+//!   cut down or cancelled when it shrinks, and a fill of one beyond the position is
+//!   recorded only up to it (`VenueError::WouldReverse`).
+//! - **Results in** (`venue_fills`): fills, rejections, cancellations; and the venue's
+//!   answers to the cancellations and modifications it was sent (`venue_answers`).
 //! - **The clock** (`venue_clock`). What a backtest does at the open of a slice (the
 //!   engine's exits, the timers) happens when the session reaches that open, the close of
 //!   the slice before it. At a session close the kernel sends `Cancel` for the DAY orders
@@ -36,14 +41,16 @@
 //!   position then held, rounded down to the venue quantity. A live session trades whole
 //!   shares and lots: `quantity_mode="fractional"` is refused.
 //! - **What the fill path cannot record** is refused at submission (`venue_checks`), and a
-//!   fill is checked whole before anything of it is recorded.
+//!   fill is checked whole before anything of it is recorded. The free cash a submission
+//!   is checked against counts what the session's working entries would block.
 //! - **Not built yet** (`KernelError::NotBuilt`): leg rules (`stop=`, `target=`, trailing
 //!   and breakeven, held by the broker and on ticks in the next unit, decision D31), GTT
 //!   orders, futures series and rebalancing.
 //!
 //! The contract for the live layer: every fill of an order is delivered (`apply_fill`)
 //! before its terminal result (`apply_cancel`, `apply_reject`); after it the order takes
-//! no more fills. A result the kernel cannot record is a `VenueError` (`venue_error`).
+//! no more fills. A result the kernel cannot record is a `VenueError` (`venue_error`);
+//! it changes nothing, but for `WouldReverse`, which records the fill up to the position.
 
 use crate::charges::OrderCharges;
 use crate::exec::{ExecError, InstrumentId, Order, OrderId, OrderRequest, OrderType, Validity};
@@ -120,16 +127,14 @@ pub(super) enum ExitBy {
     Engine(ExitReason),
 }
 
-/// The one exit of a position.
+/// One exit of a position, the strategy's or the engine's (`venue_owner`).
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct ExitOwner {
+pub(super) struct PositionExit {
     pub(super) key: PositionKey,
     pub(super) by: ExitBy,
-    /// The orders sent for it; empty while it waits for the orders it cancels.
+    /// The orders sent for it, a strategy's own order first; empty while it waits for the
+    /// orders it cancels.
     pub(super) sent: Vec<OrderId>,
-    /// The strategy's earlier exits of the position it took the place of: it closes at
-    /// least what the largest of them asks for.
-    pub(super) superseded: Vec<OrderId>,
 }
 
 /// A modification sent to the venue and not yet confirmed.
@@ -167,10 +172,14 @@ pub(super) struct VenueDesk {
     pub(super) commands: Vec<VenueCommand>,
     /// Working orders whose cancellation has been sent and not yet answered.
     pub(super) cancelling: Vec<OrderId>,
+    /// The slice index in which each working order's last cancellation was sent: one the
+    /// venue refused is sent again in a later slice, not in that one (`withdraw_order`).
+    pub(super) cancels_sent: Vec<(OrderId, u32)>,
     /// Working orders whose modification has been sent and not yet answered.
     pub(super) modifying: Vec<(OrderId, Replacement)>,
-    /// The exit owner of each position that has one, in the order they were made.
-    pub(super) exits: Vec<ExitOwner>,
+    /// The exits of the positions, in the order they were made: a position has the
+    /// strategy's, one after another, or the engine's alone.
+    pub(super) exits: Vec<PositionExit>,
     /// What each order's fills have been charged so far.
     pub(super) charged: Vec<(ChargePart, OrderCharges)>,
 }
@@ -321,27 +330,39 @@ impl Engine {
         self.venue
             .exits
             .iter()
-            .any(|owner| owner.by == ExitBy::Strategy(id) && owner.sent.is_empty())
+            .any(|exit| exit.by == ExitBy::Strategy(id) && exit.sent.is_empty())
     }
 
-    /// The exit owner of `key`, if it has one.
-    pub(super) fn exit_owner(&self, key: PositionKey) -> Option<&ExitOwner> {
-        self.venue.exits.iter().find(|owner| owner.key == key)
+    /// True when the engine's exit holds `key` (`venue_owner`).
+    pub(super) fn has_engine_exit(&self, key: PositionKey) -> bool {
+        self.venue
+            .exits
+            .iter()
+            .any(|exit| exit.key == key && matches!(exit.by, ExitBy::Engine(_)))
     }
 
-    /// Forget what the venue was asked about orders that have ended, and the exit owners
-    /// whose orders have all ended.
+    /// True when an exit of `key` waits for the orders it cancels.
+    pub(super) fn has_waiting_exit(&self, key: PositionKey) -> bool {
+        self.venue
+            .exits
+            .iter()
+            .any(|exit| exit.key == key && exit.sent.is_empty())
+    }
+
+    /// Forget what the venue was asked about orders that have ended, and the exits whose
+    /// orders have all ended.
     pub(super) fn tidy_venue(&mut self) {
         let book = &self.book;
         let works = |id: &OrderId| book.get(*id).is_some_and(|o| o.status.is_working());
         self.venue.cancelling.retain(works);
+        self.venue.cancels_sent.retain(|(id, _)| works(id));
         self.venue.modifying.retain(|(id, _)| works(id));
-        self.venue.exits.retain(|owner| {
-            let own = match owner.by {
-                ExitBy::Strategy(id) => works(&id),
-                ExitBy::Engine(_) => true,
-            };
-            own && (owner.sent.is_empty() || owner.sent.iter().any(works))
-        });
+        self.venue
+            .exits
+            .retain(|exit| match (exit.by, exit.sent.is_empty()) {
+                (ExitBy::Strategy(id), true) => works(&id),
+                (ExitBy::Engine(_), true) => true,
+                (_, false) => exit.sent.iter().any(works),
+            });
     }
 }

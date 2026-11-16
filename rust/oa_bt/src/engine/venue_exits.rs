@@ -9,19 +9,21 @@
 //! | Square-off | when the session reaches the first open at or after `square_off` | at that open |
 //! | Time exit (`max_hold`) | when the session reaches the open at which it is due | at that open |
 //!
-//! Each is a reduce-only MARKET DAY order with the backtest's exit reason, made through the
-//! position's exit owner: it cancels the working orders on the position's closing side
-//! first. "When the session reaches an open" is the close of the slice before it, after
-//! its decisions and timers (`venue_clock`): a live session runs a slice once it has
-//! closed, so this is the moment the open arrives, and the venue then fills the exit in
-//! the slice a backtest would. It does not wait for a bar. The order is stamped in step 2
-//! of the slice it is due in, the stamp of the backtest's fill.
+//! Each is a reduce-only MARKET DAY order with the backtest's exit reason for the whole
+//! position, made as the position's exit (`venue_owner`): it takes over from the
+//! strategy's exits of the position and cancels the working orders on its closing side
+//! first, theirs among them. "When the session reaches an open" is the close of the slice
+//! before it, after its decisions and timers (`venue_clock`): a live session runs a slice
+//! once it has closed, so this is the moment the open arrives, and the venue then fills
+//! the exit in the slice a backtest would. It does not wait for a bar. The order is
+//! stamped in step 2 of the slice it is due in, the stamp of the backtest's fill.
 //!
-//! Sent again: at every open the session reaches, a position that is still open and has no
-//! exit owner gets the exit that applies, in this order: the risk lock (REDUCING after a
-//! daily loss breach, HALTED after the drawdown halt), the time exit, the square-off. So an
-//! exit the venue rejected, or a position a cancel race reopened, is exited again at the
-//! next open; how often to retry and when to stop are the live layer's to decide.
+//! Sent again: at every open the session reaches, a position that is still open and that
+//! no exit of the engine holds gets the exit that applies, in this order: the risk lock
+//! (REDUCING after a daily loss breach, HALTED after the drawdown halt), the time exit,
+//! the square-off. So an exit the venue rejected, or a position a cancel race reopened, is
+//! exited again at the next open; how often to retry and when to stop are the live
+//! layer's to decide.
 //!
 //! Also at each open: an MIS order that would open or add, still working once the open is
 //! at or after `entry_until`, is withdrawn (`Cancel`), since a backtest rejects it at its
@@ -43,18 +45,20 @@ use super::venue::SendAt;
 
 impl Engine {
     /// What a backtest does at the open of `next`, done as the external session reaches
-    /// it (module docs): the waiting exit owners move on, every open position with no exit
-    /// owner gets the exit that applies, instruments in registration order, and the late
-    /// MIS entries are withdrawn.
+    /// it (module docs): the reduce-only orders are fitted to their positions
+    /// (`venue_cover`), the waiting exits move on, every open position that no exit of the
+    /// engine holds gets the exit that applies, instruments in registration order, and the
+    /// late MIS entries are withdrawn.
     ///
-    /// Errors: `InvalidConfig` when the session has no intraday times; those of the exit
-    /// owners and of `withdraw_order`.
+    /// Errors: `InvalidConfig` when the session has no intraday times; those of the exits
+    /// and of `withdraw_order`.
     pub(super) fn venue_at_next_open(&mut self, next: &SliceInfo) -> Result<(), KernelError> {
         let at = SendAt {
             slice: *next,
             step: Step::OpenFills,
             decided_at: next.open,
         };
+        self.fit_exit_cover(at)?;
         self.progress_exits(at)?;
         for index in 0..self.instruments.len() {
             let instrument = InstrumentId(index as u32);
@@ -66,7 +70,7 @@ impl Engine {
                 .map(|position| position.key)
                 .collect();
             for key in open {
-                if self.exit_owner(key).is_some() {
+                if self.has_engine_exit(key) {
                     continue;
                 }
                 if let Some(reason) = self.exit_due(next, key)? {

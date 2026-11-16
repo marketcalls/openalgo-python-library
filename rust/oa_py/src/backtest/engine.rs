@@ -33,10 +33,10 @@ mod tables;
 mod venue;
 
 use oa_bt::data::resample::CalendarUnit;
-use oa_bt::engine::{Engine, KernelError, TimerSpec};
+use oa_bt::engine::{Engine, KernelError, TimerSpec, VENUE_REFUSAL_KINDS};
 use oa_bt::exec::{InstrumentId, OrderId};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyDict, PyList, PyTuple};
 
 use super::calendar::NativeCalendar;
 use errors::{engine_error, NativeEngineError, NativeEngineInputError};
@@ -124,7 +124,9 @@ impl NativeEngine {
     }
 
     /// Record the venue's fill of `units` newly filled of an order at `price` rupees at
-    /// `at` (UTC nanoseconds); returns the stamp (slice, slice_ts, step).
+    /// `at` (UTC nanoseconds); returns the stamp (slice, slice_ts, step). A fill beyond
+    /// the position of an order that may not reverse it raises `VenueRefusalError` of
+    /// kind "would_reverse" after recording the units that closed the position.
     fn apply_fill(
         &mut self,
         py: Python<'_>,
@@ -386,6 +388,11 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NativeEngine>()?;
     // The engine default's cash buffer in venue mode, a fraction, for the Assumptions.
     m.add("VENUE_CASH_BUFFER", oa_bt::sizing::VENUE_CASH_BUFFER)?;
+    // Every kind of `VenueRefusalError`, from the kernel's one list of them.
+    m.add(
+        "VENUE_REFUSAL_KINDS",
+        PyTuple::new_bound(m.py(), VENUE_REFUSAL_KINDS),
+    )?;
     futures::register(m)?;
     market::register(m)
 }
