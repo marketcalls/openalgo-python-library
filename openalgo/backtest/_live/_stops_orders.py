@@ -129,9 +129,9 @@ class LegOrders:
             self._unbound_add(watched, +1)
 
     def not_sent(self, request: OrderRequest, reason: NotSentReason) -> None:
-        """A request the worker did not send: a placement put back is held; one refused,
-        stale or withdrawn ended; a modify put back held; a cancel refused waits for its
-        read."""
+        """A request the worker did not send: a placement put back is held; one refused or
+        stale ended (one the guard locked out stays as it was: nothing more is sent); a
+        modify put back is held; a cancel refused waits for its read."""
         watched = self.orders.get(request.kernel_order)
         if watched is None:
             return

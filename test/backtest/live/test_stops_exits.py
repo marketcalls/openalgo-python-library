@@ -408,6 +408,24 @@ def test_F44_a_refused_square_off_is_asked_for_again_with_alerts_until_flat(worl
     check_invariants(world.timeline, strategy="StopHold")
 
 
+def test_a_square_off_refused_after_the_retries_places_the_stop_again_each_time(world):
+    # Five refusals use the schedule up; the kernel's own re-send at 15:01:01 is refused
+    # too, and the one at 15:02:01 fills.
+    def refuse_six():
+        for _ in range(EXIT_ATTEMPTS + 1):
+            world.fake.reject_next("RMS: square-off blocked", price_type="MARKET")
+
+    world.script.at(ist(14, 59, 50), refuse_six)
+    world.run(StopHold)
+
+    stops = [o.status for o in world.orders() if o.price_type == "SL-M"]
+    assert stops == ["cancelled", "cancelled", "cancelled"]
+    exits = [o.status for o in world.orders() if o.price_type == "MARKET" and o.action == "SELL"]
+    assert exits == ["rejected"] * (EXIT_ATTEMPTS + 1) + ["complete"]
+    assert world.fake.position("SBIN", "NSE") == 0
+    check_invariants(world.timeline, strategy="StopHold")
+
+
 class BuysWhenFlat(StopHold):
     """Buys 10 SBIN with a stop at every decision at which it holds none."""
 

@@ -58,7 +58,7 @@ from ._stops_kernel import order_of, push_price
 from ._stops_orders import LegOrders, Sent
 from ._stops_price import PriceRule
 from ._stops_protect import Protection
-from ._types import LOGGER_NAME, AlertKind, OrderStatus, OrderUpdate, Purpose
+from ._types import LOGGER_NAME, AlertKind, OrderIntent, OrderStatus, OrderUpdate, Purpose
 from ._venue_requests import (
     STOP_TYPES,
     CancelRequest,
@@ -152,7 +152,7 @@ class StopsSupervisor:
         if isinstance(request, PlaceRequest):
             leg.placed(kernel_order, outcome.kind, outcome.order_id, now_ns)
             if outcome.kind is Outcome.ACCEPTED:
-                self._limit_exit(trader, request, now_ns)
+                self._limit_exit(trader, request.intent, kernel_order, now_ns)
             elif outcome.kind is Outcome.UNANSWERED and request.intent.purpose is Purpose.ADD:
                 self._unbound_add(trader, request)
         elif isinstance(request, CancelRequest):
@@ -203,9 +203,8 @@ class StopsSupervisor:
         now_ns = self._session.now()
         self.leg(trader).resolved(kernel_order, resolution.kind, resolution.order_id, now_ns)
         self._touch(trader, now_ns)
-        request = PlaceRequest(0, kernel_order, resolution.intent, Priority.PROTECT)
         if resolution.kind is Resolved.BOUND:
-            self._limit_exit(trader, request, now_ns)
+            self._limit_exit(trader, resolution.intent, kernel_order, now_ns)
 
     def positions(self, message: PositionRows) -> None:
         """A position-book read for a held cancel."""
@@ -315,11 +314,13 @@ class StopsSupervisor:
                 "s: the position is exited (the stop cancelled first)",
             )
 
-    def _limit_exit(self, trader: Trader, request: PlaceRequest, now_ns: int) -> None:
-        """The price rule's exit at a limit was accepted: the rule watches it."""
-        intent = request.intent
+    def _limit_exit(
+        self, trader: Trader, intent: OrderIntent, kernel_order: int, now_ns: int
+    ) -> None:
+        """An order was accepted: when it is the price rule's exit at a limit (the only
+        risk exit the kernel sends as a LIMIT), the rule watches it."""
         if intent.purpose is Purpose.RISK_EXIT and intent.price_type == "LIMIT":
-            self.prices.track_exit(trader, request.kernel_order, now_ns)
+            self.prices.track_exit(trader, kernel_order, now_ns)
 
     def _moved(self, trader: Trader, request: ModifyRequest) -> None:
         old, new = request.replaces, request.terms
