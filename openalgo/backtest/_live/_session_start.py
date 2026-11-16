@@ -213,6 +213,7 @@ def _open(
     session.traders = _traders(session, report.funds_available)
     for note in (*report.warnings, *plan.warnings):
         session.warn(note)
+    session.risk.warn_at_start()
     return session
 
 

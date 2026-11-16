@@ -6,7 +6,8 @@ the kernel sessions, and its iteration, `Session.step`.
     B. close slices by the clock: each bar builder's due slices, released to the kernel
        in order (`_session_trader`), and the broker candle checks asked for
     C. drive the kernel sessions to their decisions (`Trader.drive`)
-    D. duties by time: the safe stop, the end of the day (`_session_stop.Control`)
+    D. duties by time: the risk watch (`watch`), the safe stop, the end of the day
+       (`_session_stop.Control`)
     E. hand the kernel's commands to the order worker, none after a guard lock
     F. save each strategy's `self.state` when a slice was released and it changed
     G. wait for the next slice close, at most `wait_max_s`
@@ -45,6 +46,7 @@ from .data_worker import DataWorker
 from .feedlink import FeedLink
 from .inbox import Envelope
 from .ticks import TickTally
+from .watch import RiskWatch
 
 logger = logging.getLogger(LOGGER_NAME)
 
@@ -93,6 +95,7 @@ class Session:
         self.traders: tuple[Trader, ...] = ()
         self.news = News(self)
         self.exits = ExitRetries(self)
+        self.risk = RiskWatch(self)
         self.control: Any = None
         self.data: DataWorker | None = None
         self.link: FeedLink | None = None
@@ -209,6 +212,7 @@ class Session:
             trader.drive(deciding=self.deciding)
         # The commands are taken after the duties, so an entry the safe stop cancels in
         # the step that decided it is withdrawn before it reaches the worker.
+        self.risk.duties(self.now())
         if self.control is not None:
             self.control.duties(self.now())
         self.hand_over(self._commands())
@@ -302,7 +306,7 @@ class Session:
                 trader.closed(closed.slices, closed.bars)
                 self._check_candles(trader, closed.slices[-1][1])
         for trader in self.traders:
-            trader.release_due()
+            self.risk.released(trader, trader.release_due())
         return {t.name for t in self.traders if t.part.released != before[t.name]}
 
     def _check_candles(self, trader: Trader, closed_ns: int) -> None:
@@ -358,6 +362,7 @@ class Session:
             self.builders[exchange] = builder
             self._closes[exchange] = [closed + grace_ns for _, closed in builder.slices]
             self._closed[exchange] = 0
+        self.risk.start(watching_ns)
         for trader in self.traders:
             builder = self.builders[trader.exchange]
             trader.watch(watching_ns, from_open=watching_ns <= builder.session[0])

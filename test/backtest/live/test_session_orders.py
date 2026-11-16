@@ -149,6 +149,11 @@ def test_F09_a_rate_limited_exit_is_asked_for_again_a_second_later_and_fills(wor
 
 def test_F10_a_slow_answer_moves_the_clock_and_the_session_catches_up(world):
     world.fake.faults.slow("placeorder", 5)
+    # Under the test seam the market does not trade while a call holds the loop's thread:
+    # SBIN trades every 2 s as well, so the 5 s jump leaves no 10 s without a tick, which
+    # the risk watch would take for a dead feed (16-session-design 6.5).
+    for instant in range(ist(14, 41), ist(14, 50), 2 * NS):
+        world.script.at(instant, world.script.trade)
     outcome = world.run(BuyAndHold)
     assert len(entries_at_the_fake(world)) == 1
     sells = [order for order in world.orders() if order.action == "SELL"]
