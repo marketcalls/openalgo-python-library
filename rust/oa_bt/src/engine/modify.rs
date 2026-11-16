@@ -15,6 +15,7 @@ use super::error::KernelError;
 use super::event::{Event, OrderEventKind};
 use super::kernel::Engine;
 use super::submit::{Resolved, Submission};
+use super::venue::Replacement;
 
 /// Why a request cannot replace an order, if it cannot.
 fn replacement_error(current: &OrderRequest, replacement: &OrderRequest) -> Option<ExecError> {
@@ -38,9 +39,15 @@ impl Engine {
     /// check (the order is unchanged and no event is written), `Skipped` when a sizer gave
     /// no quantity.
     ///
+    /// In a live session the replacement is sent to the venue and the order keeps its
+    /// old terms until the venue confirms it (`Engine::apply_modify`, which writes
+    /// `Modified`) or refuses it (`venue`).
+    ///
     /// Errors: `NotAtDecisionPoint` unless paused; `UnknownOrder`; `Exec(InvalidRequest)`
     /// for an order that no longer works or a replacement that changes what identifies
-    /// the order; the errors of `submit` for the replacement itself.
+    /// the order, and in a live session for an order whose last modification the venue
+    /// has not answered or an exit not sent yet; `NotBuilt` for a partly filled order in
+    /// a live session; the errors of `submit` for the replacement itself.
     pub fn modify(
         &mut self,
         id: OrderId,
@@ -61,18 +68,37 @@ impl Engine {
         if let Some(error) = replacement_error(&order.request, &request) {
             return Err(error.into());
         }
+        self.check_venue_replacement(order)?;
         self.check_buildable(&request)?;
+        self.check_venue_request(&request)?;
         let request = self.venue_request(request)?;
         let units = match self.resolve_units(&request, &slice)? {
             Resolved::Units(units) => units,
             Resolved::AtFill => 0.0,
             Resolved::Skipped(reason) => return Ok(Submission::Skipped(reason)),
         };
-        let checked = self.submission_checks(&request, units, &slice, decided_at, Some(id))?;
+        let units = self.venue_units(&request, units);
+        self.check_replacement_units(units)?;
+        let checked = match self.submission_checks(&request, units, &slice, decided_at, Some(id))? {
+            Ok(good_until) => self
+                .venue_checks(&request, units, &slice, Some(id))?
+                .map(|()| good_until),
+            Err(code) => Err(code),
+        };
         let good_until = match checked {
             Ok(good_until) => good_until,
             Err(code) => return Ok(Submission::Rejected(id, code)),
         };
+        if self.is_external() {
+            let replacement = Replacement {
+                request,
+                decided_at,
+                good_until,
+                units,
+            };
+            self.send_modify(id, replacement);
+            return Ok(Submission::Submitted(id));
+        }
         self.book
             .replace(id, request, decided_at, good_until, units)?;
         let stamp = Self::stamp(&slice, step);

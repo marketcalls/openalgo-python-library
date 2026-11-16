@@ -26,7 +26,9 @@
 //! session there is no later bar, so the exit fills at once at the last close, flagged
 //! (on a daily base every bar is such a slice, SPEC-17); an exit still waiting when the
 //! session closes fills in step 8 the same way. The exits are engine-held: no order
-//! event, the risk event already written, then the position event of the fill.
+//! event, the risk event already written, then the position event of the fill. In a live
+//! session they are orders sent to the venue when the rule fires, and the entries are
+//! withdrawn through the venue (`venue`, `venue_exits`).
 //!
 //! Step 1: when a slice opens a later session, the daily loss measure starts its new
 //! session and REDUCING returns to ACTIVE, with its event; HALTED stays. The session
@@ -34,7 +36,7 @@
 //! Indian calendar, so the kernel crosses it where the slice's IST session date
 //! changes.
 
-use crate::exec::{FillAt, FillFlags, InstrumentId, OrderAction, OrderId};
+use crate::exec::{FillAt, FillFlags, InstrumentId, OrderId};
 use crate::model::Side;
 use crate::portfolio::PositionKey;
 use crate::rms::{
@@ -44,9 +46,10 @@ use crate::rms::{
 
 use super::clock::SliceInfo;
 use super::error::KernelError;
-use super::event::{Event, EventStamp, OrderEventKind, Step};
+use super::event::{Event, EventStamp, Step};
 use super::fills::FillRequest;
 use super::kernel::Engine;
+use super::venue::SendAt;
 
 impl Engine {
     /// Step 1: a later session ends REDUCING and restarts the daily loss measure.
@@ -199,13 +202,14 @@ impl Engine {
             .map(|order| order.id)
             .collect();
         for id in entries {
-            self.end_order(stamp, id, OrderAction::Cancel, OrderEventKind::Canceled)?;
+            self.withdraw_order(stamp, id)?;
         }
         Ok(())
     }
 
     /// Exit every open position, in instrument registration order: at once at the last
-    /// close when the slice closes the session, otherwise at the next open.
+    /// close when the slice closes the session, otherwise at the next open. In a live
+    /// session the exits are sent to the venue now (`venue_exits`).
     fn exit_every_position(
         &mut self,
         slice: &SliceInfo,
@@ -221,7 +225,14 @@ impl Engine {
             .collect();
         open.sort_by_key(|key| key.instrument);
         for key in open {
-            if slice.closes_session {
+            if self.is_external() {
+                let at = SendAt {
+                    slice: *slice,
+                    step: stamp.step,
+                    decided_at: slice.close,
+                };
+                self.request_engine_exit(at, key, reason)?;
+            } else if slice.closes_session {
                 self.exit_at_last_close(stamp, key, reason)?;
             } else {
                 self.risk.queue_exit(key, reason);

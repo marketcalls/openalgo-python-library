@@ -162,7 +162,7 @@ use OrderAction as A;
 use OrderStatus as S;
 
 /// Every legal transition as (from, action, to). Anything not listed is illegal.
-pub const ORDER_TRANSITIONS: [(OrderStatus, OrderAction, OrderStatus); 28] = [
+pub const ORDER_TRANSITIONS: [(OrderStatus, OrderAction, OrderStatus); 29] = [
     (S::Initialized, A::PassChecks, S::Submitted),
     (S::Initialized, A::FailChecks, S::Rejected),
     (S::Submitted, A::Accept, S::Accepted),
@@ -192,6 +192,8 @@ pub const ORDER_TRANSITIONS: [(OrderStatus, OrderAction, OrderStatus); 28] = [
     (S::PartiallyFilled, A::Expire, S::Expired),
     // A venue may still reject the rest of a partly filled order (live only).
     (S::PartiallyFilled, A::Reject, S::Rejected),
+    // A venue may confirm a replacement sent before the order filled in part (live only).
+    (S::PartiallyFilled, A::Modify, S::PartiallyFilled),
 ];
 
 /// The state an order moves to.
@@ -211,7 +213,7 @@ mod tests {
 
     /// The legal transitions, written out from the lifecycle above and 03-architecture
     /// 4.5 (live adds `Accepted` and partial fills).
-    const LEGAL: [(OrderStatus, OrderAction, OrderStatus); 28] = [
+    const LEGAL: [(OrderStatus, OrderAction, OrderStatus); 29] = [
         (S::Initialized, A::PassChecks, S::Submitted),
         (S::Initialized, A::FailChecks, S::Rejected),
         (S::Submitted, A::Accept, S::Accepted),
@@ -240,6 +242,7 @@ mod tests {
         (S::PartiallyFilled, A::Cancel, S::Canceled),
         (S::PartiallyFilled, A::Expire, S::Expired),
         (S::PartiallyFilled, A::Reject, S::Rejected),
+        (S::PartiallyFilled, A::Modify, S::PartiallyFilled),
     ];
 
     #[test]

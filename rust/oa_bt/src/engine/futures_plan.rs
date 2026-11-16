@@ -17,12 +17,20 @@ impl Engine {
     /// series, an instrument that is not a future with a last trading day or that is in
     /// another series, hand-over sessions out of order, before the run or on the wrong
     /// side of their contract's last trading day, and a hand-over whose bars do not
-    /// allow a switch (no slice in which both contracts have a bar).
+    /// allow a switch (no slice in which both contracts have a bar); `NotBuilt` in a live
+    /// session (`venue`).
     pub fn add_futures_series(&mut self, series: FuturesSeries) -> Result<u32, KernelError> {
         if self.phase != Phase::Ready(0) {
             return Err(invalid(
                 "futures series are registered before the run starts".to_string(),
             ));
+        }
+        if self.is_external() {
+            return Err(KernelError::NotBuilt {
+                feature: "a futures series (its roll or expiry settlement) in a live session",
+                instead: "trade the current contract as an instrument of its own and roll it \
+                          by placing the orders yourself",
+            });
         }
         self.check_series(&series)?;
         let index = u32::try_from(self.futures.series.len()).unwrap_or(u32::MAX);

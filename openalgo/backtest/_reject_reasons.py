@@ -2,7 +2,10 @@
 of the run's rejection warnings (`_rejections`).
 
 The codes are the kernel's (`RejectCode::code` in `rust/oa_bt/src/exec/checks.rs`), except
-`rate_limit`, which no kernel check makes: a backtest enforces no order rate limit. Each
+`rate_limit`, which no kernel check makes: a backtest enforces no order rate limit. `venue`
+and `exit_cover` are a live session's: the broker's own rejection of an order, and a
+reduce-only order that would leave more units resting to close a position than it has
+(`rust/oa_bt/src/engine/venue_cover.rs`). Each
 entry is (what happened, what to do). The product rule covers three refusals that need
 different advice, so it has one entry per case, told apart by the order and its
 instrument (`_rejections.product_rule_case`). The entry window is the window working, not
@@ -80,6 +83,18 @@ REASONS = MappingProxyType(
             "an add broke a scale-in limit (max_adds, max_position, min_spacing or "
             "max_risk) or averaged down",
             "set allow_averaging_down = True or loosen the scale-in limits",
+        ),
+        "venue": (
+            "the broker or the exchange refused the order in a live session, for a "
+            "reason of its own",
+            "read the broker's reason in the session's journal and the OpenAlgo order book",
+        ),
+        "exit_cover": (
+            "a live session keeps at most the position's units resting to close it, so "
+            "that the broker cannot fill them all and reverse the position; this "
+            "reduce-only order would have gone beyond them",
+            "hold a target with the strategy's own logic, or, once it is built, with "
+            "target=, which the engine holds on ticks",
         ),
     }
 )

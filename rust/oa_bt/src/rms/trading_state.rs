@@ -117,6 +117,11 @@ impl TradingLock {
         self.state
     }
 
+    /// What set the current state; `None` while ACTIVE.
+    pub fn cause(&self) -> Option<TradingStateCause> {
+        self.cause
+    }
+
     /// Apply a cause by the transition table; the change when the state moved.
     pub fn apply(&mut self, cause: TradingStateCause) -> Option<StateChange> {
         let from = self.state;

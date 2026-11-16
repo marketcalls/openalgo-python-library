@@ -18,6 +18,8 @@ use crate::portfolio::PortfolioError;
 use crate::rms::RmsError;
 use crate::sizing::SizingError;
 
+use super::venue_error::VenueError;
+
 /// Why the kernel stopped.
 #[derive(Clone, Debug, PartialEq)]
 pub enum KernelError {
@@ -43,6 +45,8 @@ pub enum KernelError {
     Slippage(SlippageError),
     /// The credit for selling delivery holdings.
     SaleCredit(SaleCreditError),
+    /// A result from the venue of a live session that cannot be recorded (`venue`).
+    Venue(VenueError),
     /// An order call made while the engine is not paused at a decision point.
     NotAtDecisionPoint,
     /// `advance` called after the run finished.
@@ -90,6 +94,8 @@ impl KernelError {
                 | KernelError::Sizing(SizingError::InvalidSizer { .. })
                 | KernelError::Margin(MarginError::InvalidRequest { .. })
                 | KernelError::Slippage(SlippageError::InvalidSpec { .. })
+                | KernelError::Venue(VenueError::InvalidFill { .. })
+                | KernelError::Venue(VenueError::TooManyUnits { .. })
         )
     }
 }
@@ -108,6 +114,7 @@ impl fmt::Display for KernelError {
             KernelError::Margin(inner) => inner.fmt(f),
             KernelError::Slippage(inner) => inner.fmt(f),
             KernelError::SaleCredit(inner) => inner.fmt(f),
+            KernelError::Venue(inner) => inner.fmt(f),
             KernelError::NotAtDecisionPoint => write!(
                 f,
                 "orders can only be placed, changed or cancelled while the engine is paused \
@@ -147,6 +154,7 @@ wrap!(
     MarginError => Margin,
     SlippageError => Slippage,
     SaleCreditError => SaleCredit,
+    VenueError => Venue,
 );
 
 #[cfg(test)]

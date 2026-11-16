@@ -107,7 +107,7 @@ pub struct ChargeBook {
     output: ChargesOutput,
 }
 
-fn is_cash_equity(spec: &InstrumentSpec) -> bool {
+pub(super) fn is_cash_equity(spec: &InstrumentSpec) -> bool {
     spec.kind == InstrumentKind::Equity && matches!(spec.exchange, Exchange::Nse | Exchange::Bse)
 }
 
@@ -153,14 +153,25 @@ impl ChargeBook {
         cost: CostBreakdown,
         dp_charge: Option<DpCharge>,
     ) -> Result<f64, ChargeError> {
+        let charged = round_to_paise(model.reported_total(&cost));
+        self.book_charged(model, fill, (segment, cost), charged, dp_charge)
+    }
+
+    /// `book_fill` with what the fill is charged given, whole paise (a part of an order
+    /// costed on its total, `parts`).
+    pub(super) fn book_charged(
+        &mut self,
+        model: &CostModel,
+        fill: &FillToCharge<'_>,
+        (segment, cost): (Segment, CostBreakdown),
+        charged_rupees: f64,
+        dp_charge: Option<DpCharge>,
+    ) -> Result<f64, ChargeError> {
         let status = model.status(segment, fill.day)?;
         let cost_rupees = model.reported_total(&cost);
         if model.rounding() == Rounding::ContractNote {
             self.notes.add(fill.day, segment, &cost);
-            self.add_posted(
-                (fill.day, segment.note_group()),
-                round_to_paise(cost_rupees),
-            );
+            self.add_posted((fill.day, segment.note_group()), charged_rupees);
         }
         let record = FillCharge {
             fill: fill.fill,
@@ -168,7 +179,7 @@ impl ChargeBook {
             segment,
             cost,
             cost_rupees,
-            charged_rupees: round_to_paise(cost_rupees),
+            charged_rupees,
             dp_charge,
             status,
             trade: None,

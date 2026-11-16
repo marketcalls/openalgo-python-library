@@ -27,12 +27,14 @@
 //! | `book` | `ChargeBook`: the run's charge state, per-fill charging, trade numbers |
 //! | `notes` | Contract-note settlement at the session close |
 //! | `same_day` | CNC fills of one scrip bought and sold on one day, charged as intraday |
+//! | `parts` | An order filled in parts (a live session's venue), costed once on its total |
 //! | `estimate` | Cost estimates for sizers |
 //! | `usage` | `TableUse`: dated table rows a run used |
 
 mod book;
 mod estimate;
 mod notes;
+mod parts;
 mod same_day;
 mod usage;
 
@@ -49,6 +51,7 @@ use crate::model::Product;
 pub use book::{ChargeBook, ChargesOutput, FillCharge, FillToCharge};
 pub use estimate::{estimate_entry, estimate_round_trip};
 pub use notes::SettledNote;
+pub use parts::OrderCharges;
 pub use usage::{MarketTable, TableUse};
 
 /// Why a fill could not be charged.
