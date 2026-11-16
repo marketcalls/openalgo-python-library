@@ -10,10 +10,11 @@ applies too) settles it: a modify by its terms or the old terms, a cancel by a t
 or a working row, either by a terminal row, whose news then decides. A row that settles
 nothing is read again. A modify not settled within `MODIFY_SETTLE_DEADLINE_S` is
 settled expired (`inbox.Settled` with no check), which the loop takes as refused, with an
-ERROR alert: the kernel then sends the wanted terms again, and a broker that had applied
-them accepts the same terms again. A cancel is read until a row settles it, since the
-exit owner waits and the stop protects meanwhile. The order's terminal news settles it
-too, before any read.
+ERROR alert that says what its last read found (no row, or a row of other terms, such as
+a change made by hand at the broker): the kernel then sends the wanted terms again, and a
+broker that had applied them accepts the same terms again. A cancel is read until a row
+settles it, since the exit owner waits and the stop protects meanwhile. The order's
+terminal news settles it too, before any read.
 
 Times are UTC nanoseconds. Used by the worker's thread only.
 """
@@ -42,12 +43,14 @@ Change = ModifyRequest | CancelRequest
 @dataclass
 class Unsettled:
     """An order's modify or cancel waiting for a row: unsettled since `since_ns`, read
-    `reads` times, next due at `due_ns`."""
+    `reads` times, next due at `due_ns`; `last` is what the latest read found (None
+    before any)."""
 
     request: Change
     since_ns: int
     due_ns: int
     reads: int = 0
+    last: OrderCheck | None = None
 
 
 class Settlements:
@@ -97,21 +100,39 @@ class Settlements:
             self._waiting.pop(request.order_id, None)
             return Settled(request, check)
         waiting.reads += 1
+        waiting.last = check
         waiting.due_ns = now_ns + BACKOFF_NS[min(waiting.reads, len(BACKOFF_NS) - 1)]
         return None
 
 
 def expired_text(waiting: Unsettled, now_ns: int) -> str:
-    """The ERROR alert of a modify no row settled in time."""
-    request = waiting.request
+    """The ERROR alert of a modify no row settled in time, saying what its last read
+    found: no row (and why), or a row that shows neither the old nor the new terms."""
+    request, terms = waiting.request, waiting.request.terms
     seconds = (now_ns - waiting.since_ns) // NANOS_PER_SECOND
+    wanted = _terms_text(terms.quantity, terms.price_type, terms.price, terms.trigger_price)
     return (
         f"The modify of order {request.order_id} ({request.intent.symbol} "
-        f"{request.intent.exchange}, {request.terms.quantity} units {request.terms.price_type}"
-        f" at trigger {request.terms.trigger_price}) has no answer after {seconds} s and its "
-        "row cannot be read: the engine keeps the old terms and sends the new ones again. "
-        "Check the order in OpenAlgo."
+        f"{request.intent.exchange}, {wanted}) has no answer after {seconds} s and "
+        f"{_found(waiting.last)}: the engine keeps the old terms and sends the new ones "
+        "again. Check the order in OpenAlgo."
     )
+
+
+def _found(check: OrderCheck | None) -> str:
+    """What the last read of an unsettled modify found, as the alert words it."""
+    if check is None:
+        return "its row was not read in time"
+    if not check.readable:
+        return f"its row cannot be read ({check.reason})"
+    terms = _terms_text(check.quantity, check.price_type, check.price, check.trigger_price)
+    return f"its row shows neither the old nor the new terms ({terms})"
+
+
+def _terms_text(
+    quantity: int | None, price_type: str | None, price: float | None, trigger: float | None
+) -> str:
+    return f"{quantity} units {price_type} at {price}, trigger {trigger}"
 
 
 __all__ = [

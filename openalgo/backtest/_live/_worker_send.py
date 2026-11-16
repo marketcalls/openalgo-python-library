@@ -8,13 +8,16 @@ a request"), split from `worker` so each module keeps one job.
   else `modify` or `cancel`, and an unanswered or refused answer leaves the order
   unsettled, its further requests held until a read settles it (`_worker_settle`).
 - `ModeChangedError` (caught before `LiveError`, its base) is `NotSent(locked)`. Any other
-  `LiveError` (the unbound hold, the silent server, a mode that cannot be read before an
-  entry) puts a protective request (priority 0) back for `REQUEUE_AFTER_S`, noticed as
-  `NotSent(silent)` or `NotSent(held)` at once and then at most every
-  `HELD_NOTICE_EVERY_S`, and refuses any other (`NotSent(refused)`: an entry's moment has
-  passed; a cancel is then settled by a read, 4.5). A `JournalError` is raised: nothing
-  may be sent once an intent cannot be written first.
-- A release of a held fill or cancel hands its news over; the book reads go to the guard
+  `LiveError` refuses the request (`NotSent(refused)`: an entry's moment has passed; a
+  cancel is then settled by a read, 4.5), but for a protective request (priority 0) the
+  order path holds back for now: OpenAlgo silent, or an intent of the instrument unbound.
+  That one is put back for `REQUEUE_AFTER_S`, noticed as `NotSent(silent)` or
+  `NotSent(held)` at once and then at most every `HELD_NOTICE_EVERY_S`. A protective
+  request refused for any other reason (an order the session does not follow, a field the
+  order path refuses) is a defect that no wait cures: an ERROR alert names it. A
+  `JournalError` is raised: nothing may be sent once an intent cannot be written first.
+- A release of a held fill or cancel hands its news over (`_worker_news`, counted in hand
+  from before the word leaves the order path's hold); the book reads go to the guard
   answer by answer and are posted as `Books` or `PositionRows`, or `NotSent(locked)` once
   the guard locks; a probe asks OpenAlgo whether it answers; a stream gap asks for polls.
 
@@ -32,8 +35,10 @@ from .._layout import NANOS_PER_SECOND
 from ..errors import JournalError, LiveError, ModeChangedError
 from ._answers import server_answer
 from ._order_answers import Outcome
-from ._types import LOGGER_NAME, OrderUpdate, Purpose
+from ._order_resolve import same_leg
+from ._types import LOGGER_NAME, AlertKind, AlertsLike, OrderIntent, Purpose
 from ._venue_requests import CancelRequest, ModifyRequest, PlaceRequest, Priority
+from ._worker_news import NewsHandover
 from ._worker_queue import (
     Probe,
     ReadBooks,
@@ -50,6 +55,7 @@ from ._worker_settle import Change, Settlements
 from ._worker_stops import StopBook
 from .guard import ModeGuard
 from .inbox import Books, Message, NotSent, NotSentReason, PositionRows, SendResult
+from .journal import Journal
 from .orders import OrderPath
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -67,32 +73,36 @@ _BOOKS = ("positionbook", "orderbook", "tradebook", "funds")
 
 class Sender:
     """Executes the requests the worker takes (module docstring), through `path` and, for
-    the book reads, `client` (the orders client); `guard`, `queue`, `settle` and `stops`
-    are the worker's; `deliver` posts an order's news, `post` any other message, `calling`
-    marks the worker busy for a call that may reach the server, `now` gives UTC
-    nanoseconds."""
+    the book reads, `client` (the orders client); `journal` is handle W (its unbound
+    intents tell a hold), `alerts` the session's; `guard`, `queue`, `settle`, `stops` and
+    `news` are the worker's; `post` puts a message on the loop's inbox, `calling` marks the
+    worker busy for a call that may reach the server, `now` gives UTC nanoseconds."""
 
     def __init__(
         self,
         client: Any,
         path: OrderPath,
         *,
+        journal: Journal,
+        alerts: AlertsLike,
         guard: ModeGuard,
         queue: WorkerQueue,
         settle: Settlements,
         stops: StopBook,
-        deliver: Callable[[OrderUpdate], None],
+        news: NewsHandover,
         post: Callable[[Message], None],
         calling: Callable[[], AbstractContextManager[None]],
         now: Callable[[], int],
     ) -> None:
         self._client = client
         self._path = path
+        self._journal = journal
+        self._alerts = alerts
         self._guard = guard
         self._queue = queue
         self._settle = settle
         self._stops = stops
-        self._deliver = deliver
+        self._news = news
         self._post = post
         self._calling = calling
         self._now = now
@@ -172,10 +182,15 @@ class Sender:
             self.unsettle(request)
 
     def _not_sent(self, request: PlaceRequest | Change, error: LiveError) -> None:
-        """A request the order path would not send: a protective one is put back and
-        noticed at a pace; any other is refused (a cancel is then settled by a read)."""
+        """A request the order path would not send: a protective one it holds back for
+        now is put back and noticed at a pace; any other is refused, a protective one
+        with an ERROR alert (a cancel is then settled by a read)."""
         now = self._now()
-        if request.priority is not Priority.PROTECT:
+        protective = request.priority is Priority.PROTECT
+        if not (protective and self._held(request.intent)):
+            if protective:
+                self._refused_alert(request, error)
+            self._notices.pop(request.request_id, None)
             self._post(NotSent(request, NotSentReason.REFUSED, str(error)))
             if isinstance(request, CancelRequest):
                 self.unsettle(request)
@@ -188,7 +203,27 @@ class Sender:
             reason = NotSentReason.SILENT if silent else NotSentReason.HELD
             self._post(NotSent(request, reason, str(error)))
 
+    def _held(self, intent: OrderIntent) -> bool:
+        """Whether the order path holds back the sends of `intent`'s instrument for now:
+        OpenAlgo has not answered since a timeout, or an intent of the same symbol,
+        exchange and product is unbound (`OrderPath.send`)."""
+        if self._path.silent_since_ns is not None:
+            return True
+        return any(same_leg(unbound, intent) for unbound in self._journal.unbound())
+
+    def _refused_alert(self, request: PlaceRequest | Change, error: LiveError) -> None:
+        intent = request.intent
+        text = (
+            f"a protective {type(request).__name__} of {intent.strategy} on "
+            f"{intent.exchange}:{intent.symbol} ({intent.intent_id}) cannot be sent: {error}. "
+            "The engine is told it was refused; check the leg in OpenAlgo"
+        )
+        logger.error(text)
+        self._alerts.send(AlertKind.ERROR, text)
+
     def _release(self, request: ReleaseFill | ReleaseCancel) -> None:
+        # In hand from before the word leaves the order path's hold until it is posted.
+        self._news.taken(1)
         try:
             if isinstance(request, ReleaseFill):
                 news = self._path.release_fill(request.order_id, request.average_price)
@@ -201,9 +236,8 @@ class Sender:
         except LiveError as error:
             # The word was handed over by other means meanwhile (a poll, the tradebook).
             logger.warning("held word of order %s not released: %s", request.order_id, error)
-            return
-        if news is not None:
-            self._deliver(news)
+            news = None
+        self._news.hand_over(news, self._stops)
 
     def _read(self, request: ReadBooks | ReadPositions) -> None:
         """The books of a reconciliation, or the position book for a held cancel, each

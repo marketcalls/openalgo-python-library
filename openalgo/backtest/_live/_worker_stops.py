@@ -5,16 +5,22 @@ a leg on the day and `clear_stop` forgets it (`_journal_stops`).
 - A STOP intent's terminal news clears its leg's stop when the journal names that order,
   before the news is posted, so a leg's second trade of the day, a re-placed stop, the
   protect after failed exits and a restart's re-placed stop each find the leg clear.
+  An orphan's terminal news records the new stop that waited for it, unless that stop
+  has ended meanwhile.
 - A STOP intent that binds (an accepted placement, or BOUND by resolution) is recorded.
   When the journal names another stop of the leg: one the order path or the journal
   knows terminal is cleared first; else one `check_order` read decides: terminal,
   cleared; still working, it is an own stop the kernel does not know (two stops on a leg
   could reverse the position), so it is cancelled as an orphan with a RECONCILE_MISMATCH
   alert and the new stop is recorded once the orphan's terminal news comes; unreadable,
-  the new stop is not recorded and an ERROR alert says so.
+  the new stop is not recorded and an ERROR alert says so. The stop that waits for an
+  orphan is kept in memory only: a restart before the orphan's terminal news leaves the
+  leg with no recorded stop (the restored-order check of a restart can record it).
 
-A refusal of `set_stop` is never fatal: it is logged and alerted. Only a `JournalError`
-for a file failure (SQLite's own error chained) is raised, which stops the worker (3.5).
+A refusal of `set_stop` is never fatal: it is logged and alerted. A `JournalError` for a
+file failure (SQLite's own error chained) there, and any `JournalError` of a read, a
+cancel or `clear_stop` (each journals what it learns), is raised, which stops the worker
+(3.5).
 """
 
 from __future__ import annotations
@@ -26,7 +32,8 @@ from contextlib import AbstractContextManager
 
 from ..errors import JournalError, LiveError, ModeChangedError
 from ._order_answers import Outcome
-from ._types import LOGGER_NAME, AlertKind, AlertsLike, OrderIntent, OrderUpdate
+from ._types import LOGGER_NAME, AlertKind, AlertsLike, OrderIntent
+from ._worker_news import NewsHandover
 from .journal import Journal
 from .orders import OrderPath
 
@@ -44,8 +51,8 @@ def leg_of(intent: OrderIntent) -> Leg:
 class StopBook:
     """The journal's stops of the worker's legs (module docstring). `journal` is handle W,
     `path` the order path, `alerts` the session's; `calling` marks the worker busy for a
-    call that may reach the server, and `deliver` posts an order's news (which comes back
-    to `ended` for a STOP's terminal news)."""
+    call that may reach the server, and `news` hands a read's news to the loop (a STOP's
+    terminal news comes back to `ended`)."""
 
     def __init__(
         self,
@@ -54,13 +61,13 @@ class StopBook:
         *,
         alerts: AlertsLike,
         calling: Callable[[], AbstractContextManager[None]],
-        deliver: Callable[[OrderUpdate], None],
+        news: NewsHandover,
     ) -> None:
         self._journal = journal
         self._path = path
         self._alerts = alerts
         self._calling = calling
-        self._deliver = deliver
+        self._news = news
         # An orphan stop being cancelled, and the stop to record once it has ended.
         self._after: dict[str, tuple[Leg, str]] = {}
 
@@ -74,14 +81,20 @@ class StopBook:
 
     def ended(self, intent: OrderIntent, order_id: str) -> bool:
         """A STOP intent's order ended: clear its leg's stop when the journal names it,
-        and record a stop that waited for it; True when it was cleared."""
+        and record a stop that waited for it while that stop works; True when it was
+        cleared."""
         leg = leg_of(intent)
         cleared = self._journal.stop_of(*leg) == order_id
         if cleared:
             self._journal.clear_stop(*leg)
         waiting = self._after.pop(order_id, None)
         if waiting is not None:
-            self._set(*waiting)
+            new_leg, new_id = waiting
+            last = self._path.last_known(new_id)
+            if last is not None and last.status.terminal:
+                logger.info("stop %s ended before orphan %s: it is not recorded", new_id, order_id)
+            else:
+                self._set(new_leg, new_id)
         return cleared
 
     def bound(self, intent: OrderIntent, order_id: str) -> None:
@@ -100,13 +113,16 @@ class StopBook:
         try:
             with self._calling():
                 check = self._path.check_order(held)
+                self._news.taken(int(check.news is not None))
         except ModeChangedError:
             return
+        except JournalError:
+            raise
         except LiveError as error:
             self._alert(AlertKind.ERROR, f"{self._not_recorded(leg, order_id, held)}: {error}")
             return
         if check.news is not None:
-            self._deliver(check.news)
+            self._news.hand_over(check.news, self)
         if check.status is None:
             why = f"its row cannot be read ({check.reason})"
             self._alert(AlertKind.ERROR, f"{self._not_recorded(leg, order_id, held)}: {why}")
@@ -129,6 +145,8 @@ class StopBook:
         try:
             with self._calling():
                 outcome = self._path.cancel(held)
+        except JournalError:
+            raise
         except LiveError as error:
             outcome = None
             reason = str(error)

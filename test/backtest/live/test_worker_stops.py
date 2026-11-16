@@ -174,9 +174,7 @@ def test_a_journal_file_failure_while_reading_the_stop_the_journal_names_stops_t
     assert isinstance(failed.error, JournalError)
 
 
-def test_a_journal_file_failure_while_cancelling_an_orphan_stop_stops_the_worker(
-    rig, monkeypatch
-):
+def test_a_journal_file_failure_while_cancelling_an_orphan_stop_stops_the_worker(rig, monkeypatch):
     placed_stop(rig)
     rig.restart()
     rig.messages()

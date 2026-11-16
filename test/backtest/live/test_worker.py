@@ -316,10 +316,11 @@ def test_a_step_under_way_when_the_worker_closes_sends_nothing_more(broker, tmp_
         return client.placeorder(**fields)
 
     rig.orders.placeorder = placeorder
-    rig.worker.put(rig.stop())
-    rig.worker.put(
-        rig.place(Purpose.STOP, action="SELL", price_type="SL-M", trigger_price=1490.0, symbol="INFY")
+    infy_stop = rig.place(
+        Purpose.STOP, action="SELL", price_type="SL-M", trigger_price=1490.0, symbol="INFY"
     )
+    rig.worker.put(rig.stop())
+    rig.worker.put(infy_stop)
     rig.worker.start()
     assert inside.wait(THREAD_WAIT_S)
 
@@ -418,6 +419,20 @@ def test_polled_news_counts_as_waiting_until_it_is_posted(rig, monkeypatch):
     rig.worker.step()
 
     assert [news.update.source for news in rig.of(OrderNews, rig.messages())] == ["poll"]
+    assert (seen != [], looks_idle(seen)) == (True, [])
+
+
+def test_a_released_held_word_counts_as_waiting_until_it_is_posted(rig, monkeypatch):
+    rig.fake.faults.zero_price_next_fill()
+    rig.fake.faults.gateway_error("tradebook")
+    (result,) = rig.of(SendResult, rig.run(rig.place()))
+    rig.worker.step()
+    rig.messages()
+    seen = watch_handover(rig.worker, monkeypatch)
+
+    released = rig.run(ReleaseFill(result.outcome.order_id, 811.5))
+
+    assert len(rig.of(OrderNews, released)) == 1
     assert (seen != [], looks_idle(seen)) == (True, [])
 
 

@@ -326,8 +326,9 @@ class VenueMap:
     def news(self, update: OrderUpdate) -> FillResult:
         """Take an order's news (2.5 A.2): a quantity that shows the pending modify
         confirms it first, then the fills and the terminal status go through the order's
-        ledger; a terminal word ends what waited for a result. Raises LiveError for an
-        order this map has not bound."""
+        ledger; a terminal word the kernel took ends what waited for a result (one it
+        refused leaves the order working there, a mismatch in the result). Raises
+        LiveError for an order this map has not bound."""
         kernel_order = self._by_order_id.get(update.order_id)
         if kernel_order is None:
             raise LiveError(f"order {update.order_id} is not bound in this venue map")
@@ -336,7 +337,9 @@ class VenueMap:
         if pending is not None and units == pending.terms.quantity != order.terms.quantity:
             self._modify_result(order, pending, confirmed=True)
         result = order.ledger.apply(update)
-        if update.status.terminal:
+        # Ended only once the kernel has ended it: after a refused terminal result the
+        # kernel still works the order, and its modify and cancel still need results.
+        if update.status.terminal and kernel_order not in self._engine.working_orders():
             order.ended, order.modify, order.cancel = True, None, None
         return result
 

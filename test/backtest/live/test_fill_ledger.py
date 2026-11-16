@@ -1,10 +1,10 @@
 """The fill ledger (`_fill_ledger`, 16-session-design 2.6): the one door through which every
 fill of an own order reaches the kernel. Cumulative words (filled quantity and average
-price of the whole order) become increments, priced from the two cumulative values (put
-on the tick where the average's rounding cannot hide one), the average itself used only
-when its rounding could move the derived price by more than a tick, a stale or repeated
-word ignored, and a terminal word ending the order in the kernel; a refusal by the kernel
-is alerted as a mismatch.
+price of the whole order) become increments, priced from the two cumulative values: put
+on the tick where the average's rounding bound tells it, flagged where the bound is too
+wide to tell the tick, the average itself used only when the derived price is not a
+price; a stale or repeated word ignored, and a terminal word ending the order in the
+kernel; a refusal by the kernel is alerted as a mismatch.
 
 The kernel is the real binding's session (`venue_samples`), or a stand-in for a race the
 binding cannot be brought to yet; the test plays the broker.
@@ -52,13 +52,17 @@ TICK = 0.05
             (101, 480.0),
             (FillOutcome.APPLIED, Increment(1, 480.0, derived_from_average=True)),
         ),
-        # 100 at 500, 1 more averaged to 500.50: an average to the paisa may be off by
-        # half a paisa, which moves the one unit's derived 550.50 by 50 paise, ten ticks.
+        # 100 at 500, 1 more at 550.50, averaged to 500.50: an average to the paisa may be
+        # off by a paisa, which moves the one unit's derived 550.50 by up to 1.01 rupees,
+        # so the tick cannot be told; the average itself is 50 rupees away.
         (
             (100, 50_000.0),
             (101, 500.5),
-            (FillOutcome.APPLIED, Increment(1, 500.5, derived_from_average=True)),
+            (FillOutcome.APPLIED, Increment(1, 550.5, derived_from_average=True)),
         ),
+        # 1 at 500, then 1 more at 500.05, the average 500.025 cut to 500.02: the derived
+        # 500.04 is within 2 paise, the bound, of the tick 500.05.
+        ((1, 500.0), (2, 500.02), (FillOutcome.APPLIED, Increment(1, 500.05))),
         ((40, 20_004.0), (40, 500.10), (FillOutcome.NOTHING_NEW, None)),
         ((40, 20_004.0), (30, 500.10), (FillOutcome.STALE, None)),
     ],
@@ -71,7 +75,8 @@ TICK = 0.05
         "a second fill one tick away on an option",
         "a first word of several trades",
         "derived price not above 0",
-        "an average too coarse to price the units",
+        "an average too coarse to tell the tick",
+        "an average cut to the paisa",
         "same units",
         "fewer units",
     ],
@@ -107,13 +112,28 @@ def test_fills_reach_the_kernel_as_increments_at_their_derived_prices():
     assert rig.status(kernel_order) == "Filled"
 
 
-def test_the_ledger_moves_to_the_brokers_cumulative_figures_its_value_on_the_tick():
+def test_the_ledger_keeps_the_brokers_units_and_the_value_the_kernel_was_given():
     rig = Rig()
     _, ledger = holding_order(rig)
+    ledger.apply(update("B1", filled=10, average=500.0))
 
+    # 13 averaged to 500.0115 is 6,500.1495; the 3 new units are put on the tick, 500.05.
     ledger.apply(update("B1", filled=13, average=500.0115))
 
     assert (ledger.filled_units, ledger.filled_value) == (13, 6_500.15)
+
+
+def test_a_price_the_averages_could_not_tell_is_made_good_by_the_next_word():
+    rig = Rig()
+    _, ledger = holding_order(rig, units=101)
+    ledger.apply(update("B1", filled=99, average=500.0, quantity=101))
+    # The derived price is not a price: the average, 480, is used for the 1 unit.
+    ledger.apply(update("B1", filled=100, average=480.0, quantity=101))
+
+    ledger.apply(update("B1", OrderStatus.COMPLETE, filled=101, average=500.0, quantity=101))
+
+    position = rig.engine.position(0, "MIS")
+    assert (ledger.filled_value, position["average_price_rupees"]) == (50_500.0, 500.0)
 
 
 def test_a_fill_seen_by_a_second_source_is_applied_once():

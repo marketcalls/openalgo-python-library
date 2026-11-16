@@ -136,10 +136,11 @@ def test_the_alert_of_an_expired_modify_whose_row_shows_other_terms_says_so(rig)
 
 
 def test_the_news_of_a_settling_read_counts_as_waiting_until_it_is_posted(rig, monkeypatch):
-    place, order_id = resting(rig)
-    rig.worker.step()
-    rig.messages()
+    # The broker rejects the order right after accepting it, and the stream is silent:
+    # the settling read of its unanswered modify is the first to hear of it.
     rig.fake.faults.silence_order_updates()
+    rig.fake.reject_next("insufficient margin")
+    place, order_id = resting(rig)
     rig.fake.faults.lose_answer("modifyorder")
     rig.run(rig.modify(place, order_id, NEW_TERMS, Priority.ADJUST))
     seen = watch_handover(rig.worker, monkeypatch)
@@ -148,7 +149,8 @@ def test_the_news_of_a_settling_read_counts_as_waiting_until_it_is_posted(rig, m
     rig.worker.step()
 
     (news,) = rig.of(OrderNews, rig.messages())
-    assert (news.update.quantity, looks_idle(seen)) == (20, [])
+    assert (news.update.source, news.update.status) == ("poll", OrderStatus.REJECTED)
+    assert (seen != [], looks_idle(seen)) == (True, [])
 
 
 def test_a_journal_file_failure_in_a_settling_read_stops_the_worker(rig, monkeypatch):

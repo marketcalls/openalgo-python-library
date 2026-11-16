@@ -4,23 +4,32 @@
 The order path hands over cumulative updates: the filled quantity and the average price
 of the whole order, every fill priced. The kernel takes increments. A `FillLedger`, one
 per kernel order, knows what the kernel was given (`filled_units`, and `filled_value`,
-the broker's cumulative value as of the last increment applied) and turns each
-cumulative word into the units newly filled and their price, so a fill seen by two
-sources (the stream and a poll, a released held fill, the tradebook rows a
-reconciliation attributes to the order, the journal at a restart) is applied once:
+those units times the prices they were given at) and turns each cumulative word into the
+units newly filled and their price, so a fill seen by two sources (the stream and a poll,
+a released held fill, the tradebook rows a reconciliation attributes to the order, the
+journal at a restart) is applied once:
 
 - Fewer units than known: stale, logged and ignored. The same units: nothing new.
-- More: `units = F - filled_units` at `(A * F - filled_value) / units`, rounded to the
-  instrument's tick (a trade is on the tick; a cumulative average is not). A derived
-  price not above 0, or outside `INCREMENT_PRICE_BAND_PCT` of A (an average the broker
-  rounded too coarsely), gives way to A itself, flagged `derived_from_average`.
+- More: `units = F - filled_units` at the derived price `(A * F - filled_value) / units`.
+  The broker rounds (or cuts) A to its last decimal, at the paisa or finer
+  (`AVERAGE_DECIMALS_AT_LEAST`), so the derived price is off by less than one unit of
+  that decimal times F over units: its rounding bound. Within half a tick, the bound
+  tells the trade's price: a tick within it is that price (a trade is on the tick), and
+  with none the units are several trades whose average is the derived price itself.
+  Wider (a large order's average priced against a few units), the tick cannot be told:
+  the derived price is used as it is, flagged `derived_from_average`, still within its
+  bound, where the average itself could be far from the units' price. A derived price
+  not above 0 (figures that do not agree) gives way to A itself, flagged. Since
+  `filled_value` is what the kernel was given, the next word's derived price makes good
+  any error, and the kernel's value follows the broker's A times F.
 - The kernel takes it with `apply_fill(order, units, price, at=ts_recv_ns)`, and the
-  ledger moves to F and A * F. A refusal (`VenueRefusalError`) is a reconciliation
-  matter: logged with both figures, an ERROR alert, and the result says a book read is
-  due. The ledger stays where it was, since nothing was recorded, except after
-  "would_reverse", where the kernel recorded the closing part and refused the rest: the
-  ledger moves to the broker's figures, so the excess is reported once, not on every
-  later word.
+  ledger moves to F and adds the increment's value. A refusal (`VenueRefusalError`) is
+  a reconciliation matter: logged with both figures, an ERROR alert, and the result says
+  a book read is due. The ledger stays where it was, since nothing was recorded, except
+  after "would_reverse", where the kernel recorded the closing part and refused the rest:
+  the result reports the units the kernel recorded (read from the kernel's order), and
+  the ledger moves past the whole increment, so the excess is reported once, not on
+  every later word.
 
 Then a terminal word: REJECTED is `apply_reject(order, "venue")`, CANCELLED
 `apply_cancel(order)`; COMPLETE needs nothing once the kernel's order is filled, and an
@@ -46,10 +55,13 @@ from ._types import LOGGER_NAME, AlertKind, AlertsLike, OrderStatus, OrderUpdate
 
 logger = logging.getLogger(LOGGER_NAME)
 
-#: A price derived from two cumulative averages must lie within this percentage of the
-#: newer average; outside it the averages were rounded too coarsely to derive a price
-#: from, and the average itself is used (16-session-design 2.6).
-INCREMENT_PRICE_BAND_PCT = 2.0
+#: The fewest decimals an average price is taken to be given to, the paisa: OpenAlgo's
+#: broker mappings and its sandbox round an average to 2 decimals, none coarser, and a
+#: number cannot show its trailing zeros (an average of 500.10 reads 500.1).
+AVERAGE_DECIMALS_AT_LEAST = 2
+#: Decimals a derived price or value keeps: finer digits are the noise of float arithmetic,
+#: not money (the paisa is 2 decimals, the finest tick 4).
+PRICE_DECIMALS = 6
 #: The reject code the kernel records for a refusal by the broker or OpenAlgo
 #: (`_reject_reasons.REASONS["venue"]`).
 VENUE_REJECT_CODE = "venue"
@@ -59,7 +71,6 @@ VENUE_REJECT_CODE = "venue"
 ENDED_RACE = "order_ended"
 #: The refusal kind after which the kernel recorded the units that closed the position.
 WOULD_REVERSE = "would_reverse"
-_PERCENT = 100.0
 
 
 class FillOutcome(enum.Enum):
@@ -78,7 +89,9 @@ class FillOutcome(enum.Enum):
 @dataclass(frozen=True)
 class Increment:
     """The units newly filled (whole units) at `price` rupees; `derived_from_average` when
-    the broker's average was used because no price could be derived on the tick."""
+    the cumulative averages could not tell the units' price to the tick: rounded too
+    coarsely for so few units (the derived price, within its rounding bound), or not
+    agreeing (the newer average itself)."""
 
     units: int
     price: float
@@ -88,7 +101,8 @@ class Increment:
 @dataclass(frozen=True)
 class FillResult:
     """What one word did to kernel order `kernel_order`: its fills' `outcome`, the
-    `increment` given (None when none was), the refusal's `refusal` kind when REFUSED,
+    `increment` the kernel recorded (None when it recorded none; after a "would_reverse"
+    refusal, the closing part), the refusal's `refusal` kind when REFUSED,
     `ended` the terminal status it applied (None for none), and `mismatch` when the
     kernel and the broker now differ, so the loop asks for a book read."""
 
@@ -104,7 +118,7 @@ def next_increment(
     filled_units: int, filled_value: float, filled_quantity: int, average_price: float, tick: float
 ) -> tuple[FillOutcome, Increment | None]:
     """The increment a cumulative word gives: the kernel has `filled_units` worth
-    `filled_value` rupees (the broker's cumulative value at the last increment), the word
+    `filled_value` rupees (those units times the prices they were given at), the word
     says `filled_quantity` units at an average of `average_price` rupees, and the
     instrument's tick is `tick` rupees. (NOTHING_NEW or STALE, None) when it gives no
     units; (APPLIED, the increment) otherwise (module docstring)."""
@@ -113,11 +127,26 @@ def next_increment(
     if filled_quantity == filled_units:
         return FillOutcome.NOTHING_NEW, None
     units = filled_quantity - filled_units
-    derived = on_tick((average_price * filled_quantity - filled_value) / units, tick)
-    band = average_price * INCREMENT_PRICE_BAND_PCT / _PERCENT
-    if derived > 0 and abs(derived - average_price) <= band:
-        return FillOutcome.APPLIED, Increment(units, derived)
-    return FillOutcome.APPLIED, Increment(units, average_price, derived_from_average=True)
+    derived = round((average_price * filled_quantity - filled_value) / units, PRICE_DECIMALS)
+    if derived <= 0:
+        return FillOutcome.APPLIED, Increment(units, average_price, derived_from_average=True)
+    bound = _rounding_bound(average_price, filled_quantity, units)
+    if bound >= tick / 2:
+        return FillOutcome.APPLIED, Increment(units, derived, derived_from_average=True)
+    nearest = on_tick(derived, tick)
+    if round(abs(nearest - derived) - bound, PRICE_DECIMALS) <= 0:
+        return FillOutcome.APPLIED, Increment(units, nearest)
+    return FillOutcome.APPLIED, Increment(units, derived)
+
+
+def _rounding_bound(average_price: float, filled_quantity: int, units: int) -> float:
+    """Rupees by which the price of `units` derived from an average of `average_price`
+    over `filled_quantity` units can be off: one unit of the average's last decimal (at
+    the paisa or finer, `AVERAGE_DECIMALS_AT_LEAST`), whether the broker rounded or cut
+    it, times `filled_quantity` over `units`."""
+    shown = -Decimal(repr(average_price)).normalize().as_tuple().exponent
+    decimals = max(AVERAGE_DECIMALS_AT_LEAST, shown)
+    return 10.0**-decimals * filled_quantity / units
 
 
 def on_tick(price: float, tick: float) -> float:
@@ -156,6 +185,8 @@ class FillLedger:
         self._alerts = alerts
         self._filled_units = filled_units
         self._filled_value = filled_value
+        # The units the kernel recorded: `filled_units` but after a "would_reverse".
+        self._recorded_units = filled_units
 
     @property
     def filled_units(self) -> int:
@@ -164,14 +195,14 @@ class FillLedger:
 
     @property
     def filled_value(self) -> float:
-        """Rupees: the broker's cumulative value (units times average) at the last word
-        applied."""
+        """Rupees: `filled_units` times the prices they were given at."""
         return self._filled_value
 
     def apply(self, update: OrderUpdate) -> FillResult:
         """Give the kernel the fills `update` (a cumulative word of this order) adds, then
         its terminal status (module docstring). Never raises for a refusal by the kernel:
-        it is in the result."""
+        it is in the result. Raises LiveError when the kernel no longer knows the order
+        whose fill it refused in part."""
         outcome, increment = next_increment(
             self._filled_units,
             self._filled_value,
@@ -184,23 +215,22 @@ class FillLedger:
             told, known = update.filled_quantity, self._filled_units
             logger.info("order %s: a stale word, %d filled of %d", update.order_id, told, known)
         elif increment is not None:
-            refusal = self._give(update, increment)
+            refusal, increment = self._give(update, increment)
             if refusal:
-                outcome, increment = FillOutcome.REFUSED, None
+                outcome = FillOutcome.REFUSED
         ended, differs = self._end(update)
         return FillResult(
             self._order, outcome, increment, refusal, ended, mismatch=bool(refusal) or differs
         )
 
-    def _give(self, update: OrderUpdate, increment: Increment) -> str:
-        """Hand the increment to the kernel; the refusal's kind, or "" when it took it."""
+    def _give(self, update: OrderUpdate, increment: Increment) -> tuple[str, Increment | None]:
+        """Hand the increment to the kernel: ("", the increment) when it took it, else the
+        refusal's kind and what it recorded (None but after a "would_reverse")."""
         try:
             self._engine.apply_fill(
                 self._order, float(increment.units), increment.price, update.ts_recv_ns
             )
         except VenueRefusalError as error:
-            if error.kind == WOULD_REVERSE:
-                self._move(update)
             self._mismatch(
                 f"the engine refused {increment.units} units at {increment.price} of order "
                 f"{update.order_id} ({update.symbol} {update.exchange}): the broker reports "
@@ -208,13 +238,32 @@ class FillLedger:
                 f"{self._filled_units} ({error.kind}: {error}). The books are read again; "
                 "check the position in OpenAlgo"
             )
-            return error.kind
-        self._move(update)
-        return ""
+            if error.kind != WOULD_REVERSE:
+                return error.kind, None
+            recorded = self._recorded_of(increment)
+            self._move(update, increment)
+            return error.kind, recorded
+        self._recorded_units += increment.units
+        self._move(update, increment)
+        return "", increment
 
-    def _move(self, update: OrderUpdate) -> None:
+    def _recorded_of(self, increment: Increment) -> Increment | None:
+        """The units the kernel recorded of an increment it refused in part (read from its
+        order), at the increment's price; None for none. Raises LiveError when the kernel
+        no longer knows the order."""
+        kernel = self._engine.order(self._order)
+        if kernel is None:
+            raise LiveError(f"the engine no longer knows kernel order o{self._order}")
+        recorded = round(kernel["filled_units"]) - self._recorded_units
+        self._recorded_units += recorded
+        if recorded <= 0:
+            return None
+        return Increment(recorded, increment.price, increment.derived_from_average)
+
+    def _move(self, update: OrderUpdate, increment: Increment) -> None:
         self._filled_units = update.filled_quantity
-        self._filled_value = update.average_price * update.filled_quantity
+        value = self._filled_value + increment.units * increment.price
+        self._filled_value = round(value, PRICE_DECIMALS)
 
     def _end(self, update: OrderUpdate) -> tuple[OrderStatus | None, bool]:
         """Apply `update`'s terminal status; (the status applied or None, whether the
@@ -263,8 +312,9 @@ class FillLedger:
 
 
 __all__ = [
+    "AVERAGE_DECIMALS_AT_LEAST",
     "ENDED_RACE",
-    "INCREMENT_PRICE_BAND_PCT",
+    "PRICE_DECIMALS",
     "VENUE_REJECT_CODE",
     "WOULD_REVERSE",
     "FillLedger",

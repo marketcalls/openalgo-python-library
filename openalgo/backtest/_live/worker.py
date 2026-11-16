@@ -11,8 +11,9 @@ builds and restores the order path, and posts `inbox.WorkerReady`. Then each `st
 
 1. drains the raw order updates (`updates`): each normalized (an unreadable one is logged
    and counted, never raised), taken by the order path, and its news posted as
-   `inbox.OrderNews`; a STOP intent's terminal news clears its leg's journal stop first
-   (`_worker_stops`), and any terminal news settles the order (`_worker_settle`);
+   `inbox.OrderNews` (`_worker_news`); a STOP intent's terminal news clears its leg's
+   journal stop first (`_worker_stops`), and any terminal news settles the order
+   (`_worker_settle`);
 2. executes every ready request of priority 0 (stops, exits, protective modifies and
    cancels), draining the updates before each (`_worker_send`);
 3. polls the mode guard (it reads only every 5 s), after priority 0, so a protective send
@@ -24,11 +25,14 @@ builds and restores the order path, and posts `inbox.WorkerReady`. Then each `st
    check's news and `inbox.Settled` (an expired modify with an ERROR alert);
 8. executes one ready request of any priority, after draining the updates.
 
-A `JournalError` (any while an intent is written; a file failure elsewhere: a refused stop
-record is only alerted) is posted as `inbox.WorkerFailed`, after which nothing is sent: an
-intent can no longer be written first. `busy_since_ns` is set around every call that may reach
-the server and `raw_pending` counts the raw updates waiting; the loop reads both (4.2).
-Times are UTC nanoseconds.
+A `JournalError` (any but a refused stop record, which is only alerted) is posted as
+`inbox.WorkerFailed`, after which nothing is sent: an intent can no longer be written
+first. So is any exception nothing expected, the same inline (`step`) as on the thread
+(`run`), so the fault suite meets what production does. `close` lets the step under way
+end without taking another request. `busy_since_ns` is set around every call that may
+reach the server, and `raw_pending` counts the order words not yet posted, those waiting
+in the raw FIFO and those in the worker's hands (`_worker_news`); the loop reads both
+(4.2). Times are UTC nanoseconds.
 """
 
 from __future__ import annotations
@@ -47,9 +51,9 @@ from ._journal_file import DEFAULT_BUSY_TIMEOUT_S
 from ._journal_reads import JournalSession
 from ._order_check import OrderCheck
 from ._order_state import HeldFill
-from ._order_updates import normalize_update
-from ._types import LOGGER_NAME, AlertKind, AlertsLike, Mode, Now, OrderUpdate, Purpose, Sleep
+from ._types import LOGGER_NAME, AlertKind, AlertsLike, Mode, Now, Purpose, Sleep
 from ._venue_requests import Priority
+from ._worker_news import NewsHandover
 from ._worker_queue import Request, WorkerQueue, order_key
 from ._worker_send import Sender
 from ._worker_settle import Settlements, expired_text
@@ -60,7 +64,6 @@ from .inbox import (
     HeldFills,
     Inbox,
     Message,
-    OrderNews,
     RawUpdates,
     Resolutions,
     Settled,
@@ -140,11 +143,12 @@ class OrderWorker:
         #: Since when (UTC nanoseconds) the worker is inside a call that may reach the
         #: server; None between calls.
         self.busy_since_ns: int | None = None
-        #: Raw order updates that could not be read, logged and dropped.
-        self.unreadable_updates = 0
         self._incoming: queue.SimpleQueue[Request] = queue.SimpleQueue()
         self._queue = WorkerQueue()
         self._settle = Settlements()
+        self._news = NewsHandover(
+            self.updates, settle=self._settle, queue=self._queue, post=self._post
+        )
         self._started: _Started | None = None
         self._held: tuple[HeldFill, ...] = ()
         self._lock_posted = False
@@ -154,8 +158,14 @@ class OrderWorker:
 
     @property
     def raw_pending(self) -> int:
-        """The raw order updates waiting to be drained (4.2)."""
-        return len(self.updates)
+        """The order words not yet posted to the loop (4.2): the raw updates waiting to be
+        drained, and the words the worker took in and has not posted (`_worker_news`)."""
+        return self._news.pending
+
+    @property
+    def unreadable_updates(self) -> int:
+        """Raw order updates that could not be read, logged and dropped."""
+        return self._news.unreadable
 
     def put(self, request: Request) -> None:
         """Hand the worker a request (any thread); it never waits."""
@@ -194,17 +204,17 @@ class OrderWorker:
         except BaseException:
             journal.close()
             raise
-        stops = StopBook(
-            journal, path, alerts=self._alerts, calling=self._calling, deliver=self._deliver
-        )
+        stops = StopBook(journal, path, alerts=self._alerts, calling=self._calling, news=self._news)
         sender = Sender(
             self._client,
             path,
+            journal=journal,
+            alerts=self._alerts,
             guard=self._guard,
             queue=self._queue,
             settle=self._settle,
             stops=stops,
-            deliver=self._deliver,
+            news=self._news,
             post=self._post,
             calling=self._calling,
             now=self._now,
@@ -215,8 +225,8 @@ class OrderWorker:
 
     def step(self) -> bool:
         """One iteration (module docstring); True when it took a request, so the thread
-        steps again at once. Nothing is done after a `WorkerFailed`. Raises LiveError
-        before `start_up`."""
+        steps again at once. A failure is posted as `WorkerFailed`, never raised, and
+        nothing is done after one. Raises LiveError before `start_up`."""
         started = self._started
         if started is None:
             raise LiveError("the order worker steps after start_up()")
@@ -225,14 +235,22 @@ class OrderWorker:
         try:
             return self._step(started)
         except JournalError as error:
-            self._failed = True
             logger.error("the order worker stops: the journal failed: %s", error)
-            self._post(WorkerFailed(error))
-            return False
+            self._fail(error)
+        # The loop must hear of any failure, or orders would stop unseen: it runs the
+        # emergency stop on it (3.5).
+        except Exception as error:
+            logger.exception("the order worker failed")
+            self._fail(error)
+        return False
+
+    def _fail(self, error: BaseException) -> None:
+        self._failed = True
+        self._post(WorkerFailed(error))
 
     def _step(self, started: _Started) -> bool:
         path = started.path
-        self._drain(path)
+        self._news.drain(path, started.stops)
         took = False
         while self._run_next(started, Priority.PROTECT):
             took = True
@@ -241,17 +259,21 @@ class OrderWorker:
         self._notice_lock()
         with self._calling():
             polled = path.due_polls()
+            self._news.taken(len(polled))
         for update in polled:
-            self._deliver(update)
+            self._news.hand_over(update, started.stops)
         self._resolve(started)
         held = tuple(path.held_fills())
         if held != self._held:
             self._held = held
             self._post(HeldFills(held))
-        self._settle_due(path)
+        self._settle_due(started)
         return self._run_next(started, Priority.UPKEEP) or took
 
     def _run_next(self, started: _Started, most: Priority) -> bool:
+        if self._stopping:
+            # Closed: the step under way ends without sending what is still queued.
+            return False
         while True:
             try:
                 self._queue.put(self._incoming.get_nowait())
@@ -262,51 +284,27 @@ class OrderWorker:
             return False
         # The updates that came meanwhile first: a modify or cancel is never sent on
         # stale knowledge.
-        self._drain(started.path)
+        self._news.drain(started.path, started.stops)
         started.sender.execute(request)
         self._notice_lock()
         return True
 
-    def _drain(self, path: OrderPath) -> None:
-        for raw in self.updates.drain():
-            try:
-                update = normalize_update(raw.message, ts_recv_ns=raw.arrived_ns, source="stream")
-            except LiveError as error:
-                self.unreadable_updates += 1
-                logger.warning("an order update cannot be read, dropped: %s", error)
-                continue
-            news = path.on_update(update)
-            if news is not None:
-                self._deliver(news)
-
-    def _deliver(self, news: OrderUpdate) -> None:
-        """Post an order's news; its terminal news settles the order and, for a STOP
-        intent, clears its leg's journal stop first."""
-        stops = self._ready().stops
-        intent = stops.intent_of(news.order_id)
-        cleared = False
-        if news.status.terminal:
-            waiting = self._settle.ended(news.order_id)
-            if waiting is not None:
-                self._queue.release(order_key(waiting.request))
-            if intent.purpose is Purpose.STOP:
-                cleared = stops.ended(intent, news.order_id)
-        self._post(OrderNews(news, intent.intent_id, cleared))
-
     def _resolve(self, started: _Started) -> None:
         with self._calling():
             resolutions = started.path.resolve_unbound()
+            self._news.taken(len(resolutions))
         if not resolutions:
             return
         # Posted first, so the loop knows the orders even if the journal fails next.
         self._post(Resolutions(tuple(resolutions)))
+        self._news.handed(len(resolutions))
         for resolution in resolutions:
             update = resolution.update
             ended = update is not None and update.status.terminal
             if resolution.order_id and resolution.intent.purpose is Purpose.STOP and not ended:
                 started.stops.bound(resolution.intent, resolution.order_id)
 
-    def _settle_due(self, path: OrderPath) -> None:
+    def _settle_due(self, started: _Started) -> None:
         now = self._now()
         for waiting in self._settle.expired(now):
             text = expired_text(waiting, now)
@@ -318,16 +316,19 @@ class OrderWorker:
             order_id = waiting.request.order_id
             try:
                 with self._calling():
-                    check = path.check_order(order_id)
+                    check = started.path.check_order(order_id)
+                    self._news.taken(int(check.news is not None))
             except ModeChangedError:
                 self._notice_lock()
                 return
+            except JournalError:
+                raise
             except LiveError as error:
                 logger.error("order %s cannot be read to settle it: %s", order_id, error)
                 check = OrderCheck(order_id, reason=str(error))
             settled = self._settle.judge(waiting, check, self._now())
             if check.news is not None:
-                self._deliver(check.news)
+                self._news.hand_over(check.news, started.stops)
             if settled is not None:
                 self._queue.release(order_key(waiting.request))
                 self._post(settled)
@@ -346,11 +347,6 @@ class OrderWorker:
             yield
         finally:
             self.busy_since_ns = None
-
-    def _ready(self) -> _Started:
-        if self._started is None:
-            raise LiveError("the order worker steps after start_up()")
-        return self._started
 
     def _post(self, message: Message) -> None:
         self._inbox.put(message)
@@ -373,29 +369,31 @@ class OrderWorker:
                 self._wake.clear()
                 if not self.step():
                     self._wake.wait(WORKER_IDLE_WAIT_S)
-        # The loop must hear of any failure, or orders would stop unseen: it runs the
-        # emergency stop on it (3.5).
+        # The startup's failure: `step` posts its own.
         except Exception as error:
-            logger.exception("the order worker failed")
-            self._failed = True
-            self._post(WorkerFailed(error))
+            logger.exception("the order worker failed to start")
+            self._fail(error)
         finally:
-            self._close_journal()
+            self._finish()
 
     def close(self, wait_s: float = CLOSE_WAIT_S) -> None:
-        """Stop the worker after its current step and wait for its thread at most `wait_s`
-        seconds; without a thread, close journal W on the calling thread (the one that
-        ran `start_up`). Safe to call twice."""
+        """Stop the worker after its current step, which takes no further request, and
+        wait for its thread at most `wait_s` seconds; without a thread, close journal W on
+        the calling thread (the one that ran `start_up`). Safe to call twice."""
         self._stopping = True
         self._wake.set()
         if self._thread is None:
-            self._close_journal()
+            self._finish()
             return
         self._thread.join(wait_s)
         if self._thread.is_alive():
             logger.warning("the order worker's thread did not end within %s s", wait_s)
 
-    def _close_journal(self) -> None:
+    def _finish(self) -> None:
+        """Close journal W, saying what was left unsent."""
+        left = len(self._queue) + self._incoming.qsize()
+        if left and self._stopping:
+            logger.warning("the order worker closed with %d requests not sent", left)
         if self._started is not None:
             self._started.journal.close()
 
