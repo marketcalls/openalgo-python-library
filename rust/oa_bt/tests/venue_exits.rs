@@ -12,7 +12,9 @@
 mod venue_support;
 
 use oa_bt::engine::{Engine, RunConfig, RunOutput, Step, VenueCommand};
-use oa_bt::exec::{FillFlags, OrderId, OrderRequest, OrderStatus, OrderType, QuantitySpec};
+use oa_bt::exec::{
+    FillFlags, OrderId, OrderRequest, OrderStatus, OrderType, QuantitySpec, RejectCode,
+};
 use oa_bt::model::{Product, Side};
 use oa_bt::rms::{ExitReason, StrategyRiskConfig};
 use venue_support::{
@@ -236,54 +238,51 @@ fn the_square_off_is_sent_once_the_order_it_cancels_has_ended() {
     assert_eq!(square_off.request.exit_reason, Some(ExitReason::Scheduler));
 }
 
-#[test]
-fn an_engine_exit_above_the_freeze_quantity_goes_out_in_orders_of_at_most_it() {
-    // A freeze quantity of 40: the square-off of 100 is three orders, 40, 40 and 20.
+/// An echoed session of SBIN with a freeze quantity of 40 that buys 40 (o1) and then
+/// tries to add 40 (o2) and 20 (o3), with `more` acts, run until it waits before `slice`.
+/// A session's position may not go above the freeze quantity (`venue_gates`), so the adds
+/// are rejected `freeze_qty` and every exit of the 40 fits in one order (an exit above the
+/// freeze quantity goes out in pieces of at most it: `venue_owner`).
+fn held_at_the_freeze_quantity(more: Vec<(i64, Act)>, slice: usize) -> Engine {
     let columns = bars(&[], &[]);
     let mut kernel = venue_support::session_of(config(), venue_support::frozen_at(40));
-    let acts = vec![
+    let mut acts = vec![
         at_close(0, Act::Submit(market(Side::Buy, 40.0))),
         at_close(1, Act::Submit(market(Side::Buy, 40.0))),
         at_close(2, Act::Submit(market(Side::Buy, 20.0))),
     ];
+    acts.extend(more);
     let mut echo = Echo::default();
     echo_until(
         &mut kernel,
         &columns,
         &mut Script::new(acts),
         &mut echo,
-        SQUARE_OFF_SLICE,
+        slice,
     );
+    for add in [OrderId(2), OrderId(3)] {
+        let code = kernel.order(add).and_then(|order| order.reject_code);
+        assert_eq!(code, Some(RejectCode::FreezeQty), "{add}");
+    }
+    kernel
+}
+
+#[test]
+fn the_square_off_of_a_position_held_to_the_freeze_quantity_is_one_order() {
+    let mut kernel = held_at_the_freeze_quantity(Vec::new(), SQUARE_OFF_SLICE);
     assert_eq!(
         placed(&kernel.take_commands()),
-        [
-            (OrderId(4), Side::Sell, 40.0),
-            (OrderId(5), Side::Sell, 40.0),
-            (OrderId(6), Side::Sell, 20.0),
-        ]
+        [(OrderId(4), Side::Sell, 40.0)]
     );
 }
 
 #[test]
-fn a_strategy_exit_above_the_freeze_quantity_goes_out_in_orders_of_at_most_it() {
-    // A freeze quantity of 40: exit() of 100 is its own order of 40 and two more, 40 and 20.
-    let columns = bars(&[], &[]);
-    let mut kernel = venue_support::session_of(config(), venue_support::frozen_at(40));
-    let acts = vec![
-        at_close(0, Act::Submit(market(Side::Buy, 40.0))),
-        at_close(1, Act::Submit(market(Side::Buy, 40.0))),
-        at_close(2, Act::Submit(market(Side::Buy, 20.0))),
-        at_close(5, Act::Submit(whole_exit())),
-    ];
-    let mut echo = Echo::default();
-    echo_until(&mut kernel, &columns, &mut Script::new(acts), &mut echo, 6);
+fn a_strategy_exit_of_a_position_held_to_the_freeze_quantity_is_its_own_order() {
+    let exit_at_5 = vec![at_close(5, Act::Submit(whole_exit()))];
+    let mut kernel = held_at_the_freeze_quantity(exit_at_5, 6);
     assert_eq!(
         placed(&kernel.take_commands()),
-        [
-            (OrderId(4), Side::Sell, 40.0),
-            (OrderId(5), Side::Sell, 40.0),
-            (OrderId(6), Side::Sell, 20.0),
-        ]
+        [(OrderId(4), Side::Sell, 40.0)]
     );
 }
 
@@ -432,12 +431,13 @@ fn a_daily_loss_exit_the_venue_rejects_is_sent_again_at_the_next_open() {
 
 #[test]
 fn a_position_a_cancel_race_reopens_is_exited_again_at_the_next_open() {
-    // A resting buy of 50 (o2) fills before its cancellation at the breach lands, after
-    // the exit of the 100 (o3) has filled: the 50 are exited at the next open.
+    // A resting buy of 50 (o2, decided once the 100 have filled) fills before its
+    // cancellation at the breach lands, after the exit of the 100 (o3) has filled: the 50
+    // are exited at the next open.
     let columns = bars(&[CRASH], &[]);
     let mut acts = buy_100_at_the_open();
     let resting_buy = order(Side::Buy, 50.0, limit(491.0), Product::Mis);
-    acts.push(at_close(0, Act::Submit(resting_buy)));
+    acts.push(at_close(1, Act::Submit(resting_buy)));
     let mut kernel = session(daily_loss_config(config()));
     let mut script = Script::new(acts);
     venue_support::wait_before(&mut kernel, &columns, &mut script, 1);

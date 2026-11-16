@@ -44,6 +44,7 @@ use super::error::KernelError;
 use super::event::{Event, OrderEventKind};
 use super::kernel::Engine;
 use super::venue::{ExitBy, PositionExit, SendAt};
+use super::venue_roles::{EngineExit, OrderRole};
 
 /// The side that closes a position of `held` signed units.
 pub(super) fn closing_side(held: f64) -> Side {
@@ -52,6 +53,20 @@ pub(super) fn closing_side(held: f64) -> Side {
     } else {
         Side::Buy
     }
+}
+
+/// `units` in pieces of at most `freeze_units` in whole lots of `lot_units`, in order:
+/// all of it in one when there is no freeze quantity, or when it is below one lot.
+fn freeze_pieces(units: f64, freeze_units: Option<u32>, lot_units: u32) -> Vec<f64> {
+    let mut pieces = Vec::new();
+    let mut left = units;
+    while left > 0.0 {
+        let piece = cap_at_freeze(left, freeze_units, lot_units);
+        let piece = if piece > 0.0 { piece } else { left };
+        pieces.push(piece);
+        left -= piece;
+    }
+    pieces
 }
 
 impl Engine {
@@ -77,16 +92,16 @@ impl Engine {
         Ok(())
     }
 
-    /// The engine's exit of `key` for `reason`, decided as `at` says: it takes over from
-    /// the strategy's exits of the position (module docs), unless the position is flat or
-    /// the engine's exit holds it already.
+    /// The engine's exit of `key` (`exit`: the square-off or a risk exit), decided as `at`
+    /// says: it takes over from the strategy's exits of the position (module docs), unless
+    /// the position is flat or the engine's exit holds it already.
     ///
     /// Errors: those of `fills::end_order` and of `progress_exits`.
     pub(super) fn request_engine_exit(
         &mut self,
         at: SendAt,
         key: PositionKey,
-        reason: ExitReason,
+        exit: EngineExit,
     ) -> Result<(), KernelError> {
         if self.held_units(key) == 0.0 || self.has_engine_exit(key) {
             return Ok(());
@@ -108,7 +123,7 @@ impl Engine {
         }
         self.venue.exits.push(PositionExit {
             key,
-            by: ExitBy::Engine(reason),
+            by: ExitBy::Engine(exit),
             sent: Vec::new(),
         });
         self.progress_exits(at)
@@ -149,7 +164,7 @@ impl Engine {
         }
         match exit.by {
             ExitBy::Strategy(id) => self.send_strategy_exit(at, exit, id, held),
-            ExitBy::Engine(reason) => self.send_engine_exit(at, exit, reason, held),
+            ExitBy::Engine(by) => self.send_engine_exit(at, exit, by, held),
         }
     }
 
@@ -224,19 +239,13 @@ impl Engine {
             .sum()
     }
 
-    /// `units` in pieces of at most the freeze quantity in whole lots (all of it in one
-    /// when the instrument has none), in order.
+    /// `units` of `key`'s instrument in pieces of at most its freeze quantity
+    /// (`freeze_pieces`). The entry gates keep a position the session builds within one
+    /// piece (`venue_gates`).
     fn pieces_of(&self, key: PositionKey, units: f64) -> Result<Vec<f64>, KernelError> {
         let spec = self.spec(key.instrument)?;
-        let mut pieces = Vec::new();
-        let mut left = units;
-        while left > 0.0 {
-            let piece = cap_at_freeze(left, spec.freeze_quantity_units, spec.lot_size_units);
-            let piece = if piece > 0.0 { piece } else { left };
-            pieces.push(piece);
-            left -= piece;
-        }
-        Ok(pieces)
+        let (freeze, lot) = (spec.freeze_quantity_units, spec.lot_size_units);
+        Ok(freeze_pieces(units, freeze, lot))
     }
 
     /// What a strategy exit asks for of a position of `open` units (above 0): a fraction
@@ -287,7 +296,7 @@ impl Engine {
         if let Some(sending) = self.book.get_mut(id) {
             sending.quantity_units = first;
         }
-        self.place(id);
+        self.place(id, OrderRole::Exit);
         let mut sent = vec![id];
         let terms = (
             closing_side(held),
@@ -295,7 +304,7 @@ impl Engine {
             order.good_until,
         );
         for units in rest {
-            sent.push(self.make_exit_order(at, exit.key, terms, *units)?);
+            sent.push(self.make_exit_order(at, exit.key, terms, *units, OrderRole::Exit)?);
         }
         self.set_sent(exit, sent);
         Ok(())
@@ -305,7 +314,7 @@ impl Engine {
         &mut self,
         at: SendAt,
         exit: &PositionExit,
-        reason: ExitReason,
+        by: EngineExit,
         held: f64,
     ) -> Result<(), KernelError> {
         // A DAY order needs a session left to fill in; at the session's last close there
@@ -314,18 +323,18 @@ impl Engine {
             Ok(good_until) => good_until,
             Err(_market_closed) => return self.drop_exit(at, exit, OrderEventKind::Canceled),
         };
-        let terms = (closing_side(held), Some(reason), good_until);
+        let terms = (closing_side(held), Some(by.exit_reason()), good_until);
         let mut sent = Vec::new();
         for units in self.pieces_of(exit.key, held.abs())? {
-            sent.push(self.make_exit_order(at, exit.key, terms, units)?);
+            sent.push(self.make_exit_order(at, exit.key, terms, units, by.into())?);
         }
         self.set_sent(exit, sent);
         Ok(())
     }
 
     /// Make and send one of the engine's exit orders of `key`: a reduce-only MARKET DAY
-    /// order of `units` with `(side, exit reason, good until)`, decided and stamped as
-    /// `at` says.
+    /// order of `units` with `(side, exit reason, good until)`, for `role`, decided and
+    /// stamped as `at` says.
     ///
     /// Errors: those of the order book.
     fn make_exit_order(
@@ -334,6 +343,7 @@ impl Engine {
         key: PositionKey,
         (side, exit_reason, good_until): (Side, Option<ExitReason>, TsNanos),
         units: f64,
+        role: OrderRole,
     ) -> Result<OrderId, KernelError> {
         let request = OrderRequest {
             product: key.product,
@@ -358,7 +368,35 @@ impl Engine {
             order: id,
             kind: OrderEventKind::Submitted,
         });
-        self.place(id);
+        self.place(id, role);
         Ok(id)
+    }
+}
+
+#[cfg(test)]
+mod freeze_split_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_exit_goes_out_in_pieces_of_at_most_the_freeze_quantity_in_whole_lots() {
+        let table: [(f64, Option<u32>, u32, &[f64]); 5] = [
+            (100.0, Some(40), 1, &[40.0, 40.0, 20.0]),
+            (40.0, Some(40), 1, &[40.0]),
+            (100.0, None, 1, &[100.0]),
+            // 1,000 units of 75-unit lots: 13 lots (975) at most in one order.
+            (1_050.0, Some(1_000), 75, &[975.0, 75.0]),
+            // A freeze quantity below one lot cannot split it.
+            (150.0, Some(50), 75, &[150.0]),
+        ];
+        for (units, freeze, lot, pieces) in table {
+            assert_eq!(
+                freeze_pieces(units, freeze, lot),
+                pieces,
+                "{units} of {freeze:?}"
+            );
+        }
     }
 }

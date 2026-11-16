@@ -17,7 +17,7 @@
 
 use oa_bt::engine::{
     run, BarColumns, BaseBar, CostConfig, Driver, Engine, Event, FillTiming, IntradayOverrides,
-    KernelError, OrderEventKind, Pause, QuantityMode, RunConfig, RunOutput, RunSetup,
+    KernelError, OrderEventKind, OrderRole, Pause, QuantityMode, RunConfig, RunOutput, RunSetup,
     StrategyInterval, Submission, VenueCommand,
 };
 use oa_bt::exec::matching::{limit_after_trigger, limit_point, trigger_point};
@@ -593,6 +593,37 @@ pub fn pause_at_close(kernel: &mut Engine, bars: &BarColumns, slice: usize) {
             _ => {}
         }
     }
+}
+
+/// `kernel` holding `units` of SBIN in MIS, bought by a MARKET order decided at the close
+/// of minute 0 (o1) and filled by the venue at 500.10 at the open of minute 1, then paused
+/// at the close of minute 2 with no command left to take.
+pub fn holding_on(mut kernel: Engine, units: f64) -> Engine {
+    let acts = vec![at_close(0, Act::Submit(market(Side::Buy, units)))];
+    wait_before(&mut kernel, &bars(&[], &[]), &mut Script::new(acts), 1);
+    kernel
+        .apply_fill(OrderId(1), units, 500.1, minute(1))
+        .expect("the buy fills");
+    pause_at_close(&mut kernel, &bars(&[], &[]), 2);
+    kernel.take_commands();
+    kernel
+}
+
+/// The (order, side, units, role) of the orders placed by `commands`.
+pub fn placed_roles(commands: &[VenueCommand]) -> Vec<(OrderId, Side, f64, OrderRole)> {
+    commands
+        .iter()
+        .filter_map(|command| match *command {
+            VenueCommand::Place {
+                order,
+                side,
+                units,
+                role,
+                ..
+            } => Some((order, side, units, role)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// One event as (slice open, step number, name).

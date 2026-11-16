@@ -1,8 +1,9 @@
 //! The venue's answers to the cancellations and modifications an external session sent
 //! it (`venue`), recorded in the slice in progress as its fills are (`venue_fills`).
 //!
-//! A refused cancellation leaves the order working; the session sends it again in a later
-//! slice, not in the one it was refused in (`withdraw_order`). A confirmed modification
+//! A refused cancellation leaves the order working. The engine's own withdrawals send it
+//! again in a later slice, not in the one it was refused in (`withdraw_order`); a `cancel`
+//! sends it again at once (`venue_session`). A confirmed modification
 //! gives the order the replacement's terms in full; one cut to the units the order has
 //! filled (the venue filled them while the modification waited) leaves nothing to fill,
 //! so the order completes. A modification below the units filled is refused: the venue
@@ -17,9 +18,9 @@ use super::venue_error::{Pending, VenueError};
 use super::venue_fills::result_step;
 
 impl Engine {
-    /// Record that the venue refused to cancel `order`: it works on, and the session sends
-    /// the cancellation again in a later slice when it still withdraws the order (module
-    /// docs).
+    /// Record that the venue refused to cancel `order`: it works on, and the engine sends
+    /// the cancellation again in a later slice when it still withdraws the order, or at
+    /// once on a `cancel` (module docs).
     ///
     /// Errors: those of `apply_fill` for the session, the engine's state and the order;
     /// `Venue(NotPending)` when no cancellation of it was sent.

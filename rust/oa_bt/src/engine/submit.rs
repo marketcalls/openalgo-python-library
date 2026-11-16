@@ -76,7 +76,7 @@ impl Engine {
         let units = self.venue_units(&request, units);
         let checked = match self.submission_checks(&request, units, &slice, decided_at, None)? {
             Ok(good_until) => self
-                .venue_checks(&request, units, &slice, None)?
+                .live_checks(&request, units, &slice, None)?
                 .map(|()| good_until),
             Err(code) => Err(code),
         };
@@ -131,13 +131,13 @@ impl Engine {
     /// Cancel a working order. An order that no longer works is left as it is and its
     /// state is returned. In a live session the cancellation is sent to the venue and
     /// the order works on until the venue confirms it (`venue`): its state then is the
-    /// one returned.
+    /// one returned. A live session takes it while it waits too, and sends it again for
+    /// an order whose cancellation the venue refused (`venue_session`).
     ///
-    /// Errors: `NotAtDecisionPoint` unless paused; `UnknownOrder`.
+    /// Errors: `NotAtDecisionPoint` unless paused (in a live session, unless paused or
+    /// waiting); `Venue(SessionOver)` after a live session; `UnknownOrder`.
     pub fn cancel(&mut self, id: OrderId) -> Result<OrderStatus, KernelError> {
-        let Some((slice, _, step)) = self.decision_point() else {
-            return Err(KernelError::NotAtDecisionPoint);
-        };
+        let at = self.control_point()?;
         let status = self
             .book
             .get(id)
@@ -146,7 +146,7 @@ impl Engine {
         if !status.is_working() {
             return Ok(status);
         }
-        self.withdraw_order(Self::stamp(&slice, step), id)
+        self.cancel_on_request(at.stamp(), id)
     }
 
     /// Refuse a request that cannot be read: unusable prices, contradictory leg rules.

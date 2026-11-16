@@ -1,7 +1,10 @@
 #![cfg(all(feature = "costs", feature = "time"))]
 //! What a live session refuses: venue results it cannot record (`venue_fills`), and the
 //! parts of a backtest its venue cannot carry yet (`engine::venue`), each with a typed
-//! error.
+//! error. A fill whose opening part the margin rule refuses is recorded not at all; no
+//! call can make one, since an order's opening part is checked at submission and an
+//! exit's fill never opens, so the crate specifies it
+//! (`engine/venue_cover/shrink_tests.rs`).
 
 mod venue_support;
 
@@ -253,61 +256,24 @@ fn an_order_whose_margin_is_above_the_free_cash_is_rejected_as_in_a_backtest() {
 #[test]
 fn an_entry_the_working_orders_leave_no_cash_for_is_rejected_as_in_a_backtest() {
     // Two buys of 12,000 near 500.00 in one bar, 60 lakh each, against a capital of 1
-    // crore: a backtest fills the first and rejects the second `margin` at their fill
-    // bar, a session rejects the second when it is submitted.
-    let buy = || market(Side::Buy, 12_000.0);
+    // crore, on MIS and on CNC (two positions, so nothing is in flight on the second's):
+    // a backtest fills the first and rejects the second `margin` at their fill bar, a
+    // session rejects the second when it is submitted.
+    let buy = |product| order(Side::Buy, 12_000.0, OrderType::Market, product);
     let acts = vec![
-        at_close(0, Act::Submit(buy())),
-        at_close(0, Act::Submit(buy())),
+        at_close(0, Act::Submit(buy(Product::Mis))),
+        at_close(0, Act::Submit(buy(Product::Cnc))),
     ];
     let simulated = venue_support::run_backtest(config(), &bars(&[], &[]), &mut Script::new(acts));
     let codes: Vec<Option<RejectCode>> = simulated.orders.iter().map(|o| o.reject_code).collect();
     assert_eq!(codes[..2], [None, Some(RejectCode::Margin)]);
     let mut kernel = session(config());
     pause_at_close(&mut kernel, &bars(&[], &[]), 0);
-    assert_eq!(kernel.submit(buy()), Ok(Submission::Submitted(OrderId(1))));
+    let first = kernel.submit(buy(Product::Mis));
+    assert_eq!(first, Ok(Submission::Submitted(OrderId(1))));
     assert_eq!(
-        kernel.submit(buy()),
+        kernel.submit(buy(Product::Cnc)),
         Ok(Submission::Rejected(OrderId(2), RejectCode::Margin))
-    );
-}
-
-#[test]
-fn a_fill_the_margin_rule_refuses_is_recorded_not_at_all() {
-    // Long 10; a sale of 10 that may reverse, with leverage 50 (o2), and a LIMIT sale of
-    // 5 (o3) are sent; o3 fills, so o2's 10 units would close 5 and open 5 short at a
-    // leverage the margin table refuses: nothing of the fill is recorded, not even its
-    // closing part.
-    let mut kernel = session(config());
-    let columns = bars(&[], &[]);
-    let mut script = Script::new(vec![at_close(0, Act::Submit(market(Side::Buy, 10.0)))]);
-    wait_before(&mut kernel, &columns, &mut script, 1);
-    assert!(kernel
-        .apply_fill(OrderId(1), 10.0, 500.0, minute(1))
-        .is_ok());
-    pause_at_close(&mut kernel, &columns, 1);
-    let leveraged_sale = OrderRequest {
-        reverse: true,
-        leverage: Some(50.0),
-        ..market(Side::Sell, 10.0)
-    };
-    assert!(kernel.submit(leveraged_sale).is_ok());
-    assert!(kernel
-        .submit(order(Side::Sell, 5.0, limit(500.0), Product::Mis))
-        .is_ok());
-    wait_before(&mut kernel, &columns, &mut script, 2);
-    assert!(kernel.apply_fill(OrderId(3), 5.0, 500.0, minute(2)).is_ok());
-    assert!(kernel
-        .apply_fill(OrderId(2), 10.0, 500.0, minute(2))
-        .is_err());
-    let held = kernel
-        .position(SBIN, Product::Mis)
-        .map(|p| p.quantity_units);
-    assert_eq!(held, Some(5.0));
-    let sale = kernel.order(OrderId(2)).expect("the sale");
-    assert_eq!(
-        (sale.status, sale.filled_units),
-        (OrderStatus::Submitted, 0.0)
     );
 }
 

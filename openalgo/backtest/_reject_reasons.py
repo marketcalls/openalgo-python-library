@@ -5,7 +5,9 @@ The codes are the kernel's (`RejectCode::code` in `rust/oa_bt/src/exec/checks.rs
 `rate_limit`, which no kernel check makes: a backtest enforces no order rate limit. `venue`
 and `exit_cover` are a live session's: the broker's own rejection of an order, and a
 reduce-only order that would leave more units resting to close a position than it has
-(`rust/oa_bt/src/engine/venue_cover.rs`). Each
+(`rust/oa_bt/src/engine/venue_cover.rs`). So are `live_lock` and `live_in_flight`, the
+entry gates a live session adds (`rust/oa_bt/src/engine/venue_gates.rs`), and the freeze
+quantity is a cap on the whole position there, not only on each order. Each
 entry is (what happened, what to do). The product rule covers three refusals that need
 different advice, so it has one entry per case, told apart by the order and its
 instrument (`_rejections.product_rule_case`). The entry window is the window working, not
@@ -38,9 +40,12 @@ REASONS = MappingProxyType(
             "round prices to self.instrument().tick_size",
         ),
         "freeze_qty": (
-            "the quantity was above the exchange's freeze quantity for one order",
-            "keep each order at or below self.instrument().freeze_qty; a bt.size sizer "
-            "caps at it on its own",
+            "the quantity was above the exchange's freeze quantity for one order; in a "
+            "live session also an entry or add that would have taken the position above "
+            "it, since one stop order and one exit order must cover the whole position",
+            "keep each order, and in a live session each position, at or below "
+            "self.instrument().freeze_qty; a bt.size sizer caps each order at it on its "
+            "own",
         ),
         "margin": (
             "the margin the order needed was more than the free cash",
@@ -95,6 +100,25 @@ REASONS = MappingProxyType(
             "reduce-only order would have gone beyond them",
             "hold a target with the strategy's own logic, or, once it is built, with "
             "target=, which the engine holds on ticks",
+        ),
+        "live_lock": (
+            "a live session had locked entries (a change of OpenAlgo's mode, a feed with "
+            "no ticks, the start or the stop of the session, a failed exit, a "
+            "reconciliation mismatch or the account's loss limit), so an entry or add was "
+            "not sent; exits still were",
+            "the session's log and alerts name the lock; entries resume when it lifts, and "
+            "a lock that stands for the day needs a new session",
+        ),
+        "live_in_flight": (
+            "a live session sends no entry or add while another order of the symbol is "
+            "working (an entry whose fill is not reported yet, a resting order), so that "
+            "a fill reported late cannot double the position; a sale or buy against the "
+            "position beyond what the orders already working to close it leave counts as "
+            "an entry, since their fills could leave the position flat and it would then "
+            "open the other side",
+            "enter, add or close once the earlier order has filled or been cancelled: "
+            "check self.orders and self.position in on_bar, and close a position with "
+            "self.exit(), which cancels the orders on its closing side first",
         ),
     }
 )

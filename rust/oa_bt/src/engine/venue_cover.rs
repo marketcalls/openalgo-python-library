@@ -1,24 +1,30 @@
-//! Reduce-only orders never reverse a position in an external session (`venue`).
+//! Orders sent to close never reverse a position in an external session (`venue`).
 //!
 //! A backtest fills a reduce-only order for at most the position it finds at the fill bar
-//! (`fill_bar`); a broker fills the units it holds. So a session keeps the reduce-only
-//! orders resting on a position's closing side within the position:
+//! (`fill_bar`); a broker fills the units it holds. So a session keeps the orders working
+//! on a position's closing side within the position:
 //!
-//! - **At submission and modification.** A reduce-only order that would take the units of
-//!   the working reduce-only orders on the closing side (what each still has to fill, or
-//!   what a modification waiting for the venue's answer would give it, the larger) above
-//!   the open position is rejected `exit_cover`, and so is one placed while an exit of the
-//!   position waits for its cancels (that exit would cancel it). One stop for the whole
-//!   position rests; a stop and a target for it both do not. An exit (`exit()`,
-//!   `reduce()`) is sized to fit when it is sent (`venue_owner`) and is checked here only
-//!   when it is modified.
+//! - **At submission and modification.** The closing side of a position has room for its
+//!   units less what every working order on that side may still fill (what each has left,
+//!   or what a modification waiting for the venue's answer would give it, the larger),
+//!   reduce-only or not, and for nothing while an exit of the position waits for its
+//!   cancels (that exit closes the whole position, and cancels what is placed meanwhile):
+//!   `closing_room`. A reduce-only order beyond the room is rejected `exit_cover`. One
+//!   stop for the whole position rests; a stop and a target for it both do not, and
+//!   neither do a stop and a plain sale of the long. An exit (`exit()`, `reduce()`) is
+//!   sized to fit when it is sent (`venue_owner`) and is checked here only when it is
+//!   modified. An order against the position that is not reduce-only counts as an exit
+//!   only within the room (`venue_roles`).
 //! - **When the position shrinks** (after every venue result, and at each open the session
-//!   reaches). The reduce-only orders of a flat position, and those on a side that no
-//!   longer closes it, are cancelled. On the closing side, in the order they were placed,
-//!   each keeps what still fits in the position: one that fits only in part is cut down to
-//!   that with a modification (one at a time, as `modify`: a waiting one is answered
-//!   first), and one that has partly filled, or has nothing left to fit, is cancelled. An
-//!   order whose cancellation waits counts at what it may still fill.
+//!   reaches). The orders sent only to close it (`Engine::sent_to_close`: reduce-only, or a
+//!   plain order whose role is an exit) are fitted to it. The session's own fills keep them
+//!   within it, by the room above; a position restored, adopted or reduced at the broker
+//!   may not. Those of a flat position, and those on a side that no longer closes it, are
+//!   cancelled. On the closing side, in the order they were placed, each keeps what still
+//!   fits in the position: one that fits only in part is cut down to that with a
+//!   modification (one at a time, as `modify`: a waiting one is answered first), and one
+//!   that has partly filled, or has nothing left to fit, is cancelled. An order whose
+//!   cancellation waits counts at what it may still fill.
 //! - **A fill beyond the position**, from a race at the broker, is recorded up to the
 //!   position and the rest refused (`venue_fills`, `VenueError::WouldReverse`).
 
@@ -53,6 +59,29 @@ impl Engine {
         order.quantity_units.max(pending) - order.filled_units
     }
 
+    /// The units the closing side of `key`'s position has room for (module docs): the
+    /// position less what every working order on that side but `except` may still fill;
+    /// 0 for a flat position and while an exit of it waits for its cancels. `except` is
+    /// the order being judged, once it is in the book (a modification's own order).
+    pub(super) fn closing_room(&self, key: PositionKey, except: Option<OrderId>) -> f64 {
+        let held = self.held_units(key);
+        if held == 0.0 || self.has_waiting_exit(key) {
+            return 0.0;
+        }
+        let side = closing_side(held);
+        let working: f64 = self
+            .book
+            .working()
+            .filter(|order| {
+                key_of(&order.request) == key
+                    && order.request.side == side
+                    && Some(order.id) != except
+            })
+            .map(|order| self.units_to_fill(order))
+            .sum();
+        (held.abs() - working).max(0.0)
+    }
+
     /// In an external session, the cover rule of a reduce-only order of `units` (above 0)
     /// at submission, or as the replacement of `replacing` (module docs); a backtest and
     /// an exit at submission pass.
@@ -68,28 +97,13 @@ impl Engine {
         if !self.is_external() || !request.reduce_only || sized_when_sent {
             return Ok(());
         }
-        let key = key_of(request);
-        if self.has_waiting_exit(key) {
-            return Err(RejectCode::ExitCover);
-        }
-        let resting: f64 = self
-            .book
-            .working()
-            .filter(|order| {
-                key_of(&order.request) == key
-                    && order.request.reduce_only
-                    && order.request.side == request.side
-                    && Some(order.id) != replacing
-            })
-            .map(|order| self.units_to_fill(order))
-            .sum();
-        if resting + units > self.held_units(key).abs() {
+        if units > self.closing_room(key_of(request), replacing) {
             return Err(RejectCode::ExitCover);
         }
         Ok(())
     }
 
-    /// Fit the reduce-only orders of every position to what is open (module docs),
+    /// Fit the orders sent only to close every position to what is open (module docs),
     /// decided and stamped as `at` says. A backtest has nothing to fit.
     ///
     /// Errors: those of `withdraw_order`.
@@ -98,7 +112,7 @@ impl Engine {
             return Ok(());
         }
         let mut keys: Vec<PositionKey> = Vec::new();
-        for order in self.book.working().filter(|o| o.request.reduce_only) {
+        for order in self.book.working().filter(|o| self.sent_to_close(o)) {
             let key = key_of(&order.request);
             if !keys.contains(&key) {
                 keys.push(key);
@@ -118,7 +132,7 @@ impl Engine {
             .working()
             .filter(|order| {
                 key_of(&order.request) == key
-                    && order.request.reduce_only
+                    && self.sent_to_close(order)
                     && !self.is_unsent(order.id)
             })
             .cloned()
@@ -139,8 +153,8 @@ impl Engine {
         Ok(())
     }
 
-    /// Cut a working reduce-only order down to `fits` units still to fill, or cancel it
-    /// (module docs).
+    /// Cut a working order sent only to close down to `fits` units still to fill, or cancel
+    /// it (module docs).
     fn cut_down(&mut self, at: SendAt, order: &Order, fits: f64) -> Result<(), KernelError> {
         let cancel =
             fits <= 0.0 || order.filled_units > 0.0 || self.venue.cancelling.contains(&order.id);
@@ -165,3 +179,6 @@ impl Engine {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod shrink_tests;

@@ -13,12 +13,13 @@
 //! open). The parts:
 //!
 //! - **Commands out** (`venue_orders`). An order that passes the checks is sent at once as
-//!   `VenueCommand::Place`, except an exit (below). `cancel`, and the engine's own
-//!   withdrawals, send `Cancel`, at most once in a slice; the order works on until the
-//!   venue's result, since a fill may come first. `modify` sends `Modify` and the order
-//!   keeps its old terms until the venue confirms the new ones (`apply_modify`) or refuses
-//!   them. The adapter takes the commands with `Engine::take_commands`, in the order they
-//!   were made.
+//!   `VenueCommand::Place`, except an exit (below). The engine's own withdrawals send
+//!   `Cancel` at most once in a slice; `cancel` sends it at once, again after the venue
+//!   refused it, but never twice while one waits for the venue's answer. The order works
+//!   on until the venue's result, since a fill may come first. `modify` sends `Modify`
+//!   and the order keeps its old terms until the venue confirms the new ones
+//!   (`apply_modify`) or refuses them. The adapter takes the commands with
+//!   `Engine::take_commands`, in the order they were made.
 //! - **Exits** (`venue_owner`). An exit is the strategy's `exit()` or `reduce()` (a
 //!   reduce-only MARKET order) or one of the engine's exits (`venue_exits`: the daily loss
 //!   limit and drawdown halt, the square-off, the time exit). An exit first cancels every
@@ -26,10 +27,12 @@
 //!   all ended, in orders of at most the freeze quantity. The strategy's exits of a
 //!   position add up as in a backtest, each sized on what the earlier ones leave; an
 //!   engine exit takes over from them and closes the whole position.
-//! - **Reduce-only orders never reverse** (`venue_cover`). The reduce-only orders resting
-//!   on a position's closing side may not hold more units than it has (`exit_cover`), are
-//!   cut down or cancelled when it shrinks, and a fill of one beyond the position is
-//!   recorded only up to it (`VenueError::WouldReverse`).
+//! - **Reduce-only orders never reverse** (`venue_cover`). The orders working on a
+//!   position's closing side may not hold more units than it has: a reduce-only order
+//!   beyond that is rejected (`exit_cover`), and any other order against the position
+//!   beyond it is an entry (`venue_roles`). Reduce-only orders are cut down or cancelled
+//!   when the position shrinks, and a fill of an order sent to close beyond the position
+//!   is recorded only up to it (`VenueError::WouldReverse`).
 //! - **Results in** (`venue_fills`): fills, rejections, cancellations; and the venue's
 //!   answers to the cancellations and modifications it was sent (`venue_answers`).
 //! - **The clock** (`venue_clock`). What a backtest does at the open of a slice (the
@@ -43,6 +46,13 @@
 //! - **What the fill path cannot record** is refused at submission (`venue_checks`), and a
 //!   fill is checked whole before anything of it is recorded. The free cash a submission
 //!   is checked against counts what the session's working entries would block.
+//! - **Roles** (`venue_roles`). Every order sent carries what it is for: an entry, an add,
+//!   the strategy's exit, the engine's risk exit with its reason, the square-off.
+//! - **The session's controls** (`venue_session`): an exit the live layer asks for, a
+//!   cancellation while waiting, the entry locks, the cap on the sizing equity, the daily
+//!   loss measure, and the stop of the session where it stands. **The entry gates** a
+//!   session adds at submission (`venue_gates`): the entry locks, nothing in flight on the
+//!   instrument, a position at most the freeze quantity.
 //! - **Not built yet** (`KernelError::NotBuilt`): leg rules (`stop=`, `target=`, trailing
 //!   and breakeven, held by the broker and on ticks in the next unit, decision D31), GTT
 //!   orders, futures series and rebalancing.
@@ -56,13 +66,14 @@ use crate::charges::OrderCharges;
 use crate::exec::{ExecError, InstrumentId, Order, OrderId, OrderRequest, OrderType, Validity};
 use crate::model::{Product, Side, TsNanos};
 use crate::portfolio::PositionKey;
-use crate::rms::ExitReason;
 
 use super::clock::SliceInfo;
 use super::config::{QuantityMode, RunConfig};
 use super::error::KernelError;
 use super::event::{EventStamp, Step};
 use super::kernel::Engine;
+use super::venue_roles::{EngineExit, OrderRole};
+use super::venue_session::SessionControls;
 
 /// Who fills a run's orders.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -101,6 +112,8 @@ pub enum VenueCommand {
         units: f64,
         /// MARKET, LIMIT, SL or SL-M, with its limit and trigger prices.
         order_type: OrderType,
+        /// What the order is for (`venue_roles`).
+        role: OrderRole,
     },
     /// Replace a working order's units, type, limit and trigger (a full replacement).
     Modify {
@@ -123,8 +136,8 @@ pub enum VenueCommand {
 pub(super) enum ExitBy {
     /// The strategy's exit order (`exit()`, `reduce()`).
     Strategy(OrderId),
-    /// One of the engine's exits, with the backtest's reason.
-    Engine(ExitReason),
+    /// One of the engine's exits: the square-off or a risk exit (`venue_roles`).
+    Engine(EngineExit),
 }
 
 /// One exit of a position, the strategy's or the engine's (`venue_owner`).
@@ -173,7 +186,8 @@ pub(super) struct VenueDesk {
     /// Working orders whose cancellation has been sent and not yet answered.
     pub(super) cancelling: Vec<OrderId>,
     /// The slice index in which each working order's last cancellation was sent: one the
-    /// venue refused is sent again in a later slice, not in that one (`withdraw_order`).
+    /// venue refused is sent again by the engine's own withdrawals in a later slice, not
+    /// in that one (`withdraw_order`), and by `cancel` at once (`cancel_on_request`).
     pub(super) cancels_sent: Vec<(OrderId, u32)>,
     /// Working orders whose modification has been sent and not yet answered.
     pub(super) modifying: Vec<(OrderId, Replacement)>,
@@ -182,6 +196,10 @@ pub(super) struct VenueDesk {
     pub(super) exits: Vec<PositionExit>,
     /// What each order's fills have been charged so far.
     pub(super) charged: Vec<(ChargePart, OrderCharges)>,
+    /// The role of every order the session accepted, in id order (`venue_roles`).
+    pub(super) roles: Vec<(OrderId, OrderRole)>,
+    /// The session's entry locks and sizing cap (`venue_session`).
+    pub(super) controls: SessionControls,
 }
 
 impl VenueDesk {

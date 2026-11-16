@@ -75,10 +75,10 @@ fn the_session_close_does_not_wait_for_an_order_a_modification_completed() {
     assert!(matches!(kernel.advance(), Ok(Pause::Finished { .. })));
 }
 
-/// Holding 100 in MIS with a take-profit LIMIT sale of 100 at 600.00 (o2) and two
-/// resting CNC LIMIT buys of 10 at 400.00 (o3, o4, never reached), `exit()` (o5) decided
-/// at the close of minute 3 sends a cancellation of o2; the venue refuses it while the
-/// session waits before slice 4.
+/// Holding 100 in MIS with a take-profit LIMIT sale of 100 at 600.00 (o2) and a
+/// marketable CNC LIMIT buy of 10 at 510.00 (o3), `exit()` (o4) decided at the close of
+/// minute 3 sends a cancellation of o2; the venue refuses it while the session waits
+/// before slice 4.
 fn refused_behind_a_take_profit() -> Engine {
     let mut kernel = session(config());
     let mut script = Script::new(vec![at_close(0, Act::Submit(market(Side::Buy, 100.0)))]);
@@ -88,11 +88,9 @@ fn refused_behind_a_take_profit() -> Engine {
         .is_ok());
     pause_at_close(&mut kernel, &bars(&[], &[]), 3);
     assert!(kernel.submit(exit(Side::Sell, 100.0, limit(600.0))).is_ok());
-    let resting = order(Side::Buy, 10.0, limit(400.0), Product::Cnc);
-    for _ in 0..2 {
-        let placed = kernel.submit(resting.clone());
-        assert!(matches!(placed, Ok(Submission::Submitted(_))));
-    }
+    let resting = order(Side::Buy, 10.0, limit(510.0), Product::Cnc);
+    let placed = kernel.submit(resting);
+    assert!(matches!(placed, Ok(Submission::Submitted(_))));
     let whole_exit = OrderRequest {
         quantity: QuantitySpec::PositionFraction(1.0),
         ..exit(Side::Sell, 1.0, OrderType::Market)
@@ -117,17 +115,18 @@ fn cancels_of(kernel: &mut Engine, id: u64) -> usize {
 #[test]
 fn a_refused_cancellation_is_sent_at_most_once_in_the_slice_it_was_refused_in() {
     // Sent in slice 3 (the decision at its close), refused in slice 4: the next result of
-    // slice 4 sends it again; refused again, no later result of the slice does.
+    // slice 4 (5 units of the CNC buy filled) sends it again; refused again, no later
+    // result of the slice (the rest of the buy cancelled) does.
     let mut kernel = refused_behind_a_take_profit();
     assert_eq!(
         cancels_of(&mut kernel, 2),
         0,
         "a refusal sends nothing itself"
     );
-    assert!(kernel.apply_cancel(OrderId(3)).is_ok());
+    assert!(kernel.apply_fill(OrderId(3), 5.0, 500.4, minute(4)).is_ok());
     assert_eq!(cancels_of(&mut kernel, 2), 1);
     assert!(kernel.apply_cancel_refused(OrderId(2)).is_ok());
-    assert!(kernel.apply_cancel(OrderId(4)).is_ok());
+    assert!(kernel.apply_cancel(OrderId(3)).is_ok());
     assert_eq!(cancels_of(&mut kernel, 2), 0);
 }
 

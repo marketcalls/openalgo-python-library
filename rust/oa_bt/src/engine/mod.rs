@@ -37,18 +37,22 @@
 //! | `Engine::new(RunSetup)` | once | validate and prepare; the engine stands before slice 0 |
 //! | `Engine::advance()` | until `Pause::Finished` | run steps to the next decision point |
 //! | `Engine::submit(OrderRequest)` | while paused | submission checks, `Submitted` or `Rejected` (in a live session sent, or an exit that cancels first, `venue_owner`) |
-//! | `Engine::cancel(OrderId)` | while paused | cancel a working order (in a live session sent, the order works until the venue's result) |
-//! | `Engine::modify(OrderId, OrderRequest)` | while paused | a full replacement of a working order (`modify`; in a live session sent, the old terms stand until the venue confirms) |
+//! | `Engine::cancel(OrderId)` | while paused (a live session: or waiting) | cancel a working order (in a live session sent, the order works until the venue's result; sent again after the venue refused it, `venue_session`) |
+//! | `Engine::modify(OrderId, OrderRequest)` | while paused | a full replacement of a working order (`modify`; in a live session sent, the old terms stand until the venue confirms, and a replacement that would change the order's role is refused) |
 //! | `Engine::submit_target(TargetRequest)` | while paused | the order for the difference to a target position (`target`) |
 //! | `Engine::submit_rebalance(TargetRequest)` | while paused | the same order as part of a rebalance (`rebalance`) |
 //! | `position`, `leg`, `order`, `working_orders`, `gtts`, `has_pending_entry`, `account`, `last_close`, `decision_instant`, `trading_state`, `strategy_bars`, `timer_counts` | any time | queries |
 //! | `Engine::add_timer(TimerSpec)` | before the first `advance` | register `self.at` or `self.every` |
 //! | `Engine::new_session(RunSetup)` | once | live clock (`live_clock`): a session built before its bars, ending at the end of its range, holding; its venue is external (`venue`) |
 //! | `Engine::add_bar(InstrumentId, BaseBar)`, `Engine::release(slices)`, `Engine::hold()` | any time | live clock: hand over a closed slice's bars, then release it; `advance` returns `Pause::Waiting` before the first slice not released (a backtest never holds) |
-//! | `Engine::take_commands()` | any time | a live session's orders for its venue (`venue`): `VenueCommand::Place`, `Modify`, `Cancel`, in the order they were made (none in a backtest); `venue()` says which venue fills |
+//! | `Engine::take_commands()` | any time | a live session's orders for its venue (`venue`): `VenueCommand::Place` (with the order's role, `venue_roles`), `Modify`, `Cancel`, in the order they were made (none in a backtest); `venue()` says which venue fills; `order_role(OrderId)` reports an accepted order's role |
 //! | `Engine::apply_fill(OrderId, units, price, at)`, `Engine::apply_reject(OrderId, RejectCode)`, `Engine::apply_cancel(OrderId)` | while waiting, at a timer pause, or while a session close waits | a live session's results from its venue (`venue_fills`): the units newly filled at the venue's price through `execute_fill` (all or nothing, costed once on the order's total; units beyond the position of an order that may not reverse it are refused, `would_reverse`), a rejection, a cancellation; each returns the stamp it was recorded with. Every fill of an order comes before its terminal result |
-//! | `Engine::apply_cancel_refused(OrderId)`, `Engine::apply_modify(OrderId)`, `Engine::apply_modify_refused(OrderId)` | as `apply_fill` | the venue's answers (`venue_answers`) to a cancellation (the order works on, and is cancelled again in a later slice) and to a modification (confirmed: the new terms, complete when cut to what has filled; refused: the old ones stand) |
-//! | `Engine::finish()` | after `Pause::Finished` | the `RunOutput` |
+//! | `Engine::apply_cancel_refused(OrderId)`, `Engine::apply_modify(OrderId)`, `Engine::apply_modify_refused(OrderId)` | as `apply_fill` | the venue's answers (`venue_answers`) to a cancellation (the order works on; the engine's own withdrawals send it again in a later slice, `cancel` at once) and to a modification (confirmed: the new terms, complete when cut to what has filled; refused: the old ones stand) |
+//! | `Engine::request_exit(InstrumentId, Product, EngineExit)` | while paused or waiting | a live session's exit of a whole position for its own reason (`venue_session`), through the position's exit owner (`venue_owner`); returns what it did (`ExitRequest`: sent, waits for cancels, already exiting, flat, market closed) |
+//! | `Engine::lock_entries(reason)`, `Engine::unlock_entries(reason)`, `entry_locks` | any time | a live session's entry locks, reasons in a set (names with no spaces around them): while any is set, entries and adds are rejected `live_lock` (`venue_gates`) |
+//! | `Engine::cap_sizing_equity(rupees)`, `Engine::daily_loss_measure()` | any time | a live session's cap on the engine default's sizing equity; the strategy's daily loss measure (`venue_session`) |
+//! | `Engine::stop_session()` | any time | a live session ends where it stands: nothing is sent, working orders and open positions are reported as they are (a strategy exit never sent ends `Canceled`), the undelivered events are returned (`venue_session`) |
+//! | `Engine::finish()` | after `Pause::Finished` or `stop_session` | the `RunOutput` |
 //! | `pause::run(engine, driver)` | Rust drivers | the loop above, for a `Driver` |
 //!
 //! A pause is a decision point: `Pause::BarClose` in step 7 of a slice where a strategy
@@ -113,15 +117,18 @@
 //! | `kernel` | `Engine`, `advance`, `finish` |
 //! | `live_clock` | A live session: built before its bars, given each bar as its slice closes, holding before the slices not released |
 //! | `venue` | Who fills the orders (`Simulated`, `External`); the venue's types and its desk of what was asked and not answered; what a live session refuses as not built |
-//! | `venue_orders` | A live session's commands out: the units an order is sent with, the order sent or made an exit, a modification held until answered, a cancellation sent at most once in a slice |
+//! | `venue_orders` | A live session's commands out: the units an order is sent with, the order sent or made an exit, a modification held until answered, a cancellation (the engine's own sent at most once in a slice) |
 //! | `venue_owner` | The exits of a position: cancel the orders on its closing side, then exit; the strategy's exits add up, the engine's takes over; in orders of at most the freeze quantity |
 //! | `venue_exits` | A live session's own exits: made where a backtest makes them, sent again while they apply; the entries withdrawn when the entry window closes |
-//! | `venue_cover` | Reduce-only orders never reverse a position: the cover rule at submission (`exit_cover`), cut down or cancelled when the position shrinks |
+//! | `venue_cover` | Reduce-only orders never reverse a position: the room on its closing side, the cover rule at submission (`exit_cover`), cut down or cancelled when the position shrinks |
 //! | `venue_checks` | What the fill path could not record, refused at submission with the backtest's codes and errors; the free cash net of the working orders |
-//! | `venue_fills` | A live session's results from its venue: fills (none beyond the position of an order that may not reverse it), rejections, cancellations, and the slice they are recorded in |
+//! | `venue_fills` | A live session's results from its venue: fills (none beyond the position of an order that may not reverse it, nor of one sent to close), rejections, cancellations, and the slice they are recorded in |
 //! | `venue_answers` | The venue's answers to the cancellations and modifications it was sent |
 //! | `venue_clock` | The end of a slice: a session close that waits for the venue to end its orders, the next open reached at the close of the slice before |
 //! | `venue_error` | `VenueError`: a venue result that cannot be recorded, with its kind |
+//! | `venue_roles` | What each order of a live session is for: `OrderRole`, `EngineExit`, `RiskExitReason`; an order against the position beyond its closing side's room is an entry, and a modification keeps the role |
+//! | `venue_session` | A live session's controls: an exit it asks for and what came of it (`ExitRequest`), the entry locks, the sizing cap, the daily loss measure, the stop where it stands |
+//! | `venue_gates` | The entry gates a live session adds at submission: the entry locks, nothing in flight, a position at most the freeze quantity |
 //! | `queries` | `AccountView` and the queries of positions, legs, orders and the account |
 //! | `steps` | Steps 1 to 8 |
 //! | `fills` | Step 2 fills of queued orders, `execute_fill` |
@@ -235,8 +242,13 @@ mod venue_cover;
 mod venue_error;
 mod venue_exits;
 mod venue_fills;
+mod venue_gates;
 mod venue_orders;
 mod venue_owner;
+mod venue_roles;
+mod venue_session;
+#[cfg(test)]
+mod venue_test_kit;
 
 pub use clock::{SliceInfo, Timeline};
 pub use config::{
@@ -263,3 +275,5 @@ pub use target::TargetRequest;
 pub use timers::{TimerCount, TimerSpec};
 pub use venue::{Venue, VenueCommand};
 pub use venue_error::{Pending, VenueError, UNKNOWN_ORDER_KIND, VENUE_REFUSAL_KINDS};
+pub use venue_roles::{EngineExit, OrderRole, RiskExitReason};
+pub use venue_session::ExitRequest;

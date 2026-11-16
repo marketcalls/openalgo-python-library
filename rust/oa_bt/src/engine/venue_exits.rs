@@ -35,13 +35,14 @@
 use crate::exec::{InstrumentId, Order, OrderId};
 use crate::model::{Product, Side};
 use crate::portfolio::PositionKey;
-use crate::rms::{ExitReason, TradingState, TradingStateCause};
+use crate::rms::{TradingState, TradingStateCause};
 
 use super::clock::SliceInfo;
 use super::error::KernelError;
 use super::event::Step;
 use super::kernel::Engine;
 use super::venue::SendAt;
+use super::venue_roles::{EngineExit, RiskExitReason};
 
 impl Engine {
     /// What a backtest does at the open of `next`, done as the external session reaches
@@ -73,8 +74,8 @@ impl Engine {
                 if self.has_engine_exit(key) {
                     continue;
                 }
-                if let Some(reason) = self.exit_due(next, key)? {
-                    self.request_engine_exit(at, key, reason)?;
+                if let Some(exit) = self.exit_due(next, key)? {
+                    self.request_engine_exit(at, key, exit)?;
                 }
             }
         }
@@ -86,9 +87,9 @@ impl Engine {
         &mut self,
         next: &SliceInfo,
         key: PositionKey,
-    ) -> Result<Option<ExitReason>, KernelError> {
-        if let Some(reason) = self.risk_lock_exit() {
-            return Ok(Some(reason));
+    ) -> Result<Option<EngineExit>, KernelError> {
+        if let Some(exit) = self.risk_lock_exit() {
+            return Ok(Some(exit));
         }
         if let Some(max_hold) = self.config.risk.max_hold_bars {
             let entered = self
@@ -99,27 +100,28 @@ impl Engine {
                 .map(|(_, slice)| slice);
             let due = |slice: usize| next.index.saturating_sub(slice) >= max_hold as usize;
             if entered.is_some_and(due) {
-                return Ok(Some(ExitReason::TimeExit));
+                return Ok(Some(EngineExit::Risk(RiskExitReason::TimeExit)));
             }
         }
         if key.product == Product::Mis && next.open >= self.session_times(next.day)?.square_off {
-            return Ok(Some(ExitReason::Scheduler));
+            return Ok(Some(EngineExit::SquareOff));
         }
         Ok(None)
     }
 
     /// The exit of a risk lock in force: the daily loss limit while REDUCING after its
     /// breach, the drawdown halt while HALTED by it.
-    fn risk_lock_exit(&self) -> Option<ExitReason> {
-        match (self.risk.lock.state(), self.risk.lock.cause()) {
+    fn risk_lock_exit(&self) -> Option<EngineExit> {
+        let reason = match (self.risk.lock.state(), self.risk.lock.cause()) {
             (TradingState::Reducing, Some(TradingStateCause::DailyLossBreach)) => {
-                Some(ExitReason::DailyLossLimit)
+                RiskExitReason::DailyLoss
             }
             (TradingState::Halted, Some(TradingStateCause::DrawdownHalt)) => {
-                Some(ExitReason::DrawdownHalt)
+                RiskExitReason::Drawdown
             }
-            _ => None,
-        }
+            _ => return None,
+        };
+        Some(EngineExit::Risk(reason))
     }
 
     /// Withdraw the MIS orders that would open or add and still work at an open at or

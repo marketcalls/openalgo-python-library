@@ -8,7 +8,8 @@
 mod venue_support;
 
 use oa_bt::engine::{
-    run, Engine, KernelError, RunConfig, RunOutput, Step, Venue, VenueCommand, VenueError,
+    run, Engine, KernelError, OrderRole, RunConfig, RunOutput, Step, Venue, VenueCommand,
+    VenueError,
 };
 use oa_bt::exec::{
     FillAt, OrderId, OrderRequest, OrderStatus, OrderType, QuantitySpec, RejectCode,
@@ -58,6 +59,7 @@ fn an_order_that_passes_the_checks_is_sent_at_once() {
         side: Side::Buy,
         units: 100.0,
         order_type: stop,
+        role: OrderRole::Entry,
     };
     assert_eq!(kernel.take_commands(), vec![place]);
 }
@@ -313,17 +315,14 @@ fn a_fill_takes_the_venues_price_with_no_slippage() {
 
 #[test]
 fn a_fill_at_the_slices_open_is_at_the_open_and_one_inside_it_at_a_level() {
-    let acts = vec![
-        submit_at(0, market(Side::Buy, 10.0)),
-        submit_at(0, market(Side::Buy, 10.0)),
-    ];
+    let acts = vec![submit_at(0, market(Side::Buy, 20.0))];
     let mut script = Script::new(acts);
     let mut kernel = waiting_before(1, &mut script);
     assert!(kernel
         .apply_fill(OrderId(1), 10.0, 500.1, minute(1))
         .is_ok());
     assert!(kernel
-        .apply_fill(OrderId(2), 10.0, 500.2, minute(1) + 30_000_000_000)
+        .apply_fill(OrderId(1), 10.0, 500.2, minute(1) + 30_000_000_000)
         .is_ok());
     let output = finished(kernel, &mut script);
     let at: Vec<FillAt> = output.fills.iter().map(|record| record.fill.at).collect();

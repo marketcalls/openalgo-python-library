@@ -32,7 +32,8 @@ impl Pending {
 /// Why a result from the venue was refused.
 #[derive(Clone, Debug, PartialEq)]
 pub enum VenueError {
-    /// The run fills its own orders: a backtest (`Engine::new`) takes no venue results.
+    /// The run fills its own orders: a backtest (`Engine::new`) takes no venue results
+    /// and no session controls (`venue_session`).
     NotExternal,
     /// The order has ended (filled, cancelled, expired or rejected).
     OrderEnded {
@@ -135,8 +136,9 @@ impl fmt::Display for VenueError {
         match self {
             VenueError::NotExternal => write!(
                 f,
-                "this run fills its own orders (a backtest): fills, rejections and \
-                 cancellations from a venue go to a live session (Engine::new_session)"
+                "this run fills its own orders (a backtest): a venue's fills, rejections \
+                 and cancellations, and a session's controls, go to a live session \
+                 (Engine::new_session)"
             ),
             VenueError::OrderEnded { order, status } => write!(
                 f,

@@ -13,6 +13,9 @@
 //! position are not recorded, as a backtest fills or allows none of them at the fill bar
 //! (`fill_bar`): the order's units shrink by them and the fill is refused for them
 //! (`VenueError::WouldReverse`), after the units that closed the position are recorded.
+//! So is every unit beyond the position of an order whose role only closes (`venue_roles`:
+//! an exit, a stop, the engine's exits), even when the position is flat already: such an
+//! order was sent to close, and never opens one.
 //! The first fill of a stop order (SL, SL-M) writes `Triggered` before it, since the venue
 //! filled it only once its trigger was reached. A fill is checked whole before anything of
 //! it is recorded (the margin rule and the charges of each of its parts): what is recorded
@@ -35,8 +38,7 @@
 //! terminal result (`apply_cancel`, `apply_reject`); after it the order takes no more.
 
 use crate::exec::{
-    FillAt, FillFlags, FillPricing, Order, OrderAction, OrderId, OrderRequest, OrderStatus,
-    OrderType, RejectCode,
+    FillAt, FillFlags, FillPricing, Order, OrderAction, OrderId, OrderStatus, OrderType, RejectCode,
 };
 use crate::model::{Side, TsNanos};
 use crate::portfolio::PositionKey;
@@ -74,12 +76,12 @@ fn check_fill(units: f64, price_rupees: f64) -> Result<(), VenueError> {
     Ok(())
 }
 
-/// The units of a fill of `request` with `(closing, opening)` parts that may not be
-/// recorded: the opening part of a reduce-only order, and of any order that reduces the
-/// position without `reverse=True` (module docs).
-fn beyond_position(request: &OrderRequest, (closing, opening): (f64, f64)) -> f64 {
-    let may_reverse = request.reverse && !request.reduce_only;
-    let goes_through_zero = request.reduce_only || closing > 0.0;
+/// The units of a fill with `(closing, opening)` parts that may not be recorded: the
+/// opening part of an order sent only to close (`Engine::sent_to_close`), and of any other
+/// order that reduces the position without `reverse` (module docs).
+fn beyond_position(reverse: bool, sent_to_close: bool, (closing, opening): (f64, f64)) -> f64 {
+    let may_reverse = reverse && !sent_to_close;
+    let goes_through_zero = sent_to_close || closing > 0.0;
     if goes_through_zero && !may_reverse {
         opening
     } else {
@@ -123,7 +125,8 @@ impl Engine {
             .into());
         }
         let (closing, opening) = self.fill_parts(&placed, units);
-        let excess_units = beyond_position(&placed.request, (closing, opening));
+        let closes = self.sent_to_close(&placed);
+        let excess_units = beyond_position(placed.request.reverse, closes, (closing, opening));
         let parts = (closing, opening - excess_units);
         self.check_recordable(&placed, parts, price_rupees, &slice)?;
         let stamp = Self::stamp(&slice, result_step(&placed));
@@ -221,17 +224,24 @@ impl Engine {
     ///
     /// Errors: those of `fit_exit_cover` and of `progress_exits`.
     pub(super) fn after_result(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
+        let at = self.waiting_at(slice);
+        self.fit_exit_cover(at)?;
+        self.progress_exits(at)
+    }
+
+    /// Where the engine decides while an external session waits: in `slice`, the slice in
+    /// progress (`result_slice`), at its open, or at its close when it is the session's
+    /// closing slice waiting for its orders to end (`venue_clock`); stamped in step 2.
+    pub(super) fn waiting_at(&self, slice: &SliceInfo) -> SendAt {
         let decided_at = match self.phase {
             Phase::Closing(_) => slice.close,
             _ => slice.open,
         };
-        let at = SendAt {
+        SendAt {
             slice: *slice,
             step: Step::OpenFills,
             decided_at,
-        };
-        self.fit_exit_cover(at)?;
-        self.progress_exits(at)
+        }
     }
 
     /// The slice a venue's result is recorded in (module docs).
@@ -372,4 +382,44 @@ struct VenueFill {
     parts: (f64, f64),
     price_rupees: f64,
     at: FillAt,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_fill_is_recorded_beyond_the_position_only_for_an_order_that_may_open() {
+        // (what, reverse, sent only to close, (closing, opening) units, units refused)
+        let table = [
+            ("an entry from flat", false, false, (0.0, 100.0), 0.0),
+            ("a reversal", true, false, (40.0, 60.0), 0.0),
+            (
+                "a plain order through zero",
+                false,
+                false,
+                (40.0, 60.0),
+                60.0,
+            ),
+            (
+                "an exit within the position",
+                false,
+                true,
+                (100.0, 0.0),
+                0.0,
+            ),
+            ("an exit through zero", false, true, (40.0, 60.0), 60.0),
+            ("an exit from flat", false, true, (0.0, 100.0), 100.0),
+            (
+                "an exit with reverse from flat",
+                true,
+                true,
+                (0.0, 100.0),
+                100.0,
+            ),
+        ];
+        for (what, reverse, closes, parts, refused) in table {
+            assert_eq!(beyond_position(reverse, closes, parts), refused, "{what}");
+        }
+    }
 }
