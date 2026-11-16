@@ -31,6 +31,7 @@ from openalgo.backtest._live._session_stop import (
     SAFE_STOP_STATE_WAIT_S,
     UNPROTECTED_REMINDER_EVERY_S,
 )
+from openalgo.backtest._live._stops_report import CHECK_FIRST, STOP_PROTECTS
 from openalgo.backtest._live._types import LOGGER_NAME
 
 
@@ -197,7 +198,9 @@ def test_F77_when_the_kernels_protect_fails_too_the_alert_lists_the_leg_without_
 
     assert [kind for _, kind, _ in kinds(world)] == ["MARKET", "SL-M"]
     stopped = [t for t in alerts(caplog, "error") if "the session stops on an error" in t]
-    assert len(stopped) == 1 and "10 units, no stop at the broker" in stopped[0]
+    # No stop and nothing working: the one case the alert says to close by hand.
+    assert len(stopped) == 1
+    assert "10 units: no stop at the broker, close it by hand" in stopped[0]
     check_invariants(world.timeline, strategy="TargetHold", unprotected_at_end=True)
 
 
@@ -382,3 +385,66 @@ def test_the_emergency_stop_while_the_stops_cancel_word_is_lost_places_the_stop_
     assert len(stopped) == 1
     assert f"stop {world.orders()[-1].order_id} confirmed at the broker" in stopped[0]
     check_invariants(world.timeline, strategy="TargetHold")
+
+
+def raise_once_at(monkeypatch, world, at_ns: int) -> None:
+    """The loop's first kernel call at or after `at_ns` raises."""
+    original = _session_trader.Trader.drive
+    raised = []
+
+    def drive(self, *, deciding):
+        if not raised and world.fake.clock.now() >= at_ns:
+            raised.append(True)
+            raise RuntimeError("a defect of the loop")
+        return original(self, deciding=deciding)
+
+    monkeypatch.setattr(_session_trader.Trader, "drive", drive)
+
+
+def stopped_alert(caplog) -> str:
+    """The emergency stop's one ERROR alert."""
+    (text,) = [t for t in alerts(caplog, "error") if "the session stops on an error" in t]
+    return text
+
+
+def test_the_emergency_alert_says_a_confirmed_stop_protects_the_leg_until_it_is_cancelled(
+    world, monkeypatch, caplog
+):
+    raise_once_at(monkeypatch, world, ist(14, 43, 30))
+    with pytest.raises(RuntimeError, match="a defect of the loop"):
+        world.run(StopHold)
+
+    stop = world.orders()[-1]
+    assert (stop.price_type, stop.status) == ("SL-M", "trigger pending")
+    text = stopped_alert(caplog)
+    # A sale by hand beside the working stop would leave the stop to sell 10 more.
+    assert f"stop {stop.order_id} confirmed at the broker" in text
+    assert STOP_PROTECTS in text
+    assert "close it by hand" not in text.lower().replace(STOP_PROTECTS, "")
+    check_invariants(world.timeline, strategy="StopHold")
+
+
+def test_the_emergency_alert_names_an_exit_at_work_and_the_order_book_comes_first(
+    world, monkeypatch, caplog
+):
+    at_price(world, ist(14, 44), 502.0)
+
+    def exit_words_held_and_reads_failing():
+        world.fake.faults.hold_order_updates()
+        for _ in range(30):
+            world.fake.faults.gateway_error("orderstatus", status=503)
+            world.fake.faults.gateway_error("tradebook", status=503)
+
+    # The target's sale is sent and fills at the broker; the session never hears of it.
+    world.script.at(TARGET_TICK + 3 * NS - NS // 2, exit_words_held_and_reads_failing)
+    raise_once_at(monkeypatch, world, TARGET_TICK + 5 * NS)
+    with pytest.raises(RuntimeError, match="a defect of the loop"):
+        world.run(TargetHold)
+
+    sale = next(o for o in world.orders() if (o.action, o.price_type) == ("SELL", "MARKET"))
+    assert sale.status == "complete" and world.fake.position("SBIN", "NSE") == 0
+    text = stopped_alert(caplog)
+    # Selling by hand what the alert lists would sell 10 short.
+    assert f"exit order {sale.order_id} in flight" in text
+    assert text.endswith(CHECK_FIRST)
+    assert "close it by hand" not in text.lower().replace(CHECK_FIRST, "")

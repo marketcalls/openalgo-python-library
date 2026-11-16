@@ -1,17 +1,25 @@
 """What the operator is told of a leg and its broker-held stop (16-session-design 1.4
 `open_positions`, 3.3 step 4, 3.5, 6.2; the unit 8 hand-off on the left-open note): the
 stop's order ID and whether it is confirmed, the stop in an alert's words, and the note
-of a position left open.
+of a position left open (the safe stop's lines, the result's `open_positions` and the
+emergency stop's alert).
 
 A position left open names each order still working toward it, by its broker order ID
 once bound, else its side, units, purpose and intent ID: an exit or an entry sent and
 unanswered, held back or ambiguous, or a MARKET order accepted with no final word yet, is
 "in flight"; any other one bound is "resting at the broker"; one the kernel made and
-never sent is "not sent". Then the stop: confirmed, not confirmed, being cancelled,
-ambiguous, or none. While any order works (or the stop's cancel has no answer) the note
-ends by saying to check the order book, cancelling what still works, before closing the
-position by hand: a sale by hand beside the session's own would sell short. Only a leg
-with nothing working and no stop is told plainly to close it by hand.
+never sent is "not sent". Then the stop: confirmed (for part of the position, or all of
+it), repriced to a LIMIT resting at the broker, being cancelled, ambiguous, handed to the
+order worker with no answer, held back and not sent, sent and unanswered, not confirmed,
+or none. Then what to do, since a sale by hand beside the session's own orders would
+sell short:
+
+- no stop and nothing working: close it by hand;
+- a confirmed stop covering the whole position and nothing else working: the stop
+  protects it, and must be cancelled before any sale by hand (`protected`);
+- anything else (an order working, or a stop that may be at the broker without covering
+  the position): check the order book before closing it by hand, cancelling what still
+  works.
 
 Used by the loop only, over the stops supervisor (`stops.StopsSupervisor`).
 """
@@ -30,12 +38,22 @@ from ._types import Purpose
 NO_STOP = "no stop at the broker"
 #: What a note of a position with an order still working tells the operator to do.
 CHECK_FIRST = "check the order book before closing it by hand, cancelling what still works"
+#: What a note of a position its confirmed stop covers whole, with nothing else working,
+#: tells the operator: a sale by hand beside the stop would let the stop sell again.
+STOP_PROTECTS = "it protects the position, so cancel the stop before any sale by hand"
 #: How far an order in flight got, in words.
 _IN_FLIGHT_WORDS = {
     Sent.HANDED: "not answered yet",
     Sent.HELD: "held back, not sent",
     Sent.UNANSWERED: "sent and unanswered",
     Sent.AMBIGUOUS: "ambiguous in the order book",
+}
+#: How far a stop not answered got, in words: one handed to the order worker may wait in
+#: its queue (dropped at its close) or be in its call.
+_STOP_UNANSWERED_WORDS = {
+    Sent.HANDED: "handed to the order worker, not answered: it may not have been sent",
+    Sent.HELD: "held back, not sent",
+    Sent.UNANSWERED: "sent and unanswered",
 }
 #: The words of a MARKET order accepted with no final word yet.
 _ACCEPTED_WORDS = "accepted with no final word yet"
@@ -49,14 +67,47 @@ def stop_state(stops: Any, trader: Trader) -> tuple[str, bool]:
 
 
 def stop_words(stops: Any, trader: Trader) -> str:
-    """The stop of `trader`'s leg in an alert's words: confirmed, not confirmed, being
-    cancelled (with the order book to check), ambiguous, or none."""
+    """The stop of `trader`'s leg in an alert's words: confirmed, repriced, being
+    cancelled or ambiguous (these two with the order book to check), not sent, not
+    confirmed, or none."""
     words = _stop_words(stops, trader)
-    return f"{words}: check the order book" if _cancelling(stops, trader) else words
+    watched = _stop(stops, trader)
+    unsure = watched is not None and (watched.cancel_sent or watched.state is Sent.AMBIGUOUS)
+    return f"{words}: check the order book" if unsure else words
+
+
+def protected(stops: Any, trader: Trader) -> bool:
+    """True when the leg's confirmed stop covers its whole position and no other order
+    works toward it: nothing for the operator to do but leave the stop or cancel it
+    before a sale by hand."""
+    units = round(abs(trader.open_units()))
+    return 0 < units <= stops.covered(trader) and not _working(stops, trader)
 
 
 def left_open(stops: Any, trader: Trader) -> str:
     """The note of `trader`'s position left open (module docstring)."""
+    leg, working = stops.leg(trader), trader.working()
+    parts = _working(stops, trader)
+    unsent = [kernel_order for kernel_order in working if kernel_order not in leg.orders]
+    if unsent:
+        parts.append(f"order {', '.join(f'o{k}' for k in unsent)} not sent")
+    stop_part = _stop_words(stops, trader)
+    if stop_part == NO_STOP and len(parts) == len(unsent):
+        # Nothing sent works toward the position: only a sale by hand closes it.
+        return "; ".join([*parts, f"{NO_STOP}, close it by hand"])
+    if protected(stops, trader):
+        return "; ".join([*parts, f"{stop_part}: {STOP_PROTECTS}"])
+    if stop_part != NO_STOP or leg.guarded:
+        # With an order working on a leg that never had a stop, that order is what the
+        # operator checks, not a stop it never was to have.
+        parts.append(stop_part)
+    parts.append(CHECK_FIRST)
+    return "; ".join(parts)
+
+
+def _working(stops: Any, trader: Trader) -> list[str]:
+    """Each order other than the stop sent and still working toward the position, in a
+    note's words."""
     leg, working = stops.leg(trader), set(trader.working())
     parts = []
     for watched in leg.orders.values():
@@ -65,21 +116,7 @@ def left_open(stops: Any, trader: Trader) -> str:
             continue
         kind = "entry" if watched.purpose in ENTRY_PURPOSES else "exit"
         parts.append(f"{kind} order {watched.name()} {_how_far(trader, watched)}")
-    works = bool(parts)
-    unsent = [kernel_order for kernel_order in working if kernel_order not in leg.orders]
-    if unsent:
-        parts.append(f"order {', '.join(f'o{k}' for k in unsent)} not sent")
-    stop_part = _stop_words(stops, trader)
-    works = works or _cancelling(stops, trader)
-    if not works:
-        parts.append(f"{NO_STOP}, close it by hand" if stop_part == NO_STOP else stop_part)
-        return "; ".join(parts)
-    if stop_part != NO_STOP or leg.guarded:
-        # With an order working on a leg that never had a stop, that order is what the
-        # operator checks, not a stop it never was to have.
-        parts.append(stop_part)
-    parts.append(CHECK_FIRST)
-    return "; ".join(parts)
+    return parts
 
 
 def _how_far(trader: Trader, watched: Watched) -> str:
@@ -94,25 +131,40 @@ def _how_far(trader: Trader, watched: Watched) -> str:
 
 
 def _stop_words(stops: Any, trader: Trader) -> str:
-    """The stop of the leg in words, with no advice (`stop_words`)."""
+    """The stop of the leg in words, with no advice (module docstring)."""
     watched = _stop(stops, trader)
     if watched is None:
         return NO_STOP
     if watched.state is Sent.AMBIGUOUS:
-        return f"ambiguous stop order (intent {watched.intent_id}): close it by hand"
+        return f"ambiguous stop order (intent {watched.intent_id})"
     name = watched.order_id or f"(intent {watched.intent_id})"
     if watched.cancel_sent:
         return f"stop {name} being cancelled, with no final word yet"
-    if stops.covered(trader) > 0:
+    covered, units = stops.covered(trader), round(abs(trader.open_units()))
+    if covered and covered >= units:
         return f"stop {name} confirmed at the broker"
+    if covered:
+        return f"stop {name} confirmed at the broker for {covered} of {units} units"
+    if watched.state in _STOP_UNANSWERED_WORDS:
+        return f"stop {name} {_STOP_UNANSWERED_WORDS[watched.state]}"
+    limit = _repriced_limit(trader, watched)
+    if limit is not None:
+        return f"stop {name} repriced to a LIMIT at {limit:.2f}, resting at the broker"
     return f"stop {name} not confirmed at the broker"
 
 
-def _cancelling(stops: Any, trader: Trader) -> bool:
-    """Whether a cancel of the leg's stop was sent and has no final word yet: the stop
-    may still be at the broker, or gone."""
-    watched = _stop(stops, trader)
-    return watched is not None and watched.cancel_sent
+def _repriced_limit(trader: Trader, watched: Watched) -> float | None:
+    """The limit in rupees of a leg stop the price rule repriced to a LIMIT that the
+    broker accepted and that still works, else None (a leg stop is SL or SL-M until a
+    reprice is applied)."""
+    if watched.state not in (Sent.BOUND, Sent.CONFIRMED):
+        return None
+    if watched.kernel_order not in trader.working():
+        return None
+    order = order_of(trader, watched.kernel_order)
+    if order is None or order["order_type"] != "LIMIT":
+        return None
+    return float(order["limit_rupees"])
 
 
 def _stop(stops: Any, trader: Trader) -> Watched | None:
@@ -120,4 +172,12 @@ def _stop(stops: Any, trader: Trader) -> Watched | None:
     return leg.orders.get(leg.stop) if leg.stop is not None else None
 
 
-__all__ = ["CHECK_FIRST", "NO_STOP", "left_open", "stop_state", "stop_words"]
+__all__ = [
+    "CHECK_FIRST",
+    "NO_STOP",
+    "STOP_PROTECTS",
+    "left_open",
+    "protected",
+    "stop_state",
+    "stop_words",
+]

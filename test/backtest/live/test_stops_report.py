@@ -1,10 +1,12 @@
 """What the operator is told of a position left open, on the fake OpenAlgo
-(`_live/_stops_report.py`; 16-session-design 1.4 `open_positions`, 3.3 step 4; the unit 8
-hand-off on the left-open note): each order still working toward the position named by
-its broker order ID, else its side, units, purpose and intent; an order sent and
+(`_live/_stops_report.py`; 16-session-design 1.4 `open_positions`, 3.3 step 4, 3.5; the
+unit 8 hand-off on the left-open note): each order still working toward the position
+named by its broker order ID, else its side, units, purpose and intent; an order sent and
 unanswered, or a market order accepted with no final word, told from one resting at the
-broker; an entry still working named too; the stop, confirmed or not; and, while any
-order works, the order book before closing it by hand.
+broker; an entry still working named too; the stop, confirmed (and then that it protects
+the position until it is cancelled), repriced to a resting LIMIT, not sent, or not
+confirmed; and, while any order works or a stop may, the order book before closing it by
+hand. A leg its confirmed stop covers is printed, and only the others are ERROR alerts.
 
 The session starts at 14:40:05 IST; SBIN trades at 500.00 every 10 seconds.
 """
@@ -15,12 +17,15 @@ import logging
 
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
-from session_samples import NS, ist
-from stops_samples import STOP_POINTS, StopHold, stop_world
+from session_samples import NS, alerts, ist
+from stops_samples import OPTION, STOP_POINTS, OptionHold, StopHold, option_world, stop_world
 
 import openalgo.backtest as bt
-from openalgo.backtest._live._stops_report import CHECK_FIRST
-from openalgo.backtest._live._types import LOGGER_NAME
+from openalgo.backtest._live._stops_report import CHECK_FIRST, STOP_PROTECTS, left_open
+from openalgo.backtest._live._types import LOGGER_NAME, OrderIntent, Purpose
+from openalgo.backtest._live._venue_requests import PlaceRequest, Priority
+from openalgo.backtest._live.inbox import NotSentReason
+from openalgo.backtest._live.stops import StopsSupervisor
 
 
 @pytest.fixture
@@ -143,3 +148,129 @@ def test_an_exit_accepted_with_no_final_word_is_in_flight_and_never_beside_close
     assert "resting at the broker" not in left.note
     assert left.note.endswith(CHECK_FIRST)
     assert "close it by hand" not in left.note.replace(CHECK_FIRST, "")
+
+
+@pytest.fixture
+def option(make_fake_openalgo, monkeypatch, tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+    return option_world(make_fake_openalgo, monkeypatch, tmp_path)
+
+
+def test_a_stop_repriced_to_a_limit_that_rests_is_named_as_resting_with_its_price(option):
+    # The option trades through its stop at 100.00 at 14:44:05; the best bid then drops
+    # to 90.00, so the stop's reprice to a LIMIT at 95.00 rests unfilled at the broker.
+    crossed_at = ist(14, 44, 5)
+    option.script.at(crossed_at - NS // 2, lambda: setattr(option, "option_price", 100.0))
+    option.script.at(
+        crossed_at + NS // 2, lambda: option.fake.trade(OPTION, "NFO", 100.0, bid=90.0)
+    )
+    option.stop_at(crossed_at + 3 * NS)
+    outcome = option.run(OptionHold, on_stop="keep")
+
+    stop = option.orders()[1]
+    assert (stop.price_type, stop.price, stop.filled, stop.status) == ("LIMIT", 95.0, 0, "open")
+    (left,) = outcome.open_positions
+    assert f"stop {stop.order_id} repriced to a LIMIT at 95.00, resting at the broker" in left.note
+    # A sale by hand beside the resting LIMIT sale of the whole position would sell short.
+    assert left.note.endswith(CHECK_FIRST)
+
+
+def test_a_leg_left_with_its_confirmed_stop_is_printed_and_not_alerted_as_an_error(world, caplog):
+    world.stop_at(ist(14, 43, 30))
+    world.run(StopHold, on_stop="keep")
+
+    stop = world.orders()[1]
+    (line,) = [line for line in world.lines if "StopHold SBIN NSE 10 units" in line]
+    assert f"stop {stop.order_id} confirmed at the broker" in line
+    assert STOP_PROTECTS in line
+    # Design 3.3 step 4: only a leg still without a confirmed stop is the operator's.
+    assert not any("SBIN NSE 10 units" in text for text in alerts(caplog, "error"))
+
+
+# ----- a stop not sent, on its own (no server) ----------------------------------------
+
+
+class _Engine:
+    """A kernel session whose leg stop o2 (an SL-M sale of 10 units) works."""
+
+    def order(self, kernel_order):
+        return {
+            "order_type": "SL-M",
+            "side": "SELL",
+            "quantity_units": 10,
+            "filled_units": 0,
+            "limit_rupees": 0.0,
+            "trigger_rupees": 497.0,
+        }
+
+
+class _Venue:
+    def order_id_of(self, kernel_order):
+        return ""
+
+
+class _Trader:
+    """A strategy holding 10 SBIN whose stop o2 the kernel placed."""
+
+    name, symbol, exchange, finished = "StopHold", "SBIN", "NSE", False
+
+    def __init__(self):
+        self.engine, self.venue = _Engine(), _Venue()
+
+    def open_units(self):
+        return 10.0
+
+    def working(self):
+        return [2]
+
+
+#: The placement of the stop o2, as the session hands it to the order worker.
+STOP_PLACED = PlaceRequest(
+    1,
+    2,
+    OrderIntent(
+        intent_id="20261116-live-1-StopHold-o2",
+        strategy="StopHold",
+        symbol="SBIN",
+        exchange="NSE",
+        action="SELL",
+        quantity=10,
+        price_type="SL-M",
+        product="MIS",
+        purpose=Purpose.STOP,
+        created_ns=0,
+        trigger_price=497.0,
+    ),
+    Priority.PROTECT,
+)
+
+
+def stop_handed() -> tuple[StopsSupervisor, _Trader]:
+    """The stop o2 handed to the order worker, with no answer yet."""
+    stops, trader = StopsSupervisor(session=None), _Trader()
+    stops.leg(trader).handed(STOP_PLACED)
+    return stops, trader
+
+
+def test_a_stop_handed_to_the_worker_and_unanswered_may_not_have_been_sent():
+    stops, trader = stop_handed()
+
+    note = left_open(stops, trader)
+
+    assert note.startswith(
+        "stop (intent 20261116-live-1-StopHold-o2) handed to the order worker, not "
+        "answered: it may not have been sent"
+    )
+    assert "not confirmed at the broker" not in note
+    assert note.endswith(CHECK_FIRST)
+
+
+def test_a_stop_held_back_while_openalgo_is_silent_is_named_as_not_sent():
+    stops, trader = stop_handed()
+    stops.leg(trader).not_sent(STOP_PLACED, NotSentReason.SILENT)
+
+    note = left_open(stops, trader)
+
+    assert note.startswith("stop (intent 20261116-live-1-StopHold-o2) held back, not sent")
+    assert "not confirmed at the broker" not in note
+    assert note.endswith(CHECK_FIRST)

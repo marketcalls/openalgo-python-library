@@ -134,3 +134,31 @@ def test_a_crossed_stop_the_daily_loss_cancels_is_not_repriced_while_its_cancel_
     assert option.fake.position(OPTION, "NFO") == 0
     assert outcome.open_positions == ()
     check_invariants(option.timeline, strategy="OptionHold")
+
+
+def test_a_crossed_stop_whose_cancel_stays_unanswered_past_its_price_clock_is_never_repriced(
+    option,
+):
+    falls_to(option, 100.0)
+
+    def cancel_unanswered():
+        option.fake.faults.hold_order_updates()
+        for _ in range(12):
+            option.fake.faults.gateway_error("orderstatus", status=503)
+
+    # The tick through the stop also breaches the daily loss: the engine cancels the stop
+    # for its exit. No word of the cancel comes, by stream or read, for longer than the
+    # price rule's clock: the engine takes no modify of an order it is cancelling.
+    option.script.at(CROSSED_AT - NS // 4, cancel_unanswered)
+    option.script.at(CROSSED_AT + 25 * NS, option.fake.faults.release_order_updates)
+    outcome = option.run(OptionHold, max_daily_loss=1000)
+
+    assert option.fake.log.calls("modifyorder") == []
+    assert events(outcome, "repriced") == []
+    assert outcome.stopped_by == "session_end"
+    assert sells(option) == [
+        (OPTION_LOT, "SL", 0, "cancelled"),
+        (OPTION_LOT, "MARKET", OPTION_LOT, "complete"),
+    ]
+    assert option.fake.position(OPTION, "NFO") == 0
+    check_invariants(option.timeline, strategy="OptionHold")

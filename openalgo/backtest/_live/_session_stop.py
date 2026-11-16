@@ -27,7 +27,10 @@ time that end it (`Control`). The common close is `_session_close`.
   the orders of a leg with no stop rule to end (with "flatten" every working order, the
   exits in flight among them; with "keep" the entries it cancelled), so a fill on the
   way is known, then prints one line per leg left open, naming its stop and an exit
-  still in flight, and stops. Two requests the loop sees at once act as the first
+  still in flight, and stops. The same lines end a stop with "keep" or a safe stop whose
+  legs are all flat or protected; each is an ERROR alert too unless the leg's confirmed
+  stop covers it with nothing else working (`_stops_report.protected`), which needs
+  nothing of the operator. Two requests the loop sees at once act as the first
   followed by the second (decided for unit 10: how fast the keys were pressed must not
   change the outcome), so the flatten's exits are asked for and the second's bounded
   wait follows. After a guard lock nothing can be sent: a first Ctrl+C stops at once.
@@ -35,8 +38,8 @@ time that end it (`Control`). The common close is `_session_close`.
   nothing working, the session ends ("session_end"). From the square-off plus
   `SQUARE_OFF_VERIFY_AFTER_S` a strategy not flat gets the ERROR alert "still not flat
   after square-off", each minute while it lasts. A leg still open at the exchange's close
-  plus `SESSION_END_GRACE_S` ends the session too, with an ERROR alert to close it by
-  hand. After a guard lock the session ends at that same time ("mode_breach").
+  plus `SESSION_END_GRACE_S` ends the session too, with an ERROR alert for every such
+  leg, its stop or not. After a guard lock the session ends at that same time ("mode_breach").
 - **A strategy's exception** (3.5): an ERROR alert, then the safe stop by `on_stop`. The
   operator's first Ctrl+C, before or after it, asks for the stop already under way: only
   a second one is the second Ctrl+C.
@@ -54,7 +57,7 @@ from .._layout import NANOS_PER_SECOND
 from ._session_loop import Session
 from ._session_trader import StrategyFailed, Trader
 from ._stops_protect import PROTECTED
-from ._stops_report import left_open
+from ._stops_report import left_open, protected
 from ._types import LOGGER_NAME, AlertKind
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -210,7 +213,7 @@ class Control:
         if not self._session.locked:
             self._ask_exits(retried_too=False)
         if now_ns >= self._end_ns:
-            self._left_open()
+            self._left_open(every_leg=True)
             self.verdict = self._stopped_by()
         elif now_ns >= self._remind_ns:
             if not self._protecting:
@@ -287,7 +290,12 @@ class Control:
             return f"its exit waits for the cancel of order {', '.join(cancels)}"
         return f"no exit works (the engine answered {asked})"
 
-    def _left_open(self) -> None:
+    def _left_open(self, *, every_leg: bool = False) -> None:
+        """One console line per leg left open (3.3 step 4). An ERROR alert goes for each
+        leg the operator must act on: one without a confirmed stop covering it, or with
+        another order working; a leg its stop protects is information only. At the
+        exchange's close (`every_leg`) a position still open is the operator's whatever
+        its stop (3.4)."""
         session = self._session
         for trader in session.traders:
             units = trader.open_units()
@@ -295,7 +303,10 @@ class Control:
                 continue
             line = f"{_leg(trader, units)}: {left_open(session.stops, trader)}"
             session.emit(line)
-            session.alert(AlertKind.ERROR, line)
+            if every_leg or not protected(session.stops, trader):
+                session.alert(AlertKind.ERROR, line)
+            else:
+                logger.info(line)
 
     def _stopped_by(self) -> str:
         if self.failure is not None:
@@ -315,7 +326,7 @@ class Control:
             self.verdict = SESSION_END
             return
         if now_ns >= self._end_ns:
-            self._left_open()
+            self._left_open(every_leg=True)
             self.verdict = SESSION_END
             return
         for trader in traders:
