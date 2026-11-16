@@ -470,11 +470,14 @@ fn slice_open(index: usize) -> i64 {
 }
 
 #[test]
-fn a_session_given_its_bars_slice_by_slice_is_the_backtest_of_those_bars() {
+fn a_session_given_its_bars_slice_by_slice_runs_the_slices_of_their_backtest() {
+    // A session's orders are filled by its venue (tests/venue_echo.rs: with a venue that
+    // fills where the simulator does, a session is the backtest); with no order, it is
+    // the backtest of the bars it was given.
     let columns = bars(375, &[40, 41]);
-    let (backtest, _) = run_script(columns.clone(), None, buy_then_exit());
+    let (backtest, _) = run_script(columns.clone(), None, Vec::new());
     let mut kernel = session();
-    let mut script = Script::new(buy_then_exit());
+    let mut script = Script::new(Vec::new());
     loop {
         match kernel.advance().expect("the slice runs") {
             Pause::Waiting { next_slice } => {

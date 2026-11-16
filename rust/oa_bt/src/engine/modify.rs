@@ -38,9 +38,12 @@ impl Engine {
     /// check (the order is unchanged and no event is written), `Skipped` when a sizer gave
     /// no quantity.
     ///
+    /// In a live session the replacement is sent to the venue (`venue`).
+    ///
     /// Errors: `NotAtDecisionPoint` unless paused; `UnknownOrder`; `Exec(InvalidRequest)`
     /// for an order that no longer works or a replacement that changes what identifies
-    /// the order; the errors of `submit` for the replacement itself.
+    /// the order; `NotBuilt` for a partly filled order in a live session; the errors of
+    /// `submit` for the replacement itself.
     pub fn modify(
         &mut self,
         id: OrderId,
@@ -61,13 +64,17 @@ impl Engine {
         if let Some(error) = replacement_error(&order.request, &request) {
             return Err(error.into());
         }
+        self.check_venue_replacement(order)?;
         self.check_buildable(&request)?;
+        self.check_venue_request(&request)?;
         let request = self.venue_request(request)?;
         let units = match self.resolve_units(&request, &slice)? {
             Resolved::Units(units) => units,
             Resolved::AtFill => 0.0,
             Resolved::Skipped(reason) => return Ok(Submission::Skipped(reason)),
         };
+        let units = self.venue_units(&request, units, Some(id));
+        self.check_replacement_units(units)?;
         let checked = self.submission_checks(&request, units, &slice, decided_at, Some(id))?;
         let good_until = match checked {
             Ok(good_until) => good_until,
@@ -82,6 +89,7 @@ impl Engine {
             kind: OrderEventKind::Modified,
         });
         self.modify_order_gtt(stamp, id)?;
+        self.send_modify(id);
         Ok(Submission::Submitted(id))
     }
 }

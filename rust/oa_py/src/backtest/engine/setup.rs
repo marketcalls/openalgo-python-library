@@ -7,7 +7,7 @@
 use numpy::PyReadonlyArray1;
 use oa_bt::data::resample::CalendarUnit;
 use oa_bt::engine::{
-    BarColumns, FillTiming, IntradayOverrides, QuantityMode, RunConfig, StrategyInterval,
+    BarColumns, FillTiming, IntradayOverrides, QuantityMode, RunConfig, RunSetup, StrategyInterval,
 };
 use oa_bt::exec::InstrumentSpec;
 use oa_bt::market::calendar::BaseInterval;
@@ -21,7 +21,7 @@ use oa_bt::rms::{
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use super::super::calendar::{parse_exchange, PyDay};
+use super::super::calendar::{parse_exchange, NativeCalendar, PyDay};
 use super::NativeEngineInputError;
 
 /// A required key of a dict, extracted as `T`.
@@ -255,6 +255,25 @@ pub(super) fn instrument(dict: &Bound<'_, PyDict>) -> PyResult<InstrumentSpec> {
         freeze_quantity_units: optional(dict, "freeze_qty")?,
         cost_segment: None,
         last_trading_day: last_trading_day.map(|day| day.0),
+    })
+}
+
+/// The run setup from the calendar, the config dict, one dict per instrument and one
+/// tuple of bar arrays per instrument, in registration order.
+pub(super) fn run_setup(
+    calendar: &NativeCalendar,
+    config: &Bound<'_, PyDict>,
+    instruments: &[Bound<'_, PyDict>],
+    bars: &[BarArrays<'_>],
+) -> PyResult<RunSetup> {
+    Ok(RunSetup {
+        config: run_config(config)?,
+        calendar: calendar.inner.clone(),
+        instruments: instruments
+            .iter()
+            .map(instrument)
+            .collect::<PyResult<_>>()?,
+        bars: bars.iter().map(BarArrays::columns).collect(),
     })
 }
 

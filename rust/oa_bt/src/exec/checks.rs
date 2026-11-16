@@ -62,11 +62,14 @@ pub enum RejectCode {
     /// An add beyond a scale-in limit, or against the position without
     /// `allow_averaging_down=True` (12-position-sizing 2, `rms::scale_in`).
     ScaleInLimit = 14,
+    /// The venue of a live session (the broker or the exchange) refused the order for a
+    /// reason of its own (`Engine::apply_reject`); no kernel check makes it.
+    Venue = 15,
 }
 
 impl RejectCode {
     /// Every code, in code order.
-    pub const ALL: [RejectCode; 15] = [
+    pub const ALL: [RejectCode; 16] = [
         RejectCode::QuantityRule,
         RejectCode::Tick,
         RejectCode::FreezeQty,
@@ -82,6 +85,7 @@ impl RejectCode {
         RejectCode::InstrumentUnknown,
         RejectCode::ReverseNotAllowed,
         RejectCode::ScaleInLimit,
+        RejectCode::Venue,
     ];
 
     /// The code string used in events and results.
@@ -102,7 +106,15 @@ impl RejectCode {
             RejectCode::InstrumentUnknown => "instrument_unknown",
             RejectCode::ReverseNotAllowed => "reverse_not_allowed",
             RejectCode::ScaleInLimit => "scale_in_limit",
+            RejectCode::Venue => "venue",
         }
+    }
+
+    /// The code with this string, `None` for a string that names none.
+    pub fn from_code(code: &str) -> Option<RejectCode> {
+        RejectCode::ALL
+            .into_iter()
+            .find(|known| known.code() == code)
     }
 }
 
@@ -314,8 +326,16 @@ mod tests {
     #[test]
     fn codes_are_the_ruled_vocabulary() {
         let codes: Vec<&str> = RejectCode::ALL.iter().map(|code| code.code()).collect();
-        assert_eq!(codes.len(), 15);
+        assert_eq!(codes.len(), 16);
         assert!(codes.contains(&"market_closed") && codes.contains(&"instrument_unknown"));
-        assert!(codes.contains(&"scale_in_limit"));
+        assert!(codes.contains(&"scale_in_limit") && codes.contains(&"venue"));
+    }
+
+    #[test]
+    fn every_code_is_read_back_from_its_string() {
+        for code in RejectCode::ALL {
+            assert_eq!(RejectCode::from_code(code.code()), Some(code));
+        }
+        assert_eq!(RejectCode::from_code("broker_said_no"), None);
     }
 }

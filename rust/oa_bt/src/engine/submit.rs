@@ -56,19 +56,23 @@ impl Engine {
     /// quantity that is not positive, a fraction outside (0, 1], a limit or trigger
     /// that is not a usable price, or a GTT order without a price; `Rms(InvalidRule)`
     /// for contradictory leg rules, or an add whose leg rules differ from the
-    /// position's (SPEC-14); `NotBuilt` for arguments not built yet. A market rule that
-    /// refuses the order is not an error: the result is `Submission::Rejected`.
+    /// position's (SPEC-14); `NotBuilt` for arguments not built yet (in a live session
+    /// also leg rules, GTT orders and rebalancing, `venue`). A market rule that refuses
+    /// the order is not an error: the result is `Submission::Rejected`. In a live session
+    /// an order that passes is sent to the venue at once (`venue`).
     pub fn submit(&mut self, request: OrderRequest) -> Result<Submission, KernelError> {
         let Some((slice, decided_at, step)) = self.decision_point() else {
             return Err(KernelError::NotAtDecisionPoint);
         };
         self.check_buildable(&request)?;
+        self.check_venue_request(&request)?;
         let request = self.venue_request(request)?;
         let units = match self.resolve_units(&request, &slice)? {
             Resolved::Units(units) => units,
             Resolved::AtFill => 0.0,
             Resolved::Skipped(reason) => return Ok(Submission::Skipped(reason)),
         };
+        let units = self.venue_units(&request, units, None);
         let checked = self.submission_checks(&request, units, &slice, decided_at, None)?;
         let id = self.book.next_id();
         let (action, kind, good_until, reject) = match checked {
@@ -105,6 +109,7 @@ impl Engine {
         });
         if reject.is_none() {
             self.place_order_gtt(stamp, id)?;
+            self.send_order(stamp, id)?;
         }
         Ok(match reject {
             Some(code) => Submission::Rejected(id, code),
@@ -113,7 +118,9 @@ impl Engine {
     }
 
     /// Cancel a working order. An order that no longer works is left as it is and its
-    /// state is returned.
+    /// state is returned. In a live session the cancellation is sent to the venue and
+    /// the order works on until the venue confirms it (`venue`): its state then is the
+    /// one returned.
     ///
     /// Errors: `NotAtDecisionPoint` unless paused; `UnknownOrder`.
     pub fn cancel(&mut self, id: OrderId) -> Result<OrderStatus, KernelError> {
@@ -128,9 +135,7 @@ impl Engine {
         if !status.is_working() {
             return Ok(status);
         }
-        let stamp = Self::stamp(&slice, step);
-        self.end_order(stamp, id, OrderAction::Cancel, OrderEventKind::Canceled)?;
-        Ok(OrderStatus::Canceled)
+        self.withdraw_order(Self::stamp(&slice, step), id)
     }
 
     /// Refuse a request that cannot be read: unusable prices, contradictory leg rules.
@@ -250,7 +255,11 @@ impl Engine {
     /// and longer strategies are valid for the first session that opens at or after the
     /// decision: the next session for a decision at a close, the same session for a
     /// timer at its open.
-    fn day_validity(&self, slice: &SliceInfo, decided_at: TsNanos) -> Result<TsNanos, RejectCode> {
+    pub(super) fn day_validity(
+        &self,
+        slice: &SliceInfo,
+        decided_at: TsNanos,
+    ) -> Result<TsNanos, RejectCode> {
         let exchange = self.timeline.exchange();
         if self.config.strategy_interval.is_intraday() {
             return match self.calendar.session(exchange, slice.day) {

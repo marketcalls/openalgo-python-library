@@ -43,8 +43,10 @@
 //! | `Engine::submit_rebalance(TargetRequest)` | while paused | the same order as part of a rebalance (`rebalance`) |
 //! | `position`, `leg`, `order`, `working_orders`, `gtts`, `has_pending_entry`, `account`, `last_close`, `decision_instant`, `trading_state`, `strategy_bars`, `timer_counts` | any time | queries |
 //! | `Engine::add_timer(TimerSpec)` | before the first `advance` | register `self.at` or `self.every` |
-//! | `Engine::new_session(RunSetup)` | once | live clock (`live_clock`): a session built before its bars, ending at the end of its range, holding |
+//! | `Engine::new_session(RunSetup)` | once | live clock (`live_clock`): a session built before its bars, ending at the end of its range, holding; its venue is external (`venue`) |
 //! | `Engine::add_bar(InstrumentId, BaseBar)`, `Engine::release(slices)`, `Engine::hold()` | any time | live clock: hand over a closed slice's bars, then release it; `advance` returns `Pause::Waiting` before the first slice not released (a backtest never holds) |
+//! | `Engine::take_commands()` | any time | a live session's orders for its venue (`venue`): `VenueCommand::Place`, `Modify`, `Cancel`, in the order they were made (none in a backtest); `venue()` says which venue fills |
+//! | `Engine::apply_fill(OrderId, units, price, at)`, `Engine::apply_reject(OrderId, RejectCode)`, `Engine::apply_cancel(OrderId)` | while waiting or at a timer pause | a live session's results from its venue (`venue_fills`): the units newly filled at the venue's price through `execute_fill`, a rejection, a cancellation; each returns the stamp it was recorded with |
 //! | `Engine::finish()` | after `Pause::Finished` | the `RunOutput` |
 //! | `pause::run(engine, driver)` | Rust drivers | the loop above, for a `Driver` |
 //!
@@ -60,7 +62,9 @@
 //! (`hold`) and the adapter releases each slice once it has closed and its bars are in,
 //! and tick mode runs steps 3 to 6 for one instrument per tick (03-architecture 4.2, last
 //! paragraph; PRD 15-phase2-plan section 2). A run released one slice at a time is the
-//! same run. The order and risk rules do not change.
+//! same run. Its venue is external (`venue`): the engine hands every order to the adapter
+//! as a command and records the broker's fills, rejections and cancellations; it fills
+//! nothing itself. The order and risk rules do not change.
 //!
 //! # The eight steps of a slice (03-architecture 4.2)
 //!
@@ -104,6 +108,10 @@
 //! | `market_data` | Base bars aligned to the grid; strategy bars via `data::resample` |
 //! | `kernel` | `Engine`, `advance`, queries, `finish` |
 //! | `live_clock` | A live session: built before its bars, given each bar as its slice closes, holding before the slices not released |
+//! | `venue` | Who fills the orders (`Simulated`, `External`); a live session's commands, the quantities it sends, what it refuses as not built |
+//! | `venue_fills` | A live session's results from its venue: fills, rejections, cancellations, and the slice they are recorded in |
+//! | `venue_exits` | A live session's own orders: the exits a backtest fills with no order, the entries withdrawn when the entry window closes |
+//! | `venue_error` | `VenueError`: a venue result that cannot be recorded |
 //! | `steps` | Steps 1 to 8 |
 //! | `fills` | Step 2 fills of queued orders, `execute_fill` |
 //! | `legs` | Leg rules in steps 3 and 4, the add rule of SPEC-14 |
@@ -205,6 +213,10 @@ mod strategy_risk;
 pub mod submit;
 mod target;
 pub mod timers;
+mod venue;
+mod venue_error;
+mod venue_exits;
+mod venue_fills;
 
 pub use clock::{SliceInfo, Timeline};
 pub use config::{
@@ -228,3 +240,5 @@ pub use signals::{run_signals, AtrInput, AtrSlot, EntrySignal, SignalArrays, Ski
 pub use submit::Submission;
 pub use target::TargetRequest;
 pub use timers::{TimerCount, TimerSpec};
+pub use venue::{Venue, VenueCommand};
+pub use venue_error::VenueError;

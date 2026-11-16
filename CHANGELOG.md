@@ -19,6 +19,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   valid OHLC bar), its strategy bars rebuilt by the backtest's resampler, and ending at
   the end of its day. A session given its bars minute by minute gives the same result as
   the backtest of those bars.
+- A live session's venue in the kernel (no change to backtests): a session fills no order
+  itself. Each order that passes the backtest's submission checks is handed to the live
+  layer at once as a command (place, modify, cancel: `Engine::take_commands`), and the
+  broker's results come back: `Engine::apply_fill` with the units newly filled at the
+  broker's price (no slippage model, the cost model's charges), `Engine::apply_reject`
+  and `Engine::apply_cancel`. A cancelled order works on until the broker confirms it.
+  The exits a backtest makes without an order are sent as reduce-only MARKET orders where
+  the backtest queues or fills them: the daily loss limit and the drawdown halt when they
+  fire, the square-off and the time exit as the session reaches their open, with or
+  without a bar; MIS entries still working when entries stop are cancelled. Working exits
+  never exceed the position, and a position still open at the session close is reported
+  open (no closing fill is invented). A session whose orders are filled where the
+  simulator fills them gives the same result as the backtest, field for field. Not
+  supported in a session yet (NotImplementedError): `stop=`, `target=`, trailing and
+  breakeven, GTT orders, futures series and `rebalance()`; fractional quantities are
+  refused. A broker's own rejection has the new reject code `venue`. The native `Engine`
+  gains `session`, `add_bar`, `release`, `venue`, `take_commands`, `apply_fill`,
+  `apply_reject` and `apply_cancel`.
 - The live layer's mode guard (private, not used by `bt.live` yet): OpenAlgo's sandbox or
   live mode read at the start of a session, checked on every order answer and update of
   the session's own orders, and polled every 5 seconds and before each entry. A change of

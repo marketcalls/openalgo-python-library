@@ -13,8 +13,8 @@
 //!
 //! The adapter adds a slice's bars, then releases it. A slice with no bar for an
 //! instrument (no trade in that minute) is released without one, as a backtest runs a
-//! missing bar (SPEC-07). So a session given its bars slice by slice is the backtest of
-//! those bars.
+//! missing bar (SPEC-07). So a session given its bars slice by slice, whose venue fills
+//! each order where a backtest would (`venue`), is the backtest of those bars.
 
 use crate::exec::InstrumentId;
 use crate::market::calendar::format_ist;
@@ -25,6 +25,7 @@ use super::error::KernelError;
 use super::kernel::{Engine, Phase};
 use super::market_data::BaseBar;
 use super::run_end::{Ending, RunEnd};
+use super::venue::{check_session_config, VenueDesk};
 
 /// Where a session ends: the close of its range's last slice.
 ///
@@ -47,12 +48,15 @@ pub(super) fn range_end(timeline: &Timeline) -> Result<RunEnd, KernelError> {
 impl Engine {
     /// Build a live session: the grid of `setup`'s range from the calendar, the bars of
     /// the slices already closed (empty at the open), an engine that holds before its
-    /// first slice. It ends at the end of its range.
+    /// first slice. It ends at the end of its range. Its venue is external: a broker
+    /// fills its orders (`venue`).
     ///
-    /// Errors: those of `Engine::new`, and `InvalidConfig` naming `start` when the range
-    /// holds no slice.
+    /// Errors: those of `Engine::new`, `InvalidConfig` naming `start` when the range
+    /// holds no slice and naming `quantity_mode` for fractional quantities.
     pub fn new_session(setup: RunSetup) -> Result<Engine, KernelError> {
+        check_session_config(&setup.config)?;
         let mut engine = Engine::assemble(setup, Ending::AtRangeEnd)?;
+        engine.venue = VenueDesk::external();
         engine.hold();
         Ok(engine)
     }

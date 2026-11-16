@@ -29,6 +29,7 @@ use super::sale_credit::SessionBuys;
 use super::session::SessionTimes;
 use super::strategy_risk::StrategyRisk;
 use super::timers::TimerBook;
+use super::venue::VenueDesk;
 
 /// Where the state machine stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,6 +101,8 @@ pub struct Engine {
     /// The slices `advance` may run, as the index of the first one it may not: `None`
     /// runs them all (a backtest), `Some` holds before that slice (`hold`, `release`).
     pub(super) released: Option<usize>,
+    /// Who fills the orders, and the commands for an external venue (`venue`).
+    pub(super) venue: VenueDesk,
 }
 
 impl Engine {
@@ -168,6 +171,7 @@ impl Engine {
             run_end,
             session_buys: SessionBuys::default(),
             released: None,
+            venue: VenueDesk::default(),
         })
     }
 
