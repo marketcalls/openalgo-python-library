@@ -16,6 +16,10 @@ attribute of its parent, which would replace the `bt.live` function.
 | `alerts` | Alerts through OpenAlgo's Telegram, the daily summary, the session logs |
 | `ticks` | The tick adapter: one feed message as a `Tick`, the last trade time read by one rule |
 | `recorder` | The tick recorder behind `bt.record`: record, finalize, and the verified reads |
+| `clients` | The session's five clients derived from the user's, each with its own timeout |
+| `_shared_alerts` | One `AlertsLike` shared by every thread of a session |
+| `inbox` | The messages workers and the feed pass to the loop, and the inbox that carries them |
+| `feedlink` | The feed link: connect, subscribe, queue ticks and order updates, outages |
 
 Times are UTC nanoseconds, prices rupees and quantities units, never lots. No module
 prints: they log to the `openalgo.backtest.live` logger, and a session's own output goes
