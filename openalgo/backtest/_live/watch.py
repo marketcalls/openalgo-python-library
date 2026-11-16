@@ -29,6 +29,10 @@ the loop.
 
 Every lock and unlock is written to the event stream. Times are UTC nanoseconds, amounts
 rupees. Used by the loop only.
+
+**Not made yet.** 6.5's banner warning for a session whose only symbol is thinly traded:
+telling a thin symbol needs a measure of its trading and a threshold that the design does
+not set, so only a session of options only is warned.
 """
 
 from __future__ import annotations

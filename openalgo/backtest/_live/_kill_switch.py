@@ -15,18 +15,22 @@ reason, and the name of the entry lock):
    keeps it from taking the broker's position through zero. With fewer units at the
    broker, none or the other side, or a book that cannot be read, nothing is sent and the
    book is read again (a book that lags a fill catches up); from the second such read in
-   a row an ERROR alert says so, once, with what the session will still exit, and the
-   strategy's book is then read every `KILL_READ_BACKOFF_S`. The event stream notes a
-   disagreement when the broker's figure changes. The position is looked at again
-   whenever it changes (an entry whose cancel was refused fills after the exit, say).
-3. Once the engine is flat with nothing working, one more read, and an ERROR alert says
-   whether the broker is flat too or what is left to close by hand.
+   a row an ERROR alert says so, with what the session will still exit, once for each
+   position, and the strategy's book is then read every `KILL_READ_BACKOFF_S`. The event
+   stream notes a disagreement when the broker's figure changes. The position is looked
+   at again whenever it changes (an entry whose cancel was refused fills after the exit,
+   say).
+3. Once the engine is flat with nothing working, an ERROR alert reports it: at the first
+   read showing the broker flat too; when the book shows other units, or cannot be read,
+   only once two reads in a row show the same (the units left to close by hand).
 
 **Which read counts.** A strategy's state is its position (units and tranches) and its
 working orders. A read counts for it only when the read began at or after its state, as
 the kill switch last saw it, began: the fire, a fill, its cancels ending, its exit
-filling. Each read is judged once: the next judgement takes a read begun after it. Any
-reader's read counts (the stops supervisor reads the book too).
+filling. Each read is judged once: the next judgement takes a read begun at least
+`KILL_READ_EVERY_S` after it, so reads in a row are that far apart, and a new state
+starts a new run of them. Any reader's read counts (the stops supervisor reads the book
+too).
 
 **Asking for reads.** At most one at a time: the next is asked for once a read begun at
 or after the last ask has come and `KILL_READ_EVERY_S` have passed since that ask. A read
@@ -74,8 +78,9 @@ KILL_REASONS = (ACCOUNT_LOSS,)
 #: exits what the strategy holds: as the safe stop waits for its last words
 #: (`_session_stop.SAFE_STOP_STATE_WAIT_S`).
 KILL_CANCEL_WAIT_S = 5.0
-#: Seconds between two asks for a position-book read: the stops supervisor's pace for a
-#: held cancel (16-session-design 4.11).
+#: Seconds between two asks for a position-book read, and at least between the starts of
+#: two reads judged in a row: the stops supervisor's pace for a held cancel
+#: (16-session-design 4.11).
 KILL_READ_EVERY_S = 2.0
 #: Seconds between two reads for a strategy whose disagreement was alerted: the user has
 #: been told, and a book that stays apart is not read every few seconds all day.
@@ -85,8 +90,9 @@ KILL_READ_BACKOFF_S = 30.0
 #: call ahead of it on the worker. The worker answers every read (or the session stops),
 #: so this only keeps a lost answer from silencing the kill switch.
 KILL_READ_LOST_AFTER_S = 300.0
-#: Reads in a row that disagree with the engine before the kill switch alerts: as two
-#: consecutive mismatches make a reconciliation mismatch (08-live-trading section 7).
+#: Reads in a row that disagree with the engine before the kill switch alerts, or reports
+#: units left at the broker: as two consecutive mismatches make a reconciliation mismatch
+#: (08-live-trading section 7).
 KILL_DISAGREEMENTS_ALERTED = 2
 
 _NS = NANOS_PER_SECOND
@@ -114,9 +120,10 @@ class _Kill:
     """One fired strategy: why and when; its `state` as last seen and the instant from
     which a read counts for it (`since_ns`); the broker's units in the read that counts
     and is not judged yet, and when that read began (None for none); the position its last
-    exit request was for; the reads in a row that disagreed and the broker's figure the
-    event stream last noted; the instant before which no read is asked for it after its
-    alert; what it has alerted."""
+    exit request was for; the reads in a row that disagreed about its state and the
+    broker's figure in the last of them; the instant before which no read is asked for it
+    after its alert; the position its last disagreement alert was about; whether its flat
+    state was reported."""
 
     reason: str
     fired_ns: int
@@ -128,7 +135,7 @@ class _Kill:
     disagreements: int = 0
     noted: int | None = None
     quiet_until_ns: int = 0
-    alerted: bool = False
+    alerted_for: _Held | None = None
     reported: bool = False
 
 
@@ -228,40 +235,56 @@ class KillSwitch:
             kill.exit_for = None
             if working or kill.reported:
                 return False
-            if kill.read_ns is None:
-                return True
-            self._report(trader, kill)
-            return False
+            return kill.read_ns is None or self._flat(trader, kill, kill.read_ns)
         kill.reported = False
         waiting = trader.entry_orders() and now_ns < kill.fired_ns + _s(KILL_CANCEL_WAIT_S)
         if waiting or held == kill.exit_for:
             return False
         if kill.read_ns is None:
             return True
-        # Judged once: the next judgement takes a read begun after this one.
-        kill.since_ns, kill.read_ns = kill.read_ns + 1, None
+        _judged(kill, kill.read_ns)
         if not exit_agreed(units, kill.broker):
-            self._disagree(trader, kill, units, now_ns)
+            self._disagree(trader, kill, held, now_ns)
             return True
-        kill.disagreements = 0
         kill.exit_for = held
         what = trader.request_exit(kill.reason)
         self._session.event("kill_exit", strategy=trader.name, units=units, outcome=what)
         return False
 
-    def _disagree(self, trader: Trader, kill: _Kill, units: float, now_ns: int) -> None:
+    def _disagree(self, trader: Trader, kill: _Kill, held: _Held, now_ns: int) -> None:
         kill.disagreements += 1
+        self._note(trader, kill, held[0])
+        if kill.disagreements < KILL_DISAGREEMENTS_ALERTED:
+            return
+        kill.quiet_until_ns = now_ns + _s(KILL_READ_BACKOFF_S)
+        # Once per position of the engine: a new one (an add or a fill) changes the units
+        # and what a Ctrl+C or the square-off would sell, so it is alerted again.
+        if kill.alerted_for != held:
+            kill.alerted_for = held
+            self._session.alert(AlertKind.ERROR, self._disagreement_words(trader, kill, held[0]))
+
+    def _flat(self, trader: Trader, kill: _Kill, read_ns: int) -> bool:
+        """The flat strategy's read, begun at `read_ns`: reported when the broker is flat
+        too, or once `KILL_DISAGREEMENTS_ALERTED` reads in a row show the same other figure
+        (a book that lags the exit's fill catches up). True while another read is needed."""
+        same = kill.disagreements > 0 and kill.broker == kill.noted
+        _judged(kill, read_ns)
+        if kill.broker != 0:
+            kill.disagreements = kill.disagreements + 1 if same else 1
+            self._note(trader, kill, 0.0)
+            if kill.disagreements < KILL_DISAGREEMENTS_ALERTED:
+                return True
+        self._report(trader, kill)
+        return False
+
+    def _note(self, trader: Trader, kill: _Kill, units: float) -> None:
+        """Write a disagreement to the event stream: the first of a run, then each change of
+        the broker's figure."""
         if kill.disagreements == 1 or kill.broker != kill.noted:
             kill.noted = kill.broker
             self._session.event(
                 "kill_disagrees", strategy=trader.name, units=units, broker_units=kill.broker
             )
-        if kill.disagreements < KILL_DISAGREEMENTS_ALERTED:
-            return
-        kill.quiet_until_ns = now_ns + _s(KILL_READ_BACKOFF_S)
-        if not kill.alerted:
-            kill.alerted = True
-            self._session.alert(AlertKind.ERROR, self._disagreement_words(trader, kill, units))
 
     def _disagreement_words(self, trader: Trader, kill: _Kill, units: float) -> str:
         """The ERROR alert of a lasting disagreement: what the books say, and what the
@@ -306,14 +329,22 @@ class KillSwitch:
 
 
 def _look(trader: Trader, kill: _Kill, now_ns: int) -> _State:
-    """The strategy's state at `now_ns`, noted: a new one restarts what counts as its
-    read, and is looked at without the back-off of an earlier alert."""
+    """The strategy's state at `now_ns`, noted: a new one restarts what counts as its read
+    and its run of disagreeing reads, and is looked at without the back-off of an earlier
+    alert."""
     state = (_held(trader), tuple(sorted(trader.working())))
     if state != kill.state:
         kill.state, kill.since_ns = state, now_ns
         kill.broker = kill.read_ns = None
-        kill.quiet_until_ns = 0
+        kill.disagreements = kill.quiet_until_ns = 0
     return state
+
+
+def _judged(kill: _Kill, read_ns: int) -> None:
+    """The read that counts for `kill`, begun at `read_ns`, is judged: the next one to
+    count begins at least `KILL_READ_EVERY_S` after it, so a book that lags a fill by less
+    catches up between two reads in a row."""
+    kill.since_ns, kill.read_ns = read_ns + _s(KILL_READ_EVERY_S), None
 
 
 def _held(trader: Trader) -> _Held:
