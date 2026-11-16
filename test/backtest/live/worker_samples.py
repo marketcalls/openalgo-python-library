@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import itertools
+import sqlite3
 from typing import Any
 
 from fake_openalgo import BROKER, FakeOpenAlgo
@@ -26,12 +27,42 @@ from openalgo.backtest._live.guard import ModeGuard
 from openalgo.backtest._live.inbox import Inbox, RawOrderUpdate
 from openalgo.backtest._live.journal import Journal
 from openalgo.backtest._live.worker import JournalTarget, OrderWorker
+from openalgo.backtest.errors import JournalError
 
 #: The fake's trading day (its fixture starts on 2026-11-16 at 10:15 IST).
 DAY = dt.date(2026, 11, 16)
 STRATEGY = "ema_cross"
 ACCOUNT = "trader1"
 PRICE = 812.0
+
+
+def disk_failure(*args: Any, **kwargs: Any) -> Any:
+    """Stands in for a journal write that meets a failing disk: the JournalError the
+    journal raises for SQLite's own error."""
+    raise JournalError("cannot record the order update: disk I/O error") from (
+        sqlite3.OperationalError("disk I/O error")
+    )
+
+
+def watch_handover(worker: OrderWorker, monkeypatch: Any) -> list[tuple[int | None, int]]:
+    """Note the worker's `busy_since_ns` and `raw_pending` whenever it journals an order
+    word or looks up the intent of news it is about to post: moments when that news is not
+    posted yet. The list fills as the worker steps."""
+    seen: list[tuple[int | None, int]] = []
+    for name in ("record_update", "intent_of"):
+        original = getattr(Journal, name)
+
+        def spy(self: Journal, *args: Any, _original: Any = original, **kwargs: Any) -> Any:
+            seen.append((worker.busy_since_ns, worker.raw_pending))
+            return _original(self, *args, **kwargs)
+
+        monkeypatch.setattr(Journal, name, spy)
+    return seen
+
+
+def looks_idle(seen: list[tuple[int | None, int]]) -> list[tuple[int | None, int]]:
+    """The moments of `watch_handover` at which the worker looked idle to the loop."""
+    return [(busy, waiting) for busy, waiting in seen if busy is None and waiting == 0]
 
 
 class Alerts:

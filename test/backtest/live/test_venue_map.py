@@ -382,6 +382,25 @@ def test_a_terminal_news_ends_what_waited_for_a_result():
     assert rig.map.sent(SendResult(modify.request_id, accepted("B1"))).applied is Applied.NOTHING
 
 
+def test_a_terminal_word_the_kernel_refuses_leaves_the_modify_waiting_for_its_result():
+    rig = Rig()
+    kernel_order = bound(rig)
+    modify = modified(rig, kernel_order)
+    # Paused at a bar close the kernel refuses every result: here the stand-in for any
+    # refusal of a terminal word but the race of an order it had ended.
+    rig.next_close()
+    refused = rig.map.news(update("B1", OrderStatus.CANCELLED, quantity=10))
+    rig.wait()
+
+    answer = rig.map.sent(SendResult(modify.request_id, accepted("B1")))
+
+    assert (refused.mismatch, answer.applied, rig.units(kernel_order)) == (
+        True,
+        Applied.MODIFIED,
+        20.0,
+    )
+
+
 def test_intent_ids_carry_the_journal_sessions_mode_and_start():
     rig = Rig(mode=Mode.SANDBOX, starts=3)
     kernel_order, place = placed(rig)

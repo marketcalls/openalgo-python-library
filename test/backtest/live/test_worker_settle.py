@@ -9,16 +9,25 @@ from __future__ import annotations
 
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
-from worker_samples import PRICE, WorkerRig
+from worker_samples import PRICE, STRATEGY, WorkerRig, disk_failure, looks_idle, watch_handover
 
 from openalgo.backtest._live._order_answers import Outcome
+from openalgo.backtest._live._order_follow import OrderFollower
 from openalgo.backtest._live._types import AlertKind, OrderStatus
 from openalgo.backtest._live._venue_requests import OrderTerms, Priority
 from openalgo.backtest._live._worker_settle import (
     MODIFY_SETTLE_DEADLINE_S,
     ORDER_CHECK_DELAYS_S,
 )
-from openalgo.backtest._live.inbox import NotSent, NotSentReason, OrderNews, SendResult, Settled
+from openalgo.backtest._live.inbox import (
+    NotSent,
+    NotSentReason,
+    OrderNews,
+    SendResult,
+    Settled,
+    WorkerFailed,
+)
+from openalgo.backtest.errors import JournalError
 
 NEW_TERMS = OrderTerms(20, "LIMIT", 705.0, 0.0)
 
@@ -98,6 +107,61 @@ def test_a_modify_no_row_settles_within_its_deadline_expires_with_an_alert(rig):
     assert (settled.request, settled.expired) == (change, True)
     assert len(rig.fake.log.calls("orderstatus")) == 3
     assert rig.alerts.kinds() == [AlertKind.ERROR]
+    assert "its row cannot be read (" in rig.alerts.sent[0][1]
+
+
+def test_the_alert_of_an_expired_modify_whose_row_shows_other_terms_says_so(rig):
+    place, order_id = resting(rig)
+    rig.fake.faults.lose_answer("modifyorder")
+    rig.run(rig.modify(place, order_id, NEW_TERMS, Priority.ADJUST))
+    # A change made by hand at the broker meanwhile.
+    rig.fake.client().modifyorder(
+        order_id=order_id,
+        strategy=STRATEGY,
+        symbol="SBIN",
+        action="BUY",
+        exchange="NSE",
+        price_type="LIMIT",
+        product="MIS",
+        quantity=30,
+        price=702.0,
+    )
+
+    for wait in (1, 2, 5, 2):
+        rig.clock.advance(wait)
+        rig.worker.step()
+
+    (text,) = [text for kind, text in rig.alerts.sent if kind is AlertKind.ERROR]
+    assert "its row shows neither the old nor the new terms (30 units LIMIT" in text
+
+
+def test_the_news_of_a_settling_read_counts_as_waiting_until_it_is_posted(rig, monkeypatch):
+    place, order_id = resting(rig)
+    rig.worker.step()
+    rig.messages()
+    rig.fake.faults.silence_order_updates()
+    rig.fake.faults.lose_answer("modifyorder")
+    rig.run(rig.modify(place, order_id, NEW_TERMS, Priority.ADJUST))
+    seen = watch_handover(rig.worker, monkeypatch)
+
+    rig.clock.advance(1)
+    rig.worker.step()
+
+    (news,) = rig.of(OrderNews, rig.messages())
+    assert (news.update.quantity, looks_idle(seen)) == (20, [])
+
+
+def test_a_journal_file_failure_in_a_settling_read_stops_the_worker(rig, monkeypatch):
+    place, order_id = resting(rig)
+    rig.fake.faults.lose_answer("modifyorder")
+    rig.run(rig.modify(place, order_id, NEW_TERMS, Priority.ADJUST))
+    monkeypatch.setattr(OrderFollower, "check", disk_failure)
+
+    rig.clock.advance(1)
+    rig.worker.step()
+
+    (failed,) = rig.of(WorkerFailed, rig.messages())
+    assert isinstance(failed.error, JournalError)
 
 
 def test_a_refused_cancel_of_an_order_still_working_is_settled_by_its_row(rig):

@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
-from worker_samples import DAY, PRICE, STRATEGY, WorkerRig
+from worker_samples import DAY, PRICE, STRATEGY, WorkerRig, disk_failure
 
+from openalgo.backtest._live._order_follow import OrderFollower
 from openalgo.backtest._live._types import AlertKind, Mode, OrderStatus, OrderUpdate
-from openalgo.backtest._live.inbox import OrderNews, Resolutions, SendResult
+from openalgo.backtest._live.inbox import OrderNews, Resolutions, SendResult, WorkerFailed
+from openalgo.backtest._live.orders import OrderPath
+from openalgo.backtest.errors import JournalError
 
 LEG = (STRATEGY, "SBIN", "NSE")
 
@@ -141,6 +144,47 @@ def test_a_stop_still_working_that_the_journal_names_is_cancelled_as_an_orphan(r
         old
     ]
     assert (named_meanwhile, journal_stop(rig)) == (old, new)
+
+
+def test_a_new_stop_that_ends_before_the_orphan_it_waits_for_is_not_recorded(rig):
+    placed_stop(rig)
+    rig.restart()
+    rig.messages()
+    rig.fake.faults.hold_order_updates()
+    placed_stop(rig)  # the old stop still works: it is cancelled as an orphan
+    rig.fake.trade("SBIN", "NSE", 799.0)  # the new stop fills
+
+    # The new stop's fill arrives before the orphan's cancel.
+    rig.fake.faults.release_order_updates(newest_first=True)
+    rig.worker.step()
+
+    assert journal_stop(rig) is None
+
+
+def test_a_journal_file_failure_while_reading_the_stop_the_journal_names_stops_the_worker(
+    rig, monkeypatch
+):
+    placed_stop(rig)
+    rig.worker.step()
+    rig.messages()
+    monkeypatch.setattr(OrderFollower, "check", disk_failure)
+
+    (failed,) = rig.of(WorkerFailed, rig.run(rig.stop()))
+
+    assert isinstance(failed.error, JournalError)
+
+
+def test_a_journal_file_failure_while_cancelling_an_orphan_stop_stops_the_worker(
+    rig, monkeypatch
+):
+    placed_stop(rig)
+    rig.restart()
+    rig.messages()
+    monkeypatch.setattr(OrderPath, "cancel", disk_failure)
+
+    (failed,) = rig.of(WorkerFailed, rig.run(rig.stop()))
+
+    assert isinstance(failed.error, JournalError)
 
 
 def test_a_stop_the_journal_names_whose_row_cannot_be_read_keeps_it_and_alerts(rig):

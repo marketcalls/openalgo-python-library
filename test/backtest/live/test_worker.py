@@ -9,12 +9,14 @@ the test drives `step()` on the fake's manual clock (`worker_samples`).
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
-from worker_samples import DAY, PRICE, WorkerRig
+from worker_samples import DAY, PRICE, WorkerRig, looks_idle, watch_handover
 
 from openalgo.backtest._live._order_answers import Outcome
-from openalgo.backtest._live._types import Mode, OrderStatus, Purpose
+from openalgo.backtest._live._types import AlertKind, Mode, OrderStatus, Purpose
 from openalgo.backtest._live._venue_requests import OrderTerms, Priority
 from openalgo.backtest._live._worker_queue import (
     Probe,
@@ -36,9 +38,12 @@ from openalgo.backtest._live.inbox import (
     WorkerFailed,
     WorkerReady,
 )
+from openalgo.backtest._live.orders import OrderPath
 from openalgo.backtest.errors import JournalError, LiveError
 
 NS = 1_000_000_000
+#: Seconds a thread test waits for the worker's thread at most.
+THREAD_WAIT_S = 5.0
 
 
 @pytest.fixture
@@ -245,6 +250,19 @@ def test_a_protective_modify_held_back_is_put_back_and_a_trailing_one_is_refused
     assert rig.fake.log.calls("modifyorder") == []
 
 
+def test_a_protective_request_the_order_path_refuses_for_good_is_refused_with_an_alert(rig):
+    # A cancel of an order this session never sent: no hold explains it, so it is not
+    # put back to be refused again every half second.
+    cancel = rig.cancel(rig.stop(), "260101000000001", Priority.PROTECT)
+
+    posted = rig.run(cancel) + steps(rig, 6.0)
+
+    assert [(n.request, n.reason) for n in rig.of(NotSent, posted)] == [
+        (cancel, NotSentReason.REFUSED)
+    ]
+    assert rig.alerts.kinds() == [AlertKind.ERROR]
+
+
 def filled_entry(rig: WorkerRig):
     place = rig.place()
     posted = rig.run(place)
@@ -271,6 +289,45 @@ def test_a_journal_that_cannot_take_an_intent_stops_the_worker(rig):
     (failed,) = rig.of(WorkerFailed, posted)
     assert isinstance(failed.error, JournalError)
     assert (after, len(rig.fake.log.calls("placeorder"))) == ([], 0)
+
+
+def test_an_unexpected_error_in_a_step_stops_the_worker_as_on_its_thread(rig, monkeypatch):
+    def broken(path: OrderPath) -> list:
+        raise RuntimeError("a defect")
+
+    monkeypatch.setattr(OrderPath, "held_fills", broken)
+    took = rig.worker.step()
+    (failed,) = rig.of(WorkerFailed, rig.messages())
+    monkeypatch.undo()
+    after = rig.run(rig.stop())
+
+    assert (took, str(failed.error)) == (False, "a defect")
+    assert (after, rig.fake.log.calls("placeorder")) == ([], [])
+
+
+def test_a_step_under_way_when_the_worker_closes_sends_nothing_more(broker, tmp_path):
+    rig = WorkerRig(broker, tmp_path, start=False)
+    inside, carry_on = threading.Event(), threading.Event()
+    client = broker.client()
+
+    def placeorder(**fields):
+        inside.set()
+        carry_on.wait(THREAD_WAIT_S)
+        return client.placeorder(**fields)
+
+    rig.orders.placeorder = placeorder
+    rig.worker.put(rig.stop())
+    rig.worker.put(
+        rig.place(Purpose.STOP, action="SELL", price_type="SL-M", trigger_price=1490.0, symbol="INFY")
+    )
+    rig.worker.start()
+    assert inside.wait(THREAD_WAIT_S)
+
+    rig.worker.close(wait_s=0.0)
+    carry_on.set()
+    rig.worker.close(wait_s=THREAD_WAIT_S)
+
+    assert len(broker.log.calls("placeorder")) == 1
 
 
 def test_the_books_are_read_and_posted_with_their_generation(rig):
@@ -340,6 +397,28 @@ def test_the_raw_updates_waiting_are_counted_until_drained(rig):
     rig.worker.step()
 
     assert (waiting, rig.worker.raw_pending) == (2, 0)
+
+
+def test_a_drained_update_counts_as_waiting_until_its_news_is_posted(rig, monkeypatch):
+    rig.run(rig.stop())  # its confirming word waits in the raw FIFO
+    seen = watch_handover(rig.worker, monkeypatch)
+
+    rig.worker.step()
+
+    assert rig.of(OrderNews, rig.messages()) != []
+    assert (seen != [], looks_idle(seen)) == (True, [])
+
+
+def test_polled_news_counts_as_waiting_until_it_is_posted(rig, monkeypatch):
+    rig.fake.faults.silence_order_updates()
+    rig.run(rig.stop())
+    rig.clock.advance(2.5)
+    seen = watch_handover(rig.worker, monkeypatch)
+
+    rig.worker.step()
+
+    assert [news.update.source for news in rig.of(OrderNews, rig.messages())] == ["poll"]
+    assert (seen != [], looks_idle(seen)) == (True, [])
 
 
 def test_an_update_that_cannot_be_read_is_counted_and_dropped(rig):
