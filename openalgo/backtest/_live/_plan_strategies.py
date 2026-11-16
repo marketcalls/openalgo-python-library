@@ -9,8 +9,9 @@ intervals, CNC and NRML (they need GTT orders live), and condition strategies
 (`entry_when`, `exit_when`, `short_when`, `cover_when`), whose arrays are computed ahead
 over the whole series (decision 5): their rules go in `on_bar`. It then resolves the
 strategy's settings for today as `bt.backtest` resolves them (`_settings.resolve`: a
-class attribute wins over the run argument of the same name, each `max_daily_loss` in
-rupees) and learns what history its indicators need by running `init` on the engine's
+class attribute wins over the run argument of the same name, except the daily loss
+limit: live it is the `max_daily_loss=` of the call, in rupees, and a class attribute
+must agree with it) and learns what history its indicators need by running `init` on the engine's
 reference bars, as a backtest does before it loads data (`_warm_up_probe`): that run is
 also the strategy layer's causality and window-stability check, and the one that finds
 a condition strategy, since conditions are declared in `init`.
@@ -33,6 +34,7 @@ from .._margin_check import check_margin
 from .._messages import not_supported
 from .._series import ist_time
 from .._settings import RunPlan, resolve
+from .._settings import _rupees as rupees_amount
 from .._timeframes import _check_interval
 from .._warm_up import SeriesNeed
 from .._warm_up_measure import WarmUp
@@ -55,7 +57,7 @@ class StrategySpec:
 
     `strategy` is the class and `name` its class name; `symbol` and `exchange` what it
     trades, `interval` its bar interval. `capital` and `max_daily_loss` are rupees (the
-    limit resolved as `bt.backtest` resolves it, the class attribute winning). `plan` is
+    limit given to `bt.live`, which a class attribute must agree with). `plan` is
     its settings for today (`_settings.RunPlan`, the present of the start), `arguments`
     the arguments of the backtest of today they were resolved from, `instruments` its
     instruments from the reference tables, `needs` the bars its indicators need before
@@ -155,16 +157,12 @@ def strategy_spec(
 
     Raises NotImplementedError for what a live session does not run, ConfigError for
     unusable settings and for a strategy with no daily loss limit (mandatory live: from
-    `max_daily_loss=` or the class attribute), the reference tables' errors for a contract
+    `max_daily_loss=` of the call; a class attribute must agree with it), the reference
+    tables' errors for a contract
     they do not cover, and what the strategy's `init` raises on the reference bars."""
     refuse_unsupported(strategy)
     plan = resolve(strategy, dict(arguments))
-    limit = plan.risk["max_daily_loss"]
-    if limit is None:
-        raise ConfigError(
-            f"{name}: max_daily_loss is mandatory in a live session; pass max_daily_loss= "
-            "(rupees, or bt.rupees(...)) to bt.live, or set it on the class"
-        )
+    limit = _live_daily_loss_limit(name, plan.risk["max_daily_loss"], arguments)
     instruments, _, _ = resolve_instruments(plan, None, calendar)
     check_margin(instruments, plan.product, (plan.start, plan.end))
     needs, measured = probe(strategy, plan, instruments, arguments["params"])
@@ -203,6 +201,33 @@ def refuse_shared_legs(specs: tuple[StrategySpec, ...]) -> None:
 def ist_day(present_ns: int) -> dt.date:
     """The IST date of `present_ns` (UTC nanoseconds): the session's trading day."""
     return ist_time(present_ns).date()
+
+
+def _live_daily_loss_limit(
+    name: str, resolved: float | None, arguments: Mapping[str, Any]
+) -> float:
+    """The strategy's daily loss limit for the session, in rupees: the `max_daily_loss=` of
+    the `bt.live` call. A live risk limit is the one given when the session starts, never
+    one taken silently from the class (maintainer, 2026-11-16: capital and max_daily_loss
+    are mandatory live). `resolved` is the backtest's resolution, in which a class
+    attribute wins; when the class sets a different limit, the session refuses to start.
+
+    Raises ConfigError for a limit missing from the call and for a class limit that differs
+    from it."""
+    given = rupees_amount(arguments.get("max_daily_loss"), "max_daily_loss")
+    if given is None:
+        raise ConfigError(
+            f"{name}: max_daily_loss is mandatory in a live session; pass max_daily_loss= "
+            "(rupees, or bt.rupees(...)) to bt.live: a limit set only on the class is not "
+            "taken as the live limit"
+        )
+    if resolved != given:
+        raise ConfigError(
+            f"{name}: max_daily_loss={given:g} differs from the class attribute "
+            f"max_daily_loss={resolved:g}: give bt.live the same value, or remove the class "
+            "attribute, so the live limit is the one you pass"
+        )
+    return given
 
 
 __all__ = [

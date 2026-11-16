@@ -177,8 +177,18 @@ def test_a_strategy_with_no_daily_loss_limit_is_refused():
         specify(max_daily_loss={})
 
 
-def test_the_daily_loss_limit_set_on_the_class_wins_over_the_argument():
-    spec = specify(subclass(max_daily_loss=1_500), max_daily_loss=5_000)
+def test_a_daily_loss_limit_set_only_on_the_class_is_refused_live():
+    with pytest.raises(ConfigError, match="Variant: max_daily_loss is mandatory in a live session"):
+        specify(subclass(max_daily_loss=1_500), max_daily_loss={})
+
+
+def test_a_class_limit_that_differs_from_the_argument_is_refused():
+    with pytest.raises(ConfigError, match="differs from the class attribute"):
+        specify(subclass(max_daily_loss=1_500), max_daily_loss=5_000)
+
+
+def test_a_class_limit_equal_to_the_argument_is_the_limit():
+    spec = specify(subclass(max_daily_loss=1_500), max_daily_loss=bt.rupees(1_500))
     assert spec.strategies[0].max_daily_loss == 1_500
 
 
@@ -247,11 +257,11 @@ def test_without_a_daily_loss_limit_on_the_call_or_the_class_bt_live_is_refused(
         specify_without("max_daily_loss")
 
 
-def test_a_daily_loss_limit_set_on_the_class_needs_no_argument():
-    spec = plan_module.specify(
-        subclass(max_daily_loss=1_500), clock=lambda: ist(10, 15), capital=LIMITS["capital"]
-    )
-    assert spec.strategies[0].max_daily_loss == 1_500
+def test_a_class_limit_with_no_argument_at_all_is_refused():
+    with pytest.raises(ConfigError, match="a limit set only on the class is not taken"):
+        plan_module.specify(
+            subclass(max_daily_loss=1_500), clock=lambda: ist(10, 15), capital=LIMITS["capital"]
+        )
 
 
 def test_a_default_shared_with_bt_backtest_follows_bt_backtests_own(monkeypatch):

@@ -16,8 +16,8 @@ and 3.1 step 1; decisions 3 and 9 of its section 10.0; unit 7). Part of `plan`.
   `ping` reports (decision 9; `LiveArguments.account_name`).
 - The settings a live session shares with `bt.backtest` take `bt.backtest`'s own
   defaults, read from its signature (`BACKTEST_DEFAULT`), so the two cannot drift
-  apart. `capital` is mandatory; `max_daily_loss` is mandatory for each strategy, from
-  the call or the class attribute, which wins as in a backtest (`_plan_strategies`).
+  apart. `capital` and `max_daily_loss` are mandatory in the call, for each strategy; a
+  class attribute `max_daily_loss` must agree with the call's (`_plan_strategies`).
 
 Every other value is checked where `bt.backtest` checks it, when the plan resolves each
 strategy's settings (`_plan_strategies`), so a live session and a backtest refuse the

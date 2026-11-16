@@ -167,6 +167,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose bars, views and indicators equal a backtest's at every decision; and a data
   worker that reads quotes and broker candles on its own thread under the server's rate
   limits.
+- The live session's plan (private): `bt.live`'s arguments are checked and each strategy
+  is set up the way a backtest sets it up for the same day, with OpenAlgo's lot size,
+  tick size and freeze quantity in place of the reference tables'; the session then
+  catches up from the open without deciding or sending anything. `max_daily_loss` must
+  be given in the `bt.live` call: a limit set only on the strategy class is not taken as
+  the live limit, and a class limit that differs from the call's stops the start.
 
 ## [2.2.1] - 2026-11-15
 
