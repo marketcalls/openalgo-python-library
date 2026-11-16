@@ -90,6 +90,50 @@ def checked_at_two_seconds(fake, worker, *slices: int, symbol: str = "SBIN") -> 
     worker.step()
 
 
+def stepped_for(fake, worker, seconds: float) -> None:
+    """Step the worker for `seconds` from now, the clock moved on to each read it says is
+    due, as its thread waits between steps."""
+    end = fake.clock.now() + round(seconds * NS)
+    while (due := worker.step()) is not None and due <= end:
+        move_to(fake, max(due, fake.clock.now()))
+
+
+def reads(fake) -> list[str]:
+    """The data reads answered so far, oldest first: "quotes" or "history"."""
+    return [entry.what for entry in fake.log.calls() if entry.what in ("quotes", "history")]
+
+
+class AsksDuringFirstRead:
+    """The fake's client, during whose first read the loop asks `ask()` of the worker,
+    as the loop does while a read is in flight on the worker's thread."""
+
+    def __init__(self, client, ask) -> None:
+        self._client = client
+        self._ask = ask
+        self._reads = 0
+
+    def _read(self, endpoint: str, arguments: dict):
+        self._reads += 1
+        if self._reads == 1:
+            self._ask()
+        return getattr(self._client, endpoint)(**arguments)
+
+    def quotes(self, **arguments):
+        return self._read("quotes", arguments)
+
+    def history(self, **arguments):
+        return self._read("history", arguments)
+
+
+def checks_of_three_instruments_slow_to_read(fake, worker) -> None:
+    """Candle checks of SBIN, INFY and TCS asked at 10:16:01, each history read taking
+    one second (twice the pace), the clock at their first read."""
+    for symbol in ("SBIN", "INFY", "TCS"):
+        worker.check_candles(symbol, "NSE", [SLICE_1015], CLOSE_1015)
+        fake.faults.slow("history", 1.0)
+    move_to(fake, CLOSE_1015 + 2 * NS)
+
+
 # ----- candle checks -------------------------------------------------------------------
 
 
@@ -247,6 +291,18 @@ def test_quotes_are_read_while_the_feed_is_dead(fake, worker, inbox):
     assert [type(message) for message in taken(inbox)] == [Quote]
 
 
+def test_a_feed_death_reported_during_a_slow_read_stops_the_history_reads_after_it(fake, inbox):
+    worker = DataWorker(
+        AsksDuringFirstRead(fake.client(), lambda: worker.feed_dead()),
+        inbox,
+        day=DAY,
+        now=fake.clock.now,
+    )
+    checks_of_three_instruments_slow_to_read(fake, worker)
+    worker.step()
+    assert len(history_calls(fake)) == 1
+
+
 # ----- the quote fallback ----------------------------------------------------------------
 
 
@@ -271,8 +327,59 @@ def test_quotes_are_read_every_two_seconds(fake, worker):
 def test_each_instrument_named_is_quoted(fake, worker, inbox):
     trade_at(fake, ASKED_AT, 1_500.0, 1, symbol="INFY")
     worker.quote([("SBIN", "NSE"), ("INFY", "NSE")])
-    worker.step()
+    stepped_for(fake, worker, 1.0)
     assert [(m.symbol, m.ltp) for m in taken(inbox)] == [("SBIN", 499.0), ("INFY", 1_500.0)]
+
+
+def test_quote_reads_are_paced_at_five_per_second(fake, worker):
+    worker.quote([("SBIN", "NSE"), ("INFY", "NSE"), ("TCS", "NSE")])
+    stepped_for(fake, worker, 1.0)
+    assert [entry.ts_ns for entry in fake.log.calls("quotes")] == [
+        ASKED_AT,
+        ASKED_AT + NS // 5,
+        ASKED_AT + 2 * NS // 5,
+    ]
+
+
+def test_a_round_of_more_instruments_than_the_route_allows_per_second_is_not_refused(fake, inbox):
+    # The fake's quotes route takes 10 calls per second, as the server's does by default.
+    named = [(f"STOCK{number}", "NSE") for number in range(12)]
+    for symbol, exchange in named:
+        fake.add_instrument(symbol, exchange)
+        fake.trade(symbol, exchange, 100.0, volume=1)
+    worker = DataWorker(fake.client(), inbox, day=DAY, now=fake.clock.now)
+    worker.quote(named)
+    stepped_for(fake, worker, 3.0)
+    assert [type(message) for message in taken(inbox)][: len(named)] == [Quote] * len(named)
+
+
+def test_a_quote_round_slower_than_its_period_ends_the_step_after_one_round(fake, worker):
+    named = [("SBIN", "NSE"), ("INFY", "NSE"), ("TCS", "NSE")]
+    for _ in range(30):
+        fake.faults.slow("quotes", 1.0)
+    worker.quote(named)
+    worker.step()
+    assert len(fake.log.calls("quotes")) == len(named)
+
+
+def test_the_rest_of_a_quote_round_goes_before_a_due_candle_check(fake, worker):
+    worker.quote([("SBIN", "NSE"), ("INFY", "NSE")])
+    worker.check_candles("SBIN", "NSE", [SLICE_1015], CLOSE_1015)
+    move_to(fake, CLOSE_1015 + 2 * NS)
+    stepped_for(fake, worker, 1.0)
+    assert reads(fake) == ["quotes", "quotes", "history"]
+
+
+def test_a_quote_asked_during_a_slow_history_read_is_read_before_the_next(fake, inbox):
+    worker = DataWorker(
+        AsksDuringFirstRead(fake.client(), lambda: worker.quote([("SBIN", "NSE")])),
+        inbox,
+        day=DAY,
+        now=fake.clock.now,
+    )
+    checks_of_three_instruments_slow_to_read(fake, worker)
+    worker.step()
+    assert reads(fake)[:2] == ["history", "quotes"]
 
 
 def test_an_empty_list_stops_the_quotes(fake, worker):
@@ -289,8 +396,7 @@ def test_due_quotes_are_read_before_a_due_candle_check(fake, worker):
     worker.quote([("SBIN", "NSE")])
     move_to(fake, CLOSE_1015 + 2 * NS)
     worker.step()
-    reads = [entry.what for entry in fake.log.calls() if entry.what in ("quotes", "history")]
-    assert reads == ["quotes", "history"]
+    assert reads(fake) == ["quotes", "history"]
 
 
 def test_quotes_due_after_a_slow_history_read_go_before_the_next(fake, worker):
@@ -300,8 +406,8 @@ def test_quotes_due_after_a_slow_history_read_go_before_the_next(fake, worker):
     worker.quote([("SBIN", "NSE")])
     fake.faults.slow("history", 3.0)
     worker.step()
-    reads = [entry.what for entry in fake.log.calls() if entry.what in ("quotes", "history")]
-    assert reads == ["quotes", "history", "quotes", "history"]
+    worker.step()
+    assert reads(fake) == ["quotes", "history", "quotes", "history"]
 
 
 def test_a_failed_quote_reaches_the_loop_as_data_failed(fake, worker, inbox):
@@ -345,5 +451,65 @@ def test_the_thread_is_started_once(worker):
     try:
         with pytest.raises(ConfigError, match="started once"):
             worker.start()
+    finally:
+        worker.close()
+
+
+class HeldFirstQuote:
+    """The fake's client, its first quote read held until `release` is set, as a broker
+    that is slow to answer holds it."""
+
+    def __init__(self, client) -> None:
+        self._client = client
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.quote_reads = 0
+
+    def quotes(self, **arguments):
+        self.quote_reads += 1
+        if self.quote_reads == 1:
+            self.entered.set()
+            self.release.wait(10.0)
+        return self._client.quotes(**arguments)
+
+
+def test_a_close_during_a_slow_read_ends_the_thread_before_its_next_read(fake, inbox):
+    client = HeldFirstQuote(fake.client())
+    worker = DataWorker(client, inbox, day=DAY, now=fake.clock.now)
+    worker.start()
+    try:
+        worker.quote([("SBIN", "NSE"), ("INFY", "NSE"), ("TCS", "NSE")])
+        assert client.entered.wait(10.0)
+        worker.close(wait_s=0.0)  # the stop is asked while the read is in flight
+    finally:
+        client.release.set()
+        worker.close()
+    assert THREAD_NAME not in running_names()
+    assert client.quote_reads == 1
+
+
+class CloseAtFirstClear(threading.Event):
+    """A wake event during whose first `clear` the session's stop comes, the instant
+    between the thread's last look at the stop and its wait."""
+
+    def __init__(self, worker: DataWorker) -> None:
+        super().__init__()
+        self._worker = worker
+        self._first = True
+
+    def clear(self) -> None:
+        if self._first:
+            self._first = False
+            self._worker.close(wait_s=0.0)
+        super().clear()
+
+
+def test_a_close_as_the_thread_clears_its_wake_still_ends_the_thread(worker):
+    worker._wake = CloseAtFirstClear(worker)  # no public seam reaches this instant
+    runner = threading.Thread(target=worker.run, daemon=True)
+    runner.start()
+    try:
+        runner.join(2.0)
+        assert not runner.is_alive()
     finally:
         worker.close()
