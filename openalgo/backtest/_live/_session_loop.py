@@ -6,8 +6,8 @@ the kernel sessions, and its iteration, `Session.step`.
     B. close slices by the clock: each bar builder's due slices, released to the kernel
        in order (`_session_trader`), and the broker candle checks asked for
     C. drive the kernel sessions to their decisions (`Trader.drive`)
-    D. duties by time: the stops supervisor's (`stops`), the safe stop, the end of the
-       day (`_session_stop.Control`)
+    D. duties by time: the stops supervisor's (`stops`), the risk watch (`watch`), the
+       safe stop, the end of the day (`_session_stop.Control`)
     E. hand the kernel's commands to the order worker, none after a guard lock; the stops
        supervisor then reviews each leg's unprotected window
     F. save each strategy's `self.state` when a slice was released and it changed
@@ -18,7 +18,7 @@ own threads. Under the test seam (`threads` False) `step` runs the order worker'
 data worker's own steps, and posts the queued alerts, on the loop's thread before A, and
 every wait is the injected `sleep`, so a test runs on a manual clock with nothing waiting
 for real (2.11). The loop's lag (the age of the oldest message it takes) is watched with
-threads only: under the test seam a worker's call runs on the loop's thread.
+threads only (`_session_lag`).
 
 A guard lock (`guard_locked`, 6.2) locks every strategy's entries and stops every request
 to the worker; the ERROR alert lists each position and its stop. The emergency stop's
@@ -38,6 +38,7 @@ from .._layout import NANOS_PER_SECOND
 from ..errors import LiveError
 from ._guard_breach import ModeBreach, breach_text
 from ._session_exits import ExitRetries
+from ._session_lag import LoopLag
 from ._session_news import News
 from ._session_parts import SessionParts, SessionStopped, StopFlag
 from ._session_trader import Trader
@@ -51,6 +52,7 @@ from .feedlink import FeedLink
 from .inbox import Envelope
 from .stops import StopsSupervisor
 from .ticks import TickTally
+from .watch import RiskWatch
 
 logger = logging.getLogger(LOGGER_NAME)
 
@@ -63,9 +65,6 @@ LOOP_BATCH_MAX_S = 0.02
 #: Seconds A keeps draining what arrived before it began once a slice close is due, so
 #: the closing slice's ticks are stamped before it closes (the bars' second duty).
 LOOP_DRAIN_OVERRUN_S = 0.2
-#: The loop's lag (2.9): a warning past the first, an ERROR alert past the second.
-LOOP_LAG_WARN_S = 1.0
-LOOP_LAG_ALERT_S = 5.0
 #: The shortest wait, so a loop with work due still yields.
 LOOP_WAIT_MIN_S = 0.001
 #: The entry lock of the session's guard lock (6.2).
@@ -100,6 +99,7 @@ class Session:
         self.news = News(self)
         self.exits = ExitRetries(self)
         self.stops = StopsSupervisor(self)
+        self.risk = RiskWatch(self)
         self.control: Any = None
         self.data: DataWorker | None = None
         self.link: FeedLink | None = None
@@ -121,7 +121,7 @@ class Session:
         self.started_ns = now()
         self._held: collections.deque[Envelope] = collections.deque()
         self._event_failed = False
-        self._lag_warned_ns: int | None = None
+        self._lag = LoopLag(self)
 
     # ----- what the handlers and the stop use -----------------------------------------
 
@@ -228,8 +228,10 @@ class Session:
         self.stops.duties(self.now(), protecting=protecting)
         # The commands are taken after the duties, so an entry the safe stop cancels in
         # the step that decided it is withdrawn before it reaches the worker.
-        if self.control is not None and not protecting:
-            self.control.duties(self.now())
+        if not protecting:
+            self.risk.duties(self.now())
+            if self.control is not None:
+                self.control.duties(self.now())
         self.hand_over(self._commands())
         self.stops.review(self.now())
         if released:
@@ -269,7 +271,7 @@ class Session:
             if envelope is None:
                 return
             if self.threads:
-                self._watch_lag(envelope)
+                self._lag.note(envelope)
             self.news.take(envelope.message)
 
     def _next(self, arrived_before_ns: int | None) -> Envelope | None:
@@ -279,22 +281,6 @@ class Session:
                 return None
             return self._held.popleft()
         return self.parts.inbox.take(arrived_before_ns=arrived_before_ns)
-
-    def _watch_lag(self, envelope: Envelope) -> None:
-        now_ns = self.now()
-        lag_s = (now_ns - envelope.put_ns) / _NS
-        if lag_s <= LOOP_LAG_WARN_S:
-            return
-        if self._lag_warned_ns is None or now_ns - self._lag_warned_ns >= 60 * _NS:
-            self._lag_warned_ns = now_ns
-            logger.warning("the session loop is %.1f s behind its inbox", lag_s)
-            self.event("loop_lag", seconds=lag_s)
-        if lag_s > LOOP_LAG_ALERT_S:
-            self.alert(
-                AlertKind.ERROR,
-                f"the session loop is more than {LOOP_LAG_ALERT_S:g} s behind: a slow "
-                "strategy or a stuck journal delays ticks and order news",
-            )
 
     def _close_due(self, now_ns: int) -> bool:
         return any(close_ns <= now_ns for close_ns in self._next_closes())
@@ -322,7 +308,7 @@ class Session:
                 trader.closed(closed.slices, closed.bars)
                 self._check_candles(trader, closed.slices[-1][1])
         for trader in self.traders:
-            trader.release_due()
+            self.risk.released(trader, trader.release_due())
         return {t.name for t in self.traders if t.part.released != before[t.name]}
 
     def _check_candles(self, trader: Trader, closed_ns: int) -> None:
@@ -378,6 +364,7 @@ class Session:
             self.builders[exchange] = builder
             self._closes[exchange] = [closed + grace_ns for _, closed in builder.slices]
             self._closed[exchange] = 0
+        self.risk.start(watching_ns)
         for trader in self.traders:
             builder = self.builders[trader.exchange]
             trader.watch(watching_ns, from_open=watching_ns <= builder.session[0])
@@ -390,8 +377,6 @@ __all__ = [
     "LOOP_BATCH_MAX",
     "LOOP_BATCH_MAX_S",
     "LOOP_DRAIN_OVERRUN_S",
-    "LOOP_LAG_ALERT_S",
-    "LOOP_LAG_WARN_S",
     "LOOP_WAIT_MAX_S",
     "LOOP_WAIT_MIN_S",
     "MODE_BREACH_LOCK",

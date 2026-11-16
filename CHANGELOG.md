@@ -243,6 +243,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A journal failure stops the session at once; a strategy error stops it the safe way.
   Strategies without leg rules only in this version: stops, targets and trailing come
   with the stops supervisor.
+- The live session's risk watch and kill switch (private): a feed with no tick on any
+  instrument for 10 seconds is dead, with one alert, entries locked, the strategies'
+  prices read by quote every 2 seconds and the slices it covered marked missing (no bar
+  is made from part of a slice); entries open again at the close of the first whole
+  slice after ticks return. A quiet instrument with an open position is priced by quote
+  without a lock. A refused quote read alerts that the broker's login may have expired.
+  The clock skew between this computer and the exchange is estimated from the trades'
+  exchange times in the first minute and alerted beyond 2 seconds; a broker whose ticks
+  carry no exchange time is named in the start banner or the result's warnings. The
+  account's daily loss limit, across every strategy of the session, fires the kill
+  switch: entries locked for the day, working entries cancelled, then each position
+  exited only when OpenAlgo's position book holds at least the strategy's units on the
+  same side (otherwise nothing is sent and the disagreement is alerted), and each
+  strategy reported against the broker's book once flat.
 - A live session's state saved and restored in the kernel (no change to backtests):
   `Engine::live_state` writes the session's state as plain data that survives a JSON round
   trip (in Python a dict of None, bool, int, float, str, list and dict, written by
@@ -286,6 +300,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   position is flat). A fill that would not only close or reduce the position (on its
   side, of a flat position, through zero) is refused whole: `VenueRefusalError` of the
   new kind `beyond_position`.
+- Reference table `price_protection` (`openalgo/backtest/reference/data/price_protection.csv`,
+  read with `tables.find("price_protection", (exchange, segment, check, underlying, days),
+  date)`): the price bands NSE and BSE apply to an option's limit price, by date, each row
+  with its exchange circular or notice and its verification status. `underlying` is ALL or
+  one underlying with a rule of its own; `days` is every_day, or expiry_day for a rule that
+  holds only on a day an option on the underlying expires. Limit price protection, met by
+  a stop-limit order when it triggers: the limit within 40 percent (20 rupees minimum) of
+  the contract's 30-second average trade price on NSE options, BSE index options from
+  2025-12-01 and BSE stock options from 2026-07-06; 60 percent (30 rupees) on BSE index
+  options from 2024-04-23 to 2025-11-30 and BSE stock options from 2024-04-23 to
+  2024-06-30; 40 percent with a 10 rupee minimum on every SENSEX option on a SENSEX expiry
+  day from 2026-03-12; 80 percent (80 rupees) on BSE FOCUSED IT options from 2026-05-11.
+  From 2024-07-01 to 2026-07-05 BSE stock options were under BSE's Price Reasonability
+  Check instead, whose rupee slabs are never narrower than 10 percent of the premium. The
+  stop-limit range, met at entry and on every modification: the limit within 20 percent
+  (10 rupees) of the trigger, on NSE options and BSE index options from 2026-02-09. The
+  stock option floor and ceiling during an underlying's cooling-off: 15 percent (7.5
+  rupees) on NSE, 30 percent with no rupee minimum on BSE. Every row is verified: the BSE
+  notices were read to 2026-11-16. A kernel test reads the table and finds the 5 percent
+  option buffer inside every band at every premium on the 0.05 and 0.01 tick grids, for a
+  stop-limit's limit, a GTT child's and the reprice of a stop the price has passed, except
+  where a band is narrower than one tick: the BSE cooling-off band at a premium of three
+  ticks or less, where no limit off the premium fits. The buffer is unchanged. No change in
+  backtest results; the reference data's version string now carries 2026-11-17, the date
+  this table was checked.
 
 ### Changed
 

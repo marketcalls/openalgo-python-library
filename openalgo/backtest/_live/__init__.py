@@ -26,6 +26,7 @@ attribute of its parent, which would replace the `bt.live` function.
 | `venue_map` | The kernel's commands as order requests, and each answer as its kernel call |
 | `worker` | The order worker: the one thread that sends the session's orders and reads its books |
 | `session` | A live session from start to stop: the start, the loop, the safe stop, the close |
+| `watch` | The risk watch: a dead or quiet feed, clock skew, the account loss and the kill switch |
 
 Times are UTC nanoseconds, prices rupees and quantities units, never lots. No module
 prints: they log to the `openalgo.backtest.live` logger, and a session's own output goes

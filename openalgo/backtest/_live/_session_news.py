@@ -13,7 +13,9 @@ go to `_session_feed`.
 - `Settled`: the venue map applies the read's verdict.
 - `Resolutions`: bound (with the order's update, if any), not placed, or ambiguous (the
   strategy's entries locked, an ERROR alert).
-- `HeldFills` and `PositionRows`: to the stops supervisor (held fills and cancels, 4.11).
+- `HeldFills`: to the stops supervisor (held fills, 4.11).
+- `PositionRows`: to the stops supervisor (held cancels, 4.11) and the risk watch (the
+  kill switch's position reads, `watch`).
 - `GuardLocked`: the session's guard lock (`Session.guard_locked`).
 - `WorkerFailed`: raised as `WorkerFailedError`, which stops the session (3.5).
 
@@ -312,6 +314,7 @@ class News:
 
     def _positions(self, message: PositionRows) -> None:
         self._session.stops.positions(message)
+        self._session.risk.positions(message)
 
     def _guard_locked(self, message: GuardLocked) -> None:
         self._session.guard_locked(message.breach)

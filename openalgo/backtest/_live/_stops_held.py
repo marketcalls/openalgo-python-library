@@ -138,7 +138,7 @@ class HeldWords:
             trader, kernel_order = owner
             if not self._decidable(trader, word, message.read_ns):
                 continue
-            net = _net_units(message.positionbook, trader.symbol, trader.exchange)
+            net = net_units(message.positionbook, trader.symbol, trader.exchange)
             filled = self._decide(trader, kernel_order, net)
             if filled is None:
                 self._undecided(trader, word.order_id, net)
@@ -229,9 +229,10 @@ def _key(word: HeldFill) -> tuple[str, int]:
     return word.order_id, word.held_since_ns
 
 
-def _net_units(answer: Mapping[str, Any], symbol: str, exchange: str) -> int | None:
+def net_units(answer: Mapping[str, Any], symbol: str, exchange: str) -> int | None:
     """The broker's net MIS units of an instrument in a position-book answer, signed; None
-    when the answer cannot be read."""
+    when the answer cannot be read. The one reading of the position book that the held
+    cancels and the kill switch (`_kill_switch`) share."""
     rows = answer.get("data") if answer.get("status") == "success" else None
     if not isinstance(rows, list):
         return None
@@ -258,4 +259,5 @@ __all__ = [
     "POSITION_READ_EVERY_S",
     "Estimate",
     "HeldWords",
+    "net_units",
 ]

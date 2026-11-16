@@ -35,6 +35,7 @@ _TABLE_MARKERS = (
     ("kind", "underlyings"),
     ("freeze_qty_futures", "freeze_qty"),
     ("settlement", "settlement"),
+    ("band_percent", "price_protection"),
 )
 
 # What `load_user_files` accepts: a path, a list of paths or (table, path) pairs, or a
