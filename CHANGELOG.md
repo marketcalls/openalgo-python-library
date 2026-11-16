@@ -1427,7 +1427,7 @@ engine with end-to-end risk management:
 
 #### WebSocket Feed API - Real-Time Order Updates
 - **`subscribe_orders(on_order_update=None)`**: Account-level real-time order
-  status stream over the existing OpenAlgo WebSocket connection — fills,
+  status stream over the existing OpenAlgo WebSocket connection: fills,
   partial fills, rejections and cancellations pushed by the broker (live
   mode) or the sandbox engine (analyze mode), for orders from any origin
   (API, broker app/web, engine square-offs).
@@ -1435,7 +1435,7 @@ engine with end-to-end risk management:
 - **`get_orders()`**: Cached order updates received so far (most recent
   first, capped at 500).
 - **`[ORDER]` log category**: order updates printed at `verbose=2`.
-- Order-update subscription survives reconnects — replayed automatically
+- Order-update subscription survives reconnects: replayed automatically
   after re-authentication, like market-data subscriptions.
 - Message fields use OpenAlgo common order constants (`symbol` in OpenAlgo
   format, `action`, `pricetype`, `product`, lowercase `order_status`,
