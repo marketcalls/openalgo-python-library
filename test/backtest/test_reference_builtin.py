@@ -434,8 +434,9 @@ def test_price_band_of_an_option_check(tables, key, on_date, percent, rupees):
         ("lpp", "reference_price", "on_trigger"),
         # NSE/FAOP/56127; BSE notice 20260114-28: at entry and on modification.
         ("stop_limit_range", "trigger_price", "on_entry"),
-        # NSE/FAOP/64995 Annexure B 2.2.1 and 2.2.9; BSE notice 20241112-11 Annexure B
-        # 2.2.1, 2.2.2 and 2.2.9.
+        # NSE/FAOP/64995 Annexure B 2.2.1 and 2.2.9 (basis and when checked). BSE notice
+        # 20241112-11 Annexure B 2.2.1, 2.2.2 and 2.2.9 give the held basis only; BSE says
+        # nothing of stop-loss orders, so on_trigger there is the row note's assumption.
         ("cooling_off", "cooling_off_ltp", "on_trigger"),
     ],
 )

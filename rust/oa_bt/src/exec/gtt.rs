@@ -29,7 +29,7 @@ use super::error::ExecError;
 use super::instrument::InstrumentId;
 use super::matching::TriggerDirection;
 use super::order::OrderId;
-use super::price::round_away_from_trader;
+use super::price::limit_beyond;
 use super::segment::OPTIONS_STOP_LIMIT_BUFFER_PERCENT;
 
 /// Identifier of a GTT, unique within a run, in creation order. Shown as `g1`, `g2`, ...
@@ -272,8 +272,8 @@ impl GttPolicy {
 /// The limit price of a GTT child order: beyond the trigger by `buffer_percent` in the
 /// direction of the child's side (above for a buy, below for a sell), computed from the
 /// trigger as rounded to the tick and rounded to the tick away from the trader, so the
-/// buffer is never smaller than asked. A target's child sits on the far side of its
-/// trigger like a stop's (decision GTT-6).
+/// buffer is never smaller than asked, and never below one tick (`limit_beyond`). A
+/// target's child sits on the far side of its trigger like a stop's (decision GTT-6).
 ///
 /// Units: rupees and percent. Errors: `InvalidPrice` for an unusable trigger or a
 /// negative buffer, `InvalidTick` for an unusable tick.
@@ -283,14 +283,7 @@ pub fn child_limit(
     buffer_percent: f64,
     tick_rupees: f64,
 ) -> Result<f64, ExecError> {
-    if !buffer_percent.is_finite() || buffer_percent < 0.0 {
-        return Err(ExecError::InvalidPrice {
-            what: "GTT buffer percent",
-            value: buffer_percent,
-        });
-    }
-    let factor = 1.0 + child_side.sign() * buffer_percent / 100.0;
-    round_away_from_trader(trigger_rupees * factor, tick_rupees, child_side)
+    limit_beyond(trigger_rupees, child_side, buffer_percent, tick_rupees)
 }
 
 /// A GTT in the book.
@@ -414,6 +407,15 @@ mod tests {
     fn the_child_limit_rounds_away_from_the_trader() {
         // Trace 06b: 1473.90 x 0.99 = 1459.161; down for a sell is 1459.15 (GTT-6).
         assert_eq!(child_limit(1473.9, Side::Sell, 1.0, 0.05), Ok(1459.15));
+    }
+
+    #[test]
+    fn a_sell_child_at_one_tick_keeps_a_limit_of_one_tick() {
+        // 5 percent below 0.05 rounds down to 0.00, which no order can carry.
+        assert_eq!(child_limit(0.05, Side::Sell, 5.0, 0.05), Ok(0.05));
+        assert_eq!(child_limit(0.01, Side::Sell, 5.0, 0.01), Ok(0.01));
+        // Two ticks keep their rounding: 0.095 down to the tick is 0.05.
+        assert_eq!(child_limit(0.1, Side::Sell, 5.0, 0.05), Ok(0.05));
     }
 
     #[test]
