@@ -287,6 +287,7 @@ def test_missing_user_file_is_reported(tmp_path):
         ),
         (["underlying", "exchange", "valid_from", "strike_step"], "strike_steps"),
         (["broker", "segment", "valid_from", "tick_size_unit"], "broker_units"),
+        (["exchange", "segment", "check", "valid_from", "band_percent"], "price_protection"),
     ],
 )
 def test_table_of_a_user_file_is_inferred_from_its_columns(columns, table):

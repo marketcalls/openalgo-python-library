@@ -44,6 +44,11 @@ SPAN_DATE = "date"
 SPAN_PRICE = "price"
 _ISO_DATE_LENGTH = len("2024-11-28")
 
+# The prices an exchange measures an option price band from, and when a stop-limit order
+# meets the band (the price_protection table documents each word).
+_BAND_BASES = ("reference_price", "trigger_price", "cooling_off_ltp")
+_STOP_LIMIT_CHECKS = ("on_trigger", "on_entry")
+
 
 def as_date(value: DateLike, what: str = "date") -> _dt.date:
     """Return `value` as a calendar date (an IST session date wherever one is meant).
@@ -312,6 +317,23 @@ _SPECS = (
         description=(
             "What the OpenAlgo server source shows about quantity and tick_size units per "
             "broker. Not confirmed against live brokers"
+        ),
+    ),
+    TableSpec(
+        name="price_protection",
+        key=("exchange", "segment", "check"),
+        lower_key=("segment", "check"),
+        columns=(
+            Column("band_percent", _positive_float),
+            Column("band_min_rupees", _positive_float),
+            Column("basis", _one_of(_BAND_BASES)),
+            Column("stop_limit_checked", _one_of(_STOP_LIMIT_CHECKS)),
+        ),
+        description=(
+            "Price bands the exchanges apply to the limit price of an option order: the band "
+            "is the larger of band_percent of the basis price and band_min_rupees; "
+            "stop_limit_checked says whether a stop-limit order meets it when it triggers or "
+            "when it is placed and modified"
         ),
     ),
 )

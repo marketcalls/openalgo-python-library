@@ -286,6 +286,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   position is flat). A fill that would not only close or reduce the position (on its
   side, of a flat position, through zero) is refused whole: `VenueRefusalError` of the
   new kind `beyond_position`.
+- Reference table `price_protection` (`openalgo/backtest/reference/data/price_protection.csv`,
+  read with `tables.find("price_protection", (exchange, segment, check), date)`): the price
+  bands NSE and BSE apply to an option's limit price, by date, each row with its exchange
+  circular or notice and its verification status. Limit price protection, met by a
+  stop-limit order when it triggers: the limit within 40 percent (20 rupees minimum) of
+  the contract's 30-second average trade price on NSE options and BSE index options, 60
+  percent (30 rupees) on BSE stock options and on BSE index options before 2025-12-01. The
+  stop-limit range, met at entry and on every modification: the limit within 20 percent
+  (10 rupees) of the trigger, on NSE options and BSE index options from 2026-02-09. NSE's
+  stock option floor and ceiling during an underlying's cooling-off: 15 percent (7.5
+  rupees). BSE rows after 2026-03-13 are unverified (later notices could not be read). A
+  kernel test reads the table and finds the 5 percent option buffer inside every band at
+  every premium on the 0.05 and 0.01 tick grids, for a stop-limit's limit, a GTT child's
+  and the reprice of a stop the price has passed, so the buffer is unchanged. No change in
+  backtest results; the reference data's version string now carries 2026-11-17, the date
+  this table was checked.
 
 ### Changed
 
