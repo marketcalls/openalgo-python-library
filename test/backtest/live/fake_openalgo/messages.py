@@ -169,6 +169,12 @@ def subscribe_reply(entries: list[tuple[str, str, int, str]], broker: str) -> di
     }
 
 
+def token_not_found(symbol: str, exchange: str) -> str:
+    """The broker adapter's words for a subscription to an instrument it does not know
+    (broker/zerodha/streaming/zerodha_adapter.py:282-284)."""
+    return f"Token not found for {symbol} on {exchange}"
+
+
 def orders_reply(action: str) -> dict[str, Any]:
     """The proxy's answer to `subscribe_orders` or `unsubscribe_orders`."""
     words = "Subscribed to" if action == "subscribe_orders" else "Unsubscribed from"
@@ -186,4 +192,5 @@ __all__ = [
     "order_update",
     "orders_reply",
     "subscribe_reply",
+    "token_not_found",
 ]

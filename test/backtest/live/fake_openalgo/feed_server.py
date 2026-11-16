@@ -19,7 +19,7 @@ from typing import Any
 
 from feed_fakes import KEY_REFUSED, FakeServer, FakeSocket
 
-from .messages import auth_reply, orders_reply, subscribe_reply
+from .messages import auth_reply, orders_reply, subscribe_reply, token_not_found
 
 _ORDER_ACTIONS = ("subscribe_orders", "unsubscribe_orders")
 
@@ -93,11 +93,7 @@ class FeedServer(FakeServer):
         entries = []
         for instrument in frame.get("symbols", []):
             symbol, exchange = instrument["symbol"], instrument["exchange"]
-            refusal = (
-                ""
-                if self._knows(symbol, exchange)
-                else (f"Token not found for {symbol} on {exchange}")
-            )
+            refusal = "" if self._knows(symbol, exchange) else token_not_found(symbol, exchange)
             if not refusal:
                 accepted.add((symbol, exchange, mode))
             entries.append((symbol, exchange, mode, refusal))
