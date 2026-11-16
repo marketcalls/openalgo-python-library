@@ -81,7 +81,8 @@ impl Engine {
     /// Step 3: engine-held leg levels (`legs::test_leg_levels`), then GTTs
     /// (`gtt_fire::test_gtts`), then resting DAY orders (`resting::test_resting_orders`),
     /// each across the instruments in registration order. In a live session the venue
-    /// fills the resting orders, and leg levels and GTTs are not built yet (`venue`).
+    /// fills the resting orders and holds the legs' stops, and the targets are tested on
+    /// ticks (`venue_ticks`); GTTs are not built there (`venue`).
     fn step_levels(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         if self.is_external() {
             return Ok(());
@@ -93,8 +94,11 @@ impl Engine {
 
     /// Step 4: trail and breakeven ratchets, in force from the next slice
     /// (`legs::ratchet_legs`); then the GTTs of CNC and NRML legs follow their levels
-    /// (`gtt::sync_gtts`).
+    /// (`gtt::sync_gtts`). A live session ratchets on ticks instead (`venue_ticks`).
     fn step_ratchets(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
+        if self.is_external() {
+            return Ok(());
+        }
         self.ratchet_legs(slice)?;
         self.sync_gtts(slice)
     }

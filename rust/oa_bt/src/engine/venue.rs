@@ -20,12 +20,14 @@
 //!   and the order keeps its old terms until the venue confirms the new ones
 //!   (`apply_modify`) or refuses them. The adapter takes the commands with
 //!   `Engine::take_commands`, in the order they were made.
-//! - **Exits** (`venue_owner`). An exit is the strategy's `exit()` or `reduce()` (a
-//!   reduce-only MARKET order) or one of the engine's exits (`venue_exits`: the daily loss
-//!   limit and drawdown halt, the square-off, the time exit). An exit first cancels every
-//!   other working order of its position on the closing side and is sent once they have
-//!   all ended, in orders of at most the freeze quantity. The strategy's exits of a
-//!   position add up as in a backtest, each sized on what the earlier ones leave; an
+//! - **Exits** (`venue_owner`, `venue_exit_orders`). An exit is the strategy's `exit()` or
+//!   `reduce()` (a reduce-only MARKET order), a leg's target (`venue_ticks`), or one of
+//!   the engine's exits (`venue_exits`: the daily loss limit and drawdown halt, the
+//!   square-off, the time exit; and the session's own). An exit first cancels every other
+//!   working order of its position on the closing side and is sent once they have all
+//!   ended, in orders of at most the freeze quantity; a partial exit cuts the leg's stop
+//!   down to what stays open instead of cancelling it (`venue_legs`). The strategy's exits
+//!   of a position add up as in a backtest, each sized on what the earlier ones leave; an
 //!   engine exit takes over from them and closes the whole position.
 //! - **Reduce-only orders never reverse** (`venue_cover`). The orders working on a
 //!   position's closing side may not hold more units than it has: a reduce-only order
@@ -33,8 +35,9 @@
 //!   beyond it is an entry (`venue_roles`). Reduce-only orders are cut down or cancelled
 //!   when the position shrinks, and a fill of an order sent to close beyond the position
 //!   is recorded only up to it (`VenueError::WouldReverse`).
-//! - **Results in** (`venue_fills`): fills, rejections, cancellations; and the venue's
-//!   answers to the cancellations and modifications it was sent (`venue_answers`).
+//! - **Results in**: fills (`venue_fills`), rejections and cancellations (`venue_ends`),
+//!   and the venue's answers to the cancellations and modifications it was sent
+//!   (`venue_answers`); the session's last prices (`venue_ticks`).
 //! - **The clock** (`venue_clock`). What a backtest does at the open of a slice (the
 //!   engine's exits, the timers) happens when the session reaches that open, the close of
 //!   the slice before it. At a session close the kernel sends `Cancel` for the DAY orders
@@ -53,9 +56,17 @@
 //!   loss measure, and the stop of the session where it stands. **The entry gates** a
 //!   session adds at submission (`venue_gates`): the entry locks, nothing in flight on the
 //!   instrument, a position at most the freeze quantity.
-//! - **Not built yet** (`KernelError::NotBuilt`): leg rules (`stop=`, `target=`, trailing
-//!   and breakeven, held by the broker and on ticks in the next unit, decision D31), GTT
-//!   orders, futures series and rebalancing.
+//! - **Leg rules** (`stop=`, `target=`, trailing and breakeven, decision D31). The broker
+//!   holds a leg's stop as an order (`venue_legs`): placed when the leg has a stop level,
+//!   its units and trigger kept on the leg's, a partial exit sent once it has been cut down
+//!   to what stays open, and the leg protected again when it ends without a fill. The
+//!   kernel holds the targets, the trail and the breakeven on the session's prices
+//!   (`venue_ticks`, tick mode): a target exits through the position's exit owner, a trail
+//!   or a breakeven moves the broker's stop. The session's own calls for a leg (`protect`,
+//!   `reprice_exit`, an exit at a limit) are in `venue_protect`. Leg rules are MIS only in
+//!   a session: CNC and NRML legs are held as GTTs.
+//! - **Not built yet** (`KernelError::NotBuilt`, `venue_requests`): leg rules on CNC and NRML, GTT orders,
+//!   futures series and rebalancing.
 //!
 //! The contract for the live layer: every fill of an order is delivered (`apply_fill`)
 //! before its terminal result (`apply_cancel`, `apply_reject`); after it the order takes
@@ -63,7 +74,7 @@
 //! it changes nothing, but for `WouldReverse`, which records the fill up to the position.
 
 use crate::charges::OrderCharges;
-use crate::exec::{ExecError, InstrumentId, Order, OrderId, OrderRequest, OrderType, Validity};
+use crate::exec::{InstrumentId, OrderId, OrderRequest, OrderType};
 use crate::model::{Product, Side, TsNanos};
 use crate::portfolio::PositionKey;
 
@@ -72,6 +83,7 @@ use super::config::{QuantityMode, RunConfig};
 use super::error::KernelError;
 use super::event::{EventStamp, Step};
 use super::kernel::Engine;
+use super::venue_legs::LegStop;
 use super::venue_roles::{EngineExit, OrderRole};
 use super::venue_session::SessionControls;
 
@@ -148,6 +160,9 @@ pub(super) struct PositionExit {
     /// The orders sent for it, a strategy's own order first; empty while it waits for the
     /// orders it cancels.
     pub(super) sent: Vec<OrderId>,
+    /// The limit, rupees, of an engine exit the session asked for at a price
+    /// (`venue_protect`); `None` for a MARKET exit.
+    pub(super) limit_rupees: Option<f64>,
 }
 
 /// A modification sent to the venue and not yet confirmed.
@@ -200,6 +215,17 @@ pub(super) struct VenueDesk {
     pub(super) roles: Vec<(OrderId, OrderRole)>,
     /// The session's entry locks and sizing cap (`venue_session`).
     pub(super) controls: SessionControls,
+    /// The legs' broker-held stops, in the order the legs opened (`venue_legs`).
+    pub(super) leg_stops: Vec<LegStop>,
+    /// The target each of the engine's target exits fills, by order (`venue_ticks`).
+    pub(super) target_exits: Vec<(OrderId, u16)>,
+    /// The LIMIT, rupees, a reprice wants for an order whose last modification waits for
+    /// the venue's answer, sent with that answer (`venue_protect`).
+    pub(super) reprices: Vec<(OrderId, f64)>,
+    /// The latest instant the session has been given, UTC nanoseconds: a tick's or a
+    /// fill's time, or the open of a slice it reached. The throttle of a stop's
+    /// modifications reads it (`venue_legs`).
+    pub(super) clock_ns: TsNanos,
 }
 
 impl VenueDesk {
@@ -239,16 +265,6 @@ pub(super) fn check_session_config(config: &RunConfig) -> Result<(), KernelError
     Ok(())
 }
 
-fn not_built(feature: &'static str, instead: &'static str) -> KernelError {
-    KernelError::NotBuilt { feature, instead }
-}
-
-fn invalid(reason: &str) -> KernelError {
-    KernelError::Exec(ExecError::InvalidRequest {
-        reason: reason.to_string(),
-    })
-}
-
 /// True for an exit: a reduce-only MARKET order (`exit()`, `reduce()`).
 pub(super) fn is_exit(request: &OrderRequest) -> bool {
     request.reduce_only && request.order_type == OrderType::Market
@@ -269,78 +285,6 @@ impl Engine {
     /// True in a live session: a broker fills the orders.
     pub(super) fn is_external(&self) -> bool {
         self.venue.venue == Venue::External
-    }
-
-    /// Refuse, in an external session, what the venue cannot carry yet (module docs).
-    ///
-    /// Errors: `NotBuilt` for leg rules, a GTT order and a rebalance order.
-    pub(super) fn check_venue_request(&self, request: &OrderRequest) -> Result<(), KernelError> {
-        if !self.is_external() {
-            return Ok(());
-        }
-        if !request.leg_rules.is_empty() {
-            return Err(not_built(
-                "stop=, target=, trailing and breakeven in a live session",
-                "exit from on_bar with self.exit() for now: broker-held stops and \
-                 engine-held targets arrive with the next release",
-            ));
-        }
-        if request.validity == Validity::Gtt {
-            return Err(not_built(
-                "a GTT order in a live session",
-                "live trading is MIS only: place a DAY order",
-            ));
-        }
-        if request.rebalance {
-            return Err(not_built(
-                "rebalance() in a live session",
-                "trade each symbol with self.target(), the sales before the buys",
-            ));
-        }
-        Ok(())
-    }
-
-    /// Refuse, in an external session, a modification the venue cannot carry: an order
-    /// that has partly filled, one whose last modification is not answered yet, and an
-    /// exit not sent yet.
-    ///
-    /// Errors: `NotBuilt` for a partly filled order; `Exec(InvalidRequest)` for the others.
-    pub(super) fn check_venue_replacement(&self, order: &Order) -> Result<(), KernelError> {
-        if !self.is_external() {
-            return Ok(());
-        }
-        if order.filled_units > 0.0 {
-            return Err(not_built(
-                "modifying a partly filled order in a live session",
-                "cancel the order and place a new one for the rest",
-            ));
-        }
-        if self.venue.modifying.iter().any(|(id, _)| *id == order.id) {
-            return Err(invalid(
-                "the order's last modification waits for the venue's answer: modify it again \
-                 once the venue has confirmed or refused it",
-            ));
-        }
-        if self.is_unsent(order.id) {
-            return Err(invalid(
-                "the exit waits for the orders it cancels and has not been sent: cancel it and \
-                 exit again instead",
-            ));
-        }
-        Ok(())
-    }
-
-    /// Refuse, in an external session, a replacement left with no units (an exit with
-    /// nothing left to reduce): the venue takes no order of none.
-    ///
-    /// Errors: `Exec(InvalidRequest)` saying to cancel the order instead.
-    pub(super) fn check_replacement_units(&self, units: f64) -> Result<(), KernelError> {
-        if self.is_external() && units <= 0.0 {
-            return Err(invalid(
-                "the replacement has nothing left to reduce: cancel the order instead",
-            ));
-        }
-        Ok(())
     }
 
     /// True for a strategy's exit that waits for the orders it cancels: not sent yet.
@@ -375,6 +319,8 @@ impl Engine {
         self.venue.cancelling.retain(works);
         self.venue.cancels_sent.retain(|(id, _)| works(id));
         self.venue.modifying.retain(|(id, _)| works(id));
+        self.venue.target_exits.retain(|(id, _)| works(id));
+        self.venue.reprices.retain(|(id, _)| works(id));
         self.venue
             .exits
             .retain(|exit| match (exit.by, exit.sent.is_empty()) {

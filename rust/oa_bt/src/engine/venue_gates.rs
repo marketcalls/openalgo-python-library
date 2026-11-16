@@ -7,7 +7,7 @@
 //! | Gate | Rejects the entry or add | Code |
 //! |---|---|---|
 //! | Entry locks | while any reason locks entries (`Engine::lock_entries`) | `live_lock` |
-//! | Nothing in flight | while any other order of its instrument and product works, but the leg's resting stop, which keeps it out too while a modification or cancellation of the stop waits for the venue | `live_in_flight` |
+//! | Nothing in flight | while any other order of its instrument and product works, but the leg's resting stop, which keeps it out too while a modification or cancellation of the stop waits for the venue and once the stop is repriced to exit (`venue_protect`) | `live_in_flight` |
 //! | Freeze cap | when it would take the position above the instrument's freeze quantity | `freeze_qty` |
 //!
 //! Why: a backtest fills a MARKET entry at the next open, before the next decision, but a
@@ -33,10 +33,11 @@ fn key_of(request: &OrderRequest) -> PositionKey {
 }
 
 /// True when a working order keeps an entry or add of its instrument and product out
-/// (module docs): any order but a leg's resting stop, and that stop too while the venue
-/// has not answered a modification or cancellation of it.
-fn holds_entries(role: Option<OrderRole>, answer_pending: bool) -> bool {
-    role != Some(OrderRole::LegStop) || answer_pending
+/// (module docs): any order but a leg's resting stop, and that stop too while it is busy
+/// (the venue has not answered a modification or cancellation of it, or it was repriced
+/// to exit).
+fn holds_entries(role: Option<OrderRole>, stop_busy: bool) -> bool {
+    role != Some(OrderRole::LegStop) || stop_busy
 }
 
 impl Engine {
@@ -78,7 +79,7 @@ impl Engine {
         let in_flight = |order: &Order| {
             key_of(&order.request) == key
                 && Some(order.id) != replacing
-                && holds_entries(self.order_role(order.id), self.answer_pending(order.id))
+                && holds_entries(self.order_role(order.id), self.stop_busy(key, order.id))
         };
         if self.book.working().any(in_flight) {
             return Err(RejectCode::LiveInFlight);
@@ -95,9 +96,11 @@ impl Engine {
     }
 
     /// True while a cancellation or modification of order `id` waits for the venue's
-    /// answer.
-    fn answer_pending(&self, id: OrderId) -> bool {
-        self.venue.cancelling.contains(&id) || self.venue.modifying.iter().any(|(m, _)| *m == id)
+    /// answer, or once it is `key`'s leg stop repriced to exit (`venue_protect`).
+    fn stop_busy(&self, key: PositionKey, id: OrderId) -> bool {
+        self.venue.cancelling.contains(&id)
+            || self.venue.modifying.iter().any(|(m, _)| *m == id)
+            || self.repriced_leg_stop(key) == Some(id)
     }
 }
 
@@ -122,11 +125,11 @@ mod tests {
             ),
             (None, false, true),
         ];
-        for (role, answer_pending, keeps_out) in table {
+        for (role, stop_busy, keeps_out) in table {
             assert_eq!(
-                holds_entries(role, answer_pending),
+                holds_entries(role, stop_busy),
                 keeps_out,
-                "{role:?}, answer pending {answer_pending}"
+                "{role:?}, stop busy {stop_busy}"
             );
         }
     }

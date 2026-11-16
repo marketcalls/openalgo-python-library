@@ -31,7 +31,7 @@ use oa_bt::market::facts::MarketFacts;
 use oa_bt::market::margin::MarginModel;
 use oa_bt::market::slippage::{slipped_price, SlippageSpec};
 use oa_bt::model::{days_from_civil, ts_from_ist, Day, Exchange, InstrumentKind, Product, Side};
-use oa_bt::rms::{BarPrices, StrategyRiskConfig};
+use oa_bt::rms::{BarPrices, Distance, LegRules, StrategyRiskConfig};
 use oa_bt::sizing::SizingControls;
 
 pub const MINUTE: i64 = 60_000_000_000;
@@ -648,6 +648,62 @@ pub fn events(output: &RunOutput) -> Vec<(i64, u8, String)> {
                 Event::Gtt { event, .. } => format!("{} {}", event.name.code(), event.gtt),
             };
             (stamp.slice_ts, stamp.step.number(), name)
+        })
+        .collect()
+}
+
+/// One second, UTC nanoseconds.
+pub const SECOND: i64 = 1_000_000_000;
+
+/// `seconds` after the open of minute `k`, UTC nanoseconds.
+pub fn at_second(k: u32, seconds: i64) -> i64 {
+    minute(k) + seconds * SECOND
+}
+
+/// A stop `points` from the leg's average price, on its losing side.
+pub fn stop_points(points: f64) -> LegRules {
+    LegRules {
+        stop: Some(Distance::Points(points)),
+        ..LegRules::default()
+    }
+}
+
+/// A session trading `instrument` that bought `units` of it with `rules` (o1, an MIS
+/// MARKET order decided at the close of minute 0), waiting before minute 1 with the buy's
+/// command taken and the buy not filled.
+pub fn entry_waiting(instrument: InstrumentSpec, units: f64, rules: LegRules) -> Engine {
+    let mut kernel = session_of(config(), instrument);
+    let request = OrderRequest {
+        leg_rules: rules,
+        ..market(Side::Buy, units)
+    };
+    let acts = vec![at_close(0, Act::Submit(request))];
+    wait_before(&mut kernel, &bars(&[], &[]), &mut Script::new(acts), 1);
+    kernel.take_commands();
+    kernel
+}
+
+/// `entry_waiting` on SBIN with the buy filled whole at 500.10 at the open of minute 1;
+/// the commands the fill made are left for the test.
+pub fn holding_with(units: f64, rules: LegRules) -> Engine {
+    let mut kernel = entry_waiting(sbin(), units, rules);
+    kernel
+        .apply_fill(OrderId(1), units, 500.1, minute(1))
+        .expect("the buy fills");
+    kernel
+}
+
+/// The (order, units, order type) of the modifications in `commands`.
+pub fn modified(commands: &[VenueCommand]) -> Vec<(OrderId, f64, OrderType)> {
+    commands
+        .iter()
+        .filter_map(|command| match *command {
+            VenueCommand::Modify {
+                order,
+                units,
+                order_type,
+            } => Some((order, units, order_type)),
+            _ => None,
         })
         .collect()
 }

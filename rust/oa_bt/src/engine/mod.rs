@@ -49,6 +49,10 @@
 //! | `Engine::apply_fill(OrderId, units, price, at)`, `Engine::apply_reject(OrderId, RejectCode)`, `Engine::apply_cancel(OrderId)` | while waiting, at a timer pause, or while a session close waits | a live session's results from its venue (`venue_fills`): the units newly filled at the venue's price through `execute_fill` (all or nothing, costed once on the order's total; units beyond the position of an order that may not reverse it are refused, `would_reverse`), a rejection, a cancellation; each returns the stamp it was recorded with. Every fill of an order comes before its terminal result |
 //! | `Engine::apply_cancel_refused(OrderId)`, `Engine::apply_modify(OrderId)`, `Engine::apply_modify_refused(OrderId)` | as `apply_fill` | the venue's answers (`venue_answers`) to a cancellation (the order works on; the engine's own withdrawals send it again in a later slice, `cancel` at once) and to a modification (confirmed: the new terms, complete when cut to what has filled; refused: the old ones stand) |
 //! | `Engine::request_exit(InstrumentId, Product, EngineExit)` | while paused or waiting | a live session's exit of a whole position for its own reason (`venue_session`), through the position's exit owner (`venue_owner`); returns what it did (`ExitRequest`: sent, waits for cancels, already exiting, flat, market closed) |
+//! | `Engine::request_limit_exit(InstrumentId, Product, EngineExit, limit)` | as `request_exit` | the same exit as LIMIT orders at `limit` rupees, the price rule's marketable fallback (`venue_protect`) |
+//! | `Engine::push_tick(InstrumentId, price, at)` | as `apply_fill` | tick mode (`venue_ticks`): the session's last price at `at` ratchets the instrument's legs (the broker's stop follows under its throttle, `venue_legs`), exits a target it reaches through the exit owner, marks the position and runs the daily loss limit and drawdown halt on that mark; a stop it reaches is the broker's |
+//! | `Engine::protect(InstrumentId, Product)` | while paused or waiting | a live session places a leg's stop again at its level for what its exits leave, when none works and no exit holds the position (`venue_protect`); returns what it did (`Protect`: placed, stop works, exiting, no stop level, flat, market closed) |
+//! | `Engine::reprice_exit(OrderId, limit)` | while paused or waiting | a live session modifies a leg's stop (or the engine's exit) to a LIMIT at `limit` rupees for the order's total units, partly filled or not; sent now (true) or with the answer to the modification that waits (false); the repriced stop exits the position (`venue_protect`) |
 //! | `Engine::lock_entries(reason)`, `Engine::unlock_entries(reason)`, `entry_locks` | any time | a live session's entry locks, reasons in a set (names with no spaces around them): while any is set, entries and adds are rejected `live_lock` (`venue_gates`) |
 //! | `Engine::cap_sizing_equity(rupees)`, `Engine::daily_loss_measure()` | any time | a live session's cap on the engine default's sizing equity; the strategy's daily loss measure (`venue_session`) |
 //! | `Engine::stop_session()` | any time | a live session ends where it stands: nothing is sent, working orders and open positions are reported as they are (a strategy exit never sent ends `Canceled`), the undelivered events are returned (`venue_session`) |
@@ -72,7 +76,10 @@
 //! and expires nothing itself. What a backtest does at the open of a slice (timers, the
 //! engine's exits) happens as the session reaches that open, the close of the slice
 //! before, and a session close waits for the venue to end its orders (`venue_clock`).
-//! The order and risk rules do not change.
+//! A leg's stop is the broker's, as an order the kernel keeps on the leg (`venue_legs`,
+//! decision D31); its targets, trail and breakeven are the kernel's, on ticks
+//! (`venue_ticks`): a session runs steps 3 and 4 on ticks, not on its bars. The order and
+//! risk rules do not change.
 //!
 //! # The eight steps of a slice (03-architecture 4.2)
 //!
@@ -84,8 +91,8 @@
 //! |---|---|---|
 //! | 1 session open, reference events | `steps::open_slice`; intraday times resolved lazily by `session::session_times`; GTTs older than 360 days re-created (`gtt::renew_old_gtts`, GTT-2); futures switches are planned before the run (`futures`) | times, GTTs and rolls yes; lot-size change events no |
 //! | 2 fills at the open | `steps::step_open_fills`: per instrument the risk exits of step 6 (`risk_exits_at_open`) and the engine's exits after unfilled GTT children (`gtt_fire::gtt_exits_at_open`), then `fills::fill_queued` (eligible when the open is at or after `decided_at`, SPEC-35; a missing bar keeps the order queued, SPEC-06; entry window and margin checked at the fill bar), the time exit, then `session::square_off_at_open` (the square-off timer, SPEC-05); after every instrument, `rebalance::fill_rebalance_buys` (the buys of a rebalance, after its sales), then `roll::roll_due_futures` (the futures auto-roll, near leg first, SPEC-19, GTT-9). In a slice where a timer is due, `timers::fill_due_orders` runs the engine exits and queued orders first, `timers::timers_pause` returns `Pause::Timers`, and `step_open_fills` then fills what the timers placed | MARKET orders, converted stop-limit exits, timers, square-off, rolls |
-//! | 3 resting orders, leg levels | `steps::step_levels` -> `legs::test_leg_levels` -> `rms::LegState::test_bar` (MIS), `gtt_fire::test_gtts` (CNC and NRML levels and GTT orders), `resting::test_resting_orders` (LIMIT, SL, SL-M), exits through `fills::execute_fill` | yes |
-//! | 4 ratchets | `steps::step_ratchets` -> `legs::ratchet_legs` -> `rms::LegState::ratchet`, then `gtt::sync_gtts` (GTTs follow the levels, GTT-3) | yes |
+//! | 3 resting orders, leg levels | `steps::step_levels` -> `legs::test_leg_levels` -> `rms::LegState::test_bar` (MIS; an option's stop as the segment's stop-limit, R12), `gtt_fire::test_gtts` (CNC and NRML levels and GTT orders), `resting::test_resting_orders` (LIMIT, SL, SL-M), exits through `fills::execute_fill`; a live session on ticks (`venue_ticks`) | yes |
+//! | 4 ratchets | `steps::step_ratchets` -> `legs::ratchet_legs` -> `rms::LegState::ratchet`, then `gtt::sync_gtts` (GTTs follow the levels, GTT-3); a live session on ticks | yes |
 //! | 5 mark | `steps::step_mark`: close, or last close and stale | yes |
 //! | 6 aggregate rules | `aggregate::step_aggregate_rules`: daily loss limit, drawdown halt; their exits at the next open (`risk_exits_at_open`, step 2) or the last close; the session boundary in step 1 (`risk_session_open`) | yes (combined rules: Phase 3) |
 //! | 7 callbacks and `on_bar` | `steps::callbacks_pause` -> `Pause::BarClose`; `submit::submit` | yes |
@@ -118,11 +125,16 @@
 //! | `live_clock` | A live session: built before its bars, given each bar as its slice closes, holding before the slices not released |
 //! | `venue` | Who fills the orders (`Simulated`, `External`); the venue's types and its desk of what was asked and not answered; what a live session refuses as not built |
 //! | `venue_orders` | A live session's commands out: the units an order is sent with, the order sent or made an exit, a modification held until answered, a cancellation (the engine's own sent at most once in a slice) |
-//! | `venue_owner` | The exits of a position: cancel the orders on its closing side, then exit; the strategy's exits add up, the engine's takes over; in orders of at most the freeze quantity |
+//! | `venue_owner` | The exits of a position: cancel the orders on its closing side, then exit (a partial exit cuts the leg's stop down instead); the strategy's exits add up, the engine's takes over |
+//! | `venue_exit_orders` | The orders an exit goes out in: a strategy exit sized on what the earlier ones leave, the engine's for the whole position at market or at a limit, in orders of at most the freeze quantity |
+//! | `venue_legs` | A leg's broker-held stop: placed in the segment's shape, its units and trigger kept on the leg's under the throttle, the leg protected again when the stop ends without a fill |
+//! | `venue_ticks` | Tick mode: `push_tick` ratchets the legs, exits the targets reached, marks and runs the aggregate rules |
+//! | `venue_protect` | The session's calls for a leg: `protect`, `reprice_exit`, `request_limit_exit` (`Protect`) |
 //! | `venue_exits` | A live session's own exits: made where a backtest makes them, sent again while they apply; the entries withdrawn when the entry window closes |
 //! | `venue_cover` | Reduce-only orders never reverse a position: the room on its closing side, the cover rule at submission (`exit_cover`), cut down or cancelled when the position shrinks |
 //! | `venue_checks` | What the fill path could not record, refused at submission with the backtest's codes and errors; the free cash net of the working orders |
-//! | `venue_fills` | A live session's results from its venue: fills (none beyond the position of an order that may not reverse it, nor of one sent to close), rejections, cancellations, and the slice they are recorded in |
+//! | `venue_fills` | A live session's fills from its venue (none beyond the position of an order that may not reverse it, nor of one sent to close) |
+//! | `venue_ends` | Its rejections and cancellations, and the slice every venue result is recorded in |
 //! | `venue_answers` | The venue's answers to the cancellations and modifications it was sent |
 //! | `venue_clock` | The end of a slice: a session close that waits for the venue to end its orders, the next open reached at the close of the slice before |
 //! | `venue_error` | `VenueError`: a venue result that cannot be recorded, with its kind |
@@ -239,16 +251,23 @@ mod venue_answers;
 mod venue_checks;
 mod venue_clock;
 mod venue_cover;
+mod venue_ends;
 mod venue_error;
+mod venue_exit_orders;
 mod venue_exits;
 mod venue_fills;
 mod venue_gates;
+mod venue_legs;
 mod venue_orders;
 mod venue_owner;
+mod venue_protect;
+mod venue_requests;
 mod venue_roles;
 mod venue_session;
+mod venue_stop_terms;
 #[cfg(test)]
 mod venue_test_kit;
+mod venue_ticks;
 
 pub use clock::{SliceInfo, Timeline};
 pub use config::{
@@ -275,5 +294,6 @@ pub use target::TargetRequest;
 pub use timers::{TimerCount, TimerSpec};
 pub use venue::{Venue, VenueCommand};
 pub use venue_error::{Pending, VenueError, UNKNOWN_ORDER_KIND, VENUE_REFUSAL_KINDS};
+pub use venue_protect::Protect;
 pub use venue_roles::{EngineExit, OrderRole, RiskExitReason};
 pub use venue_session::ExitRequest;

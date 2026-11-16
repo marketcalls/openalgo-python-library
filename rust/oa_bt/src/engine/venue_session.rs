@@ -136,6 +136,19 @@ impl Engine {
         product: Product,
         exit: EngineExit,
     ) -> Result<ExitRequest, KernelError> {
+        self.request_exit_at(instrument, product, exit, None)
+    }
+
+    /// `request_exit` at market, or at `limit_rupees` (`venue_protect`).
+    ///
+    /// Errors: those of `request_exit`.
+    pub(super) fn request_exit_at(
+        &mut self,
+        instrument: InstrumentId,
+        product: Product,
+        exit: EngineExit,
+        limit_rupees: Option<f64>,
+    ) -> Result<ExitRequest, KernelError> {
         self.require_session()?;
         self.spec(instrument)?;
         let at = self.control_point()?;
@@ -152,7 +165,7 @@ impl Engine {
         if self.day_validity(&at.slice, at.decided_at).is_err() {
             return Ok(ExitRequest::MarketClosed);
         }
-        self.request_engine_exit(at, key, exit)?;
+        self.request_engine_exit(at, key, exit, limit_rupees)?;
         Ok(if self.has_waiting_exit(key) {
             ExitRequest::WaitsForCancels
         } else {
@@ -313,7 +326,7 @@ impl Engine {
     /// Refuse a session control in a backtest.
     ///
     /// Errors: `Venue(NotExternal)`.
-    fn require_session(&self) -> Result<(), KernelError> {
+    pub(super) fn require_session(&self) -> Result<(), KernelError> {
         if self.is_external() {
             Ok(())
         } else {

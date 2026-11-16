@@ -76,22 +76,28 @@ impl Engine {
             // Nothing is left to fill: the order has filled all its units.
             self.book.apply(order, OrderAction::Fill)?;
         }
+        self.leg_stop_answered(order, true);
+        self.send_waiting_reprice(order);
         self.after_result(&slice)?;
         Ok(stamp)
     }
 
     /// Record that the venue refused the modification of `order` it was sent: the order
-    /// keeps its old terms.
+    /// keeps its old terms. A leg's stop sends its newest terms again after the throttle
+    /// (`venue_legs`); a reprice that waited for this answer is sent now
+    /// (`venue_protect`).
     ///
     /// Errors: those of `apply_modify`, but for the units.
     pub fn apply_modify_refused(&mut self, order: OrderId) -> Result<(), KernelError> {
-        self.result_slice()?;
+        let slice = self.result_slice()?;
         self.live_order(order)?;
         if !self.venue.modifying.iter().any(|(id, _)| *id == order) {
             let what = Pending::Modify;
             return Err(VenueError::NotPending { order, what }.into());
         }
         self.venue.modifying.retain(|(id, _)| *id != order);
-        Ok(())
+        self.leg_stop_answered(order, false);
+        self.send_waiting_reprice(order);
+        self.progress_exits(self.waiting_at(&slice))
     }
 }

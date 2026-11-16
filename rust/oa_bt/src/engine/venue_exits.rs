@@ -49,7 +49,8 @@ impl Engine {
     /// it (module docs): the reduce-only orders are fitted to their positions
     /// (`venue_cover`), the waiting exits move on, every open position that no exit of the
     /// engine holds gets the exit that applies, instruments in registration order, and the
-    /// late MIS entries are withdrawn.
+    /// late MIS entries are withdrawn. The session's clock reaches that open, so a stop
+    /// modification the throttle held back goes now (`venue_legs`).
     ///
     /// Errors: `InvalidConfig` when the session has no intraday times; those of the exits
     /// and of `withdraw_order`.
@@ -59,6 +60,7 @@ impl Engine {
             step: Step::OpenFills,
             decided_at: next.open,
         };
+        self.venue.clock_ns = self.venue.clock_ns.max(next.open);
         self.fit_exit_cover(at)?;
         self.progress_exits(at)?;
         for index in 0..self.instruments.len() {
@@ -75,7 +77,7 @@ impl Engine {
                     continue;
                 }
                 if let Some(exit) = self.exit_due(next, key)? {
-                    self.request_engine_exit(at, key, exit)?;
+                    self.request_engine_exit(at, key, exit, None)?;
                 }
             }
         }
