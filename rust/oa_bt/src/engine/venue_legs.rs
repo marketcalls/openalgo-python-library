@@ -164,10 +164,16 @@ impl Engine {
 
     /// The units `key`'s stop covers (module docs): the position less what its exits sent
     /// still have to fill and less a partial exit that waits for the stop; 0 or more.
+    /// When the waiting exits together close what is open, they wait for the stop's
+    /// cancellation, and the stop covers all of it until that goes through (a refused
+    /// cancellation is retried, 16-session-design 4.5).
     ///
-    /// Errors: those of `partial_exit_units`.
+    /// Errors: those of `partial_exit_units` and `waiting_exits_close_all`.
     pub(super) fn stop_cover_units(&self, key: PositionKey) -> Result<f64, KernelError> {
         let open = self.held_units(key).abs() - self.left_to_exit(key);
+        if self.waiting_exits_close_all(key, open)? {
+            return Ok(open.max(0.0));
+        }
         let first_waiting = self
             .venue
             .exits

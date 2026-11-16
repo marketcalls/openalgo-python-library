@@ -57,15 +57,6 @@ fn restored(state: &StateValue, saved: u64) -> (Engine, OrderId) {
     (kernel, new)
 }
 
-/// The order a command is for.
-fn order_of(command: &VenueCommand) -> OrderId {
-    match *command {
-        VenueCommand::Place { order, .. }
-        | VenueCommand::Modify { order, .. }
-        | VenueCommand::Cancel { order } => order,
-    }
-}
-
 /// The value of `key` in the map `value`.
 fn get<'a>(value: &'a StateValue, key: &str) -> &'a StateValue {
     let StateValue::Map(entries) = value else {
@@ -131,7 +122,7 @@ fn a_restored_order_that_ends_before_its_place_is_taken_is_never_sent() {
         learn(&mut kernel, order);
         let commands = kernel.take_commands();
         assert!(
-            commands.iter().all(|command| order_of(command) != order),
+            commands.iter().all(|command| command.order() != order),
             "{what}: nothing is sent for the ended {order}: {commands:?}"
         );
         assert_eq!(placed_roles(&commands), placed, "{what}");

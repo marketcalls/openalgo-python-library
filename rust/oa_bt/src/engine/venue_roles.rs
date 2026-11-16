@@ -15,8 +15,10 @@
 //! A MARKET order against a position whose leg's stop rests is judged in the room the stop
 //! makes for it: the position's exit owner sends it once the stop is cut down to what stays
 //! open, or cancelled for a sale of the whole position or a reversal (`venue_owner`), so
-//! the order and the stop never both fill at the broker (16-session-design 4.5). A resting
-//! order against it (LIMIT, SL, SL-M) is judged beside the stop, which keeps working.
+//! the order and the stop never both fill at the broker (16-session-design 4.5). A reversal
+//! whose stop fills before its cancellation ends canceled and opens nothing; the strategy
+//! decides again at its next bar. A resting order against it (LIMIT, SL, SL-M) is judged
+//! beside the stop, which keeps working.
 //!
 //! A strategy order's role is decided when it passes the submission checks, from the
 //! position then held and the orders working to close it; the engine's orders take the

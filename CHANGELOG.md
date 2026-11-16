@@ -117,7 +117,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stop down to what stays open first and is sent once the broker confirms that (a refusal
   leaves it waiting, the cut sent again 5 seconds later); a full exit cancels the stop
   first, and so does a partial exit followed by exits that close the rest (`reduce()`
-  then `exit()`), which then go one after the other. A plain MARKET order against the
+  then `exit()`), which then go one after the other; until that cancellation goes
+  through (a refused one is sent again) the stop covers the whole position. A plain MARKET order against the
   position (`sell()` of the long, a reversal, a `target()` that flips) goes the same way,
   the stop cut down or cancelled first, so it and the stop never both fill at the
   broker; a reversal whose stop fills before its cancellation ends canceled and opens

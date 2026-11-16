@@ -196,6 +196,58 @@ fn a_full_exit_behind_a_partial_one_waiting_for_its_cut_cancels_the_stop_and_bot
     assert_eq!(placed_roles(&kernel.take_commands()), expected);
 }
 
+#[test]
+fn a_stop_whose_cancel_is_refused_stays_whole_while_a_partial_and_a_full_exit_wait() {
+    // reduce() waits for a cut the venue refuses twice; exit() of the rest asks for the
+    // stop's cancel, which the venue refuses twice too. Both exits wait for that cancel,
+    // so the stop keeps protecting the whole position (16-session-design 4.5): no tick
+    // past the modification throttle cuts it down to the half the reduce would leave.
+    let mut kernel = deciding();
+    assert_eq!(
+        kernel.submit(reduce(0.5)),
+        Ok(Submission::Submitted(OrderId(3)))
+    );
+    waiting(&mut kernel);
+    assert_eq!(kernel.take_commands(), [modify_stop(50.0, STOP_LEVEL)]);
+    kernel
+        .apply_modify_refused(STOP)
+        .expect("the cut is refused");
+    assert_eq!(kernel.take_commands(), [modify_stop(50.0, STOP_LEVEL)]);
+    kernel.apply_modify_refused(STOP).expect("refused again");
+    pause_at_close(&mut kernel, &bars(&[], &[]), 2);
+    assert_eq!(kernel.take_commands(), []);
+    assert_eq!(
+        kernel.submit(reduce(1.0)),
+        Ok(Submission::Submitted(OrderId(4)))
+    );
+    assert_eq!(
+        kernel.take_commands(),
+        [VenueCommand::Cancel { order: STOP }]
+    );
+    waiting(&mut kernel);
+    kernel
+        .apply_cancel_refused(STOP)
+        .expect("the cancel is refused");
+    let steps: Vec<Step> = vec![
+        (
+            "2 s into minute 3: the cancel goes again",
+            |k| k.push_tick(SBIN, 500.2, at_second(3, 2)),
+            vec![VenueCommand::Cancel { order: STOP }],
+        ),
+        (
+            "the venue refuses it again",
+            |k| k.apply_cancel_refused(STOP),
+            vec![],
+        ),
+        (
+            "8 s in, past the throttle: the stop is not cut down",
+            |k| k.push_tick(SBIN, 500.2, at_second(3, 8)),
+            vec![],
+        ),
+    ];
+    run_steps(&mut kernel, steps);
+}
+
 /// One step of a tick-driven script: what the venue or the feed does, at the session's
 /// clock, and the commands the session sends after it.
 type Step = (

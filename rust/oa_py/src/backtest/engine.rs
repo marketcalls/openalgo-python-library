@@ -104,7 +104,9 @@ impl NativeEngine {
         Ok(self.engine()?.venue().code())
     }
 
-    /// A live session's commands since the last call, in order, as dicts (`venue`).
+    /// A live session's commands since the last call, in order, as dicts (`venue`). The
+    /// commands of an order that has ended since they were made (rejected, cancelled or
+    /// filled whole) are dropped.
     fn take_commands<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         venue::commands(py, &self.engine_mut()?.take_commands())
     }
