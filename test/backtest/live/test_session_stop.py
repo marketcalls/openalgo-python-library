@@ -96,7 +96,9 @@ def test_a_second_ctrl_c_stops_with_a_line_per_leg_left_open(world, caplog):
     assert [(p.symbol, p.units) for p in outcome.open_positions] == [("SBIN", 10.0)]
     assert any("close it by hand" in line for line in world.lines)
     assert any("safe stop" in text for text in alerts(caplog, "error"))
-    assert any("failed 5 times" in text for text in alerts(caplog, "error"))
+    (gave_up,) = [text for text in alerts(caplog, "error") if "failed 5 times" in text]
+    # With no stop rule no stop can be placed again: only then is it closed by hand.
+    assert gave_up.endswith("no stop at the broker: close it by hand in OpenAlgo")
 
 
 def test_two_ctrl_c_before_the_loop_looks_act_as_the_first_then_the_second(world):

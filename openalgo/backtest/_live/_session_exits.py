@@ -5,28 +5,30 @@ An exit (a signal exit, a risk exit, a square-off) that ends rejected while its 
 still holds a position starts the schedule: the session asks the kernel for the exit again
 (`request_exit`) after `EXIT_RETRY_DELAYS_S` (1, 2, 5, 10 seconds after each rejection),
 so five attempts in all (08-live-trading section 6.3). After the fifth rejection the
-strategy's entries are locked for the rest of the session ("exit_failed"), the leg's
-stop is placed again (`protect`, R7) so the broker holds one, and an ERROR alert says to
-close the position by hand in OpenAlgo; a later rejection (the kernel's own re-send of
-an engine exit at a later open, a backstop its exit owner keeps from overlapping the
-schedule) places the stop again too. While the retries run the leg has no stop at the
-broker (it was cancelled for the exit) and counts as unprotected. The schedule starts
-again once the position is flat. A risk exit is asked for again with its own reason; a
-signal exit, a target or a square-off with "operator_stop", the kernel's reason for an
-exit the session asks for (its trade's exit reason reads "manual").
+strategy's entries are locked for the rest of the session ("exit_failed"), the leg's stop
+is placed again (`protect`, R7) so the broker holds one, and an ERROR alert says what
+protect achieved (16-session-design 4.8, by the rule of 3.5 that a sale by hand is never
+advised beside a working stop): the stop placed again protects the position and is to be
+cancelled before closing it by hand; only when no stop could be placed is the position to
+be closed by hand. A later rejection (the kernel's own re-send of an engine exit at a
+later open, a backstop its exit owner keeps from overlapping the schedule) places the
+stop again too. While the retries run the leg has no stop at the broker (it was cancelled
+for the exit) and counts as unprotected. The schedule starts again once the position is
+flat. A risk exit is asked for again with its own reason; a signal exit, a target or a
+square-off with "operator_stop", the kernel's reason for an exit the session asks for
+(its trade's exit reason reads "manual").
 
 A partial exit is not asked for again (decided for unit 10): `request_exit`, the only
 retry call, exits the whole position, so a rejected sale of part of it (a `reduce()`, an
 EXIT order for fewer units than the position, a partial target) stays rejected, as the
-strategy saw it in `on_order`, with the REJECT alert sent for every rejection. Turning
-it into a full exit would close more than the strategy asked for. Part or all is judged
+strategy saw it in `on_order`, with the REJECT alert sent for every rejection. Turning it
+into a full exit would close more than the strategy asked for. Part or all is judged
 against the position when the exit was placed (`Trader.units_at_place`), so the outcome
 does not depend on whether another exit's fill is heard before the rejection. The units
 it was for stay protected: when the partial exit alone was working, the kernel cut the
-stop down
-only for its units and puts it back over the whole position once it has ended unfilled
-(R4); when it and the exits beside it closed the whole position (two targets on one
-tick, a `reduce()` then an `exit()`), the kernel cancelled the stop for them and does
+stop down only for its units and puts it back over the whole position once it has ended
+unfilled (R4); when it and the exits beside it closed the whole position (two targets on
+one tick, a `reduce()` then an `exit()`), the kernel cancelled the stop for them and does
 not place it again, so the stops supervisor does (`_stops_bare`: `protect`, R7, with an
 ERROR alert) once the leg holds units with nothing working to close them. After the
 second Ctrl+C, or once protect by state holds a leg (`halt`), no exit is asked for again:
@@ -43,6 +45,7 @@ from typing import Any
 from .._layout import NANOS_PER_SECOND
 from ._session_trader import Trader
 from ._stops_kernel import PROTECT_PLACED, protect
+from ._stops_report import NO_STOP
 from ._types import LOGGER_NAME, AlertKind, OrderIntent, Purpose
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -58,6 +61,12 @@ EXIT_FAILED_LOCK = "exit_failed"
 RETRY_REASON = "operator_stop"
 #: The purposes of the orders that close a position.
 EXIT_PURPOSES = frozenset({Purpose.EXIT, Purpose.RISK_EXIT, Purpose.SQUARE_OFF})
+#: What the give-up alert tells the operator when the stop is placed again (4.8): a sale
+#: by hand beside it would let the stop sell again once triggered.
+STOP_PLACED_AGAIN = (
+    "its stop is placed again at the broker and protects the position; to close it by "
+    "hand, cancel that stop first"
+)
 
 
 class ExitRetries:
@@ -127,7 +136,8 @@ class ExitRetries:
 
     def _give_up(self, trader: Trader, rejections: int, why: str) -> None:
         """The last attempt failed, or a later exit did: the broker holds a stop again
-        (`protect`), alerted once with the entries locked."""
+        (`protect`), alerted once with the entries locked, in words of what protect
+        achieved (module docstring)."""
         session, name = self._session, trader.name
         self._due_ns.pop(name, None)
         protected = protect(trader)
@@ -136,13 +146,14 @@ class ExitRetries:
             return
         if trader.lock(EXIT_FAILED_LOCK):
             session.event("lock", strategy=name, reason=EXIT_FAILED_LOCK)
-        stop = "its stop is placed again at the broker"
+        advice = STOP_PLACED_AGAIN
         if protected not in PROTECT_PLACED:
-            stop = f"no stop can be placed again ({protected})"
+            logger.warning("%s: no stop could be placed again (%s)", name, protected)
+            advice = f"{NO_STOP}: close it by hand in OpenAlgo"
         session.alert(
             AlertKind.ERROR,
             f"exit of {trader.symbol} {trader.exchange} failed {rejections} times ({why}): "
-            f"{name}'s entries are locked and {stop}; close the position by hand in OpenAlgo",
+            f"{name}'s entries are locked; {advice}",
         )
 
     def duties(self, now_ns: int) -> None:
@@ -176,5 +187,6 @@ __all__ = [
     "EXIT_PURPOSES",
     "EXIT_RETRY_DELAYS_S",
     "RETRY_REASON",
+    "STOP_PLACED_AGAIN",
     "ExitRetries",
 ]

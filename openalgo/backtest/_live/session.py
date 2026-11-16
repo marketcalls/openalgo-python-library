@@ -35,9 +35,9 @@ while the journal works (its broker-held stop placed again where it can be, for 
 alert naming each open leg, its stop, the orders working toward it and what to do
 (`_stops_report.left_open`: a confirmed stop must be cancelled before any sale by hand,
 an order working means the order book first, and only a leg with neither is to be closed
-by hand), and closes the same way. A stop asked for during
-the countdown stops at once (nothing was sent); a feed that does not connect in time
-closes the session and raises LiveError.
+by hand), and closes the same way. A stop asked for during the countdown stops at once
+(nothing was sent); a feed that does not connect in time closes the session and raises
+LiveError.
 
 Times are UTC nanoseconds, amounts rupees.
 """

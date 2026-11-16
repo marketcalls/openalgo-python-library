@@ -21,8 +21,23 @@ from session_samples import NS, alerts, ist
 from stops_samples import OPTION, STOP_POINTS, OptionHold, StopHold, option_world, stop_world
 
 import openalgo.backtest as bt
-from openalgo.backtest._live._stops_report import CHECK_FIRST, STOP_PROTECTS, left_open
-from openalgo.backtest._live._types import LOGGER_NAME, OrderIntent, Purpose
+from openalgo.backtest._live._order_answers import Outcome
+from openalgo.backtest._live._stops_report import (
+    CHECK_FIRST,
+    STOP_PROTECTS,
+    left_open,
+    protected,
+    stop_state,
+    stop_words,
+)
+from openalgo.backtest._live._types import (
+    LOGGER_NAME,
+    Mode,
+    OrderIntent,
+    OrderStatus,
+    OrderUpdate,
+    Purpose,
+)
 from openalgo.backtest._live._venue_requests import PlaceRequest, Priority
 from openalgo.backtest._live.inbox import NotSentReason
 from openalgo.backtest._live.stops import StopsSupervisor
@@ -187,6 +202,26 @@ def test_a_leg_left_with_its_confirmed_stop_is_printed_and_not_alerted_as_an_err
     assert not any("SBIN NSE 10 units" in text for text in alerts(caplog, "error"))
 
 
+class TargetOnly(StopHold):
+    """Buys 10 SBIN at its first decision with a target 2 points above and no stop."""
+
+    rules = {"target": bt.points(2)}
+
+
+def test_a_stops_lines_are_taken_after_its_step_hands_over_the_exit_a_tick_made(world, caplog):
+    # SBIN trades at the target (502.00) at the instant of the Ctrl+C: the loop step that
+    # sees the stop takes the tick first, so the kernel makes the target's exit in the
+    # step whose wait ends at once (no stop to protect, no entry to cancel).
+    world.script.at(ist(14, 43, 30), lambda: world.fake.trade("SBIN", "NSE", 502.0, volume=10.0))
+    world.stop_at(ist(14, 43, 30))
+    world.run(TargetOnly, on_stop="keep")
+
+    (line,) = [line for line in world.lines if line.startswith("TargetOnly SBIN NSE 10 units")]
+    assert "exit order SELL 10" in line
+    assert line.endswith(CHECK_FIRST)
+    assert "close it by hand" not in line.replace(CHECK_FIRST, "")
+
+
 # ----- a stop not sent, on its own (no server) ----------------------------------------
 
 
@@ -274,3 +309,138 @@ def test_a_stop_held_back_while_openalgo_is_silent_is_named_as_not_sent():
     assert note.startswith("stop (intent 20261116-live-1-StopHold-o2) held back, not sent")
     assert "not confirmed at the broker" not in note
     assert note.endswith(CHECK_FIRST)
+
+
+# ----- what works toward a leg, and a stop the kernel is cancelling (no server) ----------
+
+
+class _Book:
+    """A kernel session whose orders are `orders` (kernel order to its terms) and whose
+    cancelling list (decided, not yet answered) is `cancelling`."""
+
+    def __init__(self, orders: dict, cancelling: tuple = ()):
+        self.orders, self.cancelling = orders, cancelling
+
+    def order(self, kernel_order):
+        return self.orders.get(kernel_order)
+
+    def live_state(self):
+        return {"desk": {"cancelling": list(self.cancelling)}}
+
+
+class _Leg:
+    """A strategy holding 10 SBIN whose working kernel orders are `working`."""
+
+    name, symbol, exchange, finished = "StopHold", "SBIN", "NSE", False
+
+    def __init__(self, book: _Book, working: list):
+        self.engine, self.venue, self._working = book, _Venue(), working
+
+    def open_units(self):
+        return 10.0
+
+    def working(self):
+        return list(self._working)
+
+
+#: A SELL of 10 SBIN for kernel order `kernel_order`, placed as `purpose` at `price_type`.
+def _sale(kernel_order: int, purpose: Purpose, price_type: str) -> PlaceRequest:
+    intent = OrderIntent(
+        intent_id=f"20261116-live-1-StopHold-o{kernel_order}",
+        strategy="StopHold",
+        symbol="SBIN",
+        exchange="NSE",
+        action="SELL",
+        quantity=10,
+        price_type=price_type,
+        product="MIS",
+        purpose=purpose,
+        created_ns=0,
+        price=600.0 if price_type == "LIMIT" else 0.0,
+        trigger_price=497.0 if price_type == "SL-M" else 0.0,
+    )
+    return PlaceRequest(kernel_order, kernel_order, intent, Priority.PROTECT)
+
+
+def _terms(order_type: str) -> dict:
+    return {
+        "order_type": order_type,
+        "side": "SELL",
+        "quantity_units": 10,
+        "filled_units": 0,
+        "limit_rupees": 600.0 if order_type == "LIMIT" else 0.0,
+        "trigger_rupees": 497.0 if order_type == "SL-M" else 0.0,
+    }
+
+
+def _bound(stops: StopsSupervisor, trader, request: PlaceRequest, order_id: str) -> None:
+    """`request` handed to the worker and accepted as `order_id`."""
+    leg = stops.leg(trader)
+    leg.handed(request)
+    leg.placed(request.kernel_order, Outcome.ACCEPTED, order_id, 0)
+
+
+def _working_word(order_id: str) -> OrderUpdate:
+    return OrderUpdate(
+        order_id=order_id,
+        symbol="SBIN",
+        exchange="NSE",
+        action="SELL",
+        quantity=10,
+        filled_quantity=0,
+        pending_quantity=10,
+        average_price=0.0,
+        status=OrderStatus.TRIGGER_PENDING,
+        rejection_reason="",
+        mode=Mode.LIVE,
+        ts_recv_ns=0,
+        source="stream",
+    )
+
+
+@pytest.mark.parametrize("unsent", [(), (5,), (5, 6)], ids=["none", "one", "two"])
+def test_a_resting_exit_beside_orders_never_sent_comes_before_closing_it_by_hand(unsent):
+    # No stop rule; an exit LIMIT rests at the broker; the kernel orders `unsent` were
+    # never handed to the order worker.
+    stops = StopsSupervisor(session=None)
+    trader = _Leg(_Book({3: _terms("LIMIT")}), working=[3, *unsent])
+    _bound(stops, trader, _sale(3, Purpose.EXIT, "LIMIT"), "261116000000003")
+
+    note = left_open(stops, trader)
+
+    assert note.startswith("exit order 261116000000003 resting at the broker")
+    # A sale by hand beside the resting exit would sell short once it fills.
+    assert note.endswith(CHECK_FIRST)
+    assert "close it by hand" not in note.replace(CHECK_FIRST, "")
+
+
+def confirmed_stop(cancelling: tuple) -> tuple[StopsSupervisor, _Leg]:
+    """A leg whose SL-M stop o2 (order 261116000000002) is confirmed working for its 10
+    units, with the kernel's cancelling list `cancelling`."""
+    stops = StopsSupervisor(session=None)
+    trader = _Leg(_Book({2: _terms("SL-M")}, cancelling=cancelling), working=[2])
+    _bound(stops, trader, STOP_PLACED, "261116000000002")
+    stops.leg(trader).heard(2, _working_word("261116000000002"))
+    return stops, trader
+
+
+def test_a_confirmed_stop_with_nothing_else_working_protects_the_position():
+    stops, trader = confirmed_stop(cancelling=())
+
+    assert protected(stops, trader)
+    assert left_open(stops, trader).endswith(STOP_PROTECTS)
+
+
+def test_a_stop_the_kernel_is_cancelling_is_named_as_being_cancelled_not_as_protecting():
+    # The kernel decided the cancel in this loop step (a target tick, the daily loss):
+    # the session hands it to the worker only at the step's end.
+    stops, trader = confirmed_stop(cancelling=(2,))
+
+    note = left_open(stops, trader)
+
+    assert not protected(stops, trader)
+    assert "stop 261116000000002 being cancelled" in note
+    assert STOP_PROTECTS not in note
+    assert note.endswith(CHECK_FIRST)
+    assert stop_words(stops, trader).endswith("check the order book")
+    assert stop_state(stops, trader) == ("261116000000002", False)

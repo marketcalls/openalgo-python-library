@@ -9,19 +9,24 @@ once bound, else its side, units, purpose and intent ID: an exit or an entry sen
 unanswered, held back or ambiguous, or a MARKET order accepted with no final word yet, is
 "in flight"; any other one bound is "resting at the broker"; one the kernel made and
 never sent is "not sent". Then the stop: confirmed (for part of the position, or all of
-it), repriced to a LIMIT resting at the broker, being cancelled, ambiguous, handed to the
-order worker with no answer, held back and not sent, sent and unanswered, not confirmed,
-or none. Then what to do, since a sale by hand beside the session's own orders would
-sell short:
+it), repriced to a LIMIT resting at the broker, being cancelled (a cancel sent, or one the
+kernel decided and the session has not handed over yet), ambiguous, handed to the order
+worker with no answer, held back and not sent, sent and unanswered, not confirmed, or
+none. Then what to do, since a sale by hand beside the session's own orders would sell
+short:
 
-- no stop and nothing working: close it by hand;
+- no stop and nothing sent working (an order the kernel made and never sent is no
+  order at the broker): close it by hand;
 - a confirmed stop covering the whole position and nothing else working: the stop
   protects it, and must be cancelled before any sale by hand (`protected`);
 - anything else (an order working, or a stop that may be at the broker without covering
   the position): check the order book before closing it by hand, cancelling what still
   works.
 
-Used by the loop only, over the stops supervisor (`stops.StopsSupervisor`).
+The notes are taken once the loop step's commands are handed over (`_session_stop`): an
+order not sent then was not handed to the order worker (after a guard lock, or an exit
+the kernel holds until a cancel it waits for ends, which the note names too). Used by
+the loop only, over the stops supervisor (`stops.StopsSupervisor`).
 """
 
 from __future__ import annotations
@@ -30,7 +35,7 @@ from typing import Any
 
 from ._order_state import ENTRY_PURPOSES
 from ._session_trader import Trader
-from ._stops_kernel import order_of
+from ._stops_kernel import cancelling, order_of
 from ._stops_orders import IN_FLIGHT, Sent, Watched
 from ._types import Purpose
 
@@ -63,7 +68,7 @@ def stop_state(stops: Any, trader: Trader) -> tuple[str, bool]:
     """The stop of `trader`'s leg as the supervisor `stops` knows it: its broker order ID
     ("" for none, or one not bound) and whether it is confirmed working at the broker."""
     watched = _stop(stops, trader)
-    return ("", False) if watched is None else (watched.order_id, stops.covered(trader) > 0)
+    return ("", False) if watched is None else (watched.order_id, _covering(stops, trader) > 0)
 
 
 def stop_words(stops: Any, trader: Trader) -> str:
@@ -72,7 +77,9 @@ def stop_words(stops: Any, trader: Trader) -> str:
     confirmed, or none."""
     words = _stop_words(stops, trader)
     watched = _stop(stops, trader)
-    unsure = watched is not None and (watched.cancel_sent or watched.state is Sent.AMBIGUOUS)
+    unsure = watched is not None and (
+        watched.state is Sent.AMBIGUOUS or _being_cancelled(stops, trader, watched)
+    )
     return f"{words}: check the order book" if unsure else words
 
 
@@ -81,18 +88,19 @@ def protected(stops: Any, trader: Trader) -> bool:
     works toward it: nothing for the operator to do but leave the stop or cancel it
     before a sale by hand."""
     units = round(abs(trader.open_units()))
-    return 0 < units <= stops.covered(trader) and not _working(stops, trader)
+    return 0 < units <= _covering(stops, trader) and not _working(stops, trader)
 
 
 def left_open(stops: Any, trader: Trader) -> str:
     """The note of `trader`'s position left open (module docstring)."""
     leg, working = stops.leg(trader), trader.working()
-    parts = _working(stops, trader)
+    sent = _working(stops, trader)
     unsent = [kernel_order for kernel_order in working if kernel_order not in leg.orders]
+    parts = [*sent]
     if unsent:
         parts.append(f"order {', '.join(f'o{k}' for k in unsent)} not sent")
     stop_part = _stop_words(stops, trader)
-    if stop_part == NO_STOP and len(parts) == len(unsent):
+    if stop_part == NO_STOP and not sent:
         # Nothing sent works toward the position: only a sale by hand closes it.
         return "; ".join([*parts, f"{NO_STOP}, close it by hand"])
     if protected(stops, trader):
@@ -138,7 +146,7 @@ def _stop_words(stops: Any, trader: Trader) -> str:
     if watched.state is Sent.AMBIGUOUS:
         return f"ambiguous stop order (intent {watched.intent_id})"
     name = watched.order_id or f"(intent {watched.intent_id})"
-    if watched.cancel_sent:
+    if _being_cancelled(stops, trader, watched):
         return f"stop {name} being cancelled, with no final word yet"
     covered, units = stops.covered(trader), round(abs(trader.open_units()))
     if covered and covered >= units:
@@ -165,6 +173,25 @@ def _repriced_limit(trader: Trader, watched: Watched) -> float | None:
     if order is None or order["order_type"] != "LIMIT":
         return None
     return float(order["limit_rupees"])
+
+
+def _being_cancelled(stops: Any, trader: Trader, watched: Watched) -> bool:
+    """Whether a cancel of the leg's stop `watched` was sent, or the kernel decided one the
+    session has not handed over yet (its cancelling list): either may be in effect at the
+    broker by the time the operator reads the note. Only a stop that covers units is
+    looked up in the kernel: one not confirmed covers nothing either way."""
+    if watched.cancel_sent:
+        return True
+    return stops.covered(trader) > 0 and watched.kernel_order in cancelling(trader)
+
+
+def _covering(stops: Any, trader: Trader) -> int:
+    """The units the leg's confirmed stop covers at the broker for a note: none while it
+    is being cancelled (`_being_cancelled`)."""
+    watched = _stop(stops, trader)
+    if watched is None or _being_cancelled(stops, trader, watched):
+        return 0
+    return int(stops.covered(trader))
 
 
 def _stop(stops: Any, trader: Trader) -> Watched | None:

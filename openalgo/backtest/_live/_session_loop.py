@@ -9,7 +9,8 @@ the kernel sessions, and its iteration, `Session.step`.
     D. duties by time: the stops supervisor's (`stops`), the risk watch (`watch`), the
        safe stop, the end of the day (`_session_stop.Control`)
     E. hand the kernel's commands to the order worker, none after a guard lock; the stops
-       supervisor then reviews each leg's unprotected window
+       supervisor then reviews each leg's unprotected window, and the safe stop's lines
+       asked for in D are taken (`Control.after_hand_over`)
     F. save each strategy's `self.state` when a slice was released and it changed
     G. wait for the next slice close, at most `wait_max_s`
 
@@ -234,6 +235,8 @@ class Session:
                 self.control.duties(self.now())
         self.hand_over(self._commands())
         self.stops.review(self.now())
+        if self.control is not None and not protecting:
+            self.control.after_hand_over()
         if released:
             self._save_states(released)
         self._wait(until_ns)

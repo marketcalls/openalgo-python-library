@@ -36,11 +36,15 @@ from stops_samples import (
 import openalgo.backtest as bt
 from openalgo.backtest._live._session_exits import EXIT_ATTEMPTS, EXIT_RETRY_DELAYS_S
 from openalgo.backtest._live._stops_cancels import CANCEL_RETRY_DELAYS_S
+from openalgo.backtest._live._stops_report import CHECK_FIRST, STOP_PROTECTS
 from openalgo.backtest._live._types import LOGGER_NAME, Mode
 from openalgo.backtest._live.journal import Journal
 
 #: When the target of `TargetHold` is reached: SBIN trades at 502.00 from 14:44.
 TARGET_AT = ist(14, 44)
+#: More refusals of a cancel than its retries (1, 2 and 5 s, then every 5 s) make from the
+#: square-off (15:00) to the session's end (15:35).
+CANCELS_REFUSED_TO_THE_CLOSE = 1000
 
 
 @pytest.fixture
@@ -437,7 +441,14 @@ def test_F28_an_exit_rejected_five_times_halts_entries_and_places_the_stop_again
     assert all(gap >= delay for gap, delay in zip(gaps, EXIT_RETRY_DELAYS_S, strict=True))
     stops = [(o.status) for o in world.orders() if o.price_type == "SL-M"]
     assert stops == ["cancelled", "trigger pending"]
-    assert any("failed 5 times" in text for text in alerts(caplog, "error"))
+    (gave_up,) = [text for text in alerts(caplog, "error") if "failed 5 times" in text]
+    # The stop placed again works at the broker: a sale by hand beside it would let it
+    # sell again (16-session-design 3.5, 4.8), so the alert says to cancel it first.
+    assert gave_up.endswith(
+        "its stop is placed again at the broker and protects the position; to close it by "
+        "hand, cancel that stop first"
+    )
+    assert "close the position by hand" not in gave_up
     assert "live_lock" in outcome.outputs["ExitsThenBuys"]["orders"]["reject_code"]
     assert journal_stop(world, outcome, "ExitsThenBuys") == world.orders()[-1].order_id
     check_invariants(world.timeline, strategy="ExitsThenBuys")
@@ -487,6 +498,65 @@ def test_a_square_off_refused_after_the_retries_places_the_stop_again_each_time(
     assert exits == ["rejected"] * (EXIT_ATTEMPTS + 1) + ["complete"]
     assert world.fake.position("SBIN", "NSE") == 0
     check_invariants(world.timeline, strategy="StopHold")
+
+
+def test_a_reminder_of_an_exit_that_failed_every_attempt_names_the_stop_placed_again(world, caplog):
+    # The safe stop's exit is refused five times; the stop placed again reaches the broker
+    # but its answer is lost and the order book cannot be read, so it is still unanswered
+    # at the safe stop's reminder: a sale by hand might sell beside it.
+    def refuse_five():
+        for _ in range(EXIT_ATTEMPTS):
+            world.fake.reject_next("RMS blocked", price_type="MARKET")
+
+    world.script.at(ist(14, 43, 20), refuse_five)
+    world.stop_at(ist(14, 43, 30))
+    answers_lost_after_the_fifth_refusal(world)
+    world.stop_at(ist(14, 44, 40))
+    world.run(StopHold)
+
+    (reminder,) = [t for t in alerts(caplog, "error") if "safe stop:" in t]
+    assert "its exit failed every attempt" in reminder
+    assert "sent and unanswered" in reminder
+    assert reminder.endswith(CHECK_FIRST)
+    assert "close it by hand" not in reminder.replace(CHECK_FIRST, "")
+
+
+def answers_lost_after_the_fifth_refusal(world) -> None:
+    """Once the fake has refused five SELL MARKET orders, the next placement reaches the
+    broker with its answer lost and the order book stops answering: checked every tenth
+    of a second from 14:43:30, so the faults come before the stop placed again goes."""
+    armed = []
+
+    def arm():
+        refused = [o for o in world.orders() if (o.action, o.price_type) == ("SELL", "MARKET")]
+        if armed or len(refused) < EXIT_ATTEMPTS:
+            return
+        armed.append(True)
+        world.fake.faults.drop_connection("placeorder", reached_broker=True)
+        for _ in range(200):
+            world.fake.faults.gateway_error("orderbook", status=504)
+
+    for instant in range(ist(14, 43, 30), ist(14, 44, 30), NS // 10):
+        world.script.at(instant, arm)
+
+
+def test_at_the_exchanges_close_a_leg_its_stop_protects_is_still_an_error_alert(world, caplog):
+    # OpenAlgo's limiter refuses every cancel of the stop, so the square-off's exit waits
+    # behind it and the stop protects the position to 15:35, the exchange's close plus
+    # the grace: the position left open is the operator's then (16-session-design 3.4),
+    # not information only.
+    def refuse_cancels():
+        for _ in range(CANCELS_REFUSED_TO_THE_CLOSE):
+            world.fake.faults.rate_limit("cancelorder")
+
+    world.script.at(ist(14, 59, 50), refuse_cancels)
+    outcome = world.run(StopHold)
+
+    (left,) = outcome.open_positions
+    assert outcome.stopped_by == "session_end"
+    assert left.stop_confirmed
+    (alert,) = [text for text in alerts(caplog, "error") if "StopHold SBIN NSE 10 units:" in text]
+    assert alert.endswith(STOP_PROTECTS)
 
 
 class BuysWhenFlat(StopHold):

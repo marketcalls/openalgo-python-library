@@ -15,8 +15,10 @@ time that end it (`Control`). The common close is `_session_close`.
   protected by state (`_stops_protect`: its broker-held stop placed again where it can
   be, and its exit asked for no more), and the session keeps running, with an ERROR
   alert and a console line naming each leg without a confirmed stop and what works
-  toward its exit every `UNPROTECTED_REMINDER_EVERY_S`, until every leg is flat or
-  protected, a second Ctrl+C, or the exchange's close plus `SESSION_END_GRACE_S`. With
+  toward its exit (for one whose exit failed every attempt, its left-open note: the stop
+  placed again, never a bare "close it by hand" beside it) every
+  `UNPROTECTED_REMINDER_EVERY_S`, until every leg is flat or protected, a second Ctrl+C,
+  or the exchange's close plus `SESSION_END_GRACE_S`. With
   `"keep"` every leg is protected by state at once, and the session waits at most
   `SAFE_STOP_STATE_WAIT_S` for the cancels and the stops' words (longer only to finish a
   step of protect by state's own, `Protection.may_end`), then leaves the positions open
@@ -37,13 +39,19 @@ time that end it (`Control`). The common close is `_session_close`.
 - **The end of the day.** Once every strategy is past its MIS square-off, flat and with
   nothing working, the session ends ("session_end"). From the square-off plus
   `SQUARE_OFF_VERIFY_AFTER_S` a strategy not flat gets the ERROR alert "still not flat
-  after square-off", each minute while it lasts. A leg still open at the exchange's close
-  plus `SESSION_END_GRACE_S` ends the session too, with an ERROR alert for every such
-  leg, its stop or not. After a guard lock the session ends at that same time ("mode_breach").
+  after square-off", each minute while it lasts. A leg still open at the exchange's
+  close plus `SESSION_END_GRACE_S` ends the session too, with an ERROR alert for every
+  such leg, its stop or not. After a guard lock the session ends at that same time
+  ("mode_breach").
 - **A strategy's exception** (3.5): an ERROR alert, then the safe stop by `on_stop`. The
   operator's first Ctrl+C, before or after it, asks for the stop already under way: only
   a second one is the second Ctrl+C.
 - The slices the plan's catch-up still owns are given up on at their last candle check.
+
+The reminders and the lines of the legs left open are taken once the loop step that asked
+for them has handed its commands to the order worker (`after_hand_over`, after the loop's
+step E): an order the kernel made in that step (a target's exit, a stop placed again) is
+then named as handed over, not as "not sent" beside "close it by hand".
 
 Times are UTC nanoseconds, quantities units.
 """
@@ -101,6 +109,10 @@ class Control:
         self._second_ns: int | None = None
         self._remind_ns: int | None = None
         self._protecting = False
+        # The lines due after the step's hand-over: the reminders, and the legs left open
+        # (the value is `every_leg`).
+        self._remind_due = False
+        self._left_open_due: bool | None = None
         # The kernel's last answer to the safe stop's exit request, by strategy.
         self._asked: dict[str, str | None] = {}
         self._not_flat_ns = {
@@ -143,6 +155,16 @@ class Control:
             self._stop_due(now_ns)
         else:
             self._end_of_day(now_ns)
+
+    def after_hand_over(self) -> None:
+        """The lines the step's duties asked for, once the step has handed its commands to
+        the order worker (module docstring): the reminders, then the legs left open."""
+        if self._remind_due:
+            self._remind_due = False
+            self._remind()
+        every_leg, self._left_open_due = self._left_open_due, None
+        if every_leg is not None:
+            self._left_open_lines(every_leg=every_leg)
 
     # ----- the safe stop --------------------------------------------------------------
 
@@ -203,23 +225,23 @@ class Control:
         traders = self._session.traders
         if self._on_stop == "keep":
             if self._wait_over(now_ns, self._stopping_ns):
-                self._left_open()
+                self._left_open_due = False
                 self.verdict = self._stopped_by()
             return
         if all(trader.flat or self._protected(trader) for trader in traders):
-            self._left_open()
+            self._left_open_due = False
             self.verdict = self._stopped_by()
             return
         if not self._session.locked:
             self._ask_exits(retried_too=False)
         if now_ns >= self._end_ns:
-            self._left_open(every_leg=True)
+            self._left_open_due = True
             self.verdict = self._stopped_by()
         elif now_ns >= self._remind_ns:
             if not self._protecting:
                 self._protect([trader for trader in traders if not trader.flat], now_ns)
             self._remind_ns = now_ns + _s(UNPROTECTED_REMINDER_EVERY_S)
-            self._remind()
+            self._remind_due = True
 
     def _second_due(self, now_ns: int) -> None:
         """After the second Ctrl+C: once every leg is protected by state and the orders
@@ -227,7 +249,7 @@ class Control:
         left open and stop."""
         if not self._wait_over(now_ns, self._second_ns):
             return
-        self._left_open()
+        self._left_open_due = False
         self.verdict = self._stopped_by()
 
     def _wait_over(self, now_ns: int, since_ns: int) -> bool:
@@ -281,7 +303,9 @@ class Control:
         if session.exits.retry_due(trader.name):
             return "its rejected exit is asked for again shortly"
         if session.exits.owns(trader.name):
-            return "its exit failed every attempt, close it by hand"
+            # Its stop was placed again (`_session_exits`): what to do follows from what
+            # works at the broker, never a sale by hand beside a working stop (3.5).
+            return f"its exit failed every attempt; {left_open(session.stops, trader)}"
         asked = self._asked.get(trader.name)
         # With no exit order working, the working orders left are entries: those on the
         # position's closing side are what a waiting exit waits for.
@@ -290,7 +314,7 @@ class Control:
             return f"its exit waits for the cancel of order {', '.join(cancels)}"
         return f"no exit works (the engine answered {asked})"
 
-    def _left_open(self, *, every_leg: bool = False) -> None:
+    def _left_open_lines(self, *, every_leg: bool) -> None:
         """One console line per leg left open (3.3 step 4). An ERROR alert goes for each
         leg the operator must act on: one without a confirmed stop covering it, or with
         another order working; a leg its stop protects is information only. At the
@@ -326,7 +350,7 @@ class Control:
             self.verdict = SESSION_END
             return
         if now_ns >= self._end_ns:
-            self._left_open(every_leg=True)
+            self._left_open_due = True
             self.verdict = SESSION_END
             return
         for trader in traders:

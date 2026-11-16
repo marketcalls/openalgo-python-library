@@ -12,8 +12,8 @@ square-off. The partial exit is not asked for again (`_session_exits`: it would 
 more than the strategy asked for); instead the session places the leg's stop again over
 what is left (`protect`, R7) and sends an ERROR alert, once each time the leg is left
 bare. The alert says what the leg is (units with no stop and nothing working to close
-them), not how it got there: an exit filled in part and then cancelled leaves it bare
-the same way. A leg that never had a stop, one protect by state holds, and every leg once the
+them), not how it got there: an exit filled in part and then cancelled leaves it bare the
+same way. A leg that never had a stop, one protect by state holds, and every leg once the
 safe stop has begun (its flatten exits the position) are left to their own rules.
 
 Quantities are units. Used by the loop only.
