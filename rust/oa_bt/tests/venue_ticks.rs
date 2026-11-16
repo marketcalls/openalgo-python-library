@@ -13,9 +13,11 @@ use oa_bt::engine::{
     Engine, EngineExit, ExitRequest, KernelError, OrderRole, Pause, RiskExitReason, RunConfig,
     VenueCommand, VenueError,
 };
-use oa_bt::exec::{InstrumentId, OrderId, OrderType};
+use oa_bt::exec::{InstrumentId, OrderId, OrderType, RejectCode};
 use oa_bt::model::{Product, Side};
-use oa_bt::rms::{BreakevenSpec, Distance, LegRules, StrategyRiskConfig, TradingState, TrailSpec};
+use oa_bt::rms::{
+    BreakevenSpec, Distance, LegRules, StrategyRiskConfig, TargetSpec, TradingState, TrailSpec,
+};
 use venue_support::{
     at_close, at_second, backtest, bars, config, holding_with, market, minute, pause_at_close,
     placed_roles, session, stop_points, wait_before, Act, Script, SBIN,
@@ -157,6 +159,93 @@ fn a_target_reached_on_a_tick_exits_once_while_its_exit_works() {
             .expect("the tick is taken");
         assert_eq!(placed_roles(&kernel.take_commands()), expected, "{price}");
     }
+}
+
+/// The stop 3 points below (497.10) and two targets, half the position each, 2 and 4
+/// points above: 502.10 and 504.10.
+fn stop_and_two_targets() -> LegRules {
+    let target = |points| TargetSpec {
+        distance: Distance::Points(points),
+        fraction: 0.5,
+    };
+    LegRules {
+        targets: vec![target(2.0), target(4.0)],
+        ..stop_points(3.0)
+    }
+}
+
+/// The ticks at 502.20, past the first target, at seconds `from` to `from + 4` of minute 1:
+/// the orders each places and the modifications each sends.
+fn ticks_past_the_first_target(kernel: &mut Engine, from: i64) -> Vec<VenueCommand> {
+    let mut commands = Vec::new();
+    for second in from..from + 5 {
+        kernel
+            .push_tick(SBIN, 502.2, at_second(1, second))
+            .expect("the tick is taken");
+        commands.extend(kernel.take_commands());
+    }
+    commands
+}
+
+#[test]
+fn a_target_whose_exit_the_venue_rejects_is_not_exited_again() {
+    // The target takes the whole position: its exit cancels the stop first, then goes.
+    let rules = LegRules {
+        target: Some(Distance::Points(2.0)),
+        ..stop_points(3.0)
+    };
+    let mut kernel = holding(rules);
+    kernel
+        .push_tick(SBIN, 502.1, at_second(1, 1))
+        .expect("the tick is taken");
+    assert_eq!(
+        kernel.take_commands(),
+        [VenueCommand::Cancel { order: STOP }]
+    );
+    kernel.apply_cancel(STOP).expect("the stop is cancelled");
+    let exit = vec![(OrderId(3), Side::Sell, 100.0, OrderRole::Exit)];
+    assert_eq!(placed_roles(&kernel.take_commands()), exit);
+    kernel
+        .apply_reject(OrderId(3), RejectCode::Venue)
+        .expect("the venue rejects the target's exit");
+    kernel.take_commands();
+    let later = ticks_past_the_first_target(&mut kernel, 2);
+    assert!(later.is_empty(), "not exited again: {later:?}");
+}
+
+#[test]
+fn a_partial_target_whose_exit_the_venue_rejects_leaves_the_stop_on_the_position() {
+    let mut kernel = holding(stop_and_two_targets());
+    let cut = VenueCommand::Modify {
+        order: STOP,
+        units: 50.0,
+        order_type: OrderType::StopMarket {
+            trigger_rupees: 497.1,
+        },
+    };
+    kernel
+        .push_tick(SBIN, 502.1, at_second(1, 1))
+        .expect("the tick is taken");
+    assert_eq!(kernel.take_commands(), [cut]);
+    kernel.apply_modify(STOP).expect("the venue confirms the cut");
+    let exit = vec![(OrderId(3), Side::Sell, 50.0, OrderRole::Exit)];
+    assert_eq!(placed_roles(&kernel.take_commands()), exit);
+    kernel
+        .apply_reject(OrderId(3), RejectCode::Venue)
+        .expect("the venue rejects the target's exit");
+    let restored = VenueCommand::Modify {
+        order: STOP,
+        units: 100.0,
+        order_type: OrderType::StopMarket {
+            trigger_rupees: 497.1,
+        },
+    };
+    assert_eq!(kernel.take_commands(), [restored]);
+    kernel
+        .apply_modify(STOP)
+        .expect("the venue confirms the stop");
+    let later = ticks_past_the_first_target(&mut kernel, 20);
+    assert!(later.is_empty(), "not exited again: {later:?}");
 }
 
 #[test]
