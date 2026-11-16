@@ -1,7 +1,9 @@
 #![cfg(all(feature = "costs", feature = "time"))]
-//! The engine's own orders in a live session (`engine::venue_exits`): the exits a
-//! backtest fills with no order are sent as orders where the backtest queues or fills
-//! them, and the entries a backtest would refuse at their fill bar are withdrawn.
+//! The engine's own orders in a live session (`engine::venue_exits`, `venue_owner`): the
+//! exits a backtest fills with no order are sent as orders where the backtest queues or
+//! fills them, after the orders on the position's closing side have been cancelled, and
+//! again while they apply; the entries a backtest would refuse at their fill bar are
+//! withdrawn.
 //!
 //! The test day is 2025-07-01: MIS entries stop at 15:00 (slice 345) and the square-off
 //! is at 15:10 (slice 355). The bars rise 0.10 a minute from 500.00
@@ -198,17 +200,68 @@ fn a_position_the_venue_never_closes_is_reported_open_at_the_end() {
         .any(|record| record.fill.flags.contains(FillFlags::FILLED_AT_LAST_CLOSE)));
 }
 
-#[test]
-fn a_strategy_exit_already_working_covers_the_square_off() {
+/// Long 100 from minute 1 with a take-profit LIMIT sell of 100 at 600.00 (o2) working
+/// from the close of minute 350; the session waits before the square-off slice.
+fn take_profit_at_square_off() -> (Engine, Echo) {
     let columns = bars(&[], &[]);
     let mut acts = buy_100_at_the_open();
     acts.push(at_close(
         350,
         Act::Submit(exit(Side::Sell, 100.0, limit(600.0))),
     ));
-    let (mut kernel, _) = echoed_until(config(), &columns, acts, SQUARE_OFF_SLICE);
-    assert!(placed(&kernel.take_commands()).is_empty());
-    assert!(kernel.order(OrderId(3)).is_none());
+    echoed_until(config(), &columns, acts, SQUARE_OFF_SLICE)
+}
+
+#[test]
+fn the_square_off_first_cancels_a_working_order_on_the_closing_side() {
+    let (mut kernel, _) = take_profit_at_square_off();
+    let cancel = VenueCommand::Cancel { order: OrderId(2) };
+    assert_eq!(
+        kernel.take_commands(),
+        vec![cancel],
+        "no square-off order yet"
+    );
+}
+
+#[test]
+fn the_square_off_is_sent_once_the_order_it_cancels_has_ended() {
+    let (mut kernel, _) = take_profit_at_square_off();
+    kernel.take_commands();
+    assert!(kernel.apply_cancel(OrderId(2)).is_ok());
+    assert_eq!(
+        placed(&kernel.take_commands()),
+        [(OrderId(3), Side::Sell, 100.0)]
+    );
+    let square_off = kernel.order(OrderId(3)).expect("the engine's order");
+    assert_eq!(square_off.request.exit_reason, Some(ExitReason::Scheduler));
+}
+
+#[test]
+fn an_engine_exit_above_the_freeze_quantity_goes_out_in_orders_of_at_most_it() {
+    // A freeze quantity of 40: the square-off of 100 is three orders, 40, 40 and 20.
+    let columns = bars(&[], &[]);
+    let mut kernel = venue_support::session_of(config(), venue_support::frozen_at(40));
+    let acts = vec![
+        at_close(0, Act::Submit(market(Side::Buy, 40.0))),
+        at_close(1, Act::Submit(market(Side::Buy, 40.0))),
+        at_close(2, Act::Submit(market(Side::Buy, 20.0))),
+    ];
+    let mut echo = Echo::default();
+    echo_until(
+        &mut kernel,
+        &columns,
+        &mut Script::new(acts),
+        &mut echo,
+        SQUARE_OFF_SLICE,
+    );
+    assert_eq!(
+        placed(&kernel.take_commands()),
+        [
+            (OrderId(4), Side::Sell, 40.0),
+            (OrderId(5), Side::Sell, 40.0),
+            (OrderId(6), Side::Sell, 20.0),
+        ]
+    );
 }
 
 /// A crash at minute 10: open 494.00, close 494.05, a loss of about 605 on 100 units
@@ -261,6 +314,94 @@ fn an_echoed_daily_loss_exit_fills_where_the_backtest_fills_it() {
         (minute(11), Step::OpenFills)
     );
     assert_eq!(as_backtest_records(session, &[OrderId(2)]), backtest);
+}
+
+/// Long 100 from minute 1 with a resting SL-M sell of 100 at 450.00 (o2) from the close
+/// of minute 1; the crash at minute 10 breaches the daily loss limit. The session waits
+/// before slice 11.
+fn breach_behind_a_resting_stop() -> Engine {
+    let columns = bars(&[CRASH], &[]);
+    let mut acts = buy_100_at_the_open();
+    acts.push(at_close(
+        1,
+        Act::Submit(exit(
+            Side::Sell,
+            100.0,
+            OrderType::StopMarket {
+                trigger_rupees: 450.0,
+            },
+        )),
+    ));
+    echoed_until(daily_loss_config(config()), &columns, acts, 11).0
+}
+
+#[test]
+fn the_daily_loss_exit_first_cancels_a_resting_stop() {
+    let mut kernel = breach_behind_a_resting_stop();
+    let cancel = VenueCommand::Cancel { order: OrderId(2) };
+    assert_eq!(kernel.take_commands(), vec![cancel], "no exit order yet");
+}
+
+#[test]
+fn the_daily_loss_exit_is_sent_once_the_stop_it_cancels_has_ended() {
+    let mut kernel = breach_behind_a_resting_stop();
+    kernel.take_commands();
+    assert!(kernel.apply_cancel(OrderId(2)).is_ok());
+    assert_eq!(
+        placed(&kernel.take_commands()),
+        [(OrderId(3), Side::Sell, 100.0)]
+    );
+    let risk_exit = kernel.order(OrderId(3)).expect("the engine's order");
+    assert_eq!(
+        risk_exit.request.exit_reason,
+        Some(ExitReason::DailyLossLimit)
+    );
+}
+
+#[test]
+fn a_daily_loss_exit_the_venue_rejects_is_sent_again_at_the_next_open() {
+    let columns = bars(&[CRASH], &[]);
+    let mut kernel = session(daily_loss_config(config()));
+    let mut echo = Echo::rejecting([OrderId(2)]);
+    let mut script = Script::new(buy_100_at_the_open());
+    echo_until(&mut kernel, &columns, &mut script, &mut echo, 12);
+    assert_eq!(
+        kernel.order(OrderId(2)).map(|o| o.status),
+        Some(OrderStatus::Rejected)
+    );
+    let commands = kernel.take_commands();
+    assert_eq!(placed(&commands), [(OrderId(3), Side::Sell, 100.0)]);
+    let again = kernel.order(OrderId(3)).expect("the exit sent again");
+    assert_eq!(again.request.exit_reason, Some(ExitReason::DailyLossLimit));
+}
+
+#[test]
+fn a_position_a_cancel_race_reopens_is_exited_again_at_the_next_open() {
+    // A resting buy of 50 (o2) fills before its cancellation at the breach lands, after
+    // the exit of the 100 (o3) has filled: the 50 are exited at the next open.
+    let columns = bars(&[CRASH], &[]);
+    let mut acts = buy_100_at_the_open();
+    let resting_buy = order(Side::Buy, 50.0, limit(491.0), Product::Mis);
+    acts.push(at_close(0, Act::Submit(resting_buy)));
+    let mut kernel = session(daily_loss_config(config()));
+    let mut script = Script::new(acts);
+    venue_support::wait_before(&mut kernel, &columns, &mut script, 1);
+    assert!(kernel
+        .apply_fill(OrderId(1), 100.0, 500.0, minute(1))
+        .is_ok());
+    venue_support::wait_before(&mut kernel, &columns, &mut script, 11);
+    kernel.take_commands();
+    assert!(kernel
+        .apply_fill(OrderId(3), 100.0, 494.5, minute(11))
+        .is_ok());
+    assert!(kernel
+        .apply_fill(OrderId(2), 50.0, 491.0, minute(11) + 1)
+        .is_ok());
+    venue_support::wait_before(&mut kernel, &columns, &mut script, 12);
+    assert_eq!(
+        placed(&kernel.take_commands()),
+        [(OrderId(4), Side::Sell, 50.0)]
+    );
 }
 
 #[test]

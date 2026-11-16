@@ -9,8 +9,8 @@
 
 mod venue_support;
 
-use oa_bt::engine::{run, RunConfig, RunOutput, StrategyInterval, TimerSpec};
-use oa_bt::exec::{FillAt, OrderId, OrderRequest, OrderType};
+use oa_bt::engine::{run, Pause, RunConfig, RunOutput, StrategyInterval, TimerSpec};
+use oa_bt::exec::{FillAt, OrderRequest, OrderType};
 use oa_bt::model::{ts_from_ist, Product, Side};
 use venue_support::{
     at_close, backtest, bars, charged_config, config, day, drive_echo, exit, limit, market, minute,
@@ -41,9 +41,11 @@ fn mis(side: Side, units: f64, order_type: OrderType) -> OrderRequest {
 /// | 40 | sell 50 MARKET, exit | minute 43 at the open, 504.30 (no bars at 41, 42) |
 /// | 45 | buy 10 MARKET | minute 46 at the open, 504.60 |
 /// | 47 | sell 10 SL-M 503.00, exit | minute 50 at the open of the gap, 495.00 |
-/// | 55 | buy 10 LIMIT 400.00 (o11) | never at 400 |
-/// | 57 | o11 replaced by LIMIT 506.00 | minute 58 at the open, 505.80 |
+/// | 57 | buy 10 LIMIT 506.00 | minute 58 at the open, 505.80 |
 /// | 65 | sell 10 MARKET, exit | minute 66 at the open, 506.60 |
+///
+/// A modification and a cancellation are not in it: the venue confirms them, so their
+/// events are written when it does (`venue_session.rs`), not at the decision.
 fn every_order_kind() -> Vec<(i64, Act)> {
     let reverse = OrderRequest {
         reverse: true,
@@ -63,11 +65,7 @@ fn every_order_kind() -> Vec<(i64, Act)> {
         at_close(40, Act::Submit(exit(Side::Sell, 50.0, OrderType::Market))),
         at_close(45, Act::Submit(market(Side::Buy, 10.0))),
         at_close(47, Act::Submit(exit(Side::Sell, 10.0, stop_market(503.0)))),
-        at_close(55, Act::Submit(mis(Side::Buy, 10.0, limit(400.0)))),
-        at_close(
-            57,
-            Act::Modify(OrderId(11), mis(Side::Buy, 10.0, limit(506.0))),
-        ),
+        at_close(57, Act::Submit(mis(Side::Buy, 10.0, limit(506.0)))),
         at_close(65, Act::Submit(exit(Side::Sell, 10.0, OrderType::Market))),
     ]
 }
@@ -157,18 +155,49 @@ fn a_session_on_a_15_minute_strategy_is_the_backtest_of_its_bars() {
     assert_eq!(session, backtest);
 }
 
+/// 10:05 IST in minutes since midnight: the open of minute 50, between two 15-minute
+/// closes.
+const FIVE_PAST_TEN: u32 = 10 * 60 + 5;
+
+#[test]
+fn a_timer_fires_when_the_session_reaches_its_open() {
+    // The 10:05 timer fires at the close of minute 49, before minute 50 has run: a live
+    // session reaches 10:05 then.
+    let timer = TimerSpec::At {
+        minute_of_day: FIVE_PAST_TEN,
+    };
+    let mut live = session(fifteen_minutes());
+    live.add_timer(timer).expect("a timer before the session");
+    let columns = bars(&[], &[]);
+    let mut script = Script::new(Vec::new());
+    venue_support::wait_before(&mut live, &columns, &mut script, 49);
+    live.release(50);
+    let fired = live.advance().expect("minute 49 runs");
+    let Pause::Timers {
+        stamp, decided_at, ..
+    } = fired
+    else {
+        panic!("expected the timer, got {fired:?}");
+    };
+    assert_eq!(
+        (stamp.slice, decided_at),
+        (50, ts_from_ist(day(), FIVE_PAST_TEN))
+    );
+    assert_eq!(live.advance(), Ok(Pause::Waiting { next_slice: 50 }));
+}
+
 #[test]
 fn a_session_whose_timer_places_an_order_is_the_backtest_of_its_bars() {
-    // A timer at 10:05 buys at that open (minute 50), between two 15-minute closes; the
-    // exit is decided at the 10:30 close.
-    let five_past_ten = 10 * 60 + 5;
-    let at_timer = ts_from_ist(day(), five_past_ten);
+    // A timer at 10:05 buys at that open (minute 50), sent as the session reaches it and
+    // filled by the venue in minute 50, as a backtest fills it; the exit is decided at the
+    // 10:30 close.
+    let at_timer = ts_from_ist(day(), FIVE_PAST_TEN);
     let acts = vec![
         (at_timer, Act::Submit(market(Side::Buy, 40.0))),
         at_close(74, Act::Submit(exit(Side::Sell, 40.0, OrderType::Market))),
     ];
     let timer = TimerSpec::At {
-        minute_of_day: five_past_ten,
+        minute_of_day: FIVE_PAST_TEN,
     };
     let columns = bars(&[], &[]);
     let mut simulated = backtest(fifteen_minutes(), columns.clone());

@@ -1,24 +1,27 @@
-//! The engine's own orders in an external session (`venue`): the exits a backtest fills
-//! with no order (SPEC-21), sent as orders where a backtest queues or fills them, and the
-//! entries a backtest would refuse at their fill bar, withdrawn.
+//! The engine's own exits in an external session (`venue`, `venue_owner`): the exits a
+//! backtest fills with no order (SPEC-21), made where a backtest queues or fills them,
+//! sent again while they still apply, and the entries a backtest would refuse at their
+//! fill bar, withdrawn.
 //!
-//! Each exit is a reduce-only MARKET DAY order with the backtest's exit reason, for the
-//! units of the position that no working order on its other side already covers (so the
-//! working exits never exceed the position), and nothing when none are left.
-//!
-//! | Exit | Sent | A backtest fills it |
+//! | Exit | Made | A backtest fills it |
 //! |---|---|---|
 //! | Daily loss limit, drawdown halt | in step 6, when the rule fires | at the next open (step 2) |
 //! | Square-off | when the session reaches the first open at or after `square_off` | at that open |
 //! | Time exit (`max_hold`) | when the session reaches the open at which it is due | at that open |
 //!
-//! "When the session reaches an open" is the close of the slice before it (step 8 of that
-//! slice, after its decisions): a live session runs a slice once it has closed, so this
-//! is the moment the open arrives, and the venue then fills the exit in the slice a
-//! backtest would. It does not wait for a bar: a square-off is sent even when no bar came
-//! in the slice before it, nor will in the slice it is due. The order is stamped in step
-//! 2 of the slice it is due in, the stamp of the backtest's fill, and re-sent at each
-//! later open while the position is still held and uncovered (a rejected square-off).
+//! Each is a reduce-only MARKET DAY order with the backtest's exit reason, made through the
+//! position's exit owner: it cancels the working orders on the position's closing side
+//! first. "When the session reaches an open" is the close of the slice before it, after
+//! its decisions and timers (`venue_clock`): a live session runs a slice once it has
+//! closed, so this is the moment the open arrives, and the venue then fills the exit in
+//! the slice a backtest would. It does not wait for a bar. The order is stamped in step 2
+//! of the slice it is due in, the stamp of the backtest's fill.
+//!
+//! Sent again: at every open the session reaches, a position that is still open and has no
+//! exit owner gets the exit that applies, in this order: the risk lock (REDUCING after a
+//! daily loss breach, HALTED after the drawdown halt), the time exit, the square-off. So an
+//! exit the venue rejected, or a position a cancel race reopened, is exited again at the
+//! next open; how often to retry and when to stop are the live layer's to decide.
 //!
 //! Also at each open: an MIS order that would open or add, still working once the open is
 //! at or after `entry_until`, is withdrawn (`Cancel`), since a backtest rejects it at its
@@ -27,127 +30,92 @@
 //! In the slice that closes the session the market is closed: nothing is sent, and a
 //! position still open is reported open.
 
-use crate::exec::state::next_status;
-use crate::exec::{
-    InstrumentId, Order, OrderAction, OrderId, OrderRequest, OrderStatus, QuantitySpec,
-};
-use crate::model::{Product, Side, TsNanos};
+use crate::exec::{InstrumentId, Order, OrderId};
+use crate::model::{Product, Side};
 use crate::portfolio::PositionKey;
-use crate::rms::ExitReason;
+use crate::rms::{ExitReason, TradingState, TradingStateCause};
 
 use super::clock::SliceInfo;
 use super::error::KernelError;
-use super::event::{Event, OrderEventKind, Step};
+use super::event::Step;
 use super::kernel::Engine;
+use super::venue::SendAt;
 
 impl Engine {
-    /// Send the engine's exit of the position `key` for `reason`, decided at
-    /// `decided_at` and stamped in `step` of `slice` (module docs). Nothing is sent when
-    /// working orders already cover the position, or when the market is closed by then.
+    /// What a backtest does at the open of `next`, done as the external session reaches
+    /// it (module docs): the waiting exit owners move on, every open position with no exit
+    /// owner gets the exit that applies, instruments in registration order, and the late
+    /// MIS entries are withdrawn.
     ///
-    /// Errors: those of the order book.
-    pub(super) fn send_engine_exit(
-        &mut self,
-        slice: &SliceInfo,
-        step: Step,
-        decided_at: TsNanos,
-        key: PositionKey,
-        reason: ExitReason,
-    ) -> Result<(), KernelError> {
-        let held = self.held_units(key);
-        let units = held.abs() - self.units_closing(key, held, None).min(held.abs());
-        if units <= 0.0 {
-            return Ok(());
-        }
-        // A DAY order needs a session left to fill in; at the session's last close there
-        // is none, and the position stays open (module docs).
-        let good_until = match self.day_validity(slice, decided_at) {
-            Ok(good_until) => good_until,
-            Err(_market_closed) => return Ok(()),
+    /// Errors: `InvalidConfig` when the session has no intraday times; those of the exit
+    /// owners and of `withdraw_order`.
+    pub(super) fn venue_at_next_open(&mut self, next: &SliceInfo) -> Result<(), KernelError> {
+        let at = SendAt {
+            slice: *next,
+            step: Step::OpenFills,
+            decided_at: next.open,
         };
-        let side = if held > 0.0 { Side::Sell } else { Side::Buy };
-        let request = OrderRequest {
-            product: key.product,
-            reduce_only: true,
-            exit_reason: Some(reason),
-            ..OrderRequest::market(key.instrument, side, QuantitySpec::Units(units))
-        };
-        let id = self.book.next_id();
-        self.book.insert(Order {
-            id,
-            request,
-            status: next_status(OrderStatus::Initialized, OrderAction::PassChecks)?,
-            decided_at,
-            good_until,
-            quantity_units: units,
-            filled_units: 0.0,
-            average_fill_rupees: 0.0,
-            reject_code: None,
-        })?;
-        let stamp = Self::stamp(slice, step);
-        self.emit(Event::Order {
-            stamp,
-            order: id,
-            kind: OrderEventKind::Submitted,
-        });
-        self.send_order(stamp, id)
-    }
-
-    /// Step 8 of a slice of an external session that does not close it: what a backtest
-    /// does at the next open, sent now (module docs). Instruments in registration order,
-    /// the time exit before the square-off, as in step 2.
-    ///
-    /// Errors: `InvalidConfig` when the session has no intraday times; those of
-    /// `send_engine_exit` and `withdraw_order`.
-    pub(super) fn venue_at_next_open(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
-        if slice.closes_session {
-            return Ok(());
-        }
-        let Some(next) = self.timeline.slice(slice.index + 1) else {
-            return Ok(());
-        };
+        self.progress_exits(at)?;
         for index in 0..self.instruments.len() {
             let instrument = InstrumentId(index as u32);
-            self.send_time_exits(&next, instrument)?;
-            self.send_square_off(&next, instrument)?;
-        }
-        self.withdraw_late_entries(&next)
-    }
-
-    /// The time exits due at the open of `next` (`entry_rules::time_exit_at_open`).
-    fn send_time_exits(
-        &mut self,
-        next: &SliceInfo,
-        instrument: InstrumentId,
-    ) -> Result<(), KernelError> {
-        let Some(max_hold) = self.config.risk.max_hold_bars else {
-            return Ok(());
-        };
-        for (key, entered) in self.risk.entries_on(instrument) {
-            let due = next.index.saturating_sub(entered) >= max_hold as usize;
-            if due && self.held_units(key) != 0.0 {
-                let reason = ExitReason::TimeExit;
-                self.send_engine_exit(next, Step::OpenFills, next.open, key, reason)?;
+            let open: Vec<PositionKey> = self
+                .portfolio
+                .positions()
+                .iter()
+                .filter(|position| position.key.instrument == instrument && !position.is_flat())
+                .map(|position| position.key)
+                .collect();
+            for key in open {
+                if self.exit_owner(key).is_some() {
+                    continue;
+                }
+                if let Some(reason) = self.exit_due(next, key)? {
+                    self.request_engine_exit(at, key, reason)?;
+                }
             }
         }
-        Ok(())
+        self.withdraw_late_entries(next)
     }
 
-    /// The square-off due at the open of `next` (`session::square_off_at_open`).
-    fn send_square_off(
+    /// The engine's exit that applies to the open position `key` at the open of `next`.
+    fn exit_due(
         &mut self,
         next: &SliceInfo,
-        instrument: InstrumentId,
-    ) -> Result<(), KernelError> {
-        let key = PositionKey {
-            instrument,
-            product: Product::Mis,
-        };
-        if self.held_units(key) == 0.0 || next.open < self.session_times(next.day)?.square_off {
-            return Ok(());
+        key: PositionKey,
+    ) -> Result<Option<ExitReason>, KernelError> {
+        if let Some(reason) = self.risk_lock_exit() {
+            return Ok(Some(reason));
         }
-        let reason = ExitReason::Scheduler;
-        self.send_engine_exit(next, Step::OpenFills, next.open, key, reason)
+        if let Some(max_hold) = self.config.risk.max_hold_bars {
+            let entered = self
+                .risk
+                .entries_on(key.instrument)
+                .into_iter()
+                .find(|(held, _)| *held == key)
+                .map(|(_, slice)| slice);
+            let due = |slice: usize| next.index.saturating_sub(slice) >= max_hold as usize;
+            if entered.is_some_and(due) {
+                return Ok(Some(ExitReason::TimeExit));
+            }
+        }
+        if key.product == Product::Mis && next.open >= self.session_times(next.day)?.square_off {
+            return Ok(Some(ExitReason::Scheduler));
+        }
+        Ok(None)
+    }
+
+    /// The exit of a risk lock in force: the daily loss limit while REDUCING after its
+    /// breach, the drawdown halt while HALTED by it.
+    fn risk_lock_exit(&self) -> Option<ExitReason> {
+        match (self.risk.lock.state(), self.risk.lock.cause()) {
+            (TradingState::Reducing, Some(TradingStateCause::DailyLossBreach)) => {
+                Some(ExitReason::DailyLossLimit)
+            }
+            (TradingState::Halted, Some(TradingStateCause::DrawdownHalt)) => {
+                Some(ExitReason::DrawdownHalt)
+            }
+            _ => None,
+        }
     }
 
     /// Withdraw the MIS orders that would open or add and still work at an open at or

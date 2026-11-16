@@ -282,10 +282,9 @@ impl Engine {
         self.portfolio.account.post_realized(effect.realized_rupees);
         self.portfolio.refresh_margin();
         self.credit_delivery_sale(&request, price, spec.multiplier, day, effect.kind)?;
-        let (side, units) = (request.side, request.units);
         let costs = match request.origin {
             FillOrigin::ExpirySettlement => self.uncharged_fill(request.key, effect),
-            _ => self.charge_fill(request.key, side, units, price, day, effect)?,
+            _ => self.charge_fill(&request, price, day, effect)?,
         };
         let context = LegContext {
             side: request.side,

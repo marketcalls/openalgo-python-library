@@ -10,7 +10,12 @@
 //! (`take_commands()`), and the broker's results come back with `apply_fill(order_id,
 //! units, price, at)` (the units newly filled, the venue's price in rupees, the fill time
 //! in UTC nanoseconds), `apply_reject(order_id, reason)` (a reject code: "venue", or a
-//! kernel code such as "margin") and `apply_cancel(order_id)`.
+//! kernel code such as "margin") and `apply_cancel(order_id)`, and the broker's answers to
+//! what it was sent with `apply_cancel_refused(order_id)`, `apply_modify(order_id)` and
+//! `apply_modify_refused(order_id)`. Every fill of an order is passed before its terminal
+//! result (`apply_cancel`, `apply_reject`): after it the order takes no more. A result the
+//! kernel refuses raises `openalgo.backtest.errors.VenueRefusalError`, whose `kind` says
+//! why, and changes nothing.
 //!
 //! A command crosses as a dict with `command` ("place", "modify" or "cancel") and
 //! `order_id` (the kernel order, an integer; Python shows `o<n>`); "place" adds
@@ -26,7 +31,7 @@ use oa_bt::exec::{OrderType, RejectCode};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-use super::engine_error;
+use super::errors::venue_result_error;
 use super::setup::unknown;
 
 /// A base bar as it crosses: (ts_open UTC nanoseconds, open, high, low, close, volume).
@@ -46,10 +51,19 @@ pub(super) fn base_bar((ts_open, open, high, low, close, volume): BarTuple) -> B
     }
 }
 
-/// A venue result's stamp, or the error it was refused with.
-pub(super) fn recorded(result: Result<EventStamp, KernelError>) -> PyResult<StampTuple> {
-    let stamp = result.map_err(engine_error)?;
+/// A venue result's stamp, or the error it was refused with (`VenueRefusalError` for a
+/// refusal).
+pub(super) fn recorded(
+    py: Python<'_>,
+    result: Result<EventStamp, KernelError>,
+) -> PyResult<StampTuple> {
+    let stamp = result.map_err(|error| venue_result_error(py, error))?;
     Ok((stamp.slice, stamp.slice_ts, stamp.step.number()))
+}
+
+/// A venue answer that records no stamp, or the error it was refused with.
+pub(super) fn answered(py: Python<'_>, result: Result<(), KernelError>) -> PyResult<()> {
+    result.map_err(|error| venue_result_error(py, error))
 }
 
 /// The commands as a list of dicts (module docs).

@@ -122,7 +122,8 @@ impl Engine {
     fn next_slice(&self) -> usize {
         match self.phase {
             Phase::Ready(index) => index,
-            Phase::Paused(slice) | Phase::Timers(slice) => slice.index + 1,
+            Phase::Ahead(slice) => slice.index,
+            Phase::Paused(slice) | Phase::Timers(slice) | Phase::Closing(slice) => slice.index + 1,
             Phase::Finished => self.timeline.len(),
         }
     }

@@ -114,6 +114,45 @@ class JournalError(LiveError):
     """The live session's journal cannot be opened, read or written."""
 
 
+#: Why the kernel of a live session refused a result from the broker
+#: (`VenueRefusalError.kind`).
+VENUE_REFUSAL_KINDS = frozenset(
+    {
+        "not_external",
+        "unknown_order",
+        "order_ended",
+        "not_sent",
+        "too_many_units",
+        "invalid_fill",
+        "not_pending",
+        "modify_below_filled",
+        "at_bar_close",
+        "session_over",
+    }
+)
+
+
+class VenueRefusalError(LiveError):
+    """The kernel of a live session refused a result from the broker (a fill, a
+    rejection, a cancellation, or the answer to a cancellation or modification it was
+    sent) and changed nothing.
+
+    `kind` says why, one of `VENUE_REFUSAL_KINDS`, so the live layer tells a race it
+    expects from a defect without reading the message: "order_ended" (the order had
+    already ended: a fill reported after its cancellation, say), "unknown_order",
+    "not_sent" (an exit still waiting for the orders it cancels), "too_many_units" (more
+    than the order has left: pass the units newly filled), "invalid_fill" (units or a
+    price not above 0), "not_pending" (no cancellation or modification of the order
+    waits for an answer), "modify_below_filled", "at_bar_close" (the engine is paused at a
+    bar close: advance it first), "session_over" (the session has finished) and
+    "not_external" (the engine is a backtest's).
+    """
+
+    def __init__(self, message, kind):
+        super().__init__(message)
+        self.kind = kind
+
+
 class OrdersNotPlacedWarning(UserWarning):
     """Orders of a run were not placed: rejected (margin, the product rule, a quantity
     off the lot size, ...) or skipped before they were placed (a sized quantity of less
@@ -153,5 +192,7 @@ __all__ = [
     "ServerError",
     "SymbolNotFoundError",
     "TimestampError",
+    "VENUE_REFUSAL_KINDS",
+    "VenueRefusalError",
     "WarmUpWarning",
 ]

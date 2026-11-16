@@ -6,25 +6,28 @@
 mod venue_support;
 
 use oa_bt::engine::{
-    run, Engine, FuturesSeries, KernelError, Pause, QuantityMode, RollRule, RunConfig, RunSetup,
-    TargetRequest, VenueError,
+    run, Engine, FuturesSeries, KernelError, Pause, Pending, QuantityMode, RollRule, RunConfig,
+    RunSetup, Submission, TargetRequest, VenueError,
 };
-use oa_bt::exec::{OrderId, OrderRequest, OrderStatus, RejectCode, Validity};
+use oa_bt::exec::{OrderId, OrderRequest, OrderStatus, OrderType, RejectCode, Validity};
 use oa_bt::market::calendar::Calendar;
 use oa_bt::model::{Product, Side};
 use oa_bt::rms::{BreakevenSpec, Distance, LegRules, TrailSpec};
 use oa_bt::sizing::TargetSize;
 use venue_support::{
-    at_close, backtest, bars, config, limit, market, minute, order, pause_at_close, run_to_end,
-    sbin, session, wait_before, Act, Script, SBIN,
+    at_close, backtest, bars, config, limit, market, minute, nifty_call, order, pause_at_close,
+    run_to_end, sbin, session, wait_before, Act, Script, SBIN,
 };
 
-/// The three results a venue sends, each as a call on `kernel` for order `id`.
-fn every_result(kernel: &mut Engine, id: OrderId) -> [Result<(), KernelError>; 3] {
+/// Every result a venue sends, each as a call on `kernel` for order `id`.
+fn every_result(kernel: &mut Engine, id: OrderId) -> [Result<(), KernelError>; 6] {
     [
         kernel.apply_fill(id, 10.0, 500.1, minute(1)).map(|_| ()),
         kernel.apply_reject(id, RejectCode::Venue).map(|_| ()),
         kernel.apply_cancel(id).map(|_| ()),
+        kernel.apply_cancel_refused(id),
+        kernel.apply_modify(id).map(|_| ()),
+        kernel.apply_modify_refused(id),
     ]
 }
 
@@ -141,8 +144,148 @@ fn a_result_after_the_session_finished_is_refused() {
     let mut kernel = one_order_waiting();
     run_to_end(&mut kernel, &bars(&[], &[]), &mut Script::new(Vec::new()));
     for result in every_result(&mut kernel, OrderId(1)) {
-        assert_eq!(result, Err(KernelError::RunFinished));
+        assert_eq!(venue_error(result), VenueError::SessionOver);
     }
+}
+
+#[test]
+fn an_answer_to_nothing_the_venue_was_sent_is_refused() {
+    let mut kernel = one_order_waiting();
+    let not_pending = |what| VenueError::NotPending {
+        order: OrderId(1),
+        what,
+    };
+    let cancel = kernel.apply_cancel_refused(OrderId(1));
+    assert_eq!(venue_error(cancel), not_pending(Pending::Cancel));
+    for result in [
+        kernel.apply_modify(OrderId(1)).map(|_| ()),
+        kernel.apply_modify_refused(OrderId(1)),
+    ] {
+        assert_eq!(venue_error(result), not_pending(Pending::Modify));
+    }
+}
+
+#[test]
+fn a_modification_confirmed_below_the_units_filled_is_refused() {
+    let mut kernel = session(config());
+    let columns = bars(&[], &[]);
+    let resting = order(Side::Buy, 100.0, limit(400.0), Product::Mis);
+    let acts = vec![
+        at_close(0, Act::Submit(resting)),
+        at_close(
+            1,
+            Act::Modify(
+                OrderId(1),
+                order(Side::Buy, 30.0, limit(401.0), Product::Mis),
+            ),
+        ),
+    ];
+    wait_before(&mut kernel, &columns, &mut Script::new(acts), 2);
+    assert!(kernel
+        .apply_fill(OrderId(1), 50.0, 400.0, minute(2))
+        .is_ok());
+    let below = VenueError::ModifyBelowFilled {
+        order: OrderId(1),
+        units: 30.0,
+        filled_units: 50.0,
+    };
+    assert_eq!(
+        venue_error(kernel.apply_modify(OrderId(1)).map(|_| ())),
+        below
+    );
+}
+
+#[test]
+fn leverage_the_margin_table_does_not_allow_is_refused_before_it_is_sent() {
+    let request = OrderRequest {
+        leverage: Some(50.0),
+        ..market(Side::Buy, 10.0)
+    };
+    let mut kernel = session(config());
+    kernel.release(1);
+    assert!(matches!(kernel.advance(), Ok(Pause::BarClose { .. })));
+    let refused = kernel.submit(request);
+    assert!(
+        matches!(refused, Err(KernelError::Margin(_))),
+        "{refused:?}"
+    );
+    assert!(kernel.take_commands().is_empty());
+}
+
+#[test]
+fn a_short_option_is_refused_before_it_is_sent() {
+    let setup = |bars| RunSetup {
+        config: config(),
+        calendar: Calendar::new().expect("the embedded calendar tables parse"),
+        instruments: vec![nifty_call()],
+        bars: vec![bars],
+    };
+    let mut kernel = Engine::new_session(setup(Default::default())).expect("a session");
+    kernel.release(1);
+    assert!(matches!(kernel.advance(), Ok(Pause::BarClose { .. })));
+    let sell = order(Side::Sell, 75.0, OrderType::Market, Product::Nrml);
+    let refused = kernel.submit(sell).map(|_| ());
+    assert_eq!(
+        not_built(refused),
+        "selling an option to open a short position (short-option margin)"
+    );
+    assert!(kernel.take_commands().is_empty());
+}
+
+#[test]
+fn an_order_whose_margin_is_above_the_free_cash_is_rejected_as_in_a_backtest() {
+    // 30,000 shares near 500.00 are 1.5 crore, above the capital of 1 crore: a backtest
+    // rejects the order `margin` at its fill bar, a session when it is submitted.
+    let large = market(Side::Buy, 30_000.0);
+    let acts = vec![at_close(0, Act::Submit(large.clone()))];
+    let simulated = venue_support::run_backtest(config(), &bars(&[], &[]), &mut Script::new(acts));
+    assert_eq!(simulated.orders[0].reject_code, Some(RejectCode::Margin));
+    let mut kernel = session(config());
+    pause_at_close(&mut kernel, &bars(&[], &[]), 0);
+    let live = kernel.submit(large);
+    assert_eq!(
+        live,
+        Ok(Submission::Rejected(OrderId(1), RejectCode::Margin))
+    );
+    assert!(kernel.take_commands().is_empty());
+}
+
+#[test]
+fn a_fill_the_margin_rule_refuses_is_recorded_not_at_all() {
+    // Long 10; an exit with leverage 50 (o2) and a LIMIT sale of 5 (o3) are sent; o3
+    // fills, so o2's 10 units would close 5 and open 5 short at a leverage the margin
+    // table refuses: nothing of the fill is recorded, not even its closing part.
+    let mut kernel = session(config());
+    let columns = bars(&[], &[]);
+    let mut script = Script::new(vec![at_close(0, Act::Submit(market(Side::Buy, 10.0)))]);
+    wait_before(&mut kernel, &columns, &mut script, 1);
+    assert!(kernel
+        .apply_fill(OrderId(1), 10.0, 500.0, minute(1))
+        .is_ok());
+    pause_at_close(&mut kernel, &columns, 1);
+    let leveraged_exit = OrderRequest {
+        reduce_only: true,
+        leverage: Some(50.0),
+        ..market(Side::Sell, 10.0)
+    };
+    assert!(kernel.submit(leveraged_exit).is_ok());
+    assert!(kernel
+        .submit(order(Side::Sell, 5.0, limit(500.0), Product::Mis))
+        .is_ok());
+    wait_before(&mut kernel, &columns, &mut script, 2);
+    assert!(kernel.apply_fill(OrderId(3), 5.0, 500.0, minute(2)).is_ok());
+    assert!(kernel
+        .apply_fill(OrderId(2), 10.0, 500.0, minute(2))
+        .is_err());
+    let held = kernel
+        .position(SBIN, Product::Mis)
+        .map(|p| p.quantity_units);
+    assert_eq!(held, Some(5.0));
+    let exit = kernel.order(OrderId(2)).expect("the exit");
+    assert_eq!(
+        (exit.status, exit.filled_units),
+        (OrderStatus::Submitted, 0.0)
+    );
 }
 
 /// What submitting `request` at the first bar close of a session returns.

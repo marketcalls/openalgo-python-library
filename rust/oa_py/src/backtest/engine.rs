@@ -21,6 +21,7 @@
 
 mod charges;
 mod columns;
+mod errors;
 mod futures;
 mod market;
 mod request;
@@ -34,45 +35,14 @@ mod venue;
 use oa_bt::data::resample::CalendarUnit;
 use oa_bt::engine::{Engine, KernelError, TimerSpec};
 use oa_bt::exec::{InstrumentId, OrderId};
-use oa_bt::model::Product;
-use pyo3::create_exception;
-use pyo3::exceptions::{PyException, PyNotImplementedError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use super::calendar::NativeCalendar;
+use errors::{engine_error, NativeEngineError, NativeEngineInputError};
 use request::{submission_tuple, SubmissionTuple};
-use setup::{run_setup, BarArrays};
+use setup::{parse_product, run_setup, BarArrays};
 use venue::StampTuple;
-
-create_exception!(
-    backtest,
-    NativeEngineError,
-    PyException,
-    "The engine cannot go on: a call at the wrong time, or a kernel defect."
-);
-create_exception!(
-    backtest,
-    NativeEngineInputError,
-    NativeEngineError,
-    "The configuration, the data or an order request cannot be used."
-);
-
-fn engine_error(error: KernelError) -> PyErr {
-    let message = error.to_string();
-    if error.not_built_feature().is_some() {
-        PyNotImplementedError::new_err(message)
-    } else if error.is_input_error() {
-        NativeEngineInputError::new_err(message)
-    } else {
-        NativeEngineError::new_err(message)
-    }
-}
-
-fn parse_product(code: &str) -> PyResult<Product> {
-    Product::from_code(code)
-        .ok_or_else(|| NativeEngineInputError::new_err(format!("unknown product {code:?}")))
-}
 
 /// The backtest kernel of one run (see `oa_bt::engine`).
 #[pyclass(name = "Engine", module = "openalgo._oaindicators.backtest")]
@@ -157,24 +127,48 @@ impl NativeEngine {
     /// `at` (UTC nanoseconds); returns the stamp (slice, slice_ts, step).
     fn apply_fill(
         &mut self,
+        py: Python<'_>,
         order_id: u64,
         units: f64,
         price: f64,
         at: i64,
     ) -> PyResult<StampTuple> {
         let engine = self.engine_mut()?;
-        venue::recorded(engine.apply_fill(OrderId(order_id), units, price, at))
+        venue::recorded(py, engine.apply_fill(OrderId(order_id), units, price, at))
     }
 
     /// Record that the venue rejected an order with a reject code; returns the stamp.
-    fn apply_reject(&mut self, order_id: u64, reason: &str) -> PyResult<StampTuple> {
+    fn apply_reject(
+        &mut self,
+        py: Python<'_>,
+        order_id: u64,
+        reason: &str,
+    ) -> PyResult<StampTuple> {
         let reason = venue::reject_code(reason)?;
-        venue::recorded(self.engine_mut()?.apply_reject(OrderId(order_id), reason))
+        let engine = self.engine_mut()?;
+        venue::recorded(py, engine.apply_reject(OrderId(order_id), reason))
     }
 
     /// Record that the venue cancelled an order; returns the stamp.
-    fn apply_cancel(&mut self, order_id: u64) -> PyResult<StampTuple> {
-        venue::recorded(self.engine_mut()?.apply_cancel(OrderId(order_id)))
+    fn apply_cancel(&mut self, py: Python<'_>, order_id: u64) -> PyResult<StampTuple> {
+        venue::recorded(py, self.engine_mut()?.apply_cancel(OrderId(order_id)))
+    }
+
+    /// Record that the venue refused to cancel an order: it works on.
+    fn apply_cancel_refused(&mut self, py: Python<'_>, order_id: u64) -> PyResult<()> {
+        let engine = self.engine_mut()?;
+        venue::answered(py, engine.apply_cancel_refused(OrderId(order_id)))
+    }
+
+    /// Record that the venue confirmed an order's modification; returns the stamp.
+    fn apply_modify(&mut self, py: Python<'_>, order_id: u64) -> PyResult<StampTuple> {
+        venue::recorded(py, self.engine_mut()?.apply_modify(OrderId(order_id)))
+    }
+
+    /// Record that the venue refused an order's modification: its old terms stand.
+    fn apply_modify_refused(&mut self, py: Python<'_>, order_id: u64) -> PyResult<()> {
+        let engine = self.engine_mut()?;
+        venue::answered(py, engine.apply_modify_refused(OrderId(order_id)))
     }
 
     /// Run to the next decision point; the pause as a tuple (kind, decided_at, bars,
@@ -234,6 +228,16 @@ impl NativeEngine {
             .sizing_inputs(&request)
             .map_err(engine_error)?;
         sizing::inputs(py, &ctx, request.side)
+    }
+
+    /// Replace a working order's request in full at the current decision point (a dict
+    /// as `submit` takes). Returns what `submit` returns; in a live session the order
+    /// keeps its old terms until the venue confirms the new ones (`apply_modify`).
+    fn modify(&mut self, order_id: u64, request: &Bound<'_, PyDict>) -> PyResult<SubmissionTuple> {
+        let request = request::order_request(request)?;
+        let engine = self.engine_mut()?;
+        let outcome = engine.modify(OrderId(order_id), request);
+        Ok(submission_tuple(outcome.map_err(engine_error)?))
     }
 
     /// Cancel a working order; returns its state afterwards (in a live session the order
@@ -378,15 +382,7 @@ impl NativeEngine {
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    let py = m.py();
-    m.add(
-        "NativeEngineError",
-        py.get_type_bound::<NativeEngineError>(),
-    )?;
-    m.add(
-        "NativeEngineInputError",
-        py.get_type_bound::<NativeEngineInputError>(),
-    )?;
+    errors::register(m)?;
     m.add_class::<NativeEngine>()?;
     // The engine default's cash buffer in venue mode, a fraction, for the Assumptions.
     m.add("VENUE_CASH_BUFFER", oa_bt::sizing::VENUE_CASH_BUFFER)?;

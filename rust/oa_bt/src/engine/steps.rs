@@ -21,7 +21,8 @@ use super::pause::Pause;
 impl Engine {
     /// Steps 1 to 6 of a slice. Returns the timer pause of step 2 when timers are due
     /// (`timers`); the slice then goes on with `finish_open_slice` at the next
-    /// `advance`.
+    /// `advance`. In a live session the timers of most slices fired ahead of them
+    /// (`venue_clock`).
     pub(super) fn open_slice(&mut self, slice: &SliceInfo) -> Result<Option<Pause>, KernelError> {
         // Step 1: session open and reference events. The session's intraday times are
         // resolved on first use (`session_times`); a futures roll is planned before the
@@ -29,6 +30,10 @@ impl Engine {
         // configured yet.
         self.risk_session_open(slice);
         self.renew_old_gtts(slice)?;
+        if self.timers_fired_ahead(slice) {
+            self.finish_open_slice(slice)?;
+            return Ok(None);
+        }
         if let Some(pause) = self.timers_pause(slice) {
             self.fill_due_orders(slice)?;
             return Ok(Some(pause));
@@ -143,16 +148,26 @@ impl Engine {
         })
     }
 
-    /// Step 8 when the session ends at this slice (expiry of DAY orders, the `eod`
+    /// Step 8 when the session ends at this slice (the end of DAY orders, the `eod`
     /// close, futures expiry and mark to market (`settlement`), the day's contract
     /// notes, the credit of the day's withheld sale proceeds (`sale_credit`)), the
     /// contract notes of a run that ends before its session close (`run_end`), then the
     /// end-of-slice records. A live session closes no position itself at the session
-    /// close, and sends at the close of any other slice what a backtest does at the next
-    /// open (`venue_exits`).
+    /// close, and completes it only once the venue has ended its DAY orders
+    /// (`venue_clock`).
     pub(super) fn close_slice(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         if slice.closes_session {
-            self.expire_day_orders(slice)?;
+            self.end_day_orders(slice)?;
+            if self.session_close_waits(slice) {
+                return Ok(());
+            }
+        }
+        self.complete_close(slice)
+    }
+
+    /// The rest of step 8 once the DAY orders have ended, then the records.
+    pub(super) fn complete_close(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
+        if slice.closes_session {
             self.risk_exits_at_session_close(slice)?;
             if !self.is_external() {
                 self.close_intraday_positions(slice)?;
@@ -160,8 +175,6 @@ impl Engine {
             self.settle_futures(slice)?;
             self.settle_contract_notes(slice);
             self.credit_withheld_sales();
-        } else if self.is_external() {
-            self.venue_at_next_open(slice)?;
         }
         self.settle_at_run_end(slice);
         self.record_levels(slice);
@@ -170,7 +183,7 @@ impl Engine {
     }
 
     /// Expire every DAY order whose validity ends with this session.
-    fn expire_day_orders(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
+    pub(super) fn expire_day_orders(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         let ending: Vec<_> = self
             .book
             .working()

@@ -20,9 +20,10 @@ from openalgo.backtest._reject_reasons import PRODUCT_RULE_CASES, REASONS
 from openalgo.backtest._rejections import entry_window_warning, reject_warnings
 from openalgo.backtest.reference import Instrument
 
-# Every code a kernel check can reject an order with (`RejectCode` in
-# rust/oa_bt/src/exec/checks.rs). `RejectCode::RateLimit` is left out: no kernel check
-# makes it, because no order rate limit is enforced in a backtest.
+# Every code the kernel can reject an order with (`RejectCode` in
+# rust/oa_bt/src/exec/checks.rs): those of its checks, and "venue", a live session's
+# broker refusing an order. `RejectCode::RateLimit` is left out: no kernel check makes
+# it, because no order rate limit is enforced in a backtest.
 KERNEL_REJECT_CODES = {
     "quantity_rule",
     "tick",
@@ -38,6 +39,7 @@ KERNEL_REJECT_CODES = {
     "instrument_unknown",
     "reverse_not_allowed",
     "scale_in_limit",
+    "venue",
 }
 NIFTY_INDEX = Instrument(
     symbol="NIFTY", exchange="NSE_INDEX", kind="index", tick_size=0.05, settlement="none"

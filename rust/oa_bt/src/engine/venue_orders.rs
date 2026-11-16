@@ -1,0 +1,143 @@
+//! Commands out of an external session (`venue`): the units an order is sent with, the
+//! order sent at once or made an exit owner, a modification sent and held until the
+//! venue answers, and a cancellation sent once.
+
+use crate::exec::{OrderAction, OrderId, OrderRequest, OrderStatus, QuantitySpec};
+use crate::model::Side;
+use crate::portfolio::PositionKey;
+use crate::sizing::round_down_to_venue;
+
+use super::error::KernelError;
+use super::event::{EventStamp, OrderEventKind};
+use super::kernel::Engine;
+use super::venue::{is_exit, ExitBy, ExitOwner, Replacement, SendAt, VenueCommand};
+
+impl Engine {
+    /// The units an order is sent with: in a backtest `units` as resolved; in an external
+    /// session an order that only reduces gets at most the position held now, and a
+    /// fraction of it is taken of that position, rounded down to the venue quantity. An
+    /// order that would reduce nothing gets 0.
+    pub(super) fn venue_units(&self, request: &OrderRequest, units: f64) -> f64 {
+        if !self.is_external() || !request.reduce_only {
+            return units;
+        }
+        let key = PositionKey {
+            instrument: request.instrument,
+            product: request.product,
+        };
+        let held = self.held_units(key);
+        let reduces = held != 0.0 && (held > 0.0) != (request.side == Side::Buy);
+        if !reduces {
+            return 0.0;
+        }
+        let wanted = match request.quantity {
+            QuantitySpec::PositionFraction(fraction) => {
+                let lot = self
+                    .instruments
+                    .get(request.instrument.index())
+                    .map_or(1, |spec| spec.lot_size_units);
+                round_down_to_venue(held.abs() * fraction, lot, false)
+            }
+            _ => units,
+        };
+        wanted.min(held.abs())
+    }
+
+    /// In an external session, after an order has passed the checks (`at` is its
+    /// decision): an exit becomes its position's exit owner (`venue_owner`), any other
+    /// order is sent at once. An order with no units, or an exit of a position another
+    /// exit owns, ends `Canceled` and sends nothing. Then every exit owner moves on, so a
+    /// waiting exit also cancels an order just placed on its closing side. A backtest
+    /// sends nothing.
+    ///
+    /// Errors: those of `fills::end_order` and of the exit owners.
+    pub(super) fn send_order(&mut self, at: SendAt, id: OrderId) -> Result<(), KernelError> {
+        if !self.is_external() {
+            return Ok(());
+        }
+        let order = self.book.get(id).ok_or(KernelError::UnknownOrder(id))?;
+        let key = PositionKey {
+            instrument: order.request.instrument,
+            product: order.request.product,
+        };
+        let exit = is_exit(&order.request);
+        if order.quantity_units <= 0.0 || (exit && self.exit_owner(key).is_some()) {
+            let kind = OrderEventKind::Canceled;
+            return self.end_order(at.stamp(), id, OrderAction::Cancel, kind);
+        }
+        if exit {
+            self.venue.exits.push(ExitOwner {
+                key,
+                by: ExitBy::Strategy(id),
+                sent: Vec::new(),
+            });
+        } else {
+            self.place(id);
+        }
+        self.progress_exits(at)
+    }
+
+    /// Send an order to the venue with its units and type as they stand.
+    pub(super) fn place(&mut self, id: OrderId) {
+        if let Some(order) = self.book.get(id) {
+            let command = VenueCommand::Place {
+                order: id,
+                instrument: order.request.instrument,
+                product: order.request.product,
+                side: order.request.side,
+                units: order.quantity_units,
+                order_type: order.request.order_type,
+            };
+            self.venue.commands.push(command);
+        }
+    }
+
+    /// In an external session, a modification that passed the checks: sent to the venue,
+    /// and held until the venue confirms it (`apply_modify`) or refuses it; the order
+    /// keeps its old terms until then.
+    pub(super) fn send_modify(&mut self, id: OrderId, replacement: Replacement) {
+        let command = VenueCommand::Modify {
+            order: id,
+            units: replacement.units,
+            order_type: replacement.request.order_type,
+        };
+        self.venue.commands.push(command);
+        self.venue.modifying.push((id, replacement));
+    }
+
+    /// Withdraw a working order. A backtest ends it `Canceled` now. An external session
+    /// sends `Cancel` once (again only after the venue refused it,
+    /// `apply_cancel_refused`) and leaves the order working until the venue's result; an
+    /// exit not sent yet has nothing at the venue and ends `Canceled` now. Returns the
+    /// order's state afterwards.
+    ///
+    /// Errors: `UnknownOrder`; those of `fills::end_order`.
+    pub(super) fn withdraw_order(
+        &mut self,
+        stamp: EventStamp,
+        id: OrderId,
+    ) -> Result<OrderStatus, KernelError> {
+        if !self.is_external() {
+            self.end_order(stamp, id, OrderAction::Cancel, OrderEventKind::Canceled)?;
+            return Ok(OrderStatus::Canceled);
+        }
+        let status = self
+            .book
+            .get(id)
+            .ok_or(KernelError::UnknownOrder(id))?
+            .status;
+        if !status.is_working() {
+            return Ok(status);
+        }
+        if self.is_unsent(id) {
+            self.end_order(stamp, id, OrderAction::Cancel, OrderEventKind::Canceled)?;
+            self.tidy_venue();
+            return Ok(OrderStatus::Canceled);
+        }
+        if !self.venue.cancelling.contains(&id) {
+            self.venue.cancelling.push(id);
+            self.venue.commands.push(VenueCommand::Cancel { order: id });
+        }
+        Ok(status)
+    }
+}

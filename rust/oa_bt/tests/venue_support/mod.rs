@@ -8,7 +8,8 @@
 //! them (`exec::matching`, step 3), each in id order, none before the slice after its
 //! decision (SPEC-35) and none in a slice without a bar (SPEC-06). Slippage is zero, so
 //! the simulator's price is the matched price itself. A fill at the open is reported at
-//! the slice's open instant, one inside the bar one nanosecond after it.
+//! the slice's open instant, one inside the bar one nanosecond after it. It confirms
+//! every modification and cancellation as soon as it takes them.
 //!
 //! Every test file that includes this module uses a different part of it, so unused
 //! items are allowed here rather than duplicated per file.
@@ -98,6 +99,26 @@ pub fn sbin() -> InstrumentSpec {
     }
 }
 
+/// An NFO call option: lot 75, tick 0.05.
+pub fn nifty_call() -> InstrumentSpec {
+    InstrumentSpec {
+        symbol: "NIFTY31JUL2525000CE".to_string(),
+        exchange: Exchange::Nfo,
+        kind: InstrumentKind::Option,
+        lot_size_units: 75,
+        last_trading_day: Some(days_from_civil(2025, 7, 31)),
+        ..sbin()
+    }
+}
+
+/// SBIN with a freeze quantity of `units`.
+pub fn frozen_at(units: u32) -> InstrumentSpec {
+    InstrumentSpec {
+        freeze_quantity_units: Some(units),
+        ..sbin()
+    }
+}
+
 /// A 1-minute strategy on 1-minute bars on 2025-07-01, with no costs and no slippage.
 pub fn config() -> RunConfig {
     RunConfig {
@@ -148,6 +169,15 @@ pub fn backtest(config: RunConfig, bars: BarColumns) -> Engine {
 /// A live session of the test day, built before its bars.
 pub fn session(config: RunConfig) -> Engine {
     Engine::new_session(setup(config, BarColumns::default())).expect("a valid session")
+}
+
+/// A live session of the test day trading `instrument`.
+pub fn session_of(config: RunConfig, instrument: InstrumentSpec) -> Engine {
+    let setup = RunSetup {
+        instruments: vec![instrument],
+        ..setup(config, BarColumns::default())
+    };
+    Engine::new_session(setup).expect("a valid session")
 }
 
 /// A request for `units` of SBIN on `side` in `product`, priced as `order_type`.
@@ -337,44 +367,58 @@ impl Echo {
         }
     }
 
-    /// Take the session's commands; what they place or replace may fill from `slice`.
+    /// Take the session's commands, until it makes no more: what they place or replace
+    /// may fill from `slice`; a modification and a cancellation are confirmed at once.
     pub fn take(&mut self, engine: &mut Engine, slice: usize) {
-        for command in engine.take_commands() {
-            self.commands.push(command);
-            match command {
-                VenueCommand::Place {
-                    order,
-                    side,
-                    units,
-                    order_type,
-                    ..
-                } => self.held.push(Held {
-                    order,
-                    side,
-                    units,
-                    order_type,
-                    from_slice: slice,
-                }),
-                VenueCommand::Modify {
-                    order,
-                    units,
-                    order_type,
-                } => {
-                    if let Some(held) = self.held.iter_mut().find(|h| h.order == order) {
-                        *held = Held {
-                            units,
-                            order_type,
-                            from_slice: slice,
-                            ..*held
-                        };
-                    }
+        loop {
+            let commands = engine.take_commands();
+            if commands.is_empty() {
+                return;
+            }
+            for command in commands {
+                self.answer(engine, command, slice);
+            }
+        }
+    }
+
+    fn answer(&mut self, engine: &mut Engine, command: VenueCommand, slice: usize) {
+        self.commands.push(command);
+        match command {
+            VenueCommand::Place {
+                order,
+                side,
+                units,
+                order_type,
+                ..
+            } => self.held.push(Held {
+                order,
+                side,
+                units,
+                order_type,
+                from_slice: slice,
+            }),
+            VenueCommand::Modify {
+                order,
+                units,
+                order_type,
+            } => {
+                engine
+                    .apply_modify(order)
+                    .expect("the venue confirms a modify");
+                if let Some(held) = self.held.iter_mut().find(|h| h.order == order) {
+                    *held = Held {
+                        units,
+                        order_type,
+                        from_slice: slice,
+                        ..*held
+                    };
                 }
-                VenueCommand::Cancel { order } => {
-                    self.held.retain(|held| held.order != order);
-                    engine
-                        .apply_cancel(order)
-                        .expect("the venue confirms a cancel");
-                }
+            }
+            VenueCommand::Cancel { order } => {
+                self.held.retain(|held| held.order != order);
+                engine
+                    .apply_cancel(order)
+                    .expect("the venue confirms a cancel");
             }
         }
     }
@@ -427,7 +471,8 @@ impl Echo {
 
 /// Run a live session on `bars` with `script` and the echo venue to its end: at each
 /// wait the venue takes the commands and fills the slice, then the slice's bar is added
-/// and the slice released; at a timer pause the venue fills what the timers placed.
+/// and the slice released. The venue answers only while the session waits, as a real
+/// one's answers arrive between slices.
 pub fn run_echo(
     config: RunConfig,
     bars: &BarColumns,
@@ -470,15 +515,7 @@ pub fn echo_until(
                 kernel.release(next_slice + 1);
             }
             Pause::Finished { .. } => return,
-            pause => {
-                script.on_pause(kernel, &pause).expect("the script acts");
-                if let Pause::Timers { stamp, .. } = pause {
-                    let slice = stamp.slice as usize;
-                    echo.take(kernel, slice);
-                    let open = stamp.slice_ts;
-                    echo.fill(kernel, slice, open, bar_at(bars, open));
-                }
-            }
+            pause => script.on_pause(kernel, &pause).expect("the script acts"),
         }
     }
 }
@@ -511,10 +548,23 @@ pub fn wait_before(kernel: &mut Engine, bars: &BarColumns, script: &mut Script, 
     }
 }
 
-/// Advance a session (as `wait_before`) to its end; it is finished but not consumed.
+/// Advance a session (as `wait_before`) to its end, the venue confirming the cancels
+/// of the session close; it is finished but not consumed.
 pub fn run_to_end(kernel: &mut Engine, bars: &BarColumns, script: &mut Script) {
     loop {
         match kernel.advance().expect("the slice runs") {
+            Pause::Waiting { next_slice } if next_slice >= SESSION_SLICES as usize => {
+                for command in kernel.take_commands() {
+                    let VenueCommand::Cancel { order } = command else {
+                        continue;
+                    };
+                    if kernel.order(order).is_some_and(|o| o.status.is_working()) {
+                        kernel
+                            .apply_cancel(order)
+                            .expect("the venue confirms a cancel");
+                    }
+                }
+            }
             Pause::Waiting { next_slice } => {
                 if let Some(bar) = base_bar(bars, slice_open(next_slice)) {
                     kernel.add_bar(SBIN, bar).expect("a bar of a closed slice");

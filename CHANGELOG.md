@@ -19,24 +19,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   valid OHLC bar), its strategy bars rebuilt by the backtest's resampler, and ending at
   the end of its day. A session given its bars minute by minute gives the same result as
   the backtest of those bars.
-- A live session's venue in the kernel (no change to backtests): a session fills no order
-  itself. Each order that passes the backtest's submission checks is handed to the live
-  layer at once as a command (place, modify, cancel: `Engine::take_commands`), and the
-  broker's results come back: `Engine::apply_fill` with the units newly filled at the
-  broker's price (no slippage model, the cost model's charges), `Engine::apply_reject`
-  and `Engine::apply_cancel`. A cancelled order works on until the broker confirms it.
-  The exits a backtest makes without an order are sent as reduce-only MARKET orders where
-  the backtest queues or fills them: the daily loss limit and the drawdown halt when they
-  fire, the square-off and the time exit as the session reaches their open, with or
-  without a bar; MIS entries still working when entries stop are cancelled. Working exits
-  never exceed the position, and a position still open at the session close is reported
-  open (no closing fill is invented). A session whose orders are filled where the
-  simulator fills them gives the same result as the backtest, field for field. Not
-  supported in a session yet (NotImplementedError): `stop=`, `target=`, trailing and
-  breakeven, GTT orders, futures series and `rebalance()`; fractional quantities are
-  refused. A broker's own rejection has the new reject code `venue`. The native `Engine`
-  gains `session`, `add_bar`, `release`, `venue`, `take_commands`, `apply_fill`,
-  `apply_reject` and `apply_cancel`.
+- A live session's venue in the kernel (no change to backtests): a session fills and
+  expires no order itself. Each order that passes the backtest's submission checks is
+  handed to the live layer at once as a command (place, modify, cancel:
+  `Engine::take_commands`), and the broker's results come back: `Engine::apply_fill` with
+  the units newly filled at the broker's price (no slippage model; the cost model's
+  charges, an order filled in parts charged once on its total; recorded all or nothing),
+  `apply_reject`, `apply_cancel`, and the broker's answers `apply_cancel_refused`,
+  `apply_modify` and `apply_modify_refused`. A cancelled order works on until the broker's
+  result; a modified one keeps its old terms until the broker confirms the new ones.
+  Every fill of an order comes before its terminal result.
+- Cancel, then exit: an exit (`exit()`, `reduce()`, the daily loss limit, the drawdown
+  halt, the square-off, the time exit) first cancels every working order of the position
+  on the closing side and is sent once they have ended, for the position then open; it is
+  the position's one exit owner meanwhile. The engine's exits are sent where a backtest
+  makes them (the square-off and time exit as the session reaches their open, with or
+  without a bar), again at the next open while they apply (a rejected exit, a position a
+  cancel race reopened), and above the freeze quantity as several orders of at most it.
+  MIS entries still working when entries stop are cancelled. Timers fire as the session
+  reaches their open. At a session close the DAY orders are cancelled through the broker
+  and the session does not finish while an order works; a position still open is
+  reported open (no closing fill is invented).
+- Refused at submission in a session, with the backtest's codes and errors, what a fill
+  could not record: a leverage the margin table does not allow, a short option, a margin
+  above the free cash (`margin`), a fill the cost model cannot price. Not supported in a
+  session yet (NotImplementedError): `stop=`, `target=`, trailing and breakeven, GTT
+  orders, futures series and `rebalance()`; fractional quantities are refused. A broker's
+  own rejection has the new reject code `venue`; a result the kernel refuses raises
+  `openalgo.backtest.errors.VenueRefusalError` with its `kind` (`VENUE_REFUSAL_KINDS`). A
+  session whose orders are filled where the simulator fills them gives the same result as
+  the backtest, field for field. The native `Engine` gains `session`, `add_bar`,
+  `release`, `venue`, `take_commands`, `modify` and the `apply_*` calls.
 - The live layer's mode guard (private, not used by `bt.live` yet): OpenAlgo's sandbox or
   live mode read at the start of a session, checked on every order answer and update of
   the session's own orders, and polled every 5 seconds and before each entry. A change of

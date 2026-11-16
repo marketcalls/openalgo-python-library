@@ -49,6 +49,7 @@ use super::error::KernelError;
 use super::event::{Event, EventStamp, Step};
 use super::fills::FillRequest;
 use super::kernel::Engine;
+use super::venue::SendAt;
 
 impl Engine {
     /// Step 1: a later session ends REDUCING and restarts the daily loss measure.
@@ -225,7 +226,12 @@ impl Engine {
         open.sort_by_key(|key| key.instrument);
         for key in open {
             if self.is_external() {
-                self.send_engine_exit(slice, stamp.step, slice.close, key, reason)?;
+                let at = SendAt {
+                    slice: *slice,
+                    step: stamp.step,
+                    decided_at: slice.close,
+                };
+                self.request_engine_exit(at, key, reason)?;
             } else if slice.closes_session {
                 self.exit_at_last_close(stamp, key, reason)?;
             } else {

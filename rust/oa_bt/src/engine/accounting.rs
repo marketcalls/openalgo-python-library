@@ -6,18 +6,20 @@
 //! `charges`); this module connects them to the run's configuration, instruments and
 //! ledger, and records which dated table rows the run used.
 
-use crate::charges::{ChargeBook, ChargeError, FillToCharge, MarketTable};
+use crate::charges::{fill_segment, ChargeBook, ChargeError, FillToCharge, MarketTable};
 use crate::exec::InstrumentId;
-use crate::market::margin::MarginRequest;
+use crate::market::margin::{MarginQuote, MarginRequest};
 use crate::market::slippage::{default_slippage, SlippageClass, SlippageSpec};
-use crate::model::{ist_day, Day, Side};
-use crate::portfolio::{FillEffect, PositionKey};
+use crate::model::{ist_day, Day, Product, Side};
+use crate::portfolio::{FillEffect, FillKind, PositionKey};
 
 use super::clock::SliceInfo;
 use super::config::CostConfig;
 use super::error::KernelError;
 use super::event::EventStamp;
+use super::fills::FillRequest;
 use super::kernel::Engine;
+use super::venue::Venue;
 
 /// A charging error as a kernel error: a cost the model cannot price is a problem of
 /// the run's `costs` setting.
@@ -96,6 +98,26 @@ impl Engine {
         price_rupees: f64,
         leverage: Option<f64>,
     ) -> Result<f64, KernelError> {
+        let quote = self.margin_quote(day, key, side, units, price_rupees, leverage)?;
+        if let Some(row) = quote.row {
+            self.charges.record_use(MarketTable::Margin, &row.meta, day);
+        }
+        Ok(quote.rupees)
+    }
+
+    /// The margin an opening fill would block, and the table row that prices it, with
+    /// nothing recorded (`opening_margin` records the row it uses).
+    ///
+    /// Errors: as `opening_margin`.
+    pub(super) fn margin_quote(
+        &self,
+        day: Day,
+        key: PositionKey,
+        side: Side,
+        units: f64,
+        price_rupees: f64,
+        leverage: Option<f64>,
+    ) -> Result<MarginQuote, KernelError> {
         let spec = self.spec(key.instrument)?;
         let facts = self.config.market.of(key.instrument.index());
         let request = MarginRequest {
@@ -111,25 +133,53 @@ impl Engine {
             day,
             futures_margin: facts.and_then(|f| f.futures_margin),
         };
-        let quote = self.config.margin.initial_margin(&request)?;
-        if let Some(row) = quote.row {
-            self.charges.record_use(MarketTable::Margin, &row.meta, day);
+        Ok(self.config.margin.initial_margin(&request)?)
+    }
+
+    /// Check, recording nothing, that the cost model can price a fill of `units` of
+    /// `key` on `side` at `price_rupees` on `day` (a CNC fill of cash equity at both its
+    /// delivery and its intraday rates, `charges::same_day`).
+    ///
+    /// Errors: as `charge_fill`.
+    pub(super) fn check_chargeable(
+        &self,
+        key: PositionKey,
+        side: Side,
+        units: f64,
+        price_rupees: f64,
+        day: Day,
+    ) -> Result<(), KernelError> {
+        let CostConfig::Model(model) = &self.config.costs else {
+            return Ok(());
+        };
+        let spec = self.spec(key.instrument)?;
+        let facts = self.config.market.of(key.instrument.index());
+        let mut products = vec![key.product];
+        if key.product == Product::Cnc {
+            products.push(Product::Mis);
         }
-        Ok(quote.rupees)
+        for product in products {
+            let segment = fill_segment(spec, facts, product).map_err(charge_error)?;
+            model
+                .fill_cost(segment, side, price_rupees, units, day)
+                .map_err(|error| charge_error(ChargeError::Cost(error)))?;
+        }
+        Ok(())
     }
 
     /// Charge a fill and post its cost to the ledger; returns the fill's cost in rupees
     /// (0 when the run is cost-free). A CNC sale of a scrip bought the same day (or a
     /// buy back of one sold) also carries the new charges of the earlier fill it turned
-    /// into intraday (`charges::same_day`). Call it before the fill is recorded.
+    /// into intraday (`charges::same_day`). In a live session an order's fills are
+    /// costed once on their total (`charges::parts`), its fills that reduce the position
+    /// apart from those that open or add, as a backtest costs the two fills of a
+    /// reversal. Call it before the fill is recorded.
     ///
     /// Errors: `InvalidConfig` (field `costs`) when the cost model cannot price the
     /// fill.
     pub(super) fn charge_fill(
         &mut self,
-        key: PositionKey,
-        side: Side,
-        units: f64,
+        request: &FillRequest,
         price_rupees: f64,
         day: Day,
         effect: FillEffect,
@@ -137,6 +187,7 @@ impl Engine {
         let CostConfig::Model(model) = &self.config.costs else {
             return Ok(0.0);
         };
+        let key = request.key;
         let spec =
             self.instruments
                 .get(key.instrument.index())
@@ -149,13 +200,26 @@ impl Engine {
             spec,
             facts: self.config.market.of(key.instrument.index()),
             key,
-            side,
-            units,
+            side: request.side,
+            units: request.units,
             price_rupees,
             day,
             effect,
         };
-        let rupees = self.charges.charge(model, &fill).map_err(charge_error)?;
+        let part = match request.order {
+            Some(order) if self.venue.venue == Venue::External => {
+                Some((order, effect.kind == FillKind::Reduce))
+            }
+            _ => None,
+        };
+        let charged = match part {
+            Some(part) => {
+                let so_far = self.venue.charged_so_far(part);
+                self.charges.charge_part(model, &fill, so_far)
+            }
+            None => self.charges.charge(model, &fill),
+        };
+        let rupees = charged.map_err(charge_error)?;
         self.portfolio.account.post_costs(rupees);
         Ok(rupees)
     }

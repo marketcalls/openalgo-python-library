@@ -13,7 +13,7 @@ use oa_bt::exec::InstrumentSpec;
 use oa_bt::market::calendar::BaseInterval;
 use oa_bt::market::margin::MarginModel;
 use oa_bt::market::slippage::SlippageSpec;
-use oa_bt::model::InstrumentKind;
+use oa_bt::model::{InstrumentKind, Product};
 use oa_bt::rms::{
     AfterRiskExit, Distance, PositionCap, RiskBasis, RiskCap, ScaleLimits, Spacing,
     StrategyRiskConfig,
@@ -53,6 +53,12 @@ pub(super) fn optional<'py, T: FromPyObject<'py>>(
 
 pub(super) fn unknown(what: &str, value: &str, allowed: &str) -> PyErr {
     NativeEngineInputError::new_err(format!("unknown {what} {value:?}: use {allowed}"))
+}
+
+/// A product from its code ("CNC", "MIS", "NRML").
+pub(super) fn parse_product(code: &str) -> PyResult<Product> {
+    Product::from_code(code)
+        .ok_or_else(|| NativeEngineInputError::new_err(format!("unknown product {code:?}")))
 }
 
 /// The base interval: nanoseconds of an intraday interval, or None for daily.

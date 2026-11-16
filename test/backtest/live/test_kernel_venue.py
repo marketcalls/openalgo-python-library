@@ -1,6 +1,7 @@
 """The kernel's live session through the binding (`Engine.session`): its venue is
-external, so every order goes out as a command dict and the venue's fills, rejections and
-cancellations come back (rust/oa_py/src/backtest/engine/venue.rs).
+external, so every order goes out as a command dict and the venue's fills, rejections,
+cancellations and answers come back (rust/oa_py/src/backtest/engine/venue.rs); a result
+the kernel refuses raises `VenueRefusalError` with its kind.
 
 No server is involved: the test plays the venue. The session is the NSE day 2025-07-01
 on 1-minute slices from 09:15 IST, one instrument (SBIN), a 1-minute strategy.
@@ -16,6 +17,7 @@ import pytest
 
 from openalgo.backtest._calendar_convert import native_attr, to_day
 from openalgo.backtest.calendar import default_calendar
+from openalgo.backtest.errors import VENUE_REFUSAL_KINDS, VenueRefusalError
 
 DAY = dt.date(2025, 7, 1)
 MINUTE_NS = 60 * 1_000_000_000
@@ -167,16 +169,52 @@ def test_an_unknown_reject_code_is_an_input_error():
         engine.apply_reject(order_id, "broker_said_no")
 
 
-def test_a_fill_of_more_units_than_the_order_has_left_is_an_input_error():
+def refusal_kind(call: Any, *args: Any) -> str:
+    """The kind of the VenueRefusalError that `call(*args)` raises."""
+    with pytest.raises(VenueRefusalError) as raised:
+        call(*args)
+    assert raised.value.kind in VENUE_REFUSAL_KINDS
+    return raised.value.kind
+
+
+def test_a_fill_of_more_units_than_the_order_has_left_is_refused_by_kind():
     engine, order_id = session_with_order(buy(10))
-    with pytest.raises(native_attr("NativeEngineInputError"), match="10 units left"):
-        engine.apply_fill(order_id, 11.0, 500.0, OPEN_NS + MINUTE_NS)
+    kind = refusal_kind(engine.apply_fill, order_id, 11.0, 500.0, OPEN_NS + MINUTE_NS)
+    assert kind == "too_many_units"
+    assert engine.order(order_id)["filled_units"] == 0.0
 
 
-def test_a_result_for_a_backtest_is_refused_as_a_call_it_cannot_take():
-    with pytest.raises(native_attr("NativeEngineError"), match="fills its own orders") as raised:
-        new_backtest().apply_cancel(1)
-    assert not isinstance(raised.value, native_attr("NativeEngineInputError"))
+def test_a_result_for_an_order_that_has_ended_is_refused_as_a_race():
+    engine, order_id = session_with_order(buy(10))
+    engine.apply_fill(order_id, 10.0, 500.0, OPEN_NS + MINUTE_NS)
+    assert refusal_kind(engine.apply_cancel, order_id) == "order_ended"
+    assert refusal_kind(engine.apply_reject, 99, "venue") == "unknown_order"
+
+
+def test_a_result_for_a_backtest_is_refused_by_kind():
+    assert refusal_kind(new_backtest().apply_cancel, 1) == "not_external"
+
+
+def test_a_cancellation_the_venue_refuses_leaves_the_order_working():
+    engine, order_id = session_with_order(buy(10, order_type="LIMIT", price=450.0))
+    assert release_minute(engine, 1)[0] == "bar_close"
+    engine.cancel(order_id)
+    assert engine.advance()[0] == "waiting"
+    engine.apply_cancel_refused(order_id)
+    assert engine.order(order_id)["status"] == "Submitted"
+    assert refusal_kind(engine.apply_cancel_refused, order_id) == "not_pending"
+
+
+def test_a_modification_takes_effect_once_the_venue_confirms_it():
+    engine, order_id = session_with_order(buy(10, order_type="LIMIT", price=450.0))
+    assert release_minute(engine, 1)[0] == "bar_close"
+    engine.modify(order_id, buy(20, order_type="LIMIT", price=455.0))
+    commands = engine.take_commands()
+    assert commands[-1]["command"] == "modify"
+    assert engine.order(order_id)["quantity_units"] == 10.0
+    assert engine.advance()[0] == "waiting"
+    engine.apply_modify(order_id)
+    assert engine.order(order_id)["quantity_units"] == 20.0
 
 
 def test_a_stop_on_an_order_in_a_session_is_not_built_yet():

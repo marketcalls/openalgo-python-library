@@ -7,15 +7,17 @@
 
 mod venue_support;
 
-use oa_bt::engine::{run, Engine, RunConfig, RunOutput, Step, Venue, VenueCommand};
+use oa_bt::engine::{
+    run, Engine, KernelError, RunConfig, RunOutput, Step, Venue, VenueCommand, VenueError,
+};
 use oa_bt::exec::{
     FillAt, OrderId, OrderRequest, OrderStatus, OrderType, QuantitySpec, RejectCode,
 };
 use oa_bt::market::slippage::SlippageSpec;
 use oa_bt::model::{Product, Side};
 use venue_support::{
-    at_close, backtest, bars, config, exit, limit, market, minute, order, pause_at_close,
-    run_to_end, session, slice_open, stop_market, wait_before, Act, Script, SBIN,
+    at_close, backtest, bars, charged_config, config, exit, limit, market, minute, order,
+    pause_at_close, run_to_end, session, slice_open, stop_market, wait_before, Act, Script, SBIN,
 };
 
 /// A session run without a venue until it waits before `slice`, with `script`.
@@ -154,25 +156,85 @@ fn a_second_cancel_of_an_order_sends_nothing_more() {
     );
 }
 
-#[test]
-fn modify_replaces_the_order_and_sends_the_replacement() {
+/// A session with a buy LIMIT of 10 at 400.00 (o1) decided at minute 0 and its
+/// replacement by 20 at 450.00 decided at minute 2, waiting before slice 3.
+fn modify_sent() -> Engine {
     let replacement = order(Side::Buy, 20.0, limit(450.0), Product::Mis);
     let acts = vec![
         submit_at(0, order(Side::Buy, 10.0, limit(400.0), Product::Mis)),
         at_close(2, Act::Modify(OrderId(1), replacement)),
     ];
-    let mut kernel = waiting_before(3, &mut Script::new(acts));
+    waiting_before(3, &mut Script::new(acts))
+}
+
+fn terms(kernel: &Engine) -> (f64, OrderType) {
+    let order = kernel.order(OrderId(1)).expect("the order");
+    (order.quantity_units, order.request.order_type)
+}
+
+#[test]
+fn modify_sends_the_replacement_and_keeps_the_old_terms_until_the_venue_answers() {
+    let mut kernel = modify_sent();
     let modify = VenueCommand::Modify {
         order: OrderId(1),
         units: 20.0,
         order_type: limit(450.0),
     };
     assert_eq!(kernel.take_commands().last(), Some(&modify));
-    let replaced = kernel.order(OrderId(1)).expect("the order");
-    assert_eq!(
-        (replaced.quantity_units, replaced.request.order_type),
-        (20.0, limit(450.0))
+    assert_eq!(terms(&kernel), (10.0, limit(400.0)));
+}
+
+#[test]
+fn a_modification_the_venue_confirms_gives_the_order_its_new_terms() {
+    let mut kernel = modify_sent();
+    let stamp = kernel.apply_modify(OrderId(1)).expect("the venue confirms");
+    assert_eq!((stamp.slice, stamp.step), (3, Step::Levels));
+    assert_eq!(terms(&kernel), (20.0, limit(450.0)));
+}
+
+#[test]
+fn a_modification_the_venue_refuses_leaves_the_old_terms() {
+    let mut kernel = modify_sent();
+    assert!(kernel.apply_modify_refused(OrderId(1)).is_ok());
+    assert_eq!(terms(&kernel), (10.0, limit(400.0)));
+    assert!(
+        kernel.apply_modify(OrderId(1)).is_err(),
+        "nothing waits any more"
     );
+}
+
+#[test]
+fn a_fill_while_a_modification_waits_is_taken_on_the_old_terms() {
+    let mut kernel = modify_sent();
+    // 15 units would be within the replacement's 20 but not the 10 still in force.
+    assert!(kernel
+        .apply_fill(OrderId(1), 15.0, 400.0, minute(3))
+        .is_err());
+    assert!(kernel
+        .apply_fill(OrderId(1), 10.0, 400.0, minute(3))
+        .is_ok());
+    assert_eq!(status(&kernel, 1), OrderStatus::Filled);
+}
+
+#[test]
+fn a_cancellation_the_venue_refuses_can_be_sent_again() {
+    let mut kernel = session(config());
+    let columns = bars(&[], &[]);
+    let mut script = Script::new(vec![submit_at(
+        0,
+        order(Side::Buy, 10.0, limit(400.0), Product::Mis),
+    )]);
+    wait_before(&mut kernel, &columns, &mut script, 2);
+    pause_at_close(&mut kernel, &columns, 2);
+    assert!(kernel.cancel(OrderId(1)).is_ok());
+    wait_before(&mut kernel, &columns, &mut script, 3);
+    assert!(kernel.apply_cancel_refused(OrderId(1)).is_ok());
+    assert_eq!(status(&kernel, 1), OrderStatus::Submitted);
+    kernel.take_commands();
+    pause_at_close(&mut kernel, &columns, 3);
+    assert!(kernel.cancel(OrderId(1)).is_ok());
+    let cancel = VenueCommand::Cancel { order: OrderId(1) };
+    assert_eq!(kernel.take_commands(), vec![cancel]);
 }
 
 #[test]
@@ -203,6 +265,28 @@ fn partial_fills_accumulate_until_the_order_has_its_units() {
         .position(SBIN, Product::Mis)
         .map(|p| p.quantity_units);
     assert_eq!(held, Some(100.0));
+}
+
+/// The charges posted for an MIS buy of 1,000 at 500.00 filled in `parts`, with the
+/// built-in charges (whose brokerage is capped per order).
+fn charged_in(parts: &[f64]) -> f64 {
+    let mut kernel = session(charged_config());
+    let mut script = Script::new(vec![submit_at(0, market(Side::Buy, 1_000.0))]);
+    wait_before(&mut kernel, &bars(&[], &[]), &mut script, 1);
+    for (offset, units) in (0_i64..).zip(parts) {
+        let filled = kernel.apply_fill(OrderId(1), *units, 500.0, minute(1) + offset);
+        assert!(filled.is_ok());
+    }
+    assert_eq!(status(&kernel, 1), OrderStatus::Filled);
+    kernel.account().costs_rupees
+}
+
+#[test]
+fn an_order_filled_in_parts_is_charged_once_on_its_total() {
+    let whole = charged_in(&[1_000.0]);
+    assert!(whole > 0.0);
+    assert_eq!(charged_in(&[400.0, 600.0]), whole);
+    assert_eq!(charged_in(&[250.0; 4]), whole);
 }
 
 #[test]
@@ -371,16 +455,63 @@ fn a_fraction_exit_is_sent_with_the_units_of_the_position_at_the_decision() {
     );
 }
 
-#[test]
-fn an_exit_is_held_to_the_part_of_the_position_no_working_exit_covers() {
-    let (mut kernel, _) = holding_100();
-    pause_at_close(&mut kernel, &bars(&[], &[]), 3);
-    assert!(kernel.submit(exit(Side::Sell, 60.0, limit(600.0))).is_ok());
+/// Holding 100 with a take-profit LIMIT sell of 100 at 600.00 working (o2, sent at the
+/// close of minute 2), `exit()` decided at the close of minute 3 (o3); the commands of
+/// that decision are left in the engine, which waits before slice 4.
+fn exit_behind_a_take_profit() -> (Engine, Script) {
+    let (mut kernel, mut script) = holding_100();
+    let columns = bars(&[], &[]);
+    pause_at_close(&mut kernel, &columns, 3);
+    assert!(kernel.submit(exit(Side::Sell, 100.0, limit(600.0))).is_ok());
+    assert_eq!(placed_units(&mut kernel), [(OrderId(2), 100.0)]);
     assert!(kernel.submit(fraction_exit(1.0)).is_ok());
-    assert_eq!(
-        placed_units(&mut kernel),
-        [(OrderId(2), 60.0), (OrderId(3), 40.0)]
-    );
+    wait_before(&mut kernel, &columns, &mut script, 4);
+    (kernel, script)
+}
+
+#[test]
+fn an_exit_first_cancels_the_working_orders_on_its_closing_side() {
+    let (mut kernel, _) = exit_behind_a_take_profit();
+    let cancel = VenueCommand::Cancel { order: OrderId(2) };
+    assert_eq!(kernel.take_commands(), vec![cancel], "no exit order yet");
+    assert_eq!(status(&kernel, 3), OrderStatus::Submitted);
+}
+
+#[test]
+fn an_exit_is_sent_for_the_position_once_the_orders_it_cancels_have_ended() {
+    let (mut kernel, _) = exit_behind_a_take_profit();
+    kernel.take_commands();
+    assert!(kernel.apply_cancel(OrderId(2)).is_ok());
+    assert_eq!(placed_units(&mut kernel), [(OrderId(3), 100.0)]);
+}
+
+#[test]
+fn an_exit_whose_position_the_cancelled_orders_filled_sends_nothing() {
+    let (mut kernel, _) = exit_behind_a_take_profit();
+    kernel.take_commands();
+    assert!(kernel
+        .apply_fill(OrderId(2), 100.0, 600.0, minute(4))
+        .is_ok());
+    assert!(kernel.take_commands().is_empty());
+    assert_eq!(status(&kernel, 3), OrderStatus::Canceled);
+}
+
+#[test]
+fn an_exit_that_waits_takes_no_venue_result() {
+    let (mut kernel, _) = exit_behind_a_take_profit();
+    let result = kernel.apply_fill(OrderId(3), 100.0, 500.4, minute(4));
+    let refused = VenueError::NotSent { order: OrderId(3) };
+    assert_eq!(result, Err(KernelError::Venue(refused)));
+}
+
+#[test]
+fn a_second_exit_of_a_position_with_an_exit_owner_ends_canceled() {
+    let (mut kernel, mut script) = exit_behind_a_take_profit();
+    pause_at_close(&mut kernel, &bars(&[], &[]), 4);
+    assert!(kernel.submit(fraction_exit(1.0)).is_ok());
+    assert_eq!(status(&kernel, 4), OrderStatus::Canceled);
+    wait_before(&mut kernel, &bars(&[], &[]), &mut script, 5);
+    assert!(placed_units(&mut kernel).is_empty());
 }
 
 #[test]

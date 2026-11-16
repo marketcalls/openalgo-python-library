@@ -20,6 +20,7 @@ use super::config::QuantityMode;
 use super::error::KernelError;
 use super::event::{Event, OrderEventKind};
 use super::kernel::Engine;
+use super::venue::SendAt;
 
 /// Days searched for the next session of a daily strategy's order before it counts as
 /// having no session to fill in: longer than any run of Indian market holidays.
@@ -72,8 +73,13 @@ impl Engine {
             Resolved::AtFill => 0.0,
             Resolved::Skipped(reason) => return Ok(Submission::Skipped(reason)),
         };
-        let units = self.venue_units(&request, units, None);
-        let checked = self.submission_checks(&request, units, &slice, decided_at, None)?;
+        let units = self.venue_units(&request, units);
+        let checked = match self.submission_checks(&request, units, &slice, decided_at, None)? {
+            Ok(good_until) => self
+                .venue_checks(&request, units, &slice)?
+                .map(|()| good_until),
+            Err(code) => Err(code),
+        };
         let id = self.book.next_id();
         let (action, kind, good_until, reject) = match checked {
             Ok(good_until) => (
@@ -109,7 +115,12 @@ impl Engine {
         });
         if reject.is_none() {
             self.place_order_gtt(stamp, id)?;
-            self.send_order(stamp, id)?;
+            let at = SendAt {
+                slice,
+                step,
+                decided_at,
+            };
+            self.send_order(at, id)?;
         }
         Ok(match reject {
             Some(code) => Submission::Rejected(id, code),

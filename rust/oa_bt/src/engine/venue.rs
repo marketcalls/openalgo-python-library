@@ -7,44 +7,53 @@
 //!
 //! In an external session the kernel decides and checks exactly as in a backtest (every
 //! submission check and reject code, the risk rules, the cost model) and records every
-//! fill through the one fill path (`fills::execute_fill`), but matches nothing itself:
-//! steps 2 and 3 fill no order, and step 8 invents no closing fill for an open MIS
-//! position nor an expiry settlement (a position still open at the end is reported open).
+//! fill through the one fill path (`fills::execute_fill`), but matches nothing and ends no
+//! order itself: steps 2 and 3 fill nothing, no order expires, and step 8 invents no
+//! closing fill nor an expiry settlement (a position still open at the end is reported
+//! open). The parts:
 //!
-//! - **Commands out.** An order that passes the submission checks is handed over at once
-//!   as `VenueCommand::Place`; `modify` replaces the order and sends `Modify`; `cancel`,
-//!   and the engine's own withdrawals (the entries cancelled when step 6 locks them, the
-//!   MIS entries still working once the entry window has closed), send `Cancel`. A
-//!   cancelled order works on until the venue confirms it (`apply_cancel`), since a fill
-//!   may come first. The adapter takes the commands with `Engine::take_commands`, in the
-//!   order they were made.
-//! - **Engine orders.** The exits a backtest fills without an order (SPEC-21) are orders
-//!   here (`venue_exits`): reduce-only MARKET orders with the backtest's exit reason.
-//! - **Results in.** `apply_fill`, `apply_reject` and `apply_cancel` (`venue_fills`).
-//! - **Quantities.** The venue needs every order's units when it is sent, so they are
-//!   resolved at submission: a fraction of the position held at the decision, rounded
-//!   down to the venue quantity (`exit(fraction=)`), and an order that only reduces is
-//!   held to the part of the position no working order on the other side already covers,
-//!   so the working exits never exceed the position. An order left with no units ends
-//!   `Canceled` at once and sends nothing, as a backtest cancels it at its fill bar. A
-//!   live session trades whole shares and lots: `quantity_mode="fractional"` is refused.
+//! - **Commands out** (`venue_orders`). An order that passes the checks is sent at once as
+//!   `VenueCommand::Place`, except an exit (below). `cancel`, and the engine's own
+//!   withdrawals, send `Cancel`; the order works on until the venue's result, since a fill
+//!   may come first. `modify` sends `Modify` and the order keeps its old terms until the
+//!   venue confirms the new ones (`apply_modify`) or refuses them. The adapter takes the
+//!   commands with `Engine::take_commands`, in the order they were made.
+//! - **Exits** (`venue_owner`). An exit is the strategy's `exit()` or `reduce()` (a
+//!   reduce-only MARKET order) or one of the engine's exits (`venue_exits`: the daily loss
+//!   limit and drawdown halt, the square-off, the time exit). No working order counts as
+//!   covering a position: an exit first cancels every working order of its position on
+//!   the closing side and is sent once they have all ended, for the position then open.
+//!   Meanwhile it is the position's one exit owner: no second exit order is made.
+//! - **Results in** (`venue_fills`): fills, rejections, cancellations, and the venue's
+//!   answers to a cancellation or modification it refused.
+//! - **The clock** (`venue_clock`). What a backtest does at the open of a slice (the
+//!   engine's exits, the timers) happens when the session reaches that open, the close of
+//!   the slice before it. At a session close the kernel sends `Cancel` for the DAY orders
+//!   a backtest would expire, and the close completes once the venue has ended them all;
+//!   the session cannot finish while an order works.
+//! - **Quantities.** An order's units are resolved when it is sent: a fraction of the
+//!   position then held, rounded down to the venue quantity. A live session trades whole
+//!   shares and lots: `quantity_mode="fractional"` is refused.
+//! - **What the fill path cannot record** is refused at submission (`venue_checks`), and a
+//!   fill is checked whole before anything of it is recorded.
 //! - **Not built yet** (`KernelError::NotBuilt`): leg rules (`stop=`, `target=`, trailing
 //!   and breakeven, held by the broker and on ticks in the next unit, decision D31), GTT
 //!   orders, futures series and rebalancing.
 //!
-//! A result the venue sends that cannot be recorded is a `VenueError` (`venue_error`).
+//! The contract for the live layer: every fill of an order is delivered (`apply_fill`)
+//! before its terminal result (`apply_cancel`, `apply_reject`); after it the order takes
+//! no more fills. A result the kernel cannot record is a `VenueError` (`venue_error`).
 
-use crate::exec::{
-    ExecError, InstrumentId, Order, OrderAction, OrderId, OrderRequest, OrderStatus, OrderType,
-    QuantitySpec, Validity,
-};
-use crate::model::{Product, Side};
+use crate::charges::OrderCharges;
+use crate::exec::{ExecError, InstrumentId, Order, OrderId, OrderRequest, OrderType, Validity};
+use crate::model::{Product, Side, TsNanos};
 use crate::portfolio::PositionKey;
-use crate::sizing::round_down_to_venue;
+use crate::rms::ExitReason;
 
+use super::clock::SliceInfo;
 use super::config::{QuantityMode, RunConfig};
 use super::error::KernelError;
-use super::event::{EventStamp, OrderEventKind};
+use super::event::{EventStamp, Step};
 use super::kernel::Engine;
 
 /// Who fills a run's orders.
@@ -70,33 +79,96 @@ impl Venue {
 /// What an external session asks of its venue. Quantities are units, prices rupees.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum VenueCommand {
-    /// Place a DAY order. `order_type` carries the limit and the trigger.
+    /// Place a DAY order.
     Place {
+        /// The kernel order the venue's results name.
         order: OrderId,
+        /// The instrument, by registration index.
         instrument: InstrumentId,
+        /// CNC, MIS or NRML.
         product: Product,
+        /// Buy or sell.
         side: Side,
+        /// Units to trade, never lots.
         units: f64,
+        /// MARKET, LIMIT, SL or SL-M, with its limit and trigger prices.
         order_type: OrderType,
     },
     /// Replace a working order's units, type, limit and trigger (a full replacement).
     Modify {
+        /// The kernel order to replace.
         order: OrderId,
+        /// The replacement's units.
         units: f64,
+        /// The replacement's type, with its limit and trigger prices.
         order_type: OrderType,
     },
     /// Cancel a working order.
-    Cancel { order: OrderId },
+    Cancel {
+        /// The kernel order to cancel.
+        order: OrderId,
+    },
 }
 
-/// The venue of a run, and what an external one has been asked and not yet confirmed.
+/// Who asked for an exit (`venue_owner`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum ExitBy {
+    /// The strategy's exit order (`exit()`, `reduce()`).
+    Strategy(OrderId),
+    /// One of the engine's exits, with the backtest's reason.
+    Engine(ExitReason),
+}
+
+/// The one exit of a position.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct ExitOwner {
+    pub(super) key: PositionKey,
+    pub(super) by: ExitBy,
+    /// The orders sent for it; empty while it waits for the orders it cancels.
+    pub(super) sent: Vec<OrderId>,
+}
+
+/// A modification sent to the venue and not yet confirmed.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Replacement {
+    pub(super) request: OrderRequest,
+    pub(super) decided_at: TsNanos,
+    pub(super) good_until: TsNanos,
+    pub(super) units: f64,
+}
+
+/// Where an order the engine sends now is decided and stamped.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct SendAt {
+    pub(super) slice: SliceInfo,
+    pub(super) step: Step,
+    pub(super) decided_at: TsNanos,
+}
+
+impl SendAt {
+    pub(super) fn stamp(&self) -> EventStamp {
+        Engine::stamp(&self.slice, self.step)
+    }
+}
+
+/// An order's fills that reduce its position, or those that open or add (a reversal has
+/// both), for costing them once on their total (`charges::OrderCharges`).
+pub(super) type ChargePart = (OrderId, bool);
+
+/// The venue of a run, and what an external one has been asked and not yet answered.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct VenueDesk {
-    venue: Venue,
+    pub(super) venue: Venue,
     /// Commands not yet taken by the adapter, in the order they were made.
-    commands: Vec<VenueCommand>,
-    /// Working orders whose cancellation has been sent and not yet confirmed.
-    cancelling: Vec<OrderId>,
+    pub(super) commands: Vec<VenueCommand>,
+    /// Working orders whose cancellation has been sent and not yet answered.
+    pub(super) cancelling: Vec<OrderId>,
+    /// Working orders whose modification has been sent and not yet answered.
+    pub(super) modifying: Vec<(OrderId, Replacement)>,
+    /// The exit owner of each position that has one, in the order they were made.
+    pub(super) exits: Vec<ExitOwner>,
+    /// What each order's fills have been charged so far.
+    pub(super) charged: Vec<(ChargePart, OrderCharges)>,
 }
 
 impl VenueDesk {
@@ -106,6 +178,18 @@ impl VenueDesk {
             venue: Venue::External,
             ..VenueDesk::default()
         }
+    }
+
+    /// What the order part's fills have been charged so far (zero for its first fill).
+    pub(super) fn charged_so_far(&mut self, part: ChargePart) -> &mut OrderCharges {
+        let slot = match self.charged.iter().position(|(known, _)| *known == part) {
+            Some(slot) => slot,
+            None => {
+                self.charged.push((part, OrderCharges::default()));
+                self.charged.len() - 1
+            }
+        };
+        &mut self.charged[slot].1
     }
 }
 
@@ -126,6 +210,17 @@ pub(super) fn check_session_config(config: &RunConfig) -> Result<(), KernelError
 
 fn not_built(feature: &'static str, instead: &'static str) -> KernelError {
     KernelError::NotBuilt { feature, instead }
+}
+
+fn invalid(reason: &str) -> KernelError {
+    KernelError::Exec(ExecError::InvalidRequest {
+        reason: reason.to_string(),
+    })
+}
+
+/// True for an exit: a reduce-only MARKET order (`exit()`, `reduce()`).
+pub(super) fn is_exit(request: &OrderRequest) -> bool {
+    request.reduce_only && request.order_type == OrderType::Market
 }
 
 impl Engine {
@@ -175,14 +270,30 @@ impl Engine {
     }
 
     /// Refuse, in an external session, a modification the venue cannot carry: an order
-    /// that has partly filled.
+    /// that has partly filled, one whose last modification is not answered yet, and an
+    /// exit not sent yet.
     ///
-    /// Errors: `NotBuilt` for a partly filled order.
+    /// Errors: `NotBuilt` for a partly filled order; `Exec(InvalidRequest)` for the others.
     pub(super) fn check_venue_replacement(&self, order: &Order) -> Result<(), KernelError> {
-        if self.is_external() && order.filled_units > 0.0 {
+        if !self.is_external() {
+            return Ok(());
+        }
+        if order.filled_units > 0.0 {
             return Err(not_built(
                 "modifying a partly filled order in a live session",
                 "cancel the order and place a new one for the rest",
+            ));
+        }
+        if self.venue.modifying.iter().any(|(id, _)| *id == order.id) {
+            return Err(invalid(
+                "the order's last modification waits for the venue's answer: modify it again \
+                 once the venue has confirmed or refused it",
+            ));
+        }
+        if self.is_unsent(order.id) {
+            return Err(invalid(
+                "the exit waits for the orders it cancels and has not been sent: cancel it and \
+                 exit again instead",
             ));
         }
         Ok(())
@@ -194,137 +305,39 @@ impl Engine {
     /// Errors: `Exec(InvalidRequest)` saying to cancel the order instead.
     pub(super) fn check_replacement_units(&self, units: f64) -> Result<(), KernelError> {
         if self.is_external() && units <= 0.0 {
-            return Err(KernelError::Exec(ExecError::InvalidRequest {
-                reason: "the replacement has nothing left to reduce: cancel the order instead"
-                    .to_string(),
-            }));
+            return Err(invalid(
+                "the replacement has nothing left to reduce: cancel the order instead",
+            ));
         }
         Ok(())
     }
 
-    /// The units an order is sent with: in a backtest `units` as resolved; in an external
-    /// session an order that only reduces gets the units it reduces now (module docs).
-    /// `replacing` is the order a modification replaces, which covers nothing of the
-    /// position once replaced.
-    pub(super) fn venue_units(
-        &self,
-        request: &OrderRequest,
-        units: f64,
-        replacing: Option<OrderId>,
-    ) -> f64 {
-        if !self.is_external() || !request.reduce_only {
-            return units;
-        }
-        let key = PositionKey {
-            instrument: request.instrument,
-            product: request.product,
-        };
-        let held = self.held_units(key);
-        let reduces = held != 0.0 && (held > 0.0) != (request.side == Side::Buy);
-        if !reduces {
-            return 0.0;
-        }
-        let wanted = match request.quantity {
-            QuantitySpec::PositionFraction(fraction) => {
-                let lot = self
-                    .instruments
-                    .get(request.instrument.index())
-                    .map_or(1, |spec| spec.lot_size_units);
-                round_down_to_venue(held.abs() * fraction, lot, false)
-            }
-            _ => units,
-        };
-        let open = held.abs() - self.units_closing(key, held, replacing).min(held.abs());
-        wanted.min(open)
+    /// True for a strategy's exit that waits for the orders it cancels: not sent yet.
+    pub(super) fn is_unsent(&self, id: OrderId) -> bool {
+        self.venue
+            .exits
+            .iter()
+            .any(|owner| owner.by == ExitBy::Strategy(id) && owner.sent.is_empty())
     }
 
-    /// Units of the working orders on `key` on the other side of a position of `held`
-    /// signed units, `except` one: what they would close if they filled.
-    pub(super) fn units_closing(
-        &self,
-        key: PositionKey,
-        held: f64,
-        except: Option<OrderId>,
-    ) -> f64 {
-        let closing_side = if held > 0.0 { Side::Sell } else { Side::Buy };
-        self.book
-            .working()
-            .filter(|order| {
-                Some(order.id) != except
-                    && order.request.instrument == key.instrument
-                    && order.request.product == key.product
-                    && order.request.side == closing_side
-            })
-            .map(|order| order.quantity_units - order.filled_units)
-            .sum()
+    /// The exit owner of `key`, if it has one.
+    pub(super) fn exit_owner(&self, key: PositionKey) -> Option<&ExitOwner> {
+        self.venue.exits.iter().find(|owner| owner.key == key)
     }
 
-    /// In an external session, after an order has passed the submission checks: send it,
-    /// or end it `Canceled` when it has no units left to reduce. A backtest sends nothing.
-    ///
-    /// Errors: those of `fills::end_order`.
-    pub(super) fn send_order(&mut self, stamp: EventStamp, id: OrderId) -> Result<(), KernelError> {
-        if !self.is_external() {
-            return Ok(());
-        }
-        let order = self.book.get(id).ok_or(KernelError::UnknownOrder(id))?;
-        if order.quantity_units <= 0.0 {
-            let kind = OrderEventKind::Canceled;
-            return self.end_order(stamp, id, OrderAction::Cancel, kind);
-        }
-        let command = VenueCommand::Place {
-            order: id,
-            instrument: order.request.instrument,
-            product: order.request.product,
-            side: order.request.side,
-            units: order.quantity_units,
-            order_type: order.request.order_type,
-        };
-        self.venue.commands.push(command);
-        Ok(())
-    }
-
-    /// In an external session, after a modification: send the replacement.
-    pub(super) fn send_modify(&mut self, id: OrderId) {
-        if !self.is_external() {
-            return;
-        }
-        if let Some(order) = self.book.get(id) {
-            let command = VenueCommand::Modify {
-                order: id,
-                units: order.quantity_units,
-                order_type: order.request.order_type,
-            };
-            self.venue.commands.push(command);
-        }
-    }
-
-    /// Withdraw a working order: a backtest ends it `Canceled` now; an external session
-    /// sends `Cancel` once and leaves the order working until the venue confirms it.
-    /// Returns the order's state afterwards.
-    ///
-    /// Errors: those of `fills::end_order`.
-    pub(super) fn withdraw_order(
-        &mut self,
-        stamp: EventStamp,
-        id: OrderId,
-    ) -> Result<OrderStatus, KernelError> {
-        if !self.is_external() {
-            self.end_order(stamp, id, OrderAction::Cancel, OrderEventKind::Canceled)?;
-            return Ok(OrderStatus::Canceled);
-        }
-        let status = self
-            .book
-            .get(id)
-            .ok_or(KernelError::UnknownOrder(id))?
-            .status;
+    /// Forget what the venue was asked about orders that have ended, and the exit owners
+    /// whose orders have all ended.
+    pub(super) fn tidy_venue(&mut self) {
         let book = &self.book;
-        let cancelling = &mut self.venue.cancelling;
-        cancelling.retain(|asked| book.get(*asked).is_some_and(|o| o.status.is_working()));
-        if status.is_working() && !cancelling.contains(&id) {
-            cancelling.push(id);
-            self.venue.commands.push(VenueCommand::Cancel { order: id });
-        }
-        Ok(status)
+        let works = |id: &OrderId| book.get(*id).is_some_and(|o| o.status.is_working());
+        self.venue.cancelling.retain(works);
+        self.venue.modifying.retain(|(id, _)| works(id));
+        self.venue.exits.retain(|owner| {
+            let own = match owner.by {
+                ExitBy::Strategy(id) => works(&id),
+                ExitBy::Engine(_) => true,
+            };
+            own && (owner.sent.is_empty() || owner.sent.iter().any(works))
+        });
     }
 }
