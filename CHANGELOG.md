@@ -131,6 +131,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the broker login only for the failures a login can fix (a refused API key, no funds or
   no quote), failing at once when OpenAlgo cannot be reached; the journal's wait for a
   lock is set by `busy_timeout_s`.
+- The live session's building blocks (private): its clients, each with its own timeout;
+  an inbox and a feed link that take ticks and order updates from the WebSocket without
+  ever blocking it and tell a feed outage from a quiet symbol; a strategy's live series,
+  whose bars, views and indicators equal a backtest's at every decision; and a data
+  worker that reads quotes and broker candles on its own thread under the server's rate
+  limits.
 
 ## [2.2.1] - 2026-11-15
 

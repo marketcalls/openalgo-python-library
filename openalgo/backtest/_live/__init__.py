@@ -20,6 +20,8 @@ attribute of its parent, which would replace the `bt.live` function.
 | `_shared_alerts` | One `AlertsLike` shared by every thread of a session |
 | `inbox` | The messages workers and the feed pass to the loop, and the inbox that carries them |
 | `feedlink` | The feed link: connect, subscribe, queue ticks and order updates, outages |
+| `series` | A strategy's live series: base bars that grow by the slice, stores, views, indicators |
+| `data_worker` | Quotes and broker candles read on their own thread, under the server's limits |
 
 Times are UTC nanoseconds, prices rupees and quantities units, never lots. No module
 prints: they log to the `openalgo.backtest.live` logger, and a session's own output goes
