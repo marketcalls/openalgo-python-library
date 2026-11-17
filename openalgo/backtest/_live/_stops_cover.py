@@ -4,8 +4,9 @@ leg's position held more units than its confirmed broker-held stop covered, and 
 A window opens at the receive time of the news that left units uncovered and closes at
 the receive time of the word that covers them, or of the leg going flat. A change of
 reason closes the window and opens the next at the same instant, so each window has one
-reason (`REASONS`). The windows are the result's `unprotected` table, and their seconds
-the summary's `unprotected_seconds` (a window still open counts up to the moment asked).
+reason (`REASONS`, `reason_of`). The windows are the result's `unprotected` table, and
+their seconds the summary's `unprotected_seconds` (a window still open counts up to the
+moment asked).
 
 Times are UTC nanoseconds, quantities whole units. Used by the loop only.
 """
@@ -15,6 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from .._layout import NANOS_PER_SECOND
+from ._order_state import ENTRY_PURPOSES
+from ._stops_orders import LegOrders, Sent
 
 #: Why a leg is unprotected (the result's `unprotected` reasons).
 STOP_UNCONFIRMED = "stop unconfirmed"
@@ -55,6 +58,30 @@ class Unprotected:
         """The window's length in seconds, up to `now_ns` while it lasts."""
         end = now_ns if self.to_ns is None else self.to_ns
         return max(0, end - self.from_ns) / NANOS_PER_SECOND
+
+
+def reason_of(leg: LegOrders, *, held_cancel: bool, retries: bool) -> str:
+    """Why `leg`'s units are uncovered (one of `REASONS`): an order of it ambiguous in the
+    order book, its stop's cancel held for the trade book (`held_cancel`), an add whose
+    answer was lost, its stop held back or unanswered, an exit the exit owner retries
+    (`retries`), an exit working or the stop's cancel sent for one, else its stop not
+    confirmed yet or ended."""
+    live = [w for w in leg.orders.values() if w.state is not Sent.ENDED]
+    if any(w.state is Sent.AMBIGUOUS and w.purpose not in ENTRY_PURPOSES for w in live):
+        return AMBIGUOUS_ORDER
+    stop = leg.orders.get(leg.stop) if leg.stop is not None else None
+    if held_cancel:
+        return HELD_CANCEL
+    if leg.unbound_add_units:
+        return UNBOUND_ADD
+    if stop is not None and (stop.state in (Sent.HELD, Sent.UNANSWERED) or stop.modify_held):
+        return STOP_HELD
+    if retries:
+        return EXIT_RETRIES
+    if leg.exits() or (stop is not None and stop.cancel_sent):
+        # A stop's cancel is sent only for an exit of the position (R4).
+        return EXITING
+    return STOP_ENDED if stop is None else STOP_UNCONFIRMED
 
 
 class Windows:
@@ -113,4 +140,5 @@ __all__ = [
     "UNBOUND_ADD",
     "Unprotected",
     "Windows",
+    "reason_of",
 ]

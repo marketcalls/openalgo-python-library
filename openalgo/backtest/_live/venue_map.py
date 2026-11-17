@@ -17,7 +17,8 @@ the one kernel call it calls for.
   terminal news. Later answers of the same request change nothing.
 - **Cancels.** An accepted cancel changes nothing in the kernel: the CANCELLED news ends
   the order, since a fill may come first. A cancel the row shows still working is
-  `apply_cancel_refused`, after which the session sends it again (4.5).
+  `apply_cancel_refused`, after which the session sends it again (4.5); so is one the
+  exit guard held and withdraws, never sent (`withdraw_cancel`).
 - **Fills** go through each order's `FillLedger`, the one door (`news`).
 
 The kernel is always waiting when these run (2.5), so a refusal of "order_ended" or
@@ -273,6 +274,18 @@ class VenueMap(RestoredOrders):
         if self._answer(self._engine.apply_cancel_refused, request.kernel_order):
             return Handled(Applied.CANCEL_REFUSED)
         return Handled(Applied.NOTHING)
+
+    def withdraw_cancel(self, request: CancelRequest) -> bool:
+        """A cancel this map made that the session will never send (the exit guard held it
+        and withdraws it: 16-session-design 3.3 step 5 "As built", round 7): it waits for
+        no answer, and the kernel takes it as refused (`apply_cancel_refused`), so the
+        order works on and the kernel may fit it to the position. True when the kernel
+        took it. Raises LiveError for an order this map did not place."""
+        self._issued.pop(request.request_id, None)
+        order = self._order(request.kernel_order)
+        if order.cancel is not None and order.cancel.request_id == request.request_id:
+            order.cancel = None
+        return self._answer(self._engine.apply_cancel_refused, request.kernel_order)
 
     def resolved(self, resolution: Resolution) -> Handled:
         """Take an unbound placement the order book settled (2.5 A.6): BOUND binds it (the

@@ -17,7 +17,7 @@ agrees (`close`), the guard holds back from the order worker:
   reconciler's own cancel of the stop (the broker on the other side) goes
   (`allow_cancel`).
 
-One ERROR alert per held order says so.
+One ERROR alert per held order says so (`_reconcile_held`).
 
 **Awaiting a read** (`await_read`): the safe stop's flatten and each square-off ask for a
 book read first, since a sale by hand after the last read is not known yet (and so does a
@@ -45,20 +45,25 @@ that keeps or lowers the units, and any other cancel, always go: they never add
 exposure. A held order is not at the broker, so it does not keep its leg in flight
 (`held_orders`, `held_cancels`).
 
-**A sale by hand adopted** (`adopted`, 3.3 step 5 "As built"): the stop is fitted to what
-is left at once. A held cancel of an order that may still fill more units at the broker,
-by the terms the broker confirmed, than the engine holds once the reconciler adopted the
-sale goes at once, before and after the end (`allow_cancel`): with nothing left the stop
-is cancelled; with some left it is cancelled too, and before the last lines protect by
-state places a stop for what is left (after them nothing new is sent, and the note says
-the leg has no stop at the broker). A stop whose cancel was not held is cut by the
-kernel's own fit (a modify that only lowers its units).
+**A sale by hand adopted** (`adopted`, `withdraw_for_cut`, 3.3 step 5 "As built"): the
+stop is fitted to what is left at once. A held cancel of an order that may still fill
+more units at the broker, by the terms the broker confirmed, than the engine holds once
+the reconciler adopted the sale goes at once (`allow_cancel`): with nothing left the stop
+is cancelled; with some left before the last lines it is cancelled too, and protect by
+state places a stop for what is left. After the last lines, with some left, the held
+cancel of the stop is withdrawn instead, never sent (lead, round 7): the venue map tells
+the kernel it was refused (`VenueMap.withdraw_cancel`), so the kernel's fit with the
+adoption cuts the stop to what is left by a modify that only lowers its units, which the
+guard admits, and the units left keep a stop; the exit that asked for the cancel waits in
+the engine and is never sent. A stop whose cancel was not held is cut by the kernel's own
+fit too.
 
 **At the close** (`end`): once the session has printed its last lines, it sends nothing
 they did not name. Nothing held goes to the worker, whatever the close's final read shows,
-but the cancel a sale by hand frees (`adopted`): the lines and alerts have named each held
-order as not sent, and an operator may already be closing the position by hand as they
-say. Every new order request is held too (an exit, a stop placed again, a trail, an
+but the cancel a sale by hand of all the position frees (`adopted`; with units left it is
+withdrawn for the stop's cut, `withdraw_for_cut`): the lines and alerts have named each
+held order as not sent, and an operator may already be closing the position by hand as
+they say. Every new order request is held too (an exit, a stop placed again, a trail, an
 entry, the cancel of an exit or of the stop of a position), but what only takes exposure
 away, the wider set the lead ratified on 2026-11-17 (16-session-design 3.3 step 5 "As
 built", round 4): the reconciler's own cancel of a stop on the other side
@@ -79,6 +84,7 @@ from typing import Any
 
 from .._engine import call
 from ._order_state import ENTRY_PURPOSES
+from ._reconcile_held import held_words
 from ._reconcile_rules import exit_room
 from ._session_exits import EXIT_PURPOSES
 from ._types import LOGGER_NAME, AlertKind, OrderIntent, Purpose
@@ -172,10 +178,37 @@ class ExitGuard:
             self._held[name] = [request for request in held if request not in cancels]
             self._session.hand_over(cancels)
 
+    def withdraw_for_cut(self, name: str, left_units: int) -> bool:
+        """Before the reconciler adopts a sale by hand that leaves strategy `name`'s leg
+        `left_units` (signed): after the end, with units left, each held cancel of the
+        leg's stop that may still fill more than that is withdrawn, never sent, so the
+        kernel's fit with the adoption cuts the stop (module docstring, "A sale by hand
+        adopted"). True when one was withdrawn."""
+        if not self._ended or left_units == 0:
+            return False
+        trader = self._session.trader_named(name)
+        held = self._held.get(name, [])
+        withdrawn = [
+            request
+            for request in held
+            if isinstance(request, CancelRequest)
+            and request.intent.purpose is Purpose.STOP
+            and _left_to_fill(trader, request.kernel_order) > abs(left_units)
+        ]
+        self._held[name] = [request for request in held if request not in withdrawn]
+        for request in withdrawn:
+            trader.venue.withdraw_cancel(request)
+            self._session.event(
+                "cancel_withdrawn", strategy=name, kernel_order=request.kernel_order
+            )
+        return bool(withdrawn)
+
     def adopted(self, name: str) -> bool:
         """The reconciler adopted a sale by hand on strategy `name`'s leg: each held cancel
         of an order larger than what the engine holds now goes at once, before and after
-        the end (module docstring, "A sale by hand adopted"). True when one went."""
+        the end; after the end with units left, the stop's was withdrawn before the
+        adoption (`withdraw_for_cut`). Module docstring, "A sale by hand adopted". True
+        when one went."""
         held = self.held_cancels(name)
         if not held:
             return False
@@ -282,7 +315,7 @@ class ExitGuard:
         if key in self._alerted or self._ended:
             return
         self._alerted.add(key)
-        self._session.alert(AlertKind.ERROR, _held_words(request, self._broker[intent.strategy]))
+        self._session.alert(AlertKind.ERROR, held_words(request, self._broker[intent.strategy]))
 
     def _release(self, name: str) -> None:
         """The leg is neither guarded nor awaiting a read: each held request that fits goes
@@ -333,43 +366,19 @@ def _outgrown(trader: Any, kernel_order: int) -> bool:
     """Whether order `kernel_order` may still fill more units at the broker, by the terms
     the broker confirmed, than the engine's position holds (a trigger of such a stop
     would take the broker's position through zero)."""
+    return _left_to_fill(trader, kernel_order) > abs(round(trader.open_units()))
+
+
+def _left_to_fill(trader: Any, kernel_order: int) -> int:
+    """The units order `kernel_order` may still fill at the broker, by the terms the
+    broker confirmed."""
     venue = trader.venue
-    left = venue.terms(kernel_order).quantity - venue.filled(kernel_order)
-    return left > abs(round(trader.open_units()))
+    return venue.terms(kernel_order).quantity - venue.filled(kernel_order)
 
 
 def _against(action: str, engine_units: int) -> bool:
     """Whether an order on `action`'s side reduces the engine's position (signed units)."""
     return (engine_units > 0 and action == "SELL") or (engine_units < 0 and action == "BUY")
-
-
-def _held_words(request: Any, broker_units: int) -> str:
-    """The ERROR alert of a held order of a guarded leg."""
-    intent = request.intent
-    leg = f"{intent.symbol} {intent.exchange} ({intent.action} {intent.quantity})"
-    book = f"OpenAlgo's position book shows {broker_units} units"
-    if isinstance(request, CancelRequest):
-        # Neither is promised once the books agree: protect by state keeps the cancel of a
-        # stop that still fits and asks for no exit, and after the session's last lines
-        # only an adoption's cancel goes (module docstring).
-        return (
-            f"{intent.strategy}: the cancel of the stop of {leg} is held back, so the stop "
-            f"stays at the broker: {book}, and the exit it makes way for would take the "
-            "broker's position through zero. Both wait for the books to agree, and go only "
-            "if the session still asks for them then; check the position in OpenAlgo"
-        )
-    if intent.purpose in ENTRY_PURPOSES:
-        return (
-            f"{intent.strategy}: the entry of {leg} is held back: {book}, and it would close "
-            "more than the broker holds. It is sent once the books agree, unless entries "
-            "are locked by then; check the position in OpenAlgo"
-        )
-    what = "stop" if intent.purpose is Purpose.STOP else intent.purpose.value.replace("_", " ")
-    return (
-        f"{intent.strategy}: the {what} of {leg} is held back: {book}, and it would take "
-        "the broker's position through zero. It is sent once the books agree; check the "
-        "position in OpenAlgo"
-    )
 
 
 __all__ = ["CLOSING", "ExitGuard"]

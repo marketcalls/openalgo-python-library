@@ -40,7 +40,8 @@ BEFORE_NS, AFTER_NS = 900, 1_100
 
 class Trader:
     """One strategy's engine as the guard sees it; its stop's terms at the broker are
-    `stop_units` units of an SL-M at 497.00, none filled."""
+    `stop_units` units of an SL-M at 497.00, none filled; `withdrawn` the cancels its venue
+    map was told were withdrawn, never sent."""
 
     name = "S"
 
@@ -49,12 +50,18 @@ class Trader:
         self.stop_units = ENGINE_UNITS
         self.orders = {STOP, EXIT, ENTRY}
         self.locks: list[str] = []
+        self.withdrawn: list[CancelRequest] = []
         self.engine = SimpleNamespace(entry_locks=lambda: list(self.locks))
         self.venue = SimpleNamespace(
             changing=lambda kernel_order: False,
             terms=lambda kernel_order: OrderTerms(self.stop_units, "SL-M", trigger_price=497.0),
             filled=lambda kernel_order: 0,
+            withdraw_cancel=self.withdraw_cancel,
         )
+
+    def withdraw_cancel(self, request: CancelRequest) -> bool:
+        self.withdrawn.append(request)
+        return True
 
     def open_units(self) -> float:
         return float(self.units)
@@ -262,8 +269,11 @@ def test_the_held_cancel_of_a_stop_larger_than_the_position_goes_under_protect_b
 # ----- a sale by hand adopted --------------------------------------------------------------
 
 
-@pytest.mark.parametrize("ended", [False, True], ids=["before the end", "after the end"])
-@pytest.mark.parametrize("engine_units", [0, BROKER_UNITS], ids=["nothing left", "4 left"])
+@pytest.mark.parametrize(
+    ("ended", "engine_units"),
+    [(False, 0), (False, BROKER_UNITS), (True, 0)],
+    ids=["before the end, nothing left", "before the end, 4 left", "after the end, nothing left"],
+)
 def test_an_adoption_sends_the_held_cancel_of_a_stop_larger_than_what_is_left(
     guarded, ended, engine_units
 ):
@@ -271,9 +281,36 @@ def test_an_adoption_sends_the_held_cancel_of_a_stop_larger_than_what_is_left(
     if ended:
         guarded.guard.end()
     guarded.trader.units = engine_units
+    assert guarded.guard.withdraw_for_cut("S", engine_units) is False
     sent = guarded.guard.adopted("S")
     assert (sent, guarded.handed) == (True, [cancel_of_stop()])
     assert guarded.guard.held_cancels("S") == frozenset()
+
+
+def test_after_the_end_an_adoption_that_leaves_units_withdraws_the_held_cancel_for_a_cut(guarded):
+    # The cancel is never sent: the venue map tells the kernel it was refused, so the
+    # kernel's fit with the adoption cuts the stop to the 4 units left.
+    guarded.hand_over([cancel_of_stop()])
+    guarded.guard.end()
+    assert guarded.guard.withdraw_for_cut("S", BROKER_UNITS) is True
+    assert (guarded.handed, guarded.trader.withdrawn) == ([], [cancel_of_stop()])
+    assert guarded.guard.held_cancels("S") == frozenset()
+    guarded.trader.units = BROKER_UNITS
+    assert guarded.guard.adopted("S") is False
+
+
+def test_after_the_end_the_stops_cut_to_what_is_left_goes(guarded):
+    guarded.guard.end()
+    guarded.hand_over([stop_modified(BROKER_UNITS)])
+    assert guarded.handed == [stop_modified(BROKER_UNITS)]
+
+
+def test_after_the_end_a_held_cancel_of_a_stop_that_still_fits_is_not_withdrawn(guarded):
+    guarded.hand_over([cancel_of_stop()])
+    guarded.guard.end()
+    guarded.trader.stop_units = BROKER_UNITS
+    assert guarded.guard.withdraw_for_cut("S", BROKER_UNITS) is False
+    assert (guarded.trader.withdrawn, guarded.guard.held_cancels("S")) == ([], frozenset({STOP}))
 
 
 def test_an_adoption_keeps_the_held_cancel_of_a_stop_that_still_fits(guarded):

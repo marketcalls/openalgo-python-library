@@ -28,7 +28,8 @@ The loop calls the hooks as it takes each message, `duties` in its step D, and `
 after the commands are handed over (E), so a window opens at the receive time of the
 news that left units uncovered. Nothing is done once the mode guard has locked: nothing
 can be sent. Once the close has printed its last lines no price is taken and no duty
-runs, and a word that ends a leg's stop is noted for the result (`after`, 3.3 step 5).
+runs, and a word that ends a leg's stop, and the cut of a stop and its refusal, are
+noted for the result (`after`, 3.3 step 5).
 Times are UTC nanoseconds, prices rupees, quantities units.
 """
 
@@ -41,22 +42,11 @@ from typing import Any
 from ._fill_ledger import FillResult
 from ._order_answers import Outcome
 from ._order_book import Resolution, Resolved
-from ._order_state import ENTRY_PURPOSES
 from ._session_trader import Trader
 from ._stops_after import AfterLines
 from ._stops_bare import BareLegs
 from ._stops_cancels import CancelRetries
-from ._stops_cover import (
-    AMBIGUOUS_ORDER,
-    EXIT_RETRIES,
-    EXITING,
-    HELD_CANCEL,
-    STOP_ENDED,
-    STOP_HELD,
-    STOP_UNCONFIRMED,
-    UNBOUND_ADD,
-    Windows,
-)
+from ._stops_cover import Windows, reason_of
 from ._stops_deadline import UNPROTECTED, UNPROTECTED_EXIT_AFTER_S, Deadlines
 from ._stops_held import HeldWords
 from ._stops_kernel import cancelling, push_price
@@ -123,6 +113,7 @@ class StopsSupervisor:
             if isinstance(request, PlaceRequest | ModifyRequest | CancelRequest):
                 self._requests[request.request_id] = request
                 self._legs.setdefault(request.intent.strategy, LegOrders()).handed(request)
+                self.after.handed(request)
 
     def updated(self, trader: Trader, update: OrderUpdate, result: FillResult) -> None:
         """An order word the kernel was given, with what it did."""
@@ -272,7 +263,11 @@ class StopsSupervisor:
                 self._warn_unguarded(trader, units)
             else:
                 uncovered = units + leg.unbound_add_units - self.covered(trader)
-                opened = self.windows.note(key, uncovered, self._reason(trader, leg), span)
+                stop = leg.orders.get(leg.stop) if leg.stop is not None else None
+                held = stop is not None and self.held.held_cancel(trader, stop.kernel_order)
+                retries = self._session.exits.owns(trader.name)
+                reason = reason_of(leg, held_cancel=held, retries=retries)
+                opened = self.windows.note(key, uncovered, reason, span)
                 if opened is not None:
                     self._session.event(
                         "unprotected",
@@ -323,24 +318,6 @@ class StopsSupervisor:
         span = (at_ns, at_ns) if known is None else (min(known[0], at_ns), max(known[1], at_ns))
         self._changed[trader.name] = span
 
-    def _reason(self, trader: Trader, leg: LegOrders) -> str:
-        live = [w for w in leg.orders.values() if w.state is not Sent.ENDED]
-        if any(w.state is Sent.AMBIGUOUS and w.purpose not in ENTRY_PURPOSES for w in live):
-            return AMBIGUOUS_ORDER
-        stop = leg.orders.get(leg.stop) if leg.stop is not None else None
-        if stop is not None and self.held.held_cancel(trader, stop.kernel_order):
-            return HELD_CANCEL
-        if leg.unbound_add_units:
-            return UNBOUND_ADD
-        if stop is not None and (stop.state in (Sent.HELD, Sent.UNANSWERED) or stop.modify_held):
-            return STOP_HELD
-        if self._session.exits.owns(trader.name):
-            return EXIT_RETRIES
-        if leg.exits() or (stop is not None and stop.cancel_sent):
-            # A stop's cancel is sent only for an exit of the position (R4).
-            return EXITING
-        return STOP_ENDED if stop is None else STOP_UNCONFIRMED
-
     def _limit_exit(
         self, trader: Trader, intent: OrderIntent, kernel_order: int, now_ns: int
     ) -> None:
@@ -360,6 +337,7 @@ class StopsSupervisor:
             )
 
     def _modify_refused(self, trader: Trader, request: ModifyRequest) -> None:
+        self.after.refused(request)
         if request.terms.price_type == "LIMIT" and self.prices.watching(
             trader, request.kernel_order
         ):

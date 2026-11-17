@@ -15,12 +15,13 @@ locked for the rest of the session ("reconciliation") and a RECONCILE_MISMATCH a
 naming the leg, both figures and the orders, then only what can never open or add
 exposure: an explained difference adopted (`apply_external_fill` at the other orders'
 price, the kernel fitting the leg's stop to the adopted units in the same call, and a
-cancel of it the exit guard held sent when the stop is larger than what is left:
-16-session-design 3.3 step 5 "As built"), the leg's own stop cancelled when the broker
-holds the other side, the session's own orphan cancelled. Never an exit, never the kill
-switch. A finding on a leg in flight past the in-flight limit is alerted, with nothing
-done; so is a restart's difference whose journal units the restored engine no longer
-holds (`stale`), with entries locked.
+cancel of it the exit guard held sent when the stop is larger than what is left, or,
+after the session's last lines with units left, withdrawn first so that the fit cuts the
+stop instead: 16-session-design 3.3 step 5 "As built", round 7), the leg's own stop
+cancelled when the broker holds the other side, the session's own orphan cancelled.
+Never an exit, never the kill switch. A finding on a leg in flight past the in-flight
+limit is alerted, with nothing done; so is a restart's difference whose journal units
+the restored engine no longer holds (`stale`), with entries locked.
 
 Quantities are signed units, prices rupees, times UTC nanoseconds. Used by the loop only.
 """
@@ -226,6 +227,9 @@ class Corrections:
         session = self._session
         try:
             price = adoption_price(books.external(own), units, side)
+            # After the last lines a held cancel of the stop is withdrawn before the fill,
+            # so the kernel's fit with it cuts the stop to what is left (module docstring).
+            session.reconcile.guard.withdraw_for_cut(trader.name, broker)
             call(
                 trader.engine.apply_external_fill,
                 INSTRUMENT,

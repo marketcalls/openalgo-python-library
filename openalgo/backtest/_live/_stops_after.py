@@ -12,7 +12,11 @@ A word in that window that ends a leg's stop (filled, cancelled or rejected at t
 broker) is therefore not acted on: what the engine makes of it (the stop placed again, an
 exit at market) is not sent. It is noted (`heard`), and so is a leg whose units changed
 in that window (a fill whose answer came then, a sale by hand the reconciler adopted), as
-the engine held them when the lines were printed (`end`). The result's note of a position
+the engine held them when the lines were printed (`end`). So is the cut of a leg's stop to
+what a sale by hand adopted then leaves (a modify that only lowers its units, `handed`):
+until the broker confirmed it no note says the stop protects the leg, and one the broker
+refused (`refused`), or that had no answer when the session closed, is named. The result's
+note of a position
 left open first says what happened, then the leg's state as `_stops_report.left_open`
 gives it (`note`), and one ERROR alert per leg says the same (`alert`): the last line is
 never left claiming a position or a protection the leg no longer has.
@@ -46,7 +50,7 @@ from ._reconcile_findings import Sighting
 from ._session_trader import Trader
 from ._stops_orders import LegOrders
 from ._stops_report import left_open, leg_words, still_working
-from ._types import AlertKind, OrderStatus, OrderUpdate
+from ._types import AlertKind, OrderStatus, OrderUpdate, Purpose
 from ._venue_requests import CancelRequest, ModifyRequest
 
 #: How a note says a stop ended, by the status of its last word.
@@ -72,6 +76,11 @@ DIFFERS = (
 )
 #: When it happened, in a note's words.
 _AFTER_THE_LINES = "after the session's last lines"
+#: What became of a stop's cut the broker did not confirm, in a note's words: refused as
+#: the venue map takes a modify to be (an error answer, a request not sent, a row with the
+#: old terms), or no answer by the close.
+_CUT_REFUSED = "was refused"
+_CUT_UNANSWERED = "got no answer before the session closed"
 
 
 class AfterLines:
@@ -84,6 +93,10 @@ class AfterLines:
         self._units: dict[str, float] = {}
         # By strategy: its stop's name and how it ended after them.
         self._stops: dict[str, tuple[str, OrderStatus]] = {}
+        # By strategy: the last cut of its stop handed over after them, and the
+        # strategies one of whose cuts was refused.
+        self._cuts: dict[str, ModifyRequest] = {}
+        self._refused: set[str] = set()
 
     @property
     def ended(self) -> bool:
@@ -103,6 +116,26 @@ class AfterLines:
             return False
         self._stops[trader.name] = (leg.orders[kernel_order].name(), update.status)
         return True
+
+    def handed(self, request: Any) -> None:
+        """A request handed to the order worker: after the last lines, a modify of a stop
+        that lowers its units is that stop's cut, noted (module docstring)."""
+        cut = (
+            self._ended
+            and isinstance(request, ModifyRequest)
+            and request.intent.purpose is Purpose.STOP
+            and request.terms.quantity < request.replaces.quantity
+        )
+        if cut:
+            self._cuts[request.intent.strategy] = request
+
+    def refused(self, request: Any) -> None:
+        """A modify the broker or OpenAlgo refused, or that was not sent: when it is a
+        stop's cut, the cut is named as refused."""
+        name = request.intent.strategy
+        known = self._cuts.get(name)
+        if known is not None and known.request_id == request.request_id:
+            self._refused.add(name)
 
     def note(self, session: Any, trader: Trader) -> str:
         """The note of `trader`'s position left open: what happened to the leg after the
@@ -152,17 +185,27 @@ class AfterLines:
 
     def _happened(self, trader: Trader) -> list[str]:
         """What happened to the leg after the last lines, in a note's words: its units
-        changed (but by its stop's own fill, which says it), its stop ended, or both."""
+        changed (but by its stop's own fill, which says it), its stop ended, or both; then
+        a cut of its stop the broker did not confirm."""
         now = trader.open_units()
         before = self._units.get(trader.name, now)
         stop = self._stops.get(trader.name)
         if stop is None:
-            return [] if before == now else [_moved(before, now)]
+            return ([] if before == now else [_moved(before, now)]) + self._cut(trader)
         name, status = stop
         ended = f"its stop {name} {_ENDED_WORDS[status]} at the broker"
         if before == now or status is OrderStatus.COMPLETE:
-            return [f"{ended} {_AFTER_THE_LINES}"]
-        return [f"{_moved(before, now)}, and {ended}"]
+            return [f"{ended} {_AFTER_THE_LINES}", *self._cut(trader)]
+        return [f"{_moved(before, now)}, and {ended}", *self._cut(trader)]
+
+    def _cut(self, trader: Trader) -> list[str]:
+        """The cut of the leg's stop after the last lines, in a note's words, unless the
+        broker confirmed it (the terms the venue map holds are the cut's)."""
+        cut = self._cuts.get(trader.name)
+        if cut is None or trader.venue.terms(cut.kernel_order).quantity == cut.terms.quantity:
+            return []
+        how = _CUT_REFUSED if trader.name in self._refused else _CUT_UNANSWERED
+        return [f"the cut of its stop {cut.order_id} to {cut.terms.quantity} units {how}"]
 
 
 def differs_words(seen: Sighting) -> str:
