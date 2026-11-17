@@ -183,6 +183,7 @@
 //! | `signals` | Condition and array strategies: the Rust driver of 14-strategy-api 4.1 over the stepping API |
 //! | `event` | `Event`, `EventStamp`, `Step` |
 //! | `excursion` | A trade's MAE and MFE (the running P&L at the prices it saw) and the slippage of a fill |
+//! | `excursion_hold` | What holds a live trade's MAE and MFE back: the closing orders the venue may have filled unreported |
 //! | `output` | `RunOutput` and its tables |
 //! | `error` | `KernelError` |
 //!
@@ -220,6 +221,7 @@ mod entry_rules;
 pub mod error;
 pub mod event;
 mod excursion;
+mod excursion_hold;
 mod fill_bar;
 mod fills;
 mod futures;

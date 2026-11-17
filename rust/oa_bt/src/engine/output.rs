@@ -191,7 +191,7 @@ pub struct RunOutput {
 }
 
 /// A round trip still open (a live session's saved state carries it, `venue_state`).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) struct OpenTrade {
     pub(super) key: PositionKey,
     pub(super) direction: Side,

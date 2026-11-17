@@ -26,7 +26,8 @@
 //! | a fill at the open (`FillAt::Open`) | the open, before the fill when the trade was open |
 //! | the first fill of the trade inside a slice's bar (`FillAt::Level`) | the open, before the fill when the trade was open |
 //! | every fill (entries, adds, partial and full exits) | its price, before the fill when the trade was open, and after it |
-//! | a tick (`push_tick`, a live session) | its price, held, unless a working order on the trade's closing side could have filled by then |
+//! | a tick (`push_tick`, a live session) | its price, held, unless the trade is held back (`excursion_hold`) |
+//! | a live session's slice | as above, unless the trade is held back (`excursion_hold`) |
 //!
 //! So a trade entered at the next open sees its whole opening slice, and one entered by
 //! a stop or a limit inside a slice only its fill price and the slice's close; an exit at
@@ -37,12 +38,10 @@
 //! a 1-minute base, finer than the strategy's interval).
 //!
 //! A live session hands over a slice's bar after the fills recorded in it, so its fills
-//! see no open, and its ticks carry the prices in between. A venue reports a fill after
-//! the ticks that made it: a tick through a broker-held stop comes while the session
-//! still holds the position the stop has closed. So a tick does not count while an order
-//! on the trade's closing side may have filled at or before its price (`could_have_closed`:
-//! a MARKET exit sent, a limit the price reached, a stop whose trigger it reached or that
-//! has triggered); the fill, once reported, counts at its own price.
+//! see no open, and its ticks carry the prices in between. Its venue reports a fill after
+//! the prices that made it, so the session holds a trade back from the prices that may
+//! have come after one of its closing orders filled (`excursion_hold`). A backtest records
+//! its fills in steps 2 and 3, before the bar is seen in step 5, and holds nothing back.
 //!
 //! # Slippage
 //!
@@ -54,12 +53,13 @@
 //! Slippage is already in the fill price and so in the gross and net P&L: it is shown,
 //! never deducted again.
 
-use crate::exec::{FillAt, InstrumentId, Order, OrderStatus, OrderType};
+use crate::exec::FillAt;
 use crate::model::Side;
 use crate::portfolio::{round_to_paise, Position, PositionKey};
 use crate::rms::BarPrices;
 
 use super::clock::SliceInfo;
+use super::excursion_hold::Hold;
 use super::fills::FillRequest;
 use super::kernel::Engine;
 
@@ -71,7 +71,7 @@ pub(super) struct Holding {
 }
 
 impl Holding {
-    fn of(position: &Position) -> Holding {
+    pub(super) fn of(position: &Position) -> Holding {
         Holding {
             units: position.quantity_units,
             average_rupees: position.average_price_rupees,
@@ -119,13 +119,15 @@ pub(super) fn slippage_cost(
 }
 
 /// The excursion of an open trade so far (module docs): the lowest and highest running
-/// P&L seen, unrounded rupees, and the last slice with a fill of the trade inside its
-/// bar, whose high and low do not count.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// P&L seen, unrounded rupees; the last slice with a fill of the trade inside its bar,
+/// whose high and low do not count; and in a live session what holds it back
+/// (`excursion_hold`).
+#[derive(Clone, Debug, PartialEq)]
 pub(super) struct Excursion {
     pub(super) worst_rupees: f64,
     pub(super) best_rupees: f64,
     pub(super) inside_fill_slice: Option<u32>,
+    pub(super) hold: Hold,
 }
 
 impl Default for Excursion {
@@ -135,6 +137,7 @@ impl Default for Excursion {
             worst_rupees: 0.0,
             best_rupees: 0.0,
             inside_fill_slice: None,
+            hold: Hold::default(),
         }
     }
 }
@@ -216,43 +219,6 @@ pub(super) fn add_slippage(total: Option<f64>, fill: Option<f64>) -> Option<f64>
     Some(total? + fill?)
 }
 
-/// Whether the working `order` may have closed part of a position that is long (`long`)
-/// or short by the time the market traded at `price_rupees` (module docs): an order on
-/// the closing side that is MARKET, a limit the price reached, or a stop whose trigger the
-/// price reached or that has triggered already (a stop-limit is counted as soon as its
-/// trigger is reached, since the price may have passed its limit on the way).
-fn could_have_closed(order: &Order, long: bool, price_rupees: f64) -> bool {
-    let closing_side = if long { Side::Sell } else { Side::Buy };
-    if order.request.side != closing_side {
-        return false;
-    }
-    let triggered = matches!(
-        order.status,
-        OrderStatus::Triggered | OrderStatus::PartiallyFilled
-    );
-    let reached_limit = |limit: f64| {
-        if long {
-            price_rupees >= limit
-        } else {
-            price_rupees <= limit
-        }
-    };
-    let reached_trigger = |trigger: f64| {
-        if long {
-            price_rupees <= trigger
-        } else {
-            price_rupees >= trigger
-        }
-    };
-    match order.request.order_type {
-        OrderType::Market => true,
-        OrderType::Limit { limit_rupees } => reached_limit(limit_rupees),
-        OrderType::StopMarket { trigger_rupees } | OrderType::StopLimit { trigger_rupees, .. } => {
-            triggered || reached_trigger(trigger_rupees)
-        }
-    }
-}
-
 impl Engine {
     /// The position of `key` as it stands (flat when it was never opened).
     pub(super) fn holding(&self, key: PositionKey) -> Holding {
@@ -293,9 +259,12 @@ impl Engine {
     }
 
     /// Step 5: every open trade sees its slice's bar (`Excursion::see_bar`); a trade on
-    /// an instrument with no bar in the slice sees nothing.
+    /// an instrument with no bar in the slice sees nothing, and neither does a live
+    /// session's trade held back (`Hold::held_back`, judged by the prices of the bar its
+    /// ticks did not carry).
     pub(super) fn see_slice_bars(&mut self, slice: &SliceInfo) {
         let index = u32::try_from(slice.index).unwrap_or(u32::MAX);
+        let live = self.is_external();
         for trade in &mut self.record.trades.open {
             let Some(bar) = self.market.bar(trade.key.instrument, slice.index) else {
                 continue;
@@ -303,34 +272,16 @@ impl Engine {
             let Some(position) = self.portfolio.position(trade.key) else {
                 continue;
             };
+            if live {
+                let side = (trade.key, position.quantity_units > 0.0);
+                let hold = &mut trade.excursion.hold;
+                let unseen = hold.beyond_ticks(index, &bar);
+                if hold.held_back(&self.book, side, &unseen) {
+                    continue;
+                }
+            }
             let held = (Holding::of(position), position.multiplier);
             trade.excursion.see_bar(index, &bar, held, trade.gross);
-        }
-    }
-
-    /// A tick of `instrument` at `price_rupees`: every open trade of the instrument sees
-    /// it (`Excursion::see_price`), but one with a working order on its closing side that
-    /// may have filled by then (`could_have_closed`).
-    pub(super) fn see_tick(&mut self, instrument: InstrumentId, price_rupees: f64) {
-        for trade in &mut self.record.trades.open {
-            if trade.key.instrument != instrument {
-                continue;
-            }
-            let Some(position) = self.portfolio.position(trade.key) else {
-                continue;
-            };
-            let (key, long) = (trade.key, position.quantity_units > 0.0);
-            let closing = self.book.working().any(|order| {
-                let request = &order.request;
-                request.instrument == key.instrument
-                    && request.product == key.product
-                    && could_have_closed(order, long, price_rupees)
-            });
-            if closing {
-                continue;
-            }
-            let held = (Holding::of(position), position.multiplier);
-            trade.excursion.see_price(price_rupees, held, trade.gross);
         }
     }
 }
@@ -479,141 +430,6 @@ mod tests {
         };
         seen.see_price(490.0, (left, 1.0), 400.0);
         assert_eq!(seen.rounded(), (-200.0, 0.0));
-    }
-
-    fn working(side: Side, order_type: OrderType, status: OrderStatus) -> Order {
-        use crate::exec::{OrderId, OrderRequest, QuantitySpec};
-        Order {
-            id: OrderId(2),
-            request: OrderRequest {
-                order_type,
-                ..OrderRequest::market(InstrumentId(0), side, QuantitySpec::Units(100.0))
-            },
-            status,
-            decided_at: 0,
-            good_until: 0,
-            quantity_units: 100.0,
-            filled_units: 0.0,
-            average_fill_rupees: 0.0,
-            reject_code: None,
-        }
-    }
-
-    #[test]
-    fn a_tick_is_not_known_with_the_position_once_a_closing_order_may_have_filled() {
-        // A long's sell stop at 497.10, sell target limit at 503.00, a sell MARKET exit,
-        // and a buy (not on the closing side); a short's buy stop at 503.00.
-        let stop = OrderType::StopMarket {
-            trigger_rupees: 497.1,
-        };
-        let stop_limit = OrderType::StopLimit {
-            trigger_rupees: 497.1,
-            limit_rupees: 496.0,
-        };
-        let target = OrderType::Limit {
-            limit_rupees: 503.0,
-        };
-        let short_stop = OrderType::StopMarket {
-            trigger_rupees: 503.0,
-        };
-        let (open, fired) = (OrderStatus::Accepted, OrderStatus::Triggered);
-        let table = [
-            (
-                "stop, tick above it",
-                Side::Sell,
-                stop,
-                open,
-                true,
-                498.0,
-                false,
-            ),
-            (
-                "stop, tick at it",
-                Side::Sell,
-                stop,
-                open,
-                true,
-                497.1,
-                true,
-            ),
-            (
-                "stop, tick through it",
-                Side::Sell,
-                stop,
-                open,
-                true,
-                496.0,
-                true,
-            ),
-            ("stop triggered", Side::Sell, stop, fired, true, 499.0, true),
-            (
-                "stop-limit at its trigger",
-                Side::Sell,
-                stop_limit,
-                open,
-                true,
-                497.0,
-                true,
-            ),
-            (
-                "target not reached",
-                Side::Sell,
-                target,
-                open,
-                true,
-                502.9,
-                false,
-            ),
-            (
-                "target reached",
-                Side::Sell,
-                target,
-                open,
-                true,
-                503.0,
-                true,
-            ),
-            (
-                "market exit sent",
-                Side::Sell,
-                OrderType::Market,
-                open,
-                true,
-                500.0,
-                true,
-            ),
-            (
-                "a buy while long",
-                Side::Buy,
-                OrderType::Market,
-                open,
-                true,
-                500.0,
-                false,
-            ),
-            (
-                "short stop below it",
-                Side::Buy,
-                short_stop,
-                open,
-                false,
-                502.0,
-                false,
-            ),
-            (
-                "short stop through it",
-                Side::Buy,
-                short_stop,
-                open,
-                false,
-                503.5,
-                true,
-            ),
-        ];
-        for (what, side, order_type, status, long, price, closed) in table {
-            let order = working(side, order_type, status);
-            assert_eq!(could_have_closed(&order, long, price), closed, "{what}");
-        }
     }
 
     #[test]

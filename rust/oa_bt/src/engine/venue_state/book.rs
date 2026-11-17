@@ -3,12 +3,14 @@
 //! restart is reported with its entry, its excursion so far and its slippage) and the
 //! session's CNC buys (the sale credit).
 
-use crate::exec::InstrumentId;
+use crate::exec::{InstrumentId, OrderBook, OrderId};
 use crate::portfolio::{Position, PositionKey, SubAccount, Tranche};
 
 use super::super::excursion::Excursion;
+use super::super::excursion_hold::{Hold, SliceTicks};
 use super::super::output::OpenTrade;
 use super::error::LiveStateError;
+use super::orders::Ids;
 use super::requests::{key_fields, read_instrument, read_key, read_side};
 use super::value::{list, map, Read, StateValue};
 
@@ -103,12 +105,59 @@ pub(super) fn read_position(
     })
 }
 
+/// What holds a live trade back (`excursion_hold`): the orders of `book` it waits on
+/// that still work, by id, and the slice of its last ticks with their lowest and highest
+/// price, rupees.
+fn write_hold(book: &OrderBook, hold: &Hold) -> [(&'static str, StateValue); 2] {
+    let works = |id: &&OrderId| {
+        book.get(**id)
+            .is_some_and(|order| order.status.is_working())
+    };
+    let unconfirmed = hold.unconfirmed_closes.iter().filter(works);
+    let ticks = hold.ticks.map_or(StateValue::Null, |ticks| {
+        map([
+            ("slice", ticks.slice.into()),
+            ("low_rupees", ticks.low_rupees.into()),
+            ("high_rupees", ticks.high_rupees.into()),
+        ])
+    });
+    [
+        (
+            "unconfirmed_close_orders",
+            list(unconfirmed, |id| StateValue::from(id.0)),
+        ),
+        ("slice_ticks", ticks),
+    ]
+}
+
+/// The hold `write_hold` wrote, its orders named by their new ids (`ids`). Errors:
+/// `Malformed` for a field missing or unusable, or an order that is not a saved working
+/// order.
+fn read_hold(read: &Read<'_>, ids: &Ids) -> Result<Hold, LiveStateError> {
+    let read_ticks = |ticks: Read<'_>| -> Result<SliceTicks, LiveStateError> {
+        Ok(SliceTicks {
+            slice: ticks.whole_of("slice")?,
+            low_rupees: ticks.f64_of("low_rupees")?,
+            high_rupees: ticks.f64_of("high_rupees")?,
+        })
+    };
+    Ok(Hold {
+        unconfirmed_closes: read
+            .items_of("unconfirmed_close_orders")?
+            .iter()
+            .map(|order| ids.working(order))
+            .collect::<Result<_, _>>()?,
+        ticks: read.maybe("slice_ticks")?.map(read_ticks).transpose()?,
+    })
+}
+
 /// A round trip still open: its entry, what it has traded so far, its gross P&L, its
-/// initial risk, its excursion so far (unrounded rupees, and the last slice with a fill
-/// of it inside the bar) and its slippage so far.
-pub(super) fn write_open_trade(trade: &OpenTrade) -> StateValue {
+/// initial risk, its excursion so far (unrounded rupees, the last slice with a fill of it
+/// inside the bar, and what holds it back, `write_hold`) and its slippage so far.
+pub(super) fn write_open_trade(book: &OrderBook, trade: &OpenTrade) -> StateValue {
     let [instrument, product] = key_fields(trade.key);
-    let excursion = trade.excursion;
+    let excursion = &trade.excursion;
+    let [unconfirmed, ticks] = write_hold(book, &excursion.hold);
     map([
         instrument,
         product,
@@ -126,15 +175,19 @@ pub(super) fn write_open_trade(trade: &OpenTrade) -> StateValue {
         ("worst_rupees", excursion.worst_rupees.into()),
         ("best_rupees", excursion.best_rupees.into()),
         ("inside_fill_slice", excursion.inside_fill_slice.into()),
+        unconfirmed,
+        ticks,
         ("slippage_rupees", trade.slippage.into()),
     ])
 }
 
-/// The round trip `write_open_trade` wrote. Errors: `Malformed` for a field missing or
-/// unusable.
+/// The round trip `write_open_trade` wrote, its orders named by their new ids (`ids`).
+/// Errors: `Malformed` for a field missing or unusable, or an order that is not a saved
+/// working order.
 pub(super) fn read_open_trade(
     read: &Read<'_>,
     instruments: usize,
+    ids: &Ids,
 ) -> Result<OpenTrade, LiveStateError> {
     Ok(OpenTrade {
         key: read_key(read, instruments)?,
@@ -153,6 +206,7 @@ pub(super) fn read_open_trade(
             worst_rupees: read.f64_of("worst_rupees")?,
             best_rupees: read.f64_of("best_rupees")?,
             inside_fill_slice: read.opt_whole_of("inside_fill_slice")?,
+            hold: read_hold(read, ids)?,
         },
         slippage: read.opt_f64_of("slippage_rupees")?,
     })
@@ -191,8 +245,10 @@ mod tests {
     #[test]
     fn an_open_trade_keeps_its_excursion_and_slippage_through_a_restart() {
         // Long 100 since slice 12, a fill inside slice 40's bar, its worst running P&L
-        // -310.25 and its best 120.50 so far, slippage 3.40 so far; and one whose fills
-        // the venue priced (no slippage) and none inside a bar.
+        // -310.25 and its best 120.50 so far, ticks of slice 41 from 501.20 to 503.05,
+        // slippage 3.40 so far; and one whose fills the venue priced (no slippage), none
+        // inside a bar and no tick. Neither waits on an order (a restart that keeps one:
+        // tests/excursion_live.rs).
         let trade = OpenTrade {
             key: PositionKey {
                 instrument: InstrumentId(0),
@@ -213,17 +269,61 @@ mod tests {
                 worst_rupees: -310.25,
                 best_rupees: 120.5,
                 inside_fill_slice: Some(40),
+                hold: Hold {
+                    unconfirmed_closes: Vec::new(),
+                    ticks: Some(SliceTicks {
+                        slice: 41,
+                        low_rupees: 501.2,
+                        high_rupees: 503.05,
+                    }),
+                },
             },
             slippage: Some(3.4),
         };
         let venue_priced = OpenTrade {
             excursion: Excursion::default(),
             slippage: None,
-            ..trade
+            ..trade.clone()
         };
+        let (book, ids) = (OrderBook::default(), Ids { pairs: Vec::new() });
         for saved in [trade, venue_priced] {
-            let value = write_open_trade(&saved);
-            assert_eq!(read_open_trade(&Read::root(&value), 1), Ok(saved));
+            let value = write_open_trade(&book, &saved);
+            assert_eq!(read_open_trade(&Read::root(&value), 1, &ids), Ok(saved));
         }
+    }
+
+    #[test]
+    fn an_order_that_held_a_trade_back_and_has_ended_is_not_saved() {
+        // The trade waits on o7, which the book no longer has working: nothing holds it
+        // back after a restart.
+        let trade = OpenTrade {
+            key: PositionKey {
+                instrument: InstrumentId(0),
+                product: Product::Mis,
+            },
+            direction: Side::Sell,
+            entry_slice: 3,
+            entry_ts: 1_751_341_500_000_000_000,
+            entry_units: 50.0,
+            entry_value: 10_000.0,
+            exit_units: 0.0,
+            exit_value: 0.0,
+            max_units: 50.0,
+            gross: 0.0,
+            fills: 1,
+            initial_risk: None,
+            excursion: Excursion {
+                hold: Hold {
+                    unconfirmed_closes: vec![OrderId(7)],
+                    ticks: None,
+                },
+                ..Excursion::default()
+            },
+            slippage: None,
+        };
+        let value = write_open_trade(&OrderBook::default(), &trade);
+        let read = read_open_trade(&Read::root(&value), 1, &Ids { pairs: Vec::new() });
+        let restored = read.expect("the trade reads back");
+        assert_eq!(restored.excursion.hold.unconfirmed_closes, Vec::new());
     }
 }

@@ -201,8 +201,8 @@ fn a_state_that_cannot_be_read_is_refused_whole_naming_the_field() {
     let table = [
         (
             "another layout",
-            with(&state, &["layout"], 2i64.into()),
-            "version 2",
+            with(&state, &["layout"], 3i64.into()),
+            "version 3",
         ),
         (
             "a part missing",
@@ -376,4 +376,36 @@ fn a_restored_working_order_takes_the_next_id_and_keeps_its_terms() {
         Ok(Submission::Submitted(OrderId(2))),
         "numbered after the stop"
     );
+}
+
+/// The fields an open trade gained in layout 2: its excursion so far, its slippage so
+/// far, the closing orders a price has reached that have not ended and the ticks of its
+/// last slice.
+const OPEN_TRADE_FIELDS_OF_LAYOUT_2: [&str; 6] = [
+    "worst_rupees",
+    "best_rupees",
+    "inside_fill_slice",
+    "slippage_rupees",
+    "unconfirmed_close_orders",
+    "slice_ticks",
+];
+
+#[test]
+fn a_state_of_the_layout_before_the_excursions_is_refused_as_another_version() {
+    // The saved state as layout 1 wrote it: its open trade without the fields of layout 2.
+    let state = saved();
+    let StateValue::Map(entries) = &state else {
+        panic!("the state is a map");
+    };
+    let trades = entries.iter().find(|(key, _)| key == "open_trades");
+    let Some((_, StateValue::List(trades))) = trades else {
+        panic!("the state has its open trades");
+    };
+    let trade = OPEN_TRADE_FIELDS_OF_LAYOUT_2
+        .iter()
+        .fold(trades[0].clone(), |trade, field| without(&trade, field));
+    let earlier = with(&state, &["open_trades", "0"], trade);
+    let earlier = with(&earlier, &["layout"], 1i64.into());
+    let mut kernel = restarted_at(config(), 2);
+    assert_eq!(kind(kernel.restore_live_state(&earlier)), "version 1");
 }

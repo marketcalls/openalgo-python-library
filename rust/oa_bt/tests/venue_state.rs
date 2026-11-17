@@ -465,7 +465,7 @@ impl Renumber {
 
     /// `value` with every order id renumbered: the values of the keys that name an order
     /// ("order", "strategy_order") and the items of the lists of orders ("sent",
-    /// "cancelling").
+    /// "cancelling", "unconfirmed_close_orders").
     fn walk(&self, value: &StateValue, names_order: bool) -> StateValue {
         match value {
             StateValue::Int(id) if names_order => {
@@ -484,7 +484,11 @@ impl Renumber {
                     .map(|(key, item)| {
                         let names = matches!(
                             key.as_str(),
-                            "order" | "strategy_order" | "sent" | "cancelling"
+                            "order"
+                                | "strategy_order"
+                                | "sent"
+                                | "cancelling"
+                                | "unconfirmed_close_orders"
                         );
                         (key.clone(), self.walk(item, names))
                     })

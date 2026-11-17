@@ -75,7 +75,7 @@ impl Engine {
                 position.mark_rupees = Some(price_rupees);
             }
         }
-        self.see_tick(instrument, price_rupees);
+        self.see_tick(&slice, instrument, price_rupees);
         if market_open {
             self.aggregate_rules_at(&slice, point.decided_at)?;
         }
