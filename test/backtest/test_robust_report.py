@@ -1,12 +1,13 @@
 """`bt.robustness`, `Result.robustness` and `RobustnessReport` end to end, on own daily
 bars with no server (`robust_runs`): a strategy with a planted edge passes every judged
-check, one fitted to noise fails them, the same seed gives the same report, the plan is
-reported before the checks run, and the HTML report is the scorecard, a section per
-check and the Notes in one self-contained page.
+check, a small edge in much noise fails them, a strategy with no edge is not judged, the
+same seed gives the same report, the plan is reported before the checks run, and the
+HTML report is the scorecard, a section per check and the Notes in one self-contained
+page.
 
 `Flip` trades 60 times. With a planted edge its trades make 30, 20, 40, -10, 30, 20,
--20, 50, 10 and -10 rupees, repeated: 7 of 10 win and the mean is 16. On noise they make
-+20 and -20 in turn and sum to zero.
+-20, 50, 10 and -10 rupees, repeated: 7 of 10 win and the mean is 16. With a small edge
+they make +25 and -20 in turn, 150 in all; with no edge, +20 and -20, nothing in all.
 """
 
 import logging
@@ -14,7 +15,7 @@ import re
 
 import pandas as pd
 import pytest
-from robust_runs import FREE, Flip, bars, edge_run, noise_run, steps_for
+from robust_runs import FREE, Flip, bars, edge_run, no_edge_run, small_edge_run, steps_for
 from test_report_tearsheet import FORBIDDEN_NAME_HASHES, Structure, section_ids
 
 import openalgo.backtest as bt
@@ -43,8 +44,8 @@ def edge_report(edge):
 
 
 @pytest.fixture(scope="module")
-def noise_report():
-    return noise_run().robustness(progress=lambda line: None)
+def small_edge_report():
+    return small_edge_run().robustness(progress=lambda line: None)
 
 
 @pytest.fixture(scope="module")
@@ -64,10 +65,17 @@ def test_a_planted_edge_passes_every_judged_check(edge_report):
     assert edge_report.passed
 
 
-def test_a_strategy_fitted_to_noise_fails(noise_report):
-    verdicts = noise_report.verdicts.set_index("check")["verdict"]
+def test_a_small_edge_in_much_noise_fails(small_edge_report):
+    verdicts = small_edge_report.verdicts.set_index("check")["verdict"]
     assert verdicts[["random_out_of_sample", "resample", "variance"]].tolist() == [FAILED] * 3
-    assert not noise_report.passed
+    assert not small_edge_report.passed
+
+
+def test_a_strategy_with_no_edge_is_not_judged_and_nothing_passed():
+    report = no_edge_run().robustness(checks="quick", progress=lambda line: None)
+    verdicts = report.verdicts.set_index("check")["verdict"]
+    assert verdicts[["random_out_of_sample", "resample", "variance"]].tolist() == [NOT_JUDGED] * 3
+    assert not report.passed
 
 
 def test_the_scorecard_lists_every_check_and_the_ones_not_built(edge_report):

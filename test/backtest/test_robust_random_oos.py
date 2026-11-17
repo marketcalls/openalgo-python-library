@@ -4,9 +4,13 @@ one trade per session (`robust_runs.trade_performance`).
 
 - Every session makes +100: each part's net profit per year is 100 x sessions per year,
   the same in both parts, so every assignment keeps all of it.
-- Sessions alternate +100 and -100 and the trades sum to zero: the out-of-sample P&L is
-  minus the in-sample P&L, so whenever the in-sample figure is above zero the
-  out-of-sample one is below it, and no assignment keeps anything.
+- Sessions alternate +100 and -100 and the trades sum to zero: the run made nothing, so
+  it has no edge to judge.
+- Sessions alternate +102 and -100: a small edge in much noise. The 100 trades make 100
+  rupees, so an out-of-sample part of 30 sessions with w wins makes 202 w - 3,000 and the
+  in-sample part the rest. Its net profit per year keeps half the in-sample one only when
+  P_out / 30 >= (100 - P_out) / 140 and 100 - P_out > 0, so 17.6 <= P_out < 100: only
+  w = 15 does, with the hypergeometric odds C(50, 15)^2 / C(100, 30) = 17.2%.
 - Sessions alternate +150 and +50: every part has a mean near 100 and a spread near 50,
   so the out-of-sample Sharpe ratio stays near the in-sample one.
 """
@@ -27,7 +31,9 @@ from openalgo.backtest._robust._verdict import FAILED, NOT_JUDGED, PASSED
 from openalgo.backtest.report._kernel import call
 
 STEADY = [100.0] * 100
-NOISE = [100.0, -100.0] * 50
+NO_EDGE = [100.0, -100.0] * 50
+SMALL_EDGE = [102.0, -100.0] * 50
+SMALL_EDGE_KEPT = math.comb(50, 15) ** 2 / math.comb(100, 30)
 EDGE = [150.0, 50.0] * 50
 
 
@@ -57,23 +63,28 @@ def test_steady_profit_per_session_keeps_everything_in_every_assignment():
 
 
 @pytest.mark.parametrize("objective", ["sharpe", "net_profit", "expectancy"])
-def test_trades_that_sum_to_zero_never_keep_their_in_sample_figure(objective):
-    result = check_of(trade_performance(NOISE), "random_out_of_sample", objective=objective)
+def test_trades_that_sum_to_zero_have_no_edge_to_judge(objective):
+    result = check_of(trade_performance(NO_EDGE), "random_out_of_sample", objective=objective)
+    assert result.verdict == NOT_JUDGED
+    assert result.note.startswith("No edge to judge")
+
+
+def test_a_small_edge_in_much_noise_keeps_its_net_profit_in_few_assignments():
+    result = check_of(trade_performance(SMALL_EDGE), "random_out_of_sample", objective="net_profit")
     assert result.verdict == FAILED
-    assert result.summary["kept_share"] == 0.0
+    assert result.summary["kept_share"] == pytest.approx(SMALL_EDGE_KEPT, abs=0.04)
 
 
 @pytest.mark.parametrize("objective", ["sharpe", "sortino"])
-def test_parts_that_break_even_are_not_above_zero_whatever_the_rounding(objective):
-    # 0.2 rupees on 1,00,000 has no exact binary fraction; parts with as many wins as
-    # losses make exactly nothing, so their ratio is 0, never a rounding residue above it.
-    result = check_of(
-        trade_performance([0.2, -0.2] * 50), "random_out_of_sample", objective=objective
-    )
-    assert result.summary["kept_share"] == 0.0
-    inside = result.table["in_sample"]
-    assert ((inside == 0) | (inside.abs() > 1e-6)).all()
-    assert (inside == 0).any()
+@pytest.mark.parametrize("order", range(5))
+def test_a_part_that_makes_exactly_nothing_has_a_ratio_of_exactly_zero(objective, order):
+    # 0.2 rupees on 1,00,000 has no exact binary fraction; a part with as many wins as
+    # losses makes exactly nothing, so its ratio is 0, never a rounding residue, in
+    # whatever order its sessions come.
+    run = replace(trade_run(trade_performance(EDGE)), risk_free_rate=0.0)
+    sessions = np.random.default_rng(order).permutation([0.2, -0.2] * 15)
+    measured = part_measure(objective, run).figure(Part(sessions, sessions))
+    assert measured == 0.0
 
 
 @pytest.mark.parametrize("objective", ["sharpe", "sortino"])
@@ -224,9 +235,13 @@ def test_a_win_rate_cannot_judge_the_check():
 @pytest.mark.parametrize(
     "objective", ["sharpe", "sortino", "net_profit", "expectancy", "profit_factor", "win_rate"]
 )
-def test_a_losing_trade_list_never_passes(objective):
+def test_a_losing_trade_list_is_not_judged_under_any_objective(objective):
     # 200 trades of +100 or -100, 40 percent winners: a net loss of 4,000 rupees and a
     # profit factor of 0.67.
     losing = ([100.0] * 2 + [-100.0] * 3) * 40
     result = check_of(trade_performance(losing), "random_out_of_sample", objective=objective)
-    assert result.verdict != PASSED
+    assert result.verdict == NOT_JUDGED
+    assert result.note == (
+        "No edge to judge: the run's 200 closed trades did not make money (net P&L "
+        "Rs -4,000), and a check of overfitting needs a run that did."
+    )

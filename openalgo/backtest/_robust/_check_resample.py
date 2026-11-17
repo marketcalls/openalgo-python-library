@@ -6,7 +6,8 @@ booking their net P&L one after another on the start capital: the Monte Carlo of
 summary block (`_trade_common.path_figures`): the share of paths profitable, the ruin
 odds (paths whose maximum drawdown reaches `ruin`), the average profit and drawdown,
 their 95 percent intervals and the return over drawdown. Pass: at least `pass_share` of
-the paths profitable and ruin odds at most `max_ruin`.
+the paths profitable and ruin odds at most `max_ruin`. A run whose closed trades did not
+make money has no edge to judge (`_trade_common.no_edge`).
 
 The fan's bands are the Monte Carlo's own; its thin paths are its first runs, drawn
 again the way the kernel draws them (`_paths.resampled_trades`).
@@ -24,7 +25,15 @@ from . import _words as words
 from ._blocks import FanBlock
 from ._paths import BAND_LEVELS, SAMPLED_PATHS, Fan, own_path, resampled_trades, walk
 from ._setting import Setting, between
-from ._trade_common import ENOUGH_TRADES, RUIN, RUNS, path_figures, path_tiles, too_few
+from ._trade_common import (
+    ENOUGH_TRADES,
+    RUIN,
+    RUNS,
+    no_edge,
+    path_figures,
+    path_tiles,
+    too_few,
+)
 from ._trades import TradeRun
 from ._verdict import FAILED, PASSED, Outcome
 
@@ -72,7 +81,7 @@ def run(
 ) -> Outcome:
     """The check of the module docstring; `objective` is not used."""
     text = rule(settings)
-    short = too_few(trades, settings["min_trades"], text)
+    short = too_few(trades, settings["min_trades"], text) or no_edge(trades, text)
     if short is not None:
         return short
     study = monte_carlo(trades.performance, simulations=runs, seed=seed, resample="trades")

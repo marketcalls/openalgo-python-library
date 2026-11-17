@@ -71,10 +71,17 @@ def test_more_points_set_in_the_checks_dict_lower_the_rate_further():
 
 def test_the_lower_rate_never_goes_below_zero():
     # One winner in 30: a win rate of 3.3%, five points lower is 0.
-    trades = [100.0] + [-10.0] * 29
+    trades = [400.0] + [-10.0] * 29
     result = check_of(trade_performance(trades), "variance", runs=100)
     assert result.summary["lower_win_rate"] == 0.0
     assert result.summary["lower_profitable_share"] == 0.0
+
+
+def test_a_run_that_did_not_make_money_is_not_judged():
+    losing = [100.0] * 16 + [-100.0] * 24
+    result = check_of(trade_performance(losing), "variance")
+    assert result.verdict == NOT_JUDGED
+    assert result.note.startswith("No edge to judge")
 
 
 def test_a_run_whose_every_trade_won_is_not_judged():

@@ -4,22 +4,23 @@ line of `result.summary()` and in `result.warnings` when one fails; "too few tra
 judge" below 30 closed trades; never a change to an existing figure.
 
 The runs are those of `robust_runs`: `Flip` with 60 trades on a planted edge (every
-judged quick check passes; the trade reshuffle is informational) or on noise (the
-random out of sample, the trade resample and the variance fail).
+judged quick check passes; the trade reshuffle is informational), on a small edge in
+much noise (the random out of sample, the trade resample and the variance fail), or
+with no edge (trades that sum to zero: those three are not judged).
 """
 
 from types import SimpleNamespace
 
 import pandas as pd
 import pytest
-from robust_runs import FREE, Flip, bars, edge_run, noise_run, steps_for
+from robust_runs import FREE, Flip, bars, edge_run, no_edge_run, small_edge_run, steps_for
 from test_report_tearsheet import section_ids
 
 import openalgo.backtest as bt
 from openalgo.backtest import report
 from openalgo.backtest._robust._quick import quick_checks
 
-FAILED_NOISE = ("random out of sample", "trade resample", "variance")
+FAILED_SMALL_EDGE = ("random out of sample", "trade resample", "variance")
 
 
 @pytest.fixture(scope="module")
@@ -28,8 +29,13 @@ def edge():
 
 
 @pytest.fixture(scope="module")
-def noise():
-    return noise_run()
+def small_edge():
+    return small_edge_run()
+
+
+@pytest.fixture(scope="module")
+def no_edge():
+    return no_edge_run()
 
 
 def overfitting_section(page: str) -> str:
@@ -70,28 +76,36 @@ def test_the_summary_has_one_line_for_the_quick_checks(edge):
     )
 
 
-def test_the_summary_names_the_quick_checks_that_failed(noise):
-    line = noise.summary().splitlines()[-1]
+def test_the_summary_names_the_quick_checks_that_failed(small_edge):
+    line = small_edge.summary().splitlines()[-1]
     assert line == (
         "Overfitting  : quick checks: 3 failed (random_out_of_sample, resample, variance), "
         "1 informational; see result.robustness()"
     )
 
 
-def test_a_quick_check_that_fails_adds_a_warning(noise):
-    added = [line for line in noise.warnings if line.startswith("Overfitting check failed")]
+def test_a_quick_check_that_fails_adds_a_warning(small_edge):
+    added = [line for line in small_edge.warnings if line.startswith("Overfitting check failed")]
     assert [line.split(":")[0] for line in added] == [
-        f"Overfitting check failed, {title}" for title in FAILED_NOISE
+        f"Overfitting check failed, {title}" for title in FAILED_SMALL_EDGE
     ]
     assert all("result.robustness() runs the full set" in line for line in added)
+
+
+def test_a_run_with_no_edge_says_so_and_adds_no_overfitting_warning(no_edge):
+    assert not [line for line in no_edge.warnings if line.startswith("Overfitting")]
+    assert no_edge.summary().splitlines()[-1] == (
+        "Overfitting  : quick checks: 3 not judged, 1 informational; see result.robustness()"
+    )
 
 
 def test_quick_checks_that_pass_add_no_warning(edge):
     assert not [line for line in edge.warnings if line.startswith("Overfitting")]
 
 
-def test_the_failed_quick_checks_are_in_the_tearsheet_notes(noise):
-    notes = noise.tearsheet()[noise.tearsheet().index("<section id='notes'") :]
+def test_the_failed_quick_checks_are_in_the_tearsheet_notes(small_edge):
+    page = small_edge.tearsheet()
+    notes = page[page.index("<section id='notes'") :]
     assert notes.count("Overfitting check failed") == 3
 
 

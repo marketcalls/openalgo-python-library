@@ -164,9 +164,12 @@ class Flip(bt.Strategy):
 FREE = {"capital": CAPITAL, "costs": None, "slippage": 0}
 #: Traded moves of a planted edge: 7 of 10 win, the mean is 1.6 rupees a share.
 EDGE_MOVES = [3.0, 2.0, 4.0, -1.0, 3.0, 2.0, -2.0, 5.0, 1.0, -1.0]
-#: Traded moves of a strategy fitted to noise: wins and losses of 2 rupees, alternating,
-#: so the trades sum to zero.
-NOISE_MOVES = [2.0, -2.0]
+#: Traded moves of a strategy with no edge: wins and losses of 2 rupees, alternating, so
+#: the trades sum to zero.
+NO_EDGE_MOVES = [2.0, -2.0]
+#: Traded moves of a small edge buried in noise: wins of 2.5 rupees and losses of 2,
+#: alternating, so a trade makes 0.25 rupees a share on average against a spread of 2.25.
+SMALL_EDGE_MOVES = [2.5, -2.0]
 
 
 def edge_run(trades: int = 60, **settings) -> bt.Result:
@@ -174,6 +177,12 @@ def edge_run(trades: int = 60, **settings) -> bt.Result:
     return bt.backtest(Flip, data=bars(steps_for(EDGE_MOVES, trades)), **FREE, **settings)
 
 
-def noise_run(trades: int = 60, **settings) -> bt.Result:
-    """`Flip` on bars whose traded moves are noise."""
-    return bt.backtest(Flip, data=bars(steps_for(NOISE_MOVES, trades)), **FREE, **settings)
+def no_edge_run(trades: int = 60, **settings) -> bt.Result:
+    """`Flip` on bars whose traded moves sum to zero."""
+    return bt.backtest(Flip, data=bars(steps_for(NO_EDGE_MOVES, trades)), **FREE, **settings)
+
+
+def small_edge_run(trades: int = 60, **settings) -> bt.Result:
+    """`Flip` on bars whose traded moves hold a small edge in much noise."""
+    data = bars(steps_for(SMALL_EDGE_MOVES, trades))
+    return bt.backtest(Flip, data=data, **FREE, **settings)

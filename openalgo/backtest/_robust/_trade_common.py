@@ -1,6 +1,11 @@
 """What the trade-list checks share: the settings every one of them takes, the trade
-count needed to judge, and the summary block of resampled paths (trade resample and
-variance, design 17 sections 2.11 and 2.13).
+count needed to judge, the edge needed to judge, and the summary block of resampled
+paths (trade resample and variance, design 17 sections 2.11 and 2.13).
+
+The checks that judge whether an edge holds (random out of sample, trade resample and
+variance) are not judged on a run whose closed trades did not make money (`no_edge`):
+a run with no edge has nothing that could have been overfitted, so a failure would
+wrongly read as evidence of overfitting.
 
 The summary block of a set of paths (`_paths.walk`, fractions of the start capital):
 
@@ -79,6 +84,20 @@ def too_few(trades: TradeRun, needed: int, rule: str) -> Outcome | None:
     return not_judged(rule, why)
 
 
+def no_edge(trades: TradeRun, rule: str) -> Outcome | None:
+    """The "not judged" outcome of a run whose closed trades did not make money (their
+    net P&L, exactly summed, below `BREAK_EVEN_RUPEES`), else None."""
+    total = math.fsum(trades.pnl)
+    if total >= BREAK_EVEN_RUPEES:
+        return None
+    why = (
+        f"No edge to judge: the run's {words.whole(trades.closed, 'closed trade')} did not "
+        f"make money (net P&L {words.rupees(total)}), and a check of overfitting needs a "
+        "run that did."
+    )
+    return not_judged(rule, why)
+
+
 def path_figures(
     final_return: np.ndarray, max_drawdown: np.ndarray, capital: float, ruin: float
 ) -> dict[str, float]:
@@ -141,6 +160,7 @@ __all__ = [
     "RUIN",
     "RUNS",
     "exact_mean",
+    "no_edge",
     "path_figures",
     "path_tiles",
     "too_few",

@@ -4,9 +4,10 @@ One backtest over the whole period, no rerun. Each of `runs` assignments puts a 
 `oos` share of the run's sessions out of sample and the rest in sample, and every closed
 trade belongs to the part of its entry session. The share is rounded to whole sessions
 (halves to even, Python's `round`). The run's objective is measured on each part
-(`_part_objective`), and the check is not judged when a part would hold fewer sessions
-than the objective needs (two for a ratio of session returns), or when no assignment
-has the objective of both parts defined.
+(`_part_objective`), and the check is not judged when the run did not make money
+(`_trade_common.no_edge`), when a part would hold fewer sessions than the objective
+needs (two for a ratio of session returns), or when no assignment has the objective of
+both parts defined.
 
 An assignment keeps its in-sample figure when the in-sample objective is above its
 break-even figure (0, or 1 for a profit factor) and the out-of-sample one keeps at least
@@ -41,7 +42,7 @@ from ._part_objective import (
 )
 from ._paths import DRAWS_PER_CHUNK
 from ._setting import Setting, between
-from ._trade_common import ENOUGH_TRADES, RUNS, too_few
+from ._trade_common import ENOUGH_TRADES, RUNS, no_edge, too_few
 from ._trades import TradeRun
 from ._verdict import FAILED, PASSED, Outcome, not_judged
 
@@ -147,7 +148,7 @@ def run(
 ) -> Outcome:
     """The check of the module docstring."""
     text = rule(settings, objective)
-    short = too_few(trades, settings["min_trades"], text)
+    short = too_few(trades, settings["min_trades"], text) or no_edge(trades, text)
     if short is not None:
         return short
     name = objective_name(objective)

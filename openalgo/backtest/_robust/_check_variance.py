@@ -7,8 +7,9 @@ P&L of zero or below). Two sets of paths use the same draws: one at the run's ow
 rate, one at a win rate `points` percentage points lower (not below zero), so the
 difference between them is the lower win rate alone. Figures: the summary block of each
 (`_trade_common.path_figures`). Pass: at the lower rate, at least `pass_share` of the
-paths profitable. A run whose every trade won has no other trade to draw and is not
-judged.
+paths profitable. A run whose closed trades did not make money has no edge to judge
+(`_trade_common.no_edge`), and a run whose every trade won has no other trade to draw;
+neither is judged.
 
 Draws: path r reads 2 x trades draws from r x 2 x trades onwards of the check's stream;
 the even ones decide winner or not (a fraction below the rate is a winner), the odd ones
@@ -28,7 +29,15 @@ from . import _words as words
 from ._blocks import FanBlock
 from ._paths import DRAWS_PER_CHUNK, PathSet, fan, fan_steps, measure, own_path
 from ._setting import Setting, between
-from ._trade_common import ENOUGH_TRADES, RUIN, RUNS, path_figures, path_tiles, too_few
+from ._trade_common import (
+    ENOUGH_TRADES,
+    RUIN,
+    RUNS,
+    no_edge,
+    path_figures,
+    path_tiles,
+    too_few,
+)
 from ._trades import TradeRun
 from ._verdict import FAILED, PASSED, Outcome, not_judged
 
@@ -86,7 +95,7 @@ def run(
 ) -> Outcome:
     """The check of the module docstring; `objective` is not used."""
     text = rule(settings)
-    short = too_few(trades, settings["min_trades"], text)
+    short = too_few(trades, settings["min_trades"], text) or no_edge(trades, text)
     if short is not None:
         return short
     if not (trades.pnl <= 0).any():

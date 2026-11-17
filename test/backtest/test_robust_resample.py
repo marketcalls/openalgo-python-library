@@ -5,27 +5,31 @@ Monte Carlo of `metrics.monte_carlo(resample="trades")`, with odds worked by han
   losers ends at 100 x (40 - L) - 50 x L, a loss only for L >= 27, whose odds at one loser
   in ten are below 1e-15: every path is profitable, and none comes near a 50% drawdown on
   1,00,000.
-- Noise: 20 trades of +100 and 20 of -100. A path's P&L is 100 x (2W - 40) with W the
-  winners drawn, binomial with n = 40 and p = 1/2, so it is profitable when W >= 21:
-  (1 - C(40, 20) / 2^40) / 2 = 43.73% of paths.
-- Ruin: 29 trades of +1 and one of -700 on 1,000. One -700 is a fall of at least
-  700 / 1,029 = 68% from any peak, so a path reaches a 50% drawdown exactly when it draws
-  the loss at least once: 1 - (29/30)^30 = 63.84% of paths.
+- A small edge: 20 trades of +100 and 20 of -90, making 200. A path's P&L is
+  100 W - 90 (40 - W) = 190 W - 3,600 with W the winners drawn, binomial with n = 40 and
+  p = 1/2, so it is profitable when W >= 19: 68.2% of paths, computed below from the
+  binomial terms C(40, k) / 2^40.
+- No edge: 20 trades of +100 and 20 of -100 make nothing, so there is no edge to judge.
+- Ruin: 29 trades of +40 and one of -1,100 on 1,000, making 60. A path rises only until
+  its first loss, so its peak is at most 1,000 + 29 x 40 = 2,160, and that loss is a fall
+  of at least 1,100 / 2,160 = 50.9% from it: a path reaches a 50% drawdown exactly when it
+  draws the loss at least once, 1 - (29/30)^30 = 63.84% of paths.
 """
 
 import math
 
 import pytest
-from robust_runs import check_of, trade_performance
+from robust_runs import blocks_of, check_of, trade_performance
 
 from openalgo.backtest import metrics
 from openalgo.backtest._robust._paths import SAMPLED_PATHS
 from openalgo.backtest._robust._verdict import FAILED, NOT_JUDGED, PASSED
 
 EDGE = [100.0] * 36 + [-50.0] * 4
-NOISE = [100.0, -100.0] * 20
-NOISE_PROFITABLE = (1 - math.comb(40, 20) / 2**40) / 2
-RUIN = [1.0] * 29 + [-700.0]
+SMALL_EDGE = [100.0, -90.0] * 20
+SMALL_EDGE_PROFITABLE = sum(math.comb(40, k) for k in range(19, 41)) / 2**40
+NO_EDGE = [100.0, -100.0] * 20
+RUIN = [40.0] * 29 + [-1_100.0]
 RUIN_ODDS = 1 - (29 / 30) ** 30
 # Many runs keep the drawn shares within this of the worked odds (about 4 standard
 # errors at 4,000 runs).
@@ -33,7 +37,7 @@ TOLERANCE = 0.03
 
 
 def test_the_paths_are_the_monte_carlo_of_the_trades_with_the_checks_seed():
-    performance = trade_performance(NOISE)
+    performance = trade_performance(SMALL_EDGE)
     result = check_of(performance, "resample", runs=300, seed=5)
     # The resample check is number 11, so it draws from the stream of seed 5 + 11.
     study = metrics.monte_carlo(performance, simulations=300, seed=16, resample="trades")
@@ -55,18 +59,27 @@ def test_a_planted_edge_passes():
     assert result.summary["ruin_odds"] == 0.0
 
 
-def test_noise_fails_with_the_share_of_profitable_paths_worked_by_hand():
-    result = check_of(trade_performance(NOISE), "resample", runs=4_000)
+def test_a_small_edge_fails_with_the_share_of_profitable_paths_worked_by_hand():
+    result = check_of(trade_performance(SMALL_EDGE), "resample", runs=4_000)
     assert result.verdict == FAILED
-    assert result.summary["profitable_share"] == pytest.approx(NOISE_PROFITABLE, abs=TOLERANCE)
+    assert result.summary["profitable_share"] == pytest.approx(SMALL_EDGE_PROFITABLE, abs=TOLERANCE)
+
+
+def test_a_run_with_no_edge_is_not_judged():
+    result = check_of(trade_performance(NO_EDGE), "resample")
+    assert result.verdict == NOT_JUDGED
+    assert result.note.startswith("No edge to judge")
 
 
 def test_a_path_that_breaks_even_is_not_profitable_whatever_the_rounding():
     # 0.1 rupees has no exact binary fraction, so a path of 20 wins and 20 losses ends a
-    # rounding residue away from its capital; it made nothing and is not profitable.
-    small = [0.1, -0.1] * 20
+    # rounding residue away from its capital; it made nothing and is not profitable. With
+    # 21 wins of 0.1 in 40 trades a path is profitable when it draws 21 wins or more.
+    small = [0.1] * 21 + [-0.1] * 19
+    rate = 21 / 40
+    odds = sum(math.comb(40, k) * rate**k * (1 - rate) ** (40 - k) for k in range(21, 41))
     result = check_of(trade_performance(small), "resample", runs=4_000)
-    assert result.summary["profitable_share"] == pytest.approx(NOISE_PROFITABLE, abs=TOLERANCE)
+    assert result.summary["profitable_share"] == pytest.approx(odds, abs=TOLERANCE)
 
 
 def test_the_ruin_odds_are_the_share_of_paths_reaching_the_ruin_drawdown():
@@ -76,7 +89,7 @@ def test_the_ruin_odds_are_the_share_of_paths_reaching_the_ruin_drawdown():
 
 
 def test_the_average_profit_is_the_mean_final_return_on_the_capital():
-    result = check_of(trade_performance(NOISE), "resample", runs=500)
+    result = check_of(trade_performance(SMALL_EDGE), "resample", runs=500)
     table = result.table
     assert result.summary["average_profit_rupees"] == pytest.approx(table["profit_rupees"].mean())
     assert table["profit_rupees"].to_numpy() == pytest.approx(
@@ -85,7 +98,7 @@ def test_the_average_profit_is_the_mean_final_return_on_the_capital():
 
 
 def test_the_95_percent_interval_holds_95_percent_of_the_paths():
-    result = check_of(trade_performance(NOISE), "resample", runs=4_000)
+    result = check_of(trade_performance(SMALL_EDGE), "resample", runs=4_000)
     summary, table = result.summary, result.table
     inside = table["profit_rupees"].between(
         summary["profit_low_rupees"], summary["profit_high_rupees"]
@@ -94,14 +107,15 @@ def test_the_95_percent_interval_holds_95_percent_of_the_paths():
 
 
 def test_a_looser_rule_set_in_the_checks_dict_judges_the_same_paths():
-    result = check_of(trade_performance(NOISE), "resample", runs=4_000, pass_share=0.4)
+    result = check_of(trade_performance(SMALL_EDGE), "resample", runs=4_000, pass_share=0.4)
     assert result.verdict == PASSED
     assert result.rule.startswith("at least 40% of paths profitable")
 
 
 def test_the_fan_draws_the_first_runs_and_they_end_where_the_table_says():
-    result = check_of(trade_performance(NOISE), "resample", runs=300)
-    fan = result._blocks[0][0].fan
+    performance = trade_performance(SMALL_EDGE)
+    result = check_of(performance, "resample", runs=300)
+    fan = blocks_of(performance, "resample", runs=300)[0][0].fan
     assert len(fan.samples) == SAMPLED_PATHS and fan.runs == 300
     ends = result.table["final_return"].to_numpy()[:SAMPLED_PATHS]
     assert fan.samples[:, -1] == pytest.approx(ends, abs=1e-12)
