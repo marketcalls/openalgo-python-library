@@ -8,7 +8,10 @@ records (`_session_close.SessionOutcome`).
   and history a backtest of the day would have, the strategy instance and its run
   context, the warm-up measured on its live stores. It covers this start only: a
   restarted engine's run begins at the restart. It cannot rerun (`Result.rerun` raises):
-  a live session is not a backtest to repeat.
+  a live session is not a backtest to repeat. `bt.live` ends with no end-of-run notice of
+  orders not placed, as `bt.backtest` does (`_rejection_notice`): the session alerted
+  each refusal as it came, and each result's warnings name every reject code, the live
+  session's entry locks (`live_lock`) and in-flight gate (`live_in_flight`) among them.
 - **The day's summary** is the session's (`_session_figures`): every start of the day,
   each counted once.
 - **The tables** are `_result_frames`'.

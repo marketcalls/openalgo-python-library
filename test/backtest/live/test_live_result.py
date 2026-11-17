@@ -193,6 +193,11 @@ def test_a_strategys_result_has_its_trades_and_metrics(day):
     assert result.metrics["trades"] == 1
 
 
+def test_a_strategys_result_draws_its_tearsheet(day):
+    html = day.results["BuyAndHold"].tearsheet()
+    assert html.lstrip().lower().startswith("<!doctype html>") and "BuyAndHold" in html
+
+
 def test_a_strategys_result_states_its_live_assumptions(day):
     assumptions = day.results["BuyAndHold"].assumptions
     assert "built from the feed's ticks on 1-minute slices" in assumptions["base_rule"]
