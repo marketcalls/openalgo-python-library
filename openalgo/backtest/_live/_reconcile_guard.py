@@ -20,7 +20,8 @@ agrees (`close`), the guard holds back from the order worker:
 One ERROR alert per held order says so.
 
 **Awaiting a read** (`await_read`): the safe stop's flatten and each square-off ask for a
-book read first, since a sale by hand after the last read is not known yet. Until a
+book read first, since a sale by hand after the last read is not known yet (and so does a
+restart whose start books no longer describe a leg: `Reconciler.differs_at_start`). Until a
 comparison of a read begun after the request has come (`read`), the leg's exit
 placements, entries against its position and the cancel of its stop are held; a stop
 placed again is not (it rests until triggered). The comparison then guards the leg, or

@@ -62,9 +62,10 @@ def test_F57_ctrl_c_mid_position_cancels_the_stop_then_exits_flat(world):
 
 def test_F57_a_second_ctrl_c_right_after_the_stops_cancel_protects_instead_of_exiting(world):
     world.stop_at(ist(14, 43, 30))
-    # The first Ctrl+C's cancel of the stop is sent at 14:43:31; its word is taken, and
-    # the exit made, at 14:43:32.
-    world.stop_at(ist(14, 43, 31) + NS // 2)
+    # The first Ctrl+C's book read is compared at 14:43:31, which lets its cancel of the
+    # stop go (the exit guard): the cancel is sent at 14:43:32; its word is taken, and the
+    # exit made, at 14:43:33.
+    world.stop_at(ist(14, 43, 32) + NS // 2)
     outcome = world.run(StopHold)
 
     assert kinds(world) == [
@@ -76,17 +77,20 @@ def test_F57_a_second_ctrl_c_right_after_the_stops_cancel_protects_instead_of_ex
     (left,) = outcome.open_positions
     assert (left.units, left.stop_confirmed) == (10.0, True)
     assert left.stop_order_id == world.orders()[-1].order_id
-    assert outcome.ended_ns < ist(14, 43, 31) + SAFE_STOP_STATE_WAIT_S * NS + NS
+    assert outcome.ended_ns < ist(14, 43, 32) + SAFE_STOP_STATE_WAIT_S * NS + NS
     check_invariants(world.timeline, strategy="StopHold")
 
 
 def test_two_ctrl_c_at_once_on_a_leg_with_a_stop_leave_it_protected_with_no_exit(world):
+    # The flatten's cancel of the stop waits for its book read (the exit guard), and the
+    # second Ctrl+C's protect by state keeps it back: the stop is never cancelled.
     world.stop_at(ist(14, 43, 30))
     world.stop_at(ist(14, 43, 30))
     outcome = world.run(StopHold)
 
-    assert [kind for _, kind, _ in kinds(world)] == ["MARKET", "SL-M", "SL-M"]
-    assert outcome.open_positions[0].stop_confirmed
+    assert kinds(world) == [("BUY", "MARKET", "complete"), ("SELL", "SL-M", "trigger pending")]
+    (left,) = outcome.open_positions
+    assert (left.stop_order_id, left.stop_confirmed) == (world.orders()[-1].order_id, True)
     check_invariants(world.timeline, strategy="StopHold")
 
 
@@ -242,11 +246,13 @@ def test_F80_an_ambiguous_stop_placement_leaves_the_leg_marked_and_sends_nothing
 
 
 def test_two_ctrl_c_with_the_stops_cancel_word_lost_place_the_stop_again_before_the_end(world):
-    # The flatten cancels the stop; the broker's word of the cancel is lost on the stream,
+    # The flatten cancels the stop once its book read is compared, at 14:43:36; the
+    # second Ctrl+C follows, and the broker's word of the cancel is lost on the stream,
     # so only a read of the order tells the session that the stop is gone.
+    second_ns = ist(14, 43, 36) + NS // 2
     world.script.at(ist(14, 43, 35), world.fake.faults.drop_next_order_update)
     world.stop_at(ist(14, 43, 35))
-    world.stop_at(ist(14, 43, 35))
+    world.stop_at(second_ns)
     outcome = world.run(StopHold)
 
     assert kinds(world) == [
@@ -258,7 +264,7 @@ def test_two_ctrl_c_with_the_stops_cancel_word_lost_place_the_stop_again_before_
     assert (left.stop_order_id, left.stop_confirmed) == (world.orders()[-1].order_id, True)
     # The loop's step that ends the wait still waits its turn (1 s here) before the close,
     # whose final book read takes a few of the loop's shortest waits.
-    assert outcome.ended_ns <= ist(14, 43, 35) + SAFE_STOP_STATE_WAIT_S * NS + NS + NS // 10
+    assert outcome.ended_ns <= second_ns + SAFE_STOP_STATE_WAIT_S * NS + NS + NS // 10
     check_invariants(world.timeline, strategy="StopHold")
 
 
@@ -268,9 +274,11 @@ def test_a_stop_whose_cancel_has_no_word_at_the_end_is_not_reported_confirmed(wo
         for _ in range(20):
             world.fake.faults.gateway_error("orderstatus", status=503)
 
+    # The second Ctrl+C follows the flatten's cancel of the stop, sent once its book read
+    # is compared at 14:43:36.
     world.script.at(ist(14, 43, 35), cancel_word_lost_and_reads_failing)
     world.stop_at(ist(14, 43, 35))
-    world.stop_at(ist(14, 43, 35))
+    world.stop_at(ist(14, 43, 36) + NS // 2)
     outcome = world.run(StopHold)
 
     cancelled = world.orders()[1]
@@ -285,19 +293,20 @@ def test_a_stop_whose_cancel_has_no_word_at_the_end_is_not_reported_confirmed(wo
 def test_a_stop_placed_again_in_the_last_step_of_the_second_ctrl_c_wait_reaches_the_broker(
     world,
 ):
-    # The flatten's cancel of the stop is accepted at 14:43:31; its word lags on the stream
-    # until 14:43:33.5 and the reads of the order fail, so the stop is placed again in the
-    # step at 14:43:35 that ends the second Ctrl+C's wait of 5 seconds: it must still be
-    # sent, and its first word taken.
+    # The flatten's cancel of the stop goes once its book read is compared at 14:43:31,
+    # and is accepted at 14:43:32, when the second Ctrl+C is seen; its word lags on the
+    # stream until 14:43:35.5 and the reads of the order fail, so the stop is placed again
+    # in the step at 14:43:37 that ends the second Ctrl+C's wait of 5 seconds: it must
+    # still be sent, and its first word taken.
     def stream_lags_and_reads_fail():
         world.fake.faults.hold_order_updates()
         for _ in range(5):
             world.fake.faults.gateway_error("orderstatus", status=503)
 
     world.script.at(ist(14, 43, 29), stream_lags_and_reads_fail)
-    world.script.at(ist(14, 43, 33) + NS // 2, world.fake.faults.release_order_updates)
+    world.script.at(ist(14, 43, 35) + NS // 2, world.fake.faults.release_order_updates)
     world.stop_at(ist(14, 43, 30))
-    world.stop_at(ist(14, 43, 30))
+    world.stop_at(ist(14, 43, 31) + NS // 2)
     outcome = world.run(StopHold)
 
     assert kinds(world) == [

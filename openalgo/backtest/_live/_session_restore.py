@@ -23,11 +23,13 @@ Then: the saved entry locks that last the day (reconciliation, exit failed, the
 account's daily loss) set again, since the kernel restores none (K4); a leg the start
 judged different from the broker locked from the start and, when other orders' trades
 explain the difference, adopted; the exit guard opened for a leg whose broker holds fewer
-units; each leg with a position given its stop again (`protect`, R7: nothing when one
-works), or, past its square-off, exited (`request_exit("square_off")`); the reconciler
-told what was adopted and which orders are the session's own; every restored order
-polled once (`StreamGap`). The kernel's events not delivered before the crash are lost
-(K4): the strategy's `on_fill`, `on_order` and `on_position` never run for them.
+units (a leg whose restored engine holds other units than the start judged waits for a
+fresh read instead: `Reconciler.differs_at_start`); each leg with a position given its
+stop again (`protect`, R7: nothing when one works), or, past its square-off, exited
+(`request_exit("square_off")`); the reconciler told what was adopted and which orders are
+the session's own; every restored order polled once (`StreamGap`). The kernel's events
+not delivered before the crash are lost (K4): the strategy's `on_fill`, `on_order` and
+`on_position` never run for them.
 
 **The protective start phase** (`protect_restored`, 3.1 step 12): the loop turns with no
 feed and no strategy called until every resumed leg is flat, has no stop rule, or its

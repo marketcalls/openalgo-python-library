@@ -6,10 +6,9 @@ time that end it (`Control`). The common close is `_session_close`.
 - **Ctrl+C, the safe stop (D29).** The first stop request locks every strategy's entries
   ("operator_stop") and cancels its working entries and adds (one decided in the same
   loop step is withdrawn before it is sent: `Trader.commands`). With `on_stop="flatten"`
-  every open position is then exited (`request_exit`, "operator_stop", held by the exit
-  guard until a book read asked for now has compared the leg; the kernel answers
-  "already_exiting" while an exit of it works, and a position whose exit failed every
-  attempt of the retry schedule is asked once more). At each later step a position whose
+  every open position is then exited (`request_exit`, "operator_stop", after a fresh book
+  read; the kernel answers "already_exiting" while an exit works, and a position whose
+  exit failed every retry is asked once more). At each later step a position whose
   exit is not on the retry schedule (`_session_exits`) is asked again, so an entry that
   fills after the stop began is exited too. The session waits until every strategy is
   flat with nothing working, at most `SAFE_STOP_FLATTEN_S`; then each leg not flat is

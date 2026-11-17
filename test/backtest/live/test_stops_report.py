@@ -15,6 +15,7 @@ The session starts at 14:40:05 IST; SBIN trades at 500.00 every 10 seconds.
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
@@ -43,6 +44,12 @@ from openalgo.backtest._live._types import (
 from openalgo.backtest._live._venue_requests import PlaceRequest, Priority
 from openalgo.backtest._live.inbox import NotSentReason
 from openalgo.backtest._live.stops import StopsSupervisor
+
+#: The session of the supervisors built with no server: its reconciler's exit guard holds
+#: no cancel back, which is all they ask of it (`StopsSupervisor.cancelling`).
+NOTHING_HELD = SimpleNamespace(
+    reconcile=SimpleNamespace(guard=SimpleNamespace(held_cancels=lambda name: frozenset()))
+)
 
 
 @pytest.fixture
@@ -154,9 +161,11 @@ def test_an_exit_accepted_with_no_final_word_is_in_flight_and_never_beside_close
             world.fake.faults.gateway_error("orderstatus", status=503)
             world.fake.faults.gateway_error("tradebook", status=503)
 
+    # The flatten's book read is compared at 14:43:31, its cancel of the stop answered at
+    # 14:43:33 and its exit accepted at 14:43:34; the stream then stops.
     world.stop_at(ist(14, 43, 30))
-    world.script.at(ist(14, 43, 32) + NS // 2, stream_held_and_reads_failing)
-    world.stop_at(ist(14, 43, 33) + NS // 2)
+    world.script.at(ist(14, 43, 33) + NS // 2, stream_held_and_reads_failing)
+    world.stop_at(ist(14, 43, 34) + NS // 2)
     outcome = world.run(StopHold)
 
     exit_ = next(o for o in world.orders() if (o.action, o.price_type) == ("SELL", "MARKET"))
@@ -284,7 +293,7 @@ STOP_PLACED = PlaceRequest(
 
 def stop_handed() -> tuple[StopsSupervisor, _Trader]:
     """The stop o2 handed to the order worker, with no answer yet."""
-    stops, trader = StopsSupervisor(session=None), _Trader()
+    stops, trader = StopsSupervisor(session=NOTHING_HELD), _Trader()
     stops.leg(trader).handed(STOP_PLACED)
     return stops, trader
 
@@ -404,7 +413,7 @@ def _working_word(order_id: str) -> OrderUpdate:
 def test_a_resting_exit_beside_orders_never_sent_comes_before_closing_it_by_hand(unsent):
     # No stop rule; an exit LIMIT rests at the broker; the kernel orders `unsent` were
     # never handed to the order worker.
-    stops = StopsSupervisor(session=None)
+    stops = StopsSupervisor(session=NOTHING_HELD)
     trader = _Leg(_Book({3: _terms("LIMIT")}), working=[3, *unsent])
     _bound(stops, trader, _sale(3, Purpose.EXIT, "LIMIT"), "261116000000003")
 
@@ -419,7 +428,7 @@ def test_a_resting_exit_beside_orders_never_sent_comes_before_closing_it_by_hand
 def confirmed_stop(cancelling: tuple) -> tuple[StopsSupervisor, _Leg]:
     """A leg whose SL-M stop o2 (order 261116000000002) is confirmed working for its 10
     units, with the kernel's cancelling list `cancelling`."""
-    stops = StopsSupervisor(session=None)
+    stops = StopsSupervisor(session=NOTHING_HELD)
     trader = _Leg(_Book({2: _terms("SL-M")}, cancelling=cancelling), working=[2])
     _bound(stops, trader, STOP_PLACED, "261116000000002")
     stops.leg(trader).heard(2, _working_word("261116000000002"))
@@ -461,7 +470,7 @@ IF_OPEN = "if its closing lines still show the leg open"
 
 def no_stop() -> tuple[StopsSupervisor, _Leg]:
     """A leg of 10 SBIN that never had a stop, with nothing working."""
-    return StopsSupervisor(session=None), _Leg(_Book({}), working=[])
+    return StopsSupervisor(session=NOTHING_HELD), _Leg(_Book({}), working=[])
 
 
 @pytest.mark.parametrize(

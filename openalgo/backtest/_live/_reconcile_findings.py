@@ -54,13 +54,25 @@ class Findings:
         self._lag_alerted: set[str] = set()
 
     def at_start(
-        self, trader: Trader, kind: Kind, journal_units: int, books: LegBooks, own: frozenset[str]
+        self,
+        trader: Trader,
+        kind: Kind,
+        journal_units: int,
+        books: LegBooks,
+        own: frozenset[str],
+        *,
+        stale: bool = False,
     ) -> None:
         """A restart's difference of `trader`'s journal position (`journal_units`) from the
-        broker's: acted on at once, as two comparisons in a row would be (5.5)."""
+        broker's: acted on at once, as two comparisons in a row would be (5.5); `stale`
+        when the restored engine holds other units, so it is only locked and alerted
+        (`Corrections.stale`) and the next comparisons judge the leg."""
         finding = (kind, journal_units, books.units)
-        self._acted.add((trader.name, finding))
-        action = self._corrections.act(trader, finding, books, own)
+        if stale:
+            action = self._corrections.stale(trader, finding, books, own)
+        else:
+            self._acted.add((trader.name, finding))
+            action = self._corrections.act(trader, finding, books, own)
         self._row(trader.name, kind.value, journal_units, books.units, action)
 
     def judged(

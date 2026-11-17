@@ -214,20 +214,42 @@ def test_F38_the_session_ends_with_the_engine_and_the_broker_flat(expired, caplo
     assert after and set(after) == {"agree"}
 
 
-def test_F38_a_square_off_refused_while_the_login_is_expired_is_retried_until_it_fills(world):
-    world.script.at(ist(14, 58), world.fake.faults.expire_session)
-    restored = ist(15, 0, 10)
-    world.script.at(restored, world.fake.faults.restore_session)
-    outcome = run(world, Hold)
-    sells = [
+def square_off_sells(world) -> list:
+    """The session's SELL placements at the fake, in order."""
+    return [
         call
         for call in world.fake.log.calls("placeorder")
         if call.detail["request"].get("action") == "SELL"
     ]
+
+
+def test_F38_a_square_off_refused_while_the_login_is_expired_is_retried_until_it_fills(world):
+    # The login expires after the books are read before the 15:00 square-off (at
+    # 14:59:55, the exit guard's read), so the square-off is sent and refused.
+    world.script.at(ist(14, 59, 58), world.fake.faults.expire_session)
+    restored = ist(15, 0, 10)
+    world.script.at(restored, world.fake.faults.restore_session)
+    outcome = run(world, Hold)
+    sells = square_off_sells(world)
     # The square-off and two retries are refused while the login is expired; the third
     # retry, after the restore, fills.
     assert [call.detail["status"] for call in sells] == [403, 403, 403, 200]
     assert sells[-1].ts_ns > restored
+    assert world.fake.position("SBIN", "NSE") == 0
+    assert outcome.stopped_by == "session_end"
+
+
+def test_F38_a_square_off_due_while_the_books_cannot_be_read_waits_for_them(world):
+    # The login expires before the read of the books ahead of the square-off: the exit
+    # guard holds the square-off until a read is compared, after the restore, so no
+    # refused order is sent and the one sent fills.
+    world.script.at(ist(14, 58), world.fake.faults.expire_session)
+    restored = ist(15, 0, 10)
+    world.script.at(restored, world.fake.faults.restore_session)
+    outcome = run(world, Hold)
+    sells = square_off_sells(world)
+    assert [call.detail["status"] for call in sells] == [200]
+    assert sells[0].ts_ns > restored
     assert world.fake.position("SBIN", "NSE") == 0
     assert outcome.stopped_by == "session_end"
 

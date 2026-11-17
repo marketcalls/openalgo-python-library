@@ -115,8 +115,16 @@ class Reconciler:
         """A restart found `trader`'s journal position (`journal_units`) different from
         the broker's (5.5): acted on at once, as 5.3 would after two comparisons, with the
         strategy's entries locked from the start; the exit guard opened while the broker
-        holds fewer units that nothing explains, or the other side."""
+        holds fewer units that nothing explains, or the other side. When the restored
+        engine holds other units (a fill reached the journal after the start read the
+        books: the order worker follows the day's orders during the warm-up), those books
+        no longer describe the leg: its entries are locked, and its exits wait for a
+        comparison of a fresh read, which judges it."""
         own = own_orders(trader, self._earlier)
+        if round(trader.open_units()) != journal_units:
+            self._findings.at_start(trader, kind, journal_units, books, own, stale=True)
+            self.guard.await_read(trader.name, self._session.now())
+            return
         self._findings.at_start(trader, kind, journal_units, books, own)
         if kind in (Kind.UNEXPLAINED, Kind.OTHER_SIDE) and books.units is not None:
             self.guard.open(trader.name, books.units)
@@ -159,7 +167,7 @@ class Reconciler:
     def duties(self, now_ns: int) -> None:
         """Note each leg in flight or out of it, and ask for a read when one is due."""
         session = self._session
-        if session.locked or self._stopped or not session.trading:
+        if not self._reads(session):
             return
         for trader in session.traders:
             name = trader.name
@@ -179,24 +187,25 @@ class Reconciler:
         if due:
             self._before = {n: at for n, at in self._before.items() if n not in due}
             self.read_before_exits(due)
-        # While OpenAlgo is silent the order worker's probe asks it (4.9): a read could
-        # hold the worker for the client's whole timeout, ahead of the stops and exits.
-        if session.parts.worker.silent_since_ns is not None:
-            return
-        if self._answered:
-            if self._due(now_ns):
-                self.ask(now_ns)
-        elif self._asked_ns is None or now_ns >= self._asked_ns + _s(RECONCILE_READ_LOST_AFTER_S):
-            self.ask(now_ns)
+        self._ask_when_due(now_ns)
 
     def read_before_exits(self, names: Iterable[str] | None = None) -> None:
         """The exits of strategies `names` (all for None) wait for a comparison of a read
-        asked for now (module docstring): the safe stop's flatten and the square-off."""
-        now_ns = self._session.now()
-        for trader in self._session.traders:
-            if names is None or trader.name in names:
+        asked for now (module docstring): the safe stop's flatten and the square-off. A
+        finished kernel session is never compared again, so it waits for nothing. The
+        read is asked for in this step, so the exits wait one read and no more; while one
+        is asked for already, its answer asks for the next at once when it began earlier
+        (`books`)."""
+        session = self._session
+        now_ns = session.now()
+        for trader in session.traders:
+            if not trader.finished and (names is None or trader.name in names):
                 self.guard.await_read(trader.name, now_ns)
+        if not self._answered:
+            return
         self._soon(now_ns)
+        if self._reads(session):
+            self._ask_when_due(now_ns)
 
     def ask(self, now_ns: int) -> None:
         """Ask the order worker for a read now."""
@@ -219,6 +228,21 @@ class Reconciler:
         until_ns = now_ns + _s(wait_s)
         while self.waiting and session.now() < until_ns:
             session.step(session.now(), protecting=True)
+
+    def _reads(self, session: Any) -> bool:
+        """Whether reads are made: once trading began, never after a guard lock."""
+        return session.trading and not (session.locked or self._stopped)
+
+    def _ask_when_due(self, now_ns: int) -> None:
+        # While OpenAlgo is silent the order worker's probe asks it (4.9): a read could
+        # hold the worker for the client's whole timeout, ahead of the stops and exits.
+        if self._session.parts.worker.silent_since_ns is not None:
+            return
+        if self._answered:
+            if self._due(now_ns):
+                self.ask(now_ns)
+        elif self._asked_ns is None or now_ns >= self._asked_ns + _s(RECONCILE_READ_LOST_AFTER_S):
+            self.ask(now_ns)
 
     def _due(self, now_ns: int) -> bool:
         due = [self._next_ns if self._next_ns is not None else now_ns]

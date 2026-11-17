@@ -17,7 +17,8 @@ exposure: an explained difference adopted (`apply_external_fill` at the other or
 price, the kernel fitting the leg's stop to the adopted units in the same call), the
 leg's own stop cancelled when the broker holds the other side, the session's own orphan
 cancelled. Never an exit, never the kill switch. A finding on a leg in flight past the
-in-flight limit is alerted, with nothing done.
+in-flight limit is alerted, with nothing done; so is a restart's difference whose journal
+units the restored engine no longer holds (`stale`), with entries locked.
 
 Quantities are signed units, prices rupees, times UTC nanoseconds. Used by the loop only.
 """
@@ -195,6 +196,22 @@ class Corrections:
         text = self._words(trader, finding, books, own, words, locked=False)
         self._session.alert(AlertKind.ERROR, text)
         return "alerted"
+
+    def stale(self, trader: Trader, finding: Finding, books: LegBooks, own: frozenset[str]) -> str:
+        """A restart's difference judged on the journal's units when the restored engine
+        holds other units: entries locked and alerted, nothing adopted or cancelled, since
+        the books read at the start no longer describe the leg."""
+        session = self._session
+        session.mismatches += 1
+        if trader.lock(RECONCILE_LOCK):
+            session.event("lock", strategy=trader.name, reason=RECONCILE_LOCK)
+        words = (
+            f"the engine holds {round(trader.open_units())} units once restored, since a fill "
+            "reached it after these books were read, so nothing is done until a fresh read "
+            "of the books judges the leg"
+        )
+        session.alert(AlertKind.RECONCILE_MISMATCH, self._words(trader, finding, books, own, words))
+        return "locked"
 
     def _adopt(self, trader: Trader, finding: Finding, books: LegBooks, own: frozenset[str]) -> str:
         engine, broker = finding[1], finding[2]
