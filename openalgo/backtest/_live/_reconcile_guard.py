@@ -344,11 +344,14 @@ def _held_words(request: Any, broker_units: int) -> str:
     leg = f"{intent.symbol} {intent.exchange} ({intent.action} {intent.quantity})"
     book = f"OpenAlgo's position book shows {broker_units} units"
     if isinstance(request, CancelRequest):
+        # Neither is promised once the books agree: protect by state keeps the cancel of a
+        # stop that still fits and asks for no exit, and after the session's last lines
+        # only an adoption's cancel goes (module docstring).
         return (
             f"{intent.strategy}: the cancel of the stop of {leg} is held back, so the stop "
             f"stays at the broker: {book}, and the exit it makes way for would take the "
-            "broker's position through zero. Both go once the books agree; check the "
-            "position in OpenAlgo"
+            "broker's position through zero. Both wait for the books to agree, and go only "
+            "if the session still asks for them then; check the position in OpenAlgo"
         )
     if intent.purpose in ENTRY_PURPOSES:
         return (

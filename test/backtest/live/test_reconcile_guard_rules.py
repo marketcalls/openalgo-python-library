@@ -194,6 +194,16 @@ def test_a_held_cancel_of_the_stop_is_alerted_as_keeping_the_stop(guarded):
     assert "the stop stays at the broker" in text
 
 
+def test_a_held_cancel_of_the_stop_is_alerted_without_promising_the_exit(guarded):
+    # Once the books agree neither is sure to go: protect by state keeps the cancel of a
+    # stop that still fits and asks for no exit, and after the session's last lines the
+    # exit is held.
+    guarded.hand_over([cancel_of_stop()])
+    [text] = guarded.alerts
+    assert "Both go once the books agree" not in text
+    assert "go only if the session still asks for them then" in text
+
+
 # ----- when the books agree -------------------------------------------------------------
 
 
