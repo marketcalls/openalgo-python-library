@@ -29,7 +29,14 @@ TRADE_LIST_COLUMNS = (
     "days_held",
     "exit_reason",
     "r_multiple",
+    "mae",
+    "mfe",
+    "mae_pct",
+    "mfe_pct",
+    "slippage",
 )
+#: The columns the trade list takes as they are from the metrics layout (NaN when absent).
+EXCURSION_COLUMNS = ("mae", "mfe", "mae_pct", "mfe_pct", "slippage")
 #: The side of a trade's entry, as the metrics layout writes it, and its direction.
 DIRECTIONS = {"BUY": "long", "SELL": "short"}
 SECONDS_PER_DAY = 86_400
@@ -75,9 +82,18 @@ def trade_list(trades: pd.DataFrame | None) -> pd.DataFrame:
         days_held     calendar days from entry_time to exit_time, fractional
         exit_reason   why the closing fill happened ("signal", "stop", "target", ...)
         r_multiple    net_pnl over the trade's initial risk; NaN without a stop
+        mae           maximum adverse excursion: the lowest running P&L the trade
+                      showed, before charges, rupees, zero or negative
+        mfe           maximum favourable excursion: the highest, zero or positive
+        mae_pct       mae in percent of the trade's largest capital at work (entry
+                      price x largest quantity held x multiplier)
+        mfe_pct       mfe in the same percent
+        slippage      what slippage cost the trade's fills, rupees, already in
+                      gross_pnl; NaN when none was modelled (a broker's fills)
 
-    The columns are the same, with no rows, when there are no closed trades or no
-    trades table (None).
+    The excursion and slippage columns are NaN for a table without them. The columns
+    are the same, with no rows, when there are no closed trades or no trades table
+    (None).
     """
     if trades is None or trades.empty:
         empty = pd.DataFrame(columns=list(TRADE_LIST_COLUMNS))
@@ -109,6 +125,7 @@ def trade_list(trades: pd.DataFrame | None) -> pd.DataFrame:
             "days_held": held.dt.total_seconds() / SECONDS_PER_DAY,
             "exit_reason": _optional(closed, "exit_reason"),
             "r_multiple": _optional(closed, "r_multiple").astype(float),
+            **{name: _optional(closed, name).astype(float) for name in EXCURSION_COLUMNS},
         },
         columns=list(TRADE_LIST_COLUMNS),
     )

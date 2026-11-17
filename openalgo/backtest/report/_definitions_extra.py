@@ -1,6 +1,7 @@
 """The metrics added to the core table of `_definitions`: corrected and drawdown-based
-ratios, the distribution of session returns, its tails, ratios of trades, and the
-active-return figures of a benchmark.
+ratios, the distribution of session returns, its tails, ratios of trades, the
+excursions and trading cost of the trades, and the active-return figures of a
+benchmark.
 
 Each entry is (label, unit, definition), as in `_definitions`; the source of every
 definition is cited in the native kernel's module docs (`oa_bt::metrics`).
@@ -228,6 +229,65 @@ TRADE_RATIOS = {
     ),
 }
 
+EXCURSIONS = {
+    "average_mae": (
+        "Average MAE",
+        "fraction",
+        "Mean over closed trades of the maximum adverse excursion (MAE) as a share of the "
+        "trade's largest capital at work (average entry price x largest quantity held x "
+        "multiplier). A trade's MAE is the lowest running P&L it showed before charges: "
+        "its P&L realized so far plus the open position valued at a price known to have "
+        "traded while it was open (the high and low of each base bar it held through, its "
+        "fill prices, the open of a bar it exited in, a live session's ticks). Zero or "
+        "negative.",
+    ),
+    "average_mfe": (
+        "Average MFE",
+        "fraction",
+        "Mean over closed trades of the maximum favourable excursion (MFE), the highest "
+        "running P&L a trade showed, as a share of its largest capital at work. Zero or "
+        "positive.",
+    ),
+    "worst_mae": ("Worst MAE", "rupees", "The lowest MAE of a closed trade."),
+    "best_mfe": ("Best MFE", "rupees", "The highest MFE of a closed trade."),
+    "edge_ratio": (
+        "Edge ratio",
+        "ratio",
+        "Mean MFE over the mean magnitude of the MAE, both as shares of capital at work: "
+        "above 1, trades moved further in their favour than against them.",
+    ),
+    "profit_kept": (
+        "Profit kept",
+        "fraction",
+        "Sum of the gross P&L of the winning trades (net P&L above zero) over the sum of "
+        "their MFE: the share of their best open profit the winners kept.",
+    ),
+    "total_slippage": (
+        "Slippage",
+        "rupees",
+        "What slippage cost the closed trades' fills: each fill's price against its price "
+        "before slippage (the open, a level, a last close), times units and multiplier, "
+        "worse positive. It is already in the fill prices, so in gross and net P&L, and is "
+        "not deducted again. NaN when a fill had none modelled (a broker priced it).",
+    ),
+    "trading_cost": (
+        "Trading cost",
+        "rupees",
+        "Costs plus slippage of the closed trades.",
+    ),
+    "trading_cost_share_of_gross_pnl": (
+        "Trading cost / gross P&L",
+        "fraction",
+        "Trading cost over gross P&L; NaN when gross P&L is zero or negative.",
+    ),
+    "trading_cost_bps": (
+        "Trading cost of turnover",
+        "bps",
+        "Trading cost over the closed trades' traded value (|price| x quantity x "
+        "multiplier of each entry and exit), in basis points.",
+    ),
+}
+
 BENCHMARK_EXTRA = {
     "r_squared": (
         "R squared",
@@ -254,4 +314,4 @@ BENCHMARK_EXTRA = {
     ),
 }
 
-__all__ = ["BENCHMARK_EXTRA", "RISK_ADJUSTED", "SESSIONS", "TAIL", "TRADE_RATIOS"]
+__all__ = ["BENCHMARK_EXTRA", "EXCURSIONS", "RISK_ADJUSTED", "SESSIONS", "TAIL", "TRADE_RATIOS"]

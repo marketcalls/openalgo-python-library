@@ -27,7 +27,15 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from . import _rejections, _result_costs, _result_futures, _result_r, _result_report, _skips
+from . import (
+    _rejections,
+    _result_costs,
+    _result_excursion,
+    _result_futures,
+    _result_r,
+    _result_report,
+    _skips,
+)
 from ._messages import SEVERAL_STRATEGIES, not_supported
 from ._native import native
 from ._result_analysis import AnalysisMethods
@@ -101,7 +109,12 @@ class Result(AnalysisMethods, ExportMethods):
     @property
     def fills(self) -> pd.DataFrame:
         """One row per fill: slice, step of the sequence, side, units, price, where in the
-        bar (`fill_at`), reason, order id, target index, flags, charges."""
+        bar (`fill_at`), reason, order id, target index, flags, charges, and
+        `slippage_rupees`, what slippage cost the fill: its price against the price before
+        slippage (the open, a level, a last close) times units and multiplier, positive
+        when worse, 0 for a resting limit, NaN for a fill a broker priced (none
+        modelled). It is already in the fill price, so in the P&L: shown, not deducted
+        again."""
         return self._table("fills", "slice_ts")
 
     @property
@@ -128,13 +141,24 @@ class Result(AnalysisMethods, ExportMethods):
         """Closed round trips; positions open at the end are in `final_positions`.
         `initial_risk_rupees` is what the opening fill would have lost at the stop its
         entry set, and `r_multiple` the net P&L over it (NaN for a trade opened without
-        a stop; `_result_r`)."""
+        a stop; `_result_r`). `mae_rupees` (at most 0) and `mfe_rupees` (at least 0) are
+        the lowest and highest running P&L the trade showed before charges, at prices
+        known to have traded while it was open, and `mae_pct` and `mfe_pct` the same in
+        percent of its largest capital at work (entry price x largest quantity held x
+        multiplier; `_result_excursion`). `slippage_rupees` is what slippage cost its
+        fills (`fills`), NaN when a fill had none modelled; it is already in the gross
+        P&L."""
         frame = self._table("trades", None)
         frame.insert(1, "entry_time", ist_times(frame["entry_ts"]))
         frame.insert(2, "exit_time", ist_times(frame["exit_ts"]))
         frame["initial_risk_rupees"] = frame["initial_risk_rupees"].astype(float)
         risk = frame["initial_risk_rupees"]
-        frame["r_multiple"] = _result_r.r_values(frame["net_pnl_rupees"], risk)
+        after_risk = frame.columns.get_loc("initial_risk_rupees") + 1
+        frame.insert(after_risk, "r_multiple", _result_r.r_values(frame["net_pnl_rupees"], risk))
+        frame["slippage_rupees"] = frame["slippage_rupees"].astype(float)
+        multipliers = _result_excursion.instrument_multipliers(self._manifest)
+        for name, values in _result_excursion.excursion_columns(frame, multipliers).items():
+            frame[name] = values
         return frame
 
     @property

@@ -16,6 +16,12 @@ purpose, on the reference platform, and review the diff:
 
 No test writes a pin.
 
+The trades' excursions and trading cost are pinned apart, in
+`golden/<run>.excursion.json` (`golden_runs.excursion_snapshot`), after each trade's MAE
+and MFE were checked against an independent recomputation from its fills and base bars;
+the pins made before them are unchanged, so their test shows that no earlier figure
+moved when they were added.
+
 Platforms: on the reference platform (Windows x86_64) every number must have the same
 bits as its pin. Elsewhere every number must match within CROSS_PLATFORM_TOLERANCE,
 relative or absolute; integers, strings and flags must be equal.
@@ -32,7 +38,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from golden_runs import RUNS, on_reference_platform, read_pins, snapshot
+from golden_runs import (
+    EXCURSION_PINS,
+    RUNS,
+    excursion_snapshot,
+    on_reference_platform,
+    read_pins,
+    snapshot,
+)
 
 HERE = Path(__file__).resolve().parent
 
@@ -86,14 +99,28 @@ def differences(pinned: Any, current: Any, exact: bool, path: str = "") -> list[
 
 
 @pytest.fixture(scope="module")
-def snapshots() -> dict[str, dict[str, Any]]:
+def results() -> dict[str, Any]:
+    """Each golden run's result."""
+    return {name: run() for name, run in RUNS.items()}
+
+
+@pytest.fixture(scope="module")
+def snapshots(results) -> dict[str, dict[str, Any]]:
     """Each golden run's snapshot, read back through JSON as the pins were."""
-    return {name: json.loads(json.dumps(snapshot(run()))) for name, run in RUNS.items()}
+    return {name: json.loads(json.dumps(snapshot(result))) for name, result in results.items()}
 
 
 @pytest.mark.parametrize("name", list(RUNS))
 def test_the_golden_run_matches_its_pins(name, snapshots):
     found = differences(read_pins(name), snapshots[name], exact=on_reference_platform())
+    assert not found, f"{len(found)} differences, first: {found[:5]}"
+
+
+@pytest.mark.parametrize("name", list(RUNS))
+def test_the_golden_runs_excursions_and_trading_cost_match_their_pins(name, results):
+    current = json.loads(json.dumps(excursion_snapshot(results[name])))
+    pinned = read_pins(name, EXCURSION_PINS)
+    found = differences(pinned, current, exact=on_reference_platform())
     assert not found, f"{len(found)} differences, first: {found[:5]}"
 
 

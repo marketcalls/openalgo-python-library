@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from . import _result_report
+from ._result_excursion import instrument_multipliers
 from ._summary import summary_text
 from ._trade_list import trade_list as closed_trade_list
 from .metrics import MonteCarlo, analyse, monte_carlo
@@ -41,10 +42,17 @@ class AnalysisMethods:
         number: symbol, direction, product, entry and exit time (IST), quantity in
         units, entry and exit price, gross P&L, charges and net P&L in rupees,
         return_pct, bars_held (bars of the strategy's interval), days_held, exit_reason
-        and r_multiple (`_trade_list.trade_list` defines each column). The tearsheet's
-        trade table shows the same rows."""
-        trades = _result_report.closed_trades(self._output, self._symbols, self._strategy_closes)
+        and r_multiple, then mae, mfe, mae_pct, mfe_pct and slippage
+        (`_trade_list.trade_list` defines each column). The tearsheet's trade table shows
+        the same rows."""
+        trades = _result_report.closed_trades(
+            self._output, self._symbols, self._strategy_closes, self._multipliers()
+        )
         return closed_trade_list(trades)
+
+    def _multipliers(self) -> list[float]:
+        """The contract multiplier of each instrument, by the kernel's index."""
+        return instrument_multipliers(self._manifest)
 
     @cached_property
     def performance(self) -> Performance:
@@ -58,7 +66,8 @@ class AnalysisMethods:
         charts) against its closes. Its trades carry `bars_held` in bars of the
         strategy's interval. Raises ConfigError when the run has no equity point."""
         output, symbols = self._output, self._symbols
-        trades = _result_report.trades_table(output, symbols, self._strategy_closes)
+        closes, multipliers = self._strategy_closes, self._multipliers()
+        trades = _result_report.trades_table(output, symbols, closes, multipliers)
         equity = _result_report.equity_series(self.equity)
         arguments = self._manifest["arguments"]
         exchange, capital = arguments["exchange"], arguments["capital"]

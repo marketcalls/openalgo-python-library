@@ -16,7 +16,12 @@ The kernel's tables are turned into the inputs `metrics.analyse` documents:
              trade are broken down into the cost components and the DP charge, its
              R-multiple is in `r_multiple` (`_result_r`; NaN for an open trade) and in
              `bars_held` the bars of the strategy's interval that closed while it was
-             open (`strategy_bars_held`), not the base bars.
+             open (`strategy_bars_held`), not the base bars. `multiplier` is the
+             instrument's contract multiplier; a closed trade carries its MAE and MFE
+             in rupees (`mae`, `mfe`) and in percent of its largest capital at work
+             (`mae_pct`, `mfe_pct`; `_result_excursion`) and what slippage cost its
+             fills (`slippage`, NaN when none was modelled); an open trade has none of
+             them yet (NaN).
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ import pandas as pd
 
 from ._calendar_convert import interval_nanos
 from ._result_costs import open_charges, trade_charges
+from ._result_excursion import excursion_columns, trade_multipliers
 from ._result_r import r_values
 from ._series import IST
 from .errors import BacktestError
@@ -36,6 +42,8 @@ from .report import tearsheet as render_tearsheet
 from .report._performance import Performance
 
 _SIDES = {"long": "BUY", "short": "SELL"}
+#: The columns of a closed trade an open trade has no value for yet (NaN).
+OPEN_TRADE_UNKNOWN = ("mae", "mfe", "mae_pct", "mfe_pct", "slippage")
 
 
 def _times(values: Any) -> pd.Series:
@@ -65,13 +73,18 @@ def strategy_bars_held(raw: pd.DataFrame, strategy_closes: list[np.ndarray]) -> 
 
 
 def closed_trades(
-    output: dict[str, Any], symbols: list[str], strategy_closes: list[np.ndarray]
+    output: dict[str, Any],
+    symbols: list[str],
+    strategy_closes: list[np.ndarray],
+    multipliers: list[float],
 ) -> pd.DataFrame:
-    """The kernel's closed trades in the metrics layout, with their cost breakdown and
-    the strategy bars each was held (`strategy_bars_held`)."""
+    """The kernel's closed trades in the metrics layout, with their cost breakdown, the
+    strategy bars each was held (`strategy_bars_held`), their excursions and slippage;
+    `multipliers` are the instruments' contract multipliers by kernel index."""
     raw = pd.DataFrame(output["trades"])
     if not len(raw):
         return pd.DataFrame()
+    excursions = excursion_columns(raw, multipliers)
     frame = pd.DataFrame(
         {
             "trade_id": raw["trade_id"],
@@ -89,6 +102,12 @@ def closed_trades(
             "exit_reason": raw["exit_reason"],
             "r_multiple": r_values(raw["net_pnl_rupees"], raw["initial_risk_rupees"]),
             "bars_held": strategy_bars_held(raw, strategy_closes),
+            "multiplier": trade_multipliers(raw["instrument"], multipliers),
+            "mae": raw["mae_rupees"].astype(float),
+            "mfe": raw["mfe_rupees"].astype(float),
+            "mae_pct": excursions["mae_pct"],
+            "mfe_pct": excursions["mfe_pct"],
+            "slippage": raw["slippage_rupees"].astype(float),
         }
     )
     charges = trade_charges(output)
@@ -106,7 +125,9 @@ def _entry_time(output: dict[str, Any], instrument: int, product: str) -> int:
     return int(rows["slice_ts"].iloc[start])
 
 
-def open_trades(output: dict[str, Any], symbols: list[str]) -> pd.DataFrame:
+def open_trades(
+    output: dict[str, Any], symbols: list[str], multipliers: list[float]
+) -> pd.DataFrame:
     """Positions still open at the end, as open trades in the metrics layout."""
     rows = []
     for position in output["final_positions"]:
@@ -130,17 +151,24 @@ def open_trades(output: dict[str, Any], symbols: list[str]) -> pd.DataFrame:
                 "costs": costs,
                 "net_pnl": gross - costs,
                 "exit_reason": None,
+                "multiplier": multipliers[instrument],
+                # A trade still open has no excursion or slippage of a closed trade yet.
+                **dict.fromkeys(OPEN_TRADE_UNKNOWN, np.nan),
             }
         )
     return pd.DataFrame(rows)
 
 
 def trades_table(
-    output: dict[str, Any], symbols: list[str], strategy_closes: list[np.ndarray]
+    output: dict[str, Any],
+    symbols: list[str],
+    strategy_closes: list[np.ndarray],
+    multipliers: list[float],
 ) -> pd.DataFrame | None:
     """Closed and open trades in the metrics layout, or None when there are none."""
-    closed = closed_trades(output, symbols, strategy_closes)
-    parts = [part for part in (closed, open_trades(output, symbols)) if len(part)]
+    closed = closed_trades(output, symbols, strategy_closes, multipliers)
+    still_open = open_trades(output, symbols, multipliers)
+    parts = [part for part in (closed, still_open) if len(part)]
     if not parts:
         return None
     frame = pd.concat(parts, ignore_index=True)

@@ -17,6 +17,7 @@ import pandas as pd
 from .._layout import NANOS_PER_SECOND
 from ..calendar import Calendar, default_calendar
 from ..errors import ConfigError
+from . import _excursion as excursion
 from . import _extended as extended
 from . import _periods as periods
 from . import _rolling as rolling
@@ -148,6 +149,7 @@ def analyse(
     figures |= _return_figures(points, curve, annual, years, rate)
     figures |= _drawdown_figures(points, curve)
     figures |= _trade_figures(table, points)
+    figures |= excursion.excursion_figures(table) | excursion.trading_cost_figures(table, figures)
     returns = pd.Series(curve["session_returns"], index=periods.date_index(days), name="return")
     monthly, yearly = periods.period_returns(returns)
     streaks = _extended_figures(figures, returns, (monthly, yearly), table, points, annual.value)

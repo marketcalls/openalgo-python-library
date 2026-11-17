@@ -21,6 +21,13 @@ A result is written down as plain JSON types: the equity table, the trades table
 the metrics. Times are UTC nanoseconds or ISO strings; floats are kept as floats, which
 `json` writes in the shortest form that reads back to the same bits. The pins live in
 `golden/<run>.json`; only `golden/regenerate.py --write` writes them.
+
+The trades' excursions and trading cost (each trade's MAE, MFE and slippage, and the
+metrics of the group "Excursions and trading cost") came after those pins and are
+pinned apart, in `golden/<run>.excursion.json` (`excursion_snapshot`): the earlier pins
+stay as they were made, so their test shows that adding the new figures changed no
+earlier one. The new figures were checked against an independent recomputation from
+each trade's fills and base bars before they were pinned.
 """
 
 from __future__ import annotations
@@ -37,6 +44,7 @@ import pandas as pd
 
 import openalgo.backtest as bt
 from openalgo import ta
+from openalgo.backtest.metrics import GROUPS
 from openalgo.backtest.reference import Instrument
 
 # A full-period 64-bit linear congruential generator (the widely published multiplier
@@ -293,6 +301,12 @@ TRADE_COLUMNS = (
     "exit_reason",
     "fills",
 )
+# The figures pinned apart (module docstring): the trades' excursions and slippage, and
+# the metrics of their group.
+EXCURSION_TRADE_COLUMNS = ("mae_rupees", "mfe_rupees", "slippage_rupees", "mae_pct", "mfe_pct")
+EXCURSION_METRICS = GROUPS["Excursions and trading cost"]
+# The suffix of the file that pins them.
+EXCURSION_PINS = "excursion"
 
 
 def plain(value: Any) -> Any:
@@ -305,16 +319,30 @@ def plain(value: Any) -> Any:
 
 
 def snapshot(result: bt.Result) -> dict[str, Any]:
-    """The pinned part of a result: equity, trades and metrics, as JSON types."""
+    """The pinned part of a result: equity, trades and metrics, as JSON types, but for
+    the figures pinned apart (`excursion_snapshot`)."""
     equity = result.equity
     trades = result.trades
+    metrics = result.metrics
     return {
         "equity": {
             "ts": [int(stamp.value) for stamp in equity.index],
             **{name: [plain(v) for v in equity[name]] for name in EQUITY_COLUMNS},
         },
         "trades": {name: [plain(v) for v in trades[name]] for name in TRADE_COLUMNS},
-        "metrics": {key: plain(value) for key, value in result.metrics.items()},
+        "metrics": {
+            key: plain(value) for key, value in metrics.items() if key not in EXCURSION_METRICS
+        },
+    }
+
+
+def excursion_snapshot(result: bt.Result) -> dict[str, Any]:
+    """The trades' excursions and slippage and the metrics of their group, as JSON
+    types."""
+    trades = result.trades
+    return {
+        "trades": {name: [plain(v) for v in trades[name]] for name in EXCURSION_TRADE_COLUMNS},
+        "metrics": {key: plain(result.metrics[key]) for key in EXCURSION_METRICS},
     }
 
 
@@ -323,30 +351,33 @@ def on_reference_platform() -> bool:
     return (platform.system(), platform.machine()) == REFERENCE_PLATFORM
 
 
-def pins_path(name: str) -> Path:
-    """The file that pins run `name`."""
-    return GOLDEN_DIR / f"{name}.json"
+def pins_path(name: str, part: str | None = None) -> Path:
+    """The file that pins run `name`, or its `part` pinned apart (`EXCURSION_PINS`)."""
+    return GOLDEN_DIR / (f"{name}.json" if part is None else f"{name}.{part}.json")
 
 
-def read_pins(name: str) -> dict[str, Any]:
-    """The pinned snapshot of run `name`."""
-    return json.loads(pins_path(name).read_text(encoding="utf-8"))
+def read_pins(name: str, part: str | None = None) -> dict[str, Any]:
+    """The pinned snapshot of run `name`, or of its `part`."""
+    return json.loads(pins_path(name, part).read_text(encoding="utf-8"))
 
 
-def write_pins(name: str, pinned: dict[str, Any]) -> Path:
-    """Write the snapshot of run `name` (only `golden/regenerate.py` calls this). NaN
-    and infinities are written as the JSON extension tokens `json` reads back."""
-    path = pins_path(name)
+def write_pins(name: str, pinned: dict[str, Any], part: str | None = None) -> Path:
+    """Write the snapshot of run `name`, or of its `part` (only `golden/regenerate.py`
+    calls this). NaN and infinities are written as the JSON extension tokens `json`
+    reads back."""
+    path = pins_path(name, part)
     path.write_text(json.dumps(pinned, indent=1) + "\n", encoding="utf-8")
     return path
 
 
 __all__ = [
     "CAPITAL",
+    "EXCURSION_PINS",
     "GOLDEN_DIR",
     "REFERENCE_PLATFORM",
     "RUNS",
     "TickWalk",
+    "excursion_snapshot",
     "on_reference_platform",
     "pins_path",
     "read_pins",

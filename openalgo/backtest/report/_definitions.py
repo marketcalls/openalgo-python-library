@@ -11,6 +11,7 @@ Units:
     days        calendar days, fractional
     seconds     elapsed seconds
     sessions    sessions per year
+    bps         basis points: 1 is 0.01 percent
     timestamp   a pandas Timestamp in IST, or None
     text        a string
     flag        True or False
@@ -24,7 +25,14 @@ zero or positive, and so is the ulcer index, a root mean square.
 from types import MappingProxyType
 from typing import NamedTuple
 
-from ._definitions_extra import BENCHMARK_EXTRA, RISK_ADJUSTED, SESSIONS, TAIL, TRADE_RATIOS
+from ._definitions_extra import (
+    BENCHMARK_EXTRA,
+    EXCURSIONS,
+    RISK_ADJUSTED,
+    SESSIONS,
+    TAIL,
+    TRADE_RATIOS,
+)
 
 
 class Definition(NamedTuple):
@@ -43,6 +51,7 @@ UNITS = (
     "days",
     "seconds",
     "sessions",
+    "bps",
     "timestamp",
     "text",
     "flag",
@@ -289,6 +298,7 @@ _GROUPS = (
     ("Returns and risk", _RETURNS),
     ("Drawdown", _DRAWDOWN),
     ("Trades", _TRADES),
+    ("Excursions and trading cost", EXCURSIONS),
     ("Benchmark", _BENCHMARK),
     ("Risk-adjusted ratios", RISK_ADJUSTED),
     ("Session returns", SESSIONS),
