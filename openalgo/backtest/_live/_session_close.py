@@ -60,7 +60,9 @@ _FINAL_READ = frozenset({"session_end", "ctrl_c"})
 class OpenPosition:
     """A position still open when the session ended: the strategy, the instrument, its
     signed units, a note for the operator, its stop's broker order ID ("" for none, or one
-    not bound) and whether that stop was confirmed working at the broker."""
+    not bound) and whether that stop was confirmed working at the broker for no more units
+    than the position holds (one larger, which a trigger would take through zero, is not:
+    `_stops_report.stop_state`)."""
 
     strategy: str
     symbol: str
