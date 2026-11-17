@@ -27,7 +27,7 @@ import pandas as pd
 from . import _random
 from . import _words as words
 from ._blocks import FanBlock
-from ._paths import DRAWS_PER_CHUNK, PathSet, fan, fan_steps, measure, own_path
+from ._paths import DRAWS_PER_CHUNK, PathSet, fan, fan_steps, joined, measure_chunk, own_path
 from ._setting import Setting, between
 from ._trade_common import (
     ENOUGH_TRADES,
@@ -73,21 +73,34 @@ def rule(settings: Mapping[str, Any]) -> str:
     )
 
 
-def _drawn(trades: TradeRun, seed: int, runs: int, rates: tuple[float, ...]) -> list[PathSet]:
-    """The paths at each of `rates`, from the same draws."""
+def _chunk(
+    trades: TradeRun, seed: int, first: int, size: int, rates: tuple[float, ...]
+) -> list[PathSet]:
+    """The `size` paths from run `first` at each of `rates`, from the same draws, reduced
+    to what the check keeps of each run (`_paths.measure_chunk`); nothing else of the
+    chunk outlives the call."""
     count = trades.closed
     winners, others = trades.pnl[trades.pnl > 0], trades.pnl[trades.pnl <= 0]
+    bits = _random.block(seed, first, size, 2 * count)
+    chance = _random.fractions(bits[:, 0::2])
+    pick = bits[:, 1::2]
+    won = winners[_random.below(pick, len(winners))] if len(winners) else np.zeros(pick.shape)
+    other = others[_random.below(pick, len(others))]
+    # The raw draws are spent: free them before the walks.
+    del bits, pick
     steps = fan_steps(count)
-    chunks: list[list[np.ndarray]] = [[] for _ in rates]
-    for first, size in _random.run_chunks(runs, 2 * count, DRAWS_PER_CHUNK):
-        bits = _random.block(seed, first, size, 2 * count)
-        chance = _random.fractions(bits[:, 0::2])
-        pick = bits[:, 1::2]
-        won = winners[_random.below(pick, len(winners))] if len(winners) else np.zeros(pick.shape)
-        other = others[_random.below(pick, len(others))]
-        for rows, rate in zip(chunks, rates, strict=True):
-            rows.append(np.where(chance < rate, won, other))
-    return [measure(rows, trades.capital, steps) for rows in chunks]
+    return [
+        measure_chunk(np.where(chance < rate, won, other), trades.capital, steps) for rate in rates
+    ]
+
+
+def _drawn(trades: TradeRun, seed: int, runs: int, rates: tuple[float, ...]) -> list[PathSet]:
+    """The paths at each of `rates`, from the same draws, one chunk at a time."""
+    chunks = [
+        _chunk(trades, seed, first, size, rates)
+        for first, size in _random.run_chunks(runs, 2 * trades.closed, DRAWS_PER_CHUNK)
+    ]
+    return [joined(at_rate) for at_rate in zip(*chunks, strict=True)]
 
 
 def run(

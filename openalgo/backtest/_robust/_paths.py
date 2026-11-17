@@ -12,11 +12,16 @@ A fan summarises many paths at no more than `FAN_POINTS` evenly spaced numbers o
 trades: the percentile bands of `BAND_LEVELS` (5 to 95 and 25 to 75 percent, the median)
 of the cumulative return, `SAMPLED_PATHS` runs drawn thin, and the run's own path (design
 17, section 2: about 100 sampled paths keep 1,000 runs light on the page).
+
+Memory: a check draws its runs in chunks of `DRAWS_PER_CHUNK` values and draws, walks
+and reduces one chunk before it draws the next (`measure`), keeping only what each run
+reduces to (`measure_chunk`: three figures and the fan's points), so its memory is a few
+chunks' worth whatever its number of runs.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 import numpy as np
@@ -30,8 +35,8 @@ FAN_POINTS = 201
 BAND_LEVELS = (0.05, 0.25, 0.50, 0.75, 0.95)
 #: The runs a fan draws as thin paths (design 17, section 2).
 SAMPLED_PATHS = 100
-#: The draws a check computes at once, whatever its number of runs: about 16 MB of
-#: 64-bit values, so a long trade list does not need memory in proportion to its runs.
+#: The draws a check computes at once, whatever its number of runs: 16 MB of 64-bit
+#: values. A chunk's walk holds its P&L, wealth and peaks, three arrays of that size.
 DRAWS_PER_CHUNK = 2_000_000
 
 
@@ -58,17 +63,22 @@ class Walk:
 
 def walk(pnl: np.ndarray, capital: float) -> Walk:
     """The paths of `pnl`, (runs, trades) net P&L in rupees booked in column order on
-    `capital` rupees."""
+    `capital` rupees. Works in place on two arrays the size of `pnl`, its wealth and
+    its peaks."""
     runs, count = pnl.shape
-    equity = capital + np.cumsum(pnl, axis=1)
-    below_zero = equity <= 0.0
+    wealth = np.empty((runs, count + 1))
+    wealth[:, 0] = 1.0
+    booked = wealth[:, 1:]
+    np.cumsum(pnl, axis=1, out=booked)
+    booked += capital
+    below_zero = booked <= 0.0
     ruined = below_zero.any(axis=1)
     ruin_at = np.where(ruined, below_zero.argmax(axis=1), count)
-    alive = np.arange(count)[None, :] < ruin_at[:, None]
-    wealth = np.ones((runs, count + 1))
-    wealth[:, 1:] = np.where(alive, equity / capital, 0.0)
+    booked /= capital
+    np.putmask(booked, np.arange(count)[None, :] >= ruin_at[:, None], 0.0)
     peaks = np.maximum.accumulate(wealth, axis=1)
-    drawdown = np.minimum((wealth / peaks - 1.0).min(axis=1), 0.0)
+    np.divide(wealth, peaks, out=peaks)
+    drawdown = np.minimum(peaks.min(axis=1) - 1.0, 0.0)
     return Walk(wealth, wealth[:, -1] - 1.0, drawdown, ruined)
 
 
@@ -105,16 +115,36 @@ class PathSet:
     at_steps: np.ndarray
 
 
-def measure(chunks: Iterable[np.ndarray], capital: float, steps: np.ndarray) -> PathSet:
-    """The paths of every (runs, trades) chunk of net P&L, in order, booked on
-    `capital` rupees."""
-    walks = [walk(rows, capital) for rows in chunks]
+def measure_chunk(pnl: np.ndarray, capital: float, steps: np.ndarray) -> PathSet:
+    """The paths of one (runs, trades) chunk of net P&L booked on `capital` rupees,
+    reduced to what a check keeps of each run; the chunk's wealth is freed on return."""
+    paths = walk(pnl, capital)
     return PathSet(
-        np.concatenate([w.final_return for w in walks]),
-        np.concatenate([w.max_drawdown for w in walks]),
-        np.concatenate([w.ruined for w in walks]),
-        np.concatenate([w.wealth[:, steps] - 1.0 for w in walks]),
+        paths.final_return, paths.max_drawdown, paths.ruined, paths.wealth[:, steps] - 1.0
     )
+
+
+def joined(parts: Iterable[PathSet]) -> PathSet:
+    """The runs of `parts`, in order, as one set."""
+    parts = list(parts)
+    return PathSet(
+        np.concatenate([part.final_return for part in parts]),
+        np.concatenate([part.max_drawdown for part in parts]),
+        np.concatenate([part.ruined for part in parts]),
+        np.concatenate([part.at_steps for part in parts]),
+    )
+
+
+def measure(
+    draw: Callable[[int, int], np.ndarray],
+    chunks: Iterable[tuple[int, int]],
+    capital: float,
+    steps: np.ndarray,
+) -> PathSet:
+    """The paths of every chunk of runs, in order: `draw(first, runs)` gives the
+    (runs, trades) net P&L in rupees of the runs from `first`, booked on `capital`
+    rupees. Each chunk is drawn, walked and reduced before the next is drawn."""
+    return joined(measure_chunk(draw(first, size), capital, steps) for first, size in chunks)
 
 
 def own_path(pnl: np.ndarray, capital: float, steps: np.ndarray) -> np.ndarray:
@@ -157,7 +187,9 @@ __all__ = [
     "bands",
     "fan",
     "fan_steps",
+    "joined",
     "measure",
+    "measure_chunk",
     "own_path",
     "resampled_trades",
     "walk",

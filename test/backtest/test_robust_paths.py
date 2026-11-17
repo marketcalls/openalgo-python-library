@@ -11,9 +11,11 @@ Hand-worked paths on a capital of 1,000:
 - +50, +50: never below a peak; drawdown 0.
 """
 
+import tracemalloc
+
 import numpy as np
 import pytest
-from robust_runs import trade_performance
+from robust_runs import check_of, trade_performance
 
 from openalgo.backtest import metrics
 from openalgo.backtest._robust import _paths
@@ -66,3 +68,30 @@ def test_resampled_paths_are_the_kernel_monte_carlo_runs(capital, some_ruined):
     assert paths.ruined.any() == some_ruined
     assert paths.final_return == pytest.approx(study.runs["final_return"].to_numpy(), abs=1e-12)
     assert paths.max_drawdown == pytest.approx(study.runs["max_drawdown"].to_numpy(), abs=1e-12)
+
+
+# 4,000 trades on 100 sessions. A chunk of `DRAWS_PER_CHUNK` draws holds 500 reshuffled
+# orders (one draw a trade) or 250 variance paths (two draws a trade).
+LONG = [300.0, -100.0, 250.0, -200.0] * 1_000
+CHUNK_BYTES = _paths.DRAWS_PER_CHUNK * 8
+
+
+def peak_bytes(performance, name: str, runs: int) -> int:
+    tracemalloc.start()
+    try:
+        check_of(performance, name, runs=runs)
+        return tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+@pytest.mark.parametrize(("name", "one_chunk"), [("reshuffle", 500), ("variance", 250)])
+def test_a_checks_memory_does_not_grow_with_its_runs(name, one_chunk):
+    # Four chunks of runs keep only what each run reduces to (a few figures and the
+    # fan's 201 points), so they peak within half a chunk of one chunk.
+    performance = trade_performance(LONG, per_session=40)
+    one, four = (
+        peak_bytes(performance, name, one_chunk),
+        peak_bytes(performance, name, 4 * one_chunk),
+    )
+    assert four - one < CHUNK_BYTES / 2

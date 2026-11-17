@@ -81,11 +81,12 @@ def run(
     if short is not None:
         return short
     count, steps = trades.closed, fan_steps(trades.closed)
-    chunks = (
-        trades.pnl[_random.orders(seed, first, size, count)]
-        for first, size in _random.run_chunks(runs, count, DRAWS_PER_CHUNK)
+    paths = measure(
+        lambda first, size: trades.pnl[_random.orders(seed, first, size, count)],
+        _random.run_chunks(runs, count, DRAWS_PER_CHUNK),
+        trades.capital,
+        steps,
     )
-    paths = measure(chunks, trades.capital, steps)
     real = own_path(trades.pnl, trades.capital, steps)
     real_drawdown = float(walk(trades.pnl[None, :], trades.capital).max_drawdown[0])
     summary = {
