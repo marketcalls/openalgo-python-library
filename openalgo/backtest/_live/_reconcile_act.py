@@ -38,6 +38,7 @@ from ..errors import VenueRefusalError
 from ._plan_catch_up import INSTRUMENT
 from ._reconcile_rules import FEWER_STOP_CANCELLED, RULES, Kind, LegBooks, adoption_price
 from ._session_news import RECONCILE_LOCK
+from ._session_records import adopted_fill
 from ._session_trader import Trader
 from ._stops_orders import IN_FLIGHT, Sent
 from ._types import LOGGER_NAME, AlertKind, OrderStatus, OrderUpdate
@@ -246,6 +247,7 @@ class Corrections:
             # After the last lines a held cancel of the stop is withdrawn before the fill,
             # so the kernel's fit with it cuts the stop to what is left (module docstring).
             withdrawn = guard.withdraw_for_cut(trader.name, broker)
+            before = trader.open_units()
             call(
                 trader.engine.apply_external_fill,
                 INSTRUMENT,
@@ -263,6 +265,8 @@ class Corrections:
             return f"{NOT_ADOPTED} ({error})"
         signed = units if side == "BUY" else -units
         self._adopted[trader.name] = self._adopted.get(trader.name, 0) + signed
+        trader.records.filled(before, trader.open_units())
+        session.fills.append(adopted_fill(trader, side, units, price, session.now()))
         session.event("adopted", strategy=trader.name, side=side, units=units, price=price)
         # An exit's cancel of the stop the exit guard held: the kernel waits for it and
         # fits nothing more, so the stop would stay larger than what is left.

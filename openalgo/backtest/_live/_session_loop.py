@@ -43,10 +43,12 @@ from .._layout import NANOS_PER_SECOND
 from ..errors import LiveError
 from ._guard_breach import ModeBreach, breach_text
 from ._session_exits import ExitRetries
+from ._session_figures import DayFigures, SessionFigures, StrategyFigures
 from ._session_lag import LoopLag
 from ._session_news import News
 from ._session_parts import SessionParts, SessionStopped, StopFlag
-from ._session_saved import save, save_released
+from ._session_records import FillRecord
+from ._session_saved import save, save_released, save_session
 from ._session_trader import Trader
 from ._stops_report import stop_words
 from ._types import LOGGER_NAME, AlertKind, Now, Sleep, Tick
@@ -76,8 +78,15 @@ LOOP_DRAIN_OVERRUN_S = 0.2
 LOOP_WAIT_MIN_S = 0.001
 #: The entry lock of the session's guard lock (6.2).
 MODE_BREACH_LOCK = "mode_breach"
+#: How the console shows a warning, once: the banner's lines and a later warning alike.
+WARNING_LINE = "Warning: {}"
 
 _NS = NANOS_PER_SECOND
+
+
+def warning_line(text: str) -> str:
+    """A warning as the console prints it (`WARNING_LINE`)."""
+    return WARNING_LINE.format(text)
 
 
 class Session:
@@ -126,6 +135,12 @@ class Session:
         self.tally = TickTally()
         self.last_tick: dict[tuple[str, str], Tick] = {}
         self.warnings: list[str] = []
+        #: True once the start banner is printed: a later warning is printed at once.
+        self.banner_shown = False
+        #: Every fill the kernel took, and what the day's earlier starts left (the start
+        #: sets it from journal L at a restart).
+        self.fills: list[FillRecord] = []
+        self.figures = DayFigures({}, StrategyFigures(), SessionFigures())
         self.started_ns = now()
         self._held: collections.deque[Envelope] = collections.deque()
         self._event_failed = False
@@ -171,15 +186,19 @@ class Session:
                 self.warn(text)
                 self.alert(AlertKind.ERROR, text)
 
-    def alert(self, kind: AlertKind, text: str) -> None:
-        """Send an alert through the session's shared alerts (which log it)."""
-        self.parts.alerts.send(kind, text)
+    def alert(self, kind: AlertKind, text: str, *, echo: bool = True) -> None:
+        """Send an alert through the session's shared alerts (which log it, and echo it on
+        the console unless `echo` is False: a line the caller prints itself)."""
+        self.parts.alerts.send(kind, text, echo=echo)
 
     def warn(self, text: str) -> None:
-        """Keep a warning for the result, once, and log it."""
+        """Keep a warning for the result, once, and log it; once the start banner is out
+        (it prints the warnings found before it) print it on the console too."""
         if text not in self.warnings:
             self.warnings.append(text)
             logger.warning(text)
+            if self.banner_shown:
+                self.emit(warning_line(text))
 
     def hand_over(self, requests: Sequence[Request]) -> None:
         """Give the order worker `requests`, in order, but those the reconciler's exit
@@ -260,6 +279,8 @@ class Session:
             if made:
                 save(self, trader)
             requests += made
+        if requests:
+            save_session(self)
         return requests
 
     def pause(self, seconds: float) -> None:
@@ -391,5 +412,7 @@ __all__ = [
     "LOOP_WAIT_MAX_S",
     "LOOP_WAIT_MIN_S",
     "MODE_BREACH_LOCK",
+    "WARNING_LINE",
     "Session",
+    "warning_line",
 ]

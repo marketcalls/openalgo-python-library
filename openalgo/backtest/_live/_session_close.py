@@ -46,6 +46,7 @@ from .._driver import deliver
 from .._engine import call
 from ..errors import JournalError
 from ._alerts_summary import SessionSummary, summary_text
+from ._plan_catch_up import StrategyPlan
 from ._reconcile_close import (
     NOT_CONFIRMED_ALERT,
     differing,
@@ -57,6 +58,7 @@ from ._reconcile_close import (
 from ._reconcile_final import final_read
 from ._reconcile_findings import Reconciliation
 from ._session_loop import Session
+from ._session_records import FillRecord, LockRecord, OrderRecord, order_records
 from ._session_trader import Skipped, Trader
 from ._stops_cover import Unprotected
 from ._stops_held import Estimate
@@ -96,16 +98,19 @@ class OpenPosition:
 
 @dataclass(frozen=True)
 class SessionOutcome:
-    """What one run of a live session leaves (the public `SessionResult` is built from it
-    in a later unit): the `mode` ("sandbox" or "live"), `broker`, `account`, IST `day`,
+    """What one run of a live session leaves (the public `SessionResult` is built from it,
+    `_result_build`): the `mode` ("sandbox" or "live"), `broker`, `account`, IST `day`,
     `started_ns` and `ended_ns`, `stopped_by` ("session_end", "ctrl_c", "mode_breach",
     "error"), `restarts`, the `strategies` in call order, `outputs` (each kernel
-    session's `finish()` tables by strategy), `summary` (the day's figures),
-    `open_positions`, `mode_breach` (the guard's text or None), `warnings`,
-    `skipped_decisions`, `drift` (the accepted candles' drift), `paths` (journal, log,
-    events), `unprotected` (each window a leg had no confirmed stop at the broker),
-    `estimated` (the fills released at a price the books did not confirm) and
-    `reconciliations` (each comparison with the broker's books that differed)."""
+    session's `finish()` tables by strategy), `summary` (the day's figures across its
+    restarts, `_session_figures`), `open_positions`, `mode_breach` (the guard's text or
+    None), `warnings`, `skipped_decisions`, `drift` (the accepted candles' drift), `paths`
+    (journal, log, events), `unprotected` (each window a leg had no confirmed stop at the
+    broker), `estimated` (the fills released at a price the books did not confirm),
+    `reconciliations` (each comparison with the broker's books that differed), and the
+    records of `_session_records`: `orders`, `fills` and `locks`; `plans`, each
+    strategy's part of the session plan by name (its settings, strategy and run context,
+    for its result)."""
 
     mode: str
     broker: str
@@ -127,6 +132,10 @@ class SessionOutcome:
     unprotected: tuple[Unprotected, ...] = ()
     estimated: tuple[Estimate, ...] = ()
     reconciliations: tuple[Reconciliation, ...] = ()
+    orders: tuple[OrderRecord, ...] = ()
+    fills: tuple[FillRecord, ...] = ()
+    locks: tuple[LockRecord, ...] = ()
+    plans: dict[str, StrategyPlan] = field(default_factory=dict)
 
 
 def close_session(
@@ -155,6 +164,7 @@ def close_session(
             _save_states(session)
         parts.worker.close()
         outputs = {trader.name: _stop_engine(trader) for trader in session.traders}
+        orders = order_records(session, {name: output for name, (output, _) in outputs.items()})
         summary = _summary(session, outputs, unprotected_s, named, not open_positions)
         session.alert(AlertKind.DAILY_SUMMARY, summary_text(summary))
         if not session.threads:
@@ -189,6 +199,10 @@ def close_session(
         unprotected=session.stops.windows.rows(),
         estimated=tuple(session.stops.held.estimates),
         reconciliations=tuple(session.reconcile.rows),
+        orders=orders,
+        fills=tuple(session.fills),
+        locks=tuple(lock for trader in session.traders for lock in trader.records.locks),
+        plans={trader.name: trader.part for trader in session.traders},
     )
 
 
@@ -233,25 +247,27 @@ def _summary(
     legs: tuple[tuple[str, ...], tuple[str, ...]],
     flat: bool,
 ) -> SessionSummary:
-    """The day's figures of this start: the trades the kernel sessions closed, their
-    gross P&L and modelled charges (the broker's trade book carries none), and the legs
-    `_named_legs` gives, each differing one a mismatch too."""
+    """The day's figures across its restarts (`_session_figures`): the trades the kernel
+    sessions closed, their gross P&L and modelled charges (the broker's trade book carries
+    none), the session's counts, and the legs `_named_legs` gives, each differing one a
+    mismatch too. No slippage: the backtest's fill price of each order is not modelled
+    here."""
     differs, unsure = legs
     parts = session.parts
-    closed = sum(len(output["trades"]["trade_id"]) for output, _ in outputs.values())
+    traded, counted = session.figures.day(session, outputs, unprotected_s)
     return SessionSummary(
         day=parts.spec.day,
         mode=parts.mode,
         broker=parts.broker,
         strategies=tuple(t.name for t in session.traders),
-        closed_trades=closed,
-        gross_pnl=sum(gross for _, (gross, _) in outputs.values()),
-        charges=sum(charges for _, (_, charges) in outputs.values()),
+        closed_trades=traded.closed_trades,
+        gross_pnl=traded.gross_pnl,
+        charges=traded.charges,
         slippage=None,
-        rejected_orders=session.rejected,
-        unprotected_seconds=unprotected_s,
-        reconcile_mismatches=session.mismatches + len(differs),
-        undelivered_alerts=parts.sender.undelivered,
+        rejected_orders=counted.rejected_orders,
+        unprotected_seconds=counted.unprotected_seconds,
+        reconcile_mismatches=counted.reconcile_mismatches + len(differs),
+        undelivered_alerts=counted.undelivered_alerts,
         flat=flat,
         differing=differs,
         unconfirmed=unsure,

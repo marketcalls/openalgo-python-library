@@ -9,13 +9,15 @@ plain-data dict:
 | "live_state" | the kernel session's `live_state()` (K4, R14) |
 | "venue_map" | the venue map's records of the orders the kernel still works (`_venue_saved`) |
 | "adopted" | the signed units the reconciler adopted from other orders' trades (5.3) |
+| "figures" | the strategy's figures of the day as that state holds them (`_session_figures`) |
 
 It is saved before each batch of the kernel's commands reaches the order worker (design
 rule 4: a restart never meets an order the saved state lacks) and after each slice a
 strategy releases (the trail's extremes move on ticks without commands), with the
-strategy's `self.state` when it changed (`save_released`). A kernel session
-that has finished saves nothing: no session resumes at its close. A journal that cannot
-write raises JournalError, which stops the session (3.5).
+strategy's `self.state` when it changed (`save_released`), and the session's own counts
+of the day after them (`save_session`, under `_session_figures.SESSION_KEY`). A kernel
+session that has finished saves nothing: no session resumes at its close. A journal that
+cannot write raises JournalError, which stops the session (3.5).
 
 Quantities are signed units, prices rupees.
 """
@@ -31,6 +33,7 @@ from ..errors import LiveError
 from ._kill_switch import ACCOUNT_LOSS
 from ._plan_catch_up import INSTRUMENT
 from ._session_exits import EXIT_FAILED_LOCK
+from ._session_figures import FIGURES, SESSION_KEY
 from ._session_news import RECONCILE_LOCK
 from ._session_trader import Trader
 from ._venue_requests import LIVE_PRODUCT
@@ -93,20 +96,29 @@ def save(session: Any, trader: Trader) -> None:
         "live_state": call(trader.engine.live_state),
         "venue_map": trader.venue.saved(),
         "adopted": session.reconcile.adopted(trader.name),
+        FIGURES: session.figures.strategy(trader),
     }
     session.parts.journal.put_rms_state(trader.name, saved, day=session.parts.spec.day)
 
 
+def save_session(session: Any) -> None:
+    """Save `session`'s own counts of the day to journal L (module docstring). Raises
+    JournalError when the journal cannot write them."""
+    counts = session.figures.session_counts(session)
+    session.parts.journal.put_rms_state(SESSION_KEY, counts, day=session.parts.spec.day)
+
+
 def save_released(session: Any, names: set[str]) -> None:
     """The loop's step F: each strategy of `session` named in `names` (those that released
-    a slice) saved, and its `self.state` when it changed, to journal L. Raises
-    JournalError when the journal cannot write them."""
+    a slice) saved, and its `self.state` when it changed, to journal L, then the session's
+    counts. Raises JournalError when the journal cannot write them."""
     for trader in session.traders:
         if trader.name in names:
             save(session, trader)
             state = trader.state_changed()
             if state is not None:
                 session.parts.journal.put_user_state(trader.name, state)
+    save_session(session)
 
 
 def read_saved(state: Mapping[str, Any] | None, strategy: str) -> Saved | None:
@@ -128,4 +140,12 @@ def read_saved(state: Mapping[str, Any] | None, strategy: str) -> Saved | None:
     return Saved(live_state, orders, sent, adopted)
 
 
-__all__ = ["DAY_LOCKS", "LEG_STOP_ROLE", "Saved", "read_saved", "save", "save_released"]
+__all__ = [
+    "DAY_LOCKS",
+    "LEG_STOP_ROLE",
+    "Saved",
+    "read_saved",
+    "save",
+    "save_released",
+    "save_session",
+]

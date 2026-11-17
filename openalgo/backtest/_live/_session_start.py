@@ -52,8 +52,10 @@ from ..strategy import Strategy
 from ._alerts_logs import configure_session_logs
 from ._journal_file import DEFAULT_BUSY_TIMEOUT_S
 from ._preflight_lock import live_root
+from ._preflight_plan import WARNING
 from ._restart_books import judge_start, read_start
 from ._session_banner import BANNER_ALERT_LINES, banner_lines
+from ._session_figures import DayFigures
 from ._session_loop import Session
 from ._session_parts import SessionParts, StopFlag
 from ._session_restore import RESTART_PROTECT_WAIT_S, protect_restored, restore
@@ -133,7 +135,8 @@ def _open(
     clients = settings.clients
     if clients is None:
         clients = stack.enter_context(derive(client))
-    shared = SharedAlerts()
+    # Every alert is echoed on the operator's console, with or without a Telegram user.
+    shared = SharedAlerts(echo=settings.emit)
     guard = ModeGuard(clients.guard, now=now, alerts=shared)
     mode = guard.start()
     names = tuple(each.name for each in spec.strategies)
@@ -219,11 +222,13 @@ def _open(
         wait_max_s=settings.wait_max_s,
     )
     session.traders = _traders(session, report.funds_available)
+    session.figures = DayFigures.at_start(snapshot.rms_states, names)
     for envelope in start.deferred:
         # What the worker posted during the start's reads, for the loop to take.
         inbox.put(envelope.message)
     restore(session, restart, settings.sleep)
-    for note in (*report.warnings, *plan.warnings):
+    # The preflight marks its warnings with a prefix of its own; the console adds one.
+    for note in (*(note.removeprefix(WARNING) for note in report.warnings), *plan.warnings):
         session.warn(note)
     session.risk.warn_at_start()
     return session
@@ -355,6 +360,7 @@ def begin_trading(session: Session, source: FeedSource) -> None:
     lines = banner_lines(session)
     for line in lines:
         session.emit(line)
+    session.banner_shown = True
     session.alert(AlertKind.SESSION, "\n".join(lines[:BANNER_ALERT_LINES]))
     countdown(COUNTDOWN_SECONDS, emit=session.emit, sleep=session.pause)
     instruments = [{"symbol": t.symbol, "exchange": t.exchange} for t in session.traders]
