@@ -13,19 +13,24 @@ runs steps 1 to 11 and returns the loop, `begin_trading` runs steps 12 to 15 on 
    guard's banner line is read now.
 8. The order worker starts journal handle W, the journal's session of the day and the
    order path (on its own thread, or inline under the test seam), and the main thread
-   opens journal handle L. A restart of the day with any order in the journal is
-   refused: resuming one is built with the reconciler (unit 12).
+   opens journal handle L.
+9. and 10. Unbound intents of the day resolved first, then the books read and each
+   strategy's journal position judged against the broker's (`_restart_books`): a broker
+   position on a traded symbol that the journal does not hold, or a journal position the
+   broker does not hold that nothing explains, refuses the start (LiveError).
 11. The plan (`plan.build`): warm-up from broker history, each strategy's kernel session,
    live series and `init`, its saved `self.state` merged, the catch-up to the present.
    Each kernel session's entries are locked ("starting") and its sizing equity capped by
-   the funds available. Steps 9 and 10 (unbound intents and the restart comparison)
-   belong to a restart.
+   the funds available; a restart's saved state restored and checked
+   (`_session_restore.restore`).
 
 A failure up to step 11 closes what was opened, in reverse, and is raised. Then
-`begin_trading`: 12. the data worker starts and the loop turns (the start phase);
-13. the banner, a SESSION alert with its first lines, and the countdown, during which the
-loop keeps turning; 14. the feed connects and the session watches it; 15. entries are
-unlocked. A stop requested during 13 or 14 raises `SessionStopped`.
+`begin_trading`: 12. the data worker starts and the loop turns (the start phase): with a
+position resumed, the loop turns until its stop is confirmed, at most
+`RESTART_PROTECT_WAIT_S`, before anything else; 13. the banner, a SESSION alert with its
+first lines, and the countdown, during which the loop keeps turning; 14. the feed
+connects and the session watches it; 15. entries are unlocked. A stop requested during
+13 or 14 raises `SessionStopped`.
 
 Times are UTC nanoseconds, amounts rupees.
 """
@@ -47,9 +52,11 @@ from ..strategy import Strategy
 from ._alerts_logs import configure_session_logs
 from ._journal_file import DEFAULT_BUSY_TIMEOUT_S
 from ._preflight_lock import live_root
+from ._restart_books import judge_start, read_start
 from ._session_banner import BANNER_ALERT_LINES, banner_lines
 from ._session_loop import Session
 from ._session_parts import SessionParts, StopFlag
+from ._session_restore import RESTART_PROTECT_WAIT_S, protect_restored, restore
 from ._session_trader import Trader, ist_instant
 from ._shared_alerts import SharedAlerts
 from ._types import LOGGER_NAME, AlertKind, Mode, Now, Sleep
@@ -178,8 +185,9 @@ def _open(
             busy_timeout_s=DEFAULT_BUSY_TIMEOUT_S,
         )
     )
+    start = read_start(worker, inbox, settings, journal, spec.day, shared)
+    restart = judge_start(spec, journal, start, shared)
     snapshot = journal.snapshot(day=spec.day)
-    _refuse_restart(journal_session.starts, snapshot, journal.queued(day=spec.day))
     saved = {name: kept.state for name, kept in snapshot.user_states.items()}
     plan = build(spec, clients.data, facts=report.instruments, clock=now, user_states=saved)
     parts = SessionParts(
@@ -211,6 +219,10 @@ def _open(
         wait_max_s=settings.wait_max_s,
     )
     session.traders = _traders(session, report.funds_available)
+    for envelope in start.deferred:
+        # What the worker posted during the start's reads, for the loop to take.
+        inbox.put(envelope.message)
+    restore(session, restart, settings.sleep)
     for note in (*report.warnings, *plan.warnings):
         session.warn(note)
     session.risk.warn_at_start()
@@ -294,20 +306,6 @@ def _start_worker(worker: OrderWorker, inbox: Inbox, settings: StartSettings) ->
     )
 
 
-def _refuse_restart(starts: int, snapshot: Any, queued: Sequence[Any]) -> None:
-    """A restart of the day is refused once the journal holds an order of the day:
-    resuming it needs the kernel's saved state and the reconciler. A start after one that
-    sent nothing is a fresh start."""
-    sent = snapshot.bound_orders or snapshot.unbound or queued
-    if starts > 1 and sent:
-        raise LiveError(
-            f"this is start {starts} of today's session in the journal, which holds the "
-            "orders of an earlier start: resuming a session after a restart is not "
-            "supported yet. Check the positions and orders in OpenAlgo and close them by "
-            "hand, or run the session under another account name (account=)"
-        )
-
-
 def _traders(session: Session, funds_available: float) -> tuple[Trader, ...]:
     """Each strategy's `Trader`, its venue map numbered with the session's request IDs,
     its entries locked until trading begins and its sizing capped by the funds."""
@@ -352,6 +350,8 @@ def begin_trading(session: Session, source: FeedSource) -> None:
     parts.stack.callback(data.close)
     if session.threads:
         data.start()
+    if any(trader.open_units() for trader in session.traders):
+        protect_restored(session, RESTART_PROTECT_WAIT_S)
     lines = banner_lines(session)
     for line in lines:
         session.emit(line)

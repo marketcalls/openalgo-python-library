@@ -6,9 +6,9 @@ time that end it (`Control`). The common close is `_session_close`.
 - **Ctrl+C, the safe stop (D29).** The first stop request locks every strategy's entries
   ("operator_stop") and cancels its working entries and adds (one decided in the same
   loop step is withdrawn before it is sent: `Trader.commands`). With `on_stop="flatten"`
-  every open position is then exited (`request_exit`, "operator_stop"; the kernel answers
-  "already_exiting" while an exit of it works, and a position whose exit failed every
-  attempt of the retry schedule is asked once more). At each later step a position whose
+  every open position is then exited (`request_exit`, "operator_stop", after a fresh book
+  read; the kernel answers "already_exiting" while an exit works, and a position whose
+  exit failed every retry is asked once more). At each later step a position whose
   exit is not on the retry schedule (`_session_exits`) is asked again, so an entry that
   fills after the stop began is exited too. The session waits until every strategy is
   flat with nothing working, at most `SAFE_STOP_FLATTEN_S`; then each leg not flat is
@@ -33,10 +33,13 @@ time that end it (`Control`). The common close is `_session_close`.
   still in flight, and stops. The same lines end a stop with "keep" or a safe stop whose
   legs are all flat or protected; each is an ERROR alert too unless the leg's confirmed
   stop covers it with nothing else working (`_stops_report.protected`), which needs
-  nothing of the operator. Two requests the loop sees at once act as the first
-  followed by the second (decided for unit 10: how fast the keys were pressed must not
-  change the outcome), so the flatten's exits are asked for and the second's bounded
-  wait follows. After a guard lock nothing can be sent: a first Ctrl+C stops at once.
+  nothing of the operator. Two requests seen at once act as the first followed by the
+  second (unit 10: how fast the keys were pressed must not change the outcome): the
+  flatten's exits are asked for, then the second's bounded wait. A second seen before
+  the flatten's book read is compared (at once or a moment later) keeps a leg's stop,
+  whose cancel waits for that read (the exit guard): the leg is left open with its stop
+  and no exit, as 16-session-design 3.3 step 4 "As built" accepts. After a guard lock
+  nothing can be sent: a first Ctrl+C stops at once.
 - **The end of the day.** Once every strategy is past its MIS square-off, flat and with
   nothing working, the session ends ("session_end"). From the square-off plus
   `SQUARE_OFF_VERIFY_AFTER_S` a strategy not flat gets the ERROR alert "still not flat
@@ -66,7 +69,7 @@ from .._layout import NANOS_PER_SECOND
 from ._session_loop import Session
 from ._session_trader import StrategyFailed, Trader
 from ._stops_protect import PROTECTED
-from ._stops_report import left_open, open_while_running, protected
+from ._stops_report import left_open, leg_words, open_while_running, protected
 from ._types import LOGGER_NAME, AlertKind
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -203,6 +206,7 @@ class Control:
             self.verdict = MODE_BREACH
             return
         if self._on_stop == "flatten":
+            session.reconcile.read_before_exits()
             self._ask_exits(retried_too=True)
         else:
             self._protect(session.traders, now_ns)
@@ -285,13 +289,15 @@ class Control:
             units = trader.open_units()
             if units == 0 or self._protected(trader):
                 continue
-            line = f"{_leg(trader, units)}: not flat yet, {self._exit_state(trader)}"
+            line = f"{leg_words(trader, units)}: not flat yet, {self._exit_state(trader)}"
             session.emit(line)
             session.alert(AlertKind.ERROR, f"safe stop: {line}")
 
     def _exit_state(self, trader: Trader) -> str:
         """What works toward the exit of `trader`'s position, as a reminder says it."""
         session = self._session
+        if session.reconcile.guard.holds_back(trader.name):
+            return "its exit is held back until OpenAlgo's books show the units it closes"
         stop = session.stops.leg(trader).stop
         closing = [kernel_order for kernel_order in trader.exit_orders() if kernel_order != stop]
         exits = [trader.order_name(kernel_order) for kernel_order in closing]
@@ -328,7 +334,7 @@ class Control:
             units = trader.open_units()
             if units == 0:
                 continue
-            line = f"{_leg(trader, units)}: {left_open(session.stops, trader)}"
+            line = f"{leg_words(trader, units)}: {left_open(session.stops, trader)}"
             session.emit(line)
             if every_leg or not protected(session.stops, trader):
                 session.alert(AlertKind.ERROR, line)
@@ -369,11 +375,6 @@ class Control:
             f"{trader.exchange} {trader.open_units():g} units, working orders "
             f"{', '.join(exits) or 'none'}",
         )
-
-
-def _leg(trader: Trader, units: float) -> str:
-    """How a line names a strategy's leg: the strategy, the instrument, signed units."""
-    return f"{trader.name} {trader.symbol} {trader.exchange} {units:g} units"
 
 
 def _s(seconds: float) -> int:

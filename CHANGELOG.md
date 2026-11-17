@@ -318,6 +318,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   position is flat). A fill that would not only close or reduce the position (on its
   side, of a flat position, through zero) is refused whole: `VenueRefusalError` of the
   new kind `beyond_position`.
+- The live session's reconciler and restart (private). OpenAlgo's position, order and trade
+  books and the funds are read when trading begins, every 30 seconds, 3 seconds after a
+  fill, 3 seconds after a comparison that found a new difference, around each square-off,
+  before the safe stop's flatten and at the close, and compared leg by leg with the engine
+  once the leg has no order in flight (a leg in flight for more than 3 minutes is compared
+  anyway, with an alert and no action). A fill of the session's own orders that the stream
+  and the polls missed is taken from the trade book. A difference seen in two comparisons
+  in a row locks the strategy's entries, sends an alert, and allows only a safe
+  correction: a position closed or reduced by other orders whose trades come to the
+  difference exactly (a sale by hand, the broker's square-off) is adopted, with its stop
+  cancelled or cut to what is left; when the broker holds the other side the leg's own
+  stop is cancelled and the alert says to close it by hand; a broker holding fewer units
+  that no trade explains, or more units, is left alone and alerted (an ERROR alert to
+  check the account once it lasts 3 minutes). Nothing is ever traded to make the broker
+  match the engine, and no difference exits a position or fires the kill switch. From the
+  first comparison showing the broker with fewer units, none or the other side, no exit,
+  flatten, square-off or stop of that leg is sent for more than the broker holds on that
+  side. Orders of the session working at the broker that the engine does not hold, and
+  working orders naming the strategy that the session did not send, are reported. The
+  funds read caps each strategy's sizing by the available cash. After the session's last
+  lines the close sends nothing those lines did not name; a difference only its final read
+  sees is reported at OpenAlgo's units in the result and the daily summary, with one ERROR
+  alert, never as flat, and a leg no read could judge (its own fill landed inside the
+  read) is reported as not confirmed, with an alert to check OpenAlgo's position book. A
+  restart the same day first resolves the journal's unsent or unanswered orders against
+  the order book, then reads the books: a broker position on a traded symbol that the
+  journal does not hold, or a journal position the broker does not hold and no trade
+  explains, refuses the start with nothing sent. Each strategy's saved state is restored
+  after its catch-up, every restored order is checked against the journal and the books,
+  the entry locks that last the day are set again, and before the banner every open leg
+  has its stop confirmed or placed again (or is exited when past its square-off).
 - Reference table `price_protection` (`openalgo/backtest/reference/data/price_protection.csv`,
   read with `tables.find("price_protection", (exchange, segment, check, underlying, days),
   date)`): the price bands NSE and BSE apply to an option's limit price, by date, each row

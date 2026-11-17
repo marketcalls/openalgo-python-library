@@ -27,7 +27,10 @@ runs, on the loop's thread, the rules about the broker's behaviour in time:
 The loop calls the hooks as it takes each message, `duties` in its step D, and `review`
 after the commands are handed over (E), so a window opens at the receive time of the
 news that left units uncovered. Nothing is done once the mode guard has locked: nothing
-can be sent. Times are UTC nanoseconds, prices rupees, quantities units.
+can be sent. Once the close has printed its last lines no price is taken and no duty
+runs, and a word that ends a leg's stop, and the cut of a stop and its refusal, are
+noted for the result (`after`, 3.3 step 5).
+Times are UTC nanoseconds, prices rupees, quantities units.
 """
 
 from __future__ import annotations
@@ -39,24 +42,14 @@ from typing import Any
 from ._fill_ledger import FillResult
 from ._order_answers import Outcome
 from ._order_book import Resolution, Resolved
-from ._order_state import ENTRY_PURPOSES
 from ._session_trader import Trader
+from ._stops_after import AfterLines
 from ._stops_bare import BareLegs
 from ._stops_cancels import CancelRetries
-from ._stops_cover import (
-    AMBIGUOUS_ORDER,
-    EXIT_RETRIES,
-    EXITING,
-    HELD_CANCEL,
-    STOP_ENDED,
-    STOP_HELD,
-    STOP_UNCONFIRMED,
-    UNBOUND_ADD,
-    Windows,
-)
+from ._stops_cover import Windows, reason_of
 from ._stops_deadline import UNPROTECTED, UNPROTECTED_EXIT_AFTER_S, Deadlines
 from ._stops_held import HeldWords
-from ._stops_kernel import order_of, push_price
+from ._stops_kernel import cancelling, push_price
 from ._stops_orders import LegOrders, Sent
 from ._stops_price import PriceRule
 from ._stops_protect import Protection
@@ -78,7 +71,8 @@ logger = logging.getLogger(LOGGER_NAME)
 
 class StopsSupervisor:
     """The stops supervisor of `session`, a `_session_loop.Session` (module docstring).
-    `windows`, `prices`, `held`, `cancels`, `silence` and `protection` are its parts."""
+    `windows`, `prices`, `held`, `cancels`, `silence`, `protection` and `after` are its
+    parts."""
 
     def __init__(self, session: Any) -> None:
         self._session = session
@@ -96,6 +90,7 @@ class StopsSupervisor:
         self.bare = BareLegs(session, self)
         self.deadlines = Deadlines(session, self)
         self.silence = SilentServer(session, self)
+        self.after = AfterLines()
 
     def leg(self, trader: Trader) -> LegOrders:
         """What the supervisor knows of `trader`'s leg."""
@@ -105,7 +100,9 @@ class StopsSupervisor:
 
     def price(self, trader: Trader, price: float, at_ns: int) -> None:
         """A price of `trader`'s instrument, rupees at `at_ns` (a tick, a quote): to the
-        kernel, then the price rule."""
+        kernel, then the price rule; to neither after the close's last lines."""
+        if self.after.ended:
+            return
         if push_price(trader, price, at_ns):
             self._touch(trader, at_ns)
         self.prices.observe(trader, self.leg(trader).stop, price, at_ns)
@@ -116,12 +113,14 @@ class StopsSupervisor:
             if isinstance(request, PlaceRequest | ModifyRequest | CancelRequest):
                 self._requests[request.request_id] = request
                 self._legs.setdefault(request.intent.strategy, LegOrders()).handed(request)
+                self.after.handed(request)
 
     def updated(self, trader: Trader, update: OrderUpdate, result: FillResult) -> None:
         """An order word the kernel was given, with what it did."""
         kernel_order, leg = result.kernel_order, self.leg(trader)
         watched = leg.orders.get(kernel_order)
         cancel_sent = watched is not None and watched.cancel_sent
+        after_lines = self.after.heard(trader, leg, kernel_order, update)
         leg.heard(kernel_order, update)
         self._touch(trader, update.ts_recv_ns)
         if result.increment is not None:
@@ -130,7 +129,8 @@ class StopsSupervisor:
             return
         self.prices.ended(trader, kernel_order)
         self.cancels.ended(trader, kernel_order)
-        by_itself = update.status is OrderStatus.CANCELLED and not cancel_sent
+        # After the last lines the stop's end is noted for the result (`after`), not alerted.
+        by_itself = update.status is OrderStatus.CANCELLED and not (cancel_sent or after_lines)
         if watched is not None and watched.purpose is Purpose.STOP and by_itself:
             self._session.alert(
                 AlertKind.REJECT,
@@ -218,8 +218,8 @@ class StopsSupervisor:
         """Step D: the unprotected deadline, the price rule, held words, cancels sent
         again, bare legs, a silent OpenAlgo, protect by state. With `protecting` (the
         emergency stop's turns) a part that fails is logged and skipped from then on, so
-        protect by state, the last, still runs."""
-        if self._session.locked:
+        protect by state, the last, still runs. None runs after the close's last lines."""
+        if self._session.locked or self.after.ended:
             return
         parts = (
             self.deadlines.due,
@@ -263,7 +263,11 @@ class StopsSupervisor:
                 self._warn_unguarded(trader, units)
             else:
                 uncovered = units + leg.unbound_add_units - self.covered(trader)
-                opened = self.windows.note(key, uncovered, self._reason(trader, leg), span)
+                stop = leg.orders.get(leg.stop) if leg.stop is not None else None
+                held = stop is not None and self.held.held_cancel(trader, stop.kernel_order)
+                retries = self._session.exits.owns(trader.name)
+                reason = reason_of(leg, held_cancel=held, retries=retries)
+                opened = self.windows.note(key, uncovered, reason, span)
                 if opened is not None:
                     self._session.event(
                         "unprotected",
@@ -277,8 +281,10 @@ class StopsSupervisor:
     # ----- what the alerts and the close read -------------------------------------------
 
     def covered(self, trader: Trader) -> int:
-        """The units the leg's confirmed stop covers at the broker now: none while a
-        cancel of it was sent (the broker may have cancelled it already)."""
+        """The units the leg's confirmed stop may still fill at the broker now, by the terms
+        the broker confirmed (the venue map's, whatever modify or cancel of it waits), so
+        more than the position until a sale by hand is fitted; none once a cancel of it
+        was sent (the broker may have cancelled it already)."""
         leg = self.leg(trader)
         kernel_order = leg.stop
         watched = leg.orders.get(kernel_order) if kernel_order is not None else None
@@ -286,10 +292,22 @@ class StopsSupervisor:
             return 0
         if kernel_order not in trader.working() or self.held.held_cancel(trader, kernel_order):
             return 0
-        order = order_of(trader, kernel_order)
-        if order is None or order["order_type"] not in STOP_TYPES:
+        terms = trader.venue.terms(kernel_order)
+        if terms.price_type not in STOP_TYPES:
             return 0
-        return max(0, round(order["quantity_units"] - order["filled_units"]))
+        return max(0, terms.quantity - trader.venue.filled(kernel_order))
+
+    def broker_units(self, trader: Trader) -> int | None:
+        """The broker's signed units of `trader`'s leg as the last read showed them while
+        they differ from the engine's (`Reconciler.broker_units`), else None."""
+        return self._session.reconcile.broker_units(trader.name)
+
+    def cancelling(self, trader: Trader) -> frozenset[int]:
+        """The kernel orders of `trader` whose cancel the kernel decided and the venue has
+        not answered, but those whose cancel the reconciler's exit guard holds back: never
+        sent, so they work at the broker."""
+        held = self._session.reconcile.guard.held_cancels(trader.name)
+        return cancelling(trader) - held
 
     # ----- helpers ------------------------------------------------------------------
 
@@ -299,24 +317,6 @@ class StopsSupervisor:
         known = self._changed.get(trader.name)
         span = (at_ns, at_ns) if known is None else (min(known[0], at_ns), max(known[1], at_ns))
         self._changed[trader.name] = span
-
-    def _reason(self, trader: Trader, leg: LegOrders) -> str:
-        live = [w for w in leg.orders.values() if w.state is not Sent.ENDED]
-        if any(w.state is Sent.AMBIGUOUS and w.purpose not in ENTRY_PURPOSES for w in live):
-            return AMBIGUOUS_ORDER
-        stop = leg.orders.get(leg.stop) if leg.stop is not None else None
-        if stop is not None and self.held.held_cancel(trader, stop.kernel_order):
-            return HELD_CANCEL
-        if leg.unbound_add_units:
-            return UNBOUND_ADD
-        if stop is not None and (stop.state in (Sent.HELD, Sent.UNANSWERED) or stop.modify_held):
-            return STOP_HELD
-        if self._session.exits.owns(trader.name):
-            return EXIT_RETRIES
-        if leg.exits() or (stop is not None and stop.cancel_sent):
-            # A stop's cancel is sent only for an exit of the position (R4).
-            return EXITING
-        return STOP_ENDED if stop is None else STOP_UNCONFIRMED
 
     def _limit_exit(
         self, trader: Trader, intent: OrderIntent, kernel_order: int, now_ns: int
@@ -337,6 +337,7 @@ class StopsSupervisor:
             )
 
     def _modify_refused(self, trader: Trader, request: ModifyRequest) -> None:
+        self.after.refused(request)
         if request.terms.price_type == "LIMIT" and self.prices.watching(
             trader, request.kernel_order
         ):

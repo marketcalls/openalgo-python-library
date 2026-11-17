@@ -9,6 +9,8 @@ session, no server): both use the one 5 percent buffer.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from test_kernel_legs import NIFTY_CALL, STOP_3, holding
 
@@ -263,9 +265,11 @@ class _Exits:
 
 
 class _Session:
-    """A session of one strategy, its order worker idle; `clock` is its time."""
+    """A session of one strategy, its order worker idle and its reconciler's exit guard
+    holding nothing back; `clock` is its time."""
 
     locked, inbox_waiting, control = False, 0, None
+    reconcile = SimpleNamespace(guard=SimpleNamespace(held_cancels=lambda name: frozenset()))
 
     def __init__(self):
         self.parts = type("Parts", (), {"worker": _Worker()})()

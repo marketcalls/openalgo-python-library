@@ -16,12 +16,14 @@ go to `_session_feed`.
 - `HeldFills`: to the stops supervisor (held fills, 4.11).
 - `PositionRows`: to the stops supervisor (held cancels, 4.11) and the risk watch (the
   kill switch's position reads, `watch`).
+- `Books`: to the reconciler (`reconcile`); a read the worker did not make (the guard
+  locked) stops its reads. Each fill the kernel takes is told to it too, and the news of
+  an orphan it cancels is expected.
 - `GuardLocked`: the session's guard lock (`Session.guard_locked`).
 - `WorkerFailed`: raised as `WorkerFailedError`, which stops the session (3.5).
 
-Each order answer reaches the stops supervisor after the venue map has applied it. Not
-handled yet, logged: `Books` (the reconciler's). Times are UTC nanoseconds, prices rupees,
-quantities units. Used by the loop only.
+Each order answer reaches the stops supervisor after the venue map has applied it. Times
+are UTC nanoseconds, prices rupees, quantities units. Used by the loop only.
 """
 
 from __future__ import annotations
@@ -39,7 +41,9 @@ from ._session_feed import take_candles, take_data_failed, take_feed_event, take
 from ._session_trader import Trader
 from ._types import LOGGER_NAME, AlertKind, OrderIntent, OrderStatus, OrderUpdate
 from ._venue_requests import Applied, CancelRequest, ModifyRequest, PlaceRequest
+from ._worker_queue import ReadBooks
 from .inbox import (
+    Books,
     Candles,
     DataFailed,
     FeedEvent,
@@ -101,6 +105,9 @@ class News:
 
     def _news(self, message: OrderNews) -> None:
         trader = self._owner(message.update.order_id, message.intent_id)
+        if trader is None and self._session.reconcile.orphan(message.update.order_id):
+            logger.info("news of orphan %s: %s", message.update.order_id, message.update.status)
+            return
         if trader is None:
             logger.error(
                 "order news of %s (intent %s) for no order of this session's venue maps",
@@ -130,6 +137,7 @@ class News:
             outcome=result.outcome.value,
         )
         if result.increment is not None:
+            session.reconcile.filled(trader, update.ts_recv_ns)
             self._fill_alert(intent, update, result.increment)
         if result.ended is OrderStatus.REJECTED:
             why = update.rejection_reason or "no reason given"
@@ -225,6 +233,8 @@ class News:
         request = message.request
         if not isinstance(request, PlaceRequest | ModifyRequest | CancelRequest):
             logger.info("worker request %r not sent (%s)", request, message.reason.value)
+            if isinstance(request, ReadBooks):
+                session.reconcile.not_read()
             return
         trader = session.trader_named(request.intent.strategy)
         handled = trader.venue.not_sent(message)
@@ -316,6 +326,9 @@ class News:
         self._session.stops.positions(message)
         self._session.risk.positions(message)
 
+    def _books(self, message: Books) -> None:
+        self._session.reconcile.books(message)
+
     def _guard_locked(self, message: GuardLocked) -> None:
         self._session.guard_locked(message.breach)
 
@@ -367,6 +380,7 @@ _HANDLERS: Mapping[type, Any] = MappingProxyType(
         Resolutions: News._resolutions,
         HeldFills: News._held_fills,
         PositionRows: News._positions,
+        Books: News._books,
         GuardLocked: News._guard_locked,
         WorkerFailed: News._worker_failed,
     }

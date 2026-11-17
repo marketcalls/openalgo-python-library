@@ -13,8 +13,9 @@ more than the strategy asked for); instead the session places the leg's stop aga
 what is left (`protect`, R7) and sends an ERROR alert, once each time the leg is left
 bare. The alert says what the leg is (units with no stop and nothing working to close
 them), not how it got there: an exit filled in part and then cancelled leaves it bare the
-same way. A leg that never had a stop, one protect by state holds, and every leg once the
-safe stop has begun (its flatten exits the position) are left to their own rules.
+same way. A leg that never had a stop, one protect by state holds, one the reconciler's
+exit guard holds (the broker's books show fewer units), and every leg once the safe stop
+has begun (its flatten exits the position) are left to their own rules.
 
 Quantities are units. Used by the loop only.
 """
@@ -58,6 +59,10 @@ class BareLegs:
         if session.control is not None and session.control.stopping:
             return False
         if not self._stops.leg(trader).guarded or self._stops.protection.holds(trader):
+            return False
+        # While the broker's books show fewer units, a stop for the engine's units could
+        # take the broker through zero (the reconciler's exit guard holds the leg).
+        if session.reconcile.holds(trader):
             return False
         # Any closing order the kernel has, sent or not, a stop among them, covers the leg
         # or is on its way to.

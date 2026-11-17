@@ -15,6 +15,7 @@ Prices are rupees, quantities units, times UTC nanoseconds.
 
 from __future__ import annotations
 
+import dataclasses
 import itertools
 import threading
 from collections import deque
@@ -31,6 +32,7 @@ from .log import FILL, SWITCH, FakeLog
 from .market import Instrument, MarketState
 from .messages import order_update
 from .orders import FakeOrder
+from .positions import Position
 
 
 @dataclass(frozen=True)
@@ -86,6 +88,8 @@ class Venue:
         self.telegram_bot_active = True
         self.telegram_sent: list[TelegramMessage] = []
         self.analyzer_logs = 0
+        #: The position books as they stood when they began to lag their fills, by mode.
+        self.lagged: dict[Mode, list[Position]] | None = None
         self._pending_ids = itertools.count(1)
         self._rejections: list[Rejection] = []
         self._split_next: int | None = None
@@ -104,6 +108,25 @@ class Venue:
     def book(self) -> Book:
         """The book the analyzer switch selects now."""
         return self.books[self.mode]
+
+    def position_rows(self, book: Book) -> list[Position]:
+        """The positions `book`'s position book answers with: as they stand, or as they
+        stood at `lag_positions` while the book lags its fills."""
+        if self.lagged is not None:
+            return self.lagged[book.mode]
+        return book.positions.rows()
+
+    def lag_positions(self) -> None:
+        """The position books answer the positions as they stand now, until
+        `catch_up_positions`: later fills do not show in them."""
+        self.lagged = {
+            mode: [dataclasses.replace(row) for row in book.positions.rows()]
+            for mode, book in self.books.items()
+        }
+
+    def catch_up_positions(self) -> None:
+        """The position books show every fill again."""
+        self.lagged = None
 
     @property
     def broker_reachable(self) -> bool:

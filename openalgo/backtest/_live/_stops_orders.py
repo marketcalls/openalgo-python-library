@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from ._order_answers import Outcome
 from ._order_book import Resolved
 from ._order_state import ENTRY_PURPOSES
-from ._types import OrderStatus, OrderUpdate, Purpose
+from ._types import OrderIntent, OrderStatus, OrderUpdate, Purpose
 from ._venue_requests import CancelRequest, ModifyRequest, OrderRequest, PlaceRequest
 from .inbox import NotSentReason
 
@@ -167,6 +167,25 @@ class LegOrders:
         elif watched.state in (Sent.BOUND, Sent.UNANSWERED, Sent.HANDED):
             watched.state = Sent.CONFIRMED
         return watched
+
+    def restored(
+        self, kernel_order: int, intent: OrderIntent, order_id: str, working: bool, at_ns: int
+    ) -> None:
+        """An order a restart took back (16-session-design 3.6), bound to `order_id`:
+        confirmed when the order book showed it `working`; a stop becomes the leg's."""
+        state = Sent.CONFIRMED if working else Sent.BOUND
+        self.orders[kernel_order] = Watched(
+            kernel_order,
+            intent.purpose,
+            intent.quantity,
+            intent.intent_id,
+            intent.action,
+            state=state,
+            order_id=order_id,
+            bound_ns=at_ns,
+        )
+        if intent.purpose is Purpose.STOP:
+            self.stop, self.guarded = kernel_order, True
 
     def cancel_refused(self, kernel_order: int) -> None:
         """The venue refused a cancel and the order works on: no cancel waits for it."""

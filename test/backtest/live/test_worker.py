@@ -1,7 +1,7 @@
 """The order worker (`worker`, 16-session-design 2.4) on the fake OpenAlgo: its startup
 phase, the order of its step (priority 0 before the guard poll), what each request
 becomes (`NotSent` kinds included), the book reads, the releases, and what the loop reads
-of it (`busy_since_ns`, `raw_pending`).
+of it (`busy_since_ns`, `raw_pending`, `unfinished`).
 
 The worker runs with the fake's real SDK clients, a real mode guard and a real journal;
 the test drives `step()` on the fake's manual clock (`worker_samples`).
@@ -388,6 +388,32 @@ def test_the_worker_is_busy_during_each_call_and_idle_between_them(rig):
 
     assert rig.orders.busy_during[0] == ("placeorder", rig.clock.now())
     assert rig.worker.busy_since_ns is None
+
+
+def test_a_request_is_unfinished_until_the_worker_has_executed_it(rig):
+    rig.worker.put(rig.place())
+
+    waiting = rig.worker.unfinished
+    rig.worker.step()
+
+    assert (waiting, rig.worker.unfinished) == (1, 0)
+
+
+def test_a_request_put_back_stays_unfinished_until_it_is_sent(rig):
+    # As above: SBIN is held for 7 seconds while the order book cannot be read.
+    for _ in range(7):
+        rig.fake.faults.gateway_error("orderbook")
+    unbound_entry(rig, reached_broker=True)
+    rig.run(rig.stop())
+
+    put_back = rig.worker.unfinished
+    steps(rig, 8.0)
+
+    assert (put_back, rig.worker.unfinished) == (1, 0)
+    assert [e.detail["request"]["pricetype"] for e in rig.fake.log.calls("placeorder")] == [
+        "MARKET",
+        "SL-M",
+    ]
 
 
 def test_the_raw_updates_waiting_are_counted_until_drained(rig):

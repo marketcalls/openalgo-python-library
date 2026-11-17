@@ -28,13 +28,14 @@ builds and restores the order path, and posts `inbox.WorkerReady`. Then each `st
 
 A `JournalError` (any but a refused stop record, which is only alerted) is posted as
 `inbox.WorkerFailed`, after which nothing is sent: an intent can no longer be written
-first. So is any exception nothing expected, the same inline (`step`) as on the thread
-(`run`), so the fault suite meets what production does. `close` lets the step under way
-end without taking another request. `busy_since_ns` is set around every call that may
-reach the server, and `raw_pending` counts the order words not yet posted, those waiting
-in the raw FIFO and those in the worker's hands (`_worker_news`); the loop reads both
-(4.2), and the order path's silence (`silent_since_ns`, `asked_ns`, 4.9). Times are UTC
-nanoseconds.
+first. So is any exception nothing expected, inline (`step`) as on the thread (`run`),
+so the fault suite meets what production does. `close` lets the step under way end
+without taking another request; `withdraw_put_back` drops what was put back before the
+session's last lines (3.3 step 5). The loop reads `busy_since_ns` (set around every call
+that may reach the server) and `raw_pending` (the order words not yet posted, in the raw
+FIFO or the worker's hands: `_worker_news`) (4.2), the requests not executed yet
+(`unfinished`, the close's last wait), and the order path's silence (`silent_since_ns`,
+`asked_ns`, 4.9). Times are UTC nanoseconds.
 """
 
 from __future__ import annotations
@@ -42,7 +43,6 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
-import queue
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -55,7 +55,7 @@ from ._order_state import HeldFill
 from ._types import LOGGER_NAME, AlertsLike, Mode, Now, Purpose, Sleep
 from ._venue_requests import Priority
 from ._worker_news import NewsHandover
-from ._worker_queue import Request, WorkerQueue
+from ._worker_queue import Incoming, Request, WorkerQueue
 from ._worker_send import Sender
 from ._worker_settle import Settlements
 from ._worker_stops import StopBook
@@ -114,9 +114,9 @@ class OrderWorker:
     shared alerts, `inbox` the loop's, `journal` where W is; `now` gives UTC nanoseconds
     and `sleep` waits seconds (the rate budget's waits).
 
-    The loop calls `put` and reads `busy_since_ns` and `raw_pending` from its thread, and
-    the feed's order callback puts on `updates`; `start_up`, `step`, `start` and `close`
-    are called from one thread at a time.
+    The loop calls `put` and `withdraw_put_back` and reads `busy_since_ns` and
+    `raw_pending` from its thread, and the feed's order callback puts on `updates`;
+    `start_up`, `step`, `start` and `close` are called from one thread at a time.
     """
 
     def __init__(
@@ -140,10 +140,9 @@ class OrderWorker:
         self._wake = threading.Event()
         #: The raw order updates, put by the feed's order callback (2.3).
         self.updates = RawUpdates(wake=self._wake)
-        #: Since when (UTC nanoseconds) the worker is inside a call that may reach the
-        #: server; None between calls.
+        #: Since when (UTC nanoseconds) the worker is in a call that may reach the server.
         self.busy_since_ns: int | None = None
-        self._incoming: queue.SimpleQueue[Request] = queue.SimpleQueue()
+        self._incoming = Incoming()
         self._queue = WorkerQueue()
         self._settle = Settlements()
         self._news = NewsHandover(
@@ -163,6 +162,12 @@ class OrderWorker:
         return self._news.pending
 
     @property
+    def unfinished(self) -> int:
+        """The requests handed over and not executed yet, one put back among them until it
+        is withdrawn; an answer is posted before its request stops counting (3.3 step 5)."""
+        return self._incoming.unfinished
+
+    @property
     def silent_since_ns(self) -> int | None:
         """Since when (UTC nanoseconds) OpenAlgo has not answered the order path after a
         client timeout or a dropped connection (`OrderPath.silent_since_ns`); None while
@@ -172,10 +177,9 @@ class OrderWorker:
 
     @property
     def asked_ns(self) -> int | None:
-        """The time (UTC nanoseconds) noted with the order path's last answer from
-        OpenAlgo, whatever it was: when it came, or when the call began for a poll or a
-        book read (`OrderPath.asked_ns`); None before its first call. Read from the
-        loop's thread (4.9)."""
+        """When (UTC nanoseconds) the order path's last answer from OpenAlgo was noted,
+        whatever it was: when it came, or when its poll or book read began
+        (`OrderPath.asked_ns`); None before its first call. Read from the loop (4.9)."""
         started = self._started
         return None if started is None else started.path.asked_ns
 
@@ -189,12 +193,18 @@ class OrderWorker:
         self._incoming.put(request)
         self._wake.set()
 
+    def withdraw_put_back(self) -> None:
+        """Withdraw at the next step every request put back so far (OpenAlgo silent, an
+        intent of the instrument unbound): the session's last lines named them as not sent,
+        so none is sent after them or counted `unfinished`. Any thread; it never waits."""
+        self._incoming.ask_withdrawal()
+        self._wake.set()
+
     def start_up(self) -> JournalSession:
         """The startup phase, on the calling thread, which then owns journal W: open it,
-        start the journal's session, build and restore the order path, post
-        `WorkerReady`, and return the session. Raises JournalError when the journal
-        cannot be opened or started, LiveError when the guard has not started or the
-        worker has started up already."""
+        start the journal's session, build and restore the order path, post `WorkerReady`,
+        and return the session. Raises JournalError when the journal cannot be opened or
+        started, LiveError when the guard has not started or the worker started up already."""
         if self._started is not None:
             raise LiveError("the order worker starts up once")
         target = self._target
@@ -242,9 +252,8 @@ class OrderWorker:
 
     def step(self) -> bool:
         """One iteration (module docstring); True when it took a request, so the thread
-        steps again at once. A failure is posted as `WorkerFailed`, never raised, and
-        nothing is done after one, nor after `close`. Raises LiveError before
-        `start_up`."""
+        steps again at once. A failure is posted as `WorkerFailed`, never raised; nothing
+        is done after one or after `close`. Raises LiveError before `start_up`."""
         started = self._started
         if started is None:
             raise LiveError("the order worker steps after start_up()")
@@ -294,11 +303,8 @@ class OrderWorker:
         if self._stopping:
             # Closed: the step under way ends without sending what is still queued.
             return False
-        while True:
-            try:
-                self._queue.put(self._incoming.get_nowait())
-            except queue.Empty:
-                break
+        for request in self._incoming.into(self._queue):
+            logger.warning("withdrawn, put back before the session's last lines: %r", request)
         request = self._queue.take(self._now(), most=most)
         if request is None:
             return False
@@ -306,6 +312,8 @@ class OrderWorker:
         # stale knowledge.
         self._news.drain(started.path, started.stops)
         started.sender.execute(request)
+        if not self._queue.waits(request):
+            self._incoming.finished()
         self._notice_lock()
         return True
 
@@ -382,7 +390,7 @@ class OrderWorker:
 
     def _finish(self) -> None:
         """Close journal W, saying what was left unsent."""
-        left = len(self._queue) + self._incoming.qsize()
+        left = self._incoming.unfinished
         if left and self._stopping:
             logger.warning("the order worker closed with %d requests not sent", left)
         if self._started is not None:

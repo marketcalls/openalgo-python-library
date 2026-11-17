@@ -199,12 +199,14 @@ def test_without_an_account_limit_nothing_fires(world):
 
 
 @pytest.fixture
-def reduced_by_hand(world):
-    """Another client of the account sells 6 of the 10 SBIN the strategy bought, at
-    14:43:00: the broker holds 4 when the engine's loss passes the limit."""
+def sold_by_hand(world):
+    """Another client of the account sells 6 of the 10 SBIN the strategy bought at
+    14:43:46, right after the engine's loss passed the limit: the trade book explains the
+    broker's 4 units, so the reconciler takes the sale as the engine's (16-session-design
+    5.3 row 2)."""
     other = world.fake.client()
     world.script.at(
-        ist(14, 43),
+        FIRST_FALL_TICK + NS,
         lambda: other.placeorder(
             strategy="manual",
             symbol="SBIN",
@@ -218,44 +220,55 @@ def reduced_by_hand(world):
     return world
 
 
-def test_the_kill_switch_sends_no_exit_beyond_what_the_broker_holds(reduced_by_hand):
-    run(reduced_by_hand, HoldSbin, account_max_daily_loss=50.0, on_stop="keep")
-    sells = [o for o in reduced_by_hand.orders() if o.strategy == "HoldSbin" and o.action == "SELL"]
-    assert sells == []
-    assert reduced_by_hand.fake.position("SBIN", "NSE") == 4
+@pytest.fixture
+def lagging(world):
+    """OpenAlgo's position book stops showing new fills at 14:41:30, before the strategy's
+    entry: it shows SBIN flat while the engine holds 10 units and the trade book shows the
+    entry, an unexplained difference (5.3 row 3). A second Ctrl+C follows the first at
+    14:47:10, so the session ends once its exits are known."""
+    world.script.at(ist(14, 41, 30), world.fake.lag_positionbook)
+    world.stop_at(ist(14, 47, 10))
+    return world
 
 
-def test_the_kill_switch_alerts_once_when_the_broker_and_the_engine_disagree(
-    reduced_by_hand, caplog
-):
-    run(reduced_by_hand, HoldSbin, account_max_daily_loss=50.0, on_stop="keep")
+def strategy_sells(world) -> list[tuple[int, int]]:
+    return [
+        (o.quantity, o.filled)
+        for o in world.orders()
+        if o.strategy == "HoldSbin" and o.action == "SELL"
+    ]
+
+
+def test_after_a_sale_by_hand_the_kill_switch_exits_only_what_is_left(sold_by_hand):
+    outcome = run(sold_by_hand, HoldSbin, account_max_daily_loss=50.0, on_stop="keep")
+    assert [(e["side"], e["units"]) for e in events(outcome, "adopted")] == [("SELL", 6)]
+    assert strategy_sells(sold_by_hand) == [(4, 4)]
+    assert sold_by_hand.fake.position("SBIN", "NSE") == 0
+
+
+def test_the_kill_switch_alerts_once_when_the_broker_and_the_engine_disagree(lagging, caplog):
+    run(lagging, HoldSbin, account_max_daily_loss=50.0, on_stop="keep")
     errors = [text for text in alerts(caplog, "error") if "no exit is sent until" in text]
     assert len(errors) == 1
-    assert "holds 10 units of SBIN NSE" in errors[0] and "shows 4 units" in errors[0]
+    assert "holds 10 units of SBIN NSE" in errors[0] and "shows 0 units" in errors[0]
 
 
-def test_with_on_stop_keep_the_disagreement_alert_names_only_the_square_off(
-    reduced_by_hand, caplog
-):
-    run(reduced_by_hand, HoldSbin, account_max_daily_loss=50.0, on_stop="keep")
+def test_with_on_stop_keep_the_disagreement_alert_names_only_the_square_off(lagging, caplog):
+    run(lagging, HoldSbin, account_max_daily_loss=50.0, on_stop="keep")
     [error] = [text for text in alerts(caplog, "error") if "no exit is sent until" in text]
-    assert "the square-off at 15:00 IST would sell all 10 units" in error
+    assert "no exit of the session (the square-off at 15:00 IST)" in error
     assert "Ctrl+C" not in error
 
 
-def test_the_disagreement_alert_says_what_the_default_safe_stop_will_still_sell(
-    reduced_by_hand, caplog
-):
-    # With the default on_stop="flatten", the Ctrl+C at 14:47 exits the engine's whole
-    # position, as the alert warns: the broker is left 6 units short.
-    outcome = run(reduced_by_hand, HoldSbin, account_max_daily_loss=50.0)
+def test_while_the_book_shows_fewer_units_no_exit_of_any_owner_goes_beyond_them(lagging, caplog):
+    # The default on_stop="flatten": the Ctrl+C at 14:47 asks the engine to exit its 10
+    # units, which the position book does not show, so the exit is held back.
+    outcome = run(lagging, HoldSbin, account_max_daily_loss=50.0)
     [error] = [text for text in alerts(caplog, "error") if "no exit is sent until" in text]
-    assert (
-        'a Ctrl+C (on_stop="flatten") and the square-off at 15:00 IST would sell all 10 '
-        "units, leaving -6 at the broker"
-    ) in error
+    assert 'a Ctrl+C (on_stop="flatten") and the square-off at 15:00 IST' in error
     assert events(outcome, "kill_exit") == []
-    assert reduced_by_hand.fake.position("SBIN", "NSE") == -6
+    assert [e["strategy"] for e in events(outcome, "exit_held")] == ["HoldSbin"]
+    assert strategy_sells(lagging) == []
 
 
 def test_after_a_mode_change_the_kill_switch_alerts_and_sends_nothing(world, caplog):

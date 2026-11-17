@@ -279,7 +279,8 @@ def test_a_disagreement_is_alerted_again_once_the_engines_units_change():
     step_for(loop, kill, 60)
     assert len(loop.alerts) == 2
     assert "holds 20 units of SBIN NSE" in loop.alerts[1]
-    assert "would sell all 20 units, leaving -6 at the broker" in loop.alerts[1]
+    assert "shows 14 units" in loop.alerts[1]
+    assert "is sent for more than the broker holds" in loop.alerts[1]
 
 
 def test_a_lasting_disagreement_is_read_less_often_once_alerted():

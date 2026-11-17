@@ -26,6 +26,9 @@ a request"), split from `worker` so each module keeps one job.
   from before the word leaves the order path's hold); the book reads go to the guard
   answer by answer and are posted as `Books` or `PositionRows`, or `NotSent(locked)` once
   the guard locks; a probe asks OpenAlgo whether it answers; a stream gap asks for polls.
+- A restart's `Settle` makes a restored order's modify or cancel unsettled, so a read
+  settles it as an unanswered one (3.6); `CancelOrphan` cancels an order of the journal
+  the engine does not hold (5.3), with an ERROR alert when it cannot be cancelled.
 
 Times are UTC nanoseconds. Used by the worker's thread only.
 """
@@ -47,12 +50,14 @@ from ._types import LOGGER_NAME, AlertKind, AlertsLike, OrderIntent, Purpose
 from ._venue_requests import CancelRequest, ModifyRequest, PlaceRequest, Priority
 from ._worker_news import NewsHandover
 from ._worker_queue import (
+    CancelOrphan,
     Probe,
     ReadBooks,
     ReadPositions,
     ReleaseCancel,
     ReleaseFill,
     Request,
+    Settle,
     StreamGap,
     WorkerQueue,
     is_stale,
@@ -141,6 +146,10 @@ class Sender:
                 self._path.probe()
         elif isinstance(request, StreamGap):
             self._path.stream_gap(request.since_ns)
+        elif isinstance(request, Settle):
+            self.unsettle(request.change)
+        elif isinstance(request, CancelOrphan):
+            self._cancel_orphan(request.order_id)
         else:
             raise LiveError(f"the order worker takes requests, not {request!r}")
 
@@ -296,6 +305,28 @@ class Sender:
             logger.warning("held word of order %s not released: %s", request.order_id, error)
             news = None
         self._news.hand_over(news, self._stops)
+
+    def _cancel_orphan(self, order_id: str) -> None:
+        """Cancel an order of the journal that the engine does not hold; one the order path
+        cannot cancel (it does not follow it, OpenAlgo refuses) is an ERROR alert to cancel
+        it by hand. Its terminal news comes as any order's."""
+        try:
+            with self._calling():
+                outcome = self._path.cancel(order_id)
+        except ModeChangedError:
+            return
+        except JournalError:
+            raise
+        except LiveError as error:
+            reason = str(error)
+        else:
+            if outcome.kind is Outcome.ACCEPTED:
+                return
+            reason = outcome.reason
+        text = f"order {order_id}, which the engine does not hold, could not be cancelled "
+        text += f"({reason}): cancel it by hand in OpenAlgo"
+        logger.error(text)
+        self._alerts.send(AlertKind.ERROR, text)
 
     def _read(self, request: ReadBooks | ReadPositions) -> None:
         """The books of a reconciliation, or the position book for a held cancel, each
