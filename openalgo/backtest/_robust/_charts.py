@@ -7,8 +7,8 @@ axis text, round ticks and frame, `report._dashboard.bars` and `scale`):
     histogram  one figure over the runs in round-edged bins, with marked values: the
                run's own (solid), a rule's limit (dashed), a reference such as zero
                (dotted), each labelled
-    sessions   the run's cumulative return at each session close, with marked sessions
-               shaded
+    sessions   a value at each session close (the run's cumulative return, or a price),
+               with marked sessions shaded
 
 Every chart reads without colour: the run's own path is the boldest line, the median is
 dashed, and a key under each chart says what each mark is. Marks carry a `<title>`, the
@@ -41,10 +41,13 @@ def _inner() -> tuple[float, float]:
     return WIDTH - MARGIN.left - MARGIN.right, HEIGHT - MARGIN.top - MARGIN.bottom
 
 
-def _domain(values: np.ndarray) -> tuple[float, float]:
-    """A round axis over the finite `values` and zero, never an empty span."""
+def _domain(values: np.ndarray, with_zero: bool = True) -> tuple[float, float]:
+    """A round axis over the finite `values`, and zero unless `with_zero` is False (a
+    price), never an empty span."""
     known = values[np.isfinite(values)]
-    low, high = min(0.0, float(known.min())), max(0.0, float(known.max()))
+    low, high = float(known.min()), float(known.max())
+    if with_zero:
+        low, high = min(0.0, low), max(0.0, high)
     if low == high:
         low, high = low - 0.01, high + 0.01
     return scale.widen(low, high)
@@ -186,15 +189,15 @@ def _spans(marked: np.ndarray) -> list[tuple[int, int]]:
 
 
 def sessions_chart(block: SessionsBlock) -> str:
-    """The run's cumulative return with the marked sessions shaded, and its key."""
-    count = len(block.cumulative)
+    """The values of `block` with the marked sessions shaded, and its key."""
+    count = len(block.values)
     if count < 2:
         return "<p class='empty'>No chart: the run has fewer than two sessions.</p>"
     width, height = _inner()
-    low, high = _domain(block.cumulative)
+    low, high = _domain(block.values, with_zero=block.percent)
     x, y = scale.Linear(0.0, count - 1.0, 0.0, width), scale.Linear(low, high, height, 0.0)
     step = width / (count - 1)
-    marks = [_value_axis(y, low, high, True, width)]
+    marks = [_value_axis(y, low, high, block.percent, width)]
     for first, last in _spans(block.marked):
         left = max(0.0, x(first) - step / 2)
         right = min(width, x(last) + step / 2)
@@ -202,7 +205,7 @@ def sessions_chart(block: SessionsBlock) -> str:
             f"<rect class='held-out' x='{left:.1f}' y='0' width='{right - left:.1f}' "
             f"height='{height:.1f}'/>"
         )
-    line = _points(np.array([x(i) for i in range(count)]), [y(v) for v in block.cumulative], 1)
+    line = _points(np.array([x(i) for i in range(count)]), [y(v) for v in block.values], 1)
     marks.append(f"<polyline class='run-line' points='{line}'/>")
     for at, date in ((0, block.dates[0]), (count - 1, block.dates[-1])):
         anchor = "start" if at == 0 else "end"
@@ -213,7 +216,7 @@ def sessions_chart(block: SessionsBlock) -> str:
     svg = frame(WIDTH, HEIGHT, MARGIN, fmt.text(block.title), "".join(marks))
     held = int(block.marked.sum())
     return (
-        f"{svg}<p class='key'>Line: the run's cumulative return at each session close. "
+        f"{svg}<p class='key'>Line: {fmt.text(block.line)}. "
         f"Shaded: the {held} sessions this assignment holds out of sample.</p>"
     )
 

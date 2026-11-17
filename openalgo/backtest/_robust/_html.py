@@ -20,7 +20,7 @@ from ..report._dashboard.page import document
 from ..report._dashboard.sections_run import assumptions_card
 from . import _charts
 from ._blocks import FanBlock, HistogramBlock, SessionsBlock, TilesBlock
-from ._registry import UNITS
+from ._registry import not_built_note
 from ._report import RunFacts
 from ._request import Request
 from ._scorecard import Row, lead, table, verdict_badge
@@ -30,7 +30,7 @@ from ._verdict import NOT_BUILT, WORDING_RULE, CheckResult
 READING = (
     "Informational: the check shows its figures and judges nothing until its limit is "
     "given in its settings.",
-    "Not built: the check comes with a later version; the scorecard names what brings it.",
+    "Not built: the check comes with a later version; the scorecard says what it needs.",
     "Every check draws from its own random stream, seeded with the report's seed plus the "
     "check's number, so the same seed gives the same report on every platform.",
 )
@@ -75,7 +75,7 @@ def _scorecard(request: Request, results: Mapping[str, CheckResult], counts: dic
                 )
             )
         else:
-            rule = f"comes with robustness unit {check.unit}, {UNITS[check.unit]}"
+            rule = not_built_note(check)
             rows.append(Row(check.number, check.title, check.question, "", rule, NOT_BUILT))
     body = card("Every check", "In report order", lead(counts) + table(rows))
     return Section("scorecard", "Scorecard", "Each check, its rule and its verdict", body)

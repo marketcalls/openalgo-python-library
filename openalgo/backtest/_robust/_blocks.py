@@ -52,14 +52,17 @@ class HistogramBlock:
 
 @dataclass(frozen=True, eq=False)
 class SessionsBlock:
-    """The run's cumulative return at each session close (fractions), with the sessions
-    of `marked` shaded."""
+    """A value at each session close, `values` (fractions shown as percentages when
+    `percent`, else rupees, such as a close), with the sessions of `marked` shaded;
+    `line` says in words what the line is, for the chart's key."""
 
     title: str
     subtitle: str
     dates: pd.DatetimeIndex
-    cumulative: np.ndarray
+    values: np.ndarray
     marked: np.ndarray
+    percent: bool
+    line: str
 
 
 @dataclass(frozen=True)

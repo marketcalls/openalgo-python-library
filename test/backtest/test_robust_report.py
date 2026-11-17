@@ -29,6 +29,7 @@ from openalgo.backtest._robust._verdict import (
     WORDING_RULE,
 )
 from openalgo.backtest.errors import BacktestError, ConfigError
+from openalgo.backtest.report._format import text as fmt_text
 
 THIS_VERSION = ["random_out_of_sample", "reshuffle", "resample", "variance"]
 EDGE_DATA = bars(steps_for([3.0, 2.0, 4.0, -1.0, 3.0, 2.0, -2.0, 5.0, 1.0, -1.0], 60))
@@ -85,7 +86,10 @@ def test_the_scorecard_lists_every_check_and_the_ones_not_built(edge_report):
     assert list(verdicts.index) == list(range(1, 18))
     assert (verdicts["verdict"] == NOT_BUILT).sum() == 13
     noise = verdicts.set_index("check").loc["noise"]
-    assert noise["note"].startswith("Comes with robustness unit RB2")
+    assert noise["note"] == (
+        "Not built in this version: it needs the bar generators (permuted, noisy and "
+        "synthetic bars)."
+    )
 
 
 def test_a_check_result_is_made_of_its_public_fields_only():
@@ -112,8 +116,8 @@ def test_one_check_has_its_table_summary_and_settings(edge_report):
     assert resample.settings["runs"] == 1_000 and resample.seed == 11
 
 
-def test_asking_for_a_check_not_built_names_its_unit(edge_report):
-    with pytest.raises(NotImplementedError, match="robustness unit RB2"):
+def test_asking_for_a_check_not_built_says_what_it_needs(edge_report):
+    with pytest.raises(NotImplementedError, match="it needs the bar generators"):
         edge_report.check("noise")
 
 
@@ -219,7 +223,7 @@ def test_the_page_is_the_scorecard_a_section_per_check_and_the_notes(page):
 def test_the_scorecard_counts_the_verdicts_and_states_the_wording_rule(page):
     scorecard = page[page.index("<section id='scorecard'") : page.index("<section id='random")]
     assert "3 passed, 0 failed, 0 not judged, 1 informational, 13 not built." in scorecard
-    assert WORDING_RULE in scorecard
+    assert fmt_text(WORDING_RULE) in scorecard
     assert scorecard.count("<tr>") == 1 + 17
 
 

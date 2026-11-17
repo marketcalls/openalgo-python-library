@@ -1,6 +1,6 @@
 """The seventeen checks and the request of a robustness report: the checks in the order of
-design 17 section 2, the four this version runs, the error for one it does not (naming
-the unit that brings it), and every setting checked before work starts."""
+design 17 section 2, the four this version runs, the error for one it does not (saying
+what it needs, in plain words), and every setting checked before work starts."""
 
 import pytest
 from robust_runs import FREE, Flip, bars, steps_for
@@ -30,21 +30,24 @@ DESIGN_ORDER = (
     "parameters",
     "noise_optimization",
 )
-# The robustness unit that brings each check this version does not run (section 6).
-UNITS = {
-    "out_of_sample": "RB4",
-    "walk_forward": "RB4",
-    "vs_random": "RB2",
-    "permutation": "RB2",
-    "noise": "RB2",
-    "shifted": "RB3",
-    "other_markets": "RB2",
-    "stress": "RB2",
-    "random_exits": "RB3",
-    "delayed": "RB3",
-    "liquidity": "RB3",
-    "parameters": "RB4",
-    "noise_optimization": "RB4",
+GENERATORS = "the bar generators (permuted, noisy and synthetic bars)"
+ENGINE = "late orders, other fill prices and shifted bar boundaries in the engine"
+SEARCHES = "walk-forward and the parameter searches"
+# What each check this version does not run needs (section 6), in plain words.
+NEEDS = {
+    "out_of_sample": SEARCHES,
+    "walk_forward": SEARCHES,
+    "vs_random": GENERATORS,
+    "permutation": GENERATORS,
+    "noise": GENERATORS,
+    "shifted": ENGINE,
+    "other_markets": GENERATORS,
+    "stress": GENERATORS,
+    "random_exits": ENGINE,
+    "delayed": ENGINE,
+    "liquidity": ENGINE,
+    "parameters": SEARCHES,
+    "noise_optimization": SEARCHES,
 }
 THIS_VERSION = ("random_out_of_sample", "reshuffle", "resample", "variance")
 
@@ -77,13 +80,13 @@ def test_this_version_runs_the_four_trade_list_checks():
     assert QUICK == THIS_VERSION
 
 
-@pytest.mark.parametrize("name", list(UNITS))
-def test_a_check_this_version_does_not_run_names_the_unit_that_brings_it(name):
+@pytest.mark.parametrize("name", list(NEEDS))
+def test_a_check_this_version_does_not_run_says_what_it_needs(name):
     with pytest.raises(NotImplementedError) as raised:
         request(checks=[name])
     message = str(raised.value)
     assert "not supported in this version" in message
-    assert f"robustness unit {UNITS[name]}" in message
+    assert f"it needs {NEEDS[name]}" in message
     assert "checks='all'" in message
 
 
@@ -156,18 +159,18 @@ def test_settings_for_a_check_that_does_not_run_are_refused():
         request(checks=["resample"], check_settings={"variance": {"points": 10}})
 
 
-def test_settings_for_a_check_this_version_does_not_run_name_its_unit():
-    with pytest.raises(NotImplementedError, match="robustness unit RB2"):
+def test_settings_for_a_check_this_version_does_not_run_say_what_it_needs():
+    with pytest.raises(NotImplementedError, match=r"it needs the bar generators"):
         request(check_settings={"noise": {"runs": 500}})
 
 
 def test_other_markets_are_not_run_in_this_version():
-    with pytest.raises(NotImplementedError, match="robustness unit RB2"):
+    with pytest.raises(NotImplementedError, match=r"it needs the bar generators"):
         request(others=["ICICIBANK"])
 
 
 def test_parameter_ranges_are_not_searched_in_this_version():
-    with pytest.raises(NotImplementedError, match="robustness unit RB4"):
+    with pytest.raises(NotImplementedError, match="they need walk-forward and the parameter"):
         request(ranges={"fast": range(5, 30, 5)})
 
 

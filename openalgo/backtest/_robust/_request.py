@@ -21,7 +21,7 @@ from .._messages import not_supported
 from .._objective import check_objective
 from ..errors import ConfigError
 from . import _random
-from ._registry import BY_NAME, CHECKS, QUICK, UNITS, CheckSpec, find, not_built
+from ._registry import BY_NAME, CHECKS, NEEDS, QUICK, CheckSpec, find, not_built
 from ._setting import resolve, whole
 
 DEFAULT_OBJECTIVE = "sharpe"
@@ -126,8 +126,8 @@ def build_request(
     if ranges:
         raise not_supported(
             f"parameter ranges ({', '.join(sorted(ranges))}) in a robustness report",
-            f"the checks that search them ({', '.join(SEARCHING)}) come with robustness unit "
-            f"RB4, {UNITS['RB4']}. Fix the parameters with params=",
+            f"the checks that search them ({', '.join(SEARCHING)}) are not built in this "
+            f"version: they need {NEEDS['RB4']}. Fix the parameters with params=",
         )
     for name in check_settings:
         check = BY_NAME[name]

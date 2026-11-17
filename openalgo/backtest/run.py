@@ -208,9 +208,10 @@ def optimize(strategy: type[Strategy], client: Any = None, **settings: Any) -> A
 def robustness(strategy: type[Strategy], client: Any = None, **settings: Any) -> Any:
     """Backtest the strategy once and run the robustness and overfitting checks on it;
     returns a `RobustnessReport` (`.verdicts`, `.check(name)`, `.passed`, `.plan`,
-    `.tearsheet(path)`). Passing a check proves nothing on its own; failing one is
-    strong evidence of overfitting; a check with too little to judge is "not judged"
-    and never passes.
+    `.tearsheet(path)`). Passing a check proves nothing on its own; failing one says
+    the edge did not hold up under that check (it may be fitted to the past or too small
+    to tell apart from the noise of the data tested), never that it proves overfitting;
+    a check with too little to judge is "not judged" and never passes.
 
     Takes the run arguments of `bt.backtest` and:
 
@@ -218,9 +219,9 @@ def robustness(strategy: type[Strategy], client: Any = None, **settings: Any) ->
         not built), "quick" (the trade-list checks, no rerun) or a list of check names:
         random_out_of_sample, reshuffle, resample and variance run in this version.
     objective: the metric random out of sample measures on each part of the trades:
-        "sharpe" (the default), "sortino", "net_profit", "expectancy",
-        "profit_factor" or "win_rate"; another metric or a function of a `Result`
-        leaves that check not judged.
+        "sharpe" (the default), "sortino", "net_profit", "expectancy" or
+        "profit_factor"; "win_rate" (a win rate is not a measure of profit), another
+        metric or a function of a `Result` leaves that check not judged.
     runs: alternative runs of each check (1000); seed: the seed of every check's
         stream (0), the same report for the same seed on every platform.
     workers, progress: as in `bt.optimize`; the plan is reported through `progress` (or
@@ -231,7 +232,7 @@ def robustness(strategy: type[Strategy], client: Any = None, **settings: Any) ->
 
     Raises ConfigError for unusable arguments or settings (naming what they take), the
     backtest's errors, and NotImplementedError for a check, `others=` or parameter
-    ranges this version does not run, naming the unit that brings them."""
+    ranges this version does not run, saying what it needs."""
     from ._robust import robustness as run_checks
 
     return run_checks(strategy, client, **settings)
