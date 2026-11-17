@@ -340,6 +340,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   futures stops, and CNC and NRML legs (their stops are GTTs with the same buffer), are
   unchanged. None of the four golden runs holds an option leg with a stop, so no pin
   changed.
+- An option sell stop or GTT child priced from a trigger of one tick (0.05, or 0.01 on a
+  one-paisa contract) keeps a limit of one tick, where 5 percent below it used to round
+  down to 0.00, a price no order can carry. One rule now prices every option limit beyond
+  a price (`exec::price::limit_beyond`): a stop-limit's limit, a GTT child's limit and the
+  reprice of a stop the price has passed. Change in results: only option sell stops at
+  one tick, which used to rest with a limit of 0.00.
 
 ## [2.2.1] - 2026-11-15
 

@@ -20,7 +20,7 @@
 //! premium fits inside it whatever the buffer. Those premiums are left out of the check.
 
 use oa_bt::exec::gtt::child_limit;
-use oa_bt::exec::price::{is_on_tick, round_away_from_trader, PRICE_UNITS_PER_RUPEE};
+use oa_bt::exec::price::{is_on_tick, limit_beyond, PRICE_UNITS_PER_RUPEE};
 use oa_bt::exec::segment::{venue_order_type, OPTIONS_STOP_LIMIT_BUFFER_PERCENT};
 use oa_bt::exec::{GttPolicy, OrderType};
 use oa_bt::model::{InstrumentKind, Side};
@@ -184,17 +184,6 @@ fn premiums(tick_rupees: f64) -> Vec<f64> {
         .collect()
 }
 
-/// How many of the lowest premiums a side skips. A sell priced from one tick rounds down
-/// to zero, which is no option price at all whatever the band (an option trades at one
-/// tick at the least, so a sell stop there has nothing below it to protect); that case is
-/// outside this check of the bands.
-fn premiums_skipped(side: Side) -> usize {
-    match side {
-        Side::Buy => 0,
-        Side::Sell => 1,
-    }
-}
-
 /// The limit of an option stop at `trigger_rupees`, as the venue takes it.
 fn stop_limit(trigger_rupees: f64, side: Side, tick_rupees: f64) -> f64 {
     let asked = OrderType::StopMarket { trigger_rupees };
@@ -211,14 +200,18 @@ fn gtt_child_limit(trigger_rupees: f64, side: Side, tick_rupees: f64) -> f64 {
 }
 
 /// The limit a stop the price has passed is repriced to: the last price moved
-/// `OPTIONS_STOP_LIMIT_BUFFER_PERCENT` against the trader, rounded to the tick away from
-/// the trader (16-session-design 4.6, open decision 8). The session prices the reprice
-/// (the stops supervisor, unit 10) and the kernel only takes the price
-/// (`Engine::reprice_exit`), so this is the rule as the design states it: a change to the
-/// session's pricing must be made here too.
+/// `OPTIONS_STOP_LIMIT_BUFFER_PERCENT` against the trader by the crate's one rule for an
+/// option limit (`limit_beyond`, 16-session-design 4.6, open decision 8). The session
+/// prices the reprice (the stops supervisor) and the kernel only takes the price
+/// (`Engine::reprice_exit`); the session's pricing must give the same limit.
 fn reprice_limit(last_price_rupees: f64, side: Side, tick_rupees: f64) -> f64 {
-    let moved = last_price_rupees * (1.0 + side.sign() * OPTIONS_STOP_LIMIT_BUFFER_PERCENT / 100.0);
-    round_away_from_trader(moved, tick_rupees, side).expect("a reprice limit")
+    limit_beyond(
+        last_price_rupees,
+        side,
+        OPTIONS_STOP_LIMIT_BUFFER_PERCENT,
+        tick_rupees,
+    )
+    .expect("a reprice limit")
 }
 
 /// Every limit `price` gives at every premium of both ticks and both sides is a positive
@@ -230,7 +223,7 @@ fn assert_inside(bands: &[&Band], price: fn(f64, Side, f64) -> f64) {
     let mut failures = Vec::new();
     for tick in OPTION_TICKS_RUPEES {
         for side in [Side::Sell, Side::Buy] {
-            for premium in premiums(tick).into_iter().skip(premiums_skipped(side)) {
+            for premium in premiums(tick) {
                 let limit = price(premium, side, tick);
                 if limit <= 0.0 || is_on_tick(limit, tick) != Ok(true) {
                     failures.push(format!(

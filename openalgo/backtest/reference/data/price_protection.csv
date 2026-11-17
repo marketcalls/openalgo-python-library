@@ -13,7 +13,9 @@
 #                          price band cooling-off. A floor under sell limits and a ceiling over
 #                          buy limits, only in the direction of the share's move (a floor on
 #                          puts and a ceiling on calls when it rises; a floor on calls and a
-#                          ceiling on puts when it falls), on top of lpp
+#                          ceiling on puts when it falls), on top of lpp on NSE; on BSE
+#                          a hard price band, on top of the Price Reasonability Check
+#                          until 2026-07-05
 #   underlying             the index or share the row is for, as the exchange's F&O ticker
 #                          (FOCIT is BSE FOCUSED IT), or ALL for every underlying of the
 #                          segment without a row of its own for the day
