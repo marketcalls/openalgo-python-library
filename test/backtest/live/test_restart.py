@@ -354,3 +354,26 @@ def test_F69_a_restart_during_the_second_trade_keeps_its_stop_as_the_legs(world)
     assert journal_stop(world, outcome, "TwoTrades") == stops[-1][0]
     (left,) = outcome.open_positions
     assert (left.stop_order_id, left.stop_confirmed) == (stops[-1][0], True)
+
+
+def test_a_modify_saved_as_waiting_is_settled_by_reading_the_order_after_the_restart(
+    world, monkeypatch
+):
+    # The session crashes as it sends the stop's first trailing modify: the saved state
+    # has the modify waiting, which the journal cannot tell was sent (3.6).
+    modify = OrderPath.modify
+
+    def crash_on_the_modify(path, order_id, **fields):
+        monkeypatch.setattr(OrderPath, "modify", modify)
+        raise Crash("the trailing modify's send")
+
+    monkeypatch.setattr(OrderPath, "modify", crash_on_the_modify)
+    rising(world, start=ist(14, 43), step=0.5, until=ist(14, 46))
+    run_to_crash(world, TrailsWhenFlat)
+    crashed_ns = world.fake.clock.now()
+    outcome = restart(world, TrailsWhenFlat, stop_ns=ist(14, 48), on_stop="keep")
+    settled = [e for e in events(outcome, "settled") if e["ts_ns"] >= crashed_ns]
+    assert [e["applied"] for e in settled][:1] == ["modify_refused"]
+    (stop,) = stops_working(world)
+    assert stop.trigger_price > 497.0
+    assert placed_after(world, crashed_ns) == []

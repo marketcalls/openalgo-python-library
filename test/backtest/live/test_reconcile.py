@@ -272,3 +272,19 @@ def test_F78_the_square_off_sends_no_exit_beyond_what_the_book_shows(
     assert held
     assert [o.action for o in strategy_orders(world, "Hold")] == ["BUY"]
     assert any("square off" in text and "held back" in text for text in alerts(caplog, "error"))
+
+
+def test_F78_a_stop_placed_again_is_held_while_the_book_shows_fewer_units(lagging, caplog):
+    # Another client cancels the stop at 14:43: the engine places it again for its 10
+    # units (R3), which the position book does not show, so the placement is held back.
+    other = lagging.fake.client()
+    lagging.script.at(
+        BY_HAND,
+        lambda: other.cancelorder(order_id=stop_of(lagging).order_id, strategy="StopHold"),
+    )
+    outcome = lagging.run(StopHold, on_stop="keep")
+    assert [o.status for o in lagging.orders() if o.price_type == "SL-M"] == ["cancelled"]
+    assert [e["strategy"] for e in events(outcome, "exit_held")][:1] == ["StopHold"]
+    assert any(
+        "stop of SBIN NSE" in text and "held back" in text for text in alerts(caplog, "error")
+    )
