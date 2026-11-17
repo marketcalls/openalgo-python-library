@@ -27,7 +27,9 @@ supervisor's windows; each comparison of the day that differed is in `reconcilia
 A leg whose difference with OpenAlgo's books no later read will confirm (16-session-design
 5.4 "As built", round 7) is an open position at OpenAlgo's units with no confirmed stop,
 flat or not in the engine, a mismatch of the summary and named on its Reconcile and End
-state lines. The public `SessionResult` (unit 13) is built from the outcome.
+state lines; OpenAlgo's units are those the read showed, moved by the engine's own fills
+since (`_reconcile_close`), and a leg they leave flat is no open position (round 8). The
+public `SessionResult` (unit 13) is built from the outcome.
 
 Times are UTC nanoseconds, quantities units, amounts rupees.
 """
@@ -42,6 +44,7 @@ from .._driver import deliver
 from .._engine import call
 from ..errors import JournalError
 from ._alerts_summary import SessionSummary, summary_text
+from ._reconcile_close import differing
 from ._reconcile_findings import Reconciliation
 from ._session_loop import Session
 from ._session_trader import Skipped, Trader
@@ -65,10 +68,11 @@ _FINAL_READ = frozenset({"session_end", "ctrl_c"})
 class OpenPosition:
     """A position still open when the session ended: the strategy, the instrument, its
     signed units (OpenAlgo's at the last read when they differed from the engine's and no
-    later read confirmed it), a note for the operator, its stop's broker order ID ("" for
-    none, or one not bound) and whether that stop was confirmed working at the broker for
-    no more units than the position holds (one larger, which a trigger would take through
-    zero, is not, nor any while OpenAlgo's books show other units than the engine's:
+    later read confirmed it, moved by the engine's own fills since: `_reconcile_close`), a
+    note for the operator, its stop's broker order ID ("" for none, or one not bound) and
+    whether that stop was confirmed working at the broker for no more units than the
+    position holds (one larger, which a trigger would take through zero, is not, nor any
+    while OpenAlgo's books show other units than the engine's:
     `_stops_report.stop_state`)."""
 
     strategy: str
@@ -133,12 +137,14 @@ def close_session(
             logger.warning("a request held back by the exit guard was not sent: %r", request)
         session.stops.after.alert(session)
         open_positions = _open_positions(session)
+        # Named while the kernel sessions run: a finished one has no units to read.
+        differing_legs = _differing_legs(session)
         unprotected_s = session.stops.windows.seconds(session.now())
         if journal_works:
             _save_states(session)
         parts.worker.close()
         outputs = {trader.name: _stop_engine(trader) for trader in session.traders}
-        summary = _summary(session, outputs, unprotected_s, flat=not open_positions)
+        summary = _summary(session, outputs, unprotected_s, differing_legs, not open_positions)
         session.alert(AlertKind.DAILY_SUMMARY, summary_text(summary))
         if not session.threads:
             # Under the test seam no sender thread posts: the queue goes now, as it would.
@@ -175,20 +181,28 @@ def close_session(
     )
 
 
+def _differing_legs(session: Session) -> tuple[str, ...]:
+    """Each leg whose difference with OpenAlgo's books no later read confirms, in the
+    summary's words (`_reconcile_close.Differing.summary`)."""
+    return tuple(
+        differs.summary(trader)
+        for trader in session.traders
+        if (differs := differing(session.reconcile, trader)) is not None
+    )
+
+
 def _summary(
-    session: Session, outputs: dict[str, Any], unprotected_s: float, *, flat: bool
+    session: Session,
+    outputs: dict[str, Any],
+    unprotected_s: float,
+    legs: tuple[str, ...],
+    flat: bool,
 ) -> SessionSummary:
     """The day's figures of this start: the trades the kernel sessions closed, their
     gross P&L and modelled charges (the broker's trade book carries none), and each leg
-    whose difference with OpenAlgo's books no later read confirms, a mismatch too."""
+    of `legs` (`_differing_legs`), a mismatch too."""
     parts = session.parts
     closed = sum(len(output["trades"]["trade_id"]) for output, _ in outputs.values())
-    differing = tuple(
-        f"{trader.name} {trader.symbol} {trader.exchange} {seen.broker_units} units in "
-        f"OpenAlgo's books, the engine's {seen.engine_units}"
-        for trader in session.traders
-        if (seen := session.reconcile.unconfirmed(trader.name)) is not None
-    )
     return SessionSummary(
         day=parts.spec.day,
         mode=parts.mode,
@@ -200,21 +214,22 @@ def _summary(
         slippage=None,
         rejected_orders=session.rejected,
         unprotected_seconds=unprotected_s,
-        reconcile_mismatches=session.mismatches + len(differing),
+        reconcile_mismatches=session.mismatches + len(legs),
         undelivered_alerts=parts.sender.undelivered,
         flat=flat,
-        differing=differing,
+        differing=legs,
     )
 
 
 def _open_positions(session: Session) -> tuple[OpenPosition, ...]:
     """Each leg the engine holds open, and each whose difference with OpenAlgo's books no
-    later read confirms, at OpenAlgo's units then (module docstring)."""
+    later read confirms, at OpenAlgo's units then; none they show flat (module
+    docstring)."""
     stops, positions = session.stops, []
     for trader in session.traders:
-        seen = session.reconcile.unconfirmed(trader.name)
-        units = trader.open_units() if seen is None else seen.broker_units
-        if units == 0 and seen is None:
+        differs = differing(session.reconcile, trader)
+        units = trader.open_units() if differs is None else differs.broker_units
+        if units == 0:
             continue
         note = (
             "known as of the mode breach" if session.locked else stops.after.note(session, trader)

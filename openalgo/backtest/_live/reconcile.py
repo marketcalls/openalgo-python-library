@@ -32,8 +32,8 @@ the first comparison showing the broker holding fewer units, none or the other s
 exit guard (`_reconcile_guard`) holds every closing order beyond what the broker holds,
 and the stop's cancel that makes way for one, until a comparison agrees. Once the close
 has printed its last lines (`end`), a difference a leg's last comparison saw for the
-first time is never confirmed: the close reports the leg at OpenAlgo's units
-(`unconfirmed`, `broker_units`; 16-session-design 5.4 "As built", round 7).
+first time is never confirmed: the close reports the leg at OpenAlgo's units, moved by
+the engine's own fills since (`unconfirmed`, `_reconcile_close`; 5.4 "As built", round 7).
 
 Each read's position book also counts for the kill switch (`KillSwitch.positions`, its
 interface to the reconciler, which never fires it), and its funds cap each strategy's

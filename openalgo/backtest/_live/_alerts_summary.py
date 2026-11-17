@@ -18,8 +18,11 @@ session did not reach OpenAlgo. A leg whose OpenAlgo books differed from the eng
 close with no later read to confirm it (16-session-design 5.4 "As built", round 7) is
 counted and named on the Reconcile and End state lines, "(at the close: s1 SBIN NSE -4
 units in OpenAlgo's books, the engine's 0)" after "1 mismatch" and after "not flat: a
-position is still open". Rupees are written as `Result.summary()` writes them (Indian
-digit grouping, a loss as "Rs -500.00"). `alerts` re-exports both names.
+position is still open", or after "flat" when OpenAlgo's books show every such leg flat
+(round 8: "s1 SBIN NSE no position in OpenAlgo's books, the engine's 10").
+
+Rupees are written as `Result.summary()` writes them (Indian digit grouping, a loss as
+"Rs -500.00"). `alerts` re-exports both names.
 """
 
 from __future__ import annotations
@@ -59,13 +62,14 @@ class SessionSummary:
     OpenAlgo, failed or dropped (`Alerts.undelivered`). `flat` is True when the session
     ended with no open position. `differing` names, in words, each leg whose OpenAlgo
     books differed from the engine at the close with no later read to confirm it; each
-    is a mismatch, and a position that may be open.
+    is a mismatch, and a position that may be open unless the words say OpenAlgo's books
+    show it flat (a session can then end `flat` with it named).
 
     Raises ConfigError when a rupee figure or the seconds unprotected is not a finite
     number (None is allowed for `slippage` only), when the seconds unprotected are
     negative, when a count is not a whole number of at least zero, when a leg of
     `differing` is not named in words, or when it names more legs than the mismatches
-    counted or any leg while `flat` is True.
+    counted.
     """
 
     day: dt.date
@@ -96,7 +100,7 @@ class SessionSummary:
             )
         for name in _COUNTS:
             _check_count(name, getattr(self, name))
-        _check_differing(self.differing, self.reconcile_mismatches, self.flat)
+        _check_differing(self.differing, self.reconcile_mismatches)
 
     @property
     def net_pnl(self) -> float:
@@ -125,7 +129,7 @@ def summary_text(summary: SessionSummary) -> str:
     ]
     if summary.undelivered_alerts:
         lines.append(("Alerts", f"{summary.undelivered_alerts} not delivered"))
-    end = "flat" if summary.flat else f"not flat: a position is still open{at_close}"
+    end = ("flat" if summary.flat else "not flat: a position is still open") + at_close
     lines.append(("End state", end))
     width = max(len(label) for label, _ in lines)
     title = (
@@ -152,19 +156,14 @@ def _check_count(name: str, value: object) -> None:
         )
 
 
-def _check_differing(differing: object, mismatches: int, flat: bool) -> None:
+def _check_differing(differing: object, mismatches: int) -> None:
     """Raise ConfigError unless `differing` is a tuple of legs in words, each counted
-    among the `mismatches`, and empty when the session ended `flat`."""
+    among the `mismatches`."""
     if not isinstance(differing, tuple) or not all(
         isinstance(words, str) and words for words in differing
     ):
         raise ConfigError(
             f"the session summary's differing names each leg in words, got {differing!r}"
-        )
-    if differing and flat:
-        raise ConfigError(
-            "the session summary cannot be flat while it names a leg whose OpenAlgo books "
-            "differed from the engine at the close"
         )
     if len(differing) > mismatches:
         raise ConfigError(

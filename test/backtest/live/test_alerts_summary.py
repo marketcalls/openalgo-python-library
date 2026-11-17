@@ -192,9 +192,16 @@ def test_several_legs_that_differ_at_the_close_are_named_in_order():
     assert line(summary, "Reconcile") == f"2 mismatches (at the close: {SHORT_4}; {other})"
 
 
-def test_a_flat_summary_cannot_name_a_leg_that_differs_at_the_close():
-    with pytest.raises(ConfigError, match="cannot be flat"):
-        replace(A_GOOD_DAY, reconcile_mismatches=1, differing=(SHORT_4,))
+#: How the close names a leg whose OpenAlgo books show it flat (round 8).
+FLAT_AT_OPENALGO = "StopHold SBIN NSE no position in OpenAlgo's books, the engine's 10"
+
+
+def test_a_flat_end_state_names_a_leg_openalgos_books_show_flat_at_the_close():
+    # The engine held 10 and its stop works on at the broker: no position is open, but the
+    # leg is named where the End state says flat.
+    summary = replace(A_GOOD_DAY, reconcile_mismatches=1, differing=(FLAT_AT_OPENALGO,))
+    assert line(summary, "End state") == f"flat (at the close: {FLAT_AT_OPENALGO})"
+    assert line(summary, "Reconcile") == f"1 mismatch (at the close: {FLAT_AT_OPENALGO})"
 
 
 def test_a_leg_that_differs_at_the_close_counts_among_the_mismatches():
