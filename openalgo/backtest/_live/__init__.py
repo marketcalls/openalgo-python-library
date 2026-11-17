@@ -28,6 +28,10 @@ attribute of its parent, which would replace the `bt.live` function.
 | `session` | A live session from start to stop: the start, the loop, the safe stop, the close |
 | `stops` | The stops supervisor: broker-held stops, exits that fail, protection, held words |
 | `watch` | The risk watch: a dead or quiet feed, clock skew, the account loss and the kill switch |
+| `reconcile` | The reconciler: the broker's books against the engine, the safe corrections |
+
+A restart (`_restart_books`, `_session_restore`, `_session_saved`) resumes the day's session
+from journal L's saved state, checked against the journal and the broker's books.
 
 Times are UTC nanoseconds, prices rupees and quantities units, never lots. No module
 prints: they log to the `openalgo.backtest.live` logger, and a session's own output goes

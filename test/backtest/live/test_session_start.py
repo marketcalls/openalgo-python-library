@@ -55,14 +55,17 @@ def test_the_banner_names_the_mode_first_and_the_square_off(world):
     assert any("entries until 14:50 IST" in line for line in world.lines)
 
 
-def test_a_restart_of_the_day_whose_journal_holds_orders_is_refused(world):
+def test_a_restart_of_the_day_whose_journal_holds_orders_resumes(world):
+    # The first start bought and flattened; the restart takes the day's journal back
+    # (unit 12) and trades on.
     world.stop_at(ist(14, 43))
     world.run(BuyAndHold)
     world.stop, world.feed = StopFlag(), None
-    placed = len(world.fake.log.calls("placeorder"))
-    with pytest.raises(LiveError, match="restart"):
-        world.run(BuyAndHold)
-    assert len(world.fake.log.calls("placeorder")) == placed
+    world.stop_at(ist(14, 45))
+    outcome = world.run(BuyAndHold)
+    assert outcome.restarts == 1
+    assert outcome.stopped_by == "ctrl_c"
+    assert world.fake.position("SBIN", "NSE") == 0
 
 
 def test_a_restart_after_a_start_that_sent_nothing_is_a_fresh_start(world):

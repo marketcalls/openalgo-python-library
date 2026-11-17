@@ -75,17 +75,18 @@ class Saved:
         return None
 
 
-def save(trader: Trader, journal: Any, day: Any, adopted: int) -> None:
-    """Save `trader`'s state to journal L for `day` (module docstring); nothing once its
-    kernel session finished. Raises JournalError when the journal cannot write it."""
+def save(session: Any, trader: Trader) -> None:
+    """Save `trader`'s state to `session`'s journal L for its day (module docstring);
+    nothing once its kernel session finished. Raises JournalError when the journal
+    cannot write it."""
     if trader.finished:
         return
     saved = {
         "live_state": call(trader.engine.live_state),
         "venue_map": trader.venue.saved(),
-        "adopted": adopted,
+        "adopted": session.reconcile.adopted(trader.name),
     }
-    journal.put_rms_state(trader.name, saved, day=day)
+    session.parts.journal.put_rms_state(trader.name, saved, day=session.parts.spec.day)
 
 
 def read_saved(state: Mapping[str, Any] | None, strategy: str) -> Saved | None:

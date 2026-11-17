@@ -258,3 +258,17 @@ def test_F78_a_lag_that_lasts_past_the_in_flight_limit_is_alerted_to_check_the_a
     lagging.run(StopHold, on_stop="keep")
     texts = [text for text in alerts(caplog, "error") if "check the account" in text]
     assert len(texts) == 1
+
+
+def test_F78_the_square_off_sends_no_exit_beyond_what_the_book_shows(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog
+):
+    world = stop_world(make_fake_openalgo, monkeypatch, tmp_path)
+    world.script.at(ist(14, 41, 30), world.fake.lag_positionbook)
+    world.stop_at(ist(15, 1))
+    world.stop_at(ist(15, 1, 10))
+    outcome = world.run(Hold, on_stop="keep")
+    held = [e for e in events(outcome, "exit_held") if e["ts_ns"] >= ist(15, 0)]
+    assert held
+    assert [o.action for o in strategy_orders(world, "Hold")] == ["BUY"]
+    assert any("square off" in text and "held back" in text for text in alerts(caplog, "error"))

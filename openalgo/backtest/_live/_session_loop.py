@@ -257,15 +257,9 @@ class Session:
         for trader in self.traders:
             made = trader.commands()
             if made:
-                self.save(trader)
+                save(self, trader)
             requests += made
         return requests
-
-    def save(self, trader: Trader) -> None:
-        """Save `trader`'s state for a restart to journal L (`_session_saved`). Raises
-        JournalError when the journal cannot be written."""
-        day = self.parts.spec.day
-        save(trader, self.parts.journal, day, self.reconcile.adopted(trader.name))
 
     def pause(self, seconds: float) -> None:
         """Wait `seconds` while the loop keeps turning (the start's waits: the countdown,
@@ -357,7 +351,7 @@ class Session:
         cannot be written."""
         for trader in self.traders:
             if trader.name in names:
-                self.save(trader)
+                save(self, trader)
                 state = trader.state_changed()
                 if state is not None:
                     self.parts.journal.put_user_state(trader.name, state)

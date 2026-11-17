@@ -91,7 +91,12 @@ def zero_funds(make_fake_openalgo, monkeypatch, tmp_path, caplog):
 def test_F87_before_the_open_the_preflight_runs_again_each_minute_until_the_login(login, request):
     world = request.getfixturevalue(login)
     run(world, BuyAndHold)
+    # The start's book read (16-session-design 3.1 step 10) reads the funds with the
+    # position book once the preflight has passed: it is not a preflight.
     checks = [call.ts_ns for call in calls_between(world, "funds", ist(8, 58), LOGIN_AT + NS)]
+    for read in world.fake.log.calls("positionbook"):
+        if read.ts_ns in checks:
+            checks.remove(read.ts_ns)
     assert checks == [ist(8, 58) + minute * 60 * NS for minute in range(8)]
 
 

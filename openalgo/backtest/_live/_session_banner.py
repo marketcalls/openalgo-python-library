@@ -8,6 +8,7 @@ from typing import Any
 
 from .._calendar_convert import format_ist
 from ..calendar import default_calendar
+from ._session_restore import restart_lines
 from ._session_trader import ist_instant
 from ._types import Mode
 
@@ -19,13 +20,15 @@ BANNER_ALERT_LINES = 4
 def banner_lines(session: Any) -> list[str]:
     """The start banner of `session` (a `_session_loop.Session` whose strategies are
     set): the guard's mode line first ("OpenAlgo is in LIVE mode: orders go to
-    zerodha"), then the funds, each strategy's instrument, interval, capital, daily loss
+    zerodha"), at a restart the start's number and each resumed leg with its stop, then
+    the funds, each strategy's instrument, interval, capital, daily loss
     limit, entry cut-off and square-off, each instrument's freeze cap and a warning that
     an entry without `stop=` has no stop at the broker (allowed, decided 2026-11-16), the
     account's limit, the cost model, the sandbox's difference, and the warnings."""
     parts = session.parts
     spec, report = parts.spec, parts.report
-    lines = [parts.banner, f"Funds available: Rs {report.funds_available:,.2f}"]
+    lines = [parts.banner, *restart_lines(session)]
+    lines.append(f"Funds available: Rs {report.funds_available:,.2f}")
     facts = {(fact.symbol, fact.exchange): fact for fact in report.instruments}
     calendar = default_calendar()
     for each, trader in zip(spec.strategies, session.traders, strict=True):

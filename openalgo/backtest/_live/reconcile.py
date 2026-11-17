@@ -43,12 +43,18 @@ from typing import Any
 
 from .._engine import call
 from .._layout import NANOS_PER_SECOND
-from ._reconcile_act import Corrections, Finding, in_flight, own_orders
+from ._reconcile_act import (
+    Corrections,
+    Finding,
+    attribute,
+    in_flight,
+    order_findings,
+    own_orders,
+)
 from ._reconcile_guard import ExitGuard
 from ._reconcile_rules import GUARDED, Kind, LegBooks, judge, leg_books, unexplained_by
 from ._session_trader import Trader
-from ._types import AlertKind, OrderStatus, OrderUpdate
-from ._venue_requests import SAME_PRICE_RUPEES, STOP_TYPES
+from ._types import AlertKind
 from ._worker_queue import ReadBooks, StreamGap
 from .inbox import Books, PositionRows
 
@@ -119,6 +125,25 @@ class Reconciler:
         broker order IDs of the day's earlier starts (the session's own, by the journal)."""
         self._adopted.update(adopted)
         self._earlier = earlier
+
+    def differs_at_start(
+        self, trader: Trader, kind: Kind, journal_units: int, books: LegBooks
+    ) -> None:
+        """A restart found `trader`'s journal position (`journal_units`) different from
+        the broker's (5.5): acted on at once, as 5.3 would after two comparisons, with the
+        strategy's entries locked from the start; the exit guard opened while the broker
+        holds fewer units that nothing explains, or the other side."""
+        finding = (kind, journal_units, books.units)
+        own = own_orders(trader, self._earlier)
+        self._acted.add((trader.name, finding))
+        action = self._corrections.act(trader, finding, books, own)
+        self.rows.append(
+            Reconciliation(
+                self._session.now(), trader.name, kind.value, journal_units, books.units, action
+            )
+        )
+        if kind in (Kind.UNEXPLAINED, Kind.OTHER_SIDE) and books.units is not None:
+            self.guard.open(trader.name, books.units)
 
     def adopted(self, name: str) -> int:
         """The signed units strategy `name` adopted from other orders' trades today."""
@@ -251,9 +276,9 @@ class Reconciler:
         )
         own = own_orders(trader, self._earlier)
         if not late and books.trades is not None:
-            self._attribute(trader, books, message.ended_ns)
+            attribute(self._session, trader, books, message.ended_ns)
         engine = round(trader.open_units())
-        findings, polls = self._orders(trader, books, own)
+        findings, polls = order_findings(self._session, trader, books, own)
         kind = Kind.UNREADABLE
         if books.units is not None and books.trades is not None:
             external = sum(trade.signed for trade in books.external(own))
@@ -276,62 +301,6 @@ class Reconciler:
         if kind in (Kind.AGREE, Kind.MORE) or round(trader.open_units()) == books.units:
             self.guard.close(trader.name)
         return polls
-
-    def _attribute(self, trader: Trader, books: LegBooks, at_ns: int) -> None:
-        """Step 1: each own order's trades through its fill ledger, as news."""
-        for order_id, kernel_order in trader.venue.bound().items():
-            units, average = books.fills(order_id)
-            if units <= trader.venue.filled(kernel_order):
-                continue
-            order = call(trader.engine.order, kernel_order)
-            intent = trader.venue.intent_of(kernel_order)
-            quantity = intent.quantity if order is None else round(order["quantity_units"])
-            update = OrderUpdate(
-                order_id=order_id,
-                symbol=intent.symbol,
-                exchange=intent.exchange,
-                action=intent.action,
-                quantity=quantity,
-                filled_quantity=units,
-                pending_quantity=max(0, quantity - units),
-                average_price=average,
-                status=OrderStatus.COMPLETE if units >= quantity else OrderStatus.OPEN,
-                rejection_reason="",
-                mode=self._session.parts.mode,
-                ts_recv_ns=at_ns,
-                source="reconcile",
-            )
-            self._session.event("attributed", strategy=trader.name, order_id=order_id, filled=units)
-            self._session.news.apply_update(trader, update)
-
-    def _orders(
-        self, trader: Trader, books: LegBooks, own: frozenset[str]
-    ) -> tuple[set[Finding], bool]:
-        """Steps 2 and 4: the order book's findings, and whether a poll is wanted."""
-        findings: set[Finding] = set()
-        if books.rows is None:
-            return findings, False
-        bound, working = trader.venue.bound(), set(trader.working())
-        polls = False
-        for row in books.rows:
-            kernel_order = bound.get(row.order_id)
-            if kernel_order in working and not row.working:
-                polls = True
-            elif row.working and row.order_id in own and kernel_order not in working:
-                findings.add(("orphan", row.order_id))
-            elif row.working and row.order_id not in own and row.strategy == trader.name:
-                findings.add(("foreign", row.order_id))
-        stop = self._session.stops.leg(trader).stop
-        order_id = trader.venue.order_id_of(stop) if stop is not None else ""
-        row = books.row(order_id) if order_id else None
-        if stop is None or row is None or not row.working or row.price_type not in STOP_TYPES:
-            return findings, polls
-        kernel = call(trader.engine.order, stop)
-        trigger = float(kernel["trigger_rupees"] or 0.0)
-        same = math.isclose(row.trigger_price, trigger, rel_tol=0.0, abs_tol=SAME_PRICE_RUPEES)
-        if row.quantity != round(kernel["quantity_units"]) or not same:
-            findings.add(("stop_terms", order_id, row.quantity, row.trigger_price))
-        return findings, polls
 
     def _judged(
         self,
