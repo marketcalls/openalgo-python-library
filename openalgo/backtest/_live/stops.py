@@ -56,7 +56,7 @@ from ._stops_cover import (
 )
 from ._stops_deadline import UNPROTECTED, UNPROTECTED_EXIT_AFTER_S, Deadlines
 from ._stops_held import HeldWords
-from ._stops_kernel import order_of, push_price
+from ._stops_kernel import cancelling, order_of, push_price
 from ._stops_orders import LegOrders, Sent
 from ._stops_price import PriceRule
 from ._stops_protect import Protection
@@ -290,6 +290,13 @@ class StopsSupervisor:
         if order is None or order["order_type"] not in STOP_TYPES:
             return 0
         return max(0, round(order["quantity_units"] - order["filled_units"]))
+
+    def cancelling(self, trader: Trader) -> frozenset[int]:
+        """The kernel orders of `trader` whose cancel the kernel decided and the venue has
+        not answered, but those whose cancel the reconciler's exit guard holds back: never
+        sent, so they work at the broker."""
+        held = self._session.reconcile.guard.held_cancels(trader.name)
+        return cancelling(trader) - held
 
     # ----- helpers ------------------------------------------------------------------
 

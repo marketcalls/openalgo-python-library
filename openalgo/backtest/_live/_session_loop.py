@@ -15,7 +15,7 @@ the kernel sessions, and its iteration, `Session.step`.
        leg's unprotected window, and the safe stop's lines asked for in D are taken
        (`Control.after_hand_over`)
     F. save each strategy that released a slice for a restart, and its `self.state` when
-       it changed
+       it changed (`_session_saved.save_released`)
     G. wait for the next slice close, at most `wait_max_s`
 
 The loop never makes a network call: the order worker and the data worker do, on their
@@ -46,7 +46,7 @@ from ._session_exits import ExitRetries
 from ._session_lag import LoopLag
 from ._session_news import News
 from ._session_parts import SessionParts, SessionStopped, StopFlag
-from ._session_saved import save
+from ._session_saved import save, save_released
 from ._session_trader import Trader
 from ._stops_report import stop_words
 from ._types import LOGGER_NAME, AlertKind, Now, Sleep, Tick
@@ -246,7 +246,7 @@ class Session:
         if self.control is not None and not protecting:
             self.control.after_hand_over()
         if released:
-            self._save_states(released)
+            save_released(self, released)
         self._wait(until_ns)
 
     def _commands(self) -> list[Request]:
@@ -344,17 +344,6 @@ class Session:
             if wanted:
                 closes = [closed for opened, closed in trader.part.slices if opened in wanted]
                 self._check_candles(trader, max(closes))
-
-    def _save_states(self, names: set[str]) -> None:
-        """F: each strategy that released a slice is saved for a restart, and its
-        `self.state` when it changed, to journal L. Raises JournalError when the journal
-        cannot be written."""
-        for trader in self.traders:
-            if trader.name in names:
-                save(self, trader)
-                state = trader.state_changed()
-                if state is not None:
-                    self.parts.journal.put_user_state(trader.name, state)
 
     def _wait(self, until_ns: int | None) -> None:
         now_ns = self.now()

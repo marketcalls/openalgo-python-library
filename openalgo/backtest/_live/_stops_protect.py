@@ -36,7 +36,7 @@ from typing import Any
 
 from .._layout import NANOS_PER_SECOND
 from ._session_trader import Trader
-from ._stops_kernel import PROTECT_PLACED, cancelling, order_of, protect
+from ._stops_kernel import PROTECT_PLACED, order_of, protect
 from ._stops_orders import IN_FLIGHT, LegOrders, Sent
 from ._types import LOGGER_NAME, AlertKind
 from ._venue_requests import STOP_TYPES
@@ -152,7 +152,7 @@ class Protection:
         stop = leg.orders.get(leg.stop) if leg.stop is not None else None
         if stop is not None and leg.stop in trader.working():
             # A cancel the kernel decided in this loop step is handed over at its end.
-            if stop.cancel_sent or leg.stop in cancelling(trader):
+            if stop.cancel_sent or leg.stop in self._stops.cancelling(trader):
                 return CANCEL_WAITS
             return PROTECTED if self._stops.covered(trader) >= units else STOP_WAITS
         exits = [kernel_order for kernel_order in trader.exit_orders() if kernel_order != leg.stop]

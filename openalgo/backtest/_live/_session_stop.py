@@ -6,7 +6,8 @@ time that end it (`Control`). The common close is `_session_close`.
 - **Ctrl+C, the safe stop (D29).** The first stop request locks every strategy's entries
   ("operator_stop") and cancels its working entries and adds (one decided in the same
   loop step is withdrawn before it is sent: `Trader.commands`). With `on_stop="flatten"`
-  every open position is then exited (`request_exit`, "operator_stop"; the kernel answers
+  every open position is then exited (`request_exit`, "operator_stop", held by the exit
+  guard until a book read asked for now has compared the leg; the kernel answers
   "already_exiting" while an exit of it works, and a position whose exit failed every
   attempt of the retry schedule is asked once more). At each later step a position whose
   exit is not on the retry schedule (`_session_exits`) is asked again, so an entry that
@@ -203,6 +204,7 @@ class Control:
             self.verdict = MODE_BREACH
             return
         if self._on_stop == "flatten":
+            session.reconcile.read_before_exits()
             self._ask_exits(retried_too=True)
         else:
             self._protect(session.traders, now_ns)
@@ -292,6 +294,8 @@ class Control:
     def _exit_state(self, trader: Trader) -> str:
         """What works toward the exit of `trader`'s position, as a reminder says it."""
         session = self._session
+        if session.reconcile.guard.holds_back(trader.name):
+            return "its exit is held back until OpenAlgo's books show the units it closes"
         stop = session.stops.leg(trader).stop
         closing = [kernel_order for kernel_order in trader.exit_orders() if kernel_order != stop]
         exits = [trader.order_name(kernel_order) for kernel_order in closing]

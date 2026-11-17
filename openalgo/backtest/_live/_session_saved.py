@@ -12,7 +12,8 @@ plain-data dict:
 
 It is saved before each batch of the kernel's commands reaches the order worker (design
 rule 4: a restart never meets an order the saved state lacks) and after each slice a
-strategy releases (the trail's extremes move on ticks without commands). A kernel session
+strategy releases (the trail's extremes move on ticks without commands), with the
+strategy's `self.state` when it changed (`save_released`). A kernel session
 that has finished saves nothing: no session resumes at its close. A journal that cannot
 write raises JournalError, which stops the session (3.5).
 
@@ -66,6 +67,13 @@ class Saved:
         """The saved entry locks that last the day (`DAY_LOCKS`)."""
         return frozenset(self.live_state.get("desk", {}).get("entry_locks", [])) & DAY_LOCKS
 
+    def leg_stop(self, order: int) -> bool:
+        """True when saved kernel order `order` is a leg's broker-held stop."""
+        return any(
+            int(saved["order"]) == order and saved.get("role") == LEG_STOP_ROLE
+            for saved in self.live_state.get("orders", [])
+        )
+
     @property
     def stop(self) -> SavedOrder | None:
         """The saved order of the leg's broker-held stop, None when the leg had none."""
@@ -89,6 +97,18 @@ def save(session: Any, trader: Trader) -> None:
     session.parts.journal.put_rms_state(trader.name, saved, day=session.parts.spec.day)
 
 
+def save_released(session: Any, names: set[str]) -> None:
+    """The loop's step F: each strategy of `session` named in `names` (those that released
+    a slice) saved, and its `self.state` when it changed, to journal L. Raises
+    JournalError when the journal cannot write them."""
+    for trader in session.traders:
+        if trader.name in names:
+            save(session, trader)
+            state = trader.state_changed()
+            if state is not None:
+                session.parts.journal.put_user_state(trader.name, state)
+
+
 def read_saved(state: Mapping[str, Any] | None, strategy: str) -> Saved | None:
     """A strategy's saved state from `rms_state` (None: nothing saved). Raises LiveError
     for one that cannot be read, naming the strategy: a restart never guesses."""
@@ -108,4 +128,4 @@ def read_saved(state: Mapping[str, Any] | None, strategy: str) -> Saved | None:
     return Saved(live_state, orders, sent, adopted)
 
 
-__all__ = ["DAY_LOCKS", "LEG_STOP_ROLE", "Saved", "read_saved", "save"]
+__all__ = ["DAY_LOCKS", "LEG_STOP_ROLE", "Saved", "read_saved", "save", "save_released"]

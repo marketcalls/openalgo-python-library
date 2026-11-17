@@ -5,10 +5,15 @@ safe corrections; it never exits a position and never fires the kill switch).
 
 **Schedule** (5.1): a read when trading begins, every `RECONCILE_EVERY_S`,
 `RECONCILE_AFTER_FILL_S` after a fill, `RECONCILE_AGAIN_AFTER_S` after a comparison that
-differed, `SQUARE_OFF_READ_AFTER_S` after each strategy's square-off, and at the common
-close (`final`); never after the mode guard locked. One read at a time, numbered: the
-order worker reads the position, order and trade books and the funds (`ReadBooks`) and
-answers `Books`.
+found a difference the one before it did not (the second confirms it; one seen twice in a
+row waits for the schedule), `SQUARE_OFF_READ_BEFORE_S` before and
+`SQUARE_OFF_READ_AFTER_S` after each strategy's square-off, when the safe stop's flatten
+begins (`read_before_exits`), and at the common close (`final`); never after the mode
+guard locked. One read at a time, numbered: the order worker reads the position, order
+and trade books and the funds (`ReadBooks`) and answers `Books`. Before the flatten and
+the square-off the exit guard holds each leg's exits until a read begun after the request
+has compared it (a sale by hand since the last read is not known before), read again
+every `RECONCILE_AGAIN_AFTER_S` while a leg cannot be compared.
 
 **In flight** (`_reconcile_act.in_flight`). A read compares a leg only when it was out of
 flight from before the read began (a fill restarts that) and still is; a leg in flight
@@ -22,39 +27,32 @@ row has ended asks for a poll of the followed orders; an order of the session's 
 the broker that the engine does not hold is an orphan, and a working row naming the
 strategy that the session did not send is another's; (3) the positions are judged
 (`_reconcile_rules.judge`); (4) a working stop's units and trigger against the engine's.
-A finding seen in two comparisons in a row acts, once (`_reconcile_act.Corrections`). From
+A finding seen in two comparisons in a row acts, once (`_reconcile_findings`). From
 the first comparison showing the broker holding fewer units, none or the other side, the
 exit guard (`_reconcile_guard`) holds every closing order beyond what the broker holds,
-until a comparison agrees.
+and the stop's cancel that makes way for one, until a comparison agrees.
 
 Each read's position book also counts for the kill switch (`KillSwitch.positions`, its
 interface to the reconciler, which never fires it), and its funds cap each strategy's
-sizing (6.6, R18). Every comparison is an event; each that differed is a row of `rows`
-(`clean` while none did). Times are UTC nanoseconds, quantities signed units, prices
-rupees. Used by the loop only.
+sizing (6.6, R18). Every comparison is an event; a difference is a row of `rows` when
+first seen and when seen again in the next comparison (what was done then), not at each
+read while it lasts (`clean` while none was found). Times are UTC nanoseconds,
+quantities signed units, prices rupees. Used by the loop only.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from .._engine import call
 from .._layout import NANOS_PER_SECOND
-from ._reconcile_act import (
-    Corrections,
-    Finding,
-    attribute,
-    in_flight,
-    order_findings,
-    own_orders,
-)
+from ._reconcile_act import Corrections, attribute, in_flight, order_findings, own_orders
+from ._reconcile_findings import Findings, Reconciliation
 from ._reconcile_guard import ExitGuard
 from ._reconcile_rules import GUARDED, Kind, LegBooks, judge, leg_books, unexplained_by
 from ._session_trader import Trader
-from ._types import AlertKind
 from ._worker_queue import ReadBooks, StreamGap
 from .inbox import Books, PositionRows
 
@@ -69,6 +67,9 @@ RECONCILE_IN_FLIGHT_MAX_S = 180.0
 #: Seconds after a strategy's square-off before the books are read: the session's own
 #: check that every leg is flat then (16-session-design 3.4).
 SQUARE_OFF_READ_AFTER_S = 30.0
+#: Seconds before a strategy's square-off at which the books are read, so its exit knows
+#: what the broker holds (5.4 "As built"): a read of the four books takes a second or two.
+SQUARE_OFF_READ_BEFORE_S = 5.0
 #: Seconds after which a read asked for and never answered is asked for again: well past
 #: the orders client's own wait (the SDK's 120 s), as for the kill switch's reads.
 RECONCILE_READ_LOST_AFTER_S = 300.0
@@ -76,46 +77,28 @@ RECONCILE_READ_LOST_AFTER_S = 300.0
 _NS = NANOS_PER_SECOND
 
 
-@dataclass(frozen=True)
-class Reconciliation:
-    """A comparison that differed: when, the strategy, what differed (`kind`, a
-    `_reconcile_rules.Kind` value or "orphan", "foreign", "stop_terms"), the engine's and
-    the broker's units (None: not read), and what was done ("noted" at first sight)."""
-
-    at_ns: int
-    strategy: str
-    kind: str
-    engine_units: int
-    broker_units: int | None
-    action: str
-
-
 class Reconciler:
     """The reconciler of `session`, a `_session_loop.Session` (module docstring). `guard`
-    is its exit guard, `rows` its comparisons that differed, `compared` how many legs it
-    compared."""
+    is its exit guard, `rows` its differences."""
 
     def __init__(self, session: Any) -> None:
         self._session = session
         self.guard = ExitGuard(session)
-        self.rows: list[Reconciliation] = []
-        self.compared = 0
+        self._adopted: dict[str, int] = {}
+        self._orphans: set[str] = set()
+        corrections = Corrections(session, self._adopted, self._orphans)
+        self._findings = Findings(session, corrections, RECONCILE_IN_FLIGHT_MAX_S)
+        self.rows: list[Reconciliation] = self._findings.rows
         self._generation = 0
         self._asked_ns: int | None = None
         self._answered = True
         self._next_ns: int | None = None
         self._soon_ns: int | None = None
         self._square_offs: list[int] = []
+        self._before: dict[str, int] = {}
         self._quiet: dict[str, int | None] = {}
         self._flight: dict[str, int | None] = {}
-        self._last: dict[str, set[Finding]] = {}
-        self._acted: set[tuple[str, Finding]] = set()
-        self._lag_since: dict[str, int] = {}
-        self._lag_alerted: set[str] = set()
-        self._adopted: dict[str, int] = {}
         self._earlier: frozenset[str] = frozenset()
-        self._orphans: set[str] = set()
-        self._corrections = Corrections(session, self._adopted, self._orphans)
         self._stopped = False
 
     # ----- the start and what the loop tells it -----------------------------------------
@@ -133,15 +116,8 @@ class Reconciler:
         the broker's (5.5): acted on at once, as 5.3 would after two comparisons, with the
         strategy's entries locked from the start; the exit guard opened while the broker
         holds fewer units that nothing explains, or the other side."""
-        finding = (kind, journal_units, books.units)
         own = own_orders(trader, self._earlier)
-        self._acted.add((trader.name, finding))
-        action = self._corrections.act(trader, finding, books, own)
-        self.rows.append(
-            Reconciliation(
-                self._session.now(), trader.name, kind.value, journal_units, books.units, action
-            )
-        )
+        self._findings.at_start(trader, kind, journal_units, books, own)
         if kind in (Kind.UNEXPLAINED, Kind.OTHER_SIDE) and books.units is not None:
             self.guard.open(trader.name, books.units)
 
@@ -186,8 +162,8 @@ class Reconciler:
         if session.locked or self._stopped or not session.trading:
             return
         for trader in session.traders:
-            name, held = trader.name, self.guard.held_orders(trader.name)
-            if in_flight(session, trader, held):
+            name = trader.name
+            if in_flight(session, trader):
                 self._quiet[name] = None
                 self._flight[name] = self._flight.get(name) or now_ns
             else:
@@ -196,8 +172,13 @@ class Reconciler:
                     self._quiet[name] = now_ns
         if self._next_ns is None:
             self._next_ns = now_ns
-            after = _s(SQUARE_OFF_READ_AFTER_S)
+            after, before = _s(SQUARE_OFF_READ_AFTER_S), _s(SQUARE_OFF_READ_BEFORE_S)
             self._square_offs = sorted({t.square_off_ns + after for t in session.traders})
+            self._before = {t.name: t.square_off_ns - before for t in session.traders}
+        due = [name for name, before_ns in self._before.items() if before_ns <= now_ns]
+        if due:
+            self._before = {n: at for n, at in self._before.items() if n not in due}
+            self.read_before_exits(due)
         # While OpenAlgo is silent the order worker's probe asks it (4.9): a read could
         # hold the worker for the client's whole timeout, ahead of the stops and exits.
         if session.parts.worker.silent_since_ns is not None:
@@ -207,6 +188,15 @@ class Reconciler:
                 self.ask(now_ns)
         elif self._asked_ns is None or now_ns >= self._asked_ns + _s(RECONCILE_READ_LOST_AFTER_S):
             self.ask(now_ns)
+
+    def read_before_exits(self, names: Iterable[str] | None = None) -> None:
+        """The exits of strategies `names` (all for None) wait for a comparison of a read
+        asked for now (module docstring): the safe stop's flatten and the square-off."""
+        now_ns = self._session.now()
+        for trader in self._session.traders:
+            if names is None or trader.name in names:
+                self.guard.await_read(trader.name, now_ns)
+        self._soon(now_ns)
 
     def ask(self, now_ns: int) -> None:
         """Ask the order worker for a read now."""
@@ -258,11 +248,17 @@ class Reconciler:
             quiet = self._quiet.get(trader.name)
             if not late and (quiet is None or quiet > message.started_ns):
                 continue
-            if not late and in_flight(session, trader, self.guard.held_orders(trader.name)):
+            if not late and in_flight(session, trader):
                 continue
             polls |= self._compare(trader, message, late=late)
         if polls:
             session.hand_over([StreamGap(message.started_ns)])
+        awaited = self.guard.awaited_since()
+        if awaited:
+            # A wait that began after this read began needs a read at once; a leg the read
+            # could not compare (in flight, unreadable) another after a short while.
+            again = 0 if max(awaited) > message.started_ns else _s(RECONCILE_AGAIN_AFTER_S)
+            self._soon(session.now() + again)
 
     def _compare(self, trader: Trader, message: Books, *, late: bool) -> bool:
         """Compare one leg (module docstring); True when an order's row has ended while
@@ -286,7 +282,6 @@ class Reconciler:
             kind = judge(engine, books.units, unexplained)
         if kind not in (Kind.AGREE, Kind.UNREADABLE):
             findings.add((kind, engine, books.units))
-        self.compared += 1
         self._session.event(
             "reconcile",
             strategy=trader.name,
@@ -297,58 +292,13 @@ class Reconciler:
         )
         if kind in GUARDED and books.units is not None:
             self.guard.open(trader.name, books.units)
-        self._judged(trader, findings, books, own, late=late)
+        if self._findings.judged(trader, findings, books, own, late=late):
+            self._soon(self._session.now() + _s(RECONCILE_AGAIN_AFTER_S))
         if kind in (Kind.AGREE, Kind.MORE) or round(trader.open_units()) == books.units:
             self.guard.close(trader.name)
+        if kind is not Kind.UNREADABLE:
+            self.guard.read(trader.name, message.started_ns)
         return polls
-
-    def _judged(
-        self,
-        trader: Trader,
-        findings: set[Finding],
-        books: LegBooks,
-        own: frozenset[str],
-        *,
-        late: bool,
-    ) -> None:
-        """Note each finding; act on those seen in two comparisons in a row, once."""
-        name, now_ns = trader.name, self._session.now()
-        last, self._last[name] = self._last.get(name, set()), findings
-        if findings:
-            self._soon(now_ns + _s(RECONCILE_AGAIN_AFTER_S))
-        if not any(finding[0] is Kind.UNEXPLAINED for finding in findings):
-            self._lag_since.pop(name, None)
-        for finding in sorted(findings, key=repr):
-            action = "noted"
-            if finding in last and (name, finding) not in self._acted:
-                self._acted.add((name, finding))
-                corrections = self._corrections
-                act = corrections.alert_only if late else corrections.act
-                action = act(trader, finding, books, own)
-            elif finding in last:
-                action = "acted"
-            kind = finding[0].value if isinstance(finding[0], Kind) else finding[0]
-            engine = finding[1] if isinstance(finding[0], Kind) else round(trader.open_units())
-            self.rows.append(Reconciliation(now_ns, name, kind, engine, books.units, action))
-            self._session.event("mismatch", strategy=name, found=kind, action=action)
-            if finding[0] is Kind.UNEXPLAINED:
-                self._lag(trader, books)
-
-    def _lag(self, trader: Trader, books: LegBooks) -> None:
-        """An unexplained difference that lasts past the in-flight limit: an ERROR alert,
-        once, to check the account (5.3 row 3)."""
-        now_ns = self._session.now()
-        since = self._lag_since.setdefault(trader.name, now_ns)
-        late = now_ns - since > _s(RECONCILE_IN_FLIGHT_MAX_S)
-        if late and trader.name not in self._lag_alerted:
-            self._lag_alerted.add(trader.name)
-            self._session.alert(
-                AlertKind.ERROR,
-                f"{trader.name}: OpenAlgo's books have shown {books.units} units of "
-                f"{trader.symbol} {trader.exchange} against the engine's "
-                f"{round(trader.open_units())} for over {RECONCILE_IN_FLIGHT_MAX_S:g} s with "
-                "no trade to explain it: check the account in OpenAlgo",
-            )
 
     def _cap_sizing(self, funds: Mapping[str, Any]) -> None:
         """Each strategy's sizing capped by the account's available cash (6.6, R18)."""
@@ -376,6 +326,6 @@ __all__ = [
     "RECONCILE_IN_FLIGHT_MAX_S",
     "RECONCILE_READ_LOST_AFTER_S",
     "SQUARE_OFF_READ_AFTER_S",
+    "SQUARE_OFF_READ_BEFORE_S",
     "Reconciler",
-    "Reconciliation",
 ]

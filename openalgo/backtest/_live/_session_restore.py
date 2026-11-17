@@ -49,7 +49,7 @@ from ._fill_ledger import VENUE_REJECT_CODE
 from ._plan_release import CANDLE_LAST_READ_S
 from ._reconcile_rules import Kind, LegBooks
 from ._restart_books import LegStart, Restart
-from ._session_saved import LEG_STOP_ROLE, Saved
+from ._session_saved import Saved
 from ._session_trader import Trader
 from ._stops_kernel import protect
 from ._stops_report import stop_words
@@ -131,20 +131,22 @@ def _restore(session: Any, trader: Trader, saved: Saved, restart: Restart) -> No
     rebuilt = trader.venue.restore(saved.orders, pairs)
     for old, new in sorted(pairs.items(), key=lambda pair: pair[1]):
         if saved.sent.get(old, False):
-            _check(session, trader, new, rebuilt.get(new), restart)
+            record = rebuilt.get(new)
+            if record is None:
+                _not_placed(session, trader, new, None, leg_stop=saved.leg_stop(old))
+            else:
+                _check(session, trader, new, record, restart)
     for reason in sorted(saved.locks):
         if trader.lock(reason):
             session.event("lock", strategy=trader.name, reason=reason)
 
 
 def _check(
-    session: Any, trader: Trader, kernel_order: int, saved: SavedOrder | None, restart: Restart
+    session: Any, trader: Trader, kernel_order: int, saved: SavedOrder, restart: Restart
 ) -> None:
-    """The restored-order check of one order (module docstring)."""
+    """The restored-order check of one order the venue map has a record of (module
+    docstring)."""
     journal, day = session.parts.journal, session.parts.spec.day
-    if saved is None:
-        _not_placed(session, trader, kernel_order, None)
-        return
     intent = saved.intent
     order_id = saved.order_id or journal.order_id_of(intent.intent_id) or ""
     if order_id:
@@ -160,7 +162,7 @@ def _check(
     elif any(unbound.intent_id == intent.intent_id for unbound in journal.unbound(day=day)):
         raise LiveError(f"intent {intent.intent_id} is still unbound after the start's wait")
     else:
-        _not_placed(session, trader, kernel_order, saved)
+        _not_placed(session, trader, kernel_order, saved, leg_stop=False)
 
 
 def _bound(
@@ -226,12 +228,15 @@ def _word(session: Any, saved: SavedOrder, order_id: str, books: LegBooks) -> Or
     )
 
 
-def _not_placed(session: Any, trader: Trader, kernel_order: int, saved: SavedOrder | None) -> None:
+def _not_placed(
+    session: Any, trader: Trader, kernel_order: int, saved: SavedOrder | None, *, leg_stop: bool
+) -> None:
     """A restored order that never reached the broker ends: a leg stop is placed again
-    (R3), any other order rejected; a rejected exit is asked for again on the schedule."""
+    (R3), any other order rejected; a rejected exit is asked for again on the schedule.
+    With no venue record (`saved` None) the saved state's role tells a leg stop
+    (`leg_stop`): the kernel's order dict has none."""
     if saved is None:
-        order = call(trader.engine.order, kernel_order)
-        if order is not None and order.get("role") == LEG_STOP_ROLE:
+        if leg_stop:
             call(trader.engine.apply_cancel, kernel_order)
         else:
             call(trader.engine.apply_reject, kernel_order, VENUE_REJECT_CODE)

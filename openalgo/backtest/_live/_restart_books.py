@@ -17,7 +17,10 @@ journal's last update or the trade book, whichever says more. The restart rules 
 traded symbol that no journal position holds, and a journal position the broker does not
 hold that no trade of another order explains, refuse the start (LiveError naming them;
 nothing has been sent). A resumed leg whose saved stop does not work in the order book is
-an ERROR alert now; its stop is placed again at the end of step 11.
+an ERROR alert now, saying what the restart does about it (`_missing_stop_words`): its
+stop is placed again at the end of step 11, unless the books show the broker holding
+fewer units that no trade explains, or the other side (the exit guard then holds a stop
+for the journal's units), or other orders closed the position.
 
 Times are UTC nanoseconds, quantities signed units. Run by the main thread at the start.
 """
@@ -26,7 +29,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from .._layout import NANOS_PER_SECOND
@@ -84,7 +87,6 @@ class Restart:
     legs: Mapping[str, LegStart]
     own: frozenset[str]
     read_ns: int
-    stops_missing: tuple[str, ...] = field(default=())
 
 
 def read_start(
@@ -212,8 +214,8 @@ def judge_start(spec: Any, journal: Any, start: StartBooks, alerts: Any) -> Rest
             )
     if refused:
         raise LiveError("the start cannot resume: " + "; ".join(refused))
-    missing = tuple(_alert_missing_stops(spec, legs, journal, alerts))
-    return Restart(legs, own, books.started_ns, missing)
+    _alert_missing_stops(spec, legs, journal, alerts)
+    return Restart(legs, own, books.started_ns)
 
 
 def _journal_units(saved: Saved | None, journal: Any, day: Any, leg: LegBooks) -> int:
@@ -236,10 +238,9 @@ def _journal_units(saved: Saved | None, journal: Any, day: Any, leg: LegBooks) -
 
 def _alert_missing_stops(
     spec: Any, legs: Mapping[str, LegStart], journal: Any, alerts: Any
-) -> list[str]:
+) -> None:
     """An ERROR alert for each leg that resumes with a position whose saved stop does not
-    work in the order book (3.1 step 10); the names of those strategies."""
-    missing = []
+    work in the order book (3.1 step 10)."""
     for each in spec.strategies:
         leg = legs[each.name]
         stop = None if leg.saved is None else leg.saved.stop
@@ -249,14 +250,34 @@ def _alert_missing_stops(
         row = leg.books.row(order_id) if order_id else None
         if row is not None and row.working:
             continue
-        missing.append(each.name)
         alerts.send(
             AlertKind.ERROR,
             f"{each.name}: {leg.journal_units} units of {each.symbol} {each.exchange} have no "
-            f"working stop at the broker (stop {order_id or 'not sent'}): it is placed again "
-            "once the engine is restored",
+            f"working stop at the broker (stop {order_id or 'not sent'}): "
+            f"{_missing_stop_words(leg)}",
         )
-    return missing
+
+
+def _missing_stop_words(leg: LegStart) -> str:
+    """What the restart does about a resumed leg's missing stop, by how the start judged
+    the leg against the broker's books (module docstring)."""
+    if leg.kind is Kind.EXPLAINED_FLAT:
+        return (
+            "OpenAlgo's books show the position closed by other orders, which the engine "
+            "takes as its own, so no stop is placed"
+        )
+    if leg.kind is Kind.UNEXPLAINED:
+        return (
+            f"OpenAlgo's books show {leg.broker_units} units, which no trade explains, so no "
+            "stop is placed for the journal's units while they disagree: check the account "
+            "in OpenAlgo"
+        )
+    if leg.kind is Kind.OTHER_SIDE:
+        return (
+            f"OpenAlgo's books show {leg.broker_units} units, the other side, so no stop is "
+            "placed: close the position by hand in OpenAlgo"
+        )
+    return "it is placed again once the engine is restored"
 
 
 __all__ = [

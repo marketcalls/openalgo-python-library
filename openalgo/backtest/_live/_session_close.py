@@ -26,6 +26,7 @@ from .._driver import deliver
 from .._engine import call
 from ..errors import JournalError
 from ._alerts_summary import SessionSummary, summary_text
+from ._reconcile_findings import Reconciliation
 from ._session_loop import Session
 from ._session_trader import Skipped, Trader
 from ._stops_cover import Unprotected
@@ -33,7 +34,6 @@ from ._stops_held import Estimate
 from ._stops_report import left_open, stop_state
 from ._types import LOGGER_NAME, AlertKind
 from .bars import BarDrift
-from .reconcile import Reconciliation
 
 logger = logging.getLogger(LOGGER_NAME)
 

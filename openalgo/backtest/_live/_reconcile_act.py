@@ -7,7 +7,8 @@ safe corrections a finding seen twice in a row allows.
 answered, unbound, held back or ambiguous; an add whose answer was lost; a word the order
 path holds for the trade book; a modify or cancel waiting for its result or its bind; any
 order of the leg working other than its confirmed, unchanged stop, and other than those
-the exit guard holds (they are not at the broker).
+the exit guard holds (they are not at the broker), and, while the guard holds the stop's
+cancel, an exit never sent that waits for it.
 
 **The safe corrections** (`Corrections.act`, decided 2026-11-16): the strategy's entries
 locked for the rest of the session ("reconciliation") and a RECONCILE_MISMATCH alert
@@ -47,21 +48,21 @@ ADOPTED_REASON = "manual"
 Finding = tuple[Any, ...]
 
 
-def in_flight(session: Any, trader: Trader, held: frozenset[int]) -> bool:
-    """Whether `trader`'s leg is in flight (module docstring); `held` are its kernel
-    orders whose requests the exit guard holds."""
-    stops = session.stops
+def in_flight(session: Any, trader: Trader) -> bool:
+    """Whether `trader`'s leg is in flight (module docstring)."""
+    stops, guard = session.stops, session.reconcile.guard
     leg = stops.leg(trader)
     if leg.unbound_add_units or stops.held.holds(trader):
         return True
     if any(watched.state in IN_FLIGHT for watched in leg.orders.values()):
         return True
+    held, waits = guard.held_orders(trader.name), bool(guard.held_cancels(trader.name))
     for kernel_order in trader.working():
-        if kernel_order in held:
+        watched = leg.orders.get(kernel_order)
+        if kernel_order in held or (waits and watched is None):
             continue
         if trader.venue.changing(kernel_order):
             return True
-        watched = leg.orders.get(kernel_order)
         resting = kernel_order == leg.stop and watched is not None
         if not (resting and watched.state is Sent.CONFIRMED and not watched.cancel_sent):
             return True
@@ -223,6 +224,9 @@ class Corrections:
         stop = self._session.stops.leg(trader).stop
         if stop is None or stop not in trader.working():
             return "no stop to cancel"
+        # The exit guard holds the stop's cancel of a leg whose broker holds fewer units:
+        # this one it lets go (a stop on the other side's position could add to it).
+        self._session.reconcile.guard.allow_cancel(trader.name, stop)
         trader.cancel(stop)
         return "stop cancelled"
 

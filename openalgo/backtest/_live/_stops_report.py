@@ -42,7 +42,7 @@ from typing import Any
 
 from ._order_state import ENTRY_PURPOSES
 from ._session_trader import Trader
-from ._stops_kernel import PROTECT_PLACED, cancelling, order_of
+from ._stops_kernel import PROTECT_PLACED, order_of
 from ._stops_orders import IN_FLIGHT, Sent, Watched
 from ._types import Purpose
 
@@ -256,12 +256,13 @@ def _repriced_limit(trader: Trader, watched: Watched) -> float | None:
 
 def _being_cancelled(stops: Any, trader: Trader, watched: Watched) -> bool:
     """Whether a cancel of the leg's stop `watched` was sent, or the kernel decided one the
-    session has not handed over yet (its cancelling list): either may be in effect at the
-    broker by the time the operator reads the note. Only a stop that covers units is
-    looked up in the kernel: one not confirmed covers nothing either way."""
+    session has not handed over yet (its cancelling list, but a cancel the exit guard holds
+    back): either may be in effect at the broker by the time the operator reads the note.
+    Only a stop that covers units is looked up in the kernel: one not confirmed covers
+    nothing either way."""
     if watched.cancel_sent:
         return True
-    return stops.covered(trader) > 0 and watched.kernel_order in cancelling(trader)
+    return stops.covered(trader) > 0 and watched.kernel_order in stops.cancelling(trader)
 
 
 def _covering(stops: Any, trader: Trader) -> int:

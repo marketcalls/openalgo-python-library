@@ -104,6 +104,26 @@ def test_F48_a_buy_by_hand_locks_the_strategys_entries_after_two_reads(world, ca
     assert "the excess is not the engine's" in text
 
 
+def test_a_difference_that_lasts_is_read_again_only_on_the_30_second_schedule(world):
+    # The excess is seen at 14:43:05 and confirmed by the read 3 s later; from then on
+    # the books are read every 30 s, as when they agree.
+    by_hand(world, "BUY", 10)
+    outcome = world.run(Hold, on_stop="keep")
+    reads = [e["ts_ns"] for e in events(outcome, "request") if e["type"] == "ReadBooks"]
+    later = [instant for instant in reads if ist(14, 43, 30) <= instant < STOPPED]
+    gaps = {b - a for a, b in zip(later, later[1:], strict=False)}
+    assert gaps == {round(RECONCILE_EVERY_S * 10**9)}
+
+
+def test_a_difference_that_lasts_is_listed_when_seen_and_when_acted_on_only(world):
+    by_hand(world, "BUY", 10)
+    outcome = world.run(Hold, on_stop="keep")
+    assert [(row.kind, row.action) for row in outcome.reconciliations] == [
+        ("more", "noted"),
+        ("more", "locked"),
+    ]
+
+
 def test_F48_nothing_is_sent_for_the_excess_bought_by_hand(world):
     by_hand(world, "BUY", 10)
     world.run(Hold)
