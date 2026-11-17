@@ -44,6 +44,8 @@ def tearsheet(
         strategies      a mapping {name: Performance} of the strategies of a combined
                         result; with two or more, a Strategies section compares them and
                         gives the correlation of their session returns (full mode)
+        overfitting     the quick overfitting checks already computed for this
+                        performance; without it the page computes them
 
     The page follows the layout of OpenStatz's dashboard: a sticky header with links to
     the sections, a theme toggle and Export PDF (the browser's print), the title line
@@ -69,12 +71,16 @@ def tearsheet(
                    `openalgo.backtest.Result.trade_list` with its MAE and MFE, sortable
                    and paged; the charges by component with the slippage and the
                    trading cost under their total; the R-multiples when a closed trade
-                   has an initial risk); Strategies (when given); Notes (how the
-                   figures were computed, the assumptions and warnings)
+                   has an initial risk); Overfitting checks (the quick checks of the
+                   trade list, `openalgo.backtest._robust._quick`: random out of
+                   sample, trade reshuffle, trade resample and variance at 200 runs,
+                   scored, or "too few trades to judge" below 30 closed trades);
+                   Strategies (when given); Notes (how the figures were computed, the
+                   assumptions and warnings)
         "basic"    the overview, cumulative return and period returns, the drawdown
                    chart and worst drawdowns, the monthly heatmap and yearly returns,
                    the trades, the trading cost, the MAE and MFE histograms and the
-                   charges, and the notes
+                   charges, the overfitting checks, and the notes
         "metrics"  every metric with its value and definition, and the assumptions
         "charts"   every chart and nothing else, the MAE and MFE histograms and
                    scatter charts included
@@ -103,6 +109,7 @@ def tearsheet(
         mode=mode,
         log_scale=log_scale,
         benchmark_name=bench_name,
+        overfitting=getattr(result_like, "overfitting", None),
     )
     if path is None:
         return page
@@ -170,9 +177,11 @@ def render(
     mode: str = "full",
     log_scale: bool = False,
     benchmark_name: str | None = None,
+    overfitting: object = None,
 ) -> str:
-    """The HTML page for `performance` in `mode` (see `tearsheet`). Raises ConfigError
-    for an unknown mode."""
+    """The HTML page for `performance` in `mode` (see `tearsheet`); `overfitting` is its
+    quick overfitting checks when already computed. Raises ConfigError for an unknown
+    mode."""
     if mode not in MODES:
         raise ConfigError(f"mode is one of {MODES}, got {mode!r}")
     view = _dashboard.View(
@@ -184,6 +193,7 @@ def render(
         strategies=strategies,
         log_scale=log_scale,
         parts=_dashboard.MODE_PARTS[mode],
+        overfitting=overfitting,
     )
     return _dashboard.render(view, __version__)
 

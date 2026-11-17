@@ -134,7 +134,7 @@ def notes(view: View) -> Section | None:
     method = method_notes(view.performance) if view.has("method") else ""
     blocks = [
         ("", card("How the figures were computed", "", method) if method else ""),
-        (SMALL, _assumptions(view.assumptions) if view.has("assumptions") else ""),
+        (SMALL, assumptions_card(view.assumptions) if view.has("assumptions") else ""),
     ]
     body = stack(blocks)
     return Section("notes", "Notes", "Method, assumptions &amp; warnings", body) if body else None
@@ -150,7 +150,9 @@ def _assumption_row(line: str) -> str:
     return f"<tr{css}><td class='l'>{fmt.text(name)}</td><td class='l'>{fmt.text(value)}</td></tr>"
 
 
-def _assumptions(lines: list[str]) -> str:
+def assumptions_card(lines: list[str]) -> str:
+    """The Assumptions card: one row per line, a line "name: value" as a name and its
+    value, a warning ("warning: ...") in red."""
     if not lines:
         body = "<p class='empty'>No assumptions were recorded with this result.</p>"
     else:
@@ -159,4 +161,4 @@ def _assumptions(lines: list[str]) -> str:
     return card("Assumptions", "What the run assumed, and every warning", body)
 
 
-__all__ = ["metrics", "notes", "strategies", "trades"]
+__all__ = ["assumptions_card", "metrics", "notes", "strategies", "trades"]

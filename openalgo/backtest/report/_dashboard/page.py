@@ -2,8 +2,8 @@
 toggle), the title line, the numbered sections the mode shows and the footer."""
 
 from .. import _format as fmt
-from . import script, sections, sections_run, style
-from .layout import View, section
+from . import overfitting, script, sections, sections_run, style
+from .layout import Section, View, section
 from .timeseries import MIN_TIME_GAP_PX
 
 #: The sections in page order; each returns None when the mode shows none of it.
@@ -15,6 +15,7 @@ SECTIONS = (
     sections.distribution,
     sections_run.metrics,
     sections_run.trades,
+    overfitting.overfitting,
     sections_run.strategies,
     sections_run.notes,
 )
@@ -76,22 +77,31 @@ def _footer(version: str) -> str:
 def render(view: View, version: str) -> str:
     """The whole page for `view`; `version` is the SDK's, shown in the footer."""
     parts = [part for part in (build(view) for build in SECTIONS) if part is not None]
+    dates = ",".join(f"{d:%Y-%m-%d}" for d in view.performance.session_returns.index)
+    title = f"{view.title}: backtest tearsheet"
+    return document(title, _title(view), parts, version, dates)
+
+
+def document(title: str, heading: str, parts: list[Section], version: str, dates: str) -> str:
+    """A whole self-contained page: the document `title` (plain text), the sticky
+    header with a link to each of `parts`, the title line `heading` (HTML), the numbered
+    sections and the footer with the SDK's `version`. `dates` are the session dates the
+    time-series charts' crosshair reads (comma-separated "YYYY-MM-DD")."""
     nav = "".join(
         f"<a href='#{part.anchor}'{ACTIVE if i == 0 else ''}>{part.title}</a>"
         for i, part in enumerate(parts)
     )
     body = "".join(section(i + 1, part) for i, part in enumerate(parts))
-    dates = ",".join(f"{d:%Y-%m-%d}" for d in view.performance.session_returns.index)
     return (
         "<!DOCTYPE html>\n<html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
         "<meta name='color-scheme' content='light dark'>"
-        f"<title>{fmt.text(view.title)}: backtest tearsheet</title>"
+        f"<title>{fmt.text(title)}</title>"
         f"<script>{script.HEAD}</script><style>{style.stylesheet()}</style></head>"
-        f"<body data-dates='{dates}'>{_header(nav)}<main>{_title(view)}{body}"
+        f"<body data-dates='{dates}'>{_header(nav)}<main>{heading}{body}"
         f"{_footer(version)}</main><script>{script.script(MIN_TIME_GAP_PX)}</script>"
         "</body></html>\n"
     )
 
 
-__all__ = ["SECTIONS", "render"]
+__all__ = ["SECTIONS", "document", "render"]

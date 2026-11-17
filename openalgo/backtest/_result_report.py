@@ -216,13 +216,15 @@ def opening_time(first_close_ns: int, base: str, exchange: str, calendar: Any) -
 
 @dataclass(frozen=True)
 class Report:
-    """What the tearsheet reads: the performance, a title, the assumption lines and the
-    name of the benchmark (None without one)."""
+    """What the tearsheet reads: the performance, a title, the assumption lines, the
+    name of the benchmark (None without one) and the quick overfitting checks the run
+    already computed (`_robust._quick.QuickChecks`; None computes them)."""
 
     performance: Performance
     name: str
     assumptions: list[str]
     benchmark_name: str | None = None
+    overfitting: Any = None
 
 
 #: The name a benchmark given as closes (a Series or DataFrame) is shown under.
