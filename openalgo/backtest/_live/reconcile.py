@@ -220,7 +220,10 @@ class Reconciler:
         protective steps, each waiting as little as the loop waits, for at most `wait_s`
         seconds. They take in the books and the order news only: after the last lines no
         price reaches the engine and the stops supervisor's duties do not run
-        (`_stops_after`)."""
+        (`_stops_after`). Once the books came, the steps go on within the same seconds
+        until the order worker is quiet (`_worker_quiet`): what the comparisons handed
+        over (a safe correction, an entry's cancel bound meanwhile) is answered before the
+        worker closes, and the order words it took during the read are taken in."""
         session = self._session
         if session.locked or self._stopped:
             return
@@ -229,6 +232,8 @@ class Reconciler:
         self.ask(now_ns)
         until_ns = now_ns + _s(wait_s)
         while self.waiting and session.now() < until_ns:
+            session.step(session.now(), protecting=True)
+        while not (session.locked or _worker_quiet(session)) and session.now() < until_ns:
             session.step(session.now(), protecting=True)
 
     def _reads(self, session: Any) -> bool:
@@ -343,6 +348,16 @@ class Reconciler:
 
 def _s(seconds: float) -> int:
     return round(seconds * _NS)
+
+
+def _worker_quiet(session: Any) -> bool:
+    """Whether the order worker has executed every request handed to it, is in no call,
+    and every order word it took and every message it posted have been taken. Read in
+    this order: each is raised before the one ahead of it clears."""
+    worker = session.parts.worker
+    if worker.unfinished or worker.busy_since_ns is not None:
+        return False
+    return not (worker.raw_pending or session.inbox_waiting)
 
 
 __all__ = [

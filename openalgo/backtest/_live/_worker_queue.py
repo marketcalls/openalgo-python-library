@@ -15,13 +15,18 @@ The worker's own requests (`ReleaseFill`, `ReleaseCancel`, `ReadBooks`, `ReadPos
 `Probe`, `StreamGap`, and a restart's `Settle` and the reconciler's `CancelOrphan`) belong
 to no order: each is its own FIFO. An entry or add whose
 decision is older than `ENTRY_STALE_AFTER_S` when it is taken is not sent (`is_stale`,
-open decision 7). Times are UTC nanoseconds. Used by the worker's thread only.
+open decision 7). Times are UTC nanoseconds. Used by the worker's thread only, but for
+`Incoming`: the requests any thread hands the worker, counted until the worker has
+executed them (`unfinished`), so the close knows when every answer it waits for has been
+posted (16-session-design 3.3 step 5).
 """
 
 from __future__ import annotations
 
 import collections
 import itertools
+import queue
+import threading
 from dataclasses import dataclass
 
 from .._layout import NANOS_PER_SECOND
@@ -184,6 +189,10 @@ class WorkerQueue:
         fifo = self._fifos.setdefault(self._key(request, arrived), collections.deque())
         fifo.appendleft(waiting)
 
+    def waits(self, request: Request) -> bool:
+        """True while `request` waits in the queue: put and not taken, or put back."""
+        return any(waiting.request is request for fifo in self._fifos.values() for waiting in fifo)
+
     def hold(self, key: OrderKey) -> None:
         """Take nothing of order `key` until `release` (an unsettled modify or cancel)."""
         self._held.add(key)
@@ -222,9 +231,47 @@ class WorkerQueue:
         return ("", arrived)
 
 
+class Incoming:
+    """The requests handed to the worker until it takes them into its queue, and how many
+    it has not finished (module docstring). Any thread puts; the worker's thread takes
+    them and says when one is finished."""
+
+    def __init__(self) -> None:
+        self._requests: queue.SimpleQueue[Request] = queue.SimpleQueue()
+        self._lock = threading.Lock()
+        self._unfinished = 0
+
+    @property
+    def unfinished(self) -> int:
+        """The requests handed over and not executed yet, one put back among them. Any
+        thread reads it: the worker posts a request's answer before it is finished."""
+        return self._unfinished
+
+    def put(self, request: Request) -> None:
+        """Hand over `request`, counted unfinished from now; it never waits."""
+        with self._lock:
+            self._unfinished += 1
+        self._requests.put(request)
+
+    def take_all(self) -> list[Request]:
+        """Every request handed over since the last call, oldest first."""
+        taken = []
+        while True:
+            try:
+                taken.append(self._requests.get_nowait())
+            except queue.Empty:
+                return taken
+
+    def finished(self) -> None:
+        """The worker executed a request and did not put it back."""
+        with self._lock:
+            self._unfinished -= 1
+
+
 __all__ = [
     "ENTRY_STALE_AFTER_S",
     "CancelOrphan",
+    "Incoming",
     "OrderKey",
     "Probe",
     "ReadBooks",

@@ -48,10 +48,14 @@ in flight (`held_orders`, `held_cancels`).
 lines, it sends nothing they did not name. Nothing held goes to the worker, whatever the
 close's final read shows: the lines and alerts have named each held order as not sent,
 and an operator may already be closing the position by hand as they say. Every new order
-request is held too (an exit, the cancel or a modify of a stop, a stop placed again, an
-entry), but the reconciler's own cancel of a stop on the other side (`allow_cancel`); the
-worker's own requests (a book read, an orphan's cancel) go. Nothing is alerted as going
-later; the close logs every request still held (`left`).
+request is held too (an exit, a stop placed again, a trail, an entry, the cancel of an
+exit or of the stop of a position), but what only takes exposure away: the reconciler's
+own cancel of a stop on the other side (`allow_cancel`), the cancel of a stop once the
+engine holds the leg flat and a modify that only lowers a stop's units (the stop fitted
+to a sale by hand the reconciler adopts), and the cancel of an entry or an add (the safe
+stop asked for it before the lines; it waited for the order's bind). The worker's own
+requests (a book read, an orphan's cancel) go. Nothing is alerted as going later; the
+close names every request still held (`left`).
 
 Quantities are units, times UTC nanoseconds. Used by the loop only.
 """
@@ -174,7 +178,7 @@ class ExitGuard:
 
     def end(self) -> None:
         """The session has printed its last lines: from now nothing held goes, and no new
-        order request but the reconciler's own cancel (module docstring, "At the
+        order request but what only takes exposure away (module docstring, "At the
         close")."""
         self._ended = True
 
@@ -189,7 +193,8 @@ class ExitGuard:
         name = intent.strategy
         allowed = (name, request.kernel_order) in self._allowed
         if self._ended:
-            return not (allowed and isinstance(request, CancelRequest))
+            own = allowed and isinstance(request, CancelRequest)
+            return not (own or self._takes_away(request))
         guarded, awaiting = name in self._broker, name in self._awaiting
         if not (guarded or awaiting):
             return False
@@ -208,6 +213,27 @@ class ExitGuard:
             if units <= request.replaces.quantity:
                 return False
         return units > exit_room(engine, self._broker[name])
+
+    def _takes_away(self, request: Any) -> bool:
+        """Whether an order request only takes exposure away, so it goes after the end
+        (module docstring, "At the close"): the cancel of an entry or an add, the cancel of
+        a stop of a leg the engine holds flat, a modify of a stop that lowers its units and
+        keeps its type and prices."""
+        purpose = request.intent.purpose
+        if isinstance(request, CancelRequest):
+            if purpose in ENTRY_PURPOSES:
+                return True
+            trader = self._session.trader_named(request.intent.strategy)
+            return purpose is Purpose.STOP and round(trader.open_units()) == 0
+        if isinstance(request, ModifyRequest) and purpose is Purpose.STOP:
+            new, old = request.terms, request.replaces
+            same = (new.price_type, new.price, new.trigger_price) == (
+                old.price_type,
+                old.price,
+                old.trigger_price,
+            )
+            return same and new.quantity < old.quantity
+        return False
 
     def _hold(self, request: Any) -> None:
         name = request.intent.strategy

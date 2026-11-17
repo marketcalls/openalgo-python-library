@@ -2,7 +2,8 @@
 `open_positions`, 3.3 step 4, 3.5, 6.2; the unit 8 hand-off on the left-open note): how a
 line names the leg, the stop's order ID and whether it is confirmed, the stop in an
 alert's words, and the note of a position left open (the safe stop's lines, the result's
-`open_positions` and the emergency stop's alert).
+`open_positions` and the emergency stop's alert), and what still works on a leg left flat
+(`still_working`, the close's alert, `_stops_after`).
 
 A position left open names each order still working toward it, by its broker order ID
 once bound, else its side, units, purpose and intent ID: an exit or an entry sent and
@@ -132,6 +133,20 @@ def left_open(stops: Any, trader: Trader) -> str:
     *before, last = parts
     words = f"{last}, close it by hand" if advice == _CLOSE else f"{last}: {STOP_PROTECTS}"
     return "; ".join([*before, words])
+
+
+def still_working(stops: Any, trader: Trader) -> list[str]:
+    """Each order of `trader`'s leg sent and still working in the engine, its stop among
+    them, in a note's words: what may still work at the broker, for a leg left flat."""
+    parts = _working(stops, trader)
+    watched = _stop(stops, trader)
+    if (
+        watched is not None
+        and watched.state is not Sent.ENDED
+        and watched.kernel_order in trader.working()
+    ):
+        parts.append(_stop_words(stops, trader))
+    return parts
 
 
 def open_while_running(stops: Any, trader: Trader) -> str:
@@ -298,6 +313,7 @@ __all__ = [
     "open_while_running",
     "protect_words",
     "protected",
+    "still_working",
     "stop_state",
     "stop_words",
     "while_running",

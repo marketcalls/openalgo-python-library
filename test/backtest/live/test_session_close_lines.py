@@ -3,14 +3,19 @@
 16-session-design 3.3 step 5 "As built", unit 12): once the session has printed its last
 lines, its final book read takes in the books and the order news only, no price reaches
 the engine, and a word that ends a leg's stop is not acted on but named in the result and
-in one ERROR alert.
+in one ERROR alert. What only takes exposure away still goes, and is answered before the
+order worker closes: the reconciler's own safe corrections, the stop fitted to a sale by
+hand it adopts among them.
 
 The market is `stops_samples`': SBIN on NSE from 14:40:05 IST, trading 10 units every
 10 s at 500.00. `TargetHold` buys 10 SBIN at 14:42:01 with an SL-M stop at 497.00 and a
 target at 502.00; `StopHold` the same with the stop only. Each test stops the session
 with Ctrl+C and `on_stop="keep"` at 14:46, so the leg's last line says its confirmed stop
 protects it; what the test plays happens right after that line is printed, before the
-close's final read. Expected values come from the scenario and the fake's books.
+close's final read. The tests of a sale by hand press Ctrl+C earlier, as the first
+comparison that shows the sale guards the leg, so the close's final read is the second
+comparison to show it, the one that acts. Expected values come from the scenario and the
+fake's books.
 """
 
 from __future__ import annotations
@@ -22,7 +27,16 @@ from typing import Any
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from session_samples import alerts, ist
-from stops_samples import StopHold, TargetHold, events, stop_world
+from stops_samples import (
+    StopHold,
+    TargetHold,
+    after_the_final_read,
+    ctrl_c_at_the_first_sighting,
+    handed_after_the_final_read,
+    held_after_the_final_read,
+    sold_by_hand,
+    stop_world,
+)
 
 from openalgo.backtest._live import session as live_session
 from openalgo.backtest._live._types import LOGGER_NAME
@@ -61,14 +75,6 @@ def after_the_line(world: Any, strategy: str, action: Callable[[], None]) -> Non
     world.lines = LinesThen(f"{strategy} SBIN NSE", action)
 
 
-def handed_after_the_final_read(outcome: Any) -> list[tuple[str, str | None]]:
-    """What the session handed to the order worker after the close asked for its final
-    book read (the event stream's requests after its last `ReadBooks`): (type, purpose)."""
-    requests = events(outcome, "request")
-    last = max(i for i, event in enumerate(requests) if event["type"] == "ReadBooks")
-    return [(event["type"], event.get("purpose")) for event in requests[last + 1 :]]
-
-
 def stops(world: Any) -> list[tuple[int, str]]:
     return [(o.quantity, o.status) for o in world.orders() if o.price_type == "SL-M"]
 
@@ -82,6 +88,14 @@ def test_a_tick_at_the_target_after_the_last_lines_hands_nothing_over(world):
     assert handed_after_the_final_read(outcome) == []
     (left,) = outcome.open_positions
     assert left.note.endswith(PROTECTS)
+
+
+def test_a_tick_at_the_target_after_the_last_lines_makes_the_engine_decide_nothing(world):
+    # Had the price reached the engine, its target's exit would cancel the stop first:
+    # a request the exit guard holds back, which hands nothing over either.
+    after_the_line(world, "TargetHold", lambda: world.fake.trade("SBIN", "NSE", 503.0, volume=10))
+    outcome = world.run(TargetHold, on_stop="keep")
+    assert held_after_the_final_read(outcome) == []
 
 
 @pytest.fixture
@@ -104,6 +118,7 @@ def test_a_quote_at_the_target_during_the_final_read_reaches_no_engine(quote_as_
     world = quote_as_the_close_begins
     outcome = world.run(TargetHold, on_stop="keep")
     assert handed_after_the_final_read(outcome) == []
+    assert held_after_the_final_read(outcome) == []
     trades = outcome.outputs["TargetHold"]["trades"]
     assert list(trades["exit_reason"]) == []
     (left,) = outcome.open_positions
@@ -179,3 +194,77 @@ def test_a_stop_filled_after_the_last_lines_is_one_error_alert_on_the_flat_leg(w
         "last lines; the engine holds no position now: check the order book in OpenAlgo, "
         "cancelling what still works"
     ]
+
+
+# ----- the reconciler's safe corrections in the final read ------------------------------
+
+
+@pytest.fixture
+def first_seen_before_ctrl_c(world, monkeypatch):
+    """Ctrl+C comes as the first comparison that shows a sale by hand of SBIN (made at
+    14:43:00 by the test), so the close's final read is the one that acts on it."""
+    ctrl_c_at_the_first_sighting(world, monkeypatch, broker_below=StopHold.qty)
+    return world
+
+
+def acted_in_the_final_read(outcome: Any) -> list[str]:
+    """The reconciler's actions after the close asked for its final read: "adopted"."""
+    return [event["kind"] for event in after_the_final_read(outcome) if event["kind"] == "adopted"]
+
+
+@pytest.mark.parametrize(
+    ("sold", "stop_at_the_broker"),
+    [(10, (10, "cancelled")), (4, (6, "trigger pending"))],
+    ids=["all of it: the stop is cancelled", "4 of 10: the stop is cut to 6"],
+)
+def test_a_sale_by_hand_adopted_in_the_final_read_fits_the_stop_at_the_broker(
+    first_seen_before_ctrl_c, sold, stop_at_the_broker
+):
+    world = first_seen_before_ctrl_c
+    sold_by_hand(world, sold, ist(14, 43))
+    outcome = world.run(StopHold, on_stop="keep")
+    assert acted_in_the_final_read(outcome) == ["adopted"]
+    assert stops(world) == [stop_at_the_broker]
+    assert world.fake.position("SBIN", "NSE") == StopHold.qty - sold
+
+
+def test_a_part_sold_by_hand_in_the_final_read_leaves_the_rest_with_its_cut_stop(
+    first_seen_before_ctrl_c,
+):
+    world = first_seen_before_ctrl_c
+    sold_by_hand(world, 4, ist(14, 43))
+    outcome = world.run(StopHold, on_stop="keep")
+    (left,) = outcome.open_positions
+    stop = next(o for o in world.orders() if o.price_type == "SL-M")
+    assert (left.units, left.stop_order_id, left.stop_confirmed) == (6, stop.order_id, True)
+    assert left.note == (
+        "its position went from 10 to 6 units after the session's last lines; "
+        f"stop {stop.order_id} confirmed at the broker: {PROTECTS}"
+    )
+
+
+def test_a_sale_by_hand_of_all_of_it_in_the_final_read_is_one_error_alert(
+    first_seen_before_ctrl_c, caplog
+):
+    world = first_seen_before_ctrl_c
+    sold_by_hand(world, 10, ist(14, 43))
+    outcome = world.run(StopHold, on_stop="keep")
+    assert outcome.open_positions == ()
+    stop = next(o for o in world.orders() if o.price_type == "SL-M")
+    named = [text for text in alerts(caplog, "error") if "after the session's last lines" in text]
+    assert [text.split(": ", 1)[1] for text in named] == [
+        "StopHold SBIN NSE: its position went from 10 to 0 units after the session's last "
+        f"lines, and its stop {stop.order_id} cancelled at the broker; the engine holds no "
+        "position now: check the order book in OpenAlgo, cancelling what still works"
+    ]
+
+
+def test_the_stop_on_the_other_side_is_cancelled_at_the_broker_before_the_close(
+    first_seen_before_ctrl_c,
+):
+    # Another client sells 20: the broker holds 10 short, and a trigger of the stop would
+    # take it to 20 short. The reconciler cancels the stop in the final read.
+    world = first_seen_before_ctrl_c
+    sold_by_hand(world, 20, ist(14, 43))
+    world.run(StopHold, on_stop="keep")
+    assert stops(world) == [(10, "cancelled")]

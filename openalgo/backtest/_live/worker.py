@@ -33,7 +33,8 @@ first. So is any exception nothing expected, the same inline (`step`) as on the 
 end without taking another request. `busy_since_ns` is set around every call that may
 reach the server, and `raw_pending` counts the order words not yet posted, those waiting
 in the raw FIFO and those in the worker's hands (`_worker_news`); the loop reads both
-(4.2), and the order path's silence (`silent_since_ns`, `asked_ns`, 4.9). Times are UTC
+(4.2), the requests not executed yet (`unfinished`, the close's last wait, 3.3 step 5),
+and the order path's silence (`silent_since_ns`, `asked_ns`, 4.9). Times are UTC
 nanoseconds.
 """
 
@@ -42,7 +43,6 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
-import queue
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -55,7 +55,7 @@ from ._order_state import HeldFill
 from ._types import LOGGER_NAME, AlertsLike, Mode, Now, Purpose, Sleep
 from ._venue_requests import Priority
 from ._worker_news import NewsHandover
-from ._worker_queue import Request, WorkerQueue
+from ._worker_queue import Incoming, Request, WorkerQueue
 from ._worker_send import Sender
 from ._worker_settle import Settlements
 from ._worker_stops import StopBook
@@ -143,7 +143,7 @@ class OrderWorker:
         #: Since when (UTC nanoseconds) the worker is inside a call that may reach the
         #: server; None between calls.
         self.busy_since_ns: int | None = None
-        self._incoming: queue.SimpleQueue[Request] = queue.SimpleQueue()
+        self._incoming = Incoming()
         self._queue = WorkerQueue()
         self._settle = Settlements()
         self._news = NewsHandover(
@@ -161,6 +161,13 @@ class OrderWorker:
         """The order words not yet posted to the loop (4.2): the raw updates waiting to be
         drained, and the words the worker took in and has not posted (`_worker_news`)."""
         return self._news.pending
+
+    @property
+    def unfinished(self) -> int:
+        """The requests handed to the worker that it has not executed yet, one put back to
+        send later among them; a request's answer is posted before it stops counting. Read
+        from the loop's thread (3.3 step 5)."""
+        return self._incoming.unfinished
 
     @property
     def silent_since_ns(self) -> int | None:
@@ -294,11 +301,8 @@ class OrderWorker:
         if self._stopping:
             # Closed: the step under way ends without sending what is still queued.
             return False
-        while True:
-            try:
-                self._queue.put(self._incoming.get_nowait())
-            except queue.Empty:
-                break
+        for request in self._incoming.take_all():
+            self._queue.put(request)
         request = self._queue.take(self._now(), most=most)
         if request is None:
             return False
@@ -306,6 +310,8 @@ class OrderWorker:
         # stale knowledge.
         self._news.drain(started.path, started.stops)
         started.sender.execute(request)
+        if not self._queue.waits(request):
+            self._incoming.finished()
         self._notice_lock()
         return True
 
@@ -382,7 +388,7 @@ class OrderWorker:
 
     def _finish(self) -> None:
         """Close journal W, saying what was left unsent."""
-        left = len(self._queue) + self._incoming.qsize()
+        left = self._incoming.unfinished
         if left and self._stopping:
             logger.warning("the order worker closed with %d requests not sent", left)
         if self._started is not None:

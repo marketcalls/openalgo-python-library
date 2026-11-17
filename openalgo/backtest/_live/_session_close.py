@@ -3,22 +3,24 @@ and what a session leaves (`SessionOutcome`).
 
 The last lines are printed before the close begins, and from then on the session sends
 nothing they did not name (3.3 step 5 "As built"): the exit guard sends none of the
-requests it holds and no new one but the reconciler's own safe corrections
-(`ExitGuard.end`), and no price reaches the engine or the stops supervisor
-(`_stops_after`). Then a final book read and reconciliation, after a session end or a
-Ctrl+C (`reconcile`; not after an error or a mode breach), which takes in the books and
-the order news only; an ERROR alert for each leg whose stop ended in that read;
-`self.state` saved; the order worker stopped; each kernel session stopped where it
-stands (`stop_session`, R20) with its last events delivered, `on_stop` called and
-`finish` read; the DAILY_SUMMARY alert; then everything the start opened closed in
+requests it holds and no new one but what only takes exposure away, the reconciler's own
+safe corrections among them (`ExitGuard.end`), and no price reaches the engine or the
+stops supervisor (`_stops_after`). Then a final book read and reconciliation, after a
+session end or a Ctrl+C (`reconcile`; not after an error or a mode breach), which takes
+in the books and the order news only, and waits within its seconds for the answers to
+what it handed over; an ERROR alert for each leg whose units or stop changed after the
+lines, and for each leg left flat with an order still working, naming what the guard
+held back; `self.state` saved; the order worker stopped; each kernel session stopped
+where it stands (`stop_session`, R20) with its last events delivered, `on_stop` called
+and `finish` read; the DAILY_SUMMARY alert; then everything the start opened closed in
 reverse (the feed, the data worker, journal L, the logs, the alerts, the lock). A journal
 failure or another error closes the same way without the flatten (journal L is not
 written after a journal failure). A position left open is reported with its broker-held
 stop and what works toward its exit (`_stops_report.left_open`), after what happened to
-its stop following the last lines when anything did (`_stops_after.AfterLines.note`), and
-the day's unprotected seconds are the supervisor's windows; each comparison of the day
-that differed is in `reconciliations`. The public `SessionResult` (unit 13) is built from
-the outcome.
+it following the last lines when anything did (`_stops_after.AfterLines.note`), and the
+day's unprotected seconds are the supervisor's windows; each comparison of the day that
+differed is in `reconciliations`. The public `SessionResult` (unit 13) is built from the
+outcome.
 
 Times are UTC nanoseconds, quantities units, amounts rupees.
 """
@@ -111,7 +113,7 @@ def close_session(
     stack, which raises LiveError naming it once all are closed."""
     parts = session.parts
     try:
-        session.stops.after.end()
+        session.stops.after.end(session.traders)
         session.reconcile.guard.end()
         if journal_works and stopped_by in _FINAL_READ:
             session.reconcile.final(FINAL_READ_WAIT_S)

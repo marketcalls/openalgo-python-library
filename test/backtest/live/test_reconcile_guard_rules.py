@@ -2,7 +2,7 @@
 16-session-design 5.3, 5.4 and 3.3 step 5 "As built", unit 12): what it holds back while a
 leg's broker holds fewer units than the engine, or while a leg waits for a book read, what
 it lets go once the books agree, and the little it lets go once the session has printed
-its last lines.
+its last lines: what only takes exposure away.
 
 The stand-in session holds one strategy, `S`, long `ENGINE_UNITS` SBIN with a leg stop
 (kernel order `STOP`) working; it records what reaches the order worker and what is
@@ -255,28 +255,72 @@ def ended(session: Session) -> Session:
     return session
 
 
+def stop_cut_and_trailed() -> ModifyRequest:
+    """The stop cut down to 4 units and raised to 499.00."""
+    return ModifyRequest(
+        6,
+        STOP,
+        intent(Purpose.STOP, "SELL", ENGINE_UNITS),
+        "B2",
+        OrderTerms(BROKER_UNITS, "SL-M", trigger_price=499.0),
+        OrderTerms(ENGINE_UNITS, "SL-M", trigger_price=497.0),
+        Priority.PROTECT,
+    )
+
+
+def cancel_of(kernel_order: int, purpose: Purpose, action: str) -> CancelRequest:
+    return CancelRequest(
+        kernel_order, kernel_order, intent(purpose, action, 5), f"B{kernel_order}", Priority.ENTER
+    )
+
+
 @pytest.mark.parametrize(
     "request_",
     [
         place(EXIT, Purpose.RISK_EXIT, "SELL", ENGINE_UNITS),
         cancel_of_stop(),
         stop_trailed(),
-        stop_modified(BROKER_UNITS),
+        stop_cut_and_trailed(),
         place(STOP, Purpose.STOP, "SELL", ENGINE_UNITS),
         place(ENTRY, Purpose.ENTRY, "BUY", 5),
+        cancel_of(EXIT, Purpose.EXIT, "SELL"),
     ],
     ids=[
         "a target's exit",
-        "the cancel of the stop",
+        "the cancel of the stop of a position",
         "a trail of the stop",
-        "a stop cut down",
+        "a stop cut down and moved",
         "a stop placed again",
         "an entry",
+        "the cancel of an exit",
     ],
 )
 def test_after_the_last_lines_a_new_order_request_is_not_sent(ended, request_):
     ended.hand_over([request_])
     assert (ended.handed, ended.refused) == ([], [])
+
+
+@pytest.mark.parametrize(
+    ("request_", "engine_units"),
+    [
+        (stop_modified(BROKER_UNITS), BROKER_UNITS),
+        (cancel_of_stop(), 0),
+        (cancel_of(ENTRY, Purpose.ENTRY, "BUY"), ENGINE_UNITS),
+        (cancel_of(ENTRY, Purpose.ADD, "BUY"), ENGINE_UNITS),
+    ],
+    ids=[
+        "the stop cut down to what the engine holds",
+        "the cancel of the stop of a flat engine",
+        "the cancel of an entry",
+        "the cancel of an add",
+    ],
+)
+def test_after_the_last_lines_what_only_takes_exposure_away_goes(ended, request_, engine_units):
+    # A sale by hand the final read adopts fits the stop to what is left; the safe stop
+    # asked before the lines for the cancel of every entry and add.
+    ended.trader.units = engine_units
+    ended.hand_over([request_])
+    assert ended.handed == [request_]
 
 
 def test_after_the_last_lines_a_request_not_sent_is_left_for_the_close_to_log(ended):
