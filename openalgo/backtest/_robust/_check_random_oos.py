@@ -1,9 +1,10 @@
 """Random out of sample (design 17, section 2.2): was the out-of-sample period just lucky?
 
 One backtest over the whole period, no rerun. Each of `runs` assignments puts a random
-`oos` share of the run's sessions (rounded to whole sessions, at least one in each part)
-out of sample and the rest in sample, and every closed trade belongs to the part of its
-entry session. The run's objective is measured on each part (`_part_objective`).
+`oos` share of the run's sessions out of sample and the rest in sample, and every closed
+trade belongs to the part of its entry session. The share is rounded to whole sessions
+(halves to even, Python's `round`), and a share that leaves a part with no session is
+not judged. The run's objective is measured on each part (`_part_objective`).
 
 An assignment keeps its in-sample figure when the in-sample objective is above zero and
 the out-of-sample one is at least `keep` times it; an assignment whose in-sample
@@ -136,7 +137,10 @@ def run(
         "median_out_of_sample": float(table["out_of_sample"].median()),
         "median_difference": float(table["difference"].median()),
     }
-    figure = f"{words.percent(share)} of {words.whole(runs, 'assignment')} kept it"
+    figure = (
+        f"{words.percent(share)} of {words.whole(runs, 'assignment')} kept "
+        f"{words.percent(settings['keep'], 0)} of the in-sample {name}"
+    )
     note = (
         f"Each assignment puts {words.whole(held_out, 'session')} of {count} out of sample "
         f"at random; a closed trade belongs to the part of its entry session, and {name} is "

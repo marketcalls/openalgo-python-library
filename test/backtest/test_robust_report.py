@@ -52,6 +52,12 @@ def page(edge_report):
     return edge_report.tearsheet()
 
 
+def test_the_public_names_come_from_openalgo_backtest(edge_report):
+    assert {"robustness", "RobustnessReport", "CheckResult"} <= set(bt.__all__)
+    assert isinstance(edge_report, bt.RobustnessReport)
+    assert isinstance(edge_report.check("resample"), bt.CheckResult)
+
+
 def test_a_planted_edge_passes_every_judged_check(edge_report):
     verdicts = edge_report.verdicts.set_index("check")["verdict"]
     assert verdicts[THIS_VERSION].tolist() == [PASSED, INFORMATIONAL, PASSED, PASSED]
@@ -179,7 +185,7 @@ def test_the_page_is_the_scorecard_a_section_per_check_and_the_notes(page):
 
 def test_the_scorecard_counts_the_verdicts_and_states_the_wording_rule(page):
     scorecard = page[page.index("<section id='scorecard'") : page.index("<section id='random")]
-    assert "3 passed, 1 informational, 13 not built." in scorecard
+    assert "3 passed, 0 failed, 0 not judged, 1 informational, 13 not built." in scorecard
     assert WORDING_RULE in scorecard
     assert scorecard.count("<tr>") == 1 + 17
 

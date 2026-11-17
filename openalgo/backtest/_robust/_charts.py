@@ -23,7 +23,7 @@ from ..report import _format as fmt
 from ..report._dashboard import scale
 from ..report._dashboard.bars import AXIS_TEXT, MUTED_TEXT, Margin
 from ..report._dashboard.bars import _frame as frame
-from ._blocks import FanBlock, HistogramBlock, SessionsBlock
+from ._blocks import LIMIT, REAL, REFERENCE, FanBlock, HistogramBlock, SessionsBlock
 from ._paths import Fan
 
 WIDTH, HEIGHT = 680, 300
@@ -33,8 +33,9 @@ AXIS_TICKS, HISTOGRAM_BINS = 6, 30
 #: Points of a sampled path: thin paths are drawn at no more than this many of the
 #: fan's points, to whole pixels, which keeps 100 of them light on the page.
 SAMPLE_POINTS = 101
-#: The class of each mark kind's line.
-MARK_CLASSES = {"real": "mark-real", "limit": "mark-limit", "reference": "mark-reference"}
+#: The class of each mark kind's line, and how the key names its line style.
+MARK_CLASSES = {REAL: "mark-real", LIMIT: "mark-limit", REFERENCE: "mark-reference"}
+MARK_STYLES = {REAL: "Solid", LIMIT: "Dashed", REFERENCE: "Dotted"}
 
 
 def _inner() -> tuple[float, float]:
@@ -136,8 +137,7 @@ def _mark_lines(block: HistogramBlock, x: scale.Linear, height: float) -> tuple[
             f"<text x='{at:.1f}' y='-6' text-anchor='middle' style='{MUTED_TEXT}'>"
             f"{fmt.text(mark.label)}</text>"
         )
-        style = {"real": "solid", "limit": "dashed", "reference": "dotted"}[mark.kind]
-        words.append(f"{style}: {fmt.text(mark.label)} ({text})")
+        words.append(f"{MARK_STYLES[mark.kind]}: {fmt.text(mark.label)} ({text})")
     return marks, "; ".join(words)
 
 

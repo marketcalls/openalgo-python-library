@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from ..report import _format as fmt
 from ..report._dashboard.tables import head
-from ._verdict import FAILED, PASSED, VERDICTS, WORDING_RULE
+from ._verdict import FAILED, NOT_JUDGED, PASSED, VERDICTS, WORDING_RULE
 
 
 @dataclass(frozen=True)
@@ -35,17 +35,24 @@ def verdict_badge(verdict: str) -> str:
     return f"<span class='verdict {css}'>{fmt.text(verdict)}</span>"
 
 
-def counts_line(counts: Mapping[str, int]) -> str:
+def counts_line(counts: Mapping[str, int], always: tuple[str, ...] = ()) -> str:
     """How many checks had each verdict, in `VERDICTS` order, leaving out the ones none
-    had: "2 passed, 1 failed, 13 not built"."""
-    shown = [f"{counts[verdict]} {verdict}" for verdict in VERDICTS if counts.get(verdict)]
-    return ", ".join(shown) or "no check"
+    had unless they are among `always`: "2 passed, 1 failed, 13 not built"."""
+    shown = [
+        f"{counts.get(verdict, 0)} {verdict}"
+        for verdict in VERDICTS
+        if counts.get(verdict) or verdict in always
+    ]
+    return ", ".join(shown)
 
 
 def lead(counts: Mapping[str, int]) -> str:
-    """The scorecard's top line: the counts and the wording rule, as HTML."""
+    """The scorecard's top line, as HTML: how many checks passed, failed and were not
+    judged (zeros included; the other verdicts when any had them), and the wording
+    rule."""
+    told = counts_line(counts, always=(PASSED, FAILED, NOT_JUDGED))
     return (
-        f"<p class='lead'><b>{fmt.text(counts_line(counts))}.</b></p>"
+        f"<p class='lead'><b>{fmt.text(told)}.</b></p>"
         f"<p class='lead muted'>{fmt.text(WORDING_RULE)}</p>"
     )
 

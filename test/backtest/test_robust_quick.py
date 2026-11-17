@@ -50,7 +50,7 @@ def test_the_metrics_and_charts_modes_leave_it_out(edge, mode):
 def test_the_section_scores_the_four_quick_checks_and_points_to_the_full_set(edge):
     section = overfitting_section(edge.tearsheet())
     assert section.count("<tr>") == 1 + 4
-    assert "3 passed, 1 informational." in section
+    assert "3 passed, 0 failed, 0 not judged, 1 informational." in section
     assert "200 runs each, seed 0" in section
     assert "result.robustness() runs the full set of checks, with charts." in section
 
@@ -59,7 +59,7 @@ def test_the_section_says_too_few_trades_to_judge_below_30_closed_trades():
     result = bt.backtest(Flip, data=bars(steps_for([2.0, -1.0], 10)), **FREE)
     section = overfitting_section(result.tearsheet())
     assert "Too few trades to judge: 10 closed trades; the checks need 30 to judge." in section
-    assert "4 not judged." in section
+    assert "0 passed, 0 failed, 4 not judged." in section
 
 
 def test_the_summary_has_one_line_for_the_quick_checks(edge):
