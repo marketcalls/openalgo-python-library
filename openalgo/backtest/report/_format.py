@@ -83,6 +83,12 @@ def number(value: float, decimals: int = 2) -> str:
     return special if special is not None else indian_digits(value, decimals)
 
 
+def basis_points(value: float) -> str:
+    """A figure in basis points, to a tenth: 12.345 is "12.3 bps"."""
+    special = _special(value)
+    return special if special is not None else f"{indian_digits(value, 1)} bps"
+
+
 def duration(seconds: float) -> str:
     """Elapsed time in words: "45 min", "3 h 20 min", "2 d 4 h"."""
     special = _special(seconds)
@@ -111,6 +117,7 @@ _NUMERIC_UNITS = {
     "count": lambda value: indian_digits(value, 0),
     "days": lambda value: f"{number(value, 1)} d",
     "seconds": duration,
+    "bps": basis_points,
 }
 
 
@@ -132,6 +139,7 @@ __all__ = [
     "INFINITY",
     "MISSING",
     "RUPEE",
+    "basis_points",
     "duration",
     "figure",
     "indian_digits",

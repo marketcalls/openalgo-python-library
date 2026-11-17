@@ -58,16 +58,28 @@ def tearsheet(
                    (monthly and weekly heatmaps, the monthly tiles, yearly returns
                    against the benchmark); Distribution (tiles, histogram of session
                    returns, box plot of session and monthly returns); Metrics (every
-                   metric, the benchmark's beside it, sortable); Trades (trade tiles,
-                   the trade list of `openalgo.backtest.Result.trade_list`, sortable and
-                   paged, the charges by component, the R-multiples when a closed trade
-                   has an initial risk); Strategies (when given); Notes (how the figures
-                   were computed, the assumptions and warnings)
+                   metric, the benchmark's beside it, sortable); Trades (trade tiles;
+                   the trading cost tiles: turnover, charges, slippage, trading cost,
+                   its share of gross P&L and its basis points of turnover; MAE and
+                   MFE: the excursion tiles, a histogram of MAE percent and one of MFE
+                   percent, and each against the trade's return as scatter charts,
+                   winners as circles and the others as crosses, or one line when the
+                   trades have no excursion columns or none closed; the trade list of
+                   `openalgo.backtest.Result.trade_list` with its MAE and MFE, sortable
+                   and paged; the charges by component with the slippage and the
+                   trading cost under their total; the R-multiples when a closed trade
+                   has an initial risk); Strategies (when given); Notes (how the
+                   figures were computed, the assumptions and warnings)
         "basic"    the overview, cumulative return and period returns, the drawdown
                    chart and worst drawdowns, the monthly heatmap and yearly returns,
-                   the trades and charges, and the notes
+                   the trades, the trading cost, the MAE and MFE histograms and the
+                   charges, and the notes
         "metrics"  every metric with its value and definition, and the assumptions
-        "charts"   every chart and nothing else
+        "charts"   every chart and nothing else, the MAE and MFE histograms and
+                   scatter charts included
+
+    A money tile shows paise when the amount is under Rs 1,000 (Rs 3.60), whole rupees
+    above.
 
     Every figure is the SDK's: a metric of the Performance or a cell of its tables. A
     tile's subline is the benchmark's figure, measured as the strategy's is, where a
