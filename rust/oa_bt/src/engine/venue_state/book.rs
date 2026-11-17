@@ -7,11 +7,11 @@ use crate::exec::{InstrumentId, OrderBook, OrderId};
 use crate::portfolio::{Position, PositionKey, SubAccount, Tranche};
 
 use super::super::excursion::Excursion;
-use super::super::excursion_hold::{Hold, SliceTicks};
+use super::super::excursion_hold::{Hold, ReplacedTerms, SliceTicks};
 use super::super::output::OpenTrade;
 use super::error::LiveStateError;
 use super::orders::Ids;
-use super::requests::{key_fields, read_instrument, read_key, read_side};
+use super::requests::{key_fields, read_instrument, read_key, read_order_type, read_side};
 use super::value::{list, map, Read, StateValue};
 
 /// The account: capital, realized P&L, charges, margin blocked and sale proceeds withheld,
@@ -107,9 +107,11 @@ pub(super) fn read_position(
 
 /// What holds a live trade back (`excursion_hold`): the orders of `book` it waits on
 /// that still work, by id (those a price reached by their own terms, and those reached
-/// only by the terms of a modification not answered), and the slice of its last ticks
-/// with their lowest and highest price, rupees.
-fn write_hold(book: &OrderBook, hold: &Hold) -> [(&'static str, StateValue); 3] {
+/// only by the terms of a modification not answered), the slice of its last ticks with
+/// their lowest and highest price, rupees, and the terms confirmed modifications replaced
+/// on orders that still work, with the slice of each confirmation (the order type in the
+/// fields `read_order_type` reads).
+fn write_hold(book: &OrderBook, hold: &Hold) -> [(&'static str, StateValue); 4] {
     let works = |id: &&OrderId| {
         book.get(**id)
             .is_some_and(|order| order.status.is_working())
@@ -122,10 +124,21 @@ fn write_hold(book: &OrderBook, hold: &Hold) -> [(&'static str, StateValue); 3] 
             ("high_rupees", ticks.high_rupees.into()),
         ])
     });
+    let still_working = hold.replaced_terms.iter().filter(|old| works(&&old.order));
+    let replaced = list(still_working, |old| {
+        map([
+            ("order", old.order.0.into()),
+            ("order_type", old.terms.code().into()),
+            ("limit_rupees", old.terms.limit_rupees().into()),
+            ("trigger_rupees", old.terms.trigger_rupees().into()),
+            ("slice", old.slice.into()),
+        ])
+    });
     [
         ("unconfirmed_close_orders", ids(&hold.unconfirmed_closes)),
         ("pending_close_orders", ids(&hold.pending_closes)),
         ("slice_ticks", ticks),
+        ("replaced_terms", replaced),
     ]
 }
 
@@ -146,10 +159,22 @@ fn read_hold(read: &Read<'_>, ids: &Ids) -> Result<Hold, LiveStateError> {
             .map(|order| ids.working(order))
             .collect()
     };
+    let read_replaced = |old: &Read<'_>| -> Result<ReplacedTerms, LiveStateError> {
+        Ok(ReplacedTerms {
+            order: ids.working(&old.field("order")?)?,
+            terms: read_order_type(old)?,
+            slice: old.whole_of("slice")?,
+        })
+    };
     Ok(Hold {
         unconfirmed_closes: orders("unconfirmed_close_orders")?,
         pending_closes: orders("pending_close_orders")?,
         ticks: read.maybe("slice_ticks")?.map(read_ticks).transpose()?,
+        replaced_terms: read
+            .items_of("replaced_terms")?
+            .iter()
+            .map(read_replaced)
+            .collect::<Result<_, _>>()?,
     })
 }
 
@@ -159,7 +184,7 @@ fn read_hold(read: &Read<'_>, ids: &Ids) -> Result<Hold, LiveStateError> {
 pub(super) fn write_open_trade(book: &OrderBook, trade: &OpenTrade) -> StateValue {
     let [instrument, product] = key_fields(trade.key);
     let excursion = &trade.excursion;
-    let [unconfirmed, pending, ticks] = write_hold(book, &excursion.hold);
+    let [unconfirmed, pending, ticks, replaced] = write_hold(book, &excursion.hold);
     map([
         instrument,
         product,
@@ -180,6 +205,7 @@ pub(super) fn write_open_trade(book: &OrderBook, trade: &OpenTrade) -> StateValu
         unconfirmed,
         pending,
         ticks,
+        replaced,
         ("slippage_rupees", trade.slippage.into()),
     ])
 }
@@ -273,13 +299,12 @@ mod tests {
                 best_rupees: 120.5,
                 inside_fill_slice: Some(40),
                 hold: Hold {
-                    unconfirmed_closes: Vec::new(),
-                    pending_closes: Vec::new(),
                     ticks: Some(SliceTicks {
                         slice: 41,
                         low_rupees: 501.2,
                         high_rupees: 503.05,
                     }),
+                    ..Hold::default()
                 },
             },
             slippage: Some(3.4),
@@ -299,8 +324,9 @@ mod tests {
     #[test]
     fn an_order_that_held_a_trade_back_and_has_ended_is_not_saved() {
         // The trade waits on o7, reached by its own terms, and on o8, reached by the terms
-        // of its modification; the book has neither working: nothing holds it back after a
-        // restart.
+        // of its modification, and keeps the terms a confirmed modification replaced on o9
+        // for the bar of slice 3; the book has none of them working: nothing holds it back
+        // after a restart.
         let trade = OpenTrade {
             key: PositionKey {
                 instrument: InstrumentId(0),
@@ -322,6 +348,13 @@ mod tests {
                     unconfirmed_closes: vec![OrderId(7)],
                     pending_closes: vec![OrderId(8)],
                     ticks: None,
+                    replaced_terms: vec![ReplacedTerms {
+                        order: OrderId(9),
+                        terms: crate::exec::OrderType::Limit {
+                            limit_rupees: 503.0,
+                        },
+                        slice: 3,
+                    }],
                 },
                 ..Excursion::default()
             },

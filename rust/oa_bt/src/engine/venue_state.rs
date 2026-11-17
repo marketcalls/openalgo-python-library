@@ -103,8 +103,9 @@ use value::{list, map, Read};
 /// is refused (`LiveStateError::Version`). Layout 2 added to each open trade its excursion
 /// and slippage so far and the orders that hold its excursion back (`excursion`); layout
 /// 3 the orders that hold it back by the terms of a modification the venue has not
-/// answered, which its refusal releases (`excursion_hold`).
-pub const LIVE_STATE_LAYOUT: i64 = 3;
+/// answered, which its refusal releases (`excursion_hold`); layout 4 the terms confirmed
+/// modifications replaced, which judge the bar of the slice they were confirmed in.
+pub const LIVE_STATE_LAYOUT: i64 = 4;
 
 /// A saved state read whole, before any of it is applied.
 struct Saved {

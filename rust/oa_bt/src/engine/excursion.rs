@@ -59,7 +59,7 @@ use crate::portfolio::{round_to_paise, Position, PositionKey};
 use crate::rms::BarPrices;
 
 use super::clock::SliceInfo;
-use super::excursion_hold::Hold;
+use super::excursion_hold::{slice_number, Hold};
 use super::fills::FillRequest;
 use super::kernel::Engine;
 
@@ -260,10 +260,10 @@ impl Engine {
 
     /// Step 5: every open trade sees its slice's bar (`Excursion::see_bar`); a trade on
     /// an instrument with no bar in the slice sees nothing, and neither does a live
-    /// session's trade held back (`Hold::held_back`, judged by the prices of the bar its
-    /// ticks did not carry).
+    /// session's trade held back (`Hold::bar_held_back`, judged by the prices of the bar
+    /// its ticks did not carry).
     pub(super) fn see_slice_bars(&mut self, slice: &SliceInfo) {
-        let index = u32::try_from(slice.index).unwrap_or(u32::MAX);
+        let index = slice_number(slice);
         let live = self.is_external();
         for trade in &mut self.record.trades.open {
             let Some(bar) = self.market.bar(trade.key.instrument, slice.index) else {
@@ -274,10 +274,9 @@ impl Engine {
             };
             if live {
                 let side = (trade.key, position.quantity_units > 0.0);
-                let hold = &mut trade.excursion.hold;
-                let unseen = hold.beyond_ticks(index, &bar);
                 let orders = (&self.book, self.venue.modifying.as_slice());
-                if hold.held_back(orders, side, &unseen) {
+                let hold = &mut trade.excursion.hold;
+                if hold.bar_held_back(orders, side, (index, &bar)) {
                     continue;
                 }
             }
