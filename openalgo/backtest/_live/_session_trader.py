@@ -115,6 +115,9 @@ class Trader:
         self.skipped: list[Skipped] = []
         #: The kernel's reason of each risk exit placed, by kernel order.
         self.reasons: dict[int, str] = {}
+        #: The position's units (unsigned) when each order's placement was taken from the
+        #: kernel, by kernel order: what an exit was for part of (`_session_exits`).
+        self.units_at_place: dict[int, int] = {}
         self.failed = False
         #: True once the kernel session has finished: it takes no call that changes it.
         self.finished = False
@@ -268,7 +271,8 @@ class Trader:
     def commands(self) -> list[OrderRequest]:
         """The kernel's commands since the last call, as the order worker's requests (a
         placement the kernel cancelled before this call withdrawn: module docstring); the
-        reason of each risk exit placed is kept (`reasons`)."""
+        reason of each risk exit placed is kept (`reasons`), and the position's units at
+        each placement (`units_at_place`)."""
         if self.finished:
             return []
         requests: list[OrderRequest] = []
@@ -276,8 +280,12 @@ class Trader:
         while commands:
             kept = self._withdraw_cancelled(commands)
             for command in kept:
-                if command.get("command") == "place" and command.get("reason"):
-                    self.reasons[int(command["order_id"])] = str(command["reason"])
+                if command.get("command") != "place":
+                    continue
+                kernel_order = int(command["order_id"])
+                self.units_at_place[kernel_order] = round(abs(self.open_units()))
+                if command.get("reason"):
+                    self.reasons[kernel_order] = str(command["reason"])
             requests += self.venue.requests(kept)
             # A withdrawal ends an order in the kernel, which may free an exit that waited
             # for it: its commands go out in this same call.

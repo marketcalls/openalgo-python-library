@@ -241,8 +241,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every open position exited and waited for, or with `on_stop="keep"` the positions left
   open; a second Ctrl+C waits briefly for what is in flight and lists what is left open.
   A journal failure stops the session at once; a strategy error stops it the safe way.
-  Strategies without leg rules only in this version: stops, targets and trailing come
-  with the stops supervisor.
+  A strategy's leg rules (stop, targets, trailing, breakeven) run in the session through
+  the stops supervisor, below.
+- The live session's stops supervisor (private): every leg with `stop=` has its stop held
+  by the broker, placed when the entry fills (SL-M for cash equity and futures, a
+  stop-limit 5 percent beyond the trigger for NFO and BFO options), confirmed only when
+  the broker answers that it works, and moved by modifying it for a trail or a breakeven
+  (at most once per 5 seconds and 0.25 percent). Targets and the daily loss limit are held
+  by the engine on ticks and quotes. An exit cancels or cuts the stop first, so a stop and
+  an exit never both fill. A time without a confirmed stop is counted as unprotected, and
+  a stop accepted but not confirmed within 10 seconds exits the leg (never while the order
+  worker is busy or its answers wait to be read). An option stop-limit the price runs through is repriced to a
+  marketable limit every 2 seconds, up to 5 times, then exited. A rejected exit is asked
+  for again after 1, 2, 5 and 10 seconds; after the fifth rejection entries are locked,
+  the stop is placed again and the alert says to end the session before any close by
+  hand. A refused cancel is sent again; held fills and held cancels are decided from the
+  broker's books. While OpenAlgo is silent and a stop or an exit waits, it is probed every
+  2 seconds, with an alert after 10 seconds. The safe stop and every close protect each
+  leg by its state first, and the lines printed as a session ends name each open leg's
+  stop and orders and what to do by hand. Entries without a stop are allowed, with a
+  warning in the start banner and the result.
 - The live session's risk watch and kill switch (private): a feed with no tick on any
   instrument for 10 seconds is dead, with one alert, entries locked, the strategies'
   prices read by quote every 2 seconds and the slices it covered marked missing (no bar

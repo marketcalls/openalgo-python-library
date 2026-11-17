@@ -43,10 +43,8 @@ from typing import Any
 
 from .._engine import call
 from .._layout import NANOS_PER_SECOND
-from ..errors import VenueRefusalError
 from ._clock_skew import ClockSkew, skew_words, unmeasured_words
 from ._kill_switch import ACCOUNT_LOSS, KillSwitch
-from ._plan_catch_up import INSTRUMENT
 from ._session_trader import Trader
 from ._types import LOGGER_NAME, AlertKind, Tick
 from .bars import DEFAULT_DEAD_AFTER_S, FeedHealth
@@ -60,9 +58,6 @@ FEED_DEAD_LOCK = "feed_dead"
 #: Seconds without a tick after which an instrument with an open position is quiet and
 #: gets REST quotes while the others tick: the feed's own dead time (6.5).
 QUIET_AFTER_S = DEFAULT_DEAD_AFTER_S
-#: The kernel's refusals of a price that are races, not defects: the engine paused at a
-#: bar close, or its session over.
-_PRICE_RACES = frozenset({"at_bar_close", "session_over"})
 
 _Span = tuple[int, int | None]
 
@@ -131,18 +126,15 @@ class RiskWatch:
 
     def quote(self, message: Quote) -> None:
         """A REST quote the watch asked for: a price for the kernel of the strategy that
-        trades the instrument (A.11). A quote no longer asked for (the feed came back
-        meanwhile) is dropped: the ticks are newer."""
-        trader = self._session.trader_of(message.symbol, message.exchange)
+        trades the instrument and for the stops supervisor's price rule (A.11), through
+        `StopsSupervisor.price`, the one way a price reaches the kernel. A quote no longer
+        asked for (the feed came back meanwhile) is dropped: the ticks are newer."""
+        session = self._session
+        trader = session.trader_of(message.symbol, message.exchange)
         wanted = (message.symbol, message.exchange) in self._quotes
         if trader is None or trader.finished or not wanted or message.ltp <= 0:
             return
-        try:
-            call(trader.engine.push_tick, INSTRUMENT, float(message.ltp), int(message.read_ns))
-        except VenueRefusalError as error:
-            if error.kind not in _PRICE_RACES:
-                raise
-            logger.debug("%s: a quote not taken (%s)", trader.name, error.kind)
+        session.stops.price(trader, float(message.ltp), int(message.read_ns))
 
     def data_failed(self, message: DataFailed) -> None:
         """A read of the data worker failed: logged; a quote still asked for is an ERROR

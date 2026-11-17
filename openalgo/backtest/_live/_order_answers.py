@@ -107,10 +107,18 @@ class ServerWatch:
     """Whether OpenAlgo has fallen silent: a call of the order path ended in a client
     timeout or a dropped connection, and no call has been answered in OpenAlgo's own JSON
     since (`silent_since_ns`, UTC nanoseconds, else None). A hung server may still be
-    placing what it was sent, so nothing is sent for any instrument meanwhile."""
+    placing what it was sent, so nothing is sent for any instrument meanwhile.
+    `asked_ns` is the time noted with the last answer, whatever it was (None before the
+    first): when the answer came for a placement, a modify, a cancel and a probe, and
+    when the call began for a poll, a tradebook read and an order-book read for unbound
+    intents. The session probes a silent OpenAlgo only when no call was noted lately
+    (16-session-design 4.9); a poll begun after a probe was asked can stand for that
+    probe being made, so a second probe may be queued behind the first (one more
+    order-book read during a silence)."""
 
     def __init__(self) -> None:
         self.silent_since_ns: int | None = None
+        self.asked_ns: int | None = None
 
     @property
     def silent(self) -> bool:
@@ -118,7 +126,9 @@ class ServerWatch:
         return self.silent_since_ns is not None
 
     def note(self, answer: Mapping[str, Any], now_ns: int) -> None:
-        """Take in the answer to a call made at `now_ns`."""
+        """Take in the answer to a call, noted at `now_ns` (when the answer came, or when
+        the call began: see the class docstring)."""
+        self.asked_ns = now_ns
         if went_silent(answer):
             if self.silent_since_ns is None:
                 self.silent_since_ns = now_ns

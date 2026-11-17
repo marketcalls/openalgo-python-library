@@ -6,9 +6,11 @@ the kernel sessions, and its iteration, `Session.step`.
     B. close slices by the clock: each bar builder's due slices, released to the kernel
        in order (`_session_trader`), and the broker candle checks asked for
     C. drive the kernel sessions to their decisions (`Trader.drive`)
-    D. duties by time: the risk watch (`watch`), the safe stop, the end of the day
-       (`_session_stop.Control`)
-    E. hand the kernel's commands to the order worker, none after a guard lock
+    D. duties by time: the stops supervisor's (`stops`), the risk watch (`watch`), the
+       safe stop, the end of the day (`_session_stop.Control`)
+    E. hand the kernel's commands to the order worker, none after a guard lock; the stops
+       supervisor then reviews each leg's unprotected window, and the safe stop's lines
+       asked for in D are taken (`Control.after_hand_over`)
     F. save each strategy's `self.state` when a slice was released and it changed
     G. wait for the next slice close, at most `wait_max_s`
 
@@ -17,10 +19,12 @@ own threads. Under the test seam (`threads` False) `step` runs the order worker'
 data worker's own steps, and posts the queued alerts, on the loop's thread before A, and
 every wait is the injected `sleep`, so a test runs on a manual clock with nothing waiting
 for real (2.11). The loop's lag (the age of the oldest message it takes) is watched with
-threads only: under the test seam a worker's call runs on the loop's thread.
+threads only (`_session_lag`).
 
 A guard lock (`guard_locked`, 6.2) locks every strategy's entries and stops every request
-to the worker; the ERROR alert lists each position. Times are UTC nanoseconds.
+to the worker; the ERROR alert lists each position and its stop. The emergency stop's
+protect by state turns the loop with `protecting` (3.5): no slice is released and no
+strategy called. Times are UTC nanoseconds.
 """
 
 from __future__ import annotations
@@ -35,16 +39,19 @@ from .._layout import NANOS_PER_SECOND
 from ..errors import LiveError
 from ._guard_breach import ModeBreach, breach_text
 from ._session_exits import ExitRetries
+from ._session_lag import LoopLag
 from ._session_news import News
 from ._session_parts import SessionParts, SessionStopped, StopFlag
 from ._session_trader import Trader
+from ._stops_report import stop_words
 from ._types import LOGGER_NAME, AlertKind, Now, Sleep, Tick
-from ._venue_requests import CancelRequest, ModifyRequest, PlaceRequest
+from ._venue_requests import request_fields
 from ._worker_queue import Request
 from .bars import DEFAULT_CLOSE_GRACE_S, TickBarBuilder
 from .data_worker import DataWorker
 from .feedlink import FeedLink
 from .inbox import Envelope
+from .stops import StopsSupervisor
 from .ticks import TickTally
 from .watch import RiskWatch
 
@@ -59,9 +66,6 @@ LOOP_BATCH_MAX_S = 0.02
 #: Seconds A keeps draining what arrived before it began once a slice close is due, so
 #: the closing slice's ticks are stamped before it closes (the bars' second duty).
 LOOP_DRAIN_OVERRUN_S = 0.2
-#: The loop's lag (2.9): a warning past the first, an ERROR alert past the second.
-LOOP_LAG_WARN_S = 1.0
-LOOP_LAG_ALERT_S = 5.0
 #: The shortest wait, so a loop with work due still yields.
 LOOP_WAIT_MIN_S = 0.001
 #: The entry lock of the session's guard lock (6.2).
@@ -95,6 +99,7 @@ class Session:
         self.traders: tuple[Trader, ...] = ()
         self.news = News(self)
         self.exits = ExitRetries(self)
+        self.stops = StopsSupervisor(self)
         self.risk = RiskWatch(self)
         self.control: Any = None
         self.data: DataWorker | None = None
@@ -117,7 +122,7 @@ class Session:
         self.started_ns = now()
         self._held: collections.deque[Envelope] = collections.deque()
         self._event_failed = False
-        self._lag_warned_ns: int | None = None
+        self._lag = LoopLag(self)
 
     # ----- what the handlers and the stop use -----------------------------------------
 
@@ -125,6 +130,11 @@ class Session:
     def locked(self) -> bool:
         """True once the mode guard locked: nothing more is sent."""
         return self.breach is not None
+
+    @property
+    def inbox_waiting(self) -> int:
+        """The messages put on the loop's inbox and not taken yet."""
+        return len(self.parts.inbox) + len(self._held)
 
     def trader_named(self, name: str) -> Trader:
         """The strategy named `name`. Raises LiveError for none."""
@@ -167,13 +177,16 @@ class Session:
     def hand_over(self, requests: Sequence[Request]) -> None:
         """Give the order worker `requests`, in order; none after a guard lock (each is
         noted as not sent)."""
+        handed = []
         for request in requests:
-            fields = _request_fields(request)
+            fields = request_fields(request)
             if self.locked:
                 self.event("not_sent_locked", **fields)
                 continue
             self.event("request", **fields)
             self.parts.worker.put(request)
+            handed.append(request)
+        self.stops.handed(handed)
 
     def guard_locked(self, breach: ModeBreach) -> None:
         """The mode guard locked (16-session-design 6.2): every strategy's entries are
@@ -186,8 +199,8 @@ class Session:
             trader.lock(MODE_BREACH_LOCK)
         self.event("guard_locked", text=self.breach_text)
         positions = [
-            f"{trader.name} {trader.symbol} {trader.exchange} {units:g} units, no stop at the "
-            "broker"
+            f"{trader.name} {trader.symbol} {trader.exchange} {units:g} units, "
+            f"{stop_words(self.stops, trader)}"
             for trader in self.traders
             if (units := trader.open_units()) != 0
         ]
@@ -201,21 +214,29 @@ class Session:
 
     # ----- the iteration -------------------------------------------------------------
 
-    def step(self, until_ns: int | None = None) -> None:
-        """One iteration (module docstring), waiting at most until `until_ns`."""
+    def step(self, until_ns: int | None = None, *, protecting: bool = False) -> None:
+        """One iteration (module docstring), waiting at most until `until_ns`. With
+        `protecting` (the emergency stop's protect by state) it only takes in what
+        arrived, runs the stops supervisor and hands over the commands."""
         if not self.threads:
             self._step_workers()
         self._take_in()
-        now_ns = self.now()
-        released = self._close_slices(now_ns)
-        for trader in self.traders:
-            trader.drive(deciding=self.deciding)
+        released: set[str] = set()
+        if not protecting:
+            released = self._close_slices(self.now())
+            for trader in self.traders:
+                trader.drive(deciding=self.deciding)
+        self.stops.duties(self.now(), protecting=protecting)
         # The commands are taken after the duties, so an entry the safe stop cancels in
         # the step that decided it is withdrawn before it reaches the worker.
-        self.risk.duties(self.now())
-        if self.control is not None:
-            self.control.duties(self.now())
+        if not protecting:
+            self.risk.duties(self.now())
+            if self.control is not None:
+                self.control.duties(self.now())
         self.hand_over(self._commands())
+        self.stops.review(self.now())
+        if self.control is not None and not protecting:
+            self.control.after_hand_over()
         if released:
             self._save_states(released)
         self._wait(until_ns)
@@ -253,7 +274,7 @@ class Session:
             if envelope is None:
                 return
             if self.threads:
-                self._watch_lag(envelope)
+                self._lag.note(envelope)
             self.news.take(envelope.message)
 
     def _next(self, arrived_before_ns: int | None) -> Envelope | None:
@@ -263,22 +284,6 @@ class Session:
                 return None
             return self._held.popleft()
         return self.parts.inbox.take(arrived_before_ns=arrived_before_ns)
-
-    def _watch_lag(self, envelope: Envelope) -> None:
-        now_ns = self.now()
-        lag_s = (now_ns - envelope.put_ns) / _NS
-        if lag_s <= LOOP_LAG_WARN_S:
-            return
-        if self._lag_warned_ns is None or now_ns - self._lag_warned_ns >= 60 * _NS:
-            self._lag_warned_ns = now_ns
-            logger.warning("the session loop is %.1f s behind its inbox", lag_s)
-            self.event("loop_lag", seconds=lag_s)
-        if lag_s > LOOP_LAG_ALERT_S:
-            self.alert(
-                AlertKind.ERROR,
-                f"the session loop is more than {LOOP_LAG_ALERT_S:g} s behind: a slow "
-                "strategy or a stuck journal delays ticks and order news",
-            )
 
     def _close_due(self, now_ns: int) -> bool:
         return any(close_ns <= now_ns for close_ns in self._next_closes())
@@ -371,26 +376,10 @@ class Session:
         self.ask_first_candles()
 
 
-def _request_fields(request: Request) -> dict[str, Any]:
-    """What the event stream notes of a request."""
-    fields: dict[str, Any] = {"type": type(request).__name__}
-    if isinstance(request, PlaceRequest | ModifyRequest | CancelRequest):
-        fields.update(
-            request_id=request.request_id,
-            strategy=request.intent.strategy,
-            kernel_order=request.kernel_order,
-            purpose=request.intent.purpose.value,
-            priority=int(request.priority),
-        )
-    return fields
-
-
 __all__ = [
     "LOOP_BATCH_MAX",
     "LOOP_BATCH_MAX_S",
     "LOOP_DRAIN_OVERRUN_S",
-    "LOOP_LAG_ALERT_S",
-    "LOOP_LAG_WARN_S",
     "LOOP_WAIT_MAX_S",
     "LOOP_WAIT_MIN_S",
     "MODE_BREACH_LOCK",

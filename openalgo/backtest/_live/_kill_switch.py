@@ -52,7 +52,6 @@ the loop only.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -62,6 +61,7 @@ from .._series import ist_time
 from ..errors import ConfigError
 from ._plan_catch_up import INSTRUMENT
 from ._session_trader import Trader
+from ._stops_held import net_units
 from ._types import LOGGER_NAME, AlertKind
 from ._venue_requests import LIVE_PRODUCT
 from ._worker_queue import ReadPositions
@@ -204,7 +204,7 @@ class KillSwitch:
             if message.read_ns < kill.since_ns:
                 continue
             trader = self._session.trader_named(name)
-            kill.broker = _net_units(message.positionbook, trader.symbol, trader.exchange)
+            kill.broker = net_units(message.positionbook, trader.symbol, trader.exchange)
             kill.read_ns = message.read_ns
 
     def duties(self, now_ns: int) -> None:
@@ -356,29 +356,6 @@ def _held(trader: Trader) -> _Held:
         (int(number), int(opened_at)) for number, _, _, opened_at in position["tranches"]
     )
     return float(position["quantity_units"]), tranches
-
-
-def _net_units(answer: Mapping[str, Any], symbol: str, exchange: str) -> int | None:
-    """The broker's net MIS units of an instrument in a position-book answer, signed; None
-    when the answer cannot be read."""
-    rows = answer.get("data") if answer.get("status") == "success" else None
-    if not isinstance(rows, list):
-        return None
-    net = 0
-    for row in rows:
-        if not isinstance(row, Mapping):
-            return None
-        if (row.get("symbol"), row.get("exchange"), row.get("product")) != (
-            symbol,
-            exchange,
-            LIVE_PRODUCT,
-        ):
-            continue
-        try:
-            net += round(float(row.get("quantity", 0)))
-        except (TypeError, ValueError):
-            return None
-    return net
 
 
 def _s(seconds: float) -> int:

@@ -96,18 +96,27 @@ def test_a_second_ctrl_c_stops_with_a_line_per_leg_left_open(world, caplog):
     assert [(p.symbol, p.units) for p in outcome.open_positions] == [("SBIN", 10.0)]
     assert any("close it by hand" in line for line in world.lines)
     assert any("safe stop" in text for text in alerts(caplog, "error"))
-    assert any("failed 5 times" in text for text in alerts(caplog, "error"))
+    (gave_up,) = [text for text in alerts(caplog, "error") if "failed 5 times" in text]
+    # With no stop rule no stop can be placed again: it is closed by hand, once the
+    # session has ended, since until then the engine may send its exit again.
+    assert gave_up.endswith(
+        "no stop at the broker; to close it by hand, end the session first (Ctrl+C, and a "
+        "second Ctrl+C if it does not end): while the session runs, the engine may send "
+        "its exit or its stop again"
+    )
 
 
-def test_two_ctrl_c_before_the_loop_looks_ask_for_no_exit(world):
+def test_two_ctrl_c_before_the_loop_looks_act_as_the_first_then_the_second(world):
+    # Decided for unit 10: how fast the keys were pressed must not change the outcome, so
+    # the flatten's exit is sent and the second Ctrl+C's bounded wait sees it fill.
     world.stop_at(ist(14, 43, 30))
     world.stop_at(ist(14, 43, 30))
     outcome = world.run(Hold)
     assert outcome.stopped_by == "ctrl_c"
-    assert list(outcome.outputs["Hold"]["orders"]["status"]) == ["Filled"]
-    assert actions(world) == [("BUY", 10)]
-    assert [(p.symbol, p.units) for p in outcome.open_positions] == [("SBIN", 10.0)]
-    assert any("SBIN NSE 10 units: no stop at the broker" in line for line in world.lines)
+    assert actions(world) == [("BUY", 10), ("SELL", 10)]
+    assert world.fake.position("SBIN", "NSE") == 0
+    assert outcome.open_positions == ()
+    assert outcome.ended_ns < ist(14, 43, 30) + _session_stop.SAFE_STOP_STATE_WAIT_S * NS
 
 
 def test_a_second_ctrl_c_waits_for_the_exit_in_flight_and_stops_flat(world):

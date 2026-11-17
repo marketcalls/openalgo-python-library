@@ -13,7 +13,9 @@ settled expired (`inbox.Settled` with no check), which the loop takes as refused
 ERROR alert that says what its last read found (no row, or a row of other terms, such as
 a change made by hand at the broker): the kernel then sends the wanted terms again, and a
 broker that had applied them accepts the same terms again. A cancel is read until a row
-settles it, since the exit owner waits and the stop protects meanwhile. The order's
+settles it, since the exit owner waits and the stop protects meanwhile, with one ERROR
+alert after `CANCEL_READS_ALERT` reads that settled nothing (a broker's login expired,
+say). The order's
 terminal news settles it too, before any read.
 
 Times are UTC nanoseconds. Used by the worker's thread only.
@@ -34,6 +36,8 @@ from .inbox import Settled
 ORDER_CHECK_DELAYS_S = tuple(step / NANOS_PER_SECOND for step in BACKOFF_NS)
 #: Seconds from a modify's answer within which a row must settle it (4.3).
 MODIFY_SETTLE_DEADLINE_S = 10.0
+#: Reads of a cancel that settle nothing after which one ERROR alert says so (4.5).
+CANCEL_READS_ALERT = 3
 _DEADLINE_NS = round(MODIFY_SETTLE_DEADLINE_S * NANOS_PER_SECOND)
 
 #: A modify or a cancel of one broker order.
@@ -105,6 +109,19 @@ class Settlements:
         return None
 
 
+def unsettled_cancel_text(waiting: Unsettled) -> str:
+    """The ERROR alert of a cancel `CANCEL_READS_ALERT` reads have not settled: the stop
+    stays at the broker and the exit waits, read on (4.5)."""
+    request = waiting.request
+    return (
+        f"The cancel of order {request.order_id} ({request.intent.symbol} "
+        f"{request.intent.exchange}, {request.intent.purpose.value}) is not confirmed after "
+        f"{waiting.reads} reads ({_found(waiting.last)}): the order stays at the broker and "
+        "what waits for its cancel waits on; it is read again every few seconds. Check the "
+        "broker's login and the order in OpenAlgo."
+    )
+
+
 def expired_text(waiting: Unsettled, now_ns: int) -> str:
     """The ERROR alert of a modify no row settled in time, saying what its last read
     found: no row (and why), or a row that shows neither the old nor the new terms."""
@@ -136,10 +153,12 @@ def _terms_text(
 
 
 __all__ = [
+    "CANCEL_READS_ALERT",
     "MODIFY_SETTLE_DEADLINE_S",
     "ORDER_CHECK_DELAYS_S",
     "Change",
     "Settlements",
     "Unsettled",
     "expired_text",
+    "unsettled_cancel_text",
 ]

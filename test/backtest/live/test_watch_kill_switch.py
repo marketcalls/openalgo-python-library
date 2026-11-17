@@ -28,6 +28,12 @@ from openalgo.backtest.errors import ConfigError
 #: The account's limit: below either strategy's loss of 80.00 at 492.00, at or below both.
 ACCOUNT_LIMIT = 150.0
 FALL_AT = ist(14, 43, 40)
+#: The first trade at 492.00: its tick reaches the kernel (tick mode), so the loss is
+#: marked there, not at the bar's close.
+FIRST_FALL_TICK = ist(14, 43, 45)
+#: More refusals of a cancel than its retries (1, 2 and 5 s, then every 5 s) make
+#: between the kill switch's fire and 14:44:30.
+CANCELS_REFUSED = 20
 
 
 @pytest.mark.parametrize(
@@ -85,9 +91,10 @@ def test_F46_the_kill_switch_exits_both_positions_as_risk_exits(world):
         if e["type"] == "PlaceRequest" and e["purpose"] == "risk_exit"
     ]
     assert exits == ["HoldSbin", "HoldInfy"]
-    # The 14:43 bar marks the fall at 14:44:01; the exits fill long before the Ctrl+C.
+    # The first tick at 492.00 marks the fall, before the 14:43 bar closes; the exits
+    # fill long before the Ctrl+C.
     sells = [o.placed_ns for o in world.orders() if o.action == "SELL"]
-    assert len(sells) == 2 and all(FALL_AT < placed < ist(14, 45) for placed in sells)
+    assert len(sells) == 2 and all(FIRST_FALL_TICK < placed < ist(14, 44) for placed in sells)
     assert (world.fake.position("SBIN", "NSE"), world.fake.position("INFY", "NSE")) == (0, 0)
 
 
@@ -151,10 +158,11 @@ class HoldAndAdd(bt.Strategy):
 
 
 def test_an_add_that_fills_before_its_cancel_is_exited_with_the_position(world):
-    # The kill switch fires at 14:44:01 and cancels the resting add; a trade at 490.00
-    # half a second later fills it before the cancel reaches the broker.
+    # The first tick at 492.00 (FIRST_FALL_TICK) marks the loss past the limit: the kill
+    # switch fires in that loop step and cancels the resting add; a trade at 490.00 half
+    # a second later fills it before the cancel reaches the broker.
     world.script.at(
-        ist(14, 44, 1) + NS // 2, lambda: world.fake.trade("SBIN", "NSE", 490.0, volume=10.0)
+        FIRST_FALL_TICK + NS // 2, lambda: world.fake.trade("SBIN", "NSE", 490.0, volume=10.0)
     )
     outcome = run(world, HoldAndAdd, account_max_daily_loss=50.0)
     asked = [(e["units"], e["outcome"]) for e in events(outcome, "kill_exit")]
@@ -165,10 +173,12 @@ def test_an_add_that_fills_before_its_cancel_is_exited_with_the_position(world):
 
 
 def test_a_position_that_opens_again_after_the_kill_switch_exit_is_exited_too(world):
-    # OpenAlgo's limiter refuses the kill switch's cancel of the resting add, so the add
-    # still works when the kill switch exits the first 10 units after its wait; a trade
-    # at 490.00 at 14:44:30 fills the add, opening 10 units again.
-    world.fake.faults.rate_limit("cancelorder")
+    # OpenAlgo's limiter refuses the kill switch's cancel of the resting add and every
+    # time it is sent again (16-session-design 4.5), so the add still works when the kill
+    # switch exits the first 10 units after its wait; a trade at 490.00 at 14:44:30 fills
+    # the add, opening 10 units again.
+    for _ in range(CANCELS_REFUSED):
+        world.fake.faults.rate_limit("cancelorder")
     world.script.at(ist(14, 44, 30), lambda: world.fake.trade("SBIN", "NSE", 490.0, volume=10.0))
     outcome = run(world, HoldAndAdd, account_max_daily_loss=50.0)
     asked = [(e["units"], e["outcome"]) for e in events(outcome, "kill_exit")]

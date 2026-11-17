@@ -29,9 +29,15 @@ Errors mid-session (3.5): a strategy's exception stops the session safely by `on
 then is raised again (a failure during that safe stop takes the emergency stop below, and
 the strategy's exception is still the one raised); a journal failure (the worker's or
 journal L's) stops sending at once and closes without the flatten, then is raised again;
-any other error of the loop does the same after an ERROR alert and locking every
-strategy's entries. A stop asked for during the countdown stops at once (nothing was
-sent); a feed that does not connect in time closes the session and raises LiveError.
+any other error of the loop locks every strategy's entries, protects each leg by state
+while the journal works (its broker-held stop placed again where it can be, for at most
+`SAFE_STOP_STATE_WAIT_S`, with no slice released and no strategy called), sends an ERROR
+alert naming each open leg, its stop, the orders working toward it and what to do
+(`_stops_report.left_open`: a confirmed stop must be cancelled before any sale by hand,
+an order working means the order book first, and only a leg with neither is to be closed
+by hand), and closes the same way. A stop asked for during the countdown stops at once
+(nothing was sent); a feed that does not connect in time closes the session and raises
+LiveError.
 
 Times are UTC nanoseconds, amounts rupees.
 """
@@ -54,8 +60,10 @@ from ._session_loop import LOOP_WAIT_MAX_S, Session
 from ._session_news import WorkerFailedError
 from ._session_parts import SessionStopped, StopFlag
 from ._session_start import StartSettings, begin_trading, open_session
-from ._session_stop import CTRL_C, ERROR, Control
-from ._session_trader import StrategyFailed
+from ._session_stop import CTRL_C, ERROR, SAFE_STOP_STATE_WAIT_S, Control
+from ._session_trader import StrategyFailed, Trader
+from ._stops_protect import protect_and_wait
+from ._stops_report import left_open
 from ._types import LOGGER_NAME, AlertKind, Now, Sleep
 from .clients import SessionClients
 from .feedlink import FeedSource
@@ -168,29 +176,59 @@ def _cause(error: BaseException) -> BaseException:
 
 
 def _abort(session: Session, error: BaseException, *, journal_works: bool) -> None:
-    """The emergency stop (3.5): nothing more is sent, an ERROR alert lists each open
-    leg, every strategy's entries are locked, and the session closes without the
-    flatten. A failure of the close is logged: the error that stopped the session is the
-    one raised."""
+    """The emergency stop (3.5): every strategy's entries are locked, each leg is
+    protected by state while the journal works, an ERROR alert lists each open leg with
+    its left-open note (its stop, the orders working toward it, and what to do: only a
+    leg with no stop and nothing working is to be closed by hand), and the session closes
+    without the flatten. A failure of the close is logged: the error that stopped the
+    session is the one raised."""
     logger.error("the session stops on %s: %s", type(error).__name__, error)
     try:
-        legs = [
-            f"{t.name} {t.symbol} {t.exchange} {units:g} units, no stop at the broker"
-            for t in session.traders
-            if (units := t.open_units()) != 0
-        ]
         for trader in session.traders:
             trader.lock(EMERGENCY_LOCK)
+        if journal_works and not session.locked:
+            _protect(session)
+        legs = [leg for trader in session.traders if (leg := _open_leg(session, trader))]
         session.alert(
             AlertKind.ERROR,
             f"the session stops on an error ({type(error).__name__}: {error}). Open: "
-            f"{'; '.join(legs) if legs else 'nothing'}. Close by hand what is open",
+            f"{'. '.join(legs) if legs else 'nothing'}",
         )
         close_session(session, ERROR, journal_works=journal_works)
     # The close of a failed session must not hide the failure that stopped it.
     except Exception:
         logger.exception("the session's close after an error failed")
         session.parts.stack.close()
+
+
+def _open_leg(session: Session, trader: Trader) -> str:
+    """The emergency alert's words for `trader`'s leg: "" when flat, else the leg and its
+    left-open note. The alert is the operator's only notice, so a leg whose kernel calls
+    fail is still listed, as unknown, with the order book to check (open decision 15)."""
+    try:
+        units = trader.open_units()
+        if units == 0:
+            return ""
+        return f"{trader.name} {trader.symbol} {trader.exchange} {units:g} units: " + left_open(
+            session.stops, trader
+        )
+    # Whatever the kernel's state, the alert must go out.
+    except Exception as failure:
+        logger.exception("%s: its leg cannot be read for the emergency alert", trader.name)
+        return (
+            f"{trader.name} {trader.symbol} {trader.exchange}: its position and stop cannot "
+            f"be read ({type(failure).__name__}), check the order book and the positions"
+        )
+
+
+def _protect(session: Session) -> None:
+    """Protect each leg by state; a failure there (the kernel's own, say) is logged, and
+    the alert then names the legs it left without a stop."""
+    try:
+        protect_and_wait(session, SAFE_STOP_STATE_WAIT_S)
+    # The emergency stop goes on whatever fails here: what is open is alerted below.
+    except Exception:
+        logger.exception("protect by state failed in the emergency stop")
 
 
 @contextlib.contextmanager

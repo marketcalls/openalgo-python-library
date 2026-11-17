@@ -86,6 +86,40 @@ def test_a_stop_the_stream_reports_waiting_is_polled_every_thirty_seconds():
     assert poll_times(rig, until_seconds=59) == [30.0]
 
 
+def cancelled_stop(**answers):
+    """A rig whose SL-M sale, order 1, the stream reports waiting, and whose cancel the
+    broker accepted, all at the rig's start."""
+    stop = make_intent("i-1", purpose=Purpose.STOP, action="SELL", price_type="SL-M")
+    rig = sent_rig(stop, cancelorder=[placed("1")], **answers)
+    stream_word(rig, OrderStatus.TRIGGER_PENDING)
+    rig.path.cancel("1")
+    return rig
+
+
+def test_an_order_whose_cancel_was_accepted_is_polled_each_second_for_ten_seconds():
+    # The cancel's word may be lost on the stream: until a word ends the order it is
+    # polled each second from a second after the acceptance, then by its schedule again.
+    rig = cancelled_stop(orderstatus=[status_answer("1", "trigger pending")] * 11)
+
+    assert poll_times(rig, until_seconds=39) == [float(s) for s in range(1, 11)]
+
+
+def test_an_order_whose_cancel_was_accepted_is_polled_no_more_once_a_poll_ends_it():
+    rig = cancelled_stop(
+        orderstatus=[status_answer("1", "cancelled", filled_quantity=0)],
+        tradebook=[NO_TRADES],
+    )
+
+    assert poll_times(rig, until_seconds=10) == [1.0]
+
+
+def test_an_order_whose_cancel_word_came_on_the_stream_is_not_polled():
+    rig = cancelled_stop(tradebook=[NO_TRADES])
+    stream_word(rig, OrderStatus.CANCELLED)
+
+    assert poll_times(rig, until_seconds=40) == []
+
+
 def test_a_resting_order_no_stream_speaks_for_backs_off_to_five_seconds():
     stop = make_intent("i-1", purpose=Purpose.STOP, action="SELL", price_type="SL-M")
     rig = sent_rig(stop, orderstatus=[status_answer("1", "trigger pending")] * 6)

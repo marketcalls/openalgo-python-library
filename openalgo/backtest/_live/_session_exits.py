@@ -4,19 +4,38 @@ OpenAlgo rejects while its position is still open is asked for again, on a sched
 An exit (a signal exit, a risk exit, a square-off) that ends rejected while its strategy
 still holds a position starts the schedule: the session asks the kernel for the exit again
 (`request_exit`) after `EXIT_RETRY_DELAYS_S` (1, 2, 5, 10 seconds after each rejection),
-so five attempts in all (08-live-trading section 6.3). `request_exit` exits the whole
-position, so only an exit that closes all of it is asked for again: a strategy's sale of
-part of its position (a reduce, an EXIT order for fewer units than the position) stays
-rejected, as the strategy saw it in `on_order`. After the fifth rejection the
-strategy's entries are locked for the rest of the session ("exit_failed") and an ERROR
-alert says to close the position by hand in OpenAlgo. The schedule starts again once the
-position is flat. A risk exit is asked for again with its own reason; a signal exit or a
-square-off with "operator_stop", the kernel's reason for an exit the session asks for
-(its trade's exit reason reads "manual"). The kernel's own re-send of a rejected engine
-exit at each later open stays as a backstop; its exit owner keeps the two from
-overlapping. The broker-held stop the design re-places after the fifth failure comes with
-the stops supervisor (unit 10). After the second Ctrl+C (`halt`) no exit is asked for
-again: the session only waits for what is in flight (16-session-design 3.3 step 4).
+so five attempts in all (08-live-trading section 6.3). After the fifth rejection the
+strategy's entries are locked for the rest of the session ("exit_failed"), the leg's stop
+is placed again (`protect`, R7) so the broker holds one, and an ERROR alert says what
+protect found: the stop placed again, or one working already, protects the position; an
+exit waits or works; or no stop is at the broker. A sale by hand is never advised beside a
+working stop (16-session-design 3.5, 4.8), nor while the session runs
+(`_stops_report.while_running`): until it ends the kernel sends the exit again at each
+later open (a backstop its exit owner keeps from overlapping the schedule) and places the
+stop again should the operator cancel it (4.10), so a sale by hand would sell twice. The
+alert says to end the session first, then to cancel the stop, or to read the order book
+first while an exit waits or works. A later rejection (that backstop's) places the stop
+again too, with no alert. While the retries run the leg has no stop at the broker (it was
+cancelled for the exit) and counts as unprotected. The schedule starts again once the
+position is flat. A risk exit is asked for again with its own reason; a signal exit, a
+target or a square-off with "operator_stop", the kernel's reason for an exit the session
+asks for (its trade's exit reason reads "manual").
+
+A partial exit is not asked for again (decided for unit 10): `request_exit`, the only
+retry call, exits the whole position, so a rejected sale of part of it (a `reduce()`, an
+EXIT order for fewer units than the position, a partial target) stays rejected, as the
+strategy saw it in `on_order`, with the REJECT alert sent for every rejection. Turning it
+into a full exit would close more than the strategy asked for. Part or all is judged
+against the position when the exit was placed (`Trader.units_at_place`), so the outcome
+does not depend on whether another exit's fill is heard before the rejection. The units
+it was for stay protected: when the partial exit alone was working, the kernel cut the
+stop down only for its units and puts it back over the whole position once it has ended
+unfilled (R4); when it and the exits beside it closed the whole position (two targets on
+one tick, a `reduce()` then an `exit()`), the kernel cancelled the stop for them and does
+not place it again, so the stops supervisor does (`_stops_bare`: `protect`, R7, with an
+ERROR alert) once the leg holds units with nothing working to close them. After the
+second Ctrl+C, or once protect by state holds a leg (`halt`), no exit is asked for again:
+the session only waits for what is in flight (16-session-design 3.3).
 
 Times are UTC nanoseconds. Used by the loop only.
 """
@@ -28,6 +47,8 @@ from typing import Any
 
 from .._layout import NANOS_PER_SECOND
 from ._session_trader import Trader
+from ._stops_kernel import PROTECT_PLACED, protect
+from ._stops_report import protect_words, while_running
 from ._types import LOGGER_NAME, AlertKind, OrderIntent, Purpose
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -54,7 +75,8 @@ class ExitRetries:
         self._rejections: dict[str, int] = {}
         self._due_ns: dict[str, int] = {}
         self._reason: dict[str, str] = {}
-        self._halted = False
+        self._halted: set[str] = set()
+        self._all_halted = False
 
     def rejected(self, trader: Trader, kernel_order: int, intent: OrderIntent, why: str) -> None:
         """An order of `trader` (kernel order `kernel_order`, placed as `intent`) ended
@@ -65,7 +87,9 @@ class ExitRetries:
         if intent.purpose not in EXIT_PURPOSES or units == 0:
             return
         session, name = self._session, trader.name
-        if intent.purpose is Purpose.EXIT and intent.quantity < units:
+        if intent.purpose is Purpose.EXIT and intent.quantity < _units_at_place(
+            trader, kernel_order, units
+        ):
             session.event("reduce_rejected", strategy=name, units=intent.quantity, reason=why)
             logger.info(
                 "%s: a reduce of %d units was rejected: not asked for again", name, intent.quantity
@@ -74,20 +98,10 @@ class ExitRetries:
         rejections = self._rejections.get(name, 0) + 1
         self._rejections[name] = rejections
         session.event("exit_rejected", strategy=name, attempt=rejections, reason=why)
-        if rejections > EXIT_ATTEMPTS:
-            # The kernel's own re-send at a later open, rejected again: alerted already.
+        if rejections >= EXIT_ATTEMPTS:
+            self._give_up(trader, rejections, why)
             return
-        if rejections == EXIT_ATTEMPTS:
-            self._due_ns.pop(name, None)
-            if trader.lock(EXIT_FAILED_LOCK):
-                session.event("lock", strategy=name, reason=EXIT_FAILED_LOCK)
-            session.alert(
-                AlertKind.ERROR,
-                f"exit of {trader.symbol} {trader.exchange} failed {rejections} times ({why}): "
-                f"{name}'s entries are locked; close the position by hand in OpenAlgo",
-            )
-            return
-        if self._halted:
+        if self.halted(name):
             return
         delay_ns = round(EXIT_RETRY_DELAYS_S[rejections - 1] * NANOS_PER_SECOND)
         self._due_ns[name] = session.now() + delay_ns
@@ -102,11 +116,41 @@ class ExitRetries:
         """True while a retry of the exit of strategy `name` is due."""
         return name in self._due_ns
 
-    def halt(self) -> None:
-        """Ask for no exit again from now (the second Ctrl+C): the retries due are
-        dropped, and a later rejection is counted but not asked for again."""
-        self._halted = True
-        self._due_ns.clear()
+    def halt(self, strategy: str | None = None) -> None:
+        """Ask for no exit of `strategy` again from now (every strategy's when None: the
+        second Ctrl+C): its retries due are dropped, and a later rejection is counted but
+        not asked for again."""
+        if strategy is None:
+            self._all_halted = True
+            self._due_ns.clear()
+            return
+        self._halted.add(strategy)
+        self._due_ns.pop(strategy, None)
+
+    def halted(self, strategy: str) -> bool:
+        """True once no exit of `strategy` is asked for again."""
+        return self._all_halted or strategy in self._halted
+
+    def _give_up(self, trader: Trader, rejections: int, why: str) -> None:
+        """The last attempt failed, or a later exit did: the broker holds a stop again
+        (`protect`), alerted once with the entries locked, in words of what protect
+        achieved (module docstring)."""
+        session, name = self._session, trader.name
+        self._due_ns.pop(name, None)
+        protected = protect(trader)
+        session.event("protect", strategy=name, outcome=protected)
+        if rejections > EXIT_ATTEMPTS:
+            return
+        if trader.lock(EXIT_FAILED_LOCK):
+            session.event("lock", strategy=name, reason=EXIT_FAILED_LOCK)
+        if protected not in PROTECT_PLACED:
+            logger.warning("%s: no stop placed again (%s)", name, protected)
+        held, then = protect_words(protected)
+        session.alert(
+            AlertKind.ERROR,
+            f"exit of {trader.symbol} {trader.exchange} failed {rejections} times ({why}): "
+            f"{name}'s entries are locked; {held}; {while_running(then)}",
+        )
 
     def duties(self, now_ns: int) -> None:
         """Ask again for each exit whose retry is due; forget the schedule of a strategy
@@ -124,6 +168,13 @@ class ExitRetries:
             what = trader.request_exit(self._reason[name])
             session.event("exit_retried", strategy=name, outcome=what)
             logger.info("%s: exit asked for again (%s)", name, what)
+
+
+def _units_at_place(trader: Trader, kernel_order: int, units_now: float) -> float:
+    """The position's units when the exit was placed, which tell an exit of part of it
+    from one of all of it whatever came between (another exit's fill heard before this
+    one's rejection); the units now for an order the session did not see placed."""
+    return trader.units_at_place.get(kernel_order, units_now)
 
 
 __all__ = [

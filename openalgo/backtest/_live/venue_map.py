@@ -27,7 +27,6 @@ Quantities are whole units, prices rupees, times UTC nanoseconds. Used by the lo
 
 from __future__ import annotations
 
-import enum
 import logging
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -39,9 +38,11 @@ from ._journal_reads import JournalSession
 from ._order_answers import Outcome
 from ._order_book import Resolution, Resolved
 from ._order_state import ENTRY_PURPOSES
-from ._types import LOGGER_NAME, AlertsLike, Now, OrderIntent, OrderUpdate
+from ._types import LOGGER_NAME, AlertsLike, Now, OrderIntent, OrderUpdate, Purpose
 from ._venue_requests import (
+    Applied,
     CancelRequest,
+    Handled,
     ModifyRequest,
     OrderRequest,
     OrderTerms,
@@ -64,34 +65,6 @@ logger = logging.getLogger(LOGGER_NAME)
 HELD_REASONS = frozenset({NotSentReason.HELD, NotSentReason.SILENT})
 #: Refusals of a modify's or a cancel's result that mean the order ended meanwhile.
 RACES = frozenset({"order_ended", "not_pending"})
-
-
-class Applied(enum.Enum):
-    """The kernel call the venue map made for an answer of the worker."""
-
-    #: None: the answer waits for another (a hold, a read to come, a CANCELLED news), or
-    #: the request had its result already.
-    NOTHING = "nothing"
-    #: The placement is bound to the broker's order ID.
-    BOUND = "bound"
-    #: `apply_reject(order, "venue")`: the placement was refused or never placed.
-    REJECTED = "rejected"
-    #: `apply_modify`: the broker holds the modify's terms.
-    MODIFIED = "modified"
-    #: `apply_modify_refused`: the old terms stand.
-    MODIFY_REFUSED = "modify_refused"
-    #: `apply_cancel_refused`: the order works on, and the session sends the cancel again
-    #: after its retry wait (4.5).
-    CANCEL_REFUSED = "cancel_refused"
-
-
-@dataclass(frozen=True)
-class Handled:
-    """What the venue map did with an answer: the kernel call it `applied`, and the
-    `requests` a bind released (the modifies and cancels that waited for it, in order)."""
-
-    applied: Applied
-    requests: tuple[OrderRequest, ...] = ()
 
 
 @dataclass
@@ -269,7 +242,8 @@ class VenueMap:
         """Take a request the worker did not send (2.5 A.4): one put back waits; an entry
         or add is rejected; a modify gets `apply_modify_refused`; a stop or exit after the
         guard locked, and a cancel, change nothing (a refused cancel is settled by the
-        worker's read)."""
+        worker's read); any other stop not sent is placed again once (R3), an exit
+        rejected."""
         request = message.request
         if not isinstance(request, PlaceRequest | ModifyRequest | CancelRequest):
             raise LiveError(f"the venue map makes order requests only, not {request!r}")
@@ -282,13 +256,15 @@ class VenueMap:
         if isinstance(request, PlaceRequest):
             entry = request.intent.purpose in ENTRY_PURPOSES
             if entry or message.reason is not NotSentReason.LOCKED:
-                return self._reject(order, f"not sent ({message.reason.value}): {message.error}")
+                why = f"not sent ({message.reason.value}): {message.error}"
+                return self._reject(order, why, placed=False)
         return Handled(Applied.NOTHING)
 
     def settled(self, message: Settled) -> Handled:
         """Take a modify or cancel the worker settled by reading its order (2.5 A.5, 4.3,
-        4.5): the row's verdict applied once. Raises LiveError for an expired cancel (the
-        worker reads a cancel until a row settles it)."""
+        4.5): the row's verdict applied once. A cancel settled with no row (no read can
+        ever settle it: the order path does not follow the order) is refused, so the stop
+        keeps protecting and the exit waits."""
         request = message.request
         if not isinstance(request, ModifyRequest | CancelRequest):
             raise LiveError(f"only a modify or a cancel is settled, not {request!r}")
@@ -299,10 +275,9 @@ class VenueMap:
             if verdict not in (Verdict.CONFIRMED, Verdict.REFUSED):
                 return Handled(Applied.NOTHING)
             return self._modify_result(order, request, confirmed=verdict is Verdict.CONFIRMED)
-        if check is None:
-            raise LiveError(f"the cancel of order {request.order_id} is settled by a read row")
+        verdict = Verdict.REFUSED if check is None else cancel_verdict(check)
         waiting = order.cancel is not None and order.cancel.request_id == request.request_id
-        if not waiting or cancel_verdict(check) is not Verdict.REFUSED:
+        if not waiting or verdict is not Verdict.REFUSED:
             return Handled(Applied.NOTHING)
         order.cancel = None
         if self._answer(self._engine.apply_cancel_refused, request.kernel_order):
@@ -312,7 +287,8 @@ class VenueMap:
     def resolved(self, resolution: Resolution) -> Handled:
         """Take an unbound placement the order book settled (2.5 A.6): BOUND binds it (the
         order's update, when the resolution carries one, is the loop's to pass to
-        `news`), NOT_PLACED rejects it, AMBIGUOUS leaves it unbound."""
+        `news`), NOT_PLACED rejects it (a leg stop is placed again once, R3), AMBIGUOUS
+        leaves it unbound."""
         kernel_order = self._by_intent.get(resolution.intent.intent_id)
         if kernel_order is None:
             raise LiveError(f"intent {resolution.intent.intent_id} is not this venue map's")
@@ -320,7 +296,7 @@ class VenueMap:
         if resolution.kind is Resolved.BOUND:
             return self._bind(order, resolution.order_id)
         if resolution.kind is Resolved.NOT_PLACED:
-            return self._reject(order, "not placed: the order book does not hold it")
+            return self._reject(order, "not placed: the order book does not hold it", placed=False)
         return Handled(Applied.NOTHING)
 
     def news(self, update: OrderUpdate) -> FillResult:
@@ -352,13 +328,17 @@ class VenueMap:
         released = tuple(self._request(order, command) for command in deferred)
         return Handled(Applied.BOUND, released)
 
-    def _reject(self, order: _Order, why: str) -> Handled:
+    def _reject(self, order: _Order, why: str, *, placed: bool = True) -> Handled:
         kernel_order = self._by_intent[order.intent.intent_id]
         logger.warning("intent %s %s", order.intent.intent_id, why)
         order.ended, order.deferred = True, []
-        if self._answer(self._engine.apply_reject, kernel_order, VENUE_REJECT_CODE):
-            return Handled(Applied.REJECTED)
-        return Handled(Applied.NOTHING)
+        # A leg stop that never reached the broker ended with no request of the session's,
+        # which the kernel places again once (R3); a rejection would exit the leg at market.
+        if not placed and order.intent.purpose is Purpose.STOP:
+            ended = self._answer(self._engine.apply_cancel, kernel_order)
+        else:
+            ended = self._answer(self._engine.apply_reject, kernel_order, VENUE_REJECT_CODE)
+        return Handled(Applied.REJECTED if ended else Applied.NOTHING)
 
     def _modify_result(self, order: _Order, request: ModifyRequest, *, confirmed: bool) -> Handled:
         if order.modify is None or order.modify.request_id != request.request_id:
