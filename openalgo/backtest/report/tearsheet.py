@@ -58,9 +58,10 @@ def tearsheet(
                    (monthly and weekly heatmaps, the monthly tiles, yearly returns
                    against the benchmark); Distribution (tiles, histogram of session
                    returns, box plot of session and monthly returns); Metrics (every
-                   metric, the benchmark's beside it, sortable); Trades (trade tiles;
-                   the trading cost tiles: turnover, charges, slippage, trading cost,
-                   its share of gross P&L and its basis points of turnover; MAE and
+                   metric, the benchmark's beside it, sortable); Trades (trade tiles,
+                   gross and net P&L among them; the trading cost tiles of the closed
+                   trades: turnover, charges, slippage, trading cost, its share of
+                   gross P&L and its basis points of that turnover; MAE and
                    MFE: the excursion tiles, a histogram of MAE percent and one of MFE
                    percent, and each against the trade's return as scatter charts,
                    winners as circles and the others as crosses, or one line when the

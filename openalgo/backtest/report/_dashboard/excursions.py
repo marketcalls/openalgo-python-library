@@ -1,12 +1,12 @@
 """The trading cost block and the "MAE and MFE" subsection of the Trades section
 (`sections_run.trades`).
 
-The trading cost block is a row of tiles: turnover, charges, slippage, the trading cost
-(charges plus slippage), its share of gross P&L and its basis points of turnover. The
-subsection shows, for the closed trades, the excursion tiles, a histogram of MAE percent
-and one of MFE percent, and each against the trade's return as scatter charts, as the
-mode's parts ask. A trades table without the excursion columns, or a run with no closed
-trade, gets one line saying so instead of empty charts.
+The trading cost block is a row of tiles for the closed trades: their turnover, charges,
+slippage, the trading cost (charges plus slippage), its share of gross P&L and its basis
+points of that turnover. The subsection shows, for the closed trades, the excursion
+tiles, a histogram of MAE percent and one of MFE percent, and each against the trade's
+return as scatter charts, as the mode's parts ask. A trades table without the excursion
+columns, or a run with no closed trade, gets one line saying so instead of empty charts.
 """
 
 import pandas as pd

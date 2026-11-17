@@ -16,6 +16,8 @@ import re
 import numpy as np
 import pandas as pd
 import pytest
+from test_metrics_excursion import analysed as analysed_with_an_open_trade
+from test_metrics_excursion import trades_table as three_closed_and_one_open
 from test_report_tearsheet import Structure, at, sample_trades, section_of, tile
 
 from openalgo.backtest import metrics, report
@@ -85,7 +87,7 @@ def test_the_mae_and_mfe_tiles_show_the_excursion_figures(page, label, shown):
 @pytest.mark.parametrize(
     ("label", "shown"),
     [
-        # Entries 9 x 5,000 and exits 45,000 + 320.
+        # Entries 9 x 5,000 and exits 45,000 + 320, every trade closed.
         ("Turnover", f"{RUPEE}90,320"),
         ("Slippage", f"{RUPEE}18.00"),
         # Charges 180.00 and slippage 18.00.
@@ -98,6 +100,24 @@ def test_the_mae_and_mfe_tiles_show_the_excursion_figures(page, label, shown):
 )
 def test_the_trading_cost_block_shows_turnover_slippage_and_the_cost(page, label, shown):
     assert tile(section_of(page, "trades"), label)[0] == shown
+
+
+def test_the_turnover_tile_is_the_closed_trades_the_cost_is_measured_against():
+    # test_metrics_excursion's table: three closed trades traded 6,190.00 and one still
+    # open was entered for 1,000.00; the trading cost 28.50 is 46.0 basis points of
+    # 6,190.00 (of 7,190.00 it would be 39.6).
+    page = report.tearsheet(analysed_with_an_open_trade(three_closed_and_one_open()))
+    trades = section_of(page, "trades")
+    assert tile(trades, "Turnover") == (f"{RUPEE}6,190", "of closed trades")
+    assert tile(trades, "Cost / Turnover")[0] == "46.0 bps"
+
+
+def test_the_trades_section_shows_the_charges_once_and_the_gross_pnl_beside_the_net(page):
+    trades = section_of(page, "trades")
+    assert trades.count(">Charges</div><div class='stat-value") == 1
+    # Gross P&L 320.00 of the nine trades, then net 140.00 after charges of 180.00.
+    assert tile(trades, "Gross P&amp;L") == (f"{RUPEE}320.00", "before charges")
+    assert tile(trades, "Net P&amp;L")[0] == f"{RUPEE}140.00"
 
 
 def test_the_subsection_draws_a_histogram_and_a_scatter_chart_of_each_excursion(page):
@@ -141,6 +161,7 @@ def test_money_tiles_show_paise_under_a_thousand_rupees():
     trades["exit_price"] = 499.88
     page = report.tearsheet(analysed(trades))
     trade_tiles = section_of(page, "trades")
+    assert tile(trade_tiles, "Gross P&amp;L")[0] == f"-{RUPEE}1.20"
     assert tile(trade_tiles, "Charges")[0] == f"{RUPEE}3.60"
     assert tile(trade_tiles, "Net P&amp;L")[0] == f"-{RUPEE}4.80"
     assert tile(trade_tiles, "Turnover")[0] == f"{RUPEE}9,999"

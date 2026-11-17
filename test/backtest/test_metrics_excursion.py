@@ -13,7 +13,8 @@ Average MAE (-2 - 6 - 1) / 3 = -3 percent; average MFE (12 + 1.5 + 5) / 3 = 6.16
 percent; worst MAE -60, best MFE 120; edge ratio 6.1667 / 3 = 2.0556; the winners (net
 above 0) are 1 and 3, gross 140 over MFE 170 kept 0.8235. Slippage 3.50; charges 25.00;
 trading cost 28.50; gross P&L 90.00, so 31.67 percent of it; the closed trades traded
-2,100 + 2,050 + 2,040 = 6,190.00, so 28.50 is 46.04 basis points of it.
+2,100 + 2,050 + 2,040 = 6,190.00 (their turnover; the open trade's entry adds 1,000.00 to
+the turnover of every trade), so 28.50 is 46.04 basis points of it.
 """
 
 import math
@@ -34,6 +35,9 @@ EXCURSION_KEYS = (
     "edge_ratio",
     "profit_kept",
 )
+#: The closed trades' turnover: known from prices and quantities, with or without the
+#: optional columns.
+CLOSED_TURNOVER = "closed_turnover"
 COST_KEYS = (
     "total_slippage",
     "trading_cost",
@@ -136,6 +140,14 @@ def test_the_trading_cost_of_the_closed_trades(figures, key, expected):
     assert figures[key] == pytest.approx(expected)
 
 
+def test_the_trading_cost_is_measured_against_the_closed_trades_turnover(figures):
+    # 6,190.00 of the closed trades; the turnover of every trade adds the open entry.
+    assert figures[CLOSED_TURNOVER] == pytest.approx(6_190.0)
+    assert figures["turnover"] == pytest.approx(7_190.0)
+    expected = figures["trading_cost"] / figures[CLOSED_TURNOVER] * 10_000
+    assert figures["trading_cost_bps"] == pytest.approx(expected)
+
+
 def test_the_existing_figures_are_untouched_by_the_new_columns(figures):
     # The same table without the new columns gives every earlier figure unchanged.
     plain = analysed(trades_table().drop(columns=list(OPTIONAL))).metrics
@@ -168,6 +180,7 @@ def test_no_closed_trade_has_no_excursion_and_no_slippage():
     for key in EXCURSION_KEYS:
         assert math.isnan(figures[key]), key
     assert (figures["total_slippage"], figures["trading_cost"]) == (0.0, 0.0)
+    assert figures[CLOSED_TURNOVER] == 0.0
     assert math.isnan(figures["trading_cost_share_of_gross_pnl"])
     assert math.isnan(figures["trading_cost_bps"])
 
@@ -180,9 +193,10 @@ def test_trades_that_never_went_against_have_an_infinite_edge_ratio():
 
 def test_every_new_figure_is_defined_in_its_own_group():
     group = GROUPS["Excursions and trading cost"]
-    assert group == EXCURSION_KEYS + COST_KEYS
+    assert group == EXCURSION_KEYS + (CLOSED_TURNOVER,) + COST_KEYS
     units = [DEFINITIONS[key].unit for key in group]
     assert units == ["fraction", "fraction", "rupees", "rupees", "ratio", "fraction"] + [
+        "rupees",
         "rupees",
         "rupees",
         "fraction",

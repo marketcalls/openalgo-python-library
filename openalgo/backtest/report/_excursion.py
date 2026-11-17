@@ -1,6 +1,8 @@
 """The excursion and trading-cost figures of the closed trades: average, worst and best
-MAE and MFE, the edge ratio, the profit winners kept, the slippage and the trading cost
-(definitions in `DEFINITIONS`).
+MAE and MFE, the edge ratio, the profit winners kept, their turnover, the slippage and
+the trading cost (definitions in `DEFINITIONS`). The trading cost counts the closed
+trades only, so its basis points are of their turnover, which leaves out the entries of
+trades still open that the turnover of every trade counts.
 
 They read optional columns of the trades table (`metrics.analyse` documents them): the
 excursions `mae` and `mfe` in rupees and `mae_pct` and `mfe_pct` in percent of each
@@ -82,8 +84,8 @@ def _closed_turnover(table: TradeTable) -> float:
 
 
 def trading_cost_figures(table: TradeTable, figures: Mapping[str, float]) -> dict[str, float]:
-    """The slippage and trading cost of the closed trades of `table` (module docs);
-    `figures` holds their `total_costs` and `gross_pnl`, rupees."""
+    """The turnover, slippage and trading cost of the closed trades of `table` (module
+    docs); `figures` holds their `total_costs` and `gross_pnl`, rupees."""
     closed = table.frame.loc[~table.is_open]
     slippage = (
         float(np.sum(_column(closed, SLIPPAGE_COLUMN)))
@@ -94,6 +96,7 @@ def trading_cost_figures(table: TradeTable, figures: Mapping[str, float]) -> dic
     gross = figures["gross_pnl"]
     turnover = _closed_turnover(table)
     return {
+        "closed_turnover": turnover,
         "total_slippage": slippage,
         "trading_cost": cost,
         "trading_cost_share_of_gross_pnl": cost / gross if gross > 0 else math.nan,

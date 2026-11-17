@@ -130,11 +130,11 @@ TRADES = (
     Stat("Avg Loss", "average_loss", "rupees", "net, per trade", tone=True),
     Stat("Largest Win", "largest_win", "rupees", "net", tone=True),
     Stat("Largest Loss", "largest_loss", "rupees", "net", tone=True),
-    Stat("Charges", "total_costs", "rupees", "of closed trades"),
+    Stat("Gross P&amp;L", "gross_pnl", "rupees", "before charges", tone=True),
     Stat("Net P&amp;L", "net_pnl", "rupees", "after charges", tone=True),
 )
 TRADING_COST = (
-    Stat("Turnover", "turnover", "rupees", "traded value"),
+    Stat("Turnover", "closed_turnover", "rupees", "of closed trades"),
     Stat("Charges", "total_costs", "rupees", "of closed trades"),
     Stat("Slippage", "total_slippage", "rupees", "in fill prices"),
     Stat("Trading Cost", "trading_cost", "rupees", "charges + slippage"),

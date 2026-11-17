@@ -262,6 +262,13 @@ EXCURSIONS = {
         "Sum of the gross P&L of the winning trades (net P&L above zero) over the sum of "
         "their MFE: the share of their best open profit the winners kept.",
     ),
+    "closed_turnover": (
+        "Turnover of closed trades",
+        "rupees",
+        "Traded value of the closed trades: |price| x quantity x multiplier of each entry "
+        "and each exit. The trading cost is measured against it; the turnover also counts "
+        "the entries of trades still open.",
+    ),
     "total_slippage": (
         "Slippage",
         "rupees",
@@ -283,8 +290,7 @@ EXCURSIONS = {
     "trading_cost_bps": (
         "Trading cost of turnover",
         "bps",
-        "Trading cost over the closed trades' traded value (|price| x quantity x "
-        "multiplier of each entry and exit), in basis points.",
+        "Trading cost over the turnover of closed trades, in basis points.",
     ),
 }
 
