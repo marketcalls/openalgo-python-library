@@ -8,12 +8,16 @@ judged quick check passes; the trade reshuffle is informational) or on noise (th
 random out of sample, the trade resample and the variance fail).
 """
 
+from types import SimpleNamespace
+
 import pandas as pd
 import pytest
 from robust_runs import FREE, Flip, bars, edge_run, noise_run, steps_for
 from test_report_tearsheet import section_ids
 
 import openalgo.backtest as bt
+from openalgo.backtest import report
+from openalgo.backtest._robust._quick import quick_checks
 
 FAILED_NOISE = ("random out of sample", "trade resample", "variance")
 
@@ -89,6 +93,17 @@ def test_quick_checks_that_pass_add_no_warning(edge):
 def test_the_failed_quick_checks_are_in_the_tearsheet_notes(noise):
     notes = noise.tearsheet()[noise.tearsheet().index("<section id='notes'") :]
     assert notes.count("Overfitting check failed") == 3
+
+
+def test_a_tearsheet_shows_the_quick_checks_its_run_already_computed(edge):
+    given = quick_checks(edge.performance, runs=50)
+    page = report.tearsheet(SimpleNamespace(performance=edge.performance, overfitting=given))
+    assert "50 runs each, seed 0" in overfitting_section(page)
+
+
+def test_a_results_tearsheet_shows_its_own_quick_checks(edge):
+    section = overfitting_section(edge.tearsheet())
+    assert all(result.figure.replace("'", "&#x27;") in section for result in edge._quick.results)
 
 
 def test_the_quick_checks_change_no_figure_of_the_run():

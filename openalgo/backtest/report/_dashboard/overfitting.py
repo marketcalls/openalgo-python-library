@@ -2,8 +2,9 @@
 checks of the run's trade list (random out of sample, trade reshuffle, trade resample
 and variance, `openalgo.backtest._robust._quick`), their scorecard with how many passed,
 failed and were not judged and the wording rule, the trade count they need, and a line
-pointing to `result.robustness()` for the full set. They are computed from the
-`Performance` the page shows and change none of its figures.
+pointing to `result.robustness()` for the full set. They are those the run already
+computed (`View.overfitting`, a `Result`'s), else computed from the `Performance` the
+page shows; they change none of its figures.
 """
 
 from .. import _format as fmt
@@ -18,7 +19,7 @@ def overfitting(view: View) -> Section | None:
     from ..._robust._scorecard import lead, table
     from ..._robust._trade_common import MIN_TRADES
 
-    quick = quick_checks(view.performance)
+    quick = view.overfitting if view.overfitting is not None else quick_checks(view.performance)
     trades = (
         f"{fmt.indian_digits(quick.closed, 0)} closed "
         f"{'trade' if quick.closed == 1 else 'trades'}; the checks need {MIN_TRADES} to judge"

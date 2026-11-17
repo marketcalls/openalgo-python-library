@@ -158,7 +158,7 @@ class AnalysisMethods:
         lines += [f"warning: {text}" for text in [*self._warnings, *self._overfitting_warnings()]]
         name = self._manifest["strategy"]["name"]
         bench = _result_report.benchmark_name(self._manifest)
-        report = _result_report.Report(self.performance, name, lines, bench)
+        report = _result_report.Report(self.performance, name, lines, bench, self._quick)
         return _result_report.tearsheet(report, path, mode, log_scale)
 
 
