@@ -60,7 +60,20 @@ def _quantity(units: float) -> str:
     return fmt.number(units, 0 if float(units).is_integer() else 2)
 
 
-def _row(number: int, trade: pd.Series, with_r: bool) -> str:
+def _excursion(trade: pd.Series, name: str) -> str:
+    """The `name` ("mae" or "mfe") cell of a trade: rupees, coloured by sign, with its
+    percent of capital at work on hover; "n/a" when the trade has none."""
+    value, pct = float(trade[name]), float(trade[f"{name}_pct"])
+    if math.isnan(value):
+        return _td(fmt.MISSING, None)
+    hover = f"{fmt.percent(pct / 100)} of capital at work"
+    return (
+        f"<td class='r nums{tone(value)}' data-v='{_key(value)}' title='{hover}'>"
+        f"{fmt.rupees(value)}</td>"
+    )
+
+
+def _row(number: int, trade: pd.Series, with_r: bool, with_excursion: bool) -> str:
     net, ret = float(trade["net_pnl"]), float(trade["return_pct"])
     bars = trade["bars_held"]
     cells = [
@@ -80,6 +93,7 @@ def _row(number: int, trade: pd.Series, with_r: bool) -> str:
         _td(fmt.rupees(float(trade["charges"])), float(trade["charges"])),
         _td(fmt.rupees(net), net, "r nums" + tone(net)),
         _td(fmt.percent(ret / 100), ret, "r nums" + tone(ret)),
+        *([_excursion(trade, "mae"), _excursion(trade, "mfe")] if with_excursion else []),
         _td(
             fmt.MISSING if pd.isna(bars) else str(int(bars)), None if pd.isna(bars) else float(bars)
         ),
@@ -96,8 +110,10 @@ def _row(number: int, trade: pd.Series, with_r: bool) -> str:
 
 def trade_table(listing: pd.DataFrame) -> str:
     """The trade list (`openalgo.backtest._trade_list`) as a sortable table, paged by
-    `TRADES_PER_PAGE` rows with script; the R column only when a trade has one."""
+    `TRADES_PER_PAGE` rows with script; the MAE and MFE columns when a trade has them,
+    the R column when a trade has one."""
     with_r = bool(listing["r_multiple"].notna().any())
+    with_excursion = bool(listing[["mae", "mfe"]].notna().any().any())
     columns = [
         ("#", "r"),
         ("Symbol", "l"),
@@ -111,12 +127,15 @@ def trade_table(listing: pd.DataFrame) -> str:
         ("Charges", "r"),
         ("Net P&amp;L", "r"),
         ("Return", "r"),
+        *([("MAE", "r"), ("MFE", "r")] if with_excursion else []),
         ("Bars", "r"),
         ("Days", "r"),
         ("Exit Reason", "l"),
     ] + ([("R", "r")] if with_r else [])
     head = "".join(f"<th class='{align} s'>{label}</th>" for label, align in columns)
-    rows = "".join(_row(int(number), trade, with_r) for number, trade in listing.iterrows())
+    rows = "".join(
+        _row(int(number), trade, with_r, with_excursion) for number, trade in listing.iterrows()
+    )
     pager = (
         "<div class='pager js-only'><span class='pager-info nums'></span>"
         "<button type='button' class='btn pg-prev'>Prev</button>"

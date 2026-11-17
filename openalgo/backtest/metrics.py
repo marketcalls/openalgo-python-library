@@ -1,6 +1,6 @@
-"""Performance metrics of a backtest, built in: returns, risk, drawdowns, trades, costs,
-the distribution and tails of session returns, rolling statistics, a horizon summary
-and Monte Carlo resampling.
+"""Performance metrics of a backtest, built in: returns, risk, drawdowns, trades and their
+excursions, costs and slippage, the distribution and tails of session returns, rolling
+statistics, a horizon summary and Monte Carlo resampling.
 
     from openalgo.backtest import metrics
 
@@ -52,9 +52,20 @@ Inputs
         gross_pnl, net_pnl, costs   rupees; net_pnl = gross_pnl - costs to the paisa
         Optional cost columns brokerage, stt, exchange_txn, sebi_fee, stamp_duty, gst,
         dp_charge and note_rounding (the contract-note rounding shared to the trade's
-        fills; rupees) are summed into `Performance.cost_breakdown`. Other
-        columns (symbol, exit_reason, ...) are kept for the report. Trade statistics
-        count closed trades only; an open trade counts for exposure and turnover.
+        fills; rupees) are summed into `Performance.cost_breakdown`. Optional:
+        multiplier              rupees per one-rupee move per unit of quantity (a
+                                contract's multiplier; 1 when absent), so price x
+                                quantity x multiplier is the traded value
+        mae, mfe                the trade's maximum adverse and favourable excursion,
+                                rupees: the lowest (at most 0) and highest (at least 0)
+                                running P&L it showed before charges
+        mae_pct, mfe_pct        the same in percent of its largest capital at work
+        slippage                what slippage cost its fills, rupees (already in its
+                                P&L); NaN when none was modelled
+        Without the excursion columns the excursion figures are NaN, and without
+        slippage the slippage and trading cost, with no error. Other columns (symbol,
+        exit_reason, ...) are kept for the report. Trade statistics count closed
+        trades only; an open trade counts for exposure and turnover.
     cash_flows: a Series of deposits (positive) and withdrawals (negative) in rupees,
         indexed by time, each after the first equity point and at or before the last.
         A flow is taken to arrive at the next equity point; it changes the equity but

@@ -18,6 +18,9 @@ from . import scale
 HISTOGRAM_BINS = 41
 #: Ticks asked of a percent axis of the histogram and the box plot.
 PERCENT_TICKS = 6
+#: Left and right margin of the histogram, pixels: half of a six-character tick label
+#: in the 10-pixel mono axis font, so the end labels show whole.
+HISTOGRAM_SIDE_PX = 22
 #: Font of axis text, as an SVG style.
 AXIS_TEXT = "font-size:10px;font-family:var(--font-mono);fill:var(--text-faint)"
 MUTED_TEXT = "font-size:10px;font-family:var(--font-mono);fill:var(--text-muted)"
@@ -42,13 +45,21 @@ def _pct(value: float, decimals: int) -> str:
     return f"{value * 100:.{decimals}f}%"
 
 
-def histogram(values: np.ndarray, *, height: int = 220) -> str:
-    """Session returns (fractions) in round-edged bins, gains green and losses red by
-    the bin's centre, with a dashed line at their mean."""
+def histogram(
+    values: np.ndarray,
+    *,
+    height: int = 220,
+    label: str = "Session returns distribution",
+    decimals: int | None = 1,
+) -> str:
+    """Fractions (session returns, or the trades' excursions) in round-edged bins, gains
+    green and losses red by the bin's centre, with a dashed line at their mean. `label`
+    names the chart for a screen reader; the axis shows percent to `decimals` places, or
+    to as many as its tick step needs when None (`scale.percent_decimals`)."""
     data = values[np.isfinite(values)]
     if not len(data):
         return "<p class='empty'>No data</p>"
-    width, margin = 520, Margin(10, 12, 26, 12)
+    width, margin = 520, Margin(10, HISTOGRAM_SIDE_PX, 26, HISTOGRAM_SIDE_PX)
     inner_w, inner_h = width - margin.left - margin.right, height - margin.top - margin.bottom
     low, high = scale.widen(float(data.min()), float(data.max()))
     x = scale.Linear(low, high, 0, inner_w)
@@ -70,12 +81,14 @@ def histogram(values: np.ndarray, *, height: int = 220) -> str:
         "style='stroke:var(--accent)' stroke-width='1.5' stroke-dasharray='3 3'/>"
     )
     marks.append(f"<line x1='0' x2='{inner_w}' y1='{inner_h}' y2='{inner_h}' class='axis'/>")
+    if decimals is None:
+        decimals = scale.percent_decimals(low, high, PERCENT_TICKS)
     marks += [
         f"<text x='{x(t):.2f}' y='{inner_h + 16}' text-anchor='middle' style='{AXIS_TEXT}'>"
-        f"{_pct(t, 1)}</text>"
+        f"{_pct(t, decimals)}</text>"
         for t in scale.ticks(low, high, PERCENT_TICKS)
     ]
-    return _frame(width, height, margin, "Session returns distribution", "".join(marks))
+    return _frame(width, height, margin, label, "".join(marks))
 
 
 class Box(NamedTuple):

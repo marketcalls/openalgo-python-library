@@ -1,6 +1,6 @@
 """The stat tiles: a hairline grid of label, value and subline, in groups that follow
 the reference dashboard's (overview, period returns, risk, benchmark, monthly,
-distribution) and one for trades.
+distribution) and ones for the trades, their trading cost and their excursions.
 
 Every value is a figure of the SDK: a key of `Performance.metrics`, or a cell of one of
 its tables (`data`). Where the reference shows a figure the SDK does not compute, the
@@ -17,13 +17,18 @@ from .._definitions import DEFINITIONS
 from .._performance import Performance
 from . import data
 
+#: A money tile shows paise below this many rupees in absolute value, whole rupees from
+#: it on: a one-share run's charges read Rs 3.60, not Rs 4.
+PAISE_BELOW_RUPEES = 1_000.0
+
 
 class Stat(NamedTuple):
     """One tile: the label (HTML-safe text), the figure (a metrics key, or a reader of
     a table cell with its `definition`), how it is shown ("pct" a fraction as a percent,
-    "num" two decimals, "int" a whole number, "rupees" whole rupees, "duration"
-    seconds in words), the subline without a benchmark figure, and whether the value is
-    coloured by its sign."""
+    "num" two decimals, "int" a whole number, "rupees" whole rupees, with paise below
+    `PAISE_BELOW_RUPEES`, "bps" basis points, "duration" seconds in words), the
+    subline without a benchmark figure, and whether the value is coloured by its
+    sign."""
 
     label: str
     figure: str | Callable[[Performance], float]
@@ -125,8 +130,24 @@ TRADES = (
     Stat("Avg Loss", "average_loss", "rupees", "net, per trade", tone=True),
     Stat("Largest Win", "largest_win", "rupees", "net", tone=True),
     Stat("Largest Loss", "largest_loss", "rupees", "net", tone=True),
-    Stat("Charges", "total_costs", "rupees", "of closed trades"),
+    Stat("Gross P&amp;L", "gross_pnl", "rupees", "before charges", tone=True),
     Stat("Net P&amp;L", "net_pnl", "rupees", "after charges", tone=True),
+)
+TRADING_COST = (
+    Stat("Turnover", "closed_turnover", "rupees", "of closed trades"),
+    Stat("Charges", "total_costs", "rupees", "of closed trades"),
+    Stat("Slippage", "total_slippage", "rupees", "in fill prices"),
+    Stat("Trading Cost", "trading_cost", "rupees", "charges + slippage"),
+    _pct("Cost / Gross P&amp;L", "trading_cost_share_of_gross_pnl", "share", tone=False),
+    Stat("Cost / Turnover", "trading_cost_bps", "bps", "basis points"),
+)
+EXCURSIONS = (
+    _pct("Avg MAE", "average_mae", "of capital at work"),
+    _pct("Avg MFE", "average_mfe", "of capital at work"),
+    Stat("Worst MAE", "worst_mae", "rupees", "deepest open loss", tone=True),
+    Stat("Best MFE", "best_mfe", "rupees", "highest open profit", tone=True),
+    _num("Edge Ratio", "edge_ratio", "avg MFE / avg MAE"),
+    _pct("Profit Kept", "profit_kept", "of winners' MFE", tone=False),
 )
 
 
@@ -148,7 +169,9 @@ def text(value: object, shown: str) -> str:
     if shown == "int":
         return fmt.number(number, 0)
     if shown == "rupees":
-        return fmt.rupees(number, 0)
+        return fmt.rupees(number, 2 if abs(number) < PAISE_BELOW_RUPEES else 0)
+    if shown == "bps":
+        return fmt.basis_points(number)
     if shown == "duration":
         return fmt.duration(number)
     return fmt.number(number)
@@ -198,11 +221,14 @@ def grid(
 __all__ = [
     "BENCHMARK",
     "DISTRIBUTION",
+    "EXCURSIONS",
     "MONTHLY",
     "OVERVIEW",
+    "PAISE_BELOW_RUPEES",
     "PERIODS",
     "RISK",
     "TRADES",
+    "TRADING_COST",
     "Stat",
     "figure",
     "grid",

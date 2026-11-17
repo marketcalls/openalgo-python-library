@@ -42,9 +42,15 @@ pub(super) fn row<'py, R>(
     Ok(dict)
 }
 
+/// What slippage cost a fill or a trade, rupees: NaN when none was modelled (a fill the
+/// venue priced), never 0.
+fn slippage(py: Python<'_>, rupees: Option<f64>) -> PyObject {
+    rupees.unwrap_or(f64::NAN).into_py(py)
+}
+
 /// The fills: the stamp of the fill, what filled, where and why, its order or GTT, its
-/// flags and its charges (rupees).
-pub(super) const FILL_COLUMNS: [Column<FillRecord>; 16] = [
+/// flags, its charges and what its slippage cost (rupees).
+pub(super) const FILL_COLUMNS: [Column<FillRecord>; 17] = [
     ("slice", |py, r| r.stamp.slice.into_py(py)),
     ("slice_ts", |py, r| r.stamp.slice_ts.into_py(py)),
     ("step", |py, r| r.stamp.step.number().into_py(py)),
@@ -64,6 +70,7 @@ pub(super) const FILL_COLUMNS: [Column<FillRecord>; 16] = [
         let flags = r.fill.flags;
         flags.contains(FillFlags::FILLED_AT_LAST_CLOSE).into_py(py)
     }),
+    ("slippage_rupees", |py, r| slippage(py, r.slippage_rupees)),
 ];
 
 /// The targets of a level row as (index, level rupees, units, filled).
@@ -115,8 +122,9 @@ pub(super) const LEVEL_COLUMNS: [Column<LevelRow>; 16] = [
 ];
 
 /// The closed round trips: their number, direction, entry and exit, P&L and charges
-/// (rupees), and the initial risk in rupees (None with no stop at the open).
-pub(super) const TRADE_COLUMNS: [Column<TradeRecord>; 18] = [
+/// (rupees), the initial risk in rupees (None with no stop at the open), the MAE and MFE
+/// and what slippage cost the trade's fills (rupees).
+pub(super) const TRADE_COLUMNS: [Column<TradeRecord>; 21] = [
     ("trade_id", |py, t| t.number.into_py(py)),
     ("instrument", |py, t| t.instrument.0.into_py(py)),
     ("product", |py, t| t.product.code().into_py(py)),
@@ -142,6 +150,9 @@ pub(super) const TRADE_COLUMNS: [Column<TradeRecord>; 18] = [
     ("initial_risk_rupees", |py, t| {
         t.initial_risk_rupees.into_py(py)
     }),
+    ("mae_rupees", |py, t| t.mae_rupees.into_py(py)),
+    ("mfe_rupees", |py, t| t.mfe_rupees.into_py(py)),
+    ("slippage_rupees", |py, t| slippage(py, t.slippage_rupees)),
 ];
 
 /// The orders: the request (type, prices in rupees, validity, product), the state and

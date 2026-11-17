@@ -1,4 +1,5 @@
-"""Write the golden fixtures of `test_golden.py` again, from the runs of `golden_runs`.
+"""Write the golden fixtures of `test_golden.py` again, from the runs of `golden_runs`:
+each run's pins and the figures it pins apart (`golden_runs.excursion_snapshot`).
 
 The pins are regression pins: they say what the engine produced when they were made,
 after that output was checked by hand. Regenerate them only on purpose, after a change
@@ -37,7 +38,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
     for name, run in golden_runs.RUNS.items():
-        path = golden_runs.write_pins(name, golden_runs.snapshot(run()))
+        result = run()
+        path = golden_runs.write_pins(name, golden_runs.snapshot(result))
+        print(f"wrote {path}")
+        part = golden_runs.EXCURSION_PINS
+        path = golden_runs.write_pins(name, golden_runs.excursion_snapshot(result), part)
         print(f"wrote {path}")
     return 0
 

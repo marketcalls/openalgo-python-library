@@ -62,6 +62,7 @@ impl Engine {
             .into());
         }
         let (_, replacement) = self.venue.modifying.remove(slot);
+        self.hold_on_modify_confirmed(order, &slice);
         self.book.replace(
             order,
             replacement.request,
@@ -105,6 +106,7 @@ impl Engine {
             return Err(VenueError::NotPending { order, what }.into());
         }
         self.venue.modifying.retain(|(id, _)| *id != order);
+        self.hold_on_modify_refused(order);
         self.leg_stop_answered(order, false);
         self.send_waiting_reprice(order);
         self.progress_exits(self.waiting_at(&slice))

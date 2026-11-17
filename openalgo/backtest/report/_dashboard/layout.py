@@ -31,7 +31,16 @@ PARTS = {
     ),
     "distribution": ("distribution_stats", "histogram", "box_plot"),
     "metrics": ("metrics_table", "definitions"),
-    "trades": ("trade_stats", "trade_table", "costs", "r_multiples"),
+    "trades": (
+        "trade_stats",
+        "trade_costs",
+        "excursion_stats",
+        "excursion_histograms",
+        "excursion_scatter",
+        "trade_table",
+        "costs",
+        "r_multiples",
+    ),
     "strategies": ("strategies",),
     "notes": ("method", "assumptions"),
 }
@@ -50,6 +59,8 @@ MODE_PARTS = {
             "yearly_bars",
             "yearly_table",
             "trade_stats",
+            "trade_costs",
+            "excursion_histograms",
             "trade_table",
             "costs",
             "method",
@@ -69,6 +80,8 @@ MODE_PARTS = {
             "yearly_bars",
             "histogram",
             "box_plot",
+            "excursion_histograms",
+            "excursion_scatter",
         }
     ),
 }
