@@ -61,10 +61,19 @@ def recording(tmp_path, *, until: object = "10:01", failing: bool = False, monke
     [
         (None, None),
         ("15:30", ist_ns("15:30:00")),
+        ("9:45", ist_ns("09:45:00")),
         (dt.datetime(2026, 11, 16, 15, 30), ist_ns("15:30:00")),
         (dt.datetime(2026, 11, 16, 10, 0, tzinfo=dt.UTC), ist_ns("15:30:00")),
+        (dt.datetime(2026, 11, 16, 15, 30, 0, 250_000), ist_ns("15:30:00.250")),
     ],
-    ids=["the day's close", "a time of day", "a naive datetime, IST", "an aware datetime"],
+    ids=[
+        "the day's close",
+        "a time of day",
+        "an hour of one digit",
+        "a naive datetime, IST",
+        "an aware datetime",
+        "a datetime to the microsecond",
+    ],
 )
 def test_until_names_the_instant_the_recording_stops(until, stop_at):
     assert _record_verb.stop_at_of(until, ist_ns("09:00:00")) == stop_at

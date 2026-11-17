@@ -29,7 +29,6 @@ from .._calendar_convert import IST, format_ist
 from ..errors import ConfigError, LiveError
 from ._recorder_loop import Monotonic
 from ._recorder_summary import RecordSummary
-from ._session_trader import ist_instant
 from ._tick_files import ist_day, raw_parts_of, ticks_root
 from ._tick_spans import Stop
 from ._types import Now, Sleep
@@ -38,6 +37,8 @@ from .recorder import record
 
 #: How `until` is written as a time of day: "HH:MM", IST.
 TIME_OF_DAY = "%H:%M"
+#: The instant UTC nanoseconds count from.
+EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.UTC)
 
 
 def stop_at_of(until: Any, started_ns: int) -> int | None:
@@ -48,15 +49,15 @@ def stop_at_of(until: Any, started_ns: int) -> int | None:
         return None
     if isinstance(until, str):
         try:
-            dt.datetime.strptime(until, TIME_OF_DAY)
+            clock = dt.datetime.strptime(until, TIME_OF_DAY).time()
         except ValueError:
             raise ConfigError(
                 f"until takes an IST time of day as 'HH:MM' (for example '15:30'), not {until!r}"
             ) from None
-        return ist_instant(ist_day(started_ns), until)
+        until = dt.datetime.combine(ist_day(started_ns), clock)
     if isinstance(until, dt.datetime):
         moment = until if until.tzinfo is not None else until.replace(tzinfo=IST)
-        return round(moment.timestamp() * 1_000_000) * 1_000
+        return (moment - EPOCH) // dt.timedelta(microseconds=1) * 1_000
     raise ConfigError(
         f"until takes an IST time of day ('15:30'), a datetime, or None for the day's close, "
         f"not {until!r}"
