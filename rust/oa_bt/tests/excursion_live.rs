@@ -3,8 +3,10 @@
 //! tick taken while a trade is open counts, besides the bars handed over, but none once a
 //! price has reached a working order on the trade's closing side (a broker-held stop, a
 //! limit, a MARKET exit), until the venue reports that order filled or ended: the venue
-//! may have closed the position before it reports so. A bar is judged by the prices its
-//! ticks did not carry. And a fill the venue priced has no slippage modelled.
+//! may have closed the position before it reports so. An order whose modification waits
+//! for the venue's answer is judged by its old terms and by its new ones until then. A
+//! bar is judged by the prices its ticks did not carry. And a fill the venue priced has
+//! no slippage modelled.
 //!
 //! 100 SBIN in MIS bought by the venue at 500.10 at the open of minute 1; minute 1's bar
 //! is (500.10, 500.60, 499.60, 500.15) unless a test gives another; the position is sold
@@ -13,12 +15,12 @@
 mod venue_support;
 
 use oa_bt::engine::{Engine, RunOutput, StateValue, TradeRecord, VenueCommand};
-use oa_bt::exec::{OrderId, OrderType};
+use oa_bt::exec::{OrderId, OrderRequest, OrderType};
 use oa_bt::model::Side;
 use oa_bt::rms::{Distance, LegRules, TrailSpec};
 use venue_support::{
-    at_close, at_second, bars, config, exit, holding_with, limit, run_to_end, session, stop_points,
-    wait_before, Act, Script, SBIN,
+    at_close, at_second, bars, config, entry_waiting, exit, holding_with, limit, market, minute,
+    modified, run_to_end, sbin, session, stop_market, stop_points, wait_before, Act, Script, SBIN,
 };
 
 /// The one trade of a session run to its end.
@@ -238,6 +240,17 @@ fn tick_confirmed(kernel: &mut Engine, price: f64, at: i64) {
     }
 }
 
+/// A stop 3 points from the fill that trails 2 points behind the best price.
+fn trailing() -> LegRules {
+    LegRules {
+        trail: Some(TrailSpec {
+            trigger: Distance::Points(2.0),
+            step: None,
+        }),
+        ..stop_points(3.0)
+    }
+}
+
 #[test]
 fn a_bar_its_ticks_carried_counts_though_the_stop_trailed_above_its_low_inside_it() {
     // The broker's stop (o2) starts at 497.10 and trails 2 points behind the best price.
@@ -246,14 +259,7 @@ fn a_bar_its_ticks_carried_counts_though_the_stop_trailed_above_its_low_inside_i
     // move, and its ticks carried its low and high, so it holds nothing back. Minute 2
     // ticks at 506.00 (+590; the stop moves to 504.00) and 503.50, through the stop,
     // which fills at 504.00 (+390).
-    let rules = LegRules {
-        trail: Some(TrailSpec {
-            trigger: Distance::Points(2.0),
-            step: None,
-        }),
-        ..stop_points(3.0)
-    };
-    let mut kernel = holding_with(100.0, rules);
+    let mut kernel = holding_with(100.0, trailing());
     kernel.take_commands();
     for (second, price) in [(1, 499.0), (2, 504.0), (3, 503.0)] {
         tick_confirmed(&mut kernel, price, at_second(1, second));
@@ -275,4 +281,190 @@ fn a_bar_its_ticks_carried_counts_though_the_stop_trailed_above_its_low_inside_i
         .apply_fill(OrderId(2), 100.0, 504.0, at_second(2, 3))
         .expect("the stop fills");
     assert_eq!(excursion(&only_trade(kernel)), (-110.0, 590.0, 390.0));
+}
+
+/// The ticks `ticks` of minute 1, each (second, price).
+fn take_ticks(kernel: &mut Engine, ticks: &[(i64, f64)]) {
+    for (second, price) in ticks {
+        kernel
+            .push_tick(SBIN, *price, at_second(1, *second))
+            .expect("the tick is taken");
+    }
+}
+
+/// 100 SBIN held with the trailing stop (o2) at 497.10, and a tick at 504.00 (+390) one
+/// second into minute 1 that moves it to 502.00: the modification is sent and the venue
+/// has not answered it.
+fn trail_in_flight() -> Engine {
+    let mut kernel = holding_with(100.0, trailing());
+    kernel.take_commands();
+    take_ticks(&mut kernel, &[(1, 504.0)]);
+    let sent = modified(&kernel.take_commands());
+    assert_eq!(sent, [(OrderId(2), 100.0, stop_market(502.0))]);
+    kernel
+}
+
+#[test]
+fn a_tick_through_the_terms_of_a_stops_modification_in_flight_holds_the_trade_back() {
+    // A tick at 501.50 crosses the stop's new trigger, 502.00, before the venue confirms
+    // the move: the venue may have applied it and filled the stop, so neither 501.50 nor
+    // the bounce at 510.00 (+990), before or after the confirmation, counts. The stop
+    // fills at 501.50 (+140); the tick at 504.00 gives the MFE.
+    for bounce_before_confirmation in [false, true] {
+        let mut kernel = trail_in_flight();
+        take_ticks(&mut kernel, &[(2, 501.5)]);
+        if bounce_before_confirmation {
+            take_ticks(&mut kernel, &[(3, 510.0)]);
+        }
+        kernel.apply_modify(OrderId(2)).expect("the venue confirms");
+        if !bounce_before_confirmation {
+            take_ticks(&mut kernel, &[(3, 510.0)]);
+        }
+        kernel
+            .apply_fill(OrderId(2), 100.0, 501.5, at_second(1, 4))
+            .expect("the stop fills");
+        assert_eq!(
+            excursion(&only_trade(kernel)),
+            (0.0, 390.0, 140.0),
+            "bounce before the confirmation: {bounce_before_confirmation}"
+        );
+    }
+}
+
+#[test]
+fn a_tick_between_the_old_and_the_new_trigger_of_a_modification_in_flight_does_not_count() {
+    // A tick at 499.00 (-110), above the stop's old trigger 497.10 and below its new one
+    // 502.00, comes before the venue confirms the move: the stop may have filled already.
+    // The venue confirms, and the stop fills at 501.80 (+170).
+    let mut kernel = trail_in_flight();
+    take_ticks(&mut kernel, &[(2, 499.0)]);
+    kernel.apply_modify(OrderId(2)).expect("the venue confirms");
+    kernel
+        .apply_fill(OrderId(2), 100.0, 501.8, at_second(1, 3))
+        .expect("the stop fills");
+    assert_eq!(excursion(&only_trade(kernel)), (0.0, 390.0, 170.0));
+}
+
+#[test]
+fn a_short_is_held_back_by_the_terms_of_its_stops_modification_in_flight() {
+    // 100 SBIN sold short at 500.10 with the broker's buy stop (o2) at 503.10 trailing 2
+    // points: a tick at 496.00 (+410) moves it to 498.00. A tick at 498.50 crosses 498.00
+    // before the venue confirms the move, so neither it (+160) nor the fall to 490.00
+    // (+1,010) after the confirmation counts. The stop fills at 498.50 (+160).
+    let request = OrderRequest {
+        leg_rules: trailing(),
+        ..market(Side::Sell, 100.0)
+    };
+    let mut kernel = session(config());
+    let mut script = Script::new(vec![at_close(0, Act::Submit(request))]);
+    wait_before(&mut kernel, &bars(&[], &[]), &mut script, 1);
+    kernel.take_commands();
+    kernel
+        .apply_fill(OrderId(1), 100.0, 500.1, minute(1))
+        .expect("the sell fills");
+    kernel.take_commands();
+    take_ticks(&mut kernel, &[(1, 496.0)]);
+    let sent = modified(&kernel.take_commands());
+    assert_eq!(sent, [(OrderId(2), 100.0, stop_market(498.0))]);
+    take_ticks(&mut kernel, &[(2, 498.5)]);
+    kernel.apply_modify(OrderId(2)).expect("the venue confirms");
+    take_ticks(&mut kernel, &[(3, 490.0)]);
+    kernel
+        .apply_fill(OrderId(2), 100.0, 498.5, at_second(1, 4))
+        .expect("the stop fills");
+    assert_eq!(excursion(&only_trade(kernel)), (0.0, 410.0, 160.0));
+}
+
+/// `trail_in_flight` with ticks at 501.50, through the new trigger 502.00, and 506.00
+/// (+590) two and three seconds into minute 1, before the venue answers.
+fn crossed_in_flight() -> Engine {
+    let mut kernel = trail_in_flight();
+    take_ticks(&mut kernel, &[(2, 501.5), (3, 506.0)]);
+    kernel
+}
+
+/// The venue refuses the stop's move (`stop`), then ticks at 505.00 (+490) and 496.00,
+/// through the old trigger 497.10, and the stop fills at 497.10 (-300).
+fn refused_then_stopped(mut kernel: Engine, stop: OrderId) -> TradeRecord {
+    kernel
+        .apply_modify_refused(stop)
+        .expect("the venue refuses");
+    take_ticks(&mut kernel, &[(4, 505.0), (5, 496.0)]);
+    kernel
+        .apply_fill(stop, 100.0, 497.1, at_second(1, 6))
+        .expect("the stop fills");
+    only_trade(kernel)
+}
+
+#[test]
+fn a_refused_modification_leaves_the_trade_judged_by_the_old_terms_again() {
+    // Ticks at 501.50 and 506.00 come while the stop's move to 502.00 is in flight: the
+    // first crosses 502.00, so neither counts. The venue refuses the move: the stop worked
+    // at 497.10 throughout, which neither tick reached, so the trade is judged by 497.10
+    // again: the tick at 505.00 (+490) counts, the one at 496.00 reaches 497.10 and does
+    // not.
+    let trade = refused_then_stopped(crossed_in_flight(), OrderId(2));
+    assert_eq!(excursion(&trade), (-300.0, 490.0, -300.0));
+}
+
+#[test]
+fn a_restart_keeps_a_trade_held_back_by_a_modification_in_flight_until_the_venue_answers() {
+    // As above, with a restart between the tick at 506.00 and the venue's refusal: the
+    // restored session holds the trade back by the move in flight, and the refusal
+    // releases it as it would have without the restart.
+    let saved = crossed_in_flight().live_state();
+    let (kernel, stop) = restored(&saved);
+    let trade = refused_then_stopped(kernel, stop);
+    assert_eq!(excursion(&trade), (-300.0, 490.0, -300.0));
+}
+
+#[test]
+fn a_bar_price_the_ticks_after_a_mid_bar_entry_did_not_carry_holds_the_trade_back() {
+    // The buy (o1) fills at 500.10 thirty seconds into minute 1 and the broker's stop
+    // (o2) works at 497.10. Ticks after the fill at 500.50 (+40) and 501.00 (+90) count.
+    // Minute 1's bar (500.00, 501.00, 496.00, 500.80) has a low the ticks did not carry:
+    // a tick feed does not carry every traded price, and that low may have traded after
+    // the fill, through the stop, as well as before it. So the trade is held back until
+    // the venue reports its closing orders ended: minute 2's ticks at 510.00 (+990),
+    // 520.00 (+1,990) and 500.30, and its bar, count neither while the stop works nor
+    // while the sell (o3) decided at the close of minute 2 works. The sell fills at 500.20
+    // (+10). An under-claim if the low came before the fill, never an over-claim.
+    let mut kernel = entry_waiting(sbin(), 100.0, stop_points(3.0));
+    kernel
+        .apply_fill(OrderId(1), 100.0, 500.1, at_second(1, 30))
+        .expect("the buy fills");
+    kernel.take_commands();
+    for (second, price) in [(31, 500.5), (40, 501.0)] {
+        kernel
+            .push_tick(SBIN, price, at_second(1, second))
+            .expect("the tick is taken");
+    }
+    let minute_1 = (500.0, 501.0, 496.0, 500.8);
+    let sell = Act::Submit(exit(Side::Sell, 100.0, OrderType::Market));
+    let mut script = Script::new(vec![at_close(2, sell)]);
+    wait_before(&mut kernel, &bars(&[(1, minute_1)], &[]), &mut script, 2);
+    for (second, price) in [(10, 510.0), (20, 520.0), (40, 500.3)] {
+        kernel
+            .push_tick(SBIN, price, at_second(2, second))
+            .expect("the tick is taken");
+    }
+    let minute_2 = (500.8, 520.0, 500.3, 500.3);
+    let both = bars(&[(1, minute_1), (2, minute_2)], &[]);
+    wait_before(&mut kernel, &both, &mut script, 3);
+    let cancels = kernel.take_commands();
+    assert!(cancels.contains(&VenueCommand::Cancel { order: OrderId(2) }));
+    kernel.apply_cancel(OrderId(2)).expect("the venue cancels");
+    let sells = kernel.take_commands();
+    assert!(matches!(
+        sells.as_slice(),
+        [VenueCommand::Place {
+            order: OrderId(3),
+            side: Side::Sell,
+            ..
+        }]
+    ));
+    kernel
+        .apply_fill(OrderId(3), 100.0, 500.2, at_second(3, 1))
+        .expect("the sell fills");
+    assert_eq!(excursion(&only_trade(kernel)), (0.0, 90.0, 10.0));
 }

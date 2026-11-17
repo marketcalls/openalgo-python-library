@@ -106,14 +106,15 @@ pub(super) fn read_position(
 }
 
 /// What holds a live trade back (`excursion_hold`): the orders of `book` it waits on
-/// that still work, by id, and the slice of its last ticks with their lowest and highest
-/// price, rupees.
-fn write_hold(book: &OrderBook, hold: &Hold) -> [(&'static str, StateValue); 2] {
+/// that still work, by id (those a price reached by their own terms, and those reached
+/// only by the terms of a modification not answered), and the slice of its last ticks
+/// with their lowest and highest price, rupees.
+fn write_hold(book: &OrderBook, hold: &Hold) -> [(&'static str, StateValue); 3] {
     let works = |id: &&OrderId| {
         book.get(**id)
             .is_some_and(|order| order.status.is_working())
     };
-    let unconfirmed = hold.unconfirmed_closes.iter().filter(works);
+    let ids = |orders: &[OrderId]| list(orders.iter().filter(works), |id| StateValue::from(id.0));
     let ticks = hold.ticks.map_or(StateValue::Null, |ticks| {
         map([
             ("slice", ticks.slice.into()),
@@ -122,10 +123,8 @@ fn write_hold(book: &OrderBook, hold: &Hold) -> [(&'static str, StateValue); 2] 
         ])
     });
     [
-        (
-            "unconfirmed_close_orders",
-            list(unconfirmed, |id| StateValue::from(id.0)),
-        ),
+        ("unconfirmed_close_orders", ids(&hold.unconfirmed_closes)),
+        ("pending_close_orders", ids(&hold.pending_closes)),
         ("slice_ticks", ticks),
     ]
 }
@@ -141,12 +140,15 @@ fn read_hold(read: &Read<'_>, ids: &Ids) -> Result<Hold, LiveStateError> {
             high_rupees: ticks.f64_of("high_rupees")?,
         })
     };
-    Ok(Hold {
-        unconfirmed_closes: read
-            .items_of("unconfirmed_close_orders")?
+    let orders = |field: &str| -> Result<Vec<OrderId>, LiveStateError> {
+        read.items_of(field)?
             .iter()
             .map(|order| ids.working(order))
-            .collect::<Result<_, _>>()?,
+            .collect()
+    };
+    Ok(Hold {
+        unconfirmed_closes: orders("unconfirmed_close_orders")?,
+        pending_closes: orders("pending_close_orders")?,
         ticks: read.maybe("slice_ticks")?.map(read_ticks).transpose()?,
     })
 }
@@ -157,7 +159,7 @@ fn read_hold(read: &Read<'_>, ids: &Ids) -> Result<Hold, LiveStateError> {
 pub(super) fn write_open_trade(book: &OrderBook, trade: &OpenTrade) -> StateValue {
     let [instrument, product] = key_fields(trade.key);
     let excursion = &trade.excursion;
-    let [unconfirmed, ticks] = write_hold(book, &excursion.hold);
+    let [unconfirmed, pending, ticks] = write_hold(book, &excursion.hold);
     map([
         instrument,
         product,
@@ -176,6 +178,7 @@ pub(super) fn write_open_trade(book: &OrderBook, trade: &OpenTrade) -> StateValu
         ("best_rupees", excursion.best_rupees.into()),
         ("inside_fill_slice", excursion.inside_fill_slice.into()),
         unconfirmed,
+        pending,
         ticks,
         ("slippage_rupees", trade.slippage.into()),
     ])
@@ -271,6 +274,7 @@ mod tests {
                 inside_fill_slice: Some(40),
                 hold: Hold {
                     unconfirmed_closes: Vec::new(),
+                    pending_closes: Vec::new(),
                     ticks: Some(SliceTicks {
                         slice: 41,
                         low_rupees: 501.2,
@@ -294,8 +298,9 @@ mod tests {
 
     #[test]
     fn an_order_that_held_a_trade_back_and_has_ended_is_not_saved() {
-        // The trade waits on o7, which the book no longer has working: nothing holds it
-        // back after a restart.
+        // The trade waits on o7, reached by its own terms, and on o8, reached by the terms
+        // of its modification; the book has neither working: nothing holds it back after a
+        // restart.
         let trade = OpenTrade {
             key: PositionKey {
                 instrument: InstrumentId(0),
@@ -315,6 +320,7 @@ mod tests {
             excursion: Excursion {
                 hold: Hold {
                     unconfirmed_closes: vec![OrderId(7)],
+                    pending_closes: vec![OrderId(8)],
                     ticks: None,
                 },
                 ..Excursion::default()
@@ -324,6 +330,6 @@ mod tests {
         let value = write_open_trade(&OrderBook::default(), &trade);
         let read = read_open_trade(&Read::root(&value), 1, &Ids { pairs: Vec::new() });
         let restored = read.expect("the trade reads back");
-        assert_eq!(restored.excursion.hold.unconfirmed_closes, Vec::new());
+        assert_eq!(restored.excursion.hold, Hold::default());
     }
 }

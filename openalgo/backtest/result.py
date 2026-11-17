@@ -145,9 +145,12 @@ class Result(AnalysisMethods, ExportMethods):
         the lowest and highest running P&L the trade showed before charges, at prices
         known to have traded while it was open, and `mae_pct` and `mfe_pct` the same in
         percent of its largest capital at work (entry price x largest quantity held x
-        multiplier; `_result_excursion`). `slippage_rupees` is what slippage cost its
-        fills (`fills`), NaN when a fill had none modelled; it is already in the gross
-        P&L."""
+        multiplier; `_result_excursion`). In a live session, once a price may have reached
+        one of the trade's closing orders (a stop, a target, an exit sent), only its fills
+        count until the venue reports those orders ended, so the two can read smaller than
+        the prices the trade went through, never larger. `slippage_rupees` is what
+        slippage cost its fills (`fills`), NaN when a fill had none modelled; it is
+        already in the gross P&L."""
         frame = self._table("trades", None)
         frame.insert(1, "entry_time", ist_times(frame["entry_ts"]))
         frame.insert(2, "exit_time", ist_times(frame["exit_ts"]))

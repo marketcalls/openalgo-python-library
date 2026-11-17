@@ -13,12 +13,35 @@
 //! come after the position was closed. The order's fill, once reported, counts at its own
 //! price.
 //!
+//! An order whose modification has been sent and not answered (`VenueDesk::modifying`: a
+//! trail or a breakeven moving a broker-held stop, a reprice) may already work on its new
+//! terms at the venue, so it is judged by its working terms and by those of the
+//! modification, and it is reached when either is. Reached by the new terms alone, it
+//! holds the trade back until the venue answers (`Hold::pending_closes`): a confirmation
+//! keeps the hold, since the new terms were working; a refusal releases it, since the
+//! order kept its old terms throughout and no price judged reached them (the prices it
+//! has not judged yet, such as the bar's, are judged by them in their turn). After the
+//! answer only the terms then working count.
+//!
 //! A tick is judged against the orders' terms when it is taken. A bar is handed over
 //! after its minute, when the kernel may have moved the broker's stop on the minute's
 //! ticks (a trail, a breakeven) after its low or high traded, so a bar is judged only by
 //! the prices the trade's ticks of the slice did not carry: its low when below every one
 //! of them, its high when above every one, its low and high when it took none. A bar the
 //! ticks carried counts unless the trade is held back already.
+//!
+//! # Why a hold lasts until the orders end
+//!
+//! Save by the refusal above, a hold is not released when the price comes back, nor by
+//! a later price that suggests the trade was still open: a broker's tick feed does not
+//! carry every traded price, so a price of a bar that the trade's ticks did not carry may
+//! have come after the entry and reached the stop, and releasing the hold could claim an
+//! excursion the trade did not see. The cost falls on the safe side: a live trade held
+//! back on a bar keeps the excursion of its fills only (besides the prices it saw before
+//! the hold) until the venue reports its closing orders ended. A trade entered inside a
+//! bar shows it most: a low or high of that bar that traded before the entry, when the
+//! trade had no stop, still holds it back, so its live MAE and MFE can read smaller than
+//! the prices it went through.
 //!
 //! A backtest records its fills in steps 2 and 3, before the bar is seen in step 5, and
 //! takes no ticks: it holds nothing back.
@@ -31,6 +54,11 @@ use crate::rms::BarPrices;
 use super::clock::SliceInfo;
 use super::excursion::Holding;
 use super::kernel::Engine;
+use super::venue::Replacement;
+
+/// A live session's order book and the modifications of its orders sent and not
+/// answered (`VenueDesk::modifying`), as a hold judges a price against them.
+pub(super) type Orders<'a> = (&'a OrderBook, &'a [(OrderId, Replacement)]);
 
 /// The lowest and highest ticks a trade took in one slice, rupees.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -41,11 +69,14 @@ pub(super) struct SliceTicks {
 }
 
 /// What holds a live session's trade back (module docs): the orders on its closing side
-/// that a price has reached and that the venue has not reported ended, and the ticks it
-/// took in the last slice it took one in.
+/// that a price has reached by their working terms and that the venue has not reported
+/// ended; those a price has reached only by the terms of their modification the venue
+/// has not answered; and the ticks it took in the last slice it took one in. An order is
+/// in one list at most.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct Hold {
     pub(super) unconfirmed_closes: Vec<OrderId>,
+    pub(super) pending_closes: Vec<OrderId>,
     pub(super) ticks: Option<SliceTicks>,
 }
 
@@ -82,38 +113,71 @@ impl Hold {
     }
 
     /// Whether the trade on `key`, `long` or short, is held back (module docs) once
-    /// `prices` are judged against the working orders of `book`: the orders it waits on
-    /// that have ended are dropped, the working orders on its closing side that one of
-    /// `prices` reaches are added.
+    /// `prices` are judged against the working orders of the book and the terms of their
+    /// modifications not answered (`orders`): the orders it waits on that have ended are
+    /// dropped; a working order on its closing side that one of `prices` reaches by its
+    /// own terms is added to the unconfirmed closes, one reached only by the terms of its
+    /// modification to the pending closes.
     pub(super) fn held_back(
         &mut self,
-        book: &OrderBook,
+        (book, modifying): Orders<'_>,
         (key, long): (PositionKey, bool),
         prices: &[f64],
     ) -> bool {
         let works = |id: &OrderId| book.get(*id).is_some_and(|order| order.status.is_working());
         self.unconfirmed_closes.retain(works);
+        self.pending_closes.retain(works);
         for order in book.working() {
             let request = &order.request;
-            let reached = request.instrument == key.instrument
-                && request.product == key.product
-                && prices
+            if request.instrument != key.instrument || request.product != key.product {
+                continue;
+            }
+            let reached = |terms: OrderType| {
+                prices
                     .iter()
-                    .any(|price| could_have_closed(order, long, *price));
-            if reached && !self.unconfirmed_closes.contains(&order.id) {
-                self.unconfirmed_closes.push(order.id);
+                    .any(|price| could_have_closed(order, terms, long, *price))
+            };
+            let pending = modifying.iter().find(|(id, _)| *id == order.id);
+            if reached(request.order_type) {
+                self.pending_closes.retain(|id| *id != order.id);
+                add_once(&mut self.unconfirmed_closes, order.id);
+            } else if pending.is_some_and(|(_, wanted)| reached(wanted.request.order_type))
+                && !self.unconfirmed_closes.contains(&order.id)
+            {
+                add_once(&mut self.pending_closes, order.id);
             }
         }
-        !self.unconfirmed_closes.is_empty()
+        !(self.unconfirmed_closes.is_empty() && self.pending_closes.is_empty())
+    }
+
+    /// The venue answered the modification of `order`, `confirmed` or refused (module
+    /// docs): a hold by its new terms alone stays when it was confirmed, and ends when it
+    /// was refused.
+    fn answered(&mut self, order: OrderId, confirmed: bool) {
+        let Some(at) = self.pending_closes.iter().position(|id| *id == order) else {
+            return;
+        };
+        self.pending_closes.remove(at);
+        if confirmed {
+            add_once(&mut self.unconfirmed_closes, order);
+        }
     }
 }
 
-/// Whether the working `order` may have closed part of a position that is long (`long`)
+/// `id` added to `ids` unless they have it.
+fn add_once(ids: &mut Vec<OrderId>, id: OrderId) {
+    if !ids.contains(&id) {
+        ids.push(id);
+    }
+}
+
+/// Whether the working `order`, priced as `terms` (its own order type, or that of its
+/// modification not answered), may have closed part of a position that is long (`long`)
 /// or short by the time the market traded at `price_rupees` (module docs): an order on
 /// the closing side that is MARKET, a limit the price reached, or a stop whose trigger the
 /// price reached or that has triggered already (a stop-limit is counted as soon as its
 /// trigger is reached, since the price may have passed its limit on the way).
-fn could_have_closed(order: &Order, long: bool, price_rupees: f64) -> bool {
+fn could_have_closed(order: &Order, terms: OrderType, long: bool, price_rupees: f64) -> bool {
     let closing_side = if long { Side::Sell } else { Side::Buy };
     if order.request.side != closing_side {
         return false;
@@ -136,7 +200,7 @@ fn could_have_closed(order: &Order, long: bool, price_rupees: f64) -> bool {
             price_rupees >= trigger
         }
     };
-    match order.request.order_type {
+    match terms {
         OrderType::Market => true,
         OrderType::Limit { limit_rupees } => reached_limit(limit_rupees),
         OrderType::StopMarket { trigger_rupees } | OrderType::StopLimit { trigger_rupees, .. } => {
@@ -161,11 +225,21 @@ impl Engine {
             let hold = &mut trade.excursion.hold;
             hold.take_tick(index, price);
             let side = (trade.key, position.quantity_units > 0.0);
-            if hold.held_back(&self.book, side, &[price]) {
+            let orders = (&self.book, self.venue.modifying.as_slice());
+            if hold.held_back(orders, side, &[price]) {
                 continue;
             }
             let held = (Holding::of(position), position.multiplier);
             trade.excursion.see_price(price, held, trade.gross);
+        }
+    }
+
+    /// The venue answered the modification of `order`, `confirmed` or refused: every open
+    /// trade held back by its new terms alone keeps the hold or is released from it
+    /// (`Hold::answered`).
+    pub(super) fn hold_on_modify_answer(&mut self, order: OrderId, confirmed: bool) {
+        for trade in &mut self.record.trades.open {
+            trade.excursion.hold.answered(order, confirmed);
         }
     }
 }
@@ -259,7 +333,12 @@ mod tests {
         ];
         for (what, side, order_type, status, long, price, closed) in table {
             let order = working(side, order_type, status);
-            assert_eq!(could_have_closed(&order, long, price), closed, "{what}");
+            let terms = order.request.order_type;
+            assert_eq!(
+                could_have_closed(&order, terms, long, price),
+                closed,
+                "{what}"
+            );
         }
     }
 
@@ -279,6 +358,7 @@ mod tests {
         for (ticks, judged) in table {
             let hold = Hold {
                 unconfirmed_closes: Vec::new(),
+                pending_closes: Vec::new(),
                 ticks: ticks.map(|(slice, low_rupees, high_rupees)| SliceTicks {
                     slice,
                     low_rupees,
@@ -387,7 +467,11 @@ mod tests {
             let mut book = OrderBook::default();
             book.insert(order).expect("o1 is the first order");
             let mut hold = Hold::default();
-            assert_eq!(hold.held_back(&book, (key, long), &prices), held, "{what}");
+            assert_eq!(
+                hold.held_back((&book, &[]), (key, long), &prices),
+                held,
+                "{what}"
+            );
         }
     }
 
@@ -409,9 +493,57 @@ mod tests {
         let mut book = OrderBook::default();
         book.insert(order).expect("o1 is the first order");
         let mut hold = Hold::default();
-        assert!(hold.held_back(&book, (key, true), &[496.0]));
-        assert!(hold.held_back(&book, (key, true), &[505.0]));
-        assert!(hold.held_back(&book, (key, true), &[]));
+        assert!(hold.held_back((&book, &[]), (key, true), &[496.0]));
+        assert!(hold.held_back((&book, &[]), (key, true), &[505.0]));
+        assert!(hold.held_back((&book, &[]), (key, true), &[]));
         assert_eq!(hold.unconfirmed_closes, vec![OrderId(1)]);
+    }
+
+    #[test]
+    fn a_price_reaching_only_a_modification_not_answered_holds_the_trade_until_the_answer() {
+        // The long's stop (o1) works at 497.10 and its move to 502.00 waits for the
+        // venue's answer. A price of 501.50 reaches only the new trigger and holds the
+        // trade back; after the answer a price of 505.00 reaches neither trigger. The
+        // confirmation keeps the hold, the refusal ends it. A price of 497.00 reaches the
+        // working trigger too, and the hold stays whatever the answer.
+        use crate::exec::OrderRequest;
+        let stop_at = |trigger_rupees| OrderType::StopMarket { trigger_rupees };
+        let table = [
+            (501.5, true, true),
+            (501.5, false, false),
+            (497.0, false, true),
+        ];
+        for (price, confirmed, held_after) in table {
+            let order = working(Side::Sell, stop_at(497.1), OrderStatus::Accepted);
+            let key = PositionKey {
+                instrument: order.request.instrument,
+                product: order.request.product,
+            };
+            let moved = OrderRequest {
+                order_type: stop_at(502.0),
+                ..order.request.clone()
+            };
+            let in_flight = [(
+                OrderId(1),
+                Replacement {
+                    request: moved.clone(),
+                    decided_at: 0,
+                    good_until: 0,
+                    units: 100.0,
+                },
+            )];
+            let mut book = OrderBook::default();
+            book.insert(order).expect("o1 is the first order");
+            let mut hold = Hold::default();
+            let before = hold.held_back((&book, &in_flight), (key, true), &[price]);
+            assert!(before, "{price}");
+            if confirmed {
+                book.replace(OrderId(1), moved, 0, 0, 100.0)
+                    .expect("o1 takes the new terms");
+            }
+            hold.answered(OrderId(1), confirmed);
+            let after = hold.held_back((&book, &[]), (key, true), &[505.0]);
+            assert_eq!(after, held_after, "{price}, confirmed: {confirmed}");
+        }
     }
 }

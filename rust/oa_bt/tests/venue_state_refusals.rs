@@ -201,8 +201,8 @@ fn a_state_that_cannot_be_read_is_refused_whole_naming_the_field() {
     let table = [
         (
             "another layout",
-            with(&state, &["layout"], 3i64.into()),
-            "version 3",
+            with(&state, &["layout"], 4i64.into()),
+            "version 4",
         ),
         (
             "a part missing",
@@ -390,9 +390,12 @@ const OPEN_TRADE_FIELDS_OF_LAYOUT_2: [&str; 6] = [
     "slice_ticks",
 ];
 
-#[test]
-fn a_state_of_the_layout_before_the_excursions_is_refused_as_another_version() {
-    // The saved state as layout 1 wrote it: its open trade without the fields of layout 2.
+/// The field an open trade gained in layout 3: the closing orders a price has reached
+/// only by the terms of a modification the venue has not answered.
+const OPEN_TRADE_FIELD_OF_LAYOUT_3: &str = "pending_close_orders";
+
+/// The saved state as layout `layout` wrote it: its open trade without `fields`.
+fn as_layout(layout: i64, fields: &[&str]) -> StateValue {
     let state = saved();
     let StateValue::Map(entries) = &state else {
         panic!("the state is a map");
@@ -401,11 +404,25 @@ fn a_state_of_the_layout_before_the_excursions_is_refused_as_another_version() {
     let Some((_, StateValue::List(trades))) = trades else {
         panic!("the state has its open trades");
     };
-    let trade = OPEN_TRADE_FIELDS_OF_LAYOUT_2
+    let trade = fields
         .iter()
         .fold(trades[0].clone(), |trade, field| without(&trade, field));
     let earlier = with(&state, &["open_trades", "0"], trade);
-    let earlier = with(&earlier, &["layout"], 1i64.into());
+    with(&earlier, &["layout"], layout.into())
+}
+
+#[test]
+fn a_state_of_the_layout_before_the_excursions_is_refused_as_another_version() {
+    let mut fields = OPEN_TRADE_FIELDS_OF_LAYOUT_2.to_vec();
+    fields.push(OPEN_TRADE_FIELD_OF_LAYOUT_3);
     let mut kernel = restarted_at(config(), 2);
+    let earlier = as_layout(1, &fields);
     assert_eq!(kind(kernel.restore_live_state(&earlier)), "version 1");
+}
+
+#[test]
+fn a_state_of_the_layout_before_the_holds_by_a_modification_is_refused_as_another_version() {
+    let mut kernel = restarted_at(config(), 2);
+    let earlier = as_layout(2, &[OPEN_TRADE_FIELD_OF_LAYOUT_3]);
+    assert_eq!(kind(kernel.restore_live_state(&earlier)), "version 2");
 }

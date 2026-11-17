@@ -101,8 +101,10 @@ use value::{list, map, Read};
 
 /// The layout of the saved state this kernel writes and reads; a state of another layout
 /// is refused (`LiveStateError::Version`). Layout 2 added to each open trade its excursion
-/// and slippage so far and the orders that hold its excursion back (`excursion`).
-pub const LIVE_STATE_LAYOUT: i64 = 2;
+/// and slippage so far and the orders that hold its excursion back (`excursion`); layout
+/// 3 the orders that hold it back by the terms of a modification the venue has not
+/// answered, which its refusal releases (`excursion_hold`).
+pub const LIVE_STATE_LAYOUT: i64 = 3;
 
 /// A saved state read whole, before any of it is applied.
 struct Saved {

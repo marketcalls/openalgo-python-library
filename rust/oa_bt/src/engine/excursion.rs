@@ -276,7 +276,8 @@ impl Engine {
                 let side = (trade.key, position.quantity_units > 0.0);
                 let hold = &mut trade.excursion.hold;
                 let unseen = hold.beyond_ticks(index, &bar);
-                if hold.held_back(&self.book, side, &unseen) {
+                let orders = (&self.book, self.venue.modifying.as_slice());
+                if hold.held_back(orders, side, &unseen) {
                     continue;
                 }
             }
