@@ -1,7 +1,8 @@
 """The "Overfitting checks" section of the tearsheet (full and basic modes): the quick
 checks of the run's trade list (random out of sample, trade reshuffle, trade resample
 and variance, `openalgo.backtest._robust._quick`), their scorecard with how many passed,
-failed and were not judged and the wording rule, the trade count they need, and a line
+failed and were not judged and how to read a quick check's verdict (what a failure of
+the trade list shows, and what it cannot see), the trade count they need, and a line
 pointing to `result.robustness()` for the full set. They are those the run already
 computed (`View.overfitting`, a `Result`'s), else computed from the `Performance` the
 page shows; they change none of its figures.
@@ -15,7 +16,7 @@ def overfitting(view: View) -> Section | None:
     """The section, or None when the mode does not show it."""
     if not view.has("overfitting_checks"):
         return None
-    from ..._robust._quick import POINTER, quick_checks
+    from ..._robust._quick import POINTER, QUICK_READING, quick_checks
     from ..._robust._scorecard import lead, table
     from ..._robust._trade_common import MIN_TRADES
 
@@ -31,7 +32,7 @@ def overfitting(view: View) -> Section | None:
         f"seed {quick.seed}"
     )
     body = (
-        lead(quick.counts())
+        lead(quick.counts(), QUICK_READING)
         + f"<p class='key'>{fmt.text(trades)}</p>"
         + table(quick.rows())
         + f"<p class='key'>{fmt.text(POINTER)}.</p>"

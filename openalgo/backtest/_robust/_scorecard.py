@@ -46,14 +46,13 @@ def counts_line(counts: Mapping[str, int], always: tuple[str, ...] = ()) -> str:
     return ", ".join(shown)
 
 
-def lead(counts: Mapping[str, int]) -> str:
+def lead(counts: Mapping[str, int], reading: str = WORDING_RULE) -> str:
     """The scorecard's top line, as HTML: how many checks passed, failed and were not
-    judged (zeros included; the other verdicts when any had them), and the wording
-    rule."""
+    judged (zeros included; the other verdicts when any had them), and how to read the
+    verdicts (`reading`: the wording rule of the full report by default)."""
     told = counts_line(counts, always=(PASSED, FAILED, NOT_JUDGED))
     return (
-        f"<p class='lead'><b>{fmt.text(told)}.</b></p>"
-        f"<p class='lead muted'>{fmt.text(WORDING_RULE)}</p>"
+        f"<p class='lead'><b>{fmt.text(told)}.</b></p><p class='lead muted'>{fmt.text(reading)}</p>"
     )
 
 

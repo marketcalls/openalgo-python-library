@@ -6,6 +6,13 @@ alone, with no rerun. They never change a figure of the run.
 The standard tearsheet shows them in its "Overfitting checks" section, `Result.summary()`
 in one line, and `Result.warnings` with a line for each one that fails. A run with fewer
 closed trades than the checks need says "too few trades to judge" instead.
+
+What a quick check's verdict means (`QUICK_READING`): these checks read the run's own
+trades, so a failure says the edge is fragile or small next to the noise of those
+trades, and none of them can see a strategy picked as the best of many tried. At their
+default rules an honest edge with an annual Sharpe ratio near 1 over a few years fails
+random out of sample and variance more often than not, so their failure is not worded
+as strong evidence of overfitting, the reading of the full report's checks.
 """
 
 from __future__ import annotations
@@ -25,6 +32,13 @@ from ._verdict import FAILED, CheckResult
 QUICK_RUNS = 200
 #: Where the full set of checks is.
 POINTER = "result.robustness() runs the full set of checks, with charts"
+#: How to read the quick checks' verdicts (module docstring).
+QUICK_READING = (
+    "Passing proves nothing on its own. These checks read the run's own trades: a failure "
+    "says the edge is fragile or small next to the noise of those trades, and none of them "
+    "can see a strategy picked as the best of many tried. A check with too little to judge "
+    "says not judged and why, and never passes."
+)
 
 
 @dataclass(frozen=True, eq=False)
@@ -64,10 +78,12 @@ class QuickChecks:
         return f"quick checks: {counted}; see result.robustness()"
 
     def warnings(self) -> list[str]:
-        """A line for `Result.warnings` for each quick check that failed."""
+        """A line for `Result.warnings` for each quick check that failed, saying what a
+        failure of the trade list shows (`QUICK_READING`)."""
         return [
             f"Overfitting check failed, {result.title.lower()}: {result.figure}, where the rule "
-            f"is {result.rule}. Failing a check is strong evidence of overfitting; {POINTER}"
+            f"is {result.rule}. The edge is fragile or small next to the noise of the run's "
+            f"own trades; {POINTER}"
             for result in self.failed()
         ]
 
@@ -100,4 +116,4 @@ def quick_checks(
     return QuickChecks(results, trades.closed, runs, seed)
 
 
-__all__ = ["POINTER", "QUICK_RUNS", "QuickChecks", "quick_checks"]
+__all__ = ["POINTER", "QUICK_READING", "QUICK_RUNS", "QuickChecks", "quick_checks"]

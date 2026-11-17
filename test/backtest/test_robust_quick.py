@@ -18,7 +18,9 @@ from test_report_tearsheet import section_ids
 
 import openalgo.backtest as bt
 from openalgo.backtest import report
-from openalgo.backtest._robust._quick import quick_checks
+from openalgo.backtest._robust._quick import QUICK_READING, quick_checks
+from openalgo.backtest._robust._verdict import WORDING_RULE
+from openalgo.backtest.report._format import text as fmt_text
 
 FAILED_SMALL_EDGE = ("random out of sample", "trade resample", "variance")
 
@@ -90,6 +92,24 @@ def test_a_quick_check_that_fails_adds_a_warning(small_edge):
         f"Overfitting check failed, {title}" for title in FAILED_SMALL_EDGE
     ]
     assert all("result.robustness() runs the full set" in line for line in added)
+
+
+def test_a_failed_quick_check_says_the_edge_is_fragile_not_that_it_was_overfitted(small_edge):
+    # The trade-list checks fail an honest edge whose Sharpe ratio is near 1 more often
+    # than not; their failure shows an edge small next to its own noise.
+    added = [line for line in small_edge.warnings if line.startswith("Overfitting check failed")]
+    assert all(
+        "The edge is fragile or small next to the noise of the run's own trades" in line
+        for line in added
+    )
+    assert not [line for line in added if "strong evidence of overfitting" in line]
+
+
+def test_the_section_says_what_the_trade_list_checks_cannot_see(small_edge):
+    section = overfitting_section(small_edge.tearsheet())
+    assert fmt_text(QUICK_READING) in section
+    assert "none of them can see a strategy picked as the best of many tried" in QUICK_READING
+    assert fmt_text(WORDING_RULE) not in section
 
 
 def test_a_run_with_no_edge_says_so_and_adds_no_overfitting_warning(no_edge):
