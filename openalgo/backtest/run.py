@@ -245,8 +245,8 @@ def live(
         max_positions, drawdown_halt, cooldown, round_levels, strict_config: as in
         `bt.backtest`, with the same defaults. `costs` models the charges of the broker's
         fills, since its trade book carries none.
-    live_dir: the folder of the accounts' journals, logs and locks (default: the
-        OPENALGO_LIVE_DIR environment variable, else a folder under the home folder).
+    live_dir: the absolute folder of the accounts' journals, logs and locks (default: the
+        OPENALGO_LIVE_DIR environment variable, else ~/.openalgo/live).
     on_stop: what Ctrl+C does with open positions: "flatten" (exit them, then stop) or
         "keep" (leave them with their stops at the broker).
 
@@ -262,11 +262,12 @@ def live(
     yet (condition strategies, signal and array strategies, several symbols or a
     universe, futures series, daily or longer intervals, CNC and NRML, two strategies on
     one symbol or with one name, bars from broker candles), saying what to do instead;
-    PreflightError, listing every check that failed; LiveError when OpenAlgo does not
-    report its mode, the account is in use by another session, the call is not on the
-    main thread (Ctrl+C reaches only the main thread), the feed does not connect, or a
-    restart cannot resume today's positions; JournalError when the journal cannot be
-    used; and the strategy's own exception, after the session has stopped safely.
+    PreflightError, listing every check that failed (another session holding the
+    account or the server among them); LiveError when OpenAlgo does not report its mode,
+    the call is not on the main thread (Ctrl+C reaches only the main thread), the feed
+    does not connect, or a restart cannot resume today's positions; JournalError when the
+    journal cannot be used; and the strategy's own exception, after the session has
+    stopped safely.
     """
     arguments = {
         name: value
