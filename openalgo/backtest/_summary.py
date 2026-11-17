@@ -4,6 +4,7 @@
     Return       : 4.00%
     Max drawdown : -0.97%
     Trades       : 11 (36% won)
+    Overfitting  : too few trades to judge (11 closed, 30 needed)
     Benchmark    : 3.52% return (NIFTY)
 
 Net profit is rupees with Indian digit grouping (`report._format.indian_digits`; a loss
@@ -14,7 +15,10 @@ unless that would read 0% or 100% for a rate that is neither (then with the fewe
 decimals that do not: "0.4% won" for 1 winner in 250). It is undefined (NaN) for a run
 with no closed trade, such as a buy-and-hold or rebalanced portfolio or a run whose
 entries were all rejected or skipped; the line then says "no closed trades" instead.
-Positions still open at the end are counted beside the closed trades. The benchmark line
+Positions still open at the end are counted beside the closed trades. The overfitting line
+is the quick overfitting checks of the trade list (`_robust._quick`): "too few trades to
+judge" below the closed trades they need, else how many passed, failed or were
+informational, the failed ones named. The benchmark line
 is there only for a run with `benchmark=`: the benchmark's total return
 (`benchmark_total_return`), named by its index symbol, or "given closes" for closes given
 as a Series or DataFrame. A figure that is undefined reads "n/a".
@@ -68,15 +72,17 @@ def _trades(metrics: Mapping[str, Any]) -> str:
     return f"{text}, {still_open} still open" if closed else f"{text} ({still_open} still open)"
 
 
-def summary_text(metrics: Mapping[str, Any], benchmark: str | None) -> str:
+def summary_text(metrics: Mapping[str, Any], benchmark: str | None, overfitting: str) -> str:
     """The summary of the module docstring, one line per figure. `metrics` is
     `Result.metrics`; `benchmark` the run's benchmark as `_result_report.benchmark_name`
-    names it (None without one)."""
+    names it (None without one); `overfitting` the quick checks' line
+    (`QuickChecks.summary_line`)."""
     lines = [
         ("Net profit", _rupees(metrics["net_profit"])),
         ("Return", _percent(metrics["total_return"], 2)),
         ("Max drawdown", _percent(metrics["max_drawdown"], 2)),
         ("Trades", _trades(metrics)),
+        ("Overfitting", overfitting),
     ]
     if benchmark is not None:
         name = GIVEN_CLOSES if benchmark == GIVEN_BENCHMARK else benchmark

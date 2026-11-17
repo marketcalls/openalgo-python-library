@@ -69,12 +69,16 @@ def tearsheet(
                    `openalgo.backtest.Result.trade_list` with its MAE and MFE, sortable
                    and paged; the charges by component with the slippage and the
                    trading cost under their total; the R-multiples when a closed trade
-                   has an initial risk); Strategies (when given); Notes (how the
-                   figures were computed, the assumptions and warnings)
+                   has an initial risk); Overfitting checks (the quick checks of the
+                   trade list, `openalgo.backtest._robust._quick`: random out of
+                   sample, trade reshuffle, trade resample and variance at 200 runs,
+                   scored, or "too few trades to judge" below 30 closed trades);
+                   Strategies (when given); Notes (how the figures were computed, the
+                   assumptions and warnings)
         "basic"    the overview, cumulative return and period returns, the drawdown
                    chart and worst drawdowns, the monthly heatmap and yearly returns,
                    the trades, the trading cost, the MAE and MFE histograms and the
-                   charges, and the notes
+                   charges, the overfitting checks, and the notes
         "metrics"  every metric with its value and definition, and the assumptions
         "charts"   every chart and nothing else, the MAE and MFE histograms and
                    scatter charts included

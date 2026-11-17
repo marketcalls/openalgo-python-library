@@ -41,6 +41,7 @@ PARTS = {
         "costs",
         "r_multiples",
     ),
+    "overfitting": ("overfitting_checks",),
     "strategies": ("strategies",),
     "notes": ("method", "assumptions"),
 }
@@ -63,6 +64,7 @@ MODE_PARTS = {
             "excursion_histograms",
             "trade_table",
             "costs",
+            "overfitting_checks",
             "method",
             "assumptions",
         }

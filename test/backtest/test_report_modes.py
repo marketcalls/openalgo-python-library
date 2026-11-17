@@ -18,7 +18,7 @@ from openalgo.backtest.metrics import DEFINITIONS, GROUPS
 IST = "Asia/Kolkata"
 FORBIDDEN = ("http://", "https://", "@import", "url(http", "<link", "<iframe", "<img", "src=")
 MODE_SECTIONS = {
-    "basic": ["overview", "performance", "risk", "monthly", "trades", "notes"],
+    "basic": ["overview", "performance", "risk", "monthly", "trades", "overfitting", "notes"],
     "metrics": ["metrics", "notes"],
     # The trades' MAE and MFE charts, or the one line that says there are none.
     "charts": ["performance", "risk", "monthly", "distribution", "trades"],

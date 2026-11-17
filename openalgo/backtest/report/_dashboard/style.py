@@ -242,6 +242,29 @@ background:color-mix(in oklab,var(--pnl-pos) 10%,transparent)}
 .prose p+p{margin-top:8px}
 """
 
+#: The verdicts of the overfitting checks, and the fans, histograms and marks of the
+#: robustness report: the verdict is a word first, its colour only repeats it.
+_CHECKS = """
+.verdict{font-weight:600;white-space:nowrap}
+.verdict.passed{color:var(--pnl-pos)}.verdict.failed{color:var(--pnl-neg)}
+.verdict.quiet{color:var(--text-muted)}
+.lead{font-size:.875rem;line-height:1.4rem;color:var(--text)}
+.lead+.lead{margin-top:6px}
+.key{margin-top:8px;font-size:.75rem;line-height:1.1rem;color:var(--text-muted)}
+.tbl td.wrap{white-space:normal;min-width:10rem}
+svg.bars .fan-outer{fill:var(--benchmark);fill-opacity:.12}
+svg.bars .fan-inner{fill:var(--benchmark);fill-opacity:.24}
+svg.bars .fan-path{fill:none;stroke:var(--text-faint);stroke-width:.6;stroke-opacity:.5}
+svg.bars .fan-median{fill:none;stroke:var(--benchmark);stroke-width:1.5;stroke-dasharray:5 4}
+svg.bars .fan-real,svg.bars .run-line{fill:none;stroke:var(--text);stroke-linejoin:round}
+svg.bars .fan-real{stroke-width:2.6}svg.bars .run-line{stroke-width:1.6}
+svg.bars .hist-bar{fill:var(--text-faint);fill-opacity:.6}
+svg.bars .mark-real{stroke:var(--text);stroke-width:2.4}
+svg.bars .mark-limit{stroke:var(--pnl-neg);stroke-width:1.6;stroke-dasharray:6 4}
+svg.bars .mark-reference{stroke:var(--text-muted);stroke-width:1.2;stroke-dasharray:2 3}
+svg.bars .held-out{fill:var(--benchmark);fill-opacity:.2}
+"""
+
 _PRINT = """
 @media print{html,body,*{-webkit-print-color-adjust:exact!important;
 print-color-adjust:exact!important}
@@ -263,7 +286,7 @@ def stylesheet() -> str:
         f":root[data-theme=dark]{{{dark}color-scheme:dark}}"
     )
     charts = _CHARTS.replace("@AXIS@", str(VALUE_AXIS_PX)).replace("@TIME@", str(TIME_AXIS_PX))
-    return themes + _BASE + _HEADER + _MAIN + charts + _TABLES + _PRINT
+    return themes + _BASE + _HEADER + _MAIN + charts + _TABLES + _CHECKS + _PRINT
 
 
 __all__ = ["DARK", "LIGHT", "stylesheet"]
