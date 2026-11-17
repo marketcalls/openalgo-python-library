@@ -1,15 +1,17 @@
 """The common close of a live session (16-session-design 3.3 step 5, 3.5, 1.4; unit 8),
 and what a session leaves (`SessionOutcome`).
 
-`self.state` saved, the order worker stopped, each kernel session stopped where it stands
-(`stop_session`, R20) with its last events delivered, `on_stop` called and `finish` read,
+A final book read and reconciliation first, after a session end or a Ctrl+C (`reconcile`;
+not after an error or a mode breach), `self.state` saved, the order worker stopped, each
+kernel session stopped where it stands (`stop_session`, R20) with its last events
+delivered, `on_stop` called and `finish` read,
 the DAILY_SUMMARY alert, then everything the start opened closed in reverse (the feed,
 the data worker, journal L, the logs, the alerts, the lock). A journal failure or another
 error closes the same way without the flatten (journal L is not written after a journal
 failure). A position left open is reported with its broker-held stop and what works
 toward its exit (`_stops_report.left_open`), and the day's unprotected seconds
-are the supervisor's windows. The reconciler (unit 12) adds a final book read; the public
-`SessionResult` (unit 13) is built from the outcome.
+are the supervisor's windows; each comparison of the day that differed is in
+`reconciliations`. The public `SessionResult` (unit 13) is built from the outcome.
 
 Times are UTC nanoseconds, quantities units, amounts rupees.
 """
@@ -31,8 +33,16 @@ from ._stops_held import Estimate
 from ._stops_report import left_open, stop_state
 from ._types import LOGGER_NAME, AlertKind
 from .bars import BarDrift
+from .reconcile import Reconciliation
 
 logger = logging.getLogger(LOGGER_NAME)
+
+#: Seconds the common close waits for its final book read (3.3 step 5): the safe stop's
+#: wait for its last words (`_session_stop.SAFE_STOP_STATE_WAIT_S`).
+FINAL_READ_WAIT_S = 5.0
+#: How a session ended that takes the final read: not after an error (3.5) or a mode
+#: breach (6.2), when the books are not to be trusted or not to be read.
+_FINAL_READ = frozenset({"session_end", "ctrl_c"})
 
 
 @dataclass(frozen=True)
@@ -59,8 +69,9 @@ class SessionOutcome:
     session's `finish()` tables by strategy), `summary` (the day's figures),
     `open_positions`, `mode_breach` (the guard's text or None), `warnings`,
     `skipped_decisions`, `drift` (the accepted candles' drift), `paths` (journal, log,
-    events), `unprotected` (each window a leg had no confirmed stop at the broker) and
-    `estimated` (the fills released at a price the books did not confirm)."""
+    events), `unprotected` (each window a leg had no confirmed stop at the broker),
+    `estimated` (the fills released at a price the books did not confirm) and
+    `reconciliations` (each comparison with the broker's books that differed)."""
 
     mode: str
     broker: str
@@ -81,6 +92,7 @@ class SessionOutcome:
     paths: dict[str, str] = field(default_factory=dict)
     unprotected: tuple[Unprotected, ...] = ()
     estimated: tuple[Estimate, ...] = ()
+    reconciliations: tuple[Reconciliation, ...] = ()
 
 
 def close_session(
@@ -92,6 +104,10 @@ def close_session(
     stack, which raises LiveError naming it once all are closed."""
     parts = session.parts
     try:
+        if journal_works and stopped_by in _FINAL_READ:
+            session.reconcile.final(FINAL_READ_WAIT_S)
+        for request in session.reconcile.guard.left():
+            logger.warning("a request held back by the exit guard was not sent: %r", request)
         open_positions = _open_positions(session)
         unprotected_s = session.stops.windows.seconds(session.now())
         if journal_works:
@@ -131,6 +147,7 @@ def close_session(
         },
         unprotected=session.stops.windows.rows(),
         estimated=tuple(session.stops.held.estimates),
+        reconciliations=tuple(session.reconcile.rows),
     )
 
 

@@ -12,7 +12,8 @@ cancel of it is unsettled (`hold`), and a request put back (`put_back`) waits un
 `not_before_ns`, at the head of its FIFO.
 
 The worker's own requests (`ReleaseFill`, `ReleaseCancel`, `ReadBooks`, `ReadPositions`,
-`Probe`, `StreamGap`) belong to no order: each is its own FIFO. An entry or add whose
+`Probe`, `StreamGap`, and a restart's `Settle` and the reconciler's `CancelOrphan`) belong
+to no order: each is its own FIFO. An entry or add whose
 decision is older than `ENTRY_STALE_AFTER_S` when it is taken is not sent (`is_stale`,
 open decision 7). Times are UTC nanoseconds. Used by the worker's thread only.
 """
@@ -93,8 +94,38 @@ class StreamGap:
     priority = Priority.PROTECT
 
 
+@dataclass(frozen=True)
+class Settle:
+    """Settle `change`, a modify or cancel of a restored order whose answer the restart
+    cannot know (16-session-design 3.6: the journal does not record modify or cancel
+    calls), by reading the order as for an unanswered one (4.3, 4.5)."""
+
+    change: ModifyRequest | CancelRequest
+
+    priority = Priority.PROTECT
+
+
+@dataclass(frozen=True)
+class CancelOrphan:
+    """Cancel broker order `order_id`, an order of the session's journal working at the
+    broker that the engine does not hold (5.3 row 6, 3.6): cancelling never opens."""
+
+    order_id: str
+
+    priority = Priority.PROTECT
+
+
 #: The worker's own requests.
-WorkerRequest = ReleaseFill | ReleaseCancel | ReadBooks | ReadPositions | Probe | StreamGap
+WorkerRequest = (
+    ReleaseFill
+    | ReleaseCancel
+    | ReadBooks
+    | ReadPositions
+    | Probe
+    | StreamGap
+    | Settle
+    | CancelOrphan
+)
 #: Everything the worker takes.
 Request = OrderRequest | WorkerRequest
 #: A kernel order's FIFO key: (strategy, kernel order), since every engine numbers its
@@ -193,6 +224,7 @@ class WorkerQueue:
 
 __all__ = [
     "ENTRY_STALE_AFTER_S",
+    "CancelOrphan",
     "OrderKey",
     "Probe",
     "ReadBooks",
@@ -200,6 +232,7 @@ __all__ = [
     "ReleaseCancel",
     "ReleaseFill",
     "Request",
+    "Settle",
     "StreamGap",
     "WorkerQueue",
     "WorkerRequest",

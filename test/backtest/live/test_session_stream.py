@@ -160,9 +160,27 @@ def test_a_fill_the_kernel_refuses_locks_the_strategys_entries_and_is_alerted(wo
 
     world.script.at(ist(14, 43, 30), overfill)
     world.stop_at(ist(14, 45))
-    outcome = world.run(RestingBuy)
-    assert len(alerts(caplog, "reconcile_mismatch")) == 1
-    assert outcome.summary.reconcile_mismatches == 1
+    world.run(RestingBuy)
+    first = alerts(caplog, "reconcile_mismatch")[0]
+    assert "differ on order" in first and "15 filled" in first
     locks = [r.getMessage() for r in caplog.records if "too_many_units" in r.getMessage()]
     assert locks
     assert [order.action for order in world.orders()] == ["BUY"]
+
+
+def test_after_a_refused_fill_the_order_still_resting_at_the_broker_is_cancelled(world, caplog):
+    # The stream's word ended the order in the engine while it rests at the broker: an
+    # orphan of the session's own, which reconciliation cancels (16-session-design 5.3).
+    def overfill():
+        sent = world.fake.log.of("order_update", "sent")
+        message = dict(sent[-1].detail["message"])
+        message.update(quantity=15, filled_quantity=15, pending_quantity=0, average_price=400.0)
+        message["order_status"] = "complete"
+        world.feed.deliver_update(message)
+
+    world.script.at(ist(14, 43, 30), overfill)
+    world.stop_at(ist(14, 45))
+    outcome = world.run(RestingBuy)
+    assert [order.status for order in world.orders()] == ["cancelled"]
+    assert "orphan cancelled" in [row.action for row in outcome.reconciliations]
+    assert outcome.summary.reconcile_mismatches == 2

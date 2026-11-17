@@ -56,12 +56,13 @@ def tradebook(venue: Venue, payload: dict[str, Any]) -> Answer:
 
 
 def positionbook(venue: Venue, payload: dict[str, Any]) -> Answer:
-    """`positionbook`: every position of the day, flat ones included."""
+    """`positionbook`: every position of the day, flat ones included (as they stood when
+    the book began to lag its fills, while it does: `Venue.lag_positions`)."""
     del payload  # the API key only, checked before any route
     book = venue.book
     rows = [
         position_row(row, venue.market(row.symbol, row.exchange), book.mode)
-        for row in book.positions.rows()
+        for row in venue.position_rows(book)
     ]
     if book.mode is Mode.LIVE:
         if venue.session_expired:

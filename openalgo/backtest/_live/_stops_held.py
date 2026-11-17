@@ -87,6 +87,11 @@ class HeldWords:
         self._held = held
         self._released &= {_key(word) for word in held}
 
+    def holds(self, trader: Trader) -> bool:
+        """True while the order path holds a word of one of `trader`'s orders (the
+        reconciler's in-flight rule, 16-session-design 5.1)."""
+        return any(self._leg_of(word) == trader.name for word in self._held)
+
     def held_cancel(self, trader: Trader, kernel_order: int) -> bool:
         """True while the order's cancel is held (it is gone at the broker)."""
         order_id = trader.venue.order_id_of(kernel_order)

@@ -256,8 +256,9 @@ def test_two_ctrl_c_with_the_stops_cancel_word_lost_place_the_stop_again_before_
     ]
     (left,) = outcome.open_positions
     assert (left.stop_order_id, left.stop_confirmed) == (world.orders()[-1].order_id, True)
-    # The loop's step that ends the wait still waits its turn (1 s here) before the close.
-    assert outcome.ended_ns <= ist(14, 43, 35) + SAFE_STOP_STATE_WAIT_S * NS + NS
+    # The loop's step that ends the wait still waits its turn (1 s here) before the close,
+    # whose final book read takes a few of the loop's shortest waits.
+    assert outcome.ended_ns <= ist(14, 43, 35) + SAFE_STOP_STATE_WAIT_S * NS + NS + NS // 10
     check_invariants(world.timeline, strategy="StopHold")
 
 

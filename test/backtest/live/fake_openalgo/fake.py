@@ -219,6 +219,19 @@ class FakeOpenAlgo:
         at placement."""
         self._venue.schedule_rejection(Rejection(reason, price_type, at_placement))
 
+    def lag_positionbook(self) -> None:
+        """The position book answers the positions as they stand now until
+        `catch_up_positionbook`: fills from now on do not show in it, while the order and
+        trade books show them (a broker's position book lagging its fills,
+        16-session-design F78)."""
+        with self._venue.lock:
+            self._venue.lag_positions()
+
+    def catch_up_positionbook(self) -> None:
+        """The position book shows every fill again after `lag_positionbook`."""
+        with self._venue.lock:
+            self._venue.catch_up_positions()
+
     def set_analyzer(self, on: bool) -> None:
         """Flip OpenAlgo's analyzer switch (True: sandbox mode)."""
         self._venue.set_switch("analyzer", on)

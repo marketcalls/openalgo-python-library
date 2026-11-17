@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
 from typing import Any
 
 from ..errors import LiveError, VenueRefusalError
@@ -45,7 +44,6 @@ from ._venue_requests import (
     Handled,
     ModifyRequest,
     OrderRequest,
-    OrderTerms,
     PlaceRequest,
     Verdict,
     cancel_priority,
@@ -56,6 +54,7 @@ from ._venue_requests import (
     place_priority,
     terms_of,
 )
+from ._venue_saved import RestoredOrders, VenueOrder
 from .inbox import NotSent, NotSentReason, SendResult, Settled
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -67,26 +66,9 @@ HELD_REASONS = frozenset({NotSentReason.HELD, NotSentReason.SILENT})
 RACES = frozenset({"order_ended", "not_pending"})
 
 
-@dataclass
-class _Order:
-    """A kernel order the map placed: its intent, the terms the broker holds as far as the
-    kernel knows (`terms`), its fills' ledger, the broker's order ID once bound, whether
-    it ended, the modify and the cancel waiting for a result, and the commands waiting for
-    the bind."""
-
-    intent: OrderIntent
-    terms: OrderTerms
-    ledger: FillLedger
-    order_id: str = ""
-    ended: bool = False
-    modify: ModifyRequest | None = None
-    cancel: CancelRequest | None = None
-    deferred: list[Mapping[str, Any]] = field(default_factory=list)
-
-
-class VenueMap:
+class VenueMap(RestoredOrders):
     """The venue map of `engine` (an `Engine.session`), the session of strategy `strategy`
-    (module docstring).
+    (module docstring); a restart saves and rebuilds it (`_venue_saved.RestoredOrders`).
 
     `instruments` are the engine's in registration order, each with `symbol`, `exchange`
     and `tick_size` (rupees: the preflight's facts); `session` is the journal session
@@ -120,7 +102,7 @@ class VenueMap:
         self._request_ids = request_ids
         self._alerts = alerts
         self._now = now
-        self._orders: dict[int, _Order] = {}
+        self._orders: dict[int, VenueOrder] = {}
         self._by_order_id: dict[str, int] = {}
         self._by_intent: dict[str, int] = {}
         # Requests handed over whose answer (SendResult or NotSent) has not come.
@@ -182,7 +164,7 @@ class VenueMap:
         if kernel_order in self._orders:
             raise LiveError(f"kernel order o{kernel_order} of {self._strategy} is placed twice")
         ledger = FillLedger(self._engine, kernel_order, tick=tick, alerts=self._alerts)
-        self._orders[kernel_order] = _Order(intent, terms_of(command), ledger)
+        self._orders[kernel_order] = VenueOrder(intent, terms_of(command), ledger)
         self._by_intent[intent.intent_id] = kernel_order
         number, priority = next(self._request_ids), place_priority(intent)
         request = PlaceRequest(number, kernel_order, intent, priority)
@@ -199,7 +181,7 @@ class VenueMap:
             return []
         return [self._request(order, command)]
 
-    def _request(self, order: _Order, command: Mapping[str, Any]) -> OrderRequest:
+    def _request(self, order: VenueOrder, command: Mapping[str, Any]) -> OrderRequest:
         kernel_order, number = int(command["order_id"]), next(self._request_ids)
         request: OrderRequest
         if command["command"] == "modify":
@@ -321,14 +303,14 @@ class VenueMap:
 
     # ----- the kernel calls ------------------------------------------------------------
 
-    def _bind(self, order: _Order, order_id: str) -> Handled:
+    def _bind(self, order: VenueOrder, order_id: str) -> Handled:
         order.order_id = order_id
         self._by_order_id[order_id] = self._by_intent[order.intent.intent_id]
         deferred, order.deferred = order.deferred, []
         released = tuple(self._request(order, command) for command in deferred)
         return Handled(Applied.BOUND, released)
 
-    def _reject(self, order: _Order, why: str, *, placed: bool = True) -> Handled:
+    def _reject(self, order: VenueOrder, why: str, *, placed: bool = True) -> Handled:
         kernel_order = self._by_intent[order.intent.intent_id]
         logger.warning("intent %s %s", order.intent.intent_id, why)
         order.ended, order.deferred = True, []
@@ -340,7 +322,9 @@ class VenueMap:
             ended = self._answer(self._engine.apply_reject, kernel_order, VENUE_REJECT_CODE)
         return Handled(Applied.REJECTED if ended else Applied.NOTHING)
 
-    def _modify_result(self, order: _Order, request: ModifyRequest, *, confirmed: bool) -> Handled:
+    def _modify_result(
+        self, order: VenueOrder, request: ModifyRequest, *, confirmed: bool
+    ) -> Handled:
         if order.modify is None or order.modify.request_id != request.request_id:
             logger.debug("modify %d was answered already", request.request_id)
             return Handled(Applied.NOTHING)
@@ -365,7 +349,7 @@ class VenueMap:
             return False
         return True
 
-    def _order(self, kernel_order: int) -> _Order:
+    def _order(self, kernel_order: int) -> VenueOrder:
         order = self._orders.get(kernel_order)
         if order is None:
             raise LiveError(

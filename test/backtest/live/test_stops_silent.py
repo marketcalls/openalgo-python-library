@@ -93,8 +93,11 @@ def silent_from(world) -> int:
 
 
 def probes(world) -> list[int]:
-    """When each order-book read of the session was made from 14:43: its probes."""
-    return [c.ts_ns for c in world.fake.log.calls("orderbook") if c.ts_ns >= SILENCE_ARMED]
+    """When each order-book read of the session was made from 14:43 alone: its probes (a
+    reconciliation reads the position book with it, 16-session-design 5.2)."""
+    books = {c.ts_ns for c in world.fake.log.calls("positionbook")}
+    reads = world.fake.log.calls("orderbook")
+    return [c.ts_ns for c in reads if c.ts_ns >= SILENCE_ARMED and c.ts_ns not in books]
 
 
 def stop_placements(world) -> list[int]:

@@ -206,9 +206,12 @@ def test_F38_the_session_ends_with_the_engine_and_the_broker_flat(expired, caplo
     outcome = run(expired, Hold)
     assert expired.fake.position("SBIN", "NSE") == 0
     assert outcome.open_positions == ()
-    # Row F38's "reconciliation clean": no session reconciles yet (unit 12), so this
-    # check can only fail once the reconciler runs.
+    # Row F38's "reconciliation clean": no comparison with the broker's books differed,
+    # and once the login is back the books are read and agree with the engine (unit 12).
     assert alerts(caplog, "reconcile_mismatch") == []
+    assert outcome.reconciliations == ()
+    after = [e["found"] for e in events(outcome, "reconcile") if e["ts_ns"] > ist(14, 45, 30)]
+    assert after and set(after) == {"agree"}
 
 
 def test_F38_a_square_off_refused_while_the_login_is_expired_is_retried_until_it_fills(world):
