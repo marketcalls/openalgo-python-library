@@ -35,7 +35,9 @@ and the stop's cancel that makes way for one, until a comparison agrees. Once th
 has printed its last lines (`end`), a difference a leg's last comparison saw for the
 first time is never confirmed: the close reports the leg at OpenAlgo's units, moved by
 the engine's own fills since (`unconfirmed`, `_reconcile_close`; 5.4 "As built", rounds 7
-to 9), and one no comparison judged after such a fill as not confirmed (`unjudged`).
+to 9), and one no comparison judged after such a fill as not confirmed (`unjudged`). A
+leg whose last comparison was late and saw a difference is named by that read's figures
+instead, neither carried nor confirmed (`late`; the unit 12 follow-up).
 
 Each read's position book also counts for the kill switch (`KillSwitch.positions`, its
 interface to the reconciler, which never fires it), and its funds cap each strategy's
@@ -170,17 +172,29 @@ class Reconciler:
         """The close has printed its last lines: the exit guard ends (`ExitGuard.end`),
         and no later comparison will confirm a difference first seen (module docstring)."""
         self._ended = True
+        self._findings.end()
         self.guard.end()
 
     def unconfirmed(self, name: str) -> Sighting | None:
         """Once the close has printed its last lines, the position difference strategy
-        `name`'s last comparison saw for the first time, else None."""
-        return self._findings.unconfirmed(name) if self._ended else None
+        `name`'s last comparison saw for the first time, else None; None too when its last
+        comparison was late with a difference (`late` names the leg then)."""
+        if not self._ended or self._findings.late(name) is not None:
+            return None
+        return self._findings.unconfirmed(name)
 
     def unjudged(self, name: str) -> bool:
         """Once the close has printed its last lines, True when no comparison judged
-        strategy `name`'s position since a fill of its own orders landed during a read."""
-        return self._ended and self._findings.unjudged(name)
+        strategy `name`'s position since a fill of its own orders landed during a read,
+        unless a late comparison since saw a difference (`late` names the leg then)."""
+        findings = self._findings
+        return self._ended and findings.unjudged(name) and findings.late(name) is None
+
+    def late(self, name: str) -> Sighting | None:
+        """Once the close has printed its last lines, the position difference strategy
+        `name`'s last comparison saw when it was late (the leg in flight past the limit):
+        named at the close as that read saw it, neither carried nor confirmed; else None."""
+        return self._findings.late(name) if self._ended else None
 
     def broker_units(self, name: str) -> int | None:
         """OpenAlgo's signed units of strategy `name`'s leg at the last read while they

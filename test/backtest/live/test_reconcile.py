@@ -14,6 +14,7 @@ by hand. Expected values come from the scenario and the fake's books.
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -23,7 +24,10 @@ from stops_samples import STOP_TRIGGER, StopHold, check_invariants, events, stop
 from test_session_threads import alone, passing, run_threaded  # noqa: F401
 
 import openalgo.account as account
-from openalgo.backtest._live._types import LOGGER_NAME
+from openalgo.backtest._live._reconcile_act import Corrections
+from openalgo.backtest._live._reconcile_findings import Findings, Sighting
+from openalgo.backtest._live._reconcile_rules import Kind, LegBooks
+from openalgo.backtest._live._types import LOGGER_NAME, AlertKind
 from openalgo.backtest._live.reconcile import RECONCILE_EVERY_S
 
 #: When the other client's order goes in, and when the session is stopped.
@@ -377,3 +381,83 @@ def test_the_next_read_after_a_fill_inside_a_read_judges_the_leg_flat(filled_ins
     )
     assert (judged["found"], judged["engine_units"], judged["broker_units"]) == ("agree", 0, 0)
     assert outcome.open_positions == ()
+
+
+# ----- a late comparison (the leg in flight past the limit) -------------------------------
+
+#: The leg the comparisons below are of, as the alerts name it; its entries lock.
+LEG = SimpleNamespace(
+    name="Hold", symbol="SBIN", exchange="NSE", open_units=lambda: 0.0, lock=lambda reason: True
+)
+
+
+class Judging:
+    """The reconciler's findings over a stand-in session that keeps the alerts sent and
+    the mismatches counted, with the real corrections."""
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[AlertKind, str]] = []
+        session = SimpleNamespace(
+            now=lambda: 0,
+            event=lambda *args, **fields: None,
+            alert=lambda kind, text: self.sent.append((kind, text)),
+        )
+        session.mismatches = 0
+        self.session = session
+        self.findings = Findings(session, Corrections(session, {}, set()), 180.0)
+
+    def late(self, kind: Kind, engine: int, broker: int) -> None:
+        """A late comparison of the leg that found `kind`, the engine's and OpenAlgo's
+        units."""
+        books = LegBooks(broker, (), ())
+        self.findings.judged(LEG, {(kind, engine, broker)}, books, frozenset(), late=True)
+
+
+#: A position difference of each kind: (kind, the engine's units, OpenAlgo's).
+DIFFERENCES = [
+    (Kind.MORE, 0, 10),
+    (Kind.EXPLAINED_FLAT, 10, 0),
+    (Kind.EXPLAINED_FEWER, 10, 6),
+    (Kind.UNEXPLAINED, 10, 0),
+    (Kind.OTHER_SIDE, 10, -10),
+]
+DIFFERENCE_IDS = ["more", "explained flat", "explained fewer", "unexplained", "other side"]
+
+
+@pytest.mark.parametrize(("kind", "engine", "broker"), DIFFERENCES, ids=DIFFERENCE_IDS)
+def test_a_late_comparison_alerts_a_difference_at_once_when_first_seen(kind, engine, broker):
+    judging = Judging()
+    judging.late(kind, engine, broker)
+    rows = [(row.kind, row.action) for row in judging.findings.rows]
+    assert rows == [(kind.value, "alerted")]
+    [(alert_kind, text)] = judging.sent
+    assert alert_kind is AlertKind.ERROR
+    assert f"the engine holds {engine} units, OpenAlgo's books show {broker}" in text
+
+
+@pytest.mark.parametrize(("kind", "engine", "broker"), DIFFERENCES, ids=DIFFERENCE_IDS)
+def test_a_late_comparison_takes_no_sighting_locks_nothing_and_is_kept_for_the_close(
+    kind, engine, broker
+):
+    judging = Judging()
+    judging.late(kind, engine, broker)
+    assert judging.findings.unconfirmed(LEG.name) is None
+    assert judging.session.mismatches == 0
+    assert judging.findings.late(LEG.name) == Sighting(engine, broker)
+
+
+def test_a_difference_seen_late_twice_is_alerted_once():
+    judging = Judging()
+    judging.late(Kind.MORE, 0, 10)
+    judging.late(Kind.MORE, 0, 10)
+    assert len(judging.sent) == 1
+    assert [row.action for row in judging.findings.rows] == ["alerted", "alerted"]
+
+
+def test_a_difference_alerted_late_is_still_acted_on_once_compared_in_time():
+    judging = Judging()
+    judging.late(Kind.MORE, 0, 10)
+    books = LegBooks(10, (), ())
+    judging.findings.judged(LEG, {(Kind.MORE, 0, 10)}, books, frozenset(), late=False)
+    assert [row.action for row in judging.findings.rows] == ["alerted", "locked"]
+    assert judging.findings.late(LEG.name) is None

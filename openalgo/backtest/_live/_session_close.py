@@ -49,6 +49,8 @@ from ._alerts_summary import SessionSummary, summary_text
 from ._reconcile_close import (
     NOT_CONFIRMED_ALERT,
     differing,
+    late_alert,
+    late_summary,
     not_confirmed_alert,
     not_confirmed_summary,
 )
@@ -191,14 +193,18 @@ def close_session(
 
 
 def _named_legs(session: Session) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """The legs the summary names at the close, in its words: each whose difference with
-    OpenAlgo's books no later read confirms (`_reconcile_close.Differing.summary`), then
-    each with none that no read judged after a fill of its own orders landed during a read
-    (`_reconcile_close.not_confirmed_summary`)."""
+    """The legs the summary names at the close, in its words: each whose last comparison
+    was late and saw a difference (`_reconcile_close.late_summary`) or whose difference
+    with OpenAlgo's books no later read confirms (`_reconcile_close.Differing.summary`),
+    then each with none that no read judged after a fill of its own orders landed during a
+    read (`_reconcile_close.not_confirmed_summary`)."""
     differs, unsure = [], []
     for trader in session.traders:
+        late = session.reconcile.late(trader.name)
         seen = differing(session.reconcile, trader)
-        if seen is not None:
+        if late is not None:
+            differs.append(late_summary(trader, late))
+        elif seen is not None:
             differs.append(seen.summary(trader))
         elif session.reconcile.unjudged(trader.name):
             unsure.append(not_confirmed_summary(trader, round(trader.open_units())))
@@ -207,9 +213,14 @@ def _named_legs(session: Session) -> tuple[tuple[str, ...], tuple[str, ...]]:
 
 def _alert_not_confirmed(session: Session) -> None:
     """One alert per leg no read judged after a fill of its own orders landed during a
-    read, to check OpenAlgo's position book (`_reconcile_close.not_confirmed_alert`)."""
+    read, to check OpenAlgo's position book (`_reconcile_close.not_confirmed_alert`), and
+    one ERROR alert per leg whose last comparison was late and saw a difference, with that
+    read's figures (`_reconcile_close.late_alert`)."""
     for trader in session.traders:
-        if session.reconcile.unjudged(trader.name):
+        late = session.reconcile.late(trader.name)
+        if late is not None:
+            session.alert(AlertKind.ERROR, late_alert(trader, late))
+        elif session.reconcile.unjudged(trader.name):
             differs = differing(session.reconcile, trader)
             text = not_confirmed_alert(trader, round(trader.open_units()), differs)
             session.alert(NOT_CONFIRMED_ALERT, text)
