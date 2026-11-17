@@ -3,14 +3,17 @@
 One backtest over the whole period, no rerun. Each of `runs` assignments puts a random
 `oos` share of the run's sessions out of sample and the rest in sample, and every closed
 trade belongs to the part of its entry session. The share is rounded to whole sessions
-(halves to even, Python's `round`), and a share that leaves a part with no session is
-not judged. The run's objective is measured on each part (`_part_objective`).
+(halves to even, Python's `round`). The run's objective is measured on each part
+(`_part_objective`), and the check is not judged when a part would hold fewer sessions
+than the objective needs (two for a ratio of session returns), or when no assignment
+has the objective of both parts defined.
 
-An assignment keeps its in-sample figure when the in-sample objective is above zero and
-the out-of-sample one is at least `keep` times it; an assignment whose in-sample
-objective is zero, negative or undefined does not keep (a strategy that made nothing in
-sample has nothing to keep). Figure: the share of assignments that keep. Pass: at least
-`pass_share`.
+An assignment keeps its in-sample figure when the in-sample objective is above its
+break-even figure (0, or 1 for a profit factor) and the out-of-sample one keeps at least
+`keep` times the in-sample one's part above break-even; an assignment whose in-sample
+objective is at or below break-even, or undefined, does not keep (a strategy that made
+nothing in sample has nothing to keep). Figure: the share of assignments that keep.
+Pass: at least `pass_share`.
 
 Draws: assignment r orders the sessions by draws r x sessions onwards of the check's
 stream (`_random.orders`) and puts the first of that order out of sample.
@@ -27,7 +30,15 @@ import pandas as pd
 from . import _random
 from . import _words as words
 from ._blocks import REFERENCE, HistogramBlock, Mark, SessionsBlock, Tile, TilesBlock
-from ._part_objective import MEASURED, Part, objective_name, part_measure
+from ._part_objective import (
+    BREAK_EVEN,
+    MEASURED,
+    NO_BREAK_EVEN,
+    Measure,
+    Part,
+    objective_name,
+    part_measure,
+)
 from ._paths import DRAWS_PER_CHUNK
 from ._setting import Setting, between
 from ._trade_common import ENOUGH_TRADES, RUNS, too_few
@@ -63,10 +74,13 @@ SETTINGS = (
 
 def rule(settings: Mapping[str, Any], objective: Any) -> str:
     """The pass rule, in words."""
+    name = objective_name(objective)
+    break_even = BREAK_EVEN.get(name, 0.0)
+    above = f" above {break_even:g}" if break_even else ""
     return (
         f"at least {words.percent(settings['pass_share'], 0)} of assignments keep "
-        f"{words.percent(settings['keep'], 0)} of the in-sample {objective_name(objective)} "
-        f"out of sample ({words.percent(settings['oos'], 0)} of the sessions out of sample)"
+        f"{words.percent(settings['keep'], 0)} of the in-sample {name}{above} out of sample "
+        f"({words.percent(settings['oos'], 0)} of the sessions out of sample)"
     )
 
 
@@ -94,10 +108,38 @@ def _assignments(
     return table, first_marked
 
 
-def _kept(table: pd.DataFrame, keep: float) -> pd.Series:
+def kept(table: pd.DataFrame, keep: float, break_even: float) -> pd.Series:
+    """Whether each assignment of `table` (its "in_sample" and "out_of_sample" figures)
+    keeps its in-sample figure: the in-sample figure is above `break_even` and the
+    out-of-sample one's part above break-even is at least `keep` times the in-sample
+    one's."""
     inside, outside = table["in_sample"], table["out_of_sample"]
+    gain = inside - break_even
     # NaN compares False, so an undefined figure never keeps.
-    return (inside > 0) & (outside >= keep * inside)
+    return (gain > 0) & (outside - break_even >= keep * gain)
+
+
+def _unmeasured(name: str) -> str:
+    """Why an objective cannot judge the check, and what to give instead."""
+    choices = ", ".join(MEASURED)
+    if name in NO_BREAK_EVEN:
+        return (
+            f"The objective {name} cannot judge this check: {NO_BREAK_EVEN[name]}; give "
+            f"objective= one of {choices} to judge it."
+        )
+    return (
+        f"The objective {name} cannot be measured on a part of the trades; give "
+        f"objective= one of {choices} to judge this check."
+    )
+
+
+def _too_few_sessions(count: int, held_out: int, need: int, oos: float, name: str) -> str:
+    return (
+        f"Too few sessions to judge: {words.percent(oos, 0)} of "
+        f"{words.whole(count, 'session')} puts {held_out} out of sample and "
+        f"{count - held_out} in sample, and the {name} of a part needs "
+        f"{words.whole(need, 'session')} in each part."
+    )
 
 
 def run(
@@ -111,21 +153,34 @@ def run(
     name = objective_name(objective)
     measure = part_measure(objective, trades)
     if measure is None:
-        return not_judged(
-            text,
-            f"The objective {name} cannot be measured on a part of the trades; "
-            f"give objective= one of {', '.join(MEASURED)} to judge this check.",
-        )
+        return not_judged(text, _unmeasured(name))
     count = len(trades.sessions)
     held_out = round(settings["oos"] * count)
-    if not 1 <= held_out < count:
-        return not_judged(
-            text,
-            f"Too few sessions to judge: {words.whole(count, 'session')} leave no session in "
-            f"one of the parts at {words.percent(settings['oos'], 0)} out of sample.",
+    if not measure.min_sessions <= held_out <= count - measure.min_sessions:
+        why = _too_few_sessions(count, held_out, measure.min_sessions, settings["oos"], name)
+        return not_judged(text, why)
+    table, first_marked = _assignments(trades, measure.figure, held_out, seed, runs)
+    if not (table["in_sample"].notna() & table["out_of_sample"].notna()).any():
+        why = (
+            f"No assignment has the {name} of both parts defined (a part with no trade, or "
+            "whose session returns never vary), so nothing can be judged."
         )
-    table, first_marked = _assignments(trades, measure, held_out, seed, runs)
-    table["kept"] = _kept(table, settings["keep"])
+        return not_judged(text, why)
+    table["kept"] = kept(table, settings["keep"], measure.break_even)
+    return _judged(trades, table, first_marked, settings, measure, name, text)
+
+
+def _judged(
+    trades: TradeRun,
+    table: pd.DataFrame,
+    first_marked: np.ndarray,
+    settings: Mapping[str, Any],
+    measure: Measure,
+    name: str,
+    text: str,
+) -> Outcome:
+    """The verdict, figure, note and blocks of assignments whose kept column is set."""
+    runs, count, held_out = len(table), len(trades.sessions), int(first_marked.sum())
     share = float(table["kept"].mean())
     verdict = PASSED if share >= settings["pass_share"] else FAILED
     summary = {
@@ -144,8 +199,8 @@ def run(
     note = (
         f"Each assignment puts {words.whole(held_out, 'session')} of {count} out of sample "
         f"at random; a closed trade belongs to the part of its entry session, and {name} is "
-        "measured on each part. An assignment whose in-sample figure is not above zero "
-        "does not keep."
+        "measured on each part. An assignment whose in-sample figure is not above "
+        f"{measure.break_even:g}, its break-even, does not keep."
     )
     blocks = _blocks(trades, table, first_marked, summary, name)
     return Outcome(verdict, figure, text, note, table, summary, blocks)

@@ -1,11 +1,13 @@
 """Runs and trade lists shared by the robustness tests.
 
 Trade lists: `trade_performance(pnl)` is the `Performance` of a hand-built trade list on
-NSE sessions from 2025-01-01: trade k is entered at 09:30 IST and exits at 15:00 IST on
-session `sessions_apart * k`, with net P&L `pnl[k]` (no charges), and the equity at
-each session close is the capital plus the P&L closed so far. So trade k's entry session
-is session `sessions_apart * k`, and the exit order is the list's order. `check_of` runs
-one check on such a list as a report runs it.
+NSE sessions from 2025-01-01: trade k is the j-th of session `sessions_apart * (k //
+per_session)`, j = k % per_session, entered at 09:30 IST plus j minutes and exiting at
+15:00 IST less `per_session - 1 - j` minutes, with net P&L `pnl[k]` (no charges), and
+the equity at each session close is the capital plus the P&L closed so far. With one
+trade a session (the default) trade k is entered on session `sessions_apart * k`, and the
+exit order is always the list's order. `check_of` runs one check on such a list as a
+report runs it, and `blocks_of` gives what its section draws.
 
 Bars: `bars(steps)` is one NSE daily bar per session from 2023-01-02, opening at 500
 plus the running sum of `steps`, with the high and low 1 rupee either side of the open
@@ -54,17 +56,26 @@ def trade_performance(
     capital: float = CAPITAL,
     sessions_apart: int = 1,
     extra_sessions: int = 0,
+    per_session: int = 1,
 ) -> metrics.Performance:
     """The Performance of the hand-built trade list of the module docstring, with
     `extra_sessions` sessions without a trade after the last one."""
     pnl = np.asarray(pnl, dtype=float)
-    count = sessions_apart * len(pnl) + extra_sessions
+    session_of = sessions_apart * (np.arange(len(pnl)) // per_session)
+    within = np.arange(len(pnl)) % per_session
+    count = sessions_apart * int(np.ceil(len(pnl) / per_session)) + extra_sessions
     days = nse_sessions("2025-01-01", count)
-    traded = [days[sessions_apart * k] for k in range(len(pnl))]
+    traded = [days[k] for k in session_of]
+    minute = pd.Timedelta(minutes=1)
     trades = pd.DataFrame(
         {
-            "entry_time": [_at(day, 9, 30) for day in traded],
-            "exit_time": [_at(day, 15, 0) for day in traded],
+            "entry_time": [
+                _at(day, 9, 30) + j * minute for day, j in zip(traded, within, strict=True)
+            ],
+            "exit_time": [
+                _at(day, 15, 0) - (per_session - 1 - j) * minute
+                for day, j in zip(traded, within, strict=True)
+            ],
             "entry_price": 100.0,
             "exit_price": 100.0,
             "quantity": 1.0,
@@ -74,9 +85,7 @@ def trade_performance(
             "net_pnl": pnl,
         }
     )
-    closed = np.zeros(count)
-    for k, value in enumerate(pnl):
-        closed[sessions_apart * k] = value
+    closed = np.bincount(session_of, weights=pnl, minlength=count)
     equity = pd.Series(
         capital + np.cumsum(closed), index=pd.DatetimeIndex([_at(day, 15, 30) for day in days])
     )
@@ -105,6 +114,11 @@ def check_of(
         ranges={},
     )
     return run_check(BY_NAME[name], trade_run(performance), request)
+
+
+def blocks_of(performance: metrics.Performance, name: str, **settings: Any) -> tuple:
+    """What the section of check `name` draws on `performance`: rows of blocks."""
+    return check_of(performance, name, **settings)._blocks
 
 
 def steps_for(trade_moves: list[float], trades: int) -> np.ndarray:
