@@ -14,12 +14,15 @@ by hand. Expected values come from the scenario and the fake's books.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from session_samples import Hold, alerts, ist
 from stops_samples import STOP_TRIGGER, StopHold, check_invariants, events, stop_world
+from test_session_threads import alone, passing, run_threaded  # noqa: F401
 
+import openalgo.account as account
 from openalgo.backtest._live._types import LOGGER_NAME
 from openalgo.backtest._live.reconcile import RECONCILE_EVERY_S
 
@@ -308,3 +311,69 @@ def test_F78_a_stop_placed_again_is_held_while_the_book_shows_fewer_units(laggin
     assert any(
         "stop of SBIN NSE" in text and "held back" in text for text in alerts(caplog, "error")
     )
+
+
+# ----- a fill of the leg's own stop that lands inside a read ------------------------------
+
+
+def stop_fills_inside_the_next_read(world: Any, monkeypatch: Any) -> None:
+    """From 14:43 the next position-book call answers, then SBIN trades at 496.00 through
+    the stop's trigger before the read's order and trade books are read: that read's trade
+    book carries the stop's fill while its position book still shows the 10 units."""
+    answer_book = account.AccountAPI.positionbook
+    armed: list[bool] = []
+
+    def position_book(api: Any, **kwargs: Any) -> Any:
+        answer = answer_book(api, **kwargs)
+        if armed and armed[0]:
+            armed[0] = False
+            world.fake.trade("SBIN", "NSE", 496.0, volume=10)
+        return answer
+
+    monkeypatch.setattr(account.AccountAPI, "positionbook", position_book)
+    world.script.at(BY_HAND, lambda: armed.append(True))
+
+
+@pytest.fixture(params=["inline", "threads"])
+def filled_inside_a_read(request, monkeypatch):
+    """`StopHold` (on_stop="keep", stopped at 14:46) on the seam the parameter names, its
+    stop filling inside the first read after 14:43; before the run."""
+    if request.param == "inline":
+        made = request.getfixturevalue("world")
+    else:
+        made = request.getfixturevalue("alone")
+        made.script.at(STOPPED, made.stop.request)
+    made.seam = request.param
+    stop_fills_inside_the_next_read(made, monkeypatch)
+    return made
+
+
+def run_on_seam(world: Any) -> Any:
+    """Run `StopHold` with on_stop="keep" on the world's seam."""
+    if world.seam == "inline":
+        return world.run(StopHold, on_stop="keep")
+    return run_threaded(world, passing(world), "orders", (StopHold,), on_stop="keep")
+
+
+def test_a_read_inside_which_the_stop_fills_records_no_difference_and_alerts_nothing(
+    filled_inside_a_read, caplog
+):
+    world = filled_inside_a_read
+    outcome = run_on_seam(world)
+    assert stop_of(world).status == "complete"
+    assert world.fake.position("SBIN", "NSE") == 0
+    assert outcome.reconciliations == ()
+    assert alerts(caplog, "reconcile_mismatch") == []
+
+
+def test_the_next_read_after_a_fill_inside_a_read_judges_the_leg_flat(filled_inside_a_read):
+    outcome = run_on_seam(filled_inside_a_read)
+    after = [e for e in events(outcome, "reconcile") if e["ts_ns"] >= BY_HAND]
+    skipped, judged = after[0], after[1]
+    assert (skipped["found"], skipped["engine_units"], skipped["broker_units"]) == (
+        "fill_during_read",
+        0,
+        10,
+    )
+    assert (judged["found"], judged["engine_units"], judged["broker_units"]) == ("agree", 0, 0)
+    assert outcome.open_positions == ()

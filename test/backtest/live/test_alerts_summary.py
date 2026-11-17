@@ -213,3 +213,29 @@ def test_a_leg_that_differs_at_the_close_counts_among_the_mismatches():
 def test_a_leg_that_differs_is_named_in_words(words):
     with pytest.raises(ConfigError, match="names each leg in words"):
         replace(A_SHORT_CLOSE, differing=(words,))
+
+
+#: How the close names a leg no read judged after a fill of its own orders (round 9).
+NOT_CONFIRMED_0 = (
+    "StopHold SBIN NSE the engine's 0 units, not confirmed, since a fill of its own orders "
+    "landed during a read of the books and no later read judged the position"
+)
+
+
+def test_a_flat_end_state_names_a_leg_no_read_judged_after_a_fill_and_counts_no_mismatch():
+    summary = replace(A_GOOD_DAY, unconfirmed=(NOT_CONFIRMED_0,))
+    assert line(summary, "End state") == f"flat (at the close: {NOT_CONFIRMED_0})"
+    assert line(summary, "Reconcile") == f"0 mismatches (at the close: {NOT_CONFIRMED_0})"
+
+
+def test_a_leg_not_confirmed_is_named_after_the_legs_that_differ():
+    summary = replace(A_SHORT_CLOSE, unconfirmed=(NOT_CONFIRMED_0,))
+    assert line(summary, "Reconcile") == (
+        f"2 mismatches (at the close: {SHORT_4}; {NOT_CONFIRMED_0})"
+    )
+
+
+@pytest.mark.parametrize("words", ["", 5], ids=["empty", "not text"])
+def test_a_leg_not_confirmed_is_named_in_words(words):
+    with pytest.raises(ConfigError, match="unconfirmed names each leg in words"):
+        replace(A_GOOD_DAY, unconfirmed=(words,))

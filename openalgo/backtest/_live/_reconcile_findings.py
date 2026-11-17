@@ -9,6 +9,15 @@ difference for the first time has it as its `Sighting` until a later comparison 
 the position again (`unconfirmed`): at the close no later read will confirm it, so the
 close reports it (16-session-design 5.4 "As built", round 7).
 
+Only a comparison that judges the position takes or ends a sighting: one that read both
+books, attributed the trade book's own fills first and found none new (5.4, round 9). A
+read whose trade book gave the kernel a fill of the leg's own orders took its position
+book first, which may predate the fill: it judges nothing, keeps the sighting the round 8
+carry then moves by the fill, and leaves the leg unjudged (`fill_during_read`,
+`unjudged`) until a comparison judges it. A late comparison (the leg in flight past the
+in-flight limit, its trades not attributed) only alerts: it takes no sighting, so no
+later carry can count a fill its position book already held, and judges nothing.
+
 Quantities are signed units, times UTC nanoseconds. Used by the loop only.
 """
 
@@ -66,11 +75,24 @@ class Findings:
         self._lag_alerted: set[str] = set()
         # By strategy: the position difference its last judged comparison saw first.
         self._first: dict[str, Sighting] = {}
+        # The strategies no comparison judged since a fill landed during a read.
+        self._unjudged: set[str] = set()
 
     def unconfirmed(self, name: str) -> Sighting | None:
         """The position difference strategy `name`'s last comparison that judged the
         position saw for the first time, or None (module docstring)."""
         return self._first.get(name)
+
+    def fill_during_read(self, name: str) -> None:
+        """A read's trade book gave the kernel a fill of strategy `name`'s own orders: that
+        read judges nothing of the leg, which stays unjudged until a comparison judges it
+        (module docstring)."""
+        self._unjudged.add(name)
+
+    def unjudged(self, name: str) -> bool:
+        """True when no comparison has judged strategy `name`'s position since a fill of
+        its own orders landed during a read."""
+        return name in self._unjudged
 
     def at_start(
         self,
@@ -104,16 +126,17 @@ class Findings:
         late: bool,
     ) -> bool:
         """Take one comparison's `findings` of `trader`'s leg (module docstring); `late` for
-        a leg compared while in flight past the limit (alerted, nothing done). True when a
-        finding was seen for the first time: a read soon confirms it."""
+        a leg compared while in flight past the limit (alerted, nothing done, no sighting
+        taken). True when a finding was seen for the first time: a read soon confirms it."""
         name = trader.name
         last, self._last[name] = self._last.get(name, set()), findings
         confirmed = self._confirmed.setdefault(name, set())
         confirmed &= findings
         if not any(finding[0] is Kind.UNEXPLAINED for finding in findings):
             self._lag_since.pop(name, None)
-        if books.units is not None and books.trades is not None:
+        if books.units is not None and books.trades is not None and not late:
             self._sighted(name, findings, last)
+            self._unjudged.discard(name)
         for finding in sorted(findings, key=repr):
             if finding[0] is Kind.UNEXPLAINED:
                 self._lag(trader, books)

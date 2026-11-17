@@ -19,7 +19,10 @@ close with no later read to confirm it (16-session-design 5.4 "As built", round 
 counted and named on the Reconcile and End state lines, "(at the close: s1 SBIN NSE -4
 units in OpenAlgo's books, the engine's 0)" after "1 mismatch" and after "not flat: a
 position is still open", or after "flat" when OpenAlgo's books show every such leg flat
-(round 8: "s1 SBIN NSE no position in OpenAlgo's books, the engine's 10").
+(round 8: "s1 SBIN NSE no position in OpenAlgo's books, the engine's 10"). A leg no read
+judged after a fill of its own orders landed during a read is named there too, as not
+confirmed, and is no mismatch (round 9: "s1 SBIN NSE the engine's 0 units, not confirmed,
+since ...").
 
 Rupees are written as `Result.summary()` writes them (Indian digit grouping, a loss as
 "Rs -500.00"). `alerts` re-exports both names.
@@ -63,13 +66,15 @@ class SessionSummary:
     ended with no open position. `differing` names, in words, each leg whose OpenAlgo
     books differed from the engine at the close with no later read to confirm it; each
     is a mismatch, and a position that may be open unless the words say OpenAlgo's books
-    show it flat (a session can then end `flat` with it named).
+    show it flat (a session can then end `flat` with it named). `unconfirmed` names, in
+    words, each leg no read judged after a fill of its own orders landed during a read,
+    with no difference to name: not a mismatch, named beside them.
 
     Raises ConfigError when a rupee figure or the seconds unprotected is not a finite
     number (None is allowed for `slippage` only), when the seconds unprotected are
     negative, when a count is not a whole number of at least zero, when a leg of
-    `differing` is not named in words, or when it names more legs than the mismatches
-    counted.
+    `differing` or `unconfirmed` is not named in words, or when `differing` names more legs
+    than the mismatches counted.
     """
 
     day: dt.date
@@ -86,6 +91,7 @@ class SessionSummary:
     undelivered_alerts: int
     flat: bool
     differing: tuple[str, ...] = ()
+    unconfirmed: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _check_figure("gross_pnl", self.gross_pnl)
@@ -101,6 +107,7 @@ class SessionSummary:
         for name in _COUNTS:
             _check_count(name, getattr(self, name))
         _check_differing(self.differing, self.reconcile_mismatches)
+        _check_legs("unconfirmed", self.unconfirmed)
 
     @property
     def net_pnl(self) -> float:
@@ -112,7 +119,8 @@ def summary_text(summary: SessionSummary) -> str:
     """The summary of the module docstring: a title line, then one line per figure with
     the colons aligned, the alerts line only when an alert was not delivered. Plain
     text, no emoji."""
-    at_close = f" (at the close: {'; '.join(summary.differing)})" if summary.differing else ""
+    named = (*summary.differing, *summary.unconfirmed)
+    at_close = f" (at the close: {'; '.join(named)})" if named else ""
     lines = [
         ("Strategies", ", ".join(summary.strategies) or "none"),
         ("Trades", f"{summary.closed_trades} closed"),
@@ -159,18 +167,19 @@ def _check_count(name: str, value: object) -> None:
 def _check_differing(differing: object, mismatches: int) -> None:
     """Raise ConfigError unless `differing` is a tuple of legs in words, each counted
     among the `mismatches`."""
-    if not isinstance(differing, tuple) or not all(
-        isinstance(words, str) and words for words in differing
-    ):
-        raise ConfigError(
-            f"the session summary's differing names each leg in words, got {differing!r}"
-        )
+    _check_legs("differing", differing)
     if len(differing) > mismatches:
         raise ConfigError(
             f"the session summary counts {mismatches} reconcile mismatches but names "
             f"{len(differing)} legs that differ at the close: it counts at least one "
             "mismatch for each leg"
         )
+
+
+def _check_legs(name: str, legs: object) -> None:
+    """Raise ConfigError unless `legs` is a tuple of legs, each named in words."""
+    if not isinstance(legs, tuple) or not all(isinstance(words, str) and words for words in legs):
+        raise ConfigError(f"the session summary's {name} names each leg in words, got {legs!r}")
 
 
 def _slippage(slippage: float | None) -> str:

@@ -85,10 +85,13 @@ def in_flight(session: Any, trader: Trader) -> bool:
     return False
 
 
-def attribute(session: Any, trader: Trader, books: LegBooks, at_ns: int) -> None:
+def attribute(session: Any, trader: Trader, books: LegBooks, at_ns: int) -> bool:
     """A comparison's first step (5.2): each own order's trades in the trade book, beyond
     what its fill ledger has given the kernel, through the ledger as news read at `at_ns`
-    (complete once they come to the order's units)."""
+    (complete once they come to the order's units). True when any gave the kernel units:
+    the read took the position book before the trade book, so its position book may
+    predate them (16-session-design 5.4, round 9)."""
+    applied = False
     for order_id, kernel_order in trader.venue.bound().items():
         units, average = books.fills(order_id)
         if units <= trader.venue.filled(kernel_order):
@@ -112,7 +115,8 @@ def attribute(session: Any, trader: Trader, books: LegBooks, at_ns: int) -> None
             source="reconcile",
         )
         session.event("attributed", strategy=trader.name, order_id=order_id, filled=units)
-        session.news.apply_update(trader, update)
+        applied |= session.news.apply_update(trader, update).increment is not None
+    return applied
 
 
 def order_findings(

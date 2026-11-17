@@ -31,7 +31,9 @@ what works toward the leg and its stop with the order book to check before closi
 hand (`_stops_report.left_open`); the result lists it at OpenAlgo's units as those fills
 leave them (`_session_close`). When they leave OpenAlgo's books flat, the alert names what
 of the leg still works and that nothing is to be closed by hand (`NOTHING_TO_CLOSE`), and
-the result lists no position (round 8).
+the result lists no position (round 8). A leg left open that no read judged after a fill
+of its own orders landed during a read, with no such difference, has the engine's units
+named as not confirmed in its note (`NOT_CONFIRMED`, round 9).
 
 A leg left open that the exit guard still holds after a difference seen twice
 (`CLOSED_DIFFERING`) is alerted too: no comparison agreed after it, so a line printed
@@ -51,7 +53,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Any
 
-from ._reconcile_close import NOTHING_TO_CLOSE, Differing, differing
+from ._reconcile_close import NOT_CONFIRMED, NOTHING_TO_CLOSE, Differing, differing
 from ._session_trader import Trader
 from ._stops_orders import LegOrders
 from ._stops_report import left_open, leg_words, still_working
@@ -139,11 +141,13 @@ class AfterLines:
     def note(self, session: Any, trader: Trader) -> str:
         """The note of `trader`'s position left open: what happened to the leg after the
         last lines, when anything did, how OpenAlgo's books differed from the engine when
-        no later read confirms it (`Differing.words`), then its state (`left_open`);
-        `session` is the `_session_loop.Session`."""
+        no later read confirms it (`Differing.words`), or that no read confirmed it after a
+        fill, then its state (`left_open`); `session` is the `_session_loop.Session`."""
         differs = differing(session.reconcile, trader)
         if differs is None:
-            return "; ".join([*self._happened(trader), left_open(session.stops, trader)])
+            unsure = [NOT_CONFIRMED] if session.reconcile.unjudged(trader.name) else []
+            state = left_open(session.stops, trader)
+            return "; ".join([*self._happened(trader), *unsure, state])
         state = left_open(session.stops, trader, books=False)
         return "; ".join([*self._happened(trader), differs.words(), state])
 

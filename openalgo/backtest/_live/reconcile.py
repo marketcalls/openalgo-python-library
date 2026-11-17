@@ -8,17 +8,18 @@ safe corrections; it never exits a position and never fires the kill switch).
 found a difference the one before it did not (the second confirms it; one seen twice in a
 row waits for the schedule), `SQUARE_OFF_READ_BEFORE_S` before and
 `SQUARE_OFF_READ_AFTER_S` after each strategy's square-off, when the safe stop's flatten
-begins (`read_before_exits`), and at the common close (`final`); never after the mode
-guard locked. One read at a time, numbered: the order worker reads the position, order
-and trade books and the funds (`ReadBooks`) and answers `Books`. Before the flatten and
-the square-off the exit guard holds each leg's exits until a read begun after the request
-has compared it (a sale by hand since the last read is not known before), read again
-every `RECONCILE_AGAIN_AFTER_S` while a leg cannot be compared.
+begins (`read_before_exits`), and at the common close (`_reconcile_final`); never after
+the mode guard locked. One read at a time, numbered: the order worker reads the position,
+order and trade books and the funds (`ReadBooks`) and answers `Books`. Before the flatten
+and the square-off the exit guard holds each leg's exits until a read begun after the
+request has compared it (a sale by hand since the last read is not known before), read
+again every `RECONCILE_AGAIN_AFTER_S` while a leg cannot be compared.
 
 **In flight** (`_reconcile_act.in_flight`). A read compares a leg only when it was out of
 flight from before the read began (a fill restarts that) and still is; a leg in flight
-past `RECONCILE_IN_FLIGHT_MAX_S` is compared anyway, and a difference is alerted with no
-automatic action.
+past `RECONCILE_IN_FLIGHT_MAX_S` is compared anyway (late): a difference is alerted, with
+no automatic action and no sighting. A fill of the leg's own orders the read's trade book
+gives the kernel restarts flight too, as its position book, read first, may predate it.
 
 **A comparison** (5.2), in order: (1) the trade book's trades of the session's own orders
 go to their orders' fill ledgers as news (a fill the stream and the polls missed is applied
@@ -33,7 +34,8 @@ exit guard (`_reconcile_guard`) holds every closing order beyond what the broker
 and the stop's cancel that makes way for one, until a comparison agrees. Once the close
 has printed its last lines (`end`), a difference a leg's last comparison saw for the
 first time is never confirmed: the close reports the leg at OpenAlgo's units, moved by
-the engine's own fills since (`unconfirmed`, `_reconcile_close`; 5.4 "As built", round 7).
+the engine's own fills since (`unconfirmed`, `_reconcile_close`; 5.4 "As built", rounds 7
+to 9), and one no comparison judged after such a fill as not confirmed (`unjudged`).
 
 Each read's position book also counts for the kill switch (`KillSwitch.positions`, its
 interface to the reconciler, which never fires it), and its funds cap each strategy's
@@ -45,7 +47,6 @@ quantities signed units, prices rupees. Used by the loop only.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -54,7 +55,15 @@ from .._layout import NANOS_PER_SECOND
 from ._reconcile_act import Corrections, attribute, in_flight, order_findings, own_orders
 from ._reconcile_findings import Findings, Reconciliation, Sighting
 from ._reconcile_guard import ExitGuard
-from ._reconcile_rules import GUARDED, Kind, LegBooks, judge, leg_books, unexplained_by
+from ._reconcile_rules import (
+    GUARDED,
+    Kind,
+    LegBooks,
+    available_cash,
+    judge,
+    leg_books,
+    unexplained_by,
+)
 from ._session_trader import Trader
 from ._worker_queue import ReadBooks, StreamGap
 from .inbox import Books, PositionRows
@@ -76,6 +85,9 @@ SQUARE_OFF_READ_BEFORE_S = 5.0
 #: Seconds after which a read asked for and never answered is asked for again: well past
 #: the orders client's own wait (the SDK's 120 s), as for the kill switch's reads.
 RECONCILE_READ_LOST_AFTER_S = 300.0
+#: What the "reconcile" event of a leg says it found when a fill of the leg's own orders
+#: landed during the read: nothing judged (module docstring).
+FILL_DURING_READ = "fill_during_read"
 
 _NS = NANOS_PER_SECOND
 
@@ -102,6 +114,8 @@ class Reconciler:
         self._quiet: dict[str, int | None] = {}
         self._flight: dict[str, int | None] = {}
         self._earlier: frozenset[str] = frozenset()
+        # The strategies the read asked for compares, all for None (`ask_of`).
+        self._only: frozenset[str] | None = None
         self._stopped = False
         self._ended = False
 
@@ -163,6 +177,11 @@ class Reconciler:
         `name`'s last comparison saw for the first time, else None."""
         return self._findings.unconfirmed(name) if self._ended else None
 
+    def unjudged(self, name: str) -> bool:
+        """Once the close has printed its last lines, True when no comparison judged
+        strategy `name`'s position since a fill of its own orders landed during a read."""
+        return self._ended and self._findings.unjudged(name)
+
     def broker_units(self, name: str) -> int | None:
         """OpenAlgo's signed units of strategy `name`'s leg at the last read while they
         differ from the engine's with nothing taking them in: while the exit guard holds
@@ -179,6 +198,11 @@ class Reconciler:
     def waiting(self) -> bool:
         """True while a read asked for has not come."""
         return not self._answered and not self._stopped
+
+    @property
+    def stopped(self) -> bool:
+        """True once the worker did not read the books (`not_read`)."""
+        return self._stopped
 
     @property
     def clean(self) -> bool:
@@ -231,33 +255,23 @@ class Reconciler:
             self._ask_when_due(now_ns)
 
     def ask(self, now_ns: int) -> None:
-        """Ask the order worker for a read now."""
+        """Ask the order worker for a read now, of every leg."""
+        self._only = None
         self._generation += 1
         self._asked_ns, self._answered = now_ns, False
         self._next_ns, self._soon_ns = now_ns + _s(RECONCILE_EVERY_S), None
         self._square_offs = [instant for instant in self._square_offs if instant > now_ns]
         self._session.hand_over([ReadBooks(self._generation)])
 
-    def final(self, wait_s: float) -> None:
-        """The common close's read (3.3 step 5): asked for now and taken in by the loop's
-        protective steps, each waiting as little as the loop waits, for at most `wait_s`
-        seconds. They take in the books and the order news only: after the last lines no
-        price reaches the engine and the stops supervisor's duties do not run
-        (`_stops_after`). Once the books came, the steps go on within the same seconds
-        until the order worker is quiet (`_worker_quiet`): what the comparisons handed
-        over (a safe correction, an entry's cancel bound meanwhile) is answered before the
-        worker closes, and the order words it took during the read are taken in."""
-        session = self._session
-        if session.locked or self._stopped:
-            return
-        now_ns = session.now()
-        self._quiet.update({trader.name: now_ns for trader in session.traders})
+    def ask_of(self, names: frozenset[str] | None) -> None:
+        """Ask for a read now that compares the legs of strategies `names` alone (all for
+        None), each out of flight from now: the close's reads (`_reconcile_final`), after
+        the last lines, when no duty notes flight."""
+        now_ns = self._session.now()
+        traders = self._session.traders
+        self._quiet.update({t.name: now_ns for t in traders if names is None or t.name in names})
         self.ask(now_ns)
-        until_ns = now_ns + _s(wait_s)
-        while self.waiting and session.now() < until_ns:
-            session.step(session.now(), protecting=True)
-        while not (session.locked or _worker_quiet(session)) and session.now() < until_ns:
-            session.step(session.now(), protecting=True)
+        self._only = names
 
     def _reads(self, session: Any) -> bool:
         """Whether reads are made: once trading began, never after a guard lock."""
@@ -292,10 +306,13 @@ class Reconciler:
             return
         self._answered = True
         session.risk.positions(PositionRows(message.positionbook, message.started_ns))
-        self._cap_sizing(message.funds)
+        # The funds cap each strategy's sizing by the account's available cash (6.6, R18).
+        available = available_cash(message.funds)
         polls = False
         for trader in session.traders:
-            if trader.finished:
+            if available is not None and not trader.finished:
+                call(trader.engine.cap_sizing_equity, available)
+            if trader.finished or (self._only is not None and trader.name not in self._only):
                 continue
             since = self._flight.get(trader.name)
             late = since is not None and session.now() - since > _s(RECONCILE_IN_FLIGHT_MAX_S)
@@ -325,8 +342,13 @@ class Reconciler:
             trader.exchange,
         )
         own = own_orders(trader, self._earlier)
-        if not late and books.trades is not None:
-            attribute(self._session, trader, books, message.ended_ns)
+        late_or_unread = late or books.trades is None
+        if not late_or_unread and attribute(self._session, trader, books, message.ended_ns):
+            # The read took its position book first, which may predate the fill: it judges
+            # nothing of the leg, and the fill asked for a read soon (`filled`).
+            self._findings.fill_during_read(trader.name)
+            self._noted(trader, FILL_DURING_READ, books.units, 0)
+            return False
         engine = round(trader.open_units())
         findings, polls = order_findings(self._session, trader, books, own)
         kind = Kind.UNREADABLE
@@ -336,14 +358,7 @@ class Reconciler:
             kind = judge(engine, books.units, unexplained)
         if kind not in (Kind.AGREE, Kind.UNREADABLE):
             findings.add((kind, engine, books.units))
-        self._session.event(
-            "reconcile",
-            strategy=trader.name,
-            found=kind.value,
-            engine_units=engine,
-            broker_units=books.units,
-            findings=len(findings),
-        )
+        self._noted(trader, kind.value, books.units, len(findings))
         if kind in GUARDED and books.units is not None:
             self.guard.open(trader.name, books.units)
         if self._findings.judged(trader, findings, books, own, late=late):
@@ -354,38 +369,24 @@ class Reconciler:
             self.guard.read(trader.name, message.started_ns)
         return polls
 
-    def _cap_sizing(self, funds: Mapping[str, Any]) -> None:
-        """Each strategy's sizing capped by the account's available cash (6.6, R18)."""
-        data = funds.get("data") if funds.get("status") == "success" else None
-        value = data.get("availablecash") if isinstance(data, Mapping) else None
-        try:
-            available = float(value) if value is not None and not isinstance(value, bool) else None
-        except (TypeError, ValueError):
-            available = None
-        if available is None or not math.isfinite(available):
-            return
-        for trader in self._session.traders:
-            if not trader.finished:
-                call(trader.engine.cap_sizing_equity, available)
+    def _noted(self, trader: Trader, found: str, broker_units: int | None, findings: int) -> None:
+        """A comparison's event: what it found of the leg, both figures, the findings."""
+        self._session.event(
+            "reconcile",
+            strategy=trader.name,
+            found=found,
+            engine_units=round(trader.open_units()),
+            broker_units=broker_units,
+            findings=findings,
+        )
 
 
 def _s(seconds: float) -> int:
     return round(seconds * _NS)
 
 
-def _worker_quiet(session: Any) -> bool:
-    """Whether the order worker has executed every request handed to it that can still be
-    sent (what it put back before the last lines is withdrawn, not counted:
-    `OrderWorker.withdraw_put_back`), is in no call, and every order word it took and
-    every message it posted have been taken. Read in this order: each is raised before
-    the one ahead of it clears."""
-    worker = session.parts.worker
-    if worker.unfinished or worker.busy_since_ns is not None:
-        return False
-    return not (worker.raw_pending or session.inbox_waiting)
-
-
 __all__ = [
+    "FILL_DURING_READ",
     "RECONCILE_AFTER_FILL_S",
     "RECONCILE_AGAIN_AFTER_S",
     "RECONCILE_EVERY_S",

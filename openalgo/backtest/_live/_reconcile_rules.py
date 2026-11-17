@@ -5,7 +5,7 @@ each judgement allows. Pure: the reconciler (`reconcile`) and the restart
 
 **A leg in the books** (`LegBooks`, `leg_books`): the broker's net units of the
 instrument in MIS (the position book), its trades (the trade book), and its order-book
-rows.
+rows; the account's available cash in the funds (`available_cash`).
 
 **A position difference** (`judge`, 5.3). The engine's signed units are compared, after
 its own orders' trades are attributed to them (5.2 step 1), with the broker's. A
@@ -40,6 +40,7 @@ Quantities are signed units (long above 0), prices rupees.
 from __future__ import annotations
 
 import enum
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -240,6 +241,18 @@ def unexplained_by(engine_units: int, broker_units: int, external: int, adopted:
     return (broker_units - engine_units) - (external - adopted)
 
 
+def available_cash(funds: Mapping[str, Any]) -> float | None:
+    """Rupees of available cash in a funds answer (as the SDK returns it), or None when it
+    is not a success or the figure is not a finite number."""
+    data = funds.get("data") if funds.get("status") == "success" else None
+    value = data.get("availablecash") if isinstance(data, Mapping) else None
+    try:
+        cash = float(value) if value is not None and not isinstance(value, bool) else None
+    except (TypeError, ValueError):
+        return None
+    return cash if cash is not None and math.isfinite(cash) else None
+
+
 def adoption_price(external: Sequence[Trade], units: int, side: str) -> float:
     """The price the engine adopts `units` on `side` at: the trades of other orders on that
     side, newest first, up to `units`, averaged by units. Raises ValueError for none."""
@@ -339,6 +352,7 @@ __all__ = [
     "Rule",
     "Trade",
     "adoption_price",
+    "available_cash",
     "exit_room",
     "judge",
     "leg_books",
