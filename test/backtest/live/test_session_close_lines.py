@@ -49,7 +49,9 @@ from test_stops_silent import (
 from openalgo.backtest._live import session as live_session
 from openalgo.backtest._live._session_close import FINAL_READ_WAIT_S
 from openalgo.backtest._live._types import LOGGER_NAME
+from openalgo.backtest._live._worker_queue import Probe
 from openalgo.backtest._live.inbox import Quote
+from openalgo.backtest._live.worker import OrderWorker
 
 #: The end of a note whose confirmed stop covers the whole position.
 PROTECTS = "it protects the position, so cancel the stop before any sale by hand"
@@ -310,11 +312,43 @@ def stop_put_back_at_ctrl_c(world):
     return world
 
 
-def test_a_stop_put_back_before_the_last_lines_is_never_placed(stop_put_back_at_ctrl_c):
+def test_the_last_line_names_a_stop_put_back_as_held_back_and_not_sent(stop_put_back_at_ctrl_c):
     world = stop_put_back_at_ctrl_c
     world.run(RestsAnEntry, on_stop="keep")
     (line,) = [line for line in world.lines if line.startswith("RestsAnEntry SBIN NSE")]
     assert "held back, not sent" in line
+
+
+@pytest.fixture
+def workers(monkeypatch):
+    """Each order worker a session builds, as built."""
+    built: list[OrderWorker] = []
+    build = OrderWorker.__init__
+
+    def kept(worker: OrderWorker, *arguments: Any, **options: Any) -> None:
+        build(worker, *arguments, **options)
+        built.append(worker)
+
+    monkeypatch.setattr(OrderWorker, "__init__", kept)
+    return built
+
+
+def test_a_stop_put_back_before_the_last_lines_is_not_placed_when_openalgo_answers_after_them(
+    stop_put_back_at_ctrl_c, workers
+):
+    # A probe of the silent OpenAlgo asked as the leg's line is printed runs after it, and
+    # OpenAlgo answers it (the order-book reads still set to fail are cleared): its hold on
+    # sending ends within the close's final read, and the stop put back would go then but
+    # for its withdrawal.
+    world = stop_put_back_at_ctrl_c
+
+    def probe_answered() -> None:
+        while world.fake.faults.take("orderbook") is not None:
+            pass
+        workers[0].put(Probe())
+
+    after_the_line(world, "RestsAnEntry", probe_answered)
+    world.run(RestsAnEntry, on_stop="keep")
     assert stop_placements(world) == []
 
 
