@@ -96,7 +96,7 @@
 //! | 2 fills at the open | `steps::step_open_fills`: per instrument the risk exits of step 6 (`risk_exits_at_open`) and the engine's exits after unfilled GTT children (`gtt_fire::gtt_exits_at_open`), then `fills::fill_queued` (eligible when the open is at or after `decided_at`, SPEC-35; a missing bar keeps the order queued, SPEC-06; entry window and margin checked at the fill bar), the time exit, then `session::square_off_at_open` (the square-off timer, SPEC-05); after every instrument, `rebalance::fill_rebalance_buys` (the buys of a rebalance, after its sales), then `roll::roll_due_futures` (the futures auto-roll, near leg first, SPEC-19, GTT-9). In a slice where a timer is due, `timers::fill_due_orders` runs the engine exits and queued orders first, `timers::timers_pause` returns `Pause::Timers`, and `step_open_fills` then fills what the timers placed | MARKET orders, converted stop-limit exits, timers, square-off, rolls |
 //! | 3 resting orders, leg levels | `steps::step_levels` -> `legs::test_leg_levels` -> `rms::LegState::test_bar` (MIS; an option's stop as the segment's stop-limit, R12), `gtt_fire::test_gtts` (CNC and NRML levels and GTT orders), `resting::test_resting_orders` (LIMIT, SL, SL-M), exits through `fills::execute_fill`; a live session on ticks (`venue_ticks`) | yes |
 //! | 4 ratchets | `steps::step_ratchets` -> `legs::ratchet_legs` -> `rms::LegState::ratchet`, then `gtt::sync_gtts` (GTTs follow the levels, GTT-3); a live session on ticks | yes |
-//! | 5 mark | `steps::step_mark`: close, or last close and stale | yes |
+//! | 5 mark | `steps::step_mark`: close, or last close and stale; the open trades see the slice's bar (`excursion`) | yes |
 //! | 6 aggregate rules | `aggregate::step_aggregate_rules`: daily loss limit, drawdown halt; their exits at the next open (`risk_exits_at_open`, step 2) or the last close; the session boundary in step 1 (`risk_session_open`) | yes (combined rules: Phase 3) |
 //! | 7 callbacks and `on_bar` | `steps::callbacks_pause` -> `Pause::BarClose`; `submit::submit` | yes |
 //! | 8 session close | `steps::close_slice`: expire DAY orders, close open MIS positions at the last close (reason `eod`, flagged), settle expiring futures and post the futures mark to market (`settlement::settle_futures`), settle the day's contract notes (`accounting::settle_contract_notes`), credit the day's withheld sale proceeds (`sale_credit::credit_withheld_sales`) | yes (options expiry: Phase 3) |
@@ -104,9 +104,11 @@
 //! Every fill takes one path, `fills::execute_fill`: slippage (`market::slippage`, the
 //! run's or the dated default table's), position and tranches (`portfolio`), the ledger,
 //! the charges (`charges`, posted to the ledger; contract notes settle in step 8), the
-//! leg state (`rms::leg`), then the records: the fill, `Filled` (when it has an order),
-//! the position event, the trade. The glue to the market rules is in `accounting`, the
-//! sizers' in `sizing`.
+//! leg state (`rms::leg`), then the records: the fill with what its slippage cost,
+//! `Filled` (when it has an order), the position event, the trade and its excursion
+//! (`excursion`: the MAE and MFE, from every fill, the bars in step 5 and the ticks of a
+//! live session). The glue to the market rules is in `accounting`, the sizers' in
+//! `sizing`.
 //!
 //! # Determinism
 //!
@@ -180,6 +182,7 @@
 //! | `history` | The strategy bars of the whole run, for indicators computed ahead |
 //! | `signals` | Condition and array strategies: the Rust driver of 14-strategy-api 4.1 over the stepping API |
 //! | `event` | `Event`, `EventStamp`, `Step` |
+//! | `excursion` | A trade's MAE and MFE (the running P&L at the prices it saw) and the slippage of a fill |
 //! | `output` | `RunOutput` and its tables |
 //! | `error` | `KernelError` |
 //!
@@ -216,6 +219,7 @@ pub mod config;
 mod entry_rules;
 pub mod error;
 pub mod event;
+mod excursion;
 mod fill_bar;
 mod fills;
 mod futures;

@@ -15,7 +15,7 @@
 //! | `desk` | the cancellations and modifications waiting for the venue's answer (a modification with its terms), the exits of the positions, the legs' broker-held stops, the targets fired, the reprices waiting, the entry locks and the sizing cap |
 //! | `commands` | the commands the adapter has not taken yet |
 //! | `risk` | the trading state and its cause, the daily loss totals, the drawdown peak, the slices the cooldown and time exit count from, the engine exits waiting for an open |
-//! | `open_trades`, `session_buys` | the round trips still open, the day's CNC buys |
+//! | `open_trades`, `session_buys` | the round trips still open (with their excursion and slippage so far), the day's CNC buys |
 //!
 //! `Engine::restore_live_state` gives a saved state to a session built for the restart,
 //! once, after its catch-up (the day's bars added and released, nothing decided) and

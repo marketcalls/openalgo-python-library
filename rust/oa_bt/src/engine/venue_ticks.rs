@@ -21,8 +21,9 @@
 //!   per tick and the stop is not cut and restored each time; the session retries a
 //!   failed exit on its own schedule (16-session-design 4.8).
 //! - **Mark and aggregate rules** (steps 5 and 6): the instrument's open positions are
-//!   marked at the price, then the daily loss limit and the drawdown halt are tested on
-//!   that mark (`aggregate`); their exits go through the exit owner.
+//!   marked at the price, and its open trades see it (their MAE and MFE, `excursion`),
+//!   then the daily loss limit and the drawdown halt are tested on that mark
+//!   (`aggregate`); their exits go through the exit owner.
 //!
 //! What a tick writes is recorded in the slice in progress (`venue_fills`), at the steps
 //! above. While the market is closed (the session's closing slice) a tick only marks.
@@ -74,6 +75,7 @@ impl Engine {
                 position.mark_rupees = Some(price_rupees);
             }
         }
+        self.see_tick(instrument, price_rupees);
         if market_open {
             self.aggregate_rules_at(&slice, point.decided_at)?;
         }

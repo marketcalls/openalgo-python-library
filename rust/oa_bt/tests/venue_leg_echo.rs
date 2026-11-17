@@ -39,7 +39,7 @@ use oa_bt::model::Side;
 use oa_bt::rms::{BreakevenSpec, Distance, ExitReason, LegRules, TargetSpec, TrailSpec};
 use venue_support::{
     at_close, bar_at, bars, charged_config, market, rising, run_backtest, session, slice_open,
-    stop_points, Act, Ohlc, Script, SBIN, SECOND,
+    stop_points, venue_priced, Act, Ohlc, Script, SBIN, SECOND,
 };
 
 /// Seconds after a slice's open of its four ticks: open, low, high, close.
@@ -262,6 +262,7 @@ fn same_trades(rules: LegRules, overrides: &[(u32, Ohlc)]) -> RunOutput {
     let acts = vec![at_close(0, Act::Submit(buy))];
     let columns = bars(overrides, &[]);
     let backtest = run_backtest(config.clone(), &columns, &mut Script::new(acts.clone()));
+    let backtest = venue_priced(backtest);
     let session = run_on_ticks(config, overrides, &mut Script::new(acts));
     assert_eq!(traded(&session), traded(&backtest), "the fills");
     assert_eq!(session.trades, backtest.trades, "the trades");

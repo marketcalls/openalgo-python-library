@@ -1,10 +1,12 @@
 //! The books of a live session's saved state (`venue_state`): the account (the cash), the
 //! positions with their tranches, the round trips still open (so a trade closed after a
-//! restart is reported with its entry) and the session's CNC buys (the sale credit).
+//! restart is reported with its entry, its excursion so far and its slippage) and the
+//! session's CNC buys (the sale credit).
 
 use crate::exec::InstrumentId;
 use crate::portfolio::{Position, PositionKey, SubAccount, Tranche};
 
+use super::super::excursion::Excursion;
 use super::super::output::OpenTrade;
 use super::error::LiveStateError;
 use super::requests::{key_fields, read_instrument, read_key, read_side};
@@ -101,10 +103,12 @@ pub(super) fn read_position(
     })
 }
 
-/// A round trip still open: its entry, what it has traded so far, its gross P&L and its
-/// initial risk.
+/// A round trip still open: its entry, what it has traded so far, its gross P&L, its
+/// initial risk, its excursion so far (unrounded rupees, and the last slice with a fill
+/// of it inside the bar) and its slippage so far.
 pub(super) fn write_open_trade(trade: &OpenTrade) -> StateValue {
     let [instrument, product] = key_fields(trade.key);
+    let excursion = trade.excursion;
     map([
         instrument,
         product,
@@ -119,6 +123,10 @@ pub(super) fn write_open_trade(trade: &OpenTrade) -> StateValue {
         ("gross_rupees", trade.gross.into()),
         ("fills", trade.fills.into()),
         ("initial_risk_rupees", trade.initial_risk.into()),
+        ("worst_rupees", excursion.worst_rupees.into()),
+        ("best_rupees", excursion.best_rupees.into()),
+        ("inside_fill_slice", excursion.inside_fill_slice.into()),
+        ("slippage_rupees", trade.slippage.into()),
     ])
 }
 
@@ -141,6 +149,12 @@ pub(super) fn read_open_trade(
         gross: read.f64_of("gross_rupees")?,
         fills: read.whole_of("fills")?,
         initial_risk: read.opt_f64_of("initial_risk_rupees")?,
+        excursion: Excursion {
+            worst_rupees: read.f64_of("worst_rupees")?,
+            best_rupees: read.f64_of("best_rupees")?,
+            inside_fill_slice: read.opt_whole_of("inside_fill_slice")?,
+        },
+        slippage: read.opt_f64_of("slippage_rupees")?,
     })
 }
 
@@ -167,4 +181,49 @@ pub(super) fn repeats(keys: impl IntoIterator<Item = PositionKey>) -> bool {
     keys.iter()
         .enumerate()
         .any(|(at, key)| keys[..at].contains(key))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Product, Side};
+
+    #[test]
+    fn an_open_trade_keeps_its_excursion_and_slippage_through_a_restart() {
+        // Long 100 since slice 12, a fill inside slice 40's bar, its worst running P&L
+        // -310.25 and its best 120.50 so far, slippage 3.40 so far; and one whose fills
+        // the venue priced (no slippage) and none inside a bar.
+        let trade = OpenTrade {
+            key: PositionKey {
+                instrument: InstrumentId(0),
+                product: Product::Mis,
+            },
+            direction: Side::Buy,
+            entry_slice: 12,
+            entry_ts: 1_751_341_500_000_000_000,
+            entry_units: 100.0,
+            entry_value: 50_010.0,
+            exit_units: 0.0,
+            exit_value: 0.0,
+            max_units: 100.0,
+            gross: 0.0,
+            fills: 1,
+            initial_risk: None,
+            excursion: Excursion {
+                worst_rupees: -310.25,
+                best_rupees: 120.5,
+                inside_fill_slice: Some(40),
+            },
+            slippage: Some(3.4),
+        };
+        let venue_priced = OpenTrade {
+            excursion: Excursion::default(),
+            slippage: None,
+            ..trade
+        };
+        for saved in [trade, venue_priced] {
+            let value = write_open_trade(&saved);
+            assert_eq!(read_open_trade(&Read::root(&value), 1), Ok(saved));
+        }
+    }
 }

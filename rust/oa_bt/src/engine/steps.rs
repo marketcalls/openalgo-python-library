@@ -104,7 +104,8 @@ impl Engine {
     }
 
     /// Step 5: mark every open position at its close, or at its last close and flagged
-    /// stale when it has no bar (SPEC-07).
+    /// stale when it has no bar (SPEC-07); then every open trade sees the slice's bar
+    /// (`excursion`).
     fn step_mark(&mut self, slice: &SliceInfo) {
         for (index, last) in self.last_close.iter_mut().enumerate() {
             if let Some(bar) = self.market.bar(InstrumentId(index as u32), slice.index) {
@@ -129,6 +130,7 @@ impl Engine {
                 });
             }
         }
+        self.see_slice_bars(slice);
     }
 
     /// Step 7: pause when a strategy bar closes, or when events wait for callbacks.
