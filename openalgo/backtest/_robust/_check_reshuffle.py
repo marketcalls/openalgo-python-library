@@ -15,6 +15,7 @@ Draws: order r sorts the trades by draws r x trades onwards of the check's strea
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from typing import Any
 
@@ -96,7 +97,7 @@ def run(
         "runs": float(runs),
         "drawdown_at_level": at_level,
         "real_drawdown": real_drawdown,
-        "final_pnl_rupees": float(trades.pnl.sum()),
+        "final_pnl_rupees": math.fsum(trades.pnl),
         "ruined_share": float(paths.ruined.mean()),
     }
     verdict = INFORMATIONAL if limit is None else PASSED if at_level >= -limit else FAILED
@@ -107,7 +108,7 @@ def run(
     note = (
         f"{words.whole(runs, 'order')} of the {trades.closed} closed trades, drawn without "
         f"replacement and booked on {words.rupees(trades.capital)}; every order ends at "
-        f"{words.rupees(trades.pnl.sum())} of net P&L"
+        f"{words.rupees(math.fsum(trades.pnl))} of net P&L"
     )
     ruined = int(paths.ruined.sum())
     if ruined:

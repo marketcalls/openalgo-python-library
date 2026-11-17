@@ -61,6 +61,14 @@ def test_noise_fails_with_the_share_of_profitable_paths_worked_by_hand():
     assert result.summary["profitable_share"] == pytest.approx(NOISE_PROFITABLE, abs=TOLERANCE)
 
 
+def test_a_path_that_breaks_even_is_not_profitable_whatever_the_rounding():
+    # 0.1 rupees has no exact binary fraction, so a path of 20 wins and 20 losses ends a
+    # rounding residue away from its capital; it made nothing and is not profitable.
+    small = [0.1, -0.1] * 20
+    result = check_of(trade_performance(small), "resample", runs=4_000)
+    assert result.summary["profitable_share"] == pytest.approx(NOISE_PROFITABLE, abs=TOLERANCE)
+
+
 def test_the_ruin_odds_are_the_share_of_paths_reaching_the_ruin_drawdown():
     result = check_of(trade_performance(RUIN, capital=1_000.0), "resample", runs=4_000)
     assert result.summary["ruin_odds"] == pytest.approx(RUIN_ODDS, abs=TOLERANCE)

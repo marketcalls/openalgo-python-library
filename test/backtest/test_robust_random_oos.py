@@ -11,11 +11,17 @@ one trade per session (`robust_runs.trade_performance`).
   so the out-of-sample Sharpe ratio stays near the in-sample one.
 """
 
+from dataclasses import replace
+
+import numpy as np
 import pytest
 from robust_runs import check_of, trade_performance
 
 from openalgo.backtest._robust._blocks import SessionsBlock
+from openalgo.backtest._robust._part_objective import Part, part_measure
+from openalgo.backtest._robust._trades import trade_run
 from openalgo.backtest._robust._verdict import FAILED, NOT_JUDGED, PASSED
+from openalgo.backtest.report._kernel import call
 
 STEADY = [100.0] * 100
 NOISE = [100.0, -100.0] * 50
@@ -50,6 +56,34 @@ def test_trades_that_sum_to_zero_never_keep_their_in_sample_figure(objective):
     result = check_of(trade_performance(NOISE), "random_out_of_sample", objective=objective)
     assert result.verdict == FAILED
     assert result.summary["kept_share"] == 0.0
+
+
+@pytest.mark.parametrize("objective", ["sharpe", "sortino"])
+def test_parts_that_break_even_are_not_above_zero_whatever_the_rounding(objective):
+    # 0.2 rupees on 1,00,000 has no exact binary fraction; parts with as many wins as
+    # losses make exactly nothing, so their ratio is 0, never a rounding residue above it.
+    result = check_of(
+        trade_performance([0.2, -0.2] * 50), "random_out_of_sample", objective=objective
+    )
+    assert result.summary["kept_share"] == 0.0
+    inside = result.table["in_sample"]
+    assert ((inside == 0) | (inside.abs() > 1e-6)).all()
+    assert (inside == 0).any()
+
+
+@pytest.mark.parametrize("objective", ["sharpe", "sortino"])
+@pytest.mark.parametrize("rate", [0.0, 0.065])
+def test_a_parts_ratio_is_the_kernels_ratio_of_its_session_returns(objective, rate):
+    # The ratio of the whole run's sessions, as a part holding all of them.
+    pnl = [120.0, -40.0, 75.5, -60.25, 10.0, 33.0] * 10
+    performance = trade_performance(pnl)
+    run = trade_run(performance)
+    session_pnl = np.bincount(run.entry_session, weights=run.pnl, minlength=len(run.sessions))
+    whole = Part(session_pnl, run.pnl)
+    measured = part_measure(objective, replace(run, risk_free_rate=rate))(whole)
+    annual = (run.sessions_per_year, rate, run.elapsed_nanos)
+    kernel = call("path", session_pnl / run.capital, *annual)[objective]
+    assert measured == pytest.approx(kernel, rel=1e-12)
 
 
 def test_a_planted_edge_keeps_its_sharpe_ratio_out_of_sample():

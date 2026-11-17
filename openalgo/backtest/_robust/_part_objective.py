@@ -8,8 +8,12 @@ The objectives a part can be measured by, each annualised where its size matters
 part of 30 percent of the sessions compares with one of 70 percent:
 
     sharpe, sortino   the Sharpe and Sortino ratios of the part's session returns,
-                      annualised by the run's sessions per year with its risk-free rate
-                      (the kernel's definitions, `metrics_path`)
+                      annualised by the run's sessions per year with its risk-free rate:
+                      the kernel's definitions (`oa_bt::metrics::ratios`; mean excess
+                      return over the sample deviation, or over the downside deviation)
+                      with every sum exactly rounded (`math.fsum`), so a part that makes
+                      exactly nothing has a ratio of exactly 0 and the sign of a ratio
+                      is never a rounding residue
     net_profit        the part's net P&L per year, rupees: its total over its sessions
                       times the sessions per year
     expectancy        the mean net P&L of its trades, rupees
@@ -30,7 +34,6 @@ from typing import Any
 
 import numpy as np
 
-from ..report._kernel import call
 from ._trades import TradeRun
 
 #: The objectives a part of the trades can be measured by (module docstring).
@@ -46,11 +49,37 @@ class Part:
     trade_pnl: np.ndarray
 
 
+def _sharpe(excess: np.ndarray, mean: float) -> float:
+    """Mean excess return over its sample deviation (divisor n - 1), per session; NaN
+    when the excess returns do not vary."""
+    if (excess == excess[0]).all():
+        return math.nan
+    deviation = math.sqrt(math.fsum((excess - mean) ** 2) / (len(excess) - 1))
+    return mean / deviation
+
+
+def _sortino(excess: np.ndarray, mean: float) -> float:
+    """Mean excess return over the downside deviation (the root mean square of the
+    excess returns below zero), per session; infinite with no downside and a positive
+    mean, NaN with neither."""
+    downside = math.sqrt(math.fsum(np.minimum(excess, 0.0) ** 2) / len(excess))
+    if downside > 0:
+        return mean / downside
+    return math.inf if mean > 0 else math.nan
+
+
 def _ratio(name: str, trades: TradeRun) -> Callable[[Part], float]:
+    per_year = trades.sessions_per_year
+    # The annual risk-free rate as a rate per session, as the kernel converts it.
+    per_session = (1.0 + trades.risk_free_rate) ** (1.0 / per_year) - 1.0
+    ratio = _sharpe if name == "sharpe" else _sortino
+
     def measure(part: Part) -> float:
-        returns = part.session_pnl / trades.capital
-        annual = (trades.sessions_per_year, trades.risk_free_rate, trades.elapsed_nanos)
-        return float(call("path", returns, *annual)[name])
+        if len(part.session_pnl) < 2:
+            return math.nan
+        excess = part.session_pnl / trades.capital - per_session
+        mean = math.fsum(excess) / len(excess)
+        return ratio(excess, mean) * math.sqrt(per_year)
 
     return measure
 
@@ -59,18 +88,18 @@ def _net_profit(trades: TradeRun) -> Callable[[Part], float]:
     def measure(part: Part) -> float:
         if not len(part.session_pnl):
             return math.nan
-        return float(part.session_pnl.sum()) / len(part.session_pnl) * trades.sessions_per_year
+        return math.fsum(part.session_pnl) / len(part.session_pnl) * trades.sessions_per_year
 
     return measure
 
 
 def _expectancy(part: Part) -> float:
-    return float(part.trade_pnl.mean()) if len(part.trade_pnl) else math.nan
+    return math.fsum(part.trade_pnl) / len(part.trade_pnl) if len(part.trade_pnl) else math.nan
 
 
 def _profit_factor(part: Part) -> float:
-    wins = float(part.trade_pnl[part.trade_pnl > 0].sum())
-    losses = -float(part.trade_pnl[part.trade_pnl < 0].sum())
+    wins = math.fsum(part.trade_pnl[part.trade_pnl > 0])
+    losses = -math.fsum(part.trade_pnl[part.trade_pnl < 0])
     if losses > 0:
         return wins / losses
     return math.inf if wins > 0 else math.nan

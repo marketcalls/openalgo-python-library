@@ -4,7 +4,10 @@ variance, design 17 sections 2.11 and 2.13).
 
 The summary block of a set of paths (`_paths.walk`, fractions of the start capital):
 
-    profitable_share        paths that end above the capital
+    profitable_share        paths that end at least half a paisa above the capital: a
+                            final P&L that rounds to zero paise broke even, so the
+                            rounding residue of booking many trades never makes a path
+                            profitable (`BREAK_EVEN_RUPEES`)
     ruin_odds               paths whose maximum drawdown reaches `ruin` (a fraction, 0.5
                             is a fall of half from a peak)
     average_profit_rupees   the mean of the paths' final P&L
@@ -39,6 +42,10 @@ from ._verdict import Outcome, not_judged
 MIN_TRADES = 30
 #: The 95 percent interval: its lower and upper percentile levels.
 INTERVAL = (0.025, 0.975)
+#: The least final P&L of a profitable path, rupees: half a paisa, the amount that rounds
+#: to one paisa, as `Result.summary()` rounds money (`_summary`). Booking trades of
+#: fractional rupees leaves a residue far below it on a path that made nothing.
+BREAK_EVEN_RUPEES = 0.005
 
 RUNS = Setting(
     "runs",
@@ -79,14 +86,14 @@ def path_figures(
     (module docstring)."""
     profit_low, profit_high = call("percentiles", final_return, np.array(INTERVAL))
     drawdown_low, drawdown_high = call("percentiles", max_drawdown, np.array(INTERVAL))
-    mean_return, mean_drawdown = float(np.mean(final_return)), float(np.mean(max_drawdown))
+    mean_return, mean_drawdown = exact_mean(final_return), exact_mean(max_drawdown)
     if mean_drawdown < 0:
         ratio = mean_return / -mean_drawdown
     else:
         ratio = math.inf if mean_return > 0 else math.nan
     return {
         "runs": float(len(final_return)),
-        "profitable_share": float(np.mean(final_return > 0)),
+        "profitable_share": float(np.mean(final_return * capital >= BREAK_EVEN_RUPEES)),
         "ruin_odds": float(np.mean(max_drawdown <= -ruin)),
         "average_profit_rupees": mean_return * capital,
         "average_drawdown": mean_drawdown,
@@ -96,6 +103,12 @@ def path_figures(
         "drawdown_high": float(drawdown_high),
         "return_over_drawdown": ratio,
     }
+
+
+def exact_mean(values: np.ndarray) -> float:
+    """The mean of `values`, summed exactly rounded (`math.fsum`), so it is the same on
+    every platform whatever order a vectorised sum would add in."""
+    return math.fsum(values) / len(values)
 
 
 def _tone(value: float) -> str:
@@ -121,11 +134,13 @@ def path_tiles(title: str, subtitle: str, figures: dict[str, float], ruin: float
 
 
 __all__ = [
+    "BREAK_EVEN_RUPEES",
     "ENOUGH_TRADES",
     "INTERVAL",
     "MIN_TRADES",
     "RUIN",
     "RUNS",
+    "exact_mean",
     "path_figures",
     "path_tiles",
     "too_few",
