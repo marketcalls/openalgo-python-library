@@ -52,8 +52,11 @@ from stops_samples import (
 )
 from test_session_threads import passing, run_threaded
 
+from openalgo.backtest._live import _reconcile_act as reconcile_act
+from openalgo.backtest._live._reconcile_act import NOT_ADOPTED_WORDS
 from openalgo.backtest._live._reconcile_guard import ExitGuard
 from openalgo.backtest._live._types import LOGGER_NAME
+from openalgo.backtest.errors import VenueRefusalError
 
 #: When the other client sells, and when two Ctrl+C come at once in the first way.
 SOLD_AT = ist(14, 43)
@@ -480,3 +483,51 @@ def test_the_error_alert_names_a_cut_with_no_answer_by_the_close_and_claims_no_p
         f"StopHold SBIN NSE 6 units: {left.note}"
     ]
     assert (left.stop_confirmed, PROTECTS in left.note) == (False, False)
+
+
+# ----- the probe's case, the kernel refusing the adoption after the last lines -------------
+
+
+def refusing_adoptions(monkeypatch: Any) -> None:
+    """The kernel refuses the reconciler's adoption of the sale: `apply_external_fill`
+    raises VenueRefusalError (here "session_over", the kernel session having finished)."""
+    real = reconcile_act.call
+
+    def refuse(func: Any, *args: Any) -> Any:
+        if getattr(func, "__name__", "") == "apply_external_fill":
+            raise VenueRefusalError("the session has finished", "session_over")
+        return real(func, *args)
+
+    monkeypatch.setattr(reconcile_act, "call", refuse)
+
+
+def test_an_adoption_the_kernel_refuses_leaves_the_stop_for_10_and_sends_nothing(
+    cut_world, monkeypatch
+):
+    refusing_adoptions(monkeypatch)
+    outcome = play_cut(cut_world)
+    assert stops(cut_world) == [(10, "trigger pending")]
+    assert cut_world.fake.position("SBIN", "NSE") == 6
+    assert "adopted" not in [event["kind"] for event in after_the_final_read(outcome)]
+
+
+def test_the_close_names_the_held_cancel_an_adoption_the_kernel_refused_made_way_for(
+    cut_world, monkeypatch, caplog
+):
+    # The cancel withdrawn for a cut that never came is held again: the close's alert names
+    # it among what was not sent, as it would had no adoption been tried.
+    refusing_adoptions(monkeypatch)
+    play_cut(cut_world)
+    not_sent = f"not sent: the cancel of stop order {first_stop(cut_world).order_id}"
+    named = [text for text in alerts(caplog, "error") if "StopHold SBIN NSE 10 units" in text]
+    assert [text for text in named if not_sent in text] != []
+
+
+def test_the_mismatch_alert_of_an_adoption_the_kernel_refused_claims_no_adoption(
+    cut_world, monkeypatch, caplog
+):
+    refusing_adoptions(monkeypatch)
+    play_cut(cut_world)
+    (text,) = alerts(caplog, "reconcile_mismatch")
+    assert NOT_ADOPTED_WORDS in text
+    assert "the engine takes them as its own" not in text

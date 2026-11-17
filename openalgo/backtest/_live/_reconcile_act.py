@@ -17,7 +17,8 @@ exposure: an explained difference adopted (`apply_external_fill` at the other or
 price, the kernel fitting the leg's stop to the adopted units in the same call, and a
 cancel of it the exit guard held sent when the stop is larger than what is left, or,
 after the session's last lines with units left, withdrawn first so that the fit cuts the
-stop instead: 16-session-design 3.3 step 5 "As built", round 7), the leg's own stop
+stop instead: 16-session-design 3.3 step 5 "As built", round 7; held again when the kernel
+refuses the adoption, which the alert then says, round 8), the leg's own stop
 cancelled when the broker holds the other side, the session's own orphan cancelled.
 Never an exit, never the kill switch. A finding on a leg in flight past the in-flight
 limit is alerted, with nothing done; so is a restart's difference whose journal units
@@ -40,7 +41,7 @@ from ._session_news import RECONCILE_LOCK
 from ._session_trader import Trader
 from ._stops_orders import IN_FLIGHT, Sent
 from ._types import LOGGER_NAME, AlertKind, OrderStatus, OrderUpdate
-from ._venue_requests import LIVE_PRODUCT, SAME_PRICE_RUPEES, STOP_TYPES
+from ._venue_requests import LIVE_PRODUCT, SAME_PRICE_RUPEES, STOP_TYPES, CancelRequest
 from ._worker_queue import CancelOrphan
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -50,6 +51,14 @@ ADOPTED_REASON = "manual"
 #: What an adoption did when it also sent the cancel of the leg's stop that the exit guard
 #: held (`ExitGuard.adopted`): the stop is cancelled rather than cut down.
 ADOPTED_STOP_CANCELLED = "adopted, its held stop cancel sent"
+#: What an adoption the kernel refused did, and what its RECONCILE_MISMATCH alert says:
+#: nothing was adopted, and the stop stays as it was (a cancel withdrawn is held again).
+NOT_ADOPTED = "not adopted"
+NOT_ADOPTED_WORDS = (
+    "trades of other orders explain it, but the engine could not take them as its own: "
+    "nothing is adopted or sent for it, and its stop stays as it was. Check the position in "
+    "OpenAlgo"
+)
 #: A finding: its kind first (a `_reconcile_rules.Kind`, or "orphan", "foreign",
 #: "stop_terms"), then what tells one from another.
 Finding = tuple[Any, ...]
@@ -182,6 +191,8 @@ class Corrections:
                 action = self._adopt(trader, finding, books, own)
             if action == ADOPTED_STOP_CANCELLED and kind is Kind.EXPLAINED_FEWER:
                 words = FEWER_STOP_CANCELLED
+            if action.startswith(NOT_ADOPTED):
+                words = NOT_ADOPTED_WORDS
             if rule.cancel_stop:
                 action = self._cancel_stop(trader)
         session.alert(AlertKind.RECONCILE_MISMATCH, self._words(trader, finding, books, own, words))
@@ -224,12 +235,13 @@ class Corrections:
     def _adopt(self, trader: Trader, finding: Finding, books: LegBooks, own: frozenset[str]) -> str:
         engine, broker = finding[1], finding[2]
         units, side = abs(engine - broker), "SELL" if broker < engine else "BUY"
-        session = self._session
+        session, guard = self._session, self._session.reconcile.guard
+        withdrawn: list[CancelRequest] = []
         try:
             price = adoption_price(books.external(own), units, side)
             # After the last lines a held cancel of the stop is withdrawn before the fill,
             # so the kernel's fit with it cuts the stop to what is left (module docstring).
-            session.reconcile.guard.withdraw_for_cut(trader.name, broker)
+            withdrawn = guard.withdraw_for_cut(trader.name, broker)
             call(
                 trader.engine.apply_external_fill,
                 INSTRUMENT,
@@ -241,14 +253,16 @@ class Corrections:
                 ADOPTED_REASON,
             )
         except (ValueError, VenueRefusalError) as error:
+            # No fit comes: a cancel withdrawn for it is held again, as it was.
+            guard.put_back(trader.name, withdrawn)
             logger.error("%s: the broker's units not adopted: %s", trader.name, error)
-            return f"not adopted ({error})"
+            return f"{NOT_ADOPTED} ({error})"
         signed = units if side == "BUY" else -units
         self._adopted[trader.name] = self._adopted.get(trader.name, 0) + signed
         session.event("adopted", strategy=trader.name, side=side, units=units, price=price)
         # An exit's cancel of the stop the exit guard held: the kernel waits for it and
         # fits nothing more, so the stop would stay larger than what is left.
-        if session.reconcile.guard.adopted(trader.name):
+        if guard.adopted(trader.name):
             return ADOPTED_STOP_CANCELLED
         return "adopted"
 
@@ -287,6 +301,8 @@ class Corrections:
 __all__ = [
     "ADOPTED_REASON",
     "ADOPTED_STOP_CANCELLED",
+    "NOT_ADOPTED",
+    "NOT_ADOPTED_WORDS",
     "Corrections",
     "Finding",
     "attribute",

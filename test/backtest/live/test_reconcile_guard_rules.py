@@ -41,7 +41,8 @@ BEFORE_NS, AFTER_NS = 900, 1_100
 class Trader:
     """One strategy's engine as the guard sees it; its stop's terms at the broker are
     `stop_units` units of an SL-M at 497.00, none filled; `withdrawn` the cancels its venue
-    map was told were withdrawn, never sent."""
+    map was told were withdrawn, never sent, and `restored` those it was told wait for an
+    answer again."""
 
     name = "S"
 
@@ -51,12 +52,14 @@ class Trader:
         self.orders = {STOP, EXIT, ENTRY}
         self.locks: list[str] = []
         self.withdrawn: list[CancelRequest] = []
+        self.restored: list[CancelRequest] = []
         self.engine = SimpleNamespace(entry_locks=lambda: list(self.locks))
         self.venue = SimpleNamespace(
             changing=lambda kernel_order: False,
             terms=lambda kernel_order: OrderTerms(self.stop_units, "SL-M", trigger_price=497.0),
             filled=lambda kernel_order: 0,
             withdraw_cancel=self.withdraw_cancel,
+            restore_cancel=self.restored.append,
         )
 
     def withdraw_cancel(self, request: CancelRequest) -> bool:
@@ -281,7 +284,7 @@ def test_an_adoption_sends_the_held_cancel_of_a_stop_larger_than_what_is_left(
     if ended:
         guarded.guard.end()
     guarded.trader.units = engine_units
-    assert guarded.guard.withdraw_for_cut("S", engine_units) is False
+    assert guarded.guard.withdraw_for_cut("S", engine_units) == []
     sent = guarded.guard.adopted("S")
     assert (sent, guarded.handed) == (True, [cancel_of_stop()])
     assert guarded.guard.held_cancels("S") == frozenset()
@@ -292,11 +295,22 @@ def test_after_the_end_an_adoption_that_leaves_units_withdraws_the_held_cancel_f
     # kernel's fit with the adoption cuts the stop to the 4 units left.
     guarded.hand_over([cancel_of_stop()])
     guarded.guard.end()
-    assert guarded.guard.withdraw_for_cut("S", BROKER_UNITS) is True
+    assert guarded.guard.withdraw_for_cut("S", BROKER_UNITS) == [cancel_of_stop()]
     assert (guarded.handed, guarded.trader.withdrawn) == ([], [cancel_of_stop()])
     assert guarded.guard.held_cancels("S") == frozenset()
     guarded.trader.units = BROKER_UNITS
     assert guarded.guard.adopted("S") is False
+
+
+def test_a_withdrawn_cancel_put_back_after_a_refused_adoption_is_held_again(guarded):
+    # The kernel refused the adoption the withdrawal made way for, so no cut comes: the
+    # cancel is held again, waits for its answer at the venue map again, and is not sent.
+    guarded.hand_over([cancel_of_stop()])
+    guarded.guard.end()
+    guarded.guard.put_back("S", guarded.guard.withdraw_for_cut("S", BROKER_UNITS))
+    assert guarded.trader.restored == [cancel_of_stop()]
+    assert guarded.guard.held_cancels("S") == frozenset({STOP})
+    assert (guarded.guard.left(), guarded.handed) == ([cancel_of_stop()], [])
 
 
 def test_after_the_end_the_stops_cut_to_what_is_left_goes(guarded):
@@ -309,7 +323,7 @@ def test_after_the_end_a_held_cancel_of_a_stop_that_still_fits_is_not_withdrawn(
     guarded.hand_over([cancel_of_stop()])
     guarded.guard.end()
     guarded.trader.stop_units = BROKER_UNITS
-    assert guarded.guard.withdraw_for_cut("S", BROKER_UNITS) is False
+    assert guarded.guard.withdraw_for_cut("S", BROKER_UNITS) == []
     assert (guarded.trader.withdrawn, guarded.guard.held_cancels("S")) == ([], frozenset({STOP}))
 
 

@@ -338,6 +338,22 @@ def test_a_cancel_withdrawn_before_it_was_sent_leaves_the_order_working_with_not
     assert isinstance(again, CancelRequest) and again.request_id != cancel.request_id
 
 
+def test_a_withdrawn_cancel_restored_waits_for_its_answer_again():
+    # The exit guard holds it again (the adoption it was withdrawn for was refused): should
+    # it be sent, its answer is this map's, and the CANCELLED news ends the order.
+    rig = Rig()
+    kernel_order = bound(rig)
+    cancel = cancelled(rig, kernel_order)
+    rig.map.withdraw_cancel(cancel)
+
+    rig.map.restore_cancel(cancel)
+
+    assert rig.map.changing(kernel_order) and rig.map.owns_request(cancel.request_id)
+    answer = rig.map.sent(SendResult(cancel.request_id, accepted("B1")))
+    rig.map.news(update("B1", OrderStatus.CANCELLED, quantity=10))
+    assert (answer.applied, rig.status(kernel_order)) == (Applied.NOTHING, "Canceled")
+
+
 @pytest.mark.parametrize(
     "message",
     [

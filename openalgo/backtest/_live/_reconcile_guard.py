@@ -55,8 +55,9 @@ cancel of the stop is withdrawn instead, never sent (lead, round 7): the venue m
 the kernel it was refused (`VenueMap.withdraw_cancel`), so the kernel's fit with the
 adoption cuts the stop to what is left by a modify that only lowers its units, which the
 guard admits, and the units left keep a stop; the exit that asked for the cancel waits in
-the engine and is never sent. A stop whose cancel was not held is cut by the kernel's own
-fit too.
+the engine and is never sent. Should the kernel refuse the adoption, the withdrawn cancel
+is held again (`put_back`) and the stop stays as it was. A stop whose cancel was not held
+is cut by the kernel's own fit too.
 
 **At the close** (`end`): once the session has printed its last lines, it sends nothing
 they did not name. Nothing held goes to the worker, whatever the close's final read shows,
@@ -178,14 +179,14 @@ class ExitGuard:
             self._held[name] = [request for request in held if request not in cancels]
             self._session.hand_over(cancels)
 
-    def withdraw_for_cut(self, name: str, left_units: int) -> bool:
+    def withdraw_for_cut(self, name: str, left_units: int) -> list[CancelRequest]:
         """Before the reconciler adopts a sale by hand that leaves strategy `name`'s leg
         `left_units` (signed): after the end, with units left, each held cancel of the
         leg's stop that may still fill more than that is withdrawn, never sent, so the
         kernel's fit with the adoption cuts the stop (module docstring, "A sale by hand
-        adopted"). True when one was withdrawn."""
+        adopted"). Returns those withdrawn, for `put_back` should the adoption fail."""
         if not self._ended or left_units == 0:
-            return False
+            return []
         trader = self._session.trader_named(name)
         held = self._held.get(name, [])
         withdrawn = [
@@ -201,7 +202,21 @@ class ExitGuard:
             self._session.event(
                 "cancel_withdrawn", strategy=name, kernel_order=request.kernel_order
             )
-        return bool(withdrawn)
+        return withdrawn
+
+    def put_back(self, name: str, withdrawn: Sequence[CancelRequest]) -> None:
+        """The kernel refused the adoption `withdrawn` (from `withdraw_for_cut`) made way
+        for, so no cut comes: each is held again and waits for its answer at the venue map
+        again (`VenueMap.restore_cancel`), and the close names it as not sent (lead,
+        round 8). The kernel took it as refused, which leaves the stop working there as at
+        the broker."""
+        if not withdrawn:
+            return
+        trader = self._session.trader_named(name)
+        for request in withdrawn:
+            trader.venue.restore_cancel(request)
+            self._session.event("cancel_put_back", strategy=name, kernel_order=request.kernel_order)
+        self._held[name] = [*withdrawn, *self._held.get(name, [])]
 
     def adopted(self, name: str) -> bool:
         """The reconciler adopted a sale by hand on strategy `name`'s leg: each held cancel
