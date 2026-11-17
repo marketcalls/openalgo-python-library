@@ -10,6 +10,7 @@ page.
 they make +25 and -20 in turn, 150 in all; with no edge, +20 and -20, nothing in all.
 """
 
+import dataclasses
 import logging
 import re
 
@@ -85,6 +86,23 @@ def test_the_scorecard_lists_every_check_and_the_ones_not_built(edge_report):
     assert (verdicts["verdict"] == NOT_BUILT).sum() == 13
     noise = verdicts.set_index("check").loc["noise"]
     assert noise["note"].startswith("Comes with robustness unit RB2")
+
+
+def test_a_check_result_is_made_of_its_public_fields_only():
+    names = [field.name for field in dataclasses.fields(bt.CheckResult)]
+    assert names == [
+        "name",
+        "title",
+        "question",
+        "verdict",
+        "figure",
+        "rule",
+        "note",
+        "table",
+        "summary",
+        "settings",
+        "seed",
+    ]
 
 
 def test_one_check_has_its_table_summary_and_settings(edge_report):

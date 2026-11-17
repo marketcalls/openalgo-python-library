@@ -28,10 +28,11 @@ import pandas as pd
 
 import openalgo.backtest as bt
 from openalgo.backtest import metrics
-from openalgo.backtest._robust._assess import run_check
+from openalgo.backtest._robust._assess import Checked, run_check
 from openalgo.backtest._robust._registry import BY_NAME
 from openalgo.backtest._robust._request import build_request
 from openalgo.backtest._robust._trades import trade_run
+from openalgo.backtest._robust._verdict import CheckResult
 
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 CAPITAL = 100_000.0
@@ -92,7 +93,7 @@ def trade_performance(
     return metrics.analyse(equity, exchanges="NSE", trades=trades, opening_wealth=capital)
 
 
-def check_of(
+def checked(
     performance: metrics.Performance,
     name: str,
     *,
@@ -100,9 +101,10 @@ def check_of(
     seed: int = 0,
     objective: Any = "sharpe",
     **settings: Any,
-):
-    """The `CheckResult` of check `name` on `performance`, with `settings` as its dict:
-    the check as a report runs it, on a hand-built trade list with no strategy."""
+) -> Checked:
+    """Check `name` on `performance`, with `settings` as its dict, as a report runs it
+    on a hand-built trade list with no strategy: its result and what its section
+    draws."""
     request = build_request(
         checks=[name],
         objective=objective,
@@ -116,9 +118,14 @@ def check_of(
     return run_check(BY_NAME[name], trade_run(performance), request)
 
 
-def blocks_of(performance: metrics.Performance, name: str, **settings: Any) -> tuple:
-    """What the section of check `name` draws on `performance`: rows of blocks."""
-    return check_of(performance, name, **settings)._blocks
+def check_of(performance: metrics.Performance, name: str, **options: Any) -> CheckResult:
+    """The `CheckResult` of `checked`."""
+    return checked(performance, name, **options).result
+
+
+def blocks_of(performance: metrics.Performance, name: str, **options: Any) -> tuple:
+    """What the section of `checked` draws: rows of blocks."""
+    return checked(performance, name, **options).blocks
 
 
 def steps_for(trade_moves: list[float], trades: int) -> np.ndarray:

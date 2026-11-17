@@ -120,17 +120,17 @@ def _settings_text(result: CheckResult) -> str:
     return f"{shown}; seed {result.seed}" if result.seed is not None else shown
 
 
-def _check_section(result: CheckResult) -> Section:
+def _check_section(result: CheckResult, blocks: tuple) -> Section:
     verdict = (
         f"<p class='lead'>{verdict_badge(result.verdict)} &#183; {fmt.text(result.figure)}</p>"
         f"<p class='lead'>Rule: {fmt.text(result.rule)}</p>"
         f"<p class='key'>{fmt.text(result.note)}</p>"
         f"<p class='key'>Settings: {fmt.text(_settings_text(result))}</p>"
     )
-    blocks = [("", card("Verdict", "", verdict))]
-    blocks += [(SMALL, _row(row)) for row in result._blocks]
+    parts = [("", card("Verdict", "", verdict))]
+    parts += [(SMALL, _row(row)) for row in blocks]
     return Section(
-        anchor(result.name), fmt.text(result.title), fmt.text(result.question), stack(blocks)
+        anchor(result.name), fmt.text(result.title), fmt.text(result.question), stack(parts)
     )
 
 
@@ -171,14 +171,16 @@ def render(
     facts: RunFacts,
     request: Request,
     results: tuple[CheckResult, ...],
+    blocks: Mapping[str, tuple],
     counts: dict[str, int],
     plan: str,
 ) -> str:
-    """The whole page (module docstring)."""
+    """The whole page (module docstring); `blocks` holds what each check's section
+    draws, by check name."""
     by_name = {result.name: result for result in results}
     parts = [
         _scorecard(request, by_name, counts),
-        *(_check_section(result) for result in results),
+        *(_check_section(result, blocks[result.name]) for result in results),
         _notes(facts, request, by_name, plan),
     ]
     title = f"{facts.strategy}: robustness report"

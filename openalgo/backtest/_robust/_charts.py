@@ -21,8 +21,7 @@ import numpy as np
 
 from ..report import _format as fmt
 from ..report._dashboard import scale
-from ..report._dashboard.bars import AXIS_TEXT, MUTED_TEXT, Margin
-from ..report._dashboard.bars import _frame as frame
+from ..report._dashboard.bars import AXIS_TEXT, MUTED_TEXT, Margin, frame
 from ._blocks import LIMIT, REAL, REFERENCE, FanBlock, HistogramBlock, SessionsBlock
 from ._paths import Fan
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from .._messages import counted
@@ -29,14 +30,23 @@ from ._verdict import CheckResult
 LOGGER = logging.getLogger("openalgo.backtest.robustness")
 
 
-def run_check(check: CheckSpec, trades: TradeRun, request: Request) -> CheckResult:
-    """The result of `check` on `trades` under `request`."""
+@dataclass(frozen=True, eq=False)
+class Checked:
+    """A check that ran: its `result`, and the `blocks` its section of the HTML report
+    draws (`_blocks`), which stay out of the public `CheckResult`."""
+
+    result: CheckResult
+    blocks: tuple
+
+
+def run_check(check: CheckSpec, trades: TradeRun, request: Request) -> Checked:
+    """The result of `check` on `trades` under `request`, with what its section draws."""
     settings = dict(request.settings[check.name])
     runs = settings["runs"] if settings["runs"] is not None else request.runs
     settings["runs"] = runs
     seed = _random.check_seed(request.seed, check.number)
     outcome = check.run(trades, settings, runs=runs, seed=seed, objective=request.objective)
-    return CheckResult(
+    result = CheckResult(
         check.name,
         check.title,
         check.question,
@@ -48,8 +58,8 @@ def run_check(check: CheckSpec, trades: TradeRun, request: Request) -> CheckResu
         dict(outcome.summary),
         settings,
         seed,
-        outcome.blocks,
     )
+    return Checked(result, outcome.blocks)
 
 
 def plan_text(strategy: str, request: Request, trades: TradeRun) -> str:
@@ -106,8 +116,10 @@ def assess(
     plan = plan_text(facts.strategy, request, trades)
     timed = plan if seconds is None else f"{plan} The backtest took {seconds:.2f} s."
     (progress or LOGGER.info)(timed)
-    results = tuple(run_check(check, trades, request) for check in request.to_run)
-    return RobustnessReport(facts, request, results, plan)
+    checked = [run_check(check, trades, request) for check in request.to_run]
+    results = tuple(done.result for done in checked)
+    blocks = {done.result.name: done.blocks for done in checked}
+    return RobustnessReport(facts, request, results, plan, blocks)
 
 
-__all__ = ["LOGGER", "assess", "plan_text", "run_check"]
+__all__ = ["LOGGER", "Checked", "assess", "plan_text", "run_check"]

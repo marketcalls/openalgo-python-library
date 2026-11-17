@@ -13,6 +13,7 @@ one is strong evidence of overfitting; "not judged" never passes.
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 from os import PathLike
 from pathlib import Path
@@ -44,15 +45,23 @@ class RunFacts:
 
 
 class RobustnessReport:
-    """The result of the robustness checks of one run; see the module docstring."""
+    """The result of the robustness checks of one run; see the module docstring. Made by
+    `bt.robustness` and `Result.robustness`; `blocks` holds what each check's section of
+    the HTML report draws, by check name."""
 
     def __init__(
-        self, facts: RunFacts, request: Request, results: tuple[CheckResult, ...], plan: str
+        self,
+        facts: RunFacts,
+        request: Request,
+        results: tuple[CheckResult, ...],
+        plan: str,
+        blocks: Mapping[str, tuple],
     ) -> None:
         self._facts = facts
         self._request = request
         self._results = {result.name: result for result in results}
         self._plan = plan
+        self._blocks = dict(blocks)
 
     @property
     def plan(self) -> str:
@@ -106,7 +115,7 @@ class RobustnessReport:
         from ._html import render
 
         results = tuple(self._results.values())
-        page = render(self._facts, self._request, results, self._counts(), self._plan)
+        page = render(self._facts, self._request, results, self._blocks, self._counts(), self._plan)
         if path is None:
             return page
         target = Path(path)

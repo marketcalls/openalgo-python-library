@@ -76,7 +76,6 @@ class CheckResult:
     summary: Mapping[str, float] = field(repr=False)
     settings: Mapping[str, Any] = field(repr=False)
     seed: int | None = None
-    _blocks: tuple = field(default=(), repr=False)
 
     @property
     def passed(self) -> bool:

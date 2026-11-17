@@ -33,7 +33,9 @@ class Margin(NamedTuple):
     left: int
 
 
-def _frame(width: int, height: int, margin: Margin, label: str, body: str) -> str:
+def frame(width: int, height: int, margin: Margin, label: str, body: str) -> str:
+    """A chart's SVG: `width` by `height` in view-box units, scaled to the card's width,
+    with `body` (SVG marks) drawn inside `margin` and `label` as its accessible name."""
     return (
         f"<svg class='bars' width='100%' viewBox='0 0 {width} {height}' role='img' "
         f"aria-label='{label}'><g transform='translate({margin.left},{margin.top})'>"
@@ -88,7 +90,7 @@ def histogram(
         f"{_pct(t, decimals)}</text>"
         for t in scale.ticks(low, high, PERCENT_TICKS)
     ]
-    return _frame(width, height, margin, label, "".join(marks))
+    return frame(width, height, margin, label, "".join(marks))
 
 
 class Box(NamedTuple):
@@ -137,7 +139,7 @@ def box_plot(boxes: Sequence[Box], *, height: int = 200) -> str:
             f"style='stroke:{tone}' stroke-width='2'>"
             f"<title>median {fmt.percent(med)}</title></line>"
         )
-    return _frame(width, height, margin, "Returns box plot", "".join(marks))
+    return frame(width, height, margin, "Returns box plot", "".join(marks))
 
 
 class YearRow(NamedTuple):
@@ -211,7 +213,7 @@ def yearly_bars(rows: Sequence[YearRow], benchmark_name: str | None) -> str:
             f"<text x='{start + band / 2:.2f}' y='{inner_h + 18}' text-anchor='middle' "
             f"style='{MUTED_TEXT}'>{row.year}</text>"
         )
-    return _frame(width, height, margin, "Yearly returns", "".join(marks))
+    return frame(width, height, margin, "Yearly returns", "".join(marks))
 
 
 def streak_bars(counts: Sequence[tuple[int, int]]) -> str:
@@ -234,7 +236,7 @@ def streak_bars(counts: Sequence[tuple[int, int]]) -> str:
             f"<text x='{start + band / 2:.2f}' y='{inner_h + 18}' text-anchor='middle' "
             f"style='{MUTED_TEXT}'>{length}</text>"
         )
-    return _frame(width, height, margin, "Losing streak lengths", "".join(marks))
+    return frame(width, height, margin, "Losing streak lengths", "".join(marks))
 
 
-__all__ = ["Box", "YearRow", "box_plot", "histogram", "streak_bars", "yearly_bars"]
+__all__ = ["Box", "YearRow", "box_plot", "frame", "histogram", "streak_bars", "yearly_bars"]
