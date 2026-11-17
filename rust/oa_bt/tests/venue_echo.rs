@@ -1,7 +1,8 @@
 #![cfg(all(feature = "costs", feature = "time"))]
 //! A live session whose venue fills every order where the backtest's simulator does (the
 //! echo venue of `venue_support`) is the backtest: its `RunOutput` equals the backtest's,
-//! field for field, with zero slippage and the same costs.
+//! field for field, with zero slippage and the same costs, but that the venue priced its
+//! fills, so none has slippage modelled (`venue_support::venue_priced`).
 //!
 //! The bars rise 0.10 a minute from 500.00 (`venue_support::rising`), so every fill
 //! below can be read off them: open 500.00 + 0.10 k at minute k, high the open plus 0.50,
@@ -14,8 +15,8 @@ use oa_bt::exec::{FillAt, OrderRequest, OrderType};
 use oa_bt::model::{ts_from_ist, Product, Side};
 use venue_support::{
     at_close, backtest, bars, charged_config, config, day, drive_echo, exit, limit, market, minute,
-    order, run_backtest, run_echo, session, stop_limit, stop_market, Act, Echo, Ohlc, Script,
-    MINUTE,
+    order, run_backtest, run_echo, session, stop_limit, stop_market, venue_priced, Act, Echo, Ohlc,
+    Script, MINUTE,
 };
 
 /// A gap down at minute 50: it opens at 495.00, through a sell stop at 503.00.
@@ -86,7 +87,7 @@ fn both(config: RunConfig, acts: Vec<(i64, Act)>) -> (RunOutput, RunOutput) {
 #[test]
 fn a_session_with_an_echo_venue_is_the_backtest_of_its_bars() {
     let (session, backtest) = both(charged_config(), every_order_kind());
-    assert_eq!(session, backtest);
+    assert_eq!(session, venue_priced(backtest));
 }
 
 #[test]
@@ -152,7 +153,7 @@ fn a_session_on_a_15_minute_strategy_is_the_backtest_of_its_bars() {
     ];
     let (session, backtest) = both(fifteen_minutes(), acts);
     assert_eq!(session.fills.len(), 2);
-    assert_eq!(session, backtest);
+    assert_eq!(session, venue_priced(backtest));
 }
 
 /// 10:05 IST in minutes since midnight: the open of minute 50, between two 15-minute
@@ -209,5 +210,5 @@ fn a_session_whose_timer_places_an_order_is_the_backtest_of_its_bars() {
     let output = drive_echo(live, &columns, &mut Script::new(acts), &mut Echo::default());
     assert_eq!(output.fills.len(), 2);
     assert_eq!(output.fills[0].stamp.slice_ts, at_timer);
-    assert_eq!(output, backtest);
+    assert_eq!(output, venue_priced(backtest));
 }

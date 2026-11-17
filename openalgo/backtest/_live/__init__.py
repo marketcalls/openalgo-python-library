@@ -25,9 +25,10 @@ attribute of its parent, which would replace the `bt.live` function.
 | `plan` | The session plan: `bt.live`'s arguments checked, each strategy set up, the catch-up |
 | `venue_map` | The kernel's commands as order requests, and each answer as its kernel call |
 | `worker` | The order worker: the one thread that sends the session's orders and reads its books |
-| `session` | A live session from start to stop: the start, the loop, the safe stop, the close |
+| `session` | A live session: the start and the restart, the loop, the safe stop, the close |
 | `stops` | The stops supervisor: broker-held stops, exits that fail, protection, held words |
 | `watch` | The risk watch: a dead or quiet feed, clock skew, the account loss and the kill switch |
+| `reconcile` | The reconciler: the books compared leg by leg, safe corrections, the exit guard |
 
 Times are UTC nanoseconds, prices rupees and quantities units, never lots. No module
 prints: they log to the `openalgo.backtest.live` logger, and a session's own output goes

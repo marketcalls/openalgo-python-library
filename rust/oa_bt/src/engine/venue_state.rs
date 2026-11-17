@@ -15,7 +15,7 @@
 //! | `desk` | the cancellations and modifications waiting for the venue's answer (a modification with its terms), the exits of the positions, the legs' broker-held stops, the targets fired, the reprices waiting, the entry locks and the sizing cap |
 //! | `commands` | the commands the adapter has not taken yet |
 //! | `risk` | the trading state and its cause, the daily loss totals, the drawdown peak, the slices the cooldown and time exit count from, the engine exits waiting for an open |
-//! | `open_trades`, `session_buys` | the round trips still open, the day's CNC buys |
+//! | `open_trades`, `session_buys` | the round trips still open (with their excursion and slippage so far, the working orders that hold their excursion back and their last slice's ticks), the day's CNC buys |
 //!
 //! `Engine::restore_live_state` gives a saved state to a session built for the restart,
 //! once, after its catch-up (the day's bars added and released, nothing decided) and
@@ -100,8 +100,12 @@ use risk::{read_risk, write_risk};
 use value::{list, map, Read};
 
 /// The layout of the saved state this kernel writes and reads; a state of another layout
-/// is refused (`LiveStateError::Version`).
-pub const LIVE_STATE_LAYOUT: i64 = 1;
+/// is refused (`LiveStateError::Version`). Layout 2 added to each open trade its excursion
+/// and slippage so far and the orders that hold its excursion back (`excursion`); layout
+/// 3 the orders that hold it back by the terms of a modification the venue has not
+/// answered, which its refusal releases (`excursion_hold`); layout 4 the terms confirmed
+/// modifications replaced, which judge the bar of the slice they were confirmed in.
+pub const LIVE_STATE_LAYOUT: i64 = 4;
 
 /// A saved state read whole, before any of it is applied.
 struct Saved {
@@ -157,7 +161,9 @@ impl Engine {
             ("risk", write_risk(&self.risk)),
             (
                 "open_trades",
-                list(&self.record.trades.open, write_open_trade),
+                list(&self.record.trades.open, |trade| {
+                    write_open_trade(book, trade)
+                }),
             ),
             ("session_buys", list(&self.session_buys.bought, write_buy)),
         ])
@@ -246,7 +252,7 @@ impl Engine {
             open_trades: read
                 .items_of("open_trades")?
                 .iter()
-                .map(|trade| read_open_trade(trade, count))
+                .map(|trade| read_open_trade(trade, count, &ids))
                 .collect::<Result<_, _>>()?,
             ids,
         })

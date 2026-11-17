@@ -130,7 +130,7 @@ def test_the_saved_state_is_plain_data_that_survives_a_json_round_trip():
     state = holding().live_state()
     text = json.dumps(state, allow_nan=False)
     assert json.loads(text) == state
-    assert state["layout"] == 1
+    assert state["layout"] == 4
     assert (state["slice"], state["stage"]) == (1, "ready")
     [position] = state["positions"]
     assert (position["product"], position["quantity_units"]) == ("MIS", 10.0)
@@ -174,7 +174,7 @@ def with_field(state: dict[str, Any], path: tuple[str, ...], value: Any) -> dict
 @pytest.mark.parametrize(
     ("what", "path", "value", "message"),
     [
-        ("another layout", ("layout",), 2, "layout 2"),
+        ("another layout", ("layout",), 5, "layout 5"),
         ("a number that is not finite", ("account", "capital_rupees"), math.nan, "finite"),
         ("a value that is not plain data", ("desk", "entry_locks"), {"starting"}, "set"),
         ("an order that was not saved working", ("desk", "cancelling"), [9], "cancelling"),

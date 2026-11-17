@@ -318,6 +318,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   position is flat). A fill that would not only close or reduce the position (on its
   side, of a flat position, through zero) is refused whole: `VenueRefusalError` of the
   new kind `beyond_position`.
+- The live session's reconciler and restart (private). OpenAlgo's position, order and trade
+  books and the funds are read when trading begins, every 30 seconds, 3 seconds after a
+  fill, 3 seconds after a comparison that found a new difference, around each square-off,
+  before the safe stop's flatten and at the close, and compared leg by leg with the engine
+  once the leg has no order in flight (a leg in flight for more than 3 minutes is compared
+  anyway, with an alert and no action). A fill of the session's own orders that the stream
+  and the polls missed is taken from the trade book. A difference seen in two comparisons
+  in a row locks the strategy's entries, sends an alert, and allows only a safe
+  correction: a position closed or reduced by other orders whose trades come to the
+  difference exactly (a sale by hand, the broker's square-off) is adopted, with its stop
+  cancelled or cut to what is left; when the broker holds the other side the leg's own
+  stop is cancelled and the alert says to close it by hand; a broker holding fewer units
+  that no trade explains, or more units, is left alone and alerted (an ERROR alert to
+  check the account once it lasts 3 minutes). Nothing is ever traded to make the broker
+  match the engine, and no difference exits a position or fires the kill switch. From the
+  first comparison showing the broker with fewer units, none or the other side, no exit,
+  flatten, square-off or stop of that leg is sent for more than the broker holds on that
+  side. Orders of the session working at the broker that the engine does not hold, and
+  working orders naming the strategy that the session did not send, are reported. The
+  funds read caps each strategy's sizing by the available cash. After the session's last
+  lines the close sends nothing those lines did not name; a difference only its final read
+  sees is reported at OpenAlgo's units in the result and the daily summary, with one ERROR
+  alert, never as flat, and a leg no read could judge (its own fill landed inside the
+  read) is reported as not confirmed, with an alert to check OpenAlgo's position book. A
+  restart the same day first resolves the journal's unsent or unanswered orders against
+  the order book, then reads the books: a broker position on a traded symbol that the
+  journal does not hold, or a journal position the broker does not hold and no trade
+  explains, refuses the start with nothing sent. Each strategy's saved state is restored
+  after its catch-up, every restored order is checked against the journal and the books,
+  the entry locks that last the day are set again, and before the banner every open leg
+  has its stop confirmed or placed again (or is exited when past its square-off).
 - Reference table `price_protection` (`openalgo/backtest/reference/data/price_protection.csv`,
   read with `tables.find("price_protection", (exchange, segment, check, underlying, days),
   date)`): the price bands NSE and BSE apply to an option's limit price, by date, each row
@@ -343,6 +374,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ticks or less, where no limit off the premium fits. The buffer is unchanged. No change in
   backtest results; the reference data's version string now carries 2026-11-17, the date
   this table was checked.
+- MAE and MFE of every trade, computed by the kernel for backtests and live sessions
+  alike. `Result.trades` gains `mae_rupees` (the lowest running P&L the trade showed while
+  open, before charges: zero or negative), `mfe_rupees` (the highest: zero or positive),
+  `mae_pct` and `mfe_pct` (as percents of the trade's largest capital at work: average
+  entry price times the largest quantity held times the contract multiplier) and
+  `slippage_rupees`; `result.trade_list()` gains `mae`, `mfe`, `mae_pct`, `mfe_pct` and
+  `slippage`. Only prices the trade could have seen while it was open count: the high and
+  low of each base bar it held through, its fill prices, the open of a bar it exited in,
+  and a live session's ticks. In a live session a trade whose closing order may have
+  filled unseen (a bar reached its stop, or a stop change waits for the broker) counts
+  only its fills until the broker reports, so its MAE and MFE can be smaller than the
+  backtest's, never larger. Every existing column and figure is unchanged.
+- Slippage paid: `Result.fills` gains `slippage_rupees`, each fill's price against its
+  price before slippage times units and multiplier, positive when worse. It is already in
+  the fill prices, so no P&L changes; a fill the broker priced in a live session has none
+  (NaN), and so has its trade.
+- New metrics, group "Excursions and trading cost": `average_mae` and `average_mfe` (as
+  shares of capital at work), `worst_mae` and `best_mfe` (rupees), `edge_ratio` (mean MFE
+  over mean MAE), `profit_kept` (the winners' gross P&L over their MFE),
+  `closed_turnover`, `total_slippage`, `trading_cost` (charges plus slippage),
+  `trading_cost_share_of_gross_pnl` and `trading_cost_bps` (basis points of the closed
+  trades' turnover). A trades table without the new columns gives NaN for them.
+- Tearsheet, Trades section: a Trading Cost row (turnover of closed trades, charges,
+  slippage, trading cost, its share of gross P&L and its basis points of turnover); a MAE
+  and MFE block with six tiles, histograms of MAE and MFE percent and scatter charts of
+  each against the trade's return (winners as circles, the others as crosses); MAE and
+  MFE columns in the trade list; slippage and trading cost rows under the Charges table.
+  Money tiles show paise below Rs 1,000. Mode "basic" shows the trading cost row and the
+  histograms, "charts" the histograms and scatter charts (the Trades section now appears
+  in that mode), "metrics" the new metrics.
 
 ### Changed
 
@@ -364,6 +425,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a price (`exec::price::limit_beyond`): a stop-limit's limit, a GTT child's limit and the
   reprice of a stop the price has passed. Change in results: only option sell stops at
   one tick, which used to rest with a limit of 0.00.
+
+### Fixed
+
+- The `turnover` metric (and the turnover ratio built on it) and the trade list's
+  `return_pct` now count the contract multiplier. For a contract whose multiplier is not
+  1 (an MCX gold future quoted per 10 grams and traded in 1 kg units has 100) the
+  turnover read 100 times too small and the return 100 times too large. A trades table
+  given to `metrics.analyse` may carry a `multiplier` column (1 when absent). Change in
+  results: only instruments with a multiplier other than 1; shares, NSE and BSE
+  derivatives and most MCX contracts are unchanged to the bit.
 
 ## [2.2.1] - 2026-11-15
 

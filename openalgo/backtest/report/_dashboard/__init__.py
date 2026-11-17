@@ -6,8 +6,9 @@ built from a `Performance`, in one self-contained page.
 Modules: `page` (the page and its order of sections), `sections` (the return
 sections), `sections_run` (metrics, trades, strategies, notes), `layout` (what a page
 shows, sections and cards), `cards` (the stat tiles), `tables` and `trades` (tables),
-`timeseries`, `bars` and `heatmaps` (charts as inline SVG and HTML), `scale` (axis
-arithmetic), `data` (the series, tables and benchmark figures the sections draw),
+`excursions` (the trading cost block and the MAE and MFE subsection of the trades),
+`timeseries`, `bars`, `scatter` and `heatmaps` (charts as inline SVG and HTML), `scale`
+(axis arithmetic), `data` (the series, tables and benchmark figures the sections draw),
 `style` and `script` (the inline stylesheet and script).
 """
 

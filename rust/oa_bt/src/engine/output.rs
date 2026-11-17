@@ -3,10 +3,10 @@
 //!
 //! | Table | One row per | Notes |
 //! |---|---|---|
-//! | `fills` | fill | slice, step, side, units, price, where in the bar, reason, order, flags, costs |
+//! | `fills` | fill | slice, step, side, units, price, where in the bar, reason, order, flags, costs, slippage |
 //! | `levels` | slice in which a position or its levels changed | the position history: quantity, average price, stop, targets, remainder, trail, breakeven (as of the end of the slice; in force from the next) |
 //! | `equity` | slice | the equity series the metrics are computed from |
-//! | `trades` | closed round trip (flat to flat) | positions still open at the end are not trades; they are in `final_positions` |
+//! | `trades` | closed round trip (flat to flat) | positions still open at the end are not trades; they are in `final_positions`; each has its MAE, MFE and slippage (`excursion`) |
 //! | `orders` | order | every order with its final state |
 //! | `events` | event | the stream of `event` |
 //! | `stale_marks` | open position marked at a last close for want of a bar | SPEC-07 |
@@ -22,6 +22,7 @@ use crate::portfolio::{round_to_paise, FillEffect, FillKind, PositionChange, Pos
 use crate::rms::leg::{BreakevenState, LevelInForce, TargetLevel, TrailState};
 
 use super::event::{Event, EventStamp};
+use super::excursion::{add_slippage, paise, Excursion, FillView};
 use super::futures::FuturesOutput;
 use super::run_end::RunEnd;
 
@@ -31,6 +32,10 @@ pub struct FillRecord {
     pub stamp: EventStamp,
     pub product: Product,
     pub fill: Fill,
+    /// What slippage cost the fill, rupees to the paisa, positive when it was worse
+    /// than its price before slippage; `None` for a fill the venue priced (a live
+    /// session's), which has none modelled (`excursion`). Already in the fill price.
+    pub slippage_rupees: Option<f64>,
 }
 
 /// One row of the position history: the state at the end of a slice in which the
@@ -128,6 +133,15 @@ pub struct TradeRecord {
     /// when the position opened with no stop (`initial_risk`). The R-multiple of the
     /// trade is its P&L over this.
     pub initial_risk_rupees: Option<f64>,
+    /// Maximum adverse excursion: the lowest running P&L the trade showed, before
+    /// charges, rupees to the paisa, at most 0 (`excursion` defines the running P&L and
+    /// the prices that count).
+    pub mae_rupees: f64,
+    /// Maximum favourable excursion: the highest running P&L, at least 0.
+    pub mfe_rupees: f64,
+    /// What slippage cost the trade's fills, rupees: the sum of theirs, `None` when a
+    /// fill has none modelled. Already in the gross P&L.
+    pub slippage_rupees: Option<f64>,
 }
 
 /// A position at the end of the run.
@@ -177,7 +191,7 @@ pub struct RunOutput {
 }
 
 /// A round trip still open (a live session's saved state carries it, `venue_state`).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) struct OpenTrade {
     pub(super) key: PositionKey,
     pub(super) direction: Side,
@@ -191,6 +205,8 @@ pub(super) struct OpenTrade {
     pub(super) gross: f64,
     pub(super) fills: u32,
     pub(super) initial_risk: Option<f64>,
+    pub(super) excursion: Excursion,
+    pub(super) slippage: Option<f64>,
 }
 
 /// Builds the trades table from fills.
@@ -201,8 +217,8 @@ pub struct TradeBook {
 }
 
 impl TradeBook {
-    /// Account for one fill and its effect on the position.
-    pub fn record(&mut self, record: &FillRecord, effect: &FillEffect) {
+    /// Account for one fill, its effect on the position and what it showed (`view`).
+    pub(super) fn record(&mut self, record: &FillRecord, effect: &FillEffect, view: &FillView) {
         let key = PositionKey {
             instrument: record.fill.instrument,
             product: record.product,
@@ -223,12 +239,15 @@ impl TradeBook {
                 gross: 0.0,
                 fills: 0,
                 initial_risk: None,
+                excursion: Excursion::default(),
+                slippage: Some(0.0),
             });
         }
         let Some(index) = self.open.iter().position(|trade| trade.key == key) else {
             return;
         };
         let trade = &mut self.open[index];
+        let realized_before = trade.gross;
         trade.fills += 1;
         if effect.kind == FillKind::Reduce {
             trade.exit_units += fill.quantity_units;
@@ -240,6 +259,14 @@ impl TradeBook {
             trade.entry_value += fill.quantity_units * fill.price_rupees;
         }
         trade.max_units = trade.max_units.max(effect.quantity_after.abs());
+        trade.slippage = add_slippage(trade.slippage, record.slippage_rupees);
+        let opened = effect.kind == FillKind::Entry;
+        let realized = (realized_before, trade.gross);
+        let when = (record.stamp.slice, fill.at);
+        let price = fill.price_rupees;
+        trade
+            .excursion
+            .see_fill(when, price, view, opened, realized);
         if effect.change == PositionChange::Closed {
             let done = self.open.remove(index);
             self.close(done, record.stamp, fill.reason);
@@ -249,6 +276,7 @@ impl TradeBook {
     fn close(&mut self, trade: OpenTrade, stamp: EventStamp, reason: FillReason) {
         let average = |value: f64, units: f64| if units > 0.0 { value / units } else { 0.0 };
         let gross = round_to_paise(trade.gross);
+        let (mae, mfe) = trade.excursion.rounded();
         self.closed.push(TradeRecord {
             number: self.closed.len() as u32 + 1,
             instrument: trade.key.instrument,
@@ -270,6 +298,9 @@ impl TradeBook {
             exit_reason: reason,
             fills: trade.fills,
             initial_risk_rupees: trade.initial_risk,
+            mae_rupees: mae,
+            mfe_rupees: mfe,
+            slippage_rupees: trade.slippage.map(paise),
         });
     }
 

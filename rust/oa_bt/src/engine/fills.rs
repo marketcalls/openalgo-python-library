@@ -15,6 +15,7 @@ use super::clock::SliceInfo;
 use super::config::QuantityMode;
 use super::error::KernelError;
 use super::event::{Event, EventStamp, OrderEventKind};
+use super::excursion::FillView;
 use super::fill_bar::AtFill;
 use super::futures::FillOrigin;
 use super::kernel::Engine;
@@ -211,6 +212,7 @@ impl Engine {
         let spec = self.spec(request.key.instrument)?.clone();
         let day = self.trade_day(stamp);
         let price = self.fill_price(&request, spec.tick_size_rupees, day)?;
+        let before = self.holding(request.key);
         let position = self.portfolio.position_mut(request.key, spec.multiplier);
         let effect = position.apply(request.side, request.units, price, stamp.slice_ts)?;
         position.margin_rupees += request.margin_rupees;
@@ -251,7 +253,9 @@ impl Engine {
             flags: request.flags,
             costs_rupees: costs,
         };
-        self.record_fill(stamp, request.key, fill, &effect)?;
+        let at = (stamp.slice as usize, &request);
+        let view = self.fill_view(at, before, price, spec.multiplier);
+        self.record_fill(stamp, request.key, fill, (&effect, &view))?;
         self.risk_after_fill(stamp, request.key, &fill, &effect);
         self.place_gtts_after_entry(stamp, request.key, &effect)?;
         Ok(effect)
@@ -297,7 +301,7 @@ impl Engine {
         stamp: EventStamp,
         key: PositionKey,
         fill: Fill,
-        effect: &FillEffect,
+        (effect, view): (&FillEffect, &FillView),
     ) -> Result<(), KernelError> {
         if let Some(id) = fill.order {
             // A reversal fills its order in two parts: the close, then the open.
@@ -340,8 +344,9 @@ impl Engine {
             stamp,
             product: key.product,
             fill,
+            slippage_rupees: view.slippage_rupees,
         };
-        self.record.trades.record(&record, effect);
+        self.record.trades.record(&record, effect, view);
         if effect.kind == FillKind::Entry {
             let risk = self.initial_risk(key, &fill);
             self.record.trades.set_initial_risk(key, risk);

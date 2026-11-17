@@ -19,7 +19,7 @@ use oa_bt::model::{Product, Side};
 use oa_bt::rms::{ExitReason, StrategyRiskConfig};
 use venue_support::{
     at_close, bars, charged_config, config, echo_until, events, exit, limit, market, minute, order,
-    run_backtest, run_echo, session, slice_open, Act, Echo, Ohlc, Script,
+    run_backtest, run_echo, session, slice_open, venue_priced, Act, Echo, Ohlc, Script,
 };
 
 /// The slice that opens at the square-off, 15:10.
@@ -156,7 +156,8 @@ fn an_echoed_square_off_fills_where_the_backtest_squares_off() {
     let exit = session.fills.last().expect("the square-off's fill");
     assert_eq!(exit.fill.reason.code(), "scheduler");
     assert_eq!(exit.stamp.slice_ts, slice_open(SQUARE_OFF_SLICE));
-    assert_eq!(as_backtest_records(session, &[OrderId(2)]), backtest);
+    let session = as_backtest_records(session, &[OrderId(2)]);
+    assert_eq!(session, venue_priced(backtest));
 }
 
 #[test]
@@ -367,7 +368,8 @@ fn an_echoed_daily_loss_exit_fills_where_the_backtest_fills_it() {
         (exit.stamp.slice_ts, exit.stamp.step),
         (minute(11), Step::OpenFills)
     );
-    assert_eq!(as_backtest_records(session, &[OrderId(2)]), backtest);
+    let session = as_backtest_records(session, &[OrderId(2)]);
+    assert_eq!(session, venue_priced(backtest));
 }
 
 /// Long 100 from minute 1 with a resting SL-M sell of 100 at 450.00 (o2) from the close

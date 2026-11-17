@@ -274,6 +274,19 @@ pub fn run_backtest(config: RunConfig, bars: &BarColumns, script: &mut Script) -
     kernel.finish().expect("the backtest finished")
 }
 
+/// A backtest's output as a live session reports the same fills: its venue priced them,
+/// so no fill and no trade has slippage modelled (`engine::excursion`), where the
+/// backtest's fills with zero slippage record 0.
+pub fn venue_priced(mut output: RunOutput) -> RunOutput {
+    for record in &mut output.fills {
+        record.slippage_rupees = None;
+    }
+    for trade in &mut output.trades {
+        trade.slippage_rupees = None;
+    }
+    output
+}
+
 /// An order the echo venue holds.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Held {

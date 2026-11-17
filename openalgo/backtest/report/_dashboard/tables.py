@@ -46,7 +46,9 @@ def _cell(text: str, css: str = "r nums") -> str:
 
 #: Units of the metrics that sort by their number; times, text and flags have no sort
 #: value, so a sort puts them first (ascending) or last (descending), as undefined.
-SORTED_UNITS = frozenset({"fraction", "rupees", "ratio", "count", "days", "seconds", "sessions"})
+SORTED_UNITS = frozenset(
+    {"fraction", "rupees", "ratio", "count", "days", "seconds", "sessions", "bps"}
+)
 
 
 def _sort_key(key: str, value: object) -> str:
@@ -165,7 +167,8 @@ def _valued(key: str, value: object) -> str:
 
 def costs(metrics: Mapping[str, object], breakdown: Mapping[str, float]) -> str:
     """Costs of closed trades by component (when the trades table itemised them), their
-    total, and the path from gross to net P&L."""
+    total, the slippage in the fill prices and the trading cost (the two together), and
+    the path from gross to net P&L."""
     total = float(metrics["total_costs"])
     rows = []
     for name, amount in breakdown.items():
@@ -180,8 +183,12 @@ def costs(metrics: Mapping[str, object], breakdown: Mapping[str, float]) -> str:
         for label, amount, share in rows
     )
     gross, net = metrics["gross_pnl"], metrics["net_pnl"]
+    slippage = metrics.get("total_slippage", math.nan)
+    trading = metrics.get("trading_cost", math.nan)
     summary = (
         ("Total charges", fmt.rupees(total), ""),
+        ("Slippage (in fill prices)", fmt.figure("total_slippage", slippage), ""),
+        ("Trading cost", fmt.figure("trading_cost", trading), ""),
         ("Gross P&amp;L", fmt.figure("gross_pnl", gross), tone(gross)),
         ("Net P&amp;L", fmt.figure("net_pnl", net), tone(net)),
         (

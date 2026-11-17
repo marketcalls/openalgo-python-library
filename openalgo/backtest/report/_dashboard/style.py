@@ -182,6 +182,8 @@ svg.bars .grid{stroke:var(--grid)}svg.bars .axis{stroke:var(--border)}
 svg.bars .zero{stroke:var(--border-strong);stroke-dasharray:2 2}
 svg.bars .whisker{stroke:var(--text-faint)}svg.bars .base{stroke:var(--border-strong)}
 svg.bars .mean{stroke:var(--pnl-neg);stroke-dasharray:5 4;stroke-width:1.3}
+svg.bars .win{fill:var(--pnl-pos);fill-opacity:.7;stroke:var(--pnl-pos);stroke-width:1}
+svg.bars .loss{fill:none;stroke:var(--pnl-neg);stroke-width:1.6;stroke-linecap:round}
 .streak-foot{margin-top:8px;display:flex;flex-wrap:wrap;gap:8px 24px;font-size:.75rem;
 color:var(--text-muted)}
 .streak-foot b{font-weight:400;color:var(--text)}

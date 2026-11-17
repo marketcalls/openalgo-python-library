@@ -201,8 +201,8 @@ fn a_state_that_cannot_be_read_is_refused_whole_naming_the_field() {
     let table = [
         (
             "another layout",
-            with(&state, &["layout"], 2i64.into()),
-            "version 2",
+            with(&state, &["layout"], 5i64.into()),
+            "version 5",
         ),
         (
             "a part missing",
@@ -376,4 +376,65 @@ fn a_restored_working_order_takes_the_next_id_and_keeps_its_terms() {
         Ok(Submission::Submitted(OrderId(2))),
         "numbered after the stop"
     );
+}
+
+/// The fields an open trade gained in layout 2: its excursion so far, its slippage so
+/// far, the closing orders a price has reached that have not ended and the ticks of its
+/// last slice.
+const OPEN_TRADE_FIELDS_OF_LAYOUT_2: [&str; 6] = [
+    "worst_rupees",
+    "best_rupees",
+    "inside_fill_slice",
+    "slippage_rupees",
+    "unconfirmed_close_orders",
+    "slice_ticks",
+];
+
+/// The field an open trade gained in layout 3: the closing orders a price has reached
+/// only by the terms of a modification the venue has not answered.
+const OPEN_TRADE_FIELD_OF_LAYOUT_3: &str = "pending_close_orders";
+
+/// The field an open trade gained in layout 4: the terms confirmed modifications replaced,
+/// kept for the bar of the slice they were confirmed in.
+const OPEN_TRADE_FIELD_OF_LAYOUT_4: &str = "replaced_terms";
+
+/// The saved state as layout `layout` wrote it: its open trade without `fields`.
+fn as_layout(layout: i64, fields: &[&str]) -> StateValue {
+    let state = saved();
+    let StateValue::Map(entries) = &state else {
+        panic!("the state is a map");
+    };
+    let trades = entries.iter().find(|(key, _)| key == "open_trades");
+    let Some((_, StateValue::List(trades))) = trades else {
+        panic!("the state has its open trades");
+    };
+    let trade = fields
+        .iter()
+        .fold(trades[0].clone(), |trade, field| without(&trade, field));
+    let earlier = with(&state, &["open_trades", "0"], trade);
+    with(&earlier, &["layout"], layout.into())
+}
+
+#[test]
+fn a_state_of_the_layout_before_the_excursions_is_refused_as_another_version() {
+    let mut fields = OPEN_TRADE_FIELDS_OF_LAYOUT_2.to_vec();
+    fields.extend([OPEN_TRADE_FIELD_OF_LAYOUT_3, OPEN_TRADE_FIELD_OF_LAYOUT_4]);
+    let mut kernel = restarted_at(config(), 2);
+    let earlier = as_layout(1, &fields);
+    assert_eq!(kind(kernel.restore_live_state(&earlier)), "version 1");
+}
+
+#[test]
+fn a_state_of_the_layout_before_the_holds_by_a_modification_is_refused_as_another_version() {
+    let mut kernel = restarted_at(config(), 2);
+    let fields = [OPEN_TRADE_FIELD_OF_LAYOUT_3, OPEN_TRADE_FIELD_OF_LAYOUT_4];
+    let earlier = as_layout(2, &fields);
+    assert_eq!(kind(kernel.restore_live_state(&earlier)), "version 2");
+}
+
+#[test]
+fn a_state_of_the_layout_before_the_replaced_terms_is_refused_as_another_version() {
+    let mut kernel = restarted_at(config(), 2);
+    let earlier = as_layout(3, &[OPEN_TRADE_FIELD_OF_LAYOUT_4]);
+    assert_eq!(kind(kernel.restore_live_state(&earlier)), "version 3");
 }
