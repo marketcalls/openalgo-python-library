@@ -30,7 +30,10 @@ strategy that the session did not send is another's; (3) the positions are judge
 A finding seen in two comparisons in a row acts, once (`_reconcile_findings`). From
 the first comparison showing the broker holding fewer units, none or the other side, the
 exit guard (`_reconcile_guard`) holds every closing order beyond what the broker holds,
-and the stop's cancel that makes way for one, until a comparison agrees.
+and the stop's cancel that makes way for one, until a comparison agrees. Once the close
+has printed its last lines (`end`), a difference a leg's last comparison saw for the
+first time is never confirmed: the close reports the leg at OpenAlgo's units
+(`unconfirmed`, `broker_units`; 16-session-design 5.4 "As built", round 7).
 
 Each read's position book also counts for the kill switch (`KillSwitch.positions`, its
 interface to the reconciler, which never fires it), and its funds cap each strategy's
@@ -49,7 +52,7 @@ from typing import Any
 from .._engine import call
 from .._layout import NANOS_PER_SECOND
 from ._reconcile_act import Corrections, attribute, in_flight, order_findings, own_orders
-from ._reconcile_findings import Findings, Reconciliation
+from ._reconcile_findings import Findings, Reconciliation, Sighting
 from ._reconcile_guard import ExitGuard
 from ._reconcile_rules import GUARDED, Kind, LegBooks, judge, leg_books, unexplained_by
 from ._session_trader import Trader
@@ -100,6 +103,7 @@ class Reconciler:
         self._flight: dict[str, int | None] = {}
         self._earlier: frozenset[str] = frozenset()
         self._stopped = False
+        self._ended = False
 
     # ----- the start and what the loop tells it -----------------------------------------
 
@@ -147,6 +151,25 @@ class Reconciler:
     def orphan(self, order_id: str) -> bool:
         """True for an orphan the reconciler asked to cancel: its news is expected."""
         return order_id in self._orphans
+
+    def end(self) -> None:
+        """The close has printed its last lines: the exit guard ends (`ExitGuard.end`),
+        and no later comparison will confirm a difference first seen (module docstring)."""
+        self._ended = True
+        self.guard.end()
+
+    def unconfirmed(self, name: str) -> Sighting | None:
+        """Once the close has printed its last lines, the position difference strategy
+        `name`'s last comparison saw for the first time, else None."""
+        return self._findings.unconfirmed(name) if self._ended else None
+
+    def broker_units(self, name: str) -> int | None:
+        """OpenAlgo's signed units of strategy `name`'s leg at the last read while they
+        differ from the engine's with nothing taking them in: while the exit guard holds
+        the leg (`ExitGuard.broker_units`), and after the last lines when no later
+        comparison will confirm the difference (`unconfirmed`); else None."""
+        guarded, seen = self.guard.broker_units(name), self.unconfirmed(name)
+        return guarded if guarded is not None or seen is None else seen.broker_units
 
     def not_read(self) -> None:
         """The worker did not read the books (the guard locked): nothing more is read."""

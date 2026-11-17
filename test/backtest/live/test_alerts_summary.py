@@ -167,3 +167,42 @@ def test_the_summary_is_plain_ascii_text():
 def test_a_summary_cannot_be_changed():
     with pytest.raises(FrozenInstanceError):
         A_GOOD_DAY.closed_trades = 5
+
+
+# ----- a difference first seen at the close (16-session-design 5.4 "As built", round 7) ---
+
+#: How the close names a leg whose books differed at its last read.
+SHORT_4 = "StopHold SBIN NSE -4 units in OpenAlgo's books, the engine's 0"
+A_SHORT_CLOSE = replace(A_BAD_DAY, reconcile_mismatches=2, differing=(SHORT_4,))
+
+
+def test_the_reconcile_line_counts_and_names_the_legs_that_differ_at_the_close():
+    assert line(A_SHORT_CLOSE, "Reconcile") == f"2 mismatches (at the close: {SHORT_4})"
+
+
+def test_the_end_state_names_the_legs_that_differ_at_the_close():
+    assert line(A_SHORT_CLOSE, "End state") == (
+        f"not flat: a position is still open (at the close: {SHORT_4})"
+    )
+
+
+def test_several_legs_that_differ_at_the_close_are_named_in_order():
+    other = "Orb INFY NSE 0 units in OpenAlgo's books, the engine's 5"
+    summary = replace(A_SHORT_CLOSE, differing=(SHORT_4, other))
+    assert line(summary, "Reconcile") == f"2 mismatches (at the close: {SHORT_4}; {other})"
+
+
+def test_a_flat_summary_cannot_name_a_leg_that_differs_at_the_close():
+    with pytest.raises(ConfigError, match="cannot be flat"):
+        replace(A_GOOD_DAY, reconcile_mismatches=1, differing=(SHORT_4,))
+
+
+def test_a_leg_that_differs_at_the_close_counts_among_the_mismatches():
+    with pytest.raises(ConfigError, match="at least one mismatch for each leg"):
+        replace(A_SHORT_CLOSE, reconcile_mismatches=0)
+
+
+@pytest.mark.parametrize("words", ["", 5], ids=["empty", "not text"])
+def test_a_leg_that_differs_is_named_in_words(words):
+    with pytest.raises(ConfigError, match="names each leg in words"):
+        replace(A_SHORT_CLOSE, differing=(words,))

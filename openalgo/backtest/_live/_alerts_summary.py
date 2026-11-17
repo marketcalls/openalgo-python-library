@@ -14,8 +14,12 @@ style of `Result.summary()`:
     End state   : flat
 
 An "Alerts : 2 not delivered" line comes before the end state when an alert of the
-session did not reach OpenAlgo. Rupees are written as `Result.summary()` writes them
-(Indian digit grouping, a loss as "Rs -500.00"). `alerts` re-exports both names.
+session did not reach OpenAlgo. A leg whose OpenAlgo books differed from the engine at the
+close with no later read to confirm it (16-session-design 5.4 "As built", round 7) is
+counted and named on the Reconcile and End state lines, "(at the close: s1 SBIN NSE -4
+units in OpenAlgo's books, the engine's 0)" after "1 mismatch" and after "not flat: a
+position is still open". Rupees are written as `Result.summary()` writes them (Indian
+digit grouping, a loss as "Rs -500.00"). `alerts` re-exports both names.
 """
 
 from __future__ import annotations
@@ -53,11 +57,15 @@ class SessionSummary:
     `reconcile_mismatches` the reconciliations whose broker position differed from the
     engine's. `undelivered_alerts` counts the session's alerts that did not reach
     OpenAlgo, failed or dropped (`Alerts.undelivered`). `flat` is True when the session
-    ended with no open position.
+    ended with no open position. `differing` names, in words, each leg whose OpenAlgo
+    books differed from the engine at the close with no later read to confirm it; each
+    is a mismatch, and a position that may be open.
 
     Raises ConfigError when a rupee figure or the seconds unprotected is not a finite
     number (None is allowed for `slippage` only), when the seconds unprotected are
-    negative, or when a count is not a whole number of at least zero.
+    negative, when a count is not a whole number of at least zero, when a leg of
+    `differing` is not named in words, or when it names more legs than the mismatches
+    counted or any leg while `flat` is True.
     """
 
     day: dt.date
@@ -73,6 +81,7 @@ class SessionSummary:
     reconcile_mismatches: int
     undelivered_alerts: int
     flat: bool
+    differing: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _check_figure("gross_pnl", self.gross_pnl)
@@ -87,6 +96,7 @@ class SessionSummary:
             )
         for name in _COUNTS:
             _check_count(name, getattr(self, name))
+        _check_differing(self.differing, self.reconcile_mismatches, self.flat)
 
     @property
     def net_pnl(self) -> float:
@@ -98,6 +108,7 @@ def summary_text(summary: SessionSummary) -> str:
     """The summary of the module docstring: a title line, then one line per figure with
     the colons aligned, the alerts line only when an alert was not delivered. Plain
     text, no emoji."""
+    at_close = f" (at the close: {'; '.join(summary.differing)})" if summary.differing else ""
     lines = [
         ("Strategies", ", ".join(summary.strategies) or "none"),
         ("Trades", f"{summary.closed_trades} closed"),
@@ -107,11 +118,15 @@ def summary_text(summary: SessionSummary) -> str:
         ("Slippage", _slippage(summary.slippage)),
         ("Rejected", _count(summary.rejected_orders, "order")),
         ("Unprotected", f"{math.ceil(summary.unprotected_seconds)} s without a stop at the broker"),
-        ("Reconcile", _count(summary.reconcile_mismatches, "mismatch", "mismatches")),
+        (
+            "Reconcile",
+            _count(summary.reconcile_mismatches, "mismatch", "mismatches") + at_close,
+        ),
     ]
     if summary.undelivered_alerts:
         lines.append(("Alerts", f"{summary.undelivered_alerts} not delivered"))
-    lines.append(("End state", "flat" if summary.flat else "not flat: a position is still open"))
+    end = "flat" if summary.flat else f"not flat: a position is still open{at_close}"
+    lines.append(("End state", end))
     width = max(len(label) for label, _ in lines)
     title = (
         f"Session of {summary.day.isoformat()} (IST): {summary.mode.name} mode, "
@@ -134,6 +149,28 @@ def _check_count(name: str, value: object) -> None:
     if isinstance(value, bool) or not isinstance(value, numbers.Integral) or value < 0:
         raise ConfigError(
             f"the session summary's {name} must be a whole number of at least zero, got {value!r}"
+        )
+
+
+def _check_differing(differing: object, mismatches: int, flat: bool) -> None:
+    """Raise ConfigError unless `differing` is a tuple of legs in words, each counted
+    among the `mismatches`, and empty when the session ended `flat`."""
+    if not isinstance(differing, tuple) or not all(
+        isinstance(words, str) and words for words in differing
+    ):
+        raise ConfigError(
+            f"the session summary's differing names each leg in words, got {differing!r}"
+        )
+    if differing and flat:
+        raise ConfigError(
+            "the session summary cannot be flat while it names a leg whose OpenAlgo books "
+            "differed from the engine at the close"
+        )
+    if len(differing) > mismatches:
+        raise ConfigError(
+            f"the session summary counts {mismatches} reconcile mismatches but names "
+            f"{len(differing)} legs that differ at the close: it counts at least one "
+            "mismatch for each leg"
         )
 
 

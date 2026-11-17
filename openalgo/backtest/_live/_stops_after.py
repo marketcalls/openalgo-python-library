@@ -15,17 +15,23 @@ in that window (a fill whose answer came then, a sale by hand the reconciler ado
 the engine held them when the lines were printed (`end`). The result's note of a position
 left open first says what happened, then the leg's state as `_stops_report.left_open`
 gives it (`note`), and one ERROR alert per leg says the same (`alert`): the last line is
-never left claiming a position or a protection the leg no longer has. So is a leg left
-open that the reconciler's exit guard still holds at the close (`CLOSED_DIFFERING`): the
-last read showed the broker holding fewer units than the engine counts and no comparison
-agreed after it (the final read brought no books, or was the first to see a sale by
-hand), so a line printed before that read may have said its stop protects it; the alert
-and the note name the units OpenAlgo's books showed and the stop's own
-(`_stops_report.left_open`). A leg left flat is alerted when anything happened to it, or
-when an order of it still works in the engine (`_stops_report.still_working`), since that
-order may work at the broker; no line named a flat leg. Each alert names the changes of
-the leg's orders the exit guard held back (a held placement's order is named by the note
-as not sent).
+never left claiming a position or a protection the leg no longer has.
+
+A leg whose last comparison saw a difference with OpenAlgo's books for the first time
+(fewer units, none, more or the other side: `Reconciler.unconfirmed`) has no later read to
+confirm it once the session has ended (16-session-design 5.4 "As built", round 7). It is
+reported whatever the engine holds, flat included: the note, and one ERROR alert, name
+OpenAlgo's units and the engine's (`differs_words`), that nothing was sent for the
+difference, then what works toward the leg and its stop with the order book to check
+before closing it by hand (`_stops_report.left_open`); the result lists it at OpenAlgo's
+units (`_session_close`). A leg left open that the exit guard still holds after a
+difference seen twice (`CLOSED_DIFFERING`) is alerted too: no comparison agreed after it,
+so a line printed before the final read may have said its stop protects it; the alert and
+the note name the units OpenAlgo's books showed and the stop's own. A leg left flat is
+alerted when anything happened to it, or when an order of it still works in the engine
+(`_stops_report.still_working`), since that order may work at the broker; no line named a
+flat leg. Each alert names the changes of the leg's orders the exit guard held back (a
+held placement's order is named by the note as not sent). Nothing is sent for any of it.
 
 Quantities are signed units. Used by the loop only.
 """
@@ -36,6 +42,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Any
 
+from ._reconcile_findings import Sighting
 from ._session_trader import Trader
 from ._stops_orders import LegOrders
 from ._stops_report import left_open, leg_words, still_working
@@ -57,6 +64,12 @@ FLAT_NOW = (
 )
 #: What the alert of a leg the exit guard still holds at the close says first.
 CLOSED_DIFFERING = "the session closed before OpenAlgo's books agreed with the engine"
+#: What the note and the alert of a leg whose difference no later read confirms say of
+#: it (`differs_words`).
+DIFFERS = (
+    "OpenAlgo's books showed {broker} units against the engine's {engine} at the last "
+    "read, and the session ended before they agreed: nothing was sent for the difference"
+)
 #: When it happened, in a note's words.
 _AFTER_THE_LINES = "after the session's last lines"
 
@@ -91,26 +104,39 @@ class AfterLines:
         self._stops[trader.name] = (leg.orders[kernel_order].name(), update.status)
         return True
 
-    def note(self, stops: Any, trader: Trader) -> str:
+    def note(self, session: Any, trader: Trader) -> str:
         """The note of `trader`'s position left open: what happened to the leg after the
-        last lines, when anything did, then its state (`left_open`); `stops` is the stops
-        supervisor."""
-        return "; ".join([*self._happened(trader), left_open(stops, trader)])
+        last lines, when anything did, how OpenAlgo's books differed from the engine when
+        no later read confirms it (`differs_words`), then its state (`left_open`);
+        `session` is the `_session_loop.Session`."""
+        seen = session.reconcile.unconfirmed(trader.name)
+        if seen is None:
+            return "; ".join([*self._happened(trader), left_open(session.stops, trader)])
+        state = left_open(session.stops, trader, books=False)
+        return "; ".join([*self._happened(trader), differs_words(seen), state])
 
     def alert(self, session: Any) -> None:
-        """One ERROR alert per leg left open that anything happened to after the last
-        lines or that the exit guard still holds, and per leg left flat that anything
-        happened to or that still has an order working (module docstring); `session` is
-        the `_session_loop.Session`."""
+        """One ERROR alert per leg whose difference with OpenAlgo's books no later read
+        confirms, per leg left open that anything happened to after the last lines or that
+        the exit guard still holds, and per leg left flat that anything happened to or that
+        still has an order working (module docstring); `session` is the
+        `_session_loop.Session`."""
         held = session.reconcile.guard.left()
         for trader in session.traders:
-            text = self._alert_text(session.stops, trader, held)
+            seen = session.reconcile.unconfirmed(trader.name)
+            text = self._alert_text(session.stops, trader, held, seen)
             if text is not None:
                 session.alert(AlertKind.ERROR, text)
 
-    def _alert_text(self, stops: Any, trader: Trader, held: Sequence[Any]) -> str | None:
+    def _alert_text(
+        self, stops: Any, trader: Trader, held: Sequence[Any], seen: Sighting | None
+    ) -> str | None:
         """The ERROR alert of `trader`'s leg, or None when it needs none (`alert`)."""
         happened, not_sent = self._happened(trader), _held_changes(trader, held)
+        if seen is not None:
+            state = left_open(stops, trader, books=False)
+            parts = [*happened, differs_words(seen), *not_sent, state]
+            return f"{trader.name} {trader.symbol} {trader.exchange}: {'; '.join(parts)}"
         units = trader.open_units()
         if units:
             differs = [CLOSED_DIFFERING] if stops.broker_units(trader) is not None else []
@@ -139,6 +165,12 @@ class AfterLines:
         return [f"{_moved(before, now)}, and {ended}"]
 
 
+def differs_words(seen: Sighting) -> str:
+    """How a note and an alert name a difference with OpenAlgo's books that no later read
+    confirms: both figures, and that nothing was sent for it (`DIFFERS`)."""
+    return DIFFERS.format(broker=seen.broker_units, engine=seen.engine_units)
+
+
 def _moved(before: float, now: float) -> str:
     """A change of a leg's signed units after the last lines, in a note's words."""
     return f"its position went from {before:g} to {now:g} units {_AFTER_THE_LINES}"
@@ -158,4 +190,4 @@ def _held_changes(trader: Trader, held: Sequence[Any]) -> list[str]:
     return [f"not sent: {', '.join(names)}"] if names else []
 
 
-__all__ = ["CLOSED_DIFFERING", "FLAT_NOW", "AfterLines"]
+__all__ = ["CLOSED_DIFFERING", "DIFFERS", "FLAT_NOW", "AfterLines", "differs_words"]

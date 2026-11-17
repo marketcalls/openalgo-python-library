@@ -4,7 +4,10 @@ seen in two comparisons in a row (`_reconcile_act.Corrections`), and is a row of
 day's reconciliations (`Reconciliation`) at those two sightings only, not at each read
 while it lasts; once it has been absent from a comparison, a sighting is a first one
 again. An unexplained difference that lasts past the in-flight limit is an ERROR alert,
-once, to check the account (5.3 row 3).
+once, to check the account (5.3 row 3). A leg whose last comparison saw a position
+difference for the first time has it as its `Sighting` until a later comparison judges
+the position again (`unconfirmed`): at the close no later read will confirm it, so the
+close reports it (16-session-design 5.4 "As built", round 7).
 
 Quantities are signed units, times UTC nanoseconds. Used by the loop only.
 """
@@ -19,6 +22,15 @@ from ._reconcile_act import Corrections, Finding
 from ._reconcile_rules import Kind, LegBooks
 from ._session_trader import Trader
 from ._types import AlertKind
+
+
+@dataclass(frozen=True)
+class Sighting:
+    """A position difference a comparison saw for the first time: the engine's signed
+    units as compared and OpenAlgo's books'."""
+
+    engine_units: int
+    broker_units: int
 
 
 @dataclass(frozen=True)
@@ -52,6 +64,13 @@ class Findings:
         self._acted: set[tuple[str, Finding]] = set()
         self._lag_since: dict[str, int] = {}
         self._lag_alerted: set[str] = set()
+        # By strategy: the position difference its last judged comparison saw first.
+        self._first: dict[str, Sighting] = {}
+
+    def unconfirmed(self, name: str) -> Sighting | None:
+        """The position difference strategy `name`'s last comparison that judged the
+        position saw for the first time, or None (module docstring)."""
+        return self._first.get(name)
 
     def at_start(
         self,
@@ -93,6 +112,8 @@ class Findings:
         confirmed &= findings
         if not any(finding[0] is Kind.UNEXPLAINED for finding in findings):
             self._lag_since.pop(name, None)
+        if books.units is not None and books.trades is not None:
+            self._sighted(name, findings, last)
         for finding in sorted(findings, key=repr):
             if finding[0] is Kind.UNEXPLAINED:
                 self._lag(trader, books)
@@ -111,6 +132,15 @@ class Findings:
             engine = finding[1] if isinstance(finding[0], Kind) else round(trader.open_units())
             self._row(name, kind, engine, books.units, action)
         return bool(findings - last)
+
+    def _sighted(self, name: str, findings: set[Finding], last: set[Finding]) -> None:
+        """A comparison that judged the position: its difference, when the comparison
+        before did not show it, is the leg's first sighting; none otherwise."""
+        position = next((f for f in findings if isinstance(f[0], Kind)), None)
+        if position is None or position in last:
+            self._first.pop(name, None)
+        else:
+            self._first[name] = Sighting(position[1], position[2])
 
     def _row(
         self, name: str, kind: str, engine_units: int, broker_units: int | None, action: str
@@ -137,4 +167,4 @@ class Findings:
             )
 
 
-__all__ = ["Findings", "Reconciliation"]
+__all__ = ["Findings", "Reconciliation", "Sighting"]

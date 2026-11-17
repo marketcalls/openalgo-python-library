@@ -47,11 +47,12 @@ from openalgo.backtest._live.inbox import NotSentReason
 from openalgo.backtest._live.stops import StopsSupervisor
 
 #: The session of the supervisors built with no server: its reconciler's exit guard holds
-#: no cancel back and no leg, which is all they ask of it (`StopsSupervisor.cancelling`,
-#: `StopsSupervisor.broker_units`).
+#: no cancel back, and no leg's books differ from the engine's, which is all they ask of it
+#: (`StopsSupervisor.cancelling`, `StopsSupervisor.broker_units`).
 NOTHING_HELD = SimpleNamespace(
     reconcile=SimpleNamespace(
-        guard=SimpleNamespace(held_cancels=lambda name: frozenset(), broker_units=lambda name: None)
+        guard=SimpleNamespace(held_cancels=lambda name: frozenset()),
+        broker_units=lambda name: None,
     )
 )
 
@@ -444,7 +445,8 @@ def test_a_resting_exit_beside_orders_never_sent_comes_before_closing_it_by_hand
 #: showed the broker holding 6 of the engine's 10 units (4 sold by hand, seen once).
 BROKER_HOLDS_6 = SimpleNamespace(
     reconcile=SimpleNamespace(
-        guard=SimpleNamespace(held_cancels=lambda name: frozenset(), broker_units=lambda name: 6)
+        guard=SimpleNamespace(held_cancels=lambda name: frozenset()),
+        broker_units=lambda name: 6,
     )
 )
 

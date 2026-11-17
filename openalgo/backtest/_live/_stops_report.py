@@ -29,11 +29,12 @@ the session's own orders would sell short:
   works.
 
 While the reconciler's exit guard holds the leg (its last read showed the broker holding
-fewer units on the engine's side, none, or the other side: `StopsSupervisor.broker_units`)
-the note names the units OpenAlgo's books showed and a confirmed stop's own units, and
-sends the operator to the order book: the broker's position is not the engine's, so a stop
-sized for the engine's units may sell beyond it, and no stop is said to protect the leg or
-reported confirmed (`stop_state`).
+fewer units on the engine's side, none, or the other side), and after the close's last
+lines for a difference no later read will confirm (`StopsSupervisor.broker_units`), the
+note names the units OpenAlgo's books showed (unless the caller names them itself) and a
+confirmed stop's own units, and sends the operator to the order book: the broker's
+position is not the engine's, so a stop sized for the engine's units may sell beyond it,
+and no stop is said to protect the leg or reported confirmed (`stop_state`).
 
 That advice holds once the session has ended. While it runs, the engine sends a rejected
 exit again at a later bar's open and places a stop again that ended at the broker with no
@@ -144,10 +145,11 @@ def protected(stops: Any, trader: Trader) -> bool:
     return 0 < units == _covering(stops, trader) and not _working(stops, trader)
 
 
-def left_open(stops: Any, trader: Trader) -> str:
+def left_open(stops: Any, trader: Trader, *, books: bool = True) -> str:
     """The note of `trader`'s position left open once the session has ended (module
-    docstring)."""
-    parts, advice = _note(stops, trader)
+    docstring); with `books` False it leaves out the units OpenAlgo's books showed, for a
+    caller whose words name them."""
+    parts, advice = _note(stops, trader, books=books)
     if advice == _CHECK:
         return "; ".join([*parts, CHECK_FIRST])
     *before, last = parts
@@ -209,10 +211,11 @@ def while_running(then: str = "") -> str:
     return f"to close it by hand, {END_SESSION_FIRST}{step}: {WHILE_IT_RUNS}"
 
 
-def _note(stops: Any, trader: Trader) -> tuple[list[str], str]:
+def _note(stops: Any, trader: Trader, *, books: bool = True) -> tuple[list[str], str]:
     """What works toward `trader`'s position and its stop, in a note's words, and the
     advice the leg's state asks for (`_CLOSE`, `_PROTECTS` or `_CHECK`); with `_CLOSE`
-    and `_PROTECTS` the last part is the stop's."""
+    and `_PROTECTS` the last part is the stop's. `books`: whether it names the units
+    OpenAlgo's books showed when they differ from the engine's (`left_open`)."""
     leg, working = stops.leg(trader), trader.working()
     sent = _working(stops, trader)
     unsent = [kernel_order for kernel_order in working if kernel_order not in leg.orders]
@@ -222,10 +225,10 @@ def _note(stops: Any, trader: Trader) -> tuple[list[str], str]:
     stop_part = _stop_words(stops, trader)
     broker = stops.broker_units(trader)
     if broker is not None:
-        # The broker holds fewer units than the engine counts, or the other side: neither
+        # The broker holds other units than the engine counts, or the other side: neither
         # a sale by hand of the engine's units nor its stop fits what the broker holds.
-        books = f"OpenAlgo's books showed {broker} units at the last read"
-        return [*parts, stop_part, books], _CHECK
+        shown = [f"OpenAlgo's books showed {broker} units at the last read"] if books else []
+        return [*parts, stop_part, *shown], _CHECK
     if stop_part == NO_STOP and not sent:
         # Nothing sent works toward the position: only a sale by hand closes it.
         return [*parts, NO_STOP], _CLOSE

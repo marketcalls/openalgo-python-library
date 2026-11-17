@@ -12,7 +12,9 @@ line, note or result may say that stop protects the position.
 
 - The final read brings no books: right after the leg's line its position-book call loses
   its connection, or, on the threads, takes 8 s, past the read's seconds. The guard still
-  holds the leg at the close, and one ERROR alert then names both figures and the stop.
+  holds the leg at the close, the first sighting of the sale was never confirmed, and so
+  the result lists the leg at OpenAlgo's units with no confirmed stop and one ERROR alert
+  names both figures and the stop (16-session-design 5.4 "As built", round 7).
 - The final read adopts the sale, but the stop's cut to 6 never reaches the broker: the
   exit guard keeps it (standing for any reason it is held after the last lines), its
   connection drops, or, inline, the books come after the read's seconds, so the cut is
@@ -46,10 +48,13 @@ LEFT = StopHold.qty - SOLD
 SLOW_BOOK_S = 8.0
 #: The end of a note whose confirmed stop covers the whole position.
 PROTECTS = "it protects the position, so cancel the stop before any sale by hand"
-#: How a note names the broker's units the exit guard knows of the leg.
+#: How a line names the broker's units the exit guard knows of the leg.
 BOOKS_SHOWED_6 = "OpenAlgo's books showed 6 units at the last read"
-#: How the close's ERROR alert says the books never agreed with the engine.
-CLOSED_DIFFERING = "the session closed before OpenAlgo's books agreed with the engine"
+#: How the close names both figures of a difference no later read confirmed.
+BOTH_FIGURES = (
+    "OpenAlgo's books showed 6 units against the engine's 10 at the last read, and the "
+    "session ended before they agreed: nothing was sent for the difference"
+)
 
 
 def scenario(seam: str, request: Any, monkeypatch: Any) -> Any:
@@ -146,12 +151,12 @@ def test_the_last_line_of_a_leg_the_guard_holds_names_the_books_units_not_a_prot
 
 
 @pytest.mark.parametrize("unsettled", NO_BOOKS, indirect=True)
-def test_the_result_never_says_the_stop_protects_a_leg_the_guard_holds(unsettled):
+def test_the_result_lists_a_leg_the_guard_holds_at_openalgos_units_and_no_protection(unsettled):
     outcome = run(unsettled)
     (left,) = outcome.open_positions
-    assert (left.units, left.stop_confirmed) == (StopHold.qty, False)
+    assert (left.units, left.stop_confirmed) == (LEFT, False)
     assert PROTECTS not in left.note
-    assert BOOKS_SHOWED_6 in left.note
+    assert left.note.startswith(BOTH_FIGURES)
 
 
 @pytest.mark.parametrize("unsettled", NO_BOOKS, indirect=True)
@@ -162,11 +167,12 @@ def test_a_leg_the_guard_holds_at_the_close_is_one_error_alert_naming_both_figur
     outcome = run(world)
     (left,) = outcome.open_positions
     stop = next(o for o in world.orders() if o.price_type == "SL-M")
-    named = [text for text in alerts(caplog, "error") if CLOSED_DIFFERING in text]
-    assert [text.split(": ", 1)[1] for text in named] == [
-        f"StopHold SBIN NSE 10 units: {CLOSED_DIFFERING}; {left.note}"
-    ]
-    assert f"stop {stop.order_id} confirmed at the broker for 10 units" in left.note
+    named = [text for text in alerts(caplog, "error") if BOTH_FIGURES in text]
+    assert [text.split(": ", 1)[1] for text in named] == [f"StopHold SBIN NSE: {left.note}"]
+    assert left.note == (
+        f"{BOTH_FIGURES}; stop {stop.order_id} confirmed at the broker for 10 units; check "
+        "the order book before closing it by hand, cancelling what still works"
+    )
 
 
 # ----- the final read adopts the sale, and the stop's cut never reaches the broker -------
