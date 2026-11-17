@@ -158,6 +158,13 @@ def test_bt_robustness_states_how_long_the_backtest_took():
     assert re.search(r"The backtest took \d+\.\d\d s\.$", lines[0])
 
 
+def test_the_page_leaves_out_how_long_the_backtest_took(edge_report, page):
+    # A wall-clock time differs from call to call; the page is the same for a seed.
+    report = bt.robustness(Flip, data=EDGE_DATA, **FREE, progress=lambda line: None)
+    assert "took" not in report.plan
+    assert report.tearsheet() == page
+
+
 def test_without_progress_the_plan_goes_to_the_robustness_logger(edge, caplog):
     with caplog.at_level(logging.INFO, logger="openalgo.backtest.robustness"):
         edge.robustness(checks="quick")

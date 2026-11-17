@@ -6,7 +6,8 @@ closed trades, which checks are not built in this version, and what reruns the c
 need: none, because every check this version runs reads the run's trade list, so no
 worker process starts. It is reported through `progress` (a function taking one line of
 text) or, without one, the `openalgo.backtest.robustness` logger at INFO, before any
-check runs.
+check runs, with how long the backtest took when the report ran it. The report keeps the
+plan without that time, so the same run and seed give the same page.
 """
 
 from __future__ import annotations
@@ -51,9 +52,8 @@ def run_check(check: CheckSpec, trades: TradeRun, request: Request) -> CheckResu
     )
 
 
-def plan_text(strategy: str, request: Request, trades: TradeRun, seconds: float | None) -> str:
-    """The line reported before the checks run (module docstring); `seconds` is how
-    long the backtest took when the report ran it, None for an existing result."""
+def plan_text(strategy: str, request: Request, trades: TradeRun) -> str:
+    """The plan of the checks (module docstring), without the backtest's duration."""
     names = [check.name for check in request.to_run]
     text = (
         f"bt.robustness: {counted(len(names), 'check')} of {len(CHECKS)} for {strategy} "
@@ -68,8 +68,6 @@ def plan_text(strategy: str, request: Request, trades: TradeRun, seconds: float 
             f" {counted(len(later), 'check is', 'checks are')} not built in this version and "
             f"listed as such: {', '.join(later)}."
         )
-    if seconds is not None:
-        text += f" The backtest took {seconds:.2f} s."
     return text
 
 
@@ -97,14 +95,17 @@ def assess(
     progress: Callable[[str], Any] | None,
     seconds: float | None,
 ) -> RobustnessReport:
-    """The report of `request` on `result` (a `Result`). Raises ConfigError for a
-    `progress` that is not a function, and what `result.performance` raises."""
+    """The report of `request` on `result` (a `Result`); `seconds` is how long the
+    backtest took when the report ran it, None for an existing result. Raises
+    ConfigError for a `progress` that is not a function, and what `result.performance`
+    raises."""
     if progress is not None and not callable(progress):
         raise ConfigError(f"progress takes a function of one line of text, got {progress!r}")
     trades = trade_run(result.performance)
     facts = _facts(result, trades)
-    plan = plan_text(facts.strategy, request, trades, seconds)
-    (progress or LOGGER.info)(plan)
+    plan = plan_text(facts.strategy, request, trades)
+    timed = plan if seconds is None else f"{plan} The backtest took {seconds:.2f} s."
+    (progress or LOGGER.info)(timed)
     results = tuple(run_check(check, trades, request) for check in request.to_run)
     return RobustnessReport(facts, request, results, plan)
 

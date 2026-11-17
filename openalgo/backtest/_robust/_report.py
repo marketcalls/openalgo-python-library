@@ -3,7 +3,7 @@
     report.verdicts          # DataFrame: check, question, figure, rule, verdict, note
     report.check("resample") # one check's CheckResult: .table, .summary, .verdict
     report.passed            # every judged check passed (and at least one was judged)
-    report.plan              # the plan reported before the checks ran
+    report.plan              # the plan reported before the checks ran, untimed
     report.tearsheet(path)   # the HTML robustness report
 
 Wording rule (design 17, section 0): passing a check proves nothing on its own; failing
@@ -56,7 +56,8 @@ class RobustnessReport:
 
     @property
     def plan(self) -> str:
-        """What was reported before the checks ran."""
+        """What was reported before the checks ran, without how long the backtest
+        took."""
         return self._plan
 
     @property
