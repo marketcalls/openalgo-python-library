@@ -23,7 +23,10 @@ sent for it.
   is the first comparison's, 6 units against the engine's 10, older than the stop's fill.
   That fill was the broker's too, so it moved OpenAlgo's books by the same 10 units: the
   close names the read's figures and the fill, lists the leg at the -4 units they leave,
-  and calls no figure the engine's that it no longer holds (round 8).
+  and calls no figure the engine's that it no longer holds (round 8). The fake's slow
+  answer moves its clock on at once, on the order worker's thread, where 8 real seconds
+  would let the loop take the stop's fill in meanwhile; so the slow call waits until the
+  fill has reached the engine, and the fake's clock stands still until then (round 9).
 
 When all 10 are sold by hand and one Ctrl+C with on_stop="keep" comes a second later,
 the final read is the first to see OpenAlgo's books flat while the engine holds 10 and
@@ -36,6 +39,7 @@ scenario and the fake's books.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
 import pytest
@@ -49,10 +53,12 @@ from stops_samples import (
     stop_world,
 )
 from test_session_close_lines import LinesThen
-from test_session_threads import alone, passing, run_threaded  # noqa: F401
+from test_session_threads import BLOCK_LIMIT_S, alone, passing, run_threaded  # noqa: F401
 
+import openalgo.account as account
 from openalgo.backtest._live._reconcile_guard import ExitGuard
 from openalgo.backtest._live._types import LOGGER_NAME
+from openalgo.backtest._live.reconcile import Reconciler
 
 #: Units sold by hand at `SOLD_AT`; the price SBIN trades at to fill the stop (its
 #: trigger is 497.00); and what the account holds once it filled.
@@ -105,21 +111,53 @@ def fires_after_the_line(world: Any, monkeypatch: Any) -> None:
 
 def fires_after_the_line_with_no_books(how: str) -> Any:
     """`fires_after_the_line`, the final read's position book then losing its connection
-    ("dropped") or answering in `SLOW_BOOK_S` ("slow")."""
+    ("dropped") or answering in `SLOW_BOOK_S` once the stop's fill is in the engine
+    ("slow", `slow_once_the_fill_is_in`)."""
 
     def arm(world: Any, monkeypatch: Any) -> None:
         ctrl_c_at_the_first_sighting(world, monkeypatch, broker_below=StopHold.qty)
+        if how == "slow":
+            slow_once_the_fill_is_in(world, monkeypatch)
+            return
 
         def fall_then_no_books() -> None:
             fall(world)
-            if how == "dropped":
-                world.fake.faults.drop_connection("positionbook")
-            else:
-                world.fake.faults.slow("positionbook", SLOW_BOOK_S)
+            world.fake.faults.drop_connection("positionbook")
 
         world.lines = LinesThen("StopHold SBIN NSE", fall_then_no_books)
 
     return arm
+
+
+def slow_once_the_fill_is_in(world: Any, monkeypatch: Any) -> None:
+    """Right after the leg's last line SBIN trades through the stop. The fake's clock then
+    stands still until the stop's fill has reached the engine, and the final read's
+    position-book call, on the order worker's thread, waits for that too; only then is its
+    `SLOW_BOOK_S` answer scheduled, which moves the clock past the read's seconds. So the
+    loop takes the fill in first, whichever thread runs first (module docstring)."""
+    in_the_engine = threading.Event()
+    armed: list[bool] = []
+    filled, answer_book = Reconciler.filled, account.AccountAPI.positionbook
+
+    def heard(reconcile: Reconciler, trader: Any, at_ns: int) -> None:
+        filled(reconcile, trader, at_ns)
+        if armed and not in_the_engine.is_set():
+            world.fake.faults.slow("positionbook", SLOW_BOOK_S)
+            in_the_engine.set()
+
+    def position_book(api: Any, **kwargs: Any) -> Any:
+        if armed:
+            in_the_engine.wait(BLOCK_LIMIT_S)
+        return answer_book(api, **kwargs)
+
+    def at_the_line() -> None:
+        fall(world)
+        armed.append(True)
+        world.script.at(world.fake.clock.now(), lambda: in_the_engine.wait(BLOCK_LIMIT_S))
+
+    monkeypatch.setattr(Reconciler, "filled", heard)
+    monkeypatch.setattr(account.AccountAPI, "positionbook", position_book)
+    world.lines = LinesThen("StopHold SBIN NSE", at_the_line)
 
 
 #: The cases: when the stop fires, on which seam, and what Ctrl+C does with the leg.
