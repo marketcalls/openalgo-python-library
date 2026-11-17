@@ -110,7 +110,8 @@ class SessionOutcome:
     `reconciliations` (each comparison with the broker's books that differed), and the
     records of `_session_records`: `orders`, `fills` and `locks`; `plans`, each
     strategy's part of the session plan by name (its settings, strategy and run context,
-    for its result)."""
+    for its result), and `timer_warnings`, its timers' notes, read before its kernel
+    session finished."""
 
     mode: str
     broker: str
@@ -136,6 +137,7 @@ class SessionOutcome:
     fills: tuple[FillRecord, ...] = ()
     locks: tuple[LockRecord, ...] = ()
     plans: dict[str, StrategyPlan] = field(default_factory=dict)
+    timer_warnings: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 def close_session(
@@ -163,6 +165,8 @@ def close_session(
         if journal_works:
             _save_states(session)
         parts.worker.close()
+        # Read while each kernel session runs: a finished one counts its timers no more.
+        timers = {t.name: tuple(t.part.context.timers.warnings()) for t in session.traders}
         outputs = {trader.name: _stop_engine(trader) for trader in session.traders}
         orders = order_records(session, {name: output for name, (output, _) in outputs.items()})
         summary = _summary(session, outputs, unprotected_s, named, not open_positions)
@@ -203,6 +207,7 @@ def close_session(
         fills=tuple(session.fills),
         locks=tuple(lock for trader in session.traders for lock in trader.records.locks),
         plans={trader.name: trader.part for trader in session.traders},
+        timer_warnings=timers,
     )
 
 

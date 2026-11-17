@@ -147,9 +147,9 @@ def test_an_exit_while_flat_places_no_order():
     assert handles and all(handle is None for handle in handles)
 
 
-def test_live_is_not_supported_in_this_version():
-    with pytest.raises(NotImplementedError, match="bt.live is not supported in this version"):
-        bt.live(BuyThenExit, None, capital=CAPITAL, max_daily_loss=1_000)
+def test_live_refuses_a_backtest_argument_with_no_meaning_live_before_anything_else():
+    with pytest.raises(ConfigError, match="bt.live takes no data=: the session trades on"):
+        bt.live(BuyThenExit, None, capital=CAPITAL, max_daily_loss=1_000, data=minute_bars(10))
 
 
 def test_capital_must_be_positive():

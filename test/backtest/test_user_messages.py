@@ -72,7 +72,7 @@ def _result() -> bt.Result:
 
 
 NOT_BUILT = {
-    "bt.live": lambda: bt.live(Quarterly, None, capital=100_000, max_daily_loss=1_000),
+    "weekly strategy live": lambda: bt.live(Weekly, None, capital=100_000, max_daily_loss=1_000),
     "bt.walk_forward": lambda: bt.walk_forward(Quarterly),
     "bt.rebalance": lambda: bt.rebalance(),
     "several strategies": lambda: bt.backtest([Quarterly, Quarterly], capital=100_000),
@@ -223,6 +223,11 @@ def test_the_walk_reaches_the_public_surface():
         "openalgo.backtest.size.caps",
         "openalgo.backtest.data.DataProvider",
         "openalgo.backtest.run.backtest",
+        "openalgo.backtest.run.live",
+        "openalgo.backtest.run.record",
+        "openalgo.backtest.session_result.SessionResult",
+        "openalgo.backtest.session_result.SessionResult.summary_text",
+        "openalgo.backtest.session_result.RecordSummary",
         "openalgo.backtest.result.Result.settlements",
         "openalgo.backtest.strategy.Strategy.buy",
         "openalgo.backtest.strategy.Strategy.on_fill",
