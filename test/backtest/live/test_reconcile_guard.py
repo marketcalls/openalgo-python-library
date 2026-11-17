@@ -18,7 +18,7 @@ import logging
 
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
-from session_samples import Hold, alerts, ist
+from session_samples import NS, Hold, alerts, ist
 from stops_samples import StopHold, events, stop_world
 
 from openalgo.backtest._live._types import LOGGER_NAME
@@ -100,6 +100,43 @@ def test_F78_the_safe_stops_reminder_says_the_exit_waits_for_the_books(lagging, 
     lagging.run(Hold)
     [reminder] = [text for text in alerts(caplog, "error") if "safe stop:" in text]
     assert "its exit is held back until OpenAlgo's books show the units it closes" in reminder
+
+
+# ----- the close sends nothing held -----------------------------------------------------
+
+
+@pytest.fixture
+def agreeing_at_the_close(lagging):
+    """`Hold` (no stop) is stopped at 14:46 and again at 14:48: its flatten exit is held
+    while the book shows 0, and the second Ctrl+C's lines, after its 5 s wait, say it was
+    not sent. The book catches up at 14:48:05.5, so the close's final read agrees."""
+    lagging.script.at(ist(14, 48, 5) + NS // 2, lagging.fake.catch_up_positionbook)
+    lagging.stop_at(ist(14, 46))
+    lagging.stop_at(ist(14, 48))
+    return lagging
+
+
+def test_an_exit_held_when_the_session_ends_is_not_sent_when_the_books_agree_at_the_close(
+    agreeing_at_the_close,
+):
+    world = agreeing_at_the_close
+    outcome = world.run(Hold)
+    closed = [e for e in events(outcome, "reconcile") if e["ts_ns"] > ist(14, 48, 5)]
+    assert [e["found"] for e in closed] == ["agree"]
+    # What the session handed to the order worker: the entry only.
+    placed = [e["purpose"] for e in events(outcome, "request") if e["type"] == "PlaceRequest"]
+    assert placed == ["entry"]
+    assert world.fake.position("SBIN", "NSE") == 10
+
+
+def test_the_result_names_an_exit_held_at_the_close_as_the_last_lines_did(agreeing_at_the_close):
+    world = agreeing_at_the_close
+    outcome = world.run(Hold)
+    # The last line of the leg is the second Ctrl+C's (a reminder came at 14:47).
+    *_, line = [line for line in world.lines if line.startswith("Hold SBIN NSE 10 units: ")]
+    (left,) = outcome.open_positions
+    assert left.note == line.removeprefix("Hold SBIN NSE 10 units: ")
+    assert left.note == "order o2 not sent; no stop at the broker, close it by hand"
 
 
 # ----- a sale by hand just before the flatten or the square-off ---------------------------

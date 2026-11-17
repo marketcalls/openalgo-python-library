@@ -2,7 +2,9 @@
 and what a session leaves (`SessionOutcome`).
 
 A final book read and reconciliation first, after a session end or a Ctrl+C (`reconcile`;
-not after an error or a mode breach), `self.state` saved, the order worker stopped, each
+not after an error or a mode breach), in which nothing the exit guard holds is sent any
+more (the last lines named it not sent: `ExitGuard.end`), `self.state` saved, the order
+worker stopped, each
 kernel session stopped where it stands (`stop_session`, R20) with its last events
 delivered, `on_stop` called and `finish` read,
 the DAILY_SUMMARY alert, then everything the start opened closed in reverse (the feed,
@@ -104,6 +106,7 @@ def close_session(
     stack, which raises LiveError naming it once all are closed."""
     parts = session.parts
     try:
+        session.reconcile.guard.end()
         if journal_works and stopped_by in _FINAL_READ:
             session.reconcile.final(FINAL_READ_WAIT_S)
         for request in session.reconcile.guard.left():

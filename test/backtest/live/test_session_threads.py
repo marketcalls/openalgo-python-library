@@ -300,6 +300,27 @@ def test_two_ctrl_c_at_once_send_the_flatten_exit_and_stop_flat(alone):
     assert not any("close it by hand" in line for line in alone.lines)
 
 
+def test_an_exit_waiting_for_a_slow_read_is_not_sent_after_the_last_lines(alone):
+    # The flatten's exit waits for a read of the books (unit 12), whose position book call
+    # is held 7.5 fake seconds: past the second Ctrl+C's 5 s wait, within the close's 5 s
+    # final read. The last lines say the exit was not sent; the close's read then agrees,
+    # and the exit must still not be sent.
+    PressesStop.presses = 2
+    slow = Blocking(
+        alone.fake.client(),
+        "positionbook",
+        when=lambda: alone.stop.count >= 1,
+        hold_s=7.5,
+        now=alone.fake.clock.now,
+    )
+    outcome = run_threaded(alone, slow, "orders", (PressesStop,))
+    assert slow.held_at is not None
+    assert [order.action for order in alone.orders()] == ["BUY"]
+    assert alone.fake.position("SBIN", "NSE") == 10
+    (left,) = outcome.open_positions
+    assert left.note == "order o2 not sent; no stop at the broker, close it by hand"
+
+
 def test_a_second_ctrl_c_while_the_exit_is_sent_waits_for_its_fill(alone):
     # The safe stop's SELL is held in its call for 1 fake second, well inside the second
     # Ctrl+C's bounded wait at any real-time pace of the run; the second Ctrl+C comes as

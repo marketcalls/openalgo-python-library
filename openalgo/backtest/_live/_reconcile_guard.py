@@ -27,6 +27,15 @@ placements, entries against its position and the cancel of its stop are held; a 
 placed again is not (it rests until triggered). The comparison then guards the leg, or
 lets them go.
 
+What no read knows yet (as built): a sale by hand made after the read began; for a
+square-off, whose read is asked `reconcile.SQUARE_OFF_READ_BEFORE_S` ahead so the
+square-off is not delayed, one made in those seconds; and for a strategy's own exit or a
+target's exit, which ask for no read, one made since the last comparison (at most
+`reconcile.RECONCILE_EVERY_S` before, unless a fill brought one sooner). Such an exit may
+sell more than the broker holds; the comparisons after it find the broker holding units
+the engine does not (`Kind.MORE`), and two in a row alert it and lock the strategy's
+entries.
+
 Once a leg is neither guarded nor awaiting a read, each held request that still fits what
 the engine holds goes to the worker in its order; any other is refused as not sent: an
 entry also once the strategy's entries are locked. The cancel of the stop of a leg
@@ -34,6 +43,11 @@ protect by state holds stays held: the stop protects it, and the session asks fo
 of it any more. A modify that keeps or lowers the units, and any other cancel, always go:
 they never add exposure. A held order is not at the broker, so it does not keep its leg
 in flight (`held_orders`, `held_cancels`).
+
+**At the close** (`end`): once the session has ended, nothing held goes to the worker,
+whatever the close's final read shows. The safe stop's last lines and alerts have named
+each held order as not sent, and an operator may already be closing the position by hand
+as they say; the held requests stay held, and the close reports them (`left`).
 
 Quantities are units, times UTC nanoseconds. Used by the loop only.
 """
@@ -71,6 +85,7 @@ class ExitGuard:
         self._held: dict[str, list[Any]] = {}
         self._allowed: set[tuple[str, int]] = set()
         self._alerted: set[tuple[str, int]] = set()
+        self._ended = False
 
     def guards(self, name: str) -> bool:
         """True while strategy `name`'s leg is guarded (the broker holds fewer units)."""
@@ -153,6 +168,11 @@ class ExitGuard:
         held = self._held.get(name, [])
         return frozenset(r.kernel_order for r in held if isinstance(r, CancelRequest))
 
+    def end(self) -> None:
+        """The session has ended: from now nothing held goes (module docstring, "At the
+        close")."""
+        self._ended = True
+
     def left(self) -> list[Any]:
         """Every request still held (the session's close reports them)."""
         return [request for held in self._held.values() for request in held]
@@ -204,7 +224,10 @@ class ExitGuard:
     def _release(self, name: str) -> None:
         """The leg is neither guarded nor awaiting a read: each held request that fits goes
         to the worker, in order; the stop's cancel of a leg protect by state holds stays
-        held; any other is refused as not sent (module docstring)."""
+        held; any other is refused as not sent (module docstring). Once the session has
+        ended every one stays held, as its last lines said ("At the close")."""
+        if self._ended:
+            return
         session = self._session
         trader = session.trader_named(name)
         protected = session.stops.protection.holds(trader)

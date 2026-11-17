@@ -211,6 +211,16 @@ def test_a_held_exit_beyond_what_the_engine_holds_by_then_is_refused(guarded):
     assert [message.request.kernel_order for message in guarded.refused] == [EXIT]
 
 
+def test_once_the_session_has_ended_books_that_agree_let_nothing_go(guarded):
+    # The session's last lines named the held orders as not sent: they stay so.
+    held = [cancel_of_stop(), place(EXIT, Purpose.EXIT, "SELL", ENGINE_UNITS)]
+    guarded.hand_over(held)
+    guarded.guard.end()
+    guarded.guard.close("S")
+    assert (guarded.handed, guarded.refused) == ([], [])
+    assert guarded.guard.left() == held
+
+
 def test_the_held_cancel_of_a_leg_protect_by_state_holds_stays_held(guarded):
     # Protect by state asks for no exit of the leg: its stop stays at the broker.
     guarded.hand_over([cancel_of_stop()])
@@ -256,6 +266,15 @@ def test_a_read_begun_after_the_request_lets_the_exits_go(awaiting):
     awaiting.hand_over([exit_])
     awaiting.guard.read("S", AFTER_NS)
     assert awaiting.handed == [exit_]
+
+
+def test_once_the_session_has_ended_the_read_a_leg_awaited_lets_nothing_go(awaiting):
+    exit_ = place(EXIT, Purpose.RISK_EXIT, "SELL", ENGINE_UNITS)
+    awaiting.hand_over([exit_])
+    awaiting.guard.end()
+    awaiting.guard.read("S", AFTER_NS)
+    assert (awaiting.handed, awaiting.refused) == ([], [])
+    assert awaiting.guard.left() == [exit_]
 
 
 def test_a_read_that_guards_the_leg_keeps_the_exit_held_and_alerts_it(awaiting):

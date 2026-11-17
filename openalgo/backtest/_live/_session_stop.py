@@ -33,10 +33,12 @@ time that end it (`Control`). The common close is `_session_close`.
   still in flight, and stops. The same lines end a stop with "keep" or a safe stop whose
   legs are all flat or protected; each is an ERROR alert too unless the leg's confirmed
   stop covers it with nothing else working (`_stops_report.protected`), which needs
-  nothing of the operator. Two requests the loop sees at once act as the first
-  followed by the second (decided for unit 10: how fast the keys were pressed must not
-  change the outcome), so the flatten's exits are asked for and the second's bounded
-  wait follows. After a guard lock nothing can be sent: a first Ctrl+C stops at once.
+  nothing of the operator. Two requests seen at once act as the first followed by the
+  second (unit 10: how fast the keys were pressed must not change the outcome): the
+  flatten's exits are asked for, then the second's bounded wait. A second seen before
+  the flatten's book read is compared (at once or a moment later) keeps a leg's stop,
+  whose cancel waits for that read (the exit guard): the leg is left open with its stop
+  and no exit. After a guard lock nothing can be sent: a first Ctrl+C stops at once.
 - **The end of the day.** Once every strategy is past its MIS square-off, flat and with
   nothing working, the session ends ("session_end"). From the square-off plus
   `SQUARE_OFF_VERIFY_AFTER_S` a strategy not flat gets the ERROR alert "still not flat
