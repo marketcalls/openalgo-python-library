@@ -39,23 +39,34 @@ two in a row alert it and lock the strategy's entries.
 Once a leg is neither guarded nor awaiting a read, each held request that still fits what
 the engine holds goes to the worker in its order; any other is refused as not sent: an
 entry also once the strategy's entries are locked. The cancel of the stop of a leg
-protect by state holds stays held: the stop protects it, and the session asks for no exit
-of it any more. A modify that keeps or lowers the units, and any other cancel, always go:
-they never add exposure. A held order is not at the broker, so it does not keep its leg
-in flight (`held_orders`, `held_cancels`).
+protect by state holds stays held while the stop is for no more units than the engine
+holds: the stop protects it, and the session asks for no exit of it any more. A modify
+that keeps or lowers the units, and any other cancel, always go: they never add
+exposure. A held order is not at the broker, so it does not keep its leg in flight
+(`held_orders`, `held_cancels`).
 
-**At the close** (`end`, 3.3 step 5 "As built"): once the session has printed its last
-lines, it sends nothing they did not name. Nothing held goes to the worker, whatever the
-close's final read shows: the lines and alerts have named each held order as not sent,
-and an operator may already be closing the position by hand as they say. Every new order
-request is held too (an exit, a stop placed again, a trail, an entry, the cancel of an
-exit or of the stop of a position), but what only takes exposure away: the reconciler's
-own cancel of a stop on the other side (`allow_cancel`), the cancel of a stop once the
-engine holds the leg flat and a modify that only lowers a stop's units (the stop fitted
-to a sale by hand the reconciler adopts), and the cancel of an entry or an add (the safe
-stop asked for it before the lines; it waited for the order's bind). The worker's own
-requests (a book read, an orphan's cancel) go. Nothing is alerted as going later; the
-close names every request still held (`left`).
+**A sale by hand adopted** (`adopted`, 3.3 step 5 "As built"): the stop is fitted to what
+is left at once. A held cancel of an order that may still fill more units at the broker,
+by the terms the broker confirmed, than the engine holds once the reconciler adopted the
+sale goes at once, before and after the end (`allow_cancel`): with nothing left the stop
+is cancelled; with some left it is cancelled too, and before the last lines protect by
+state places a stop for what is left (after them nothing new is sent, and the note says
+the leg has no stop at the broker). A stop whose cancel was not held is cut by the
+kernel's own fit (a modify that only lowers its units).
+
+**At the close** (`end`): once the session has printed its last lines, it sends nothing
+they did not name. Nothing held goes to the worker, whatever the close's final read shows,
+but the cancel a sale by hand frees (`adopted`): the lines and alerts have named each held
+order as not sent, and an operator may already be closing the position by hand as they
+say. Every new order request is held too (an exit, a stop placed again, a trail, an
+entry, the cancel of an exit or of the stop of a position), but what only takes exposure
+away, the wider set the lead ratified on 2026-11-17 (16-session-design 3.3 step 5 "As
+built", round 4): the reconciler's own cancel of a stop on the other side
+(`allow_cancel`), the cancel of a stop once the engine holds the leg flat and a modify
+that only lowers a stop's units (the stop fitted to a sale by hand the reconciler adopts),
+and the cancel of an entry or an add (the safe stop asked for it before the lines; it
+waited for the order's bind). The worker's own requests (a book read, an orphan's cancel)
+go. Nothing is alerted as going later; the close names every request still held (`left`).
 
 Quantities are units, times UTC nanoseconds. Used by the loop only.
 """
@@ -155,6 +166,19 @@ class ExitGuard:
         if cancels:
             self._held[name] = [request for request in held if request not in cancels]
             self._session.hand_over(cancels)
+
+    def adopted(self, name: str) -> bool:
+        """The reconciler adopted a sale by hand on strategy `name`'s leg: each held cancel
+        of an order larger than what the engine holds now goes at once, before and after
+        the end (module docstring, "A sale by hand adopted"). True when one went."""
+        held = self.held_cancels(name)
+        if not held:
+            return False
+        trader = self._session.trader_named(name)
+        outgrown = [kernel_order for kernel_order in held if _outgrown(trader, kernel_order)]
+        for kernel_order in sorted(outgrown):
+            self.allow_cancel(name, kernel_order)
+        return bool(outgrown)
 
     def admit(self, requests: Sequence[Any]) -> list[Any]:
         """`requests` but those the guard holds (module docstring), in order."""
@@ -258,8 +282,9 @@ class ExitGuard:
     def _release(self, name: str) -> None:
         """The leg is neither guarded nor awaiting a read: each held request that fits goes
         to the worker, in order; the stop's cancel of a leg protect by state holds stays
-        held; any other is refused as not sent (module docstring). Once the session has
-        ended every one stays held, as its last lines said ("At the close")."""
+        held unless the stop has outgrown the position; any other is refused as not sent
+        (module docstring). Once the session has ended every one stays held, as its last
+        lines said ("At the close")."""
         if self._ended:
             return
         session = self._session
@@ -267,7 +292,8 @@ class ExitGuard:
         protected = session.stops.protection.holds(trader)
         fits, kept = [], []
         for request in self._held.pop(name, []):
-            if protected and isinstance(request, CancelRequest):
+            cancel = isinstance(request, CancelRequest)
+            if protected and cancel and not _outgrown(trader, request.kernel_order):
                 kept.append(request)
             elif self._fits(trader, request):
                 fits.append(request)
@@ -296,6 +322,15 @@ class ExitGuard:
                 return not call(trader.engine.entry_locks)
             units = request.intent.quantity
         return units is not None and units <= abs(round(trader.open_units()))
+
+
+def _outgrown(trader: Any, kernel_order: int) -> bool:
+    """Whether order `kernel_order` may still fill more units at the broker, by the terms
+    the broker confirmed, than the engine's position holds (a trigger of such a stop
+    would take the broker's position through zero)."""
+    venue = trader.venue
+    left = venue.terms(kernel_order).quantity - venue.filled(kernel_order)
+    return left > abs(round(trader.open_units()))
 
 
 def _against(action: str, engine_units: int) -> bool:

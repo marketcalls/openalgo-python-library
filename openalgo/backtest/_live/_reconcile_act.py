@@ -14,11 +14,13 @@ cancel, an exit never sent that waits for it.
 locked for the rest of the session ("reconciliation") and a RECONCILE_MISMATCH alert
 naming the leg, both figures and the orders, then only what can never open or add
 exposure: an explained difference adopted (`apply_external_fill` at the other orders'
-price, the kernel fitting the leg's stop to the adopted units in the same call), the
-leg's own stop cancelled when the broker holds the other side, the session's own orphan
-cancelled. Never an exit, never the kill switch. A finding on a leg in flight past the
-in-flight limit is alerted, with nothing done; so is a restart's difference whose journal
-units the restored engine no longer holds (`stale`), with entries locked.
+price, the kernel fitting the leg's stop to the adopted units in the same call, and a
+cancel of it the exit guard held sent when the stop is larger than what is left:
+16-session-design 3.3 step 5 "As built"), the leg's own stop cancelled when the broker
+holds the other side, the session's own orphan cancelled. Never an exit, never the kill
+switch. A finding on a leg in flight past the in-flight limit is alerted, with nothing
+done; so is a restart's difference whose journal units the restored engine no longer
+holds (`stale`), with entries locked.
 
 Quantities are signed units, prices rupees, times UTC nanoseconds. Used by the loop only.
 """
@@ -32,7 +34,7 @@ from typing import Any
 from .._engine import call
 from ..errors import VenueRefusalError
 from ._plan_catch_up import INSTRUMENT
-from ._reconcile_rules import RULES, Kind, LegBooks, adoption_price
+from ._reconcile_rules import FEWER_STOP_CANCELLED, RULES, Kind, LegBooks, adoption_price
 from ._session_news import RECONCILE_LOCK
 from ._session_trader import Trader
 from ._stops_orders import IN_FLIGHT, Sent
@@ -44,6 +46,9 @@ logger = logging.getLogger(LOGGER_NAME)
 
 #: The exit reason the kernel records for units adopted from other orders' trades.
 ADOPTED_REASON = "manual"
+#: What an adoption did when it also sent the cancel of the leg's stop that the exit guard
+#: held (`ExitGuard.adopted`): the stop is cancelled rather than cut down.
+ADOPTED_STOP_CANCELLED = "adopted, its held stop cancel sent"
 #: A finding: its kind first (a `_reconcile_rules.Kind`, or "orphan", "foreign",
 #: "stop_terms"), then what tells one from another.
 Finding = tuple[Any, ...]
@@ -174,6 +179,8 @@ class Corrections:
             words = rule.words
             if rule.adopt:
                 action = self._adopt(trader, finding, books, own)
+            if action == ADOPTED_STOP_CANCELLED and kind is Kind.EXPLAINED_FEWER:
+                words = FEWER_STOP_CANCELLED
             if rule.cancel_stop:
                 action = self._cancel_stop(trader)
         session.alert(AlertKind.RECONCILE_MISMATCH, self._words(trader, finding, books, own, words))
@@ -235,6 +242,10 @@ class Corrections:
         signed = units if side == "BUY" else -units
         self._adopted[trader.name] = self._adopted.get(trader.name, 0) + signed
         session.event("adopted", strategy=trader.name, side=side, units=units, price=price)
+        # An exit's cancel of the stop the exit guard held: the kernel waits for it and
+        # fits nothing more, so the stop would stay larger than what is left.
+        if session.reconcile.guard.adopted(trader.name):
+            return ADOPTED_STOP_CANCELLED
         return "adopted"
 
     def _cancel_stop(self, trader: Trader) -> str:
@@ -271,6 +282,7 @@ class Corrections:
 
 __all__ = [
     "ADOPTED_REASON",
+    "ADOPTED_STOP_CANCELLED",
     "Corrections",
     "Finding",
     "attribute",

@@ -221,15 +221,19 @@ def held_after_the_final_read(outcome: Any) -> list[int]:
     ]
 
 
-def ctrl_c_at_the_first_sighting(world: Any, monkeypatch: Any, *, broker_below: int) -> None:
-    """Ask the session to stop (Ctrl+C) as the first comparison that shows the broker
-    holding fewer than `broker_below` signed units of the leg opens the exit guard on it:
-    the close's final read is then the second comparison to show it, the one that acts."""
+def ctrl_c_at_the_first_sighting(
+    world: Any, monkeypatch: Any, *, broker_below: int, presses: int = 1
+) -> None:
+    """Press Ctrl+C `presses` times at once as the first comparison that shows the broker
+    holding fewer than `broker_below` signed units of the leg opens the exit guard on it.
+    With one press and on_stop="keep" the close's final read is then the second comparison
+    to show it, the one that acts; with two and "flatten", the flatten's own read is."""
     opened = ExitGuard.open
 
     def open_then_press(guard: ExitGuard, name: str, broker_units: int) -> None:
         if broker_units < broker_below and not world.stop.count:
-            world.stop.request()
+            for _ in range(presses):
+                world.stop.request()
         opened(guard, name, broker_units)
 
     monkeypatch.setattr(ExitGuard, "open", open_then_press)

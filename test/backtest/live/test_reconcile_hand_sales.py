@@ -1,0 +1,331 @@
+"""A sale by hand the reconciler adopts while the exit guard holds the cancel of the leg's
+stop, on the fake OpenAlgo, inline and on the session's threads (`_live/_reconcile_act.py`,
+`_live/_reconcile_guard.py`, `_live/_stops_report.py`; 16-session-design 3.3 step 5 "As
+built", 5.3, 5.4; unit 12).
+
+`StopHold` holds 10 SBIN from 14:42:01 IST with an SL-M stop of 10 at 497.00 (`TargetHold`
+also a target at 502.00), and another client sells 10, or 4, at 14:43:00. An exit of the
+leg (the flatten's, or the target's) cancels the stop first, and the exit guard holds that
+cancel while the books show fewer units than the engine. Once the reconciler adopts the
+sale, the stop is fitted to what is left at once: with nothing left it is cancelled; with
+6 left it is cancelled and placed again for 6 before the session's last lines (protect by
+state), and only cancelled after them, where nothing new is sent and the note says there
+is no stop at the broker. The RECONCILE_MISMATCH alert says what became of the stop, and
+no note, result or alert says that a stop larger than the position protects it.
+
+Three ways the cancel comes to be held when the sale is adopted:
+
+- two Ctrl+C at once at 14:43:01, before any read has seen the sale: the last lines come
+  first, and the close's final read adopts it;
+- two Ctrl+C at once as the first comparison that shows the sale comes: the flatten's own
+  read adopts it, before the last lines;
+- with on_stop="keep", SBIN crossing the target right after that first comparison and one
+  Ctrl+C two seconds later: the target's exit asked for the cancel, and the close's final
+  read adopts the sale.
+
+On the threads seam the adoption may fall on either side of the last lines, so those
+tests check the end state either side allows. Expected values come from the scenario and
+the fake's books.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Callable
+from typing import Any
+
+import pytest
+from fake_openalgo.fixtures import *  # noqa: F403
+from session_samples import NS, alerts, ist, rig
+from stops_samples import (
+    StopHold,
+    TargetHold,
+    ctrl_c_at_the_first_sighting,
+    sold_by_hand,
+    stop_world,
+)
+from test_session_threads import passing, run_threaded
+
+from openalgo.backtest._live._reconcile_guard import ExitGuard
+from openalgo.backtest._live._types import LOGGER_NAME
+
+#: When the other client sells, and when two Ctrl+C come at once in the first way.
+SOLD_AT = ist(14, 43)
+PRESSED_AT = ist(14, 43, 1)
+#: A price past `TargetHold`'s target, and how long after the first comparison that shows
+#: the sale Ctrl+C comes once SBIN trades there, seconds.
+ABOVE_TARGET = 503.0
+KEEP_AFTER_S = 2
+#: The end of a note whose confirmed stop covers the whole position.
+PROTECTS = "it protects the position, so cancel the stop before any sale by hand"
+#: What a RECONCILE_MISMATCH alert says became of the stop, by what is left.
+CANCELLED_WITH_THEM = "(a stop of the leg is cancelled with them)"
+CANCELLED_NOT_CUT = (
+    "(a stop of the leg is cancelled: an exit had asked for its cancel, held back until the "
+    "books agreed)"
+)
+#: What a flat leg's alert asks of the operator.
+FLAT_NOW = (
+    "the engine holds no position now: check the order book in OpenAlgo, cancelling what "
+    "still works"
+)
+
+Scenario = Callable[[Any, Any], tuple[type, dict[str, Any]]]
+
+
+def before_any_read(world: Any, monkeypatch: Any) -> tuple[type, dict[str, Any]]:
+    """Two Ctrl+C at once at 14:43:01 (flatten)."""
+    del monkeypatch
+
+    def press_twice() -> None:
+        world.stop.request()
+        world.stop.request()
+
+    world.script.at(PRESSED_AT, press_twice)
+    return StopHold, {}
+
+
+def at_the_first_sighting(world: Any, monkeypatch: Any) -> tuple[type, dict[str, Any]]:
+    """Two Ctrl+C at once as the first comparison that shows the sale comes (flatten)."""
+    ctrl_c_at_the_first_sighting(world, monkeypatch, broker_below=StopHold.qty, presses=2)
+    return StopHold, {}
+
+
+def target_between_the_sightings(world: Any, monkeypatch: Any) -> tuple[type, dict[str, Any]]:
+    """As the first comparison that shows the sale comes, SBIN trades past the target from
+    then on; one Ctrl+C `KEEP_AFTER_S` later, with on_stop="keep"."""
+    opened = ExitGuard.open
+    crossed: list[int] = []
+
+    def open_then_cross(guard: ExitGuard, name: str, broker_units: int) -> None:
+        if broker_units < StopHold.qty and not crossed:
+            crossed.append(broker_units)
+            now = world.fake.clock.now()
+            world.script.price = lambda now_ns: ABOVE_TARGET
+            world.script.at(
+                now + 1, lambda: world.fake.trade("SBIN", "NSE", ABOVE_TARGET, volume=10.0)
+            )
+            world.script.at(now + KEEP_AFTER_S * NS, world.stop.request)
+        opened(guard, name, broker_units)
+
+    monkeypatch.setattr(ExitGuard, "open", open_then_cross)
+    return TargetHold, {"on_stop": "keep"}
+
+
+#: The scenarios whose adoption comes after the last lines on the inline seam.
+AFTER_THE_LINES = [before_any_read, target_between_the_sightings]
+AFTER_IDS = ["two Ctrl+C before any read", "target crossed, then keep"]
+
+
+@pytest.fixture
+def world(make_fake_openalgo, monkeypatch, tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+    made = stop_world(make_fake_openalgo, monkeypatch, tmp_path)
+    made.stop_at(ist(14, 50))
+    return made
+
+
+def play(world: Any, monkeypatch: Any, scenario: Scenario, sold: int) -> Any:
+    """Run `scenario` on the inline seam with `sold` SBIN sold by hand at 14:43:00."""
+    sold_by_hand(world, sold, SOLD_AT)
+    strategy, arguments = scenario(world, monkeypatch)
+    return world.run(strategy, **arguments)
+
+
+def stops(world: Any) -> list[tuple[int, str]]:
+    return [(o.quantity, o.status) for o in world.orders() if o.price_type == "SL-M"]
+
+
+def first_stop(world: Any) -> Any:
+    return next(o for o in world.orders() if o.price_type == "SL-M")
+
+
+def after_the_lines(caplog: Any) -> list[str]:
+    """The ERROR alerts that say what happened after the session's last lines, without the
+    mode and strategy they begin with ("LIVE (StopHold): ")."""
+    named = [text for text in alerts(caplog, "error") if "after the session's last lines" in text]
+    return [text.split(": ", 1)[1] for text in named]
+
+
+# ----- inline: the stop at the broker ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("scenario", "sold", "stops_left"),
+    [
+        (before_any_read, 10, [(10, "cancelled")]),
+        (before_any_read, 4, [(10, "cancelled")]),
+        (at_the_first_sighting, 10, [(10, "cancelled")]),
+        (at_the_first_sighting, 4, [(10, "cancelled"), (6, "trigger pending")]),
+        (target_between_the_sightings, 10, [(10, "cancelled")]),
+        (target_between_the_sightings, 4, [(10, "cancelled")]),
+    ],
+    ids=[
+        "two Ctrl+C before any read, all sold",
+        "two Ctrl+C before any read, 4 sold",
+        "two Ctrl+C at the first sighting, all sold",
+        "two Ctrl+C at the first sighting, 4 sold: placed again for 6",
+        "target crossed, then keep, all sold",
+        "target crossed, then keep, 4 sold",
+    ],
+)
+def test_a_sale_by_hand_adopted_while_the_stops_cancel_is_held_fits_the_stop_at_the_broker(
+    world, monkeypatch, scenario, sold, stops_left
+):
+    play(world, monkeypatch, scenario, sold)
+    assert stops(world) == stops_left
+    assert world.fake.position("SBIN", "NSE") == StopHold.qty - sold
+
+
+# ----- inline: what the operator is told --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("scenario", "sold", "words"),
+    [
+        (before_any_read, 10, CANCELLED_WITH_THEM),
+        (before_any_read, 4, CANCELLED_NOT_CUT),
+        (at_the_first_sighting, 10, CANCELLED_WITH_THEM),
+        (at_the_first_sighting, 4, CANCELLED_NOT_CUT),
+        (target_between_the_sightings, 10, CANCELLED_WITH_THEM),
+        (target_between_the_sightings, 4, CANCELLED_NOT_CUT),
+    ],
+    ids=[
+        "two Ctrl+C before any read, all sold",
+        "two Ctrl+C before any read, 4 sold",
+        "two Ctrl+C at the first sighting, all sold",
+        "two Ctrl+C at the first sighting, 4 sold",
+        "target crossed, then keep, all sold",
+        "target crossed, then keep, 4 sold",
+    ],
+)
+def test_the_mismatch_alert_says_the_stop_is_cancelled(
+    world, monkeypatch, caplog, scenario, sold, words
+):
+    play(world, monkeypatch, scenario, sold)
+    (text,) = alerts(caplog, "reconcile_mismatch")
+    assert words in text
+
+
+@pytest.mark.parametrize("scenario", AFTER_THE_LINES, ids=AFTER_IDS)
+def test_a_sale_of_all_adopted_after_the_last_lines_is_one_alert_naming_the_cancelled_stop(
+    world, monkeypatch, caplog, scenario
+):
+    outcome = play(world, monkeypatch, scenario, 10)
+    assert outcome.open_positions == ()
+    strategy = outcome.strategies[0]
+    assert after_the_lines(caplog) == [
+        f"{strategy} SBIN NSE: its position went from 10 to 0 units after the session's last "
+        f"lines, and its stop {first_stop(world).order_id} cancelled at the broker; {FLAT_NOW}"
+    ]
+
+
+@pytest.mark.parametrize("scenario", AFTER_THE_LINES, ids=AFTER_IDS)
+def test_a_sale_of_part_adopted_after_the_last_lines_leaves_the_rest_with_no_stop_and_says_so(
+    world, monkeypatch, caplog, scenario
+):
+    # The exit (o3) waits for the stop's cancel and goes after it: after the last lines it
+    # is held back, so the 6 units left have no stop and no exit at the broker.
+    outcome = play(world, monkeypatch, scenario, 4)
+    (left,) = outcome.open_positions
+    assert (left.units, left.stop_order_id, left.stop_confirmed) == (6, "", False)
+    assert left.note == (
+        "its position went from 10 to 6 units after the session's last lines, and its stop "
+        f"{first_stop(world).order_id} cancelled at the broker; order o3 not sent; no stop at "
+        "the broker, close it by hand"
+    )
+    assert after_the_lines(caplog) == [f"{left.strategy} SBIN NSE 6 units: {left.note}"]
+
+
+def test_a_sale_of_part_adopted_before_the_last_lines_leaves_the_rest_with_a_stop_for_it(
+    world, monkeypatch
+):
+    outcome = play(world, monkeypatch, at_the_first_sighting, 4)
+    placed_again = [o for o in world.orders() if o.price_type == "SL-M"][-1]
+    (left,) = outcome.open_positions
+    assert (placed_again.quantity, placed_again.status) == (6, "trigger pending")
+    assert (left.units, left.stop_order_id, left.stop_confirmed) == (6, placed_again.order_id, True)
+    note = f"stop {placed_again.order_id} confirmed at the broker: {PROTECTS}"
+    assert left.note == note
+    assert [line for line in world.lines if line.startswith("StopHold SBIN")] == [
+        f"StopHold SBIN NSE 6 units: {note}"
+    ]
+
+
+def test_a_sale_of_all_adopted_before_the_last_lines_leaves_nothing_to_tell(
+    world, monkeypatch, caplog
+):
+    # The stop is cancelled before the last lines: no order of the flat leg works on.
+    outcome = play(world, monkeypatch, at_the_first_sighting, 10)
+    assert outcome.open_positions == ()
+    assert [text for text in alerts(caplog, "error") if "StopHold SBIN NSE" in text] == []
+    assert [line for line in world.lines if line.startswith("StopHold SBIN")] == []
+
+
+@pytest.mark.parametrize("sold", [10, 4])
+@pytest.mark.parametrize(
+    "scenario",
+    [before_any_read, at_the_first_sighting, target_between_the_sightings],
+    ids=["two Ctrl+C before any read", "two Ctrl+C at the first sighting", *AFTER_IDS[1:]],
+)
+def test_no_alert_or_note_names_the_first_stop_as_confirmed_once_the_sale_is_adopted(
+    world, monkeypatch, caplog, scenario, sold
+):
+    # The stop of 10 is cancelled with the adoption: no ERROR alert and no note of the
+    # result may say it is confirmed at the broker (and so protects what is left).
+    outcome = play(world, monkeypatch, scenario, sold)
+    claim = f"stop {first_stop(world).order_id} confirmed at the broker"
+    texts = alerts(caplog, "error") + [left.note for left in outcome.open_positions]
+    assert [text for text in texts if claim in text] == []
+
+
+# ----- on the session's threads -------------------------------------------------------------
+
+
+@pytest.fixture
+def threaded(make_fake_openalgo, monkeypatch, tmp_path, caplog):
+    """A rig for the session's threads (`test_session_threads.run_threaded`), started at
+    14:40:05 IST."""
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+    return rig(make_fake_openalgo, monkeypatch, tmp_path, start=(14, 40, 5))
+
+
+def play_threaded(world: Any, monkeypatch: Any, scenario: Scenario, sold: int) -> Any:
+    """Run `scenario` on the threads seam with `sold` SBIN sold by hand at 14:43:00."""
+    sold_by_hand(world, sold, SOLD_AT)
+    world.stop_at(ist(14, 50))
+    strategy, arguments = scenario(world, monkeypatch)
+    return run_threaded(world, passing(world), "orders", (strategy,), **arguments)
+
+
+@pytest.mark.parametrize("sold", [10, 4])
+@pytest.mark.parametrize(
+    "scenario",
+    [before_any_read, at_the_first_sighting, target_between_the_sightings],
+    ids=["two Ctrl+C before any read", "two Ctrl+C at the first sighting", *AFTER_IDS[1:]],
+)
+def test_on_threads_the_stop_ends_fitted_to_what_is_left_and_the_result_says_so(
+    threaded, monkeypatch, caplog, scenario, sold
+):
+    # Either side of the last lines, the stop of 10 ends cancelled; what is left has a
+    # stop of exactly its units that the result says protects it, or no stop at all and a
+    # note that says so; and the mismatch alert says the stop is cancelled.
+    outcome = play_threaded(threaded, monkeypatch, scenario, sold)
+    left_units = StopHold.qty - sold
+    first, *again = [o for o in threaded.orders() if o.price_type == "SL-M"]
+    working = [o for o in again if o.status == "trigger pending"]
+    assert first.status == "cancelled"
+    assert threaded.fake.position("SBIN", "NSE") == left_units
+    assert [o.quantity for o in working] in ([], [left_units] if left_units else [])
+    (mismatch,) = alerts(caplog, "reconcile_mismatch")
+    assert "(a stop of the leg is cancelled" in mismatch
+    if not left_units:
+        assert outcome.open_positions == ()
+        return
+    (left,) = outcome.open_positions
+    if working:
+        assert (left.stop_order_id, left.stop_confirmed) == (working[0].order_id, True)
+        assert left.note.endswith(PROTECTS)
+    else:
+        assert (left.stop_order_id, left.stop_confirmed) == ("", False)
+        assert left.note.endswith("no stop at the broker, close it by hand")

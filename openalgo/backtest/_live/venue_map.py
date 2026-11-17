@@ -44,6 +44,7 @@ from ._venue_requests import (
     Handled,
     ModifyRequest,
     OrderRequest,
+    OrderTerms,
     PlaceRequest,
     Verdict,
     cancel_priority,
@@ -133,6 +134,13 @@ class VenueMap(RestoredOrders):
     def intent_of(self, kernel_order: int) -> OrderIntent:
         """The intent of a kernel order. Raises LiveError for one this map did not place."""
         return self._order(kernel_order).intent
+
+    def terms(self, kernel_order: int) -> OrderTerms:
+        """The terms the broker holds for a kernel order as far as the session knows: those
+        it was placed with, or the last modify the broker confirmed; a modify or cancel
+        held back or unanswered changes nothing here. Raises LiveError for an order this
+        map did not place."""
+        return self._order(kernel_order).terms
 
     # ----- commands to requests --------------------------------------------------------
 

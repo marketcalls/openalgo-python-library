@@ -9,17 +9,21 @@ A position left open names each order still working toward it, by its broker ord
 once bound, else its side, units, purpose and intent ID: an exit or an entry sent and
 unanswered, held back or ambiguous, or a MARKET order accepted with no final word yet, is
 "in flight"; any other one bound is "resting at the broker"; one the kernel made and
-never sent is "not sent". Then the stop: confirmed (for part of the position, or all of
-it), repriced to a LIMIT resting at the broker, being cancelled (a cancel sent, or one the
-kernel decided and the session has not handed over yet), ambiguous, handed to the order
-worker with no answer, held back and not sent, sent and unanswered, not confirmed, or
-none. Then what to do, since a sale by hand beside the session's own orders would sell
-short:
+never sent is "not sent". Then the stop: confirmed (for part of the position, all of it,
+or more units than it holds), repriced to a LIMIT resting at the broker, being cancelled
+(a cancel sent, or one the kernel decided and the session has not handed over yet),
+ambiguous, handed to the order worker with no answer, held back and not sent, sent and
+unanswered, not confirmed, or none. A stop's units are the terms the broker confirmed
+(`StopsSupervisor.covered`), never the kernel's while a modify or cancel of it is held
+back or unanswered (3.3 step 5 "As built"). Then what to do, since a sale by hand beside
+the session's own orders would sell short:
 
 - no stop and nothing sent working (an order the kernel made and never sent is no
   order at the broker): close it by hand;
-- a confirmed stop covering the whole position and nothing else working: the stop
-  protects it, and must be cancelled before any sale by hand (`protected`);
+- a confirmed stop for exactly the position's units and nothing else working: the stop
+  protects it, and must be cancelled before any sale by hand (`protected`). A stop
+  larger than the position (a sale by hand adopted before its cut or cancel went) never
+  protects it: a trigger would sell beyond it;
 - anything else (an order working, or a stop that may be at the broker without covering
   the position): check the order book before closing it by hand, cancelling what still
   works.
@@ -99,9 +103,13 @@ def leg_words(trader: Trader, units: float) -> str:
 
 def stop_state(stops: Any, trader: Trader) -> tuple[str, bool]:
     """The stop of `trader`'s leg as the supervisor `stops` knows it: its broker order ID
-    ("" for none, or one not bound) and whether it is confirmed working at the broker."""
+    ("" for none, or one not bound) and whether it is confirmed working at the broker for
+    no more units than the position holds (all of them or part)."""
     watched = _stop(stops, trader)
-    return ("", False) if watched is None else (watched.order_id, _covering(stops, trader) > 0)
+    if watched is None:
+        return "", False
+    covering = _covering(stops, trader)
+    return watched.order_id, 0 < covering <= round(abs(trader.open_units()))
 
 
 def stop_words(stops: Any, trader: Trader) -> str:
@@ -117,11 +125,11 @@ def stop_words(stops: Any, trader: Trader) -> str:
 
 
 def protected(stops: Any, trader: Trader) -> bool:
-    """True when the leg's confirmed stop covers its whole position and no other order
-    works toward it: nothing for the operator to do but leave the stop or cancel it
+    """True when the leg's confirmed stop is for exactly its position's units and no other
+    order works toward it: nothing for the operator to do but leave the stop or cancel it
     before a sale by hand."""
     units = round(abs(trader.open_units()))
-    return 0 < units <= _covering(stops, trader) and not _working(stops, trader)
+    return 0 < units == _covering(stops, trader) and not _working(stops, trader)
 
 
 def left_open(stops: Any, trader: Trader) -> str:
@@ -248,8 +256,14 @@ def _stop_words(stops: Any, trader: Trader) -> str:
     if _being_cancelled(stops, trader, watched):
         return f"stop {name} being cancelled, with no final word yet"
     covered, units = stops.covered(trader), round(abs(trader.open_units()))
-    if covered and covered >= units:
+    if covered and units in (0, covered):
+        # A flat leg's stop working on is named so: its alert sends the operator to the
+        # order book to cancel what still works.
         return f"stop {name} confirmed at the broker"
+    if covered > units:
+        # A sale by hand adopted before the stop's cut or cancel went: never a protection.
+        more = f"for {covered} units, more than the {units} held"
+        return f"stop {name} confirmed at the broker {more}"
     if covered:
         return f"stop {name} confirmed at the broker for {covered} of {units} units"
     if watched.state in _STOP_UNANSWERED_WORDS:

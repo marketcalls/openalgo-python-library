@@ -3,7 +3,9 @@ leg with a position when it must end with no leg left without a broker-held stop
 one can be sent. The rule throughout: never a working exit and a new stop at once.
 
 - Flat, or no stop rule (the leg never had a stop): nothing.
-- A confirmed stop covers it and no cancel of it waits: nothing, it is protected.
+- A confirmed stop for exactly its units and no cancel of it waits: nothing, it is
+  protected. One for more units (a sale by hand adopted before its cut went) waits for
+  the cut's word, as one not confirmed does; it never protects the leg.
 - A cancel of the stop was sent: wait for its word. Cancelled, the cases below apply;
   refused (the stop works on), it is protected.
 - The stop not confirmed yet, or held back: wait for its word.
@@ -154,7 +156,7 @@ class Protection:
             # A cancel the kernel decided in this loop step is handed over at its end.
             if stop.cancel_sent or leg.stop in self._stops.cancelling(trader):
                 return CANCEL_WAITS
-            return PROTECTED if self._stops.covered(trader) >= units else STOP_WAITS
+            return PROTECTED if self._stops.covered(trader) == units else STOP_WAITS
         exits = [kernel_order for kernel_order in trader.exit_orders() if kernel_order != leg.stop]
         unsent = [kernel_order for kernel_order in exits if kernel_order not in leg.orders]
         if any(_is_stop(trader, kernel_order) for kernel_order in unsent):

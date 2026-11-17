@@ -18,7 +18,7 @@ the strategy's entries, alert, and allow only this (`RULES`):
 |---|---|---|---|
 | N | the same | AGREE | nothing to do |
 | N | flat, explained | EXPLAINED_FLAT | adopt flat; the kernel cancels the stop with it |
-| N | same side, fewer, explained | EXPLAINED_FEWER | adopt; the kernel cuts the stop with it |
+| N | same side, fewer, explained | EXPLAINED_FEWER | adopt; the stop cut (a held cancel goes) |
 | N | flat or fewer, unexplained | UNEXPLAINED | nothing: a lag of the broker's books |
 | N or flat | same side, more | MORE | nothing: the excess is not the engine's |
 | N | the other side | OTHER_SIDE | cancel the leg's own working stop; close by hand |
@@ -113,6 +113,14 @@ RULES: Mapping[Kind, Rule] = MappingProxyType(
             "is sent. Close the position by hand in OpenAlgo",
         ),
     }
+)
+#: The words of an explained fewer difference whose adoption sent the cancel of the leg's
+#: stop that the exit guard held (16-session-design 3.3 step 5 "As built"): an exit asked
+#: for that cancel, so the stop is cancelled rather than cut down.
+FEWER_STOP_CANCELLED = (
+    "trades of other orders reduced it at the broker: the engine takes them as its own (a "
+    "stop of the leg is cancelled: an exit had asked for its cancel, held back until the "
+    "books agreed)"
 )
 #: The kinds during which no closing order goes beyond what the broker holds.
 GUARDED = frozenset({Kind.EXPLAINED_FLAT, Kind.EXPLAINED_FEWER, Kind.UNEXPLAINED, Kind.OTHER_SIDE})
@@ -319,6 +327,7 @@ def _rows(answer: Mapping[str, Any], symbol: str, exchange: str) -> tuple[Row, .
 
 
 __all__ = [
+    "FEWER_STOP_CANCELLED",
     "GUARDED",
     "RULES",
     "Kind",

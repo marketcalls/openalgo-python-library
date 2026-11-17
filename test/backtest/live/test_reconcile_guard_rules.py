@@ -39,16 +39,22 @@ BEFORE_NS, AFTER_NS = 900, 1_100
 
 
 class Trader:
-    """One strategy's engine as the guard sees it."""
+    """One strategy's engine as the guard sees it; its stop's terms at the broker are
+    `stop_units` units of an SL-M at 497.00, none filled."""
 
     name = "S"
 
     def __init__(self) -> None:
         self.units = ENGINE_UNITS
+        self.stop_units = ENGINE_UNITS
         self.orders = {STOP, EXIT, ENTRY}
         self.locks: list[str] = []
         self.engine = SimpleNamespace(entry_locks=lambda: list(self.locks))
-        self.venue = SimpleNamespace(changing=lambda kernel_order: False)
+        self.venue = SimpleNamespace(
+            changing=lambda kernel_order: False,
+            terms=lambda kernel_order: OrderTerms(self.stop_units, "SL-M", trigger_price=497.0),
+            filled=lambda kernel_order: 0,
+        )
 
     def open_units(self) -> float:
         return float(self.units)
@@ -230,6 +236,43 @@ def test_the_held_cancel_of_a_leg_protect_by_state_holds_stays_held(guarded):
     guarded.guard.close("S")
     assert guarded.handed == []
     assert guarded.guard.held_cancels("S") == {STOP}
+
+
+def test_the_held_cancel_of_a_stop_larger_than_the_position_goes_under_protect_by_state(guarded):
+    # The engine holds 4 of the stop's 10 units by the time the books agree: a trigger
+    # would sell 6 beyond the position, so the cancel goes, and protect by state places a
+    # stop for what is left once it is cancelled.
+    guarded.hand_over([cancel_of_stop()])
+    guarded.protected.add("S")
+    guarded.trader.units = BROKER_UNITS
+    guarded.guard.close("S")
+    assert guarded.handed == [cancel_of_stop()]
+
+
+# ----- a sale by hand adopted --------------------------------------------------------------
+
+
+@pytest.mark.parametrize("ended", [False, True], ids=["before the end", "after the end"])
+@pytest.mark.parametrize("engine_units", [0, BROKER_UNITS], ids=["nothing left", "4 left"])
+def test_an_adoption_sends_the_held_cancel_of_a_stop_larger_than_what_is_left(
+    guarded, ended, engine_units
+):
+    guarded.hand_over([cancel_of_stop()])
+    if ended:
+        guarded.guard.end()
+    guarded.trader.units = engine_units
+    sent = guarded.guard.adopted("S")
+    assert (sent, guarded.handed) == (True, [cancel_of_stop()])
+    assert guarded.guard.held_cancels("S") == frozenset()
+
+
+def test_an_adoption_keeps_the_held_cancel_of_a_stop_that_still_fits(guarded):
+    # The stop covers 4 units and the engine holds 4 once the sale is adopted: it fits,
+    # and its cancel waits for the books as before.
+    guarded.hand_over([cancel_of_stop()])
+    guarded.trader.stop_units = guarded.trader.units = BROKER_UNITS
+    assert guarded.guard.adopted("S") is False
+    assert guarded.handed == []
 
 
 # ----- after the session's last lines ---------------------------------------------------

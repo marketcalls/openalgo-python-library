@@ -59,7 +59,7 @@ from ._stops_cover import (
 )
 from ._stops_deadline import UNPROTECTED, UNPROTECTED_EXIT_AFTER_S, Deadlines
 from ._stops_held import HeldWords
-from ._stops_kernel import cancelling, order_of, push_price
+from ._stops_kernel import cancelling, push_price
 from ._stops_orders import LegOrders, Sent
 from ._stops_price import PriceRule
 from ._stops_protect import Protection
@@ -286,8 +286,10 @@ class StopsSupervisor:
     # ----- what the alerts and the close read -------------------------------------------
 
     def covered(self, trader: Trader) -> int:
-        """The units the leg's confirmed stop covers at the broker now: none while a
-        cancel of it was sent (the broker may have cancelled it already)."""
+        """The units the leg's confirmed stop may still fill at the broker now, by the terms
+        the broker confirmed (the venue map's, whatever modify or cancel of it waits), so
+        more than the position until a sale by hand is fitted; none once a cancel of it
+        was sent (the broker may have cancelled it already)."""
         leg = self.leg(trader)
         kernel_order = leg.stop
         watched = leg.orders.get(kernel_order) if kernel_order is not None else None
@@ -295,10 +297,10 @@ class StopsSupervisor:
             return 0
         if kernel_order not in trader.working() or self.held.held_cancel(trader, kernel_order):
             return 0
-        order = order_of(trader, kernel_order)
-        if order is None or order["order_type"] not in STOP_TYPES:
+        terms = trader.venue.terms(kernel_order)
+        if terms.price_type not in STOP_TYPES:
             return 0
-        return max(0, round(order["quantity_units"] - order["filled_units"]))
+        return max(0, terms.quantity - trader.venue.filled(kernel_order))
 
     def cancelling(self, trader: Trader) -> frozenset[int]:
         """The kernel orders of `trader` whose cancel the kernel decided and the venue has

@@ -41,7 +41,7 @@ from openalgo.backtest._live._types import (
     OrderUpdate,
     Purpose,
 )
-from openalgo.backtest._live._venue_requests import PlaceRequest, Priority
+from openalgo.backtest._live._venue_requests import OrderTerms, PlaceRequest, Priority
 from openalgo.backtest._live.inbox import NotSentReason
 from openalgo.backtest._live.stops import StopsSupervisor
 
@@ -251,8 +251,17 @@ class _Engine:
 
 
 class _Venue:
+    """The venue map of the stop o2: not bound, its terms the broker's (10 units of an SL-M
+    at 497.00), none filled."""
+
     def order_id_of(self, kernel_order):
         return ""
+
+    def terms(self, kernel_order):
+        return OrderTerms(10, "SL-M", trigger_price=497.0)
+
+    def filled(self, kernel_order):
+        return 0
 
 
 class _Trader:
@@ -340,15 +349,17 @@ class _Book:
 
 
 class _Leg:
-    """A strategy holding 10 SBIN whose working kernel orders are `working`."""
+    """A strategy holding `units` SBIN (10 unless a test changes it) whose working kernel
+    orders are `working`."""
 
     name, symbol, exchange, finished = "StopHold", "SBIN", "NSE", False
 
     def __init__(self, book: _Book, working: list):
         self.engine, self.venue, self._working = book, _Venue(), working
+        self.units = 10
 
     def open_units(self):
-        return 10.0
+        return float(self.units)
 
     def working(self):
         return list(self._working)
@@ -440,6 +451,22 @@ def test_a_confirmed_stop_with_nothing_else_working_protects_the_position():
 
     assert protected(stops, trader)
     assert left_open(stops, trader).endswith(STOP_PROTECTS)
+
+
+def test_a_confirmed_stop_larger_than_the_position_is_named_with_its_units_not_as_protecting():
+    # 4 of the 10 units were sold by hand and adopted while the stop's cut or cancel
+    # waits: a trigger of the stop as the broker holds it would sell 4 beyond the position.
+    stops, trader = confirmed_stop(cancelling=())
+    trader.units = 6
+
+    note = left_open(stops, trader)
+
+    assert not protected(stops, trader)
+    assert note == (
+        f"stop 261116000000002 confirmed at the broker for 10 units, more than the 6 held; "
+        f"{CHECK_FIRST}"
+    )
+    assert stop_state(stops, trader) == ("261116000000002", False)
 
 
 def test_a_stop_the_kernel_is_cancelling_is_named_as_being_cancelled_not_as_protecting():
