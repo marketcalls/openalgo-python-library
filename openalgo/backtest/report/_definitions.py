@@ -248,7 +248,8 @@ _TRADES = {
     "turnover": (
         "Turnover",
         "rupees",
-        "Traded value: |price| x quantity of every entry and every exit.",
+        "Traded value: |price| x quantity x multiplier of every entry and every exit (the "
+        "multiplier is 1 for a trades table without one).",
     ),
     "turnover_ratio": ("Turnover ratio", "ratio", "Turnover over mean equity."),
 }

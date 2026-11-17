@@ -65,8 +65,9 @@ def trade_list(trades: pd.DataFrame | None) -> pd.DataFrame:
                       the paisa (in a run, contract-note rounding included, so with no
                       position open at the end the trades add up to the run's charges)
         net_pnl       gross_pnl - charges, rupees, to the paisa
-        return_pct    net_pnl over the value of the entry (entry_price x quantity), in
-                      percent: 10.0 is ten percent; for a short, of the value sold
+        return_pct    net_pnl over the value of the entry (entry_price x quantity x the
+                      contract multiplier, 1 for shares), in percent: 10.0 is ten
+                      percent; for a short, of the value sold
         bars_held     bars of the strategy's interval that closed while the trade was
                       open, after entry_time and up to exit_time (a daily strategy:
                       sessions; `_result_report.strategy_bars_held`); NA when the
@@ -85,6 +86,7 @@ def trade_list(trades: pd.DataFrame | None) -> pd.DataFrame:
     closed = trades[trades["exit_time"].notna()]
     quantity = closed["quantity"].astype(float)
     entry_price = closed["entry_price"].astype(float)
+    multiplier = _optional(closed, "multiplier", 1.0).astype(float)
     gross = closed["gross_pnl"].astype(float).round(PAISA_DECIMALS)
     charges = closed["costs"].astype(float).round(PAISA_DECIMALS)
     net = closed["net_pnl"].astype(float).round(PAISA_DECIMALS)
@@ -102,7 +104,7 @@ def trade_list(trades: pd.DataFrame | None) -> pd.DataFrame:
             "gross_pnl": gross,
             "charges": charges,
             "net_pnl": net,
-            "return_pct": net / (entry_price * quantity) * PERCENT,
+            "return_pct": net / (entry_price * quantity * multiplier) * PERCENT,
             "bars_held": _optional(closed, "bars_held").astype("Int64"),
             "days_held": held.dt.total_seconds() / SECONDS_PER_DAY,
             "exit_reason": _optional(closed, "exit_reason"),

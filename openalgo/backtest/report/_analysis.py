@@ -293,9 +293,9 @@ def _trade_figures(table: TradeTable, points: EquityPoints) -> dict:
         closed(table.net_pnl),
         closed(table.costs),
     )
-    entries = np.sum(np.abs(table.entry_price) * table.quantity)
-    exits = np.sum(np.abs(closed(table.exit_price)) * closed(table.quantity))
-    turnover = float(entries + exits)
+    exited = np.abs(table.exit_price) * table.quantity * table.multiplier
+    entries = np.sum(np.abs(table.entry_price) * table.quantity * table.multiplier)
+    turnover = float(entries + np.sum(closed(exited)))
     mean_equity = float(np.mean(points.values))
     return {
         "exposure": call("exposure", points.bar_edges, table.entry_ts, table.holding_exits()),

@@ -30,6 +30,9 @@ TRADE_COLUMNS = (
 )
 #: Trade sides: the side of the entry order, so "BUY" is a long trade.
 SIDES = ("BUY", "SELL")
+#: The optional column of a trade's contract multiplier: rupees per one-rupee move per
+#: unit of quantity, so price x quantity x multiplier is the traded value (1 when absent).
+MULTIPLIER = "multiplier"
 #: Optional per-trade cost columns summed into the cost breakdown, in rupees: the six
 #: components of `openalgo.backtest.costs`, the depository charge on delivery sells and
 #: the contract-note rounding shared to the trade's fills (a run's trades table holds
@@ -142,7 +145,8 @@ def benchmark_columns(benchmark: pd.Series) -> tuple[np.ndarray, np.ndarray]:
 @dataclass(frozen=True)
 class TradeTable:
     """A checked trades table as columns. Times are int64 UTC nanoseconds, money is
-    rupees, quantity is units. Open trades (no exit time) have `is_open` True."""
+    rupees, quantity is units, `multiplier` rupees per one-rupee move per unit (1 for a
+    table without the column). Open trades (no exit time) have `is_open` True."""
 
     frame: pd.DataFrame
     entry_ts: np.ndarray
@@ -154,6 +158,7 @@ class TradeTable:
     gross_pnl: np.ndarray
     net_pnl: np.ndarray
     costs: np.ndarray
+    multiplier: np.ndarray
 
     def closed(self, column: np.ndarray) -> np.ndarray:
         """The rows of `column` that belong to closed trades."""
@@ -191,6 +196,7 @@ def trade_table(trades: pd.DataFrame | None) -> TradeTable:
     def number(name: str) -> np.ndarray:
         return _floats(frame[name], what=f"trades {name}")
 
+    multiplier = number(MULTIPLIER) if MULTIPLIER in frame.columns else np.ones(len(frame))
     table = TradeTable(
         frame=frame,
         entry_ts=entry_ts,
@@ -202,6 +208,7 @@ def trade_table(trades: pd.DataFrame | None) -> TradeTable:
         gross_pnl=number("gross_pnl"),
         net_pnl=number("net_pnl"),
         costs=number("costs"),
+        multiplier=multiplier,
     )
     _check_trade_values(table)
     return table
@@ -214,6 +221,11 @@ def _check_trade_values(table: TradeTable) -> None:
         raise ConfigError(f"trades side must be 'BUY' (long) or 'SELL' (short), found {bad}")
     if not np.all(np.isfinite(table.quantity) & (table.quantity > 0)):
         raise ConfigError("trades quantity must be a positive number of units (never lots)")
+    if not np.all(np.isfinite(table.multiplier) & (table.multiplier > 0)):
+        raise ConfigError(
+            "trades multiplier must be a positive number: the rupees a one-rupee move makes "
+            "per unit of quantity (1 for shares)"
+        )
     if not np.all(np.isfinite(table.entry_price)):
         raise ConfigError("trades entry_price is missing on some row")
     if not np.all(np.isfinite(table.closed(table.exit_price))):
@@ -222,6 +234,7 @@ def _check_trade_values(table: TradeTable) -> None:
 
 __all__ = [
     "COST_COLUMNS",
+    "MULTIPLIER",
     "OPEN_EXIT_NANOS",
     "SIDES",
     "TRADE_COLUMNS",
