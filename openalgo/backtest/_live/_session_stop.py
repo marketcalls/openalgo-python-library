@@ -38,7 +38,8 @@ time that end it (`Control`). The common close is `_session_close`.
   flatten's exits are asked for, then the second's bounded wait. A second seen before
   the flatten's book read is compared (at once or a moment later) keeps a leg's stop,
   whose cancel waits for that read (the exit guard): the leg is left open with its stop
-  and no exit. After a guard lock nothing can be sent: a first Ctrl+C stops at once.
+  and no exit, as 16-session-design 3.3 step 4 "As built" accepts. After a guard lock
+  nothing can be sent: a first Ctrl+C stops at once.
 - **The end of the day.** Once every strategy is past its MIS square-off, flat and with
   nothing working, the session ends ("session_end"). From the square-off plus
   `SQUARE_OFF_VERIFY_AFTER_S` a strategy not flat gets the ERROR alert "still not flat
@@ -68,7 +69,7 @@ from .._layout import NANOS_PER_SECOND
 from ._session_loop import Session
 from ._session_trader import StrategyFailed, Trader
 from ._stops_protect import PROTECTED
-from ._stops_report import left_open, open_while_running, protected
+from ._stops_report import left_open, leg_words, open_while_running, protected
 from ._types import LOGGER_NAME, AlertKind
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -288,7 +289,7 @@ class Control:
             units = trader.open_units()
             if units == 0 or self._protected(trader):
                 continue
-            line = f"{_leg(trader, units)}: not flat yet, {self._exit_state(trader)}"
+            line = f"{leg_words(trader, units)}: not flat yet, {self._exit_state(trader)}"
             session.emit(line)
             session.alert(AlertKind.ERROR, f"safe stop: {line}")
 
@@ -333,7 +334,7 @@ class Control:
             units = trader.open_units()
             if units == 0:
                 continue
-            line = f"{_leg(trader, units)}: {left_open(session.stops, trader)}"
+            line = f"{leg_words(trader, units)}: {left_open(session.stops, trader)}"
             session.emit(line)
             if every_leg or not protected(session.stops, trader):
                 session.alert(AlertKind.ERROR, line)
@@ -374,11 +375,6 @@ class Control:
             f"{trader.exchange} {trader.open_units():g} units, working orders "
             f"{', '.join(exits) or 'none'}",
         )
-
-
-def _leg(trader: Trader, units: float) -> str:
-    """How a line names a strategy's leg: the strategy, the instrument, signed units."""
-    return f"{trader.name} {trader.symbol} {trader.exchange} {units:g} units"
 
 
 def _s(seconds: float) -> int:

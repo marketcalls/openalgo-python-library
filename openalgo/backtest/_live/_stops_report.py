@@ -1,8 +1,8 @@
 """What the operator is told of a leg and its broker-held stop (16-session-design 1.4
-`open_positions`, 3.3 step 4, 3.5, 6.2; the unit 8 hand-off on the left-open note): the
-stop's order ID and whether it is confirmed, the stop in an alert's words, and the note
-of a position left open (the safe stop's lines, the result's `open_positions` and the
-emergency stop's alert).
+`open_positions`, 3.3 step 4, 3.5, 6.2; the unit 8 hand-off on the left-open note): how a
+line names the leg, the stop's order ID and whether it is confirmed, the stop in an
+alert's words, and the note of a position left open (the safe stop's lines, the result's
+`open_positions` and the emergency stop's alert).
 
 A position left open names each order still working toward it, by its broker order ID
 once bound, else its side, units, purpose and intent ID: an exit or an entry sent and
@@ -89,6 +89,11 @@ _STOP_UNANSWERED_WORDS = {
 }
 #: The words of a MARKET order accepted with no final word yet.
 _ACCEPTED_WORDS = "accepted with no final word yet"
+
+
+def leg_words(trader: Trader, units: float) -> str:
+    """How a line names a strategy's leg: the strategy, the instrument, signed units."""
+    return f"{trader.name} {trader.symbol} {trader.exchange} {units:g} units"
 
 
 def stop_state(stops: Any, trader: Trader) -> tuple[str, bool]:
@@ -288,6 +293,7 @@ __all__ = [
     "NO_STOP",
     "STOP_PROTECTS",
     "WHILE_IT_RUNS",
+    "leg_words",
     "left_open",
     "open_while_running",
     "protect_words",

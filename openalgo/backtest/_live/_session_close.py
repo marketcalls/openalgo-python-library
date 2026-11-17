@@ -1,19 +1,24 @@
 """The common close of a live session (16-session-design 3.3 step 5, 3.5, 1.4; unit 8),
 and what a session leaves (`SessionOutcome`).
 
-A final book read and reconciliation first, after a session end or a Ctrl+C (`reconcile`;
-not after an error or a mode breach), in which nothing the exit guard holds is sent any
-more (the last lines named it not sent: `ExitGuard.end`), `self.state` saved, the order
-worker stopped, each
-kernel session stopped where it stands (`stop_session`, R20) with its last events
-delivered, `on_stop` called and `finish` read,
-the DAILY_SUMMARY alert, then everything the start opened closed in reverse (the feed,
-the data worker, journal L, the logs, the alerts, the lock). A journal failure or another
-error closes the same way without the flatten (journal L is not written after a journal
-failure). A position left open is reported with its broker-held stop and what works
-toward its exit (`_stops_report.left_open`), and the day's unprotected seconds
-are the supervisor's windows; each comparison of the day that differed is in
-`reconciliations`. The public `SessionResult` (unit 13) is built from the outcome.
+The last lines are printed before the close begins, and from then on the session sends
+nothing they did not name (3.3 step 5 "As built"): the exit guard sends none of the
+requests it holds and no new one but the reconciler's own safe corrections
+(`ExitGuard.end`), and no price reaches the engine or the stops supervisor
+(`_stops_after`). Then a final book read and reconciliation, after a session end or a
+Ctrl+C (`reconcile`; not after an error or a mode breach), which takes in the books and
+the order news only; an ERROR alert for each leg whose stop ended in that read;
+`self.state` saved; the order worker stopped; each kernel session stopped where it
+stands (`stop_session`, R20) with its last events delivered, `on_stop` called and
+`finish` read; the DAILY_SUMMARY alert; then everything the start opened closed in
+reverse (the feed, the data worker, journal L, the logs, the alerts, the lock). A journal
+failure or another error closes the same way without the flatten (journal L is not
+written after a journal failure). A position left open is reported with its broker-held
+stop and what works toward its exit (`_stops_report.left_open`), after what happened to
+its stop following the last lines when anything did (`_stops_after.AfterLines.note`), and
+the day's unprotected seconds are the supervisor's windows; each comparison of the day
+that differed is in `reconciliations`. The public `SessionResult` (unit 13) is built from
+the outcome.
 
 Times are UTC nanoseconds, quantities units, amounts rupees.
 """
@@ -33,7 +38,7 @@ from ._session_loop import Session
 from ._session_trader import Skipped, Trader
 from ._stops_cover import Unprotected
 from ._stops_held import Estimate
-from ._stops_report import left_open, stop_state
+from ._stops_report import stop_state
 from ._types import LOGGER_NAME, AlertKind
 from .bars import BarDrift
 
@@ -106,11 +111,13 @@ def close_session(
     stack, which raises LiveError naming it once all are closed."""
     parts = session.parts
     try:
+        session.stops.after.end()
         session.reconcile.guard.end()
         if journal_works and stopped_by in _FINAL_READ:
             session.reconcile.final(FINAL_READ_WAIT_S)
         for request in session.reconcile.guard.left():
             logger.warning("a request held back by the exit guard was not sent: %r", request)
+        session.stops.after.alert(session)
         open_positions = _open_positions(session)
         unprotected_s = session.stops.windows.seconds(session.now())
         if journal_works:
@@ -186,7 +193,7 @@ def _open_positions(session: Session) -> tuple[OpenPosition, ...]:
             trader.symbol,
             trader.exchange,
             units,
-            "known as of the mode breach" if session.locked else left_open(stops, trader),
+            "known as of the mode breach" if session.locked else stops.after.note(stops, trader),
             *stop_state(stops, trader),
         )
         for trader in session.traders

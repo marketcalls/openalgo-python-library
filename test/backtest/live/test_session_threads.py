@@ -18,6 +18,9 @@ happened, and time the held call from it.
 The safe stop's tests (16-session-design 3.3 step 4) run `PressesStop` alone: it buys 10
 SBIN and, once it holds them, presses Ctrl+C from `on_bar`, on the loop's thread, where
 the signal handler runs too, so presses made together are seen together by the loop.
+`PressesStopWithTarget` does the same with a broker-held stop and a target: once the
+leg's last line says the stop protects it, the close sends nothing that line did not name
+(3.3 step 5 "As built", unit 12).
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ from typing import Any
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from session_samples import NS, alerts, ist, rig
+from stops_samples import events
 
 import openalgo.backtest as bt
 from openalgo.backtest._live._series_store import LiveStore
@@ -78,12 +82,13 @@ class Late(bt.Strategy):
 
 
 class PressesStop(bt.Strategy):
-    """Buys 10 SBIN at its first decision; at its second, holding them, asks the session's
-    stop flag `flag` to stop `presses` times."""
+    """Buys 10 SBIN at its first decision, with the leg `rules` (none here); at its
+    second, holding them, asks the session's stop flag `flag` to stop `presses` times."""
 
     symbol, exchange, interval = "SBIN", "NSE", "1m"
     presses = 1
     flag: Any = None
+    rules: dict[str, Any] = {}
 
     def init(self):
         self.calls = 0
@@ -91,10 +96,17 @@ class PressesStop(bt.Strategy):
     def on_bar(self, bar):
         self.calls += 1
         if self.calls == 1:
-            self.buy(10)
+            self.buy(10, **type(self).rules)
         elif self.calls == 2 and self.position.qty:
             for _ in range(type(self).presses):
                 type(self).flag.request()
+
+
+class PressesStopWithTarget(PressesStop):
+    """`PressesStop` whose entry has a broker-held stop 3 points below (an SL-M at 497.00)
+    and a target 2 points above (502.00), which the engine holds on ticks."""
+
+    rules = {"stop": bt.points(3), "target": bt.points(2)}
 
 
 class Blocking:
@@ -156,10 +168,14 @@ class Driver(threading.Thread):
 
 
 def run_threaded(
-    world: Any, blocking: Blocking, role: str, strategies: tuple[Any, ...] = (Early, Late)
+    world: Any,
+    blocking: Blocking,
+    role: str,
+    strategies: tuple[Any, ...] = (Early, Late),
+    **arguments: Any,
 ) -> Any:
     """Run `strategies` with the session's threads, `blocking` standing in for the
-    session's `role` client."""
+    session's `role` client, and `bt.live`'s other `arguments` (`on_stop`)."""
     clients = world.clients()
     clients = type(clients)(**{**clients.__dict__, role: blocking})
     clock = world.fake.clock
@@ -188,6 +204,7 @@ def run_threaded(
             alerts_to="trader1",
             live_dir=world.folder / "live",
             wait_max_s=WAIT_MAX_S,
+            **arguments,
         )
     finally:
         blocking.freed.set()
@@ -342,3 +359,50 @@ def test_a_second_ctrl_c_while_the_exit_is_sent_waits_for_its_fill(alone):
     assert alone.fake.position("SBIN", "NSE") == 0
     assert outcome.open_positions == ()
     assert not any("close it by hand" in line for line in alone.lines)
+
+
+# ----- the close sends nothing its last lines did not name ------------------------------
+
+
+def handed_after_the_final_read(outcome: Any) -> list[tuple[str, str | None]]:
+    """What the session handed to the order worker after the close asked for its final
+    book read (the event stream's requests after its last `ReadBooks`): (type, purpose)."""
+    requests = events(outcome, "request")
+    last = max(i for i, event in enumerate(requests) if event["type"] == "ReadBooks")
+    return [(event["type"], event.get("purpose")) for event in requests[last + 1 :]]
+
+
+@pytest.mark.parametrize(
+    ("on_stop", "presses"),
+    [("keep", 1), ("flatten", 2)],
+    ids=["on_stop keep", "two Ctrl+C at once"],
+)
+def test_a_tick_at_the_target_during_the_closes_final_read_sends_nothing(alone, on_stop, presses):
+    # The leg's last line says its stop protects it. The close's final read then holds
+    # its position book call 3 fake seconds, and SBIN trades at 503.00, past the 502.00
+    # target, as the hold begins: the stop must stay at the broker, and nothing may be
+    # handed to the order worker after the read was asked for.
+    PressesStop.presses = presses
+    fake = alone.fake
+
+    def at_the_target() -> None:
+        for _ in range(3):
+            fake.trade("SBIN", "NSE", 503.0, volume=10.0)
+
+    slow = Blocking(
+        fake.client(),
+        "positionbook",
+        when=lambda: any(line.startswith("PressesStopWithTarget SBIN") for line in alone.lines),
+        hold_s=3.0,
+        now=fake.clock.now,
+        on_hold=at_the_target,
+    )
+    outcome = run_threaded(alone, slow, "orders", (PressesStopWithTarget,), on_stop=on_stop)
+    assert slow.held_at is not None
+    assert handed_after_the_final_read(outcome) == []
+    sells = [(o.price_type, o.status) for o in alone.orders() if o.action == "SELL"]
+    assert sells == [("SL-M", "trigger pending")]
+    (left,) = outcome.open_positions
+    assert left.note.endswith(
+        "it protects the position, so cancel the stop before any sale by hand"
+    )

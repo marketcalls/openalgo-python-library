@@ -218,7 +218,9 @@ class Reconciler:
     def final(self, wait_s: float) -> None:
         """The common close's read (3.3 step 5): asked for now and taken in by the loop's
         protective steps, each waiting as little as the loop waits, for at most `wait_s`
-        seconds."""
+        seconds. They take in the books and the order news only: after the last lines no
+        price reaches the engine and the stops supervisor's duties do not run
+        (`_stops_after`)."""
         session = self._session
         if session.locked or self._stopped:
             return

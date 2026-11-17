@@ -27,14 +27,14 @@ placements, entries against its position and the cancel of its stop are held; a 
 placed again is not (it rests until triggered). The comparison then guards the leg, or
 lets them go.
 
-What no read knows yet (as built): a sale by hand made after the read began; for a
-square-off, whose read is asked `reconcile.SQUARE_OFF_READ_BEFORE_S` ahead so the
-square-off is not delayed, one made in those seconds; and for a strategy's own exit or a
-target's exit, which ask for no read, one made since the last comparison (at most
-`reconcile.RECONCILE_EVERY_S` before, unless a fill brought one sooner). Such an exit may
-sell more than the broker holds; the comparisons after it find the broker holding units
-the engine does not (`Kind.MORE`), and two in a row alert it and lock the strategy's
-entries.
+What no read knows yet, the limit 16-session-design 5.4 "As built" accepts: a sale by
+hand made after the read began; for a square-off, whose read is asked
+`reconcile.SQUARE_OFF_READ_BEFORE_S` ahead so the square-off is not delayed, one made in
+those seconds; and for a strategy's own exit or a target's exit, which ask for no read,
+one made since the last comparison (at most `reconcile.RECONCILE_EVERY_S` before, unless
+a fill brought one sooner). Such an exit may sell more than the broker holds; the
+comparisons after it find the broker holding units the engine does not (`Kind.MORE`), and
+two in a row alert it and lock the strategy's entries.
 
 Once a leg is neither guarded nor awaiting a read, each held request that still fits what
 the engine holds goes to the worker in its order; any other is refused as not sent: an
@@ -44,10 +44,14 @@ of it any more. A modify that keeps or lowers the units, and any other cancel, a
 they never add exposure. A held order is not at the broker, so it does not keep its leg
 in flight (`held_orders`, `held_cancels`).
 
-**At the close** (`end`): once the session has ended, nothing held goes to the worker,
-whatever the close's final read shows. The safe stop's last lines and alerts have named
-each held order as not sent, and an operator may already be closing the position by hand
-as they say; the held requests stay held, and the close reports them (`left`).
+**At the close** (`end`, 3.3 step 5 "As built"): once the session has printed its last
+lines, it sends nothing they did not name. Nothing held goes to the worker, whatever the
+close's final read shows: the lines and alerts have named each held order as not sent,
+and an operator may already be closing the position by hand as they say. Every new order
+request is held too (an exit, the cancel or a modify of a stop, a stop placed again, an
+entry), but the reconciler's own cancel of a stop on the other side (`allow_cancel`); the
+worker's own requests (a book read, an orphan's cancel) go. Nothing is alerted as going
+later; the close logs every request still held (`left`).
 
 Quantities are units, times UTC nanoseconds. Used by the loop only.
 """
@@ -169,7 +173,8 @@ class ExitGuard:
         return frozenset(r.kernel_order for r in held if isinstance(r, CancelRequest))
 
     def end(self) -> None:
-        """The session has ended: from now nothing held goes (module docstring, "At the
+        """The session has printed its last lines: from now nothing held goes, and no new
+        order request but the reconciler's own cancel (module docstring, "At the
         close")."""
         self._ended = True
 
@@ -182,12 +187,14 @@ class ExitGuard:
             return False
         intent: OrderIntent = request.intent
         name = intent.strategy
+        allowed = (name, request.kernel_order) in self._allowed
+        if self._ended:
+            return not (allowed and isinstance(request, CancelRequest))
         guarded, awaiting = name in self._broker, name in self._awaiting
         if not (guarded or awaiting):
             return False
         engine = round(self._session.trader_named(name).open_units())
         if isinstance(request, CancelRequest):
-            allowed = (name, request.kernel_order) in self._allowed
             return intent.purpose is Purpose.STOP and engine != 0 and not allowed
         if intent.purpose in ENTRY_PURPOSES:
             return isinstance(request, PlaceRequest) and _against(intent.action, engine)
@@ -213,10 +220,11 @@ class ExitGuard:
             self._alert(request)
 
     def _alert(self, request: Any) -> None:
-        """One ERROR alert per held order of a guarded leg."""
+        """One ERROR alert per held order of a guarded leg; none once the session has
+        ended, since nothing held goes then ("At the close")."""
         intent = request.intent
         key = (intent.strategy, request.kernel_order)
-        if key in self._alerted:
+        if key in self._alerted or self._ended:
             return
         self._alerted.add(key)
         self._session.alert(AlertKind.ERROR, _held_words(request, self._broker[intent.strategy]))

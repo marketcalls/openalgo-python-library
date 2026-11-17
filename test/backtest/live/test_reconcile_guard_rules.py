@@ -1,7 +1,8 @@
 """The exit guard's rules on a stand-in session (`_live/_reconcile_guard.py`;
-16-session-design 5.3 and 5.4 "As built", unit 12): what it holds back while a leg's
-broker holds fewer units than the engine, or while a leg waits for a book read, and what
-it lets go once the books agree.
+16-session-design 5.3, 5.4 and 3.3 step 5 "As built", unit 12): what it holds back while a
+leg's broker holds fewer units than the engine, or while a leg waits for a book read, what
+it lets go once the books agree, and the little it lets go once the session has printed
+its last lines.
 
 The stand-in session holds one strategy, `S`, long `ENGINE_UNITS` SBIN with a leg stop
 (kernel order `STOP`) working; it records what reaches the order worker and what is
@@ -24,6 +25,7 @@ from openalgo.backtest._live._venue_requests import (
     PlaceRequest,
     Priority,
 )
+from openalgo.backtest._live._worker_queue import CancelOrphan, ReadBooks
 from openalgo.backtest._live.inbox import NotSent
 
 #: The engine's position, signed units, and the broker's when it holds fewer.
@@ -228,6 +230,75 @@ def test_the_held_cancel_of_a_leg_protect_by_state_holds_stays_held(guarded):
     guarded.guard.close("S")
     assert guarded.handed == []
     assert guarded.guard.held_cancels("S") == {STOP}
+
+
+# ----- after the session's last lines ---------------------------------------------------
+
+
+def stop_trailed() -> ModifyRequest:
+    """The stop raised to 499.00 for the same units (a trail)."""
+    return ModifyRequest(
+        7,
+        STOP,
+        intent(Purpose.STOP, "SELL", ENGINE_UNITS),
+        "B2",
+        OrderTerms(ENGINE_UNITS, "SL-M", trigger_price=499.0),
+        OrderTerms(ENGINE_UNITS, "SL-M", trigger_price=497.0),
+        Priority.PROTECT,
+    )
+
+
+@pytest.fixture
+def ended(session: Session) -> Session:
+    """The session has printed its last lines; the books agree with the engine."""
+    session.guard.end()
+    return session
+
+
+@pytest.mark.parametrize(
+    "request_",
+    [
+        place(EXIT, Purpose.RISK_EXIT, "SELL", ENGINE_UNITS),
+        cancel_of_stop(),
+        stop_trailed(),
+        stop_modified(BROKER_UNITS),
+        place(STOP, Purpose.STOP, "SELL", ENGINE_UNITS),
+        place(ENTRY, Purpose.ENTRY, "BUY", 5),
+    ],
+    ids=[
+        "a target's exit",
+        "the cancel of the stop",
+        "a trail of the stop",
+        "a stop cut down",
+        "a stop placed again",
+        "an entry",
+    ],
+)
+def test_after_the_last_lines_a_new_order_request_is_not_sent(ended, request_):
+    ended.hand_over([request_])
+    assert (ended.handed, ended.refused) == ([], [])
+
+
+def test_after_the_last_lines_a_request_not_sent_is_left_for_the_close_to_log(ended):
+    ended.hand_over([cancel_of_stop()])
+    assert ended.guard.left() == [cancel_of_stop()]
+
+
+def test_after_the_last_lines_the_reconcilers_own_cancel_of_the_stop_goes(ended):
+    # The broker holds the other side: a stop on it could add to that position.
+    ended.guard.allow_cancel("S", STOP)
+    ended.hand_over([cancel_of_stop()])
+    assert ended.handed == [cancel_of_stop()]
+
+
+@pytest.mark.parametrize(
+    "request_",
+    [CancelOrphan("B7"), ReadBooks(3)],
+    ids=["the cancel of an orphan", "a book read"],
+)
+def test_after_the_last_lines_the_workers_own_requests_go(ended, request_):
+    ended.hand_over([request_])
+    assert ended.handed == [request_]
 
 
 # ----- a leg waiting for a book read ------------------------------------------------------

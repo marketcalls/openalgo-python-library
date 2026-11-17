@@ -223,8 +223,9 @@ class Session:
 
     def step(self, until_ns: int | None = None, *, protecting: bool = False) -> None:
         """One iteration (module docstring), waiting at most until `until_ns`. With
-        `protecting` (the emergency stop's protect by state) it only takes in what
-        arrived, runs the stops supervisor and hands over the commands."""
+        `protecting` (the emergency stop's protect by state, the close's final read) it
+        only takes in what arrived, runs the stops supervisor and hands over the
+        commands."""
         if not self.threads:
             self._step_workers()
         self._take_in()

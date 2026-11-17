@@ -27,7 +27,9 @@ runs, on the loop's thread, the rules about the broker's behaviour in time:
 The loop calls the hooks as it takes each message, `duties` in its step D, and `review`
 after the commands are handed over (E), so a window opens at the receive time of the
 news that left units uncovered. Nothing is done once the mode guard has locked: nothing
-can be sent. Times are UTC nanoseconds, prices rupees, quantities units.
+can be sent. Once the close has printed its last lines no price is taken and no duty
+runs, and a word that ends a leg's stop is noted for the result (`after`, 3.3 step 5).
+Times are UTC nanoseconds, prices rupees, quantities units.
 """
 
 from __future__ import annotations
@@ -41,6 +43,7 @@ from ._order_answers import Outcome
 from ._order_book import Resolution, Resolved
 from ._order_state import ENTRY_PURPOSES
 from ._session_trader import Trader
+from ._stops_after import AfterLines
 from ._stops_bare import BareLegs
 from ._stops_cancels import CancelRetries
 from ._stops_cover import (
@@ -78,7 +81,8 @@ logger = logging.getLogger(LOGGER_NAME)
 
 class StopsSupervisor:
     """The stops supervisor of `session`, a `_session_loop.Session` (module docstring).
-    `windows`, `prices`, `held`, `cancels`, `silence` and `protection` are its parts."""
+    `windows`, `prices`, `held`, `cancels`, `silence`, `protection` and `after` are its
+    parts."""
 
     def __init__(self, session: Any) -> None:
         self._session = session
@@ -96,6 +100,7 @@ class StopsSupervisor:
         self.bare = BareLegs(session, self)
         self.deadlines = Deadlines(session, self)
         self.silence = SilentServer(session, self)
+        self.after = AfterLines()
 
     def leg(self, trader: Trader) -> LegOrders:
         """What the supervisor knows of `trader`'s leg."""
@@ -105,7 +110,9 @@ class StopsSupervisor:
 
     def price(self, trader: Trader, price: float, at_ns: int) -> None:
         """A price of `trader`'s instrument, rupees at `at_ns` (a tick, a quote): to the
-        kernel, then the price rule."""
+        kernel, then the price rule; to neither after the close's last lines."""
+        if self.after.ended:
+            return
         if push_price(trader, price, at_ns):
             self._touch(trader, at_ns)
         self.prices.observe(trader, self.leg(trader).stop, price, at_ns)
@@ -122,6 +129,7 @@ class StopsSupervisor:
         kernel_order, leg = result.kernel_order, self.leg(trader)
         watched = leg.orders.get(kernel_order)
         cancel_sent = watched is not None and watched.cancel_sent
+        after_lines = self.after.heard(trader, leg, kernel_order, update)
         leg.heard(kernel_order, update)
         self._touch(trader, update.ts_recv_ns)
         if result.increment is not None:
@@ -130,7 +138,8 @@ class StopsSupervisor:
             return
         self.prices.ended(trader, kernel_order)
         self.cancels.ended(trader, kernel_order)
-        by_itself = update.status is OrderStatus.CANCELLED and not cancel_sent
+        # After the last lines the stop's end is noted for the result (`after`), not alerted.
+        by_itself = update.status is OrderStatus.CANCELLED and not (cancel_sent or after_lines)
         if watched is not None and watched.purpose is Purpose.STOP and by_itself:
             self._session.alert(
                 AlertKind.REJECT,
@@ -218,8 +227,8 @@ class StopsSupervisor:
         """Step D: the unprotected deadline, the price rule, held words, cancels sent
         again, bare legs, a silent OpenAlgo, protect by state. With `protecting` (the
         emergency stop's turns) a part that fails is logged and skipped from then on, so
-        protect by state, the last, still runs."""
-        if self._session.locked:
+        protect by state, the last, still runs. None runs after the close's last lines."""
+        if self._session.locked or self.after.ended:
             return
         parts = (
             self.deadlines.due,
