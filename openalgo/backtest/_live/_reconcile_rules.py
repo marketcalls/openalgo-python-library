@@ -70,7 +70,9 @@ class Kind(enum.Enum):
 class Rule:
     """What a difference allows once two comparisons in a row show it: adopt the broker's
     units through `apply_external_fill`, cancel the leg's own working stop, and the words
-    of its RECONCILE_MISMATCH alert (what is done, what to do). Every difference locks the
+    of its RECONCILE_MISMATCH alert (what is done, what to do). A change of the stop is
+    named as asked for: it goes to the order worker, which may close before sending it
+    (a final read whose books came as its seconds ran out). Every difference locks the
     strategy's entries for the rest of the session ("reconciliation")."""
 
     adopt: bool
@@ -85,13 +87,13 @@ RULES: Mapping[Kind, Rule] = MappingProxyType(
             True,
             False,
             "trades of other orders closed it at the broker: the engine takes them as its "
-            "own (a stop of the leg is cancelled with them)",
+            "own and asks for a stop of the leg to be cancelled with them",
         ),
         Kind.EXPLAINED_FEWER: Rule(
             True,
             False,
             "trades of other orders reduced it at the broker: the engine takes them as its "
-            "own (a stop of the leg is cut down to what is left)",
+            "own and asks for a stop of the leg to be cut down to what is left",
         ),
         Kind.UNEXPLAINED: Rule(
             False,
@@ -109,18 +111,18 @@ RULES: Mapping[Kind, Rule] = MappingProxyType(
         Kind.OTHER_SIDE: Rule(
             False,
             True,
-            "the broker holds the other side: the engine's stop is cancelled and nothing else "
-            "is sent. Close the position by hand in OpenAlgo",
+            "the broker holds the other side: the engine asks for its stop to be cancelled "
+            "and sends nothing else. Close the position by hand in OpenAlgo",
         ),
     }
 )
 #: The words of an explained fewer difference whose adoption sent the cancel of the leg's
 #: stop that the exit guard held (16-session-design 3.3 step 5 "As built"): an exit asked
-#: for that cancel, so the stop is cancelled rather than cut down.
+#: for that cancel, so the stop's cancel is asked for rather than its cut.
 FEWER_STOP_CANCELLED = (
-    "trades of other orders reduced it at the broker: the engine takes them as its own (a "
-    "stop of the leg is cancelled: an exit had asked for its cancel, held back until the "
-    "books agreed)"
+    "trades of other orders reduced it at the broker: the engine takes them as its own and "
+    "asks for the stop of the leg to be cancelled (an exit had asked for its cancel, held "
+    "back until the books agreed)"
 )
 #: The kinds during which no closing order goes beyond what the broker holds.
 GUARDED = frozenset({Kind.EXPLAINED_FLAT, Kind.EXPLAINED_FEWER, Kind.UNEXPLAINED, Kind.OTHER_SIDE})

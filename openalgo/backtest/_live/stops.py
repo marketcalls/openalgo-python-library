@@ -302,6 +302,11 @@ class StopsSupervisor:
             return 0
         return max(0, terms.quantity - trader.venue.filled(kernel_order))
 
+    def broker_units(self, trader: Trader) -> int | None:
+        """The broker's signed units of `trader`'s leg while the reconciler's exit guard
+        holds it, as its last read showed them (`ExitGuard.broker_units`), else None."""
+        return self._session.reconcile.guard.broker_units(trader.name)
+
     def cancelling(self, trader: Trader) -> frozenset[int]:
         """The kernel orders of `trader` whose cancel the kernel decided and the venue has
         not answered, but those whose cancel the reconciler's exit guard holds back: never

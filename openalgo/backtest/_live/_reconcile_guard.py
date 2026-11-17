@@ -110,6 +110,11 @@ class ExitGuard:
         """True while strategy `name`'s leg is guarded (the broker holds fewer units)."""
         return name in self._broker
 
+    def broker_units(self, name: str) -> int | None:
+        """The broker's signed units of strategy `name`'s leg as the last read showed them
+        while the leg is guarded, else None."""
+        return self._broker.get(name)
+
     def holds_back(self, name: str) -> bool:
         """True while the guard holds a request of strategy `name`."""
         return bool(self._held.get(name))

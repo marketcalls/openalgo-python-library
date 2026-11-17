@@ -15,11 +15,17 @@ in that window (a fill whose answer came then, a sale by hand the reconciler ado
 the engine held them when the lines were printed (`end`). The result's note of a position
 left open first says what happened, then the leg's state as `_stops_report.left_open`
 gives it (`note`), and one ERROR alert per leg says the same (`alert`): the last line is
-never left claiming a position or a protection the leg no longer has. A leg left flat is
-alerted when anything happened to it, or when an order of it still works in the engine
-(`_stops_report.still_working`), since that order may work at the broker; no line named
-a flat leg. Each alert names the changes of the leg's orders the exit guard held back
-(a held placement's order is named by the note as not sent).
+never left claiming a position or a protection the leg no longer has. So is a leg left
+open that the reconciler's exit guard still holds at the close (`CLOSED_DIFFERING`): the
+last read showed the broker holding fewer units than the engine counts and no comparison
+agreed after it (the final read brought no books, or was the first to see a sale by
+hand), so a line printed before that read may have said its stop protects it; the alert
+and the note name the units OpenAlgo's books showed and the stop's own
+(`_stops_report.left_open`). A leg left flat is alerted when anything happened to it, or
+when an order of it still works in the engine (`_stops_report.still_working`), since that
+order may work at the broker; no line named a flat leg. Each alert names the changes of
+the leg's orders the exit guard held back (a held placement's order is named by the note
+as not sent).
 
 Quantities are signed units. Used by the loop only.
 """
@@ -49,6 +55,8 @@ FLAT_NOW = (
     "the engine holds no position now: check the order book in OpenAlgo, cancelling what "
     "still works"
 )
+#: What the alert of a leg the exit guard still holds at the close says first.
+CLOSED_DIFFERING = "the session closed before OpenAlgo's books agreed with the engine"
 #: When it happened, in a note's words.
 _AFTER_THE_LINES = "after the session's last lines"
 
@@ -91,8 +99,9 @@ class AfterLines:
 
     def alert(self, session: Any) -> None:
         """One ERROR alert per leg left open that anything happened to after the last
-        lines, and per leg left flat that anything happened to or that still has an order
-        working (module docstring); `session` is the `_session_loop.Session`."""
+        lines or that the exit guard still holds, and per leg left flat that anything
+        happened to or that still has an order working (module docstring); `session` is
+        the `_session_loop.Session`."""
         held = session.reconcile.guard.left()
         for trader in session.traders:
             text = self._alert_text(session.stops, trader, held)
@@ -104,9 +113,10 @@ class AfterLines:
         happened, not_sent = self._happened(trader), _held_changes(trader, held)
         units = trader.open_units()
         if units:
-            if not happened:
+            differs = [CLOSED_DIFFERING] if stops.broker_units(trader) is not None else []
+            if not (happened or differs):
                 return None
-            parts = [*happened, *not_sent, left_open(stops, trader)]
+            parts = [*happened, *differs, *not_sent, left_open(stops, trader)]
             return f"{leg_words(trader, units)}: {'; '.join(parts)}"
         working = still_working(stops, trader)
         if not (happened or working):
@@ -148,4 +158,4 @@ def _held_changes(trader: Trader, held: Sequence[Any]) -> list[str]:
     return [f"not sent: {', '.join(names)}"] if names else []
 
 
-__all__ = ["FLAT_NOW", "AfterLines"]
+__all__ = ["CLOSED_DIFFERING", "FLAT_NOW", "AfterLines"]

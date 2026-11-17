@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
@@ -46,9 +47,12 @@ from openalgo.backtest._live.inbox import NotSentReason
 from openalgo.backtest._live.stops import StopsSupervisor
 
 #: The session of the supervisors built with no server: its reconciler's exit guard holds
-#: no cancel back, which is all they ask of it (`StopsSupervisor.cancelling`).
+#: no cancel back and no leg, which is all they ask of it (`StopsSupervisor.cancelling`,
+#: `StopsSupervisor.broker_units`).
 NOTHING_HELD = SimpleNamespace(
-    reconcile=SimpleNamespace(guard=SimpleNamespace(held_cancels=lambda name: frozenset()))
+    reconcile=SimpleNamespace(
+        guard=SimpleNamespace(held_cancels=lambda name: frozenset(), broker_units=lambda name: None)
+    )
 )
 
 
@@ -436,10 +440,19 @@ def test_a_resting_exit_beside_orders_never_sent_comes_before_closing_it_by_hand
     assert "close it by hand" not in note.replace(CHECK_FIRST, "")
 
 
-def confirmed_stop(cancelling: tuple) -> tuple[StopsSupervisor, _Leg]:
+#: The session of a supervisor whose reconciler's exit guard holds the leg: its last read
+#: showed the broker holding 6 of the engine's 10 units (4 sold by hand, seen once).
+BROKER_HOLDS_6 = SimpleNamespace(
+    reconcile=SimpleNamespace(
+        guard=SimpleNamespace(held_cancels=lambda name: frozenset(), broker_units=lambda name: 6)
+    )
+)
+
+
+def confirmed_stop(cancelling: tuple, session: Any = NOTHING_HELD) -> tuple[StopsSupervisor, _Leg]:
     """A leg whose SL-M stop o2 (order 261116000000002) is confirmed working for its 10
-    units, with the kernel's cancelling list `cancelling`."""
-    stops = StopsSupervisor(session=NOTHING_HELD)
+    units, with the kernel's cancelling list `cancelling`, in `session`."""
+    stops = StopsSupervisor(session=session)
     trader = _Leg(_Book({2: _terms("SL-M")}, cancelling=cancelling), working=[2])
     _bound(stops, trader, STOP_PLACED, "261116000000002")
     stops.leg(trader).heard(2, _working_word("261116000000002"))
@@ -482,6 +495,32 @@ def test_a_stop_the_kernel_is_cancelling_is_named_as_being_cancelled_not_as_prot
     assert note.endswith(CHECK_FIRST)
     assert stop_words(stops, trader).endswith("check the order book")
     assert stop_state(stops, trader) == ("261116000000002", False)
+
+
+def test_a_confirmed_stop_of_a_leg_the_guard_holds_is_named_with_the_books_units():
+    # A trigger of the stop for 10 would sell 4 beyond the 6 the broker holds.
+    stops, trader = confirmed_stop(cancelling=(), session=BROKER_HOLDS_6)
+
+    assert left_open(stops, trader) == (
+        "stop 261116000000002 confirmed at the broker for 10 units; OpenAlgo's books showed 6 "
+        f"units at the last read; {CHECK_FIRST}"
+    )
+
+
+def test_a_confirmed_stop_of_a_leg_the_guard_holds_neither_protects_it_nor_is_confirmed():
+    stops, trader = confirmed_stop(cancelling=(), session=BROKER_HOLDS_6)
+
+    assert not protected(stops, trader)
+    assert stop_state(stops, trader) == ("261116000000002", False)
+
+
+def test_a_leg_the_guard_holds_with_no_stop_is_sent_to_the_order_book_not_to_close_it():
+    # A sale by hand of the engine's 10 would sell 4 beyond the 6 the broker holds.
+    stops, trader = StopsSupervisor(session=BROKER_HOLDS_6), _Leg(_Book({}), working=[])
+
+    assert left_open(stops, trader) == (
+        f"no stop at the broker; OpenAlgo's books showed 6 units at the last read; {CHECK_FIRST}"
+    )
 
 
 # ----- the note of an alert sent while the session runs (no server) ---------------------

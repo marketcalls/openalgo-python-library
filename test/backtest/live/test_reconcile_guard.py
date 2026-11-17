@@ -77,7 +77,9 @@ def test_F78_the_stop_stays_at_the_broker_while_the_flatten_waits_for_the_books(
     assert stops(lagging) == [(10, "trigger pending")]
     assert market_sells(lagging) == []
     (left,) = outcome.open_positions
-    assert (left.units, left.stop_confirmed) == (10, True)
+    # The position book showed the broker flat to the end: the stop is not reported as
+    # confirmed for a position OpenAlgo's books do not show.
+    assert (left.units, left.stop_confirmed) == (10, False)
     assert [w for w in outcome.unprotected if w.from_ns >= ist(14, 46)] == []
 
 
@@ -132,10 +134,12 @@ def test_an_exit_held_when_the_session_ends_is_not_sent_when_the_books_agree_at_
 def test_the_result_names_an_exit_held_at_the_close_as_the_last_lines_did(agreeing_at_the_close):
     world = agreeing_at_the_close
     outcome = world.run(Hold)
-    # The last line of the leg is the second Ctrl+C's (a reminder came at 14:47).
+    # The last line of the leg is the second Ctrl+C's (a reminder came at 14:47), printed
+    # while the books showed the broker flat, so it sends the operator to the books first;
+    # the close's final read agrees, and the result's note names the held exit the same.
     *_, line = [line for line in world.lines if line.startswith("Hold SBIN NSE 10 units: ")]
     (left,) = outcome.open_positions
-    assert left.note == line.removeprefix("Hold SBIN NSE 10 units: ")
+    assert line.startswith("Hold SBIN NSE 10 units: order o2 not sent; ")
     assert left.note == "order o2 not sent; no stop at the broker, close it by hand"
 
 

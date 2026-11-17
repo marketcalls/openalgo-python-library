@@ -58,11 +58,11 @@ ABOVE_TARGET = 503.0
 KEEP_AFTER_S = 2
 #: The end of a note whose confirmed stop covers the whole position.
 PROTECTS = "it protects the position, so cancel the stop before any sale by hand"
-#: What a RECONCILE_MISMATCH alert says became of the stop, by what is left.
-CANCELLED_WITH_THEM = "(a stop of the leg is cancelled with them)"
+#: What a RECONCILE_MISMATCH alert says the engine asks of the stop, by what is left.
+CANCELLED_WITH_THEM = "asks for a stop of the leg to be cancelled with them"
 CANCELLED_NOT_CUT = (
-    "(a stop of the leg is cancelled: an exit had asked for its cancel, held back until the "
-    "books agreed)"
+    "asks for the stop of the leg to be cancelled (an exit had asked for its cancel, held "
+    "back until the books agreed)"
 )
 #: What a flat leg's alert asks of the operator.
 FLAT_NOW = (
@@ -147,6 +147,18 @@ def after_the_lines(caplog: Any) -> list[str]:
     return [text.split(": ", 1)[1] for text in named]
 
 
+def errors_after_the_adoption(caplog: Any) -> list[str]:
+    """The ERROR alerts sent after the RECONCILE_MISMATCH alert of the adoption: a line
+    printed before it, while the exit guard held the leg, names the stop beside the units
+    OpenAlgo's books showed."""
+    texts = [record.getMessage() for record in caplog.records if record.name == LOGGER_NAME]
+    adopted = max(
+        i for i, text in enumerate(texts) if text.startswith("alert reconcile_mismatch: ")
+    )
+    tag = "alert error: "
+    return [text[len(tag) :] for text in texts[adopted:] if text.startswith(tag)]
+
+
 # ----- inline: the stop at the broker ---------------------------------------------------
 
 
@@ -199,7 +211,7 @@ def test_a_sale_by_hand_adopted_while_the_stops_cancel_is_held_fits_the_stop_at_
         "target crossed, then keep, 4 sold",
     ],
 )
-def test_the_mismatch_alert_says_the_stop_is_cancelled(
+def test_the_mismatch_alert_asks_for_the_stops_cancel(
     world, monkeypatch, caplog, scenario, sold, words
 ):
     play(world, monkeypatch, scenario, sold)
@@ -275,7 +287,7 @@ def test_no_alert_or_note_names_the_first_stop_as_confirmed_once_the_sale_is_ado
     # result may say it is confirmed at the broker (and so protects what is left).
     outcome = play(world, monkeypatch, scenario, sold)
     claim = f"stop {first_stop(world).order_id} confirmed at the broker"
-    texts = alerts(caplog, "error") + [left.note for left in outcome.open_positions]
+    texts = errors_after_the_adoption(caplog) + [left.note for left in outcome.open_positions]
     assert [text for text in texts if claim in text] == []
 
 
@@ -309,7 +321,7 @@ def test_on_threads_the_stop_ends_fitted_to_what_is_left_and_the_result_says_so(
 ):
     # Either side of the last lines, the stop of 10 ends cancelled; what is left has a
     # stop of exactly its units that the result says protects it, or no stop at all and a
-    # note that says so; and the mismatch alert says the stop is cancelled.
+    # note that says so; and the mismatch alert asks for the stop's cancel.
     outcome = play_threaded(threaded, monkeypatch, scenario, sold)
     left_units = StopHold.qty - sold
     first, *again = [o for o in threaded.orders() if o.price_type == "SL-M"]
@@ -318,7 +330,7 @@ def test_on_threads_the_stop_ends_fitted_to_what_is_left_and_the_result_says_so(
     assert threaded.fake.position("SBIN", "NSE") == left_units
     assert [o.quantity for o in working] in ([], [left_units] if left_units else [])
     (mismatch,) = alerts(caplog, "reconcile_mismatch")
-    assert "(a stop of the leg is cancelled" in mismatch
+    assert "of the leg to be cancelled" in mismatch
     if not left_units:
         assert outcome.open_positions == ()
         return

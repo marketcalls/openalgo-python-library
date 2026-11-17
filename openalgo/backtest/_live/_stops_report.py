@@ -28,6 +28,13 @@ the session's own orders would sell short:
   the position): check the order book before closing it by hand, cancelling what still
   works.
 
+While the reconciler's exit guard holds the leg (its last read showed the broker holding
+fewer units on the engine's side, none, or the other side: `StopsSupervisor.broker_units`)
+the note names the units OpenAlgo's books showed and a confirmed stop's own units, and
+sends the operator to the order book: the broker's position is not the engine's, so a stop
+sized for the engine's units may sell beyond it, and no stop is said to protect the leg or
+reported confirmed (`stop_state`).
+
 That advice holds once the session has ended. While it runs, the engine sends a rejected
 exit again at a later bar's open and places a stop again that ended at the broker with no
 request of its own (16-session-design 4.8, 4.10), so a sale by hand beside it sells
@@ -104,12 +111,14 @@ def leg_words(trader: Trader, units: float) -> str:
 def stop_state(stops: Any, trader: Trader) -> tuple[str, bool]:
     """The stop of `trader`'s leg as the supervisor `stops` knows it: its broker order ID
     ("" for none, or one not bound) and whether it is confirmed working at the broker for
-    no more units than the position holds (all of them or part)."""
+    no more units than the position holds (all of them or part), never while the exit
+    guard holds the leg (module docstring)."""
     watched = _stop(stops, trader)
     if watched is None:
         return "", False
     covering = _covering(stops, trader)
-    return watched.order_id, 0 < covering <= round(abs(trader.open_units()))
+    guarded = stops.broker_units(trader) is not None
+    return watched.order_id, not guarded and 0 < covering <= round(abs(trader.open_units()))
 
 
 def stop_words(stops: Any, trader: Trader) -> str:
@@ -125,9 +134,12 @@ def stop_words(stops: Any, trader: Trader) -> str:
 
 
 def protected(stops: Any, trader: Trader) -> bool:
-    """True when the leg's confirmed stop is for exactly its position's units and no other
-    order works toward it: nothing for the operator to do but leave the stop or cancel it
-    before a sale by hand."""
+    """True when the leg's confirmed stop is for exactly its position's units, no other
+    order works toward it and the exit guard does not hold the leg (module docstring):
+    nothing for the operator to do but leave the stop or cancel it before a sale by
+    hand."""
+    if stops.broker_units(trader) is not None:
+        return False
     units = round(abs(trader.open_units()))
     return 0 < units == _covering(stops, trader) and not _working(stops, trader)
 
@@ -208,6 +220,12 @@ def _note(stops: Any, trader: Trader) -> tuple[list[str], str]:
     if unsent:
         parts.append(f"order {', '.join(f'o{k}' for k in unsent)} not sent")
     stop_part = _stop_words(stops, trader)
+    broker = stops.broker_units(trader)
+    if broker is not None:
+        # The broker holds fewer units than the engine counts, or the other side: neither
+        # a sale by hand of the engine's units nor its stop fits what the broker holds.
+        books = f"OpenAlgo's books showed {broker} units at the last read"
+        return [*parts, stop_part, books], _CHECK
     if stop_part == NO_STOP and not sent:
         # Nothing sent works toward the position: only a sale by hand closes it.
         return [*parts, NO_STOP], _CLOSE
@@ -256,6 +274,10 @@ def _stop_words(stops: Any, trader: Trader) -> str:
     if _being_cancelled(stops, trader, watched):
         return f"stop {name} being cancelled, with no final word yet"
     covered, units = stops.covered(trader), round(abs(trader.open_units()))
+    if covered and stops.broker_units(trader) is not None:
+        # The broker's position is not the engine's (the note names it): the stop's own
+        # units are what the operator weighs against it.
+        return f"stop {name} confirmed at the broker for {covered} units"
     if covered and units in (0, covered):
         # A flat leg's stop working on is named so: its alert sends the operator to the
         # order book to cancel what still works.
