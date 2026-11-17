@@ -18,11 +18,13 @@ Monte Carlo of `metrics.monte_carlo(resample="trades")`, with odds worked by han
 
 import math
 
+import numpy as np
 import pytest
 from robust_runs import blocks_of, check_of, trade_performance
 
 from openalgo.backtest import metrics
-from openalgo.backtest._robust._paths import SAMPLED_PATHS
+from openalgo.backtest._robust._paths import SAMPLED_PATHS, walk
+from openalgo.backtest._robust._trade_common import path_figures
 from openalgo.backtest._robust._verdict import FAILED, NOT_JUDGED, PASSED
 
 EDGE = [100.0] * 36 + [-50.0] * 4
@@ -125,3 +127,16 @@ def test_too_few_trades_are_not_judged():
     result = check_of(trade_performance(EDGE[:20]), "resample")
     assert result.verdict == NOT_JUDGED
     assert result.note == "Too few trades to judge: 20 closed trades, 30 needed."
+
+
+def test_the_rule_says_ruin_is_a_fall_from_a_peak():
+    result = check_of(trade_performance(EDGE), "resample", runs=50)
+    assert result.rule.endswith("at most 5% of paths falling 50% from a peak")
+
+
+def test_ruin_is_a_fall_from_a_peak_not_a_share_of_the_capital():
+    # On 1,00,000 a path that rises to 3,00,000 and falls 1,00,000 loses half the
+    # capital but a third of its peak: it is not ruined at a 50% fall, as the
+    # Monte Carlo's bust odds count it.
+    path = walk(np.array([[200_000.0, -100_000.0]]), 100_000.0)
+    assert path_figures(path.final_return, path.max_drawdown, 100_000.0, 0.5)["ruin_odds"] == 0.0

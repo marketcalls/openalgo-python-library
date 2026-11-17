@@ -4,10 +4,11 @@
 booking their net P&L one after another on the start capital: the Monte Carlo of
 `metrics.monte_carlo(resample="trades")`, with the check's seed. Its runs give the
 summary block (`_trade_common.path_figures`): the share of paths profitable, the ruin
-odds (paths whose maximum drawdown reaches `ruin`), the average profit and drawdown,
-their 95 percent intervals and the return over drawdown. Pass: at least `pass_share` of
-the paths profitable and ruin odds at most `max_ruin`. A run whose closed trades did not
-make money has no edge to judge (`_trade_common.no_edge`).
+odds (paths whose maximum drawdown reaches `ruin`, a fall from a peak as the Monte
+Carlo's bust odds measure it, not a share of the start capital), the average profit and
+drawdown, their 95 percent intervals and the return over drawdown. Pass: at least
+`pass_share` of the paths profitable and ruin odds at most `max_ruin`. A run whose closed
+trades did not make money has no edge to judge (`_trade_common.no_edge`).
 
 The fan's bands are the Monte Carlo's own; its thin paths are its first runs, drawn
 again the way the kernel draws them (`_paths.resampled_trades`).
@@ -62,8 +63,8 @@ def rule(settings: Mapping[str, Any]) -> str:
     """The pass rule, in words."""
     return (
         f"at least {words.percent(settings['pass_share'], 0)} of paths profitable and at "
-        f"most {words.percent(settings['max_ruin'], 0)} reaching a "
-        f"{words.percent(settings['ruin'], 0)} drawdown"
+        f"most {words.percent(settings['max_ruin'], 0)} of paths falling "
+        f"{words.percent(settings['ruin'], 0)} from a peak"
     )
 
 

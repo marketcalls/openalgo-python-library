@@ -140,7 +140,9 @@ def path_tiles(title: str, subtitle: str, figures: dict[str, float], ruin: float
     low, high = figures["profit_low_rupees"], figures["profit_high_rupees"]
     tiles = (
         Tile("Profitable", words.percent(figures["profitable_share"]), "of the paths"),
-        Tile("Ruin odds", words.percent(figures["ruin_odds"]), f"drawdown {words.percent(-ruin)}"),
+        Tile(
+            "Ruin odds", words.percent(figures["ruin_odds"]), f"{words.percent(ruin)} from a peak"
+        ),
         Tile("Average profit", words.rupees(profit), "final P&L", _tone(profit)),
         Tile("Profit, low", words.rupees(low), "2.5th percentile", _tone(low)),
         Tile("Profit, high", words.rupees(high), "97.5th percentile", _tone(high)),
