@@ -236,6 +236,7 @@ def test_a_part_sold_by_hand_in_the_final_read_leaves_the_rest_with_its_cut_stop
     outcome = world.run(StopHold, on_stop="keep")
     (left,) = outcome.open_positions
     stop = next(o for o in world.orders() if o.price_type == "SL-M")
+    assert stops(world) == [(6, "trigger pending")]
     assert (left.units, left.stop_order_id, left.stop_confirmed) == (6, stop.order_id, True)
     assert left.note == (
         "its position went from 10 to 6 units after the session's last lines; "
