@@ -13,15 +13,18 @@ journal at a restart) is applied once:
 - More: `units = F - filled_units` at the derived price `(A * F - filled_value) / units`.
   The broker rounds (or cuts) A to its last decimal, at the paisa or finer
   (`AVERAGE_DECIMALS_AT_LEAST`), so the derived price is off by less than one unit of
-  that decimal times F over units: its rounding bound. Within half a tick, the bound
-  tells the trade's price: a tick within it is that price (a trade is on the tick), and
-  with none the units are several trades whose average is the derived price itself.
-  Wider (a large order's average priced against a few units), the tick cannot be told:
-  the derived price is used as it is, flagged `derived_from_average`, still within its
-  bound, where the average itself could be far from the units' price. A derived price
-  not above 0 (figures that do not agree) gives way to A itself, flagged. Since
-  `filled_value` is what the kernel was given, the next word's derived price makes good
-  any error, and the kernel's value follows the broker's A times F.
+  that decimal times F over units: its rounding bound. The ticks strictly within the
+  bound tell the units' price. One tick: that is the price (a trade is on the tick).
+  None: the units are several trades whose average is the derived price itself. Two or
+  more (a large order's average priced against a few units, or a later part of an order
+  at a 0.01 tick): the tick cannot be told, and the derived price is used as it is,
+  flagged `derived_from_average`, still within its bound, where the average itself could
+  be far from the units' price. A first fill is never flagged: its derived price is the
+  broker's own average of those units. A derived price not above 0 (figures that do not
+  agree) gives way to A itself, flagged. So a fill is flagged only when its true price
+  may lie on another tick than the one shown. Since `filled_value` is what the kernel was
+  given, the next word's derived price makes good any error, and the kernel's value
+  follows the broker's A times F.
 - The kernel takes it with `apply_fill(order, units, price, at=ts_recv_ns)`, and the
   ledger moves to F and adds the increment's value. A refusal (`VenueRefusalError`) is
   a reconciliation matter: logged with both figures, an ERROR alert, and the result says
@@ -89,9 +92,9 @@ class FillOutcome(enum.Enum):
 @dataclass(frozen=True)
 class Increment:
     """The units newly filled (whole units) at `price` rupees; `derived_from_average` when
-    the cumulative averages could not tell the units' price to the tick: rounded too
-    coarsely for so few units (the derived price, within its rounding bound), or not
-    agreeing (the newer average itself)."""
+    the units' true price may lie on another tick than `price`: the cumulative averages
+    were rounded too coarsely for so few units of a later fill (the derived price, within
+    its rounding bound), or did not agree (the newer average itself)."""
 
     units: int
     price: float
@@ -131,12 +134,21 @@ def next_increment(
     if derived <= 0:
         return FillOutcome.APPLIED, Increment(units, average_price, derived_from_average=True)
     bound = _rounding_bound(average_price, filled_quantity, units)
-    if bound >= tick / 2:
-        return FillOutcome.APPLIED, Increment(units, derived, derived_from_average=True)
     nearest = on_tick(derived, tick)
-    if round(abs(nearest - derived) - bound, PRICE_DECIMALS) <= 0:
+    if not _within(nearest, derived, bound):
+        return FillOutcome.APPLIED, Increment(units, derived)
+    # The tick next nearest the derived price is the second one within the bound, if any.
+    second = nearest + (tick if derived >= nearest else -tick)
+    if not _within(second, derived, bound):
         return FillOutcome.APPLIED, Increment(units, nearest)
-    return FillOutcome.APPLIED, Increment(units, derived)
+    first_fill = filled_units == 0
+    return FillOutcome.APPLIED, Increment(units, derived, derived_from_average=not first_fill)
+
+
+def _within(price: float, derived: float, bound: float) -> bool:
+    """Whether `price` lies strictly within `bound` rupees of `derived`: the true price is
+    off by less than the rounding bound, never by it."""
+    return round(abs(price - derived) - bound, PRICE_DECIMALS) < 0
 
 
 def _rounding_bound(average_price: float, filled_quantity: int, units: int) -> float:
