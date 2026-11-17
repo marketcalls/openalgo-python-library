@@ -7,16 +7,19 @@ still holds a position starts the schedule: the session asks the kernel for the 
 so five attempts in all (08-live-trading section 6.3). After the fifth rejection the
 strategy's entries are locked for the rest of the session ("exit_failed"), the leg's stop
 is placed again (`protect`, R7) so the broker holds one, and an ERROR alert says what
-protect achieved (16-session-design 4.8, by the rule of 3.5 that a sale by hand is never
-advised beside a working stop): the stop placed again protects the position and is to be
-cancelled before closing it by hand; only when no stop could be placed is the position to
-be closed by hand. A later rejection (the kernel's own re-send of an engine exit at a
-later open, a backstop its exit owner keeps from overlapping the schedule) places the
-stop again too. While the retries run the leg has no stop at the broker (it was cancelled
-for the exit) and counts as unprotected. The schedule starts again once the position is
-flat. A risk exit is asked for again with its own reason; a signal exit, a target or a
-square-off with "operator_stop", the kernel's reason for an exit the session asks for
-(its trade's exit reason reads "manual").
+protect found: the stop placed again, or one working already, protects the position; an
+exit waits or works; or no stop is at the broker. A sale by hand is never advised beside a
+working stop (16-session-design 3.5, 4.8), nor while the session runs
+(`_stops_report.while_running`): until it ends the kernel sends the exit again at each
+later open (a backstop its exit owner keeps from overlapping the schedule) and places the
+stop again should the operator cancel it (4.10), so a sale by hand would sell twice. The
+alert says to end the session first, then to cancel the stop, or to read the order book
+first while an exit waits or works. A later rejection (that backstop's) places the stop
+again too, with no alert. While the retries run the leg has no stop at the broker (it was
+cancelled for the exit) and counts as unprotected. The schedule starts again once the
+position is flat. A risk exit is asked for again with its own reason; a signal exit, a
+target or a square-off with "operator_stop", the kernel's reason for an exit the session
+asks for (its trade's exit reason reads "manual").
 
 A partial exit is not asked for again (decided for unit 10): `request_exit`, the only
 retry call, exits the whole position, so a rejected sale of part of it (a `reduce()`, an
@@ -45,7 +48,7 @@ from typing import Any
 from .._layout import NANOS_PER_SECOND
 from ._session_trader import Trader
 from ._stops_kernel import PROTECT_PLACED, protect
-from ._stops_report import NO_STOP
+from ._stops_report import CANCEL_THAT_STOP, CHECK_THE_BOOK, NO_STOP, while_running
 from ._types import LOGGER_NAME, AlertKind, OrderIntent, Purpose
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -61,12 +64,18 @@ EXIT_FAILED_LOCK = "exit_failed"
 RETRY_REASON = "operator_stop"
 #: The purposes of the orders that close a position.
 EXIT_PURPOSES = frozenset({Purpose.EXIT, Purpose.RISK_EXIT, Purpose.SQUARE_OFF})
-#: What the give-up alert tells the operator when the stop is placed again (4.8): a sale
-#: by hand beside it would let the stop sell again once triggered.
-STOP_PLACED_AGAIN = (
-    "its stop is placed again at the broker and protects the position; to close it by "
-    "hand, cancel that stop first"
-)
+#: What the give-up alert says when the stop is placed again (4.8).
+STOP_PLACED_AGAIN = "its stop is placed again at the broker and protects the position"
+#: What the give-up alert says the broker holds for the leg, by what `protect` did (the
+#: kernel's `PROTECT_OUTCOMES`), with what the leg asks of the operator once the session
+#: has ended (`_stops_report.while_running`): a stop working is cancelled before a sale by
+#: hand, and an exit waiting or working sends the operator to the order book first. Any
+#: other outcome (no stop level, the market closed) leaves no stop at the broker.
+_GIVE_UP_WORDS = {
+    **dict.fromkeys(PROTECT_PLACED, (STOP_PLACED_AGAIN, CANCEL_THAT_STOP)),
+    "stop_works": ("its stop works at the broker and protects the position", CANCEL_THAT_STOP),
+    "exiting": ("an exit of it waits or works", CHECK_THE_BOOK),
+}
 
 
 class ExitRetries:
@@ -146,14 +155,13 @@ class ExitRetries:
             return
         if trader.lock(EXIT_FAILED_LOCK):
             session.event("lock", strategy=name, reason=EXIT_FAILED_LOCK)
-        advice = STOP_PLACED_AGAIN
         if protected not in PROTECT_PLACED:
-            logger.warning("%s: no stop could be placed again (%s)", name, protected)
-            advice = f"{NO_STOP}: close it by hand in OpenAlgo"
+            logger.warning("%s: no stop placed again (%s)", name, protected)
+        held, then = _GIVE_UP_WORDS.get(protected or "", (NO_STOP, ""))
         session.alert(
             AlertKind.ERROR,
             f"exit of {trader.symbol} {trader.exchange} failed {rejections} times ({why}): "
-            f"{name}'s entries are locked; {advice}",
+            f"{name}'s entries are locked; {held}; {while_running(then)}",
         )
 
     def duties(self, now_ns: int) -> None:

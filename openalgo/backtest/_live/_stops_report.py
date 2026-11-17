@@ -23,6 +23,13 @@ short:
   the position): check the order book before closing it by hand, cancelling what still
   works.
 
+That advice holds once the session has ended. While it runs, the engine sends a rejected
+exit again at a later bar's open and places a stop again that ended at the broker with no
+request of its own (16-session-design 4.8, 4.10), so a sale by hand beside it sells
+twice: an alert sent while the session runs (the give-up of an exit, a safe stop's
+reminder) says to end the session first, then what the leg asks for (`while_running`,
+`open_while_running`).
+
 The notes are taken once the loop step's commands are handed over (`_session_stop`): an
 order not sent then was not handed to the order worker (after a guard lock, or an exit
 the kernel holds until a cancel it waits for ends, which the note names too). Used by
@@ -46,6 +53,23 @@ CHECK_FIRST = "check the order book before closing it by hand, cancelling what s
 #: What a note of a position its confirmed stop covers whole, with nothing else working,
 #: tells the operator: a sale by hand beside the stop would let the stop sell again.
 STOP_PROTECTS = "it protects the position, so cancel the stop before any sale by hand"
+#: How an alert sent while the session runs tells the operator to end it before any close
+#: by hand (module docstring): a first Ctrl+C with on_stop="flatten" may wait for its
+#: exits, and a second one ends the session.
+END_SESSION_FIRST = "end the session first (Ctrl+C, and a second Ctrl+C if it does not end)"
+#: Why, as such an alert says it.
+WHILE_IT_RUNS = "while the session runs, the engine may send its exit or its stop again"
+#: What a leg whose stop works asks of the operator once the session has ended.
+CANCEL_THAT_STOP = "cancel that stop"
+#: What a leg with an order working, or a stop that may be at the broker, asks of the
+#: operator once the session has ended.
+CHECK_THE_BOOK = "check the order book, cancelling what still works"
+#: What a note advises by the leg's state (module docstring): close it by hand, its stop
+#: protects it, or check the order book first.
+_CLOSE, _PROTECTS, _CHECK = "close", "protects", "check"
+#: What each advice asks of the operator once the session has ended, for an alert sent
+#: while it runs (`open_while_running`).
+_AFTER_THE_END = {_CLOSE: "", _PROTECTS: CANCEL_THAT_STOP, _CHECK: CHECK_THE_BOOK}
 #: How far an order in flight got, in words.
 _IN_FLIGHT_WORDS = {
     Sent.HANDED: "not answered yet",
@@ -92,7 +116,37 @@ def protected(stops: Any, trader: Trader) -> bool:
 
 
 def left_open(stops: Any, trader: Trader) -> str:
-    """The note of `trader`'s position left open (module docstring)."""
+    """The note of `trader`'s position left open once the session has ended (module
+    docstring)."""
+    parts, advice = _note(stops, trader)
+    if advice == _CHECK:
+        return "; ".join([*parts, CHECK_FIRST])
+    *before, last = parts
+    words = f"{last}, close it by hand" if advice == _CLOSE else f"{last}: {STOP_PROTECTS}"
+    return "; ".join([*before, words])
+
+
+def open_while_running(stops: Any, trader: Trader) -> str:
+    """The note of `trader`'s open position for an alert sent while the session runs:
+    what works toward it and its stop, as `left_open` names them, then `while_running`
+    with what the leg asks for once the session has ended (module docstring)."""
+    parts, advice = _note(stops, trader)
+    return "; ".join([*parts, while_running(_AFTER_THE_END[advice])])
+
+
+def while_running(then: str = "") -> str:
+    """What an alert sent while the session runs tells an operator who would close a leg
+    by hand: end the session first, then `then` (what the leg asks for once the session
+    has ended, `CANCEL_THAT_STOP` or `CHECK_THE_BOOK`; nothing when only the sale by hand
+    is left), and why (module docstring)."""
+    step = f", then {then}" if then else ""
+    return f"to close it by hand, {END_SESSION_FIRST}{step}: {WHILE_IT_RUNS}"
+
+
+def _note(stops: Any, trader: Trader) -> tuple[list[str], str]:
+    """What works toward `trader`'s position and its stop, in a note's words, and the
+    advice the leg's state asks for (`_CLOSE`, `_PROTECTS` or `_CHECK`); with `_CLOSE`
+    and `_PROTECTS` the last part is the stop's."""
     leg, working = stops.leg(trader), trader.working()
     sent = _working(stops, trader)
     unsent = [kernel_order for kernel_order in working if kernel_order not in leg.orders]
@@ -102,15 +156,14 @@ def left_open(stops: Any, trader: Trader) -> str:
     stop_part = _stop_words(stops, trader)
     if stop_part == NO_STOP and not sent:
         # Nothing sent works toward the position: only a sale by hand closes it.
-        return "; ".join([*parts, f"{NO_STOP}, close it by hand"])
+        return [*parts, NO_STOP], _CLOSE
     if protected(stops, trader):
-        return "; ".join([*parts, f"{stop_part}: {STOP_PROTECTS}"])
+        return [*parts, stop_part], _PROTECTS
     if stop_part != NO_STOP or leg.guarded:
         # With an order working on a leg that never had a stop, that order is what the
         # operator checks, not a stop it never was to have.
         parts.append(stop_part)
-    parts.append(CHECK_FIRST)
-    return "; ".join(parts)
+    return parts, _CHECK
 
 
 def _working(stops: Any, trader: Trader) -> list[str]:
@@ -200,11 +253,17 @@ def _stop(stops: Any, trader: Trader) -> Watched | None:
 
 
 __all__ = [
+    "CANCEL_THAT_STOP",
     "CHECK_FIRST",
+    "CHECK_THE_BOOK",
+    "END_SESSION_FIRST",
     "NO_STOP",
     "STOP_PROTECTS",
+    "WHILE_IT_RUNS",
     "left_open",
+    "open_while_running",
     "protected",
     "stop_state",
     "stop_words",
+    "while_running",
 ]

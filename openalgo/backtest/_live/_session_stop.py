@@ -15,14 +15,15 @@ time that end it (`Control`). The common close is `_session_close`.
   protected by state (`_stops_protect`: its broker-held stop placed again where it can
   be, and its exit asked for no more), and the session keeps running, with an ERROR
   alert and a console line naming each leg without a confirmed stop and what works
-  toward its exit (for one whose exit failed every attempt, its left-open note: the stop
-  placed again, never a bare "close it by hand" beside it) every
-  `UNPROTECTED_REMINDER_EVERY_S`, until every leg is flat or protected, a second Ctrl+C,
-  or the exchange's close plus `SESSION_END_GRACE_S`. With
-  `"keep"` every leg is protected by state at once, and the session waits at most
-  `SAFE_STOP_STATE_WAIT_S` for the cancels and the stops' words (longer only to finish a
-  step of protect by state's own, `Protection.may_end`), then leaves the positions open
-  with their broker-held stops.
+  toward its exit every `UNPROTECTED_REMINDER_EVERY_S`, until every leg is flat or
+  protected, a second Ctrl+C, or the exchange's close plus `SESSION_END_GRACE_S`. For a
+  leg whose exit failed every attempt the reminder names its stop and the orders working
+  toward it, and says to end the session before any close by hand
+  (`_stops_report.open_while_running`), since the engine may still send its exit or its
+  stop. With `"keep"` every leg is protected by state at once, and the session waits at
+  most `SAFE_STOP_STATE_WAIT_S` for the cancels and the stops' words (longer only to
+  finish a step of protect by state's own, `Protection.may_end`), then leaves the
+  positions open with their broker-held stops.
 - **The second Ctrl+C** (3.3 step 4) asks for nothing more (no exit, no retry: the
   schedule is halted) and protects every leg by state. It waits at most
   `SAFE_STOP_STATE_WAIT_S` (bounded as with "keep") for each leg to be protected, and for
@@ -65,7 +66,7 @@ from .._layout import NANOS_PER_SECOND
 from ._session_loop import Session
 from ._session_trader import StrategyFailed, Trader
 from ._stops_protect import PROTECTED
-from ._stops_report import left_open, protected
+from ._stops_report import left_open, open_while_running, protected
 from ._types import LOGGER_NAME, AlertKind
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -304,8 +305,10 @@ class Control:
             return "its rejected exit is asked for again shortly"
         if session.exits.owns(trader.name):
             # Its stop was placed again (`_session_exits`): what to do follows from what
-            # works at the broker, never a sale by hand beside a working stop (3.5).
-            return f"its exit failed every attempt; {left_open(session.stops, trader)}"
+            # works at the broker, never a sale by hand beside a working stop (3.5) or
+            # the running session, which may send the exit or the stop again (4.8, 4.10).
+            note = open_while_running(session.stops, trader)
+            return f"its exit failed every attempt; {note}"
         asked = self._asked.get(trader.name)
         # With no exit order working, the working orders left are entries: those on the
         # position's closing side are what a waiting exit waits for.

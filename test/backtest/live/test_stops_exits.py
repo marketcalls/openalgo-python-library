@@ -443,12 +443,15 @@ def test_F28_an_exit_rejected_five_times_halts_entries_and_places_the_stop_again
     assert stops == ["cancelled", "trigger pending"]
     (gave_up,) = [text for text in alerts(caplog, "error") if "failed 5 times" in text]
     # The stop placed again works at the broker: a sale by hand beside it would let it
-    # sell again (16-session-design 3.5, 4.8), so the alert says to cancel it first.
+    # sell again (16-session-design 3.5, 4.8), and one beside the running session would
+    # let the engine sell again (4.8, 4.10), so the alert says to end the session, then
+    # cancel the stop.
     assert gave_up.endswith(
         "its stop is placed again at the broker and protects the position; to close it by "
-        "hand, cancel that stop first"
+        "hand, end the session first (Ctrl+C, and a second Ctrl+C if it does not end), "
+        "then cancel that stop: while the session runs, the engine may send its exit or "
+        "its stop again"
     )
-    assert "close the position by hand" not in gave_up
     assert "live_lock" in outcome.outputs["ExitsThenBuys"]["orders"]["reject_code"]
     assert journal_stop(world, outcome, "ExitsThenBuys") == world.orders()[-1].order_id
     check_invariants(world.timeline, strategy="ExitsThenBuys")
@@ -517,8 +520,14 @@ def test_a_reminder_of_an_exit_that_failed_every_attempt_names_the_stop_placed_a
     (reminder,) = [t for t in alerts(caplog, "error") if "safe stop:" in t]
     assert "its exit failed every attempt" in reminder
     assert "sent and unanswered" in reminder
-    assert reminder.endswith(CHECK_FIRST)
-    assert "close it by hand" not in reminder.replace(CHECK_FIRST, "")
+    # The session still runs: the engine may send the exit or the stop again, so the
+    # order book comes only once the session has ended (16-session-design 4.8, 4.10).
+    assert reminder.endswith(
+        "to close it by hand, end the session first (Ctrl+C, and a second Ctrl+C if it "
+        "does not end), then check the order book, cancelling what still works: while the "
+        "session runs, the engine may send its exit or its stop again"
+    )
+    assert CHECK_FIRST not in reminder
 
 
 def answers_lost_after_the_fifth_refusal(world) -> None:

@@ -7,6 +7,7 @@ broker; an entry still working named too; the stop, confirmed (and then that it 
 the position until it is cancelled), repriced to a resting LIMIT, not sent, or not
 confirmed; and, while any order works or a stop may, the order book before closing it by
 hand. A leg its confirmed stop covers is printed, and only the others are ERROR alerts.
+The note of an alert sent while the session runs says to end it before any close by hand.
 
 The session starts at 14:40:05 IST; SBIN trades at 500.00 every 10 seconds.
 """
@@ -26,6 +27,7 @@ from openalgo.backtest._live._stops_report import (
     CHECK_FIRST,
     STOP_PROTECTS,
     left_open,
+    open_while_running,
     protected,
     stop_state,
     stop_words,
@@ -444,3 +446,42 @@ def test_a_stop_the_kernel_is_cancelling_is_named_as_being_cancelled_not_as_prot
     assert note.endswith(CHECK_FIRST)
     assert stop_words(stops, trader).endswith("check the order book")
     assert stop_state(stops, trader) == ("261116000000002", False)
+
+
+# ----- the note of an alert sent while the session runs (no server) ---------------------
+
+#: What such a note says before any close by hand, and why: the running session may send
+#: the exit or the stop again (16-session-design 4.8, 4.10).
+END_THE_SESSION = (
+    "to close it by hand, end the session first (Ctrl+C, and a second Ctrl+C if it does not end)"
+)
+WHY = "while the session runs, the engine may send its exit or its stop again"
+
+
+def no_stop() -> tuple[StopsSupervisor, _Leg]:
+    """A leg of 10 SBIN that never had a stop, with nothing working."""
+    return StopsSupervisor(session=None), _Leg(_Book({}), working=[])
+
+
+@pytest.mark.parametrize(
+    ("leg", "note"),
+    [
+        (
+            lambda: confirmed_stop(cancelling=()),
+            "stop 261116000000002 confirmed at the broker; "
+            f"{END_THE_SESSION}, then cancel that stop: {WHY}",
+        ),
+        (
+            lambda: confirmed_stop(cancelling=(2,)),
+            "stop 261116000000002 being cancelled, with no final word yet; "
+            f"{END_THE_SESSION}, then check the order book, cancelling what still works: "
+            f"{WHY}",
+        ),
+        (no_stop, f"no stop at the broker; {END_THE_SESSION}: {WHY}"),
+    ],
+    ids=["stop confirmed", "stop being cancelled", "no stop"],
+)
+def test_while_the_session_runs_the_note_says_to_end_it_before_any_close_by_hand(leg, note):
+    stops, trader = leg()
+
+    assert open_while_running(stops, trader) == note
