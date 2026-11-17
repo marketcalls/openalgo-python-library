@@ -172,9 +172,10 @@ class OrderWorker:
 
     @property
     def asked_ns(self) -> int | None:
-        """When (UTC nanoseconds) the order path last called OpenAlgo, whatever the
-        answer (`OrderPath.asked_ns`); None before its first call. Read from the loop's
-        thread (4.9)."""
+        """The time (UTC nanoseconds) noted with the order path's last answer from
+        OpenAlgo, whatever it was: when it came, or when the call began for a poll or a
+        book read (`OrderPath.asked_ns`); None before its first call. Read from the
+        loop's thread (4.9)."""
         started = self._started
         return None if started is None else started.path.asked_ns
 

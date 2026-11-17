@@ -13,7 +13,10 @@ polls, its order-book reads for unbound intents, its settlement reads and a prob
 - **The alert.** Once the silence has lasted `SILENT_ALERT_AFTER_S`, one ERROR alert
   says for how long, how many positions are open, and how many of them have no confirmed
   stop at the broker covering them; it is sent again at most every
-  `SILENT_ALERT_EVERY_S` while the same silence lasts.
+  `SILENT_ALERT_EVERY_S` while the same silence lasts. Alerts reach the phone through
+  OpenAlgo's own Telegram endpoint (`alerts`), so while OpenAlgo is truly hung this one
+  reaches the session's log at once (as a warning) and the phone only once OpenAlgo
+  answers again, if the alerts' sender has not given it up by then.
 
 The broker's stops are the protection meanwhile (D31); the unprotected windows go on
 counting (4.2, `stops.StopsSupervisor.review`). The worker's view of the silence is read
@@ -86,8 +89,10 @@ class SilentServer:
             self._session.hand_over([Probe()])
 
     def _probe_due(self, now_ns: int, asked_ns: int | None) -> bool:
-        """Whether a probe is due: the order path has called OpenAlgo for nothing for
-        `PROBE_EVERY_S`, and the probe asked last has been made (a call came since)."""
+        """Whether a probe is due: no answer of the order path's calls was noted for
+        `PROBE_EVERY_S` (`OrderWorker.asked_ns`), and the probe asked last has been made,
+        as far as `asked_ns` tells: a poll begun after it was asked counts too, so a
+        second probe may be queued behind the first."""
         asked_probe = self._probe_asked_ns
         if asked_probe is not None and (asked_ns is None or asked_ns < asked_probe):
             return False

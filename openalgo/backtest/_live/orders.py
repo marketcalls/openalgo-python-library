@@ -308,7 +308,9 @@ class OrderPath:
 
     @property
     def asked_ns(self) -> int | None:
-        """When (UTC nanoseconds) the order path last called OpenAlgo; None before."""
+        """The time (UTC nanoseconds) noted with the order path's last answer from
+        OpenAlgo: when it came for a placement, a modify, a cancel or a probe, when the
+        call began for a poll or a book read (`ServerWatch`); None before the first."""
         return self._watch.asked_ns
 
     def probe(self) -> bool:
