@@ -44,7 +44,8 @@ def tradebook_fails(world, times: int) -> None:
 
 def test_F34_a_fill_the_tradebook_never_prices_is_released_at_the_feeds_price(world):
     world.fake.faults.zero_price_next_fill()
-    tradebook_fails(world, 3)
+    # Set just before the entry, so the reconciler's earlier reads do not take them.
+    world.script.at(ist(14, 41, 50), lambda: tradebook_fails(world, 3))
     world.stop_at(ist(14, 44))
     outcome = world.run(StopHold, on_stop="keep")
 
@@ -74,9 +75,11 @@ def test_F68_a_held_cancel_the_position_book_shows_unfilled_is_released_and_exit
 
     stop, exit_ = [o for o in world.orders() if o.action == "SELL"]
     assert (stop.status, exit_.price_type, exit_.quantity) == ("cancelled", "MARKET", 10)
-    (read,) = world.fake.log.calls("positionbook")
-    assert read.ts_ns - TARGET_TICK >= HELD_CANCEL_DECIDE_AFTER_S * NS
-    assert read.ts_ns <= exit_.placed_ns
+    # The reconciler reads the position book too: the held cancel's read is the one that
+    # comes once its wait is over, before the exit.
+    reads = [call.ts_ns for call in world.fake.log.calls("positionbook")]
+    decided = [ts for ts in reads if ts - TARGET_TICK >= HELD_CANCEL_DECIDE_AFTER_S * NS]
+    assert decided and decided[0] <= exit_.placed_ns
     assert "held cancel" in [w.reason for w in outcome.unprotected]
     assert world.fake.position("SBIN", "NSE") == 0
     check_invariants(world.timeline, strategy="TargetHold")

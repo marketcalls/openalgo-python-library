@@ -26,6 +26,7 @@ from plan_samples import candles
 from session_samples import NS, TRADE_EVERY_S, ist, rig
 
 import openalgo.backtest as bt
+from openalgo.backtest._live._reconcile_guard import ExitGuard
 from openalgo.backtest._live._types import Mode
 
 #: The stop's distance below the entry, points, and the stop's trigger, rupees.
@@ -187,6 +188,74 @@ def events(outcome: Any, kind: str) -> list[dict[str, Any]]:
         return [event for line in stream if (event := json.loads(line))["kind"] == kind]
 
 
+def after_the_final_read(outcome: Any) -> list[dict[str, Any]]:
+    """The session's event-stream lines written after the close asked for its final book
+    read (its last `ReadBooks` request), oldest first."""
+    with open(outcome.paths["events"], encoding="utf-8") as stream:
+        written = [json.loads(line) for line in stream]
+    last = max(
+        i
+        for i, event in enumerate(written)
+        if event["kind"] == "request" and event["type"] == "ReadBooks"
+    )
+    return written[last + 1 :]
+
+
+def handed_after_the_final_read(outcome: Any) -> list[tuple[str, str | None]]:
+    """What the session handed to the order worker after the close asked for its final
+    book read: (type, purpose) of each request."""
+    return [
+        (event["type"], event.get("purpose"))
+        for event in after_the_final_read(outcome)
+        if event["kind"] == "request"
+    ]
+
+
+def held_after_the_final_read(outcome: Any) -> list[int]:
+    """The kernel orders whose requests the exit guard held back after the close asked
+    for its final book read: a request the engine made then."""
+    return [
+        event["kernel_order"]
+        for event in after_the_final_read(outcome)
+        if event["kind"] == "exit_held"
+    ]
+
+
+def ctrl_c_at_the_first_sighting(
+    world: Any, monkeypatch: Any, *, broker_below: int, presses: int = 1
+) -> None:
+    """Press Ctrl+C `presses` times at once as the first comparison that shows the broker
+    holding fewer than `broker_below` signed units of the leg opens the exit guard on it.
+    With one press and on_stop="keep" the close's final read is then the second comparison
+    to show it, the one that acts; with two and "flatten", the flatten's own read is."""
+    opened = ExitGuard.open
+
+    def open_then_press(guard: ExitGuard, name: str, broker_units: int) -> None:
+        if broker_units < broker_below and not world.stop.count:
+            for _ in range(presses):
+                world.stop.request()
+        opened(guard, name, broker_units)
+
+    monkeypatch.setattr(ExitGuard, "open", open_then_press)
+
+
+def sold_by_hand(world: Any, quantity: int, at_ns: int) -> None:
+    """Another client of the account sells `quantity` SBIN at market at `at_ns`."""
+    other = world.fake.client()
+    world.script.at(
+        at_ns,
+        lambda: other.placeorder(
+            strategy="manual",
+            symbol="SBIN",
+            action="SELL",
+            exchange="NSE",
+            price_type="MARKET",
+            product="MIS",
+            quantity=quantity,
+        ),
+    )
+
+
 def stop_world(make_fake_openalgo: Any, monkeypatch: Any, tmp_path: Any, **options: Any) -> Any:
     """A `session_samples.rig` with the fake's order timeline recorded (`world.timeline`)."""
     world = rig(make_fake_openalgo, monkeypatch, tmp_path, **options)
@@ -255,10 +324,15 @@ __all__ = [
     "StopHold",
     "TargetHold",
     "Timeline",
+    "after_the_final_read",
     "at_price",
     "check_invariants",
+    "ctrl_c_at_the_first_sighting",
     "events",
     "first_order",
+    "handed_after_the_final_read",
+    "held_after_the_final_read",
     "option_world",
+    "sold_by_hand",
     "stop_world",
 ]

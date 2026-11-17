@@ -18,6 +18,12 @@ happened, and time the held call from it.
 The safe stop's tests (16-session-design 3.3 step 4) run `PressesStop` alone: it buys 10
 SBIN and, once it holds them, presses Ctrl+C from `on_bar`, on the loop's thread, where
 the signal handler runs too, so presses made together are seen together by the loop.
+`PressesStopWithTarget` does the same with a broker-held stop and a target: once the
+leg's last line says the stop protects it, the close sends nothing that line did not name
+(3.3 step 5 "As built", unit 12). What only takes exposure away still goes after the last
+lines and is answered before the order worker closes: the reconciler's safe corrections
+(`StopHold`, from `stops_samples`, with a sale by hand first seen as Ctrl+C comes) and
+the safe stop's cancel of an entry bound during the close's final read (`RestingEntry`).
 """
 
 from __future__ import annotations
@@ -30,6 +36,14 @@ from typing import Any
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from session_samples import NS, alerts, ist, rig
+from stops_samples import (
+    StopHold,
+    after_the_final_read,
+    ctrl_c_at_the_first_sighting,
+    handed_after_the_final_read,
+    held_after_the_final_read,
+    sold_by_hand,
+)
 
 import openalgo.backtest as bt
 from openalgo.backtest._live._series_store import LiveStore
@@ -78,12 +92,13 @@ class Late(bt.Strategy):
 
 
 class PressesStop(bt.Strategy):
-    """Buys 10 SBIN at its first decision; at its second, holding them, asks the session's
-    stop flag `flag` to stop `presses` times."""
+    """Buys 10 SBIN at its first decision, with the leg `rules` (none here); at its
+    second, holding them, asks the session's stop flag `flag` to stop `presses` times."""
 
     symbol, exchange, interval = "SBIN", "NSE", "1m"
     presses = 1
     flag: Any = None
+    rules: dict[str, Any] = {}
 
     def init(self):
         self.calls = 0
@@ -91,10 +106,32 @@ class PressesStop(bt.Strategy):
     def on_bar(self, bar):
         self.calls += 1
         if self.calls == 1:
-            self.buy(10)
+            self.buy(10, **type(self).rules)
         elif self.calls == 2 and self.position.qty:
             for _ in range(type(self).presses):
                 type(self).flag.request()
+
+
+class PressesStopWithTarget(PressesStop):
+    """`PressesStop` whose entry has a broker-held stop 3 points below (an SL-M at 497.00)
+    and a target 2 points above (502.00), which the engine holds on ticks."""
+
+    rules = {"stop": bt.points(3), "target": bt.points(2)}
+
+
+class RestingEntry(bt.Strategy):
+    """Buys 10 SBIN at a limit of 480.00 at its first decision: SBIN trades at 500.00, so
+    the order rests at the broker."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "1m"
+
+    def init(self):
+        self.calls = 0
+
+    def on_bar(self, bar):
+        self.calls += 1
+        if self.calls == 1:
+            self.buy(10, price=480.0)
 
 
 class Blocking:
@@ -156,10 +193,14 @@ class Driver(threading.Thread):
 
 
 def run_threaded(
-    world: Any, blocking: Blocking, role: str, strategies: tuple[Any, ...] = (Early, Late)
+    world: Any,
+    blocking: Blocking,
+    role: str,
+    strategies: tuple[Any, ...] = (Early, Late),
+    **arguments: Any,
 ) -> Any:
     """Run `strategies` with the session's threads, `blocking` standing in for the
-    session's `role` client."""
+    session's `role` client, and `bt.live`'s other `arguments` (`on_stop`)."""
     clients = world.clients()
     clients = type(clients)(**{**clients.__dict__, role: blocking})
     clock = world.fake.clock
@@ -188,6 +229,7 @@ def run_threaded(
             alerts_to="trader1",
             live_dir=world.folder / "live",
             wait_max_s=WAIT_MAX_S,
+            **arguments,
         )
     finally:
         blocking.freed.set()
@@ -300,6 +342,27 @@ def test_two_ctrl_c_at_once_send_the_flatten_exit_and_stop_flat(alone):
     assert not any("close it by hand" in line for line in alone.lines)
 
 
+def test_an_exit_waiting_for_a_slow_read_is_not_sent_after_the_last_lines(alone):
+    # The flatten's exit waits for a read of the books (unit 12), whose position book call
+    # is held 7.5 fake seconds: past the second Ctrl+C's 5 s wait, within the close's 5 s
+    # final read. The last lines say the exit was not sent; the close's read then agrees,
+    # and the exit must still not be sent.
+    PressesStop.presses = 2
+    slow = Blocking(
+        alone.fake.client(),
+        "positionbook",
+        when=lambda: alone.stop.count >= 1,
+        hold_s=7.5,
+        now=alone.fake.clock.now,
+    )
+    outcome = run_threaded(alone, slow, "orders", (PressesStop,))
+    assert slow.held_at is not None
+    assert [order.action for order in alone.orders()] == ["BUY"]
+    assert alone.fake.position("SBIN", "NSE") == 10
+    (left,) = outcome.open_positions
+    assert left.note == "order o2 not sent; no stop at the broker, close it by hand"
+
+
 def test_a_second_ctrl_c_while_the_exit_is_sent_waits_for_its_fill(alone):
     # The safe stop's SELL is held in its call for 1 fake second, well inside the second
     # Ctrl+C's bounded wait at any real-time pace of the run; the second Ctrl+C comes as
@@ -321,3 +384,203 @@ def test_a_second_ctrl_c_while_the_exit_is_sent_waits_for_its_fill(alone):
     assert alone.fake.position("SBIN", "NSE") == 0
     assert outcome.open_positions == ()
     assert not any("close it by hand" in line for line in alone.lines)
+
+
+# ----- the close sends nothing its last lines did not name ------------------------------
+
+
+@pytest.mark.parametrize(
+    ("on_stop", "presses"),
+    [("keep", 1), ("flatten", 2)],
+    ids=["on_stop keep", "two Ctrl+C at once"],
+)
+def test_a_tick_at_the_target_during_the_closes_final_read_sends_nothing(alone, on_stop, presses):
+    # The leg's last line says its stop protects it. The close's final read then holds
+    # its position book call 3 fake seconds, and SBIN trades at 503.00, past the 502.00
+    # target, from the moment the hold begins: the stop must stay at the broker, and
+    # nothing may be handed to the order worker after the read was asked for.
+    PressesStop.presses = presses
+    fake = alone.fake
+
+    def at_the_target() -> None:
+        alone.script.price = lambda now_ns: 503.0
+        for _ in range(3):
+            fake.trade("SBIN", "NSE", 503.0, volume=10.0)
+
+    slow = Blocking(
+        fake.client(),
+        "positionbook",
+        when=lambda: any(line.startswith("PressesStopWithTarget SBIN") for line in alone.lines),
+        hold_s=3.0,
+        now=fake.clock.now,
+        on_hold=at_the_target,
+    )
+    outcome = run_threaded(alone, slow, "orders", (PressesStopWithTarget,), on_stop=on_stop)
+    assert slow.held_at is not None
+    assert handed_after_the_final_read(outcome) == []
+    assert held_after_the_final_read(outcome) == []
+    # The engine values the position at the last price it took before the lines, 500.00
+    # (the fill's): a price of 503.00 reaching it would show 30.00 of gross profit.
+    assert outcome.summary.gross_pnl == 0.0
+    sells = [(o.price_type, o.status) for o in alone.orders() if o.action == "SELL"]
+    assert sells == [("SL-M", "trigger pending")]
+    (left,) = outcome.open_positions
+    assert left.note.endswith(
+        "it protects the position, so cancel the stop before any sale by hand"
+    )
+
+
+# ----- what still goes after the last lines, answered before the worker closes ----------
+
+
+def passing(world: Any) -> Blocking:
+    """An orders client that holds no call."""
+    return Blocking(
+        world.fake.client(), "placeorder", when=lambda: False, hold_s=0, now=world.fake.clock.now
+    )
+
+
+def stops_at_the_broker(world: Any) -> list[tuple[int, str]]:
+    return [(o.quantity, o.status) for o in world.orders() if o.price_type == "SL-M"]
+
+
+@pytest.mark.parametrize(
+    ("sold", "stop_at_the_broker"),
+    [(10, (10, "cancelled")), (4, (6, "trigger pending"))],
+    ids=["all of it: the stop is cancelled", "4 of 10: the stop is cut to 6"],
+)
+def test_a_sale_by_hand_adopted_in_the_final_read_fits_the_stop_at_the_broker(
+    alone, monkeypatch, sold, stop_at_the_broker
+):
+    # Another client sells at 14:43; Ctrl+C with on_stop="keep" comes as the first
+    # comparison that shows it, so the close's final read is the one that adopts it.
+    sold_by_hand(alone, sold, ist(14, 43))
+    ctrl_c_at_the_first_sighting(alone, monkeypatch, broker_below=StopHold.qty)
+    outcome = run_threaded(alone, passing(alone), "orders", (StopHold,), on_stop="keep")
+    assert "adopted" in [event["kind"] for event in after_the_final_read(outcome)]
+    assert stops_at_the_broker(alone) == [stop_at_the_broker]
+    assert alone.fake.position("SBIN", "NSE") == StopHold.qty - sold
+
+
+def test_the_stop_on_the_other_side_is_cancelled_at_the_broker_before_the_close(alone, monkeypatch):
+    # Another client sells 20: the broker holds 10 short, and a trigger of the stop would
+    # take it to 20 short. The reconciler cancels the stop in the close's final read.
+    sold_by_hand(alone, 20, ist(14, 43))
+    ctrl_c_at_the_first_sighting(alone, monkeypatch, broker_below=StopHold.qty)
+    outcome = run_threaded(alone, passing(alone), "orders", (StopHold,), on_stop="keep")
+    assert ("CancelRequest", "stop") in handed_after_the_final_read(outcome)
+    assert stops_at_the_broker(alone) == [(10, "cancelled")]
+
+
+@pytest.mark.parametrize(
+    ("on_stop", "presses"),
+    [("keep", 1), ("flatten", 2)],
+    ids=["on_stop keep", "two Ctrl+C at once"],
+)
+def test_an_entry_bound_during_the_final_read_is_cancelled_at_the_broker(alone, on_stop, presses):
+    # The entry's placement call is held 8 fake seconds and Ctrl+C comes as the hold
+    # begins: the safe stop's cancel of the entry waits for the bind, which comes during
+    # the close's final read. The cancel never adds exposure, so it goes then.
+    fake = alone.fake
+
+    def press() -> None:
+        for _ in range(presses):
+            alone.stop.request()
+
+    slow = Blocking(
+        fake.client(),
+        "placeorder",
+        when=lambda: True,
+        hold_s=8.0,
+        now=fake.clock.now,
+        on_hold=press,
+    )
+    outcome = run_threaded(alone, slow, "orders", (RestingEntry,), on_stop=on_stop)
+    assert ("CancelRequest", "entry") in handed_after_the_final_read(outcome)
+    assert [(o.action, o.price_type, o.status) for o in alone.orders()] == [
+        ("BUY", "LIMIT", "cancelled")
+    ]
+    assert outcome.open_positions == ()
+
+
+def test_an_entry_filled_during_the_final_read_is_one_error_alert(alone, caplog):
+    # As above with a MARKET entry and a stop rule: it fills as its answer comes, during
+    # the close's final read, and the stop placed with the fill is not sent.
+    fake = alone.fake
+    slow = Blocking(
+        fake.client(),
+        "placeorder",
+        when=lambda: True,
+        hold_s=8.0,
+        now=fake.clock.now,
+        on_hold=alone.stop.request,
+    )
+    outcome = run_threaded(alone, slow, "orders", (StopHold,), on_stop="keep")
+    assert fake.position("SBIN", "NSE") == 10
+    (left,) = outcome.open_positions
+    assert left.note == (
+        "its position went from 0 to 10 units after the session's last lines; order o2 not "
+        "sent; no stop at the broker, close it by hand"
+    )
+    named = [text for text in alerts(caplog, "error") if "after the session's last lines" in text]
+    assert [text.split(": ", 1)[1] for text in named] == [
+        f"StopHold SBIN NSE 10 units: {left.note}"
+    ]
+
+
+def test_an_entry_unanswered_at_the_close_is_one_error_alert(alone, caplog):
+    # The placement call is held 12 fake seconds: its answer comes after the close's final
+    # read, so the entry's cancel is never sent and the order rests at the broker.
+    fake = alone.fake
+    slow = Blocking(
+        fake.client(),
+        "placeorder",
+        when=lambda: True,
+        hold_s=12.0,
+        now=fake.clock.now,
+        on_hold=alone.stop.request,
+    )
+    outcome = run_threaded(alone, slow, "orders", (RestingEntry,), on_stop="keep")
+    assert outcome.open_positions == ()
+    named = [text for text in alerts(caplog, "error") if "RestingEntry SBIN NSE" in text]
+    assert [text.split(": ", 1)[1] for text in named] == [
+        "RestingEntry SBIN NSE: entry order BUY 10 (entry, intent "
+        "20261116-live-1-RestingEntry-o1) in flight, not answered yet; the engine holds no "
+        "position now: check the order book in OpenAlgo, cancelling what still works"
+    ]
+
+
+@pytest.mark.parametrize("book", ["positionbook", "orderbook"])
+def test_a_stop_cancelled_during_the_final_read_is_named_in_the_result(alone, caplog, book):
+    # The leg's last line says its stop protects it. The close's final read then holds
+    # its call of `book` 1 fake second, and another client cancels the stop as the hold
+    # begins: the stream's word of it comes while the books are read.
+    PressesStop.presses = 1
+    fake = alone.fake
+    other = fake.client()
+    cancelled: list[str] = []
+
+    def cancel_the_stop() -> None:
+        stop = next(o for o in alone.orders() if o.price_type == "SL-M")
+        cancelled.append(stop.order_id)
+        other.cancelorder(order_id=stop.order_id, strategy="PressesStopWithTarget")
+
+    slow = Blocking(
+        fake.client(),
+        book,
+        when=lambda: any(line.startswith("PressesStopWithTarget SBIN") for line in alone.lines),
+        hold_s=1.0,
+        now=fake.clock.now,
+        on_hold=cancel_the_stop,
+    )
+    outcome = run_threaded(alone, slow, "orders", (PressesStopWithTarget,), on_stop="keep")
+    assert stops_at_the_broker(alone) == [(10, "cancelled")]
+    (left,) = outcome.open_positions
+    assert (left.stop_order_id, left.stop_confirmed) == ("", False)
+    assert left.note.startswith(
+        f"its stop {cancelled[0]} cancelled at the broker after the session's last lines; "
+    )
+    named = [text for text in alerts(caplog, "error") if "after the session's last lines" in text]
+    assert [text.split(": ", 1)[1] for text in named] == [
+        f"PressesStopWithTarget SBIN NSE 10 units: {left.note}"
+    ]

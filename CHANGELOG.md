@@ -318,6 +318,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   position is flat). A fill that would not only close or reduce the position (on its
   side, of a flat position, through zero) is refused whole: `VenueRefusalError` of the
   new kind `beyond_position`.
+- The live session's reconciler and restart (private). OpenAlgo's position, order and trade
+  books and the funds are read when trading begins, every 30 seconds, 3 seconds after a
+  fill, 3 seconds after a comparison that found a new difference, around each square-off,
+  before the safe stop's flatten and at the close, and compared leg by leg with the engine
+  once the leg has no order in flight (a leg in flight for more than 3 minutes is compared
+  anyway, with an alert and no action). A fill of the session's own orders that the stream
+  and the polls missed is taken from the trade book. A difference seen in two comparisons
+  in a row locks the strategy's entries, sends an alert, and allows only a safe
+  correction: a position closed or reduced by other orders whose trades come to the
+  difference exactly (a sale by hand, the broker's square-off) is adopted, with its stop
+  cancelled or cut to what is left; when the broker holds the other side the leg's own
+  stop is cancelled and the alert says to close it by hand; a broker holding fewer units
+  that no trade explains, or more units, is left alone and alerted (an ERROR alert to
+  check the account once it lasts 3 minutes). Nothing is ever traded to make the broker
+  match the engine, and no difference exits a position or fires the kill switch. From the
+  first comparison showing the broker with fewer units, none or the other side, no exit,
+  flatten, square-off or stop of that leg is sent for more than the broker holds on that
+  side. Orders of the session working at the broker that the engine does not hold, and
+  working orders naming the strategy that the session did not send, are reported. The
+  funds read caps each strategy's sizing by the available cash. After the session's last
+  lines the close sends nothing those lines did not name; a difference only its final read
+  sees is reported at OpenAlgo's units in the result and the daily summary, with one ERROR
+  alert, never as flat, and a leg no read could judge (its own fill landed inside the
+  read) is reported as not confirmed, with an alert to check OpenAlgo's position book. A
+  restart the same day first resolves the journal's unsent or unanswered orders against
+  the order book, then reads the books: a broker position on a traded symbol that the
+  journal does not hold, or a journal position the broker does not hold and no trade
+  explains, refuses the start with nothing sent. Each strategy's saved state is restored
+  after its catch-up, every restored order is checked against the journal and the books,
+  the entry locks that last the day are set again, and before the banner every open leg
+  has its stop confirmed or placed again (or is exited when past its square-off).
 - Reference table `price_protection` (`openalgo/backtest/reference/data/price_protection.csv`,
   read with `tables.find("price_protection", (exchange, segment, check, underlying, days),
   date)`): the price bands NSE and BSE apply to an option's limit price, by date, each row
@@ -373,6 +404,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Money tiles show paise below Rs 1,000. Mode "basic" shows the trading cost row and the
   histograms, "charts" the histograms and scatter charts (the Trades section now appears
   in that mode), "metrics" the new metrics.
+- Robustness and overfitting checks, first part: `bt.robustness(strategy, client=None, *,
+  checks="all", objective="sharpe", runs=1000, seed=0, workers=None, progress=None,
+  **settings)` runs the backtest once and then the checks, and `result.robustness()` runs
+  them on a finished backtest. Both return a `RobustnessReport`: `verdicts`, a table of all
+  seventeen checks with each one's question, figure, rule and verdict; `check(name)`, a
+  `CheckResult` with every run, the summary, the settings and the seed; `passed`; `plan`;
+  and `tearsheet(path)`, a self-contained HTML report with a scorecard, a section of
+  charts per check and the notes. Four checks of the trade list are built: random out of
+  sample (whole sessions put out of sample at random, 30 percent by default; passes when
+  at least 80 percent of the assignments keep at least half the in-sample figure), trade
+  reshuffle (the drawdowns of the trades in random orders; informational unless
+  `max_drawdown` is given), trade resample (trades drawn with replacement; passes with at
+  least 95 percent of paths profitable and at most 5 percent ruined, a fall of 50 percent
+  from a peak) and variance (the same with the win rate 5 points lower; passes with at
+  least 80 percent of paths profitable). A check with fewer than 30 closed trades, too few
+  sessions, or a run that did not make money says "not judged" and why, and never passes.
+  Each check draws from its own random stream (the seed plus the check's number), so the
+  same seed gives the same report on every platform. The other thirteen checks are listed
+  as not built yet, and asking for one raises NotImplementedError.
+- Quick overfitting checks on every backtest: the four trade-list checks at 200 runs, seed
+  0, computed when first read and never during `bt.backtest` or `bt.optimize`. The
+  tearsheet has a new "Overfitting checks" section after Trades (full and basic modes),
+  `result.summary()` a new "Overfitting" line before Benchmark, and `result.warnings` one
+  line for each quick check that fails. No existing figure changes.
 
 ### Changed
 

@@ -36,8 +36,8 @@ alert naming each open leg, its stop, the orders working toward it and what to d
 (`_stops_report.left_open`: a confirmed stop must be cancelled before any sale by hand,
 an order working means the order book first, and only a leg with neither is to be closed
 by hand), and closes the same way. A stop asked for during the countdown stops at once
-(nothing was sent); a feed that does not connect in time closes the session and raises
-LiveError.
+when nothing was sent, and with a restart's resumed positions takes the safe stop by
+`on_stop`; a feed that does not connect in time closes the session and raises LiveError.
 
 Times are UTC nanoseconds, amounts rupees.
 """
@@ -134,7 +134,12 @@ def _run(session: Session, settings: StartSettings, on_stop: str) -> SessionOutc
     try:
         begin_trading(session, source)
     except SessionStopped:
-        return close_session(session, CTRL_C)
+        # Nothing was sent at a fresh start; a restart's resumed positions are stopped
+        # safely, by `on_stop`, as after trading began (3.3, F75).
+        if not any(trader.open_units() or trader.working() for trader in session.traders):
+            return close_session(session, CTRL_C)
+        session.trading = True
+        session.event("stopped_in_start")
     except BaseException as error:
         failure = _cause(error)
         _abort(session, failure, journal_works=not isinstance(failure, JournalError))

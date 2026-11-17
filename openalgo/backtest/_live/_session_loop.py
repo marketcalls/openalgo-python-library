@@ -7,11 +7,15 @@ the kernel sessions, and its iteration, `Session.step`.
        in order (`_session_trader`), and the broker candle checks asked for
     C. drive the kernel sessions to their decisions (`Trader.drive`)
     D. duties by time: the stops supervisor's (`stops`), the risk watch (`watch`), the
-       safe stop, the end of the day (`_session_stop.Control`)
-    E. hand the kernel's commands to the order worker, none after a guard lock; the stops
-       supervisor then reviews each leg's unprotected window, and the safe stop's lines
-       asked for in D are taken (`Control.after_hand_over`)
-    F. save each strategy's `self.state` when a slice was released and it changed
+       reconciler's reads (`reconcile`), the safe stop, the end of the day
+       (`_session_stop.Control`)
+    E. hand the kernel's commands to the order worker, each strategy that made any saved
+       to journal L first (`_session_saved`, design rule 4), none after a guard lock and
+       none the reconciler's exit guard holds; the stops supervisor then reviews each
+       leg's unprotected window, and the safe stop's lines asked for in D are taken
+       (`Control.after_hand_over`)
+    F. save each strategy that released a slice for a restart, and its `self.state` when
+       it changed (`_session_saved.save_released`)
     G. wait for the next slice close, at most `wait_max_s`
 
 The loop never makes a network call: the order worker and the data worker do, on their
@@ -42,6 +46,7 @@ from ._session_exits import ExitRetries
 from ._session_lag import LoopLag
 from ._session_news import News
 from ._session_parts import SessionParts, SessionStopped, StopFlag
+from ._session_saved import save, save_released
 from ._session_trader import Trader
 from ._stops_report import stop_words
 from ._types import LOGGER_NAME, AlertKind, Now, Sleep, Tick
@@ -51,6 +56,7 @@ from .bars import DEFAULT_CLOSE_GRACE_S, TickBarBuilder
 from .data_worker import DataWorker
 from .feedlink import FeedLink
 from .inbox import Envelope
+from .reconcile import Reconciler
 from .stops import StopsSupervisor
 from .ticks import TickTally
 from .watch import RiskWatch
@@ -101,6 +107,7 @@ class Session:
         self.exits = ExitRetries(self)
         self.stops = StopsSupervisor(self)
         self.risk = RiskWatch(self)
+        self.reconcile = Reconciler(self)
         self.control: Any = None
         self.data: DataWorker | None = None
         self.link: FeedLink | None = None
@@ -175,10 +182,10 @@ class Session:
             logger.warning(text)
 
     def hand_over(self, requests: Sequence[Request]) -> None:
-        """Give the order worker `requests`, in order; none after a guard lock (each is
-        noted as not sent)."""
+        """Give the order worker `requests`, in order, but those the reconciler's exit
+        guard holds; none after a guard lock (each is noted as not sent)."""
         handed = []
-        for request in requests:
+        for request in self.reconcile.guard.admit(requests):
             fields = request_fields(request)
             if self.locked:
                 self.event("not_sent_locked", **fields)
@@ -216,8 +223,9 @@ class Session:
 
     def step(self, until_ns: int | None = None, *, protecting: bool = False) -> None:
         """One iteration (module docstring), waiting at most until `until_ns`. With
-        `protecting` (the emergency stop's protect by state) it only takes in what
-        arrived, runs the stops supervisor and hands over the commands."""
+        `protecting` (the emergency stop's protect by state, the close's final read) it
+        only takes in what arrived, runs the stops supervisor and hands over the
+        commands."""
         if not self.threads:
             self._step_workers()
         self._take_in()
@@ -231,6 +239,7 @@ class Session:
         # the step that decided it is withdrawn before it reaches the worker.
         if not protecting:
             self.risk.duties(self.now())
+            self.reconcile.duties(self.now())
             if self.control is not None:
                 self.control.duties(self.now())
         self.hand_over(self._commands())
@@ -238,12 +247,20 @@ class Session:
         if self.control is not None and not protecting:
             self.control.after_hand_over()
         if released:
-            self._save_states(released)
+            save_released(self, released)
         self._wait(until_ns)
 
     def _commands(self) -> list[Request]:
-        """Every strategy's commands since the last call, as requests (E)."""
-        return [request for trader in self.traders for request in trader.commands()]
+        """Every strategy's commands since the last call, as requests (E); a strategy that
+        made any is saved to journal L first (design rule 4). Raises JournalError when the
+        journal cannot be written."""
+        requests: list[Request] = []
+        for trader in self.traders:
+            made = trader.commands()
+            if made:
+                save(self, trader)
+            requests += made
+        return requests
 
     def pause(self, seconds: float) -> None:
         """Wait `seconds` while the loop keeps turning (the start's waits: the countdown,
@@ -328,15 +345,6 @@ class Session:
             if wanted:
                 closes = [closed for opened, closed in trader.part.slices if opened in wanted]
                 self._check_candles(trader, max(closes))
-
-    def _save_states(self, names: set[str]) -> None:
-        """F: each strategy that released a slice and whose `self.state` changed is
-        saved to journal L. Raises JournalError when the journal cannot be written."""
-        for trader in self.traders:
-            if trader.name in names:
-                state = trader.state_changed()
-                if state is not None:
-                    self.parts.journal.put_user_state(trader.name, state)
 
     def _wait(self, until_ns: int | None) -> None:
         now_ns = self.now()

@@ -1,27 +1,40 @@
 """What the operator is told of a leg and its broker-held stop (16-session-design 1.4
-`open_positions`, 3.3 step 4, 3.5, 6.2; the unit 8 hand-off on the left-open note): the
-stop's order ID and whether it is confirmed, the stop in an alert's words, and the note
-of a position left open (the safe stop's lines, the result's `open_positions` and the
-emergency stop's alert).
+`open_positions`, 3.3 step 4, 3.5, 6.2; the unit 8 hand-off on the left-open note): how a
+line names the leg, the stop's order ID and whether it is confirmed, the stop in an
+alert's words, and the note of a position left open (the safe stop's lines, the result's
+`open_positions` and the emergency stop's alert), and what still works on a leg left flat
+(`still_working`, the close's alert, `_stops_after`).
 
 A position left open names each order still working toward it, by its broker order ID
 once bound, else its side, units, purpose and intent ID: an exit or an entry sent and
 unanswered, held back or ambiguous, or a MARKET order accepted with no final word yet, is
 "in flight"; any other one bound is "resting at the broker"; one the kernel made and
-never sent is "not sent". Then the stop: confirmed (for part of the position, or all of
-it), repriced to a LIMIT resting at the broker, being cancelled (a cancel sent, or one the
-kernel decided and the session has not handed over yet), ambiguous, handed to the order
-worker with no answer, held back and not sent, sent and unanswered, not confirmed, or
-none. Then what to do, since a sale by hand beside the session's own orders would sell
-short:
+never sent is "not sent". Then the stop: confirmed (for part of the position, all of it,
+or more units than it holds), repriced to a LIMIT resting at the broker, being cancelled
+(a cancel sent, or one the kernel decided and the session has not handed over yet),
+ambiguous, handed to the order worker with no answer, held back and not sent, sent and
+unanswered, not confirmed, or none. A stop's units are the terms the broker confirmed
+(`StopsSupervisor.covered`), never the kernel's while a modify or cancel of it is held
+back or unanswered (3.3 step 5 "As built"). Then what to do, since a sale by hand beside
+the session's own orders would sell short:
 
 - no stop and nothing sent working (an order the kernel made and never sent is no
   order at the broker): close it by hand;
-- a confirmed stop covering the whole position and nothing else working: the stop
-  protects it, and must be cancelled before any sale by hand (`protected`);
+- a confirmed stop for exactly the position's units and nothing else working: the stop
+  protects it, and must be cancelled before any sale by hand (`protected`). A stop
+  larger than the position (a sale by hand adopted before its cut or cancel went) never
+  protects it: a trigger would sell beyond it;
 - anything else (an order working, or a stop that may be at the broker without covering
   the position): check the order book before closing it by hand, cancelling what still
   works.
+
+While the reconciler's exit guard holds the leg (its last read showed the broker holding
+fewer units on the engine's side, none, or the other side), and after the close's last
+lines for a difference no later read will confirm (`StopsSupervisor.broker_units`), the
+note names the units OpenAlgo's books showed (unless the caller names them itself) and a
+confirmed stop's own units, and sends the operator to the order book: the broker's
+position is not the engine's, so a stop sized for the engine's units may sell beyond it,
+and no stop is said to protect the leg or reported confirmed (`stop_state`).
 
 That advice holds once the session has ended. While it runs, the engine sends a rejected
 exit again at a later bar's open and places a stop again that ended at the broker with no
@@ -42,7 +55,7 @@ from typing import Any
 
 from ._order_state import ENTRY_PURPOSES
 from ._session_trader import Trader
-from ._stops_kernel import PROTECT_PLACED, cancelling, order_of
+from ._stops_kernel import PROTECT_PLACED, order_of
 from ._stops_orders import IN_FLIGHT, Sent, Watched
 from ._types import Purpose
 
@@ -91,11 +104,22 @@ _STOP_UNANSWERED_WORDS = {
 _ACCEPTED_WORDS = "accepted with no final word yet"
 
 
+def leg_words(trader: Trader, units: float) -> str:
+    """How a line names a strategy's leg: the strategy, the instrument, signed units."""
+    return f"{trader.name} {trader.symbol} {trader.exchange} {units:g} units"
+
+
 def stop_state(stops: Any, trader: Trader) -> tuple[str, bool]:
     """The stop of `trader`'s leg as the supervisor `stops` knows it: its broker order ID
-    ("" for none, or one not bound) and whether it is confirmed working at the broker."""
+    ("" for none, or one not bound) and whether it is confirmed working at the broker for
+    no more units than the position holds (all of them or part), never while the exit
+    guard holds the leg (module docstring)."""
     watched = _stop(stops, trader)
-    return ("", False) if watched is None else (watched.order_id, _covering(stops, trader) > 0)
+    if watched is None:
+        return "", False
+    covering = _covering(stops, trader)
+    guarded = stops.broker_units(trader) is not None
+    return watched.order_id, not guarded and 0 < covering <= round(abs(trader.open_units()))
 
 
 def stop_words(stops: Any, trader: Trader) -> str:
@@ -111,22 +135,40 @@ def stop_words(stops: Any, trader: Trader) -> str:
 
 
 def protected(stops: Any, trader: Trader) -> bool:
-    """True when the leg's confirmed stop covers its whole position and no other order
-    works toward it: nothing for the operator to do but leave the stop or cancel it
-    before a sale by hand."""
+    """True when the leg's confirmed stop is for exactly its position's units, no other
+    order works toward it and the exit guard does not hold the leg (module docstring):
+    nothing for the operator to do but leave the stop or cancel it before a sale by
+    hand."""
+    if stops.broker_units(trader) is not None:
+        return False
     units = round(abs(trader.open_units()))
-    return 0 < units <= _covering(stops, trader) and not _working(stops, trader)
+    return 0 < units == _covering(stops, trader) and not _working(stops, trader)
 
 
-def left_open(stops: Any, trader: Trader) -> str:
+def left_open(stops: Any, trader: Trader, *, books: bool = True) -> str:
     """The note of `trader`'s position left open once the session has ended (module
-    docstring)."""
-    parts, advice = _note(stops, trader)
+    docstring); with `books` False it leaves out the units OpenAlgo's books showed, for a
+    caller whose words name them."""
+    parts, advice = _note(stops, trader, books=books)
     if advice == _CHECK:
         return "; ".join([*parts, CHECK_FIRST])
     *before, last = parts
     words = f"{last}, close it by hand" if advice == _CLOSE else f"{last}: {STOP_PROTECTS}"
     return "; ".join([*before, words])
+
+
+def still_working(stops: Any, trader: Trader) -> list[str]:
+    """Each order of `trader`'s leg sent and still working in the engine, its stop among
+    them, in a note's words: what may still work at the broker, for a leg left flat."""
+    parts = _working(stops, trader)
+    watched = _stop(stops, trader)
+    if (
+        watched is not None
+        and watched.state is not Sent.ENDED
+        and watched.kernel_order in trader.working()
+    ):
+        parts.append(_stop_words(stops, trader))
+    return parts
 
 
 def open_while_running(stops: Any, trader: Trader) -> str:
@@ -169,10 +211,11 @@ def while_running(then: str = "") -> str:
     return f"to close it by hand, {END_SESSION_FIRST}{step}: {WHILE_IT_RUNS}"
 
 
-def _note(stops: Any, trader: Trader) -> tuple[list[str], str]:
+def _note(stops: Any, trader: Trader, *, books: bool = True) -> tuple[list[str], str]:
     """What works toward `trader`'s position and its stop, in a note's words, and the
     advice the leg's state asks for (`_CLOSE`, `_PROTECTS` or `_CHECK`); with `_CLOSE`
-    and `_PROTECTS` the last part is the stop's."""
+    and `_PROTECTS` the last part is the stop's. `books`: whether it names the units
+    OpenAlgo's books showed when they differ from the engine's (`left_open`)."""
     leg, working = stops.leg(trader), trader.working()
     sent = _working(stops, trader)
     unsent = [kernel_order for kernel_order in working if kernel_order not in leg.orders]
@@ -180,6 +223,12 @@ def _note(stops: Any, trader: Trader) -> tuple[list[str], str]:
     if unsent:
         parts.append(f"order {', '.join(f'o{k}' for k in unsent)} not sent")
     stop_part = _stop_words(stops, trader)
+    broker = stops.broker_units(trader)
+    if broker is not None:
+        # The broker holds other units than the engine counts, or the other side: neither
+        # a sale by hand of the engine's units nor its stop fits what the broker holds.
+        shown = [f"OpenAlgo's books showed {broker} units at the last read"] if books else []
+        return [*parts, stop_part, *shown], _CHECK
     if stop_part == NO_STOP and not sent:
         # Nothing sent works toward the position: only a sale by hand closes it.
         return [*parts, NO_STOP], _CLOSE
@@ -228,8 +277,18 @@ def _stop_words(stops: Any, trader: Trader) -> str:
     if _being_cancelled(stops, trader, watched):
         return f"stop {name} being cancelled, with no final word yet"
     covered, units = stops.covered(trader), round(abs(trader.open_units()))
-    if covered and covered >= units:
+    if covered and stops.broker_units(trader) is not None:
+        # The broker's position is not the engine's (the note names it): the stop's own
+        # units are what the operator weighs against it.
+        return f"stop {name} confirmed at the broker for {covered} units"
+    if covered and units in (0, covered):
+        # A flat leg's stop working on is named so: its alert sends the operator to the
+        # order book to cancel what still works.
         return f"stop {name} confirmed at the broker"
+    if covered > units:
+        # A sale by hand adopted before the stop's cut or cancel went: never a protection.
+        more = f"for {covered} units, more than the {units} held"
+        return f"stop {name} confirmed at the broker {more}"
     if covered:
         return f"stop {name} confirmed at the broker for {covered} of {units} units"
     if watched.state in _STOP_UNANSWERED_WORDS:
@@ -256,12 +315,13 @@ def _repriced_limit(trader: Trader, watched: Watched) -> float | None:
 
 def _being_cancelled(stops: Any, trader: Trader, watched: Watched) -> bool:
     """Whether a cancel of the leg's stop `watched` was sent, or the kernel decided one the
-    session has not handed over yet (its cancelling list): either may be in effect at the
-    broker by the time the operator reads the note. Only a stop that covers units is
-    looked up in the kernel: one not confirmed covers nothing either way."""
+    session has not handed over yet (its cancelling list, but a cancel the exit guard holds
+    back): either may be in effect at the broker by the time the operator reads the note.
+    Only a stop that covers units is looked up in the kernel: one not confirmed covers
+    nothing either way."""
     if watched.cancel_sent:
         return True
-    return stops.covered(trader) > 0 and watched.kernel_order in cancelling(trader)
+    return stops.covered(trader) > 0 and watched.kernel_order in stops.cancelling(trader)
 
 
 def _covering(stops: Any, trader: Trader) -> int:
@@ -287,10 +347,12 @@ __all__ = [
     "NO_STOP",
     "STOP_PROTECTS",
     "WHILE_IT_RUNS",
+    "leg_words",
     "left_open",
     "open_while_running",
     "protect_words",
     "protected",
+    "still_working",
     "stop_state",
     "stop_words",
     "while_running",

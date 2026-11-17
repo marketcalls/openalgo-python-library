@@ -17,7 +17,9 @@ the one kernel call it calls for.
   terminal news. Later answers of the same request change nothing.
 - **Cancels.** An accepted cancel changes nothing in the kernel: the CANCELLED news ends
   the order, since a fill may come first. A cancel the row shows still working is
-  `apply_cancel_refused`, after which the session sends it again (4.5).
+  `apply_cancel_refused`, after which the session sends it again (4.5); so is one the
+  exit guard held and withdraws, never sent (`withdraw_cancel`), which waits for its
+  answer again if the guard holds it again (`restore_cancel`).
 - **Fills** go through each order's `FillLedger`, the one door (`news`).
 
 The kernel is always waiting when these run (2.5), so a refusal of "order_ended" or
@@ -29,7 +31,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
 from typing import Any
 
 from ..errors import LiveError, VenueRefusalError
@@ -56,6 +57,7 @@ from ._venue_requests import (
     place_priority,
     terms_of,
 )
+from ._venue_saved import RestoredOrders, VenueOrder
 from .inbox import NotSent, NotSentReason, SendResult, Settled
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -67,26 +69,9 @@ HELD_REASONS = frozenset({NotSentReason.HELD, NotSentReason.SILENT})
 RACES = frozenset({"order_ended", "not_pending"})
 
 
-@dataclass
-class _Order:
-    """A kernel order the map placed: its intent, the terms the broker holds as far as the
-    kernel knows (`terms`), its fills' ledger, the broker's order ID once bound, whether
-    it ended, the modify and the cancel waiting for a result, and the commands waiting for
-    the bind."""
-
-    intent: OrderIntent
-    terms: OrderTerms
-    ledger: FillLedger
-    order_id: str = ""
-    ended: bool = False
-    modify: ModifyRequest | None = None
-    cancel: CancelRequest | None = None
-    deferred: list[Mapping[str, Any]] = field(default_factory=list)
-
-
-class VenueMap:
+class VenueMap(RestoredOrders):
     """The venue map of `engine` (an `Engine.session`), the session of strategy `strategy`
-    (module docstring).
+    (module docstring); a restart saves and rebuilds it (`_venue_saved.RestoredOrders`).
 
     `instruments` are the engine's in registration order, each with `symbol`, `exchange`
     and `tick_size` (rupees: the preflight's facts); `session` is the journal session
@@ -120,7 +105,7 @@ class VenueMap:
         self._request_ids = request_ids
         self._alerts = alerts
         self._now = now
-        self._orders: dict[int, _Order] = {}
+        self._orders: dict[int, VenueOrder] = {}
         self._by_order_id: dict[str, int] = {}
         self._by_intent: dict[str, int] = {}
         # Requests handed over whose answer (SendResult or NotSent) has not come.
@@ -152,6 +137,13 @@ class VenueMap:
         """The intent of a kernel order. Raises LiveError for one this map did not place."""
         return self._order(kernel_order).intent
 
+    def terms(self, kernel_order: int) -> OrderTerms:
+        """The terms the broker holds for a kernel order as far as the session knows: those
+        it was placed with, or the last modify the broker confirmed; a modify or cancel
+        held back or unanswered changes nothing here. Raises LiveError for an order this
+        map did not place."""
+        return self._order(kernel_order).terms
+
     # ----- commands to requests --------------------------------------------------------
 
     def requests(self, commands: Iterable[Mapping[str, Any]]) -> list[OrderRequest]:
@@ -182,7 +174,7 @@ class VenueMap:
         if kernel_order in self._orders:
             raise LiveError(f"kernel order o{kernel_order} of {self._strategy} is placed twice")
         ledger = FillLedger(self._engine, kernel_order, tick=tick, alerts=self._alerts)
-        self._orders[kernel_order] = _Order(intent, terms_of(command), ledger)
+        self._orders[kernel_order] = VenueOrder(intent, terms_of(command), ledger)
         self._by_intent[intent.intent_id] = kernel_order
         number, priority = next(self._request_ids), place_priority(intent)
         request = PlaceRequest(number, kernel_order, intent, priority)
@@ -199,7 +191,7 @@ class VenueMap:
             return []
         return [self._request(order, command)]
 
-    def _request(self, order: _Order, command: Mapping[str, Any]) -> OrderRequest:
+    def _request(self, order: VenueOrder, command: Mapping[str, Any]) -> OrderRequest:
         kernel_order, number = int(command["order_id"]), next(self._request_ids)
         request: OrderRequest
         if command["command"] == "modify":
@@ -284,6 +276,29 @@ class VenueMap:
             return Handled(Applied.CANCEL_REFUSED)
         return Handled(Applied.NOTHING)
 
+    def withdraw_cancel(self, request: CancelRequest) -> bool:
+        """A cancel this map made that the session will never send (the exit guard held it
+        and withdraws it: 16-session-design 3.3 step 5 "As built", round 7): it waits for
+        no answer, and the kernel takes it as refused (`apply_cancel_refused`), so the
+        order works on and the kernel may fit it to the position. True when the kernel
+        took it. Raises LiveError for an order this map did not place."""
+        self._issued.pop(request.request_id, None)
+        order = self._order(request.kernel_order)
+        if order.cancel is not None and order.cancel.request_id == request.request_id:
+            order.cancel = None
+        return self._answer(self._engine.apply_cancel_refused, request.kernel_order)
+
+    def restore_cancel(self, request: CancelRequest) -> None:
+        """A cancel `withdraw_cancel` withdrew that the session holds again (the exit
+        guard puts it back when the adoption it made way for is refused): it waits for its
+        answer again, should it ever be sent. The kernel took it as refused, so the order
+        works on there as at the broker, where it was never sent; a later refusal of it is
+        the "not_pending" race. Raises LiveError for an order this map did not place."""
+        order = self._order(request.kernel_order)
+        self._issued[request.request_id] = request
+        if order.cancel is None:
+            order.cancel = request
+
     def resolved(self, resolution: Resolution) -> Handled:
         """Take an unbound placement the order book settled (2.5 A.6): BOUND binds it (the
         order's update, when the resolution carries one, is the loop's to pass to
@@ -321,14 +336,14 @@ class VenueMap:
 
     # ----- the kernel calls ------------------------------------------------------------
 
-    def _bind(self, order: _Order, order_id: str) -> Handled:
+    def _bind(self, order: VenueOrder, order_id: str) -> Handled:
         order.order_id = order_id
         self._by_order_id[order_id] = self._by_intent[order.intent.intent_id]
         deferred, order.deferred = order.deferred, []
         released = tuple(self._request(order, command) for command in deferred)
         return Handled(Applied.BOUND, released)
 
-    def _reject(self, order: _Order, why: str, *, placed: bool = True) -> Handled:
+    def _reject(self, order: VenueOrder, why: str, *, placed: bool = True) -> Handled:
         kernel_order = self._by_intent[order.intent.intent_id]
         logger.warning("intent %s %s", order.intent.intent_id, why)
         order.ended, order.deferred = True, []
@@ -340,7 +355,9 @@ class VenueMap:
             ended = self._answer(self._engine.apply_reject, kernel_order, VENUE_REJECT_CODE)
         return Handled(Applied.REJECTED if ended else Applied.NOTHING)
 
-    def _modify_result(self, order: _Order, request: ModifyRequest, *, confirmed: bool) -> Handled:
+    def _modify_result(
+        self, order: VenueOrder, request: ModifyRequest, *, confirmed: bool
+    ) -> Handled:
         if order.modify is None or order.modify.request_id != request.request_id:
             logger.debug("modify %d was answered already", request.request_id)
             return Handled(Applied.NOTHING)
@@ -365,7 +382,7 @@ class VenueMap:
             return False
         return True
 
-    def _order(self, kernel_order: int) -> _Order:
+    def _order(self, kernel_order: int) -> VenueOrder:
         order = self._orders.get(kernel_order)
         if order is None:
             raise LiveError(

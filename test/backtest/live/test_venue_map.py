@@ -321,6 +321,39 @@ def test_a_cancel_the_row_shows_still_working_is_refused_so_it_can_be_sent_again
     assert isinstance(again, CancelRequest) and again.request_id != cancel.request_id
 
 
+def test_a_cancel_withdrawn_before_it_was_sent_leaves_the_order_working_with_nothing_waiting():
+    # The exit guard held it back and withdraws it (a sale by hand adopted after the
+    # session's last lines): the kernel takes it as refused, and the order is no longer
+    # changing, so a cancel asked for later is a new request.
+    rig = Rig()
+    kernel_order = bound(rig)
+    cancel = cancelled(rig, kernel_order)
+
+    taken = rig.map.withdraw_cancel(cancel)
+
+    assert (taken, rig.status(kernel_order)) == (True, "Submitted")
+    assert not (rig.map.changing(kernel_order) or rig.map.owns_request(cancel.request_id))
+    rig.engine.cancel(kernel_order)
+    (again,) = rig.map.requests(rig.engine.take_commands())
+    assert isinstance(again, CancelRequest) and again.request_id != cancel.request_id
+
+
+def test_a_withdrawn_cancel_restored_waits_for_its_answer_again():
+    # The exit guard holds it again (the adoption it was withdrawn for was refused): should
+    # it be sent, its answer is this map's, and the CANCELLED news ends the order.
+    rig = Rig()
+    kernel_order = bound(rig)
+    cancel = cancelled(rig, kernel_order)
+    rig.map.withdraw_cancel(cancel)
+
+    rig.map.restore_cancel(cancel)
+
+    assert rig.map.changing(kernel_order) and rig.map.owns_request(cancel.request_id)
+    answer = rig.map.sent(SendResult(cancel.request_id, accepted("B1")))
+    rig.map.news(update("B1", OrderStatus.CANCELLED, quantity=10))
+    assert (answer.applied, rig.status(kernel_order)) == (Applied.NOTHING, "Canceled")
+
+
 @pytest.mark.parametrize(
     "message",
     [
