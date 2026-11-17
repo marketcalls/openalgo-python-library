@@ -4,12 +4,14 @@ and what a session leaves (`SessionOutcome`).
 The last lines are printed before the close begins, and from then on the session sends
 nothing they did not name (3.3 step 5 "As built"): the exit guard sends none of the
 requests it holds and no new one but what only takes exposure away, the reconciler's own
-safe corrections among them (`ExitGuard.end`), and no price reaches the engine or the
-stops supervisor (`_stops_after`). Then a final book read and reconciliation, after a
-session end or a Ctrl+C (`reconcile`; not after an error or a mode breach), which takes
-in the books and the order news only, and waits within its seconds for the answers to
-what it handed over; an ERROR alert for each leg whose units or stop changed after the
-lines, and for each leg left flat with an order still working, naming what the guard
+safe corrections among them (`ExitGuard.end`), the order worker withdraws what it put
+back to send later (`OrderWorker.withdraw_put_back`: OpenAlgo silent, an unbound hold),
+and no price reaches the engine or the stops supervisor (`_stops_after`). Then a final
+book read and reconciliation, after a session end or a Ctrl+C (`reconcile`; not after an
+error or a mode breach), which takes in the books and the order news only, and waits
+within its seconds for the answers to what it handed over (a stop fitted to a sale by
+hand it adopts among them); an ERROR alert for each leg whose units or stop changed after
+the lines, and for each leg left flat with an order still working, naming what the guard
 held back; `self.state` saved; the order worker stopped; each kernel session stopped
 where it stands (`stop_session`, R20) with its last events delivered, `on_stop` called
 and `finish` read; the DAILY_SUMMARY alert; then everything the start opened closed in
@@ -115,6 +117,7 @@ def close_session(
     try:
         session.stops.after.end(session.traders)
         session.reconcile.guard.end()
+        parts.worker.withdraw_put_back()
         if journal_works and stopped_by in _FINAL_READ:
             session.reconcile.final(FINAL_READ_WAIT_S)
         for request in session.reconcile.guard.left():

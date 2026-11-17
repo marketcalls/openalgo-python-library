@@ -351,9 +351,11 @@ def _s(seconds: float) -> int:
 
 
 def _worker_quiet(session: Any) -> bool:
-    """Whether the order worker has executed every request handed to it, is in no call,
-    and every order word it took and every message it posted have been taken. Read in
-    this order: each is raised before the one ahead of it clears."""
+    """Whether the order worker has executed every request handed to it that can still be
+    sent (what it put back before the last lines is withdrawn, not counted:
+    `OrderWorker.withdraw_put_back`), is in no call, and every order word it took and
+    every message it posted have been taken. Read in this order: each is raised before
+    the one ahead of it clears."""
     worker = session.parts.worker
     if worker.unfinished or worker.busy_since_ns is not None:
         return False

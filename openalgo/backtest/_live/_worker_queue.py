@@ -18,7 +18,9 @@ decision is older than `ENTRY_STALE_AFTER_S` when it is taken is not sent (`is_s
 open decision 7). Times are UTC nanoseconds. Used by the worker's thread only, but for
 `Incoming`: the requests any thread hands the worker, counted until the worker has
 executed them (`unfinished`), so the close knows when every answer it waits for has been
-posted (16-session-design 3.3 step 5).
+posted (16-session-design 3.3 step 5). The close also asks for the requests put back to
+be withdrawn (`ask_withdrawal`): its last lines named them as not sent, so they are never
+sent after them and the close does not wait for them.
 """
 
 from __future__ import annotations
@@ -158,6 +160,7 @@ class _Waiting:
     request: Request
     arrived: int
     not_before_ns: int = 0
+    put_back: bool = False
 
 
 class WorkerQueue:
@@ -185,9 +188,22 @@ class WorkerQueue:
         FIFOs of its rank, to be taken again from `not_before_ns` (UTC nanoseconds)."""
         taken = self._taken
         arrived = taken.arrived if taken and taken.request is request else next(self._arrivals)
-        waiting = _Waiting(request, arrived, not_before_ns)
+        waiting = _Waiting(request, arrived, not_before_ns, put_back=True)
         fifo = self._fifos.setdefault(self._key(request, arrived), collections.deque())
         fifo.appendleft(waiting)
+
+    def withdraw_put_back(self) -> list[Request]:
+        """Take every request put back off the queue for good, in order of arrival: the
+        session's last lines named them as not sent (16-session-design 3.3 step 5)."""
+        withdrawn: list[_Waiting] = []
+        for key, fifo in list(self._fifos.items()):
+            withdrawn += [waiting for waiting in fifo if waiting.put_back]
+            kept = collections.deque(waiting for waiting in fifo if not waiting.put_back)
+            if kept:
+                self._fifos[key] = kept
+            else:
+                del self._fifos[key]
+        return [waiting.request for waiting in sorted(withdrawn, key=lambda w: w.arrived)]
 
     def waits(self, request: Request) -> bool:
         """True while `request` waits in the queue: put and not taken, or put back."""
@@ -233,13 +249,15 @@ class WorkerQueue:
 
 class Incoming:
     """The requests handed to the worker until it takes them into its queue, and how many
-    it has not finished (module docstring). Any thread puts; the worker's thread takes
-    them and says when one is finished."""
+    it has not finished (module docstring). Any thread puts, and asks for the withdrawal
+    of what was put back; the worker's thread takes them into its queue (`into`) and says
+    when one is finished."""
 
     def __init__(self) -> None:
         self._requests: queue.SimpleQueue[Request] = queue.SimpleQueue()
         self._lock = threading.Lock()
         self._unfinished = 0
+        self._withdraw = threading.Event()
 
     @property
     def unfinished(self) -> int:
@@ -253,14 +271,27 @@ class Incoming:
             self._unfinished += 1
         self._requests.put(request)
 
-    def take_all(self) -> list[Request]:
-        """Every request handed over since the last call, oldest first."""
-        taken = []
+    def ask_withdrawal(self) -> None:
+        """Ask for the withdrawal of every request put back so far, made at the worker's
+        next `into` (any thread; it never waits)."""
+        self._withdraw.set()
+
+    def into(self, waiting: WorkerQueue) -> list[Request]:
+        """Put every request handed over since the last call into `waiting`, the worker's
+        queue, oldest first. When a withdrawal was asked for, first take every request put
+        back off `waiting` (`WorkerQueue.withdraw_put_back`), no longer unfinished; those
+        are returned."""
+        withdrawn: list[Request] = []
+        if self._withdraw.is_set():
+            self._withdraw.clear()
+            withdrawn = waiting.withdraw_put_back()
+            with self._lock:
+                self._unfinished -= len(withdrawn)
         while True:
             try:
-                taken.append(self._requests.get_nowait())
+                waiting.put(self._requests.get_nowait())
             except queue.Empty:
-                return taken
+                return withdrawn
 
     def finished(self) -> None:
         """The worker executed a request and did not put it back."""

@@ -26,19 +26,28 @@ from typing import Any
 
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
-from session_samples import alerts, ist
+from session_samples import NS, alerts, ist
 from stops_samples import (
     StopHold,
     TargetHold,
     after_the_final_read,
     ctrl_c_at_the_first_sighting,
+    events,
     handed_after_the_final_read,
     held_after_the_final_read,
     sold_by_hand,
     stop_world,
 )
+from test_stops_silent import (
+    SILENCE_ARMED,
+    RestsAnEntry,
+    probes_fail,
+    stop_placements,
+    the_entry_fills,
+)
 
 from openalgo.backtest._live import session as live_session
+from openalgo.backtest._live._session_close import FINAL_READ_WAIT_S
 from openalgo.backtest._live._types import LOGGER_NAME
 from openalgo.backtest._live.inbox import Quote
 
@@ -269,3 +278,53 @@ def test_the_stop_on_the_other_side_is_cancelled_at_the_broker_before_the_close(
     sold_by_hand(world, 20, ist(14, 43))
     world.run(StopHold, on_stop="keep")
     assert stops(world) == [(10, "cancelled")]
+
+
+# ----- what the order worker put back before the last lines -------------------------------
+
+
+class TimedLines(list):
+    """The console's lines, with the fake's time at which each was printed (`at`)."""
+
+    def __init__(self, clock: Any) -> None:
+        super().__init__()
+        self._clock = clock
+        self.at: list[tuple[str, int]] = []
+
+    def append(self, line: str) -> None:
+        super().append(line)
+        self.at.append((line, self._clock.now()))
+
+
+@pytest.fixture
+def stop_put_back_at_ctrl_c(world):
+    """`RestsAnEntry`'s entry fills at 14:43:10 while OpenAlgo is silent (its probes fail
+    six times), so its stop waits in the order worker, put back; Ctrl+C with
+    on_stop="keep" comes at 14:43:20, and the leg's last line says the stop is held back
+    and not sent."""
+    world.script.at(SILENCE_ARMED, lambda: world.fake.faults.drop_connection("orderstatus"))
+    probes_fail(world, 6)
+    the_entry_fills(world)
+    world.stop_at(ist(14, 43, 20))
+    world.lines = TimedLines(world.fake.clock)
+    return world
+
+
+def test_a_stop_put_back_before_the_last_lines_is_never_placed(stop_put_back_at_ctrl_c):
+    world = stop_put_back_at_ctrl_c
+    world.run(RestsAnEntry, on_stop="keep")
+    (line,) = [line for line in world.lines if line.startswith("RestsAnEntry SBIN NSE")]
+    assert "held back, not sent" in line
+    assert stop_placements(world) == []
+
+
+def test_the_final_read_does_not_wait_for_a_stop_put_back_before_the_last_lines(
+    stop_put_back_at_ctrl_c,
+):
+    # The close ends once the final read's books are taken in, about a second after the
+    # line, not when the read's FINAL_READ_WAIT_S run out.
+    world = stop_put_back_at_ctrl_c
+    outcome = world.run(RestsAnEntry, on_stop="keep")
+    (printed_ns,) = [at for line, at in world.lines.at if line.startswith("RestsAnEntry SBIN")]
+    (closed,) = events(outcome, "closed")
+    assert closed["ts_ns"] - printed_ns < 2 * NS < FINAL_READ_WAIT_S * NS
