@@ -35,13 +35,12 @@ import numpy as np
 
 from . import _words as words
 from ._bar_common import (
-    FIXED_ARRAYS,
     BarRun,
     RerunSet,
     below_break_even,
     break_even,
     finite,
-    fixed_decisions,
+    fixed_unjudged,
     noisy_family,
     objective_histogram,
     rerun_set,
@@ -52,6 +51,7 @@ from ._bar_common import (
 from ._blocks import LIMIT, CandlesBlock, Mark, Tile, TilesBlock
 from ._generate_noisy import Noise, noisy
 from ._part_objective import objective_name
+from ._reruns import Family
 from ._setting import Setting, between, whole
 from ._trade_common import ENOUGH_TRADES, RUNS, no_edge, too_few
 from ._verdict import FAILED, PASSED, Outcome, not_judged
@@ -119,17 +119,15 @@ def rule(settings: Mapping[str, Any], objective: Any) -> str:
     )
 
 
-def run(
-    subject: BarRun, settings: Mapping[str, Any], *, runs: int, seed: int, objective: Any
-) -> Outcome:
-    """The check of the module docstring."""
+def unjudged(subject: BarRun, settings: Mapping[str, Any], objective: Any) -> Outcome | None:
+    """The "not judged" outcome of the module docstring that needs no rerun, else None:
+    the one source of whether the check reruns (`reruns`)."""
     text = rule(settings, objective)
     trades = subject.trades
     short = too_few(trades, settings["min_trades"], text) or no_edge(trades, text)
+    short = short or fixed_unjudged(subject, "Noise", text)
     if short is not None:
         return short
-    if fixed_decisions(subject):
-        return not_judged(text, f"Noise cannot judge this strategy: {FIXED_ARRAYS}.")
     name, level = objective_name(objective), break_even(objective)
     if not finite(subject.real):
         return not_judged(text, undefined(name, "noise"))
@@ -137,6 +135,28 @@ def run(
         return not_judged(text, unmeasured(objective))
     if not subject.real > level:
         return not_judged(text, below_break_even(name, subject.real, level))
+    return None
+
+
+def reruns(
+    subject: BarRun, settings: Mapping[str, Any], *, runs: int, seed: int, objective: Any
+) -> list[tuple[Family, int]]:
+    """(family, runs) of what the check reruns: the noisy copies, none when it is not
+    judged before any rerun (`unjudged`)."""
+    if unjudged(subject, settings, objective) is not None:
+        return []
+    return [(noisy_family(subject.seed, noise_of(settings)), runs)]
+
+
+def run(
+    subject: BarRun, settings: Mapping[str, Any], *, runs: int, seed: int, objective: Any
+) -> Outcome:
+    """The check of the module docstring."""
+    text = rule(settings, objective)
+    short = unjudged(subject, settings, objective)
+    if short is not None:
+        return short
+    name, level = objective_name(objective), break_even(objective)
     family = noisy_family(subject.seed, noise_of(settings))
     set_ = rerun_set(subject.reruns.rows(family, range(runs)))
     values = set_.objective[set_.measured]
@@ -231,4 +251,4 @@ def _blocks(
     return ((fan, histogram), _candles(subject, settings, seed), (summary_block,))
 
 
-__all__ = ["CANDLES", "SETTINGS", "noise_of", "rule", "run"]
+__all__ = ["CANDLES", "SETTINGS", "noise_of", "reruns", "rule", "run", "unjudged"]

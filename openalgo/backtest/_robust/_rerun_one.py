@@ -15,17 +15,19 @@ from its first combination to the rest.
 
 What a check keeps of a rerun (`RerunRow`): the objective, the net profit in rupees,
 the maximum drawdown (a fraction, zero or negative), the closed trades, the largest win
-and loss in rupees, the longest win and loss streaks in trades, and the cumulative return
+and loss in rupees, the longest win and loss streaks in trades, the cumulative return
 at the fan's sessions (`path`, fractions of the capital: point 0 is the start, point k
-the close of the k-th session of the run). A rerun whose bars could not be made or that
+the close of the k-th session of the run), and how large each symbol's position grew
+(`sizes`, `_position_sizes`). A rerun whose bars could not be made or that
 the data layer refuses (a DataError, `_reruns.run_batch`) keeps NaN figures and the
 reason in `failure`; any other error is the strategy's or the engine's and is raised.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -35,6 +37,7 @@ import pandas as pd
 from .._causality_checks import IndicatorChecks
 from .._objective import evaluate
 from .._pipeline import execute, prepare
+from ._position_sizes import PositionSize, position_sizes
 from ._run_bars import strategy_name
 
 
@@ -60,6 +63,7 @@ class RerunRow:
     win_streak: int
     loss_streak: int
     path: np.ndarray
+    sizes: tuple[PositionSize, ...]
     failure: str = ""
 
 
@@ -70,13 +74,17 @@ def rerun(
     frames: Sequence[pd.DataFrame],
     known: Known,
     on_path: Callable[[str], Any] | None = None,
+    plan: Mapping[str, Any] | None = None,
 ) -> tuple[Any, Known]:
     """(the `Result` of `strategy` on `frames`, the bars of `symbols`, with the run's
     `arguments`; the indicator checks known after it). `on_path` is told the evaluation
-    path the rerun took. Raises what the run raises."""
+    path the rerun took; `plan` sets settings of the run's plan that no run argument
+    gives (`_settings.RunPlan.bar_shift`, `exit_scales`). Raises what the run raises."""
     args = {**arguments, "data": dict(zip(symbols, frames, strict=True))}
     checks = IndicatorChecks(strategy_name(strategy), known.keys, measured=known.measured)
     prepared = prepare(strategy, None, args, checks=checks)
+    if plan:
+        prepared = dataclasses.replace(prepared, plan=dataclasses.replace(prepared.plan, **plan))
     result = execute(strategy, prepared, args, checks=checks, on_path=on_path)
     return result, Known(checks.keys, checks.measured())
 
@@ -107,6 +115,7 @@ def measured_row(
         win_streak=_count(metrics["max_consecutive_wins"]),
         loss_streak=_count(metrics["max_consecutive_losses"]),
         path=path_at(result, dates, steps),
+        sizes=position_sizes(result),
     )
 
 
@@ -120,7 +129,7 @@ def failed_row(reason: str, points: int) -> RerunRow:
     """The row of a rerun left out for `reason` (its bars could not be made, or the data
     layer refused them), with `points` points of its path."""
     nan = math.nan
-    return RerunRow(nan, nan, nan, 0, nan, nan, 0, 0, np.full(points, nan), reason)
+    return RerunRow(nan, nan, nan, 0, nan, nan, 0, 0, np.full(points, nan), (), reason)
 
 
 __all__ = ["Known", "RerunRow", "failed_row", "measured_row", "path_at", "rerun"]

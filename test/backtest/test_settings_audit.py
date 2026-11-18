@@ -67,6 +67,8 @@ AUDITED_RUN_ARGUMENTS = {
     "corporate_actions",
     "base",
     "fill",
+    "delay_entries",
+    "delay_exits",
     "quantity_mode",
     "costs",
     "slippage",

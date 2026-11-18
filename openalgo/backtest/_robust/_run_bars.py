@@ -14,11 +14,13 @@ client, `start` and `end` the run's dates, `base` its base interval, `source` "a
 `tz` None (the bars carry UTC nanoseconds) and the benchmark as the closes the run had.
 
 A futures series (a strategy on an underlying) changes contract at each roll, which a
-generator cannot perturb yet: its bar checks raise NotImplementedError.
+rerun on the run's bars as one series cannot hold yet: its bar checks raise
+NotImplementedError.
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import inspect
 from dataclasses import dataclass
 from typing import Any
@@ -32,13 +34,16 @@ from .._messages import not_supported
 from .._pipeline import _kept_history, prepare
 from ..errors import BacktestError
 from ._ohlc import session_days
+from ._session_entries import SessionTimes, session_times
 
 #: What the bar checks of a futures series are refused with, and what to do instead.
 FUTURES = (
-    "the checks that rerun the backtest on generated bars (vs_random, permutation, noise, "
-    "other_markets, stress) for a strategy on a futures series",
-    "a futures series changes contract at each roll, which the bar generators cannot "
-    "perturb yet; run checks='quick', or a list of the trade-list checks",
+    "the checks that rerun the backtest (vs_random, permutation, noise, shifted, "
+    "other_markets, stress, random_exits, delayed, liquidity) for a strategy on a futures "
+    "series",
+    "a futures series changes contract at each roll, and the reruns read the run's bars "
+    "as one series of its own, which cannot hold the rolls yet; run checks='quick', or a "
+    "list of the trade-list checks",
 )
 
 
@@ -46,13 +51,17 @@ FUTURES = (
 class RunBars:
     """The bars a run read (module docstring): `symbols` in registration order, the base
     bars of each in `frames` (canonical layout, the history before `start` first), the
-    tick of each in rupees, and `first_run_ns`, the UTC nanosecond open of the run's first
-    bar (the bars before it are history)."""
+    tick of each in rupees, `first_run_ns`, the UTC nanosecond open of the run's first
+    bar (the bars before it are history), the `sessions` of the run with their entry
+    window and square-off (`_session_entries.SessionTimes`), and the `base` interval of
+    the bars ("1m", "D")."""
 
     symbols: tuple[str, ...]
     frames: tuple[pd.DataFrame, ...]
     ticks: tuple[float, ...]
     first_run_ns: int
+    sessions: tuple[SessionTimes, ...] = ()
+    base: str = ""
 
     def run_part(self, position: int) -> pd.DataFrame:
         """The run's bars of the symbol at `position`, without the history."""
@@ -106,11 +115,17 @@ def run_bars(result: Any) -> tuple[RunBars, dict[str, Any]]:
         for symbol, frame in zip(plan.symbols, prepared.frames, strict=True)
     )
     first = min(int(frame["ts_open"].iloc[0]) for frame in prepared.frames if len(frame))
+    days = np.unique(
+        np.concatenate([session_days(frame["ts_open"].to_numpy()) for frame in prepared.frames])
+    )
+    dates = [dt.date(1970, 1, 1) + dt.timedelta(days=int(day)) for day in days]
     bars = RunBars(
         tuple(plan.symbols),
         frames,
         tuple(float(instrument.tick_size) for instrument in prepared.instruments),
         first,
+        session_times(plan, prepared.session_calendar(), dates),
+        plan.base,
     )
     reruns = {
         **arguments,

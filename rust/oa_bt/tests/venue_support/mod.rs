@@ -17,8 +17,8 @@
 
 use oa_bt::engine::{
     run, BarColumns, BaseBar, CostConfig, Driver, Engine, Event, FillTiming, IntradayOverrides,
-    KernelError, OrderEventKind, OrderRole, Pause, QuantityMode, RunConfig, RunOutput, RunSetup,
-    StrategyInterval, Submission, VenueCommand,
+    KernelError, OrderEventKind, OrderRole, Pause, Perturbation, QuantityMode, RunConfig,
+    RunOutput, RunSetup, StrategyInterval, Submission, VenueCommand,
 };
 use oa_bt::exec::matching::{limit_after_trigger, limit_point, trigger_point};
 use oa_bt::exec::{
@@ -140,6 +140,7 @@ pub fn config() -> RunConfig {
         sizing: SizingControls::default(),
         intraday: IntradayOverrides::default(),
         deliver_events: false,
+        perturbation: Perturbation::default(),
     }
 }
 

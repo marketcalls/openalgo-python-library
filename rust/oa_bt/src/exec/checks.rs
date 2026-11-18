@@ -76,11 +76,15 @@ pub enum RejectCode {
     /// In a live session, an entry or add while another order of its instrument and
     /// product is in flight at the venue (`engine::venue_gates`).
     LiveInFlight = 18,
+    /// An order held for a delay (`delay_entries`, `delay_exits`; `engine::delay`) would
+    /// wait past the last instant it could fill from: its session's close for an
+    /// intraday order, the run's last strategy bar for any order.
+    DelayPastClose = 19,
 }
 
 impl RejectCode {
     /// Every code, in code order.
-    pub const ALL: [RejectCode; 19] = [
+    pub const ALL: [RejectCode; 20] = [
         RejectCode::QuantityRule,
         RejectCode::Tick,
         RejectCode::FreezeQty,
@@ -100,6 +104,7 @@ impl RejectCode {
         RejectCode::ExitCover,
         RejectCode::LiveLock,
         RejectCode::LiveInFlight,
+        RejectCode::DelayPastClose,
     ];
 
     /// The code string used in events and results.
@@ -124,6 +129,7 @@ impl RejectCode {
             RejectCode::ExitCover => "exit_cover",
             RejectCode::LiveLock => "live_lock",
             RejectCode::LiveInFlight => "live_in_flight",
+            RejectCode::DelayPastClose => "delay_past_close",
         }
     }
 
@@ -343,11 +349,12 @@ mod tests {
     #[test]
     fn codes_are_the_ruled_vocabulary() {
         let codes: Vec<&str> = RejectCode::ALL.iter().map(|code| code.code()).collect();
-        assert_eq!(codes.len(), 19);
+        assert_eq!(codes.len(), 20);
         assert!(codes.contains(&"market_closed") && codes.contains(&"instrument_unknown"));
         assert!(codes.contains(&"scale_in_limit") && codes.contains(&"venue"));
         assert!(codes.contains(&"exit_cover"));
         assert!(codes.contains(&"live_lock") && codes.contains(&"live_in_flight"));
+        assert!(codes.contains(&"delay_past_close"));
     }
 
     #[test]

@@ -7,7 +7,10 @@
 //! from the base bars inside the run, so a strategy bar is the aggregate of the base
 //! bars present and a bucket with none is absent (SPEC-07).
 
-use crate::data::resample::{resample_daily, resample_intraday, BarsIn, BarsOut, ClosedDayPolicy};
+use crate::data::resample::{
+    resample_daily, resample_daily_ending_earlier, resample_intraday,
+    resample_intraday_ending_earlier, BarsIn, BarsOut, ClosedDayPolicy,
+};
 use crate::exec::{InstrumentId, InstrumentSpec};
 use crate::market::calendar::{format_ist, BaseInterval, Calendar};
 use crate::model::{counted, TsNanos};
@@ -187,11 +190,35 @@ fn strategy_bars(
         oi: &aligned.oi,
     };
     let policy = ClosedDayPolicy::Error;
+    let shift = i64::from(config.perturbation.bar_shift);
     let resampled = match (config.base, config.strategy_interval) {
+        (BaseInterval::Intraday(base), StrategyInterval::Intraday(strategy))
+            if strategy != base && shift > 0 =>
+        {
+            let (intervals, exchange) = ((base, strategy), spec.exchange);
+            resample_intraday_ending_earlier(
+                calendar,
+                exchange,
+                &input,
+                intervals,
+                shift * base,
+                policy,
+            )?
+        }
         (BaseInterval::Intraday(base), StrategyInterval::Intraday(strategy))
             if strategy != base =>
         {
             resample_intraday(calendar, spec.exchange, &input, base, strategy, policy)?
+        }
+        (BaseInterval::Intraday(base), StrategyInterval::Daily) if shift > 0 => {
+            resample_daily_ending_earlier(
+                calendar,
+                spec.exchange,
+                &input,
+                base,
+                shift * base,
+                policy,
+            )?
         }
         (BaseInterval::Intraday(base), StrategyInterval::Daily) => {
             resample_daily(calendar, spec.exchange, &input, base, policy)?

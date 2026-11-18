@@ -49,15 +49,20 @@ THIS_VERSION = [
     "vs_random",
     "permutation",
     "noise",
+    "shifted",
     "other_markets",
     "stress",
     "reshuffle",
     "resample",
+    "random_exits",
     "variance",
+    "delayed",
+    "liquidity",
 ]
 TRADE_LIST = ["random_out_of_sample", "reshuffle", "resample", "variance"]
 EDGE_DATA = bars(steps_for([3.0, 2.0, 4.0, -1.0, 3.0, 2.0, -2.0, 5.0, 1.0, -1.0], 60))
-#: Stress on noisy candidates only: the planted edge holds under noise.
+#: Stress on noisy candidates only: the recovery rule keeps 9 of the 10, which singles
+#: out no shock, so stress judges no rule.
 STRESS = {"noise_candidates": 10, "permutation_candidates": 0, "min_kept": 5}
 SMALL = {**SMALL_BARS, "stress": STRESS}
 
@@ -92,20 +97,28 @@ def test_the_public_names_come_from_openalgo_backtest(edge_report):
     assert isinstance(edge_report.check("resample"), bt.CheckResult)
 
 
-def test_a_planted_edge_passes_every_judged_check(edge_report):
+def test_a_planted_edge_passes_the_checks_its_planting_survives(edge_report):
+    # The planted moves sit on exact bars, from one open to the next: entering a bar late,
+    # or filling at a price averaged over two bars, takes them away, so the delayed-orders
+    # and liquidity checks fail; Flip's daily bars are its base bars and it holds no
+    # engine exit, so shifted bars and randomized exits have nothing to judge.
     verdicts = edge_report.verdicts.set_index("check")["verdict"]
     assert verdicts[THIS_VERSION].tolist() == [
         PASSED,
         PASSED,
         PASSED,
         PASSED,
+        NOT_JUDGED,  # daily bars are the base bars: nothing to shift
         NOT_JUDGED,  # no others= given
-        PASSED,
+        NOT_JUDGED,  # no stress rule singles out shocks among noisy copies of these bars
         INFORMATIONAL,
         PASSED,
+        NOT_JUDGED,  # no engine exit to vary
         PASSED,
+        FAILED,
+        FAILED,
     ]
-    assert edge_report.passed
+    assert not edge_report.passed
 
 
 def test_a_small_edge_in_much_noise_fails(small_edge_report):
@@ -125,11 +138,10 @@ def test_the_scorecard_lists_every_check_and_the_ones_not_built(edge_report):
     verdicts = edge_report.verdicts
     assert list(verdicts.columns) == ["check", "question", "figure", "rule", "verdict", "note"]
     assert list(verdicts.index) == list(range(1, 18))
-    assert (verdicts["verdict"] == NOT_BUILT).sum() == 8
-    delayed = verdicts.set_index("check").loc["delayed"]
-    assert delayed["note"] == (
-        "Not built in this version: it needs late orders, other fill prices and shifted bar "
-        "boundaries in the engine."
+    assert (verdicts["verdict"] == NOT_BUILT).sum() == 4
+    parameters = verdicts.set_index("check").loc["parameters"]
+    assert parameters["note"] == (
+        "Not built in this version: it needs walk-forward and the parameter searches."
     )
 
 
@@ -158,8 +170,8 @@ def test_one_check_has_its_table_summary_and_settings(edge_report):
 
 
 def test_asking_for_a_check_not_built_says_what_it_needs(edge_report):
-    with pytest.raises(NotImplementedError, match="it needs late orders"):
-        edge_report.check("delayed")
+    with pytest.raises(NotImplementedError, match="it needs walk-forward"):
+        edge_report.check("parameters")
 
 
 def test_asking_for_a_check_the_report_did_not_run_is_refused(edge):
@@ -291,7 +303,7 @@ def test_the_page_is_the_scorecard_a_section_per_check_and_the_notes(page):
 
 def test_the_scorecard_counts_the_verdicts_and_states_the_wording_rule(page):
     scorecard = page[page.index("<section id='scorecard'") : page.index("<section id='random")]
-    assert "7 passed, 0 failed, 1 not judged, 1 informational, 8 not built." in scorecard
+    assert "6 passed, 2 failed, 4 not judged, 1 informational, 4 not built." in scorecard
     assert fmt_text(WORDING_RULE) in scorecard
     assert scorecard.count("<tr>") == 1 + 17
 

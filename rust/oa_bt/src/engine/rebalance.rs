@@ -27,7 +27,6 @@ use crate::exec::{Order, OrderRequest, OrderType, Validity};
 use super::clock::SliceInfo;
 use super::error::KernelError;
 use super::kernel::Engine;
-use super::order_fill::OrderFill;
 use super::submit::Submission;
 use super::target::{TargetOrder, TargetRequest};
 
@@ -77,15 +76,15 @@ impl Engine {
                 waits_for_sales(order)
                     && order.request.order_type == OrderType::Market
                     && order.request.validity == Validity::Day
-                    && slice.open >= order.decided_at
+                    && slice.open >= self.fills_from(order)
             })
             .cloned()
             .collect();
         for order in due {
-            let Some(bar) = self.market.bar(order.request.instrument, slice.index) else {
+            let Some(how) = self.queued_fill(order.request.instrument, slice) else {
                 continue;
             };
-            self.fill_order(slice, &order, OrderFill::at_open(bar.open))?;
+            self.fill_order(slice, &order, how)?;
         }
         Ok(())
     }

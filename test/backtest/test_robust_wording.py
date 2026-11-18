@@ -29,10 +29,6 @@ ROBUST = Path(bt.__file__).parent / "_robust"
 RUN = Path(bt.__file__).parent / "run.py"
 #: The checks a later version brings, and what each needs.
 LATER = {
-    "shifted": "late orders, other fill prices and shifted bar boundaries in the engine",
-    "random_exits": "late orders, other fill prices and shifted bar boundaries in the engine",
-    "delayed": "late orders, other fill prices and shifted bar boundaries in the engine",
-    "liquidity": "late orders, other fill prices and shifted bar boundaries in the engine",
     "out_of_sample": "walk-forward and the parameter searches",
     "walk_forward": "walk-forward and the parameter searches",
     "parameters": "walk-forward and the parameter searches",
@@ -89,8 +85,9 @@ def test_the_rule_says_the_rerun_checks_judge_the_chosen_settings_not_the_search
     # rerun the settings chosen and never the search that chose them.
     assert FIXED == (
         "Nor can the checks that rerun the strategy with its parameters as chosen (versus "
-        "random, permutation, noise, other markets and synthetic stress): they judge the "
-        "settings chosen, not the search that chose them."
+        "random, permutation, noise, shifted bars, other markets, synthetic stress, "
+        "randomized exits, delayed orders and liquidity): they judge the settings chosen, not "
+        "the search that chose them."
     )
     assert WORDING_RULE.index(PICKED) < WORDING_RULE.index(FIXED) < WORDING_RULE.index(UNJUDGED)
 
@@ -144,7 +141,7 @@ def test_parameter_ranges_say_what_they_need_in_plain_words():
 def test_the_report_names_no_internal_unit(page):
     report = edge_run().robustness(checks="all", progress=lambda line: None, **SMALL_BARS)
     notes = report.verdicts.set_index("check")["note"]
-    assert notes["delayed"] == f"Not built in this version: it needs {LATER['delayed']}."
+    assert notes["parameters"] == f"Not built in this version: it needs {LATER['parameters']}."
     assert not re.search(r"\bRB\d", report.tearsheet())
 
 

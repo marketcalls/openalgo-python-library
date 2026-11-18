@@ -388,6 +388,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session's behaviour is now checked after every test against the design's safety rules
   (no orphan order, one stop per leg, exits within the position, nothing sent after a
   lock), over every change of every order at the simulated broker.
+- `bt.read_ticks(day, instruments=None, *, cache_dir=None)` reads the ticks `bt.record` (or
+  a session) recorded on a day back as one DataFrame, merged in the exact order they were
+  received: the exchange and symbol, the exchange's last trade time (or the receive time
+  where the feed gave none, with a column saying which), the receive time, the last price,
+  and the volume, bid and ask where the recording kept them. A day with no recording
+  raises DataError naming the folder.
+- Live sessions: another client's fill on a symbol the session trades (a sale by hand, for
+  example) now prompts a comparison with OpenAlgo's books 3 seconds later, so the session
+  fits its stop to the sale within seconds instead of at its next 30-second read; the
+  preflight warns, in the start banner and the result, that the session's matching of the
+  trade book to its orders by order ID has not been checked for pocketful and mstock. The
+  loop's time from a tick's arrival to the kernel is measured by
+  `benchmark/live_loop_speed.py` (median about 7 microseconds, 99th percentile about 19,
+  against a target under 500).
 - Reference table `price_protection` (`openalgo/backtest/reference/data/price_protection.csv`,
   read with `tables.find("price_protection", (exchange, segment, check, underlying, days),
   date)`): the price bands NSE and BSE apply to an option's limit price, by date, each row
@@ -497,6 +511,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or rule) in the robustness report. The random out-of-sample chart now draws the price
   when the report has the run's bars. A check of these five with fewer than 30 closed
   trades, or on a run that did not make money, is not judged.
+- Robustness and overfitting checks, third part: four checks that rerun the backtest on
+  the run's own bars with one thing changed. Shifted bars: the strategy bars built with
+  their boundaries moved (an intraday strategy's bars ending 1 to n-1 base bars earlier; a
+  daily strategy's days ending 15, 30, 45 and 60 minutes earlier); passes when every shift
+  makes money and the median keeps at least half the run's figure. Random exits: each
+  trade's stop, target and trailing distances scaled at random within 25 percent (and
+  any `exit_params` drawn from the values given); passes when at least 70 percent of runs
+  make money. Delayed orders: entries and exits 0 to 2 strategy bars late in every pair;
+  passes when entries one bar late still make money and keep half the run's figure (a
+  late run that took more entries than the run is not judged). Liquidity: the fills
+  priced by six other models; passes when every model makes money and no drawdown is
+  deeper than 1.5 times the run's. 13 of the 17 checks are now built.
+- `bt.backtest(fill=...)` takes six more fill models for these checks and for your own
+  tests: "next_close", "next_mid" (the high and low's midpoint), "next_ohlc4" (the average
+  of open, high, low and close) of the next base bar, and the same averaged with the bar
+  after it ("next_close_2", "next_mid_2", "next_ohlc4_2"). `bt.backtest(delay_entries=0,
+  delay_exits=0)` holds a decided order that opens or adds (or that closes, reduces or
+  reverses) for that many strategy bars; the engine's own stops, targets and exits are
+  never held. The default run is unchanged (the golden runs give the same figures);
+  `bt.live` refuses both settings, saying why.
+- Robustness checks on generated bars (second part, refined): a synthetic stress rule
+  that keeps more than half its candidates is not judged ("it does not single out
+  shocks"); permutation, synthetic stress and the strategy-on-permuted family of versus
+  random are not judged for `bt.from_arrays` strategies, whose decisions are fixed in
+  advance; the plan counts and times only the reruns that will run; the random entries
+  of an all-intraday run stay within one session each.
 
 ### Changed
 

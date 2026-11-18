@@ -1,6 +1,6 @@
 """The seventeen checks and the request of a robustness report: the checks in the order of
-design 17 section 2, the nine this version runs (the four trade-list checks and the five
-bar checks), the error for one it does not (saying what it needs, in plain words), and
+design 17 section 2, the thirteen this version runs (the four trade-list checks and the
+nine bar checks), the error for one it does not (saying what it needs, in plain words), and
 every setting checked before work starts. The checks load only when they are used."""
 
 import subprocess
@@ -34,16 +34,11 @@ DESIGN_ORDER = (
     "parameters",
     "noise_optimization",
 )
-ENGINE = "late orders, other fill prices and shifted bar boundaries in the engine"
 SEARCHES = "walk-forward and the parameter searches"
 # What each check this version does not run needs (section 6), in plain words.
 NEEDS = {
     "out_of_sample": SEARCHES,
     "walk_forward": SEARCHES,
-    "shifted": ENGINE,
-    "random_exits": ENGINE,
-    "delayed": ENGINE,
-    "liquidity": ENGINE,
     "parameters": SEARCHES,
     "noise_optimization": SEARCHES,
 }
@@ -53,11 +48,15 @@ THIS_VERSION = (
     "vs_random",
     "permutation",
     "noise",
+    "shifted",
     "other_markets",
     "stress",
     "reshuffle",
     "resample",
+    "random_exits",
     "variance",
+    "delayed",
+    "liquidity",
 )
 
 
@@ -169,8 +168,8 @@ def test_settings_for_a_check_that_does_not_run_are_refused():
 
 
 def test_settings_for_a_check_this_version_does_not_run_say_what_it_needs():
-    with pytest.raises(NotImplementedError, match=r"it needs late orders"):
-        request(check_settings={"delayed": {"runs": 500}})
+    with pytest.raises(NotImplementedError, match=r"it needs walk-forward"):
+        request(check_settings={"parameters": {"runs": 500}})
 
 
 def test_others_are_symbols_or_symbol_and_exchange_pairs():

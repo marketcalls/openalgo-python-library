@@ -41,8 +41,9 @@
 //!   exchange's official closing price.
 //!
 //! Modules: `bars` (the column types and the bucket aggregate), `runs` (admitting bars
-//! and aggregating runs of rows), `intraday`, `daily`, `period` (the three resamplers)
-//! and `error`.
+//! and aggregating runs of rows), `intraday`, `daily`, `period` (the three resamplers),
+//! `shifted` (intraday and daily bars whose boundaries end earlier, for the robustness
+//! checks) and `error`.
 
 mod bars;
 mod daily;
@@ -50,6 +51,7 @@ mod error;
 mod intraday;
 mod period;
 mod runs;
+pub(crate) mod shifted;
 
 #[cfg(test)]
 mod tests;
@@ -59,6 +61,7 @@ pub use daily::resample_daily;
 pub use error::ResampleError;
 pub use intraday::resample_intraday;
 pub use period::{resample_period, CalendarUnit};
+pub use shifted::{resample_daily_ending_earlier, resample_intraday_ending_earlier};
 
 /// What to do with bars on a date the calendar has no session for.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

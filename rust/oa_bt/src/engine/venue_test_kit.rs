@@ -15,8 +15,8 @@ use crate::rms::{ExitReason, StrategyRiskConfig};
 use crate::sizing::SizingControls;
 
 use super::config::{
-    BarColumns, CostConfig, FillTiming, IntradayOverrides, QuantityMode, RunConfig, RunSetup,
-    StrategyInterval,
+    BarColumns, CostConfig, FillTiming, IntradayOverrides, Perturbation, QuantityMode, RunConfig,
+    RunSetup, StrategyInterval,
 };
 use super::kernel::Engine;
 use super::market_data::BaseBar;
@@ -74,6 +74,7 @@ fn config() -> RunConfig {
         sizing: SizingControls::default(),
         intraday: IntradayOverrides::default(),
         deliver_events: false,
+        perturbation: Perturbation::default(),
     }
 }
 

@@ -19,12 +19,13 @@ asks for 3 percent more): run - break-even > (1 + margin) x (best - break-even),
 run above break-even passes whenever every random run is at or below it.
 
 Random entries need the run's trades to fit among its strategy bars, and permuted bars
-need every symbol's bars at the same times; families that cannot run are left out and
-the note says why. Not judged when the run did not make money, has too few closed
-trades, has an objective that is undefined, has no break-even or is not above it, or
-when no random run could be measured. For a strategy made by `bt.from_arrays`, when the
-strategy on permuted bars ran, the note says what its fixed decisions leave unjudged
-(`_bar_common.FIXED_TRADES`).
+need every symbol's bars at the same times; the strategy on permuted bars needs a
+strategy that reads them, so it is left out for one made by `bt.from_arrays`, whose
+decisions are arrays fixed in advance (`_bar_common.FIXED_ARRAYS`; the random entries
+stay). Families that cannot run are left out and the note says why. Not judged when the
+run did not make money, has too few closed trades, has an objective that is undefined,
+has no break-even or is not above it, when no family can run, or when no random run
+could be measured.
 
 Draws: random entries on the run's bars from part 0 of the check's stream
 (`_random.part_seed`), random entries on permuted bars from part 1, on the permutation
@@ -42,12 +43,13 @@ import pandas as pd
 from . import _random
 from . import _words as words
 from ._bar_common import (
+    FIXED_ARRAYS,
     BarRun,
     RerunSet,
     below_break_even,
     break_even,
     finite,
-    fixed_note,
+    fixed_decisions,
     grid_problem,
     joined,
     objective_histogram,
@@ -127,9 +129,10 @@ def family(name: str, seed: int, report_seed: int) -> Family:
 
 def _placed(subject: BarRun, names: tuple[str, ...]) -> tuple[tuple[str, ...], str]:
     """(the families that can run, why the others cannot, "" when all can)."""
-    entries = subject.reruns.setup.entries
+    entries = subject.entries
     unplaced = entries.unplaced() if entries is not None else []
     problem = grid_problem(subject.bars)
+    fixed = fixed_decisions(subject) and "permuted" in names and not problem
     why = ""
     if unplaced:
         why += (
@@ -138,14 +141,19 @@ def _placed(subject: BarRun, names: tuple[str, ...]) -> tuple[tuple[str, ...], s
         )
     if problem:
         why += f" The families on permuted bars are left out: {problem}."
-    left_out = (RANDOM if unplaced else ()) + (ON_PERMUTED if problem else ())
+    if fixed:
+        why += f" The strategy on permuted bars is left out: {FIXED_ARRAYS}."
+    left_out = (
+        (RANDOM if unplaced else ())
+        + (ON_PERMUTED if problem else ())
+        + (("permuted",) if fixed else ())
+    )
     return tuple(name for name in names if name not in left_out), why
 
 
-def run(
-    subject: BarRun, settings: Mapping[str, Any], *, runs: int, seed: int, objective: Any
-) -> Outcome:
-    """The check of the module docstring."""
+def unjudged(subject: BarRun, settings: Mapping[str, Any], objective: Any) -> Outcome | None:
+    """The "not judged" outcome of the module docstring that needs no rerun, else None:
+    the one source of whether the check reruns (`reruns`)."""
     text = rule(settings, objective)
     short = too_few(subject.trades, settings["min_trades"], text) or no_edge(subject.trades, text)
     if short is not None:
@@ -160,6 +168,30 @@ def run(
     names, left_out = _placed(subject, settings["families"])
     if not names:
         return not_judged(text, "No family of random runs can run." + left_out)
+    return None
+
+
+def reruns(
+    subject: BarRun, settings: Mapping[str, Any], *, runs: int, seed: int, objective: Any
+) -> list[tuple[Family, int]]:
+    """(family, runs) of what the check reruns: each family that can run, none when the
+    check is not judged before any rerun (`unjudged`)."""
+    if unjudged(subject, settings, objective) is not None:
+        return []
+    names, _ = _placed(subject, settings["families"])
+    return [(family(each, seed, subject.seed), runs) for each in names]
+
+
+def run(
+    subject: BarRun, settings: Mapping[str, Any], *, runs: int, seed: int, objective: Any
+) -> Outcome:
+    """The check of the module docstring."""
+    text = rule(settings, objective)
+    short = unjudged(subject, settings, objective)
+    if short is not None:
+        return short
+    name, level = objective_name(objective), break_even(objective)
+    names, left_out = _placed(subject, settings["families"])
     sets = {
         each: rerun_set(subject.reruns.rows(family(each, seed, subject.seed), range(runs)))
         for each in names
@@ -174,10 +206,7 @@ def run(
     note = (
         "Random entries hold the run's own trades (count, direction, quantity, holding time) "
         "at random strategy bars, under the run's rules; the strategy on permuted bars is the "
-        "permutation test's runs."
-        + (fixed_note(subject) if "permuted" in sets else "")
-        + left_out
-        + "".join(s.failure_note() for s in sets.values())
+        "permutation test's runs." + left_out + "".join(s.failure_note() for s in sets.values())
     )
     table = _table(sets)
     blocks = _blocks(subject, sets, pooled, summary, name)
@@ -267,4 +296,13 @@ def _blocks(
     return ((fan, histogram), (table,), (TilesBlock("Summary", "Over every random run", tiles),))
 
 
-__all__ = ["FAMILIES", "SETTINGS", "families_value", "family", "rule", "run"]
+__all__ = [
+    "FAMILIES",
+    "SETTINGS",
+    "families_value",
+    "family",
+    "reruns",
+    "rule",
+    "run",
+    "unjudged",
+]

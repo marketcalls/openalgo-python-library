@@ -71,6 +71,8 @@ def backtest(
     corporate_actions: Any = None,
     base: str | None = None,
     fill: str = "next_open",
+    delay_entries: int = 0,
+    delay_exits: int = 0,
     quantity_mode: str = "venue",
     costs: str | None = "zerodha",
     slippage: Any = "default",
@@ -127,7 +129,27 @@ def backtest(
     base: the base interval ("1m", "D", ...); default "D" for daily strategies, and for
         intraday ones 1 minute when 1-minute data covers the run for every instrument,
         else the strategy interval (`_base_interval`; the Assumptions say which and why).
-    fill: "next_open".
+    fill: where a decided order fills: "next_open" (the default), or, to test how a
+        strategy stands worse fill prices, another price of the next base bar: its close
+        ("next_close"), its midpoint (high + low) / 2 ("next_mid") or the average of its
+        open, high, low and close ("next_ohlc4"), or that price averaged with the bar
+        after it ("next_close_2", "next_mid_2", "next_ohlc4_2"; the next bar of the same
+        session on an intraday base, the next session's on a daily one). A model fills
+        the strategy's orders inside the bar, after the bar's stops and targets, with the
+        run's slippage; the engine's own exits and the fills at a level keep their prices.
+    delay_entries, delay_exits: strategy bars a decided order that opens or adds, and one
+        that reduces or closes, is held before it can fill (0, the default, fills at the
+        next base-bar open): with 1, an order decided at a bar's close fills at the open
+        after the next bar's close, and one decided inside a bar (a timer) waits for that
+        bar's close first. A cancellation or modification of an order is held as long,
+        the order working on its old terms until it arrives. An intraday order whose
+        delay ends at its session's close, or any order whose delay ends after the run's
+        last bar, is rejected delay_past_close. The legs' stops and targets and the
+        engine's own exits are never held. A held order is a working order (in
+        `self.orders`), not a position: a strategy that decides its entries by its
+        position alone (`self.position.is_flat`) sees none while its entry is held and
+        enters again, so decide by `self.orders` too (a condition strategy counts a held
+        entry as pending and never does).
     quantity_mode: "venue" (the default: whole shares of cash equity and whole lots of
         derivatives, as an exchange accepts) or "fractional" (part shares of cash
         equity, for research; derivatives stay in whole lots).
@@ -348,20 +370,28 @@ def robustness(strategy: type[Strategy], client: Any = None, **settings: Any) ->
         not built), "quick" (the trade-list checks, no rerun) or a list of check names.
         This version runs the trade-list checks (random_out_of_sample, reshuffle,
         resample, variance) and the bar checks, which rerun the backtest on generated
-        bars or other symbols' bars: vs_random (random entries with the run's trades,
-        and the strategy on permuted bars), permutation (the same moves in another
-        order), noise (every price moved within a fifth of its bar's average true
-        range), stress (the noisy and permuted series whose drawdown, time to a new high
-        or fall below the average is half as bad again as the run's own, judged against
-        every generated series) and other_markets.
+        bars, other symbols' bars or the run's own bars with one setting changed:
+        vs_random (random entries with the run's trades, and the strategy on permuted
+        bars), permutation (the same moves in another order), noise (every price moved
+        within a fifth of its bar's average true range), shifted (strategy bars ending
+        1 to n - 1 base bars earlier, or days ending 15 to 60 minutes earlier),
+        other_markets, stress (the noisy and permuted series whose drawdown, time to a
+        new high or fall below the average is half as bad again as the run's own, judged
+        against every generated series), random_exits (each trade's stop, target, trail
+        and breakeven distances scaled within a quarter, and exit_params drawn per run),
+        delayed (entries and exits held 0 to 2 strategy bars; not judged when the run a
+        bar late entered again while its entry was held, as a strategy deciding by
+        `self.position.is_flat` without `self.orders` does) and liquidity (fills at the
+        next bar's close, midpoint or average price, or their two-bar averages).
     objective: what the checks measure: a metric name or a function of a `Result`
         ("sharpe" by default). Random out of sample measures it on parts of the trades,
         so it takes "sharpe", "sortino", "net_profit", "expectancy" or
         "profit_factor"; "win_rate" (a win rate is not a measure of profit), another
         metric or a function leaves that check not judged. The bar checks measure it on
-        each rerun; noise and vs_random also need its break-even value (0, or 1 for a
-        profit factor), and an objective without one (a win rate, a function, whose value
-        for a run that makes nothing is not known) leaves them not judged.
+        each rerun; noise, vs_random, shifted and delayed also need its break-even value
+        (0, or 1 for a profit factor), and an objective without one (a win rate, a
+        function, whose value for a run that makes nothing is not known) leaves them not
+        judged.
     others: the symbols other_markets runs the strategy on, unchanged (["ICICIBANK",
         "HDFCBANK"] on the strategy's exchange, or (symbol, exchange) pairs), read from
         the run's source: a `data=` dict by symbol holding them, or OpenAlgo through

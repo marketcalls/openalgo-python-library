@@ -8,8 +8,8 @@
 
 use oa_bt::engine::{
     run, BarColumns, CostConfig, Driver, Engine, Event, FillTiming, IntradayOverrides, KernelError,
-    OrderEventKind, Pause, QuantityMode, RunConfig, RunOutput, RunSetup, Step, StrategyInterval,
-    Submission,
+    OrderEventKind, Pause, Perturbation, QuantityMode, RunConfig, RunOutput, RunSetup, Step,
+    StrategyInterval, Submission,
 };
 use oa_bt::exec::{
     FillAt, Gtt, InstrumentId, InstrumentSpec, OrderId, OrderRequest, OrderType, QuantitySpec,
@@ -153,6 +153,7 @@ fn config(days: (Day, Day), base: BaseInterval, interval: StrategyInterval) -> R
         sizing: SizingControls::default(),
         intraday: IntradayOverrides::default(),
         deliver_events: false,
+        perturbation: Perturbation::default(),
     }
 }
 

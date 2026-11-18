@@ -9,7 +9,8 @@
 
 use oa_bt::engine::{
     run, BarColumns, CostConfig, Driver, Engine, Event, FillTiming, IntradayOverrides, KernelError,
-    Pause, QuantityMode, RunConfig, RunOutput, RunSetup, Step, StrategyInterval, Submission,
+    Pause, Perturbation, QuantityMode, RunConfig, RunOutput, RunSetup, Step, StrategyInterval,
+    Submission,
 };
 use oa_bt::exec::{
     FillAt, InstrumentId, InstrumentSpec, OrderRequest, OrderStatus, QuantitySpec, RejectCode,
@@ -93,6 +94,7 @@ fn engine(instruments: Vec<(&str, BarColumns)>, slippage: SlippageSpec) -> Engin
         sizing: SizingControls::default(),
         intraday: IntradayOverrides::default(),
         deliver_events: false,
+        perturbation: Perturbation::default(),
     };
     let (specs, columns): (Vec<_>, Vec<_>) = instruments
         .into_iter()
