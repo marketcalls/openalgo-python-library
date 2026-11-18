@@ -48,6 +48,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from ._calendar_convert import interval_nanos
 from ._messages import counted
 from ._series import FIELDS, TIMES, ist_time
 from ._warm_up import HISTORY_YEARS_CAP, SeriesNeed
@@ -56,7 +57,7 @@ from ._warm_up_days import FIRST_BAR_SLACK_DAYS, Request, run_from
 from ._warm_up_join import Opening, join, opening_part
 from .data._finish import _hash_by_month
 from .data._sessions import day_start_ns
-from .resample import resample_bars
+from .resample import shifted_bars
 
 FUTURES_NOTE = "none (a futures series is built from start: its contracts and their rolls)"
 FUTURES_REASON = "a futures series is built from start, from its contracts and their rolls"
@@ -68,16 +69,20 @@ NOT_PROBED = (
 
 
 def _frame(base: pd.DataFrame, interval: str, plan: Any, calendar: Any) -> pd.DataFrame:
-    """The bars of `interval` the base bars make, built as the run builds them."""
+    """The bars of `interval` the base bars make, built as the run builds them: the
+    strategy's own bars end `plan.bar_shift` base bars earlier in a run of the
+    shifted-bars check (`resample.shifted_bars`)."""
     if interval == plan.base or base.empty:
         return base
-    return resample_bars(
+    shift = plan.bar_shift * interval_nanos(plan.base) if interval == plan.interval else 0
+    return shifted_bars(
         base,
         interval,
         exchange=plan.exchange,
         calendar=calendar,
         source_interval=plan.base,
         on_closed_day="drop",
+        shift_nanos=shift,
     )
 
 

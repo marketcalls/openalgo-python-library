@@ -57,7 +57,8 @@ def test_an_argument_that_chooses_the_mode_is_refused_naming_the_analyzer_switch
 # The bt.backtest arguments 16-session-design 1.2 lists as having no meaning live, with
 # tz and corporate_actions, which describe data of the user's own.
 NOT_LIVE_NAMES = (
-    "data", "start", "end", "now", "source", "base", "fill", "slippage", "margin",
+    "data", "start", "end", "now", "source", "base", "fill", "delay_entries",
+    "delay_exits", "slippage", "margin",
     "quantity_mode", "instrument", "product", "roll", "benchmark", "calendar", "tz",
     "corporate_actions",
 )  # fmt: skip

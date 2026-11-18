@@ -153,9 +153,16 @@ impl Engine {
             };
             self.risk_exits_at_open(slice, instrument, bar.open)?;
             self.gtt_exits_at_open(slice, instrument, bar.open)?;
-            for id in self.book.queued_for(instrument) {
+            let queued = self
+                .fill_model()
+                .is_none()
+                .then(|| self.book.queued_for(instrument));
+            for id in queued.unwrap_or_default() {
                 self.fill_queued(slice, id, bar.open)?;
             }
+        }
+        if self.fill_model().is_some() {
+            return Ok(());
         }
         self.fill_rebalance_buys(slice)
     }

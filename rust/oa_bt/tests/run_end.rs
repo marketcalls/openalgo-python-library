@@ -9,7 +9,8 @@
 
 use oa_bt::engine::{
     run, BarColumns, CostConfig, Driver, Engine, FillTiming, IntradayOverrides, KernelError, Pause,
-    QuantityMode, RunConfig, RunEnd, RunEndCause, RunOutput, RunSetup, StrategyInterval,
+    Perturbation, QuantityMode, RunConfig, RunEnd, RunEndCause, RunOutput, RunSetup,
+    StrategyInterval,
 };
 use oa_bt::exec::{InstrumentId, InstrumentSpec, OrderRequest, QuantitySpec};
 use oa_bt::market::calendar::{BaseInterval, Calendar};
@@ -87,6 +88,7 @@ fn config(present: Option<i64>) -> RunConfig {
         sizing: SizingControls::default(),
         intraday: IntradayOverrides::default(),
         deliver_events: false,
+        perturbation: Perturbation::default(),
     }
 }
 

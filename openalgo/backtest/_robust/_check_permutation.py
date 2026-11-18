@@ -11,12 +11,12 @@ A run whose objective is undefined (no trade, returns that never vary) or whose 
 data checks refused says nothing about the order of the moves, so it is left out of both
 counts, which can only raise p; when too few runs are measured for p to reach `max_p`
 (fewer than 1 / `max_p` - 1), the check is not judged. Not judged either when the run did
-not make money or has too few closed trades (`_trade_common`), or when no permuted path
-can be made: several symbols are permuted together only when their bars are at the same
-times (`_bar_common.grid_problem`). A strategy made by `bt.from_arrays` is judged: its
-fixed trades meet other moves on permuted bars, which still tells an edge of the order of
-the moves from one of the drift, and the note says a pass says nothing of how its arrays
-were chosen (`_bar_common.FIXED_TRADES`).
+not make money or has too few closed trades (`_trade_common`), when no permuted path can
+be made: several symbols are permuted together only when their bars are at the same
+times (`_bar_common.grid_problem`), or when the strategy was made by `bt.from_arrays`: its
+decisions are arrays fixed in advance, so on permuted bars it trades at the same bars, and
+arrays chosen with hindsight on the real bars would beat the permuted paths
+(`_bar_common.fixed_unjudged`).
 
 The summary block, over the permuted runs that ran: the shallowest, deepest and average
 maximum drawdown; the average largest win and loss; the longest win and loss streaks of
@@ -35,7 +35,7 @@ from . import _words as words
 from ._bar_common import (
     BarRun,
     RerunSet,
-    fixed_note,
+    fixed_unjudged,
     grid_problem,
     objective_histogram,
     permuted_family,
@@ -44,6 +44,7 @@ from ._bar_common import (
 )
 from ._blocks import LIMIT, Mark, Tile, TilesBlock
 from ._part_objective import objective_name
+from ._reruns import Family
 from ._setting import Setting, between
 from ._trade_common import ENOUGH_TRADES, RUNS, exact_mean, no_edge, too_few
 from ._verdict import FAILED, PASSED, Outcome, not_judged
@@ -98,13 +99,13 @@ def _summary(set_: RerunSet, p: float, above: int, measured: int) -> dict[str, f
     }
 
 
-def run(
-    subject: BarRun, settings: Mapping[str, Any], *, runs: int, seed: int, objective: Any
-) -> Outcome:
-    """The check of the module docstring."""
+def unjudged(subject: BarRun, settings: Mapping[str, Any], objective: Any) -> Outcome | None:
+    """The "not judged" outcome of the module docstring that needs no rerun, else None:
+    the one source of whether the check reruns (`reruns`)."""
     text = rule(settings, objective)
     trades = subject.trades
     short = too_few(trades, settings["min_trades"], text) or no_edge(trades, text)
+    short = short or fixed_unjudged(subject, "The permutation test", text)
     if short is not None:
         return short
     name = objective_name(objective)
@@ -113,6 +114,28 @@ def run(
     problem = grid_problem(subject.bars)
     if problem:
         return not_judged(text, f"No permuted path can be made: {problem}.")
+    return None
+
+
+def reruns(
+    subject: BarRun, settings: Mapping[str, Any], *, runs: int, seed: int, objective: Any
+) -> list[tuple[Family, int]]:
+    """(family, runs) of what the check reruns: the permuted paths, none when it is not
+    judged before any rerun (`unjudged`)."""
+    if unjudged(subject, settings, objective) is not None:
+        return []
+    return [(permuted_family(subject.seed), runs)]
+
+
+def run(
+    subject: BarRun, settings: Mapping[str, Any], *, runs: int, seed: int, objective: Any
+) -> Outcome:
+    """The check of the module docstring."""
+    text = rule(settings, objective)
+    short = unjudged(subject, settings, objective)
+    if short is not None:
+        return short
+    name = objective_name(objective)
     set_ = rerun_set(subject.reruns.rows(permuted_family(subject.seed), range(runs)))
     p, above, measured = p_value(set_.objective, subject.real)
     least = math.ceil(1.0 / settings["max_p"]) - 1
@@ -131,9 +154,7 @@ def run(
         "Each run rebuilds the bars from the run's own moves in another order: within each "
         "session the bars after its first, and the sessions' first bars with their overnight "
         "gaps as one more set, the history before start apart; volumes travel with their "
-        "bars. Runs whose objective is undefined are left out of both counts."
-        + fixed_note(subject)
-        + set_.failure_note()
+        "bars. Runs whose objective is undefined are left out of both counts." + set_.failure_note()
     )
     summary = _summary(set_, p, above, measured)
     table = set_.table()
@@ -188,4 +209,4 @@ def _blocks(
     return ((fan, histogram), (_tiles(summary),))
 
 
-__all__ = ["SETTINGS", "p_value", "rule", "run"]
+__all__ = ["SETTINGS", "p_value", "reruns", "rule", "run", "unjudged"]

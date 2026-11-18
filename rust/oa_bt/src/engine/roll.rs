@@ -186,6 +186,7 @@ impl Engine {
         if let Some((_, slot)) = self.legs.iter_mut().find(|(k, _)| *k == next_key) {
             *slot = leg;
         }
+        self.carry_exit_scale(key, next_key);
         self.record.touch(next_key);
         self.place_gtts_after_entry(stamp, next_key, &effect)
     }

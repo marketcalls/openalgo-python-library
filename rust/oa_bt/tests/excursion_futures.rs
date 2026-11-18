@@ -7,8 +7,8 @@ mod order_support;
 
 use oa_bt::engine::{
     run, BarColumns, CostConfig, Driver, Engine, FillTiming, FuturesSeries, IntradayOverrides,
-    KernelError, Pause, QuantityMode, RollRule, RunConfig, RunOutput, RunSetup, SeriesContract,
-    StrategyInterval, TradeRecord,
+    KernelError, Pause, Perturbation, QuantityMode, RollRule, RunConfig, RunOutput, RunSetup,
+    SeriesContract, StrategyInterval, TradeRecord,
 };
 use oa_bt::exec::{InstrumentId, InstrumentSpec, OrderRequest, OrderType, QuantitySpec};
 use oa_bt::market::calendar::{BaseInterval, Calendar};
@@ -127,6 +127,7 @@ fn roll_config() -> RunConfig {
         sizing: SizingControls::default(),
         intraday: IntradayOverrides::default(),
         deliver_events: false,
+        perturbation: Perturbation::default(),
     }
 }
 

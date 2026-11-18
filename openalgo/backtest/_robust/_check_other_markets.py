@@ -138,15 +138,36 @@ def equity_line(result: Any) -> pd.Series:
     return pd.Series((1.0 + returns.to_numpy(dtype=float)).cumprod() - 1.0, index=days)
 
 
+#: How the plan names the reruns of this check: one per other symbol.
+OTHER_SYMBOLS = "other symbols"
+
+
+def unjudged(subject: BarRun, settings: Mapping[str, Any], objective: Any) -> Outcome | None:
+    """The "not judged" outcome of the module docstring that needs no rerun, else None:
+    the one source of whether the check reruns (`reruns`)."""
+    text = rule(settings, objective)
+    if not subject.others:
+        why = "No related symbols given: name them with others=['ICICIBANK', 'HDFCBANK']."
+        return not_judged(text, why)
+    return too_few(subject.trades, settings["min_trades"], text) or no_edge(subject.trades, text)
+
+
+def reruns(
+    subject: BarRun, settings: Mapping[str, Any], *, runs: int, seed: int, objective: Any
+) -> list[tuple[str, int]]:
+    """(`OTHER_SYMBOLS`, one run per symbol) when the check runs, none when it is not
+    judged before any run (`unjudged`)."""
+    if unjudged(subject, settings, objective) is not None:
+        return []
+    return [(OTHER_SYMBOLS, len(subject.others))]
+
+
 def run(
     subject: BarRun, settings: Mapping[str, Any], *, runs: int, seed: int, objective: Any
 ) -> Outcome:
     """The check of the module docstring."""
     text = rule(settings, objective)
-    if not subject.others:
-        why = "No related symbols given: name them with others=['ICICIBANK', 'HDFCBANK']."
-        return not_judged(text, why)
-    short = too_few(subject.trades, settings["min_trades"], text) or no_edge(subject.trades, text)
+    short = unjudged(subject, settings, objective)
     if short is not None:
         return short
     rows, lines = [], [_own_lines(subject)]
@@ -288,12 +309,15 @@ def _blocks(subject: BarRun, table: pd.DataFrame, lines: Sequence, name: str) ->
 
 
 __all__ = [
+    "OTHER_SYMBOLS",
     "SETTINGS",
     "buy_and_hold",
     "check_strategy",
     "equity_line",
     "other_run",
     "others_value",
+    "reruns",
     "rule",
     "run",
+    "unjudged",
 ]

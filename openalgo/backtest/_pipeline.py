@@ -55,6 +55,7 @@ from ._manifest import build_manifest, strategy_source_hash
 from ._margin_check import check_margin
 from ._market import MarketSettings, market_settings
 from ._messages import not_supported
+from ._perturbation import manifest_settings
 from ._rejections import reject_warnings
 from ._run_corporate_actions import (
     UnadjustedEvent,
@@ -304,8 +305,7 @@ def _arguments(
 ) -> dict[str, Any]:
     """Every argument of the run after defaults were resolved, for the manifest (the
     cost model by its label: it is a native object)."""
-    plan = prepared.plan
-    resolved = {field.name: getattr(plan, field.name) for field in dataclasses.fields(plan)}
+    resolved = manifest_settings(prepared.plan)
     resolved.update(
         costs=market.costs_label,
         slippage_rule=market.slippage_label,

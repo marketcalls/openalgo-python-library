@@ -13,7 +13,9 @@ Bars: `bars(steps)` is one NSE daily bar per session from 2023-01-02, opening at
 plus the running sum of `steps`, with the high and low 1 rupee either side of the open
 and the close at the open. `Flip` buys 10 shares when flat and exits when long, deciding
 at each bar's close and filling at the next open, so its trade k is bought at the open
-of bar 2k + 1 and sold at the open of bar 2k + 2: its net P&L is 10 x steps[2k + 1].
+of bar 2k + 1 and sold at the open of bar 2k + 2: its net P&L is 10 x steps[2k + 1]. It
+buys only with no working order, which on time it never has at a decision, so that with
+its entries held (the delayed check) it enters late rather than twice.
 `steps_for(trade_moves)` builds steps whose traded moves are `trade_moves`, repeated,
 with the move between two trades taking back the traded one so the price stays near 500.
 """
@@ -162,13 +164,15 @@ def opens_bars(opens: list[float] | np.ndarray) -> pd.DataFrame:
 
 
 class Flip(bt.Strategy):
-    """Buys 10 shares when flat and exits when long (module docstring)."""
+    """Buys 10 shares when flat with no working order and exits when long (module
+    docstring)."""
 
     symbol, exchange, interval = "SBIN", "NSE", "D"
 
     def on_bar(self, bar):
         if self.position.is_flat:
-            self.buy(qty=QUANTITY)
+            if not self.orders:
+                self.buy(qty=QUANTITY)
         else:
             self.exit()
 

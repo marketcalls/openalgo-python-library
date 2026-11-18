@@ -87,16 +87,49 @@ def resample_bars(
     exchange or (by default) bars on a date the calendar has no session for; that
     message says how to add the session.
     """
+    return shifted_bars(
+        bars,
+        interval,
+        exchange=exchange,
+        calendar=calendar,
+        source_interval=source_interval,
+        on_closed_day=on_closed_day,
+    )
+
+
+def shifted_bars(
+    bars: pd.DataFrame,
+    interval: str,
+    *,
+    exchange: str,
+    calendar: SessionCalendar | None = None,
+    source_interval: str | None = None,
+    on_closed_day: str = "error",
+    shift_nanos: int = 0,
+) -> pd.DataFrame:
+    """`resample_bars` with every bar of `interval` ending `shift_nanos` earlier: an
+    intraday lattice moved earlier inside each session, or each day ending before its
+    session's close, its later bars opening the next session's bar (the kernel's
+    `oa_bt::data::resample::shifted`, for the shifted-bars check of the robustness
+    report). A shift of 0 is `resample_bars`. Private to the package. Raises as
+    `resample_bars`, and ConfigError for a shift from daily bars or to a longer period."""
     exchange = _checked_exchange(bars, exchange)
     if on_closed_day not in _CLOSED_DAY_POLICIES:
         raise ConfigError(
             f"on_closed_day must be one of {_CLOSED_DAY_POLICIES}, got {on_closed_day!r}"
         )
     steps = _plan(_source_interval(bars, source_interval), interval)
+    if shift_nanos and (len(steps) != 1 or steps[0][0] == "period"):
+        raise ConfigError(
+            f"bars of {interval} can end earlier only when they are built in one step from "
+            "intraday bars (an intraday interval, or D)"
+        )
     if steps:
         columns = _input_columns(bars)
         kernel_calendar = _kernel_calendar(calendar, exchange, columns[0], steps)
-        frame, dropped = _run_steps(kernel_calendar, exchange, columns, steps, on_closed_day)
+        frame, dropped = _run_steps(
+            kernel_calendar, exchange, columns, steps, on_closed_day, shift_nanos
+        )
     else:  # D to D: nothing to aggregate
         _check_sorted(_input_columns(bars)[0])
         frame, dropped = bars.loc[:, list(BAR_COLUMNS)].reset_index(drop=True), {}
@@ -148,18 +181,27 @@ def _kernel_calendar(
 
 
 def _run_steps(
-    calendar: Calendar, exchange: str, columns: tuple, steps: list[tuple], on_closed_day: str
+    calendar: Calendar,
+    exchange: str,
+    columns: tuple,
+    steps: list[tuple],
+    on_closed_day: str,
+    shift_nanos: int = 0,
 ) -> tuple[pd.DataFrame, dict]:
     """Run the native resampling steps in order. Returns canonical bars and the counts
     of what was dropped, summed over the steps.
 
-    `columns` is (ts_open, open, high, low, close, volume, oi) as contiguous arrays.
+    `columns` is (ts_open, open, high, low, close, volume, oi) as contiguous arrays; a
+    `shift_nanos` reaches the one step of a shifted resampling (`shifted_bars`).
     """
     dropped = dict.fromkeys(_DROP_KEYS, 0)
+    shift = (shift_nanos,) if shift_nanos else ()
     for kind, *arguments in steps:
         function = native_attr(f"resample_{kind}")
         native = calendar._cal  # the package's own handle on the kernel calendar
-        output, counts = call_native(function, native, exchange, columns, *arguments, on_closed_day)
+        output, counts = call_native(
+            function, native, exchange, columns, *arguments, on_closed_day, *shift
+        )
         for key in _DROP_KEYS:
             dropped[key] += int(counts[key])
         # A step returns ts_close as its second column; the next step takes none.
@@ -245,4 +287,4 @@ def _plan(source: str, target: str) -> list[tuple]:
     )
 
 
-__all__ = ["resample_bars"]
+__all__ = ["resample_bars", "shifted_bars"]

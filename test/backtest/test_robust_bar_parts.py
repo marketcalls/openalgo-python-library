@@ -190,8 +190,19 @@ def _set(net_profit):
 
     pnl = np.asarray(net_profit, dtype=float)
     count = np.zeros(len(pnl), dtype=np.int64)
+    runs = len(pnl)
     return RerunSet(
-        pnl, pnl, pnl, count, pnl, pnl, count, count, np.zeros((len(pnl), 2)), ("",) * len(pnl)
+        pnl,
+        pnl,
+        pnl,
+        count,
+        pnl,
+        pnl,
+        count,
+        count,
+        np.zeros((runs, 2)),
+        ("",) * runs,
+        ((),) * runs,
     )
 
 
@@ -203,8 +214,8 @@ def test_a_rules_kept_candidates_are_judged_against_their_generators_share():
     #   b: permuted 2-9: 2 of 8, expected 0.4, 0.625 times, at least 0.5: kept
     #   c: noisy 5-9: 5 kept, fewer than min_kept 6: not judged
     #   d: permuted 4-9: 0 of 6, 0 times: it fails the check
-    from openalgo.backtest._robust._check_stress import Candidates, rule_table
     from openalgo.backtest._robust._stress_rules import StressRule
+    from openalgo.backtest._robust._stress_table import Candidates, rule_table
 
     generators = np.array(["noisy"] * 10 + ["permuted"] * 10)
     holds = {"a": [*range(5), *range(10, 15)], "b": range(12, 20), "c": range(5, 10)}

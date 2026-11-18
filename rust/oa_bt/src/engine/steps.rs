@@ -30,6 +30,7 @@ impl Engine {
         // configured yet.
         self.risk_session_open(slice);
         self.renew_old_gtts(slice)?;
+        self.apply_held_changes(slice)?;
         if self.timers_fired_ahead(slice) {
             self.finish_open_slice(slice)?;
             return Ok(None);
@@ -68,13 +69,19 @@ impl Engine {
             };
             self.risk_exits_at_open(slice, instrument, bar.open)?;
             self.gtt_exits_at_open(slice, instrument, bar.open)?;
-            for id in self.book.queued_for(instrument) {
+            let queued = self
+                .fill_model()
+                .is_none()
+                .then(|| self.book.queued_for(instrument));
+            for id in queued.unwrap_or_default() {
                 self.fill_queued(slice, id, bar.open)?;
             }
             self.time_exit_at_open(slice, instrument, bar.open)?;
             self.square_off_at_open(slice, instrument, bar.open)?;
         }
-        self.fill_rebalance_buys(slice)?;
+        if self.fill_model().is_none() {
+            self.fill_rebalance_buys(slice)?;
+        }
         self.roll_due_futures(slice)
     }
 
@@ -89,7 +96,8 @@ impl Engine {
         }
         self.test_leg_levels(slice)?;
         self.test_gtts(slice)?;
-        self.test_resting_orders(slice)
+        self.test_resting_orders(slice)?;
+        self.fill_queued_at_model(slice)
     }
 
     /// Step 4: trail and breakeven ratchets, in force from the next slice

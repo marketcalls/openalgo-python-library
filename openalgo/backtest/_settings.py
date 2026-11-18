@@ -34,6 +34,7 @@ from ._intraday_assumptions import TIMES as INTRADAY_TIMES
 from ._intraday_assumptions import intraday_times
 from ._layout import parse_interval
 from ._messages import not_supported
+from ._perturbation import FILL_MODELS, delay, delay_assumption, perturbation
 from ._scale_in import describe as describe_scale_limits
 from ._scale_in import scale_limits
 from ._series import IST
@@ -47,7 +48,7 @@ from .errors import ConfigError
 from .units import Distance
 
 DERIVATIVE_EXCHANGES = ("NFO", "BFO", "MCX", "CDS", "BCD")
-FILL_MODES = ("next_open", "close")
+FILL_MODES = ("next_open", "close", *FILL_MODELS)
 QUANTITY_MODES = ("fractional", "venue")
 RISK_BASES = ("gross", "net")
 AFTER_RISK_EXIT = ("lock_session", "allow_reentry")
@@ -97,6 +98,15 @@ class RunPlan:
     roll: int | None = 1
     # The run's own futures margin (`margin=`, `_futures_margin`), None for the default.
     margin: MarginSetting = None
+    # Strategy bars a decided entry and a decided exit are held before they can fill
+    # (`delay_entries=`, `delay_exits=`; the kernel's `engine::delay`).
+    delay_entries: int = 0
+    delay_exits: int = 0
+    # Set by the robustness reruns only (`_robust`), never by a run argument: base bars by
+    # which every strategy bar ends earlier (`engine::shifted_bars`), and the factors of
+    # each trade's leg-rule distances (`engine::exit_scale`).
+    bar_shift: int = 0
+    exit_scales: tuple[float, ...] = ()
 
     def native_config(self, deliver_events: bool) -> dict[str, Any]:
         """The config dict of the native engine."""
@@ -130,6 +140,7 @@ class RunPlan:
             "risk": self.risk,
             "deliver_events": deliver_events,
             **minutes,
+            **perturbation(self),
         }
 
 
@@ -351,6 +362,8 @@ def resolve(strategy: type, args: dict[str, Any]) -> RunPlan:
         warnings=tuple(warnings),
         roll=check_roll(args["roll"]),
         margin=parse_margin(args["margin"]),
+        delay_entries=delay(args.get("delay_entries", 0), "delay_entries"),
+        delay_exits=delay(args.get("delay_exits", 0), "delay_exits"),
     )
 
 
@@ -373,6 +386,7 @@ def assumptions(plan: RunPlan, calendar: Any) -> dict[str, Any]:
         capital=plan.capital,
     )
     block.update(_risk_assumptions(plan))
+    block.update(delay_assumption(plan))
     return block
 
 

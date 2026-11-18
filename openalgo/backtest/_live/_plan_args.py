@@ -66,6 +66,8 @@ NOT_LIVE = MappingProxyType(
         "corporate_actions": "the session reads the broker's history as the broker gives it",
         "base": "a live session's bars are built on 1-minute slices",
         "fill": "the broker fills the orders",
+        "delay_entries": "a live session sends each order when it is decided",
+        "delay_exits": "a live session sends each order when it is decided",
         "slippage": "the broker prices the fills",
         "margin": "the broker computes the margin",
         "quantity_mode": "a live session trades whole shares and lots",
