@@ -20,11 +20,13 @@ import dataclasses
 from collections.abc import Iterator
 from typing import Any
 
+from record_objects import KEPT
 from session_record import (
     FORMAT,
     INPUTS,
     SERIES_CALLS,
     VERSION,
+    ReplayError,
     SessionRecord,
     candle_rows,
     failure_of,
@@ -150,7 +152,7 @@ def record_sessions(monkeypatch: Any) -> SessionRecorder:
             "version": VERSION,
             "day": spec.day.isoformat(),
             "strategies": classes,
-            "arguments": plain(arguments),
+            "arguments": _kept(arguments),
             "specified_ns": present,
         }
         recorder.records.append(SessionRecord(header))
@@ -243,6 +245,20 @@ def _record_units(recorder: SessionRecorder, monkeypatch: Any) -> None:
     monkeypatch.setattr(StrategyPlan, "_drive", caught_up)
     monkeypatch.setattr(_session_close, "_stop_engine", stopped)
     monkeypatch.setattr(News, "apply_update", news)
+
+
+def _kept(arguments: dict[str, Any]) -> dict[str, Any]:
+    """`bt.live`'s keyword arguments as the header keeps them. Raises ReplayError naming
+    an argument a record cannot keep, and what to pass instead."""
+    kept = {}
+    for name, value in arguments.items():
+        try:
+            kept[name] = plain(value)
+        except ReplayError as error:
+            raise ReplayError(
+                f"bt.live's {name}= cannot be kept in a session record ({error}): pass {KEPT}"
+            ) from error
+    return kept
 
 
 def _path(cls: type) -> str:

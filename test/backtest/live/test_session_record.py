@@ -4,23 +4,74 @@ sessions of `replay_samples`.
 
 A record holds the session's ticks, news, kernel inputs with their results, decisions and
 commands, the lines that define its scenario, the mode OpenAlgo was in, the `bt.live`
-arguments it was given (a distance as a tagged object), and at its close the kernel's
-whole run output. Its file is strict JSON lines: a number with no value (a live fill's
-modelled slippage) is written null.
+arguments it was given (a distance, a brokerage preset or a cost model as a tagged
+object, `record_objects`), and at its close the kernel's whole run output. Its file is
+strict JSON lines: a number with no value (a live fill's modelled slippage) is written
+null. An argument a record cannot keep stops the session at its start, named.
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import logging
 
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
+from record_objects import untagged
 from replay_fixtures import *  # noqa: F403
 from replay_samples import commands, recorded
-from session_record import FORMAT, VERSION, ReplayError, SessionRecord, with_distances
+from session_record import FORMAT, VERSION, ReplayError, SessionRecord, plain
+from session_recorder import record_sessions
+from session_samples import ist
+from stops_samples import StopHold, stop_world
 
+import openalgo.backtest as bt
 from openalgo.backtest._live._types import LOGGER_NAME
+from openalgo.backtest.units import Distance
+
+#: Brokerage presets a `bt.live` call may give as `costs=`, by how they are built.
+BROKERAGES = {
+    "zerodha": bt.costs.zerodha(),
+    "zero brokerage": bt.costs.zero_brokerage(),
+    "zero brokerage, own DP fee": bt.costs.zero_brokerage(dp_fee=10),
+    "flat": bt.costs.flat(20),
+    "flat, own DP fee": bt.costs.flat(20, dp_fee=12),
+    "percent with a cap": bt.costs.percent(0.03, 20),
+    "percent with no cap": bt.costs.percent(0.07),
+    "custom": bt.costs.custom(
+        delivery=("percent", 0.1, 30), intraday=("percent", 0.03, 20), futures=20, options=20,
+        dp_fee=15, name="my broker",
+    ),
+}  # fmt: skip
+#: Cost models a `bt.live` call may give as `costs=`: on the built-in schedule versions,
+#: and on versions of the user's own (the first two built-in ones, alone).
+COST_MODELS = {
+    "built-in schedules": lambda: bt.costs.CostModel(
+        bt.costs.flat(20), "calculator", backfill=True
+    ),
+    "own schedules": lambda: bt.costs.CostModel(
+        bt.costs.percent(0.03, 20), schedules=bt.costs.schedules()[:2], include_builtin=False
+    ),
+}
+
+
+class HoldsFrom(StopHold):
+    """`StopHold` with a parameter JSON cannot hold, a time of day, which it never reads."""
+
+    hold_from = bt.param(dt.time(14, 41))
+
+
+def strict(value: object) -> object:
+    """`value` as a record keeps it, through strict JSON text and back."""
+    return json.loads(json.dumps(plain(value), allow_nan=False))
+
+
+def cost_fields(model: bt.costs.CostModel) -> tuple:
+    """What a cost model charges by: its brokerage (and its name), rounding, backfill and
+    schedule versions."""
+    brokerage = model.brokerage
+    return brokerage, brokerage.name, model.rounding, model.backfill, model.schedules()
 
 
 def refuse(constant: str) -> None:
@@ -49,16 +100,67 @@ def test_a_records_header_names_the_mode_openalgo_was_in(session):
 
 
 def test_a_distance_argument_is_kept_as_a_tagged_object_and_read_back_as_given(session):
+    given = {n: v for n, v in session.scenario.objects.items() if isinstance(v, Distance)}
     for record in session.records:
         arguments = record.header["arguments"]
-        for name, distance in session.scenario.distances.items():
+        for name, distance in given.items():
             assert arguments[name] == {
                 "tag": "distance",
                 "unit": distance.unit,
                 "value": distance.value,
                 "period": distance.period,
             }
-        assert with_distances(arguments) == arguments | session.scenario.distances
+        assert untagged(arguments) == arguments | session.scenario.objects
+
+
+def test_a_cost_preset_argument_is_kept_by_its_terms_and_read_back_as_given(session):
+    # The sandbox session's costs=bt.costs.flat(20): Rs 20 an executed order in each of
+    # delivery, intraday, futures and options, Zerodha's DP fee standing in.
+    given = {n: v for n, v in session.scenario.objects.items() if n == "costs"}
+    for record in session.records:
+        arguments = record.header["arguments"]
+        for name in given:
+            assert arguments[name] == {
+                "tag": "brokerage",
+                "name": "flat(20)",
+                "dp_fee": None,
+                "rules": [["flat", 20.0, 0.0]] * 4,
+            }
+        back = untagged(arguments)
+        assert [(back[n], back[n].name) for n in given] == [(v, v.name) for v in given.values()]
+
+
+@pytest.mark.parametrize("brokerage", BROKERAGES.values(), ids=list(BROKERAGES))
+def test_a_brokerage_preset_reads_back_equal_with_its_name_and_dp_fee(brokerage):
+    kept = strict(brokerage)
+    back = untagged(kept)
+    assert kept["tag"] == "brokerage"
+    assert (back, back.name, back.dp_fee, back.dp_fee_source) == (
+        brokerage,
+        brokerage.name,
+        brokerage.dp_fee,
+        brokerage.dp_fee_source,
+    )
+
+
+@pytest.mark.parametrize("model", COST_MODELS.values(), ids=list(COST_MODELS))
+def test_a_cost_model_reads_back_with_its_brokerage_rounding_backfill_and_schedules(model):
+    given = model()
+    kept = strict(given)
+    assert kept["tag"] == "cost_model"
+    assert cost_fields(untagged(kept)) == cost_fields(given)
+
+
+def test_an_argument_a_record_cannot_keep_stops_the_session_at_its_start_naming_it(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog
+):
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+    world = stop_world(make_fake_openalgo, monkeypatch, tmp_path)
+    record_sessions(monkeypatch)
+    world.stop_at(ist(14, 44))
+    with pytest.raises(ReplayError, match=r"bt\.live's params= cannot be kept .* pass JSON"):
+        world.run(HoldsFrom, on_stop="keep", params={"hold_from": dt.time(14, 42)})
+    assert world.orders() == []
 
 
 def test_a_record_file_is_strict_json_lines(session):

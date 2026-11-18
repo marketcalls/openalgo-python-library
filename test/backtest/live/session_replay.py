@@ -23,6 +23,7 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from record_objects import untagged
 from session_record import (
     ReplayError,
     SessionRecord,
@@ -30,7 +31,6 @@ from session_record import (
     failure_of,
     plain,
     run_output,
-    with_distances,
 )
 
 from openalgo.backtest._live import _session_close
@@ -139,7 +139,7 @@ def _parts(record: SessionRecord) -> dict[str, StrategyPlan]:
     candles, by name. Raises ReplayError when the candles do not rebuild a warm-up."""
     header = record.header
     classes = [_resolve(each["class"]) for each in header["strategies"]]
-    arguments = with_distances(header["arguments"])
+    arguments = untagged(header["arguments"])
     spec = plan_module.specify(classes, clock=lambda: header["specified_ns"], **arguments)
     calendar = default_calendar()
     facts = [InstrumentFacts(**fact) for fact in header["facts"]]

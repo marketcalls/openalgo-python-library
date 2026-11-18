@@ -17,8 +17,10 @@ every 10 s):
   resumes the leg and trails its stop (F50). Two runs, two records.
 - **Sandbox.** The trailing session with OpenAlgo's analyzer switch on, its strategy
   (`AveragedTrails`) holding a 400-bar average whose warm-up reaches into the sessions
-  before today, and its limits given as distances (`max_daily_loss=bt.rupees(5000)`,
-  `drawdown_halt=bt.pct(10)`), as a recorded sandbox day may have them.
+  before today, its limits given as distances (`max_daily_loss=bt.rupees(5000)`,
+  `drawdown_halt=bt.pct(10)`) and its charges as a brokerage preset
+  (`costs=bt.costs.flat(20)`, for a broker with no preset of its name), as a recorded
+  sandbox day may have them.
 
 `recorded` runs one under the recorder and writes each of its records to a file;
 `replay_fixtures.session` is the pytest fixture of all four. Each session's `defining` check asserts
@@ -45,8 +47,13 @@ from openalgo import ta
 
 #: The bars of `AveragedTrails`' average: more than today holds before 14:40 (325).
 WARM_UP_BARS = 400
-#: The sandbox session's limits, in their distance forms.
-DISTANCE_LIMITS = {"max_daily_loss": bt.rupees(5_000), "drawdown_halt": bt.pct(10)}
+#: The sandbox session's `bt.live` arguments given as objects: its limits as distances,
+#: its charges as a brokerage preset (Rs 20 an executed order).
+OBJECT_ARGUMENTS = {
+    "max_daily_loss": bt.rupees(5_000),
+    "drawdown_halt": bt.pct(10),
+    "costs": bt.costs.flat(20),
+}
 
 
 class AveragedTrails(Trails):
@@ -90,7 +97,7 @@ def crash_and_restart(world: Any) -> None:
 
 def sandbox(world: Any) -> None:
     """The sandbox session (module docstring)."""
-    trailing(world, AveragedTrails, **DISTANCE_LIMITS)
+    trailing(world, AveragedTrails, **OBJECT_ARGUMENTS)
 
 
 # ----- the lines that define each session ----------------------------------------------------
@@ -154,14 +161,14 @@ def resumes_the_leg_after_the_crash(records: list[SessionRecord]) -> None:
 class Scenario:
     """A session to record: how it is played, the kinds of line its records hold between
     them, the check of its defining lines, the units of SBIN it holds at its end, the
-    mode OpenAlgo is in, and the `bt.live` arguments it gives in their distance forms."""
+    mode OpenAlgo is in, and the `bt.live` arguments it gives as objects."""
 
     play: Callable[[Any], None]
     kinds: frozenset[str]
     defining: Callable[[list[SessionRecord]], None]
     held_at_end: float
     analyzer: bool = False
-    distances: dict[str, Any] = field(default_factory=dict)
+    objects: dict[str, Any] = field(default_factory=dict)
 
     @property
     def mode(self) -> str:
@@ -194,7 +201,7 @@ SCENARIOS = {
         modifies_its_stop_up,
         held_at_end=10.0,
         analyzer=True,
-        distances=DISTANCE_LIMITS,
+        objects=OBJECT_ARGUMENTS,
     ),
 }
 
@@ -225,7 +232,7 @@ def recorded(name: str, make_fake_openalgo: Any, monkeypatch: Any, tmp_path: Pat
 
 
 __all__ = [
-    "DISTANCE_LIMITS",
+    "OBJECT_ARGUMENTS",
     "SCENARIOS",
     "WARM_UP_BARS",
     "AveragedTrails",

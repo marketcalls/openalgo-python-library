@@ -13,9 +13,10 @@ strategy's decisions, and the commands the kernel issued.
 
 **The format** ("openalgo-live-session", version 1): JSON lines, UTF-8, one object a line,
 strict JSON (a number with no value, NaN, is written null; an infinite one is refused),
-times UTC nanoseconds, prices rupees, quantities units. A distance (`bt.points`,
-`bt.pct`, `bt.rupees`, `bt.ticks`, `bt.atr`) is written as a tagged object,
-{"tag": "distance", "unit", "value", "period"}, and read back as one (`with_distances`).
+times UTC nanoseconds, prices rupees, quantities units. A `bt.live` argument that is not a
+JSON value but an object a replay must give again (a distance, a brokerage preset, a cost
+model) is written as a tagged object, as `record_objects` describes, and read back as the
+object it was.
 
 - Line 1, the header: `format`, `version`, `day` (the IST trading day, ISO), `mode`
   ("live" or "sandbox": the mode OpenAlgo's analyzer switch was in at the start),
@@ -52,7 +53,6 @@ Every line but the header carries `strategy`.
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import math
 import os
@@ -63,8 +63,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-
-from openalgo.backtest.units import Distance
+from record_objects import tagged
 
 FORMAT = "openalgo-live-session"
 VERSION = 1
@@ -101,9 +100,6 @@ SERIES_CALLS = ("take", "mark_missing", "no_trade")
 #: The columns of a `history` row, in order.
 CANDLE_COLUMNS = ("ts_open", "open", "high", "low", "close", "volume")
 _PRICES = CANDLE_COLUMNS[1:]
-#: The tag of a `Distance` written as an object (module docstring).
-DISTANCE_TAG = "distance"
-_DISTANCE_KEYS = frozenset({"tag", "unit", "value", "period"})
 
 
 class ReplayError(AssertionError):
@@ -113,8 +109,13 @@ class ReplayError(AssertionError):
 
 def plain(value: Any) -> Any:
     """`value` as a record keeps it (module docstring): tuples as lists, keys as text,
-    NumPy as Python, NaN as None, a distance as its tagged object."""
-    return _nan_as_none(json.loads(json.dumps(value, default=_json_default)))
+    NumPy as Python, NaN as None, an object `record_objects` names as its tagged object.
+    Raises ReplayError for a value a record cannot keep."""
+    try:
+        text = json.dumps(value, default=_json_default)
+    except ValueError as error:
+        raise ReplayError(f"a record cannot keep it: {error}") from error
+    return _nan_as_none(json.loads(text))
 
 
 def _nan_as_none(value: Any) -> Any:
@@ -128,27 +129,16 @@ def _nan_as_none(value: Any) -> Any:
 
 
 def _json_default(value: Any) -> Any:
-    if isinstance(value, Distance):
-        return {"tag": DISTANCE_TAG, **dataclasses.asdict(value)}
+    found = tagged(value)
+    if found is not None:
+        return found
     if isinstance(value, np.generic):
         return value.item()
     if isinstance(value, np.ndarray):
         return value.tolist()
     if isinstance(value, os.PathLike):
         return os.fspath(value)
-    raise ReplayError(f"a record keeps JSON values only, not {type(value).__name__}: {value!r}")
-
-
-def with_distances(value: Any) -> Any:
-    """`value` read from a record with each tagged distance (module docstring) a
-    `Distance` again."""
-    if isinstance(value, dict):
-        if value.get("tag") == DISTANCE_TAG and set(value) == _DISTANCE_KEYS:
-            return Distance(value["unit"], value["value"], value["period"])
-        return {key: with_distances(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [with_distances(item) for item in value]
-    return value
+    raise ReplayError(f"a record keeps no {type(value).__name__}: {value!r}")
 
 
 def failure_of(error: BaseException) -> dict[str, str]:
@@ -281,7 +271,6 @@ def output_of(line: Mapping[str, Any]) -> Any:
 
 __all__ = [
     "CANDLE_COLUMNS",
-    "DISTANCE_TAG",
     "FORMAT",
     "INPUTS",
     "SERIES_CALLS",
@@ -293,5 +282,4 @@ __all__ = [
     "output_of",
     "plain",
     "run_output",
-    "with_distances",
 ]
