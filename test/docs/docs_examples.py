@@ -77,10 +77,12 @@ FENCE = re.compile(r"^```(\w*)\s*$")
 # of the module), whatever object it is called on, so no spelling of the module escapes.
 LIVE_SESSION_CALL = re.compile(r"\.\s*live\s*\(")
 TICK_RECORDING_CALL = re.compile(r"\.\s*record\s*\(")
-# The names a script imports from `openalgo.backtest`, on one line or in brackets over
-# several; a name it imports can be called bare or under another name.
+# The names a script imports from `openalgo.backtest` or one of its modules (`run`
+# defines both calls), on one line or in brackets over several; a name it imports can be
+# called bare or under another name.
 BACKTEST_IMPORT = re.compile(
-    r"from\s+openalgo\.backtest\s+import\s+(?:\((?P<bracketed>[^)]*)\)|(?P<names>[^\n#]*))"
+    r"from\s+openalgo\.backtest(?:\.\w+)*\s+import\s+"
+    r"(?:\((?P<bracketed>[^)]*)\)|(?P<names>[^\n#]*))"
 )
 # The private live layer (`openalgo.backtest._live`), whose session and recorder the two
 # public calls wrap.

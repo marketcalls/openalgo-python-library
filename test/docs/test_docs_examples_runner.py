@@ -265,6 +265,9 @@ LIVE_CALLS = {
         'from openalgo.backtest import (\n    costs,\n    live,\n)\nlive("EmaCrossover")'
     ),
     "every name imported": 'from openalgo.backtest import *\nlive("EmaCrossover")',
+    "live imported from the run module": (
+        'from openalgo.backtest.run import live\nlive("EmaCrossover")'
+    ),
     "the private live layer": (
         'from openalgo.backtest._live.session import run_session\nrun_session("EmaCrossover", None)'
     ),
@@ -323,6 +326,9 @@ RECORD_CALLS = {
     "record imported by name": 'from openalgo.backtest import record\nrecord("client", [])',
     "record imported under another name": (
         'from openalgo.backtest import record as keep\nkeep("client", [])'
+    ),
+    "record imported from the run module": (
+        'from openalgo.backtest.run import record\nrecord("client", [])'
     ),
 }
 
