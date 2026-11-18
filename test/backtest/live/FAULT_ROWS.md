@@ -185,7 +185,7 @@ defects):
 | `test_session_close_differing.py`: the `all_sold` tests (inline and threads) | 5.4 "As built", round 8: the close names the stop working on a flat position |
 | `test_session_close_hand_sale.py`: every test (the final read with no books; the cut held, dropped or asked for as the final read ends) | 3.3 step 5 and 5.4 "As built", rounds 6 to 8: the close does not fit the stop to a sale it has not settled, and names it |
 | `test_reconcile_hand_sales.py::test_a_cut_the_broker_refuses_leaves_the_stop_for_10_and_nothing_claims_protection`, `test_the_error_alert_names_a_cut_the_broker_refused` | 3.3 step 5 "As built", round 7: a refused cut is named |
-| `test_reconcile_hand_sales.py::test_the_error_alert_names_a_cut_with_no_answer_by_the_close_and_claims_no_protection` | 3.3 step 5 "As built", round 7: a cut with no answer by the close |
+| `test_reconcile_hand_sales.py::test_the_error_alert_names_a_cut_with_no_answer_by_the_close_and_claims_no_protection` (inline only: on the threads the slow cut reaches the broker, so no stop stays beyond the position; unit 16 found the declaration unneeded there) | 3.3 step 5 "As built", round 7: a cut with no answer by the close |
 | `test_reconcile_hand_sales.py::test_an_adoption_the_kernel_refuses_leaves_the_stop_for_10_and_sends_nothing`, `test_the_close_names_the_held_cancel_an_adoption_the_kernel_refused_made_way_for`, `test_the_mismatch_alert_of_an_adoption_the_kernel_refused_claims_no_adoption` | 3.3 step 5 "As built", round 8: an adoption the kernel refuses leaves the stop as it was |
 
 What would remove the first list instead: fitting the stop at the first comparison that
