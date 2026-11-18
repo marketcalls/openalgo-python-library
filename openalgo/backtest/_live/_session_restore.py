@@ -51,6 +51,7 @@ from ._fill_ledger import VENUE_REJECT_CODE
 from ._plan_release import CANDLE_LAST_READ_S
 from ._reconcile_rules import Kind, LegBooks
 from ._restart_books import LegStart, Restart
+from ._session_records import restored
 from ._session_saved import Saved
 from ._session_trader import Trader
 from ._stops_kernel import protect
@@ -125,6 +126,7 @@ def _restore(session: Any, trader: Trader, saved: Saved, restart: Restart) -> No
             "cannot resume it. Check its positions in OpenAlgo"
         ) from error
     pairs = {int(old): int(new) for old, new in pairs.items()}
+    trader.records.restored = restored(trader)
     session.event("restored", strategy=trader.name, orders=len(pairs))
     logger.info(
         "%s restored: the events its kernel had not delivered before the restart are lost",

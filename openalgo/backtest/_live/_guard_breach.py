@@ -5,6 +5,7 @@ section 3). `guard.ModeGuard` builds them; `guard` re-exports `ModeBreach` and `
 from __future__ import annotations
 
 import enum
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from .._calendar_convert import format_ist
@@ -83,4 +84,16 @@ def breach_text(breach: ModeBreach) -> str:
     return f"{text} The session sends nothing more. {again} again in the mode you want."
 
 
-__all__ = ["ModeBreach", "SeenIn", "breach_text"]
+def breach_alert(positions: Sequence[str]) -> str:
+    """The session's ERROR alert when the mode guard locked (16-session-design 6.2): it
+    sends nothing more, and each position as last known, in words with its stop
+    (`positions`)."""
+    held = "; ".join(positions) if positions else "no open position"
+    return (
+        f"OpenAlgo's mode changed: the session sends nothing more. Positions as last known: "
+        f"{held}. The broker's MIS square-off closes what is left; stop the session with "
+        "Ctrl+C"
+    )
+
+
+__all__ = ["ModeBreach", "SeenIn", "breach_alert", "breach_text"]

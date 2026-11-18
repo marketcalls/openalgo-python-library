@@ -38,6 +38,7 @@ from ._order_answers import Outcome
 from ._order_book import Resolved
 from ._order_state import ENTRY_PURPOSES
 from ._session_feed import take_candles, take_data_failed, take_feed_event, take_quote, take_tick
+from ._session_records import fill_record
 from ._session_trader import Trader
 from ._types import LOGGER_NAME, AlertKind, OrderIntent, OrderStatus, OrderUpdate
 from ._venue_requests import Applied, CancelRequest, ModifyRequest, PlaceRequest
@@ -122,7 +123,10 @@ class News:
         alerts it calls for and note it in the event stream."""
         session = self._session
         kernel_order = trader.venue.kernel_order_of(update.order_id)
+        before = trader.open_units()
         result = trader.venue.news(update)
+        if result.increment is not None:
+            trader.records.filled(before, trader.open_units())
         session.stops.updated(trader, update, result)
         intent = trader.venue.intent_of(result.kernel_order)
         session.event(
@@ -152,7 +156,11 @@ class News:
 
     def _fill_alert(self, intent: OrderIntent, update: OrderUpdate, increment: Increment) -> None:
         kind = AlertKind.ENTRY if intent.purpose in ENTRY_PURPOSES else AlertKind.EXIT
-        self._session.event(
+        session = self._session
+        estimated = session.stops.held.estimated(update.order_id, update.filled_quantity)
+        record = fill_record(intent, update, increment, estimated=estimated)
+        session.fills.append(record)
+        session.event(
             "fill",
             strategy=intent.strategy,
             order_id=update.order_id,
@@ -160,7 +168,7 @@ class News:
             price=increment.price,
             source=update.source,
             derived_from_average=increment.derived_from_average,
-            estimated=self._session.stops.held.estimated(update.order_id, update.filled_quantity),
+            estimated=record.estimated,
         )
         self._session.alert(
             kind,

@@ -1,8 +1,9 @@
 """The fill ledger (`_fill_ledger`, 16-session-design 2.6): the one door through which every
 fill of an own order reaches the kernel. Cumulative words (filled quantity and average
 price of the whole order) become increments, priced from the two cumulative values: put
-on the tick where the average's rounding bound tells it, flagged where the bound is too
-wide to tell the tick, the average itself used only when the derived price is not a
+on the tick where the average's rounding bound tells it, flagged only where the units'
+price may lie on another tick than the one shown (never a first fill, priced at the
+broker's own average), the average itself used only when the derived price is not a
 price; a stale or repeated word ignored, and a terminal word ending the order in the
 kernel; a refusal by the kernel is alerted as a mismatch.
 
@@ -83,6 +84,48 @@ TICK = 0.05
 )
 def test_a_cumulative_word_gives_the_units_newly_filled_and_their_price(known, word, expected):
     assert next_increment(*known, *word, TICK) == expected
+
+
+@pytest.mark.parametrize(
+    ("tick", "known", "word", "expected"),
+    [
+        # A first fill is priced at the broker's average itself: exact, whatever the tick.
+        (0.01, (0, 0.0), (40, 500.13), Increment(40, 500.13)),
+        (0.05, (0, 0.0), (40, 500.10), Increment(40, 500.10)),
+        # A currency tick finer than the paisa the average is given to: still the average.
+        (0.0025, (0, 0.0), (100, 82.12), Increment(100, 82.12)),
+        # 40 at 500.13, then 60 more averaged to 500.16: the 60 come to 500.18, but the
+        # average to the paisa leaves them anywhere from 500.17 to 500.19, three ticks.
+        (
+            0.01,
+            (40, 20_005.2),
+            (100, 500.16),
+            Increment(60, 500.18, derived_from_average=True),
+        ),
+        # 60 at 500.00, then 40 more averaged to 500.02: the 40 come to 500.05, and the
+        # paisa leaves them strictly between 500.025 and 500.075, where 500.05 is the one
+        # tick: exact.
+        (0.05, (60, 30_000.0), (100, 500.02), Increment(40, 500.05)),
+        # 90 at 500.00, then 10 more averaged to 500.01: the 10 come to 500.10, and the
+        # paisa leaves them between 500.00 and 500.20, where 500.05, 500.10 and 500.15 lie.
+        (
+            0.05,
+            (90, 45_000.0),
+            (100, 500.01),
+            Increment(10, 500.1, derived_from_average=True),
+        ),
+    ],
+    ids=[
+        "a first fill at a 0.01 tick",
+        "a first fill at a 0.05 tick",
+        "a first fill at a tick finer than the average",
+        "a later fill at a 0.01 tick that may lie on a tick either side",
+        "a later fill at a 0.05 tick with one tick within its bound",
+        "a later fill at a 0.05 tick with three ticks within its bound",
+    ],
+)
+def test_a_fill_is_flagged_only_when_its_price_may_lie_on_another_tick(tick, known, word, expected):
+    assert next_increment(*known, *word, tick) == (FillOutcome.APPLIED, expected)
 
 
 @pytest.mark.parametrize(

@@ -14,6 +14,9 @@ from ..calendar import Calendar, default_calendar
 from ..errors import CalendarError, ConfigError
 from ._tick_files import day_bounds, instrument_key, ist_day
 
+#: How the recorder's own stop is named in its errors (`bt.record` names its own).
+STOP_AT_WORDS = "stop_at_ns (UTC nanoseconds)"
+
 #: The feed modes a recording can subscribe in: LTP, quote (the default) and depth. The
 #: SDK's depth data carries no volume and no last trade time; quote data no bid or ask.
 RECORD_MODES = ("ltp", "quote", "depth")
@@ -81,7 +84,7 @@ def stop_instant(
     for a stop that is not an int, not after the start or after the end of the start's
     day; CalendarError when no exchange of the instruments has a session that day."""
     if stop_at_ns is None:
-        stop_ns = _close_of_day(wanted, started_ns, calendar)
+        stop_ns = close_of_day(wanted, started_ns, calendar)
         if stop_ns <= started_ns:
             raise ConfigError(
                 f"the sessions of {ist_day(started_ns)} closed at {format_ist(stop_ns)}: "
@@ -108,10 +111,17 @@ def stop_instant(
     return int(stop_at_ns)
 
 
-def _close_of_day(
-    wanted: tuple[tuple[str, str], ...], started_ns: int, calendar: Calendar | None
+def close_of_day(
+    wanted: tuple[tuple[str, str], ...],
+    started_ns: int,
+    calendar: Calendar | None,
+    *,
+    stop_words: str = STOP_AT_WORDS,
 ) -> int:
-    """The latest close of the instruments' exchanges on the IST day of the start."""
+    """The latest close of the instruments' exchanges `wanted` on the IST day of the start
+    (UTC nanoseconds), from `calendar` (the package's when None). Raises CalendarError
+    when none of them has a session that day, telling the user to pass the stop
+    `stop_words` names."""
     calendar = default_calendar() if calendar is None else calendar
     day = ist_day(started_ns)
     exchanges = list(dict.fromkeys(exchange for exchange, _ in wanted))
@@ -119,10 +129,18 @@ def _close_of_day(
     closes = [session[1] for session in sessions if session is not None]
     if not closes:
         raise CalendarError(
-            f"{', '.join(exchanges)} has no session on {day}: pass stop_at_ns (UTC "
-            "nanoseconds) to record on a day the calendar holds no session"
+            f"{', '.join(exchanges)} has no session on {day}: pass {stop_words} to record on "
+            "a day the calendar holds no session"
         )
     return max(closes)
 
 
-__all__ = ["RECORD_MODES", "feed_calls", "instruments_of", "queue_size_of", "stop_instant"]
+__all__ = [
+    "RECORD_MODES",
+    "STOP_AT_WORDS",
+    "close_of_day",
+    "feed_calls",
+    "instruments_of",
+    "queue_size_of",
+    "stop_instant",
+]

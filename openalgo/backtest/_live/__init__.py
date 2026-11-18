@@ -1,9 +1,10 @@
 """The live layer of `bt.live` (Phase 2, PRD 15-phase2-plan): the adapter between the Rust
 kernel and an OpenAlgo server, in the mode set inside OpenAlgo (D21).
 
-Private: `import openalgo.backtest` does not import it, and `bt.live` imports it when it
-runs. The package is named `_live`, not `live`: importing a subpackage binds it as an
-attribute of its parent, which would replace the `bt.live` function.
+Private: `import openalgo.backtest` does not import it, and `bt.live` and `bt.record`
+import it when they run. The package is named `_live`, not `live`: importing a
+subpackage binds it as an attribute of its parent, which would replace the `bt.live`
+function.
 
 | Module | Responsibility |
 |---|---|
@@ -29,6 +30,8 @@ attribute of its parent, which would replace the `bt.live` function.
 | `stops` | The stops supervisor: broker-held stops, exits that fail, protection, held words |
 | `watch` | The risk watch: a dead or quiet feed, clock skew, the account loss and the kill switch |
 | `reconcile` | The reconciler: the books compared leg by leg, safe corrections, the exit guard |
+| `_result_build` | `bt.live`'s `SessionResult`: each strategy's `Result`, tables, warnings |
+| `_record_verb` | What `bt.record` runs: the recorder on a client of its own, until a time |
 
 Times are UTC nanoseconds, prices rupees and quantities units, never lots. No module
 prints: they log to the `openalgo.backtest.live` logger, and a session's own output goes

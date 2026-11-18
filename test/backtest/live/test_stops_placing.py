@@ -294,7 +294,10 @@ def test_an_entry_without_a_stop_rule_is_warned_about_and_never_counted_unprotec
 
     assert outcome.unprotected == ()
     assert any("no stop at the broker" in warning for warning in outcome.warnings)
-    assert any(line.startswith("Warning: NoStop: an entry without stop=") for line in world.lines)
+    assert any(
+        line.startswith("Warning: NoStop: a position of 10 SBIN NSE was opened with no stop")
+        for line in world.lines
+    )
 
 
 def test_a_trail_moves_the_brokers_stop_and_a_stop_moved_alert_says_so(world, caplog):

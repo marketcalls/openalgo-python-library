@@ -45,6 +45,7 @@ from ..errors import JournalError, LiveError
 from ._journal_rows import state_json
 from ._plan_catch_up import INSTRUMENT, StrategyPlan
 from ._session_candles import CandleKeeper
+from ._session_records import StrategyRecords
 from ._types import LOGGER_NAME, LiveBar, Now
 from ._venue_requests import LIVE_PRODUCT, OrderRequest
 from .venue_map import VenueMap
@@ -121,6 +122,8 @@ class Trader:
         self.failed = False
         #: True once the kernel session has finished: it takes no call that changes it.
         self.finished = False
+        #: Its entry locks and the round trips it closed, for the result.
+        self.records = StrategyRecords(self.name)
         self._slow_warned = self._state_warned = False
         self._state_text = self._state_json()
 
@@ -346,11 +349,17 @@ class Trader:
     def lock(self, reason: str) -> bool:
         """Lock the strategy's entries for `reason`; True when they were not locked for
         it (False once the kernel session finished: it takes no entry)."""
-        return not self.finished and bool(call(self.engine.lock_entries, reason))
+        locked = not self.finished and bool(call(self.engine.lock_entries, reason))
+        if locked:
+            self.records.locked(reason, self._now())
+        return locked
 
     def unlock(self, reason: str) -> bool:
         """Lift the entry lock of `reason`; True when it was set."""
-        return not self.finished and bool(call(self.engine.unlock_entries, reason))
+        lifted = not self.finished and bool(call(self.engine.unlock_entries, reason))
+        if lifted:
+            self.records.unlocked(reason, self._now())
+        return lifted
 
     def request_exit(self, reason: str) -> str | None:
         """Ask the kernel to exit the position for `reason` (one of its RISK_EXIT_REASONS);

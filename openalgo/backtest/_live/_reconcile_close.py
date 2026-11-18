@@ -69,6 +69,10 @@ NOTHING_TO_CLOSE = (
     "no position is left to close by hand: check the order book in OpenAlgo, cancelling "
     "what still works"
 )
+#: How the close names a difference its last comparison saw late (an order of the leg in
+#: flight past the in-flight limit, its trades not attributed): as that read saw it.
+LATE_READ = "at a late read, while an order of the leg was in flight past the limit"
+NEITHER = "neither carried by the engine's fills since nor confirmed by a later read"
 
 
 @dataclass(frozen=True)
@@ -174,6 +178,27 @@ def not_confirmed_alert(trader: Trader, engine_units: int, differs: Differing | 
     )
 
 
+def late_alert(trader: Trader, seen: Sighting) -> str:
+    """The ERROR alert of a leg whose last comparison was late and saw a difference
+    (`LATE_READ`): the engine's and OpenAlgo's units as that read saw them, neither carried
+    nor confirmed, and the books to check."""
+    return (
+        f"{trader.name} {trader.symbol} {trader.exchange}: OpenAlgo's books showed "
+        f"{_held(seen.broker_units)} against the engine's {seen.engine_units} {LATE_READ}, "
+        f"{NEITHER}; nothing was sent for the difference: check the position and the order "
+        "book in OpenAlgo"
+    )
+
+
+def late_summary(trader: Trader, seen: Sighting) -> str:
+    """Such a leg in the DAILY_SUMMARY's words (`late_alert`): a mismatch, its figures
+    as the late read saw them."""
+    return (
+        f"{trader.name} {trader.symbol} {trader.exchange} {_held(seen.broker_units)} in "
+        f"OpenAlgo's books against the engine's {seen.engine_units} {LATE_READ}, {NEITHER}"
+    )
+
+
 def _held(units: int) -> str:
     """Signed units held, in words: "no position" for none."""
     return "no position" if units == 0 else f"{units} units"
@@ -189,6 +214,8 @@ __all__ = [
     "DIFFERS",
     "LAST_JUDGING_READ",
     "LAST_READ",
+    "LATE_READ",
+    "NEITHER",
     "NOTHING_TO_CLOSE",
     "NOT_CONFIRMED",
     "NOT_CONFIRMED_ALERT",
@@ -196,6 +223,8 @@ __all__ = [
     "SINCE_SUMMARY",
     "Differing",
     "differing",
+    "late_alert",
+    "late_summary",
     "not_confirmed_alert",
     "not_confirmed_summary",
 ]
