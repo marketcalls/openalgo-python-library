@@ -29,7 +29,8 @@ When the last run ends (its close returned, or the test ended after a crash), of
    fake holds flat (but one a sale by hand left there, which the close names).
 5. **Protected.** Each position the fake holds that a leg of the run wants a stop for
    (its stop level is set) has the session's working stops covering the engine's units,
-   confirmed in `open_positions`; unless the test asserts the leg unprotected in
+   confirmed working by the session's stops supervisor (`StopsSupervisor.covered`);
+   unless the test asserts the leg unprotected in
    `open_positions` and the ERROR alert that names it (`SessionTrace.leave_unprotected`:
    the rows F35, F36, F60, the F77 variant and F80, and the merged tests of decided ends
    that leave a leg without a confirmed stop, each saying which in a comment). Such a leg
@@ -63,8 +64,7 @@ from openalgo.backtest._live._types import Mode
 
 #: The price types of a stop at the broker.
 STOP_TYPES = frozenset({"SL", "SL-M"})
-#: The kernel's terminal order states and the order stream's terminal words.
-KERNEL_ENDED = frozenset({"Filled", "Canceled", "Expired", "Rejected"})
+#: The order stream's terminal words.
 NEWS_ENDED = frozenset({"complete", "cancelled", "rejected"})
 #: The calls that send an order or read a book (8).
 ORDER_CALLS = frozenset({"placeorder", "modifyorder", "cancelorder"})
