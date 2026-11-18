@@ -64,6 +64,7 @@ from types import MappingProxyType
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from openalgo.backtest._live import _session_close, _session_start
 from openalgo.backtest._live import plan as plan_module
@@ -173,6 +174,25 @@ class SessionRecord:
     def kinds(self) -> set[str]:
         """The kinds of line the record holds."""
         return {line["kind"] for line in self.lines}
+
+    def bars(self, strategy: str) -> pd.DataFrame:
+        """The 1-minute bars `strategy`'s kernel session ran on: the warm-up's candles
+        before today, then each bar it was given today (a candle of the catch-up, or a
+        bar the session built from ticks), indexed by their opens in IST, as a backtest
+        takes them (`data=`). A slice released with no bar is not in it, as a backtest
+        runs a minute it has no bar of."""
+        rows = []
+        for line in self.lines:
+            if line["strategy"] != strategy:
+                continue
+            if line["kind"] == "history":
+                rows += line["base"]
+            elif line["kind"] == "bar":
+                rows.append(line["args"][1])
+        frame = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "volume"])
+        opens = pd.to_datetime(frame.pop("ts"), utc=True).dt.tz_convert("Asia/Kolkata")
+        frame.index = pd.DatetimeIndex(opens, name="time")
+        return frame
 
 
 def _output_of(line: Mapping[str, Any]) -> Any:
