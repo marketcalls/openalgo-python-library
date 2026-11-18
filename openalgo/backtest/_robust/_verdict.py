@@ -89,9 +89,11 @@ class CheckResult:
     "informational"; figure: the figure it judged, as text; rule: its pass rule, as
     text; note: how it was measured, or why it was not judged.
     table: a row per run (an assignment, an order, a path, a rerun), empty when not
-    judged; other markets has a row per symbol and synthetic stress a row per rule.
-    summary: its figures by name; fractions are fractions (0.95 is 95 percent), money
-    is rupees, and drawdowns are zero or negative.
+    judged; other markets has a row per symbol and synthetic stress a row per rule,
+    which it keeps when no rule keeps enough candidates to be judged.
+    summary: its figures by name, empty when not judged but for synthetic stress (as
+    its table); fractions are fractions (0.95 is 95 percent), money is rupees, and
+    drawdowns are zero or negative.
     settings: the settings it ran with (its defaults with the check's dict applied);
     seed: the seed of its random stream, or None for a check that draws nothing.
     """

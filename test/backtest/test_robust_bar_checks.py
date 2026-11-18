@@ -48,6 +48,7 @@ from openalgo.backtest._robust._blocks import (
     TableBlock,
 )
 from openalgo.backtest._robust._check_permutation import p_value
+from openalgo.backtest._robust._reruns import Reruns
 from openalgo.backtest._robust._run_bars import run_bars
 from openalgo.backtest._robust._verdict import FAILED, NOT_JUDGED, PASSED
 from openalgo.backtest.errors import ConfigError
@@ -551,9 +552,19 @@ def test_an_edge_of_the_drift_alone_has_no_shock_to_judge(rising):
     # Bars that rise a rupee every session: a permutation of equal moves is the same path
     # and noise of a fifth of a bar's range never makes the price fall, so no candidate
     # falls deeper, longer or further below its average than the run's own bars.
-    result = checked(rising, "stress", objective="net_profit").check("stress")
+    report = checked(rising, "stress", objective="net_profit")
+    result = report.check("stress")
     assert result.verdict == NOT_JUDGED
-    assert result.summary == {} and result.note.startswith("Too few kept candidates to judge")
+    assert result.note.startswith("Too few kept candidates to judge")
+    # The rule table stays, with the kept counts the design asks for, and so does the
+    # section's chart and table.
+    table = result.table.set_index("rule")
+    assert table.index.tolist() == ["drawdown", "recovery", "below_average"]
+    assert table["kept"].tolist() == [0, 0, 0] and not table["judged"].any()
+    assert result.summary["candidates"] == 400 and result.summary["judged_rules"] == 0
+    (chart,), (rules,) = report._blocks["stress"]
+    assert isinstance(chart, PathsBlock) and chart.groups == ()
+    assert [row[0] for row in rules.rows] == ["drawdown", "recovery", "below_average"]
 
 
 @pytest.fixture(scope="module")
@@ -589,7 +600,15 @@ def test_the_stress_rule_says_which_rules_are_judged(edge):
     )
 
 
-def test_stress_reruns_the_permutation_tests_paths_and_the_noise_checks_copies(edge):
+def test_stress_reruns_the_permutation_tests_paths_and_the_noise_checks_copies(edge, monkeypatch):
+    done = []
+    close = Reruns.close
+
+    def recording_close(reruns):
+        done.append(reruns.done)
+        close(reruns)
+
+    monkeypatch.setattr(Reruns, "close", recording_close)
     lines = []
     edge.robustness(
         checks=["permutation", "noise", "stress"],
@@ -604,6 +623,7 @@ def test_stress_reruns_the_permutation_tests_paths_and_the_noise_checks_copies(e
         "kernel. The checks share 30 of the runs listed, which read the same generated bars, "
         "so the total counts each once."
     ) in lines[0]
+    assert done == [40]  # 20 permuted paths and 20 noisy copies, each run once
 
 
 def test_rules_that_keep_too_few_candidates_are_not_judged(edge):
@@ -753,6 +773,12 @@ def test_stress_on_symbols_with_a_missing_bar_judges_its_noisy_candidates(missin
     stress = {"noise_candidates": 10, "permutation_candidates": 10, **ALWAYS}
     check = checked(missing_bar, "stress", stress=stress).check("stress")
     assert check.verdict == PASSED and check.summary["candidates"] == 10
+    # The note names the candidates made, then why the permuted ones were not.
+    assert check.note.startswith(
+        "Candidates: the noise check's first 10 noisy copies of the run's bars; the "
+        "strategy ran on each,"
+    )
+    assert "permuted paths" not in check.note
     assert f"Permuted candidates are left out: {GRID}" in check.note
 
 

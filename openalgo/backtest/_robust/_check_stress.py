@@ -24,7 +24,8 @@ judged when it keeps `min_kept` (10) or more that ran and its expected share is 
 zero. Pass: under every judged rule the kept share is at least `keep` (half) of the
 expected share. When the strategy makes money on every candidate of a generator this is
 the design's rule: at least half the kept ones profitable. Not judged when no rule is
-judged, when the run did not make money, or when it has too few closed trades.
+judged (the table by rule, its kept counts and the chart stay), when the run did not make
+money, or when it has too few closed trades.
 
 Permuted candidates are left out, with the reason, when the run's symbols' bars are not
 at the same times (`_bar_common.grid_problem`). For a strategy made by `bt.from_arrays`
@@ -59,7 +60,7 @@ from ._setting import Setting, between, whole
 from ._stress_rules import DEFAULT_RULES, RULES_TAKE, StressRule, held, prices, rules_value
 from ._stress_rules import stress_rules as make_rules
 from ._trade_common import BREAK_EVEN_RUPEES, ENOUGH_TRADES, exact_mean, no_edge, too_few
-from ._verdict import FAILED, PASSED, Outcome, not_judged
+from ._verdict import FAILED, NOT_JUDGED, PASSED, Outcome, not_judged
 
 #: The kept candidates a chart draws for each rule.
 DRAWN = 40
@@ -238,25 +239,25 @@ def run(
     table = rule_table(rules, made, set_, settings)
     judged = table[table["judged"]]
     note = _note(made, set_, settings, subject)
+    kept = int((made.kept(settings["combine"]) & set_.ran).sum())
+    summary = _summary(made, set_, kept, len(judged))
+    blocks = _blocks(subject, rules, made, set_, table, settings)
     if not len(judged):
         why = (
             f"Too few kept candidates to judge: no rule keeps {settings['min_kept']} or more "
             f"of the {words.whole(len(made.generators), 'candidate')} from generators on "
             f"whose candidates the strategy makes money. {note}"
         )
-        return not_judged(text, why)
+        return Outcome(NOT_JUDGED, "n/a", text, why, table.reset_index(), summary, blocks)
     passed = bool(judged["passed"].all())
     lowest = judged["ratio"].idxmin()
     worst = judged.loc[lowest]
-    kept = int((made.kept(settings["combine"]) & set_.ran).sum())
     figure = (
         f"{kept} of {words.whole(len(made.generators), 'candidate')} kept as shocks; under "
         f"{lowest}, {words.percent(worst['profitable_share'])} of its shocks are profitable "
         f"against {words.percent(worst['expected_share'])} of their generators' candidates, "
         f"{words.number(worst['ratio'])} times, over {words.whole(len(judged), 'judged rule')}"
     )
-    summary = _summary(made, set_, kept, len(judged))
-    blocks = _blocks(subject, rules, made, set_, table, settings)
     return Outcome(
         PASSED if passed else FAILED, figure, text, note, table.reset_index(), summary, blocks
     )
@@ -275,11 +276,21 @@ def _summary(made: Candidates, set_: RerunSet, kept: int, judged: int) -> dict[s
     return summary
 
 
+#: How the note names the candidates of each generator, by the number made.
+MADE_FROM = {
+    NOISY: "the noise check's first {} noisy copies of the run's bars",
+    PERMUTED: "the permutation test's first {} permuted paths",
+}
+
+
 def _note(made: Candidates, set_: RerunSet, settings: Mapping[str, Any], run: BarRun) -> str:
+    """How the check was measured: the candidates of the generators that ran (those left
+    out are named after, with why), how one is kept, and how the kept ones are judged."""
+    sources = " and ".join(
+        MADE_FROM[family.bars].format(count) for family, count in _families(run, settings)
+    )
     note = (
-        f"Candidates: the noise check's first {settings['noise_candidates']} noisy copies of "
-        f"the run's bars and the permutation test's first {settings['permutation_candidates']} "
-        f"permuted paths; the strategy ran on each, and one is kept as a shock when "
+        f"Candidates: {sources}; the strategy ran on each, and one is kept as a shock when "
         f"{settings['combine']} of the rules hold, each rule judged on the session closes of "
         "every instrument against the real ones. A rule's kept candidates are judged against "
         "the share of all the candidates of their generators that make money, since a "
