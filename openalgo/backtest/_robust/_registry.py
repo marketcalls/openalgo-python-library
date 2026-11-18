@@ -7,8 +7,8 @@ A check this version does not run is listed with what it needs, in plain words
 (`needs`), and asking for it raises NotImplementedError (`not_built`) saying so;
 `checks="all"` runs the built checks and lists the others as not built. The trade-list
 checks read the run's closed trades only, with no rerun: they are the quick checks of
-every tearsheet. The bar checks rerun the backtest on generated bars, or on other
-symbols' bars (`_reruns`).
+every tearsheet. The bar checks rerun the backtest on generated bars, on other
+symbols' bars, or on the run's own bars with one setting changed (`_reruns`).
 """
 
 from __future__ import annotations
@@ -19,12 +19,16 @@ from dataclasses import dataclass
 from .._messages import not_supported
 from ..errors import ConfigError
 from . import (
+    _check_delayed,
+    _check_liquidity,
     _check_noise,
     _check_other_markets,
     _check_permutation,
+    _check_random_exits,
     _check_random_oos,
     _check_resample,
     _check_reshuffle,
+    _check_shifted,
     _check_stress,
     _check_variance,
     _check_vs_random,
@@ -34,7 +38,6 @@ from ._setting import Setting
 #: What the checks a later version brings need, by their build unit, as a reader would
 #: put it. A message names what a check needs, never its internal unit (`_messages`).
 NEEDS = {
-    "RB3": "late orders, other fill prices and shifted bar boundaries in the engine",
     "RB4": "walk-forward and the parameter searches",
 }
 
@@ -68,9 +71,11 @@ def _trade_check(number: int, name: str, title: str, question: str, module) -> C
     return CheckSpec(number, name, title, question, "RB1", module.SETTINGS, module.run, True)
 
 
-def _bar_check(number: int, name: str, title: str, question: str, module) -> CheckSpec:
+def _bar_check(
+    number: int, name: str, title: str, question: str, module, unit: str = "RB2"
+) -> CheckSpec:
     return CheckSpec(
-        number, name, title, question, "RB2", module.SETTINGS, module.run, reruns=module.reruns
+        number, name, title, question, unit, module.SETTINGS, module.run, reruns=module.reruns
     )
 
 
@@ -103,7 +108,14 @@ CHECKS = (
         _check_permutation,
     ),
     _bar_check(6, "noise", "Noise", "Does it survive small changes to every bar?", _check_noise),
-    CheckSpec(7, "shifted", "Shifted bars", "Does it depend on where the bars start?", "RB3"),
+    _bar_check(
+        7,
+        "shifted",
+        "Shifted bars",
+        "Does it depend on where the bars start?",
+        _check_shifted,
+        "RB3",
+    ),
     _bar_check(
         8,
         "other_markets",
@@ -128,16 +140,26 @@ CHECKS = (
     _trade_check(
         11, "resample", "Trade resample", "How wide is the range of outcomes?", _check_resample
     ),
-    CheckSpec(12, "random_exits", "Randomized exits", "Are the exits fitted?", "RB3"),
+    _bar_check(
+        12, "random_exits", "Randomized exits", "Are the exits fitted?", _check_random_exits, "RB3"
+    ),
     _trade_check(13, "variance", "Variance", "Does it survive a worse win rate?", _check_variance),
-    CheckSpec(
+    _bar_check(
         14,
         "delayed",
         "Delayed orders",
         "Does it survive entering or exiting a bar late?",
+        _check_delayed,
         "RB3",
     ),
-    CheckSpec(15, "liquidity", "Liquidity", "Does it survive worse fill prices?", "RB3"),
+    _bar_check(
+        15,
+        "liquidity",
+        "Liquidity",
+        "Does it survive worse fill prices?",
+        _check_liquidity,
+        "RB3",
+    ),
     CheckSpec(16, "parameters", "Parameter neighbourhood", "A plateau, or one lucky spike?", "RB4"),
     CheckSpec(
         17,

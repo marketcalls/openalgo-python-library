@@ -7,7 +7,8 @@
 use numpy::PyReadonlyArray1;
 use oa_bt::data::resample::CalendarUnit;
 use oa_bt::engine::{
-    BarColumns, FillTiming, IntradayOverrides, QuantityMode, RunConfig, RunSetup, StrategyInterval,
+    BarColumns, BarPrice, FillModel, FillTiming, IntradayOverrides, Perturbation, QuantityMode,
+    RunConfig, RunSetup, StrategyInterval,
 };
 use oa_bt::exec::InstrumentSpec;
 use oa_bt::market::calendar::BaseInterval;
@@ -219,11 +220,7 @@ pub(super) fn run_config(dict: &Bound<'_, PyDict>) -> PyResult<RunConfig> {
         present: optional(dict, "present")?,
         base: base_interval(optional(dict, "base_nanos")?),
         strategy_interval: strategy_interval(&interval)?,
-        fill: match fill.as_str() {
-            "next_open" => FillTiming::NextOpen,
-            "close" => FillTiming::Close,
-            _ => return Err(unknown("fill", &fill, "next_open or close")),
-        },
+        fill: fill_timing(&fill)?,
         quantity_mode: match mode.as_str() {
             "fractional" => QuantityMode::Fractional,
             "venue" => QuantityMode::Venue,
@@ -242,6 +239,39 @@ pub(super) fn run_config(dict: &Bound<'_, PyDict>) -> PyResult<RunConfig> {
             square_off_minute: optional(dict, "square_off_minute")?,
         },
         deliver_events: field(dict, "deliver_events")?,
+        perturbation: perturbation(dict)?,
+    })
+}
+
+/// The fill names `bt.backtest` takes (`openalgo/backtest/_settings.py`): the next open,
+/// the decision bar's close, and the fill models of the liquidity check.
+fn fill_timing(fill: &str) -> PyResult<FillTiming> {
+    let model = |price, two_bars| Ok(FillTiming::Model(FillModel { price, two_bars }));
+    match fill {
+        "next_open" => Ok(FillTiming::NextOpen),
+        "close" => Ok(FillTiming::Close),
+        "next_close" => model(BarPrice::Close, false),
+        "next_mid" => model(BarPrice::Mid, false),
+        "next_ohlc4" => model(BarPrice::Ohlc4, false),
+        "next_close_2" => model(BarPrice::Close, true),
+        "next_mid_2" => model(BarPrice::Mid, true),
+        "next_ohlc4_2" => model(BarPrice::Ohlc4, true),
+        _ => Err(unknown(
+            "fill",
+            fill,
+            "next_open, close, next_close, next_mid, next_ohlc4, next_close_2, next_mid_2 or \
+             next_ohlc4_2",
+        )),
+    }
+}
+
+/// What a robustness rerun changes; an absent key changes nothing.
+fn perturbation(dict: &Bound<'_, PyDict>) -> PyResult<Perturbation> {
+    Ok(Perturbation {
+        delay_entries: optional(dict, "delay_entries")?.unwrap_or(0),
+        delay_exits: optional(dict, "delay_exits")?.unwrap_or(0),
+        bar_shift: optional(dict, "bar_shift")?.unwrap_or(0),
+        exit_scales: optional(dict, "exit_scales")?.unwrap_or_default(),
     })
 }
 

@@ -9,8 +9,8 @@
 
 use oa_bt::engine::{
     run, BarColumns, BaseBar, CostConfig, Driver, Engine, Event, FillTiming, IntradayOverrides,
-    KernelError, Pause, QuantityMode, RunConfig, RunOutput, RunSetup, Step, StrategyInterval,
-    Submission,
+    KernelError, Pause, Perturbation, QuantityMode, RunConfig, RunOutput, RunSetup, Step,
+    StrategyInterval, Submission,
 };
 use oa_bt::exec::{
     GttLegRole, GttStatus, InstrumentId, InstrumentSpec, OrderRequest, QuantitySpec, RejectCode,
@@ -89,6 +89,7 @@ fn config(last_slice: Option<i64>) -> RunConfig {
         sizing: SizingControls::default(),
         intraday: IntradayOverrides::default(),
         deliver_events: false,
+        perturbation: Perturbation::default(),
     }
 }
 

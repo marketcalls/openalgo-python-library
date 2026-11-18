@@ -10,6 +10,7 @@
 //! the order works on unchanged. A GTT order's GTT is replaced with it.
 
 use crate::exec::{ExecError, OrderId, OrderRequest};
+use crate::portfolio::PositionKey;
 
 use super::error::KernelError;
 use super::event::{Event, OrderEventKind};
@@ -103,8 +104,14 @@ impl Engine {
             self.send_modify(id, replacement);
             return Ok(Submission::Submitted(id));
         }
+        let key = PositionKey {
+            instrument: request.instrument,
+            product: request.product,
+        };
+        let held_until = self.held_until(&request, self.held_units(key), decided_at);
         self.book
             .replace(id, request, decided_at, good_until, units)?;
+        self.hold_order(id, held_until, decided_at);
         let stamp = Self::stamp(&slice, step);
         self.emit(Event::Order {
             stamp,

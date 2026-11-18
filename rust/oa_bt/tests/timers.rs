@@ -9,8 +9,8 @@
 use oa_bt::data::resample::CalendarUnit;
 use oa_bt::engine::{
     BarColumns, CostConfig, Engine, FillTiming, IntradayOverrides, KernelError, Pause,
-    QuantityMode, RunConfig, RunSetup, Step, StrategyInterval, Submission, TimerCount, TimerId,
-    TimerSpec,
+    Perturbation, QuantityMode, RunConfig, RunSetup, Step, StrategyInterval, Submission,
+    TimerCount, TimerId, TimerSpec,
 };
 use oa_bt::exec::{InstrumentId, InstrumentSpec, OrderRequest, QuantitySpec};
 use oa_bt::market::calendar::{BaseInterval, Calendar};
@@ -103,6 +103,7 @@ fn config(
         sizing: SizingControls::default(),
         intraday: IntradayOverrides::default(),
         deliver_events: false,
+        perturbation: Perturbation::default(),
     }
 }
 

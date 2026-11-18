@@ -3,10 +3,13 @@ in worker processes on `bt.optimize`'s pool (`_sweep_pool`), each kept once.
 
 A family (`Family`) says what its runs read and run: the run's bars as they are,
 permuted (`_generate_permuted`) or noisy (`_generate_noisy`) from a stream, and the run's
-strategy or random entries drawn from a stream (`_random_entries`). Run r of a family is a
-pure function of the run's bars, the family and r, so it is the same in any process and
-for any number of workers, and two checks that ask for the same family and run (versus
-random's strategy on permuted bars, which are the permutation test's runs) share it.
+strategy or random entries drawn from a stream (`_random_entries`); with run arguments
+changed (`arguments`: a delay, a fill model), settings of the run's plan changed (`plan`:
+strategy bars that end earlier), or each run's exits drawn (`exits`, `_exit_draws`). Run
+r of a family is a pure function of the run's bars, the family and r, so it is the same
+in any process and for any number of workers, and two checks that ask for the same
+family and run (versus random's strategy on permuted bars, which are the permutation
+test's runs) share it.
 
 Workers: `workers` processes (the CPU count by default), as `bt.optimize` starts them,
 or this process when there is one run to do, when the strategy was made by
@@ -32,6 +35,7 @@ import pandas as pd
 from .._arrays import made_by
 from .._sweep_pool import START_METHOD, portable, split
 from ..errors import DataError
+from ._exit_draws import ExitDraws
 from ._generate_noisy import Noise, noisy, ranges
 from ._generate_permuted import permuted
 from ._random_entries import EntryPlan, random_strategy, schedule
@@ -45,12 +49,28 @@ REAL, PERMUTED, NOISY = "real", "permuted", "noisy"
 class Family:
     """What a family of reruns reads and runs (module docstring): `bars` REAL, PERMUTED or
     NOISY, generated from the stream `bars_seed` with `noise`; the run's strategy, or
-    random entries from the stream `entries_seed` when it is not None."""
+    random entries from the stream `entries_seed` when it is not None; `arguments` and
+    `plan`, (name, value) pairs of run arguments and plan settings every run changes;
+    `exits`, what each run's exits are drawn from (None for none)."""
 
     bars: str
     bars_seed: int = 0
     noise: Noise | None = None
     entries_seed: int | None = None
+    arguments: tuple[tuple[str, Any], ...] = ()
+    plan: tuple[tuple[str, Any], ...] = ()
+    exits: ExitDraws | None = None
+
+    def changes(self, run: int, arguments: dict[str, Any]) -> tuple[dict[str, Any], dict]:
+        """(the run arguments, the plan settings) of run `run`, from the run's own
+        `arguments`."""
+        changed = {**arguments, **dict(self.arguments)}
+        plan = dict(self.plan)
+        if self.exits is not None:
+            params, scales = self.exits.draw(run)
+            changed["params"] = {**(changed.get("params") or {}), **params}
+            plan["exit_scales"] = scales
+        return changed, plan
 
     def frames(self, source: RunBars, run: int, atrs: Sequence[np.ndarray] | None) -> list:
         """The bars of run `run` (canonical layout, by symbol in registration order).
@@ -106,8 +126,9 @@ def run_batch(setup: Setup, family: Family, runs: Sequence[int]) -> list[RerunRo
         chosen = strategy
         if family.entries_seed is not None and setup.entries is not None:
             chosen = random_strategy(strategy, schedule(setup.entries, family.entries_seed, run))
+        arguments, plan = family.changes(run, setup.arguments)
         try:
-            result, _ = rerun(chosen, setup.arguments, setup.bars.symbols, frames, setup.known)
+            result, _ = rerun(chosen, arguments, setup.bars.symbols, frames, setup.known, plan=plan)
         except DataError as error:
             rows.append(failed_row(f"the data checks refused its bars: {error}", len(setup.steps)))
             continue

@@ -6,10 +6,12 @@ The first rerun runs the strategy on the run's own bars through the reruns' path
 evaluation path, and should give the run's own objective. If it does not (a source whose
 bars changed since the run), the plan says so, since every generated run is then
 measured against a run that read other bars. The plan's estimate is timed on run 0 of the
-first family of generated bars that a check will rerun (a noisy one first, kept for the
-check that reads it), so it counts making the bars and measuring the rerun as well as the
-rerun; with no such family (other markets alone, no check that reruns) it is timed on the
-first rerun.
+first family that a check will rerun (a noisy one first, kept for the check that reads
+it), so on generated bars it counts making the bars and measuring the rerun as well as
+the rerun; with no such family (other markets alone, no check that reruns) it is timed on
+the first rerun. A family on the run's own bars with a setting changed (a delay, a fill
+model, shifted strategy bars, varied exits: the checks of `_variant_common`) is a rerun
+on the run's own bars.
 
 What a report plans (`planned`) is what each bar check says it will rerun (its
 `reruns`, from the same reasons as its run: a check not judged before any rerun, for too
@@ -42,7 +44,7 @@ from ._paths import fan_steps
 from ._random_entries import EntryPlan, entry_plan
 from ._request import Request
 from ._rerun_one import Known, rerun
-from ._reruns import NOISY, Family, Reruns, Setup, Workers, choose_workers, shipped
+from ._reruns import NOISY, REAL, Family, Reruns, Setup, Workers, choose_workers, shipped
 from ._run_bars import RunBars, run_bars
 from ._trades import TradeRun
 
@@ -58,12 +60,14 @@ SAME_OBJECTIVE = 1e-9
 @dataclass(frozen=True)
 class Plan:
     """What the bar checks of a report will rerun (module docstring): the reruns each
-    plans, by name (`counts`), how many of them another check shares (`shared`), and the
-    families of generated bars, in the order the checks list them (`families`)."""
+    plans, by name (`counts`), how many of them another check shares (`shared`), the
+    families, in the order the checks list them (`families`), and whether any check
+    reruns other symbols (`others`)."""
 
     counts: Mapping[str, int]
     shared: int
     families: tuple[Family, ...]
+    others: bool = False
 
     @property
     def total(self) -> int:
@@ -87,10 +91,15 @@ def planned(request: Request, preview: BarRun) -> Plan:
         counts[check.name] = sum(runs for _, runs in families)
         for family, runs in families:
             most[family] = max(most.get(family, 0), runs)
-    generated = tuple(
-        family for family, runs in most.items() if isinstance(family, Family) and runs
-    )
-    return Plan(counts, sum(counts.values()) - sum(most.values()), generated)
+    families = tuple(family for family, runs in most.items() if isinstance(family, Family) and runs)
+    others = any(not isinstance(family, Family) and runs for family, runs in most.items())
+    return Plan(counts, sum(counts.values()) - sum(most.values()), families, others)
+
+
+def changed_only(family: Family) -> bool:
+    """Whether `family` reruns the strategy on the run's own bars with a setting changed
+    (module docstring), rather than on generated bars or with random entries."""
+    return family.bars == REAL and family.entries_seed is None
 
 
 @dataclass(frozen=True, eq=False)
@@ -183,7 +192,7 @@ def bar_context(result: Any, request: Request, trades: TradeRun) -> BarContext:
         started = time.perf_counter()
         reruns.rows(timed, [0])
         seconds = time.perf_counter() - started
-    generated = timed is not None
+    generated = timed is not None and not changed_only(timed)
     return BarContext(bars, reruns, workers, real, reference, seconds, generated, paths[0], plan)
 
 
@@ -213,7 +222,7 @@ def plan_words(context: BarContext | None) -> str:
     total = words.number(context.plan.total, 0)
     text = (
         "The trade-list checks read the run's trade list; the bar checks rerun the backtest "
-        f"{total} times or fewer on generated bars or other symbols ({', '.join(parts)}), "
+        f"{total} times or fewer on {_where(context.plan)} ({', '.join(parts)}), "
         "each an ordinary backtest of the same kernel."
     )
     if shared:
@@ -222,6 +231,16 @@ def plan_words(context: BarContext | None) -> str:
             "same generated bars, so the total counts each once."
         )
     return text + _changed(context)
+
+
+def _where(plan: Plan) -> str:
+    """What the reruns of `plan` read, in words."""
+    changed = [changed_only(family) for family in plan.families]
+    if not any(changed):
+        return "generated bars or other symbols"
+    if all(changed) and not plan.others:
+        return "the run's own bars, each with one setting changed"
+    return "generated bars, other symbols or the run's own bars with one setting changed"
 
 
 def _changed(context: BarContext) -> str:

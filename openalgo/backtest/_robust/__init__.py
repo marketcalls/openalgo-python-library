@@ -10,7 +10,9 @@ Private: `import openalgo.backtest` does not import it; `bt.robustness`,
 `Result.robustness`, the tearsheet, `Result.summary()` and `Result.warnings` import it
 when they need it. Every check is deterministic for a seed on every platform: the bar
 checks rerun the backtest, an ordinary run of the deterministic kernel, on bars that are
-a pure function of the run's bars and the seed.
+a pure function of the run's bars and the seed, or on the run's own bars with one
+setting changed (a delay, a fill model, shifted strategy bars, exits drawn from the
+seed).
 
 | Module | Responsibility |
 |---|---|
@@ -37,6 +39,7 @@ a pure function of the run's bars and the seed.
 | `_run_bars` | The bars a run read, and the arguments of its reruns |
 | `_rerun_one` | One rerun on given bars, and what a check keeps of it |
 | `_random_entries` | Random entries with the run's trades |
+| `_session_entries` | Random entries of an all-intraday run kept within one session each |
 | `_reruns` | Families of reruns, in this process or worker processes, kept once |
 | `_bar_setup` | The bar checks' setup: the bars, a first rerun, the plan's reruns |
 | `_bar_common` | What the bar checks share: the run they read, break-even, rerun sets |
@@ -45,6 +48,13 @@ a pure function of the run's bars and the seed.
 | `_check_noise` | Noise |
 | `_check_other_markets` | Other markets |
 | `_check_stress` | Synthetic stress |
+| `_stress_table` | Synthetic stress's candidates and the figures of each rule over them |
+| `_variant_common` | What the checks on the run's bars with one setting changed share |
+| `_exit_draws` | Each run's exit factors and exit parameters, for randomized exits |
+| `_check_shifted` | Shifted bars |
+| `_check_random_exits` | Randomized exits |
+| `_check_delayed` | Delayed orders |
+| `_check_liquidity` | Liquidity |
 | `_blocks` | What a check's section draws, as data |
 | `_charts` | The fan, histogram and sessions charts as inline SVG |
 | `_charts_bars` | The candles, lines, groups of paths and tables of the bar checks |

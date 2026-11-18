@@ -24,8 +24,9 @@ reason in `failure`; any other error is the strategy's or the engine's and is ra
 
 from __future__ import annotations
 
+import dataclasses
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -70,13 +71,17 @@ def rerun(
     frames: Sequence[pd.DataFrame],
     known: Known,
     on_path: Callable[[str], Any] | None = None,
+    plan: Mapping[str, Any] | None = None,
 ) -> tuple[Any, Known]:
     """(the `Result` of `strategy` on `frames`, the bars of `symbols`, with the run's
     `arguments`; the indicator checks known after it). `on_path` is told the evaluation
-    path the rerun took. Raises what the run raises."""
+    path the rerun took; `plan` sets settings of the run's plan that no run argument
+    gives (`_settings.RunPlan.bar_shift`, `exit_scales`). Raises what the run raises."""
     args = {**arguments, "data": dict(zip(symbols, frames, strict=True))}
     checks = IndicatorChecks(strategy_name(strategy), known.keys, measured=known.measured)
     prepared = prepare(strategy, None, args, checks=checks)
+    if plan:
+        prepared = dataclasses.replace(prepared, plan=dataclasses.replace(prepared.plan, **plan))
     result = execute(strategy, prepared, args, checks=checks, on_path=on_path)
     return result, Known(checks.keys, checks.measured())
 

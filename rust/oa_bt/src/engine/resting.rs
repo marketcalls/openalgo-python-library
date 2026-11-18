@@ -65,7 +65,7 @@ impl Engine {
         let Some(order) = self.book.get(id).cloned() else {
             return Err(KernelError::UnknownOrder(id));
         };
-        if slice.open < order.decided_at {
+        if slice.open < self.fills_from(&order) {
             return Ok(());
         }
         let side = order.request.side;

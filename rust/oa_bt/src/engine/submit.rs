@@ -81,6 +81,11 @@ impl Engine {
             Err(code) => Err(code),
         };
         let id = self.book.next_id();
+        let key = PositionKey {
+            instrument: request.instrument,
+            product: request.product,
+        };
+        let held_until = self.held_until(&request, self.held_units(key), decided_at);
         let (action, kind, good_until, reject) = match checked {
             Ok(good_until) => (
                 OrderAction::PassChecks,
@@ -107,6 +112,7 @@ impl Engine {
             average_fill_rupees: 0.0,
             reject_code: reject,
         })?;
+        self.hold_order(id, held_until, decided_at);
         let stamp = Self::stamp(&slice, step);
         self.emit(Event::Order {
             stamp,
@@ -251,7 +257,7 @@ impl Engine {
         // and entry gates (6, 7), the scale-in limits (7), then an excess over the
         // position without `reverse` (7).
         let validity = match request.validity {
-            Validity::Day => self.day_validity(slice, decided_at),
+            Validity::Day => self.day_validity(slice, self.held_until(request, held, decided_at)),
             Validity::Gtt => Ok(GTT_GOOD_UNTIL),
         };
         if opening && validity.is_ok() {

@@ -118,8 +118,11 @@ fn output(py: Python<'_>, result: rs::Resampled) -> PyResult<(BarColumns, Bound<
     Ok((columns, dropped))
 }
 
-/// Resample intraday bars of `base_nanos` to `target_nanos` on the bar lattice.
+/// Resample intraday bars of `base_nanos` to `target_nanos` on the bar lattice, every
+/// bucket ending `shift_nanos` earlier when it is given (`shifted`).
 #[pyfunction]
+#[pyo3(signature = (calendar, exchange, bars, base_nanos, target_nanos, closed_day, shift_nanos = 0))]
+#[allow(clippy::too_many_arguments)]
 fn resample_intraday<'py>(
     py: Python<'py>,
     calendar: PyRef<'py, NativeCalendar>,
@@ -128,21 +131,31 @@ fn resample_intraday<'py>(
     base_nanos: i64,
     target_nanos: i64,
     closed_day: &str,
+    shift_nanos: i64,
 ) -> PyResult<(BarColumns, Bound<'py, PyDict>)> {
-    let result = rs::resample_intraday(
-        &calendar.inner,
-        parse_exchange(exchange)?,
-        &bars.as_bars()?,
-        base_nanos,
-        target_nanos,
-        parse_closed_day(closed_day)?,
-    )
+    let (inner, exchange) = (&calendar.inner, parse_exchange(exchange)?);
+    let (input, policy) = (bars.as_bars()?, parse_closed_day(closed_day)?);
+    let result = if shift_nanos == 0 {
+        rs::resample_intraday(inner, exchange, &input, base_nanos, target_nanos, policy)
+    } else {
+        let intervals = (base_nanos, target_nanos);
+        rs::resample_intraday_ending_earlier(
+            inner,
+            exchange,
+            &input,
+            intervals,
+            shift_nanos,
+            policy,
+        )
+    }
     .map_err(resample_error)?;
     output(py, result)
 }
 
-/// Resample intraday bars of `base_nanos` to one bar per IST session date.
+/// Resample intraday bars of `base_nanos` to one bar per IST session date, each ending
+/// `shift_nanos` before its session's close when it is given (`shifted`).
 #[pyfunction]
+#[pyo3(signature = (calendar, exchange, bars, base_nanos, closed_day, shift_nanos = 0))]
 fn resample_daily<'py>(
     py: Python<'py>,
     calendar: PyRef<'py, NativeCalendar>,
@@ -150,14 +163,15 @@ fn resample_daily<'py>(
     bars: BarArrays<'py>,
     base_nanos: i64,
     closed_day: &str,
+    shift_nanos: i64,
 ) -> PyResult<(BarColumns, Bound<'py, PyDict>)> {
-    let result = rs::resample_daily(
-        &calendar.inner,
-        parse_exchange(exchange)?,
-        &bars.as_bars()?,
-        base_nanos,
-        parse_closed_day(closed_day)?,
-    )
+    let (inner, exchange) = (&calendar.inner, parse_exchange(exchange)?);
+    let (input, policy) = (bars.as_bars()?, parse_closed_day(closed_day)?);
+    let result = if shift_nanos == 0 {
+        rs::resample_daily(inner, exchange, &input, base_nanos, policy)
+    } else {
+        rs::resample_daily_ending_earlier(inner, exchange, &input, base_nanos, shift_nanos, policy)
+    }
     .map_err(resample_error)?;
     output(py, result)
 }

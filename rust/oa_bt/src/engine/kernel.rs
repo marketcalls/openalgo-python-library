@@ -6,8 +6,10 @@
 //! the queries; `finish` returns the result once the grid is exhausted. The steps
 //! themselves are in `steps`, order submission in `submit`, fills in `fills`.
 
+use std::collections::BTreeMap;
+
 use crate::charges::ChargeBook;
-use crate::exec::{InstrumentId, InstrumentSpec, OrderBook};
+use crate::exec::{InstrumentId, InstrumentSpec, OrderBook, OrderId};
 use crate::market::calendar::Calendar;
 use crate::model::TsNanos;
 use crate::portfolio::{Portfolio, PositionKey};
@@ -18,6 +20,7 @@ use super::clock::{single_exchange, SliceInfo, Timeline};
 use super::config::{RunConfig, RunSetup};
 use super::error::KernelError;
 use super::event::{Event, EventStamp, Step};
+use super::exit_scale::ExitScales;
 use super::futures::FuturesDesk;
 use super::gtt::GttDesk;
 use super::live_clock::range_end;
@@ -90,6 +93,10 @@ pub struct Engine {
     pub(super) released: Option<usize>,
     /// Who fills the orders, and the commands for an external venue (`venue`).
     pub(super) venue: VenueDesk,
+    /// Orders held for a delay, by id: the instant each may fill from (`delay`).
+    pub(super) held: BTreeMap<OrderId, TsNanos>,
+    /// The factors of the trades' leg rules (`exit_scale`).
+    pub(super) exit_scales: ExitScales,
 }
 
 impl Engine {
@@ -159,6 +166,8 @@ impl Engine {
             session_buys: SessionBuys::default(),
             released: None,
             venue: VenueDesk::default(),
+            held: BTreeMap::new(),
+            exit_scales: ExitScales::default(),
         })
     }
 

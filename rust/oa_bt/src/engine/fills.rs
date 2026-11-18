@@ -103,13 +103,25 @@ impl Engine {
         id: OrderId,
         open: f64,
     ) -> Result<(), KernelError> {
+        self.fill_queued_how(slice, id, OrderFill::at_open(open))
+    }
+
+    /// Fill a queued order as `how` says (at the open, or a fill model's price,
+    /// `fill_model`), when the slice opens at or after the instant it may fill from
+    /// (`delay`); a rebalance buy is left for `fill_rebalance_buys`.
+    pub(super) fn fill_queued_how(
+        &mut self,
+        slice: &SliceInfo,
+        id: OrderId,
+        how: OrderFill,
+    ) -> Result<(), KernelError> {
         let Some(order) = self.book.get(id).cloned() else {
             return Err(KernelError::UnknownOrder(id));
         };
-        if slice.open < order.decided_at || waits_for_sales(&order) {
+        if slice.open < self.fills_from(&order) || waits_for_sales(&order) {
             return Ok(());
         }
-        self.fill_order(slice, &order, OrderFill::at_open(open))
+        self.fill_order(slice, &order, how)
     }
 
     /// Fill an order as `how` says, after the checks of the fill bar: the position
@@ -272,14 +284,15 @@ impl Engine {
         let slot = self.legs.iter().position(|(k, _)| *k == key);
         match (effect.kind, effect.change, slot) {
             (FillKind::Entry, _, _) => {
-                let rules = request.leg_rules.clone();
+                let rules = self.leg_rules_of(request, FillKind::Entry);
                 let leg = LegState::open(rules, context, average, request.units)?;
                 self.legs.retain(|(k, _)| *k != key);
                 self.legs.push((key, leg));
             }
             (FillKind::Add, _, Some(slot)) => {
+                let rules = self.leg_rules_of(request, FillKind::Add);
                 let leg = &mut self.legs[slot].1;
-                leg.accepts_add_rules(&request.leg_rules)?;
+                leg.accepts_add_rules(&rules)?;
                 leg.on_add(average, request.units)?;
             }
             (FillKind::Reduce, PositionChange::Closed, Some(slot)) => {

@@ -47,7 +47,17 @@ from .errors import ConfigError
 from .units import Distance
 
 DERIVATIVE_EXCHANGES = ("NFO", "BFO", "MCX", "CDS", "BCD")
-FILL_MODES = ("next_open", "close")
+#: The fill models besides the next open (design 17, section 2.15): another price of the
+#: next base bar, and its average with the bar after it (the "_2" forms).
+FILL_MODELS = (
+    "next_close",
+    "next_mid",
+    "next_ohlc4",
+    "next_close_2",
+    "next_mid_2",
+    "next_ohlc4_2",
+)
+FILL_MODES = ("next_open", "close", *FILL_MODELS)
 QUANTITY_MODES = ("fractional", "venue")
 RISK_BASES = ("gross", "net")
 AFTER_RISK_EXIT = ("lock_session", "allow_reentry")
@@ -97,6 +107,26 @@ class RunPlan:
     roll: int | None = 1
     # The run's own futures margin (`margin=`, `_futures_margin`), None for the default.
     margin: MarginSetting = None
+    # Strategy bars a decided entry and a decided exit are held before they can fill
+    # (`delay_entries=`, `delay_exits=`; the kernel's `engine::delay`).
+    delay_entries: int = 0
+    delay_exits: int = 0
+    # Set by the robustness reruns only (`_robust`), never by a run argument: base bars by
+    # which every strategy bar ends earlier (`engine::shifted_bars`), and the factors of
+    # each trade's leg-rule distances (`engine::exit_scale`).
+    bar_shift: int = 0
+    exit_scales: tuple[float, ...] = ()
+
+    def perturbation(self) -> dict[str, Any]:
+        """What the run changes for a robustness check, as the native config's keys: none
+        for an ordinary run, so its config is the one it always was."""
+        changes = {
+            "delay_entries": self.delay_entries,
+            "delay_exits": self.delay_exits,
+            "bar_shift": self.bar_shift,
+            "exit_scales": list(self.exit_scales),
+        }
+        return {key: value for key, value in changes.items() if value}
 
     def native_config(self, deliver_events: bool) -> dict[str, Any]:
         """The config dict of the native engine."""
@@ -130,6 +160,7 @@ class RunPlan:
             "risk": self.risk,
             "deliver_events": deliver_events,
             **minutes,
+            **self.perturbation(),
         }
 
 
@@ -269,6 +300,13 @@ def _count(value: Any, name: str, unit: str) -> int | None:
     return value
 
 
+def _delay(value: Any, name: str) -> int:
+    """A delay in strategy bars: a whole number, 0 or more."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ConfigError(f"{name} takes a whole number of strategy bars, 0 or more, got {value!r}")
+    return value
+
+
 def _bars(value: Any, name: str) -> int | None:
     """None, or a positive whole number of base bars. A time ("30m") is not built yet."""
     if isinstance(value, str):
@@ -351,6 +389,8 @@ def resolve(strategy: type, args: dict[str, Any]) -> RunPlan:
         warnings=tuple(warnings),
         roll=check_roll(args["roll"]),
         margin=parse_margin(args["margin"]),
+        delay_entries=_delay(args.get("delay_entries", 0), "delay_entries"),
+        delay_exits=_delay(args.get("delay_exits", 0), "delay_exits"),
     )
 
 
@@ -373,6 +413,12 @@ def assumptions(plan: RunPlan, calendar: Any) -> dict[str, Any]:
         capital=plan.capital,
     )
     block.update(_risk_assumptions(plan))
+    if plan.delay_entries or plan.delay_exits:
+        # Only a run that holds its orders says so, so every other block is as it was.
+        block["delay"] = (
+            f"entries held {plan.delay_entries} and exits {plan.delay_exits} strategy bars "
+            "before they can fill; the engine's own exits and the legs' levels are not held"
+        )
     return block
 
 

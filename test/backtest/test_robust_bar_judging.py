@@ -17,7 +17,7 @@ import pytest
 from robust_runs import FREE, bars, edge_run, no_edge_run, steps_for
 
 import openalgo.backtest as bt
-from openalgo.backtest._robust._check_stress import MOST_KEPT, why_unjudged
+from openalgo.backtest._robust._stress_table import MOST_KEPT, why_unjudged
 from openalgo.backtest._robust._verdict import NOT_JUDGED, PASSED
 
 EDGE_MOVES = [3.0, 2.0, 4.0, -1.0, 3.0, 2.0, -2.0, 5.0, 1.0, -1.0]
