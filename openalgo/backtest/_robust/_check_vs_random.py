@@ -18,10 +18,11 @@ every family, not the average), both measured from the objective's break-even
 asks for 3 percent more): run - break-even > (1 + margin) x (best - break-even), which a
 run above break-even passes whenever every random run is at or below it.
 
-Random entries need the run's trades to fit among its strategy bars; families that cannot
-place them are left out and the note says why. Not judged when the run did not make
-money, has too few closed trades, has an objective with no break-even or one not above
-it, or when no random run could be measured.
+Random entries need the run's trades to fit among its strategy bars, and permuted bars
+need every symbol's bars at the same times; families that cannot run are left out and
+the note says why. Not judged when the run did not make money, has too few closed
+trades, has an objective that is undefined, has no break-even or is not above it, or
+when no random run could be measured.
 
 Draws: random entries on the run's bars from part 0 of the check's stream
 (`_random.part_seed`), random entries on permuted bars from part 1, on the permutation
@@ -43,11 +44,14 @@ from ._bar_common import (
     RerunSet,
     below_break_even,
     break_even,
+    finite,
+    grid_problem,
     joined,
     objective_histogram,
     permuted_family,
     rerun_set,
     session_fan,
+    undefined,
     unmeasured,
 )
 from ._blocks import TableBlock, Tile, TilesBlock
@@ -65,6 +69,8 @@ FAMILIES = {
 }
 #: The families that draw random entries.
 RANDOM = ("random_entries", "random_on_permuted")
+#: The families on permuted bars.
+ON_PERMUTED = ("permuted", "random_on_permuted")
 
 
 def families_value(value: Any) -> tuple[str, ...] | None:
@@ -120,13 +126,17 @@ def _placed(subject: BarRun, names: tuple[str, ...]) -> tuple[tuple[str, ...], s
     """(the families that can run, why the others cannot, "" when all can)."""
     entries = subject.reruns.setup.entries
     unplaced = entries.unplaced() if entries is not None else []
-    if not unplaced:
-        return names, ""
-    why = (
-        f" Random entries are left out: the trades of {', '.join(unplaced)} do not fit "
-        "among its strategy bars of the run."
-    )
-    return tuple(name for name in names if name not in RANDOM), why
+    problem = grid_problem(subject.bars)
+    why = ""
+    if unplaced:
+        why += (
+            f" Random entries are left out: the trades of {', '.join(unplaced)} do not fit "
+            "among its strategy bars of the run."
+        )
+    if problem:
+        why += f" The families on permuted bars are left out: {problem}."
+    left_out = (RANDOM if unplaced else ()) + (ON_PERMUTED if problem else ())
+    return tuple(name for name in names if name not in left_out), why
 
 
 def run(
@@ -138,6 +148,8 @@ def run(
     if short is not None:
         return short
     name, level = objective_name(objective), break_even(objective)
+    if not finite(subject.real):
+        return not_judged(text, undefined(name, "random"))
     if level is None:
         return not_judged(text, unmeasured(objective))
     if not subject.real > level:

@@ -41,7 +41,9 @@ READING = (
     "given in its settings.",
     "Not built: the check comes with a later version; the scorecard says what it needs.",
     "Every check draws from its own random stream, seeded with the report's seed plus the "
-    "check's number, so the same seed gives the same report on every platform.",
+    "check's number, so the same seed gives the same report on every platform. Versus "
+    "random and synthetic stress also read the permutation test's permuted paths, and "
+    "stress the noise check's noisy copies, from those checks' streams.",
 )
 
 

@@ -85,22 +85,26 @@ BOLD, THIN, DOTTED = "bold", "thin", "dotted"
 
 @dataclass(frozen=True, eq=False)
 class Line:
-    """One line of a `LinesBlock`: its label, its dates and values (fractions), and its
-    style (`BOLD`, `THIN` or `DOTTED`)."""
+    """One line of a `LinesBlock`: its label, its dates and values (fractions), its
+    style (`BOLD`, `THIN` or `DOTTED`) and its `group`: the lines of one group (one
+    symbol's run and its buy and hold) share a colour and the shape at their end."""
 
     label: str
     dates: pd.DatetimeIndex
     values: np.ndarray
     style: str
+    group: int = 0
 
 
 @dataclass(frozen=True, eq=False)
 class LinesBlock:
-    """Cumulative returns over dates, one line each, on one time axis."""
+    """Returns over dates, one line each, on one time axis; `note` ends the key, saying
+    what the lines measure."""
 
     title: str
     subtitle: str
     lines: tuple[Line, ...]
+    note: str
 
 
 @dataclass(frozen=True, eq=False)

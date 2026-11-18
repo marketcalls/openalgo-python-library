@@ -11,7 +11,9 @@ A run whose objective is undefined (no trade, returns that never vary) or whose 
 data checks refused says nothing about the order of the moves, so it is left out of both
 counts, which can only raise p; when too few runs are measured for p to reach `max_p`
 (fewer than 1 / `max_p` - 1), the check is not judged. Not judged either when the run did
-not make money or has too few closed trades (`_trade_common`).
+not make money or has too few closed trades (`_trade_common`), or when no permuted path
+can be made: several symbols are permuted together only when their bars are at the same
+times (`_bar_common.grid_problem`).
 
 The summary block, over the permuted runs that ran: the shallowest, deepest and average
 maximum drawdown; the average largest win and loss; the longest win and loss streaks of
@@ -30,6 +32,7 @@ from . import _words as words
 from ._bar_common import (
     BarRun,
     RerunSet,
+    grid_problem,
     objective_histogram,
     permuted_family,
     rerun_set,
@@ -103,6 +106,9 @@ def run(
     name = objective_name(objective)
     if not math.isfinite(subject.real):
         return not_judged(text, f"The run's {name} is undefined, so no path can reach it.")
+    problem = grid_problem(subject.bars)
+    if problem:
+        return not_judged(text, f"No permuted path can be made: {problem}.")
     set_ = rerun_set(subject.reruns.rows(permuted_family(subject.seed), range(runs)))
     p, above, measured = p_value(set_.objective, subject.real)
     least = math.ceil(1.0 / settings["max_p"]) - 1

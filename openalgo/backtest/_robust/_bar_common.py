@@ -1,22 +1,28 @@
 """What the bar checks share (design 17, sections 2.4 to 2.9): what they read of the run
-(`BarRun`), the objective's break-even, the figures of a set of reruns, and their fan
-and histogram.
+(`BarRun`), the generated bars several checks read, the objective's break-even, the
+figures of a set of reruns, and their fan and histogram.
 
 `BarRun` is the run as the bar checks see it: its trade list (`_trades.TradeRun`), its
 `Result`, the objective's value on it, its bars and the reruns' runner, the report's seed
 and the symbols of `others=`.
 
+Shared bars: the permutation test's permuted paths (`permuted_family`) are also versus
+random's strategy on permuted bars and synthetic stress's permuted candidates, and the
+noise check's noisy copies at its default settings (`noisy_family`) are also stress's
+noisy candidates, so a report that runs several of them reruns each path once.
+
 A rerun is profitable when its net profit is at least half a paisa
 (`_trade_common.BREAK_EVEN_RUPEES`, as the trade-list checks count a profitable path). A
-rerun's objective is measured when the rerun ran (its generated bars were not refused)
-and the objective is a number; the checks judge the measured ones and say how many were
-not.
+rerun's objective is measured when the rerun ran (its generated bars were made and not
+refused) and the objective is a number; the checks judge the measured ones and say how
+many were not.
 
 Break-even: the ratio checks (versus random's margin, noise's share of the objective) read
 an objective from the value of a run that makes nothing: 0 for sharpe, sortino, calmar,
-net_profit, net_pnl, total_return, cagr and expectancy, 1 for profit_factor, and 0 for a
-function of a `Result` (read as a measure of profit). Another metric has none, and those
-checks are not judged under it (`unmeasured`).
+net_profit, net_pnl, total_return, cagr and expectancy, 1 for profit_factor. Another
+metric has none, nor has a function of a `Result` (what it gives for a run that makes
+nothing is not known: the end equity, for one, gives the capital), and those checks are
+not judged under it (`unmeasured`).
 """
 
 from __future__ import annotations
@@ -30,21 +36,33 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from .._arrays import made_by
+from ..errors import DataError
 from . import _random
 from . import _words as words
 from ._blocks import REAL, FanBlock, HistogramBlock, Mark
+from ._generate_noisy import Noise
+from ._ohlc import same_grid
 from ._part_objective import BREAK_EVEN as PART_BREAK_EVEN
 from ._part_objective import NO_BREAK_EVEN, objective_name
 from ._paths import Fan, bands
 from ._rerun_one import RerunRow
-from ._reruns import PERMUTED, Family, Reruns
+from ._reruns import NOISY, PERMUTED, Family, Reruns
 from ._run_bars import RunBars
 from ._trade_common import BREAK_EVEN_RUPEES
 from ._trades import TradeRun
 
 #: The number of the permutation test: the stream its permuted bars come from, which
-#: versus random's strategy on permuted bars shares (`permuted_family`).
+#: versus random and synthetic stress share (`permuted_family`).
 PERMUTATION_NUMBER = 5
+#: The number of the noise check: the stream its noisy copies come from, which synthetic
+#: stress shares (`noisy_family`).
+NOISE_NUMBER = 6
+#: Why a function objective leaves the ratio checks not judged (module docstring).
+FUNCTION_BREAK_EVEN = (
+    "what a function of a Result gives for a run that makes nothing is not known (the end "
+    "equity, for one, gives the capital)"
+)
 #: Break-even values of the objectives that have one (module docstring): those a part of
 #: the trades is measured by, and the measures of a whole run's profit.
 BREAK_EVEN = {
@@ -79,21 +97,60 @@ def permuted_family(report_seed: int) -> Family:
     return Family(PERMUTED, _random.check_seed(report_seed, PERMUTATION_NUMBER))
 
 
+def noisy_family(report_seed: int, noise: Noise) -> Family:
+    """The noise check's noisy copies with `noise` of the report seeded `report_seed`."""
+    return Family(NOISY, _random.check_seed(report_seed, NOISE_NUMBER), noise)
+
+
+def grid_problem(bars: RunBars) -> str:
+    """Why no permuted path of `bars` can be made ("" when one can): several symbols are
+    permuted together only when their bars are at the same times (`_ohlc.same_grid`)."""
+    try:
+        same_grid(bars.frames, bars.symbols)
+    except DataError as error:
+        return str(error)
+    return ""
+
+
+#: What a strategy made by `bt.from_arrays` does on generated bars.
+FIXED_ARRAYS = (
+    "its decisions are arrays fixed in advance (bt.from_arrays), which never read the "
+    "generated bars, so on them it trades at the same bars and only its fills move"
+)
+
+
+def fixed_decisions(run: BarRun) -> bool:
+    """Whether the run's strategy decides from arrays fixed in advance (`FIXED_ARRAYS`)."""
+    return made_by(run.result._record.strategy) == "bt.from_arrays"
+
+
 def break_even(objective: Any) -> float | None:
     """The break-even value of `objective` (module docstring), None when it has none."""
-    if callable(objective):
-        return 0.0
+    if not isinstance(objective, str):
+        return None
     return BREAK_EVEN.get(objective)
 
 
 def unmeasured(objective: Any) -> str:
     """Why a ratio check cannot judge `objective`, which has no break-even value."""
     name = objective_name(objective)
-    reason = NO_BREAK_EVEN.get(name, "it has no value that says a run made nothing")
-    choices = ", ".join(BREAK_EVEN)
+    if isinstance(objective, str):
+        reason = NO_BREAK_EVEN.get(name, "it has no value that says a run made nothing")
+    else:
+        reason = FUNCTION_BREAK_EVEN
     return (
         f"The objective {name} cannot judge this check: {reason}; give objective= one of "
-        f"{choices} (or a function of a Result) to judge it."
+        f"{', '.join(BREAK_EVEN)} to judge it."
+    )
+
+
+def undefined(name: str, compared: str) -> str:
+    """Why a check is not judged when the run's objective `name` is undefined: there is
+    no figure for the `compared` runs to be measured against."""
+    return (
+        f"The run's {name} is undefined (a ratio of session returns needs returns that "
+        f"vary, over two sessions or more), so the {compared} runs have no figure to be "
+        "measured against."
     )
 
 
@@ -140,13 +197,13 @@ class RerunSet:
         return np.array([not failure for failure in self.failures], dtype=bool)
 
     def failure_note(self) -> str:
-        """How many runs the data layer refused, and the first reason; "" for none."""
+        """How many runs were left out, and the first reason (their bars could not be
+        made, or the data checks refused them); "" for none."""
         refused = [failure for failure in self.failures if failure]
         if not refused:
             return ""
         return (
-            f" {words.whole(len(refused), 'run was', 'runs were')} refused by the data checks "
-            f"and left out (first: {refused[0]})."
+            f" {words.whole(len(refused), 'run was', 'runs were')} left out (first: {refused[0]})."
         )
 
     def table(self) -> pd.DataFrame:
@@ -235,17 +292,24 @@ def finite(value: float) -> bool:
 
 __all__ = [
     "BREAK_EVEN",
+    "FIXED_ARRAYS",
+    "FUNCTION_BREAK_EVEN",
+    "NOISE_NUMBER",
     "PERMUTATION_NUMBER",
     "BarRun",
     "RerunSet",
     "below_break_even",
     "break_even",
     "finite",
+    "fixed_decisions",
+    "grid_problem",
     "joined",
+    "noisy_family",
     "objective_histogram",
     "permuted_family",
     "real_path",
     "rerun_set",
     "session_fan",
+    "undefined",
     "unmeasured",
 ]

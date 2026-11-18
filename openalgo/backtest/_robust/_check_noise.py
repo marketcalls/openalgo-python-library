@@ -11,7 +11,14 @@ them (the share of noise runs below it). Pass: the ratio at least `keep` (0.5), 
 percentile of the noise objectives (linear between order statistics).
 
 Not judged when the run did not make money, has too few closed trades, has an objective
-with no break-even or one not above it, or when no noise run could be measured.
+that is undefined, has no break-even or is not above it, when no noise run could be
+measured, or when the strategy was made by `bt.from_arrays`: its decisions are arrays
+fixed in advance that never read the noisy bars, so noise could move only its fills and
+would pass whatever the arrays were fitted to (`bt.from_signals` computes its signals on
+the noisy bars and is judged).
+
+The runs are the noise check's stream (`_bar_common.noisy_family`); at the default
+settings synthetic stress reads its first ones as its noisy candidates.
 
 Charts: the noise equity fan with the run bold; the histogram of the noise objectives
 with the run, its limit at the top percentile and the keep line marked; candles of the
@@ -28,19 +35,23 @@ import numpy as np
 
 from . import _words as words
 from ._bar_common import (
+    FIXED_ARRAYS,
     BarRun,
     RerunSet,
     below_break_even,
     break_even,
+    finite,
+    fixed_decisions,
+    noisy_family,
     objective_histogram,
     rerun_set,
     session_fan,
+    undefined,
     unmeasured,
 )
 from ._blocks import LIMIT, CandlesBlock, Mark, Tile, TilesBlock
 from ._generate_noisy import Noise, noisy
 from ._part_objective import objective_name
-from ._reruns import NOISY, Family
 from ._setting import Setting, between, whole
 from ._trade_common import ENOUGH_TRADES, RUNS, no_edge, too_few
 from ._verdict import FAILED, PASSED, Outcome, not_judged
@@ -117,12 +128,16 @@ def run(
     short = too_few(trades, settings["min_trades"], text) or no_edge(trades, text)
     if short is not None:
         return short
+    if fixed_decisions(subject):
+        return not_judged(text, f"Noise cannot judge this strategy: {FIXED_ARRAYS}.")
     name, level = objective_name(objective), break_even(objective)
+    if not finite(subject.real):
+        return not_judged(text, undefined(name, "noise"))
     if level is None:
         return not_judged(text, unmeasured(objective))
     if not subject.real > level:
         return not_judged(text, below_break_even(name, subject.real, level))
-    family = Family(NOISY, seed, noise_of(settings))
+    family = noisy_family(subject.seed, noise_of(settings))
     set_ = rerun_set(subject.reruns.rows(family, range(runs)))
     values = set_.objective[set_.measured]
     if not len(values):

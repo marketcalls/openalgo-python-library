@@ -88,8 +88,9 @@ def _restore(shipped: tuple[str, Any]) -> Any:
 
 def run_batch(setup: Setup, family: Family, runs: Sequence[int]) -> list[RerunRow]:
     """The rows of runs `runs` of `family`, in order (module docstring); a worker's entry
-    point. Raises what a rerun raises, but for the data layer's refusal of generated bars,
-    which is kept as the run's failure."""
+    point. Raises what a rerun raises, but for a DataError, which is kept as the run's
+    failure: its bars could not be made (a generator's requirement), or the data checks
+    refused them."""
     strategy, objective = _restore(setup.strategy), _restore(setup.objective)
     atrs = None
     if family.bars == NOISY:
@@ -99,13 +100,16 @@ def run_batch(setup: Setup, family: Family, runs: Sequence[int]) -> list[RerunRo
     for run in runs:
         try:
             frames = family.frames(setup.bars, run, atrs)
-            chosen = strategy
-            if family.entries_seed is not None and setup.entries is not None:
-                decisions = schedule(setup.entries, family.entries_seed, run)
-                chosen = random_strategy(strategy, decisions)
+        except DataError as error:
+            rows.append(failed_row(f"its bars could not be made: {error}", len(setup.steps)))
+            continue
+        chosen = strategy
+        if family.entries_seed is not None and setup.entries is not None:
+            chosen = random_strategy(strategy, schedule(setup.entries, family.entries_seed, run))
+        try:
             result, _ = rerun(chosen, setup.arguments, setup.bars.symbols, frames, setup.known)
         except DataError as error:
-            rows.append(failed_row(error, len(setup.steps)))
+            rows.append(failed_row(f"the data checks refused its bars: {error}", len(setup.steps)))
             continue
         rows.append(measured_row(result, objective, setup.dates, setup.steps))
     return rows

@@ -2,14 +2,20 @@
 reruns' runner, and what each bar check reads (`_bar_common.BarRun`).
 
 The first rerun runs the strategy on the run's own bars through the reruns' path
-(`_rerun_one`): it does the indicator checks once for every rerun after it, times a
-rerun for the plan's estimate, tells the evaluation path, and should give the run's own
-objective. If it does not (a source whose bars changed since the run), the plan says so,
-since every generated run is then measured against a run that read other bars.
+(`_rerun_one`): it does the indicator checks once for every rerun after it, tells the
+evaluation path, and should give the run's own objective. If it does not (a source whose
+bars changed since the run), the plan says so, since every generated run is then
+measured against a run that read other bars. The plan's estimate is timed on run 0 of the
+first family of generated bars the checks read (a noisy one first, kept for the check
+that reads it), so it counts making the bars and measuring the rerun as well as the
+rerun; with no generated family (other markets alone) it is timed on the first rerun.
 
 How many reruns a report plans (`planned`): each bar check's runs (versus random's for
-each of its families; noise and permutation theirs; stress at most its candidates; other
-markets one a symbol), less the permutation test's runs that versus random shares.
+each of its families; noise and permutation theirs; stress its candidates; other markets
+one a symbol), less the runs two checks share: a family of generated bars is rerun once
+up to the most runs any check asks of it (`_bar_common`: the permutation test's permuted
+paths, which versus random and stress read, and the noise check's noisy copies, which
+stress reads at the default noise).
 """
 
 from __future__ import annotations
@@ -24,15 +30,18 @@ import numpy as np
 
 from .._conditions import EVENT_PATH
 from .._objective import evaluate
+from . import _random
 from . import _words as words
-from ._bar_common import BarRun
+from ._bar_common import BarRun, noisy_family, permuted_family
+from ._check_noise import noise_of
 from ._check_vs_random import RANDOM
+from ._check_vs_random import family as random_family
+from ._generate_noisy import Noise
 from ._paths import fan_steps
 from ._random_entries import EntryPlan, entry_plan
-from ._registry import BY_NAME
 from ._request import Request
 from ._rerun_one import Known, rerun
-from ._reruns import Reruns, Setup, Workers, choose_workers, shipped
+from ._reruns import NOISY, Family, Reruns, Setup, Workers, choose_workers, shipped
 from ._run_bars import RunBars, run_bars
 from ._trades import TradeRun
 
@@ -45,32 +54,44 @@ LARGE_EVENT_RERUNS = 1000
 SAME_OBJECTIVE = 1e-9
 
 
+def _families(request: Request, check: Any) -> list[tuple[Family | str, int]]:
+    """(family, runs) of each family of reruns bar check `check` asks for; other markets
+    has one family of its own (its symbols)."""
+    settings, runs = request.settings[check.name], request.runs_of(check)
+    if check.name == "vs_random":
+        seed = _random.check_seed(request.seed, check.number)
+        return [(random_family(name, seed, request.seed), runs) for name in settings["families"]]
+    if check.name == "permutation":
+        return [(permuted_family(request.seed), runs)]
+    if check.name == "noise":
+        return [(noisy_family(request.seed, noise_of(settings)), runs)]
+    if check.name == "stress":
+        return [
+            (noisy_family(request.seed, Noise()), settings["noise_candidates"]),
+            (permuted_family(request.seed), settings["permutation_candidates"]),
+        ]
+    return [("other symbols", len(request.others))]
+
+
 def planned(request: Request) -> tuple[dict[str, int], int]:
-    """(the reruns each bar check plans, by name; those versus random shares with the
-    permutation test) of `request` (module docstring)."""
+    """(the reruns each bar check plans, by name; how many of them another check shares)
+    of `request` (module docstring)."""
     counts: dict[str, int] = {}
+    most: dict[Family | str, int] = {}
     for check in request.reruns:
-        settings, runs = request.settings[check.name], request.runs_of(check)
-        if check.name == "vs_random":
-            counts[check.name] = runs * len(settings["families"])
-        elif check.name == "other_markets":
-            counts[check.name] = len(request.others)
-        elif check.name == "stress":
-            counts[check.name] = settings["noise_candidates"] + settings["permutation_candidates"]
-        else:
-            counts[check.name] = runs
-    shared = 0
-    both = "vs_random" in counts and "permutation" in counts
-    if both and "permuted" in request.settings["vs_random"]["families"]:
-        shared = min(request.runs_of(BY_NAME["vs_random"]), counts["permutation"])
-    return counts, shared
+        families = _families(request, check)
+        counts[check.name] = sum(runs for _, runs in families)
+        for family, runs in families:
+            most[family] = max(most.get(family, 0), runs)
+    return counts, sum(counts.values()) - sum(most.values())
 
 
 @dataclass(frozen=True, eq=False)
 class BarContext:
     """The bar checks' shared state: the run's bars, the reruns' runner and workers, the
-    run's objective (`real`), the first rerun's objective (`reference`) and its seconds,
-    and the evaluation path it took."""
+    run's objective (`real`), the first rerun's objective (`reference`), the seconds of
+    the timed rerun and whether it was on generated bars (module docstring), and the
+    evaluation path the first rerun took."""
 
     bars: RunBars
     reruns: Reruns
@@ -78,6 +99,7 @@ class BarContext:
     real: float
     reference: float
     seconds: float
+    generated: bool
     path: str
 
     @property
@@ -140,7 +162,27 @@ def bar_context(result: Any, request: Request, trades: TradeRun, total: int) -> 
     )
     real = evaluate(result, objective)["objective"]
     reference = evaluate(first, objective)["objective"]
-    return BarContext(bars, Reruns(setup, workers), workers, real, reference, seconds, paths[0])
+    reruns = Reruns(setup, workers)
+    timed = _timed_family(request)
+    if timed is not None:
+        started = time.perf_counter()
+        reruns.rows(timed, [0])
+        seconds = time.perf_counter() - started
+    generated = timed is not None
+    return BarContext(bars, reruns, workers, real, reference, seconds, generated, paths[0])
+
+
+def _timed_family(request: Request) -> Family | None:
+    """The family whose run 0 times the plan's estimate (module docstring), None when
+    the checks read no generated bars."""
+    families = [
+        family
+        for check in request.reruns
+        for family, runs in _families(request, check)
+        if isinstance(family, Family) and runs
+    ]
+    families.sort(key=lambda family: family.bars != NOISY)
+    return families[0] if families else None
 
 
 def plan_words(counts: Mapping[str, int], shared: int, context: BarContext | None) -> str:
@@ -150,11 +192,7 @@ def plan_words(counts: Mapping[str, int], shared: int, context: BarContext | Non
             "They read the run's trade list, so the backtest is not rerun and no worker "
             "process starts."
         )
-    parts = [
-        f"{name} {'up to ' if name == 'stress' else ''}{words.number(count, 0)}"
-        for name, count in counts.items()
-        if count
-    ]
+    parts = [f"{name} {words.number(count, 0)}" for name, count in counts.items() if count]
     total = words.number(sum(counts.values()) - shared, 0)
     text = (
         "The trade-list checks read the run's trade list; the bar checks rerun the backtest "
@@ -162,7 +200,10 @@ def plan_words(counts: Mapping[str, int], shared: int, context: BarContext | Non
         "each an ordinary backtest of the same kernel."
     )
     if shared:
-        text += f" Versus random shares {words.number(shared, 0)} runs with the permutation test."
+        text += (
+            f" The checks share {words.number(shared, 0)} of the runs listed, which read the "
+            "same generated bars, so the total counts each once."
+        )
     if context is not None and not context.same:
         text += (
             f" A rerun on the run's own bars gave {context.reference!r} where the run gave "
@@ -179,9 +220,14 @@ def timing_words(counts: Mapping[str, int], shared: int, context: BarContext) ->
     where = f"{workers.count} worker processes" if workers.count > 1 else "this process"
     why = f" ({workers.why})" if workers.why else ""
     estimate = total * context.seconds / max(workers.count, 1)
+    timed = (
+        "A rerun on generated bars took {:.2f} s, making its bars and measuring it included"
+        if context.generated
+        else "A rerun on the run's own bars took {:.2f} s"
+    )
     text = (
-        f" A rerun on the run's own bars took {context.seconds:.2f} s; in {where}{why} the "
-        f"reruns should take about {estimate:.1f} s."
+        f" {timed.format(context.seconds)}; in {where}{why} the reruns should take about "
+        f"{estimate:.1f} s."
     )
     if context.path == EVENT_PATH and total > LARGE_EVENT_RERUNS:
         text += (

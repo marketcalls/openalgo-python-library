@@ -2,8 +2,10 @@
 
     candles    bars as candles: a rising bar filled, a falling one hollow (so it reads
                without colour), its wick from low to high; x is the bar, y the price
-    lines      cumulative returns over dates on one time axis: the run's own bold,
-               another run thin, a buy and hold dotted, each named in the key
+    lines      returns over dates on one time axis: the run's own bold, another run
+               thin, a buy and hold dotted; the lines of one group (a symbol) share a
+               colour and end in the group's shape, so they read without colour, and the
+               key names each line's style and shape
     paths      groups of paths at the run's sessions, each group in its own colour and
                dash, the run's own bold
     table      a table of text, its first column a label
@@ -20,15 +22,18 @@ from ..report import _format as fmt
 from ..report._dashboard import scale
 from ..report._dashboard.bars import AXIS_TEXT, frame
 from ..report._dashboard.tables import head
-from ._blocks import BOLD, DOTTED, CandlesBlock, LinesBlock, PathsBlock, TableBlock
+from ._blocks import BOLD, DOTTED, CandlesBlock, Line, LinesBlock, PathsBlock, TableBlock
 from ._charts import HEIGHT, MARGIN, WIDTH, domain, inner, points, value_axis
 
-#: The classes of a line's style, and how the key names it.
-LINE_CLASSES = {BOLD: "line-bold", DOTTED: "line-dotted"}
+#: How the key names a line's style.
 LINE_WORDS = {BOLD: "bold", DOTTED: "dotted"}
 #: The groups of paths a chart tells apart by colour and dash, in order.
 GROUP_CLASSES = 4
 GROUP_DASHES = ("solid", "long dashes", "dots", "dash and dot")
+#: The shape at the end of each line of a group of lines, in order, and its radius in
+#: pixels.
+SHAPES = ("circle", "square", "triangle", "diamond")
+SHAPE_SIZE = 4.0
 #: The width of a candle's body, as a share of the space of one bar.
 BODY_SHARE = 0.6
 
@@ -74,8 +79,38 @@ def candles_chart(block: CandlesBlock) -> str:
     return f"{svg}<p class='key'>{key}. Wicks run from the low to the high.</p>"
 
 
+def _line_class(line: Line) -> str:
+    """The class of a line: bold for the run, else its group's colour, dotted for a buy
+    and hold."""
+    if line.style == BOLD:
+        return "line-bold"
+    kind = "hold" if line.style == DOTTED else "series"
+    return f"{kind}-{line.group % len(SHAPES)}"
+
+
+def _shape(group: int, cx: float, cy: float) -> str:
+    """The shape of `group` centred on (cx, cy), filled in the group's colour."""
+    r, css = SHAPE_SIZE, f"end-{group % len(SHAPES)}"
+    name = SHAPES[group % len(SHAPES)]
+    if name == "circle":
+        return f"<circle class='{css}' cx='{cx:.1f}' cy='{cy:.1f}' r='{r * 0.85:.1f}'/>"
+    if name == "square":
+        side = 1.5 * r
+        return (
+            f"<rect class='{css}' x='{cx - side / 2:.1f}' y='{cy - side / 2:.1f}' "
+            f"width='{side:.1f}' height='{side:.1f}'/>"
+        )
+    if name == "triangle":
+        corners = ((cx, cy - r), (cx + r, cy + 0.8 * r), (cx - r, cy + 0.8 * r))
+    else:
+        corners = ((cx, cy - r), (cx + r, cy), (cx, cy + r), (cx - r, cy))
+    path = " L ".join(f"{px:.1f} {py:.1f}" for px, py in corners)
+    return f"<path class='{css}' d='M {path} Z'/>"
+
+
 def lines_chart(block: LinesBlock) -> str:
-    """The lines of `block` on one time axis, with their key."""
+    """The lines of `block` on one time axis, each ending in its group's shape, with
+    their key."""
     lines = [line for line in block.lines if len(line.values)]
     if not lines:
         return "<p class='empty'>No chart: no line has a point.</p>"
@@ -90,15 +125,17 @@ def lines_chart(block: LinesBlock) -> str:
     words = []
     for line, dates in zip(lines, days, strict=True):
         xs = np.array([x(float((day - first).value)) for day in dates])
-        css = LINE_CLASSES.get(line.style, "line-thin")
+        ys = [y(v) for v in line.values]
         marks.append(
-            f"<polyline class='{css}' points='{points(xs, [y(v) for v in line.values], 1)}'>"
-            f"<title>{fmt.text(line.label)}</title></polyline>"
+            f"<g><title>{fmt.text(line.label)}</title><polyline class='{_line_class(line)}' "
+            f"points='{points(xs, ys, 1)}'/>{_shape(line.group, xs[-1], ys[-1])}</g>"
         )
-        words.append(f"{LINE_WORDS.get(line.style, 'thin')}: {fmt.text(line.label)}")
+        style = LINE_WORDS.get(line.style, "thin")
+        shape = SHAPES[line.group % len(SHAPES)]
+        words.append(f"{fmt.text(line.label)}: {style}, ending in a {shape}")
     marks.append(_date_ends(x, first, last, (0.0, float(span))))
     svg = frame(WIDTH, HEIGHT, MARGIN, fmt.text(block.title), "".join(marks))
-    return f"{svg}<p class='key'>{'; '.join(words)}. Cumulative return on the capital.</p>"
+    return f"{svg}<p class='key'>{'; '.join(words)}. {fmt.text(block.note)}</p>"
 
 
 def paths_chart(block: PathsBlock) -> str:

@@ -15,6 +15,7 @@ The runs:
 """
 
 import math
+import re
 import warnings
 
 import numpy as np
@@ -23,11 +24,14 @@ import pytest
 from data_fixtures.fakes import FakeClient
 from robust_runs import (
     FREE,
+    SMALL_BARS,
     Flip,
     bars,
     edge_run,
     no_edge_run,
+    nse_sessions,
     odd_close_run,
+    opens_bars,
     rising_run,
     steps_for,
 )
@@ -150,6 +154,84 @@ def test_a_win_rate_cannot_judge_the_noise_ratio(edge):
     result = checked(edge, "noise", runs=5, objective="win_rate").check("noise")
     assert result.verdict == NOT_JUDGED
     assert "a win rate is not a measure of profit" in result.note
+
+
+@pytest.mark.parametrize("name", ["noise", "vs_random"])
+def test_a_function_objective_cannot_judge_the_ratio_checks(edge, name):
+    # A ratio is measured from what a run that makes nothing scores, which a function
+    # does not say: the end equity, for one, scores the capital, so every noisy run would
+    # keep about all of it.
+    def end_equity(result):
+        return float(result.metrics["end_equity"])
+
+    result = checked(edge, name, runs=5, objective=end_equity).check(name)
+    assert result.verdict == NOT_JUDGED
+    assert result.note.startswith(
+        "The objective end_equity cannot judge this check: what a function of a Result gives "
+        "for a run that makes nothing is not known"
+    )
+
+
+@pytest.fixture(scope="module")
+def one_session():
+    """Flip on 5-minute bars of one session: 34 trades of +10 rupees, and a Sharpe ratio
+    that is undefined, since it needs returns over two sessions or more."""
+    day = nse_sessions("2024-03-01", 1)[0]
+    stamps = pd.DatetimeIndex(
+        [
+            pd.Timestamp(f"{day} 09:15", tz="Asia/Kolkata") + pd.Timedelta(minutes=5 * k)
+            for k in range(75)
+        ],
+        name="timestamp",
+    )
+    steps = np.where(np.arange(75) % 2 == 1, 1.0, -0.5)
+    opens = 500 + np.concatenate(([0.0], np.cumsum(steps)[:-1]))
+    columns = {"open": opens, "high": opens + 0.5, "low": opens - 0.5, "close": opens}
+    data = pd.DataFrame({**columns, "volume": 1_000.0}, index=stamps)
+
+    class FiveMinuteFlip(Flip):
+        interval = "5m"
+
+    return bt.backtest(FiveMinuteFlip, data=data, **FREE)
+
+
+@pytest.mark.parametrize(("name", "compared"), [("noise", "noise"), ("vs_random", "random")])
+def test_an_undefined_objective_is_named_undefined(one_session, name, compared):
+    assert math.isnan(one_session.metrics["sharpe"]) and one_session.metrics["net_profit"] > 0
+    result = checked(one_session, name, runs=5).check(name)
+    assert result.verdict == NOT_JUDGED
+    assert result.note.startswith("The run's sharpe is undefined")
+    assert f"so the {compared} runs have no figure to be measured against" in result.note
+
+
+def test_noise_cannot_judge_decisions_fixed_in_advance():
+    # Arrays made from the real bars stay the same on every noisy copy, so noise could
+    # move only the fills: the strategy would keep its edge whatever it was fitted to.
+    data = bars(steps_for(EDGE_MOVES, 60))
+    bar = np.arange(len(data))
+    fixed = bt.from_arrays(
+        bar % 2 == 0,
+        bar % 2 == 1,
+        symbol="SBIN",
+        exchange="NSE",
+        interval="D",
+        size=bt.size.qty(10),
+    )
+    result = bt.backtest(fixed, data=data, **FREE)
+    stress = {"noise_candidates": 4, "permutation_candidates": 4}
+    report = result.robustness(
+        checks=["noise", "stress"], workers=1, runs=5, stress=stress, progress=quiet
+    )
+    noise = report.check("noise")
+    assert noise.verdict == NOT_JUDGED
+    assert noise.note == (
+        "Noise cannot judge this strategy: its decisions are arrays fixed in advance "
+        "(bt.from_arrays), which never read the generated bars, so on them it trades at the "
+        "same bars and only its fills move."
+    )
+    assert "its decisions are arrays fixed in advance (bt.from_arrays)" in (
+        report.check("stress").note
+    )
 
 
 def test_the_noise_section_shows_the_bars_beside_a_noisy_copy(edge):
@@ -291,7 +373,31 @@ def test_the_other_markets_section_draws_each_symbol_and_its_buy_and_hold(three_
     (chart,), (table,) = report._blocks["other_markets"]
     assert isinstance(chart, LinesBlock)
     assert [line.style for line in chart.lines] == ["bold", "dotted", "thin", "dotted"]
+    assert [line.group for line in chart.lines] == [0, 0, 1, 1]
     assert isinstance(table, TableBlock) and table.rows[0][0] == "ICICIBANK"
+
+
+def test_the_other_markets_chart_tells_each_symbol_apart_without_colour(three_symbols):
+    # Each symbol's two lines share its colour and the shape at their end; the key names
+    # every line's style and shape, and says what a buy and hold measures.
+    result = bt.backtest(Flip, data=three_symbols, **FREE)
+    page = result.robustness(
+        checks=["other_markets"], others=["ICICIBANK", "HDFCBANK"], progress=quiet
+    ).tearsheet()
+    section = page[page.index("Equity by symbol") :]
+    classes = re.findall(r"<polyline class='([a-z0-9-]+)'", section)
+    assert classes == ["line-bold", "hold-0", "series-1", "hold-1", "series-2", "hold-2"]
+    ends = re.findall(r"class='end-(\d)'", section)
+    assert ends == ["0", "0", "1", "1", "2", "2"]
+    key = re.search(r"<p class='key'>(SBIN, the run[^<]*)</p>", section).group(1)
+    assert key == (
+        "SBIN, the run: bold, ending in a circle; SBIN buy and hold: dotted, ending in a "
+        "circle; ICICIBANK: thin, ending in a square; ICICIBANK buy and hold: dotted, ending "
+        "in a square; HDFCBANK: thin, ending in a triangle; HDFCBANK buy and hold: dotted, "
+        "ending in a triangle. A strategy line is its cumulative return on the capital; a buy "
+        "and hold is the return of the price from the open of its first bar of the run, which "
+        "a run invested in part of the time does not compare with directly."
+    )
 
 
 # ----- synthetic stress ----------------------------------------------------------------
@@ -304,9 +410,88 @@ def test_a_planted_edge_holds_on_every_noisy_candidate(edge):
     assert result.table.set_index("rule").loc["<lambda>", "kept"] == 20
 
 
-def test_an_edge_on_a_digit_of_the_close_fails_on_permuted_candidates(odd_close):
-    stress = {"noise_candidates": 0, "permutation_candidates": 40, **ALWAYS}
-    assert checked(odd_close, "stress", stress=stress).check("stress").verdict == FAILED
+def test_a_planted_edge_passes_synthetic_stress_at_its_defaults(edge):
+    # The permutation takes the planted edge away (it lives in the order of the moves), so
+    # the strategy makes money on about half the permuted paths, shocks or not; judged
+    # against that share, the shocks among them take nothing more from it.
+    result = checked(edge, "stress").check("stress")
+    assert result.verdict == PASSED
+    assert result.summary["permuted_profitable"] < 0.6
+    assert result.summary["noisy_profitable"] == 1.0
+
+
+def test_a_strategy_whose_losses_fall_on_the_shocks_fails(edge):
+    # A rule that keeps exactly the permuted paths on which Flip loses: Flip makes money
+    # on about half of them all, and on none of those kept.
+    def flip_loses(real, candidate):
+        opens = candidate["open"].to_numpy()
+        return (opens[2:121:2] - opens[1:120:2]).sum() < 0
+
+    stress = {"noise_candidates": 10, "permutation_candidates": 60, "rules": [flip_loses]}
+    result = checked(edge, "stress", stress=stress).check("stress")
+    assert result.verdict == FAILED
+    row = result.table.set_index("rule").loc["flip_loses"]
+    assert row["kept_noisy"] == 0 and row["kept"] >= 10
+    assert row["profitable_share"] == 0.0 and row["expected_share"] > 0.3
+
+
+def test_an_edge_of_the_drift_alone_has_no_shock_to_judge(rising):
+    # Bars that rise a rupee every session: a permutation of equal moves is the same path
+    # and noise of a fifth of a bar's range never makes the price fall, so no candidate
+    # falls deeper, longer or further below its average than the run's own bars.
+    result = checked(rising, "stress", objective="net_profit").check("stress")
+    assert result.verdict == NOT_JUDGED
+    assert result.summary == {} and result.note.startswith("Too few kept candidates to judge")
+
+
+@pytest.fixture(scope="module")
+def walk():
+    """An EMA crossover on a random walk of 600 sessions: a realistic path, with history
+    before start for its averages."""
+    from test_robust_bar_parts import Ema
+
+    rng = np.random.default_rng(5)
+    opens = 500 + np.cumsum(np.round(rng.normal(0.1, 3.0, 600) / 0.05) * 0.05)
+    data = opens_bars(opens)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return bt.backtest(Ema, data=data, start=data.index[150].date(), **FREE)
+
+
+def test_stress_keeps_only_the_candidates_that_are_shocks(walk):
+    # A noisy copy moves each price by at most a fifth of the bar's range, which never
+    # makes a fall half as deep again as the run's own; a few permuted paths do.
+    stress = {"noise_candidates": 50, "permutation_candidates": 50, "min_trades": 2, "min_kept": 1}
+    result = checked(walk, "stress", stress=stress).check("stress")
+    table = result.table.set_index("rule")
+    assert table["kept_noisy"].sum() == 0
+    assert 0 < result.summary["kept"] <= 25  # a quarter of the 100 candidates at most
+
+
+def test_the_stress_rule_says_which_rules_are_judged(edge):
+    result = checked(edge, "stress", stress={"noise_candidates": 4, "permutation_candidates": 0})
+    rule = result.check("stress").rule
+    assert rule == (
+        "under every rule that keeps 10 or more candidates, the kept ones make money at "
+        "least 50% as often as all the candidates of their generators"
+    )
+
+
+def test_stress_reruns_the_permutation_tests_paths_and_the_noise_checks_copies(edge):
+    lines = []
+    edge.robustness(
+        checks=["permutation", "noise", "stress"],
+        workers=1,
+        runs=20,
+        stress={"noise_candidates": 10, "permutation_candidates": 20},
+        progress=lines.append,
+    )
+    assert (
+        "the bar checks rerun the backtest 40 times or fewer on generated bars or other "
+        "symbols (permutation 20, noise 20, stress 30), each an ordinary backtest of the same "
+        "kernel. The checks share 30 of the runs listed, which read the same generated bars, "
+        "so the total counts each once."
+    ) in lines[0]
 
 
 def test_rules_that_keep_too_few_candidates_are_not_judged(edge):
@@ -422,20 +607,52 @@ def test_the_bar_checks_change_no_figure_of_the_run(edge):
     pd.testing.assert_frame_equal(edge.metrics_table(), before)
 
 
+class PairFlip(bt.Strategy):
+    """Flip on SBIN, with ICICIBANK's bars read too."""
+
+    symbols, exchange, interval = ("SBIN", "ICICIBANK"), "NSE", "D"
+
+    def on_bar(self, bar):
+        if self.positions["SBIN"].is_flat:
+            self.buy(qty=10, symbol="SBIN")
+        else:
+            self.exit("SBIN")
+
+
 def test_a_strategy_on_two_symbols_is_permuted_on_one_grid():
-    class PairFlip(bt.Strategy):
-        symbols, exchange, interval = ("SBIN", "ICICIBANK"), "NSE", "D"
-
-        def on_bar(self, bar):
-            if self.positions["SBIN"].is_flat:
-                self.buy(qty=10, symbol="SBIN")
-            else:
-                self.exit("SBIN")
-
     edge_bars = bars(steps_for(EDGE_MOVES, 60))
     result = bt.backtest(PairFlip, data={"SBIN": edge_bars, "ICICIBANK": edge_bars}, **FREE)
     check = checked(result, "permutation", runs=20).check("permutation")
     assert check.verdict == PASSED and (check.table["refused"] == "").all()
+
+
+@pytest.fixture(scope="module")
+def missing_bar():
+    """PairFlip with one session missing from ICICIBANK's bars: 122 and 121 bars."""
+    edge_bars = bars(steps_for(EDGE_MOVES, 60))
+    other = edge_bars.drop(edge_bars.index[50])
+    return bt.backtest(PairFlip, data={"SBIN": edge_bars, "ICICIBANK": other}, **FREE)
+
+
+GRID = "the bars of SBIN and ICICIBANK are not at the same times (122 and 121 bars)"
+
+
+def test_stress_on_symbols_with_a_missing_bar_judges_its_noisy_candidates(missing_bar):
+    stress = {"noise_candidates": 10, "permutation_candidates": 10, **ALWAYS}
+    check = checked(missing_bar, "stress", stress=stress).check("stress")
+    assert check.verdict == PASSED and check.summary["candidates"] == 10
+    assert f"Permuted candidates are left out: {GRID}" in check.note
+
+
+def test_a_full_report_on_symbols_with_a_missing_bar_keeps_every_check(missing_bar):
+    report = missing_bar.robustness(progress=quiet, **SMALL_BARS)
+    permutation = report.check("permutation")
+    assert permutation.verdict == NOT_JUDGED
+    assert permutation.note.startswith(f"No permuted path can be made: {GRID}")
+    vs_random = report.check("vs_random")
+    assert set(vs_random.table["family"]) == {"random_entries"}
+    assert f"The families on permuted bars are left out: {GRID}" in vs_random.note
+    assert report.check("noise").verdict == PASSED
 
 
 def test_the_bar_checks_of_a_futures_series_are_not_supported():
@@ -454,4 +671,5 @@ def test_the_other_markets_page_is_one_well_formed_page(three_symbols):
     ).tearsheet()
     structure = Structure(page)
     assert structure.errors == [] and structure.stack == []
-    assert page.count("class='line-bold'") == 1 and page.count("class='line-dotted'") == 2
+    assert page.count("class='line-bold'") == 1 and page.count("class='series-1'") == 1
+    assert page.count("class='hold-0'") == 1 and page.count("class='hold-1'") == 1

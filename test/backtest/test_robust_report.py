@@ -238,11 +238,14 @@ def test_the_plan_counts_the_reruns_before_they_run(edge):
         "each from seed 0, on 60 closed trades over 122 sessions. The trade-list checks read "
         "the run's trade list; the bar checks rerun the backtest 60 times or fewer on "
         "generated bars or other symbols (vs_random 60, permutation 20), each an ordinary "
-        "backtest of the same kernel. Versus random shares 20 runs with the permutation test."
+        "backtest of the same kernel. The checks share 20 of the runs listed, which read the "
+        "same generated bars, so the total counts each once."
     )
+    # The estimate is timed on a rerun of generated bars, making the bars and measuring
+    # the rerun included, which a rerun of the run's own bars leaves out.
     assert re.search(
-        r"A rerun on the run's own bars took \d+\.\d\d s; in this process the reruns should "
-        r"take about \d+\.\d s\.$",
+        r"A rerun on generated bars took \d+\.\d\d s, making its bars and measuring it "
+        r"included; in this process the reruns should take about \d+\.\d s\.$",
         lines[0],
     )
 

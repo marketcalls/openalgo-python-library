@@ -85,13 +85,16 @@ def _prices(opens):
     return prices(frame, int(frame["ts_open"].iloc[0]))
 
 
-SETTINGS = {"average": 200, "correlation": 0.5}
+SETTINGS = {"average": 200, "correlation": 0.5, "shock": 1.5}
 
 
+# The real closes 100, 120, 90, 130, 140 fall a quarter from their high (120 to 90) and
+# stay below it 1 session; a shock is half as deep again or as long again (`shock` 1.5).
 @pytest.mark.parametrize(
     ("name", "candidate", "expected"),
     [
-        ("drawdown", [100, 120, 80, 130], True),  # a fall of a third, deeper than 1/4
+        ("drawdown", [100, 120, 70, 130], True),  # 120 to 70: 0.417, at least 0.375
+        ("drawdown", [100, 120, 80, 130], False),  # 0.333: deeper, but not a shock
         ("drawdown", [100, 120, 100, 130], False),
         ("recovery", [100, 120, 110, 105, 130], True),  # 2 sessions below, against 1
         ("recovery", [100, 120, 110, 125, 130], False),
@@ -99,22 +102,127 @@ SETTINGS = {"average": 200, "correlation": 0.5}
         ("correlation", [100, 120, 90, 130, 140], False),
     ],
 )
-def test_a_built_in_rule_holds_when_the_candidate_is_worse(name, candidate, expected):
+def test_a_built_in_rule_holds_when_the_candidate_is_a_shock(name, candidate, expected):
     real = _prices([100, 120, 90, 130, 140])
     (rule,) = stress_rules([name], SETTINGS)
-    assert held([rule], [real], [_prices(candidate)]) == (expected,)
+    assert held([rule], [real], [_prices(candidate)], permuted=False) == (expected,)
+
+
+# With a 2-session average the real closes fall at most 90 / 105 - 1 = -0.143 below it;
+# half as deep again is 0.214. 75 / 97.5 - 1 = -0.231 is a shock, 80 / 100 - 1 = -0.2 not.
+@pytest.mark.parametrize(("low", "expected"), [(75, True), (80, False)])
+def test_a_fall_below_the_average_is_a_shock_half_as_deep_again(low, expected):
+    real, candidate = _prices([100, 120, 90, 130, 140]), _prices([100, 120, low, 130, 140])
+    (rule,) = stress_rules(["below_average"], {**SETTINGS, "average": 2})
+    assert held([rule], [real], [candidate], permuted=False) == (expected,)
+
+
+def test_any_fall_is_a_shock_for_a_series_that_never_fell():
+    real, candidate = _prices([100, 101, 102]), _prices([100, 99.5, 102])
+    (rule,) = stress_rules(["drawdown"], SETTINGS)
+    assert held([rule], [real], [candidate], permuted=False) == (True,)
+
+
+def test_the_correlation_rule_reads_noisy_candidates_only():
+    # A permuted path is the run's own moves in another order: on daily bars its returns
+    # are uncorrelated with the real ones by construction, which is no shock.
+    real, candidate = _prices([100, 120, 90, 130, 140]), _prices([100, 90, 99, 89.1, 98])
+    (rule,) = stress_rules(["correlation"], SETTINGS)
+    assert held([rule], [real], [candidate], permuted=False) == (True,)
+    assert held([rule], [real], [candidate], permuted=True) == (False,)
+
+
+def test_the_default_rules_are_the_three_that_find_a_shock_on_either_generator():
+    from openalgo.backtest._robust._check_stress import SETTINGS as STRESS
+
+    defaults = {setting.name: setting.default for setting in STRESS}
+    assert defaults["rules"] == ("drawdown", "recovery", "below_average")
+    assert defaults["shock"] == 1.5
 
 
 def test_a_rule_given_as_a_function_reads_the_runs_bars():
     real, candidate = _prices([100, 101, 102]), _prices([100, 99, 98])
     (rule,) = stress_rules([lambda a, b: b["close"].iloc[-1] < a["close"].iloc[-1]], SETTINGS)
-    assert held([rule], [real], [candidate]) == (True,)
+    assert held([rule], [real], [candidate], permuted=True) == (True,)
     assert rule.name == "<lambda>"
 
 
-@pytest.mark.parametrize("value", ["drawdown", [], ["drawdown", "bogus"], [3]])
-def test_rules_that_name_no_rule_are_refused(value):
+def _first(real, candidate):
+    return True
+
+
+def _second(real, candidate):
+    return False
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "drawdown",
+        [],
+        ["drawdown", "bogus"],
+        [3],
+        ["drawdown", "drawdown"],  # one name twice
+        [lambda a, b: True, lambda a, b: False],  # two functions both named <lambda>
+    ],
+)
+def test_rules_that_name_no_rule_or_one_name_twice_are_refused(value):
     assert rules_value(value) is None
+
+
+def test_rules_with_a_name_each_are_taken():
+    assert rules_value(["drawdown", _first, _second]) == ("drawdown", _first, _second)
+
+
+def test_two_rules_of_one_name_are_refused_with_what_to_do():
+    from openalgo.backtest.errors import ConfigError
+
+    with pytest.raises(ConfigError, match="each with a name of its own"):
+        edge_run().robustness(checks=["stress"], stress={"rules": ["drawdown", "drawdown"]})
+
+
+# ----- judging the kept candidates -----------------------------------------------------
+
+
+def _set(net_profit):
+    """A RerunSet of runs that ran, with these net profits, rupees."""
+    from openalgo.backtest._robust._bar_common import RerunSet
+
+    pnl = np.asarray(net_profit, dtype=float)
+    count = np.zeros(len(pnl), dtype=np.int64)
+    return RerunSet(
+        pnl, pnl, pnl, count, pnl, pnl, count, count, np.zeros((len(pnl), 2)), ("",) * len(pnl)
+    )
+
+
+def test_a_rules_kept_candidates_are_judged_against_their_generators_share():
+    # Ten noisy candidates all make 100 (their generator's share: 100%); ten permuted
+    # ones, of which the first four make 50 and the rest lose 50 (40%).
+    #   a: noisy 0-4 and permuted 0-4: 9 of 10 profitable, expected (5 x 1 + 5 x 0.4) / 10
+    #      = 0.7, so 1.29 times
+    #   b: permuted 2-9: 2 of 8, expected 0.4, 0.625 times, at least 0.5: kept
+    #   c: noisy 5-9: 5 kept, fewer than min_kept 6: not judged
+    #   d: permuted 4-9: 0 of 6, 0 times: it fails the check
+    from openalgo.backtest._robust._check_stress import Candidates, rule_table
+    from openalgo.backtest._robust._stress_rules import StressRule
+
+    generators = np.array(["noisy"] * 10 + ["permuted"] * 10)
+    holds = {"a": [*range(5), *range(10, 15)], "b": range(12, 20), "c": range(5, 10)}
+    holds["d"] = range(14, 20)
+    flags = np.zeros((20, 4), dtype=bool)
+    for k, rows in enumerate(holds.values()):
+        flags[list(rows), k] = True
+    candidates = Candidates(generators, flags, "")
+    rules = [StressRule(name, name, lambda a, b: True, True) for name in holds]
+    pnl = [100.0] * 10 + [50.0] * 4 + [-50.0] * 6
+    settings = {"combine": "any", "min_kept": 6, "keep": 0.5}
+    table = rule_table(rules, candidates, _set(pnl), settings)
+    assert table["kept"].tolist() == [10, 8, 5, 6]
+    assert table["profitable_share"].tolist() == pytest.approx([0.9, 0.25, 1.0, 0.0])
+    assert table["expected_share"].tolist() == pytest.approx([0.7, 0.4, 1.0, 0.4])
+    assert table["ratio"].tolist() == pytest.approx([0.9 / 0.7, 0.625, 1.0, 0.0])
+    assert table["judged"].tolist() == [True, True, False, True]
+    assert table["passed"].tolist() == [True, True, False, False]
 
 
 # ----- random entries ------------------------------------------------------------------
@@ -331,13 +439,15 @@ def test_a_strategy_made_at_run_time_reruns_in_this_process():
     assert chosen.count == 1 and "bt.from_arrays" in chosen.why
 
 
-def final_equity(result):
-    """A function of a Result, read as a measure of profit."""
-    return float(result.metrics["end_equity"])
+def net_profit_of(result):
+    """A function of a Result: its net profit in rupees."""
+    return float(result.metrics["net_profit"])
 
 
 # (objective, break-even): what a run that makes nothing scores, or None for an objective
-# that cannot say whether a run made money (a win rate, a drawdown, a trade count).
+# that cannot say whether a run made money (a win rate, a drawdown, a trade count) and for
+# any function of a Result, even one that measures profit: what a function gives for a run
+# that makes nothing is not known (the end equity gives the capital, not 0).
 BREAK_EVENS = [
     ("sharpe", 0.0),
     ("sortino", 0.0),
@@ -348,7 +458,7 @@ BREAK_EVENS = [
     ("net_pnl", 0.0),
     ("total_return", 0.0),
     ("cagr", 0.0),
-    (final_equity, 0.0),
+    (net_profit_of, None),
     ("win_rate", None),
     ("max_drawdown", None),
     ("trades", None),

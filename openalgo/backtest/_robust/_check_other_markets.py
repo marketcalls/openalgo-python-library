@@ -15,7 +15,9 @@ of the symbols profitable. Not judged without `others=`, or when the run did not
 money or has too few closed trades.
 
 Charts: each symbol's equity with the run's bold and each symbol's buy and hold (its
-session closes over the open of its first bar of the run) dotted; a table by symbol.
+session closes over the open of its first bar of the run, the price's return, not a
+return on the capital) dotted, a symbol's two lines in its colour and ending in its
+shape; a table by symbol.
 """
 
 from __future__ import annotations
@@ -147,7 +149,7 @@ def run(
     if short is not None:
         return short
     rows, lines = [], [_own_lines(subject)]
-    for symbol, exchange in subject.others:
+    for group, (symbol, exchange) in enumerate(subject.others, start=1):
         result, hold = other_run(subject, symbol, exchange)
         metrics = result.metrics
         rows.append(
@@ -162,7 +164,7 @@ def run(
                 "buy_and_hold": float(hold.iloc[-1]) if len(hold) else np.nan,
             }
         )
-        lines.append(_lines(symbol, equity_line(result), hold))
+        lines.append(_lines(symbol, equity_line(result), hold, group))
     table = pd.DataFrame(rows).set_index("symbol")
     return _judged(subject, table, lines, settings, objective, text)
 
@@ -182,10 +184,17 @@ def _own_equity(subject: BarRun, hold: pd.Series) -> np.ndarray:
     return own.reindex(hold.index, method="ffill").fillna(0.0).to_numpy(dtype=float)
 
 
-def _lines(symbol: str, equity: pd.Series, hold: pd.Series) -> tuple[Line, ...]:
+def _lines(symbol: str, equity: pd.Series, hold: pd.Series, group: int) -> tuple[Line, ...]:
+    """The lines of the other symbol `symbol`, in its `group`'s colour and shape."""
     return (
-        Line(symbol, pd.DatetimeIndex(equity.index), equity.to_numpy(), THIN),
-        Line(f"{symbol} buy and hold", pd.DatetimeIndex(hold.index), hold.to_numpy(), DOTTED),
+        Line(symbol, pd.DatetimeIndex(equity.index), equity.to_numpy(), THIN, group),
+        Line(
+            f"{symbol} buy and hold",
+            pd.DatetimeIndex(hold.index),
+            hold.to_numpy(),
+            DOTTED,
+            group,
+        ),
     )
 
 
@@ -222,11 +231,20 @@ def _judged(
     return Outcome(verdict, figure, text, note, table.reset_index(), summary, blocks)
 
 
+#: What the lines of the other markets chart measure, for its key.
+LINES_NOTE = (
+    "A strategy line is its cumulative return on the capital; a buy and hold is the return "
+    "of the price from the open of its first bar of the run, which a run invested in part "
+    "of the time does not compare with directly."
+)
+
+
 def _blocks(subject: BarRun, table: pd.DataFrame, lines: Sequence, name: str) -> tuple:
     chart = LinesBlock(
         "Equity by symbol",
-        "Cumulative return; the run bold, buy and hold dotted",
+        "Each symbol in its colour and shape; the run bold, buy and hold dotted",
         tuple(line for group in lines for line in group),
+        LINES_NOTE,
     )
     rows = tuple(
         (

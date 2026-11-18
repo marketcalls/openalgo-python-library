@@ -17,9 +17,9 @@ What a check keeps of a rerun (`RerunRow`): the objective, the net profit in rup
 the maximum drawdown (a fraction, zero or negative), the closed trades, the largest win
 and loss in rupees, the longest win and loss streaks in trades, and the cumulative return
 at the fan's sessions (`path`, fractions of the capital: point 0 is the start, point k
-the close of the k-th session of the run). A rerun whose generated bars the data layer
-refuses (DataError) keeps NaN figures and the reason in `failure`; any other error is
-the strategy's or the engine's and is raised.
+the close of the k-th session of the run). A rerun whose bars could not be made or that
+the data layer refuses (a DataError, `_reruns.run_batch`) keeps NaN figures and the
+reason in `failure`; any other error is the strategy's or the engine's and is raised.
 """
 
 from __future__ import annotations
@@ -35,7 +35,6 @@ import pandas as pd
 from .._causality_checks import IndicatorChecks
 from .._objective import evaluate
 from .._pipeline import execute, prepare
-from ..errors import DataError
 from ._run_bars import strategy_name
 
 
@@ -117,10 +116,11 @@ def _count(value: Any) -> int:
     return 0 if math.isnan(number) else int(number)
 
 
-def failed_row(error: DataError, points: int) -> RerunRow:
-    """The row of a rerun whose bars the data layer refused."""
+def failed_row(reason: str, points: int) -> RerunRow:
+    """The row of a rerun left out for `reason` (its bars could not be made, or the data
+    layer refused them), with `points` points of its path."""
     nan = math.nan
-    return RerunRow(nan, nan, nan, 0, nan, nan, 0, 0, np.full(points, nan), str(error))
+    return RerunRow(nan, nan, nan, 0, nan, nan, 0, 0, np.full(points, nan), reason)
 
 
 __all__ = ["Known", "RerunRow", "failed_row", "measured_row", "path_at", "rerun"]
