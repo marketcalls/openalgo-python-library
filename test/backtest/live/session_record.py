@@ -216,7 +216,13 @@ class SessionRecord:
         of today's slices the last bar its live series took (a catch-up candle, a bar
         built from ticks, or the broker candle that replaced it or filled a slice marked
         missing, such as the seed slice the session started in). A slice the series
-        never took a bar of is not in it, as a backtest runs a minute it has no bar of."""
+        never took a bar of is not in it, as a backtest runs a minute it has no bar of.
+
+        A slice whose bar was replaced after the decision at its close (`replaced`: after
+        a tick gap, the broker's candle in place of the bar built from ticks) is given by
+        its candle, the bar every later decision saw; the decision at its own close saw
+        the bar built from ticks, so a backtest of these bars may decide that slice
+        otherwise than the session did."""
         rows: dict[int, list[float]] = {}
         for line in self.lines:
             if line["strategy"] != strategy:
@@ -225,8 +231,26 @@ class SessionRecord:
                 rows.update((row[0], row) for row in line["base"])
             elif line["kind"] == "series" and line["call"] == "take":
                 (bar,) = line["args"]
-                rows[bar["ts_open_ns"]] = [bar["ts_open_ns"], *(bar[name] for name in _PRICES)]
+                rows[bar["ts_open_ns"]] = _taken_row(bar)
         return _bars_frame([rows[opened] for opened in sorted(rows)])
+
+    def replaced(self, strategy: str) -> list[int]:
+        """The opens (UTC nanoseconds) of today's slices whose bar `strategy`'s live
+        series took again, a different one, after its first: after a tick gap, the
+        broker's candle replacing the bar built from ticks once it is read, after the
+        decision at the slice's close (16-session-design 2.5 C). That decision saw the
+        first bar, each later one the last (`bars`)."""
+        first: dict[int, list[float]] = {}
+        found: list[int] = []
+        for line in self.lines:
+            if (line["strategy"], line["kind"], line.get("call")) != (strategy, "series", "take"):
+                continue
+            (bar,) = line["args"]
+            opened, row = bar["ts_open_ns"], _taken_row(bar)
+            kept = first.setdefault(opened, row)
+            if row != kept and opened not in found:
+                found.append(opened)
+        return found
 
     def kernel_bars(self, strategy: str) -> pd.DataFrame:
         """The 1-minute bars `strategy`'s kernel session was given (`add_bar`): the
@@ -243,6 +267,11 @@ class SessionRecord:
             elif line["kind"] == "bar":
                 rows.append(line["args"][1])
         return _bars_frame(rows)
+
+
+def _taken_row(bar: Mapping[str, Any]) -> list[float]:
+    """A bar a series took (a `series` line's argument) as a `history` row."""
+    return [bar["ts_open_ns"], *(bar[name] for name in _PRICES)]
 
 
 def _bars_frame(rows: list[list[float]]) -> pd.DataFrame:

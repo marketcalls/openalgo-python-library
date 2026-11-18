@@ -37,6 +37,13 @@ difference:
   backtest holds it as a level of the leg, with no order.
 - **An exit's units.** The live exit names the units it closes, as a broker order must;
   the backtest's closes whatever the position holds (0 units asked, the position filled).
+- **A bar replaced after its decision.** After a tick gap the strategy's series takes the
+  broker's candle in place of the bar built from ticks once the candle is read, after
+  the decision at that slice's close (16-session-design 2.5 C). `SessionRecord.bars`
+  gives the candle, the bar every later decision saw, so a backtest of them may decide
+  that slice otherwise than the session did (`SessionRecord.replaced` names such
+  slices). This scenario has no tick gap and no replaced bar (asserted); the tick gap of
+  `test_session_candles` (F42) is recorded to show the slice where they differ.
 
 Expected values come from the scenario, the fake's books and the backtest's own bars.
 """
@@ -50,8 +57,9 @@ import pandas as pd
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from session_recorder import record_sessions
-from session_samples import CAPITAL, DAY, MAX_DAILY_LOSS, ist
+from session_samples import CAPITAL, DAY, MAX_DAILY_LOSS, PRICE, ist, rig
 from stops_samples import stop_world
+from test_session_candles import InfyTicks, Opens, climbing
 
 import openalgo.backtest as bt
 from openalgo import ta
@@ -177,6 +185,42 @@ def test_the_kernels_bars_lack_only_the_seed_slice_which_the_strategy_held_as_it
     assert list(bars.index.difference(kernel.index)) == [seed]
     assert kernel.index.difference(bars.index).empty
     assert bars.drop(index=seed).equals(kernel)
+
+
+def test_no_bar_the_strategy_decided_on_was_replaced_after_its_decision(runs):
+    # With no tick gap, the series never takes a candle in place of a bar it decided on,
+    # so each decision saw the bar the backtest is given.
+    _, _, _, record, _ = runs
+    assert record.replaced("Parity") == []
+
+
+def test_a_tick_gaps_slice_is_decided_on_its_tick_bar_and_given_to_a_backtest_as_its_candle(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog
+):
+    # F42's gap: SBIN's first three trades of 14:43 send no tick, so the bar built from
+    # ticks opens at the fourth (PRICE + 1.50) while the broker's candle opens at PRICE.
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+    Opens.seen = []
+    world = rig(make_fake_openalgo, monkeypatch, tmp_path, symbols=("SBIN", "INFY"))
+    world.script.price = climbing
+    world.script.at(ist(14, 42, 59), lambda: world.fake.faults.tick_gap("SBIN", "NSE", trades=3))
+    world.stop_at(ist(14, 46))
+    recorder = record_sessions(monkeypatch)
+    world.run([Opens, InfyTicks])
+    (record,) = recorder.finish()
+    gap = ist(14, 43)
+    assert record.replaced("Opens") == [gap]
+    takes = [
+        at
+        for at, line in enumerate(record.lines)
+        if (line["strategy"], line["kind"], line.get("call")) == ("Opens", "series", "take")
+        and line["args"][0]["ts_open_ns"] == gap
+    ]
+    decided = [line for line in record.lines[takes[0] : takes[-1]] if line["kind"] == "drive"]
+    assert any(line["strategy"] == "Opens" and line["deciding"] for line in decided)
+    at = ist_time(gap)
+    assert record.kernel_bars("Opens").loc[at, "open"] == pytest.approx(PRICE + 1.5)
+    assert record.bars("Opens").loc[at, "open"] == pytest.approx(PRICE)
 
 
 def test_the_strategys_last_decision_is_bars_before_the_records_last(runs):

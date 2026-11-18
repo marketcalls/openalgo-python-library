@@ -203,6 +203,31 @@ def test_the_finished_line_holds_the_runs_working_orders_and_open_position(sessi
     assert held == session.scenario.held_at_end
 
 
+def series_take(opened: int, open_: float, close: float) -> dict:
+    """A record's line of a 1-minute bar SBIN's series took (prices rupees)."""
+    bar = {"ts_open_ns": opened, "open": open_, "high": close, "low": open_, "close": close}
+    return {"kind": "series", "strategy": "S", "call": "take", "args": [bar | {"volume": 1.0}]}
+
+
+def test_a_slice_whose_series_took_another_bar_after_its_first_is_named_replaced():
+    # 14:41's bar built from ticks (opening late, at 500.50, after a tick gap) is decided
+    # on, then replaced by the broker's candle (opening at 500.00); 14:42's candle comes
+    # again unchanged. `bars` gives the candle, the bar later decisions saw.
+    minute = 60 * 10**9
+    first, second = ist(14, 41), ist(14, 42)
+    lines = [
+        {"kind": "history", "strategy": "S", "base": [], "today": []},
+        series_take(first, 500.5, 501.0),
+        {"kind": "drive", "strategy": "S", "deciding": True, "decide_from_ns": first + minute},
+        series_take(second, 501.0, 501.5),
+        series_take(first, 500.0, 501.0),
+        series_take(second, 501.0, 501.5),
+    ]
+    record = SessionRecord({"format": FORMAT, "version": VERSION}, lines)
+    assert record.replaced("S") == [first]
+    assert list(record.bars("S")["open"]) == [500.0, 501.0]
+
+
 def test_a_record_of_another_format_or_version_is_refused(tmp_path):
     path = tmp_path / "other.jsonl"
     path.write_text(f'{{"format": "{FORMAT}", "version": {VERSION + 1}}}\n', encoding="utf-8")
