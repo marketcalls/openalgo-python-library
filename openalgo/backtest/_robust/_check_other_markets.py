@@ -17,7 +17,8 @@ money or has too few closed trades.
 Charts: each symbol's equity with the run's bold and each symbol's buy and hold (its
 session closes over the open of its first bar of the run, the price's return, not a
 return on the capital) dotted, a symbol's two lines in its colour and ending in its
-shape; a table by symbol.
+shape, for the run's symbol and the first three others (`DRAWN_OTHERS`: a colour and a
+shape each, so none looks like another); a table of every symbol.
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ from ..errors import ConfigError
 from ..reference import Instrument
 from . import _words as words
 from ._bar_common import BarRun, break_even, finite
-from ._blocks import BOLD, DOTTED, THIN, Line, LinesBlock, TableBlock
+from ._blocks import BOLD, DOTTED, LINE_GROUPS, THIN, Line, LinesBlock, TableBlock
 from ._ohlc import session_days
 from ._part_objective import objective_name
 from ._run_bars import run_arguments
@@ -239,12 +240,25 @@ LINES_NOTE = (
 )
 
 
+#: The other symbols the chart draws: one group of lines each after the run's own, as
+#: many as the chart tells apart (`_blocks.LINE_GROUPS`); the table has every symbol.
+DRAWN_OTHERS = LINE_GROUPS - 1
+
+
 def _blocks(subject: BarRun, table: pd.DataFrame, lines: Sequence, name: str) -> tuple:
+    """The chart of the run's own lines (`lines[0]`) and of the first `DRAWN_OTHERS`
+    other symbols' (module docstring), and the table of every other symbol."""
+    note, others = LINES_NOTE, len(lines) - 1
+    if others > DRAWN_OTHERS:
+        note += (
+            f" The chart draws the first {DRAWN_OTHERS} of the {others} other symbols; the "
+            "table has every one."
+        )
     chart = LinesBlock(
         "Equity by symbol",
         "Each symbol in its colour and shape; the run bold, buy and hold dotted",
-        tuple(line for group in lines for line in group),
-        LINES_NOTE,
+        tuple(line for group in lines[: DRAWN_OTHERS + 1] for line in group),
+        note,
     )
     rows = tuple(
         (

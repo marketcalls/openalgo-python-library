@@ -470,6 +470,48 @@ def test_the_other_markets_chart_tells_each_symbol_apart_without_colour(three_sy
     )
 
 
+def test_the_other_markets_chart_draws_three_other_symbols_and_the_table_every_one(
+    three_symbols,
+):
+    # Four colours and shapes tell four symbols apart and the run's own takes the first,
+    # so a fourth other symbol would look like the run's own buy and hold: it is in the
+    # table, and the key says so.
+    data = {
+        **three_symbols,
+        "AXISBANK": three_symbols["SBIN"],
+        "KOTAKBANK": three_symbols["HDFCBANK"],
+    }
+    result = bt.backtest(Flip, data=data, **FREE)
+    others = ["ICICIBANK", "HDFCBANK", "AXISBANK", "KOTAKBANK"]
+    report = result.robustness(checks=["other_markets"], others=others, progress=quiet)
+    page = report.tearsheet()
+    section = page[page.index("Equity by symbol") :]
+    classes = re.findall(r"<polyline class='([a-z0-9-]+)'", section)
+    assert classes == [
+        "line-bold",
+        "hold-0",
+        "series-1",
+        "hold-1",
+        "series-2",
+        "hold-2",
+        "series-3",
+        "hold-3",
+    ]
+    key = re.search(r"<p class='key'>(SBIN, the run[^<]*)</p>", section).group(1)
+    assert "KOTAKBANK" not in key
+    assert key.endswith(
+        "The chart draws the first 3 of the 4 other symbols; the table has every one."
+    )
+    assert report.check("other_markets").table["symbol"].tolist() == others
+
+
+def test_the_chart_has_a_shape_for_each_group_of_lines_it_tells_apart():
+    from openalgo.backtest._robust._blocks import LINE_GROUPS
+    from openalgo.backtest._robust._charts_bars import SHAPES
+
+    assert len(set(SHAPES)) == len(SHAPES) == LINE_GROUPS
+
+
 # ----- synthetic stress ----------------------------------------------------------------
 
 

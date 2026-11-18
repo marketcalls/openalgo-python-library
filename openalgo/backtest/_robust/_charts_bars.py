@@ -30,8 +30,8 @@ LINE_WORDS = {BOLD: "bold", DOTTED: "dotted"}
 #: The groups of paths a chart tells apart by colour and dash, in order.
 GROUP_CLASSES = 4
 GROUP_DASHES = ("solid", "long dashes", "dots", "dash and dot")
-#: The shape at the end of each line of a group of lines, in order, and its radius in
-#: pixels.
+#: The shape at the end of each line of a group of lines, one for each of the
+#: `_blocks.LINE_GROUPS` groups, in order, and its radius in pixels.
 SHAPES = ("circle", "square", "triangle", "diamond")
 SHAPE_SIZE = 4.0
 #: The width of a candle's body, as a share of the space of one bar.

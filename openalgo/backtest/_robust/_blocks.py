@@ -81,13 +81,17 @@ class CandlesBlock:
 #: The styles of a line over dates: the run's own (bold), another run (thin), and a
 #: buy-and-hold reference (dotted).
 BOLD, THIN, DOTTED = "bold", "thin", "dotted"
+#: The groups of lines a `LinesBlock` tells apart, each by its colour and the shape at
+#: the end of its lines (`_charts_bars.SHAPES`); groups 0 to LINE_GROUPS - 1.
+LINE_GROUPS = 4
 
 
 @dataclass(frozen=True, eq=False)
 class Line:
     """One line of a `LinesBlock`: its label, its dates and values (fractions), its
-    style (`BOLD`, `THIN` or `DOTTED`) and its `group`: the lines of one group (one
-    symbol's run and its buy and hold) share a colour and the shape at their end."""
+    style (`BOLD`, `THIN` or `DOTTED`) and its `group`, from 0 to `LINE_GROUPS` - 1: the
+    lines of one group (one symbol's run and its buy and hold) share a colour and the
+    shape at their end."""
 
     label: str
     dates: pd.DatetimeIndex
@@ -163,6 +167,7 @@ __all__ = [
     "BOLD",
     "DOTTED",
     "LIMIT",
+    "LINE_GROUPS",
     "REAL",
     "REFERENCE",
     "THIN",
