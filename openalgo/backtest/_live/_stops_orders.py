@@ -7,7 +7,11 @@ A stop is **confirmed** once it was accepted with an order ID and a word after t
 (stream or poll: open, trigger pending, or a fill) says it works (4.2). The leg is
 **guarded** from the placement of its first stop until it is flat again: a leg that never
 had a stop (no stop rule, or a trail or breakeven not armed yet) is not counted as
-unprotected (open decision 4).
+unprotected (open decision 4). An entry or add the order book cannot tell apart from
+another order is the exception: the session's own units may be at the broker in it with
+no stop the engine knows of, so they count unprotected whatever the leg's rules
+(`LegOrders.ambiguous_entry_units`; 7.1 lists F60 among the legs the close names
+unprotected).
 
 Quantities are whole units, times UTC nanoseconds. Used by the loop only.
 """
@@ -201,6 +205,16 @@ class LegOrders:
     def exits(self) -> list[Watched]:
         """The leg's exits that have not ended, oldest first."""
         return [w for w in self.orders.values() if w.is_exit and w.state is not Sent.ENDED]
+
+    def ambiguous_entry_units(self) -> int:
+        """The signed units of the leg's entries and adds the order book cannot tell apart
+        from another order (16-session-design F60): the engine holds none of them, yet
+        one of the orders is the session's, so they may be at the broker with no stop."""
+        return sum(
+            w.units if w.action == "BUY" else -w.units
+            for w in self.orders.values()
+            if w.state is Sent.AMBIGUOUS and w.purpose in ENTRY_PURPOSES
+        )
 
     def _bind(self, watched: Watched, order_id: str, at_ns: int) -> None:
         if watched.state in (Sent.CONFIRMED, Sent.ENDED):

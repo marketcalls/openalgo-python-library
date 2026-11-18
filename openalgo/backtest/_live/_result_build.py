@@ -6,12 +6,18 @@ records (`_session_close.SessionOutcome`).
   (`_pipeline._result`, the one `bt.backtest` returns), from its kernel session's
   `finish()` tables and its part of the session plan: the settings, instruments, market
   and history a backtest of the day would have, the strategy instance and its run
-  context, the warm-up measured on its live stores. It covers this start only: a
-  restarted engine's run begins at the restart, and its account carried the realized
-  P&L and charges of the day's earlier starts (the kernel restores the cash), which are
-  taken out of its equity rows after the restore and of its gross P&L (`this_start`), so
-  its metrics and its trades are this start's. A position carried open across the
-  restart keeps its whole P&L in both, as its trade does. Its Assumptions block says
+  context, the warm-up measured on its live stores. It covers the trades this start
+  closes, whole: a restarted engine's run begins at the restart, and its account carried
+  the realized P&L and charges of the round trips the day's earlier starts closed (the
+  kernel restores the cash), which are taken out of its equity rows after the restore
+  and of its gross P&L (`this_start`), so its metrics are this start's. A position
+  carried open across the restart is the trade this start closes: its P&L and its
+  charges, its entry's before the restart included, stay in the result (the unit 13
+  follow-up item 2), so the result's net profit is what an unbroken day's result shows
+  for the same trades. Its trades table is the kernel's, with the charges the position
+  carried open paid before the restart added to its trade (`Restored.carried`): a
+  restored engine's charge book holds the fills of its own start only. Its Assumptions
+  block says
   OpenAlgo priced the fills (`LIVE_ASSUMPTIONS`, `LIVE_BASE_MEANING`): the backtest's
   fill model and slippage played no part. It cannot rerun (`Result.rerun` raises):
   a live session is not a backtest to repeat. `bt.live` ends with no end-of-run notice of
@@ -178,10 +184,10 @@ def strategy_result(
 
 
 def this_start(output: Mapping[str, Any], restore: Restored) -> dict[str, Any]:
-    """`output` with the realized gross P&L and charges a restored account carried from
-    the day's earlier starts (`restore`) taken out of the equity rows that close after the
-    restore and of the gross P&L (module docstring); the rows before it, the catch-up's,
-    hold none."""
+    """`output` with the realized gross P&L and charges of the round trips the day's
+    earlier starts closed (`restore`) taken out of the equity rows that close after the
+    restore and of the gross P&L (module docstring): a position carried open keeps what it
+    realized and paid. The rows before the restore, the catch-up's, hold none."""
     equity = dict(output["equity"])
     after = np.asarray(equity["ts"], dtype=np.int64) > restore.after_ns
     carried = {
@@ -195,7 +201,26 @@ def this_start(output: Mapping[str, Any], restore: Restored) -> dict[str, Any]:
         equity[column] = values
     realized, unrealized, total = output["gross_pnl"]
     gross_pnl = (realized - restore.realized, unrealized, total - restore.realized)
-    return {**output, "equity": equity, "gross_pnl": gross_pnl}
+    trades = _carried_charges(output["trades"], restore)
+    return {**output, "equity": equity, "gross_pnl": gross_pnl, "trades": trades}
+
+
+def _carried_charges(trades: Mapping[str, Any], restore: Restored) -> dict[str, Any]:
+    """The kernel's trades table with the charges the position carried open across the
+    restart paid before it (`Restored.carried`) added to the trade that position is: the
+    first this start closes (a strategy holds one position, so it closes before another
+    opens), opened before the restore. The restored engine's charge book holds the fills
+    of its own start only (module docstring)."""
+    table = dict(trades)
+    entries = np.asarray(table["entry_ts"], dtype=np.int64)
+    if not restore.carried or not len(entries) or entries[0] > restore.after_ns:
+        return table
+    costs = np.array(table["costs_rupees"], dtype=float)
+    net = np.array(table["net_pnl_rupees"], dtype=float)
+    costs[0] = round(costs[0] + restore.carried, 2)
+    net[0] = round(net[0] - restore.carried, 2)
+    table["costs_rupees"], table["net_pnl_rupees"] = costs, net
+    return table
 
 
 def instrument_lines(instruments: Sequence[Instrument]) -> str:

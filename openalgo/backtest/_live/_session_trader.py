@@ -23,6 +23,8 @@ venue map, the slices it releases live, its decisions and its broker candles.
   told it was cancelled (`apply_cancel`).
 - **Candles**: the strategy's broker candles are `candles`, a `_session_candles.
   CandleKeeper`.
+- **Bookkeeping**: its entry locks and its saved `self.state` are
+  `_session_bookkeeping.Bookkeeping`'s.
 
 Times are UTC nanoseconds, prices rupees, quantities units. Used by the loop only.
 """
@@ -31,7 +33,6 @@ from __future__ import annotations
 
 import bisect
 import datetime as dt
-import json
 import logging
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -41,9 +42,9 @@ from .._calendar_convert import IST, format_ist
 from .._driver import deliver
 from .._engine import call
 from .._layout import NANOS_PER_SECOND
-from ..errors import JournalError, LiveError
-from ._journal_rows import state_json
+from ..errors import LiveError
 from ._plan_catch_up import INSTRUMENT, StrategyPlan
+from ._session_bookkeeping import Bookkeeping
 from ._session_candles import CandleKeeper
 from ._session_records import StrategyRecords
 from ._types import LOGGER_NAME, LiveBar, Now
@@ -86,7 +87,7 @@ def ist_instant(day: dt.date, hhmm: str) -> int:
     return int(dt.datetime.combine(day, clock, tzinfo=IST).timestamp()) * NANOS_PER_SECOND
 
 
-class Trader:
+class Trader(Bookkeeping):
     """One strategy of the session (module docstring): `part`, its share of the plan,
     `venue`, its venue map; `square_off_ns` its MIS square-off and `close_ns` its
     exchange's session close (UTC nanoseconds); `now` the session's clock and `event`
@@ -126,11 +127,6 @@ class Trader:
         self.records = StrategyRecords(self.name)
         self._slow_warned = self._state_warned = False
         self._state_text = self._state_json()
-
-    @property
-    def engine(self) -> Any:
-        """The strategy's kernel session."""
-        return self.part.engine
 
     # ----- releases ----------------------------------------------------------------
 
@@ -346,21 +342,6 @@ class Trader:
             if not call(self.engine.order, kernel_order)["reduce_only"]
         ]
 
-    def lock(self, reason: str) -> bool:
-        """Lock the strategy's entries for `reason`; True when they were not locked for
-        it (False once the kernel session finished: it takes no entry)."""
-        locked = not self.finished and bool(call(self.engine.lock_entries, reason))
-        if locked:
-            self.records.locked(reason, self._now())
-        return locked
-
-    def unlock(self, reason: str) -> bool:
-        """Lift the entry lock of `reason`; True when it was set."""
-        lifted = not self.finished and bool(call(self.engine.unlock_entries, reason))
-        if lifted:
-            self.records.unlocked(reason, self._now())
-        return lifted
-
     def request_exit(self, reason: str) -> str | None:
         """Ask the kernel to exit the position for `reason` (one of its RISK_EXIT_REASONS);
         what it did (its EXIT_REQUESTS), or None once the kernel session finished."""
@@ -372,25 +353,6 @@ class Trader:
         """Ask the kernel to cancel a working order (nothing once it finished)."""
         if not self.finished:
             call(self.engine.cancel, kernel_order)
-
-    def state_changed(self) -> dict[str, Any] | None:
-        """The strategy's `self.state` when it changed since the last call, else None. A
-        state the journal cannot keep (a value JSON does not hold) is warned about once
-        and not saved: the session goes on, and a restart would not have it."""
-        text = self._state_json()
-        if text is None or text == self._state_text:
-            return None
-        self._state_text = text
-        return json.loads(text)
-
-    def _state_json(self) -> str | None:
-        try:
-            return state_json(self.part.strategy.state, "self.state", self.name)
-        except JournalError as error:
-            if not self._state_warned:
-                self._state_warned = True
-                logger.warning("%s: %s; it is not saved", self.name, error)
-            return None
 
 
 __all__ = [

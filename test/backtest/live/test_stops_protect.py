@@ -16,6 +16,7 @@ import logging
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from session_samples import NS, alerts, ist
+from session_trace import BOOKS_AGREE
 from stops_samples import (
     StopHold,
     TargetHold,
@@ -190,6 +191,7 @@ def test_F77_an_error_mid_cancel_then_exit_drops_the_exit_and_places_the_stop_ag
 def test_F77_when_the_kernels_protect_fails_too_the_alert_lists_the_leg_without_a_stop(
     world, monkeypatch, caplog
 ):
+    world.trace.leave_unprotected("TargetHold", "F77 variant")
     at_price(world, ist(14, 44), 502.0)
     raise_once_after_the_stop_is_cancelled(monkeypatch)
 
@@ -211,6 +213,7 @@ def test_F77_when_the_kernels_protect_fails_too_the_alert_lists_the_leg_without_
 def test_F80_an_ambiguous_stop_placement_leaves_the_leg_marked_and_sends_nothing_more(
     world, caplog
 ):
+    world.trace.leave_unprotected("StopHold", "F80")
     other = world.fake.client()
 
     def the_same_stop_by_another_client():
@@ -231,12 +234,14 @@ def test_F80_an_ambiguous_stop_placement_leaves_the_leg_marked_and_sends_nothing
         world.fake.faults.bad_gateway_page("placeorder", reached_broker=True)
 
     world.script.at(ist(14, 42, 3) + NS // 2, the_stops_answer_is_lost)
-    world.stop_at(ist(14, 46))
-    world.stop_at(ist(14, 47))
+    # Past NSE's square-off at 15:00, which must not be sent either.
+    world.stop_at(ist(15, 1))
+    world.stop_at(ist(15, 2))
     outcome = world.run(StopHold)
 
     sent = [c for c in world.fake.log.calls("placeorder") if c.ts_ns > ist(14, 42, 4)]
     assert sent == []
+    assert [o for o in world.orders() if o.placed_ns >= ist(15, 0)] == []
     assert world.fake.log.calls("cancelorder") == []
     ambiguous = [t for t in alerts(caplog, "error") if "cannot be told apart" in t]
     assert len(ambiguous) == 1
@@ -269,6 +274,12 @@ def test_two_ctrl_c_with_the_stops_cancel_word_lost_place_the_stop_again_before_
 
 
 def test_a_stop_whose_cancel_has_no_word_at_the_end_is_not_reported_confirmed(world):
+    # A second Ctrl+C ends the session before the cancel's word (3.3 step 4): the leg is
+    # left with no confirmed stop and its line says so, which the invariants take.
+    world.trace.left_unprotected_by_decision(
+        "StopHold", "3.3 step 4: a second Ctrl+C before the cancel's word"
+    )
+
     def cancel_word_lost_and_reads_failing():
         world.fake.faults.drop_next_order_update()
         for _ in range(20):
@@ -437,6 +448,10 @@ def test_the_emergency_alert_says_a_confirmed_stop_protects_the_leg_until_it_is_
 def test_the_emergency_alert_names_an_exit_at_work_and_the_order_book_comes_first(
     world, monkeypatch, caplog
 ):
+    # The exit's fill never reaches the session, which reads no books after an error
+    # (3.5): the engine ends long against the fake's flat, and the ERROR alert names the
+    # exit in flight instead of a reconciliation.
+    world.trace.waive(BOOKS_AGREE, "3.5: an exit filled unheard, and no read after an error")
     at_price(world, ist(14, 44), 502.0)
 
     def exit_words_held_and_reads_failing():

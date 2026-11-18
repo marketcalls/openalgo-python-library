@@ -15,7 +15,7 @@ Times are UTC nanoseconds on the fake's manual clock, prices rupees, quantities 
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 import httpx
 from feed_fakes import retire, shorten
@@ -31,7 +31,7 @@ from .feed_server import FeedServer
 from .log import FakeLog
 from .market import Candle, Instrument
 from .orders import FakeOrder, Fill
-from .rest import ROUTES, RestHandler
+from .rest import CLIENT_HEADER, ROUTES, RestHandler
 from .venue import Rejection, TelegramMessage, Venue
 
 #: The fake's API key: a placeholder, never a real key.
@@ -85,19 +85,33 @@ class FakeOpenAlgo:
         self.faults = Faults(self._venue, feed, frozenset(ROUTES))
         self._handler = RestHandler(self._venue, self.faults, API_KEY)
         self._clients: list[api] = []
+        #: Checks to run when the test ends (`at_test_end`), oldest first.
+        self.end_checks: list[Callable[[], None]] = []
 
     # -- wiring -----------------------------------------------------------
 
     def client(self, *, api_key: str = API_KEY, auto_reconnect: bool = True) -> api:
         """A real `openalgo.api` whose REST calls this fake answers in-process, and whose
         feed connects to its proxy (installed by the fixture). Closed by `close`. A key
-        other than `API_KEY` is refused as the server refuses an unknown one."""
+        other than `API_KEY` is refused as the server refuses an unknown one.
+
+        Each client has a name (`client_name`) its calls carry: the log notes it with
+        every call, and an order keeps the name of the client that placed it
+        (`FakeOrder.client`), so a test can tell the session's calls from another
+        client's."""
         client = api(api_key=api_key, host=HOST, auto_reconnect=auto_reconnect)
         client.client.close()
-        client.client = httpx.Client(transport=httpx.MockTransport(self._handler))
+        name = f"client-{len(self._clients) + 1}"
+        client.client = httpx.Client(
+            transport=httpx.MockTransport(self._handler), headers={CLIENT_HEADER: name}
+        )
         shorten(client, **_FEED_TIMING)
         self._clients.append(client)
         return client
+
+    def owns(self, client: api) -> bool:
+        """True for a client this fake made (`client`)."""
+        return any(client is made for made in self._clients)
 
     def direct_feed(self) -> DirectFeed:
         """A feed the fake calls directly, with the part of the SDK's `FeedAPI` a live
@@ -133,6 +147,11 @@ class FakeOpenAlgo:
         for client in self._clients:
             retire(client)
         self._clients.clear()
+
+    def at_test_end(self, check: Callable[[], None]) -> None:
+        """Run `check` when the test that built this fake ends (the fixture runs each, in
+        order, before it retires the clients); a check fails the test by raising."""
+        self.end_checks.append(check)
 
     @property
     def mode(self) -> Mode:
@@ -269,6 +288,12 @@ class FakeOpenAlgo:
             return list(self._venue.telegram_sent)
 
 
+def client_name(client: api) -> str:
+    """The name of a client `FakeOpenAlgo.client` made, which its calls carry ("" for a
+    client of no fake)."""
+    return client.client.headers.get(CLIENT_HEADER, "")
+
+
 __all__ = [
     "API_KEY",
     "BROKER",
@@ -277,4 +302,5 @@ __all__ = [
     "SANDBOX_CASH",
     "USERNAME",
     "FakeOpenAlgo",
+    "client_name",
 ]

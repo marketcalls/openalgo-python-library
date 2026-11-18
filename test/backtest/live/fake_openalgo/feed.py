@@ -6,8 +6,10 @@ tick or an order update out to its subscribers (websocket_proxy/server.py:2102-2
 `_handle_order_update`), then to every direct feed that subscribed (`direct_feed`, in
 quote mode, on the caller's thread), and loses what the proxy would lose: a tick or an update sent
 while no such socket is open is not replayed. While the broker's login is gone (expired
-or revoked) the broker's market-data connection is down, so no tick is sent. Every fault
-is logged when it is set or when it acts.
+or revoked) the broker's market-data connection is down, so no tick is sent, and so is
+its order stream, so no live order update is sent either (16-session-design 7.3: what it
+lost stays lost, the polls find it); the sandbox's updates are OpenAlgo's own and still
+flow. Every fault is logged when it is set or when it acts.
 
 A message is delivered on the caller's thread and handed to the SDK's socket thread,
 which processes it before the send returns. The SDK runs its callbacks on that thread,
@@ -24,11 +26,13 @@ from typing import Any
 
 from feed_fakes import FakeSocket
 
+from openalgo.backtest._live._types import Mode
+
 from .direct_feed import DirectFeed
 from .feed_server import FeedServer
 from .log import FAULT, ORDER_UPDATE, TICK, FakeLog
 from .market import MarketState
-from .messages import QUOTE, market_data
+from .messages import QUOTE, UPDATE_MODES, market_data
 
 
 class Feed:
@@ -87,13 +91,17 @@ class Feed:
         self._log.record(self._now(), TICK, "sent", sockets=sent, direct=len(direct), **detail)
 
     def set_login(self, valid: bool) -> None:
-        """The broker's login is valid (ticks flow) or gone (no tick is sent)."""
+        """The broker's login is valid (ticks and live order updates flow) or gone (none
+        is sent)."""
         self._login_gone = not valid
 
     def order_update(self, message: dict[str, Any]) -> None:
         """Send one order update on the order stream, unless a fault takes it."""
         if self._silent:
             self._note(message, "lost", reason="order stream silent")
+            return
+        if self._login_gone and message["mode"] == UPDATE_MODES[Mode.LIVE]:
+            self._note(message, "lost", reason="broker login gone")
             return
         if self._held is not None:
             self._held.append(message)

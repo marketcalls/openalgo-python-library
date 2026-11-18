@@ -378,6 +378,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once, and the close names that leg in the summary and the result, never as flat; a
   fill priced from an average is flagged only when its price may lie on another tick.
   The summary's slippage against the backtest's model reads n/a in this version.
+- Live sessions, from the fault suite (unit 14): a position difference that comparisons
+  in time already acted on and that the final read sees again is named at the close (an
+  ERROR alert, the summary's Reconcile and End state lines, `SessionResult.flat` False)
+  and counted once; the units of an entry the order book cannot tell apart from another
+  order are listed in `open_positions` with no confirmed stop, so such a day no longer
+  ends "flat"; after a restart, a position carried open across it keeps its entry's
+  charges in the restarted start's `bt.Result`, so its trades and its metrics agree. The
+  session's behaviour is now checked after every test against the design's safety rules
+  (no orphan order, one stop per leg, exits within the position, nothing sent after a
+  lock), over every change of every order at the simulated broker.
 - Reference table `price_protection` (`openalgo/backtest/reference/data/price_protection.csv`,
   read with `tables.find("price_protection", (exchange, segment, check, underlying, days),
   date)`): the price bands NSE and BSE apply to an option's limit price, by date, each row
@@ -487,6 +497,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or rule) in the robustness report. The random out-of-sample chart now draws the price
   when the report has the run's bars. A check of these five with fewer than 30 closed
   trades, or on a run that did not make money, is not judged.
+- Robustness and overfitting checks, third part: four checks that rerun the backtest on
+  the run's own bars with one thing changed. Shifted bars: the strategy bars built with
+  their boundaries moved (an intraday strategy's bars ending 1 to n-1 base bars earlier; a
+  daily strategy's days ending 15, 30, 45 and 60 minutes earlier); passes when every shift
+  makes money and the median keeps at least half the run's figure. Random exits: each
+  trade's stop, target and trailing distances scaled at random within 25 percent (and
+  any `exit_params` drawn from the values given); passes when at least 70 percent of runs
+  make money. Delayed orders: entries and exits 0 to 2 strategy bars late in every pair;
+  passes when entries one bar late still make money and keep half the run's figure (a
+  late run that took more entries than the run is not judged). Liquidity: the fills
+  priced by six other models; passes when every model makes money and no drawdown is
+  deeper than 1.5 times the run's. 13 of the 17 checks are now built.
+- `bt.backtest(fill=...)` takes six more fill models for these checks and for your own
+  tests: "next_close", "next_mid" (the high and low's midpoint), "next_ohlc4" (the average
+  of open, high, low and close) of the next base bar, and the same averaged with the bar
+  after it ("next_close_2", "next_mid_2", "next_ohlc4_2"). `bt.backtest(delay_entries=0,
+  delay_exits=0)` holds a decided order that opens or adds (or that closes, reduces or
+  reverses) for that many strategy bars; the engine's own stops, targets and exits are
+  never held. The default run is unchanged (the golden runs give the same figures);
+  `bt.live` refuses both settings, saying why.
+- Robustness checks on generated bars (second part, refined): a synthetic stress rule
+  that keeps more than half its candidates is not judged ("it does not single out
+  shocks"); permutation, synthetic stress and the strategy-on-permuted family of versus
+  random are not judged for `bt.from_arrays` strategies, whose decisions are fixed in
+  advance; the plan counts and times only the reruns that will run; the random entries
+  of an all-intraday run stay within one session each.
 
 ### Changed
 

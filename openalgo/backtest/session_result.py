@@ -13,11 +13,12 @@ not it has rows.
 - `restarts`: how many times the session of this day and mode was started before this
   start.
 - `strategies`: the strategy names, in call order. `results`: each strategy's
-  `bt.Result`, built from its engine by the backtest's own result builder, covering this
-  start only: a restarted engine's run begins at the restart, so its equity, metrics and
-  gross P&L leave out the realized P&L and charges of the day's earlier starts, which
-  its account carried (a position carried open across the restart keeps its whole P&L,
-  as its trade does). Its Assumptions block says OpenAlgo priced the fills (no fill
+  `bt.Result`, built from its engine by the backtest's own result builder, covering the
+  trades this start closes: a restarted engine's run begins at the restart, so its
+  equity, metrics and gross P&L leave out the realized P&L and charges of the round
+  trips the day's earlier starts closed, which its account carried (a position carried
+  open across the restart is a trade this start closes: it keeps its whole P&L and its
+  charges, its entry's included). Its Assumptions block says OpenAlgo priced the fills (no fill
   model, no slippage).
 - `summary`: the day's figures across every start of the day: `gross_pnl`, `charges`
   (modelled: the broker's trade book carries none), `net_pnl`, `slippage` (None: not

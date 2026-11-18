@@ -10,6 +10,15 @@ runs under its test seam (16-session-design 2.11): the fake's clients, its direc
 `threads=False`, no signal handlers, the script's `sleep` as every wait, so the whole
 session runs on the test's thread and nothing waits for real. Nothing contacts a server.
 
+Every rig records its fake's order changes and session runs (`Rig.trace`, `session_trace`),
+and the session invariants of 16-session-design 7.1 run over them when the test ends
+(`session_invariants`): every session test is checked. A test whose row leaves a leg
+unprotected says so (`trace.leave_unprotected`, or `trace.left_unprotected_by_decision`
+for a decided end); one whose other client sells by hand names what the decided end it
+plays leaves at the fake (`trace.kept_stop_by_decision`, `trace.oversold_by_decision`);
+one whose session cannot keep a check waives that check alone and says why
+(`trace.waive`).
+
 Expected values come from the fake's books and the scenario, never from the session's
 code.
 """
@@ -24,6 +33,9 @@ from typing import Any
 
 from fake_openalgo import USERNAME, FakeOpenAlgo
 from plan_samples import DAY, candles, ist, market
+from session_hooks import trace_sessions
+from session_invariants import assert_session_invariants
+from session_trace import SessionTrace
 
 import openalgo.backtest as bt
 from openalgo.backtest._live._session_parts import StopFlag
@@ -94,11 +106,13 @@ class Script:
 
 @dataclass
 class Rig:
-    """A session's world: the fake, its script, the stop flag, the console's lines."""
+    """A session's world: the fake, its script, the stop flag, the console's lines, and
+    the trace the session invariants are checked over."""
 
     fake: FakeOpenAlgo
     script: Script
     folder: Any
+    trace: SessionTrace
     stop: StopFlag = field(default_factory=StopFlag)
     lines: list[str] = field(default_factory=list)
     feed: Any = None
@@ -181,7 +195,8 @@ def rig(
         for symbol in symbols:
             script.trade(symbol)
         script.trades(at + TRADE_EVERY_S * NS, ist(*trades_until), symbols)
-    return Rig(fake, script, tmp_path)
+    trace = trace_sessions(fake, monkeypatch, assert_session_invariants)
+    return Rig(fake, script, tmp_path, trace)
 
 
 class BuyAndHold(bt.Strategy):

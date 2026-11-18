@@ -34,6 +34,14 @@ its SL-M for 10 works at the broker: the leg is no open position, and its alert 
 stop still working with no position to close by hand (round 8). A session that closes flat
 with books that agree still says "0 mismatches" and "flat". Expected values come from the
 scenario and the fake's books.
+
+In every case of the short the session's stop for 10 fills against the 6 left, through
+zero: the decided ends above let it (5.3 fits the stop on the second comparison that shows
+the sale), which each such test names to the session invariants
+(`SessionTrace.oversold_by_decision`), as it names the stop for 10 kept on the flat
+position (`SessionTrace.kept_stop_by_decision`); FAULT_ROWS.md lists them for the lead
+(unit 14 round 2). Where the stop fires at the first sighting, the market moves in the
+very comparison that first sees the sale, before the session can act.
 """
 
 from __future__ import annotations
@@ -160,6 +168,13 @@ def slow_once_the_fill_is_in(world: Any, monkeypatch: Any) -> None:
     world.lines = LinesThen("StopHold SBIN NSE", at_the_line)
 
 
+#: The decided ends that let the stop for 10 fill against the 6 left, and keep it on the
+#: flat position the sale of all 10 leaves (for the session invariants).
+OVERSOLD = (
+    "5.3: the stop is fitted on the second comparison that shows the sale; 5.4 As built, "
+    "rounds 7 and 8: the close names the short it was the first to see"
+)
+KEPT_ON_FLAT = "5.4 As built, round 8: the close names the stop working on a flat position"
 #: The cases: when the stop fires, on which seam, and what Ctrl+C does with the leg.
 CASES = [
     pytest.param((fires_at_the_first_sighting, "inline", "keep"), id="first sighting, keep"),
@@ -185,6 +200,7 @@ def short(request, monkeypatch):
     else:
         world = request.getfixturevalue("alone")
     world.seam, world.on_stop = seam, on_stop
+    world.trace.oversold_by_decision("StopHold", OVERSOLD)
     sold_by_hand(world, SOLD, SOLD_AT)
     arm(world, monkeypatch)
     return world
@@ -267,8 +283,7 @@ def test_nothing_is_sent_for_the_short(short):
 STALE = [
     pytest.param((fires_after_the_line_with_no_books("dropped"), "inline", "keep"), id="dropped"),
     pytest.param(
-        (fires_after_the_line_with_no_books("dropped"), "threads", "keep"),
-        id="dropped, threads",
+        (fires_after_the_line_with_no_books("dropped"), "threads", "keep"), id="dropped, threads"
     ),
     pytest.param(
         (fires_after_the_line_with_no_books("slow"), "threads", "keep"), id="slow, threads"
@@ -375,6 +390,7 @@ def all_sold(request, monkeypatch):
     else:
         world = request.getfixturevalue("alone")
     world.seam, world.on_stop = request.param, "keep"
+    world.trace.kept_stop_by_decision("StopHold", KEPT_ON_FLAT)
     sold_by_hand(world, StopHold.qty, SOLD_AT)
     world.script.at(PRESSED_AT, world.stop.request)
     return world

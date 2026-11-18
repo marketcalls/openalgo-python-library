@@ -106,7 +106,11 @@ def test_F11_a_stop_rejected_after_acceptance_exits_at_market_at_once(world, cap
     assert world.fake.position("SBIN", "NSE") == 0
     rejects = alerts(caplog, "reject")
     assert any(stop.order_id in text and "trigger price invalid" in text for text in rejects)
-    assert sum(seconds for _, seconds in windows(outcome)) <= 5
+    # The row's "unprotected under 2 s": from the stop's rejection to flat. Before it, the
+    # stop waits for its first word, as every stop does (at most 3 s here).
+    (unconfirmed, after), (exiting, seconds) = windows(outcome)
+    assert (unconfirmed, exiting) == ("stop unconfirmed", "exiting")
+    assert 0 < after <= 3 and 0 < seconds < 2
     check_invariants(world.timeline, strategy="StopHold")
 
 

@@ -164,6 +164,10 @@ def test_F35_after_a_mode_breach_the_live_stop_still_works_and_the_alert_names_i
     assert outcome.stopped_by == "mode_breach"
     named = [t for t in alerts(caplog, "error") if "mode changed" in t]
     assert len(named) == 1 and f"stop {stop.order_id} confirmed at the broker" in named[0]
+    # Nothing is read after the lock: the session cannot confirm the stop at its end.
+    [left] = outcome.open_positions
+    assert (left.strategy, left.units, left.stop_confirmed) == ("StopRoundTrip", 10, False)
+    world.trace.leave_unprotected("StopRoundTrip", "F35")
 
 
 class RaisesHolding(StopHold):
