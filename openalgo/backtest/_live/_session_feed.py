@@ -12,6 +12,10 @@ to A.12; units 8 and 10), split from `_session_news`, which takes the order work
 - `FeedEvent`: to the feed link; a recovery resumes every bar builder over the outage and
   asks the worker to poll the orders the stream may have missed.
 - `DataFailed`: to the risk watch (`RiskWatch.data_failed`).
+- `OtherFill`: another client's fill the order stream reported, on an instrument a
+  strategy trades, asks the reconciler for a comparison soon (`Reconciler.other_fill`), so
+  a sale by hand is seen within seconds (7.1 "As built (unit 14"); on any other
+  instrument it changes nothing.
 
 Times are UTC nanoseconds, prices rupees. Used by the loop only.
 """
@@ -19,11 +23,13 @@ Times are UTC nanoseconds, prices rupees. Used by the loop only.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
 from typing import Any
 
 from ._types import LOGGER_NAME
 from ._worker_queue import StreamGap
-from .inbox import Candles, DataFailed, FeedEvent, FeedTick, Quote
+from .inbox import Candles, DataFailed, FeedEvent, FeedTick, OtherFill, Quote
 from .ticks import tick_from_feed
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -78,4 +84,34 @@ def take_data_failed(session: Any, message: DataFailed) -> None:
     session.risk.data_failed(message)
 
 
-__all__ = ["take_candles", "take_data_failed", "take_feed_event", "take_quote", "take_tick"]
+def take_other_fill(session: Any, message: OtherFill) -> None:
+    """Another client's fill on the order stream (module docstring)."""
+    trader = session.trader_of(message.symbol, message.exchange)
+    if trader is None:
+        return
+    session.event("other_fill", strategy=trader.name, arrived_ns=message.arrived_ns)
+    session.reconcile.other_fill(message.arrived_ns)
+
+
+#: The market's messages, each with its handler, for the loop's dispatch (`_session_news`).
+MARKET: Mapping[type, Callable[[Any, Any], None]] = MappingProxyType(
+    {
+        FeedTick: take_tick,
+        Quote: take_quote,
+        FeedEvent: take_feed_event,
+        Candles: take_candles,
+        DataFailed: take_data_failed,
+        OtherFill: take_other_fill,
+    }
+)
+
+
+__all__ = [
+    "MARKET",
+    "take_candles",
+    "take_data_failed",
+    "take_feed_event",
+    "take_other_fill",
+    "take_quote",
+    "take_tick",
+]

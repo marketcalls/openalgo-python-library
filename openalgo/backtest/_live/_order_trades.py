@@ -43,6 +43,10 @@ UNSUPPORTED_BROKERS = MappingProxyType(
         ),
     }
 )
+#: The brokers, by OpenAlgo's broker name, whose tradebook's order IDs have not been
+#: checked against the IDs of their orders (merge notes, order path round 5): the order
+#: path trades through them, and the preflight warns (16-session-design 3.1 step 7).
+UNVERIFIED_BROKERS = frozenset({"pocketful", "mstock"})
 
 
 def needs_trades(update: OrderUpdate) -> bool:
@@ -135,6 +139,7 @@ def with_fills(word: Polled, fills: Fills | None, now: int) -> tuple[OrderUpdate
 
 __all__ = [
     "UNSUPPORTED_BROKERS",
+    "UNVERIFIED_BROKERS",
     "Fills",
     "Polled",
     "needs_trades",

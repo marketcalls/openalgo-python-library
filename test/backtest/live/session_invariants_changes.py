@@ -93,11 +93,13 @@ def within_the_position(
     *,
     within: bool = True,
     side: bool = True,
+    used: set[str] | None = None,
 ) -> dict[Instrument, SaleRoom]:
     """2 and 3 (module docstring), `within` and `side` saying which is asserted, and
-    `oversold` the strategies whose decided end lets an overtaken stop fill through zero.
-    Returns, for each instrument whose session exits a sale by hand left beyond the
-    position at the end, its `SaleRoom`."""
+    `oversold` the strategies whose decided end lets an overtaken stop fill through zero
+    (each one whose end a fill took is added to `used`, when given). Returns, for each
+    instrument whose session exits a sale by hand left beyond the position at the end,
+    its `SaleRoom`."""
     orders: dict[str, OrderChange] = {}
     rooms: dict[Instrument, SaleRoom] = {}
     for change in changes:
@@ -113,8 +115,9 @@ def within_the_position(
         ]  # fmt: skip
         closing = sum(o.remaining for o in exits)
         if change.client in mine:
-            if side:
-                _never_the_other_side(change, opens, held, room, oversold or {})
+            allowed = side and _never_the_other_side(change, opens, held, room, oversold or {})
+            if allowed and used is not None:
+                used.add(change.strategy)
         elif change.fill_units and change.action != opens:
             room.sold += change.fill_units
             room.beyond = min(room.sold, max(closing - max(held, 0), 0))
@@ -132,19 +135,21 @@ def within_the_position(
 
 def _never_the_other_side(
     change: OrderChange, opens: str, held: int, room: SaleRoom, oversold: Mapping[str, str]
-) -> None:
+) -> bool:
     """3 (module docstring) for a change of the session's order: `held` is the position on
-    the open side after it, `room` what sales by hand left before it."""
+    the open side after it, `room` what sales by hand left before it. True when the test's
+    decided end (`oversold`) is what allows it."""
     if not change.fill_units or held >= 0:
-        return
+        return False
     moved = change.fill_units if change.action == opens else -change.fill_units
     if held - moved < 0 and moved > 0:
-        return
+        return False
     overtaken = change.strategy in oversold and room.took(change) and -held <= room.beyond
     assert overtaken, (
         f"7.1: a fill of the session's order {change.order_id} left {change.instrument} at "
         f"{change.position}, the other side of the leg ({change})"
     )
+    return True
 
 
 __all__ = [

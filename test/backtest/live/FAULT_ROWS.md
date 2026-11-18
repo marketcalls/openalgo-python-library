@@ -196,6 +196,13 @@ two comparisons, and of every unit 12 test built on them) or a kernel call that 
 stop alone (a Rust build). It would remove the "after the line" and fill-in-read cases;
 the first-sighting cases need the exemption whatever is built.
 
+As built (unit 16, the lead's decision in 7.1 "As built (unit 14"): another client's fill
+on a traded symbol, reported by the order stream, prompts a comparison
+`RECONCILE_AFTER_FILL_S` later, so the two comparisons come within seconds of the sale
+instead of up to 30 s after it (`test_reconcile_prompted.py`). Each declaration above must
+still be needed: the end checks find a decided end that no check took
+(`session_invariants_end._declarations_needed`).
+
 ## Exemptions beyond 7.1's list (for the lead)
 
 7.1 lists F35, F36, F60, the F77 variant and F80 as the tests that end with a leg without a

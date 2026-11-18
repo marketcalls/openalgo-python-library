@@ -3,7 +3,8 @@
 
 - The raw order updates the feed's order callback queued are drained, each normalized (one
   that cannot be read is logged and counted, never raised) and taken by the order path,
-  and its news is posted as `inbox.OrderNews`.
+  and its news is posted as `inbox.OrderNews`. A fill of an order the order path does not
+  follow is posted as `inbox.OtherFill`, so the loop can ask for a comparison soon (5.1).
 - Posting news: a terminal word settles its order (`_worker_settle`) and lets its requests
   be taken again, and a STOP intent's terminal word clears its leg's journal stop first
   (`_worker_stops`), so the news says whether it did.
@@ -30,7 +31,7 @@ from ._order_updates import normalize_update
 from ._types import LOGGER_NAME, OrderUpdate, Purpose
 from ._worker_queue import WorkerQueue, order_key
 from ._worker_settle import Settlements
-from .inbox import Message, OrderNews, RawOrderUpdate, RawUpdates
+from .inbox import Message, OrderNews, OtherFill, RawOrderUpdate, RawUpdates
 from .orders import OrderPath
 
 if TYPE_CHECKING:
@@ -115,7 +116,12 @@ class NewsHandover:
             self.unreadable += 1
             logger.warning("an order update cannot be read, dropped: %s", error)
             return None
-        return path.on_update(update)
+        news = path.on_update(update)
+        # A fill of an order the order path does not follow (another client's, or an
+        # unbound intent's, kept aside): the loop asks for a comparison soon (5.1).
+        if news is None and update.filled_quantity > 0 and path.last_known(update.order_id) is None:
+            self._post(OtherFill(update.symbol, update.exchange, update.ts_recv_ns))
+        return news
 
 
 __all__ = ["NewsHandover"]

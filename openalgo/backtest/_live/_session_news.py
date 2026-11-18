@@ -1,7 +1,7 @@
 """What the session loop does with each message it takes in (16-session-design 2.5 A; units
 8 and 10): the order worker's answers to the venue maps, the kernel and the stops
-supervisor (`stops`); the market's messages (ticks, quotes, candles, the feed's events)
-go to `_session_feed`.
+supervisor (`stops`); the market's messages (ticks, quotes, candles, the feed's events,
+other clients' fills) go to `_session_feed`.
 
 - `OrderNews`: through the order's venue map and fill ledger to the kernel; ENTRY, EXIT
   and REJECT alerts with the order IDs; a fill the kernel refuses is a reconciliation
@@ -37,7 +37,7 @@ from ._fill_ledger import FillOutcome, FillResult, Increment
 from ._order_answers import Outcome
 from ._order_book import Resolved
 from ._order_state import ENTRY_PURPOSES
-from ._session_feed import take_candles, take_data_failed, take_feed_event, take_quote, take_tick
+from ._session_feed import MARKET
 from ._session_records import fill_record
 from ._session_trader import Trader
 from ._types import LOGGER_NAME, AlertKind, OrderIntent, OrderStatus, OrderUpdate
@@ -45,10 +45,6 @@ from ._venue_requests import Applied, CancelRequest, ModifyRequest, PlaceRequest
 from ._worker_queue import ReadBooks
 from .inbox import (
     Books,
-    Candles,
-    DataFailed,
-    FeedEvent,
-    FeedTick,
     GuardLocked,
     HeldFills,
     Message,
@@ -56,7 +52,6 @@ from .inbox import (
     NotSentReason,
     OrderNews,
     PositionRows,
-    Quote,
     Resolutions,
     SendResult,
     Settled,
@@ -92,7 +87,7 @@ class News:
 
     def take(self, message: Message) -> None:
         """Handle one message. Raises WorkerFailedError for `WorkerFailed`."""
-        market = _MARKET.get(type(message))
+        market = MARKET.get(type(message))
         if market is not None:
             market(self._session, message)
             return
@@ -369,16 +364,6 @@ def _order_words(intent: OrderIntent) -> str:
     )
 
 
-#: The market's messages, taken by `_session_feed`.
-_MARKET: Mapping[type, Any] = MappingProxyType(
-    {
-        FeedTick: take_tick,
-        Quote: take_quote,
-        FeedEvent: take_feed_event,
-        Candles: take_candles,
-        DataFailed: take_data_failed,
-    }
-)
 _HANDLERS: Mapping[type, Any] = MappingProxyType(
     {
         OrderNews: News._news,
