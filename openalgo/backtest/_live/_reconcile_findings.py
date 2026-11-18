@@ -20,9 +20,10 @@ difference and once per difference (a comparison in time still acts on it): it t
 sighting, so no later carry can count a fill its position book already held, and judges
 nothing. A leg whose last comparison that read the position book was late and found a
 position difference keeps it (`late`) for the close, which names its figures as that read
-saw them, neither carried nor confirmed (16-session-design 5.4, the unit 12 follow-up),
-unless comparisons in time confirmed it and acted on it while it lasted: it was counted
-then, and the close would count it again.
+saw them, neither carried nor confirmed (16-session-design 5.4, the unit 12 follow-up).
+One that comparisons in time confirmed and acted on while it lasted is kept and named the
+same way, but marked counted (`late_counted`): it was a mismatch of the day then, and the
+close counts it no more (the unit 13 follow-up, lead's rule of 2026-11-18).
 
 Quantities are signed units, times UTC nanoseconds. Used by the loop only.
 """
@@ -88,6 +89,8 @@ class Findings:
         self._unjudged: set[str] = set()
         # By strategy: the position difference its last comparison saw, when it was late.
         self._late: dict[str, Sighting] = {}
+        # The strategies whose late difference comparisons in time acted on and counted.
+        self._late_counted: set[str] = set()
         self._late_alerted: set[tuple[str, Finding]] = set()
         self._ended = False
 
@@ -105,6 +108,12 @@ class Findings:
         """The position difference strategy `name`'s last comparison that read the
         position book saw, when that comparison was late; else None (module docstring)."""
         return self._late.get(name)
+
+    def late_counted(self, name: str) -> bool:
+        """True when strategy `name`'s late difference (`late`) was confirmed and acted on
+        by comparisons in time while it lasted: a mismatch counted then (module
+        docstring)."""
+        return name in self._late and name in self._late_counted
 
     def fill_during_read(self, name: str) -> None:
         """A read's trade book gave the kernel a fill of strategy `name`'s own orders: that
@@ -216,14 +225,19 @@ class Findings:
     ) -> None:
         """Keep the position difference of a late comparison for the close; a comparison
         in time, or a late one that agrees, ends it. One that comparisons in time confirmed
-        and acted on, and counted, while it lasted (`confirmed`) is not kept: the close
-        would count it again (the in-time path takes no sighting of it either)."""
+        and acted on while it lasted (`confirmed`) is kept too, for the close to name, and
+        marked counted: it was counted then, and the close must not count it again (the
+        in-time path takes no sighting of it either)."""
         position = next((f for f in findings if isinstance(f[0], Kind)), None)
-        acted = position in confirmed and (name, position) in self._acted
-        if late and position is not None and not acted:
+        if late and position is not None:
             self._late[name] = Sighting(position[1], position[2])
+            if position in confirmed and (name, position) in self._acted:
+                self._late_counted.add(name)
+            else:
+                self._late_counted.discard(name)
         else:
             self._late.pop(name, None)
+            self._late_counted.discard(name)
 
     def _sighted(self, name: str, findings: set[Finding], last: set[Finding]) -> None:
         """A comparison that judged the position: its difference, when the comparison

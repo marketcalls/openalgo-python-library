@@ -385,6 +385,68 @@ def test_a_restarted_starts_result_counts_its_own_money_only(world):
     assert result.gross_pnl["realized"] == pytest.approx(result.trades["gross_pnl_rupees"].sum())
 
 
+class BuyEarlySellLate(bt.Strategy):
+    """Buys 10 SBIN on the 14:42 bar and sells them on the 14:49 bar."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "1m"
+
+    def on_bar(self, bar):
+        if bar.ts_close == ist(14, 42) and not self.position.qty:
+            self.buy(10)
+        elif bar.ts_close == ist(14, 49) and self.position.qty:
+            self.exit()
+
+
+def bought_at_500_sold_at_510(world, *, ctrl_c_at: int | None) -> bt.SessionResult:
+    """`BuyEarlySellLate` on `world` with SBIN at 505.00 from 14:44:30 and 510.00 from
+    14:48:30; with `ctrl_c_at`, stopped there with on_stop="keep" and started again on the
+    same journal. The result of the last start, which stops at 14:51."""
+    at_price(world, ist(14, 44, 30), 505.0)
+    at_price(world, ist(14, 48, 30), 510.0)
+    if ctrl_c_at is not None:
+        world.stop_at(ctrl_c_at)
+        live(world, BuyEarlySellLate, on_stop="keep")
+        world.stop = StopFlag()
+    world.stop_at(ist(14, 51))
+    return live(world, BuyEarlySellLate)
+
+
+@pytest.fixture
+def unbroken(make_fake_openalgo, monkeypatch, tmp_path_factory):
+    """The day of `bought_at_500_sold_at_510` in one start, on a fake of its own."""
+    folder = tmp_path_factory.mktemp("unbroken")
+    made = rig(make_fake_openalgo, monkeypatch, folder, trades_until=(14, 55))
+    seam(made, monkeypatch)
+    return bought_at_500_sold_at_510(made, ctrl_c_at=None)
+
+
+def test_a_position_carried_across_a_restart_brings_its_entry_charges_to_the_result(
+    unbroken, make_fake_openalgo, monkeypatch, tmp_path
+):
+    # The unit 13 follow-up item 2: the restarted start closes the trade, so its result
+    # counts the whole trade, the charges of its entry before the restart included.
+    world = rig(make_fake_openalgo, monkeypatch, tmp_path, trades_until=(14, 55))
+    seam(world, monkeypatch)
+    restarted = bought_at_500_sold_at_510(world, ctrl_c_at=ist(14, 46, 30))
+    result = restarted.results["BuyEarlySellLate"]
+    whole = unbroken.results["BuyEarlySellLate"]
+    assert result.metrics["net_profit"] == pytest.approx(whole.metrics["net_profit"])
+    assert result.metrics["net_profit"] == pytest.approx(restarted.summary.net_pnl)
+    assert result.gross_pnl["realized"] == pytest.approx(result.trades["gross_pnl_rupees"].sum())
+
+
+def test_a_day_with_a_position_carried_across_a_restart_sums_as_the_unbroken_day(
+    unbroken, make_fake_openalgo, monkeypatch, tmp_path
+):
+    world = rig(make_fake_openalgo, monkeypatch, tmp_path, trades_until=(14, 55))
+    seam(world, monkeypatch)
+    restarted = bought_at_500_sold_at_510(world, ctrl_c_at=ist(14, 46, 30))
+    figures = ("closed_trades", "gross_pnl", "charges", "net_pnl")
+    assert [getattr(restarted.summary, name) for name in figures] == pytest.approx(
+        [getattr(unbroken.summary, name) for name in figures]
+    )
+
+
 def test_a_first_starts_result_is_left_as_its_engine_made_it(world):
     at_price(world, ist(14, 44, 30), 505.0)
     world.stop_at(ist(14, 46, 30))

@@ -463,16 +463,23 @@ def test_a_difference_alerted_late_is_still_acted_on_once_compared_in_time():
     assert judging.findings.late(LEG.name) is None
 
 
-def test_a_difference_acted_on_in_time_is_not_kept_for_the_close_when_then_seen_late():
+def test_a_difference_acted_on_in_time_then_seen_late_is_kept_for_the_close_as_counted():
     # Seen in two comparisons in time it was acted on and counted: a late comparison that
-    # sees it again names nothing new at the close.
+    # sees it again keeps it for the close to name, marked as counted already.
     judging = Judging()
     books = LegBooks(10, (), ())
     for _ in range(2):
         judging.findings.judged(LEG, {(Kind.MORE, 0, 10)}, books, frozenset(), late=False)
     judging.late(Kind.MORE, 0, 10)
     assert judging.session.mismatches == 1
-    assert judging.findings.late(LEG.name) is None
+    assert judging.findings.late(LEG.name) == Sighting(0, 10)
+    assert judging.findings.late_counted(LEG.name)
+
+
+def test_a_difference_first_seen_late_is_not_counted_already():
+    judging = Judging()
+    judging.late(Kind.MORE, 0, 10)
+    assert not judging.findings.late_counted(LEG.name)
 
 
 def test_a_difference_seen_late_twice_is_still_kept_for_the_close():
