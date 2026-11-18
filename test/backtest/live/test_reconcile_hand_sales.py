@@ -28,8 +28,10 @@ Three ways the cancel comes to be held when the sale is adopted:
   read adopts the sale.
 
 On the threads seam the adoption may fall on either side of the last lines, so those
-tests check the end state either side allows. Expected values come from the scenario and
-the fake's books.
+tests check the end state either side allows. A cut the broker refuses or does not answer,
+and an adoption the kernel refuses, leave the stop for 10 on the 6 left: a decided end each
+such test names to the session invariants (`SessionTrace.kept_stop_by_decision`). Expected
+values come from the scenario and the fake's books.
 """
 
 from __future__ import annotations
@@ -373,6 +375,10 @@ def test_on_threads_the_stop_ends_fitted_to_what_is_left_and_the_result_says_so(
 
 #: What the broker answers a modify of the stop when a test has it refuse the cut.
 REFUSED_WORDS = "Order cannot be modified"
+#: The decided ends that keep the stop for 10 on the 6 left (for the session invariants).
+REFUSED_CUT = "3.3 step 5 As built, round 7: a cut the broker refuses is named, not retried"
+NO_CUT_ANSWER = "3.3 step 5 As built, round 7: a cut with no answer by the close"
+NOT_ADOPTED = "3.3 step 5 As built, round 8: an adoption the kernel refuses leaves the stop"
 
 
 def refusing_modifies(monkeypatch: Any) -> None:
@@ -439,6 +445,7 @@ def test_a_cut_the_broker_refuses_leaves_the_stop_for_10_and_nothing_claims_prot
     cut_world, monkeypatch, caplog
 ):
     refusing_modifies(monkeypatch)
+    cut_world.trace.kept_stop_by_decision("StopHold", REFUSED_CUT)
     outcome = play_cut(cut_world)
     (left,) = outcome.open_positions
     stop = first_stop(cut_world).order_id
@@ -451,6 +458,7 @@ def test_a_cut_the_broker_refuses_leaves_the_stop_for_10_and_nothing_claims_prot
 
 def test_the_error_alert_names_a_cut_the_broker_refused(cut_world, monkeypatch, caplog):
     refusing_modifies(monkeypatch)
+    cut_world.trace.kept_stop_by_decision("StopHold", REFUSED_CUT)
     outcome = play_cut(cut_world)
     (left,) = outcome.open_positions
     stop = first_stop(cut_world).order_id
@@ -481,6 +489,7 @@ def test_the_error_alert_names_a_cut_with_no_answer_by_the_close_and_claims_no_p
     decided = "3.3 step 5 As built: a cut with no answer by the close"
     cut_world.trace.left_unprotected_by_decision("StopHold", decided)
     cut_world.trace.waive(ANSWERED, decided)
+    cut_world.trace.kept_stop_by_decision("StopHold", NO_CUT_ANSWER)
     outcome = play_cut(cut_world)
     (left,) = outcome.open_positions
     stop = first_stop(cut_world).order_id
@@ -512,6 +521,7 @@ def test_an_adoption_the_kernel_refuses_leaves_the_stop_for_10_and_sends_nothing
     cut_world, monkeypatch
 ):
     refusing_adoptions(monkeypatch)
+    cut_world.trace.kept_stop_by_decision("StopHold", NOT_ADOPTED)
     outcome = play_cut(cut_world)
     assert stops(cut_world) == [(10, "trigger pending")]
     assert cut_world.fake.position("SBIN", "NSE") == 6
@@ -524,6 +534,7 @@ def test_the_close_names_the_held_cancel_an_adoption_the_kernel_refused_made_way
     # The cancel withdrawn for a cut that never came is held again: the close's alert names
     # it among what was not sent, as it would had no adoption been tried.
     refusing_adoptions(monkeypatch)
+    cut_world.trace.kept_stop_by_decision("StopHold", NOT_ADOPTED)
     play_cut(cut_world)
     not_sent = f"not sent: the cancel of stop order {first_stop(cut_world).order_id}"
     named = [text for text in alerts(caplog, "error") if "StopHold SBIN NSE 10 units" in text]
@@ -534,6 +545,7 @@ def test_the_mismatch_alert_of_an_adoption_the_kernel_refused_claims_no_adoption
     cut_world, monkeypatch, caplog
 ):
     refusing_adoptions(monkeypatch)
+    cut_world.trace.kept_stop_by_decision("StopHold", NOT_ADOPTED)
     play_cut(cut_world)
     (text,) = alerts(caplog, "reconcile_mismatch")
     assert NOT_ADOPTED_WORDS in text

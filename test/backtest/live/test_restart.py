@@ -24,9 +24,9 @@ from restart_samples import (
     run_to_crash,
     stops_working,
 )
+from session_hooks import trace_sessions
 from session_invariants import assert_session_invariants
 from session_samples import Hold, Rig, Script, alerts, ist
-from session_trace import trace_sessions
 from stops_samples import at_price, check_invariants, events, stop_world
 from test_stops_exits import TwoTrades, journal_stop, rising
 
@@ -129,17 +129,24 @@ def test_F51_a_stop_that_filled_while_down_is_attributed_to_the_stop(crashed, ca
 
 def test_F93_a_stop_fill_journaled_after_the_last_save_is_in_the_journal_position(world):
     # The stop fills at 14:42:35 and its word is journaled; the next save of the engine
-    # would come with the 14:42 slice's release at 14:43:01, after the crash.
+    # would come with the 14:42 slice's release at 14:43:01, after the crash. The restart
+    # comes after the MIS entry cut-off (14:50), so the flat strategy enters no more, and
+    # the session runs to its end past the 15:00 square-off.
     world.script.at(
         ist(14, 42, 35), lambda: world.fake.trade("SBIN", "NSE", FALL_PRICE, volume=10.0)
     )
-    crash_at(world, ist(14, 42, 50))
+    crashed = ist(14, 42, 50)
+    crash_at(world, crashed)
     run_to_crash(world, StopWhenFlat)
-    outcome = restart(world, StopWhenFlat, stop_ns=ist(14, 44), on_stop="keep")
+    world.script.sleep((ist(14, 51) - world.fake.clock.now()) / 10**9)
+    outcome = restart(world, StopWhenFlat)
     assert events(outcome, "adopted") == []
     assert outcome.reconciliations == ()
-    assert [o for o in placed_after(world, ist(14, 42, 50)) if o.action == "SELL"] == []
-    check_invariants(world.timeline, strategy="StopWhenFlat", unprotected_at_end=True)
+    # The square-off sends nothing: the restored engine is flat, never long 10 or short.
+    assert placed_after(world, crashed) == []
+    assert (outcome.stopped_by, outcome.open_positions) == ("session_end", ())
+    assert world.fake.position("SBIN", "NSE") == 0
+    check_invariants(world.timeline, strategy="StopWhenFlat")
 
 
 # ----- F52, F75, F76: the stop missing at the restart -------------------------------------

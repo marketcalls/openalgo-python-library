@@ -35,12 +35,13 @@ stop still working with no position to close by hand (round 8). A session that c
 with books that agree still says "0 mismatches" and "flat". Expected values come from the
 scenario and the fake's books.
 
-Every case of the short breaks the session invariants' third check (never the other side,
-16-session-design 7.1): the session's stop for 10 fills against the 6 left. The cases carry
-it as a known break (`session_invariants.known_break`), checked at each test's end, until
-the lead decides (unit 14 round 1). Where the stop fires at the first sighting, the market
-moves in the very comparison that first sees the sale, before the session can act, so only
-a listed exemption in 7.1 covers those.
+In every case of the short the session's stop for 10 fills against the 6 left, through
+zero: the decided ends above let it (5.3 fits the stop on the second comparison that shows
+the sale), which each such test names to the session invariants
+(`SessionTrace.oversold_by_decision`), as it names the stop for 10 kept on the flat
+position (`SessionTrace.kept_stop_by_decision`); FAULT_ROWS.md lists them for the lead
+(unit 14 round 2). Where the stop fires at the first sighting, the market moves in the
+very comparison that first sees the sale, before the session can act.
 """
 
 from __future__ import annotations
@@ -51,7 +52,6 @@ from typing import Any
 
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
-from session_invariants import OVERSOLD_AFTER_A_SALE_BY_HAND, known_break, then_the_invariants
 from session_samples import NS, alerts, ist
 from stops_samples import (
     StopHold,
@@ -168,32 +168,22 @@ def slow_once_the_fill_is_in(world: Any, monkeypatch: Any) -> None:
     world.lines = LinesThen("StopHold SBIN NSE", at_the_line)
 
 
-#: Every case ends with the stop for 10 filled against the 6 left, the account short 4: a
-#: known break of the session invariants (`known_break`).
-OVERSOLD = known_break(OVERSOLD_AFTER_A_SALE_BY_HAND)
+#: The decided ends that let the stop for 10 fill against the 6 left, and keep it on the
+#: flat position the sale of all 10 leaves (for the session invariants).
+OVERSOLD = (
+    "5.3: the stop is fitted on the second comparison that shows the sale; 5.4 As built, "
+    "rounds 7 and 8: the close names the short it was the first to see"
+)
+KEPT_ON_FLAT = "5.4 As built, round 8: the close names the stop working on a flat position"
 #: The cases: when the stop fires, on which seam, and what Ctrl+C does with the leg.
 CASES = [
+    pytest.param((fires_at_the_first_sighting, "inline", "keep"), id="first sighting, keep"),
     pytest.param(
-        (fires_at_the_first_sighting, "inline", "keep"), id="first sighting, keep", marks=OVERSOLD
+        (fires_at_the_first_sighting, "threads", "keep"), id="first sighting, keep, threads"
     ),
-    pytest.param(
-        (fires_at_the_first_sighting, "threads", "keep"),
-        id="first sighting, keep, threads",
-        marks=OVERSOLD,
-    ),
-    pytest.param(
-        (fires_at_the_first_sighting, "inline", "flatten"),
-        id="first sighting, flatten",
-        marks=OVERSOLD,
-    ),
-    pytest.param(
-        (fires_after_the_line, "inline", "keep"), id="after the line, keep", marks=OVERSOLD
-    ),
-    pytest.param(
-        (fires_after_the_line, "threads", "keep"),
-        id="after the line, keep, threads",
-        marks=OVERSOLD,
-    ),
+    pytest.param((fires_at_the_first_sighting, "inline", "flatten"), id="first sighting, flatten"),
+    pytest.param((fires_after_the_line, "inline", "keep"), id="after the line, keep"),
+    pytest.param((fires_after_the_line, "threads", "keep"), id="after the line, keep, threads"),
 ]
 
 
@@ -210,6 +200,7 @@ def short(request, monkeypatch):
     else:
         world = request.getfixturevalue("alone")
     world.seam, world.on_stop = seam, on_stop
+    world.trace.oversold_by_decision("StopHold", OVERSOLD)
     sold_by_hand(world, SOLD, SOLD_AT)
     arm(world, monkeypatch)
     return world
@@ -243,14 +234,12 @@ def test_the_stop_for_10_fills_and_leaves_the_account_short_4(short):
     stops = [(o.quantity, o.status) for o in world.orders() if o.price_type == "SL-M"]
     assert stops == [(StopHold.qty, "complete")]
     assert world.fake.position("SBIN", "NSE") == SHORT
-    then_the_invariants(short.trace)
 
 
 @pytest.mark.parametrize("short", CASES[:3], indirect=True)
 def test_the_close_alerts_the_short_once_naming_both_figures(short, caplog):
     run(short)
     assert leg_alerts(caplog) == [f"StopHold SBIN NSE: {BOTH_FIGURES}; {NO_STOP_CLOSE_BY_HAND}"]
-    then_the_invariants(short.trace)
 
 
 @pytest.mark.parametrize("short", CASES[3:], indirect=True)
@@ -263,7 +252,6 @@ def test_the_alert_of_the_stop_that_filled_after_the_lines_names_the_short(short
         f"StopHold SBIN NSE: its stop {stop.order_id} filled at the broker after the "
         f"session's last lines; {BOTH_FIGURES}; {NO_STOP_CLOSE_BY_HAND}"
     )
-    then_the_invariants(short.trace)
 
 
 @pytest.mark.parametrize("short", CASES, indirect=True)
@@ -273,7 +261,6 @@ def test_the_result_lists_the_short_at_openalgos_units_with_no_confirmed_stop(sh
     assert (left.units, left.stop_order_id, left.stop_confirmed) == (SHORT, "", False)
     assert left.note.endswith(f"{BOTH_FIGURES}; {NO_STOP_CLOSE_BY_HAND}")
     assert outcome.summary.flat is False
-    then_the_invariants(short.trace)
 
 
 @pytest.mark.parametrize("short", CASES, indirect=True)
@@ -282,34 +269,24 @@ def test_the_daily_summary_counts_and_names_the_short(short, caplog):
     lines = summary_lines(caplog)
     assert lines["Reconcile"] == f"1 mismatch ({SUMMARY_WORDS})"
     assert lines["End state"] == f"not flat: a position is still open ({SUMMARY_WORDS})"
-    then_the_invariants(short.trace)
 
 
 @pytest.mark.parametrize("short", CASES, indirect=True)
 def test_nothing_is_sent_for_the_short(short):
     outcome = run(short)
     assert handed_after_the_final_read(outcome) == []
-    then_the_invariants(short.trace)
 
 
 # ----- the final read brings no books: the sighting is older than the stop's fill -------
 
 #: The cases: how the final read brings no books, on which seam.
 STALE = [
+    pytest.param((fires_after_the_line_with_no_books("dropped"), "inline", "keep"), id="dropped"),
     pytest.param(
-        (fires_after_the_line_with_no_books("dropped"), "inline", "keep"),
-        id="dropped",
-        marks=OVERSOLD,
+        (fires_after_the_line_with_no_books("dropped"), "threads", "keep"), id="dropped, threads"
     ),
     pytest.param(
-        (fires_after_the_line_with_no_books("dropped"), "threads", "keep"),
-        id="dropped, threads",
-        marks=OVERSOLD,
-    ),
-    pytest.param(
-        (fires_after_the_line_with_no_books("slow"), "threads", "keep"),
-        id="slow, threads",
-        marks=OVERSOLD,
+        (fires_after_the_line_with_no_books("slow"), "threads", "keep"), id="slow, threads"
     ),
 ]
 #: How the close names the first comparison's figures, the stop's fill after them, and the
@@ -343,7 +320,6 @@ def test_with_no_books_at_the_close_the_stop_for_10_still_leaves_the_account_sho
     stops = [(o.quantity, o.status) for o in world.orders() if o.price_type == "SL-M"]
     assert stops == [(StopHold.qty, "complete")]
     assert world.fake.position("SBIN", "NSE") == SHORT
-    then_the_invariants(short.trace)
 
 
 @pytest.mark.parametrize("short", STALE, indirect=True)
@@ -354,7 +330,6 @@ def test_a_sighting_older_than_the_stops_fill_lists_the_short_that_fill_leaves(s
     assert (left.units, left.stop_order_id, left.stop_confirmed) == (SHORT, "", False)
     assert left.note == stale_note(world)
     assert outcome.summary.flat is False
-    then_the_invariants(short.trace)
 
 
 @pytest.mark.parametrize("short", STALE, indirect=True)
@@ -365,7 +340,6 @@ def test_the_alert_of_a_sighting_older_than_the_stops_fill_names_the_read_and_th
     run(world)
     *_, last = leg_alerts(caplog)
     assert last == f"StopHold SBIN NSE: {stale_note(world)}"
-    then_the_invariants(short.trace)
 
 
 @pytest.mark.parametrize("short", STALE, indirect=True)
@@ -376,14 +350,12 @@ def test_the_daily_summary_names_the_short_the_fill_leaves_against_the_engines_u
     lines = summary_lines(caplog)
     assert lines["Reconcile"] == f"1 mismatch ({STALE_SUMMARY_WORDS})"
     assert lines["End state"] == f"not flat: a position is still open ({STALE_SUMMARY_WORDS})"
-    then_the_invariants(short.trace)
 
 
 @pytest.mark.parametrize("short", STALE, indirect=True)
 def test_nothing_is_sent_for_a_sighting_older_than_the_stops_fill(short):
     outcome = run(short)
     assert handed_after_the_final_read(outcome) == []
-    then_the_invariants(short.trace)
 
 
 # ----- OpenAlgo's books flat at the first sighting, the stop still working --------------
@@ -418,6 +390,7 @@ def all_sold(request, monkeypatch):
     else:
         world = request.getfixturevalue("alone")
     world.seam, world.on_stop = request.param, "keep"
+    world.trace.kept_stop_by_decision("StopHold", KEPT_ON_FLAT)
     sold_by_hand(world, StopHold.qty, SOLD_AT)
     world.script.at(PRESSED_AT, world.stop.request)
     return world

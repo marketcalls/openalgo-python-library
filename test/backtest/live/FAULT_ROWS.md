@@ -6,16 +6,20 @@ the fake OpenAlgo. Each row below names the tests (module and name, under
 Assertion columns. A parametrized test is named with its parameter id in brackets.
 
 Every one of these tests also runs the session invariants of 7.1 when it ends
-(`session_invariants.py`, over the order changes `session_trace.py` records as the fake
-makes them, a sandbox modify included): `session_samples.rig` installs the recording for
-every session test, and the `make_fake_openalgo` fixture runs the checks. A test whose row
-7.1 lists (F35, F36, F60, the F77 variant, F80) leaves its leg without a confirmed stop
-with `trace.leave_unprotected`; the leg must then be listed in `open_positions` with no
-confirmed stop and named by an ERROR alert, and only the protection check is lifted for
-it. A test whose session cannot keep one check waives that check alone, with its reason
-(`trace.waive`); every other check still runs. `test_session_invariants.py` and
-`test_session_invariants_end.py` check the checks on hand-written changes and runs, and
-the trace's recording on the fake.
+(`session_invariants.py` with `session_invariants_changes.py`, `session_invariants_end.py`
+and `session_invariants_stream.py`, over the order changes `session_trace.py` records as
+the fake makes them, a sandbox modify included): `session_samples.rig` installs the
+recording for every session test (`session_hooks.py`), and the `make_fake_openalgo`
+fixture runs the checks. The checks "at any instant" run at every change of an order at
+the fake, another client's included. A test whose row 7.1 lists (F35, F36, F60, the F77
+variant, F80) leaves its leg without a confirmed stop with `trace.leave_unprotected`; the
+leg must then be listed in `open_positions` with no confirmed stop and named by an ERROR
+alert, and only the protection check is lifted for it. A test whose other client sells by
+hand names what the decided end it plays leaves at the fake (`trace.kept_stop_by_decision`,
+`trace.oversold_by_decision`; the section "Sales by hand" below). A test whose session
+cannot keep one check waives that check alone, with its reason (`trace.waive`); every
+other check still runs. `test_session_invariants.py` and `test_session_invariants_end.py`
+check the checks on hand-written changes and runs, and the trace's recording on the fake.
 
 | Row | Tests |
 |---|---|
@@ -29,7 +33,7 @@ the trace's recording on the fake.
 | F08 | `test_session_orders.py::test_F08_a_rate_limited_entry_is_rejected_once_and_not_sent_again` |
 | F09 | `test_stops_unit8_rows.py::test_F09_a_rate_limited_exit_after_the_stops_cancel_is_asked_for_again_and_fills`, `test_session_orders.py::test_F09_a_rate_limited_exit_is_asked_for_again_a_second_later_and_fills` |
 | F10 | `test_session_faults_orders.py::test_F10_a_slow_entry_answer_leaves_no_false_unprotected_exit_and_the_stop_confirmed`, `test_session_orders.py::test_F10_a_slow_answer_moves_the_clock_and_the_session_catches_up` |
-| F11 | `test_stops_placing.py::test_F11_a_stop_rejected_after_acceptance_exits_at_market_at_once` |
+| F11 | `test_stops_placing.py::test_F11_a_stop_rejected_after_acceptance_exits_at_market_at_once` (unprotected under 2 s from the rejection to flat, after the stop's usual wait for its first word) |
 | F12 | `test_stops_placing.py::test_F12_an_option_stop_refused_at_placement_exits_at_market_at_once` |
 | F13 | `test_stops_placing.py::test_F13_an_options_stop_is_a_stop_limit_5_percent_beyond_its_trigger_on_the_tick` |
 | F14 | `test_stops_placing.py::test_F14_a_stop_accepted_and_never_confirmed_exits_the_leg_after_10_seconds` |
@@ -62,7 +66,7 @@ the trace's recording on the fake.
 | F41 | `test_watch_feed_drop.py::test_F41_a_fill_while_the_connection_was_down_is_found_by_the_stream_gaps_poll`, `test_F41_the_bar_builders_resume_over_the_outages_span`, `test_F41_the_sdk_replays_the_subscriptions_on_the_new_connection`, `test_F41_a_reconnect_held_past_the_dead_time_is_a_dead_feed_until_ticks_return` |
 | F42 | `test_session_candles.py::test_F42_a_tick_gap_is_drift_and_the_series_continues_from_the_candle` |
 | F43 | `test_stops_exits.py::test_F43_the_square_off_comes_by_the_clock_with_no_tick_and_cancels_the_stop_first` |
-| F44 | `test_stops_exits.py::test_F44_a_refused_square_off_is_asked_for_again_with_alerts_until_flat` |
+| F44 | `test_stops_exits.py::test_F44_a_refused_square_off_is_asked_for_again_with_alerts_each_minute_until_flat` (the "still not flat" ERROR at the square-off plus 30 s and again a minute later, then flat) |
 | F45 | `test_stops_exits.py::test_F45_the_daily_loss_on_ticks_exits_mid_bar_and_locks_entries` (the later entries rejected `daily_loss_gate`) |
 | F46 | `test_watch_kill_switch.py::test_F46_a_combined_loss_at_the_account_limit_fires_the_kill_switch_of_every_strategy`, `test_F46_the_kill_switch_exits_both_positions_as_risk_exits`, `test_F46_entries_stay_locked_for_the_day_after_the_kill_switch`, `test_F46_the_account_limit_is_alerted_once`, `test_F46_the_kill_switch_reports_each_strategy_flat_at_the_broker`, `test_F46_a_flat_report_waits_for_a_read_begun_after_the_strategy_went_flat` |
 | F47 | `test_session_faults_start.py::test_F47_a_live_session_with_the_telegram_bot_stopped_fails_its_preflight`, `test_session_faults_start.py::test_F47_a_sandbox_session_with_the_telegram_bot_stopped_runs_and_counts_its_alerts` |
@@ -111,7 +115,7 @@ the trace's recording on the fake.
 | F90 | `test_session_stream.py::test_F90_when_the_stream_resumes_the_trades_are_the_baseline_ones` |
 | F91 | `test_stops_exits.py::test_F91_an_add_that_would_pass_the_freeze_quantity_is_rejected` |
 | F92 | `test_stops_threads.py::test_F92_no_deadline_exit_while_the_worker_is_in_a_call_with_the_confirmation_waiting` |
-| F93 | `test_restart.py::test_F93_a_stop_fill_journaled_after_the_last_save_is_in_the_journal_position` |
+| F93 | `test_restart.py::test_F93_a_stop_fill_journaled_after_the_last_save_is_in_the_journal_position` (restarted after the entry cut-off and run past the 15:00 square-off, which sends nothing) |
 
 All 93 rows are covered.
 
@@ -146,25 +150,51 @@ post: "once" means once in all of them.
 | The broker's own MIS square-off (optional) | Not built: no row's test needs it (F44's variant and 5.3 row 1 are covered by the session's own square-off and the reconciler's adoption tests) |
 | The client each call and order came from (for the invariants) | `test_fake_openalgo_extensions.py::test_each_client_of_the_fake_has_its_own_name`, `test_an_order_keeps_the_name_of_the_client_that_placed_it`, `test_the_log_names_the_client_of_every_call` |
 
-## Known breaks of the invariants (for the lead)
+## Sales by hand: decided ends beyond 7.1 (for the lead)
 
-Invariant 3 (no fill of the session's orders leaves the position on the other side of the
-leg) breaks in the merged tests of a sale by hand followed by the stop's fill: the
-session's SL-M for 10 fills against the 6 left and takes the account short 4 (unit 12's
-decided close reporting, 5.4 "As built" rounds 7 to 9). 7.1 names no exemption for it, so
-these cases carry `known_break(OVERSOLD_AFTER_A_SALE_BY_HAND)` (strict: a pass fails them,
-so the mark goes with the fix) and check the invariants at their end:
+A sale by hand is the one change a session learns of only by its comparisons, and 5.3
+fits the leg's stop to it on the second comparison that shows it. So at the instant of
+the sale, and until that fit, the stop that was working stands beyond the position. The
+invariants allow that, at every change, for exactly the exits that were working when the
+other client's fill came, by no more than the sale left them beyond the position; an exit
+placed after the sale, or the units a stop is raised by, get no such room
+(`session_invariants_changes.SaleRoom`; self-tests in `test_session_invariants.py`).
 
-- `test_session_close_fill_in_read.py`: every test of the cases `sold 4` (inline and
-  threads, stream live and held).
-- `test_session_close_differing.py`: every test of the short (`CASES` and `STALE`).
+Beyond that the invariants of 7.1 hold with no exemption unless the test names the decided
+end it plays. These merged tests do, for the lead to add to 7.1 (or to send back as code
+defects):
 
-To lift them the lead decides one of: cut the stop at the first comparison that shows an
-explained sale by hand (5.3 row 2 cuts it at the second), which removes the break where the
-stop fills after that comparison (the "after the line" and fill-in-read cases); or list the
-exemption in 7.1 and 5.3. Where the stop fires at the first sighting itself, the market
-moves in the very comparison that first sees the sale, so only a listed exemption covers
-it.
+1. **The session's stop fills against what the sale left, through zero**
+   (`trace.oversold_by_decision`; invariant 3). Allowed only for a stop that was working
+   when the sale came, through zero by no more than the sale left it beyond the position,
+   and only when the run lists the leg in `open_positions` at the fake's units with no
+   confirmed stop and an ERROR alert names the strategy.
+
+| Test | Decided end |
+|---|---|
+| `test_session_close_differing.py`: every test of `CASES` (first sighting, inline and threads, keep and flatten; after the line, inline and threads) and of `STALE` (dropped, inline and threads; slow, threads) | 5.3 (the stop is fitted on the second comparison that shows the sale); 5.4 "As built", rounds 7 to 9 (the close names the short it is the first to see). In the first-sighting cases the market moves inside the very comparison that first sees the sale |
+| `test_session_close_fill_in_read.py`: every case `sold 4` (inline and threads, stream live and held, and the `UNJUDGED` ones) | 5.3; 5.4 "As built", round 9 (the stop fills inside the read of the second comparison) |
+
+2. **The stop stays larger than what the sale left, or on the flat position it left**
+   (`trace.kept_stop_by_decision`; invariants 2 and 4 at the end). Allowed only for a stop
+   that was working when the sale came, beyond the position by no more than the sale left
+   it, and only when an ERROR alert of the run names that stop's order ID.
+
+| Test | Decided end |
+|---|---|
+| `test_session_close_differing.py`: the `all_sold` tests (inline and threads) | 5.4 "As built", round 8: the close names the stop working on a flat position |
+| `test_session_close_hand_sale.py`: every test (the final read with no books; the cut held, dropped or asked for as the final read ends) | 3.3 step 5 and 5.4 "As built", rounds 6 to 8: the close does not fit the stop to a sale it has not settled, and names it |
+| `test_reconcile_hand_sales.py::test_a_cut_the_broker_refuses_leaves_the_stop_for_10_and_nothing_claims_protection`, `test_the_error_alert_names_a_cut_the_broker_refused` | 3.3 step 5 "As built", round 7: a refused cut is named |
+| `test_reconcile_hand_sales.py::test_the_error_alert_names_a_cut_with_no_answer_by_the_close_and_claims_no_protection` | 3.3 step 5 "As built", round 7: a cut with no answer by the close |
+| `test_reconcile_hand_sales.py::test_an_adoption_the_kernel_refuses_leaves_the_stop_for_10_and_sends_nothing`, `test_the_close_names_the_held_cancel_an_adoption_the_kernel_refused_made_way_for`, `test_the_mismatch_alert_of_an_adoption_the_kernel_refused_claims_no_adoption` | 3.3 step 5 "As built", round 8: an adoption the kernel refuses leaves the stop as it was |
+
+What would remove the first list instead: fitting the stop at the first comparison that
+shows an explained sale by hand. The kernel fits a stop only with an adoption
+(`apply_external_fill`), and `Engine.modify` needs a decision point and keeps a stop's
+role, so that means adopting an explained sale on its first sighting (a change of 5.3's
+two comparisons, and of every unit 12 test built on them) or a kernel call that cuts a
+stop alone (a Rust build). It would remove the "after the line" and fill-in-read cases;
+the first-sighting cases need the exemption whatever is built.
 
 ## Exemptions beyond 7.1's list (for the lead)
 

@@ -21,7 +21,9 @@ line, note or result may say that stop protects the position.
   handed to the order worker as it closes. The RECONCILE_MISMATCH alert says the cut was
   asked for, not that it was made.
 
-Expected values come from the scenario and the fake's books.
+Every case ends with that stop for 10 working on the 6 left, which the session invariants
+take as the decided end it is (`SessionTrace.kept_stop_by_decision`, listed in
+FAULT_ROWS.md for the lead). Expected values come from the scenario and the fake's books.
 """
 
 from __future__ import annotations
@@ -50,6 +52,12 @@ SLOW_BOOK_S = 8.0
 #: Why a test's cut of the stop has no answer when the session ends, which the session
 #: invariants take instead of an answered modify (16-session-design 3.3 step 5 "As built").
 CUT_UNANSWERED = "3.3 step 5 As built: the stop's cut is not sent or not answered by the close"
+#: Why every case ends with the stop for 10 on the 6 left, which the session invariants take
+#: once an ERROR alert names the stop (16-session-design 3.3 step 5 and 5.4 "As built").
+KEPT = (
+    "3.3 step 5 and 5.4 As built, rounds 6 to 8: the close does not fit the stop to a sale "
+    "by hand it has not settled, and names it"
+)
 #: The end of a note whose confirmed stop covers the whole position.
 PROTECTS = "it protects the position, so cancel the stop before any sale by hand"
 #: How a line names the broker's units the exit guard knows of the leg.
@@ -71,6 +79,7 @@ def scenario(seam: str, request: Any, monkeypatch: Any) -> Any:
     else:
         made = request.getfixturevalue("alone")
     made.seam = seam
+    made.trace.kept_stop_by_decision("StopHold", KEPT)
     sold_by_hand(made, SOLD, SOLD_AT)
     ctrl_c_at_the_first_sighting(made, monkeypatch, broker_below=StopHold.qty)
     return made

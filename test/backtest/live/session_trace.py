@@ -14,16 +14,16 @@ that fake left.
   (`Closing`), and the outcome its close returned (None for a run that crashed or whose
   close failed).
 
-`trace_sessions` installs the recording for one fake and registers the invariants to run
-when the test ends (`session_invariants.assert_session_invariants`). The hooks wrap the
-session's start, its close, the kernel stop of each strategy at the close, the event
-stream's writer, the shared alerts' sender and the mode guard's lock, once per test
-(monkeypatch undoes them), and hand each run to the trace of the fake whose clients it
-uses. Nothing here changes what a session does.
+`session_hooks.trace_sessions` installs the recording for one fake and has the invariants
+run when the test ends.
 
 A test whose session cannot keep one of the checks says which and why (`SessionTrace.waive`);
 one whose row leaves a leg without a confirmed stop names the leg
-(`SessionTrace.leave_unprotected`).
+(`SessionTrace.leave_unprotected`). A test whose other client sells by hand says what the
+decided end it plays leaves at the fake beyond 7.1's list, each such test listed in
+FAULT_ROWS.md for the lead: a stop larger than the position, or working on a flat one,
+that the close names (`SessionTrace.kept_stop_by_decision`), or the session's stop filled
+against what the sale left, through zero (`SessionTrace.oversold_by_decision`).
 
 Times are UTC nanoseconds, quantities signed units, prices rupees.
 """
@@ -34,19 +34,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from fake_openalgo import FakeOpenAlgo, client_name
+from fake_openalgo import FakeOpenAlgo
 
-from openalgo import api
 from openalgo.backtest._engine import call
-from openalgo.backtest._live import _session_close as close_module
-from openalgo.backtest._live import session as session_module
-from openalgo.backtest._live._alerts_logs import SessionLogs
-from openalgo.backtest._live._shared_alerts import SharedAlerts
 from openalgo.backtest._live._types import Mode
-from openalgo.backtest._live.guard import ModeGuard
-
-#: The session's client roles (`clients.SessionClients`).
-ROLES = ("orders", "guard", "data", "alerts", "feed")
 
 #: The checks of 7.1 (`session_invariants`), by the name a waiver gives.
 ONE_STOP = "one stop per leg"
@@ -158,6 +149,12 @@ class SessionTrace:
         self.unprotected: dict[str, str] = {}
         #: The checks the test's session cannot keep, with why.
         self.waived: dict[str, str] = {}
+        #: The strategies whose stop the test's decided end keeps larger than the position
+        #: another client's sale left, or on the flat position it left, with that end.
+        self.kept_stops: dict[str, str] = {}
+        #: The strategies whose stop the test's decided end lets fill against what another
+        #: client's sale left, taking the account through zero, with that end.
+        self.oversold: dict[str, str] = {}
         #: Whether the invariants were checked already (`check_now`).
         self.checked = False
         self._positions: dict[tuple[Mode, str, str], int] = {}
@@ -189,6 +186,27 @@ class SessionTrace:
         leg without a confirmed stop (`decision` names the paragraph); each is listed in
         FAULT_ROWS.md for the lead to add to 7.1's list."""
         self.unprotected[strategy] = decision
+
+    def kept_stop_by_decision(self, strategy: str, decision: str) -> None:
+        """Another client sells part or all of `strategy`'s position by hand while its stop
+        works, and the decided end of 16-session-design that `decision` names keeps that
+        stop at the broker, larger than what is left, to the end. The checks then take a
+        stop that was working when the sale came, beyond the position by no more than the
+        sale left it there, once an ERROR alert of the run names its order ID; an exit
+        placed or raised after the sale gets no such room. Listed in FAULT_ROWS.md for the
+        lead."""
+        self.kept_stops[strategy] = decision
+
+    def oversold_by_decision(self, strategy: str, decision: str) -> None:
+        """Another client sells part of `strategy`'s position by hand while its stop works,
+        and the decided end of 16-session-design that `decision` names lets the stop fill
+        for the whole position before the session fits it (5.3 fits it on the second
+        comparison that shows the sale), taking the account through zero. The checks then
+        take such a fill of a stop that was working when the sale came, through zero by
+        no more than the sale left it beyond the position, once the run lists the leg in
+        `open_positions` at the units the fake holds, with no confirmed stop, and an ERROR
+        alert names the strategy. Listed in FAULT_ROWS.md for the lead."""
+        self.oversold[strategy] = decision
 
     def waive(self, check: str, reason: str) -> None:
         """Do not assert `check` (one of `CHECKS`) for this test, for `reason` (said in the
@@ -249,21 +267,6 @@ class SessionTrace:
         )
 
 
-def trace_sessions(
-    fake: FakeOpenAlgo, monkeypatch: Any, check: Callable[..., None]
-) -> SessionTrace:
-    """Record `fake`'s order changes and session runs (module docstring), and run
-    `check(trace, fake)` when the test ends (unless the test ran it, `check_now`)."""
-    trace = SessionTrace(fake)
-    hooks = getattr(session_module.open_session, "hooks", None)
-    if hooks is None:
-        hooks = _Hooks()
-        hooks.install(monkeypatch)
-    hooks.traces.append(trace)
-    fake.at_test_end(lambda: None if trace.checked else check(trace, fake))
-    return trace
-
-
 def closing_of(session: Any, trader: Any) -> Closing | None:
     """`trader`'s `Closing` read from its running kernel session and `session`'s stops
     supervisor, None when the kernel cannot be read (a test's hook broke it)."""
@@ -284,127 +287,6 @@ def closing_of(session: Any, trader: Any) -> Closing | None:
     )
 
 
-class _Hooks:
-    """The hooks of one test (module docstring): each run goes to the trace of the fake
-    whose clients it uses. What a part sends before its run is known (the start's alerts,
-    a guard that locks in the start) waits on the part (`traced`) until the run opens."""
-
-    def __init__(self) -> None:
-        self.traces: list[SessionTrace] = []
-        self._runs: dict[int, Run] = {}
-        self._traces: dict[int, SessionTrace] = {}
-        self._open = session_module.open_session
-        self._close = session_module.close_session
-        self._stop_engine = close_module._stop_engine
-        self._write = SessionLogs.event
-        self._send = SharedAlerts.send
-        self._lock = ModeGuard._lock
-
-    def install(self, monkeypatch: Any) -> None:
-        """Wrap the session's start, close, kernel stops, event writer, alerts and guard
-        lock for the test."""
-        hooks = self
-
-        def opened(*args: Any, **kwargs: Any) -> Any:
-            return hooks.opened(*args, **kwargs)
-
-        def written(logs: Any, kind: str, **fields: Any) -> None:
-            hooks.written(logs, kind, **fields)
-
-        def sent(alerts: Any, kind: Any, text: str, **kwargs: Any) -> None:
-            hooks.sent(alerts, kind, text, **kwargs)
-
-        def locked(guard: Any, *args: Any, **kwargs: Any) -> None:
-            hooks.locked(guard, *args, **kwargs)
-
-        opened.hooks = self
-        monkeypatch.setattr(session_module, "open_session", opened)
-        monkeypatch.setattr(session_module, "close_session", self.closed)
-        monkeypatch.setattr(close_module, "_stop_engine", self.stopped)
-        monkeypatch.setattr(SessionLogs, "event", written)
-        monkeypatch.setattr(SharedAlerts, "send", sent)
-        monkeypatch.setattr(ModeGuard, "_lock", locked)
-
-    def opened(self, *args: Any, **kwargs: Any) -> Any:
-        session = self._open(*args, **kwargs)
-        parts = session.parts
-        clients = [_unwrapped(getattr(parts.clients, role, None)) for role in ROLES]
-        made = [client for client in clients if client is not None]
-        trace = next((t for t in self.traces if any(t.fake.owns(c) for c in made)), None)
-        if trace is not None:
-            names = frozenset(client_name(client) for client in made)
-            run = Run(
-                session,
-                names,
-                list(getattr(parts.logs, "traced", [])),
-                list(getattr(parts.alerts, "traced", [])),
-                log_from=getattr(parts.logs, "traced_log_from", len(trace.fake.log.entries)),
-                locked_at=getattr(parts.guard, "traced_lock", {}).get(id(trace)),
-            )
-            trace.runs.append(run)
-            self._runs[id(parts.logs)] = run
-            self._runs[id(parts.alerts)] = run
-            self._runs[id(parts.guard)] = run
-            self._traces[id(run)] = trace
-        return session
-
-    def closed(self, session: Any, *args: Any, **kwargs: Any) -> Any:
-        outcome = self._close(session, *args, **kwargs)
-        run = self._runs.get(id(session.parts.logs))
-        if run is not None:
-            run.outcome = outcome
-            trace = self._traces[id(run)]
-            run.ended_at = len(trace.changes)
-            run.log_to = len(trace.fake.log.entries)
-        return outcome
-
-    def stopped(self, trader: Any) -> Any:
-        for run in {id(run): run for run in self._runs.values()}.values():
-            if any(t is trader for t in run.session.traders):
-                closing = closing_of(run.session, trader)
-                if closing is not None:
-                    run.closing[trader.name] = closing
-        return self._stop_engine(trader)
-
-    def written(self, logs: Any, kind: str, **fields: Any) -> None:
-        self._write(logs, kind, **fields)
-        line = {"ts_ns": logs._now(), "kind": kind, **fields}
-        run = self._runs.get(id(logs))
-        if run is not None:
-            run.events.append(line)
-            return
-        logs.__dict__.setdefault("traced", []).append(line)
-        if "traced_log_from" not in logs.__dict__ and self.traces:
-            # The log as the session's first event found it: its run's calls come after.
-            logs.traced_log_from = min(len(t.fake.log.entries) for t in self.traces)
-
-    def sent(self, alerts: Any, kind: Any, text: str, **kwargs: Any) -> None:
-        run = self._runs.get(id(alerts))
-        if run is not None:
-            run.alerts.append((kind, text))
-        else:
-            alerts.__dict__.setdefault("traced", []).append((kind, text))
-        self._send(alerts, kind, text, **kwargs)
-
-    def locked(self, guard: Any, *args: Any, **kwargs: Any) -> None:
-        self._lock(guard, *args, **kwargs)
-        run = self._runs.get(id(guard))
-        if run is not None:
-            trace = self._traces[id(run)]
-            run.locked_at = len(trace.fake.log.entries)
-        else:
-            guard.traced_lock = {id(t): len(t.fake.log.entries) for t in self.traces}
-
-
-def _unwrapped(client: Any) -> api | None:
-    """The fake's client inside a test's client double (one that keeps it as `_client`)."""
-    for _ in range(5):
-        if client is None or isinstance(client, api):
-            return client
-        client = getattr(client, "_client", None)
-    return None
-
-
 __all__ = [
     "ANSWERED",
     "BOOKS_AGREE",
@@ -422,5 +304,4 @@ __all__ = [
     "Run",
     "SessionTrace",
     "closing_of",
-    "trace_sessions",
 ]

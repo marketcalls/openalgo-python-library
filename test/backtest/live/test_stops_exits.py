@@ -513,15 +513,22 @@ def test_F43_the_square_off_comes_by_the_clock_with_no_tick_and_cancels_the_stop
     check_invariants(option.timeline, strategy="OptionHold")
 
 
-def test_F44_a_refused_square_off_is_asked_for_again_with_alerts_until_flat(world, caplog):
-    def refuse_five():
-        for _ in range(EXIT_ATTEMPTS):
+def test_F44_a_refused_square_off_is_asked_for_again_with_alerts_each_minute_until_flat(world):
+    # The five attempts of the schedule are refused, and the kernel's own re-send at
+    # 15:01:01 too; the one at 15:02:01 fills. The session's check 30 s after the
+    # square-off finds the leg open, and again a minute later; then it is flat.
+    def refuse_six():
+        for _ in range(EXIT_ATTEMPTS + 1):
             world.fake.reject_next("RMS: square-off blocked", price_type="MARKET")
 
-    world.script.at(ist(14, 59, 50), refuse_five)
+    world.script.at(ist(14, 59, 50), refuse_six)
     outcome = world.run(StopHold)
 
-    assert any("still not flat after square-off" in t for t in alerts(caplog, "error"))
+    sent = [m for m in world.fake.telegram_sent if "still not flat after square-off" in m.message]
+    first, second = (m.ts_ns for m in sent)
+    assert ist(15, 0, 30) <= first < ist(15, 0, 35)
+    assert second - first == 60 * NS
+    assert all("StopHold SBIN NSE 10 units" in m.message for m in sent)
     assert world.fake.position("SBIN", "NSE") == 0
     assert outcome.stopped_by == "session_end"
     check_invariants(world.timeline, strategy="StopHold")

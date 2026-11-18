@@ -19,7 +19,8 @@ from session_invariants import InvariantBroken, assert_session_invariants
 from session_samples import NS, BuyAndHold, alerts, ist, rig
 
 from openalgo.backtest._live._session_loop import Session, StopFlag
-from openalgo.backtest._live._types import LOGGER_NAME, Mode
+from openalgo.backtest._live._types import LOGGER_NAME, AlertKind, Mode
+from openalgo.backtest._live.guard import ModeGuard
 
 #: The calls that send an order or read the session's books.
 SENDS_AND_READS = frozenset(
@@ -79,6 +80,25 @@ def test_F35_a_book_read_in_the_instant_of_the_guard_lock_breaks_the_invariants(
     world.stop_at(ist(14, 47))
     world.run(BuyAndHold)
     with pytest.raises(InvariantBroken, match="calls after the guard lock"):
+        world.trace.check_now(assert_session_invariants)
+
+
+def test_F35_a_book_read_while_the_guard_is_locking_breaks_the_invariants(world, monkeypatch):
+    # Finding 3 of unit 14 round 2: a read made once the breach is set, while the lock
+    # still sends its MODE_BREACH alert (as the order worker's thread could), is after the
+    # lock.
+    alert = ModeGuard._alert
+
+    def read_inside_the_lock(guard, kind, text):
+        if kind is AlertKind.MODE_BREACH:
+            guard._client.positionbook()
+        alert(guard, kind, text)
+
+    monkeypatch.setattr(ModeGuard, "_alert", read_inside_the_lock)
+    world.script.at(ist(14, 43, 30), lambda: world.fake.set_analyzer(True))
+    world.stop_at(ist(14, 47))
+    world.run(BuyAndHold)
+    with pytest.raises(InvariantBroken, match="calls after the guard lock.*positionbook"):
         world.trace.check_now(assert_session_invariants)
 
 

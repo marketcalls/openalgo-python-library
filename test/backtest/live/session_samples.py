@@ -14,8 +14,10 @@ Every rig records its fake's order changes and session runs (`Rig.trace`, `sessi
 and the session invariants of 16-session-design 7.1 run over them when the test ends
 (`session_invariants`): every session test is checked. A test whose row leaves a leg
 unprotected says so (`trace.leave_unprotected`, or `trace.left_unprotected_by_decision`
-for a decided end); one whose session cannot keep a check waives that check alone and says
-why (`trace.waive`).
+for a decided end); one whose other client sells by hand names what the decided end it
+plays leaves at the fake (`trace.kept_stop_by_decision`, `trace.oversold_by_decision`);
+one whose session cannot keep a check waives that check alone and says why
+(`trace.waive`).
 
 Expected values come from the fake's books and the scenario, never from the session's
 code.
@@ -31,8 +33,9 @@ from typing import Any
 
 from fake_openalgo import USERNAME, FakeOpenAlgo
 from plan_samples import DAY, candles, ist, market
+from session_hooks import trace_sessions
 from session_invariants import assert_session_invariants
-from session_trace import SessionTrace, trace_sessions
+from session_trace import SessionTrace
 
 import openalgo.backtest as bt
 from openalgo.backtest._live._session_parts import StopFlag

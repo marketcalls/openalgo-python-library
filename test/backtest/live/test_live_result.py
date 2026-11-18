@@ -480,8 +480,8 @@ def test_the_trade_a_restart_closes_carries_the_charges_its_entry_paid_before_it
 UNSETTLED_NOTE = (
     "kernel: a live kernel session stopped mid-day (stop_session) leaves the day's contract "
     "note unsettled, so its fills and trades carry their charges before the note's "
-    "settlement while the account carries the charges it posted (0.43 rupees apart on this "
-    "day's round trip, unbroken or restarted)"
+    "settlement while the account carries the charges it posted (on this day's round trip "
+    "net_profit is 94.62 rupees, the trades' net 95.05 unbroken and 94.89 restarted)"
 )
 
 
