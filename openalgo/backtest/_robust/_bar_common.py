@@ -33,6 +33,7 @@ import pandas as pd
 from . import _random
 from . import _words as words
 from ._blocks import REAL, FanBlock, HistogramBlock, Mark
+from ._part_objective import BREAK_EVEN as PART_BREAK_EVEN
 from ._part_objective import NO_BREAK_EVEN, objective_name
 from ._paths import Fan, bands
 from ._rerun_one import RerunRow
@@ -44,17 +45,14 @@ from ._trades import TradeRun
 #: The number of the permutation test: the stream its permuted bars come from, which
 #: versus random's strategy on permuted bars shares (`permuted_family`).
 PERMUTATION_NUMBER = 5
-#: Break-even values of the objectives that have one (module docstring).
+#: Break-even values of the objectives that have one (module docstring): those a part of
+#: the trades is measured by, and the measures of a whole run's profit.
 BREAK_EVEN = {
-    "sharpe": 0.0,
-    "sortino": 0.0,
+    **PART_BREAK_EVEN,
     "calmar": 0.0,
-    "net_profit": 0.0,
     "net_pnl": 0.0,
     "total_return": 0.0,
     "cagr": 0.0,
-    "expectancy": 0.0,
-    "profit_factor": 1.0,
 }
 #: The runs a fan draws thin (design 17, section 2).
 SAMPLED = 100

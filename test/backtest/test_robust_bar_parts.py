@@ -12,6 +12,7 @@ import pytest
 from robust_runs import edge_run, opens_bars
 
 import openalgo.backtest as bt
+from openalgo.backtest._robust._bar_common import break_even
 from openalgo.backtest._robust._paths import fan_steps
 from openalgo.backtest._robust._random_entries import (
     EntryPlan,
@@ -328,3 +329,32 @@ def test_a_strategy_made_at_run_time_reruns_in_this_process():
     strategy = bt.from_arrays([True], [False], symbol="SBIN", exchange="NSE", interval="D")
     chosen = choose_workers(4, 100, strategy, {})
     assert chosen.count == 1 and "bt.from_arrays" in chosen.why
+
+
+def final_equity(result):
+    """A function of a Result, read as a measure of profit."""
+    return float(result.metrics["end_equity"])
+
+
+# (objective, break-even): what a run that makes nothing scores, or None for an objective
+# that cannot say whether a run made money (a win rate, a drawdown, a trade count).
+BREAK_EVENS = [
+    ("sharpe", 0.0),
+    ("sortino", 0.0),
+    ("net_profit", 0.0),
+    ("expectancy", 0.0),
+    ("profit_factor", 1.0),
+    ("calmar", 0.0),
+    ("net_pnl", 0.0),
+    ("total_return", 0.0),
+    ("cagr", 0.0),
+    (final_equity, 0.0),
+    ("win_rate", None),
+    ("max_drawdown", None),
+    ("trades", None),
+]
+
+
+@pytest.mark.parametrize(("objective", "expected"), BREAK_EVENS)
+def test_the_bar_checks_measure_an_objective_from_its_break_even(objective, expected):
+    assert break_even(objective) == expected

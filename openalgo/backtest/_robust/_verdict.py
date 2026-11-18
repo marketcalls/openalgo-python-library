@@ -88,7 +88,8 @@ class CheckResult:
     question: what it answers; verdict: "passed", "failed", "not judged" or
     "informational"; figure: the figure it judged, as text; rule: its pass rule, as
     text; note: how it was measured, or why it was not judged.
-    table: a row per run (an assignment, an order, a path), empty when not judged.
+    table: a row per run (an assignment, an order, a path, a rerun), empty when not
+    judged; other markets has a row per symbol and synthetic stress a row per rule.
     summary: its figures by name; fractions are fractions (0.95 is 95 percent), money
     is rupees, and drawdowns are zero or negative.
     settings: the settings it ran with (its defaults with the check's dict applied);
