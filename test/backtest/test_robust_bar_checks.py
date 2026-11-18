@@ -54,8 +54,23 @@ from openalgo.backtest._robust._verdict import FAILED, NOT_JUDGED, PASSED
 from openalgo.backtest.errors import ConfigError
 
 EDGE_MOVES = [3.0, 2.0, 4.0, -1.0, 3.0, 2.0, -2.0, 5.0, 1.0, -1.0]
-#: Rules that keep every candidate, so stress reads the generator alone.
+#: Rules that keep every candidate: stress reads the generator alone, and judges no rule,
+#: since one that keeps every candidate singles out no shock.
 ALWAYS = {"rules": [lambda real, candidate: True], "min_kept": 5}
+
+
+def half():
+    """A stress rule that keeps every second candidate it is asked about (the second,
+    the fourth, ...): half of them or one fewer, so it is judged. It reads the first
+    instrument's calls only, so a candidate of several instruments counts once."""
+    asked: dict[int, int] = {}
+
+    def every_other(real, candidate):
+        key = id(real)
+        asked[key] = asked.get(key, 0) + 1
+        return key == next(iter(asked)) and asked[key] % 2 == 0
+
+    return every_other
 
 
 def quiet(line: str) -> None:
@@ -231,31 +246,6 @@ def test_noise_cannot_judge_decisions_fixed_in_advance(fixed):
         "(bt.from_arrays), which never read the generated bars, so on them it trades at the "
         "same bars and only its fills move."
     )
-
-
-#: What the checks that judge fixed decisions on generated bars add to their notes.
-FIXED_SENTENCE = (
-    " The strategy cannot react to the generated bars: its decisions are arrays fixed in "
-    "advance (bt.from_arrays), so on them it trades at the same bars against other moves, "
-    "and a pass says nothing of how those arrays were chosen (with hindsight, for one)."
-)
-
-
-def test_the_checks_on_generated_bars_say_what_fixed_decisions_leave_unjudged(fixed):
-    # On permuted bars fixed trades meet other moves, which still tells an edge of the
-    # order of the moves from one of the drift; it cannot tell arrays chosen with
-    # hindsight, and the notes say so once.
-    stress = {"noise_candidates": 4, "permutation_candidates": 4}
-    report = fixed.robustness(
-        checks=["vs_random", "permutation", "stress"],
-        workers=1,
-        runs=20,
-        stress=stress,
-        progress=quiet,
-    )
-    for name in ("vs_random", "permutation", "stress"):
-        assert report.check(name).note.count(FIXED_SENTENCE) == 1, name
-    assert "The strategy's its" not in report.check("stress").note
 
 
 def test_the_noise_section_shows_the_bars_beside_a_noisy_copy(edge):
@@ -516,10 +506,17 @@ def test_the_chart_has_a_shape_for_each_group_of_lines_it_tells_apart():
 # ----- synthetic stress ----------------------------------------------------------------
 
 
-def test_a_planted_edge_holds_on_every_noisy_candidate(edge):
+def test_a_planted_edge_holds_on_the_noisy_candidates_a_rule_keeps(edge):
+    stress = {"noise_candidates": 20, "permutation_candidates": 0, "rules": [half()]}
+    result = checked(edge, "stress", stress={**stress, "min_kept": 5}).check("stress")
+    assert result.verdict == PASSED
+    assert result.table.set_index("rule").loc["every_other", "kept"] == 10
+
+
+def test_a_rule_that_keeps_every_candidate_judges_nothing(edge):
     stress = {"noise_candidates": 20, "permutation_candidates": 0, **ALWAYS}
     result = checked(edge, "stress", stress=stress).check("stress")
-    assert result.verdict == PASSED
+    assert result.verdict == NOT_JUDGED
     assert result.table.set_index("rule").loc["<lambda>", "kept"] == 20
 
 
@@ -555,7 +552,11 @@ def test_an_edge_of_the_drift_alone_has_no_shock_to_judge(rising):
     report = checked(rising, "stress", objective="net_profit")
     result = report.check("stress")
     assert result.verdict == NOT_JUDGED
-    assert result.note.startswith("Too few kept candidates to judge")
+    assert result.note.startswith(
+        "No rule can judge: drawdown keeps 0 of 400 candidates, fewer than 10; recovery "
+        "keeps 0 of 400 candidates, fewer than 10; below_average keeps 0 of 400 candidates, "
+        "fewer than 10."
+    )
     # The rule table stays, with the kept counts the design asks for, and so does the
     # section's chart and table.
     table = result.table.set_index("rule")
@@ -595,8 +596,9 @@ def test_the_stress_rule_says_which_rules_are_judged(edge):
     result = checked(edge, "stress", stress={"noise_candidates": 4, "permutation_candidates": 0})
     rule = result.check("stress").rule
     assert rule == (
-        "under every rule that keeps 10 or more candidates, the kept ones make money at "
-        "least 50% as often as all the candidates of their generators"
+        "under every rule that keeps 10 or more candidates and at most 50% of its "
+        "generators', the kept ones make money at least 50% as often as all the candidates "
+        "of their generators"
     )
 
 
@@ -629,7 +631,8 @@ def test_stress_reruns_the_permutation_tests_paths_and_the_noise_checks_copies(e
 def test_rules_that_keep_too_few_candidates_are_not_judged(edge):
     never = {"noise_candidates": 5, "permutation_candidates": 5, "rules": [lambda a, b: False]}
     result = checked(edge, "stress", stress=never).check("stress")
-    assert result.verdict == NOT_JUDGED and result.note.startswith("Too few kept candidates")
+    assert result.verdict == NOT_JUDGED
+    assert result.note.startswith("No rule can judge: <lambda> keeps 0 of 10 candidates, fewer")
 
 
 def test_any_keeps_a_candidate_one_rule_holds_for_and_all_needs_every_rule(edge):
@@ -650,9 +653,13 @@ def test_any_keeps_a_candidate_one_rule_holds_for_and_all_needs_every_rule(edge)
     any_kept = checked(edge, "stress", stress=stress).check("stress")
     assert any_kept.summary["candidates"] == 4
     assert any_kept.table.set_index("rule")["kept"].to_dict() == {"always": 4, "never": 0}
-    assert any_kept.verdict == PASSED  # judged on the rule that kept candidates
     all_kept = checked(edge, "stress", stress={**stress, "combine": "all"}).check("stress")
     assert all_kept.verdict == NOT_JUDGED
+    # A rule that keeps half the candidates is judged under "any".
+    selecting = {**stress, "rules": [half(), never]}
+    judged = checked(edge, "stress", stress=selecting).check("stress")
+    assert judged.table.set_index("rule")["kept"].to_dict() == {"every_other": 2, "never": 0}
+    assert judged.verdict == PASSED  # judged on the rule that kept candidates
 
 
 def test_the_stress_section_draws_the_kept_equity_by_rule(edge):
@@ -770,8 +777,8 @@ GRID = "the bars of SBIN and ICICIBANK are not at the same times (122 and 121 ba
 
 
 def test_stress_on_symbols_with_a_missing_bar_judges_its_noisy_candidates(missing_bar):
-    stress = {"noise_candidates": 10, "permutation_candidates": 10, **ALWAYS}
-    check = checked(missing_bar, "stress", stress=stress).check("stress")
+    stress = {"noise_candidates": 10, "permutation_candidates": 10, "rules": [half()]}
+    check = checked(missing_bar, "stress", stress={**stress, "min_kept": 5}).check("stress")
     assert check.verdict == PASSED and check.summary["candidates"] == 10
     # The note names the candidates made, then why the permuted ones were not.
     assert check.note.startswith(

@@ -8,16 +8,18 @@ bars changed since the run), the plan says so, since every generated run is then
 measured against a run that read other bars. The plan's estimate is timed on run 0 of the
 first family of generated bars that a check will rerun (a noisy one first, kept for the
 check that reads it), so it counts making the bars and measuring the rerun as well as the
-rerun. A check reruns a family only when the run has the closed trades it needs and made
-money (`_trade_common.too_few`, `no_edge`) and the family can run (`CanRun`); with no
-such family (other markets alone, a run with no edge) it is timed on the first rerun.
+rerun; with no such family (other markets alone, no check that reruns) it is timed on the
+first rerun.
 
-How many reruns a report plans (`planned`): each bar check's runs of the families that
-can run (versus random's for each of its families; noise and permutation theirs; stress
-its candidates; other markets one a symbol), less the runs two checks share: a family of
-generated bars is rerun once up to the most runs any check asks of it (`_bar_common`: the
-permutation test's permuted paths, which versus random and stress read, and the noise
-check's noisy copies, which stress reads at the default noise).
+What a report plans (`planned`) is what each bar check says it will rerun (its
+`reruns`, from the same reasons as its run: a check not judged before any rerun, for too
+few trades, no edge, decisions fixed in advance or an objective it cannot measure, reruns
+nothing): versus random's runs of each family that can run, noise and permutation theirs,
+stress its candidates, other markets one a symbol; less the runs two checks share: a
+family of generated bars is rerun once up to the most runs any check asks of it
+(`_bar_common`: the permutation test's permuted paths, which versus random and stress
+read, and the noise check's noisy copies, which stress reads at the default noise). When
+no check will rerun, the plan says so, and each check's note says why.
 """
 
 from __future__ import annotations
@@ -34,18 +36,14 @@ from .._conditions import EVENT_PATH
 from .._objective import evaluate
 from . import _random
 from . import _words as words
-from ._bar_common import BarRun, grid_problem, noisy_family, permuted_family
-from ._check_noise import noise_of
+from ._bar_common import BarRun
 from ._check_vs_random import RANDOM
-from ._check_vs_random import family as random_family
-from ._generate_noisy import Noise
 from ._paths import fan_steps
 from ._random_entries import EntryPlan, entry_plan
 from ._request import Request
 from ._rerun_one import Known, rerun
-from ._reruns import NOISY, PERMUTED, Family, Reruns, Setup, Workers, choose_workers, shipped
+from ._reruns import NOISY, Family, Reruns, Setup, Workers, choose_workers, shipped
 from ._run_bars import RunBars, run_bars
-from ._trade_common import no_edge, too_few
 from ._trades import TradeRun
 
 #: Reruns on the event path above which the plan suggests the condition form, as
@@ -57,54 +55,42 @@ LARGE_EVENT_RERUNS = 1000
 SAME_OBJECTIVE = 1e-9
 
 
-def _families(request: Request, check: Any) -> list[tuple[Family | str, int]]:
-    """(family, runs) of each family of reruns bar check `check` asks for; other markets
-    has one family of its own (its symbols)."""
-    settings, runs = request.settings[check.name], request.runs_of(check)
-    if check.name == "vs_random":
-        seed = _random.check_seed(request.seed, check.number)
-        return [(random_family(name, seed, request.seed), runs) for name in settings["families"]]
-    if check.name == "permutation":
-        return [(permuted_family(request.seed), runs)]
-    if check.name == "noise":
-        return [(noisy_family(request.seed, noise_of(settings)), runs)]
-    if check.name == "stress":
-        return [
-            (noisy_family(request.seed, Noise()), settings["noise_candidates"]),
-            (permuted_family(request.seed), settings["permutation_candidates"]),
-        ]
-    return [("other symbols", len(request.others))]
-
-
 @dataclass(frozen=True)
-class CanRun:
-    """Which families of reruns can run on the run (module docstring): random entries
-    need the run's trades to fit among its strategy bars (`EntryPlan.unplaced`), permuted
-    bars one grid of bars for every symbol (`_bar_common.grid_problem`). Called with a
-    family, it says whether that family can run; other symbols always can."""
+class Plan:
+    """What the bar checks of a report will rerun (module docstring): the reruns each
+    plans, by name (`counts`), how many of them another check shares (`shared`), and the
+    families of generated bars, in the order the checks list them (`families`)."""
 
-    entries: bool = True
-    permuted: bool = True
+    counts: Mapping[str, int]
+    shared: int
+    families: tuple[Family, ...]
 
-    def __call__(self, family: Family | str) -> bool:
-        if not isinstance(family, Family):
-            return True
-        if family.entries_seed is not None and not self.entries:
-            return False
-        return family.bars != PERMUTED or self.permuted
+    @property
+    def total(self) -> int:
+        """The reruns the checks will run, each shared one once."""
+        return sum(self.counts.values()) - self.shared
 
 
-def planned(request: Request, can_run: CanRun) -> tuple[dict[str, int], int]:
-    """(the reruns each bar check plans, by name; how many of them another check shares)
-    of `request`, counting the families `can_run` (module docstring)."""
+def planned(request: Request, preview: BarRun) -> Plan:
+    """The `Plan` of `request` on the run `preview` (a `BarRun` with no runner yet): what
+    each bar check's `reruns` says it will rerun."""
     counts: dict[str, int] = {}
     most: dict[Family | str, int] = {}
     for check in request.reruns:
-        families = [(family, runs) for family, runs in _families(request, check) if can_run(family)]
+        families = check.reruns(
+            preview,
+            request.settings[check.name],
+            runs=request.runs_of(check),
+            seed=_random.check_seed(request.seed, check.number),
+            objective=request.objective,
+        )
         counts[check.name] = sum(runs for _, runs in families)
         for family, runs in families:
             most[family] = max(most.get(family, 0), runs)
-    return counts, sum(counts.values()) - sum(most.values())
+    generated = tuple(
+        family for family, runs in most.items() if isinstance(family, Family) and runs
+    )
+    return Plan(counts, sum(counts.values()) - sum(most.values()), generated)
 
 
 @dataclass(frozen=True, eq=False)
@@ -112,8 +98,7 @@ class BarContext:
     """The bar checks' shared state: the run's bars, the reruns' runner and workers, the
     run's objective (`real`), the first rerun's objective (`reference`), the seconds of
     the timed rerun and whether it was on generated bars (module docstring), the
-    evaluation path the first rerun took, and the plan: the reruns each bar check plans
-    by name (`counts`) and how many of them another check shares (`shared`)."""
+    evaluation path the first rerun took, and the `Plan`."""
 
     bars: RunBars
     reruns: Reruns
@@ -123,8 +108,7 @@ class BarContext:
     seconds: float
     generated: bool
     path: str
-    counts: Mapping[str, int]
-    shared: int
+    plan: Plan
 
     @property
     def same(self) -> bool:
@@ -144,6 +128,7 @@ class BarContext:
             request.seed,
             request.others,
             result._record.client,
+            self.reruns.setup.entries,
         )
 
 
@@ -157,7 +142,7 @@ def _entries(result: Any, bars: RunBars, request: Request) -> EntryPlan | None:
         symbol: np.asarray(closes)[np.asarray(closes) > bars.first_run_ns]
         for symbol, closes in zip(bars.symbols, result._strategy_closes, strict=True)
     }
-    return entry_plan(result.trade_list(), closes)
+    return entry_plan(result.trade_list(), closes, bars.sessions)
 
 
 def bar_context(result: Any, request: Request, trades: TradeRun) -> BarContext:
@@ -173,9 +158,13 @@ def bar_context(result: Any, request: Request, trades: TradeRun) -> BarContext:
     )
     seconds = time.perf_counter() - started
     entries = _entries(result, bars, request)
-    can_run = CanRun(entries is None or not entries.unplaced(), not grid_problem(bars))
-    counts, shared = planned(request, can_run)
-    workers = choose_workers(request.workers, sum(counts.values()) - shared, strategy, arguments)
+    real = evaluate(result, objective)["objective"]
+    client = result._record.client
+    preview = BarRun(
+        trades, result, real, bars, None, request.seed, request.others, client, entries
+    )
+    plan = planned(request, preview)
+    workers = choose_workers(request.workers, plan.total, strategy, arguments)
     steps = fan_steps(len(trades.sessions))
     setup = Setup(
         shipped(strategy, "the strategy", workers),
@@ -187,51 +176,41 @@ def bar_context(result: Any, request: Request, trades: TradeRun) -> BarContext:
         steps,
         entries,
     )
-    real = evaluate(result, objective)["objective"]
     reference = evaluate(first, objective)["objective"]
     reruns = Reruns(setup, workers)
-    timed = _timed_family(request, trades, can_run)
+    timed = _timed_family(plan)
     if timed is not None:
         started = time.perf_counter()
         reruns.rows(timed, [0])
         seconds = time.perf_counter() - started
     generated = timed is not None
-    return BarContext(
-        bars, reruns, workers, real, reference, seconds, generated, paths[0], counts, shared
-    )
+    return BarContext(bars, reruns, workers, real, reference, seconds, generated, paths[0], plan)
 
 
-def _reruns_on(trades: TradeRun, settings: Mapping[str, Any]) -> bool:
-    """Whether a bar check with `settings` reruns anything on the run of `trades`: it
-    has the closed trades the check needs and made money (module docstring)."""
-    return too_few(trades, settings["min_trades"], "") is None and no_edge(trades, "") is None
-
-
-def _timed_family(request: Request, trades: TradeRun, can_run: CanRun) -> Family | None:
+def _timed_family(plan: Plan) -> Family | None:
     """The family whose run 0 times the plan's estimate (module docstring), None when no
     check will rerun generated bars."""
-    families = [
-        family
-        for check in request.reruns
-        if _reruns_on(trades, request.settings[check.name])
-        for family, runs in _families(request, check)
-        if isinstance(family, Family) and runs and can_run(family)
-    ]
-    families.sort(key=lambda family: family.bars != NOISY)
+    families = sorted(plan.families, key=lambda family: family.bars != NOISY)
     return families[0] if families else None
 
 
 def plan_words(context: BarContext | None) -> str:
     """The plan's sentence on the reruns (deterministic: no time, no worker count); no
     `context` when no check reruns the backtest."""
-    counts, shared = (context.counts, context.shared) if context is not None else ({}, 0)
-    if not counts:
+    if context is None:
         return (
             "They read the run's trade list, so the backtest is not rerun and no worker "
             "process starts."
         )
+    counts, shared = context.plan.counts, context.plan.shared
+    if not context.plan.total:
+        return (
+            "The trade-list checks read the run's trade list; the bar checks will not rerun "
+            "the backtest, since each is not judged before any rerun, as its note says."
+            + _changed(context)
+        )
     parts = [f"{name} {words.number(count, 0)}" for name, count in counts.items() if count]
-    total = words.number(sum(counts.values()) - shared, 0)
+    total = words.number(context.plan.total, 0)
     text = (
         "The trade-list checks read the run's trade list; the bar checks rerun the backtest "
         f"{total} times or fewer on generated bars or other symbols ({', '.join(parts)}), "
@@ -242,18 +221,25 @@ def plan_words(context: BarContext | None) -> str:
             f" The checks share {words.number(shared, 0)} of the runs listed, which read the "
             "same generated bars, so the total counts each once."
         )
-    if context is not None and not context.same:
-        text += (
-            f" A rerun on the run's own bars gave {context.reference!r} where the run gave "
-            f"{context.real!r}: the source's bars changed since the run, and every rerun is "
-            "measured against the run."
-        )
-    return text
+    return text + _changed(context)
+
+
+def _changed(context: BarContext) -> str:
+    """What the plan says when the first rerun did not give the run's objective."""
+    if context.same:
+        return ""
+    return (
+        f" A rerun on the run's own bars gave {context.reference!r} where the run gave "
+        f"{context.real!r}: the source's bars changed since the run, and every rerun is "
+        "measured against the run."
+    )
 
 
 def timing_words(context: BarContext) -> str:
     """The plan's estimate of the reruns, reported before them and not kept."""
-    total = sum(context.counts.values()) - context.shared
+    total = context.plan.total
+    if not total:
+        return f" A rerun on the run's own bars took {context.seconds:.2f} s; no other will run."
     workers = context.workers
     where = f"{workers.count} worker processes" if workers.count > 1 else "this process"
     why = f" ({workers.why})" if workers.why else ""
@@ -278,7 +264,7 @@ def timing_words(context: BarContext) -> str:
 __all__ = [
     "LARGE_EVENT_RERUNS",
     "BarContext",
-    "CanRun",
+    "Plan",
     "bar_context",
     "plan_words",
     "planned",

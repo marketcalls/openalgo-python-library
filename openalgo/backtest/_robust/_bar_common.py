@@ -3,8 +3,14 @@
 figures of a set of reruns, and their fan and histogram.
 
 `BarRun` is the run as the bar checks see it: its trade list (`_trades.TradeRun`), its
-`Result`, the objective's value on it, its bars and the reruns' runner, the report's seed
-and the symbols of `others=`.
+`Result`, the objective's value on it, its bars and the reruns' runner (None while the
+report plans, before the runner exists), the report's seed, the symbols of `others=` and
+what random entries are drawn from.
+
+A strategy made by `bt.from_arrays` decides from arrays fixed in advance, which never read
+generated bars: on them it trades at the same bars, so a check on generated bars could
+judge only its fills, whatever the arrays were fitted to, and leaves it not judged
+(`fixed_unjudged`, one reason for every such check).
 
 Shared bars: the permutation test's permuted paths (`permuted_family`) are also versus
 random's strategy on permuted bars and synthetic stress's permuted candidates, and the
@@ -46,11 +52,13 @@ from ._ohlc import same_grid
 from ._part_objective import BREAK_EVEN as PART_BREAK_EVEN
 from ._part_objective import NO_BREAK_EVEN, objective_name
 from ._paths import Fan, bands
+from ._random_entries import EntryPlan
 from ._rerun_one import RerunRow
 from ._reruns import NOISY, PERMUTED, Family, Reruns
 from ._run_bars import RunBars
 from ._trade_common import BREAK_EVEN_RUPEES
 from ._trades import TradeRun
+from ._verdict import Outcome, not_judged
 
 #: The number of the permutation test: the stream its permuted bars come from, which
 #: versus random and synthetic stress share (`permuted_family`).
@@ -79,17 +87,20 @@ SAMPLED = 100
 @dataclass(frozen=True, eq=False)
 class BarRun:
     """The run as the bar checks read it (module docstring): `real` the objective's value
-    on it (NaN when undefined), `seed` the report's seed, `others` the (symbol, exchange)
-    pairs of `others=`, `client` the run's client."""
+    on it (NaN when undefined), `reruns` the runner (None while the report plans), `seed`
+    the report's seed, `others` the (symbol, exchange) pairs of `others=`, `client` the
+    run's client, `entries` what random entries are drawn from (None when no check draws
+    them)."""
 
     trades: TradeRun
     result: Any
     real: float
     bars: RunBars
-    reruns: Reruns
+    reruns: Reruns | None
     seed: int
     others: tuple[tuple[str, str], ...]
     client: Any
+    entries: EntryPlan | None = None
 
 
 def permuted_family(report_seed: int) -> Family:
@@ -112,19 +123,11 @@ def grid_problem(bars: RunBars) -> str:
     return ""
 
 
-#: What a strategy made by `bt.from_arrays` does on generated bars, why noise cannot
-#: judge it.
+#: Why a check on generated bars cannot judge a strategy made by `bt.from_arrays`
+#: (module docstring), the one reason every such check gives.
 FIXED_ARRAYS = (
     "its decisions are arrays fixed in advance (bt.from_arrays), which never read the "
     "generated bars, so on them it trades at the same bars and only its fills move"
-)
-#: What the checks that judge such a strategy on other moves (permuted bars, shocks) add
-#: to their notes: fixed trades on other moves still tell an edge of the order of the
-#: moves from one of the drift, but not how the arrays were chosen.
-FIXED_TRADES = (
-    " The strategy cannot react to the generated bars: its decisions are arrays fixed in "
-    "advance (bt.from_arrays), so on them it trades at the same bars against other moves, "
-    "and a pass says nothing of how those arrays were chosen (with hindsight, for one)."
 )
 
 
@@ -133,10 +136,13 @@ def fixed_decisions(run: BarRun) -> bool:
     return made_by(run.result._record.strategy) == "bt.from_arrays"
 
 
-def fixed_note(run: BarRun) -> str:
-    """`FIXED_TRADES` for a run whose strategy decides from arrays fixed in advance, ""
-    for any other."""
-    return FIXED_TRADES if fixed_decisions(run) else ""
+def fixed_unjudged(run: BarRun, title: str, rule: str) -> Outcome | None:
+    """The "not judged" outcome of check `title` (as a sentence starts it, "Noise") with
+    pass rule `rule` for a run whose strategy decides from arrays fixed in advance, else
+    None."""
+    if not fixed_decisions(run):
+        return None
+    return not_judged(rule, f"{title} cannot judge this strategy: {FIXED_ARRAYS}.")
 
 
 def break_even(objective: Any) -> float | None:
@@ -308,7 +314,6 @@ def finite(value: float) -> bool:
 __all__ = [
     "BREAK_EVEN",
     "FIXED_ARRAYS",
-    "FIXED_TRADES",
     "FUNCTION_BREAK_EVEN",
     "NOISE_NUMBER",
     "PERMUTATION_NUMBER",
@@ -318,7 +323,7 @@ __all__ = [
     "break_even",
     "finite",
     "fixed_decisions",
-    "fixed_note",
+    "fixed_unjudged",
     "grid_problem",
     "joined",
     "noisy_family",

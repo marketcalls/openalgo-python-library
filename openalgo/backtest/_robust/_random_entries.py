@@ -32,9 +32,13 @@ so the engine applies the same rules to its trades, which may refuse an entry (o
 the entry window, for margin) or close a trade early (the square-off, a risk rule) as it
 would the strategy's; the table of the check shows the random runs' trade counts.
 
+An all-intraday run (every closed trade opens and closes in one session) places its
+random trades within one session each, from the entry window to the square-off
+(`_session_entries`), with the run's own sessions' trades kept together.
+
 Draws: run r reads 2 draws a trade, symbols in registration order (draws r x 2 x trades
 onwards): the order of each symbol's trades within their direction (one key each), then
-its cut points.
+its cut points; an all-intraday run reads 3 (`_session_entries`).
 """
 
 from __future__ import annotations
@@ -44,11 +48,24 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from .._arrays import MADE_BY
 from ..errors import ConfigError
 from ..strategy import CALLBACKS, Strategy
 from . import _random
+from ._ohlc import session_days
+from ._session_entries import (
+    DRAWS_PER_TRADE,
+    SessionTimes,
+    Window,
+    all_intraday,
+    fits,
+    groups,
+    need,
+    place,
+    stretches_by_symbol,
+)
 
 #: The least strategy bars a random trade is held (module docstring).
 LEAST_HOLD = 1
@@ -57,51 +74,83 @@ LEAST_HOLD = 1
 @dataclass(frozen=True)
 class Trade:
     """One trade to place: its symbol, side ("BUY" opens a long, "SELL" a short), units,
-    product and holding time in strategy bars."""
+    product, holding time in strategy bars and the IST day of its entry (days since
+    1970-01-01)."""
 
     symbol: str
     side: str
     units: float
     product: str
     hold: int
+    day: int = 0
 
 
 @dataclass(frozen=True, eq=False)
 class EntryPlan:
     """What random entries are drawn from: the run's trades in the order it entered
-    them, and the UTC nanosecond close of each strategy bar of the run, by symbol."""
+    them, the UTC nanosecond close of each strategy bar of the run, by symbol, and for an
+    all-intraday run each symbol's session stretches (`_session_entries`; None for any
+    other run)."""
 
     trades: tuple[Trade, ...]
     closes: Mapping[str, np.ndarray]
+    stretches: Mapping[str, tuple[Window, ...]] | None = None
 
     def of(self, symbol: str) -> list[Trade]:
         """The trades of `symbol`, in the order the run entered them."""
         return [trade for trade in self.trades if trade.symbol == symbol]
 
     def slack(self, symbol: str) -> int:
-        """The bars `symbol`'s trades leave free (module docstring); below 0 they do not
-        fit."""
+        """The bars `symbol`'s trades leave free across the run (module docstring); below
+        0 they do not fit."""
         mine = self.of(symbol)
         holds = sum(trade.hold for trade in mine)
         return len(self.closes[symbol]) - 2 - holds - _waits(mine)
 
+    def fits(self, symbol: str) -> bool:
+        """Whether `symbol`'s trades fit: across the run, or for an all-intraday run each
+        session's group in a session of its own (`_session_entries.fits`)."""
+        if self.stretches is None:
+            return self.slack(symbol) >= 0
+        mine = self.of(symbol)
+        waits = _wait_list(mine)
+        needs = [
+            need([mine[p].hold for p in group], [waits[p] for p in group[:-1]])
+            for group in groups([trade.day for trade in mine])
+        ]
+        return fits(needs, [stretch.room for stretch in self.stretches[symbol]])
+
     def unplaced(self) -> list[str]:
         """The symbols whose trades do not fit among their strategy bars."""
         symbols = dict.fromkeys(trade.symbol for trade in self.trades)
-        return [symbol for symbol in symbols if self.slack(symbol) < 0]
+        return [symbol for symbol in symbols if not self.fits(symbol)]
+
+
+def _wait_list(trades: Sequence[Trade]) -> list[int]:
+    """The bars each trade but the last waits before the next: one when the next goes
+    the same way (module docstring)."""
+    pairs = zip(trades[:-1], trades[1:], strict=True)
+    return [int(after.side == before.side) for before, after in pairs]
 
 
 def _waits(trades: Sequence[Trade]) -> int:
     """The bars a sequence of trades waits between neighbours: one for each trade that
     goes the same way as the one before it (module docstring)."""
-    pairs = zip(trades[:-1], trades[1:], strict=True)
-    return sum(after.side == before.side for before, after in pairs)
+    return sum(_wait_list(trades))
 
 
-def entry_plan(trade_list: Any, closes: Mapping[str, np.ndarray]) -> EntryPlan:
+def entry_plan(
+    trade_list: Any,
+    closes: Mapping[str, np.ndarray],
+    times: Sequence[SessionTimes] | None = None,
+) -> EntryPlan:
     """The `EntryPlan` of a run's `trade_list` (`Result.trade_list()`, put in the order
-    of entry) and its strategy bars' closes by symbol."""
+    of entry) and its strategy bars' closes by symbol; with the run's session `times`,
+    an all-intraday run keeps its random trades within one session each (module
+    docstring)."""
     entered = trade_list.sort_values("entry_time", kind="stable")
+    stamps = pd.DatetimeIndex(entered["entry_time"]).as_unit("ns").asi8
+    days = session_days(stamps) if len(stamps) else np.zeros(0, dtype=np.int64)
     trades = tuple(
         Trade(
             str(row.symbol),
@@ -109,10 +158,14 @@ def entry_plan(trade_list: Any, closes: Mapping[str, np.ndarray]) -> EntryPlan:
             float(row.quantity),
             str(row.product),
             max(LEAST_HOLD, int(row.bars_held)),
+            int(day),
         )
-        for row in entered.itertuples()
+        for row, day in zip(entered.itertuples(), days, strict=True)
     )
-    return EntryPlan(trades, closes)
+    stretches = None
+    if times is not None and all_intraday(trade_list):
+        stretches = stretches_by_symbol(closes, times)
+    return EntryPlan(trades, closes, stretches)
 
 
 @dataclass(frozen=True)
@@ -144,32 +197,56 @@ def schedule(plan: EntryPlan, seed: int, run: int) -> dict[int, tuple[Action, ..
     unplaced = plan.unplaced()
     if unplaced:
         symbol = unplaced[0]
+        where = (
+            f"{len(plan.closes[symbol])} strategy bars of the run ({-plan.slack(symbol)} short)"
+            if plan.stretches is None
+            else "sessions, a session's trades in a session of their own"
+        )
         raise ConfigError(
             f"Random entries cannot be placed: the trades of {symbol} do not fit among its "
-            f"{len(plan.closes[symbol])} strategy bars of the run ({-plan.slack(symbol)} "
-            "short); leave out the random entries of a plan whose unplaced() names a symbol."
+            f"{where}; leave out the random entries of a plan whose unplaced() names a symbol."
         )
-    draws = _random.block(seed, run, 1, 2 * len(plan.trades))[0]
+    width = 2 if plan.stretches is None else DRAWS_PER_TRADE
+    draws = _random.block(seed, run, 1, width * len(plan.trades))[0]
     exits: dict[int, list[Action]] = {}
     entries: dict[int, list[Action]] = {}
     used = 0
     for symbol in dict.fromkeys(trade.symbol for trade in plan.trades):
         mine = plan.of(symbol)
-        count, slack, closes = len(mine), plan.slack(symbol), plan.closes[symbol]
-        keys, cuts = draws[used : used + count], draws[used + count : used + 2 * count]
-        used += 2 * count
-        placed = _drawn(mine, keys)
-        gaps = np.diff(np.concatenate(([0], np.sort(_random.below(cuts, slack + 1)))))
-        bar = 0
-        for k, (gap, trade) in enumerate(zip(gaps, placed, strict=True)):
-            bar += int(gap)
-            entry = Action(symbol, trade.side, trade.units, trade.product)
-            entries.setdefault(int(closes[bar]), []).append(entry)
-            bar += trade.hold
-            exits.setdefault(int(closes[bar]), []).append(Action(symbol))
-            bar += _waits(placed[k : k + 2])
+        count, closes = len(mine), plan.closes[symbol]
+        mine_draws = draws[used : used + width * count]
+        used += width * count
+        placed = _drawn(mine, mine_draws[:count])
+        for trade, (entry, exit_) in zip(
+            placed, _spots(plan, symbol, placed, mine_draws), strict=True
+        ):
+            action = Action(symbol, trade.side, trade.units, trade.product)
+            entries.setdefault(int(closes[entry]), []).append(action)
+            exits.setdefault(int(closes[exit_]), []).append(Action(symbol))
     times = sorted(set(exits) | set(entries))
     return {when: (*exits.get(when, ()), *entries.get(when, ())) for when in times}
+
+
+def _spots(
+    plan: EntryPlan, symbol: str, placed: Sequence[Trade], draws: np.ndarray
+) -> list[tuple[int, int]]:
+    """(entry, exit) positions in `symbol`'s closes of each of its `placed` trades, from
+    its draws after its keys: across the run, or within sessions for an all-intraday run
+    (module docstring)."""
+    count, waits = len(placed), _wait_list(placed)
+    if plan.stretches is not None:
+        days = [trade.day for trade in plan.of(symbol)]
+        holds = [trade.hold for trade in placed]
+        spots = place(holds, waits, days, plan.stretches[symbol], draws[count:])
+        return [(spot.entry, spot.exit) for spot in spots]
+    cuts = draws[count : 2 * count]
+    gaps = np.diff(np.concatenate(([0], np.sort(_random.below(cuts, plan.slack(symbol) + 1)))))
+    bar, spots = 0, []
+    for k, (gap, trade) in enumerate(zip(gaps, placed, strict=True)):
+        bar += int(gap)
+        spots.append((bar, bar + trade.hold))
+        bar += trade.hold + (waits[k] if k < len(waits) else 0)
+    return spots
 
 
 def _decide(strategy: Strategy, plan: Mapping[int, Sequence[Action]], bar: Any) -> None:

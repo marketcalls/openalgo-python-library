@@ -43,8 +43,10 @@ NEEDS = {
 class CheckSpec:
     """One check: its `number` in the report, `name` (its keyword and `checks=` entry),
     `title`, `question`, the build `unit` that brings it (internal), its `settings` and its
-    procedure `run` (empty and None for a check not built in this version), and whether
-    it reads the trade list only (`trade_list`)."""
+    procedure `run` (empty and None for a check not built in this version), whether it
+    reads the trade list only (`trade_list`), and for a check that reruns the backtest
+    what it reruns (`reruns`, the families and their runs; none when it is not judged
+    before any rerun), which the plan counts."""
 
     number: int
     name: str
@@ -54,6 +56,7 @@ class CheckSpec:
     settings: tuple[Setting, ...] = ()
     run: Callable | None = None
     trade_list: bool = False
+    reruns: Callable | None = None
 
     @property
     def built(self) -> bool:
@@ -66,7 +69,9 @@ def _trade_check(number: int, name: str, title: str, question: str, module) -> C
 
 
 def _bar_check(number: int, name: str, title: str, question: str, module) -> CheckSpec:
-    return CheckSpec(number, name, title, question, "RB2", module.SETTINGS, module.run)
+    return CheckSpec(
+        number, name, title, question, "RB2", module.SETTINGS, module.run, reruns=module.reruns
+    )
 
 
 CHECKS = (

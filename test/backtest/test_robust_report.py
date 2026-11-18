@@ -57,7 +57,8 @@ THIS_VERSION = [
 ]
 TRADE_LIST = ["random_out_of_sample", "reshuffle", "resample", "variance"]
 EDGE_DATA = bars(steps_for([3.0, 2.0, 4.0, -1.0, 3.0, 2.0, -2.0, 5.0, 1.0, -1.0], 60))
-#: Stress on noisy candidates only: the planted edge holds under noise.
+#: Stress on noisy candidates only: the recovery rule keeps 9 of the 10, which singles
+#: out no shock, so stress judges no rule.
 STRESS = {"noise_candidates": 10, "permutation_candidates": 0, "min_kept": 5}
 SMALL = {**SMALL_BARS, "stress": STRESS}
 
@@ -100,7 +101,7 @@ def test_a_planted_edge_passes_every_judged_check(edge_report):
         PASSED,
         PASSED,
         NOT_JUDGED,  # no others= given
-        PASSED,
+        NOT_JUDGED,  # no stress rule singles out shocks among noisy copies of these bars
         INFORMATIONAL,
         PASSED,
         PASSED,
@@ -291,7 +292,7 @@ def test_the_page_is_the_scorecard_a_section_per_check_and_the_notes(page):
 
 def test_the_scorecard_counts_the_verdicts_and_states_the_wording_rule(page):
     scorecard = page[page.index("<section id='scorecard'") : page.index("<section id='random")]
-    assert "7 passed, 0 failed, 1 not judged, 1 informational, 8 not built." in scorecard
+    assert "6 passed, 0 failed, 2 not judged, 1 informational, 8 not built." in scorecard
     assert fmt_text(WORDING_RULE) in scorecard
     assert scorecard.count("<tr>") == 1 + 17
 

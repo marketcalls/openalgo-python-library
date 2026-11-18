@@ -20,16 +20,20 @@ candidates, of the share of their generator's candidates that are profitable.
 
 Figures per rule: the candidates kept (of each generator), the share of them profitable,
 the expected share, their ratio, the median and average net P&L in rupees. A rule is
-judged when it keeps `min_kept` (10) or more that ran and its expected share is above
-zero. Pass: under every judged rule the kept share is at least `keep` (half) of the
-expected share. When the strategy makes money on every candidate of a generator this is
-the design's rule: at least half the kept ones profitable. Not judged when no rule is
-judged (the table by rule, its kept counts and the chart stay), when the run did not make
-money, or when it has too few closed trades.
+judged when it keeps `min_kept` (10) or more that ran, at most `MOST_KEPT` (half) of the
+candidates of its generators that ran (a shock is a path harder than most: a rule that
+keeps nearly every candidate does not single out shocks, and its ratio is about 1 by
+construction), and its expected share is above zero; the table says why a rule is not.
+Pass: under every judged rule the kept share is at least `keep` (half) of the expected
+share. When the strategy makes money on every candidate of a generator this is the
+design's rule: at least half the kept ones profitable. Not judged when no rule is judged
+(the table by rule, its kept counts and the chart stay), when the run did not make money,
+when it has too few closed trades, or when the strategy was made by `bt.from_arrays`: its
+decisions are arrays fixed in advance, which trade the same bars on every candidate
+(`_bar_common.fixed_unjudged`).
 
 Permuted candidates are left out, with the reason, when the run's symbols' bars are not
-at the same times (`_bar_common.grid_problem`). For a strategy made by `bt.from_arrays`
-the note says what its fixed decisions leave unjudged (`_bar_common.FIXED_TRADES`).
+at the same times (`_bar_common.grid_problem`).
 """
 
 from __future__ import annotations
@@ -45,7 +49,7 @@ from . import _words as words
 from ._bar_common import (
     BarRun,
     RerunSet,
-    fixed_note,
+    fixed_unjudged,
     grid_problem,
     joined,
     noisy_family,
@@ -64,6 +68,9 @@ from ._verdict import FAILED, NOT_JUDGED, PASSED, Outcome, not_judged
 
 #: The kept candidates a chart draws for each rule.
 DRAWN = 40
+#: The most of the candidates of its generators that ran a rule may keep and be judged
+#: (module docstring): a shock is a path harder than most (lead, 2026-11-18).
+MOST_KEPT = 0.5
 
 
 def _combine(value: Any) -> str | None:
@@ -116,9 +123,10 @@ SETTINGS = (
 def rule(settings: Mapping[str, Any], objective: Any) -> str:
     """The pass rule, in words."""
     return (
-        f"under every rule that keeps {settings['min_kept']} or more candidates, the kept "
-        f"ones make money at least {words.percent(settings['keep'], 0)} as often as all the "
-        "candidates of their generators"
+        f"under every rule that keeps {settings['min_kept']} or more candidates and at most "
+        f"{words.percent(MOST_KEPT, 0)} of its generators', the kept ones make money at least "
+        f"{words.percent(settings['keep'], 0)} as often as all the candidates of their "
+        "generators"
     )
 
 
@@ -169,6 +177,22 @@ def candidates(
     return Candidates(np.array(generators, dtype=object), table, left_out)
 
 
+def why_unjudged(kept: int, candidates: int, expected: float, min_kept: int) -> str:
+    """Why a rule that keeps `kept` of the `candidates` of its generators that ran, with
+    `expected` the share of them that make money, is not judged; "" when it is
+    (module docstring)."""
+    if kept < min_kept:
+        return f"keeps {kept} of {candidates} candidates, fewer than {min_kept}"
+    if kept > MOST_KEPT * candidates:
+        return f"keeps {kept} of {candidates} candidates, so it does not single out shocks"
+    if not expected > 0:
+        return (
+            f"keeps {kept} of {candidates} candidates, of generators on whose candidates the "
+            "strategy never makes money"
+        )
+    return ""
+
+
 def rule_table(
     rules: Sequence[StressRule],
     made: Candidates,
@@ -176,7 +200,9 @@ def rule_table(
     settings: Mapping[str, Any],
 ) -> pd.DataFrame:
     """The figures of each rule over its kept candidates (module docstring), by rule
-    name; `set_` holds the reruns of every candidate, in order."""
+    name; `set_` holds the reruns of every candidate, in order. `candidates` counts the
+    candidates of the rule's generators that ran, `why` says why it is not judged ("" when
+    it is)."""
     ran, profitable = set_.ran, set_.net_profit >= BREAK_EVEN_RUPEES
     base = {
         generator: float(profitable[ran & (made.generators == generator)].mean())
@@ -187,13 +213,15 @@ def rule_table(
     rows = []
     for k, stress in enumerate(rules):
         mine = kept & made.flags[:, k] & ran
+        read = (NOISY, PERMUTED) if stress.permuted else (NOISY,)
+        candidates = int((ran & np.isin(made.generators, read)).sum())
         pnl = set_.net_profit[mine]
         if mine.any():
             expected = exact_mean(np.array([base[g] for g in made.generators[mine]]))
             share = float(profitable[mine].mean())
         else:
             expected = share = np.nan
-        judged = bool(mine.sum() >= settings["min_kept"] and expected > 0)
+        why = why_unjudged(int(mine.sum()), candidates, expected, settings["min_kept"])
         ratio = share / expected if expected > 0 else np.nan
         rows.append(
             {
@@ -202,13 +230,15 @@ def rule_table(
                 "kept": int(mine.sum()),
                 "kept_noisy": int((mine & (made.generators == NOISY)).sum()),
                 "kept_permuted": int((mine & (made.generators == PERMUTED)).sum()),
+                "candidates": candidates,
                 "profitable_share": share,
                 "expected_share": expected,
                 "ratio": ratio,
                 "median_pnl": float(np.median(pnl)) if len(pnl) else np.nan,
                 "average_pnl": exact_mean(pnl) if len(pnl) else np.nan,
-                "judged": judged,
-                "passed": judged and ratio >= settings["keep"],
+                "judged": not why,
+                "why": why,
+                "passed": not why and ratio >= settings["keep"],
             }
         )
     return pd.DataFrame(rows).set_index("rule")
@@ -223,12 +253,30 @@ def _reruns(subject: BarRun, settings: Mapping[str, Any]) -> RerunSet | None:
     return joined(parts) if parts else None
 
 
+def unjudged(subject: BarRun, settings: Mapping[str, Any], objective: Any) -> Outcome | None:
+    """The "not judged" outcome of the module docstring that needs no rerun, else None:
+    the one source of whether the check reruns (`reruns`)."""
+    text = rule(settings, objective)
+    short = too_few(subject.trades, settings["min_trades"], text) or no_edge(subject.trades, text)
+    return short or fixed_unjudged(subject, "Synthetic stress", text)
+
+
+def reruns(
+    subject: BarRun, settings: Mapping[str, Any], *, runs: int, seed: int, objective: Any
+) -> list[tuple[Family, int]]:
+    """(family, candidates) of what the check reruns: every candidate of the generators
+    that can run, none when it is not judged before any rerun (`unjudged`)."""
+    if unjudged(subject, settings, objective) is not None:
+        return []
+    return _families(subject, settings)
+
+
 def run(
     subject: BarRun, settings: Mapping[str, Any], *, runs: int, seed: int, objective: Any
 ) -> Outcome:
     """The check of the module docstring."""
     text = rule(settings, objective)
-    short = too_few(subject.trades, settings["min_trades"], text) or no_edge(subject.trades, text)
+    short = unjudged(subject, settings, objective)
     if short is not None:
         return short
     rules = make_rules(settings["rules"], settings)
@@ -238,16 +286,13 @@ def run(
         return not_judged(text, "No candidate was made." + made.left_out)
     table = rule_table(rules, made, set_, settings)
     judged = table[table["judged"]]
-    note = _note(made, set_, settings, subject)
+    note = _note(made, set_, settings, subject, table)
     kept = int((made.kept(settings["combine"]) & set_.ran).sum())
     summary = _summary(made, set_, kept, len(judged))
     blocks = _blocks(subject, rules, made, set_, table, settings)
     if not len(judged):
-        why = (
-            f"Too few kept candidates to judge: no rule keeps {settings['min_kept']} or more "
-            f"of the {words.whole(len(made.generators), 'candidate')} from generators on "
-            f"whose candidates the strategy makes money. {note}"
-        )
+        reasons = "; ".join(f"{name} {row.why}" for name, row in table.iterrows())
+        why = f"No rule can judge: {reasons}. {note}"
         return Outcome(NOT_JUDGED, "n/a", text, why, table.reset_index(), summary, blocks)
     passed = bool(judged["passed"].all())
     lowest = judged["ratio"].idxmin()
@@ -283,7 +328,13 @@ MADE_FROM = {
 }
 
 
-def _note(made: Candidates, set_: RerunSet, settings: Mapping[str, Any], run: BarRun) -> str:
+def _note(
+    made: Candidates,
+    set_: RerunSet,
+    settings: Mapping[str, Any],
+    run: BarRun,
+    table: pd.DataFrame,
+) -> str:
     """How the check was measured: the candidates of the generators that ran (those left
     out are named after, with why), how one is kept, and how the kept ones are judged."""
     sources = " and ".join(
@@ -296,7 +347,16 @@ def _note(made: Candidates, set_: RerunSet, settings: Mapping[str, Any], run: Ba
         "the share of all the candidates of their generators that make money, since a "
         "permutation takes away an edge that lives in the order of the moves, shocks or not."
     )
-    return note + fixed_note(run) + made.left_out + set_.failure_note()
+    return note + _selecting(table) + made.left_out + set_.failure_note()
+
+
+def _selecting(table: pd.DataFrame) -> str:
+    """What the note says of each rule that keeps too many candidates to single out
+    shocks (module docstring), "" when none does."""
+    many = [f"{name} {row.why}" for name, row in table.iterrows() if "single out" in row.why]
+    if not many:
+        return ""
+    return f" Not judged: {'; '.join(many)}."
 
 
 def _blocks(
@@ -352,12 +412,25 @@ def _blocks(
 
 
 def _standing(row: Any, settings: Mapping[str, Any]) -> str:
-    """A rule's standing in the table: judged, or why not."""
+    """A rule's standing in the table: judged, or why not (`why_unjudged`)."""
     if row.judged:
         return "judged"
     if row.kept < settings["min_kept"]:
         return "too few"
+    if "single out" in row.why:
+        return f"keeps {row.kept} of {row.candidates}: not shocks"
     return "none profitable"
 
 
-__all__ = ["SETTINGS", "Candidates", "candidates", "rule", "rule_table", "run"]
+__all__ = [
+    "MOST_KEPT",
+    "SETTINGS",
+    "Candidates",
+    "candidates",
+    "reruns",
+    "rule",
+    "rule_table",
+    "run",
+    "unjudged",
+    "why_unjudged",
+]
