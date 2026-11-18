@@ -131,8 +131,19 @@ def _row(blocks: tuple) -> str:
     )
 
 
+def _value_text(value: object) -> str:
+    """A setting's value as text: a function by its name (its own text carries where it
+    sits in memory, which would make the page differ from run to run), a list or tuple
+    as its items in brackets."""
+    if callable(value):
+        return getattr(value, "__name__", type(value).__name__)
+    if isinstance(value, list | tuple):
+        return f"[{', '.join(_value_text(item) for item in value)}]"
+    return str(value)
+
+
 def _settings_text(result: CheckResult) -> str:
-    shown = ", ".join(f"{name} {value}" for name, value in result.settings.items())
+    shown = ", ".join(f"{name} {_value_text(value)}" for name, value in result.settings.items())
     return f"{shown}; seed {result.seed}" if result.seed is not None else shown
 
 

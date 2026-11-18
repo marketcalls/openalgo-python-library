@@ -119,10 +119,11 @@ def test_rules_that_name_no_rule_are_refused(value):
 # ----- random entries ------------------------------------------------------------------
 
 
-def test_trades_that_fill_every_bar_are_placed_back_to_back():
-    # Six strategy bars, two trades held 2 bars: U = 5 decision bars, slack 6 - 2 - 4 = 0.
-    # The first is decided at bar 0 and exited at bar 2, where the second is decided; it
-    # is exited at bar 4, the last whose decision can fill.
+def test_trades_of_opposite_directions_that_fill_every_bar_are_placed_back_to_back():
+    # Six strategy bars, a long and a short held 2 bars: slack 6 - 2 - 4 = 0. The first
+    # is decided at bar 0 and exited at bar 2, where the second, of the other direction,
+    # is decided (a reversal fills cleanly); it is exited at bar 4, the last whose
+    # decision can fill.
     closes = np.arange(6) * 100
     plan = EntryPlan(
         (Trade("SBIN", "BUY", 10, "CNC", 2), Trade("SBIN", "SELL", 5, "MIS", 2)), {"SBIN": closes}
@@ -134,20 +135,58 @@ def test_trades_that_fill_every_bar_are_placed_back_to_back():
     assert len(decided[0]) == 1 and len(decided[400]) == 1
 
 
+def test_trades_of_one_direction_leave_a_bar_between_an_exit_and_the_next_entry():
+    # Seven strategy bars, two longs held 2 bars: slack 7 - 2 - 4 - 1 = 0, the 1 being the
+    # bar a long waits after the exit before it, when the position is flat again (an
+    # entry decided at the exit's close would add to the open position). Decided: entry
+    # at bar 0, exit at 2, entry at 3, exit at 5, the last whose decision can fill.
+    closes = np.arange(7) * 100
+    trades = (Trade("SBIN", "BUY", 10, "CNC", 2), Trade("SBIN", "BUY", 5, "CNC", 2))
+    plan = EntryPlan(trades, {"SBIN": closes})
+    assert plan.slack("SBIN") == 0
+    decided = schedule(plan, seed=1, run=0)
+    assert sorted(decided) == [0, 200, 300, 500]
+    assert [len(decided[when]) for when in sorted(decided)] == [1, 1, 1, 1]
+
+
+def test_two_longs_that_need_their_bar_between_do_not_fit_in_six_bars():
+    closes = np.arange(6) * 100
+    trades = (Trade("SBIN", "BUY", 10, "CNC", 2), Trade("SBIN", "BUY", 5, "CNC", 2))
+    plan = EntryPlan(trades, {"SBIN": closes})
+    assert plan.slack("SBIN") == -1 and plan.unplaced() == ["SBIN"]
+
+
+@pytest.mark.parametrize("run", range(6))
+def test_random_trades_keep_the_runs_order_of_directions(run):
+    # The run went long, long, short, long, short: each place keeps its direction and
+    # takes one of that direction's trades (its units and holding time), drawn.
+    sides = ("BUY", "BUY", "SELL", "BUY", "SELL")
+    trades = tuple(
+        Trade("SBIN", side, units, "MIS", hold)
+        for side, units, hold in zip(sides, (1, 2, 3, 4, 5), (1, 2, 3, 1, 2), strict=True)
+    )
+    decided = schedule(EntryPlan(trades, {"SBIN": np.arange(60) * 10}), seed=3, run=run)
+    entered = [action for when in sorted(decided) for action in decided[when] if action.side]
+    assert [action.side for action in entered] == list(sides)
+    assert sorted(action.units for action in entered if action.side == "BUY") == [1, 2, 4]
+    assert sorted(action.units for action in entered if action.side == "SELL") == [3, 5]
+
+
 @pytest.mark.parametrize("run", range(5))
 def test_random_trades_never_overlap_and_keep_their_holding_times(run):
     closes = np.arange(40) * 10
     holds = (3, 1, 5, 2)
     trades = tuple(Trade("SBIN", "BUY", 1, "CNC", hold) for hold in holds)
     decided = schedule(EntryPlan(trades, {"SBIN": closes}), seed=7, run=run)
-    spans, open_at = [], None
+    spans, open_at, last_exit = [], None, -1
     for when in sorted(decided):
         for action in decided[when]:
             if action.side is None:
                 spans.append((open_at, when // 10))
-                open_at = None
+                open_at, last_exit = None, when // 10
             else:
                 assert open_at is None  # never two trades at once
+                assert when // 10 > last_exit  # a long waits for the long before to close
                 open_at = when // 10
     assert sorted(end - start for start, end in spans) == sorted(holds)
     assert spans[-1][1] <= 38  # the last exit can still fill
@@ -251,6 +290,7 @@ def test_a_rerun_asked_twice_runs_once(setup):
         assert reruns.done == 3
 
 
+@pytest.mark.worker_pool
 def test_reruns_in_two_worker_processes_are_the_reruns_of_this_process(setup):
     family = Family(PERMUTED, 8)
     with Reruns(setup, Workers(1, "")) as here:

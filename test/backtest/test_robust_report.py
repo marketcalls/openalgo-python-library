@@ -323,10 +323,11 @@ def test_each_fan_has_its_bands_its_sampled_paths_and_the_run_bold(page):
 
 def test_each_histogram_marks_its_reference_or_the_runs_own_value(page):
     # The run's order among the reshuffles, and the run among the random, permuted and
-    # noise objectives; zero among the differences; the limits of permutation and noise.
+    # noise objectives; zero among the differences; the limit of permutation, and the
+    # two of noise (its top percentile and the line its median must keep).
     assert page.count("class='mark-real'") == 4
     assert page.count("class='mark-reference'") == 1
-    assert page.count("class='mark-limit'") == 2
+    assert page.count("class='mark-limit'") == 3
 
 
 def test_the_notes_hold_the_settings_seeds_and_the_runs_assumptions(page, edge):

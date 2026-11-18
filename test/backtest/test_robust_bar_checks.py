@@ -15,10 +15,12 @@ The runs:
 """
 
 import math
+import warnings
 
 import numpy as np
 import pandas as pd
 import pytest
+from data_fixtures.fakes import FakeClient
 from robust_runs import (
     FREE,
     Flip,
@@ -29,6 +31,7 @@ from robust_runs import (
     rising_run,
     steps_for,
 )
+from test_quickstart import QUICKSTART, historify_rows
 
 import openalgo.backtest as bt
 from openalgo.backtest._robust._blocks import (
@@ -41,6 +44,7 @@ from openalgo.backtest._robust._blocks import (
     TableBlock,
 )
 from openalgo.backtest._robust._check_permutation import p_value
+from openalgo.backtest._robust._run_bars import run_bars
 from openalgo.backtest._robust._verdict import FAILED, NOT_JUDGED, PASSED
 from openalgo.backtest.errors import ConfigError
 
@@ -157,6 +161,17 @@ def test_the_noise_section_shows_the_bars_beside_a_noisy_copy(edge):
     assert real.bars["ts_open"].tolist() == noisy.bars["ts_open"].tolist()
 
 
+def test_the_noise_histogram_marks_the_run_its_top_percentile_and_the_keep_line(edge):
+    # Sharpe breaks even at 0, so the median must stay at or above half the run's.
+    report = checked(edge, "noise", runs=5)
+    check = report.check("noise")
+    (_, histogram), *_ = report._blocks["noise"]
+    marks = {mark.label: mark.value for mark in histogram.marks}
+    assert marks["the run"] == edge.metrics["sharpe"]
+    assert marks["95% percentile"] == check.summary["top_limit"]
+    assert marks["the median keeps 50%"] == pytest.approx(0.5 * edge.metrics["sharpe"])
+
+
 # ----- versus random -------------------------------------------------------------------
 
 
@@ -171,6 +186,17 @@ def test_random_entries_hold_the_runs_trade_count(edge):
     table = checked(edge, "vs_random", runs=10).check("vs_random").table
     random_entries = table[table["family"] == "random_entries"]
     assert (random_entries["trades"] == 60).all()
+
+
+def test_random_entries_keep_every_trade_when_the_position_is_under_water_at_its_exit():
+    # Each bar closes a rupee below its open, so at the close where a long is exited it
+    # is under water: a long decided at that same close would add to it below its
+    # average, which the engine refuses. The random longs wait a bar, so all 60 fill.
+    data = bars(steps_for(EDGE_MOVES, 60))
+    data["close"] = data["open"] - 1.0
+    result = bt.backtest(Flip, data=data, **FREE)
+    table = checked(result, "vs_random", runs=10, vs_random={"families": ["random_entries"]})
+    assert (table.check("vs_random").table["trades"] == 60).all()
 
 
 def test_an_edge_random_entries_match_fails(rising):
@@ -200,6 +226,10 @@ def test_the_versus_random_section_has_a_table_by_family(edge):
     rows = checked(edge, "vs_random", runs=5)._blocks["vs_random"]
     (table,) = rows[1]
     assert isinstance(table, TableBlock) and len(table.rows) == 3
+    # The random runs' average trades sit beside the run's own count, so a trader sees
+    # when the run's rules (an entry window, margin) refused some random entries.
+    assert table.subtitle == "The sharpe of each family's runs; the run has 60 closed trades"
+    assert table.columns[-1] == "Average trades"
 
 
 # ----- other markets -------------------------------------------------------------------
@@ -315,6 +345,24 @@ def test_the_stress_section_draws_the_kept_equity_by_rule(edge):
     assert isinstance(table, TableBlock)
 
 
+def test_a_rule_given_as_a_function_is_named_in_the_settings_and_the_page_repeats(edge):
+    # A function's own text carries where it sits in memory, which differs from process
+    # to process; the page names it, so the same run and seed give the same page.
+    def deeper_than_ever(real, candidate):
+        return True
+
+    stress = {
+        "rules": [deeper_than_ever, "drawdown"],
+        "noise_candidates": 4,
+        "permutation_candidates": 0,
+        "min_kept": 1,
+    }
+    page = checked(edge, "stress", stress=stress).tearsheet()
+    assert "Settings: min_trades 30, noise_candidates 4" in page
+    assert "rules [deeper_than_ever, drawdown]" in page
+    assert " at 0x" not in page and "&lt;function" not in page
+
+
 # ----- what every bar check shares -----------------------------------------------------
 
 
@@ -341,6 +389,31 @@ def test_with_the_bars_random_out_of_sample_draws_the_price(edge):
     assert isinstance(chart, SessionsBlock) and not chart.percent
     assert chart.values[0] == 500.0 and chart.line.startswith("SBIN's close")
     assert "Line: SBIN&#x27;s close at each session close" in report.tearsheet()
+
+
+def test_a_run_on_openalgo_data_is_read_once_more_and_rerun_without_the_client(
+    tmp_path, monkeypatch
+):
+    # The report reads the run's bars through the client once more, as the run read
+    # them; every rerun takes them from memory, and the first gives the run's own figure,
+    # the warm-up of its averages included, so the plan reports no change of the bars.
+    monkeypatch.setenv("OPENALGO_BT_CACHE", str(tmp_path))
+    client = FakeClient(api={("SBIN", "NSE", "D"): historify_rows(QUICKSTART.daily_bars())})
+    span = {"start": QUICKSTART.START, "end": QUICKSTART.END, "capital": QUICKSTART.CAPITAL}
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        result = bt.backtest(QUICKSTART.EmaCross, client, source="api", **span)
+    client.calls.clear()
+    run_bars(result)
+    one_read = len(client.calls)
+    client.calls.clear()
+    lines = []
+    report = result.robustness(
+        checks=["noise"], workers=1, runs=3, noise={"min_trades": 2}, progress=lines.append
+    )
+    assert one_read > 0 and len(client.calls) == one_read
+    assert "changed since the run" not in lines[0]
+    assert report.check("noise").summary["measured"] == 3
 
 
 def test_the_bar_checks_change_no_figure_of_the_run(edge):

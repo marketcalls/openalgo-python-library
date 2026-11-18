@@ -235,7 +235,11 @@ def _blocks(
             )
         )
     columns = ("Family", "Measured", "Best", "Median", "Below the run", "Average trades")
-    table = TableBlock("By family", f"The {name} of each family's runs", columns, tuple(rows))
+    subtitle = (
+        f"The {name} of each family's runs; the run has "
+        f"{words.whole(subject.trades.closed, 'closed trade')}"
+    )
+    table = TableBlock("By family", subtitle, columns, tuple(rows))
     tiles = (
         Tile("The run", words.number(subject.real), name),
         Tile("Best random", words.number(summary["best_random"]), name),

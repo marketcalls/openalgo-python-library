@@ -146,7 +146,8 @@ def run(
         f"tick grid with its high the largest and its low the smallest. The ratio is "
         f"measured from {level:g}, a run that makes nothing." + set_.failure_note()
     )
-    blocks = _blocks(subject, set_, summary, name, settings, seed)
+    keep_line = level + settings["keep"] * (subject.real - level)
+    blocks = _blocks(subject, set_, summary, name, settings, seed, keep_line)
     return Outcome(PASSED if passed else FAILED, figure, text, note, set_.table(), summary, blocks)
 
 
@@ -188,9 +189,15 @@ def _blocks(
     name: str,
     settings: Mapping[str, Any],
     seed: int,
+    keep_line: float,
 ) -> tuple:
+    """The fan, the histogram with the run, its top percentile and the keep line the
+    median must reach, the candles and the summary."""
     fan = session_fan("Noise equity", "The strategy on each noisy copy", set_, subject)
-    marks = (Mark(summary["top_limit"], f"{words.percent(settings['top'], 0)} percentile", LIMIT),)
+    marks = (
+        Mark(summary["top_limit"], f"{words.percent(settings['top'], 0)} percentile", LIMIT),
+        Mark(keep_line, f"the median keeps {words.percent(settings['keep'], 0)}", LIMIT),
+    )
     histogram = objective_histogram(
         "Noise objectives", f"The {name} of each noisy copy", set_.objective, subject.real, marks
     )

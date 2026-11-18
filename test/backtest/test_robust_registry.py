@@ -1,7 +1,10 @@
 """The seventeen checks and the request of a robustness report: the checks in the order of
 design 17 section 2, the nine this version runs (the four trade-list checks and the five
 bar checks), the error for one it does not (saying what it needs, in plain words), and
-every setting checked before work starts."""
+every setting checked before work starts. The checks load only when they are used."""
+
+import subprocess
+import sys
 
 import pytest
 from robust_runs import FREE, Flip, bars, steps_for
@@ -218,3 +221,14 @@ def test_bt_robustness_refuses_a_settings_value_that_is_not_a_dict():
 def test_bt_robustness_takes_a_strategy_class():
     with pytest.raises(ConfigError, match="bt.Strategy subclass"):
         bt.robustness(Flip(), data=bars(steps_for([1.0], 4)), **FREE)
+
+
+def test_importing_the_backtest_package_does_not_load_the_checks():
+    # The checks, their generators and their charts load when a report needs them.
+    code = (
+        "import sys, openalgo.backtest as bt; bt.Strategy; bt.metrics; "
+        "loaded = [m for m in sys.modules if m.startswith('openalgo.backtest._robust')]; "
+        "assert not loaded, loaded"
+    )
+    run = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr

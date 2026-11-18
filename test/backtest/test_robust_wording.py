@@ -15,7 +15,14 @@ import openalgo.backtest as bt
 from openalgo.backtest._robust import _words as words
 from openalgo.backtest._robust._quick import QUICK_READING
 from openalgo.backtest._robust._request import build_request
-from openalgo.backtest._robust._verdict import FAILING, PASSING, PICKED, UNJUDGED, WORDING_RULE
+from openalgo.backtest._robust._verdict import (
+    FAILING,
+    FIXED,
+    PASSING,
+    PICKED,
+    UNJUDGED,
+    WORDING_RULE,
+)
 from openalgo.backtest.report._format import text as fmt_text
 
 ROBUST = Path(bt.__file__).parent / "_robust"
@@ -76,6 +83,18 @@ def test_the_rule_says_what_the_trade_list_checks_cannot_see_and_names_the_check
     assert PICKED in WORDING_RULE
 
 
+def test_the_rule_says_the_rerun_checks_judge_the_chosen_settings_not_the_search():
+    # Measured on an EMA crossover picked as the best of 100 settings on a random walk:
+    # noise passed it in 3 of 3 seeds and the permutation test in 1 of 3, since both
+    # rerun the settings chosen and never the search that chose them.
+    assert FIXED == (
+        "Nor can the checks that rerun the strategy with its parameters as chosen (versus "
+        "random, permutation, noise, other markets and synthetic stress): they judge the "
+        "settings chosen, not the search that chose them."
+    )
+    assert WORDING_RULE.index(PICKED) < WORDING_RULE.index(FIXED) < WORDING_RULE.index(UNJUDGED)
+
+
 def test_a_check_with_too_little_to_judge_never_passes():
     assert UNJUDGED == "A check with too little to judge says not judged and why, and never passes."
     assert WORDING_RULE.endswith(UNJUDGED)
@@ -88,7 +107,7 @@ def test_the_quick_checks_reading_shares_the_rules_sentences():
 
 def test_the_scorecard_prints_the_amended_rule_at_its_top(page):
     scorecard = page[page.index("<section id='scorecard'") : page.index("<section id='random")]
-    for sentence in (PASSING, FAILING, PICKED, UNJUDGED):
+    for sentence in (PASSING, FAILING, PICKED, FIXED, UNJUDGED):
         assert fmt_text(sentence) in scorecard
 
 

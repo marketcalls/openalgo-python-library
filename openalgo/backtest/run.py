@@ -211,7 +211,9 @@ def robustness(strategy: type[Strategy], client: Any = None, **settings: Any) ->
     `.tearsheet(path)`). Passing a check proves nothing on its own; failing one says
     the edge did not hold up under that check (it may be fitted to the past or too small
     to tell apart from the noise of the data tested), never that it proves overfitting;
-    a check with too little to judge is "not judged" and never passes.
+    a check with too little to judge is "not judged" and never passes. The checks this
+    version runs judge the settings given, so none of them can see a strategy picked as
+    the best of many settings tried.
 
     Takes the run arguments of `bt.backtest` and:
 
@@ -221,8 +223,9 @@ def robustness(strategy: type[Strategy], client: Any = None, **settings: Any) ->
         resample, variance) and the bar checks, which rerun the backtest on generated
         bars or other symbols' bars: vs_random (random entries with the run's trades,
         and the strategy on permuted bars), permutation (the same moves in another
-        order), noise (every price moved within a fifth of its bar's range), stress
-        (generated series with shocks the real one did not have) and other_markets.
+        order), noise (every price moved within a fifth of its bar's average true
+        range), stress (generated series with shocks the real one did not have) and
+        other_markets.
     objective: what the checks measure: a metric name or a function of a `Result`
         ("sharpe" by default). Random out of sample measures it on parts of the trades,
         so it takes "sharpe", "sortino", "net_profit", "expectancy" or
