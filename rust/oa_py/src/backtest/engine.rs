@@ -402,6 +402,19 @@ impl NativeEngine {
         Ok(self.engine()?.last_close(InstrumentId(instrument)))
     }
 
+    /// Rupees: the price a backtest of this run fills a MARKET order of `side` at, at the
+    /// open of the instrument's base bar opening at `bar_open` (UTC nanoseconds) at `open`
+    /// rupees, by the run's slippage rule; records nothing (`market`).
+    fn market_fill_price(
+        &self,
+        instrument: u32,
+        side: &str,
+        bar_open: i64,
+        open: f64,
+    ) -> PyResult<f64> {
+        market::market_fill_price(self.engine()?, instrument, side, bar_open, open)
+    }
+
     /// The account as (equity, free cash, realized, unrealized, costs, margin), rupees.
     fn account(&self) -> PyResult<tables::AccountTuple> {
         Ok(tables::account(&self.engine()?.account()))

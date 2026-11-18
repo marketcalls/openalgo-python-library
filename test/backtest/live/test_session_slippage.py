@@ -1,0 +1,95 @@
+"""The day summary's slippage on the fake OpenAlgo (`_live/_session_slippage.py`,
+16-session-design 1.4 and decided item 11 of 10.0): each MARKET fill against the price a
+backtest fills the same order at, the open of the base bar opening at its decision with
+the run's modelled slippage, signed against the trader, times the units.
+
+The market and the script are `session_samples`': the session starts at 14:40:05 IST on
+Monday 2026-11-16 and SBIN (tick 0.05) trades every 10 s, five seconds past each tenth
+second, at 500.00 until 14:44 and at 505.00 from then on. The fake fills a MARKET order at
+the last trade's price. `Hold` buys 10 at its first decision, the close of 14:42, and never
+sells: the session's own exit sells them. The run's slippage is the default for large and
+mid cap equity, 2 bps with a floor of one tick, rounded to the tick away from the trader.
+
+By hand:
+- The buy, decided at 14:42:00, filled at 500.00. The bar opening at 14:42 opens at its
+  first trade, 500.00 at 14:42:05; 2 bps of it is 0.10, so the backtest buys at 500.10.
+  The live buy did 0.10 better a unit: 10 x (500.00 - 500.10) = -1.00.
+- The sale on Ctrl+C at 14:46:30 is decided at the open of the minute in progress, 14:46,
+  and fills at 505.00. That bar's first trade is 505.00 at 14:46:05; 2 bps of it is 0.101,
+  so the backtest sells at 504.899, rounded down to the tick, 504.85. The live sale did
+  0.15 better a unit: -10 x (505.00 - 504.85) = -1.50.
+- The square-off's sale is decided at 15:00 and fills at 505.00, the same figures, when
+  the minute's first trade comes before the session ends.
+
+So the day's slippage is -2.50: Rs 2.50 better than the backtest.
+"""
+
+from __future__ import annotations
+
+import pytest
+from fake_openalgo.fixtures import *  # noqa: F403
+from live_samples import live, seam
+from session_samples import NS, Hold, StopFlag, ist, rig
+from stops_samples import at_price
+from test_live_result import BuyEarlySellLate
+
+from openalgo.backtest._live._alerts_summary import summary_text
+
+#: The day's slippage of the round trip of the module docstring, rupees.
+ROUND_TRIP = -2.50
+
+
+@pytest.fixture
+def world(make_fake_openalgo, monkeypatch, tmp_path):
+    made = rig(make_fake_openalgo, monkeypatch, tmp_path)
+    seam(made, monkeypatch)
+    at_price(made, ist(14, 44), 505.0)
+    return made
+
+
+def slippage_line(summary) -> str:
+    """The summary text's Slippage line, after its label."""
+    [line] = [line for line in summary_text(summary).splitlines() if line.startswith("Slippage")]
+    return line.split(":", 1)[1].strip()
+
+
+def test_a_round_trip_ended_by_ctrl_c_sets_both_fills_against_the_backtest(world):
+    world.stop_at(ist(14, 46, 30))
+    summary = live(world, Hold).summary
+    assert (summary.slippage, summary.slippage_not_compared) == (ROUND_TRIP, 0)
+    assert slippage_line(summary) == "Rs 2.50 better than the backtest"
+
+
+def test_a_round_trip_ended_by_the_square_off_sets_both_fills_against_the_backtest(world):
+    # A trade half a second into 15:00, before the square-off's sale is sent at 15:00:01.
+    world.script.at(ist(15, 0) + NS // 2, world.script.trade)
+    summary = live(world, Hold).summary
+    assert (summary.slippage, summary.slippage_not_compared) == (ROUND_TRIP, 0)
+
+
+def test_a_fill_whose_bar_had_no_trade_before_the_session_ended_is_not_compared(world):
+    # The minute of the square-off's decision has its first trade at 15:00:05, after the
+    # session has ended flat: only the buy is compared.
+    summary = live(world, Hold).summary
+    assert (summary.slippage, summary.slippage_not_compared) == (-1.00, 1)
+    assert slippage_line(summary) == (
+        "Rs 1.00 better than the backtest (1 MARKET fill not compared: no bar of its decision)"
+    )
+
+
+def test_the_days_slippage_carries_across_a_restart(make_fake_openalgo, monkeypatch, tmp_path):
+    # `BuyEarlySellLate` buys at the close of 14:42 (-1.00, as above) and sells at the close
+    # of 14:49 with SBIN at 510.00 from 14:48:30: that bar's first trade is 510.00, 2 bps of
+    # it 0.102, so the backtest sells at 509.898, rounded down, 509.85, and the live sale at
+    # 510.00 did 0.15 better a unit (-1.50). Ctrl+C at 14:46:30 keeps the position; the
+    # restarted start sells it. The day adds the first start's saved slippage to its own.
+    world = rig(make_fake_openalgo, monkeypatch, tmp_path, trades_until=(14, 55))
+    seam(world, monkeypatch)
+    at_price(world, ist(14, 48, 30), 510.0)
+    world.stop_at(ist(14, 46, 30))
+    first = live(world, BuyEarlySellLate, on_stop="keep").summary
+    world.stop = StopFlag()
+    world.stop_at(ist(14, 51))
+    day = live(world, BuyEarlySellLate).summary
+    assert first.slippage == -1.00
+    assert (day.slippage, day.slippage_not_compared) == (-2.50, 0)

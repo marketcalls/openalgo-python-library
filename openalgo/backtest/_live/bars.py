@@ -21,6 +21,7 @@ owns these objects, as it owns the engine; the feed's thread only queues ticks f
 from __future__ import annotations
 
 import bisect
+import copy
 import datetime as dt
 import logging
 import math
@@ -286,6 +287,22 @@ class TickBarBuilder:
             )
         )
         return ClosedSlices(closed, tuple(bars))
+
+    def open_so_far(self, symbol: str, ts_open_ns: int) -> float | None:
+        """Rupees: the open `symbol`'s bar of the slice opening at `ts_open_ns` will have,
+        from the ticks taken so far of a slice not closed yet: a bar's open is its first
+        trade, which later ticks do not change. They are judged on a copy, so the slice
+        closes as it would have. None for a slice with no trade so far, one closed or that
+        only seeds, and an instant that opens no slice."""
+        slot = bisect.bisect_left(self._opens, ts_open_ns)
+        trades = self._symbols.get(symbol)
+        seeding = any(first <= slot <= last for first, last in self._seeding)
+        if trades is None or seeding or not self._due_slots <= slot < len(self._opens):
+            return None
+        if self._opens[slot] != ts_open_ns:
+            return None
+        judged = copy.deepcopy(trades).close_before(slot + 1)
+        return next((bar.open for at, bar in judged if at == slot), None)
 
     def resume(self, outage_start_ns: int, now_ns: int) -> None:
         """The feed, out since `outage_start_ns`, resumed at `now_ns` (UTC nanoseconds).

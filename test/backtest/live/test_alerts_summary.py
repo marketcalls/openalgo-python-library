@@ -111,6 +111,25 @@ def test_slippage_not_compared_with_a_backtest_reads_n_a():
 
 
 @pytest.mark.parametrize(
+    ("count", "shown"),
+    [
+        (
+            1,
+            "Rs 35.00 worse than the backtest (1 MARKET fill not compared: no bar of its decision)",
+        ),
+        (
+            2,
+            "Rs 35.00 worse than the backtest (2 MARKET fills not compared: no bar of their "
+            "decisions)",
+        ),
+    ],
+    ids=["one", "two"],
+)
+def test_the_market_fills_the_slippage_leaves_out_are_counted_on_its_line(count, shown):
+    assert line(replace(A_GOOD_DAY, slippage_not_compared=count), "Slippage") == shown
+
+
+@pytest.mark.parametrize(
     "slippage", [0.0, 0.004, -0.004], ids=["zero", "under half a paisa", "under half a paisa back"]
 )
 def test_slippage_that_rounds_to_no_paisa_reads_as_none(slippage):
@@ -151,7 +170,14 @@ def test_negative_seconds_unprotected_are_refused():
 
 
 @pytest.mark.parametrize(
-    "field", ["closed_trades", "rejected_orders", "reconcile_mismatches", "undelivered_alerts"]
+    "field",
+    [
+        "closed_trades",
+        "rejected_orders",
+        "reconcile_mismatches",
+        "undelivered_alerts",
+        "slippage_not_compared",
+    ],
 )
 @pytest.mark.parametrize("value", [-1, 1.5, None], ids=["negative", "a fraction", "none"])
 def test_a_count_that_is_not_a_whole_number_of_at_least_zero_is_refused(field, value):

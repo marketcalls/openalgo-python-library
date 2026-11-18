@@ -122,20 +122,20 @@ def test_a_restored_engines_gross_and_charges_are_the_days_and_its_trades_are_ad
     # The kernel restores the account, so the engine's gross P&L and charges hold the
     # earlier start's; the round trips it closed are this start's only.
     figures = DayFigures.at_start({"A": saved_state(1, 50.0, 20.0)}, ["A"])
-    traded, _ = figures.day(this_start(), {"A": finished(1, 100.0, 40.0)}, 0.0)
+    traded, _ = figures.day(this_start(), {"A": finished(1, 100.0, 40.0)}, 0.0, slippages={})
     assert traded == StrategyFigures(2, 100.0, 40.0)
 
 
 def test_a_strategy_this_start_does_not_run_adds_its_saved_figures_whole():
     saved = {"A": saved_state(1, 50.0, 20.0), "B": saved_state(2, -30.0, 15.0)}
     figures = DayFigures.at_start(saved, ["A"])
-    traded, _ = figures.day(this_start(), {"A": finished(0, 50.0, 20.0)}, 0.0)
+    traded, _ = figures.day(this_start(), {"A": finished(0, 50.0, 20.0)}, 0.0, slippages={})
     assert traded == StrategyFigures(3, 20.0, 35.0)
 
 
 def test_the_sessions_counts_add_the_earlier_starts_to_this_ones():
     figures = DayFigures.at_start({SESSION_KEY: session_counts(1, 2, 3.5, 4)}, ["A"])
-    _, counted = figures.day(this_start(2, 1, 1), {"A": finished(0, 0.0, 0.0)}, 1.5)
+    _, counted = figures.day(this_start(2, 1, 1), {"A": finished(0, 0.0, 0.0)}, 1.5, slippages={})
     assert counted == SessionFigures(3, 3, 5.0, 5)
 
 

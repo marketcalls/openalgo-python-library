@@ -26,8 +26,11 @@ not it has rows.
 - `summary`: the day's figures across every start of the day: `gross_pnl`, `charges`
   (modelled: the broker's trade book carries none; each fill's rounded to the paisa, so a
   result's charges, its contract notes', differ from them by the notes' rounding, the
-  `adjustment` column of `Result.contract_notes`), `net_pnl`, `slippage` (None: not
-  measured yet), `closed_trades`, `rejected_orders`, `unprotected_seconds`,
+  `adjustment` column of `Result.contract_notes`), `net_pnl`, `slippage` (rupees the
+  MARKET fills cost beyond a backtest's fill of the same orders at the open of the bar
+  opening at each decision, with the run's modelled slippage; negative when live did
+  better) and `slippage_not_compared` (MARKET fills with no bar to set them against),
+  `closed_trades`, `rejected_orders`, `unprotected_seconds`,
   `reconcile_mismatches`, `undelivered_alerts` and `flat`, and the legs the close names
   (`differing`, `unconfirmed`) and the strategies of earlier starts (`earlier`), in
   words; `summary_text()` gives them as the DAILY_SUMMARY alert sent them. Its type is
