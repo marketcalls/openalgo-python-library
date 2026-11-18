@@ -378,6 +378,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once, and the close names that leg in the summary and the result, never as flat; a
   fill priced from an average is flagged only when its price may lie on another tick.
   The summary's slippage against the backtest's model reads n/a in this version.
+- Live sessions, from the fault suite (unit 14): a position difference that comparisons
+  in time already acted on and that the final read sees again is named at the close (an
+  ERROR alert, the summary's Reconcile and End state lines, `SessionResult.flat` False)
+  and counted once; the units of an entry the order book cannot tell apart from another
+  order are listed in `open_positions` with no confirmed stop, so such a day no longer
+  ends "flat"; after a restart, a position carried open across it keeps its entry's
+  charges in the restarted start's `bt.Result`, so its trades and its metrics agree. The
+  session's behaviour is now checked after every test against the design's safety rules
+  (no orphan order, one stop per leg, exits within the position, nothing sent after a
+  lock), over every change of every order at the simulated broker.
 - Reference table `price_protection` (`openalgo/backtest/reference/data/price_protection.csv`,
   read with `tables.find("price_protection", (exchange, segment, check, underlying, days),
   date)`): the price bands NSE and BSE apply to an option's limit price, by date, each row

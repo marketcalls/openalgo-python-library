@@ -14,8 +14,11 @@ closed, and, at the close, every order its venue maps placed.
   position to flat or through it, so that the count saved with a strategy's state is the
   count that state holds (`_session_figures`).
 - **A restore** (`Restored`, `StrategyRecords.restored`): where a restart restored a
-  strategy's kernel session and what its account carried from the day's earlier starts,
-  which its result takes out (`_result_build`: a result covers its start only).
+  strategy's kernel session and what the round trips the day's earlier starts closed
+  realized and paid, which its result takes out (`_result_build`: a result covers the
+  trades its start closes, whole). A position carried open across the restart is no
+  closed round trip: what it realized and paid before the restart stays in the result of
+  the start that closes it (the unit 13 follow-up item 2, lead's rule of 2026-11-18).
 - **Orders** (`OrderRecord`, `order_records`): every order the venue maps placed, with
   how far it got at the broker (the stops supervisor's word: handed, held, unanswered,
   ambiguous, bound, confirmed, ended, or never handed) and the kernel's final status.
@@ -110,21 +113,32 @@ class LockRecord:
 class Restored:
     """A restart's restore of a strategy's kernel session (module docstring): `after_ns`,
     the open of the slice it stood at (UTC nanoseconds: the equity rows that close after
-    it hold the restored account), and the realized gross P&L and charges its account
-    carried then, rupees."""
+    it hold the restored account), and the realized gross P&L and charges of the round
+    trips its account had closed then, rupees: its account's totals when the strategy was
+    last flat, so a position carried open keeps what it realized and paid. `carried` is
+    what the account paid for the fills of the position still open at the restore (its
+    entry's and adds'), rupees: the restored engine's charge book holds none of them."""
 
     after_ns: int
     realized: float
     charges: float
+    carried: float = 0.0
 
 
 def restored(trader: Any) -> Restored:
-    """`trader`'s `Restored`, read from its kernel session just after the restore."""
-    standing = int(call(trader.engine.live_state)["slice"])
+    """`trader`'s `Restored`, read from its kernel session just after the restore: the
+    account's totals the daily loss measure kept when the strategy last became flat (the
+    kernel's `DailyLossTotals.flat`, rms/daily_loss.rs), which hold every round trip closed
+    before the restart and nothing of a position still open, and the account's charges
+    beyond them, those of the position still open."""
+    state = call(trader.engine.live_state)
+    standing = int(state["slice"])
     slices = trader.part.slices
     after_ns = slices[standing][0] if standing < len(slices) else slices[-1][1]
-    _equity, _cash, realized, _unrealized, charges, _margin = call(trader.engine.account)
-    return Restored(after_ns, float(realized), float(charges))
+    flat = state["risk"]["daily_loss"]["flat"]
+    _equity, _cash, _realized, _unrealized, paid, _margin = call(trader.engine.account)
+    carried = round(max(0.0, float(paid) - float(flat["costs_rupees"])), 2)
+    return Restored(after_ns, float(flat["realized_rupees"]), float(flat["costs_rupees"]), carried)
 
 
 @dataclass

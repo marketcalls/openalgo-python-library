@@ -23,6 +23,13 @@ flat or 0 mismatches unqualified, it lists the leg at the earlier comparison's f
 by the fill when there was one, and one WARNING alert (logged at WARNING level, as a
 RECONCILE_MISMATCH alert) tells the operator to check OpenAlgo's position book. Nothing is
 sent. Expected values come from the scenario and the fake's books.
+
+Each case with units sold by hand ends with the session's stop for 10 filled against the 6
+left, taking the account short 4: the decided ends above let it (5.3 fits the stop on the
+second comparison that shows the sale, and here the stop fills inside that comparison's
+read), which each such case names to the session invariants
+(`SessionTrace.oversold_by_decision`); FAULT_ROWS.md lists them for the lead (unit 14
+round 2).
 """
 
 from __future__ import annotations
@@ -54,6 +61,12 @@ SOLD_AT, PRESSED_AT = ist(14, 43), ist(14, 43, 1)
 WHY = (
     "a fill of its own orders landed during a read of the books and no later read judged "
     "the position"
+)
+#: The decided ends that let the stop for 10 fill against the 6 a sale by hand left (for
+#: the session invariants).
+OVERSOLD = (
+    "5.3: the stop is fitted on the second comparison that shows the sale; 5.4 As built, "
+    "round 9: the stop fills inside that comparison's read"
 )
 
 
@@ -91,6 +104,7 @@ def scenario(request: Any, monkeypatch: Any, *, then: Any) -> Any:
         world = request.getfixturevalue("alone")
     world.seam, world.sold = seam, sold
     if sold:
+        world.trace.oversold_by_decision("StopHold", OVERSOLD)
         sold_by_hand(world, sold, SOLD_AT)
         ctrl_c_at_the_first_sighting(world, monkeypatch, broker_below=StopHold.qty)
     else:

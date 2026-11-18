@@ -145,12 +145,14 @@ def test_F48_nothing_is_sent_for_the_excess_bought_by_hand(world):
 
 @pytest.fixture
 def stop_filled_unheard(world):
-    """From 14:42:30 the order stream is silent and every orderstatus read fails; at 14:43
-    the broker fills the stop at its trigger."""
+    """From 14:42:30 the order stream is silent and the next two orderstatus reads fail
+    (the stop's polls of 14:42:34 and 14:43:04); at 14:43 the broker fills the stop at its
+    trigger. The trade book attributes the fill at the read 3 s after it, so orderstatus
+    recovers only after that, with the stop's COMPLETE."""
 
     def silence():
         world.fake.faults.silence_order_updates()
-        for _ in range(300):
+        for _ in range(2):
             world.fake.faults.gateway_error("orderstatus", status=503)
 
     world.script.at(ist(14, 42, 30), silence)
@@ -164,11 +166,19 @@ def test_F49_the_stops_trade_is_attributed_to_the_stop_and_nothing_is_adopted(
     outcome = stop_filled_unheard.run(StopHold, on_stop="keep")
     world = stop_filled_unheard
     attributed = events(outcome, "attributed")
-    assert [(e["order_id"], e["filled"]) for e in attributed] == [(stop_of(world).order_id, 10)]
+    stop = stop_of(world).order_id
+    assert [(e["order_id"], e["filled"]) for e in attributed] == [(stop, 10)]
     assert events(outcome, "adopted") == []
     assert outcome.open_positions == ()
     assert [o.action for o in strategy_orders(world, "StopHold")] == ["BUY", "SELL"]
     assert world.fake.position("SBIN", "NSE") == 0
+    # orderstatus answers the stop's COMPLETE after the attribution, which changes nothing.
+    recovered = [
+        c.ts_ns for c in world.fake.log.calls("orderstatus")
+        if c.detail["request"]["orderid"] == stop and c.detail["status"] == 200
+    ]  # fmt: skip
+    assert recovered and recovered[0] > attributed[0]["ts_ns"]
+    assert len([e for e in events(outcome, "fill") if e["order_id"] == stop]) == 1
     check_invariants(world.timeline, strategy="StopHold")
 
 
@@ -308,6 +318,12 @@ def test_F78_a_stop_placed_again_is_held_while_the_book_shows_fewer_units(laggin
     lagging.script.at(
         BY_HAND,
         lambda: other.cancelorder(order_id=stop_of(lagging).order_id, strategy="StopHold"),
+    )
+    # The leg ends with no stop: the exit guard holds a stop for more units than the
+    # position book shows (5.3), and the ERROR alert names it. The session invariants take
+    # that instead of a stop (16-session-design 7.1).
+    lagging.trace.left_unprotected_by_decision(
+        "StopHold", "5.4 As built (unit 12): the exit guard holds a stop beyond the book's units"
     )
     outcome = lagging.run(StopHold, on_stop="keep")
     assert [o.status for o in lagging.orders() if o.price_type == "SL-M"] == ["cancelled"]
@@ -463,16 +479,23 @@ def test_a_difference_alerted_late_is_still_acted_on_once_compared_in_time():
     assert judging.findings.late(LEG.name) is None
 
 
-def test_a_difference_acted_on_in_time_is_not_kept_for_the_close_when_then_seen_late():
+def test_a_difference_acted_on_in_time_then_seen_late_is_kept_for_the_close_as_counted():
     # Seen in two comparisons in time it was acted on and counted: a late comparison that
-    # sees it again names nothing new at the close.
+    # sees it again keeps it for the close to name, marked as counted already.
     judging = Judging()
     books = LegBooks(10, (), ())
     for _ in range(2):
         judging.findings.judged(LEG, {(Kind.MORE, 0, 10)}, books, frozenset(), late=False)
     judging.late(Kind.MORE, 0, 10)
     assert judging.session.mismatches == 1
-    assert judging.findings.late(LEG.name) is None
+    assert judging.findings.late(LEG.name) == Sighting(0, 10)
+    assert judging.findings.late_counted(LEG.name)
+
+
+def test_a_difference_first_seen_late_is_not_counted_already():
+    judging = Judging()
+    judging.late(Kind.MORE, 0, 10)
+    assert not judging.findings.late_counted(LEG.name)
 
 
 def test_a_difference_seen_late_twice_is_still_kept_for_the_close():

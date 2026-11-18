@@ -44,7 +44,9 @@ BUY, SELL = "BUY", "SELL"
 @dataclass
 class FakeOrder:
     """An order at the fake broker. `value` is the rupees filled so far (units times
-    price, summed), from which the average fill price comes."""
+    price, summed), from which the average fill price comes; `client` names the client
+    of the fake that placed it (`FakeOpenAlgo.client`), as the broker knows which API
+    session sent an order ("" for an order no client placed)."""
 
     order_id: str
     strategy: str
@@ -61,6 +63,7 @@ class FakeOrder:
     filled: int = 0
     value: float = 0.0
     rejection_reason: str = ""
+    client: str = ""
 
     @property
     def working(self) -> bool:

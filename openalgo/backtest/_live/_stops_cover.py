@@ -16,7 +16,6 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from .._layout import NANOS_PER_SECOND
-from ._order_state import ENTRY_PURPOSES
 from ._stops_orders import LegOrders, Sent
 
 #: Why a leg is unprotected (the result's `unprotected` reasons).
@@ -62,12 +61,12 @@ class Unprotected:
 
 def reason_of(leg: LegOrders, *, held_cancel: bool, retries: bool) -> str:
     """Why `leg`'s units are uncovered (one of `REASONS`): an order of it ambiguous in the
-    order book, its stop's cancel held for the trade book (`held_cancel`), an add whose
-    answer was lost, its stop held back or unanswered, an exit the exit owner retries
-    (`retries`), an exit working or the stop's cancel sent for one, else its stop not
-    confirmed yet or ended."""
+    order book (an entry's units uncovered too, `LegOrders.ambiguous_entry_units`), its
+    stop's cancel held for the trade book (`held_cancel`), an add whose answer was lost,
+    its stop held back or unanswered, an exit the exit owner retries (`retries`), an exit
+    working or the stop's cancel sent for one, else its stop not confirmed yet or ended."""
     live = [w for w in leg.orders.values() if w.state is not Sent.ENDED]
-    if any(w.state is Sent.AMBIGUOUS and w.purpose not in ENTRY_PURPOSES for w in live):
+    if any(w.state is Sent.AMBIGUOUS for w in live):
         return AMBIGUOUS_ORDER
     stop = leg.orders.get(leg.stop) if leg.stop is not None else None
     if held_cancel:

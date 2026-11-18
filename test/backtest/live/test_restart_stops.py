@@ -16,6 +16,7 @@ import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from restart_samples import StopWhenFlat, crash_at, crashing, restart, run_to_crash
 from session_samples import alerts, ist
+from session_trace import NO_ORPHAN, ONE_STOP, WITHIN
 from stops_samples import events, stop_world
 
 from openalgo.backtest._live._types import LOGGER_NAME, Purpose
@@ -41,7 +42,14 @@ def placed_after(world, instant_ns: int) -> list[tuple[str, int, str]]:
 
 def test_a_restored_stop_with_no_record_is_placed_again_and_no_exit_is_sent(world, monkeypatch):
     # The venue map's saved records lack the stop (3.6's "never recorded"): the saved
-    # state's role says it is the leg's stop, so it is placed again (R3).
+    # state's role says it is the leg's stop, so it is placed again (R3). The test drops
+    # the record of a stop the broker holds, a state the save before every send (2.5 E)
+    # never leaves (F73 is the real case, its stop never sent), so the restart's stop
+    # works beside the first until the worker cancels the first: two stops of 10 on a
+    # position of 10, and an orphan at the end, so those three checks cannot hold here.
+    why = "the venue record of a stop the broker holds is dropped by the test"
+    for check in (ONE_STOP, WITHIN, NO_ORPHAN):
+        world.trace.waive(check, why)
     crash_at(world, CRASHED)
     run_to_crash(world, StopWhenFlat)
     restore = RestoredOrders.restore
@@ -64,7 +72,11 @@ def test_a_restored_stop_with_no_record_is_placed_again_and_no_exit_is_sent(worl
 def test_a_missing_stop_of_a_leg_the_books_show_fewer_units_of_is_not_promised_again(world, caplog):
     # The entry fills 4 units, then 6 at 14:42:05; the position book stops showing fills
     # in between, so it shows 4 of the engine's 10 with no trade to explain the rest.
-    # While the session is down another client cancels the stop.
+    # While the session is down another client cancels the stop. The leg ends with no
+    # stop, named by the start's ERROR alert: the session invariants take that instead.
+    world.trace.left_unprotected_by_decision(
+        "StopWhenFlat", "5.5 and 5.4 As built: a lagging book and a stop cancelled"
+    )
     world.fake.split_next_fill(4)
     world.script.at(ist(14, 42, 3), world.fake.lag_positionbook)
     crash_at(world, CRASHED)

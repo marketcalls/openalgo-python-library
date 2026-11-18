@@ -33,6 +33,9 @@ function.
 | `_result_build` | `bt.live`'s `SessionResult`: each strategy's `Result`, tables, warnings |
 | `_record_verb` | What `bt.record` runs: the recorder on a client of its own, until a time |
 
+Each row's module keeps its helpers in private modules named after it (`_reconcile_*`,
+`_session_*`, `_feedlink_*` and so on), each under the package's 400-line rule.
+
 Times are UTC nanoseconds, prices rupees and quantities units, never lots. No module
 prints: they log to the `openalgo.backtest.live` logger, and a session's own output goes
 through its alerts and summary.

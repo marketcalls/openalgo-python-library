@@ -78,6 +78,13 @@ FINAL_READ_WAIT_S = 5.0
 #: How a session ended that takes the final read: not after an error (3.5) or a mode
 #: breach (6.2), when the books are not to be trusted or not to be read.
 _FINAL_READ = frozenset({"session_end", "ctrl_c"})
+#: How an open position names the units of an entry the order book cannot tell apart from
+#: another order (16-session-design F60): the session cannot say which is its own.
+AMBIGUOUS_ENTRY_NOTE = (
+    "an entry of {units} units cannot be told apart in the order book from another order: "
+    "one of them is the session's, at the broker with no stop; check the order book in "
+    "OpenAlgo and close it by hand"
+)
 #: How the close warns of a strategy's state it could not save, and what a restart does.
 NOT_SAVED = "its state and the day's figures were not saved at the close"
 RESUMES_FROM_LAST_SAVE = "a restart today resumes it from its last save"
@@ -171,7 +178,7 @@ def close_session(
         named = _named_legs(session)
         unprotected_s = session.stops.windows.seconds(session.now())
         if journal_works:
-            _save_day(session, unprotected_s, len(named[0]))
+            _save_day(session, unprotected_s, named.new_mismatches)
         parts.worker.close()
         # Read while each kernel session runs: a finished one counts its timers no more.
         timers = {t.name: tuple(t.part.context.timers.warnings()) for t in session.traders}
@@ -220,23 +227,38 @@ def close_session(
     )
 
 
-def _named_legs(session: Session) -> tuple[tuple[str, ...], tuple[str, ...]]:
+@dataclass(frozen=True)
+class NamedLegs:
+    """The legs the summary names at the close (`_named_legs`), in its words: `differs`,
+    those whose position differed from OpenAlgo's books, `unsure`, those no read
+    confirmed, and `new_mismatches`, how many of `differs` the day has not counted yet (a
+    late difference comparisons in time acted on was counted then)."""
+
+    differs: tuple[str, ...] = ()
+    unsure: tuple[str, ...] = ()
+    new_mismatches: int = 0
+
+
+def _named_legs(session: Session) -> NamedLegs:
     """The legs the summary names at the close, in its words: each whose last comparison
     was late and saw a difference (`_reconcile_close.late_summary`) or whose difference
     with OpenAlgo's books no later read confirms (`_reconcile_close.Differing.summary`),
     then each with none that no read judged after a fill of its own orders landed during a
-    read (`_reconcile_close.not_confirmed_summary`)."""
-    differs, unsure = [], []
+    read (`_reconcile_close.not_confirmed_summary`). Each differing leg is a mismatch of
+    the day but a late one comparisons in time acted on, counted then
+    (`Reconciler.late_counted`)."""
+    differs, unsure, counted = [], [], 0
     for trader in session.traders:
         late = session.reconcile.late(trader.name)
         seen = differing(session.reconcile, trader)
         if late is not None:
             differs.append(late_summary(trader, late))
+            counted += session.reconcile.late_counted(trader.name)
         elif seen is not None:
             differs.append(seen.summary(trader))
         elif session.reconcile.unjudged(trader.name):
             unsure.append(not_confirmed_summary(trader, round(trader.open_units())))
-    return tuple(differs), tuple(unsure)
+    return NamedLegs(tuple(differs), tuple(unsure), len(differs) - counted)
 
 
 def _alert_not_confirmed(session: Session) -> None:
@@ -258,16 +280,15 @@ def _summary(
     session: Session,
     outputs: dict[str, Any],
     unprotected_s: float,
-    legs: tuple[tuple[str, ...], tuple[str, ...]],
+    legs: NamedLegs,
     flat: bool,
 ) -> SessionSummary:
     """The day's figures across its restarts (`_session_figures`): the trades the kernel
     sessions closed, their gross P&L and modelled charges (the broker's trade book carries
     none), the session's counts, and the legs `_named_legs` gives, each differing one a
-    mismatch too; the strategies earlier starts ran and this one does not, the day not
-    `flat` while one held a position at its last save. No slippage: the backtest's fill
-    price of each order is not modelled here."""
-    differs, unsure = legs
+    mismatch too unless the day counted it already; the strategies earlier starts ran
+    and this one does not, the day not `flat` while one held a position at its last save.
+    No slippage: the backtest's fill price of each order is not modelled here."""
     parts = session.parts
     figures = session.figures
     traded, counted = figures.day(session, outputs, unprotected_s)
@@ -282,11 +303,11 @@ def _summary(
         slippage=None,
         rejected_orders=counted.rejected_orders,
         unprotected_seconds=counted.unprotected_seconds,
-        reconcile_mismatches=counted.reconcile_mismatches + len(differs),
+        reconcile_mismatches=counted.reconcile_mismatches + legs.new_mismatches,
         undelivered_alerts=counted.undelivered_alerts,
         flat=flat and not figures.earlier_open,
-        differing=differs,
-        unconfirmed=unsure,
+        differing=legs.differs,
+        unconfirmed=legs.unsure,
         earlier=tuple(strategy.words() for strategy in figures.earlier),
     )
 
@@ -294,20 +315,24 @@ def _summary(
 def _open_positions(session: Session) -> tuple[OpenPosition, ...]:
     """Each leg the engine holds open, and each whose difference with OpenAlgo's books no
     later read confirms, at OpenAlgo's units then; none they show flat (module
-    docstring)."""
+    docstring). An entry the order book cannot tell apart adds its units, with no stop
+    confirmed (16-session-design 7.1, F60)."""
     stops, positions = session.stops, []
     for trader in session.traders:
         differs = differing(session.reconcile, trader)
         units = trader.open_units() if differs is None else differs.broker_units
-        if units == 0:
+        unsure = stops.leg(trader).ambiguous_entry_units()
+        if units == 0 and unsure == 0:
             continue
         note = (
             "known as of the mode breach" if session.locked else stops.after.note(session, trader)
         )
+        stop = stop_state(stops, trader)
+        if unsure:
+            words = AMBIGUOUS_ENTRY_NOTE.format(units=abs(unsure))
+            note, stop = (f"{note}; {words}" if units else words), (stop[0], False)
         positions.append(
-            OpenPosition(
-                trader.name, trader.symbol, trader.exchange, units, note, *stop_state(stops, trader)
-            )
+            OpenPosition(trader.name, trader.symbol, trader.exchange, units + unsure, note, *stop)
         )
     return tuple(positions)
 

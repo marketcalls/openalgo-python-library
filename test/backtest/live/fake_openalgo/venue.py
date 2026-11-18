@@ -88,6 +88,9 @@ class Venue:
         self.telegram_bot_active = True
         self.telegram_sent: list[TelegramMessage] = []
         self.analyzer_logs = 0
+        #: The client whose REST call the venue is answering (`FakeOpenAlgo.client`), set
+        #: by the REST handler under the venue's lock: the orders it places are its.
+        self.calling_client = ""
         #: The position books as they stood when they began to lag their fills, by mode.
         self.lagged: dict[Mode, list[Position]] | None = None
         self._pending_ids = itertools.count(1)
@@ -196,7 +199,8 @@ class Venue:
         sandbox could fetch no quote) the order rests unworked, a stop trigger pending.
         Returns the order."""
         market = self._known(terms.symbol, terms.exchange)
-        placed = book.place(terms, self.clock.now(), market.last_price if priced else None)
+        last_price = market.last_price if priced else None
+        placed = book.place(terms, self.clock.now(), last_price, self.calling_client)
         order = book.orders[placed.order.order_id]
         self._publish(book, placed)
         rejection = None
@@ -212,7 +216,7 @@ class Venue:
         """Record an order the sandbox refuses at placement: kept as rejected with no
         units pending, and announced as rejected only (sandbox/order_manager.py:632-680).
         Returns the order."""
-        placed = book.place(terms, self.clock.now(), None)
+        placed = book.place(terms, self.clock.now(), None, self.calling_client)
         order = book.orders[placed.order.order_id]
         self._publish(book, book.reject(order, reason))
         return order

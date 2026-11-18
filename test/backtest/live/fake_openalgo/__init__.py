@@ -19,7 +19,16 @@ Times are UTC nanoseconds, prices rupees, quantities units (never lots).
 """
 
 from .clock import ManualClock, ist_ns
-from .fake import API_KEY, BROKER, HOST, LIVE_CASH, SANDBOX_CASH, USERNAME, FakeOpenAlgo
+from .fake import (
+    API_KEY,
+    BROKER,
+    HOST,
+    LIVE_CASH,
+    SANDBOX_CASH,
+    USERNAME,
+    FakeOpenAlgo,
+    client_name,
+)
 from .faults import Faults
 from .log import Entry, FakeLog
 from .orders import FakeOrder, Fill
@@ -38,5 +47,6 @@ __all__ = [
     "Faults",
     "Fill",
     "ManualClock",
+    "client_name",
     "ist_ns",
 ]

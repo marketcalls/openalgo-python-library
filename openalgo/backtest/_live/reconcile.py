@@ -37,7 +37,9 @@ first time is never confirmed: the close reports the leg at OpenAlgo's units, mo
 the engine's own fills since (`unconfirmed`, `_reconcile_close`; 5.4 "As built", rounds 7
 to 9), and one no comparison judged after such a fill as not confirmed (`unjudged`). A
 leg whose last comparison was late and saw a difference is named by that read's figures
-instead, neither carried nor confirmed (`late`; the unit 12 follow-up).
+instead, neither carried nor confirmed (`late`; the unit 12 follow-up), and counted no
+more when comparisons in time had acted on it (`late_counted`; the unit 13 follow-up).
+These queries of the close are `_reconcile_ended`'s.
 
 Each read's position book also counts for the kill switch (`KillSwitch.positions`, its
 interface to the reconciler, which never fires it), and its funds cap each strategy's
@@ -55,7 +57,8 @@ from typing import Any
 from .._engine import call
 from .._layout import NANOS_PER_SECOND
 from ._reconcile_act import Corrections, attribute, in_flight, order_findings, own_orders
-from ._reconcile_findings import Findings, Reconciliation, Sighting
+from ._reconcile_ended import EndQueries
+from ._reconcile_findings import Findings, Reconciliation
 from ._reconcile_guard import ExitGuard
 from ._reconcile_rules import (
     GUARDED,
@@ -94,7 +97,7 @@ FILL_DURING_READ = "fill_during_read"
 _NS = NANOS_PER_SECOND
 
 
-class Reconciler:
+class Reconciler(EndQueries):
     """The reconciler of `session`, a `_session_loop.Session` (module docstring). `guard`
     is its exit guard, `rows` its differences."""
 
@@ -167,42 +170,6 @@ class Reconciler:
     def orphan(self, order_id: str) -> bool:
         """True for an orphan the reconciler asked to cancel: its news is expected."""
         return order_id in self._orphans
-
-    def end(self) -> None:
-        """The close has printed its last lines: the exit guard ends (`ExitGuard.end`),
-        and no later comparison will confirm a difference first seen (module docstring)."""
-        self._ended = True
-        self._findings.end()
-        self.guard.end()
-
-    def unconfirmed(self, name: str) -> Sighting | None:
-        """Once the close has printed its last lines, the position difference strategy
-        `name`'s last comparison saw for the first time, else None; None too when its last
-        comparison was late with a difference (`late` names the leg then)."""
-        if not self._ended or self._findings.late(name) is not None:
-            return None
-        return self._findings.unconfirmed(name)
-
-    def unjudged(self, name: str) -> bool:
-        """Once the close has printed its last lines, True when no comparison judged
-        strategy `name`'s position since a fill of its own orders landed during a read,
-        unless a late comparison since saw a difference (`late` names the leg then)."""
-        findings = self._findings
-        return self._ended and findings.unjudged(name) and findings.late(name) is None
-
-    def late(self, name: str) -> Sighting | None:
-        """Once the close has printed its last lines, the position difference strategy
-        `name`'s last comparison saw when it was late (the leg in flight past the limit):
-        named at the close as that read saw it, neither carried nor confirmed; else None."""
-        return self._findings.late(name) if self._ended else None
-
-    def broker_units(self, name: str) -> int | None:
-        """OpenAlgo's signed units of strategy `name`'s leg at the last read while they
-        differ from the engine's with nothing taking them in: while the exit guard holds
-        the leg (`ExitGuard.broker_units`), and after the last lines when no later
-        comparison will confirm the difference (`unconfirmed`); else None."""
-        guarded, seen = self.guard.broker_units(name), self.unconfirmed(name)
-        return guarded if guarded is not None or seen is None else seen.broker_units
 
     def not_read(self) -> None:
         """The worker did not read the books (the guard locked): nothing more is read."""
