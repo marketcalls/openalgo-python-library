@@ -27,7 +27,9 @@ from test_session_threads import run_threaded
 
 import openalgo.backtest as bt
 from openalgo.backtest._live._alerts_summary import summary_text
-from openalgo.backtest._live._types import LOGGER_NAME
+from openalgo.backtest._live._session_figures import SESSION_KEY
+from openalgo.backtest._live._types import LOGGER_NAME, Mode
+from openalgo.backtest._live.journal import Journal
 
 #: The units the broker holds at the close (the session's entry and the other client's),
 #: and the engine's.
@@ -128,3 +130,17 @@ def test_the_daily_summary_names_the_leg_as_a_mismatch(late_at_the_close):
 
 def test_no_open_position_carries_the_late_reads_figure(late_at_the_close):
     assert late_at_the_close().open_positions == ()
+
+
+def test_the_close_saves_the_mismatch_it_names_for_a_restart_of_the_day(late_at_the_close):
+    outcome = late_at_the_close()
+    journal = Journal.open(
+        outcome.paths["journal"],
+        account=outcome.account,
+        broker=outcome.broker,
+        mode=Mode(outcome.mode),
+        now=lambda: outcome.ended_ns,
+    )
+    with journal:
+        counts = journal.rms_state(SESSION_KEY, day=outcome.day)
+    assert counts["reconcile_mismatches"] == outcome.summary.reconcile_mismatches == 1

@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import dataclasses
 import pickle
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -371,9 +371,17 @@ class _Finished:
 
 
 def _result(
-    strategy: type, prepared: PreparedRun, args: dict[str, Any], run: _Finished, record: Any
+    strategy: type,
+    prepared: PreparedRun,
+    args: dict[str, Any],
+    run: _Finished,
+    record: Any,
+    *,
+    assumptions: Mapping[str, str] | None = None,
 ) -> Result:
-    """The `Result` of a finished run, with its Assumptions block, warnings and manifest."""
+    """The `Result` of a finished run, with its Assumptions block, warnings and manifest;
+    `assumptions` replace lines of the block (a live session's, whose fills OpenAlgo
+    priced)."""
     plan, calendar = prepared.plan, prepared.session_calendar()
     market, output = run.market, run.output
     parameters = {name: getattr(run.instance, name) for name in strategy.parameters()}
@@ -390,7 +398,7 @@ def _result(
     return Result(
         output,
         list(plan.symbols),
-        block | {"warm_up": run.state.assumption()},
+        block | {"warm_up": run.state.assumption()} | dict(assumptions or {}),
         [
             *run_end_warnings(output["run_end"]),
             *reject_warnings(output["orders"], [i.kind for i in prepared.instruments]),

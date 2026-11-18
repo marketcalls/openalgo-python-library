@@ -7,7 +7,13 @@ records (`_session_close.SessionOutcome`).
   `finish()` tables and its part of the session plan: the settings, instruments, market
   and history a backtest of the day would have, the strategy instance and its run
   context, the warm-up measured on its live stores. It covers this start only: a
-  restarted engine's run begins at the restart. It cannot rerun (`Result.rerun` raises):
+  restarted engine's run begins at the restart, and its account carried the realized
+  P&L and charges of the day's earlier starts (the kernel restores the cash), which are
+  taken out of its equity rows after the restore and of its gross P&L (`this_start`), so
+  its metrics and its trades are this start's. A position carried open across the
+  restart keeps its whole P&L in both, as its trade does. Its Assumptions block says
+  OpenAlgo priced the fills (`LIVE_ASSUMPTIONS`, `LIVE_BASE_MEANING`): the backtest's
+  fill model and slippage played no part. It cannot rerun (`Result.rerun` raises):
   a live session is not a backtest to repeat. `bt.live` ends with no end-of-run notice of
   orders not placed, as `bt.backtest` does (`_rejection_notice`): the session alerted
   each refusal as it came, and each result's warnings name every reject code, the live
@@ -18,7 +24,8 @@ records (`_session_close.SessionOutcome`).
 - **The warnings**, the mode first: the mode the session ran in and what it means; then
   the session's own warnings in order (the preflight's, the plan's, the clock's against
   the exchange, each first position opened with no stop at the broker, and the rest);
-  then the seconds positions had no confirmed stop, and the positions left open.
+  then the seconds positions had no confirmed stop, the positions left open, and each leg
+  the close named that it could not confirm (`SessionResult.unconfirmed_legs`).
 
 Times are UTC nanoseconds turned into IST datetimes, amounts rupees, quantities units.
 """
@@ -30,6 +37,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from .._pipeline import PreparedRun, _Finished, _result
@@ -50,10 +58,36 @@ from ._result_frames import (
     unprotected_frame,
 )
 from ._session_close import SessionOutcome
+from ._session_records import Restored
 from ._types import Mode
 
 #: How a live session's base interval was chosen, as the Assumptions block says it.
 BASE_RULE = "a live session's bars are built from the feed's ticks on 1-minute slices"
+#: What the base interval means live, in place of the backtest's fills at bar opens.
+LIVE_BASE_MEANING = (
+    "the strategy decides at each bar's close and its orders are sent at once; OpenAlgo "
+    "reports the price of each fill"
+)
+#: The Assumptions lines of a live result that replace the backtest's fill model: the
+#: broker (or OpenAlgo's sandbox) filled every order at its own prices.
+LIVE_ASSUMPTIONS = MappingProxyType(
+    {
+        "fill": (
+            "at the prices OpenAlgo reported for each order, sent when the strategy decided "
+            "(the broker's fills in LIVE mode, OpenAlgo's sandbox fills in SANDBOX mode)"
+        ),
+        "slippage": "not modelled: the fills are OpenAlgo's",
+        "risk_exit_fill": (
+            "at the price OpenAlgo reported: a stop is held by the broker, and a target or "
+            "the daily loss limit is sent as an order on the tick that reaches it"
+        ),
+    }
+)
+#: How the result names a leg the close named that it could not confirm.
+NOT_CONFIRMED_AT_CLOSE = (
+    "not confirmed at the close: {words}; result.open_positions holds no confirmed figure "
+    "of it: check the position and the order book in OpenAlgo"
+)
 #: The first warning of a result: the mode, and what it means.
 MODE_WARNINGS = MappingProxyType(
     {
@@ -71,7 +105,10 @@ def session_result(outcome: SessionOutcome) -> SessionResult:
     Raises what the backtest's result builder raises for tables it cannot read."""
     results = {
         name: strategy_result(
-            outcome.plans[name], outcome.outputs[name], outcome.timer_warnings.get(name, ())
+            outcome.plans[name],
+            outcome.outputs[name],
+            outcome.timer_warnings.get(name, ()),
+            outcome.restored.get(name),
         )
         for name in outcome.strategies
     }
@@ -102,12 +139,17 @@ def session_result(outcome: SessionOutcome) -> SessionResult:
 
 
 def strategy_result(
-    part: StrategyPlan, output: Mapping[str, Any], timer_warnings: Sequence[str] = ()
+    part: StrategyPlan,
+    output: Mapping[str, Any],
+    timer_warnings: Sequence[str] = (),
+    restore: Restored | None = None,
 ) -> Result:
     """One strategy's `bt.Result` (module docstring): its kernel session's `finish()`
     tables `output`, its part of the session plan `part` and its timers' notes, read
-    before the kernel session finished, through the backtest's own result builder."""
+    before the kernel session finished, through the backtest's own result builder; for a
+    kernel session a restart restored (`restore`), this start's money only."""
     spec, setup, context = part.spec, part.setup, part.context
+    output = dict(output) if restore is None else this_start(output, restore)
     state = readiness(context.run.checks.outcomes, context, setup.history)
     context.close(output["orders"])
     arguments = dict(spec.arguments)
@@ -130,7 +172,30 @@ def strategy_result(
     finished = _Finished(
         part.strategy, context, setup.market, setup.history, state, output, list(timer_warnings)
     )
-    return _result(spec.strategy, prepared, arguments, finished, None)
+    base_rule = f"base {setup.plan.base} ({BASE_RULE}): {LIVE_BASE_MEANING}"
+    lines = LIVE_ASSUMPTIONS | {"base_rule": base_rule}
+    return _result(spec.strategy, prepared, arguments, finished, None, assumptions=lines)
+
+
+def this_start(output: Mapping[str, Any], restore: Restored) -> dict[str, Any]:
+    """`output` with the realized gross P&L and charges a restored account carried from
+    the day's earlier starts (`restore`) taken out of the equity rows that close after the
+    restore and of the gross P&L (module docstring); the rows before it, the catch-up's,
+    hold none."""
+    equity = dict(output["equity"])
+    after = np.asarray(equity["ts"], dtype=np.int64) > restore.after_ns
+    carried = {
+        "equity_rupees": restore.realized - restore.charges,
+        "realized_rupees": restore.realized,
+        "costs_rupees": restore.charges,
+    }
+    for column, amount in carried.items():
+        values = np.array(equity[column], dtype=float)
+        values[after] -= amount
+        equity[column] = values
+    realized, unrealized, total = output["gross_pnl"]
+    gross_pnl = (realized - restore.realized, unrealized, total - restore.realized)
+    return {**output, "equity": equity, "gross_pnl": gross_pnl}
 
 
 def instrument_lines(instruments: Sequence[Instrument]) -> str:
@@ -164,6 +229,9 @@ def result_warnings(outcome: SessionOutcome) -> tuple[str, ...]:
             f"positions were still open when the session ended ({legs}): "
             "result.open_positions says what to do with each"
         )
+    summary = outcome.summary
+    for words in (*summary.differing, *summary.unconfirmed):
+        notes.append(NOT_CONFIRMED_AT_CLOSE.format(words=words))
     return tuple(dict.fromkeys(notes))
 
 
@@ -173,9 +241,13 @@ def _ist(ts_ns: int) -> pd.Timestamp:
 
 __all__ = [
     "BASE_RULE",
+    "LIVE_ASSUMPTIONS",
+    "LIVE_BASE_MEANING",
     "MODE_WARNINGS",
+    "NOT_CONFIRMED_AT_CLOSE",
     "instrument_lines",
     "result_warnings",
     "session_result",
     "strategy_result",
+    "this_start",
 ]

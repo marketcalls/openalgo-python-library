@@ -14,7 +14,9 @@ style of `Result.summary()`:
     End state   : flat
 
 An "Alerts : 2 not delivered" line comes before the end state when an alert of the
-session did not reach OpenAlgo. A leg whose OpenAlgo books differed from the engine at the
+session did not reach OpenAlgo. The Strategies line names after "; earlier today:" the
+strategies an earlier start of the day ran and this one does not, whose figures the day's
+include. A leg whose OpenAlgo books differed from the engine at the
 close with no later read to confirm it (16-session-design 5.4 "As built", round 7) is
 counted and named on the Reconcile and End state lines, "(at the close: s1 SBIN NSE -4
 units in OpenAlgo's books, the engine's 0)" after "1 mismatch" and after "not flat: a
@@ -68,7 +70,9 @@ class SessionSummary:
     is a mismatch, and a position that may be open unless the words say OpenAlgo's books
     show it flat (a session can then end `flat` with it named). `unconfirmed` names, in
     words, each leg no read judged after a fill of its own orders landed during a read,
-    with no difference to name: not a mismatch, named beside them.
+    with no difference to name: not a mismatch, named beside them. `earlier` names, in
+    words, each strategy an earlier start of the day ran and this one does not, whose
+    figures the day's include (with the position its last save held, when it held one).
 
     Raises ConfigError when a rupee figure or the seconds unprotected is not a finite
     number (None is allowed for `slippage` only), when the seconds unprotected are
@@ -92,6 +96,7 @@ class SessionSummary:
     flat: bool
     differing: tuple[str, ...] = ()
     unconfirmed: tuple[str, ...] = ()
+    earlier: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _check_figure("gross_pnl", self.gross_pnl)
@@ -108,6 +113,7 @@ class SessionSummary:
             _check_count(name, getattr(self, name))
         _check_differing(self.differing, self.reconcile_mismatches)
         _check_legs("unconfirmed", self.unconfirmed)
+        _check_legs("earlier", self.earlier)
 
     @property
     def net_pnl(self) -> float:
@@ -121,8 +127,9 @@ def summary_text(summary: SessionSummary) -> str:
     text, no emoji."""
     named = (*summary.differing, *summary.unconfirmed)
     at_close = f" (at the close: {'; '.join(named)})" if named else ""
+    earlier = f"; earlier today: {'; '.join(summary.earlier)}" if summary.earlier else ""
     lines = [
-        ("Strategies", ", ".join(summary.strategies) or "none"),
+        ("Strategies", (", ".join(summary.strategies) or "none") + earlier),
         ("Trades", f"{summary.closed_trades} closed"),
         ("Gross P&L", _rupees(summary.gross_pnl)),
         ("Charges", f"{_rupees(summary.charges)} (modelled)"),

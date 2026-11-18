@@ -19,8 +19,10 @@ import pandas as pd
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from live_samples import live, seam
-from session_samples import BuyAndHold, Hold, alerts, ist, rig
-from stops_samples import StopHold
+from session_samples import CAPITAL, BuyAndHold, Hold, StopFlag, alerts, ist, rig
+from stops_samples import StopHold, at_price
+from test_session_close_late import LATE_SUMMARY, EntersThenStops, TwinOrder
+from test_session_figures import DAY_ENDS, TwoRoundTrips
 
 import openalgo.backtest as bt
 from openalgo.backtest._live._alerts_summary import SessionSummary
@@ -328,3 +330,78 @@ def test_the_summary_text_is_the_daily_summary_the_alert_sent(world, caplog):
 
 def test_the_repr_names_the_session(day):
     assert repr(day).startswith("SessionResult(LIVE 2026-11-16, broker zerodha, stopped by")
+
+
+# ----- a leg the close names, unconfirmed ---------------------------------------------------
+
+
+@pytest.fixture
+def late(world):
+    """`test_session_close_late`'s scenario through `bt.live`: OpenAlgo holds 20 SBIN that
+    the engine does not, seen only by the close's late read."""
+    EntersThenStops.flag = world.stop
+    world.fake.faults.bad_gateway_page("placeorder", reached_broker=True)
+    twin = TwinOrder(world.fake.client(), world.fake.client())
+    made = world.clients()
+    world.clients = lambda: type(made)(**{**made.__dict__, "orders": twin})
+    result = live(world, EntersThenStops, on_stop="keep")
+    assert world.fake.position("SBIN", "NSE") == 20
+    return result
+
+
+def test_a_leg_the_close_names_leaves_the_result_not_confirmed_flat(late):
+    assert late.summary.differing == (LATE_SUMMARY,)
+    assert late.open_positions.empty
+    assert not late.flat
+
+
+def test_the_warnings_name_each_leg_the_close_names(late):
+    assert any(LATE_SUMMARY in warning for warning in late.warnings)
+
+
+def test_the_repr_counts_the_legs_the_close_names(late):
+    assert repr(late).endswith("0 positions open, 1 leg not confirmed at the close)")
+
+
+# ----- a restarted start's result -----------------------------------------------------------
+
+
+def test_a_restarted_starts_result_counts_its_own_money_only(world):
+    at_price(world, ist(14, 44, 30), 505.0)
+    at_price(world, ist(14, 48, 30), 510.0)
+    world.stop_at(ist(14, 46, 30))
+    first = live(world, TwoRoundTrips)
+    world.stop = StopFlag()
+    world.stop_at(DAY_ENDS)
+    second = live(world, TwoRoundTrips)
+    result = second.results["TwoRoundTrips"]
+    assert len(result.trades) == 1
+    assert result.metrics["start_equity"] == CAPITAL
+    assert result.metrics["net_profit"] == pytest.approx(
+        second.summary.net_pnl - first.summary.net_pnl
+    )
+    assert result.gross_pnl["realized"] == pytest.approx(result.trades["gross_pnl_rupees"].sum())
+
+
+def test_a_first_starts_result_is_left_as_its_engine_made_it(world):
+    at_price(world, ist(14, 44, 30), 505.0)
+    world.stop_at(ist(14, 46, 30))
+    result = live(world, TwoRoundTrips)
+    figures = result.results["TwoRoundTrips"]
+    assert figures.metrics["net_profit"] == pytest.approx(result.summary.net_pnl)
+
+
+# ----- the live assumptions -----------------------------------------------------------------
+
+
+def test_a_live_results_assumptions_say_openalgo_priced_the_fills(day):
+    assumptions = day.results["BuyAndHold"].assumptions
+    assert "OpenAlgo" in assumptions["fill"] and "next_open" not in assumptions["fill"]
+    assert assumptions["slippage"].startswith("not modelled")
+    assert "OpenAlgo" in assumptions["risk_exit_fill"]
+
+
+def test_a_live_results_base_rule_models_no_fill_at_a_bar_open(day):
+    base_rule = day.results["BuyAndHold"].assumptions["base_rule"]
+    assert base_rule.startswith("base 1m (a live session's bars are built from the feed's ticks")
+    assert not any(words in base_rule for words in ("fill at", "fills at", "bar opens"))

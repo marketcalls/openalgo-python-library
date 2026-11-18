@@ -13,6 +13,9 @@ closed, and, at the close, every order its venue maps placed.
 - **Round trips** (`StrategyRecords.closed_trades`): counted as each fill takes a
   position to flat or through it, so that the count saved with a strategy's state is the
   count that state holds (`_session_figures`).
+- **A restore** (`Restored`, `StrategyRecords.restored`): where a restart restored a
+  strategy's kernel session and what its account carried from the day's earlier starts,
+  which its result takes out (`_result_build`: a result covers its start only).
 - **Orders** (`OrderRecord`, `order_records`): every order the venue maps placed, with
   how far it got at the broker (the stops supervisor's word: handed, held, unanswered,
   ambiguous, bound, confirmed, ended, or never handed) and the kernel's final status.
@@ -25,6 +28,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
+
+from .._engine import call
 
 #: How far an order got when the session never handed it to the order worker (an exit
 #: the exit guard held, a request after a guard lock).
@@ -82,14 +87,36 @@ class LockRecord:
     lifted_ns: int | None = None
 
 
+@dataclass(frozen=True)
+class Restored:
+    """A restart's restore of a strategy's kernel session (module docstring): `after_ns`,
+    the open of the slice it stood at (UTC nanoseconds: the equity rows that close after
+    it hold the restored account), and the realized gross P&L and charges its account
+    carried then, rupees."""
+
+    after_ns: int
+    realized: float
+    charges: float
+
+
+def restored(trader: Any) -> Restored:
+    """`trader`'s `Restored`, read from its kernel session just after the restore."""
+    standing = int(call(trader.engine.live_state)["slice"])
+    slices = trader.part.slices
+    after_ns = slices[standing][0] if standing < len(slices) else slices[-1][1]
+    _equity, _cash, realized, _unrealized, charges, _margin = call(trader.engine.account)
+    return Restored(after_ns, float(realized), float(charges))
+
+
 @dataclass
 class StrategyRecords:
-    """One strategy's records (module docstring): its entry locks, oldest first, and the
-    round trips it closed in this start."""
+    """One strategy's records (module docstring): its entry locks, oldest first, the
+    round trips it closed in this start, and its restore at a restart (None for none)."""
 
     strategy: str
     locks: list[LockRecord] = field(default_factory=list)
     closed_trades: int = 0
+    restored: Restored | None = None
 
     def locked(self, reason: str, at_ns: int) -> None:
         """Its entries were locked for `reason` at `at_ns`."""
@@ -187,7 +214,9 @@ __all__ = [
     "FillRecord",
     "LockRecord",
     "OrderRecord",
+    "Restored",
     "StrategyRecords",
     "adopted_fill",
     "order_records",
+    "restored",
 ]

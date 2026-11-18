@@ -23,10 +23,12 @@ from session_samples import ist, rig
 from stops_samples import at_price
 
 import openalgo.backtest as bt
+from openalgo.backtest._live._alerts_summary import summary_text
 from openalgo.backtest._live._session_figures import (
     FIGURES,
     SESSION_KEY,
     DayFigures,
+    Earlier,
     SessionFigures,
     StrategyFigures,
 )
@@ -226,3 +228,106 @@ def test_an_order_refused_before_a_restart_is_counted_in_the_days_summary(
     summary = restart(world, TwoRoundTrips, stop_ns=DAY_ENDS).summary
     assert (first.rejected_orders, first.closed_trades) == (1, 0)
     assert (summary.rejected_orders, summary.closed_trades) == (1, 1)
+
+
+def test_an_order_refused_after_the_last_save_is_counted_after_a_ctrl_c_and_a_restart(
+    make_fake_openalgo, monkeypatch, tmp_path
+):
+    # The entry is refused at 14:42:01; Ctrl+C comes before the next slice's save at 14:43.
+    world = world_of(make_fake_openalgo, monkeypatch, tmp_path)
+    world.fake.reject_next("RMS: blocked", price_type="MARKET", at_placement=True)
+    world.stop_at(ist(14, 42, 30))
+    first = world.run(TwoRoundTrips).summary
+    summary = restart(world, TwoRoundTrips, stop_ns=DAY_ENDS).summary
+    assert first.rejected_orders == 1
+    assert summary.rejected_orders == 1
+
+
+# ----- a strategy the restart does not run ------------------------------------------------
+
+
+class HoldSBIN(bt.Strategy):
+    """Buys 10 SBIN on the bar closing at 14:42 IST and holds them."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "1m"
+
+    def on_bar(self, bar):
+        if bar.ts_close == ist(14, 42) and not self.position.qty:
+            self.buy(10)
+
+
+class IdleINFY(bt.Strategy):
+    """Trades nothing."""
+
+    symbol, exchange, interval = "INFY", "NSE", "1m"
+
+    def on_bar(self, bar):
+        pass
+
+
+def two_strategies(make_fake_openalgo, monkeypatch, tmp_path):
+    """SBIN at 505.00 from 14:43:05, a minute after HoldSBIN bought at 500.00; Ctrl+C at
+    14:43:30."""
+    world = rig(make_fake_openalgo, monkeypatch, tmp_path, symbols=("SBIN", "INFY"))
+    at_price(world, ist(14, 43, 5), 505.0)
+    world.stop_at(ist(14, 43, 30))
+    return world
+
+
+def test_a_strategy_the_restart_drops_after_a_flatten_adds_its_round_trip_once(
+    make_fake_openalgo, monkeypatch, tmp_path
+):
+    # The flatten's sale fills after the last save of the slices: the close saves it.
+    world = two_strategies(make_fake_openalgo, monkeypatch, tmp_path)
+    first = world.run([HoldSBIN, IdleINFY]).summary
+    summary = restart(world, [IdleINFY], stop_ns=ist(14, 45)).summary
+    assert (first.closed_trades, first.gross_pnl) == (1, TRIP_GROSS)
+    assert (summary.closed_trades, summary.gross_pnl) == (1, TRIP_GROSS)
+    assert summary.charges == pytest.approx(first.charges)
+    assert summary.flat
+
+
+def test_the_days_summary_names_a_strategy_the_restart_drops(
+    make_fake_openalgo, monkeypatch, tmp_path
+):
+    world = two_strategies(make_fake_openalgo, monkeypatch, tmp_path)
+    world.run([HoldSBIN, IdleINFY])
+    summary = restart(world, [IdleINFY], stop_ns=ist(14, 45)).summary
+    strategies = next(line for line in summary_text(summary).splitlines() if "Strategies" in line)
+    assert strategies.endswith(": IdleINFY; earlier today: HoldSBIN")
+
+
+def test_a_position_a_dropped_strategy_kept_leaves_the_day_not_flat(
+    make_fake_openalgo, monkeypatch, tmp_path
+):
+    world = two_strategies(make_fake_openalgo, monkeypatch, tmp_path)
+    world.run([HoldSBIN, IdleINFY], on_stop="keep")
+    summary = restart(world, [IdleINFY], stop_ns=ist(14, 45)).summary
+    assert not summary.flat
+    assert summary.earlier == ("HoldSBIN (10 units of SBIN NSE open at its last save)",)
+
+
+def saved_position(units: float) -> dict:
+    """A strategy's saved state whose live state holds `units` of SBIN NSE in MIS."""
+    live_state = {
+        "instruments": [{"symbol": "SBIN", "exchange": "NSE"}],
+        "positions": [{"instrument": 0, "product": "MIS", "quantity_units": units}],
+    }
+    return {**saved_state(1, 50.0, 20.0), "live_state": live_state}
+
+
+def test_a_start_names_the_position_a_strategy_it_does_not_run_saved():
+    figures = DayFigures.at_start({"B": saved_position(10.0)}, ["A"])
+    assert figures.earlier == (Earlier("B", "SBIN", "NSE", 10),)
+    assert figures.earlier_open
+
+
+def test_a_saved_position_that_cannot_be_read_refuses_the_start():
+    saved = {
+        "B": {
+            **saved_state(1, 50.0, 20.0),
+            "live_state": {"positions": [{"instrument": 0, "product": "MIS"}]},
+        }
+    }
+    with pytest.raises(LiveError, match=r"saved for B cannot be read \(its saved position\)"):
+        DayFigures.at_start(saved, ["A"])

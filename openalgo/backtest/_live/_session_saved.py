@@ -15,9 +15,10 @@ It is saved before each batch of the kernel's commands reaches the order worker 
 rule 4: a restart never meets an order the saved state lacks) and after each slice a
 strategy releases (the trail's extremes move on ticks without commands), with the
 strategy's `self.state` when it changed (`save_released`), and the session's own counts
-of the day after them (`save_session`, under `_session_figures.SESSION_KEY`). A kernel
-session that has finished saves nothing: no session resumes at its close. A journal that
-cannot write raises JournalError, which stops the session (3.5).
+of the day after them (`save_session`, under `_session_figures.SESSION_KEY`); the close
+saves them once more after its final fills (`_session_close`). A kernel session that has
+finished saves nothing: no session resumes at its close. A journal that cannot write
+raises JournalError, which stops the session (3.5).
 
 Quantities are signed units, prices rupees.
 """
@@ -101,10 +102,11 @@ def save(session: Any, trader: Trader) -> None:
     session.parts.journal.put_rms_state(trader.name, saved, day=session.parts.spec.day)
 
 
-def save_session(session: Any) -> None:
-    """Save `session`'s own counts of the day to journal L (module docstring). Raises
+def save_session(session: Any, *, unprotected_s: float | None = None, named: int = 0) -> None:
+    """Save `session`'s own counts of the day to journal L (module docstring), with the
+    close's `unprotected_s` and `named` mismatches (`DayFigures.session_counts`). Raises
     JournalError when the journal cannot write them."""
-    counts = session.figures.session_counts(session)
+    counts = session.figures.session_counts(session, unprotected_s=unprotected_s, named=named)
     session.parts.journal.put_rms_state(SESSION_KEY, counts, day=session.parts.spec.day)
 
 
