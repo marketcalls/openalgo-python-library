@@ -335,30 +335,56 @@ def optimize(strategy: type[Strategy], client: Any = None, **settings: Any) -> A
 def robustness(strategy: type[Strategy], client: Any = None, **settings: Any) -> Any:
     """Backtest the strategy once and run the robustness and overfitting checks on it;
     returns a `RobustnessReport` (`.verdicts`, `.check(name)`, `.passed`, `.plan`,
-    `.tearsheet(path)`). Passing a check proves nothing on its own; failing one is
-    strong evidence of overfitting; a check with too little to judge is "not judged"
-    and never passes.
+    `.tearsheet(path)`). Passing a check proves nothing on its own; failing one says
+    the edge did not hold up under that check (it may be fitted to the past or too small
+    to tell apart from the noise of the data tested), never that it proves overfitting;
+    a check with too little to judge is "not judged" and never passes. The checks this
+    version runs judge the settings given, so none of them can see a strategy picked as
+    the best of many settings tried.
 
     Takes the run arguments of `bt.backtest` and:
 
     checks: "all" (the default: every check, those this version does not run listed as
-        not built), "quick" (the trade-list checks, no rerun) or a list of check names:
-        random_out_of_sample, reshuffle, resample and variance run in this version.
-    objective: the metric random out of sample measures on each part of the trades:
-        "sharpe" (the default), "sortino", "net_profit", "expectancy",
-        "profit_factor" or "win_rate"; another metric or a function of a `Result`
-        leaves that check not judged.
+        not built), "quick" (the trade-list checks, no rerun) or a list of check names.
+        This version runs the trade-list checks (random_out_of_sample, reshuffle,
+        resample, variance) and the bar checks, which rerun the backtest on generated
+        bars or other symbols' bars: vs_random (random entries with the run's trades,
+        and the strategy on permuted bars), permutation (the same moves in another
+        order), noise (every price moved within a fifth of its bar's average true
+        range), stress (the noisy and permuted series whose drawdown, time to a new high
+        or fall below the average is half as bad again as the run's own, judged against
+        every generated series) and other_markets.
+    objective: what the checks measure: a metric name or a function of a `Result`
+        ("sharpe" by default). Random out of sample measures it on parts of the trades,
+        so it takes "sharpe", "sortino", "net_profit", "expectancy" or
+        "profit_factor"; "win_rate" (a win rate is not a measure of profit), another
+        metric or a function leaves that check not judged. The bar checks measure it on
+        each rerun; noise and vs_random also need its break-even value (0, or 1 for a
+        profit factor), and an objective without one (a win rate, a function, whose value
+        for a run that makes nothing is not known) leaves them not judged.
+    others: the symbols other_markets runs the strategy on, unchanged (["ICICIBANK",
+        "HDFCBANK"] on the strategy's exchange, or (symbol, exchange) pairs), read from
+        the run's source: a `data=` dict by symbol holding them, or OpenAlgo through
+        `client`. Without it other_markets is not judged.
     runs: alternative runs of each check (1000); seed: the seed of every check's
         stream (0), the same report for the same seed on every platform.
-    workers, progress: as in `bt.optimize`; the plan is reported through `progress` (or
-        the `openalgo.backtest.robustness` logger) before the checks run.
+    workers, progress: as in `bt.optimize`: the bar checks' reruns run in `workers`
+        processes (the CPU count by default; `workers=1` keeps them in this process),
+        and the plan, with the reruns it needs and an estimate of their time, is reported
+        through `progress` (or the `openalgo.backtest.robustness` logger) before the
+        checks run.
     A keyword named after a check holds its settings as a dict (`variance={"points":
-        10}`, `reshuffle={"max_drawdown": 0.25}`); `report.check(name).settings` shows
-        each check's.
+        10}`, `noise={"runs": 500, "close": 0.75}`); `report.check(name).settings`
+        shows each check's.
+
+    The bar checks read the run's bars again from its source and rerun it as ordinary
+    backtests of the same kernel, the warm-up included; nothing changes the run's own
+    figures.
 
     Raises ConfigError for unusable arguments or settings (naming what they take), the
-    backtest's errors, and NotImplementedError for a check, `others=` or parameter
-    ranges this version does not run, naming the unit that brings them."""
+    backtest's errors, and NotImplementedError for a check or parameter ranges this
+    version does not run (saying what it needs), for the bar checks of a futures
+    series, and for other_markets of a strategy that trades no one named symbol."""
     from ._robust import robustness as run_checks
 
     return run_checks(strategy, client, **settings)

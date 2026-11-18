@@ -12,6 +12,9 @@
     sessions        the run's session dates (`Performance.session_returns`)
     capital         the start equity in rupees: the run's capital for a `Result`
     cumulative      the run's cumulative return at each session close, a fraction
+    prices          (symbol, its close at each session close in rupees) of the run's
+                    first symbol, the close of its last strategy bar of the session, when
+                    the report has the run's bars (`_run_bars`); None otherwise
 
 Positions still open at the end are not trades yet; `open_trades` counts them.
 """
@@ -45,6 +48,7 @@ class TradeRun:
     open_trades: int
     cumulative: np.ndarray
     performance: Performance
+    prices: tuple[str, np.ndarray] | None = None
 
     @property
     def closed(self) -> int:

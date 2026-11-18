@@ -7,7 +7,8 @@ work starts.
 named after a check holds that check's settings as a dict (`variance={"points": 10}`).
 Everything else `bt.robustness` takes is a `bt.backtest` run argument, or a parameter
 range named after a strategy parameter; ranges belong to the checks that search
-parameters, which this version does not run.
+parameters, which this version does not run. `others=` names the symbols of the other
+markets check, which must be listed to take them.
 """
 
 from __future__ import annotations
@@ -21,7 +22,8 @@ from .._messages import not_supported
 from .._objective import check_objective
 from ..errors import ConfigError
 from . import _random
-from ._registry import BY_NAME, CHECKS, QUICK, UNITS, CheckSpec, find, not_built
+from ._check_other_markets import others_value
+from ._registry import BY_NAME, CHECKS, NEEDS, QUICK, CheckSpec, find, not_built
 from ._setting import resolve, whole
 
 DEFAULT_OBJECTIVE = "sharpe"
@@ -35,7 +37,8 @@ SEARCHING = ("out_of_sample", "walk_forward", "parameters", "noise_optimization"
 class Request:
     """A checked request: `listed` the checks the report lists, in report order;
     `objective`, `runs` and `seed`; `workers` (None for the CPU count); `settings` the
-    resolved settings of each listed check this version runs."""
+    resolved settings of each listed check this version runs; `others` the (symbol,
+    exchange) pairs of `others=`, exchange None for the strategy's own."""
 
     listed: tuple[CheckSpec, ...]
     objective: Any
@@ -43,11 +46,22 @@ class Request:
     seed: int
     workers: int | None
     settings: Mapping[str, Mapping[str, Any]]
+    others: tuple[tuple[str, str | None], ...] = ()
 
     @property
     def to_run(self) -> tuple[CheckSpec, ...]:
         """The listed checks this version runs."""
         return tuple(check for check in self.listed if check.built)
+
+    @property
+    def reruns(self) -> tuple[CheckSpec, ...]:
+        """The listed checks that rerun the backtest (the bar checks)."""
+        return tuple(check for check in self.to_run if not check.trade_list)
+
+    def runs_of(self, check: CheckSpec) -> int:
+        """The runs of `check`: its `runs` setting, else the report's."""
+        given = self.settings[check.name].get("runs")
+        return self.runs if given is None else given
 
 
 def select(checks: Any) -> tuple[CheckSpec, ...]:
@@ -117,17 +131,21 @@ def build_request(
     ranges: Mapping[str, Any],
 ) -> Request:
     """The checked `Request`. Raises ConfigError for unusable values (naming what each
-    takes) and for settings of a check `checks` does not list, and NotImplementedError
-    for a check, `others=` or parameter ranges this version does not run."""
+    takes), for settings of a check `checks` does not list and for `others=` without the
+    other markets check, and NotImplementedError for a check or parameter ranges this
+    version does not run."""
     listed = select(checks)
     check_objective(objective)
-    if others is not None:
-        raise not_built(BY_NAME["other_markets"])
+    pairs = () if others is None else others_value(others)
+    if pairs and BY_NAME["other_markets"] not in listed:
+        raise ConfigError(
+            "others= names symbols for the other_markets check, which checks= does not run"
+        )
     if ranges:
         raise not_supported(
             f"parameter ranges ({', '.join(sorted(ranges))}) in a robustness report",
-            f"the checks that search them ({', '.join(SEARCHING)}) come with robustness unit "
-            f"RB4, {UNITS['RB4']}. Fix the parameters with params=",
+            f"the checks that search them ({', '.join(SEARCHING)}) are not built in this "
+            f"version: they need {NEEDS['RB4']}. Fix the parameters with params=",
         )
     for name in check_settings:
         check = BY_NAME[name]
@@ -146,6 +164,7 @@ def build_request(
             for check in listed
             if check.built
         },
+        others=pairs,
     )
 
 

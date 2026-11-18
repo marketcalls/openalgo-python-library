@@ -7,12 +7,13 @@ The standard tearsheet shows them in its "Overfitting checks" section, `Result.s
 in one line, and `Result.warnings` with a line for each one that fails. A run with fewer
 closed trades than the checks need says "too few trades to judge" instead.
 
-What a quick check's verdict means (`QUICK_READING`): these checks read the run's own
-trades, so a failure says the edge is fragile or small next to the noise of those
+What a quick check's verdict means (`QUICK_READING`, made of the wording rule's own
+sentences, `_verdict`): passing proves nothing on its own; these checks read the run's
+own trades, so a failure says the edge is fragile or small next to the noise of those
 trades, and none of them can see a strategy picked as the best of many tried. At their
 default rules an honest edge with an annual Sharpe ratio near 1 over a few years fails
-random out of sample and variance more often than not, so their failure is not worded
-as strong evidence of overfitting, the reading of the full report's checks.
+random out of sample and variance more often than not, which is why a failure is read
+as an edge that did not hold up, never as proof of overfitting.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from ._request import DEFAULT_OBJECTIVE, DEFAULT_SEED, build_request
 from ._scorecard import Row, counts_line
 from ._trade_common import MIN_TRADES
 from ._trades import trade_run
-from ._verdict import FAILED, CheckResult
+from ._verdict import FAILED, PASSING, UNJUDGED, CheckResult
 
 #: The runs of each quick check (design 17, section 4).
 QUICK_RUNS = 200
@@ -34,10 +35,9 @@ QUICK_RUNS = 200
 POINTER = "result.robustness() runs the full set of checks, with charts"
 #: How to read the quick checks' verdicts (module docstring).
 QUICK_READING = (
-    "Passing proves nothing on its own. These checks read the run's own trades: a failure "
-    "says the edge is fragile or small next to the noise of those trades, and none of them "
-    "can see a strategy picked as the best of many tried. A check with too little to judge "
-    "says not judged and why, and never passes."
+    f"{PASSING} These checks read the run's own trades: a failure says the edge is fragile "
+    "or small next to the noise of those trades, and none of them can see a strategy picked "
+    f"as the best of many tried. {UNJUDGED}"
 )
 
 
