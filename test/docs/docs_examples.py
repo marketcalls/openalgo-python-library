@@ -29,6 +29,13 @@ a timeout, the way a reader runs a copied example (a file, so that `bt.optimize`
 processes can import it). Printed output is compared line by line, ignoring trailing
 spaces. The API key is never written to a file: the script reads it from the
 environment of the interpreter that runs it.
+
+A script that starts a live session (`bt.live(...)`, however the module or the function
+is named) or records the live feed (`bt.record(...)`) is never run, whatever the
+environment: a session would place orders through the OpenAlgo server the key reaches,
+in whichever mode its analyzer switch is, and a recording would hold that server's
+WebSocket until the close. `skip_reason` says so before any other reason, and `run`
+refuses such a script (`live_reason` lists the spellings found).
 """
 
 from __future__ import annotations
@@ -65,6 +72,30 @@ ROOT = Path(__file__).resolve().parents[2]
 # The marker printed between the blocks of one script, to split its output by block.
 SEPARATOR = "----- end of documented block -----"
 FENCE = re.compile(r"^```(\w*)\s*$")
+# A call that starts a live session or records the live feed, anywhere in a script: any
+# attribute call named `live` or `record` (`bt.live(...)`, `backtest.record(...)`, an alias
+# of the module), whatever object it is called on, so no spelling of the module escapes.
+LIVE_SESSION_CALL = re.compile(r"\.\s*live\s*\(")
+TICK_RECORDING_CALL = re.compile(r"\.\s*record\s*\(")
+# The names a script imports from `openalgo.backtest` or one of its modules (`run`
+# defines both calls), on one line or in brackets over several; a name it imports can be
+# called bare or under another name.
+BACKTEST_IMPORT = re.compile(
+    r"from\s+openalgo\.backtest(?:\.\w+)*\s+import\s+"
+    r"(?:\((?P<bracketed>[^)]*)\)|(?P<names>[^\n#]*))"
+)
+# The private live layer (`openalgo.backtest._live`), whose session and recorder the two
+# public calls wrap.
+PRIVATE_LIVE_LAYER = re.compile(r"openalgo\.backtest\._live\b")
+LIVE_SESSION_REASON = (
+    "starts a live session (bt.live), which places orders through OpenAlgo: the docs "
+    "runner never runs one, with or without an API key"
+)
+TICK_RECORDING_REASON = (
+    "records the live feed of the OpenAlgo server (bt.record), which stays connected to "
+    "its WebSocket until the close: the docs runner never runs one, with or without an "
+    "API key"
+)
 
 
 @dataclass
@@ -181,10 +212,43 @@ def collect(docs: Path, section: Path, opt_in: bool = False) -> list[Example]:
     ]
 
 
+def _imports_from_backtest(script: str, name: str) -> bool:
+    """True when `script` imports `name`, or every name, from `openalgo.backtest`."""
+    for found in BACKTEST_IMPORT.finditer(script):
+        names = found.group("bracketed") or found.group("names") or ""
+        if re.search(rf"\b{name}\b|\*", names):
+            return True
+    return False
+
+
+def live_reason(example: Example) -> str | None:
+    """Why the script of `example` must never run, whatever the environment, or None: it
+    starts a live session (LIVE_SESSION_REASON: an attribute call named `live`, an import
+    of `live` or of every name from `openalgo.backtest`, or any use of its private live
+    layer) or records the live feed (TICK_RECORDING_REASON: an attribute call named
+    `record`, or an import of `record` from `openalgo.backtest`), in any of its blocks.
+    The script's text is read as written, so a call made through a name built at run
+    time is not seen."""
+    script = "".join(example.blocks)
+    if (
+        LIVE_SESSION_CALL.search(script)
+        or PRIVATE_LIVE_LAYER.search(script)
+        or _imports_from_backtest(script, "live")
+    ):
+        return LIVE_SESSION_REASON
+    if TICK_RECORDING_CALL.search(script) or _imports_from_backtest(script, "record"):
+        return TICK_RECORDING_REASON
+    return None
+
+
 def skip_reason(example: Example, environ: Mapping[str, str] = os.environ) -> str | None:
-    """Why `example` cannot run in an environment, or None when it can: a block that
-    needs a server needs OPENALGO_API_KEY, one that needs the network needs
-    OPENALGO_DOCS_NETWORK=1."""
+    """Why `example` cannot run in an environment, or None when it can: a script that
+    starts a live session or records the live feed never runs, in any environment
+    (`live_reason`); a block that needs a server needs OPENALGO_API_KEY, one that needs
+    the network needs OPENALGO_DOCS_NETWORK=1."""
+    never = live_reason(example)
+    if never is not None:
+        return never
     if REQUIRES_SERVER in example.needs and not environ.get(API_KEY_ENV):
         return f"needs an OpenAlgo server: set {API_KEY_ENV} to run it"
     if REQUIRES_NETWORK in example.needs and environ.get(NETWORK_ENV) != "1":
@@ -212,10 +276,14 @@ def lines(text: str) -> list[str]:
 
 def run(example: Example, folder: Path, environ: Mapping[str, str] = os.environ) -> list[str]:
     """Run an example as a file in `folder`; the output of each block. Raises
-    AssertionError with the script's output when it fails."""
+    AssertionError with the script's output when it fails, and before anything runs
+    when the script starts a live session or records the live feed (`live_reason`)."""
     # `environ` holds the API key: pytest leaves this frame, and its arguments, out of
     # a failure report.
     __tracebackhide__ = True
+    never = live_reason(example)
+    if never is not None:
+        raise AssertionError(f"{example.name} {never}")
     script = folder / "example.py"
     script.write_text(example.script(), encoding="utf-8")
     environment = {**environ, "PYTHONPATH": str(ROOT), "PYTHONIOENCODING": "utf-8"}
@@ -260,6 +328,7 @@ __all__ = [
     "API_KEY_ENV",
     "CONTINUES",
     "DOCS_ENV",
+    "LIVE_SESSION_REASON",
     "NETWORK_ENV",
     "OUTPUT",
     "OUTPUT_VARIES",
@@ -267,6 +336,7 @@ __all__ = [
     "REQUIRES_NETWORK",
     "REQUIRES_SERVER",
     "RUNNABLE",
+    "TICK_RECORDING_REASON",
     "Example",
     "blocks",
     "check",
@@ -274,6 +344,7 @@ __all__ = [
     "docs_dir",
     "interpreter",
     "lines",
+    "live_reason",
     "page_examples",
     "run",
     "skip_reason",
