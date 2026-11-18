@@ -4,8 +4,9 @@ late?
 The strategy reruns on its own bars with its decided entries held 0 to `most` (2)
 strategy bars and its exits 0 to `most` (`bt.backtest(delay_entries=, delay_exits=)`,
 the kernel's `engine::delay`), every pair but (0, 0), which is the run itself: eight
-reruns by default. The engine-held stops and targets rest with the broker and are not
-held, nor are the engine's own exits.
+reruns by default. The delays are later than the run: they add to the run's own
+`delay_entries` and `delay_exits` (`own_delays`), and the note says so. The engine-held
+stops and targets rest with the broker and are not held, nor are the engine's own exits.
 
 Figures: each pair's objective over the run's, measured from the objective's break-even.
 Pass: the run with entries one bar late (and exits on time) profitable (net profit of at
@@ -81,8 +82,16 @@ def pairs(settings: Mapping[str, Any]) -> list[tuple[int, int]]:
     return [(e, x) for e in range(most + 1) for x in range(most + 1) if (e, x) != (0, 0)]
 
 
-def _family(pair: tuple[int, int]) -> Family:
-    return Family(REAL, arguments=(("delay_entries", pair[0]), ("delay_exits", pair[1])))
+def own_delays(subject: BarRun) -> tuple[int, int]:
+    """(entries, exits): the strategy bars the run itself held its decided orders."""
+    arguments = subject.result._record.arguments
+    return arguments["delay_entries"], arguments["delay_exits"]
+
+
+def _family(pair: tuple[int, int], own: tuple[int, int]) -> Family:
+    """The rerun with the delays of `pair` added to the run's `own`."""
+    entries, exits = own[0] + pair[0], own[1] + pair[1]
+    return Family(REAL, arguments=(("delay_entries", entries), ("delay_exits", exits)))
 
 
 def unjudged(subject: BarRun, settings: Mapping[str, Any], objective: Any) -> Outcome | None:
@@ -100,7 +109,8 @@ def reruns(
     judged before any rerun (`unjudged`)."""
     if unjudged(subject, settings, objective) is not None:
         return []
-    return [(_family(pair), 1) for pair in pairs(settings)]
+    own = own_delays(subject)
+    return [(_family(pair, own), 1) for pair in pairs(settings)]
 
 
 def _label(pair: tuple[int, int]) -> str:
@@ -116,8 +126,8 @@ def run(
     short = unjudged(subject, settings, objective)
     if short is not None:
         return short
-    made = pairs(settings)
-    set_ = variant_set(subject, [_family(pair) for pair in made])
+    made, own = pairs(settings), own_delays(subject)
+    set_ = variant_set(subject, [_family(pair, own) for pair in made])
     judged = made.index(JUDGED)
     if not set_.ran[judged]:
         return not_judged(
@@ -136,9 +146,10 @@ def run(
     )
     note = (
         "Each run held the strategy's decided entries and exits the strategy bars named "
-        "before they could fill; the legs' stops and targets and the engine's own exits "
-        "were not held, and an intraday order held past its session's close was refused, "
-        "as one decided at the last bar is." + set_.failure_note()
+        "before they could fill"
+        + (f", added to the run's own (entries {own[0]}, exits {own[1]})" if any(own) else "")
+        + "; the legs' stops and targets and the engine's own exits were not held, and an "
+        "intraday order held past its session's close was refused." + set_.failure_note()
     )
     labels = [_label(pair) for pair in made]
     table = labelled_table(
@@ -199,4 +210,4 @@ def _blocks(
     return ((chart,), (table,), (tiles,))
 
 
-__all__ = ["JUDGED", "SETTINGS", "pairs", "reruns", "rule", "run", "unjudged"]
+__all__ = ["JUDGED", "SETTINGS", "own_delays", "pairs", "reruns", "rule", "run", "unjudged"]

@@ -1,19 +1,23 @@
 """Liquidity (design 17, section 2.15): does it survive worse fill prices?
 
 The strategy reruns on its own bars under each fill model of `bt.backtest(fill=)` (the
-kernel's `engine::fill_model`) besides the default next open: the next base bar's close
+kernel's `engine::fill_model`) besides the run's own: the next base bar's close
 ("next_close"), its midpoint ("next_mid"), the average of its open, high, low and close
 ("next_ohlc4"), and each of them averaged with the bar after it ("next_close_2",
-"next_mid_2", "next_ohlc4_2"). A model prices the strategy's own orders, after the bar's
-stops and targets, with the run's slippage; the engine's own exits keep their prices.
+"next_mid_2", "next_ohlc4_2"); a run made on another model reruns on the next open
+("next_open") too, in place of its own (`models`). A model prices the strategy's market
+orders, after the bar's stops and targets, with the run's slippage; its resting orders,
+GTTs, the legs' stops and targets and the engine's own exits keep their prices, and the
+note says how many of the run's fills the models priced (`priced_fills`).
 
 Figures: each model's objective (and its ratio to the run's from the objective's
 break-even, when it has one) and its maximum drawdown against the run's. Pass: every
 model profitable (net profit of at least half a paisa) and no model's maximum drawdown
 deeper than `drawdown` (1.5) times the run's.
 
-Not judged when the run did not make money or has too few closed trades, or when no
-model ran.
+Not judged when the run did not make money or has too few closed trades, when no fill
+of the run was a market order of the strategy (every rerun would be the run itself), or
+when no model ran.
 
 Charts: the equity of each model, the next bar's prices and the two-bar averages in a
 group each, with the run's bold; a table by model.
@@ -44,8 +48,14 @@ from ._variant_common import (
 )
 from ._verdict import FAILED, PASSED, Outcome, not_judged
 
+#: The default fill, which a run made on a model is checked against.
+NEXT_OPEN = "next_open"
+#: The order type of the strategy's orders the fill models price (`Result.orders`).
+MARKET = "MARKET"
+
 #: What each model fills at, in words.
 MEANINGS = {
+    NEXT_OPEN: "the next bar's open",
     "next_close": "the next bar's close",
     "next_mid": "the next bar's midpoint",
     "next_ohlc4": "the next bar's average price",
@@ -78,10 +88,35 @@ def _family(model: str) -> Family:
     return Family(REAL, arguments=(("fill", model),))
 
 
+def models(subject: BarRun) -> tuple[str, ...]:
+    """The fill models the run is checked under: every model but its own fill, the next
+    open first when the run was made on another (module docstring)."""
+    own = subject.result._record.arguments["fill"]
+    return tuple(model for model in (NEXT_OPEN, *FILL_MODELS) if model != own)
+
+
+def priced_fills(result: Any) -> tuple[int, int]:
+    """(the run's fills of the strategy's market orders, which a fill model prices; all
+    its fills)."""
+    orders, fills = result.orders, result.fills
+    market = orders.loc[orders["order_type"] == MARKET, "order_id"]
+    return int(fills["order_id"].isin(market).sum()), len(fills)
+
+
 def unjudged(subject: BarRun, settings: Mapping[str, Any], objective: Any) -> Outcome | None:
     """The "not judged" outcome of the module docstring that needs no rerun, else None:
     the one source of whether the check reruns (`reruns`)."""
-    return run_unjudged(subject, settings, rule(settings, objective))
+    text = rule(settings, objective)
+    short = run_unjudged(subject, settings, text)
+    if short is None and priced_fills(subject.result)[0] == 0:
+        short = not_judged(
+            text,
+            "Nothing to judge: no fill of the run was a market order of the strategy, the "
+            "only orders the fill models price; its resting orders, GTTs, the legs' stops "
+            "and targets and the engine's own exits keep their prices under every model, "
+            "so each rerun would be the run itself.",
+        )
+    return short
 
 
 def reruns(
@@ -91,7 +126,7 @@ def reruns(
     not judged before any rerun (`unjudged`)."""
     if unjudged(subject, settings, objective) is not None:
         return []
-    return [(_family(model), 1) for model in FILL_MODELS]
+    return [(_family(model), 1) for model in models(subject)]
 
 
 def run(
@@ -102,7 +137,8 @@ def run(
     short = unjudged(subject, settings, objective)
     if short is not None:
         return short
-    set_ = variant_set(subject, [_family(model) for model in FILL_MODELS])
+    made = models(subject)
+    set_ = variant_set(subject, [_family(model) for model in made])
     ran = set_.ran
     if not ran.any():
         return not_judged(text, "No fill model ran." + set_.failure_note())
@@ -118,15 +154,18 @@ def run(
         f"maximum drawdown is {words.number(summary['deepest'])} times the run's "
         f"{words.percent(real_drawdown)}"
     )
+    priced, every = priced_fills(subject.result)
     note = (
-        "Each run filled the strategy's orders at another price of the bar after the "
-        "decision, with the run's slippage, after that bar's stops and targets; the "
-        "engine's own exits kept their prices." + set_.failure_note()
+        "Each run filled the strategy's market orders at another price of the bar after "
+        "the decision, with the run's slippage, after that bar's stops and targets. The "
+        f"fill models priced {priced} of the run's {every} fills; the others (resting "
+        "orders, GTTs, the legs' stops and targets, the engine's own exits) kept their "
+        "prices." + set_.failure_note()
     )
-    table = labelled_table(set_, ratio, model=FILL_MODELS)
+    table = labelled_table(set_, ratio, model=made)
     table.insert(table.columns.get_loc("max_drawdown") + 1, "drawdown_times", depth)
-    labels = [MEANINGS[model] for model in FILL_MODELS]
-    blocks = _blocks(subject, set_, ratio, labels, summary, name)
+    labels = [MEANINGS[model] for model in made]
+    blocks = _blocks(subject, (set_, made), ratio, labels, summary, name)
     return Outcome(PASSED if passed else FAILED, figure, text, note, table, summary, blocks)
 
 
@@ -152,14 +191,15 @@ def _summary(set_: RerunSet, depth: np.ndarray, real_drawdown: float) -> dict[st
 
 def _blocks(
     subject: BarRun,
-    set_: RerunSet,
+    ran: tuple[RerunSet, tuple[str, ...]],
     ratio: np.ndarray,
     labels: list[str],
     summary: Mapping[str, float],
     name: str,
 ) -> tuple:
-    one_bar = [k for k, model in enumerate(FILL_MODELS) if not model.endswith("_2")]
-    two_bars = [k for k, model in enumerate(FILL_MODELS) if model.endswith("_2")]
+    set_, made = ran
+    one_bar = [k for k, model in enumerate(made) if not model.endswith("_2")]
+    two_bars = [k for k, model in enumerate(made) if model.endswith("_2")]
     chart = variants_chart(
         "Equity under other fill prices",
         "The next bar's prices and the two-bar averages; the run bold",
@@ -188,4 +228,4 @@ def _blocks(
     return ((chart,), (table,), (tiles,))
 
 
-__all__ = ["MEANINGS", "SETTINGS", "reruns", "rule", "run", "unjudged"]
+__all__ = ["MEANINGS", "SETTINGS", "models", "priced_fills", "reruns", "rule", "run", "unjudged"]

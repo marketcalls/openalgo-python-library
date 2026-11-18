@@ -7,7 +7,12 @@ k = 1 to n - 1 (a 5-minute strategy on 1-minute bars has four); a daily strategy
 intraday base bars has days that end `minutes` (15, 30, 45 and 60) earlier, each a whole
 number of base bars shorter than the shortest session of the run (other minutes are left
 out, and the note says so), its decision made that much before the close with the day's
-bars so far and its later bars opening the next day's bar.
+bars so far and its later bars opening the next day's bar. Such a day opens at the
+session before's close less the shift, so its `bar.time` is on that session's date (its
+`close_time` on its own), and the run's first day starts at its session's open: the
+last minutes of the session before the run belong to no bar (the history keeps the bars
+closed before the run starts, the run builds its bars from its own sessions). The note
+says both (`DAYS_NOTE`).
 
 Figures, over the shifts that ran: the share profitable (net profit of at least half a
 paisa), and the median shifted objective over the run's, both measured from the
@@ -57,6 +62,14 @@ from ._verdict import FAILED, PASSED, Outcome, not_judged
 
 #: The strategy bars the candle charts show.
 CANDLES = 40
+#: What a daily strategy is told of its days that end earlier (module docstring).
+DAYS_NOTE = (
+    " A day that ends earlier opens at the close of the session before, less the shift, so "
+    "its bar.time is on the date of the session before (its close_time on its own date): a "
+    "rule on the date of bar.time reads the day before in these runs. The last minutes of "
+    "the session before the run belong to no bar, so the run's first day starts at its "
+    "session's open."
+)
 NANOS_PER_MINUTE = 60 * NANOS_PER_SECOND
 
 
@@ -178,10 +191,12 @@ def run(
         f"{words.whole(int(summary['shifts']), 'shift')} profitable; the median shift keeps "
         f"{words.percent(summary['ratio'])} of the run's {name} of {words.number(subject.real)}"
     )
+    daily = parse_interval(subject.result._record.strategy.interval)[0] != "intraday"
     note = (
         f"Each run rebuilt the strategy bars from the run's own {subject.bars.base} bars, "
         "every bar ending that many base bars earlier, and reran the strategy on them."
         + left_out
+        + (DAYS_NOTE if daily else "")
         + set_.failure_note()
     )
     labels = [_label(subject, shift) for shift in made]

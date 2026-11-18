@@ -20,6 +20,7 @@ until Phase 3 builds them; no other setting is accepted and then ignored
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 from dataclasses import dataclass
 from typing import Any
@@ -58,6 +59,9 @@ FILL_MODELS = (
     "next_ohlc4_2",
 )
 FILL_MODES = ("next_open", "close", *FILL_MODELS)
+#: Plan settings the robustness reruns set and no run argument does (`RunPlan.bar_shift`,
+#: `RunPlan.exit_scales`).
+RERUN_SETTINGS = ("bar_shift", "exit_scales")
 QUANTITY_MODES = ("fractional", "venue")
 RISK_BASES = ("gross", "net")
 AFTER_RISK_EXIT = ("lock_session", "allow_reentry")
@@ -116,6 +120,16 @@ class RunPlan:
     # each trade's leg-rule distances (`engine::exit_scale`).
     bar_shift: int = 0
     exit_scales: tuple[float, ...] = ()
+
+    def manifest_settings(self) -> dict[str, Any]:
+        """Every setting of the plan, for the manifest's arguments, but the robustness
+        reruns' own (`bar_shift`, `exit_scales`) at their defaults: no run argument sets
+        them, so an ordinary run's manifest does not name them."""
+        settings = {field.name: getattr(self, field.name) for field in dataclasses.fields(self)}
+        for name in RERUN_SETTINGS:
+            if not settings[name]:
+                del settings[name]
+        return settings
 
     def perturbation(self) -> dict[str, Any]:
         """What the run changes for a robustness check, as the native config's keys: none

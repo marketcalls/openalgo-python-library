@@ -57,17 +57,46 @@ class Every4(bt.Strategy):
             self.exit()
 
 
-def every4_run(block, closes=None):
-    """`Every4` on `BLOCKS` blocks of the opens `block` and one more bar; each bar's high
-    and low 1 rupee either side of its open, its close at its open unless `closes` (a
-    block of closes) says otherwise."""
+class LimitEvery4(Every4):
+    """`Every4` with resting orders: a LIMIT buy at bar 4j's close and a LIMIT sell at bar
+    4j + 2's close, each at that close."""
+
+    def on_bar(self, bar):
+        self.bar_number += 1
+        if self.bar_number % 4 == 0 and self.position.is_flat:
+            self.buy(qty=10, price=bar.close)
+        elif self.bar_number % 4 == 2 and self.position.is_long:
+            self.sell(qty=10, price=bar.close)
+
+
+class LimitInMarketOut(Every4):
+    """`Every4` with a resting LIMIT buy at bar 4j's close and a MARKET exit."""
+
+    def on_bar(self, bar):
+        self.bar_number += 1
+        if self.bar_number % 4 == 0 and self.position.is_flat:
+            self.buy(qty=10, price=bar.close)
+        elif self.bar_number % 4 == 2:
+            self.exit()
+
+
+def every4_bars(block, closes=None):
+    """`BLOCKS` blocks of the daily opens `block` and one more bar; each bar's high and low
+    1 rupee either side of its open, its close at its open unless `closes` (a block of
+    closes) says otherwise."""
     data = opens_bars(block * BLOCKS + block[:1])
     if closes is not None:
         close = np.array(closes * BLOCKS + closes[:1], dtype=float)
         data["close"] = close
         data["high"] = np.maximum(data["high"], close + 0.5)
         data["low"] = np.minimum(data["low"], close - 0.5)
-    return bt.backtest(Every4, data=data, **FREE)
+    return data
+
+
+def every4_run(block, closes=None, strategy=Every4, **settings):
+    """`strategy` (`Every4`) on `every4_bars(block, closes)`, with `settings` as run
+    arguments."""
+    return bt.backtest(strategy, data=every4_bars(block, closes), **FREE, **settings)
 
 
 # ----- delayed orders -------------------------------------------------------------------
@@ -107,6 +136,21 @@ def test_a_delay_of_one_bar_at_most_reruns_three_pairs():
     assert len(check.table) == 3
 
 
+def test_the_checks_delays_add_to_the_runs_own():
+    # A run whose entries are held a bar already buys at bar 4j + 2's open (500) and sells
+    # at bar 4j + 3's (503): +30 a trade. Entries one bar later than that run are entries
+    # held two bars, which buy at bar 4j + 3's open (503) and make nothing on the move.
+    block = [500.0, 500.0, 500.0, 503.0]
+    result = every4_run(block, delay_entries=1)
+    assert result.metrics["net_profit"] == 30.0 * BLOCKS
+    check = checked(result, "delayed")
+    late = check.table.set_index(["delay_entries", "delay_exits"]).loc[(1, 0)]
+    held_two = every4_run(block, delay_entries=2).metrics["net_profit"]
+    assert late["net_profit"] == held_two < 0
+    assert check.verdict == FAILED
+    assert "added to the run's own (entries 1, exits 0)" in check.note
+
+
 # ----- liquidity ------------------------------------------------------------------------
 
 
@@ -132,6 +176,37 @@ def test_an_edge_every_fill_price_keeps_passes():
     assert (check.table["drawdown_times"] <= 1.5).all()
     assert list(check.table["model"]) == [
         "next_close",
+        "next_mid",
+        "next_ohlc4",
+        "next_close_2",
+        "next_mid_2",
+        "next_ohlc4_2",
+    ]
+
+
+def test_a_run_whose_fills_all_keep_their_prices_is_not_judged():
+    # Every fill is a resting LIMIT order's, which keeps its price under every model: the
+    # six reruns would each be the run itself.
+    result = every4_run([500.0, 500.0, 500.0, 503.0], strategy=LimitEvery4)
+    assert result.metrics["net_profit"] == 30.0 * BLOCKS
+    check = checked(result, "liquidity")
+    assert check.verdict == NOT_JUDGED
+    assert check.note.startswith("Nothing to judge: no fill of the run was a market order")
+
+
+def test_the_note_says_how_many_fills_the_models_priced():
+    # The LIMIT buys keep their prices and the 31 MARKET exits move: 31 of 62 fills.
+    result = every4_run([500.0, 500.0, 500.0, 503.0], strategy=LimitInMarketOut)
+    check = checked(result, "liquidity")
+    assert check.verdict != NOT_JUDGED
+    assert "The fill models priced 31 of the run's 62 fills" in check.note
+
+
+def test_a_run_on_a_fill_model_is_checked_against_the_others_and_the_next_open():
+    result = every4_run([500.0, 500.0, 499.0, 503.0], fill="next_close")
+    check = checked(result, "liquidity")
+    assert list(check.table["model"]) == [
+        "next_open",
         "next_mid",
         "next_ohlc4",
         "next_close_2",
@@ -258,6 +333,19 @@ def test_a_daily_strategy_gets_days_ending_earlier_in_whole_base_bars():
     ]
     assert "Days ending 7 minutes earlier are left out" in check.note
     assert check.verdict == PASSED
+
+
+def test_a_daily_strategy_is_told_its_shifted_days_open_the_day_before():
+    data = minute_bars(rising, sessions=12, minutes=5)
+    result = bt.backtest(DailyFlip, data=data, base="5m", **FREE)
+    check = checked(result, "shifted", shifted={"min_trades": 2})
+    assert "bar.time is on the date of the session before" in check.note
+    assert "the run's first day starts at its session's open" in check.note
+
+
+def test_an_intraday_strategy_is_not_told_of_days():
+    result = bt.backtest(Flip5, data=minute_bars(rising), base="1m", **FREE)
+    assert "bar.time" not in checked(result, "shifted").note
 
 
 def test_decisions_fixed_in_advance_cannot_be_shifted():

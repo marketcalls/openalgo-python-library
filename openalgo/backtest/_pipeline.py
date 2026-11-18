@@ -304,8 +304,7 @@ def _arguments(
 ) -> dict[str, Any]:
     """Every argument of the run after defaults were resolved, for the manifest (the
     cost model by its label: it is a native object)."""
-    plan = prepared.plan
-    resolved = {field.name: getattr(plan, field.name) for field in dataclasses.fields(plan)}
+    resolved = prepared.plan.manifest_settings()
     resolved.update(
         costs=market.costs_label,
         slippage_rule=market.slippage_label,

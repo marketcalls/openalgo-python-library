@@ -78,6 +78,12 @@ def test_a_run_that_holds_its_orders_says_so_and_no_other_does():
     assert plain.assumptions["fill"] == "next_open"
 
 
+def test_the_manifest_records_the_delays_and_none_of_the_reruns_own_settings():
+    arguments = bt.backtest(BuyFirstSellThird, data=bars(), **FREE).manifest["arguments"]
+    assert (arguments["delay_entries"], arguments["delay_exits"]) == (0, 0)
+    assert "bar_shift" not in arguments and "exit_scales" not in arguments
+
+
 @pytest.mark.parametrize("value", [-1, 1.5, "1", True])
 def test_a_delay_is_a_whole_number_of_strategy_bars(value):
     with pytest.raises(ConfigError, match="delay_entries takes a whole number of strategy bars"):
