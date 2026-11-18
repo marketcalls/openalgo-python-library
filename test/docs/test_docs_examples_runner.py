@@ -191,3 +191,86 @@ def test_an_example_without_the_network_marker_keeps_the_test_python(tmp_path):
 def test_only_the_api_key_argument_is_replaced_not_the_variable_name(tmp_path):
     (example,) = examples_of(NAMED_VARIABLE_PAGE, tmp_path)
     check(example, tmp_path, environ={**os.environ, API_KEY_ENV: FAKE_KEY})
+
+
+# ----- a live session never runs --------------------------------------------------------
+
+# The file a block below leaves in its folder if it ever runs.
+LIVE_MARK = "live-session-started"
+# A stand-in for `openalgo.backtest` that only leaves the mark, so a runner without the
+# guard would show here that it ran the block, with no session and no server.
+LIVE_STAND_IN = f"""\
+from pathlib import Path
+
+
+class bt:
+    @staticmethod
+    def live(*strategies, **settings):
+        Path({LIVE_MARK!r}).touch()
+
+
+backtest = bt
+
+
+class openalgo:
+    backtest = bt
+"""
+LIVE_PAGE = f"""\
+<!-- requires-server -->
+```python
+{LIVE_STAND_IN}
+bt.live("EmaCrossover", api_key="OPENALGO_API_KEY", capital=100_000, max_daily_loss=2_000)
+```
+"""
+
+
+def test_a_server_block_that_starts_a_live_session_is_skipped_even_with_an_api_key(tmp_path):
+    (example,) = examples_of(LIVE_PAGE, tmp_path)
+    environ = {**os.environ, API_KEY_ENV: FAKE_KEY}
+    reason = skip_reason(example, environ=environ)
+    if reason is None:
+        check(example, tmp_path, environ=environ)
+    assert not (tmp_path / LIVE_MARK).exists()
+    assert "live session" in reason
+
+
+@pytest.mark.parametrize(
+    "environ",
+    [{}, {API_KEY_ENV: FAKE_KEY}, {API_KEY_ENV: FAKE_KEY, NETWORK_ENV: "1"}],
+    ids=["nothing-set", "api-key", "api-key-and-network"],
+)
+def test_the_skip_reason_of_a_live_session_is_the_same_in_every_environment(tmp_path, environ):
+    (example,) = examples_of(LIVE_PAGE, tmp_path)
+    assert "live session" in skip_reason(example, environ=environ)
+
+
+LIVE_CALLS = {
+    "bt.live": 'bt.live("EmaCrossover")',
+    "backtest.live": 'backtest.live("EmaCrossover")',
+    "a space before the bracket": 'bt.live ("EmaCrossover")',
+    "the full module path": 'openalgo.backtest.live("EmaCrossover")',
+}
+
+
+@pytest.mark.parametrize("call", LIVE_CALLS.values(), ids=LIVE_CALLS)
+def test_every_spelling_of_a_live_session_call_is_found(tmp_path, call):
+    page = f"```python\n{LIVE_STAND_IN}\n{call}\n```\n"
+    (example,) = examples_of(page, tmp_path)
+    assert "live session" in skip_reason(example, environ={})
+
+
+def test_a_live_session_call_in_a_block_that_continues_skips_the_whole_script(tmp_path):
+    page = (
+        f"```python\n{LIVE_STAND_IN}```\n\n"
+        '<!-- continues -->\n```python\nbt.live("EmaCrossover")\n```\n'
+    )
+    (example,) = examples_of(page, tmp_path)
+    assert len(example.blocks) == 2
+    assert "live session" in skip_reason(example, environ={})
+
+
+def test_running_a_live_session_script_directly_is_refused_and_nothing_runs(tmp_path):
+    (example,) = examples_of(LIVE_PAGE, tmp_path)
+    with pytest.raises(AssertionError, match="live session"):
+        run(example, tmp_path, environ={**os.environ, API_KEY_ENV: FAKE_KEY})
+    assert not (tmp_path / LIVE_MARK).exists()

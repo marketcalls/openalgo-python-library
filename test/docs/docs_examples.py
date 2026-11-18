@@ -29,6 +29,11 @@ a timeout, the way a reader runs a copied example (a file, so that `bt.optimize`
 processes can import it). Printed output is compared line by line, ignoring trailing
 spaces. The API key is never written to a file: the script reads it from the
 environment of the interpreter that runs it.
+
+A script that starts a live session (`bt.live(` or `backtest.live(` anywhere in it) is
+never run, whatever the environment: it would place orders through the OpenAlgo server
+the key reaches, in whichever mode its analyzer switch is. `skip_reason` says so before
+any other reason, and `run` refuses such a script.
 """
 
 from __future__ import annotations
@@ -65,6 +70,14 @@ ROOT = Path(__file__).resolve().parents[2]
 # The marker printed between the blocks of one script, to split its output by block.
 SEPARATOR = "----- end of documented block -----"
 FENCE = re.compile(r"^```(\w*)\s*$")
+# A call that starts a live session, as the docs write it (`bt.live(...)`, or through the
+# module name `backtest`), anywhere in a script; matched without a word boundary, so a
+# longer name that ends in one of them is refused too.
+LIVE_SESSION_CALL = re.compile(r"(?:bt|backtest)\.live\s*\(")
+LIVE_SESSION_REASON = (
+    "starts a live session (bt.live), which places orders through OpenAlgo: the docs "
+    "runner never runs one, with or without an API key"
+)
 
 
 @dataclass
@@ -181,10 +194,18 @@ def collect(docs: Path, section: Path, opt_in: bool = False) -> list[Example]:
     ]
 
 
+def starts_live_session(example: Example) -> bool:
+    """True when the script of `example` calls `bt.live` (or `backtest.live`) anywhere,
+    in any of its blocks."""
+    return LIVE_SESSION_CALL.search("".join(example.blocks)) is not None
+
+
 def skip_reason(example: Example, environ: Mapping[str, str] = os.environ) -> str | None:
-    """Why `example` cannot run in an environment, or None when it can: a block that
-    needs a server needs OPENALGO_API_KEY, one that needs the network needs
-    OPENALGO_DOCS_NETWORK=1."""
+    """Why `example` cannot run in an environment, or None when it can: a script that
+    starts a live session never runs, in any environment; a block that needs a server
+    needs OPENALGO_API_KEY, one that needs the network needs OPENALGO_DOCS_NETWORK=1."""
+    if starts_live_session(example):
+        return LIVE_SESSION_REASON
     if REQUIRES_SERVER in example.needs and not environ.get(API_KEY_ENV):
         return f"needs an OpenAlgo server: set {API_KEY_ENV} to run it"
     if REQUIRES_NETWORK in example.needs and environ.get(NETWORK_ENV) != "1":
@@ -212,10 +233,13 @@ def lines(text: str) -> list[str]:
 
 def run(example: Example, folder: Path, environ: Mapping[str, str] = os.environ) -> list[str]:
     """Run an example as a file in `folder`; the output of each block. Raises
-    AssertionError with the script's output when it fails."""
+    AssertionError with the script's output when it fails, and before anything runs
+    when the script starts a live session (`starts_live_session`)."""
     # `environ` holds the API key: pytest leaves this frame, and its arguments, out of
     # a failure report.
     __tracebackhide__ = True
+    if starts_live_session(example):
+        raise AssertionError(f"{example.name} {LIVE_SESSION_REASON}")
     script = folder / "example.py"
     script.write_text(example.script(), encoding="utf-8")
     environment = {**environ, "PYTHONPATH": str(ROOT), "PYTHONIOENCODING": "utf-8"}
@@ -260,6 +284,7 @@ __all__ = [
     "API_KEY_ENV",
     "CONTINUES",
     "DOCS_ENV",
+    "LIVE_SESSION_REASON",
     "NETWORK_ENV",
     "OUTPUT",
     "OUTPUT_VARIES",
@@ -277,4 +302,5 @@ __all__ = [
     "page_examples",
     "run",
     "skip_reason",
+    "starts_live_session",
 ]
