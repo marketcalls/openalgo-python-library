@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import datetime as dt
 import errno
+import inspect
 import time
 
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
-from recorder_fakes import DAY, IST, SBIN, Clocks, FakeFeed, Script, ist_ns, quote, raw_files
+from recorder_fakes import DAY, SBIN, Clocks, FakeFeed, Script, ist_ns, quote, raw_files
 
 import openalgo.backtest as bt
 from openalgo.backtest._live import _record_verb
@@ -163,10 +164,19 @@ class Recorder:
         return type("Summary", (), {"stopped_by": Stop.STOP_AT})()
 
 
+def morning() -> int:
+    """The wall clock as `bt.record` reads its start in these tests: 10:00:00 IST on DAY, a
+    trading day, before its close whatever the time the tests run at."""
+    return ist_ns(START)
+
+
 @pytest.fixture
 def recorder(monkeypatch):
+    """The recorder stood in, and `record_day`'s wall clock (`time.time_ns` by default,
+    `test_record_day_runs_on_the_wall_clock_and_a_monotonic_one`) read as `morning`."""
     stand_in = Recorder()
     monkeypatch.setattr(_record_verb, "record", stand_in)
+    monkeypatch.setitem(_record_verb.record_day.__kwdefaults__, "now", morning)
     return stand_in
 
 
@@ -185,13 +195,21 @@ def test_bt_record_closes_its_own_client_and_leaves_the_users_open(fake_openalgo
     assert client.client.is_closed and not user.client.is_closed
 
 
-def test_bt_record_runs_on_the_wall_clock_until_the_time_given(fake_openalgo, recorder):
+def test_record_day_runs_on_the_wall_clock_and_a_monotonic_one():
+    clocks = inspect.signature(_record_verb.record_day).parameters
+    assert (clocks["now"].default, clocks["monotonic"].default) == (
+        time.time_ns,
+        time.monotonic_ns,
+    )
+
+
+def test_bt_record_runs_on_record_days_clocks_until_the_time_given(fake_openalgo, recorder):
+    # The start comes from record_day's clock, pinned to the morning here: read from the
+    # real wall clock, an until of 15:30 is refused when the tests run after 15:30 IST.
     bt.record(fake_openalgo.client(), [SBIN], mode="ltp", until="15:30")
     [(_, keywords)] = recorder.calls
-    today = dt.datetime.now(IST).date()
-    stop_at = dt.datetime.combine(today, dt.time(15, 30), tzinfo=IST).timestamp() * 10**9
-    assert (keywords["now"], keywords["monotonic"]) == (time.time_ns, time.monotonic_ns)
-    assert (keywords["mode"], keywords["stop_at_ns"]) == ("ltp", round(stop_at))
+    assert (keywords["now"], keywords["monotonic"]) == (morning, time.monotonic_ns)
+    assert (keywords["mode"], keywords["stop_at_ns"]) == ("ltp", ist_ns("15:30:00"))
 
 
 def test_bt_record_refuses_a_client_that_is_not_an_openalgo_client(recorder):
