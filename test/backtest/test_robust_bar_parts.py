@@ -307,6 +307,16 @@ def test_trades_that_do_not_fit_are_named():
     assert plan.slack("SBIN") == -1 and plan.unplaced() == ["SBIN"]
 
 
+@pytest.mark.parametrize(("hold", "slack"), [(4, -1), (5, -2)])
+def test_a_schedule_of_trades_that_do_not_fit_is_refused(hold, slack):
+    from openalgo.backtest.errors import ConfigError
+
+    plan = EntryPlan((Trade("SBIN", "BUY", 1, "CNC", hold),), {"SBIN": np.arange(5)})
+    assert plan.slack("SBIN") == slack
+    with pytest.raises(ConfigError, match="the trades of SBIN do not fit among its 5"):
+        schedule(plan, seed=1, run=0)
+
+
 def test_the_entry_plan_holds_the_runs_trades_with_their_holding_times():
     result = edge_run()
     plan = entry_plan(result.trade_list(), {"SBIN": np.arange(10)})

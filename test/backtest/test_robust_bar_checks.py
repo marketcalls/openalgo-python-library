@@ -304,6 +304,53 @@ def test_versus_random_shares_the_permutation_tests_runs():
     np.testing.assert_array_equal(permuted, report.check("permutation").table["objective"])
 
 
+class TargetInsideTheBar(bt.Strategy):
+    """Buys 10 shares when flat with a target half a rupee above its fill: on the edge
+    bars each trade reaches it inside its entry bar (held 0 bars, placed as 1) and the
+    next long is decided at that bar's close, so its 121 trades, each with the bar a long
+    waits after the one before, need about twice the run's 122 strategy bars."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "D"
+
+    def on_bar(self, bar):
+        if self.position.is_flat:
+            self.buy(qty=10, target=bt.points(0.5))
+
+
+class StopInsideTheBar(TargetInsideTheBar):
+    """`TargetInsideTheBar` with a stop half a rupee below the fill instead: every trade
+    loses inside its entry bar."""
+
+    def on_bar(self, bar):
+        if self.position.is_flat:
+            self.buy(qty=10, stop=bt.points(0.5))
+
+
+@pytest.mark.parametrize("checks", [["vs_random"], ["vs_random", "permutation"]])
+def test_random_entries_that_do_not_fit_are_left_out_and_the_report_goes_on(checks):
+    result = bt.backtest(TargetInsideTheBar, data=bars(steps_for(EDGE_MOVES, 60)), **FREE)
+    lines = []
+    report = result.robustness(checks=checks, workers=1, runs=5, progress=lines.append)
+    check = report.check("vs_random")
+    assert set(check.table["family"]) == {"permuted"}
+    assert (
+        " Random entries are left out: the trades of SBIN do not fit among its strategy bars "
+        "of the run."
+    ) in check.note
+    # The plan counts the runs of the families that can run, and times one of them.
+    assert "vs_random 5" in lines[0] and "A rerun on generated bars took" in lines[0]
+
+
+def test_a_losing_run_whose_random_entries_do_not_fit_has_no_edge_to_judge():
+    # No check reruns a run that did not make money, so the plan times no generated rerun.
+    result = bt.backtest(StopInsideTheBar, data=bars(steps_for(EDGE_MOVES, 60)), **FREE)
+    lines = []
+    report = result.robustness(checks=["vs_random"], workers=1, runs=5, progress=lines.append)
+    check = report.check("vs_random")
+    assert check.verdict == NOT_JUDGED and check.note.startswith("No edge to judge")
+    assert "A rerun on the run's own bars took" in lines[0]
+
+
 def test_the_versus_random_section_has_a_table_by_family(edge):
     rows = checked(edge, "vs_random", runs=5)._blocks["vs_random"]
     (table,) = rows[1]
@@ -642,6 +689,13 @@ def test_stress_on_symbols_with_a_missing_bar_judges_its_noisy_candidates(missin
     check = checked(missing_bar, "stress", stress=stress).check("stress")
     assert check.verdict == PASSED and check.summary["candidates"] == 10
     assert f"Permuted candidates are left out: {GRID}" in check.note
+
+
+def test_the_plan_counts_no_permuted_candidate_of_symbols_with_a_missing_bar(missing_bar):
+    lines = []
+    stress = {"noise_candidates": 10, "permutation_candidates": 10}
+    missing_bar.robustness(checks=["stress"], workers=1, stress=stress, progress=lines.append)
+    assert "rerun the backtest 10 times or fewer" in lines[0] and "(stress 10)" in lines[0]
 
 
 def test_a_full_report_on_symbols_with_a_missing_bar_keeps_every_check(missing_bar):

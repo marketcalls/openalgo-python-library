@@ -24,7 +24,7 @@ whose decision can fill (every strategy bar of the run but the last), holding ti
 to h_n and w neighbours of one direction, the slack S = U - 1 - (h_1 + ... + h_n) - w is
 cut at n points drawn uniformly from 0 to S and sorted, which leaves the n + 1 gaps
 before, between and after the trades. Trades that do not fit (S below 0) cannot be
-placed, and the check says so.
+placed: the check leaves random entries out and says so, and `schedule` refuses them.
 
 The random strategy is the run's own strategy class with its decisions replaced: it
 keeps the class's settings (product, sizing caps, risk rules, entry window, square-off),
@@ -46,6 +46,7 @@ from typing import Any
 import numpy as np
 
 from .._arrays import MADE_BY
+from ..errors import ConfigError
 from ..strategy import CALLBACKS, Strategy
 from . import _random
 
@@ -138,7 +139,16 @@ def _drawn(trades: Sequence[Trade], keys: np.ndarray) -> list[Trade]:
 
 def schedule(plan: EntryPlan, seed: int, run: int) -> dict[int, tuple[Action, ...]]:
     """Run `run` of the stream `seed`: the decisions of the random strategy by the UTC
-    nanosecond close they are made at (module docstring), exits before entries."""
+    nanosecond close they are made at (module docstring), exits before entries. Raises
+    ConfigError for a plan whose trades do not fit (`EntryPlan.unplaced`)."""
+    unplaced = plan.unplaced()
+    if unplaced:
+        symbol = unplaced[0]
+        raise ConfigError(
+            f"Random entries cannot be placed: the trades of {symbol} do not fit among its "
+            f"{len(plan.closes[symbol])} strategy bars of the run ({-plan.slack(symbol)} "
+            "short); leave out the random entries of a plan whose unplaced() names a symbol."
+        )
     draws = _random.block(seed, run, 1, 2 * len(plan.trades))[0]
     exits: dict[int, list[Action]] = {}
     entries: dict[int, list[Action]] = {}

@@ -10,9 +10,9 @@ The plan says what will run, on how many closed trades, which checks are not bui
 this version, and what reruns the bar checks plan. It is reported through `progress` (a
 function taking one line of text) or, without one, the `openalgo.backtest.robustness`
 logger at INFO, before any check runs, with how long the backtest took when the report
-ran it and an estimate of the reruns from a first rerun on the run's own bars. The report
-keeps the plan without those times and the worker count, so the same run and seed give
-the same page.
+ran it and an estimate of the reruns timed on one rerun (`_bar_setup`). The report keeps
+the plan without those times and the worker count, so the same run and seed give the
+same page.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from .._messages import counted
 from ..errors import ConfigError
 from . import _random
 from . import _words as words
-from ._bar_setup import BarContext, bar_context, plan_words, planned, timing_words
+from ._bar_setup import BarContext, bar_context, plan_words, timing_words
 from ._registry import CHECKS, CheckSpec
 from ._report import RobustnessReport, RunFacts
 from ._request import Request
@@ -78,12 +78,11 @@ def plan_text(
 ) -> str:
     """The plan of the checks (module docstring), without times or the worker count."""
     names = [check.name for check in request.to_run]
-    counts, shared = planned(request)
     text = (
         f"bt.robustness: {counted(len(names), 'check')} of {len(CHECKS)} for {strategy} "
         f"({', '.join(names)}), {words.whole(request.runs, 'run')} each from seed "
         f"{request.seed}, on {words.whole(trades.closed, 'closed trade')} over "
-        f"{words.whole(len(trades.sessions), 'session')}. {plan_words(counts, shared, context)}"
+        f"{words.whole(len(trades.sessions), 'session')}. {plan_words(context)}"
     )
     later = [check.name for check in request.listed if not check.built]
     if later:
@@ -112,12 +111,11 @@ def _facts(result: Any, trades: TradeRun) -> RunFacts:
     )
 
 
-def _timed(plan: str, seconds: float | None, request: Request, context: BarContext | None) -> str:
+def _timed(plan: str, seconds: float | None, context: BarContext | None) -> str:
     """The plan as reported: with the backtest's duration and the reruns' estimate."""
     timed = plan if seconds is None else f"{plan} The backtest took {seconds:.2f} s."
     if context is not None:
-        counts, shared = planned(request)
-        timed += timing_words(counts, shared, context)
+        timed += timing_words(context)
     return timed
 
 
@@ -138,11 +136,10 @@ def assess(
     facts = _facts(result, trades)
     context = None
     if request.reruns:
-        counts, shared = planned(request)
-        context = bar_context(result, request, trades, sum(counts.values()) - shared)
+        context = bar_context(result, request, trades)
         trades = dataclasses.replace(trades, prices=context.bars.session_closes(trades.sessions))
     plan = plan_text(facts.strategy, request, trades, context)
-    (progress or LOGGER.info)(_timed(plan, seconds, request, context))
+    (progress or LOGGER.info)(_timed(plan, seconds, context))
     closing = context.reruns if context is not None else contextlib.nullcontext()
     with closing:
         checked = []
