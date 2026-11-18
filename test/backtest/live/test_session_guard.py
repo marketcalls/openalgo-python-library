@@ -15,9 +15,10 @@ import logging
 
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
+from session_invariants import InvariantBroken, assert_session_invariants
 from session_samples import NS, BuyAndHold, alerts, ist, rig
 
-from openalgo.backtest._live._session_loop import StopFlag
+from openalgo.backtest._live._session_loop import Session, StopFlag
 from openalgo.backtest._live._types import LOGGER_NAME, Mode
 
 #: The calls that send an order or read the session's books.
@@ -62,6 +63,23 @@ def test_F35_after_the_switch_flips_to_sandbox_nothing_is_sent_or_read(world, ca
     assert "mode breach" in outcome.open_positions[0].note
     assert alerts(caplog, "mode_breach")
     assert any("SBIN NSE 10 units" in text for text in alerts(caplog, "error"))
+
+
+def test_F35_a_book_read_in_the_instant_of_the_guard_lock_breaks_the_invariants(world, monkeypatch):
+    # Finding 3 of unit 14 round 1: a read at the very instant the guard locked (the same
+    # time on the manual clock) is found by the fake log's order, not missed by its time.
+    locked = Session.guard_locked
+
+    def read_then_lock(session, breach):
+        session.parts.clients.guard.positionbook()
+        locked(session, breach)
+
+    monkeypatch.setattr(Session, "guard_locked", read_then_lock)
+    world.script.at(ist(14, 43, 30), lambda: world.fake.set_analyzer(True))
+    world.stop_at(ist(14, 47))
+    world.run(BuyAndHold)
+    with pytest.raises(InvariantBroken, match="calls after the guard lock"):
+        world.trace.check_now(assert_session_invariants)
 
 
 def test_F35_a_session_locked_by_the_guard_ends_at_the_close_plus_its_grace(world):

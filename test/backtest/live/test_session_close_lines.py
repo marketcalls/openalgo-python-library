@@ -153,7 +153,9 @@ def stop_cancelled_after_the_line(world):
     # After the last lines the session sends nothing they did not name (3.3 step 5 "As
     # built"): the leg ends with no stop, named by the ERROR alert, which the session
     # invariants take instead of a stop (16-session-design 7.1).
-    world.trace.leave_unprotected("StopHold", "a stop cancelled after the last lines")
+    world.trace.left_unprotected_by_decision(
+        "StopHold", "3.3 step 5 As built: a stop cancelled after the last lines"
+    )
     return world
 
 
@@ -315,7 +317,9 @@ def stop_put_back_at_ctrl_c(world):
     world.lines = TimedLines(world.fake.clock)
     # The stop held back at the last lines is not sent after them (3.3 step 5 "As
     # built"): the leg ends with no stop, named by its line and the ERROR alert.
-    world.trace.leave_unprotected("RestsAnEntry", "a stop held back at the last lines")
+    world.trace.left_unprotected_by_decision(
+        "RestsAnEntry", "3.3 step 5 As built: a stop held back at the last lines"
+    )
     return world
 
 

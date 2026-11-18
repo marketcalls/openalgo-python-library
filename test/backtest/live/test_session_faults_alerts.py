@@ -54,6 +54,12 @@ def holding(texts: list[str], words: str) -> list[str]:
     return [text for text in texts if words in text]
 
 
+def times(texts: list[str], words: str) -> int:
+    """How many times `words` stand in `texts`: routine alerts that wait together leave in
+    one post, so a post can hold an alert twice."""
+    return sum(text.count(words) for text in texts)
+
+
 class StopRoundTrip(StopHold):
     """StopHold that exits at its fourth decision (14:45:01)."""
 
@@ -69,7 +75,7 @@ def test_F31_the_entry_alert_names_the_fill_once_though_its_word_came_twice(worl
     world.run(StopRoundTrip)
     entry = world.orders()[0].order_id
     words = f"BUY 10 SBIN NSE at 500.00 (entry, order {entry})"
-    assert len(holding(sent(world, AlertKind.ENTRY), words)) == 1
+    assert times(sent(world, AlertKind.ENTRY), words) == 1
 
 
 def test_F09_the_exit_alert_names_the_exit_that_filled_after_a_rate_limited_try(world):
@@ -78,7 +84,7 @@ def test_F09_the_exit_alert_names_the_exit_that_filled_after_a_rate_limited_try(
     exit_order = world.orders()[-1].order_id
     # The strategy's exit() is sent as the engine's risk exit of the position.
     words = f"SELL 10 SBIN NSE at 500.00 (risk_exit, order {exit_order})"
-    assert len(holding(sent(world, AlertKind.EXIT), words)) == 1
+    assert times(sent(world, AlertKind.EXIT), words) == 1
 
 
 class Trails(bt.Strategy):
@@ -122,7 +128,7 @@ def test_F35_the_mode_breach_alert_says_the_switch_changed_and_nothing_more_is_s
     world.trace.leave_unprotected("StopRoundTrip", "F35")
     breach = sent(world, AlertKind.MODE_BREACH)
     words = "OpenAlgo's analyzer switch changed during the session: it started in LIVE mode"
-    assert len(holding(breach, words)) == 1
+    assert times(breach, words) == 1
     assert holding(breach, "The session sends nothing more.") != []
     assert outcome.open_positions[0].stop_confirmed is False
     assert world.fake.orders(Mode.LIVE)[1].status == "trigger pending"
@@ -146,7 +152,7 @@ def test_F48_the_reconciliation_mismatch_alert_names_both_figures(world):
     world.run(StopHold, on_stop="keep")
     words = "StopHold SBIN NSE: the engine holds 10 units, OpenAlgo's books show 20"
     mismatch = holding(sent(world, AlertKind.RECONCILE_MISMATCH), words)
-    assert len(mismatch) == 1
+    assert times(mismatch, words) == 1
     assert "Entries of the strategy are locked for the rest of the session" in mismatch[0]
 
 
@@ -160,14 +166,14 @@ def test_F40_the_feed_dead_alert_says_entries_are_locked_and_quotes_watch_the_po
         "a whole minute again; REST quotes of SBIN NSE every 2 s keep the targets and the "
         "daily loss watched"
     )
-    assert len(holding(sent(world, AlertKind.FEED_DEAD), words)) == 1
+    assert times(sent(world, AlertKind.FEED_DEAD), words) == 1
 
 
 def test_F29_the_daily_summary_comes_last_with_the_days_figures(world):
     world.fake.faults.silence_order_updates()
     world.run(StopRoundTrip)
     summaries = holding(sent(world, AlertKind.DAILY_SUMMARY), "Session of 2026-11-16 (IST)")
-    assert len(summaries) == 1
+    assert times(summaries, "Session of 2026-11-16 (IST)") == 1
     text = summaries[0]
     assert f"{PREFIX.format(name='StopRoundTrip')}Session of 2026-11-16 (IST): LIVE mode" in text
     assert "Trades      : 1 closed" in text

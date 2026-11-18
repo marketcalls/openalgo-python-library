@@ -13,8 +13,9 @@ session runs on the test's thread and nothing waits for real. Nothing contacts a
 Every rig records its fake's order changes and session runs (`Rig.trace`, `session_trace`),
 and the session invariants of 16-session-design 7.1 run over them when the test ends
 (`session_invariants`): every session test is checked. A test whose row leaves a leg
-unprotected says so (`trace.leave_unprotected`); one that opts out says why
-(`trace.opt_out`).
+unprotected says so (`trace.leave_unprotected`, or `trace.left_unprotected_by_decision`
+for a decided end); one whose session cannot keep a check waives that check alone and says
+why (`trace.waive`).
 
 Expected values come from the fake's books and the scenario, never from the session's
 code.

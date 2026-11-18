@@ -23,6 +23,13 @@ flat or 0 mismatches unqualified, it lists the leg at the earlier comparison's f
 by the fill when there was one, and one WARNING alert (logged at WARNING level, as a
 RECONCILE_MISMATCH alert) tells the operator to check OpenAlgo's position book. Nothing is
 sent. Expected values come from the scenario and the fake's books.
+
+Each case with units sold by hand ends with the session's stop for 10 filled against the 6
+left, taking the account short 4: the session invariants' third check (never the other
+side, 16-session-design 7.1) breaks there. The cases carry it as a known break
+(`session_invariants.known_break`), checked at each test's end, until the lead decides
+between cutting the stop at the first comparison that shows the sale and listing the
+exemption in 7.1 and 5.3 (unit 14 round 1).
 """
 
 from __future__ import annotations
@@ -32,6 +39,7 @@ from typing import Any
 
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
+from session_invariants import OVERSOLD_AFTER_A_SALE_BY_HAND, known_break, then_the_invariants
 from session_samples import alerts, ist
 from stops_samples import (
     StopHold,
@@ -120,9 +128,15 @@ def leg_warnings(caplog: Any) -> list[str]:
     return [text.split(": ", 1)[1] for text in named]
 
 
-#: Each case: the seam, the units sold by hand, and whether the order stream is held.
+#: Each case: the seam, the units sold by hand, and whether the order stream is held. A
+#: case with units sold by hand ends with the stop for 10 filled against the 6 left, the
+#: account short 4: a known break of the session invariants (`known_break`).
 CASES = [
-    pytest.param((seam, sold, held), id=f"{seam}, sold {sold}, stream {name}")
+    pytest.param(
+        (seam, sold, held),
+        id=f"{seam}, sold {sold}, stream {name}",
+        marks=known_break(OVERSOLD_AFTER_A_SALE_BY_HAND) if sold else (),
+    )
     for seam in ("inline", "threads")
     for sold in (0, 4)
     for held, name in ((False, "live"), (True, "held"))
@@ -145,6 +159,7 @@ def test_the_stop_fills_inside_the_read_and_the_account_ends_at_what_was_not_sol
     stops = [(o.quantity, o.status) for o in world.orders() if o.price_type == "SL-M"]
     assert stops == [(StopHold.qty, "complete")]
     assert world.fake.position("SBIN", "NSE") == -world.sold
+    then_the_invariants(filled_inside.trace)
 
 
 @pytest.mark.parametrize("filled_inside", CASES, indirect=True)
@@ -153,6 +168,7 @@ def test_the_close_lists_the_leg_at_what_openalgos_books_hold_after_the_fill(fil
     outcome = run(world)
     assert [p.units for p in outcome.open_positions] == ([-world.sold] if world.sold else [])
     assert outcome.summary.flat is (world.sold == 0)
+    then_the_invariants(filled_inside.trace)
 
 
 @pytest.mark.parametrize("filled_inside", CASES, indirect=True)
@@ -166,6 +182,7 @@ def test_the_daily_summary_names_what_the_read_after_the_fill_showed(filled_insi
     named = "at the close: StopHold SBIN NSE -4 units in OpenAlgo's books, the engine's 0"
     assert lines["Reconcile"] == f"1 mismatch ({named})"
     assert lines["End state"] == f"not flat: a position is still open ({named})"
+    then_the_invariants(filled_inside.trace)
 
 
 @pytest.mark.parametrize("filled_inside", CASES, indirect=True)
@@ -178,12 +195,14 @@ def test_a_fill_inside_the_read_is_no_difference_of_that_read(filled_inside, cap
     else:
         assert after_the_sale == []
     assert leg_warnings(caplog) == []
+    then_the_invariants(filled_inside.trace)
 
 
 @pytest.mark.parametrize("filled_inside", CASES, indirect=True)
 def test_nothing_is_sent_once_the_stop_filled_inside_the_read(filled_inside):
     outcome = run(filled_inside)
     assert handed_after_the_final_read(outcome) == []
+    then_the_invariants(filled_inside.trace)
 
 
 # ----- the close's second read brings no books: no read judged the leg after its fill ----
@@ -221,6 +240,7 @@ def test_a_leg_no_read_judged_after_its_fill_is_listed_at_the_earlier_figure_mov
         "OpenAlgo's books against the engine's 0, and the session ended before they agreed: "
         f"nothing was sent for the difference; not confirmed, since {WHY}"
     ) in left.note
+    then_the_invariants(unjudged.trace)
 
 
 @pytest.mark.parametrize("unjudged", UNJUDGED, indirect=True)
@@ -242,6 +262,7 @@ def test_the_daily_summary_never_calls_a_leg_no_read_judged_after_its_fill_flat_
         named = f"at the close: StopHold SBIN NSE the engine's 0 units, not confirmed, since {WHY}"
         assert lines["Reconcile"] == f"0 mismatches ({named})"
         assert lines["End state"] == f"flat ({named})"
+    then_the_invariants(unjudged.trace)
 
 
 @pytest.mark.parametrize("unjudged", UNJUDGED, indirect=True)
@@ -265,12 +286,14 @@ def test_one_warning_alert_asks_to_check_openalgos_position_book(unjudged, caplo
         and "position book" in record.getMessage()
     ]
     assert warned == ["WARNING"]
+    then_the_invariants(unjudged.trace)
 
 
 @pytest.mark.parametrize("unjudged", UNJUDGED, indirect=True)
 def test_nothing_is_sent_for_a_leg_no_read_judged_after_its_fill(unjudged):
     outcome = run(unjudged)
     assert handed_after_the_final_read(outcome) == []
+    then_the_invariants(unjudged.trace)
 
 
 # ----- part of the stop fills inside the read, and no read judges the leg after it --------

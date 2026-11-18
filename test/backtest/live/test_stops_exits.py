@@ -23,6 +23,7 @@ from stops_samples import (
     OPTION,
     OPTION_LOT,
     STOP_POINTS,
+    STOP_TRIGGER,
     OptionHold,
     StopHold,
     TargetHold,
@@ -108,7 +109,13 @@ def test_F21_a_stop_that_fills_while_its_cancel_is_sent_closes_the_leg_with_no_e
     outcome = world.run(TargetHold)
 
     assert sells(world) == [(10, "SL-M", "complete")]
-    assert len(calls_of(world, "cancelorder")) == 1
+    (cancel,) = calls_of(world, "cancelorder")
+    stop = next(o for o in world.orders() if o.price_type == "SL-M")
+    reads = [
+        c for c in calls_of(world, "orderstatus")
+        if c.detail["request"]["orderid"] == stop.order_id and c.ts_ns >= cancel.ts_ns
+    ]  # fmt: skip
+    assert len(reads) == 1
     assert world.fake.position("SBIN", "NSE") == 0
     assert outcome.open_positions == ()
     check_invariants(world.timeline, strategy="TargetHold")
@@ -181,11 +188,46 @@ def test_F67_a_cancel_refused_while_the_login_is_expired_leaves_the_stop_working
     exit_ = world.orders()[-1]
     assert sells(world) == [(10, "SL-M", "cancelled"), (10, "MARKET", "complete")]
     assert exit_.placed_ns > ist(14, 45)
+    # OpenAlgo answers the cancel with the broker's error (HTTP 500), not a refusal the
+    # retry delays of a 429 apply to (F66): the session reads the order instead, alerts
+    # after the third read fails, and cancels again once a read after the restore shows
+    # the stop working.
+    cancels = [(c.ts_ns, c.detail["status"]) for c in calls_of(world, "cancelorder")]
+    assert [status for _, status in cancels] == [500, 200]
+    assert ist(14, 44, 5) <= cancels[0][0] < ist(14, 45) <= cancels[1][0] < exit_.placed_ns
+    reads = [
+        c.ts_ns for c in calls_of(world, "orderstatus")
+        if c.detail["request"]["orderid"] == stop.order_id
+        and cancels[0][0] < c.ts_ns < ist(14, 45)
+    ]  # fmt: skip
+    assert len(reads) >= 3
     assert any(
-        stop.order_id in text and "not confirmed" in text for text in alerts(caplog, "error")
+        stop.order_id in text and "not confirmed after 3 reads" in text
+        for text in alerts(caplog, "error")
     )
     assert world.fake.position("SBIN", "NSE") == 0
     check_invariants(world.timeline, strategy="TargetHold")
+
+
+def test_F67_a_stop_that_fills_while_the_login_is_expired_is_found_after_the_restore(world):
+    # Unit 14 round 1, finding 7: while the login is expired the stop's fill sends no word
+    # on the order stream (16-session-design 7.3) and every read is refused, so only a read
+    # once the login is restored finds it: the stop's own fill, no exit, nothing adopted.
+    world.script.at(ist(14, 43), world.fake.faults.expire_session)
+    at_price(world, ist(14, 43, 10), STOP_TRIGGER - 1)
+    world.script.at(ist(14, 44), world.fake.faults.restore_session)
+    world.stop_at(ist(14, 46))
+    outcome = world.run(StopHold, on_stop="keep")
+
+    stop = next(o for o in world.orders() if o.price_type == "SL-M")
+    assert sells(world) == [(10, "SL-M", "complete")]
+    lost = [e.detail["orderid"] for e in world.fake.log.of("order_update", "lost")]
+    assert stop.order_id in lost
+    (fill,) = [e for e in events(outcome, "fill") if e["order_id"] == stop.order_id]
+    assert fill["ts_ns"] >= ist(14, 44)
+    assert events(outcome, "adopted") == []
+    assert world.fake.position("SBIN", "NSE") == 0
+    assert outcome.open_positions == ()
 
 
 def test_F83_a_cancel_whose_answer_is_lost_is_settled_by_a_read_and_exits(world):
@@ -509,7 +551,9 @@ def test_a_reminder_of_an_exit_that_failed_every_attempt_names_the_stop_placed_a
     # at the safe stop's reminder: a sale by hand might sell beside it. The session ends
     # with that stop still unanswered, so it cannot confirm the leg protected, as the
     # reminder says: the session invariants take that instead of a confirmed stop.
-    world.trace.leave_unprotected("StopHold", "a stop placed again with its answer lost")
+    world.trace.left_unprotected_by_decision(
+        "StopHold", "3.3 step 4 and F74: a stop placed again with its answer lost"
+    )
 
     def refuse_five():
         for _ in range(EXIT_ATTEMPTS):
@@ -592,6 +636,8 @@ def test_F45_the_daily_loss_on_ticks_exits_mid_bar_and_locks_entries(world):
     assert world.fake.position("SBIN", "NSE") == 0
     reasons = outcome.outputs["BuysWhenFlat"]["trades"]["exit_reason"]
     assert reasons == ["daily_loss_limit"]
+    codes = [code for code in outcome.outputs["BuysWhenFlat"]["orders"]["reject_code"] if code]
+    assert codes[0] == "daily_loss_gate"
     check_invariants(world.timeline, strategy="BuysWhenFlat")
 
 

@@ -33,6 +33,7 @@ from typing import Any
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from session_samples import alerts, ist
+from session_trace import ANSWERED
 from stops_samples import StopHold, ctrl_c_at_the_first_sighting, sold_by_hand, stop_world
 from test_session_close_lines import LinesThen
 from test_session_threads import alone, passing, run_threaded  # noqa: F401
@@ -46,6 +47,9 @@ LEFT = StopHold.qty - SOLD
 #: Seconds the final read's position-book call takes in the slow cases: past the close's
 #: 5 s wait for that read (`_session_close.FINAL_READ_WAIT_S`).
 SLOW_BOOK_S = 8.0
+#: Why a test's cut of the stop has no answer when the session ends, which the session
+#: invariants take instead of an answered modify (16-session-design 3.3 step 5 "As built").
+CUT_UNANSWERED = "3.3 step 5 As built: the stop's cut is not sent or not answered by the close"
 #: The end of a note whose confirmed stop covers the whole position.
 PROTECTS = "it protects the position, so cancel the stop before any sale by hand"
 #: How a line names the broker's units the exit guard knows of the leg.
@@ -180,14 +184,15 @@ def test_a_leg_the_guard_holds_at_the_close_is_one_error_alert_naming_both_figur
 
 def cut_held(world: Any, monkeypatch: Any) -> None:
     """The exit guard keeps the stop's cut after the last lines."""
-    del world
     monkeypatch.setattr(ExitGuard, "_takes_away", lambda guard, request: False)
+    world.trace.waive(ANSWERED, CUT_UNANSWERED)
 
 
 def cut_dropped(world: Any, monkeypatch: Any) -> None:
     """The stop's cut loses its connection (the session's first modify)."""
     del monkeypatch
     world.fake.faults.drop_connection("modifyorder")
+    world.trace.waive(ANSWERED, CUT_UNANSWERED)
 
 
 @pytest.mark.parametrize("unsent", [cut_held, cut_dropped], ids=["held", "dropped"])
@@ -217,6 +222,7 @@ def adopted_late(request, monkeypatch):
     hands over is sent; before the run."""
     made = scenario("inline", request, monkeypatch)
     no_books(made, "slow")
+    made.trace.waive(ANSWERED, CUT_UNANSWERED)
     return made
 
 

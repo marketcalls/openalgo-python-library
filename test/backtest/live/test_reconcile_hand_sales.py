@@ -42,6 +42,7 @@ import pytest
 from fake_openalgo import rest as fake_rest
 from fake_openalgo.fixtures import *  # noqa: F403
 from session_samples import NS, alerts, ist, rig
+from session_trace import ANSWERED
 from stops_samples import (
     StopHold,
     TargetHold,
@@ -477,7 +478,9 @@ def test_the_error_alert_names_a_cut_with_no_answer_by_the_close_and_claims_no_p
     # The cut has no answer by the close (3.3 step 5 "As built"): the ERROR alert names it
     # and no confirmed stop is claimed, which the session invariants take instead of an
     # answered modify and a confirmed stop.
-    cut_world.trace.leave_unprotected("StopHold", "a cut with no answer by the close")
+    decided = "3.3 step 5 As built: a cut with no answer by the close"
+    cut_world.trace.left_unprotected_by_decision("StopHold", decided)
+    cut_world.trace.waive(ANSWERED, decided)
     outcome = play_cut(cut_world)
     (left,) = outcome.open_positions
     stop = first_stop(cut_world).order_id

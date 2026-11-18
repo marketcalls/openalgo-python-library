@@ -42,6 +42,8 @@ ENTERED = [
     change(0, "e", "BUY", "MARKET", "complete", 10, filled=10, fill=10, position=10),
     change(1, "s1", "SELL", "SL-M", "trigger pending", 10, position=10),
 ]
+#: Another client sells 4 of the 10 by hand while the stop of 10 works.
+SOLD_4 = change(2, "h", "SELL", "MARKET", "complete", 4, filled=4, fill=4, position=6, client="o")
 
 
 def test_a_second_stop_working_beside_the_first_is_found():
@@ -65,7 +67,7 @@ def test_an_exit_placed_while_the_stop_still_works_is_found():
 def test_an_exit_placed_once_the_stop_is_cancelled_is_within_the_position():
     cancelled = change(2, "s1", "SELL", "SL-M", "cancelled", 10, position=10)
     exit_ = change(3, "x", "SELL", "MARKET", "open", 10, position=10)
-    assert _within_the_position([*ENTERED, cancelled, exit_], MINE, SIDES) == set()
+    assert _within_the_position([*ENTERED, cancelled, exit_], MINE, SIDES) == {}
 
 
 def test_a_fill_of_the_sessions_order_through_zero_is_found():
@@ -75,14 +77,51 @@ def test_a_fill_of_the_sessions_order_through_zero_is_found():
         _within_the_position([*ENTERED, cut, oversold], MINE, SIDES)
 
 
-def test_a_sale_by_hand_against_the_stop_is_excused_until_the_session_fits_it():
-    sold = change(2, "h", "SELL", "MARKET", "complete", 4, filled=4, fill=4, position=6, client="o")
-    assert _within_the_position([*ENTERED, sold], MINE, SIDES) == {SBIN}
+def test_a_sale_by_hand_against_the_stop_leaves_its_units_as_the_operators_excess():
+    assert _within_the_position([*ENTERED, SOLD_4], MINE, SIDES) == {SBIN: 4}
 
 
-def test_once_the_session_fits_the_stop_to_a_sale_by_hand_the_checks_apply_again():
-    sold = change(2, "h", "SELL", "MARKET", "complete", 4, filled=4, fill=4, position=6, client="o")
+def test_the_stop_filling_through_zero_after_a_sale_by_hand_is_found():
+    # Finding 1 of unit 14 round 1: the sale by hand excuses none of the session's fills.
+    filled = change(3, "s1", "SELL", "SL-M", "complete", 10, filled=10, fill=10, position=-4)
+    with pytest.raises(AssertionError, match="other side"):
+        _within_the_position([*ENTERED, SOLD_4, filled], MINE, SIDES)
+
+
+def test_an_exit_the_session_adds_beside_a_stop_a_sale_by_hand_left_too_large_is_found():
+    trailed = change(3, "s1", "SELL", "SL-M", "trigger pending", 10, position=6)
+    exit_ = change(4, "x", "SELL", "MARKET", "open", 6, position=6)
+    _within_the_position([*ENTERED, SOLD_4, trailed], MINE, SIDES)
+    with pytest.raises(AssertionError, match="working exits"):
+        _within_the_position([*ENTERED, SOLD_4, trailed, exit_], MINE, SIDES)
+
+
+def test_once_the_session_fits_the_stop_to_a_sale_by_hand_the_excess_is_gone():
     fitted = change(3, "s1", "SELL", "SL-M", "trigger pending", 6, position=6)
     exit_ = change(4, "x", "SELL", "MARKET", "open", 6, position=6)
+    assert _within_the_position([*ENTERED, SOLD_4, fitted], MINE, SIDES) == {}
     with pytest.raises(AssertionError, match="working exits"):
-        _within_the_position([*ENTERED, sold, fitted, exit_], MINE, SIDES)
+        _within_the_position([*ENTERED, SOLD_4, fitted, exit_], MINE, SIDES)
+
+
+def test_a_session_buy_back_while_another_client_took_the_account_short_is_no_break():
+    sold_15 = change(
+        2, "h", "SELL", "MARKET", "complete", 15, filled=15, fill=15, position=-5, client="o"
+    )
+    cancelled = change(3, "s1", "SELL", "SL-M", "cancelled", 10, position=-5)
+    bought = change(4, "b", "BUY", "MARKET", "complete", 2, filled=2, fill=2, position=-3)
+    _within_the_position([*ENTERED, sold_15, cancelled, bought], MINE, SIDES)
+
+
+def test_a_session_sale_deeper_on_the_side_another_client_took_the_account_to_is_found():
+    sold_15 = change(
+        2, "h", "SELL", "MARKET", "complete", 15, filled=15, fill=15, position=-5, client="o"
+    )
+    deeper = change(3, "s1", "SELL", "SL-M", "complete", 10, filled=10, fill=10, position=-15)
+    with pytest.raises(AssertionError, match="other side"):
+        _within_the_position([*ENTERED, sold_15, deeper], MINE, SIDES)
+
+
+def test_a_waived_check_is_not_asserted():
+    exit_ = change(2, "x", "SELL", "MARKET", "open", 10, position=10)
+    _within_the_position([*ENTERED, exit_], MINE, SIDES, within=False)
