@@ -4,12 +4,12 @@ orders and fills twice").
 
 `replay` builds each strategy's kernel session, live series and instance afresh from a
 record's header and history (`session_record`), gives them the record's calls in the
-record's order, with no fake and no threads, and returns what the kernel gave back
-(`ReplayOutcome.outputs`), to be compared with the record's own (`SessionRecord.outputs`)
-command by command. Its data reads (the plan's warm-up and today's candles) are answered
-from the record's candles, through a data cache (OPENALGO_BT_CACHE) of its own, an empty
-folder for the replay's duration: what the caller's cache holds is neither read nor
-written.
+record's order, with no fake and no threads, taking the kernel's commands at each take
+the loop made, and returns what the kernel gave back (`ReplayOutcome.outputs`), to be
+compared with the record's own (`SessionRecord.outputs`) command by command. Its data
+reads (the plan's warm-up and today's candles) are answered from the record's candles,
+through a data cache (OPENALGO_BT_CACHE) of its own, an empty folder for the replay's
+duration: what the caller's cache holds is neither read nor written.
 """
 
 from __future__ import annotations

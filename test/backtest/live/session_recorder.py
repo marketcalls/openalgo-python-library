@@ -130,8 +130,7 @@ class _RecordingEngine:
     def _take(self, attribute: Any) -> Any:
         def taken() -> Any:
             commands = attribute()
-            if commands:
-                self._recorder.line("commands", self._name, commands=list(commands))
+            self._recorder.line("commands", self._name, commands=list(commands))
             return commands
 
         return taken

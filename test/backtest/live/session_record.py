@@ -42,7 +42,9 @@ object it was.
 - `drive`: the loop ran the kernel's pauses with the strategy (`deciding`,
   `decide_from_ns`, `raised` when the strategy's code raised); `catch_up`: the plan's
   catch-up ran them deciding nothing.
-- `commands`: what one `take_commands` gave, when it gave any.
+- `commands`: what one `take_commands` of the loop gave, an empty list when it gave
+  nothing. Every take is a line, so a replay takes where the loop took and each command
+  is pinned to the input after which the kernel issued it.
 - `stop` then `finished`: the close stopped the kernel session, and its whole run output
   (`output`, `finish()`'s tables: among them `orders`, `fills`, `trades`, `levels`,
   `equity`, `events` and `final_positions`); `end`, for a run that never closed (a

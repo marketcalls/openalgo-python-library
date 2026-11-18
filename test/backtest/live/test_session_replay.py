@@ -7,10 +7,12 @@ The sessions are `replay_samples`': a trailing stop, a part fill then a rejected
 crash and a restart on the same journal, and a sandbox session whose warm-up reaches into
 the days before and whose limits are distances. Each record is written to its file and
 read back, then replayed twice: each replay gives, line by line, the commands the kernel
-issued, its answer to every fill, rejection, cancel and modify, every decision drive, and
-the kernel's whole run output at the close (or its state where a run crashed), and these
-must equal the live run's and each other's. A replay reads its warm-up from the record,
-whatever the data layer's cache holds, and writes nothing into that cache.
+issued at each take of the loop (an empty take too, so each command is pinned to the input
+after which the kernel issued it), its answer to every fill, rejection, cancel and modify,
+every decision drive, and the kernel's whole run output at the close (or its state where a
+run crashed), and these must equal the live run's and each other's. A replay reads its
+warm-up from the record, whatever the data layer's cache holds, and writes nothing into
+that cache.
 """
 
 from __future__ import annotations
@@ -39,7 +41,7 @@ def first_difference(left: list, right: list) -> Any:
 def test_a_replay_gives_the_commands_and_fills_of_the_live_run_command_by_command(session):
     for record in session.records:
         outputs = replay(record).outputs
-        assert sum(1 for output in outputs if output[2] == "commands") > 0
+        assert any(output[2] == "commands" and output[3] for output in outputs)
         assert first_difference(outputs, record.outputs()) is None
 
 
@@ -80,10 +82,32 @@ def test_a_replay_finds_a_command_the_record_says_the_kernel_issued_otherwise(
     # issued differs from its replay at that command.
     caplog.set_level(logging.INFO, logger=LOGGER_NAME)
     (record,) = recorded("trailing", make_fake_openalgo, monkeypatch, tmp_path).records
-    at, line = next((i, line) for i, line in enumerate(record.lines) if line["kind"] == "commands")
+    at, line = next(
+        (i, line)
+        for i, line in enumerate(record.lines)
+        if line["kind"] == "commands" and line["commands"]
+    )
     line["commands"][0]["quantity_units"] += 1
     live, replayed = first_difference(record.outputs(), replay(record).outputs)
     assert (live[0], live[2], replayed[0]) == (at, "commands", at)
+
+
+def test_a_replay_finds_a_command_the_record_says_the_kernel_issued_a_take_earlier(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog
+):
+    # Every take of the loop is recorded, an empty one too: a record whose first command
+    # is moved to the take before the one that gave it differs from its replay at that
+    # earlier take, where the replay's kernel had issued nothing yet.
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+    (record,) = recorded("trailing", make_fake_openalgo, monkeypatch, tmp_path).records
+    takes = [at for at, line in enumerate(record.lines) if line["kind"] == "commands"]
+    gave = next(at for at in takes if record.lines[at]["commands"])
+    earlier = max((at for at in takes if at < gave), default=None)
+    assert earlier is not None, "the takes before the first command are recorded"
+    lines = record.lines
+    lines[earlier]["commands"], lines[gave]["commands"] = lines[gave]["commands"], []
+    live, replayed = first_difference(record.outputs(), replay(record).outputs)
+    assert (live[0], live[2], replayed[0], replayed[3]) == (earlier, "commands", earlier, [])
 
 
 def test_a_replay_finds_a_working_stop_the_record_says_the_run_ended_with_otherwise(
