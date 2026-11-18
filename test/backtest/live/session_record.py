@@ -89,6 +89,7 @@ INPUTS = MappingProxyType(
 SERIES_CALLS = ("take", "mark_missing", "no_trade")
 #: The columns of a `history` row, in order.
 CANDLE_COLUMNS = ("ts_open", "open", "high", "low", "close", "volume")
+_PRICES = CANDLE_COLUMNS[1:]
 
 
 class ReplayError(AssertionError):
@@ -168,12 +169,38 @@ class SessionRecord:
         """The kinds of line the record holds."""
         return {line["kind"] for line in self.lines}
 
+    def decisions_from(self, strategy: str) -> int:
+        """The instant (UTC nanoseconds) `strategy`'s session decided from: the close of
+        the first whole slice it watched. Raises ReplayError for a record with none."""
+        for line in self.lines:
+            if (line["strategy"], line["kind"]) == (strategy, "drive") and line["decide_from_ns"]:
+                return line["decide_from_ns"]
+        raise ReplayError(f"the record holds no decision of {strategy}")
+
     def bars(self, strategy: str) -> pd.DataFrame:
-        """The 1-minute bars `strategy`'s kernel session ran on: the warm-up's candles
-        before today, then each bar it was given today (a candle of the catch-up, or a
-        bar the session built from ticks), indexed by their opens in IST, as a backtest
-        takes them (`data=`). A slice released with no bar is not in it, as a backtest
-        runs a minute it has no bar of."""
+        """The 1-minute bars `strategy` decided on, as a backtest takes them (`data=`,
+        indexed by their opens in IST): the warm-up's candles before today, then for each
+        of today's slices the last bar its live series took (a catch-up candle, a bar
+        built from ticks, or the broker candle that replaced it or filled a slice marked
+        missing, such as the seed slice the session started in). A slice the series
+        never took a bar of is not in it, as a backtest runs a minute it has no bar of."""
+        rows: dict[int, list[float]] = {}
+        for line in self.lines:
+            if line["strategy"] != strategy:
+                continue
+            if line["kind"] == "history":
+                rows.update((row[0], row) for row in line["base"])
+            elif line["kind"] == "series" and line["call"] == "take":
+                (bar,) = line["args"]
+                rows[bar["ts_open_ns"]] = [bar["ts_open_ns"], *(bar[name] for name in _PRICES)]
+        return _bars_frame([rows[opened] for opened in sorted(rows)])
+
+    def kernel_bars(self, strategy: str) -> pd.DataFrame:
+        """The 1-minute bars `strategy`'s kernel session was given (`add_bar`): the
+        warm-up's candles before today, then today's catch-up candles and the bars the
+        session built from ticks, indexed by their opens in IST. A slice released with no
+        bar (the seed slice the session started in, a minute with no trade) is not in
+        it."""
         rows = []
         for line in self.lines:
             if line["strategy"] != strategy:
@@ -182,10 +209,15 @@ class SessionRecord:
                 rows += line["base"]
             elif line["kind"] == "bar":
                 rows.append(line["args"][1])
-        frame = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "volume"])
-        opens = pd.to_datetime(frame.pop("ts"), utc=True).dt.tz_convert("Asia/Kolkata")
-        frame.index = pd.DatetimeIndex(opens, name="time")
-        return frame
+        return _bars_frame(rows)
+
+
+def _bars_frame(rows: list[list[float]]) -> pd.DataFrame:
+    """`history` rows as a backtest's `data=`: indexed by their opens in IST."""
+    frame = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "volume"])
+    opens = pd.to_datetime(frame.pop("ts"), utc=True).dt.tz_convert("Asia/Kolkata")
+    frame.index = pd.DatetimeIndex(opens, name="time")
+    return frame
 
 
 def output_of(line: Mapping[str, Any]) -> Any:
