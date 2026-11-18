@@ -12,14 +12,19 @@ repricing, the sizing cap, an adopted fill, a restored state), each drive of the
 strategy's decisions, and the commands the kernel issued.
 
 **The format** ("openalgo-live-session", version 1): JSON lines, UTF-8, one object a line,
-times UTC nanoseconds, prices rupees, quantities units.
+strict JSON (a number with no value, NaN, is written null; an infinite one is refused),
+times UTC nanoseconds, prices rupees, quantities units. A distance (`bt.points`,
+`bt.pct`, `bt.rupees`, `bt.ticks`, `bt.atr`) is written as a tagged object,
+{"tag": "distance", "unit", "value", "period"}, and read back as one (`with_distances`).
 
-- Line 1, the header: `format`, `version`, `day` (the IST trading day, ISO), `broker`,
-  `strategies` (each `name` and `class`, "module:qualname", importable where the record
-  is replayed), `arguments` (`bt.live`'s keyword arguments, JSON values), `specified_ns`
-  and `built_ns` (the clock's reads when the arguments were resolved and the plan built),
-  `facts` (OpenAlgo's instrument facts: `symbol`, `exchange`, `lot_size`, `tick_size`,
-  `freeze_quantity`) and `user_states` (each strategy's saved `self.state`).
+- Line 1, the header: `format`, `version`, `day` (the IST trading day, ISO), `mode`
+  ("live" or "sandbox": the mode OpenAlgo's analyzer switch was in at the start),
+  `broker`, `strategies` (each `name` and `class`, "module:qualname", importable where
+  the record is replayed), `arguments` (`bt.live`'s keyword arguments, JSON values and
+  distances), `specified_ns` and `built_ns` (the clock's reads when the arguments were
+  resolved and the plan built), `facts` (OpenAlgo's instrument facts: `symbol`,
+  `exchange`, `lot_size`, `tick_size`, `freeze_quantity`) and `user_states` (each
+  strategy's saved `self.state`).
 - `history` (one per strategy): `base` and `today`, rows [ts_open_ns, open, high, low,
   close, volume] of the broker's 1-minute candles the plan's warm-up kept and of today's
   read when it was built: what a replay's data reads are answered from.
@@ -37,15 +42,19 @@ times UTC nanoseconds, prices rupees, quantities units.
   `decide_from_ns`, `raised` when the strategy's code raised); `catch_up`: the plan's
   catch-up ran them deciding nothing.
 - `commands`: what one `take_commands` gave, when it gave any.
-- `stop` then `finished`: the close stopped the kernel session, and the `fills` of its
-  run output; `end`, for a run that never closed (a crash): each strategy's `live_state`.
+- `stop` then `finished`: the close stopped the kernel session, and its whole run output
+  (`output`, `finish()`'s tables: among them `orders`, `fills`, `trades`, `levels`,
+  `equity`, `events` and `final_positions`); `end`, for a run that never closed (a
+  crash): each strategy's `live_state`.
 
 Every line but the header carries `strategy`.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
+import math
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -54,6 +63,8 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+
+from openalgo.backtest.units import Distance
 
 FORMAT = "openalgo-live-session"
 VERSION = 1
@@ -90,6 +101,9 @@ SERIES_CALLS = ("take", "mark_missing", "no_trade")
 #: The columns of a `history` row, in order.
 CANDLE_COLUMNS = ("ts_open", "open", "high", "low", "close", "volume")
 _PRICES = CANDLE_COLUMNS[1:]
+#: The tag of a `Distance` written as an object (module docstring).
+DISTANCE_TAG = "distance"
+_DISTANCE_KEYS = frozenset({"tag", "unit", "value", "period"})
 
 
 class ReplayError(AssertionError):
@@ -98,11 +112,24 @@ class ReplayError(AssertionError):
 
 
 def plain(value: Any) -> Any:
-    """`value` as JSON gives it back: tuples as lists, keys as text, NumPy as Python."""
-    return json.loads(json.dumps(value, default=_json_default))
+    """`value` as a record keeps it (module docstring): tuples as lists, keys as text,
+    NumPy as Python, NaN as None, a distance as its tagged object."""
+    return _nan_as_none(json.loads(json.dumps(value, default=_json_default)))
+
+
+def _nan_as_none(value: Any) -> Any:
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    if isinstance(value, dict):
+        return {key: _nan_as_none(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_nan_as_none(item) for item in value]
+    return value
 
 
 def _json_default(value: Any) -> Any:
+    if isinstance(value, Distance):
+        return {"tag": DISTANCE_TAG, **dataclasses.asdict(value)}
     if isinstance(value, np.generic):
         return value.item()
     if isinstance(value, np.ndarray):
@@ -110,6 +137,18 @@ def _json_default(value: Any) -> Any:
     if isinstance(value, os.PathLike):
         return os.fspath(value)
     raise ReplayError(f"a record keeps JSON values only, not {type(value).__name__}: {value!r}")
+
+
+def with_distances(value: Any) -> Any:
+    """`value` read from a record with each tagged distance (module docstring) a
+    `Distance` again."""
+    if isinstance(value, dict):
+        if value.get("tag") == DISTANCE_TAG and set(value) == _DISTANCE_KEYS:
+            return Distance(value["unit"], value["value"], value["period"])
+        return {key: with_distances(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [with_distances(item) for item in value]
+    return value
 
 
 def failure_of(error: BaseException) -> dict[str, str]:
@@ -125,12 +164,9 @@ def candle_rows(frame: Any) -> list[list[float]]:
     return [[int(row[0]), *map(float, row[1:])] for row in values]
 
 
-def run_fills(output: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """The fills table of a kernel session's run output (`finish()`) as rows."""
-    table = output["fills"]
-    names = list(table)
-    columns = [plain(table[name]) for name in names]
-    return [dict(zip(names, values, strict=True)) for values in zip(*columns, strict=True)]
+def run_output(output: Mapping[str, Any]) -> dict[str, Any]:
+    """A kernel session's whole run output (`finish()`) as a `finished` line keeps it."""
+    return plain(output)
 
 
 @dataclass
@@ -141,10 +177,15 @@ class SessionRecord:
     lines: list[dict[str, Any]] = field(default_factory=list)
 
     def dump(self, path: os.PathLike[str] | str) -> None:
-        """Write the record to `path` as JSON lines."""
+        """Write the record to `path` as strict JSON lines. Raises ReplayError for a value
+        JSON cannot hold (an infinite number)."""
         with open(path, "w", encoding="utf-8") as stream:
             for line in (self.header, *self.lines):
-                stream.write(json.dumps(line, default=_json_default) + "\n")
+                try:
+                    text = json.dumps(plain(line), allow_nan=False)
+                except ValueError as error:
+                    raise ReplayError(f"a record keeps JSON values only: {error}") from error
+                stream.write(text + "\n")
 
     @classmethod
     def load(cls, path: os.PathLike[str] | str) -> SessionRecord:
@@ -228,7 +269,7 @@ def output_of(line: Mapping[str, Any]) -> Any:
     if kind == "commands":
         return line["commands"]
     if kind == "finished":
-        return line["fills"]
+        return line["output"]
     if kind == "end":
         return line["live_state"]
     if kind == "drive":
@@ -240,6 +281,7 @@ def output_of(line: Mapping[str, Any]) -> Any:
 
 __all__ = [
     "CANDLE_COLUMNS",
+    "DISTANCE_TAG",
     "FORMAT",
     "INPUTS",
     "SERIES_CALLS",
@@ -250,5 +292,6 @@ __all__ = [
     "failure_of",
     "output_of",
     "plain",
-    "run_fills",
+    "run_output",
+    "with_distances",
 ]

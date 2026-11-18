@@ -7,15 +7,19 @@ record's header and history (`session_record`), gives them the record's calls in
 record's order, with no fake and no threads, and returns what the kernel gave back
 (`ReplayOutcome.outputs`), to be compared with the record's own (`SessionRecord.outputs`)
 command by command. Its data reads (the plan's warm-up and today's candles) are answered
-from the record's candles; the data layer's cache (OPENALGO_BT_CACHE) must be an empty
-folder, so the warm-up is read from the record.
+from the record's candles, through a data cache (OPENALGO_BT_CACHE) of its own, an empty
+folder for the replay's duration: what the caller's cache holds is neither read nor
+written.
 """
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import importlib
-from collections.abc import Mapping
+import os
+import tempfile
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,7 +29,8 @@ from session_record import (
     candle_rows,
     failure_of,
     plain,
-    run_fills,
+    run_output,
+    with_distances,
 )
 
 from openalgo.backtest._live import _session_close
@@ -36,6 +41,7 @@ from openalgo.backtest._live._preflight_plan import InstrumentFacts
 from openalgo.backtest._live._session_trader import StrategyFailed, Trader
 from openalgo.backtest._live._types import LiveBar
 from openalgo.backtest.calendar import default_calendar
+from openalgo.backtest.data.cache import CACHE_ENV
 
 # What the replay builds and drives a strategy's part with: the session's own functions,
 # as they were before a test's recorder wrapped them (this module is imported when a
@@ -94,28 +100,57 @@ def replay(record: SessionRecord) -> ReplayOutcome:
     """Replay `record` through fresh kernel sessions, series and strategies (module
     docstring), with no fake and no threads. Raises ReplayError when the record cannot be
     replayed."""
+    with _own_cache():
+        parts = _parts(record)
+        traders = {
+            name: Trader(
+                part, None, square_off_ns=0, close_ns=0, now=lambda: 0, event=lambda *a, **k: None
+            )
+            for name, part in parts.items()
+        }
+        outputs = []
+        stopped: dict[str, Any] = {}
+        for index, line in enumerate(record.lines):
+            value = _step(line, parts, traders, stopped)
+            if value is not None:
+                outputs.append((index, line["strategy"], line.get("call", line["kind"]), value))
+    return ReplayOutcome(outputs, parts)
+
+
+@contextlib.contextmanager
+def _own_cache() -> Iterator[None]:
+    """The data layer's cache an empty folder of the replay's own while it runs: its
+    warm-up is read from the record whatever the caller's cache holds, and nothing is
+    written into that cache."""
+    before = os.environ.get(CACHE_ENV)
+    with tempfile.TemporaryDirectory(prefix="replay-cache-", ignore_cleanup_errors=True) as folder:
+        os.environ[CACHE_ENV] = folder
+        try:
+            yield
+        finally:
+            if before is None:
+                del os.environ[CACHE_ENV]
+            else:
+                os.environ[CACHE_ENV] = before
+
+
+def _parts(record: SessionRecord) -> dict[str, StrategyPlan]:
+    """Each strategy's part of the plan, built afresh from the record's header and
+    candles, by name. Raises ReplayError when the candles do not rebuild a warm-up."""
     header = record.header
     classes = [_resolve(each["class"]) for each in header["strategies"]]
-    spec = plan_module.specify(classes, clock=lambda: header["specified_ns"], **header["arguments"])
+    arguments = with_distances(header["arguments"])
+    spec = plan_module.specify(classes, clock=lambda: header["specified_ns"], **arguments)
     calendar = default_calendar()
     facts = [InstrumentFacts(**fact) for fact in header["facts"]]
     reads = _History(record)
-    parts, traders = {}, {}
+    parts = {}
     for each in spec.strategies:
         setup = strategy_setup(each, reads, facts, header["built_ns"], calendar)
         part = _STRATEGY_PLAN(each, setup, calendar, header["user_states"].get(each.name))
         _check_history(record, each.name, part)
         parts[each.name] = part
-        traders[each.name] = Trader(
-            part, None, square_off_ns=0, close_ns=0, now=lambda: 0, event=lambda *a, **k: None
-        )
-    outputs = []
-    stopped: dict[str, Any] = {}
-    for index, line in enumerate(record.lines):
-        value = _step(line, parts, traders, stopped)
-        if value is not None:
-            outputs.append((index, line["strategy"], line.get("call", line["kind"]), value))
-    return ReplayOutcome(outputs, parts)
+    return parts
 
 
 def _step(line: dict[str, Any], parts: dict, traders: dict, stopped: dict) -> Any:
@@ -145,7 +180,7 @@ def _step(line: dict[str, Any], parts: dict, traders: dict, stopped: dict) -> An
         stopped[name] = _STOP_ENGINE(trader)[0]
         return None
     if kind == "finished":
-        return run_fills(stopped.pop(name))
+        return run_output(stopped.pop(name))
     if kind == "end":
         return plain(part.engine.live_state())
     return _input(part.engine, line)
