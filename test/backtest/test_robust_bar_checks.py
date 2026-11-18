@@ -204,12 +204,12 @@ def test_an_undefined_objective_is_named_undefined(one_session, name, compared):
     assert f"so the {compared} runs have no figure to be measured against" in result.note
 
 
-def test_noise_cannot_judge_decisions_fixed_in_advance():
-    # Arrays made from the real bars stay the same on every noisy copy, so noise could
-    # move only the fills: the strategy would keep its edge whatever it was fitted to.
+@pytest.fixture(scope="module")
+def fixed():
+    """Flip's decisions as arrays fixed in advance (bt.from_arrays) on the edge bars."""
     data = bars(steps_for(EDGE_MOVES, 60))
     bar = np.arange(len(data))
-    fixed = bt.from_arrays(
+    arrays = bt.from_arrays(
         bar % 2 == 0,
         bar % 2 == 1,
         symbol="SBIN",
@@ -217,21 +217,44 @@ def test_noise_cannot_judge_decisions_fixed_in_advance():
         interval="D",
         size=bt.size.qty(10),
     )
-    result = bt.backtest(fixed, data=data, **FREE)
-    stress = {"noise_candidates": 4, "permutation_candidates": 4}
-    report = result.robustness(
-        checks=["noise", "stress"], workers=1, runs=5, stress=stress, progress=quiet
-    )
-    noise = report.check("noise")
+    return bt.backtest(arrays, data=data, **FREE)
+
+
+def test_noise_cannot_judge_decisions_fixed_in_advance(fixed):
+    # Arrays made from the real bars stay the same on every noisy copy, so noise could
+    # move only the fills: the strategy would keep its edge whatever it was fitted to.
+    noise = checked(fixed, "noise", runs=5).check("noise")
     assert noise.verdict == NOT_JUDGED
     assert noise.note == (
         "Noise cannot judge this strategy: its decisions are arrays fixed in advance "
         "(bt.from_arrays), which never read the generated bars, so on them it trades at the "
         "same bars and only its fills move."
     )
-    assert "its decisions are arrays fixed in advance (bt.from_arrays)" in (
-        report.check("stress").note
+
+
+#: What the checks that judge fixed decisions on generated bars add to their notes.
+FIXED_SENTENCE = (
+    " The strategy cannot react to the generated bars: its decisions are arrays fixed in "
+    "advance (bt.from_arrays), so on them it trades at the same bars against other moves, "
+    "and a pass says nothing of how those arrays were chosen (with hindsight, for one)."
+)
+
+
+def test_the_checks_on_generated_bars_say_what_fixed_decisions_leave_unjudged(fixed):
+    # On permuted bars fixed trades meet other moves, which still tells an edge of the
+    # order of the moves from one of the drift; it cannot tell arrays chosen with
+    # hindsight, and the notes say so once.
+    stress = {"noise_candidates": 4, "permutation_candidates": 4}
+    report = fixed.robustness(
+        checks=["vs_random", "permutation", "stress"],
+        workers=1,
+        runs=20,
+        stress=stress,
+        progress=quiet,
     )
+    for name in ("vs_random", "permutation", "stress"):
+        assert report.check(name).note.count(FIXED_SENTENCE) == 1, name
+    assert "The strategy's its" not in report.check("stress").note
 
 
 def test_the_noise_section_shows_the_bars_beside_a_noisy_copy(edge):

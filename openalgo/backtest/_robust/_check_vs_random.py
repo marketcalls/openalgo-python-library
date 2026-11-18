@@ -22,7 +22,9 @@ Random entries need the run's trades to fit among its strategy bars, and permute
 need every symbol's bars at the same times; families that cannot run are left out and
 the note says why. Not judged when the run did not make money, has too few closed
 trades, has an objective that is undefined, has no break-even or is not above it, or
-when no random run could be measured.
+when no random run could be measured. For a strategy made by `bt.from_arrays`, when the
+strategy on permuted bars ran, the note says what its fixed decisions leave unjudged
+(`_bar_common.FIXED_TRADES`).
 
 Draws: random entries on the run's bars from part 0 of the check's stream
 (`_random.part_seed`), random entries on permuted bars from part 1, on the permutation
@@ -45,6 +47,7 @@ from ._bar_common import (
     below_break_even,
     break_even,
     finite,
+    fixed_note,
     grid_problem,
     joined,
     objective_histogram,
@@ -171,7 +174,10 @@ def run(
     note = (
         "Random entries hold the run's own trades (count, direction, quantity, holding time) "
         "at random strategy bars, under the run's rules; the strategy on permuted bars is the "
-        "permutation test's runs." + left_out + "".join(s.failure_note() for s in sets.values())
+        "permutation test's runs."
+        + (fixed_note(subject) if "permuted" in sets else "")
+        + left_out
+        + "".join(s.failure_note() for s in sets.values())
     )
     table = _table(sets)
     blocks = _blocks(subject, sets, pooled, summary, name)

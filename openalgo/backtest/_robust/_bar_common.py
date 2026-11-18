@@ -112,16 +112,31 @@ def grid_problem(bars: RunBars) -> str:
     return ""
 
 
-#: What a strategy made by `bt.from_arrays` does on generated bars.
+#: What a strategy made by `bt.from_arrays` does on generated bars, why noise cannot
+#: judge it.
 FIXED_ARRAYS = (
     "its decisions are arrays fixed in advance (bt.from_arrays), which never read the "
     "generated bars, so on them it trades at the same bars and only its fills move"
+)
+#: What the checks that judge such a strategy on other moves (permuted bars, shocks) add
+#: to their notes: fixed trades on other moves still tell an edge of the order of the
+#: moves from one of the drift, but not how the arrays were chosen.
+FIXED_TRADES = (
+    " The strategy cannot react to the generated bars: its decisions are arrays fixed in "
+    "advance (bt.from_arrays), so on them it trades at the same bars against other moves, "
+    "and a pass says nothing of how those arrays were chosen (with hindsight, for one)."
 )
 
 
 def fixed_decisions(run: BarRun) -> bool:
     """Whether the run's strategy decides from arrays fixed in advance (`FIXED_ARRAYS`)."""
     return made_by(run.result._record.strategy) == "bt.from_arrays"
+
+
+def fixed_note(run: BarRun) -> str:
+    """`FIXED_TRADES` for a run whose strategy decides from arrays fixed in advance, ""
+    for any other."""
+    return FIXED_TRADES if fixed_decisions(run) else ""
 
 
 def break_even(objective: Any) -> float | None:
@@ -293,6 +308,7 @@ def finite(value: float) -> bool:
 __all__ = [
     "BREAK_EVEN",
     "FIXED_ARRAYS",
+    "FIXED_TRADES",
     "FUNCTION_BREAK_EVEN",
     "NOISE_NUMBER",
     "PERMUTATION_NUMBER",
@@ -302,6 +318,7 @@ __all__ = [
     "break_even",
     "finite",
     "fixed_decisions",
+    "fixed_note",
     "grid_problem",
     "joined",
     "noisy_family",

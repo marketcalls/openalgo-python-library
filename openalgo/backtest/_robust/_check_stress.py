@@ -27,7 +27,8 @@ the design's rule: at least half the kept ones profitable. Not judged when no ru
 judged, when the run did not make money, or when it has too few closed trades.
 
 Permuted candidates are left out, with the reason, when the run's symbols' bars are not
-at the same times (`_bar_common.grid_problem`).
+at the same times (`_bar_common.grid_problem`). For a strategy made by `bt.from_arrays`
+the note says what its fixed decisions leave unjudged (`_bar_common.FIXED_TRADES`).
 """
 
 from __future__ import annotations
@@ -41,10 +42,9 @@ import pandas as pd
 
 from . import _words as words
 from ._bar_common import (
-    FIXED_ARRAYS,
     BarRun,
     RerunSet,
-    fixed_decisions,
+    fixed_note,
     grid_problem,
     joined,
     noisy_family,
@@ -285,9 +285,7 @@ def _note(made: Candidates, set_: RerunSet, settings: Mapping[str, Any], run: Ba
         "the share of all the candidates of their generators that make money, since a "
         "permutation takes away an edge that lives in the order of the moves, shocks or not."
     )
-    if fixed_decisions(run):
-        note += f" The strategy's {FIXED_ARRAYS}."
-    return note + made.left_out + set_.failure_note()
+    return note + fixed_note(run) + made.left_out + set_.failure_note()
 
 
 def _blocks(

@@ -13,7 +13,10 @@ counts, which can only raise p; when too few runs are measured for p to reach `m
 (fewer than 1 / `max_p` - 1), the check is not judged. Not judged either when the run did
 not make money or has too few closed trades (`_trade_common`), or when no permuted path
 can be made: several symbols are permuted together only when their bars are at the same
-times (`_bar_common.grid_problem`).
+times (`_bar_common.grid_problem`). A strategy made by `bt.from_arrays` is judged: its
+fixed trades meet other moves on permuted bars, which still tells an edge of the order of
+the moves from one of the drift, and the note says a pass says nothing of how its arrays
+were chosen (`_bar_common.FIXED_TRADES`).
 
 The summary block, over the permuted runs that ran: the shallowest, deepest and average
 maximum drawdown; the average largest win and loss; the longest win and loss streaks of
@@ -32,6 +35,7 @@ from . import _words as words
 from ._bar_common import (
     BarRun,
     RerunSet,
+    fixed_note,
     grid_problem,
     objective_histogram,
     permuted_family,
@@ -127,7 +131,9 @@ def run(
         "Each run rebuilds the bars from the run's own moves in another order: within each "
         "session the bars after its first, and the sessions' first bars with their overnight "
         "gaps as one more set, the history before start apart; volumes travel with their "
-        "bars. Runs whose objective is undefined are left out of both counts." + set_.failure_note()
+        "bars. Runs whose objective is undefined are left out of both counts."
+        + fixed_note(subject)
+        + set_.failure_note()
     )
     summary = _summary(set_, p, above, measured)
     table = set_.table()
