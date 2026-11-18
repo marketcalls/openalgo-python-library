@@ -8,8 +8,9 @@ verdict follows from the bars:
 - `Every4`, a daily strategy that buys 10 shares at the close of bar 4j and exits at the
   close of bar 4j + 2, on daily bars whose opens repeat a block of four: the trade buys
   at the open of bar 4j + 1 and sells at the open of bar 4j + 3.
-- `Flip5`, a 5-minute delivery (CNC) strategy that buys when flat and exits when long, on
-  one-minute bars: its edge lives in where its 5-minute bars start, or not.
+- `Flip5`, a 5-minute delivery (CNC) strategy that buys when flat (with no working order)
+  and exits when long, on one-minute bars: its edge lives in where its 5-minute bars
+  start, or not.
 - `DipFlip`, a 5-minute MIS strategy that buys at a session's even bars with a stop
   below a dip planted in the bar after: the run never meets its stop, a tighter one does.
 """
@@ -230,14 +231,16 @@ def test_a_models_drawdown_is_measured_in_times_the_runs(drawdowns, real, times)
 
 
 class Flip5(bt.Strategy):
-    """Buys 10 shares when flat and exits when long, on 5-minute bars, as delivery."""
+    """Buys 10 shares when flat after a green bar and exits when long, on 5-minute bars,
+    as delivery. It buys only with no working order, which on time it never has at a
+    decision, so that with its entries held it enters late rather than twice."""
 
     symbol, exchange, interval = "SBIN", "NSE", "5m"
     product = "CNC"
 
     def on_bar(self, bar):
         if self.position.is_flat:
-            if bar.close > bar.open:
+            if bar.close > bar.open and not self.orders:
                 self.buy(qty=10)
         else:
             self.exit()

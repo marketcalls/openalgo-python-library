@@ -52,6 +52,7 @@ from ._ohlc import same_grid
 from ._part_objective import BREAK_EVEN as PART_BREAK_EVEN
 from ._part_objective import NO_BREAK_EVEN, objective_name
 from ._paths import Fan, bands
+from ._position_sizes import PositionSize
 from ._random_entries import EntryPlan
 from ._rerun_one import RerunRow
 from ._reruns import NOISY, PERMUTED, Family, Reruns
@@ -187,8 +188,9 @@ def below_break_even(name: str, real: float, level: float) -> str:
 class RerunSet:
     """Rows of reruns as arrays: `objective` (NaN when not measured), `net_profit`,
     `max_drawdown`, `trades`, `largest_win`, `largest_loss`, `win_streak`, `loss_streak`,
-    `paths` (runs, points) and `failures`, the reason of each refused run ("" for one that
-    ran)."""
+    `paths` (runs, points), `failures`, the reason of each refused run ("" for one that
+    ran), and `sizes`, how large each run's positions grew (`_position_sizes`; none for a
+    refused run)."""
 
     objective: np.ndarray
     net_profit: np.ndarray
@@ -200,6 +202,7 @@ class RerunSet:
     loss_streak: np.ndarray
     paths: np.ndarray
     failures: tuple[str, ...]
+    sizes: tuple[tuple[PositionSize, ...], ...]
 
     @property
     def measured(self) -> np.ndarray:
@@ -263,6 +266,7 @@ def rerun_set(rows: Sequence[RerunRow]) -> RerunSet:
         column("loss_streak", np.int64),
         np.vstack([row.path for row in rows]),
         tuple(row.failure for row in rows),
+        tuple(row.sizes for row in rows),
     )
 
 
@@ -273,8 +277,8 @@ def joined(parts: Sequence[RerunSet]) -> RerunSet:
         pieces = [getattr(part, column.name) for part in parts]
         if column.name == "paths":
             values[column.name] = np.vstack(pieces)
-        elif column.name == "failures":
-            values[column.name] = tuple(failure for piece in pieces for failure in piece)
+        elif column.name in ("failures", "sizes"):
+            values[column.name] = tuple(each for piece in pieces for each in piece)
         else:
             values[column.name] = np.concatenate(pieces)
     return RerunSet(**values)

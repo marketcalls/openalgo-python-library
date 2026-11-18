@@ -145,7 +145,11 @@ def backtest(
         the order working on its old terms until it arrives. An intraday order whose
         delay ends at its session's close, or any order whose delay ends after the run's
         last bar, is rejected delay_past_close. The legs' stops and targets and the
-        engine's own exits are never held.
+        engine's own exits are never held. A held order is a working order (in
+        `self.orders`), not a position: a strategy that decides its entries by its
+        position alone (`self.position.is_flat`) sees none while its entry is held and
+        enters again, so decide by `self.orders` too (a condition strategy counts a held
+        entry as pending and never does).
     quantity_mode: "venue" (the default: whole shares of cash equity and whole lots of
         derivatives, as an exchange accepts) or "fractional" (part shares of cash
         equity, for research; derivatives stay in whole lots).
@@ -375,7 +379,9 @@ def robustness(strategy: type[Strategy], client: Any = None, **settings: Any) ->
         new high or fall below the average is half as bad again as the run's own, judged
         against every generated series), random_exits (each trade's stop, target, trail
         and breakeven distances scaled within a quarter, and exit_params drawn per run),
-        delayed (entries and exits held 0 to 2 strategy bars) and liquidity (fills at the
+        delayed (entries and exits held 0 to 2 strategy bars; not judged when the run a
+        bar late entered again while its entry was held, as a strategy deciding by
+        `self.position.is_flat` without `self.orders` does) and liquidity (fills at the
         next bar's close, midpoint or average price, or their two-bar averages).
     objective: what the checks measure: a metric name or a function of a `Result`
         ("sharpe" by default). Random out of sample measures it on parts of the trades,

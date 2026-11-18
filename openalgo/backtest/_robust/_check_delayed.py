@@ -15,8 +15,13 @@ Pass: the run with entries one bar late (and exits on time) profitable (net prof
 least half a paisa) and keeping at least `keep` (half) of the run's objective.
 
 Not judged when the run did not make money or has too few closed trades, when its
-objective is undefined, has no break-even or is not above it, or when the one-bar entry
-delay did not run.
+objective is undefined, has no break-even or is not above it, when the one-bar entry
+delay did not run, or when that run entered again while its entry was held: a held entry
+is a working order (`self.orders`), not a position, so a strategy that decides its entries
+by its position alone enters twice under a delay, and the late run holds a bigger position
+than the run ever did (`_position_sizes`). The run then judges that position, not a late
+entry; the note says so and what to do. Other pairs that entered again are named in the
+note and flagged in the table (`entered_again`).
 
 Charts: the equity of each pair, a group for each entry delay, with the run's bold; a
 table by pair.
@@ -33,6 +38,7 @@ from . import _words as words
 from ._bar_common import BarRun, RerunSet
 from ._blocks import Tile, TilesBlock
 from ._part_objective import objective_name
+from ._position_sizes import WORKING_ORDER, entered_again, grown, position_sizes
 from ._reruns import REAL, Family
 from ._setting import Setting, between, whole
 from ._trade_common import BREAK_EVEN_RUPEES, ENOUGH_TRADES
@@ -135,6 +141,10 @@ def run(
         return not_judged(
             text, "The run with entries one bar late did not run." + set_.failure_note()
         )
+    own_sizes = position_sizes(subject.result)
+    grew = [grown(sizes, own_sizes) for sizes in set_.sizes]
+    if grew[judged]:
+        return not_judged(text, entered_again(grew[judged], own_sizes, subject.result._symbols))
     name = objective_name(objective)
     ratio = ratios(set_.objective, subject.real, objective)
     profitable = bool(set_.net_profit[judged] >= BREAK_EVEN_RUPEES)
@@ -153,14 +163,30 @@ def run(
         + ", and their cancellations and modifications as long; the legs' stops and targets "
         "and the engine's own exits were not held, and an order held past its session's "
         "close (intraday) or the run's last bar was refused (delay_past_close)."
+        + _entered_again_note(
+            [_label(pair) for pair, sizes in zip(made, grew, strict=True) if sizes]
+        )
         + set_.failure_note()
     )
     labels = [_label(pair) for pair in made]
     table = labelled_table(
         set_, ratio, delay_entries=[e for e, _ in made], delay_exits=[x for _, x in made]
     )
+    table["entered_again"] = [bool(sizes) for sizes in grew]
     blocks = _blocks(subject, set_, ratio, labels, made, summary, name)
     return Outcome(PASSED if passed else FAILED, figure, text, note, table, summary, blocks)
+
+
+def _entered_again_note(labels: list[str]) -> str:
+    """The note's words on the delayed runs (`labels`) that entered again while an entry
+    was held (module docstring); "" for none."""
+    if not labels:
+        return ""
+    they = "it holds" if len(labels) == 1 else "they hold"
+    return (
+        f" {words.whole(len(labels), 'delayed run')} entered again while an entry was held, "
+        f"so {they} more than the run ever did: {'; '.join(labels)}. {WORKING_ORDER}"
+    )
 
 
 def _summary(set_: RerunSet, ratio: np.ndarray, judged: int) -> dict[str, float]:

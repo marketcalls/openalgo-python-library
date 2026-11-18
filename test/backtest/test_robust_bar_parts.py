@@ -190,8 +190,19 @@ def _set(net_profit):
 
     pnl = np.asarray(net_profit, dtype=float)
     count = np.zeros(len(pnl), dtype=np.int64)
+    runs = len(pnl)
     return RerunSet(
-        pnl, pnl, pnl, count, pnl, pnl, count, count, np.zeros((len(pnl), 2)), ("",) * len(pnl)
+        pnl,
+        pnl,
+        pnl,
+        count,
+        pnl,
+        pnl,
+        count,
+        count,
+        np.zeros((runs, 2)),
+        ("",) * runs,
+        ((),) * runs,
     )
 
 

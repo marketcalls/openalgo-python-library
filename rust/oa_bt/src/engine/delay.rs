@@ -29,7 +29,10 @@
 //! (`held_changes`). Until then the order works on its old terms, so a strategy that
 //! cancels and places its entry again at every bar keeps an order working, one decided
 //! `delay` bars earlier. A condition strategy counts a held entry as an entry pending
-//! (SPEC-29).
+//! (SPEC-29). An event strategy sees a held order as a working order, not as a position:
+//! one that decides its entries by its position alone enters again while its entry is
+//! held, and holds more than it would on time (the delayed-orders check finds such a run
+//! from its fills and does not judge it).
 
 use crate::exec::{Order, OrderId, OrderRequest, RejectCode};
 use crate::model::{ist_day, Side, TsNanos};
