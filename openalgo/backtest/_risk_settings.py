@@ -1,0 +1,115 @@
+"""The risk settings of a run, in the units of 14-strategy-api: `max_daily_loss` in rupees
+(a number or `bt.rupees`), `drawdown_halt` in percent (`bt.pct(x)` or a number of
+percent), `cooldown`, `max_hold` and `max_positions` as whole numbers (base bars,
+positions), the scale-in limits as `_scale_in` reads them, and `reinvest` and
+`size_caps` as `_size_controls` reads them. The combined rules of a run are refused
+until Phase 3 builds them.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from ._messages import not_supported
+from ._scale_in import scale_limits
+from ._size_controls import size_controls
+from .errors import ConfigError
+from .units import Distance
+
+RISK_BASES = ("gross", "net")
+AFTER_RISK_EXIT = ("lock_session", "allow_reentry")
+# Combined rules of a run, class attributes for strategies that open single positions
+# (14-strategy-api 2.1); refused until Phase 3 builds them.
+COMBINED_RULES = ("combined_stop", "combined_target", "lock_profit", "trail_sl_to_entry")
+
+
+def choice(value: Any, allowed: tuple[str, ...], name: str) -> str:
+    """`value` when it is one of `allowed`. Raises ConfigError otherwise."""
+    if value not in allowed:
+        raise ConfigError(f"{name} takes one of {allowed}, got {value!r}")
+    return value
+
+
+def rupees_amount(value: Any, name: str) -> float | None:
+    """None, or a positive amount of rupees (a number or bt.rupees(x)). Raises
+    ConfigError otherwise."""
+    if value is None:
+        return None
+    if isinstance(value, Distance) and value.unit == "rupees":
+        return value.value
+    if isinstance(value, bool) or not isinstance(value, int | float) or not value > 0:
+        raise ConfigError(f"{name} takes a positive amount of rupees, got {value!r}")
+    return float(value)
+
+
+def _percent(value: Any, name: str) -> float | None:
+    """None, or a percent above 0 and below 100 (bt.pct(x) or a bare number of percent)."""
+    if value is None:
+        return None
+    if isinstance(value, Distance) and value.unit == "pct":
+        value = value.value
+    if isinstance(value, bool) or not isinstance(value, int | float) or not 0 < value < 100:
+        raise ConfigError(f"{name} takes bt.pct(x) with x above 0 and below 100, got {value!r}")
+    return float(value)
+
+
+def _count(value: Any, name: str, unit: str) -> int | None:
+    """None, or a positive whole number of `unit`."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ConfigError(f"{name} takes a positive whole number of {unit}, got {value!r}")
+    return value
+
+
+def _bars(value: Any, name: str) -> int | None:
+    """None, or a positive whole number of base bars. A time ("30m") is not built yet."""
+    if isinstance(value, str):
+        raise not_supported(
+            f"{name} as a time ({value!r})", f"give {name} as a whole number of base bars"
+        )
+    return _count(value, name, "base bars")
+
+
+def refuse_combined_rules(strategy: type) -> None:
+    """Combined rules of a run (05-risk-management 4) are Phase 3; never ignore them.
+    Raises NotImplementedError for one the strategy declares."""
+    for name in COMBINED_RULES:
+        if getattr(strategy, name, None) not in (None, False):
+            raise not_supported(
+                f"{name} (a combined rule over the run's positions)",
+                "give each order its own stop=, target= or trail=, and the run max_daily_loss=",
+            )
+
+
+def risk_settings(
+    strategy: type, args: dict[str, Any], overrides: dict[str, Any]
+) -> dict[str, Any]:
+    """The risk settings of a run of `strategy` (module docstring), from the run
+    arguments `args` and the class attributes that override them (`overrides`). Raises
+    ConfigError for unusable values and NotImplementedError for a time given as a count
+    of bars."""
+    return {
+        "max_daily_loss": rupees_amount(overrides["max_daily_loss"], "max_daily_loss"),
+        "max_positions": _count(args["max_positions"], "max_positions", "positions"),
+        "drawdown_halt": _percent(overrides["drawdown_halt"], "drawdown_halt"),
+        "cooldown_bars": _bars(overrides["cooldown"], "cooldown"),
+        "max_hold_bars": _bars(getattr(strategy, "max_hold", None), "max_hold"),
+        "risk_basis": choice(args["risk_basis"], RISK_BASES, "risk_basis"),
+        "after_risk_exit": choice(args["after_risk_exit"], AFTER_RISK_EXIT, "after_risk_exit"),
+        "round_levels": bool(args["round_levels"]),
+        "strict_config": bool(args["strict_config"]),
+        **scale_limits(strategy),
+        **size_controls(strategy),
+    }
+
+
+__all__ = [
+    "AFTER_RISK_EXIT",
+    "COMBINED_RULES",
+    "RISK_BASES",
+    "choice",
+    "refuse_combined_rules",
+    "risk_settings",
+    "rupees_amount",
+]

@@ -137,9 +137,11 @@ def backtest(
         session on an intraday base, the next session's on a daily one). A model fills
         the strategy's orders inside the bar, after the bar's stops and targets, with the
         run's slippage; the engine's own exits and the fills at a level keep their prices.
-    delay_entries, delay_exits: strategy bars a decided order that opens or adds, and one
-        that reduces or closes, is held before it can fill (0, the default, fills at the
-        next base-bar open): with 1, an order decided at a bar's close fills at the open
+    delay_entries, delay_exits: strategy bars a decided order that opens or adds, and an
+        order that reduces, closes or reverses the position it meets, is held before it
+        can fill (0, the default, fills at the next base-bar open); a reversal is an exit,
+        so under `delay_entries` alone a strategy always in the market holds only its
+        entries from flat. With 1, an order decided at a bar's close fills at the open
         after the next bar's close, and one decided inside a bar (a timer) waits for that
         bar's close first. A cancellation or modification of an order is held as long,
         the order working on its old terms until it arrives. An intraday order whose

@@ -16,10 +16,14 @@ of one product (`largest_units`). The position after each fill is the running su
 fills, so a position that grew and shrank inside one bar counts at its largest, which the
 positions table, a row at a bar's end, does not show.
 
-A rerun grew a symbol's position (`grown`) when it added to it more often than the run and
-held more units of it than the run's largest: both, because a late entry sized from the
-equity can buy a few more units than the run did without adding, and a strategy that adds
-can add once more at other prices and still hold no more than the run's largest.
+A rerun grew a symbol's position (`grown`) when the run never added to it and the rerun
+added to it at all: a strategy that never adds on time adds a bar late only by entering
+again, whatever the units (a position sized in rupees or from the equity and bought late
+at a higher price can hold fewer units than the run's largest, bought once at a low
+price). For a symbol the run added to, the rerun must both add more often than the run
+and hold more units than the run's largest: a late entry sized from the equity can buy a
+few more units than the run did without adding, and a strategy that adds can add once
+more at other prices and still hold no more than the run's largest.
 """
 
 from __future__ import annotations
@@ -79,12 +83,16 @@ def grown(sizes: Sequence[PositionSize], run: Sequence[PositionSize]) -> tuple[P
     """The sizes among `sizes` (a rerun's) of the symbols whose position the rerun grew
     beyond the run's `run` (module docstring), in their order."""
     before = _by_symbol(run)
-    return tuple(
-        size
-        for size in sizes
-        if size.adds > before.get(size.instrument, NEVER_TRADED).adds
-        and size.largest_units > before.get(size.instrument, NEVER_TRADED).largest_units
-    )
+    return tuple(size for size in sizes if _grew(size, before.get(size.instrument, NEVER_TRADED)))
+
+
+def _grew(size: PositionSize, before: PositionSize) -> bool:
+    """Whether a rerun's `size` of a symbol entered again against the run's `before`
+    (module docstring): any add where the run never added, else more adds and more
+    units."""
+    if before.adds == 0:
+        return size.adds > 0
+    return size.adds > before.adds and size.largest_units > before.largest_units
 
 
 def entered_again(

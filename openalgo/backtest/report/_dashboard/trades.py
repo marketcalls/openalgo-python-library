@@ -60,6 +60,17 @@ def _quantity(units: float) -> str:
     return fmt.number(units, 0 if float(units).is_integer() else 2)
 
 
+def _when(value: object) -> str:
+    """An entry or exit time cell that may break only between its date and its time of
+    day ("02 Jun 2025" over "09:30"), so a trade list wider than its card narrows its two
+    time columns rather than cutting its last column (`.trades td.when`)."""
+    shown = fmt.moment(value)
+    if shown == fmt.MISSING:
+        return _td(shown, value, "l nums when")
+    date, _, clock = shown.rpartition(" ")
+    return _td(f"{date.replace(' ', '&#160;')} {clock}", value, "l nums when")
+
+
 def _excursion(trade: pd.Series, name: str) -> str:
     """The `name` ("mae" or "mfe") cell of a trade: rupees, coloured by sign, with its
     percent of capital at work on hover; "n/a" when the trade has none."""
@@ -80,8 +91,8 @@ def _row(number: int, trade: pd.Series, with_r: bool, with_excursion: bool) -> s
         _td(str(number), number),
         _td(fmt.text(trade["symbol"]), trade["symbol"], "l"),
         _td(fmt.text(str(trade["direction"]).capitalize()), trade["direction"], "l"),
-        _td(fmt.moment(trade["entry_time"]), trade["entry_time"], "l nums"),
-        _td(fmt.moment(trade["exit_time"]), trade["exit_time"], "l nums"),
+        _when(trade["entry_time"]),
+        _when(trade["exit_time"]),
         _td(_quantity(trade["quantity"]), float(trade["quantity"])),
         _td(fmt.rupees(float(trade["entry_price"])), float(trade["entry_price"])),
         _td(fmt.rupees(float(trade["exit_price"])), float(trade["exit_price"])),

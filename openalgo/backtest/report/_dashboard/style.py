@@ -229,6 +229,7 @@ _TABLES = """
 background:color-mix(in oklab,var(--pnl-pos) 10%,transparent)}
 .trades{font-size:.8125rem}
 .trades td{white-space:nowrap}
+.trades td.when{white-space:normal}
 .trades th,.trades td{padding-left:7px;padding-right:7px}
 .kv td:first-child{color:var(--text-muted);white-space:nowrap;width:1%}
 .kv td{vertical-align:top;overflow-wrap:anywhere}

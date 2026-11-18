@@ -104,6 +104,40 @@ def test_a_late_run_that_entered_again_leaves_the_check_not_judged_and_says_why(
     assert "(self.position.is_flat and not self.orders)" in check.note
 
 
+def test_a_late_run_that_entered_again_keeps_its_table_and_its_chart():
+    # The eight delayed runs ran: their table says which entered again, and the page draws
+    # their equity and their table, as a judged check does.
+    report = run_of(Twin).robustness(
+        checks=["delayed"], workers=1, objective="net_profit", progress=quiet
+    )
+    check = report.check("delayed")
+    assert check.verdict == NOT_JUDGED
+    again = check.table.set_index(["delay_entries", "delay_exits"])["entered_again"]
+    assert len(again) == 8 and again[(1, 0)] and not again[(0, 1)]
+    page = report.tearsheet()
+    section = page[page.index("<section id='delayed'") : page.index("<section id='notes'")]
+    assert "Equity with late orders" in section and "By delay" in section
+
+
+#: What the delayed check's note says of a reversal (lead, 2026-11-18).
+REVERSAL = (
+    "A reversal (an order that closes the position it meets and opens the other side) is "
+    "an exit and takes the exit delay, so for a strategy always in the market the runs "
+    "with entries late delay only its entries from flat: the first of the run, or the "
+    "first of each session when it is squared off every session."
+)
+
+
+def test_the_note_says_a_reversal_is_an_exit_and_takes_the_exit_delay():
+    assert REVERSAL in delayed_of(run_of(CarefulTwin)).note
+
+
+def test_the_backtest_docstring_says_a_reversal_takes_the_exit_delay():
+    words = " ".join(bt.backtest.__doc__.split())
+    assert "an order that reduces, closes or reverses the position it meets" in words
+    assert "a reversal is an exit" in words
+
+
 def test_the_twin_that_checks_its_working_orders_is_judged():
     # A bar late it buys at 500 (bar 4j + 2) and sells at 503 (bar 4j + 3): +30 a trade,
     # all of the run's kept.
@@ -160,6 +194,10 @@ def test_late_runs_that_entered_again_are_named_while_the_one_bar_late_run_is_ju
         # More adds but no more units: a strategy that adds added once more at other
         # prices, holding no more than the run's largest.
         (((0, 2, 30.0),), (0, 3, 30.0), False),
+        # A run that never added: any add a bar late is an entry made again, even when a
+        # rupee-sized position bought at a higher price holds fewer units than the run's
+        # largest, bought once at a low price.
+        (((0, 0, 24.0),), (0, 40, 20.0), True),
         # A symbol the run never held: any add and any unit is more.
         (((0, 0, 10.0),), (1, 1, 5.0), True),
         # Each symbol against its own: 20 units of symbol 1 are more than its 10, though
@@ -168,6 +206,7 @@ def test_late_runs_that_entered_again_are_named_while_the_one_bar_late_run_is_ju
     ],
 )
 def test_a_rerun_grew_a_symbols_position_when_it_added_more_and_held_more(run, late, grew):
+    # The rule for a symbol the run added to; for one it never added to, any add.
     from openalgo.backtest._robust._position_sizes import PositionSize, grown
 
     sizes = (PositionSize(*late),)
