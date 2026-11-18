@@ -143,7 +143,10 @@ def test_an_exit_sent_and_unanswered_is_named_by_side_units_and_intent(world):
             if self.calls == 1:
                 self.buy(10, stop=bt.points(STOP_POINTS))
 
-    # The safe stop's exit never reaches the broker and its answer is lost.
+    # The safe stop's exit never reaches the broker and its answer is lost. A second Ctrl+C
+    # ends the session with the leg mid exit, named by its line (3.3 step 4), which the
+    # session invariants take instead of a confirmed stop.
+    world.trace.leave_unprotected("Holds", "a second Ctrl+C with the exit unanswered")
     world.script.at(
         ist(14, 43, 31) + NS // 2, lambda: world.fake.faults.bad_gateway_page("placeorder")
     )
@@ -167,7 +170,9 @@ def test_an_exit_accepted_with_no_final_word_is_in_flight_and_never_beside_close
             world.fake.faults.gateway_error("tradebook", status=503)
 
     # The flatten's book read is compared at 14:43:31, its cancel of the stop answered at
-    # 14:43:33 and its exit accepted at 14:43:34; the stream then stops.
+    # 14:43:33 and its exit accepted at 14:43:34; the stream then stops. A second Ctrl+C
+    # ends the session with the leg mid exit (3.3 step 4), which the invariants take.
+    world.trace.leave_unprotected("StopHold", "a second Ctrl+C with the exit unconfirmed")
     world.stop_at(ist(14, 43, 30))
     world.script.at(ist(14, 43, 33) + NS // 2, stream_held_and_reads_failing)
     world.stop_at(ist(14, 43, 34) + NS // 2)
@@ -189,7 +194,10 @@ def option(make_fake_openalgo, monkeypatch, tmp_path, caplog):
 
 def test_a_stop_repriced_to_a_limit_that_rests_is_named_as_resting_with_its_price(option):
     # The option trades through its stop at 100.00 at 14:44:05; the best bid then drops
-    # to 90.00, so the stop's reprice to a LIMIT at 95.00 rests unfilled at the broker.
+    # to 90.00, so the stop's reprice to a LIMIT at 95.00 rests unfilled at the broker. The
+    # leg is left with that LIMIT, no stop, named by its line (4.6), which the session
+    # invariants take instead of a confirmed stop.
+    option.trace.leave_unprotected("OptionHold", "a stop repriced to a resting LIMIT")
     crossed_at = ist(14, 44, 5)
     option.script.at(crossed_at - NS // 2, lambda: setattr(option, "option_price", 100.0))
     option.script.at(

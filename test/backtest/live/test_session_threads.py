@@ -505,7 +505,10 @@ def test_an_entry_bound_during_the_final_read_is_cancelled_at_the_broker(alone, 
 
 def test_an_entry_filled_during_the_final_read_is_one_error_alert(alone, caplog):
     # As above with a MARKET entry and a stop rule: it fills as its answer comes, during
-    # the close's final read, and the stop placed with the fill is not sent.
+    # the close's final read, and the stop placed with the fill is not sent (3.3 step 5
+    # "As built"): the leg ends with no stop, named by the ERROR alert, which the session
+    # invariants take instead of a stop.
+    alone.trace.leave_unprotected("StopHold", "an entry filled after the last lines")
     fake = alone.fake
     slow = Blocking(
         fake.client(),
@@ -530,7 +533,10 @@ def test_an_entry_filled_during_the_final_read_is_one_error_alert(alone, caplog)
 
 def test_an_entry_unanswered_at_the_close_is_one_error_alert(alone, caplog):
     # The placement call is held 12 fake seconds: its answer comes after the close's final
-    # read, so the entry's cancel is never sent and the order rests at the broker.
+    # read, so the entry's cancel is never sent and the order rests at the broker. The
+    # session ends with that order working unknown to it, named by the ERROR alert (3.3
+    # step 5 "As built"): no invariant of the end can hold, so none is checked.
+    alone.trace.opt_out("the entry's answer comes after the session closed")
     fake = alone.fake
     slow = Blocking(
         fake.client(),
@@ -554,7 +560,9 @@ def test_an_entry_unanswered_at_the_close_is_one_error_alert(alone, caplog):
 def test_a_stop_cancelled_during_the_final_read_is_named_in_the_result(alone, caplog, book):
     # The leg's last line says its stop protects it. The close's final read then holds
     # its call of `book` 1 fake second, and another client cancels the stop as the hold
-    # begins: the stream's word of it comes while the books are read.
+    # begins: the stream's word of it comes while the books are read. The leg ends with no
+    # stop, named by the ERROR alert, which the session invariants take instead.
+    alone.trace.leave_unprotected("PressesStopWithTarget", "a stop cancelled in the final read")
     PressesStop.presses = 1
     fake = alone.fake
     other = fake.client()

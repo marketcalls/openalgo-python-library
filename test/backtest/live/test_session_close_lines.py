@@ -150,6 +150,10 @@ def stop_cancelled_after_the_line(world):
         other.cancelorder(order_id=stop.order_id, strategy="StopHold")
 
     after_the_line(world, "StopHold", cancel_the_stop)
+    # After the last lines the session sends nothing they did not name (3.3 step 5 "As
+    # built"): the leg ends with no stop, named by the ERROR alert, which the session
+    # invariants take instead of a stop (16-session-design 7.1).
+    world.trace.leave_unprotected("StopHold", "a stop cancelled after the last lines")
     return world
 
 
@@ -309,6 +313,9 @@ def stop_put_back_at_ctrl_c(world):
     the_entry_fills(world)
     world.stop_at(ist(14, 43, 20))
     world.lines = TimedLines(world.fake.clock)
+    # The stop held back at the last lines is not sent after them (3.3 step 5 "As
+    # built"): the leg ends with no stop, named by its line and the ERROR alert.
+    world.trace.leave_unprotected("RestsAnEntry", "a stop held back at the last lines")
     return world
 
 

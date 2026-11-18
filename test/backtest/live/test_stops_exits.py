@@ -506,7 +506,11 @@ def test_a_square_off_refused_after_the_retries_places_the_stop_again_each_time(
 def test_a_reminder_of_an_exit_that_failed_every_attempt_names_the_stop_placed_again(world, caplog):
     # The safe stop's exit is refused five times; the stop placed again reaches the broker
     # but its answer is lost and the order book cannot be read, so it is still unanswered
-    # at the safe stop's reminder: a sale by hand might sell beside it.
+    # at the safe stop's reminder: a sale by hand might sell beside it. The session ends
+    # with that stop still unanswered, so it cannot confirm the leg protected, as the
+    # reminder says: the session invariants take that instead of a confirmed stop.
+    world.trace.leave_unprotected("StopHold", "a stop placed again with its answer lost")
+
     def refuse_five():
         for _ in range(EXIT_ATTEMPTS):
             world.fake.reject_next("RMS blocked", price_type="MARKET")

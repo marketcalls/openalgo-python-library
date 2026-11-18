@@ -91,14 +91,18 @@ class Book:
         self.fills: list[Fill] = []
         self.positions = Positions()
 
-    def place(self, terms: OrderTerms, now_ns: int, last_price: float | None) -> Change:
-        """Accept an order. A stop whose trigger the last price already reached starts
-        open, as the sandbox does (sandbox/order_manager.py, place_order); `last_price`
-        is None when no price could be had (none traded, or the broker's login is gone),
-        and a stop then rests trigger pending."""
+    def place(
+        self, terms: OrderTerms, now_ns: int, last_price: float | None, client: str = ""
+    ) -> Change:
+        """Accept an order from `client` (`FakeOrder.client`). A stop whose trigger the
+        last price already reached starts open, as the sandbox does
+        (sandbox/order_manager.py, place_order); `last_price` is None when no price could
+        be had (none traded, or the broker's login is gone), and a stop then rests trigger
+        pending."""
         order = FakeOrder(
             order_id=self._ids.order_id(now_ns),
             placed_ns=now_ns,
+            client=client,
             **dataclasses.asdict(terms),
         )
         triggered_now = last_price is not None and reached(

@@ -190,6 +190,7 @@ def test_F77_an_error_mid_cancel_then_exit_drops_the_exit_and_places_the_stop_ag
 def test_F77_when_the_kernels_protect_fails_too_the_alert_lists_the_leg_without_a_stop(
     world, monkeypatch, caplog
 ):
+    world.trace.leave_unprotected("TargetHold", "F77 variant")
     at_price(world, ist(14, 44), 502.0)
     raise_once_after_the_stop_is_cancelled(monkeypatch)
 
@@ -211,6 +212,7 @@ def test_F77_when_the_kernels_protect_fails_too_the_alert_lists_the_leg_without_
 def test_F80_an_ambiguous_stop_placement_leaves_the_leg_marked_and_sends_nothing_more(
     world, caplog
 ):
+    world.trace.leave_unprotected("StopHold", "F80")
     other = world.fake.client()
 
     def the_same_stop_by_another_client():
@@ -269,6 +271,10 @@ def test_two_ctrl_c_with_the_stops_cancel_word_lost_place_the_stop_again_before_
 
 
 def test_a_stop_whose_cancel_has_no_word_at_the_end_is_not_reported_confirmed(world):
+    # A second Ctrl+C ends the session before the cancel's word (3.3 step 4): the leg is
+    # left with no confirmed stop and its line says so, which the invariants take.
+    world.trace.leave_unprotected("StopHold", "a second Ctrl+C before the cancel's word")
+
     def cancel_word_lost_and_reads_failing():
         world.fake.faults.drop_next_order_update()
         for _ in range(20):
@@ -437,6 +443,9 @@ def test_the_emergency_alert_says_a_confirmed_stop_protects_the_leg_until_it_is_
 def test_the_emergency_alert_names_an_exit_at_work_and_the_order_book_comes_first(
     world, monkeypatch, caplog
 ):
+    # The emergency stop (3.5) leaves the leg mid exit, named by its ERROR alert, which
+    # the session invariants take instead of a confirmed stop.
+    world.trace.leave_unprotected("TargetHold", "an emergency stop with an exit at work")
     at_price(world, ist(14, 44), 502.0)
 
     def exit_words_held_and_reads_failing():

@@ -18,6 +18,7 @@ from __future__ import annotations
 import email.utils
 import json
 import math
+import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -59,6 +60,9 @@ from .venue import Venue
 
 Route = Callable[[Venue, dict[str, Any]], tuple[dict[str, Any], int]]
 
+#: The HTTP header that names the client of the fake a request came from
+#: (`FakeOpenAlgo.client`): the fake's own test seam, no server reads it.
+CLIENT_HEADER = "x-fake-openalgo-client"
 #: The endpoints the fake answers, by the path after `/api/v1/` the SDK posts to.
 ROUTES: dict[str, Route] = {
     "placeorder": routes_orders.place,
@@ -100,11 +104,14 @@ class RestHandler:
         self._faults = faults
         self._api_key = api_key
         self._limiter = RateLimiter()
+        # The client of the call being answered on each thread, for the log.
+        self._calling = threading.local()
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         """The answer to one request; raises the client's own transport errors for a
         timeout, a dropped or a refused connection (the faults), and re-raises (after
         logging a problem) anything else."""
+        self._calling.client = request.headers.get(CLIENT_HEADER, "")
         try:
             return self._answer(request)
         except httpx.TransportError:
@@ -144,7 +151,7 @@ class RestHandler:
         body, status = None, 0
         acts = fault is None or fault.name == SLOW_ANSWER or fault.reached_broker
         if acts:
-            body, status = self._route(endpoint, payload)
+            body, status = self._route(endpoint, payload, self._calling.client)
             self._venue.flush()
         if times_out:
             # The client gives up after its read timeout, whatever the server does.
@@ -155,7 +162,9 @@ class RestHandler:
             return self._faulty(endpoint, payload, fault, request)
         return self._sent(endpoint, payload, service(body, status), body)
 
-    def _route(self, endpoint: str, payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    def _route(
+        self, endpoint: str, payload: dict[str, Any], client: str
+    ) -> tuple[dict[str, Any], int]:
         if endpoint == _TELEGRAM:
             # The notify route checks the API key alone (restx_api/telegram_bot.py).
             if payload.get("apikey") != self._api_key:
@@ -164,7 +173,11 @@ class RestHandler:
             # services/*: no key, or a login OpenAlgo revoked (get_auth_token_broker).
             return {"status": "error", "message": INVALID_KEY}, 403
         with self._venue.lock:
-            return ROUTES[endpoint](self._venue, payload)
+            self._venue.calling_client = client
+            try:
+                return ROUTES[endpoint](self._venue, payload)
+            finally:
+                self._venue.calling_client = ""
 
     def _faulty(
         self, endpoint: str, payload: dict[str, Any], fault: RestFault, request: httpx.Request
@@ -205,6 +218,7 @@ class RestHandler:
             status=status,
             answer=answer,
             mode=self._venue.mode.value,
+            client=getattr(self._calling, "client", ""),
             **detail,
         )
 

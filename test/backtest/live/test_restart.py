@@ -24,7 +24,9 @@ from restart_samples import (
     run_to_crash,
     stops_working,
 )
+from session_invariants import assert_session_invariants
 from session_samples import Hold, Rig, Script, alerts, ist
+from session_trace import trace_sessions
 from stops_samples import at_price, check_invariants, events, stop_world
 from test_stops_exits import TwoTrades, journal_stop, rising
 
@@ -244,14 +246,15 @@ def test_F55_a_restart_past_the_square_off_flattens_in_the_start_phase(world):
 
 
 def test_F56_a_journal_bound_to_another_broker_refuses_the_start(
-    world, make_fake_openalgo, tmp_path
+    world, make_fake_openalgo, monkeypatch, tmp_path
 ):
     world.stop_at(ist(14, 40, 20))
     world.run(StopWhenFlat)
     upstox = make_fake_openalgo(start_ns=world.fake.clock.now(), broker="upstox")
     upstox.add_instrument("SBIN", "NSE")
     upstox.trade("SBIN", "NSE", 500.0, volume=10.0)
-    other = Rig(upstox, Script(upstox), tmp_path)
+    traced = trace_sessions(upstox, monkeypatch, assert_session_invariants)
+    other = Rig(upstox, Script(upstox), tmp_path, traced)
     with pytest.raises(JournalError, match="zerodha"):
         other.run(StopWhenFlat, account="zerodha")
     assert upstox.orders() == []

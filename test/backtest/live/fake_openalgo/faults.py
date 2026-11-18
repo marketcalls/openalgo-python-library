@@ -120,8 +120,8 @@ class Faults:
         """The broker's login expires while OpenAlgo still holds it: `ping` still
         answers, while the broker's calls fail as the server reports them (funds empty,
         quotes, history, orders and books refused), the sandbox, which prices from the
-        broker's quotes, fills nothing, and the feed stops ticking, until
-        `restore_session`."""
+        broker's quotes, fills nothing, and the feed stops ticking and sends no live
+        order update (the broker's order stream is down too), until `restore_session`."""
         self._venue.set_switch("expired", True)
         self._venue.log.record(self._venue.clock.now(), FAULT, "session_expired")
 
@@ -133,9 +133,9 @@ class Faults:
     def revoke_login(self) -> None:
         """OpenAlgo revokes the broker's login, as at the daily session rollover
         (app.py:572-583): every call that needs it, `ping` and `analyzerstatus` included,
-        answers HTTP 403 "Invalid openalgo apikey", and the feed stops ticking, until
-        `restore_login`. `telegram/notify` checks the API key alone and still answers
-        (restx_api/telegram_bot.py, SendNotification)."""
+        answers HTTP 403 "Invalid openalgo apikey", and the feed stops ticking and sends no
+        live order update, until `restore_login`. `telegram/notify` checks the API key
+        alone and still answers (restx_api/telegram_bot.py, SendNotification)."""
         self._venue.set_switch("revoked", True)
         self._venue.log.record(self._venue.clock.now(), FAULT, "login_revoked")
 

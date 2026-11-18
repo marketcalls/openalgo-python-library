@@ -12,8 +12,9 @@ since pytest finds a fixture by its name in the module that uses it.
 - `fake_openalgo`: a `FakeOpenAlgo` on Monday 2026-11-16 10:15:00 IST in live mode, its
   proxy installed for `openalgo.feed`; `make_fake_openalgo(**options)` builds one with
   other options. Either keeps the test offline even in a module that took no other
-  fixture. At the end the fake's clients are retired and the test fails if the fake
-  logged a problem.
+  fixture. At the end each fake's end checks run (`FakeOpenAlgo.at_test_end`: the
+  session invariants of `session_invariants`), its clients are retired, and the test
+  fails if a check failed or the fake logged a problem.
 """
 
 from __future__ import annotations
@@ -105,8 +106,13 @@ def make_fake_openalgo(
         return fake
 
     yield build
-    for fake in built:
-        fake.close()
+    try:
+        for fake in built:
+            for check in fake.end_checks:
+                check()
+    finally:
+        for fake in built:
+            fake.close()
     problems = [entry for fake in built for entry in fake.log.problems()]
     assert problems == [], f"the fake OpenAlgo logged problems: {problems}"
     if own_guard is not None:

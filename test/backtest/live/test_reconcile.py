@@ -309,6 +309,10 @@ def test_F78_a_stop_placed_again_is_held_while_the_book_shows_fewer_units(laggin
         BY_HAND,
         lambda: other.cancelorder(order_id=stop_of(lagging).order_id, strategy="StopHold"),
     )
+    # The leg ends with no stop: the exit guard holds a stop for more units than the
+    # position book shows (5.3), and the ERROR alert names it. The session invariants take
+    # that instead of a stop (16-session-design 7.1).
+    lagging.trace.leave_unprotected("StopHold", "F78 with the stop cancelled by another client")
     outcome = lagging.run(StopHold, on_stop="keep")
     assert [o.status for o in lagging.orders() if o.price_type == "SL-M"] == ["cancelled"]
     assert [e["strategy"] for e in events(outcome, "exit_held")][:1] == ["StopHold"]
