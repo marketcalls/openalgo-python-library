@@ -51,7 +51,10 @@ def test_import_openalgo_loads_no_backtest_module():
 
 
 def test_the_run_functions_load_no_indicator_or_optimisation_module():
-    code = "import openalgo.backtest as bt; bt.backtest; bt.optimize; bt.Strategy; bt.Result"
+    code = (
+        "import openalgo.backtest as bt; bt.backtest; bt.optimize; bt.walk_forward; "
+        "bt.robustness; bt.Strategy; bt.Result"
+    )
     assert loaded_after(code) == []
 
 

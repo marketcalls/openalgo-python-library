@@ -36,12 +36,16 @@ FLAT = 1e-12
 #: The isometric directions: a step along x goes right and down, along y left and down
 #: (cos 30 and sin 30 degrees).
 ISO_X, ISO_Y = math.cos(math.pi / 6), math.sin(math.pi / 6)
-#: The tallest column of the surface, a share of the chart's height.
-TALLEST_SHARE = 0.38
-#: The surface's margin inside the chart, pixels, and the room its labels take on the
-#: right of the plane.
-SURFACE_PAD = 26
+#: The surface's chart height, pixels: taller than the other charts, since an isometric
+#: plane takes half as much height as width.
+SURFACE_HEIGHT = 420
+#: The span from the deepest to the tallest column, a share of the chart's height.
+TALLEST_SHARE = 0.36
+#: The surface's margin inside the chart, pixels, the room its labels take on the right
+#: of the plane, and below it.
+SURFACE_PAD = 20
 LABEL_ROOM = 48
+LABEL_BELOW = 30
 
 
 def _bound(block: GridBlock) -> float:
@@ -154,15 +158,26 @@ def _column(block: GridBlock, column: int, row: int, cell: float, scale: float) 
     )
 
 
+def _extent(block: GridBlock) -> tuple[float, float]:
+    """(how far the tallest column rises above break-even, how far the deepest falls
+    below it), in the objective's units, zero or more."""
+    gaps = block.values - block.level
+    known = gaps[np.isfinite(gaps)]
+    if not len(known):
+        return 0.0, 0.0
+    return max(0.0, float(known.max())), max(0.0, -float(known.min()))
+
+
 def surface_chart(block: GridBlock) -> str:
     """The isometric surface of `block` with its key (module docstring)."""
     count_x, count_y = len(block.columns), len(block.rows)
-    span_x = (count_x + count_y) * ISO_X
-    tallest = TALLEST_SHARE * HEIGHT
-    across = (WIDTH - 2 * SURFACE_PAD - LABEL_ROOM) / span_x
-    down = (HEIGHT - 2 * SURFACE_PAD - tallest) / ((count_x + count_y) * ISO_Y)
-    cell = min(across, down)
-    scale = tallest / 2 / _bound(block)
+    rise, fall = _extent(block)
+    tall = TALLEST_SHARE * SURFACE_HEIGHT
+    scale = tall / max(rise + fall, FLAT)
+    room = WIDTH - 2 * SURFACE_PAD - LABEL_ROOM
+    across = room / ((count_x + count_y) * ISO_X)
+    deep = SURFACE_HEIGHT - 2 * SURFACE_PAD - tall - LABEL_BELOW
+    cell = min(across, deep / ((count_x + count_y) * ISO_Y))
     order = sorted(
         ((column, row) for column in range(count_x) for row in range(count_y)),
         key=lambda place: (place[0] + place[1], place[0]),
@@ -173,10 +188,11 @@ def surface_chart(block: GridBlock) -> str:
     marks = [f"<polygon class='surf-base' points='{plane}'/>"]
     marks += [_column(block, column, row, cell, scale) for column, row in order]
     marks += _surface_axes(block, cell)
-    left = count_y * ISO_X * cell + SURFACE_PAD
-    top = tallest / 2 + SURFACE_PAD
+    spare = room - (count_x + count_y) * ISO_X * cell
+    left = SURFACE_PAD + spare / 2 + count_y * ISO_X * cell
+    top = SURFACE_PAD + rise * scale
     margin = Margin(int(round(top)), 0, 0, int(round(left)))
-    svg = frame(WIDTH, HEIGHT, margin, fmt.text(block.title), "".join(marks))
+    svg = frame(WIDTH, SURFACE_HEIGHT, margin, fmt.text(block.title), "".join(marks))
     return f"{svg}<p class='key'>{_key(block)}</p>"
 
 

@@ -45,6 +45,9 @@ READING = (
     "check's number, so the same seed gives the same report on every platform. Versus "
     "random and synthetic stress also read the permutation test's permuted paths, and "
     "stress the noise check's noisy copies, from those checks' streams.",
+    "The searching checks rerun the strategy with its parameters changed, on the run's "
+    "bars read with the history every combination's warm-up needs, so a combination "
+    "with a longer warm-up reads the bars it would read in a sweep.",
 )
 
 

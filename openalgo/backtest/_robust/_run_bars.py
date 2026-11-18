@@ -45,9 +45,9 @@ from ._session_entries import SessionTimes, session_times
 
 #: What the bar checks of a futures series are refused with, and what to do instead.
 FUTURES = (
-    "the checks that rerun the backtest (vs_random, permutation, noise, shifted, "
-    "other_markets, stress, random_exits, delayed, liquidity) for a strategy on a futures "
-    "series",
+    "the checks that rerun the backtest (out_of_sample, walk_forward, vs_random, "
+    "permutation, noise, shifted, other_markets, stress, random_exits, delayed, "
+    "liquidity, parameters, noise_optimization) for a strategy on a futures series",
     "a futures series changes contract at each roll, and the reruns read the run's bars "
     "as one series of its own, which cannot hold the rolls yet; run checks='quick', or a "
     "list of the trade-list checks",
@@ -127,16 +127,21 @@ def _longest(histories: list[Any], symbol: str) -> Any:
 
 
 def bars_for(
-    strategy: type, client: Any, arguments: dict[str, Any], parameter_sets: list[Any]
+    strategy: type,
+    client: Any,
+    arguments: dict[str, Any],
+    parameter_sets: list[Any],
+    refused: tuple[str, str] = FUTURES,
 ) -> tuple[RunBars, dict[str, Any]]:
     """(the `RunBars` of a run of `strategy` with the run arguments `arguments`, each
     symbol with the longest history any of `parameter_sets` (its `params=` values) keeps;
     the arguments of its reruns without `data=`, the benchmark's closes as the source
-    gives them). Raises NotImplementedError for a futures series and what preparing the
-    run raises (the data layer's errors among them)."""
+    gives them). Raises NotImplementedError for a futures series, with `refused` (what
+    is refused, what to do), and what preparing the run raises (the data layer's errors
+    among them)."""
     prepared = prepare(strategy, client, {**arguments, "client": client}, parameter_sets)
     if prepared.futures is not None:
-        raise not_supported(*FUTURES)
+        raise not_supported(*refused)
     plan = prepared.plan
     checks = IndicatorChecks(strategy_name(strategy), measured=prepared.measured)
     histories = [_kept_history(strategy, prepared, params, checks) for params in parameter_sets]

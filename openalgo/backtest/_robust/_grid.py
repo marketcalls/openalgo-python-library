@@ -12,9 +12,11 @@ gives them, which is the order its steps are counted in.
 
 The neighbourhood (`cube`), when no range is given: every combination of each number
 parameter of the run at minus, zero and plus `step` of its value (a whole number moves
-by at least one unit, rounding half up, so 14 at 10 percent gives 13, 14 and 15; a
-fraction by `step` of its value, so a zero stays zero); a parameter that is not a number
-(a flag, a name) stays as the run has it.
+by at least one unit, rounding half up, so 14 at 10 percent gives 13, 14 and 15, and
+never below 1 from 1 or more nor below 0 from 0, since such a parameter is most often a
+count or a period that a strategy cannot take at 0 or below: 1 gives 1 and 2; a
+fraction by `step` of its value, so it keeps its sign and a zero stays zero); a
+parameter that is not a number (a flag, a name) stays as the run has it.
 
 A neighbour of a combination (`Grid.neighbours`) is another combination of the grid at
 most one step from it in every parameter: the 8 around it on a grid of two parameters,
@@ -115,8 +117,11 @@ def _number(value: Any) -> bool:
 def around(value: Any, step: float) -> tuple[Any, ...]:
     """The values of a parameter at minus, zero and plus `step` (module docstring)."""
     if isinstance(value, numbers.Integral):
-        move = max(1, math.floor(step * abs(int(value)) + 0.5))
-        return (int(value) - move, int(value), int(value) + move)
+        whole = int(value)
+        move = max(1, math.floor(step * abs(whole) + 0.5))
+        floor = 1 if whole >= 1 else 0 if whole == 0 else None
+        low = whole - move if floor is None else max(whole - move, floor)
+        return tuple(dict.fromkeys((low, whole, whole + move)))
     move = step * abs(float(value))
     return (float(value) - move, float(value), float(value) + move) if move else (value,)
 

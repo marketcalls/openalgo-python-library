@@ -30,7 +30,7 @@ from .._optimize import _run_arguments, _split_settings
 from ..errors import ConfigError
 from ..report._performance import Performance
 from ._check_walk_forward import SETTINGS as CHECK_SETTINGS
-from ._grid import search_grid
+from ._grid import Grid, search_grid
 from ._part_objective import objective_name
 from ._paths import fan_steps
 from ._rerun_one import Known, rerun
@@ -43,6 +43,13 @@ from ._walk_tables import fold_frame
 from ._windows import folds as cut_folds
 
 LOGGER = logging.getLogger("openalgo.backtest.walk_forward")
+#: What a walk-forward of a futures series is refused with, and what to do instead.
+FUTURES = (
+    "bt.walk_forward of a strategy on a futures series",
+    "a futures series changes contract at each roll, and the walk-forward reruns the "
+    "run's bars as one series of its own, which cannot hold the rolls yet; run "
+    "bt.optimize on each in-sample window and bt.backtest on the window after it",
+)
 #: The settings of the check that `bt.walk_forward` takes as its own arguments.
 FOLD_SETTINGS = tuple(s for s in CHECK_SETTINGS if s.name in ("folds", "anchored", "in_sample"))
 
@@ -140,6 +147,34 @@ def _plan(
     )
 
 
+def _checked(
+    strategy: type, objective: Any, shape: dict[str, Any], workers: Any, progress: Any
+) -> dict[str, Any]:
+    """The fold settings `shape` checked. Raises ConfigError for an unusable argument."""
+    from ..strategy import Strategy
+
+    if not (isinstance(strategy, type) and issubclass(strategy, Strategy)):
+        raise ConfigError("bt.walk_forward takes a bt.Strategy subclass")
+    check_objective(objective)
+    if workers is not None and whole(1)(workers) is None:
+        raise ConfigError(f"workers takes a whole number, 1 or more, got {workers!r}")
+    if progress is not None and not callable(progress):
+        raise ConfigError(f"progress takes a function of one line of text, got {progress!r}")
+    return resolve("bt.walk_forward", FOLD_SETTINGS, shape)
+
+
+def _grid(strategy: type, ranges: dict[str, Any], given: Any) -> Grid:
+    """The grid searched. Raises ConfigError when there is nothing to search."""
+    grid = search_grid(strategy, ranges, given)
+    if grid is None:
+        raise ConfigError(
+            f"bt.walk_forward: nothing to search: pass ranges named after the parameters of "
+            f"{strategy.__name__} ({sorted(strategy.parameters())}, fast=range(5, 30, 5)) or "
+            "declare them with bt.param(default, values)"
+        )
+    return grid
+
+
 def walk_forward(
     strategy: type,
     client: Any = None,
@@ -155,65 +190,29 @@ def walk_forward(
     """Walk `strategy` forward over its parameter ranges (module docstring); see
     `bt.walk_forward`. Raises ConfigError for unusable arguments, too few sessions for
     the folds, or nothing to search, and whatever a backtest raises."""
-    from ..strategy import Strategy
-
-    if not (isinstance(strategy, type) and issubclass(strategy, Strategy)):
-        raise ConfigError("bt.walk_forward takes a bt.Strategy subclass")
-    check_objective(objective)
-    shape = resolve(
-        "bt.walk_forward",
-        FOLD_SETTINGS,
-        {"folds": folds, "anchored": anchored, "in_sample": in_sample},
-    )
-    if workers is not None and whole(1)(workers) is None:
-        raise ConfigError(f"workers takes a whole number, 1 or more, got {workers!r}")
-    if progress is not None and not callable(progress):
-        raise ConfigError(f"progress takes a function of one line of text, got {progress!r}")
+    shape = {"folds": folds, "anchored": anchored, "in_sample": in_sample}
+    shape = _checked(strategy, objective, shape, workers, progress)
     run_settings, ranges = _split_settings(strategy, settings, "bt.walk_forward")
     arguments = _run_arguments(client, run_settings, "bt.walk_forward")
-    grid = search_grid(strategy, ranges, arguments["params"])
-    if grid is None:
-        raise ConfigError(
-            f"bt.walk_forward: nothing to search: pass ranges named after the parameters of "
-            f"{strategy.__name__} ({sorted(strategy.parameters())}, fast=range(5, 30, 5)) or "
-            "declare them with bt.param(default, values)"
-        )
+    grid = _grid(strategy, ranges, arguments["params"])
     sets = parameter_sets(strategy, arguments["params"], grid, None)
-    bars, rerun_arguments = bars_for(strategy, client, arguments, sets)
+    bars, rerun_arguments = bars_for(strategy, client, arguments, sets, FUTURES)
     dates = session_dates(bars)
     made = cut_folds(len(dates), shape["folds"], shape["in_sample"], shape["anchored"])
     started = time.perf_counter()
     _, known = rerun(strategy, rerun_arguments, bars.symbols, list(bars.frames), Known())
     seconds = time.perf_counter() - started
-    total = len(made) * (len(grid.combos) + 1)
-    chosen = choose_workers(workers, total, strategy, rerun_arguments)
+    chosen = choose_workers(workers, len(made) * (len(grid.combos) + 1), strategy, rerun_arguments)
     ship = (shipped(strategy, "the strategy", chosen), shipped(objective, "the objective", chosen))
-    setup = Setup(
-        *ship,
-        rerun_arguments,
-        bars,
-        known,
-        pd.DatetimeIndex(dates),
-        fan_steps(len(dates)),
-        None,
-    )
+    steps = fan_steps(len(dates))
+    setup = Setup(*ship, rerun_arguments, bars, known, pd.DatetimeIndex(dates), steps, None)
     plan = _plan(strategy.__name__, made, shape, len(grid.combos), chosen, seconds)
     (progress or LOGGER.info)(plan)
     with Reruns(setup, chosen) as runner:
+        capital = float(arguments["capital"])
+        given, bounds = arguments["params"], (rerun_arguments["start"], rerun_arguments["end"])
         subject = SearchRun(
-            strategy,
-            float(arguments["capital"]),
-            None,
-            None,
-            math.nan,
-            grid,
-            arguments["params"],
-            bars,
-            runner,
-            0,
-            dates,
-            rerun_arguments["start"],
-            rerun_arguments["end"],
+            strategy, capital, None, None, math.nan, grid, given, bars, runner, 0, dates, *bounds
         )
         outcome = walk(subject, runner, made, objective)
     return WalkForwardResult(outcome, dates, plan)

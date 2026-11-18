@@ -239,6 +239,56 @@ def rising_run(trades: int = 60, **settings) -> bt.Result:
     return bt.backtest(Flip, data=bars(np.ones(2 * trades + 2)), **FREE, **settings)
 
 
+class Weekday(bt.Strategy):
+    """Buys 10 shares at the close of a session on weekday `day` (0 Monday to 4 Friday)
+    when flat with no working order, and exits at the next session's close: its trade of
+    session d buys at the open of session d + 1 and sells at the open of session d + 2.
+    It decides by the date, so a run of any window of the sessions trades the same
+    sessions."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "D"
+    day = 0
+
+    def on_bar(self, bar):
+        if self.position.is_flat:
+            if bar.time.weekday() == self.day and not self.orders:
+                self.buy(qty=QUANTITY)
+        else:
+            self.exit()
+
+
+#: The move a weekday's trade makes when its weekday is favoured, and when it is not,
+#: rupees a share.
+FAVOURED_MOVE, OTHER_MOVE = 3.0, -1.0
+
+
+def weekday_bars(count: int, favoured) -> pd.DataFrame:
+    """`count` daily bars (`opens_bars`) whose move from the open of session s - 1 to the
+    open of session s is `FAVOURED_MOVE` when session s - 2 falls on one of the weekdays
+    `favoured(s)` gives, else `OTHER_MOVE`: a `Weekday` trade of session d makes 10 x
+    the move into session d + 2."""
+    days = nse_sessions("2023-01-02", count)
+    steps = np.zeros(count)
+    for s in range(2, count):
+        steps[s] = FAVOURED_MOVE if days[s - 2].weekday() in favoured(s) else OTHER_MOVE
+    return opens_bars(FIRST_PRICE + np.cumsum(steps))
+
+
+def weekday_trades(count: int, day: int, first: int = 0, last: int | None = None) -> list[int]:
+    """The sessions, positions from `first` to `last` of the first `count` NSE sessions
+    from 2023-01-02, at whose close `Weekday` with `day` buys in a run of those sessions:
+    each one on that weekday that leaves two sessions after it in the run (to buy and to
+    sell), as long as the trade before it has sold."""
+    days = nse_sessions("2023-01-02", count)
+    last = count - 1 if last is None else last
+    bought, free_from = [], first
+    for d in range(first, last - 1):
+        if d >= free_from and days[d].weekday() == day:
+            bought.append(d)
+            free_from = d + 2
+    return bought
+
+
 #: Settings that keep the bar checks of a full report small in a test: one process, 20
 #: runs of each check and 10 candidates of each stress generator.
 SMALL_BARS = {

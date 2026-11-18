@@ -12,10 +12,13 @@ a total such as the net profit over the years each part lasted) and measured fro
 objective's break-even. Pass: the out-of-sample run profitable (a net profit of at least
 half a paisa) and the ratio at least `keep` (0.5).
 
-Not judged when the run has too few closed trades or did not make money, when its
-objective is undefined, has no break-even or is not above it, when either part would
-hold fewer than two sessions, when the in-sample part did not make more than break-even
-(nothing to keep), or when an out-of-sample objective is undefined.
+Not judged when either part would hold fewer than two sessions, when the objective has
+no break-even, when the in-sample part did not make more than break-even (nothing to
+keep), or when an out-of-sample objective is undefined; without ranges also when the run
+has too few closed trades or did not make money, or its objective is undefined or not
+above break-even (the run as given is what the parts judge); with ranges, when the two
+parts closed fewer than `min_trades` (30) trades together (the search is judged on its
+own runs, whatever the run's own parameters made).
 
 Charts: the price with the out-of-sample sessions shaded; the equity of the two parts
 stitched (`_stitch`) with the out-of-sample sessions shaded, so its start is marked; a
@@ -34,9 +37,8 @@ import pandas as pd
 
 from ..errors import ConfigError
 from . import _words as words
-from ._bar_common import break_even
+from ._bar_common import break_even, unmeasured
 from ._blocks import SessionsBlock, TableBlock
-from ._part_objective import objective_name
 from ._rerun_one import RerunRow
 from ._reruns import Family, Later
 from ._search_common import objective_unjudged, params_text, search_unjudged
@@ -45,7 +47,7 @@ from ._setting import Setting, between
 from ._stitch import stitched_equity
 from ._trade_common import BREAK_EVEN_RUPEES, ENOUGH_TRADES
 from ._verdict import FAILED, PASSED, Outcome, not_judged
-from ._walk import annual, best
+from ._walk import annual, annual_name, best
 from ._windows import Window, split
 
 SETTINGS = (
@@ -81,7 +83,7 @@ def rule(settings: Mapping[str, Any], objective: Any) -> str:
     """The pass rule, in words."""
     return (
         f"the out-of-sample run is profitable and keeps {words.percent(settings['keep'], 0)} "
-        f"of the in-sample {objective_name(objective)} per year (the last "
+        f"of the in-sample {annual_name(objective)} (the last "
         f"{words.percent(1.0 - settings['in_sample'], 0)} of the sessions out of sample)"
     )
 
@@ -94,11 +96,14 @@ def parts(subject: SearchRun, settings: Mapping[str, Any]) -> tuple[Window, Wind
 def unjudged(subject: SearchRun, settings: Mapping[str, Any], objective: Any) -> Outcome | None:
     """The "not judged" outcome of the module docstring that needs no rerun, else None."""
     text = rule(settings, objective)
-    short = search_unjudged(subject, settings, text) or objective_unjudged(
-        subject, objective, text, "out-of-sample"
-    )
-    if short is not None:
-        return short
+    if subject.grid is None:
+        short = search_unjudged(subject, settings, text) or objective_unjudged(
+            subject, objective, text, "out-of-sample"
+        )
+        if short is not None:
+            return short
+    elif break_even(objective) is None:
+        return not_judged(text, unmeasured(objective))
     try:
         parts(subject, settings)
     except ConfigError as error:
@@ -162,16 +167,38 @@ def run(
             subject.family(grid, position, outside, detail=True),
         ]
     )
-    level, name = break_even(objective), objective_name(objective)
+    if first.failure or second.failure:
+        return not_judged(text, f"A part did not run: {first.failure or second.failure}.")
+    closed = first.trades + second.trades
+    if grid is not None and closed < settings["min_trades"]:
+        why = (
+            f"Too few trades to judge: the two parts closed {words.whole(closed, 'trade')}, "
+            f"{settings['min_trades']} needed."
+        )
+        return not_judged(text, why)
+    return _judged(subject, settings, objective, (inside, outside), (first, second), table)
+
+
+def _judged(
+    subject: SearchRun,
+    settings: Mapping[str, Any],
+    objective: Any,
+    windows: tuple[Window, Window],
+    runs: tuple[RerunRow, RerunRow],
+    table: pd.DataFrame,
+) -> Outcome:
+    """The verdict, figure, note and blocks of the two parts that ran."""
+    text = rule(settings, objective)
+    (inside, outside), (first, second), grid = windows, runs, subject.grid
+    position = None if grid is None else best(table["in_sample"].to_numpy(dtype=float))
+    level, name = break_even(objective), annual_name(objective)
     in_year = annual(first.objective, first.years, objective)
     out_year = annual(second.objective, second.years, objective)
     chosen = "" if grid is None else f" with {params_text(grid.swept(position))}, searched best"
-    if first.failure or second.failure:
-        return not_judged(text, f"A part did not run: {first.failure or second.failure}.")
     if not in_year > level:
         return not_judged(
             text,
-            f"Nothing to keep: in sample{chosen} the {name} per year is "
+            f"Nothing to keep: in sample{chosen} the {name} is "
             f"{words.number(in_year)}, not above {level:g}.",
         )
     if not math.isfinite(out_year):
@@ -188,7 +215,7 @@ def run(
         "out_of_sample_sessions": float(outside.sessions),
     }
     figure = (
-        f"out of sample the {name} per year is {words.number(out_year)}, "
+        f"out of sample the {name} is {words.number(out_year)}, "
         f"{words.percent(ratio)} of the in-sample {words.number(in_year)}; the run made "
         f"{words.rupees(second.net_profit)} out of sample"
     )
@@ -266,7 +293,7 @@ def _compare(
         (label, *(_shown(part.detail.figures[key], how) for part in (first, second)))
         for label, key, how in TABLE_ROWS
     ]
-    rows.append((f"{name.capitalize()} per year", words.number(in_year), words.number(out_year)))
+    rows.append((name.capitalize(), words.number(in_year), words.number(out_year)))
     return TableBlock(
         "In sample against out of sample",
         "Each part's figures",

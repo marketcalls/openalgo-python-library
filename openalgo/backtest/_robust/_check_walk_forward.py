@@ -40,7 +40,7 @@ from ._search_setup import SearchRun
 from ._setting import Setting, between, whole
 from ._trade_common import BREAK_EVEN_RUPEES, ENOUGH_TRADES
 from ._verdict import FAILED, NOT_JUDGED, PASSED, Outcome, not_judged
-from ._walk import WalkOutcome, walk
+from ._walk import WalkOutcome, annual_name, walk
 from ._walk_tables import drift_words, fold_frame, fold_table
 from ._windows import Fold, folds
 
@@ -82,7 +82,7 @@ def rule(settings: Mapping[str, Any], objective: Any) -> str:
     """The pass rule, in words."""
     return (
         f"the stitched out-of-sample run is profitable, its walk-forward efficiency (the "
-        f"{objective_name(objective)} per year out of sample over in sample) is at least "
+        f"{annual_name(objective)} out of sample over in sample) is at least "
         f"{words.percent(settings['efficiency'], 0)}, and at least "
         f"{words.percent(settings['fold_share'], 0)} of the folds are profitable out of sample"
     )

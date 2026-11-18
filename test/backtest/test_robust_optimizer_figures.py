@@ -1,0 +1,160 @@
+"""The overfitting figures `bt.optimize` gains from the grid it already ran (design 17,
+section 5): the neighbourhood of the best with a spike warning, the deflated Sharpe ratio
+and the probability of backtest overfitting, and the heatmap page that shows them; on
+own daily bars with no server, in this process.
+
+`robust_runs.Weekday` buys 10 shares at the close of a session on its weekday `day`;
+`weekday_bars` plants +30 rupees on a trade of a favoured weekday and -10 on any other
+(`test_robust_search_checks` describes them). The sweep is days 0 to 4.
+"""
+
+import math
+
+import pytest
+from robust_runs import FREE, Weekday, weekday_bars, weekday_trades
+from test_report_tearsheet import FORBIDDEN_NAME_HASHES, Structure, section_ids
+
+import openalgo.backtest as bt
+from openalgo.backtest._robust._verdict import FAILED, NOT_JUDGED, PASSED
+from openalgo.backtest.errors import ConfigError
+
+SESSIONS = 300
+WIN, LOSS = 30.0, -10.0
+
+
+def sweep(data, **settings):
+    return bt.optimize(Weekday, data=data, **FREE, day=range(5), workers=1, **settings)
+
+
+@pytest.fixture(scope="module")
+def spike():
+    """Wednesday trades win, every other day's lose."""
+    return sweep(weekday_bars(SESSIONS, lambda s: (2,)))
+
+
+@pytest.fixture(scope="module")
+def plateau():
+    """Every trade wins."""
+    return sweep(weekday_bars(SESSIONS, lambda s: range(5)))
+
+
+def test_the_best_of_a_lone_spike_fails_its_neighbourhood_and_warns(spike):
+    # Wednesday makes 30 a trade; its neighbours Tuesday and Thursday lose 10 a trade.
+    n1, n2, n3 = (len(weekday_trades(SESSIONS, day)) for day in (1, 2, 3))
+    assert spike.best == {"day": 2}
+    found = spike.neighbourhood
+    assert found.verdict == FAILED
+    assert found.summary["median_ratio"] == pytest.approx(LOSS * (n1 + n3) / 2 / (WIN * n2))
+    assert list(found.table["neighbour"]) == [False, True, False, True, False]
+    assert len(spike.warnings) == 1
+    assert spike.warnings[0].startswith(
+        "The best combination (day 2) looks like a lone spike, not a plateau"
+    )
+
+
+def test_the_best_of_a_plateau_passes_and_does_not_warn(plateau):
+    assert plateau.neighbourhood.verdict == PASSED
+    assert plateau.neighbourhood.summary["profitable_share"] == 1.0
+    assert plateau.warnings == []
+
+
+def test_the_figures_change_no_column_of_the_table(spike):
+    assert list(spike.table.columns) == [
+        "day",
+        "net_profit",
+        "total_return",
+        "max_drawdown",
+        "sharpe",
+        "trades",
+        "objective",
+    ]
+
+
+def test_a_best_that_dominates_every_block_never_overfits(spike):
+    # Wednesday's session returns are above every other day's in every block of the
+    # cross-validation, so it is best in sample and out of sample in all C(16, 8) splits.
+    figures = spike.overfitting
+    assert spike.overfitting_probability == 0.0
+    assert figures["blocks"] == 16 and figures["splits"] == 12_870
+    assert figures["trials"] == 5 and figures["sessions"] == SESSIONS
+
+
+def test_the_deflated_sharpe_ratio_is_a_probability(spike):
+    figures = spike.overfitting
+    assert 0.0 <= spike.deflated_sharpe <= 1.0
+    assert figures["deflated_sharpe"] == spike.deflated_sharpe
+    assert figures["expected_best_sharpe"] > 0.0
+
+
+def test_a_sweep_that_minimises_leaves_the_neighbourhood_not_judged():
+    result = sweep(weekday_bars(SESSIONS, lambda s: (2,)), maximize=False)
+    assert result.neighbourhood.verdict == NOT_JUDGED
+    assert "better higher" in result.neighbourhood.note
+    assert result.warnings == []
+
+
+def test_an_objective_without_a_break_even_leaves_the_neighbourhood_not_judged():
+    result = sweep(weekday_bars(SESSIONS, lambda s: (2,)), objective="win_rate")
+    assert result.neighbourhood.verdict == NOT_JUDGED
+    assert result.neighbourhood.note.startswith("The objective win_rate has no value")
+
+
+def test_a_grid_of_one_combination_has_nothing_to_deflate():
+    result = bt.optimize(
+        Weekday, data=weekday_bars(SESSIONS, lambda s: (2,)), **FREE, day=(2,), workers=1
+    )
+    assert math.isnan(result.deflated_sharpe) and math.isnan(result.overfitting_probability)
+    assert result.neighbourhood.verdict == NOT_JUDGED
+
+
+# ----- the heatmap page ---------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def page(spike):
+    return spike.tearsheet()
+
+
+def test_the_page_is_the_search_the_neighbourhood_the_overfitting_and_the_notes(page):
+    assert section_ids(page) == ["search", "neighbourhood", "overfitting", "notes"]
+
+
+def test_the_page_draws_the_heatmap_and_the_surface_with_the_best_outlined(page):
+    assert "aria-label='Objective'" in page and "aria-label='Objective as a surface'" in page
+    assert page.count("class='heat-cell cell-marked'") == 1
+    assert page.count("class='surf-top cell-marked'") == 1
+
+
+def test_the_page_states_the_spike_warning_and_the_figures(spike, page):
+    assert "Warning: The best combination (day 2) looks like a lone spike" in page
+    assert ">Deflated Sharpe<" in page and ">Overfitting<" in page
+
+
+def test_the_page_is_one_self_contained_well_formed_page(page):
+    assert page.startswith("<!DOCTYPE html>") and page.isascii()
+    lower = page.lower()
+    for forbidden in ("http://", "https://", "@import", "<link", "<iframe", "<img", "src="):
+        assert forbidden not in lower, forbidden
+    structure = Structure(page)
+    assert structure.errors == [] and structure.stack == []
+
+
+def test_the_page_names_no_third_party_product(page):
+    import hashlib
+    import re
+
+    tokens = set(re.findall(r"[a-z0-9][a-z0-9.\-]*", page.lower()))
+    tokens |= {part for token in tokens for part in token.split("-")}
+    hashed = {hashlib.sha256(token.encode()).hexdigest()[:16] for token in tokens}
+    assert not hashed & FORBIDDEN_NAME_HASHES
+
+
+def test_the_page_is_written_to_a_file(spike, tmp_path):
+    target = tmp_path / "sweep.html"
+    assert spike.tearsheet(target) == str(target)
+    assert target.read_text(encoding="utf-8") == spike.tearsheet()
+
+
+def test_the_page_refuses_a_parameter_the_sweep_did_not_vary(spike):
+    with pytest.raises(ConfigError, match="'fast' is not a swept parameter"):
+        spike.tearsheet(x="fast")

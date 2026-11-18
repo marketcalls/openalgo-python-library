@@ -347,10 +347,12 @@ def record(
 
 def optimize(strategy: type[Strategy], client: Any = None, **settings: Any) -> Any:
     """Sweep the strategy's parameters over a grid and return an `OptimizeResult`
-    (`.table`, `.best`, `.select(**params)`, `.heatmap(x, y)`, `.path`). Takes the run
-    arguments of `bt.backtest`, ranges named after parameters (`fast=range(5, 30, 5)`;
-    `bt.param` ranges otherwise), `objective=`, `maximize=`, `workers=` and `progress=`.
-    See `_optimize.optimize` for the rules and errors."""
+    (`.table`, `.best`, `.select(**params)`, `.heatmap(x, y)`, `.path`; and from the grid
+    it ran, `.neighbourhood` with a spike warning in `.warnings`, `.deflated_sharpe`,
+    `.overfitting_probability`, `.overfitting` and `.tearsheet(path)`, its heatmap page).
+    Takes the run arguments of `bt.backtest`, ranges named after parameters
+    (`fast=range(5, 30, 5)`; `bt.param` ranges otherwise), `objective=`, `maximize=`,
+    `workers=` and `progress=`. See `_optimize.optimize` for the rules and errors."""
     from ._optimize import optimize as sweep
 
     return sweep(strategy, client, **settings)
@@ -402,13 +404,17 @@ def robustness(strategy: type[Strategy], client: Any = None, **settings: Any) ->
         (0, or 1 for a profit factor), and an objective without one (a win rate, a
         function, whose value for a run that makes nothing is not known) leaves them not
         judged.
+    ranges: keywords named after strategy parameters (`fast=range(5, 30, 5)`; the
+        `bt.param` ranges the strategy declares otherwise) are what the searching checks
+        search; `params=` holds the run's own parameters, its chosen settings, which the
+        parameter neighbourhood judges among their neighbours.
     others: the symbols other_markets runs the strategy on, unchanged (["ICICIBANK",
         "HDFCBANK"] on the strategy's exchange, or (symbol, exchange) pairs), read from
         the run's source: a `data=` dict by symbol holding them, or OpenAlgo through
         `client`. Without it other_markets is not judged.
     runs: alternative runs of each check (1000); seed: the seed of every check's
         stream (0), the same report for the same seed on every platform.
-    workers, progress: as in `bt.optimize`: the bar checks' reruns run in `workers`
+    workers, progress: as in `bt.optimize`: the checks' reruns run in `workers`
         processes (the CPU count by default; `workers=1` keeps them in this process),
         and the plan, with the reruns it needs and an estimate of their time, is reported
         through `progress` (or the `openalgo.backtest.robustness` logger) before the

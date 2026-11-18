@@ -91,8 +91,11 @@ class CheckResult:
     table: a row per run (an assignment, an order, a path, a rerun), empty when not
     judged; other markets has a row per symbol, shifted bars a row per shift, delayed
     orders a row per pair of delays, which it keeps when its one-bar-late run entered
-    again, liquidity a row per fill model, and synthetic stress a row per rule, which it
-    keeps when no rule keeps enough candidates to be judged.
+    again, liquidity a row per fill model, synthetic stress a row per rule, which it
+    keeps when no rule keeps enough candidates to be judged, out of sample a row per part
+    and then a row per combination searched, walk-forward a row per fold (which it keeps
+    when its stitched runs closed too few trades), and the parameter neighbourhood and
+    the noise-robust optimization a row per combination.
     summary: its figures by name, empty when not judged but for synthetic stress (as
     its table); fractions are fractions (0.95 is 95 percent), money is rupees, and
     drawdowns are zero or negative.

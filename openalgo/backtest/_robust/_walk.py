@@ -54,9 +54,21 @@ ANNUAL_TOTALS = ("net_profit", "net_pnl", "total_return")
 
 def annual(value: float, years: float, objective: Any) -> float:
     """`value` of `objective` per year (module docstring)."""
-    if isinstance(objective, str) and objective in ANNUAL_TOTALS:
+    if totals(objective):
         return value / years if years > 0 else math.nan
     return value
+
+
+def totals(objective: Any) -> bool:
+    """Whether `objective` totals over time, so its figures are put per year."""
+    return isinstance(objective, str) and objective in ANNUAL_TOTALS
+
+
+def annual_name(objective: Any) -> str:
+    """The objective's name as its compared figures read: "net_profit per year" for one
+    that totals over time, else its name ("sharpe")."""
+    name = objective if isinstance(objective, str) else getattr(objective, "__name__", "custom")
+    return f"{name} per year" if totals(objective) else name
 
 
 @dataclass(frozen=True, eq=False)
@@ -212,4 +224,13 @@ def walk(subject: SearchRun, runner: Reruns, folds: Sequence[Fold], objective: A
     return WalkOutcome(outcomes, grid, objective, performance)
 
 
-__all__ = ["ANNUAL_TOTALS", "FoldOutcome", "WalkOutcome", "annual", "best", "walk"]
+__all__ = [
+    "ANNUAL_TOTALS",
+    "FoldOutcome",
+    "WalkOutcome",
+    "annual",
+    "annual_name",
+    "best",
+    "totals",
+    "walk",
+]
