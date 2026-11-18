@@ -15,7 +15,8 @@ style of `Result.summary()`:
 
 An "Alerts : 2 not delivered" line comes before the end state when an alert of the
 session did not reach OpenAlgo. The Slippage line adds "(1 MARKET fill not compared: no
-bar of its decision)" when the session had no bar to set a MARKET fill against. The
+bar of its decision)" when the session had no bar to set a MARKET fill against, and reads
+"not compared (2 MARKET fills: no bar of their decisions)" when it had none for any. The
 Strategies line names after "; earlier today:" the
 strategies an earlier start of the day ran and this one does not, whose figures the day's
 include. A leg whose OpenAlgo books differed from the engine at the
@@ -41,7 +42,6 @@ from dataclasses import dataclass
 
 from .._summary import _rupees
 from ..errors import ConfigError
-from ..report._format import MISSING
 from ._types import Mode
 
 # Rupee text has two decimals (paise); a slippage that rounds to zero there is none.
@@ -71,11 +71,11 @@ class SessionSummary:
     `Result.contract_notes` names (its `adjustment` column).
     `slippage` is rupees the live MARKET fills cost beyond the fills the backtest models
     for the same orders, each at the open of the bar that opens at its decision with the
-    run's modelled slippage (negative when live did better), or None when no backtest was
-    compared; `slippage_not_compared` counts the MARKET fills it could not set against a
-    bar. `rejected_orders` counts the orders the broker or OpenAlgo refused,
-    `unprotected_seconds` the seconds a position had no stop at the broker (shown
-    rounded up, so any exposure shows), and
+    run's modelled slippage (negative when live did better), or None when not one of the
+    day's MARKET fills could be compared; `slippage_not_compared` counts the MARKET fills
+    it could not set against a bar. `rejected_orders` counts the orders the broker or
+    OpenAlgo refused, `unprotected_seconds` the seconds a position had no stop at the
+    broker (shown rounded up, so any exposure shows), and
     `reconcile_mismatches` the reconciliations whose broker position differed from the
     engine's. `undelivered_alerts` counts the session's alerts that did not reach
     OpenAlgo, failed or dropped (`Alerts.undelivered`). `flat` is True when the session
@@ -149,7 +149,7 @@ def summary_text(summary: SessionSummary) -> str:
         ("Gross P&L", _rupees(summary.gross_pnl)),
         ("Charges", f"{_rupees(summary.charges)} (modelled)"),
         ("Net P&L", _rupees(summary.net_pnl)),
-        ("Slippage", _slippage(summary.slippage) + _not_compared(summary.slippage_not_compared)),
+        ("Slippage", _slippage(summary.slippage, summary.slippage_not_compared)),
         ("Rejected", _count(summary.rejected_orders, "order")),
         ("Unprotected", f"{math.ceil(summary.unprotected_seconds)} s without a stop at the broker"),
         (
@@ -204,23 +204,28 @@ def _check_legs(name: str, legs: object) -> None:
         raise ConfigError(f"the session summary's {name} names each leg in words, got {legs!r}")
 
 
-def _slippage(slippage: float | None) -> str:
+def _slippage(slippage: float | None, not_compared: int) -> str:
+    """The Slippage line (module docstring): the rupees against the backtest, or "not
+    compared" when no fill was, with the note of the MARKET fills left out."""
     if slippage is None:
-        return f"{MISSING} (no backtest to compare with)"
+        return "not compared" + _not_compared(not_compared, words="")
     shown = round(slippage, _PAISE_DECIMALS)
     if shown == 0:
-        return "none against the backtest"
-    if shown > 0:
-        return f"{_rupees(slippage)} worse than the backtest"
-    return f"{_rupees(-slippage)} better than the backtest"
+        figure = "none against the backtest"
+    elif shown > 0:
+        figure = f"{_rupees(slippage)} worse than the backtest"
+    else:
+        figure = f"{_rupees(-slippage)} better than the backtest"
+    return figure + _not_compared(not_compared, words=" not compared")
 
 
-def _not_compared(count: int) -> str:
-    """The note of the MARKET fills the slippage leaves out, "" for none."""
+def _not_compared(count: int, *, words: str) -> str:
+    """The note of the MARKET fills the slippage leaves out, `words` after their count;
+    "" for none."""
     if not count:
         return ""
     decisions = "its decision" if count == 1 else "their decisions"
-    return f" ({_count(count, 'MARKET fill')} not compared: no bar of {decisions})"
+    return f" ({_count(count, 'MARKET fill')}{words}: no bar of {decisions})"
 
 
 def _count(count: int, one: str, many: str | None = None) -> str:

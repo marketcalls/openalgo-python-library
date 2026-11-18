@@ -46,7 +46,7 @@ so it may hold the trade the broker filled at.
 A fill whose bar the session cannot give (its minute still marked missing, no trade of its
 minute before the session ended, or its slice closed and waits to be released behind the
 catch-up), or whose order its kernel session does not know, is not compared, and is
-counted (`not_compared`).
+counted (`not_compared`); the fills compared are counted too (`compared`).
 
 Times are UTC nanoseconds, prices rupees, quantities units.
 """
@@ -72,11 +72,12 @@ _LEG_TARGET, _TIME_EXIT = "leg_target", "time_exit"
 @dataclass(frozen=True)
 class Slippage:
     """A strategy's slippage (module docstring): `rupees`, positive when the live fills
-    cost more than the backtest's, and `not_compared`, the MARKET fills with no bar to
-    set them against."""
+    cost more than the backtest's; `not_compared`, the MARKET fills with no bar to set
+    them against; and `compared`, those set against one."""
 
     rupees: float = 0.0
     not_compared: int = 0
+    compared: int = 0
 
 
 def strategy_slippage(session: Any, trader: Any) -> Slippage:
@@ -90,7 +91,7 @@ def strategy_slippage(session: Any, trader: Any) -> Slippage:
         if venue.order_id and venue.intent.price_type == MARKET
     }
     multiplier = trader.part.setup.instruments[INSTRUMENT].multiplier
-    rupees, not_compared = 0.0, 0
+    rupees, not_compared, compared = 0.0, 0, 0
     for fill in session.fills:
         found = placed.get(fill.order_id) if fill.strategy == trader.name else None
         if found is None:
@@ -103,7 +104,8 @@ def strategy_slippage(session: Any, trader: Any) -> Slippage:
         modelled = call(trader.engine.market_fill_price, INSTRUMENT, fill.action, *bar)
         worse = _AGAINST_THE_TRADER[fill.action] * (fill.price - modelled)
         rupees += worse * fill.units * multiplier
-    return Slippage(round(rupees, 2), not_compared)
+        compared += 1
+    return Slippage(round(rupees, 2), not_compared, compared)
 
 
 def _decided_at(trader: Any, kernel_order: int, intent: OrderIntent) -> int | None:

@@ -186,18 +186,30 @@ def test_an_entry_whose_minute_is_still_marked_missing_is_not_compared(
     assert (summary.slippage, summary.slippage_not_compared) == (-2.50, 2)
 
 
-def dead_feed_in_the_entrys_minute(make_fake_openalgo, monkeypatch, tmp_path):
-    """`BuyEarlySellLate` with SBIN at 500.00, then 502.00 from 14:42:30, and the feed dead
-    from 14:42:02 to 14:42:50. Its buy, decided at 14:42:00, fills at 500.00; the minute
-    makes no tick bar, so the kernel runs it without one and marks it missing until the
-    broker's candle of it is read. Stopped at 14:51."""
+def dead_feed_in_the_entrys_minute(
+    make_fake_openalgo, monkeypatch, tmp_path, *, stop_ns: int = ist(14, 51)
+):
+    """SBIN at 500.00, then 502.00 from 14:42:30, and the feed dead from 14:42:02 to
+    14:42:50. A buy decided at 14:42:00 (`BuyEarlySellLate`'s, `Hold`'s) fills at 500.00;
+    the minute makes no tick bar, so the kernel runs it without one and marks it missing
+    until the broker's candle of it is read. Stopped at `stop_ns`."""
     world = rig(make_fake_openalgo, monkeypatch, tmp_path, trades_until=(14, 55))
     seam(world, monkeypatch)
     at_price(world, ist(14, 42, 30), 502.0)
     world.script.at(ist(14, 42, 2), world.fake.faults.feed_dead)
     world.script.at(ist(14, 42, 50), world.fake.faults.feed_alive)
-    world.stop_at(ist(14, 51))
+    world.stop_at(stop_ns)
     return world
+
+
+def candles_fail_from_14_42_03(world) -> None:
+    """Every read of the broker's candles fails from 14:42:03 for the rest of the day."""
+
+    def candles_fail():
+        for _ in range(80):
+            world.fake.faults.gateway_error("history", status=503)
+
+    world.script.at(ist(14, 42, 3), candles_fail)
 
 
 # By hand: the buy at 500.00 against the 14:42 candle, which opens at its first trade,
@@ -219,11 +231,22 @@ def test_an_entry_in_a_minute_the_feed_missed_whose_candle_never_comes_is_not_co
     make_fake_openalgo, monkeypatch, tmp_path
 ):
     world = dead_feed_in_the_entrys_minute(make_fake_openalgo, monkeypatch, tmp_path)
-
-    def candles_fail():
-        for _ in range(80):
-            world.fake.faults.gateway_error("history", status=503)
-
-    world.script.at(ist(14, 42, 3), candles_fail)
+    candles_fail_from_14_42_03(world)
     summary = live(world, BuyEarlySellLate).summary
     assert (summary.slippage, summary.slippage_not_compared) == (-1.50, 1)
+
+
+def test_a_day_with_no_market_fill_compared_reads_not_compared(
+    make_fake_openalgo, monkeypatch, tmp_path
+):
+    # `Hold`'s buy in the minute the feed missed, whose candle never comes, and its sale on
+    # Ctrl+C at 14:46:30, whose next minute has no trade before the session ends: neither
+    # is compared, so the day has no figure to show, only the count.
+    stop_ns = ist(14, 46, 30)
+    world = dead_feed_in_the_entrys_minute(
+        make_fake_openalgo, monkeypatch, tmp_path, stop_ns=stop_ns
+    )
+    candles_fail_from_14_42_03(world)
+    summary = live(world, Hold).summary
+    assert (summary.slippage, summary.slippage_not_compared) == (None, 2)
+    assert slippage_line(summary) == "not compared (2 MARKET fills: no bar of their decisions)"

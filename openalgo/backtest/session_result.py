@@ -29,7 +29,8 @@ not it has rows.
   `adjustment` column of `Result.contract_notes`), `net_pnl`, `slippage` (rupees the
   MARKET fills cost beyond a backtest's fill of the same orders at the open of the bar
   opening at each decision, with the run's modelled slippage; negative when live did
-  better) and `slippage_not_compared` (MARKET fills with no bar to set them against),
+  better; None when not one of them could be compared) and `slippage_not_compared`
+  (MARKET fills with no bar to set them against),
   `closed_trades`, `rejected_orders`, `unprotected_seconds`,
   `reconcile_mismatches`, `undelivered_alerts` and `flat`, and the legs the close names
   (`differing`, `unconfirmed`) and the strategies of earlier starts (`earlier`), in

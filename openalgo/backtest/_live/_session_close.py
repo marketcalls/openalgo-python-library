@@ -304,7 +304,7 @@ def _summary(
         closed_trades=traded.closed_trades,
         gross_pnl=traded.gross_pnl,
         charges=traded.charges,
-        slippage=traded.slippage,
+        slippage=traded.summary_slippage,
         slippage_not_compared=traded.slippage_not_compared,
         rejected_orders=counted.rejected_orders,
         unprotected_seconds=counted.unprotected_seconds,

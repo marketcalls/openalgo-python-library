@@ -104,10 +104,21 @@ def test_rupees_use_indian_digit_grouping():
     assert line(replace(A_GOOD_DAY, gross_pnl=1234567.891), "Gross P&L") == "Rs 12,34,567.89"
 
 
-def test_slippage_not_compared_with_a_backtest_reads_n_a():
-    assert (
-        line(replace(A_GOOD_DAY, slippage=None), "Slippage") == "n/a (no backtest to compare with)"
-    )
+def test_slippage_with_no_fill_compared_reads_not_compared():
+    assert line(replace(A_GOOD_DAY, slippage=None), "Slippage") == "not compared"
+
+
+@pytest.mark.parametrize(
+    ("count", "shown"),
+    [
+        (1, "not compared (1 MARKET fill: no bar of its decision)"),
+        (2, "not compared (2 MARKET fills: no bar of their decisions)"),
+    ],
+    ids=["one", "two"],
+)
+def test_slippage_with_every_market_fill_left_out_reads_not_compared_with_their_count(count, shown):
+    day = replace(A_GOOD_DAY, slippage=None, slippage_not_compared=count)
+    assert line(day, "Slippage") == shown
 
 
 @pytest.mark.parametrize(

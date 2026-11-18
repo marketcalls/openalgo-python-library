@@ -32,6 +32,7 @@ from openalgo.backtest._live._session_figures import (
     SessionFigures,
     StrategyFigures,
 )
+from openalgo.backtest._live._session_slippage import Slippage
 from openalgo.backtest._live._types import LOGGER_NAME
 from openalgo.backtest.errors import LiveError
 
@@ -131,6 +132,40 @@ def test_a_strategy_this_start_does_not_run_adds_its_saved_figures_whole():
     figures = DayFigures.at_start(saved, ["A"])
     traded, _ = figures.day(this_start(), {"A": finished(0, 50.0, 20.0)}, 0.0, slippages={})
     assert traded == StrategyFigures(3, 20.0, 35.0)
+
+
+def saved_slippage(rupees: float, not_compared: int, compared: int) -> dict:
+    """A strategy's saved state whose figures hold a slippage and its counts only."""
+    figures = {
+        "slippage": rupees,
+        "slippage_not_compared": not_compared,
+        "slippage_compared": compared,
+    }
+    return {"live_state": {}, FIGURES: figures}
+
+
+@pytest.mark.parametrize(
+    ("saved", "own", "shown"),
+    [
+        ((0.0, 1, 0), Slippage(0.0, 1, 0), None),
+        ((-1.0, 0, 1), Slippage(0.0, 1, 0), -1.0),
+        ((0.0, 1, 0), Slippage(1.5, 0, 1), 1.5),
+        ((1.0, 0, 1), Slippage(-1.0, 0, 1), 0.0),
+        ((0.0, 0, 0), Slippage(), 0.0),
+    ],
+    ids=[
+        "none compared in either start",
+        "one compared before the restart",
+        "one compared after it",
+        "compared fills that net to nothing",
+        "no MARKET fill",
+    ],
+)
+def test_the_days_slippage_is_missing_only_when_no_market_fill_was_compared(saved, own, shown):
+    figures = DayFigures.at_start({"A": saved_slippage(*saved)}, ["A"])
+    finish = {"A": finished(0, 0.0, 0.0)}
+    traded, _ = figures.day(this_start(), finish, 0.0, slippages={"A": own})
+    assert traded.summary_slippage == shown
 
 
 def test_the_sessions_counts_add_the_earlier_starts_to_this_ones():

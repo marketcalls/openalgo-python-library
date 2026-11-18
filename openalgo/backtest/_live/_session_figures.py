@@ -7,9 +7,9 @@ state, so a restart adds exactly what the state it restores does not hold:
 
 - **Per strategy**, in its saved state (`FIGURES`): the round trips closed today, the
   gross P&L and modelled charges of its account, and the slippage of its MARKET fills
-  against the backtest's (`_session_slippage`) with the count of those not compared. The
-  account is in the saved state itself (the kernel restores the cash with its realized
-  P&L and its charges), so a restored engine's gross P&L and charges are the day's, and
+  against the backtest's (`_session_slippage`) with the counts of those compared and not
+  compared. The account is in the saved state itself (the kernel restores the cash with
+  its realized P&L and its charges), so a restored engine's gross P&L and charges are the day's, and
   the saved ones are never added to them. Its round trips and its slippage are not (a
   restored engine's result begins at the restart, and a start compares its own fills
   only), so the saved ones are carried and the restored start's own are added to them. A
@@ -55,17 +55,27 @@ SESSION_KEY = "(session)"
 class StrategyFigures:
     """A strategy's figures of the day (module docstring): round trips closed, gross P&L,
     modelled charges and the slippage of its MARKET fills against the backtest's, rupees,
-    and how many of those fills were not compared. A save of an earlier version holds no
-    slippage: it reads as none."""
+    and how many of those fills were not compared and compared. A save of an earlier
+    version holds no slippage: it reads as none."""
 
     closed_trades: int = 0
     gross_pnl: float = 0.0
     charges: float = 0.0
     slippage: float = 0.0
     slippage_not_compared: int = 0
+    slippage_compared: int = 0
 
     def __add__(self, other: StrategyFigures) -> StrategyFigures:
         return StrategyFigures(*(a + b for a, b in zip(_values(self), _values(other), strict=True)))
+
+    @property
+    def summary_slippage(self) -> float | None:
+        """The slippage the day summary shows: rupees, or None when MARKET fills were made
+        and not one of them could be compared (there is no figure to show, only the
+        count)."""
+        if self.slippage_not_compared and not self.slippage_compared:
+            return None
+        return self.slippage
 
 
 @dataclass(frozen=True)
@@ -204,6 +214,7 @@ class DayFigures:
             charges,
             round(carried.slippage + own.rupees, 2),
             carried.slippage_not_compared + own.not_compared,
+            carried.slippage_compared + own.compared,
         )
 
 
