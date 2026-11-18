@@ -67,9 +67,11 @@ def sandbox_stop(world) -> str:
     return next(o.order_id for o in world.fake.orders(Mode.SANDBOX) if o.price_type == "SL-M")
 
 
-def test_F60_an_entry_the_book_cannot_tell_apart_gets_no_stop_and_holds_the_instrument(
-    world, caplog
-):
+@pytest.fixture
+def ambiguous(world):
+    """F60: the session's entry gets an HTML 502 though it reached the broker, and another
+    client places the same order half a second later; before the run, which Ctrl+C stops
+    at 14:45 with on_stop="keep"."""
     world.fake.faults.bad_gateway_page("placeorder", reached_broker=True)
     other = world.fake.client()
     world.script.at(
@@ -86,12 +88,41 @@ def test_F60_an_entry_the_book_cannot_tell_apart_gets_no_stop_and_holds_the_inst
     )
     world.stop_at(ist(14, 45))
     # The engine holds no position of an entry it cannot bind, so it places no stop: the
-    # broker's 20 units have none, as the ERROR alert says (7.1 lists F60).
+    # session's 10 units at the broker have none, as the ERROR alert and the open
+    # position say (7.1 lists F60).
     world.trace.leave_unprotected("StopHold", "F60")
-    outcome = world.run(StopHold, on_stop="keep")
-    ambiguous = [text for text in alerts(caplog, "error") if "cannot be told apart" in text]
-    assert len(ambiguous) == 1
+    return world
+
+
+def test_F60_an_entry_the_book_cannot_tell_apart_gets_no_stop_and_holds_the_instrument(
+    ambiguous, caplog
+):
+    world = ambiguous
+    world.run(StopHold, on_stop="keep")
+    named = [text for text in alerts(caplog, "error") if "cannot be told apart" in text]
+    assert len(named) == 1
     assert [o.price_type for o in world.orders()] == ["MARKET", "MARKET"]
     assert world.fake.log.calls("modifyorder") == world.fake.log.calls("cancelorder") == []
     assert world.fake.position("SBIN", "NSE") == 20
-    assert outcome.open_positions == ()
+
+
+def test_F60_the_ambiguous_entrys_units_are_an_open_position_with_no_stop(ambiguous):
+    outcome = ambiguous.run(StopHold, on_stop="keep")
+    (left,) = outcome.open_positions
+    assert (left.strategy, left.units, left.stop_order_id, left.stop_confirmed) == (
+        "StopHold",
+        10,
+        "",
+        False,
+    )
+    assert "cannot be told apart in the order book from another order" in left.note
+    assert outcome.summary.flat is False
+
+
+def test_F60_the_ambiguous_entrys_units_count_unprotected_until_the_end(ambiguous):
+    outcome = ambiguous.run(StopHold, on_stop="keep")
+    (window,) = outcome.unprotected
+    assert (window.strategy, window.units, window.reason) == ("StopHold", 10, "ambiguous order")
+    assert ist(14, 42, 2) <= window.from_ns <= ist(14, 45)
+    assert outcome.summary.unprotected_seconds == pytest.approx(window.seconds(outcome.ended_ns))
+    assert outcome.summary.unprotected_seconds > 0

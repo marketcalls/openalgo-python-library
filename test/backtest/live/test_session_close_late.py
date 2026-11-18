@@ -11,7 +11,9 @@ the entry stays unbound, in flight, for the rest of the session. Both fill at th
 when the close reads the books, so the close's read compares it late, and is the first to
 see the difference. The close alerts it once, names it on the DAILY_SUMMARY's Reconcile
 and End state lines as a mismatch, and reports no open position at OpenAlgo's units: a
-late read's figures are neither carried nor confirmed.
+late read's figures are neither carried nor confirmed. The entry it cannot tell apart is
+an open position of its own 10 units with no stop, so the day does not end flat
+(16-session-design 7.1 lists F60's leg among those the close names unprotected; unit 14).
 """
 
 from __future__ import annotations
@@ -125,11 +127,19 @@ def test_the_daily_summary_names_the_leg_as_a_mismatch(late_at_the_close):
     reconcile = next(line for line in lines if line.startswith("Reconcile"))
     end = next(line for line in lines if line.startswith("End state"))
     assert reconcile.endswith(f": 1 mismatch (at the close: {LATE_SUMMARY})")
-    assert end.endswith(f": flat (at the close: {LATE_SUMMARY})")
+    # The session's own entry, one of the two orders, is at the broker (unit 14, F60).
+    assert end.endswith(f": not flat: a position is still open (at the close: {LATE_SUMMARY})")
 
 
 def test_no_open_position_carries_the_late_reads_figure(late_at_the_close):
-    assert late_at_the_close().open_positions == ()
+    units = [p.units for p in late_at_the_close().open_positions]
+    assert BROKER_UNITS not in units
+
+
+def test_the_entry_the_book_cannot_tell_apart_is_an_open_position_with_no_stop(late_at_the_close):
+    (left,) = late_at_the_close().open_positions
+    assert (left.strategy, left.units, left.stop_confirmed) == ("EntersThenStops", 10, False)
+    assert "cannot be told apart in the order book from another order" in left.note
 
 
 def test_the_close_saves_the_mismatch_it_names_for_a_restart_of_the_day(late_at_the_close):

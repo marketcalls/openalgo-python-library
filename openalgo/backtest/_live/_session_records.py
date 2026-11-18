@@ -115,24 +115,30 @@ class Restored:
     the open of the slice it stood at (UTC nanoseconds: the equity rows that close after
     it hold the restored account), and the realized gross P&L and charges of the round
     trips its account had closed then, rupees: its account's totals when the strategy was
-    last flat, so a position carried open keeps what it realized and paid."""
+    last flat, so a position carried open keeps what it realized and paid. `carried` is
+    what the account paid for the fills of the position still open at the restore (its
+    entry's and adds'), rupees: the restored engine's charge book holds none of them."""
 
     after_ns: int
     realized: float
     charges: float
+    carried: float = 0.0
 
 
 def restored(trader: Any) -> Restored:
     """`trader`'s `Restored`, read from its kernel session just after the restore: the
     account's totals the daily loss measure kept when the strategy last became flat (the
     kernel's `DailyLossTotals.flat`, rms/daily_loss.rs), which hold every round trip closed
-    before the restart and nothing of a position still open."""
+    before the restart and nothing of a position still open, and the account's charges
+    beyond them, those of the position still open."""
     state = call(trader.engine.live_state)
     standing = int(state["slice"])
     slices = trader.part.slices
     after_ns = slices[standing][0] if standing < len(slices) else slices[-1][1]
     flat = state["risk"]["daily_loss"]["flat"]
-    return Restored(after_ns, float(flat["realized_rupees"]), float(flat["costs_rupees"]))
+    _equity, _cash, _realized, _unrealized, paid, _margin = call(trader.engine.account)
+    carried = round(max(0.0, float(paid) - float(flat["costs_rupees"])), 2)
+    return Restored(after_ns, float(flat["realized_rupees"]), float(flat["costs_rupees"]), carried)
 
 
 @dataclass

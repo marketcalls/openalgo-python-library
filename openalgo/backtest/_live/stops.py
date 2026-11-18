@@ -256,13 +256,15 @@ class StopsSupervisor:
             leg = self.leg(trader)
             span = self._changed.pop(trader.name, (now_ns, now_ns))
             units = round(abs(trader.open_units()))
+            # An entry the order book cannot tell apart: its units count whatever the rules.
+            unsure = abs(leg.ambiguous_entry_units())
             key = (trader.name, trader.symbol, trader.exchange)
-            if units == 0 and not leg.unbound_add_units:
+            if units == 0 and not leg.unbound_add_units and not unsure:
                 leg.flat()
-            elif not leg.guarded:
+            elif not leg.guarded and not unsure:
                 self._warn_unguarded(trader, units)
             else:
-                uncovered = units + leg.unbound_add_units - self.covered(trader)
+                uncovered = units + leg.unbound_add_units + unsure - self.covered(trader)
                 stop = leg.orders.get(leg.stop) if leg.stop is not None else None
                 held = stop is not None and self.held.held_cancel(trader, stop.kernel_order)
                 retries = self._session.exits.owns(trader.name)

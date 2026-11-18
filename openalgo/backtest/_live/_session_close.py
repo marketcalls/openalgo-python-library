@@ -78,6 +78,13 @@ FINAL_READ_WAIT_S = 5.0
 #: How a session ended that takes the final read: not after an error (3.5) or a mode
 #: breach (6.2), when the books are not to be trusted or not to be read.
 _FINAL_READ = frozenset({"session_end", "ctrl_c"})
+#: How an open position names the units of an entry the order book cannot tell apart from
+#: another order (16-session-design F60): the session cannot say which is its own.
+AMBIGUOUS_ENTRY_NOTE = (
+    "an entry of {units} units cannot be told apart in the order book from another order: "
+    "one of them is the session's, at the broker with no stop; check the order book in "
+    "OpenAlgo and close it by hand"
+)
 #: How the close warns of a strategy's state it could not save, and what a restart does.
 NOT_SAVED = "its state and the day's figures were not saved at the close"
 RESUMES_FROM_LAST_SAVE = "a restart today resumes it from its last save"
@@ -308,20 +315,24 @@ def _summary(
 def _open_positions(session: Session) -> tuple[OpenPosition, ...]:
     """Each leg the engine holds open, and each whose difference with OpenAlgo's books no
     later read confirms, at OpenAlgo's units then; none they show flat (module
-    docstring)."""
+    docstring). An entry the order book cannot tell apart adds its units, with no stop
+    confirmed (16-session-design 7.1, F60)."""
     stops, positions = session.stops, []
     for trader in session.traders:
         differs = differing(session.reconcile, trader)
         units = trader.open_units() if differs is None else differs.broker_units
-        if units == 0:
+        unsure = stops.leg(trader).ambiguous_entry_units()
+        if units == 0 and unsure == 0:
             continue
         note = (
             "known as of the mode breach" if session.locked else stops.after.note(session, trader)
         )
+        stop = stop_state(stops, trader)
+        if unsure:
+            words = AMBIGUOUS_ENTRY_NOTE.format(units=abs(unsure))
+            note, stop = (f"{note}; {words}" if units else words), (stop[0], False)
         positions.append(
-            OpenPosition(
-                trader.name, trader.symbol, trader.exchange, units, note, *stop_state(stops, trader)
-            )
+            OpenPosition(trader.name, trader.symbol, trader.exchange, units + unsure, note, *stop)
         )
     return tuple(positions)
 
