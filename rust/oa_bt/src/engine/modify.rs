@@ -7,13 +7,13 @@
 //! passes the submission checks of a new order at the current decision instant, and is
 //! eligible from the first base bar at or after it (SPEC-35); a triggered stop order
 //! starts over and must trigger again. A replacement that fails a check is refused and
-//! the order works on unchanged. A GTT order's GTT is replaced with it.
+//! the order works on unchanged. A GTT order's GTT is replaced with it. Under a delay the
+//! replacement takes effect when its delay ends, the order working on its old terms until
+//! then (`held_changes`).
 
 use crate::exec::{ExecError, OrderId, OrderRequest};
-use crate::portfolio::PositionKey;
 
 use super::error::KernelError;
-use super::event::{Event, OrderEventKind};
 use super::kernel::Engine;
 use super::submit::{Resolved, Submission};
 use super::venue::Replacement;
@@ -36,7 +36,8 @@ impl Engine {
     /// Replace a working order's request in full (see the module documentation).
     ///
     /// Returns `Submitted(id)` when the order was replaced (event `Modified`, in the step
-    /// of the decision), `Rejected(id, code)` when the replacement failed a submission
+    /// of the decision, or when a held replacement takes effect: `held_changes`),
+    /// `Rejected(id, code)` when the replacement failed a submission
     /// check (the order is unchanged and no event is written), `Skipped` when a sizer gave
     /// no quantity.
     ///
@@ -104,21 +105,13 @@ impl Engine {
             self.send_modify(id, replacement);
             return Ok(Submission::Submitted(id));
         }
-        let key = PositionKey {
-            instrument: request.instrument,
-            product: request.product,
+        let replacement = Replacement {
+            request,
+            decided_at,
+            good_until,
+            units,
         };
-        let held_until = self.held_until(&request, self.held_units(key), decided_at);
-        self.book
-            .replace(id, request, decided_at, good_until, units)?;
-        self.hold_order(id, held_until, decided_at);
-        let stamp = Self::stamp(&slice, step);
-        self.emit(Event::Order {
-            stamp,
-            order: id,
-            kind: OrderEventKind::Modified,
-        });
-        self.modify_order_gtt(stamp, id)?;
+        self.modify_or_hold(Self::stamp(&slice, step), id, replacement)?;
         Ok(Submission::Submitted(id))
     }
 }

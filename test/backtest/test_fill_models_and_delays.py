@@ -70,6 +70,41 @@ def test_a_held_exit_fills_a_bar_later():
     assert fill_prices(delay_exits=2) == [501.0, 515.0]
 
 
+def test_an_order_held_past_the_runs_last_bar_is_refused_in_the_words_of_the_delay():
+    # The exit decided at bar 2's close and held 4 bars would wait to bar 6's close; the
+    # run's last bar is bar 5.
+    result = bt.backtest(BuyFirstSellThird, data=bars(), **FREE, delay_exits=4)
+    lines = [line for line in result.warnings if "'delay_past_close'" in line]
+    assert len(lines) == 1
+    assert "an order held by delay_entries= or delay_exits= would have waited" in lines[0]
+
+
+class ChaseHigh(bt.Strategy):
+    """While flat, cancels its working orders and places a buy stop (SL-M) 1 rupee above
+    the bar's high; when long, exits."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "D"
+
+    def on_bar(self, bar):
+        if self.position.is_flat:
+            self.cancel_all()
+            self.buy(qty=10, trigger_price=bar.high + 1.0)
+        else:
+            self.exit()
+
+
+def test_a_strategy_that_places_its_entry_again_each_bar_still_enters_when_held():
+    # Bar k opens at 500 + 3k, its high 1 above: the stop placed at bar k's close (502 +
+    # 3k) is gapped through by bar k + 1's open. Held one bar, the stop placed at bar 0
+    # works from bar 1's close, and its cancellation, decided at bar 1's close, arrives
+    # only at bar 2's close: bar 2 opens at 506, through the stop, and the order fills.
+    data = opens_bars([500.0 + 3.0 * k for k in range(10)])
+    result = bt.backtest(ChaseHigh, data=data, **FREE, delay_entries=1)
+    first = result.fills.iloc[0]
+    assert (first["side"], first["price_rupees"]) == ("BUY", 506.0)
+    assert first["time"].date() == data.index[2].date()
+
+
 def test_a_run_that_holds_its_orders_says_so_and_no_other_does():
     held = bt.backtest(BuyFirstSellThird, data=bars(), **FREE, delay_entries=1)
     assert held.assumptions["delay"].startswith("entries held 1 and exits 0 strategy bars")

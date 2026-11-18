@@ -30,6 +30,7 @@ impl Engine {
         // configured yet.
         self.risk_session_open(slice);
         self.renew_old_gtts(slice)?;
+        self.apply_held_changes(slice)?;
         if self.timers_fired_ahead(slice) {
             self.finish_open_slice(slice)?;
             return Ok(None);

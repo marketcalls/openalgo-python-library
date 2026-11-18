@@ -14,6 +14,9 @@
 //! the legs' levels, the GTTs and the resting orders were tested on that bar, as an
 //! order filled inside the bar (`FillAt::Level`): a stop hit inside the bar acts before
 //! them, and a position they open is first tested against its levels in the next slice.
+//! The rest of the fill bar may have come before such a fill (at the next close, all of
+//! it did), so in the fill's slice the trail and breakeven of a position a model opened
+//! see only the bar's close (`ratchet_bar`), as its excursion does (`excursion`).
 //! The fill takes the run's slippage and is rounded to the tick away from the trader, as
 //! every market fill is. The engine's own exits at an open (the risk exits, the time
 //! exit, the square-off, the exit after an unfilled GTT child), the futures roll and the
@@ -23,8 +26,9 @@
 //! The two-bar models read the bar after the fill bar: a pessimistic price model for a
 //! backtest, never a live rule.
 
-use crate::exec::{BarPoint, FillAt, FillPricing, InstrumentId};
+use crate::exec::{BarPoint, FillAt, FillPricing, InstrumentId, OrderId};
 use crate::market::calendar::BaseInterval;
+use crate::portfolio::PositionKey;
 use crate::rms::BarPrices;
 
 use super::clock::SliceInfo;
@@ -76,16 +80,55 @@ impl Engine {
         if self.fill_model().is_none() || self.is_external() {
             return Ok(());
         }
+        self.model_opened.clear();
         for index in 0..self.instruments.len() {
             let instrument = InstrumentId(index as u32);
             let Some(how) = self.queued_fill(instrument, slice) else {
                 continue;
             };
             for id in self.book.queued_for(instrument) {
-                self.fill_queued_how(slice, id, how)?;
+                self.fill_at_model(slice, id, how)?;
             }
         }
         self.fill_rebalance_buys(slice)
+    }
+
+    /// Fill the queued order `id` as `how` says, noting the position it opens, if it
+    /// opens one (`model_opened`, `ratchet_bar`).
+    ///
+    /// Errors: `UnknownOrder`, and those of `fill_queued_how`.
+    fn fill_at_model(
+        &mut self,
+        slice: &SliceInfo,
+        id: OrderId,
+        how: OrderFill,
+    ) -> Result<(), KernelError> {
+        let order = self.book.get(id).ok_or(KernelError::UnknownOrder(id))?;
+        let key = PositionKey {
+            instrument: order.request.instrument,
+            product: order.request.product,
+        };
+        let before = self.held_units(key);
+        self.fill_queued_how(slice, id, how)?;
+        let after = self.held_units(key);
+        if after != 0.0 && (before == 0.0 || (before > 0.0) != (after > 0.0)) {
+            self.model_opened.push(key);
+        }
+        Ok(())
+    }
+
+    /// The bar the ratchets of `key`'s leg see in this slice: its close alone when a
+    /// fill model opened the position in it (module docs), else the whole `bar`.
+    pub(super) fn ratchet_bar(&self, key: PositionKey, bar: BarPrices) -> BarPrices {
+        if !self.model_opened.contains(&key) {
+            return bar;
+        }
+        BarPrices {
+            open: bar.close,
+            high: bar.close,
+            low: bar.close,
+            close: bar.close,
+        }
     }
 
     /// How a queued order of `instrument` fills in `slice`: at the open, or at the run's

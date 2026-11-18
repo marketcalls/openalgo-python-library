@@ -205,6 +205,14 @@ impl Timeline {
             .map(|&(_, close)| close)
     }
 
+    /// Whether a strategy bar (by the clock) closes at `ts`.
+    pub fn closes_strategy_bar(&self, ts: TsNanos) -> bool {
+        let at = self.strategy_bars.partition_point(|&(_, close)| close < ts);
+        self.strategy_bars
+            .get(at)
+            .is_some_and(|&(_, close)| close == ts)
+    }
+
     /// The strategy bar (open, close) that closes with this slice, if one does.
     pub fn strategy_bar_closing(&self, slice: &SliceInfo) -> Option<(TsNanos, TsNanos)> {
         self.strategy_bars

@@ -128,8 +128,9 @@ impl Engine {
         }
     }
 
-    /// Step 4: trail and breakeven of every leg with a bar, from the bar's extreme; the
-    /// levels they move are in force from the next slice.
+    /// Step 4: trail and breakeven of every leg with a bar, from the bar's extreme (from
+    /// its close alone for a position a fill model opened in this slice, `ratchet_bar`);
+    /// the levels they move are in force from the next slice.
     ///
     /// Errors: those of the leg rules.
     pub(super) fn ratchet_legs(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
@@ -138,6 +139,7 @@ impl Engine {
             let Some(bar) = self.market.bar(key.instrument, slice.index) else {
                 continue;
             };
+            let bar = self.ratchet_bar(key, bar);
             let outcome = match self.leg_mut(key) {
                 Some(leg) => leg.ratchet(&bar)?,
                 None => continue,

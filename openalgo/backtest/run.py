@@ -140,9 +140,12 @@ def backtest(
     delay_entries, delay_exits: strategy bars a decided order that opens or adds, and one
         that reduces or closes, is held before it can fill (0, the default, fills at the
         next base-bar open): with 1, an order decided at a bar's close fills at the open
-        after the next bar's close. An intraday order whose delay ends at its session's
-        close is rejected market_closed. The legs' stops and targets and the engine's own
-        exits are never held.
+        after the next bar's close, and one decided inside a bar (a timer) waits for that
+        bar's close first. A cancellation or modification of an order is held as long,
+        the order working on its old terms until it arrives. An intraday order whose
+        delay ends at its session's close, or any order whose delay ends after the run's
+        last bar, is rejected delay_past_close. The legs' stops and targets and the
+        engine's own exits are never held.
     quantity_mode: "venue" (the default: whole shares of cash equity and whole lots of
         derivatives, as an exchange accepts) or "fractional" (part shares of cash
         equity, for research; derivatives stay in whole lots).

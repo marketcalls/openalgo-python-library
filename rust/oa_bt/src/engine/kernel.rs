@@ -23,6 +23,7 @@ use super::event::{Event, EventStamp, Step};
 use super::exit_scale::ExitScales;
 use super::futures::FuturesDesk;
 use super::gtt::GttDesk;
+use super::held_changes::HeldChange;
 use super::live_clock::range_end;
 use super::market_data::MarketData;
 use super::output::{settle_trade_charges, FinalPosition, GrossPnl, Recorder, RunOutput};
@@ -95,6 +96,12 @@ pub struct Engine {
     pub(super) venue: VenueDesk,
     /// Orders held for a delay, by id: the instant each may fill from (`delay`).
     pub(super) held: BTreeMap<OrderId, TsNanos>,
+    /// The strategy's cancellations and modifications held for a delay, in the order
+    /// they were decided (`held_changes`).
+    pub(super) held_changes: Vec<HeldChange>,
+    /// The positions a fill model opened in this slice, whose ratchets see only the fill
+    /// bar's close (`fill_model`).
+    pub(super) model_opened: Vec<PositionKey>,
     /// The factors of the trades' leg rules (`exit_scale`).
     pub(super) exit_scales: ExitScales,
 }
@@ -167,6 +174,8 @@ impl Engine {
             released: None,
             venue: VenueDesk::default(),
             held: BTreeMap::new(),
+            held_changes: Vec::new(),
+            model_opened: Vec::new(),
             exit_scales: ExitScales::default(),
         })
     }

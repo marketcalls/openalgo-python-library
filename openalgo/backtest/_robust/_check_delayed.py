@@ -5,8 +5,10 @@ The strategy reruns on its own bars with its decided entries held 0 to `most` (2
 strategy bars and its exits 0 to `most` (`bt.backtest(delay_entries=, delay_exits=)`,
 the kernel's `engine::delay`), every pair but (0, 0), which is the run itself: eight
 reruns by default. The delays are later than the run: they add to the run's own
-`delay_entries` and `delay_exits` (`own_delays`), and the note says so. The engine-held
-stops and targets rest with the broker and are not held, nor are the engine's own exits.
+`delay_entries` and `delay_exits` (`own_delays`), and the note says so. Every decision
+about an order is held, its cancellations and modifications as long as its placement, so
+an order works on its old terms until a change reaches it. The engine-held stops and
+targets rest with the broker and are not held, nor are the engine's own exits.
 
 Figures: each pair's objective over the run's, measured from the objective's break-even.
 Pass: the run with entries one bar late (and exits on time) profitable (net profit of at
@@ -148,8 +150,10 @@ def run(
         "Each run held the strategy's decided entries and exits the strategy bars named "
         "before they could fill"
         + (f", added to the run's own (entries {own[0]}, exits {own[1]})" if any(own) else "")
-        + "; the legs' stops and targets and the engine's own exits were not held, and an "
-        "intraday order held past its session's close was refused." + set_.failure_note()
+        + ", and their cancellations and modifications as long; the legs' stops and targets "
+        "and the engine's own exits were not held, and an order held past its session's "
+        "close (intraday) or the run's last bar was refused (delay_past_close)."
+        + set_.failure_note()
     )
     labels = [_label(pair) for pair in made]
     table = labelled_table(

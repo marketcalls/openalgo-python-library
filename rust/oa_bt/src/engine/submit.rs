@@ -11,7 +11,7 @@ use crate::exec::{
     ExecError, InstrumentId, Order, OrderAction, OrderId, OrderRequest, OrderStatus, QuantitySpec,
     RejectCode, Validity, GTT_GOOD_UNTIL,
 };
-use crate::model::{Product, Side, TsNanos};
+use crate::model::{Day, Product, Side, TsNanos};
 use crate::portfolio::PositionKey;
 use crate::sizing::{SizeOutcome, SkipReason};
 
@@ -135,7 +135,9 @@ impl Engine {
     }
 
     /// Cancel a working order. An order that no longer works is left as it is and its
-    /// state is returned. In a live session the cancellation is sent to the venue and
+    /// state is returned. Under a delay the cancellation takes effect when its delay
+    /// ends, the order working until then (`held_changes`), and the state returned is the
+    /// order's now. In a live session the cancellation is sent to the venue and
     /// the order works on until the venue confirms it (`venue`): its state then is the
     /// one returned. A live session takes it while it waits too, and sends it again for
     /// an order whose cancellation the venue refused (`venue_session`).
@@ -149,7 +151,7 @@ impl Engine {
             .get(id)
             .ok_or(KernelError::UnknownOrder(id))?
             .status;
-        if !status.is_working() {
+        if !status.is_working() || self.hold_cancel(id, at.decided_at)? {
             return Ok(status);
         }
         self.cancel_on_request(at.stamp(), id)
@@ -257,7 +259,7 @@ impl Engine {
         // and entry gates (6, 7), the scale-in limits (7), then an excess over the
         // position without `reverse` (7).
         let validity = match request.validity {
-            Validity::Day => self.day_validity(slice, self.held_until(request, held, decided_at)),
+            Validity::Day => self.held_day_validity(slice, request, held, decided_at),
             Validity::Gtt => Ok(GTT_GOOD_UNTIL),
         };
         if opening && validity.is_ok() {
@@ -291,10 +293,17 @@ impl Engine {
                 _ => Err(RejectCode::MarketClosed),
             };
         }
-        (0..=NEXT_SESSION_SEARCH_DAYS)
-            .filter_map(|ahead| self.calendar.session(exchange, slice.day + ahead))
-            .find(|session| session.open >= decided_at)
-            .map(|session| session.close)
+        self.session_close_from(slice.day, decided_at)
             .ok_or(RejectCode::MarketClosed)
+    }
+
+    /// The close of the first session from `day` on that opens at or after `at`, within
+    /// `NEXT_SESSION_SEARCH_DAYS`; `None` when there is none.
+    pub(super) fn session_close_from(&self, day: Day, at: TsNanos) -> Option<TsNanos> {
+        let exchange = self.timeline.exchange();
+        (0..=NEXT_SESSION_SEARCH_DAYS)
+            .filter_map(|ahead| self.calendar.session(exchange, day + ahead))
+            .find(|session| session.open >= at)
+            .map(|session| session.close)
     }
 }

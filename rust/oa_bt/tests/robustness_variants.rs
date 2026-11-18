@@ -13,7 +13,7 @@ use oa_bt::engine::{
 use oa_bt::exec::{FillAt, OrderType};
 use oa_bt::market::calendar::BaseInterval;
 use oa_bt::model::{ts_from_ist, Product, Side};
-use oa_bt::rms::{Distance, LegRules};
+use oa_bt::rms::{Distance, LegRules, TrailSpec};
 use order_support::{
     engine, equity, exit_all, fills, july_2025, minute, minute_bars, minute_config, order,
     run_script, Act, Ohlc, MINUTE, NSE_OPEN_MINUTE,
@@ -127,6 +127,61 @@ fn a_stop_hit_inside_the_fill_bar_acts_before_a_model_fill_of_the_exit() {
     );
 }
 
+#[test]
+fn a_leg_a_model_fill_opens_ratchets_from_the_fill_bars_close_only() {
+    // At the next close the buy decided at minute 0's close fills at minute 1's close,
+    // 102. Minute 1's high (103) came before that fill, so its trail of 1 point does not
+    // arm there (a stop at 102, at the entry, would exit at minute 2's open). Minute 2
+    // (102, 104, 101, 103) arms it at 104 - 1 = 103, and minute 3 opens at 103: the trail
+    // exits there, a point above the entry.
+    let entry = oa_bt::exec::OrderRequest {
+        leg_rules: LegRules {
+            stop: Some(Distance::Points(3.0)),
+            trail: Some(TrailSpec {
+                trigger: Distance::Points(1.0),
+                step: None,
+            }),
+            ..LegRules::default()
+        },
+        product: Product::Mis,
+        ..buy(10.0)
+    };
+    let kernel = engine(
+        with_fill(model(BarPrice::Close, false)),
+        equity(),
+        minute_bars(10, 100.0, &rising(10)),
+    );
+    let (output, _) = run_script(kernel, vec![(minute(1), Act::Submit(entry))]);
+    let rows = fills(&output);
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!((rows[0].0, rows[0].4), (minute(1), 102.0));
+    assert_eq!(
+        (rows[1].0, rows[1].4, rows[1].6),
+        (minute(3), 103.0, "leg_sl")
+    );
+}
+
+#[test]
+fn a_trade_a_model_fill_opens_sees_only_its_fill_bars_close() {
+    // At the next close a buy fills at minute 1's close (102) and the exit decided at
+    // minute 8's close at minute 9's (110). From minute 1 the trade sees its fill and
+    // that close, not minute 1's low (100): its worst price is minute 2's low, 101, so
+    // its MAE is 10 x (101 - 102) = -10; its best is 110, an MFE of 10 x 8 = 80.
+    let kernel = engine(
+        with_fill(model(BarPrice::Close, false)),
+        equity(),
+        minute_bars(10, 100.0, &rising(10)),
+    );
+    let acts = vec![
+        (minute(1), Act::Submit(buy(10.0))),
+        (minute(9), Act::Submit(exit_all(Side::Buy, Product::Cnc))),
+    ];
+    let (output, _) = run_script(kernel, acts);
+    let trade = &output.trades[0];
+    assert_eq!(trade.exit_price_rupees, 110.0);
+    assert_eq!((trade.mae_rupees, trade.mfe_rupees), (-10.0, 80.0));
+}
+
 fn delayed(entries: u32, exits: u32) -> RunConfig {
     let mut config = minute_config();
     config.perturbation.delay_entries = entries;
@@ -181,20 +236,6 @@ fn a_legs_stop_is_never_held() {
         (rows[1].0, rows[1].4, rows[1].6),
         (minute(2), 99.0, "leg_sl")
     );
-}
-
-#[test]
-fn an_intraday_order_held_past_its_sessions_close_is_refused() {
-    // The session's last one-minute bar closes at 15:30; an entry decided at 15:29 (the
-    // close of minute 373) and held one bar would wait to 15:30: market closed.
-    let kernel = engine(delayed(1, 0), equity(), minute_bars(375, 100.0, &[]));
-    let decided = ts_from_ist(july_2025(1), NSE_OPEN_MINUTE + 374);
-    let (output, script) = run_script(kernel, vec![(decided, Act::Submit(buy(1.0)))]);
-    assert!(fills(&output).is_empty());
-    assert!(matches!(
-        script.submissions[0],
-        oa_bt::engine::Submission::Rejected(_, code) if code.code() == "market_closed"
-    ));
 }
 
 /// Records every decision instant and the strategy bar each pause hands over.

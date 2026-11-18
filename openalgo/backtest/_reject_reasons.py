@@ -14,9 +14,10 @@ instrument (`_rejections.product_rule_case`). The entry window is the window wor
 a mistake: its line names the window's times (`_rejections.entry_window_warning`).
 
 `RUN_RULE_CODES` are the refusals of a rule of the run working as it intends: the MIS
-entry window (given or the calendar's default) and the limits a strategy or run sets
+entry window (given or the calendar's default), the limits a strategy or run sets
 (max_daily_loss, drawdown_halt, cooldown, max_positions, and the REDUCING or HALTED
-state they lead to). The end-of-run notice leaves them out (`_rejection_notice`).
+state they lead to) and the delay a run holds its orders for (delay_entries=,
+delay_exits=). The end-of-run notice leaves them out (`_rejection_notice`).
 """
 
 from __future__ import annotations
@@ -25,7 +26,10 @@ from types import MappingProxyType
 
 PRODUCT_RULE = "product_rule"
 ENTRY_WINDOW = "entry_window"
-RUN_RULE_CODES = frozenset({ENTRY_WINDOW, "daily_loss_gate", "cooldown", "max_positions", "halted"})
+DELAY_PAST_CLOSE = "delay_past_close"
+RUN_RULE_CODES = frozenset(
+    {ENTRY_WINDOW, "daily_loss_gate", "cooldown", "max_positions", "halted", DELAY_PAST_CLOSE}
+)
 
 REASONS = MappingProxyType(
     {
@@ -56,6 +60,13 @@ REASONS = MappingProxyType(
             "an intraday order decided at the session's last close could only fill in the "
             "next session",
             "stop placing orders on the session's last bar (check self.now)",
+        ),
+        DELAY_PAST_CLOSE: (
+            "an order held by delay_entries= or delay_exits= would have waited past the last "
+            "close it could fill after: its session's close for an intraday order, the run's "
+            "last strategy bar for any order",
+            "this is the delay working: an order decided that near the session's or the "
+            "run's end cannot fill that late; lower the delay to fill such orders",
         ),
         "daily_loss_gate": (
             "an entry came after the day's loss reached max_daily_loss, which stops new "
@@ -140,4 +151,11 @@ PRODUCT_RULE_CASES = MappingProxyType(
     }
 )
 
-__all__ = ["ENTRY_WINDOW", "PRODUCT_RULE", "PRODUCT_RULE_CASES", "REASONS", "RUN_RULE_CODES"]
+__all__ = [
+    "DELAY_PAST_CLOSE",
+    "ENTRY_WINDOW",
+    "PRODUCT_RULE",
+    "PRODUCT_RULE_CASES",
+    "REASONS",
+    "RUN_RULE_CODES",
+]
