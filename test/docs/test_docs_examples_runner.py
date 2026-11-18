@@ -11,10 +11,12 @@ from pathlib import Path
 import pytest
 from docs_examples import (
     API_KEY_ENV,
+    LIVE_SESSION_REASON,
     NETWORK_ENV,
     PYTHON_ENV,
     REQUIRES_NETWORK,
     REQUIRES_SERVER,
+    TICK_RECORDING_REASON,
     check,
     interpreter,
     page_examples,
@@ -195,10 +197,11 @@ def test_only_the_api_key_argument_is_replaced_not_the_variable_name(tmp_path):
 
 # ----- a live session never runs --------------------------------------------------------
 
-# The file a block below leaves in its folder if it ever runs.
+# The files a block below leaves in its folder if it ever runs.
 LIVE_MARK = "live-session-started"
-# A stand-in for `openalgo.backtest` that only leaves the mark, so a runner without the
-# guard would show here that it ran the block, with no session and no server.
+RECORD_MARK = "ticks-recorded"
+# A stand-in for `openalgo.backtest` that only leaves the marks, so a runner without the
+# guard would show here that it ran the block, with no session, no feed and no server.
 LIVE_STAND_IN = f"""\
 from pathlib import Path
 
@@ -207,6 +210,10 @@ class bt:
     @staticmethod
     def live(*strategies, **settings):
         Path({LIVE_MARK!r}).touch()
+
+    @staticmethod
+    def record(*instruments, **settings):
+        Path({RECORD_MARK!r}).touch()
 
 
 backtest = bt
@@ -249,6 +256,18 @@ LIVE_CALLS = {
     "backtest.live": 'backtest.live("EmaCrossover")',
     "a space before the bracket": 'bt.live ("EmaCrossover")',
     "the full module path": 'openalgo.backtest.live("EmaCrossover")',
+    "a module alias": 'import openalgo.backtest as engine\nengine.live("EmaCrossover")',
+    "live imported by name": 'from openalgo.backtest import live\nlive("EmaCrossover")',
+    "live imported under another name": (
+        'from openalgo.backtest import live as trade\ntrade("EmaCrossover")'
+    ),
+    "live among names in brackets": (
+        'from openalgo.backtest import (\n    costs,\n    live,\n)\nlive("EmaCrossover")'
+    ),
+    "every name imported": 'from openalgo.backtest import *\nlive("EmaCrossover")',
+    "the private live layer": (
+        'from openalgo.backtest._live.session import run_session\nrun_session("EmaCrossover", None)'
+    ),
 }
 
 
@@ -256,7 +275,7 @@ LIVE_CALLS = {
 def test_every_spelling_of_a_live_session_call_is_found(tmp_path, call):
     page = f"```python\n{LIVE_STAND_IN}\n{call}\n```\n"
     (example,) = examples_of(page, tmp_path)
-    assert "live session" in skip_reason(example, environ={})
+    assert skip_reason(example, environ={}) == LIVE_SESSION_REASON
 
 
 def test_a_live_session_call_in_a_block_that_continues_skips_the_whole_script(tmp_path):
@@ -274,3 +293,61 @@ def test_running_a_live_session_script_directly_is_refused_and_nothing_runs(tmp_
     with pytest.raises(AssertionError, match="live session"):
         run(example, tmp_path, environ={**os.environ, API_KEY_ENV: FAKE_KEY})
     assert not (tmp_path / LIVE_MARK).exists()
+
+
+# ----- tick recording never runs --------------------------------------------------------
+
+RECORD_PAGE = f"""\
+<!-- requires-server -->
+```python
+{LIVE_STAND_IN}
+bt.record("client", [{{"exchange": "NSE", "symbol": "SBIN"}}], until="15:30")
+```
+"""
+
+
+def test_a_server_block_that_records_ticks_is_skipped_even_with_an_api_key(tmp_path):
+    (example,) = examples_of(RECORD_PAGE, tmp_path)
+    environ = {**os.environ, API_KEY_ENV: FAKE_KEY}
+    reason = skip_reason(example, environ=environ)
+    if reason is None:
+        check(example, tmp_path, environ=environ)
+    assert not (tmp_path / RECORD_MARK).exists()
+    assert reason == TICK_RECORDING_REASON
+
+
+RECORD_CALLS = {
+    "bt.record": 'bt.record("client", [])',
+    "backtest.record": 'backtest.record("client", [])',
+    "a space before the bracket": 'bt.record ("client", [])',
+    "record imported by name": 'from openalgo.backtest import record\nrecord("client", [])',
+    "record imported under another name": (
+        'from openalgo.backtest import record as keep\nkeep("client", [])'
+    ),
+}
+
+
+@pytest.mark.parametrize("call", RECORD_CALLS.values(), ids=RECORD_CALLS)
+def test_every_spelling_of_a_tick_recording_call_is_found(tmp_path, call):
+    page = f"```python\n{LIVE_STAND_IN}\n{call}\n```\n"
+    (example,) = examples_of(page, tmp_path)
+    assert skip_reason(example, environ={}) == TICK_RECORDING_REASON
+
+
+def test_running_a_tick_recording_script_directly_is_refused_and_nothing_runs(tmp_path):
+    (example,) = examples_of(RECORD_PAGE, tmp_path)
+    with pytest.raises(AssertionError, match="live feed"):
+        run(example, tmp_path, environ={**os.environ, API_KEY_ENV: FAKE_KEY})
+    assert not (tmp_path / RECORD_MARK).exists()
+
+
+def test_a_backtest_script_that_imports_other_backtest_names_still_runs(tmp_path):
+    page = (
+        "```python\n"
+        "import openalgo.backtest as bt\n"
+        "from openalgo.backtest import costs, reference as ref\n"
+        'print(bt.__name__, costs.__name__, ref.__name__.endswith("reference"))\n'
+        "```\n"
+    )
+    (example,) = examples_of(page, tmp_path)
+    assert skip_reason(example, environ={}) is None
