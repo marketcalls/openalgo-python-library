@@ -474,6 +474,10 @@ def test_the_error_alert_names_a_cut_with_no_answer_by_the_close_and_claims_no_p
     cut_world, caplog
 ):
     no_answer_by_the_close(cut_world)
+    # The cut has no answer by the close (3.3 step 5 "As built"): the ERROR alert names it
+    # and no confirmed stop is claimed, which the session invariants take instead of an
+    # answered modify and a confirmed stop.
+    cut_world.trace.leave_unprotected("StopHold", "a cut with no answer by the close")
     outcome = play_cut(cut_world)
     (left,) = outcome.open_positions
     stop = first_stop(cut_world).order_id
