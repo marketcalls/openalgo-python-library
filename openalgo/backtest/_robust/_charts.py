@@ -236,7 +236,7 @@ def sessions_chart(block: SessionsBlock) -> str:
     held = int(block.marked.sum())
     return (
         f"{svg}<p class='key'>Line: {fmt.text(block.line)}. "
-        f"Shaded: the {held} sessions this assignment holds out of sample.</p>"
+        f"Shaded: the {held} sessions {fmt.text(block.shaded)}.</p>"
     )
 
 

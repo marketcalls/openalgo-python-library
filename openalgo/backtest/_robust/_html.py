@@ -18,28 +18,29 @@ from ..report import _format as fmt
 from ..report._dashboard.layout import SMALL, Section, card, label, stack
 from ..report._dashboard.page import document
 from ..report._dashboard.sections_run import assumptions_card
-from . import _charts, _charts_bars
+from . import _charts, _charts_bars, _charts_folds, _charts_grid
 from ._blocks import (
     CandlesBlock,
     FanBlock,
+    FoldsBlock,
+    GridBlock,
     HistogramBlock,
     LinesBlock,
     PathsBlock,
     SessionsBlock,
+    SparkTableBlock,
     TableBlock,
     TilesBlock,
 )
-from ._registry import not_built_note
 from ._report import RunFacts
 from ._request import Request
 from ._scorecard import Row, lead, table, verdict_badge
-from ._verdict import NOT_BUILT, WORDING_RULE, CheckResult
+from ._verdict import WORDING_RULE, CheckResult
 
 #: What the Notes say about the verdicts beyond the wording rule.
 READING = (
     "Informational: the check shows its figures and judges nothing until its limit is "
     "given in its settings.",
-    "Not built: the check comes with a later version; the scorecard says what it needs.",
     "Every check draws from its own random stream, seeded with the report's seed plus the "
     "check's number, so the same seed gives the same report on every platform. Versus "
     "random and synthetic stress also read the permutation test's permuted paths, and "
@@ -72,22 +73,18 @@ def _heading(facts: RunFacts, request: Request) -> str:
 def _scorecard(request: Request, results: Mapping[str, CheckResult], counts: dict) -> Section:
     rows = []
     for check in request.listed:
-        if check.built:
-            r = results[check.name]
-            rows.append(
-                Row(
-                    check.number,
-                    check.title,
-                    check.question,
-                    r.figure,
-                    r.rule,
-                    r.verdict,
-                    anchor(check.name),
-                )
+        r = results[check.name]
+        rows.append(
+            Row(
+                check.number,
+                check.title,
+                check.question,
+                r.figure,
+                r.rule,
+                r.verdict,
+                anchor(check.name),
             )
-        else:
-            rule = not_built_note(check)
-            rows.append(Row(check.number, check.title, check.question, "", rule, NOT_BUILT))
+        )
     body = card("Every check", "In report order", lead(counts) + table(rows))
     return Section("scorecard", "Scorecard", "Each check, its rule and its verdict", body)
 
@@ -111,10 +108,15 @@ CHARTS = {
     LinesBlock: _charts_bars.lines_chart,
     PathsBlock: _charts_bars.paths_chart,
     TableBlock: _charts_bars.table_html,
+    GridBlock: _charts_grid.grid_chart,
+    FoldsBlock: _charts_folds.folds_chart,
+    SparkTableBlock: _charts_folds.spark_table,
 }
 
 
-def _block(block: object) -> str:
+def block_html(block: object) -> str:
+    """A block of a section as HTML: its chart (or table) in a card, or its tiles.
+    Raises TypeError for a block no chart draws."""
     if isinstance(block, TilesBlock):
         return _tiles(block)
     draw = CHARTS.get(type(block))
@@ -123,12 +125,12 @@ def _block(block: object) -> str:
     return card(fmt.text(block.title), fmt.text(block.subtitle), draw(block))
 
 
-def _row(blocks: tuple) -> str:
-    """A row of blocks: charts side by side, tiles one under the other."""
+def row_html(blocks: tuple) -> str:
+    """A row of blocks as HTML: charts side by side, tiles one under the other."""
     if len(blocks) == 2 and not any(isinstance(b, TilesBlock) for b in blocks):
-        return f"<div class='grid2'>{''.join(_block(b) for b in blocks)}</div>"
+        return f"<div class='grid2'>{''.join(block_html(b) for b in blocks)}</div>"
     return "".join(
-        _block(b) if i == 0 else f"<div class='gap-s'>{_block(b)}</div>"
+        block_html(b) if i == 0 else f"<div class='gap-s'>{block_html(b)}</div>"
         for i, b in enumerate(blocks)
     )
 
@@ -157,7 +159,7 @@ def _check_section(result: CheckResult, blocks: tuple) -> Section:
         f"<p class='key'>Settings: {fmt.text(_settings_text(result))}</p>"
     )
     parts = [("", card("Verdict", "", verdict))]
-    parts += [(SMALL, _row(row)) for row in blocks]
+    parts += [(SMALL, row_html(row)) for row in blocks]
     return Section(
         anchor(result.name), fmt.text(result.title), fmt.text(result.question), stack(parts)
     )
@@ -216,4 +218,4 @@ def render(
     return document(title, _heading(facts, request), parts, __version__, "")
 
 
-__all__ = ["anchor", "render"]
+__all__ = ["anchor", "block_html", "render", "row_html"]

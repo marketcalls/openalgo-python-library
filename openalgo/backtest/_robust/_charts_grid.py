@@ -1,0 +1,214 @@
+"""An objective over two parameters as inline SVG (`_blocks.GridBlock`), in the style of
+`_charts`:
+
+    heatmap   a cell per combination, its objective written in it and its colour mixed
+              from the gain or loss colour by how far it is from break-even, against the
+              farthest in the grid (the tearsheet's monthly heatmap colours,
+              `report._dashboard.heatmaps.heat`); a marked cell (the chosen or the best
+              setting) has a bold outline and its label under the grid
+    surface   the same grid in an isometric view, original to this package: each
+              combination a column standing on the break-even plane, as tall (or as deep
+              below it) as its objective is from break-even, coloured as the heatmap;
+              drawn from the back to the front, so a nearer column hides a farther one,
+              its top face lit and its two front faces shaded; a marked column outlined
+
+Both read without colour: the heatmap writes each figure, the surface shows it as a
+height, and every cell and column carries a `<title>` with its parameters and figure.
+"""
+
+from __future__ import annotations
+
+import math
+
+import numpy as np
+
+from ..report import _format as fmt
+from ..report._dashboard.bars import AXIS_TEXT, MUTED_TEXT, Margin, frame
+from ..report._dashboard.heatmaps import heat
+from ._blocks import GridBlock
+from ._charts import HEIGHT, WIDTH
+
+#: The heatmap's margin: room for the y values on the left and the x values below.
+HEATMAP_MARGIN = Margin(14, 12, 40, 64)
+#: The smallest distance from break-even the colour scale is stretched to, so a flat
+#: grid stays pale.
+FLAT = 1e-12
+#: The isometric directions: a step along x goes right and down, along y left and down
+#: (cos 30 and sin 30 degrees).
+ISO_X, ISO_Y = math.cos(math.pi / 6), math.sin(math.pi / 6)
+#: The tallest column of the surface, a share of the chart's height.
+TALLEST_SHARE = 0.38
+#: The surface's margin inside the chart, pixels, and the room its labels take on the
+#: right of the plane.
+SURFACE_PAD = 26
+LABEL_ROOM = 48
+
+
+def _bound(block: GridBlock) -> float:
+    gaps = np.abs(block.values - block.level)
+    known = gaps[np.isfinite(gaps)]
+    return max(FLAT, float(known.max())) if len(known) else FLAT
+
+
+def _tip(block: GridBlock, column: int, row: int) -> str:
+    value = block.values[row, column]
+    return (
+        f"{fmt.text(block.x)} {fmt.text(block.columns[column])}, {fmt.text(block.y)} "
+        f"{fmt.text(block.rows[row])}: {fmt.number(value)}"
+    )
+
+
+def _marks(block: GridBlock) -> dict[tuple[int, int], str]:
+    return {(column, row): label for column, row, label in block.marked}
+
+
+def heatmap_chart(block: GridBlock) -> str:
+    """The heatmap of `block` with its key."""
+    margin = HEATMAP_MARGIN
+    width, height = WIDTH - margin.left - margin.right, HEIGHT - margin.top - margin.bottom
+    count_x, count_y = len(block.columns), len(block.rows)
+    cell_w, cell_h = width / count_x, height / count_y
+    bound, marks, marked = _bound(block), [], _marks(block)
+    for row in range(count_y):
+        for column in range(count_x):
+            value = block.values[row, column]
+            x, y = column * cell_w, (count_y - 1 - row) * cell_h
+            css = "heat-cell cell-marked" if (column, row) in marked else "heat-cell"
+            shown = fmt.number(value) if math.isfinite(value) else ""
+            marks.append(
+                f"<g><title>{_tip(block, column, row)}</title><rect class='{css}' "
+                f"x='{x:.1f}' y='{y:.1f}' width='{cell_w:.1f}' height='{cell_h:.1f}' "
+                f"style='fill:{heat(value - block.level, bound)}'/>"
+                f"<text x='{x + cell_w / 2:.1f}' y='{y + cell_h / 2 + 3:.1f}' "
+                f"text-anchor='middle' class='cell-text'>{shown}</text></g>"
+            )
+    marks += _heatmap_axes(block, cell_w, cell_h, width, height)
+    svg = frame(WIDTH, HEIGHT, margin, fmt.text(block.title), "".join(marks))
+    return f"{svg}<p class='key'>{_key(block)}</p>"
+
+
+def _heatmap_axes(
+    block: GridBlock, cell_w: float, cell_h: float, width: float, height: float
+) -> list[str]:
+    count_y = len(block.rows)
+    marks = [
+        f"<text x='{(k + 0.5) * cell_w:.1f}' y='{height + 14:.1f}' text-anchor='middle' "
+        f"style='{AXIS_TEXT}'>{fmt.text(value)}</text>"
+        for k, value in enumerate(block.columns)
+    ]
+    marks += [
+        f"<text x='-8' y='{(count_y - 1 - k + 0.5) * cell_h + 3:.1f}' text-anchor='end' "
+        f"style='{AXIS_TEXT}'>{fmt.text(value)}</text>"
+        for k, value in enumerate(block.rows)
+    ]
+    marks.append(
+        f"<text x='{width:.1f}' y='{height + 30:.1f}' text-anchor='end' "
+        f"style='{MUTED_TEXT}'>{fmt.text(block.x)}</text>"
+        f"<text x='-8' y='-4' text-anchor='end' style='{MUTED_TEXT}'>{fmt.text(block.y)}</text>"
+    )
+    return marks
+
+
+def _key(block: GridBlock) -> str:
+    marked = "; ".join(
+        f"outlined: the {fmt.text(label)} setting ({fmt.text(block.x)} "
+        f"{fmt.text(block.columns[column])}, {fmt.text(block.y)} {fmt.text(block.rows[row])})"
+        for column, row, label in block.marked
+    )
+    level = f"{fmt.number(block.level)}, the value of a run that makes nothing"
+    if block.surface:
+        text = f"Each column stands above or below {level}, as tall as its figure is from it"
+    else:
+        text = f"Each cell is coloured by how far its figure is above or below {level}"
+    return f"{text}{'; ' + marked if marked else ''}."
+
+
+def _corner(u: float, v: float, w: float, cell: float) -> tuple[float, float]:
+    """The isometric point of grid position (u, v) at height `w` pixels."""
+    return (u - v) * ISO_X * cell, (u + v) * ISO_Y * cell - w
+
+
+def _face(points: list[tuple[float, float]], css: str, fill: str) -> str:
+    path = " ".join(f"{x:.1f},{y:.1f}" for x, y in points)
+    return f"<polygon class='{css}' points='{path}' style='fill:{fill}'/>"
+
+
+def _column(block: GridBlock, column: int, row: int, cell: float, scale: float) -> str:
+    """One combination's column: its two front faces and its top face."""
+    value = block.values[row, column]
+    if not math.isfinite(value):
+        return ""
+    w = (value - block.level) * scale
+    fill = heat(value - block.level, _bound(block))
+    u, v = float(column), float(row)
+    top = [_corner(u, v, w, cell), _corner(u + 1, v, w, cell)]
+    top += [_corner(u + 1, v + 1, w, cell), _corner(u, v + 1, w, cell)]
+    left = [_corner(u, v + 1, 0, cell), _corner(u + 1, v + 1, 0, cell)]
+    left += [_corner(u + 1, v + 1, w, cell), _corner(u, v + 1, w, cell)]
+    right = [_corner(u + 1, v, 0, cell), _corner(u + 1, v + 1, 0, cell)]
+    right += [_corner(u + 1, v + 1, w, cell), _corner(u + 1, v, w, cell)]
+    css = "surf-top cell-marked" if (column, row) in _marks(block) else "surf-top"
+    return (
+        f"<g><title>{_tip(block, column, row)}</title>{_face(left, 'surf-left', fill)}"
+        f"{_face(right, 'surf-right', fill)}{_face(top, css, fill)}</g>"
+    )
+
+
+def surface_chart(block: GridBlock) -> str:
+    """The isometric surface of `block` with its key (module docstring)."""
+    count_x, count_y = len(block.columns), len(block.rows)
+    span_x = (count_x + count_y) * ISO_X
+    tallest = TALLEST_SHARE * HEIGHT
+    across = (WIDTH - 2 * SURFACE_PAD - LABEL_ROOM) / span_x
+    down = (HEIGHT - 2 * SURFACE_PAD - tallest) / ((count_x + count_y) * ISO_Y)
+    cell = min(across, down)
+    scale = tallest / 2 / _bound(block)
+    order = sorted(
+        ((column, row) for column in range(count_x) for row in range(count_y)),
+        key=lambda place: (place[0] + place[1], place[0]),
+    )
+    base = [_corner(0, 0, 0, cell), _corner(count_x, 0, 0, cell)]
+    base += [_corner(count_x, count_y, 0, cell), _corner(0, count_y, 0, cell)]
+    plane = " ".join(f"{x:.1f},{y:.1f}" for x, y in base)
+    marks = [f"<polygon class='surf-base' points='{plane}'/>"]
+    marks += [_column(block, column, row, cell, scale) for column, row in order]
+    marks += _surface_axes(block, cell)
+    left = count_y * ISO_X * cell + SURFACE_PAD
+    top = tallest / 2 + SURFACE_PAD
+    margin = Margin(int(round(top)), 0, 0, int(round(left)))
+    svg = frame(WIDTH, HEIGHT, margin, fmt.text(block.title), "".join(marks))
+    return f"{svg}<p class='key'>{_key(block)}</p>"
+
+
+def _surface_axes(block: GridBlock, cell: float) -> list[str]:
+    """The x values along the front-right edge of the plane and the y values along its
+    front-left edge, and the two parameters' names."""
+    count_x, count_y = len(block.columns), len(block.rows)
+    marks = []
+    for k, value in enumerate(block.columns):
+        x, y = _corner(k + 0.5, count_y, 0, cell)
+        marks.append(
+            f"<text x='{x + 4:.1f}' y='{y + 12:.1f}' style='{AXIS_TEXT}'>{fmt.text(value)}</text>"
+        )
+    for k, value in enumerate(block.rows):
+        x, y = _corner(count_x, k + 0.5, 0, cell)
+        marks.append(
+            f"<text x='{x + 6:.1f}' y='{y + 4:.1f}' style='{AXIS_TEXT}'>{fmt.text(value)}</text>"
+        )
+    x_name = _corner(count_x / 2, count_y, 0, cell)
+    y_name = _corner(count_x, count_y / 2, 0, cell)
+    marks.append(
+        f"<text x='{x_name[0] - 8:.1f}' y='{x_name[1] + 26:.1f}' text-anchor='end' "
+        f"style='{MUTED_TEXT}'>{fmt.text(block.x)}</text>"
+        f"<text x='{y_name[0] + 30:.1f}' y='{y_name[1] + 20:.1f}' "
+        f"style='{MUTED_TEXT}'>{fmt.text(block.y)}</text>"
+    )
+    return marks
+
+
+def grid_chart(block: GridBlock) -> str:
+    """The heatmap or the surface of `block`, as it asks."""
+    return surface_chart(block) if block.surface else heatmap_chart(block)
+
+
+__all__ = ["grid_chart", "heatmap_chart", "surface_chart"]

@@ -22,10 +22,10 @@ from pathlib import Path
 import pandas as pd
 
 from ..errors import ConfigError
-from ._registry import find, not_built, not_built_note
+from ._registry import find
 from ._request import Request
 from ._scorecard import counts_line
-from ._verdict import FAILED, NOT_BUILT, PASSED, CheckResult
+from ._verdict import FAILED, PASSED, CheckResult
 
 
 @dataclass(frozen=True)
@@ -73,15 +73,11 @@ class RobustnessReport:
     @property
     def verdicts(self) -> pd.DataFrame:
         """One row per listed check, indexed by its number in report order: check (its
-        name), question, figure, rule, verdict and note (plain text). A check this
-        version does not run has the verdict "not built" and says what it needs."""
+        name), question, figure, rule, verdict and note (plain text)."""
         rows = []
         for check in self._request.listed:
-            if check.built:
-                result = self._results[check.name]
-                cells = (result.figure, result.rule, result.verdict, result.note)
-            else:
-                cells = ("", "", NOT_BUILT, not_built_note(check))
+            result = self._results[check.name]
+            cells = (result.figure, result.rule, result.verdict, result.note)
             rows.append((check.number, check.name, check.question, *cells))
         columns = ["number", "check", "question", "figure", "rule", "verdict", "note"]
         return pd.DataFrame(rows, columns=columns).set_index("number")
@@ -92,11 +88,8 @@ class RobustnessReport:
 
     def check(self, name: str) -> CheckResult:
         """The result of the check named `name`. Raises ConfigError for an unknown name or
-        a check this report did not run, and NotImplementedError for a check this version
-        does not run."""
-        check = find(name)
-        if not check.built:
-            raise not_built(check)
+        a check this report did not run."""
+        find(name)
         if name not in self._results:
             raise ConfigError(f"this report did not run {name}; it ran {list(self._results)}")
         return self._results[name]
@@ -104,7 +97,7 @@ class RobustnessReport:
     @property
     def passed(self) -> bool:
         """True when at least one check was judged and every judged check passed. A
-        check that was not judged, informational or not built is not judged."""
+        check that was not judged or is informational is not judged."""
         judged = [r.verdict for r in self._results.values() if r.verdict in (PASSED, FAILED)]
         return bool(judged) and all(verdict == PASSED for verdict in judged)
 

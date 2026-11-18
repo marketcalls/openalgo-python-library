@@ -3,14 +3,14 @@
 Status: beta. `bt.backtest` runs one `bt.Strategy` class on OpenAlgo history or on your
 own bars, with Indian charges, slippage, session calendars and contract terms applied by
 default, and returns a `Result` with its tables, metrics and HTML tearsheet;
-`bt.optimize` sweeps a strategy's parameters over a grid; `bt.robustness` (and
-`result.robustness()`) runs the robustness and overfitting checks. `bt.live` trades the
+`bt.optimize` sweeps a strategy's parameters over a grid; `bt.walk_forward` re-fits them
+fold by fold through time; `bt.robustness` (and `result.robustness()`) runs the
+robustness and overfitting checks. `bt.live` trades the
 same strategy classes through OpenAlgo for today, in the mode set inside OpenAlgo (sandbox
 or live), and returns a `SessionResult`; `bt.record` records the feed's ticks for later
 replay, and `bt.read_ticks` reads a day of them back as a table. A part this version
 does not run raises NotImplementedError saying what to do
-instead: `bt.walk_forward`, `bt.rebalance` and a backtest of several strategies among
-them.
+instead: `bt.rebalance` and a backtest of several strategies among them.
 
     import openalgo.backtest as bt
 
@@ -55,7 +55,7 @@ _EXPORTS = {
     "session_result": ("SessionResult", "RecordSummary"),
     "_optimize_result": ("OptimizeResult",),
     "_read_ticks": ("read_ticks",),
-    "_robust": ("RobustnessReport", "CheckResult"),
+    "_robust": ("RobustnessReport", "CheckResult", "WalkForwardResult"),
     "run": (
         "backtest",
         "live",

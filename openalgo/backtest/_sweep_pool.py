@@ -12,7 +12,8 @@ process.
 
 The combinations are split into one contiguous chunk per worker, in grid order, and the
 rows come back in that order, so a sweep's table does not depend on the number of
-workers.
+workers. Each combination comes back as its row of the table and its session returns
+(`Measured`), which the optimizer's overfitting figures read (`_robust._optimizer_checks`).
 """
 
 from __future__ import annotations
@@ -25,6 +26,8 @@ from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from typing import Any
+
+import pandas as pd
 
 from ._causality_checks import IndicatorChecks
 from ._objective import evaluate
@@ -70,6 +73,16 @@ def _restore(shipped: tuple[str, Any]) -> Any:
     return pickle.loads(value) if kind == "cloudpickle" else value
 
 
+@dataclass(frozen=True, eq=False)
+class Measured:
+    """What a sweep keeps of one combination: its row of the table (the objective and
+    the key metrics, `_objective.evaluate`) and its session returns (fractions, indexed
+    by IST session date, `Performance.session_returns`)."""
+
+    row: dict[str, float]
+    returns: pd.Series
+
+
 @dataclass(frozen=True)
 class Chunk:
     """One worker's share of a sweep: everything it needs, all picklable."""
@@ -91,18 +104,18 @@ def run_combinations(
     combinations: list[dict[str, Any]],
     checks: IndicatorChecks,
     on_path: Callable[[str], Any] | None = None,
-) -> list[dict[str, float]]:
-    """The objective and key metrics of each combination, in order; `on_path` is told
+) -> list[Measured]:
+    """The row and the session returns of each combination, in order; `on_path` is told
     the evaluation path of each run (see `_pipeline.execute`)."""
     rows = []
     for params in combinations:
         settings = {**arguments, "params": params}
         result = execute(strategy, prepared, settings, checks=checks, on_path=on_path)
-        rows.append(evaluate(result, objective))
+        rows.append(Measured(evaluate(result, objective), result.performance.session_returns))
     return rows
 
 
-def run_chunk(chunk: Chunk) -> list[dict[str, float]]:
+def run_chunk(chunk: Chunk) -> list[Measured]:
     """A worker's entry point: run one chunk."""
     checks = IndicatorChecks(chunk.strategy_hash, chunk.checked, measured=chunk.prepared.measured)
     return run_combinations(
@@ -126,11 +139,11 @@ def split(combinations: list[dict[str, Any]], parts: int) -> list[list[dict[str,
     return [chunk for chunk in chunks if chunk]
 
 
-def run_in_pool(chunks: list[Chunk], workers: int) -> list[dict[str, float]]:
+def run_in_pool(chunks: list[Chunk], workers: int) -> list[Measured]:
     """Run the chunks in `workers` spawned processes; the rows in chunk order."""
     context = multiprocessing.get_context(START_METHOD)
     with ProcessPoolExecutor(max_workers=workers, mp_context=context) as pool:
         return [row for rows in pool.map(run_chunk, chunks) for row in rows]
 
 
-__all__ = ["Chunk", "portable", "run_combinations", "run_in_pool", "split"]
+__all__ = ["Chunk", "Measured", "portable", "run_combinations", "run_in_pool", "split"]

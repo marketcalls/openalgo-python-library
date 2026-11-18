@@ -1,7 +1,7 @@
 """The seventeen checks and the request of a robustness report: the checks in the order of
-design 17 section 2, the thirteen this version runs (the four trade-list checks and the
-nine bar checks), the error for one it does not (saying what it needs, in plain words), and
-every setting checked before work starts. The checks load only when they are used."""
+design 17 section 2, what each reads (the four trade-list checks, the nine bar checks and
+the four searching checks), the parameter ranges the searching checks take, and every
+setting checked before work starts. The checks load only when they are used."""
 
 import subprocess
 import sys
@@ -10,7 +10,7 @@ import pytest
 from robust_runs import FREE, Flip, bars, steps_for
 
 import openalgo.backtest as bt
-from openalgo.backtest._robust._registry import BUILT, CHECKS, QUICK
+from openalgo.backtest._robust._registry import CHECKS, QUICK, SEARCHING
 from openalgo.backtest._robust._request import build_request
 from openalgo.backtest.errors import ConfigError
 
@@ -34,30 +34,8 @@ DESIGN_ORDER = (
     "parameters",
     "noise_optimization",
 )
-SEARCHES = "walk-forward and the parameter searches"
-# What each check this version does not run needs (section 6), in plain words.
-NEEDS = {
-    "out_of_sample": SEARCHES,
-    "walk_forward": SEARCHES,
-    "parameters": SEARCHES,
-    "noise_optimization": SEARCHES,
-}
 TRADE_LIST = ("random_out_of_sample", "reshuffle", "resample", "variance")
-THIS_VERSION = (
-    "random_out_of_sample",
-    "vs_random",
-    "permutation",
-    "noise",
-    "shifted",
-    "other_markets",
-    "stress",
-    "reshuffle",
-    "resample",
-    "random_exits",
-    "variance",
-    "delayed",
-    "liquidity",
-)
+SEARCH = ("out_of_sample", "walk_forward", "parameters", "noise_optimization")
 
 
 def request(**changes):
@@ -83,25 +61,14 @@ def test_the_registry_lists_the_seventeen_checks_in_the_design_order():
     assert [check.number for check in CHECKS] == list(range(1, 18))
 
 
-def test_this_version_runs_the_trade_list_and_the_bar_checks():
-    assert BUILT == THIS_VERSION
+def test_the_quick_checks_read_the_trade_list_and_four_checks_search_parameters():
     assert QUICK == TRADE_LIST
+    assert SEARCHING == SEARCH
 
 
-@pytest.mark.parametrize("name", list(NEEDS))
-def test_a_check_this_version_does_not_run_says_what_it_needs(name):
-    with pytest.raises(NotImplementedError) as raised:
-        request(checks=[name])
-    message = str(raised.value)
-    assert "not supported in this version" in message
-    assert f"it needs {NEEDS[name]}" in message
-    assert "checks='all'" in message
-
-
-def test_all_lists_every_check_and_runs_the_built_ones():
+def test_all_runs_every_check():
     asked = request()
     assert tuple(check.name for check in asked.listed) == DESIGN_ORDER
-    assert tuple(check.name for check in asked.to_run) == THIS_VERSION
 
 
 def test_quick_runs_the_trade_list_checks():
@@ -110,7 +77,7 @@ def test_quick_runs_the_trade_list_checks():
 
 def test_a_list_of_checks_runs_them_in_report_order():
     asked = request(checks=["variance", "resample"])
-    assert [check.name for check in asked.to_run] == ["resample", "variance"]
+    assert [check.name for check in asked.listed] == ["resample", "variance"]
 
 
 @pytest.mark.parametrize("checks", [["bogus"], [], "some", 3, [3]])
@@ -167,9 +134,16 @@ def test_settings_for_a_check_that_does_not_run_are_refused():
         request(checks=["resample"], check_settings={"variance": {"points": 10}})
 
 
-def test_settings_for_a_check_this_version_does_not_run_say_what_it_needs():
-    with pytest.raises(NotImplementedError, match=r"it needs walk-forward"):
-        request(check_settings={"parameters": {"runs": 500}})
+def test_a_searching_checks_dict_applies_over_its_defaults():
+    asked = request(check_settings={"walk_forward": {"folds": 3, "anchored": True}})
+    assert asked.settings["walk_forward"] == {
+        "min_trades": 30,
+        "folds": 3,
+        "anchored": True,
+        "in_sample": 0.7,
+        "efficiency": 0.5,
+        "fold_share": 0.6,
+    }
 
 
 def test_others_are_symbols_or_symbol_and_exchange_pairs():
@@ -188,9 +162,19 @@ def test_others_without_the_other_markets_check_are_refused():
         request(checks="quick", others=["ICICIBANK"])
 
 
-def test_parameter_ranges_are_not_searched_in_this_version():
-    with pytest.raises(NotImplementedError, match="they need walk-forward and the parameter"):
-        request(ranges={"fast": range(5, 30, 5)})
+def test_parameter_ranges_are_kept_as_their_values():
+    asked = request(ranges={"fast": range(5, 30, 5)})
+    assert asked.ranges == {"fast": (5, 10, 15, 20, 25)}
+
+
+def test_parameter_ranges_without_a_check_that_searches_them_are_refused():
+    with pytest.raises(ConfigError, match="which checks= does not run; fix the parameters"):
+        request(checks="quick", ranges={"fast": range(5, 30, 5)})
+
+
+def test_an_empty_parameter_range_is_refused():
+    with pytest.raises(ConfigError, match="the range of fast is empty"):
+        request(ranges={"fast": []})
 
 
 @pytest.mark.parametrize(

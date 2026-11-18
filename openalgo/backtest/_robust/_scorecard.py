@@ -37,7 +37,7 @@ def verdict_badge(verdict: str) -> str:
 
 def counts_line(counts: Mapping[str, int], always: tuple[str, ...] = ()) -> str:
     """How many checks had each verdict, in `VERDICTS` order, leaving out the ones none
-    had unless they are among `always`: "2 passed, 1 failed, 13 not built"."""
+    had unless they are among `always`: "2 passed, 1 failed, 1 informational"."""
     shown = [
         f"{counts.get(verdict, 0)} {verdict}"
         for verdict in VERDICTS

@@ -29,9 +29,8 @@ PASSED = "passed"
 FAILED = "failed"
 NOT_JUDGED = "not judged"
 INFORMATIONAL = "informational"
-NOT_BUILT = "not built"
 #: Every verdict, in the order a scorecard counts them.
-VERDICTS = (PASSED, FAILED, NOT_JUDGED, INFORMATIONAL, NOT_BUILT)
+VERDICTS = (PASSED, FAILED, NOT_JUDGED, INFORMATIONAL)
 #: What a pass shows.
 PASSING = "Passing a check proves nothing on its own."
 #: What a failure shows, and what it does not.
@@ -124,7 +123,6 @@ __all__ = [
     "FAILING",
     "FIXED",
     "INFORMATIONAL",
-    "NOT_BUILT",
     "NOT_JUDGED",
     "PASSED",
     "PASSING",

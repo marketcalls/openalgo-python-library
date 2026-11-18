@@ -73,7 +73,6 @@ def _result() -> bt.Result:
 
 NOT_BUILT = {
     "weekly strategy live": lambda: bt.live(Weekly, None, capital=100_000, max_daily_loss=1_000),
-    "bt.walk_forward": lambda: bt.walk_forward(Quarterly),
     "bt.rebalance": lambda: bt.rebalance(),
     "several strategies": lambda: bt.backtest([Quarterly, Quarterly], capital=100_000),
     "Result.strategy": lambda: _result().strategy("Quarterly"),

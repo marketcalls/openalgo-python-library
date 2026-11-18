@@ -7,6 +7,13 @@ run's source again: the user's `data=`, or OpenAlgo through the run's client), a
 symbol's base bars are joined after the history before `start` that its indicators keep
 (`_pipeline._kept_history`), exactly the bars the run read.
 
+The checks that search parameters (`_search_setup`) read the same bars with the history
+of the largest need of the combinations they run (`bars_for`): the run is prepared with
+every combination's parameters, as `bt.optimize` prepares a sweep, and each symbol keeps
+the longest of their histories, so a combination with a longer warm-up than the run's
+reads the bars it would read in a sweep. `bt.walk_forward` reads them the same way,
+with no run before it.
+
 A rerun goes through `bt.backtest`'s `data=` path with the warm-up the run needs
 (`rerun_arguments`): the run's own arguments, with `data=` the generated bars by symbol
 (history included, so the warm-up is read from them as from the user's own data), no
@@ -104,14 +111,37 @@ def run_bars(result: Any) -> tuple[RunBars, dict[str, Any]]:
     if record is None:
         raise BacktestError("this result was not made by bt.backtest, so it has no bars to rerun")
     arguments = run_arguments(record)
-    prepared = prepare(record.strategy, record.client, {**arguments, "client": record.client})
+    bars, reruns = bars_for(record.strategy, record.client, arguments, [arguments["params"]])
+    return bars, {**reruns, "benchmark": result._benchmark}
+
+
+def _longest(histories: list[Any], symbol: str) -> Any:
+    """The history among `histories` (`_warm_up_history.RunHistory`) that keeps the most
+    base bars of `symbol` before the run; the first of equal ones."""
+
+    def kept(history: Any) -> int:
+        found = history.symbols.get(symbol)
+        return -1 if found is None else len(found.base)
+
+    return max(histories, key=kept)
+
+
+def bars_for(
+    strategy: type, client: Any, arguments: dict[str, Any], parameter_sets: list[Any]
+) -> tuple[RunBars, dict[str, Any]]:
+    """(the `RunBars` of a run of `strategy` with the run arguments `arguments`, each
+    symbol with the longest history any of `parameter_sets` (its `params=` values) keeps;
+    the arguments of its reruns without `data=`, the benchmark's closes as the source
+    gives them). Raises NotImplementedError for a futures series and what preparing the
+    run raises (the data layer's errors among them)."""
+    prepared = prepare(strategy, client, {**arguments, "client": client}, parameter_sets)
     if prepared.futures is not None:
         raise not_supported(*FUTURES)
     plan = prepared.plan
-    checks = IndicatorChecks(strategy_name(record.strategy), measured=prepared.measured)
-    history = _kept_history(record.strategy, prepared, arguments["params"], checks)
+    checks = IndicatorChecks(strategy_name(strategy), measured=prepared.measured)
+    histories = [_kept_history(strategy, prepared, params, checks) for params in parameter_sets]
     frames = tuple(
-        history.with_base(symbol, frame)
+        _longest(histories, symbol).with_base(symbol, frame)
         for symbol, frame in zip(plan.symbols, prepared.frames, strict=True)
     )
     first = min(int(frame["ts_open"].iloc[0]) for frame in prepared.frames if len(frame))
@@ -135,9 +165,9 @@ def run_bars(result: Any) -> tuple[RunBars, dict[str, Any]]:
         "base": plan.base,
         "source": "auto",
         "tz": None,
-        "benchmark": result._benchmark,
+        "benchmark": None if prepared.benchmark is None else prepared.benchmark.closes,
     }
     return bars, reruns
 
 
-__all__ = ["FUTURES", "RunBars", "run_arguments", "run_bars", "strategy_name"]
+__all__ = ["FUTURES", "RunBars", "bars_for", "run_arguments", "run_bars", "strategy_name"]
