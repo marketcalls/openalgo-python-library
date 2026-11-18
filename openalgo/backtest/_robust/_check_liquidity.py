@@ -30,7 +30,7 @@ from typing import Any
 
 import numpy as np
 
-from .._settings import FILL_MODELS
+from .._perturbation import FILL_MODELS
 from . import _words as words
 from ._bar_common import BarRun, RerunSet
 from ._blocks import Tile, TilesBlock

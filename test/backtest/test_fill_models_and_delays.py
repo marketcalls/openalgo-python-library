@@ -125,6 +125,12 @@ def test_a_delay_is_a_whole_number_of_strategy_bars(value):
         bt.backtest(BuyFirstSellThird, data=bars(), **FREE, delay_entries=value)
 
 
+def test_a_delay_beyond_the_longest_the_engine_counts_names_that_longest():
+    # The engine counts a delay in a 32-bit whole number: 2**32 - 1 bars at most.
+    with pytest.raises(ConfigError, match=r"delay_exits takes at most 4294967295 strategy bars"):
+        bt.backtest(BuyFirstSellThird, data=bars(), **FREE, delay_exits=2**32)
+
+
 def test_an_unknown_fill_names_every_model():
     with pytest.raises(ConfigError, match="next_ohlc4_2"):
         bt.backtest(BuyFirstSellThird, data=bars(), **FREE, fill="next_vwap")
