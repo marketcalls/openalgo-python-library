@@ -1,6 +1,7 @@
 """The shared alerts of a live session (16-session-design 2.8): one lock around the
 session's alerts for the threads that send them, the log until the alerts are attached,
-one attachment, and a test alert that holds no lock.
+one attachment, a test alert that holds no lock, and every alert echoed on the console
+(the sandbox smoke run of 2026-11-17, unit 13).
 
 The thread tests run real threads against alerts doubles that block on an event; every
 wait is bounded, and reached only when something is broken.
@@ -142,6 +143,77 @@ def test_the_test_alert_before_the_attachment_is_not_delivered(caplog):
         assert SharedAlerts().test() is False
 
     assert "not set up" in caplog.text
+
+
+# -- the console's echo ----------------------------------------------------------------------------
+
+
+def echoing(alerts=None) -> tuple[SharedAlerts, list[str]]:
+    """Shared alerts that echo on a console keeping its lines, with `alerts` attached."""
+    lines: list[str] = []
+    shared = SharedAlerts(echo=lines.append)
+    shared.attach(alerts or RecordingAlerts())
+    return shared, lines
+
+
+@pytest.mark.parametrize(
+    ("kind", "line"),
+    [
+        (AlertKind.ENTRY, "ENTRY: BUY 10 SBIN NSE at 812.00"),
+        (AlertKind.STOP_MOVED, "STOP MOVED: BUY 10 SBIN NSE at 812.00"),
+        (AlertKind.DAILY_SUMMARY, "DAILY SUMMARY: BUY 10 SBIN NSE at 812.00"),
+    ],
+    ids=["one word", "two words", "the daily summary"],
+)
+def test_an_alert_is_echoed_on_the_console_after_its_kind(kind, line):
+    shared, lines = echoing()
+    shared.send(kind, "BUY 10 SBIN NSE at 812.00")
+    assert lines == [line]
+
+
+def test_an_alert_is_echoed_with_no_telegram_user():
+    shared, lines = echoing(make_alerts(FakeOpenAlgo(), ManualClock(), username=None))
+    shared.send(AlertKind.EXIT, "SELL 10 SBIN NSE at 812.00")
+    assert lines == ["EXIT: SELL 10 SBIN NSE at 812.00"]
+
+
+def test_the_banners_session_alert_is_not_echoed():
+    shared, lines = echoing()
+    shared.send(AlertKind.SESSION, "OpenAlgo is in LIVE mode: orders go to zerodha")
+    assert lines == []
+
+
+def test_an_alert_whose_line_its_caller_printed_is_not_echoed():
+    shared, lines = echoing()
+    shared.send(AlertKind.ERROR, "SBIN NSE 10 units: no stop at the broker", echo=False)
+    assert lines == []
+
+
+def test_a_repeated_condition_held_back_is_not_echoed_again():
+    clock = ManualClock()
+    shared, lines = echoing(make_alerts(FakeOpenAlgo(), clock))
+    shared.send(AlertKind.FEED_DEAD, "no tick for 10 s")
+    clock.advance(30)
+    shared.send(AlertKind.FEED_DEAD, "no tick for 10 s")
+    assert lines == ["FEED DEAD: no tick for 10 s"]
+
+
+def test_an_alert_before_the_attachment_is_echoed_too():
+    lines: list[str] = []
+    SharedAlerts(echo=lines.append).send(AlertKind.ERROR, "analyzerstatus did not answer")
+    assert lines == ["ERROR: analyzerstatus did not answer"]
+
+
+def test_a_console_that_fails_is_logged_and_the_alert_still_goes(caplog):
+    def broken(line: str) -> None:
+        raise OSError("the console is closed")
+
+    shared, alerts = SharedAlerts(echo=broken), RecordingAlerts()
+    shared.attach(alerts)
+    with caplog.at_level(logging.ERROR, logger=LOGGER_NAME):
+        shared.send(AlertKind.REJECT, "order 2511160001 rejected")
+    assert alerts.sent == [(AlertKind.REJECT, "order 2511160001 rejected")]
+    assert "could not be printed on the console" in caplog.text
 
 
 # -- two threads -----------------------------------------------------------------------------------

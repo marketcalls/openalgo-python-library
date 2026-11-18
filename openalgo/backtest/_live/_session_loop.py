@@ -41,13 +41,16 @@ from typing import Any
 from .._calendar_convert import format_ist
 from .._layout import NANOS_PER_SECOND
 from ..errors import LiveError
-from ._guard_breach import ModeBreach, breach_text
+from ._guard_breach import ModeBreach, breach_alert, breach_text
 from ._session_exits import ExitRetries
+from ._session_figures import DayFigures, SessionFigures, StrategyFigures
 from ._session_lag import LoopLag
 from ._session_news import News
 from ._session_parts import SessionParts, SessionStopped, StopFlag
-from ._session_saved import save, save_released
+from ._session_records import FillRecord
+from ._session_saved import save_released, saved_commands
 from ._session_trader import Trader
+from ._shared_alerts import warning_line
 from ._stops_report import stop_words
 from ._types import LOGGER_NAME, AlertKind, Now, Sleep, Tick
 from ._venue_requests import request_fields
@@ -126,6 +129,12 @@ class Session:
         self.tally = TickTally()
         self.last_tick: dict[tuple[str, str], Tick] = {}
         self.warnings: list[str] = []
+        #: True once the start banner is printed: a later warning is printed at once.
+        self.banner_shown = False
+        #: Every fill the kernel took, and what the day's earlier starts left (the start
+        #: sets it from journal L at a restart).
+        self.fills: list[FillRecord] = []
+        self.figures = DayFigures({}, StrategyFigures(), SessionFigures())
         self.started_ns = now()
         self._held: collections.deque[Envelope] = collections.deque()
         self._event_failed = False
@@ -168,18 +177,23 @@ class Session:
             if not self._event_failed:
                 self._event_failed = True
                 text = f"the session's event stream cannot be written ({error}); it goes on"
-                self.warn(text)
+                self.warn(text, printed=True)
                 self.alert(AlertKind.ERROR, text)
 
-    def alert(self, kind: AlertKind, text: str) -> None:
-        """Send an alert through the session's shared alerts (which log it)."""
-        self.parts.alerts.send(kind, text)
+    def alert(self, kind: AlertKind, text: str, *, echo: bool = True) -> None:
+        """Send an alert through the session's shared alerts (which log it, and echo it on
+        the console unless `echo` is False: a line the caller prints itself)."""
+        self.parts.alerts.send(kind, text, echo=echo)
 
-    def warn(self, text: str) -> None:
-        """Keep a warning for the result, once, and log it."""
+    def warn(self, text: str, *, printed: bool = False) -> None:
+        """Keep a warning for the result, once, and log it; once the start banner is out
+        (it prints the warnings found before it) print it on the console too, unless
+        `printed`: an alert of the same words, which the console echoes, goes with it."""
         if text not in self.warnings:
             self.warnings.append(text)
             logger.warning(text)
+            if self.banner_shown and not printed:
+                self.emit(warning_line(text))
 
     def hand_over(self, requests: Sequence[Request]) -> None:
         """Give the order worker `requests`, in order, but those the reconciler's exit
@@ -211,13 +225,7 @@ class Session:
             for trader in self.traders
             if (units := trader.open_units()) != 0
         ]
-        held = "; ".join(positions) if positions else "no open position"
-        self.alert(
-            AlertKind.ERROR,
-            f"OpenAlgo's mode changed: the session sends nothing more. Positions as last "
-            f"known: {held}. The broker's MIS square-off closes what is left; stop the "
-            "session with Ctrl+C",
-        )
+        self.alert(AlertKind.ERROR, breach_alert(positions))
 
     # ----- the iteration -------------------------------------------------------------
 
@@ -242,25 +250,13 @@ class Session:
             self.reconcile.duties(self.now())
             if self.control is not None:
                 self.control.duties(self.now())
-        self.hand_over(self._commands())
+        self.hand_over(saved_commands(self))
         self.stops.review(self.now())
         if self.control is not None and not protecting:
             self.control.after_hand_over()
         if released:
             save_released(self, released)
         self._wait(until_ns)
-
-    def _commands(self) -> list[Request]:
-        """Every strategy's commands since the last call, as requests (E); a strategy that
-        made any is saved to journal L first (design rule 4). Raises JournalError when the
-        journal cannot be written."""
-        requests: list[Request] = []
-        for trader in self.traders:
-            made = trader.commands()
-            if made:
-                save(self, trader)
-            requests += made
-        return requests
 
     def pause(self, seconds: float) -> None:
         """Wait `seconds` while the loop keeps turning (the start's waits: the countdown,

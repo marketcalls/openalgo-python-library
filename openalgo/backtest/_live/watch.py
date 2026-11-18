@@ -310,7 +310,7 @@ class RiskWatch:
             session.alert(AlertKind.ERROR, text)
             if not self._skew_warned:
                 self._skew_warned = True
-                session.warn(text)
+                session.warn(text, printed=True)
 
 
 __all__ = ["FEED_DEAD_LOCK", "QUIET_AFTER_S", "RiskWatch"]

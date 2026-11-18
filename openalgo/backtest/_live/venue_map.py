@@ -137,6 +137,11 @@ class VenueMap(RestoredOrders):
         """The intent of a kernel order. Raises LiveError for one this map did not place."""
         return self._order(kernel_order).intent
 
+    def placed(self) -> list[tuple[int, VenueOrder]]:
+        """Every order this map placed, a restart's restored ones included, by kernel
+        order: its intent, the broker's order ID once bound ("" before), its terms."""
+        return sorted(self._orders.items())
+
     def terms(self, kernel_order: int) -> OrderTerms:
         """The terms the broker holds for a kernel order as far as the session knows: those
         it was placed with, or the last modify the broker confirmed; a modify or cancel

@@ -24,6 +24,7 @@ from typing import Any
 import pytest
 
 from openalgo.backtest._live._reconcile_rules import Kind, LegBooks, Trade
+from openalgo.backtest._live._session_records import StrategyRecords
 from openalgo.backtest._live._types import AlertKind
 from openalgo.backtest._live.reconcile import Reconciler
 
@@ -40,7 +41,8 @@ BOOKS = LegBooks(
 
 class Trader:
     """One strategy's engine as the reconciler sees it at the restart; `fills` are the
-    external fills it was given, `locks` its entry locks."""
+    external fills it was given, `locks` its entry locks, `records` what the session keeps
+    of it for the result."""
 
     name, symbol, exchange = "S", "SBIN", "NSE"
     finished = False
@@ -51,6 +53,7 @@ class Trader:
         self.locks: list[str] = []
         self.engine = SimpleNamespace(apply_external_fill=lambda *args: self.fills.append(args))
         self.venue = SimpleNamespace(bound=dict)
+        self.records = StrategyRecords(self.name)
 
     def open_units(self) -> float:
         return float(self.units)
@@ -64,7 +67,7 @@ class Trader:
 
 class Session:
     """What the reconciler calls on its session, before trading begins (no read is asked
-    for yet); `alerts` what it sent."""
+    for yet); `alerts` what it sent, `fills` the fills the session kept for its result."""
 
     trading, locked = False, False
 
@@ -72,6 +75,7 @@ class Session:
         self.traders = (trader,)
         self.mismatches = 0
         self.alerts: list[tuple[AlertKind, str]] = []
+        self.fills: list[Any] = []
         self.reconcile = Reconciler(self)
         # B1 is the session's own order, sent before the restart (the journal's).
         self.reconcile.start({}, frozenset({"B1"}))
@@ -111,6 +115,11 @@ def stale() -> Session:
 def test_a_start_difference_the_engine_still_holds_is_adopted_at_once(current):
     [fill] = current.traders[0].fills
     assert (fill[2], fill[3]) == ("SELL", 6.0)
+
+
+def test_an_adopted_fill_is_kept_for_the_result_as_an_external_one(current):
+    [kept] = current.fills
+    assert (kept.action, kept.units, kept.price, kept.source) == ("SELL", 6, 498.0, "external")
 
 
 def test_a_start_difference_on_units_the_engine_no_longer_holds_adopts_nothing(stale):

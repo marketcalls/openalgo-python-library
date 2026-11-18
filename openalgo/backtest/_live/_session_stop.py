@@ -291,7 +291,7 @@ class Control:
                 continue
             line = f"{leg_words(trader, units)}: not flat yet, {self._exit_state(trader)}"
             session.emit(line)
-            session.alert(AlertKind.ERROR, f"safe stop: {line}")
+            session.alert(AlertKind.ERROR, f"safe stop: {line}", echo=False)
 
     def _exit_state(self, trader: Trader) -> str:
         """What works toward the exit of `trader`'s position, as a reminder says it."""
@@ -337,7 +337,7 @@ class Control:
             line = f"{leg_words(trader, units)}: {left_open(session.stops, trader)}"
             session.emit(line)
             if every_leg or not protected(session.stops, trader):
-                session.alert(AlertKind.ERROR, line)
+                session.alert(AlertKind.ERROR, line, echo=False)
             else:
                 logger.info(line)
 

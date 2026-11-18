@@ -14,9 +14,12 @@ hand it adopts among them); an ERROR alert for each leg whose last comparison sa
 difference with OpenAlgo's books no later read will confirm, for each leg whose units or
 stop changed after the lines, for each leg left open that the exit guard still holds
 (OpenAlgo's books never agreed with the engine), and for each leg left flat with an order
-still working, naming what the guard held back; `self.state` saved; the order worker
-stopped; each kernel session stopped where it stands (`stop_session`, R20) with its last
-events delivered, `on_stop` called and `finish` read; the DAILY_SUMMARY alert; then
+still working, naming what the guard held back; what a restart of the day needs saved
+to journal L, now that the final fills are in (each strategy's state with its figures and
+its `self.state`, the session's counts with the mismatches the close names:
+`_session_figures`); the order worker stopped; each kernel session stopped where it
+stands (`stop_session`, R20) with its last events delivered, `on_stop` called and
+`finish` read; the DAILY_SUMMARY alert; then
 everything the start opened closed in reverse (the feed, the data worker, journal L, the
 logs, the alerts, the lock). A journal failure or another error closes the same way
 without the flatten (journal L is not written after a journal failure). A position left
@@ -46,15 +49,20 @@ from .._driver import deliver
 from .._engine import call
 from ..errors import JournalError
 from ._alerts_summary import SessionSummary, summary_text
+from ._plan_catch_up import StrategyPlan
 from ._reconcile_close import (
     NOT_CONFIRMED_ALERT,
     differing,
+    late_alert,
+    late_summary,
     not_confirmed_alert,
     not_confirmed_summary,
 )
 from ._reconcile_final import final_read
 from ._reconcile_findings import Reconciliation
 from ._session_loop import Session
+from ._session_records import FillRecord, LockRecord, OrderRecord, Restored, order_records
+from ._session_saved import save, save_session
 from ._session_trader import Skipped, Trader
 from ._stops_cover import Unprotected
 from ._stops_held import Estimate
@@ -70,6 +78,9 @@ FINAL_READ_WAIT_S = 5.0
 #: How a session ended that takes the final read: not after an error (3.5) or a mode
 #: breach (6.2), when the books are not to be trusted or not to be read.
 _FINAL_READ = frozenset({"session_end", "ctrl_c"})
+#: How the close warns of a strategy's state it could not save, and what a restart does.
+NOT_SAVED = "its state and the day's figures were not saved at the close"
+RESUMES_FROM_LAST_SAVE = "a restart today resumes it from its last save"
 
 
 @dataclass(frozen=True)
@@ -94,16 +105,20 @@ class OpenPosition:
 
 @dataclass(frozen=True)
 class SessionOutcome:
-    """What one run of a live session leaves (the public `SessionResult` is built from it
-    in a later unit): the `mode` ("sandbox" or "live"), `broker`, `account`, IST `day`,
+    """What one run of a live session leaves (the public `SessionResult` is built from it,
+    `_result_build`): the `mode` ("sandbox" or "live"), `broker`, `account`, IST `day`,
     `started_ns` and `ended_ns`, `stopped_by` ("session_end", "ctrl_c", "mode_breach",
     "error"), `restarts`, the `strategies` in call order, `outputs` (each kernel
-    session's `finish()` tables by strategy), `summary` (the day's figures),
-    `open_positions`, `mode_breach` (the guard's text or None), `warnings`,
-    `skipped_decisions`, `drift` (the accepted candles' drift), `paths` (journal, log,
-    events), `unprotected` (each window a leg had no confirmed stop at the broker),
-    `estimated` (the fills released at a price the books did not confirm) and
-    `reconciliations` (each comparison with the broker's books that differed)."""
+    session's `finish()` tables by strategy), `summary` (the day's figures across its
+    restarts, `_session_figures`), `open_positions`, `mode_breach` (the guard's text or
+    None), `warnings`, `skipped_decisions`, `drift` (the accepted candles' drift), `paths`
+    (journal, log, events), `unprotected` (each window a leg had no confirmed stop at the
+    broker), `estimated` (the fills released at a price the books did not confirm),
+    `reconciliations` (each comparison with the broker's books that differed), and the
+    records of `_session_records`: `orders`, `fills` and `locks`; `plans`, each
+    strategy's part of the session plan by name (its settings, strategy and run context,
+    for its result), `timer_warnings`, its timers' notes, read before its kernel
+    session finished, and `restored`, each restored strategy's restore at a restart."""
 
     mode: str
     broker: str
@@ -125,6 +140,12 @@ class SessionOutcome:
     unprotected: tuple[Unprotected, ...] = ()
     estimated: tuple[Estimate, ...] = ()
     reconciliations: tuple[Reconciliation, ...] = ()
+    orders: tuple[OrderRecord, ...] = ()
+    fills: tuple[FillRecord, ...] = ()
+    locks: tuple[LockRecord, ...] = ()
+    plans: dict[str, StrategyPlan] = field(default_factory=dict)
+    timer_warnings: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    restored: dict[str, Restored] = field(default_factory=dict)
 
 
 def close_session(
@@ -150,9 +171,12 @@ def close_session(
         named = _named_legs(session)
         unprotected_s = session.stops.windows.seconds(session.now())
         if journal_works:
-            _save_states(session)
+            _save_day(session, unprotected_s, len(named[0]))
         parts.worker.close()
+        # Read while each kernel session runs: a finished one counts its timers no more.
+        timers = {t.name: tuple(t.part.context.timers.warnings()) for t in session.traders}
         outputs = {trader.name: _stop_engine(trader) for trader in session.traders}
+        orders = order_records(session, {name: output for name, (output, _) in outputs.items()})
         summary = _summary(session, outputs, unprotected_s, named, not open_positions)
         session.alert(AlertKind.DAILY_SUMMARY, summary_text(summary))
         if not session.threads:
@@ -187,18 +211,28 @@ def close_session(
         unprotected=session.stops.windows.rows(),
         estimated=tuple(session.stops.held.estimates),
         reconciliations=tuple(session.reconcile.rows),
+        orders=orders,
+        fills=tuple(session.fills),
+        locks=tuple(lock for trader in session.traders for lock in trader.records.locks),
+        plans={trader.name: trader.part for trader in session.traders},
+        timer_warnings=timers,
+        restored={t.name: t.records.restored for t in session.traders if t.records.restored},
     )
 
 
 def _named_legs(session: Session) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """The legs the summary names at the close, in its words: each whose difference with
-    OpenAlgo's books no later read confirms (`_reconcile_close.Differing.summary`), then
-    each with none that no read judged after a fill of its own orders landed during a read
-    (`_reconcile_close.not_confirmed_summary`)."""
+    """The legs the summary names at the close, in its words: each whose last comparison
+    was late and saw a difference (`_reconcile_close.late_summary`) or whose difference
+    with OpenAlgo's books no later read confirms (`_reconcile_close.Differing.summary`),
+    then each with none that no read judged after a fill of its own orders landed during a
+    read (`_reconcile_close.not_confirmed_summary`)."""
     differs, unsure = [], []
     for trader in session.traders:
+        late = session.reconcile.late(trader.name)
         seen = differing(session.reconcile, trader)
-        if seen is not None:
+        if late is not None:
+            differs.append(late_summary(trader, late))
+        elif seen is not None:
             differs.append(seen.summary(trader))
         elif session.reconcile.unjudged(trader.name):
             unsure.append(not_confirmed_summary(trader, round(trader.open_units())))
@@ -207,9 +241,14 @@ def _named_legs(session: Session) -> tuple[tuple[str, ...], tuple[str, ...]]:
 
 def _alert_not_confirmed(session: Session) -> None:
     """One alert per leg no read judged after a fill of its own orders landed during a
-    read, to check OpenAlgo's position book (`_reconcile_close.not_confirmed_alert`)."""
+    read, to check OpenAlgo's position book (`_reconcile_close.not_confirmed_alert`), and
+    one ERROR alert per leg whose last comparison was late and saw a difference, with that
+    read's figures (`_reconcile_close.late_alert`)."""
     for trader in session.traders:
-        if session.reconcile.unjudged(trader.name):
+        late = session.reconcile.late(trader.name)
+        if late is not None:
+            session.alert(AlertKind.ERROR, late_alert(trader, late))
+        elif session.reconcile.unjudged(trader.name):
             differs = differing(session.reconcile, trader)
             text = not_confirmed_alert(trader, round(trader.open_units()), differs)
             session.alert(NOT_CONFIRMED_ALERT, text)
@@ -222,28 +261,33 @@ def _summary(
     legs: tuple[tuple[str, ...], tuple[str, ...]],
     flat: bool,
 ) -> SessionSummary:
-    """The day's figures of this start: the trades the kernel sessions closed, their
-    gross P&L and modelled charges (the broker's trade book carries none), and the legs
-    `_named_legs` gives, each differing one a mismatch too."""
+    """The day's figures across its restarts (`_session_figures`): the trades the kernel
+    sessions closed, their gross P&L and modelled charges (the broker's trade book carries
+    none), the session's counts, and the legs `_named_legs` gives, each differing one a
+    mismatch too; the strategies earlier starts ran and this one does not, the day not
+    `flat` while one held a position at its last save. No slippage: the backtest's fill
+    price of each order is not modelled here."""
     differs, unsure = legs
     parts = session.parts
-    closed = sum(len(output["trades"]["trade_id"]) for output, _ in outputs.values())
+    figures = session.figures
+    traded, counted = figures.day(session, outputs, unprotected_s)
     return SessionSummary(
         day=parts.spec.day,
         mode=parts.mode,
         broker=parts.broker,
         strategies=tuple(t.name for t in session.traders),
-        closed_trades=closed,
-        gross_pnl=sum(gross for _, (gross, _) in outputs.values()),
-        charges=sum(charges for _, (_, charges) in outputs.values()),
+        closed_trades=traded.closed_trades,
+        gross_pnl=traded.gross_pnl,
+        charges=traded.charges,
         slippage=None,
-        rejected_orders=session.rejected,
-        unprotected_seconds=unprotected_s,
-        reconcile_mismatches=session.mismatches + len(differs),
-        undelivered_alerts=parts.sender.undelivered,
-        flat=flat,
+        rejected_orders=counted.rejected_orders,
+        unprotected_seconds=counted.unprotected_seconds,
+        reconcile_mismatches=counted.reconcile_mismatches + len(differs),
+        undelivered_alerts=counted.undelivered_alerts,
+        flat=flat and not figures.earlier_open,
         differing=differs,
         unconfirmed=unsure,
+        earlier=tuple(strategy.words() for strategy in figures.earlier),
     )
 
 
@@ -268,10 +312,18 @@ def _open_positions(session: Session) -> tuple[OpenPosition, ...]:
     return tuple(positions)
 
 
-def _save_states(session: Session) -> None:
-    """Save each changed `self.state`. One the journal cannot take is a warning of the
-    result: the close goes on, since what is open matters more than the saved state."""
+def _save_day(session: Session, unprotected_s: float, named: int) -> None:
+    """Save to journal L what a restart of the day needs, as the loop's step F does, now
+    that the final fills are in: each running strategy's state with its figures, and its
+    `self.state` when it changed; then the session's counts with what the close adds,
+    `named` mismatches and `unprotected_s` seconds unprotected. A save the journal cannot
+    take is a warning of the result: the close goes on, since what is open matters more
+    than what is saved."""
     for trader in session.traders:
+        try:
+            save(session, trader)
+        except JournalError as error:
+            session.warn(f"{trader.name}: {NOT_SAVED} ({error}): {RESUMES_FROM_LAST_SAVE}")
         state = trader.state_changed()
         if state is None:
             continue
@@ -279,6 +331,10 @@ def _save_states(session: Session) -> None:
             session.parts.journal.put_user_state(trader.name, state)
         except JournalError as error:
             session.warn(f"{trader.name}: self.state not saved at the close: {error}")
+    try:
+        save_session(session, unprotected_s=unprotected_s, named=named)
+    except JournalError as error:
+        session.warn(f"the session's counts of the day were not saved at the close: {error}")
 
 
 def _stop_engine(trader: Trader) -> tuple[Any, tuple[float, float]]:
