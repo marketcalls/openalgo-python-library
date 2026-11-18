@@ -18,10 +18,15 @@ not it has rows.
   equity, metrics and gross P&L leave out the realized P&L and charges of the round
   trips the day's earlier starts closed, which its account carried (a position carried
   open across the restart is a trade this start closes: it keeps its whole P&L and its
-  charges, its entry's included). Its Assumptions block says OpenAlgo priced the fills (no fill
-  model, no slippage).
+  charges, its entry's included). Its account is settled as a backtest's session close
+  settles it: the contract notes of its start's fills (`Result.contract_notes`), every
+  fill to the last included, so its net profit is its trades' net plus an open position's
+  value at its mark less what its fills were charged. Its Assumptions block says OpenAlgo
+  priced the fills (no fill model, no slippage).
 - `summary`: the day's figures across every start of the day: `gross_pnl`, `charges`
-  (modelled: the broker's trade book carries none), `net_pnl`, `slippage` (None: not
+  (modelled: the broker's trade book carries none; each fill's rounded to the paisa, so a
+  result's charges, its contract notes', differ from them by the notes' rounding, the
+  `adjustment` column of `Result.contract_notes`), `net_pnl`, `slippage` (None: not
   measured yet), `closed_trades`, `rejected_orders`, `unprotected_seconds`,
   `reconcile_mismatches`, `undelivered_alerts` and `flat`, and the legs the close names
   (`differing`, `unconfirmed`) and the strategies of earlier starts (`earlier`), in

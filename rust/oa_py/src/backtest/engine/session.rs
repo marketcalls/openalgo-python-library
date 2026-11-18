@@ -25,8 +25,11 @@
 //!   negative for a loss.
 //! - `stop_session()`: the session ends where it stands. Nothing is sent, working orders
 //!   and open positions are reported as they are by `finish()` (a strategy exit that waited
-//!   for its cancels was never placed and ends "canceled"), and the pause tuple "finished"
-//!   is returned with the events not delivered yet. Commands not taken stay for
+//!   for its cancels was never placed and ends "canceled"), the slice in progress is closed
+//!   for the records as a backtest closes a session (the day's contract notes settled, then
+//!   its position-history and equity rows, so the equity holds every fill and the notes'
+//!   charges), and the pause tuple "finished" is returned with the events not delivered
+//!   yet. Commands not taken stay for
 //!   `take_commands()`; they were never sent.
 //!
 //! A session also rejects at submission an entry or add while another order of its

@@ -240,7 +240,7 @@ impl Engine {
     }
 
     /// A position-history row for every position that changed in this slice.
-    fn record_levels(&mut self, slice: &SliceInfo) {
+    pub(super) fn record_levels(&mut self, slice: &SliceInfo) {
         for key in std::mem::take(&mut self.record.changed) {
             let Some(position) = self.portfolio.position(key) else {
                 continue;
@@ -270,7 +270,7 @@ impl Engine {
     }
 
     /// One row of the equity series, at the slice's close.
-    fn record_equity(&mut self, slice: &SliceInfo) {
+    pub(super) fn record_equity(&mut self, slice: &SliceInfo) {
         let account = self.portfolio.account;
         let unrealized = self.portfolio.unrealized_rupees();
         let exposure = self

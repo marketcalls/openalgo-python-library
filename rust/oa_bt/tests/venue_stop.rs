@@ -10,14 +10,14 @@
 mod venue_support;
 
 use oa_bt::engine::{
-    Engine, EngineExit, Event, EventStamp, KernelError, OrderEventKind, RiskExitReason, Step,
-    VenueCommand, VenueError,
+    Engine, EngineExit, Event, EventStamp, KernelError, OrderEventKind, RiskExitReason, RunOutput,
+    Step, VenueCommand, VenueError,
 };
 use oa_bt::exec::{OrderId, OrderRequest, OrderStatus, OrderType, QuantitySpec};
 use oa_bt::model::{Product, Side};
 use venue_support::{
     at_close, backtest, bars, charged_config, config, exit, holding_on, limit, market, minute,
-    pause_at_close, session, wait_before, Act, Script, SBIN,
+    pause_at_close, session, wait_before, Act, Script, CAPITAL, SBIN, SECOND,
 };
 
 /// The slice after the test day's last: where a session waits while its close does.
@@ -205,4 +205,75 @@ fn a_stopped_sessions_fills_add_up_to_its_charges() {
     let paid: f64 = output.fills.iter().map(|r| r.fill.costs_rupees).sum();
     assert!(charges > 0.0);
     assert!((paid - charges).abs() < 0.005, "{paid} against {charges}");
+}
+
+/// The last row of a run's equity series: (close of its slice, equity, charges), rupees.
+fn last_equity(output: &RunOutput) -> (i64, f64, f64) {
+    let equity = &output.equity;
+    let last = equity.ts.len().checked_sub(1).expect("an equity row");
+    (
+        equity.ts[last],
+        equity.equity_rupees[last],
+        equity.costs_rupees[last],
+    )
+}
+
+#[test]
+fn a_stopped_sessions_equity_ends_with_its_round_trip_net_of_the_settled_note() {
+    // Holding 100 (o1, bought at 500.10) is sold by the venue at 501.00 (o2, a MARKET exit
+    // decided at the close of minute 2) one second into minute 3, while the session waits
+    // before slice 3; the session stops there, before slice 3 runs. As a backtest's step 8
+    // does at a session close, the stop settles the day's contract note and records the
+    // slice in progress at its close (09:19): the equity then holds the sale and the
+    // note's charges, so it ends at the capital plus the trade's net (gross 90.00).
+    let mut kernel = holding_on(session(charged_config()), 100.0);
+    assert!(kernel
+        .submit(exit(Side::Sell, 100.0, OrderType::Market))
+        .is_ok());
+    to_wait(&mut kernel, 3);
+    assert_eq!(placed(&kernel.take_commands()), [OrderId(2)]);
+    kernel
+        .apply_fill(OrderId(2), 100.0, 501.0, minute(3) + SECOND)
+        .expect("the sale fills");
+    assert!(kernel.stop_session().is_ok());
+    let output = kernel.finish().expect("a stopped session finishes");
+    let [trade] = output.trades.as_slice() else {
+        panic!("one trade, got {:?}", output.trades);
+    };
+    assert_eq!(trade.gross_pnl_rupees, 90.0);
+    let (ts, equity, charges) = last_equity(&output);
+    assert_eq!(ts, minute(4));
+    assert!(
+        (equity - CAPITAL - trade.net_pnl_rupees).abs() < 0.005,
+        "{equity} against the trade's net {}",
+        trade.net_pnl_rupees
+    );
+    assert!((charges - trade.costs_rupees).abs() < 0.005);
+    let flat = output
+        .levels
+        .last()
+        .map(|row| (row.slice, row.quantity_units));
+    assert_eq!(flat, Some((3, 0.0)));
+}
+
+#[test]
+fn a_stopped_sessions_equity_ends_with_its_open_position_less_its_settled_charges() {
+    // Holding 100 at 500.10, the session stops while it waits before slice 5: the position
+    // is marked at minute 4's close, 500.45 (+35.00). The equity's last row, minute 5 at
+    // its close (09:21), holds that less the buy's charges on the settled note.
+    let mut kernel = holding_on(session(charged_config()), 100.0);
+    to_wait(&mut kernel, 5);
+    assert!(kernel.stop_session().is_ok());
+    let output = kernel.finish().expect("a stopped session finishes");
+    let [buy] = output.charges.fills.as_slice() else {
+        panic!("one charged fill, got {:?}", output.charges.fills);
+    };
+    let (ts, equity, charges) = last_equity(&output);
+    assert_eq!(ts, minute(6));
+    assert!((charges - buy.charged_rupees).abs() < 0.005);
+    let expected = CAPITAL + 35.0 - buy.charged_rupees;
+    assert!(
+        (equity - expected).abs() < 0.005,
+        "{equity} against {expected}"
+    );
 }
