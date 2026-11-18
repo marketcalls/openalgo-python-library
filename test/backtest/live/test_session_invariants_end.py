@@ -72,10 +72,12 @@ def trace_of(unprotected=None, waived=None, kept=None, oversold=None) -> Any:
     )  # fmt: skip
 
 
-def at_the_end(run: Run, working, position: int, *, trace=None, closing=None, rooms=None) -> None:
+def at_the_end(
+    run: Run, working, position: int, *, trace=None, closing=None, rooms=None, **used: Any
+) -> None:
     end_checks(
         trace or trace_of(), run, {"StopHold": closing or leg()}, working, {SBIN: position},
-        SIDES, rooms or {},
+        SIDES, rooms or {}, **used,
     )  # fmt: skip
 
 
@@ -208,6 +210,43 @@ def test_a_leg_a_decided_end_oversold_that_no_error_alert_names_is_found():
     run = run_of(outcome=outcome_of(SHORT_ROW))
     with pytest.raises(AssertionError, match="no ERROR alert names it"):
         at_the_end(run, [], -4, trace=OVERSOLD, closing=FLAT_LEG)
+
+
+# ----- decided ends a run did not need --------------------------------------------------------
+
+
+def test_an_oversold_decided_end_for_a_leg_the_run_never_took_through_zero_is_found():
+    with pytest.raises(AssertionError, match="oversold_by_decision"):
+        at_the_end(run_of(), [stop()], 10, trace=OVERSOLD)
+
+
+def test_an_oversold_decided_end_a_fill_through_zero_used_during_the_run_is_needed():
+    # A fill through zero the run's changes allowed by the decided end, the position then
+    # back on the leg's side by the end (another client's purchase, say).
+    at_the_end(run_of(), [stop()], 10, trace=OVERSOLD, oversold_used=frozenset({"StopHold"}))
+
+
+def test_a_kept_stop_decided_end_for_a_stop_the_run_never_kept_beyond_the_position_is_found():
+    with pytest.raises(AssertionError, match="kept_stop_by_decision"):
+        at_the_end(run_of(), [stop()], 10, trace=trace_of(kept=KEPT))
+
+
+def test_a_kept_stop_decided_end_the_no_orphan_check_named_is_needed():
+    named = no_orphan(
+        run_of(alerts=[NAMES_THE_STOP]), {"StopHold": leg()}, [stop(position=0)], {SBIN: 0},
+        ALL_SOLD, KEPT,
+    )  # fmt: skip
+    assert named == {"StopHold"}
+    run = run_of(alerts=[NAMES_THE_STOP], outcome=outcome_of())
+    at_the_end(
+        run, [stop(position=0)], 0, trace=trace_of(kept=KEPT), closing=FLAT_LEG,
+        rooms=ALL_SOLD, kept_named=named,
+    )  # fmt: skip
+
+
+@pytest.mark.parametrize("check", ["no orphan", "exits within the position"])
+def test_a_kept_stop_decided_end_is_not_judged_when_a_check_that_names_it_is_waived(check):
+    at_the_end(run_of(), [stop()], 10, trace=trace_of(kept=KEPT, waived={check: "a reason"}))
 
 
 # ----- books agree ----------------------------------------------------------------------------

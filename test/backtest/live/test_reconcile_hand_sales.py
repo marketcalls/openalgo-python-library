@@ -489,7 +489,10 @@ def test_the_error_alert_names_a_cut_with_no_answer_by_the_close_and_claims_no_p
     decided = "3.3 step 5 As built: a cut with no answer by the close"
     cut_world.trace.left_unprotected_by_decision("StopHold", decided)
     cut_world.trace.waive(ANSWERED, decided)
-    cut_world.trace.kept_stop_by_decision("StopHold", NO_CUT_ANSWER)
+    # Inline the cut's connection drops before it reaches the broker, so the stop for 10
+    # stays on the 6 left; on the threads the broker makes the cut, answered too late.
+    if cut_world.seam == "inline":
+        cut_world.trace.kept_stop_by_decision("StopHold", NO_CUT_ANSWER)
     outcome = play_cut(cut_world)
     (left,) = outcome.open_positions
     stop = first_stop(cut_world).order_id

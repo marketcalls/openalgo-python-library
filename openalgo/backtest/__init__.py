@@ -7,7 +7,8 @@ default, and returns a `Result` with its tables, metrics and HTML tearsheet;
 `result.robustness()`) runs the robustness and overfitting checks. `bt.live` trades the
 same strategy classes through OpenAlgo for today, in the mode set inside OpenAlgo (sandbox
 or live), and returns a `SessionResult`; `bt.record` records the feed's ticks for later
-replay. A part this version does not run raises NotImplementedError saying what to do
+replay, and `bt.read_ticks` reads a day of them back as a table. A part this version
+does not run raises NotImplementedError saying what to do
 instead: `bt.walk_forward`, `bt.rebalance` and a backtest of several strategies among
 them.
 
@@ -23,8 +24,8 @@ them.
     result = bt.backtest(Demo, data=frame, capital=100_000, costs=None, slippage=0)
 
 `import openalgo` does not import this package. Submodules load on first use and no
-network call is made on import; the live layer loads only when `bt.live` or `bt.record`
-runs.
+network call is made on import; the live layer loads only when `bt.live`, `bt.record` or
+`bt.read_ticks` runs.
 """
 
 from importlib import import_module as _import_module
@@ -53,6 +54,7 @@ _EXPORTS = {
     "result": ("Result",),
     "session_result": ("SessionResult", "RecordSummary"),
     "_optimize_result": ("OptimizeResult",),
+    "_read_ticks": ("read_ticks",),
     "_robust": ("RobustnessReport", "CheckResult"),
     "run": (
         "backtest",

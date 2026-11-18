@@ -1,7 +1,7 @@
 """What importing the package loads: `import openalgo` loads no backtest module, and
 `openalgo.backtest` with its run functions loads no indicator-check, timeframe,
 optimisation or robustness module until a strategy or a report uses them, and no
-module of the live layer until `bt.live` or `bt.record` runs."""
+module of the live layer until `bt.live`, `bt.record` or `bt.read_ticks` runs."""
 
 import subprocess
 import sys
@@ -57,7 +57,7 @@ def test_the_run_functions_load_no_indicator_or_optimisation_module():
 
 def test_the_live_verbs_and_their_result_load_no_live_module_until_they_run():
     code = (
-        "import openalgo.backtest as bt; bt.live; bt.record; bt.SessionResult; "
+        "import openalgo.backtest as bt; bt.live; bt.record; bt.read_ticks; bt.SessionResult; "
         "assert not [m for m in sys.modules if m.startswith('openalgo.backtest._live')]"
     )
     assert loaded_after(code) == []

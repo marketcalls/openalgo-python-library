@@ -4,16 +4,17 @@ F64, unit 8, run without leg rules).
 
 These tests run the session's own threads (`threads=True`): the loop on the test's
 thread, the order worker, the data worker and the alert sender on theirs. The fake's
-clock runs `SPEED` times faster than the wall clock, moved on by a driver thread that
-also plays the script (the trades, and the release of a blocked call), so a fake minute
-lasts a couple of real seconds. A client double holds one call of the order worker for
-a span of fake seconds.
+clock runs `threads_seam.SPEED` times faster than the wall clock, moved on by a driver
+thread that also plays the script (the trades, and the release of a blocked call), and
+only while every thread of the session waits (`threads_seam.lockstep`), so a fake minute
+lasts a couple of real seconds and the session sees the same fake time however loaded
+the machine is. A client double holds one call of the order worker for a span of fake
+seconds, waiting on the seam's clock.
 
 Two strategies trade: `Early` buys 10 SBIN at its first decision and sells them at its
 second; `Late` buys 10 INFY at its second decision. The session starts at 14:40:05 IST
-and is stopped with Ctrl+C at 14:47. The start runs on the sped-up clock too, so when the
-first decision comes depends on how fast the start ran: the tests read it from what
-happened, and time the held call from it.
+and is stopped with Ctrl+C at 14:47. The tests read when the first decision came from
+what happened, and time the held call from it.
 
 The safe stop's tests (16-session-design 3.3 step 4) run `PressesStop` alone: it buys 10
 SBIN and, once it holds them, presses Ctrl+C from `on_bar`, on the loop's thread, where
@@ -30,7 +31,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from typing import Any
 
 import pytest
@@ -45,15 +45,14 @@ from stops_samples import (
     held_after_the_final_read,
     sold_by_hand,
 )
+from threads_seam import Lockstep, lockstep, wait_for
 
 import openalgo.backtest as bt
 from openalgo.backtest._live._series_store import LiveStore
 from openalgo.backtest._live._types import LOGGER_NAME
 from openalgo.backtest._live.session import run_session
 
-#: Fake seconds per real second.
-SPEED = 30
-#: The loop's longest wait, real seconds: a fraction of a fake second.
+#: The loop's longest wait, real seconds: a fraction of a fake second at the seam's speed.
 WAIT_MAX_S = 0.01
 #: Real seconds a blocked call waits at most, so a broken test cannot hang.
 BLOCK_LIMIT_S = 20.0
@@ -137,7 +136,9 @@ class RestingEntry(bt.Strategy):
 
 class Blocking:
     """A client that holds its first call of `method` made once `when()` is true for
-    `hold_s` fake seconds (by `now`), then makes it; `on_hold` runs as the hold begins."""
+    `hold_s` fake seconds (by `now`), then makes it; `on_hold` runs as the hold begins.
+    The hold waits on the seam's clock (`threads_seam.wait_for`), marked as a wait, so
+    the clock moves on meanwhile; `run_threaded` gives it the seam (`lockstep`)."""
 
     def __init__(
         self,
@@ -154,6 +155,7 @@ class Blocking:
         self._on_hold = on_hold
         self.held_at: int | None = None
         self.freed = threading.Event()
+        self.lockstep: Lockstep | None = None
 
     def __getattr__(self, name: str) -> Any:
         attribute = getattr(self._client, name)
@@ -165,77 +167,59 @@ class Blocking:
                 self.held_at = self._now()
                 if self._on_hold is not None:
                     self._on_hold()
-                limit = time.perf_counter() + BLOCK_LIMIT_S
-                while self._now() < self.held_at + self._hold_ns and not self.freed.is_set():
-                    if time.perf_counter() > limit:
-                        break
-                    time.sleep(0.002)
+                assert self.lockstep is not None, "run the session with run_threaded"
+                until_ns = self.held_at + self._hold_ns
+                wait_for(
+                    self.lockstep,
+                    lambda: self._now() >= until_ns or self.freed.is_set(),
+                    limit_s=BLOCK_LIMIT_S,
+                )
             return attribute(*args, **kwargs)
 
         return call
 
 
-class Driver(threading.Thread):
-    """Moves the fake's clock on in step with the wall clock, `SPEED` times faster,
-    playing the script on the way."""
-
-    def __init__(self, script: Any) -> None:
-        super().__init__(name="test-clock", daemon=True)
-        self._script = script
-        self.done = threading.Event()
-
-    def run(self) -> None:
-        last = time.perf_counter()
-        while not self.done.is_set():
-            time.sleep(0.002)
-            now = time.perf_counter()
-            self._script.sleep((now - last) * SPEED)
-            last = now
-
-
 def run_threaded(
     world: Any,
-    blocking: Blocking,
+    blocking: Any,
     role: str,
     strategies: tuple[Any, ...] = (Early, Late),
     **arguments: Any,
 ) -> Any:
-    """Run `strategies` with the session's threads, `blocking` standing in for the
-    session's `role` client, and `bt.live`'s other `arguments` (`on_stop`)."""
+    """Run `strategies` with the session's threads, `blocking` (a client double with
+    `freed` and `lockstep`) standing in for the session's `role` client, and `bt.live`'s
+    other `arguments` (`on_stop`), on the seam's clock (`threads_seam.lockstep`)."""
     clients = world.clients()
     clients = type(clients)(**{**clients.__dict__, role: blocking})
     clock = world.fake.clock
+    with lockstep(world.script) as step:
+        blocking.lockstep = step
 
-    def wait(seconds: float) -> None:
-        until = clock.now() + round(seconds * NS)
-        while clock.now() < until:
-            time.sleep(0.001)
+        def wait(seconds: float) -> None:
+            until_ns = clock.now() + round(seconds * NS)
+            wait_for(step, lambda: clock.now() >= until_ns, limit_s=BLOCK_LIMIT_S)
 
-    driver = Driver(world.script)
-    driver.start()
-    try:
-        return run_session(
-            list(strategies),
-            world.fake.client(),
-            clients=clients,
-            feed=world.fake.direct_feed(),
-            now=clock.now,
-            sleep=wait,
-            threads=True,
-            signals=False,
-            stop=world.stop,
-            emit=world.lines.append,
-            capital=100_000,
-            max_daily_loss=5_000,
-            alerts_to="trader1",
-            live_dir=world.folder / "live",
-            wait_max_s=WAIT_MAX_S,
-            **arguments,
-        )
-    finally:
-        blocking.freed.set()
-        driver.done.set()
-        driver.join(5)
+        try:
+            return run_session(
+                list(strategies),
+                world.fake.client(),
+                clients=clients,
+                feed=world.fake.direct_feed(),
+                now=clock.now,
+                sleep=wait,
+                threads=True,
+                signals=False,
+                stop=world.stop,
+                emit=world.lines.append,
+                capital=100_000,
+                max_daily_loss=5_000,
+                alerts_to="trader1",
+                live_dir=world.folder / "live",
+                wait_max_s=WAIT_MAX_S,
+                **arguments,
+            )
+        finally:
+            blocking.freed.set()
 
 
 @pytest.fixture

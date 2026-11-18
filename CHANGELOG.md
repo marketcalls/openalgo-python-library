@@ -388,6 +388,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session's behaviour is now checked after every test against the design's safety rules
   (no orphan order, one stop per leg, exits within the position, nothing sent after a
   lock), over every change of every order at the simulated broker.
+- `bt.read_ticks(day, instruments=None, *, cache_dir=None)` reads the ticks `bt.record` (or
+  a session) recorded on a day back as one DataFrame, merged in the exact order they were
+  received: the exchange and symbol, the exchange's last trade time (or the receive time
+  where the feed gave none, with a column saying which), the receive time, the last price,
+  and the volume, bid and ask where the recording kept them. A day with no recording
+  raises DataError naming the folder.
+- Live sessions: another client's fill on a symbol the session trades (a sale by hand, for
+  example) now prompts a comparison with OpenAlgo's books 3 seconds later, so the session
+  fits its stop to the sale within seconds instead of at its next 30-second read; the
+  preflight warns, in the start banner and the result, that the session's matching of the
+  trade book to its orders by order ID has not been checked for pocketful and mstock. The
+  loop's time from a tick's arrival to the kernel is measured by
+  `benchmark/live_loop_speed.py` (median about 7 microseconds, 99th percentile about 19,
+  against a target under 500).
 - Reference table `price_protection` (`openalgo/backtest/reference/data/price_protection.csv`,
   read with `tables.find("price_protection", (exchange, segment, check, underlying, days),
   date)`): the price bands NSE and BSE apply to an option's limit price, by date, each row

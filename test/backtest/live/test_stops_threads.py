@@ -2,10 +2,11 @@
 threads and the fake OpenAlgo (`_live/stops.py`; 16-session-design 4.2, 4.3 and 7.2 rows
 F71 and F92).
 
-As in `test_session_threads`: the fake's clock runs `SPEED` times faster than the wall
-clock, moved on by a driver thread that plays the script, and a client double holds one
-call of the worker for a span of fake seconds. The start runs on the sped-up clock too,
-so each hold is triggered by what happened (a stop placed), never by a time of day.
+As in `test_session_threads`: the fake's clock runs `threads_seam.SPEED` times faster
+than the wall clock, moved on by a driver thread that plays the script while every thread
+of the session waits, and a client double holds one call of the worker for a span of
+fake seconds. Each hold is triggered by what happened (a stop placed), never by a time of
+day.
 `StopHold` buys 10 SBIN at its first decision with a stop 3 points below
 (`stops_samples`); the session is stopped with Ctrl+C at 14:47 IST, which flattens.
 """
@@ -14,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from typing import Any
 
 import pytest
@@ -22,6 +22,7 @@ from fake_openalgo.fixtures import *  # noqa: F403
 from session_samples import NS, alerts, ist, rig
 from stops_samples import STOP_POINTS, StopHold, Timeline, check_invariants, events
 from test_session_threads import BLOCK_LIMIT_S, run_threaded
+from threads_seam import wait_for
 
 import openalgo.backtest as bt
 from openalgo.backtest._live._types import LOGGER_NAME
@@ -48,6 +49,8 @@ class Holds:
         self._on_hold, self._before = on_hold, before
         self.held_at: int | None = None
         self.freed = threading.Event()
+        #: The seam's clock, which `run_threaded` gives it: the hold waits on it.
+        self.lockstep: Any = None
 
     def __getattr__(self, name: str) -> Any:
         attribute = getattr(self._client, name)
@@ -61,11 +64,12 @@ class Holds:
                 self.held_at = self._now()
                 if self._on_hold is not None:
                     self._on_hold()
-                limit = time.perf_counter() + BLOCK_LIMIT_S
-                while self._now() < self.held_at + self._hold_ns and not self.freed.is_set():
-                    if time.perf_counter() > limit:
-                        break
-                    time.sleep(0.002)
+                until_ns = self.held_at + self._hold_ns
+                wait_for(
+                    self.lockstep,
+                    lambda: self._now() >= until_ns or self.freed.is_set(),
+                    limit_s=BLOCK_LIMIT_S,
+                )
             return attribute(*args, **kwargs)
 
         return call

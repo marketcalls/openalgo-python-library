@@ -76,6 +76,7 @@ class TwinOrder:
     def __init__(self, client: Any, other: Any) -> None:
         self._client, self._other = client, other
         self.freed = threading.Event()
+        self.lockstep: Any = None
         self._twinned = False
 
     def __getattr__(self, name: str) -> Any:

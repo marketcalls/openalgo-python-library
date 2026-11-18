@@ -10,6 +10,7 @@ worker put on it; only the loop takes from it, in the order the messages were pu
 | `FeedEvent` | feed thread | a connection hook: connect, disconnect, reconnect, error, with `seq` |
 | `WorkerReady` | order worker | the journal session, after `start_session` and `restore` |
 | `OrderNews` | order worker | an update the order path gave as news, its intent |
+| `OtherFill` | order worker | a fill the order stream reported of an order not the session's |
 | `SendResult` | order worker | a request sent: its ID, intent or order ID, the outcome |
 | `NotSent` | order worker | a request not sent, and why |
 | `Settled` | order worker | an unanswered or refused modify or cancel, and what settled it |
@@ -26,7 +27,7 @@ worker put on it; only the loop takes from it, in the order the messages were pu
 A put never waits: the queue is unbounded, because a feed callback must never wait, and
 the loop watches its depth instead (2.9). The order worker's inbox is its request queue
 (the worker's own) plus `RawUpdates`, the FIFO of the order updates the feed's order
-callback receives (`RawOrderUpdate`).
+callback receives (`RawOrderUpdate`; both in `_inbox_raw`, re-exported here).
 
 Every message is a frozen dataclass; a raw message from the feed is the callback's own
 copy, which only its reader looks at. Times are UTC nanoseconds, prices rupees.
@@ -36,13 +37,13 @@ from __future__ import annotations
 
 import enum
 import queue
-import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from ._bars_candle import Row
 from ._guard_breach import ModeBreach
+from ._inbox_raw import RawOrderUpdate, RawUpdates
 from ._journal_reads import JournalSession
 from ._order_answers import SendOutcome
 from ._order_book import Resolution
@@ -91,15 +92,6 @@ class FeedEvent:
 
 
 @dataclass(frozen=True)
-class RawOrderUpdate:
-    """An order update as the feed's order callback received it, and `arrived_ns`, the
-    callback's clock read: the order worker normalizes it (2.4 step 1)."""
-
-    message: Mapping[str, Any]
-    arrived_ns: int
-
-
-@dataclass(frozen=True)
 class WorkerReady:
     """The order worker has started the journal's session and restored the order path:
     the journal session (mode, starts, last start)."""
@@ -115,6 +107,17 @@ class OrderNews:
     update: OrderUpdate
     intent_id: str
     stop_cleared: bool = False
+
+
+@dataclass(frozen=True)
+class OtherFill:
+    """A fill the order stream reported of an order the session did not send, on
+    `exchange:symbol`, received at `arrived_ns`: the loop asks for a comparison soon when
+    the session trades the instrument (5.1; 7.1 "As built (unit 14")."""
+
+    symbol: str
+    exchange: str
+    arrived_ns: int
 
 
 @dataclass(frozen=True)
@@ -261,6 +264,7 @@ Message = (
     | FeedEvent
     | WorkerReady
     | OrderNews
+    | OtherFill
     | SendResult
     | NotSent
     | Settled
@@ -330,40 +334,6 @@ class Inbox:
         return self._queue.qsize() + (self._head is not None)
 
 
-class RawUpdates:
-    """The FIFO of raw order updates between the feed's order callback and the order
-    worker. Any thread puts, and a put never waits; one thread drains (the worker).
-    `wake`, when given, is set after each put, so a worker that waits on one event for
-    its requests and its updates wakes for an update too."""
-
-    def __init__(self, *, wake: threading.Event | None = None) -> None:
-        self._queue: queue.SimpleQueue[RawOrderUpdate] = queue.SimpleQueue()
-        self._wake = wake
-
-    def put(self, update: RawOrderUpdate) -> None:
-        """Put one raw update at the end. Raises TypeError for anything else."""
-        if not isinstance(update, RawOrderUpdate):
-            raise TypeError(f"the raw updates are RawOrderUpdate, not {type(update).__name__}")
-        self._queue.put(update)
-        if self._wake is not None:
-            self._wake.set()
-
-    def drain(self) -> list[RawOrderUpdate]:
-        """Every update waiting when it is called, oldest first; what arrives meanwhile
-        waits for the next drain, so a flood cannot keep the worker here."""
-        drained = []
-        for _ in range(self._queue.qsize()):
-            try:
-                drained.append(self._queue.get_nowait())
-            except queue.Empty:
-                break
-        return drained
-
-    def __len__(self) -> int:
-        """The updates waiting (the worker's `raw_pending`, 4.2)."""
-        return self._queue.qsize()
-
-
 __all__ = [
     "Books",
     "Candles",
@@ -379,6 +349,7 @@ __all__ = [
     "NotSent",
     "NotSentReason",
     "OrderNews",
+    "OtherFill",
     "PositionRows",
     "Quote",
     "RawOrderUpdate",

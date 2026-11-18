@@ -315,8 +315,8 @@ def record(
     until: Any = None,
 ) -> RecordSummary:
     """Record the ticks of `instruments` from OpenAlgo's WebSocket feed into the local
-    cache, for a backtest to replay later in the order they were received, and return
-    the recording's `RecordSummary`.
+    cache, kept in the order they were received (`bt.read_ticks` reads a day of them
+    back), and return the recording's `RecordSummary`.
 
     client: an `openalgo.api` client; the recording makes a feed client of its own from
         its settings, so a session or a callback on it is left alone. It can run in a
