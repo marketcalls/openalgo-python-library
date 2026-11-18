@@ -349,6 +349,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after its catch-up, every restored order is checked against the journal and the books,
   the entry locks that last the day are set again, and before the banner every open leg
   has its stop confirmed or placed again (or is exited when past its square-off).
+- **Live trading: `bt.live`, `bt.record` and `bt.SessionResult` are public.**
+  `bt.live(strategy, client, *, capital, max_daily_loss, account_max_daily_loss=None,
+  alerts_to=None, account=None, params=None, ..., live_dir=None, on_stop="flatten")`
+  trades one strategy class or a list of them through OpenAlgo for today, in the mode
+  set by OpenAlgo's analyzer switch (sandbox or live: no argument chooses or confirms
+  it), and returns a `SessionResult` when the session ends (the end of the day, Ctrl+C,
+  or after the switch changed). The settings it shares with `bt.backtest` take the same
+  defaults; a `bt.backtest` argument with no meaning live raises ConfigError saying why,
+  and what this version does not run live (condition, signal and array strategies,
+  several symbols, futures series, daily intervals, CNC and NRML) raises
+  NotImplementedError before any call to OpenAlgo. `SessionResult` holds the mode,
+  broker, account and day, how the session stopped and its restarts, each strategy's
+  `bt.Result` (built by the backtest's own builder, with its metrics and tearsheet, for
+  this start of the session), the day's summary (`summary`, `summary_text()`), and
+  tables of orders, fills, drift, seconds unprotected, locks, reconciliations, skipped
+  decisions and open positions, each instant with an IST column; `flat` says whether
+  the day ended flat. `bt.record(client, instruments, *, mode="quote", cache_dir=None,
+  until=None)` records the feed's ticks for a later replay and returns a
+  `RecordSummary`. Importing `openalgo.backtest` loads no module of the live layer.
+- Live sessions, before the first public release: the day's summary counts the whole day
+  across restarts (closed round trips, rejected orders, mismatches, seconds unprotected,
+  undelivered alerts), so a day split by Ctrl+C or a crash reads like the day run
+  unbroken; every alert is also printed on the console, whether or not `alerts_to` is
+  set; the start banner states the stop rule once, and the first position opened with no
+  stop at the broker prints a warning at once and is listed in the result; a comparison
+  of a leg in flight for more than 3 minutes that finds a position difference alerts at
+  once, and the close names that leg in the summary and the result, never as flat; a
+  fill priced from an average is flagged only when its price may lie on another tick.
+  The summary's slippage against the backtest's model reads n/a in this version.
 - Reference table `price_protection` (`openalgo/backtest/reference/data/price_protection.csv`,
   read with `tables.find("price_protection", (exchange, segment, check, underlying, days),
   date)`): the price bands NSE and BSE apply to an option's limit price, by date, each row
@@ -404,6 +433,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Money tiles show paise below Rs 1,000. Mode "basic" shows the trading cost row and the
   histograms, "charts" the histograms and scatter charts (the Trades section now appears
   in that mode), "metrics" the new metrics.
+- Robustness and overfitting checks, first part: `bt.robustness(strategy, client=None, *,
+  checks="all", objective="sharpe", runs=1000, seed=0, workers=None, progress=None,
+  **settings)` runs the backtest once and then the checks, and `result.robustness()` runs
+  them on a finished backtest. Both return a `RobustnessReport`: `verdicts`, a table of all
+  seventeen checks with each one's question, figure, rule and verdict; `check(name)`, a
+  `CheckResult` with every run, the summary, the settings and the seed; `passed`; `plan`;
+  and `tearsheet(path)`, a self-contained HTML report with a scorecard, a section of
+  charts per check and the notes. Four checks of the trade list are built: random out of
+  sample (whole sessions put out of sample at random, 30 percent by default; passes when
+  at least 80 percent of the assignments keep at least half the in-sample figure), trade
+  reshuffle (the drawdowns of the trades in random orders; informational unless
+  `max_drawdown` is given), trade resample (trades drawn with replacement; passes with at
+  least 95 percent of paths profitable and at most 5 percent ruined, a fall of 50 percent
+  from a peak) and variance (the same with the win rate 5 points lower; passes with at
+  least 80 percent of paths profitable). A check with fewer than 30 closed trades, too few
+  sessions, or a run that did not make money says "not judged" and why, and never passes.
+  Each check draws from its own random stream (the seed plus the check's number), so the
+  same seed gives the same report on every platform. The other thirteen checks are listed
+  as not built yet, and asking for one raises NotImplementedError.
+- Quick overfitting checks on every backtest: the four trade-list checks at 200 runs, seed
+  0, computed when first read and never during `bt.backtest` or `bt.optimize`. The
+  tearsheet has a new "Overfitting checks" section after Trades (full and basic modes),
+  `result.summary()` a new "Overfitting" line before Benchmark, and `result.warnings` one
+  line for each quick check that fails. No existing figure changes.
 
 ### Changed
 

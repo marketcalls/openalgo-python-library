@@ -25,6 +25,7 @@ SECTIONS = (
     "distribution",
     "metrics",
     "trades",
+    "overfitting",
     "notes",
 )
 # Elements that never have a closing tag in HTML.

@@ -11,7 +11,8 @@ Built: `fills`, `orders`, `trades`, `equity`, `returns`, `positions` (the positi
 history), `events`, `risk_events`, `stale_marks`, `final_positions`, `gross_pnl`,
 `costs`, `contract_notes`, `settlements` and `rolls` (futures), `assumptions`,
 `warnings`, `skipped`, `r_summary` (the R-multiples, `_result_r`), `manifest` (see
-`_manifest`), `rerun()` (see `_rerun`); `trade_list()` (`_trade_list`), `performance`,
+`_manifest`), `rerun()` (see `_rerun`), `robustness()` (`_robust`); `trade_list()`
+(`_trade_list`), `performance`,
 `metrics`, `summary()` (`_summary`), `metrics_table()`, `monte_carlo()` and
 `tearsheet()` (full, basic, metrics or charts) from `_result_analysis`; and
 `to_dataframes()`, `to_csv()` and `to_excel()` from `_result_export`. Not supported in
@@ -288,8 +289,9 @@ class Result(AnalysisMethods, ExportMethods):
     def warnings(self) -> list[str]:
         """What the reader of the result must know, most important first: a line per
         skip reason (`_skips`) and per reject code (`_rejections`) that occurred, with
-        what to do, among the others."""
-        return list(self._warnings)
+        what to do, among the others, and last a line per quick overfitting check that
+        failed (`_robust._quick`; computed on first read, from the trade list)."""
+        return [*self._warnings, *self._overfitting_warnings()]
 
     @property
     def skipped(self) -> pd.DataFrame:
@@ -326,6 +328,17 @@ class Result(AnalysisMethods, ExportMethods):
             raise BacktestError("this result was not made by bt.backtest and cannot rerun")
         return self._record.rerun(overrides, self.manifest)
 
+    def robustness(self, **settings: Any) -> Any:
+        """The robustness and overfitting checks of this run, its arguments reused
+        through its rerun record: a `RobustnessReport`. Takes the settings of
+        `bt.robustness` (checks, objective, runs, seed, workers, progress, a dict per
+        check), not run arguments. Raises ConfigError for a run argument (call
+        `result.rerun(...).robustness()` to change one) and as `bt.robustness`, and
+        BacktestError for a result that was not made by `bt.backtest`."""
+        from ._robust import result_robustness
+
+        return result_robustness(self, **settings)
+
     def strategy(self, name: str) -> Result:
         """One strategy's result in a run of several; not supported in this version."""
         raise not_supported(*SEVERAL_STRATEGIES)
@@ -353,7 +366,7 @@ class Result(AnalysisMethods, ExportMethods):
             _skips.skipped_summary(self._skipped),
         )
         lines += [f"  {line}" for line in counts if line is not None]
-        lines += [f"  warning: {text}" for text in self._warnings]
+        lines += [f"  warning: {text}" for text in self.warnings]
         return "\n".join(lines)
 
 

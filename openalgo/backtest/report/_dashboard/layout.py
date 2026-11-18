@@ -7,6 +7,7 @@ left out when it holds none. Sections are numbered in page order among those sho
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from .._performance import Performance
 
@@ -41,6 +42,7 @@ PARTS = {
         "costs",
         "r_multiples",
     ),
+    "overfitting": ("overfitting_checks",),
     "strategies": ("strategies",),
     "notes": ("method", "assumptions"),
 }
@@ -63,6 +65,7 @@ MODE_PARTS = {
             "excursion_histograms",
             "trade_table",
             "costs",
+            "overfitting_checks",
             "method",
             "assumptions",
         }
@@ -92,7 +95,8 @@ class View:
     """What one page shows: the run's performance, the benchmark measured as the
     strategy is (None without one) and its name, the title, the assumption lines, the
     strategies of a combined result (None unless two or more), whether the cumulative
-    return is on a log scale, and the parts of the report mode."""
+    return is on a log scale, the parts of the report mode, and the quick overfitting
+    checks when the run already computed them (None: the page computes them)."""
 
     performance: Performance
     bench: Performance | None
@@ -102,6 +106,7 @@ class View:
     strategies: Mapping[str, Performance] | None
     log_scale: bool
     parts: frozenset[str]
+    overfitting: Any = None
 
     def has(self, part: str) -> bool:
         """Whether the page shows `part`."""

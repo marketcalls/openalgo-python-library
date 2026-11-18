@@ -332,6 +332,38 @@ def optimize(strategy: type[Strategy], client: Any = None, **settings: Any) -> A
     return sweep(strategy, client, **settings)
 
 
+def robustness(strategy: type[Strategy], client: Any = None, **settings: Any) -> Any:
+    """Backtest the strategy once and run the robustness and overfitting checks on it;
+    returns a `RobustnessReport` (`.verdicts`, `.check(name)`, `.passed`, `.plan`,
+    `.tearsheet(path)`). Passing a check proves nothing on its own; failing one is
+    strong evidence of overfitting; a check with too little to judge is "not judged"
+    and never passes.
+
+    Takes the run arguments of `bt.backtest` and:
+
+    checks: "all" (the default: every check, those this version does not run listed as
+        not built), "quick" (the trade-list checks, no rerun) or a list of check names:
+        random_out_of_sample, reshuffle, resample and variance run in this version.
+    objective: the metric random out of sample measures on each part of the trades:
+        "sharpe" (the default), "sortino", "net_profit", "expectancy",
+        "profit_factor" or "win_rate"; another metric or a function of a `Result`
+        leaves that check not judged.
+    runs: alternative runs of each check (1000); seed: the seed of every check's
+        stream (0), the same report for the same seed on every platform.
+    workers, progress: as in `bt.optimize`; the plan is reported through `progress` (or
+        the `openalgo.backtest.robustness` logger) before the checks run.
+    A keyword named after a check holds its settings as a dict (`variance={"points":
+        10}`, `reshuffle={"max_drawdown": 0.25}`); `report.check(name).settings` shows
+        each check's.
+
+    Raises ConfigError for unusable arguments or settings (naming what they take), the
+    backtest's errors, and NotImplementedError for a check, `others=` or parameter
+    ranges this version does not run, naming the unit that brings them."""
+    from ._robust import robustness as run_checks
+
+    return run_checks(strategy, client, **settings)
+
+
 def walk_forward(strategy: type[Strategy], client: Any = None, **settings: Any) -> Any:
     """Walk-forward optimisation. Not supported in this version: raises
     NotImplementedError."""
@@ -380,5 +412,6 @@ __all__ = [
     "optimize",
     "rebalance",
     "record",
+    "robustness",
     "walk_forward",
 ]

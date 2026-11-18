@@ -13,8 +13,7 @@ from typing import NamedTuple
 
 from .. import _format as fmt
 from . import scale
-from .bars import AXIS_TEXT, MUTED_TEXT, Margin
-from .bars import _frame as frame
+from .bars import AXIS_TEXT, MUTED_TEXT, Margin, frame
 
 #: Ticks asked of each percent axis.
 AXIS_TICKS = 5
