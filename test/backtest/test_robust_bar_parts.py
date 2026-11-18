@@ -1,0 +1,290 @@
+"""The parts of the bar checks (design 17, sections 2.4 to 2.9): the stress rules on
+session closes worked by hand, random entries placed among the strategy bars, the bars a
+run read and their reruns, which reproduce the run on its own bars and are the same for
+a seed in any process.
+"""
+
+import math
+
+import numpy as np
+import pandas as pd
+import pytest
+from robust_runs import edge_run, opens_bars
+
+import openalgo.backtest as bt
+from openalgo.backtest._robust._paths import fan_steps
+from openalgo.backtest._robust._random_entries import (
+    EntryPlan,
+    Trade,
+    entry_plan,
+    schedule,
+)
+from openalgo.backtest._robust._rerun_one import Known, rerun
+from openalgo.backtest._robust._reruns import (
+    PERMUTED,
+    REAL,
+    Family,
+    Reruns,
+    Setup,
+    Workers,
+    choose_workers,
+)
+from openalgo.backtest._robust._run_bars import run_bars
+from openalgo.backtest._robust._stress_rules import (
+    deepest_below_average,
+    held,
+    longest_recovery,
+    max_drawdown,
+    prices,
+    return_correlation,
+    rules_value,
+    stress_rules,
+)
+from openalgo.indicators import ta
+
+# ----- stress rules --------------------------------------------------------------------
+
+
+def test_the_maximum_drawdown_is_the_deepest_fall_below_the_running_high():
+    # 120 then 90: a fall of a quarter; 130 is a new high.
+    assert max_drawdown(np.array([100.0, 120.0, 90.0, 130.0])) == pytest.approx(-0.25)
+
+
+def test_the_longest_recovery_counts_sessions_below_the_running_high():
+    # Below the high of 120 at 90 and 110 (2 sessions), below 130 at 125 (1, to the end).
+    assert longest_recovery(np.array([100.0, 120.0, 90.0, 110.0, 130.0, 125.0])) == 2
+    assert longest_recovery(np.array([100.0, 101.0, 102.0])) == 0
+
+
+def test_the_deepest_fall_below_the_average_is_measured_over_the_run():
+    # 3-session averages: undefined, undefined, 10, 9, 9; the run is the last three
+    # sessions, whose closes over their averages less one are 0, 7/9 - 1 and 10/9 - 1.
+    closes = np.array([10.0, 10.0, 10.0, 7.0, 10.0])
+    in_run = np.array([False, False, True, True, True])
+    assert deepest_below_average(closes, in_run, 3) == pytest.approx(7 / 9 - 1)
+    assert math.isnan(deepest_below_average(closes, in_run, 6))
+
+
+def test_the_correlation_is_of_the_session_returns():
+    up_down = np.array([100.0, 110.0, 99.0, 108.9])
+    assert return_correlation(up_down, up_down) == pytest.approx(1.0)
+    assert return_correlation(up_down, up_down[::-1]) == pytest.approx(-1.0, abs=0.05)
+    assert math.isnan(return_correlation(up_down, np.full(4, 100.0)))
+
+
+def _prices(opens):
+    bars = opens_bars(opens)
+    frame = pd.DataFrame(
+        {
+            "ts_open": bars.index.as_unit("ns").asi8,
+            "ts_close": bars.index.as_unit("ns").asi8 + 1,
+            "close": bars["close"].to_numpy(),
+        }
+    )
+    return prices(frame, int(frame["ts_open"].iloc[0]))
+
+
+SETTINGS = {"average": 200, "correlation": 0.5}
+
+
+@pytest.mark.parametrize(
+    ("name", "candidate", "expected"),
+    [
+        ("drawdown", [100, 120, 80, 130], True),  # a fall of a third, deeper than 1/4
+        ("drawdown", [100, 120, 100, 130], False),
+        ("recovery", [100, 120, 110, 105, 130], True),  # 2 sessions below, against 1
+        ("recovery", [100, 120, 110, 125, 130], False),
+        ("correlation", [100, 90, 99, 89.1, 98], True),  # returns that move opposite
+        ("correlation", [100, 120, 90, 130, 140], False),
+    ],
+)
+def test_a_built_in_rule_holds_when_the_candidate_is_worse(name, candidate, expected):
+    real = _prices([100, 120, 90, 130, 140])
+    (rule,) = stress_rules([name], SETTINGS)
+    assert held([rule], [real], [_prices(candidate)]) == (expected,)
+
+
+def test_a_rule_given_as_a_function_reads_the_runs_bars():
+    real, candidate = _prices([100, 101, 102]), _prices([100, 99, 98])
+    (rule,) = stress_rules([lambda a, b: b["close"].iloc[-1] < a["close"].iloc[-1]], SETTINGS)
+    assert held([rule], [real], [candidate]) == (True,)
+    assert rule.name == "<lambda>"
+
+
+@pytest.mark.parametrize("value", ["drawdown", [], ["drawdown", "bogus"], [3]])
+def test_rules_that_name_no_rule_are_refused(value):
+    assert rules_value(value) is None
+
+
+# ----- random entries ------------------------------------------------------------------
+
+
+def test_trades_that_fill_every_bar_are_placed_back_to_back():
+    # Six strategy bars, two trades held 2 bars: U = 5 decision bars, slack 6 - 2 - 4 = 0.
+    # The first is decided at bar 0 and exited at bar 2, where the second is decided; it
+    # is exited at bar 4, the last whose decision can fill.
+    closes = np.arange(6) * 100
+    plan = EntryPlan(
+        (Trade("SBIN", "BUY", 10, "CNC", 2), Trade("SBIN", "SELL", 5, "MIS", 2)), {"SBIN": closes}
+    )
+    assert plan.slack("SBIN") == 0
+    decided = schedule(plan, seed=1, run=0)
+    assert sorted(decided) == [0, 200, 400]
+    assert [action.side for action in decided[200]][0] is None  # the exit comes first
+    assert len(decided[0]) == 1 and len(decided[400]) == 1
+
+
+@pytest.mark.parametrize("run", range(5))
+def test_random_trades_never_overlap_and_keep_their_holding_times(run):
+    closes = np.arange(40) * 10
+    holds = (3, 1, 5, 2)
+    trades = tuple(Trade("SBIN", "BUY", 1, "CNC", hold) for hold in holds)
+    decided = schedule(EntryPlan(trades, {"SBIN": closes}), seed=7, run=run)
+    spans, open_at = [], None
+    for when in sorted(decided):
+        for action in decided[when]:
+            if action.side is None:
+                spans.append((open_at, when // 10))
+                open_at = None
+            else:
+                assert open_at is None  # never two trades at once
+                open_at = when // 10
+    assert sorted(end - start for start, end in spans) == sorted(holds)
+    assert spans[-1][1] <= 38  # the last exit can still fill
+
+
+def test_trades_that_do_not_fit_are_named():
+    closes = np.arange(5)
+    plan = EntryPlan((Trade("SBIN", "BUY", 1, "CNC", 4),), {"SBIN": closes})
+    assert plan.slack("SBIN") == -1 and plan.unplaced() == ["SBIN"]
+
+
+def test_the_entry_plan_holds_the_runs_trades_with_their_holding_times():
+    result = edge_run()
+    plan = entry_plan(result.trade_list(), {"SBIN": np.arange(10)})
+    assert len(plan.trades) == 60
+    assert {trade.hold for trade in plan.trades} == {1}  # Flip holds one bar
+    assert {(trade.side, trade.units) for trade in plan.trades} == {("BUY", 10.0)}
+
+
+# ----- the run's bars and its reruns ---------------------------------------------------
+
+
+class Ema(bt.Strategy):
+    """Long while a 5-bar EMA is above a 20-bar one: its indicators need history."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "D"
+
+    def init(self):
+        self.fast = self.I(ta.ema, self.close, 5)
+        self.slow = self.I(ta.ema, self.close, 20)
+
+    def on_bar(self, bar):
+        if self.position.is_flat and self.fast[-1] > self.slow[-1]:
+            self.buy(qty=10)
+        elif self.position.is_long and self.fast[-1] < self.slow[-1]:
+            self.exit()
+
+
+@pytest.fixture(scope="module")
+def ema_run():
+    rng = np.random.default_rng(5)
+    opens = 500 + np.cumsum(np.round(rng.normal(0.1, 3.0, 400) / 0.05) * 0.05)
+    data = opens_bars(opens)
+    return bt.backtest(
+        Ema, data=data, start=data.index[150].date(), capital=100_000, costs=None, slippage=0
+    )
+
+
+def test_the_runs_bars_are_its_base_bars_after_the_history_its_indicators_keep(ema_run):
+    bars, arguments = run_bars(ema_run)
+    (frame,) = bars.frames
+    assert bars.symbols == ("SBIN",) and bars.ticks == (0.05,)
+    history = frame[frame["ts_open"] < bars.first_run_ns]
+    assert len(history) == 150 and len(frame) == 400  # all 150 sessions before start
+    assert arguments["data"] is None and arguments["tz"] is None and arguments["base"] == "D"
+
+
+def test_a_rerun_on_the_runs_own_bars_reproduces_the_run(ema_run):
+    bars, arguments = run_bars(ema_run)
+    again, known = rerun(Ema, arguments, bars.symbols, list(bars.frames), Known())
+    assert again.metrics["sharpe"] == ema_run.metrics["sharpe"]
+    pd.testing.assert_frame_equal(again.trade_list(), ema_run.trade_list())
+    assert known.measured  # the warm-ups measured once, for the reruns after it
+
+
+@pytest.fixture(scope="module")
+def setup():
+    result = edge_run()
+    bars, arguments = run_bars(result)
+    _, known = rerun(strategy_of(result), arguments, bars.symbols, list(bars.frames), Known())
+    dates = result.performance.session_returns.index
+    return Setup(
+        ("ref", strategy_of(result)),
+        ("ref", "sharpe"),
+        arguments,
+        bars,
+        known,
+        dates,
+        fan_steps(len(dates)),
+        None,
+    )
+
+
+def strategy_of(result):
+    """The strategy class of a run."""
+    return result._record.strategy
+
+
+def test_the_same_family_and_run_give_the_same_rerun(setup):
+    family = Family(PERMUTED, 3)
+    with Reruns(setup, Workers(1, "")) as first, Reruns(setup, Workers(1, "")) as second:
+        a = first.rows(family, [0, 1, 2])
+        b = second.rows(family, [2, 1, 0])
+    assert [row.objective for row in a] == [row.objective for row in b][::-1]
+
+
+def test_a_rerun_asked_twice_runs_once(setup):
+    with Reruns(setup, Workers(1, "")) as reruns:
+        reruns.rows(Family(PERMUTED, 3), [0, 1])
+        reruns.rows(Family(PERMUTED, 3), [1, 2])
+        assert reruns.done == 3
+
+
+def test_reruns_in_two_worker_processes_are_the_reruns_of_this_process(setup):
+    family = Family(PERMUTED, 8)
+    with Reruns(setup, Workers(1, "")) as here:
+        local = [row.objective for row in here.rows(family, range(4))]
+    pooled_setup = Setup(
+        ("ref", setup.strategy[1]),
+        ("ref", "sharpe"),
+        *[
+            getattr(setup, name)
+            for name in ("arguments", "bars", "known", "dates", "steps", "entries")
+        ],
+    )
+    with Reruns(pooled_setup, Workers(2, "")) as pool:
+        pooled = [row.objective for row in pool.rows(family, range(4))]
+    assert pooled == local
+
+
+def test_the_runs_own_bars_rerun_as_the_run(setup):
+    with Reruns(setup, Workers(1, "")) as reruns:
+        (row,) = reruns.rows(Family(REAL), [0])
+    assert row.objective == edge_run().metrics["sharpe"]
+
+
+@pytest.mark.parametrize(
+    ("requested", "total", "expected"),
+    [(1, 100, 1), (4, 100, 4), (4, 2, 2), (4, 1, 1)],
+)
+def test_the_workers_are_asked_for_but_never_more_than_the_reruns(requested, total, expected):
+    from robust_runs import Flip
+
+    assert choose_workers(requested, total, Flip, {"costs": None}).count == expected
+
+
+def test_a_strategy_made_at_run_time_reruns_in_this_process():
+    strategy = bt.from_arrays([True], [False], symbol="SBIN", exchange="NSE", interval="D")
+    chosen = choose_workers(4, 100, strategy, {})
+    assert chosen.count == 1 and "bt.from_arrays" in chosen.why

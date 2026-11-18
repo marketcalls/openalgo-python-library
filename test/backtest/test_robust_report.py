@@ -8,6 +8,10 @@ page.
 `Flip` trades 60 times. With a planted edge its trades make 30, 20, 40, -10, 30, 20,
 -20, 50, 10 and -10 rupees, repeated: 7 of 10 win and the mean is 16. With a small edge
 they make +25 and -20 in turn, 150 in all; with no edge, +20 and -20, nothing in all.
+
+The full reports keep their bar checks small (`robust_runs.SMALL_BARS`: one process, 20
+runs a check, stress on 10 noisy candidates); `test_robust_bar_checks` holds the bar
+checks' own specifications.
 """
 
 import dataclasses
@@ -16,7 +20,16 @@ import re
 
 import pandas as pd
 import pytest
-from robust_runs import FREE, Flip, bars, edge_run, no_edge_run, small_edge_run, steps_for
+from robust_runs import (
+    FREE,
+    SMALL_BARS,
+    Flip,
+    bars,
+    edge_run,
+    no_edge_run,
+    small_edge_run,
+    steps_for,
+)
 from test_report_tearsheet import FORBIDDEN_NAME_HASHES, Structure, section_ids
 
 import openalgo.backtest as bt
@@ -31,8 +44,26 @@ from openalgo.backtest._robust._verdict import (
 from openalgo.backtest.errors import BacktestError, ConfigError
 from openalgo.backtest.report._format import text as fmt_text
 
-THIS_VERSION = ["random_out_of_sample", "reshuffle", "resample", "variance"]
+THIS_VERSION = [
+    "random_out_of_sample",
+    "vs_random",
+    "permutation",
+    "noise",
+    "other_markets",
+    "stress",
+    "reshuffle",
+    "resample",
+    "variance",
+]
+TRADE_LIST = ["random_out_of_sample", "reshuffle", "resample", "variance"]
 EDGE_DATA = bars(steps_for([3.0, 2.0, 4.0, -1.0, 3.0, 2.0, -2.0, 5.0, 1.0, -1.0], 60))
+#: Stress on noisy candidates only: the planted edge holds under noise.
+STRESS = {"noise_candidates": 10, "permutation_candidates": 0, "min_kept": 5}
+SMALL = {**SMALL_BARS, "stress": STRESS}
+
+
+def quiet(line: str) -> None:
+    """A progress function that drops the plan."""
 
 
 @pytest.fixture(scope="module")
@@ -42,12 +73,12 @@ def edge():
 
 @pytest.fixture(scope="module")
 def edge_report(edge):
-    return edge.robustness(progress=lambda line: None)
+    return edge.robustness(progress=quiet, **SMALL)
 
 
 @pytest.fixture(scope="module")
 def small_edge_report():
-    return small_edge_run().robustness(progress=lambda line: None)
+    return small_edge_run().robustness(checks="quick", progress=quiet)
 
 
 @pytest.fixture(scope="module")
@@ -63,7 +94,17 @@ def test_the_public_names_come_from_openalgo_backtest(edge_report):
 
 def test_a_planted_edge_passes_every_judged_check(edge_report):
     verdicts = edge_report.verdicts.set_index("check")["verdict"]
-    assert verdicts[THIS_VERSION].tolist() == [PASSED, INFORMATIONAL, PASSED, PASSED]
+    assert verdicts[THIS_VERSION].tolist() == [
+        PASSED,
+        PASSED,
+        PASSED,
+        PASSED,
+        NOT_JUDGED,  # no others= given
+        PASSED,
+        INFORMATIONAL,
+        PASSED,
+        PASSED,
+    ]
     assert edge_report.passed
 
 
@@ -74,7 +115,7 @@ def test_a_small_edge_in_much_noise_fails(small_edge_report):
 
 
 def test_a_strategy_with_no_edge_is_not_judged_and_nothing_passed():
-    report = no_edge_run().robustness(checks="quick", progress=lambda line: None)
+    report = no_edge_run().robustness(checks="quick", progress=quiet)
     verdicts = report.verdicts.set_index("check")["verdict"]
     assert verdicts[["random_out_of_sample", "resample", "variance"]].tolist() == [NOT_JUDGED] * 3
     assert not report.passed
@@ -84,11 +125,11 @@ def test_the_scorecard_lists_every_check_and_the_ones_not_built(edge_report):
     verdicts = edge_report.verdicts
     assert list(verdicts.columns) == ["check", "question", "figure", "rule", "verdict", "note"]
     assert list(verdicts.index) == list(range(1, 18))
-    assert (verdicts["verdict"] == NOT_BUILT).sum() == 13
-    noise = verdicts.set_index("check").loc["noise"]
-    assert noise["note"] == (
-        "Not built in this version: it needs the bar generators (permuted, noisy and "
-        "synthetic bars)."
+    assert (verdicts["verdict"] == NOT_BUILT).sum() == 8
+    delayed = verdicts.set_index("check").loc["delayed"]
+    assert delayed["note"] == (
+        "Not built in this version: it needs late orders, other fill prices and shifted bar "
+        "boundaries in the engine."
     )
 
 
@@ -117,34 +158,39 @@ def test_one_check_has_its_table_summary_and_settings(edge_report):
 
 
 def test_asking_for_a_check_not_built_says_what_it_needs(edge_report):
-    with pytest.raises(NotImplementedError, match="it needs the bar generators"):
-        edge_report.check("noise")
+    with pytest.raises(NotImplementedError, match="it needs late orders"):
+        edge_report.check("delayed")
 
 
 def test_asking_for_a_check_the_report_did_not_run_is_refused(edge):
-    report = edge.robustness(checks=["resample"], progress=lambda line: None)
+    report = edge.robustness(checks=["resample"], progress=quiet)
     with pytest.raises(ConfigError, match="did not run variance"):
         report.check("variance")
     assert list(report.verdicts["check"]) == ["resample"]
 
 
 def test_the_same_seed_gives_the_same_report(edge):
-    first = edge.robustness(seed=4, runs=300, progress=lambda line: None)
-    again = edge.robustness(seed=4, runs=300, progress=lambda line: None)
-    for name in THIS_VERSION:
+    first = edge.robustness(checks="quick", seed=4, runs=300, progress=quiet)
+    again = edge.robustness(checks="quick", seed=4, runs=300, progress=quiet)
+    for name in TRADE_LIST:
         pd.testing.assert_frame_equal(first.check(name).table, again.check(name).table)
     assert first.tearsheet() == again.tearsheet()
 
 
 def test_another_seed_draws_other_runs(edge):
-    first = edge.robustness(seed=4, runs=300, progress=lambda line: None)
-    other = edge.robustness(seed=5, runs=300, progress=lambda line: None)
+    first = edge.robustness(checks="quick", seed=4, runs=300, progress=quiet)
+    other = edge.robustness(checks="quick", seed=5, runs=300, progress=quiet)
     assert not first.check("resample").table.equals(other.check("resample").table)
 
 
-def test_bt_robustness_runs_the_backtest_once_and_checks_it_as_the_result_does(edge_report):
-    report = bt.robustness(Flip, data=EDGE_DATA, **FREE, progress=lambda line: None)
+def test_bt_robustness_checks_its_run_as_the_result_does_and_the_page_has_no_time(
+    edge_report, page
+):
+    # A wall-clock time differs from call to call; the page is the same for a seed.
+    report = bt.robustness(Flip, data=EDGE_DATA, **FREE, progress=quiet, **SMALL)
     pd.testing.assert_frame_equal(report.verdicts, edge_report.verdicts)
+    assert "took" not in report.plan
+    assert report.tearsheet() == page
 
 
 def test_result_robustness_reuses_the_run_and_takes_no_run_argument(edge):
@@ -153,38 +199,58 @@ def test_result_robustness_reuses_the_run_and_takes_no_run_argument(edge):
 
 
 def test_a_check_setting_reaches_the_check(edge):
-    report = edge.robustness(reshuffle={"max_drawdown": 0.5}, progress=lambda line: None)
+    report = edge.robustness(checks="quick", reshuffle={"max_drawdown": 0.5}, progress=quiet)
     assert report.check("reshuffle").verdict == PASSED
 
 
 def test_too_few_trades_leave_every_check_not_judged_and_nothing_passed():
     result = bt.backtest(Flip, data=bars(steps_for([2.0, -1.0], 10)), **FREE)
-    report = result.robustness(checks="quick", progress=lambda line: None)
+    report = result.robustness(checks="quick", progress=quiet)
     assert set(report.verdicts["verdict"]) == {NOT_JUDGED}
     assert not report.passed
 
 
-def test_the_plan_is_reported_once_before_the_checks_run(edge):
+def test_a_quick_plan_says_nothing_is_rerun(edge):
     lines = []
-    edge.robustness(progress=lines.append)
+    edge.robustness(checks="quick", progress=lines.append)
+    assert lines == [
+        "bt.robustness: 4 checks of 17 for Flip (random_out_of_sample, reshuffle, resample, "
+        "variance), 1,000 runs each from seed 0, on 60 closed trades over 122 sessions. They "
+        "read the run's trade list, so the backtest is not rerun and no worker process starts."
+    ]
+
+
+def test_the_plan_counts_the_reruns_before_they_run(edge):
+    # Versus random runs 20 of each of its three families, 60 in all, of which the 20 on
+    # permuted bars are the permutation test's own runs: 60 + 20 - 20 = 60 reruns.
+    lines = []
+    report = edge.robustness(
+        checks=["vs_random", "permutation", "resample"],
+        workers=1,
+        vs_random={"runs": 20},
+        permutation={"runs": 20},
+        progress=lines.append,
+    )
     assert len(lines) == 1
-    plan = lines[0]
-    assert plan.startswith("bt.robustness: 4 checks of 17 for Flip")
-    assert "on 60 closed trades" in plan and "the backtest is not rerun" in plan
-    assert "13 checks are not built in this version" in plan
+    assert lines[0].startswith(report.plan)
+    assert report.plan == (
+        "bt.robustness: 3 checks of 17 for Flip (vs_random, permutation, resample), 1,000 runs "
+        "each from seed 0, on 60 closed trades over 122 sessions. The trade-list checks read "
+        "the run's trade list; the bar checks rerun the backtest 60 times or fewer on "
+        "generated bars or other symbols (vs_random 60, permutation 20), each an ordinary "
+        "backtest of the same kernel. Versus random shares 20 runs with the permutation test."
+    )
+    assert re.search(
+        r"A rerun on the run's own bars took \d+\.\d\d s; in this process the reruns should "
+        r"take about \d+\.\d s\.$",
+        lines[0],
+    )
 
 
 def test_bt_robustness_states_how_long_the_backtest_took():
     lines = []
     bt.robustness(Flip, data=EDGE_DATA, **FREE, checks="quick", progress=lines.append)
     assert re.search(r"The backtest took \d+\.\d\d s\.$", lines[0])
-
-
-def test_the_page_leaves_out_how_long_the_backtest_took(edge_report, page):
-    # A wall-clock time differs from call to call; the page is the same for a seed.
-    report = bt.robustness(Flip, data=EDGE_DATA, **FREE, progress=lambda line: None)
-    assert "took" not in report.plan
-    assert report.tearsheet() == page
 
 
 def test_without_progress_the_plan_goes_to_the_robustness_logger(edge, caplog):
@@ -216,13 +282,13 @@ def test_a_result_not_made_by_bt_backtest_has_no_run_to_check(edge):
 
 
 def test_the_page_is_the_scorecard_a_section_per_check_and_the_notes(page):
-    ids = ["random-out-of-sample", "reshuffle", "resample", "variance"]
+    ids = [name.replace("_", "-") for name in THIS_VERSION]
     assert section_ids(page) == ["scorecard", *ids, "notes"]
 
 
 def test_the_scorecard_counts_the_verdicts_and_states_the_wording_rule(page):
     scorecard = page[page.index("<section id='scorecard'") : page.index("<section id='random")]
-    assert "3 passed, 0 failed, 0 not judged, 1 informational, 13 not built." in scorecard
+    assert "7 passed, 0 failed, 1 not judged, 1 informational, 8 not built." in scorecard
     assert fmt_text(WORDING_RULE) in scorecard
     assert scorecard.count("<tr>") == 1 + 17
 
@@ -246,17 +312,21 @@ def test_the_page_names_no_third_party_product(page):
     assert not hashed & FORBIDDEN_NAME_HASHES
 
 
-def test_each_fan_has_its_bands_100_sampled_paths_and_the_run_bold(page):
-    # Reshuffle, resample and the two of variance.
-    assert page.count("class='fan-real'") == 4
-    assert page.count("class='fan-outer'") == 4 and page.count("class='fan-inner'") == 4
-    assert page.count("class='fan-path'") == 4 * 100  # 100 of the 1,000 runs of each fan
-    assert page.count("class='fan-median'") == 4
+def test_each_fan_has_its_bands_its_sampled_paths_and_the_run_bold(page):
+    # Reshuffle, resample and the two of variance draw 100 of their 1,000 runs; versus
+    # random draws its 60 runs, the permutation test and noise their 20.
+    assert page.count("class='fan-real'") == 7
+    assert page.count("class='fan-outer'") == 7 and page.count("class='fan-inner'") == 7
+    assert page.count("class='fan-path'") == 4 * 100 + 60 + 20 + 20
+    assert page.count("class='fan-median'") == 7
 
 
 def test_each_histogram_marks_its_reference_or_the_runs_own_value(page):
-    assert page.count("class='mark-real'") == 1  # the run's order among the reshuffles
-    assert page.count("class='mark-reference'") == 1  # zero among the differences
+    # The run's order among the reshuffles, and the run among the random, permuted and
+    # noise objectives; zero among the differences; the limits of permutation and noise.
+    assert page.count("class='mark-real'") == 4
+    assert page.count("class='mark-reference'") == 1
+    assert page.count("class='mark-limit'") == 2
 
 
 def test_the_notes_hold_the_settings_seeds_and_the_runs_assumptions(page, edge):

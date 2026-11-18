@@ -18,8 +18,17 @@ from ..report import _format as fmt
 from ..report._dashboard.layout import SMALL, Section, card, label, stack
 from ..report._dashboard.page import document
 from ..report._dashboard.sections_run import assumptions_card
-from . import _charts
-from ._blocks import FanBlock, HistogramBlock, SessionsBlock, TilesBlock
+from . import _charts, _charts_bars
+from ._blocks import (
+    CandlesBlock,
+    FanBlock,
+    HistogramBlock,
+    LinesBlock,
+    PathsBlock,
+    SessionsBlock,
+    TableBlock,
+    TilesBlock,
+)
 from ._registry import not_built_note
 from ._report import RunFacts
 from ._request import Request
@@ -91,18 +100,25 @@ def _tiles(block: TilesBlock) -> str:
     return f"{label(fmt.text(block.title))}<div class='stats'>{tiles}</div>"
 
 
+#: The chart of each kind of block.
+CHARTS = {
+    FanBlock: _charts.fan_chart,
+    HistogramBlock: _charts.histogram_chart,
+    SessionsBlock: _charts.sessions_chart,
+    CandlesBlock: _charts_bars.candles_chart,
+    LinesBlock: _charts_bars.lines_chart,
+    PathsBlock: _charts_bars.paths_chart,
+    TableBlock: _charts_bars.table_html,
+}
+
+
 def _block(block: object) -> str:
     if isinstance(block, TilesBlock):
         return _tiles(block)
-    if isinstance(block, FanBlock):
-        chart = _charts.fan_chart(block)
-    elif isinstance(block, HistogramBlock):
-        chart = _charts.histogram_chart(block)
-    elif isinstance(block, SessionsBlock):
-        chart = _charts.sessions_chart(block)
-    else:
+    draw = CHARTS.get(type(block))
+    if draw is None:
         raise TypeError(f"no chart for {type(block).__name__}")
-    return card(fmt.text(block.title), fmt.text(block.subtitle), chart)
+    return card(fmt.text(block.title), fmt.text(block.subtitle), draw(block))
 
 
 def _row(blocks: tuple) -> str:
@@ -153,7 +169,7 @@ def _notes(
         ("objective", name),
         ("runs", fmt.indian_digits(request.runs, 0)),
         ("seed", str(request.seed)),
-        ("workers", f"{asked}; none started, as every check reads the trade list"),
+        ("workers", f"{asked}; the plan says what the checks rerun"),
         ("plan", plan),
     ]
     general += [(result.name, _settings_text(result)) for result in results.values()]

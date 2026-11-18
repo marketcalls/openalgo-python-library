@@ -190,10 +190,13 @@ def _instruments(plan: RunPlan, args: dict[str, Any], calendar: Any, futures: An
     return futures.instruments, futures.lines, futures.version
 
 
-def _probed(strategy: type, setup: Any, sets: list) -> tuple[dict, dict[str, WarmUp]]:
+def _probed(
+    strategy: type, setup: Any, sets: list, checks: IndicatorChecks | None = None
+) -> tuple[dict, dict[str, WarmUp]]:
     """(the needs of each parameter set, by `_warm_up_probe.params_key`; the warm-ups
-    measured to learn them), from `init` on the reference bars (`_warm_up_probe`)."""
-    checks = IndicatorChecks(strategy_source_hash(strategy) or strategy.__qualname__)
+    measured to learn them), from `init` on the reference bars (`_warm_up_probe`), with
+    `checks` holding the indicator checks done before (None for none)."""
+    checks = checks or IndicatorChecks(strategy_source_hash(strategy) or strategy.__qualname__)
     return probe_needs(strategy, setup, sets, checks), checks.measured()
 
 
@@ -202,11 +205,14 @@ def prepare(
     client: Any,
     args: dict[str, Any],
     parameter_sets: list[dict[str, Any] | None] | None = None,
+    checks: IndicatorChecks | None = None,
 ) -> PreparedRun:
     """Resolve a run of `strategy` with the arguments of `bt.backtest` up to the engine.
     `parameter_sets` are the `params=` of every combination of a sweep (None for a
     single run, whose own `params=` are probed); the largest need of history before
-    `start` over them is loaded here (`_warm_up_probe.probe_needs`). Raises ConfigError
+    `start` over them is loaded here (`_warm_up_probe.probe_needs`). `checks` holds the
+    indicator checks and warm-ups already done for the strategy (a rerun of the same
+    strategy on other bars, `_robust`), None to do them here. Raises ConfigError
     for unusable arguments, the data layer's and the reference tables' errors,
     NotImplementedError for settings of later work, and what the strategy's `init`
     raises on the reference bars."""
@@ -223,7 +229,8 @@ def prepare(
     # and the needs before start are learnt on the reference bars.
     check_margin(instruments, plan.product, (plan.start, plan.end))
     sets = [args["params"]] if parameter_sets is None else parameter_sets
-    needs, measured = _probed(strategy, probe_setup(strategy, plan, instruments, futures), sets)
+    setup = probe_setup(strategy, plan, instruments, futures)
+    needs, measured = _probed(strategy, setup, sets, checks)
     with expired_contracts(instruments, plan.present):
         choice = choose_base(plan, args, client, calendar, windows)
     plan = dataclasses.replace(plan, base=choice.base)

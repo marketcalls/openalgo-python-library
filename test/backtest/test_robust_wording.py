@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 
 import pytest
-from robust_runs import check_of, edge_run, trade_performance
+from robust_runs import SMALL_BARS, check_of, edge_run, trade_performance
 
 import openalgo.backtest as bt
 from openalgo.backtest._robust import _words as words
@@ -123,7 +123,7 @@ def test_parameter_ranges_say_what_they_need_in_plain_words():
 
 
 def test_the_report_names_no_internal_unit(page):
-    report = edge_run().robustness(checks="all", progress=lambda line: None)
+    report = edge_run().robustness(checks="all", progress=lambda line: None, **SMALL_BARS)
     notes = report.verdicts.set_index("check")["note"]
     assert notes["delayed"] == f"Not built in this version: it needs {LATER['delayed']}."
     assert not re.search(r"\bRB\d", report.tearsheet())
