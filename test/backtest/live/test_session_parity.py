@@ -2,7 +2,7 @@
 "the same strategy on a recorded session and on the bars built from it in a backtest takes
 the same decisions"; 16-session-design section 8 unit 16).
 
-The session runs on the fake OpenAlgo under the recorder (`session_replay`): SBIN on NSE
+The session runs on the fake OpenAlgo under the recorder (`session_recorder`): SBIN on NSE
 from 14:40:05 IST, trading 10 units every 10 s at 500.00, then at 497.50 from 14:46:20.
 `Parity` decides from the 14:42 close on: it buys 10 with a stop 2 points below, sells
 them two bars later, buys 10 again with the same stop, and that stop is hit. Ctrl+C at
@@ -33,7 +33,7 @@ from typing import Any
 
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
-from session_replay import record_sessions
+from session_recorder import record_sessions
 from session_samples import CAPITAL, DAY, MAX_DAILY_LOSS, ist
 from stops_samples import stop_world
 

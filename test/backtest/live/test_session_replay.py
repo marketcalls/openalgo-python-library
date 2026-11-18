@@ -31,7 +31,9 @@ from typing import Any
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from restart_samples import TrailsWhenFlat, crash_at, crashing, restart, run_to_crash
-from session_replay import FORMAT, VERSION, ReplayError, SessionRecord, record_sessions, replay
+from session_record import FORMAT, VERSION, ReplayError, SessionRecord
+from session_recorder import record_sessions
+from session_replay import replay
 from session_samples import ist
 from stops_samples import StopHold, stop_world
 from test_stops_exits import Trails, rising
