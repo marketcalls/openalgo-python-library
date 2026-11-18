@@ -5,16 +5,26 @@ One backtest over the whole period, no rerun. Each of `runs` assignments puts a 
 trade belongs to the part of its entry session. The share is rounded to whole sessions
 (halves to even, Python's `round`). The run's objective is measured on each part
 (`_part_objective`), and the check is not judged when the run did not make money
-(`_trade_common.no_edge`), when a part would hold fewer sessions than the objective
-needs (two for a ratio of session returns), or when no assignment has the objective of
-both parts defined.
+(`_trade_common.no_edge`), or when a part would hold fewer sessions than the objective
+needs (two for a ratio of session returns).
 
-An assignment keeps its in-sample figure when the in-sample objective is above its
+An assignment can be judged when its out-of-sample part holds a closed trade and the
+objective of both parts is defined; one that cannot (a part with no trade, or whose
+session returns never vary) says nothing either way, so it is left out rather than
+counted as not keeping. When fewer than `pass_share` of the assignments can be judged,
+the check is not judged and says how many could; the summary shows both counts.
+
+A judged assignment keeps its in-sample figure when the in-sample objective is above its
 break-even figure (0, or 1 for a profit factor) and the out-of-sample one keeps at least
-`keep` times the in-sample one's part above break-even; an assignment whose in-sample
-objective is at or below break-even, or undefined, does not keep (a strategy that made
-nothing in sample has nothing to keep). Figure: the share of assignments that keep.
-Pass: at least `pass_share`.
+`keep` times the in-sample one's part above break-even; one whose in-sample objective is
+at or below break-even does not keep (a strategy that made nothing in sample has nothing
+to keep). Figure: the share of the judged assignments that keep. Pass: at least
+`pass_share`.
+
+Chart: when the report has the run's bars (`TradeRun.prices`, loaded for the checks that
+rerun the backtest), the strategy bars' close at each session close with one
+assignment's out-of-sample sessions shaded; without them, the run's cumulative return,
+and the chart's key says why.
 
 Draws: assignment r orders the sessions by draws r x sessions onwards of the check's
 stream (`_random.orders`) and puts the first of that order out of sample.
@@ -44,7 +54,7 @@ from ._paths import DRAWS_PER_CHUNK
 from ._setting import Setting, between
 from ._trade_common import ENOUGH_TRADES, RUNS, no_edge, too_few
 from ._trades import TradeRun
-from ._verdict import FAILED, PASSED, Outcome, not_judged
+from ._verdict import FAILED, NOT_JUDGED, PASSED, Outcome, not_judged
 
 SETTINGS = (
     RUNS,
@@ -161,14 +171,31 @@ def run(
         why = _too_few_sessions(count, held_out, measure.min_sessions, settings["oos"], name)
         return not_judged(text, why)
     table, first_marked = _assignments(trades, measure.figure, held_out, seed, runs)
-    if not (table["in_sample"].notna() & table["out_of_sample"].notna()).any():
+    table["judged"] = judgeable(table)
+    table["kept"] = table["judged"] & kept(table, settings["keep"], measure.break_even)
+    judged = int(table["judged"].sum())
+    if not judged:
         why = (
             f"No assignment has the {name} of both parts defined (a part with no trade, or "
             "whose session returns never vary), so nothing can be judged."
         )
         return not_judged(text, why)
-    table["kept"] = kept(table, settings["keep"], measure.break_even)
+    if judged < settings["pass_share"] * runs:
+        why = (
+            f"Too little to judge: {words.number(judged, 0)} of {words.whole(runs, 'assignment')} "
+            f"put a trade out of sample with the {name} of both parts defined, and the rule "
+            f"needs {words.percent(settings['pass_share'], 0)} of them."
+        )
+        summary = {"runs": float(runs), "judged_assignments": float(judged)}
+        return Outcome(NOT_JUDGED, "n/a", text, why, table, summary)
     return _judged(trades, table, first_marked, settings, measure, name, text)
+
+
+def judgeable(table: pd.DataFrame) -> pd.Series:
+    """Whether each assignment of `table` can be judged: its out-of-sample part holds a
+    closed trade and both its figures are defined."""
+    defined = table["in_sample"].notna() & table["out_of_sample"].notna()
+    return (table["out_of_sample_trades"] > 0) & defined
 
 
 def _judged(
@@ -182,42 +209,76 @@ def _judged(
 ) -> Outcome:
     """The verdict, figure, note and blocks of assignments whose kept column is set."""
     runs, count, held_out = len(table), len(trades.sessions), int(first_marked.sum())
-    share = float(table["kept"].mean())
+    judged = table[table["judged"]]
+    share = float(judged["kept"].mean())
     verdict = PASSED if share >= settings["pass_share"] else FAILED
     summary = {
         "runs": float(runs),
+        "judged_assignments": float(len(judged)),
         "kept_share": share,
         "out_of_sample_sessions": float(held_out),
         "sessions": float(count),
-        "median_in_sample": float(table["in_sample"].median()),
-        "median_out_of_sample": float(table["out_of_sample"].median()),
-        "median_difference": float(table["difference"].median()),
+        "median_in_sample": float(judged["in_sample"].median()),
+        "median_out_of_sample": float(judged["out_of_sample"].median()),
+        "median_difference": float(judged["difference"].median()),
     }
     figure = (
-        f"{words.percent(share)} of {words.whole(runs, 'assignment')} kept "
+        f"{words.percent(share)} of {words.whole(len(judged), 'judged assignment')} kept "
         f"{words.percent(settings['keep'], 0)} of the in-sample {name}"
     )
+    judged_count, assignments = words.number(len(judged), 0), words.whole(runs, "assignment")
     note = (
         f"Each assignment puts {words.whole(held_out, 'session')} of {count} out of sample "
         f"at random; a closed trade belongs to the part of its entry session, and {name} is "
-        "measured on each part. An assignment whose in-sample figure is not above "
-        f"{measure.break_even:g}, its break-even, does not keep."
+        f"measured on each part. {judged_count} of the {assignments} "
+        f"put a trade out of sample with the {name} of both parts defined and are judged; "
+        f"one whose in-sample figure is not above {measure.break_even:g}, its break-even, "
+        "does not keep."
     )
-    blocks = _blocks(trades, table, first_marked, summary, name)
+    blocks = _blocks(trades, judged, first_marked, summary, name)
     return Outcome(verdict, figure, text, note, table, summary, blocks)
+
+
+def assignment_chart(trades: TradeRun, marked: np.ndarray) -> SessionsBlock:
+    """One assignment's out-of-sample sessions shaded on the price when the report has
+    the run's bars (`TradeRun.prices`), else on the run's cumulative return."""
+    if trades.prices is not None:
+        symbol, closes = trades.prices
+        return SessionsBlock(
+            "One assignment",
+            f"{symbol} close; shaded sessions are out of sample",
+            trades.sessions,
+            closes,
+            marked,
+            percent=False,
+            line=f"{symbol}'s close at each session close, the close of its last strategy bar",
+        )
+    return SessionsBlock(
+        "One assignment",
+        "The run's cumulative return; shaded sessions are out of sample",
+        trades.sessions,
+        trades.cumulative,
+        marked,
+        percent=True,
+        line=(
+            "the run's cumulative return at each session close; the price is drawn when "
+            "the report has the run's bars, which it loads for the checks that rerun the "
+            "backtest"
+        ),
+    )
 
 
 def _blocks(
     trades: TradeRun,
-    table: pd.DataFrame,
+    judged: pd.DataFrame,
     marked: np.ndarray,
     summary: dict[str, float],
     name: str,
 ) -> tuple:
-    differences = table["difference"].to_numpy(dtype=float)
+    differences = judged["difference"].to_numpy(dtype=float)
     shown = differences[np.isfinite(differences)]
     tiles = (
-        Tile("Kept", words.percent(summary["kept_share"]), "of the assignments"),
+        Tile("Kept", words.percent(summary["kept_share"]), "of the judged assignments"),
         Tile("Median in sample", words.number(summary["median_in_sample"]), name),
         Tile("Median out of sample", words.number(summary["median_out_of_sample"]), name),
         Tile("Median difference", words.number(summary["median_difference"]), "out minus in"),
@@ -227,23 +288,17 @@ def _blocks(
             f"of {int(summary['sessions'])}",
         ),
         Tile(
-            "Undefined",
-            words.whole(int((~np.isfinite(differences)).sum()), "assignment"),
-            "a part with no figure",
+            "Judged",
+            words.whole(int(summary["judged_assignments"]), "assignment"),
+            f"of {words.number(summary['runs'], 0)}: a trade out of sample, both figures",
         ),
     )
     return (
         (
-            SessionsBlock(
-                "One assignment",
-                "The run's cumulative return; shaded sessions are out of sample",
-                trades.sessions,
-                trades.cumulative,
-                marked,
-            ),
+            assignment_chart(trades, marked),
             HistogramBlock(
                 "Out of sample minus in sample",
-                f"The {name} of each assignment",
+                f"The {name} of each judged assignment",
                 shown,
                 False,
                 (Mark(0.0, "no change", REFERENCE),),
@@ -253,4 +308,4 @@ def _blocks(
     )
 
 
-__all__ = ["SETTINGS", "rule", "run"]
+__all__ = ["SETTINGS", "assignment_chart", "judgeable", "kept", "rule", "run"]

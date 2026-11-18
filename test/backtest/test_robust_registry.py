@@ -1,6 +1,10 @@
 """The seventeen checks and the request of a robustness report: the checks in the order of
-design 17 section 2, the four this version runs, the error for one it does not (naming
-the unit that brings it), and every setting checked before work starts."""
+design 17 section 2, the nine this version runs (the four trade-list checks and the five
+bar checks), the error for one it does not (saying what it needs, in plain words), and
+every setting checked before work starts. The checks load only when they are used."""
+
+import subprocess
+import sys
 
 import pytest
 from robust_runs import FREE, Flip, bars, steps_for
@@ -30,23 +34,31 @@ DESIGN_ORDER = (
     "parameters",
     "noise_optimization",
 )
-# The robustness unit that brings each check this version does not run (section 6).
-UNITS = {
-    "out_of_sample": "RB4",
-    "walk_forward": "RB4",
-    "vs_random": "RB2",
-    "permutation": "RB2",
-    "noise": "RB2",
-    "shifted": "RB3",
-    "other_markets": "RB2",
-    "stress": "RB2",
-    "random_exits": "RB3",
-    "delayed": "RB3",
-    "liquidity": "RB3",
-    "parameters": "RB4",
-    "noise_optimization": "RB4",
+ENGINE = "late orders, other fill prices and shifted bar boundaries in the engine"
+SEARCHES = "walk-forward and the parameter searches"
+# What each check this version does not run needs (section 6), in plain words.
+NEEDS = {
+    "out_of_sample": SEARCHES,
+    "walk_forward": SEARCHES,
+    "shifted": ENGINE,
+    "random_exits": ENGINE,
+    "delayed": ENGINE,
+    "liquidity": ENGINE,
+    "parameters": SEARCHES,
+    "noise_optimization": SEARCHES,
 }
-THIS_VERSION = ("random_out_of_sample", "reshuffle", "resample", "variance")
+TRADE_LIST = ("random_out_of_sample", "reshuffle", "resample", "variance")
+THIS_VERSION = (
+    "random_out_of_sample",
+    "vs_random",
+    "permutation",
+    "noise",
+    "other_markets",
+    "stress",
+    "reshuffle",
+    "resample",
+    "variance",
+)
 
 
 def request(**changes):
@@ -72,18 +84,18 @@ def test_the_registry_lists_the_seventeen_checks_in_the_design_order():
     assert [check.number for check in CHECKS] == list(range(1, 18))
 
 
-def test_this_version_runs_the_four_trade_list_checks():
+def test_this_version_runs_the_trade_list_and_the_bar_checks():
     assert BUILT == THIS_VERSION
-    assert QUICK == THIS_VERSION
+    assert QUICK == TRADE_LIST
 
 
-@pytest.mark.parametrize("name", list(UNITS))
-def test_a_check_this_version_does_not_run_names_the_unit_that_brings_it(name):
+@pytest.mark.parametrize("name", list(NEEDS))
+def test_a_check_this_version_does_not_run_says_what_it_needs(name):
     with pytest.raises(NotImplementedError) as raised:
         request(checks=[name])
     message = str(raised.value)
     assert "not supported in this version" in message
-    assert f"robustness unit {UNITS[name]}" in message
+    assert f"it needs {NEEDS[name]}" in message
     assert "checks='all'" in message
 
 
@@ -94,7 +106,7 @@ def test_all_lists_every_check_and_runs_the_built_ones():
 
 
 def test_quick_runs_the_trade_list_checks():
-    assert tuple(check.name for check in request(checks="quick").listed) == THIS_VERSION
+    assert tuple(check.name for check in request(checks="quick").listed) == TRADE_LIST
 
 
 def test_a_list_of_checks_runs_them_in_report_order():
@@ -156,18 +168,29 @@ def test_settings_for_a_check_that_does_not_run_are_refused():
         request(checks=["resample"], check_settings={"variance": {"points": 10}})
 
 
-def test_settings_for_a_check_this_version_does_not_run_name_its_unit():
-    with pytest.raises(NotImplementedError, match="robustness unit RB2"):
-        request(check_settings={"noise": {"runs": 500}})
+def test_settings_for_a_check_this_version_does_not_run_say_what_it_needs():
+    with pytest.raises(NotImplementedError, match=r"it needs late orders"):
+        request(check_settings={"delayed": {"runs": 500}})
 
 
-def test_other_markets_are_not_run_in_this_version():
-    with pytest.raises(NotImplementedError, match="robustness unit RB2"):
-        request(others=["ICICIBANK"])
+def test_others_are_symbols_or_symbol_and_exchange_pairs():
+    asked = request(others=["ICICIBANK", ("HDFCBANK", "BSE")])
+    assert asked.others == (("ICICIBANK", None), ("HDFCBANK", "BSE"))
+
+
+@pytest.mark.parametrize("others", ["ICICIBANK", [], [3], [("HDFCBANK",)], [("A", "")]])
+def test_others_that_name_no_symbol_are_refused(others):
+    with pytest.raises(ConfigError, match="others takes"):
+        request(others=others)
+
+
+def test_others_without_the_other_markets_check_are_refused():
+    with pytest.raises(ConfigError, match="which checks= does not run"):
+        request(checks="quick", others=["ICICIBANK"])
 
 
 def test_parameter_ranges_are_not_searched_in_this_version():
-    with pytest.raises(NotImplementedError, match="robustness unit RB4"):
+    with pytest.raises(NotImplementedError, match="they need walk-forward and the parameter"):
         request(ranges={"fast": range(5, 30, 5)})
 
 
@@ -198,3 +221,14 @@ def test_bt_robustness_refuses_a_settings_value_that_is_not_a_dict():
 def test_bt_robustness_takes_a_strategy_class():
     with pytest.raises(ConfigError, match="bt.Strategy subclass"):
         bt.robustness(Flip(), data=bars(steps_for([1.0], 4)), **FREE)
+
+
+def test_importing_the_backtest_package_does_not_load_the_checks():
+    # The checks, their generators and their charts load when a report needs them.
+    code = (
+        "import sys, openalgo.backtest as bt; bt.Strategy; bt.metrics; "
+        "loaded = [m for m in sys.modules if m.startswith('openalgo.backtest._robust')]; "
+        "assert not loaded, loaded"
+    )
+    run = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr

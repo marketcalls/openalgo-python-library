@@ -53,7 +53,9 @@ BREAK_EVEN = {
 MEASURED = tuple(BREAK_EVEN)
 #: Objectives that can be measured on a part but have no break-even figure, and why.
 NO_BREAK_EVEN = {
-    "win_rate": "a win rate is not a measure of profit: a strategy can lose money at any win rate"
+    "win_rate": (
+        "a win rate is not a measure of profit, since a strategy can lose money at any win rate"
+    )
 }
 #: The sessions a ratio of session returns needs: its sample deviation divides by the
 #: sessions less one.

@@ -263,6 +263,28 @@ svg.bars .mark-real{stroke:var(--text);stroke-width:2.4}
 svg.bars .mark-limit{stroke:var(--pnl-neg);stroke-width:1.6;stroke-dasharray:6 4}
 svg.bars .mark-reference{stroke:var(--text-muted);stroke-width:1.2;stroke-dasharray:2 3}
 svg.bars .held-out{fill:var(--benchmark);fill-opacity:.2}
+svg.bars .wick{stroke:var(--text-muted);stroke-width:1}
+svg.bars .candle-up{fill:var(--pnl-pos);stroke:var(--pnl-pos);stroke-width:1}
+svg.bars .candle-down{fill:var(--bg);stroke:var(--pnl-neg);stroke-width:1.2}
+svg.bars .line-bold{fill:none;stroke:var(--text);stroke-width:2.4;stroke-linejoin:round}
+svg.bars .series-0,svg.bars .series-1,svg.bars .series-2,svg.bars .series-3{fill:none;
+stroke-width:1.4}
+svg.bars .hold-0,svg.bars .hold-1,svg.bars .hold-2,svg.bars .hold-3{fill:none;
+stroke-width:1.2;stroke-dasharray:1 3}
+svg.bars .series-0,svg.bars .hold-0{stroke:var(--text)}
+svg.bars .series-1,svg.bars .hold-1{stroke:var(--benchmark)}
+svg.bars .series-2,svg.bars .hold-2{stroke:var(--pnl-neg)}
+svg.bars .series-3,svg.bars .hold-3{stroke:var(--pnl-pos)}
+svg.bars .end-0{fill:var(--text)}
+svg.bars .end-1{fill:var(--benchmark)}
+svg.bars .end-2{fill:var(--pnl-neg)}
+svg.bars .end-3{fill:var(--pnl-pos)}
+svg.bars .group-0,svg.bars .group-1,svg.bars .group-2,svg.bars .group-3{fill:none;
+stroke-width:.8;stroke-opacity:.55}
+svg.bars .group-0{stroke:var(--benchmark)}
+svg.bars .group-1{stroke:var(--pnl-neg);stroke-dasharray:6 3}
+svg.bars .group-2{stroke:var(--pnl-pos);stroke-dasharray:1.5 2.5}
+svg.bars .group-3{stroke:var(--text-muted);stroke-dasharray:8 3 2 3}
 """
 
 _PRINT = """

@@ -164,9 +164,12 @@ def test_a_ratio_with_one_session_in_a_part_is_not_judged(objective, sessions):
 
 
 def test_five_sessions_leave_two_out_of_sample_and_a_ratio_is_judged():
-    # round(0.3 x 5) = round(1.5) = 2 out of sample, 3 in sample.
+    # round(0.3 x 5) = round(1.5) = 2 out of sample, 3 in sample. The sessions make
+    # 2,900, 3,250, 2,850, 2,900 and 3,250, so 2 of the 10 pairs out of sample have a
+    # Sharpe ratio that is undefined, and about 80% of the assignments can be judged: a
+    # pass share of 70% judges them.
     performance = trade_performance((STRONG_SESSIONS * 4)[:100], per_session=20)
-    result = check_of(performance, "random_out_of_sample", runs=200)
+    result = check_of(performance, "random_out_of_sample", runs=200, pass_share=0.7)
     assert result.verdict in (PASSED, FAILED)
     assert result.summary["out_of_sample_sessions"] == 2
 
@@ -245,3 +248,67 @@ def test_a_losing_trade_list_is_not_judged_under_any_objective(objective):
         "No edge to judge: the run's 200 closed trades did not make money (net P&L "
         "Rs -4,000), and a check of overfitting needs a run that did."
     )
+
+
+# ----- judged over the assignments that can be judged ------------------------------------
+
+# 30 winning trades of 100 on the first 3 of 20 sessions. Out of sample are 6 sessions,
+# k of them with trades, k hypergeometric (20 sessions, 3 with trades, 6 drawn): with
+# k = 0 no trade is out of sample, with k = 3 none is in sample (its sessions never vary),
+# so only k = 1 or 2 can be judged, 1 - C(17, 6) / C(20, 6) - C(17, 3) / C(20, 6) of them.
+FEW_SESSIONS_JUDGED = 1 - (math.comb(17, 6) + math.comb(17, 3)) / math.comb(20, 6)
+
+
+def judged_rows(table):
+    defined = table["in_sample"].notna() & table["out_of_sample"].notna()
+    return (table["out_of_sample_trades"] > 0) & defined
+
+
+def test_trades_on_3_of_20_sessions_leave_too_few_assignments_to_judge():
+    performance = trade_performance([100.0] * 30, per_session=10, extra_sessions=17)
+    result = check_of(performance, "random_out_of_sample")
+    judged = judged_rows(result.table)
+    assert abs(FEW_SESSIONS_JUDGED - 0.6632) < 1e-4
+    assert abs(judged.mean() - FEW_SESSIONS_JUDGED) < 0.05
+    assert result.table.loc[judged, "kept"].all()  # every assignment that can be judged keeps
+    assert result.verdict == NOT_JUDGED
+    count = int(judged.sum())
+    assert result.summary["runs"] == 1_000 and result.summary["judged_assignments"] == count
+    assert result.note == (
+        f"Too little to judge: {count} of 1,000 assignments put a trade out of sample with "
+        "the sharpe of both parts defined, and the rule needs 80% of them."
+    )
+
+
+def test_seven_sessions_with_a_fifth_of_assignments_undefined_are_not_judged():
+    # 20 trades a session over 7 sessions make 2,900, 3,250, 2,850, 2,900, 3,250, 2,850
+    # and 2,900. Two sessions are out of sample, and 5 of the 21 pairs hold two sessions
+    # of the same P&L, whose Sharpe ratio is undefined: 16 / 21 = 76.2% can be judged.
+    performance = trade_performance((STRONG_SESSIONS * 4)[:140], per_session=20)
+    result = check_of(performance, "random_out_of_sample")
+    judged = judged_rows(result.table)
+    assert abs(judged.mean() - 16 / 21) < 0.05
+    assert result.table.loc[judged, "kept"].all()
+    assert result.verdict == NOT_JUDGED
+
+
+def test_the_kept_share_is_over_the_assignments_that_can_be_judged():
+    # 60 winning trades on the first 6 of 40 sessions: 12 sessions are out of sample, and
+    # C(34, 12) / C(40, 12) = 9.8% of the assignments hold no trade out of sample.
+    performance = trade_performance([100.0] * 60, per_session=10, extra_sessions=34)
+    result = check_of(performance, "random_out_of_sample")
+    judged = judged_rows(result.table)
+    assert abs((1 - judged.mean()) - math.comb(34, 12) / math.comb(40, 12)) < 0.03
+    assert result.summary["judged_assignments"] == judged.sum() < 1_000
+    assert result.summary["kept_share"] == 1.0
+    assert result.verdict == PASSED
+    assert result.figure.startswith(f"100.0% of {int(judged.sum()):,} judged assignments kept")
+
+
+def test_without_the_bars_the_chart_draws_the_runs_return_and_says_why():
+    blocks = blocks_of(
+        trade_performance(STEADY), "random_out_of_sample", runs=20, objective="net_profit"
+    )
+    block = blocks[0][0]
+    assert block.percent
+    assert "the price is drawn when the report has the run's bars" in block.line

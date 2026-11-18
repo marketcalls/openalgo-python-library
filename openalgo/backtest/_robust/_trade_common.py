@@ -3,9 +3,9 @@ count needed to judge, the edge needed to judge, and the summary block of resamp
 paths (trade resample and variance, design 17 sections 2.11 and 2.13).
 
 The checks that judge whether an edge holds (random out of sample, trade resample and
-variance) are not judged on a run whose closed trades did not make money (`no_edge`):
-a run with no edge has nothing that could have been overfitted, so a failure would
-wrongly read as evidence of overfitting.
+variance, and the bar checks) are not judged on a run whose closed trades did not make
+money (`no_edge`): a run with no edge has no edge to hold up, so its verdict would say
+nothing about the strategy.
 
 The summary block of a set of paths (`_paths.walk`, fractions of the start capital):
 
