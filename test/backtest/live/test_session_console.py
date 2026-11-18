@@ -22,12 +22,16 @@ from fake_openalgo.fixtures import *  # noqa: F403
 from session_samples import BuyAndHold, Hold, ist, rig
 from stops_samples import StopHold
 
+from openalgo.backtest._live._alerts_logs import SessionLogs
 from openalgo.backtest._live._types import LOGGER_NAME
+from openalgo.backtest.errors import LiveError
 
 #: What the preflight warns of a SANDBOX session without an OpenAlgo username.
 NO_ALERTS = "this SANDBOX session runs without alerts"
 #: The start of the warning given at the first position opened with no stop.
 NO_STOP = "a position of 10 SBIN NSE was opened with no stop at the broker"
+#: The words of the alert and the warning of an event stream that cannot be written.
+NO_EVENTS = "the session's event stream cannot be written"
 
 
 @pytest.fixture
@@ -127,3 +131,20 @@ def test_the_results_warnings_carry_no_prefix(sandbox):
     outcome = sandbox.run(BuyAndHold, alerts_to=None)
     [no_alerts] = [warning for warning in outcome.warnings if NO_ALERTS in warning]
     assert not no_alerts.lower().startswith("warning")
+
+
+def test_a_warning_sent_as_an_alert_too_is_printed_once(world, monkeypatch):
+    # The event stream fails at the entry's fill, after the banner: one ERROR alert and
+    # one warning of the result, with the same words, and one console line.
+    write = SessionLogs.event
+
+    def failing(logs, kind, **fields):
+        if kind == "fill":
+            raise LiveError("disk full")
+        write(logs, kind, **fields)
+
+    monkeypatch.setattr(SessionLogs, "event", failing)
+    world.stop_at(ist(14, 44))
+    outcome = world.run(BuyAndHold)
+    assert len([warning for warning in outcome.warnings if NO_EVENTS in warning]) == 1
+    assert len([line for line in world.lines if NO_EVENTS in line]) == 1

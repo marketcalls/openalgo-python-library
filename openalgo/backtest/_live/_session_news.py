@@ -38,7 +38,7 @@ from ._order_answers import Outcome
 from ._order_book import Resolved
 from ._order_state import ENTRY_PURPOSES
 from ._session_feed import take_candles, take_data_failed, take_feed_event, take_quote, take_tick
-from ._session_records import FillRecord
+from ._session_records import fill_record
 from ._session_trader import Trader
 from ._types import LOGGER_NAME, AlertKind, OrderIntent, OrderStatus, OrderUpdate
 from ._venue_requests import Applied, CancelRequest, ModifyRequest, PlaceRequest
@@ -157,20 +157,8 @@ class News:
     def _fill_alert(self, intent: OrderIntent, update: OrderUpdate, increment: Increment) -> None:
         kind = AlertKind.ENTRY if intent.purpose in ENTRY_PURPOSES else AlertKind.EXIT
         session = self._session
-        record = FillRecord(
-            at_ns=update.ts_recv_ns,
-            strategy=intent.strategy,
-            symbol=intent.symbol,
-            exchange=intent.exchange,
-            order_id=update.order_id,
-            action=intent.action,
-            units=increment.units,
-            price=increment.price,
-            purpose=intent.purpose.value,
-            source=update.source,
-            estimated=session.stops.held.estimated(update.order_id, update.filled_quantity),
-            derived_from_average=increment.derived_from_average,
-        )
+        estimated = session.stops.held.estimated(update.order_id, update.filled_quantity)
+        record = fill_record(intent, update, increment, estimated=estimated)
         session.fills.append(record)
         session.event(
             "fill",

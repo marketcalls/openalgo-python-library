@@ -59,6 +59,25 @@ class FillRecord:
     derived_from_average: bool = False
 
 
+def fill_record(intent: Any, update: Any, increment: Any, *, estimated: bool) -> FillRecord:
+    """The record of `increment` (a `_fill_ledger.Increment`) of the order of `intent`, as
+    `update` gave it; `estimated` when its price was released unconfirmed."""
+    return FillRecord(
+        at_ns=update.ts_recv_ns,
+        strategy=intent.strategy,
+        symbol=intent.symbol,
+        exchange=intent.exchange,
+        order_id=update.order_id,
+        action=intent.action,
+        units=increment.units,
+        price=increment.price,
+        purpose=intent.purpose.value,
+        source=update.source,
+        estimated=estimated,
+        derived_from_average=increment.derived_from_average,
+    )
+
+
 def adopted_fill(trader: Any, action: str, units: int, price: float, at_ns: int) -> FillRecord:
     """The record of `units` of other orders' trades on `action`'s side at `price` that
     the reconciler adopted into `trader`'s leg at `at_ns` (`EXTERNAL`)."""
@@ -217,6 +236,7 @@ __all__ = [
     "Restored",
     "StrategyRecords",
     "adopted_fill",
+    "fill_record",
     "order_records",
     "restored",
 ]

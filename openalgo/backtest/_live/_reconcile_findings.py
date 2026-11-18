@@ -20,7 +20,9 @@ difference and once per difference (a comparison in time still acts on it): it t
 sighting, so no later carry can count a fill its position book already held, and judges
 nothing. A leg whose last comparison that read the position book was late and found a
 position difference keeps it (`late`) for the close, which names its figures as that read
-saw them, neither carried nor confirmed (16-session-design 5.4, the unit 12 follow-up).
+saw them, neither carried nor confirmed (16-session-design 5.4, the unit 12 follow-up),
+unless comparisons in time confirmed it and acted on it while it lasted: it was counted
+then, and the close would count it again.
 
 Quantities are signed units, times UTC nanoseconds. Used by the loop only.
 """
@@ -161,7 +163,7 @@ class Findings:
             self._sighted(name, findings, last)
             self._unjudged.discard(name)
         if books.units is not None:
-            self._late_difference(name, findings, late=late)
+            self._late_difference(name, findings, confirmed, late=late)
         for finding in sorted(findings, key=repr):
             if finding[0] is Kind.UNEXPLAINED:
                 self._lag(trader, books)
@@ -209,11 +211,16 @@ class Findings:
             return self._corrections.alert_only(trader, finding, books, own)
         return "alerted"
 
-    def _late_difference(self, name: str, findings: set[Finding], *, late: bool) -> None:
+    def _late_difference(
+        self, name: str, findings: set[Finding], confirmed: set[Finding], *, late: bool
+    ) -> None:
         """Keep the position difference of a late comparison for the close; a comparison
-        in time, or a late one that agrees, ends it."""
+        in time, or a late one that agrees, ends it. One that comparisons in time confirmed
+        and acted on, and counted, while it lasted (`confirmed`) is not kept: the close
+        would count it again (the in-time path takes no sighting of it either)."""
         position = next((f for f in findings if isinstance(f[0], Kind)), None)
-        if late and position is not None:
+        acted = position in confirmed and (name, position) in self._acted
+        if late and position is not None and not acted:
             self._late[name] = Sighting(position[1], position[2])
         else:
             self._late.pop(name, None)

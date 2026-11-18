@@ -15,9 +15,9 @@ from typing import Any
 
 from .._calendar_convert import format_ist
 from ..calendar import default_calendar
-from ._session_loop import warning_line
 from ._session_restore import restart_lines
 from ._session_trader import ist_instant
+from ._shared_alerts import warning_line
 from ._types import Mode
 
 #: The banner's lines a SESSION alert carries: the mode, the funds and the first

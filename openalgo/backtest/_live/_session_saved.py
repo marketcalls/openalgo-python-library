@@ -110,6 +110,22 @@ def save_session(session: Any, *, unprotected_s: float | None = None, named: int
     session.parts.journal.put_rms_state(SESSION_KEY, counts, day=session.parts.spec.day)
 
 
+def saved_commands(session: Any) -> list[Any]:
+    """The loop's step E: every strategy's commands since the last call, as requests
+    (`_worker_queue.Request`); a strategy that made any is saved first, and the session's
+    counts after them (design rule 4). Raises JournalError when the journal cannot write
+    them."""
+    requests: list[Any] = []
+    for trader in session.traders:
+        made = trader.commands()
+        if made:
+            save(session, trader)
+        requests += made
+    if requests:
+        save_session(session)
+    return requests
+
+
 def save_released(session: Any, names: set[str]) -> None:
     """The loop's step F: each strategy of `session` named in `names` (those that released
     a slice) saved, and its `self.state` when it changed, to journal L, then the session's
@@ -150,4 +166,5 @@ __all__ = [
     "save",
     "save_released",
     "save_session",
+    "saved_commands",
 ]

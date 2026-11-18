@@ -307,10 +307,14 @@ def record(
         None for the latest close of the instruments' exchanges today. Ctrl+C stops it
         too; one recording covers one day.
 
-    Raises ConfigError for an unusable argument, LiveError when the feed does not
-    connect, another recording holds the cache, or ticks could not be written (the raw
-    files are kept, and the next recording of the day finalizes them), and OSError when
-    the cache cannot be written at the start.
+    Raises ConfigError for an unusable argument (an `until` not after the start, or
+    past the end of its IST day, or None once the day's sessions closed, among them),
+    CalendarError when `until` is None on a day none of the instruments' exchanges
+    trades, LiveError when the feed does not connect, another recording holds the cache,
+    or ticks could not be written (the raw files are kept, and the next recording of the
+    day finalizes them), and OSError when the cache cannot be written at the start. The
+    return hint names `RecordSummary`, which loads with the live layer
+    (`openalgo.backtest.session_result.RecordSummary`): it is for static type checkers.
     """
     from ._live._record_verb import record_day
 

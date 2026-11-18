@@ -85,6 +85,37 @@ def test_an_until_that_is_no_time_is_refused_saying_what_to_pass(until):
         _record_verb.stop_at_of(until, ist_ns("09:00:00"))
 
 
+def recording_from(tmp_path, start: str, until: object) -> object:
+    """Record SBIN from the IST time `start` on the fakes, with no tick, until `until`."""
+    clocks = Clocks(ist_ns(start))
+    return _record_verb.record_day(
+        None,
+        [SBIN],
+        cache_dir=tmp_path,
+        until=until,
+        now=clocks.wall,
+        monotonic=clocks.mono,
+        wait=Script(clocks),
+        feed=FakeFeed(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("start", "until", "words"),
+    [
+        ("10:00:00", "09:00", "until (2026-11-16 09:00 IST) is not after the start"),
+        ("10:00:00", dt.datetime(2026, 11, 17, 10, 0), "until (2026-11-17 10:00 IST) is after"),
+        ("16:00:00", None, "closed at 2026-11-16 15:30 IST: pass until"),
+    ],
+    ids=["an until before the start", "an until on the next day", "no until after the close"],
+)
+def test_an_until_the_recording_cannot_take_is_refused_naming_until(tmp_path, start, until, words):
+    with pytest.raises(ConfigError) as refused:
+        recording_from(tmp_path, start, until)
+    assert words in str(refused.value)
+    assert "stop_at_ns" not in str(refused.value)
+
+
 # ----- a recording on the fakes ------------------------------------------------------------
 
 

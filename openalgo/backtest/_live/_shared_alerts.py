@@ -16,7 +16,8 @@ Telegram, so a session without an OpenAlgo username is not silent once it trades
 line (or more, for the daily summary) starting with the alert's kind in capitals
 (`echo_line`). A SESSION alert is not echoed: it carries the start banner's first lines,
 printed already; nor is a repeated condition the alerts hold back within their repeat
-window. A caller that prints its own line for an alert passes `echo=False`.
+window. A caller that prints its own line for an alert passes `echo=False`. A warning
+of the session is printed with one prefix (`warning_line`), once.
 """
 
 from __future__ import annotations
@@ -32,11 +33,18 @@ logger = logging.getLogger(LOGGER_NAME)
 
 #: The alert kinds the console does not echo (module docstring).
 NOT_ECHOED = frozenset({AlertKind.SESSION})
+#: How the console shows a warning, once: the banner's lines and a later warning alike.
+WARNING_LINE = "Warning: {}"
 
 
 def echo_line(kind: AlertKind, text: str) -> str:
     """An alert as the console shows it: "ENTRY: BUY 10 SBIN NSE at 500.00 (...)"."""
     return f"{kind.name.replace('_', ' ')}: {text}"
+
+
+def warning_line(text: str) -> str:
+    """A warning as the console prints it (`WARNING_LINE`)."""
+    return WARNING_LINE.format(text)
 
 
 class SharedAlerts:
@@ -130,4 +138,4 @@ def _suppressed(alerts: AlertsLike) -> int:
     return int(getattr(alerts, "suppressed", 0))
 
 
-__all__ = ["NOT_ECHOED", "SharedAlerts", "echo_line"]
+__all__ = ["NOT_ECHOED", "WARNING_LINE", "SharedAlerts", "echo_line", "warning_line"]

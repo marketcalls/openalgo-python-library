@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import typing
+from collections.abc import Mapping
 
 import pandas as pd
 import pytest
@@ -405,3 +407,20 @@ def test_a_live_results_base_rule_models_no_fill_at_a_bar_open(day):
     base_rule = day.results["BuyAndHold"].assumptions["base_rule"]
     assert base_rule.startswith("base 1m (a live session's bars are built from the feed's ticks")
     assert not any(words in base_rule for words in ("fill at", "fills at", "bar opens"))
+
+
+# ----- the type hints ----------------------------------------------------------------------
+
+
+def test_the_summarys_type_has_a_public_name(day):
+    from openalgo.backtest.session_result import SessionSummary as Public
+
+    assert type(day.summary) is Public
+
+
+def test_the_results_type_hints_resolve_once_its_summary_type_is_loaded():
+    from openalgo.backtest.session_result import SessionSummary as Public
+
+    hints = typing.get_type_hints(bt.SessionResult)
+    assert hints["summary"] is Public
+    assert hints["results"] == Mapping[str, bt.Result]

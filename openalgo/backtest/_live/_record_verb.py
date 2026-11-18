@@ -9,7 +9,9 @@ on a feed client of its own, on the wall clock, until a time of day the user nam
   never steps back schedules the writes (`time.monotonic_ns`).
 - **Until when** (`stop_at_of`): an IST "HH:MM" of the recording's day, a datetime (aware,
   or naive and read as IST), or None for the latest close of the instruments' exchanges
-  that day (the recorder's default).
+  that day (the recorder's default, `check_close`). One that is not after the start, past
+  the end of the start's IST day, or None once the day's sessions closed, is refused in
+  `until`'s words before the recording starts.
 - **A write that fails** stops the recording (`Stop.WRITE_FAILED`): the ticks it could not
   write cannot be fetched again, so it raises LiveError chained from the error, naming
   the raw files kept, which the next recording of the day finalizes.
@@ -27,9 +29,10 @@ from typing import Any
 
 from .._calendar_convert import IST, format_ist
 from ..errors import ConfigError, LiveError
+from ._recorder_args import close_of_day, instruments_of
 from ._recorder_loop import Monotonic
 from ._recorder_summary import RecordSummary
-from ._tick_files import ist_day, raw_parts_of, ticks_root
+from ._tick_files import day_bounds, ist_day, raw_parts_of, ticks_root
 from ._tick_spans import Stop
 from ._types import Now, Sleep
 from .clients import settings_of
@@ -39,12 +42,15 @@ from .recorder import record
 TIME_OF_DAY = "%H:%M"
 #: The instant UTC nanoseconds count from.
 EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.UTC)
+#: What to pass for `until`, as its errors say it.
+UNTIL_WORDS = "until (an IST time of day as 'HH:MM', or a datetime)"
 
 
 def stop_at_of(until: Any, started_ns: int) -> int | None:
     """The instant (UTC nanoseconds) a recording begun at `started_ns` stops at, from
     `until` (module docstring); None for the recorder's default. Raises ConfigError for
-    any other value, saying what to pass."""
+    any other value, and for an instant not after the start or past the end of its IST
+    day, saying what to pass."""
     if until is None:
         return None
     if isinstance(until, str):
@@ -57,11 +63,43 @@ def stop_at_of(until: Any, started_ns: int) -> int | None:
         until = dt.datetime.combine(ist_day(started_ns), clock)
     if isinstance(until, dt.datetime):
         moment = until if until.tzinfo is not None else until.replace(tzinfo=IST)
-        return (moment - EPOCH) // dt.timedelta(microseconds=1) * 1_000
+        return _within_the_day((moment - EPOCH) // dt.timedelta(microseconds=1) * 1_000, started_ns)
     raise ConfigError(
         f"until takes an IST time of day ('15:30'), a datetime, or None for the day's close, "
         f"not {until!r}"
     )
+
+
+def _within_the_day(stop_ns: int, started_ns: int) -> int:
+    """`stop_ns`, once it is after `started_ns` and by the end of its IST day. Raises
+    ConfigError otherwise, in `until`'s words."""
+    if stop_ns <= started_ns:
+        raise ConfigError(
+            f"until ({format_ist(stop_ns)}) is not after the start of the recording "
+            f"({format_ist(started_ns)}): pass a later {UNTIL_WORDS}"
+        )
+    day = ist_day(started_ns)
+    day_end_ns = day_bounds(day)[1]
+    if stop_ns > day_end_ns:
+        raise ConfigError(
+            f"until ({format_ist(stop_ns)}) is after the end of {day}, the IST day the "
+            f"recording starts on: one recording is one day, so stop it by "
+            f"{format_ist(day_end_ns)} and record the next day apart"
+        )
+    return stop_ns
+
+
+def check_close(instruments: Sequence[Mapping[str, str]], started_ns: int) -> None:
+    """For a recording begun at `started_ns` with no `until`: raise ConfigError when the
+    day's sessions of the instruments' exchanges have closed, and CalendarError when none
+    of them has a session that day, each saying to pass `until`."""
+    wanted = instruments_of(instruments)
+    close_ns = close_of_day(wanted, started_ns, None, stop_words=UNTIL_WORDS)
+    if close_ns <= started_ns:
+        raise ConfigError(
+            f"the sessions of {ist_day(started_ns)} closed at {format_ist(close_ns)}: pass "
+            f"{UNTIL_WORDS} to record after the close"
+        )
 
 
 def record_day(
@@ -83,7 +121,10 @@ def record_day(
     Raises ConfigError for a client that is not an `openalgo.api` client and for unusable
     arguments, LiveError when a write failed (chained from it) and what `recorder.record`
     raises."""
-    stop_at_ns = stop_at_of(until, now())
+    started_ns = now()
+    stop_at_ns = stop_at_of(until, started_ns)
+    if stop_at_ns is None:
+        check_close(instruments, started_ns)
     own = feed is None
     if own:
         settings = settings_of(client)
@@ -122,4 +163,4 @@ def _write_failed(summary: RecordSummary, cache_dir: str | os.PathLike[str] | No
     return error
 
 
-__all__ = ["TIME_OF_DAY", "record_day", "stop_at_of"]
+__all__ = ["TIME_OF_DAY", "UNTIL_WORDS", "check_close", "record_day", "stop_at_of"]

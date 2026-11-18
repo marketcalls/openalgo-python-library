@@ -24,7 +24,8 @@ not it has rows.
   measured yet), `closed_trades`, `rejected_orders`, `unprotected_seconds`,
   `reconcile_mismatches`, `undelivered_alerts` and `flat`, and the legs the close names
   (`differing`, `unconfirmed`) and the strategies of earlier starts (`earlier`), in
-  words; `summary_text()` gives them as the DAILY_SUMMARY alert sent them.
+  words; `summary_text()` gives them as the DAILY_SUMMARY alert sent them. Its type is
+  `SessionSummary`, loaded with the live layer.
 - `orders`: every order the session placed through OpenAlgo, with its intent ID, broker
   order ID, purpose, how far it got at the broker and its final status. `fills`: every
   fill the engine took, with where it was heard (`source`) and whether its price was
@@ -46,8 +47,10 @@ not it has rows.
 - `flat`: True only when the session ended with no position open, a strategy of an
   earlier start included, and no leg the close names.
 
-`RecordSummary`, what `bt.record` returns, is re-exported here for type hints. It loads
-on first use, so importing this module loads none of the live layer.
+`RecordSummary`, what `bt.record` returns, and `SessionSummary`, the type of `summary`,
+are re-exported here for type hints. They load with the live layer on first use, so
+importing this module loads none of it; `typing.get_type_hints(SessionResult)` resolves
+once `SessionSummary` has been read from this module.
 """
 
 from __future__ import annotations
@@ -60,10 +63,11 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from .result import Result
+
 if TYPE_CHECKING:
     from ._live._alerts_summary import SessionSummary
     from ._live._recorder_summary import RecordSummary
-    from .result import Result
 
 
 @dataclass(frozen=True, eq=False)
@@ -129,7 +133,10 @@ class SessionResult:
 
 
 # Names re-exported from the live layer, loaded on first use.
-_LIVE_EXPORTS = {"RecordSummary": "._live._recorder_summary"}
+_LIVE_EXPORTS = {
+    "RecordSummary": "._live._recorder_summary",
+    "SessionSummary": "._live._alerts_summary",
+}
 
 
 def __getattr__(name: str) -> Any:
@@ -140,4 +147,4 @@ def __getattr__(name: str) -> Any:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-__all__ = ["RecordSummary", "SessionResult"]
+__all__ = ["RecordSummary", "SessionResult", "SessionSummary"]
