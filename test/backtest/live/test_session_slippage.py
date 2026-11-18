@@ -184,3 +184,46 @@ def test_an_entry_whose_minute_is_still_marked_missing_is_not_compared(
     world.script.at(ist(14, 48, 50), candles_fail)
     summary = restart(world, TwoRoundTrips, stop_ns=DAY_ENDS).summary
     assert (summary.slippage, summary.slippage_not_compared) == (-2.50, 2)
+
+
+def dead_feed_in_the_entrys_minute(make_fake_openalgo, monkeypatch, tmp_path):
+    """`BuyEarlySellLate` with SBIN at 500.00, then 502.00 from 14:42:30, and the feed dead
+    from 14:42:02 to 14:42:50. Its buy, decided at 14:42:00, fills at 500.00; the minute
+    makes no tick bar, so the kernel runs it without one and marks it missing until the
+    broker's candle of it is read. Stopped at 14:51."""
+    world = rig(make_fake_openalgo, monkeypatch, tmp_path, trades_until=(14, 55))
+    seam(world, monkeypatch)
+    at_price(world, ist(14, 42, 30), 502.0)
+    world.script.at(ist(14, 42, 2), world.fake.faults.feed_dead)
+    world.script.at(ist(14, 42, 50), world.fake.faults.feed_alive)
+    world.stop_at(ist(14, 51))
+    return world
+
+
+# By hand: the buy at 500.00 against the 14:42 candle, which opens at its first trade,
+# 500.00 at 14:42:05: the backtest buys at 500.10, -1.00, where the 14:43 bar's 502.00 would
+# make it 500.00 against 502.15, -21.50. The sale, decided at the close of the 14:48 bar,
+# 14:49:00, fills at 502.00; the 14:49 bar opens at 502.00, 2 bps of it 0.1004, so the
+# backtest sells at 501.8996, rounded down to the tick, 501.85: -1.50.
+
+
+def test_an_entry_in_a_minute_the_feed_missed_is_set_against_its_candle(
+    make_fake_openalgo, monkeypatch, tmp_path
+):
+    world = dead_feed_in_the_entrys_minute(make_fake_openalgo, monkeypatch, tmp_path)
+    summary = live(world, BuyEarlySellLate).summary
+    assert (summary.slippage, summary.slippage_not_compared) == (-1.00 - 1.50, 0)
+
+
+def test_an_entry_in_a_minute_the_feed_missed_whose_candle_never_comes_is_not_compared(
+    make_fake_openalgo, monkeypatch, tmp_path
+):
+    world = dead_feed_in_the_entrys_minute(make_fake_openalgo, monkeypatch, tmp_path)
+
+    def candles_fail():
+        for _ in range(80):
+            world.fake.faults.gateway_error("history", status=503)
+
+    world.script.at(ist(14, 42, 3), candles_fail)
+    summary = live(world, BuyEarlySellLate).summary
+    assert (summary.slippage, summary.slippage_not_compared) == (-1.50, 1)
