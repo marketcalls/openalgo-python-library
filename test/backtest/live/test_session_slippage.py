@@ -29,9 +29,11 @@ from __future__ import annotations
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from live_samples import live, seam
+from restart_samples import crash_at, crashing, restart, run_to_crash
 from session_samples import NS, Hold, StopFlag, ist, rig
 from stops_samples import at_price
 from test_live_result import BuyEarlySellLate
+from test_session_figures import DAY_ENDS, TwoRoundTrips, world_of
 
 from openalgo.backtest._live._alerts_summary import summary_text
 
@@ -93,3 +95,48 @@ def test_the_days_slippage_carries_across_a_restart(make_fake_openalgo, monkeypa
     day = live(world, BuyEarlySellLate).summary
     assert first.slippage == -1.00
     assert (day.slippage, day.slippage_not_compared) == (-2.50, 0)
+
+
+def restarted_in_the_second_entrys_minute(make_fake_openalgo, monkeypatch, tmp_path):
+    """`TwoRoundTrips` (test_session_figures) crashed at 14:48:30, after its second entry,
+    decided at 14:48:00, filled at 505.00. The restart begins in that minute, which only
+    seeds its bar builder: its kernel runs 14:48 without a bar and marks it missing until
+    the broker's candle of it is read."""
+    world = world_of(make_fake_openalgo, monkeypatch, tmp_path)
+    crashing(monkeypatch)
+    crash_at(world, ist(14, 48, 30))
+    run_to_crash(world, TwoRoundTrips)
+    return world
+
+
+# By hand, with SBIN at 500.00, then 505.00 from 14:44:30 and 510.00 from 14:48:30, and each
+# bar opening at its minute's first trade, five seconds in: the first start's round trip
+# -2.50 (the buy at 500.00 against 500.10, the sale at 505.00 against 504.85); the restored
+# entry at 505.00 against the 14:48 bar's 505.15, -1.50, where the 14:49 bar's open would
+# make it 505.00 against 510.15, -51.50. The restart decides first at 14:50, the close of
+# the first whole minute it watches, so Ctrl+C at 14:51 sells at 510.00, decided at 14:50:00
+# (the minute its kernel runs next), whose bar opens at 510.00: against 509.85, -1.50.
+
+
+def test_an_entry_restored_by_a_restart_is_set_against_its_minutes_candle(
+    make_fake_openalgo, monkeypatch, tmp_path
+):
+    world = restarted_in_the_second_entrys_minute(make_fake_openalgo, monkeypatch, tmp_path)
+    summary = restart(world, TwoRoundTrips, stop_ns=DAY_ENDS).summary
+    assert (summary.slippage, summary.slippage_not_compared) == (-2.50 - 1.50 - 1.50, 0)
+
+
+def test_an_entry_whose_minute_is_still_marked_missing_is_not_compared(
+    make_fake_openalgo, monkeypatch, tmp_path
+):
+    # No candle can be read once the restart has caught up, so 14:48 stays marked missing:
+    # its bar is not known, and the restored entry is not compared.
+    world = restarted_in_the_second_entrys_minute(make_fake_openalgo, monkeypatch, tmp_path)
+
+    def candles_fail():
+        for _ in range(60):
+            world.fake.faults.gateway_error("history", status=503)
+
+    world.script.at(ist(14, 48, 50), candles_fail)
+    summary = restart(world, TwoRoundTrips, stop_ns=DAY_ENDS).summary
+    assert (summary.slippage, summary.slippage_not_compared) == (-2.50 - 1.50, 1)
