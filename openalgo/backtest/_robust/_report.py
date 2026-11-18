@@ -6,8 +6,9 @@
     report.plan              # the plan reported before the checks ran, untimed
     report.tearsheet(path)   # the HTML robustness report
 
-Wording rule (design 17, section 0): passing a check proves nothing on its own; failing
-one is strong evidence of overfitting; "not judged" never passes.
+Wording rule (design 17, section 0, `_verdict.WORDING_RULE`): passing a check proves
+nothing on its own; failing one says the edge did not hold up under that check, never
+that it proves overfitting; "not judged" never passes.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from pathlib import Path
 import pandas as pd
 
 from ..errors import ConfigError
-from ._registry import UNITS, find, not_built
+from ._registry import find, not_built, not_built_note
 from ._request import Request
 from ._scorecard import counts_line
 from ._verdict import FAILED, NOT_BUILT, PASSED, CheckResult
@@ -73,16 +74,14 @@ class RobustnessReport:
     def verdicts(self) -> pd.DataFrame:
         """One row per listed check, indexed by its number in report order: check (its
         name), question, figure, rule, verdict and note (plain text). A check this
-        version does not run has the verdict "not built" and names the unit that
-        brings it."""
+        version does not run has the verdict "not built" and says what it needs."""
         rows = []
         for check in self._request.listed:
             if check.built:
                 result = self._results[check.name]
                 cells = (result.figure, result.rule, result.verdict, result.note)
             else:
-                note = f"Comes with robustness unit {check.unit}, {UNITS[check.unit]}."
-                cells = ("", "", NOT_BUILT, note)
+                cells = ("", "", NOT_BUILT, not_built_note(check))
             rows.append((check.number, check.name, check.question, *cells))
         columns = ["number", "check", "question", "figure", "rule", "verdict", "note"]
         return pd.DataFrame(rows, columns=columns).set_index("number")

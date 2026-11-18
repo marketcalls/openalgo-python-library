@@ -1,11 +1,14 @@
 """The seventeen robustness checks, in the order a report lists them (design 17,
-section 2): each one's number, name, title, the question it answers, the robustness
-unit that builds it and, for a check this version runs, its settings and procedure.
+section 2): each one's number, name, title, the question it answers, the build unit
+that brings it (an internal tag, never shown) and, for a check this version runs, its
+settings and procedure.
 
-A check this version does not run is listed with what its unit brings, and asking for
-it raises NotImplementedError (`not_built`), naming that unit; `checks="all"` runs the
-built checks and lists the others as not built. The trade-list checks read the run's
-closed trades only, with no rerun: they are the quick checks of every tearsheet.
+A check this version does not run is listed with what it needs, in plain words
+(`needs`), and asking for it raises NotImplementedError (`not_built`) saying so;
+`checks="all"` runs the built checks and lists the others as not built. The trade-list
+checks read the run's closed trades only, with no rerun: they are the quick checks of
+every tearsheet. The bar checks rerun the backtest on generated bars, or on other
+symbols' bars (`_reruns`).
 """
 
 from __future__ import annotations
@@ -15,13 +18,23 @@ from dataclasses import dataclass
 
 from .._messages import not_supported
 from ..errors import ConfigError
-from . import _check_random_oos, _check_resample, _check_reshuffle, _check_variance
+from . import (
+    _check_noise,
+    _check_other_markets,
+    _check_permutation,
+    _check_random_oos,
+    _check_resample,
+    _check_reshuffle,
+    _check_stress,
+    _check_variance,
+    _check_vs_random,
+)
 from ._setting import Setting
 
-#: What each later robustness unit brings, as a reader would put it.
-UNITS = {
-    "RB2": "the bar generators (permuted, noisy and synthetic bars)",
-    "RB3": "late orders, other fill prices and shifted bar boundaries in the kernel",
+#: What the checks a later version brings need, by their build unit, as a reader would
+#: put it. A message names what a check needs, never its internal unit (`_messages`).
+NEEDS = {
+    "RB3": "late orders, other fill prices and shifted bar boundaries in the engine",
     "RB4": "walk-forward and the parameter searches",
 }
 
@@ -29,7 +42,7 @@ UNITS = {
 @dataclass(frozen=True)
 class CheckSpec:
     """One check: its `number` in the report, `name` (its keyword and `checks=` entry),
-    `title`, `question`, the robustness `unit` that builds it, its `settings` and its
+    `title`, `question`, the build `unit` that brings it (internal), its `settings` and its
     procedure `run` (empty and None for a check not built in this version), and whether
     it reads the trade list only (`trade_list`)."""
 
@@ -52,6 +65,10 @@ def _trade_check(number: int, name: str, title: str, question: str, module) -> C
     return CheckSpec(number, name, title, question, "RB1", module.SETTINGS, module.run, True)
 
 
+def _bar_check(number: int, name: str, title: str, question: str, module) -> CheckSpec:
+    return CheckSpec(number, name, title, question, "RB2", module.SETTINGS, module.run)
+
+
 CHECKS = (
     CheckSpec(
         1, "out_of_sample", "Out of sample", "Does it work on bars the search never saw?", "RB4"
@@ -66,27 +83,35 @@ CHECKS = (
     CheckSpec(
         3, "walk_forward", "Walk-forward", "Does it hold when re-fitted through time?", "RB4"
     ),
-    CheckSpec(
+    _bar_check(
         4,
         "vs_random",
         "Versus random",
         "Is it better than random entries with the same exposure?",
-        "RB2",
+        _check_vs_random,
     ),
-    CheckSpec(
+    _bar_check(
         5,
         "permutation",
         "Permutation test",
         "Could the edge come from the price path's distribution alone?",
-        "RB2",
+        _check_permutation,
     ),
-    CheckSpec(6, "noise", "Noise", "Does it survive small changes to every bar?", "RB2"),
+    _bar_check(6, "noise", "Noise", "Does it survive small changes to every bar?", _check_noise),
     CheckSpec(7, "shifted", "Shifted bars", "Does it depend on where the bars start?", "RB3"),
-    CheckSpec(
-        8, "other_markets", "Other markets", "Does the logic hold on related symbols?", "RB2"
+    _bar_check(
+        8,
+        "other_markets",
+        "Other markets",
+        "Does the logic hold on related symbols?",
+        _check_other_markets,
     ),
-    CheckSpec(
-        9, "stress", "Synthetic stress", "Does it hold through shocks history did not have?", "RB2"
+    _bar_check(
+        9,
+        "stress",
+        "Synthetic stress",
+        "Does it hold through shocks history did not have?",
+        _check_stress,
     ),
     _trade_check(
         10,
@@ -131,15 +156,35 @@ def find(name: str) -> CheckSpec:
     return BY_NAME[name]
 
 
+def needs(check: CheckSpec) -> str:
+    """What `check`, which this version does not run, needs: "it needs ..."."""
+    return f"it needs {NEEDS[check.unit]}"
+
+
+def not_built_note(check: CheckSpec) -> str:
+    """The note of `check`, which this version does not run, in a report."""
+    return f"Not built in this version: {needs(check)}."
+
+
 def not_built(check: CheckSpec) -> NotImplementedError:
-    """The error for asking for `check`, which this version does not run: the unit that
-    brings it, and the checks it can run instead."""
+    """The error for asking for `check`, which this version does not run: what it
+    needs, and the checks it can run instead."""
     return not_supported(
         f"the {check.name} check ({check.title})",
-        f"it comes with robustness unit {check.unit}, {UNITS[check.unit]}. checks='all' "
-        f"runs the checks this version has ({', '.join(BUILT)}) and lists the rest as not "
-        "built",
+        f"{needs(check)}. checks='all' runs the checks this version has "
+        f"({', '.join(BUILT)}) and lists the rest as not built",
     )
 
 
-__all__ = ["BUILT", "BY_NAME", "CHECKS", "QUICK", "UNITS", "CheckSpec", "find", "not_built"]
+__all__ = [
+    "BUILT",
+    "BY_NAME",
+    "CHECKS",
+    "NEEDS",
+    "QUICK",
+    "CheckSpec",
+    "find",
+    "needs",
+    "not_built",
+    "not_built_note",
+]

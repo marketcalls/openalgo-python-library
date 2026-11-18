@@ -9,6 +9,10 @@ import math
 from .._messages import counted
 from ..report._format import MISSING, indian_digits
 
+#: The most decimal places of a percentage: a figure below a ten-billionth of a percent
+#: is a rounding residue of summed rupees, not a figure to show.
+MOST_DECIMALS = 10
+
 
 def _undefined(value: float) -> str | None:
     if value is None or math.isnan(value):
@@ -19,9 +23,21 @@ def _undefined(value: float) -> str | None:
 
 
 def percent(fraction: float, decimals: int = 1) -> str:
-    """A fraction as a percentage: 0.875 is "87.5%"."""
+    """A fraction as a percentage to `decimals` places: 0.875 is "87.5%". A nonzero
+    fraction that would round to zero there shows more places, up to its first
+    significant digit (-0.0004 is "-0.04%"), so a shallow drawdown never reads "-0.0%";
+    one too small to show in `MOST_DECIMALS` places, a rounding residue, and a zero of
+    either sign read as zero ("0.0%")."""
     special = _undefined(fraction)
-    return special if special is not None else f"{fraction * 100:.{decimals}f}%"
+    if special is not None:
+        return special
+    value = fraction * 100
+    shown = decimals
+    while round(value, shown) == 0 and shown < MOST_DECIMALS:
+        shown += 1
+    if round(value, shown) == 0:
+        return f"{0.0:.{decimals}f}%"
+    return f"{value:.{shown}f}%"
 
 
 def rupees(amount: float) -> str:
@@ -42,4 +58,4 @@ def whole(count: int, singular: str, plural: str | None = None) -> str:
     return indian_digits(count, 0) + text[len(str(count)) :]
 
 
-__all__ = ["number", "percent", "rupees", "whole"]
+__all__ = ["MOST_DECIMALS", "number", "percent", "rupees", "whole"]

@@ -140,8 +140,14 @@ def steps_for(trade_moves: list[float], trades: int) -> np.ndarray:
 
 def bars(steps: np.ndarray) -> pd.DataFrame:
     """The daily bars of the module docstring, one per step."""
-    days = nse_sessions("2023-01-02", len(steps))
-    opens = FIRST_PRICE + np.concatenate(([0.0], np.cumsum(steps)[:-1]))
+    return opens_bars(FIRST_PRICE + np.concatenate(([0.0], np.cumsum(steps)[:-1])))
+
+
+def opens_bars(opens: list[float] | np.ndarray) -> pd.DataFrame:
+    """Daily bars as `bars` makes them (one per NSE session from 2023-01-02, the high and
+    low 1 rupee either side of the open, the close at the open), from their opens."""
+    opens = np.asarray(opens, dtype=float)
+    days = nse_sessions("2023-01-02", len(opens))
     index = pd.DatetimeIndex(
         [dt.datetime.combine(day, dt.time(9, 15), tzinfo=IST) for day in days], name="timestamp"
     )
@@ -150,7 +156,7 @@ def bars(steps: np.ndarray) -> pd.DataFrame:
         "high": opens + 1.0,
         "low": opens - 1.0,
         "close": opens,
-        "volume": np.full(len(steps), 1_000.0),
+        "volume": np.full(len(opens), 1_000.0),
     }
     return pd.DataFrame(columns, index=index)
 
@@ -193,3 +199,48 @@ def small_edge_run(trades: int = 60, **settings) -> bt.Result:
     """`Flip` on bars whose traded moves hold a small edge in much noise."""
     data = bars(steps_for(SMALL_EDGE_MOVES, trades))
     return bt.backtest(Flip, data=data, **FREE, **settings)
+
+
+class OddCloseFlip(bt.Strategy):
+    """Buys 10 shares when flat and the bar closed on an odd number of 5-paisa ticks (a
+    close ending in 5 paisa), and exits the bar after: a rule fitted to the last digit of
+    the price, which means nothing."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "D"
+
+    def on_bar(self, bar):
+        if self.position.is_flat and round(bar.close / 0.05) % 2 == 1:
+            self.buy(qty=QUANTITY)
+        elif self.position.is_long:
+            self.exit()
+
+
+#: Opens of a block of three daily bars that plants a gain on a close ending in 5 paisa:
+#: the first closes at 500.05 (odd ticks, so OddCloseFlip buys at the next open, 500.10),
+#: and the third opens at 503.10, where it sells: 3 rupees a share. The next block opens
+#: at 500.05 again.
+ODD_CLOSE_BLOCK = [500.05, 500.10, 503.10]
+
+
+def odd_close_run(blocks: int = 40, **settings) -> bt.Result:
+    """`OddCloseFlip` on `blocks` blocks of `ODD_CLOSE_BLOCK`: one trade of +30 rupees
+    each."""
+    data = opens_bars(ODD_CLOSE_BLOCK * blocks)
+    return bt.backtest(OddCloseFlip, data=data, **FREE, **settings)
+
+
+def rising_run(trades: int = 60, **settings) -> bt.Result:
+    """`Flip` on bars that rise 1 rupee every session: every trade makes 10 rupees, from
+    the drift alone."""
+    return bt.backtest(Flip, data=bars(np.ones(2 * trades + 2)), **FREE, **settings)
+
+
+#: Settings that keep the bar checks of a full report small in a test: one process, 20
+#: runs of each check and 10 candidates of each stress generator.
+SMALL_BARS = {
+    "workers": 1,
+    "vs_random": {"runs": 20},
+    "permutation": {"runs": 20},
+    "noise": {"runs": 20},
+    "stress": {"noise_candidates": 10, "permutation_candidates": 10},
+}

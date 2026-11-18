@@ -8,7 +8,9 @@
 
 Private: `import openalgo.backtest` does not import it; `bt.robustness`,
 `Result.robustness`, the tearsheet, `Result.summary()` and `Result.warnings` import it
-when they need it. Every check is deterministic for a seed on every platform.
+when they need it. Every check is deterministic for a seed on every platform: the bar
+checks rerun the backtest, an ordinary run of the deterministic kernel, on bars that are
+a pure function of the run's bars and the seed.
 
 | Module | Responsibility |
 |---|---|
@@ -28,8 +30,24 @@ when they need it. Every check is deterministic for a seed on every platform.
 | `_check_reshuffle` | Trade reshuffle |
 | `_check_resample` | Trade resample |
 | `_check_variance` | Variance |
+| `_ohlc` | Sessions of bars, prices on the tick grid, a bar made valid |
+| `_generate_permuted` | Permuted bars |
+| `_generate_noisy` | Noisy bars |
+| `_stress_rules` | The rules that keep a synthetic stress candidate |
+| `_run_bars` | The bars a run read, and the arguments of its reruns |
+| `_rerun_one` | One rerun on given bars, and what a check keeps of it |
+| `_random_entries` | Random entries with the run's trades |
+| `_reruns` | Families of reruns, in this process or worker processes, kept once |
+| `_bar_setup` | The bar checks' setup: the bars, a first rerun, the plan's reruns |
+| `_bar_common` | What the bar checks share: the run they read, break-even, rerun sets |
+| `_check_vs_random` | Versus random |
+| `_check_permutation` | Permutation test |
+| `_check_noise` | Noise |
+| `_check_other_markets` | Other markets |
+| `_check_stress` | Synthetic stress |
 | `_blocks` | What a check's section draws, as data |
 | `_charts` | The fan, histogram and sessions charts as inline SVG |
+| `_charts_bars` | The candles, lines, groups of paths and tables of the bar checks |
 | `_scorecard` | The scorecard table and its top line |
 | `_html` | The HTML robustness report |
 | `_words` | Figures as plain text |
@@ -43,6 +61,7 @@ from typing import Any
 
 from ..errors import BacktestError, ConfigError
 from ._assess import assess
+from ._check_other_markets import check_strategy
 from ._report import RobustnessReport
 from ._request import (
     DEFAULT_OBJECTIVE,
@@ -69,8 +88,9 @@ def robustness(
 ) -> RobustnessReport:
     """Backtest `strategy` once with the run arguments in `settings` and run the
     robustness checks on it (see `bt.robustness`). Raises ConfigError for unusable
-    arguments, NotImplementedError for a check, `others=` or parameter ranges this
-    version does not run, and whatever the backtest raises."""
+    arguments, NotImplementedError for a check or parameter ranges this version does not
+    run (and other markets for a strategy that trades no one named symbol), and whatever
+    the backtest and its reruns raise."""
     from ..run import backtest
     from ..strategy import Strategy
 
@@ -87,6 +107,8 @@ def robustness(
         check_settings=check_settings,
         ranges=ranges,
     )
+    if request.others:
+        check_strategy(strategy, run_arguments)
     started = time.perf_counter()
     result = backtest(strategy, client, **run_arguments)
     return assess(result, request, progress, time.perf_counter() - started)
@@ -127,6 +149,8 @@ def result_robustness(
         check_settings=check_settings,
         ranges=ranges,
     )
+    if request.others:
+        check_strategy(record.strategy, record.arguments)
     return assess(result, request, progress, None)
 
 

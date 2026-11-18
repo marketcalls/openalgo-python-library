@@ -52,6 +52,13 @@ def check_seed(seed: int, number: int) -> int:
     return seed + number
 
 
+def part_seed(seed: int, part: int) -> int:
+    """The seed of part `part` of a check that draws for several things (random entries
+    and their bars, two generators of candidates): output `part` of the check's stream,
+    so each part reads a stream of its own, the same on every platform."""
+    return int(outputs(seed, part, 1)[0])
+
+
 def outputs(seed: int, start: int, count: int) -> np.ndarray:
     """Outputs `start` to `start + count - 1` of the stream seeded with `seed`, as
     unsigned 64-bit integers."""
@@ -110,5 +117,6 @@ __all__ = [
     "fractions",
     "orders",
     "outputs",
+    "part_seed",
     "run_chunks",
 ]
