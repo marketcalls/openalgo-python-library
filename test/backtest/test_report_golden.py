@@ -3,7 +3,9 @@ four report modes, pinned whole in `golden/tearsheets/<run>.<mode>.html` and com
 byte for byte, so any change to the default page shows as a diff.
 
 The pages are regression pins, made from the tearsheet code as it was before custom
-tearsheets were added. When a change to the default page is meant, regenerate them on
+tearsheets were added. They also hold the custom path to the default page: no layout,
+`layout=None` and a layout that asks for nothing custom (`Layout(base=mode)`) all give
+the golden page. When a change to the default page is meant, regenerate them on
 purpose, on the reference platform, and review the diff:
 
     python test/backtest/golden/tearsheets/regenerate.py --write
@@ -31,6 +33,12 @@ from tearsheet_runs import (
     pinned,
     read_page,
 )
+
+import openalgo.backtest as bt
+from openalgo.backtest.report import Layout
+from openalgo.backtest.report._dashboard import script, style
+from openalgo.backtest.report._dashboard.page import document
+from openalgo.backtest.report._dashboard.timeseries import MIN_TIME_GAP_PX
 
 #: As the golden runs' (`test_golden.py`): far above a 1-ulp difference grown through a
 #: ratio, far below any real change.
@@ -108,6 +116,47 @@ def assert_golden(name: str, mode: str, page: str, folder: Path) -> None:
 @pytest.mark.parametrize("name", list(RUNS))
 def test_the_default_page_equals_its_golden_page(name, mode, results, tmp_path):
     assert_golden(name, mode, default_page(results[name], mode), tmp_path)
+
+
+def page_with(run: object, mode: str, layout: Layout | None) -> str:
+    """The run's page in `mode` through the layout keyword."""
+    if isinstance(run, bt.Result):
+        return run.tearsheet(mode=mode, layout=layout)
+    return bt.report.tearsheet(run, mode=mode, layout=layout)
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("name", list(RUNS))
+def test_no_layout_given_as_none_equals_the_golden_page(name, mode, results, tmp_path):
+    assert_golden(name, mode, page_with(results[name], mode, None), tmp_path)
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("name", list(RUNS))
+def test_a_layout_of_a_base_alone_equals_the_golden_page_of_that_mode(
+    name, mode, results, tmp_path
+):
+    run, layout = results[name], Layout(base=mode)
+    if isinstance(run, bt.Result):
+        page = run.tearsheet(layout=layout)
+    else:
+        page = bt.report.tearsheet(run, layout=layout)
+    assert_golden(name, mode, page, tmp_path)
+
+
+@pytest.mark.parametrize("name", list(RUNS))
+def test_the_page_stylesheet_and_script_are_unchanged(name):
+    golden = read_page(name, "full")
+    assert f"<style>{style.stylesheet()}</style></head>" in golden
+    assert f"<script>{script.script(MIN_TIME_GAP_PX)}</script></body>" in golden
+
+
+def test_the_page_shell_without_the_new_keyword_is_todays():
+    parts = []
+    assert document("T", "<h1>T</h1>", parts, "v", "") == document(
+        "T", "<h1>T</h1>", parts, "v", "", extra_style=""
+    )
+    assert document("T", "<h1>T</h1>", parts, "v", "").count("<style>") == 1
 
 
 def test_the_golden_pages_stay_small():

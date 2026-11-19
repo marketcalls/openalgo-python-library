@@ -16,13 +16,59 @@ toggle, sorting, paging and the chart crosshair; no font or image is fetched whe
 is opened, and it reads in full with script turned off. It follows the reader's light
 or dark setting and reads at phone width.
 
-Modules: `tearsheet` (the entry points), `_dashboard` (the page, its sections, charts
-and tables), `_format` (numbers in Indian notation). The metrics computation behind
+A custom tearsheet chooses the built-in sections and charts, adds the user's own and
+sets the colours (`custom`):
+
+    layout = report.Layout(hide=("monthly",), sections=(
+        report.section("Exposure", report.line(lambda r: r.equity["margin_rupees"],
+                                               title="Margin blocked")),
+    ))
+    result.tearsheet("custom.html", layout=layout)
+
+Modules: `tearsheet` (the entry points), `custom` (layouts, themes, sections and
+blocks), `_dashboard` (the page, its sections, charts and tables), `_custom` (how a
+layout renders), `_format` (numbers in Indian notation). The metrics computation behind
 `openalgo.backtest.metrics` lives here too, in `_analysis`, `_extended`, `_rolling`,
 `_montecarlo`, `_inputs`, `_periods`, `_combined`, `_kernel`, `_tables_data`,
 `_definitions` and `_performance`.
 """
 
+from .custom import (
+    MAX_SERIES,
+    PARTS,
+    Layout,
+    Theme,
+    bar,
+    heatmap,
+    histogram,
+    html,
+    line,
+    scatter,
+    section,
+    svg,
+    table,
+    text,
+    tiles,
+)
 from .tearsheet import MODES, metrics_table, tearsheet
 
-__all__ = ["MODES", "metrics_table", "tearsheet"]
+__all__ = [
+    "MAX_SERIES",
+    "MODES",
+    "PARTS",
+    "Layout",
+    "Theme",
+    "bar",
+    "heatmap",
+    "histogram",
+    "html",
+    "line",
+    "metrics_table",
+    "scatter",
+    "section",
+    "svg",
+    "table",
+    "tearsheet",
+    "text",
+    "tiles",
+]

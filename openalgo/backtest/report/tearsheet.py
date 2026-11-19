@@ -1,5 +1,6 @@
 """The HTML tearsheet: one self-contained dashboard page for a strategy or a combined
-portfolio, in one of four modes; and the metrics as a DataFrame."""
+portfolio, in one of four modes or a custom layout (`custom`); and the metrics as a
+DataFrame."""
 
 from collections.abc import Iterable, Mapping
 from os import PathLike
@@ -10,9 +11,11 @@ import pandas as pd
 from ... import __version__
 from ..errors import ConfigError
 from . import _dashboard
+from ._custom import _layout
 from ._dashboard import data
 from ._definitions import DEFINITIONS, GROUPS
 from ._performance import Performance
+from .custom import Layout
 
 DEFAULT_TITLE = "Backtest"
 #: The name of a benchmark when none is given with it.
@@ -28,6 +31,7 @@ def tearsheet(
     title: str | None = None,
     mode: str = "full",
     log_scale: bool = False,
+    layout: Layout | None = None,
 ) -> str:
     """Render a performance report as one self-contained HTML dashboard.
 
@@ -99,7 +103,38 @@ def tearsheet(
     HTML is returned; otherwise it is written there as UTF-8 and the path is returned
     as a string. Raises ConfigError when no Performance can be found or for another
     mode.
+
+    `layout` (a `report.custom.Layout`) makes a custom tearsheet: the built-in sections
+    and parts it chooses, sections and charts of the user's, and its colours, on the
+    same page shell (see `openalgo.backtest.report.custom`). Its blocks' callables
+    receive `result_like`. With a layout, `mode` stays "full" (the layout's `base` is
+    the mode it starts from), else ConfigError. Without one (the default) the page is
+    exactly the built-in tearsheet.
     """
+    return write_tearsheet(
+        result_like,
+        path,
+        subject=result_like,
+        title=title,
+        mode=mode,
+        log_scale=log_scale,
+        layout=layout,
+    )
+
+
+def write_tearsheet(
+    result_like: object,
+    path: str | PathLike | None,
+    *,
+    subject: object,
+    title: str | None = None,
+    mode: str = "full",
+    log_scale: bool = False,
+    layout: Layout | None = None,
+) -> str:
+    """`tearsheet` (which documents the arguments), with `subject` the object a custom
+    layout's callables receive: a `Result` hands itself, while its page reads the
+    adapter it passes as `result_like`."""
     performance, name, assumptions, strategies, bench_name = _resolve(result_like)
     page = render(
         performance,
@@ -110,6 +145,8 @@ def tearsheet(
         log_scale=log_scale,
         benchmark_name=bench_name,
         overfitting=getattr(result_like, "overfitting", None),
+        layout=layout,
+        subject=subject,
     )
     if path is None:
         return page
@@ -178,12 +215,22 @@ def render(
     log_scale: bool = False,
     benchmark_name: str | None = None,
     overfitting: object = None,
+    layout: Layout | None = None,
+    subject: object = None,
 ) -> str:
     """The HTML page for `performance` in `mode` (see `tearsheet`); `overfitting` is its
-    quick overfitting checks when already computed. Raises ConfigError for an unknown
-    mode."""
+    quick overfitting checks when already computed. With `layout`, the custom page,
+    whose blocks' callables receive `subject`. Raises ConfigError for an unknown mode,
+    a layout with a mode other than "full", or a layout that is not a `Layout`."""
     if mode not in MODES:
         raise ConfigError(f"mode is one of {MODES}, got {mode!r}")
+    if layout is not None:
+        _check_layout(layout, mode)
+    parts = (
+        _dashboard.MODE_PARTS[mode]
+        if layout is None
+        else _layout.parts_of(layout.base, layout.hide, layout.show)
+    )
     view = _dashboard.View(
         performance=performance,
         bench=data.benchmark_performance(performance),
@@ -192,10 +239,23 @@ def render(
         assumptions=assumptions,
         strategies=strategies,
         log_scale=log_scale,
-        parts=_dashboard.MODE_PARTS[mode],
+        parts=parts,
         overfitting=overfitting,
     )
-    return _dashboard.render(view, __version__)
+    if layout is None:
+        return _dashboard.render(view, __version__)
+    return _layout.render(layout, view, subject, __version__)
+
+
+def _check_layout(layout: object, mode: str) -> None:
+    if not isinstance(layout, Layout):
+        raise ConfigError(
+            f"layout is a report.custom.Layout (or None for the built-in page), got {layout!r}"
+        )
+    if mode != "full":
+        raise ConfigError(
+            f"a layout gives its own starting mode: pass Layout(base={mode!r}) and leave mode out"
+        )
 
 
 __all__ = [
@@ -206,4 +266,5 @@ __all__ = [
     "metrics_table",
     "render",
     "tearsheet",
+    "write_tearsheet",
 ]

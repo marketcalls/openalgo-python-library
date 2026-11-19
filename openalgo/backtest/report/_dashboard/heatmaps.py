@@ -33,7 +33,9 @@ def heat(value: float, bound: float) -> str:
     return f"color-mix(in oklab, {target} {share}%, var(--heat-mid))"
 
 
-def _bound(values: np.ndarray) -> float:
+def heat_bound(values: np.ndarray) -> float:
+    """The largest size of a known return in `values`, the colour scale's end on each
+    side of zero (symmetric), at least `HEAT_FLOOR`."""
     known = np.abs(values[np.isfinite(values)])
     return max(HEAT_FLOOR, float(known.max())) if len(known) else HEAT_FLOOR
 
@@ -41,7 +43,7 @@ def _bound(values: np.ndarray) -> float:
 def monthly(table: pd.DataFrame) -> str:
     """The monthly returns table (rows years, columns 1 to 12, fractions, NaN for a
     month with no session) as a heatmap; a month with no session is blank."""
-    bound = _bound(table.to_numpy(dtype=float))
+    bound = heat_bound(table.to_numpy(dtype=float))
     head = "".join(f"<div class='hm-month'>{name[0]}</div>" for name in MONTHS)
     rows = []
     for year, values in table.iterrows():
@@ -70,7 +72,7 @@ class Week(NamedTuple):
 
 
 def _weeks(weeks: Sequence[Week]) -> str:
-    bound = _bound(np.array([w.value for w in weeks], dtype=float))
+    bound = heat_bound(np.array([w.value for w in weeks], dtype=float))
     cells = []
     for w in weeks:
         known = math.isfinite(w.value)
@@ -106,4 +108,4 @@ def weekly(by_year: Mapping[int, Sequence[Week]]) -> str:
     return f"<div class='wk' data-weekly>{picker}{''.join(blocks)}</div>"
 
 
-__all__ = ["HEAT_SHARE", "MONTHS", "Week", "heat", "monthly", "weekly"]
+__all__ = ["HEAT_SHARE", "MONTHS", "Week", "heat", "heat_bound", "monthly", "weekly"]

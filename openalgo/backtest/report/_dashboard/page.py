@@ -74,19 +74,39 @@ def _footer(version: str) -> str:
     )
 
 
-def render(view: View, version: str) -> str:
-    """The whole page for `view`; `version` is the SDK's, shown in the footer."""
-    parts = [part for part in (build(view) for build in SECTIONS) if part is not None]
+def built(view: View) -> list[Section]:
+    """The sections of `SECTIONS` that `view` shows, in page order."""
+    return [part for part in (build(view) for build in SECTIONS) if part is not None]
+
+
+def render(
+    view: View, version: str, sections: list[Section] | None = None, *, extra_style: str = ""
+) -> str:
+    """The whole page for `view`; `version` is the SDK's, shown in the footer.
+    `sections` are the page's sections in order (those of `SECTIONS` that `view` shows
+    when None), and `extra_style` a second stylesheet after the page's own (none when
+    empty)."""
+    parts = built(view) if sections is None else sections
     dates = ",".join(f"{d:%Y-%m-%d}" for d in view.performance.session_returns.index)
     title = f"{view.title}: backtest tearsheet"
-    return document(title, _title(view), parts, version, dates)
+    return document(title, _title(view), parts, version, dates, extra_style=extra_style)
 
 
-def document(title: str, heading: str, parts: list[Section], version: str, dates: str) -> str:
+def document(
+    title: str,
+    heading: str,
+    parts: list[Section],
+    version: str,
+    dates: str,
+    *,
+    extra_style: str = "",
+) -> str:
     """A whole self-contained page: the document `title` (plain text), the sticky
     header with a link to each of `parts`, the title line `heading` (HTML), the numbered
     sections and the footer with the SDK's `version`. `dates` are the session dates the
-    time-series charts' crosshair reads (comma-separated "YYYY-MM-DD")."""
+    time-series charts' crosshair reads (comma-separated "YYYY-MM-DD"). `extra_style`,
+    when given, is a second stylesheet written after the page's own (a custom
+    tearsheet's colours)."""
     nav = "".join(
         f"<a href='#{part.anchor}'{ACTIVE if i == 0 else ''}>{part.title}</a>"
         for i, part in enumerate(parts)
@@ -97,11 +117,12 @@ def document(title: str, heading: str, parts: list[Section], version: str, dates
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
         "<meta name='color-scheme' content='light dark'>"
         f"<title>{fmt.text(title)}</title>"
-        f"<script>{script.HEAD}</script><style>{style.stylesheet()}</style></head>"
+        f"<script>{script.HEAD}</script><style>{style.stylesheet()}</style>"
+        f"{f'<style>{extra_style}</style>' if extra_style else ''}</head>"
         f"<body data-dates='{dates}'>{_header(nav)}<main>{heading}{body}"
         f"{_footer(version)}</main><script>{script.script(MIN_TIME_GAP_PX)}</script>"
         "</body></html>\n"
     )
 
 
-__all__ = ["SECTIONS", "document", "render"]
+__all__ = ["SECTIONS", "built", "document", "render"]

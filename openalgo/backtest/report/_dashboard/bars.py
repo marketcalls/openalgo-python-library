@@ -54,6 +54,22 @@ def _pct(value: float, decimals: int) -> str:
     return f"{value * 100:.{decimals}f}%"
 
 
+def value_text(value: float, percent: bool) -> str:
+    """A value as a mark's hover readout shows it: a percent of a fraction, or a plain
+    number in Indian notation."""
+    return fmt.percent(value) if percent else fmt.number(value)
+
+
+def tick_texts(low: float, high: float, count: int, percent: bool) -> list[tuple[float, str]]:
+    """The ticks of an axis over [low, high] and their labels, percent or plain, to as
+    many decimals as the step needs."""
+    if percent:
+        decimals = scale.percent_decimals(low, high, count)
+        return [(t, _pct(t, decimals)) for t in scale.ticks(low, high, count)]
+    decimals = scale.number_decimals(low, high, count)
+    return [(t, fmt.number(t, decimals)) for t in scale.ticks(low, high, count)]
+
+
 def _count_axis(tallest: int, inner_w: float, inner_h: float, caption: str) -> tuple:
     """(the y scale of a count axis up to `tallest`, its grid lines, whole-count labels
     and `caption` above them)."""
@@ -78,13 +94,16 @@ def histogram(
     label: str = "Session returns distribution",
     decimals: int | None = 1,
     counts: str | None = None,
+    bins: int = HISTOGRAM_BINS,
+    percent: bool = True,
 ) -> str:
     """Fractions (session returns, or the trades' excursions) in round-edged bins, gains
     green and losses red by the bin's centre, with a dashed line at their mean. `label`
     names the chart for a screen reader; the axis shows percent to `decimals` places, or
     to as many as its tick step needs when None (`scale.percent_decimals`). `counts`
     names what a bar counts ("trades") and adds a count axis captioned with it; None
-    draws no count axis."""
+    draws no count axis. `bins` is the number of bins asked; with `percent` False the
+    values are plain numbers, labelled to as many decimals as the step needs."""
     data = values[np.isfinite(values)]
     if not len(data):
         return "<p class='empty'>No data</p>"
@@ -95,7 +114,7 @@ def histogram(
     inner_w, inner_h = width - margin.left - margin.right, height - margin.top - margin.bottom
     low, high = scale.widen(float(data.min()), float(data.max()))
     x = scale.Linear(low, high, 0, inner_w)
-    counted = scale.bins(data, low, high, HISTOGRAM_BINS)
+    counted = scale.bins(data, low, high, bins)
     tallest = max(n for _, _, n in counted)
     marks = []
     y = scale.Linear(0, tallest or 1, inner_h, 0)
@@ -108,7 +127,7 @@ def histogram(
         marks.append(
             f"<rect x='{x(left):.2f}' y='{y(n):.2f}' width='{wide:.2f}' "
             f"height='{inner_h - y(n):.2f}' style='fill:var({tone})' opacity='0.78'>"
-            f"<title>{fmt.percent(centre)} &#183; {n}</title></rect>"
+            f"<title>{value_text(centre, percent)} &#183; {n}</title></rect>"
         )
     mean = float(data.mean())
     marks.append(
@@ -118,10 +137,14 @@ def histogram(
     marks.append(f"<line x1='0' x2='{inner_w}' y1='{inner_h}' y2='{inner_h}' class='axis'/>")
     if decimals is None:
         decimals = scale.percent_decimals(low, high, PERCENT_TICKS)
+    if percent:
+        texts = [(t, _pct(t, decimals)) for t in scale.ticks(low, high, PERCENT_TICKS)]
+    else:
+        texts = tick_texts(low, high, PERCENT_TICKS, percent=False)
     marks += [
         f"<text x='{x(t):.2f}' y='{inner_h + 16}' text-anchor='middle' style='{AXIS_TEXT}'>"
-        f"{_pct(t, decimals)}</text>"
-        for t in scale.ticks(low, high, PERCENT_TICKS)
+        f"{text}</text>"
+        for t, text in texts
     ]
     return frame(width, height, margin, label, "".join(marks))
 
@@ -272,4 +295,14 @@ def streak_bars(counts: Sequence[tuple[int, int]]) -> str:
     return frame(width, height, margin, "Losing streak lengths", "".join(marks))
 
 
-__all__ = ["Box", "YearRow", "box_plot", "frame", "histogram", "streak_bars", "yearly_bars"]
+__all__ = [
+    "Box",
+    "YearRow",
+    "box_plot",
+    "frame",
+    "histogram",
+    "streak_bars",
+    "tick_texts",
+    "value_text",
+    "yearly_bars",
+]
