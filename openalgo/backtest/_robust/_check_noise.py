@@ -9,9 +9,10 @@ objective's break-even; the share of noise runs profitable; the run's percentile
 them (the share of noise runs below it). Pass: the ratio at least `keep` (0.5), at least
 `profitable` (0.8) of the runs profitable, and the run not above the `top` (0.95)
 percentile of the noise objectives (linear between order statistics). The words give
-the run's percentile as that share to a tenth of a percent ("the run above 95.1% of the
-noise runs"): rounded to a whole ordinal it would read "95th" on both sides of the top
-limit.
+the run's percentile as that share to a tenth of a percent, then whether the run is
+above that limit and the limit itself ("the run above 95.0% of the noise runs and not
+above their 95th percentile 7.08"): the share compares the run with the noise runs, not
+with the interpolated limit, so to a tenth it can read 95.0% on both sides of it.
 
 Not judged when the run did not make money, has too few closed trades, has an objective
 that is undefined, has no break-even or is not above it, when no noise run could be
@@ -169,16 +170,20 @@ def run(
     if not len(values):
         return not_judged(text, "No noise run could be measured." + set_.failure_note())
     summary = _summary(set_, values, subject.real, level, settings)
+    within = subject.real <= summary["top_limit"]
     passed = (
         summary["ratio"] >= settings["keep"]
         and summary["profitable_share"] >= settings["profitable"]
-        and subject.real <= summary["top_limit"]
+        and within
     )
     figure = (
         f"median {name} {words.number(summary['median'])} keeps "
         f"{words.percent(summary['ratio'])} of the run's {words.number(subject.real)}; "
         f"{words.percent(summary['profitable_share'])} of noise runs profitable; the run above "
-        f"{words.percent(summary['percentile'])} of the noise runs"
+        f"{words.percent(summary['percentile'])} of the noise runs and "
+        f"{'not above' if within else 'above'} their "
+        f"{words.ordinal(settings['top'], TOP_DECIMALS)} percentile "
+        f"{words.number(summary['top_limit'])}"
     )
     note = (
         f"Each run moves every price of every bar, with its chance, by up to "

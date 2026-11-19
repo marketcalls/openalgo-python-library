@@ -272,13 +272,15 @@ def test_the_noise_histogram_marks_the_run_its_top_percentile_and_the_keep_line(
 
 
 def test_the_noise_words_say_how_many_noise_runs_the_run_is_above(edge):
-    # No price moves, so every noisy run is the run itself: each is profitable and none
-    # is below the run.
+    # No price moves, so every noisy run is the run itself: each is profitable, none is
+    # below the run, and their 95th percentile is the run's own Sharpe, which the run is
+    # not above.
     still = {"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0}
     report = checked(edge, "noise", runs=5, noise=still)
     check = report.check("noise")
     assert check.figure.endswith(
-        "100.0% of noise runs profitable; the run above 0.0% of the noise runs"
+        "100.0% of noise runs profitable; the run above 0.0% of the noise runs and not above "
+        f"their 95th percentile {edge.metrics['sharpe']:.2f}"
     )
     assert check.rule.endswith("and the run is not above their 95th percentile")
     (tiles,) = report._blocks["noise"][-1]
@@ -290,37 +292,53 @@ def test_the_noise_words_say_how_many_noise_runs_the_run_is_above(edge):
 NOISE_RUNS = 1_000
 
 
-def planted_noise(real: float, below: int):
+def planted_noise(real: float, at: float):
     """A stand-in for the noise check's set of reruns: its first rerun repeated
     `NOISE_RUNS` times, each profitable, with objectives 1 to 1,000 parts of the run's
-    `real` / (`below` + 0.5), so exactly `below` of them are below the run."""
+    `real` / `at`, so the run sits at `at` parts and the noise runs of fewer parts are
+    below it."""
 
     def made(rows):
         many = joined([rerun_set(rows[:1])] * NOISE_RUNS)
         parts = np.arange(1.0, NOISE_RUNS + 1.0)
         return dataclasses.replace(
-            many, objective=real * parts / (below + 0.5), net_profit=np.full(NOISE_RUNS, 100.0)
+            many, objective=real * parts / at, net_profit=np.full(NOISE_RUNS, 100.0)
         )
 
     return made
 
 
-# (noise runs below the run, verdict, their share): the 95th percentile of 1 to 1,000
-# parts, linear between order statistics, is 950.05 parts (0.95 x 999 = 949.05 places
-# past the first), so a run of 949.5 parts passes and one of 950.5 or 951.5 is above it.
-# The median, 500.5 parts, keeps over half of each run.
-TOP_LIMIT_ROWS = [(949, PASSED, "94.9%"), (950, FAILED, "95.0%"), (951, FAILED, "95.1%")]
+#: The 95th percentile of the planted objectives, in parts: linear between order
+#: statistics, 0.95 x 999 = 949.05 places past the first, so 950 + 0.05 x (951 - 950).
+TOP_PARTS = 950.05
+
+# (the run's place in parts, verdict, the share of noise runs below it, how it stands
+# against their 95th percentile): a run of 949.5 or 950.03 parts is not above 950.05 and
+# passes; one of 950.5 or 951.5 is above it and fails. Runs of 950.03 and 950.5 parts
+# both have 950 noise runs below them, so the share reads 95.0% on either side of the
+# limit and the words "above" or "not above" say which. The median, 500.5 parts, keeps
+# over half of each run.
+TOP_LIMIT_ROWS = [
+    (949.5, PASSED, "94.9%", "not above"),
+    (950.03, PASSED, "95.0%", "not above"),
+    (950.5, FAILED, "95.0%", "above"),
+    (951.5, FAILED, "95.1%", "above"),
+]
 
 
-@pytest.mark.parametrize(("below", "verdict", "share"), TOP_LIMIT_ROWS)
+@pytest.mark.parametrize(("at", "verdict", "share", "against"), TOP_LIMIT_ROWS)
 def test_the_noise_figure_at_the_top_limit_reads_as_its_verdict(
-    edge, monkeypatch, below, verdict, share
+    edge, monkeypatch, at, verdict, share, against
 ):
-    monkeypatch.setattr(_check_noise, "rerun_set", planted_noise(edge.metrics["sharpe"], below))
+    real = edge.metrics["sharpe"]
+    monkeypatch.setattr(_check_noise, "rerun_set", planted_noise(real, at))
     report = checked(edge, "noise", runs=1)
     check = report.check("noise")
+    limit = real * TOP_PARTS / at
     assert check.verdict == verdict
-    assert check.figure.endswith(f"the run above {share} of the noise runs")
+    assert check.figure.endswith(
+        f"the run above {share} of the noise runs and {against} their 95th percentile {limit:.2f}"
+    )
     assert check.rule.endswith("and the run is not above their 95th percentile")
     (tiles,) = report._blocks["noise"][-1]
     shown = {tile.label: tile.value for tile in tiles.tiles}

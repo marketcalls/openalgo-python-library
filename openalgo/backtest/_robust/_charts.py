@@ -9,7 +9,8 @@ axis text, round ticks and frame, `report._dashboard.bars` and `scale`):
                run's own (solid), a rule's limit (dashed), a reference such as zero
                (dotted), each labelled above the plot; a label that would overprint
                one drawn before it goes a line higher, and the key names every mark
-               with its value (a percentage as the figures write it, never "-0.0%")
+               with its value (a percentage as the figures write it, never "-0.0%");
+               a bin's readout gives its edges to the bins' own decimal places
     sessions   a value at each session close (the run's cumulative return, or a price),
                with marked sessions shaded
 
@@ -184,9 +185,16 @@ def _histogram_margin(labels: list[Label | None]) -> Margin:
 
 
 def _figure(value: float, percent: bool) -> str:
-    """A histogram's value in its key and hover readouts: a percentage that never reads
-    "-0.0%" (`_words.percent`), or a plain number."""
+    """A mark's value in the key and its hover readout: a percentage as the figures write
+    it, never "-0.0%" (`_words.percent`), or a plain number."""
     return _words.percent(value, 1) if percent else fmt.number(value)
+
+
+def _edge(value: float, places: int, percent: bool) -> str:
+    """A bin's edge in its hover readout: a percentage to the bins' own decimal `places`,
+    so each bin's two edges read apart as the axis ticks do at theirs, or a plain
+    number."""
+    return f"{value * 100:.{places}f}%" if percent else fmt.number(value)
 
 
 def _mark_lines(
@@ -224,9 +232,10 @@ def histogram_chart(block: HistogramBlock) -> str:
     height = HEIGHT - margin.top - margin.bottom
     counted = scale.bins(values, low, high, HISTOGRAM_BINS)
     y = scale.Linear(0.0, float(max(n for _, _, n in counted) or 1), height, 0.0)
+    places = scale.percent_decimals(low, high, HISTOGRAM_BINS)
     marks = []
     for left, right, n in counted:
-        span = f"{_figure(left, block.percent)} to {_figure(right, block.percent)}"
+        span = f"{_edge(left, places, block.percent)} to {_edge(right, places, block.percent)}"
         marks.append(
             f"<rect class='hist-bar' x='{x(left):.1f}' y='{y(n):.1f}' "
             f"width='{max(1.0, x(right) - x(left) - 1):.1f}' height='{height - y(n):.1f}'>"

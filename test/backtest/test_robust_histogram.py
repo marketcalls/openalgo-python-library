@@ -107,6 +107,29 @@ def test_a_shallow_percentage_reads_its_first_digit_not_minus_zero():
     assert not re.search(r"-0\.0+%", chart)
 
 
+#: The hover readout of a bar of the histogram: its two edges and its count.
+BIN_READOUT = r"<rect class='hist-bar'[^>]*><title>([^<]*)</title></rect>"
+
+
+def test_a_shallow_bin_reads_its_two_edges_apart_at_the_bins_own_places():
+    # Drawdowns down to -0.125%: the axis runs from -0.13% (a round step of 0.01%) to 0,
+    # and its bins step 0.005% (the round step nearest 0.13% / 30, 0.0043%), so every
+    # edge needs three places; to a tenth -0.125% and -0.120% would both read -0.1%.
+    drawdowns = np.array([-0.00125, -0.0006, -0.0001, 0.0])
+    marks = (Mark(-0.0006, "the run's order", REAL),)
+    chart = histogram_chart(HistogramBlock("Drawdowns", "", drawdowns, True, marks))
+    readouts = re.findall(BIN_READOUT, chart)
+    assert "-0.120% to -0.115%: 0" in readouts
+    # The bars that hold a drawdown, the ones tall enough to point at.
+    held = [text for text in readouts if not text.endswith(": 0")]
+    assert held == [
+        "-0.125% to -0.120%: 1",
+        "-0.060% to -0.055%: 1",
+        "-0.010% to -0.005%: 1",
+        "-0.005% to 0.000%: 1",
+    ]
+
+
 def test_the_key_counts_the_values_as_runs_by_default():
     assert "Bars: how many of the 4 runs fall in each bin." in histogram()
 
