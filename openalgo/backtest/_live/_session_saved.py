@@ -97,7 +97,7 @@ def save(session: Any, trader: Trader) -> None:
         "live_state": call(trader.engine.live_state),
         "venue_map": trader.venue.saved(),
         "adopted": session.reconcile.adopted(trader.name),
-        FIGURES: session.figures.strategy(trader),
+        FIGURES: session.figures.strategy(session, trader),
     }
     session.parts.journal.put_rms_state(trader.name, saved, day=session.parts.spec.day)
 

@@ -58,7 +58,8 @@
 //! | `Engine::apply_external_fill(InstrumentId, Product, Side, units, price, at, ExitReason)` | as `apply_fill` | a live session's fill with no order of its own (`venue_external`): the broker closed or reduced the position by itself; recorded through `execute_fill`, flagged `external`, then the closing orders are fitted to what is left; refused whole unless it only closes or reduces (`beyond_position`) |
 //! | `Engine::live_state()` | any time | a live session's state as plain data that survives a JSON round trip (`venue_state`): positions with tranches, legs, working orders with roles and terms, pending modifies and cancels, exits and leg stops, the daily loss totals, the trading state, counters, cash |
 //! | `Engine::restore_live_state(&StateValue)` | once, in a session built for a restart, after its catch-up and before any order | the saved state put back as it stood (`venue_state`), but for the entry locks (the session keeps its own) and a sizing cap the session has set; returns (saved id, new id) of each restored working order; refused whole (`LiveStateError`), also for parts that do not hold together and for a state saved while the session closed |
-//! | `Engine::stop_session()` | any time | a live session ends where it stands: nothing is sent, working orders and open positions are reported as they are (a strategy exit never sent ends `Canceled`), the undelivered events are returned (`venue_session`) |
+//! | `Engine::market_fill_price(InstrumentId, Side, bar_open, open)` | any time | the price a backtest fills a MARKET order at, at the open of a bar the caller names, by the run's slippage rule; records nothing (`market_fill`): what a live session's day summary sets its MARKET fills against |
+//! | `Engine::stop_session()` | any time | a live session ends where it stands: nothing is sent, working orders and open positions are reported as they are (a strategy exit never sent ends `Canceled`), the slice in progress is closed for the records as step 8 closes a session (the day's contract notes settled, then its position-history and equity rows), the undelivered events are returned (`venue_session`) |
 //! | `Engine::finish()` | after `Pause::Finished` or `stop_session` | the `RunOutput` |
 //! | `pause::run(engine, driver)` | Rust drivers | the loop above, for a `Driver` |
 //!
@@ -162,6 +163,7 @@
 //! | `resting` | Step 3: resting LIMIT, SL and SL-M DAY orders, the stop-limit exit conversion |
 //! | `modify` | `modify`: a full replacement of a working order |
 //! | `order_fill` | Where and how an order fills; the price of any fill (slippage, limits) |
+//! | `market_fill` | The price a backtest fills a MARKET order at, for a bar the caller names, recording nothing (a live session's slippage against the backtest) |
 //! | `gtt` | GTTs holding CNC and NRML levels: placement, cancel-then-exit, step-4 sync, renewal |
 //! | `gtt_plan` | Which GTTs a positional leg needs (GTT-11) and when one is modified (GTT-3) |
 //! | `gtt_fire` | Step 3 for GTTs, the child fill, the engine's exit after an unfilled child |
@@ -245,6 +247,7 @@ pub mod kernel;
 mod legs;
 mod live_clock;
 pub mod market_data;
+mod market_fill;
 mod modify;
 mod order_fill;
 pub mod output;

@@ -377,7 +377,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of a leg in flight for more than 3 minutes that finds a position difference alerts at
   once, and the close names that leg in the summary and the result, never as flat; a
   fill priced from an average is flagged only when its price may lie on another tick.
-  The summary's slippage against the backtest's model reads n/a in this version.
 - Live sessions, from the fault suite (unit 14): a position difference that comparisons
   in time already acted on and that the final read sees again is named at the close (an
   ERROR alert, the summary's Reconcile and End state lines, `SessionResult.flat` False)
@@ -402,6 +401,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loop's time from a tick's arrival to the kernel is measured by
   `benchmark/live_loop_speed.py` (median about 7 microseconds, 99th percentile about 19,
   against a target under 500).
+- Live sessions, figures a trader reads at the end: a strategy's `bt.Result` now adds up
+  to its trades. A session's stop (Ctrl+C, the end of the day after the square-off, or an
+  error) settles the day's contract notes and records the minute it stopped in, so the
+  Result's equity, net profit, returns and drawdown include the session's last fills and
+  the notes' charges: its net profit equals the sum of its trades' net, plus an open
+  position's value at its mark less its charges. The day summary's charges stay each
+  fill's charges rounded to the paisa (they add up across restarts) and differ from the
+  Results' by exactly the contract notes' rounding, shown in `Result.contract_notes`. The
+  day summary's slippage is now measured: each MARKET fill against the price a backtest
+  fills the same order at (the open of the bar after the decision, with the run's
+  modelled slippage), signed against the trader and times the units, for example
+  "Slippage : Rs 2.50 better than the backtest"; a fill with no bar to compare it with
+  (a Ctrl+C sale before the next minute's first trade) is counted as not compared. A live
+  trade's MAE and MFE judge the ticks after a confirmed change of a stop or target, and
+  the next minute's, against the terms it replaced too, so a fill on the old terms is
+  never counted with the whole position. Backtest figures do not change.
 - Reference table `price_protection` (`openalgo/backtest/reference/data/price_protection.csv`,
   read with `tables.find("price_protection", (exchange, segment, check, underlying, days),
   date)`): the price bands NSE and BSE apply to an option's limit price, by date, each row
@@ -522,7 +537,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   passes when entries one bar late still make money and keep half the run's figure (a
   late run that took more entries than the run is not judged). Liquidity: the fills
   priced by six other models; passes when every model makes money and no drawdown is
-  deeper than 1.5 times the run's. 13 of the 17 checks are now built.
+  deeper than 1.5 times the run's.
 - `bt.backtest(fill=...)` takes six more fill models for these checks and for your own
   tests: "next_close", "next_mid" (the high and low's midpoint), "next_ohlc4" (the average
   of open, high, low and close) of the next base bar, and the same averaged with the bar
@@ -537,6 +552,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   random are not judged for `bt.from_arrays` strategies, whose decisions are fixed in
   advance; the plan counts and times only the reruns that will run; the random entries
   of an all-intraday run stay within one session each.
+- Robustness and overfitting checks, last part: the four checks that can see a strategy
+  picked as the best of many settings, so all seventeen are built. Give `bt.robustness`
+  (or `result.robustness`) parameter ranges as keywords (`fast=range(10, 31, 5)`) and the
+  chosen settings in `params=`. Out of sample: the first 70 percent of sessions searched,
+  the best combination rerun on the last 30; passes when it makes money out of sample and
+  keeps half its in-sample figure (totals compared per year). Walk-forward: five rolling
+  folds (or anchored), each searched on its in-sample part and traded on the next; passes
+  when the stitched out-of-sample run makes money, its efficiency (out-of-sample figure
+  over the folds' in-sample figures) is at least 0.5 and 60 percent of folds make money.
+  Parameter neighbourhood: every combination one grid step from the chosen one (or a 10
+  percent cube around it); passes when the 25th percentile of the neighbours makes money
+  and their median keeps half the chosen figure; with a heatmap, a surface view, a
+  histogram and a blend of the neighbours. Noise-robust optimization: every combination
+  scored on the median of 50 noisy copies of the bars; the robust choice is judged by the
+  neighbourhood rule.
+- `bt.walk_forward(strategy, client=None, *, folds=5, anchored=False, in_sample=0.7,
+  objective="net_profit", workers=None, progress=None, **settings_and_ranges)` is public
+  (it raised NotImplementedError before) and returns a `WalkForwardResult`: `folds` (each
+  fold's windows, chosen parameters, in-sample and out-of-sample figures and efficiency),
+  `equity` (the stitched out-of-sample curve), `performance`, `efficiency`,
+  `profitable_share`, `net_profit` and `drift` (how far each parameter moved between
+  folds).
+- `bt.optimize` results gain the overfitting measures of a search: `neighbourhood` (the
+  best combination's neighbours, with a warning in `warnings` when the best is a lone
+  spike), `deflated_sharpe` (the best Sharpe ratio corrected for the number of
+  combinations tried), `overfitting_probability` (the probability of backtest overfitting,
+  by combinatorially symmetric cross-validation over 16 blocks of sessions),
+  `overfitting` (both figures with their inputs) and `tearsheet(path, x=, y=)`, a heatmap
+  page. No existing column or figure changes.
+- Tearsheet: the trade list's entry and exit times wrap between the date and the time, so
+  every column fits a narrower window; the MAE and MFE histograms have a count axis.
+  `bt.backtest`'s delays: a reversal counts as an exit and takes `delay_exits`.
 
 ### Changed
 

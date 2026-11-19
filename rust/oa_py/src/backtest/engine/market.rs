@@ -12,8 +12,13 @@
 //! valid_to, model, amount, min_ticks, source, status, notes) and `margin_defaults()`
 //! (row_id, kind, product, valid_from, valid_to, model, percent, source, status, notes),
 //! with dates as IST days since 1970-01-01 or None.
+//!
+//! `Engine.market_fill_price(instrument, side, bar_open, open)` prices a MARKET order by
+//! the run's own rule at the open of a bar the caller names (`market_fill_price` below):
+//! what a live session's day summary sets the broker's MARKET fills against.
 
-use oa_bt::engine::{CostConfig, KernelError};
+use oa_bt::engine::{CostConfig, Engine, KernelError};
+use oa_bt::exec::InstrumentId;
 use oa_bt::market::facts::{InstrumentMarket, MarketFacts};
 use oa_bt::market::margin::{
     margin_defaults as margin_rows, FuturesMargin, MarginBasis, MarginError, MarginModel,
@@ -226,6 +231,27 @@ fn margin_check(exchange: &str, kind: &str, product: &str, day: PyDay) -> PyResu
         .initial_margin(&request)
         .map_err(|error| engine_error(KernelError::Margin(error)))?;
     Ok(quote.row.map(|row| row.meta.id.clone()))
+}
+
+/// `Engine.market_fill_price`: the price a backtest of the engine's run fills a MARKET
+/// order of `side` ("BUY" or "SELL") on an instrument at, at the open of its base bar that
+/// opens at `bar_open` (UTC nanoseconds) at `open` rupees, by the run's slippage rule
+/// (`oa_bt::engine::market_fill`); nothing is recorded.
+///
+/// Errors: `NativeEngineInputError` for an unknown side, an instrument the run does not
+/// trade, an instant that opens no slice of the run's grid, an open that is not a price
+/// above 0, and a slippage the engine cannot price (as at a fill).
+pub(super) fn market_fill_price(
+    engine: &Engine,
+    instrument: u32,
+    side: &str,
+    bar_open: i64,
+    open: f64,
+) -> PyResult<f64> {
+    let side = Side::from_code(side).ok_or_else(|| unknown("side", side, "BUY or SELL"))?;
+    engine
+        .market_fill_price(InstrumentId(instrument), side, bar_open, open)
+        .map_err(engine_error)
 }
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

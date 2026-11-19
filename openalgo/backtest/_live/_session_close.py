@@ -63,6 +63,7 @@ from ._reconcile_findings import Reconciliation
 from ._session_loop import Session
 from ._session_records import FillRecord, LockRecord, OrderRecord, Restored, order_records
 from ._session_saved import save, save_session
+from ._session_slippage import Slippage, strategy_slippage
 from ._session_trader import Skipped, Trader
 from ._stops_cover import Unprotected
 from ._stops_held import Estimate
@@ -182,9 +183,10 @@ def close_session(
         parts.worker.close()
         # Read while each kernel session runs: a finished one counts its timers no more.
         timers = {t.name: tuple(t.part.context.timers.warnings()) for t in session.traders}
+        slipped = {t.name: strategy_slippage(session, t) for t in session.traders}
         outputs = {trader.name: _stop_engine(trader) for trader in session.traders}
         orders = order_records(session, {name: output for name, (output, _) in outputs.items()})
-        summary = _summary(session, outputs, unprotected_s, named, not open_positions)
+        summary = _summary(session, (outputs, slipped), unprotected_s, named, not open_positions)
         session.alert(AlertKind.DAILY_SUMMARY, summary_text(summary))
         if not session.threads:
             # Under the test seam no sender thread posts: the queue goes now, as it would.
@@ -278,20 +280,22 @@ def _alert_not_confirmed(session: Session) -> None:
 
 def _summary(
     session: Session,
-    outputs: dict[str, Any],
+    stopped: tuple[dict[str, Any], dict[str, Slippage]],
     unprotected_s: float,
     legs: NamedLegs,
     flat: bool,
 ) -> SessionSummary:
     """The day's figures across its restarts (`_session_figures`): the trades the kernel
     sessions closed, their gross P&L and modelled charges (the broker's trade book carries
-    none), the session's counts, and the legs `_named_legs` gives, each differing one a
-    mismatch too unless the day counted it already; the strategies earlier starts ran
-    and this one does not, the day not `flat` while one held a position at its last save.
-    No slippage: the backtest's fill price of each order is not modelled here."""
+    none) from `stopped`'s outputs, the slippage of their MARKET fills against the
+    backtest's (`stopped`'s slippages, `_session_slippage`), the session's counts, and the
+    legs `_named_legs` gives, each differing one a mismatch too unless the day counted it
+    already; the strategies earlier starts ran and this one does not, the day not `flat`
+    while one held a position at its last save."""
     parts = session.parts
     figures = session.figures
-    traded, counted = figures.day(session, outputs, unprotected_s)
+    outputs, slipped = stopped
+    traded, counted = figures.day(session, outputs, unprotected_s, slippages=slipped)
     return SessionSummary(
         day=parts.spec.day,
         mode=parts.mode,
@@ -300,7 +304,8 @@ def _summary(
         closed_trades=traded.closed_trades,
         gross_pnl=traded.gross_pnl,
         charges=traded.charges,
-        slippage=None,
+        slippage=traded.summary_slippage,
+        slippage_not_compared=traded.slippage_not_compared,
         rejected_orders=counted.rejected_orders,
         unprotected_seconds=counted.unprotected_seconds,
         reconcile_mismatches=counted.reconcile_mismatches + legs.new_mismatches,

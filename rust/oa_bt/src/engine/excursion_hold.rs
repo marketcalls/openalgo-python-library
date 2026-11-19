@@ -30,15 +30,21 @@
 //! of them, its high when above every one, its low and high when it took none. A bar the
 //! ticks carried counts unless the trade is held back already.
 //!
-//! Those prices may have traded at any moment of the minute, so the bar of the slice in
-//! which the venue confirmed a modification is judged by the terms the order worked on
-//! before it too (`Hold::replaced_terms`), and a price that reached either holds the
-//! trade back: a strategy's limit or stop moved further away may have filled in part on
-//! its old terms before the confirmation, and the venue may report that fill after the
-//! bar. The replaced terms judge the bar of that slice only and are dropped with it (or
-//! dropped unused at the next bar, when the instrument has no bar in that slice): every
-//! later price traded after the confirmation. A tightening move (a trail, a breakeven)
-//! changes nothing here, since a price that reached its old terms reaches its new ones too.
+//! A strategy's limit or stop moved further away may have filled in part on its old terms
+//! before the venue confirmed the move, and the venue may report that fill late. So the
+//! ticks and the bar of the slice in which the confirmation is recorded are judged by the
+//! terms the order worked on before it too (`Hold::replaced_terms`), and a price that
+//! reached either holds the trade back: a bar's prices may have traded at any moment of
+//! its minute, and a tick after the confirmation that lies between the old terms and the
+//! new may come after a fill on the old terms the feed did not carry, while the position
+//! that tick met is not known. The slice after it is judged the same way, its ticks and
+//! its bar: a confirmation is recorded in the slice in progress, which in a live session
+//! lags real time (a slice's bar is handed over only after its close and the live layer's
+//! close grace), so the venue may have applied it in the first moments of the next
+//! minute. The replaced terms are dropped once the bar of that next slice is judged (or
+//! unused at a later bar, when the instrument has no bar in it). A tightening move (a
+//! trail, a breakeven) changes nothing here, since a price that reached its old terms
+//! reaches its new ones too; a loosening move may under-claim, never over-claim.
 //!
 //! # Why a hold lasts until the orders end
 //!
@@ -79,8 +85,8 @@ pub(super) struct SliceTicks {
 }
 
 /// The terms a working order had until the venue confirmed a modification of it in slice
-/// `slice`: they worked during part of that slice, so its bar is judged by them too
-/// (module docs).
+/// `slice`: they worked during part of that slice, and perhaps of the next, so the ticks
+/// and the bars of both are judged by them too (module docs).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct ReplacedTerms {
     pub(super) order: OrderId,
@@ -93,7 +99,8 @@ pub(super) struct ReplacedTerms {
 /// ended; those a price has reached only by the terms of their modification the venue
 /// has not answered; and the ticks it took in the last slice it took one in. An order is
 /// in one list at most. Besides, the terms the venue's confirmations replaced on the
-/// orders of its position, until the bar of the slice they were confirmed in is judged.
+/// orders of its position, until the bar of the slice after the one they were confirmed in
+/// is judged.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct Hold {
     pub(super) unconfirmed_closes: Vec<OrderId>,
@@ -139,26 +146,24 @@ impl Hold {
         }
     }
 
-    /// Whether the trade on `key`, `long` or short, is held back (module docs) once
-    /// `prices` are judged against the working orders of the book and the terms of their
-    /// modifications not answered (`orders`): the orders it waits on that have ended are
-    /// dropped; a working order on its closing side that one of `prices` reaches by its
-    /// own terms is added to the unconfirmed closes, one reached only by the terms of its
-    /// modification to the pending closes.
-    pub(super) fn held_back(
+    /// Whether the trade is held back (`judge`) once `price`, a tick of slice `slice`, is
+    /// judged, against the terms modifications confirmed in that slice or the one before
+    /// it replaced as well (`replaced_for`).
+    pub(super) fn tick_held_back(
         &mut self,
         orders: Orders<'_>,
         side: (PositionKey, bool),
-        prices: &[f64],
+        (slice, price): (u32, f64),
     ) -> bool {
-        self.judge(orders, side, prices, &[])
+        let replaced = self.replaced_for(slice);
+        self.judge(orders, side, &[price], &replaced)
     }
 
-    /// Whether the trade is held back (`held_back`) once the prices of `bar`, the bar of
-    /// slice `slice`, that its ticks of the slice did not carry (`beyond_ticks`) are judged,
-    /// against the terms modifications confirmed in the slice replaced as well: an order
-    /// one of them reaches by those is added to the unconfirmed closes. The replaced terms
-    /// of the slice and of those before it are dropped (module docs).
+    /// Whether the trade is held back (`judge`) once the prices of `bar`, the bar of slice
+    /// `slice`, that its ticks of the slice did not carry (`beyond_ticks`) are judged,
+    /// against the terms modifications confirmed in that slice or the one before it
+    /// replaced as well (`replaced_for`). The replaced terms no later price is judged by,
+    /// those of the slices before `slice`, are dropped (module docs).
     pub(super) fn bar_held_back(
         &mut self,
         orders: Orders<'_>,
@@ -166,18 +171,29 @@ impl Hold {
         (slice, bar): (u32, &BarPrices),
     ) -> bool {
         let unseen = self.beyond_ticks(slice, bar);
-        let replaced: Vec<ReplacedTerms> = self
-            .replaced_terms
-            .iter()
-            .filter(|old| old.slice == slice)
-            .copied()
-            .collect();
-        self.replaced_terms.retain(|old| old.slice > slice);
+        let replaced = self.replaced_for(slice);
+        self.replaced_terms.retain(|old| old.slice >= slice);
         self.judge(orders, side, &unseen, &replaced)
     }
 
-    /// `held_back`, judging `prices` also against `replaced`, terms the orders worked on
-    /// while those prices may have traded.
+    /// The replaced terms a price of slice `slice` is judged by: those confirmed in it, and
+    /// those confirmed in the slice before it, which the venue may have applied after that
+    /// slice's close (module docs).
+    fn replaced_for(&self, slice: u32) -> Vec<ReplacedTerms> {
+        self.replaced_terms
+            .iter()
+            .filter(|old| old.slice == slice || old.slice.checked_add(1) == Some(slice))
+            .copied()
+            .collect()
+    }
+
+    /// Whether the trade on `key`, `long` or short, is held back (module docs) once
+    /// `prices` are judged against the working orders of the book and the terms of their
+    /// modifications not answered (`orders`), and against `replaced`, terms the orders
+    /// worked on while those prices may have traded: the orders it waits on that have ended
+    /// are dropped; a working order on its closing side that one of `prices` reaches by its
+    /// own terms or by replaced ones is added to the unconfirmed closes, one reached only
+    /// by the terms of its modification to the pending closes.
     fn judge(
         &mut self,
         (book, modifying): Orders<'_>,
@@ -276,7 +292,7 @@ fn could_have_closed(order: &Order, terms: OrderType, long: bool, price_rupees: 
 impl Engine {
     /// A tick of `instrument` at `price_rupees`, taken in `slice`: every open trade of the
     /// instrument takes it, and sees it (`Excursion::see_price`) unless it is held back
-    /// (`Hold::held_back`).
+    /// (`Hold::tick_held_back`).
     pub(super) fn see_tick(&mut self, slice: &SliceInfo, instrument: InstrumentId, price: f64) {
         let index = slice_number(slice);
         for trade in &mut self.record.trades.open {
@@ -290,7 +306,7 @@ impl Engine {
             hold.take_tick(index, price);
             let side = (trade.key, position.quantity_units > 0.0);
             let orders = (&self.book, self.venue.modifying.as_slice());
-            if hold.held_back(orders, side, &[price]) {
+            if hold.tick_held_back(orders, side, (index, price)) {
                 continue;
             }
             let held = (Holding::of(position), position.multiplier);
@@ -300,8 +316,9 @@ impl Engine {
 
     /// The venue confirmed the modification of `order` in `slice`, before the book gives
     /// the order its new terms: every open trade of the order's position keeps the terms
-    /// it works on until now for the bar of `slice` (`ReplacedTerms`), and one held back by
-    /// the new terms alone stays held back (`Hold::answered`).
+    /// it works on until now for the ticks and bars of `slice` and of the slice after it
+    /// (`ReplacedTerms`), and one held back by the new terms alone stays held back
+    /// (`Hold::answered`).
     pub(super) fn hold_on_modify_confirmed(&mut self, order: OrderId, slice: &SliceInfo) {
         let Some(working) = self.book.get(order) else {
             return;
@@ -557,7 +574,7 @@ mod tests {
             book.insert(order).expect("o1 is the first order");
             let mut hold = Hold::default();
             assert_eq!(
-                hold.held_back((&book, &[]), (key, long), &prices),
+                hold.judge((&book, &[]), (key, long), &prices, &[]),
                 held,
                 "{what}"
             );
@@ -582,9 +599,9 @@ mod tests {
         let mut book = OrderBook::default();
         book.insert(order).expect("o1 is the first order");
         let mut hold = Hold::default();
-        assert!(hold.held_back((&book, &[]), (key, true), &[496.0]));
-        assert!(hold.held_back((&book, &[]), (key, true), &[505.0]));
-        assert!(hold.held_back((&book, &[]), (key, true), &[]));
+        assert!(hold.judge((&book, &[]), (key, true), &[496.0], &[]));
+        assert!(hold.judge((&book, &[]), (key, true), &[505.0], &[]));
+        assert!(hold.judge((&book, &[]), (key, true), &[], &[]));
         assert_eq!(hold.unconfirmed_closes, vec![OrderId(1)]);
     }
 
@@ -624,14 +641,14 @@ mod tests {
             let mut book = OrderBook::default();
             book.insert(order).expect("o1 is the first order");
             let mut hold = Hold::default();
-            let before = hold.held_back((&book, &in_flight), (key, true), &[price]);
+            let before = hold.judge((&book, &in_flight), (key, true), &[price], &[]);
             assert!(before, "{price}");
             if confirmed {
                 book.replace(OrderId(1), moved, 0, 0, 100.0)
                     .expect("o1 takes the new terms");
             }
             hold.answered(OrderId(1), confirmed);
-            let after = hold.held_back((&book, &[]), (key, true), &[505.0]);
+            let after = hold.judge((&book, &[]), (key, true), &[505.0], &[]);
             assert_eq!(after, held_after, "{price}, confirmed: {confirmed}");
         }
     }
@@ -669,12 +686,13 @@ mod tests {
     }
 
     #[test]
-    fn a_bar_is_judged_by_the_terms_a_modification_confirmed_in_its_slice_replaced() {
+    fn a_bar_is_judged_by_the_terms_replaced_in_its_slice_or_the_one_before() {
         // The bar's prices its ticks did not carry are 501.50 and 504.00. o1 works as a
         // limit at 505.00, which neither reaches. Its old limit at 503.00, replaced in slice
-        // 7, is reached by 504.00; replaced in slice 6, or on another order (o2), it does
-        // not count. A stop trailed to 501.00 from 497.10 in slice 7 is reached by neither:
-        // the trail tightened it.
+        // 7, or in slice 6 (the venue may have applied that confirmation in the first moments
+        // of minute 7), is reached by 504.00; replaced in slice 5, or on another order (o2),
+        // it does not count. A stop trailed to 501.00 from 497.10 in slice 7 is reached by
+        // neither: the trail tightened it.
         let limit_at = |limit_rupees| OrderType::Limit { limit_rupees };
         let stop_at = |trigger_rupees| OrderType::StopMarket { trigger_rupees };
         let (moved, old) = (limit_at(505.0), limit_at(503.0));
@@ -683,7 +701,8 @@ mod tests {
         let table = [
             ("none replaced", moved, vec![], false),
             ("in slice 7", moved, vec![(1, old, 7)], true),
-            ("in slice 6", moved, vec![(1, old, 6)], false),
+            ("in slice 6", moved, vec![(1, old, 6)], true),
+            ("in slice 5", moved, vec![(1, old, 5)], false),
             ("on o2", moved, vec![(2, old, 7)], false),
             ("a trail", trailed, vec![(1, untrailed, 7)], false),
         ];
@@ -693,17 +712,49 @@ mod tests {
     }
 
     #[test]
-    fn the_terms_replaced_are_dropped_once_the_bar_of_their_slice_is_judged() {
-        // Terms replaced in slices 6 and 7 are dropped with the bar of slice 7; those of
-        // slice 8 wait for its bar.
+    fn the_terms_replaced_are_dropped_once_the_bar_of_the_slice_after_theirs_is_judged() {
+        // With the bar of slice 7 judged, the terms replaced in slices 5 and 6 are dropped:
+        // no later price is judged by them. Those of slice 7 wait for the bar of slice 8,
+        // those of slice 8 for the bar of slice 9.
         let limit_at = |limit_rupees| OrderType::Limit { limit_rupees };
         let replaced = [
+            (1, limit_at(502.5), 5),
             (1, limit_at(503.0), 6),
             (1, limit_at(504.0), 7),
             (1, limit_at(506.0), 8),
         ];
         let (_, hold) = judged_on_bar_7(limit_at(505.0), &replaced);
         let kept: Vec<u32> = hold.replaced_terms.iter().map(|old| old.slice).collect();
-        assert_eq!(kept, [8]);
+        assert_eq!(kept, [7, 8]);
+    }
+
+    #[test]
+    fn a_tick_is_judged_by_the_terms_replaced_in_its_slice_or_the_one_before() {
+        // o1 works as a sell limit at 505.00; its old limit at 503.00 was replaced in the
+        // slice given. A tick at 504.00 in slice 7 reaches the old limit only: it holds the
+        // trade back when the old terms were replaced in slice 7 or 6, not 5. A tick drops
+        // no replaced terms: the bar of its slice is judged by them after it.
+        let limit_at = |limit_rupees| OrderType::Limit { limit_rupees };
+        for (replaced_in, held) in [(7, true), (6, true), (5, false)] {
+            let order = working(Side::Sell, limit_at(505.0), OrderStatus::Accepted);
+            let key = PositionKey {
+                instrument: order.request.instrument,
+                product: order.request.product,
+            };
+            let mut book = OrderBook::default();
+            book.insert(order).expect("o1 is the first order");
+            let old = ReplacedTerms {
+                order: OrderId(1),
+                terms: limit_at(503.0),
+                slice: replaced_in,
+            };
+            let mut hold = Hold {
+                replaced_terms: vec![old],
+                ..Hold::default()
+            };
+            let judged = hold.tick_held_back((&book, &[]), (key, true), (7, 504.0));
+            assert_eq!(judged, held, "replaced in slice {replaced_in}");
+            assert_eq!(hold.replaced_terms, [old]);
+        }
     }
 }
