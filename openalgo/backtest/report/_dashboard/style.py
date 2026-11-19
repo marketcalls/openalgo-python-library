@@ -229,6 +229,7 @@ _TABLES = """
 background:color-mix(in oklab,var(--pnl-pos) 10%,transparent)}
 .trades{font-size:.8125rem}
 .trades td{white-space:nowrap}
+.trades td.when{white-space:normal}
 .trades th,.trades td{padding-left:7px;padding-right:7px}
 .kv td:first-child{color:var(--text-muted);white-space:nowrap;width:1%}
 .kv td{vertical-align:top;overflow-wrap:anywhere}
@@ -285,6 +286,17 @@ svg.bars .group-0{stroke:var(--benchmark)}
 svg.bars .group-1{stroke:var(--pnl-neg);stroke-dasharray:6 3}
 svg.bars .group-2{stroke:var(--pnl-pos);stroke-dasharray:1.5 2.5}
 svg.bars .group-3{stroke:var(--text-muted);stroke-dasharray:8 3 2 3}
+svg.bars .heat-cell{stroke:var(--panel);stroke-width:1.5}
+svg.bars .cell-text{font-size:10px;font-family:var(--font-mono);fill:var(--text)}
+svg.bars .cell-marked{stroke:var(--text);stroke-width:3}
+svg.bars .surf-base{fill:none;stroke:var(--border-strong);stroke-dasharray:2 3}
+svg.bars .surf-top{stroke:var(--panel);stroke-width:.6}
+svg.bars .surf-left{opacity:.8;stroke:var(--panel);stroke-width:.4}
+svg.bars .surf-right{opacity:.62;stroke:var(--panel);stroke-width:.4}
+svg.bars .fold-in{fill:var(--benchmark);fill-opacity:.12;stroke:var(--benchmark);stroke-width:1.2}
+svg.bars .fold-out{fill:var(--benchmark);stroke:var(--benchmark);stroke-width:1.2}
+svg.spark{display:inline-block;vertical-align:middle}
+svg.bars .spark-line{fill:none;stroke:var(--text);stroke-width:1.4;stroke-linejoin:round}
 """
 
 _PRINT = """

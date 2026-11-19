@@ -137,9 +137,11 @@ def backtest(
         session on an intraday base, the next session's on a daily one). A model fills
         the strategy's orders inside the bar, after the bar's stops and targets, with the
         run's slippage; the engine's own exits and the fills at a level keep their prices.
-    delay_entries, delay_exits: strategy bars a decided order that opens or adds, and one
-        that reduces or closes, is held before it can fill (0, the default, fills at the
-        next base-bar open): with 1, an order decided at a bar's close fills at the open
+    delay_entries, delay_exits: strategy bars a decided order that opens or adds, and an
+        order that reduces, closes or reverses the position it meets, is held before it
+        can fill (0, the default, fills at the next base-bar open); a reversal is an exit,
+        so under `delay_entries` alone a strategy always in the market holds only its
+        entries from flat. With 1, an order decided at a bar's close fills at the open
         after the next bar's close, and one decided inside a bar (a timer) waits for that
         bar's close first. A cancellation or modification of an order is held as long,
         the order working on its old terms until it arrives. An intraday order whose
@@ -345,10 +347,12 @@ def record(
 
 def optimize(strategy: type[Strategy], client: Any = None, **settings: Any) -> Any:
     """Sweep the strategy's parameters over a grid and return an `OptimizeResult`
-    (`.table`, `.best`, `.select(**params)`, `.heatmap(x, y)`, `.path`). Takes the run
-    arguments of `bt.backtest`, ranges named after parameters (`fast=range(5, 30, 5)`;
-    `bt.param` ranges otherwise), `objective=`, `maximize=`, `workers=` and `progress=`.
-    See `_optimize.optimize` for the rules and errors."""
+    (`.table`, `.best`, `.select(**params)`, `.heatmap(x, y)`, `.path`; and from the grid
+    it ran, `.neighbourhood` with a spike warning in `.warnings`, `.deflated_sharpe`,
+    `.overfitting_probability`, `.overfitting` and `.tearsheet(path)`, its heatmap page).
+    Takes the run arguments of `bt.backtest`, ranges named after parameters
+    (`fast=range(5, 30, 5)`; `bt.param` ranges otherwise), `objective=`, `maximize=`,
+    `workers=` and `progress=`. See `_optimize.optimize` for the rules and errors."""
     from ._optimize import optimize as sweep
 
     return sweep(strategy, client, **settings)
@@ -360,17 +364,26 @@ def robustness(strategy: type[Strategy], client: Any = None, **settings: Any) ->
     `.tearsheet(path)`). Passing a check proves nothing on its own; failing one says
     the edge did not hold up under that check (it may be fitted to the past or too small
     to tell apart from the noise of the data tested), never that it proves overfitting;
-    a check with too little to judge is "not judged" and never passes. The checks this
-    version runs judge the settings given, so none of them can see a strategy picked as
-    the best of many settings tried.
+    a check with too little to judge is "not judged" and never passes. The trade-list
+    checks and the checks that rerun the chosen settings judge those settings, not the
+    search that chose them; the parameter neighbourhood and the noise-robust
+    optimization (and the deflated Sharpe ratio and the probability of backtest
+    overfitting of `bt.optimize`) can see a strategy picked as the best of many tried.
 
     Takes the run arguments of `bt.backtest` and:
 
-    checks: "all" (the default: every check, those this version does not run listed as
-        not built), "quick" (the trade-list checks, no rerun) or a list of check names.
-        This version runs the trade-list checks (random_out_of_sample, reshuffle,
-        resample, variance) and the bar checks, which rerun the backtest on generated
-        bars, other symbols' bars or the run's own bars with one setting changed:
+    checks: "all" (the default: every check), "quick" (the trade-list checks, no rerun)
+        or a list of check names: the trade-list checks (random_out_of_sample, reshuffle,
+        resample, variance); the searching checks, which rerun the backtest over the
+        parameter ranges given (or declared with `bt.param`): out_of_sample (the last 30
+        percent of the sessions run with the parameters searched best on the first 70,
+        or as given without ranges), walk_forward (as `bt.walk_forward` runs it),
+        parameters (every combination of the ranges, or each number parameter at minus,
+        zero and plus 10 percent without, judged on the chosen setting's neighbours) and
+        noise_optimization (every combination on 50 noisy copies, scored by its median;
+        informational, its figure saying whether the best score sits on a plateau);
+        and the bar checks, which rerun the backtest on generated bars, other symbols'
+        bars or the run's own bars with one setting changed:
         vs_random (random entries with the run's trades, and the strategy on permuted
         bars), permutation (the same moves in another order), noise (every price moved
         within a fifth of its bar's average true range), shifted (strategy bars ending
@@ -392,13 +405,20 @@ def robustness(strategy: type[Strategy], client: Any = None, **settings: Any) ->
         (0, or 1 for a profit factor), and an objective without one (a win rate, a
         function, whose value for a run that makes nothing is not known) leaves them not
         judged.
+    ranges: keywords named after strategy parameters (`fast=range(5, 30, 5)`; the
+        `bt.param` ranges the strategy declares otherwise) are what the searching checks
+        search; `params=` holds the run's own parameters, its chosen settings, which the
+        parameter neighbourhood judges among their neighbours. A parameter named in
+        `params=` keeps its declared range searched (so the best of `bt.optimize`, given
+        as `params=`, is checked inside the grid it was picked from); a one-value range
+        keyword (`fast=[10]`) holds it at one value.
     others: the symbols other_markets runs the strategy on, unchanged (["ICICIBANK",
         "HDFCBANK"] on the strategy's exchange, or (symbol, exchange) pairs), read from
         the run's source: a `data=` dict by symbol holding them, or OpenAlgo through
         `client`. Without it other_markets is not judged.
     runs: alternative runs of each check (1000); seed: the seed of every check's
         stream (0), the same report for the same seed on every platform.
-    workers, progress: as in `bt.optimize`: the bar checks' reruns run in `workers`
+    workers, progress: as in `bt.optimize`: the checks' reruns run in `workers`
         processes (the CPU count by default; `workers=1` keeps them in this process),
         and the plan, with the reruns it needs and an estimate of their time, is reported
         through `progress` (or the `openalgo.backtest.robustness` logger) before the
@@ -411,23 +431,48 @@ def robustness(strategy: type[Strategy], client: Any = None, **settings: Any) ->
     backtests of the same kernel, the warm-up included; nothing changes the run's own
     figures.
 
-    Raises ConfigError for unusable arguments or settings (naming what they take), the
-    backtest's errors, and NotImplementedError for a check or parameter ranges this
-    version does not run (saying what it needs), for the bar checks of a futures
-    series, and for other_markets of a strategy that trades no one named symbol."""
+    Raises ConfigError for unusable arguments or settings (naming what they take), and
+    for parameter ranges when checks= lists no check that searches them, the backtest's
+    errors, and NotImplementedError for the checks that rerun a futures series and for
+    other_markets of a strategy that trades no one named symbol."""
     from ._robust import robustness as run_checks
 
     return run_checks(strategy, client, **settings)
 
 
 def walk_forward(strategy: type[Strategy], client: Any = None, **settings: Any) -> Any:
-    """Walk-forward optimisation. Not supported in this version: raises
-    NotImplementedError."""
-    raise not_supported(
-        "bt.walk_forward",
-        "run bt.optimize on each in-sample window and bt.backtest with the chosen "
-        "parameters on the window after it",
-    )
+    """Walk the strategy forward through time and return a `WalkForwardResult`
+    (`.folds`, `.equity`, `.performance`, `.efficiency`, `.profitable_share`, `.drift`,
+    `.net_profit`, `.plan`).
+
+    The run's sessions are cut into `folds` (5) folds, each `in_sample` (0.7) of its
+    sessions in sample: rolling folds (the default) keep an in-sample window of fixed
+    length before each out-of-sample one, `anchored=True` keeps every session before it.
+    Each fold searches the parameter ranges on its in-sample window, by `objective`
+    ("net_profit" by default, any `bt.optimize` objective, higher better), trades the
+    best combination (the first of equal ones) on the next out-of-sample window, and the
+    out-of-sample runs, which cover the run after the first fold's sample once, are
+    stitched into one equity curve by their P&L. Each window is an ordinary backtest
+    that opens flat with the run's capital and reads its warm-up from the bars before it.
+
+    Takes the run arguments of `bt.backtest`, the parameter ranges named after strategy
+    parameters (`fast=range(5, 30, 5)`; `bt.param` ranges otherwise, a parameter that
+    `params=` names being fixed as in `bt.optimize`), and `folds`, `anchored`,
+    `in_sample`, `objective`, `workers` and `progress` as `bt.optimize` takes them (the
+    plan, with the reruns and an estimate, is reported before they run, through
+    `progress` or the `openalgo.backtest.walk_forward` logger). The efficiency is the
+    stitched out-of-sample objective per year over the mean in-sample one, both from the
+    objective's break-even (a total such as the net profit is divided by the years each
+    lasted). `bt.robustness(checks=["walk_forward"], ...)` runs the same walk-forward,
+    judges it and draws its folds; there `params=` names the run's chosen settings, so
+    a declared range stays searched.
+
+    Raises ConfigError for unusable arguments, a parameter both fixed by `params=` and
+    given a range, nothing to search, or too few sessions for the folds (each window
+    needs two), and whatever a backtest raises."""
+    from ._robust._walk_forward import walk_forward as walk
+
+    return walk(strategy, client, **settings)
 
 
 def rebalance(*args: Any, **settings: Any) -> Any:

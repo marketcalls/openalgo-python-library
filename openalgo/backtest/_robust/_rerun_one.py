@@ -17,8 +17,12 @@ What a check keeps of a rerun (`RerunRow`): the objective, the net profit in rup
 the maximum drawdown (a fraction, zero or negative), the closed trades, the largest win
 and loss in rupees, the longest win and loss streaks in trades, the cumulative return
 at the fan's sessions (`path`, fractions of the capital: point 0 is the start, point k
-the close of the k-th session of the run), and how large each symbol's position grew
-(`sizes`, `_position_sizes`). A rerun whose bars could not be made or that
+the close of the k-th session of the run), how large each symbol's position grew
+(`sizes`, `_position_sizes`), the years it ran (`years`, its elapsed days over
+`DAYS_PER_YEAR`, which annualises a total such as the net profit) and, for a family that
+asks for it, its `RunDetail`: its equity at each session close, its closed trades and its
+figures, which the out-of-sample and walk-forward checks stitch and tabulate. A rerun
+whose bars could not be made or that
 the data layer refuses (a DataError, `_reruns.run_batch`) keeps NaN figures and the
 reason in `failure`; any other error is the strategy's or the engine's and is raised.
 """
@@ -39,6 +43,34 @@ from .._objective import evaluate
 from .._pipeline import execute, prepare
 from ._position_sizes import PositionSize, position_sizes
 from ._run_bars import strategy_name
+
+#: Days in a year, as the metrics' CAGR counts elapsed time (`metrics`, Conventions).
+DAYS_PER_YEAR = 365.25
+#: The figures a `RunDetail` keeps, metric keys of the run (the in-sample against
+#: out-of-sample table of design 17, section 2.1).
+DETAIL_FIGURES = (
+    "net_profit",
+    "cagr",
+    "sharpe",
+    "profit_factor",
+    "win_rate",
+    "max_drawdown",
+    "max_drawdown_amount",
+)
+
+
+@dataclass(frozen=True, eq=False)
+class RunDetail:
+    """What a rerun keeps beyond its row (module docstring): `session_equity`, its equity
+    in rupees at the last equity point of each IST session date, indexed by that instant;
+    `trades`, its closed trades as the metrics read them (`metrics.analyse`); `opening`,
+    the instant it opened with its capital; `figures`, its `DETAIL_FIGURES` and `trades`
+    (closed trades) and `trades_per_year`."""
+
+    session_equity: pd.Series
+    trades: pd.DataFrame
+    opening: pd.Timestamp
+    figures: Mapping[str, float]
 
 
 @dataclass(frozen=True)
@@ -65,6 +97,8 @@ class RerunRow:
     path: np.ndarray
     sizes: tuple[PositionSize, ...]
     failure: str = ""
+    years: float = math.nan
+    detail: RunDetail | None = None
 
 
 def rerun(
@@ -100,10 +134,30 @@ def path_at(result: Any, dates: pd.DatetimeIndex, steps: np.ndarray) -> np.ndarr
     return np.concatenate(([0.0], at_close))[steps]
 
 
+def run_detail(result: Any) -> RunDetail:
+    """The `RunDetail` of a rerun's `result`."""
+    equity = result.equity["equity_rupees"]
+    days = equity.index.normalize()
+    at_close = equity[~days.duplicated(keep="last")]
+    trades = result.performance.trades
+    metrics = result.metrics
+    years = float(metrics["elapsed_days"]) / DAYS_PER_YEAR
+    figures = {name: float(metrics[name]) for name in DETAIL_FIGURES}
+    figures["trades"] = float(metrics["trades"])
+    figures["trades_per_year"] = figures["trades"] / years if years > 0 else math.nan
+    closed = trades[trades["exit_time"].notna()].reset_index(drop=True)
+    return RunDetail(at_close, closed, pd.Timestamp(metrics["start"]), figures)
+
+
 def measured_row(
-    result: Any, objective: Any, dates: pd.DatetimeIndex, steps: np.ndarray
+    result: Any,
+    objective: Any,
+    dates: pd.DatetimeIndex,
+    steps: np.ndarray,
+    detail: bool = False,
 ) -> RerunRow:
-    """The `RerunRow` of a rerun's `result` under `objective`."""
+    """The `RerunRow` of a rerun's `result` under `objective`, with its `RunDetail`
+    when `detail`."""
     metrics = result.metrics
     return RerunRow(
         objective=evaluate(result, objective)["objective"],
@@ -116,6 +170,8 @@ def measured_row(
         loss_streak=_count(metrics["max_consecutive_losses"]),
         path=path_at(result, dates, steps),
         sizes=position_sizes(result),
+        years=float(metrics["elapsed_days"]) / DAYS_PER_YEAR,
+        detail=run_detail(result) if detail else None,
     )
 
 
@@ -132,4 +188,15 @@ def failed_row(reason: str, points: int) -> RerunRow:
     return RerunRow(nan, nan, nan, 0, nan, nan, 0, 0, np.full(points, nan), (), reason)
 
 
-__all__ = ["Known", "RerunRow", "failed_row", "measured_row", "path_at", "rerun"]
+__all__ = [
+    "DAYS_PER_YEAR",
+    "DETAIL_FIGURES",
+    "Known",
+    "RerunRow",
+    "RunDetail",
+    "failed_row",
+    "measured_row",
+    "path_at",
+    "rerun",
+    "run_detail",
+]

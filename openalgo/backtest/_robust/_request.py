@@ -2,43 +2,42 @@
 and the seed, the worker processes and every check's settings, all checked before any
 work starts.
 
-`checks` is "all" (every check, those this version does not run listed as not built),
-"quick" (the trade-list checks, which need no rerun) or a list of check names. A keyword
-named after a check holds that check's settings as a dict (`variance={"points": 10}`).
-Everything else `bt.robustness` takes is a `bt.backtest` run argument, or a parameter
-range named after a strategy parameter; ranges belong to the checks that search
-parameters, which this version does not run. `others=` names the symbols of the other
-markets check, which must be listed to take them.
+`checks` is "all" (every check), "quick" (the trade-list checks, which need no rerun) or
+a list of check names. A keyword named after a check holds that check's settings as a
+dict (`variance={"points": 10}`). Everything else `bt.robustness` takes is a
+`bt.backtest` run argument, or a parameter range named after a strategy parameter
+(`fast=range(5, 30, 5)`); ranges belong to the checks that search parameters
+(`_registry.SEARCHING`), which must be listed to take them, as `others=`, the symbols of
+the other markets check, needs that check listed.
 """
 
 from __future__ import annotations
 
 import inspect
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
-from .._messages import not_supported
 from .._objective import check_objective
 from ..errors import ConfigError
 from . import _random
 from ._check_other_markets import others_value
-from ._registry import BY_NAME, CHECKS, NEEDS, QUICK, CheckSpec, find, not_built
+from ._grid import checked_ranges
+from ._registry import BY_NAME, CHECKS, QUICK, SEARCHING, CheckSpec, find
 from ._setting import resolve, whole
 
 DEFAULT_OBJECTIVE = "sharpe"
 DEFAULT_RUNS = 1_000
 DEFAULT_SEED = 0
-#: The checks that search parameter ranges (design 17, sections 2.1, 2.3, 2.16, 2.17).
-SEARCHING = ("out_of_sample", "walk_forward", "parameters", "noise_optimization")
 
 
 @dataclass(frozen=True)
 class Request:
-    """A checked request: `listed` the checks the report lists, in report order;
+    """A checked request: `listed` the checks the report runs, in report order;
     `objective`, `runs` and `seed`; `workers` (None for the CPU count); `settings` the
-    resolved settings of each listed check this version runs; `others` the (symbol,
-    exchange) pairs of `others=`, exchange None for the strategy's own."""
+    resolved settings of each listed check; `others` the (symbol, exchange) pairs of
+    `others=`, exchange None for the strategy's own; `ranges` the parameter ranges, each
+    as a tuple of its values."""
 
     listed: tuple[CheckSpec, ...]
     objective: Any
@@ -47,16 +46,12 @@ class Request:
     workers: int | None
     settings: Mapping[str, Mapping[str, Any]]
     others: tuple[tuple[str, str | None], ...] = ()
-
-    @property
-    def to_run(self) -> tuple[CheckSpec, ...]:
-        """The listed checks this version runs."""
-        return tuple(check for check in self.listed if check.built)
+    ranges: Mapping[str, tuple[Any, ...]] = field(default_factory=dict)
 
     @property
     def reruns(self) -> tuple[CheckSpec, ...]:
-        """The listed checks that rerun the backtest (the bar checks)."""
-        return tuple(check for check in self.to_run if not check.trade_list)
+        """The listed checks that rerun the backtest (the bar and searching checks)."""
+        return tuple(check for check in self.listed if not check.trade_list)
 
     def runs_of(self, check: CheckSpec) -> int:
         """The runs of `check`: its `runs` setting, else the report's."""
@@ -66,8 +61,7 @@ class Request:
 
 def select(checks: Any) -> tuple[CheckSpec, ...]:
     """The checks `checks` names, in report order. Raises ConfigError for anything but
-    "all", "quick" or a non-empty list of check names, and NotImplementedError for a
-    named check this version does not run."""
+    "all", "quick" or a non-empty list of check names."""
     if checks == "all":
         return CHECKS
     if checks == "quick":
@@ -77,9 +71,6 @@ def select(checks: Any) -> tuple[CheckSpec, ...]:
     named = [find(name) if isinstance(name, str) else None for name in checks]
     if not named or None in named:
         raise ConfigError(f"checks takes a non-empty list of check names, got {checks!r}")
-    for check in named:
-        if not check.built:
-            raise not_built(check)
     return tuple(check for check in CHECKS if check in named)
 
 
@@ -131,9 +122,9 @@ def build_request(
     ranges: Mapping[str, Any],
 ) -> Request:
     """The checked `Request`. Raises ConfigError for unusable values (naming what each
-    takes), for settings of a check `checks` does not list and for `others=` without the
-    other markets check, and NotImplementedError for a check or parameter ranges this
-    version does not run."""
+    takes), for settings of a check `checks` does not list, for `others=` without the
+    other markets check, and for parameter ranges without a check that searches them or
+    with an empty range."""
     listed = select(checks)
     check_objective(objective)
     pairs = () if others is None else others_value(others)
@@ -141,16 +132,14 @@ def build_request(
         raise ConfigError(
             "others= names symbols for the other_markets check, which checks= does not run"
         )
-    if ranges:
-        raise not_supported(
-            f"parameter ranges ({', '.join(sorted(ranges))}) in a robustness report",
-            f"the checks that search them ({', '.join(SEARCHING)}) are not built in this "
-            f"version: they need {NEEDS['RB4']}. Fix the parameters with params=",
+    if ranges and not any(check.searches for check in listed):
+        raise ConfigError(
+            f"parameter ranges ({', '.join(sorted(ranges))}) are for the checks that search "
+            f"them ({', '.join(SEARCHING)}), which checks= does not run; fix the parameters "
+            "with params= instead"
         )
     for name in check_settings:
         check = BY_NAME[name]
-        if not check.built:
-            raise not_built(check)
         if check not in listed:
             raise ConfigError(f"{name}= sets the {name} check, which checks= does not run")
     return Request(
@@ -162,9 +151,9 @@ def build_request(
         settings={
             check.name: resolve(check.name, check.settings, check_settings.get(check.name))
             for check in listed
-            if check.built
         },
         others=pairs,
+        ranges=checked_ranges(ranges),
     )
 
 
@@ -172,7 +161,6 @@ __all__ = [
     "DEFAULT_OBJECTIVE",
     "DEFAULT_RUNS",
     "DEFAULT_SEED",
-    "SEARCHING",
     "Request",
     "build_request",
     "select",

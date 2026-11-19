@@ -112,7 +112,7 @@ def quick_checks(
         ranges={},
     )
     trades = trade_run(performance)
-    results = tuple(run_check(check, trades, request).result for check in request.to_run)
+    results = tuple(run_check(check, trades, request).result for check in request.listed)
     return QuickChecks(results, trades.closed, runs, seed)
 
 

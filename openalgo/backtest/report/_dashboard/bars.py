@@ -21,6 +21,13 @@ PERCENT_TICKS = 6
 #: Left and right margin of the histogram, pixels: half of a six-character tick label
 #: in the 10-pixel mono axis font, so the end labels show whole.
 HISTOGRAM_SIDE_PX = 22
+#: Left margin of a histogram with a count axis, pixels: room for a three-digit count
+#: and the gap before the bars, beside half of the first percent label.
+COUNT_AXIS_PX = 40
+#: Top margin of a histogram with a count axis, pixels: room for its caption.
+COUNT_CAPTION_PX = 18
+#: Ticks asked of a count axis (whole counts only are labelled).
+COUNT_TICKS = 5
 #: Font of axis text, as an SVG style.
 AXIS_TEXT = "font-size:10px;font-family:var(--font-mono);fill:var(--text-faint)"
 MUTED_TEXT = "font-size:10px;font-family:var(--font-mono);fill:var(--text-muted)"
@@ -47,27 +54,53 @@ def _pct(value: float, decimals: int) -> str:
     return f"{value * 100:.{decimals}f}%"
 
 
+def _count_axis(tallest: int, inner_w: float, inner_h: float, caption: str) -> tuple:
+    """(the y scale of a count axis up to `tallest`, its grid lines, whole-count labels
+    and `caption` above them)."""
+    _, top = scale.widen(0.0, float(max(tallest, 1)), COUNT_TICKS)
+    y = scale.Linear(0, top, inner_h, 0)
+    whole = [t for t in scale.ticks(0.0, top, COUNT_TICKS) if t == int(t)]
+    marks = [
+        f"<line x1='0' x2='{inner_w}' y1='{y(t):.2f}' y2='{y(t):.2f}' class='grid'/>"
+        f"<text x='-8' y='{y(t) + 3:.2f}' text-anchor='end' style='{AXIS_TEXT}'>{int(t)}</text>"
+        for t in whole
+    ]
+    marks.append(
+        f"<text x='-8' y='-8' text-anchor='end' style='{MUTED_TEXT}'>{fmt.text(caption)}</text>"
+    )
+    return y, marks
+
+
 def histogram(
     values: np.ndarray,
     *,
     height: int = 220,
     label: str = "Session returns distribution",
     decimals: int | None = 1,
+    counts: str | None = None,
 ) -> str:
     """Fractions (session returns, or the trades' excursions) in round-edged bins, gains
     green and losses red by the bin's centre, with a dashed line at their mean. `label`
     names the chart for a screen reader; the axis shows percent to `decimals` places, or
-    to as many as its tick step needs when None (`scale.percent_decimals`)."""
+    to as many as its tick step needs when None (`scale.percent_decimals`). `counts`
+    names what a bar counts ("trades") and adds a count axis captioned with it; None
+    draws no count axis."""
     data = values[np.isfinite(values)]
     if not len(data):
         return "<p class='empty'>No data</p>"
-    width, margin = 520, Margin(10, HISTOGRAM_SIDE_PX, 26, HISTOGRAM_SIDE_PX)
+    margin = Margin(10, HISTOGRAM_SIDE_PX, 26, HISTOGRAM_SIDE_PX)
+    if counts is not None:
+        margin = Margin(COUNT_CAPTION_PX, HISTOGRAM_SIDE_PX, 26, COUNT_AXIS_PX)
+    width = 520
     inner_w, inner_h = width - margin.left - margin.right, height - margin.top - margin.bottom
     low, high = scale.widen(float(data.min()), float(data.max()))
     x = scale.Linear(low, high, 0, inner_w)
     counted = scale.bins(data, low, high, HISTOGRAM_BINS)
-    y = scale.Linear(0, max(n for _, _, n in counted) or 1, inner_h, 0)
+    tallest = max(n for _, _, n in counted)
     marks = []
+    y = scale.Linear(0, tallest or 1, inner_h, 0)
+    if counts is not None:
+        y, marks = _count_axis(tallest, inner_w, inner_h, counts)
     for left, right, n in counted:
         centre = (left + right) / 2
         tone = "--pnl-pos" if centre >= 0 else "--pnl-neg"

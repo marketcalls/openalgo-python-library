@@ -1,5 +1,6 @@
 """What a check's section draws, as data: fans, histograms, the sessions chart, candles,
-lines over dates, groups of paths, tables and tiles. A check returns rows of blocks
+lines over dates, groups of paths, a parameter grid (a heatmap or a surface), the fold
+diagram, tables (with a small equity line a row) and tiles. A check returns rows of blocks
 (`Outcome.blocks`), one or two blocks a row, and the HTML report renders them (`_charts`,
 `_charts_bars`, `_html`). Text fields are plain text; the renderer escapes them.
 """
@@ -58,7 +59,8 @@ class HistogramBlock:
 class SessionsBlock:
     """A value at each session close, `values` (fractions shown as percentages when
     `percent`, else rupees, such as a close), with the sessions of `marked` shaded;
-    `line` says in words what the line is, for the chart's key."""
+    `line` says in words what the line is, and `shaded` what the shaded sessions are,
+    for the chart's key."""
 
     title: str
     subtitle: str
@@ -67,6 +69,7 @@ class SessionsBlock:
     marked: np.ndarray
     percent: bool
     line: str
+    shaded: str = "this assignment holds out of sample"
 
 
 @dataclass(frozen=True, eq=False)
@@ -143,6 +146,66 @@ class TableBlock:
     rows: tuple[tuple[str, ...], ...]
 
 
+@dataclass(frozen=True, eq=False)
+class GridBlock:
+    """An objective over two parameters: `x` and `y` name them, `columns` and `rows` are
+    their values, `values` (rows, columns) the objective of each cell (NaN where none
+    ran), measured from `level`, its break-even; `marked` the (column, row) of each cell
+    marked, with its label ("chosen", "best"). `surface` draws it as an isometric
+    surface of columns instead of a heatmap (`_charts_grid`)."""
+
+    title: str
+    subtitle: str
+    x: str
+    y: str
+    columns: tuple[str, ...]
+    rows: tuple[str, ...]
+    values: np.ndarray
+    level: float
+    marked: tuple[tuple[int, int, str], ...]
+    surface: bool = False
+
+
+@dataclass(frozen=True)
+class FoldSpan:
+    """One fold of a walk-forward on the fold diagram: its label and the positions, in
+    the run's sessions, of its in-sample and out-of-sample windows (both ends
+    included)."""
+
+    label: str
+    in_first: int
+    in_last: int
+    out_first: int
+    out_last: int
+
+
+@dataclass(frozen=True, eq=False)
+class FoldsBlock:
+    """The fold diagram: a row per fold, its in-sample and out-of-sample windows on the
+    time axis of the run's session `dates`."""
+
+    title: str
+    subtitle: str
+    dates: pd.DatetimeIndex
+    folds: tuple[FoldSpan, ...]
+
+
+@dataclass(frozen=True, eq=False)
+class SparkTableBlock:
+    """A table of text with a small equity line in each row: its column names and rows
+    (the first column a label, the others figures), the column the line goes in
+    (`spark_at`, its name `spark_name`) and each row's line (`sparks`, rupees of P&L,
+    an empty array for none)."""
+
+    title: str
+    subtitle: str
+    columns: tuple[str, ...]
+    rows: tuple[tuple[str, ...], ...]
+    spark_at: int
+    spark_name: str
+    sparks: tuple[np.ndarray, ...]
+
+
 @dataclass(frozen=True)
 class Tile:
     """One figure as a tile: label, value and a subline, as text; `tone` "pos", "neg"
@@ -173,6 +236,9 @@ __all__ = [
     "THIN",
     "CandlesBlock",
     "FanBlock",
+    "FoldSpan",
+    "FoldsBlock",
+    "GridBlock",
     "HistogramBlock",
     "Line",
     "LinesBlock",
@@ -180,6 +246,7 @@ __all__ = [
     "PathGroup",
     "PathsBlock",
     "SessionsBlock",
+    "SparkTableBlock",
     "TableBlock",
     "Tile",
     "TilesBlock",

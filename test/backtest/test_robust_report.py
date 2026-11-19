@@ -36,7 +36,6 @@ import openalgo.backtest as bt
 from openalgo.backtest._robust._verdict import (
     FAILED,
     INFORMATIONAL,
-    NOT_BUILT,
     NOT_JUDGED,
     PASSED,
     WORDING_RULE,
@@ -45,7 +44,9 @@ from openalgo.backtest.errors import BacktestError, ConfigError
 from openalgo.backtest.report._format import text as fmt_text
 
 THIS_VERSION = [
+    "out_of_sample",
     "random_out_of_sample",
+    "walk_forward",
     "vs_random",
     "permutation",
     "noise",
@@ -58,6 +59,8 @@ THIS_VERSION = [
     "variance",
     "delayed",
     "liquidity",
+    "parameters",
+    "noise_optimization",
 ]
 TRADE_LIST = ["random_out_of_sample", "reshuffle", "resample", "variance"]
 EDGE_DATA = bars(steps_for([3.0, 2.0, 4.0, -1.0, 3.0, 2.0, -2.0, 5.0, 1.0, -1.0], 60))
@@ -101,10 +104,15 @@ def test_a_planted_edge_passes_the_checks_its_planting_survives(edge_report):
     # The planted moves sit on exact bars, from one open to the next: entering a bar late,
     # or filling at a price averaged over two bars, takes them away, so the delayed-orders
     # and liquidity checks fail; Flip's daily bars are its base bars and it holds no
-    # engine exit, so shifted bars and randomized exits have nothing to judge.
+    # engine exit, so shifted bars and randomized exits have nothing to judge. Flip has no
+    # parameter, so the searches have nothing to search: out of sample runs it as given, from
+    # session 85 of 122, an odd one, where Flip, which alternates from its first bar, trades
+    # the moves that take the planted ones back: its edge is tied to where the run starts.
     verdicts = edge_report.verdicts.set_index("check")["verdict"]
     assert verdicts[THIS_VERSION].tolist() == [
+        FAILED,
         PASSED,
+        NOT_JUDGED,  # no parameter range to re-fit
         PASSED,
         PASSED,
         PASSED,
@@ -117,6 +125,8 @@ def test_a_planted_edge_passes_the_checks_its_planting_survives(edge_report):
         PASSED,
         FAILED,
         FAILED,
+        NOT_JUDGED,  # no parameter to vary
+        NOT_JUDGED,  # no parameter range to search
     ]
     assert not edge_report.passed
 
@@ -134,15 +144,12 @@ def test_a_strategy_with_no_edge_is_not_judged_and_nothing_passed():
     assert not report.passed
 
 
-def test_the_scorecard_lists_every_check_and_the_ones_not_built(edge_report):
+def test_the_scorecard_lists_every_check(edge_report):
     verdicts = edge_report.verdicts
     assert list(verdicts.columns) == ["check", "question", "figure", "rule", "verdict", "note"]
     assert list(verdicts.index) == list(range(1, 18))
-    assert (verdicts["verdict"] == NOT_BUILT).sum() == 4
     parameters = verdicts.set_index("check").loc["parameters"]
-    assert parameters["note"] == (
-        "Not built in this version: it needs walk-forward and the parameter searches."
-    )
+    assert parameters["note"].startswith("No parameter to vary")
 
 
 def test_a_check_result_is_made_of_its_public_fields_only():
@@ -169,9 +176,9 @@ def test_one_check_has_its_table_summary_and_settings(edge_report):
     assert resample.settings["runs"] == 1_000 and resample.seed == 11
 
 
-def test_asking_for_a_check_not_built_says_what_it_needs(edge_report):
-    with pytest.raises(NotImplementedError, match="it needs walk-forward"):
-        edge_report.check("parameters")
+def test_asking_for_a_check_by_another_name_names_every_check(edge_report):
+    with pytest.raises(ConfigError, match="there is no check 'neighbourhood'"):
+        edge_report.check("neighbourhood")
 
 
 def test_asking_for_a_check_the_report_did_not_run_is_refused(edge):
@@ -302,8 +309,8 @@ def test_the_page_is_the_scorecard_a_section_per_check_and_the_notes(page):
 
 
 def test_the_scorecard_counts_the_verdicts_and_states_the_wording_rule(page):
-    scorecard = page[page.index("<section id='scorecard'") : page.index("<section id='random")]
-    assert "6 passed, 2 failed, 4 not judged, 1 informational, 4 not built." in scorecard
+    scorecard = page[page.index("<section id='scorecard'") : page.index("<section id='out-of")]
+    assert "6 passed, 3 failed, 7 not judged, 1 informational." in scorecard
     assert fmt_text(WORDING_RULE) in scorecard
     assert scorecard.count("<tr>") == 1 + 17
 

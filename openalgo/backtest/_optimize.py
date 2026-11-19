@@ -63,7 +63,15 @@ from ._objective import DEFAULT_OBJECTIVE, check_objective
 from ._optimize_result import OptimizeResult
 from ._pipeline import PreparedRun, execute, prepare
 from ._rerun import RunRecord
-from ._sweep_pool import Chunk, portable, run_combinations, run_in_pool, split
+from ._sweep_pool import (
+    Chunk,
+    Measured,
+    portable,
+    returns_matrix,
+    run_combinations,
+    run_in_pool,
+    split,
+)
 from .errors import ConfigError
 
 # Event strategies suit hundreds to a few thousand combinations (07-research 1).
@@ -80,12 +88,15 @@ LOGGER = logging.getLogger("openalgo.backtest.optimize")
 
 # Runs combinations in this process; told each run's evaluation path when given a
 # function (`_sweep_pool.run_combinations` with the sweep's fixed inputs bound).
-Runner = Callable[..., list[dict[str, float]]]
+Runner = Callable[..., list[Measured]]
 
 
-def _run_arguments(client: Any, settings: dict[str, Any]) -> dict[str, Any]:
+def _run_arguments(
+    client: Any, settings: dict[str, Any], verb: str = "bt.optimize"
+) -> dict[str, Any]:
     """The arguments of `bt.backtest` with the given ones applied, as `backtest` passes
-    them on. Raises ConfigError for a missing required argument."""
+    them on. Raises ConfigError, naming the call `verb`, for a missing required
+    argument."""
     from .run import backtest
 
     arguments: dict[str, Any] = {"client": client}
@@ -95,7 +106,7 @@ def _run_arguments(client: Any, settings: dict[str, Any]) -> dict[str, Any]:
         if name in settings:
             arguments[name] = settings[name]
         elif parameter.default is inspect.Parameter.empty:
-            raise ConfigError(f"bt.optimize needs {name}=, as bt.backtest does")
+            raise ConfigError(f"{verb} needs {name}=, as bt.backtest does")
         else:
             arguments[name] = parameter.default
     return arguments
@@ -150,7 +161,7 @@ class Opening:
     grid order, the evaluation path of the first, and the seconds each took (the first
     also ran the sweep's indicator checks)."""
 
-    rows: list[dict[str, float]]
+    rows: list[Measured]
     path: str
     seconds: list[float]
 
@@ -158,7 +169,7 @@ class Opening:
 def _opening(run: Runner, combinations: list[dict[str, Any]]) -> Opening:
     """Run the first combination, and on the conditions path the second as well (see
     the module docstring)."""
-    rows: list[dict[str, float]] = []
+    rows: list[Measured] = []
     paths: list[str] = []
 
     def timed(position: int) -> float:
@@ -213,9 +224,11 @@ def _plan(
     return text
 
 
-def _split_settings(strategy: type, settings: dict[str, Any]) -> tuple[dict, dict]:
-    """(run arguments, parameter ranges) of the keywords. Raises ConfigError for a name
-    that is neither."""
+def _split_settings(
+    strategy: type, settings: dict[str, Any], verb: str = "bt.optimize"
+) -> tuple[dict, dict]:
+    """(run arguments, parameter ranges) of the keywords. Raises ConfigError, naming the
+    call `verb`, for a name that is neither."""
     from .run import backtest
 
     run_names = set(inspect.signature(backtest).parameters) - {"strategy", "client"}
@@ -223,12 +236,53 @@ def _split_settings(strategy: type, settings: dict[str, Any]) -> tuple[dict, dic
     unknown = sorted(set(settings) - run_names - set(parameters))
     if unknown:
         raise ConfigError(
-            f"bt.optimize: {unknown} are neither run arguments of bt.backtest nor parameters "
+            f"{verb}: {unknown} are neither run arguments of bt.backtest nor parameters "
             f"of {strategy.__name__} ({sorted(parameters)})"
         )
     run = {name: value for name, value in settings.items() if name in run_names}
     ranges = {name: value for name, value in settings.items() if name in parameters}
     return run, ranges
+
+
+def _sweep(
+    strategy: type,
+    objective: Any,
+    prepared: PreparedRun,
+    arguments: dict[str, Any],
+    combinations: list[dict[str, Any]],
+    asked: tuple[int | None, Callable[[str], Any] | None],
+) -> tuple[list[Measured], str, str]:
+    """(each combination's row and session returns in grid order, the evaluation path,
+    the plan): the opening combinations here, the plan reported through `asked`'s
+    progress function (`workers`, `progress`), then the rest in this process or in
+    worker processes (module docstring)."""
+    workers, progress = asked
+    name = strategy_source_hash(strategy) or strategy.__qualname__
+    checks = IndicatorChecks(name, measured=prepared.measured)
+    light = {key: arguments[key] for key in ("source", "tz")}
+    light["data"] = None if arguments["data"] is None else "given"
+    light["now"] = None if arguments["now"] is None else "given"
+
+    def run(
+        part: list[dict[str, Any]], on_path: Callable[[str], Any] | None = None
+    ) -> list[Measured]:
+        return run_combinations(strategy, objective, prepared, light, part, checks, on_path)
+
+    opening = _opening(run, combinations)
+    rest = combinations[len(opening.rows) :]
+    count, why = _workers(workers, len(rest), prepared, strategy)
+    plan = _plan(strategy, len(combinations), count, opening.seconds, why, opening.path)
+    (progress or LOGGER.info)(plan)
+    if count > 1:
+        shipped = (portable(strategy, "the strategy"), portable(objective, "the objective"))
+        chunks = [
+            Chunk(*shipped, prepared.for_workers(), light, part, checks.strategy_hash, checks.keys)
+            for part in split(rest, count)
+        ]
+        later = run_in_pool(chunks, count)
+    else:
+        later = run(rest)
+    return [*opening.rows, *later], opening.path, plan
 
 
 def optimize(
@@ -253,34 +307,14 @@ def optimize(
     arguments = _run_arguments(client, run_settings)
     names, combinations = grid(strategy, ranges, arguments["params"])
     prepared = prepare(strategy, client, arguments, combinations)
-    name = strategy_source_hash(strategy) or strategy.__qualname__
-    checks = IndicatorChecks(name, measured=prepared.measured)
-    light = {key: arguments[key] for key in ("source", "tz")}
-    light["data"] = None if arguments["data"] is None else "given"
-    light["now"] = None if arguments["now"] is None else "given"
-
-    def run(
-        part: list[dict[str, Any]], on_path: Callable[[str], Any] | None = None
-    ) -> list[dict[str, float]]:
-        return run_combinations(strategy, objective, prepared, light, part, checks, on_path)
-
-    opening = _opening(run, combinations)
-    rest = combinations[len(opening.rows) :]
-    count, why = _workers(workers, len(rest), prepared, strategy)
-    plan = _plan(strategy, len(combinations), count, opening.seconds, why, opening.path)
-    (progress or LOGGER.info)(plan)
-    if count > 1:
-        shipped = (portable(strategy, "the strategy"), portable(objective, "the objective"))
-        chunks = [
-            Chunk(*shipped, prepared.for_workers(), light, part, checks.strategy_hash, checks.keys)
-            for part in split(rest, count)
-        ]
-        later = run_in_pool(chunks, count)
-    else:
-        later = run(rest)
-    rows = [*opening.rows, *later]
+    measured, path, plan = _sweep(
+        strategy, objective, prepared, arguments, combinations, (workers, progress)
+    )
     table = pd.DataFrame(
-        [{**{n: c[n] for n in names}, **row} for c, row in zip(combinations, rows, strict=True)]
+        [
+            {**{n: c[n] for n in names}, **kept.row}
+            for c, kept in zip(combinations, measured, strict=True)
+        ]
     )
     label = objective if isinstance(objective, str) else getattr(objective, "__name__", "custom")
 
@@ -289,7 +323,20 @@ def optimize(
         record = RunRecord(strategy, client, {k: v for k, v in selected.items() if k != "client"})
         return execute(strategy, prepared, selected, record=record)
 
-    return OptimizeResult(table, combinations, names, label, maximize, opening.path, plan, runner)
+    named = isinstance(objective, str)
+    return OptimizeResult(
+        table,
+        combinations,
+        names,
+        label,
+        maximize,
+        path,
+        plan,
+        runner,
+        returns_matrix(measured),
+        named,
+        strategy.__name__,
+    )
 
 
 __all__ = ["CONDITIONS_PATH", "EVENT_PATH", "LARGE_EVENT_GRID", "grid", "optimize"]

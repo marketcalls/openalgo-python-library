@@ -2,12 +2,13 @@
 
 Each check runs with its resolved settings (`runs` None takes the report's runs) and the
 seed of its own stream (`_random.check_seed`). The trade-list checks read the run's trade
-list (`_trades.TradeRun`); the bar checks rerun the backtest (`_bar_setup`), so when the
-request lists one the run's bars are read again first, and the trade-list checks then
-have the run's prices too (`TradeRun.prices`, the chart of random out of sample).
+list (`_trades.TradeRun`); the bar checks and the searching checks rerun the backtest
+(`_bar_setup`), so when the request lists one the run's bars are read again first, and
+the trade-list checks then have the run's prices too (`TradeRun.prices`, the chart of
+random out of sample).
 
-The plan says what will run, on how many closed trades, which checks are not built in
-this version, and what reruns the bar checks plan. It is reported through `progress` (a
+The plan says what will run, on how many closed trades, and what reruns the checks that
+rerun plan. It is reported through `progress` (a
 function taking one line of text) or, without one, the `openalgo.backtest.robustness`
 logger at INFO, before any check runs, with how long the backtest took when the report
 ran it and an estimate of the reruns timed on one rerun (`_bar_setup`). The report keeps
@@ -28,10 +29,11 @@ from .._messages import counted
 from ..errors import ConfigError
 from . import _random
 from . import _words as words
-from ._bar_setup import BarContext, bar_context, plan_words, timing_words
+from ._bar_setup import BarContext, bar_context
 from ._registry import CHECKS, CheckSpec
 from ._report import RobustnessReport, RunFacts
 from ._request import Request
+from ._rerun_plan import plan_words
 from ._trades import TradeRun, trade_run
 from ._verdict import CheckResult
 
@@ -77,20 +79,14 @@ def plan_text(
     strategy: str, request: Request, trades: TradeRun, context: BarContext | None = None
 ) -> str:
     """The plan of the checks (module docstring), without times or the worker count."""
-    names = [check.name for check in request.to_run]
-    text = (
+    names = [check.name for check in request.listed]
+    reruns = plan_words(None, True, 0.0, 0.0) if context is None else context.words()
+    return (
         f"bt.robustness: {counted(len(names), 'check')} of {len(CHECKS)} for {strategy} "
         f"({', '.join(names)}), {words.whole(request.runs, 'run')} each from seed "
         f"{request.seed}, on {words.whole(trades.closed, 'closed trade')} over "
-        f"{words.whole(len(trades.sessions), 'session')}. {plan_words(context)}"
+        f"{words.whole(len(trades.sessions), 'session')}. {reruns}"
     )
-    later = [check.name for check in request.listed if not check.built]
-    if later:
-        text += (
-            f" {counted(len(later), 'check is', 'checks are')} not built in this version and "
-            f"listed as such: {', '.join(later)}."
-        )
-    return text
 
 
 def _facts(result: Any, trades: TradeRun) -> RunFacts:
@@ -115,8 +111,18 @@ def _timed(plan: str, seconds: float | None, context: BarContext | None) -> str:
     """The plan as reported: with the backtest's duration and the reruns' estimate."""
     timed = plan if seconds is None else f"{plan} The backtest took {seconds:.2f} s."
     if context is not None:
-        timed += timing_words(context)
+        timed += context.timing()
     return timed
+
+
+def _subject(
+    check: CheckSpec, trades: TradeRun, result: Any, request: Request, context: Any
+) -> Any:
+    """What `check` reads: the trade list, the run as the bar checks read it, or the run
+    as the searching checks read it."""
+    if check.trade_list:
+        return trades
+    return context.search if check.searches else context.subject(trades, result, request)
 
 
 def assess(
@@ -142,10 +148,10 @@ def assess(
     (progress or LOGGER.info)(_timed(plan, seconds, context))
     closing = context.reruns if context is not None else contextlib.nullcontext()
     with closing:
-        checked = []
-        for check in request.to_run:
-            subject = trades if check.trade_list else context.subject(trades, result, request)
-            checked.append(run_check(check, subject, request))
+        checked = [
+            run_check(check, _subject(check, trades, result, request, context), request)
+            for check in request.listed
+        ]
     results = tuple(done.result for done in checked)
     blocks = {done.result.name: done.blocks for done in checked}
     return RobustnessReport(facts, request, results, plan, blocks)

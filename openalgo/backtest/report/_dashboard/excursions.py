@@ -88,7 +88,9 @@ def _charts(view: View, listing: pd.DataFrame) -> list[str]:
         cells = []
         for name, column in columns.items():
             values = listing[column].to_numpy(dtype=float) / PERCENT
-            chart = bars.histogram(values, label=f"{name} distribution", decimals=None)
+            chart = bars.histogram(
+                values, label=f"{name} distribution", decimals=None, counts="trades"
+            )
             cells.append(card(*HISTOGRAMS[name], chart))
         blocks.append(_pair(cells))
     if view.has("excursion_scatter"):

@@ -2,8 +2,8 @@
 the wording rule the full report prints at its top and the quick checks' reading share
 their sentences; a failure says the edge did not hold up, never that it proves
 overfitting; the trade-list checks say they cannot see a pick from many tries and name
-the checks that can; a check not built says what it needs in plain words, with no
-internal planning name; figures read without a minus zero or a doubled colon."""
+the checks that can; no check is listed as not built, and no report names an internal
+planning name; figures read without a minus zero or a doubled colon."""
 
 import re
 from pathlib import Path
@@ -14,7 +14,6 @@ from robust_runs import SMALL_BARS, check_of, edge_run, trade_performance
 import openalgo.backtest as bt
 from openalgo.backtest._robust import _words as words
 from openalgo.backtest._robust._quick import QUICK_READING
-from openalgo.backtest._robust._request import build_request
 from openalgo.backtest._robust._verdict import (
     FAILING,
     FIXED,
@@ -27,27 +26,6 @@ from openalgo.backtest.report._format import text as fmt_text
 
 ROBUST = Path(bt.__file__).parent / "_robust"
 RUN = Path(bt.__file__).parent / "run.py"
-#: The checks a later version brings, and what each needs.
-LATER = {
-    "out_of_sample": "walk-forward and the parameter searches",
-    "walk_forward": "walk-forward and the parameter searches",
-    "parameters": "walk-forward and the parameter searches",
-    "noise_optimization": "walk-forward and the parameter searches",
-}
-
-
-def request(**changes):
-    settings = {
-        "checks": "all",
-        "objective": "sharpe",
-        "runs": 1_000,
-        "seed": 0,
-        "workers": None,
-        "others": None,
-        "check_settings": {},
-        "ranges": {},
-    }
-    return build_request(**{**settings, **changes})
 
 
 @pytest.fixture(scope="module")
@@ -121,28 +99,12 @@ def test_bt_robustness_says_a_win_rate_leaves_random_out_of_sample_not_judged():
     assert '"profit_factor" or "win_rate"' not in doc
 
 
-@pytest.mark.parametrize("name", list(LATER))
-def test_a_check_not_built_says_what_it_needs_in_plain_words(name):
-    with pytest.raises(NotImplementedError) as raised:
-        request(checks=[name])
-    message = str(raised.value)
-    assert f"it needs {LATER[name]}" in message
-    assert not re.search(r"\bRB\d", message) and "unit" not in message
-
-
-def test_parameter_ranges_say_what_they_need_in_plain_words():
-    with pytest.raises(NotImplementedError) as raised:
-        request(ranges={"fast": range(5, 30, 5)})
-    message = str(raised.value)
-    assert "walk-forward and the parameter searches" in message
-    assert not re.search(r"\bRB\d", message) and "unit" not in message
-
-
-def test_the_report_names_no_internal_unit(page):
+def test_the_report_lists_no_check_as_not_built_and_names_no_internal_unit(page):
     report = edge_run().robustness(checks="all", progress=lambda line: None, **SMALL_BARS)
-    notes = report.verdicts.set_index("check")["note"]
-    assert notes["parameters"] == f"Not built in this version: it needs {LATER['parameters']}."
-    assert not re.search(r"\bRB\d", report.tearsheet())
+    page = report.tearsheet()
+    assert len(report.verdicts) == 17
+    assert "not built" not in page.lower() and "not built" not in " ".join(report.verdicts["note"])
+    assert not re.search(r"\bRB\d", page)
 
 
 # (fraction, decimals, text): a nonzero figure that would round to zero shows its first

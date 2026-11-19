@@ -149,6 +149,53 @@ def test_the_trade_list_shows_each_trades_mae_and_mfe(page):
     assert f"title='-2.30% of capital at work'>-{RUPEE}115.00</td>" in trades
 
 
+@pytest.mark.parametrize(
+    ("label", "tallest"),
+    [
+        # The five winners' MAE is -25 of 5,000, -0.50 percent, all in one bin.
+        ("MAE distribution", 5),
+        # The four other trades' MFE is 30 of 5,000, 0.60 percent, all in one bin.
+        ("MFE distribution", 4),
+    ],
+)
+def test_each_excursion_histogram_has_a_count_axis(page, label, tallest):
+    chart = svg(page, label)
+    counts = re.findall(r"text-anchor='end' style='[^']*'>(\d+)</text>", chart)
+    assert counts == [str(count) for count in range(tallest + 1)]
+    assert ">trades</text>" in chart
+
+
+def test_the_trade_list_keeps_every_column_and_wraps_a_time_between_date_and_time(page):
+    trades = section_of(page, "trades")
+    table = trades[trades.index("<table class='tbl hover trades'") :]
+    head = table[: table.index("</thead>")]
+    assert re.findall(r"<th class='[lr] s'>([^<]+)</th>", head) == [
+        "#",
+        "Symbol",
+        "Side",
+        "Entry (IST)",
+        "Exit (IST)",
+        "Qty",
+        "Entry Price",
+        "Exit Price",
+        "Gross P&amp;L",
+        "Charges",
+        "Net P&amp;L",
+        "Return",
+        "MAE",
+        "MFE",
+        "Bars",
+        "Days",
+        "Exit Reason",
+    ]
+    # An entry and an exit time break only between the date and the time of day, so a
+    # table wider than its card narrows its two time columns, not its figures.
+    times = re.findall(r"<td class='l nums when' data-v='\d+'>([^<]+)</td>", table)
+    assert len(times) == 2 * 9
+    assert all(re.fullmatch(r"\d\d&#160;\w{3}&#160;\d{4} \d\d:\d\d", time) for time in times)
+    assert ".trades td.when{white-space:normal}" in page
+
+
 def test_the_charges_table_has_the_slippage_and_the_trading_cost_under_the_total(page):
     labels = re.findall(r"<tr class='total'><td class='l'>([^<]+)</td>", page)
     assert labels[:3] == ["Total charges", "Slippage (in fill prices)", "Trading cost"]

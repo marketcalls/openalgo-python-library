@@ -18,6 +18,10 @@ buys only with no working order, which on time it never has at a decision, so th
 its entries held (the delayed check) it enters late rather than twice.
 `steps_for(trade_moves)` builds steps whose traded moves are `trade_moves`, repeated,
 with the move between two trades taking back the traded one so the price stays near 500.
+
+A history with no edge: `random_walk(count, seed)` is daily bars whose closes walk at
+random, and `DailyCross` an EMA crossover with 81 declared settings that a search can fit
+to such a walk.
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ import numpy as np
 import pandas as pd
 
 import openalgo.backtest as bt
+from openalgo import ta
 from openalgo.backtest import metrics
 from openalgo.backtest._robust._assess import Checked, run_check
 from openalgo.backtest._robust._registry import BY_NAME
@@ -237,6 +242,94 @@ def rising_run(trades: int = 60, **settings) -> bt.Result:
     """`Flip` on bars that rise 1 rupee every session: every trade makes 10 rupees, from
     the drift alone."""
     return bt.backtest(Flip, data=bars(np.ones(2 * trades + 2)), **FREE, **settings)
+
+
+class Weekday(bt.Strategy):
+    """Buys 10 shares at the close of a session on weekday `day` (0 Monday to 4 Friday)
+    when flat with no working order, and exits at the next session's close: its trade of
+    session d buys at the open of session d + 1 and sells at the open of session d + 2.
+    It decides by the date, so a run of any window of the sessions trades the same
+    sessions."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "D"
+    day = 0
+
+    def on_bar(self, bar):
+        if self.position.is_flat:
+            if bar.time.weekday() == self.day and not self.orders:
+                self.buy(qty=QUANTITY)
+        else:
+            self.exit()
+
+
+#: The move a weekday's trade makes when its weekday is favoured, and when it is not,
+#: rupees a share.
+FAVOURED_MOVE, OTHER_MOVE = 3.0, -1.0
+
+
+def weekday_bars(count: int, favoured) -> pd.DataFrame:
+    """`count` daily bars (`opens_bars`) whose move from the open of session s - 1 to the
+    open of session s is `FAVOURED_MOVE` when session s - 2 falls on one of the weekdays
+    `favoured(s)` gives, else `OTHER_MOVE`: a `Weekday` trade of session d makes 10 x
+    the move into session d + 2."""
+    days = nse_sessions("2023-01-02", count)
+    steps = np.zeros(count)
+    for s in range(2, count):
+        steps[s] = FAVOURED_MOVE if days[s - 2].weekday() in favoured(s) else OTHER_MOVE
+    return opens_bars(FIRST_PRICE + np.cumsum(steps))
+
+
+def weekday_trades(count: int, day: int, first: int = 0, last: int | None = None) -> list[int]:
+    """The sessions, positions from `first` to `last` of the first `count` NSE sessions
+    from 2023-01-02, at whose close `Weekday` with `day` buys in a run of those sessions:
+    each one on that weekday that leaves two sessions after it in the run (to buy and to
+    sell), as long as the trade before it has sold."""
+    days = nse_sessions("2023-01-02", count)
+    last = count - 1 if last is None else last
+    bought, free_from = [], first
+    for d in range(first, last - 1):
+        if d >= free_from and days[d].weekday() == day:
+            bought.append(d)
+            free_from = d + 2
+    return bought
+
+
+#: The spread of a random walk's session log returns: 1.5 percent a session.
+WALK_SPREAD = 0.015
+#: The tick of the bars, rupees.
+TICK = 0.05
+
+
+def random_walk(count: int, seed: int) -> pd.DataFrame:
+    """`count` daily bars, one per NSE session from 2023-01-02, whose closes walk at
+    random from `FIRST_PRICE`: each session's log return is drawn from a normal of spread
+    `WALK_SPREAD` by NumPy's generator seeded with `seed`, and each close is put on the
+    5-paisa grid. A bar opens at the close before it (the first at `FIRST_PRICE`), and its
+    high and low are 1 rupee beyond its open and close. No rule has an edge on it."""
+    draws = np.random.default_rng(seed).normal(0.0, WALK_SPREAD, count)
+    closes = np.round(FIRST_PRICE * np.exp(np.cumsum(draws)) / TICK) * TICK
+    opens = np.concatenate(([FIRST_PRICE], closes[:-1]))
+    frame = opens_bars(opens)
+    frame["close"] = closes
+    frame["high"] = np.maximum(opens, closes) + 1.0
+    frame["low"] = np.minimum(opens, closes) - 1.0
+    return frame
+
+
+class DailyCross(bt.Strategy):
+    """Buys 10 shares when the fast EMA of the daily close crosses above the slow one and
+    exits when it crosses below, written as conditions; it declares 9 fast and 9 slow
+    periods, 81 settings to search."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "D"
+    fast = bt.param(8, tuple(range(4, 40, 4)))
+    slow = bt.param(40, tuple(range(20, 200, 20)))
+
+    def init(self):
+        fast_line = self.I(ta.ema, self.close, self.fast)
+        slow_line = self.I(ta.ema, self.close, self.slow)
+        self.entry_when(fast_line.crossed_above(slow_line), qty=QUANTITY)
+        self.exit_when(fast_line.crossed_below(slow_line))
 
 
 #: Settings that keep the bar checks of a full report small in a test: one process, 20

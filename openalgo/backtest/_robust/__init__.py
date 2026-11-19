@@ -1,8 +1,10 @@
 """Robustness and overfitting checks of a backtest (design 17): `bt.robustness`,
-`Result.robustness`, `RobustnessReport` and `CheckResult`.
+`Result.robustness`, `RobustnessReport` and `CheckResult`; `bt.walk_forward` and
+`WalkForwardResult`; and the overfitting figures of `bt.optimize` (`OptimizeResult`).
 
     report = bt.robustness(EmaCross, client, capital=100_000, start=..., end=...,
-                           checks="all", objective="sharpe", runs=1000, seed=0)
+                           checks="all", objective="sharpe", runs=1000, seed=0,
+                           fast=range(5, 30, 5), slow=range(20, 100, 10))
     report = result.robustness(checks="all")   # the same run, its arguments reused
     report.verdicts, report.check("resample"), report.passed, report.tearsheet(path)
 
@@ -12,11 +14,11 @@ when they need it. Every check is deterministic for a seed on every platform: th
 checks rerun the backtest, an ordinary run of the deterministic kernel, on bars that are
 a pure function of the run's bars and the seed, or on the run's own bars with one
 setting changed (a delay, a fill model, shifted strategy bars, exits drawn from the
-seed).
+seed, other parameters, a window of the run's sessions).
 
 | Module | Responsibility |
 |---|---|
-| `_registry` | The seventeen checks in report order, the ones built, the not-built error |
+| `_registry` | The seventeen checks in report order and what each reads |
 | `_request` | The checks, objective, runs, seed, workers and settings, checked first |
 | `_setting` | A check's settings: defaults, the values each takes, applying a check's dict |
 | `_assess` | Running the checks on one run, and the plan reported before they run |
@@ -41,7 +43,8 @@ seed).
 | `_random_entries` | Random entries with the run's trades |
 | `_session_entries` | Random entries of an all-intraday run kept within one session each |
 | `_reruns` | Families of reruns, in this process or worker processes, kept once |
-| `_bar_setup` | The bar checks' setup: the bars, a first rerun, the plan's reruns |
+| `_bar_setup` | The rerunning checks' setup: the bars, a first rerun, the runners |
+| `_rerun_plan` | What the rerunning checks plan, and the plan's words |
 | `_bar_common` | What the bar checks share: the run they read, break-even, rerun sets |
 | `_check_vs_random` | Versus random |
 | `_check_permutation` | Permutation test |
@@ -55,9 +58,29 @@ seed).
 | `_check_random_exits` | Randomized exits |
 | `_check_delayed` | Delayed orders |
 | `_check_liquidity` | Liquidity |
+| `_grid` | The parameter combinations of a search: a grid, or the run's neighbourhood |
+| `_windows` | Windows of the run's sessions: in and out of sample, walk-forward folds |
+| `_search_setup` | The searching checks' setup: their bars and what they read |
+| `_search_common` | What the searching checks share: reasons, values as text, the grid drawn |
+| `_neighbourhood` | The parameter-neighbourhood rule: a plateau or a spike |
+| `_stitch` | Out-of-sample runs stitched into one equity curve |
+| `_walk` | The walk-forward: folds searched in sample, traded out of sample |
+| `_walk_tables` | The walk-forward's folds as a table |
+| `_walk_forward` | `bt.walk_forward` and `WalkForwardResult` |
+| `_check_out_of_sample` | Out of sample |
+| `_check_walk_forward` | Walk-forward |
+| `_check_parameters` | Parameter neighbourhood |
+| `_check_noise_optimization` | Noise-robust optimization |
+| `_deflated_sharpe` | The deflated Sharpe ratio of a sweep's best |
+| `_overfitting_probability` | The probability of backtest overfitting |
+| `_optimizer_checks` | The overfitting figures of a `bt.optimize` sweep |
+| `_optimizer_page` | The heatmap page of a `bt.optimize` sweep |
 | `_blocks` | What a check's section draws, as data |
 | `_charts` | The fan, histogram and sessions charts as inline SVG |
 | `_charts_bars` | The candles, lines, groups of paths and tables of the bar checks |
+| `_charts_grid` | An objective over two parameters: the heatmap and the isometric surface |
+| `_chart_text` | Figures written only where they fit, and axis values that never meet |
+| `_charts_folds` | The fold diagram and the table with an equity line a row |
 | `_scorecard` | The scorecard table and its top line |
 | `_html` | The HTML robustness report |
 | `_words` | Figures as plain text |
@@ -81,6 +104,7 @@ from ._request import (
     split_keywords,
 )
 from ._verdict import CheckResult
+from ._walk_forward import WalkForwardResult
 
 
 def robustness(
@@ -97,10 +121,10 @@ def robustness(
     **settings: Any,
 ) -> RobustnessReport:
     """Backtest `strategy` once with the run arguments in `settings` and run the
-    robustness checks on it (see `bt.robustness`). Raises ConfigError for unusable
-    arguments, NotImplementedError for a check or parameter ranges this version does not
-    run (and other markets for a strategy that trades no one named symbol), and whatever
-    the backtest and its reruns raise."""
+    robustness checks on it (see `bt.robustness`); the other keywords of `settings` are
+    a check's dict or a parameter range. Raises ConfigError for unusable arguments,
+    NotImplementedError for other markets of a strategy that trades no one named symbol,
+    and whatever the backtest and its reruns raise."""
     from ..run import backtest
     from ..strategy import Strategy
 
@@ -164,4 +188,10 @@ def result_robustness(
     return assess(result, request, progress, None)
 
 
-__all__ = ["CheckResult", "RobustnessReport", "result_robustness", "robustness"]
+__all__ = [
+    "CheckResult",
+    "RobustnessReport",
+    "WalkForwardResult",
+    "result_robustness",
+    "robustness",
+]

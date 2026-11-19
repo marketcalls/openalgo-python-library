@@ -46,9 +46,10 @@ def run_unjudged(subject: BarRun, settings: Mapping[str, Any], rule: str) -> Out
     return too_few(subject.trades, settings["min_trades"], rule) or no_edge(subject.trades, rule)
 
 
-def objective_unjudged(subject: BarRun, objective: Any, rule: str, compared: str) -> Outcome | None:
-    """The "not judged" outcome of a run whose objective is undefined, has no break-even
-    or is not above it, so no `compared` run's ratio can be measured; else None."""
+def objective_unjudged(subject: Any, objective: Any, rule: str, compared: str) -> Outcome | None:
+    """The "not judged" outcome of a run (a `BarRun` or a `_search_setup.SearchRun`: its
+    objective's value `real`) whose objective is undefined, has no break-even or is not
+    above it, so no `compared` run's ratio can be measured; else None."""
     name, level = objective_name(objective), break_even(objective)
     if not finite(subject.real):
         return not_judged(rule, undefined(name, compared))

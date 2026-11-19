@@ -8,7 +8,10 @@ reruns by default. The delays are later than the run: they add to the run's own
 `delay_entries` and `delay_exits` (`own_delays`), and the note says so. Every decision
 about an order is held, its cancellations and modifications as long as its placement, so
 an order works on its old terms until a change reaches it. The engine-held stops and
-targets rest with the broker and are not held, nor are the engine's own exits.
+targets rest with the broker and are not held, nor are the engine's own exits. A reversal
+closes the position it meets, so it is an exit and takes the exit delay (lead,
+2026-11-18): for a strategy always in the market the runs with entries late hold only its
+entries from flat, and the note says so (`REVERSAL`).
 
 Figures: each pair's objective over the run's, measured from the objective's break-even.
 Pass: the run with entries one bar late (and exits on time) profitable (net profit of at
@@ -20,8 +23,9 @@ delay did not run, or when that run entered again while its entry was held: a he
 is a working order (`self.orders`), not a position, so a strategy that decides its entries
 by its position alone enters twice under a delay, and the late run holds a bigger position
 than the run ever did (`_position_sizes`). The run then judges that position, not a late
-entry; the note says so and what to do. Other pairs that entered again are named in the
-note and flagged in the table (`entered_again`).
+entry; the note says so and what to do, and the table and the chart of the eight runs,
+which ran, are kept. Other pairs that entered again are named in the note and flagged in
+the table (`entered_again`).
 
 Charts: the equity of each pair, a group for each entry delay, with the run's bold; a
 table by pair.
@@ -51,10 +55,17 @@ from ._variant_common import (
     variants_chart,
     variants_table,
 )
-from ._verdict import FAILED, PASSED, Outcome, not_judged
+from ._verdict import FAILED, NOT_JUDGED, PASSED, Outcome, not_judged
 
 #: The pair the pass rule judges: entries one strategy bar late, exits on time.
 JUDGED = (1, 0)
+#: What the note says of a reversal (module docstring).
+REVERSAL = (
+    "A reversal (an order that closes the position it meets and opens the other side) is "
+    "an exit and takes the exit delay, so for a strategy always in the market the runs "
+    "with entries late delay only its entries from flat: the first of the run, or the "
+    "first of each session when it is squared off every session."
+)
 
 SETTINGS = (
     ENOUGH_TRADES,
@@ -143,10 +154,17 @@ def run(
         )
     own_sizes = position_sizes(subject.result)
     grew = [grown(sizes, own_sizes) for sizes in set_.sizes]
-    if grew[judged]:
-        return not_judged(text, entered_again(grew[judged], own_sizes, subject.result._symbols))
     name = objective_name(objective)
     ratio = ratios(set_.objective, subject.real, objective)
+    labels = [_label(pair) for pair in made]
+    table = labelled_table(
+        set_, ratio, delay_entries=[e for e, _ in made], delay_exits=[x for _, x in made]
+    )
+    table["entered_again"] = [bool(sizes) for sizes in grew]
+    runs = (_chart(subject, set_, made), _table(set_, ratio, labels, name))
+    if grew[judged]:
+        why = entered_again(grew[judged], own_sizes, subject.result._symbols)
+        return Outcome(NOT_JUDGED, "n/a", text, why, table, {}, runs)
     profitable = bool(set_.net_profit[judged] >= BREAK_EVEN_RUPEES)
     passed = profitable and bool(ratio[judged] >= settings["keep"])
     summary = _summary(set_, ratio, judged)
@@ -162,18 +180,13 @@ def run(
         + (f", added to the run's own (entries {own[0]}, exits {own[1]})" if any(own) else "")
         + ", and their cancellations and modifications as long; the legs' stops and targets "
         "and the engine's own exits were not held, and an order held past its session's "
-        "close (intraday) or the run's last bar was refused (delay_past_close)."
+        f"close (intraday) or the run's last bar was refused (delay_past_close). {REVERSAL}"
         + _entered_again_note(
             [_label(pair) for pair, sizes in zip(made, grew, strict=True) if sizes]
         )
         + set_.failure_note()
     )
-    labels = [_label(pair) for pair in made]
-    table = labelled_table(
-        set_, ratio, delay_entries=[e for e, _ in made], delay_exits=[x for _, x in made]
-    )
-    table["entered_again"] = [bool(sizes) for sizes in grew]
-    blocks = _blocks(subject, set_, ratio, labels, made, summary, name)
+    blocks = (*runs, (_tiles(summary, name),))
     return Outcome(PASSED if passed else FAILED, figure, text, note, table, summary, blocks)
 
 
@@ -200,15 +213,8 @@ def _summary(set_: RerunSet, ratio: np.ndarray, judged: int) -> dict[str, float]
     }
 
 
-def _blocks(
-    subject: BarRun,
-    set_: RerunSet,
-    ratio: np.ndarray,
-    labels: list[str],
-    made: list[tuple[int, int]],
-    summary: Mapping[str, float],
-    name: str,
-) -> tuple:
+def _chart(subject: BarRun, set_: RerunSet, made: list[tuple[int, int]]) -> tuple:
+    """The row of the equity of each pair, a group for each entry delay."""
     entry_delays = sorted({entries for entries, _ in made})
     groups = [
         (
@@ -224,10 +230,18 @@ def _blocks(
         set_,
         subject,
     )
-    table = variants_table(
-        "By delay", "Strategy bars late; each run against the run's", labels, set_, ratio, name
-    )
-    tiles = TilesBlock(
+    return (chart,)
+
+
+def _table(set_: RerunSet, ratio: np.ndarray, labels: list[str], name: str) -> tuple:
+    """The row of the table by pair."""
+    caption = "Strategy bars late; each run against the run's"
+    return (variants_table("By delay", caption, labels, set_, ratio, name),)
+
+
+def _tiles(summary: Mapping[str, float], name: str) -> TilesBlock:
+    """The summary of a judged check."""
+    return TilesBlock(
         "Summary",
         "Over the delayed runs",
         (
@@ -237,7 +251,16 @@ def _blocks(
             Tile("Worst kept", words.percent(summary["worst_ratio"]), f"of the {name}"),
         ),
     )
-    return ((chart,), (table,), (tiles,))
 
 
-__all__ = ["JUDGED", "SETTINGS", "own_delays", "pairs", "reruns", "rule", "run", "unjudged"]
+__all__ = [
+    "JUDGED",
+    "REVERSAL",
+    "SETTINGS",
+    "own_delays",
+    "pairs",
+    "reruns",
+    "rule",
+    "run",
+    "unjudged",
+]

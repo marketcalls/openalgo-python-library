@@ -29,9 +29,8 @@ PASSED = "passed"
 FAILED = "failed"
 NOT_JUDGED = "not judged"
 INFORMATIONAL = "informational"
-NOT_BUILT = "not built"
 #: Every verdict, in the order a scorecard counts them.
-VERDICTS = (PASSED, FAILED, NOT_JUDGED, INFORMATIONAL, NOT_BUILT)
+VERDICTS = (PASSED, FAILED, NOT_JUDGED, INFORMATIONAL)
 #: What a pass shows.
 PASSING = "Passing a check proves nothing on its own."
 #: What a failure shows, and what it does not.
@@ -91,9 +90,13 @@ class CheckResult:
     text; note: how it was measured, or why it was not judged.
     table: a row per run (an assignment, an order, a path, a rerun), empty when not
     judged; other markets has a row per symbol, shifted bars a row per shift, delayed
-    orders a row per pair of delays, liquidity a row per fill model, and synthetic
-    stress a row per rule, which it keeps when no rule keeps enough candidates to be
-    judged.
+    orders a row per pair of delays, which it keeps when its one-bar-late run entered
+    again, liquidity a row per fill model, synthetic stress a row per rule, which it
+    keeps when no rule keeps enough candidates to be judged, out of sample a row per part
+    and then a row per combination searched, walk-forward a row per fold (which it keeps
+    when its stitched runs closed too few trades or its folds found no edge in sample),
+    and the parameter neighbourhood and
+    the noise-robust optimization a row per combination.
     summary: its figures by name, empty when not judged but for synthetic stress (as
     its table); fractions are fractions (0.95 is 95 percent), money is rupees, and
     drawdowns are zero or negative.
@@ -124,7 +127,6 @@ __all__ = [
     "FAILING",
     "FIXED",
     "INFORMATIONAL",
-    "NOT_BUILT",
     "NOT_JUDGED",
     "PASSED",
     "PASSING",
