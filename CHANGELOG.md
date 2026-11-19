@@ -565,8 +565,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   percent cube around it); passes when the 25th percentile of the neighbours makes money
   and their median keeps half the chosen figure; with a heatmap, a surface view, a
   histogram and a blend of the neighbours. Noise-robust optimization: every combination
-  scored on the median of 50 noisy copies of the bars; the robust choice is judged by the
-  neighbourhood rule.
+  scored on the median of 50 noisy copies of the bars; informational: its figure says
+  whether the robust choice sits on a plateau (the neighbourhood rule on the noisy
+  scores), and it counts neither as a pass nor as a failure.
 - `bt.walk_forward(strategy, client=None, *, folds=5, anchored=False, in_sample=0.7,
   objective="net_profit", workers=None, progress=None, **settings_and_ranges)` is public
   (it raised NotImplementedError before) and returns a `WalkForwardResult`: `folds` (each
