@@ -460,6 +460,47 @@ def test_a_strategy_made_at_run_time_reruns_in_this_process():
     assert chosen.count == 1 and "bt.from_arrays" in chosen.why
 
 
+def _own_calendar():
+    from openalgo.backtest.calendar import Calendar
+
+    return Calendar(builtin=False)
+
+
+# (run arguments, why the reruns stay in this process): each argument that cannot be
+# pickled, in the order bt.backtest takes them, named by what it holds; "" when every
+# argument can travel to a worker.
+UNSENT = [
+    ({"costs": "zerodha", "slippage": 0}, ""),
+    (
+        {"costs": lambda: bt.costs.flat(20)},
+        "the cost model given as costs= cannot be sent to worker processes",
+    ),
+    (
+        {"calendar": _own_calendar},
+        "the calendar given as calendar= cannot be sent to worker processes",
+    ),
+    (
+        {"calendar": _own_calendar, "costs": lambda: bt.costs.flat(20)},
+        "the calendar given as calendar= and the cost model given as costs= cannot be sent "
+        "to worker processes",
+    ),
+    (
+        {"params": lambda: {"rule": lambda bar: True}},
+        "the value given as params= cannot be sent to worker processes",
+    ),
+]
+
+
+@pytest.mark.parametrize(("made", "why"), UNSENT)
+def test_reruns_that_cannot_be_sent_stay_here_and_say_which_argument_holds_them(made, why):
+    from robust_runs import Flip
+
+    arguments = {name: value() if callable(value) else value for name, value in made.items()}
+    chosen = choose_workers(4, 100, Flip, arguments)
+    assert chosen.why == why
+    assert chosen.count == (1 if why else 4)
+
+
 def net_profit_of(result):
     """A function of a Result: its net profit in rupees."""
     return float(result.metrics["net_profit"])

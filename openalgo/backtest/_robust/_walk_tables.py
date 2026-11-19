@@ -7,14 +7,18 @@ combination chosen in sample, its in-sample and out-of-sample objective per year
 (`_walk.annual`) and their efficiency (out over in, from the objective's break-even),
 and its out-of-sample net P&L in rupees, maximum drawdown (a fraction, zero or
 negative), P&L over the drawdown in rupees (`max_drawdown_amount`; infinite with no
-drawdown and a profit), closed trades and win rate. A fold that chose nothing has NaN
-figures.
+drawdown and a profit), closed trades (a whole number, `COUNT`) and win rate. A
+parameter whose values are all whole numbers is a `COUNT` column too, so its choices
+print as whole numbers beside a fold that chose nothing. A fold that chose nothing has
+NaN figures and <NA> trades; its whole-number parameters read <NA>, any other parameter
+None or NaN.
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import math
+import numbers
 from collections.abc import Sequence
 from typing import Any
 
@@ -26,6 +30,10 @@ from ._bar_common import break_even
 from ._blocks import SparkTableBlock
 from ._search_common import params_text
 from ._walk import FoldOutcome, WalkOutcome
+
+#: The type of the folds' trade counts and whole-number parameters: whole numbers that
+#: may be missing (a fold that chose nothing has none).
+COUNT = "Int64"
 
 
 def _ratio(value: float, inside: float, level: float | None) -> float:
@@ -68,9 +76,21 @@ def _row(fold: FoldOutcome, outcome: WalkOutcome, dates: Sequence[dt.date]) -> d
     return row
 
 
+def _whole(values: Sequence[Any]) -> bool:
+    """Whether every value of a parameter is a whole number (True and False are not)."""
+    return all(
+        isinstance(value, numbers.Integral) and not isinstance(value, bool) for value in values
+    )
+
+
 def fold_frame(outcome: WalkOutcome, dates: Sequence[dt.date]) -> pd.DataFrame:
     """A row per fold (module docstring), indexed by fold number."""
-    frame = pd.DataFrame([_row(fold, outcome, dates) for fold in outcome.folds])
+    rows = [_row(fold, outcome, dates) for fold in outcome.folds]
+    frame = pd.DataFrame(rows)
+    frame["trades"] = frame["trades"].astype(COUNT)
+    for name in outcome.grid.names:
+        if _whole(outcome.grid.axis(name)):
+            frame[name] = pd.array([row[name] for row in rows], dtype=COUNT)
     return frame.set_index("fold")
 
 
@@ -87,7 +107,7 @@ def _cells(label: str, dates_text: str, chosen: str, figures: dict[str, float]) 
         words.rupees(figures["net_profit"]),
         words.percent(figures["max_drawdown"]),
         words.number(figures["pnl_over_drawdown"]),
-        words.number(figures["trades"], 0),
+        words.number(math.nan if pd.isna(figures["trades"]) else float(figures["trades"]), 0),
         words.percent(figures["win_rate"]),
     )
 

@@ -82,7 +82,7 @@ def _search(result: Any, grid: Grid) -> Section:
         "",
         (
             Tile("Combinations", fmt.indian_digits(len(values), 0), "tried"),
-            Tile("Best", params_text(grid.swept(checks.best)), f"by {name}"),
+            Tile("Best", params_text(grid.swept(checks.best), "\n"), f"by {name}", wrap=True),
             Tile("Best objective", fmt.number(values[checks.best]), name),
             Tile("Path", result.path, "evaluation"),
         ),
@@ -147,6 +147,7 @@ def _overfitting(result: Any) -> Section:
         logits,
         False,
         (Mark(0.0, "the median", REFERENCE),),
+        "splits",
     )
     body = stack([("", row_html((tiles,))), (SMALL, row_html((histogram,)))])
     return Section("overfitting", "Overfitting", "Corrected for the combinations tried", body)

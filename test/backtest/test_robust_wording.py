@@ -33,6 +33,12 @@ def page():
     return edge_run().robustness(checks="quick", progress=lambda line: None).tearsheet()
 
 
+@pytest.fixture(scope="module")
+def every_check():
+    """The report of every check on the planted edge, with few runs, in this process."""
+    return edge_run().robustness(checks="all", progress=lambda line: None, **SMALL_BARS)
+
+
 def test_passing_a_check_proves_nothing_on_its_own():
     assert PASSING == "Passing a check proves nothing on its own."
     assert WORDING_RULE.startswith(PASSING)
@@ -99,8 +105,8 @@ def test_bt_robustness_says_a_win_rate_leaves_random_out_of_sample_not_judged():
     assert '"profit_factor" or "win_rate"' not in doc
 
 
-def test_the_report_lists_no_check_as_not_built_and_names_no_internal_unit(page):
-    report = edge_run().robustness(checks="all", progress=lambda line: None, **SMALL_BARS)
+def test_the_report_lists_no_check_as_not_built_and_names_no_internal_unit(every_check):
+    report = every_check
     page = report.tearsheet()
     assert len(report.verdicts) == 17
     assert "not built" not in page.lower() and "not built" not in " ".join(report.verdicts["note"])
@@ -124,6 +130,59 @@ PERCENTS = [
 @pytest.mark.parametrize(("fraction", "decimals", "text"), PERCENTS)
 def test_a_percentage_never_reads_minus_zero(fraction, decimals, text):
     assert words.percent(fraction, decimals) == text
+
+
+# (fraction, decimals, text): a percentile reads as an ordinal, rounded to `decimals`
+# places with trailing zeros dropped; 11th to 13th take "th", a part of a hundred too.
+ORDINALS = [
+    (0.66, 0, "66th"),
+    (0.6604, 0, "66th"),
+    (0.95, 0, "95th"),
+    (0.95, 1, "95th"),
+    (0.975, 1, "97.5th"),
+    (0.01, 0, "1st"),
+    (0.02, 0, "2nd"),
+    (0.03, 0, "3rd"),
+    (0.04, 0, "4th"),
+    (0.11, 0, "11th"),
+    (0.12, 0, "12th"),
+    (0.13, 0, "13th"),
+    (0.21, 0, "21st"),
+    (0.22, 0, "22nd"),
+    (0.23, 0, "23rd"),
+    (0.29, 0, "29th"),
+    (0.0, 0, "0th"),
+    (1.0, 0, "100th"),
+    (float("nan"), 0, "n/a"),
+    # Short of either end, a percentile shows the places that keep it from reading as
+    # the end: only none below and every run below read "0th" and "100th".
+    (0.996, 0, "99.6th"),
+    (0.004, 0, "0.4th"),
+    (0.9999, 1, "99.99th"),
+    (0.99951, 0, "99.95th"),
+]
+
+
+@pytest.mark.parametrize(("fraction", "decimals", "text"), ORDINALS)
+def test_a_percentile_reads_as_an_ordinal(fraction, decimals, text):
+    assert words.ordinal(fraction, decimals) == text
+
+
+def test_no_robustness_text_prints_a_percentile_as_a_percentage(every_check):
+    sources = sorted(ROBUST.glob("*.py"))
+    for path in sources:
+        source = path.read_text(encoding="utf-8")
+        assert not re.search(r"percent\([^)]*\)\} percentile", source), path.name
+    page = every_check.tearsheet()
+    assert "id='noise'" in page
+    assert not re.search(r"\d% percentile", page)
+
+
+def test_no_robustness_page_prints_a_minus_zero_percentage(every_check):
+    # The planted edge's drawdowns are shallow: a chart key or a bin's hover readout of
+    # -0.0002 reads "-0.02%", as the figures do.
+    page = every_check.tearsheet()
+    assert not re.search(r"-0\.0+%", page)
 
 
 def test_the_win_rate_note_has_one_colon():

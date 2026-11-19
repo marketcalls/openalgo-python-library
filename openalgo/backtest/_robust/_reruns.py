@@ -15,8 +15,10 @@ test's runs) share it.
 
 Workers: `workers` processes (the CPU count by default), as `bt.optimize` starts them,
 or this process when there is one run to do, when the strategy was made by
-`bt.from_arrays` or `bt.from_signals`, or when the run's arguments cannot be sent to
-another process (a calendar or cost model of its own); `Workers.why` says which. The
+`bt.from_arrays` or `bt.from_signals`, or when a run argument cannot be sent to another
+process (a calendar or cost model of its own, `unsendable`); `Workers.why` says which.
+The reruns' arguments never hold the client: the run's bars were read through it once,
+in this process, and every rerun reads them from memory (`_run_bars.bars_for`). The
 runs of a family are split into one contiguous batch per worker and come back in order,
 and so are the families of a search, one run each (`Reruns.firsts`). The pool starts
 when the first family needs it and stops when the report is done; a runner of other
@@ -48,6 +50,9 @@ from ._rerun_one import Known, RerunRow, failed_row, measured_row, rerun
 from ._run_bars import RunBars
 
 REAL, PERMUTED, NOISY = "real", "permuted", "noisy"
+#: What a run argument that cannot be pickled holds, as the plan names it (a native
+#: object of the engine); any other is named "value".
+UNSENT = {"calendar": "calendar", "costs": "cost model", "slippage": "slippage model"}
 
 
 @dataclass(frozen=True)
@@ -184,11 +189,23 @@ def choose_workers(requested: int | None, total: int, strategy: type, arguments:
     maker = made_by(strategy)
     if maker is not None:
         return Workers(1, f"a strategy made by {maker} is built in this process")
-    try:
-        pickle.dumps(arguments)
-    except (pickle.PicklingError, TypeError, AttributeError):
-        return Workers(1, "the run's own calendar or cost model cannot be sent to workers")
+    held = unsendable(arguments)
+    if held:
+        return Workers(1, held)
     return Workers(count, "")
+
+
+def unsendable(arguments: dict[str, Any]) -> str:
+    """Why the reruns' `arguments` cannot be sent to worker processes: each argument
+    that does not pickle, in order, named by what it holds (`UNSENT`) and its keyword;
+    "" when every one can be sent."""
+    held = []
+    for name, value in arguments.items():
+        try:
+            pickle.dumps(value)
+        except (pickle.PicklingError, TypeError, AttributeError):
+            held.append(f"the {UNSENT.get(name, 'value')} given as {name}=")
+    return f"{' and '.join(held)} cannot be sent to worker processes" if held else ""
 
 
 def shipped(target: Any, what: str, workers: Workers) -> tuple[str, Any]:
@@ -289,4 +306,5 @@ __all__ = [
     "choose_workers",
     "run_batch",
     "shipped",
+    "unsendable",
 ]

@@ -426,6 +426,16 @@ def test_exits_no_factor_reaches_pass():
     assert (check.table["net_profit"] == result.metrics["net_profit"]).all()
 
 
+def test_the_runs_percentile_among_the_varied_exits_reads_as_an_ordinal():
+    # The stop is never met, so every run makes the run's own net profit: none is below.
+    report = dip_run(1.0).robustness(
+        checks=["random_exits"], workers=1, runs=20, objective="net_profit", progress=quiet
+    )
+    (tiles,) = report._blocks["random_exits"][-1]
+    shown = {tile.label: (tile.value, tile.sub) for tile in tiles.tiles}
+    assert shown["The run's percentile"] == ("0th", "0.0% of the runs below it")
+
+
 def test_exit_parameters_are_drawn_per_run_among_their_values():
     # A stop of 0.5 points (0.625 at most when scaled) is always met by the 1.00 dip, one
     # of 3.0 (2.25 at least) never: a run makes money exactly when it drew 3.0.

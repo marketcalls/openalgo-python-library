@@ -585,6 +585,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tearsheet: the trade list's entry and exit times wrap between the date and the time, so
   every column fits a narrower window; the MAE and MFE histograms have a count axis.
   `bt.backtest`'s delays: a reversal counts as an exit and takes `delay_exits`.
+- Polish before the release: `bt.walk_forward` given a client now runs on its worker
+  processes (it read the bars once and ran in one process, giving the wrong reason); when
+  a setting truly cannot be sent to workers (a cost model, a calendar), the plan names it.
+  The robustness report, the tearsheet and the optimizer's page fit their window at 1024,
+  1280 and 1440 pixels with Export PDF and the theme switch in view (the section links
+  scroll inside the header); the optimizer page's axis labels and its best-setting tile
+  fit their charts, and its cross-validation histogram counts splits. Percentiles read as
+  ordinals ("the 66th percentile"); `WalkForwardResult.folds["trades"]` is an integer
+  column; the trade reshuffle says its end figure is the closed trades'.
 
 ### Changed
 

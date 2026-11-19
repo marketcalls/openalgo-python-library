@@ -1,6 +1,6 @@
 """Text that fits a chart of the robustness report: a figure written in a cell only when
-it fits, short when the whole one does not, and axis values placed so that none meets
-another (`_charts_grid`).
+it fits, short when the whole one does not, axis values placed so that none meets
+another (`_charts_grid`), and an axis value at a chart's end kept inside it (`_charts`).
 
 Sizes are those of the charts' 10-pixel mono type (`report._dashboard.bars.AXIS_TEXT`, the
 `cell-text` style): a character 0.6 of an em wide, a line 12 pixels tall, in the units of
@@ -87,6 +87,18 @@ class Label:
         )
 
 
+def anchor_inside(at: float, text: str, left: float, right: float) -> str:
+    """The `text-anchor` that keeps `text`, an axis value placed at `at`, between `left`
+    and `right` (pixels): "middle" when it fits centred on `at`, else "end" (it ends at
+    `at`) when it would cross `right`, or "start" when it would cross `left`."""
+    half = width_of(text) / 2
+    if at + half > right:
+        return "end"
+    if at - half < left:
+        return "start"
+    return "middle"
+
+
 def placed(labels: list[Label]) -> list[Label]:
     """The labels to draw, in order: each one that meets none drawn before it, so a
     crowded axis shows every few values, evenly when they are as long."""
@@ -104,6 +116,7 @@ __all__ = [
     "LINE",
     "SHORT_UNITS",
     "Label",
+    "anchor_inside",
     "placed",
     "short",
     "width_of",
