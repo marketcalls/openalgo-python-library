@@ -22,9 +22,15 @@
 //! | The engine | Recorded at |
 //! |---|---|
 //! | Its slice closes at `at`: a participant of the round, its levels phase run | That slice, step 6, at once |
-//! | Its slice is open and closes after `at` (a coarser base) | That slice's step 6, when its levels phase runs (`steps::levels_phase`) |
+//! | Its slice is open and closes after `at` (a coarser base) | That slice's step 6, when its levels phase runs; its working entries and adds are cancelled at that slice's step 3, before its levels, so none fills inside the bar (`steps::levels_phase`) |
 //! | Between slices | Its next slice, step 1, so its exits fill at that slice's open (`steps::open_phase`) |
+//! | Its run has not started, and the breach's session day is before its first slice's | Nothing: it holds no position or order, and the lock's day is over before it starts |
 //! | Its run has ended | Nothing: its positions stay as its run left them |
+//!
+//! Every breach the engine takes is recorded, in the order the fund found them: an engine
+//! that stands between slices across two session days of another exchange's rounds (an
+//! NSE engine over an NSE holiday on which MCX trades) records both at its next slice. A
+//! position is exited once, since one whose exit already waits keeps it.
 //!
 //! A backtest's only: a live session's risk watch fires the kill switch for the account's
 //! limit (16-session-design 6.3).
@@ -82,38 +88,68 @@ impl Engine {
         }
         match self.phase {
             Phase::Finished => Ok(()),
+            Phase::Ready(0) if self.starts_after(breach.day) => Ok(()),
             Phase::Opened(slice) if slice.close <= breach.at => {
                 self.account.locked_day = Some(breach.day);
                 self.record_account_breach(&slice, Step::AggregateRules, breach)
             }
             _ => {
                 self.account.locked_day = Some(breach.day);
-                self.account.waiting = Some(breach);
+                self.account.waiting.push(breach);
                 Ok(())
             }
         }
     }
 
-    /// Step 1 of `slice`: the breach found while the engine stood between slices (module
-    /// docs); its exits fill at this slice's open.
+    /// True when the run's first slice is on a session day after `day`, or the run has no
+    /// slice.
+    fn starts_after(&self, day: Day) -> bool {
+        self.timeline.slice(0).map_or(true, |first| first.day > day)
+    }
+
+    /// Step 1 of `slice`: the breaches found while the engine stood between slices (module
+    /// docs); their exits fill at this slice's open.
     ///
     /// Errors: those of the record.
     pub(super) fn account_breach_at_open(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
-        match self.account.waiting.take() {
-            Some(breach) => self.record_account_breach(slice, Step::SessionOpen, breach),
-            None => Ok(()),
-        }
+        self.record_waiting_breaches(slice, Step::SessionOpen)
     }
 
-    /// Step 6 of `slice`, after the strategy's own aggregate rules: the breach found while
-    /// the slice was open (module docs).
+    /// Step 3 of `slice`, before its levels: a breach found while the slice was open
+    /// cancels the working entries and adds, so none fills inside the bar from the breach
+    /// on (module docs). The breach itself is recorded at step 6.
+    ///
+    /// Errors: those of the cancels.
+    pub(super) fn account_breach_inside_bar(
+        &mut self,
+        slice: &SliceInfo,
+    ) -> Result<(), KernelError> {
+        if self.account.waiting.is_empty() {
+            return Ok(());
+        }
+        self.cancel_working_entries(Self::stamp(slice, Step::Levels))
+    }
+
+    /// Step 6 of `slice`, after the strategy's own aggregate rules: the breaches found
+    /// while the slice was open (module docs).
     ///
     /// Errors: those of the record.
     pub(super) fn account_breach_at_close(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
-        match self.account.waiting.take() {
-            Some(breach) => self.record_account_breach(slice, Step::AggregateRules, breach),
-            None => Ok(()),
+        self.record_waiting_breaches(slice, Step::AggregateRules)
+    }
+
+    /// Record every waiting breach at `step` of `slice`, in the order the fund found them.
+    ///
+    /// Errors: those of the record.
+    fn record_waiting_breaches(
+        &mut self,
+        slice: &SliceInfo,
+        step: Step,
+    ) -> Result<(), KernelError> {
+        for breach in std::mem::take(&mut self.account.waiting) {
+            self.record_account_breach(slice, step, breach)?;
         }
+        Ok(())
     }
 
     /// The record of module docs, stamped at `step` of `slice`: the event, the cancels of

@@ -90,7 +90,7 @@ impl Engine {
     /// `Exec` for an instrument the run does not have.
     pub fn sizing_inputs(&self, request: &OrderRequest) -> Result<SizingContext, KernelError> {
         let price = self.last_close(request.instrument).unwrap_or(0.0);
-        Ok(self.account_sizing(self.sizing_context(request, price, 0.0)?, false))
+        Ok(self.account_sizing(self.sizing_context(request, price, 0.0)?))
     }
 
     /// What a sizer sees for `request` at `price` (rupees).
@@ -172,20 +172,68 @@ impl Engine {
 
     /// Size a request at the decision of `slice`: the decision price is the last
     /// close; the engine default keeps the venue cash buffer, and in a live session sizes
-    /// from at most the session's cap (`venue_session`), in a portfolio run from at most
-    /// the account's free cash (`account_link`).
+    /// from at most the session's cap (`venue_session`); in a portfolio run every sizer
+    /// sees at most the account's free cash (`account_link`).
     pub(super) fn size_at_decision(
         &self,
         request: &OrderRequest,
         sizer: SizerSpec,
         slice: &SliceInfo,
     ) -> Result<SizeOutcome, KernelError> {
+        let own = self.decision_context(request, sizer)?;
+        self.sized(sizer, self.account_sizing(own), request, slice.day)
+    }
+
+    /// Size a submission at the decision of `slice`, as `size_at_decision` does.
+    ///
+    /// Errors: `Ok(Err(AccountMargin))` when the account's free cash leaves the sizer
+    /// nothing where the engine's own figures size the order (`account_link`); `Err` for
+    /// those of sizing.
+    pub(super) fn size_submission(
+        &self,
+        request: &OrderRequest,
+        sizer: SizerSpec,
+        slice: &SliceInfo,
+    ) -> Result<Result<SizeOutcome, RejectCode>, KernelError> {
+        let own = self.decision_context(request, sizer)?;
+        self.sized_under_link(sizer, own, request, slice.day)
+    }
+
+    /// What a sizer sees at the decision from the engine's own figures: the last close,
+    /// the venue cash buffer for the engine default, a live session's cap.
+    fn decision_context(
+        &self,
+        request: &OrderRequest,
+        sizer: SizerSpec,
+    ) -> Result<SizingContext, KernelError> {
         let price = self.last_close(request.instrument).unwrap_or(0.0);
         let default = sizer == SizerSpec::EngineDefault;
         let buffer = if default { VENUE_CASH_BUFFER } else { 0.0 };
-        let ctx = self.session_sizing(sizer, self.sizing_context(request, price, buffer)?);
-        let ctx = self.account_sizing(ctx, default);
-        self.sized(sizer, ctx, request, slice.day)
+        Ok(self.session_sizing(sizer, self.sizing_context(request, price, buffer)?))
+    }
+
+    /// Size `sizer` from the engine's own figures `own` as the account leaves them
+    /// (`account_sizing`). A skip keeps the engine's own reason when its own figures skip
+    /// the order too.
+    ///
+    /// Errors: `Ok(Err(AccountMargin))` when only the account's free cash leaves nothing;
+    /// `Err` for those of sizing.
+    fn sized_under_link(
+        &self,
+        sizer: SizerSpec,
+        own: SizingContext,
+        request: &OrderRequest,
+        day: Day,
+    ) -> Result<Result<SizeOutcome, RejectCode>, KernelError> {
+        let linked = self.account_sizing(own);
+        let outcome = self.sized(sizer, linked, request, day)?;
+        if linked == own || matches!(outcome, SizeOutcome::Units(_)) {
+            return Ok(Ok(outcome));
+        }
+        Ok(match self.sized(sizer, own, request, day)? {
+            SizeOutcome::Units(_) => Err(RejectCode::AccountMargin),
+            skipped => Ok(skipped),
+        })
     }
 
     /// The units a queued order fills: `units` as resolved, or for an engine default
@@ -219,15 +267,13 @@ impl Engine {
         let slippage = self.fill_slippage(request.instrument, slice.day)?;
         let price = slipped_price(slippage, request.side, open, tick)?;
         let own = self.sizing_context(request, price, 0.0)?;
-        let linked = self.account_sizing(own, true);
-        let size = |ctx| self.sized(SizerSpec::EngineDefault, ctx, request, slice.day);
-        Ok(match size(linked)? {
-            SizeOutcome::Units(units) => Ok(units),
-            SizeOutcome::Skipped(_) if linked == own => Err(RejectCode::Margin),
-            SizeOutcome::Skipped(_) => match size(own)? {
-                SizeOutcome::Units(_) => Err(RejectCode::AccountMargin),
-                SizeOutcome::Skipped(_) => Err(RejectCode::Margin),
+        let sizer = SizerSpec::EngineDefault;
+        Ok(
+            match self.sized_under_link(sizer, own, request, slice.day)? {
+                Ok(SizeOutcome::Units(units)) => Ok(units),
+                Ok(SizeOutcome::Skipped(_)) => Err(RejectCode::Margin),
+                Err(code) => Err(code),
             },
-        })
+        )
     }
 }

@@ -8,13 +8,13 @@
 //! the room.
 
 use crate::engine::account_test_kit::{events, held, july_2025, market, minute_bars, pause_at};
-use crate::engine::account_test_kit::{Setup, SBIN};
+use crate::engine::account_test_kit::{Setup, INFY, SBIN};
 use crate::engine::venue_test_kit::holding_100;
 use crate::engine::Submission;
 use crate::engine::{AccountLink, Engine, KernelError, Pause, QuantityMode, RunOutput};
-use crate::exec::{OrderId, OrderRequest, QuantitySpec};
+use crate::exec::{InstrumentId, OrderId, OrderRequest, OrderType, QuantitySpec, RejectCode};
 use crate::model::{Product, Side};
-use crate::sizing::SizerSpec;
+use crate::sizing::{SizerSpec, SkipReason};
 
 fn link(room_rupees: f64) -> AccountLink {
     AccountLink {
@@ -41,8 +41,13 @@ fn linked(link: AccountLink) -> Engine {
 
 /// The engine default's order of SBIN on CNC.
 fn engine_default_buy() -> OrderRequest {
+    engine_default_buy_of(SBIN)
+}
+
+/// The engine default's order of `instrument` on CNC.
+fn engine_default_buy_of(instrument: InstrumentId) -> OrderRequest {
     let sized = QuantitySpec::Sizer(SizerSpec::EngineDefault);
-    OrderRequest::market(SBIN, Side::Buy, sized)
+    OrderRequest::market(instrument, Side::Buy, sized)
 }
 
 /// The exit of the whole MIS position.
@@ -84,11 +89,10 @@ fn run_script(mut kernel: Engine) -> RunOutput {
 }
 
 #[test]
-fn a_link_without_a_room_or_with_ample_room_changes_nothing() {
+fn a_link_with_a_room_of_0_or_an_ample_room_changes_nothing() {
     let alone = run_script(linked(AccountLink::default()));
-    let mut unlinked = linked(link(0.0));
-    assert_eq!(unlinked.set_account_link(AccountLink::default()), Ok(()));
-    assert_eq!(run_script(unlinked), alone);
+    // A room of 0: the account's free cash is the engine's own (a fund of one).
+    assert_eq!(run_script(linked(link(0.0))), alone);
     // Ample: the account's free cash stays above the strategy's equity and free cash.
     assert_eq!(run_script(linked(link(2_000_000.0))), alone);
     assert_eq!(
@@ -205,6 +209,136 @@ fn the_engine_default_sizes_from_at_most_the_accounts_free_cash() {
         let order = kernel.order(OrderId(1)).expect("the order");
         assert_eq!(order.quantity_units, units, "{link:?}");
     }
+}
+
+#[test]
+fn the_engine_default_of_two_instruments_sizes_its_share_from_at_most_the_accounts_free_cash() {
+    // SBIN and INFY flat at 1,000.00. The engine default's CNC buy of SBIN at the close of
+    // minute 0 takes half the capital: 10,00,000 / 2 x 0.98 / 1,000.00 = 490 units, filled
+    // at minute 1 and blocking 4,90,000, which leaves 5,10,000 of the engine's own free
+    // cash. INFY's at the close of minute 2, under the link given then, sizes from the
+    // least of its share (5,00,000), its own free cash and the account's free cash
+    // (5,10,000 plus the room), less the 2 percent buffer.
+    let table = [
+        (AccountLink::default(), 490.0),
+        // A fund of one: the account's free cash is the engine's own.
+        (link(0.0), 490.0),
+        // The other strategies' free cash beside it (a second strategy of 10,00,000, flat).
+        (link(1_000_000.0), 490.0),
+        // The account's free cash 2,00,000: 2,00,000 x 0.98 / 1,000.00.
+        (link(-310_000.0), 196.0),
+    ];
+    for (link, infy_units) in table {
+        let day = july_2025(1);
+        let flat = || minute_bars(&[day], |_, _| [1_000.0; 4]);
+        let mut kernel = Setup::minutes(day, day).engine_over(vec![flat(), flat()]);
+        pause_at(&mut kernel, 0);
+        let sbin = kernel.submit(engine_default_buy_of(SBIN));
+        assert_eq!(sbin, Ok(Submission::Submitted(OrderId(1))));
+        pause_at(&mut kernel, 2);
+        assert_eq!(kernel.set_account_link(link), Ok(()));
+        let infy = kernel.submit(engine_default_buy_of(INFY));
+        assert_eq!(infy, Ok(Submission::Submitted(OrderId(2))), "{link:?}");
+        let units = |id| kernel.order(id).expect("the order").quantity_units;
+        assert_eq!(
+            (units(OrderId(1)), units(OrderId(2))),
+            (490.0, infy_units),
+            "{link:?}"
+        );
+    }
+}
+
+#[test]
+fn an_engine_default_sized_at_the_decision_that_only_the_account_leaves_nothing_is_refused() {
+    // Whole shares: an MIS buy decided at the close of minute 0 fills at minute 1, then
+    // the engine default's CNC buy is sized at the close of minute 1 under the link. The
+    // MIS buy of 100 leaves 9,00,000 of the engine's own free cash, the one of 1,000 none.
+    // (MIS units, link, the engine default's submission)
+    let table = [
+        (
+            100.0,
+            AccountLink::default(),
+            Submission::Submitted(OrderId(2)),
+        ),
+        // The account's free cash 0: only the other strategies leave it nothing.
+        (
+            100.0,
+            link(-900_000.0),
+            Submission::Rejected(OrderId(2), RejectCode::AccountMargin),
+        ),
+        // The engine's own free cash 0: its own reason stands, linked or not.
+        (
+            1_000.0,
+            AccountLink::default(),
+            Submission::Skipped(SkipReason::RoundedToZero),
+        ),
+        (
+            1_000.0,
+            link(-900_000.0),
+            Submission::Skipped(SkipReason::RoundedToZero),
+        ),
+    ];
+    for (mis_units, link, expected) in table {
+        let mut kernel = linked(AccountLink::default());
+        pause_at(&mut kernel, 0);
+        assert!(kernel
+            .submit(market(Side::Buy, mis_units, Product::Mis))
+            .is_ok());
+        pause_at(&mut kernel, 1);
+        assert_eq!(kernel.set_account_link(link), Ok(()));
+        let case = format!("{mis_units} MIS units, {link:?}");
+        assert_eq!(kernel.submit(engine_default_buy()), Ok(expected), "{case}");
+    }
+}
+
+#[test]
+fn an_engine_default_refused_at_the_decision_is_an_order_rejected_account_margin() {
+    let mut kernel = linked(link(-1_000_000.0));
+    pause_at(&mut kernel, 0);
+    assert_eq!(
+        kernel.submit(engine_default_buy()),
+        Ok(Submission::Rejected(OrderId(1), RejectCode::AccountMargin))
+    );
+    let order = kernel.order(OrderId(1)).expect("the order");
+    assert_eq!(
+        (order.reject_code, order.quantity_units),
+        (Some(RejectCode::AccountMargin), 0.0)
+    );
+    assert_eq!(events_at(&kernel, 0, 7), ["Rejected account_margin"]);
+}
+
+#[test]
+fn a_replacement_the_account_leaves_unsized_is_refused_and_the_order_works_on() {
+    // A resting CNC buy LIMIT sized by the engine default at the close of minute 0: 980
+    // units. At the close of minute 1 the account's free cash is 0.
+    let mut kernel = linked(AccountLink::default());
+    pause_at(&mut kernel, 0);
+    let limit_at = |limit_rupees| OrderRequest {
+        order_type: OrderType::Limit { limit_rupees },
+        ..engine_default_buy()
+    };
+    assert_eq!(
+        kernel.submit(limit_at(900.0)),
+        Ok(Submission::Submitted(OrderId(1)))
+    );
+    pause_at(&mut kernel, 1);
+    assert_eq!(kernel.set_account_link(link(-1_000_000.0)), Ok(()));
+    assert_eq!(
+        kernel.modify(OrderId(1), limit_at(905.0)),
+        Ok(Submission::Rejected(OrderId(1), RejectCode::AccountMargin))
+    );
+    let order = kernel.order(OrderId(1)).expect("the order");
+    let limit = OrderType::Limit {
+        limit_rupees: 900.0,
+    };
+    assert_eq!(
+        (
+            order.quantity_units,
+            order.request.order_type,
+            order.status.is_working()
+        ),
+        (980.0, limit, true)
+    );
 }
 
 #[test]

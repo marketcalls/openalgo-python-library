@@ -64,11 +64,13 @@ impl Engine {
     }
 
     /// The levels phase of a slice its open phase has run: steps 3 to 6, then an account
-    /// breach found while the slice was open, after the strategy's own aggregate rules
-    /// (`account_breach`). Step 7 (`Engine::decision_phase`) comes next.
+    /// breach found while the slice was open, after the strategy's own aggregate rules; its
+    /// cancels of entries and adds come first, before the levels (`account_breach`). Step 7
+    /// (`Engine::decision_phase`) comes next.
     ///
     /// Errors: those of the steps.
     pub(crate) fn levels_phase(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
+        self.account_breach_inside_bar(slice)?;
         self.step_levels(slice)?;
         self.step_ratchets(slice)?;
         self.step_mark(slice);

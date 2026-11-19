@@ -9,7 +9,8 @@ reduce-only order that would leave more units resting to close a position than i
 entry gates a live session adds (`rust/oa_bt/src/engine/venue_gates.rs`), and the freeze
 quantity is a cap on the whole position there, not only on each order. `account_margin` and
 `account_loss_gate` are a portfolio run's: the shared account's free cash refusing an
-opening fill the strategy's own free cash covers, and the account's daily loss limit
+opening fill, or a sized order at its submission, that the strategy's own free cash
+covers, and the account's daily loss limit
 locking entries (`rust/oa_bt/src/engine/account_link.rs`, `account_breach.rs`). Each
 entry is (what happened, what to do). The product rule covers three refusals that need
 different advice, so it has one entry per case, told apart by the order and its

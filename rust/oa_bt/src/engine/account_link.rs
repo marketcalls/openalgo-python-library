@@ -16,12 +16,19 @@
 //!   other strategies hold it. Closing and reducing fills are never checked, nor is the
 //!   futures roll's next contract (the near contract's margin is freed at the same open).
 //! - **The sizing cap.** Every sizer sees the lesser of the engine's own free cash and the
-//!   account's as its free cash; the engine default also sizes from at most the account's
-//!   free cash in place of the strategy's equity (and of its capital without `reinvest`),
-//!   as a live session's sizing cap does with the broker's funds (R18,
-//!   `venue_session::session_sizing`). An engine default sized at the fill that the cap
-//!   leaves with nothing, where the engine's own figures would have sized it, is refused
-//!   `account_margin`.
+//!   account's as its free cash, and nothing else changes. So the engine default sizes
+//!   from the least of its share of the strategy's equity (the equity split across the
+//!   strategy's instruments), the engine's own free cash and the account's free cash
+//!   (`sizing::engine_default_units`). For one instrument that is the lesser of the
+//!   strategy's equity and the account's free cash; the cap comes after the split, not
+//!   before it as a live session's cap on the broker's funds does (R18,
+//!   `venue_session::session_sizing`), so a room of 0 (a fund of one, or an account whose
+//!   free cash is the engine's own) sizes as the engine alone does (KR8), and the other
+//!   strategies' investments shrink a size only once they leave the account less free
+//!   cash than the engine's share. An order a sizer leaves with nothing only because of
+//!   the account, where the engine's own figures would have sized it, is refused
+//!   `account_margin` at its submission or, for the engine default sized at the fill, at
+//!   the fill (`sizing`).
 //!
 //! The account's daily loss limit reaches the engine as a breach (`account_breach`); the
 //! entry lock it sets is kept here with the link (`AccountDesk`). A live session has no
@@ -48,14 +55,15 @@ pub struct AccountLink {
 }
 
 /// What the account of a portfolio run has told one engine: its link, and the entry lock
-/// of an account breach and the breach waiting to be recorded (`account_breach`).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// of an account breach and the breaches waiting to be recorded (`account_breach`).
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct AccountDesk {
     pub(super) link: AccountLink,
     /// The IST session day the account's daily loss limit locks entries for.
     pub(super) locked_day: Option<Day>,
-    /// A breach the engine records at its next step 6 or step 1 (`account_breach`).
-    pub(super) waiting: Option<super::account_breach::AccountBreach>,
+    /// The breaches the engine records at its next step 6 or step 1, in the order the
+    /// fund found them (`account_breach`).
+    pub(super) waiting: Vec<super::account_breach::AccountBreach>,
 }
 
 impl Engine {
@@ -99,24 +107,13 @@ impl Engine {
     }
 
     /// `ctx` as the account leaves it to a sizer (module docs): the free cash at most the
-    /// account's, and for the engine default (`engine_default`) the equity and the capital
-    /// too. Unchanged without a link.
-    pub(super) fn account_sizing(&self, ctx: SizingContext, engine_default: bool) -> SizingContext {
+    /// account's. Unchanged without a link.
+    pub(super) fn account_sizing(&self, ctx: SizingContext) -> SizingContext {
         let Some(room) = self.account.link.room_rupees else {
             return ctx;
         };
-        let account_free = ctx.free_cash_rupees + room;
-        let free_cash_rupees = ctx.free_cash_rupees.min(account_free);
-        if !engine_default {
-            return SizingContext {
-                free_cash_rupees,
-                ..ctx
-            };
-        }
         SizingContext {
-            equity_rupees: ctx.equity_rupees.min(account_free),
-            initial_capital_rupees: ctx.initial_capital_rupees.min(account_free),
-            free_cash_rupees,
+            free_cash_rupees: ctx.free_cash_rupees.min(ctx.free_cash_rupees + room),
             ..ctx
         }
     }

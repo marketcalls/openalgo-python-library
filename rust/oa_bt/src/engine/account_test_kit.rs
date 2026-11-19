@@ -1,7 +1,8 @@
 //! A harness for the unit tests of the phases of a slice (`steps`) and of a portfolio
-//! run's account in one engine (`account_link`, `account_breach`): backtests of SBIN on
-//! NSE in July 2025 with no charges and no slippage and a capital of 10,00,000, driven a
-//! phase at a time as a portfolio run's fund drives them.
+//! run's account in one engine (`account_link`, `account_breach`): backtests of SBIN (and
+//! INFY, where a test needs a second instrument) on NSE in July 2025 with no charges and
+//! no slippage and a capital of 10,00,000, driven a phase at a time as a portfolio run's
+//! fund drives them.
 
 use crate::exec::{FillAt, InstrumentId, InstrumentSpec, OrderRequest, QuantitySpec};
 use crate::market::calendar::{BaseInterval, Calendar};
@@ -23,6 +24,9 @@ use super::kernel::Engine;
 use super::pause::Pause;
 
 pub(super) const SBIN: InstrumentId = InstrumentId(0);
+pub(super) const INFY: InstrumentId = InstrumentId(1);
+/// The symbols of a run's instruments, in registration order (`SBIN`, `INFY`).
+const SYMBOLS: [&str; 2] = ["SBIN", "INFY"];
 /// The capital of every run, rupees.
 pub(super) const CAPITAL_RUPEES: f64 = 1_000_000.0;
 /// One-minute slices in an NSE session (09:15 to 15:30).
@@ -41,9 +45,10 @@ pub(super) fn ist(day: Day, hour: u32, minute: u32) -> i64 {
     ts_from_ist(day, hour * 60 + minute)
 }
 
-fn sbin() -> InstrumentSpec {
+/// An NSE equity with a lot of 1 and a tick of 0.05.
+fn nse_equity(symbol: &str) -> InstrumentSpec {
     InstrumentSpec {
-        symbol: "SBIN".to_string(),
+        symbol: symbol.to_string(),
         exchange: Exchange::Nse,
         kind: InstrumentKind::Equity,
         lot_size_units: 1,
@@ -116,11 +121,21 @@ impl Setup {
 
     /// The engine of this run on `bars` of SBIN.
     pub(super) fn engine(self, bars: BarColumns) -> Engine {
+        self.engine_over(vec![bars])
+    }
+
+    /// The engine of this run on one `BarColumns` per instrument: SBIN's, then INFY's.
+    pub(super) fn engine_over(self, bars: Vec<BarColumns>) -> Engine {
+        assert!(bars.len() <= SYMBOLS.len(), "bars of SBIN and INFY at most");
+        let instruments = SYMBOLS[..bars.len()]
+            .iter()
+            .map(|symbol| nse_equity(symbol))
+            .collect();
         let setup = RunSetup {
             config: self.config(),
             calendar: Calendar::new().expect("the embedded calendar tables parse"),
-            instruments: vec![sbin()],
-            bars: vec![bars],
+            instruments,
+            bars,
         };
         Engine::new(setup).expect("a valid run")
     }

@@ -289,6 +289,47 @@ fn a_coarser_engine_records_the_breach_at_its_slices_step_6_and_locks_from_the_b
     assert_eq!(buy_now(&mut kernel, Product::Cnc), "submitted");
 }
 
+#[test]
+fn a_breach_inside_a_coarser_engines_open_bar_cancels_its_resting_entries_before_its_levels() {
+    // Daily bars: 2025-07-01 flat at 1,000.00, 2025-07-02 opening at 1,000.00 with a low of
+    // 900.00 and closing at 970.00, 2025-07-03 flat at 970.00. A CNC buy LIMIT of 100 at
+    // 950.00 decided at the first close would fill inside the second bar; the breach comes
+    // at 11:00 IST on 2025-07-02, with that bar open. From the breach on no entry fills:
+    // the LIMIT is cancelled at the bar's step 3, before its levels, and the breach is
+    // recorded at its step 6 with nothing left to exit.
+    let (first, second, third) = (july_2025(1), july_2025(2), july_2025(3));
+    let bars = daily_bars(&[
+        (first, flat(1_000.0)),
+        (second, [1_000.0, 1_010.0, 900.0, 970.0]),
+        (third, flat(970.0)),
+    ]);
+    let mut kernel = Setup::daily(first, third).engine(bars);
+    pause_at(&mut kernel, 0);
+    let resting = OrderRequest {
+        order_type: OrderType::Limit {
+            limit_rupees: 950.0,
+        },
+        ..market(Side::Buy, 100.0, Product::Cnc)
+    };
+    assert_eq!(
+        kernel.submit(resting),
+        Ok(Submission::Submitted(OrderId(1)))
+    );
+    end_paused(&mut kernel, 0);
+    let day_bar = slice(&kernel, 1);
+    assert_eq!(kernel.open_phase(&day_bar), Ok(None));
+    assert_eq!(
+        kernel.account_breach(breach(ist(second, 11, 0), second)),
+        Ok(())
+    );
+    assert_eq!(kernel.levels_phase(&day_bar), Ok(()));
+    assert_eq!(events_at(&kernel, 1, 3), ["Canceled"]);
+    assert_eq!(events_at(&kernel, 1, 6), ["account_loss_hit"]);
+    let filled = fills(&kernel);
+    assert!(filled.is_empty(), "no fill: {filled:?}");
+    assert_eq!(held(&kernel, Product::Cnc), 0.0);
+}
+
 /// Two days of 1-minute bars, 2025-07-01 flat at 1,000.00 and 2025-07-02 flat at 985.00, a
 /// CNC buy of 100 filled at 1,000.00 at minute 1, and the engine standing between the two
 /// sessions, after the first's last slice.
@@ -348,6 +389,69 @@ fn a_breach_between_slices_on_the_engines_next_session_day_locks_that_day() {
         buy_now(&mut kernel, Product::Cnc),
         "rejected account_loss_gate"
     );
+}
+
+#[test]
+fn two_breaches_while_an_engine_stands_between_slices_are_both_recorded_and_it_exits_once() {
+    // The evening of 2025-07-01 and the morning of 2025-07-02 before NSE opens (two
+    // session days of another exchange's rounds) each breach the account's limit.
+    let mut kernel = between_sessions();
+    let evening = breach(ist(july_2025(1), 21, 0), july_2025(1));
+    let morning = AccountBreach {
+        measure_rupees: -15_000.0,
+        ..breach(ist(july_2025(2), 9, 0), july_2025(2))
+    };
+    assert_eq!(kernel.account_breach(evening), Ok(()));
+    assert_eq!(kernel.account_breach(morning), Ok(()));
+    let next = SECOND_DAY_FIRST_SLICE;
+    pause_at(&mut kernel, next);
+    let observed: Vec<(u32, Step, Option<f64>)> = kernel
+        .record
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Risk { stamp, event, .. } => {
+                Some((stamp.slice, stamp.step, event.observed_rupees))
+            }
+            _ => None,
+        })
+        .collect();
+    let at_open = |measure| (next as u32, Step::SessionOpen, Some(measure));
+    assert_eq!(observed, [at_open(-12_500.0), at_open(-15_000.0)]);
+    assert_eq!(events_at(&kernel, next, 2), ["PositionClosed"]);
+    let exits: Vec<_> = fills(&kernel)
+        .into_iter()
+        .filter(|fill| fill.6 == "account_loss_limit")
+        .collect();
+    assert_eq!(exits.len(), 1, "one exit of the 100 units: {exits:?}");
+    assert_eq!(
+        buy_now(&mut kernel, Product::Cnc),
+        "rejected account_loss_gate"
+    );
+}
+
+#[test]
+fn an_engine_that_has_not_started_drops_a_breach_of_a_day_before_its_first_slice() {
+    // A run of 2025-07-07 alone, with no position or order before its first slice. A
+    // breach of an earlier day is over before it starts; one of its first day, before
+    // NSE opens, is recorded at its first slice's step 1 and locks that day.
+    let (earlier, first) = (july_2025(1), july_2025(7));
+    let table = [
+        (breach(ist(earlier, 15, 30), earlier), vec![], "submitted"),
+        (
+            breach(ist(first, 9, 0), first),
+            vec!["account_loss_hit".to_string()],
+            "rejected account_loss_gate",
+        ),
+    ];
+    for (found, recorded, buy) in table {
+        let bars = minute_bars(&[first], |_, _| flat(1_000.0));
+        let mut kernel = Setup::minutes(first, first).engine(bars);
+        assert_eq!(kernel.account_breach(found), Ok(()));
+        pause_at(&mut kernel, 0);
+        assert_eq!(events_at(&kernel, 0, 1), recorded, "{found:?}");
+        assert_eq!(buy_now(&mut kernel, Product::Cnc), buy, "{found:?}");
+    }
 }
 
 #[test]
