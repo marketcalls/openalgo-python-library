@@ -221,6 +221,44 @@ def test_the_probability_of_overfitting_says_what_a_low_figure_cannot_show():
     assert "near 0 does not show the settings hold" in words
 
 
+def test_the_overfitting_histogram_counts_splits_not_runs(spike, page):
+    # Each value is the logit of one of the C(16, 8) = 12,870 ways of splitting the blocks.
+    assert spike.overfitting["splits_counted"] == 12_870
+    assert "Bars: how many of the 12,870 splits fall in each bin." in page
+    assert "12,870 runs" not in page
+
+
+class TwoWeekday(Weekday):
+    """`Weekday` with a second parameter it does not read, so a sweep has two."""
+
+    lots = 1
+
+
+def test_the_best_tile_shows_each_parameter_on_its_own_line():
+    # Wednesday wins; both lots give the same run, so the first, 1, is the best.
+    result = bt.optimize(
+        TwoWeekday,
+        data=weekday_bars(SESSIONS, lambda s: (2,)),
+        **FREE,
+        day=(1, 2),
+        lots=(1, 2),
+        workers=1,
+        progress=lambda line: None,
+    )
+    assert result.best == {"day": 2, "lots": 1}
+    shown = "<div class='stat-value nums wrap' title='day 2\nlots 1'>day 2\nlots 1</div>"
+    assert f">Best</div>{shown}" in result.tearsheet()
+
+
+def test_a_wrapped_tile_keeps_its_lines_and_breaks_a_long_one():
+    from test_report_tearsheet import css_rule
+
+    from openalgo.backtest.report._dashboard.style import stylesheet
+
+    rule = css_rule(stylesheet(), ".stat-value.wrap")
+    assert rule["white-space"] == "pre-line" and rule["overflow-wrap"] == "anywhere"
+
+
 def test_the_page_is_one_self_contained_well_formed_page(page):
     assert page.startswith("<!DOCTYPE html>") and page.isascii()
     lower = page.lower()

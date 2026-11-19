@@ -38,9 +38,10 @@ def value_text(value: Any) -> str:
     return str(value)
 
 
-def params_text(values: Mapping[str, Any]) -> str:
-    """Parameter values as "fast 10, slow 40"."""
-    return ", ".join(f"{name} {value_text(value)}" for name, value in values.items())
+def params_text(values: Mapping[str, Any], separator: str = ", ") -> str:
+    """Parameter values as "fast 10, slow 40", or each on its own line with `separator`
+    a line break."""
+    return separator.join(f"{name} {value_text(value)}" for name, value in values.items())
 
 
 def grid_block(

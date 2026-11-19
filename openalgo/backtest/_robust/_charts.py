@@ -24,6 +24,7 @@ from ..report import _format as fmt
 from ..report._dashboard import scale
 from ..report._dashboard.bars import AXIS_TEXT, MUTED_TEXT, Margin, frame
 from ._blocks import LIMIT, REAL, REFERENCE, FanBlock, HistogramBlock, SessionsBlock
+from ._chart_text import anchor_inside
 from ._paths import Fan
 
 WIDTH, HEIGHT = 680, 300
@@ -148,14 +149,16 @@ def _fan_axis(block: FanBlock, x: scale.Linear, last: float) -> list[str]:
 
 def _mark_lines(block: HistogramBlock, x: scale.Linear, height: float) -> tuple[list[str], str]:
     marks, words = [], []
+    width, _ = inner()
     for mark in block.marks:
         text = fmt.percent(mark.value, 1) if block.percent else fmt.number(mark.value)
         at = x(mark.value)
+        anchor = anchor_inside(at, mark.label, -MARGIN.left, width + MARGIN.right)
         marks.append(
             f"<line x1='{at:.1f}' x2='{at:.1f}' y1='0' y2='{height:.1f}' "
             f"class='{MARK_CLASSES[mark.kind]}'>"
             f"<title>{fmt.text(mark.label)}: {text}</title></line>"
-            f"<text x='{at:.1f}' y='-6' text-anchor='middle' style='{MUTED_TEXT}'>"
+            f"<text x='{at:.1f}' y='-6' text-anchor='{anchor}' style='{MUTED_TEXT}'>"
             f"{fmt.text(mark.label)}</text>"
         )
         words.append(f"{MARK_STYLES[mark.kind]}: {fmt.text(mark.label)} ({text})")
@@ -191,14 +194,18 @@ def histogram_chart(block: HistogramBlock) -> str:
     decimals = scale.percent_decimals(low, high, AXIS_TICKS)
     for tick in scale.ticks(low, high, AXIS_TICKS):
         text = f"{tick * 100:.{decimals}f}%" if block.percent else fmt.number(tick)
+        anchor = anchor_inside(x(tick), text, -MARGIN.left, width + MARGIN.right)
         marks.append(
-            f"<text x='{x(tick):.1f}' y='{height + 16}' text-anchor='middle' style='{AXIS_TEXT}'>"
-            f"{text}</text>"
+            f"<text x='{x(tick):.1f}' y='{height + 16}' text-anchor='{anchor}' "
+            f"style='{AXIS_TEXT}'>{text}</text>"
         )
     lines, key = _mark_lines(block, x, height)
     svg = frame(WIDTH, HEIGHT, MARGIN, fmt.text(block.title), "".join(marks + lines))
     runs = fmt.indian_digits(len(block.values), 0)
-    return f"{svg}<p class='key'>Bars: how many of the {runs} runs fall in each bin. {key}.</p>"
+    counted = fmt.text(block.counted)
+    return (
+        f"{svg}<p class='key'>Bars: how many of the {runs} {counted} fall in each bin. {key}.</p>"
+    )
 
 
 def _spans(marked: np.ndarray) -> list[tuple[int, int]]:

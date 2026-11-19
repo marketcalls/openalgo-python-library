@@ -30,6 +30,7 @@ from ._blocks import (
     SessionsBlock,
     SparkTableBlock,
     TableBlock,
+    Tile,
     TilesBlock,
 )
 from ._report import RunFacts
@@ -95,11 +96,16 @@ def _scorecard(request: Request, results: Mapping[str, CheckResult], counts: dic
 def _tiles(block: TilesBlock) -> str:
     tiles = "".join(
         f"<div class='stat'><div class='eyebrow trunc'>{fmt.text(tile.label)}</div>"
-        f"<div class='stat-value nums {tile.tone}' title='{fmt.text(tile.value)}'>"
+        f"<div class='{_value_classes(tile)}' title='{fmt.text(tile.value)}'>"
         f"{fmt.text(tile.value)}</div><div class='stat-sub nums'>{fmt.text(tile.sub)}</div></div>"
         for tile in block.tiles
     )
     return f"{label(fmt.text(block.title))}<div class='stats'>{tiles}</div>"
+
+
+def _value_classes(tile: Tile) -> str:
+    """The classes of a tile's value: wrapped when asked, coloured by its tone."""
+    return " ".join(["stat-value nums", *(["wrap"] if tile.wrap else []), tile.tone]).strip()
 
 
 #: The chart of each kind of block.

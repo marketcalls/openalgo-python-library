@@ -168,6 +168,19 @@ def without_script(page: str) -> str:
     return re.sub(r"<script>.*?</script>", "", page, flags=re.S)
 
 
+def css_rule(text: str, selector: str) -> dict[str, str]:
+    """The declarations of the first style rule for exactly `selector` outside any media
+    query, in a page's stylesheet or in a stylesheet itself."""
+    if "<style>" in text:
+        text = text[text.index("<style>") + len("<style>") : text.index("</style>")]
+    for rule in text.split("}"):
+        head, _, body = rule.partition("{")
+        if head.strip() == selector:
+            pairs = (part.split(":", 1) for part in body.split(";") if part.strip())
+            return {name.strip(): value.strip() for name, value in pairs}
+    raise AssertionError(f"no style rule for {selector}")
+
+
 def tile(page: str, label: str) -> tuple[str, str]:
     """The value and subline of the first tile labelled `label`."""
     found = re.search(
@@ -196,6 +209,21 @@ def test_the_page_contains_every_section_in_order(page):
 def test_the_header_links_to_every_section_in_order(page):
     links = re.findall(r"<a href='#([a-z-]+)'", page)
     assert links == list(SECTIONS)
+
+
+def test_the_header_links_scroll_inside_the_header_so_its_tools_stay_in_view(page):
+    # Measured in a browser: 19 links of a robustness report are about 1,800 pixels, so
+    # a header that cannot narrow them pushes Export PDF and the theme switch off screen
+    # and the whole page scrolls sideways.
+    nav = css_rule(page, ".nav")
+    assert nav["min-width"] == "0" and nav["overflow-x"] == "auto"
+    assert css_rule(page, ".nav a")["white-space"] == "nowrap"
+    assert css_rule(page, ".mark,.tools")["flex"] == "none"
+
+
+def test_the_link_of_the_section_in_view_is_scrolled_into_the_header(page):
+    script = page[page.rindex("<script>") :]
+    assert "nav.scrollLeft=" in script
 
 
 def test_sections_are_numbered_in_page_order(page):
