@@ -16,7 +16,12 @@ records (`_session_close.SessionOutcome`).
   follow-up item 2), so the result's net profit is what an unbroken day's result shows
   for the same trades. Its trades table is the kernel's, with the charges the position
   carried open paid before the restart added to its trade (`Restored.carried`): a
-  restored engine's charge book holds the fills of its own start only. Its Assumptions
+  restored engine's charge book holds the fills of its own start only. Its kernel
+  session's stop settled the contract notes of its start's fills and recorded the slice
+  in progress (the kernel follow-up item 1), so its equity holds every fill and the
+  notes' charges: its net profit is its trades' net (plus an open position's value), and
+  its charges differ from the day summary's, each fill's rounded to the paisa, by the
+  notes' rounding (`Result.contract_notes`). Its Assumptions
   block says
   OpenAlgo priced the fills (`LIVE_ASSUMPTIONS`, `LIVE_BASE_MEANING`): the backtest's
   fill model and slippage played no part. It cannot rerun (`Result.rerun` raises):

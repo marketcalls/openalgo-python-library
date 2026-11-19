@@ -373,6 +373,14 @@ impl NativeEngine {
             .transpose()
     }
 
+    /// The exit reason an order's fills record (a code of the trades' `exit_reason`):
+    /// "leg_target" for the exit a leg's target makes on a tick, "scheduler" for the
+    /// square-off, a risk exit's own, the one a strategy gave its exit; None when it names
+    /// none. Raises `NativeEngineError` for an unknown id.
+    fn order_exit_reason(&self, order_id: u64) -> PyResult<Option<&'static str>> {
+        session::order_exit_reason(self.engine()?, OrderId(order_id))
+    }
+
     /// Ids of the orders that can still fill.
     fn working_orders(&self) -> PyResult<Vec<u64>> {
         let working = self.engine()?.working_orders();
@@ -400,6 +408,19 @@ impl NativeEngine {
     /// The last close seen of an instrument, rupees.
     fn last_close(&self, instrument: u32) -> PyResult<Option<f64>> {
         Ok(self.engine()?.last_close(InstrumentId(instrument)))
+    }
+
+    /// Rupees: the price a backtest of this run fills a MARKET order of `side` at, at the
+    /// open of the instrument's base bar opening at `bar_open` (UTC nanoseconds) at `open`
+    /// rupees, by the run's slippage rule; records nothing (`market`).
+    fn market_fill_price(
+        &self,
+        instrument: u32,
+        side: &str,
+        bar_open: i64,
+        open: f64,
+    ) -> PyResult<f64> {
+        market::market_fill_price(self.engine()?, instrument, side, bar_open, open)
     }
 
     /// The account as (equity, free cash, realized, unrealized, costs, margin), rupees.

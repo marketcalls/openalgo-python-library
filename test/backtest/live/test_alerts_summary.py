@@ -104,10 +104,40 @@ def test_rupees_use_indian_digit_grouping():
     assert line(replace(A_GOOD_DAY, gross_pnl=1234567.891), "Gross P&L") == "Rs 12,34,567.89"
 
 
-def test_slippage_not_compared_with_a_backtest_reads_n_a():
-    assert (
-        line(replace(A_GOOD_DAY, slippage=None), "Slippage") == "n/a (no backtest to compare with)"
-    )
+def test_slippage_with_no_fill_compared_reads_not_compared():
+    assert line(replace(A_GOOD_DAY, slippage=None), "Slippage") == "not compared"
+
+
+@pytest.mark.parametrize(
+    ("count", "shown"),
+    [
+        (1, "not compared (1 MARKET fill: no bar of its decision)"),
+        (2, "not compared (2 MARKET fills: no bar of their decisions)"),
+    ],
+    ids=["one", "two"],
+)
+def test_slippage_with_every_market_fill_left_out_reads_not_compared_with_their_count(count, shown):
+    day = replace(A_GOOD_DAY, slippage=None, slippage_not_compared=count)
+    assert line(day, "Slippage") == shown
+
+
+@pytest.mark.parametrize(
+    ("count", "shown"),
+    [
+        (
+            1,
+            "Rs 35.00 worse than the backtest (1 MARKET fill not compared: no bar of its decision)",
+        ),
+        (
+            2,
+            "Rs 35.00 worse than the backtest (2 MARKET fills not compared: no bar of their "
+            "decisions)",
+        ),
+    ],
+    ids=["one", "two"],
+)
+def test_the_market_fills_the_slippage_leaves_out_are_counted_on_its_line(count, shown):
+    assert line(replace(A_GOOD_DAY, slippage_not_compared=count), "Slippage") == shown
 
 
 @pytest.mark.parametrize(
@@ -151,7 +181,14 @@ def test_negative_seconds_unprotected_are_refused():
 
 
 @pytest.mark.parametrize(
-    "field", ["closed_trades", "rejected_orders", "reconcile_mismatches", "undelivered_alerts"]
+    "field",
+    [
+        "closed_trades",
+        "rejected_orders",
+        "reconcile_mismatches",
+        "undelivered_alerts",
+        "slippage_not_compared",
+    ],
 )
 @pytest.mark.parametrize("value", [-1, 1.5, None], ids=["negative", "a fraction", "none"])
 def test_a_count_that_is_not_a_whole_number_of_at_least_zero_is_refused(field, value):

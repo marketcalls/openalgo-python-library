@@ -23,10 +23,16 @@
 //!   strategy's equity and the cap (the account's available cash).
 //! - `daily_loss_measure()`: the strategy's daily loss measure, rupees on its risk basis,
 //!   negative for a loss.
+//! - `order_exit_reason(order_id)`: the exit reason an order's fills record, or None: the
+//!   live layer tells the exit a leg's target makes on a tick ("leg_target") from the
+//!   strategy's own exits, which share its role "exit".
 //! - `stop_session()`: the session ends where it stands. Nothing is sent, working orders
 //!   and open positions are reported as they are by `finish()` (a strategy exit that waited
-//!   for its cancels was never placed and ends "canceled"), and the pause tuple "finished"
-//!   is returned with the events not delivered yet. Commands not taken stay for
+//!   for its cancels was never placed and ends "canceled"), the slice in progress is closed
+//!   for the records as a backtest closes a session (the day's contract notes settled, then
+//!   its position-history and equity rows, so the equity holds every fill and the notes'
+//!   charges), and the pause tuple "finished" is returned with the events not delivered
+//!   yet. Commands not taken stay for
 //!   `take_commands()`; they were never sent.
 //!
 //! A session also rejects at submission an entry or add while another order of its
@@ -40,10 +46,13 @@
 //! point only); a blank lock reason or one with spaces around it, an unknown exit reason
 //! and a cap that is not rupees of 0 or more raise `NativeEngineInputError`.
 
-use oa_bt::engine::{EngineExit, ExitRequest, OrderRole, RiskExitReason};
+use oa_bt::engine::{Engine, EngineExit, ExitRequest, KernelError, OrderRole, RiskExitReason};
+use oa_bt::exec::OrderId;
+use oa_bt::rms::ExitReason;
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
+use super::engine_error;
 use super::setup::unknown;
 
 /// The engine exit a session's `reason` names (module docs).
@@ -60,6 +69,16 @@ pub(super) fn engine_exit(reason: &str) -> PyResult<EngineExit> {
 /// The `role` and `reason` keys of a "place" command (module docs).
 pub(super) fn role_codes(role: OrderRole) -> (&'static str, Option<&'static str>) {
     (role.code(), role.reason().map(RiskExitReason::code))
+}
+
+/// The exit reason the fills of order `id` record (module docs).
+///
+/// Errors: `NativeEngineError` for an order the engine does not know.
+pub(super) fn order_exit_reason(engine: &Engine, id: OrderId) -> PyResult<Option<&'static str>> {
+    let order = engine
+        .order(id)
+        .ok_or_else(|| engine_error(KernelError::UnknownOrder(id)))?;
+    Ok(order.request.exit_reason.map(ExitReason::code))
 }
 
 /// Add the vocabularies of the controls to the module, from the kernel's own lists:

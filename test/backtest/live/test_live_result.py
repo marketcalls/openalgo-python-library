@@ -380,10 +380,17 @@ def test_a_restarted_starts_result_counts_its_own_money_only(world):
     result = second.results["TwoRoundTrips"]
     assert len(result.trades) == 1
     assert result.metrics["start_equity"] == CAPITAL
-    assert result.metrics["net_profit"] == pytest.approx(
-        second.summary.net_pnl - first.summary.net_pnl
-    )
+    # The summary's charges are each fill's, rounded to the paisa; the result's are its
+    # contract notes', rounded once per note.
+    before_rounding = result.metrics["net_profit"] + note_rounding(result)
+    assert before_rounding == pytest.approx(second.summary.net_pnl - first.summary.net_pnl)
     assert result.gross_pnl["realized"] == pytest.approx(result.trades["gross_pnl_rupees"].sum())
+
+
+def note_rounding(result: bt.Result) -> float:
+    """Rupees the contract notes of `result` changed its charges by, rounding their lines
+    once per note: its charges less the day summary's (each fill's rounded to the paisa)."""
+    return float(result.contract_notes["adjustment"].sum())
 
 
 class BuyEarlySellLate(bt.Strategy):
@@ -425,14 +432,18 @@ def test_a_position_carried_across_a_restart_brings_its_entry_charges_to_the_res
     unbroken, make_fake_openalgo, monkeypatch, tmp_path
 ):
     # The unit 13 follow-up item 2: the restarted start closes the trade, so its result
-    # counts the whole trade, the charges of its entry before the restart included.
+    # counts the whole trade, the charges of its entry before the restart included. Each
+    # start settles the contract notes of its own fills (the entry's before the restart
+    # are carried as the account paid them), so the results compare before the notes'
+    # rounding, which is what the day summary counts.
     world = rig(make_fake_openalgo, monkeypatch, tmp_path, trades_until=(14, 55))
     seam(world, monkeypatch)
     restarted = bought_at_500_sold_at_510(world, ctrl_c_at=ist(14, 46, 30))
     result = restarted.results["BuyEarlySellLate"]
     whole = unbroken.results["BuyEarlySellLate"]
-    assert result.metrics["net_profit"] == pytest.approx(whole.metrics["net_profit"])
-    assert result.metrics["net_profit"] == pytest.approx(restarted.summary.net_pnl)
+    before_rounding = result.metrics["net_profit"] + note_rounding(result)
+    assert before_rounding == pytest.approx(whole.metrics["net_profit"] + note_rounding(whole))
+    assert before_rounding == pytest.approx(restarted.summary.net_pnl)
     assert result.gross_pnl["realized"] == pytest.approx(result.trades["gross_pnl_rupees"].sum())
 
 
@@ -475,19 +486,11 @@ def test_the_trade_a_restart_closes_carries_the_charges_its_entry_paid_before_it
     )
 
 
-#: Why a live result's net profit is not yet its trades' net (the lead's rule for the unit
-#: 13 follow-up item 2): a kernel cause, for the R1 live kernel follow-up.
-UNSETTLED_NOTE = (
-    "kernel: a live kernel session stopped mid-day (stop_session) leaves the day's contract "
-    "note unsettled, so its fills and trades carry their charges before the note's "
-    "settlement while the account carries the charges it posted (on this day's round trip "
-    "net_profit is 94.62 rupees, the trades' net 95.05 unbroken and 94.89 restarted)"
-)
-
-
-@pytest.mark.xfail(raises=AssertionError, strict=True, reason=UNSETTLED_NOTE)
 @pytest.mark.parametrize("restart", [False, True], ids=["unbroken", "restarted"])
 def test_a_live_results_net_profit_is_the_sum_of_its_trades_net(world, restart):
+    # The kernel follow-up item 1: the stop settles the day's contract notes and records the
+    # slice in progress, so the equity holds them (94.62 before, against the trades' 95.05
+    # unbroken and 94.89 restarted).
     if restart:
         _, last = both_starts(world)
     else:
@@ -501,7 +504,8 @@ def test_a_first_starts_result_is_left_as_its_engine_made_it(world):
     world.stop_at(ist(14, 46, 30))
     result = live(world, TwoRoundTrips)
     figures = result.results["TwoRoundTrips"]
-    assert figures.metrics["net_profit"] == pytest.approx(result.summary.net_pnl)
+    before_rounding = figures.metrics["net_profit"] + note_rounding(figures)
+    assert before_rounding == pytest.approx(result.summary.net_pnl)
 
 
 # ----- the live assumptions -----------------------------------------------------------------

@@ -377,7 +377,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of a leg in flight for more than 3 minutes that finds a position difference alerts at
   once, and the close names that leg in the summary and the result, never as flat; a
   fill priced from an average is flagged only when its price may lie on another tick.
-  The summary's slippage against the backtest's model reads n/a in this version.
 - Live sessions, from the fault suite (unit 14): a position difference that comparisons
   in time already acted on and that the final read sees again is named at the close (an
   ERROR alert, the summary's Reconcile and End state lines, `SessionResult.flat` False)
@@ -402,6 +401,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loop's time from a tick's arrival to the kernel is measured by
   `benchmark/live_loop_speed.py` (median about 7 microseconds, 99th percentile about 19,
   against a target under 500).
+- Live sessions, figures a trader reads at the end: a strategy's `bt.Result` now adds up
+  to its trades. A session's stop (Ctrl+C, the end of the day after the square-off, or an
+  error) settles the day's contract notes and records the minute it stopped in, so the
+  Result's equity, net profit, returns and drawdown include the session's last fills and
+  the notes' charges: its net profit equals the sum of its trades' net, plus an open
+  position's value at its mark less its charges. The day summary's charges stay each
+  fill's charges rounded to the paisa (they add up across restarts) and differ from the
+  Results' by exactly the contract notes' rounding, shown in `Result.contract_notes`. The
+  day summary's slippage is now measured: each MARKET fill against the price a backtest
+  fills the same order at (the open of the bar after the decision, with the run's
+  modelled slippage), signed against the trader and times the units, for example
+  "Slippage : Rs 2.50 better than the backtest"; a fill with no bar to compare it with
+  (a Ctrl+C sale before the next minute's first trade) is counted as not compared. A live
+  trade's MAE and MFE judge the ticks after a confirmed change of a stop or target, and
+  the next minute's, against the terms it replaced too, so a fill on the old terms is
+  never counted with the whole position. Backtest figures do not change.
 - Reference table `price_protection` (`openalgo/backtest/reference/data/price_protection.csv`,
   read with `tables.find("price_protection", (exchange, segment, check, underlying, days),
   date)`): the price bands NSE and BSE apply to an option's limit price, by date, each row

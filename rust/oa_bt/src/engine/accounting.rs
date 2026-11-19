@@ -10,6 +10,7 @@ use crate::charges::{fill_segment, ChargeBook, ChargeError, FillToCharge, Market
 use crate::exec::InstrumentId;
 use crate::market::margin::{MarginQuote, MarginRequest};
 use crate::market::slippage::{default_slippage, SlippageClass, SlippageSpec};
+use crate::market::table_rows::RowMeta;
 use crate::model::{ist_day, Day, Product, Side};
 use crate::portfolio::{FillEffect, FillKind, PositionKey};
 
@@ -59,12 +60,28 @@ impl Engine {
         instrument: InstrumentId,
         day: Day,
     ) -> Result<SlippageSpec, KernelError> {
+        let (spec, row) = self.slippage_of(instrument, day)?;
+        if let Some(meta) = row {
+            self.charges.record_use(MarketTable::Slippage, meta, day);
+        }
+        Ok(spec)
+    }
+
+    /// `fill_slippage` with nothing recorded: the slippage, and the row of the default
+    /// table that gives it when one does.
+    ///
+    /// Errors: as `fill_slippage`.
+    pub(super) fn slippage_of(
+        &self,
+        instrument: InstrumentId,
+        day: Day,
+    ) -> Result<(SlippageSpec, Option<&'static RowMeta>), KernelError> {
         if self.config.slippage != SlippageSpec::SegmentDefault {
-            return Ok(self.config.slippage);
+            return Ok((self.config.slippage, None));
         }
         let facts = self.config.market.of(instrument.index());
         if let Some(own) = facts.and_then(|f| f.slippage) {
-            return Ok(own);
+            return Ok((own, None));
         }
         let spec = self.spec(instrument)?;
         let class = facts
@@ -79,9 +96,7 @@ impl Engine {
                 ),
             })?;
         let row = default_slippage(class, day)?;
-        self.charges
-            .record_use(MarketTable::Slippage, &row.meta, day);
-        Ok(row.spec)
+        Ok((row.spec, Some(&row.meta)))
     }
 
     /// Margin an opening fill blocks, rupees: the run's own futures margin for the

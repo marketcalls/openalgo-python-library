@@ -5,14 +5,16 @@ earlier starts of a restarted day to its own, counting nothing twice.
 Each start saves its running figures with the state they describe, at every save of that
 state, so a restart adds exactly what the state it restores does not hold:
 
-- **Per strategy**, in its saved state (`FIGURES`): the round trips closed today, and the
-  gross P&L and modelled charges of its account. The account is in the saved state
-  itself (the kernel restores the cash with its realized P&L and its charges), so a
-  restored engine's gross P&L and charges are the day's, and the saved ones are never
-  added to them. Its round trips are not (a restored engine's result begins at the
-  restart), so the saved count is carried and the restored engine's closed trades are
-  added to it. A fill applied after the save closes its round trip again in the restored
-  engine, which the saved count did not hold yet: it is counted once. A strategy an
+- **Per strategy**, in its saved state (`FIGURES`): the round trips closed today, the
+  gross P&L and modelled charges of its account, and the slippage of its MARKET fills
+  against the backtest's (`_session_slippage`) with the counts of those compared and not
+  compared. The account is in the saved state itself (the kernel restores the cash with
+  its realized P&L and its charges), so a restored engine's gross P&L and charges are the day's, and
+  the saved ones are never added to them. Its round trips and its slippage are not (a
+  restored engine's result begins at the restart, and a start compares its own fills
+  only), so the saved ones are carried and the restored start's own are added to them. A
+  fill applied after the save is applied again in the restored engine, which the saved
+  figures did not hold yet: it is counted once. A strategy an
   earlier start saved and this start does not run adds its saved figures whole, and is
   named on the summary (`Earlier`) with the position its last save held, if any: the day
   is not flat while one is held.
@@ -33,12 +35,13 @@ from __future__ import annotations
 import math
 import numbers
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 from typing import Any
 
 from .._engine import call
 from ..errors import LiveError
 from ._plan_catch_up import INSTRUMENT
+from ._session_slippage import Slippage, strategy_slippage
 from ._venue_requests import LIVE_PRODUCT
 
 #: The key of a strategy's saved state that holds its figures (`_session_saved`).
@@ -50,15 +53,29 @@ SESSION_KEY = "(session)"
 
 @dataclass(frozen=True)
 class StrategyFigures:
-    """A strategy's figures of the day (module docstring): round trips closed, gross P&L
-    and modelled charges, rupees."""
+    """A strategy's figures of the day (module docstring): round trips closed, gross P&L,
+    modelled charges and the slippage of its MARKET fills against the backtest's, rupees,
+    and how many of those fills were not compared and compared. A save of an earlier
+    version holds no slippage: it reads as none."""
 
     closed_trades: int = 0
     gross_pnl: float = 0.0
     charges: float = 0.0
+    slippage: float = 0.0
+    slippage_not_compared: int = 0
+    slippage_compared: int = 0
 
     def __add__(self, other: StrategyFigures) -> StrategyFigures:
         return StrategyFigures(*(a + b for a, b in zip(_values(self), _values(other), strict=True)))
+
+    @property
+    def summary_slippage(self) -> float | None:
+        """The slippage the day summary shows: rupees, or None when MARKET fills were made
+        and not one of them could be compared (there is no figure to show, only the
+        count)."""
+        if self.slippage_not_compared and not self.slippage_compared:
+            return None
+        return self.slippage
 
 
 @dataclass(frozen=True)
@@ -140,12 +157,13 @@ class DayFigures:
         save."""
         return any(strategy.units for strategy in self.earlier)
 
-    def strategy(self, trader: Any) -> dict[str, Any]:
-        """The running figures of `trader`'s strategy now, to save with its state: the
-        round trips carried and closed since, its account's gross P&L and charges."""
+    def strategy(self, session: Any, trader: Any) -> dict[str, Any]:
+        """The running figures of `trader`'s strategy in `session` now, to save with its
+        state: the round trips and the slippage carried and its own since, its account's
+        gross P&L and charges."""
         _equity, _cash, realized, unrealized, costs, _margin = call(trader.engine.account)
-        closed = self._carried(trader.name).closed_trades + trader.records.closed_trades
-        return asdict(StrategyFigures(closed, realized + unrealized, costs))
+        traded = (trader.records.closed_trades, realized + unrealized, costs)
+        return asdict(self._with_carried(trader.name, traded, strategy_slippage(session, trader)))
 
     def session_counts(
         self, session: Any, *, unprotected_s: float | None = None, named: int = 0
@@ -163,18 +181,41 @@ class DayFigures:
         session: Any,
         outputs: Mapping[str, tuple[Mapping[str, Any], tuple[float, float]]],
         unprotected_s: float,
+        *,
+        slippages: Mapping[str, Slippage],
     ) -> tuple[StrategyFigures, SessionFigures]:
         """The day's figures at the close (module docstring): `outputs` are each running
         strategy's `finish()` tables and (gross P&L, charges) of its account, by name;
-        `unprotected_s` this start's seconds unprotected."""
+        `unprotected_s` this start's seconds unprotected; `slippages` each running
+        strategy's slippage in this start, by name, measured before its kernel session
+        finished (`_session_slippage`; a name not given had no MARKET fill). The day's
+        slippage is rounded to the paisa."""
         total = self.absent
         for name, (output, (gross, charges)) in outputs.items():
-            closed = self._carried(name).closed_trades + len(output["trades"]["trade_id"])
-            total = total + StrategyFigures(closed, gross, charges)
+            traded = (len(output["trades"]["trade_id"]), gross, charges)
+            total = total + self._with_carried(name, traded, slippages.get(name, Slippage()))
+        total = replace(total, slippage=round(total.slippage, 2))
         return total, self.session + _own(session, unprotected_s)
 
     def _carried(self, name: str) -> StrategyFigures:
         return self.carried.get(name, StrategyFigures())
+
+    def _with_carried(
+        self, name: str, traded: tuple[int, float, float], own: Slippage
+    ) -> StrategyFigures:
+        """Strategy `name`'s figures: `traded`, this start's (round trips closed, its
+        account's gross P&L and charges, which hold the carried ones already), with the
+        carried round trips and slippage added, and `own`, this start's slippage."""
+        carried = self._carried(name)
+        closed, gross, charges = traded
+        return StrategyFigures(
+            carried.closed_trades + closed,
+            gross,
+            charges,
+            round(carried.slippage + own.rupees, 2),
+            carried.slippage_not_compared + own.not_compared,
+            carried.slippage_compared + own.compared,
+        )
 
 
 def _own(session: Any, unprotected_s: float) -> SessionFigures:

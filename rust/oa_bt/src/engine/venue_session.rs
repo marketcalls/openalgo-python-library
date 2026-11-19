@@ -29,10 +29,15 @@
 //! the working orders keep their state and the open positions stay open, marked at their
 //! last close, so `finish` reports them as they stand. A strategy exit that waits for its
 //! cancels was never sent, so nothing of it is at the venue: it ends `Canceled`, and an
-//! engine exit that waits is dropped. The slice in progress does not run:
-//! what was recorded in it (fills while waiting) is in the fills and positions, while the
-//! position history and the equity series end at the last slice that ran. Its contract
-//! notes are settled, as at a run's end (`run_end`), so every fill carries its charges.
+//! engine exit that waits is dropped. The slice in progress does not run, but the stop
+//! closes it as a backtest's step 8 closes a session: the day's contract notes are
+//! settled (each note's rounding posted to the ledger and its charges shared over its
+//! fills), then the slice is recorded at its close, a position-history row for each
+//! position that changed in it and an equity row. So what was recorded in it (the fills
+//! taken while waiting, the marks of its ticks) is in the position history and the equity
+//! series too, and the equity's last row is the capital plus the session's trades' net
+//! and its open positions at their marks less their charges, as the trades table and the
+//! settled notes give them.
 //! The events not yet delivered are returned, as `Pause::Finished` returns them, and
 //! commands not taken yet stay for `take_commands`: the live layer reports them as not
 //! sent. The run's end (`run_end`) stays the end of the session's range.
@@ -241,6 +246,8 @@ impl Engine {
         if let Some(slice) = self.slice_in_progress() {
             self.drop_unsent_exits()?;
             self.settle_contract_notes(&slice);
+            self.record_levels(&slice);
+            self.record_equity(&slice);
         }
         self.phase = Phase::Finished;
         Ok(std::mem::take(&mut self.undelivered))
