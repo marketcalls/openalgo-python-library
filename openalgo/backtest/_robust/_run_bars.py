@@ -135,10 +135,10 @@ def bars_for(
 ) -> tuple[RunBars, dict[str, Any]]:
     """(the `RunBars` of a run of `strategy` with the run arguments `arguments`, each
     symbol with the longest history any of `parameter_sets` (its `params=` values) keeps;
-    the arguments of its reruns without `data=`, the benchmark's closes as the source
-    gives them). Raises NotImplementedError for a futures series, with `refused` (what
-    is refused, what to do), and what preparing the run raises (the data layer's errors
-    among them)."""
+    the arguments of its reruns without `data=` and without a client, the benchmark's
+    closes as the source gives them). Raises NotImplementedError for a futures series,
+    with `refused` (what is refused, what to do), and what preparing the run raises (the
+    data layer's errors among them)."""
     prepared = prepare(strategy, client, {**arguments, "client": client}, parameter_sets)
     if prepared.futures is not None:
         raise not_supported(*refused)
@@ -162,8 +162,10 @@ def bars_for(
         session_times(plan, prepared.session_calendar(), dates),
         plan.base,
     )
+    # The client stays in this process: it read the bars once here, and the reruns read
+    # them from memory (an SDK client cannot be sent to a worker process either).
     reruns = {
-        **arguments,
+        **{name: value for name, value in arguments.items() if name != "client"},
         "data": None,
         "start": arguments["start"] if arguments["start"] is not None else plan.start,
         "end": arguments["end"] if arguments["end"] is not None else plan.end,

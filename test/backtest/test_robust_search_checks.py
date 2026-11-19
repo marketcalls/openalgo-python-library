@@ -1,5 +1,6 @@
 """The searching checks (design 17, sections 2.1, 2.3, 2.16 and 2.17) and `bt.walk_forward`
-end to end, on own daily bars with no server, in this process.
+end to end, on own daily bars with no server (one walk-forward reads them through a fake
+client), in this process but for the one test of the worker processes.
 
 `robust_runs.Weekday` buys 10 shares at the close of a session on its weekday `day` and
 sells two sessions on; `weekday_bars` plants the move each trade makes: 3 rupees a share
@@ -9,8 +10,12 @@ the whole run; a rotation changes the favoured weekday at each walk-forward boun
 so what one window favours the next does not.
 """
 
+import threading
+import warnings
+
 import pandas as pd
 import pytest
+from data_fixtures.fakes import FakeClient
 from robust_runs import (
     FREE,
     DailyCross,
@@ -23,6 +28,7 @@ from robust_runs import (
     weekday_bars,
     weekday_trades,
 )
+from test_quickstart import historify_rows
 
 import openalgo.backtest as bt
 from openalgo.backtest._robust._verdict import FAILED, INFORMATIONAL, NOT_JUDGED, PASSED
@@ -336,7 +342,23 @@ def test_a_fold_that_chose_nothing_counts_as_a_fold_that_made_no_money():
         LateWeekday, data=data, **FREE, objective="expectancy", workers=1, progress=quiet, **FIVE
     )
     assert list(result.folds["day"].isna()) == [True, True, True, False, False]
+    assert list(result.folds["trades"].isna()) == [True, True, True, False, False]
     assert result.profitable_share == 2 / 5
+
+
+def test_the_fold_table_reads_n_a_for_a_fold_that_chose_nothing():
+    # Folds 1 to 3 choose nothing, so they have no out-of-sample run: no P&L, drawdown,
+    # trades or win rate to show.
+    data = weekday_bars(WALK_SESSIONS, lambda s: (0,))
+    result = bt.backtest(LateWeekday, data=data, params={"day": 0}, **FREE)
+    found = result.robustness(
+        checks=["walk_forward"], workers=1, objective="expectancy", progress=quiet, **FIVE
+    )
+    (table,) = found._blocks["walk_forward"][2]
+    rows = {row[0]: row[2:] for row in table.rows}
+    assert rows["Fold 1"] == ("none", "n/a", "n/a", "n/a", "n/a", "n/a")
+    assert rows["Fold 4"][0] == "day 0"
+    assert "id='walk-forward'" in found.tearsheet()
 
 
 def test_anchored_folds_grow_their_in_sample_window(planted_walk):
@@ -381,13 +403,58 @@ def test_bt_walk_forward_refuses_unusable_settings(setting, message):
         bt.walk_forward(Weekday, data=data, **FREE, workers=1, **FIVE, **setting)
 
 
-@pytest.mark.worker_pool
-def test_a_walk_forward_in_two_worker_processes_is_the_one_in_this_process(planted_walk):
+class LockedClient(FakeClient):
+    """A fake OpenAlgo client that cannot be pickled, as the SDK's own client cannot: it
+    holds a lock, as the SDK's pooled HTTP client does."""
+
+    def __init__(self, **options):
+        super().__init__(**options)
+        self._lock = threading.RLock()
+
+
+@pytest.fixture
+def served_walk(planted_walk, tmp_path, monkeypatch):
+    """The planted walk's bars served by a `LockedClient`, and `bt.walk_forward`'s settings
+    that read them through it."""
+    monkeypatch.setenv("OPENALGO_BT_CACHE", str(tmp_path))
     data, _ = planted_walk
-    here = bt.walk_forward(Weekday, data=data, **FREE, workers=1, progress=quiet, **FIVE)
-    pooled = bt.walk_forward(Weekday, data=data, **FREE, workers=2, progress=quiet, **FIVE)
-    assert "in 2 worker processes" in pooled.plan
+    client = LockedClient(api={("SBIN", "NSE", "D"): historify_rows(data)})
+    span = {"start": data.index[0].date(), "end": data.index[-1].date(), "source": "api"}
+    return client, {**FREE, **span, **FIVE}
+
+
+@pytest.mark.worker_pool
+def test_a_walk_forward_through_a_client_runs_on_worker_processes(served_walk):
+    # The client stays in this process: the bars are read through it once, and the
+    # workers get the bars, so two workers run the folds this process runs.
+    client, settings = served_walk
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        here = bt.walk_forward(Weekday, client, workers=1, progress=quiet, **settings)
+        pooled = bt.walk_forward(Weekday, client, workers=2, progress=quiet, **settings)
+    assert "in 2 worker processes." in pooled.plan
     pd.testing.assert_frame_equal(pooled.folds, here.folds)
+    assert list(here.folds["day"]) == [0] * 5
+
+
+def test_a_walk_forward_whose_cost_model_cannot_be_sent_runs_here_and_says_why(planted_walk):
+    data, _ = planted_walk
+    settings = {**FREE, "costs": bt.costs.flat(20)}
+    result = bt.walk_forward(Weekday, data=data, **settings, workers=2, progress=quiet, **FIVE)
+    assert (
+        "in this process (the cost model given as costs= cannot be sent to worker processes)."
+        in result.plan
+    )
+
+
+def test_the_folds_count_closed_trades_in_whole_numbers(planted_walk):
+    # Every fold trades Monday out of sample: its closed trades are the Mondays it buys on.
+    _, check = planted_walk
+    trades = check.table["trades"]
+    assert trades.dtype == "Int64"
+    assert trades.tolist() == [
+        len(weekday_trades(WALK_SESSIONS, 0, BOUNDS[k], BOUNDS[k + 1] - 1)) for k in range(5)
+    ]
 
 
 def test_a_runner_of_other_bars_shares_its_parents_worker_processes():

@@ -9,9 +9,10 @@ anchored; 70 percent of each fold in sample), each fold searches the parameter r
 sample and trades the best out of sample, and the out-of-sample runs are stitched into
 one equity curve (`_walk`, `_stitch`), as the walk-forward check of `bt.robustness` runs
 it: the same settings give the same figures. Every run is an ordinary backtest of the
-deterministic kernel on the run's bars, read once with the history of every
-combination's warm-up (`_run_bars.bars_for`), so the result is the same whatever the
-number of worker processes.
+deterministic kernel on the run's bars, read once in this process with the history of
+every combination's warm-up (`_run_bars.bars_for`; a client stays here, and the worker
+processes get the bars), so the result is the same whatever the number of worker
+processes.
 """
 
 from __future__ import annotations
@@ -72,8 +73,9 @@ class WalkForwardResult:
         the in-sample and out-of-sample objective per year (a total such as the net
         profit divided by the years its window lasted), their efficiency (from the
         objective's break-even), and the out-of-sample net P&L (rupees), maximum
-        drawdown (a fraction, zero or negative), P&L over drawdown, closed trades and win
-        rate. A fold that chose nothing has NaN figures."""
+        drawdown (a fraction, zero or negative), P&L over drawdown, closed trades (whole
+        numbers, a nullable integer column) and win rate. A fold that chose nothing has
+        NaN figures and <NA> trades."""
         return fold_frame(self._outcome, self._dates)
 
     @property
