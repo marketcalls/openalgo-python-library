@@ -9,11 +9,11 @@ neighbourhood judges: a parameter with a range, given or declared, is chosen in
 `params=` and searched over its range, so a trader who checks the best of a sweep by
 passing it as `params=` keeps the declared ranges searched (design 17, section 1: the
 `bt.param` ranges when no range is given); a parameter with no range keeps its `params=`
-value in every combination. `bt.walk_forward`,
-which has no chosen point, reads `params=` as `bt.optimize` does (`params_fix`): a
-declared parameter it names is fixed, not searched. The grid's combinations are in grid
-order (the first parameter slowest), and each parameter's values in the order its range
-gives them, which is the order its steps are counted in.
+value in every combination. `bt.walk_forward`, which has no chosen point, reads
+`params=` as `bt.optimize` does (`params_fix`): a declared parameter it names is fixed,
+not searched. The grid's combinations are in grid order (the first parameter slowest),
+and each parameter's values in the order its range gives them, which is the order its
+steps are counted in.
 
 The neighbourhood (`cube`), when no range is given: every combination of each number
 parameter of the run at minus, zero and plus `step` of its value (a whole number moves

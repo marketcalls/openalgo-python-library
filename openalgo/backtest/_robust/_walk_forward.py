@@ -180,13 +180,26 @@ def _checked(
 
 def _grid(strategy: type, ranges: dict[str, Any], given: Any) -> Grid:
     """The grid searched, `params=` `given` fixing the parameters it names as in
-    `bt.optimize`. Raises ConfigError when there is nothing to search."""
-    grid = search_grid(strategy, ranges, given, params_fix=True)
+    `bt.optimize`. Raises ConfigError, as `bt.optimize` does, for a parameter both fixed
+    by `params=` and given a range, and when there is nothing to search (naming the
+    declared ranges `params=` fixed, when it fixed any)."""
+    fixed = dict(given or {})
+    both = sorted(set(fixed) & set(ranges))
+    if both:
+        raise ConfigError(f"bt.walk_forward: {both} are both fixed by params= and swept")
+    grid = search_grid(strategy, ranges, fixed, params_fix=True)
     if grid is None:
+        held = sorted(set(strategy.parameter_ranges()) & set(fixed))
+        why = (
+            f"; params= fixes {held}, whose declared ranges it would search: leave them out "
+            "of params= to search them"
+            if held
+            else ""
+        )
         raise ConfigError(
             f"bt.walk_forward: nothing to search: pass ranges named after the parameters of "
             f"{strategy.__name__} ({sorted(strategy.parameters())}, fast=range(5, 30, 5)) or "
-            "declare them with bt.param(default, values)"
+            f"declare them with bt.param(default, values){why}"
         )
     return grid
 

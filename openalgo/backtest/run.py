@@ -467,8 +467,9 @@ def walk_forward(strategy: type[Strategy], client: Any = None, **settings: Any) 
     judges it and draws its folds; there `params=` names the run's chosen settings, so
     a declared range stays searched.
 
-    Raises ConfigError for unusable arguments, nothing to search, or too few sessions
-    for the folds (each window needs two), and whatever a backtest raises."""
+    Raises ConfigError for unusable arguments, a parameter both fixed by `params=` and
+    given a range, nothing to search, or too few sessions for the folds (each window
+    needs two), and whatever a backtest raises."""
     from ._robust._walk_forward import walk_forward as walk
 
     return walk(strategy, client, **settings)

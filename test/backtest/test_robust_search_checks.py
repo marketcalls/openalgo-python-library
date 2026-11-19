@@ -175,6 +175,25 @@ def test_bt_walk_forward_reads_params_as_bt_optimize_does():
         bt.walk_forward(DeclaredWeekday, data=data, **FREE, params={"day": 0}, workers=1)
 
 
+def test_bt_walk_forward_says_params_fixed_the_declared_range_it_would_search():
+    # The trader declared day's range; the error says params= fixed it, not that no range
+    # was declared, and how to search it.
+    data = weekday_bars(100, lambda s: (0,))
+    with pytest.raises(bt.errors.ConfigError) as raised:
+        bt.walk_forward(DeclaredWeekday, data=data, **FREE, params={"day": 0}, workers=1)
+    assert str(raised.value).endswith(
+        "params= fixes ['day'], whose declared ranges it would search: leave them out of "
+        "params= to search them"
+    )
+
+
+def test_bt_walk_forward_refuses_a_parameter_both_fixed_by_params_and_given_a_range():
+    # As bt.optimize refuses it: params= fixes day and day=range(5) sweeps it.
+    data = weekday_bars(100, lambda s: (0,))
+    with pytest.raises(bt.errors.ConfigError, match=r"\['day'\] are both fixed by params="):
+        bt.walk_forward(Weekday, data=data, **FREE, params={"day": 0}, workers=1, **FIVE)
+
+
 def test_a_strategy_without_a_number_parameter_is_not_judged():
     result = bt.backtest(Flip, data=bars(steps_for([3.0, -1.0], 40)), **FREE)
     check = result.robustness(checks=["parameters"], workers=1, progress=quiet).check("parameters")
