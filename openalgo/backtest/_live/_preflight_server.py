@@ -28,8 +28,8 @@ from ..errors import ConfigError
 from ..reference.symbols import INDEX_EXCHANGES
 from ._answers import server_answer
 from ._guard_answers import SUCCESS
-from ._order_trades import UNSUPPORTED_BROKERS
-from ._preflight_plan import Check, InstrumentFacts, PreflightPlan, positive_amount
+from ._order_trades import UNSUPPORTED_BROKERS, UNVERIFIED_BROKERS
+from ._preflight_plan import WARNING, Check, InstrumentFacts, PreflightPlan, positive_amount
 from ._types import Mode, mode_of
 from .bars import DEFAULT_INTERVAL_NS
 
@@ -158,6 +158,15 @@ def _session_check(broker: str, funds: Mapping[str, Any], available: float | Non
 
 def _broker_check(broker: str) -> Check:
     why = UNSUPPORTED_BROKERS.get(broker.lower())
+    if why is None and broker.lower() in UNVERIFIED_BROKERS:
+        return Check(
+            "broker_supported",
+            True,
+            f"{WARNING}bt.live trades through {broker}, but the session matches the trade "
+            "book's trades to its orders by order ID, and that the two IDs agree has not been "
+            f"checked for {broker}: watch the RECONCILE alerts, which name a fill the session "
+            "could not match to its order",
+        )
     if why is None:
         return Check("broker_supported", True, f"bt.live can trade through {broker}")
     return Check(

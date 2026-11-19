@@ -4,7 +4,9 @@ on a schedule and compared, leg by leg, with what the engine knows, by the rules
 safe corrections; it never exits a position and never fires the kill switch).
 
 **Schedule** (5.1): a read when trading begins, every `RECONCILE_EVERY_S`,
-`RECONCILE_AFTER_FILL_S` after a fill, `RECONCILE_AGAIN_AFTER_S` after a comparison that
+`RECONCILE_AFTER_FILL_S` after a fill, of the session's orders or, on an instrument it
+trades, another client's (`other_fill`: a sale by hand is seen within seconds, 7.1 "As
+built (unit 14"), `RECONCILE_AGAIN_AFTER_S` after a comparison that
 found a difference the one before it did not (the second confirms it; one seen twice in a
 row waits for the schedule), `SQUARE_OFF_READ_BEFORE_S` before and
 `SQUARE_OFF_READ_AFTER_S` after each strategy's square-off, when the safe stop's flatten
@@ -161,6 +163,12 @@ class Reconciler(EndQueries):
         only a read begun after it compares the leg."""
         if self._quiet.get(trader.name) is not None:
             self._quiet[trader.name] = at_ns
+        self._soon(at_ns + _s(RECONCILE_AFTER_FILL_S))
+
+    def other_fill(self, at_ns: int) -> None:
+        """Another client's fill on an instrument the session trades reached the order
+        stream at `at_ns`: a read is due as after the session's own fills, so a sale by
+        hand is seen within seconds instead of at the next scheduled read."""
         self._soon(at_ns + _s(RECONCILE_AFTER_FILL_S))
 
     def holds(self, trader: Trader) -> bool:

@@ -217,7 +217,8 @@ class SessionTrace:
 
     def check_now(self, check: Callable[[SessionTrace, FakeOpenAlgo], None]) -> None:
         """Run `check` over this trace now, inside the test, and not again when it ends:
-        for a test marked as a known break of an invariant."""
+        for a self-test of the invariants that expects `check` to raise InvariantBroken
+        on a session that breaks one."""
         self.checked = True
         check(self, self.fake)
 

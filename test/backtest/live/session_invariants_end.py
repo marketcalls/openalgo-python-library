@@ -18,17 +18,28 @@ What a sale by hand left (`SaleRoom`) stands at the end only by the test's decid
 a stop larger than the position, or on the flat one, that was working when the sale
 filled and that an ERROR alert names by its order ID (`SessionTrace.kept_stop_by_decision`),
 and a stop that filled through zero, its leg then listed at the fake's units with no
-confirmed stop and named by an ERROR alert (`SessionTrace.oversold_by_decision`).
+confirmed stop and named by an ERROR alert (`SessionTrace.oversold_by_decision`). Each
+such declaration must be needed: a decided end no check took is found.
 
 Quantities are signed units, prices rupees, times UTC nanoseconds.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Set
 
 from session_invariants_changes import STOP_TYPES, Instrument, SaleRoom
-from session_trace import PROTECTED, WITHIN, Closing, OrderChange, Run, SessionTrace, closing_of
+from session_trace import (
+    NO_ORPHAN,
+    OTHER_SIDE,
+    PROTECTED,
+    WITHIN,
+    Closing,
+    OrderChange,
+    Run,
+    SessionTrace,
+    closing_of,
+)
 
 from openalgo.backtest._live._types import AlertKind
 
@@ -58,9 +69,11 @@ def no_orphan(
     held: dict[Instrument, int],
     rooms: Mapping[Instrument, SaleRoom],
     kept: Mapping[str, str],
-) -> None:
+) -> set[str]:
     """4 (module docstring); a stop on a position a sale by hand left flat stands only by
-    the test's decided end (`kept`), named by an ERROR alert."""
+    the test's decided end (`kept`), named by an ERROR alert. Returns the strategies whose
+    decided end it took so (`at_the_end` judges the declarations no check needed)."""
+    named: set[str] = set()
     kernel = {order_id for c in closing.values() for order_id in c.working_order_ids}
     known = _bound_order_ids(run)
     # A working kernel order with no broker ID yet (its placement unanswered) stands for
@@ -85,6 +98,8 @@ def no_orphan(
                 f"7.1: stop {order.order_id} works for a flat position ({order})"
             )
             _kept_stop_named(run, order, kept)
+            named.add(order.strategy)
+    return named
 
 
 def at_the_end(
@@ -95,11 +110,19 @@ def at_the_end(
     positions: dict[Instrument, int],
     sides: Mapping[Instrument, str],
     rooms: Mapping[Instrument, SaleRoom],
+    *,
+    kept_named: Set[str] = frozenset(),
+    oversold_used: Set[str] = frozenset(),
 ) -> None:
     """2 once more and 5 (module docstring), and the legs a decided end oversold; a leg
     the test leaves unprotected must need it (the fake holds units on its side at the
-    end)."""
+    end), and so must every decided end the test names: a kept stop one that a check took
+    (`kept_named`, the strategies whose stop `no_orphan` took so, and those 2 takes here),
+    an oversold leg one whose fill through zero the changes allowed (`oversold_used`) or
+    that ends on the other side."""
     named: set[str] = set()
+    kept = set(kept_named)
+    oversold = set(oversold_used)
     for leg in closing.values():
         instrument = (run.mode, leg.symbol, leg.exchange)
         opens = sides.get(instrument)
@@ -107,11 +130,12 @@ def at_the_end(
         on_its_side = position if opens != "SELL" else -position
         if on_its_side < 0 and leg.strategy in trace.oversold:
             _oversold_named(run, leg, position, trace.oversold[leg.strategy])
+            oversold.add(leg.strategy)
         # The units the fake holds on the leg's side (none when the account is flat or on
         # the other side: no stop of the leg's can hold those).
         held = max(on_its_side, 0)
         exits = [o for o in working if o.instrument == instrument and o.action != opens]
-        _exits_within(trace, run, leg, exits, held, position, rooms.get(instrument))
+        kept |= _exits_within(trace, run, leg, exits, held, position, rooms.get(instrument))
         if PROTECTED in trace.waived or not held:
             continue
         if leg.strategy in trace.unprotected:
@@ -131,6 +155,24 @@ def at_the_end(
     assert PROTECTED in trace.waived or not unneeded, (
         f"7.1: the test leaves {unneeded} unprotected, but the fake holds no units on "
         "their side at the end"
+    )
+    _declarations_needed(trace, kept, oversold)
+
+
+def _declarations_needed(trace: SessionTrace, kept: Set[str], oversold: Set[str]) -> None:
+    """A decided end the test names that no check took is a declaration it no longer
+    needs: found, so none stays silently. A kept stop is judged only while both checks
+    that take one run (4 and 2), an oversold leg while 3 runs."""
+    unneeded = sorted(set(trace.kept_stops) - kept)
+    judged = not {NO_ORPHAN, WITHIN} & set(trace.waived)
+    assert not judged or not unneeded, (
+        f"7.1: the test names kept_stop_by_decision for {unneeded}, but no stop of theirs "
+        "stood beyond the position a sale by hand left"
+    )
+    unneeded = sorted(set(trace.oversold) - oversold)
+    assert OTHER_SIDE in trace.waived or not unneeded, (
+        f"7.1: the test names oversold_by_decision for {unneeded}, but no fill of theirs "
+        "took the account through zero"
     )
 
 
@@ -163,19 +205,23 @@ def _exits_within(
     held: int,
     position: int,
     room: SaleRoom | None,
-) -> None:
+) -> set[str]:
     """2 over the leg's exits working at the end: beyond what the fake holds on its side
-    only by the room a sale by hand left, and each exit standing there named."""
+    only by the room a sale by hand left, and each exit standing there named. Returns the
+    strategies whose decided end it took so."""
     total = sum(o.remaining for o in exits)
     if WITHIN in trace.waived or total <= held:
-        return
+        return set()
     assert room is not None and total <= held + room.room(exits), (
         f"7.1: {leg.strategy} ends with exits of {total} units working at the fake "
         f"against a position of {position} {leg.symbol}"
     )
+    named = set()
     for order in exits:
         if room.took(order):
             _kept_stop_named(run, order, trace.kept_stops)
+            named.add(order.strategy)
+    return named
 
 
 def _kept_stop_named(run: Run, order: OrderChange, kept: Mapping[str, str]) -> None:

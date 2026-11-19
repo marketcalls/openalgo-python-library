@@ -212,6 +212,29 @@ def test_an_unsupported_broker_is_refused_whatever_the_case_of_its_name():
     assert failure.startswith("bt.live cannot trade through FivePaisa: ")
 
 
+@pytest.mark.parametrize("broker", ["pocketful", "mstock", "MStock"])
+def test_a_broker_whose_trade_book_order_ids_are_unchecked_passes_with_a_warning(broker):
+    # Design 16 3.1 step 7: the session matches the trade book's trades to its orders by
+    # order ID, which has not been checked for these brokers (merge notes, order path
+    # round 5). The warning names the broker, says so, and says what to watch.
+    report = preflight(FakeOpenAlgo(ping=pong(broker)))
+
+    check = check_named(report, "broker_supported")
+    assert check.ok
+    assert report.warnings == (check.message,)
+    assert check.message.startswith(f"{WARNING}bt.live trades through {broker}, ")
+    for words in ("trade book", "by order ID", "not been checked for", "RECONCILE"):
+        assert words in check.message
+
+
+def test_a_broker_whose_trade_book_order_ids_are_checked_passes_with_no_warning():
+    report = preflight(FakeOpenAlgo(ping=pong("upstox")))
+
+    check = check_named(report, "broker_supported")
+    assert (check.ok, check.message) == (True, "bt.live can trade through upstox")
+    assert report.warnings == ()
+
+
 # ----- the mode ----------------------------------------------------------------------
 
 

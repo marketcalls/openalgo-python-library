@@ -33,7 +33,9 @@ Over each run's event stream and the fake's log (`session_invariants_stream`):
 A sale by hand is the one thing a session learns of only by its comparisons, so what one
 leaves at the fake beyond 1 to 6 stands only by a decided end the test names
 (`SessionTrace.kept_stop_by_decision`, `SessionTrace.oversold_by_decision`), each such
-test listed in FAULT_ROWS.md for the lead.
+test listed in FAULT_ROWS.md for the lead. A decided end the test names that no check
+took is found too, as a leg left unprotected that the fake holds flat is: a declaration a
+test no longer needs never stays silently.
 
 Quantities are signed units, prices rupees, times UTC nanoseconds.
 """
@@ -96,6 +98,7 @@ def _check(session: SessionTrace, fake: FakeOpenAlgo) -> None:
     sides = sides_of(own)
     if ONE_STOP not in waived:
         one_stop_per_leg(changes, mine)
+    oversold_used: set[str] = set()
     rooms = within_the_position(
         changes,
         mine,
@@ -103,13 +106,25 @@ def _check(session: SessionTrace, fake: FakeOpenAlgo) -> None:
         session.oversold,
         within=WITHIN not in waived,
         side=OTHER_SIDE not in waived,
+        used=oversold_used,
     )
     closing = last.closing or closing_now(last)
     working = working_at_the_end(own)
     held = {c.instrument: c.position for c in changes}
+    kept_named: set[str] = set()
     if NO_ORPHAN not in waived:
-        no_orphan(last, closing, working, held, rooms, session.kept_stops)
-    at_the_end(session, last, closing, working, held, sides, rooms)
+        kept_named = no_orphan(last, closing, working, held, rooms, session.kept_stops)
+    at_the_end(
+        session,
+        last,
+        closing,
+        working,
+        held,
+        sides,
+        rooms,
+        kept_named=kept_named,
+        oversold_used=oversold_used,
+    )
     if BOOKS_AGREE not in waived and last.outcome is not None:
         books_agree(last, closing, held)
     for at, run in enumerate(session.runs):
