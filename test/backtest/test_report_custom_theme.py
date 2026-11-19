@@ -49,6 +49,9 @@ def several_series(performance) -> rp.custom.CustomSection:
         "rgba(0,0,0,.5)",
         "hsl(142 72% 33%)",
         "hsl(142deg 72% 33% / .5)",
+        "rgb(0 0 0 / 50%)",
+        "hsl(0.5turn 60% 40%)",
+        "rgb(none 10 20)",
         "Teal",
         "rebeccapurple",
         "transparent",
@@ -71,6 +74,11 @@ def test_a_colour_in_a_listed_form_is_accepted(colour):
         "rgb(1,2,3);",
         "rgb(1,2,3) red",
         "expression(alert(1))",
+        "rgb(red)",
+        "hsl(a, b, c)",
+        "rgb()",
+        "rgb(1 2 3 / x)",
+        "rgb(1 2 3,)",
         "var(--text)",
         "",
         5,
@@ -98,6 +106,24 @@ def test_an_unknown_token_is_refused_naming_the_tokens():
 def test_series_colours_that_cannot_be_written_are_refused(series, message):
     with pytest.raises(ConfigError, match=message):
         rp.Theme(series=series)
+
+
+def test_a_theme_changed_after_it_is_made_is_checked_again_when_the_page_is_rendered(
+    performance,
+):
+    theme = rp.Theme(light={"bg": "white"})
+    theme.light["bg"] = "red;} body{display:none"
+    with pytest.raises(ConfigError, match="Theme light bg: .* is not a colour"):
+        rp.tearsheet(performance, layout=rp.Layout(theme=theme))
+
+
+def test_a_token_added_to_a_theme_after_it_is_made_is_checked_when_the_page_is_rendered(
+    performance,
+):
+    theme = rp.Theme(dark={"bg": "black"})
+    theme.dark["body{display:none}--x"] = "red"
+    with pytest.raises(ConfigError, match="is not a token of the page"):
+        rp.tearsheet(performance, layout=rp.Layout(theme=theme))
 
 
 # ----- the second stylesheet -----------------------------------------------------------------

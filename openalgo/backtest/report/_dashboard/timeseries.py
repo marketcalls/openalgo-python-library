@@ -217,6 +217,23 @@ def _data_attributes(lines: Sequence[Line], pane: _Pane, first: int, count: int)
     return " ".join(parts)
 
 
+def _y_labels(
+    pane: _Pane,
+    ticks: list[float],
+    percent: bool,
+    value_labels: Callable[[list[float]], list[str]] | None,
+) -> str:
+    """The value axis's labels at their ticks: written by `value_labels` when given,
+    else a percent to one decimal or a number to two (`_value_label`)."""
+    texts = (
+        [_value_label(t, percent) for t in ticks] if value_labels is None else value_labels(ticks)
+    )
+    return "".join(
+        f"<span style='top:{pane.y(t):.1f}px'>{text}</span>"
+        for t, text in zip(ticks, texts, strict=True)
+    )
+
+
 def chart(
     dates: pd.DatetimeIndex,
     lines: Sequence[Line],
@@ -260,13 +277,7 @@ def chart(
         definition, drawn = _series_svg(line, pane, gid)
         defs.append(definition)
         shapes.append(drawn)
-    texts = (
-        [_value_label(t, percent) for t in ticks] if value_labels is None else value_labels(ticks)
-    )
-    y_labels = "".join(
-        f"<span style='top:{pane.y(t):.1f}px'>{text}</span>"
-        for t, text in zip(ticks, texts, strict=True)
-    )
+    y_labels = _y_labels(pane, ticks, percent, value_labels)
     x_labels = "".join(
         f"<span{'' if shown else HIDDEN} style='left:{at:.3f}%'>{text}</span>"
         for at, text, shown in _time_labels(days, nominal_width)

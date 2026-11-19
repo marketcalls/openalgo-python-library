@@ -6,7 +6,8 @@ lead's settlement of 2026-11-20: no `style` attribute, `img` only with a `data:`
 
 Every entry is a plain name, written as SVG spells it (`viewBox`, `linearGradient`); a
 fragment's names are matched without regard to case, as a browser's HTML parser reads
-them, and written back in the listed spelling.
+them, and written back in the listed spelling. Two kinds of listed value are narrowed
+further: a value the browser reads as CSS, and the hooks the page's own script reads.
 """
 
 #: HTML elements, outside an `<svg>`.
@@ -76,8 +77,8 @@ SVG_ELEMENTS = (
     "pattern",
     "use",
 )
-#: Attributes allowed on any listed element.
-ATTRIBUTES = (
+#: Attributes of text and structure, allowed on any listed element.
+TEXT_ATTRIBUTES = (
     "class",
     "title",
     "lang",
@@ -86,6 +87,9 @@ ATTRIBUTES = (
     "rowspan",
     "scope",
     "id",
+)
+#: The SVG geometry and presentation attributes, allowed on any listed element.
+SVG_ATTRIBUTES = (
     "viewBox",
     "width",
     "height",
@@ -136,11 +140,60 @@ ATTRIBUTES = (
     "patternUnits",
     "preserveAspectRatio",
 )
+#: Attributes allowed on any listed element.
+ATTRIBUTES = TEXT_ATTRIBUTES + SVG_ATTRIBUTES
+#: The attributes whose values a browser may read as CSS (presentation attributes are
+#: CSS properties): a value holds no backslash, as a CSS escape could spell `url(` past
+#: the check, and no quote, as a quoted string names a resource in a CSS image function
+#: without `url(`; `QUOTED_NAMES` alone may quote, as font names do.
+CSS_VALUE_ATTRIBUTES = frozenset(SVG_ATTRIBUTES)
+QUOTED_NAMES = "font-family"
 #: Families of attributes allowed on any listed element, by the start of their name.
 ATTRIBUTE_PREFIXES = ("aria-", "data-")
-#: Data attributes the page's own script reads as hooks (a sortable or paged table); a
-#: fragment that set them could break the script for the whole page.
-RESERVED_DATA_ATTRIBUTES = frozenset({"data-sort", "data-page"})
+#: The page's own script (`_dashboard/script.py`) finds its tables, weekly map and charts
+#: by these hooks and reads the data attributes on what it finds; a fragment holding one
+#: would run that code on an element that is not one, which can stop the script for the
+#: whole page. So a fragment holds none of the data attributes the script reads ...
+RESERVED_DATA_ATTRIBUTES = frozenset(
+    {
+        "data-bottom",
+        "data-dates",
+        "data-first",
+        "data-fmt",
+        "data-i",
+        "data-label",
+        "data-lines",
+        "data-log",
+        "data-n",
+        "data-page",
+        "data-sort",
+        "data-theme",
+        "data-top",
+        "data-v",
+        "data-weekly",
+        "data-year",
+    }
+)
+#: ... nor those it reads per series of a chart, these names followed by a number
+#: (`data-c0`, `data-v0` onward) ...
+RESERVED_DATA_FAMILIES = ("data-c", "data-v")
+#: ... nor a class it selects elements by.
+RESERVED_CLASSES = frozenset(
+    {
+        "nav",
+        "pager-info",
+        "pg-next",
+        "pg-prev",
+        "print",
+        "s",
+        "theme",
+        "ts",
+        "ts-pane",
+        "ts-x",
+        "wk-pick",
+        "wk-year",
+    }
+)
 #: Attributes allowed only on some elements: a link inside the page, and an image given
 #: inline with its text alternative.
 ELEMENT_ATTRIBUTES = {
@@ -166,13 +219,19 @@ IMAGE_TYPES = ("image/png", "image/jpeg", "image/svg+xml")
 __all__ = [
     "ATTRIBUTES",
     "ATTRIBUTE_PREFIXES",
+    "CSS_VALUE_ATTRIBUTES",
     "ELEMENT_ATTRIBUTES",
     "HTML_ELEMENTS",
     "ID_LIST_ATTRIBUTES",
     "IMAGE_TYPES",
     "NAMESPACES",
+    "QUOTED_NAMES",
+    "RESERVED_CLASSES",
     "RESERVED_DATA_ATTRIBUTES",
+    "RESERVED_DATA_FAMILIES",
+    "SVG_ATTRIBUTES",
     "SVG_ELEMENTS",
+    "TEXT_ATTRIBUTES",
     "URL_ATTRIBUTES",
     "VOID_ELEMENTS",
 ]

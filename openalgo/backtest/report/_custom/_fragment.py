@@ -11,6 +11,10 @@ with the page) and its references to them are rewritten to match: `href="#name"`
 `use` and `a`, `url(#name)` in `fill`, `stroke`, `clip-path`, `mask` and `marker-*`,
 and the ids listed in `aria-labelledby` and `aria-describedby`.
 
+A value the browser reads as CSS holds no backslash and no quote (font names aside), so
+`url(` cannot be spelt past the check; and the fragment holds none of the hooks the
+page's script finds its own elements by (`_allowed`), so the script never runs on it.
+
 Its tags must balance, so it cannot break the page around it; an empty element may be
 written `<name/>`. Comments, an XML declaration and a document type declaration carry
 no content and are left out, as are the namespace declarations of a standalone SVG
@@ -135,9 +139,9 @@ class _Reader(HTMLParser):
             return specific[key], self.specific(element, specific[key], value)
         if key in _ATTRIBUTE_NAMES:
             name = _ATTRIBUTE_NAMES[key]
-        elif key.startswith(allowed.ATTRIBUTE_PREFIXES) and key not in (
-            allowed.RESERVED_DATA_ATTRIBUTES
-        ):
+        elif key.startswith(allowed.ATTRIBUTE_PREFIXES):
+            if script_hook(key):
+                self.refuse(f"the attribute {key!r} on <{element}> is a hook of the page's script")
             name = key
         else:
             self.refuse(f"the attribute {key!r} on <{element}> is not on the allow list")
@@ -145,8 +149,18 @@ class _Reader(HTMLParser):
         return name, value
 
     def general(self, element: str, name: str, value: str) -> None:
-        """Checks an attribute allowed on any element: an id's form, and a `url(...)`
-        only as a reference inside the fragment."""
+        """Checks an attribute allowed on any element: no class the page's script
+        selects by, a value read as CSS without a backslash or a quote, an id's form,
+        and a `url(...)` only as a reference inside the fragment."""
+        if name == "class":
+            hooks = [part for part in value.split() if part.lower() in allowed.RESERVED_CLASSES]
+            if hooks:
+                self.refuse(
+                    f"class {hooks[0]!r} on <{element}> is a hook of the page's script; give "
+                    "the element another class"
+                )
+        if name in allowed.CSS_VALUE_ATTRIBUTES:
+            self.css_value(element, name, value)
         if name == "id":
             if not ID.fullmatch(value):
                 self.refuse(
@@ -164,6 +178,19 @@ class _Reader(HTMLParser):
                     "of the fragment, in fill, stroke, clip-path, mask or marker-*"
                 )
             self.references.append(match.group(1))
+
+    def css_value(self, element: str, name: str, value: str) -> None:
+        """Checks a value the browser may read as CSS (`_allowed.CSS_VALUE_ATTRIBUTES`)."""
+        if "\\" in value:
+            self.refuse(
+                f"{name}={value!r} on <{element}>: a backslash is not allowed in a value read "
+                "as CSS, where an escape could spell url( unseen"
+            )
+        if name != allowed.QUOTED_NAMES and ("'" in value or '"' in value):
+            self.refuse(
+                f"{name}={value!r} on <{element}>: a quote is not allowed in a value read as "
+                f"CSS (only {allowed.QUOTED_NAMES} quotes its names)"
+            )
 
     def specific(self, element: str, name: str, value: str) -> str:
         """Checks an attribute allowed only on `element`: a link inside the page or the
@@ -184,6 +211,17 @@ class _Reader(HTMLParser):
         if not IN_PAGE_LINK.fullmatch(value):
             self.refuse(f"href={value!r} on <a>: a link stays inside the page, as href='#...'")
         return value
+
+
+def script_hook(name: str) -> bool:
+    """Whether data attribute `name` is one the page's script reads: a listed name, or
+    a listed family's name followed by a number (`_allowed`)."""
+    if name in allowed.RESERVED_DATA_ATTRIBUTES:
+        return True
+    return any(
+        name.startswith(family) and name[len(family) :].isdigit()
+        for family in allowed.RESERVED_DATA_FAMILIES
+    )
 
 
 def _rewritten(name: str, value: str, ids: frozenset[str], prefix: str) -> str:
@@ -235,4 +273,4 @@ def checked(fragment: str, *, where: str, svg_only: bool, prefix: str) -> str:
     return "".join(_written(token, ids, prefix) for token in reader.tokens)
 
 
-__all__ = ["DATA_IMAGE", "ID", "IN_PAGE_LINK", "checked"]
+__all__ = ["DATA_IMAGE", "ID", "IN_PAGE_LINK", "checked", "script_hook"]

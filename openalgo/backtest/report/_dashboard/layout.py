@@ -46,6 +46,19 @@ PARTS = {
     "strategies": ("strategies",),
     "notes": ("method", "assumptions"),
 }
+#: Each section's title: its heading, and its link in the page's header.
+TITLES = {
+    "overview": "Overview",
+    "performance": "Performance",
+    "risk": "Risk",
+    "monthly": "Monthly",
+    "distribution": "Distribution",
+    "metrics": "Metrics",
+    "trades": "Trades",
+    "overfitting": "Overfitting checks",
+    "strategies": "Strategies",
+    "notes": "Notes",
+}
 _EVERY = frozenset(part for parts in PARTS.values() for part in parts)
 #: The parts of each report mode.
 MODE_PARTS = {
@@ -170,6 +183,7 @@ __all__ = [
     "MODE_PARTS",
     "PARTS",
     "SMALL",
+    "TITLES",
     "Section",
     "View",
     "card",

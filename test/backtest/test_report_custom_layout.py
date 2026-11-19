@@ -147,6 +147,16 @@ def test_an_addition_to_a_section_absent_on_the_page_forms_that_section(performa
     assert "<h2 class='serif'>Strategies</h2>" in section_of(page, "strategies")
 
 
+def test_a_section_formed_by_an_addition_takes_the_built_in_title_and_print_choice(performance):
+    sections = (rp.section("strategies", rp.text("screen only"), printed=False),)
+    page = page_of(performance, sections=sections)
+    strategies = section_of(page, "strategies")
+    assert strategies.startswith("<section id='strategies' class='no-print'>")
+    assert "<h2 class='serif'>Strategies</h2>" in strategies
+    assert "<a href='#strategies'>Strategies</a>" in page
+    assert "<div class='no-print'>" not in strategies
+
+
 # ----- navigation --------------------------------------------------------------------------
 
 
@@ -214,7 +224,7 @@ def _returns(performance) -> pd.Series:
 def test_a_layout_is_plain_data_that_pickles_with_its_functions(performance):
     layout = rp.Layout(sections=(rp.section("Returns", rp.line(_returns, title="R")),))
     again = pickle.loads(pickle.dumps(layout))
-    assert again == layout
+    assert again.sections[0].blocks[0].data is _returns
     assert rp.tearsheet(performance, layout=again) == rp.tearsheet(performance, layout=layout)
 
 
@@ -260,6 +270,7 @@ def test_report_tearsheets_blocks_receive_the_object_handed_to_it(performance):
     ("arguments", "message"),
     [
         ({"base": "weekly"}, "base is one of"),
+        ({"base": ["full"]}, "base is one of"),
         ({"hide": ("nope",)}, "neither a built-in section nor a part"),
         ({"show": ("distribution",)}, "show takes part names"),
         ({"show": ("nope",)}, "is not a part"),

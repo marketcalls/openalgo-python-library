@@ -153,10 +153,12 @@ def bar(block: Block, data: tuple, sessions: pd.DatetimeIndex, anchor: str) -> D
 
 
 def histogram(block: Block, values: np.ndarray, sessions: pd.DatetimeIndex, anchor: str) -> Drawn:
-    """A histogram block; values that are not finite are left out and counted."""
+    """A histogram block; values that are not finite are left out and counted. The
+    title is escaped here: `bars.frame` writes its label as given, the default page's
+    labels being fixed text."""
     chart = bars.histogram(
         values,
-        label=block.title or "",
+        label=fmt.text(block.title or ""),
         decimals=None,
         counts=COUNT_CAPTION,
         bins=block.option("bins"),

@@ -5,6 +5,8 @@ its block's anchor and its references rewritten to match."""
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from custom_pages import section_of, small_performance
 
@@ -12,6 +14,7 @@ from openalgo.backtest import report as rp
 from openalgo.backtest.errors import ConfigError
 from openalgo.backtest.report._custom import _allowed as allowed
 from openalgo.backtest.report._custom._fragment import checked
+from openalgo.backtest.report._dashboard import script
 
 WHERE = "html block 'F' in section 'S'"
 
@@ -24,30 +27,72 @@ def svg(fragment: str, prefix: str = "p") -> str:
     return checked(fragment, where=WHERE, svg_only=True, prefix=prefix)
 
 
+# ----- the lists, as design 19 section 1.4 and the lead's 11.0a.6 of design 18 give them ------
+
+#: HTML elements: the design's 33, then img and a (11.0a.6).
+HTML_ELEMENTS = (
+    "div", "span", "p", "br", "hr", "b", "strong", "i", "em", "small", "sub", "sup", "code",
+    "pre", "ul", "ol", "li", "dl", "dt", "dd", "h3", "h4", "table", "caption", "thead", "tbody",
+    "tfoot", "tr", "th", "td", "figure", "figcaption", "blockquote", "img", "a",
+)  # fmt: skip
+SVG_ELEMENTS = (
+    "svg", "g", "defs", "title", "desc", "path", "rect", "circle", "ellipse", "line",
+    "polyline", "polygon", "text", "tspan", "linearGradient", "radialGradient", "stop",
+    "clipPath", "mask", "marker", "pattern", "use",
+)  # fmt: skip
+#: Attributes allowed on any listed element; aria-* and data-* are families, and xmlns a
+#: namespace declaration (checked and left out of the page).
+ATTRIBUTES = (
+    "class", "title", "lang", "dir", "colspan", "rowspan", "scope", "id", "viewBox", "width",
+    "height", "x", "y", "x1", "y1", "x2", "y2", "cx", "cy", "r", "rx", "ry", "d", "points",
+    "transform", "fill", "fill-opacity", "fill-rule", "stroke", "stroke-width",
+    "stroke-opacity", "stroke-dasharray", "stroke-linecap", "stroke-linejoin", "opacity",
+    "font-size", "font-family", "font-weight", "text-anchor", "dominant-baseline", "offset",
+    "stop-color", "stop-opacity", "gradientUnits", "gradientTransform", "clip-path", "mask",
+    "marker-start", "marker-mid", "marker-end", "markerWidth", "markerHeight", "refX", "refY",
+    "orient", "patternUnits", "preserveAspectRatio",
+)  # fmt: skip
+#: Attributes allowed on one element only: href on use (design) and on a (11.0a.6), and
+#: src with its text alternative alt on img (11.0a.6).
+ELEMENT_ATTRIBUTES = {"use": ("href", "xlink:href"), "a": ("href",), "img": ("src", "alt")}
+
+
+def test_the_allow_lists_are_the_designs():
+    assert (len(HTML_ELEMENTS), len(SVG_ELEMENTS)) == (35, 22)
+    assert frozenset(HTML_ELEMENTS) == allowed.HTML_ELEMENTS
+    assert tuple(allowed.SVG_ELEMENTS) == SVG_ELEMENTS
+    assert sorted(ATTRIBUTES) == sorted(allowed.ATTRIBUTES)
+    assert allowed.ATTRIBUTE_PREFIXES == ("aria-", "data-")
+    assert ELEMENT_ATTRIBUTES == allowed.ELEMENT_ATTRIBUTES
+    assert {"xmlns", "xmlns:xlink"} == set(allowed.NAMESPACES)
+
+
 # ----- what the allow list lets through -----------------------------------------------------
 
 #: The listed elements that need an attribute to be allowed at all.
 NEEDS = {"img": " src='data:image/png;base64,iVBORw0KGgo='", "a": " href='#top'"}
+#: The listed elements that have no end tag.
+VOID = ("br", "hr", "img")
 
 
-@pytest.mark.parametrize("element", sorted(allowed.HTML_ELEMENTS))
+@pytest.mark.parametrize("element", HTML_ELEMENTS)
 def test_every_listed_html_element_is_allowed(element):
     attributes = NEEDS.get(element, "")
-    if element in allowed.VOID_ELEMENTS:
+    if element in VOID:
         assert html(f"<{element}{attributes}>") == f"<{element}{attributes}>"
     else:
         expected = f"<{element}{attributes}>x</{element}>"
         assert html(expected) == expected
 
 
-@pytest.mark.parametrize("element", allowed.SVG_ELEMENTS)
+@pytest.mark.parametrize("element", SVG_ELEMENTS)
 def test_every_listed_svg_element_is_allowed_inside_an_svg(element):
     fragment = f"<svg><{element}></{element}></svg>"
     expected = fragment if element != "svg" else "<svg><svg></svg></svg>"
     assert svg(fragment.lower()) == expected
 
 
-@pytest.mark.parametrize("attribute", allowed.ATTRIBUTES)
+@pytest.mark.parametrize("attribute", ATTRIBUTES)
 def test_every_listed_attribute_is_allowed(attribute):
     written = svg(f"<svg><g {attribute.lower()}='v1'></g></svg>")
     value = "p-v1" if attribute == "id" else "v1"
@@ -73,6 +118,11 @@ def test_an_image_is_allowed_inline_as_png_jpeg_or_svg(src):
 
 def test_a_link_inside_the_page_is_kept():
     assert html("<a href='#trades'>Trades</a>") == "<a href='#trades'>Trades</a>"
+
+
+def test_a_font_family_may_quote_its_names():
+    written = svg("<svg><text font-family=\"'Chart Sans', sans-serif\">x</text></svg>")
+    assert written == "<svg><text font-family='&#x27;Chart Sans&#x27;, sans-serif'>x</text></svg>"
 
 
 # ----- what it refuses, naming it -----------------------------------------------------------
@@ -109,6 +159,18 @@ def test_a_link_inside_the_page_is_kept():
         ("<svg><rect fill='url(https://example.org/p)'/></svg>", "url(#name)"),
         ("<svg><rect fill='url(#nope)'/></svg>", "#nope"),
         ("<p id='a' title='url(#a)'></p>", "url(#name)"),
+        # A CSS escape in a value the browser reads as CSS could spell url( unseen.
+        (r"<svg><rect mask='u\72 l(https://example.org/m.svg#m)'/></svg>", "a backslash"),
+        (r"<svg><rect fill='\75rl(https://example.org/p)'/></svg>", "a backslash"),
+        # A quoted string names a resource in a CSS image function without url(.
+        ("<svg><rect mask=\"image-set('https://example.org/m.png' 1x)\"/></svg>", "a quote"),
+        # The hooks the page's script reads, which would run its code on the fragment.
+        ("<figure class='ts'></figure>", "class 'ts'"),
+        ("<div class='card ts-x'></div>", "class 'ts-x'"),
+        ("<figure data-lines='1'></figure>", "'data-lines'"),
+        ("<span data-v0='1'></span>", "'data-v0'"),
+        ("<span data-c12='red'></span>", "'data-c12'"),
+        ("<div data-weekly></div>", "'data-weekly'"),
         ("<div><span></div>", "</div> does not close <span>"),
         ("<div>", "<div> is not closed"),
         ("</div>", "</div> does not close nothing"),
@@ -123,6 +185,37 @@ def test_anything_off_the_list_is_refused_naming_it_and_the_block(fragment, name
     with pytest.raises(ConfigError) as refused:
         html(fragment)
     assert named in str(refused.value) and str(refused.value).startswith(WHERE)
+
+
+#: What the page's script reads: an attribute it gets (a family when it adds a number to
+#: the name) or selects by, and a class it selects by or tests.
+READ_ATTRIBUTE = re.compile(r"getAttribute\('(data-[a-z-]+)'(\+k)?|\[(data-[a-z-]+)\]")
+SELECTED_CLASS = re.compile(
+    r"querySelector(?:All)?\('[a-z]*\.([a-z-]+)|classList\.contains\('([a-z-]+)'"
+)
+
+
+def script_hooks() -> tuple[set[str], set[str]]:
+    """The data attributes and classes the page's script reads, from its own text."""
+    text = script.HEAD + script.script(1)
+    attributes = {
+        (got + "0" if family else got) or selected
+        for got, family, selected in READ_ATTRIBUTE.findall(text)
+    }
+    classes = {selected or tested for selected, tested in SELECTED_CLASS.findall(text)}
+    return attributes, classes
+
+
+def test_every_hook_the_pages_script_reads_is_refused_in_a_fragment():
+    attributes, classes = script_hooks()
+    assert {"data-sort", "data-lines", "data-v0", "data-c0", "data-weekly"} <= attributes
+    assert {"ts", "ts-x", "nav", "s"} <= classes
+    for attribute in sorted(attributes):
+        with pytest.raises(ConfigError, match=attribute):
+            html(f"<span {attribute}='1'></span>")
+    for name in sorted(classes):
+        with pytest.raises(ConfigError, match=f"class '{name}'"):
+            html(f"<span class='box {name}'></span>")
 
 
 @pytest.mark.parametrize(

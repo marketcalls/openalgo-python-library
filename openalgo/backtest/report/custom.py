@@ -77,7 +77,8 @@ class Theme:
 
     A colour is `#rgb`, `#rrggbb`, `rgb(...)`, `hsl(...)` or a CSS colour name. Raises
     ConfigError for an unknown token or a colour in any other form, which is never
-    written into the page."""
+    written into the page: when the theme is made, and again when a page is rendered
+    (its mappings can be changed in between)."""
 
     light: Mapping[str, str] | None = None
     dark: Mapping[str, str] | None = None

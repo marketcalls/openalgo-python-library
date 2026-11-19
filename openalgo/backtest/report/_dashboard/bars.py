@@ -135,18 +135,24 @@ def histogram(
         "style='stroke:var(--accent)' stroke-width='1.5' stroke-dasharray='3 3'/>"
     )
     marks.append(f"<line x1='0' x2='{inner_w}' y1='{inner_h}' y2='{inner_h}' class='axis'/>")
-    if decimals is None:
-        decimals = scale.percent_decimals(low, high, PERCENT_TICKS)
-    if percent:
-        texts = [(t, _pct(t, decimals)) for t in scale.ticks(low, high, PERCENT_TICKS)]
-    else:
-        texts = tick_texts(low, high, PERCENT_TICKS, percent=False)
     marks += [
         f"<text x='{x(t):.2f}' y='{inner_h + 16}' text-anchor='middle' style='{AXIS_TEXT}'>"
         f"{text}</text>"
-        for t, text in texts
+        for t, text in _histogram_ticks(low, high, decimals, percent)
     ]
     return frame(width, height, margin, label, "".join(marks))
+
+
+def _histogram_ticks(
+    low: float, high: float, decimals: int | None, percent: bool
+) -> list[tuple[float, str]]:
+    """The histogram's value ticks and labels: percent to `decimals` places (as many as
+    the step needs when None), or plain numbers to as many as the step needs."""
+    if not percent:
+        return tick_texts(low, high, PERCENT_TICKS, percent=False)
+    if decimals is None:
+        decimals = scale.percent_decimals(low, high, PERCENT_TICKS)
+    return [(t, _pct(t, decimals)) for t in scale.ticks(low, high, PERCENT_TICKS)]
 
 
 class Box(NamedTuple):

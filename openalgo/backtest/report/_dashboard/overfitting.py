@@ -9,7 +9,7 @@ page shows; they change none of its figures.
 """
 
 from .. import _format as fmt
-from .layout import Section, View, card
+from .layout import TITLES, Section, View, card
 
 
 def overfitting(view: View) -> Section | None:
@@ -39,7 +39,7 @@ def overfitting(view: View) -> Section | None:
     )
     return Section(
         "overfitting",
-        "Overfitting checks",
+        TITLES["overfitting"],
         "Quick checks of the trade list",
         card("Quick checks", subtitle, body),
     )

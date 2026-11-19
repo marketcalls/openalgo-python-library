@@ -74,17 +74,6 @@ def heatmap(block: Block, frame: pd.DataFrame, placed: Placed, anchor: str) -> D
     return Drawn(f"<div class='scroll'>{table}</div>")
 
 
-def _plain_index(frame: pd.DataFrame) -> bool:
-    """Whether the index is the plain 0, 1, 2 ... index pandas gives by default."""
-    index = frame.index
-    return (
-        isinstance(index, pd.RangeIndex)
-        and index.start == 0
-        and index.step == 1
-        and index.name is None
-    )
-
-
 #: The kinds of a table column whose cells are numbers: whole numbers only, or any.
 NUMBER_KINDS = ("whole", "number")
 
@@ -120,11 +109,11 @@ def _kind(series: pd.Series) -> str:
     return "text"
 
 
-def table(block: Block, frame: pd.DataFrame, placed: Placed, anchor: str) -> Drawn:
-    """The DataFrame in the page's table style, sortable and paged as asked."""
-    if frame.empty:
+def table(block: Block, shown: pd.DataFrame, placed: Placed, anchor: str) -> Drawn:
+    """The DataFrame in the page's table style, sortable and paged as asked; `shown`
+    holds its index as its first columns already (`_data.table_frame`)."""
+    if shown.empty:
         return Drawn(NO_DATA)
-    shown = frame if _plain_index(frame) else frame.reset_index()
     kinds = [_kind(shown[column]) for column in shown.columns]
     sortable, rows = block.option("sortable"), block.option("rows")
     sort = " s" if sortable else ""

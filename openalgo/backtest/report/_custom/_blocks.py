@@ -27,12 +27,13 @@ FRAGMENTS = ("html", "svg")
 Data = Any | Callable[[Any], Any]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Block:
     """One user block: its kind, its data (a value or a callable of the result), title,
     subtitle, width ("full", "half" or "third"), whether its values are fractions shown
     as percent, and the options of its kind as (name, value) pairs. Made by the block
-    functions of `report.custom`, which check every field."""
+    functions of `report.custom`, which check every field. A block equals only itself:
+    its data may be a DataFrame, which compares cell by cell rather than as one value."""
 
     kind: str
     data: Data
@@ -61,8 +62,8 @@ def prepared(block: Block, data: object, where: str) -> object:
     """`data` checked for `block`'s kind and put in the shape its drawing takes (`_data`):
     (a DataFrame, whether several series) for a line (indexed by dates) or a bar,
     floats for a histogram, `_data.Points` for a scatter, a DataFrame for a heatmap or a
-    table, {label: value} for tiles, text for the rest (a fragment checked against the
-    allow list, `_fragment`)."""
+    table (its index as its first columns, `_data.table_frame`), {label: value} for
+    tiles, text for the rest (a fragment checked against the allow list, `_fragment`)."""
     kind = block.kind
     if kind in ("line", "bar"):
         frame, several = _data.series_frame(data, where, block.title or kind)
@@ -75,7 +76,7 @@ def prepared(block: Block, data: object, where: str) -> object:
     if kind == "heatmap":
         return _data.heat(data, where)
     if kind == "table":
-        return _data.frame_of(data, where)
+        return _data.table_frame(data, where)
     if kind == "tiles":
         return _data.tile_values(data, where)
     content = _data.text_of(data, where)
@@ -146,7 +147,8 @@ def line(
     the columns of a DataFrame in the series colours with a legend. `area` fills under
     each line, `zero_line` draws a dashed line at zero, `log_scale` draws growth on a log
     scale (returns as fractions, so it needs `percent=True`). Raises ConfigError for an
-    index that is not dates, a column that is not numbers or too many columns."""
+    index that is not dates or misses one (NaT), a column that is not numbers or too
+    many columns. Empty data, of any dtype, draws "No data"."""
     where = named("line", title)
     for name, value in (("area", area), ("zero_line", zero_line), ("log_scale", log_scale)):
         _flag(value, name, where)
@@ -260,7 +262,9 @@ def table(
     percent with `percent`), times as "12 Nov 2026 09:15", text as it is; its index as
     the first column unless it is the plain 0, 1, 2 ... index. `sortable` lets a click
     on a heading sort it (the page's script), `rows` shows that many rows a page with
-    Prev and Next (every row prints and reads without script)."""
+    Prev and Next (every row prints and reads without script). An index level without a
+    name is headed "index" ("level_0" onward in a MultiIndex). Raises ConfigError when
+    an index level's heading is a column's name."""
     where = named("table", title)
     _flag(sortable, "sortable", where)
     if rows is not None:
@@ -315,8 +319,10 @@ def html(data: Data, *, title: str | None = None, subtitle: str = "", width: str
     """An HTML fragment of the user's, inserted in a card after the allow list's check
     (`report._custom._fragment`; its elements and attributes are in the docs): no
     script, no style, nothing fetched, links only inside the page, images only inline
-    as `data:` PNG, JPEG or SVG, and balanced tags. Its ids are prefixed with the
-    block's anchor. Raises ConfigError naming what is not allowed."""
+    as `data:` PNG, JPEG or SVG, no class or data attribute the page's own script reads,
+    no backslash or quote in a value read as CSS (font names may be quoted), and
+    balanced tags. Its ids are prefixed with the block's anchor. Raises ConfigError
+    naming what is not allowed."""
     return make("html", data, title=title, subtitle=subtitle, width=width, titled=False)
 
 

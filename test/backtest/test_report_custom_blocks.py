@@ -5,12 +5,14 @@ from the inputs of each test."""
 
 from __future__ import annotations
 
+import pickle
 import re
 
 import numpy as np
 import pandas as pd
 import pytest
 from custom_pages import IST, section_of, small_performance
+from test_report_tearsheet import Structure
 
 from openalgo.backtest import report as rp
 from openalgo.backtest.errors import ConfigError
@@ -119,6 +121,12 @@ def test_a_line_on_an_index_that_is_not_dates_is_refused():
         rp.line(pd.Series([1.0, 2.0]), title="Numbered")
 
 
+def test_a_line_whose_index_misses_a_date_is_refused_naming_the_block():
+    index = pd.DatetimeIndex(["2025-06-02", None, "2025-06-09"])
+    with pytest.raises(ConfigError, match="line block 'L': its index misses 1 date"):
+        rp.line(pd.Series([1.0, 2.0, 3.0], index=index), title="L")
+
+
 def test_a_line_of_numbers_labels_its_axis_in_indian_notation(performance, sessions):
     series = pd.Series(np.linspace(0, 12_00_000, len(sessions)), index=sessions)
     html = drawn(performance, rp.line(series, title="Rupees"))
@@ -186,6 +194,25 @@ def test_a_histogram_of_fractions_shown_as_percent_labels_percent(performance):
 @pytest.mark.parametrize("values", [[], [np.nan]])
 def test_a_histogram_with_no_value_says_no_data(performance, values):
     assert NO_DATA in drawn(performance, rp.histogram(np.array(values, dtype=float), title="E"))
+
+
+# pandas gives an empty Series, and the columns of an empty DataFrame, the object dtype.
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: rp.histogram(pd.Series([]), title="E"),
+        lambda: rp.histogram([], title="E"),
+        lambda: rp.line(pd.Series([]), title="E"),
+        lambda: rp.line(pd.DataFrame(columns=["a", "b"]), title="E"),
+        lambda: rp.bar(pd.Series([]), title="E"),
+        lambda: rp.bar(pd.DataFrame(), title="E"),
+        lambda: rp.bar(pd.DataFrame(index=["Mon", "Tue"]), title="E"),
+        lambda: rp.scatter(pd.DataFrame(columns=["x", "y"]), x="x", y="y", title="E"),
+        lambda: rp.heatmap(pd.DataFrame(columns=["a"]), title="E"),
+    ],
+)
+def test_empty_data_says_no_data_whatever_its_dtype(performance, make):
+    assert NO_DATA in drawn(performance, make())
 
 
 # ----- scatter ---------------------------------------------------------------------------
@@ -302,6 +329,22 @@ def test_a_table_is_sortable_and_paged_as_asked(performance, listing):
     assert "data-sort" not in fixed and " s'>" not in fixed
 
 
+@pytest.mark.parametrize(
+    "frame",
+    [
+        pd.DataFrame({"k": [1.0]}, index=pd.Index(["a"], name="k")),
+        pd.DataFrame({"symbol": ["SBIN"], "net_pnl": [1.0]}).set_index("symbol", drop=False),
+        pd.DataFrame(
+            {"level_1": [1.0]}, index=pd.MultiIndex.from_tuples([("a", "b")], names=[None, None])
+        ),
+        pd.DataFrame({"v": [1.0]}, index=pd.MultiIndex.from_tuples([("a", "b")], names=["k", "k"])),
+    ],
+)
+def test_a_table_whose_index_takes_a_columns_heading_is_refused_naming_the_block(frame):
+    with pytest.raises(ConfigError, match="table block 'T': its index is shown as a column"):
+        rp.table(frame, title="T")
+
+
 def test_a_named_index_is_the_first_column_and_the_plain_one_is_not(performance):
     named = pd.DataFrame({"v": [1.0]}, index=pd.Index(["a"], name="key"))
     assert ">key</th>" in drawn(performance, rp.table(named, title="T"))
@@ -394,6 +437,60 @@ TWICE = pd.DataFrame([[1.0, 2.0]], columns=["a", "a"])
 def test_a_block_that_cannot_be_drawn_is_refused_when_made(make, message):
     with pytest.raises(ConfigError, match=message):
         make()
+
+
+def test_a_tables_clashing_index_from_a_data_function_is_refused_when_rendered(performance):
+    clash = pd.DataFrame({"k": [1.0]}, index=pd.Index(["a"], name="k"))
+    block = rp.table(lambda result: clash, title="T")
+    with pytest.raises(ConfigError, match="table block 'T' in section 'Blocks': its index"):
+        page(performance, block)
+
+
+def test_blocks_compare_as_the_same_block_never_by_their_data():
+    block = rp.table(pd.DataFrame({"x": [1.0]}), title="T")
+    copy = pickle.loads(pickle.dumps(block))
+    assert block == block
+    assert copy != block
+
+
+# ----- a title is text in every kind of block -------------------------------------------------
+
+FRAME = pd.DataFrame({"x": [1.0, 2.0, 3.0], "y": [0.5, -1.0, 2.0]})
+#: Every kind of block, made with a title.
+EVERY_KIND = {
+    "line": lambda title: rp.line(lambda given: given.session_returns, title=title),
+    "bar": lambda title: rp.bar(pd.Series({"Mon": 1.0, "Tue": -2.0}), title=title),
+    "histogram": lambda title: rp.histogram(np.arange(10.0), title=title),
+    "scatter": lambda title: rp.scatter(FRAME, x="x", y="y", title=title),
+    "heatmap": lambda title: rp.heatmap(FRAME, title=title),
+    "table": lambda title: rp.table(FRAME, title=title),
+    "tiles": lambda title: rp.tiles({"Trades": 3}, title=title),
+    "text": lambda title: rp.text("Words.", title=title),
+    "html": lambda title: rp.html("<p>x</p>", title=title),
+    "svg": lambda title: rp.svg("<svg></svg>", title=title),
+}
+#: The kinds drawn as a chart, named for a screen reader by the block's title.
+CHARTS = ("line", "bar", "histogram", "scatter")
+#: Titles with quotes and markup, and how the page writes them.
+TITLES = [
+    ("A's <b> & 'c'", "A&#x27;s &lt;b&gt; &amp; &#x27;c&#x27;"),
+    (
+        "x'><script>alert(1)</script><b title='",
+        "x&#x27;&gt;&lt;script&gt;alert(1)&lt;/script&gt;&lt;b title=&#x27;",
+    ),
+]
+
+
+@pytest.mark.parametrize(("title", "written"), TITLES)
+@pytest.mark.parametrize("kind", list(EVERY_KIND))
+def test_a_title_is_escaped_in_every_kind_of_block(performance, kind, title, written):
+    whole = page(performance, EVERY_KIND[kind](title))
+    structure = Structure(whole)
+    assert structure.errors == [] and structure.stack == []
+    assert whole.count("<script") == 2
+    assert written in whole
+    if kind in CHARTS:
+        assert f"aria-label='{written}'" in whole
 
 
 def test_a_data_function_that_raises_is_refused_naming_the_block_and_its_section(performance):

@@ -11,7 +11,10 @@ the page it renders.
                the sections `order` names come first, in its order, and the rest keep
                their places after them
     additions  a custom section named as a built-in section (its key in `PARTS`, in any
-               case) adds its blocks at the end of that section, after a large gap
+               case) adds its blocks at the end of that section, after a large gap; when
+               the page leaves that section out (Strategies on a single strategy, Trades
+               on a run without trades) the blocks form it, under its own title, printed
+               as the custom section asks
     anchors    a custom section's anchor is `u-` and its name made a slug (`u-exposure`),
                so it never takes a built-in anchor; its blocks' anchors follow it
 
@@ -26,7 +29,7 @@ from typing import Any, NamedTuple
 
 from ...errors import ConfigError
 from .._dashboard import page
-from .._dashboard.layout import LARGE, MODE_PARTS, PARTS, Section, View, stack
+from .._dashboard.layout import LARGE, MODE_PARTS, PARTS, TITLES, Section, View, stack
 from . import _render, _theme
 from ._text import escape
 
@@ -175,7 +178,7 @@ def check(
     ConfigError, naming the valid choices, for an unknown base, part or section, a name
     hidden and shown at once, two custom sections of one name or link, an `after` or
     `order` naming no section the layout shows, or additions to a hidden section."""
-    if base not in MODE_PARTS:
+    if not isinstance(base, str) or base not in MODE_PARTS:
         raise ConfigError(f"Layout base is one of {tuple(MODE_PARTS)}, got {base!r}")
     _check_names(hide, show)
     shown = shown_sections(parts_of(base, hide, show))
@@ -210,10 +213,10 @@ def _section(name: str, custom: Any, built: Section | None, placed: _render.Plac
     if name not in PARTS:
         title, subtitle = escape(custom.name), escape(custom.subtitle)
         return Section(placed.anchor, title, subtitle, markup, custom.printed), several
+    if built is None:
+        return Section(name, TITLES[name], "", markup, custom.printed), several
     if not custom.printed:
         markup = f"<div class='no-print'>{markup}</div>"
-    if built is None:
-        return Section(name, escape(custom.name), "", markup), several
     body = stack([("", built.body), (LARGE, markup)])
     return dataclasses.replace(built, body=body), several
 
@@ -236,9 +239,8 @@ def render(layout: Any, view: View, subject: object, version: str) -> str:
         section, uses = _section(name, custom, built.get(name), placed)
         sections.append(section)
         several = several or uses
-    theme = layout.theme
-    light, dark = (theme.light, theme.dark) if theme is not None else ({}, {})
-    series = _theme.series_tokens(theme.series if theme is not None else ()) if several else None
+    light, dark, theme_series = _theme.checked(layout.theme)
+    series = _theme.series_tokens(theme_series) if several else None
     extra = _theme.stylesheet(light, dark, series)
     return page.render(view, version, sections, extra_style=extra)
 

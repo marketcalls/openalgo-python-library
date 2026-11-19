@@ -2,17 +2,19 @@
 token and series colours, and the page's second stylesheet that writes them.
 
 A colour is written into a style sheet, so it must be one of the forms a pattern can
-check: `#rgb`, `#rrggbb`, `rgb(...)` or `rgba(...)`, `hsl(...)` or `hsla(...)` with
-numbers, units, commas, slashes and spaces inside, or a CSS colour name; text such as
-`red;}` never passes. The second stylesheet comes after the page's own and writes the
-given tokens in the three places the page's writes them (the root, the dark media query
-for a root not set light, and a root set dark), so the theme toggle and the reader's
-setting work as on the default page. It is written only when a page asks for it: a
+check: `#rgb`, `#rrggbb`, `rgb(...)` or `rgba(...)`, `hsl(...)` or `hsla(...)` holding
+numbers (each with a percent or angle unit, or none) or `none`, apart by commas, slashes
+or spaces, or a CSS colour name; text such as `red;}` never passes. The second
+stylesheet comes after the page's own and writes the given tokens in the three places
+the page's writes them (the root, the dark media query for a root not set light, and a
+root set dark), so the theme toggle and the reader's setting work as on the default
+page. It is written only when a page asks for it: a
 theme, or a chart of several series (the series tokens).
 """
 
 import re
 from collections.abc import Mapping, Sequence
+from typing import Any
 
 from ...errors import ConfigError
 from .._dashboard import style
@@ -23,7 +25,12 @@ MAX_SERIES = len(style.SERIES)
 #: The page's token names, in the order its stylesheet writes them.
 TOKENS = tuple(style.LIGHT)
 HEX_COLOUR = re.compile(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})")
-FUNCTION_COLOUR = re.compile(r"(?:rgba?|hsla?)\([0-9a-z.,%/ +-]+\)")
+#: A colour function's argument: a number (sign, decimals, exponent) with a percent or
+#: angle unit or none, or the keyword `none` (a missing component).
+_ARGUMENT = r"(?:[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?(?:%|deg|rad|grad|turn)?|none)"
+FUNCTION_COLOUR = re.compile(
+    rf"(?:rgba?|hsla?)\(\s*{_ARGUMENT}(?:(?:\s*[,/]\s*|\s+){_ARGUMENT})*\s*\)"
+)
 
 
 def colour(value: object, where: str) -> str:
@@ -81,6 +88,20 @@ def series_colours(colours: object) -> tuple[tuple[str, str], ...]:
     return tuple(pairs)
 
 
+def checked(theme: Any) -> tuple[dict[str, str], dict[str, str], tuple[tuple[str, str], ...]]:
+    """A `report.custom.Theme`'s light and dark token colours and its series pairs,
+    checked again as a page is rendered (all empty for None). A theme checks them when it
+    is made, but its mappings can be changed afterwards, and only checked text may reach
+    the stylesheet. Raises ConfigError as `token_colours` and `series_colours` do."""
+    if theme is None:
+        return {}, {}, ()
+    return (
+        token_colours(theme.light, "light"),
+        token_colours(theme.dark, "dark"),
+        series_colours(theme.series),
+    )
+
+
 def series_tokens(theme_series: Sequence[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
     """The six (light, dark) series colours of a page: the theme's first, then the
     page's own (`style.SERIES`)."""
@@ -116,6 +137,7 @@ def stylesheet(
 __all__ = [
     "MAX_SERIES",
     "TOKENS",
+    "checked",
     "colour",
     "series_colours",
     "series_tokens",
