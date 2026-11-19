@@ -1,5 +1,6 @@
 """The histogram of the robustness pages and the optimizer's page (`_robust._charts`), on
-hand-built blocks: its axis values stay inside the chart, and its key counts the values
+hand-built blocks: its axis values stay inside the chart, its mark labels never
+overprint one another, its percentages never read "-0.0%", and its key counts the values
 by what they are (runs, or the cross-validation's splits).
 
 The chart is 680 by 300 view-box units with margins of 22 (top), 16 (right), 30 (bottom)
@@ -11,7 +12,7 @@ import re
 
 import numpy as np
 
-from openalgo.backtest._robust._blocks import REAL, HistogramBlock, Mark
+from openalgo.backtest._robust._blocks import LIMIT, REAL, HistogramBlock, Mark
 from openalgo.backtest._robust._charts import histogram_chart
 
 #: The plot's width and the margins either side of it, view-box units.
@@ -67,6 +68,43 @@ def test_a_mark_at_the_right_end_keeps_its_label_inside_the_chart():
     marks = (Mark(1_00_000.0, "the best", REAL),)
     chart = histogram_chart(HistogramBlock("Objectives", "", PROFITS, False, marks))
     assert "<text x='612.0' y='-6' text-anchor='end' " in chart
+
+
+def test_mark_labels_that_meet_nothing_sit_on_one_line_above_the_plot():
+    assert "translate(52,22)" in histogram()
+    assert "<text x='306.0' y='-6' text-anchor='middle' " in histogram()
+
+
+#: The run and its limit 1,000 rupees apart, 6.1 units: "the run" (42 wide, 285 to 327)
+#: and "95th percentile" (90 wide, 267.1 to 357.1) centred on their marks would overprint.
+CLOSE_MARKS = (Mark(50_000.0, "the run", REAL), Mark(51_000.0, "95th percentile", LIMIT))
+
+
+def test_a_mark_label_that_would_meet_another_goes_a_line_higher():
+    # The second label is drawn 12 units (a line) higher, and the top margin grows by
+    # that line so it stays inside the chart: the plot is 236 tall, its axis values on 252.
+    chart = histogram_chart(HistogramBlock("Objectives", "", PROFITS, False, CLOSE_MARKS))
+    assert "<text x='306.0' y='-6' text-anchor='middle' " in chart
+    assert "<text x='312.1' y='-18' text-anchor='middle' " in chart
+    assert "translate(52,34)" in chart
+    assert "y='252' text-anchor=" in chart and "y='264' text-anchor=" not in chart
+
+
+def test_a_mark_label_that_meets_one_on_every_line_is_named_by_the_key_alone():
+    # "the median keeps 50%" (120 wide, centred on 299.9) meets both labels above.
+    keep = Mark(49_000.0, "the median keeps 50%", LIMIT)
+    chart = histogram_chart(HistogramBlock("Objectives", "", PROFITS, False, (*CLOSE_MARKS, keep)))
+    assert ">the median keeps 50%</text>" not in chart
+    assert "Dashed: the median keeps 50% (49,000.00)" in chart
+    assert "<title>the median keeps 50%: 49,000.00</title>" in chart
+
+
+def test_a_shallow_percentage_reads_its_first_digit_not_minus_zero():
+    drawdowns = np.array([-0.0003, -0.0002, -0.0001, 0.0])
+    marks = (Mark(-0.0002, "the run's order", REAL),)
+    chart = histogram_chart(HistogramBlock("Drawdowns", "", drawdowns, True, marks))
+    assert "Solid: the run&#x27;s order (-0.02%)" in chart
+    assert not re.search(r"-0\.0+%", chart)
 
 
 def test_the_key_counts_the_values_as_runs_by_default():

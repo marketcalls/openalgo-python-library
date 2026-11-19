@@ -7,7 +7,9 @@ axis text, round ticks and frame, `report._dashboard.bars` and `scale`):
                cumulative return
     histogram  one figure over the runs in round-edged bins, with marked values: the
                run's own (solid), a rule's limit (dashed), a reference such as zero
-               (dotted), each labelled
+               (dotted), each labelled above the plot; a label that would overprint
+               one drawn before it goes a line higher, and the key names every mark
+               with its value (a percentage as the figures write it, never "-0.0%")
     sessions   a value at each session close (the run's cumulative return, or a price),
                with marked sessions shaded
 
@@ -23,14 +25,18 @@ import numpy as np
 from ..report import _format as fmt
 from ..report._dashboard import scale
 from ..report._dashboard.bars import AXIS_TEXT, MUTED_TEXT, Margin, frame
+from . import _words
 from ._blocks import LIMIT, REAL, REFERENCE, FanBlock, HistogramBlock, SessionsBlock
-from ._chart_text import anchor_inside
+from ._chart_text import LINE, Label, anchor_inside
 from ._paths import Fan
 
 WIDTH, HEIGHT = 680, 300
 MARGIN = Margin(22, 16, 30, 52)
 #: Ticks asked of an axis, and bins asked of a histogram (round edges make about these).
 AXIS_TICKS, HISTOGRAM_BINS = 6, 30
+#: The baseline of a histogram's first line of mark labels above its plot, and the lines
+#: of them it stacks: a label that would meet one drawn before it goes a line higher.
+MARK_BASELINE, MARK_LINES = -6.0, 2
 #: Points of a sampled path: thin paths are drawn at no more than this many of the
 #: fan's points, to whole pixels, which keeps 100 of them light on the page.
 SAMPLE_POINTS = 101
@@ -147,22 +153,61 @@ def _fan_axis(block: FanBlock, x: scale.Linear, last: float) -> list[str]:
     return marks
 
 
-def _mark_lines(block: HistogramBlock, x: scale.Linear, height: float) -> tuple[list[str], str]:
-    marks, words = [], []
+def _mark_labels(block: HistogramBlock, x: scale.Linear) -> list[Label | None]:
+    """Where each mark's label is drawn: on the first line above the plot
+    (`MARK_BASELINE`), or a line higher when it would meet a label drawn before it there;
+    None when it would meet one on each of the `MARK_LINES` lines (the key still names
+    it, with its value)."""
     width, _ = inner()
+    drawn: list[Label] = []
+    found: list[Label | None] = []
     for mark in block.marks:
-        text = fmt.percent(mark.value, 1) if block.percent else fmt.number(mark.value)
         at = x(mark.value)
         anchor = anchor_inside(at, mark.label, -MARGIN.left, width + MARGIN.right)
+        tries = (
+            Label(at, MARK_BASELINE - line * LINE, anchor, mark.label) for line in range(MARK_LINES)
+        )
+        spot = next((each for each in tries if not any(map(each.meets, drawn))), None)
+        drawn += [] if spot is None else [spot]
+        found.append(spot)
+    return found
+
+
+def _histogram_margin(labels: list[Label | None]) -> Margin:
+    """The charts' margins, the top grown by a line for each line of mark labels above
+    the first, so every label stays inside the chart."""
+    raised = max(
+        (round((MARK_BASELINE - label.y) / LINE) for label in labels if label is not None),
+        default=0,
+    )
+    return MARGIN._replace(top=MARGIN.top + raised * round(LINE))
+
+
+def _figure(value: float, percent: bool) -> str:
+    """A histogram's value in its key and hover readouts: a percentage that never reads
+    "-0.0%" (`_words.percent`), or a plain number."""
+    return _words.percent(value, 1) if percent else fmt.number(value)
+
+
+def _mark_lines(
+    block: HistogramBlock, labels: list[Label | None], x: scale.Linear, height: float
+) -> tuple[list[str], str]:
+    marks, keys = [], []
+    for mark, label in zip(block.marks, labels, strict=True):
+        text = _figure(mark.value, block.percent)
+        at = x(mark.value)
         marks.append(
             f"<line x1='{at:.1f}' x2='{at:.1f}' y1='0' y2='{height:.1f}' "
             f"class='{MARK_CLASSES[mark.kind]}'>"
             f"<title>{fmt.text(mark.label)}: {text}</title></line>"
-            f"<text x='{at:.1f}' y='-6' text-anchor='{anchor}' style='{MUTED_TEXT}'>"
-            f"{fmt.text(mark.label)}</text>"
         )
-        words.append(f"{MARK_STYLES[mark.kind]}: {fmt.text(mark.label)} ({text})")
-    return marks, "; ".join(words)
+        if label is not None:
+            marks.append(
+                f"<text x='{at:.1f}' y='{label.y:g}' text-anchor='{label.anchor}' "
+                f"style='{MUTED_TEXT}'>{fmt.text(mark.label)}</text>"
+            )
+        keys.append(f"{MARK_STYLES[mark.kind]}: {fmt.text(mark.label)} ({text})")
+    return marks, "; ".join(keys)
 
 
 def histogram_chart(block: HistogramBlock) -> str:
@@ -170,19 +215,18 @@ def histogram_chart(block: HistogramBlock) -> str:
     values = block.values[np.isfinite(block.values)]
     if not len(values):
         return "<p class='empty'>No figure to show: every run left it undefined.</p>"
-    width, height = inner()
+    width, _ = inner()
     marked = np.array([mark.value for mark in block.marks], dtype=float)
     low, high = domain(np.concatenate([values, marked]))
     x = scale.Linear(low, high, 0.0, width)
+    labels = _mark_labels(block, x)
+    margin = _histogram_margin(labels)
+    height = HEIGHT - margin.top - margin.bottom
     counted = scale.bins(values, low, high, HISTOGRAM_BINS)
     y = scale.Linear(0.0, float(max(n for _, _, n in counted) or 1), height, 0.0)
     marks = []
     for left, right, n in counted:
-        span = (
-            f"{fmt.percent(left, 1)} to {fmt.percent(right, 1)}"
-            if block.percent
-            else f"{fmt.number(left)} to {fmt.number(right)}"
-        )
+        span = f"{_figure(left, block.percent)} to {_figure(right, block.percent)}"
         marks.append(
             f"<rect class='hist-bar' x='{x(left):.1f}' y='{y(n):.1f}' "
             f"width='{max(1.0, x(right) - x(left) - 1):.1f}' height='{height - y(n):.1f}'>"
@@ -199,8 +243,8 @@ def histogram_chart(block: HistogramBlock) -> str:
             f"<text x='{x(tick):.1f}' y='{height + 16}' text-anchor='{anchor}' "
             f"style='{AXIS_TEXT}'>{text}</text>"
         )
-    lines, key = _mark_lines(block, x, height)
-    svg = frame(WIDTH, HEIGHT, MARGIN, fmt.text(block.title), "".join(marks + lines))
+    lines, key = _mark_lines(block, labels, x, height)
+    svg = frame(WIDTH, HEIGHT, margin, fmt.text(block.title), "".join(marks + lines))
     runs = fmt.indian_digits(len(block.values), 0)
     counted = fmt.text(block.counted)
     return (

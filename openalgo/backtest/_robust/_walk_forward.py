@@ -69,13 +69,14 @@ class WalkForwardResult:
     @property
     def folds(self) -> pd.DataFrame:
         """A row per fold, indexed by fold number: the first and last session of its
-        in-sample and out-of-sample windows (IST dates), the parameters chosen in sample,
-        the in-sample and out-of-sample objective per year (a total such as the net
-        profit divided by the years its window lasted), their efficiency (from the
-        objective's break-even), and the out-of-sample net P&L (rupees), maximum
-        drawdown (a fraction, zero or negative), P&L over drawdown, closed trades (whole
-        numbers, a nullable integer column) and win rate. A fold that chose nothing has
-        NaN figures and <NA> trades."""
+        in-sample and out-of-sample windows (IST dates), the parameters chosen in sample
+        (one whose values are whole numbers as a nullable integer column), the in-sample
+        and out-of-sample objective per year (a total such as the net profit divided by
+        the years its window lasted), their efficiency (from the objective's
+        break-even), and the out-of-sample net P&L (rupees), maximum drawdown (a
+        fraction, zero or negative), P&L over drawdown, closed trades (whole numbers, a
+        nullable integer column) and win rate. A fold that chose nothing has NaN figures
+        and <NA> trades and whole-number parameters."""
         return fold_frame(self._outcome, self._dates)
 
     @property

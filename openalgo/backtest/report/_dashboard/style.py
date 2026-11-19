@@ -9,7 +9,9 @@ their sizes from `timeseries`.
 
 The header's section links scroll sideways inside the header when there are more than
 its width holds (a robustness report has 19), so the mark and the tools keep their room
-and the page itself never scrolls sideways.
+and the page itself never scrolls sideways. Below the width that shows the links the
+mark and the tools may shrink instead (Export PDF wraps), so the header fits a 320-pixel
+phone.
 """
 
 from .timeseries import TIME_AXIS_PX, VALUE_AXIS_PX
@@ -101,7 +103,6 @@ border:1px solid var(--border-strong)}
 .mark-name{font-size:1.125rem;line-height:1.75rem;color:var(--text)}
 .mark .eyebrow{margin-top:2px;line-height:1}
 .mark>div{line-height:1}
-.mark,.tools{flex:none}
 .nav{display:none;align-items:center;gap:28px;min-width:0;overflow-x:auto;scrollbar-width:thin}
 .nav a{font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.13em;
 color:var(--text-muted);text-decoration:none;transition:color .15s;white-space:nowrap}
@@ -116,7 +117,7 @@ border:1px solid var(--border-strong);color:var(--text-muted)}
 .theme:hover{color:var(--text)}
 .theme .sun{display:none}
 .dark-on .theme .sun{display:block}.dark-on .theme .moon{display:none}
-@media (min-width:64rem){.nav{display:flex}}
+@media (min-width:64rem){.nav{display:flex}.mark,.tools{flex:none}}
 """
 
 _MAIN = """

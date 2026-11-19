@@ -11,8 +11,8 @@ so what one window favours the next does not.
 """
 
 import threading
-import warnings
 
+import numpy as np
 import pandas as pd
 import pytest
 from data_fixtures.fakes import FakeClient
@@ -31,7 +31,10 @@ from robust_runs import (
 from test_quickstart import historify_rows
 
 import openalgo.backtest as bt
+from openalgo.backtest._robust._grid import Grid
 from openalgo.backtest._robust._verdict import FAILED, INFORMATIONAL, NOT_JUDGED, PASSED
+from openalgo.backtest._robust._walk import FoldOutcome, WalkOutcome
+from openalgo.backtest._robust._walk_tables import fold_frame
 from openalgo.backtest._robust._windows import folds
 
 #: A trade on a favoured weekday and on another, rupees (10 shares x 3 and x -1).
@@ -428,10 +431,8 @@ def test_a_walk_forward_through_a_client_runs_on_worker_processes(served_walk):
     # The client stays in this process: the bars are read through it once, and the
     # workers get the bars, so two workers run the folds this process runs.
     client, settings = served_walk
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        here = bt.walk_forward(Weekday, client, workers=1, progress=quiet, **settings)
-        pooled = bt.walk_forward(Weekday, client, workers=2, progress=quiet, **settings)
+    here = bt.walk_forward(Weekday, client, workers=1, progress=quiet, **settings)
+    pooled = bt.walk_forward(Weekday, client, workers=2, progress=quiet, **settings)
     assert "in 2 worker processes." in pooled.plan
     pd.testing.assert_frame_equal(pooled.folds, here.folds)
     assert list(here.folds["day"]) == [0] * 5
@@ -455,6 +456,38 @@ def test_the_folds_count_closed_trades_in_whole_numbers(planted_walk):
     assert trades.tolist() == [
         len(weekday_trades(WALK_SESSIONS, 0, BOUNDS[k], BOUNDS[k + 1] - 1)) for k in range(5)
     ]
+
+
+def chosen_frame(values: tuple, chosen: list) -> pd.DataFrame:
+    """The folds table of a hand-built walk-forward over one parameter `level` taking
+    `values`, its folds choosing the positions `chosen` (None for nothing), none traded."""
+    grid = Grid(("level",), tuple({"level": value} for value in values), {"level": values[0]}, True)
+    windows = folds(100, len(chosen), 0.7, False)
+    outcomes = tuple(
+        FoldOutcome(fold, np.array([]), position, None, None)
+        for fold, position in zip(windows, chosen, strict=True)
+    )
+    dates = nse_sessions("2023-01-02", 100)
+    return fold_frame(WalkOutcome(outcomes, grid, "net_profit", None), dates)
+
+
+# (the parameter's values, the folds' choices, whether its column is whole numbers, the
+# column with None where it is missing): whole numbers are a whole-number column, as the
+# trades are, missing for a fold that chose nothing; other values keep their own type.
+PARAMETER_COLUMNS = [
+    ((0, 1, 2), [None, 1, 2], True, [None, 1, 2]),
+    ((0, 1, 2), [0, 2, 1], True, [0, 2, 1]),
+    ((0.5, 1.5), [None, 1], False, [None, 1.5]),
+    (("fast", "slow"), [None, 0], False, [None, "fast"]),
+    ((True, False), [1, None], False, [False, None]),
+]
+
+
+@pytest.mark.parametrize(("values", "chosen", "whole", "column"), PARAMETER_COLUMNS)
+def test_the_folds_show_whole_number_parameters_as_whole_numbers(values, chosen, whole, column):
+    level = chosen_frame(values, chosen)["level"]
+    assert (str(level.dtype) == "Int64") == whole
+    assert [None if pd.isna(value) else value for value in level] == column
 
 
 def test_a_runner_of_other_bars_shares_its_parents_worker_processes():

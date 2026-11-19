@@ -8,7 +8,10 @@ runs (`_bar_common`): the median noise objective over the run's, both measured f
 objective's break-even; the share of noise runs profitable; the run's percentile among
 them (the share of noise runs below it). Pass: the ratio at least `keep` (0.5), at least
 `profitable` (0.8) of the runs profitable, and the run not above the `top` (0.95)
-percentile of the noise objectives (linear between order statistics).
+percentile of the noise objectives (linear between order statistics). The words give
+the run's percentile as that share to a tenth of a percent ("the run above 95.1% of the
+noise runs"): rounded to a whole ordinal it would read "95th" on both sides of the top
+limit.
 
 Not judged when the run did not make money, has too few closed trades, has an objective
 that is undefined, has no break-even or is not above it, when no noise run could be
@@ -174,8 +177,8 @@ def run(
     figure = (
         f"median {name} {words.number(summary['median'])} keeps "
         f"{words.percent(summary['ratio'])} of the run's {words.number(subject.real)}; "
-        f"{words.percent(summary['profitable_share'])} of noise runs profitable; the run at "
-        f"the {words.ordinal(summary['percentile'])} percentile"
+        f"{words.percent(summary['profitable_share'])} of noise runs profitable; the run above "
+        f"{words.percent(summary['percentile'])} of the noise runs"
     )
     note = (
         f"Each run moves every price of every bar, with its chance, by up to "
@@ -246,11 +249,7 @@ def _blocks(
     tiles = (
         Tile("Median kept", words.percent(summary["ratio"]), f"of the run's {name}"),
         Tile("Profitable", words.percent(summary["profitable_share"]), "of the noise runs"),
-        Tile(
-            "The run's percentile",
-            words.ordinal(summary["percentile"]),
-            f"{words.percent(summary['percentile'])} of the noise runs below it",
-        ),
+        Tile("Above", words.percent(summary["percentile"]), "of the noise runs"),
         Tile("Median", words.number(summary["median"]), name),
         Tile(
             "Measured",

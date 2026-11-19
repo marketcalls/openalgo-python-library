@@ -43,11 +43,17 @@ def percent(fraction: float, decimals: int = 1) -> str:
 def ordinal(fraction: float, decimals: int = 0) -> str:
     """A fraction as an ordinal percentile, rounded to `decimals` places with trailing
     zeros dropped: 0.66 is "66th", 0.21 "21st", 0.975 to one place "97.5th" (a part of
-    a hundred takes "th", as do 11 to 13)."""
+    a hundred takes "th", as do 11 to 13). A fraction short of 0 or 1 that would round to
+    either there shows more places, up to its first digit that keeps it apart (0.996 is
+    "99.6th", 0.004 "0.4th"), so only 0 and 1 themselves read "0th" and "100th"."""
     special = _undefined(fraction)
     if special is not None:
         return special
-    shown = f"{fraction * 100:.{decimals}f}"
+    value = fraction * 100
+    places = decimals
+    while value not in (0, 100) and round(value, places) in (0, 100) and places < MOST_DECIMALS:
+        places += 1
+    shown = f"{value:.{places}f}"
     if "." in shown:
         shown = shown.rstrip("0").rstrip(".")
     if "." in shown or shown[-2:] in ("11", "12", "13"):
