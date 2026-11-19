@@ -42,6 +42,9 @@ pub(super) enum Resolved {
     Units(f64),
     AtFill,
     Skipped(SkipReason),
+    /// Refused unsized: the account's free cash alone left its sizer nothing
+    /// (`sizing::size_submission`).
+    Refused(RejectCode),
 }
 
 fn invalid(reason: &str) -> KernelError {
@@ -68,17 +71,20 @@ impl Engine {
         self.check_buildable(&request)?;
         self.check_venue_request(&request)?;
         let request = self.venue_request(request)?;
-        let units = match self.resolve_units(&request, &slice)? {
-            Resolved::Units(units) => units,
-            Resolved::AtFill => 0.0,
+        let (units, refused) = match self.resolve_units(&request, &slice)? {
+            Resolved::Units(units) => (units, None),
+            Resolved::AtFill => (0.0, None),
+            Resolved::Refused(code) => (0.0, Some(code)),
             Resolved::Skipped(reason) => return Ok(Submission::Skipped(reason)),
         };
         let units = self.venue_units(&request, units);
-        let checked = match self.submission_checks(&request, units, &slice, decided_at, None)? {
-            Ok(good_until) => self
+        // The checks come first, so a gate's code stands before the account's refusal.
+        let checks = self.submission_checks(&request, units, &slice, decided_at, None)?;
+        let checked = match (checks, refused) {
+            (Err(code), _) | (Ok(_), Some(code)) => Err(code),
+            (Ok(good_until), None) => self
                 .live_checks(&request, units, &slice, None)?
                 .map(|()| good_until),
-            Err(code) => Err(code),
         };
         let id = self.book.next_id();
         let key = PositionKey {
@@ -191,9 +197,10 @@ impl Engine {
                 Ok(Resolved::AtFill)
             }
             QuantitySpec::Sizer(_) if self.sizes_at_fill(request) => Ok(Resolved::AtFill),
-            QuantitySpec::Sizer(sizer) => match self.size_at_decision(request, sizer, slice)? {
-                SizeOutcome::Units(units) => Ok(Resolved::Units(units)),
-                SizeOutcome::Skipped(reason) => Ok(Resolved::Skipped(reason)),
+            QuantitySpec::Sizer(sizer) => match self.size_submission(request, sizer, slice)? {
+                Ok(SizeOutcome::Units(units)) => Ok(Resolved::Units(units)),
+                Ok(SizeOutcome::Skipped(reason)) => Ok(Resolved::Skipped(reason)),
+                Err(code) => Ok(Resolved::Refused(code)),
             },
         }
     }

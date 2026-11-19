@@ -8,7 +8,8 @@
 //! - Trading state (item 6): REDUCING after a daily loss breach rejects with
 //!   `daily_loss_gate` until the next session (SPEC-18; the gate is always on and there
 //!   is no check against the limit before a breach, lead rulings); HALTED rejects with
-//!   `halted`.
+//!   `halted`. Then, in a portfolio run, the account's daily loss lock rejects with
+//!   `account_loss_gate` for the rest of its session day (`account_breach`).
 //! - Cooldown and maximum positions (item 7), for an entry from flat only: `cooldown`
 //!   while fewer than `cooldown` base bars have closed after the bar of the
 //!   instrument's last exit, `max_positions` when the positions open or with an entry
@@ -49,6 +50,7 @@ impl Engine {
         slice: &SliceInfo,
     ) -> Result<(), RejectCode> {
         self.risk.lock.entry_gate()?;
+        self.account_entry_gate(slice)?;
         if held_units != 0.0 {
             return Ok(());
         }

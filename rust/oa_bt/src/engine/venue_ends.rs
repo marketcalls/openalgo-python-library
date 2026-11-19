@@ -96,7 +96,10 @@ impl Engine {
         }
         let index = match self.phase {
             Phase::Ready(index) => index,
-            Phase::Timers(slice) | Phase::Ahead(slice) | Phase::Closing(slice) => return Ok(slice),
+            Phase::Opened(slice)
+            | Phase::Timers(slice)
+            | Phase::Ahead(slice)
+            | Phase::Closing(slice) => return Ok(slice),
             Phase::Paused(_) => return Err(VenueError::AtBarClose.into()),
             Phase::Finished => return Err(VenueError::SessionOver.into()),
         };

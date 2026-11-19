@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Groundwork for running several strategies on one account (2.4.0, kernel unit M1; `bt.backtest`
+  does not take a list of strategies yet, and nothing changes for a single strategy). The kernel
+  runs each time slice as separate phases, so a portfolio run can step several strategies' engines
+  together; every existing backtest, result and live session gives the same figures at the same
+  speed. New codes a portfolio run will report: the order rejection `account_margin` (the
+  strategy's own free cash covers the order's margin, the shared account's does not), the entry
+  rejection `account_loss_gate` (entries after the account's daily loss limit is breached, until
+  the next session), the exit reason `account_loss_limit` and the risk event `account_loss_hit`
+  (scope `account`). Result warnings explain the new rejection codes and what to do.
+
 ## [2.3.0] - 2026-11-20
 
 ### Added
