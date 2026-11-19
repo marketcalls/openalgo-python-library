@@ -10,6 +10,53 @@ A Python library for algorithmic trading using OpenAlgo's REST APIs and WebSocke
 - General Documentation: https://docs.openalgo.in
 - Source: https://github.com/marketcalls/openalgo-python-library
 
+## What's New in 2.3.0
+
+Live trading, overfitting checks and walk-forward. Three fixes change some backtest
+results (listed at the end).
+
+- **Live trading with `bt.live`.** The same strategy class that backtests trades today
+  through your OpenAlgo server, in the mode set by OpenAlgo's analyzer switch (sandbox
+  or live: no argument chooses it). Bars are built from the live feed and decided at
+  each close; the stop-loss rests at your broker as a real order (SL-M, or a stop-limit
+  for NFO and BFO options), targets and trailing stops are watched on every tick, and a
+  daily loss limit and kill switch protect the account. Every order is written to a
+  journal before it is sent, positions are checked against OpenAlgo's books every 30
+  seconds, and a restart the same day resumes positions and their stops. Ctrl+C is a
+  safe stop (`on_stop="flatten"` or `"keep"`). `bt.live` returns a `SessionResult` with
+  each strategy's `Result`, the day's summary across restarts (including slippage
+  against the backtest) and the session's tables. This version trades intraday (MIS)
+  on stocks, futures (NSE, BSE, MCX) and bought options, one symbol per strategy, and
+  needs OpenAlgo 2.0.2.6 or later. `bt.record` records the feed's ticks and
+  `bt.read_ticks` reads them back.
+- **Robustness and overfitting checks.** `bt.robustness(...)` and `result.robustness()`
+  run seventeen checks (random out of sample, walk-forward, Monte Carlo trade resampling,
+  permutation, noise, versus random entries, other markets, synthetic stress, shifted
+  bars, delayed orders, liquidity, parameter neighbourhood and more), each with its
+  rule, verdict and charts in an HTML report. Every backtest also runs four quick checks
+  of its trades: `result.summary()` shows an "Overfitting" line and the tearsheet an
+  "Overfitting checks" section. A failed check says the edge did not hold up under it;
+  it never claims proof of overfitting.
+- **`bt.walk_forward`** and the optimizer's overfitting figures: `bt.optimize` results
+  give the best setting's neighbourhood (with a warning for a lone spike), the deflated
+  Sharpe ratio and the probability of backtest overfitting, and a heatmap page.
+- **MAE, MFE and trading cost** per trade, in the trade list, the metrics and the
+  tearsheet; new `fill=` models and `delay_entries` / `delay_exits` to test a strategy
+  against worse fills and late orders.
+
+Changes in results:
+
+- MCX contracts whose multiplier is not 1 (GOLDM, GOLD, GOLDTEN, GOLDGUINEA, ZINC, LEAD,
+  ALUMINIUM and their minis) are now charged on their traded value: GOLDM was charged
+  about eight times too much, GOLD and the base metals far too little.
+- `turnover` and the trade list's `return_pct` count the contract multiplier.
+- An MIS option leg's stop is the stop-limit the exchange takes (limit 5 percent beyond
+  the stop), and an option sell stop at one tick keeps a limit of one tick.
+
+Every other backtest gives the same figures as 2.2.1. The full list is in
+[CHANGELOG.md](CHANGELOG.md); the docs are at docs.openalgo.in (Backtesting, Robustness
+and Overfitting, Live Trading).
+
 ## What's New in 2.2.1
 
 Two backtesting fixes:
