@@ -9,8 +9,8 @@
 use oa_bt::data::resample::CalendarUnit;
 use oa_bt::engine::{
     BarColumns, CostConfig, Engine, FillTiming, IntradayOverrides, KernelError, Pause,
-    QuantityMode, RunConfig, RunSetup, Step, StrategyInterval, Submission, TimerCount, TimerId,
-    TimerSpec,
+    Perturbation, QuantityMode, RunConfig, RunSetup, Step, StrategyInterval, Submission,
+    TimerCount, TimerId, TimerSpec,
 };
 use oa_bt::exec::{InstrumentId, InstrumentSpec, OrderRequest, QuantitySpec};
 use oa_bt::market::calendar::{BaseInterval, Calendar};
@@ -103,6 +103,7 @@ fn config(
         sizing: SizingControls::default(),
         intraday: IntradayOverrides::default(),
         deliver_events: false,
+        perturbation: Perturbation::default(),
     }
 }
 
@@ -147,6 +148,7 @@ fn timer_pauses(kernel: &mut Engine) -> Vec<(i64, Vec<TimerId>)> {
             } => seen.push((decided_at, timers)),
             Pause::Finished { .. } => return seen,
             Pause::BarClose { .. } => {}
+            Pause::Waiting { .. } => unreachable!("an engine that never holds does not wait"),
         }
     }
 }
@@ -354,6 +356,7 @@ fn an_order_placed_by_an_every_timer_fills_at_that_open() {
             }
             Pause::Finished { .. } => break,
             Pause::BarClose { .. } => {}
+            Pause::Waiting { .. } => unreachable!("an engine that never holds does not wait"),
         }
     }
     let output = kernel.finish().expect("finished");
@@ -379,6 +382,7 @@ fn the_strategy_bars_of_the_run_are_the_bars_the_pauses_deliver() {
             Pause::BarClose { bars, .. } => delivered.extend(bars),
             Pause::Finished { .. } => break,
             Pause::Timers { .. } => {}
+            Pause::Waiting { .. } => unreachable!("an engine that never holds does not wait"),
         }
     }
     let whole = kernel.strategy_bars(SBIN);

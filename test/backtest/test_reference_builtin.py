@@ -378,6 +378,114 @@ def test_stock_derivative_settlement_before_november_2019_is_not_covered(tables)
         tables.find("settlement", ("NFO", "stock_future"), "2019-10-31")
 
 
+# ---- price protection -----------------------------------------------------------------
+
+
+def _band(exchange, segment, check, underlying="ALL", days="every_day"):
+    """A price_protection key: every underlying on every day unless named."""
+    return (exchange, segment, check, underlying, days)
+
+
+PRICE_BANDS = [
+    # key, trade date, band percent, minimum rupees (None: no minimum).
+    # NSE/FAOP/54242 item 3, live from 2022-10-31; NSE/FAOP/73928 item 1.16 E.
+    (_band("NFO", "index_option", "lpp"), "2022-10-31", 40, 20),
+    (_band("NFO", "index_option", "lpp"), "2026-11-17", 40, 20),
+    # NSE/FAOP/55344: stock options from 2023-02-06.
+    (_band("NFO", "stock_option", "lpp"), "2023-02-06", 40, 20),
+    # NSE/FAOP/56127: limit within 20 percent of the trigger, at least 10 rupees.
+    (_band("NFO", "index_option", "stop_limit_range"), "2023-04-03", 20, 10),
+    (_band("NFO", "stock_option", "stop_limit_range"), "2026-11-17", 20, 10),
+    # NSE/FAOP/64995 Annexure B 2.2.5: 15 percent above 50, 7.5 rupees up to 50.
+    (_band("NFO", "stock_option", "cooling_off"), "2024-11-18", 15, 7.5),
+    # BSE notice 20240405-40 item a, live from 2024-04-23 (20240415-40, 20240420-1).
+    (_band("BFO", "index_option", "lpp"), "2024-04-23", 60, 30),
+    (_band("BFO", "index_option", "lpp"), "2025-11-30", 60, 30),
+    (_band("BFO", "stock_option", "lpp"), "2024-04-23", 60, 30),
+    # BSE notice 20240628-46: the Price Reasonability Check in its place from 2024-07-01.
+    (_band("BFO", "stock_option", "lpp"), "2024-06-30", 60, 30),
+    # BSE notice 20251128-56: index options from 2025-12-01.
+    (_band("BFO", "index_option", "lpp"), "2025-12-01", 40, 20),
+    (_band("BFO", "index_option", "lpp"), "2026-11-16", 40, 20),
+    # BSE notice 20260213-39: every SENSEX option on a SENSEX expiry day from 2026-03-12.
+    (_band("BFO", "index_option", "lpp", "SENSEX", "expiry_day"), "2026-03-12", 40, 10),
+    # BSE notice 20260508-30: BSE FOCUSED IT options from their launch on 2026-05-11.
+    (_band("BFO", "index_option", "lpp", "FOCIT"), "2026-05-11", 80, 80),
+    # BSE notice 20260629-43: stock options from 2026-07-06.
+    (_band("BFO", "stock_option", "lpp"), "2026-07-06", 40, 20),
+    # BSE notice 20241112-11 Annexure B 2.2.4: 30 percent of the option's price, no minimum.
+    (_band("BFO", "stock_option", "cooling_off"), "2024-11-18", 30, None),
+    # BSE notices 20260114-28 and 20260116-61: index options from 2026-02-09.
+    (_band("BFO", "index_option", "stop_limit_range"), "2026-02-09", 20, 10),
+    (_band("BFO", "index_option", "stop_limit_range"), "2026-11-16", 20, 10),
+]
+
+
+@pytest.mark.parametrize("key,on_date,percent,rupees", PRICE_BANDS)
+def test_price_band_of_an_option_check(tables, key, on_date, percent, rupees):
+    values = tables.find("price_protection", key, on_date).values
+    assert (values["band_percent"], values["band_min_rupees"]) == (percent, rupees)
+
+
+@pytest.mark.parametrize(
+    "check,basis,checked",
+    [
+        # NSE/FAOP/54242 items 2 and 8; BSE notice 20240405-40 items b and d.
+        ("lpp", "reference_price", "on_trigger"),
+        # NSE/FAOP/56127; BSE notice 20260114-28: at entry and on modification.
+        ("stop_limit_range", "trigger_price", "on_entry"),
+        # NSE/FAOP/64995 Annexure B 2.2.1 and 2.2.9 (basis and when checked). BSE notice
+        # 20241112-11 Annexure B 2.2.1, 2.2.2 and 2.2.9 give the held basis only; BSE says
+        # nothing of stop-loss orders, so on_trigger there is the row note's assumption.
+        ("cooling_off", "cooling_off_ltp", "on_trigger"),
+    ],
+)
+def test_price_band_basis_and_when_a_stop_limit_order_meets_it(tables, check, basis, checked):
+    rows = [row for row in tables.rows("price_protection") if row.key[2] == check]
+    assert rows
+    assert {(row.values["basis"], row.values["stop_limit_checked"]) for row in rows} == {
+        (basis, checked)
+    }
+
+
+@pytest.mark.parametrize(
+    "key,on_date",
+    [
+        # NSE/FAOP/55344: from 2023-02-06.
+        (_band("NFO", "stock_option", "lpp"), "2023-02-05"),
+        # NSE/FAOP/56127: from 2023-04-03.
+        (_band("NFO", "index_option", "stop_limit_range"), "2023-04-02"),
+        # BSE's earlier check, not covered.
+        (_band("BFO", "index_option", "lpp"), "2024-04-22"),
+        # BSE notices 20240628-46 and 20260629-43: the Price Reasonability Check in its place.
+        (_band("BFO", "stock_option", "lpp"), "2024-07-01"),
+        (_band("BFO", "stock_option", "lpp"), "2026-07-05"),
+        # BSE notice 20260213-39: from 2026-03-12.
+        (_band("BFO", "index_option", "lpp", "SENSEX", "expiry_day"), "2026-03-11"),
+        # BSE notice 20260508-30: from the launch on 2026-05-11.
+        (_band("BFO", "index_option", "lpp", "FOCIT"), "2026-05-10"),
+        # BSE notice 20241112-11: live from 2024-11-18.
+        (_band("BFO", "stock_option", "cooling_off"), "2024-11-17"),
+        # BSE notice 20260116-61: from 2026-02-09.
+        (_band("BFO", "index_option", "stop_limit_range"), "2026-02-08"),
+        # BSE notice 20260114-28 sets the check on index options only.
+        (_band("BFO", "stock_option", "stop_limit_range"), "2026-11-16"),
+    ],
+)
+def test_price_band_is_not_covered_where_its_check_did_not_apply(tables, key, on_date):
+    with pytest.raises(ReferenceDataError, match="price_protection"):
+        tables.find("price_protection", key, on_date)
+
+
+def test_bse_price_bands_in_force_on_the_last_notice_date_read_are_verified(tables):
+    # BSE's notices listing was read to 2026-11-16; no lookup up to then may warn.
+    keys = {row.key for row in tables.rows("price_protection") if row.key[0] == "BFO"}
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", ReferenceDataWarning)
+        statuses = {tables.find("price_protection", key, "2026-11-16").status for key in keys}
+    assert statuses == {"verified"}
+
+
 # ---- expiry rules ---------------------------------------------------------------------
 
 WEEKDAYS = [
@@ -661,7 +769,7 @@ def test_built_in_row_used_up_to_its_as_of_date_does_not_warn():
 
 
 def test_reference_version_names_the_check_date_and_a_digest_of_the_files():
-    assert re.fullmatch(r"builtin:2026-11-12:[0-9a-f]{12}", ref.default_tables().version)
+    assert re.fullmatch(r"builtin:2026-11-17:[0-9a-f]{12}", ref.default_tables().version)
 
 
 def test_reference_version_changes_when_a_user_file_is_added(tmp_path):

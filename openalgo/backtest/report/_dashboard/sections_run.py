@@ -10,8 +10,8 @@ from ..._result_r import r_summary
 from ..._trade_list import trade_list
 from .. import _format as fmt
 from .._combined import return_correlation
-from . import cards, data, tables
-from .layout import SMALL, Section, View, card, stack
+from . import cards, data, excursions, tables
+from .layout import LARGE, SMALL, Section, View, card, stack
 from .trades import compare, method_notes, r_tiles, trade_table
 
 #: The class of an assumption row that is a warning (its line starts "warning: ").
@@ -45,9 +45,8 @@ def _closed_r(view: View) -> np.ndarray:
     return trades.loc[trades["exit_time"].notna(), "r_multiple"].to_numpy(dtype=float)
 
 
-def _trade_list_card(view: View) -> str:
+def _trade_list_card(view: View, listing: pd.DataFrame) -> str:
     m = view.performance.metrics
-    listing = trade_list(view.performance.trades)
     closed = counted(m["trades"], "closed trade")
     subtitle = f"{closed}, sortable; {m['open_trades']} open at the end, not listed"
     body = trade_table(listing) if len(listing) else "<p class='empty'>No closed trades.</p>"
@@ -55,9 +54,11 @@ def _trade_list_card(view: View) -> str:
 
 
 def trades(view: View) -> Section | None:
-    """The trade tiles, the trade list, the charges by component and, when a closed
-    trade has an initial risk, the R-multiples."""
+    """The trade tiles, the trading cost, the MAE and MFE of the closed trades
+    (`excursions`), the trade list, the charges by component and, when a closed trade
+    has an initial risk, the R-multiples."""
     p = view.performance
+    listing = trade_list(p.trades)
     r_values = _closed_r(view)
     has_r = bool(np.isfinite(r_values).any())
     r_card = ""
@@ -73,7 +74,9 @@ def trades(view: View) -> Section | None:
         )
     blocks = [
         ("", cards.grid(cards.TRADES, p, None, view.bench_name) if view.has("trade_stats") else ""),
-        (SMALL, _trade_list_card(view) if view.has("trade_table") else ""),
+        (LARGE, excursions.trading_cost(view)),
+        (LARGE, excursions.mae_mfe(view, listing)),
+        (SMALL, _trade_list_card(view, listing) if view.has("trade_table") else ""),
         (
             SMALL,
             card(
@@ -87,7 +90,8 @@ def trades(view: View) -> Section | None:
         (SMALL, r_card),
     ]
     body = stack(blocks)
-    return Section("trades", "Trades", "Closed trades &amp; charges", body) if body else None
+    subtitle = "Closed trades, excursions &amp; trading cost"
+    return Section("trades", "Trades", subtitle, body) if body else None
 
 
 def strategies(view: View) -> Section | None:
@@ -130,7 +134,7 @@ def notes(view: View) -> Section | None:
     method = method_notes(view.performance) if view.has("method") else ""
     blocks = [
         ("", card("How the figures were computed", "", method) if method else ""),
-        (SMALL, _assumptions(view.assumptions) if view.has("assumptions") else ""),
+        (SMALL, assumptions_card(view.assumptions) if view.has("assumptions") else ""),
     ]
     body = stack(blocks)
     return Section("notes", "Notes", "Method, assumptions &amp; warnings", body) if body else None
@@ -146,7 +150,9 @@ def _assumption_row(line: str) -> str:
     return f"<tr{css}><td class='l'>{fmt.text(name)}</td><td class='l'>{fmt.text(value)}</td></tr>"
 
 
-def _assumptions(lines: list[str]) -> str:
+def assumptions_card(lines: list[str]) -> str:
+    """The Assumptions card: one row per line, a line "name: value" as a name and its
+    value, a warning ("warning: ...") in red."""
     if not lines:
         body = "<p class='empty'>No assumptions were recorded with this result.</p>"
     else:
@@ -155,4 +161,4 @@ def _assumptions(lines: list[str]) -> str:
     return card("Assumptions", "What the run assumed, and every warning", body)
 
 
-__all__ = ["metrics", "notes", "strategies", "trades"]
+__all__ = ["assumptions_card", "metrics", "notes", "strategies", "trades"]

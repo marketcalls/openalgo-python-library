@@ -1,7 +1,9 @@
 """`Result.summary()`: the few figures a beginner prints after a run, as plain text: net
 profit in rupees with Indian digit grouping, the return, the maximum drawdown, the closed
 trades and their win rate ("no closed trades" when there are none, where the win rate is
-undefined), and the benchmark's return for a run with one.
+undefined), the quick overfitting checks in one line (each run here has fewer than the 30
+closed trades they need, so it says "too few trades to judge"), and the benchmark's
+return for a run with one.
 
 The runs, with no charges and no slippage:
 
@@ -39,13 +41,14 @@ class SellsToOpen(bt.Strategy):
             self.sell(qty=10)
 
 
-def test_a_run_with_trades_is_summarised_in_four_lines():
+def test_a_run_with_trades_is_summarised_in_five_lines():
     result = daily_round_trip({"qty": 2_000}, capital=5_000_000, costs=None)
     assert result.summary() == (
         "Net profit   : Rs 2,00,000.00\n"
         "Return       : 4.00%\n"
         "Max drawdown : 0.00%\n"
-        "Trades       : 1 (100% won)"
+        "Trades       : 1 (100% won)\n"
+        "Overfitting  : too few trades to judge (1 closed, 30 needed)"
     )
 
 
@@ -55,7 +58,8 @@ def test_a_run_that_never_traded_says_no_closed_trades_instead_of_a_win_rate():
         "Net profit   : Rs 0.00\n"
         "Return       : 0.00%\n"
         "Max drawdown : 0.00%\n"
-        "Trades       : no closed trades"
+        "Trades       : no closed trades\n"
+        "Overfitting  : too few trades to judge (0 closed, 30 needed)"
     )
 
 
@@ -64,7 +68,8 @@ def test_a_position_held_to_the_end_is_counted_as_still_open():
         "Net profit   : Rs 4,000.00\n"
         "Return       : 4.00%\n"
         "Max drawdown : -0.97%\n"
-        "Trades       : no closed trades (1 still open)"
+        "Trades       : no closed trades (1 still open)\n"
+        "Overfitting  : too few trades to judge (0 closed, 30 needed)"
     )
 
 
@@ -80,6 +85,10 @@ def test_a_benchmark_given_as_closes_is_named_as_given():
 
 def test_a_run_without_a_benchmark_has_no_benchmark_line():
     assert "Benchmark" not in own_run().summary()
+
+
+# The quick checks' line, as `summary_text` takes it; these tests are about the others.
+QUICK_LINE = "quick checks: 4 passed; see result.robustness()"
 
 
 def figures(**changed) -> dict:
@@ -98,7 +107,7 @@ def figures(**changed) -> dict:
 
 
 def trades_line(**changed) -> str:
-    return summary_text(figures(**changed), None).splitlines()[3]
+    return summary_text(figures(**changed), None, QUICK_LINE).splitlines()[3]
 
 
 @pytest.mark.parametrize(
@@ -118,5 +127,5 @@ def test_the_win_rate_shows_zero_or_a_hundred_percent_only_when_exact(trades, wi
 
 
 def test_a_loss_below_half_a_paisa_reads_as_zero_rupees():
-    lines = summary_text(figures(net_profit=-0.004), None).splitlines()
+    lines = summary_text(figures(net_profit=-0.004), None, QUICK_LINE).splitlines()
     assert lines[0] == "Net profit   : Rs 0.00"

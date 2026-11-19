@@ -170,7 +170,8 @@ impl Engine {
     }
 
     /// Size a request at the decision of `slice`: the decision price is the last
-    /// close; the engine default keeps the venue cash buffer.
+    /// close; the engine default keeps the venue cash buffer, and in a live session sizes
+    /// from at most the session's cap (`venue_session`).
     pub(super) fn size_at_decision(
         &self,
         request: &OrderRequest,
@@ -183,7 +184,7 @@ impl Engine {
         } else {
             0.0
         };
-        let ctx = self.sizing_context(request, price, buffer)?;
+        let ctx = self.session_sizing(sizer, self.sizing_context(request, price, buffer)?);
         self.sized(sizer, ctx, request, slice.day)
     }
 

@@ -23,3 +23,4 @@ tick_sizes,tick_sizes.csv,2026-11-12,Tick size by segment and price slab for NSE
 settlement,settlement.csv,2026-11-12,Cash or physical settlement by derivative segment
 mcx_contracts,mcx_contracts.csv,2026-03-31,Lot size multiplier tick size and maximum order size of MCX futures
 broker_units,broker_units.csv,2026-11-12,What the OpenAlgo server source shows about quantity and tick units per broker
+price_protection,price_protection.csv,2026-11-17,Price bands NSE and BSE apply to the limit price of option orders and stop-limit orders by date

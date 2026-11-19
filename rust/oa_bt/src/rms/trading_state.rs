@@ -59,6 +59,15 @@ pub enum TradingStateCause {
 }
 
 impl TradingStateCause {
+    /// Every cause, in code order.
+    pub const ALL: [TradingStateCause; 5] = [
+        TradingStateCause::DailyLossBreach,
+        TradingStateCause::StrategyExit,
+        TradingStateCause::DrawdownHalt,
+        TradingStateCause::KillSwitch,
+        TradingStateCause::SessionBoundary,
+    ];
+
     /// The cause name used in events and results.
     pub fn code(self) -> &'static str {
         match self {
@@ -115,6 +124,11 @@ impl TradingLock {
     /// The current state.
     pub fn state(&self) -> TradingState {
         self.state
+    }
+
+    /// What set the current state; `None` while ACTIVE.
+    pub fn cause(&self) -> Option<TradingStateCause> {
+        self.cause
     }
 
     /// Apply a cause by the transition table; the change when the state moved.

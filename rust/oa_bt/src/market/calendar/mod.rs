@@ -58,7 +58,7 @@ pub use error::{format_day, format_ist, CalendarError};
 pub use grid::{union_grid, BaseInterval, UnionGrid, MAX_GRID_POINTS, NO_BAR};
 pub use intraday::{default_intraday_times, IntradayTimes};
 pub use lattice::Placement;
-pub(crate) use lattice::{is_supported_instant, LatticeCursor};
+pub(crate) use lattice::{is_supported_instant, DayLattice, LatticeCursor};
 pub use offset::{OffsetCheck, ShiftDirection, ShiftEvidence};
 pub use query::{SessionsPerYear, MIN_ANNUALISATION_DAYS};
 pub use series_error::SeriesError;

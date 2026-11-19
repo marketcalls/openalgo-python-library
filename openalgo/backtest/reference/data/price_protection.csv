@@ -1,0 +1,87 @@
+# price_protection: the exchanges' price checks on the limit price of an option order, as
+# they bear on a stop-limit order and on a limit order that reprices an exit.
+#
+# Columns
+#   exchange, segment      NFO or BFO with index_option or stock_option
+#   check                  lpp: limit price protection. A buy limit above the basis plus the
+#                          band, or a sell limit below the basis less the band, is rejected at
+#                          entry and on every modification
+#                          stop_limit_range: a stop-limit order whose limit lies further from
+#                          its trigger than the band is rejected at entry and on every
+#                          modification
+#                          cooling_off: stock options while the underlying share is in a
+#                          price band cooling-off. A floor under sell limits and a ceiling over
+#                          buy limits, only in the direction of the share's move (a floor on
+#                          puts and a ceiling on calls when it rises; a floor on calls and a
+#                          ceiling on puts when it falls), on top of lpp on NSE; on BSE
+#                          a hard price band, on top of the Price Reasonability Check
+#                          until 2026-07-05
+#   underlying             the index or share the row is for, as the exchange's F&O ticker
+#                          (FOCIT is BSE FOCUSED IT), or ALL for every underlying of the
+#                          segment without a row of its own for the day
+#   days                   every_day: every trade date
+#                          expiry_day: only a trade date on which an option on the underlying
+#                          expires, and then for every option on it whatever its expiry
+#                          An option meets its underlying's expiry_day row on such a date, else
+#                          its underlying's every_day row, else the ALL row
+#   valid_from, valid_to   trade dates the row applies to, both inclusive (empty valid_to: open)
+#   band_percent           the band as a percent of the basis price
+#   band_min_rupees        the smallest band in rupees, empty for a band with no minimum. The
+#                          band is the larger of band_percent of the basis and
+#                          band_min_rupees. NSE writes the same rule as two premium ranges (a
+#                          basis up to 50 rupees: the rupee figure; above 50: the percent); BSE
+#                          writes a percent subject to a minimum value
+#   basis                  the price the band is measured from
+#                          reference_price: the simple average of the contract's trade prices
+#                          in the last 30 seconds, revised every 30 seconds; at the open, and
+#                          after 15 minutes without a trade, a theoretical price
+#                          trigger_price: the order's own trigger price
+#                          cooling_off_ltp: the option's last traded price when the cooling-off
+#                          began (its theoretical price when that price is stale), held for
+#                          the whole cooling-off
+#   stop_limit_checked     when a stop-limit order meets the check
+#                          on_trigger: when it triggers and enters the order book, its limit
+#                          price against the band then in force. An untriggered stop is not
+#                          checked; a triggered one that fails is rejected
+#                          on_entry: when it is placed and when it is modified
+#   source                 the exchange circular or notice the row was read from
+#   status                 verified: checked against that document; unverified: not confirmed
+#   note                   free text
+#
+# No row for a key and date means the check did not apply then. BSE ran its Price
+# Reasonability Check instead of lpp on every option before 2024-04-23 (not covered) and on
+# stock options from 2024-07-01 to 2026-07-05 (notices 20240628-46 and 20260629-43). The
+# slabs it set for stock options are rupee figures by premium (3 rupees up to a premium of 10,
+# rising to 200 rupees up to 2000, then 15 percent), never narrower than 10 percent of the
+# premium (at 1000 and 2000 rupees), so the 5 percent option buffer lies inside every slab.
+# The BSE notices read set no stop_limit_range check for stock options. Futures are not
+# covered: their stops are SL-M.
+#
+# Not modelled: an exchange widens (flexes) the lpp band of a contract after repeated
+# rejections (NSE: 10 orders from 5 clients and 3 members between two revisions; BSE from
+# 2024-07-30: 10 orders from at least 3 members and 5 unique client codes within 30 seconds,
+# notice 20240729-42, and within 120 seconds for BSE FOCUSED IT, notice 20260508-30), and
+# every order must also lie within the contract's operating price range.
+#
+# BSE's notices listing was read from 2024-03-01 to 2026-11-16. After 2026-03-13 only notices
+# 20260508-30 and 20260629-43 change a check.
+#
+# NSE circulars: https://nsearchives.nseindia.com/content/circulars/FAOP<number>.pdf (.zip for
+#                a consolidated circular)
+# BSE notices:   https://www.bseindia.com/markets/MarketInfo/DispNewNoticesCirculars.aspx?page=<number>
+#                (up to 2026-03-13) and
+#                https://www.bseindia.com/downloads/UploadDocs/Notices/<number>/<number>.pdf
+exchange,segment,check,underlying,days,valid_from,valid_to,band_percent,band_min_rupees,basis,stop_limit_checked,source,status,note
+NFO,index_option,lpp,ALL,every_day,2022-10-31,,40,20,reference_price,on_trigger,NSE/FAOP/54242 (2022-10-28) items 1 to 11; NSE/FAOP/54894 (2022-12-19); NSE/FAOP/73928 (2026-04-28) item 1.16 E,verified,Weekly and monthly expiries from 2022-10-31 and every index option from 2023-03-31 (NSE/FAOP/54894)
+NFO,stock_option,lpp,ALL,every_day,2023-02-06,,40,20,reference_price,on_trigger,NSE/FAOP/55344 (2023-01-25); NSE/FAOP/73928 (2026-04-28) item 1.16 E,verified,
+NFO,index_option,stop_limit_range,ALL,every_day,2023-04-03,,20,10,trigger_price,on_entry,NSE/FAOP/56127 (2023-03-24); NSE/FAOP/73928 (2026-04-28) item 1.16 E,verified,Rejected with error 16448
+NFO,stock_option,stop_limit_range,ALL,every_day,2023-04-03,,20,10,trigger_price,on_entry,NSE/FAOP/56127 (2023-03-24); NSE/FAOP/73928 (2026-04-28) item 1.16 E,verified,Rejected with error 16448
+NFO,stock_option,cooling_off,ALL,every_day,2024-11-18,,15,7.5,cooling_off_ltp,on_trigger,NSE/FAOP/64995 (2024-11-08) Annexure B; NSE/FAOP/73928 (2026-04-28) item 1.16 E 11,verified,Only in the direction of the underlying's move and only during its cooling-off
+BFO,index_option,lpp,ALL,every_day,2024-04-23,2025-11-30,60,30,reference_price,on_trigger,BSE notice 20240405-40 (2024-04-05) items a b and d; BSE notice 20240415-40 (2024-04-15); BSE notice 20240420-1 (2024-04-20),verified,Live from 2024-04-23 (20240415-40 and 20240420-1) in place of the Price Reasonability Check
+BFO,index_option,lpp,ALL,every_day,2025-12-01,,40,20,reference_price,on_trigger,BSE notice 20251128-56 (2025-11-28); BSE notice 20240405-40 (2024-04-05) item d,verified,Every index option without a row of its own: SENSEX on its expiry days and BSE FOCUSED IT have theirs
+BFO,index_option,lpp,SENSEX,expiry_day,2026-03-12,,40,10,reference_price,on_trigger,BSE notice 20260213-39 (2026-02-13); BSE notice 20240405-40 (2024-04-05) item d,verified,Every SENSEX option on a day a SENSEX option expires; on other days the ALL row
+BFO,index_option,lpp,FOCIT,every_day,2026-05-11,,80,80,reference_price,on_trigger,BSE notice 20260508-30 (2026-05-08); BSE notice 20240405-40 (2024-04-05) item d,verified,BSE FOCUSED IT options from their launch on 2026-05-11 (BSE notice 20260415-34); FOCIT is their ticker in the BSE F&O bhavcopy of 2026-11-16
+BFO,stock_option,lpp,ALL,every_day,2024-04-23,2024-06-30,60,30,reference_price,on_trigger,BSE notice 20240405-40 (2024-04-05) items a b and d; BSE notice 20240415-40 (2024-04-15); BSE notice 20240420-1 (2024-04-20),verified,From 2024-07-01 the Price Reasonability Check in its place (BSE notice 20240628-46)
+BFO,stock_option,lpp,ALL,every_day,2026-07-06,,40,20,reference_price,on_trigger,BSE notice 20260629-43 (2026-06-29); BSE notice 20240405-40 (2024-04-05) item d,verified,Ends the Price Reasonability Check of BSE notice 20240628-46
+BFO,stock_option,cooling_off,ALL,every_day,2024-11-18,,30,,cooling_off_ltp,on_trigger,BSE notice 20241112-11 (2024-11-12) Annexure B 2.2; BSE notice 20241213-54 (2024-12-13),verified,No rupee minimum. The notice rejects incoming limit orders beyond the floor or ceiling and says nothing of stop-loss orders: a stop-limit is taken to meet it when it triggers (as Annexure A 1.3 says of the price band). From 2024-12-16 resting orders beyond it are kept (20241213-54)
+BFO,index_option,stop_limit_range,ALL,every_day,2026-02-09,,20,10,trigger_price,on_entry,BSE notice 20260114-28 (2026-01-14); BSE notice 20260116-61 (2026-01-16),verified,Live from 2026-02-09 (20260116-61) in place of 2026-01-19; index options only

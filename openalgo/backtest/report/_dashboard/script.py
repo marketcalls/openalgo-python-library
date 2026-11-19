@@ -4,7 +4,8 @@ without it; the script only adds what is interactive:
     theme       the toggle switches light and dark and remembers the choice in the
                 browser (`THEME_KEY`); before the first paint `HEAD` applies it
     print       the Export PDF button opens the browser's print dialog
-    navigation  the section link of the section in view is marked as the reader scrolls
+    navigation  the section link of the section in view is marked as the reader scrolls,
+                and scrolled into the header when its links scroll sideways there
     tables      a click on a column heading sorts (numbers largest first, text A to Z;
                 again reverses; a third time restores the first order), and the trade
                 table shows one page at a time with Prev and Next
@@ -53,10 +54,14 @@ if(links.length&&'IntersectionObserver' in window){var inView={};
 var spy=new IntersectionObserver(function(entries){entries.forEach(function(e){
 inView[e.target.id]=e.isIntersecting;});
 var current=links.filter(function(a){return inView[a.getAttribute('href').slice(1)];})[0];
-if(!current)return;links.forEach(function(a){a.classList.toggle('on',a===current);});},
+if(!current)return;links.forEach(function(a){a.classList.toggle('on',a===current);});
+revealLink(current);},
 {rootMargin:'-45% 0px -50% 0px'});
 links.forEach(function(a){var s=document.getElementById(a.getAttribute('href').slice(1));
 if(s)spy.observe(s);});}
+function revealLink(link){var nav=link.parentNode,left=link.offsetLeft-nav.offsetLeft;
+if(left<nav.scrollLeft||left+link.offsetWidth>nav.scrollLeft+nav.clientWidth)
+nav.scrollLeft=left-(nav.clientWidth-link.offsetWidth)/2;}
 """
 
 _TABLES = """

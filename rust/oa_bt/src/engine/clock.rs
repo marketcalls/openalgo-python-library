@@ -11,11 +11,33 @@
 //! hours (Phase 3) keep this type and add one strategy-close list per exchange; their
 //! decisions and fills are then ordered by instant (SPEC-35), never by slice position.
 
+use crate::exec::InstrumentSpec;
 use crate::market::calendar::{union_grid, BaseInterval, Calendar, UnionGrid};
 use crate::model::{Day, Exchange, TsNanos};
 
 use super::config::{RunConfig, StrategyInterval, PERIOD_INTERVALS, PERIOD_INTERVALS_INSTEAD};
 use super::error::KernelError;
+use super::shifted_bars::shifted_strategy_bars;
+
+/// The one exchange of a Phase 1 run.
+pub(super) fn single_exchange(instruments: &[InstrumentSpec]) -> Result<Exchange, KernelError> {
+    let Some(first) = instruments.first() else {
+        return Err(KernelError::InvalidConfig {
+            field: "symbol",
+            reason: "a run needs at least one instrument".to_string(),
+        });
+    };
+    if instruments
+        .iter()
+        .any(|spec| spec.exchange != first.exchange)
+    {
+        return Err(KernelError::NotBuilt {
+            feature: "a run across several exchanges",
+            instead: "run the instruments of each exchange in a backtest of their own",
+        });
+    }
+    Ok(first.exchange)
+}
 
 /// What the steps need to know about one slice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,9 +128,13 @@ impl Timeline {
                 })
             }
         };
-        let clock = grid_for(calendar, exchange, config, strategy_base)?;
-        let closes = clock.bar_close.first().cloned().unwrap_or_default();
-        let strategy_bars = clock.ts.iter().copied().zip(closes).collect();
+        let strategy_bars = if config.perturbation.bar_shift > 0 {
+            shifted_strategy_bars(calendar, exchange, &grid.ts, config)?
+        } else {
+            let clock = grid_for(calendar, exchange, config, strategy_base)?;
+            let closes = clock.bar_close.first().cloned().unwrap_or_default();
+            clock.ts.iter().copied().zip(closes).collect()
+        };
         Ok(Timeline {
             exchange,
             grid,
@@ -165,6 +191,26 @@ impl Timeline {
     /// Close instants of every slice, in order.
     pub fn slice_closes(&self) -> &[TsNanos] {
         self.grid.bar_close.first().map_or(&[], Vec::as_slice)
+    }
+
+    /// The close of the `count`-th strategy bar (by the clock) that closes after `ts`,
+    /// `count` from 1; `None` when the run has fewer.
+    pub fn strategy_close_after(&self, ts: TsNanos, count: u32) -> Option<TsNanos> {
+        let first = self
+            .strategy_bars
+            .partition_point(|&(_, close)| close <= ts);
+        let offset = usize::try_from(count).ok()?.checked_sub(1)?;
+        self.strategy_bars
+            .get(first.checked_add(offset)?)
+            .map(|&(_, close)| close)
+    }
+
+    /// Whether a strategy bar (by the clock) closes at `ts`.
+    pub fn closes_strategy_bar(&self, ts: TsNanos) -> bool {
+        let at = self.strategy_bars.partition_point(|&(_, close)| close < ts);
+        self.strategy_bars
+            .get(at)
+            .is_some_and(|&(_, close)| close == ts)
     }
 
     /// The strategy bar (open, close) that closes with this slice, if one does.

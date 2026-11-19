@@ -7,6 +7,641 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-11-20
+
+### Added
+
+- Phase 2 (live trading) groundwork, no change to backtests: the kernel can hold before
+  the slices not released yet (`Engine::hold`, `Engine::release`, `Pause::Waiting`), the
+  base of the live clock. A backtest released one slice at a time gives the same result
+  as one run straight through.
+- A live session in the kernel (`Engine::new_session`, `Engine::add_bar`, `BaseBar`): built
+  before its bars from the calendar's grid of its day, given each instrument's base bar
+  as its slice closes (checked: on the grid, for a slice that has not run, in order, a
+  valid OHLC bar), its strategy bars rebuilt by the backtest's resampler, and ending at
+  the end of its day. A session given its bars minute by minute gives the same result as
+  the backtest of those bars.
+- A live session's venue in the kernel (no change to backtests): a session fills and
+  expires no order itself. Each order that passes the backtest's submission checks is
+  handed to the live layer at once as a command (place, modify, cancel:
+  `Engine::take_commands`), and the broker's results come back: `Engine::apply_fill` with
+  the units newly filled at the broker's price (no slippage model; the cost model's
+  charges, an order filled in parts charged once on its total; recorded all or nothing),
+  `apply_reject`, `apply_cancel`, and the broker's answers `apply_cancel_refused`,
+  `apply_modify` and `apply_modify_refused`. A cancelled order works on until the broker's
+  result, and a cancellation the broker refuses is sent again in a later slice, at most
+  once in each; a modified one keeps its old terms until the broker confirms the new
+  ones, and one cut to the units it has filled meanwhile completes. Every fill of an
+  order comes before its terminal result.
+- Cancel, then exit: an exit (`exit()`, `reduce()`, the daily loss limit, the drawdown
+  halt, the square-off, the time exit) first cancels every other working order of the
+  position on the closing side and is sent once they have ended. The strategy's exits of
+  a position add up as a backtest fills them: each is sized when it is sent, on the
+  position less what the earlier ones still have to fill, so two `reduce(0.5)` close
+  three quarters, `reduce()` of 50 then of 10 units close 60, and `reduce()` then
+  `exit()` close it all. The engine's exits take over from the strategy's (their exits
+  are cancelled first) and close the whole position. Every exit goes out above the
+  freeze quantity as several orders of at most it. The engine's exits are sent where a
+  backtest makes them (the square-off and time exit as the session reaches their open,
+  with or without a bar), and again at the next open while they apply (a rejected exit,
+  a position a cancel race reopened). MIS entries still working when entries stop are
+  cancelled. Timers fire as the session reaches their open. At a session close the DAY
+  orders are cancelled through the broker and the session does not finish while an
+  order works; a position still open is reported open (no closing fill is invented).
+- Reduce-only orders never reverse a position in a session: the reduce-only orders
+  resting on its closing side may not hold more units than it has (new reject code
+  `exit_cover`: one stop for the whole position rests, a stop and a target for it both
+  do not), they are cut down or cancelled when the position shrinks, and a broker's fill
+  beyond the position of an order that may not reverse it (reduce-only, or without
+  `reverse=True`) is recorded up to the position and refused for the rest
+  (`VenueRefusalError` of kind `would_reverse`).
+- Refused at submission in a session, with the backtest's codes and errors, what a fill
+  could not record: a leverage the margin table does not allow, a short option, a margin
+  above the free cash net of what the session's working entries would block (`margin`),
+  a fill the cost model cannot price. Not supported in a
+  session yet (NotImplementedError): `stop=`, `target=`, trailing and breakeven on CNC
+  and NRML (MIS legs are below), GTT orders, futures series and `rebalance()`; fractional
+  quantities are refused. A broker's
+  own rejection has the new reject code `venue`; a result the kernel refuses raises
+  `openalgo.backtest.errors.VenueRefusalError` with its `kind` (`VENUE_REFUSAL_KINDS`,
+  the same list the native module exports). A
+  session whose orders are filled where the simulator fills them gives the same result as
+  the backtest, field for field. The native `Engine` gains `session`, `add_bar`,
+  `release`, `venue`, `take_commands`, `modify` and the `apply_*` calls.
+- A live session's controls in the kernel (no change to backtests). Every order sent
+  carries its role (`OrderRole`: entry, add, the strategy's exit, the engine's risk exit
+  with its reason, the square-off; `Engine::order_role`), and the native "place" command
+  gains `role` and `reason` (`ORDER_ROLES`, `RISK_EXIT_REASONS`). `request_exit` exits a
+  whole position for the session's own reason (an operator stop, the kill switch, the
+  account's loss limit, an unprotected leg, a stop rejected or unfilled, or the
+  square-off) through the position's exit owner, cancelling the orders on its closing
+  side first; `cancel` is taken while the session waits and sends a cancellation again
+  after the broker refused it. `lock_entries` and `unlock_entries` keep entry locks as
+  reasons in a set: while any is set, entries and adds are rejected with the new reject
+  code `live_lock`, and exits are not. A session also rejects an entry or add while
+  another order of the symbol and product works (new reject code `live_in_flight`) and one
+  that would take the position above the freeze quantity (`freeze_qty`), so a session's
+  position fits in one order. The orders working on a position's closing side never hold
+  more units than it: a plain sale or buy against the position is an exit only within
+  what the others working to close it leave, and beyond that an entry, which those gates
+  judge (so two plain sales of a long whose first fill is reported late, or a sale during
+  the session's own exit, can no longer open a short); a reduce-only order beyond it is
+  rejected `exit_cover`, counting plain closing orders too; the fill of an order sent to
+  close is never recorded beyond the position, even from a flat one; and a modification
+  that would change an order's role is refused (cancel it and place a new one).
+  `request_exit` returns what it did (`sent`, `waits_for_cancels`, `already_exiting`,
+  `flat`, `market_closed`; native `EXIT_REQUESTS`), and an exit asked for when the market
+  has closed sends nothing. A lock reason with spaces around it is refused.
+  `cap_sizing_equity` makes the engine default size from the lesser of the equity and the
+  account's available cash; `daily_loss_measure` reads the strategy's daily loss measure
+  for the account's limit; `stop_session` ends a session where it stands, sending nothing
+  and reporting its working orders and open positions as they are (a strategy exit that
+  waited for its cancels, never sent, ends canceled), with the day's contract note
+  settled, so `finish` can be called.
+- A leg's stop, targets, trail and breakeven in a live session (MIS; backtests change only
+  for option stops, below). The broker holds the stop (decision D31): the fill that opens
+  a leg with a stop level places it for the units filled, SL-M for cash equity and
+  futures, and for NFO and BFO options an SL with its limit 5 percent beyond the trigger;
+  each further fill or add modifies its units at once, and a trail or breakeven moves its
+  trigger once the move is at least 0.25 percent of the trigger the broker last confirmed,
+  at most once every 5 seconds and one modification at a time (the newest terms go once
+  the answer has come and 5 seconds have passed). The kernel executes nothing when the
+  price reaches the stop: the stop's own
+  fill closes the leg (`leg_sl_hit`, reason `leg_sl`), and a stop's fill beyond the
+  position records the units that closed it and refuses the rest (`would_reverse`; the
+  session design asked for such a fill to be refused whole, and the closing part is kept
+  instead, so the session's books hold every unit the broker closed). The stop never
+  works beside more than the position: a resting reduce-only order beside it is rejected
+  `exit_cover` and a plain resting sale beside it is an entry, as beside any order
+  closing the position, and a stop placed later (a trail or breakeven arming, `protect`,
+  a re-placed stop) cancels the resting orders sent only to close the position and covers
+  their units once they have ended. A partial exit (`reduce()`, a partial target) cuts the
+  stop down to what stays open first and is sent once the broker confirms that (a refusal
+  leaves it waiting, the cut sent again 5 seconds later); a full exit cancels the stop
+  first, and so does a partial exit followed by exits that close the rest (`reduce()`
+  then `exit()`), which then go one after the other; until that cancellation goes
+  through (a refused one is sent again) the stop covers the whole position. A plain MARKET order against the
+  position (`sell()` of the long, a reversal, a `target()` that flips) goes the same way,
+  the stop cut down or cancelled first, so it and the stop never both fill at the
+  broker; a reversal whose stop fills before its cancellation ends canceled and opens
+  nothing, and the strategy decides again at its next bar. A stop the broker rejects while its leg is open exits the
+  leg at market (`stop_rejected`); one the broker cancels of its own accord, or that could
+  not be placed (reported with `apply_cancel`), is placed again once, and a re-placed stop
+  that ends without a fill exits at market (`stop_rejected`, or `unprotected`); a stop that
+  filled while its leg holds more (an add not covered yet, or a cut the broker applied
+  before it filled) exits the rest (`stop_unfilled`). A stop a closed leg left working
+  (its cancellation refused) keeps new entries of the instrument out (`live_in_flight`).
+  The kernel holds the targets, the trail and the breakeven on the session's ticks:
+  `push_tick(instrument, price, at)` ratchets the legs, exits a target it reaches through
+  the position's exit owner (once per leg: an exit the broker rejects is not made again
+  on the next tick, the session retries it), marks the position and tests the daily loss
+  limit and the drawdown halt on that mark; a session no longer ratchets on its bars. New
+  session calls: `protect` places a leg's stop again (native `PROTECT_OUTCOMES`, with
+  `waits_for_cancels` when resting orders sent to close are cancelled for its room),
+  `reprice_exit` modifies a stop the price has passed (or the engine's exit) to a
+  marketable LIMIT for the order's total units, and `request_exit(..., limit_rupees=)`
+  exits with LIMIT orders. A session on recorded ticks whose broker fills where the
+  simulator does, and applies a confirmed stop modification only from the next bar, trades
+  as the backtest of its bars (the same fills, trades, equity, position history and
+  charges) as long as no daily loss limit or drawdown halt is breached by a tick inside a
+  bar where no bar close breaches it, and the strategy rests no order to close a leg that
+  has a stop, a trail or a breakeven (use `target=` instead; a session rejects or cancels
+  such an order for the stop's room, where a backtest keeps it): a real broker fills a
+  moved stop within the bar that moved it, and the session tests its loss limits on every
+  tick.
+- The live layer's mode guard (private, not used by `bt.live` yet): OpenAlgo's sandbox or
+  live mode read at the start of a session, checked on every order answer and update of
+  the session's own orders, and polled every 5 seconds and before each entry. A change of
+  mode, or OpenAlgo's semi-auto mode, locks the session (nothing more is sent) and sends
+  one alert listing the orders sent and the orders in doubt after the change. New errors
+  in `openalgo.backtest.errors`: `LiveError`, `PreflightError`, `ModeChangedError`,
+  `JournalError`.
+- The live layer's journal (private): a SQLite file per account, bound to its broker,
+  with one record for sandbox and one for live. Each order intent is written and synced
+  before the order is sent, so a restart knows every order whose outcome is unknown; it
+  also keeps each order's updates, the broker-held stop of each position, the risk
+  state of each strategy and trading day, and the strategy's own `self.state` across
+  days. The first final update of an order stands, except that a fill with a price
+  replaces one reported at price 0.
+- The live layer's bars (private): 1-minute bars built from OpenAlgo's WebSocket ticks on
+  the same calendar slices a live session runs, stamped at their close and closed by the
+  clock one second after it. A tick counts as a trade only when the day's volume rose or
+  the last traded price changed (every print for an index), so a minute without trades
+  has no bar, as in the broker's history. After a mid-session start or a feed outage the
+  partial minutes only set the starting level. Broker candles are compared with the
+  bars minute by minute, and feed health tells a dead feed from a quiet symbol.
+- The live layer's order path (private): each order is written to the journal before it
+  is sent, sent once and never retried, at most 5 orders a second. Fills come from
+  OpenAlgo's order-updates stream, with polling only as a fallback, and are priced and
+  confirmed from the tradebook where a status answer cannot be trusted; a fill is never
+  taken at price 0. An order whose outcome is unknown (a timeout, a dropped connection,
+  a gateway error) is resolved against the order book after the server's broker window
+  before anything more is sent for that instrument, or for any instrument while the
+  server is silent. An order queued for approval in OpenAlgo's Action Center stays
+  queued across a restart. fivepaisa is not supported for live trading until its
+  tradebook order IDs match its orders'. The SDK's `api` gains no method in this change.
+- `api.ping()`: checks the API key and returns the broker OpenAlgo is logged in to
+  (`{"status": "success", "data": {"broker": ..., "message": "pong"}}`).
+- The live layer's preflight (private): the checks before a live session. One session per
+  account and per OpenAlgo server; the broker login proven by ping, funds and one quote
+  (the quote reaches the broker in sandbox mode too); a supported broker; funds against
+  capital (available cash); each symbol's lot size, tick size and freeze quantity; the
+  interval and 1-minute candles offered; MIS only; the risk limits; the trading day and
+  the MIS entry window; the computer's clock against a remote server's; and a delivered
+  test alert in LIVE mode. Every failed check is reported together, with what to fix.
+- The live layer's alerts, daily summary and session logs (private): alerts through
+  OpenAlgo's Telegram endpoint, each starting with the session's mode (SANDBOX or LIVE)
+  and strategies. Sending never blocks or stops a session: one background sender posts
+  at most 20 alerts a minute (25 for the most urgent) under the server's limit of 30,
+  most urgent first, merges routine alerts that pile up into one message, retries a
+  rate limit, timeout or server error for up to 5 minutes, and counts every alert not
+  delivered. The same alert is held back for a minute only for conditions that repeat
+  (feed dead, reconciliation mismatch, errors). The daily summary reads like
+  `Result.summary()`; the session's log file and JSON-lines event stream redact any
+  field named like a key or token.
+- The live layer's tick adapter and tick recorder (private; `bt.record` is wired with
+  `bt.live`): each WebSocket message becomes a tick, with the exchange's last trade time
+  when the broker's feed gives one in a readable unit (otherwise the receive time is
+  used, and the tick is counted). A recording writes its ticks to disk at least once a
+  second in checksummed blocks, so a crash or power loss costs at most the last second
+  and never leaves a wrong tick; each finished recording is saved once per instrument
+  and never rewritten, and a day is read by merging its recordings in the exact order
+  they were received. Feed outages and each recording's start and stop are kept, so a
+  replay can tell a dead feed from a gap in the recording.
+- The live layer's order path, preflight and journal gain what the session needs (private):
+  a check of one order's status, a probe of a silent server, polls of the orders a
+  stream outage may have missed, the release of a held cancel at the fills found; the
+  preflight checks every strategy's interval, sends its test alert once, and waits for
+  the broker login only for the failures a login can fix (a refused API key, no funds or
+  no quote), failing at once when OpenAlgo cannot be reached; the journal's wait for a
+  lock is set by `busy_timeout_s`.
+- The live session's building blocks (private): its clients, each with its own timeout;
+  an inbox and a feed link that take ticks and order updates from the WebSocket without
+  ever blocking it and tell a feed outage from a quiet symbol; a strategy's live series,
+  whose bars, views and indicators equal a backtest's at every decision; and a data
+  worker that reads quotes and broker candles on its own thread under the server's rate
+  limits.
+- The live session's plan (private): `bt.live`'s arguments are checked and each strategy
+  is set up the way a backtest sets it up for the same day, with OpenAlgo's lot size,
+  tick size and freeze quantity in place of the reference tables'; the session then
+  catches up from the open without deciding or sending anything. `max_daily_loss` must
+  be given in the `bt.live` call: a limit set only on the strategy class is not taken as
+  the live limit, and a class limit that differs from the call's stops the start.
+- The live session's order worker (private): the kernel's orders turned into OpenAlgo
+  requests and each answer into the one kernel call it calls for (the venue map); every
+  fill of the session's own orders reaches the kernel once, as the units newly filled
+  and their price, however many sources report it (the stream, a poll, the tradebook);
+  and one worker thread that sends the orders by priority (stops first), settles
+  unanswered or refused modifications and cancellations by reading the order, and keeps
+  the journal's record of each leg's stop.
+- The live session itself, first version (private; the public `bt.live` comes with the
+  session's result): the start sequence (mode, locks, logs, preflight, the order worker,
+  warm-up and catch-up, the countdown), the loop that closes bars by the clock, drives
+  each strategy's kernel session and hands its orders to the worker, the square-off by
+  the clock, the end of the day, and the common close. Ctrl+C is the safe stop: entries
+  locked and working entries cancelled, then with `on_stop="flatten"` (the default)
+  every open position exited and waited for, or with `on_stop="keep"` the positions left
+  open; a second Ctrl+C waits briefly for what is in flight and lists what is left open.
+  A journal failure stops the session at once; a strategy error stops it the safe way.
+  A strategy's leg rules (stop, targets, trailing, breakeven) run in the session through
+  the stops supervisor, below.
+- The live session's stops supervisor (private): every leg with `stop=` has its stop held
+  by the broker, placed when the entry fills (SL-M for cash equity and futures, a
+  stop-limit 5 percent beyond the trigger for NFO and BFO options), confirmed only when
+  the broker answers that it works, and moved by modifying it for a trail or a breakeven
+  (at most once per 5 seconds and 0.25 percent). Targets and the daily loss limit are held
+  by the engine on ticks and quotes. An exit cancels or cuts the stop first, so a stop and
+  an exit never both fill. A time without a confirmed stop is counted as unprotected, and
+  a stop accepted but not confirmed within 10 seconds exits the leg (never while the order
+  worker is busy or its answers wait to be read). An option stop-limit the price runs through is repriced to a
+  marketable limit every 2 seconds, up to 5 times, then exited. A rejected exit is asked
+  for again after 1, 2, 5 and 10 seconds; after the fifth rejection entries are locked,
+  the stop is placed again and the alert says to end the session before any close by
+  hand. A refused cancel is sent again; held fills and held cancels are decided from the
+  broker's books. While OpenAlgo is silent and a stop or an exit waits, it is probed every
+  2 seconds, with an alert after 10 seconds. The safe stop and every close protect each
+  leg by its state first, and the lines printed as a session ends name each open leg's
+  stop and orders and what to do by hand. Entries without a stop are allowed, with a
+  warning in the start banner and the result.
+- The live session's risk watch and kill switch (private): a feed with no tick on any
+  instrument for 10 seconds is dead, with one alert, entries locked, the strategies'
+  prices read by quote every 2 seconds and the slices it covered marked missing (no bar
+  is made from part of a slice); entries open again at the close of the first whole
+  slice after ticks return. A quiet instrument with an open position is priced by quote
+  without a lock. A refused quote read alerts that the broker's login may have expired.
+  The clock skew between this computer and the exchange is estimated from the trades'
+  exchange times in the first minute and alerted beyond 2 seconds; a broker whose ticks
+  carry no exchange time is named in the start banner or the result's warnings. The
+  account's daily loss limit, across every strategy of the session, fires the kill
+  switch: entries locked for the day, working entries cancelled, then each position
+  exited only when OpenAlgo's position book holds at least the strategy's units on the
+  same side (otherwise nothing is sent and the disagreement is alerted), and each
+  strategy reported against the broker's book once flat.
+- A live session's state saved and restored in the kernel (no change to backtests):
+  `Engine::live_state` writes the session's state as plain data that survives a JSON round
+  trip (in Python a dict of None, bool, int, float, str, list and dict, written by
+  `json.dumps` and read back equal): where it stands, the cash, the positions with their
+  tranches, the legs, every working order with its role, request, units, filled units and
+  what its fills were charged, the cancellations and modifications waiting for the
+  broker's answer, the exits and the legs' broker-held stops, the targets fired, the
+  daily loss totals, the trading state, the cooldown and time exit counters, the entry
+  locks and the commands not yet taken. Each saved order says whether it was sent: a
+  strategy exit that waits for its cancels was not, and the restart's order check skips
+  it. `Engine::restore_live_state` gives it to a session built for a restart, once, after
+  its catch-up and before any order; the saved working orders are numbered from o1 again
+  and the call returns each one's saved and new id. Later orders take the ids after them,
+  which the earlier start may have given to orders that have since ended, so the live
+  layer rebuilds its map of broker orders from the returned pairs alone. A session restored
+  at a point of its trading day goes on as the uninterrupted one in its commands, states,
+  fills, trades and P&L, with these limits: the events recorded after the last pause and
+  not yet delivered are not saved, so the restarted strategy's `on_fill`, `on_order` and
+  `on_position` never run for them; the entry locks are not restored (the session keeps
+  its own, and the live layer sets again, from the saved state, those that last the day);
+  a sizing cap the restarted session has set already is kept, being the fresher figure;
+  and a state saved while the session closed is refused, since no session resumes at its
+  close. Each start's result covers that start: the contract notes are settled per start,
+  and a CNC sale after a restart is not matched with a same-day CNC buy before it for the
+  intraday rates. A state of another day, other instruments or another capital, of
+  another layout, one that cannot be read, or one whose parts do not hold together (a
+  position its tranches or its leg do not match, an open position without its leg, an
+  order filled beyond its units, a leg's stop that is not one; the error names the field)
+  is refused whole, and so is a restore into a session that has traded, was restored
+  already, or stands before the saved point. Through the binding, a state nested deeper
+  than any saved one is refused before it is read.
+- A live session hands out no command of an order that has ended: `Engine::take_commands`
+  drops the Place, Modify or Cancel of an order that was rejected, cancelled or filled
+  whole since the command was made, such as a restored order the restart's order check
+  ends before its commands are taken.
+- A live session's fill with no order of its own in the kernel (no change to backtests):
+  `Engine::apply_external_fill` records the broker closing or reducing a position by
+  itself (its square-off, a position closed by hand) through the one fill path, at the
+  broker's price, with the exit reason given and the fill flag `external`; the orders
+  working to close the position follow it (a leg's stop is cut down, or cancelled once the
+  position is flat). A fill that would not only close or reduce the position (on its
+  side, of a flat position, through zero) is refused whole: `VenueRefusalError` of the
+  new kind `beyond_position`.
+- The live session's reconciler and restart (private). OpenAlgo's position, order and trade
+  books and the funds are read when trading begins, every 30 seconds, 3 seconds after a
+  fill, 3 seconds after a comparison that found a new difference, around each square-off,
+  before the safe stop's flatten and at the close, and compared leg by leg with the engine
+  once the leg has no order in flight (a leg in flight for more than 3 minutes is compared
+  anyway, with an alert and no action). A fill of the session's own orders that the stream
+  and the polls missed is taken from the trade book. A difference seen in two comparisons
+  in a row locks the strategy's entries, sends an alert, and allows only a safe
+  correction: a position closed or reduced by other orders whose trades come to the
+  difference exactly (a sale by hand, the broker's square-off) is adopted, with its stop
+  cancelled or cut to what is left; when the broker holds the other side the leg's own
+  stop is cancelled and the alert says to close it by hand; a broker holding fewer units
+  that no trade explains, or more units, is left alone and alerted (an ERROR alert to
+  check the account once it lasts 3 minutes). Nothing is ever traded to make the broker
+  match the engine, and no difference exits a position or fires the kill switch. From the
+  first comparison showing the broker with fewer units, none or the other side, no exit,
+  flatten, square-off or stop of that leg is sent for more than the broker holds on that
+  side. Orders of the session working at the broker that the engine does not hold, and
+  working orders naming the strategy that the session did not send, are reported. The
+  funds read caps each strategy's sizing by the available cash. After the session's last
+  lines the close sends nothing those lines did not name; a difference only its final read
+  sees is reported at OpenAlgo's units in the result and the daily summary, with one ERROR
+  alert, never as flat, and a leg no read could judge (its own fill landed inside the
+  read) is reported as not confirmed, with an alert to check OpenAlgo's position book. A
+  restart the same day first resolves the journal's unsent or unanswered orders against
+  the order book, then reads the books: a broker position on a traded symbol that the
+  journal does not hold, or a journal position the broker does not hold and no trade
+  explains, refuses the start with nothing sent. Each strategy's saved state is restored
+  after its catch-up, every restored order is checked against the journal and the books,
+  the entry locks that last the day are set again, and before the banner every open leg
+  has its stop confirmed or placed again (or is exited when past its square-off).
+- **Live trading: `bt.live`, `bt.record` and `bt.SessionResult` are public.**
+  `bt.live(strategy, client, *, capital, max_daily_loss, account_max_daily_loss=None,
+  alerts_to=None, account=None, params=None, ..., live_dir=None, on_stop="flatten")`
+  trades one strategy class or a list of them through OpenAlgo for today, in the mode
+  set by OpenAlgo's analyzer switch (sandbox or live: no argument chooses or confirms
+  it), and returns a `SessionResult` when the session ends (the end of the day, Ctrl+C,
+  or after the switch changed). The settings it shares with `bt.backtest` take the same
+  defaults; a `bt.backtest` argument with no meaning live raises ConfigError saying why,
+  and what this version does not run live (condition, signal and array strategies,
+  several symbols, futures series, daily intervals, CNC and NRML) raises
+  NotImplementedError before any call to OpenAlgo. `SessionResult` holds the mode,
+  broker, account and day, how the session stopped and its restarts, each strategy's
+  `bt.Result` (built by the backtest's own builder, with its metrics and tearsheet, for
+  this start of the session), the day's summary (`summary`, `summary_text()`), and
+  tables of orders, fills, drift, seconds unprotected, locks, reconciliations, skipped
+  decisions and open positions, each instant with an IST column; `flat` says whether
+  the day ended flat. `bt.record(client, instruments, *, mode="quote", cache_dir=None,
+  until=None)` records the feed's ticks for a later replay and returns a
+  `RecordSummary`. Importing `openalgo.backtest` loads no module of the live layer.
+- Live sessions, before the first public release: the day's summary counts the whole day
+  across restarts (closed round trips, rejected orders, mismatches, seconds unprotected,
+  undelivered alerts), so a day split by Ctrl+C or a crash reads like the day run
+  unbroken; every alert is also printed on the console, whether or not `alerts_to` is
+  set; the start banner states the stop rule once, and the first position opened with no
+  stop at the broker prints a warning at once and is listed in the result; a comparison
+  of a leg in flight for more than 3 minutes that finds a position difference alerts at
+  once, and the close names that leg in the summary and the result, never as flat; a
+  fill priced from an average is flagged only when its price may lie on another tick.
+- Live sessions, from the fault suite (unit 14): a position difference that comparisons
+  in time already acted on and that the final read sees again is named at the close (an
+  ERROR alert, the summary's Reconcile and End state lines, `SessionResult.flat` False)
+  and counted once; the units of an entry the order book cannot tell apart from another
+  order are listed in `open_positions` with no confirmed stop, so such a day no longer
+  ends "flat"; after a restart, a position carried open across it keeps its entry's
+  charges in the restarted start's `bt.Result`, so its trades and its metrics agree. The
+  session's behaviour is now checked after every test against the design's safety rules
+  (no orphan order, one stop per leg, exits within the position, nothing sent after a
+  lock), over every change of every order at the simulated broker.
+- `bt.read_ticks(day, instruments=None, *, cache_dir=None)` reads the ticks `bt.record` (or
+  a session) recorded on a day back as one DataFrame, merged in the exact order they were
+  received: the exchange and symbol, the exchange's last trade time (or the receive time
+  where the feed gave none, with a column saying which), the receive time, the last price,
+  and the volume, bid and ask where the recording kept them. A day with no recording
+  raises DataError naming the folder.
+- Live sessions: another client's fill on a symbol the session trades (a sale by hand, for
+  example) now prompts a comparison with OpenAlgo's books 3 seconds later, so the session
+  fits its stop to the sale within seconds instead of at its next 30-second read; the
+  preflight warns, in the start banner and the result, that the session's matching of the
+  trade book to its orders by order ID has not been checked for pocketful and mstock. The
+  loop's time from a tick's arrival to the kernel is measured by
+  `benchmark/live_loop_speed.py` (median about 7 microseconds, 99th percentile about 19,
+  against a target under 500).
+- Live sessions, figures a trader reads at the end: a strategy's `bt.Result` now adds up
+  to its trades. A session's stop (Ctrl+C, the end of the day after the square-off, or an
+  error) settles the day's contract notes and records the minute it stopped in, so the
+  Result's equity, net profit, returns and drawdown include the session's last fills and
+  the notes' charges: its net profit equals the sum of its trades' net, plus an open
+  position's value at its mark less its charges. The day summary's charges stay each
+  fill's charges rounded to the paisa (they add up across restarts) and differ from the
+  Results' by exactly the contract notes' rounding, shown in `Result.contract_notes`. The
+  day summary's slippage is now measured: each MARKET fill against the price a backtest
+  fills the same order at (the open of the bar after the decision, with the run's
+  modelled slippage), signed against the trader and times the units, for example
+  "Slippage : Rs 2.50 better than the backtest"; a fill with no bar to compare it with
+  (a Ctrl+C sale before the next minute's first trade) is counted as not compared. A live
+  trade's MAE and MFE judge the ticks after a confirmed change of a stop or target, and
+  the next minute's, against the terms it replaced too, so a fill on the old terms is
+  never counted with the whole position. Backtest figures do not change.
+- Reference table `price_protection` (`openalgo/backtest/reference/data/price_protection.csv`,
+  read with `tables.find("price_protection", (exchange, segment, check, underlying, days),
+  date)`): the price bands NSE and BSE apply to an option's limit price, by date, each row
+  with its exchange circular or notice and its verification status. `underlying` is ALL or
+  one underlying with a rule of its own; `days` is every_day, or expiry_day for a rule that
+  holds only on a day an option on the underlying expires. Limit price protection, met by
+  a stop-limit order when it triggers: the limit within 40 percent (20 rupees minimum) of
+  the contract's 30-second average trade price on NSE options, BSE index options from
+  2025-12-01 and BSE stock options from 2026-07-06; 60 percent (30 rupees) on BSE index
+  options from 2024-04-23 to 2025-11-30 and BSE stock options from 2024-04-23 to
+  2024-06-30; 40 percent with a 10 rupee minimum on every SENSEX option on a SENSEX expiry
+  day from 2026-03-12; 80 percent (80 rupees) on BSE FOCUSED IT options from 2026-05-11.
+  From 2024-07-01 to 2026-07-05 BSE stock options were under BSE's Price Reasonability
+  Check instead, whose rupee slabs are never narrower than 10 percent of the premium. The
+  stop-limit range, met at entry and on every modification: the limit within 20 percent
+  (10 rupees) of the trigger, on NSE options and BSE index options from 2026-02-09. The
+  stock option floor and ceiling during an underlying's cooling-off: 15 percent (7.5
+  rupees) on NSE, 30 percent with no rupee minimum on BSE. Every row is verified: the BSE
+  notices were read to 2026-11-16. A kernel test reads the table and finds the 5 percent
+  option buffer inside every band at every premium on the 0.05 and 0.01 tick grids, for a
+  stop-limit's limit, a GTT child's and the reprice of a stop the price has passed, except
+  where a band is narrower than one tick: the BSE cooling-off band at a premium of three
+  ticks or less, where no limit off the premium fits. The buffer is unchanged. No change in
+  backtest results; the reference data's version string now carries 2026-11-17, the date
+  this table was checked.
+- MAE and MFE of every trade, computed by the kernel for backtests and live sessions
+  alike. `Result.trades` gains `mae_rupees` (the lowest running P&L the trade showed while
+  open, before charges: zero or negative), `mfe_rupees` (the highest: zero or positive),
+  `mae_pct` and `mfe_pct` (as percents of the trade's largest capital at work: average
+  entry price times the largest quantity held times the contract multiplier) and
+  `slippage_rupees`; `result.trade_list()` gains `mae`, `mfe`, `mae_pct`, `mfe_pct` and
+  `slippage`. Only prices the trade could have seen while it was open count: the high and
+  low of each base bar it held through, its fill prices, the open of a bar it exited in,
+  and a live session's ticks. In a live session a trade whose closing order may have
+  filled unseen (a bar reached its stop, or a stop change waits for the broker) counts
+  only its fills until the broker reports, so its MAE and MFE can be smaller than the
+  backtest's, never larger. Every existing column and figure is unchanged.
+- Slippage paid: `Result.fills` gains `slippage_rupees`, each fill's price against its
+  price before slippage times units and multiplier, positive when worse. It is already in
+  the fill prices, so no P&L changes; a fill the broker priced in a live session has none
+  (NaN), and so has its trade.
+- New metrics, group "Excursions and trading cost": `average_mae` and `average_mfe` (as
+  shares of capital at work), `worst_mae` and `best_mfe` (rupees), `edge_ratio` (mean MFE
+  over mean MAE), `profit_kept` (the winners' gross P&L over their MFE),
+  `closed_turnover`, `total_slippage`, `trading_cost` (charges plus slippage),
+  `trading_cost_share_of_gross_pnl` and `trading_cost_bps` (basis points of the closed
+  trades' turnover). A trades table without the new columns gives NaN for them.
+- Tearsheet, Trades section: a Trading Cost row (turnover of closed trades, charges,
+  slippage, trading cost, its share of gross P&L and its basis points of turnover); a MAE
+  and MFE block with six tiles, histograms of MAE and MFE percent and scatter charts of
+  each against the trade's return (winners as circles, the others as crosses); MAE and
+  MFE columns in the trade list; slippage and trading cost rows under the Charges table.
+  Money tiles show paise below Rs 1,000. Mode "basic" shows the trading cost row and the
+  histograms, "charts" the histograms and scatter charts (the Trades section now appears
+  in that mode), "metrics" the new metrics.
+- Robustness and overfitting checks, first part: `bt.robustness(strategy, client=None, *,
+  checks="all", objective="sharpe", runs=1000, seed=0, workers=None, progress=None,
+  others=None, **settings)` runs the backtest once and then the checks, and `result.robustness()` runs
+  them on a finished backtest. Both return a `RobustnessReport`: `verdicts`, a table of all
+  seventeen checks with each one's question, figure, rule and verdict; `check(name)`, a
+  `CheckResult` with every run, the summary, the settings and the seed; `passed`; `plan`;
+  and `tearsheet(path)`, a self-contained HTML report with a scorecard, a section of
+  charts per check and the notes. Four checks of the trade list are built: random out of
+  sample (whole sessions put out of sample at random, 30 percent by default; passes when
+  at least 80 percent of the assignments that can be judged keep at least half the
+  in-sample figure), trade
+  reshuffle (the drawdowns of the trades in random orders; informational unless
+  `max_drawdown` is given), trade resample (trades drawn with replacement; passes with at
+  least 95 percent of paths profitable and at most 5 percent ruined, a fall of 50 percent
+  from a peak) and variance (the same with the win rate 5 points lower; passes with at
+  least 80 percent of paths profitable). A check with fewer than 30 closed trades, too few
+  sessions, or a run that did not make money says "not judged" and why, and never passes.
+  Each check draws from its own random stream (the seed plus the check's number), so the
+  same seed gives the same report on every platform. A check not built yet is listed as
+  such, and asking for one raises NotImplementedError saying what it needs. Every verdict
+  is worded the same way: passing proves nothing on its own; failing says the edge did
+  not hold up under that check (fitted to the past, or too small to tell from noise),
+  never that it is proof of overfitting; and the report says which checks can see a
+  strategy picked as the best of many tries.
+- Quick overfitting checks on every backtest: the four trade-list checks at 200 runs, seed
+  0, computed when first read and never during `bt.backtest` or `bt.optimize`. The
+  tearsheet has a new "Overfitting checks" section after Trades (full and basic modes),
+  `result.summary()` a new "Overfitting" line before Benchmark, and `result.warnings` one
+  line for each quick check that fails. No existing figure changes.
+- Robustness and overfitting checks, second part: five checks that rerun the backtest on
+  other bars. Generated bars keep every bar a valid OHLC on the tick grid and are the same
+  for the same seed: permuted bars (each bar's move kept whole, the moves shuffled within
+  each session and the sessions' opening moves with their overnight gaps; several symbols
+  share one order) and noisy bars (each price moved, with a stated chance, by up to 0.20 of
+  the bar's ATR 14). The reruns are ordinary backtests of the same kernel, with the
+  warm-up read from the generated bars, in this process or in `workers` processes (the
+  same result either way), and the plan states their count and an estimated time first.
+  Versus random: three families (random entries on the run's bars, the strategy on
+  permuted bars, random entries on permuted bars); passes when the run is above the best
+  of every random run (`margin` above it if set), and reports the run's percentile.
+  Permutation test: p = (permuted runs at or above the run + 1) / (runs + 1); passes at p
+  of 0.05 or less. Noise: passes when the median noisy run keeps at least half the run's
+  figure, at least 80 percent of noisy runs make money, and the run is not above their
+  95th percentile. Other markets: the strategy unchanged on `others=` (symbols or
+  (symbol, exchange) pairs); passes when at least half make money; not judged without
+  `others`. Synthetic stress: noisy and permuted candidates kept as shocks by rules on
+  their own prices (a deeper drawdown, a longer recovery, a deeper fall below the
+  200-session average, returns little correlated with the real ones, or a function of
+  the real and candidate bars); each rule's candidates are judged against the share of
+  their generators' candidates that made money. Each check has its charts (equity fans,
+  histograms with the run marked, real against noisy candles, tables by family, symbol
+  or rule) in the robustness report. The random out-of-sample chart now draws the price
+  when the report has the run's bars. A check of these five with fewer than 30 closed
+  trades, or on a run that did not make money, is not judged.
+- Robustness and overfitting checks, third part: four checks that rerun the backtest on
+  the run's own bars with one thing changed. Shifted bars: the strategy bars built with
+  their boundaries moved (an intraday strategy's bars ending 1 to n-1 base bars earlier; a
+  daily strategy's days ending 15, 30, 45 and 60 minutes earlier); passes when every shift
+  makes money and the median keeps at least half the run's figure. Random exits: each
+  trade's stop, target and trailing distances scaled at random within 25 percent (and
+  any `exit_params` drawn from the values given); passes when at least 70 percent of runs
+  make money. Delayed orders: entries and exits 0 to 2 strategy bars late in every pair;
+  passes when entries one bar late still make money and keep half the run's figure (a
+  late run that took more entries than the run is not judged). Liquidity: the fills
+  priced by six other models; passes when every model makes money and no drawdown is
+  deeper than 1.5 times the run's.
+- `bt.backtest(fill=...)` takes six more fill models for these checks and for your own
+  tests: "next_close", "next_mid" (the high and low's midpoint), "next_ohlc4" (the average
+  of open, high, low and close) of the next base bar, and the same averaged with the bar
+  after it ("next_close_2", "next_mid_2", "next_ohlc4_2"). `bt.backtest(delay_entries=0,
+  delay_exits=0)` holds a decided order that opens or adds (or that closes, reduces or
+  reverses) for that many strategy bars; the engine's own stops, targets and exits are
+  never held. The default run is unchanged (the golden runs give the same figures);
+  `bt.live` refuses both settings, saying why.
+- Robustness checks on generated bars (second part, refined): a synthetic stress rule
+  that keeps more than half its candidates is not judged ("it does not single out
+  shocks"); permutation, synthetic stress and the strategy-on-permuted family of versus
+  random are not judged for `bt.from_arrays` strategies, whose decisions are fixed in
+  advance; the plan counts and times only the reruns that will run; the random entries
+  of an all-intraday run stay within one session each.
+- Robustness and overfitting checks, last part: the four checks that can see a strategy
+  picked as the best of many settings, so all seventeen are built. Give `bt.robustness`
+  (or `result.robustness`) parameter ranges as keywords (`fast=range(10, 31, 5)`) and the
+  chosen settings in `params=`. Out of sample: the first 70 percent of sessions searched,
+  the best combination rerun on the last 30; passes when it makes money out of sample and
+  keeps half its in-sample figure (totals compared per year). Walk-forward: five rolling
+  folds (or anchored), each searched on its in-sample part and traded on the next; passes
+  when the stitched out-of-sample run makes money, its efficiency (out-of-sample figure
+  over the folds' in-sample figures) is at least 0.5 and 60 percent of folds make money.
+  Parameter neighbourhood: every combination one grid step from the chosen one (or a 10
+  percent cube around it); passes when the 25th percentile of the neighbours makes money
+  and their median keeps half the chosen figure; with a heatmap, a surface view, a
+  histogram and a blend of the neighbours. Noise-robust optimization: every combination
+  scored on the median of 50 noisy copies of the bars; informational: its figure says
+  whether the robust choice sits on a plateau (the neighbourhood rule on the noisy
+  scores), and it counts neither as a pass nor as a failure.
+- `bt.walk_forward(strategy, client=None, *, folds=5, anchored=False, in_sample=0.7,
+  objective="net_profit", workers=None, progress=None, **settings_and_ranges)` is public
+  (it raised NotImplementedError before) and returns a `WalkForwardResult`: `folds` (each
+  fold's windows, chosen parameters, in-sample and out-of-sample figures and efficiency),
+  `equity` (the stitched out-of-sample curve), `performance`, `efficiency`,
+  `profitable_share`, `net_profit` and `drift` (how far each parameter moved between
+  folds).
+- `bt.optimize` results gain the overfitting measures of a search: `neighbourhood` (the
+  best combination's neighbours, with a warning in `warnings` when the best is a lone
+  spike), `deflated_sharpe` (the best Sharpe ratio corrected for the number of
+  combinations tried), `overfitting_probability` (the probability of backtest overfitting,
+  by combinatorially symmetric cross-validation over 16 blocks of sessions),
+  `overfitting` (both figures with their inputs) and `tearsheet(path, x=, y=)`, a heatmap
+  page. No existing column or figure changes.
+- Tearsheet: the trade list's entry and exit times wrap between the date and the time, so
+  every column fits a narrower window; the MAE and MFE histograms have a count axis.
+  `bt.backtest`'s delays: a reversal counts as an exit and takes `delay_exits`.
+- Polish before the release: `bt.walk_forward` given a client now runs on its worker
+  processes (it read the bars once and ran in one process, giving the wrong reason); when
+  a setting truly cannot be sent to workers (a cost model, a calendar), the plan names it.
+  The robustness report, the tearsheet and the optimizer's page fit their window at 1024,
+  1280 and 1440 pixels with Export PDF and the theme switch in view (the section links
+  scroll inside the header); the optimizer page's axis labels and its best-setting tile
+  fit their charts, and its cross-validation histogram counts splits. Percentiles read as
+  ordinals ("the 66th percentile"); `WalkForwardResult.folds["trades"]` is an integer
+  column; the trade reshuffle says its end figure is the closed trades'.
+
+### Changed
+
+- Backtests: an option leg's stop (`stop=` on an MIS option position) is now the
+  stop-limit order the exchange takes for it, its limit 5 percent beyond the stop (NFO and
+  BFO options accept no SL-M), as a strategy's own SL-M order on an option already was. A
+  stop reached inside a bar still fills at the stop, and a bar that opens between the stop
+  and its limit at the open; a bar that opens beyond the limit fills at the limit when it
+  trades back to it, and otherwise the leg exits at the next bar's open, where it used to
+  fill at the gapped open. Slippage on an option stop's fill is held at its limit. Change
+  in results: only backtests of MIS option legs with a stop that a bar opens more than 5
+  percent through (or whose slippage would pass the limit) change; cash equity and
+  futures stops, and CNC and NRML legs (their stops are GTTs with the same buffer), are
+  unchanged. None of the four golden runs holds an option leg with a stop, so no pin
+  changed.
+- An option sell stop or GTT child priced from a trigger of one tick (0.05, or 0.01 on a
+  one-paisa contract) keeps a limit of one tick, where 5 percent below it used to round
+  down to 0.00, a price no order can carry. One rule now prices every option limit beyond
+  a price (`exec::price::limit_beyond`): a stop-limit's limit, a GTT child's limit and the
+  reprice of a stop the price has passed. Change in results: only option sell stops at
+  one tick, which used to rest with a limit of 0.00.
+
+### Fixed
+
+- MCX futures whose contract multiplier is not 1 are now charged on their traded value
+  (price x units x multiplier), in `bt.backtest` and in `bt.live`. Before, each unit was
+  charged as if it were worth one quoted price: GOLDM and GOLDTEN (multiplier 0.1) and
+  GOLDGUINEA (0.125) were charged too much (about eight times on a GOLDM lot), GOLD (100)
+  about 100 times too little, and ZINC, LEAD, ALUMINIUM and their minis (1,000) about
+  1,000 times too little. P&L, margin and turnover were already right. Change in results,
+  for these contracts only: each fill's charges, the contract notes, the trades' costs and
+  net P&L, the equity curve and every metric built on it, the tearsheet's Charges table, a
+  live session's day summary, and the size the fixed-risk and ATR-risk sizers choose
+  (their cost estimate changes too). Example: one GOLDM lot bought at 1,20,000 and sold at
+  1,21,000 is charged Rs 254.76, not Rs 2,122.84. Every NSE and BSE instrument, CRUDEOIL,
+  CRUDEOILM, NATURALGAS, SILVER, SILVERM, SILVERMIC, COPPER, NICKEL and GOLDPETAL give
+  the same figures as before; the `bt.costs` calculators are unchanged.
+
+- The `turnover` metric (and the turnover ratio built on it) and the trade list's
+  `return_pct` now count the contract multiplier. For a contract whose multiplier is not
+  1 (an MCX gold future quoted per 10 grams and traded in 1 kg units has 100) the
+  turnover read 100 times too small and the return 100 times too large. A trades table
+  given to `metrics.analyse` may carry a `multiplier` column (1 when absent). Change in
+  results: only instruments with a multiplier other than 1; shares, NSE and BSE
+  derivatives and most MCX contracts are unchanged to the bit.
+
 ## [2.2.1] - 2026-11-15
 
 ### Fixed
@@ -1348,7 +1983,7 @@ engine with end-to-end risk management:
 
 #### WebSocket Feed API - Real-Time Order Updates
 - **`subscribe_orders(on_order_update=None)`**: Account-level real-time order
-  status stream over the existing OpenAlgo WebSocket connection — fills,
+  status stream over the existing OpenAlgo WebSocket connection: fills,
   partial fills, rejections and cancellations pushed by the broker (live
   mode) or the sandbox engine (analyze mode), for orders from any origin
   (API, broker app/web, engine square-offs).
@@ -1356,7 +1991,7 @@ engine with end-to-end risk management:
 - **`get_orders()`**: Cached order updates received so far (most recent
   first, capped at 500).
 - **`[ORDER]` log category**: order updates printed at `verbose=2`.
-- Order-update subscription survives reconnects — replayed automatically
+- Order-update subscription survives reconnects: replayed automatically
   after re-authentication, like market-data subscriptions.
 - Message fields use OpenAlgo common order constants (`symbol` in OpenAlgo
   format, `action`, `pricetype`, `product`, lowercase `order_status`,

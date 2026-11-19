@@ -28,9 +28,10 @@ use super::levels::{favour, points, positive, round_level, tighter, units};
 use super::types::{BarPrices, BreakevenState, LegContext, LevelInForce, RatchetOutcome};
 use super::LegState;
 
-/// A trail with its distances in points, fixed at the entry (SPEC-25).
+/// A trail with its distances in points, fixed at the entry (SPEC-25). A leg keeps it in
+/// its memory (`LegMemory`), which a live session's saved state carries.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum TrailPlan {
+pub enum TrailPlan {
     /// Arms at `arm_points` of excursion; the stop then sits `distance_points` behind
     /// the extreme. `bt.trail(x, 0)` has both equal to `x`.
     Continuous {

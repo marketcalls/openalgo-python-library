@@ -85,13 +85,20 @@ def _threshold(value: object, name: str, low: float, high: float) -> float | Non
     return number
 
 
+def closed_by_exit(trades: pd.DataFrame) -> pd.DataFrame:
+    """The closed trades in exit order (then entry order, then input order); an empty
+    table stays as it is."""
+    if trades.empty:
+        return trades
+    closed = trades.loc[~pd.isna(trades["exit_time"])]
+    return closed.sort_values(["exit_time", "entry_time"], kind="stable")
+
+
 def _closed_pnl_by_exit(trades: pd.DataFrame) -> np.ndarray:
-    """Net P&L of closed trades in exit order (then entry order, then input order)."""
+    """Net P&L of closed trades in exit order (`closed_by_exit`)."""
     if trades.empty:
         return np.empty(0)
-    closed = trades.loc[~pd.isna(trades["exit_time"])]
-    ordered = closed.sort_values(["exit_time", "entry_time"], kind="stable")
-    return ordered["net_pnl"].to_numpy(dtype=float)
+    return closed_by_exit(trades)["net_pnl"].to_numpy(dtype=float)
 
 
 def _trade_path(pnl: np.ndarray, capital: float) -> np.ndarray:
@@ -192,5 +199,6 @@ __all__ = [
     "PERCENTILE_LEVELS",
     "RESAMPLE",
     "MonteCarlo",
+    "closed_by_exit",
     "monte_carlo",
 ]

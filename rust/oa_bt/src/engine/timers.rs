@@ -140,8 +140,12 @@ impl Engine {
     /// Step 2 before a timer pause: the risk exits and the strategy orders due at this
     /// open fill (SPEC-35), as in `steps::step_open_fills`, the rebalance buys last
     /// (`rebalance`), so the timers decide on the position those orders make; an
-    /// instrument with no bar keeps its orders queued (SPEC-06).
+    /// instrument with no bar keeps its orders queued (SPEC-06). In a live session the
+    /// venue fills them (`venue`).
     pub(super) fn fill_due_orders(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
+        if self.is_external() {
+            return Ok(());
+        }
         for index in 0..self.instruments.len() {
             let instrument = InstrumentId(index as u32);
             let Some(bar) = self.market.bar(instrument, slice.index) else {
@@ -149,9 +153,16 @@ impl Engine {
             };
             self.risk_exits_at_open(slice, instrument, bar.open)?;
             self.gtt_exits_at_open(slice, instrument, bar.open)?;
-            for id in self.book.queued_for(instrument) {
+            let queued = self
+                .fill_model()
+                .is_none()
+                .then(|| self.book.queued_for(instrument));
+            for id in queued.unwrap_or_default() {
                 self.fill_queued(slice, id, bar.open)?;
             }
+        }
+        if self.fill_model().is_some() {
+            return Ok(());
         }
         self.fill_rebalance_buys(slice)
     }

@@ -5,13 +5,13 @@
 //! | Segment | Stop order |
 //! |---|---|
 //! | Cash equity, futures | SL-M, as asked |
-//! | Options | SL with the limit `OPTIONS_STOP_LIMIT_BUFFER_PERCENT` beyond the trigger (exchanges reject SL-M on NFO options) |
+//! | Options | SL with the limit `OPTIONS_STOP_LIMIT_BUFFER_PERCENT` beyond the trigger (NFO and BFO options accept only stop-limit orders, never SL-M) |
 
 use crate::model::{InstrumentKind, Side};
 
 use super::error::ExecError;
 use super::order::OrderType;
-use super::price::round_away_from_trader;
+use super::price::limit_beyond;
 
 /// The limit of an options stop order beyond its trigger, percent (04-execution 4.1;
 /// the GTT child of an option uses the same buffer, decision GTT-1).
@@ -20,7 +20,8 @@ pub const OPTIONS_STOP_LIMIT_BUFFER_PERCENT: f64 = 5.0;
 /// The order a segment accepts for `order_type`: an SL-M on an option becomes an SL
 /// whose limit lies `OPTIONS_STOP_LIMIT_BUFFER_PERCENT` beyond the trigger for the
 /// order's side (above for a buy, below for a sell), rounded to the tick away from the
-/// trader. Every other order is accepted as asked.
+/// trader and never below one tick (`limit_beyond`). Every other order is accepted as
+/// asked.
 ///
 /// Errors: `InvalidPrice` or `InvalidTick` for an unusable trigger or tick.
 pub fn venue_order_type(
@@ -31,8 +32,12 @@ pub fn venue_order_type(
 ) -> Result<OrderType, ExecError> {
     match (kind, order_type) {
         (InstrumentKind::Option, OrderType::StopMarket { trigger_rupees }) => {
-            let factor = 1.0 + side.sign() * OPTIONS_STOP_LIMIT_BUFFER_PERCENT / 100.0;
-            let limit_rupees = round_away_from_trader(trigger_rupees * factor, tick_rupees, side)?;
+            let limit_rupees = limit_beyond(
+                trigger_rupees,
+                side,
+                OPTIONS_STOP_LIMIT_BUFFER_PERCENT,
+                tick_rupees,
+            )?;
             Ok(OrderType::StopLimit {
                 trigger_rupees,
                 limit_rupees,
@@ -81,6 +86,23 @@ mod tests {
         };
         for kind in [InstrumentKind::Equity, InstrumentKind::Future] {
             assert_eq!(venue_order_type(kind, asked, Side::Sell, 0.05), Ok(asked));
+        }
+    }
+
+    #[test]
+    fn a_sell_stop_at_one_tick_keeps_a_limit_of_one_tick() {
+        // 5 percent below one tick rounds down to 0.00, which no order can carry; an
+        // option trades at one tick at the least, so the limit stays at one tick.
+        for tick in [0.05, 0.01] {
+            let asked = OrderType::StopMarket {
+                trigger_rupees: tick,
+            };
+            let sent = venue_order_type(InstrumentKind::Option, asked, Side::Sell, tick);
+            let expected = OrderType::StopLimit {
+                trigger_rupees: tick,
+                limit_rupees: tick,
+            };
+            assert_eq!(sent, Ok(expected), "tick {tick}");
         }
     }
 }

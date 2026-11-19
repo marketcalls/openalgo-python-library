@@ -45,6 +45,48 @@ pub enum FillTiming {
     NextOpen,
     /// At the decision bar's close (`fill="close"`, an explicit opt-in).
     Close,
+    /// At another price of the next base bar, or its average with the bar after it
+    /// (`fill="next_close"`, "next_mid", "next_ohlc4" and their "_2" forms), for the
+    /// liquidity check of the robustness report (`fill_model`).
+    Model(FillModel),
+}
+
+/// A price of a bar a fill model reads (`fill_model`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BarPrice {
+    /// The close.
+    Close,
+    /// The midpoint, (high + low) / 2.
+    Mid,
+    /// The average of open, high, low and close.
+    Ohlc4,
+}
+
+/// Where the strategy's orders fill instead of the next open (`fill_model`): `price` of
+/// the next base bar, averaged with the same price of the bar after it when `two_bars`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FillModel {
+    pub price: BarPrice,
+    pub two_bars: bool,
+}
+
+/// What a robustness rerun changes in a run (design 17, sections 2.7, 2.12 and 2.14);
+/// the default changes nothing.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Perturbation {
+    /// Strategy bars an order the strategy decides to open or add is held before it can
+    /// fill (`delay_entries=`; `delay`).
+    pub delay_entries: u32,
+    /// Strategy bars an order the strategy decides to reduce or close is held
+    /// (`delay_exits=`); the engine's own exits and the legs' levels are never held.
+    pub delay_exits: u32,
+    /// Base bars by which every strategy bar ends earlier (`bar_shift=`): the intraday
+    /// lattice, or each day's end for a daily strategy (`data::resample::shifted`).
+    pub bar_shift: u32,
+    /// Factors the distances of each trade's leg rules are multiplied by, trade k (in
+    /// the order the legs open) taking factor k, from the first again past the last;
+    /// empty scales nothing (`exit_scale`).
+    pub exit_scales: Vec<f64>,
 }
 
 /// The quantity rule of a backtest (03-architecture 7).
@@ -123,6 +165,8 @@ pub struct RunConfig {
     /// Pause at step 7 when events are waiting even if no strategy bar closes (the
     /// strategy has `on_fill`, `on_order`, `on_position` or `on_risk_event`).
     pub deliver_events: bool,
+    /// What a robustness rerun changes (none by default).
+    pub perturbation: Perturbation,
 }
 
 /// One instrument's base bars, as columns. `ts_open` holds UTC nanoseconds, strictly
@@ -158,6 +202,11 @@ fn not_built(feature: &'static str, instead: &'static str) -> KernelError {
     KernelError::NotBuilt { feature, instead }
 }
 
+/// What a shift of the strategy bars needs (`RunConfig::check_perturbation`).
+const SHIFT_NEEDS: &str = "strategy bars can end earlier only when they are made of several \
+     base bars: an intraday interval longer than the base bars (by fewer base bars than it \
+     holds), or a daily strategy on intraday base bars";
+
 /// Strategy intervals longer than a day: what is not supported and what to do instead.
 /// The clock and the market data refuse them with the same words.
 pub(super) const PERIOD_INTERVALS: &str = "a strategy interval longer than a day (W, M, Q or Y)";
@@ -169,9 +218,10 @@ impl RunConfig {
     /// Check that the kernel can run this configuration as given.
     ///
     /// Errors: `InvalidConfig` for a reversed date range, capital that is not positive,
-    /// or a strategy interval that is not a whole multiple of the base; `Rms` for an
-    /// unusable strategy or session risk rule; `Sizing` for an unusable cap; `NotBuilt`
-    /// for `fill="close"` and period intervals.
+    /// a strategy interval that is not a whole multiple of the base, or an unusable
+    /// perturbation (`check_perturbation`); `Rms` for an unusable strategy or session
+    /// risk rule; `Sizing` for an unusable cap; `NotBuilt` for `fill="close"` and period
+    /// intervals.
     pub fn validate(&self) -> Result<(), KernelError> {
         if self.first_day > self.last_day {
             return Err(invalid("start", "the first day is after the last day"));
@@ -180,6 +230,7 @@ impl RunConfig {
             return Err(invalid("capital", "must be a positive amount of rupees"));
         }
         self.check_intervals()?;
+        self.check_perturbation()?;
         if self.fill == FillTiming::Close {
             return Err(not_built(
                 "fill=\"close\"",
@@ -189,6 +240,38 @@ impl RunConfig {
         self.risk.validate()?;
         self.sizing.validate()?;
         Ok(())
+    }
+
+    /// A shift needs strategy bars made of several base bars: an intraday interval
+    /// longer than the base (the shift shorter than it), or a daily strategy on an
+    /// intraday base; exit scales are positive finite factors.
+    fn check_perturbation(&self) -> Result<(), KernelError> {
+        let change = &self.perturbation;
+        if change
+            .exit_scales
+            .iter()
+            .any(|f| !f.is_finite() || *f <= 0.0)
+        {
+            return Err(invalid(
+                "exit_scales",
+                "every factor must be a positive number",
+            ));
+        }
+        let shift = i64::from(change.bar_shift);
+        let shifts = match (self.base, self.strategy_interval) {
+            _ if shift == 0 => true,
+            (BaseInterval::Intraday(base), StrategyInterval::Intraday(strategy)) => shift
+                .checked_mul(base)
+                .is_some_and(|nanos| nanos < strategy),
+            (BaseInterval::Intraday(base), StrategyInterval::Daily) => shift
+                .checked_mul(base)
+                .is_some_and(|nanos| nanos < NANOS_PER_DAY),
+            _ => false,
+        };
+        if shifts {
+            return Ok(());
+        }
+        Err(invalid("bar_shift", SHIFT_NEEDS))
     }
 
     fn check_intervals(&self) -> Result<(), KernelError> {

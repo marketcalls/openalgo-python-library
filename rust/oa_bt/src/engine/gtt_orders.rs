@@ -106,7 +106,7 @@ impl Engine {
             purpose: GttPurpose::Order(order),
             status: GttStatus::Active,
             created_on: self.trade_day(stamp),
-            eligible_from: placed.decided_at,
+            eligible_from: self.fills_from(&placed),
             last_modified_slice: None,
             fired: None,
         })?;
@@ -131,7 +131,7 @@ impl Engine {
         let Some(replaced) = self.book.get(order) else {
             return Err(KernelError::UnknownOrder(order));
         };
-        let (quantity, decided_at) = (replaced.quantity_units, replaced.decided_at);
+        let (quantity, decided_at) = (replaced.quantity_units, self.fills_from(replaced));
         self.gtts.book.apply(id, GttAction::Modify)?;
         if let Some(gtt) = self.gtts.book.get_mut(id) {
             gtt.legs = vec![leg];

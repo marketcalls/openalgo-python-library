@@ -2,16 +2,22 @@
 of the run's rejection warnings (`_rejections`).
 
 The codes are the kernel's (`RejectCode::code` in `rust/oa_bt/src/exec/checks.rs`), except
-`rate_limit`, which no kernel check makes: a backtest enforces no order rate limit. Each
+`rate_limit`, which no kernel check makes: a backtest enforces no order rate limit. `venue`
+and `exit_cover` are a live session's: the broker's own rejection of an order, and a
+reduce-only order that would leave more units resting to close a position than it has
+(`rust/oa_bt/src/engine/venue_cover.rs`). So are `live_lock` and `live_in_flight`, the
+entry gates a live session adds (`rust/oa_bt/src/engine/venue_gates.rs`), and the freeze
+quantity is a cap on the whole position there, not only on each order. Each
 entry is (what happened, what to do). The product rule covers three refusals that need
 different advice, so it has one entry per case, told apart by the order and its
 instrument (`_rejections.product_rule_case`). The entry window is the window working, not
 a mistake: its line names the window's times (`_rejections.entry_window_warning`).
 
 `RUN_RULE_CODES` are the refusals of a rule of the run working as it intends: the MIS
-entry window (given or the calendar's default) and the limits a strategy or run sets
+entry window (given or the calendar's default), the limits a strategy or run sets
 (max_daily_loss, drawdown_halt, cooldown, max_positions, and the REDUCING or HALTED
-state they lead to). The end-of-run notice leaves them out (`_rejection_notice`).
+state they lead to) and the delay a run holds its orders for (delay_entries=,
+delay_exits=). The end-of-run notice leaves them out (`_rejection_notice`).
 """
 
 from __future__ import annotations
@@ -20,7 +26,10 @@ from types import MappingProxyType
 
 PRODUCT_RULE = "product_rule"
 ENTRY_WINDOW = "entry_window"
-RUN_RULE_CODES = frozenset({ENTRY_WINDOW, "daily_loss_gate", "cooldown", "max_positions", "halted"})
+DELAY_PAST_CLOSE = "delay_past_close"
+RUN_RULE_CODES = frozenset(
+    {ENTRY_WINDOW, "daily_loss_gate", "cooldown", "max_positions", "halted", DELAY_PAST_CLOSE}
+)
 
 REASONS = MappingProxyType(
     {
@@ -35,9 +44,12 @@ REASONS = MappingProxyType(
             "round prices to self.instrument().tick_size",
         ),
         "freeze_qty": (
-            "the quantity was above the exchange's freeze quantity for one order",
-            "keep each order at or below self.instrument().freeze_qty; a bt.size sizer "
-            "caps at it on its own",
+            "the quantity was above the exchange's freeze quantity for one order; in a "
+            "live session also an entry or add that would have taken the position above "
+            "it, since one stop order and one exit order must cover the whole position",
+            "keep each order, and in a live session each position, at or below "
+            "self.instrument().freeze_qty; a bt.size sizer caps each order at it on its "
+            "own",
         ),
         "margin": (
             "the margin the order needed was more than the free cash",
@@ -48,6 +60,13 @@ REASONS = MappingProxyType(
             "an intraday order decided at the session's last close could only fill in the "
             "next session",
             "stop placing orders on the session's last bar (check self.now)",
+        ),
+        DELAY_PAST_CLOSE: (
+            "an order held by delay_entries= or delay_exits= would have waited past the last "
+            "close it could fill after: its session's close for an intraday order, the run's "
+            "last strategy bar for any order",
+            "this is the delay working: an order decided that near the session's or the "
+            "run's end cannot fill that late; lower the delay to fill such orders",
         ),
         "daily_loss_gate": (
             "an entry came after the day's loss reached max_daily_loss, which stops new "
@@ -81,6 +100,37 @@ REASONS = MappingProxyType(
             "max_risk) or averaged down",
             "set allow_averaging_down = True or loosen the scale-in limits",
         ),
+        "venue": (
+            "the broker or the exchange refused the order in a live session, for a "
+            "reason of its own",
+            "read the broker's reason in the session's journal and the OpenAlgo order book",
+        ),
+        "exit_cover": (
+            "a live session keeps at most the position's units resting to close it, so "
+            "that the broker cannot fill them all and reverse the position; this "
+            "reduce-only order would have gone beyond them",
+            "hold a target with the strategy's own logic, or, once it is built, with "
+            "target=, which the engine holds on ticks",
+        ),
+        "live_lock": (
+            "a live session had locked entries (a change of OpenAlgo's mode, a feed with "
+            "no ticks, the start or the stop of the session, a failed exit, a "
+            "reconciliation mismatch or the account's loss limit), so an entry or add was "
+            "not sent; exits still were",
+            "the session's log and alerts name the lock; entries resume when it lifts, and "
+            "a lock that stands for the day needs a new session",
+        ),
+        "live_in_flight": (
+            "a live session sends no entry or add while another order of the symbol is "
+            "working (an entry whose fill is not reported yet, a resting order), so that "
+            "a fill reported late cannot double the position; a sale or buy against the "
+            "position beyond what the orders already working to close it leave counts as "
+            "an entry, since their fills could leave the position flat and it would then "
+            "open the other side",
+            "enter, add or close once the earlier order has filled or been cancelled: "
+            "check self.orders and self.position in on_bar, and close a position with "
+            "self.exit(), which cancels the orders on its closing side first",
+        ),
     }
 )
 
@@ -101,4 +151,11 @@ PRODUCT_RULE_CASES = MappingProxyType(
     }
 )
 
-__all__ = ["ENTRY_WINDOW", "PRODUCT_RULE", "PRODUCT_RULE_CASES", "REASONS", "RUN_RULE_CODES"]
+__all__ = [
+    "DELAY_PAST_CLOSE",
+    "ENTRY_WINDOW",
+    "PRODUCT_RULE",
+    "PRODUCT_RULE_CASES",
+    "REASONS",
+    "RUN_RULE_CODES",
+]

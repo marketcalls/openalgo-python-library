@@ -44,6 +44,8 @@ def tearsheet(
         strategies      a mapping {name: Performance} of the strategies of a combined
                         result; with two or more, a Strategies section compares them and
                         gives the correlation of their session returns (full mode)
+        overfitting     the quick overfitting checks already computed for this
+                        performance; without it the page computes them
 
     The page follows the layout of OpenStatz's dashboard: a sticky header with links to
     the sections, a theme toggle and Export PDF (the browser's print), the title line
@@ -59,15 +61,32 @@ def tearsheet(
                    against the benchmark); Distribution (tiles, histogram of session
                    returns, box plot of session and monthly returns); Metrics (every
                    metric, the benchmark's beside it, sortable); Trades (trade tiles,
-                   the trade list of `openalgo.backtest.Result.trade_list`, sortable and
-                   paged, the charges by component, the R-multiples when a closed trade
-                   has an initial risk); Strategies (when given); Notes (how the figures
-                   were computed, the assumptions and warnings)
+                   gross and net P&L among them; the trading cost tiles of the closed
+                   trades: turnover, charges, slippage, trading cost, its share of
+                   gross P&L and its basis points of that turnover; MAE and
+                   MFE: the excursion tiles, a histogram of MAE percent and one of MFE
+                   percent, and each against the trade's return as scatter charts,
+                   winners as circles and the others as crosses, or one line when the
+                   trades have no excursion columns or none closed; the trade list of
+                   `openalgo.backtest.Result.trade_list` with its MAE and MFE, sortable
+                   and paged; the charges by component with the slippage and the
+                   trading cost under their total; the R-multiples when a closed trade
+                   has an initial risk); Overfitting checks (the quick checks of the
+                   trade list, `openalgo.backtest._robust._quick`: random out of
+                   sample, trade reshuffle, trade resample and variance at 200 runs,
+                   scored, or "too few trades to judge" below 30 closed trades);
+                   Strategies (when given); Notes (how the figures were computed, the
+                   assumptions and warnings)
         "basic"    the overview, cumulative return and period returns, the drawdown
                    chart and worst drawdowns, the monthly heatmap and yearly returns,
-                   the trades and charges, and the notes
+                   the trades, the trading cost, the MAE and MFE histograms and the
+                   charges, the overfitting checks, and the notes
         "metrics"  every metric with its value and definition, and the assumptions
-        "charts"   every chart and nothing else
+        "charts"   every chart and nothing else, the MAE and MFE histograms and
+                   scatter charts included
+
+    A money tile shows paise when the amount is under Rs 1,000 (Rs 3.60), whole rupees
+    above.
 
     Every figure is the SDK's: a metric of the Performance or a cell of its tables. A
     tile's subline is the benchmark's figure, measured as the strategy's is, where a
@@ -90,6 +109,7 @@ def tearsheet(
         mode=mode,
         log_scale=log_scale,
         benchmark_name=bench_name,
+        overfitting=getattr(result_like, "overfitting", None),
     )
     if path is None:
         return page
@@ -157,9 +177,11 @@ def render(
     mode: str = "full",
     log_scale: bool = False,
     benchmark_name: str | None = None,
+    overfitting: object = None,
 ) -> str:
-    """The HTML page for `performance` in `mode` (see `tearsheet`). Raises ConfigError
-    for an unknown mode."""
+    """The HTML page for `performance` in `mode` (see `tearsheet`); `overfitting` is its
+    quick overfitting checks when already computed. Raises ConfigError for an unknown
+    mode."""
     if mode not in MODES:
         raise ConfigError(f"mode is one of {MODES}, got {mode!r}")
     view = _dashboard.View(
@@ -171,6 +193,7 @@ def render(
         strategies=strategies,
         log_scale=log_scale,
         parts=_dashboard.MODE_PARTS[mode],
+        overfitting=overfitting,
     )
     return _dashboard.render(view, __version__)
 

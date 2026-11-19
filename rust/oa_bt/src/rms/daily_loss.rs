@@ -47,7 +47,37 @@ pub struct DailyLossMeasure {
     counted_from: Option<AccountTotals>,
 }
 
+/// The account totals a `DailyLossMeasure` keeps, as a live session saves them and gives
+/// them back at a restart (16-session-design R14).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DailyLossTotals {
+    /// Account totals when the strategy last became flat.
+    pub flat: AccountTotals,
+    /// Account totals at the first fill of the live run, while a run is live.
+    pub live_run_from: Option<AccountTotals>,
+    /// Account totals at the first fill of the first run counted in this session.
+    pub counted_from: Option<AccountTotals>,
+}
+
 impl DailyLossMeasure {
+    /// The totals the measure keeps (`DailyLossTotals`).
+    pub fn totals(&self) -> DailyLossTotals {
+        DailyLossTotals {
+            flat: self.flat_totals,
+            live_run_from: self.live_run_from,
+            counted_from: self.counted_from,
+        }
+    }
+
+    /// The measure that kept `totals`, as a live session saved it.
+    pub fn resume(totals: DailyLossTotals) -> DailyLossMeasure {
+        DailyLossMeasure {
+            flat_totals: totals.flat,
+            live_run_from: totals.live_run_from,
+            counted_from: totals.counted_from,
+        }
+    }
+
     /// A new session began: runs that ended before it stop counting, and the live run
     /// counts from its first fill.
     pub fn start_session(&mut self) {

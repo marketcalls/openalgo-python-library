@@ -21,7 +21,8 @@ use super::pause::Pause;
 impl Engine {
     /// Steps 1 to 6 of a slice. Returns the timer pause of step 2 when timers are due
     /// (`timers`); the slice then goes on with `finish_open_slice` at the next
-    /// `advance`.
+    /// `advance`. In a live session the timers of most slices fired ahead of them
+    /// (`venue_clock`).
     pub(super) fn open_slice(&mut self, slice: &SliceInfo) -> Result<Option<Pause>, KernelError> {
         // Step 1: session open and reference events. The session's intraday times are
         // resolved on first use (`session_times`); a futures roll is planned before the
@@ -29,6 +30,11 @@ impl Engine {
         // configured yet.
         self.risk_session_open(slice);
         self.renew_old_gtts(slice)?;
+        self.apply_held_changes(slice)?;
+        if self.timers_fired_ahead(slice) {
+            self.finish_open_slice(slice)?;
+            return Ok(None);
+        }
         if let Some(pause) = self.timers_pause(slice) {
             self.fill_due_orders(slice)?;
             return Ok(Some(pause));
@@ -50,8 +56,12 @@ impl Engine {
 
     /// Step 2: queued orders fill at the open; then the square-off timer; then the
     /// rebalance buys, after every instrument's sales (`rebalance`); then the futures
-    /// rolls due at this open (`roll`).
+    /// rolls due at this open (`roll`). In a live session the venue fills the orders and
+    /// the engine's exits were sent as the session reached this open (`venue_exits`).
     fn step_open_fills(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
+        if self.is_external() {
+            return Ok(());
+        }
         for index in 0..self.instruments.len() {
             let instrument = InstrumentId(index as u32);
             let Some(bar) = self.market.bar(instrument, slice.index) else {
@@ -59,35 +69,51 @@ impl Engine {
             };
             self.risk_exits_at_open(slice, instrument, bar.open)?;
             self.gtt_exits_at_open(slice, instrument, bar.open)?;
-            for id in self.book.queued_for(instrument) {
+            let queued = self
+                .fill_model()
+                .is_none()
+                .then(|| self.book.queued_for(instrument));
+            for id in queued.unwrap_or_default() {
                 self.fill_queued(slice, id, bar.open)?;
             }
             self.time_exit_at_open(slice, instrument, bar.open)?;
             self.square_off_at_open(slice, instrument, bar.open)?;
         }
-        self.fill_rebalance_buys(slice)?;
+        if self.fill_model().is_none() {
+            self.fill_rebalance_buys(slice)?;
+        }
         self.roll_due_futures(slice)
     }
 
     /// Step 3: engine-held leg levels (`legs::test_leg_levels`), then GTTs
     /// (`gtt_fire::test_gtts`), then resting DAY orders (`resting::test_resting_orders`),
-    /// each across the instruments in registration order.
+    /// each across the instruments in registration order. In a live session the venue
+    /// fills the resting orders and holds the legs' stops, and the targets are tested on
+    /// ticks (`venue_ticks`); GTTs are not built there (`venue`).
     fn step_levels(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
+        if self.is_external() {
+            return Ok(());
+        }
         self.test_leg_levels(slice)?;
         self.test_gtts(slice)?;
-        self.test_resting_orders(slice)
+        self.test_resting_orders(slice)?;
+        self.fill_queued_at_model(slice)
     }
 
     /// Step 4: trail and breakeven ratchets, in force from the next slice
     /// (`legs::ratchet_legs`); then the GTTs of CNC and NRML legs follow their levels
-    /// (`gtt::sync_gtts`).
+    /// (`gtt::sync_gtts`). A live session ratchets on ticks instead (`venue_ticks`).
     fn step_ratchets(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
+        if self.is_external() {
+            return Ok(());
+        }
         self.ratchet_legs(slice)?;
         self.sync_gtts(slice)
     }
 
     /// Step 5: mark every open position at its close, or at its last close and flagged
-    /// stale when it has no bar (SPEC-07).
+    /// stale when it has no bar (SPEC-07); then every open trade sees the slice's bar
+    /// (`excursion`).
     fn step_mark(&mut self, slice: &SliceInfo) {
         for (index, last) in self.last_close.iter_mut().enumerate() {
             if let Some(bar) = self.market.bar(InstrumentId(index as u32), slice.index) {
@@ -112,6 +138,7 @@ impl Engine {
                 });
             }
         }
+        self.see_slice_bars(slice);
     }
 
     /// Step 7: pause when a strategy bar closes, or when events wait for callbacks.
@@ -135,16 +162,30 @@ impl Engine {
         })
     }
 
-    /// Step 8 when the session ends at this slice (expiry of DAY orders, the `eod`
+    /// Step 8 when the session ends at this slice (the end of DAY orders, the `eod`
     /// close, futures expiry and mark to market (`settlement`), the day's contract
     /// notes, the credit of the day's withheld sale proceeds (`sale_credit`)), the
     /// contract notes of a run that ends before its session close (`run_end`), then the
-    /// end-of-slice records.
+    /// end-of-slice records. A live session closes no position itself at the session
+    /// close, and completes it only once the venue has ended its DAY orders
+    /// (`venue_clock`).
     pub(super) fn close_slice(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         if slice.closes_session {
-            self.expire_day_orders(slice)?;
+            self.end_day_orders(slice)?;
+            if self.session_close_waits(slice) {
+                return Ok(());
+            }
+        }
+        self.complete_close(slice)
+    }
+
+    /// The rest of step 8 once the DAY orders have ended, then the records.
+    pub(super) fn complete_close(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
+        if slice.closes_session {
             self.risk_exits_at_session_close(slice)?;
-            self.close_intraday_positions(slice)?;
+            if !self.is_external() {
+                self.close_intraday_positions(slice)?;
+            }
             self.settle_futures(slice)?;
             self.settle_contract_notes(slice);
             self.credit_withheld_sales();
@@ -156,7 +197,7 @@ impl Engine {
     }
 
     /// Expire every DAY order whose validity ends with this session.
-    fn expire_day_orders(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
+    pub(super) fn expire_day_orders(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         let ending: Vec<_> = self
             .book
             .working()
@@ -199,7 +240,7 @@ impl Engine {
     }
 
     /// A position-history row for every position that changed in this slice.
-    fn record_levels(&mut self, slice: &SliceInfo) {
+    pub(super) fn record_levels(&mut self, slice: &SliceInfo) {
         for key in std::mem::take(&mut self.record.changed) {
             let Some(position) = self.portfolio.position(key) else {
                 continue;
@@ -229,7 +270,7 @@ impl Engine {
     }
 
     /// One row of the equity series, at the slice's close.
-    fn record_equity(&mut self, slice: &SliceInfo) {
+    pub(super) fn record_equity(&mut self, slice: &SliceInfo) {
         let account = self.portfolio.account;
         let unrealized = self.portfolio.unrealized_rupees();
         let exposure = self

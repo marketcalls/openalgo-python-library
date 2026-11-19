@@ -6,28 +6,34 @@
 //! the queries; `finish` returns the result once the grid is exhausted. The steps
 //! themselves are in `steps`, order submission in `submit`, fills in `fills`.
 
+use std::collections::BTreeMap;
+
 use crate::charges::ChargeBook;
-use crate::exec::{InstrumentId, InstrumentSpec, Order, OrderBook, OrderId};
+use crate::exec::{InstrumentId, InstrumentSpec, OrderBook, OrderId};
 use crate::market::calendar::Calendar;
-use crate::model::{Exchange, Product, TsNanos};
-use crate::portfolio::{Portfolio, Position, PositionKey};
+use crate::model::TsNanos;
+use crate::portfolio::{Portfolio, PositionKey};
 use crate::rms::LegState;
 
 use super::accounting::charge_book;
-use super::clock::{SliceInfo, Timeline};
+use super::clock::{single_exchange, SliceInfo, Timeline};
 use super::config::{RunConfig, RunSetup};
 use super::error::KernelError;
 use super::event::{Event, EventStamp, Step};
+use super::exit_scale::ExitScales;
 use super::futures::FuturesDesk;
 use super::gtt::GttDesk;
+use super::held_changes::HeldChange;
+use super::live_clock::range_end;
 use super::market_data::MarketData;
 use super::output::{settle_trade_charges, FinalPosition, GrossPnl, Recorder, RunOutput};
 use super::pause::Pause;
-use super::run_end::{end_of_run, RunEnd};
+use super::run_end::{end_of_run, Ending, RunEnd};
 use super::sale_credit::SessionBuys;
 use super::session::SessionTimes;
 use super::strategy_risk::StrategyRisk;
 use super::timers::TimerBook;
+use super::venue::VenueDesk;
 
 /// Where the state machine stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,27 +45,14 @@ pub(super) enum Phase {
     /// Paused for timers in step 2 of this slice; the rest of the slice runs on the
     /// next `advance`.
     Timers(SliceInfo),
+    /// A live session paused for the timers due at the open of this slice, which has not
+    /// run (`venue_clock`); the next `advance` makes the engine's exits due at that open.
+    Ahead(SliceInfo),
+    /// A live session's close of this slice, waiting for the venue to end its orders
+    /// (`venue_clock`); the rest of step 8 runs once they have.
+    Closing(SliceInfo),
     /// The grid is exhausted.
     Finished,
-}
-
-/// The account as a strategy sees it, rupees.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct AccountView {
-    /// Capital plus realized minus costs plus unrealized.
-    pub equity_rupees: f64,
-    /// What the account can trade with (`Portfolio::free_cash_rupees`): equity not
-    /// blocked as margin, with delivery holdings of shares at their cost and sale
-    /// proceeds not yet credited left out.
-    pub free_cash_rupees: f64,
-    /// Gross P&L realized since the start.
-    pub realized_rupees: f64,
-    /// Open P&L at the last marks.
-    pub unrealized_rupees: f64,
-    /// Charges paid since the start.
-    pub costs_rupees: f64,
-    /// Margin blocked by open positions.
-    pub margin_rupees: f64,
 }
 
 /// The kernel of one run.
@@ -96,26 +89,21 @@ pub struct Engine {
     pub(super) run_end: RunEnd,
     /// The session's CNC buys, for the credit of a sale (`sale_credit`).
     pub(super) session_buys: SessionBuys,
-}
-
-/// The one exchange of a Phase 1 run.
-fn single_exchange(instruments: &[InstrumentSpec]) -> Result<Exchange, KernelError> {
-    let Some(first) = instruments.first() else {
-        return Err(KernelError::InvalidConfig {
-            field: "symbol",
-            reason: "a run needs at least one instrument".to_string(),
-        });
-    };
-    if instruments
-        .iter()
-        .any(|spec| spec.exchange != first.exchange)
-    {
-        return Err(KernelError::NotBuilt {
-            feature: "a run across several exchanges",
-            instead: "run the instruments of each exchange in a backtest of their own",
-        });
-    }
-    Ok(first.exchange)
+    /// The slices `advance` may run, as the index of the first one it may not: `None`
+    /// runs them all (a backtest), `Some` holds before that slice (`hold`, `release`).
+    pub(super) released: Option<usize>,
+    /// Who fills the orders, and the commands for an external venue (`venue`).
+    pub(super) venue: VenueDesk,
+    /// Orders held for a delay, by id: the instant each may fill from (`delay`).
+    pub(super) held: BTreeMap<OrderId, TsNanos>,
+    /// The strategy's cancellations and modifications held for a delay, in the order
+    /// they were decided (`held_changes`).
+    pub(super) held_changes: Vec<HeldChange>,
+    /// The positions a fill model opened in this slice, whose ratchets see only the fill
+    /// bar's close (`fill_model`).
+    pub(super) model_opened: Vec<PositionKey>,
+    /// The factors of the trades' leg rules (`exit_scale`).
+    pub(super) exit_scales: ExitScales,
 }
 
 impl Engine {
@@ -126,6 +114,12 @@ impl Engine {
     /// `Calendar`, `Resample`, `Portfolio` (capital), and `NotBuilt` for settings the
     /// kernel cannot honour yet.
     pub fn new(setup: RunSetup) -> Result<Engine, KernelError> {
+        Engine::assemble(setup, Ending::AtLastBar)
+    }
+
+    /// Build a run that ends as `ending` says (`new` for a backtest, `new_session` for
+    /// a live session); the errors of `new`.
+    pub(super) fn assemble(setup: RunSetup, ending: Ending) -> Result<Engine, KernelError> {
         let RunSetup {
             config,
             calendar,
@@ -139,8 +133,15 @@ impl Engine {
         }
         let mut timeline = Timeline::build(&calendar, exchange, &config)?;
         let market = MarketData::build(bars, &instruments, &timeline, &calendar, &config)?;
-        let (slices, run_end) = end_of_run(&timeline, &market, instruments.len(), config.present)?;
-        timeline.end_after(slices);
+        let run_end = match ending {
+            Ending::AtLastBar => {
+                let (slices, run_end) =
+                    end_of_run(&timeline, &market, instruments.len(), config.present)?;
+                timeline.end_after(slices);
+                run_end
+            }
+            Ending::AtRangeEnd => range_end(&timeline)?,
+        };
         let portfolio = Portfolio::new(config.capital_rupees)?;
         config
             .market
@@ -170,6 +171,12 @@ impl Engine {
             futures: FuturesDesk::default(),
             run_end,
             session_buys: SessionBuys::default(),
+            released: None,
+            venue: VenueDesk::default(),
+            held: BTreeMap::new(),
+            held_changes: Vec::new(),
+            model_opened: Vec::new(),
+            exit_scales: ExitScales::default(),
         })
     }
 
@@ -179,16 +186,28 @@ impl Engine {
     /// of step 2 onwards; from step 7, step 8). It returns `Pause::Timers` in step 2 of
     /// a slice where timers are due, `Pause::BarClose` at step 7 of a slice where a
     /// strategy bar closes (or events are waiting and `deliver_events` is set), and
-    /// `Pause::Finished` once the grid is exhausted.
+    /// `Pause::Finished` once the grid is exhausted, and `Pause::Waiting` before a slice
+    /// not released to an engine that holds (`hold`).
+    ///
+    /// A live session also returns `Pause::Timers` at the close of the slice before the
+    /// open the timers are due at, and `Pause::Waiting` at a session close until the
+    /// venue has ended its orders (`venue_clock`).
     ///
     /// Errors: `RunFinished` after `Pause::Finished`; any error of a step.
     pub fn advance(&mut self) -> Result<Pause, KernelError> {
         loop {
             let slice = match self.phase {
                 Phase::Finished => return Err(KernelError::RunFinished),
-                Phase::Paused(slice) => {
-                    self.close_slice(&slice)?;
-                    self.phase = Phase::Ready(slice.index + 1);
+                Phase::Paused(slice) => match self.end_slice(&slice)? {
+                    Some(pause) => return Ok(pause),
+                    None => continue,
+                },
+                Phase::Closing(slice) => match self.wait_for_close(&slice)? {
+                    Some(pause) => return Ok(pause),
+                    None => continue,
+                },
+                Phase::Ahead(next) => {
+                    self.resume_ahead(&next)?;
                     continue;
                 }
                 Phase::Timers(slice) => {
@@ -196,6 +215,10 @@ impl Engine {
                     slice
                 }
                 Phase::Ready(index) => {
+                    let held = self.released.is_some_and(|released| index >= released);
+                    if held && index < self.timeline.len() {
+                        return Ok(Pause::Waiting { next_slice: index });
+                    }
                     let Some(slice) = self.timeline.slice(index) else {
                         self.phase = Phase::Finished;
                         let events = std::mem::take(&mut self.undelivered);
@@ -212,90 +235,22 @@ impl Engine {
                 self.phase = Phase::Paused(slice);
                 return Ok(pause);
             }
-            self.close_slice(&slice)?;
-            self.phase = Phase::Ready(slice.index + 1);
+            if let Some(pause) = self.end_slice(&slice)? {
+                return Ok(pause);
+            }
         }
-    }
-
-    /// The decision instant of the current pause (UTC nanoseconds), `None` when the
-    /// engine is not paused.
-    pub fn decision_instant(&self) -> Option<TsNanos> {
-        self.decision_point().map(|(_, decided_at, _)| decided_at)
     }
 
     /// The paused slice, the decision instant and the step of the current pause: the
-    /// slice's close in step 7, its open at a timer pause in step 2.
+    /// slice's close in step 7, its open at a timer pause in step 2 (the open of the next
+    /// slice for timers a live session fires ahead of it).
     pub(super) fn decision_point(&self) -> Option<(SliceInfo, TsNanos, Step)> {
         match self.phase {
             Phase::Paused(slice) => Some((slice, slice.close, Step::Callbacks)),
-            Phase::Timers(slice) => Some((slice, slice.open, Step::OpenFills)),
+            Phase::Timers(slice) | Phase::Ahead(slice) => {
+                Some((slice, slice.open, Step::OpenFills))
+            }
             _ => None,
-        }
-    }
-
-    /// The instruments, in registration order.
-    pub fn instruments(&self) -> &[InstrumentSpec] {
-        &self.instruments
-    }
-
-    /// True once `advance` has returned `Pause::Finished`.
-    pub fn is_finished(&self) -> bool {
-        self.phase == Phase::Finished
-    }
-
-    /// The position of an instrument and product, if it was ever opened.
-    pub fn position(&self, instrument: InstrumentId, product: Product) -> Option<&Position> {
-        self.portfolio.position(PositionKey {
-            instrument,
-            product,
-        })
-    }
-
-    /// The leg state (levels in force) of an open position.
-    pub fn leg(&self, instrument: InstrumentId, product: Product) -> Option<&LegState> {
-        let key = PositionKey {
-            instrument,
-            product,
-        };
-        self.legs
-            .iter()
-            .find(|(k, _)| *k == key)
-            .map(|(_, leg)| leg)
-    }
-
-    /// An order by id.
-    pub fn order(&self, id: OrderId) -> Option<&Order> {
-        self.book.get(id)
-    }
-
-    /// The orders that can still fill, in id order.
-    pub fn working_orders(&self) -> Vec<OrderId> {
-        self.book.working().map(|order| order.id).collect()
-    }
-
-    /// True when an order that would open or add is still working on the instrument
-    /// (a queued entry counts as not flat for a condition strategy, SPEC-29).
-    pub fn has_pending_entry(&self, instrument: InstrumentId) -> bool {
-        self.book
-            .working()
-            .any(|order| order.request.instrument == instrument && !order.request.reduce_only)
-    }
-
-    /// The last close seen of an instrument, rupees.
-    pub fn last_close(&self, instrument: InstrumentId) -> Option<f64> {
-        self.last_close.get(instrument.index()).copied().flatten()
-    }
-
-    /// The account at the last marks.
-    pub fn account(&self) -> AccountView {
-        let account = &self.portfolio.account;
-        AccountView {
-            equity_rupees: self.portfolio.equity_rupees(),
-            free_cash_rupees: self.free_cash_rupees(),
-            realized_rupees: account.realized_rupees,
-            unrealized_rupees: self.portfolio.unrealized_rupees(),
-            costs_rupees: account.costs_rupees,
-            margin_rupees: account.margin_blocked_rupees,
         }
     }
 

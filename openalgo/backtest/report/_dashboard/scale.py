@@ -49,6 +49,18 @@ def ticks(low: float, high: float, count: int) -> list[float]:
     return [round(i * step, TICK_DECIMALS) for i in range(first, last + 1)]
 
 
+def percent_decimals(low: float, high: float, count: int) -> int:
+    """Decimals that show the ticks of [low, high] (fractions) in `count` parts as
+    distinct percentages: as many as the round step needs (a step of 0.0005 is 0.05%, 2
+    decimals), none for a step of a whole percent or more, 1 for an empty span."""
+    step_pct = round_step(low, high, count) * 100
+    if step_pct == 0:
+        return 1
+    # A power of ten such as 0.1 must keep its own decimals: log10 of the float 0.1 may
+    # read a hair below -1.
+    return max(0, -math.floor(math.log10(step_pct) + 1e-9))
+
+
 def widen(low: float, high: float, count: int = 10) -> tuple[float, float]:
     """The axis [low, high] widened outward to multiples of its round step, repeated
     until the step no longer changes. A zero span is returned as it is."""
@@ -108,6 +120,7 @@ __all__ = [
     "Linear",
     "bands",
     "bins",
+    "percent_decimals",
     "quartiles",
     "round_step",
     "ticks",

@@ -3,7 +3,7 @@
 //! `o<n>`), instruments as their registration index, instants as int64 UTC nanoseconds.
 
 use numpy::IntoPyArray;
-use oa_bt::engine::{Event, EventStamp, OrderEventKind, Pause, StrategyBar};
+use oa_bt::engine::{AccountView, Event, EventStamp, OrderEventKind, Pause, StrategyBar};
 use oa_bt::exec::{GttEvent, Order};
 use oa_bt::portfolio::Position;
 use oa_bt::rms::{RiskEventName, RiskScope, TradingState, TradingStateCause};
@@ -12,6 +12,22 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString};
 
 use super::columns::{row, ORDER_COLUMNS};
+
+/// The account as it crosses: (equity, free cash, realized, unrealized, costs, margin),
+/// rupees.
+pub(super) type AccountTuple = (f64, f64, f64, f64, f64, f64);
+
+/// The account at the last marks as it crosses (`AccountTuple`).
+pub(super) fn account(view: &AccountView) -> AccountTuple {
+    (
+        view.equity_rupees,
+        view.free_cash_rupees,
+        view.realized_rupees,
+        view.unrealized_rupees,
+        view.costs_rupees,
+        view.margin_rupees,
+    )
+}
 
 pub(super) fn stamp_into(dict: &Bound<'_, PyDict>, stamp: EventStamp) -> PyResult<()> {
     dict.set_item("slice", stamp.slice)?;
@@ -144,7 +160,8 @@ pub(super) type PauseTuple<'py> = (
 );
 
 /// A pause as a tuple (kind, decided_at, bars, events, timers): `kind` "bar_close",
-/// "timers" or "finished" (interned, so the driver compares it by identity first), the
+/// "timers", "finished" or "waiting" (an engine that holds, before a slice not
+/// released; interned, so the driver compares it by identity first), the
 /// decision instant (UTC nanoseconds, None when finished), the strategy bars as tuples
 /// (instrument, ts_open, ts_close, open, high, low, close, volume), the events as dicts
 /// and the timer ids (timer pauses). A tuple, not a dict: the event driver unpacks one
@@ -183,6 +200,13 @@ pub(super) fn pause<'py>(py: Python<'py>, pause: &Pause) -> PyResult<PauseTuple<
         }
         Pause::Finished { .. } => (
             intern!(py, "finished").clone(),
+            None,
+            none(),
+            events,
+            none(),
+        ),
+        Pause::Waiting { .. } => (
+            intern!(py, "waiting").clone(),
             None,
             none(),
             events,

@@ -1,9 +1,10 @@
 //! An order request from Python (a dict built by `openalgo/backtest/_orders.py`),
-//! parsed into `oa_bt::exec::OrderRequest`.
+//! parsed into `oa_bt::exec::OrderRequest`, and the outcome of its submission back.
 //!
 //! Distances cross as (unit, value, atr) with unit "points", "pct", "ticks", "rupees"
 //! or "atr" (value is then the multiple and atr the resolved ATR in rupees).
 
+use oa_bt::engine::Submission;
 use oa_bt::exec::{InstrumentId, OrderRequest, OrderType, QuantitySpec, Validity};
 use oa_bt::model::{Product, Side};
 use oa_bt::rms::{
@@ -148,6 +149,18 @@ fn order_type(dict: &Bound<'_, PyDict>) -> PyResult<OrderType> {
         },
         _ => return Err(unknown("order type", &code, "MARKET, LIMIT, SL or SL-M")),
     })
+}
+
+/// A submission as (outcome, order id, code): ("submitted", id, None), ("rejected", id,
+/// reject code) or ("skipped", None, skip reason).
+pub(super) type SubmissionTuple = (&'static str, Option<u64>, Option<&'static str>);
+
+pub(super) fn submission_tuple(outcome: Submission) -> SubmissionTuple {
+    match outcome {
+        Submission::Submitted(id) => ("submitted", Some(id.0), None),
+        Submission::Rejected(id, code) => ("rejected", Some(id.0), Some(code.code())),
+        Submission::Skipped(reason) => ("skipped", None, Some(reason.code())),
+    }
 }
 
 /// An order request from its dict.

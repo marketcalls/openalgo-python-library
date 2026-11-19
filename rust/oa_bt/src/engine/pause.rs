@@ -48,13 +48,21 @@ pub enum Pause {
     /// The grid is exhausted. Positions still open are marked at their last close and
     /// reported as open; `Engine::finish` returns the result.
     Finished { events: Vec<Event> },
+    /// The engine holds before a slice not released yet (`Engine::hold`,
+    /// `Engine::release`): live trading releases each slice once it has closed. Nothing
+    /// of that slice has run, and the events since the last pause wait for the next
+    /// step-7 pause, as in a run that never held.
+    Waiting {
+        /// Index of the slice that runs next, once released.
+        next_slice: usize,
+    },
 }
 
 impl Pause {
-    /// The events delivered with this pause (none with a timer pause).
+    /// The events delivered with this pause (none with a timer or waiting pause).
     pub fn events(&self) -> &[Event] {
         match self {
-            Pause::Timers { .. } => &[],
+            Pause::Timers { .. } | Pause::Waiting { .. } => &[],
             Pause::BarClose { events, .. } | Pause::Finished { events } => events,
         }
     }
@@ -68,12 +76,17 @@ pub trait Driver {
     fn on_pause(&mut self, engine: &mut Engine, pause: &Pause) -> Result<(), KernelError>;
 }
 
-/// Run a Rust driver from the current position of the engine to the end of the grid.
+/// Run a Rust driver from the current position of the engine to the end of the grid,
+/// or, for an engine that holds (`Engine::hold`), to the first slice not released: the
+/// driver is not called for that pause, and `run` can be called again after `release`.
 ///
 /// Errors: the first error of `advance` or of the driver.
 pub fn run(engine: &mut Engine, driver: &mut impl Driver) -> Result<(), KernelError> {
     loop {
         let pause = engine.advance()?;
+        if matches!(pause, Pause::Waiting { .. }) {
+            return Ok(());
+        }
         driver.on_pause(engine, &pause)?;
         if matches!(pause, Pause::Finished { .. }) {
             return Ok(());

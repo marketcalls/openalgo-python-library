@@ -12,9 +12,10 @@ use crate::market::costs::CostModel;
 use crate::market::facts::InstrumentMarket;
 use crate::model::{Day, Product, Side};
 
-use super::{fill_segment, ChargeError};
+use super::{fill_segment, price_units, ChargeError};
 
-/// Rupees an order of `units` at `price_rupees` is estimated to cost on `day`.
+/// Rupees an order of `units` at `price_rupees` is estimated to cost on `day`, on its
+/// traded value (`price_units`).
 ///
 /// Errors: `Cost` when the fill cannot be priced. Zero units cost nothing.
 #[allow(clippy::too_many_arguments)]
@@ -32,12 +33,13 @@ pub fn estimate_entry(
         return Ok(0.0);
     }
     let segment = fill_segment(spec, facts, product)?;
-    let cost = model.fill_cost(segment, side, price_rupees, units, day)?;
+    let quantity = price_units(spec, units);
+    let cost = model.fill_cost(segment, side, price_rupees, quantity, day)?;
     Ok(model.reported_total(&cost))
 }
 
 /// Rupees a buy and a sell of `units` at `price_rupees` on `day` are estimated to
-/// cost together.
+/// cost together, on their traded value (`price_units`).
 ///
 /// Errors: `Cost` when the fills cannot be priced. Zero units cost nothing.
 pub fn estimate_round_trip(
@@ -53,6 +55,7 @@ pub fn estimate_round_trip(
         return Ok(0.0);
     }
     let segment = fill_segment(spec, facts, product)?;
-    let cost = model.round_trip_cost(segment, price_rupees, price_rupees, units, day, day)?;
+    let quantity = price_units(spec, units);
+    let cost = model.round_trip_cost(segment, price_rupees, price_rupees, quantity, day, day)?;
     Ok(model.reported_total(&cost))
 }

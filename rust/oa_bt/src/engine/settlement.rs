@@ -43,14 +43,15 @@ struct Marked {
 
 impl Engine {
     /// Step 8: settle the contracts expiring today, then post the mark to market of
-    /// every futures position (module docs).
+    /// every futures position (module docs). A live session settles nothing at expiry:
+    /// the exchange does, and its positions are reported as they stand (`venue`).
     ///
     /// Errors: those of `execute_fill`.
     pub(super) fn settle_futures(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         let stamp = Self::stamp(slice, Step::SessionClose);
         let expiring: Vec<InstrumentId> = (0..self.instruments.len())
             .map(|index| InstrumentId(index as u32))
-            .filter(|&instrument| self.expires_on(instrument, slice.day))
+            .filter(|&instrument| !self.is_external() && self.expires_on(instrument, slice.day))
             .collect();
         for instrument in expiring {
             self.cancel_orders_at_expiry(stamp, instrument)?;

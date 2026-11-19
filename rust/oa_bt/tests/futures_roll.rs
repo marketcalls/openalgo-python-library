@@ -10,8 +10,8 @@
 
 use oa_bt::engine::{
     run, BarColumns, CostConfig, Driver, Engine, Event, FillTiming, FuturesSeries,
-    IntradayOverrides, KernelError, Pause, QuantityMode, RollRule, RunConfig, RunOutput, RunSetup,
-    SeriesContract, SettlementKind, Step, StrategyInterval,
+    IntradayOverrides, KernelError, Pause, Perturbation, QuantityMode, RollRule, RunConfig,
+    RunOutput, RunSetup, SeriesContract, SettlementKind, Step, StrategyInterval,
 };
 use oa_bt::exec::{
     FillAt, InstrumentId, InstrumentSpec, OrderRequest, OrderStatus, OrderType, QuantitySpec,
@@ -115,6 +115,7 @@ fn config() -> RunConfig {
         sizing: SizingControls::default(),
         intraday: IntradayOverrides::default(),
         deliver_events: false,
+        perturbation: Perturbation::default(),
     }
 }
 

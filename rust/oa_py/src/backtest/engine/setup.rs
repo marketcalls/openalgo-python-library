@@ -7,13 +7,14 @@
 use numpy::PyReadonlyArray1;
 use oa_bt::data::resample::CalendarUnit;
 use oa_bt::engine::{
-    BarColumns, FillTiming, IntradayOverrides, QuantityMode, RunConfig, StrategyInterval,
+    BarColumns, BarPrice, FillModel, FillTiming, IntradayOverrides, Perturbation, QuantityMode,
+    RunConfig, RunSetup, StrategyInterval,
 };
 use oa_bt::exec::InstrumentSpec;
 use oa_bt::market::calendar::BaseInterval;
 use oa_bt::market::margin::MarginModel;
 use oa_bt::market::slippage::SlippageSpec;
-use oa_bt::model::InstrumentKind;
+use oa_bt::model::{InstrumentKind, Product};
 use oa_bt::rms::{
     AfterRiskExit, Distance, PositionCap, RiskBasis, RiskCap, ScaleLimits, Spacing,
     StrategyRiskConfig,
@@ -21,7 +22,7 @@ use oa_bt::rms::{
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use super::super::calendar::{parse_exchange, PyDay};
+use super::super::calendar::{parse_exchange, NativeCalendar, PyDay};
 use super::NativeEngineInputError;
 
 /// A required key of a dict, extracted as `T`.
@@ -53,6 +54,12 @@ pub(super) fn optional<'py, T: FromPyObject<'py>>(
 
 pub(super) fn unknown(what: &str, value: &str, allowed: &str) -> PyErr {
     NativeEngineInputError::new_err(format!("unknown {what} {value:?}: use {allowed}"))
+}
+
+/// A product from its code ("CNC", "MIS", "NRML").
+pub(super) fn parse_product(code: &str) -> PyResult<Product> {
+    Product::from_code(code)
+        .ok_or_else(|| NativeEngineInputError::new_err(format!("unknown product {code:?}")))
 }
 
 /// The base interval: nanoseconds of an intraday interval, or None for daily.
@@ -213,11 +220,7 @@ pub(super) fn run_config(dict: &Bound<'_, PyDict>) -> PyResult<RunConfig> {
         present: optional(dict, "present")?,
         base: base_interval(optional(dict, "base_nanos")?),
         strategy_interval: strategy_interval(&interval)?,
-        fill: match fill.as_str() {
-            "next_open" => FillTiming::NextOpen,
-            "close" => FillTiming::Close,
-            _ => return Err(unknown("fill", &fill, "next_open or close")),
-        },
+        fill: fill_timing(&fill)?,
         quantity_mode: match mode.as_str() {
             "fractional" => QuantityMode::Fractional,
             "venue" => QuantityMode::Venue,
@@ -236,6 +239,39 @@ pub(super) fn run_config(dict: &Bound<'_, PyDict>) -> PyResult<RunConfig> {
             square_off_minute: optional(dict, "square_off_minute")?,
         },
         deliver_events: field(dict, "deliver_events")?,
+        perturbation: perturbation(dict)?,
+    })
+}
+
+/// The fill names `bt.backtest` takes (`openalgo/backtest/_settings.py`): the next open,
+/// the decision bar's close, and the fill models of the liquidity check.
+fn fill_timing(fill: &str) -> PyResult<FillTiming> {
+    let model = |price, two_bars| Ok(FillTiming::Model(FillModel { price, two_bars }));
+    match fill {
+        "next_open" => Ok(FillTiming::NextOpen),
+        "close" => Ok(FillTiming::Close),
+        "next_close" => model(BarPrice::Close, false),
+        "next_mid" => model(BarPrice::Mid, false),
+        "next_ohlc4" => model(BarPrice::Ohlc4, false),
+        "next_close_2" => model(BarPrice::Close, true),
+        "next_mid_2" => model(BarPrice::Mid, true),
+        "next_ohlc4_2" => model(BarPrice::Ohlc4, true),
+        _ => Err(unknown(
+            "fill",
+            fill,
+            "next_open, close, next_close, next_mid, next_ohlc4, next_close_2, next_mid_2 or \
+             next_ohlc4_2",
+        )),
+    }
+}
+
+/// What a robustness rerun changes; an absent key changes nothing.
+fn perturbation(dict: &Bound<'_, PyDict>) -> PyResult<Perturbation> {
+    Ok(Perturbation {
+        delay_entries: optional(dict, "delay_entries")?.unwrap_or(0),
+        delay_exits: optional(dict, "delay_exits")?.unwrap_or(0),
+        bar_shift: optional(dict, "bar_shift")?.unwrap_or(0),
+        exit_scales: optional(dict, "exit_scales")?.unwrap_or_default(),
     })
 }
 
@@ -255,6 +291,25 @@ pub(super) fn instrument(dict: &Bound<'_, PyDict>) -> PyResult<InstrumentSpec> {
         freeze_quantity_units: optional(dict, "freeze_qty")?,
         cost_segment: None,
         last_trading_day: last_trading_day.map(|day| day.0),
+    })
+}
+
+/// The run setup from the calendar, the config dict, one dict per instrument and one
+/// tuple of bar arrays per instrument, in registration order.
+pub(super) fn run_setup(
+    calendar: &NativeCalendar,
+    config: &Bound<'_, PyDict>,
+    instruments: &[Bound<'_, PyDict>],
+    bars: &[BarArrays<'_>],
+) -> PyResult<RunSetup> {
+    Ok(RunSetup {
+        config: run_config(config)?,
+        calendar: calendar.inner.clone(),
+        instruments: instruments
+            .iter()
+            .map(instrument)
+            .collect::<PyResult<_>>()?,
+        bars: bars.iter().map(BarArrays::columns).collect(),
     })
 }
 

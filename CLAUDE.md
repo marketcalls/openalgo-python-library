@@ -119,7 +119,8 @@ with no Python dependency, driven by `bt.backtest` through `Engine.advance()`.
 |------|----------------|
 | `rust/oa_bt/` | Zero-dependency Rust kernel crate: `model` (shared types and IST time helpers), `market` (costs, calendars, margin, slippage), `data` (resampling), `metrics` (performance metrics), and the kernel: `engine` (the slice loop and stepping API), `exec` (orders, fills, GTT), `portfolio` (positions and tranches, ledger), `rms` (risk rules and trading states), `sizing` |
 | `rust/oa_py/src/backtest/` | PyO3 bindings, one file per area, exposed as `openalgo._oaindicators.backtest` |
-| `openalgo/backtest/` | Python package: `Strategy`, `backtest()` and its `Result` (`strategy.py`, `run.py`, `result.py`), costs, calendar, resample, data layer, reference tables, metrics and the HTML tearsheet (`report`). `import openalgo` does not import it |
+| `openalgo/backtest/` | Python package: `Strategy`, `backtest()` and its `Result` (`strategy.py`, `run.py`, `result.py`), `live()` and its `SessionResult` (`session_result.py`), costs, calendar, resample, data layer, reference tables, metrics, the HTML tearsheet (`report`) and the robustness and overfitting checks (`_robust`). `import openalgo` does not import it |
+| `openalgo/backtest/_live/` | The live layer behind `bt.live` (private, Phase 2): the session (start, loop, safe stop, close), its plan, the order worker and venue map, the stops supervisor, the risk watch and kill switch, the reconciler and restart, the order path, journal, mode guard, bars from ticks, feed link, data worker, preflight, alerts and the tick recorder; its `__init__.py` has the module table |
 | `test/backtest/` | pytest suite. It never contacts a server; anything that needs a client uses an in-process fake |
 
 ### Product decisions (set by the maintainer)
@@ -173,6 +174,22 @@ These are settled. Do not redesign around them without asking.
   2026-11-13).
 - **Whole shares by default.** `quantity_mode` defaults to "venue" (whole shares and lots);
   part shares only with `quantity_mode="fractional"` (maintainer, 2026-11-13).
+- **Live trading (Phase 2), decided 2026-11-15.** Live bars are built from WebSocket
+  ticks and stamped at their close, verified against broker candles (D27). Live mode is
+  allowed in the first live release, 2.3.0 (D28). A running `bt.live` is controlled by
+  Ctrl+C only, a safe stop (D29). No `expect_mode` change to the OpenAlgo server: the
+  mode guard uses each response's `mode` field and `analyzerstatus` polling (D30). A live
+  position's stop-loss is held by the broker (D31): SL-M for cash equity and futures, a
+  stop-limit with the limit 5 percent beyond the trigger for NFO and BFO options (they
+  accept no SL-M); the engine holds targets, trailing (by modifying the broker's stop)
+  and the daily loss limit on ticks. The plan is PRD 15-phase2-plan.md.
+- **Live sessions, decided 2026-11-16.** What Ctrl+C does with open positions is chosen per
+  run by `bt.live(on_stop="flatten" | "keep")` (default flatten). An unexplained
+  reconciliation mismatch locks entries and alerts, with only safe corrections; it never
+  exits a position. Entries without a stop are allowed in live, with a warning in the start
+  banner and the result. A change of the analyzer switch during a session locks it and
+  alerts with every position and its stop status; nothing more is sent. The session design
+  and its other decisions are PRD 16-session-design.md (section 10.0).
 - **Speed targets.** An empty `on_bar` makes at least 300k callbacks per second; an
   array or condition strategy over 1M bars, with charges, slippage and every metric,
   takes at most 2 seconds on a current desktop core (`benchmark/backtest_speed.py`).
@@ -261,6 +278,25 @@ version number cannot be reused afterwards, so macOS and Linux users would be le
 compiling the Rust core from the sdist.
 
     git tag vX.Y.Z && git push origin vX.Y.Z
+
+### GitHub release after PyPI
+
+Every version published to PyPI gets a GitHub release (maintainer, 2026-11-15). Create
+it once the tag's CI run has succeeded and the version is on PyPI, never before:
+
+1. Confirm the CI run for the tag passed, including "Publish to PyPI", and that
+   `https://pypi.org/pypi/openalgo/X.Y.Z/json` lists the five wheels and the sdist.
+2. Write the notes from the version's `CHANGELOG.md` section (and the README's "What's
+   New in X.Y.Z"): what changed for a user, any change in results, the checks run, a
+   link to the changelog, and an Install section (`pip install -U openalgo`). Plain text
+   rules apply: no emoji, no em or en dashes.
+3. Publish it from the existing tag, as the latest release, with no assets (the wheels
+   live on PyPI):
+
+       gh release create vX.Y.Z --verify-tag --latest \
+           --title "vX.Y.Z - short summary" --notes-file <notes.md>
+
+4. Check `gh release list`: the new release is marked Latest.
 
 ## Running / testing locally
 

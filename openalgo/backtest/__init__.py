@@ -1,11 +1,16 @@
-"""openalgo.backtest: backtesting engine for Indian markets (live trading is not built yet).
+"""openalgo.backtest: backtesting and live trading engine for Indian markets.
 
 Status: beta. `bt.backtest` runs one `bt.Strategy` class on OpenAlgo history or on your
 own bars, with Indian charges, slippage, session calendars and contract terms applied by
 default, and returns a `Result` with its tables, metrics and HTML tearsheet;
-`bt.optimize` sweeps a strategy's parameters over a grid. A part this version does not
-run raises NotImplementedError saying what to do instead: `bt.live`, `bt.walk_forward`,
-`bt.rebalance` and a run of several strategies among them.
+`bt.optimize` sweeps a strategy's parameters over a grid; `bt.walk_forward` re-fits them
+fold by fold through time; `bt.robustness` (and `result.robustness()`) runs the
+robustness and overfitting checks. `bt.live` trades the
+same strategy classes through OpenAlgo for today, in the mode set inside OpenAlgo (sandbox
+or live), and returns a `SessionResult`; `bt.record` records the feed's ticks for later
+replay, and `bt.read_ticks` reads a day of them back as a table. A part this version
+does not run raises NotImplementedError saying what to do
+instead: `bt.rebalance` and a backtest of several strategies among them.
 
     import openalgo.backtest as bt
 
@@ -19,7 +24,8 @@ run raises NotImplementedError saying what to do instead: `bt.live`, `bt.walk_fo
     result = bt.backtest(Demo, data=frame, capital=100_000, costs=None, slippage=0)
 
 `import openalgo` does not import this package. Submodules load on first use and no
-network call is made on import.
+network call is made on import; the live layer loads only when `bt.live`, `bt.record` or
+`bt.read_ticks` runs.
 """
 
 from importlib import import_module as _import_module
@@ -35,6 +41,7 @@ _SUBMODULES = (
     "resample",
     "result",
     "run",
+    "session_result",
     "size",
     "slippage",
     "strategy",
@@ -45,11 +52,16 @@ _SUBMODULES = (
 _EXPORTS = {
     "strategy": ("Strategy",),
     "result": ("Result",),
+    "session_result": ("SessionResult", "RecordSummary"),
     "_optimize_result": ("OptimizeResult",),
+    "_read_ticks": ("read_ticks",),
+    "_robust": ("RobustnessReport", "CheckResult", "WalkForwardResult"),
     "run": (
         "backtest",
         "live",
+        "record",
         "optimize",
+        "robustness",
         "walk_forward",
         "rebalance",
         "from_signals",

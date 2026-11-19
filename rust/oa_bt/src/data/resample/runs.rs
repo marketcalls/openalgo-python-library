@@ -6,6 +6,7 @@ use crate::model::{ist_day, Exchange, TsNanos};
 
 use super::bars::{Accumulator, BarsIn};
 use super::error::ResampleError;
+use super::shifted::shifted_start;
 use super::{ClosedDayPolicy, Dropped};
 
 /// A base bar that takes part: its session and the start of its target bucket.
@@ -38,6 +39,8 @@ pub(super) struct Admission<'a> {
     cursor: LatticeCursor<'a>,
     base_nanos: i64,
     target_nanos: i64,
+    /// How much earlier every bucket ends (`shifted`); zero for the lattice itself.
+    shift_nanos: i64,
     closed_day: ClosedDayPolicy,
     pub(super) dropped: Dropped,
 }
@@ -60,8 +63,17 @@ impl<'a> Admission<'a> {
             cursor,
             base_nanos,
             target_nanos,
+            shift_nanos: 0,
             closed_day,
             dropped,
+        }
+    }
+
+    /// The same admission with every bucket ending `shift_nanos` earlier (`shifted`).
+    pub(super) fn ending_earlier(self, shift_nanos: i64) -> Admission<'a> {
+        Admission {
+            shift_nanos,
+            ..self
         }
     }
 
@@ -86,7 +98,7 @@ impl<'a> Admission<'a> {
             // A bar off the base lattice still overlaps the session: it is bucketed
             // by its open. Whether such bars are acceptable is the validator's call.
             Placement::InSession | Placement::OffLattice | Placement::ClosedDay => {
-                let bucket_start = lattice.bucket_start(ts, self.target_nanos);
+                let bucket_start = shifted_start(&lattice, ts, self.target_nanos, self.shift_nanos);
                 return Ok(Some(Admitted {
                     session,
                     bucket_start,

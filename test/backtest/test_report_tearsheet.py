@@ -25,6 +25,7 @@ SECTIONS = (
     "distribution",
     "metrics",
     "trades",
+    "overfitting",
     "notes",
 )
 # Elements that never have a closing tag in HTML.
@@ -167,6 +168,39 @@ def without_script(page: str) -> str:
     return re.sub(r"<script>.*?</script>", "", page, flags=re.S)
 
 
+def media_queries(sheet: str) -> tuple[str, list[tuple[str, str]]]:
+    """(the stylesheet `sheet` outside any media query, (condition, rules) of each media
+    query in it)."""
+    outside, inside, at = [], [], 0
+    while (start := sheet.find("@media", at)) >= 0:
+        outside.append(sheet[at:start])
+        opened = sheet.index("{", start)
+        depth, end = 1, opened + 1
+        while depth:
+            depth += {"{": 1, "}": -1}.get(sheet[end], 0)
+            end += 1
+        inside.append((sheet[start + len("@media") : opened].strip(), sheet[opened + 1 : end - 1]))
+        at = end
+    outside.append(sheet[at:])
+    return "".join(outside), inside
+
+
+def css_rule(text: str, selector: str, media: str | None = None) -> dict[str, str]:
+    """The declarations of the first style rule for exactly `selector`, outside any media
+    query or, given `media`, inside the media queries of that condition, in a page's
+    stylesheet or in a stylesheet itself."""
+    if "<style>" in text:
+        text = text[text.index("<style>") + len("<style>") : text.index("</style>")]
+    outside, queries = media_queries(text)
+    rules = outside if media is None else "".join(body for when, body in queries if when == media)
+    for rule in rules.split("}"):
+        head, _, body = rule.partition("{")
+        if head.strip() == selector:
+            pairs = (part.split(":", 1) for part in body.split(";") if part.strip())
+            return {name.strip(): value.strip() for name, value in pairs}
+    raise AssertionError(f"no style rule for {selector}")
+
+
 def tile(page: str, label: str) -> tuple[str, str]:
     """The value and subline of the first tile labelled `label`."""
     found = re.search(
@@ -195,6 +229,37 @@ def test_the_page_contains_every_section_in_order(page):
 def test_the_header_links_to_every_section_in_order(page):
     links = re.findall(r"<a href='#([a-z-]+)'", page)
     assert links == list(SECTIONS)
+
+
+#: The widths at which the header shows its section links.
+WIDE_HEADER = "(min-width:64rem)"
+
+
+def test_the_header_links_scroll_inside_the_header_so_its_tools_stay_in_view(page):
+    # Measured in a browser: 19 links of a robustness report are about 1,800 pixels, so
+    # a header that cannot narrow them pushes Export PDF and the theme switch off screen
+    # and the whole page scrolls sideways.
+    nav = css_rule(page, ".nav")
+    assert nav["min-width"] == "0" and nav["overflow-x"] == "auto"
+    assert css_rule(page, ".nav a")["white-space"] == "nowrap"
+    assert css_rule(page, ".mark,.tools", media=WIDE_HEADER)["flex"] == "none"
+
+
+def test_the_mark_and_tools_keep_their_width_only_where_the_links_show(page):
+    # Measured in a browser at 320 px, where the links are hidden: a mark and tools that
+    # cannot shrink made every report page scroll 5 px sideways and cut the theme switch
+    # at the right edge; free to shrink there, Export PDF wraps and the page fits.
+    assert css_rule(page, ".nav", media=WIDE_HEADER)["display"] == "flex"
+    with pytest.raises(AssertionError, match="no style rule"):
+        css_rule(page, ".mark,.tools")
+
+
+def test_the_link_of_the_section_in_view_is_scrolled_into_the_header(page):
+    script = page[page.rindex("<script>") :]
+    spy = script[script.index("new IntersectionObserver(") : script.index("{rootMargin:")]
+    assert "revealLink(current);" in spy
+    reveal = script[script.index("function revealLink(link){") :]
+    assert "nav.scrollLeft=" in reveal[: reveal.index("}")]
 
 
 def test_sections_are_numbered_in_page_order(page):

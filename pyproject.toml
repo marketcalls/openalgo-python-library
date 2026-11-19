@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "openalgo"
-version = "2.2.1"
+version = "2.3.0"
 description = "Python library for OpenAlgo's trading APIs and WebSocket feeds, with 100+ technical indicators and a backtesting engine powered by a Rust core."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -63,6 +63,7 @@ line-length = 100
 target-version = "py312"
 include = [
     "benchmark/backtest_speed.py",
+    "benchmark/live_loop_speed.py",
     "examples/backtest_quickstart.py",
     "openalgo/backtest/**/*.py",
     "openalgo/_feed_*.py",

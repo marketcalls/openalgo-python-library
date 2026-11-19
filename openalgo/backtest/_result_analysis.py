@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from . import _result_report
+from ._result_excursion import instrument_multipliers
 from ._summary import summary_text
 from ._trade_list import trade_list as closed_trade_list
 from .metrics import MonteCarlo, analyse, monte_carlo
@@ -41,10 +42,17 @@ class AnalysisMethods:
         number: symbol, direction, product, entry and exit time (IST), quantity in
         units, entry and exit price, gross P&L, charges and net P&L in rupees,
         return_pct, bars_held (bars of the strategy's interval), days_held, exit_reason
-        and r_multiple (`_trade_list.trade_list` defines each column). The tearsheet's
-        trade table shows the same rows."""
-        trades = _result_report.closed_trades(self._output, self._symbols, self._strategy_closes)
+        and r_multiple, then mae, mfe, mae_pct, mfe_pct and slippage
+        (`_trade_list.trade_list` defines each column). The tearsheet's trade table shows
+        the same rows."""
+        trades = _result_report.closed_trades(
+            self._output, self._symbols, self._strategy_closes, self._multipliers()
+        )
         return closed_trade_list(trades)
+
+    def _multipliers(self) -> list[float]:
+        """The contract multiplier of each instrument, by the kernel's index."""
+        return instrument_multipliers(self._manifest)
 
     @cached_property
     def performance(self) -> Performance:
@@ -58,7 +66,8 @@ class AnalysisMethods:
         charts) against its closes. Its trades carry `bars_held` in bars of the
         strategy's interval. Raises ConfigError when the run has no equity point."""
         output, symbols = self._output, self._symbols
-        trades = _result_report.trades_table(output, symbols, self._strategy_closes)
+        closes, multipliers = self._strategy_closes, self._multipliers()
+        trades = _result_report.trades_table(output, symbols, closes, multipliers)
         equity = _result_report.equity_series(self.equity)
         arguments = self._manifest["arguments"]
         exchange, capital = arguments["exchange"], arguments["capital"]
@@ -83,15 +92,33 @@ class AnalysisMethods:
         `openalgo.backtest.metrics.DEFINITIONS`."""
         return self.performance.metrics
 
+    @cached_property
+    def _quick(self) -> Any:
+        """The quick overfitting checks of the run's trade list (`_robust._quick`),
+        computed on first use; None for a run with no equity point, which has no
+        performance to check."""
+        if not len(self._output["equity"]["ts"]):
+            return None
+        from ._robust._quick import quick_checks
+
+        return quick_checks(self.performance)
+
+    def _overfitting_warnings(self) -> list[str]:
+        """A warning line per quick overfitting check that failed."""
+        return [] if self._quick is None else self._quick.warnings()
+
     def summary(self) -> str:
         """A short plain-text summary to print: net profit in rupees with Indian digit
         grouping ("Rs 1,23,456.78"), the return and the maximum drawdown in percent, the
         closed trades and their win rate ("no closed trades" when there are none, where
-        the win rate is undefined) with the positions still open, and for a run with
-        `benchmark=` the benchmark's return (`_summary`). `print(result)` is the full
-        Assumptions block instead. Raises ConfigError when the run has no equity
-        point, as `performance` does."""
-        return summary_text(self.metrics, _result_report.benchmark_name(self._manifest))
+        the win rate is undefined) with the positions still open, the quick overfitting
+        checks in one line (`_robust._quick`), and for a run with `benchmark=` the
+        benchmark's return (`_summary`). `print(result)` is the full Assumptions block
+        instead. Raises ConfigError when the run has no equity point, as `performance`
+        does."""
+        metrics = self.metrics
+        bench = _result_report.benchmark_name(self._manifest)
+        return summary_text(metrics, bench, self._quick.summary_line())
 
     def metrics_table(self) -> pd.DataFrame:
         """Every metric as a DataFrame indexed by key: group, label, value, unit and
@@ -128,10 +155,10 @@ class AnalysisMethods:
         by the run's `benchmark=`, and its Notes section lists the run's assumptions and
         every warning, so a cost-free run says so on the report."""
         lines = [f"{key}: {value}" for key, value in self._assumptions.items()]
-        lines += [f"warning: {text}" for text in self._warnings]
+        lines += [f"warning: {text}" for text in [*self._warnings, *self._overfitting_warnings()]]
         name = self._manifest["strategy"]["name"]
         bench = _result_report.benchmark_name(self._manifest)
-        report = _result_report.Report(self.performance, name, lines, bench)
+        report = _result_report.Report(self.performance, name, lines, bench, self._quick)
         return _result_report.tearsheet(report, path, mode, log_scale)
 
 

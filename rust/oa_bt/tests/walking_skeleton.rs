@@ -8,8 +8,9 @@
 //! 0.50, its low the open minus 0.50 and its close the open plus 0.05.
 
 use oa_bt::engine::{
-    run, BarColumns, CostConfig, Driver, Engine, Event, FillTiming, IntradayOverrides, KernelError,
-    Pause, QuantityMode, RunConfig, RunOutput, RunSetup, Step, StrategyInterval, Submission,
+    run, BarColumns, BaseBar, CostConfig, Driver, Engine, Event, FillTiming, IntradayOverrides,
+    KernelError, Pause, Perturbation, QuantityMode, RunConfig, RunOutput, RunSetup, Step,
+    StrategyInterval, Submission,
 };
 use oa_bt::exec::{
     GttLegRole, GttStatus, InstrumentId, InstrumentSpec, OrderRequest, QuantitySpec, RejectCode,
@@ -88,6 +89,7 @@ fn config(last_slice: Option<i64>) -> RunConfig {
         sizing: SizingControls::default(),
         intraday: IntradayOverrides::default(),
         deliver_events: false,
+        perturbation: Perturbation::default(),
     }
 }
 
@@ -376,6 +378,203 @@ fn the_same_inputs_give_the_same_result() {
     let first = run_script(bars(375, &[40, 41]), None, buy_then_exit());
     let second = run_script(bars(375, &[40, 41]), None, buy_then_exit());
     assert_eq!(first.0, second.0);
+}
+
+/// Run `kernel` with `script`, releasing one slice each time the engine waits.
+fn run_released_one_by_one(kernel: &mut Engine, script: &mut Script) -> usize {
+    let mut waits = 0;
+    loop {
+        match kernel.advance().expect("the slice runs") {
+            Pause::Waiting { next_slice } => {
+                waits += 1;
+                kernel.release(next_slice + 1);
+            }
+            Pause::Finished { .. } => return waits,
+            pause => script.on_pause(kernel, &pause).expect("the script acts"),
+        }
+    }
+}
+
+#[test]
+fn a_run_released_one_slice_at_a_time_is_the_same_run() {
+    let (whole, _) = run_script(bars(375, &[40, 41]), None, buy_then_exit());
+    let mut kernel = engine(bars(375, &[40, 41]), None);
+    let mut script = Script::new(buy_then_exit());
+    kernel.hold();
+    let waits = run_released_one_by_one(&mut kernel, &mut script);
+    assert_eq!(waits, 375, "one wait before each slice of the session");
+    assert_eq!(kernel.finish().expect("the run finished"), whole);
+}
+
+#[test]
+fn an_engine_that_holds_waits_before_the_first_slice_until_released() {
+    let mut kernel = engine(bars(45, &[]), Some(at(9, 59)));
+    kernel.hold();
+    for _ in 0..2 {
+        assert_eq!(kernel.advance(), Ok(Pause::Waiting { next_slice: 0 }));
+    }
+    kernel.release(1);
+    assert_eq!(kernel.advance(), Ok(Pause::Waiting { next_slice: 1 }));
+}
+
+#[test]
+fn releasing_fewer_slices_than_released_changes_nothing() {
+    let mut kernel = engine(bars(45, &[]), Some(at(9, 59)));
+    let mut script = Script::new(Vec::new());
+    kernel.hold();
+    kernel.release(10);
+    kernel.release(5);
+    run(&mut kernel, &mut script).expect("the released slices run");
+    assert_eq!(kernel.advance(), Ok(Pause::Waiting { next_slice: 10 }));
+}
+
+#[test]
+fn run_stops_where_the_engine_waits_and_continues_after_a_release() {
+    let (whole, _) = run_script(bars(45, &[]), Some(at(9, 59)), buy_then_exit());
+    let mut kernel = engine(bars(45, &[]), Some(at(9, 59)));
+    let mut script = Script::new(buy_then_exit());
+    kernel.hold();
+    kernel.release(20);
+    run(&mut kernel, &mut script).expect("the released slices run");
+    assert!(!kernel.is_finished());
+    kernel.release(usize::MAX);
+    run(&mut kernel, &mut script).expect("the rest runs");
+    assert_eq!(kernel.finish().expect("the run finished"), whole);
+}
+
+/// A live session of the test day, built before its bars.
+fn session() -> Engine {
+    let setup = RunSetup {
+        config: config(None),
+        calendar: Calendar::new().expect("the embedded calendar tables parse"),
+        instruments: vec![sbin()],
+        bars: vec![BarColumns::default()],
+    };
+    Engine::new_session(setup).expect("a valid session")
+}
+
+/// Row `row` of `columns` as a bar handed to a session.
+fn base_bar(columns: &BarColumns, row: usize) -> BaseBar {
+    BaseBar {
+        ts_open: columns.ts_open[row],
+        open: columns.open[row],
+        high: columns.high[row],
+        low: columns.low[row],
+        close: columns.close[row],
+        volume: columns.volume[row],
+    }
+}
+
+/// The open of slice `index` of the test day's 1-minute grid.
+fn slice_open(index: usize) -> i64 {
+    ts_from_ist(day(), SESSION_OPEN_MINUTE + index as u32)
+}
+
+#[test]
+fn a_session_given_its_bars_slice_by_slice_runs_the_slices_of_their_backtest() {
+    // A session's orders are filled by its venue (tests/venue_echo.rs: with a venue that
+    // fills where the simulator does, a session is the backtest); with no order, it is
+    // the backtest of the bars it was given.
+    let columns = bars(375, &[40, 41]);
+    let (backtest, _) = run_script(columns.clone(), None, Vec::new());
+    let mut kernel = session();
+    let mut script = Script::new(Vec::new());
+    loop {
+        match kernel.advance().expect("the slice runs") {
+            Pause::Waiting { next_slice } => {
+                let open = slice_open(next_slice);
+                if let Some(row) = columns.ts_open.iter().position(|&ts| ts == open) {
+                    kernel
+                        .add_bar(SBIN, base_bar(&columns, row))
+                        .expect("a bar of a closed slice");
+                }
+                kernel.release(next_slice + 1);
+            }
+            Pause::Finished { .. } => break,
+            pause => script
+                .on_pause(&mut kernel, &pause)
+                .expect("the script acts"),
+        }
+    }
+    assert_eq!(kernel.finish().expect("the session finished"), backtest);
+}
+
+#[test]
+fn a_session_holds_before_its_first_slice() {
+    let mut kernel = session();
+    assert_eq!(kernel.advance(), Ok(Pause::Waiting { next_slice: 0 }));
+}
+
+fn refused_reason(result: Result<(), KernelError>) -> String {
+    match result {
+        Err(KernelError::InvalidData { reason, .. }) => reason,
+        other => panic!("expected InvalidData, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_bar_for_a_slice_that_has_run_is_refused() {
+    let columns = bars(3, &[]);
+    let mut kernel = session();
+    kernel.release(2);
+    assert_eq!(kernel.advance(), Ok(Pause::Waiting { next_slice: 2 }));
+    let reason = refused_reason(kernel.add_bar(SBIN, base_bar(&columns, 1)));
+    assert!(
+        reason.ends_with("is for a slice that has already run"),
+        "{reason}"
+    );
+}
+
+#[test]
+fn a_bar_off_the_grid_is_refused() {
+    let columns = bars(1, &[]);
+    let mut kernel = session();
+    let off_grid = BaseBar {
+        ts_open: columns.ts_open[0] + 30_000_000_000,
+        ..base_bar(&columns, 0)
+    };
+    let reason = refused_reason(kernel.add_bar(SBIN, off_grid));
+    assert!(
+        reason.ends_with("does not open on a slice of the session's grid"),
+        "{reason}"
+    );
+}
+
+#[test]
+fn a_bar_before_the_instruments_last_bar_is_refused() {
+    let columns = bars(6, &[]);
+    let mut kernel = session();
+    kernel
+        .add_bar(SBIN, base_bar(&columns, 5))
+        .expect("a bar ahead");
+    let reason = refused_reason(kernel.add_bar(SBIN, base_bar(&columns, 3)));
+    assert!(
+        reason.ends_with("is not after the instrument's last bar"),
+        "{reason}"
+    );
+}
+
+#[test]
+fn a_bar_that_is_not_a_valid_ohlc_bar_is_refused() {
+    let columns = bars(1, &[]);
+    let mut kernel = session();
+    let inverted = BaseBar {
+        high: columns.low[0] - 1.0,
+        ..base_bar(&columns, 0)
+    };
+    let reason = refused_reason(kernel.add_bar(SBIN, inverted));
+    assert!(reason.ends_with("is not a valid OHLC bar"), "{reason}");
+}
+
+#[test]
+fn a_backtest_is_given_no_bars_after_it_is_built() {
+    let columns = bars(45, &[]);
+    let mut kernel = engine(columns.clone(), Some(at(9, 59)));
+    let result = kernel.add_bar(SBIN, base_bar(&columns, 0));
+    assert!(matches!(
+        result,
+        Err(KernelError::InvalidConfig { field: "bars", .. })
+    ));
 }
 
 #[test]

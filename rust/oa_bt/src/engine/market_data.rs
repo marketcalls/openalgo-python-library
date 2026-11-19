@@ -7,7 +7,10 @@
 //! from the base bars inside the run, so a strategy bar is the aggregate of the base
 //! bars present and a bucket with none is absent (SPEC-07).
 
-use crate::data::resample::{resample_daily, resample_intraday, BarsIn, BarsOut, ClosedDayPolicy};
+use crate::data::resample::{
+    resample_daily, resample_daily_ending_earlier, resample_intraday,
+    resample_intraday_ending_earlier, BarsIn, BarsOut, ClosedDayPolicy,
+};
 use crate::exec::{InstrumentId, InstrumentSpec};
 use crate::market::calendar::{format_ist, BaseInterval, Calendar};
 use crate::model::{counted, TsNanos};
@@ -27,6 +30,18 @@ pub struct StrategyBar {
     pub ts_open: TsNanos,
     /// Close of the bar, UTC nanoseconds: the decision instant.
     pub ts_close: TsNanos,
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub volume: f64,
+}
+
+/// One base bar handed to a live session as its slice closes (`Engine::add_bar`):
+/// the open instant in UTC nanoseconds, prices in rupees, volume in units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BaseBar {
+    pub ts_open: TsNanos,
     pub open: f64,
     pub high: f64,
     pub low: f64,
@@ -75,22 +90,34 @@ fn validate(spec: &InstrumentSpec, bars: &BarColumns) -> Result<(), KernelError>
         ));
     }
     for row in 0..n {
-        let (o, h, l, c) = (
+        let prices = [
             bars.open[row],
             bars.high[row],
             bars.low[row],
             bars.close[row],
-        );
-        let finite = [o, h, l, c].iter().all(|v| v.is_finite() && *v > 0.0);
-        if !finite || l > o.min(c) || h < o.max(c) {
-            return Err(bad(
-                spec,
-                format!(
-                    "the bar opening at {} is not a valid OHLC bar",
-                    format_ist(bars.ts_open[row])
-                ),
-            ));
-        }
+        ];
+        valid_prices(spec, bars.ts_open[row], prices)?;
+    }
+    Ok(())
+}
+
+/// Check one bar's open, high, low and close: positive, finite, the high and low around
+/// the open and close.
+fn valid_prices(
+    spec: &InstrumentSpec,
+    ts_open: TsNanos,
+    ohlc: [f64; 4],
+) -> Result<(), KernelError> {
+    let [o, h, l, c] = ohlc;
+    let finite = ohlc.iter().all(|v| v.is_finite() && *v > 0.0);
+    if !finite || l > o.min(c) || h < o.max(c) {
+        return Err(bad(
+            spec,
+            format!(
+                "the bar opening at {} is not a valid OHLC bar",
+                format_ist(ts_open)
+            ),
+        ));
     }
     Ok(())
 }
@@ -163,11 +190,35 @@ fn strategy_bars(
         oi: &aligned.oi,
     };
     let policy = ClosedDayPolicy::Error;
+    let shift = i64::from(config.perturbation.bar_shift);
     let resampled = match (config.base, config.strategy_interval) {
+        (BaseInterval::Intraday(base), StrategyInterval::Intraday(strategy))
+            if strategy != base && shift > 0 =>
+        {
+            let (intervals, exchange) = ((base, strategy), spec.exchange);
+            resample_intraday_ending_earlier(
+                calendar,
+                exchange,
+                &input,
+                intervals,
+                shift * base,
+                policy,
+            )?
+        }
         (BaseInterval::Intraday(base), StrategyInterval::Intraday(strategy))
             if strategy != base =>
         {
             resample_intraday(calendar, spec.exchange, &input, base, strategy, policy)?
+        }
+        (BaseInterval::Intraday(base), StrategyInterval::Daily) if shift > 0 => {
+            resample_daily_ending_earlier(
+                calendar,
+                spec.exchange,
+                &input,
+                base,
+                shift * base,
+                policy,
+            )?
         }
         (BaseInterval::Intraday(base), StrategyInterval::Daily) => {
             resample_daily(calendar, spec.exchange, &input, base, policy)?
@@ -219,6 +270,79 @@ impl MarketData {
             });
         }
         Ok(MarketData { instruments: data })
+    }
+
+    /// Add a base bar of `instrument` at slice `slot` of the grid (`live_clock`); the
+    /// caller has checked that the slot has not run, and rebuilds the strategy bars
+    /// (`rebuild_strategy_bars`).
+    ///
+    /// Errors: `InvalidData` for a bar that is not a valid OHLC bar, has no finite
+    /// volume, or opens no later than the instrument's last bar.
+    pub(super) fn push_bar(
+        &mut self,
+        spec: &InstrumentSpec,
+        instrument: InstrumentId,
+        slot: usize,
+        bar: BaseBar,
+    ) -> Result<(), KernelError> {
+        valid_prices(spec, bar.ts_open, [bar.open, bar.high, bar.low, bar.close])?;
+        if !bar.volume.is_finite() || bar.volume < 0.0 {
+            return Err(bad(
+                spec,
+                format!(
+                    "the bar opening at {} has no usable volume",
+                    format_ist(bar.ts_open)
+                ),
+            ));
+        }
+        let Some(data) = self.instruments.get_mut(instrument.index()) else {
+            return Err(bad(spec, "the instrument has no bars".to_string()));
+        };
+        if data
+            .base
+            .ts_open
+            .last()
+            .is_some_and(|&last| bar.ts_open <= last)
+        {
+            return Err(bad(
+                spec,
+                format!(
+                    "the bar opening at {} is not after the instrument's last bar",
+                    format_ist(bar.ts_open)
+                ),
+            ));
+        }
+        let base = &mut data.base;
+        base.ts_open.push(bar.ts_open);
+        base.open.push(bar.open);
+        base.high.push(bar.high);
+        base.low.push(bar.low);
+        base.close.push(bar.close);
+        base.volume.push(bar.volume);
+        if let Some(cell) = data.row_at_slice.get_mut(slot) {
+            *cell = Some(base.ts_open.len() - 1);
+        }
+        Ok(())
+    }
+
+    /// Rebuild `instrument`'s strategy bars from its base bars, as `build` does;
+    /// `closes` are the slices' closes.
+    ///
+    /// Errors: `Resample` when the strategy bars cannot be built.
+    pub(super) fn rebuild_strategy_bars(
+        &mut self,
+        spec: &InstrumentSpec,
+        instrument: InstrumentId,
+        closes: &[TsNanos],
+        calendar: &Calendar,
+        config: &RunConfig,
+    ) -> Result<(), KernelError> {
+        let Some(data) = self.instruments.get_mut(instrument.index()) else {
+            return Ok(());
+        };
+        let aligned = aligned_out(&data.base, &data.row_at_slice, closes);
+        data.strategy = strategy_bars(calendar, spec, aligned, config)?;
+        Ok(())
     }
 
     /// The base bar of an instrument at a slice, or `None` when it is missing.

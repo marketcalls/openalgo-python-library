@@ -6,6 +6,12 @@ The theme follows the reader's setting, and the page's toggle overrides it by se
 `data-theme` on the root element, so the dark tokens are written for both (one source,
 `DARK`). System fonts only: nothing is fetched. The axes of the time-series charts take
 their sizes from `timeseries`.
+
+The header's section links scroll sideways inside the header when there are more than
+its width holds (a robustness report has 19), so the mark and the tools keep their room
+and the page itself never scrolls sideways. Below the width that shows the links the
+mark and the tools may shrink instead (Export PDF wraps), so the header fits a 320-pixel
+phone.
 """
 
 from .timeseries import TIME_AXIS_PX, VALUE_AXIS_PX
@@ -97,9 +103,9 @@ border:1px solid var(--border-strong)}
 .mark-name{font-size:1.125rem;line-height:1.75rem;color:var(--text)}
 .mark .eyebrow{margin-top:2px;line-height:1}
 .mark>div{line-height:1}
-.nav{display:none;align-items:center;gap:28px}
+.nav{display:none;align-items:center;gap:28px;min-width:0;overflow-x:auto;scrollbar-width:thin}
 .nav a{font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.13em;
-color:var(--text-muted);text-decoration:none;transition:color .15s}
+color:var(--text-muted);text-decoration:none;transition:color .15s;white-space:nowrap}
 .nav a:hover,.nav a.on{color:var(--text)}
 .tools{display:flex;align-items:center;gap:12px}
 .btn{font-size:.75rem;line-height:1rem;font-weight:600;text-transform:uppercase;letter-spacing:.12em;
@@ -111,7 +117,7 @@ border:1px solid var(--border-strong);color:var(--text-muted)}
 .theme:hover{color:var(--text)}
 .theme .sun{display:none}
 .dark-on .theme .sun{display:block}.dark-on .theme .moon{display:none}
-@media (min-width:64rem){.nav{display:flex}}
+@media (min-width:64rem){.nav{display:flex}.mark,.tools{flex:none}}
 """
 
 _MAIN = """
@@ -182,6 +188,8 @@ svg.bars .grid{stroke:var(--grid)}svg.bars .axis{stroke:var(--border)}
 svg.bars .zero{stroke:var(--border-strong);stroke-dasharray:2 2}
 svg.bars .whisker{stroke:var(--text-faint)}svg.bars .base{stroke:var(--border-strong)}
 svg.bars .mean{stroke:var(--pnl-neg);stroke-dasharray:5 4;stroke-width:1.3}
+svg.bars .win{fill:var(--pnl-pos);fill-opacity:.7;stroke:var(--pnl-pos);stroke-width:1}
+svg.bars .loss{fill:none;stroke:var(--pnl-neg);stroke-width:1.6;stroke-linecap:round}
 .streak-foot{margin-top:8px;display:flex;flex-wrap:wrap;gap:8px 24px;font-size:.75rem;
 color:var(--text-muted)}
 .streak-foot b{font-weight:400;color:var(--text)}
@@ -227,6 +235,7 @@ _TABLES = """
 background:color-mix(in oklab,var(--pnl-pos) 10%,transparent)}
 .trades{font-size:.8125rem}
 .trades td{white-space:nowrap}
+.trades td.when{white-space:normal}
 .trades th,.trades td{padding-left:7px;padding-right:7px}
 .kv td:first-child{color:var(--text-muted);white-space:nowrap;width:1%}
 .kv td{vertical-align:top;overflow-wrap:anywhere}
@@ -238,6 +247,63 @@ background:color-mix(in oklab,var(--pnl-pos) 10%,transparent)}
 .pager .btn[disabled]{opacity:.4;cursor:default}
 .prose p{font-size:.8125rem;line-height:1.35rem;color:var(--text-muted)}
 .prose p+p{margin-top:8px}
+"""
+
+#: The verdicts of the overfitting checks, and the fans, histograms and marks of the
+#: robustness report: the verdict is a word first, its colour only repeats it.
+_CHECKS = """
+.verdict{font-weight:600;white-space:nowrap}
+.verdict.passed{color:var(--pnl-pos)}.verdict.failed{color:var(--pnl-neg)}
+.verdict.quiet{color:var(--text-muted)}
+.lead{font-size:.875rem;line-height:1.4rem;color:var(--text)}
+.lead+.lead{margin-top:6px}
+.key{margin-top:8px;font-size:.75rem;line-height:1.1rem;color:var(--text-muted)}
+.stat-value.wrap{white-space:pre-line;overflow-wrap:anywhere;line-height:1.2}
+.tbl td.wrap{white-space:normal;min-width:10rem}
+svg.bars .fan-outer{fill:var(--benchmark);fill-opacity:.12}
+svg.bars .fan-inner{fill:var(--benchmark);fill-opacity:.24}
+svg.bars .fan-path{fill:none;stroke:var(--text-faint);stroke-width:.6;stroke-opacity:.5}
+svg.bars .fan-median{fill:none;stroke:var(--benchmark);stroke-width:1.5;stroke-dasharray:5 4}
+svg.bars .fan-real,svg.bars .run-line{fill:none;stroke:var(--text);stroke-linejoin:round}
+svg.bars .fan-real{stroke-width:2.6}svg.bars .run-line{stroke-width:1.6}
+svg.bars .hist-bar{fill:var(--text-faint);fill-opacity:.6}
+svg.bars .mark-real{stroke:var(--text);stroke-width:2.4}
+svg.bars .mark-limit{stroke:var(--pnl-neg);stroke-width:1.6;stroke-dasharray:6 4}
+svg.bars .mark-reference{stroke:var(--text-muted);stroke-width:1.2;stroke-dasharray:2 3}
+svg.bars .held-out{fill:var(--benchmark);fill-opacity:.2}
+svg.bars .wick{stroke:var(--text-muted);stroke-width:1}
+svg.bars .candle-up{fill:var(--pnl-pos);stroke:var(--pnl-pos);stroke-width:1}
+svg.bars .candle-down{fill:var(--bg);stroke:var(--pnl-neg);stroke-width:1.2}
+svg.bars .line-bold{fill:none;stroke:var(--text);stroke-width:2.4;stroke-linejoin:round}
+svg.bars .series-0,svg.bars .series-1,svg.bars .series-2,svg.bars .series-3{fill:none;
+stroke-width:1.4}
+svg.bars .hold-0,svg.bars .hold-1,svg.bars .hold-2,svg.bars .hold-3{fill:none;
+stroke-width:1.2;stroke-dasharray:1 3}
+svg.bars .series-0,svg.bars .hold-0{stroke:var(--text)}
+svg.bars .series-1,svg.bars .hold-1{stroke:var(--benchmark)}
+svg.bars .series-2,svg.bars .hold-2{stroke:var(--pnl-neg)}
+svg.bars .series-3,svg.bars .hold-3{stroke:var(--pnl-pos)}
+svg.bars .end-0{fill:var(--text)}
+svg.bars .end-1{fill:var(--benchmark)}
+svg.bars .end-2{fill:var(--pnl-neg)}
+svg.bars .end-3{fill:var(--pnl-pos)}
+svg.bars .group-0,svg.bars .group-1,svg.bars .group-2,svg.bars .group-3{fill:none;
+stroke-width:.8;stroke-opacity:.55}
+svg.bars .group-0{stroke:var(--benchmark)}
+svg.bars .group-1{stroke:var(--pnl-neg);stroke-dasharray:6 3}
+svg.bars .group-2{stroke:var(--pnl-pos);stroke-dasharray:1.5 2.5}
+svg.bars .group-3{stroke:var(--text-muted);stroke-dasharray:8 3 2 3}
+svg.bars .heat-cell{stroke:var(--panel);stroke-width:1.5}
+svg.bars .cell-text{font-size:10px;font-family:var(--font-mono);fill:var(--text)}
+svg.bars .cell-marked{stroke:var(--text);stroke-width:3}
+svg.bars .surf-base{fill:none;stroke:var(--border-strong);stroke-dasharray:2 3}
+svg.bars .surf-top{stroke:var(--panel);stroke-width:.6}
+svg.bars .surf-left{opacity:.8;stroke:var(--panel);stroke-width:.4}
+svg.bars .surf-right{opacity:.62;stroke:var(--panel);stroke-width:.4}
+svg.bars .fold-in{fill:var(--benchmark);fill-opacity:.12;stroke:var(--benchmark);stroke-width:1.2}
+svg.bars .fold-out{fill:var(--benchmark);stroke:var(--benchmark);stroke-width:1.2}
+svg.spark{display:inline-block;vertical-align:middle}
+svg.bars .spark-line{fill:none;stroke:var(--text);stroke-width:1.4;stroke-linejoin:round}
 """
 
 _PRINT = """
@@ -261,7 +327,7 @@ def stylesheet() -> str:
         f":root[data-theme=dark]{{{dark}color-scheme:dark}}"
     )
     charts = _CHARTS.replace("@AXIS@", str(VALUE_AXIS_PX)).replace("@TIME@", str(TIME_AXIS_PX))
-    return themes + _BASE + _HEADER + _MAIN + charts + _TABLES + _PRINT
+    return themes + _BASE + _HEADER + _MAIN + charts + _TABLES + _CHECKS + _PRINT
 
 
 __all__ = ["DARK", "LIGHT", "stylesheet"]

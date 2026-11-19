@@ -86,6 +86,32 @@ pub fn round_away_from_trader(
     Ok(to_rupees(ticks * tick))
 }
 
+/// A limit `buffer_percent` beyond `price_rupees` in the direction of `side` (above for a
+/// buy, below for a sell), rounded to the tick away from the trader so the buffer is never
+/// smaller than asked, and never below one tick: an order carries no price under the tick,
+/// and an option trades at one tick at the least, so a sell priced from one tick keeps a
+/// limit of one tick. The one rule for an option stop-limit's limit, a GTT child's limit
+/// and the reprice of a stop the price has passed (04-execution 4.1, 16-session-design 4.6).
+///
+/// Units: rupees and percent. Errors: `InvalidPrice` for an unusable price or a negative
+/// or non-finite buffer, `InvalidTick` for an unusable tick.
+pub fn limit_beyond(
+    price_rupees: f64,
+    side: Side,
+    buffer_percent: f64,
+    tick_rupees: f64,
+) -> Result<f64, ExecError> {
+    if !buffer_percent.is_finite() || buffer_percent < 0.0 {
+        return Err(ExecError::InvalidPrice {
+            what: "buffer percent",
+            value: buffer_percent,
+        });
+    }
+    let factor = 1.0 + side.sign() * buffer_percent / 100.0;
+    let limit = round_away_from_trader(price_rupees * factor, tick_rupees, side)?;
+    Ok(limit.max(to_rupees(tick_units(tick_rupees)?)))
+}
+
 /// True when a price is a whole number of ticks. Errors: as `round_to_tick`.
 pub fn is_on_tick(price_rupees: f64, tick_rupees: f64) -> Result<bool, ExecError> {
     Ok(to_units("price", price_rupees)? % tick_units(tick_rupees)? == 0)

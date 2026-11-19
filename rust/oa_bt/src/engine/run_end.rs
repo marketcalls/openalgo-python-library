@@ -33,6 +33,17 @@ use super::error::KernelError;
 use super::kernel::Engine;
 use super::market_data::MarketData;
 
+/// Where a run built by `Engine::assemble` ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Ending {
+    /// A backtest: at the earliest of its range's end, its last bar and the present
+    /// (`run_end`).
+    AtLastBar,
+    /// A live session: at the end of its range, whatever bars it holds so far
+    /// (`live_clock`).
+    AtRangeEnd,
+}
+
 /// Why a run ends before the end of its range.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunEndCause {

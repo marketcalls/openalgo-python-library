@@ -35,3 +35,25 @@ Rust = current `ta.*` backend (openalgo._oaindicators). Py-ref = the original ke
 | adx(14) | 3.733 | 544.574 | 145.9x |
 | sar | 0.991 | 66.380 | 67.0x |
 | linreg(14) | 0.874 | 787.907 | 901.7x |
+
+## Live session loop: a tick from its arrival at the loop to the risk rules
+
+`python benchmark/live_loop_speed.py --check` (`--slack` for a slower machine). A live
+session on the in-process fake OpenAlgo with its own loop and the fake's direct feed: two
+strategies with leg rules (a stop, a trailing stop and a target) hold SBIN and INFY while
+both trade every 100 ms of the fake's clock from 14:40:05 to 14:58 IST, rising a paisa a
+second, so the trail ratchets and its modifies go through the order worker. Each tick is
+timed on the wall clock from the start of the loop's step A.1 for it to the return of the
+kernel's `push_tick`. Target: the 99th percentile under 500 microseconds (15-phase2-plan
+section 4 and 16-session-design 2.9: "well under a millisecond").
+
+Measured 2026-11-18 on the development desktop (Windows 11, Python 3.12), three runs:
+
+| ticks measured | trailing modifies | median (us) | 99th percentile (us) | worst (us) |
+|---:|---:|---:|---:|---:|
+| 21,298 | 12 | 6.7 | 18.3 | 76.0 |
+| 21,298 | 12 | 6.8 | 18.5 | 53.7 |
+| 21,298 | 12 | 6.8 | 19.6 | 78.5 |
+
+The worst tick is shown, not checked: a pause of the interpreter's garbage collector or
+of the machine lands there.

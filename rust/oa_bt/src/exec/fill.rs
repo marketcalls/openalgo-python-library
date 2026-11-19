@@ -69,6 +69,9 @@ impl FillFlags {
     /// The engine's own exit after a GTT's child order did not fill through one base bar
     /// (04-execution 4.4 item 3; the name is the trace vocabulary's, decision GTT-8).
     pub const GTT_CHILD_UNFILLED: FillFlags = FillFlags(2);
+    /// A fill a live session's broker made with no order of the session: the broker's own
+    /// square-off, or a position closed by hand (`engine::venue_external`).
+    pub const EXTERNAL: FillFlags = FillFlags(4);
 
     /// True when every bit of `other` is set.
     pub fn contains(self, other: FillFlags) -> bool {
@@ -88,6 +91,9 @@ impl FillFlags {
         }
         if self.contains(FillFlags::GTT_CHILD_UNFILLED) {
             names.push("gtt_child_unfilled");
+        }
+        if self.contains(FillFlags::EXTERNAL) {
+            names.push("external");
         }
         names
     }

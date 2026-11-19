@@ -26,7 +26,9 @@
 //! session there is no later bar, so the exit fills at once at the last close, flagged
 //! (on a daily base every bar is such a slice, SPEC-17); an exit still waiting when the
 //! session closes fills in step 8 the same way. The exits are engine-held: no order
-//! event, the risk event already written, then the position event of the fill.
+//! event, the risk event already written, then the position event of the fill. In a live
+//! session they are orders sent to the venue when the rule fires, and the entries are
+//! withdrawn through the venue (`venue`, `venue_exits`).
 //!
 //! Step 1: when a slice opens a later session, the daily loss measure starts its new
 //! session and REDUCING returns to ACTIVE, with its event; HALTED stays. The session
@@ -34,8 +36,8 @@
 //! Indian calendar, so the kernel crosses it where the slice's IST session date
 //! changes.
 
-use crate::exec::{FillAt, FillFlags, InstrumentId, OrderAction, OrderId};
-use crate::model::Side;
+use crate::exec::{FillAt, FillFlags, InstrumentId, OrderId};
+use crate::model::{Side, TsNanos};
 use crate::portfolio::PositionKey;
 use crate::rms::{
     is_breached, AccountTotals, ExitReason, RiskBasis, RiskEvent, RiskEventName, RiskScope,
@@ -44,9 +46,11 @@ use crate::rms::{
 
 use super::clock::SliceInfo;
 use super::error::KernelError;
-use super::event::{Event, EventStamp, OrderEventKind, Step};
+use super::event::{Event, EventStamp, Step};
 use super::fills::FillRequest;
 use super::kernel::Engine;
+use super::venue::SendAt;
+use super::venue_roles::{EngineExit, RiskExitReason};
 
 impl Engine {
     /// Step 1: a later session ends REDUCING and restarts the daily loss measure.
@@ -61,8 +65,18 @@ impl Engine {
     /// Step 6: the daily loss limit, then the drawdown halt (see the module
     /// documentation).
     pub(super) fn step_aggregate_rules(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
+        self.aggregate_rules_at(slice, slice.close)
+    }
+
+    /// Step 6 in `slice`, its exits decided at `decided_at`: the slice's close, or in a live
+    /// session the open of the slice in progress for a tick's mark (`venue_ticks`).
+    pub(super) fn aggregate_rules_at(
+        &mut self,
+        slice: &SliceInfo,
+        decided_at: TsNanos,
+    ) -> Result<(), KernelError> {
         let stamp = Self::stamp(slice, Step::AggregateRules);
-        let mut exit_reason = None;
+        let mut exit = None;
         if let Some(event) = self.daily_loss_breach() {
             self.emit(Event::Risk {
                 stamp,
@@ -70,7 +84,7 @@ impl Engine {
                 event,
             });
             self.change_trading_state(stamp, TradingStateCause::DailyLossBreach);
-            exit_reason = Some(ExitReason::DailyLossLimit);
+            exit = Some(EngineExit::Risk(RiskExitReason::DailyLoss));
         }
         if let Some(event) = self.drawdown_breach() {
             self.emit(Event::Risk {
@@ -79,12 +93,12 @@ impl Engine {
                 event,
             });
             self.change_trading_state(stamp, TradingStateCause::DrawdownHalt);
-            exit_reason.get_or_insert(ExitReason::DrawdownHalt);
+            exit.get_or_insert(EngineExit::Risk(RiskExitReason::Drawdown));
         }
-        match exit_reason {
-            Some(reason) => {
+        match exit {
+            Some(exit) => {
                 self.cancel_working_entries(stamp)?;
-                self.exit_every_position(slice, stamp, reason)
+                self.exit_every_position(slice, (stamp, decided_at), exit)
             }
             None => Ok(()),
         }
@@ -199,19 +213,22 @@ impl Engine {
             .map(|order| order.id)
             .collect();
         for id in entries {
-            self.end_order(stamp, id, OrderAction::Cancel, OrderEventKind::Canceled)?;
+            self.withdraw_order(stamp, id)?;
         }
         Ok(())
     }
 
-    /// Exit every open position, in instrument registration order: at once at the last
-    /// close when the slice closes the session, otherwise at the next open.
+    /// Exit every open position, in instrument registration order, with the exit reason
+    /// of `exit` (`EngineExit::exit_reason`): at once at the last close when the slice
+    /// closes the session, otherwise at the next open. In a live session the exits are
+    /// sent to the venue now (`venue_exits`), decided at `decided_at`.
     fn exit_every_position(
         &mut self,
         slice: &SliceInfo,
-        stamp: EventStamp,
-        reason: ExitReason,
+        (stamp, decided_at): (EventStamp, TsNanos),
+        exit: EngineExit,
     ) -> Result<(), KernelError> {
+        let reason = exit.exit_reason();
         let mut open: Vec<PositionKey> = self
             .portfolio
             .positions()
@@ -221,7 +238,14 @@ impl Engine {
             .collect();
         open.sort_by_key(|key| key.instrument);
         for key in open {
-            if slice.closes_session {
+            if self.is_external() {
+                let at = SendAt {
+                    slice: *slice,
+                    step: stamp.step,
+                    decided_at,
+                };
+                self.request_engine_exit(at, key, exit, None)?;
+            } else if slice.closes_session {
                 self.exit_at_last_close(stamp, key, reason)?;
             } else {
                 self.risk.queue_exit(key, reason);
