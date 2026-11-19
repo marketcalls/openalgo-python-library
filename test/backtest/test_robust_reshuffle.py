@@ -14,7 +14,7 @@ percentile) is -20%, and the median is -15.38%.
 """
 
 import pytest
-from robust_runs import check_of, trade_performance
+from robust_runs import blocks_of, check_of, trade_performance
 
 from openalgo.backtest._robust._verdict import FAILED, INFORMATIONAL, NOT_JUDGED, PASSED
 
@@ -65,6 +65,22 @@ def test_another_level_judges_the_drawdown_that_share_stays_within(performance):
     result = check_of(performance, "reshuffle", runs=600, max_drawdown=0.16, level=0.6, **SMALL)
     assert result.verdict == PASSED
     assert result.summary["drawdown_at_level"] == pytest.approx(MIDDLE)
+
+
+def test_the_note_says_the_orders_end_at_the_closed_trades_net_pnl(performance):
+    # A run's net profit also holds a position still open at its end, which no order of
+    # the closed trades books: the words say whose end it is.
+    result = check_of(performance, "reshuffle", runs=600, **SMALL)
+    assert result.note == (
+        "600 orders of the 3 closed trades, drawn without replacement and booked on Rs 1,000; "
+        "every order of the closed trades ends at Rs 100 of net P&L."
+    )
+
+
+def test_the_final_pnl_tile_is_the_closed_trades(performance):
+    (_, (tiles,)) = blocks_of(performance, "reshuffle", runs=600, **SMALL)
+    shown = {tile.label: (tile.value, tile.sub) for tile in tiles.tiles}
+    assert shown["Final P&L"] == ("Rs 100", "of the closed trades, every order")
 
 
 def test_fewer_closed_trades_than_needed_are_not_judged():

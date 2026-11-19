@@ -58,6 +58,9 @@ from ._verdict import FAILED, PASSED, Outcome, not_judged
 
 #: The base bars the candle charts show.
 CANDLES = 60
+#: The places the `top` setting's percentile is named to: 0.975 is the 97.5th, not the
+#: 98th.
+TOP_DECIMALS = 1
 
 
 def _chance(name: str, default: float) -> Setting:
@@ -115,7 +118,7 @@ def rule(settings: Mapping[str, Any], objective: Any) -> str:
         f"the median noise run keeps {words.percent(settings['keep'], 0)} of the run's "
         f"{objective_name(objective)}, at least {words.percent(settings['profitable'], 0)} of "
         f"noise runs are profitable, and the run is not above their "
-        f"{words.percent(settings['top'], 0)} percentile"
+        f"{words.ordinal(settings['top'], TOP_DECIMALS)} percentile"
     )
 
 
@@ -172,7 +175,7 @@ def run(
         f"median {name} {words.number(summary['median'])} keeps "
         f"{words.percent(summary['ratio'])} of the run's {words.number(subject.real)}; "
         f"{words.percent(summary['profitable_share'])} of noise runs profitable; the run at "
-        f"the {words.percent(summary['percentile'])} percentile"
+        f"the {words.ordinal(summary['percentile'])} percentile"
     )
     note = (
         f"Each run moves every price of every bar, with its chance, by up to "
@@ -230,7 +233,11 @@ def _blocks(
     median must reach, the candles and the summary."""
     fan = session_fan("Noise equity", "The strategy on each noisy copy", set_, subject)
     marks = (
-        Mark(summary["top_limit"], f"{words.percent(settings['top'], 0)} percentile", LIMIT),
+        Mark(
+            summary["top_limit"],
+            f"{words.ordinal(settings['top'], TOP_DECIMALS)} percentile",
+            LIMIT,
+        ),
         Mark(keep_line, f"the median keeps {words.percent(settings['keep'], 0)}", LIMIT),
     )
     histogram = objective_histogram(
@@ -239,7 +246,11 @@ def _blocks(
     tiles = (
         Tile("Median kept", words.percent(summary["ratio"]), f"of the run's {name}"),
         Tile("Profitable", words.percent(summary["profitable_share"]), "of the noise runs"),
-        Tile("The run's percentile", words.percent(summary["percentile"]), "noise runs below it"),
+        Tile(
+            "The run's percentile",
+            words.ordinal(summary["percentile"]),
+            f"{words.percent(summary['percentile'])} of the noise runs below it",
+        ),
         Tile("Median", words.number(summary["median"]), name),
         Tile(
             "Measured",

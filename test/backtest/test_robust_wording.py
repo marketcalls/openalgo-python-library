@@ -126,6 +126,44 @@ def test_a_percentage_never_reads_minus_zero(fraction, decimals, text):
     assert words.percent(fraction, decimals) == text
 
 
+# (fraction, decimals, text): a percentile reads as an ordinal, rounded to `decimals`
+# places with trailing zeros dropped; 11th to 13th take "th", a part of a hundred too.
+ORDINALS = [
+    (0.66, 0, "66th"),
+    (0.6604, 0, "66th"),
+    (0.95, 0, "95th"),
+    (0.95, 1, "95th"),
+    (0.975, 1, "97.5th"),
+    (0.01, 0, "1st"),
+    (0.02, 0, "2nd"),
+    (0.03, 0, "3rd"),
+    (0.04, 0, "4th"),
+    (0.11, 0, "11th"),
+    (0.12, 0, "12th"),
+    (0.13, 0, "13th"),
+    (0.21, 0, "21st"),
+    (0.22, 0, "22nd"),
+    (0.23, 0, "23rd"),
+    (0.29, 0, "29th"),
+    (0.0, 0, "0th"),
+    (1.0, 0, "100th"),
+    (float("nan"), 0, "n/a"),
+]
+
+
+@pytest.mark.parametrize(("fraction", "decimals", "text"), ORDINALS)
+def test_a_percentile_reads_as_an_ordinal(fraction, decimals, text):
+    assert words.ordinal(fraction, decimals) == text
+
+
+def test_no_robustness_text_prints_a_percentile_as_a_percentage(page):
+    sources = sorted(ROBUST.glob("*.py"))
+    for path in sources:
+        source = path.read_text(encoding="utf-8")
+        assert not re.search(r"percent\([^)]*\)\} percentile", source), path.name
+    assert not re.search(r"\d% percentile", page)
+
+
 def test_the_win_rate_note_has_one_colon():
     result = check_of(
         trade_performance([150.0, 50.0] * 50), "random_out_of_sample", objective="win_rate"

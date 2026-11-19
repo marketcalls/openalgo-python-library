@@ -264,8 +264,26 @@ def test_the_noise_histogram_marks_the_run_its_top_percentile_and_the_keep_line(
     (_, histogram), *_ = report._blocks["noise"]
     marks = {mark.label: mark.value for mark in histogram.marks}
     assert marks["the run"] == edge.metrics["sharpe"]
-    assert marks["95% percentile"] == check.summary["top_limit"]
+    assert marks["95th percentile"] == check.summary["top_limit"]
     assert marks["the median keeps 50%"] == pytest.approx(0.5 * edge.metrics["sharpe"])
+
+
+def test_the_noise_words_name_percentiles_as_ordinals(edge):
+    # No price moves, so every noisy run is the run itself: each is profitable and none
+    # is below the run, which sits at the 0th percentile of them.
+    still = {"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0}
+    report = checked(edge, "noise", runs=5, noise=still)
+    check = report.check("noise")
+    assert check.figure.endswith("100.0% of noise runs profitable; the run at the 0th percentile")
+    assert check.rule.endswith("and the run is not above their 95th percentile")
+    (tiles,) = report._blocks["noise"][-1]
+    shown = {tile.label: (tile.value, tile.sub) for tile in tiles.tiles}
+    assert shown["The run's percentile"] == ("0th", "0.0% of the noise runs below it")
+
+
+def test_another_top_percentile_is_named_to_its_tenth(edge):
+    report = checked(edge, "noise", runs=5, noise={"top": 0.975})
+    assert report.check("noise").rule.endswith("not above their 97.5th percentile")
 
 
 # ----- versus random -------------------------------------------------------------------

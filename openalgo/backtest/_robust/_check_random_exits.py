@@ -213,7 +213,11 @@ def _blocks(subject: BarRun, set_: RerunSet, summary: Mapping[str, float], name:
         (
             Tile("Profitable", words.percent(summary["profitable_share"]), "of the runs"),
             Tile("Median", words.number(summary["median"]), name),
-            Tile("The run's percentile", words.percent(summary["percentile"]), "runs below it"),
+            Tile(
+                "The run's percentile",
+                words.ordinal(summary["percentile"]),
+                f"{words.percent(summary['percentile'])} of the runs below it",
+            ),
         ),
     )
     return ((fan, histogram), (tiles,))
