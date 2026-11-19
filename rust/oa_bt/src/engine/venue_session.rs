@@ -346,7 +346,8 @@ impl Engine {
     fn slice_in_progress(&self) -> Option<SliceInfo> {
         match self.phase {
             Phase::Ready(index) => self.timeline.slice(index),
-            Phase::Paused(slice)
+            Phase::Opened(slice)
+            | Phase::Paused(slice)
             | Phase::Timers(slice)
             | Phase::Ahead(slice)
             | Phase::Closing(slice) => Some(slice),

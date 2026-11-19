@@ -15,6 +15,7 @@ use crate::model::TsNanos;
 use crate::portfolio::{Portfolio, PositionKey};
 use crate::rms::LegState;
 
+use super::account_link::AccountDesk;
 use super::accounting::charge_book;
 use super::clock::{single_exchange, SliceInfo, Timeline};
 use super::config::{RunConfig, RunSetup};
@@ -40,6 +41,9 @@ use super::venue::VenueDesk;
 pub(super) enum Phase {
     /// The slice at this index runs next, from step 1.
     Ready(usize),
+    /// Steps 1 and 2 of this slice have run (its open phase, `steps::open_phase`); its
+    /// levels phase (steps 3 to 6) runs next.
+    Opened(SliceInfo),
     /// Paused in step 7 of this slice; step 8 runs on the next `advance`.
     Paused(SliceInfo),
     /// Paused for timers in step 2 of this slice; the rest of the slice runs on the
@@ -104,6 +108,9 @@ pub struct Engine {
     pub(super) model_opened: Vec<PositionKey>,
     /// The factors of the trades' leg rules (`exit_scale`).
     pub(super) exit_scales: ExitScales,
+    /// The account of a portfolio run: the link, an account breach's lock and the breach
+    /// waiting to be recorded (`account_link`, `account_breach`).
+    pub(super) account: AccountDesk,
 }
 
 impl Engine {
@@ -177,6 +184,7 @@ impl Engine {
             held_changes: Vec::new(),
             model_opened: Vec::new(),
             exit_scales: ExitScales::default(),
+            account: AccountDesk::default(),
         })
     }
 
@@ -189,6 +197,12 @@ impl Engine {
     /// `Pause::Finished` once the grid is exhausted, and `Pause::Waiting` before a slice
     /// not released to an engine that holds (`hold`).
     ///
+    /// A slice runs as its phases in sequence (18-multi-strategy 2.3): the open phase
+    /// (steps 1 and 2, `steps::open_phase`), the levels phase (steps 3 to 6,
+    /// `steps::levels_phase`), the decision of step 7 (`decision_phase`) and the close of
+    /// step 8 (`venue_clock::end_slice`). A portfolio run's fund calls the same phases one
+    /// at a time across its engines.
+    ///
     /// A live session also returns `Pause::Timers` at the close of the slice before the
     /// open the timers are due at, and `Pause::Waiting` at a session close until the
     /// venue has ended its orders (`venue_clock`).
@@ -196,49 +210,58 @@ impl Engine {
     /// Errors: `RunFinished` after `Pause::Finished`; any error of a step.
     pub fn advance(&mut self) -> Result<Pause, KernelError> {
         loop {
-            let slice = match self.phase {
+            let pause = match self.phase {
                 Phase::Finished => return Err(KernelError::RunFinished),
-                Phase::Paused(slice) => match self.end_slice(&slice)? {
-                    Some(pause) => return Ok(pause),
-                    None => continue,
-                },
-                Phase::Closing(slice) => match self.wait_for_close(&slice)? {
-                    Some(pause) => return Ok(pause),
-                    None => continue,
-                },
+                Phase::Ready(index) => self.start_slice(index)?,
+                Phase::Timers(slice) => {
+                    self.resume_open_phase(&slice)?;
+                    None
+                }
+                Phase::Opened(slice) => {
+                    self.levels_phase(&slice)?;
+                    match self.decision_phase(&slice) {
+                        Some(pause) => Some(pause),
+                        None => self.end_slice(&slice)?,
+                    }
+                }
+                Phase::Paused(slice) => self.end_slice(&slice)?,
+                Phase::Closing(slice) => self.wait_for_close(&slice)?,
                 Phase::Ahead(next) => {
                     self.resume_ahead(&next)?;
-                    continue;
-                }
-                Phase::Timers(slice) => {
-                    self.finish_open_slice(&slice)?;
-                    slice
-                }
-                Phase::Ready(index) => {
-                    let held = self.released.is_some_and(|released| index >= released);
-                    if held && index < self.timeline.len() {
-                        return Ok(Pause::Waiting { next_slice: index });
-                    }
-                    let Some(slice) = self.timeline.slice(index) else {
-                        self.phase = Phase::Finished;
-                        let events = std::mem::take(&mut self.undelivered);
-                        return Ok(Pause::Finished { events });
-                    };
-                    if let Some(pause) = self.open_slice(&slice)? {
-                        self.phase = Phase::Timers(slice);
-                        return Ok(pause);
-                    }
-                    slice
+                    None
                 }
             };
-            if let Some(pause) = self.callbacks_pause(&slice) {
-                self.phase = Phase::Paused(slice);
-                return Ok(pause);
-            }
-            if let Some(pause) = self.end_slice(&slice)? {
+            if let Some(pause) = pause {
                 return Ok(pause);
             }
         }
+    }
+
+    /// Start slice `index`: `Pause::Waiting` before a slice not released to an engine that
+    /// holds, `Pause::Finished` once the grid is exhausted, otherwise the slice's open
+    /// phase (`steps::open_phase`), which pauses when timers are due.
+    ///
+    /// Errors: those of the open phase.
+    fn start_slice(&mut self, index: usize) -> Result<Option<Pause>, KernelError> {
+        let held = self.released.is_some_and(|released| index >= released);
+        if held && index < self.timeline.len() {
+            return Ok(Some(Pause::Waiting { next_slice: index }));
+        }
+        let Some(slice) = self.timeline.slice(index) else {
+            self.phase = Phase::Finished;
+            let events = std::mem::take(&mut self.undelivered);
+            return Ok(Some(Pause::Finished { events }));
+        };
+        self.open_phase(&slice)
+    }
+
+    /// Step 7 of `slice`, once its levels phase has run: the engine pauses there
+    /// (`Phase::Paused`) when a strategy bar closes or events wait for the callbacks
+    /// (`steps::callbacks_pause`); `None` otherwise, step 8 (`end_slice`) coming next.
+    pub(crate) fn decision_phase(&mut self, slice: &SliceInfo) -> Option<Pause> {
+        let pause = self.callbacks_pause(slice)?;
+        self.phase = Phase::Paused(*slice);
+        Some(pause)
     }
 
     /// The paused slice, the decision instant and the step of the current pause: the
@@ -250,7 +273,7 @@ impl Engine {
             Phase::Timers(slice) | Phase::Ahead(slice) => {
                 Some((slice, slice.open, Step::OpenFills))
             }
-            _ => None,
+            Phase::Ready(_) | Phase::Opened(_) | Phase::Closing(_) | Phase::Finished => None,
         }
     }
 

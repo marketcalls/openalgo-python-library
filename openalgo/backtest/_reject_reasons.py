@@ -7,7 +7,10 @@ and `exit_cover` are a live session's: the broker's own rejection of an order, a
 reduce-only order that would leave more units resting to close a position than it has
 (`rust/oa_bt/src/engine/venue_cover.rs`). So are `live_lock` and `live_in_flight`, the
 entry gates a live session adds (`rust/oa_bt/src/engine/venue_gates.rs`), and the freeze
-quantity is a cap on the whole position there, not only on each order. Each
+quantity is a cap on the whole position there, not only on each order. `account_margin` and
+`account_loss_gate` are a portfolio run's: the shared account's free cash refusing an
+opening fill the strategy's own free cash covers, and the account's daily loss limit
+locking entries (`rust/oa_bt/src/engine/account_link.rs`, `account_breach.rs`). Each
 entry is (what happened, what to do). The product rule covers three refusals that need
 different advice, so it has one entry per case, told apart by the order and its
 instrument (`_rejections.product_rule_case`). The entry window is the window working, not
@@ -16,8 +19,9 @@ a mistake: its line names the window's times (`_rejections.entry_window_warning`
 `RUN_RULE_CODES` are the refusals of a rule of the run working as it intends: the MIS
 entry window (given or the calendar's default), the limits a strategy or run sets
 (max_daily_loss, drawdown_halt, cooldown, max_positions, and the REDUCING or HALTED
-state they lead to) and the delay a run holds its orders for (delay_entries=,
-delay_exits=). The end-of-run notice leaves them out (`_rejection_notice`).
+state they lead to, and the account's daily loss limit of a portfolio run) and the delay
+a run holds its orders for (delay_entries=, delay_exits=). The end-of-run notice leaves
+them out (`_rejection_notice`).
 """
 
 from __future__ import annotations
@@ -27,8 +31,17 @@ from types import MappingProxyType
 PRODUCT_RULE = "product_rule"
 ENTRY_WINDOW = "entry_window"
 DELAY_PAST_CLOSE = "delay_past_close"
+ACCOUNT_LOSS_GATE = "account_loss_gate"
 RUN_RULE_CODES = frozenset(
-    {ENTRY_WINDOW, "daily_loss_gate", "cooldown", "max_positions", "halted", DELAY_PAST_CLOSE}
+    {
+        ENTRY_WINDOW,
+        "daily_loss_gate",
+        "cooldown",
+        "max_positions",
+        "halted",
+        DELAY_PAST_CLOSE,
+        ACCOUNT_LOSS_GATE,
+    }
 )
 
 REASONS = MappingProxyType(
@@ -120,6 +133,19 @@ REASONS = MappingProxyType(
             "the session's log and alerts name the lock; entries resume when it lifts, and "
             "a lock that stands for the day needs a new session",
         ),
+        "account_margin": (
+            "in a portfolio run on a shared account, the margin the order needed was within "
+            "the strategy's own free cash but more than the account's free cash: the other "
+            "strategies held it",
+            "give the account more funds (account_capital=), lower the size, or give each "
+            'strategy its own capital with pool="separate"',
+        ),
+        ACCOUNT_LOSS_GATE: (
+            "an entry came after the account's loss for the day reached "
+            "account_max_daily_loss, which stops every strategy's new entries for the rest "
+            "of the day",
+            "this is the account's limit working; raise account_max_daily_loss if it is too tight",
+        ),
         "live_in_flight": (
             "a live session sends no entry or add while another order of the symbol is "
             "working (an entry whose fill is not reported yet, a resting order), so that "
@@ -152,6 +178,7 @@ PRODUCT_RULE_CASES = MappingProxyType(
 )
 
 __all__ = [
+    "ACCOUNT_LOSS_GATE",
     "DELAY_PAST_CLOSE",
     "ENTRY_WINDOW",
     "PRODUCT_RULE",

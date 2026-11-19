@@ -1,9 +1,13 @@
 //! The eight steps of one slice (03-architecture 4.2), each across every instrument in
 //! registration order before the next step starts.
 //!
-//! Steps 1 to 6 run in `open_slice` (resumed by `finish_open_slice` after a timer pause
-//! in step 2), step 7 decides whether to pause (`callbacks_pause`), and step 8 plus the
-//! end-of-slice records run in `close_slice`.
+//! A slice runs in phases (18-multi-strategy 2.3): steps 1 and 2 in `open_phase` (its
+//! open; resumed by `resume_open_phase` after a timer pause in step 2), steps 3 to 6 in
+//! `levels_phase`, step 7 decides whether to pause (`callbacks_pause`), and step 8 plus
+//! the end-of-slice records run in `close_slice`. A run of one engine runs them back to
+//! back (`Engine::advance`); a portfolio run's fund runs each phase across its engines
+//! before the next, so one strategy's fills inside a bar never free cash for another's
+//! fills at that bar's open.
 
 use crate::exec::{FillAt, FillFlags, InstrumentId, OrderAction};
 use crate::model::Product;
@@ -14,44 +18,62 @@ use super::clock::SliceInfo;
 use super::error::KernelError;
 use super::event::{Event, OrderEventKind, Step};
 use super::fills::FillRequest;
-use super::kernel::Engine;
+use super::kernel::{Engine, Phase};
 use super::output::{LevelRow, StaleMark};
 use super::pause::Pause;
 
 impl Engine {
-    /// Steps 1 to 6 of a slice. Returns the timer pause of step 2 when timers are due
-    /// (`timers`); the slice then goes on with `finish_open_slice` at the next
-    /// `advance`. In a live session the timers of most slices fired ahead of them
-    /// (`venue_clock`).
-    pub(super) fn open_slice(&mut self, slice: &SliceInfo) -> Result<Option<Pause>, KernelError> {
+    /// The open phase of a slice: steps 1 and 2. Returns the timer pause of step 2 when
+    /// timers are due (`timers`): the engine then stands at `Phase::Timers` and
+    /// `resume_open_phase` completes step 2 at the next `advance`. Otherwise the engine
+    /// stands at `Phase::Opened`, its levels phase next. In a live session the timers of
+    /// most slices fired ahead of them (`venue_clock`).
+    ///
+    /// Errors: those of the steps.
+    pub(crate) fn open_phase(&mut self, slice: &SliceInfo) -> Result<Option<Pause>, KernelError> {
         // Step 1: session open and reference events. The session's intraday times are
         // resolved on first use (`session_times`); a futures roll is planned before the
         // run (`futures`) and fills in step 2; no lot-size change event can be
-        // configured yet.
+        // configured yet. An account breach found while the engine stood between slices
+        // is recorded here, so its exits fill at this open (`account_breach`).
         self.risk_session_open(slice);
+        self.account_breach_at_open(slice)?;
         self.renew_old_gtts(slice)?;
         self.apply_held_changes(slice)?;
-        if self.timers_fired_ahead(slice) {
-            self.finish_open_slice(slice)?;
-            return Ok(None);
+        if !self.timers_fired_ahead(slice) {
+            if let Some(pause) = self.timers_pause(slice) {
+                self.fill_due_orders(slice)?;
+                self.phase = Phase::Timers(*slice);
+                return Ok(Some(pause));
+            }
         }
-        if let Some(pause) = self.timers_pause(slice) {
-            self.fill_due_orders(slice)?;
-            return Ok(Some(pause));
-        }
-        self.finish_open_slice(slice)?;
+        self.resume_open_phase(slice)?;
         Ok(None)
     }
 
-    /// The rest of steps 2 to 6. After a timer pause `step_open_fills` fills what the
-    /// timers placed (what `fill_due_orders` handled is no longer queued), then the time
-    /// exits and the square-off; without one it is the whole of step 2.
-    pub(super) fn finish_open_slice(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
+    /// Step 2, or its rest after a timer pause: `step_open_fills` fills what the timers
+    /// placed (what `fill_due_orders` handled is no longer queued), then the time exits
+    /// and the square-off; without a timer pause it is the whole of step 2. The engine
+    /// then stands at `Phase::Opened`.
+    ///
+    /// Errors: those of step 2.
+    pub(crate) fn resume_open_phase(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         self.step_open_fills(slice)?;
+        self.phase = Phase::Opened(*slice);
+        Ok(())
+    }
+
+    /// The levels phase of a slice its open phase has run: steps 3 to 6, then an account
+    /// breach found while the slice was open, after the strategy's own aggregate rules
+    /// (`account_breach`). Step 7 (`Engine::decision_phase`) comes next.
+    ///
+    /// Errors: those of the steps.
+    pub(crate) fn levels_phase(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         self.step_levels(slice)?;
         self.step_ratchets(slice)?;
         self.step_mark(slice);
-        self.step_aggregate_rules(slice)
+        self.step_aggregate_rules(slice)?;
+        self.account_breach_at_close(slice)
     }
 
     /// Step 2: queued orders fill at the open; then the square-off timer; then the
@@ -293,3 +315,6 @@ impl Engine {
         equity.exposure_rupees.push(exposure);
     }
 }
+
+#[cfg(test)]
+mod phase_tests;

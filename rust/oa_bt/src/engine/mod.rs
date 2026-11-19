@@ -62,6 +62,15 @@
 //! | `Engine::stop_session()` | any time | a live session ends where it stands: nothing is sent, working orders and open positions are reported as they are (a strategy exit never sent ends `Canceled`), the slice in progress is closed for the records as step 8 closes a session (the day's contract notes settled, then its position-history and equity rows), the undelivered events are returned (`venue_session`) |
 //! | `Engine::finish()` | after `Pause::Finished` or `stop_session` | the `RunOutput` |
 //! | `pause::run(engine, driver)` | Rust drivers | the loop above, for a `Driver` |
+//! | `Engine::set_account_link(AccountLink)` | before each of the engine's turns in a portfolio run | the room a shared account leaves the engine: the second margin check of its opening fills (`account_margin`) and its sizing cap (`account_link`) |
+//! | `Engine::account_breach(AccountBreach)` | at a round of a portfolio run | the account's daily loss limit: entries locked for the session day (`account_loss_gate`), the breach recorded where the engine stands, its entries cancelled and its positions exited (`account_breach`) |
+//!
+//! `advance` runs each slice as its phases in sequence (18-multi-strategy 2.3): the open
+//! phase (steps 1 and 2, `open_phase`, resumed by `resume_open_phase` after a timer pause),
+//! `Phase::Opened`, the levels phase (steps 3 to 6, `levels_phase`), the decision of step 7
+//! (`decision_phase`) and the close of step 8 (`end_slice`). They are the crate's entry
+//! points for a portfolio run's fund, which runs each phase across its engines before the
+//! next; a run of one engine runs them back to back, exactly as before.
 //!
 //! A pause is a decision point: `Pause::BarClose` in step 7 of a slice where a strategy
 //! bar closes by the clock (or where events wait and the strategy has callbacks), and
@@ -98,7 +107,7 @@
 //! | 3 resting orders, leg levels | `steps::step_levels` -> `legs::test_leg_levels` -> `rms::LegState::test_bar` (MIS; an option's stop as the segment's stop-limit, R12), `gtt_fire::test_gtts` (CNC and NRML levels and GTT orders), `resting::test_resting_orders` (LIMIT, SL, SL-M), exits through `fills::execute_fill`; then, under a fill model, the queued orders at the model's price (`fill_model::fill_queued_at_model`); a live session on ticks (`venue_ticks`) | yes |
 //! | 4 ratchets | `steps::step_ratchets` -> `legs::ratchet_legs` -> `rms::LegState::ratchet`, then `gtt::sync_gtts` (GTTs follow the levels, GTT-3); a live session on ticks | yes |
 //! | 5 mark | `steps::step_mark`: close, or last close and stale; the open trades see the slice's bar (`excursion`) | yes |
-//! | 6 aggregate rules | `aggregate::step_aggregate_rules`: daily loss limit, drawdown halt; their exits at the next open (`risk_exits_at_open`, step 2) or the last close; the session boundary in step 1 (`risk_session_open`) | yes (combined rules: Phase 3) |
+//! | 6 aggregate rules | `aggregate::step_aggregate_rules`: daily loss limit, drawdown halt; their exits at the next open (`risk_exits_at_open`, step 2) or the last close; the session boundary in step 1 (`risk_session_open`); a portfolio run's account breach after them, or in step 1 when it was found between slices (`account_breach`) | yes (combined rules: Phase 3) |
 //! | 7 callbacks and `on_bar` | `steps::callbacks_pause` -> `Pause::BarClose`; `submit::submit` | yes |
 //! | 8 session close | `steps::close_slice`: expire DAY orders, close open MIS positions at the last close (reason `eod`, flagged), settle expiring futures and post the futures mark to market (`settlement::settle_futures`), settle the day's contract notes (`accounting::settle_contract_notes`), credit the day's withheld sale proceeds (`sale_credit::credit_withheld_sales`) | yes (options expiry: Phase 3) |
 //!
@@ -127,7 +136,9 @@
 //! | `clock` | `Timeline`: the grid, slice facts, strategy-bar closes by the clock |
 //! | `run_end` | Where the run ends: the end of its range, its last bar or the present |
 //! | `market_data` | Base bars aligned to the grid; strategy bars via `data::resample` |
-//! | `kernel` | `Engine`, `advance`, `finish` |
+//! | `kernel` | `Engine`, `advance` (as the phases of a slice), `finish` |
+//! | `account_link` | A portfolio run's account in one engine: the room it leaves the engine, the second margin check of opening fills, the sizing cap, the account's entry gate |
+//! | `account_breach` | The account's daily loss limit breached in one engine: the lock, the record stamped where the engine stands, the cancels and exits |
 //! | `live_clock` | A live session: built before its bars, given each bar as its slice closes, holding before the slices not released |
 //! | `venue` | Who fills the orders (`Simulated`, `External`); the venue's types and its desk of what was asked and not answered; what a live session refuses as not built |
 //! | `venue_orders` | A live session's commands out: the units an order is sent with, the order sent or made an exit, a modification held until answered, a cancellation (the engine's own sent at most once in a slice) |
@@ -220,6 +231,10 @@
 //! or settlement at expiry, and the daily futures mark to market (`futures`, `roll`,
 //! `settlement`). Everything else returns `KernelError::NotBuilt` naming the feature.
 
+mod account_breach;
+mod account_link;
+#[cfg(test)]
+mod account_test_kit;
 mod accounting;
 mod aggregate;
 pub mod clock;
@@ -295,6 +310,8 @@ mod venue_stop_terms;
 mod venue_test_kit;
 mod venue_ticks;
 
+pub use account_breach::AccountBreach;
+pub use account_link::AccountLink;
 pub use clock::{SliceInfo, Timeline};
 pub use config::{
     BarColumns, BarPrice, CostConfig, FillModel, FillTiming, IntradayOverrides, Perturbation,

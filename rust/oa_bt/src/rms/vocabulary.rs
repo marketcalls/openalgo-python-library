@@ -37,11 +37,14 @@ pub enum ExitReason {
     Expiry = 12,
     /// The strategy's own exit (`exit()`, a reducing order, `exit_when`).
     Signal = 13,
+    /// The account's daily loss limit of a portfolio run, across its strategies
+    /// (`engine::account_breach`).
+    AccountLossLimit = 14,
 }
 
 impl ExitReason {
     /// Every reason, in code order.
-    pub const ALL: [ExitReason; 14] = [
+    pub const ALL: [ExitReason; 15] = [
         ExitReason::LegSl,
         ExitReason::LegTarget,
         ExitReason::TimeExit,
@@ -56,6 +59,7 @@ impl ExitReason {
         ExitReason::MarginLiquidation,
         ExitReason::Expiry,
         ExitReason::Signal,
+        ExitReason::AccountLossLimit,
     ];
 
     /// The reason string, as the live module writes it.
@@ -75,6 +79,7 @@ impl ExitReason {
             ExitReason::MarginLiquidation => "margin_liquidation",
             ExitReason::Expiry => "expiry",
             ExitReason::Signal => "signal",
+            ExitReason::AccountLossLimit => "account_loss_limit",
         }
     }
 
@@ -115,6 +120,9 @@ pub enum RiskEventName {
     GttChildUnfilled = 10,
     /// The trading state changed (ACTIVE, REDUCING, HALTED).
     TradingStateChanged = 11,
+    /// The account's daily loss limit of a portfolio run was breached, across its
+    /// strategies (`engine::account_breach`).
+    AccountLossHit = 12,
 }
 
 impl RiskEventName {
@@ -133,6 +141,7 @@ impl RiskEventName {
             RiskEventName::RiskHalt => "risk_halt",
             RiskEventName::GttChildUnfilled => "gtt_child_unfilled",
             RiskEventName::TradingStateChanged => "trading_state_changed",
+            RiskEventName::AccountLossHit => "account_loss_hit",
         }
     }
 }
@@ -147,6 +156,8 @@ pub enum RiskScope {
     Strategy = 1,
     /// The session (daily loss limit).
     Session = 2,
+    /// The account a portfolio run's strategies share (its daily loss limit).
+    Account = 3,
 }
 
 impl RiskScope {
@@ -156,6 +167,7 @@ impl RiskScope {
             RiskScope::Leg => "leg",
             RiskScope::Strategy => "strategy",
             RiskScope::Session => "session",
+            RiskScope::Account => "account",
         }
     }
 }
@@ -188,5 +200,15 @@ mod tests {
             assert_eq!(ExitReason::from_code(reason.code()), Some(reason));
         }
         assert_eq!(ExitReason::from_code("roll"), None);
+    }
+
+    #[test]
+    fn the_accounts_daily_loss_limit_has_its_exit_reason_event_and_scope() {
+        assert_eq!(
+            ExitReason::from_code("account_loss_limit"),
+            Some(ExitReason::AccountLossLimit)
+        );
+        assert_eq!(RiskEventName::AccountLossHit.code(), "account_loss_hit");
+        assert_eq!(RiskScope::Account.code(), "account");
     }
 }

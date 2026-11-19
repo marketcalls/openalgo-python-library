@@ -5,9 +5,9 @@
 //! between them.
 //!
 //! The opening part passes the fill-bar checks of any entry (no delivery short for CNC,
-//! the entry window for MIS, then margin) after the close has filled, as a separate
-//! entry order would. When it fails one, the close stands and the rest of the order is
-//! rejected with that code.
+//! the entry window for MIS, then margin, and in a portfolio run the account's margin,
+//! `account_link`) after the close has filled, as a separate entry order would. When it
+//! fails one, the close stands and the rest of the order is rejected with that code.
 //! Without `reverse=True` the order is rejected whole with `reverse_not_allowed`, at
 //! submission (`submit`) and again at the fill bar (`fills::at_fill`).
 
@@ -110,9 +110,7 @@ impl Engine {
             open_rupees,
             request.leverage,
         )?;
-        if margin > self.free_cash_rupees() {
-            return Ok(Err(RejectCode::Margin));
-        }
-        Ok(Ok(margin))
+        // Its own free cash, then a portfolio run's account (`account_link`).
+        Ok(self.check_opening_margin(margin).map(|()| margin))
     }
 }
