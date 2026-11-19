@@ -18,7 +18,8 @@ neighbours in the grid, a `CheckResult`; `.warnings`, a line when the best is a 
 spike rather than a plateau; `.deflated_sharpe`, the probability that the best's true
 Sharpe ratio is above what the best of that many tries would show by luck;
 `.overfitting_probability`, the probability of backtest overfitting by combinatorially
-symmetric cross-validation over the combinations' session returns; `.overfitting`, both
+symmetric cross-validation over the combinations' session returns (a figure near 0 does
+not show the settings hold); `.overfitting`, both
 with what they rest on; and `.tearsheet(path)`, the heatmap page that shows them. They
 are computed on first use and never change the table.
 """
@@ -30,6 +31,7 @@ from functools import cached_property
 from os import PathLike
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from ._messages import counted
@@ -49,7 +51,7 @@ class OptimizeResult:
         path: str,
         plan: str,
         runner: Callable[[dict[str, Any]], Any],
-        returns: list[pd.Series],
+        returns: np.ndarray,
         named: bool,
         strategy: str,
     ) -> None:
@@ -61,8 +63,9 @@ class OptimizeResult:
         self._path = path
         self._plan = plan
         self._runner = runner
-        # Each combination's session returns, in grid order; whether the objective is a
-        # metric's name (not a function); the strategy's name, for the page's title.
+        # The session returns, (sessions, combinations) in grid order
+        # (`_sweep_pool.returns_matrix`); whether the objective is a metric's name (not a
+        # function); the strategy's name, for the page's title.
         self._returns = returns
         self._named = named
         self._strategy = strategy
@@ -140,7 +143,7 @@ class OptimizeResult:
             self._table,
             self._combinations,
             self._parameters,
-            self._objective if self._named else None,
+            (self._objective, self._named),
             self._maximize,
             self._returns,
             self._best_position(),
@@ -175,8 +178,12 @@ class OptimizeResult:
         """The probability of backtest overfitting by combinatorially symmetric
         cross-validation over the combinations' session returns (Bailey, Borwein, Lopez
         de Prado and Zhu 2017): the share of the splits of the sessions into two halves
-        in which the combination best in sample ranks no better than the median out of
-        sample, 0 to 1; NaN with too few sessions or one combination."""
+        in which the combination best in sample ranks below the median out of sample (a
+        split at the median counting half), 0 to 1; NaN with too few sessions or one
+        combination. Every split cuts the same history, so a combination that held a
+        lasting exposure to its trend ranks well in all of them: near 0 does not show
+        the settings hold. Near 0.5 or above, the search did not pick settings that held
+        up across the blocks."""
         return self._checks.overfitting.probability
 
     @property

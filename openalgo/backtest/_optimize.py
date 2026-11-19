@@ -63,7 +63,15 @@ from ._objective import DEFAULT_OBJECTIVE, check_objective
 from ._optimize_result import OptimizeResult
 from ._pipeline import PreparedRun, execute, prepare
 from ._rerun import RunRecord
-from ._sweep_pool import Chunk, Measured, portable, run_combinations, run_in_pool, split
+from ._sweep_pool import (
+    Chunk,
+    Measured,
+    portable,
+    returns_matrix,
+    run_combinations,
+    run_in_pool,
+    split,
+)
 from .errors import ConfigError
 
 # Event strategies suit hundreds to a few thousand combinations (07-research 1).
@@ -236,28 +244,19 @@ def _split_settings(
     return run, ranges
 
 
-def optimize(
+def _sweep(
     strategy: type,
-    client: Any = None,
-    *,
-    objective: str | Callable[[Any], float] = DEFAULT_OBJECTIVE,
-    maximize: bool = True,
-    workers: int | None = None,
-    progress: Callable[[str], Any] | None = None,
-    **settings: Any,
-) -> OptimizeResult:
-    """Sweep `strategy` over a grid; see the module docstring. Raises ConfigError for
-    unusable arguments, a strategy or objective that worker processes cannot import
-    (without cloudpickle), and whatever a single backtest raises."""
-    from .strategy import Strategy
-
-    if not (isinstance(strategy, type) and issubclass(strategy, Strategy)):
-        raise ConfigError("bt.optimize takes a bt.Strategy subclass")
-    check_objective(objective)
-    run_settings, ranges = _split_settings(strategy, settings)
-    arguments = _run_arguments(client, run_settings)
-    names, combinations = grid(strategy, ranges, arguments["params"])
-    prepared = prepare(strategy, client, arguments, combinations)
+    objective: Any,
+    prepared: PreparedRun,
+    arguments: dict[str, Any],
+    combinations: list[dict[str, Any]],
+    asked: tuple[int | None, Callable[[str], Any] | None],
+) -> tuple[list[Measured], str, str]:
+    """(each combination's row and session returns in grid order, the evaluation path,
+    the plan): the opening combinations here, the plan reported through `asked`'s
+    progress function (`workers`, `progress`), then the rest in this process or in
+    worker processes (module docstring)."""
+    workers, progress = asked
     name = strategy_source_hash(strategy) or strategy.__qualname__
     checks = IndicatorChecks(name, measured=prepared.measured)
     light = {key: arguments[key] for key in ("source", "tz")}
@@ -283,7 +282,34 @@ def optimize(
         later = run_in_pool(chunks, count)
     else:
         later = run(rest)
-    measured = [*opening.rows, *later]
+    return [*opening.rows, *later], opening.path, plan
+
+
+def optimize(
+    strategy: type,
+    client: Any = None,
+    *,
+    objective: str | Callable[[Any], float] = DEFAULT_OBJECTIVE,
+    maximize: bool = True,
+    workers: int | None = None,
+    progress: Callable[[str], Any] | None = None,
+    **settings: Any,
+) -> OptimizeResult:
+    """Sweep `strategy` over a grid; see the module docstring. Raises ConfigError for
+    unusable arguments, a strategy or objective that worker processes cannot import
+    (without cloudpickle), and whatever a single backtest raises."""
+    from .strategy import Strategy
+
+    if not (isinstance(strategy, type) and issubclass(strategy, Strategy)):
+        raise ConfigError("bt.optimize takes a bt.Strategy subclass")
+    check_objective(objective)
+    run_settings, ranges = _split_settings(strategy, settings)
+    arguments = _run_arguments(client, run_settings)
+    names, combinations = grid(strategy, ranges, arguments["params"])
+    prepared = prepare(strategy, client, arguments, combinations)
+    measured, path, plan = _sweep(
+        strategy, objective, prepared, arguments, combinations, (workers, progress)
+    )
     table = pd.DataFrame(
         [
             {**{n: c[n] for n in names}, **kept.row}
@@ -297,7 +323,6 @@ def optimize(
         record = RunRecord(strategy, client, {k: v for k, v in selected.items() if k != "client"})
         return execute(strategy, prepared, selected, record=record)
 
-    returns = [kept.returns for kept in measured]
     named = isinstance(objective, str)
     return OptimizeResult(
         table,
@@ -305,10 +330,10 @@ def optimize(
         names,
         label,
         maximize,
-        opening.path,
+        path,
         plan,
         runner,
-        returns,
+        returns_matrix(measured),
         named,
         strategy.__name__,
     )

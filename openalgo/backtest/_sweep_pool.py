@@ -14,6 +14,9 @@ The combinations are split into one contiguous chunk per worker, in grid order, 
 rows come back in that order, so a sweep's table does not depend on the number of
 workers. Each combination comes back as its row of the table and its session returns
 (`Measured`), which the optimizer's overfitting figures read (`_robust._optimizer_checks`).
+The combinations of a chunk that ran over the same sessions share one session index, so
+a chunk sends it back once; the sweep keeps the returns as one array
+(`returns_matrix`), 8 bytes a session and combination, and drops the indexes.
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from ._causality_checks import IndicatorChecks
@@ -107,12 +111,33 @@ def run_combinations(
 ) -> list[Measured]:
     """The row and the session returns of each combination, in order; `on_path` is told
     the evaluation path of each run (see `_pipeline.execute`)."""
-    rows = []
+    rows: list[Measured] = []
     for params in combinations:
         settings = {**arguments, "params": params}
         result = execute(strategy, prepared, settings, checks=checks, on_path=on_path)
-        rows.append(Measured(evaluate(result, objective), result.performance.session_returns))
+        returns = result.performance.session_returns
+        if rows and rows[-1].returns.index.equals(returns.index):
+            returns = pd.Series(returns.to_numpy(), index=rows[-1].returns.index, name=returns.name)
+        rows.append(Measured(evaluate(result, objective), returns))
     return rows
+
+
+def returns_matrix(measured: list[Measured]) -> np.ndarray:
+    """The session returns of a sweep's combinations as one (sessions, combinations)
+    array, in grid order, on every session any of them has in date order; a session a
+    combination has no return for counts 0 (its equity did not move). Each combination's
+    returns lie together in memory (Fortran order), so a sum over sessions runs in
+    NumPy's pairwise order (`_robust._overfitting_probability`)."""
+    if not measured:
+        return np.empty((0, 0))
+    first = measured[0].returns.index
+    if all(kept.returns.index.equals(first) for kept in measured):
+        matrix = np.empty((len(first), len(measured)), order="F")
+        for position, kept in enumerate(measured):
+            matrix[:, position] = kept.returns.to_numpy(dtype=float)
+        return matrix
+    joined = pd.concat([kept.returns for kept in measured], axis=1, ignore_index=True)
+    return np.asfortranarray(joined.sort_index().fillna(0.0).to_numpy(dtype=float))
 
 
 def run_chunk(chunk: Chunk) -> list[Measured]:
@@ -146,4 +171,12 @@ def run_in_pool(chunks: list[Chunk], workers: int) -> list[Measured]:
         return [row for rows in pool.map(run_chunk, chunks) for row in rows]
 
 
-__all__ = ["Chunk", "Measured", "portable", "run_combinations", "run_in_pool", "split"]
+__all__ = [
+    "Chunk",
+    "Measured",
+    "portable",
+    "returns_matrix",
+    "run_combinations",
+    "run_in_pool",
+    "split",
+]

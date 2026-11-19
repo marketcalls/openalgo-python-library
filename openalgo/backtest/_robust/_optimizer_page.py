@@ -41,9 +41,12 @@ READING = (
     "below it does not.",
     "The probability of backtest overfitting cuts the sessions into blocks and tries every "
     "way of putting half of them in sample: it is the share of those splits in which the "
-    "combination with the best Sharpe ratio in sample ranks no better than the median out "
-    "of sample (Bailey, Borwein, Lopez de Prado and Zhu 2017). Near 0 the search picks "
-    "settings that hold; near 0.5 or above it picks noise.",
+    "combination with the best Sharpe ratio in sample ranks below the median out of "
+    "sample, a split at the median counting half (Bailey, Borwein, Lopez de Prado and Zhu "
+    "2017). Near 0 the best in sample also ranked well in the other blocks of this one "
+    "history, which a lasting exposure to its trend gives as well; it does not show the "
+    "settings hold. Near 0.5 or above, the search did not pick settings that held up "
+    "across the blocks.",
 )
 
 
@@ -139,8 +142,8 @@ def _overfitting(result: Any) -> Section:
     logits = result._checks.overfitting.logits
     histogram = HistogramBlock(
         "Rank of the best out of sample",
-        "The logit of each split: at or below zero, the best in sample ranked no better than "
-        "the median out of sample",
+        "The logit of each split: below zero, the best in sample ranked below the median out "
+        "of sample; at zero, at the median (counted half)",
         logits,
         False,
         (Mark(0.0, "the median", REFERENCE),),

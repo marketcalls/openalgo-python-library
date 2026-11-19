@@ -78,11 +78,10 @@ def _result(verdict: str, figure: str, rule: str, note: str, table, summary) -> 
 
 
 def _neighbourhood(
-    grid: Grid, table: pd.DataFrame, best: int, objective: str | None, maximize: bool
+    grid: Grid, table: pd.DataFrame, best: int, name: str, level: float | None, maximize: bool
 ) -> CheckResult:
-    """The rule on the best combination's neighbours (module docstring)."""
-    name = objective or "objective"
-    level = BREAK_EVEN.get(objective) if objective is not None else None
+    """The rule on the best combination's neighbours (module docstring), for the
+    objective `name` with break-even `level` (None for none)."""
     rule = rule_words(name, 0.0 if level is None else level, DEFAULT_KEEP)
     near = grid.neighbours(best)
     frame = table.assign(
@@ -118,30 +117,25 @@ def _neighbourhood(
     return _result(verdict, figure_words(found, name), rule, note, frame, found.summary())
 
 
-def _matrix(returns: Sequence[pd.Series]) -> np.ndarray:
-    """The session returns as (sessions, combinations), a missing session 0."""
-    if not returns:
-        return np.empty((0, 0))
-    joined = pd.concat(list(returns), axis=1, ignore_index=True).sort_index()
-    return joined.fillna(0.0).to_numpy(dtype=float)
-
-
 def optimizer_checks(
     table: pd.DataFrame,
     combinations: Sequence[Mapping[str, Any]],
     names: Sequence[str],
-    objective: str | None,
+    objective: tuple[str, bool],
     maximize: bool,
-    returns: Sequence[pd.Series],
+    returns: np.ndarray,
     best: int,
 ) -> OptimizerChecks:
     """The `OptimizerChecks` of a sweep: its `table` (an objective and a net_profit column
-    a combination), its combinations and swept `names`, its objective's metric name (None
-    for a function), the direction it was ranked in, each combination's session returns
+    a combination), its combinations and swept `names`, its objective as (its name,
+    whether that is a metric's name rather than a function's), the direction it was
+    ranked in, the session returns (sessions, combinations; `_sweep_pool.returns_matrix`)
     and the position of its best."""
     grid = Grid(tuple(names), tuple(combinations), dict(combinations[best]), True)
-    found = _neighbourhood(grid, table, best, objective, maximize)
-    matrix = _matrix(returns)
+    name, metric = objective
+    level = BREAK_EVEN.get(name) if metric else None
+    found = _neighbourhood(grid, table, best, name, level, maximize)
+    matrix = np.asarray(returns, dtype=float)
     deflated = deflated_sharpe(matrix[:, best], [matrix[:, k] for k in range(matrix.shape[1])])
     warnings = ()
     if found.verdict == FAILED:

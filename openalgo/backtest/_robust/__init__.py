@@ -79,6 +79,7 @@ seed, other parameters, a window of the run's sessions).
 | `_charts` | The fan, histogram and sessions charts as inline SVG |
 | `_charts_bars` | The candles, lines, groups of paths and tables of the bar checks |
 | `_charts_grid` | An objective over two parameters: the heatmap and the isometric surface |
+| `_chart_text` | Figures written only where they fit, and axis values that never meet |
 | `_charts_folds` | The fold diagram and the table with an equity line a row |
 | `_scorecard` | The scorecard table and its top line |
 | `_html` | The HTML robustness report |

@@ -17,9 +17,14 @@ split: the chosen blocks are in sample, the others out of sample. In each split:
        counting half, an undefined ratio below every defined one;
     3. its relative rank w = rank / (N + 1) gives the logit ln(w / (1 - w)).
 
-The probability of backtest overfitting is the share of splits whose logit is zero or
-less: how often the best in sample ranks no better than the median out of sample. A
-split with no defined Sharpe ratio in sample is left out of the count.
+The probability of backtest overfitting is the share of splits whose logit is below
+zero, how often the best in sample ranks below the median out of sample, a split whose
+logit is exactly zero (the best at the median, which an odd number of combinations
+allows and identical combinations always give) counting half. On returns with no edge
+the best in sample is as likely to rank above the median out of sample as below it, so
+the probability averages one half for any number of combinations; counting a split at
+the median in full would raise it to two thirds with three combinations. A split with
+no defined Sharpe ratio in sample is left out of the count.
 
 Fewer blocks are used when the sessions are few: the largest even number up to
 `blocks` that leaves `BLOCK_SESSIONS` sessions in each block; below `FEWEST_BLOCKS`, or
@@ -130,8 +135,15 @@ def overfitting(matrix: np.ndarray, wanted: int = DEFAULT_BLOCKS) -> Overfitting
         logits.append(_logits(inside, outside))
     every = np.concatenate(logits)
     counted = every[np.isfinite(every)]
-    probability = float((counted <= 0).mean()) if len(counted) else math.nan
-    return Overfitting(probability, blocks, len(chosen), counted)
+    return Overfitting(below_median_share(counted), blocks, len(chosen), counted)
+
+
+def below_median_share(logits: np.ndarray) -> float:
+    """The share of `logits` below zero, one at exactly zero counting half (module
+    docstring); NaN for none."""
+    if not len(logits):
+        return math.nan
+    return float(((logits < 0).sum() + 0.5 * (logits == 0).sum()) / len(logits))
 
 
 __all__ = [
@@ -139,6 +151,7 @@ __all__ = [
     "DEFAULT_BLOCKS",
     "FEWEST_BLOCKS",
     "Overfitting",
+    "below_median_share",
     "blocks_for",
     "overfitting",
 ]

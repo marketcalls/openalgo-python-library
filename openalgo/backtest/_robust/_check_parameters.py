@@ -13,7 +13,7 @@ objective above break-even and the median keeping at least `keep` (half) of the 
 Not judged when the run has too few closed trades or did not make money, when its
 objective is undefined, has no break-even or is not above it, when the strategy has no
 number parameter to move and no range is given, when the run's parameters are not a
-combination of the ranges given, or when no neighbour's objective is defined.
+combination of the ranges searched, or when no neighbour's objective is defined.
 
 Charts: the heatmap of the first two parameters that vary (the others held at the chosen
 values) with the chosen cell outlined; the same grid as an isometric surface; the
@@ -101,8 +101,8 @@ def unjudged(subject: SearchRun, settings: Mapping[str, Any], objective: Any) ->
         shown = params_text({name: grid.run_params[name] for name in grid.names})
         return not_judged(
             text,
-            f"The run's parameters ({shown}) are not a combination of the ranges given; give "
-            "ranges that hold them.",
+            f"The run's parameters ({shown}) are not a combination of the ranges searched; "
+            "give or declare ranges that hold them.",
         )
     if not grid.neighbours(chosen):
         return not_judged(text, "The chosen parameters have no neighbour in the grid.")
@@ -147,7 +147,7 @@ def run(
     )
     if found is None:
         return not_judged(text, "No neighbour's objective is defined." + set_.failure_note())
-    where = "the grid of the ranges given" if grid.given else _cube_words(grid, settings["step"])
+    where = "the grid of the ranges" if grid.given else _cube_words(grid, settings["step"])
     note = (
         f"Each combination of {where} reran on the run's own bars; the chosen parameters "
         f"have {words.whole(len(near), 'neighbour')}, the combinations at most one step from "

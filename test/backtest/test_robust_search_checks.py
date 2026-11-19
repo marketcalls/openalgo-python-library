@@ -11,10 +11,19 @@ so what one window favours the next does not.
 
 import pandas as pd
 import pytest
-from robust_runs import FREE, Flip, Weekday, bars, steps_for, weekday_bars, weekday_trades
+from robust_runs import (
+    FREE,
+    Flip,
+    Weekday,
+    bars,
+    nse_sessions,
+    steps_for,
+    weekday_bars,
+    weekday_trades,
+)
 
 import openalgo.backtest as bt
-from openalgo.backtest._robust._verdict import FAILED, NOT_JUDGED, PASSED
+from openalgo.backtest._robust._verdict import FAILED, INFORMATIONAL, NOT_JUDGED, PASSED
 from openalgo.backtest._robust._windows import folds
 
 #: A trade on a favoured weekday and on another, rupees (10 shares x 3 and x -1).
@@ -95,6 +104,53 @@ def test_with_ranges_the_neighbourhood_is_the_grids(wednesday):
     check = report(wednesday, ["parameters"], params={"day": 2}, **FIVE).check("parameters")
     assert list(check.table["neighbour"]) == [False, True, False, True, False]
     assert check.summary["percentile"] == 1.0
+
+
+class DeclaredWeekday(Weekday):
+    """`Weekday` with its weekday declared as a range to search, Wednesday by default."""
+
+    day = bt.param(2, range(5))
+
+
+@pytest.fixture(scope="module")
+def declared(wednesday):
+    """The searching checks of a `DeclaredWeekday` run whose params= name the setting a
+    search picked, day 2."""
+    result = bt.backtest(DeclaredWeekday, data=wednesday, params={"day": 2}, **FREE)
+    return result.robustness(
+        checks=["out_of_sample", "walk_forward", "parameters", "noise_optimization"],
+        workers=1,
+        objective="net_profit",
+        progress=quiet,
+        walk_forward={"folds": 2, "min_trades": 20},
+        noise_optimization={"samples": 2},
+    )
+
+
+def test_params_given_are_the_chosen_point_inside_the_declared_ranges(declared):
+    # params= day 2 is the run's chosen setting; the declared range of day, 0 to 4, stays
+    # the space the searching checks search, so day 2 is judged among days 0 to 4.
+    parameters = declared.check("parameters")
+    assert list(parameters.table["day"]) == [0, 1, 2, 3, 4]
+    assert list(parameters.table["chosen"]) == [False, False, True, False, False]
+    assert list(declared.check("noise_optimization").table["day"]) == [0, 1, 2, 3, 4]
+    searched = declared.check("out_of_sample").table.dropna(subset=["day"])
+    assert list(searched["day"]) == [0, 1, 2, 3, 4]
+
+
+def test_params_given_leave_the_declared_ranges_to_re_fit(declared):
+    # Each of the two folds searches days 0 to 4 in sample and picks Wednesday.
+    walked = declared.check("walk_forward")
+    assert walked.verdict == PASSED, walked.note
+    assert list(walked.table["day"]) == [2, 2]
+
+
+def test_bt_walk_forward_reads_params_as_bt_optimize_does():
+    # A declared parameter that params= names is fixed, as bt.optimize fixes it, so a
+    # strategy with one declared parameter has nothing left to search.
+    data = weekday_bars(100, lambda s: (0,))
+    with pytest.raises(bt.errors.ConfigError, match="nothing to search"):
+        bt.walk_forward(DeclaredWeekday, data=data, **FREE, params={"day": 0}, workers=1)
 
 
 def test_a_strategy_without_a_number_parameter_is_not_judged():
@@ -205,6 +261,43 @@ def test_an_edge_that_rotates_fails_the_walk_forward():
     assert list(check.table["net_profit"]) == lost
 
 
+def test_a_walk_forward_with_no_edge_in_sample_is_not_judged_and_shows_its_folds():
+    # Every trade loses 10, so the best of every fold's search loses money in sample: the
+    # folds' mean in-sample net profit is below 0 and there is no edge to re-fit.
+    data = weekday_bars(WALK_SESSIONS, lambda s: ())
+    found = report(data, ["walk_forward"], "net_profit", **FIVE)
+    check = found.check("walk_forward")
+    assert check.verdict == NOT_JUDGED
+    assert check.note.startswith("No edge to judge: the folds' mean in-sample net_profit per year")
+    assert check.note.endswith("not above 0, the value of a run that makes nothing.")
+    assert len(check.table) == 5
+    assert found.tearsheet().count("class='fold-in'") == 5
+
+
+class LateWeekday(Weekday):
+    """`Weekday` that trades only from session `LATE_SESSION` of the walk-forward runs."""
+
+    def on_bar(self, bar):
+        if bar.time.date() >= nse_sessions("2023-01-02", WALK_SESSIONS)[LATE_SESSION]:
+            super().on_bar(bar)
+
+
+#: The first session `LateWeekday` trades on: after the in-sample windows of folds 1 to 3
+#: (which end at sessions 126, 181 and 235) and inside those of folds 4 and 5.
+LATE_SESSION = 240
+
+
+def test_a_fold_that_chose_nothing_counts_as_a_fold_that_made_no_money():
+    # Folds 1 to 3 have no trade in sample, so no defined expectancy, and choose nothing;
+    # folds 4 and 5 choose Monday and win out of sample. Two of the five folds made money.
+    data = weekday_bars(WALK_SESSIONS, lambda s: (0,))
+    result = bt.walk_forward(
+        LateWeekday, data=data, **FREE, objective="expectancy", workers=1, progress=quiet, **FIVE
+    )
+    assert list(result.folds["day"].isna()) == [True, True, True, False, False]
+    assert result.profitable_share == 2 / 5
+
+
 def test_anchored_folds_grow_their_in_sample_window(planted_walk):
     data, _ = planted_walk
     result = bt.walk_forward(
@@ -276,26 +369,44 @@ def test_bt_walk_forward_states_its_plan_before_it_runs():
     )
 
 
+def test_bt_walk_forward_suggests_the_condition_form_for_many_event_reruns():
+    from openalgo.backtest._conditions import CONDITIONS_PATH, EVENT_PATH
+    from openalgo.backtest._robust._reruns import Workers
+    from openalgo.backtest._robust._walk_forward import _plan
+
+    made = folds(WALK_SESSIONS, 5, 0.7, anchored=False)
+    shape, here = {"anchored": False, "in_sample": 0.7}, Workers(1, "")
+    # 5 folds of 200 combinations rerun 5 x 201 = 1,005 times, past 1,000; of 199, 1,000.
+    many = _plan("Weekday", made, shape, 200, here, (0.01, EVENT_PATH))
+    assert many.endswith("which runs without a Python call per bar.")
+    assert "condition form" not in _plan("Weekday", made, shape, 199, here, (0.01, EVENT_PATH))
+    assert "condition form" not in _plan("Weekday", made, shape, 200, here, (0.01, CONDITIONS_PATH))
+
+
 # ----- 2.17 noise-robust optimization ------------------------------------------------------
 
 
-def test_the_robust_choice_of_a_lone_spike_fails_its_neighbourhood(wednesday):
-    # On every noisy copy Wednesday still wins and its neighbours still lose.
-    check = report(
-        wednesday, ["noise_optimization"], noise_optimization={"samples": 3}, **FIVE
-    ).check("noise_optimization")
+def test_the_robust_choice_of_a_lone_spike_is_shown_off_a_plateau_without_a_verdict(wednesday):
+    # On every noisy copy Wednesday still wins and its neighbours still lose: the
+    # neighbourhood rule does not hold for the robust choice. Design 17 makes the check
+    # informational, so the rule's outcome is its figure, not a failure counted.
+    found = report(wednesday, ["noise_optimization"], noise_optimization={"samples": 3}, **FIVE)
+    check = found.check("noise_optimization")
     robust = check.table[check.table["robust"]]
     assert list(robust["day"]) == [2]
-    assert check.verdict == FAILED
-    assert check.summary["profitable_share"] == 0.0
+    assert check.verdict == INFORMATIONAL
+    assert check.summary["profitable_share"] == 0.0 and check.summary["plateau"] == 0.0
+    assert "by the neighbourhood rule a lone spike, not a plateau" in check.figure
+    assert not found.passed
 
 
-def test_the_robust_choice_of_a_plateau_passes(every_day):
+def test_the_robust_choice_of_a_plateau_is_shown_on_a_plateau_without_a_verdict(every_day):
     check = report(
         every_day, ["noise_optimization"], noise_optimization={"samples": 3}, **FIVE
     ).check("noise_optimization")
-    assert check.verdict == PASSED
-    assert check.summary["profitable_share"] == 1.0
+    assert check.verdict == INFORMATIONAL
+    assert check.summary["profitable_share"] == 1.0 and check.summary["plateau"] == 1.0
+    assert "by the neighbourhood rule on a plateau" in check.figure
 
 
 def test_without_ranges_the_noise_robust_optimization_is_not_judged(wednesday):

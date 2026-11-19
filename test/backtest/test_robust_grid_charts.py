@@ -126,3 +126,85 @@ def test_a_single_row_grid_draws(draw):
         "One parameter", "", "day", "", ("0", "1", "2"), ("",), np.array([[1.0, 2.0, 3.0]]), 0.0, ()
     )
     assert well_formed(draw(row))
+
+
+# ----- a large grid ---------------------------------------------------------------------
+
+#: The width of a character of the charts' 10-pixel mono type, pixels (0.6 of an em).
+CHARACTER = 6.0
+#: The height of a line of that type, pixels.
+LINE = 12.0
+#: The text of an axis value, and of a figure written in a cell.
+AXIS = (
+    r"<text x='(-?[\d.]+)' y='(-?[\d.]+)'(?: text-anchor='(\w+)')? "
+    r"style='[^']*text-faint\)'>([^<]*)</text>"
+)
+CELL = (
+    r"<rect class='heat-cell[^']*' x='[\d.]+' y='[\d.]+' width='([\d.]+)' height='([\d.]+)'"
+    r"[^>]*/><text[^>]*class='cell-text'>([^<]*)</text>"
+)
+
+
+def large(surface: bool = False) -> GridBlock:
+    """20 by 20 combinations of a stop and a target as fractions ("0.0125" to "0.25"), the
+    net profit of most -20,308.43 rupees, as bt.optimize's default objective gives them,
+    and of the first five of the first row 1,234.50, 523.40, 3.25, -1,234.50 and none."""
+    values = np.full((20, 20), -20_308.43)
+    values[0, :5] = [1_234.5, 523.4, 3.25, -1_234.5, np.nan]
+    stops = tuple(f"{0.0125 * (k + 1):g}" for k in range(20))
+    return GridBlock("Net profit", "", "stop", "target", stops, stops, values, 0.0, (), surface)
+
+
+def _spans(labels: list[tuple[float, float, str, str]]) -> list[tuple[float, float, float]]:
+    """(left, right, baseline) of each label, from its anchor."""
+    found = []
+    for x, y, anchor, text in labels:
+        width = len(text) * CHARACTER
+        left = {"middle": x - width / 2, "end": x - width}.get(anchor, x)
+        found.append((left, left + width, y))
+    return found
+
+
+def overlapping(labels: list[tuple[float, float, str, str]]) -> list[tuple[int, int]]:
+    """The pairs of labels whose boxes overlap."""
+    spans = _spans(labels)
+    return [
+        (a, b)
+        for a in range(len(spans))
+        for b in range(a + 1, len(spans))
+        if abs(spans[a][2] - spans[b][2]) < LINE
+        and spans[a][0] < spans[b][1]
+        and spans[b][0] < spans[a][1]
+    ]
+
+
+def axis_labels(chart: str) -> list[tuple[float, float, str, str]]:
+    return [(float(x), float(y), a, t) for x, y, a, t in re.findall(AXIS, chart)]
+
+
+def test_a_large_heatmap_writes_each_figure_whole_short_or_not_at_all():
+    chart = heatmap_chart(large())
+    cells = re.findall(CELL, chart)
+    assert len(cells) == 400
+    for width, height, shown in cells:
+        assert len(shown) * CHARACTER <= float(width), shown
+        assert not shown or float(height) >= LINE, height
+    # A cell is about 30 pixels wide, five characters less its padding: 3.25 fits whole,
+    # 523.40 is written "523", 1,234.50 "1.2k" and -20,308.43 "-20k"; -1,234.50 needs
+    # "-1.2k", five characters, so only its title holds it.
+    shown = [text for _, _, text in cells]
+    assert shown[:5] == ["1.2k", "523", "3.25", "", ""]
+    assert set(shown[5:]) == {"-20k"}
+
+
+def test_a_large_heatmap_grows_taller_with_its_rows():
+    chart = heatmap_chart(large())
+    height = float(re.search(r"viewBox='0 0 \d+ ([\d.]+)'", chart).group(1))
+    assert height >= 20 * LINE * 1.5
+
+
+@pytest.mark.parametrize("draw", [heatmap_chart, surface_chart])
+def test_the_axis_values_of_a_large_grid_never_overlap(draw):
+    labels = axis_labels(draw(large(draw is surface_chart)))
+    assert labels
+    assert overlapping(labels) == []

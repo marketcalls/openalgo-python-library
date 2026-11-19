@@ -380,7 +380,8 @@ def robustness(strategy: type[Strategy], client: Any = None, **settings: Any) ->
         or as given without ranges), walk_forward (as `bt.walk_forward` runs it),
         parameters (every combination of the ranges, or each number parameter at minus,
         zero and plus 10 percent without, judged on the chosen setting's neighbours) and
-        noise_optimization (every combination on 50 noisy copies, scored by its median);
+        noise_optimization (every combination on 50 noisy copies, scored by its median;
+        informational, its figure saying whether the best score sits on a plateau);
         and the bar checks, which rerun the backtest on generated bars, other symbols'
         bars or the run's own bars with one setting changed:
         vs_random (random entries with the run's trades, and the strategy on permuted
@@ -407,7 +408,10 @@ def robustness(strategy: type[Strategy], client: Any = None, **settings: Any) ->
     ranges: keywords named after strategy parameters (`fast=range(5, 30, 5)`; the
         `bt.param` ranges the strategy declares otherwise) are what the searching checks
         search; `params=` holds the run's own parameters, its chosen settings, which the
-        parameter neighbourhood judges among their neighbours.
+        parameter neighbourhood judges among their neighbours. A parameter named in
+        `params=` keeps its declared range searched (so the best of `bt.optimize`, given
+        as `params=`, is checked inside the grid it was picked from); a one-value range
+        keyword (`fast=[10]`) holds it at one value.
     others: the symbols other_markets runs the strategy on, unchanged (["ICICIBANK",
         "HDFCBANK"] on the strategy's exchange, or (symbol, exchange) pairs), read from
         the run's source: a `data=` dict by symbol holding them, or OpenAlgo through
@@ -452,7 +456,8 @@ def walk_forward(strategy: type[Strategy], client: Any = None, **settings: Any) 
     that opens flat with the run's capital and reads its warm-up from the bars before it.
 
     Takes the run arguments of `bt.backtest`, the parameter ranges named after strategy
-    parameters (`fast=range(5, 30, 5)`; `bt.param` ranges otherwise), and `folds`,
+    parameters (`fast=range(5, 30, 5)`; `bt.param` ranges otherwise, a parameter that
+    `params=` names being fixed as in `bt.optimize`), and `folds`,
     `anchored`, `in_sample`, `objective`, `workers` and `progress` as `bt.optimize` takes
     them (the plan, with the reruns and an estimate, is reported before they run, through
     `progress` or the `openalgo.backtest.walk_forward` logger). The efficiency is the

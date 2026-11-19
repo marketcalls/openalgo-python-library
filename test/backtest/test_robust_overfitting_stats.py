@@ -86,6 +86,32 @@ def test_the_same_best_among_more_tries_is_deflated_more():
     assert many.deflated < few.deflated
 
 
+def _best_of(matrix: np.ndarray):
+    """The `DeflatedSharpe` of the column with the highest Sharpe ratio among all."""
+    columns = [matrix[:, k] for k in range(matrix.shape[1])]
+    best = int(np.nanargmax([sharpe(column) for column in columns]))
+    return deflated_sharpe(columns[best], columns)
+
+
+def test_the_best_of_many_tries_on_noise_does_not_stand_out_from_luck():
+    # 200 combinations of 500 sessions with no edge: the best's Sharpe ratio is about what
+    # the best of 200 tries shows by luck, so its deflated Sharpe ratio is far below 0.95
+    # in each of five seeds.
+    for seed in range(5):
+        noise = np.random.default_rng(seed).normal(0.0, 0.01, size=(500, 200))
+        assert _best_of(noise).deflated < 0.95
+
+
+def test_a_planted_edge_among_many_tries_stands_out_from_luck():
+    # One combination earns 0.25 of its spread a session (an annual Sharpe ratio near 4)
+    # among 199 with no edge: well above what the best of 200 tries shows by luck.
+    rng = np.random.default_rng(0)
+    returns = rng.normal(0.0, 0.01, size=(500, 200))
+    returns[:, 7] += 0.0025
+    found = _best_of(returns)
+    assert found.best_sharpe > found.expected and found.deflated > 0.95
+
+
 # ----- the probability of backtest overfitting --------------------------------------------
 
 
@@ -124,3 +150,24 @@ def test_a_best_in_sample_that_is_worst_out_of_sample_always_overfits():
 def test_too_few_sessions_or_one_combination_leave_the_probability_undefined():
     assert math.isnan(overfitting(np.ones((7, 3))).probability)
     assert math.isnan(overfitting(np.ones((40, 1))).probability)
+
+
+def test_identical_combinations_rank_at_the_median_and_count_half():
+    # Three combinations with the same returns tie in every split: the first is best in
+    # sample and ranks 1 + 0.5 x 2 = 2 of 3 out of sample, w = 2/4, logit 0, exactly at
+    # the median; a split at the median counts half, so nothing was selected either way.
+    base = _blocks([1.0, 2.0, 4.0, -7.0])
+    found = overfitting(np.column_stack([base, base, base]))
+    assert found.logits == pytest.approx([0.0] * 6)
+    assert found.probability == 0.5
+
+
+def test_on_noise_the_best_in_sample_is_as_likely_below_the_median_as_above():
+    # On returns with no edge the in-sample best's out-of-sample rank is equally likely
+    # to be any of 1 to N, so the probability averages one half for any N; with three
+    # combinations the median rank 2 comes up a third of the time, and counting it in
+    # full would average two thirds. 200 seeded matrices of 80 sessions, 8 blocks: the
+    # standard error of the mean is about 0.02.
+    rng = np.random.default_rng(0)
+    found = [overfitting(rng.normal(0.0, 0.01, size=(80, 3)), 8).probability for _ in range(200)]
+    assert abs(np.mean(found) - 0.5) < 0.05

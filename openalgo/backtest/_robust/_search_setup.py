@@ -20,6 +20,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from .._warm_up_probe import params_key
 from ._grid import Grid, cube, run_parameters, search_grid
 from ._rerun_one import Known, rerun
 from ._reruns import REAL, Family, Reruns
@@ -77,18 +78,19 @@ def parameter_sets(
 ) -> list[dict[str, Any]]:
     """The `params=` of every combination the searching checks may run: the run's own,
     the grid's, and the neighbourhood of `step` when the parameter neighbourhood check
-    runs with no grid (`step` None when it does not run); each once, in that order."""
+    runs with no grid (`step` None when it does not run); each once, in that order (a
+    combination that sets the parameters a run would hold anyway is the same run).
+    Raises ConfigError for a parameter value that cannot be told apart from another."""
     sets = [run_parameters(strategy, given)]
     if grid is not None:
         sets += [dict(combo) for combo in grid.combos]
     elif step is not None:
         found = cube(strategy, given, step)
         sets += [] if found is None else [dict(combo) for combo in found.combos]
-    unique: list[dict[str, Any]] = []
+    unique: dict[tuple, dict[str, Any]] = {}
     for params in sets:
-        if params not in unique:
-            unique.append(params)
-    return unique
+        unique.setdefault(params_key(run_parameters(strategy, params)), params)
+    return list(unique.values())
 
 
 def search_preview(

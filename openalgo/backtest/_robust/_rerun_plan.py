@@ -31,6 +31,11 @@ from ._reruns import REAL, Family
 #: Reruns on the event path above which the plan suggests the condition form, as
 #: `bt.optimize` does for a large grid (`_optimize.LARGE_EVENT_GRID`).
 LARGE_EVENT_RERUNS = 1000
+#: The plan's suggestion for that many reruns on the event path.
+CONDITION_FORM = (
+    " That many reruns suit the condition form (entry_when, exit_when), which runs "
+    "without a Python call per bar."
+)
 #: What the searching checks' reruns read, in words.
 SEARCHED = "the run's own bars over parameter combinations or windows of the run"
 
@@ -185,14 +190,12 @@ def timing_words(plan: Plan, seconds: float, generated: bool, workers: Any, path
         f" {timed.format(seconds)}; in {where}{why} the reruns should take about {estimate:.1f} s."
     )
     if path == EVENT_PATH and total > LARGE_EVENT_RERUNS:
-        text += (
-            " That many reruns suit the condition form (entry_when, exit_when), which runs "
-            "without a Python call per bar."
-        )
+        text += CONDITION_FORM
     return text
 
 
 __all__ = [
+    "CONDITION_FORM",
     "LARGE_EVENT_RERUNS",
     "SEARCHED",
     "Plan",

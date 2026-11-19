@@ -4,6 +4,7 @@ the windows of the run's sessions, and the parameter-neighbourhood rule's figure
 worked by hand."""
 
 import math
+import time
 
 import numpy as np
 import pytest
@@ -11,6 +12,7 @@ import pytest
 import openalgo.backtest as bt
 from openalgo.backtest._robust._grid import Grid, around, cube, search_grid
 from openalgo.backtest._robust._neighbourhood import plateau
+from openalgo.backtest._robust._search_setup import parameter_sets
 from openalgo.backtest._robust._windows import Window, folds, split, window_arguments
 from openalgo.backtest.errors import ConfigError
 
@@ -100,9 +102,19 @@ def test_without_ranges_the_declared_ones_make_the_grid():
     assert grid.names == ("fast",) and grid.axis("fast") == (5, 10, 15)
 
 
-def test_a_declared_range_fixed_by_params_leaves_nothing_to_search():
-    assert search_grid(Declared, {}, {"fast": 10}) is None
+def test_a_declared_range_stays_searched_when_params_choose_its_value():
+    # params= fast 15 is the run's chosen setting, the point inside the declared range.
+    grid = search_grid(Declared, {}, {"fast": 15})
+    assert grid.axis("fast") == (5, 10, 15) and grid.chosen() == 2
+
+
+def test_a_declared_range_fixed_by_params_as_bt_optimize_reads_them_leaves_nothing_to_search():
+    assert search_grid(Declared, {}, {"fast": 10}, params_fix=True) is None
+
+
+def test_a_strategy_with_no_range_given_or_declared_has_no_grid():
     assert search_grid(Crossing, {}, None) is None
+    assert search_grid(Crossing, {}, {"fast": 12}) is None
 
 
 def test_a_combination_changes_only_the_parameters_that_differ_from_the_runs():
@@ -130,6 +142,26 @@ def test_a_neighbour_is_at_most_one_step_away_in_every_parameter(place, expected
     position = 3 * place[0] + place[1]
     found = [(grid.combos[k]["x"], grid.combos[k]["y"]) for k in grid.neighbours(position)]
     assert found == expected
+
+
+def test_the_neighbours_in_a_large_grid_are_found_in_time_in_proportion_to_its_size():
+    # 10,000 combinations: each combination's place on the axes is found once, not each
+    # axis again for every combination, which takes seconds.
+    grid = _square(100)
+    started = time.perf_counter()
+    near = grid.neighbours(grid.chosen())
+    assert time.perf_counter() - started < 1.0
+    assert len(near) == 3
+
+
+def test_the_parameter_sets_of_a_large_grid_are_listed_once_each_in_proportion_to_its_size():
+    # The run's own fast 10, slow 40 is one of the 10,000 combinations, so 10,000 sets.
+    grid = search_grid(Crossing, {"fast": range(100), "slow": range(100)}, None)
+    started = time.perf_counter()
+    sets = parameter_sets(Crossing, {"fast": 10, "slow": 40}, grid, None)
+    assert time.perf_counter() - started < 1.0
+    assert len(sets) == 10_000
+    assert sets[0] == {"fast": 10, "slow": 40, "band": 2.0, "short": True, "label": "x"}
 
 
 # ----- the windows of the run's sessions ----------------------------------------------

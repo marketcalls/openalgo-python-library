@@ -8,14 +8,17 @@ curve (`_walk`, as `bt.walk_forward` runs it).
 
 Figures (`_walk`): the walk-forward efficiency, the stitched out-of-sample objective per
 year over the mean in-sample one, from break-even; the share of folds profitable out of
-sample; the parameter drift. Pass: the stitched out-of-sample run profitable (at least
-half a paisa), the efficiency at least `efficiency` (0.5), and at least `fold_share` (60
-percent) of the folds that traded profitable.
+sample, every fold counted (one that chose nothing made no money); the parameter drift.
+Pass: the stitched out-of-sample run profitable (at least half a paisa), the efficiency at
+least `efficiency` (0.5), and at least `fold_share` (60 percent) of the folds
+profitable.
 
 Not judged when no parameter range is given or declared (nothing to re-fit), when the
 objective has no break-even or is a function of a whole `Result` (the stitched run has
-none), when a window would hold fewer than two sessions, when no fold could choose, or
-when the stitched out-of-sample runs closed fewer than `min_trades` (30) trades.
+none), when a window would hold fewer than two sessions, when no fold could choose, when
+the stitched out-of-sample runs closed fewer than `min_trades` (30) trades, or when the
+folds' mean in-sample objective is not above break-even (no edge to re-fit, so the
+efficiency is undefined). The last two keep the fold table and charts.
 
 Charts: the fold diagram; the stitched out-of-sample equity; the fold table (dates,
 parameters chosen, a small equity line, net P&L, drawdown, P&L over drawdown, trades,
@@ -142,12 +145,8 @@ def run(
         return not_judged(text, "No fold could choose a combination with a defined objective.")
     table = fold_frame(outcome, subject.dates)
     blocks = _blocks(subject, outcome)
-    closed = int(outcome.performance.metrics["trades"])
-    if closed < settings["min_trades"]:
-        why = (
-            f"Too few trades to judge: the stitched out-of-sample runs closed "
-            f"{words.whole(closed, 'trade')}, {settings['min_trades']} needed."
-        )
+    why = _too_little(outcome, settings, objective)
+    if why is not None:
         return Outcome(NOT_JUDGED, "n/a", text, why, table, {}, blocks)
     summary = _summary(outcome)
     passed = (
@@ -159,7 +158,7 @@ def run(
     figure = (
         f"stitched out of sample {words.rupees(summary['net_profit'])}; efficiency "
         f"{words.percent(summary['efficiency'])}; {words.percent(summary['profitable_share'])} "
-        f"of {words.whole(len(traded), 'fold')} profitable; drift {drift_words(outcome)}"
+        f"of {words.whole(len(outcome.folds), 'fold')} profitable; drift {drift_words(outcome)}"
     )
     mode = "anchored" if settings["anchored"] else "rolling"
     note = (
@@ -171,6 +170,25 @@ def run(
         f"efficiency is measured from {break_even(objective):g}, a run that makes nothing."
     )
     return Outcome(PASSED if passed else FAILED, figure, text, note, table, summary, blocks)
+
+
+def _too_little(outcome: WalkOutcome, settings: Mapping[str, Any], objective: Any) -> str | None:
+    """Why the folds that traded leave nothing to judge (too few trades, or no edge in
+    sample to re-fit), else None."""
+    closed = int(outcome.performance.metrics["trades"])
+    if closed < settings["min_trades"]:
+        return (
+            f"Too few trades to judge: the stitched out-of-sample runs closed "
+            f"{words.whole(closed, 'trade')}, {settings['min_trades']} needed."
+        )
+    level, inside = break_even(objective), outcome.in_sample_annual
+    if not inside > level:
+        return (
+            f"No edge to judge: the folds' mean in-sample {annual_name(objective)} is "
+            f"{words.number(inside)}, not above {level:g}, the value of a run that makes "
+            "nothing."
+        )
+    return None
 
 
 def _summary(outcome: WalkOutcome) -> dict[str, float]:

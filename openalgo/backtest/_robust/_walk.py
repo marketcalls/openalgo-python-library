@@ -19,8 +19,9 @@ per trade) is taken as it is.
                        in-sample objectives (of the combinations chosen), both measured
                        from the objective's break-even; NaN when the in-sample mean is
                        not above it or the objective has no break-even
-    profitable_share   the share of the folds that traded whose out-of-sample run made
-                       at least half a paisa
+    profitable_share   the share of the folds whose out-of-sample run made at least half
+                       a paisa, every fold counted: one that chose nothing in sample (or
+                       whose run did not run) made no money
     drift              for each parameter, how far the choice moves from fold to fold:
                        for a number, the mean move between consecutive folds over the
                        span of its values in the grid (0, the same choice every fold, to
@@ -148,9 +149,10 @@ class WalkOutcome:
 
     @property
     def profitable_share(self) -> float:
-        """The share of the folds that traded whose out-of-sample run made money."""
-        traded = self.traded
-        return sum(fold.profitable for fold in traded) / len(traded) if traded else math.nan
+        """The share of the folds whose out-of-sample run made money, every fold counted
+        (module docstring)."""
+        folds = self.folds
+        return sum(fold.profitable for fold in folds) / len(folds) if folds else math.nan
 
     @property
     def net_profit(self) -> float:

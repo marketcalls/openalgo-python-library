@@ -13,9 +13,11 @@ combination also reruns on.
 Figures: the robust choice and its score; its neighbourhood on the noisy score, by the
 parameter-neighbourhood rule (`_neighbourhood`: a neighbour made money when its median
 noisy net profit did); its objective on the run's own bars against the plain optimum's.
-Pass (informational in the design's words, with the 2.16 rule applied to the robust
-choice): the robust choice's 25th percentile neighbour above break-even on the noisy
-score and its median neighbour keeping at least `keep` (half) of its score.
+Verdict: informational, as design 17 sets it, with the parameter-neighbourhood rule
+applied to the robust choice and its outcome stated in the figure and the summary
+(`plateau`, 1 when the rule holds, else 0): the robust choice's 25th percentile neighbour
+above break-even on the noisy score and its median neighbour keeping at least `keep`
+(half) of its score. It counts neither as a pass nor as a failure.
 
 Not judged when no parameter range is given or declared (there is nothing to search),
 when the objective has no break-even, when no combination has a defined score, or when
@@ -47,7 +49,7 @@ from ._search_common import grid_block, params_text
 from ._search_setup import SearchRun
 from ._setting import Setting, between, whole
 from ._trade_common import BREAK_EVEN_RUPEES
-from ._verdict import FAILED, PASSED, Outcome, not_judged
+from ._verdict import INFORMATIONAL, Outcome, not_judged
 from ._walk import best
 
 #: The number of this check: the stream of its noisy copies.
@@ -80,7 +82,10 @@ def rule(settings: Mapping[str, Any], objective: Any) -> str:
     words_ = rule_words(
         objective_name(objective), 0.0 if level is None else level, settings["keep"]
     )
-    return f"for the robust choice on the noisy score, {words_}"
+    return (
+        "informational: the parameter-neighbourhood rule applied to the robust choice on "
+        f"the noisy score, {words_}"
+    )
 
 
 def unjudged(subject: SearchRun, settings: Mapping[str, Any], objective: Any) -> Outcome | None:
@@ -160,6 +165,7 @@ def run(
     table = _table(grid, scores, profits, plain, robust, optimum)
     summary = {
         **found.summary(),
+        "plateau": float(found.passed),
         "robust_real": float(plain[robust]),
         "optimum_real": float(plain[optimum]) if optimum is not None else np.nan,
     }
@@ -168,11 +174,11 @@ def run(
         f"Each of {words.whole(len(grid.combos), 'combination')} reran on "
         f"{words.whole(settings['samples'], 'noisy copy', 'noisy copies')} of the run's bars, "
         "the same copies for every combination, and once on the run's own bars; its score is "
-        f"its median {name} over the copies. The neighbourhood rule reads the noisy score."
+        f"its median {name} over the copies. The neighbourhood rule reads the noisy score; "
+        "its outcome is stated, not counted as a pass or a failure (design 17)."
     )
     blocks = _blocks(grid, scores, plain, robust, optimum, name, level)
-    verdict = PASSED if found.passed else FAILED
-    return Outcome(verdict, figure, text, note, table, summary, blocks)
+    return Outcome(INFORMATIONAL, figure, text, note, table, summary, blocks)
 
 
 def _figure(
@@ -186,11 +192,12 @@ def _figure(
         if optimum is not None
         else "no plain optimum is defined"
     )
+    shape = "on a plateau" if found.passed else "a lone spike, not a plateau"
     return (
-        f"robust choice {params_text(grid.swept(robust))} scores {words.number(found.chosen)}; "
-        f"{words.percent(found.profitable_share)} of its neighbours profitable, the median "
-        f"keeps {words.percent(found.median_ratio)}; on the run's bars it makes "
-        f"{words.number(plain[robust])} {name}, and {against}"
+        f"robust choice {params_text(grid.swept(robust))} scores {words.number(found.chosen)}, "
+        f"by the neighbourhood rule {shape}: {words.percent(found.profitable_share)} of its "
+        f"neighbours profitable, the median keeps {words.percent(found.median_ratio)}; on "
+        f"the run's bars it makes {words.number(plain[robust])} {name}, and {against}"
     )
 
 

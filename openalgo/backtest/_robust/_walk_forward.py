@@ -24,6 +24,7 @@ from typing import Any
 
 import pandas as pd
 
+from .._conditions import EVENT_PATH
 from .._messages import counted
 from .._objective import check_objective
 from .._optimize import _run_arguments, _split_settings
@@ -34,6 +35,7 @@ from ._grid import Grid, search_grid
 from ._part_objective import objective_name
 from ._paths import fan_steps
 from ._rerun_one import Known, rerun
+from ._rerun_plan import CONDITION_FORM, LARGE_EVENT_RERUNS
 from ._reruns import Reruns, Setup, choose_workers, shipped
 from ._run_bars import bars_for
 from ._search_setup import SearchRun, parameter_sets, session_dates
@@ -97,7 +99,8 @@ class WalkForwardResult:
 
     @property
     def profitable_share(self) -> float:
-        """The share of the folds that traded whose out-of-sample run made money."""
+        """The share of the folds whose out-of-sample run made money, every fold counted:
+        one that chose nothing in sample made none."""
         return self._outcome.profitable_share
 
     @property
@@ -131,13 +134,22 @@ class WalkForwardResult:
 
 
 def _plan(
-    name: str, made: tuple, settings: Mapping[str, Any], combos: int, workers: Any, seconds: float
+    name: str,
+    made: tuple,
+    settings: Mapping[str, Any],
+    combos: int,
+    workers: Any,
+    timed: tuple[float, str],
 ) -> str:
+    """The line reported before the reruns: `timed` is (the seconds a rerun of the whole
+    run took, its evaluation path); a large total on the event path gets the condition
+    form's suggestion, as `bt.robustness` gives it."""
+    seconds, path = timed
     total = len(made) * (combos + 1)
     where = f"{workers.count} worker processes" if workers.count > 1 else "this process"
     why = f" ({workers.why})" if workers.why else ""
     mode = "anchored" if settings["anchored"] else "rolling"
-    return (
+    text = (
         f"bt.walk_forward: {counted(len(made), 'fold')} of {name}, {mode}, each "
         f"{settings['in_sample']:.0%} in sample, searching {counted(combos, 'combination')}: "
         f"{total} reruns ({len(made) * combos} in sample, {len(made)} out of sample), each an "
@@ -145,6 +157,9 @@ def _plan(
         f"{seconds:.2f} s; the reruns should take about "
         f"{total * seconds / max(workers.count, 1):.1f} s."
     )
+    if path == EVENT_PATH and total > LARGE_EVENT_RERUNS:
+        text += CONDITION_FORM
+    return text
 
 
 def _checked(
@@ -164,8 +179,9 @@ def _checked(
 
 
 def _grid(strategy: type, ranges: dict[str, Any], given: Any) -> Grid:
-    """The grid searched. Raises ConfigError when there is nothing to search."""
-    grid = search_grid(strategy, ranges, given)
+    """The grid searched, `params=` `given` fixing the parameters it names as in
+    `bt.optimize`. Raises ConfigError when there is nothing to search."""
+    grid = search_grid(strategy, ranges, given, params_fix=True)
     if grid is None:
         raise ConfigError(
             f"bt.walk_forward: nothing to search: pass ranges named after the parameters of "
@@ -199,14 +215,16 @@ def walk_forward(
     bars, rerun_arguments = bars_for(strategy, client, arguments, sets, FUTURES)
     dates = session_dates(bars)
     made = cut_folds(len(dates), shape["folds"], shape["in_sample"], shape["anchored"])
-    started = time.perf_counter()
-    _, known = rerun(strategy, rerun_arguments, bars.symbols, list(bars.frames), Known())
-    seconds = time.perf_counter() - started
+    started, paths = time.perf_counter(), []
+    _, known = rerun(
+        strategy, rerun_arguments, bars.symbols, list(bars.frames), Known(), paths.append
+    )
+    timed = (time.perf_counter() - started, paths[0])
     chosen = choose_workers(workers, len(made) * (len(grid.combos) + 1), strategy, rerun_arguments)
     ship = (shipped(strategy, "the strategy", chosen), shipped(objective, "the objective", chosen))
     steps = fan_steps(len(dates))
     setup = Setup(*ship, rerun_arguments, bars, known, pd.DatetimeIndex(dates), steps, None)
-    plan = _plan(strategy.__name__, made, shape, len(grid.combos), chosen, seconds)
+    plan = _plan(strategy.__name__, made, shape, len(grid.combos), chosen, timed)
     (progress or LOGGER.info)(plan)
     with Reruns(setup, chosen) as runner:
         capital = float(arguments["capital"])

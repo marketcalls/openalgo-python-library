@@ -2,11 +2,15 @@
 and 2.17): a grid of the parameter ranges given, or the neighbourhood of the run's own
 parameters when none are.
 
-The ranges: the keywords named after strategy parameters (`fast=range(5, 30, 5)`), else
-the ranges the strategy declares with `bt.param(default, values)` for the parameters
-`params=` does not fix, as `bt.optimize` reads them (`_optimize.grid`). The run's own
-`params=` values are its chosen parameters; a parameter both given in `params=` and as a
-range is chosen there and searched over the range. The grid's combinations are in grid
+The ranges: the keywords named after strategy parameters (`fast=range(5, 30, 5)`), and
+the ranges the strategy declares with `bt.param(default, values)` for the others. The
+run's own `params=` values are its chosen parameters, the point the parameter
+neighbourhood judges: a parameter with a range, given or declared, is chosen in
+`params=` and searched over its range, so a trader who checks the best of a sweep by
+passing it as `params=` keeps the declared ranges searched (lead, 2026-11-19); a
+parameter with no range keeps its `params=` value in every combination. `bt.walk_forward`,
+which has no chosen point, reads `params=` as `bt.optimize` does (`params_fix`): a
+declared parameter it names is fixed, not searched. The grid's combinations are in grid
 order (the first parameter slowest), and each parameter's values in the order its range
 gives them, which is the order its steps are counted in.
 
@@ -20,7 +24,8 @@ parameter that is not a number (a flag, a name) stays as the run has it.
 
 A neighbour of a combination (`Grid.neighbours`) is another combination of the grid at
 most one step from it in every parameter: the 8 around it on a grid of two parameters,
-the 26 of three.
+the 26 of three. Each combination's place on every axis is found once per grid, so
+finding neighbours takes time in proportion to the combinations.
 """
 
 from __future__ import annotations
@@ -30,7 +35,10 @@ import math
 import numbers
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Any
+
+import numpy as np
 
 from .._optimize import _values
 from .._optimize import grid as sweep_grid
@@ -72,21 +80,27 @@ class Grid:
         found = [k for k in range(len(self.combos)) if self.swept(k) == wanted]
         return found[0] if found else None
 
+    @cached_property
+    def places(self) -> np.ndarray:
+        """(combinations, parameters): the place of each combination on each parameter's
+        axis, counted from 0."""
+        columns = []
+        for name in self.names:
+            where = {value: k for k, value in enumerate(self.axis(name))}
+            columns.append([where[combo[name]] for combo in self.combos])
+        return np.array(columns, dtype=np.int64).T.reshape(len(self.combos), len(self.names))
+
     def steps(self, position: int) -> tuple[int, ...]:
         """The place of combination `position` on each parameter's axis."""
-        combo = self.combos[position]
-        return tuple(self.axis(name).index(combo[name]) for name in self.names)
+        return tuple(int(place) for place in self.places[position])
 
     def neighbours(self, position: int) -> list[int]:
         """The positions of the neighbours of combination `position` (module
         docstring), in grid order."""
-        places = [self.steps(k) for k in range(len(self.combos))]
-        mine = places[position]
-        return [
-            k
-            for k, place in enumerate(places)
-            if k != position and all(abs(a - b) <= 1 for a, b in zip(place, mine, strict=True))
-        ]
+        places = self.places
+        near = np.all(np.abs(places - places[position]) <= 1, axis=1)
+        near[position] = False
+        return [int(k) for k in np.flatnonzero(near)]
 
 
 def run_parameters(strategy: type, given: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -96,15 +110,22 @@ def run_parameters(strategy: type, given: Mapping[str, Any] | None) -> dict[str,
 
 
 def search_grid(
-    strategy: type, ranges: Mapping[str, Any], given: Mapping[str, Any] | None
+    strategy: type,
+    ranges: Mapping[str, Any],
+    given: Mapping[str, Any] | None,
+    *,
+    params_fix: bool = False,
 ) -> Grid | None:
     """The grid of the ranges (module docstring) around a run with `params=` `given`;
-    None when no range is given and the strategy declares none that `params=` leaves
-    free. Raises ConfigError for an empty range."""
-    fixed = {name: value for name, value in dict(given or {}).items() if name not in ranges}
-    declared = [name for name in strategy.parameter_ranges() if name not in fixed]
-    if not ranges and not declared:
+    None when no range is given or declared. With `params_fix` a declared parameter that
+    `given` names is fixed, as `bt.optimize` fixes it, and is not a range. Raises
+    ConfigError for an empty range or a name in `given` the strategy does not have."""
+    given = dict(given or {})
+    declared = [name for name in strategy.parameter_ranges() if not (params_fix and name in given)]
+    searched = set(ranges) | set(declared)
+    if not searched:
         return None
+    fixed = {name: value for name, value in given.items() if name not in searched}
     names, combos = sweep_grid(strategy, dict(ranges), fixed)
     return Grid(tuple(names), tuple(combos), run_parameters(strategy, given), True)
 

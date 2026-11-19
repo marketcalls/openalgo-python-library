@@ -10,12 +10,15 @@ own daily bars with no server, in this process.
 
 import math
 
+import numpy as np
+import pandas as pd
 import pytest
 from robust_runs import FREE, Weekday, weekday_bars, weekday_trades
 from test_report_tearsheet import FORBIDDEN_NAME_HASHES, Structure, section_ids
 
 import openalgo.backtest as bt
 from openalgo.backtest._robust._verdict import FAILED, NOT_JUDGED, PASSED
+from openalgo.backtest._sweep_pool import Measured
 from openalgo.backtest.errors import ConfigError
 
 SESSIONS = 300
@@ -70,6 +73,35 @@ def test_the_figures_change_no_column_of_the_table(spike):
     ]
 
 
+def test_the_sweep_keeps_its_session_returns_as_one_array(spike):
+    # 8 bytes a session and combination, with no session index kept per combination.
+    returns = spike._returns
+    assert isinstance(returns, np.ndarray) and returns.shape == (SESSIONS, 5)
+    assert returns.nbytes == 8 * SESSIONS * 5
+
+
+def _measured(days: list[str], values: list[float]) -> Measured:
+    return Measured({}, pd.Series(values, index=pd.DatetimeIndex(days)))
+
+
+def test_session_returns_on_the_same_sessions_stand_side_by_side():
+    from openalgo.backtest._sweep_pool import returns_matrix
+
+    days = ["2025-01-01", "2025-01-02", "2025-01-03"]
+    matrix = returns_matrix(
+        [_measured(days, [0.01, 0.02, 0.03]), _measured(days, [0.0, -0.01, 0.0])]
+    )
+    assert matrix.tolist() == [[0.01, 0.0], [0.02, -0.01], [0.03, 0.0]]
+
+
+def test_a_session_a_combination_has_no_return_for_counts_zero():
+    from openalgo.backtest._sweep_pool import returns_matrix
+
+    first = _measured(["2025-01-01", "2025-01-03"], [0.01, 0.03])
+    second = _measured(["2025-01-02", "2025-01-03"], [0.02, -0.01])
+    assert returns_matrix([first, second]).tolist() == [[0.01, 0.0], [0.0, 0.02], [0.03, -0.01]]
+
+
 def test_a_best_that_dominates_every_block_never_overfits(spike):
     # Wednesday's session returns are above every other day's in every block of the
     # cross-validation, so it is best in sample and out of sample in all C(16, 8) splits.
@@ -97,6 +129,21 @@ def test_an_objective_without_a_break_even_leaves_the_neighbourhood_not_judged()
     result = sweep(weekday_bars(SESSIONS, lambda s: (2,)), objective="win_rate")
     assert result.neighbourhood.verdict == NOT_JUDGED
     assert result.neighbourhood.note.startswith("The objective win_rate has no value")
+
+
+def net(result) -> float:
+    """An objective function: the run's net profit."""
+    return result.metrics["net_profit"]
+
+
+def test_an_objective_function_is_named_where_the_neighbourhood_is_not_judged():
+    # A function's value for a run that makes nothing is not known, so the rule has no
+    # break-even to measure from; the note names the function once.
+    result = sweep(weekday_bars(SESSIONS, lambda s: (2,)), objective=net)
+    assert result.neighbourhood.verdict == NOT_JUDGED
+    assert result.neighbourhood.note == (
+        "The objective net has no value that says a run made nothing."
+    )
 
 
 def test_a_grid_of_one_combination_has_nothing_to_deflate():
@@ -128,6 +175,22 @@ def test_the_page_draws_the_heatmap_and_the_surface_with_the_best_outlined(page)
 def test_the_page_states_the_spike_warning_and_the_figures(spike, page):
     assert "Warning: The best combination (day 2) looks like a lone spike" in page
     assert ">Deflated Sharpe<" in page and ">Overfitting<" in page
+
+
+def test_the_page_reads_a_low_probability_of_overfitting_as_no_proof_that_settings_hold(page):
+    # A combination that held a lasting exposure to one history's trend also ranks well
+    # in every block of it, so a probability near 0 cannot show the settings hold; near
+    # 0.5 says only that the search did not pick settings that held across the blocks.
+    assert "it does not show the settings hold" in page
+    assert "the search did not pick settings that held up across the blocks" in page
+    assert "picks noise" not in page and "picks settings that hold" not in page
+
+
+def test_the_probability_of_overfitting_says_what_a_low_figure_cannot_show():
+    from openalgo.backtest._optimize_result import OptimizeResult
+
+    words = " ".join(OptimizeResult.overfitting_probability.__doc__.split())
+    assert "near 0 does not show the settings hold" in words
 
 
 def test_the_page_is_one_self_contained_well_formed_page(page):

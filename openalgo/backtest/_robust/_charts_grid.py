@@ -12,8 +12,11 @@
               drawn from the back to the front, so a nearer column hides a farther one,
               its top face lit and its two front faces shaded; a marked column outlined
 
-Both read without colour: the heatmap writes each figure, the surface shows it as a
-height, and every cell and column carries a `<title>` with its parameters and figure.
+Both read without colour: the heatmap writes each figure that fits its cell (short, as
+"-20.3k", when the whole one does not, and none in a cell too small, `_chart_text`), the
+surface shows it as a height, and every cell and column carries a `<title>` with its
+parameters and figure. The heatmap grows taller with its rows, and a crowded axis shows
+every few values so that none meets another.
 """
 
 from __future__ import annotations
@@ -26,10 +29,15 @@ from ..report import _format as fmt
 from ..report._dashboard.bars import AXIS_TEXT, MUTED_TEXT, Margin, frame
 from ..report._dashboard.heatmaps import heat
 from ._blocks import GridBlock
+from ._chart_text import Label, placed, written
 from ._charts import HEIGHT, WIDTH
 
 #: The heatmap's margin: room for the y values on the left and the x values below.
 HEATMAP_MARGIN = Margin(14, 12, 40, 64)
+#: The height of a heatmap row while the chart grows with its rows, pixels: a written
+#: figure's line and some room; past `TALLEST_HEATMAP` the rows grow shorter instead.
+ROW_HEIGHT = 18
+TALLEST_HEATMAP = 720
 #: The smallest distance from break-even the colour scale is stretched to, so a flat
 #: grid stays pale.
 FLAT = 1e-12
@@ -66,11 +74,21 @@ def _marks(block: GridBlock) -> dict[tuple[int, int], str]:
     return {(column, row): label for column, row, label in block.marked}
 
 
+def heatmap_height(rows: int) -> int:
+    """The heatmap's chart height for `rows` rows, pixels (`ROW_HEIGHT`): the other
+    charts' height at least, `TALLEST_HEATMAP` at most."""
+    margin = HEATMAP_MARGIN
+    wanted = margin.top + margin.bottom + rows * ROW_HEIGHT
+    return min(max(HEIGHT, wanted), TALLEST_HEATMAP)
+
+
 def heatmap_chart(block: GridBlock) -> str:
     """The heatmap of `block` with its key."""
     margin = HEATMAP_MARGIN
-    width, height = WIDTH - margin.left - margin.right, HEIGHT - margin.top - margin.bottom
     count_x, count_y = len(block.columns), len(block.rows)
+    chart_height = heatmap_height(count_y)
+    width = WIDTH - margin.left - margin.right
+    height = chart_height - margin.top - margin.bottom
     cell_w, cell_h = width / count_x, height / count_y
     bound, marks, marked = _bound(block), [], _marks(block)
     for row in range(count_y):
@@ -78,7 +96,7 @@ def heatmap_chart(block: GridBlock) -> str:
             value = block.values[row, column]
             x, y = column * cell_w, (count_y - 1 - row) * cell_h
             css = "heat-cell cell-marked" if (column, row) in marked else "heat-cell"
-            shown = fmt.number(value) if math.isfinite(value) else ""
+            shown = written(value, cell_w, cell_h)
             marks.append(
                 f"<g><title>{_tip(block, column, row)}</title><rect class='{css}' "
                 f"x='{x:.1f}' y='{y:.1f}' width='{cell_w:.1f}' height='{cell_h:.1f}' "
@@ -87,7 +105,7 @@ def heatmap_chart(block: GridBlock) -> str:
                 f"text-anchor='middle' class='cell-text'>{shown}</text></g>"
             )
     marks += _heatmap_axes(block, cell_w, cell_h, width, height)
-    svg = frame(WIDTH, HEIGHT, margin, fmt.text(block.title), "".join(marks))
+    svg = frame(WIDTH, chart_height, margin, fmt.text(block.title), "".join(marks))
     return f"{svg}<p class='key'>{_key(block)}</p>"
 
 
@@ -95,22 +113,29 @@ def _heatmap_axes(
     block: GridBlock, cell_w: float, cell_h: float, width: float, height: float
 ) -> list[str]:
     count_y = len(block.rows)
-    marks = [
-        f"<text x='{(k + 0.5) * cell_w:.1f}' y='{height + 14:.1f}' text-anchor='middle' "
-        f"style='{AXIS_TEXT}'>{fmt.text(value)}</text>"
+    across = [
+        Label((k + 0.5) * cell_w, height + 14, "middle", value)
         for k, value in enumerate(block.columns)
     ]
-    marks += [
-        f"<text x='-8' y='{(count_y - 1 - k + 0.5) * cell_h + 3:.1f}' text-anchor='end' "
-        f"style='{AXIS_TEXT}'>{fmt.text(value)}</text>"
+    down = [
+        Label(-8, (count_y - 1 - k + 0.5) * cell_h + 3, "end", value)
         for k, value in enumerate(block.rows)
     ]
+    marks = [_axis_text(label) for label in placed(across) + placed(down)]
     marks.append(
         f"<text x='{width:.1f}' y='{height + 30:.1f}' text-anchor='end' "
         f"style='{MUTED_TEXT}'>{fmt.text(block.x)}</text>"
         f"<text x='-8' y='-4' text-anchor='end' style='{MUTED_TEXT}'>{fmt.text(block.y)}</text>"
     )
     return marks
+
+
+def _axis_text(label: Label) -> str:
+    anchor = "" if label.anchor == "start" else f" text-anchor='{label.anchor}'"
+    return (
+        f"<text x='{label.x:.1f}' y='{label.y:.1f}'{anchor} style='{AXIS_TEXT}'>"
+        f"{fmt.text(label.text)}</text>"
+    )
 
 
 def _key(block: GridBlock) -> str:
@@ -200,17 +225,14 @@ def _surface_axes(block: GridBlock, cell: float) -> list[str]:
     """The x values along the front-right edge of the plane and the y values along its
     front-left edge, and the two parameters' names."""
     count_x, count_y = len(block.columns), len(block.rows)
-    marks = []
-    for k, value in enumerate(block.columns):
-        x, y = _corner(k + 0.5, count_y, 0, cell)
-        marks.append(
-            f"<text x='{x + 4:.1f}' y='{y + 12:.1f}' style='{AXIS_TEXT}'>{fmt.text(value)}</text>"
-        )
+    labels = []
     for k, value in enumerate(block.rows):
         x, y = _corner(count_x, k + 0.5, 0, cell)
-        marks.append(
-            f"<text x='{x + 6:.1f}' y='{y + 4:.1f}' style='{AXIS_TEXT}'>{fmt.text(value)}</text>"
-        )
+        labels.append(Label(x + 6, y + 4, "start", value))
+    for k, value in enumerate(block.columns):
+        x, y = _corner(k + 0.5, count_y, 0, cell)
+        labels.append(Label(x + 4, y + 12, "start", value))
+    marks = [_axis_text(label) for label in placed(labels)]
     x_name = _corner(count_x / 2, count_y, 0, cell)
     y_name = _corner(count_x, count_y / 2, 0, cell)
     marks.append(
