@@ -13,10 +13,12 @@ import pandas as pd
 import pytest
 from robust_runs import (
     FREE,
+    DailyCross,
     Flip,
     Weekday,
     bars,
     nse_sessions,
+    random_walk,
     steps_for,
     weekday_bars,
     weekday_trades,
@@ -143,6 +145,26 @@ def test_params_given_leave_the_declared_ranges_to_re_fit(declared):
     walked = declared.check("walk_forward")
     assert walked.verdict == PASSED, walked.note
     assert list(walked.table["day"]) == [2, 2]
+
+
+def test_the_best_crossover_fitted_to_a_random_walk_is_a_lone_spike_of_its_declared_grid():
+    # The trader's workflow on a history with no edge: optimize DailyCross's 81 declared
+    # settings, then check the best by giving it as params=. The neighbourhood judges it
+    # inside the declared grid, where the settings next to the luckiest did not hold up.
+    # A slow crossover trades seldom, so the check is asked to judge from 10 trades.
+    data = random_walk(1_000, 1)
+    best = bt.optimize(
+        DailyCross, data=data, **FREE, objective="sharpe", workers=1, progress=quiet
+    ).best
+    result = bt.backtest(DailyCross, data=data, params=best, **FREE)
+    found = result.robustness(
+        checks=["parameters"], workers=1, progress=quiet, parameters={"min_trades": 10}
+    )
+    check = found.check("parameters")
+    chosen = check.table[check.table["chosen"]]
+    assert len(check.table) == 81
+    assert chosen[["fast", "slow"]].to_dict("records") == [best]
+    assert check.verdict == FAILED
 
 
 def test_bt_walk_forward_reads_params_as_bt_optimize_does():
@@ -397,7 +419,7 @@ def test_the_robust_choice_of_a_lone_spike_is_shown_off_a_plateau_without_a_verd
     assert check.verdict == INFORMATIONAL
     assert check.summary["profitable_share"] == 0.0 and check.summary["plateau"] == 0.0
     assert "by the neighbourhood rule a lone spike, not a plateau" in check.figure
-    assert not found.passed
+    assert list(found.verdicts["verdict"]) == [INFORMATIONAL]
 
 
 def test_the_robust_choice_of_a_plateau_is_shown_on_a_plateau_without_a_verdict(every_day):

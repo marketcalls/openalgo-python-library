@@ -19,9 +19,9 @@ spike rather than a plateau; `.deflated_sharpe`, the probability that the best's
 Sharpe ratio is above what the best of that many tries would show by luck;
 `.overfitting_probability`, the probability of backtest overfitting by combinatorially
 symmetric cross-validation over the combinations' session returns (a figure near 0 does
-not show the settings hold); `.overfitting`, both
-with what they rest on; and `.tearsheet(path)`, the heatmap page that shows them. They
-are computed on first use and never change the table.
+not show the settings hold); `.overfitting`, both with what they rest on; and
+`.tearsheet(path)`, the heatmap page that shows them. They are computed on first use
+and never change the table.
 """
 
 from __future__ import annotations

@@ -457,14 +457,15 @@ def walk_forward(strategy: type[Strategy], client: Any = None, **settings: Any) 
 
     Takes the run arguments of `bt.backtest`, the parameter ranges named after strategy
     parameters (`fast=range(5, 30, 5)`; `bt.param` ranges otherwise, a parameter that
-    `params=` names being fixed as in `bt.optimize`), and `folds`,
-    `anchored`, `in_sample`, `objective`, `workers` and `progress` as `bt.optimize` takes
-    them (the plan, with the reruns and an estimate, is reported before they run, through
+    `params=` names being fixed as in `bt.optimize`), and `folds`, `anchored`,
+    `in_sample`, `objective`, `workers` and `progress` as `bt.optimize` takes them (the
+    plan, with the reruns and an estimate, is reported before they run, through
     `progress` or the `openalgo.backtest.walk_forward` logger). The efficiency is the
     stitched out-of-sample objective per year over the mean in-sample one, both from the
     objective's break-even (a total such as the net profit is divided by the years each
     lasted). `bt.robustness(checks=["walk_forward"], ...)` runs the same walk-forward,
-    judges it and draws its folds.
+    judges it and draws its folds; there `params=` names the run's chosen settings, so
+    a declared range stays searched.
 
     Raises ConfigError for unusable arguments, nothing to search, or too few sessions
     for the folds (each window needs two), and whatever a backtest raises."""

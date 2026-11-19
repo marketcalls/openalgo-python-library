@@ -175,7 +175,8 @@ def run(
         f"{words.whole(settings['samples'], 'noisy copy', 'noisy copies')} of the run's bars, "
         "the same copies for every combination, and once on the run's own bars; its score is "
         f"its median {name} over the copies. The neighbourhood rule reads the noisy score; "
-        "its outcome is stated, not counted as a pass or a failure (design 17)."
+        "its outcome is stated in the figure and counts as neither a pass nor a failure, "
+        "since this check shows which settings hold rather than judging one."
     )
     blocks = _blocks(grid, scores, plain, robust, optimum, name, level)
     return Outcome(INFORMATIONAL, figure, text, note, table, summary, blocks)

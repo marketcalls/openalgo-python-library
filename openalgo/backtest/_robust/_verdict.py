@@ -94,7 +94,8 @@ class CheckResult:
     again, liquidity a row per fill model, synthetic stress a row per rule, which it
     keeps when no rule keeps enough candidates to be judged, out of sample a row per part
     and then a row per combination searched, walk-forward a row per fold (which it keeps
-    when its stitched runs closed too few trades), and the parameter neighbourhood and
+    when its stitched runs closed too few trades or its folds found no edge in sample),
+    and the parameter neighbourhood and
     the noise-robust optimization a row per combination.
     summary: its figures by name, empty when not judged but for synthetic stress (as
     its table); fractions are fractions (0.95 is 95 percent), money is rupees, and

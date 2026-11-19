@@ -7,8 +7,9 @@ the ranges the strategy declares with `bt.param(default, values)` for the others
 run's own `params=` values are its chosen parameters, the point the parameter
 neighbourhood judges: a parameter with a range, given or declared, is chosen in
 `params=` and searched over its range, so a trader who checks the best of a sweep by
-passing it as `params=` keeps the declared ranges searched (lead, 2026-11-19); a
-parameter with no range keeps its `params=` value in every combination. `bt.walk_forward`,
+passing it as `params=` keeps the declared ranges searched (design 17, section 1: the
+`bt.param` ranges when no range is given); a parameter with no range keeps its `params=`
+value in every combination. `bt.walk_forward`,
 which has no chosen point, reads `params=` as `bt.optimize` does (`params_fix`): a
 declared parameter it names is fixed, not searched. The grid's combinations are in grid
 order (the first parameter slowest), and each parameter's values in the order its range

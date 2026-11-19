@@ -18,6 +18,10 @@ buys only with no working order, which on time it never has at a decision, so th
 its entries held (the delayed check) it enters late rather than twice.
 `steps_for(trade_moves)` builds steps whose traded moves are `trade_moves`, repeated,
 with the move between two trades taking back the traded one so the price stays near 500.
+
+A history with no edge: `random_walk(count, seed)` is daily bars whose closes walk at
+random, and `DailyCross` an EMA crossover with 81 declared settings that a search can fit
+to such a walk.
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ import numpy as np
 import pandas as pd
 
 import openalgo.backtest as bt
+from openalgo import ta
 from openalgo.backtest import metrics
 from openalgo.backtest._robust._assess import Checked, run_check
 from openalgo.backtest._robust._registry import BY_NAME
@@ -287,6 +292,44 @@ def weekday_trades(count: int, day: int, first: int = 0, last: int | None = None
             bought.append(d)
             free_from = d + 2
     return bought
+
+
+#: The spread of a random walk's session log returns: 1.5 percent a session.
+WALK_SPREAD = 0.015
+#: The tick of the bars, rupees.
+TICK = 0.05
+
+
+def random_walk(count: int, seed: int) -> pd.DataFrame:
+    """`count` daily bars, one per NSE session from 2023-01-02, whose closes walk at
+    random from `FIRST_PRICE`: each session's log return is drawn from a normal of spread
+    `WALK_SPREAD` by NumPy's generator seeded with `seed`, and each close is put on the
+    5-paisa grid. A bar opens at the close before it (the first at `FIRST_PRICE`), and its
+    high and low are 1 rupee beyond its open and close. No rule has an edge on it."""
+    draws = np.random.default_rng(seed).normal(0.0, WALK_SPREAD, count)
+    closes = np.round(FIRST_PRICE * np.exp(np.cumsum(draws)) / TICK) * TICK
+    opens = np.concatenate(([FIRST_PRICE], closes[:-1]))
+    frame = opens_bars(opens)
+    frame["close"] = closes
+    frame["high"] = np.maximum(opens, closes) + 1.0
+    frame["low"] = np.minimum(opens, closes) - 1.0
+    return frame
+
+
+class DailyCross(bt.Strategy):
+    """Buys 10 shares when the fast EMA of the daily close crosses above the slow one and
+    exits when it crosses below, written as conditions; it declares 9 fast and 9 slow
+    periods, 81 settings to search."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "D"
+    fast = bt.param(8, tuple(range(4, 40, 4)))
+    slow = bt.param(40, tuple(range(20, 200, 20)))
+
+    def init(self):
+        fast_line = self.I(ta.ema, self.close, self.fast)
+        slow_line = self.I(ta.ema, self.close, self.slow)
+        self.entry_when(fast_line.crossed_above(slow_line), qty=QUANTITY)
+        self.exit_when(fast_line.crossed_below(slow_line))
 
 
 #: Settings that keep the bar checks of a full report small in a test: one process, 20

@@ -13,7 +13,14 @@ import math
 import numpy as np
 import pandas as pd
 import pytest
-from robust_runs import FREE, Weekday, weekday_bars, weekday_trades
+from robust_runs import (
+    FREE,
+    DailyCross,
+    Weekday,
+    random_walk,
+    weekday_bars,
+    weekday_trades,
+)
 from test_report_tearsheet import FORBIDDEN_NAME_HASHES, Structure, section_ids
 
 import openalgo.backtest as bt
@@ -116,6 +123,27 @@ def test_the_deflated_sharpe_ratio_is_a_probability(spike):
     assert 0.0 <= spike.deflated_sharpe <= 1.0
     assert figures["deflated_sharpe"] == spike.deflated_sharpe
     assert figures["expected_best_sharpe"] > 0.0
+
+
+#: The sessions of a random walk a crossover's settings are fitted to.
+WALK_SESSIONS = 1_000
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_the_best_crossover_fitted_to_a_random_walk_does_not_stand_out_from_luck(seed):
+    # No setting has an edge on a random walk, so the best of DailyCross's 81 settings is
+    # only the luckiest: its deflated Sharpe ratio stays below 0.95, and it does not sit
+    # on a plateau of settings that made money (no edge to judge, or a lone spike).
+    result = bt.optimize(
+        DailyCross,
+        data=random_walk(WALK_SESSIONS, seed),
+        **FREE,
+        objective="sharpe",
+        workers=1,
+        progress=lambda line: None,
+    )
+    assert result.deflated_sharpe < 0.95
+    assert result.neighbourhood.verdict in (FAILED, NOT_JUDGED)
 
 
 def test_a_sweep_that_minimises_leaves_the_neighbourhood_not_judged():
