@@ -6,6 +6,12 @@ The theme follows the reader's setting, and the page's toggle overrides it by se
 `data-theme` on the root element, so the dark tokens are written for both (one source,
 `DARK`). System fonts only: nothing is fetched. The axes of the time-series charts take
 their sizes from `timeseries`.
+
+The header's section links scroll sideways inside the header when there are more than
+its width holds (a robustness report has 19), so the mark and the tools keep their room
+and the page itself never scrolls sideways. Below the width that shows the links the
+mark and the tools may shrink instead (Export PDF wraps), so the header fits a 320-pixel
+phone.
 """
 
 from .timeseries import TIME_AXIS_PX, VALUE_AXIS_PX
@@ -97,9 +103,9 @@ border:1px solid var(--border-strong)}
 .mark-name{font-size:1.125rem;line-height:1.75rem;color:var(--text)}
 .mark .eyebrow{margin-top:2px;line-height:1}
 .mark>div{line-height:1}
-.nav{display:none;align-items:center;gap:28px}
+.nav{display:none;align-items:center;gap:28px;min-width:0;overflow-x:auto;scrollbar-width:thin}
 .nav a{font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.13em;
-color:var(--text-muted);text-decoration:none;transition:color .15s}
+color:var(--text-muted);text-decoration:none;transition:color .15s;white-space:nowrap}
 .nav a:hover,.nav a.on{color:var(--text)}
 .tools{display:flex;align-items:center;gap:12px}
 .btn{font-size:.75rem;line-height:1rem;font-weight:600;text-transform:uppercase;letter-spacing:.12em;
@@ -111,7 +117,7 @@ border:1px solid var(--border-strong);color:var(--text-muted)}
 .theme:hover{color:var(--text)}
 .theme .sun{display:none}
 .dark-on .theme .sun{display:block}.dark-on .theme .moon{display:none}
-@media (min-width:64rem){.nav{display:flex}}
+@media (min-width:64rem){.nav{display:flex}.mark,.tools{flex:none}}
 """
 
 _MAIN = """
@@ -252,6 +258,7 @@ _CHECKS = """
 .lead{font-size:.875rem;line-height:1.4rem;color:var(--text)}
 .lead+.lead{margin-top:6px}
 .key{margin-top:8px;font-size:.75rem;line-height:1.1rem;color:var(--text-muted)}
+.stat-value.wrap{white-space:pre-line;overflow-wrap:anywhere;line-height:1.2}
 .tbl td.wrap{white-space:normal;min-width:10rem}
 svg.bars .fan-outer{fill:var(--benchmark);fill-opacity:.12}
 svg.bars .fan-inner{fill:var(--benchmark);fill-opacity:.24}

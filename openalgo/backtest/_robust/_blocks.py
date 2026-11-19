@@ -46,13 +46,15 @@ class FanBlock:
 @dataclass(frozen=True, eq=False)
 class HistogramBlock:
     """A histogram of one figure over the runs, with `marks`; `percent` when the values
-    are fractions shown as percentages."""
+    are fractions shown as percentages; `counted` names what each value is, plural, for
+    the key ("runs", or the "splits" of a cross-validation)."""
 
     title: str
     subtitle: str
     values: np.ndarray
     percent: bool
     marks: tuple[Mark, ...]
+    counted: str = "runs"
 
 
 @dataclass(frozen=True, eq=False)
@@ -209,12 +211,14 @@ class SparkTableBlock:
 @dataclass(frozen=True)
 class Tile:
     """One figure as a tile: label, value and a subline, as text; `tone` "pos", "neg"
-    or "" colours the value."""
+    or "" colours the value; `wrap` lets a long value (parameters, one a line) take more
+    lines instead of being cut short."""
 
     label: str
     value: str
     sub: str = ""
     tone: str = ""
+    wrap: bool = False
 
 
 @dataclass(frozen=True)

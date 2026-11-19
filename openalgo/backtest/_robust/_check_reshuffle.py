@@ -3,11 +3,13 @@ order?
 
 The closed trades' net P&L, reordered at random without replacement `runs` times and
 booked one after another on the start capital (`_paths`), so every order ends at the
-same P&L unless it loses the whole capital first. Figures: the maximum drawdown that 50,
-95 and 99 percent of the orders stay within (the 50th, 5th and 1st percentiles of their
-maximum drawdowns, which are zero or negative), beside the run's own order's. Pass:
-informational unless `max_drawdown` (a fraction of a peak, 0.25 is 25 percent) is given;
-then the drawdown `level` of the orders stay within must be no deeper than it.
+closed trades' P&L unless it loses the whole capital first; a position still open at the
+run's end is in the run's net profit but not among them, so the words say "of the closed
+trades". Figures: the maximum drawdown that 50, 95 and 99 percent of the orders stay
+within (the 50th, 5th and 1st percentiles of their maximum drawdowns, which are zero or
+negative), beside the run's own order's. Pass: informational unless `max_drawdown` (a
+fraction of a peak, 0.25 is 25 percent) is given; then the drawdown `level` of the
+orders stay within must be no deeper than it.
 
 Draws: order r sorts the trades by draws r x trades onwards of the check's stream
 (`_random.orders`).
@@ -108,8 +110,8 @@ def run(
     )
     note = (
         f"{words.whole(runs, 'order')} of the {trades.closed} closed trades, drawn without "
-        f"replacement and booked on {words.rupees(trades.capital)}; every order ends at "
-        f"{words.rupees(math.fsum(trades.pnl))} of net P&L"
+        f"replacement and booked on {words.rupees(trades.capital)}; every order of the "
+        f"closed trades ends at {words.rupees(math.fsum(trades.pnl))} of net P&L"
     )
     ruined = int(paths.ruined.sum())
     if ruined:
@@ -140,7 +142,11 @@ def _blocks(shown_fan, drawdowns: np.ndarray, marks: tuple, summary: dict, runs:
         for share in SHARES
     ) + (
         Tile("Run's order", words.percent(summary["real_drawdown"]), "maximum drawdown", "neg"),
-        Tile("Final P&L", words.rupees(summary["final_pnl_rupees"]), "every order"),
+        Tile(
+            "Final P&L",
+            words.rupees(summary["final_pnl_rupees"]),
+            "of the closed trades, every order",
+        ),
     )
     return (
         (

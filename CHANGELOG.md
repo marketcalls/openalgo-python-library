@@ -585,6 +585,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tearsheet: the trade list's entry and exit times wrap between the date and the time, so
   every column fits a narrower window; the MAE and MFE histograms have a count axis.
   `bt.backtest`'s delays: a reversal counts as an exit and takes `delay_exits`.
+- Polish before the release: `bt.walk_forward` given a client now runs on its worker
+  processes (it read the bars once and ran in one process, giving the wrong reason); when
+  a setting truly cannot be sent to workers (a cost model, a calendar), the plan names it.
+  The robustness report, the tearsheet and the optimizer's page fit their window at 1024,
+  1280 and 1440 pixels with Export PDF and the theme switch in view (the section links
+  scroll inside the header); the optimizer page's axis labels and its best-setting tile
+  fit their charts, and its cross-validation histogram counts splits. Percentiles read as
+  ordinals ("the 66th percentile"); `WalkForwardResult.folds["trades"]` is an integer
+  column; the trade reshuffle says its end figure is the closed trades'.
 
 ### Changed
 
@@ -608,6 +617,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one tick, which used to rest with a limit of 0.00.
 
 ### Fixed
+
+- MCX futures whose contract multiplier is not 1 are now charged on their traded value
+  (price x units x multiplier), in `bt.backtest` and in `bt.live`. Before, each unit was
+  charged as if it were worth one quoted price: GOLDM and GOLDTEN (multiplier 0.1) and
+  GOLDGUINEA (0.125) were charged too much (about eight times on a GOLDM lot), GOLD (100)
+  about 100 times too little, and ZINC, LEAD, ALUMINIUM and their minis (1,000) about
+  1,000 times too little. P&L, margin and turnover were already right. Change in results,
+  for these contracts only: each fill's charges, the contract notes, the trades' costs and
+  net P&L, the equity curve and every metric built on it, the tearsheet's Charges table, a
+  live session's day summary, and the size the fixed-risk and ATR-risk sizers choose
+  (their cost estimate changes too). Example: one GOLDM lot bought at 1,20,000 and sold at
+  1,21,000 is charged Rs 254.76, not Rs 2,122.84. Every NSE and BSE instrument, CRUDEOIL,
+  CRUDEOILM, NATURALGAS, SILVER, SILVERM, SILVERMIC, COPPER, NICKEL and GOLDPETAL give
+  the same figures as before; the `bt.costs` calculators are unchanged.
 
 - The `turnover` metric (and the turnover ratio built on it) and the trade list's
   `return_pct` now count the contract multiplier. For a contract whose multiplier is not

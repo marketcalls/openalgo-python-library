@@ -460,12 +460,14 @@ def walk_forward(strategy: type[Strategy], client: Any = None, **settings: Any) 
     `params=` names being fixed as in `bt.optimize`), and `folds`, `anchored`,
     `in_sample`, `objective`, `workers` and `progress` as `bt.optimize` takes them (the
     plan, with the reruns and an estimate, is reported before they run, through
-    `progress` or the `openalgo.backtest.walk_forward` logger). The efficiency is the
-    stitched out-of-sample objective per year over the mean in-sample one, both from the
-    objective's break-even (a total such as the net profit is divided by the years each
-    lasted). `bt.robustness(checks=["walk_forward"], ...)` runs the same walk-forward,
-    judges it and draws its folds; there `params=` names the run's chosen settings, so
-    a declared range stays searched.
+    `progress` or the `openalgo.backtest.walk_forward` logger). The run's bars are read
+    once in this process, through `client` or from `data=`; worker processes get the
+    bars, never the client. The efficiency is the stitched out-of-sample objective per
+    year over the mean in-sample one, both from the objective's break-even (a total such
+    as the net profit is divided by the years each lasted). `.folds` counts each fold's
+    closed trades as whole numbers. `bt.robustness(checks=["walk_forward"], ...)` runs
+    the same walk-forward, judges it and draws its folds; there `params=` names the run's
+    chosen settings, so a declared range stays searched.
 
     Raises ConfigError for unusable arguments, a parameter both fixed by `params=` and
     given a range, nothing to search, or too few sessions for the folds (each window

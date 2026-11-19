@@ -8,7 +8,11 @@ runs (`_bar_common`): the median noise objective over the run's, both measured f
 objective's break-even; the share of noise runs profitable; the run's percentile among
 them (the share of noise runs below it). Pass: the ratio at least `keep` (0.5), at least
 `profitable` (0.8) of the runs profitable, and the run not above the `top` (0.95)
-percentile of the noise objectives (linear between order statistics).
+percentile of the noise objectives (linear between order statistics). The words give
+the run's percentile as that share to a tenth of a percent, then whether the run is
+above that limit and the limit itself ("the run above 95.0% of the noise runs and not
+above their 95th percentile 7.08"): the share compares the run with the noise runs, not
+with the interpolated limit, so to a tenth it can read 95.0% on both sides of it.
 
 Not judged when the run did not make money, has too few closed trades, has an objective
 that is undefined, has no break-even or is not above it, when no noise run could be
@@ -58,6 +62,9 @@ from ._verdict import FAILED, PASSED, Outcome, not_judged
 
 #: The base bars the candle charts show.
 CANDLES = 60
+#: The places the `top` setting's percentile is named to: 0.975 is the 97.5th, not the
+#: 98th.
+TOP_DECIMALS = 1
 
 
 def _chance(name: str, default: float) -> Setting:
@@ -115,7 +122,7 @@ def rule(settings: Mapping[str, Any], objective: Any) -> str:
         f"the median noise run keeps {words.percent(settings['keep'], 0)} of the run's "
         f"{objective_name(objective)}, at least {words.percent(settings['profitable'], 0)} of "
         f"noise runs are profitable, and the run is not above their "
-        f"{words.percent(settings['top'], 0)} percentile"
+        f"{words.ordinal(settings['top'], TOP_DECIMALS)} percentile"
     )
 
 
@@ -163,16 +170,20 @@ def run(
     if not len(values):
         return not_judged(text, "No noise run could be measured." + set_.failure_note())
     summary = _summary(set_, values, subject.real, level, settings)
+    within = subject.real <= summary["top_limit"]
     passed = (
         summary["ratio"] >= settings["keep"]
         and summary["profitable_share"] >= settings["profitable"]
-        and subject.real <= summary["top_limit"]
+        and within
     )
     figure = (
         f"median {name} {words.number(summary['median'])} keeps "
         f"{words.percent(summary['ratio'])} of the run's {words.number(subject.real)}; "
-        f"{words.percent(summary['profitable_share'])} of noise runs profitable; the run at "
-        f"the {words.percent(summary['percentile'])} percentile"
+        f"{words.percent(summary['profitable_share'])} of noise runs profitable; the run above "
+        f"{words.percent(summary['percentile'])} of the noise runs and "
+        f"{'not above' if within else 'above'} their "
+        f"{words.ordinal(settings['top'], TOP_DECIMALS)} percentile "
+        f"{words.number(summary['top_limit'])}"
     )
     note = (
         f"Each run moves every price of every bar, with its chance, by up to "
@@ -230,7 +241,11 @@ def _blocks(
     median must reach, the candles and the summary."""
     fan = session_fan("Noise equity", "The strategy on each noisy copy", set_, subject)
     marks = (
-        Mark(summary["top_limit"], f"{words.percent(settings['top'], 0)} percentile", LIMIT),
+        Mark(
+            summary["top_limit"],
+            f"{words.ordinal(settings['top'], TOP_DECIMALS)} percentile",
+            LIMIT,
+        ),
         Mark(keep_line, f"the median keeps {words.percent(settings['keep'], 0)}", LIMIT),
     )
     histogram = objective_histogram(
@@ -239,7 +254,7 @@ def _blocks(
     tiles = (
         Tile("Median kept", words.percent(summary["ratio"]), f"of the run's {name}"),
         Tile("Profitable", words.percent(summary["profitable_share"]), "of the noise runs"),
-        Tile("The run's percentile", words.percent(summary["percentile"]), "noise runs below it"),
+        Tile("Above", words.percent(summary["percentile"]), "of the noise runs"),
         Tile("Median", words.number(summary["median"]), name),
         Tile(
             "Measured",
