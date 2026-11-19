@@ -618,6 +618,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- MCX futures whose contract multiplier is not 1 are now charged on their traded value
+  (price x units x multiplier), in `bt.backtest` and in `bt.live`. Before, each unit was
+  charged as if it were worth one quoted price: GOLDM and GOLDTEN (multiplier 0.1) and
+  GOLDGUINEA (0.125) were charged too much (about eight times on a GOLDM lot), GOLD (100)
+  about 100 times too little, and ZINC, LEAD, ALUMINIUM and their minis (1,000) about
+  1,000 times too little. P&L, margin and turnover were already right. Change in results,
+  for these contracts only: each fill's charges, the contract notes, the trades' costs and
+  net P&L, the equity curve and every metric built on it, the tearsheet's Charges table, a
+  live session's day summary, and the size the fixed-risk and ATR-risk sizers choose
+  (their cost estimate changes too). Example: one GOLDM lot bought at 1,20,000 and sold at
+  1,21,000 is charged Rs 254.76, not Rs 2,122.84. Every NSE and BSE instrument, CRUDEOIL,
+  CRUDEOILM, NATURALGAS, SILVER, SILVERM, SILVERMIC, COPPER, NICKEL and GOLDPETAL give
+  the same figures as before; the `bt.costs` calculators are unchanged.
+
 - The `turnover` metric (and the turnover ratio built on it) and the trade list's
   `return_pct` now count the contract multiplier. For a contract whose multiplier is not
   1 (an MCX gold future quoted per 10 grams and traded in 1 kg units has 100) the
