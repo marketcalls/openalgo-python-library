@@ -19,6 +19,9 @@ percent on sells, exchange transaction charge 0.0021 percent (MCX/F&A/631/2024),
 Rs 10 a crore (0.0001 percent), stamp duty 0.002 percent on buys, GST 18 percent of
 brokerage, exchange charge and SEBI fee. Each fill is alone on its day's MCX contract
 note, which rounds CTT and stamp duty to the rupee and the other lines to the paisa.
+
+The fixed-risk sizer takes the estimated costs of the round trip out of its budget, so
+it sizes a GOLDM entry from the same traded value (the last test).
 """
 
 import dataclasses
@@ -228,3 +231,33 @@ def test_the_tearsheets_charges_table_shows_the_charges(run):
     shown = TOTAL_CHARGES_ROW.search(result.tearsheet())
     assert shown is not None
     assert float(shown.group(1).replace(",", "")) == case.charges
+
+
+class RiskedGoldm(bt.Strategy):
+    """Buys GOLDM at the first close, sized to risk 1 percent of the capital to a stop
+    2 percent away."""
+
+    symbol, exchange, interval = "GOLDM05FEB26FUT", "MCX", "D"
+
+    def on_bar(self, bar):
+        if len(self.close) == 1:
+            self.buy(size=bt.size.fixed_risk(1), stop=bt.pct(2))
+
+
+def test_fixed_risk_sizes_goldm_net_of_the_round_trip_on_its_traded_value():
+    # The budget is 1 percent of 50,00,000.00, 50,000.00, to a stop 2 percent below the
+    # decision close of 1,20,000.00: 2,400.00 a quoted unit, 240.00 a unit (multiplier
+    # 0.1). Before costs that is 208.33 units, 200 in whole lots of 100. Their round trip
+    # at 1,20,000.00 is worth 24,00,000.00 a side: the buy 20.00 + exchange 50.40 + SEBI
+    # 2.40 + stamp 48.00 + GST 18% of 72.80 = 13.104, 133.904; the sale 20.00 + CTT 240.00
+    # + 50.40 + 2.40 + 13.104, 325.904; 459.808 in all. (50,000.00 - 459.808) / 240.00 is
+    # 206.42 units, 200 in whole lots. On the units as the value (2,40,00,000.00 a side)
+    # the round trip would be 1,126.64 + 3,046.64 = 4,173.28, leaving 190.94 units: 100.
+    result = bt.backtest(
+        RiskedGoldm,
+        data=bars(CASES["GOLDM"]),
+        capital=CAPITAL,
+        product="NRML",
+        slippage=0,
+    )
+    assert result.fills.loc[0, "quantity_units"] == 200.0

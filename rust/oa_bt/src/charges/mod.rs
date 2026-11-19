@@ -29,7 +29,8 @@
 //!
 //! | Module | Responsibility |
 //! |---|---|
-//! | `book` | `ChargeBook`: the run's charge state, per-fill charging, trade numbers |//! | `notes` | Contract-note settlement at the session close |
+//! | `book` | `ChargeBook`: the run's charge state, per-fill charging, trade numbers |
+//! | `notes` | Contract-note settlement at the session close |
 //! | `same_day` | CNC fills of one scrip bought and sold on one day, charged as intraday |
 //! | `parts` | An order filled in parts (a live session's venue), costed once on its total |
 //! | `estimate` | Cost estimates for sizers |
@@ -97,7 +98,7 @@ impl From<CostError> for ChargeError {
 /// for an instrument quoted per unit of quantity (equity, NSE and BSE derivatives,
 /// CRUDEOIL); a GOLDM lot of 100 units (100 grams, quoted per 10 grams, multiplier 0.1)
 /// is 10, and a ZINC lot of 5 units (tonnes, quoted per kg, multiplier 1,000) is 5,000.
-pub fn price_units(spec: &InstrumentSpec, units: f64) -> f64 {
+pub(crate) fn price_units(spec: &InstrumentSpec, units: f64) -> f64 {
     units * spec.multiplier
 }
 
