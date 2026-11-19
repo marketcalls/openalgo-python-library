@@ -16,9 +16,8 @@ use crate::model::Product;
 use crate::portfolio::round_to_paise;
 
 use super::book::{is_cash_equity, ChargeBook, FillToCharge};
-use super::fill_segment;
 use super::same_day::difference;
-use super::ChargeError;
+use super::{fill_segment, price_units, ChargeError};
 
 /// What the fills of one order (on one side of its position change) have been charged
 /// so far, for costing the next on their total.
@@ -26,7 +25,7 @@ use super::ChargeError;
 pub struct OrderCharges {
     /// Units filled so far.
     pub units: f64,
-    /// Their traded value, rupees.
+    /// Their traded value, rupees: units x multiplier x price (`price_units`).
     pub value_rupees: f64,
     /// The cost of those units on their total, as the cost model returns it.
     pub cost: CostBreakdown,
@@ -51,11 +50,13 @@ impl ChargeBook {
         }
         let segment = fill_segment(fill.spec, fill.facts, fill.key.product)?;
         let units = so_far.units + fill.units;
-        let value_rupees = so_far.value_rupees + fill.units * fill.price_rupees;
+        let part_quantity = price_units(fill.spec, fill.units);
+        let value_rupees = so_far.value_rupees + part_quantity * fill.price_rupees;
         let (price, quantity) = if so_far.units > 0.0 {
-            (value_rupees / units, units)
+            let quantity = price_units(fill.spec, units);
+            (value_rupees / quantity, quantity)
         } else {
-            (fill.price_rupees, fill.units)
+            (fill.price_rupees, part_quantity)
         };
         let total = model.fill_cost(segment, fill.side, price, quantity, fill.day)?;
         let posted_total = round_to_paise(model.reported_total(&total));

@@ -148,7 +148,7 @@ impl SameDayBook {
 }
 
 /// The cost of a CNC fill with `intraday_units` at the intraday rates and
-/// `delivery_units` at the delivery rates.
+/// `delivery_units` at the delivery rates, both in price units (`price_units`).
 ///
 /// Errors: those of `CostModel::fill_cost`.
 pub(super) fn split_cost(

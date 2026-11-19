@@ -13,7 +13,7 @@ use crate::portfolio::{round_to_paise, FillEffect, FillKind, PositionChange, Pos
 use super::notes::{settle, share_note, SettledNote};
 use super::same_day::{difference, split_cost, Repriced, SameDayBook, Segments};
 use super::usage::{MarketTable, TableUse};
-use super::{fill_segment, ChargeError};
+use super::{fill_segment, price_units, ChargeError};
 
 /// What one fill was charged, rupees.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -123,11 +123,12 @@ impl ChargeBook {
         }
     }
 
-    /// Charge one fill under `model`; returns the rupees to post to the ledger, whole
-    /// paise (the fill's cost and its DP charge, each rounded to the paisa, as
-    /// `FillCharge::paid_rupees` before its note is settled). A CNC fill of cash equity
-    /// is charged by the same-day rule (`same_day`): its rupees also carry the change in
-    /// the charges of the earlier fills of the day it turned into intraday.
+    /// Charge one fill under `model` on its traded value (`price_units`); returns the
+    /// rupees to post to the ledger, whole paise (the fill's cost and its DP charge, each
+    /// rounded to the paisa, as `FillCharge::paid_rupees` before its note is settled).
+    /// A CNC fill of cash equity is charged by the same-day rule (`same_day`): its rupees
+    /// also carry the change in the charges of the earlier fills of the day it turned
+    /// into intraday.
     ///
     /// Errors: `Cost` when the fill cannot be priced.
     pub fn charge(
@@ -139,7 +140,8 @@ impl ChargeBook {
             return self.charge_delivery(model, fill);
         }
         let segment = fill_segment(fill.spec, fill.facts, fill.key.product)?;
-        let cost = model.fill_cost(segment, fill.side, fill.price_rupees, fill.units, fill.day)?;
+        let quantity = price_units(fill.spec, fill.units);
+        let cost = model.fill_cost(segment, fill.side, fill.price_rupees, quantity, fill.day)?;
         self.book_fill(model, fill, segment, cost, None)
     }
 
@@ -214,7 +216,10 @@ impl ChargeBook {
             fill.units,
         );
         let delivery_units = fill.units - matched.units;
-        let split = (matched.units, delivery_units);
+        let split = (
+            price_units(fill.spec, matched.units),
+            price_units(fill.spec, delivery_units),
+        );
         let cost = split_cost(model, segments, fill.side, fill.price_rupees, split, day)?;
         let from_holdings = fill.side == Side::Sell && fill.effect.kind == FillKind::Reduce;
         let dp_charge = if from_holdings
@@ -228,7 +233,7 @@ impl ChargeBook {
         };
         let mut repriced = 0.0;
         for earlier in &matched.repriced {
-            repriced += self.charge_again(model, segments, day, earlier)?;
+            repriced += self.charge_again(model, fill.spec, segments, day, earlier)?;
         }
         repriced += self.refund_dp(instrument, day);
         let segment = if matched.units > 0.0 {
@@ -245,6 +250,7 @@ impl ChargeBook {
     fn charge_again(
         &mut self,
         model: &CostModel,
+        spec: &InstrumentSpec,
         segments: Segments,
         day: Day,
         earlier: &Repriced,
@@ -252,7 +258,10 @@ impl ChargeBook {
         let Some(old) = self.output.fills.get(earlier.record).copied() else {
             return Ok(0.0);
         };
-        let split = (earlier.intraday_units, earlier.delivery_units);
+        let split = (
+            price_units(spec, earlier.intraday_units),
+            price_units(spec, earlier.delivery_units),
+        );
         let cost = split_cost(
             model,
             segments,

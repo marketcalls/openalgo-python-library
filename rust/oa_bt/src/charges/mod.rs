@@ -16,6 +16,11 @@
 //! fill is costed the way the Zerodha calculator costs a one-sided trade and there is
 //! no note adjustment.
 //!
+//! A fill is priced on its traded value, units x multiplier x price, as its P&L is
+//! (`price_units`): an MCX contract quoted for another quantity than its unit of
+//! quantity (GOLDM, GOLD, the base metals) is charged on what it is worth. The parts of
+//! an order, the CNC split and the sizers' estimates are priced the same way.
+//!
 //! A delivery (CNC) sell from holdings also pays the DP charge, once per scrip per sell
 //! day; it is not on the contract note. A CNC buy and sell of the same scrip on one day
 //! is charged as intraday with no DP charge (04-execution 2): the units a CNC fill
@@ -24,8 +29,7 @@
 //!
 //! | Module | Responsibility |
 //! |---|---|
-//! | `book` | `ChargeBook`: the run's charge state, per-fill charging, trade numbers |
-//! | `notes` | Contract-note settlement at the session close |
+//! | `book` | `ChargeBook`: the run's charge state, per-fill charging, trade numbers |//! | `notes` | Contract-note settlement at the session close |
 //! | `same_day` | CNC fills of one scrip bought and sold on one day, charged as intraday |
 //! | `parts` | An order filled in parts (a live session's venue), costed once on its total |
 //! | `estimate` | Cost estimates for sizers |
@@ -38,6 +42,8 @@ mod parts;
 mod same_day;
 mod usage;
 
+#[cfg(test)]
+mod multiplier_tests;
 #[cfg(test)]
 mod tests;
 
@@ -83,6 +89,16 @@ impl From<CostError> for ChargeError {
     fn from(error: CostError) -> ChargeError {
         ChargeError::Cost(error)
     }
+}
+
+/// The quantity the cost model prices a fill of `units` of `spec` on: its number of
+/// price units, `units` times the instrument's multiplier, so that the fill's price in
+/// rupees times it is the traded value in rupees (`CostModel::fill_cost`). It is `units`
+/// for an instrument quoted per unit of quantity (equity, NSE and BSE derivatives,
+/// CRUDEOIL); a GOLDM lot of 100 units (100 grams, quoted per 10 grams, multiplier 0.1)
+/// is 10, and a ZINC lot of 5 units (tonnes, quoted per kg, multiplier 1,000) is 5,000.
+pub fn price_units(spec: &InstrumentSpec, units: f64) -> f64 {
+    units * spec.multiplier
 }
 
 /// The cost segment of a fill of `spec` in `product`.

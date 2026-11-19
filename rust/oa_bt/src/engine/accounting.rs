@@ -6,7 +6,9 @@
 //! `charges`); this module connects them to the run's configuration, instruments and
 //! ledger, and records which dated table rows the run used.
 
-use crate::charges::{fill_segment, ChargeBook, ChargeError, FillToCharge, MarketTable};
+use crate::charges::{
+    fill_segment, price_units, ChargeBook, ChargeError, FillToCharge, MarketTable,
+};
 use crate::exec::InstrumentId;
 use crate::market::margin::{MarginQuote, MarginRequest};
 use crate::market::slippage::{default_slippage, SlippageClass, SlippageSpec};
@@ -176,7 +178,7 @@ impl Engine {
         for product in products {
             let segment = fill_segment(spec, facts, product).map_err(charge_error)?;
             model
-                .fill_cost(segment, side, price_rupees, units, day)
+                .fill_cost(segment, side, price_rupees, price_units(spec, units), day)
                 .map_err(|error| charge_error(ChargeError::Cost(error)))?;
         }
         Ok(())
