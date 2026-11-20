@@ -4,7 +4,8 @@
 //! order with `Submitted`, or `Rejected` alone (SPEC-21), stamped in step 7 of the
 //! paused slice. The order then waits for the first base bar of its instrument that
 //! opens at or after that instant (SPEC-35). A GTT order (`validity="gtt"`) also places
-//! its GTT (`gtt_orders`); `modify` is in `modify`.
+//! its GTT (`gtt_orders`); `modify` is in `modify`. The daily caps come last, after the
+//! other checks, and count the day's entries (`daily_caps`).
 
 use crate::exec::checks::{freeze_rule, gtt_rule, product_rule, quantity_rule, tick_rule};
 use crate::exec::{
@@ -17,6 +18,7 @@ use crate::sizing::{SizeOutcome, SkipReason};
 
 use super::clock::SliceInfo;
 use super::config::QuantityMode;
+use super::daily_caps::Capped;
 use super::error::KernelError;
 use super::event::{Event, OrderEventKind};
 use super::kernel::Engine;
@@ -63,9 +65,10 @@ impl Engine {
     /// position's (SPEC-14); `NotBuilt` for arguments not built yet (in a live session
     /// also leg rules, GTT orders and rebalancing, `venue`). A market rule that refuses
     /// the order is not an error: the result is `Submission::Rejected`. In a live session
-    /// an order that passes is sent to the venue at once (`venue`).
+    /// an order that passes is sent to the venue at once (`venue`). A reversal at a daily
+    /// cap is cut to its close, whose submission is returned (`daily_caps`).
     pub fn submit(&mut self, request: OrderRequest) -> Result<Submission, KernelError> {
-        let Some((slice, decided_at, step)) = self.decision_point() else {
+        let Some((slice, decided_at, _)) = self.decision_point() else {
             return Err(KernelError::NotAtDecisionPoint);
         };
         self.check_buildable(&request)?;
@@ -85,6 +88,38 @@ impl Engine {
             (Ok(good_until), None) => self
                 .live_checks(&request, units, &slice, None)?
                 .map(|()| good_until),
+        };
+        let Ok(good_until) = checked else {
+            return self.record_submission(request, units, checked);
+        };
+        match self.daily_caps(&request, units, &slice, false)? {
+            Capped::Pass(entry) => {
+                let submission = self.record_submission(request, units, Ok(good_until))?;
+                if let (true, Submission::Submitted(id)) = (entry, submission) {
+                    self.counted(&slice, id);
+                }
+                Ok(submission)
+            }
+            Capped::Refuse(code) => self.record_submission(request, units, Err(code)),
+            Capped::CutReversal(code) => self.cut_reversal(request, units, code),
+        }
+    }
+
+    /// Record `request` for `units` at the current decision point as its checks ended
+    /// (`checked`: the order's `good_until`, or the code that refused it): `Submitted`, the
+    /// order held for its delay, its GTT placed and, in a live session, sent; or
+    /// `Rejected` alone.
+    ///
+    /// Errors: `NotAtDecisionPoint` unless paused; those of the order book, the GTT desk
+    /// and the venue.
+    pub(super) fn record_submission(
+        &mut self,
+        request: OrderRequest,
+        units: f64,
+        checked: Result<TsNanos, RejectCode>,
+    ) -> Result<Submission, KernelError> {
+        let Some((slice, decided_at, step)) = self.decision_point() else {
+            return Err(KernelError::NotAtDecisionPoint);
         };
         let id = self.book.next_id();
         let key = PositionKey {

@@ -96,6 +96,9 @@ pub(super) struct Run {
     pub(super) daily: bool,
     pub(super) capital_rupees: f64,
     pub(super) max_daily_loss_rupees: Option<f64>,
+    /// The strategy's daily limits (18-multi-strategy 2.5a), none by default.
+    pub(super) max_trades_per_day: Option<u32>,
+    pub(super) daily_profit_target_rupees: Option<f64>,
 }
 
 impl Run {
@@ -107,6 +110,8 @@ impl Run {
             daily: false,
             capital_rupees,
             max_daily_loss_rupees: None,
+            max_trades_per_day: None,
+            daily_profit_target_rupees: None,
         }
     }
 
@@ -143,6 +148,8 @@ impl Run {
             market: MarketFacts::default(),
             risk: StrategyRiskConfig {
                 max_daily_loss_rupees: self.max_daily_loss_rupees,
+                max_trades_per_day: self.max_trades_per_day,
+                daily_profit_target_rupees: self.daily_profit_target_rupees,
                 ..StrategyRiskConfig::default()
             },
             sizing: SizingControls::default(),
@@ -305,12 +312,15 @@ pub(super) fn drive(mut fund: Fund, engines: &mut [Engine], scripts: &[Script]) 
     }
 }
 
-/// A fund's configuration: `pool`, the account's capital and its daily loss limit.
+/// A fund's configuration: `pool`, the account's capital and its daily loss limit, with
+/// no daily profit target and no trade cap.
 pub(super) fn account(pool: Pool, capital: Option<f64>, limit: Option<f64>) -> FundConfig {
     FundConfig {
         pool,
         account_capital_rupees: capital,
         account_max_daily_loss_rupees: limit,
+        account_daily_profit_target_rupees: None,
+        account_max_trades_per_day: None,
     }
 }
 

@@ -13,18 +13,23 @@ trade (`rust/oa_bt/src/engine/venue_group.rs`). `account_margin` and
 `account_loss_gate` are a portfolio run's: the shared account's free cash refusing an
 opening fill, or a sized order at its submission, that the strategy's own free cash
 covers, and the account's daily loss limit
-locking entries (`rust/oa_bt/src/engine/account_link.rs`, `account_breach.rs`). Each
-entry is (what happened, what to do). The product rule covers three refusals that need
-different advice, so it has one entry per case, told apart by the order and its
+locking entries (`rust/oa_bt/src/engine/account_link.rs`, `account_breach.rs`), and so are
+`account_trade_limit` and `account_profit_gate`. `trade_limit`, `daily_profit_gate` and
+`order_value_limit` are a strategy's daily limits (`rust/oa_bt/src/engine/daily_caps.rs`,
+18-multi-strategy 2.5a). Each entry is (what happened, what to do). The product rule
+covers three refusals that need different advice, so it has one entry per case, told
+apart by the order and its
 instrument (`_rejections.product_rule_case`). The entry window is the window working, not
 a mistake: its line names the window's times (`_rejections.entry_window_warning`).
 
 `RUN_RULE_CODES` are the refusals of a rule of the run working as it intends: the MIS
 entry window (given or the calendar's default), the limits a strategy or run sets
 (max_daily_loss, drawdown_halt, cooldown, max_positions, and the REDUCING or HALTED
-state they lead to, and the account's daily loss limit of a portfolio run) and the delay
-a run holds its orders for (delay_entries=, delay_exits=). The end-of-run notice leaves
-them out (`_rejection_notice`).
+state they lead to, the daily limits max_trades_per_day, daily_profit_target and
+max_order_value, and the account's daily loss limit, daily profit target and trade cap of
+a portfolio run) and the delay a run holds its orders for (delay_entries=,
+delay_exits=). The end-of-run notice leaves them out (`_rejection_notice`); each is told
+once in `result.warnings` (`_rejections`).
 """
 
 from __future__ import annotations
@@ -36,6 +41,10 @@ ENTRY_WINDOW = "entry_window"
 DELAY_PAST_CLOSE = "delay_past_close"
 ACCOUNT_LOSS_GATE = "account_loss_gate"
 ACCOUNT_MARGIN = "account_margin"
+ACCOUNT_PROFIT_GATE = "account_profit_gate"
+ACCOUNT_TRADE_LIMIT = "account_trade_limit"
+#: The codes of a strategy's daily limits (18-multi-strategy 2.5a).
+DAILY_LIMIT_CODES = ("trade_limit", "daily_profit_gate", "order_value_limit")
 RUN_RULE_CODES = frozenset(
     {
         ENTRY_WINDOW,
@@ -45,6 +54,9 @@ RUN_RULE_CODES = frozenset(
         "halted",
         DELAY_PAST_CLOSE,
         ACCOUNT_LOSS_GATE,
+        ACCOUNT_PROFIT_GATE,
+        ACCOUNT_TRADE_LIMIT,
+        *DAILY_LIMIT_CODES,
     }
 )
 
@@ -150,6 +162,36 @@ REASONS = MappingProxyType(
             "of the day",
             "this is the account's limit working; raise account_max_daily_loss if it is too tight",
         ),
+        "trade_limit": (
+            "an entry came once the strategy's entries of the day (those that filled and "
+            "those still working) had reached max_trades_per_day; a reversal at the cap was "
+            "cut to its close, its opening part refused",
+            "this is the cap working: exits still go; raise max_trades_per_day if it is too tight",
+        ),
+        ACCOUNT_TRADE_LIMIT: (
+            "an entry came once the entries of the day of every strategy of the account "
+            "together had reached account_max_trades_per_day",
+            "this is the account's cap working: exits still go; raise "
+            "account_max_trades_per_day if it is too tight",
+        ),
+        "daily_profit_gate": (
+            "an entry or add came after the day's profit reached daily_profit_target, which "
+            "exits every position and stops new entries for the rest of the day",
+            "this is the target working; raise daily_profit_target to keep trading longer",
+        ),
+        ACCOUNT_PROFIT_GATE: (
+            "an entry or add came after the account's profit for the day reached "
+            "account_daily_profit_target, which exits every strategy's positions and stops "
+            "their new entries for the rest of the day",
+            "this is the account's target working; raise account_daily_profit_target to "
+            "keep trading longer",
+        ),
+        "order_value_limit": (
+            "an entry or add was worth more than max_order_value (its units times its "
+            "limit, an SL-M's trigger or the last close, times the multiplier); exits are "
+            "never refused by it",
+            "lower the size, or raise max_order_value",
+        ),
         "live_in_flight": (
             "a live session sends no entry or add while another order of the symbol is "
             "working (an entry whose fill is not reported yet, a resting order), so that "
@@ -197,6 +239,9 @@ PRODUCT_RULE_CASES = MappingProxyType(
 __all__ = [
     "ACCOUNT_LOSS_GATE",
     "ACCOUNT_MARGIN",
+    "ACCOUNT_PROFIT_GATE",
+    "ACCOUNT_TRADE_LIMIT",
+    "DAILY_LIMIT_CODES",
     "DELAY_PAST_CLOSE",
     "ENTRY_WINDOW",
     "PRODUCT_RULE",

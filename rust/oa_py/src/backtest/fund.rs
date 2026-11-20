@@ -25,32 +25,38 @@
 //! `NativeEngineError` naming its strategy.
 //!
 //! `config` has "pool" ("shared" or "separate", `POOLS`), "account_capital" (rupees, or
-//! None for the sum of the capitals; in a separate pool None or that sum) and
-//! "account_max_daily_loss" (rupees above 0, or None). `names` are the strategies' names,
-//! one per engine, used in messages.
+//! None for the sum of the capitals; in a separate pool None or that sum),
+//! "account_max_daily_loss" (rupees above 0, or None), and may have
+//! "account_daily_profit_target" (rupees above 0, or None) and
+//! "account_max_trades_per_day" (a whole number at least 1, or None), each None when
+//! absent (18-multi-strategy 2.5a). `names` are the strategies' names, one per engine,
+//! used in messages.
 //!
 //! `finish()` returns the account's records as a dict: "account_capital" (rupees);
 //! "account", the row of every round as NumPy arrays ("ts" int64 UTC nanoseconds of the
 //! round's close, "day" int32 IST session days since 1970-01-01, "equity_rupees",
 //! "free_cash_rupees", "margin_rupees", "daily_loss_rupees" float64); "breaches", each
-//! breach of the account's daily loss limit as (at UTC nanoseconds, day, limit rupees,
-//! measure rupees); "refused", the orders the account refused or ended as a dict of
-//! lists ("strategy" index, "order_id" in that strategy's engine, "slice", "slice_ts",
-//! "step" of that engine's stamp, "reason" one of `REFUSALS`: "account_margin",
-//! "account_loss_gate", "account_loss" for an order a breach cancelled); and "skipped",
+//! breach of the account's daily loss limit, and each time its daily profit target was
+//! reached, as (at UTC nanoseconds, day, limit rupees, measure rupees, rule), the rule one
+//! of `ACCOUNT_RULES` ("account_loss", "account_profit"); "refused", the orders the
+//! account refused or ended as a dict of lists ("strategy" index, "order_id" in that
+//! strategy's engine, "slice", "slice_ts", "step" of that engine's stamp, "reason" one of
+//! `REFUSALS`: "account_margin", "account_loss_gate", "account_loss" for an order a loss
+//! breach cancelled, "account_profit_gate", "account_profit" for an order the profit
+//! target cancelled, "account_trade_limit"); and "skipped",
 //! per strategy the entries its Rust driver's sizer skipped as (decision instant,
 //! reason), empty for a strategy decided in Python.
 //!
 //! Errors: bad settings or engines raise `NativeEngineInputError`; an engine's own error
 //! raises what `Engine` raises for it, its message starting with the strategy's name; a
 //! call at the wrong time (an engine advanced outside the fund, `advance` after the end,
-//! `finish` before it) raises `NativeEngineError`.
+//! also once the engines are finished, `finish` before it) raises `NativeEngineError`.
 
 // See `engine`: lints that fire inside PyO3 0.22 macro expansions, not in this code.
 #![allow(unexpected_cfgs, clippy::useless_conversion)]
 
 use numpy::IntoPyArray;
-use oa_bt::engine::Engine;
+use oa_bt::engine::{AccountRule, Engine};
 use oa_bt::fund::{Fund, FundConfig, FundError, FundOutput, FundPause, Pool, Refusal};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
@@ -133,9 +139,14 @@ impl NativeFund {
 
     /// Run to the next pause a strategy decides in Python: (strategy index, the pause
     /// tuple as `Engine.advance` returns it), or None once every strategy's run has
-    /// finished. A "finished" pause ends that strategy's run (its `on_stop`).
+    /// finished. A "finished" pause ends that strategy's run (its `on_stop`). After the
+    /// end it raises the fund's own finished error, before the engines (which may have
+    /// been finished since) are borrowed.
     fn advance<'py>(&mut self, py: Python<'py>) -> PyResult<Option<(usize, PauseTuple<'py>)>> {
         let fund = self.inner.as_mut().ok_or_else(finished)?;
+        if fund.is_finished() {
+            return Err(fund_error(&self.names, FundError::Finished));
+        }
         let mut guards = borrowed_mut(py, &self.engines)?;
         let names = &self.names;
         let lent = guards.iter_mut().enumerate().map(|(index, guard)| {
@@ -222,6 +233,8 @@ fn fund_config(dict: &Bound<'_, PyDict>) -> PyResult<FundConfig> {
         pool,
         account_capital_rupees: optional(dict, "account_capital")?,
         account_max_daily_loss_rupees: optional(dict, "account_max_daily_loss")?,
+        account_daily_profit_target_rupees: optional(dict, "account_daily_profit_target")?,
+        account_max_trades_per_day: optional(dict, "account_max_trades_per_day")?,
     })
 }
 
@@ -268,10 +281,10 @@ fn output_dict<'py>(py: Python<'py>, output: &FundOutput) -> PyResult<Bound<'py,
         account.set_item(key, column.clone().into_pyarray_bound(py))?;
     }
     dict.set_item("account", account)?;
-    let breaches: Vec<(i64, i32, f64, f64)> = output
+    let breaches: Vec<(i64, i32, f64, f64, &str)> = output
         .breaches
         .iter()
-        .map(|b| (b.at, b.day, b.limit_rupees, b.measure_rupees))
+        .map(|b| (b.at, b.day, b.limit_rupees, b.measure_rupees, b.rule.code()))
         .collect();
     dict.set_item("breaches", breaches)?;
     dict.set_item("refused", refused(py, output)?)?;
@@ -323,5 +336,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add(
         "REFUSALS",
         PyTuple::new_bound(py, Refusal::ALL.map(Refusal::code)),
+    )?;
+    m.add(
+        "ACCOUNT_RULES",
+        PyTuple::new_bound(py, AccountRule::ALL.map(AccountRule::code)),
     )
 }

@@ -7,12 +7,14 @@
 //! passes the submission checks of a new order at the current decision instant, and is
 //! eligible from the first base bar at or after it (SPEC-35); a triggered stop order
 //! starts over and must trigger again. A replacement that fails a check is refused and
-//! the order works on unchanged. A GTT order's GTT is replaced with it. Under a delay the
+//! the order works on unchanged; so is one above the order value cap (`daily_caps`),
+//! which is not a new trade for the trade caps. A GTT order's GTT is replaced with it. Under a delay the
 //! replacement takes effect when its delay ends, the order working on its old terms until
 //! then (`held_changes`).
 
 use crate::exec::{ExecError, OrderId, OrderRequest};
 
+use super::daily_caps::Capped;
 use super::error::KernelError;
 use super::kernel::Engine;
 use super::submit::{Resolved, Submission};
@@ -98,6 +100,12 @@ impl Engine {
             Ok(good_until) => good_until,
             Err(code) => return Ok(Submission::Rejected(id, code)),
         };
+        match self.daily_caps(&request, units, &slice, true)? {
+            Capped::Pass(_) => {}
+            Capped::Refuse(code) | Capped::CutReversal(code) => {
+                return Ok(Submission::Rejected(id, code))
+            }
+        }
         if self.is_external() {
             let replacement = Replacement {
                 request,

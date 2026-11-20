@@ -12,7 +12,7 @@
 //! open until 15:30: its resting buy is cancelled at that slice's step 3 and the breach
 //! recorded at its step 6.
 
-use crate::engine::{AccountBreach, Event, EventStamp, RunOutput, Step};
+use crate::engine::{AccountBreach, AccountRule, Event, EventStamp, RunOutput, Step};
 use crate::exec::{OrderId, OrderStatus};
 use crate::model::{Product, Side};
 use crate::rms::RiskEventName;
@@ -68,6 +68,7 @@ fn the_account_breaches_once_at_the_round_its_measure_reaches_the_limit() {
     let breach = AccountBreach {
         at,
         day: july(7),
+        rule: AccountRule::Loss,
         limit_rupees: LIMIT,
         measure_rupees: -5_000.0,
     };

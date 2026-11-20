@@ -9,7 +9,10 @@
 //! - the account's equity `Q = C - sum(c_i) + sum(q_i)`;
 //! - the account's margin `sum(m_i)`;
 //! - engine `i`'s room: `F - f_i`, the account's free cash without its own, which its
-//!   link to the account holds in a shared pool (`engine::AccountLink`).
+//!   link to the account holds in a shared pool (`engine::AccountLink`);
+//! - the other engines' entries of a session day, for the account's trade cap: the sum
+//!   of each other engine's day's trades whose session day it is (18-multi-strategy
+//!   2.5a rule 7).
 //!
 //! An engine that has ended keeps its last figures here (2.6).
 //!
@@ -49,7 +52,7 @@ fn same_bits(a: &EngineFigures, b: &EngineFigures) -> bool {
             f.daily_loss_rupees.to_bits(),
         ]
     };
-    bits(a) == bits(b) && a.session_day == b.session_day
+    bits(a) == bits(b) && a.session_day == b.session_day && a.trades == b.trades
 }
 
 /// `figures` rounded to the paisa.
@@ -60,6 +63,7 @@ fn in_paise(figures: EngineFigures) -> EngineFigures {
         margin_rupees: round_to_paise(figures.margin_rupees),
         daily_loss_rupees: round_to_paise(figures.daily_loss_rupees),
         session_day: figures.session_day,
+        trades: figures.trades,
     }
 }
 
@@ -124,6 +128,16 @@ impl AccountBook {
         round_to_paise(self.free_cash_rupees - own)
     }
 
+    /// The entries every engine but `strategy` has counted on session day `day` (module
+    /// docs).
+    pub(super) fn trades_of_others(&self, strategy: usize, day: Day) -> u32 {
+        let counted = |(index, figures): (usize, &EngineFigures)| {
+            (index != strategy && figures.session_day == Some(day)).then_some(figures.trades)
+        };
+        let total = self.figures.iter().enumerate().filter_map(counted);
+        total.fold(0, u32::saturating_add)
+    }
+
     /// Each engine's daily loss measure with the session day it belongs to, in call
     /// order.
     pub(super) fn measures(&self) -> impl Iterator<Item = (f64, Option<Day>)> + '_ {
@@ -150,6 +164,7 @@ mod tests {
             margin_rupees: margin,
             daily_loss_rupees: 0.0,
             session_day: None,
+            trades: 0,
         }
     }
 
@@ -208,6 +223,25 @@ mod tests {
         assert_eq!(book.free_cash_rupees(), 700_000.0);
         assert_eq!(book.room_rupees(1), 500_000.0);
         assert_eq!(book.room_rupees(0), 500_000.0);
+    }
+
+    #[test]
+    fn the_others_trades_count_only_on_the_day_asked_for() {
+        let mut book = over_allocated();
+        let day = 20_270;
+        let on = |day, trades| EngineFigures {
+            session_day: Some(day),
+            trades,
+            ..figures(200_000.0, 200_000.0, 0.0)
+        };
+        book.take(0, on(day, 2));
+        // Strategy 1's 4 trades are of the day before: they do not count today.
+        book.take(1, on(day - 1, 4));
+        book.take(2, on(day, 1));
+        assert_eq!(book.trades_of_others(0, day), 1);
+        assert_eq!(book.trades_of_others(1, day), 3);
+        assert_eq!(book.trades_of_others(2, day), 2);
+        assert_eq!(book.trades_of_others(2, day - 1), 4);
     }
 
     #[test]

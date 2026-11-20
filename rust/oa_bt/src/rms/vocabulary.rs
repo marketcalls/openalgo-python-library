@@ -40,11 +40,16 @@ pub enum ExitReason {
     /// The account's daily loss limit of a portfolio run, across its strategies
     /// (`engine::account_breach`).
     AccountLossLimit = 14,
+    /// The strategy's daily profit target (`daily_profit_target`, 18-multi-strategy 2.5a).
+    DailyProfitTarget = 15,
+    /// The account's daily profit target of a portfolio run or live session, across its
+    /// strategies (`account_daily_profit_target`; `engine::account_breach`).
+    AccountProfitTarget = 16,
 }
 
 impl ExitReason {
     /// Every reason, in code order.
-    pub const ALL: [ExitReason; 15] = [
+    pub const ALL: [ExitReason; 17] = [
         ExitReason::LegSl,
         ExitReason::LegTarget,
         ExitReason::TimeExit,
@@ -60,6 +65,8 @@ impl ExitReason {
         ExitReason::Expiry,
         ExitReason::Signal,
         ExitReason::AccountLossLimit,
+        ExitReason::DailyProfitTarget,
+        ExitReason::AccountProfitTarget,
     ];
 
     /// The reason string, as the live module writes it.
@@ -80,6 +87,8 @@ impl ExitReason {
             ExitReason::Expiry => "expiry",
             ExitReason::Signal => "signal",
             ExitReason::AccountLossLimit => "account_loss_limit",
+            ExitReason::DailyProfitTarget => "daily_profit_target",
+            ExitReason::AccountProfitTarget => "account_profit_target",
         }
     }
 
@@ -123,6 +132,11 @@ pub enum RiskEventName {
     /// The account's daily loss limit of a portfolio run was breached, across its
     /// strategies (`engine::account_breach`).
     AccountLossHit = 12,
+    /// The strategy's daily profit target was reached (18-multi-strategy 2.5a).
+    DailyProfitHit = 13,
+    /// The account's daily profit target of a portfolio run was reached, across its
+    /// strategies (`engine::account_breach`).
+    AccountProfitHit = 14,
 }
 
 impl RiskEventName {
@@ -142,6 +156,8 @@ impl RiskEventName {
             RiskEventName::GttChildUnfilled => "gtt_child_unfilled",
             RiskEventName::TradingStateChanged => "trading_state_changed",
             RiskEventName::AccountLossHit => "account_loss_hit",
+            RiskEventName::DailyProfitHit => "daily_profit_hit",
+            RiskEventName::AccountProfitHit => "account_profit_hit",
         }
     }
 }
@@ -154,9 +170,10 @@ pub enum RiskScope {
     Leg = 0,
     /// A run of the strategy (combined rules).
     Strategy = 1,
-    /// The session (daily loss limit).
+    /// The session (daily loss limit, daily profit target).
     Session = 2,
-    /// The account a portfolio run's strategies share (its daily loss limit).
+    /// The account a portfolio run's strategies share (its daily loss limit and daily
+    /// profit target).
     Account = 3,
 }
 
@@ -210,5 +227,25 @@ mod tests {
         );
         assert_eq!(RiskEventName::AccountLossHit.code(), "account_loss_hit");
         assert_eq!(RiskScope::Account.code(), "account");
+    }
+
+    #[test]
+    fn the_daily_profit_targets_have_their_exit_reasons_and_events() {
+        let reasons = [
+            ExitReason::DailyProfitTarget,
+            ExitReason::AccountProfitTarget,
+        ];
+        assert_eq!(
+            reasons.map(ExitReason::code),
+            ["daily_profit_target", "account_profit_target"]
+        );
+        let events = [
+            RiskEventName::DailyProfitHit,
+            RiskEventName::AccountProfitHit,
+        ];
+        assert_eq!(
+            events.map(RiskEventName::code),
+            ["daily_profit_hit", "account_profit_hit"]
+        );
     }
 }

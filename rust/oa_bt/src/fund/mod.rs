@@ -37,9 +37,12 @@
 //! # The account (2.4, 2.5)
 //!
 //! `ledger` holds the account's capital and each engine's capital and last figures, in
-//! paise; `rules` the account's daily loss limit, measured on the round's IST session day
-//! only (H3), once per session day. In a separate pool no engine is linked: each runs as
-//! it would alone, and the account's figures are only recorded.
+//! paise; `rules` the account's daily loss limit and daily profit target, measured on the
+//! round's IST session day only (H3), each once per session day (2.5a rule 6). In a
+//! separate pool no engine is linked to the account's cash: each runs as it would alone,
+//! and the account's figures are only recorded. The account's trade cap (2.5a rule 7)
+//! links every engine, in either pool, to the other engines' entries of its session day,
+//! which its trade gate counts with its own.
 //!
 //! # Drivers
 //!
@@ -118,6 +121,12 @@ pub struct FundConfig {
     /// Rupees, above 0: the account's daily loss limit (`account_max_daily_loss`); `None`
     /// for none.
     pub account_max_daily_loss_rupees: Option<f64>,
+    /// Rupees, above 0: the account's daily profit target (`account_daily_profit_target`);
+    /// `None` for none.
+    pub account_daily_profit_target_rupees: Option<f64>,
+    /// At least 1: the most entries of every strategy together in one session day
+    /// (`account_max_trades_per_day`); `None` for no cap.
+    pub account_max_trades_per_day: Option<u32>,
 }
 
 /// Where `advance` stopped.
@@ -212,6 +221,8 @@ enum Decider {
 #[derive(Clone, Debug)]
 pub struct Fund {
     pool: Pool,
+    /// The account's trade cap (`FundConfig::account_max_trades_per_day`).
+    trade_cap: Option<u32>,
     lanes: Vec<Lane>,
     deciders: Vec<Decider>,
     book: AccountBook,
@@ -232,26 +243,43 @@ impl Fund {
     ///
     /// Errors: `InvalidConfig` for no engine, a live session (its account is the
     /// broker's), an engine that has advanced, an account capital that is not a positive
-    /// number of rupees (or, in a separate pool, not the sum of the capitals), and a daily
-    /// loss limit that is not a positive number of rupees.
+    /// number of rupees (or, in a separate pool, not the sum of the capitals), a daily
+    /// loss limit or daily profit target that is not a positive number of rupees, and a
+    /// trade cap of 0.
     pub fn new(config: FundConfig, engines: &[&Engine]) -> Result<Fund, FundError> {
         let lanes = timeline::lanes(engines)?;
         let capitals: Vec<f64> = engines.iter().map(|e| e.capital_rupees()).collect();
         let account_capital = account_capital(&config, &capitals)?;
         let limit = config.account_max_daily_loss_rupees;
-        if let Some(limit) = limit.filter(|limit| !(limit.is_finite() && *limit > 0.0)) {
+        let target = config.account_daily_profit_target_rupees;
+        let amounts = [
+            ("account_max_daily_loss", limit, "daily loss limit"),
+            ("account_daily_profit_target", target, "daily profit target"),
+        ];
+        for (field, amount, what) in amounts {
+            if let Some(amount) = amount.filter(|amount| !(amount.is_finite() && *amount > 0.0)) {
+                return Err(FundError::InvalidConfig {
+                    field,
+                    strategy: None,
+                    reason: format!("{amount}: give the account's {what} in rupees, above 0"),
+                });
+            }
+        }
+        if config.account_max_trades_per_day == Some(0) {
             return Err(FundError::InvalidConfig {
-                field: "account_max_daily_loss",
+                field: "account_max_trades_per_day",
                 strategy: None,
-                reason: format!("{limit}: give the account's daily loss limit in rupees, above 0"),
+                reason: "0: give the account's trade cap as at least 1 entry a day, or None"
+                    .to_string(),
             });
         }
         let figures = engines.iter().map(|e| e.figures()).collect();
         Ok(Fund {
             pool: config.pool,
+            trade_cap: config.account_max_trades_per_day,
             deciders: vec![Decider::Caller; engines.len()],
             book: AccountBook::new(account_capital, &capitals, figures),
-            rules: AccountRules::new(limit),
+            rules: AccountRules::new(limit, target),
             record: Recorder::new(account_capital, engines.len()),
             stage: Stage::Next,
             started: false,
@@ -326,8 +354,12 @@ impl Fund {
     /// Errors: `InvalidConfig` (field `engines`) for a number of engines other than the
     /// fund's, or an engine that differs from its strategy's in those; `OutOfStep` when
     /// one was advanced outside the fund; `Engine` for an error of an engine's phase or
-    /// of a Rust driver; `Finished` after `FundPause::Finished`.
+    /// of a Rust driver; `Finished` after `FundPause::Finished`, before the engines are
+    /// looked at (they may have been finished since).
     pub fn advance(&mut self, engines: &mut [&mut Engine]) -> Result<FundPause, FundError> {
+        if self.is_finished() {
+            return Err(FundError::Finished);
+        }
         timeline::check_engines(&self.lanes, engines)?;
         self.started = true;
         self.run(engines)

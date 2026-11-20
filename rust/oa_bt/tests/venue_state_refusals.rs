@@ -201,8 +201,8 @@ fn a_state_that_cannot_be_read_is_refused_whole_naming_the_field() {
     let table = [
         (
             "another layout",
-            with(&state, &["layout"], 5i64.into()),
-            "version 5",
+            with(&state, &["layout"], 4i64.into()),
+            "version 4",
         ),
         (
             "a part missing",

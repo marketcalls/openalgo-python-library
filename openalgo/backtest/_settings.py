@@ -49,7 +49,13 @@ CLASS_OVERRIDES = (
     "square_off",
     "drawdown_halt",
     "cooldown",
+    "max_trades_per_day",
+    "daily_profit_target",
+    "max_order_value",
 )
+# The daily limits (18-multi-strategy 2.5a), named in the Assumptions block only when set,
+# so a run without them states what it always stated.
+DAILY_LIMITS = ("max_trades_per_day", "daily_profit_target", "max_order_value")
 
 
 def _slippage(value: Any) -> tuple[str, float, int]:
@@ -173,7 +179,7 @@ def assumptions(plan: RunPlan, calendar: Any) -> dict[str, Any]:
 def _risk_assumptions(plan: RunPlan) -> dict[str, Any]:
     """The strategy and session rules of the run, and where their exits fill: at the
     next base-bar open, or on a daily base at the close of the day that breached
-    (SPEC-17)."""
+    (SPEC-17). The daily limits are named only when set (`DAILY_LIMITS`)."""
     risk = plan.risk
     block = {
         "max_daily_loss": risk["max_daily_loss"],
@@ -186,8 +192,10 @@ def _risk_assumptions(plan: RunPlan) -> dict[str, Any]:
         "leverage": plan.leverage,
         **describe_scale_limits(risk),
         **describe_size_controls(risk),
+        **{name: risk[name] for name in DAILY_LIMITS if risk[name] is not None},
     }
-    if risk["max_daily_loss"] is not None or risk["drawdown_halt"] is not None:
+    exits = ("max_daily_loss", "drawdown_halt", "daily_profit_target")
+    if any(risk[name] is not None for name in exits):
         block["risk_exit_fill"] = (
             "at the close of the day that breached, flagged"
             if plan.base == "D"
@@ -196,4 +204,4 @@ def _risk_assumptions(plan: RunPlan) -> dict[str, Any]:
     return block
 
 
-__all__ = ["CLASS_OVERRIDES", "RunPlan", "assumptions", "resolve"]
+__all__ = ["CLASS_OVERRIDES", "DAILY_LIMITS", "RunPlan", "assumptions", "resolve"]

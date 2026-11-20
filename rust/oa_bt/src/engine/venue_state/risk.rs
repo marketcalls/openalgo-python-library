@@ -1,14 +1,18 @@
 //! The risk bookkeeping of a live session's saved state (`venue_state`): the trading
-//! state with its cause, the daily loss totals, the drawdown peak, the slices the
-//! cooldown and the time exit count from, and the engine exits waiting for an open.
+//! state with its cause (a daily profit target's lock among them), the daily loss totals,
+//! the drawdown peak, the slices the cooldown and the time exit count from, the engine
+//! exits waiting for an open, and the day's entries the trade caps count (layout 5;
+//! 18-multi-strategy 2.5a rule 8: a restart never resets a cap or lifts a profit lock).
 
+use crate::exec::OrderId;
 use crate::rms::{
-    AccountTotals, DailyLossMeasure, DailyLossTotals, DrawdownWatch, ExitReason, TradingLock,
-    TradingState, TradingStateCause,
+    AccountTotals, DailyLossMeasure, DailyLossTotals, DrawdownWatch, ExitReason, TradeCount,
+    TradingLock, TradingState, TradingStateCause,
 };
 
 use super::super::strategy_risk::{PendingExit, StrategyRisk};
 use super::error::LiveStateError;
+use super::orders::Ids;
 use super::requests::{key_fields, read_key};
 use super::value::{list, map, Read, StateValue};
 
@@ -32,8 +36,42 @@ fn read_opt_totals(read: &Read<'_>, key: &str) -> Result<Option<AccountTotals>, 
         .transpose()
 }
 
-/// The strategy's risk bookkeeping (module docs).
-pub(super) fn write_risk(risk: &StrategyRisk) -> StateValue {
+/// The day's entries (`TradeCount`): its day, the entries that filled, and the entries
+/// waiting for a fill that still work (`works`), each as {"order": id}. One that ended
+/// with no fill no longer counts, so it is not written: every order written is a saved
+/// working order.
+fn write_trades(trades: &TradeCount, works: impl Fn(OrderId) -> bool) -> StateValue {
+    let (day, filled, waiting) = trades.parts();
+    let working: Vec<OrderId> = waiting.iter().copied().filter(|id| works(*id)).collect();
+    map([
+        ("day", day.into()),
+        ("filled", filled.into()),
+        (
+            "waiting",
+            list(&working, |order| map([("order", order.0.into())])),
+        ),
+    ])
+}
+
+/// The day's entries `write_trades` wrote, each entry waiting re-keyed to its order's new
+/// id.
+///
+/// Errors: `Malformed` for an entry whose order is not a saved working order.
+fn read_trades(read: &Read<'_>, ids: &Ids) -> Result<TradeCount, LiveStateError> {
+    let waiting = read
+        .items_of("waiting")?
+        .iter()
+        .map(|item| ids.working(&item.field("order")?))
+        .collect::<Result<Vec<OrderId>, LiveStateError>>()?;
+    Ok(TradeCount::resume(
+        read.opt_whole_of("day")?,
+        read.whole_of("filled")?,
+        waiting,
+    ))
+}
+
+/// The strategy's risk bookkeeping (module docs); `works` tells which orders still work.
+pub(super) fn write_risk(risk: &StrategyRisk, works: impl Fn(OrderId) -> bool) -> StateValue {
     let daily = risk.daily_loss.totals();
     map([
         ("trading_state", risk.lock.state().code().into()),
@@ -79,6 +117,7 @@ pub(super) fn write_risk(risk: &StrategyRisk) -> StateValue {
                 ])
             }),
         ),
+        ("trades", write_trades(&risk.trades, works)),
     ])
 }
 
@@ -102,7 +141,8 @@ fn read_lock(read: &Read<'_>) -> Result<TradingLock, LiveStateError> {
 }
 
 /// `base` (the restarted session's bookkeeping, which keeps its session day) with what
-/// `write_risk` wrote; the drawdown halt keeps the session's `drawdown_limit_percent`.
+/// `write_risk` wrote; the drawdown halt keeps the session's `drawdown_limit_percent`, and
+/// the day's entries are re-keyed by `ids` (`read_trades`).
 ///
 /// Errors: `Malformed` for a field missing or unusable, a drawdown peak saved without a
 /// drawdown halt set or the reverse, and a list of exit slices that is not one per
@@ -110,7 +150,7 @@ fn read_lock(read: &Read<'_>) -> Result<TradingLock, LiveStateError> {
 pub(super) fn read_risk(
     read: &Read<'_>,
     base: &StrategyRisk,
-    instruments: usize,
+    (instruments, ids): (usize, &Ids),
     drawdown_limit_percent: Option<f64>,
 ) -> Result<StrategyRisk, LiveStateError> {
     let daily = read.field("daily_loss")?;
@@ -160,6 +200,7 @@ pub(super) fn read_risk(
         entered_at,
         roll_carry: read.opt_whole_of("roll_carry_slice")?,
         pending_exits,
+        trades: read_trades(&read.field("trades")?, ids)?,
         ..base.clone()
     })
 }

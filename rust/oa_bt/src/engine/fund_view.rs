@@ -9,6 +9,7 @@
 use crate::exec::OrderId;
 use crate::model::Day;
 
+use super::account_breach::AccountRule;
 use super::clock::Timeline;
 use super::error::KernelError;
 use super::event::{Event, EventStamp};
@@ -31,6 +32,9 @@ pub(crate) struct EngineFigures {
     /// The IST session day the measure belongs to: the day of the slice the engine last
     /// opened; `None` before its first slice.
     pub(crate) session_day: Option<Day>,
+    /// The entries the strategy has counted on that session day (`Engine::trades_today`),
+    /// for the account's trade cap.
+    pub(crate) trades: u32,
 }
 
 impl Engine {
@@ -71,6 +75,7 @@ impl Engine {
                 unrealized,
             ),
             session_day: self.risk.session_day,
+            trades: self.trades_today(),
         }
     }
 
@@ -80,8 +85,9 @@ impl Engine {
     }
 
     /// The working orders an account breach has cancelled since the last call, each with
-    /// the stamp of its cancellation, in the order they were cancelled (`account_breach`).
-    pub(crate) fn take_account_cancels(&mut self) -> Vec<(EventStamp, OrderId)> {
+    /// the stamp of its cancellation and the breach's rule, in the order they were
+    /// cancelled (`account_breach`).
+    pub(crate) fn take_account_cancels(&mut self) -> Vec<(EventStamp, OrderId, AccountRule)> {
         std::mem::take(&mut self.account.cancels)
     }
 

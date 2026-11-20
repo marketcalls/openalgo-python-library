@@ -6,8 +6,9 @@
 //!   (`instrument` the registration index, `product` "CNC", "MIS" or "NRML"), through the
 //!   position's exit owner: the orders on its closing side are cancelled, then it exits.
 //!   `reason` is "square_off" or a risk reason of `RISK_EXIT_REASONS` ("unprotected",
-//!   "stop_rejected", "stop_unfilled", "kill_switch", "account_loss", "operator_stop", and
-//!   the kernel's own "daily_loss", "drawdown", "time_exit"); its "place" command carries
+//!   "stop_rejected", "stop_unfilled", "kill_switch", "account_loss", "account_profit",
+//!   "operator_stop", and the kernel's own "daily_loss", "daily_profit", "drawdown",
+//!   "time_exit"); its "place" command carries
 //!   the role "square_off", or "risk_exit" with the reason. Taken while the session waits
 //!   or is paused at a decision point. Returns what it did, one of `EXIT_REQUESTS`:
 //!   "sent", "waits_for_cancels" (sent once the orders on the closing side have ended, if
@@ -23,6 +24,11 @@
 //!   strategy's equity and the cap (the account's available cash).
 //! - `daily_loss_measure()`: the strategy's daily loss measure, rupees on its risk basis,
 //!   negative for a loss.
+//! - `trades_today()`: the entries the strategy has counted on its session day, for the
+//!   trade caps (18-multi-strategy 2.5a). `set_account_trades(limit, others)`: the
+//!   account's trade cap (None for none) and the entries the session's other strategies
+//!   have counted today; while set, an entry when the two counts together reach it is
+//!   rejected at submission with "account_trade_limit".
 //! - `set_group_side(instrument, product, side)`: on an instrument other strategies of the
 //!   session trade too, the side they hold or are entering, one of `GROUP_SIDES` ("long",
 //!   "short"), or None to clear it: while set, an entry, add or reversal on the other side
@@ -48,17 +54,18 @@
 //! orders working to close it leave is an entry, and a modification that would change an
 //! order's role raises `NativeEngineInputError`. Every "place" command carries the order's
 //! `role`, one of `ORDER_ROLES`, and `reason`, the risk reason of a "risk_exit" (None
-//! otherwise). In a backtest every control but the queries `entry_locks` and
-//! `daily_loss_measure` raises `NativeEngineError` (and `cancel` is taken at a decision
-//! point only); a blank lock reason or one with spaces around it, an unknown exit reason,
-//! an unknown group side and a cap that is not rupees of 0 or more raise
+//! otherwise). In a backtest every control but the queries `entry_locks`,
+//! `daily_loss_measure` and `trades_today`, and `set_account_trades`, raises
+//! `NativeEngineError` (and `cancel` is taken at a decision point only); a blank lock
+//! reason or one with spaces around it, an unknown exit reason, an unknown group side, a
+//! cap that is not rupees of 0 or more and an account trade cap of 0 raise
 //! `NativeEngineInputError`.
 
 use oa_bt::engine::{
     Engine, EngineExit, ExitRequest, GroupSide, KernelError, OrderRole, Protect, RiskExitReason,
 };
 use oa_bt::exec::{InstrumentId, OrderId};
-use oa_bt::rms::ExitReason;
+use oa_bt::rms::{AccountTrades, ExitReason};
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
@@ -113,6 +120,17 @@ pub(super) fn set_shared(
 ) -> PyResult<()> {
     let set = engine.set_shared(InstrumentId(instrument), parse_product(product)?, shared);
     set.map_err(engine_error)
+}
+
+/// `set_account_trades`: the account's trade cap and the other strategies' entries of the
+/// day (module docs).
+pub(super) fn set_account_trades(
+    engine: &mut Engine,
+    limit: Option<u32>,
+    others: u32,
+) -> PyResult<()> {
+    let trades = limit.map(|limit| AccountTrades { limit, others });
+    engine.set_account_trades(trades).map_err(engine_error)
 }
 
 /// The engine exit a session's `reason` names (module docs).
