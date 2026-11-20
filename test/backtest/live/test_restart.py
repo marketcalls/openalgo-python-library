@@ -217,6 +217,45 @@ def test_F53_a_broker_position_on_a_traded_symbol_refuses_a_fresh_start(world):
     assert [o.strategy for o in world.orders()] == ["manual"]
 
 
+# ----- a strategy whose saved state is of another instrument -----------------------------
+
+
+@pytest.fixture
+def two_symbols(make_fake_openalgo, monkeypatch, tmp_path, caplog):
+    """The rig of `world` with INFY trading beside SBIN."""
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+    world = stop_world(make_fake_openalgo, monkeypatch, tmp_path, symbols=("SBIN", "INFY"))
+    crashing(monkeypatch)
+    return world
+
+
+#: `StopWhenFlat` moved to INFY under the same class name, so its saved state is SBIN's.
+MOVED = type("StopWhenFlat", (StopWhenFlat,), {"symbol": "INFY"})
+#: What the restart says of it: the strategy, both instruments and what to do.
+MOVED_REFUSAL = (
+    "StopWhenFlat: its saved state is of SBIN on NSE, and this session trades INFY on NSE: "
+    "the restart cannot resume it, and does not start it afresh, since a saved state may "
+    "hold working orders. For a new instrument or contract, give the strategy class a new "
+    "name (its state is saved under its name); to resume it, keep its symbol SBIN on NSE. "
+    "Check its positions and orders in OpenAlgo"
+)
+
+
+@pytest.mark.parametrize(
+    "crashed_ns", [ist(14, 41, 30), CRASHED], ids=["flat", "holding with its stop working"]
+)
+def test_a_restart_of_a_strategy_moved_to_another_instrument_says_what_to_do(
+    two_symbols, crashed_ns
+):
+    crash_at(two_symbols, crashed_ns)
+    run_to_crash(two_symbols, StopWhenFlat)
+    sent = list(two_symbols.orders())
+    with pytest.raises(LiveError) as refused:
+        restart(two_symbols, MOVED, stop_ns=ist(14, 45), on_stop="keep")
+    assert str(refused.value) == MOVED_REFUSAL
+    assert two_symbols.orders() == sent
+
+
 # ----- F54: an unbound intent at the restart -------------------------------------------
 
 

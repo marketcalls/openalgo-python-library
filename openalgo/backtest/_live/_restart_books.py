@@ -10,6 +10,11 @@ every `START_BOOKS_RETRY_S` while one cannot be read, for at most `START_BOOKS_W
 (then LiveError). The messages the worker posts meanwhile are kept for the loop
 (`StartBooks.deferred`), but the resolutions, which the journal holds already.
 
+A strategy whose saved state is of another instrument than the session trades for it
+(the same class name moved to another symbol or contract) refuses the start first, naming
+both and what to do (`_session_saved.refuse_another_instrument`); it is never started
+afresh, since its saved state may hold working orders.
+
 **The journal position** of each strategy (`judge_start`, 3.6): its saved position, plus,
 for each order its saved state worked, the units filled beyond its saved ledger by the
 journal's last update or the trade book, whichever says more. The restart rules (5.5,
@@ -37,7 +42,7 @@ from ..errors import LiveError
 from ._order_book import Resolved
 from ._reconcile_rules import Kind, LegBooks, RestartKind, judge, leg_books, restart_kind
 from ._reconcile_rules import unexplained_by as unexplained_units
-from ._session_saved import Saved, read_saved
+from ._session_saved import Saved, read_saved, refuse_another_instrument
 from ._types import LOGGER_NAME, AlertKind
 from ._worker_queue import ReadBooks
 from .inbox import Books, Envelope, GuardLocked, NotSent, Resolutions, WorkerFailed
@@ -188,6 +193,8 @@ def judge_start(spec: Any, journal: Any, start: StartBooks, alerts: Any) -> Rest
     refused: list[str] = []
     for each in spec.strategies:
         saved = read_saved(journal.rms_state(each.name, day=day), each.name)
+        # Before its position is judged against another instrument's books.
+        refuse_another_instrument(saved, each.name, each.symbol, each.exchange)
         leg = leg_books(
             books.positionbook, books.tradebook, books.orderbook, each.symbol, each.exchange
         )
