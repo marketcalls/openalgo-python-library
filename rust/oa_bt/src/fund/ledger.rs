@@ -12,6 +12,13 @@
 //!   link to the account holds in a shared pool (`engine::AccountLink`).
 //!
 //! An engine that has ended keeps its last figures here (2.6).
+//!
+//! The fund hands the book an engine's figures after every turn, four times a round, and
+//! links an engine from `F` before three of them, while most turns change nothing (an
+//! engine's figures move at a fill or a mark). So the book keeps `F` with the figures and
+//! takes a turn's figures only when they differ, bit for bit, from the engine's last: the
+//! rounding and the sum are then the same as when they were last taken, and skipping
+//! them changes no figure.
 
 use crate::engine::EngineFigures;
 use crate::model::Day;
@@ -23,8 +30,26 @@ pub(super) struct AccountBook {
     /// `C - sum(c_i)`, rupees: what the account holds beyond the strategies' capitals
     /// (negative for an over-allocated account).
     unallocated_rupees: f64,
+    /// Each engine's figures as it last gave them, in call order (module docs).
+    given: Vec<EngineFigures>,
     /// Each engine's last figures, in paise, in call order.
     figures: Vec<EngineFigures>,
+    /// The account's free cash `F`, rupees, as `figures` give it.
+    free_cash_rupees: f64,
+}
+
+/// True when `a` and `b` are the same figures bit for bit (so a 0.0 and a -0.0 differ,
+/// and a NaN equals itself): what makes taking `b` after `a` change nothing.
+fn same_bits(a: &EngineFigures, b: &EngineFigures) -> bool {
+    let bits = |f: &EngineFigures| {
+        [
+            f.free_cash_rupees.to_bits(),
+            f.equity_rupees.to_bits(),
+            f.margin_rupees.to_bits(),
+            f.daily_loss_rupees.to_bits(),
+        ]
+    };
+    bits(a) == bits(b) && a.session_day == b.session_day
 }
 
 /// `figures` rounded to the paisa.
@@ -47,22 +72,32 @@ impl AccountBook {
         figures: Vec<EngineFigures>,
     ) -> AccountBook {
         let allocated: f64 = capitals.iter().map(|&c| round_to_paise(c)).sum();
-        AccountBook {
+        let mut book = AccountBook {
             unallocated_rupees: round_to_paise(round_to_paise(capital_rupees) - allocated),
-            figures: figures.into_iter().map(in_paise).collect(),
-        }
+            figures: figures.iter().copied().map(in_paise).collect(),
+            given: figures,
+            free_cash_rupees: 0.0,
+        };
+        book.free_cash_rupees = book.sum(|figures| figures.free_cash_rupees);
+        book
     }
 
-    /// Take engine `strategy`'s figures after its turn.
+    /// Take engine `strategy`'s figures after its turn (module docs).
     pub(super) fn take(&mut self, strategy: usize, figures: EngineFigures) {
-        if let Some(slot) = self.figures.get_mut(strategy) {
-            *slot = in_paise(figures);
+        let Some(given) = self.given.get_mut(strategy) else {
+            return;
+        };
+        if same_bits(given, &figures) {
+            return;
         }
+        *given = figures;
+        self.figures[strategy] = in_paise(figures);
+        self.free_cash_rupees = self.sum(|figures| figures.free_cash_rupees);
     }
 
     /// The account's free cash `F`, rupees.
     pub(super) fn free_cash_rupees(&self) -> f64 {
-        self.sum(|figures| figures.free_cash_rupees)
+        self.free_cash_rupees
     }
 
     /// The account's equity `Q`, rupees.
@@ -86,7 +121,7 @@ impl AccountBook {
             .figures
             .get(strategy)
             .map_or(0.0, |f| f.free_cash_rupees);
-        round_to_paise(self.free_cash_rupees() - own)
+        round_to_paise(self.free_cash_rupees - own)
     }
 
     /// Each engine's daily loss measure with the session day it belongs to, in call
@@ -157,6 +192,22 @@ mod tests {
         assert_eq!(book.equity_rupees(), 670_000.0);
         // F = -1,00,000 + 2,00,000 + 2,00,000 + 70,000 = 3,70,000.
         assert_eq!(book.free_cash_rupees(), 370_000.0);
+    }
+
+    #[test]
+    fn the_account_free_cash_follows_an_engine_figures_away_and_back() {
+        let mut book = over_allocated();
+        // Strategy 1 blocks 1,20,000 (free cash 80,000), takes the same figures again,
+        // then closes at no profit: F goes 7,00,000 to 5,80,000 and back.
+        let blocked = figures(80_000.0, 200_000.0, 120_000.0);
+        book.take(1, blocked);
+        book.take(1, blocked);
+        assert_eq!(book.free_cash_rupees(), 580_000.0);
+        assert_eq!(book.room_rupees(1), 500_000.0);
+        book.take(1, figures(200_000.0, 200_000.0, 0.0));
+        assert_eq!(book.free_cash_rupees(), 700_000.0);
+        assert_eq!(book.room_rupees(1), 500_000.0);
+        assert_eq!(book.room_rupees(0), 500_000.0);
     }
 
     #[test]
