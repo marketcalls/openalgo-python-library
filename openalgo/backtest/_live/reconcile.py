@@ -52,7 +52,7 @@ from ._group_rules import GroupFigure
 from ._reconcile_act import Corrections
 from ._reconcile_ended import EndQueries
 from ._reconcile_findings import FILL_DURING_READ, Findings, Reconciliation
-from ._reconcile_groups import GroupComparison
+from ._reconcile_groups import GroupComparison, GroupRead
 from ._reconcile_guard import ExitGuard
 from ._reconcile_rules import (
     GUARDED,
@@ -96,8 +96,8 @@ class Reconciler(EndQueries, GroupComparison, ReadSchedule):
         self._orphans: set[str] = set()
         # By strategy: its shared instrument's group as the last comparison judged it.
         self._figures: dict[str, GroupFigure] = {}
-        # By shared instrument: the broker's net and the members' sum at its last read.
-        self._group_reads: dict[tuple[str, str], tuple[int, int]] = {}
+        # By shared instrument: its last read (the broker's net, the members' sum, late).
+        self._group_reads: dict[tuple[str, str], GroupRead] = {}
         corrections = Corrections(session, self._adopted, self._orphans, self._figures)
         self._findings = Findings(session, corrections, RECONCILE_IN_FLIGHT_MAX_S)
         self.rows: list[Reconciliation] = self._findings.rows

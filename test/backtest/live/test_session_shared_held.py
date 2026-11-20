@@ -46,16 +46,18 @@ def stop_of(world, name: str):
     return next(o for o in sbin_orders(world, name) if o.price_type == "SL-M")
 
 
-def b_fills_unheard(world, *, lag_positions: bool = False) -> None:
-    """B's stop fills whole at the broker, its word held on the stream, and the trade book
-    fails from now on; with `lag_positions`, the position book answers as before the fill
-    (the fill lands between the read's two books)."""
+def b_fills_unheard(world, *, lag_positions: bool = False, units: int | None = None) -> None:
+    """B's stop fills whole at the broker (or `units` of it: a part fill of the triggered
+    stop, which the live order book shows open with no count of its fills), its word held
+    on the stream, and the trade book fails from now on; with `lag_positions`, the
+    position book answers as before the fill (the fill lands between the read's two
+    books)."""
     world.fake.faults.hold_order_updates()
     for _ in range(60):
         world.fake.faults.gateway_error("tradebook", status=503)
     if lag_positions:
         world.fake.lag_positionbook()
-    world.fake.fill(stop_of(world, "SbinBreakout").order_id, price=497.0)
+    world.fake.fill(stop_of(world, "SbinBreakout").order_id, units, price=497.0)
 
 
 def a_cancel_heard_with_no_fill(world) -> None:
@@ -69,9 +71,11 @@ def a_cancel_heard_with_no_fill(world) -> None:
     world.feed.deliver_update(message)
 
 
-def run(world, *, lag_positions: bool = False):
+def run(world, *, lag_positions: bool = False, b_units: int | None = None):
     at_price(world, ist(14, 44), 502.0)
-    world.script.at(B_FILLS, lambda: b_fills_unheard(world, lag_positions=lag_positions))
+    world.script.at(
+        B_FILLS, lambda: b_fills_unheard(world, lag_positions=lag_positions, units=b_units)
+    )
     world.script.at(A_CANCELLED, lambda: a_cancel_heard_with_no_fill(world))
     world.script.at(B_HEARD, world.fake.faults.release_order_updates)
     if lag_positions:
@@ -143,3 +147,15 @@ def test_F103_variant_a_fill_landing_between_the_two_books_stops_the_decision_to
     assert exit_.quantity == A_UNITS
     assert world.fake.position("SBIN", "NSE") == 0
     assert stop_of(world, "SbinBreakout").quantity == B_UNITS
+
+
+def test_F103_variant_a_part_fill_of_another_members_triggered_stop_stops_the_decision(world):
+    # B's stop sells 20 of its 50 unheard; the live order book shows it open with no count
+    # of its fills, so the net's 20 fewer units are not read as A's stop's fills.
+    outcome = run(world, b_units=20)
+    stop_a = stop_of(world, "SbinTrend").order_id
+    (released,) = [e for e in events(outcome, "held_released") if e["order_id"] == stop_a]
+    assert (released["filled"], released["ts_ns"] >= B_HEARD) == (0, True)
+    (exit_,) = a_exits(world)
+    assert (exit_.placed_ns >= B_HEARD, exit_.quantity) == (True, A_UNITS)
+    assert world.fake.position("SBIN", "NSE") == 0

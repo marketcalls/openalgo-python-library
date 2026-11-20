@@ -7,12 +7,14 @@ their legs are judged together: the sum of the members' units (`E`) against the 
 net (`B`), with `X` the units of other orders' trades not taken in yet.
 
 - **The group's kind** (`group_kind`), the rows of 4.6 in their general form, judged in
-  this order: the books unreadable; agreeing (`B == E`); the other side (`B` strictly on
-  the other side of `E`, `Kind.OTHER_SIDE`); an excess no member's closing orders can
-  overshoot (`B > E` with no short member, or `B < E` with no long member, `Kind.MORE`);
-  explained and absorbed (`X` accounts for `B - E` and the members on the side it closes
-  hold at least its units, `Kind.EXPLAINED_SHARED`: they take it by the allocation of 4.7,
-  `_reconcile_allocate`, each its `Share`); else unexplained. The side gate keeps a live
+  this order: the books unreadable; agreeing (`B == E`); explained and absorbed (`X`
+  accounts for `B - E` and the members on the side it closes hold at least its units,
+  `Kind.EXPLAINED_SHARED`: they take it by the allocation of 4.7, `_reconcile_allocate`,
+  each its `Share`), also when it leaves a mixed group's net on the other side of its sum;
+  an excess no member's closing orders can overshoot (`B > E` with no short member, or
+  `B < E` with no long member, `Kind.MORE`, which an absorbed difference never is); the
+  other side (`B` strictly on the other side of `E`, explained beyond what the members
+  can absorb or unexplained, `Kind.OTHER_SIDE`); else unexplained. The side gate keeps a live
   group's open members on one side (4.13), so the excess and the other side take their
   one-sided forms there; with one member the kinds are a leg's (`_reconcile_rules.judge`),
   an explained difference named `EXPLAINED_SHARED`.
@@ -131,12 +133,12 @@ def group_kind(member_units: Sequence[int], broker_units: int | None, unexplaine
     difference = broker_units - held
     if difference == 0:
         return Kind.AGREE
-    if held * broker_units < 0:
-        return Kind.OTHER_SIDE
-    if _excess(member_units, difference):
-        return Kind.MORE
     if unexplained == 0 and _absorbed(member_units, difference):
         return Kind.EXPLAINED_SHARED
+    if _excess(member_units, difference):
+        return Kind.MORE
+    if held * broker_units < 0:
+        return Kind.OTHER_SIDE
     return Kind.UNEXPLAINED
 
 

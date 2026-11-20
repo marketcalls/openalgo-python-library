@@ -15,11 +15,16 @@ which adds the shared instruments).
 - **The shared instruments** (`shared_positions`, `SharedPosition`): for each instrument
   several strategies of the session trade, OpenAlgo's net at the last read a comparison of
   its group took, carried by the members' own fills since (each moved OpenAlgo's books by
-  the same units), the members' sum now, and whether they agree. The close lists it in
-  `open_positions` when OpenAlgo's net is a position (`SharedPosition.note`: a flat net
-  leaves nothing open at the broker, and each member a position on its own row names it)
-  and gives it a line of the DAILY_SUMMARY (`SharedPosition.line`). A net no comparison of
-  this start read is named as not read, never guessed.
+  the same units), the members' sum now, and whether they agree. A read compared late (a
+  member in flight past the limit) may already hold a fill its member hears only later, so
+  its net is named as that read saw it, neither carried nor confirmed (`LATE_GROUP_READ`),
+  as a leg's late sighting is (`_reconcile_close.LATE_READ`). The close lists the
+  instrument in `open_positions` when OpenAlgo's net is a position, or when it is flat
+  and differs from the members' sum while a member is listed open
+  (`SharedPosition.listed`, `SharedPosition.note`: a flat net no member is listed against
+  leaves nothing open at the broker), and gives it a line of the DAILY_SUMMARY
+  (`SharedPosition.line`). A net no comparison of this start read is named as not read,
+  never guessed.
 
 Quantities are signed whole units. Read while the kernel sessions run: a finished one has
 no units to read. Used by the close only (`_session_close`).
@@ -48,6 +53,11 @@ from ._types import AlertKind
 #: How the note and the line of a shared instrument say OpenAlgo's net was carried to the
 #: close by the members' own fills since the read that saw it.
 CARRIED = " and their own fills since"
+#: How they name a net the group's last read saw late (module docstring), as it saw it.
+LATE_GROUP_READ = (
+    "at a late read, while an order of a member was in flight past the limit, neither "
+    "carried by their fills since nor confirmed by a later read"
+)
 
 
 @dataclass(frozen=True)
@@ -122,7 +132,8 @@ class SharedPosition:
     """An instrument several strategies of the session trade, at the close (module
     docstring): `symbol`, `exchange`, its `members` in call order, OpenAlgo's `net` (signed
     units, None when no comparison of this start read it), whether the members' own fills
-    since that read carried it (`carried`), and `held`, the members' sum now."""
+    since that read carried it (`carried`), `held`, the members' sum now, and whether that
+    read compared `late` (its net as it saw it, not confirmed)."""
 
     symbol: str
     exchange: str
@@ -130,21 +141,32 @@ class SharedPosition:
     net: int | None
     held: int
     carried: bool = False
+    late: bool = False
 
     @property
     def agrees(self) -> bool:
-        """True when OpenAlgo's net is known and equals the members' sum."""
-        return self.net == self.held
+        """True when OpenAlgo's net is known, from a read in time, and equals the
+        members' sum."""
+        return not self.late and self.net == self.held
 
-    @property
-    def open(self) -> bool:
-        """True when OpenAlgo's net is known and is a position."""
-        return self.net is not None and self.net != 0
+    def listed(self, members_open: bool) -> bool:
+        """True when the close lists the instrument in `open_positions`: OpenAlgo's net is
+        known and is a position, or it is flat and differs from the members' sum while a
+        member is listed open (`members_open`). A flat net no member is listed against
+        leaves nothing open at the broker (16-session-design 5.4 "As built", round 8)."""
+        if self.net is None:
+            return False
+        return self.net != 0 or (members_open and self.net != self.held)
 
     def note(self) -> str:
         """The instrument's note in `open_positions`: OpenAlgo's net, how it is known,
         against the members' sum, and what to do when they differ."""
         whose = f"OpenAlgo's net position of {self.symbol} for {and_join(self.members)} together"
+        if self.late:
+            return (
+                f"{whose}, {LATE_GROUP_READ}: their sum is {self.held}; check the position "
+                "book in OpenAlgo"
+            )
         known = f"by the last read{CARRIED if self.carried else ''}"
         if self.agrees:
             return f"{whose}, {known}: it equals their sum; each holds its own stop on its row"
@@ -159,6 +181,11 @@ class SharedPosition:
         where = f"{self.symbol} {self.exchange} ({and_join(self.members)})"
         if self.net is None:
             return f"{where}: OpenAlgo's net not read, their sum {self.held}"
+        if self.late:
+            return (
+                f"{where}: OpenAlgo's net {self.net} {LATE_GROUP_READ}; their sum "
+                f"{self.held}: not confirmed"
+            )
         verdict = "agree" if self.agrees else "differ"
         carried = CARRIED if self.carried else ""
         return (
@@ -181,13 +208,19 @@ def _shared(session: Any) -> Iterator[SharedPosition]:
         members = groups.of(group.symbol, group.exchange)
         held = sum(round(member.open_units()) for member in members)
         read = session.reconcile.group_read(group.symbol, group.exchange)
-        net = None if read is None else read[0] + held - read[1]
-        carried = read is not None and held != read[1]
-        yield SharedPosition(group.symbol, group.exchange, group.members, net, held, carried)
+        where = (group.symbol, group.exchange, group.members)
+        if read is None:
+            yield SharedPosition(*where, None, held)
+        elif read.late:
+            yield SharedPosition(*where, read.net, held, late=True)
+        else:
+            net = read.net + held - read.held
+            yield SharedPosition(*where, net, held, carried=held != read.held)
 
 
 __all__ = [
     "CARRIED",
+    "LATE_GROUP_READ",
     "NamedLegs",
     "SharedPosition",
     "alert_not_confirmed",

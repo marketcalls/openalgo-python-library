@@ -31,14 +31,16 @@ A leg whose difference with OpenAlgo's books no later read will confirm (16-sess
 5.4 "As built", round 7) is an open position at OpenAlgo's units with no confirmed stop,
 flat or not in the engine, a mismatch of the summary and named on its Reconcile and End
 state lines; OpenAlgo's units are those the read showed, moved by the engine's own fills
-since (`_reconcile_close`), and a leg they leave flat is no open position (round 8). A leg
-no read judged after a fill of its own orders landed during a read is named on those lines
-as not confirmed, with the engine's units, and has one alert to check OpenAlgo's position
-book (round 9). What the close names besides the legs it holds is `_session_named`'s: an
-instrument several strategies share has one row of its own after the legs, OpenAlgo's net
-against the members' sum, and one line of the DAILY_SUMMARY, and its group's difference is
-named and counted once (18-multi-strategy 4.11). The public `SessionResult` (unit 13) is
-built from the outcome.
+since (`_reconcile_close`), and a leg they leave flat is no open position (round 8; the
+listing is `_session_open`'s). A leg no read judged after a fill of its own orders landed
+during a read is named on those lines as not confirmed, with the engine's units, and has
+one alert to check OpenAlgo's position book (round 9). What the close names besides the
+legs it holds is `_session_named`'s: an instrument several strategies share has one row of
+its own after the legs (when OpenAlgo's net is a position or differs from the members'
+sum), OpenAlgo's net against the members' sum, and one line of the DAILY_SUMMARY, and its
+group's difference is named and counted once (18-multi-strategy 4.11). The instrument's
+row holds no position of its own: the day is flat when no row holds units. The public
+`SessionResult` (unit 13) is built from the outcome.
 
 Times are UTC nanoseconds, quantities units, amounts rupees.
 """
@@ -53,9 +55,7 @@ from .._driver import deliver
 from .._engine import call
 from ..errors import JournalError
 from ._alerts_summary import SessionSummary, summary_text
-from ._group_rules import and_join
 from ._plan_catch_up import StrategyPlan
-from ._reconcile_close import differing
 from ._reconcile_final import final_read
 from ._reconcile_findings import Reconciliation
 from ._session_loop import Session
@@ -66,13 +66,13 @@ from ._session_named import (
     named_legs,
     shared_positions,
 )
+from ._session_open import OpenPosition, open_positions
 from ._session_records import FillRecord, LockRecord, OrderRecord, Restored, order_records
 from ._session_saved import save, save_session
 from ._session_slippage import Slippage, strategy_slippage
 from ._session_trader import Skipped, Trader
 from ._stops_cover import Unprotected
 from ._stops_held import Estimate
-from ._stops_report import stop_state
 from ._types import LOGGER_NAME, AlertKind
 from .bars import BarDrift
 
@@ -84,36 +84,9 @@ FINAL_READ_WAIT_S = 5.0
 #: How a session ended that takes the final read: not after an error (3.5) or a mode
 #: breach (6.2), when the books are not to be trusted or not to be read.
 _FINAL_READ = frozenset({"session_end", "ctrl_c"})
-#: How an open position names the units of an entry the order book cannot tell apart from
-#: another order (16-session-design F60): the session cannot say which is its own.
-AMBIGUOUS_ENTRY_NOTE = (
-    "an entry of {units} units cannot be told apart in the order book from another order: "
-    "one of them is the session's, at the broker with no stop; check the order book in "
-    "OpenAlgo and close it by hand"
-)
 #: How the close warns of a strategy's state it could not save, and what a restart does.
 NOT_SAVED = "its state and the day's figures were not saved at the close"
 RESUMES_FROM_LAST_SAVE = "a restart today resumes it from its last save"
-
-
-@dataclass(frozen=True)
-class OpenPosition:
-    """A position still open when the session ended: the strategy, the instrument, its
-    signed units (OpenAlgo's at the last read when they differed from the engine's and no
-    later read confirmed it, moved by the engine's own fills since: `_reconcile_close`), a
-    note for the operator, its stop's broker order ID ("" for none, or one not bound) and
-    whether that stop was confirmed working at the broker for no more units than the
-    position holds (one larger, which a trigger would take through zero, is not, nor any
-    while OpenAlgo's books show other units than the engine's:
-    `_stops_report.stop_state`)."""
-
-    strategy: str
-    symbol: str
-    exchange: str
-    units: float
-    note: str
-    stop_order_id: str = ""
-    stop_confirmed: bool = False
 
 
 @dataclass(frozen=True)
@@ -170,52 +143,96 @@ def close_session(
     stack, which raises LiveError naming it once all are closed."""
     parts = session.parts
     try:
-        session.stops.after.end(session.traders)
-        session.reconcile.end()
-        parts.worker.withdraw_put_back()
-        if journal_works and stopped_by in _FINAL_READ:
-            final_read(session.reconcile, session, FINAL_READ_WAIT_S)
-        for request in session.reconcile.guard.left():
-            logger.warning("a request held back by the exit guard was not sent: %r", request)
-        session.stops.after.alert(session)
-        alert_not_confirmed(session)
+        _settle(session, stopped_by, journal_works=journal_works)
         # Named while the kernel sessions run: a finished one has no units to read.
-        shared = shared_positions(session)
-        open_positions = _open_positions(session, shared)
-        named = named_legs(session)
+        named = _named(session)
         unprotected_s = session.stops.windows.seconds(session.now())
         if journal_works:
-            _save_day(session, unprotected_s, named.new_mismatches)
+            _save_day(session, unprotected_s, named.legs.new_mismatches)
         parts.worker.close()
         # Read while each kernel session runs: a finished one counts its timers no more.
         timers = {t.name: tuple(t.part.context.timers.warnings()) for t in session.traders}
         slipped = {t.name: strategy_slippage(session, t) for t in session.traders}
-        outputs = {trader.name: _stop_engine(trader) for trader in session.traders}
-        orders = order_records(session, {name: output for name, (output, _) in outputs.items()})
-        summary = _summary(
-            session, (outputs, slipped), unprotected_s, (named, shared), not open_positions
-        )
+        stopped = {trader.name: _stop_engine(trader) for trader in session.traders}
+        outputs = {name: output for name, (output, _) in stopped.items()}
+        orders = order_records(session, outputs)
+        summary = _summary(session, (stopped, slipped), unprotected_s, named)
         session.alert(AlertKind.DAILY_SUMMARY, summary_text(summary))
         if not session.threads:
             # Under the test seam no sender thread posts: the queue goes now, as it would.
             parts.sender.deliver_queued()
         session.event("closed", stopped_by=stopped_by)
-        ended_ns = session.now()
+        outcome = _outcome(session, stopped_by, (outputs, orders, timers), summary, named)
     finally:
         parts.stack.close()
+    return outcome
+
+
+@dataclass(frozen=True)
+class _Named:
+    """What the close names, read while the kernel sessions run: the `open_positions`,
+    the legs the summary names (`legs`, `_session_named.NamedLegs`) and each shared
+    instrument (`shared`)."""
+
+    open_positions: tuple[OpenPosition, ...]
+    legs: NamedLegs
+    shared: tuple[SharedPosition, ...]
+
+    @property
+    def flat(self) -> bool:
+        """True when no row holds units: an instrument's row listed for a flat net its
+        members' sum differs from holds none (module docstring)."""
+        return not any(position.units for position in self.open_positions)
+
+
+def _settle(session: Session, stopped_by: str, *, journal_works: bool) -> None:
+    """The close's steps before it names what is left (module docstring): the stops
+    supervisor's and the reconciler's ends, what the order worker put back withdrawn, the
+    final read after a session end or a Ctrl+C, a log line per request the exit guard held
+    back, and the alerts of the legs that changed after the last lines or that no read
+    confirmed."""
+    session.stops.after.end(session.traders)
+    session.reconcile.end()
+    session.parts.worker.withdraw_put_back()
+    if journal_works and stopped_by in _FINAL_READ:
+        final_read(session.reconcile, session, FINAL_READ_WAIT_S)
+    for request in session.reconcile.guard.left():
+        logger.warning("a request held back by the exit guard was not sent: %r", request)
+    session.stops.after.alert(session)
+    alert_not_confirmed(session)
+
+
+def _named(session: Session) -> _Named:
+    """What the close names (`_Named`): each shared instrument, then the open positions
+    with its row, then the legs the summary names."""
+    shared = shared_positions(session)
+    return _Named(open_positions(session, shared), named_legs(session), shared)
+
+
+def _outcome(
+    session: Session,
+    stopped_by: str,
+    records: tuple[dict[str, Any], tuple[OrderRecord, ...], dict[str, tuple[str, ...]]],
+    summary: SessionSummary,
+    named: _Named,
+) -> SessionOutcome:
+    """The session's outcome, ended now: `records` are each kernel session's `finish()`
+    tables, the orders and each strategy's timers' notes, by strategy."""
+    parts = session.parts
+    outputs, orders, timers = records
     return SessionOutcome(
         mode=parts.mode.value,
         broker=parts.broker,
         account=parts.account,
         day=parts.spec.day,
         started_ns=session.started_ns,
-        ended_ns=ended_ns,
+        ended_ns=session.now(),
         stopped_by=stopped_by,
         restarts=parts.journal_session.starts - 1,
         strategies=tuple(t.name for t in session.traders),
-        outputs={name: output for name, (output, _) in outputs.items()},
+        outputs=outputs,
         summary=summary,
-        open_positions=open_positions,
+        open_positions=named.open_positions,
         mode_breach=session.breach_text,
         warnings=tuple(session.warnings),
         skipped_decisions=tuple(s for t in session.traders for s in t.skipped),
@@ -241,8 +258,7 @@ def _summary(
     session: Session,
     stopped: tuple[dict[str, Any], dict[str, Slippage]],
     unprotected_s: float,
-    named: tuple[NamedLegs, tuple[SharedPosition, ...]],
-    flat: bool,
+    named: _Named,
 ) -> SessionSummary:
     """The day's figures across its restarts (`_session_figures`): the trades the kernel
     sessions closed, their gross P&L and modelled charges (the broker's trade book carries
@@ -250,12 +266,12 @@ def _summary(
     backtest's (`stopped`'s slippages, `_session_slippage`), the session's counts, the legs
     `named` gives (`_session_named.named_legs`), each differing one a mismatch too unless
     the day counted it already, and a line per shared instrument it gives; the strategies
-    earlier starts ran and this one does not, the day not `flat` while one held a position
-    at its last save."""
+    earlier starts ran and this one does not, the day not flat while a row of `named` holds
+    units or one of them held a position at its last save."""
     parts = session.parts
     figures = session.figures
     outputs, slipped = stopped
-    legs, shared = named
+    legs = named.legs
     traded, counted = figures.day(session, outputs, unprotected_s, slippages=slipped)
     return SessionSummary(
         day=parts.spec.day,
@@ -271,57 +287,12 @@ def _summary(
         unprotected_seconds=counted.unprotected_seconds,
         reconcile_mismatches=counted.reconcile_mismatches + legs.new_mismatches,
         undelivered_alerts=counted.undelivered_alerts,
-        flat=flat and not figures.earlier_open,
+        flat=named.flat and not figures.earlier_open,
         differing=legs.differs,
         unconfirmed=legs.unsure,
         earlier=tuple(strategy.words() for strategy in figures.earlier),
-        shared=tuple(instrument.line() for instrument in shared),
+        shared=tuple(instrument.line() for instrument in named.shared),
     )
-
-
-def _open_positions(
-    session: Session, shared: tuple[SharedPosition, ...]
-) -> tuple[OpenPosition, ...]:
-    """Each leg the engine holds open, and each whose difference with OpenAlgo's books no
-    later read confirms, at OpenAlgo's units then (a member of a shared instrument at its
-    own: `_reconcile_close.Differing.open_units`); none they show flat (module
-    docstring). An entry the order book cannot tell apart adds its units, with no stop
-    confirmed (16-session-design 7.1, F60). Then each `shared` instrument with a position
-    (`_instrument_row`)."""
-    stops, positions = session.stops, []
-    for trader in session.traders:
-        differs = differing(session.reconcile, trader)
-        units = trader.open_units() if differs is None else differs.open_units
-        unsure = stops.leg(trader).ambiguous_entry_units()
-        if units == 0 and unsure == 0:
-            continue
-        note = (
-            "known as of the mode breach" if session.locked else stops.after.note(session, trader)
-        )
-        stop = stop_state(stops, trader)
-        if unsure:
-            words = AMBIGUOUS_ENTRY_NOTE.format(units=abs(unsure))
-            note, stop = (f"{note}; {words}" if units else words), (stop[0], False)
-        positions.append(
-            OpenPosition(trader.name, trader.symbol, trader.exchange, units + unsure, note, *stop)
-        )
-    rows = [_instrument_row(session, each, positions) for each in shared if each.open]
-    return (*positions, *rows)
-
-
-def _instrument_row(
-    session: Session, shared: SharedPosition, legs: list[OpenPosition]
-) -> OpenPosition:
-    """The row of a shared instrument (18-multi-strategy 4.11): its members, OpenAlgo's
-    net and the note (`SharedPosition.note`); no stop of its own, and its stop confirmed
-    when the net equals the members' sum and each member's row has its stop confirmed."""
-    rows = [p for p in legs if p.strategy in shared.members and p.symbol == shared.symbol]
-    covered = shared.agrees and bool(rows) and all(p.stop_confirmed for p in rows)
-    note = shared.note()
-    if session.locked:
-        note = f"known as of the mode breach; {note}"
-    members = and_join(shared.members)
-    return OpenPosition(members, shared.symbol, shared.exchange, shared.net or 0, note, "", covered)
 
 
 def _save_day(session: Session, unprotected_s: float, named: int) -> None:
@@ -371,4 +342,4 @@ def _stop_engine(trader: Trader) -> tuple[Any, tuple[float, float]]:
     return call(engine.finish), (realized + unrealized, costs)
 
 
-__all__ = ["OpenPosition", "SessionOutcome", "close_session"]
+__all__ = ["SessionOutcome", "close_session"]

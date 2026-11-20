@@ -45,16 +45,19 @@ not it has rows.
 - `drift`: each broker candle against the bar built from the feed's ticks. `unprotected`:
   each window a position had no confirmed stop at the broker, and why. `locks`: each
   entry lock, when it was set and lifted. `reconciliations`: each comparison with the
-  broker's books that differed, and what was done; a member of an instrument several
-  strategies share has its group there too (`group`, `group_units`, `member_units`, the
-  other orders' `external_units`, and on the row of an act the `allocation` made and the
-  `stops_cut`), empty for a strategy alone. `skipped_decisions`: the strategy bars whose
-  `on_bar` was skipped for missing data.
+  broker's books that differed, and what was done; in a session with an instrument
+  several strategies share, a member of it has its group there too (`group`,
+  `group_units`, `member_units`, the other orders' `external_units`, and on the row of an
+  act the `allocation` made and the `stops_cut`; empty for a strategy alone), and a
+  session without one has none of these columns. `skipped_decisions`: the strategy bars
+  whose `on_bar` was skipped for missing data.
 - `open_positions`: the positions still open at the end, each with its stop at the
   broker, whether that stop was confirmed working, and a note saying what to do; after
   the legs, a row per instrument several strategies share whose net OpenAlgo shows as a
-  position, named by its members ("A and B"), with that net and whether it equals their
-  sum (confirmed when it does and each member's stop is). A leg
+  position or differs from their sum, named by its members ("A and B"), with that net
+  and whether it equals their sum (confirmed when it does and each member's stop is).
+  That row is OpenAlgo's net for the members together, not a position of its own: the
+  repr counts the strategies' positions only. A leg
   the close names (`unconfirmed_legs`: OpenAlgo's books and the engine did not agree on
   it, or no read confirmed it) is there only at a figure the session could carry to the
   close (none for a difference a late read saw): a warning names each, and `flat` is
@@ -140,8 +143,14 @@ class SessionResult:
             f"SessionResult({self.mode.upper()} {self.day.isoformat()}, broker "
             f"{self.broker}, stopped by {self.stopped_by}, {figures.closed_trades} closed "
             f"trades, net P&L Rs {figures.net_pnl:,.2f}, "
-            f"{len(self.open_positions)} positions open{self._legs_named()})"
+            f"{self._legs_open()} positions open{self._legs_named()})"
         )
+
+    def _legs_open(self) -> int:
+        """The strategies' positions open: a shared instrument's row, named by its members
+        ("A and B", never a strategy's name), is OpenAlgo's net for them, no position of
+        its own."""
+        return int(self.open_positions["strategy"].isin(self.strategies).sum())
 
     def _legs_named(self) -> str:
         count = len(self.unconfirmed_legs)

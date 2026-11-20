@@ -35,8 +35,10 @@ records (`_session_close.SessionOutcome`).
 - **The warnings**, the mode first: the mode the session ran in and what it means; then
   the session's own warnings in order (the preflight's, the plan's, the clock's against
   the exchange, each first position opened with no stop at the broker, and the rest);
-  then the seconds positions had no confirmed stop, the positions left open, and each leg
-  the close named that it could not confirm (`SessionResult.unconfirmed_legs`).
+  then the seconds positions had no confirmed stop, the positions left open (each leg, then
+  each shared instrument as OpenAlgo's net for its members together, never as a position
+  of its own), and each leg the close named that it could not confirm
+  (`SessionResult.unconfirmed_legs`).
 
 Times are UTC nanoseconds turned into IST datetimes, amounts rupees, quantities units.
 """
@@ -69,6 +71,7 @@ from ._result_frames import (
     unprotected_frame,
 )
 from ._session_close import SessionOutcome
+from ._session_open import OpenPosition
 from ._session_records import Restored
 from ._types import Mode
 
@@ -140,7 +143,9 @@ def session_result(outcome: SessionOutcome) -> SessionResult:
         drift=drift_frame(outcome.drift),
         unprotected=unprotected_frame(outcome.unprotected, outcome.ended_ns),
         locks=locks_frame(outcome.locks),
-        reconciliations=reconciliations_frame(outcome.reconciliations),
+        reconciliations=reconciliations_frame(
+            outcome.reconciliations, shared=bool(outcome.summary.shared)
+        ),
         skipped_decisions=skipped_frame(outcome.skipped_decisions),
         open_positions=open_positions_frame(outcome.open_positions),
         mode_breach=outcome.mode_breach,
@@ -253,16 +258,28 @@ def result_warnings(outcome: SessionOutcome) -> tuple[str, ...]:
             f"positions had no confirmed stop at the broker for {math.ceil(seconds)} s today "
             "in all: result.unprotected lists each window and why"
         )
-    if outcome.open_positions:
-        legs = ", ".join(f"{p.strategy} {p.units:g} {p.symbol}" for p in outcome.open_positions)
+    if any(position.units for position in outcome.open_positions):
         notes.append(
-            f"positions were still open when the session ended ({legs}): "
-            "result.open_positions says what to do with each"
+            "positions were still open when the session ended "
+            f"({_open_words(outcome.open_positions)}): result.open_positions says what to do "
+            "with each"
         )
     summary = outcome.summary
     for words in (*summary.differing, *summary.unconfirmed):
         notes.append(NOT_CONFIRMED_AT_CLOSE.format(words=words))
     return tuple(dict.fromkeys(notes))
+
+
+def _open_words(positions: Sequence[OpenPosition]) -> str:
+    """The positions left open in words: each leg, then each shared instrument's row as
+    OpenAlgo's net for its members together."""
+    legs = ", ".join(f"{p.strategy} {p.units:g} {p.symbol}" for p in positions if not p.members)
+    nets = ", ".join(
+        f"OpenAlgo's net {p.units:g} {p.symbol} for {p.strategy} together"
+        for p in positions
+        if p.members
+    )
+    return "; ".join(words for words in (legs, nets) if words)
 
 
 def _ist(ts_ns: int) -> pd.Timestamp:

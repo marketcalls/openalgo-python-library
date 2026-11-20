@@ -107,12 +107,6 @@ COLUMNS = {
         "engine_units",
         "broker_units",
         "action",
-        "group",
-        "group_units",
-        "member_units",
-        "external_units",
-        "allocation",
-        "stops_cut",
     ],
     "skipped_decisions": ["strategy", "decided_at", "decided_at_ns", "reason"],
     "open_positions": [

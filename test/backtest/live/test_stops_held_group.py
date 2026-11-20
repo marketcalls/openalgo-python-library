@@ -202,6 +202,34 @@ def test_a_fill_of_another_members_stop_its_engine_lacks_stops_the_decision(stop
     assert "no exit of A is sent until the books tell" in text
 
 
+def test_another_members_stop_shown_open_with_no_count_of_its_fills_stops_the_decision():
+    # A live order book shows a stop that has triggered as open, and counts no fills: B's
+    # stop may have sold 4 unheard, which the net counts, so A's cancel is not decided.
+    session, released = held_cancel_of_a(16, {"order_status": "open"})
+    assert released == []
+    (text,) = session.alerts
+    assert (
+        "stop SA of A cancelled, its fills not confirmed (the order book shows the stop SB of B "
+        "open and does not count its fills)"
+    ) in text
+
+
+@pytest.mark.parametrize(
+    ("stop_b", "units", "filled"),
+    [
+        ({"order_status": "trigger pending"}, 10, 0),
+        ({"order_status": "open", "filled_quantity": 0}, 10, 0),
+        ({"order_status": "open", "filled_quantity": 4}, 6, 4),
+    ],
+    ids=["not triggered", "triggered, the book counts no fill", "triggered, its fill heard"],
+)
+def test_another_members_stop_the_book_shows_with_no_unheard_fill_lets_the_decision_go(
+    stop_b, units, filled
+):
+    _, released = held_cancel_of_a(10 + units, stop_b, units=units, filled_units=filled)
+    assert released == [("SA", 0)]
+
+
 def test_a_fill_of_another_members_stop_its_engine_holds_does_not_stop_the_decision():
     # B's engine has the 4 units its stop filled: the members' sum is 16, and the net too.
     session, released = held_cancel_of_a(16, {"filled_quantity": 4}, units=6, filled_units=4)

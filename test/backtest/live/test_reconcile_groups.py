@@ -69,6 +69,8 @@ def bought(units: int, price: float = 501.0, order_id: str = "h1") -> Trade:
         ((100, -50), 80, 0, Kind.EXPLAINED_SHARED),
         ((100, -50), 120, 0, Kind.UNEXPLAINED),
         ((100, -100), 30, 30, Kind.UNEXPLAINED),
+        ((100, -50), -10, 0, Kind.EXPLAINED_SHARED),
+        ((100, -50), -110, 0, Kind.OTHER_SIDE),
     ],
     ids=[
         "agree",
@@ -88,6 +90,8 @@ def bought(units: int, price: float = 501.0, order_id: str = "h1") -> Trade:
         "mixed sides: a buy the short member absorbs",
         "mixed sides: a buy beyond the short member",
         "mixed sides at no net: more, with a short member to close",
+        "mixed sides: a sale the long member absorbs, though the net turns short",
+        "mixed sides: a sale beyond the long member, the net short: the other side",
     ],
 )
 def test_the_groups_kind_judges_the_members_sum_by_the_rows_of_4_6(

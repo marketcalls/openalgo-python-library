@@ -231,12 +231,16 @@ def test_a_difference_no_trade_explains_keeps_every_stop_and_names_the_groups_ne
     outcome = world.run([SbinTrend, SbinBreakout], on_stop="keep")
     assert events(outcome, "adopted") == []
     rows = {p.strategy: p for p in outcome.open_positions}
+    # The instrument's own row: OpenAlgo's flat net against the members' sum (4.11).
+    instrument = rows.pop("SbinTrend and SbinBreakout")
     assert (rows["SbinTrend"].units, rows["SbinBreakout"].units) == (A_UNITS, B_UNITS)
     for row in rows.values():
         assert (
             "OpenAlgo's books showed 0 units of SBIN for SbinTrend and SbinBreakout together "
             "at the last read"
         ) in row.note
+    assert (instrument.units, instrument.stop_confirmed) == (0, False)
+    assert f"their sum is {A_UNITS + B_UNITS}, so they differ" in instrument.note
     assert {s[3] for s in stops_at_the_fake(world).values()} == {"trigger pending"}
 
 

@@ -24,7 +24,9 @@ from session_samples import Hold, ist
 from shared_samples import A_UNITS, B_UNITS, LateBreakout, NeverB, SbinBreakout, SbinTrend
 from stops_samples import stop_world
 
+from openalgo.backtest._live import reconcile as reconcile_module
 from openalgo.backtest._live._alerts_summary import summary_text
+from openalgo.backtest._live._result_build import session_result
 from openalgo.backtest._live._session_named import CARRIED, SharedPosition
 from openalgo.backtest._live._types import LOGGER_NAME
 
@@ -32,6 +34,11 @@ HELD = A_UNITS + B_UNITS
 #: The instrument's row's name, and the start of its summary line.
 BOTH = "SbinTrend and SbinBreakout"
 LINE = f"SBIN NSE ({BOTH}): OpenAlgo's net"
+#: How the close names a net its group's last read saw late, as that read saw it.
+LATE_WORDS = (
+    "at a late read, while an order of a member was in flight past the limit, neither "
+    "carried by their fills since nor confirmed by a later read"
+)
 
 
 @pytest.fixture
@@ -109,12 +116,83 @@ def test_an_excess_on_a_flat_group_is_the_instruments_row_and_the_day_is_not_fla
     assert outcome.summary.reconcile_mismatches == 1
 
 
-def test_a_net_openalgo_shows_flat_gives_the_instrument_no_row(world):
+def test_a_net_openalgo_shows_flat_against_the_members_units_is_a_row_saying_they_differ(world):
     # The position book lags from before the entries: it shows SBIN flat, while each
     # member holds its units on its own row.
     world.script.at(ist(14, 41, 30), world.fake.lag_positionbook)
     outcome = kept(world, [SbinTrend, SbinBreakout])
-    assert [p.strategy for p in outcome.open_positions] == ["SbinTrend", "SbinBreakout"]
+    assert [p.strategy for p in outcome.open_positions] == ["SbinTrend", "SbinBreakout", BOTH]
+    row = row_of(outcome, BOTH)
+    assert (row.units, row.stop_confirmed) == (0, False)
+    assert f"their sum is {HELD}, so they differ; check the position book in OpenAlgo" in row.note
+
+
+def test_the_results_warning_names_each_member_and_the_instruments_net_apart(world):
+    result = session_result(kept(world, [SbinTrend, SbinBreakout]))
+    (left,) = [w for w in result.warnings if w.startswith("positions were still open")]
+    assert left == (
+        f"positions were still open when the session ended (SbinTrend {A_UNITS} SBIN, "
+        f"SbinBreakout {B_UNITS} SBIN; OpenAlgo's net {HELD} SBIN for {BOTH} together): "
+        "result.open_positions says what to do with each"
+    )
+
+
+@pytest.mark.parametrize("lagging", [False, True], ids=["no difference", "a difference"])
+def test_a_shared_sessions_reconciliations_have_the_groups_columns_rows_or_not(world, lagging):
+    # A strategy alone keeps the table's columns of 2.3.0 (test_live_result.py).
+    if lagging:
+        world.script.at(ist(14, 41, 30), world.fake.lag_positionbook)
+    table = session_result(kept(world, [SbinTrend, SbinBreakout])).reconciliations
+    assert bool(len(table)) is lagging
+    assert list(table.columns)[-6:] == [
+        "group",
+        "group_units",
+        "member_units",
+        "external_units",
+        "allocation",
+        "stops_cut",
+    ]
+    assert [str(table[c].dtype) for c in ("group_units", "external_units")] == ["Int64"] * 2
+
+
+def test_the_results_repr_counts_the_members_positions_not_the_instruments_row(world):
+    result = session_result(kept(world, [SbinTrend, SbinBreakout]))
+    assert len(result.open_positions) == 3
+    assert ", 2 positions open" in repr(result)
+
+
+def test_a_late_read_names_the_net_as_it_saw_it_not_carried_by_fills_heard_after(
+    world, monkeypatch
+):
+    # SbinTrend is held in flight from 14:42:30 (a test seam, as in
+    # test_session_close_late_acted.py), so every read from 14:45:31 compares the group
+    # late. SbinBreakout's stop sells its 50 at the broker at 14:45:40, its word held; the
+    # close's final read (Ctrl+C at 14:45:41) sees OpenAlgo's net 100 against the members'
+    # 150, and the fill reaches SbinBreakout's engine after it, by the poll the read asks
+    # for. The net is 100, as read: carrying it by that fill would count the fill twice.
+    in_flight = reconcile_module.in_flight
+
+    def held_in_flight(session, trader) -> bool:
+        held = trader.name == "SbinTrend" and session.now() >= ist(14, 42, 30)
+        return held or in_flight(session, trader)
+
+    monkeypatch.setattr(reconcile_module, "in_flight", held_in_flight)
+    world.script.at(ist(14, 45, 40), lambda: b_stop_fills_unheard(world))
+    outcome = kept(world, [SbinTrend, SbinBreakout], ist(14, 45, 41))
+    assert world.fake.position("SBIN", "NSE") == A_UNITS
+    assert outcome.summary.shared == (
+        f"{LINE} {A_UNITS} {LATE_WORDS}; their sum {A_UNITS}: not confirmed",
+    )
+    row = row_of(outcome, BOTH)
+    assert (row.units, row.stop_confirmed) == (A_UNITS, False)
+    assert f"{LATE_WORDS}: their sum is {A_UNITS}; check the position book" in row.note
+
+
+def b_stop_fills_unheard(world) -> None:
+    """SbinBreakout's stop fills whole at the broker now, its word held on the stream."""
+    world.fake.faults.hold_order_updates()
+    (stop,) = [o for o in world.fake.orders() if o.strategy == "SbinBreakout" and o.trigger_price]
+    world.fake.fill(stop.order_id, price=497.0)
 
 
 def test_a_strategy_alone_has_no_instruments_row_and_no_shared_line(world):
@@ -173,18 +251,35 @@ def test_a_difference_first_seen_by_the_closes_read_is_named_and_counted_once(wo
 
 
 @pytest.mark.parametrize(
-    ("net", "held", "is_open", "agrees"),
+    ("net", "held", "late", "members_open", "listed", "agrees"),
     [
-        (150, 150, True, True),
-        (90, 150, True, False),
-        (0, 150, False, False),
-        (None, 150, False, False),
+        (150, 150, False, True, True, True),
+        (90, 150, False, True, True, False),
+        (10, 0, False, False, True, False),
+        (0, 150, False, True, True, False),
+        (0, 150, False, False, False, False),
+        (0, 0, False, False, False, True),
+        (None, 150, False, True, False, False),
+        (150, 150, True, True, True, False),
+        (0, 0, True, False, False, False),
     ],
-    ids=["agreeing", "differing", "flat at OpenAlgo", "not read"],
+    ids=[
+        "agreeing",
+        "differing",
+        "an excess no member holds",
+        "flat at OpenAlgo, a member listed open",
+        "flat at OpenAlgo, no member listed open",
+        "flat everywhere",
+        "not read",
+        "read late: not confirmed",
+        "read late, flat everywhere",
+    ],
 )
-def test_an_instrument_is_open_when_openalgos_net_is_a_position(net, held, is_open, agrees):
-    shared = SharedPosition("SBIN", "NSE", ("A", "B"), net, held)
-    assert (shared.open, shared.agrees) == (is_open, agrees)
+def test_an_instrument_is_listed_for_a_net_position_or_a_flat_net_its_listed_members_differ_from(
+    net, held, late, members_open, listed, agrees
+):
+    shared = SharedPosition("SBIN", "NSE", ("A", "B"), net, held, late=late)
+    assert (shared.listed(members_open), shared.agrees) == (listed, agrees)
 
 
 def test_a_net_carried_by_the_members_fills_since_the_read_says_so():

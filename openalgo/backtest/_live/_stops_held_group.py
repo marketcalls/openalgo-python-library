@@ -14,8 +14,11 @@ member can be at the broker unheard (`unheard`):
   filling now, and a live order book does not count fills;
 - in the order book read after the position book, every other member's resting stop
   working with no fill its engine lacks: not ended (complete, cancelled or rejected) while
-  its engine works it, and no more units filled than its engine holds where the book counts
-  them (a sandbox book does); a stop the book does not show at all is not known either.
+  its engine works it, and either still waiting for its trigger or no more units filled
+  than its engine holds by the book's count (a sandbox book counts them). A live broker's
+  book shows a stop open both before and after its trigger and counts no fills, so there
+  another member's working stop leaves the cancel to the trade book (`_order_follow`); a
+  stop the book does not show at all is not known either.
 
 The other held words of the group (a fill held for its price) the caller rules out first
 (`_stops_held.HeldWords`). Reading the position book first means a fill landing between
@@ -102,6 +105,13 @@ def _member_unheard(session: Any, member: Trader, rows: Mapping[str, BookRow]) -
         status, filled = row
         if status.terminal or (filled is not None and filled > member.venue.filled(kernel_order)):
             return f"the stop {order_id} of {member.name} shows a fill its engine has not taken"
+        if filled is None and status is not OrderStatus.TRIGGER_PENDING:
+            # A live book shows a triggered stop open, as it shows one waiting for its
+            # trigger, and counts no fills: a part fill of it cannot be ruled out.
+            return (
+                f"the order book shows the stop {order_id} of {member.name} open and does not "
+                "count its fills"
+            )
     return None
 
 
