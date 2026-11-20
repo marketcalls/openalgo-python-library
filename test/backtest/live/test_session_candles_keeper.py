@@ -2,7 +2,9 @@
 16-session-design 2.5 A.10, B and C): the strategy keeps the bars it decided on (lead
 decision 2026-11-21, 2.4.0 item P2-1). A candle of a slice with a tick bar is checked
 against it and kept as drift, never taken by the series; a candle of a slice with no bar
-fills it, and a later candle of a slice never replaces the bar it has.
+fills it, and a later candle of a slice never replaces the bar it has. Each drift event
+carries the tick bar's and the candle's prices and volume, so the bars a strategy decided
+on can be rebuilt from the event stream (item P2-2).
 
 The bars are `series_samples.minute_bars` of the live day; the keeper reads a strategy's
 plan through `Part`, a stand-in holding a real live series whose first slices are
@@ -11,6 +13,7 @@ released, with no catch-up left (every slice is released live).
 
 from __future__ import annotations
 
+import dataclasses
 from types import SimpleNamespace
 from typing import Any
 
@@ -132,3 +135,14 @@ def test_a_later_different_candle_never_replaces_the_candle_that_filled_a_slice(
     keeper.take([candle_row(2)], READ_NS)
     keeper.take([higher_close(2)], READ_NS)
     assert series.bar(opened(2)) == live_bar(TODAY.iloc[2], "candle")
+
+
+def test_a_drift_event_carries_the_tick_bars_and_the_candles_prices_and_volume():
+    keeper, _, events = keeper_of(tick_bars=1, released=1)
+    candle = higher_close(0)
+    keeper.take([candle], READ_NS)
+    (line,) = [fields for kind, fields in events.lines if kind == "drift"]
+    tick = dataclasses.asdict(live_bar(TODAY.iloc[0]))
+    prices = ("open", "high", "low", "close", "volume")
+    assert line["tick_bar"] == {name: tick[name] for name in prices}
+    assert line["candle"] == {name: candle[name] for name in prices}

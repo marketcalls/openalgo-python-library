@@ -166,7 +166,8 @@ class LiveIndicator:
     `whole` are its causal outputs on the store's bars at registration, and `compute`
     gives them on part of those bars, for the causality checks (`_causality_checks`);
     `adopt` turns the views `register` built into live views of `outputs`, every output
-    on the store's bars now. `call` is the indicator call of `_indicators` (its
+    on the store's bars now, and keeps them (`views`, the causal outputs' only, for the
+    session's decisions file). `call` is the indicator call of `_indicators` (its
     function, inputs, parameters and label), `names` its output names and `causal` the
     names that do not look ahead.
 
@@ -183,6 +184,7 @@ class LiveIndicator:
         self._causal = [k for k, name in enumerate(names) if name in causal]
         self._cached: tuple[int, list[np.ndarray]] | None = None
         self.whole = [self.outputs()[k] for k in self._causal]
+        self.views: list[LiveView] = []
 
     def _on(self, start: int, stop: int) -> list[np.ndarray]:
         """Every output on the store's bars [start, stop), the inputs' values as they
@@ -220,12 +222,14 @@ class LiveIndicator:
     def adopt(self, views: list[Any]) -> list[Any]:
         """The views `register` built, each output a live view of `outputs`; a
         `LookaheadOutput` stays as it is (any use of it raises)."""
-        return [
+        adopted = [
             LiveView(self._store, self._output(k), view.label, view._recipe, view.need)
             if isinstance(view, TimelineView)
             else view
             for k, view in enumerate(views)
         ]
+        self.views = [view for view in adopted if isinstance(view, LiveView)]
+        return adopted
 
 
 __all__ = ["LiveIndicator", "LiveSource", "LiveView", "ValuesNow", "adopted"]

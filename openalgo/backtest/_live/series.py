@@ -195,6 +195,13 @@ class LiveSeries:
         bar = self.bar(slice_open_ns)
         return bar if bar is not None and bar.source == TICKS_SOURCE else None
 
+    def sources(self, ts_open_ns: int, ts_close_ns: int) -> tuple[str, ...]:
+        """The sources ("ticks" or "candle") of the bars of today's slices that open in
+        [ts_open_ns, ts_close_ns), in slice order; a slice with no bar is left out."""
+        first = int(np.searchsorted(self._opens, ts_open_ns))
+        end = int(np.searchsorted(self._opens, ts_close_ns))
+        return tuple(self._bars[slot].source for slot in range(first, end) if slot in self._bars)
+
     def mark_missing(self, slice_open_ns: int) -> None:
         """Mark today's slice opening at `slice_open_ns` missing: it closed while the
         feed was dead and made no bar (2.5 B). A bar of it lifts the mark (`take`).

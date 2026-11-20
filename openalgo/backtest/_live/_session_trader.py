@@ -19,7 +19,9 @@ venue map, the slices it releases live, its decisions and its broker candles.
   terms. A skipped decision is logged, and kept when it was skipped for missing data. An
   exception of the strategy's code is raised as `StrategyFailed` once the kernel waits
   again (it refuses the venue's results at a bar close), after which the strategy is
-  called no more.
+  called no more. Every strategy bar gets a line in the decisions file, and each order
+  the strategy's code submitted is looked at for a rejection (`notes`,
+  `_session_decisions.DecisionNotes`).
 - **Commands** (`commands`): the kernel's commands as the order worker's requests. A
   placement the kernel cancelled before the loop took it (the safe stop's cancel of an
   entry decided in the same loop step) is withdrawn: it is never sent, and the kernel is
@@ -49,6 +51,7 @@ from ..errors import LiveError
 from ._plan_catch_up import INSTRUMENT, StrategyPlan
 from ._session_bookkeeping import Bookkeeping
 from ._session_candles import CandleKeeper
+from ._session_decisions import DecisionNotes
 from ._session_records import StrategyRecords
 from ._types import LOGGER_NAME, LiveBar, Now
 from ._venue_requests import LIVE_PRODUCT, OrderRequest
@@ -93,8 +96,8 @@ def ist_instant(day: dt.date, hhmm: str) -> int:
 class Trader(Bookkeeping):
     """One strategy of the session (module docstring): `part`, its share of the plan,
     `venue`, its venue map; `square_off_ns` its MIS square-off and `close_ns` its
-    exchange's session close (UTC nanoseconds); `now` the session's clock and `event`
-    the event stream's writer."""
+    exchange's session close (UTC nanoseconds); `now` the session's clock, `event` the
+    event stream's writer and `decision` the decisions file's."""
 
     def __init__(
         self,
@@ -105,6 +108,7 @@ class Trader(Bookkeeping):
         close_ns: int,
         now: Now,
         event: Callable[..., None],
+        decision: Callable[..., None],
     ) -> None:
         self.part, self.venue = part, venue
         self.name, self.symbol = part.spec.name, part.spec.symbol
@@ -113,6 +117,7 @@ class Trader(Bookkeeping):
         self._now, self._event = now, event
         self._opens = [opened for opened, _ in part.slices]
         self.candles = CandleKeeper(part, event=event)
+        self.notes = DecisionNotes(self.name, part, decision)
         self.first_live: int | None = None
         self.decide_from_ns: int | None = None
         self._seed: int | None = None
@@ -230,11 +235,13 @@ class Trader(Bookkeeping):
                 logger.info("%s: timers due at %s skipped", self.name, format_ist(decided_at))
         elif bars and decides:
             self._decide(next(iter(bars.values())), decided_at)
+        elif bars:
+            self.notes.not_deciding(decided_at, failed=self.failed, deciding=deciding)
 
     def _decide(self, bar: Any, decided_at: int) -> None:
         part = self.part
         if not part.indicators_ready(decided_at):
-            logger.debug("%s: indicators not ready at %s", self.name, format_ist(decided_at))
+            self.notes.not_ready(decided_at)
             return
         missing = self._unread(bar.ts_open, bar.ts_close)
         if missing:
@@ -249,9 +256,12 @@ class Trader(Bookkeeping):
                 format_ist(missing[0]),
             )
             self._event("skipped_decision", strategy=self.name, decided_at_ns=decided_at)
+            self.notes.skipped(decided_at, SKIP_MISSING)
             return
+        # What code outside a pause submitted (a catch-up's callbacks) is not this decision's.
+        self.notes.submitted()
         started = self._now()
-        self._calling(part.strategy.on_bar, bar)
+        submitted = self._calling(part.strategy.on_bar, bar)
         if self._now() - started > _SLOW_NS and not self._slow_warned:
             self._slow_warned = True
             logger.warning(
@@ -259,6 +269,7 @@ class Trader(Bookkeeping):
                 self.name,
                 SLOW_CALLBACK_WARN_S,
             )
+        self.notes.decided(decided_at, bar, submitted, self.open_units())
 
     def _unread(self, ts_open_ns: int, ts_close_ns: int) -> tuple[int, ...]:
         """The opens (UTC nanoseconds, oldest first) of the slices marked missing in the
@@ -272,13 +283,16 @@ class Trader(Bookkeeping):
         since = int(opens[-2]) if len(opens) > 1 else ts_open_ns
         return self.part.series.missing_slices(since, ts_close_ns)
 
-    def _calling(self, function: Callable[..., Any], *args: Any) -> None:
+    def _calling(self, function: Callable[..., Any], *args: Any) -> list[dict[str, Any]]:
+        """Call the strategy's code; what it submitted (`DecisionNotes.submitted`)."""
         try:
             function(*args)
         # The strategy's own code: any exception it raises stops the session safely.
         except Exception as error:
             self.failed = True
+            self.notes.submitted()
             raise StrategyFailed(self.name, error) from error
+        return self.notes.submitted()
 
     # ----- orders and positions ----------------------------------------------------
 

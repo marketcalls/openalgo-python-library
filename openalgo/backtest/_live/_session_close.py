@@ -98,7 +98,7 @@ class SessionOutcome:
     session's `finish()` tables by strategy), `summary` (the day's figures across its
     restarts, `_session_figures`), `open_positions`, `mode_breach` (the guard's text or
     None), `warnings`, `skipped_decisions`, `drift` (the accepted candles' drift), `paths`
-    (journal, log, events), `unprotected` (each window a leg had no confirmed stop at the
+    (journal, log, events, decisions), `unprotected` (each window a leg had no confirmed stop at the
     broker), `estimated` (the fills released at a price the books did not confirm),
     `reconciliations` (each comparison with the broker's books that differed), and the
     records of `_session_records`: `orders`, `fills` and `locks`; `plans`, each
@@ -241,6 +241,7 @@ def _outcome(
             "journal": str(parts.journal.path),
             "log": str(parts.logs.log_path),
             "events": str(parts.logs.events_path),
+            "decisions": str(parts.logs.decisions_path),
         },
         unprotected=session.stops.windows.rows(),
         estimated=tuple(session.stops.held.estimates),

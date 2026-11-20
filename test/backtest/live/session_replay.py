@@ -104,7 +104,13 @@ def replay(record: SessionRecord) -> ReplayOutcome:
         parts = _parts(record)
         traders = {
             name: Trader(
-                part, None, square_off_ns=0, close_ns=0, now=lambda: 0, event=lambda *a, **k: None
+                part,
+                None,
+                square_off_ns=0,
+                close_ns=0,
+                now=lambda: 0,
+                event=lambda *a, **k: None,
+                decision=lambda *a, **k: None,
             )
             for name, part in parts.items()
         }

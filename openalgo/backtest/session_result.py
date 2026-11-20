@@ -67,7 +67,8 @@ not it has rows.
   False.
 - `mode_breach`: the mode guard's text when the analyzer switch changed, else None.
   `warnings`: what the reader must know, the mode first. `paths`: the journal, the day's
-  log and the event stream.
+  log, the event stream and the decisions file (each strategy bar: what was decided on,
+  the indicators, the position and what was submitted, or why no decision was made).
 - `flat`: True only when the session ended with no position open, a strategy of an
   earlier start included, and no leg the close names.
 

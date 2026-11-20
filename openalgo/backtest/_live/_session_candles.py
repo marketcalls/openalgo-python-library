@@ -8,7 +8,8 @@ steps 11 to 15; unit 8): what the candle checks ask for, and what each read's ca
 - A candle of a live slice already released is taken as the slice's bar when it has
   none (a minute with no tick, a seed minute, a slice marked missing). When the slice
   has a tick bar the candle is checked against it (`CandleCheck.accepted`: kept as drift
-  when it covers the slice) and the series keeps the tick bar: the strategy keeps the
+  when it covers the slice, its event carrying both bars' prices and volume, so the
+  bars decided on can be rebuilt) and the series keeps the tick bar: the strategy keeps the
   bars it decided on, as the kernel keeps the bar it ran (lead decision 2026-11-21, 2.4.0
   item P2-1; `series`). A candle read again is skipped, so the drift log keeps each
   candle once, and a slice's bar is never replaced.
@@ -38,6 +39,8 @@ from ._types import LiveBar
 from .bars import DEFAULT_INTERVAL_NS
 
 _LAST_READ_NS = round(CANDLE_LAST_READ_S * NANOS_PER_SECOND)
+#: A bar's fields a drift event carries for the tick bar and for the candle.
+_BAR_FIELDS = ("open", "high", "low", "close", "volume")
 
 
 class CandleKeeper:
@@ -122,7 +125,9 @@ class CandleKeeper:
             self._drift_event(bar, candle)
 
     def _drift_event(self, tick_bar: LiveBar, candle: LiveBar) -> None:
-        """The event of the drift just kept."""
+        """The event of the drift just kept: the differences, then both bars' prices and
+        volume, from which the bars the strategy decided on can be rebuilt (2.4.0 item
+        P2-2)."""
         drift = self._checks.drifts[-1]
         self._event(
             "drift",
@@ -133,6 +138,8 @@ class CandleKeeper:
             low=drift.low,
             close=drift.close,
             volume=drift.volume,
+            tick_bar={name: getattr(tick_bar, name) for name in _BAR_FIELDS},
+            candle={name: getattr(candle, name) for name in _BAR_FIELDS},
         )
 
     def _no_trade(self, read: set[int], read_ns: int) -> None:

@@ -59,6 +59,8 @@ class LiveStore(SeriesStore):
         self._held = 0
         self._version = 0
         self._bars_of: tuple[int, dict[str, Any]] | None = None
+        #: The `self.I` indicators registered on the store, in order.
+        self.indicators: list[LiveIndicator] = []
 
     @property
     def version(self) -> int:
@@ -141,8 +143,11 @@ class LiveStore(SeriesStore):
         return Bar(self.symbol, *(self._series[name].item(index) for name in COLUMNS))
 
     def indicator_adapter(self, call: Any, names: list[str], causal: tuple[str, ...]) -> Any:
-        """What `_indicators.register` needs for an indicator on this store."""
-        return LiveIndicator(self, call, names, causal)
+        """What `_indicators.register` needs for an indicator on this store, kept in
+        `indicators`."""
+        indicator = LiveIndicator(self, call, names, causal)
+        self.indicators.append(indicator)
+        return indicator
 
 
 __all__ = ["COLUMNS", "Clock", "LiveStore"]
