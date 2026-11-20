@@ -5,6 +5,7 @@ same document the CSV row cites), not computed by the code under test. Dates are
 on both sides of each change so that an off-by-one in a validity range fails a test.
 """
 
+import datetime as dt
 import re
 import warnings
 
@@ -696,6 +697,12 @@ def test_bse_option_uses_the_option_order_limit(tables):
         ("ZINC29MAY26FUT", "2026-02-02", 5, 1000.0, 5000, 0.05, 100, "physical"),
         ("COPPER29MAY26FUT", "2026-02-02", 2500, 1.0, 2500, 0.05, 70000, "physical"),
         ("NICKEL20MAY26FUT", "2026-02-02", 250, 1.0, 250, 0.1, 24000, "physical"),
+        # MCX/TRD/114/2025: 5 kg quoted per kg, tick Re 1, maximum order size 600 kg.
+        ("SILVERM30NOV26FUT", "2026-03-02", 5, 1.0, 5, 1.0, 600, "physical"),
+        # MCX/TRD/091/2026: the same terms for the contracts expiring in 2027.
+        ("SILVERM26FEB27FUT", "2026-03-16", 5, 1.0, 5, 1.0, 600, "physical"),
+        # MCX/TRD/275/2025: 1 kg quoted per kg, tick Re 1, maximum order size 600 kg.
+        ("SILVERMIC30NOV26FUT", "2026-03-02", 1, 1.0, 1, 1.0, 600, "physical"),
     ],
 )
 def test_mcx_future_terms_from_the_contract_specification(
@@ -714,6 +721,28 @@ def test_mcx_future_terms_from_the_contract_specification(
         freeze_qty,
         settlement,
     )
+
+
+def test_mcx_silver_micro_of_2027_keeps_a_maximum_order_of_600_kg(tables):
+    # MCX/TRD/302/2026: the contracts launched from June 2026 keep 1 kg and 600 kg.
+    assert _quiet(lambda: tables.freeze_qty("SILVERMIC26FEB27FUT", "MCX", "2026-06-01")) == 600
+
+
+def test_mcx_silver_mini_of_2025_is_carried_back_and_flagged_unverified(tables):
+    # No circular of the 2025 contracts was read: MCX/TRD/114/2025's terms carried back.
+    with pytest.warns(ReferenceDataWarning, match="mcx_contracts.SILVERM MCX.*is unverified"):
+        assert tables.freeze_qty("SILVERM28NOV25FUT", "MCX", "2025-11-03") == 600
+
+
+def test_every_mcx_underlying_has_a_freeze_quantity_on_todays_date(tables):
+    # Read on the day the suite runs: the contracts trading now must all be orderable, so
+    # a table that has run out for one of them fails here first.
+    today = dt.date.today()
+    underlyings = sorted({row.key[0] for row in tables.rows("mcx_contracts")})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ReferenceDataWarning)
+        limits = {name: tables.freeze_qty(name, "MCX", today) for name in underlyings}
+    assert {name for name, limit in limits.items() if not limit} == set()
 
 
 def test_mcx_gold_has_a_contract_multiplier_of_100_but_is_unverified(tables):
