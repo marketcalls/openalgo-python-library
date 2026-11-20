@@ -158,6 +158,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `bt.optimize` uses less memory on large sweeps: the returns of each combination are copied
   into the overfitting figures' array as they come back, not after all of them.
 
+### Fixed
+
+- Live sessions: a decision is skipped for missing data when the bar before its own holds a
+  minute with no data, as it already was when its own bar held one. After a start or restart
+  in the middle of a minute, that minute's bar comes from its broker candle; when the candle
+  came after the first whole bar closed, a 1-minute strategy's first decision read a series
+  without the bar before its own, and a crossing (or `shift(1)`, `[-2]`) compared it with the
+  bar two minutes back. On the 2026-11-20 sandbox day the first decision after a restart sold
+  on an EMA crossing that the full series shows one minute earlier, before that decision. The
+  strategy now decides at the next close, with the minute's bar in its series once its
+  candle is read. A minute whose candle never comes holds up one more decision, no more.
+
 ## [2.3.0] - 2026-11-20
 
 ### Added

@@ -54,9 +54,47 @@ class Every5(bt.Strategy):
         type(self).seen.append(bar.ts_close)
 
 
+class LastCloses(bt.Strategy):
+    """A 1-minute strategy that keeps, at each decision, the closes of its last four
+    bars, by the decision's close."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "1m"
+    seen: dict[int, list[float]] = {}
+
+    def on_bar(self, bar):
+        type(self).seen[bar.ts_close] = list(self.close.values[-4:])
+
+
+#: SBIN's price in the 14:41 minute, the one watching begins in after a start at
+#: 14:40:58 and the countdown; every other minute trades at `PRICE`, so the series holds
+#: this close only when it holds that minute's bar.
+SEED_PRICE = 503.0
+
+
 @pytest.fixture(autouse=True)
 def logs(caplog):
     caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+
+
+@pytest.fixture
+def late_seed_candle(make_fake_openalgo, monkeypatch, tmp_path):
+    """A session started at 14:40:58 whose watching begins in the 14:41 minute, which
+    trades at `SEED_PRICE`. The reads of that minute's candle at 14:42:02, 14:42:04 and
+    14:42:07 fail, so its candle is read at 14:43:02, after the bar of 14:42 has closed
+    at 14:43:00. Stopped at 14:45:30."""
+    LastCloses.seen = {}
+    world = rig(make_fake_openalgo, monkeypatch, tmp_path, start=(14, 40, 58), trades_until=None)
+    world.script.trade()
+    world.script.price = lambda now_ns: SEED_PRICE if ist(14, 41) <= now_ns < ist(14, 42) else PRICE
+
+    def candle_reads_fail():
+        for _ in range(3):
+            world.fake.faults.gateway_error("history", status=503)
+
+    world.script.trades(ist(14, 41), ist(15, 2))
+    world.script.at(ist(14, 42), candle_reads_fail)
+    world.stop_at(ist(14, 45, 30))
+    return world
 
 
 def climbing(now_ns: int) -> float:
@@ -149,3 +187,20 @@ def test_a_seed_minute_with_no_trade_is_lifted_once_a_later_candle_is_read(
     outcome = world.run(Every5)
     assert Every5.seen == [ist(14, 45), ist(14, 50)]
     assert outcome.skipped_decisions == ()
+
+
+def test_a_decision_waits_while_the_minute_watching_began_in_has_no_candle(late_seed_candle):
+    # The 14:42 bar does not hold that minute, but a crossing reads the bar before it:
+    # deciding at 14:43 would read a series with a hole the candle fills two seconds later.
+    outcome = late_seed_candle.run(LastCloses)
+    assert [(s.decided_at_ns, s.reason) for s in outcome.skipped_decisions] == [
+        (ist(14, 43), "missing data")
+    ]
+
+
+def test_every_decision_after_a_start_mid_minute_reads_that_minutes_bar(late_seed_candle):
+    late_seed_candle.run(LastCloses)
+    assert {close: SEED_PRICE in closes for close, closes in LastCloses.seen.items()} == {
+        ist(14, 44): True,
+        ist(14, 45): True,
+    }
