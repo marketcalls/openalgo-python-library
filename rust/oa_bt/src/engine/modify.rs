@@ -76,20 +76,23 @@ impl Engine {
         self.check_buildable(&request)?;
         self.check_venue_request(&request)?;
         let request = self.venue_request(request)?;
-        let units = match self.resolve_units(&request, &slice)? {
-            Resolved::Units(units) => units,
-            Resolved::AtFill => 0.0,
+        let (units, refused) = match self.resolve_units(&request, &slice)? {
+            Resolved::Units(units) => (units, None),
+            Resolved::AtFill => (0.0, None),
+            Resolved::Refused(code) => (0.0, Some(code)),
             Resolved::Skipped(reason) => return Ok(Submission::Skipped(reason)),
         };
         let units = self.venue_units(&request, units);
         self.check_replacement_units(units)?;
-        let checked = match self.submission_checks(&request, units, &slice, decided_at, Some(id))? {
-            Ok(good_until) => {
+        // As in `submit`: the checks come first, then the account's refusal.
+        let checks = self.submission_checks(&request, units, &slice, decided_at, Some(id))?;
+        let checked = match (checks, refused) {
+            (Err(code), _) | (Ok(_), Some(code)) => Err(code),
+            (Ok(good_until), None) => {
                 self.check_replacement_role(id, &request, units)?;
                 self.live_checks(&request, units, &slice, Some(id))?
                     .map(|()| good_until)
             }
-            Err(code) => Err(code),
         };
         let good_until = match checked {
             Ok(good_until) => good_until,

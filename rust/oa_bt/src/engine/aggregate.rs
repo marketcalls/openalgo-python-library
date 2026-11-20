@@ -197,7 +197,7 @@ impl Engine {
     }
 
     /// Cancel every working order that would open or add, in id order.
-    fn cancel_working_entries(&mut self, stamp: EventStamp) -> Result<(), KernelError> {
+    pub(super) fn cancel_working_entries(&mut self, stamp: EventStamp) -> Result<(), KernelError> {
         let entries: Vec<OrderId> = self
             .book
             .working()
@@ -229,6 +229,24 @@ impl Engine {
         exit: EngineExit,
     ) -> Result<(), KernelError> {
         let reason = exit.exit_reason();
+        for key in self.positions_to_exit() {
+            if self.is_external() {
+                let at = SendAt {
+                    slice: *slice,
+                    step: stamp.step,
+                    decided_at,
+                };
+                self.request_engine_exit(at, key, exit, None)?;
+            } else {
+                self.exit_at_step_six(slice, stamp, key, reason)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The open positions with no exit waiting, in instrument registration order: what an
+    /// aggregate rule exits.
+    pub(super) fn positions_to_exit(&self) -> Vec<PositionKey> {
         let mut open: Vec<PositionKey> = self
             .portfolio
             .positions()
@@ -237,21 +255,25 @@ impl Engine {
             .map(|position| position.key)
             .collect();
         open.sort_by_key(|key| key.instrument);
-        for key in open {
-            if self.is_external() {
-                let at = SendAt {
-                    slice: *slice,
-                    step: stamp.step,
-                    decided_at,
-                };
-                self.request_engine_exit(at, key, exit, None)?;
-            } else if slice.closes_session {
-                self.exit_at_last_close(stamp, key, reason)?;
-            } else {
-                self.risk.queue_exit(key, reason);
-            }
+        open
+    }
+
+    /// A backtest's exit of a whole position by step 6's rule (module docs): at once at
+    /// its instrument's last close when `slice` closes the session, otherwise queued for
+    /// its next open.
+    pub(super) fn exit_at_step_six(
+        &mut self,
+        slice: &SliceInfo,
+        stamp: EventStamp,
+        key: PositionKey,
+        reason: ExitReason,
+    ) -> Result<(), KernelError> {
+        if slice.closes_session {
+            self.exit_at_last_close(stamp, key, reason)
+        } else {
+            self.risk.queue_exit(key, reason);
+            Ok(())
         }
-        Ok(())
     }
 
     /// Close a position at its instrument's last close, flagged.

@@ -80,11 +80,18 @@ pub enum RejectCode {
     /// wait past the last instant it could fill from: its session's close for an
     /// intraday order, the run's last strategy bar for any order.
     DelayPastClose = 19,
+    /// In a portfolio run on a shared account, an opening fill whose margin the strategy's
+    /// own free cash covers but the account's free cash does not: the other strategies
+    /// hold it (`engine::account_link`).
+    AccountMargin = 20,
+    /// In a portfolio run, an entry or add after the account's daily loss limit was
+    /// breached, until the next session boundary (`engine::account_breach`).
+    AccountLossGate = 21,
 }
 
 impl RejectCode {
     /// Every code, in code order.
-    pub const ALL: [RejectCode; 20] = [
+    pub const ALL: [RejectCode; 22] = [
         RejectCode::QuantityRule,
         RejectCode::Tick,
         RejectCode::FreezeQty,
@@ -105,6 +112,8 @@ impl RejectCode {
         RejectCode::LiveLock,
         RejectCode::LiveInFlight,
         RejectCode::DelayPastClose,
+        RejectCode::AccountMargin,
+        RejectCode::AccountLossGate,
     ];
 
     /// The code string used in events and results.
@@ -130,6 +139,8 @@ impl RejectCode {
             RejectCode::LiveLock => "live_lock",
             RejectCode::LiveInFlight => "live_in_flight",
             RejectCode::DelayPastClose => "delay_past_close",
+            RejectCode::AccountMargin => "account_margin",
+            RejectCode::AccountLossGate => "account_loss_gate",
         }
     }
 
@@ -349,12 +360,18 @@ mod tests {
     #[test]
     fn codes_are_the_ruled_vocabulary() {
         let codes: Vec<&str> = RejectCode::ALL.iter().map(|code| code.code()).collect();
-        assert_eq!(codes.len(), 20);
+        assert_eq!(codes.len(), 22);
         assert!(codes.contains(&"market_closed") && codes.contains(&"instrument_unknown"));
         assert!(codes.contains(&"scale_in_limit") && codes.contains(&"venue"));
         assert!(codes.contains(&"exit_cover"));
         assert!(codes.contains(&"live_lock") && codes.contains(&"live_in_flight"));
         assert!(codes.contains(&"delay_past_close"));
+    }
+
+    #[test]
+    fn a_portfolio_runs_account_refuses_with_codes_of_its_own() {
+        assert_eq!(RejectCode::AccountMargin.code(), "account_margin");
+        assert_eq!(RejectCode::AccountLossGate.code(), "account_loss_gate");
     }
 
     #[test]

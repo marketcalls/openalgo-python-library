@@ -16,22 +16,25 @@ use super::value::Read;
 use super::LIVE_STATE_LAYOUT;
 
 /// How far into a slice a session stands, in the order a slice runs them: the timers
-/// due at its open fired ahead of it, before it, at its timer pause, paused at its close,
+/// due at its open fired ahead of it, before it, at its timer pause, its open phase run
+/// (steps 1 and 2; a session passes it within one `advance`), paused at its close,
 /// waiting at its session close, and after the last slice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum Stage {
     Ahead,
     Ready,
     Timers,
+    Opened,
     Paused,
     Closing,
     Finished,
 }
 
-const STAGES: [Stage; 6] = [
+const STAGES: [Stage; 7] = [
     Stage::Ahead,
     Stage::Ready,
     Stage::Timers,
+    Stage::Opened,
     Stage::Paused,
     Stage::Closing,
     Stage::Finished,
@@ -43,6 +46,7 @@ impl Stage {
             Stage::Ahead => "ahead",
             Stage::Ready => "ready",
             Stage::Timers => "timers",
+            Stage::Opened => "opened",
             Stage::Paused => "paused",
             Stage::Closing => "closing",
             Stage::Finished => "finished",
@@ -57,6 +61,7 @@ impl Engine {
             Phase::Ahead(slice) => (slice.index, Stage::Ahead),
             Phase::Ready(index) => (index, Stage::Ready),
             Phase::Timers(slice) => (slice.index, Stage::Timers),
+            Phase::Opened(slice) => (slice.index, Stage::Opened),
             Phase::Paused(slice) => (slice.index, Stage::Paused),
             Phase::Closing(slice) => (slice.index, Stage::Closing),
             Phase::Finished => (self.timeline.len(), Stage::Finished),
@@ -165,5 +170,20 @@ impl Engine {
             ));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_opened_slice_stands_after_its_timers_and_before_its_pause() {
+        let codes = STAGES.map(Stage::code);
+        let expected = [
+            "ahead", "ready", "timers", "opened", "paused", "closing", "finished",
+        ];
+        assert_eq!(codes, expected);
+        assert!(STAGES.windows(2).all(|pair| pair[0] < pair[1]));
     }
 }

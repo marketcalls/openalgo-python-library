@@ -34,10 +34,11 @@ use super::pause::Pause;
 impl Engine {
     /// End `slice` (step 8 and its records, `steps::close_slice`) and, in an external
     /// session, reach the next open. Returns the pause to stop at, if any; otherwise the
-    /// engine stands before the next slice.
+    /// engine stands before the next slice. The close phase of a slice, after its decision
+    /// of step 7 (`Engine::decision_phase`).
     ///
     /// Errors: those of the steps.
-    pub(super) fn end_slice(&mut self, slice: &SliceInfo) -> Result<Option<Pause>, KernelError> {
+    pub(crate) fn end_slice(&mut self, slice: &SliceInfo) -> Result<Option<Pause>, KernelError> {
         self.close_slice(slice)?;
         if self.session_close_waits(slice) {
             self.phase = Phase::Closing(*slice);

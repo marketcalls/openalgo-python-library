@@ -5,7 +5,6 @@
 
 use crate::exec::{
     Fill, FillAt, FillFlags, FillPricing, FillReason, GttId, Order, OrderAction, OrderId,
-    RejectCode,
 };
 use crate::model::Side;
 use crate::portfolio::{FillEffect, FillKind, PositionChange, PositionKey};
@@ -155,9 +154,12 @@ impl Engine {
                 return self.fill_reversal(slice, order, (close, open_units), how);
             }
         };
-        let Some(units) = self.size_at_fill(slice, order, units, opening, price)? else {
-            let kind = OrderEventKind::Rejected(RejectCode::Margin);
-            return self.end_order(stamp, id, OrderAction::Reject, kind);
+        let units = match self.size_at_fill(slice, order, units, opening, price)? {
+            Ok(units) => units,
+            Err(code) => {
+                let kind = OrderEventKind::Rejected(code);
+                return self.end_order(stamp, id, OrderAction::Reject, kind);
+            }
         };
         let margin = if opening {
             let leverage = request.leverage;
@@ -165,9 +167,12 @@ impl Engine {
         } else {
             0.0
         };
-        if opening && margin > self.free_cash_rupees() {
-            let kind = OrderEventKind::Rejected(RejectCode::Margin);
-            return self.end_order(stamp, id, OrderAction::Reject, kind);
+        if opening {
+            // Its own free cash, then a portfolio run's account (`account_link`).
+            if let Err(code) = self.check_opening_margin(margin) {
+                let kind = OrderEventKind::Rejected(code);
+                return self.end_order(stamp, id, OrderAction::Reject, kind);
+            }
         }
         let fill = FillRequest {
             key,
