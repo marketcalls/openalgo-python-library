@@ -55,7 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejects in such a group holds the position: no market exit, no re-placed stop and no
   square-off sent by the engine until the session has checked the broker's books. Both
   codes have a meaning and what to do in the rejection warnings.
-- Two or more strategies on one symbol in a live session (2.4.0, unit M6). `bt.live` used to
+- Two or more strategies on one symbol in a live session (2.4.0, units M6 and M7). `bt.live` used to
   refuse a second strategy on a symbol and product ("run one strategy per symbol"); now each
   strategy keeps its own position and its own stop at the broker while OpenAlgo holds one net
   position for the symbol. The symbol is subscribed and checked against broker candles once,
@@ -79,9 +79,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     by hand while the session runs. A new unprotected reason, "instrument held by another
     strategy's order", comes with an ERROR alert naming that order. An order the order book
     cannot tell apart locks the entries of every strategy on its symbol.
-  A strategy alone on its symbol keeps 2.3.0's behaviour throughout. Until a later unit, the
-  session's closing rows list each strategy of a shared symbol at its own units, with a note
-  naming OpenAlgo's net for the group.
+  - The reports show the group. `SessionResult.open_positions` gains a row per shared symbol
+    whose OpenAlgo net is a position, named by its strategies ("A and B"), with that net and
+    whether it equals their sum, and the DAILY_SUMMARY a "Shared" line per shared symbol
+    (`SessionSummary.shared`). In a session with a shared symbol,
+    `SessionResult.reconciliations` gains the columns `group`, `group_units`,
+    `member_units`, `external_units`, `allocation` and `stops_cut`. A difference of the group
+    counts as one reconcile mismatch and is named once at the close.
+  - Units beyond every strategy's position, or a difference on the other side of the
+    strategies, are taken in by none: nothing is sent, every strategy on the symbol is
+    locked, and the alert says to end the session and close by hand. On the other side every
+    strategy's stop is cancelled, with one ERROR alert for the symbol.
+  - A stop's cancel whose fills the trade book has not yet confirmed is decided from the
+    position book and then the order book when the order book counts every other strategy's
+    fills (sandbox books do). A live broker's order book shows a resting stop without a fill
+    count, so there the cancel waits for the trade book, reading both books every 2 seconds.
+  A strategy alone on its symbol keeps 2.3.0's behaviour throughout, its reports included.
+- `bt.backtest` takes a list of strategies and runs them together on one account (2.4.0, unit
+  M3), returning a `bt.PortfolioResult`. Each strategy keeps its own `Result`
+  (`pf.strategy(name)`), measured on its own capital. The portfolio result gives the account's
+  figures and tables: `account` (equity, free cash, margin and daily loss each round), equity,
+  returns, performance and metrics, every strategy's tables in one with a `strategy` column,
+  `trade_list()`, `refused` (the orders the account refused), `net_positions`, `correlation`,
+  `contribution`, assumptions, warnings, the manifest, and CSV and Excel export.
+  - Per-strategy settings (`capital`, `params`, `product`, `base`, `max_daily_loss`,
+    `after_risk_exit`, `max_positions`, `drawdown_halt`, `cooldown`, `entry_from`,
+    `entry_until`, `square_off`) take one value for every strategy or a dict by strategy class
+    name. A `params` dict may leave a strategy out (it keeps its class defaults); the other
+    dicts may not. Every other argument is the run's: `data=` as a dict by symbol feeds every
+    strategy trading that symbol, and `instrument=` and `corporate_actions=` reach only the
+    strategies they apply to.
+  - New arguments, used only with a list: `pool` ("shared" by default, "separate" for fixed
+    allocations), `account_capital` (the account's funds, by default the sum of the capitals;
+    with that default a shared account refuses an order only when other strategies' open
+    losses leave too little free cash) and `account_max_daily_loss` (at or past it every
+    strategy exits with reason `account_loss_limit`, and later entries that day are refused
+    `account_loss_gate`).
+  - Two strategies may trade one symbol, on either side. A warning names an instrument held
+    on opposite sides (`bt.live` would refuse the later entry), and the days on which a
+    broker would net one strategy's delivery trade against another's in the same scrip,
+    which changes the charges.
+  - A list of one strategy also returns a `PortfolioResult`. A strategy class on its own runs
+    exactly as before, with the same figures.
 - MCX silver mini (SILVERM) and silver micro (SILVERMIC) can be backtested and traded: their
   freeze quantity, 600 kg per order, is in the contract table from MCX circulars
   MCX/TRD/114/2025, MCX/TRD/091/2026, MCX/TRD/275/2025 and MCX/TRD/302/2026 (contracts
@@ -90,6 +129,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `Result.strategy()`, `Result.combined` and `Result.correlation` still raise
+  NotImplementedError on a single strategy's result; the message now points to `bt.backtest`
+  with a list of strategies.
+- `bt.optimize`, `bt.robustness` and `bt.walk_forward` given a list of strategies raise
+  NotImplementedError: run them for each strategy. Given one strategy, they and `bt.backtest`
+  refuse `pool`, `account_capital` and `account_max_daily_loss` with a `ConfigError`, and
+  `bt.live` refuses `pool` and `account_capital` as it refuses the other backtest-only
+  arguments.
 - Live sessions: a trade closed by the account's daily loss limit (`account_max_daily_loss`,
   through the kill switch) now records the exit reason `account_loss_limit` instead of
   `manual`, the reason a portfolio backtest records for the same breach.

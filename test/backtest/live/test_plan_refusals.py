@@ -60,7 +60,7 @@ NOT_LIVE_NAMES = (
     "data", "start", "end", "now", "source", "base", "fill", "delay_entries",
     "delay_exits", "slippage", "margin",
     "quantity_mode", "instrument", "product", "roll", "benchmark", "calendar", "tz",
-    "corporate_actions",
+    "corporate_actions", "pool", "account_capital",
 )  # fmt: skip
 
 
