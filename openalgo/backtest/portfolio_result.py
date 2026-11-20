@@ -68,6 +68,9 @@ class PortfolioResult:
         benchmark: pd.Series | None = None,
     ) -> None:
         self._account = account
+        # The account's funds in rupees, as the fund kept them (the sum of the capitals to
+        # the paisa when no account_capital was given).
+        self._funds = float(records["account_capital"])
         self._results = dict(results)
         self._records = records
         self._benchmark = benchmark
@@ -112,7 +115,7 @@ class PortfolioResult:
     def returns(self) -> pd.Series:
         """Simple returns of the account's equity, round to round; the first round is
         measured from the account's funds, so the P&L made in it counts."""
-        return slice_returns(self.account["equity_rupees"], self._account.funds)
+        return slice_returns(self.account["equity_rupees"], self._funds)
 
     @cached_property
     def performance(self) -> Performance:
@@ -122,7 +125,7 @@ class PortfolioResult:
         strategies' exchanges' calendars and compared with the first strategy's
         benchmark. Raises ConfigError when the run has no equity point."""
         return account_performance(
-            self.account["equity_rupees"], self._account.funds, self._results, self._benchmark
+            self.account["equity_rupees"], self._funds, self._results, self._benchmark
         )
 
     @property
@@ -242,7 +245,7 @@ class PortfolioResult:
         share of the account's in percent, its P&L inside the account's maximum drawdown,
         its margin when the account's was highest and its orders the account refused
         (`_portfolio_figures.contribution` defines each column)."""
-        return contribution(self.account, self._account.funds, self._results, self.refused)
+        return contribution(self.account, self._funds, self._results, self.refused)
 
     # ----- context --------------------------------------------------------------------
 
@@ -250,9 +253,11 @@ class PortfolioResult:
     def assumptions(self) -> dict[str, Any]:
         """The run's settings in words: the account (pool, funds, what the pool lets one
         strategy do to another, the daily loss limit), the instruments several strategies
-        trade and what a backtest does there that a broker does not, and a line per
-        strategy. Each strategy's own block is in `strategy(name).assumptions`."""
-        return _portfolio_notes.assumptions(self._account, self._results)
+        trade, what a backtest does there that a broker does not and those held on
+        opposite sides, and a line per strategy. Each strategy's own block is in
+        `strategy(name).assumptions`."""
+        account, opposite = self._account, self._net[1]
+        return _portfolio_notes.assumptions(account, self._funds, self._results, opposite)
 
     @property
     def warnings(self) -> list[str]:
@@ -274,7 +279,7 @@ class PortfolioResult:
             "engine_version": native.engine_version(),
             "account": {
                 "pool": account.pool,
-                "account_capital": account.funds,
+                "account_capital": self._funds,
                 "account_max_daily_loss": account.account_max_daily_loss,
             },
             "strategies": {
@@ -310,10 +315,10 @@ class PortfolioResult:
     def __repr__(self) -> str:
         account = self._account
         equity = self.account["equity_rupees"]
-        net = float(equity.iloc[-1]) - account.funds if len(equity) else 0.0
+        net = float(equity.iloc[-1]) - self._funds if len(equity) else 0.0
         lines = [
             f"PortfolioResult({', '.join(self._results)})",
-            f"  pool: {account.pool}; account: {_portfolio_notes.rupees_text(account.funds)}",
+            f"  pool: {account.pool}; account: {_portfolio_notes.rupees_text(self._funds)}",
             f"  net P&L: {net:,.2f}",
             f"  orders the account refused or ended: {len(self.refused)}",
         ]

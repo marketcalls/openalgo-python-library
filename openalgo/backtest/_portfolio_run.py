@@ -30,6 +30,7 @@ from ._messages import counted
 from ._pipeline import begin, conclude, prepare
 from ._portfolio_driver import drive_fund
 from ._portfolio_notes import rupees_text, spoken_list
+from ._reject_reasons import ACCOUNT_LOSS_GATE, ACCOUNT_MARGIN
 from ._rejection_notice import unplaced_notice
 from ._rerun import PortfolioMember
 from ._strategy_args import (
@@ -53,9 +54,6 @@ from .strategy import Strategy
 
 #: The call a dict by strategy name is checked against, as its messages name it.
 BACKTEST = "this backtest"
-#: The account's refusals the line of each strategy's result counts (`Fund.finish`).
-ACCOUNT_MARGIN = "account_margin"
-ACCOUNT_LOSS_GATE = "account_loss_gate"
 
 
 @dataclass(frozen=True)
@@ -157,7 +155,7 @@ def member_line(plan: PortfolioPlan, index: int, records: Mapping[str, Any]) -> 
     else:
         refused = _refusals(records, index, ACCOUNT_MARGIN)
         line = (
-            f"ran in a shared account of {rupees_text(account.funds)}{beside}; "
+            f"ran in a shared account of {rupees_text(records['account_capital'])}{beside}; "
             f"{counted(refused, 'order')} refused for the account's margin"
         )
     if account.account_max_daily_loss is not None:

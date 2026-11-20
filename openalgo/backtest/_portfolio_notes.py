@@ -51,9 +51,10 @@ def spoken_list(names: Sequence[str]) -> str:
     return f"{', '.join(names[:-1])} and {names[-1]}"
 
 
-def account_note(account: Account) -> str:
-    """The Assumptions line of the account: what the pool lets one strategy do to another."""
-    funds = rupees_text(account.funds)
+def account_note(account: Account, funds_rupees: float) -> str:
+    """The Assumptions line of the account of `funds_rupees`: what the pool lets one
+    strategy do to another."""
+    funds = rupees_text(funds_rupees)
     if account.pool == "separate":
         note = (
             f"separate allocations of {funds} together: each strategy is limited by its own "
@@ -91,18 +92,24 @@ def _traded(results: Mapping[str, Result]) -> dict[tuple[str, str], list[str]]:
     return traded
 
 
-def assumptions(account: Account, results: Mapping[str, Result]) -> dict[str, Any]:
+def assumptions(
+    account: Account,
+    funds: float,
+    results: Mapping[str, Result],
+    opposite: Sequence[OppositeSides],
+) -> dict[str, Any]:
     """The Assumptions block of a portfolio run: the strategies, the pool, the account's
-    funds and note, its daily loss limit, the instruments several strategies trade (None
-    when none is shared) with what a backtest does differently from a broker there, then
-    a line per strategy: what it trades, on which interval and base, its product and
-    capital."""
+    funds (`funds`, rupees, as the fund kept them) and note, its daily loss limit, the
+    instruments several strategies trade (None when none is shared) with what a backtest
+    does differently from a broker there, those held on opposite sides (`opposite`; None
+    when none was), then a line per strategy: what it trades, on which interval and base,
+    its product and capital."""
     shared = {key: who for key, who in _traded(results).items() if len(who) > 1}
     block: dict[str, Any] = {
         "strategies": ", ".join(results),
         "pool": account.pool,
-        "account_capital": account.funds,
-        "account": account_note(account),
+        "account_capital": funds,
+        "account": account_note(account, funds),
         "account_max_daily_loss": account.account_max_daily_loss,
         "shared_instruments": "; ".join(
             f"{symbol} ({exchange}): {spoken_list(who)}"
@@ -112,6 +119,8 @@ def assumptions(account: Account, results: Mapping[str, Result]) -> dict[str, An
     }
     if shared:
         block["shared_instrument_rules"] = SHARED_RULES
+        held = [f"{each.symbol} ({each.exchange}, {each.product})" for each in opposite]
+        block["opposite_sides"] = "; ".join(held) or None
     for name, result in results.items():
         settings = result.manifest["arguments"]
         block[f"strategy {name}"] = (

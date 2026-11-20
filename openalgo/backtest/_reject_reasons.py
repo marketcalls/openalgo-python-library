@@ -35,6 +35,7 @@ PRODUCT_RULE = "product_rule"
 ENTRY_WINDOW = "entry_window"
 DELAY_PAST_CLOSE = "delay_past_close"
 ACCOUNT_LOSS_GATE = "account_loss_gate"
+ACCOUNT_MARGIN = "account_margin"
 RUN_RULE_CODES = frozenset(
     {
         ENTRY_WINDOW,
@@ -195,6 +196,7 @@ PRODUCT_RULE_CASES = MappingProxyType(
 
 __all__ = [
     "ACCOUNT_LOSS_GATE",
+    "ACCOUNT_MARGIN",
     "DELAY_PAST_CLOSE",
     "ENTRY_WINDOW",
     "PRODUCT_RULE",

@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from ._portfolio_tables import STRATEGY
+from ._reject_reasons import ACCOUNT_LOSS_GATE, ACCOUNT_MARGIN
 from .metrics import analyse
 from .report._performance import Performance
 from .result import Result
@@ -23,7 +24,7 @@ from .result import Result
 PERCENT = 100.0
 #: The refusals that count as orders the account refused a strategy (an order a breach
 #: cancelled was working, not refused).
-REFUSALS = ("account_margin", "account_loss_gate")
+REFUSALS = (ACCOUNT_MARGIN, ACCOUNT_LOSS_GATE)
 #: The columns of `contribution`, in order.
 CONTRIBUTION_COLUMNS = (
     "net_pnl_rupees",

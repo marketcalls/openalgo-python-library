@@ -277,6 +277,10 @@ def test_two_strategies_hold_one_symbol_on_opposite_sides_with_a_warning(opposit
     ) in opposite.warnings
 
 
+def test_the_assumptions_name_the_instruments_held_on_opposite_sides(opposite):
+    assert opposite.assumptions["opposite_sides"] == "SBIN (NSE, MIS)"
+
+
 def test_the_net_position_is_the_broker_view_of_a_shared_symbol(opposite):
     net = opposite.net_positions
     columns = ["time", "net_units", "holders", "Long_units", "Short_units"]
@@ -286,6 +290,20 @@ def test_the_net_position_is_the_broker_view_of_a_shared_symbol(opposite):
         [ist(15, 10), 0.0, "", 0.0, 0.0],
     ]
     assert set(net["symbol"]) == {"SBIN"} and set(net["product"]) == {"MIS"}
+
+
+@pytest.mark.parametrize(
+    ("table", "column"),
+    [("orders", "order_id"), ("fills", "order_id"), ("trades", "trade_id"), ("events", "order_id")],
+)
+def test_every_combined_table_names_the_strategy_of_each_kernel_id(opposite, table, column):
+    # Each engine numbers its own orders and trades from 1: Long's entry order and trade
+    # are 1, and so are Short's.
+    frame = getattr(opposite, table)
+    assert frame.columns[0] == "strategy"
+    rows = frame[frame[column].notna()]
+    pairs = set(zip(rows["strategy"], rows[column].astype(int), strict=True))
+    assert {("Long", 1), ("Short", 1)} <= pairs
 
 
 def test_combined_fills_are_in_time_order_one_instant_in_call_order(opposite):
@@ -424,6 +442,38 @@ def test_a_portfolio_of_one_is_the_strategy_alone(alone):
     )
     with pytest.raises(ConfigError, match="two"):
         pf.correlation  # noqa: B018 (a property that raises)
+
+
+class MinuteSbin(Scripted):
+    """Buys 100 SBIN at its first decision of the run and holds it to the square-off."""
+
+
+class DailyInfy(DailyScript):
+    """Buys 10 INFY at the first session's close and exits at the third's."""
+
+    symbol, buy_on, sell_on = "INFY", 1, 3
+
+
+def test_a_daily_strategy_beside_a_minute_one_runs_as_alone_on_one_account():
+    # Four sessions: the minute strategy closes 375 rounds a session (09:16 to 15:30); the
+    # daily one closes its slice at 15:30, a round the minute strategy closes too, so the
+    # account has 4 x 375 = 1,500 rows, its equity at each session's close the sum of the
+    # two strategies' equities there.
+    minutes = pd.concat([flat_bars(100.0 + number, day=day) for number, day in enumerate(DAYS)])
+    data = {"SBIN": minutes, "INFY": daily_bars(DAYS)}
+    run = {"data": data, "capital": LAKH, **no_costs()}
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        pf = bt.backtest([MinuteSbin, DailyInfy], pool="separate", **run)
+        alone = {each.__name__: bt.backtest(each, **run) for each in (MinuteSbin, DailyInfy)}
+    for name, own in alone.items():
+        for table in TABLES:
+            pd.testing.assert_frame_equal(getattr(pf.strategy(name), table), getattr(own, table))
+    assert len(pf.account) == 4 * 375
+    closes = [ist(15, 30, day) for day in DAYS]
+    together = sum(own.equity.loc[closes, "equity_rupees"] for own in alone.values())
+    assert pf.equity.loc[closes].tolist() == together.tolist()
+    assert pf.strategy("DailyInfy").assumptions["base"] == "D"
 
 
 # ----- the account's figures --------------------------------------------------------------

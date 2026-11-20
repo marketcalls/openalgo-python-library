@@ -154,11 +154,6 @@ class Account:
     account_max_daily_loss: float | None
     capitals: tuple[float, ...]
 
-    @property
-    def funds(self) -> float:
-        """The account's funds in rupees: `account_capital`, else the sum of the capitals."""
-        return sum(self.capitals) if self.account_capital is None else self.account_capital
-
     def fund_config(self) -> dict[str, Any]:
         """The config dict the native `Fund` reads."""
         return {
