@@ -23,6 +23,10 @@ the strategy's entries, alert, and allow only this (`RULES`):
 | N or flat | same side, more | MORE | nothing: the excess is not the engine's |
 | N | the other side | OTHER_SIDE | cancel the leg's own working stop; close by hand |
 
+On an instrument several strategies of the session share, an explained difference of the
+members' sum is EXPLAINED_SHARED: each member adopts its share of it
+(`_reconcile_allocate`, 18-multi-strategy 4.7).
+
 Adopting is `apply_external_fill` of the difference at the other orders' price. From the
 first comparison that shows the broker holding fewer units on the engine's side,
 or none, or the other side, until one agrees, no closing order of the leg is sent for
@@ -63,6 +67,9 @@ class Kind(enum.Enum):
     UNEXPLAINED = "unexplained"
     MORE = "more"
     OTHER_SIDE = "other_side"
+    #: A shared instrument's broker holds fewer units than its members' sum, or none, and
+    #: trades of other orders explain it: each member adopts its share (`_reconcile_allocate`).
+    EXPLAINED_SHARED = "explained_shared"
     #: The position book could not be read: nothing is judged.
     UNREADABLE = "unreadable"
 
@@ -126,7 +133,15 @@ FEWER_STOP_CANCELLED = (
     "back until the books agreed)"
 )
 #: The kinds during which no closing order goes beyond what the broker holds.
-GUARDED = frozenset({Kind.EXPLAINED_FLAT, Kind.EXPLAINED_FEWER, Kind.UNEXPLAINED, Kind.OTHER_SIDE})
+GUARDED = frozenset(
+    {
+        Kind.EXPLAINED_FLAT,
+        Kind.EXPLAINED_FEWER,
+        Kind.UNEXPLAINED,
+        Kind.OTHER_SIDE,
+        Kind.EXPLAINED_SHARED,
+    }
+)
 
 
 class RestartKind(enum.Enum):

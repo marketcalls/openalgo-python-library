@@ -4,9 +4,11 @@
 `trace_sessions` installs the recording for one fake and registers the invariants to run
 when the test ends (`session_invariants.assert_session_invariants`). The hooks wrap the
 session's start, its close, the kernel stop of each strategy at the close, the event
-stream's writer, the shared alerts' sender and the mode guard's lock, once per test
-(monkeypatch undoes them), and hand each run to the trace of the fake whose clients it
-uses. Nothing here changes what a session does.
+stream's writer, the shared alerts' sender, the mode guard's lock, the order words
+handed to a kernel and the session's calls that make a kernel act (an exit, a cancel, a
+protect: 18-multi-strategy 5.1 I5), once per test (monkeypatch undoes them), and hand
+each run to the trace of the fake whose clients it uses. Nothing here changes what a
+session does.
 
 Where the fake's log stood when the mode guard locked is taken as the lock begins: the
 call that showed the change is in the log by then, and anything the session's clients
@@ -26,6 +28,9 @@ from openalgo import api
 from openalgo.backtest._live import _session_close as close_module
 from openalgo.backtest._live import session as session_module
 from openalgo.backtest._live._alerts_logs import SessionLogs
+from openalgo.backtest._live._margin_reject import MarginHolds
+from openalgo.backtest._live._session_news import News
+from openalgo.backtest._live._session_trader import Trader
 from openalgo.backtest._live._shared_alerts import SharedAlerts
 from openalgo.backtest._live.guard import ModeGuard
 
@@ -65,6 +70,15 @@ class Hooks:
         self._write = SessionLogs.event
         self._send = SharedAlerts.send
         self._lock = ModeGuard._lock
+        self._apply_update = News.apply_update
+        # The strategies whose order word is being applied, innermost last.
+        self._applying: list[Any] = []
+        self._acts = {
+            (Trader, "request_exit"): Trader.request_exit,
+            (Trader, "cancel"): Trader.cancel,
+            (MarginHolds, "request_exit"): MarginHolds.request_exit,
+            (MarginHolds, "protect"): MarginHolds.protect,
+        }
 
     def install(self, monkeypatch: Any) -> None:
         """Wrap the session's start, close, kernel stops, event writer, alerts and guard
@@ -83,6 +97,11 @@ class Hooks:
         def locked(guard: Any, *args: Any, **kwargs: Any) -> None:
             hooks.locked(guard, *args, **kwargs)
 
+        def applied(news: Any, trader: Any, update: Any) -> Any:
+            return hooks.applied(news, trader, update)
+
+        for (owner, name), original in self._acts.items():
+            monkeypatch.setattr(owner, name, self._acting(owner, name, original))
         opened.hooks = self
         monkeypatch.setattr(session_module, "open_session", opened)
         monkeypatch.setattr(session_module, "close_session", self.closed)
@@ -90,6 +109,7 @@ class Hooks:
         monkeypatch.setattr(SessionLogs, "event", written)
         monkeypatch.setattr(SharedAlerts, "send", sent)
         monkeypatch.setattr(ModeGuard, "_lock", locked)
+        monkeypatch.setattr(News, "apply_update", applied)
 
     def opened(self, *args: Any, **kwargs: Any) -> Any:
         session = self._open(*args, **kwargs)
@@ -151,6 +171,55 @@ class Hooks:
         else:
             alerts.__dict__.setdefault("traced", []).append((kind, text))
         self._send(alerts, kind, text, **kwargs)
+
+    def applied(self, news: Any, trader: Any, update: Any) -> Any:
+        """An order word handed to `trader`'s kernel: noted in its run (I5) when its order
+        is not bound in `trader`'s venue map, or the fake records it for another strategy;
+        then handed on, `trader` noted as the one whose word is applied meanwhile."""
+        run = self._run_of(trader)
+        if run is not None:
+            order_id = update.order_id
+            if trader.venue.kernel_order_of(order_id) is None:
+                run.strayed.append(f"{trader.name} took order {order_id}, not bound to it")
+            tag = self._tag(run, order_id)
+            if tag is not None and tag != trader.name:
+                run.strayed.append(f"{trader.name} took order {order_id}, recorded for {tag}")
+        self._applying.append(trader)
+        try:
+            return self._apply_update(news, trader, update)
+        finally:
+            self._applying.pop()
+
+    def _acting(self, owner: type, name: str, original: Callable[..., Any]) -> Any:
+        """`original`, a session call that makes a kernel act, noting (I5) a call on one
+        strategy while another strategy's order word is applied."""
+        hooks = self
+
+        def acting(this: Any, *args: Any, **kwargs: Any) -> Any:
+            trader = this if owner is Trader else args[0]
+            if hooks._applying and hooks._applying[-1] is not trader:
+                run = hooks._run_of(trader)
+                if run is not None:
+                    run.strayed.append(
+                        f"{name} of {trader.name} while a word of "
+                        f"{hooks._applying[-1].name}'s order was applied"
+                    )
+            return original(this, *args, **kwargs)
+
+        return acting
+
+    def _run_of(self, trader: Any) -> Run | None:
+        """The open run whose session holds `trader`, or None."""
+        for run in {id(run): run for run in self._runs.values()}.values():
+            if any(t is trader for t in run.session.traders):
+                return run
+        return None
+
+    def _tag(self, run: Run, order_id: str) -> str | None:
+        """The strategy the fake records order `order_id` for, in the run's mode; None for
+        an order it does not know."""
+        fake = self._traces[id(run)].fake
+        return next((o.strategy for o in fake.orders(run.mode) if o.order_id == order_id), None)
 
     def locked(self, guard: Any, *args: Any, **kwargs: Any) -> None:
         """Note where the fake's log stands as the lock begins (module docstring), then

@@ -214,6 +214,61 @@ def test_a_held_cancel_of_the_stop_is_alerted_without_promising_the_exit(guarded
     assert "go only if the session still asks for them then" in text
 
 
+# ----- a member of a shared instrument (18-multi-strategy 4.8) --------------------------
+
+
+@pytest.fixture
+def member_guarded(session: Session) -> Session:
+    """`S` is a member of a shared instrument whose net, 4 units, differs from its members'
+    sum: every closing order of `S` is held, however few its units."""
+    session.guard.open("S", BROKER_UNITS, hold_all=True)
+    return session
+
+
+@pytest.mark.parametrize(
+    ("request_", "held"),
+    [
+        (place(EXIT, Purpose.EXIT, "SELL", BROKER_UNITS), True),
+        (place(EXIT, Purpose.EXIT, "SELL", 1), True),
+        (place(STOP, Purpose.STOP, "SELL", BROKER_UNITS), True),
+        (stop_modified(BROKER_UNITS), False),
+        (cancel_of_stop(), True),
+        (place(ENTRY, Purpose.ADD, "BUY", 5), False),
+    ],
+    ids=[
+        "an exit within the net",
+        "an exit of one unit",
+        "a stop placed for the net",
+        "a stop cut down",
+        "the cancel of the stop",
+        "an add on the position's side",
+    ],
+)
+def test_while_a_shared_instrument_differs_every_closing_order_of_a_member_is_held(
+    member_guarded, request_, held
+):
+    member_guarded.hand_over([request_])
+    assert (member_guarded.handed == []) is held
+
+
+def test_a_member_guarded_keeps_the_brokers_net_as_its_figure(member_guarded):
+    assert member_guarded.guard.broker_units("S") == BROKER_UNITS
+
+
+def test_a_members_held_exit_is_alerted_with_the_net_of_the_strategies_sharing_it(member_guarded):
+    member_guarded.hand_over([place(EXIT, Purpose.EXIT, "SELL", BROKER_UNITS)])
+    [text] = member_guarded.alerts
+    assert "OpenAlgo's position book shows 4 units of SBIN for the strategies sharing it" in text
+    assert "waits with every closing order of them while the books differ" in text
+
+
+def test_once_the_group_agrees_a_members_held_exit_goes(member_guarded):
+    exit_ = place(EXIT, Purpose.EXIT, "SELL", BROKER_UNITS)
+    member_guarded.hand_over([exit_])
+    member_guarded.guard.close("S")
+    assert member_guarded.handed == [exit_]
+
+
 # ----- when the books agree -------------------------------------------------------------
 
 

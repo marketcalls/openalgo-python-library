@@ -3,21 +3,11 @@ on a schedule and compared, leg by leg, with what the engine knows, by the rules
 `_reconcile_rules` (decided 2026-11-16: a mismatch locks entries and alerts, with only the
 safe corrections; it never exits a position and never fires the kill switch).
 
-**Schedule** (5.1): a read when trading begins, every `RECONCILE_EVERY_S`,
-`RECONCILE_AFTER_FILL_S` after a fill, of the session's orders or, on an instrument it
-trades, another client's (`other_fill`: a sale by hand is seen within seconds, 7.1 "As
-built (unit 14"), `RECONCILE_AGAIN_AFTER_S` after a comparison that
-found a difference the one before it did not (the second confirms it; one seen twice in a
-row waits for the schedule), `SQUARE_OFF_READ_BEFORE_S` before and
-`SQUARE_OFF_READ_AFTER_S` after each strategy's square-off, when the safe stop's flatten
-begins (`read_before_exits`), and at the common close (`_reconcile_final`); never after
-the mode guard locked. One read at a time, numbered: the order worker reads the position,
-order and trade books and the funds (`ReadBooks`) and answers `Books`. Before the flatten
-and the square-off the exit guard holds each leg's exits until a read begun after the
-request has compared it (a sale by hand since the last read is not known before), read
-again every `RECONCILE_AGAIN_AFTER_S` while a leg cannot be compared.
+**Schedule** (5.1): when a read is due, and the reads the session asks for, are
+`_reconcile_schedule`'s. An instrument several strategies of the session share is compared
+as one group (`_reconcile_groups`, 18-multi-strategy 4.6).
 
-**In flight** (`_reconcile_act.in_flight`). A read compares a leg only when it was out of
+**In flight** (`_reconcile_steps.in_flight`). A read compares a leg only when it was out of
 flight from before the read began (a fill restarts that) and still is; a leg in flight
 past `RECONCILE_IN_FLIGHT_MAX_S` is compared anyway (late): a difference is alerted, with
 no automatic action and no sighting. A fill of the leg's own orders the read's trade book
@@ -53,14 +43,16 @@ quantities signed units, prices rupees. Used by the loop only.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from typing import Any
 
 from .._engine import call
 from .._layout import NANOS_PER_SECOND
-from ._reconcile_act import Corrections, attribute, in_flight, order_findings, own_orders
+from ._group_rules import GroupFigure
+from ._reconcile_act import Corrections
 from ._reconcile_ended import EndQueries
-from ._reconcile_findings import Findings, Reconciliation
+from ._reconcile_findings import FILL_DURING_READ, Findings, Reconciliation
+from ._reconcile_groups import GroupComparison
 from ._reconcile_guard import ExitGuard
 from ._reconcile_rules import (
     GUARDED,
@@ -71,35 +63,29 @@ from ._reconcile_rules import (
     leg_books,
     unexplained_by,
 )
+from ._reconcile_schedule import (
+    RECONCILE_AFTER_FILL_S,
+    RECONCILE_AGAIN_AFTER_S,
+    RECONCILE_EVERY_S,
+    RECONCILE_READ_LOST_AFTER_S,
+    SQUARE_OFF_READ_AFTER_S,
+    SQUARE_OFF_READ_BEFORE_S,
+    ReadSchedule,
+)
+from ._reconcile_steps import attribute, in_flight, order_findings, own_orders
 from ._session_trader import Trader
-from ._worker_queue import ReadBooks, StreamGap
+from ._worker_queue import StreamGap
 from .inbox import Books, PositionRows
 
-#: Seconds between two reads (08-live-trading section 7).
-RECONCILE_EVERY_S = 30.0
-#: Seconds after the last fill, and after a comparison that differed, before a read.
-RECONCILE_AFTER_FILL_S = 3.0
-RECONCILE_AGAIN_AFTER_S = 3.0
 #: Seconds a leg may stay in flight before it is compared anyway: the order path's longest
 #: legitimate wait (`BROKER_WINDOW_NS`, 150 s) plus two book reads and a margin (5.1).
 RECONCILE_IN_FLIGHT_MAX_S = 180.0
-#: Seconds after a strategy's square-off before the books are read: the session's own
-#: check that every leg is flat then (16-session-design 3.4).
-SQUARE_OFF_READ_AFTER_S = 30.0
-#: Seconds before a strategy's square-off at which the books are read, so its exit knows
-#: what the broker holds (5.4 "As built"): a read of the four books takes a second or two.
-SQUARE_OFF_READ_BEFORE_S = 5.0
-#: Seconds after which a read asked for and never answered is asked for again: well past
-#: the orders client's own wait (the SDK's 120 s), as for the kill switch's reads.
-RECONCILE_READ_LOST_AFTER_S = 300.0
-#: What the "reconcile" event of a leg says it found when a fill of the leg's own orders
-#: landed during the read: nothing judged (module docstring).
-FILL_DURING_READ = "fill_during_read"
-
 _NS = NANOS_PER_SECOND
+#: The differences a restart acts on with nothing adopted: the exit guard holds the leg.
+UNADOPTED = frozenset({Kind.UNEXPLAINED, Kind.OTHER_SIDE})
 
 
-class Reconciler(EndQueries):
+class Reconciler(EndQueries, GroupComparison, ReadSchedule):
     """The reconciler of `session`, a `_session_loop.Session` (module docstring). `guard`
     is its exit guard, `rows` its differences."""
 
@@ -108,7 +94,9 @@ class Reconciler(EndQueries):
         self.guard = ExitGuard(session)
         self._adopted: dict[str, int] = {}
         self._orphans: set[str] = set()
-        corrections = Corrections(session, self._adopted, self._orphans)
+        # By strategy: its shared instrument's group as the last comparison judged it.
+        self._figures: dict[str, GroupFigure] = {}
+        corrections = Corrections(session, self._adopted, self._orphans, self._figures)
         self._findings = Findings(session, corrections, RECONCILE_IN_FLIGHT_MAX_S)
         self.rows: list[Reconciliation] = self._findings.rows
         self._generation = 0
@@ -135,41 +123,36 @@ class Reconciler(EndQueries):
         self._earlier = earlier
 
     def differs_at_start(
-        self, trader: Trader, kind: Kind, journal_units: int, books: LegBooks
+        self,
+        trader: Trader,
+        kind: Kind,
+        journal_units: int,
+        books: LegBooks,
+        group: GroupFigure | None = None,
     ) -> None:
-        """A restart found `trader`'s journal position (`journal_units`) different from
-        the broker's (5.5): acted on at once, as 5.3 would after two comparisons, with the
-        strategy's entries locked from the start; the exit guard opened while the broker
-        holds fewer units that nothing explains, or the other side. When the restored
-        engine holds other units (a fill reached the journal after the start read the
-        books: the order worker follows the day's orders during the warm-up), those books
-        no longer describe the leg: its entries are locked, and its exits wait for a
-        comparison of a fresh read, which judges it."""
+        """A restart found `trader`'s journal position (`journal_units`), or its `group`'s
+        sum on a shared instrument, different from the broker's (5.5; 18-multi-strategy
+        4.10): acted on at once, as 5.3 would after two comparisons, with the strategy's
+        entries locked from the start; the exit guard opened while the broker holds fewer
+        units that nothing adopts, or the other side (every closing order of a member of
+        a group held). When the restored engine holds other units (a fill reached the
+        journal after the start read the books: the order worker follows the day's
+        orders during the warm-up), those books no longer describe the leg: its entries
+        are locked, and its exits wait for a comparison of a fresh read, which judges it."""
         own = own_orders(trader, self._earlier)
+        if group is not None:
+            self._figures[trader.name] = group
         if round(trader.open_units()) != journal_units:
             self._findings.at_start(trader, kind, journal_units, books, own, stale=True)
             self.guard.await_read(trader.name, self._session.now())
             return
         self._findings.at_start(trader, kind, journal_units, books, own)
-        if kind in (Kind.UNEXPLAINED, Kind.OTHER_SIDE) and books.units is not None:
-            self.guard.open(trader.name, books.units)
+        if kind in UNADOPTED and books.units is not None:
+            self.guard.open(trader.name, books.units, hold_all=group is not None)
 
     def adopted(self, name: str) -> int:
         """The signed units strategy `name` adopted from other orders' trades today."""
         return self._adopted.get(name, 0)
-
-    def filled(self, trader: Trader, at_ns: int) -> None:
-        """A fill of `trader`'s reached the kernel at `at_ns`: a read is due shortly, and
-        only a read begun after it compares the leg."""
-        if self._quiet.get(trader.name) is not None:
-            self._quiet[trader.name] = at_ns
-        self._soon(at_ns + _s(RECONCILE_AFTER_FILL_S))
-
-    def other_fill(self, at_ns: int) -> None:
-        """Another client's fill on an instrument the session trades reached the order
-        stream at `at_ns`: a read is due as after the session's own fills, so a sale by
-        hand is seen within seconds instead of at the next scheduled read."""
-        self._soon(at_ns + _s(RECONCILE_AFTER_FILL_S))
 
     def holds(self, trader: Trader) -> bool:
         """True while the exit guard holds `trader`'s leg."""
@@ -178,20 +161,6 @@ class Reconciler(EndQueries):
     def orphan(self, order_id: str) -> bool:
         """True for an orphan the reconciler asked to cancel: its news is expected."""
         return order_id in self._orphans
-
-    def not_read(self) -> None:
-        """The worker did not read the books (the guard locked): nothing more is read."""
-        self._stopped = True
-
-    @property
-    def waiting(self) -> bool:
-        """True while a read asked for has not come."""
-        return not self._answered and not self._stopped
-
-    @property
-    def stopped(self) -> bool:
-        """True once the worker did not read the books (`not_read`)."""
-        return self._stopped
 
     @property
     def clean(self) -> bool:
@@ -225,67 +194,6 @@ class Reconciler(EndQueries):
             self.read_before_exits(due)
         self._ask_when_due(now_ns)
 
-    def read_before_exits(self, names: Iterable[str] | None = None) -> None:
-        """The exits of strategies `names` (all for None) wait for a comparison of a read
-        asked for now (module docstring): the safe stop's flatten and the square-off. A
-        finished kernel session is never compared again, so it waits for nothing. The
-        read is asked for in this step, so the exits wait one read and no more; while one
-        is asked for already, its answer asks for the next at once when it began earlier
-        (`books`)."""
-        session = self._session
-        now_ns = session.now()
-        for trader in session.traders:
-            if not trader.finished and (names is None or trader.name in names):
-                self.guard.await_read(trader.name, now_ns)
-        if not self._answered:
-            return
-        self._soon(now_ns)
-        if self._reads(session):
-            self._ask_when_due(now_ns)
-
-    def ask(self, now_ns: int) -> None:
-        """Ask the order worker for a read now, of every leg."""
-        self._only = None
-        self._generation += 1
-        self._asked_ns, self._answered = now_ns, False
-        self._next_ns, self._soon_ns = now_ns + _s(RECONCILE_EVERY_S), None
-        self._square_offs = [instant for instant in self._square_offs if instant > now_ns]
-        self._session.hand_over([ReadBooks(self._generation)])
-
-    def ask_of(self, names: frozenset[str] | None) -> None:
-        """Ask for a read now that compares the legs of strategies `names` alone (all for
-        None), each out of flight from now: the close's reads (`_reconcile_final`), after
-        the last lines, when no duty notes flight."""
-        now_ns = self._session.now()
-        traders = self._session.traders
-        self._quiet.update({t.name: now_ns for t in traders if names is None or t.name in names})
-        self.ask(now_ns)
-        self._only = names
-
-    def _reads(self, session: Any) -> bool:
-        """Whether reads are made: once trading began, never after a guard lock."""
-        return session.trading and not (session.locked or self._stopped)
-
-    def _ask_when_due(self, now_ns: int) -> None:
-        # While OpenAlgo is silent the order worker's probe asks it (4.9): a read could
-        # hold the worker for the client's whole timeout, ahead of the stops and exits.
-        if self._session.parts.worker.silent_since_ns is not None:
-            return
-        if self._answered:
-            if self._due(now_ns):
-                self.ask(now_ns)
-        elif self._asked_ns is None or now_ns >= self._asked_ns + _s(RECONCILE_READ_LOST_AFTER_S):
-            self.ask(now_ns)
-
-    def _due(self, now_ns: int) -> bool:
-        due = [self._next_ns if self._next_ns is not None else now_ns]
-        due += [self._soon_ns] if self._soon_ns is not None else []
-        due += [instant for instant in self._square_offs if instant <= now_ns]
-        return now_ns >= min(due)
-
-    def _soon(self, due_ns: int) -> None:
-        self._soon_ns = due_ns if self._soon_ns is None else min(self._soon_ns, due_ns)
-
     # ----- a read -----------------------------------------------------------------------
 
     def books(self, message: Books) -> None:
@@ -301,7 +209,9 @@ class Reconciler(EndQueries):
         for trader in session.traders:
             if available is not None and not trader.finished:
                 call(trader.engine.cap_sizing_equity, available)
-            if trader.finished or (self._only is not None and trader.name not in self._only):
+            if session.groups.shared(trader) or trader.finished:
+                continue
+            if self._only is not None and trader.name not in self._only:
                 continue
             since = self._flight.get(trader.name)
             late = since is not None and session.now() - since > _s(RECONCILE_IN_FLIGHT_MAX_S)
@@ -311,6 +221,8 @@ class Reconciler(EndQueries):
             if not late and in_flight(session, trader):
                 continue
             polls |= self._compare(trader, message, late=late)
+        limits = {"late_after_s": RECONCILE_IN_FLIGHT_MAX_S, "again_s": RECONCILE_AGAIN_AFTER_S}
+        polls |= self._compare_shared(message, **limits)
         if polls:
             session.hand_over([StreamGap(message.started_ns)])
         awaited = self.guard.awaited_since()

@@ -55,6 +55,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejects in such a group holds the position: no market exit, no re-placed stop and no
   square-off sent by the engine until the session has checked the broker's books. Both
   codes have a meaning and what to do in the rejection warnings.
+- Two or more strategies on one symbol in a live session (2.4.0, unit M6). `bt.live` used to
+  refuse a second strategy on a symbol and product ("run one strategy per symbol"); now each
+  strategy keeps its own position and its own stop at the broker while OpenAlgo holds one net
+  position for the symbol. The symbol is subscribed and checked against broker candles once,
+  and every tick, quote and candle reaches each of its strategies. On such a symbol:
+  - An entry, add or reversal that would put a strategy on the other side of another
+    strategy's position or pending entry is rejected `group_other_side`; a strategy's own
+    LIMIT, SL and SL-M orders are rejected `shared_resting` (its stop and targets still work);
+    while another strategy's reversal works, its entries are locked (`group_reversing`).
+  - The reconciler, the restart, the exit guard and the kill switch judge the strategies
+    together: the sum of their positions against OpenAlgo's net. A trade by hand that the
+    trade book explains is shared out among the strategies it closes, the most recently opened
+    position first, and each strategy's stop is cut or cancelled to what it still holds. Any
+    other difference locks every strategy's entries and holds their exits until the books
+    agree, with one alert that names the group.
+  - A stop or exit the broker rejects holds the position: no market exit, no stop placed
+    again and no exit retry. The strategy's entries stay locked for the session
+    (`margin_on_close`), OpenAlgo's books are read at once, and one ERROR alert says to end
+    the session, check the position book and close by hand. The session's own exits (Ctrl+C,
+    the kill switch, the square-off) go only after a book read agrees.
+  - The start banner names each shared symbol and its strategies and says never to trade it
+    by hand while the session runs. A new unprotected reason, "instrument held by another
+    strategy's order", comes with an ERROR alert naming that order. An order the order book
+    cannot tell apart locks the entries of every strategy on its symbol.
+  A strategy alone on its symbol keeps 2.3.0's behaviour throughout. Until a later unit, the
+  session's closing rows list each strategy of a shared symbol at its own units, with a note
+  naming OpenAlgo's net for the group.
 - MCX silver mini (SILVERM) and silver micro (SILVERMIC) can be backtested and traded: their
   freeze quantity, 600 kg per order, is in the contract table from MCX circulars
   MCX/TRD/114/2025, MCX/TRD/091/2026, MCX/TRD/275/2025 and MCX/TRD/302/2026 (contracts

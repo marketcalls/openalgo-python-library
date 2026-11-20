@@ -221,7 +221,7 @@ class Control:
                 continue
             if not retried_too and session.exits.owns(trader.name):
                 continue
-            what = trader.request_exit(OPERATOR_STOP)
+            what = session.margin.request_exit(trader, OPERATOR_STOP)
             self._asked[trader.name] = what
             if what in _EXIT_MADE:
                 session.event("exit_requested", strategy=trader.name, outcome=what)

@@ -68,7 +68,7 @@ from ._plan_catch_up import INSTRUMENT, StrategyPlan
 from ._plan_engine import bind_strategy, check_grid, session_engine
 from ._plan_release import CANDLE_LAST_READ_S, CANDLE_SETTLE_S, missing_note
 from ._plan_setup import StrategySetup, read_today, strategy_setup
-from ._plan_strategies import StrategySpec, ist_day, refuse_shared_legs, strategy_spec
+from ._plan_strategies import StrategySpec, ist_day, strategy_spec
 from ._preflight_plan import InstrumentFacts
 from ._types import LiveBar, Now
 from .series import DEFAULT_BASE, LiveSeries
@@ -85,8 +85,9 @@ class SessionSpec:
 
     @property
     def instruments(self) -> tuple[tuple[str, str], ...]:
-        """The (symbol, exchange) of each strategy, as the preflight takes them."""
-        return tuple((spec.symbol, spec.exchange) for spec in self.strategies)
+        """The (symbol, exchange) the strategies trade, each once, in call order, as the
+        preflight takes them (several strategies may trade one: 18-multi-strategy 4.1)."""
+        return tuple(dict.fromkeys((spec.symbol, spec.exchange) for spec in self.strategies))
 
     @property
     def intervals(self) -> tuple[str, ...]:
@@ -116,9 +117,8 @@ def specify(
     strategy for the IST day of the present `clock` gives (module docstring).
 
     Raises ConfigError for unusable arguments and NotImplementedError for what a live
-    session does not run (`_plan_args.live_arguments`, `_plan_strategies.strategy_spec`;
-    two strategies on one symbol), and what a strategy's `init` raises on the engine's
-    reference bars."""
+    session does not run (`_plan_args.live_arguments`, `_plan_strategies.strategy_spec`),
+    and what a strategy's `init` raises on the engine's reference bars."""
     checked = live_arguments(strategy, **arguments)
     present_ns = clock()
     day = ist_day(present_ns)
@@ -127,7 +127,6 @@ def specify(
         strategy_spec(cls, name, checked.backtest_arguments(name, day, present_ns), calendar)
         for cls, name in zip(checked.strategies, checked.names, strict=True)
     )
-    refuse_shared_legs(specs)
     return SessionSpec(checked, day, specs)
 
 

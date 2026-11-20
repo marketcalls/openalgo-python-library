@@ -11,6 +11,7 @@ latter with a target at 502.00, which SBIN reaches at 14:44:05 (`stops_samples`)
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
@@ -175,13 +176,14 @@ class _Trader:
 
 
 class _Session:
-    """What the held words read of a session: one strategy, its last tick, and the
-    requests handed to the order worker."""
+    """What the held words read of a session: one strategy, its last tick, its instrument
+    traded by no other strategy, and the requests handed to the order worker."""
 
     def __init__(self):
         self.traders = (_Trader(),)
         self.last_tick = {}
         self.handed = []
+        self.groups = SimpleNamespace(shared=lambda trader: False)
 
     def hand_over(self, requests):
         self.handed.extend(requests)
@@ -291,3 +293,42 @@ def test_a_position_read_decides_no_held_cancel_beside_another_held_word_of_its_
 
     assert released(session) == ["SA"]
     assert session.alerts == []
+
+
+class _Shared(_TwoLegs):
+    """Two strategies on SBIN: A holds 10 with its stop "SA" of 10, B 10 with its stop
+    "SB"; the session shares the instrument between them."""
+
+    def __init__(self):
+        super().__init__()
+        self.traders = (
+            _Leg("A", "SBIN", {"SA": (2, 10, 0)}),
+            _Leg("B", "SBIN", {"SB": (2, 10, 0)}),
+        )
+        self.groups = SimpleNamespace(shared=lambda trader: True)
+
+
+def test_a_held_cancel_on_a_shared_instrument_is_left_to_the_trade_book():
+    session = _Shared()
+    held = HeldWords(session)
+    # A's stop filled 5 of its 10 at the broker before its cancel, beside B's 10: the
+    # net shows 15, which no rule of one leg can read as A's 5.
+    held.update((HeldFill("SA", 0, 0),))
+    held.due(round(HELD_CANCEL_DECIDE_AFTER_S * NS))
+    assert ReadPositions() not in session.handed
+
+    held.positions(book(sbin=15, infy=0))
+
+    assert released(session) == []
+    [text] = session.alerts
+    assert "stop SA of A cancelled" in text and "the trade book decides" in text
+
+
+def test_a_held_cancel_on_a_shared_instrument_is_not_decided_by_anothers_position_read():
+    session = _Shared()
+    held = HeldWords(session)
+    held.update((HeldFill("SA", 0, 0),))
+    # A read asked for by another leg comes with the net equal to A's own 10 units (B's
+    # stop filled unseen): taken for A's alone, it would read A's stop as unfilled.
+    held.positions(book(sbin=10, infy=0))
+    assert released(session) == []

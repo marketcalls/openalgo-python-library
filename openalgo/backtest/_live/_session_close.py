@@ -319,13 +319,14 @@ def _summary(
 
 def _open_positions(session: Session) -> tuple[OpenPosition, ...]:
     """Each leg the engine holds open, and each whose difference with OpenAlgo's books no
-    later read confirms, at OpenAlgo's units then; none they show flat (module
+    later read confirms, at OpenAlgo's units then (a member of a shared instrument at its
+    own: `_reconcile_close.Differing.open_units`); none they show flat (module
     docstring). An entry the order book cannot tell apart adds its units, with no stop
     confirmed (16-session-design 7.1, F60)."""
     stops, positions = session.stops, []
     for trader in session.traders:
         differs = differing(session.reconcile, trader)
-        units = trader.open_units() if differs is None else differs.broker_units
+        units = trader.open_units() if differs is None else differs.open_units
         unsure = stops.leg(trader).ambiguous_entry_units()
         if units == 0 and unsure == 0:
             continue

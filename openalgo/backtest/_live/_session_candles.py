@@ -16,13 +16,16 @@ steps 11 to 15; unit 8): what the candle checks ask for, and what each read's ca
 
 `wanted` lists what the next candle check asks for: the live slices closed without an
 accepted candle, the slices marked missing, and the slices before `first_live` closed by
-then and not released. Times are UTC nanoseconds. Used by the loop only.
+then and not released. The session asks once per instrument for what its strategies want
+together (`ask_candles`, `ask_first_candles`; 18-multi-strategy 4.3), and each read's
+candles go to every strategy trading the instrument. Times are UTC nanoseconds. Used by
+the loop only.
 """
 
 from __future__ import annotations
 
 import bisect
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
 from .._layout import NANOS_PER_SECOND
@@ -143,4 +146,36 @@ class CandleKeeper:
         return [missing_note(spec.name, spec.symbol, spec.exchange, marked, none_today=none_today)]
 
 
-__all__ = ["CandleKeeper"]
+def ask_candles(session: Any, traders: Sequence[Any], closed_ns: int) -> None:
+    """Ask `session`'s data worker, at the slice close `closed_ns`, for the candles
+    `traders` (those of one exchange, `_session_trader.Trader`) want, one check per
+    instrument for what its strategies want together; nothing without a data worker."""
+    wanted: dict[tuple[str, str], set[int]] = {}
+    for trader in traders:
+        wanted.setdefault((trader.symbol, trader.exchange), set()).update(
+            trader.candles.wanted(closed_ns)
+        )
+    for (symbol, exchange), slices in wanted.items():
+        if slices and session.data is not None:
+            session.data.check_candles(symbol, exchange, sorted(slices), closed_ns)
+
+
+def ask_first_candles(session: Any) -> None:
+    """At the start of watching (16-session-design 3.1 step 14): ask for the candles of
+    the slices the catch-up still owns and of those marked missing, once per instrument,
+    at the latest close among them."""
+    now_ns = session.now()
+    asks: dict[tuple[str, str], tuple[set[int], int]] = {}
+    for trader in session.traders:
+        wanted = set(trader.candles.wanted(now_ns))
+        if not wanted:
+            continue
+        closes = [closed for opened, closed in trader.part.slices if opened in wanted]
+        slices, latest = asks.get((trader.symbol, trader.exchange), (set(), max(closes)))
+        asks[(trader.symbol, trader.exchange)] = (slices | wanted, max(latest, *closes))
+    for (symbol, exchange), (slices, closed_ns) in asks.items():
+        if session.data is not None:
+            session.data.check_candles(symbol, exchange, sorted(slices), closed_ns)
+
+
+__all__ = ["CandleKeeper", "ask_candles", "ask_first_candles"]

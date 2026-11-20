@@ -14,11 +14,12 @@ runs, on the loop's thread, the rules about the broker's behaviour in time:
   (`_stops_cover`). A stop accepted and not confirmed within `UNPROTECTED_EXIT_AFTER_S`
   exits the leg (`_stops_deadline`). A stop whose cancel was sent covers nothing: the
   cancel may be in effect at the broker.
-- **Alerts**: an ERROR alert at once for a stop, an exit or a protective modify held back
-  (OpenAlgo silent, an order of the instrument unresolved) and for an add whose answer
-  was lost on a guarded leg (its units may be filled and uncovered); a REJECT alert for a
-  stop the broker cancelled with no request from the session (the kernel places it again
-  once, 4.10); a STOP_MOVED alert for a trailing modify the broker accepted (4.3).
+- **Alerts** (`_stops_alerts`): an ERROR alert at once for a stop, an exit or a
+  protective modify held back (OpenAlgo silent, an order of the instrument unresolved)
+  and for an add whose answer was lost on a guarded leg (its units may be filled and
+  uncovered); a REJECT alert for a stop the broker cancelled with no request from the
+  session (the kernel places it again once, 4.10); a STOP_MOVED alert for a trailing
+  modify the broker accepted (4.3).
 - Held fills and held cancels (`_stops_held`, 4.11), refused cancels sent again
   (`_stops_cancels`, 4.5), a guarded leg left bare given its stop again (`_stops_bare`),
   a silent OpenAlgo probed and alerted while a stop or an exit waits (`_stops_silent`,
@@ -40,10 +41,12 @@ from collections.abc import Sequence
 from typing import Any
 
 from ._fill_ledger import FillResult
+from ._group_rules import and_join
 from ._order_answers import Outcome
 from ._order_book import Resolution, Resolved
 from ._session_trader import Trader
 from ._stops_after import AfterLines
+from ._stops_alerts import held_back, instrument_held_by, stop_moved, unbound_add
 from ._stops_bare import BareLegs
 from ._stops_cancels import CancelRetries
 from ._stops_cover import Windows, reason_of
@@ -153,12 +156,12 @@ class StopsSupervisor:
             if outcome.kind is Outcome.ACCEPTED:
                 self._limit_exit(trader, request.intent, kernel_order, now_ns)
             elif outcome.kind is Outcome.UNANSWERED and request.intent.purpose is Purpose.ADD:
-                self._unbound_add(trader, request)
+                unbound_add(self._session, self, trader, request)
         elif isinstance(request, CancelRequest):
             if outcome.kind in (Outcome.REJECTED, Outcome.UNANSWERED):
                 self.cancels.reason(trader, kernel_order, outcome.reason)
         elif outcome.kind is Outcome.ACCEPTED:
-            self._moved(trader, request)
+            stop_moved(self._session, trader, request)
         elif outcome.kind is Outcome.REJECTED:
             self._modify_refused(trader, request)
 
@@ -175,8 +178,13 @@ class StopsSupervisor:
             self.silence.done(request.request_id)
         self.leg(trader).not_sent(request, message.reason)
         self._touch(trader, self._session.now())
-        if held:
-            self._held_alert(trader, request, message)
+        if (
+            held
+            and request.priority is Priority.PROTECT
+            and request.request_id not in self._noticed
+        ):
+            self._noticed.add(request.request_id)
+            held_back(self._session, self, trader, request, message)
         elif isinstance(request, ModifyRequest):
             self._modify_refused(trader, request)
         elif isinstance(request, CancelRequest) and message.reason is NotSentReason.REFUSED:
@@ -193,7 +201,7 @@ class StopsSupervisor:
             else:
                 self.cancels.refused(trader, request.kernel_order, request.order_id, now_ns)
         elif isinstance(request, ModifyRequest) and handled.applied is Applied.MODIFIED:
-            self._moved(trader, request)
+            stop_moved(self._session, trader, request)
         elif isinstance(request, ModifyRequest) and handled.applied is Applied.MODIFY_REFUSED:
             self._modify_refused(trader, request)
 
@@ -268,7 +276,13 @@ class StopsSupervisor:
                 stop = leg.orders.get(leg.stop) if leg.stop is not None else None
                 held = stop is not None and self.held.held_cancel(trader, stop.kernel_order)
                 retries = self._session.exits.owns(trader.name)
-                reason = reason_of(leg, held_cancel=held, retries=retries)
+                reason = reason_of(
+                    leg,
+                    held_cancel=held,
+                    retries=retries,
+                    held_by_other=instrument_held_by(self._session, self, trader) is not None,
+                    closing_rejected=self._session.margin.unprotected_reason(trader),
+                )
                 opened = self.windows.note(key, uncovered, reason, span)
                 if opened is not None:
                     self._session.event(
@@ -300,9 +314,20 @@ class StopsSupervisor:
         return max(0, terms.quantity - trader.venue.filled(kernel_order))
 
     def broker_units(self, trader: Trader) -> int | None:
-        """The broker's signed units of `trader`'s leg as the last read showed them while
-        they differ from the engine's (`Reconciler.broker_units`), else None."""
+        """The broker's signed units of `trader`'s instrument (its net, of every strategy
+        of the session that trades it) as the last read showed them while they differ from
+        the engine's (`Reconciler.broker_units`), else None."""
         return self._session.reconcile.broker_units(trader.name)
+
+    def books_words(self, trader: Trader, units: int) -> str:
+        """OpenAlgo's `units` of `trader`'s instrument in a note's words: the net of every
+        strategy of the session that trades it, named when there are several
+        (18-multi-strategy 4.11)."""
+        members = self._session.groups.members(trader)
+        if len(members) <= 1:
+            return f"{units} units"
+        names = and_join([member.name for member in members])
+        return f"{units} units of {trader.symbol} for {names} together"
 
     def cancelling(self, trader: Trader) -> frozenset[int]:
         """The kernel orders of `trader` whose cancel the kernel decided and the venue has
@@ -328,47 +353,12 @@ class StopsSupervisor:
         if intent.purpose is Purpose.RISK_EXIT and intent.price_type == "LIMIT":
             self.prices.track_exit(trader, kernel_order, now_ns)
 
-    def _moved(self, trader: Trader, request: ModifyRequest) -> None:
-        old, new = request.replaces, request.terms
-        trailing = old.quantity == new.quantity and {old.price_type, new.price_type} <= STOP_TYPES
-        if request.intent.purpose is Purpose.STOP and trailing:
-            self._session.alert(
-                AlertKind.STOP_MOVED,
-                f"{trader.name}: stop of {trader.symbol} {trader.exchange} moved to "
-                f"{new.trigger_price:.2f} (order {request.order_id})",
-            )
-
     def _modify_refused(self, trader: Trader, request: ModifyRequest) -> None:
         self.after.refused(request)
         if request.terms.price_type == "LIMIT" and self.prices.watching(
             trader, request.kernel_order
         ):
             self.prices.refused(trader, request.kernel_order)
-
-    def _held_alert(self, trader: Trader, request: OrderRequest, message: NotSent) -> None:
-        if request.priority is not Priority.PROTECT or request.request_id in self._noticed:
-            return
-        self._noticed.add(request.request_id)
-        what = "stop" if request.intent.purpose is Purpose.STOP else "exit"
-        if isinstance(request, ModifyRequest):
-            what = f"change of the {what}"
-        units = round(abs(trader.open_units())) - self.covered(trader)
-        self._session.alert(
-            AlertKind.ERROR,
-            f"{trader.name}: the {what} of {trader.symbol} {trader.exchange} cannot be sent "
-            f"now ({message.reason.value}: {message.error}); it waits, and {max(units, 0)} "
-            "units have no confirmed stop at the broker meanwhile",
-        )
-
-    def _unbound_add(self, trader: Trader, request: PlaceRequest) -> None:
-        if not self.leg(trader).guarded:
-            return
-        self._session.alert(
-            AlertKind.ERROR,
-            f"{trader.name}: the add of {request.intent.quantity} {trader.symbol} "
-            f"{trader.exchange} got no answer: if it filled, those units have no stop at the "
-            "broker, and the change of the stop is held, until the order book shows it",
-        )
 
     def _warn_unguarded(self, trader: Trader, units: int) -> None:
         if trader.name in self._unguarded:

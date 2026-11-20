@@ -23,7 +23,9 @@ journal's last update or the trade book, whichever says more. The restart rules 
 `_reconcile_rules.restart_kind`) judge it against the broker's: a broker position on a
 traded symbol that no journal position holds, and a journal position the broker does not
 hold that no trade of another order explains, refuse the start (LiveError naming them;
-nothing has been sent). A resumed leg whose saved stop does not work in the order book is
+nothing has been sent). An instrument several strategies share is judged as one, the sum
+of its members' journal positions against the broker's net (`_restart_groups`,
+18-multi-strategy 4.10). A resumed leg whose saved stop does not work in the order book is
 an ERROR alert now, saying what the restart does about it (`_missing_stop_words`): its
 stop is placed again at the end of step 11, unless the books show the broker holding
 fewer units that no trade explains, or the other side (the exit guard then holds a stop
@@ -41,9 +43,12 @@ from typing import Any
 
 from .._layout import NANOS_PER_SECOND
 from ..errors import LiveError
+from ._group_rules import GroupFigure, and_join
+from ._groups import InstrumentGroup, instrument_groups
 from ._order_book import Resolved
 from ._reconcile_rules import Kind, LegBooks, RestartKind, judge, leg_books, restart_kind
 from ._reconcile_rules import unexplained_by as unexplained_units
+from ._restart_groups import judge_group
 from ._session_saved import Saved, another_instrument, read_saved
 from ._types import LOGGER_NAME, AlertKind
 from ._worker_queue import ReadBooks
@@ -76,7 +81,8 @@ class StartBooks:
 class LegStart:
     """One strategy at the start: its saved state (None: nothing saved today), its journal
     position, the broker's units, the books of its instrument, how the restart judged it
-    and, for a difference, how the reconciler would (`_reconcile_rules.Kind`)."""
+    and, for a difference, how the reconciler would (`_reconcile_rules.Kind`); for a
+    member of a shared instrument, the group it was judged with (`group`, None alone)."""
 
     saved: Saved | None
     journal_units: int
@@ -84,6 +90,19 @@ class LegStart:
     books: LegBooks
     restart: RestartKind
     kind: Kind = Kind.AGREE
+    group: GroupFigure | None = None
+
+
+@dataclass(frozen=True)
+class _Found:
+    """One strategy before it is judged: its spec, saved state, the books of its
+    instrument (readable), the broker's units in them and its journal position."""
+
+    spec: Any
+    saved: Saved | None
+    books: LegBooks
+    broker_units: int
+    journal_units: int
 
 
 @dataclass(frozen=True)
@@ -187,13 +206,12 @@ def _readable(books: Books) -> bool:
 
 
 def judge_start(spec: Any, journal: Any, start: StartBooks, alerts: Any) -> Restart:
-    """Each strategy's journal position judged against the broker's (module docstring).
-    Raises LiveError, once, for the positions a restart cannot resume and the strategies
-    saved on another instrument, naming them."""
+    """Each strategy's journal position judged against the broker's, an instrument several
+    strategies share as one (module docstring). Raises LiveError, once, for the positions
+    a restart cannot resume and the strategies saved on another instrument, naming them."""
     day, books = spec.day, start.books
     own = frozenset(order.order_id for order in journal.bound_orders(day=day))
-    legs: dict[str, LegStart] = {}
-    refused: list[str] = []
+    found: dict[str, _Found] = {}
     moved: list[str] = []
     for each in spec.strategies:
         saved = read_saved(journal.rms_state(each.name, day=day), each.name)
@@ -208,29 +226,73 @@ def judge_start(spec: Any, journal: Any, start: StartBooks, alerts: Any) -> Rest
         if leg.units is None or leg.trades is None:
             raise LiveError(_UNREAD)
         units = _journal_units(saved, journal, day, leg)
-        external = sum(trade.signed for trade in leg.external(own))
-        adopted = 0 if saved is None else saved.adopted
-        unexplained = unexplained_units(units, leg.units, external, adopted)
-        verdict = restart_kind(units, leg.units, unexplained)
-        kind = judge(units, leg.units, unexplained)
-        legs[each.name] = LegStart(saved, units, leg.units, leg, verdict, kind)
-        if verdict is RestartKind.UNKNOWN_POSITION:
-            refused.append(
-                f"OpenAlgo's books show {leg.units} units of {each.symbol} {each.exchange}, "
-                f"which {each.name} trades, and the journal holds none: close them or start "
-                "with another symbol"
-            )
-        elif verdict is RestartKind.UNEXPLAINED_FLAT:
-            refused.append(
-                f"the journal holds {units} units of {each.symbol} {each.exchange} for "
-                f"{each.name}, OpenAlgo's books show none and no trade explains it: check "
-                "the account in OpenAlgo"
-            )
+        found[each.name] = _Found(each, saved, leg, leg.units, units)
+    legs: dict[str, LegStart] = {}
+    refused: list[str] = []
+    for group in instrument_groups((s.name, s.symbol, s.exchange) for s in spec.strategies):
+        members = [found[name] for name in group.members if name in found]
+        if not members:
+            continue
+        starts, refusal = (
+            _judge_shared(group, members, own) if group.shared else _judge_leg(members[0], own)
+        )
+        legs.update({m.spec.name: leg for m, leg in zip(members, starts, strict=True)})
+        refused.extend([] if refusal is None else [refusal])
     if refused or moved:
         positions = ["the start cannot resume: " + "; ".join(refused)] if refused else []
         raise LiveError(". ".join([*positions, *moved]))
     _alert_missing_stops(spec, legs, journal, alerts)
     return Restart(legs, own, books.started_ns)
+
+
+def _judge_leg(found: _Found, own: frozenset[str]) -> tuple[list[LegStart], str | None]:
+    """A strategy alone on its instrument judged against the broker's units (module
+    docstring): its `LegStart`, and the words of its refusal (None when it resumes)."""
+    each, leg, units, broker = found.spec, found.books, found.journal_units, found.broker_units
+    external = sum(trade.signed for trade in leg.external(own))
+    adopted = 0 if found.saved is None else found.saved.adopted
+    unexplained = unexplained_units(units, broker, external, adopted)
+    verdict = restart_kind(units, broker, unexplained)
+    start = LegStart(found.saved, units, broker, leg, verdict, judge(units, broker, unexplained))
+    if verdict is RestartKind.UNKNOWN_POSITION:
+        return [start], (
+            f"OpenAlgo's books show {broker} units of {each.symbol} {each.exchange}, which "
+            f"{each.name} trades, and the journal holds none: close them or start with "
+            "another symbol"
+        )
+    if verdict is RestartKind.UNEXPLAINED_FLAT:
+        return [start], (
+            f"the journal holds {units} units of {each.symbol} {each.exchange} for "
+            f"{each.name}, OpenAlgo's books show none and no trade explains it: check the "
+            "account in OpenAlgo"
+        )
+    return [start], None
+
+
+def _judge_shared(
+    group: InstrumentGroup, members: list[_Found], own: frozenset[str]
+) -> tuple[list[LegStart], str | None]:
+    """The members of a shared instrument judged together (`_restart_groups`): each
+    member's `LegStart`, in `members`' order, and the words of the group's refusal (None
+    when it resumes)."""
+    external = members[0].books.external(own)
+    adopted = sum(0 if m.saved is None else m.saved.adopted for m in members)
+    units = {m.spec.name: m.journal_units for m in members}
+    opened = {m.spec.name: None if m.saved is None else m.saved.opened_ns for m in members}
+    group_start = judge_group(group, units, members[0].broker_units, external, adopted, opened)
+    starts = [
+        LegStart(
+            m.saved,
+            m.journal_units,
+            m.broker_units,
+            m.books,
+            group_start.restart,
+            group_start.kind,
+            group_start.figure,
+        )
+        for m in members
+    ]
+    return starts, group_start.refusal
 
 
 def _journal_units(saved: Saved | None, journal: Any, day: Any, leg: LegBooks) -> int:
@@ -269,28 +331,32 @@ def _alert_missing_stops(
             AlertKind.ERROR,
             f"{each.name}: {leg.journal_units} units of {each.symbol} {each.exchange} have no "
             f"working stop at the broker (stop {order_id or 'not sent'}): "
-            f"{_missing_stop_words(leg)}",
+            f"{_missing_stop_words(leg, each.name)}",
         )
 
 
-def _missing_stop_words(leg: LegStart) -> str:
-    """What the restart does about a resumed leg's missing stop, by how the start judged
-    the leg against the broker's books (module docstring)."""
-    if leg.kind is Kind.EXPLAINED_FLAT:
+def _missing_stop_words(leg: LegStart, name: str) -> str:
+    """What the restart does about strategy `name`'s resumed leg's missing stop, by how
+    the start judged the leg against the broker's books (module docstring); a member of a
+    shared instrument's words name the group and the sum it was judged by, and a member
+    an explained difference leaves flat (its share, `_reconcile_allocate`) is closed."""
+    shown = f"OpenAlgo's books show {leg.broker_units} units"
+    if leg.group is not None:
+        shown += f" for {and_join(leg.group.members)} together, who hold {leg.group.units}"
+    share = None if leg.group is None else leg.group.share(name)
+    if leg.kind is Kind.EXPLAINED_FLAT or (share is not None and share.left == 0):
         return (
             "OpenAlgo's books show the position closed by other orders, which the engine "
             "takes as its own, so no stop is placed"
         )
     if leg.kind is Kind.UNEXPLAINED:
         return (
-            f"OpenAlgo's books show {leg.broker_units} units, which no trade explains, so no "
-            "stop is placed for the journal's units while they disagree: check the account "
-            "in OpenAlgo"
+            f"{shown}, which no trade explains, so no stop is placed for the journal's units "
+            "while they disagree: check the account in OpenAlgo"
         )
     if leg.kind is Kind.OTHER_SIDE:
         return (
-            f"OpenAlgo's books show {leg.broker_units} units, the other side, so no stop is "
-            "placed: close the position by hand in OpenAlgo"
+            f"{shown}, the other side, so no stop is placed: close the position by hand in OpenAlgo"
         )
     return "it is placed again once the engine is restored"
 

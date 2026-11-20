@@ -30,6 +30,15 @@ Over each run's event stream and the fake's log (`session_invariants_stream`):
 8. **Nothing after a guard lock.**
 9. **Priced fills.**
 
+Over each run, of instrument groups (`session_invariants_groups`; 18-multi-strategy 5.1):
+
+10. **I4, the sum rule**, at every change while a run is open (a run whose members'
+    books could be read at none of its changes fails it, and I6).
+11. **I5, isolation**: a kernel takes only its own orders' words, an order is bound to
+    one member only and to the one the fake records it for, and the session makes no
+    member act while another's order word is applied.
+12. **I6, one side**: no two members of a group on opposite sides at any change.
+
 A sale by hand is the one thing a session learns of only by its comparisons, so what one
 leaves at the fake beyond 1 to 6 stands only by a decided end the test names
 (`SessionTrace.kept_stop_by_decision`, `SessionTrace.oversold_by_decision`), each such
@@ -51,6 +60,7 @@ from session_invariants_end import (
     no_orphan,
     working_at_the_end,
 )
+from session_invariants_groups import isolation, one_side, sampled, sum_rule
 from session_invariants_stream import (
     modifies_and_cancels_answered,
     nothing_after_a_guard_lock,
@@ -60,11 +70,15 @@ from session_trace import (
     ANSWERED,
     BOOKS_AGREE,
     GUARD_LOCK,
+    ISOLATION,
     NO_ORPHAN,
+    ONE_SIDE,
     ONE_STOP,
     OTHER_SIDE,
     PRICED,
+    SUM_RULE,
     WITHIN,
+    OrderChange,
     SessionTrace,
 )
 
@@ -127,6 +141,18 @@ def _check(session: SessionTrace, fake: FakeOpenAlgo) -> None:
     )
     if BOOKS_AGREE not in waived and last.outcome is not None:
         books_agree(last, closing, held)
+    if SUM_RULE not in waived:
+        sum_rule(changes, mine)
+    if ONE_SIDE not in waived:
+        one_side(changes)
+    _each_run(session, fake, changes, mine)
+
+
+def _each_run(
+    session: SessionTrace, fake: FakeOpenAlgo, changes: list[OrderChange], mine: frozenset[str]
+) -> None:
+    """7 to 9, I5 and the sample check of I4 and I6 (module docstring), over each run."""
+    waived = session.waived
     for at, run in enumerate(session.runs):
         if ANSWERED not in waived:
             modifies_and_cancels_answered(run)
@@ -137,6 +163,10 @@ def _check(session: SessionTrace, fake: FakeOpenAlgo) -> None:
             nothing_after_a_guard_lock(run, fake, end)
         if PRICED not in waived:
             priced_fills(run, fake)
+        if ISOLATION not in waived:
+            isolation(run, changes, mine)
+        if SUM_RULE not in waived or ONE_SIDE not in waived:
+            sampled(run)
 
 
 __all__ = ["InvariantBroken", "assert_session_invariants"]

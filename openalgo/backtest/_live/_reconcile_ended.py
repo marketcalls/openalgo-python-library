@@ -17,7 +17,10 @@ still confirm what a leg's last one saw.
   time had confirmed it and acted on it while it lasted, so the close names it and counts
   it no more.
 - `broker_units`: OpenAlgo's units of a leg while they differ from the engine's with
-  nothing taking them in.
+  nothing taking them in; of a member of a shared instrument, the net of every strategy
+  of the session that trades it (18-multi-strategy 4.11).
+- `group_units`: the units the members of a shared instrument hold now, which carry its
+  net from the read that saw it (`_reconcile_close.Differing`).
 
 Quantities are signed units. Used by the loop only.
 """
@@ -32,6 +35,7 @@ from ._reconcile_findings import Sighting
 class EndQueries:
     """The close's queries of a `reconcile.Reconciler` (module docstring)."""
 
+    _session: Any
     _findings: Any
     _ended: bool
     guard: Any
@@ -77,6 +81,12 @@ class EndQueries:
         comparison will confirm the difference (`unconfirmed`); else None."""
         guarded, seen = self.guard.broker_units(name), self.unconfirmed(name)
         return guarded if guarded is not None or seen is None else seen.broker_units
+
+    def group_units(self, trader: Any) -> int:
+        """The signed units every strategy of the session that trades `trader`'s instrument
+        holds now, `trader` among them."""
+        members = self._session.groups.members(trader)
+        return sum(round(member.open_units()) for member in members)
 
 
 __all__ = ["EndQueries"]

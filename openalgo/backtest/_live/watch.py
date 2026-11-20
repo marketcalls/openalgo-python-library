@@ -125,16 +125,18 @@ class RiskWatch:
         self.skew.sample(tick, arrived_ns)
 
     def quote(self, message: Quote) -> None:
-        """A REST quote the watch asked for: a price for the kernel of the strategy that
-        trades the instrument and for the stops supervisor's price rule (A.11), through
-        `StopsSupervisor.price`, the one way a price reaches the kernel. A quote no longer
-        asked for (the feed came back meanwhile) is dropped: the ticks are newer."""
+        """A REST quote the watch asked for: a price for the kernel of every strategy that
+        trades the instrument, in call order, and for the stops supervisor's price rule
+        (A.11; 18-multi-strategy 4.3), through `StopsSupervisor.price`, the one way a
+        price reaches the kernel. A quote no longer asked for (the feed came back
+        meanwhile) is dropped: the ticks are newer."""
         session = self._session
-        trader = session.trader_of(message.symbol, message.exchange)
         wanted = (message.symbol, message.exchange) in self._quotes
-        if trader is None or trader.finished or not wanted or message.ltp <= 0:
+        if not wanted or message.ltp <= 0:
             return
-        session.stops.price(trader, float(message.ltp), int(message.read_ns))
+        for trader in session.groups.of(message.symbol, message.exchange):
+            if not trader.finished:
+                session.stops.price(trader, float(message.ltp), int(message.read_ns))
 
     def data_failed(self, message: DataFailed) -> None:
         """A read of the data worker failed: logged; a quote still asked for is an ERROR
@@ -207,7 +209,9 @@ class RiskWatch:
                 session.event("lock", strategy=trader.name, reason=FEED_DEAD_LOCK)
         if session.data is not None:
             session.data.feed_dead()
-        held = [f"{t.symbol} {t.exchange}" for t in session.traders if t.open_units() != 0]
+        held = list(
+            dict.fromkeys(f"{t.symbol} {t.exchange}" for t in session.traders if t.open_units())
+        )
         quotes = (
             f"REST quotes of {', '.join(held)} every {QUOTE_FALLBACK_EVERY_S:g} s keep the "
             "targets and the daily loss watched"

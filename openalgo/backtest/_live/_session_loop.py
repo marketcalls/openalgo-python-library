@@ -4,10 +4,13 @@ the kernel sessions, and its iteration, `Session.step`.
     A. take in what arrived (ticks, the workers' answers, the feed's events), in arrival
        order, a bounded batch (`_session_news`)
     B. close slices by the clock: each bar builder's due slices, released to the kernel
-       in order (`_session_trader`), and the broker candle checks asked for
-    C. drive the kernel sessions to their decisions (`Trader.drive`)
-    D. duties by time: the stops supervisor's (`stops`), the risk watch (`watch`), the
-       reconciler's reads (`reconcile`), the safe stop, the end of the day
+       in order (`_session_trader`), and the broker candle checks asked for, one per
+       instrument (`_session_candles`)
+    C. drive the kernel sessions to their decisions (`Trader.drive`), each member of a
+       shared instrument's group given its gates first (`_groups`)
+    D. duties by time: the stops supervisor's (`stops`), the positions a closing order's
+       rejection holds on a shared instrument (`_margin_reject`), the risk watch
+       (`watch`), the reconciler's reads (`reconcile`), the safe stop, the end of the day
        (`_session_stop.Control`)
     E. hand the kernel's commands to the order worker, each strategy that made any saved
        to journal L first (`_session_saved`, design rule 4), none after a guard lock and
@@ -41,7 +44,10 @@ from typing import Any
 from .._calendar_convert import format_ist
 from .._layout import NANOS_PER_SECOND
 from ..errors import LiveError
+from ._groups import Groups
 from ._guard_breach import ModeBreach, breach_alert, breach_text
+from ._margin_reject import MarginHolds
+from ._session_candles import ask_candles, ask_first_candles
 from ._session_exits import ExitRetries
 from ._session_figures import DayFigures, SessionFigures, StrategyFigures
 from ._session_lag import LoopLag
@@ -104,10 +110,11 @@ class Session:
         self.now, self._sleep, self.threads = now, sleep, threads
         self.stop, self.emit = stop, emit
         self._wait_max_ns = round(wait_max_s * _NS)
-        #: The strategies, in call order (set by the start once their venue maps exist).
-        self.traders: tuple[Trader, ...] = ()
+        self._traders: tuple[Trader, ...] = ()
+        self.groups = Groups((), event=self.event)
         self.news = News(self)
         self.exits = ExitRetries(self)
+        self.margin = MarginHolds(self)
         self.stops = StopsSupervisor(self)
         self.risk = RiskWatch(self)
         self.reconcile = Reconciler(self)
@@ -159,12 +166,15 @@ class Session:
                 return trader
         raise LiveError(f"no strategy {name!r} runs in this session")
 
-    def trader_of(self, symbol: str, exchange: str) -> Trader | None:
-        """The strategy that trades `exchange:symbol`, or None."""
-        for trader in self.traders:
-            if (trader.symbol, trader.exchange) == (symbol, exchange):
-                return trader
-        return None
+    @property
+    def traders(self) -> tuple[Trader, ...]:
+        """The strategies, in call order (set by the start once their venue maps exist),
+        and with them their instrument groups (`groups`)."""
+        return self._traders
+
+    @traders.setter
+    def traders(self, traders: tuple[Trader, ...]) -> None:
+        self._traders, self.groups = traders, Groups(traders, event=self.event)
 
     def event(self, kind: str, **fields: Any) -> None:
         """Write one line to the event stream. One that cannot be written is logged to
@@ -241,11 +251,13 @@ class Session:
         if not protecting:
             released = self._close_slices(self.now())
             for trader in self.traders:
+                self.groups.before_decisions(trader)
                 trader.drive(deciding=self.deciding)
         self.stops.duties(self.now(), protecting=protecting)
         # The commands are taken after the duties, so an entry the safe stop cancels in
         # the step that decided it is withdrawn before it reaches the worker.
         if not protecting:
+            self.margin.duties(self.now())
             self.risk.duties(self.now())
             self.reconcile.duties(self.now())
             if self.control is not None:
@@ -318,29 +330,13 @@ class Session:
             if not closed.slices:
                 continue
             self._closed[exchange] += len(closed.slices)
-            for trader in self.traders:
-                if trader.exchange != exchange:
-                    continue
+            traders = [trader for trader in self.traders if trader.exchange == exchange]
+            for trader in traders:
                 trader.closed(closed.slices, closed.bars)
-                self._check_candles(trader, closed.slices[-1][1])
+            ask_candles(self, traders, closed.slices[-1][1])
         for trader in self.traders:
             self.risk.released(trader, trader.release_due())
         return {t.name for t in self.traders if t.part.released != before[t.name]}
-
-    def _check_candles(self, trader: Trader, closed_ns: int) -> None:
-        wanted = trader.candles.wanted(closed_ns)
-        if wanted and self.data is not None:
-            self.data.check_candles(trader.symbol, trader.exchange, wanted, closed_ns)
-
-    def ask_first_candles(self) -> None:
-        """At the start of watching: ask for the candles of the slices the catch-up still
-        owns and of those marked missing (3.1 step 14)."""
-        now_ns = self.now()
-        for trader in self.traders:
-            wanted = trader.candles.wanted(now_ns)
-            if wanted:
-                closes = [closed for opened, closed in trader.part.slices if opened in wanted]
-                self._check_candles(trader, max(closes))
 
     def _wait(self, until_ns: int | None) -> None:
         now_ns = self.now()
@@ -377,7 +373,7 @@ class Session:
             trader.watch(watching_ns, from_open=watching_ns <= builder.session[0])
             self.event("watching", strategy=trader.name, decide_from_ns=trader.decide_from_ns)
         logger.info("watching the feed from %s", format_ist(watching_ns))
-        self.ask_first_candles()
+        ask_first_candles(self)
 
 
 __all__ = [
