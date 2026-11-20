@@ -209,10 +209,14 @@ class YearRow(NamedTuple):
     benchmark: float
 
 
-def _value_axis(values: list[float], inner_h: float, count: int) -> tuple[scale.Linear, list]:
+def _value_axis(
+    values: list[float], inner_h: float, count: int
+) -> tuple[scale.Linear, list[tuple[float, str]]]:
+    """(the y scale of a percent axis over `values` and 0, its ticks and their labels to
+    as many decimals as the step needs, so a tick at -2.5% reads -2.5%)."""
     low, high = min(0.0, *values), max(0.0, *values)
     low, high = scale.widen(low, high)
-    return scale.Linear(low, high, inner_h, 0), scale.ticks(low, high, count)
+    return scale.Linear(low, high, inner_h, 0), tick_texts(low, high, count, percent=True)
 
 
 def yearly_bars(rows: Sequence[YearRow], benchmark_name: str | None) -> str:
@@ -247,9 +251,8 @@ def yearly_bars(rows: Sequence[YearRow], benchmark_name: str | None) -> str:
     ]
     marks += [
         f"<line x1='0' x2='{inner_w}' y1='{y(t):.2f}' y2='{y(t):.2f}' class='grid'/>"
-        f"<text x='-8' y='{y(t) + 3:.2f}' text-anchor='end' style='{AXIS_TEXT}'>"
-        f"{fmt.percent(t, 0)}</text>"
-        for t in ticks
+        f"<text x='-8' y='{y(t) + 3:.2f}' text-anchor='end' style='{AXIS_TEXT}'>{label}</text>"
+        for t, label in ticks
     ]
     mean = float(np.mean(values[: len(data)]))
     marks.append(f"<line x1='0' x2='{inner_w}' y1='{y(0):.2f}' y2='{y(0):.2f}' class='base'/>")

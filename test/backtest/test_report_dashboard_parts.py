@@ -151,14 +151,31 @@ def test_a_monthly_cell_that_rounds_to_zero_reads_without_a_sign():
     assert re.search(r"title='Jan 2026: -0\.04%' style='[^']*'>0\.0</div>", page)
 
 
-def test_yearly_bars_read_no_minus_zero():
-    # A year of -3% puts the axis at -3% to 0 in steps of 0.5%, labelled in whole percents:
-    # the tick at -0.5% reads 0%. A year of -0.003% reads 0.00% in its bar's title.
+def yearly_axis_labels(chart: str) -> list[str]:
+    """The value-axis labels of a yearly returns chart, lowest first."""
+    return re.findall(r"text-anchor='end' style='[^']*'>([^<]*)</text>", chart)
+
+
+@pytest.mark.parametrize(
+    ("returns", "labels"),
+    [
+        # -3% and -0.003%: the axis runs -3% to 0 in steps of 0.5%, so each label needs
+        # one decimal, and the tick at 0 reads 0.0%, with no sign.
+        ((-0.03, -0.00003), ["-3.0%", "-2.5%", "-2.0%", "-1.5%", "-1.0%", "-0.5%", "0.0%"]),
+        # -10% and 30%: steps of 5% need none.
+        ((-0.10, 0.30), ["-10%", "-5%", "0%", "5%", "10%", "15%", "20%", "25%", "30%"]),
+    ],
+    ids=["half-percent steps", "whole-percent steps"],
+)
+def test_the_yearly_axis_labels_each_tick_with_its_own_value(returns, labels):
+    rows = [bars.YearRow(2025 + k, value, math.nan) for k, value in enumerate(returns)]
+    assert yearly_axis_labels(bars.yearly_bars(rows, None)) == labels
+
+
+def test_a_year_that_rounds_to_zero_reads_without_a_sign_in_its_bars_title():
+    # -0.003% reads 0.00% at two places.
     rows = [bars.YearRow(2025, -0.03, math.nan), bars.YearRow(2026, -0.00003, math.nan)]
-    chart = bars.yearly_bars(rows, None)
-    labels = re.findall(r"text-anchor='end' style='[^']*'>([^<]*)</text>", chart)
-    assert "-0%" not in labels and labels[-2:] == ["0%", "0%"]
-    assert "<title>2026 Strategy: 0.00%</title>" in chart
+    assert "<title>2026 Strategy: 0.00%</title>" in bars.yearly_bars(rows, None)
 
 
 def test_weeks_compound_their_sessions_and_are_named_by_their_sunday():
