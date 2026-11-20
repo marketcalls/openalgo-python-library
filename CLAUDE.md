@@ -36,6 +36,31 @@ do not reformat or restyle the surrounding code. New code under the backtest pat
 follows the detailed rules in "Code standards for the backtest package" below. Work
 produced by agents is reviewed independently before it is committed.
 
+## No third-party brand names (whole repository, every commit)
+
+Never name a third-party product or brand anywhere in this repository or in anything
+published from it (maintainer, 2026-11-21). That covers code, identifiers, comments,
+docstrings, error and log messages, tests, benchmarks, data files, docs, README,
+`CHANGELOG.md`, commit messages (merge commits included), branch and tag names, pull
+request titles and bodies, and GitHub release notes. It covers trading and charting
+platforms, their scripting languages, other backtesting or trading engines, indicator
+libraries and market-data downloaders, also as abbreviations or suffixes of identifiers.
+Describe what the code computes instead of whose output it matches. Named freely:
+OpenAlgo and its own products, exchanges, regulators, brokers where they are functional
+identifiers (a cost preset, a broker adapter), and the technical dependencies (Python,
+Rust, NumPy, pandas, PyO3).
+
+- Commits made before 2026-11-21 are left as they are: the history and the release tags
+  are not rewritten. The rule binds every commit from 2026-11-21 on.
+- The local hooks enforce it: `.git/hooks/pre-commit` refuses added lines and
+  `.git/hooks/commit-msg` refuses a message that match the pattern list in
+  `.git/hooks/brand-names.txt`. The list stays outside the repository because it names
+  the brands. Worktrees share these hooks. Never bypass them with `--no-verify`; a fresh
+  clone has no hooks until they are copied into its `.git/hooks`.
+- Check what the hooks do not see against the same list by hand before it goes out: pull
+  request bodies, release notes, tag messages, and any text an agent wrote that is pasted
+  into a commit message.
+
 ## Architecture
 
 The public entry point is `openalgo.api`, which composes every REST mixin via
@@ -229,15 +254,8 @@ These apply to every change under the four paths above.
   implementation.
 - No dead code, no commented-out code, and no abstraction for a feature that is not
   being built yet.
-- Original code only, described in its own terms. Never name a third-party product or
-  brand anywhere in the repository: code, identifiers, comments, docstrings, error
-  messages, tests, benchmarks, data files, docs, the changelog or commit messages.
-  That covers trading and charting platforms, their scripting languages, other
-  backtesting or trading engines, indicator libraries and market-data downloaders,
-  also as abbreviations or suffixes of identifiers. Describe what the code computes
-  instead of whose output it matches. Named freely: OpenAlgo and its own products, exchanges,
-  regulators, brokers where they are functional identifiers (a cost preset, a broker
-  adapter), and the technical dependencies (Python, Rust, NumPy, pandas, PyO3).
+- Original code only, described in its own terms, with no third-party product or brand
+  named anywhere (see "No third-party brand names" above).
 
 Checks to run before committing:
 
