@@ -10,7 +10,8 @@ own daily bars with no server, in this process.
 
 import itertools
 import math
-import weakref
+import tracemalloc
+from collections.abc import Callable
 
 import numpy as np
 import pandas as pd
@@ -27,7 +28,7 @@ from test_report_tearsheet import FORBIDDEN_NAME_HASHES, Structure, section_ids
 
 import openalgo.backtest as bt
 from openalgo.backtest._robust._verdict import FAILED, NOT_JUDGED, PASSED
-from openalgo.backtest._sweep_pool import Measured
+from openalgo.backtest._sweep_returns import ReturnsMatrix
 from openalgo.backtest.errors import ConfigError
 
 SESSIONS = 300
@@ -89,64 +90,106 @@ def test_the_sweep_keeps_its_session_returns_as_one_array(spike):
     assert returns.nbytes == 8 * SESSIONS * 5
 
 
-def _measured(days: list[str], values: list[float]) -> Measured:
-    return Measured({}, pd.Series(values, index=pd.DatetimeIndex(days)))
+def returns_array(*combinations: tuple[list[str], list[float]]) -> list[list[float]]:
+    """The sweep's returns array of combinations given as (session dates, returns), in
+    grid order."""
+    built = ReturnsMatrix(len(combinations))
+    for days, values in combinations:
+        built.add(pd.Series(values, index=pd.DatetimeIndex(days)))
+    return built.array().tolist()
 
 
-def test_session_returns_on_the_same_sessions_stand_side_by_side():
-    from openalgo.backtest._sweep_pool import returns_matrix
-
-    days = ["2025-01-01", "2025-01-02", "2025-01-03"]
-    matrix = returns_matrix(
-        [_measured(days, [0.01, 0.02, 0.03]), _measured(days, [0.0, -0.01, 0.0])]
-    )
-    assert matrix.tolist() == [[0.01, 0.0], [0.02, -0.01], [0.03, 0.0]]
-
-
-def test_a_session_a_combination_has_no_return_for_counts_zero():
-    from openalgo.backtest._sweep_pool import returns_matrix
-
-    first = _measured(["2025-01-01", "2025-01-03"], [0.01, 0.03])
-    second = _measured(["2025-01-02", "2025-01-03"], [0.02, -0.01])
-    assert returns_matrix([first, second]).tolist() == [[0.01, 0.0], [0.0, 0.02], [0.03, -0.01]]
-
-
-def _copies_seen_alive(sessions: list[list[str]]) -> tuple[list[int], list[Measured]]:
-    """Four combinations' returns on `sessions[k % len(sessions)]`, made into the matrix:
-    how many of the four Series were alive each time one was copied, and the list the
-    matrix was made from, afterwards."""
-    alive: list[weakref.ref] = []
-    seen: list[int] = []
-
-    class Counted(pd.Series):
-        """Session returns that count the Series still alive when they are copied."""
-
-        def to_numpy(self, *args, **kwargs):
-            seen.append(sum(ref() is not None for ref in alive))
-            return super().to_numpy(*args, **kwargs)
-
-    measured = []
-    for k in range(4):
-        days = sessions[k % len(sessions)]
-        measured.append(Measured({}, Counted([0.01 * k] * len(days), index=pd.DatetimeIndex(days))))
-    alive.extend(weakref.ref(kept.returns) for kept in measured)
-    from openalgo.backtest._sweep_pool import returns_matrix
-
-    returns_matrix(measured)
-    return seen, measured
+JAN = ["2025-01-01", "2025-01-02", "2025-01-03"]
 
 
 @pytest.mark.parametrize(
-    "sessions",
-    [[["2025-01-01", "2025-01-02"]], [["2025-01-01", "2025-01-02"], ["2025-01-02", "2025-01-03"]]],
-    ids=["the same sessions", "other sessions"],
+    ("combinations", "array"),
+    [
+        # The same sessions stand side by side, a missing number kept as it is.
+        (
+            [(JAN, [0.01, 0.02, 0.03]), (JAN, [0.0, -0.01, math.nan])],
+            [[0.01, 0.0], [0.02, -0.01], [0.03, math.nan]],
+        ),
+        # The second has no return on 2 January: it counts 0 there, as its missing one.
+        (
+            [(JAN, [0.01, 0.02, 0.03]), (JAN[::2], [math.nan, -0.01])],
+            [[0.01, 0.0], [0.02, 0.0], [0.03, -0.01]],
+        ),
+        # The second brings 2 January, a session the first lacks: the array grows to it
+        # in date order, the first counting 0 there.
+        (
+            [(JAN[::2], [0.01, 0.03]), (JAN[1:], [0.02, -0.01])],
+            [[0.01, 0.0], [0.0, 0.02], [0.03, -0.01]],
+        ),
+        # Grown after a combination on the first's sessions, which keeps its column.
+        (
+            [(JAN[:2], [0.01, 0.02]), (JAN[:2], [0.04, 0.05]), (JAN, [0.1, 0.2, 0.3])],
+            [[0.01, 0.04, 0.1], [0.02, 0.05, 0.2], [0.0, 0.0, 0.3]],
+        ),
+    ],
+    ids=["the same sessions", "fewer sessions", "a new session", "a new session later"],
 )
-def test_the_returns_matrix_lets_each_combinations_returns_go_once_copied(sessions):
-    # The last combination is copied first, while all four are alive; each copied one is
-    # let go before the next is read, so a sweep never holds its returns twice over.
-    seen, measured = _copies_seen_alive(sessions)
-    assert seen == [4, 3, 2, 1]
-    assert measured == []
+def test_the_sweeps_returns_array_holds_each_combination_on_its_sessions(combinations, array):
+    np.testing.assert_array_equal(returns_array(*combinations), array)
+
+
+def test_a_sweep_with_nothing_measured_has_an_empty_returns_array():
+    assert ReturnsMatrix(0).array().shape == (0, 0)
+
+
+#: The size of the array the peak tests build: 200 combinations of 1,000 sessions, 1.6 MB.
+PEAK_COMBINATIONS, PEAK_SESSIONS = 200, 1_000
+#: A trading day of the peak tests' first session.
+PEAK_START = "2022-01-03"
+
+
+def built_peak(sessions_of: Callable[[int], pd.DatetimeIndex]) -> float:
+    """The most traced memory building the returns array takes, from the first
+    combination measured to the array made, over the array's size. Each combination's
+    returns (on `sessions_of(position)`) are made as its run would end, a Series with its
+    own session index, added, and let go, as a sweep does."""
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        before = tracemalloc.get_traced_memory()[0]
+        built = ReturnsMatrix(PEAK_COMBINATIONS)
+        for position in range(PEAK_COMBINATIONS):
+            sessions = sessions_of(position)
+            built.add(pd.Series(np.full(len(sessions), 0.001 * position), index=sessions))
+        array = built.array()
+        peak = tracemalloc.get_traced_memory()[1] - before
+    finally:
+        tracemalloc.stop()
+    return peak / array.nbytes
+
+
+def every_session(position: int) -> pd.DatetimeIndex:
+    return pd.bdate_range(PEAK_START, periods=PEAK_SESSIONS)
+
+
+def all_but_the_first_ten_after_the_first(position: int) -> pd.DatetimeIndex:
+    """Every session for the first combination; the others start trading ten sessions
+    later."""
+    return every_session(position)[0 if position == 0 else 10 :]
+
+
+def ten_more_after_the_first(position: int) -> pd.DatetimeIndex:
+    """The first combination starts trading ten sessions later than the others."""
+    return every_session(position)[10 if position == 0 else 0 :]
+
+
+@pytest.mark.parametrize(
+    "sessions_of",
+    [every_session, all_but_the_first_ten_after_the_first, ten_more_after_the_first],
+    ids=["the same sessions", "fewer sessions", "new sessions"],
+)
+def test_building_the_returns_array_holds_little_more_than_the_array(sessions_of):
+    # Each combination's returns are copied into the array as they come back and let go,
+    # so the build never holds them all beside it (which takes twice the array): at most
+    # the array, one combination's Series and the session index, 20 percent over at most.
+    # The second combination's new sessions grow the array while one column is filled,
+    # and only that column is held twice.
+    assert built_peak(sessions_of) < 1.2
 
 
 def test_a_best_that_dominates_every_block_never_overfits(spike):
