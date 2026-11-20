@@ -31,6 +31,9 @@
 //!   when rejected, `unprotected` otherwise). A stop that filled all its units while the
 //!   leg holds more (an add not covered yet) exits the rest at market (`stop_unfilled`).
 //!   Nothing is sent while the market is closed.
+//! - **Rejected for margin** (`apply_margin_reject`, `venue_group`): the broker may not
+//!   hold the units, so the leg is neither exited at market nor protected again; the
+//!   session's `protect` re-places the stop.
 //! - **Cancelled for an exit** (or by the strategy), the stop is not placed again by the
 //!   kernel: the session's `protect` re-places it (`venue_protect`).
 //! - **Repriced** to a LIMIT by the session's price rule (`venue_protect`), it no longer
@@ -88,18 +91,23 @@ pub(super) enum StopEnd {
     Canceled { requested: bool },
     /// It filled all its units.
     Filled,
+    /// The venue rejected it, and the session took the rejection as the broker not holding
+    /// the units (`venue_group`): the leg is neither exited nor protected again.
+    MarginRejected,
 }
 
 impl Engine {
-    /// A leg opened at `key`: its stop is placed once it has a level (module docs), and
-    /// none of its targets has fired (`venue_ticks`). A stop of an earlier leg of the
-    /// position is no longer the leg's: a new leg opens from flat only once no such stop
-    /// works (`venue_gates`), and a reversal cancels it first or leaves it on the side that
-    /// no longer closes, where it is cancelled (`venue_cover`).
+    /// A leg opened at `key`: its stop is placed once it has a level (module docs), none
+    /// of its targets has fired (`venue_ticks`), and an engine exit of an earlier leg that
+    /// a margin rejection held back no longer holds (`venue_group`). A stop of an earlier
+    /// leg of the position is no longer the leg's: a new leg opens from flat only once no
+    /// such stop works (`venue_gates`), and a reversal cancels it first or leaves it on the
+    /// side that no longer closes, where it is cancelled (`venue_cover`).
     pub(super) fn open_leg_stop(&mut self, key: PositionKey) {
         self.venue.leg_stops.retain(|stop| stop.key != key);
         self.venue.leg_stops.push(LegStop::new(key));
         self.venue.fired_targets.retain(|(known, _)| *known != key);
+        self.venue.group.release_exit(key);
     }
 
     /// The leg's stop record of `key`, if the session keeps one.
@@ -311,7 +319,7 @@ impl Engine {
             return Ok(());
         }
         let reason = match (how, stop.replaced) {
-            (StopEnd::Canceled { requested: true }, _) => return Ok(()),
+            (StopEnd::Canceled { requested: true } | StopEnd::MarginRejected, _) => return Ok(()),
             (StopEnd::Canceled { requested: false }, false) => {
                 self.renew_leg_stop(key, true);
                 return self.sync_leg_stop(at, key);

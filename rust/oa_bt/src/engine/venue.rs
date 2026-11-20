@@ -61,7 +61,10 @@
 //!   cancellation while waiting, the entry locks, the cap on the sizing equity, the daily
 //!   loss measure, and the stop of the session where it stands. **The entry gates** a
 //!   session adds at submission (`venue_gates`): the entry locks, nothing in flight on the
-//!   instrument, a position at most the freeze quantity.
+//!   instrument, a position at most the freeze quantity. **An instrument several
+//!   strategies trade** (`venue_group`): the side its other strategies hold, market orders
+//!   only, and a closing order's margin rejection, after which the kernel sends nothing
+//!   for it by itself.
 //! - **Leg rules** (`stop=`, `target=`, trailing and breakeven, decision D31). The broker
 //!   holds a leg's stop as an order (`venue_legs`): placed when the leg has a stop level,
 //!   its units and trigger kept on the leg's, a partial exit sent once it has been cut down
@@ -89,6 +92,7 @@ use super::config::{QuantityMode, RunConfig};
 use super::error::KernelError;
 use super::event::{EventStamp, Step};
 use super::kernel::Engine;
+use super::venue_group::GroupDesk;
 use super::venue_legs::LegStop;
 use super::venue_roles::{EngineExit, OrderRole};
 use super::venue_session::SessionControls;
@@ -232,6 +236,9 @@ pub(super) struct VenueDesk {
     pub(super) roles: Vec<(OrderId, OrderRole)>,
     /// The session's entry locks and sizing cap (`venue_session`).
     pub(super) controls: SessionControls,
+    /// The gates the session set on a shared instrument, and the engine exits a margin
+    /// rejection holds back (`venue_group`).
+    pub(super) group: GroupDesk,
     /// The legs' broker-held stops, in the order the legs opened (`venue_legs`).
     pub(super) leg_stops: Vec<LegStop>,
     /// The target each of the engine's target exits fills, by order (`venue_ticks`).

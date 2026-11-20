@@ -12,8 +12,14 @@
 //! in UTC nanoseconds), `apply_reject(order_id, reason)` (a reject code: "venue", or a
 //! kernel code such as "margin") and `apply_cancel(order_id)`, and the broker's answers to
 //! what it was sent with `apply_cancel_refused(order_id)`, `apply_modify(order_id)` and
-//! `apply_modify_refused(order_id)`. Every fill of an order is passed before its terminal
-//! result (`apply_cancel`, `apply_reject`): after it the order takes no more. A result the
+//! `apply_modify_refused(order_id)`. A closing order (a leg's stop, an exit, the engine's
+//! exit) whose rejection says the broker may not hold its units goes to
+//! `apply_margin_reject(order_id)` instead of `apply_reject`: it ends rejected with the
+//! reject code "venue", and the kernel neither exits the leg at market, nor places its
+//! stop again, nor sends its own exit again at later opens until the session asks for an
+//! exit or `protect`; an entry or add raises `NativeEngineInputError`. Every fill of an
+//! order is passed before its terminal result (`apply_cancel`, `apply_reject`,
+//! `apply_margin_reject`): after it the order takes no more. A result the
 //! kernel refuses raises `openalgo.backtest.errors.VenueRefusalError`, whose `kind` says
 //! why (one of the module's `VENUE_REFUSAL_KINDS`), and changes nothing, except a fill
 //! beyond the position of an order that may not reverse it (kind "would_reverse"): the

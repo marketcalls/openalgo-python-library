@@ -7,7 +7,9 @@ and `exit_cover` are a live session's: the broker's own rejection of an order, a
 reduce-only order that would leave more units resting to close a position than it has
 (`rust/oa_bt/src/engine/venue_cover.rs`). So are `live_lock` and `live_in_flight`, the
 entry gates a live session adds (`rust/oa_bt/src/engine/venue_gates.rs`), and the freeze
-quantity is a cap on the whole position there, not only on each order. `account_margin` and
+quantity is a cap on the whole position there, not only on each order; and
+`group_other_side` and `shared_resting`, its gates on a symbol several of its strategies
+trade (`rust/oa_bt/src/engine/venue_group.rs`). `account_margin` and
 `account_loss_gate` are a portfolio run's: the shared account's free cash refusing an
 opening fill, or a sized order at its submission, that the strategy's own free cash
 covers, and the account's daily loss limit
@@ -157,6 +159,19 @@ REASONS = MappingProxyType(
             "enter, add or close once the earlier order has filled or been cancelled: "
             "check self.orders and self.position in on_bar, and close a position with "
             "self.exit(), which cancels the orders on its closing side first",
+        ),
+        "group_other_side": (
+            "another strategy of the live session holds the symbol, or is entering it, on "
+            "the other side: a broker nets the two into one position, so a position on the "
+            "other side is refused",
+            "exit first, or trade the other side in its own session on another account",
+        ),
+        "shared_resting": (
+            "the symbol is traded by several strategies of the live session, which take "
+            "only market orders there: a resting LIMIT, SL or SL-M order would keep their "
+            "combined position from being checked against the broker's",
+            "use market orders on that symbol; targets and the leg's stop (target=, stop=) "
+            "are held for you",
         ),
     }
 )

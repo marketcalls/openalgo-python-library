@@ -45,7 +45,11 @@ impl Engine {
         self.end_at_venue(order, OrderAction::Cancel, OrderEventKind::Canceled, how)
     }
 
-    fn end_at_venue(
+    /// End `order` at the venue with `action` and its event `kind`, then protect the leg
+    /// as `how` the stop ended says (`venue_legs`) and move the exits on (`after_result`).
+    ///
+    /// Errors: those of `apply_reject`.
+    pub(super) fn end_at_venue(
         &mut self,
         order: OrderId,
         action: OrderAction,

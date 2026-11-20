@@ -161,6 +161,8 @@ impl Engine {
             instrument,
             product,
         };
+        // The session asks: an exit a margin rejection held back may go again later.
+        self.venue.group.release_exit(key);
         if self.held_units(key) == 0.0 {
             return Ok(ExitRequest::Flat);
         }

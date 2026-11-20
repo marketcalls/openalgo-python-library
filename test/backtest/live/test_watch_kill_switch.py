@@ -98,6 +98,12 @@ def test_F46_the_kill_switch_exits_both_positions_as_risk_exits(world):
     assert (world.fake.position("SBIN", "NSE"), world.fake.position("INFY", "NSE")) == (0, 0)
 
 
+def test_F46_the_trades_the_kill_switch_closes_record_the_account_loss_limit(world):
+    outcome = run(world, [HoldSbin, HoldInfy], account_max_daily_loss=ACCOUNT_LIMIT)
+    for name in ("HoldSbin", "HoldInfy"):
+        assert outcome.outputs[name]["trades"]["exit_reason"] == ["account_loss_limit"]
+
+
 def test_F46_entries_stay_locked_for_the_day_after_the_kill_switch(world):
     outcome = run(world, [HoldSbin, HoldInfy], account_max_daily_loss=ACCOUNT_LIMIT)
     assert placed_after(world, "BUY", FALL_AT) == []
