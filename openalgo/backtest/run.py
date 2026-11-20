@@ -28,7 +28,8 @@ How a backtest runs (the Python half of the design in `rust/oa_bt/src/engine/mod
    Assumptions block, the warnings, the manifest (`_manifest`) and `rerun` (`_rerun`).
 
 A list of strategies is a portfolio run on one account (`_portfolio_run`): each strategy
-goes through steps 1 to 3 as it would alone, the native fund advances their engines
+goes through steps 1 to 3 as it would alone (every strategy's settings checked before any
+strategy's data is loaded, `_run_check`), the native fund advances their engines
 together over the account (`_portfolio_driver`), and step 5 gives each strategy's
 `Result` and the account's `PortfolioResult`. A single strategy never reaches the fund.
 
@@ -218,11 +219,18 @@ def backtest(
     and rules); they meet only through the account, and at one step of one instant the
     first in the list acts first. Two strategies may trade one symbol, on either side.
     These take one value for every strategy, or a dict by strategy class name that names
-    every strategy (`params` may leave one out: it keeps its defaults): `capital`,
-    `params`, `product`, `base`, `max_daily_loss`, `after_risk_exit`, `max_positions`,
-    `drawdown_halt`, `cooldown`, `entry_from`, `entry_until` and `square_off`; a class
-    attribute of the same name still wins. Every other argument is the run's: one value,
-    and `data` as a dict by symbol feeds every strategy that trades the symbol.
+    every strategy: `capital`, `product`, `base`, `max_daily_loss`, `after_risk_exit`,
+    `max_positions`, `drawdown_halt`, `cooldown`, `entry_from`, `entry_until` and
+    `square_off`; a class attribute of the same name still wins. `params` is a dict by
+    strategy class name (one left out keeps its defaults); a list of one strategy takes
+    that strategy's own values, as a class does. Every other argument is the run's: one
+    value. Of those keyed by what is traded, each strategy is given the entries of what it
+    trades: `data` and `corporate_actions` by symbol, `instrument` by symbol (a futures
+    strategy the contracts of its underlying) and `margin` by underlying; an instrument or
+    corporate action no strategy trades is refused, a `margin=` no strategy uses is a
+    warning of the run, and one table of bars or one list of corporate actions is refused
+    when the strategies trade more than one symbol between them. Every strategy's
+    settings are checked before any data is loaded.
 
     pool: "shared" (the default): one account; an opening fill needs its margin within the
         strategy's own free cash and within the account's free cash (else it is refused

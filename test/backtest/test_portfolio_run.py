@@ -12,7 +12,9 @@ from __future__ import annotations
 import datetime as dt
 import re
 import warnings
+from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 from portfolio_samples import DAYS, DailyScript, Scripted, flat_bars, no_costs, stepped_bars
@@ -28,8 +30,11 @@ from strategy_samples import (
 )
 
 import openalgo.backtest as bt
+from openalgo.backtest import portfolio_result
+from openalgo.backtest.data import CorporateAction
 from openalgo.backtest.errors import ConfigError, OrdersNotPlacedWarning
 from openalgo.backtest.portfolio_result import PORTFOLIO_TABLES
+from openalgo.backtest.reference import Instrument
 
 LAKH = 100_000
 
@@ -176,10 +181,63 @@ def test_every_table_is_exported_the_strategies_prefixed_by_name(contention, tmp
     assert pd.read_csv(tmp_path / "contribution.csv")["strategy"].tolist() == ["First", "Second"]
 
 
-def test_a_shared_account_of_the_sum_of_the_capitals_rarely_binds():
-    # The same two buys on Rs 2,00,000: after First's fill the account has
-    # 2,00,000 - 2,00,000 + 40,000 + 1,00,000 = 1,40,000 free, enough for Second.
-    pf = bt.backtest([First, Second], data={"SBIN": flat_bars(100.0)}, capital=LAKH, **no_costs())
+class SbinBreakoutStrategy(Scripted):
+    """A strategy whose class name is 20 characters long."""
+
+
+class InfyBreakoutStrategy(Scripted):
+    symbol = "INFY"
+
+
+#: The most characters the sheet name of a workbook may hold.
+SHEET_NAME_LIMIT = 31
+
+
+@pytest.fixture(scope="module")
+def long_names():
+    data = {"SBIN": flat_bars(100.0), "INFY": flat_bars(200.0)}
+    strategies = [SbinBreakoutStrategy, InfyBreakoutStrategy]
+    return bt.backtest(strategies, data=data, capital=LAKH, **no_costs())
+
+
+def test_a_workbook_names_each_strategy_sheets_by_its_place_within_the_name_limit(
+    long_names, monkeypatch, tmp_path
+):
+    written = {}
+
+    def capture(tables, path):
+        written.update(tables)
+        return Path(path)
+
+    monkeypatch.setattr(portfolio_result, "write_excel", capture)
+    long_names.to_excel(tmp_path / "portfolio.xlsx")
+    assert max(len(name) for name in written) <= SHEET_NAME_LIMIT
+    assert list(written)[: len(PORTFOLIO_TABLES)] == list(PORTFOLIO_TABLES)
+    assert written["strategies"].to_dict("records") == [
+        {"sheet_prefix": "S1", "strategy": "SbinBreakoutStrategy"},
+        {"sheet_prefix": "S2", "strategy": "InfyBreakoutStrategy"},
+    ]
+    own = long_names.strategy("InfyBreakoutStrategy").contract_notes
+    pd.testing.assert_frame_equal(written["S2_contract_notes"], own)
+
+
+def test_a_workbook_holds_a_sheet_for_every_table(long_names, tmp_path):
+    pytest.importorskip("openpyxl")
+    path = long_names.to_excel(tmp_path / "portfolio.xlsx")
+    sheets = pd.ExcelFile(path).sheet_names
+    own = list(long_names.strategy("SbinBreakoutStrategy").to_dataframes())
+    expected = [*PORTFOLIO_TABLES, "strategies"]
+    expected += [f"S{place}_{table}" for place in (1, 2) for table in own]
+    assert sheets == expected
+
+
+@pytest.mark.parametrize("given", [{}, {"account_capital": 2 * LAKH}], ids=["default", "given"])
+def test_a_shared_account_of_the_sum_of_the_capitals_rarely_binds(given):
+    # The same two buys on Rs 2,00,000, the sum of the capitals whether left out or given:
+    # after First's fill the account has 2,00,000 - 2,00,000 + 40,000 + 1,00,000 = 1,40,000
+    # free, enough for Second.
+    data = {"SBIN": flat_bars(100.0)}
+    pf = bt.backtest([First, Second], data=data, capital=LAKH, **given, **no_costs())
     assert pf.refused.empty
     assert pf.account.loc[ist(9, 17), "free_cash_rupees"] == 80_000.0
     assert pf.assumptions["account"] == (
@@ -516,6 +574,44 @@ def test_the_correlation_of_two_strategies_on_opposite_sides_is_minus_one():
     assert pf.contribution["net_pnl_rupees"].tolist() == [500.0, -500.0]
 
 
+class InfyOnTheLastDay(DailyScript):
+    """Buys 10 INFY at the third session's close; it fills at the fourth session's open."""
+
+    symbol, buy_on = "INFY", 3
+
+
+def test_a_daily_strategy_margin_at_the_account_peak_counts_its_fill_at_the_session_open():
+    # Four sessions of SBIN at 100.00: LongDaily blocks 100 x 100.00 = 10,000 from each
+    # 09:16 open to the 15:10 square-off. The daily strategy's INFY buy fills at the 4 July
+    # 09:15 open at 103.00 (the fourth daily bar opens at 100 + 3), blocking 1,030 from
+    # then on. The account's margin is highest, 11,030, first at the round closing at 09:17
+    # on 4 July, and the strategies' margins there add up to it.
+    minutes = pd.concat([flat_bars(100.0, day=day) for day in DAYS])
+    data = {"SBIN": minutes, "INFY": daily_bars(DAYS)}
+    pf = bt.backtest([LongDaily, InfyOnTheLastDay], data=data, capital=LAKH, **no_costs())
+    margins = pf.account["margin_rupees"]
+    assert (margins.max(), margins.idxmax()) == (11_030.0, ist(9, 17, DAYS[3]))
+    assert pf.contribution["peak_margin_rupees"].tolist() == [10_000.0, 1_030.0]
+
+
+class Loser(Scripted):
+    qty = 600
+
+
+class Idle(Scripted):
+    entries = 0
+
+
+def test_a_strategy_with_no_pnl_has_a_share_of_zero_when_the_account_lost():
+    # Loser holds 600 SBIN bought at 100.00 to the 15:10 square-off at 95.00: -3,000, the
+    # account's net P&L. Idle never trades: 0 of -3,000 is a share of 0 percent, not -0.
+    data = {"SBIN": stepped_bars(100.0, 95.0, 10)}
+    pf = bt.backtest([Loser, Idle], data=data, capital=LAKH, **no_costs())
+    shares = pf.contribution["share_pct"]
+    assert shares.tolist() == [100.0, 0.0]
+    assert not np.signbit(shares["Idle"])
+
+
 # ----- refused before any data is loaded --------------------------------------------------
 
 
@@ -523,6 +619,9 @@ class OnInfy(Scripted):
     symbol = "INFY"
 
 
+#: The run's dates, for rows whose refusal comes from a strategy's own settings: without
+#: them the first strategy's would be refused for its dates.
+DATES = {"start": DAY, "end": DAY}
 REFUSED = [
     ("pool unknown", {"pool": "pooled"}, ConfigError, "pool takes 'shared' or 'separate'"),
     (
@@ -556,6 +655,42 @@ REFUSED = [
         ConfigError,
         "the strategies trade INFY, SBIN: give data= as a dict of bars by symbol",
     ),
+    (
+        "corporate actions as one list for two symbols",
+        {"corporate_actions": [CorporateAction.none(DAY)]},
+        ConfigError,
+        "the strategies trade INFY, SBIN: give corporate_actions= as a dict by symbol",
+    ),
+    (
+        "corporate actions of a symbol no strategy trades",
+        {"corporate_actions": {"TCS": [CorporateAction.none(DAY)]}},
+        ConfigError,
+        "corporate_actions names ['TCS'], which no strategy of the run trades (INFY, SBIN)",
+    ),
+    (
+        "an instrument no strategy trades",
+        {"instrument": Instrument.cash_equity("TCS", "NSE")},
+        ConfigError,
+        "instrument= gives TCS, which no strategy of the run trades (INFY, SBIN)",
+    ),
+    (
+        "max_positions of the second strategy",
+        {**DATES, "max_positions": {"First": 1, "OnInfy": -1}},
+        ConfigError,
+        "max_positions takes a positive whole number of positions, got -1",
+    ),
+    (
+        "product of the second strategy",
+        {**DATES, "product": {"First": "MIS", "OnInfy": "XYZ"}},
+        ConfigError,
+        "product takes one of ('CNC', 'MIS', 'NRML'), got 'XYZ'",
+    ),
+    (
+        "entry window of the second strategy",
+        {**DATES, "entry_from": {"First": "09:30", "OnInfy": "25:99"}},
+        ConfigError,
+        "cannot read '25:99' as the entry_from time",
+    ),
 ]
 
 
@@ -565,7 +700,9 @@ REFUSED = [
     ids=[row[0] for row in REFUSED],
 )
 def test_a_portfolio_run_refuses_unusable_arguments_before_loading_data(given, error, words):
-    # No data and no client: a refusal after the checks would be the data layer's.
+    # No data and no client: a refusal after the checks would be the data layer's, for the
+    # missing source. Every strategy's settings are checked before any strategy's data is
+    # loaded.
     arguments = {"capital": LAKH, **given}
     with pytest.raises(error, match=re.escape(words)):
         bt.backtest([First, OnInfy], **arguments)
@@ -603,6 +740,22 @@ def test_a_strategy_the_run_does_not_have_is_a_key_error_naming_them(contention)
     pf, _ = contention
     with pytest.raises(KeyError, match=r"no strategy 'Third' in this run; it has \['First'"):
         pf.strategy("Third")
+
+
+@pytest.mark.parametrize(
+    "view",
+    [lambda r: r.strategy("TimedTcs"), lambda r: r.combined, lambda r: r.correlation],
+    ids=["strategy", "combined", "correlation"],
+)
+def test_a_single_strategy_result_points_to_a_list_for_the_views_of_several(alone, view):
+    with pytest.raises(NotImplementedError) as caught:
+        view(alone["TimedTcs"])
+    assert str(caught.value) == (
+        "result.strategy(), result.combined or result.correlation on a single strategy's "
+        "Result is not supported in this version: pass a list of strategies to bt.backtest: "
+        "its PortfolioResult has strategy(name), the account's tables and the correlation "
+        "of the strategies"
+    )
 
 
 def test_a_list_gives_a_portfolio_result_and_a_class_a_result(contention, alone):

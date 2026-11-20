@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import slippage as slippage_module
+from ._calendar_convert import to_seconds
 from ._futures import check_roll
 from ._futures_margin import parse_margin
 from ._intraday_assumptions import TIMES as INTRADAY_TIMES
@@ -81,6 +82,15 @@ def _base(base: str | None, interval: str) -> str:
     return interval
 
 
+def _check_clock_times(times: dict[str, Any]) -> None:
+    """Raise ConfigError for an `entry_from`, `entry_until` or `square_off` in `times`
+    that is not an IST time of day, so that it is refused before any data is loaded (the
+    engine's config reads each as minutes, `RunPlan.native_config`)."""
+    for name in INTRADAY_TIMES:
+        if times[name] is not None:
+            to_seconds(times[name], what=name)
+
+
 def resolve(strategy: type, args: dict[str, Any]) -> RunPlan:
     """The plan of a run of `strategy` with the run arguments `args` (the keyword
     arguments of `bt.backtest`; a portfolio run gives each strategy its own, with the
@@ -104,6 +114,7 @@ def resolve(strategy: type, args: dict[str, Any]) -> RunPlan:
         name: getattr(strategy, name) if getattr(strategy, name) is not None else args[name]
         for name in CLASS_OVERRIDES
     }
+    _check_clock_times(overrides)
     start, end = run_dates(strategy, args)
     product = _product(strategy, args["product"], strategy.interval, strategy.exchange)
     warnings += unused_settings(strategy, args, product, overrides)

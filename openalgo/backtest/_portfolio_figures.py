@@ -72,6 +72,28 @@ def _as_of(series: pd.Series, instant: pd.Timestamp | None, before: float) -> fl
     return float(series.asof(instant))
 
 
+def _margin_at(result: Result, instant: pd.Timestamp | None) -> float:
+    """A strategy's margin in rupees at the account's round `instant`, as the account
+    counted it. The account takes a strategy's figures after its fills at a slice's open
+    (18-multi-strategy 2.3), while its equity rows are its slice closes: the margin is
+    that of its last slice close at or before `instant`, or, when it filled after that
+    close and by `instant` (at the open of a longer slice still open at `instant`, as a
+    daily strategy's beside minute ones), that of the close of the slice it filled in,
+    which counts a fill at that close as well. 0 before it has a figure, and for
+    `instant` None."""
+    margins = result.equity["margin_rupees"]
+    if instant is None or not len(margins):
+        return 0.0
+    closed = int(margins.index.searchsorted(instant, side="right"))
+    fills = result.fills["time"]
+    since = fills <= instant
+    if closed:
+        since &= fills > margins.index[closed - 1]
+    if since.any() and closed < len(margins):
+        return float(margins.iloc[closed])
+    return _as_of(margins, instant, 0.0)
+
+
 def worst_drawdown(equity: pd.Series, funds: float) -> tuple[pd.Timestamp | None, Any]:
     """(the instant the account's maximum drawdown started from, None for the opening;
     the instant of its trough) on `equity` opened with `funds`; (None, None) when the
@@ -101,9 +123,9 @@ def contribution(
     the account's net P&L; NaN when the account's is 0), `drawdown_pnl_rupees` (its P&L
     from the start to the trough of the account's maximum drawdown; NaN when the account
     never fell below a peak), `peak_margin_rupees` (its margin when the account's margin
-    was at its highest, first such round) and `orders_refused` (its orders the account
-    refused, `account_margin` or `account_loss_gate`). `account` is
-    `PortfolioResult.account`."""
+    was at its highest, first such round, as `_margin_at` reads it) and `orders_refused`
+    (its orders the account refused, `account_margin` or `account_loss_gate`). `account`
+    is `PortfolioResult.account`."""
     equity = account["equity_rupees"]
     total = float(equity.iloc[-1]) - funds if len(equity) else 0.0
     start, trough = worst_drawdown(equity, funds)
@@ -121,9 +143,10 @@ def contribution(
         rows.append(
             {
                 "net_pnl_rupees": net,
-                "share_pct": net / total * PERCENT if total else np.nan,
+                # + 0.0: no P&L is a share of 0, not -0, of an account that lost.
+                "share_pct": net / total * PERCENT + 0.0 if total else np.nan,
                 "drawdown_pnl_rupees": inside,
-                "peak_margin_rupees": _as_of(result.equity["margin_rupees"], busiest, 0.0),
+                "peak_margin_rupees": _margin_at(result, busiest),
                 "orders_refused": len(mine),
             }
         )

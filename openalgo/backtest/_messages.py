@@ -8,10 +8,10 @@ kernel's own not-built errors do (`rust/oa_bt/src/model.rs`, `write_not_supporte
 
 from __future__ import annotations
 
-# (what is not supported, what to do instead) of the several-strategy views of a
+# (what is not supported, what to do instead) of the views of several strategies on a
 # single strategy's `Result`, which a list of strategies gives in its `PortfolioResult`.
 SEVERAL_STRATEGIES = (
-    "the several-strategy views of a single strategy's Result",
+    "result.strategy(), result.combined or result.correlation on a single strategy's Result",
     "pass a list of strategies to bt.backtest: its PortfolioResult has strategy(name), "
     "the account's tables and the correlation of the strategies",
 )

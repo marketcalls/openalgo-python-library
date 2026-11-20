@@ -83,7 +83,7 @@ def _arguments(
 
 
 @dataclass(frozen=True)
-class _Finished:
+class FinishedRun:
     """A run the driver has finished: the strategy instance and its context, the market
     settings, the history kept, the readiness, the kernel's output and the timers'
     warnings."""
@@ -97,11 +97,11 @@ class _Finished:
     timer_warnings: list[str]
 
 
-def _result(
+def finished_result(
     strategy: type,
     prepared: PreparedRun,
     args: dict[str, Any],
-    run: _Finished,
+    run: FinishedRun,
     record: Any,
     *,
     assumptions: Mapping[str, str] | None = None,
@@ -143,4 +143,4 @@ def _result(
     )
 
 
-__all__ = ["_Finished", "_result"]
+__all__ = ["FinishedRun", "finished_result"]

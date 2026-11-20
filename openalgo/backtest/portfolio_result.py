@@ -17,7 +17,7 @@ engine (each one's first order is 1), so a row of a combined table is identified
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from functools import cached_property
 from pathlib import Path
 from types import MappingProxyType
@@ -51,13 +51,16 @@ PORTFOLIO_TABLES = (
     "contract_notes",
     "final_positions",
 )
+#: The letter of a strategy's sheet prefix in a workbook (`to_excel`): S1, S2, ...
+STRATEGY_SHEET = "S"
 
 
 class PortfolioResult:
     """The result of a portfolio run (see the module docstring). `account` is the run's
     checked account, `results` each strategy's `Result` by class name in call order,
-    `records` the native fund's records (`Fund.finish`) and `benchmark` the closes the
-    account is compared with (the first strategy's benchmark; None without one)."""
+    `records` the native fund's records (`Fund.finish`), `benchmark` the closes the
+    account is compared with (the first strategy's benchmark; None without one) and
+    `run_warnings` the run's own warnings (a setting no strategy used)."""
 
     def __init__(
         self,
@@ -66,8 +69,10 @@ class PortfolioResult:
         records: Mapping[str, Any],
         *,
         benchmark: pd.Series | None = None,
+        run_warnings: Sequence[str] = (),
     ) -> None:
         self._account = account
+        self._run_warnings = list(run_warnings)
         # The account's funds in rupees, as the fund kept them (the sum of the capitals to
         # the paisa when no account_capital was given).
         self._funds = float(records["account_capital"])
@@ -273,9 +278,11 @@ class PortfolioResult:
     def warnings(self) -> list[str]:
         """What the reader must know: the account's own warnings first (an instrument held
         on opposite sides; days a broker would have netted the charges of several
-        strategies), then every strategy's (`Result.warnings`), each after its name."""
+        strategies; a run setting no strategy used), then every strategy's
+        (`Result.warnings`), each after its name."""
         notes = [_portfolio_notes.opposite_sides_warning(found) for found in self._net[1]]
         notes += _portfolio_notes.netting_warnings(self._results)
+        notes += self._run_warnings
         for name, result in self._results.items():
             notes += [f"{name}: {text}" for text in result.warnings]
         return notes
@@ -300,15 +307,27 @@ class PortfolioResult:
 
     # ----- export ---------------------------------------------------------------------
 
+    def _account_tables(self) -> dict[str, pd.DataFrame]:
+        """The account's tables by name (`PORTFOLIO_TABLES`), `contribution` with its
+        strategy names as a column."""
+        tables = {name: getattr(self, name) for name in PORTFOLIO_TABLES}
+        tables["contribution"] = tables["contribution"].reset_index()
+        return tables
+
+    def _strategy_tables(self, prefixes: Sequence[str]) -> dict[str, pd.DataFrame]:
+        """Each strategy's own tables (`EXPORTED_TABLES`) named `<prefix>_<table>`, with
+        `prefixes` one per strategy in call order."""
+        return {
+            f"{prefix}_{table}": getattr(result, table)
+            for prefix, result in zip(prefixes, self._results.values(), strict=True)
+            for table in EXPORTED_TABLES
+        }
+
     def to_dataframes(self) -> dict[str, pd.DataFrame]:
         """Every table by name: the account's (`PORTFOLIO_TABLES`; `contribution` with its
         strategy names as a column), then each strategy's own tables (`Result
         .to_dataframes`) named `<strategy>_<table>`."""
-        tables = {name: getattr(self, name) for name in PORTFOLIO_TABLES}
-        tables["contribution"] = tables["contribution"].reset_index()
-        for name, result in self._results.items():
-            tables.update({f"{name}_{table}": getattr(result, table) for table in EXPORTED_TABLES})
-        return tables
+        return self._account_tables() | self._strategy_tables(list(self._results))
 
     def to_csv(self, folder: str | os.PathLike) -> list[Path]:
         """Write every table of `to_dataframes()` to `folder` (created when missing), one
@@ -318,9 +337,16 @@ class PortfolioResult:
 
     def to_excel(self, path: str | os.PathLike) -> Path:
         """Write every table of `to_dataframes()` to one Excel workbook at `path`, a sheet
-        each named after it, and return the path. Needs openpyxl, which openalgo does not
-        install: raises MissingDependencyError (an ImportError) when it is missing."""
-        return write_excel(self.to_dataframes(), path)
+        each, and return the path. A sheet name holds at most 31 characters, too few for
+        a strategy's name and a table's, so the account's tables keep their names, a
+        `strategies` sheet gives each strategy a prefix by its place in call order (S1 for
+        the first) and its tables are the sheets `<prefix>_<table>` (`S1_fills`). Needs
+        openpyxl, which openalgo does not install: raises MissingDependencyError (an
+        ImportError) when it is missing."""
+        prefixes = [f"{STRATEGY_SHEET}{place}" for place in range(1, len(self._results) + 1)]
+        index = pd.DataFrame({"sheet_prefix": prefixes, "strategy": list(self._results)})
+        sheets = self._account_tables() | {"strategies": index}
+        return write_excel(sheets | self._strategy_tables(prefixes), path)
 
     def __repr__(self) -> str:
         account = self._account

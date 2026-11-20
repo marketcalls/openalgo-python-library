@@ -3,7 +3,7 @@ the engines' tables, the journal's day as the session counted it, and the sessio
 records (`_session_close.SessionOutcome`).
 
 - **Each strategy's `bt.Result`** is built by the backtest's own result builder
-  (`_pipeline._result`, the one `bt.backtest` returns), from its kernel session's
+  (`_pipeline_result.finished_result`, the one `bt.backtest` returns), from its kernel session's
   `finish()` tables and its part of the session plan: the settings, instruments, market
   and history a backtest of the day would have, the strategy instance and its run
   context, the warm-up measured on its live stores. It covers the trades this start
@@ -51,7 +51,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from .._pipeline import PreparedRun, _Finished, _result
+from .._pipeline import PreparedRun
+from .._pipeline_result import FinishedRun, finished_result
 from .._result_tables import IST
 from .._warm_up import readiness
 from ..reference import Instrument
@@ -180,12 +181,12 @@ def strategy_result(
         },
         market=setup.market,
     )
-    finished = _Finished(
+    finished = FinishedRun(
         part.strategy, context, setup.market, setup.history, state, output, list(timer_warnings)
     )
     base_rule = f"base {setup.plan.base} ({BASE_RULE}): {LIVE_BASE_MEANING}"
     lines = LIVE_ASSUMPTIONS | {"base_rule": base_rule}
-    return _result(spec.strategy, prepared, arguments, finished, None, assumptions=lines)
+    return finished_result(spec.strategy, prepared, arguments, finished, None, assumptions=lines)
 
 
 def this_start(output: Mapping[str, Any], restore: Restored) -> dict[str, Any]:

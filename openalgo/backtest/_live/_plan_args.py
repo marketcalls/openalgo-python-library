@@ -87,6 +87,8 @@ NOT_LIVE = MappingProxyType(
         "roll": "a live session trades one contract named by its symbol",
         "benchmark": "a live session has no benchmark",
         "calendar": "a live session follows the package calendar",
+        "pool": "the broker's account is the one account every strategy of the session shares",
+        "account_capital": "the account's funds are the broker's",
     }
 )
 

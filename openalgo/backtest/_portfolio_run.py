@@ -2,11 +2,14 @@
 
 1. **Settings** (`portfolio_plan`): the strategy classes, named by class name (each name
    once); each strategy's `bt.backtest` arguments, the per-strategy settings resolved by
-   name (`_strategy_args`) and the run's other arguments shared; the account (pool,
-   funds, daily loss limit). Every argument is checked before any data is loaded.
-2. **Each strategy alone**: prepared (`_pipeline.prepare`: its settings, data, history and
-   market) and begun (`_pipeline.begin`: its engine, its `init`), in call order, exactly as
-   `bt.backtest` would run it alone.
+   name (`_strategy_args`), the run's settings keyed by symbol cut to the entries of what
+   the strategy trades (`_portfolio_symbols`) and the run's other arguments shared; the
+   account (pool, funds, daily loss limit).
+2. **Each strategy alone**, in call order, exactly as `bt.backtest` would run it alone:
+   checked (`_run_check.check_run`: its settings, instruments and its indicators' needs)
+   before any strategy's data is loaded, given its part of `margin=`
+   (`_portfolio_symbols.own_margins`), then loaded (`_pipeline.load`: its data, history
+   and market) and begun (`_pipeline.begin`: its engine, its `init`).
 3. **The fund** (`_portfolio_driver.drive_fund`) advances the engines together over the
    account; each strategy decides at its own pauses.
 4. **Results**: each strategy's `Result` (`_pipeline.conclude`) with a line saying the
@@ -20,19 +23,24 @@ before portfolio runs existed.
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from ._market import PACKAGE_DIR
 from ._messages import counted
-from ._pipeline import begin, conclude, prepare
+from ._pipeline import begin, conclude, load
 from ._portfolio_driver import drive_fund
 from ._portfolio_notes import rupees_text, spoken_list
+from ._portfolio_symbols import (
+    own_corporate_actions,
+    own_instruments,
+    own_margins,
+    refuse_one_frame,
+)
 from ._reject_reasons import ACCOUNT_LOSS_GATE, ACCOUNT_MARGIN
-from ._rejection_notice import unplaced_notice
+from ._rejection_notice import announce_unplaced
 from ._rerun import PortfolioMember
+from ._run_check import check_run
 from ._strategy_args import (
     ACCOUNT_SETTINGS,
     EVERY_STRATEGY,
@@ -46,8 +54,8 @@ from ._strategy_args import (
     repeated,
     strategy_classes,
 )
-from ._warm_up_notice import wait_notice
-from .errors import ConfigError, OrdersNotPlacedWarning, WarmUpWarning
+from ._warm_up_notice import announce_wait
+from .errors import ConfigError
 from .portfolio_result import PortfolioResult
 from .result import Result
 from .strategy import Strategy
@@ -75,28 +83,15 @@ def _capital(name: str, value: Any) -> float:
     return float(value)
 
 
-def _refuse_one_frame(strategies: tuple[type[Strategy], ...], data: Any) -> None:
-    """Raise ConfigError for own bars given as one table (not a dict by symbol) to
-    strategies that trade more than one symbol between them: the table would be read as
-    the bars of every symbol."""
-    if data is None or isinstance(data, dict):
-        return
-    symbols = sorted({symbol for each in strategies for symbol in each.traded_symbols()})
-    if len(symbols) > 1:
-        raise ConfigError(
-            f"the strategies trade {', '.join(symbols)}: give data= as a dict of bars by "
-            "symbol, which feeds every strategy that trades the symbol"
-        )
-
-
 def portfolio_plan(strategy: Any, args: Mapping[str, Any]) -> PortfolioPlan:
     """The plan of `bt.backtest` given the list `strategy` and the call's arguments `args`
     (module docstring, step 1). Raises ConfigError for a list that is empty, holds
     something other than a `bt.Strategy` subclass or names a strategy twice, for a dict by
     name that names a strategy the call does not run or leaves one out (`params` may: that
     strategy keeps its defaults), for a capital that is not a positive number, for an
-    unusable account (`_strategy_args.account_settings`) and for own bars given as one
-    table to strategies on several symbols."""
+    unusable account (`_strategy_args.account_settings`), and for a setting keyed by
+    symbol that names a symbol no strategy trades, or no symbol while the strategies trade
+    several (`_portfolio_symbols`)."""
     strategies = strategy_classes(strategy, "bt.backtest")
     names = class_names(strategies)
     twice = repeated(names)
@@ -120,16 +115,20 @@ def portfolio_plan(strategy: Any, args: Mapping[str, Any]) -> PortfolioPlan:
     params = params_by_name(args["params"], names, owner=BACKTEST)
     capitals = [_capital(name, settings["capital"][name]) for name in names]
     account = account_settings(args, capitals)
-    _refuse_one_frame(strategies, args["data"])
+    refuse_one_frame(strategies, args["data"])
+    instruments = own_instruments(strategies, args["instrument"])
+    actions = own_corporate_actions(strategies, args["corporate_actions"])
     arguments = {
         name: {
             **args,
             **{setting: values[name] for setting, values in settings.items()},
             "strategy": cls,
             "params": params[name],
+            "instrument": instruments[index],
+            "corporate_actions": actions[index],
             **ACCOUNT_SETTINGS,
         }
-        for cls, name in zip(strategies, names, strict=True)
+        for index, (cls, name) in enumerate(zip(strategies, names, strict=True))
     }
     return PortfolioPlan(strategies, names, arguments, account)
 
@@ -173,14 +172,8 @@ def announce(results: Mapping[str, Result]) -> None:
     (OrdersNotPlacedWarning) and a wait inside the run for the indicators
     (WarmUpWarning)."""
     for name, result in results.items():
-        kinds = [instrument["kind"] for instrument in result.manifest["instruments"]]
-        notices = (
-            (unplaced_notice(result.orders, result.skipped, kinds), OrdersNotPlacedWarning),
-            (wait_notice(result.manifest["arguments"]["warm_up"]), WarmUpWarning),
-        )
-        for notice, category in notices:
-            if notice is not None:
-                warnings.warn(f"{name}: {notice}", category, skip_file_prefixes=(PACKAGE_DIR,))
+        announce_unplaced(result, strategy=name)
+        announce_wait(result, strategy=name)
 
 
 def run_portfolio(strategy: Any, client: Any, args: Mapping[str, Any]) -> PortfolioResult:
@@ -189,11 +182,16 @@ def run_portfolio(strategy: Any, client: Any, args: Mapping[str, Any]) -> Portfo
     ConfigError (`portfolio_plan`, and an account the fund refuses), the data layer's
     errors, NotImplementedError for anything a strategy alone would refuse, and the
     kernel's and the strategies' errors, a kernel error starting with its strategy's
-    name."""
+    name. Every strategy's settings are checked before any strategy's data is loaded."""
     plan = portfolio_plan(strategy, args)
-    runs = [
-        prepare(cls, client, plan.arguments[name])
+    checked = [
+        check_run(cls, plan.arguments[name])
         for cls, name in zip(plan.strategies, plan.names, strict=True)
+    ]
+    checked, notes = own_margins(checked, args["margin"])
+    runs = [
+        load(each, client, plan.arguments[name])
+        for each, name in zip(checked, plan.names, strict=True)
     ]
     members = [
         begin(cls, prepared, plan.arguments[name])
@@ -216,7 +214,7 @@ def run_portfolio(strategy: Any, client: Any, args: Mapping[str, Any]) -> Portfo
     announce(results)
     benchmark = runs[0].benchmark
     closes = None if benchmark is None else benchmark.closes
-    return PortfolioResult(plan.account, results, records, benchmark=closes)
+    return PortfolioResult(plan.account, results, records, benchmark=closes, run_warnings=notes)
 
 
 __all__ = ["PortfolioPlan", "announce", "member_line", "portfolio_plan", "run_portfolio"]

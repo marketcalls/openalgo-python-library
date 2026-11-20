@@ -223,3 +223,13 @@ def test_a_run_of_one_strategy_refuses_the_account_settings_of_a_list(given, nam
 def test_a_run_of_one_strategy_takes_the_account_settings_at_their_defaults():
     refuse_account_settings({"pool": "shared", "account_capital": None})
     refuse_account_settings({})
+
+
+def test_a_list_of_one_strategy_takes_its_own_parameter_values_in_both_verbs():
+    # As a class does: a list of one is that strategy's run, so params are its own values.
+    call = inspect.signature(bt.backtest).bind([Alpha], None, capital=CAPITAL, params={"fast": 5})
+    call.apply_defaults()
+    plan = portfolio_plan([Alpha], dict(call.arguments))
+    assert plan.arguments["Alpha"]["params"] == {"fast": 5}
+    checked = live_arguments([Alpha], capital=CAPITAL, params={"fast": 5})
+    assert dict(checked.params) == {"Alpha": {"fast": 5}}

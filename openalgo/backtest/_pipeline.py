@@ -1,17 +1,19 @@
 """How one backtest runs, in two halves so that the combinations of a sweep share the
 first (the Python half of the design in `rust/oa_bt/src/engine/mod.rs`).
 
-`prepare` resolves everything that does not depend on the strategy's parameters: the
-settings (`_settings.resolve`), the calendar, the futures series (`_futures`), the
-instruments (`_instruments.resolve_instruments`) and, before any data is loaded, that the
-margin table prices them all (`_margin_check`) and what the indicators of each parameter
-set to be run need before `start` (`_warm_up_probe`, `init` on the engine's reference
-bars: the run's parameters, or every combination of a sweep); then the base interval
-and its bars (`_base_interval.choose_base`, through the data layer), the ticks chosen by
-a price slab (`_slab_ticks`, from the data) and the market settings (`_market`: the cost
-model, the slippage and the per-instrument facts), and the history before `start` for
-those needs (`_warm_up_load`: once for the largest, in which each parameter set finds
-the request its single run makes). A sweep sends its `PreparedRun` to worker
+`prepare` resolves everything that does not depend on the strategy's parameters, in two
+stages. `_run_check.check_run` checks, before any data is loaded, the settings
+(`_settings.resolve`), the calendar, the futures series (`_futures`), the instruments
+(`_instruments.resolve_instruments`), that the margin table prices them all
+(`_margin_check`) and what the indicators of each parameter set to be run need before
+`start` (`_warm_up_probe`, `init` on the engine's reference bars: the run's parameters, or
+every combination of a sweep). `load` then chooses the base interval and loads its bars
+(`_base_interval.choose_base`, through the data layer), the ticks chosen by a price slab
+(`_slab_ticks`, from the data) and the market settings (`_market`: the cost model, the
+slippage and the per-instrument facts), and the history before `start` for those needs
+(`_warm_up_load`: once for the largest, in which each parameter set finds the request
+its single run makes). A portfolio run checks every strategy before it loads any
+(`_portfolio_run`). A sweep sends its `PreparedRun` to worker
 processes without the market settings, which hold native objects, and each worker
 resolves them again from the `costs=` and `slippage=` arguments and the parsed `margin=`
 (`_futures_margin`). That needs those arguments to pickle and the run to use the shared
@@ -42,21 +44,20 @@ import pandas as pd
 
 from . import calendar as calendar_module
 from ._base_interval import choose_base
-from ._benchmark import benchmark_request, load_benchmark
+from ._benchmark import load_benchmark
 from ._causality_checks import IndicatorChecks
 from ._conditions import drive_conditions, evaluation_path, has_conditions
 from ._context import RunContext, RunData
 from ._driver import drive
 from ._engine import build_engine, call
 from ._expired_contracts import expired_contracts
-from ._futures import attach, resolve_futures
+from ._futures import attach
 from ._futures_margin import margin_warnings
-from ._instruments import resolve_instruments
 from ._manifest import strategy_source_hash
-from ._margin_check import check_margin
 from ._market import MarketSettings, market_settings
 from ._messages import not_supported
-from ._pipeline_result import _Finished, _result
+from ._pipeline_result import FinishedRun, finished_result
+from ._run_check import CheckedRun, check_run
 from ._run_corporate_actions import (
     UnadjustedEvent,
     check_crossings,
@@ -64,13 +65,13 @@ from ._run_corporate_actions import (
     unadjusted_events,
 )
 from ._session_dates import session_dates_note
-from ._settings import RunPlan, resolve
+from ._settings import RunPlan
 from ._slab_ticks import resolve_slab_ticks
 from ._warm_up import Readiness, SeriesNeed, readiness
 from ._warm_up_history import RunHistory
 from ._warm_up_load import LoadedHistory, load_history
 from ._warm_up_measure import WarmUp
-from ._warm_up_probe import combination_needs, params_key, probe_needs, probe_setup
+from ._warm_up_probe import combination_needs, params_key, probe_setup
 from ._warm_up_source import history_source
 from .reference import Instrument
 from .result import Result
@@ -143,14 +144,6 @@ def _picklable(value: Any) -> bool:
     return True
 
 
-def _calendar(given: Any, plan: RunPlan) -> calendar_module.Calendar | None:
-    if given is None:
-        return None
-    if isinstance(given, calendar_module.Calendar):
-        return given
-    return calendar_module.Calendar.from_sessions(given, plan.exchange, plan.start, plan.end)
-
-
 def _cut(bars: pd.DataFrame, plan: RunPlan) -> pd.DataFrame:
     """The bars that open inside the run's optional instant bounds (the kernel ignores
     the others; views of other intervals are built from these)."""
@@ -182,23 +175,6 @@ def _load_warnings(
     return warnings
 
 
-def _instruments(plan: RunPlan, args: dict[str, Any], calendar: Any, futures: Any) -> tuple:
-    """(instruments, Assumptions lines by symbol, reference-table version) of a run."""
-    if futures is None:
-        return resolve_instruments(plan, args["instrument"], calendar)
-    return futures.instruments, futures.lines, futures.version
-
-
-def _probed(
-    strategy: type, setup: Any, sets: list, checks: IndicatorChecks | None = None
-) -> tuple[dict, dict[str, WarmUp]]:
-    """(the needs of each parameter set, by `_warm_up_probe.params_key`; the warm-ups
-    measured to learn them), from `init` on the reference bars (`_warm_up_probe`), with
-    `checks` holding the indicator checks done before (None for none)."""
-    checks = checks or IndicatorChecks(strategy_source_hash(strategy) or strategy.__qualname__)
-    return probe_needs(strategy, setup, sets, checks), checks.measured()
-
-
 def prepare(
     strategy: type,
     client: Any,
@@ -206,35 +182,32 @@ def prepare(
     parameter_sets: list[dict[str, Any] | None] | None = None,
     checks: IndicatorChecks | None = None,
 ) -> PreparedRun:
-    """Resolve a run of `strategy` with the arguments of `bt.backtest` up to the engine.
-    `parameter_sets` are the `params=` of every combination of a sweep (None for a
-    single run, whose own `params=` are probed); the largest need of history before
-    `start` over them is loaded here (`_warm_up_probe.probe_needs`). `checks` holds the
+    """Resolve a run of `strategy` with the arguments of `bt.backtest` up to the engine:
+    `_run_check.check_run`, then `load`. `parameter_sets` are the `params=` of every
+    combination of a sweep (None for a single run, whose own `params=` are probed); the
+    largest need of history before `start` over them is loaded. `checks` holds the
     indicator checks and warm-ups already done for the strategy (a rerun of the same
-    strategy on other bars, `_robust`), None to do them here. Raises ConfigError
-    for unusable arguments, the data layer's and the reference tables' errors,
+    strategy on other bars, `_robust`), None to do them here. Raises ConfigError for
+    unusable arguments, the data layer's and the reference tables' errors,
     NotImplementedError for settings of later work, and what the strategy's `init`
     raises on the reference bars."""
-    plan = resolve(strategy, args)
-    # Checked before any data is loaded; loaded after the strategy's bars.
-    wanted_benchmark = benchmark_request(args["benchmark"], plan.exchange)
-    own_calendar = _calendar(args["calendar"], plan)
-    calendar = own_calendar or calendar_module.default_calendar()
-    futures = resolve_futures(strategy, plan, args, calendar)
+    return load(check_run(strategy, args, parameter_sets, checks), client, args)
+
+
+def load(checked: CheckedRun, client: Any, args: dict[str, Any]) -> PreparedRun:
+    """The second stage of `prepare`: the base interval and its bars for the run
+    `checked` (`_run_check.check_run`), through `client` or the run's own data, then the
+    ticks chosen by a price slab, the market settings, the benchmark's closes and the
+    history before `start` that the needs probed ask for. Raises the data layer's errors
+    and ConfigError for data the run cannot use."""
+    plan, futures, needs = checked.plan, checked.futures, checked.needs
+    calendar = checked.session_calendar()
     windows = None if futures is None else futures.windows
-    plan = plan if futures is None else dataclasses.replace(plan, symbols=futures.symbols)
-    instruments, lines, version = _instruments(plan, args, calendar, futures)
-    # Before any data is loaded: an instrument the margin table cannot price stops here,
-    # and the needs before start are learnt on the reference bars.
-    check_margin(instruments, plan.product, (plan.start, plan.end))
-    sets = [args["params"]] if parameter_sets is None else parameter_sets
-    setup = probe_setup(strategy, plan, instruments, futures)
-    needs, measured = _probed(strategy, setup, sets, checks)
-    with expired_contracts(instruments, plan.present):
+    with expired_contracts(checked.instruments, plan.present):
         choice = choose_base(plan, args, client, calendar, windows)
     plan = dataclasses.replace(plan, base=choice.base)
     instruments, lines = resolve_slab_ticks(
-        instruments, lines, plan, args, client, calendar, windows
+        checked.instruments, checked.lines, plan, args, client, calendar, windows
     )
     futures = None if futures is None else futures.with_instruments(instruments)
     market_args = {"costs": args["costs"], "slippage": args["slippage"], "margin": plan.margin}
@@ -243,12 +216,12 @@ def prepare(
     by_symbol = dict(zip(plan.symbols, loaded, strict=True))
     source = history_source(args, client, calendar, by_symbol, futures)
     frames = [_cut(result.bars, plan) for result in loaded]
-    benchmark = load_benchmark(wanted_benchmark, plan, args, client, calendar, frames)
+    benchmark = load_benchmark(checked.benchmark, plan, args, client, calendar, frames)
     extra = [market.warnings, () if futures is None else futures.warnings]
     extra.append(() if benchmark is None else benchmark.warnings)
     return PreparedRun(
         plan=plan,
-        calendar=own_calendar,
+        calendar=checked.calendar,
         instruments=instruments,
         frames=frames,
         partitions={symbol: result.meta.partition_hashes() for symbol, result in by_symbol.items()},
@@ -258,7 +231,7 @@ def prepare(
             **session_dates_note(plan.symbols, loaded),
         },
         warnings=_load_warnings(plan, instruments, loaded, extra),
-        reference_tables=version,
+        reference_tables=checked.version,
         market_args=market_args,
         market=market,
         futures=futures,
@@ -266,7 +239,7 @@ def prepare(
         unadjusted=unadjusted_events(plan.symbols, loaded),
         history=load_history(plan, source, needs.values()),
         needs=needs,
-        measured=measured,
+        measured=checked.measured,
     )
 
 
@@ -371,8 +344,8 @@ def conclude(
     check_crossings(output, prepared.unadjusted)
     context.close(output["orders"])
     kept = (begun.market, begun.history, begun.state)
-    finished = _Finished(begun.instance, context, *kept, output, timer_warnings)
-    return _result(strategy, prepared, args, finished, record, assumptions=assumptions)
+    finished = FinishedRun(begun.instance, context, *kept, output, timer_warnings)
+    return finished_result(strategy, prepared, args, finished, record, assumptions=assumptions)
 
 
 def execute(
@@ -399,4 +372,4 @@ def execute(
     return conclude(strategy, prepared, args, begun, record)
 
 
-__all__ = ["Begun", "PreparedRun", "begin", "conclude", "execute", "prepare"]
+__all__ = ["Begun", "PreparedRun", "begin", "conclude", "execute", "load", "prepare"]

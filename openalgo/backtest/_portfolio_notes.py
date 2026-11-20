@@ -19,7 +19,7 @@ import pandas as pd
 
 from ._messages import counted
 from ._portfolio_tables import OppositeSides
-from ._strategy_args import Account
+from ._strategy_args import PAISE_PER_RUPEE, Account
 from .report._format import indian_digits
 from .result import Result
 
@@ -53,7 +53,9 @@ def spoken_list(names: Sequence[str]) -> str:
 
 def account_note(account: Account, funds_rupees: float) -> str:
     """The Assumptions line of the account of `funds_rupees`: what the pool lets one
-    strategy do to another."""
+    strategy do to another. A shared account of the sum of the capitals (to the paisa,
+    whether `account_capital` was left out or given as that sum) rarely binds, and says
+    so (18-multi-strategy 2.4)."""
     funds = rupees_text(funds_rupees)
     if account.pool == "separate":
         note = (
@@ -67,14 +69,15 @@ def account_note(account: Account, funds_rupees: float) -> str:
                 "only until the account's limit is reached"
             )
         return note
-    if account.account_capital is None:
+    total = sum(account.capitals)
+    if round(funds_rupees * PAISE_PER_RUPEE) == round(total * PAISE_PER_RUPEE):
         return (
             f"shared account of {funds}, the sum of the capitals: it refuses an order only "
             "when other strategies' open losses leave too little free cash; give "
             "account_capital to model a smaller account"
         )
     return (
-        f"shared account of {funds} for strategies of {rupees_text(sum(account.capitals))} "
+        f"shared account of {funds} for strategies of {rupees_text(total)} "
         "together: an opening fill needs its margin within the strategy's own free cash and "
         "within the account's, which the other strategies' margin and open losses take"
     )

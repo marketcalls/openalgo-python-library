@@ -82,7 +82,8 @@ def live(
     or, once the analyzer switch changed, on Ctrl+C or a few minutes after the exchange's
     close. A `bt.backtest` argument with no meaning live (`data`, `start`, `end`, `now`,
     `source`, `base`, `fill`, `slippage`, `margin`, `quantity_mode`, `instrument`,
-    `product`, `roll`, `benchmark`, `calendar`) is refused, saying why.
+    `product`, `roll`, `benchmark`, `calendar`, `pool`, `account_capital`) is refused,
+    saying why.
 
     Raises ConfigError for an unusable argument (one that chooses the mode among them);
     NotImplementedError, before any call to OpenAlgo, for what live trading does not run
