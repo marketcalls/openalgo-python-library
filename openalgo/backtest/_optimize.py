@@ -205,23 +205,38 @@ def _plan(
 ) -> str:
     """The line reported before the rest of the sweep runs. `seconds` are the durations
     of the combinations already run, in order; the last stands for each of the rest."""
+    scope, advice = _plan_words(strategy, combinations, workers, why, path)
     rest = (combinations - len(seconds)) * seconds[-1] / workers
-    where = f"{workers} worker processes" if workers > 1 else "this process"
     took = f"The first took {seconds[0]:.2f} s"
     if len(seconds) > 1:
         took += f" with the sweep's indicator checks, the second took {seconds[1]:.2f} s"
-    text = (
+    return f"{scope} {took}; the rest should take about {rest:.1f} s.{advice}"
+
+
+def _untimed_plan(strategy: type, combinations: int, workers: int, why: str, path: str) -> str:
+    """The plan without its timings, as the sweep's page shows it: the same text for
+    every sweep of one grid, where the timings of two sweeps differ."""
+    scope, advice = _plan_words(strategy, combinations, workers, why, path)
+    return scope + advice
+
+
+def _plan_words(
+    strategy: type, combinations: int, workers: int, why: str, path: str
+) -> tuple[str, str]:
+    """(what the sweep runs and where, the advice for a large grid on the event path or
+    ""), the parts of the plan that do not depend on a timing."""
+    where = f"{workers} worker processes" if workers > 1 else "this process"
+    scope = (
         f"bt.optimize: {counted(combinations, 'combination')} of {strategy.__name__} on the "
-        f"{path} path "
-        f"({PATH_MEANINGS[path]}), in {where}{f' ({why})' if why else ''}. {took}; the "
-        f"rest should take about {rest:.1f} s."
+        f"{path} path ({PATH_MEANINGS[path]}), in {where}{f' ({why})' if why else ''}."
     )
+    advice = ""
     if path == EVENT_PATH and combinations > LARGE_EVENT_GRID:
-        text += (
+        advice = (
             " A grid this large suits the condition form (entry_when, exit_when), which "
             "runs without a Python call per bar."
         )
-    return text
+    return scope, advice
 
 
 def _split_settings(
@@ -251,11 +266,11 @@ def _sweep(
     arguments: dict[str, Any],
     combinations: list[dict[str, Any]],
     asked: tuple[int | None, Callable[[str], Any] | None],
-) -> tuple[list[Measured], str, str]:
+) -> tuple[list[Measured], str, str, str]:
     """(each combination's row and session returns in grid order, the evaluation path,
-    the plan): the opening combinations here, the plan reported through `asked`'s
-    progress function (`workers`, `progress`), then the rest in this process or in
-    worker processes (module docstring)."""
+    the plan, the plan without its timings): the opening combinations here, the plan
+    reported through `asked`'s progress function (`workers`, `progress`), then the rest
+    in this process or in worker processes (module docstring)."""
     workers, progress = asked
     name = strategy_source_hash(strategy) or strategy.__qualname__
     checks = IndicatorChecks(name, measured=prepared.measured)
@@ -272,6 +287,7 @@ def _sweep(
     rest = combinations[len(opening.rows) :]
     count, why = _workers(workers, len(rest), prepared, strategy)
     plan = _plan(strategy, len(combinations), count, opening.seconds, why, opening.path)
+    untimed = _untimed_plan(strategy, len(combinations), count, why, opening.path)
     (progress or LOGGER.info)(plan)
     if count > 1:
         shipped = (portable(strategy, "the strategy"), portable(objective, "the objective"))
@@ -282,7 +298,7 @@ def _sweep(
         later = run_in_pool(chunks, count)
     else:
         later = run(rest)
-    return [*opening.rows, *later], opening.path, plan
+    return [*opening.rows, *later], opening.path, plan, untimed
 
 
 def optimize(
@@ -307,7 +323,7 @@ def optimize(
     arguments = _run_arguments(client, run_settings)
     names, combinations = grid(strategy, ranges, arguments["params"])
     prepared = prepare(strategy, client, arguments, combinations)
-    measured, path, plan = _sweep(
+    measured, path, plan, untimed = _sweep(
         strategy, objective, prepared, arguments, combinations, (workers, progress)
     )
     table = pd.DataFrame(
@@ -339,6 +355,7 @@ def optimize(
         returns,
         named,
         strategy.__name__,
+        untimed,
     )
 
 

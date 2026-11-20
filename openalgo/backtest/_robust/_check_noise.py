@@ -251,14 +251,21 @@ def _blocks(
     histogram = objective_histogram(
         "Noise objectives", f"The {name} of each noisy copy", set_.objective, subject.real, marks
     )
+    measured = int(summary["measured"])
+    # The share is a count over the measured runs, so the count reads back exactly.
+    below = round(summary["percentile"] * measured)
     tiles = (
         Tile("Median kept", words.percent(summary["ratio"]), f"of the run's {name}"),
         Tile("Profitable", words.percent(summary["profitable_share"]), "of the noise runs"),
-        Tile("Above", words.percent(summary["percentile"]), "of the noise runs"),
+        Tile(
+            "Above",
+            words.percent(summary["percentile"]),
+            f"{words.number(below, 0)} of {words.whole(measured, 'noise run')}",
+        ),
         Tile("Median", words.number(summary["median"]), name),
         Tile(
             "Measured",
-            words.whole(int(summary["measured"]), "run"),
+            words.whole(measured, "run"),
             f"of {words.number(summary['runs'], 0)}",
         ),
     )

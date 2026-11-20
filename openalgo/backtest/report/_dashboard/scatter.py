@@ -49,10 +49,6 @@ def _axis(values: list[float]) -> tuple[float, float]:
     return scale.widen(low - pad, high + pad)
 
 
-def _pct(value: float, decimals: int) -> str:
-    return f"{value * 100:.{decimals}f}%"
-
-
 def _legend(inner_w: int) -> str:
     x = inner_w - 150
     return (
@@ -74,7 +70,7 @@ def _cross(cx: float, cy: float) -> str:
 
 def _percent_ticks(low: float, high: float) -> list[tuple[float, str]]:
     decimals = scale.percent_decimals(low, high, AXIS_TICKS)
-    return [(t, _pct(t, decimals)) for t in scale.ticks(low, high, AXIS_TICKS)]
+    return [(t, fmt.percent(t, decimals)) for t in scale.ticks(low, high, AXIS_TICKS)]
 
 
 def _ticks(

@@ -8,6 +8,7 @@ own daily bars with no server, in this process.
 (`test_robust_search_checks` describes them). The sweep is days 0 to 4.
 """
 
+import itertools
 import math
 import weakref
 
@@ -321,6 +322,29 @@ def test_the_page_is_written_to_a_file(spike, tmp_path):
     target = tmp_path / "sweep.html"
     assert spike.tearsheet(target) == str(target)
     assert target.read_text(encoding="utf-8") == spike.tearsheet()
+
+
+def test_two_sweeps_of_one_grid_make_the_same_page(monkeypatch):
+    # The plan times the first combination, so two sweeps report other seconds (here a
+    # clock that steps 0.25 s, then one that steps 1.75 s, between its readings); the
+    # page's notes keep the plan without its timings, so the pages are the same.
+    from openalgo.backtest import _optimize
+
+    data = weekday_bars(SESSIONS, lambda s: (2,))
+    plans, pages = [], []
+    for step in (0.25, 1.75):
+        clock = itertools.count(0.0, step)
+        monkeypatch.setattr(_optimize.time, "perf_counter", lambda clock=clock: next(clock))
+        result = sweep(data)
+        plans.append(result.plan)
+        pages.append(result.tearsheet())
+    assert plans[0] != plans[1]
+    assert pages[0] == pages[1]
+    assert "took" not in pages[0]
+    assert (
+        "<p>bt.optimize: 5 combinations of Weekday on the event path (on_bar runs in Python "
+        "for every strategy bar), in this process.</p>"
+    ) in pages[0]
 
 
 def test_the_page_refuses_a_parameter_the_sweep_did_not_vary(spike):

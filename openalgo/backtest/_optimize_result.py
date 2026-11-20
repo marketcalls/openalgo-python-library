@@ -54,6 +54,7 @@ class OptimizeResult:
         returns: np.ndarray,
         named: bool,
         strategy: str,
+        untimed_plan: str,
     ) -> None:
         self._table = table
         self._combinations = combinations
@@ -65,10 +66,12 @@ class OptimizeResult:
         self._runner = runner
         # The session returns, (sessions, combinations) in grid order
         # (`_sweep_pool.returns_matrix`); whether the objective is a metric's name (not a
-        # function); the strategy's name, for the page's title.
+        # function); the strategy's name, for the page's title; the plan without its
+        # timings, for the page's notes, so two sweeps of one grid make the same page.
         self._returns = returns
         self._named = named
         self._strategy = strategy
+        self._untimed_plan = untimed_plan
 
     @property
     def table(self) -> pd.DataFrame:

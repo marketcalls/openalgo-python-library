@@ -50,10 +50,6 @@ def frame(width: int, height: int, margin: Margin, label: str, body: str) -> str
     )
 
 
-def _pct(value: float, decimals: int) -> str:
-    return f"{value * 100:.{decimals}f}%"
-
-
 def value_text(value: float, percent: bool) -> str:
     """A value as a mark's hover readout shows it: a percent of a fraction, or a plain
     number in Indian notation."""
@@ -65,7 +61,7 @@ def tick_texts(low: float, high: float, count: int, percent: bool) -> list[tuple
     many decimals as the step needs."""
     if percent:
         decimals = scale.percent_decimals(low, high, count)
-        return [(t, _pct(t, decimals)) for t in scale.ticks(low, high, count)]
+        return [(t, fmt.percent(t, decimals)) for t in scale.ticks(low, high, count)]
     decimals = scale.number_decimals(low, high, count)
     return [(t, fmt.number(t, decimals)) for t in scale.ticks(low, high, count)]
 
@@ -152,7 +148,7 @@ def _histogram_ticks(
         return tick_texts(low, high, PERCENT_TICKS, percent=False)
     if decimals is None:
         decimals = scale.percent_decimals(low, high, PERCENT_TICKS)
-    return [(t, _pct(t, decimals)) for t in scale.ticks(low, high, PERCENT_TICKS)]
+    return [(t, fmt.percent(t, decimals)) for t in scale.ticks(low, high, PERCENT_TICKS)]
 
 
 class Box(NamedTuple):
@@ -179,7 +175,7 @@ def box_plot(boxes: Sequence[Box], *, height: int = 200) -> str:
         marks.append(
             f"<line x1='{x(t):.2f}' x2='{x(t):.2f}' y1='0' y2='{inner_h}' class='grid'/>"
             f"<text x='{x(t):.2f}' y='{inner_h + 16}' text-anchor='middle' "
-            f"style='{AXIS_TEXT}'>{_pct(t, 1)}</text>"
+            f"style='{AXIS_TEXT}'>{fmt.percent(t, 1)}</text>"
         )
     if low < 0 < high:
         marks.append(f"<line x1='{x(0):.2f}' x2='{x(0):.2f}' y1='0' y2='{inner_h}' class='zero'/>")
@@ -251,7 +247,8 @@ def yearly_bars(rows: Sequence[YearRow], benchmark_name: str | None) -> str:
     ]
     marks += [
         f"<line x1='0' x2='{inner_w}' y1='{y(t):.2f}' y2='{y(t):.2f}' class='grid'/>"
-        f"<text x='-8' y='{y(t) + 3:.2f}' text-anchor='end' style='{AXIS_TEXT}'>{_pct(t, 0)}</text>"
+        f"<text x='-8' y='{y(t) + 3:.2f}' text-anchor='end' style='{AXIS_TEXT}'>"
+        f"{fmt.percent(t, 0)}</text>"
         for t in ticks
     ]
     mean = float(np.mean(values[: len(data)]))
