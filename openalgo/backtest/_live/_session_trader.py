@@ -13,10 +13,13 @@ venue map, the slices it releases live, its decisions and its broker candles.
 - **Decisions** (`drive`): at each strategy bar close the bars are revealed and the
   kernel's events delivered; `on_bar` runs when the strategy decides: trading has begun
   (the decision at or after `decide_from_ns`), its indicators are ready, and no base
-  slice of the bar is marked missing. Timers fire on the same terms. A skipped decision
-  is logged, and kept when it was skipped for missing data. An exception of the
-  strategy's code is raised as `StrategyFailed` once the kernel waits again (it refuses
-  the venue's results at a bar close), after which the strategy is called no more.
+  slice of the bar, nor of the bar before it in the series, is marked missing: a
+  crossing reads that bar too, and the candle that fills such a hole (the slice
+  watching began in) usually comes seconds later (`_unread`). Timers fire on the same
+  terms. A skipped decision is logged, and kept when it was skipped for missing data. An
+  exception of the strategy's code is raised as `StrategyFailed` once the kernel waits
+  again (it refuses the venue's results at a bar close), after which the strategy is
+  called no more.
 - **Commands** (`commands`): the kernel's commands as the order worker's requests. A
   placement the kernel cancelled before the loop took it (the safe stop's cancel of an
   entry decided in the same loop step) is withdrawn: it is never sent, and the kernel is
@@ -233,13 +236,13 @@ class Trader(Bookkeeping):
         if not part.indicators_ready(decided_at):
             logger.debug("%s: indicators not ready at %s", self.name, format_ist(decided_at))
             return
-        missing = part.series.missing_slices(bar.ts_open, bar.ts_close)
+        missing = self._unread(bar.ts_open, bar.ts_close)
         if missing:
             skipped = Skipped(self.name, decided_at, SKIP_MISSING)
             self.skipped.append(skipped)
             logger.warning(
-                "%s: the decision at %s is skipped: the bar holds %d minute(s) with no data "
-                "(from %s)",
+                "%s: the decision at %s is skipped: its bar or the bar before it holds %d "
+                "minute(s) with no data (from %s)",
                 self.name,
                 format_ist(decided_at),
                 len(missing),
@@ -256,6 +259,18 @@ class Trader(Bookkeeping):
                 self.name,
                 SLOW_CALLBACK_WARN_S,
             )
+
+    def _unread(self, ts_open_ns: int, ts_close_ns: int) -> tuple[int, ...]:
+        """The opens (UTC nanoseconds, oldest first) of the slices marked missing in the
+        strategy bar [ts_open_ns, ts_close_ns) or in the bar before it in the strategy's
+        series: a crossing, `shift(1)` or `[-2]` reads that bar too, so a hole there (the
+        minute watching began in, after a start in the middle of the session, until its
+        candle is read) would make the decision on values a backtest never has. A hole
+        further back skips no decision: a minute whose candle never comes holds up one
+        decision more, not the rest of the day."""
+        opens = self.part.context.store(self.symbol).column("ts_open")
+        since = int(opens[-2]) if len(opens) > 1 else ts_open_ns
+        return self.part.series.missing_slices(since, ts_close_ns)
 
     def _calling(self, function: Callable[..., Any], *args: Any) -> None:
         try:
