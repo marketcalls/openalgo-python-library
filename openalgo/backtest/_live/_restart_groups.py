@@ -66,13 +66,13 @@ def judge_group(
     external_units = sum(trade.signed for trade in external)
     unexplained = unexplained_by(total, broker_units, external_units, adopted_units)
     verdict = group_restart_kind(units, broker_units, unexplained)
-    kind = group_kind(total, broker_units, unexplained)
+    kind = group_kind(units, broker_units, unexplained)
     shares = ()
     if kind is Kind.EXPLAINED_SHARED:
         opened = opened_ns or {}
         holders = [(name, held, opened.get(name)) for name, held in zip(names, units, strict=True)]
         shares = allocate(holders, broker_units - total, external)
-    figure = GroupFigure(names, total, shares)
+    figure = GroupFigure(names, total, shares, tuple(units), external_units - adopted_units)
     where, who = f"{group.symbol} {group.exchange}", and_join(names)
     refusal = None
     if verdict is RestartKind.UNKNOWN_POSITION:

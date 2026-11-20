@@ -32,6 +32,13 @@ of `reconcile.Reconciler`). A group of one is compared as a leg always was
   member).
 - **Agreement** tells the margin holds (`_margin_reject`): a position a closing order's
   rejection held may be exited again.
+- **The last read** of each shared instrument (`group_read`, `GroupRead`; 18-multi-strategy
+  4.11): the broker's net of every comparison that read its position book, kept with the
+  members' sum once the comparison has acted and whether it was late, for the close's row
+  and line of the instrument. A late read's position book may hold a fill of a member's
+  order in flight that its engine hears only later, so the close names its net as that
+  read saw it and never carries it by the members' fills since, as for a leg
+  (`_reconcile_close.LATE_READ`).
 
 Quantities are signed units, times UTC nanoseconds. Used by the loop only.
 """
@@ -39,6 +46,7 @@ Quantities are signed units, times UTC nanoseconds. Used by the loop only.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from .._engine import call
@@ -56,6 +64,18 @@ from .inbox import Books
 _NS = NANOS_PER_SECOND
 
 
+@dataclass(frozen=True)
+class GroupRead:
+    """The last read of a shared instrument that a comparison of its group took
+    (`GroupComparison.group_read`): the broker's `net` and the members' sum `held` once
+    that comparison had acted (signed units), and whether it compared `late` (a member in
+    flight past the limit: module docstring)."""
+
+    net: int
+    held: int
+    late: bool = False
+
+
 class GroupComparison:
     """The comparison of a shared instrument's group, part of `reconcile.Reconciler`
     (module docstring), which holds the session (`_session`), the exit guard (`guard`),
@@ -71,9 +91,16 @@ class GroupComparison:
     _quiet: dict[str, int | None]
     _only: frozenset[str] | None
     _figures: dict[str, GroupFigure]
+    _group_reads: dict[tuple[str, str], GroupRead]
     adopted: Any
     _noted: Any
     _soon: Any
+
+    def group_read(self, symbol: str, exchange: str) -> GroupRead | None:
+        """The last read of the shared instrument `exchange:symbol` that a comparison of
+        its group took (`GroupRead`); None when no comparison of this start read its
+        position book."""
+        return self._group_reads.get((symbol, exchange))
 
     def _compare_shared(self, message: Books, *, late_after_s: float, again_s: float) -> bool:
         """Compare each shared instrument's group with a read (`_compare_group`), in the
@@ -152,16 +179,18 @@ class GroupComparison:
         everyone = frozenset().union(*bound.values()) | self._earlier
         units = {m.name: round(m.open_units()) for m in members}
         group_units = sum(units.values())
-        kind, shares = Kind.UNREADABLE, ()
+        kind, shares, pending = Kind.UNREADABLE, (), None
         if books.units is not None and books.trades is not None:
             trades = books.external(everyone)
             external = sum(trade.signed for trade in trades)
             adopted = sum(self.adopted(m.name) for m in members)
+            pending = external - adopted
             unexplained = unexplained_by(group_units, books.units, external, adopted)
-            kind = group_kind(group_units, books.units, unexplained)
+            kind = group_kind(tuple(units.values()), books.units, unexplained)
             if kind is Kind.EXPLAINED_SHARED:
                 shares = _shared_out(members, units, books.units - group_units, trades)
-        figure = GroupFigure(tuple(m.name for m in members), group_units, shares)
+        names, held = tuple(units), tuple(units.values())
+        figure = GroupFigure(names, group_units, shares, held, pending)
         polls = False
         for member in active:
             self._figures[member.name] = figure
@@ -189,6 +218,10 @@ class GroupComparison:
                 self.guard.read(member.name, message.started_ns)
         if kind is Kind.AGREE and not late:
             session.margin.agreed(list(active), message.started_ns)
+        if books.units is not None:
+            held_now = sum(round(m.open_units()) for m in members)
+            read = GroupRead(books.units, held_now, late)
+            self._group_reads[(members[0].symbol, members[0].exchange)] = read
         return polls
 
 
@@ -214,4 +247,4 @@ def _opened_ns(trader: Trader) -> int | None:
     return min(opened) if opened else None
 
 
-__all__ = ["GroupComparison"]
+__all__ = ["GroupComparison", "GroupRead"]

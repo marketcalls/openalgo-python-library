@@ -17,9 +17,11 @@ protect.
   side by `d` at most the order's units left, it filled `d` before its cancel, released
   with them at the estimate (`release_cancel`); anything else, or a book that cannot be
   read, an ERROR alert at once and a read again. On an instrument several strategies of
-  the session share, the position book shows the net of all of them and cannot tell what
-  one order filled: the trade book alone decides, and an ERROR alert says so once the
-  wait is over (18-multi-strategy 4.5; the group's two-book read is unit M7's).
+  the session share, the position book shows the net of all of them: the read takes the
+  order book after it (`ReadPositions(orders=True)`), and the cancel is decided only when
+  it is the only held word of the group and nothing of another member can be at the
+  broker unheard, then against the members' sum (`_stops_held_group`, 18-multi-strategy
+  4.5, unit M7); a read without the order book decides nothing there.
 
 A word is held's when its filled units are above what the kernel has of the order (a
 fill), else its terminal word waits (a cancel). Each held word is released once: it is
@@ -40,6 +42,7 @@ from .._layout import NANOS_PER_SECOND
 from ._order_state import HeldFill
 from ._plan_catch_up import INSTRUMENT
 from ._session_trader import Trader
+from ._stops_held_group import decide_shared, unheard
 from ._stops_kernel import order_of
 from ._types import LOGGER_NAME, AlertKind
 from ._venue_requests import LIVE_PRODUCT
@@ -111,7 +114,7 @@ class HeldWords:
     def due(self, now_ns: int) -> None:
         """Release the held fills past their wait; ask for the position book for a held
         cancel past its wait."""
-        cancels = []
+        cancels, shared = [], False
         for word in self._held:
             owner = self._owner(word.order_id)
             if owner is None:
@@ -122,23 +125,23 @@ class HeldWords:
                     self._release(trader, kernel_order, word, word.filled_quantity, now_ns)
             elif self._decidable(trader, word, now_ns):
                 cancels.append(word)
-            elif self._session.groups.shared(trader) and _waited(word, now_ns):
-                self._left_to_trade_book(trader, word.order_id)
+                shared |= self._session.groups.shared(trader)
         if cancels and (self._read_due_ns is None or now_ns >= self._read_due_ns):
             self._read_due_ns = now_ns + round(POSITION_READ_EVERY_S * _NS)
-            self._session.hand_over([ReadPositions()])
+            self._session.hand_over([ReadPositions(orders=shared)])
 
     def _decidable(self, trader: Trader, word: HeldFill, now_ns: int) -> bool:
         """Whether the position book may decide a held cancel of `trader` at `now_ns`: past
-        its wait, not released yet (the worker's next word of the held list drops it),
-        the only held word of its leg (with another, a fill the kernel does not have yet,
-        the broker's net units cannot tell what the cancelled order filled), and of an
-        instrument no other strategy of the session trades (module docstring)."""
+        its wait, not released yet (the worker's next word of the held list drops it), and
+        the only held word of its leg, or of its group on a shared instrument (with
+        another, a fill the kernel does not have yet, the broker's net units cannot tell
+        what the cancelled order filled; module docstring)."""
         if not _waited(word, now_ns) or _key(word) in self._released:
             return False
+        names = {trader.name}
         if self._session.groups.shared(trader):
-            return False
-        return sum(self._leg_of(w) == trader.name for w in self._held) == 1
+            names = {member.name for member in self._session.groups.members(trader)}
+        return sum(self._leg_of(w) in names for w in self._held) == 1
 
     def positions(self, message: PositionRows) -> None:
         """A position-book read: decide each held cancel the book may decide at the
@@ -151,11 +154,16 @@ class HeldWords:
             if not self._decidable(trader, word, message.read_ns):
                 continue
             net = net_units(message.positionbook, trader.symbol, trader.exchange)
-            filled = self._decide(trader, kernel_order, net)
-            if filled is None:
-                self._undecided(trader, word.order_id, net)
-                continue
-            self._release(trader, kernel_order, word, filled, message.read_ns)
+            if self._session.groups.shared(trader):
+                if message.orderbook is None:
+                    continue
+                filled = self._decide_shared(trader, kernel_order, word, message, net)
+            else:
+                filled = self._decide(trader, kernel_order, net)
+                if filled is None:
+                    self._undecided(trader, word.order_id, net)
+            if filled is not None:
+                self._release(trader, kernel_order, word, filled, message.read_ns)
 
     def _decide(self, trader: Trader, kernel_order: int, net: int | None) -> int | None:
         """The units the order filled in all, from the broker's net position; None when
@@ -172,6 +180,30 @@ class HeldWords:
         if same_side and 0 < missing <= left:
             return known + missing
         return None
+
+    def _decide_shared(
+        self,
+        trader: Trader,
+        kernel_order: int,
+        word: HeldFill,
+        message: PositionRows,
+        net: int | None,
+    ) -> int | None:
+        """The units a held cancel of `trader` on a shared instrument filled in all, from a
+        two-book read (`_stops_held_group`); None, alerted once, while the read cannot tell."""
+        why = unheard(self._session, trader, message.orderbook)
+        order = order_of(trader, kernel_order)
+        filled = None
+        if why is None and order is not None:
+            members = self._session.groups.members(trader)
+            held = sum(round(member.open_units()) for member in members)
+            action = trader.venue.intent_of(kernel_order).action
+            filled = decide_shared(net, held, order, action)
+            if filled is None:
+                why = f"the position book shows {net} units, the members hold {held} together"
+        if filled is None:
+            self._undecided_shared(trader, word.order_id, why or "its order is not known")
+        return filled
 
     def _release(
         self, trader: Trader, kernel_order: int, word: HeldFill, filled: int, now_ns: int
@@ -219,18 +251,17 @@ class HeldWords:
             "check the order book",
         )
 
-    def _left_to_trade_book(self, trader: Trader, order_id: str) -> None:
-        """A held cancel on a shared instrument past its wait: alerted once, left to the
-        trade book (module docstring)."""
+    def _undecided_shared(self, trader: Trader, order_id: str, why: str) -> None:
+        """A held cancel on a shared instrument a two-book read cannot decide (`why`):
+        alerted once, read again (module docstring)."""
         if order_id in self._alerted:
             return
         self._alerted.add(order_id)
         self._session.alert(
             AlertKind.ERROR,
             f"{trader.symbol}: stop {order_id} of {trader.name} cancelled, its fills not "
-            "confirmed; the position book shows the net of every strategy of the session on "
-            f"{trader.symbol}, so it cannot tell them: the trade book decides, and no exit of "
-            f"{trader.name} is sent until it does. Check the order book",
+            f"confirmed ({why}); no exit of {trader.name} is sent until the books tell: check "
+            "the order book",
         )
 
     def _is_cancel(self, trader: Trader, word: HeldFill) -> bool:

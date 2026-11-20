@@ -18,6 +18,15 @@ Never an exit, never the kill switch. A finding on a leg in flight past the in-f
 limit is alerted, with nothing done; so is a restart's difference whose journal units
 the restored engine no longer holds (`stale`), with entries locked.
 
+**A shared instrument** (18-multi-strategy 4.6, 4.11): each member acts on its group's
+finding, locked and alerted with its own units and the group's sum; an excess and the
+other side have the group's words (`_group_rules.GROUP_WORDS`: nothing adopted, the
+excess no strategy's, every member's stop cancelled on the other side, and the session to
+be ended before closing by hand). One difference of the group is one mismatch of the day
+and, on the other side, one ERROR alert naming the instrument, however many members act on
+it (`_first_of_group`). What an act made of the group, the allocation and the member's
+stop cut, is kept for its row of the reconciliations (`done`).
+
 Quantities are signed units, prices rupees, times UTC nanoseconds. Used by the loop only.
 """
 
@@ -28,7 +37,7 @@ from typing import Any
 
 from .._engine import call
 from ..errors import VenueRefusalError
-from ._group_rules import GroupFigure, and_join
+from ._group_rules import GROUP_WORDS, GroupFigure, and_join, group_words, other_side_alert
 from ._plan_catch_up import INSTRUMENT
 from ._reconcile_allocate import allocation_words
 from ._reconcile_rules import FEWER_STOP_CANCELLED, RULES, Kind, LegBooks, adoption_price
@@ -75,47 +84,83 @@ class Corrections:
         self._adopted = adopted
         self._orphans = orphans
         self.figures: dict[str, GroupFigure] = {} if figures is None else figures
+        # The group differences acted on, each counted and alerted once (`_first_of_group`).
+        self._groups_acted: set[tuple[Any, ...]] = set()
+        # By strategy: what its last act made of its group, for its row (`done`).
+        self._done: dict[str, tuple[str, str]] = {}
+
+    def done(self, name: str) -> tuple[str, str]:
+        """What the last act on strategy `name`, a member of a shared instrument, made of
+        its group, in words: the allocation made and its own stop's cut ("" for none of
+        either; both "" for a strategy alone or with no act since). Forgets it."""
+        return self._done.pop(name, ("", ""))
 
     def act(self, trader: Trader, finding: Finding, books: LegBooks, own: frozenset[str]) -> str:
         """Act on a finding seen twice in a row; what was done."""
         session, kind = self._session, finding[0]
-        session.mismatches += 1
+        first = self._first_of_group(trader, finding)
+        if first:
+            session.mismatches += 1
         if trader.lock(RECONCILE_LOCK):
             session.event("lock", strategy=trader.name, reason=RECONCILE_LOCK)
-        action = "locked"
-        if kind == "orphan":
-            self._orphans.add(finding[1])
-            session.hand_over([CancelOrphan(finding[1])])
-            action = "orphan cancelled"
-            words = f"order {finding[1]} works at the broker, the engine does not hold it: "
-            words += "it is cancelled"
-        elif kind == "foreign":
-            words = f"order {finding[1]} names the strategy and the session did not send it: "
-            words += "nothing is sent for it. Check it in OpenAlgo"
-        elif kind == "stop_terms":
-            words = f"its stop {finding[1]} shows {finding[2]} units at {finding[3]:.2f} at the "
-            words += "broker, not the engine's terms. Check it in OpenAlgo"
-        elif kind is Kind.EXPLAINED_SHARED:
-            action, words = self._share_adopted(trader, books, own)
+        group = self.figures.get(trader.name)
+        stop_id = "" if group is None else self._stop_id(trader)
+        if isinstance(kind, Kind):
+            action, words = self._position(trader, finding, books, own)
         else:
-            rule = RULES[kind]
-            words = rule.words
-            if rule.adopt:
-                action = self._adopt(trader, finding[1], finding[2], books, own)
-            if action == ADOPTED_STOP_CANCELLED and kind is Kind.EXPLAINED_FEWER:
-                words = FEWER_STOP_CANCELLED
-            if action.startswith(NOT_ADOPTED):
-                words = NOT_ADOPTED_WORDS
-            if rule.cancel_stop:
-                action = self._cancel_stop(trader)
+            action, words = self._order(finding)
         session.alert(AlertKind.RECONCILE_MISMATCH, self._words(trader, finding, books, own, words))
-        if kind is Kind.OTHER_SIDE:
+        if kind is Kind.OTHER_SIDE and group is None:
             session.alert(
                 AlertKind.ERROR,
                 f"{trader.name}: OpenAlgo's books show {trader.symbol} {trader.exchange} on "
                 f"the other side of the engine's position: close it by hand in OpenAlgo",
             )
+        elif kind is Kind.OTHER_SIDE and first and group is not None:
+            text = other_side_alert(trader.symbol, trader.exchange, group, finding[2])
+            session.alert(AlertKind.ERROR, text)
+        if group is not None:
+            self._done[trader.name] = _made(group, trader.name, kind, action, stop_id)
         return action
+
+    def _order(self, finding: Finding) -> tuple[str, str]:
+        """An order finding seen twice in a row (an orphan, another's order naming the
+        strategy, the stop's terms): what was done and the alert's words."""
+        kind, order_id = finding[0], finding[1]
+        if kind == "orphan":
+            self._orphans.add(order_id)
+            self._session.hand_over([CancelOrphan(order_id)])
+            words = f"order {order_id} works at the broker, the engine does not hold it: "
+            return "orphan cancelled", words + "it is cancelled"
+        if kind == "foreign":
+            words = f"order {order_id} names the strategy and the session did not send it: "
+            return "locked", words + "nothing is sent for it. Check it in OpenAlgo"
+        words = f"its stop {order_id} shows {finding[2]} units at {finding[3]:.2f} at the "
+        return "locked", words + "broker, not the engine's terms. Check it in OpenAlgo"
+
+    def _position(
+        self, trader: Trader, finding: Finding, books: LegBooks, own: frozenset[str]
+    ) -> tuple[str, str]:
+        """A position difference seen twice in a row: the rule of 5.3 for a leg, the
+        group's for a member of a shared instrument (module docstring). What was done and
+        the alert's words."""
+        kind, group = finding[0], self.figures.get(trader.name)
+        if kind is Kind.EXPLAINED_SHARED:
+            return self._share_adopted(trader, books, own)
+        if group is not None and kind in GROUP_WORDS:
+            action = self._cancel_stop(trader) if kind is Kind.OTHER_SIDE else "locked"
+            return action, group_words(kind, group, finding[2])
+        action, rule = "locked", RULES[kind]
+        words = rule.words
+        if rule.adopt:
+            action = self._adopt(trader, finding[1], finding[2], books, own)
+        if action == ADOPTED_STOP_CANCELLED and kind is Kind.EXPLAINED_FEWER:
+            words = FEWER_STOP_CANCELLED
+        if action.startswith(NOT_ADOPTED):
+            words = NOT_ADOPTED_WORDS
+        if rule.cancel_stop:
+            action = self._cancel_stop(trader)
+        return action, words
 
     def alert_only(
         self, trader: Trader, finding: Finding, books: LegBooks, own: frozenset[str]
@@ -134,7 +179,8 @@ class Corrections:
         holds other units: entries locked and alerted, nothing adopted or cancelled, since
         the books read at the start no longer describe the leg."""
         session = self._session
-        session.mismatches += 1
+        if self._first_of_group(trader, finding):
+            session.mismatches += 1
         if trader.lock(RECONCILE_LOCK):
             session.event("lock", strategy=trader.name, reason=RECONCILE_LOCK)
         words = (
@@ -205,6 +251,28 @@ class Corrections:
             return ADOPTED_STOP_CANCELLED
         return "adopted"
 
+    def _first_of_group(self, trader: Trader, finding: Finding) -> bool:
+        """Whether `finding` is the first act on its difference: always for a strategy
+        alone and for a member's own finding (an orphan, a stop's terms); for a position
+        difference of a shared instrument, only for the first member acting on it, so the
+        group's difference counts and alerts once (module docstring)."""
+        group = self.figures.get(trader.name)
+        if group is None or not isinstance(finding[0], Kind):
+            return True
+        key = (trader.symbol, trader.exchange, finding[0], group.units, finding[2])
+        if key in self._groups_acted:
+            return False
+        self._groups_acted.add(key)
+        return True
+
+    def _stop_id(self, trader: Trader) -> str:
+        """The broker's order ID of `trader`'s working stop before an act changes it ("" for
+        none, "not bound" for one OpenAlgo has not answered yet)."""
+        stop = self._session.stops.leg(trader).stop
+        if stop is None or stop not in trader.working():
+            return ""
+        return trader.venue.order_id_of(stop) or "not bound"
+
     def _cancel_stop(self, trader: Trader) -> str:
         stop = self._session.stops.leg(trader).stop
         if stop is None or stop not in trader.working():
@@ -240,6 +308,25 @@ class Corrections:
             shown += " for them together"
         leg = f"{trader.name} {trader.symbol} {trader.exchange}"
         return f"{leg}: {held}, {shown}{orders}: {what}.{lock}"
+
+
+def _made(group: GroupFigure, name: str, kind: Any, action: str, stop_id: str) -> tuple[str, str]:
+    """What an act on strategy `name`, a member of `group`, made of it
+    (`Corrections.done`): the allocation, when a difference other orders' trades explain
+    was shared out, and the member's stop (`stop_id`, its broker order ID; "" for none)
+    cut down or cancelled: by its share's adoption, the kernel fitting the stop to what is
+    left (or the held cancel an exit asked for sent), or on the other side by its cancel."""
+    if kind is Kind.OTHER_SIDE:
+        return "", (f"stop {stop_id} cancelled" if stop_id and action == "stop cancelled" else "")
+    if kind is not Kind.EXPLAINED_SHARED:
+        return "", ""
+    share, cut = group.share(name), ""
+    if stop_id and share is not None and share.taken and action.startswith("adopted"):
+        if share.left == 0 or action == ADOPTED_STOP_CANCELLED:
+            cut = f"stop {stop_id} cancelled"
+        else:
+            cut = f"stop {stop_id} cut to {abs(share.left)} units"
+    return group.allocation(), cut
 
 
 __all__ = [

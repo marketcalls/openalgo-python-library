@@ -23,7 +23,7 @@ from session_invariants_stream import (
 )
 from session_trace import Closing, OrderChange, Run, SessionTrace
 
-from openalgo.backtest._live._session_close import OpenPosition
+from openalgo.backtest._live._session_open import OpenPosition
 from openalgo.backtest._live._types import AlertKind, Mode
 from openalgo.backtest._live._venue_requests import ModifyRequest
 

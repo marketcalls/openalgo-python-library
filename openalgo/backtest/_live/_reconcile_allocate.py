@@ -75,7 +75,8 @@ def allocation_words(figure: GroupFigure, name: str) -> str:
     """What the allocation of `figure` does, in the words of strategy `name`'s
     RECONCILE_MISMATCH alert: the units other orders sold or bought, the share each member
     takes and what it leaves it, the most recently opened first; that `name` keeps its
-    units when it takes none; and that each share is adopted with its stop cut."""
+    units when it takes none, or that it is flat and takes none when it holds none; and
+    that each share is adopted with its stop cut."""
     taken = [share for share in figure.shares if share.taken]
     units = sum(abs(share.taken) for share in taken)
     verb = "sold" if taken and taken[0].taken < 0 else "bought"
@@ -86,7 +87,8 @@ def allocation_words(figure: GroupFigure, name: str) -> str:
     )
     own = figure.share(name)
     if own is not None and not own.taken:
-        words += f"; {name} keeps its {abs(own.units)} units"
+        kept = f"keeps its {abs(own.units)} units" if own.units else "is flat and takes none"
+        words += f"; {name} {kept}"
     return words + (
         "; each takes its share as its own, its stop cut down to what it is left with, or cancelled"
     )

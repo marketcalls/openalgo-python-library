@@ -12,6 +12,7 @@ of SBIN unless a row says otherwise.
 from __future__ import annotations
 
 import pytest
+from test_reconcile_rules import TABLE_5_3, TABLE_5_5
 
 from openalgo.backtest._live._group_rules import (
     GroupFigure,
@@ -19,10 +20,18 @@ from openalgo.backtest._live._group_rules import (
     and_join,
     group_kind,
     group_restart_kind,
+    group_words,
+    other_side_alert,
 )
 from openalgo.backtest._live._groups import InstrumentGroup
 from openalgo.backtest._live._reconcile_allocate import allocate, allocation_words
-from openalgo.backtest._live._reconcile_rules import Kind, RestartKind, Trade
+from openalgo.backtest._live._reconcile_rules import (
+    Kind,
+    RestartKind,
+    Trade,
+    adoption_price,
+    unexplained_by,
+)
 from openalgo.backtest._live._restart_groups import judge_group
 
 SBIN = InstrumentGroup("SBIN", "NSE", "MIS", ("A", "B"))
@@ -41,34 +50,92 @@ def bought(units: int, price: float = 501.0, order_id: str = "h1") -> Trade:
 
 
 @pytest.mark.parametrize(
-    ("group", "broker", "unexplained", "kind"),
+    ("members", "broker", "unexplained", "kind"),
     [
-        (150, 150, 0, Kind.AGREE),
-        (150, None, 0, Kind.UNREADABLE),
-        (150, 200, 50, Kind.MORE),
-        (0, 30, 30, Kind.MORE),
-        (150, -30, -180, Kind.OTHER_SIDE),
-        (150, 90, 0, Kind.EXPLAINED_SHARED),
-        (150, 0, 0, Kind.EXPLAINED_SHARED),
-        (150, 90, -60, Kind.UNEXPLAINED),
-        (150, 0, -150, Kind.UNEXPLAINED),
+        ((100, 50), 150, 0, Kind.AGREE),
+        ((100, 50), None, 0, Kind.UNREADABLE),
+        ((100, 50), 160, 10, Kind.MORE),
+        ((100, 50), 160, 0, Kind.MORE),
+        ((0, 0), 30, 30, Kind.MORE),
+        ((0, 0), -30, -30, Kind.MORE),
+        ((-100, -50), -160, -10, Kind.MORE),
+        ((100, 50), -50, 0, Kind.OTHER_SIDE),
+        ((100, 50), -30, -180, Kind.OTHER_SIDE),
+        ((100, 50), 90, 0, Kind.EXPLAINED_SHARED),
+        ((100, 50), 0, 0, Kind.EXPLAINED_SHARED),
+        ((-100, -50), -120, 0, Kind.EXPLAINED_SHARED),
+        ((100, 50), 90, -60, Kind.UNEXPLAINED),
+        ((100, 50), 0, -150, Kind.UNEXPLAINED),
+        ((100, -50), 80, 0, Kind.EXPLAINED_SHARED),
+        ((100, -50), 120, 0, Kind.UNEXPLAINED),
+        ((100, -100), 30, 30, Kind.UNEXPLAINED),
+        ((100, -50), -10, 0, Kind.EXPLAINED_SHARED),
+        ((100, -50), -110, 0, Kind.OTHER_SIDE),
     ],
     ids=[
         "agree",
         "unreadable",
-        "more",
-        "more of a flat group",
-        "other side",
-        "fewer, explained: shared out",
-        "flat, explained: shared out",
+        "a buy by hand on an all-long group: an excess",
+        "an excess the trades explain is still an excess",
+        "an excess of a flat group",
+        "a short excess of a flat group",
+        "a sale by hand on an all-short group: an excess",
+        "a sale beyond the members, explained: the other side",
+        "the other side, unexplained",
+        "fewer, explained: absorbed",
+        "flat, explained: absorbed",
+        "a buy by hand on a short group: absorbed",
         "fewer, unexplained",
         "flat, unexplained",
+        "mixed sides: a buy the short member absorbs",
+        "mixed sides: a buy beyond the short member",
+        "mixed sides at no net: more, with a short member to close",
+        "mixed sides: a sale the long member absorbs, though the net turns short",
+        "mixed sides: a sale beyond the long member, the net short: the other side",
     ],
 )
-def test_the_groups_kind_judges_the_members_sum_against_the_brokers_net(
-    group, broker, unexplained, kind
+def test_the_groups_kind_judges_the_members_sum_by_the_rows_of_4_6(
+    members, broker, unexplained, kind
 ):
-    assert group_kind(group, broker, unexplained) is kind
+    assert group_kind(members, broker, unexplained) is kind
+
+
+@pytest.mark.parametrize(("engine", "broker", "external", "adopted", "kind"), TABLE_5_3)
+def test_a_group_of_one_is_judged_by_the_table_of_5_3_as_a_leg(
+    engine, broker, external, adopted, kind
+):
+    # A group of one member is 16's rows exactly (4.6): an explained difference, row 1 or
+    # 2, is the group's explained one, which the allocation gives that member whole.
+    unexplained = 0 if broker is None else unexplained_by(engine, broker, external, adopted)
+    explained = (Kind.EXPLAINED_FLAT, Kind.EXPLAINED_FEWER)
+    expected = Kind.EXPLAINED_SHARED if kind in explained else kind
+    assert group_kind((engine,), broker, unexplained) is expected
+
+
+@pytest.mark.parametrize(("journal", "broker", "unexplained", "verdict"), TABLE_5_5)
+def test_a_restart_of_a_group_of_one_is_judged_by_the_table_of_5_5_as_a_leg(
+    journal, broker, unexplained, verdict
+):
+    assert group_restart_kind((journal,), broker, unexplained) is verdict
+
+
+@pytest.mark.parametrize(
+    ("engine", "broker", "trades"),
+    [
+        (10, 0, [sold(10, 498.0)]),
+        (10, 4, [sold(6, 498.0)]),
+        (-10, -4, [bought(6, 502.0)]),
+        (10, 4, [sold(5, 499.0, "h1"), bought(2, 501.0, "h2"), sold(3, 496.0, "h3")]),
+    ],
+    ids=["flat", "fewer", "fewer short", "the newest trades first"],
+)
+def test_a_group_of_one_adopts_an_explained_difference_as_a_leg_does(engine, broker, trades):
+    # The leg adopts the whole difference at the newest of the other orders' trades on its
+    # side (5.3 rows 1 and 2): the allocation gives a member alone the same units and price.
+    side = "SELL" if broker < engine else "BUY"
+    (share,) = allocate([("A", engine, None)], broker - engine, trades)
+    assert (share.taken, share.left) == (broker - engine, broker)
+    assert share.price == pytest.approx(adoption_price(trades, abs(broker - engine), side))
 
 
 @pytest.mark.parametrize(
@@ -107,7 +174,7 @@ def test_a_restart_judges_the_members_sum_against_the_brokers_net(
 def test_a_restart_of_a_group_whose_sum_agrees_resumes_with_nothing_to_act_on():
     start = judge_group(SBIN, {"A": 100, "B": 50}, 150, (), 0)
     assert (start.restart, start.kind, start.refusal) == (RestartKind.RESUME, Kind.AGREE, None)
-    assert start.figure == GroupFigure(("A", "B"), 150)
+    assert start.figure == GroupFigure(("A", "B"), 150, (), (100, 50), 0)
 
 
 def test_a_restart_of_a_group_names_the_instrument_and_every_member_when_it_refuses():
@@ -133,6 +200,8 @@ def test_a_restart_of_a_group_after_a_sale_by_hand_shares_it_out_by_the_saved_op
     start = judge_group(SBIN, {"A": 100, "B": 50}, 90, (sold(60),), 0, opened)
     assert (start.restart, start.kind) == (RestartKind.DIFFERS, Kind.EXPLAINED_SHARED)
     assert start.figure.shares == (Share("B", 50, -50, 499.0), Share("A", 100, -10, 499.0))
+    # The members' units as judged, and the 60 sold by hand not taken in yet.
+    assert (start.figure.held, start.figure.external) == ((100, 50), -60)
 
 
 def test_a_restart_of_a_group_whose_openings_are_not_saved_shares_out_by_call_order():
@@ -142,7 +211,8 @@ def test_a_restart_of_a_group_whose_openings_are_not_saved_shares_out_by_call_or
 
 def test_a_member_moved_away_is_left_out_of_its_groups_sum():
     start = judge_group(SBIN, {"A": 100}, 100, (), 0)
-    assert (start.restart, start.figure) == (RestartKind.RESUME, GroupFigure(("A",), 100))
+    figure = GroupFigure(("A",), 100, (), (100,), 0)
+    assert (start.restart, start.figure) == (RestartKind.RESUME, figure)
 
 
 @pytest.mark.parametrize(
@@ -250,3 +320,53 @@ def test_a_figure_gives_each_members_share_and_none_for_a_member_without_one():
     figure = GroupFigure(("A", "B"), 150, (Share("A", 100, -60, 499.0),))
     assert (figure.share("A"), figure.share("B")) == (Share("A", 100, -60, 499.0), None)
     assert Share("A", 100, -60).left == 40
+
+
+def test_the_allocation_tells_a_flat_member_it_takes_none():
+    figure = GroupFigure(("A", "Flat"), 100, (Share("A", 100, -60, 499.0), Share("Flat", 0, 0)))
+    words = allocation_words(figure, "Flat")
+    assert "taken from A 60 (40 left); Flat is flat and takes none;" in words
+    assert "keeps its 0 units" not in words
+
+
+def test_a_figure_names_each_members_units_and_the_allocation_made():
+    shares = (Share("B", 50, -50, 499.0), Share("A", 100, -10, 499.0), Share("C", 0, 0))
+    figure = GroupFigure(("A", "B", "C"), 150, shares, (100, 50, 0), -60)
+    assert figure.member_units() == "A 100, B 50, C 0"
+    assert figure.allocation() == "B -50 to 0, A -10 to 90"
+    assert GroupFigure(("A", "B"), 150).member_units() == ""
+    assert GroupFigure(("A", "B"), 150).allocation() == ""
+
+
+# ----- the excess and the other side (4.6) ------------------------------------------------
+
+
+def test_an_excess_says_the_units_beyond_the_members_are_no_strategys_to_close_after_the_end():
+    words = group_words(Kind.MORE, GroupFigure(("A", "B"), 150), 160)
+    assert words == (
+        "the 10 units beyond what they hold are no strategy's of the session: nothing is sent "
+        "for them and they have no stop at the broker. End the session, then close them by "
+        "hand in OpenAlgo"
+    )
+
+
+def test_the_other_side_says_each_members_stop_is_cancelled_and_nothing_adopted():
+    words = group_words(Kind.OTHER_SIDE, GroupFigure(("A", "B"), 150), -50)
+    assert words == (
+        "the broker holds the other side of what they hold together: nothing is adopted, each "
+        "member's stop is cancelled and nothing else is sent. End the session, then close the "
+        "position by hand in OpenAlgo"
+    )
+
+
+def test_the_other_sides_error_alert_names_the_instrument_its_members_and_both_figures():
+    text = other_side_alert("SBIN", "NSE", GroupFigure(("A", "B"), 150), -50)
+    assert text == (
+        "SBIN NSE: OpenAlgo's books show -50 units, the other side of the 150 units A and B "
+        "hold together: end the session, then close the position by hand in OpenAlgo"
+    )
+
+
+def test_only_an_excess_and_the_other_side_have_group_words():
+    with pytest.raises(KeyError):
+        group_words(Kind.UNEXPLAINED, GroupFigure(("A", "B"), 150), 90)

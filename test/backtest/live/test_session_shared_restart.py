@@ -10,7 +10,10 @@ refuses the start naming the group; any other difference resumes every member wi
 entries locked. A sale by hand while the session was down, which the trade book explains,
 is shared out among the members as in a session (4.7, `_reconcile_allocate`), the position
 that opened most recently by the saved state first, each member adopting its share with
-its stop cut to what is left.
+its stop cut to what is left. The rows F109 to F112 of 18-multi-strategy 5.2 (unit M7): each
+member restored with its own stop, the gates set before its first decision; a member's stop
+that filled while down attributed to that member alone; a member's missing stop placed
+again before the banner; a stop no member holds cancelled as an orphan.
 
 The market and the strategies are `shared_samples`': SBIN at 500.00; `OnceA` buys 100 and
 `OnceB` 50 at their first decision (14:42:01 IST, A first), `LateOnceB` 50 at its second
@@ -26,14 +29,16 @@ import logging
 
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
-from restart_samples import crash_at, crashing, restart, run_to_crash
+from restart_samples import crash_at, crashing, restart, run_to_crash, stops_working
 from session_samples import alerts, ist
+from session_trace import NO_ORPHAN, ONE_STOP, WITHIN
 from shared_samples import A_UNITS, B_UNITS, NeverB, OnceA, OnceB, sbin_orders, terms
 from stops_samples import STOP_POINTS, at_price, stop_world
 
 import openalgo.backtest as bt
 from openalgo.backtest._live._session_news import RECONCILE_LOCK
-from openalgo.backtest._live._types import LOGGER_NAME
+from openalgo.backtest._live._types import LOGGER_NAME, Purpose
+from openalgo.backtest._live._venue_saved import RestoredOrders
 from openalgo.backtest.errors import LiveError
 
 #: When the first session dies.
@@ -51,6 +56,28 @@ class LateOnceB(OnceB):
         self.state["decisions"] = self.state.get("decisions", 0) + 1
         if self.state["decisions"] == 2 and not self.position.qty:
             self.buy(type(self).qty, stop=bt.points(STOP_POINTS))
+
+
+class WideOnceB(OnceB):
+    """`OnceB` with its stop 5 points below (495.00): a trade at 496.00 fills A's stop
+    only."""
+
+    def on_bar(self, bar):
+        if not self.state.get("bought") and not self.position.qty:
+            self.state["bought"] = True
+            self.buy(type(self).qty, stop=bt.points(5.0))
+
+
+class LimitAfterRestartB(OnceB):
+    """`OnceB` that, once `armed` (the test arms it after the crash), rests a LIMIT buy of
+    10 at 499.00 at each decision."""
+
+    armed = False
+
+    def on_bar(self, bar):
+        super().on_bar(bar)
+        if type(self).armed:
+            self.buy(10, price=499.0)
 
 
 @pytest.fixture
@@ -167,7 +194,10 @@ def test_a_restart_takes_a_sale_by_hand_from_the_position_its_saved_state_opened
     }
     assert stops(world, "OnceA")[-1] == ("SELL", NET, "SL-M", "trigger pending")
     assert stops(world, "LateOnceB")[-1] == ("SELL", B_UNITS, "SL-M", "cancelled")
-    assert {p.strategy: p.units for p in outcome.open_positions} == {"OnceA": NET}
+    assert {p.strategy: p.units for p in outcome.open_positions} == {
+        "OnceA": NET,
+        "OnceA and LateOnceB": NET,
+    }
 
 
 def test_after_a_restart_a_fall_through_the_stops_leaves_the_broker_flat(world):
@@ -177,3 +207,97 @@ def test_after_a_restart_a_fall_through_the_stops_leaves_the_broker_flat(world):
     at_price(world, ist(14, 46), 496.0)
     restart(world, [OnceA, OnceB], stop_ns=ist(14, 48), on_stop="keep")
     assert world.fake.position("SBIN", "NSE") == 0
+
+
+# ----- F109 to F112 (18-multi-strategy 5.2, unit M7) --------------------------------------
+
+
+def _first_stop(world, name: str) -> str:
+    """`name`'s first SL-M at the fake: its broker order ID."""
+    return next(o.order_id for o in sbin_orders(world, name) if o.price_type == "SL-M")
+
+
+def first_stops(world, *names: str) -> dict[str, str]:
+    """Each strategy's first SL-M at the fake, by name: its broker order ID."""
+    return {name: _first_stop(world, name) for name in names}
+
+
+def test_F109_each_member_resumes_with_its_own_stop_verified_by_its_order_id(world):
+    run_to_crash(world, [OnceA, OnceB])
+    before = first_stops(world, "OnceA", "OnceB")
+    outcome = restart(world, [OnceA, OnceB], stop_ns=ist(14, 47), on_stop="keep")
+    rows = {p.strategy: p for p in outcome.open_positions}
+    for name in ("OnceA", "OnceB"):
+        assert (rows[name].stop_order_id, rows[name].stop_confirmed) == (before[name], True)
+    assert [o for o in world.orders() if o.placed_ns >= CRASHED] == []
+
+
+def test_F109_the_gates_are_set_before_the_first_decision_of_the_restart(world, monkeypatch):
+    # B rests a LIMIT at its first decision after the restart: refused at submission, as
+    # on a shared instrument before the crash, so nothing rests at the broker.
+    run_to_crash(world, [OnceA, LimitAfterRestartB])
+    monkeypatch.setattr(LimitAfterRestartB, "armed", True)
+    outcome = restart(world, [OnceA, LimitAfterRestartB], stop_ns=ist(14, 47), on_stop="keep")
+    codes = outcome.outputs["LimitAfterRestartB"]["orders"]["reject_code"]
+    assert "shared_resting" in codes
+    assert [o for o in world.orders() if o.price_type == "LIMIT"] == []
+
+
+def test_F110_a_stop_that_filled_while_down_is_its_own_members_and_the_other_resumes(world):
+    # A's stop (497.00) fills at 496.00 while the session is down; B's (495.00) does not.
+    run_to_crash(world, [OnceA, WideOnceB])
+    world.fake.trade("SBIN", "NSE", 496.0, volume=10.0)
+    outcome = restart(world, [OnceA, WideOnceB], stop_ns=ist(14, 47), on_stop="keep")
+    assert stops(world, "OnceA")[-1][3] == "complete"
+    assert stops(world, "WideOnceB")[-1] == ("SELL", B_UNITS, "SL-M", "trigger pending")
+    assert adopted(outcome) == {}
+    assert outcome.reconciliations == ()
+    assert [o for o in world.orders() if o.placed_ns >= CRASHED] == []
+    assert {p.strategy: p.units for p in outcome.open_positions} == {
+        "WideOnceB": B_UNITS,
+        "OnceA and WideOnceB": B_UNITS,
+    }
+    assert world.fake.position("SBIN", "NSE") == B_UNITS
+
+
+def test_F111_a_members_missing_stop_is_placed_again_before_the_banner(world, caplog):
+    run_to_crash(world, [OnceA, OnceB])
+    world.fake.client().cancelorder(order_id=_first_stop(world, "OnceB"), strategy="OnceB")
+    restart(world, [OnceA, OnceB], stop_ns=ist(14, 47), on_stop="keep")
+    assert any(
+        "OnceB: 50 units of SBIN NSE have no working stop" in t for t in alerts(caplog, "error")
+    )
+    working = {o.strategy: o for o in stops_working(world)}
+    assert {name: o.quantity for name, o in working.items()} == {"OnceA": A_UNITS, "OnceB": B_UNITS}
+    assert working["OnceA"].order_id == _first_stop(world, "OnceA")
+    banner = next(m.ts_ns for m in world.fake.telegram_sent if "Restarted: start 2" in m.message)
+    assert working["OnceB"].placed_ns < banner
+
+
+def test_F112_a_stop_no_member_holds_is_cancelled_as_an_orphan(world, monkeypatch):
+    # B's saved records lack its stop (journal L failed before the save), so the restart
+    # places it again and the old one, bound in the journal, works for no member until
+    # the group's comparisons cancel it. Two stops of B work in between (as unit 12's test
+    # of one leg says), so those checks cannot hold at every instant here.
+    why = "the venue record of a stop the broker holds is dropped by the test"
+    for check in (ONE_STOP, WITHIN, NO_ORPHAN):
+        world.trace.waive(check, why)
+    run_to_crash(world, [OnceA, OnceB])
+    old = _first_stop(world, "OnceB")
+    restore = RestoredOrders.restore
+
+    def without_bs_stop(self, saved, pairs):
+        kept = {
+            key: record
+            for key, record in saved.items()
+            if not (record.intent.strategy == "OnceB" and record.intent.purpose is Purpose.STOP)
+        }
+        return restore(self, kept, pairs)
+
+    monkeypatch.setattr(RestoredOrders, "restore", without_bs_stop)
+    a_stop = _first_stop(world, "OnceA")
+    restart(world, [OnceA, OnceB], stop_ns=ist(14, 47), on_stop="keep")
+    assert next(o for o in world.orders() if o.order_id == old).status == "cancelled"
+    assert [c.detail["request"]["orderid"] for c in world.fake.log.calls("cancelorder")] == [old]
+    working = sorted((o.strategy, o.quantity, o.order_id == a_stop) for o in stops_working(world))
+    assert working == [("OnceA", A_UNITS, True), ("OnceB", B_UNITS, False)]
