@@ -87,11 +87,19 @@ pub enum RejectCode {
     /// In a portfolio run, an entry or add after the account's daily loss limit was
     /// breached, until the next session boundary (`engine::account_breach`).
     AccountLossGate = 21,
+    /// In a live session, an entry, add or reversal that would put the strategy's position
+    /// on the other side of the one the other strategies of its instrument hold or are
+    /// entering (`Engine::set_group_side`; `engine::venue_group`).
+    GroupOtherSide = 22,
+    /// In a live session, a strategy order that rests (LIMIT, SL, SL-M) on an instrument
+    /// several strategies of the session trade (`Engine::set_shared`;
+    /// `engine::venue_group`).
+    SharedResting = 23,
 }
 
 impl RejectCode {
     /// Every code, in code order.
-    pub const ALL: [RejectCode; 22] = [
+    pub const ALL: [RejectCode; 24] = [
         RejectCode::QuantityRule,
         RejectCode::Tick,
         RejectCode::FreezeQty,
@@ -114,6 +122,8 @@ impl RejectCode {
         RejectCode::DelayPastClose,
         RejectCode::AccountMargin,
         RejectCode::AccountLossGate,
+        RejectCode::GroupOtherSide,
+        RejectCode::SharedResting,
     ];
 
     /// The code string used in events and results.
@@ -141,6 +151,8 @@ impl RejectCode {
             RejectCode::DelayPastClose => "delay_past_close",
             RejectCode::AccountMargin => "account_margin",
             RejectCode::AccountLossGate => "account_loss_gate",
+            RejectCode::GroupOtherSide => "group_other_side",
+            RejectCode::SharedResting => "shared_resting",
         }
     }
 
@@ -360,7 +372,7 @@ mod tests {
     #[test]
     fn codes_are_the_ruled_vocabulary() {
         let codes: Vec<&str> = RejectCode::ALL.iter().map(|code| code.code()).collect();
-        assert_eq!(codes.len(), 22);
+        assert_eq!(codes.len(), 24);
         assert!(codes.contains(&"market_closed") && codes.contains(&"instrument_unknown"));
         assert!(codes.contains(&"scale_in_limit") && codes.contains(&"venue"));
         assert!(codes.contains(&"exit_cover"));
@@ -372,6 +384,12 @@ mod tests {
     fn a_portfolio_runs_account_refuses_with_codes_of_its_own() {
         assert_eq!(RejectCode::AccountMargin.code(), "account_margin");
         assert_eq!(RejectCode::AccountLossGate.code(), "account_loss_gate");
+    }
+
+    #[test]
+    fn a_live_sessions_shared_instrument_refuses_with_codes_of_its_own() {
+        assert_eq!(RejectCode::GroupOtherSide.code(), "group_other_side");
+        assert_eq!(RejectCode::SharedResting.code(), "shared_resting");
     }
 
     #[test]

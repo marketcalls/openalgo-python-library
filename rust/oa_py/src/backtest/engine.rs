@@ -139,6 +139,14 @@ impl NativeEngine {
         venue::recorded(py, engine.apply_reject(OrderId(order_id), reason))
     }
 
+    /// Record that the venue rejected a closing order in a way that says the broker may not
+    /// hold its units: its position is held until the session asks (`venue`); returns the
+    /// stamp.
+    fn apply_margin_reject(&mut self, py: Python<'_>, order_id: u64) -> PyResult<StampTuple> {
+        let engine = self.engine_mut()?;
+        venue::recorded(py, engine.apply_margin_reject(OrderId(order_id)))
+    }
+
     /// Record that the venue cancelled an order; returns the stamp.
     fn apply_cancel(&mut self, py: Python<'_>, order_id: u64) -> PyResult<StampTuple> {
         venue::recorded(py, self.engine_mut()?.apply_cancel(OrderId(order_id)))
@@ -268,6 +276,29 @@ impl NativeEngine {
     fn cap_sizing_equity(&mut self, rupees: f64) -> PyResult<()> {
         let engine = self.engine_mut()?;
         engine.cap_sizing_equity(rupees).map_err(engine_error)
+    }
+
+    /// Set the side the other strategies of a live session hold or enter on an instrument,
+    /// "long", "short" or None (`session`).
+    #[pyo3(signature = (instrument, product, side))]
+    fn set_group_side(
+        &mut self,
+        instrument: u32,
+        product: &str,
+        side: Option<&str>,
+    ) -> PyResult<()> {
+        let (product, side) = (parse_product(product)?, session::group_side(side)?);
+        let engine = self.engine_mut()?;
+        let set = engine.set_group_side(InstrumentId(instrument), product, side);
+        set.map_err(engine_error)
+    }
+
+    /// Mark an instrument as traded by several strategies of a live session, or not
+    /// (`session`).
+    fn set_shared(&mut self, instrument: u32, product: &str, shared: bool) -> PyResult<()> {
+        let (product, engine) = (parse_product(product)?, self.engine_mut()?);
+        let set = engine.set_shared(InstrumentId(instrument), product, shared);
+        set.map_err(engine_error)
     }
 
     /// The strategy's daily loss measure, rupees on its risk basis (negative is a loss).

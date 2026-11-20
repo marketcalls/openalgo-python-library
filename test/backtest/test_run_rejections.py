@@ -25,10 +25,12 @@ from openalgo.backtest.reference import Instrument
 # refusing an order, "exit_cover", a live session's reduce-only order that would leave
 # more units resting to close a position than it has, "live_lock" and "live_in_flight",
 # a live session's entry gates, "delay_past_close", an order a run's delay held past
-# the last close it could fill after, and "account_margin" and "account_loss_gate", a
+# the last close it could fill after, "account_margin" and "account_loss_gate", a
 # portfolio run's account refusing an opening fill its free cash cannot cover and an
-# entry after its daily loss limit. `RejectCode::RateLimit` is left out: no
-# kernel check makes it, because no order rate limit is enforced in a backtest.
+# entry after its daily loss limit, and "group_other_side" and "shared_resting", a live
+# session's gates on an instrument several of its strategies trade. `RejectCode::RateLimit`
+# is left out: no kernel check makes it, because no order rate limit is enforced in a
+# backtest.
 KERNEL_REJECT_CODES = {
     "quantity_rule",
     "tick",
@@ -51,6 +53,8 @@ KERNEL_REJECT_CODES = {
     "delay_past_close",
     "account_margin",
     "account_loss_gate",
+    "group_other_side",
+    "shared_resting",
 }
 NIFTY_INDEX = Instrument(
     symbol="NIFTY", exchange="NSE_INDEX", kind="index", tick_size=0.05, settlement="none"

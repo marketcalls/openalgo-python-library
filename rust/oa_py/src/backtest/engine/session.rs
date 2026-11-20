@@ -23,6 +23,13 @@
 //!   strategy's equity and the cap (the account's available cash).
 //! - `daily_loss_measure()`: the strategy's daily loss measure, rupees on its risk basis,
 //!   negative for a loss.
+//! - `set_group_side(instrument, product, side)`: on an instrument other strategies of the
+//!   session trade too, the side they hold or are entering, one of `GROUP_SIDES` ("long",
+//!   "short"), or None to clear it: while set, an entry, add or reversal on the other side
+//!   is rejected at submission with the reject code "group_other_side"; exits are not.
+//! - `set_shared(instrument, product, shared)`: while shared, a strategy order that rests
+//!   (LIMIT, SL, SL-M), entry or exit, is rejected at submission with "shared_resting";
+//!   the leg's stop, the engine's exits and the price rule's LIMIT orders are not.
 //! - `order_exit_reason(order_id)`: the exit reason an order's fills record, or None: the
 //!   live layer tells the exit a leg's target makes on a tick ("leg_target") from the
 //!   strategy's own exits, which share its role "exit".
@@ -43,10 +50,13 @@
 //! `role`, one of `ORDER_ROLES`, and `reason`, the risk reason of a "risk_exit" (None
 //! otherwise). In a backtest every control but the queries `entry_locks` and
 //! `daily_loss_measure` raises `NativeEngineError` (and `cancel` is taken at a decision
-//! point only); a blank lock reason or one with spaces around it, an unknown exit reason
-//! and a cap that is not rupees of 0 or more raise `NativeEngineInputError`.
+//! point only); a blank lock reason or one with spaces around it, an unknown exit reason,
+//! an unknown group side and a cap that is not rupees of 0 or more raise
+//! `NativeEngineInputError`.
 
-use oa_bt::engine::{Engine, EngineExit, ExitRequest, KernelError, OrderRole, RiskExitReason};
+use oa_bt::engine::{
+    Engine, EngineExit, ExitRequest, GroupSide, KernelError, OrderRole, RiskExitReason,
+};
 use oa_bt::exec::OrderId;
 use oa_bt::rms::ExitReason;
 use pyo3::prelude::*;
@@ -66,6 +76,19 @@ pub(super) fn engine_exit(reason: &str) -> PyResult<EngineExit> {
     })
 }
 
+/// The group side a session's `side` names, or None (module docs).
+///
+/// Errors: `NativeEngineInputError` for a side that names none.
+pub(super) fn group_side(side: Option<&str>) -> PyResult<Option<GroupSide>> {
+    side.map(|code| {
+        GroupSide::from_code(code).ok_or_else(|| {
+            let allowed = format!("one of {} or None", GroupSide::CODES.join(", "));
+            unknown("group side", code, &allowed)
+        })
+    })
+    .transpose()
+}
+
 /// The `role` and `reason` keys of a "place" command (module docs).
 pub(super) fn role_codes(role: OrderRole) -> (&'static str, Option<&'static str>) {
     (role.code(), role.reason().map(RiskExitReason::code))
@@ -82,11 +105,12 @@ pub(super) fn order_exit_reason(engine: &Engine, id: OrderId) -> PyResult<Option
 }
 
 /// Add the vocabularies of the controls to the module, from the kernel's own lists:
-/// `ORDER_ROLES`, `RISK_EXIT_REASONS` and `EXIT_REQUESTS`.
+/// `ORDER_ROLES`, `RISK_EXIT_REASONS`, `EXIT_REQUESTS` and `GROUP_SIDES`.
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = m.py();
     m.add("ORDER_ROLES", PyTuple::new_bound(py, OrderRole::CODES))?;
     let reasons = RiskExitReason::ALL.map(RiskExitReason::code);
     m.add("RISK_EXIT_REASONS", PyTuple::new_bound(py, reasons))?;
-    m.add("EXIT_REQUESTS", PyTuple::new_bound(py, ExitRequest::CODES))
+    m.add("EXIT_REQUESTS", PyTuple::new_bound(py, ExitRequest::CODES))?;
+    m.add("GROUP_SIDES", PyTuple::new_bound(py, GroupSide::CODES))
 }

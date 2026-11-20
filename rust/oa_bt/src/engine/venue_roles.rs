@@ -37,7 +37,8 @@
 //! | `square_off` | `scheduler`, as the backtest's square-off |
 //! | `daily_loss`, `drawdown`, `time_exit` | `daily_loss_limit`, `drawdown_halt`, `time_exit`, as the backtest's rules |
 //! | `stop_unfilled` | `leg_sl`: the leg's stop level was reached |
-//! | `unprotected`, `stop_rejected`, `kill_switch`, `account_loss`, `operator_stop` | `manual`: neither the strategy nor a kernel rule made it |
+//! | `account_loss` | `account_loss_limit`, as a portfolio backtest's account breach (`account_breach`; 18-multi-strategy 1.3) |
+//! | `unprotected`, `stop_rejected`, `kill_switch`, `operator_stop` | `manual`: neither the strategy nor a kernel rule made it |
 
 use crate::exec::{ExecError, Order, OrderId, OrderRequest, OrderType};
 use crate::model::Side;
@@ -139,10 +140,10 @@ impl EngineExit {
                 RiskExitReason::Drawdown => ExitReason::DrawdownHalt,
                 RiskExitReason::TimeExit => ExitReason::TimeExit,
                 RiskExitReason::StopUnfilled => ExitReason::LegSl,
+                RiskExitReason::AccountLoss => ExitReason::AccountLossLimit,
                 RiskExitReason::Unprotected
                 | RiskExitReason::StopRejected
                 | RiskExitReason::KillSwitch
-                | RiskExitReason::AccountLoss
                 | RiskExitReason::OperatorStop => ExitReason::Manual,
             },
         }
@@ -403,7 +404,7 @@ mod tests {
             ),
             (
                 EngineExit::Risk(RiskExitReason::AccountLoss),
-                ExitReason::Manual,
+                ExitReason::AccountLossLimit,
             ),
             (
                 EngineExit::Risk(RiskExitReason::OperatorStop),
