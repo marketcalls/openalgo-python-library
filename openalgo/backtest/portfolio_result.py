@@ -98,24 +98,30 @@ class PortfolioResult:
     # ----- the account ----------------------------------------------------------------
 
     @cached_property
+    def _rows(self) -> pd.DataFrame:
+        return _portfolio_tables.account_frame(self._records)
+
+    @property
     def account(self) -> pd.DataFrame:
         """The account's row of every round of the run (each instant at which a
         strategy's slice closed), indexed by its IST time: `equity_rupees` (the account's
         funds less the capitals plus every strategy's equity), `free_cash_rupees`,
         `margin_rupees` and `daily_loss_rupees` (the strategies' daily loss measures of
         the IST session day, added up; the figure `account_max_daily_loss` is held to)."""
-        return _portfolio_tables.account_frame(self._records)
+        return self._rows.copy()
 
     @property
     def equity(self) -> pd.Series:
         """The account's equity in rupees, by the IST time of each round."""
-        return self.account["equity_rupees"].copy()
+        return self._rows["equity_rupees"].copy()
 
     @property
     def returns(self) -> pd.Series:
-        """Simple returns of the account's equity, round to round; the first round is
-        measured from the account's funds, so the P&L made in it counts."""
-        return slice_returns(self.account["equity_rupees"], self._funds)
+        """Simple returns of the account's equity, round to round, as `Result.returns` are
+        slice to slice; the first round is measured from the account's funds, so the P&L
+        made in it counts. The account's session returns are
+        `performance.session_returns`."""
+        return slice_returns(self._rows["equity_rupees"], self._funds)
 
     @cached_property
     def performance(self) -> Performance:
@@ -125,7 +131,7 @@ class PortfolioResult:
         strategies' exchanges' calendars and compared with the first strategy's
         benchmark. Raises ConfigError when the run has no equity point."""
         return account_performance(
-            self.account["equity_rupees"], self._funds, self._results, self._benchmark
+            self._rows["equity_rupees"], self._funds, self._results, self._benchmark
         )
 
     @property
@@ -224,13 +230,17 @@ class PortfolioResult:
         return self._net[0].copy()
 
     @cached_property
+    def _refused(self) -> pd.DataFrame:
+        return _portfolio_tables.refused_frame(self._records, self._results)
+
+    @property
     def refused(self) -> pd.DataFrame:
         """The orders the account refused or ended, in time order: strategy, order id (in
         that strategy's engine), symbol, side, time, slice, slice_ts, step and reason
         ("account_margin": the account's free cash did not cover the margin;
         "account_loss_gate": an entry after the account's daily loss limit was reached;
         "account_loss": a working entry the limit's breach cancelled)."""
-        return _portfolio_tables.refused_frame(self._records, self._results)
+        return self._refused.copy()
 
     @property
     def correlation(self) -> pd.DataFrame:
@@ -239,13 +249,13 @@ class PortfolioResult:
         one strategy."""
         return return_correlation({name: r.performance for name, r in self._results.items()})
 
-    @cached_property
+    @property
     def contribution(self) -> pd.DataFrame:
         """Each strategy's part in the account, indexed by strategy name: its net P&L, its
         share of the account's in percent, its P&L inside the account's maximum drawdown,
         its margin when the account's was highest and its orders the account refused
         (`_portfolio_figures.contribution` defines each column)."""
-        return contribution(self.account, self._funds, self._results, self.refused)
+        return contribution(self._rows, self._funds, self._results, self._refused)
 
     # ----- context --------------------------------------------------------------------
 
@@ -314,13 +324,13 @@ class PortfolioResult:
 
     def __repr__(self) -> str:
         account = self._account
-        equity = self.account["equity_rupees"]
+        equity = self._rows["equity_rupees"]
         net = float(equity.iloc[-1]) - self._funds if len(equity) else 0.0
         lines = [
             f"PortfolioResult({', '.join(self._results)})",
             f"  pool: {account.pool}; account: {_portfolio_notes.rupees_text(self._funds)}",
             f"  net P&L: {net:,.2f}",
-            f"  orders the account refused or ended: {len(self.refused)}",
+            f"  orders the account refused or ended: {len(self._refused)}",
         ]
         lines += [f"  warning: {text}" for text in self.warnings]
         return "\n".join(lines)
