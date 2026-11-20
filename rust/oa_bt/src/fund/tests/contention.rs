@@ -1,10 +1,11 @@
 //! Contention for one account in a shared pool (18-multi-strategy 2.3 and 2.4), worked by
-//! hand. Every strategy trades SBIN (cash equity at 1x margin, no charges, no slippage)
-//! on 2025-07-07 (and 08), with Rs 1,00,000 of capital; the account's free cash is
-//! `F = C - sum(c_i) + sum(f_i)`, and an opening fill needs its margin within the
-//! strategy's own free cash and within `F`.
+//! hand. Every strategy trades SBIN (or INFY; cash equity at 1x margin, no charges, no
+//! slippage) on 2025-07-07 (and 08), with Rs 1,00,000 of capital; the account's free cash
+//! is `F = C - sum(c_i) + sum(f_i)`, and an opening fill needs its margin within the
+//! strategy's own free cash and within `F`. Two strategies on one instrument may hold
+//! opposite sides in a backtest (H1), each blocking its own margin (11.1-6(a)).
 
-use crate::engine::{Engine, EventStamp, Step};
+use crate::engine::{Engine, EventStamp, RunOutput, Step};
 use crate::exec::OrderId;
 use crate::model::{Product, Side};
 
@@ -73,6 +74,115 @@ fn the_first_strategy_in_call_order_takes_the_account_at_a_shared_open() {
     assert_eq!(
         row_at(&fund, ist(july(7), 9, 17)),
         (100_000.0, 40_000.0, 60_000.0)
+    );
+}
+
+#[test]
+fn the_third_strategy_in_call_order_is_refused_at_a_shared_open_whatever_its_size() {
+    // An account of Rs 1,40,000 for three strategies of Rs 1,00,000 each (so F starts at
+    // 1,40,000 - 3,00,000 + 3,00,000 = 1,40,000), SBIN flat at 100.00 and INFY at 200.00.
+    // At the close of minute 0 the first buys 500 SBIN, the second 300 INFY and the third
+    // 400 SBIN. At the open of minute 1, in call order: the first's 50,000 fills (F =
+    // 90,000), the second's 60,000 fills (F = 30,000), and the third's 40,000, the
+    // smallest, is beyond F: refused account_margin. Both positions are squared off at
+    // 15:10 (minute 355).
+    let sbin = || minutes_of(|_| flat(100.0));
+    let infy = Run::minutes(Symbol::Infy, july(7), july(7), CAPITAL).engine(|_, _| flat(200.0));
+    let scripts = [
+        Script::new(&[(0, market(Side::Buy, 500.0, Product::Mis))]),
+        Script::new(&[(0, market(Side::Buy, 300.0, Product::Mis))]),
+        Script::new(&[(0, market(Side::Buy, 400.0, Product::Mis))]),
+    ];
+    let config = account(Pool::Shared, Some(140_000.0), None);
+    let (outputs, fund) = in_fund(config, vec![sbin(), infy, sbin()], &scripts);
+    assert_eq!(
+        fills(&outputs[0]),
+        vec![
+            (1, 2, Side::Buy, 500.0, 100.0, "entry"),
+            (355, 2, Side::Sell, 500.0, 100.0, "scheduler")
+        ]
+    );
+    assert_eq!(
+        fills(&outputs[1]),
+        vec![
+            (1, 2, Side::Buy, 300.0, 200.0, "entry"),
+            (355, 2, Side::Sell, 300.0, 200.0, "scheduler")
+        ]
+    );
+    assert_eq!(fills(&outputs[2]), vec![]);
+    let minute_1 = (1, ist(july(7), 9, 16));
+    assert_eq!(fund.refused, vec![refused(2, 1, minute_1, Step::OpenFills)]);
+    // The round closing at 09:17: equity 1,40,000, free cash 30,000, margin 1,10,000.
+    assert_eq!(
+        row_at(&fund, ist(july(7), 9, 17)),
+        (140_000.0, 30_000.0, 110_000.0)
+    );
+}
+
+/// Two strategies on SBIN on opposite sides (flat at 100.00, Rs 1,00,000 each, an account
+/// of `account_capital`): the first buys 600 MIS and the second sells 600 MIS at the close
+/// of minute 0. Each engine's output, in call order, and the fund's.
+fn opposite_sides(account_capital: Option<f64>) -> (Vec<RunOutput>, FundOutput) {
+    let scripts = [
+        Script::new(&[(0, market(Side::Buy, 600.0, Product::Mis))]),
+        Script::new(&[(0, market(Side::Sell, 600.0, Product::Mis))]),
+    ];
+    let engines = vec![minutes_of(|_| flat(100.0)), minutes_of(|_| flat(100.0))];
+    in_fund(
+        account(Pool::Shared, account_capital, None),
+        engines,
+        &scripts,
+    )
+}
+
+#[test]
+fn opposite_sides_on_one_instrument_each_block_their_margin_with_no_netting() {
+    // Decision 11.1-6(a): each strategy's margin is blocked, the long's and the short's
+    // alike (cash equity at 1x: 60,000 each), and the account nets nothing. On an account
+    // of Rs 1,00,000 the long fills at 09:16 (F = 40,000) and the short's 60,000 is beyond
+    // F: refused account_margin, though its position would offset the long's.
+    let (outputs, fund) = opposite_sides(Some(CAPITAL));
+    assert_eq!(
+        fills(&outputs[0]),
+        vec![
+            (1, 2, Side::Buy, 600.0, 100.0, "entry"),
+            (355, 2, Side::Sell, 600.0, 100.0, "scheduler")
+        ]
+    );
+    assert_eq!(fills(&outputs[1]), vec![]);
+    let minute_1 = (1, ist(july(7), 9, 16));
+    assert_eq!(fund.refused, vec![refused(1, 1, minute_1, Step::OpenFills)]);
+    assert_eq!(
+        row_at(&fund, ist(july(7), 9, 17)),
+        (100_000.0, 40_000.0, 60_000.0)
+    );
+}
+
+#[test]
+fn opposite_sides_on_one_instrument_both_fill_on_an_account_that_covers_both_margins() {
+    // The account is the sum of the capitals, Rs 2,00,000. Both fill at 09:16 at 100.00;
+    // each strategy's equity stays 1,00,000 and its free cash is 1,00,000 - 60,000 =
+    // 40,000, so the row at 09:17 shows equity 2,00,000, free cash 80,000 and margin
+    // 1,20,000, the two margins summed. Both are squared off at 15:10.
+    let (outputs, fund) = opposite_sides(None);
+    assert_eq!(
+        fills(&outputs[0]),
+        vec![
+            (1, 2, Side::Buy, 600.0, 100.0, "entry"),
+            (355, 2, Side::Sell, 600.0, 100.0, "scheduler")
+        ]
+    );
+    assert_eq!(
+        fills(&outputs[1]),
+        vec![
+            (1, 2, Side::Sell, 600.0, 100.0, "entry"),
+            (355, 2, Side::Buy, 600.0, 100.0, "scheduler")
+        ]
+    );
+    assert_eq!(fund.refused, vec![]);
+    assert_eq!(
+        row_at(&fund, ist(july(7), 9, 17)),
+        (200_000.0, 80_000.0, 120_000.0)
     );
 }
 
