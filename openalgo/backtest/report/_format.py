@@ -71,10 +71,18 @@ def rupees(value: float, decimals: int = 2) -> str:
     return f"{sign}{RUPEE}{indian_digits(abs(value), decimals)}"
 
 
+def fixed(value: float, decimals: int) -> str:
+    """`value` to `decimals` places with no grouping: 12.345 is "12.35" at 2. A negative
+    value that rounds to zero there reads without a sign ("0.0", not "-0.0")."""
+    shown = f"{value:.{decimals}f}"
+    return shown[1:] if shown.startswith("-") and _rounds_to_zero(value, decimals) else shown
+
+
 def percent(value: float, decimals: int = 2) -> str:
-    """A fraction as a percentage: 0.1234 is "12.34%"."""
+    """A fraction as a percentage: 0.1234 is "12.34%"; one that rounds to zero at
+    `decimals` places has no sign (-0.00003 is "0.00%")."""
     special = _special(value)
-    return special if special is not None else f"{value * 100:.{decimals}f}%"
+    return special if special is not None else f"{fixed(value * 100, decimals)}%"
 
 
 def number(value: float, decimals: int = 2) -> str:
@@ -142,6 +150,7 @@ __all__ = [
     "basis_points",
     "duration",
     "figure",
+    "fixed",
     "indian_digits",
     "is_missing",
     "moment",

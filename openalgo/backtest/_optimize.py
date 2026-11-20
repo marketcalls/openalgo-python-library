@@ -48,10 +48,11 @@ import itertools
 import logging
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from ._arrays import made_by
@@ -63,15 +64,8 @@ from ._objective import DEFAULT_OBJECTIVE, check_objective
 from ._optimize_result import OptimizeResult
 from ._pipeline import PreparedRun, execute, prepare
 from ._rerun import RunRecord
-from ._sweep_pool import (
-    Chunk,
-    Measured,
-    portable,
-    returns_matrix,
-    run_combinations,
-    run_in_pool,
-    split,
-)
+from ._sweep_pool import Chunk, Measured, portable, run_combinations, run_in_pool, split
+from ._sweep_returns import ReturnsMatrix
 from .errors import ConfigError
 
 # Event strategies suit hundreds to a few thousand combinations (07-research 1).
@@ -86,9 +80,10 @@ PATH_MEANINGS = {
 }
 LOGGER = logging.getLogger("openalgo.backtest.optimize")
 
-# Runs combinations in this process; told each run's evaluation path when given a
-# function (`_sweep_pool.run_combinations` with the sweep's fixed inputs bound).
-Runner = Callable[..., list[Measured]]
+# Runs combinations in this process and keeps what the sweep keeps of them; told each
+# run's evaluation path when given a function (`_sweep_pool.run_combinations` with the
+# sweep's fixed inputs bound).
+Runner = Callable[..., None]
 
 
 def _run_arguments(
@@ -157,11 +152,10 @@ def grid(
 
 @dataclass(frozen=True)
 class Opening:
-    """The combinations run in this process before the plan is reported: their rows in
-    grid order, the evaluation path of the first, and the seconds each took (the first
-    also ran the sweep's indicator checks)."""
+    """The combinations run in this process before the plan is reported, the first ones
+    of the grid: the evaluation path of the first, and the seconds each took (the first
+    also ran the sweep's indicator checks), one for each of them."""
 
-    rows: list[Measured]
     path: str
     seconds: list[float]
 
@@ -169,18 +163,17 @@ class Opening:
 def _opening(run: Runner, combinations: list[dict[str, Any]]) -> Opening:
     """Run the first combination, and on the conditions path the second as well (see
     the module docstring)."""
-    rows: list[Measured] = []
     paths: list[str] = []
 
     def timed(position: int) -> float:
         started = time.perf_counter()
-        rows.extend(run(combinations[position : position + 1], paths.append))
+        run(combinations[position : position + 1], paths.append)
         return time.perf_counter() - started
 
     seconds = [timed(0)]
     if paths[0] == CONDITIONS_PATH and len(combinations) > 1:
         seconds.append(timed(1))
-    return Opening(rows, paths[0], seconds)
+    return Opening(paths[0], seconds)
 
 
 def _workers(
@@ -205,23 +198,38 @@ def _plan(
 ) -> str:
     """The line reported before the rest of the sweep runs. `seconds` are the durations
     of the combinations already run, in order; the last stands for each of the rest."""
+    scope, advice = _plan_words(strategy, combinations, workers, why, path)
     rest = (combinations - len(seconds)) * seconds[-1] / workers
-    where = f"{workers} worker processes" if workers > 1 else "this process"
     took = f"The first took {seconds[0]:.2f} s"
     if len(seconds) > 1:
         took += f" with the sweep's indicator checks, the second took {seconds[1]:.2f} s"
-    text = (
+    return f"{scope} {took}; the rest should take about {rest:.1f} s.{advice}"
+
+
+def _untimed_plan(strategy: type, combinations: int, workers: int, why: str, path: str) -> str:
+    """The plan without its timings, as the sweep's page shows it: the same text for
+    every sweep of one grid, where the timings of two sweeps differ."""
+    scope, advice = _plan_words(strategy, combinations, workers, why, path)
+    return scope + advice
+
+
+def _plan_words(
+    strategy: type, combinations: int, workers: int, why: str, path: str
+) -> tuple[str, str]:
+    """(what the sweep runs and where, the advice for a large grid on the event path or
+    ""), the parts of the plan that do not depend on a timing."""
+    where = f"{workers} worker processes" if workers > 1 else "this process"
+    scope = (
         f"bt.optimize: {counted(combinations, 'combination')} of {strategy.__name__} on the "
-        f"{path} path "
-        f"({PATH_MEANINGS[path]}), in {where}{f' ({why})' if why else ''}. {took}; the "
-        f"rest should take about {rest:.1f} s."
+        f"{path} path ({PATH_MEANINGS[path]}), in {where}{f' ({why})' if why else ''}."
     )
+    advice = ""
     if path == EVENT_PATH and combinations > LARGE_EVENT_GRID:
-        text += (
+        advice = (
             " A grid this large suits the condition form (entry_when, exit_when), which "
             "runs without a Python call per bar."
         )
-    return text
+    return scope, advice
 
 
 def _split_settings(
@@ -244,6 +252,19 @@ def _split_settings(
     return run, ranges
 
 
+@dataclass(frozen=True)
+class Swept:
+    """What a sweep keeps: each combination's row of the table (`_objective.evaluate`) and
+    the session returns of all of them as one array (`_sweep_returns.ReturnsMatrix`), in
+    grid order; the evaluation path, the plan and the plan without its timings."""
+
+    rows: list[dict[str, float]]
+    returns: np.ndarray
+    path: str
+    plan: str
+    untimed_plan: str
+
+
 def _sweep(
     strategy: type,
     objective: Any,
@@ -251,27 +272,33 @@ def _sweep(
     arguments: dict[str, Any],
     combinations: list[dict[str, Any]],
     asked: tuple[int | None, Callable[[str], Any] | None],
-) -> tuple[list[Measured], str, str]:
-    """(each combination's row and session returns in grid order, the evaluation path,
-    the plan): the opening combinations here, the plan reported through `asked`'s
-    progress function (`workers`, `progress`), then the rest in this process or in
-    worker processes (module docstring)."""
+) -> Swept:
+    """The opening combinations here, the plan reported through `asked`'s progress
+    function (`workers`, `progress`), then the rest in this process or in worker processes
+    (module docstring). Each combination's returns are copied into the sweep's array as
+    its run comes back and then let go (`_sweep_returns`)."""
     workers, progress = asked
     name = strategy_source_hash(strategy) or strategy.__qualname__
     checks = IndicatorChecks(name, measured=prepared.measured)
     light = {key: arguments[key] for key in ("source", "tz")}
     light["data"] = None if arguments["data"] is None else "given"
     light["now"] = None if arguments["now"] is None else "given"
+    rows: list[dict[str, float]] = []
+    returns = ReturnsMatrix(len(combinations))
 
-    def run(
-        part: list[dict[str, Any]], on_path: Callable[[str], Any] | None = None
-    ) -> list[Measured]:
-        return run_combinations(strategy, objective, prepared, light, part, checks, on_path)
+    def keep(measured: Iterable[Measured]) -> None:
+        for kept in measured:
+            rows.append(kept.row)
+            returns.add(kept.returns)
+
+    def run(part: list[dict[str, Any]], on_path: Callable[[str], Any] | None = None) -> None:
+        keep(run_combinations(strategy, objective, prepared, light, part, checks, on_path))
 
     opening = _opening(run, combinations)
-    rest = combinations[len(opening.rows) :]
+    rest = combinations[len(opening.seconds) :]
     count, why = _workers(workers, len(rest), prepared, strategy)
     plan = _plan(strategy, len(combinations), count, opening.seconds, why, opening.path)
+    untimed = _untimed_plan(strategy, len(combinations), count, why, opening.path)
     (progress or LOGGER.info)(plan)
     if count > 1:
         shipped = (portable(strategy, "the strategy"), portable(objective, "the objective"))
@@ -279,10 +306,10 @@ def _sweep(
             Chunk(*shipped, prepared.for_workers(), light, part, checks.strategy_hash, checks.keys)
             for part in split(rest, count)
         ]
-        later = run_in_pool(chunks, count)
+        keep(run_in_pool(chunks, count))
     else:
-        later = run(rest)
-    return [*opening.rows, *later], opening.path, plan
+        run(rest)
+    return Swept(rows, returns.array(), opening.path, plan, untimed)
 
 
 def optimize(
@@ -307,15 +334,9 @@ def optimize(
     arguments = _run_arguments(client, run_settings)
     names, combinations = grid(strategy, ranges, arguments["params"])
     prepared = prepare(strategy, client, arguments, combinations)
-    measured, path, plan = _sweep(
-        strategy, objective, prepared, arguments, combinations, (workers, progress)
-    )
-    table = pd.DataFrame(
-        [
-            {**{n: c[n] for n in names}, **kept.row}
-            for c, kept in zip(combinations, measured, strict=True)
-        ]
-    )
+    swept = _sweep(strategy, objective, prepared, arguments, combinations, (workers, progress))
+    rows = zip(combinations, swept.rows, strict=True)
+    table = pd.DataFrame([{**{n: c[n] for n in names}, **row} for c, row in rows])
     label = objective if isinstance(objective, str) else getattr(objective, "__name__", "custom")
 
     def runner(params: dict[str, Any]) -> Any:
@@ -330,12 +351,13 @@ def optimize(
         names,
         label,
         maximize,
-        path,
-        plan,
+        swept.path,
+        swept.plan,
         runner,
-        returns_matrix(measured),
+        swept.returns,
         named,
         strategy.__name__,
+        swept.untimed_plan,
     )
 
 

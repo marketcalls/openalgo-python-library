@@ -99,8 +99,12 @@ def test_a_records_header_names_the_mode_openalgo_was_in(session):
     )
 
 
-def test_a_distance_argument_is_kept_as_a_tagged_object_and_read_back_as_given(session):
+def test_a_distance_argument_is_kept_as_a_tagged_object_and_read_back_as_given(
+    session_with_objects,
+):
+    session = session_with_objects
     given = {n: v for n, v in session.scenario.objects.items() if isinstance(v, Distance)}
+    assert given
     for record in session.records:
         arguments = record.header["arguments"]
         for name, distance in given.items():
@@ -113,10 +117,12 @@ def test_a_distance_argument_is_kept_as_a_tagged_object_and_read_back_as_given(s
         assert untagged(arguments) == arguments | session.scenario.objects
 
 
-def test_a_cost_preset_argument_is_kept_by_its_terms_and_read_back_as_given(session):
+def test_a_cost_preset_argument_is_kept_by_its_terms_and_read_back_as_given(session_with_objects):
+    session = session_with_objects
     # The sandbox session's costs=bt.costs.flat(20): Rs 20 an executed order in each of
     # delivery, intraday, futures and options, Zerodha's DP fee standing in.
     given = {n: v for n, v in session.scenario.objects.items() if n == "costs"}
+    assert given
     for record in session.records:
         arguments = record.header["arguments"]
         for name in given:

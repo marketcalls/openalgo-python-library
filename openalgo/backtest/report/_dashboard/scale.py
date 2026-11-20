@@ -112,8 +112,12 @@ def bins(values: np.ndarray, low: float, high: float, count: int) -> list[tuple[
     """A histogram of `values` over [low, high]: edges at the round ticks for `count`
     parts that fall strictly inside, so the first and last bins may be narrower. Each
     bin is (left, right, how many values): left-closed, and the last one closed on
-    both sides."""
-    edges = [low, *(t for t in ticks(low, high, count) if low < t < high), high]
+    both sides. A tick is compared with the ends at its own `TICK_DECIMALS`: an end
+    widened to a multiple of the step (`widen`) may carry a float residue, -12 x 0.0001
+    reading -0.0012000000000000001, and the tick -0.0012 is then that end, not the edge
+    of a bin of no width."""
+    inside = round(low, TICK_DECIMALS), round(high, TICK_DECIMALS)
+    edges = [low, *(t for t in ticks(low, high, count) if inside[0] < t < inside[1]), high]
     counts, _ = np.histogram(values, bins=np.asarray(edges, dtype=float))
     return [(edges[i], edges[i + 1], int(counts[i])) for i in range(len(edges) - 1)]
 

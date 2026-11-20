@@ -285,7 +285,7 @@ def test_the_noise_words_say_how_many_noise_runs_the_run_is_above(edge):
     assert check.rule.endswith("and the run is not above their 95th percentile")
     (tiles,) = report._blocks["noise"][-1]
     shown = {tile.label: (tile.value, tile.sub) for tile in tiles.tiles}
-    assert shown["Above"] == ("0.0%", "of the noise runs")
+    assert shown["Above"] == ("0.0%", "0 of 5 noise runs")
 
 
 #: The noise runs of the planted sets at the top limit.
@@ -312,23 +312,23 @@ def planted_noise(real: float, at: float):
 #: statistics, 0.95 x 999 = 949.05 places past the first, so 950 + 0.05 x (951 - 950).
 TOP_PARTS = 950.05
 
-# (the run's place in parts, verdict, the share of noise runs below it, how it stands
-# against their 95th percentile): a run of 949.5 or 950.03 parts is not above 950.05 and
-# passes; one of 950.5 or 951.5 is above it and fails. Runs of 950.03 and 950.5 parts
-# both have 950 noise runs below them, so the share reads 95.0% on either side of the
-# limit and the words "above" or "not above" say which. The median, 500.5 parts, keeps
-# over half of each run.
+# (the run's place in parts, verdict, the share of noise runs below it, how many, how it
+# stands against their 95th percentile): a run of 949.5 or 950.03 parts is not above
+# 950.05 and passes; one of 950.5 or 951.5 is above it and fails. Runs of 950.03 and 950.5
+# parts both have 950 noise runs below them (those of 1 to 950 parts), so the share reads
+# 95.0% on either side of the limit and the words "above" or "not above" say which. The
+# median, 500.5 parts, keeps over half of each run.
 TOP_LIMIT_ROWS = [
-    (949.5, PASSED, "94.9%", "not above"),
-    (950.03, PASSED, "95.0%", "not above"),
-    (950.5, FAILED, "95.0%", "above"),
-    (951.5, FAILED, "95.1%", "above"),
+    (949.5, PASSED, "94.9%", "949", "not above"),
+    (950.03, PASSED, "95.0%", "950", "not above"),
+    (950.5, FAILED, "95.0%", "950", "above"),
+    (951.5, FAILED, "95.1%", "951", "above"),
 ]
 
 
-@pytest.mark.parametrize(("at", "verdict", "share", "against"), TOP_LIMIT_ROWS)
+@pytest.mark.parametrize(("at", "verdict", "share", "below", "against"), TOP_LIMIT_ROWS)
 def test_the_noise_figure_at_the_top_limit_reads_as_its_verdict(
-    edge, monkeypatch, at, verdict, share, against
+    edge, monkeypatch, at, verdict, share, below, against
 ):
     real = edge.metrics["sharpe"]
     monkeypatch.setattr(_check_noise, "rerun_set", planted_noise(real, at))
@@ -341,8 +341,8 @@ def test_the_noise_figure_at_the_top_limit_reads_as_its_verdict(
     )
     assert check.rule.endswith("and the run is not above their 95th percentile")
     (tiles,) = report._blocks["noise"][-1]
-    shown = {tile.label: tile.value for tile in tiles.tiles}
-    assert shown["Above"] == share
+    shown = {tile.label: (tile.value, tile.sub) for tile in tiles.tiles}
+    assert shown["Above"] == (share, f"{below} of 1,000 noise runs")
 
 
 # (top, its name in the rule): to a tenth, or as many places as keep a top short of 1

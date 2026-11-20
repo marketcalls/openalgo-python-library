@@ -15,8 +15,9 @@ rows come back in that order, so a sweep's table does not depend on the number o
 workers. Each combination comes back as its row of the table and its session returns
 (`Measured`), which the optimizer's overfitting figures read (`_robust._optimizer_checks`).
 The combinations of a chunk that ran over the same sessions share one session index, so
-a chunk sends it back once; the sweep keeps the returns as one array
-(`returns_matrix`), 8 bytes a session and combination, and drops the indexes.
+a chunk sends it back once. The sweep copies each combination's returns into one array as
+it comes back (`_sweep_returns.ReturnsMatrix`) and lets the Series go, so the combinations
+come back one at a time (`run_combinations`, `run_in_pool`), not as one list.
 """
 
 from __future__ import annotations
@@ -25,12 +26,11 @@ import importlib.util
 import multiprocessing
 import pickle
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 from ._causality_checks import IndicatorChecks
@@ -108,48 +108,33 @@ def run_combinations(
     combinations: list[dict[str, Any]],
     checks: IndicatorChecks,
     on_path: Callable[[str], Any] | None = None,
-) -> list[Measured]:
-    """The row and the session returns of each combination, in order; `on_path` is told
-    the evaluation path of each run (see `_pipeline.execute`)."""
-    rows: list[Measured] = []
+) -> Iterator[Measured]:
+    """The row and the session returns of each combination, in order, each as its run
+    ends; `on_path` is told the evaluation path of each run (see `_pipeline.execute`). A
+    combination on the same sessions as the one before it shares that one's index."""
+    previous: pd.Index | None = None
     for params in combinations:
         settings = {**arguments, "params": params}
         result = execute(strategy, prepared, settings, checks=checks, on_path=on_path)
         returns = result.performance.session_returns
-        if rows and rows[-1].returns.index.equals(returns.index):
-            returns = pd.Series(returns.to_numpy(), index=rows[-1].returns.index, name=returns.name)
-        rows.append(Measured(evaluate(result, objective), returns))
-    return rows
-
-
-def returns_matrix(measured: list[Measured]) -> np.ndarray:
-    """The session returns of a sweep's combinations as one (sessions, combinations)
-    array, in grid order, on every session any of them has in date order; a session a
-    combination has no return for counts 0 (its equity did not move). Each combination's
-    returns lie together in memory (Fortran order), so a sum over sessions runs in
-    NumPy's pairwise order (`_robust._overfitting_probability`)."""
-    if not measured:
-        return np.empty((0, 0))
-    first = measured[0].returns.index
-    if all(kept.returns.index.equals(first) for kept in measured):
-        matrix = np.empty((len(first), len(measured)), order="F")
-        for position, kept in enumerate(measured):
-            matrix[:, position] = kept.returns.to_numpy(dtype=float)
-        return matrix
-    joined = pd.concat([kept.returns for kept in measured], axis=1, ignore_index=True)
-    return np.asfortranarray(joined.sort_index().fillna(0.0).to_numpy(dtype=float))
+        if previous is not None and previous.equals(returns.index):
+            returns = pd.Series(returns.to_numpy(), index=previous, name=returns.name)
+        previous = returns.index
+        yield Measured(evaluate(result, objective), returns)
 
 
 def run_chunk(chunk: Chunk) -> list[Measured]:
-    """A worker's entry point: run one chunk."""
+    """A worker's entry point: run one chunk, and send its combinations back together."""
     checks = IndicatorChecks(chunk.strategy_hash, chunk.checked, measured=chunk.prepared.measured)
-    return run_combinations(
-        _restore(chunk.strategy),
-        _restore(chunk.objective),
-        chunk.prepared,
-        chunk.arguments,
-        chunk.combinations,
-        checks,
+    return list(
+        run_combinations(
+            _restore(chunk.strategy),
+            _restore(chunk.objective),
+            chunk.prepared,
+            chunk.arguments,
+            chunk.combinations,
+            checks,
+        )
     )
 
 
@@ -164,18 +149,21 @@ def split(combinations: list[dict[str, Any]], parts: int) -> list[list[dict[str,
     return [chunk for chunk in chunks if chunk]
 
 
-def run_in_pool(chunks: list[Chunk], workers: int) -> list[Measured]:
-    """Run the chunks in `workers` spawned processes; the rows in chunk order."""
+def run_in_pool(chunks: list[Chunk], workers: int) -> Iterator[Measured]:
+    """Run the chunks in `workers` spawned processes; each combination in chunk order,
+    as its chunk comes back, taken out of the chunk as it is handed on."""
     context = multiprocessing.get_context(START_METHOD)
     with ProcessPoolExecutor(max_workers=workers, mp_context=context) as pool:
-        return [row for rows in pool.map(run_chunk, chunks) for row in rows]
+        for measured in pool.map(run_chunk, chunks):
+            measured.reverse()
+            while measured:
+                yield measured.pop()
 
 
 __all__ = [
     "Chunk",
     "Measured",
     "portable",
-    "returns_matrix",
     "run_combinations",
     "run_in_pool",
     "split",

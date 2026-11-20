@@ -144,7 +144,7 @@ def test_a_neighbour_is_at_most_one_step_away_in_every_parameter(place, expected
     assert found == expected
 
 
-def test_the_neighbours_in_a_large_grid_are_found_in_time_in_proportion_to_its_size():
+def test_the_neighbours_in_a_grid_of_10000_combinations_are_found_within_a_second():
     # 10,000 combinations: each combination's place on the axes is found once, not each
     # axis again for every combination, which takes seconds.
     grid = _square(100)
@@ -154,7 +154,7 @@ def test_the_neighbours_in_a_large_grid_are_found_in_time_in_proportion_to_its_s
     assert len(near) == 3
 
 
-def test_the_parameter_sets_of_a_large_grid_are_listed_once_each_in_proportion_to_its_size():
+def test_the_parameter_sets_of_a_grid_of_10000_combinations_are_listed_once_each_within_a_second():
     # The run's own fast 10, slow 40 is one of the 10,000 combinations, so 10,000 sets.
     grid = search_grid(Crossing, {"fast": range(100), "slow": range(100)}, None)
     started = time.perf_counter()

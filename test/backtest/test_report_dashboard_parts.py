@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 from openalgo.backtest import metrics
-from openalgo.backtest.report._dashboard import data, heatmaps, scale
+from openalgo.backtest.report._dashboard import bars, data, heatmaps, scale
 from openalgo.backtest.report._dashboard import timeseries as ts
 
 IST = "Asia/Kolkata"
@@ -54,6 +54,18 @@ def test_histogram_bins_have_round_edges_and_a_closed_last_bin():
     counted = scale.bins(np.array([0.0, 0.1, 0.25, 1.0]), 0.0, 1.0, 4)
     assert [n for _, _, n in counted] == [2, 1, 0, 0, 1]
     assert [left for left, _, _ in counted] == pytest.approx([0.0, 0.2, 0.4, 0.6, 0.8])
+
+
+def test_an_axis_end_a_float_residue_from_a_tick_makes_no_bin_of_its_own():
+    # Widened from -0.118%, the axis ends at -12 x 0.0001, which floats as
+    # -0.0012000000000000001. Thirty parts of it step 0.005% (0.0012 / 30 = 0.00004: 4
+    # lies between sqrt(10) and sqrt(50), so 5), whose first tick is -0.0012: the same
+    # edge as the end, not the right edge of a bin of no width. The first bin runs to
+    # -0.115% and holds -0.118%.
+    low, high = scale.widen(-0.00118, 0.0)
+    counted = scale.bins(np.array([-0.00118, 0.0]), low, high, 30)
+    assert counted[0][1] == pytest.approx(-0.00115)
+    assert counted[0][2] == 1
 
 
 def test_quartiles_interpolate_between_order_statistics():
@@ -122,6 +134,48 @@ def test_fewer_than_two_values_draw_no_chart():
 )
 def test_a_heatmap_cell_mixes_in_the_gain_or_loss_colour_by_its_size(value, css):
     assert heatmaps.heat(value, 0.10) == css
+
+
+def test_a_weekly_cell_that_rounds_to_zero_reads_without_a_sign():
+    # -0.003 percent: 0.0 in the cell at one place, 0.00% in its title at two.
+    page = heatmaps.weekly({2026: [heatmaps.Week(20, "May 17", -0.00003)]})
+    assert "<span class='wk-value nums'>0.0</span>" in page
+    assert "title='Week 20 (May 17): 0.00%'" in page
+
+
+def test_a_monthly_cell_that_rounds_to_zero_reads_without_a_sign():
+    # -0.04 percent: 0.0 in the cell at one place; its title, at two, keeps the sign.
+    table = pd.DataFrame([[-0.0004] + [np.nan] * 11], index=[2026], columns=range(1, 13))
+    page = heatmaps.monthly(table)
+    assert "title='Jan 2026: -0.04%' style='background:" in page
+    assert re.search(r"title='Jan 2026: -0\.04%' style='[^']*'>0\.0</div>", page)
+
+
+def yearly_axis_labels(chart: str) -> list[str]:
+    """The value-axis labels of a yearly returns chart, lowest first."""
+    return re.findall(r"text-anchor='end' style='[^']*'>([^<]*)</text>", chart)
+
+
+@pytest.mark.parametrize(
+    ("returns", "labels"),
+    [
+        # -3% and -0.003%: the axis runs -3% to 0 in steps of 0.5%, so each label needs
+        # one decimal, and the tick at 0 reads 0.0%, with no sign.
+        ((-0.03, -0.00003), ["-3.0%", "-2.5%", "-2.0%", "-1.5%", "-1.0%", "-0.5%", "0.0%"]),
+        # -10% and 30%: steps of 5% need none.
+        ((-0.10, 0.30), ["-10%", "-5%", "0%", "5%", "10%", "15%", "20%", "25%", "30%"]),
+    ],
+    ids=["half-percent steps", "whole-percent steps"],
+)
+def test_the_yearly_axis_labels_each_tick_with_its_own_value(returns, labels):
+    rows = [bars.YearRow(2025 + k, value, math.nan) for k, value in enumerate(returns)]
+    assert yearly_axis_labels(bars.yearly_bars(rows, None)) == labels
+
+
+def test_a_year_that_rounds_to_zero_reads_without_a_sign_in_its_bars_title():
+    # -0.003% reads 0.00% at two places.
+    rows = [bars.YearRow(2025, -0.03, math.nan), bars.YearRow(2026, -0.00003, math.nan)]
+    assert "<title>2026 Strategy: 0.00%</title>" in bars.yearly_bars(rows, None)
 
 
 def test_weeks_compound_their_sessions_and_are_named_by_their_sunday():

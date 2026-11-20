@@ -67,6 +67,16 @@ class Saved:
         return 0
 
     @property
+    def instrument(self) -> tuple[str, str] | None:
+        """(symbol, exchange) of the instrument the saved state trades, None when it names
+        none (the kernel's restore then refuses it as unreadable)."""
+        instruments = self.live_state.get("instruments") or []
+        if len(instruments) <= INSTRUMENT:
+            return None
+        found = instruments[INSTRUMENT]
+        return str(found.get("symbol")), str(found.get("exchange"))
+
+    @property
     def locks(self) -> frozenset[str]:
         """The saved entry locks that last the day (`DAY_LOCKS`)."""
         return frozenset(self.live_state.get("desk", {}).get("entry_locks", [])) & DAY_LOCKS
@@ -158,10 +168,34 @@ def read_saved(state: Mapping[str, Any] | None, strategy: str) -> Saved | None:
     return Saved(live_state, orders, sent, adopted)
 
 
+def another_instrument(
+    saved: Saved | None, strategy: str, symbol: str, exchange: str
+) -> str | None:
+    """Why the restart refuses `strategy` when its saved state is of another instrument than
+    the one the session trades for it, `symbol` on `exchange`, else None: the restart
+    cannot resume that state, and never starts the strategy afresh in its place, since a
+    saved state may hold working orders. A state is saved under its strategy class's name,
+    so the text says to rename the class for a new instrument or contract, or to keep the
+    saved symbol."""
+    found = None if saved is None else saved.instrument
+    if found is None or found == (symbol, exchange):
+        return None
+    saved_symbol, saved_exchange = found
+    return (
+        f"{strategy}: its saved state is of {saved_symbol} on {saved_exchange}, and this "
+        f"session trades {symbol} on {exchange}: the restart cannot resume it, and does not "
+        "start it afresh, since a saved state may hold working orders. For a new instrument "
+        "or contract, give the strategy class a new name (its state is saved under its "
+        f"name); to resume it, keep its symbol {saved_symbol} on {saved_exchange}. Check its "
+        "positions and orders in OpenAlgo"
+    )
+
+
 __all__ = [
     "DAY_LOCKS",
     "LEG_STOP_ROLE",
     "Saved",
+    "another_instrument",
     "read_saved",
     "save",
     "save_released",
