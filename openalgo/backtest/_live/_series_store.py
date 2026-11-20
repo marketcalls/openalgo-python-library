@@ -39,8 +39,8 @@ class LiveStore(SeriesStore):
     first pause.
 
     `version` changes whenever the bars change: a decision revealed a bar, or a candle
-    replaced a base bar. Its views (`view`) and indicators are live views that recompute
-    once per change (`_series_indicators`). Made by `LiveSeries.store`.
+    filled a base slice that had none. Its views (`view`) and indicators are live views
+    that recompute once per change (`_series_indicators`). Made by `LiveSeries.store`.
     """
 
     def __init__(
@@ -124,8 +124,8 @@ class LiveStore(SeriesStore):
     def reveal(self, row: tuple) -> Bar:
         """The bar of the kernel's strategy-bar row (index, ts_open, ...) as the store
         holds it, after the run context has moved the clock to the row's decision: the
-        series' bar, built from the accepted candles where they came (`series` module
-        docstring).
+        series' bar, built from the bars built from ticks and the candles of minutes that
+        made none (`series` module docstring).
 
         Raises LiveError when the store holds no bar opening at the row's open: the
         kernel was given a bar the series was not.

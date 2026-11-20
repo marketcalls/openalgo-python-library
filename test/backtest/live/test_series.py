@@ -1,7 +1,8 @@
 """The live series and its stores (`_live/series.py`; 16-session-design 2.5 A.10, B and
-C): today's base bars added slice by slice, a broker candle replacing a tick bar for
-later closes, missing-data marks set and lifted, and bars visible from the decision at
-their close.
+C): today's base bars added slice by slice, each slice's bar taken once (the strategy
+keeps the bars it decided on: a broker candle fills only a slice with no bar, lead
+decision 2026-11-21, 2.4.0 item P2-1), missing-data marks set and lifted, and bars
+visible from the decision at their close.
 
 The bars are `series_samples.minute_bars`: the live day 2025-07-01 on NSE, its 375
 one-minute slices from 09:15 IST.
@@ -91,22 +92,25 @@ def test_a_strategy_bar_is_built_from_its_base_bars():
     assert store.column("volume")[0] == first.volume.sum()
 
 
-def test_a_candle_replaces_the_tick_bar_of_its_slice_for_later_closes():
+def test_a_candle_never_replaces_the_tick_bar_of_its_slice():
+    # The bar a decision read stays the slice's bar for every later close.
     clock = Clock()
     series = series_with(5)
     store = five_minute_store(series, clock)
     clock.at = int(TODAY.ts_close.iloc[4])
-    shown = store.reveal((0, int(TODAY.ts_open.iloc[0])))
-    candle = dataclasses.replace(live_bar(TODAY.iloc[4], "candle"), close=shown.close + 1.0)
-    candle = dataclasses.replace(candle, high=max(candle.high, candle.close))
-    series.take(candle)
-    assert store.column("close")[0] == shown.close + 1.0
-    assert shown.close == TODAY.close.iloc[4]
+    candle = dataclasses.replace(
+        live_bar(TODAY.iloc[4], "candle"),
+        high=TODAY.high.iloc[4] + 1.0,
+        close=TODAY.high.iloc[4] + 1.0,
+    )
+    with pytest.raises(ConfigError, match="keeps the bars it decided on"):
+        series.take(candle)
+    assert store.column("close")[0] == TODAY.close.iloc[4]
 
 
-def test_a_candle_changes_the_stores_version():
+def test_a_candle_filling_a_slice_changes_the_stores_version():
     clock = Clock()
-    series = series_with(5)
+    series = series_with(4)
     store = five_minute_store(series, clock)
     clock.at = int(TODAY.ts_close.iloc[4])
     before_candle = store.version
@@ -133,15 +137,23 @@ def test_the_candle_of_a_slice_with_no_tick_bar_fills_the_store():
 def test_another_tick_bar_for_a_slice_with_one_is_refused():
     series = series_with(1)
     other = dataclasses.replace(live_bar(TODAY.iloc[0]), volume=TODAY.volume.iloc[0] + 1)
-    with pytest.raises(ConfigError, match="given once"):
+    with pytest.raises(ConfigError, match="has a bar already"):
         series.take(other)
 
 
 def test_a_tick_bar_after_the_candle_of_its_slice_is_refused():
     series = series_with(0)
     series.take(live_bar(TODAY.iloc[0], "candle"))
-    with pytest.raises(ConfigError, match="before any candle"):
+    with pytest.raises(ConfigError, match="has a bar already"):
         series.take(live_bar(TODAY.iloc[0]))
+
+
+def test_another_candle_for_a_slice_a_candle_filled_is_refused():
+    series = series_with(0)
+    series.take(live_bar(TODAY.iloc[0], "candle"))
+    later = dataclasses.replace(live_bar(TODAY.iloc[0], "candle"), volume=TODAY.volume.iloc[0] + 7)
+    with pytest.raises(ConfigError, match="has a bar already"):
+        series.take(later)
 
 
 def test_a_slice_marked_missing_is_reported_for_its_strategy_bar():
@@ -175,14 +187,14 @@ def test_a_slice_with_a_bar_cannot_be_marked_missing():
 
 def test_the_bar_a_slice_has_now_is_given():
     series = series_with(1)
-    series.take(live_bar(TODAY.iloc[0], "candle"))
-    assert series.bar(int(TODAY.ts_open.iloc[0])).source == "candle"
-    assert series.bar(int(TODAY.ts_open.iloc[1])) is None
+    series.take(live_bar(TODAY.iloc[1], "candle"))
+    assert series.bar(int(TODAY.ts_open.iloc[0])).source == "ticks"
+    assert series.bar(int(TODAY.ts_open.iloc[1])).source == "candle"
+    assert series.bar(int(TODAY.ts_open.iloc[2])) is None
 
 
-def test_the_tick_bar_of_a_slice_stays_at_hand_after_a_candle_replaces_it():
+def test_the_tick_bar_of_a_slice_is_at_hand():
     series = series_with(1)
-    series.take(live_bar(TODAY.iloc[0], "candle"))
     assert series.tick_bar(int(TODAY.ts_open.iloc[0])) == live_bar(TODAY.iloc[0])
 
 
@@ -192,18 +204,8 @@ def test_a_slice_with_only_a_candle_has_no_tick_bar():
     assert series.tick_bar(int(TODAY.ts_open.iloc[0])) is None
 
 
-def test_a_second_candle_of_a_slice_is_checked_against_its_tick_bar():
-    series = series_with(1)
-    opened = int(TODAY.ts_open.iloc[0])
-    check = CandleCheck()
-    series.take(check.accepted(series.tick_bar(opened), live_bar(TODAY.iloc[0], "candle")))
-    later = dataclasses.replace(live_bar(TODAY.iloc[0], "candle"), volume=TODAY.volume.iloc[0] + 7)
-    series.take(check.accepted(series.tick_bar(opened), later))
-    assert series.bar(opened) == later
-
-
 def test_a_candle_equal_to_the_bar_its_slice_has_changes_nothing():
-    series = series_with(1)
+    series = series_with(0)
     candle = live_bar(TODAY.iloc[0], "candle")
     series.take(candle)
     before_again = series.version

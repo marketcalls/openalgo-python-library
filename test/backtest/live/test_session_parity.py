@@ -37,13 +37,13 @@ difference:
   backtest holds it as a level of the leg, with no order.
 - **An exit's units.** The live exit names the units it closes, as a broker order must;
   the backtest's closes whatever the position holds (0 units asked, the position filled).
-- **A bar replaced after its decision.** After a tick gap the strategy's series takes the
-  broker's candle in place of the bar built from ticks once the candle is read, after
-  the decision at that slice's close (16-session-design 2.5 C). `SessionRecord.bars`
-  gives the candle, the bar every later decision saw, so a backtest of them may decide
-  that slice otherwise than the session did (`SessionRecord.replaced` names such
-  slices). This scenario has no tick gap and no replaced bar (asserted); the tick gap of
-  `test_session_candles` (F42) is recorded to show the slice where they differ.
+- **No bar is replaced after its decision.** The strategy keeps the bars it decided on
+  (lead decision 2026-11-21, 2.4.0 item P2-1): after a tick gap the broker's candle of
+  the slice is kept as drift, and the series and the kernel keep the bar built from
+  ticks, so `SessionRecord.bars` gives every decision's bar and `SessionRecord.replaced`
+  is empty. This scenario has no tick gap (asserted); the tick gap of
+  `test_session_candles` (F42) is recorded to show its slice given to a backtest as the
+  tick bar the strategy decided on.
 
 Expected values come from the scenario, the fake's books and the backtest's own bars.
 """
@@ -194,7 +194,7 @@ def test_no_bar_the_strategy_decided_on_was_replaced_after_its_decision(runs):
     assert record.replaced("Parity") == []
 
 
-def test_a_tick_gaps_slice_is_decided_on_its_tick_bar_and_given_to_a_backtest_as_its_candle(
+def test_a_tick_gaps_slice_is_given_to_a_backtest_as_the_tick_bar_the_strategy_decided_on(
     make_fake_openalgo, monkeypatch, tmp_path, caplog
 ):
     # F42's gap: SBIN's first three trades of 14:43 send no tick, so the bar built from
@@ -206,21 +206,15 @@ def test_a_tick_gaps_slice_is_decided_on_its_tick_bar_and_given_to_a_backtest_as
     world.script.at(ist(14, 42, 59), lambda: world.fake.faults.tick_gap("SBIN", "NSE", trades=3))
     world.stop_at(ist(14, 46))
     recorder = record_sessions(monkeypatch)
-    world.run([Opens, InfyTicks])
+    outcome = world.run([Opens, InfyTicks])
     (record,) = recorder.finish()
     gap = ist(14, 43)
-    assert record.replaced("Opens") == [gap]
-    takes = [
-        at
-        for at, line in enumerate(record.lines)
-        if (line["strategy"], line["kind"], line.get("call")) == ("Opens", "series", "take")
-        and line["args"][0]["ts_open_ns"] == gap
-    ]
-    decided = [line for line in record.lines[takes[0] : takes[-1]] if line["kind"] == "drive"]
-    assert any(line["strategy"] == "Opens" and line["deciding"] for line in decided)
+    drift = [d.open for d in outcome.drift if (d.symbol, d.ts_open_ns) == ("SBIN", gap)]
+    assert drift == [pytest.approx(-1.5)]
+    assert record.replaced("Opens") == []
     at = ist_time(gap)
     assert record.kernel_bars("Opens").loc[at, "open"] == pytest.approx(PRICE + 1.5)
-    assert record.bars("Opens").loc[at, "open"] == pytest.approx(PRICE)
+    assert record.bars("Opens").loc[at, "open"] == pytest.approx(PRICE + 1.5)
 
 
 def test_the_strategys_last_decision_is_bars_before_the_records_last(runs):

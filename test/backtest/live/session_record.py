@@ -214,15 +214,15 @@ class SessionRecord:
         """The 1-minute bars `strategy` decided on, as a backtest takes them (`data=`,
         indexed by their opens in IST): the warm-up's candles before today, then for each
         of today's slices the last bar its live series took (a catch-up candle, a bar
-        built from ticks, or the broker candle that replaced it or filled a slice marked
-        missing, such as the seed slice the session started in). A slice the series
-        never took a bar of is not in it, as a backtest runs a minute it has no bar of.
+        built from ticks, or the broker candle that filled a slice with no bar, such as a
+        slice marked missing or the seed slice the session started in). A slice the
+        series never took a bar of is not in it, as a backtest runs a minute it has no
+        bar of.
 
-        A slice whose bar was replaced after the decision at its close (`replaced`: after
-        a tick gap, the broker's candle in place of the bar built from ticks) is given by
-        its candle, the bar every later decision saw; the decision at its own close saw
-        the bar built from ticks, so a backtest of these bars may decide that slice
-        otherwise than the session did."""
+        A live series takes each slice's bar once (lead decision 2026-11-21, 2.4.0 item
+        P2-1), so the last bar is the first; a record in which a slice's bar was taken
+        again, a different one (`replaced`), gives the last, and a backtest of these bars
+        may then decide that slice otherwise than the session did."""
         rows: dict[int, list[float]] = {}
         for line in self.lines:
             if line["strategy"] != strategy:
@@ -236,10 +236,10 @@ class SessionRecord:
 
     def replaced(self, strategy: str) -> list[int]:
         """The opens (UTC nanoseconds) of today's slices whose bar `strategy`'s live
-        series took again, a different one, after its first: after a tick gap, the
-        broker's candle replacing the bar built from ticks once it is read, after the
-        decision at the slice's close (16-session-design 2.5 C). That decision saw the
-        first bar, each later one the last (`bars`)."""
+        series took again, a different one, after its first. Since the lead's decision of
+        2026-11-21 (2.4.0 item P2-1) a series refuses that, so a session's record names
+        none; a record that does shows a decision that saw the first bar while each later
+        one saw the last (`bars`)."""
         first: dict[int, list[float]] = {}
         found: list[int] = []
         for line in self.lines:

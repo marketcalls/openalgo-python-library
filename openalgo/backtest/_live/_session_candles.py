@@ -5,11 +5,13 @@ steps 11 to 15; unit 8): what the candle checks ask for, and what each read's ca
   plan's catch-up, which releases the slices it still owns (`StrategyPlan.catch_up`,
   bounded below `first_live`); those whose last candle check passed with none read are
   given up on as a read with no candle would (`give_up`).
-- A candle of a live slice already released is skipped when it equals the bar the series
-  has; checked against the slice's tick bar when it has one (`CandleCheck.accepted`: the
-  candle stands for the bar when it covers the slice, and its drift is kept); taken as
-  the slice's bar when it made none (a minute with no tick, a seed minute). The kernel
-  keeps the bar it ran.
+- A candle of a live slice already released is taken as the slice's bar when it has
+  none (a minute with no tick, a seed minute, a slice marked missing). When the slice
+  has a tick bar the candle is checked against it (`CandleCheck.accepted`: kept as drift
+  when it covers the slice) and the series keeps the tick bar: the strategy keeps the
+  bars it decided on, as the kernel keeps the bar it ran (lead decision 2026-11-21, 2.4.0
+  item P2-1; `series`). A candle read again is skipped, so the drift log keeps each
+  candle once, and a slice's bar is never replaced.
 - A slice whose candle no read holds, while a read begun `CANDLE_LAST_READ_S` or more
   after its close holds a candle of a later slice, had no trade: its missing mark is
   lifted without a bar (`LiveSeries.no_trade`) and it is asked for no more.
@@ -29,7 +31,7 @@ from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
 from .._layout import NANOS_PER_SECOND
-from ._bars_candle import BarDrift, CandleCheck, candle_bar
+from ._bars_candle import TICKS_SOURCE, BarDrift, CandleCheck, candle_bar
 from ._plan_catch_up import StrategyPlan
 from ._plan_release import CANDLE_LAST_READ_S, missing_note
 from ._types import LiveBar
@@ -49,6 +51,8 @@ class CandleKeeper:
         self._first_live: int | None = None
         self._needs: set[int] = set()
         self._checks = CandleCheck()
+        # The last candle checked against each slice's tick bar, by the slice's open.
+        self._checked: dict[int, LiveBar] = {}
 
     @property
     def drifts(self) -> list[BarDrift]:
@@ -105,28 +109,31 @@ class CandleKeeper:
 
     def _live(self, candle: LiveBar) -> None:
         series, opened = self._part.series, candle.ts_open_ns
-        if series.bar(opened) == candle:
-            self._needs.discard(opened)
-            return
-        tick_bar = series.tick_bar(opened)
-        if tick_bar is None:
+        bar = series.bar(opened)
+        if bar is None:
             series.take(candle)
             self._needs.discard(opened)
-            return
-        if self._checks.accepted(tick_bar, candle) is candle:
-            series.take(candle)
+        elif bar.source != TICKS_SOURCE or self._checked.get(opened) == candle:
+            # A slice a candle filled keeps that candle; a candle read again was checked.
             self._needs.discard(opened)
-            drift = self._checks.drifts[-1]
-            self._event(
-                "drift",
-                strategy=self._part.spec.name,
-                slice_open_ns=opened,
-                open=drift.open,
-                high=drift.high,
-                low=drift.low,
-                close=drift.close,
-                volume=drift.volume,
-            )
+        elif self._checks.accepted(bar, candle) is candle:
+            self._checked[opened] = candle
+            self._needs.discard(opened)
+            self._drift_event(bar, candle)
+
+    def _drift_event(self, tick_bar: LiveBar, candle: LiveBar) -> None:
+        """The event of the drift just kept."""
+        drift = self._checks.drifts[-1]
+        self._event(
+            "drift",
+            strategy=self._part.spec.name,
+            slice_open_ns=tick_bar.ts_open_ns,
+            open=drift.open,
+            high=drift.high,
+            low=drift.low,
+            close=drift.close,
+            volume=drift.volume,
+        )
 
     def _no_trade(self, read: set[int], read_ns: int) -> None:
         if not read:

@@ -42,7 +42,10 @@ not it has rows.
   order ID, purpose, how far it got at the broker and its final status. `fills`: every
   fill the engine took, with where it was heard (`source`) and whether its price was
   released unconfirmed (`estimated`) or may lie on another tick (`derived_from_average`).
-- `drift`: each broker candle against the bar built from the feed's ticks. `unprotected`:
+- `drift`: each broker candle against the bar built from the feed's ticks. The strategy
+  decided, and kept deciding, on the bars built from ticks: a broker candle never
+  replaced one, and was the bar only of a minute with no ticks (one the feed was dead
+  in, the minute watching began in). `unprotected`:
   each window a position had no confirmed stop at the broker, and why. `locks`: each
   entry lock, when it was set and lifted. `reconciliations`: each comparison with the
   broker's books that differed, and what was done; in a session with an instrument

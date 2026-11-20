@@ -1,17 +1,21 @@
 """The strategy layer's live stores (16-session-design 1.5, 2.5 A.10, B and C, 3.1 step
 11; unit 6): bars that grow as slices close, indicators recomputed per close, broker
-candles that replace tick-built bars, and missing-data marks.
+candles that fill the minutes no tick bar was built for, and missing-data marks.
 
 - `LiveSeries` holds one instrument's base bars of a session: the history before today
   (the warm-up's broker candles, 08-live-trading section 5 rule 6) and today's closed
-  base slices, each a bar built from ticks or a broker candle. A candle replaces the
-  tick bar of its slice for later closes: the accepted candle feeds the strategy's
-  series while the kernel keeps the tick bar it ran (D27; merge notes, bars review). The
-  slice's tick bar stays at hand (`tick_bar`), so the loop checks every candle of a
-  slice against it (`CandleCheck.accepted`) and takes what the check gives; it skips a
-  candle equal to the bar the slice has (a candle read again), so the drift log keeps
-  each candle once. A slice that closed while the feed was dead with no bar is marked
-  missing until a bar of it arrives (2.5 B and C).
+  base slices, each a bar built from ticks or a broker candle. A slice's bar is taken
+  once and never replaced: the strategy keeps the bars it decided on, as the kernel does
+  (lead decision 2026-11-21, 2.4.0 item P2-1, replacing "a candle replaces a base bar for
+  later closes"). A candle read two seconds after a close is often not the broker's
+  final candle, and a bar replaced after a decision could hide a crossing from every
+  decision or show one twice. So a broker candle is the bar only of a slice that has
+  none (a minute with no tick, a slice marked missing, the minute watching began in),
+  and for a slice with a tick bar it is only checked against it (`tick_bar`,
+  `CandleCheck.accepted`) for the drift log. A slice that closed while the feed was dead
+  with no bar is marked missing until a bar of it arrives (2.5 B and C); the candle that
+  fills it refreshes the indicators, and no decision is made on it after the fact
+  (08-live-trading section 5 rules 3 and 7).
 - `LiveStore` (`_series_store`, re-exported here) is the series at one interval as a
   strategy reads it: the bars closed by the decision instant, built from the base bars
   with the resampler a backtest builds its bars with (`resample.resample_bars`), so the
@@ -130,7 +134,6 @@ class LiveSeries:
         # base bars of the period today continues (`_split`).
         self._splits: dict[str, tuple[dict[str, np.ndarray], pd.DataFrame]] = {}
         self._bars: dict[int, LiveBar] = {}
-        self._tick_bars: dict[int, LiveBar] = {}
         self._missing: set[int] = set()
         self._version = 0
 
@@ -145,16 +148,13 @@ class LiveSeries:
         return tuple(zip(self._opens.tolist(), self._closes.tolist(), strict=True))
 
     def take(self, bar: LiveBar) -> None:
-        """Take today's closed base bar of one slice: a bar built from ticks, given once
-        and before any candle of its slice, or a broker candle, which replaces whatever
-        bar the slice had (a candle accepted by `CandleCheck`, or the candle of a slice
-        that made no tick bar). Either lifts the slice's missing-data mark. The slice's
-        own tick bar again (what `CandleCheck.accepted` gives back for a candle that does
-        not cover the slice) and a candle equal to the slice's bar change nothing.
+        """Take today's closed base bar of one slice, once (module docstring): a bar
+        built from ticks, or a broker candle of a slice that has no bar. It lifts the
+        slice's missing-data mark. The slice's own bar again changes nothing.
 
         Raises ConfigError for a bar of another instrument, of a source other than
-        "ticks" or "candle", that is not one of today's base slices, or a tick bar for a
-        slice that already has another bar.
+        "ticks" or "candle", that is not one of today's base slices, or for a slice that
+        has another bar already (a slice's bar is never replaced).
         """
         if (bar.symbol, bar.exchange) != (self.symbol, self.exchange):
             raise ConfigError(
@@ -169,17 +169,15 @@ class LiveSeries:
                 f"the {self.symbol} bar opening at {bar.ts_open_ns} closes at "
                 f"{bar.ts_close_ns}, not at its slice's close {int(self._closes[slot])}"
             )
-        if bar.source == TICKS_SOURCE:
-            if self._tick_bars.get(slot) == bar:
-                return
-            if slot in self._bars:
-                raise ConfigError(
-                    f"the {self.symbol} slice opening at {bar.ts_open_ns} has a bar already: "
-                    "a slice's tick bar is given once, before any candle of it"
-                )
-            self._tick_bars[slot] = bar
-        elif self._bars.get(slot) == bar:
+        held = self._bars.get(slot)
+        if held == bar:
             return
+        if held is not None:
+            raise ConfigError(
+                f"the {self.symbol} slice opening at {bar.ts_open_ns} has a bar already: the "
+                "strategy keeps the bars it decided on, and a broker candle fills only a slice "
+                "with no bar"
+            )
         self._bars[slot] = bar
         self._missing.discard(slot)
         self._version += 1
@@ -190,11 +188,12 @@ class LiveSeries:
         return self._bars.get(self._slot(slice_open_ns))
 
     def tick_bar(self, slice_open_ns: int) -> LiveBar | None:
-        """The bar built from ticks that today's slice opening at `slice_open_ns` was
-        given, kept after a candle replaced it: what each candle of the slice is checked
-        against. None when the slice made none. Raises ConfigError for an instant that
-        opens no slice of the day."""
-        return self._tick_bars.get(self._slot(slice_open_ns))
+        """The bar built from ticks of today's slice opening at `slice_open_ns`: what
+        each candle of the slice is checked against. None when the slice made none (its
+        bar, if any, is a candle). Raises ConfigError for an instant that opens no slice
+        of the day."""
+        bar = self.bar(slice_open_ns)
+        return bar if bar is not None and bar.source == TICKS_SOURCE else None
 
     def mark_missing(self, slice_open_ns: int) -> None:
         """Mark today's slice opening at `slice_open_ns` missing: it closed while the
