@@ -90,6 +90,9 @@ _NOTICE_NS = round(HELD_NOTICE_EVERY_S * NANOS_PER_SECOND)
 _CHANGE_WORDS = {ModifyRequest: "modify", CancelRequest: "cancel"}
 #: The books a reconciliation reads, as `inbox.Books` names them (5.2).
 _BOOKS = ("positionbook", "orderbook", "tradebook", "funds")
+#: The books of a held cancel's read, in order: the position book, then the order book
+#: when asked for (`ReadPositions.orders`).
+_HELD_CANCEL_BOOKS = ("positionbook", "orderbook")
 
 
 class Sender:
@@ -329,10 +332,13 @@ class Sender:
         self._alerts.send(AlertKind.ERROR, text)
 
     def _read(self, request: ReadBooks | ReadPositions) -> None:
-        """The books of a reconciliation, or the position book for a held cancel, each
-        answer checked by the guard (the analyzer switch routes them too)."""
+        """The books of a reconciliation, or the position book for a held cancel (and the
+        order book after it when asked for), each answer checked by the guard (the
+        analyzer switch routes them too)."""
         started = self._now()
-        names = _BOOKS if isinstance(request, ReadBooks) else ("positionbook",)
+        names = _BOOKS
+        if isinstance(request, ReadPositions):
+            names = _HELD_CANCEL_BOOKS if request.orders else _HELD_CANCEL_BOOKS[:1]
         answers = {}
         for name in names:
             if self._guard.locked:
@@ -347,7 +353,7 @@ class Sender:
             ended = self._now()
             self._post(Books(request.generation, **answers, started_ns=started, ended_ns=ended))
         else:
-            self._post(PositionRows(answers["positionbook"], started))
+            self._post(PositionRows(answers["positionbook"], started, answers.get("orderbook")))
 
 
 __all__ = ["HELD_NOTICE_EVERY_S", "REQUEUE_AFTER_S", "Sender"]

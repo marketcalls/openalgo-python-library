@@ -32,6 +32,9 @@ of `reconcile.Reconciler`). A group of one is compared as a leg always was
   member).
 - **Agreement** tells the margin holds (`_margin_reject`): a position a closing order's
   rejection held may be exited again.
+- **The last read** of each shared instrument (`group_read`, 18-multi-strategy 4.11): the
+  broker's net of every comparison that read its position book, kept with the members'
+  sum once the comparison has acted, for the close's row and line of the instrument.
 
 Quantities are signed units, times UTC nanoseconds. Used by the loop only.
 """
@@ -71,9 +74,17 @@ class GroupComparison:
     _quiet: dict[str, int | None]
     _only: frozenset[str] | None
     _figures: dict[str, GroupFigure]
+    _group_reads: dict[tuple[str, str], tuple[int, int]]
     adopted: Any
     _noted: Any
     _soon: Any
+
+    def group_read(self, symbol: str, exchange: str) -> tuple[int, int] | None:
+        """The last read of the shared instrument `exchange:symbol` that a comparison of
+        its group took: the broker's net and the members' sum once that comparison had
+        acted (signed units); None when no comparison of this start read its position
+        book."""
+        return self._group_reads.get((symbol, exchange))
 
     def _compare_shared(self, message: Books, *, late_after_s: float, again_s: float) -> bool:
         """Compare each shared instrument's group with a read (`_compare_group`), in the
@@ -152,16 +163,18 @@ class GroupComparison:
         everyone = frozenset().union(*bound.values()) | self._earlier
         units = {m.name: round(m.open_units()) for m in members}
         group_units = sum(units.values())
-        kind, shares = Kind.UNREADABLE, ()
+        kind, shares, pending = Kind.UNREADABLE, (), None
         if books.units is not None and books.trades is not None:
             trades = books.external(everyone)
             external = sum(trade.signed for trade in trades)
             adopted = sum(self.adopted(m.name) for m in members)
+            pending = external - adopted
             unexplained = unexplained_by(group_units, books.units, external, adopted)
-            kind = group_kind(group_units, books.units, unexplained)
+            kind = group_kind(tuple(units.values()), books.units, unexplained)
             if kind is Kind.EXPLAINED_SHARED:
                 shares = _shared_out(members, units, books.units - group_units, trades)
-        figure = GroupFigure(tuple(m.name for m in members), group_units, shares)
+        names, held = tuple(units), tuple(units.values())
+        figure = GroupFigure(names, group_units, shares, held, pending)
         polls = False
         for member in active:
             self._figures[member.name] = figure
@@ -189,6 +202,9 @@ class GroupComparison:
                 self.guard.read(member.name, message.started_ns)
         if kind is Kind.AGREE and not late:
             session.margin.agreed(list(active), message.started_ns)
+        if books.units is not None:
+            held_now = sum(round(m.open_units()) for m in members)
+            self._group_reads[(members[0].symbol, members[0].exchange)] = (books.units, held_now)
         return polls
 
 

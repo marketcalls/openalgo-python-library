@@ -177,8 +177,35 @@ rule of one leg (review of M6, round 1):
 | A difference no trade explains adopts nothing and keeps every stop; each open position's note names the group's net | `test_session_shared_books.py::test_a_difference_no_trade_explains_keeps_every_stop_and_names_the_groups_net` |
 | A difference first seen by the close's final read lists each member at its own units, the note naming the group's net against the members' sum, none when the net is flat (4.11) | `test_session_shared_books.py::test_a_sale_first_seen_by_the_closes_read_lists_each_member_at_its_own_units`, `test_a_sale_of_every_unit_first_seen_by_the_closes_read_lists_no_position`; on their own in `test_reconcile_close.py` |
 | The kill switch exits a member only when the broker holds the group's sum (4.9): after the allocation each member exits what it holds; a flat member is flat at the broker when the book shows what the others hold; its alert says an explained sale is shared out | `test_session_shared_books.py::test_the_kill_switch_exits_each_member_what_it_holds_once_the_sale_is_shared_out`; on a stand-in session in `test_watch_kill_shared.py` |
-| A held cancel on a shared instrument is left to the trade book (4.5, until M7's two-book read) | `test_stops_held.py::test_a_held_cancel_on_a_shared_instrument_is_left_to_the_trade_book`, `test_a_held_cancel_on_a_shared_instrument_is_not_decided_by_anothers_position_read` |
+| A held cancel on a shared instrument is decided by the group's two-book read (4.5; replaced in unit M7: the rows below) | `test_stops_held_group.py` |
 | An automatic exit the margin gate keeps is alerted as waiting, and a held LIMIT exit is priced again from the latest price when a read agrees (4.14a item 2) | `test_margin_reject.py` |
+
+## Rows of a shared instrument built in unit M7 (18-multi-strategy 5.2)
+
+The sum rule's group rows (4.6) with their own words and actions, the reconciliations
+rows that carry the group, the allocation and the stops cut, the instrument's row in
+`open_positions` and its DAILY_SUMMARY line (4.11), a group difference counted once, and
+the held cancel's two-book read (4.5). Every test runs the invariants of groups as M6's
+rows do.
+
+| Row | Tests |
+|---|---|
+| F98 | `test_session_shared_rows.py::test_F98_a_sale_by_hand_is_shared_out_and_each_stop_cut_to_what_its_member_keeps`, `test_F98_each_member_adopts_its_share_before_its_stop_is_cut` (the lead's ruling of 4.14b: the adoption first, the kernel's cut after it), `test_F98_both_members_are_locked_and_the_alert_names_the_allocation`, `test_F98_each_members_row_carries_the_group_the_allocation_and_its_own_stop_cut`, `test_F98_the_first_sighting_carries_the_group_but_no_allocation_yet`, `test_F98_a_difference_of_the_group_is_one_mismatch_of_the_day` |
+| F99 | `test_session_shared_rows.py::test_F99_the_other_side_cancels_every_members_stop_and_adopts_nothing`, `test_F99_no_sell_stop_works_once_the_other_side_is_acted_on`, `test_F99_one_error_alert_names_the_instrument_and_each_row_its_stop_cancelled`, `test_F99_each_members_alert_says_nothing_is_adopted_and_to_end_the_session` (members act in call order within the confirming comparison, so the order of the two cancels is not asserted: 4.14b) |
+| F100 | `test_session_shared_rows.py::test_F100_a_buy_by_hand_on_a_short_group_is_taken_from_the_short_opened_last` |
+| F101 | `test_session_shared_rows.py::test_F101_an_excess_on_an_all_long_group_sends_nothing_and_locks_every_member`, `test_F101_the_excess_is_named_no_strategys_to_close_by_hand_once_the_session_ends`, `test_F101_an_excess_does_not_guard_the_members_exits_and_keeps_every_stop` |
+| F102 | `test_session_shared_rows.py::test_F102_a_lagging_book_on_a_shared_instrument_is_alerted_as_a_lag_and_nothing_done` |
+| F103 | `test_session_shared_held.py::test_F103_a_held_cancel_waits_while_another_members_fill_is_unheard_then_exits`, `test_F103_the_read_takes_the_order_book_after_the_position_book`, `test_F103_an_error_alert_says_why_the_cancel_waits`, `test_F103_the_wait_counts_unprotected_as_a_held_cancel`, `test_F103_variant_a_fill_landing_between_the_two_books_stops_the_decision_too` (B's stop fills whole: a live order book counts no fills, so a part fill shows only where the book counts them, `test_stops_held_group.py`); the rule on a stand-in in `test_stops_held_group.py` |
+| F106 | `test_session_shared_stop.py::test_F106_the_kill_switch_exits_each_member_once_the_group_agrees`, `test_F106_the_trades_record_the_account_loss_limit_and_entries_stay_locked` |
+| F107 | `test_session_shared_books.py::test_the_kill_switch_exits_each_member_what_it_holds_once_the_sale_is_shared_out` (built in M6) |
+| F108 | `test_session_shared_stop.py::test_F108_the_flatten_waits_for_a_read_agreeing_with_the_group_then_ends_flat`, `test_F108_variant_a_second_ctrl_c_before_the_read_leaves_each_member_a_stop` |
+| F109 | `test_session_shared_restart.py::test_F109_each_member_resumes_with_its_own_stop_verified_by_its_order_id`, `test_F109_the_gates_are_set_before_the_first_decision_of_the_restart` |
+| F110 | `test_session_shared_restart.py::test_F110_a_stop_that_filled_while_down_is_its_own_members_and_the_other_resumes` |
+| F111 | `test_session_shared_restart.py::test_F111_a_members_missing_stop_is_placed_again_before_the_banner` |
+| F112 | `test_session_shared_restart.py::test_F112_a_stop_no_member_holds_is_cancelled_as_an_orphan` (waives one stop, within and no orphan, as unit 12's test of one leg does: the test drops the venue record of a stop the broker holds) |
+
+The group of one: every row of 16-session-design 5.3 and 5.5 judged through the group's
+rules with one member gives the leg's row (`test_reconcile_groups.py::test_a_group_of_one_is_judged_by_the_table_of_5_3_as_a_leg`, `test_a_restart_of_a_group_of_one_is_judged_by_the_table_of_5_5_as_a_leg`, `test_a_group_of_one_adopts_an_explained_difference_as_a_leg_does`); a strategy alone takes the per-leg path unchanged, so the unit 12 suite runs as it did. What the close says of a shared instrument: `test_session_shared_close.py`.
 
 ## The alerts of 08-live-trading section 8
 
@@ -284,6 +311,7 @@ are for the lead to add to 7.1's list:
 | `test_stops_report.py` (a second Ctrl+C with the exit unanswered; a stop repriced to a resting LIMIT) | 3.3 step 4; 4.6 |
 | `test_session_shared_margin.py::test_a_held_leg_left_open_at_the_end_is_listed_with_its_reason` | 18-multi-strategy 4.14: a stop rejected on a shared instrument is placed again only after a book read agrees, and none can be read before the session ends |
 | `test_session_shared_books.py::test_a_sale_first_seen_by_the_closes_read_lists_each_member_at_its_own_units`, `test_a_sale_of_every_unit_first_seen_by_the_closes_read_lists_no_position` (each member's stop kept larger than the net) | 3.3 step 5 and 5.4 "As built": the close does not fit a stop to a sale by hand it has not settled, and names it |
+| `test_session_shared_close.py::test_a_difference_first_seen_by_the_closes_read_is_named_and_counted_once` (each member's stop kept larger than the net) | the same |
 
 Checks waived by single tests, each with its reason in the test:
 

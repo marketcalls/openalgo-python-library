@@ -78,7 +78,11 @@ class ReadBooks:
 
 @dataclass(frozen=True)
 class ReadPositions:
-    """Read the position book for a held cancel (4.11), answered as `inbox.PositionRows`."""
+    """Read the position book for a held cancel (4.11), and with `orders` the order book
+    after it (a held cancel on an instrument several strategies share, 18-multi-strategy
+    4.5), answered as `inbox.PositionRows`."""
+
+    orders: bool = False
 
     priority = Priority.UPKEEP
 

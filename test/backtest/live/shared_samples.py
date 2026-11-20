@@ -10,6 +10,8 @@ in call order: at their first decision (14:42:01, both filled at once at 500.00)
 (502.00), B buys 50 units with a stop 3 points below (497.00); then neither trades again.
 `LateBreakout` is a B that buys its 50 at its second decision (14:43:01), so that its
 position opened after A's; `SbinShort` is a B that sells 50 instead, for the side gate.
+`ShortTrend` is an A that sells 100 with a stop 3 points above (an SL-M buy at 503.00),
+and `LateShort` a B that sells 50 so at its second decision.
 `OnceA` and `OnceB` buy A's and B's units once a day, flat or after a restart (they
 remember it in `self.state`), and `NeverB` never trades, for the restarts.
 
@@ -75,6 +77,31 @@ class SbinShort(bt.Strategy):
             self.sell(B_UNITS, stop=bt.points(STOP_POINTS))
 
 
+class ShortTrend(bt.Strategy):
+    """A short: sells 100 SBIN at its first decision with a stop 3 points above (an SL-M
+    buy at 503.00), then never trades again."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "1m"
+
+    def init(self):
+        self.calls = 0
+
+    def on_bar(self, bar):
+        self.calls += 1
+        if self.calls == 1:
+            self.sell(A_UNITS, stop=bt.points(STOP_POINTS))
+
+
+class LateShort(ShortTrend):
+    """B short: sells 50 SBIN at its second decision (14:43:01) with a stop 3 points above,
+    so its position opened after `ShortTrend`'s."""
+
+    def on_bar(self, bar):
+        self.calls += 1
+        if self.calls == 2:
+            self.sell(B_UNITS, stop=bt.points(STOP_POINTS))
+
+
 class OnceA(bt.Strategy):
     """A that buys 100 SBIN with a stop 3 points below at its first decision of the day,
     flat, and never again (it remembers across a restart, in `self.state`)."""
@@ -119,12 +146,14 @@ __all__ = [
     "DECIDED",
     "TARGET_POINTS",
     "LateBreakout",
+    "LateShort",
     "NeverB",
     "OnceA",
     "OnceB",
     "SbinBreakout",
     "SbinShort",
     "SbinTrend",
+    "ShortTrend",
     "sbin_orders",
     "terms",
 ]

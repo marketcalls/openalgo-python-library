@@ -84,9 +84,12 @@ def drift_frame(drift: Sequence[BarDrift]) -> pd.DataFrame:
 
 def reconciliations_frame(rows: Sequence[Reconciliation]) -> pd.DataFrame:
     """Each comparison with the broker's books that differed, `time` when, IST, with the
-    engine's and the broker's units (missing: not read) and what was done."""
+    engine's and the broker's units (missing: not read) and what was done; of a member of
+    a shared instrument, its group's figures, the allocation made and its stop cut
+    (`_reconcile_findings.Reconciliation`; missing or "" for a strategy alone)."""
     table = frame(rows, _names(Reconciliation), [("at_ns", "time")])
-    table["broker_units"] = table["broker_units"].astype("Int64")
+    for column in ("broker_units", "group_units", "external_units"):
+        table[column] = table[column].astype("Int64")
     return table
 
 

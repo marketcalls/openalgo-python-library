@@ -116,7 +116,11 @@ def test_the_member_whose_position_opened_last_takes_a_sale_by_hand_first(world)
     outcome = run_sold(world)
     adopted = {e["strategy"]: (e["side"], e["units"]) for e in events(outcome, "adopted")}
     assert adopted == {"LateBreakout": ("SELL", B_UNITS), "SbinTrend": ("SELL", SOLD - B_UNITS)}
-    assert {p.strategy: p.units for p in outcome.open_positions} == {"SbinTrend": NET}
+    # A's row, and the instrument's row with OpenAlgo's net (4.11).
+    assert {p.strategy: p.units for p in outcome.open_positions} == {
+        "SbinTrend": NET,
+        "SbinTrend and LateBreakout": NET,
+    }
 
 
 def test_each_members_stop_is_cut_to_what_the_allocation_leaves_it(world):
@@ -189,6 +193,7 @@ def test_a_sale_first_seen_by_the_closes_read_lists_each_member_at_its_own_units
         world.trace.kept_stop_by_decision(member, KEPT_AT_THE_CLOSE)
     outcome = run_sold(world, SbinBreakout, sold_at=ist(14, 44, 58))
     rows = {p.strategy: p for p in outcome.open_positions}
+    instrument = rows.pop("SbinTrend and SbinBreakout")
     assert {name: row.units for name, row in rows.items()} == {
         "SbinTrend": A_UNITS,
         "SbinBreakout": B_UNITS,
@@ -198,6 +203,9 @@ def test_a_sale_first_seen_by_the_closes_read_lists_each_member_at_its_own_units
             f"OpenAlgo's books showed {NET} units of SBIN for SbinTrend and SbinBreakout "
             f"together, who held {A_UNITS + B_UNITS}, at the last read"
         ) in row.note
+    # The instrument's own row: OpenAlgo's net, against the members' sum (4.11).
+    assert (instrument.units, instrument.stop_confirmed) == (NET, False)
+    assert f"their sum is {A_UNITS + B_UNITS}, so they differ" in instrument.note
     assert events(outcome, "adopted") == []
 
 

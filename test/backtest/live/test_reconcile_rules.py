@@ -25,26 +25,27 @@ from openalgo.backtest._live._reconcile_rules import (
 )
 from openalgo.backtest._live._types import OrderStatus
 
+#: The table of 5.3: (the engine's units, the broker's, other orders' trades, adopted, kind).
+#: The group rules of a group of one are pinned against it (`test_reconcile_groups`).
+TABLE_5_3 = [
+    (10, 10, 0, 0, Kind.AGREE),
+    (10, 0, -10, 0, Kind.EXPLAINED_FLAT),
+    (10, 4, -6, 0, Kind.EXPLAINED_FEWER),
+    (-10, -4, 6, 0, Kind.EXPLAINED_FEWER),
+    (10, 0, 0, 0, Kind.UNEXPLAINED),
+    (10, 4, 0, 0, Kind.UNEXPLAINED),
+    (10, 4, -4, 0, Kind.UNEXPLAINED),
+    (4, 0, -10, -6, Kind.EXPLAINED_FLAT),
+    (4, 0, -6, -6, Kind.UNEXPLAINED),
+    (10, 20, 10, 0, Kind.MORE),
+    (0, 10, 10, 0, Kind.MORE),
+    (0, -10, 0, 0, Kind.MORE),
+    (10, -10, -20, 0, Kind.OTHER_SIDE),
+    (10, None, 0, 0, Kind.UNREADABLE),
+]
 
-@pytest.mark.parametrize(
-    ("engine", "broker", "external", "adopted", "kind"),
-    [
-        (10, 10, 0, 0, Kind.AGREE),
-        (10, 0, -10, 0, Kind.EXPLAINED_FLAT),
-        (10, 4, -6, 0, Kind.EXPLAINED_FEWER),
-        (-10, -4, 6, 0, Kind.EXPLAINED_FEWER),
-        (10, 0, 0, 0, Kind.UNEXPLAINED),
-        (10, 4, 0, 0, Kind.UNEXPLAINED),
-        (10, 4, -4, 0, Kind.UNEXPLAINED),
-        (4, 0, -10, -6, Kind.EXPLAINED_FLAT),
-        (4, 0, -6, -6, Kind.UNEXPLAINED),
-        (10, 20, 10, 0, Kind.MORE),
-        (0, 10, 10, 0, Kind.MORE),
-        (0, -10, 0, 0, Kind.MORE),
-        (10, -10, -20, 0, Kind.OTHER_SIDE),
-        (10, None, 0, 0, Kind.UNREADABLE),
-    ],
-)
+
+@pytest.mark.parametrize(("engine", "broker", "external", "adopted", "kind"), TABLE_5_3)
 def test_a_difference_is_judged_by_the_table_of_5_3(engine, broker, external, adopted, kind):
     unexplained = 0 if broker is None else unexplained_by(engine, broker, external, adopted)
     assert judge(engine, broker, unexplained) is kind
@@ -77,18 +78,19 @@ def test_a_closing_order_may_be_for_what_the_broker_holds_on_the_engines_side(en
     assert exit_room(engine, broker) == room
 
 
-@pytest.mark.parametrize(
-    ("journal", "broker", "unexplained", "kind"),
-    [
-        (10, 10, 0, RestartKind.RESUME),
-        (0, 0, 0, RestartKind.RESUME),
-        (0, 10, 10, RestartKind.UNKNOWN_POSITION),
-        (10, 0, -10, RestartKind.UNEXPLAINED_FLAT),
-        (10, 0, 0, RestartKind.DIFFERS),
-        (10, 4, 0, RestartKind.DIFFERS),
-        (10, 4, -6, RestartKind.DIFFERS),
-    ],
-)
+#: The table of 5.5: (the journal's units, the broker's, unexplained, what the restart does).
+TABLE_5_5 = [
+    (10, 10, 0, RestartKind.RESUME),
+    (0, 0, 0, RestartKind.RESUME),
+    (0, 10, 10, RestartKind.UNKNOWN_POSITION),
+    (10, 0, -10, RestartKind.UNEXPLAINED_FLAT),
+    (10, 0, 0, RestartKind.DIFFERS),
+    (10, 4, 0, RestartKind.DIFFERS),
+    (10, 4, -6, RestartKind.DIFFERS),
+]
+
+
+@pytest.mark.parametrize(("journal", "broker", "unexplained", "kind"), TABLE_5_5)
 def test_a_restart_judges_the_journal_position_by_the_table_of_5_5(
     journal, broker, unexplained, kind
 ):

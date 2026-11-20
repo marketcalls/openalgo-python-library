@@ -33,7 +33,9 @@ not it has rows.
   (MARKET fills with no bar to set them against),
   `closed_trades`, `rejected_orders`, `unprotected_seconds`,
   `reconcile_mismatches`, `undelivered_alerts` and `flat`, and the legs the close names
-  (`differing`, `unconfirmed`) and the strategies of earlier starts (`earlier`), in
+  (`differing`, `unconfirmed`; a difference of an instrument several strategies share is
+  named and counted once), the strategies of earlier starts (`earlier`) and each
+  instrument several strategies share, OpenAlgo's net against their sum (`shared`), in
   words; `summary_text()` gives them as the DAILY_SUMMARY alert sent them. Its type is
   `SessionSummary`, loaded with the live layer.
 - `orders`: every order the session placed through OpenAlgo, with its intent ID, broker
@@ -43,10 +45,16 @@ not it has rows.
 - `drift`: each broker candle against the bar built from the feed's ticks. `unprotected`:
   each window a position had no confirmed stop at the broker, and why. `locks`: each
   entry lock, when it was set and lifted. `reconciliations`: each comparison with the
-  broker's books that differed, and what was done. `skipped_decisions`: the strategy bars
-  whose `on_bar` was skipped for missing data.
+  broker's books that differed, and what was done; a member of an instrument several
+  strategies share has its group there too (`group`, `group_units`, `member_units`, the
+  other orders' `external_units`, and on the row of an act the `allocation` made and the
+  `stops_cut`), empty for a strategy alone. `skipped_decisions`: the strategy bars whose
+  `on_bar` was skipped for missing data.
 - `open_positions`: the positions still open at the end, each with its stop at the
-  broker, whether that stop was confirmed working, and a note saying what to do. A leg
+  broker, whether that stop was confirmed working, and a note saying what to do; after
+  the legs, a row per instrument several strategies share whose net OpenAlgo shows as a
+  position, named by its members ("A and B"), with that net and whether it equals their
+  sum (confirmed when it does and each member's stop is). A leg
   the close names (`unconfirmed_legs`: OpenAlgo's books and the engine did not agree on
   it, or no read confirmed it) is there only at a figure the session could carry to the
   close (none for a difference a late read saw): a warning names each, and `flat` is
