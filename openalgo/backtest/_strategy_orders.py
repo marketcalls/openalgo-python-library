@@ -21,6 +21,12 @@ from ._atr import decision_atr
 from ._orders import Order
 from .errors import ConfigError
 
+#: The exit reasons only the engine's own exits record, and what makes each: a strategy's
+#: exit cannot take them, so a trade read as stopped or as at its target is one, and a
+#: live session tells the engine's target exit, made on a tick, from a strategy's exit
+#: decided at a bar close by its reason (`_live/_session_slippage`).
+ENGINE_LEG_EXIT_REASONS = {"leg_sl": "stop", "leg_target": "target"}
+
 
 class OrderMethods:
     """`buy`, `sell`, `exit`, `reduce`, `target`, `rebalance`, `cancel`, `cancel_all`."""
@@ -143,7 +149,14 @@ class OrderMethods:
         """Close the position, or `fraction` of it, or `qty` units, at the next open.
         Returns None when flat. The fill's reason is "signal" unless `reason=` names
         another exit reason of the fills table, such as "manual"; an unknown reason is
-        an error that lists them."""
+        an error that lists them. Raises ConfigError for "leg_sl" and "leg_target", the
+        reasons of the engine's own exits at a leg's stop and target."""
+        if reason in ENGINE_LEG_EXIT_REASONS:
+            raise ConfigError(
+                f"exit(reason={reason!r}) is refused: {reason!r} is the reason of the engine's "
+                f"own exit at a leg's {ENGINE_LEG_EXIT_REASONS[reason]}. Give another reason, "
+                "such as 'manual', or none for 'signal'"
+            )
         return self._reduce(symbol, fraction=fraction, qty=qty, reason=reason)
 
     def reduce(
@@ -274,4 +287,4 @@ def order_leverage(given: float | None, strategy_leverage: float | None) -> floa
     return given if given is not None else strategy_leverage
 
 
-__all__ = ["OrderMethods", "order_leverage"]
+__all__ = ["ENGINE_LEG_EXIT_REASONS", "OrderMethods", "order_leverage"]

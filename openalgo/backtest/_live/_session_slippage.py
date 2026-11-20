@@ -124,7 +124,8 @@ def _made_on_an_event(purpose: Purpose, exit_reason: str | None) -> bool:
     """True for an order the engine makes on an event while its kernel session waits
     inside a minute (module docstring): a leg's target exit, a risk exit but the time
     exit. A strategy's exit shares the target exit's purpose and is told from it by the
-    exit reason the kernel records."""
+    exit reason the kernel records, which a strategy's exit cannot take
+    (`_strategy_orders.ENGINE_LEG_EXIT_REASONS`)."""
     if purpose is Purpose.RISK_EXIT:
         return exit_reason != _TIME_EXIT
     return purpose is Purpose.EXIT and exit_reason == _LEG_TARGET
