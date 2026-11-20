@@ -734,15 +734,30 @@ def test_mcx_silver_mini_of_2025_is_carried_back_and_flagged_unverified(tables):
         assert tables.freeze_qty("SILVERM28NOV25FUT", "MCX", "2025-11-03") == 600
 
 
-def test_every_mcx_underlying_has_a_freeze_quantity_on_todays_date(tables):
+def without_a_freeze_quantity(tables, on_date: dt.date) -> set[tuple[str, str]]:
+    """(underlying, contract) of each mcx_contracts row in force on `on_date` whose
+    contracts have no freeze quantity then: each row is looked up on a contract expiring
+    inside its own expiry range (on `on_date` when it has none), so batches of one
+    underlying with different limits are each read, and a missing limit is named."""
+    missing = set()
+    for row in tables.rows("mcx_contracts"):
+        if row.valid_from > on_date or (row.valid_to is not None and row.valid_to < on_date):
+            continue
+        expiry = row.span_low or row.span_high or on_date
+        contract = f"{row.key[0]}{expiry:%d%b%y}FUT".upper()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ReferenceDataWarning)
+            try:
+                tables.freeze_qty(contract, "MCX", on_date)
+            except ReferenceDataError:
+                missing.add((row.key[0], contract))
+    return missing
+
+
+def test_every_mcx_contract_row_in_force_today_has_a_freeze_quantity(tables):
     # Read on the day the suite runs: the contracts trading now must all be orderable, so
-    # a table that has run out for one of them fails here first.
-    today = dt.date.today()
-    underlyings = sorted({row.key[0] for row in tables.rows("mcx_contracts")})
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", ReferenceDataWarning)
-        limits = {name: tables.freeze_qty(name, "MCX", today) for name in underlyings}
-    assert {name for name, limit in limits.items() if not limit} == set()
+    # a table that has run out for one of them fails here first, naming it.
+    assert without_a_freeze_quantity(tables, dt.date.today()) == set()
 
 
 def test_mcx_gold_has_a_contract_multiplier_of_100_but_is_unverified(tables):
