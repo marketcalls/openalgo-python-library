@@ -275,11 +275,11 @@ def _judge_shared(
     """The members of a shared instrument judged together (`_restart_groups`): each
     member's `LegStart`, in `members`' order, and the words of the group's refusal (None
     when it resumes)."""
-    books = members[0].books
-    external = sum(trade.signed for trade in books.external(own))
+    external = members[0].books.external(own)
     adopted = sum(0 if m.saved is None else m.saved.adopted for m in members)
     units = {m.spec.name: m.journal_units for m in members}
-    group_start = judge_group(group, units, members[0].broker_units, external, adopted)
+    opened = {m.spec.name: None if m.saved is None else m.saved.opened_ns for m in members}
+    group_start = judge_group(group, units, members[0].broker_units, external, adopted, opened)
     starts = [
         LegStart(
             m.saved,
@@ -331,18 +331,20 @@ def _alert_missing_stops(
             AlertKind.ERROR,
             f"{each.name}: {leg.journal_units} units of {each.symbol} {each.exchange} have no "
             f"working stop at the broker (stop {order_id or 'not sent'}): "
-            f"{_missing_stop_words(leg)}",
+            f"{_missing_stop_words(leg, each.name)}",
         )
 
 
-def _missing_stop_words(leg: LegStart) -> str:
-    """What the restart does about a resumed leg's missing stop, by how the start judged
-    the leg against the broker's books (module docstring); a member of a shared
-    instrument's words name the group and the sum it was judged by."""
+def _missing_stop_words(leg: LegStart, name: str) -> str:
+    """What the restart does about strategy `name`'s resumed leg's missing stop, by how
+    the start judged the leg against the broker's books (module docstring); a member of a
+    shared instrument's words name the group and the sum it was judged by, and a member
+    an explained difference leaves flat (its share, `_reconcile_allocate`) is closed."""
     shown = f"OpenAlgo's books show {leg.broker_units} units"
     if leg.group is not None:
         shown += f" for {and_join(leg.group.members)} together, who hold {leg.group.units}"
-    if leg.kind is Kind.EXPLAINED_FLAT:
+    share = None if leg.group is None else leg.group.share(name)
+    if leg.kind is Kind.EXPLAINED_FLAT or (share is not None and share.left == 0):
         return (
             "OpenAlgo's books show the position closed by other orders, which the engine "
             "takes as its own, so no stop is placed"
@@ -351,12 +353,6 @@ def _missing_stop_words(leg: LegStart) -> str:
         return (
             f"{shown}, which no trade explains, so no stop is placed for the journal's units "
             "while they disagree: check the account in OpenAlgo"
-        )
-    if leg.kind is Kind.EXPLAINED_SHARED:
-        return (
-            f"{shown}; trades of other orders explain it, which no strategy of a shared "
-            "instrument takes as its own, so no stop is placed for the journal's units while "
-            "they disagree: check the account in OpenAlgo"
         )
     if leg.kind is Kind.OTHER_SIDE:
         return (

@@ -12,8 +12,10 @@ that fake left.
   alerts as it sent them, where the fake's log stood when it opened, when its mode guard
   locked and when it closed, each strategy's kernel state as its close stopped it
   (`Closing`), the outcome its close returned (None for a run that crashed or whose
-  close failed), and each order word a kernel took that was not of its own orders
-  (`Run.strayed`, 18-multi-strategy 5.1 I5).
+  close failed), each order word a kernel took that was not of its own orders
+  (`Run.strayed`, 18-multi-strategy 5.1 I5), and how many of its book's order changes
+  while it was open had the members' books read and how many could not (`Run.sampled`,
+  `Run.unsampled`).
 - **The members' books at each change** (`OrderChange.members`, 18-multi-strategy 5.1 I4
   and I6): for each strategy of the run open then that trades the change's instrument in
   its book, its kernel's units, the units its kernel adopted from other orders' trades,
@@ -156,7 +158,9 @@ class Run:
     the fake had made when its close returned (None while it has not); `log_from` and
     `log_to` are how many entries the fake's log held when the run opened and when its
     close returned; `locked_at` how many it held when the run's mode guard locked (None:
-    it never did). `alerts` are the (kind, text) of each alert the run sent."""
+    it never did). `alerts` are the (kind, text) of each alert the run sent. `sampled`
+    and `unsampled` count the order changes of its book while it was open whose members'
+    books the trace read, and those it could not read (a kernel that failed)."""
 
     session: Any
     clients: frozenset[str]
@@ -169,6 +173,8 @@ class Run:
     log_to: int | None = None
     locked_at: int | None = None
     strayed: list[str] = field(default_factory=list)
+    sampled: int = 0
+    unsampled: int = 0
 
     @property
     def mode(self) -> Mode:
@@ -321,9 +327,12 @@ class SessionTrace:
                 for trader in session.traders
                 if (trader.symbol, trader.exchange) == (symbol, exchange)
             )
-        # Any failure of a kernel (a test's hook broke it, the run ended): no sample.
+        # Any failure of a kernel (a test's hook broke it, the run ended): no sample,
+        # counted, so that a run with none at all fails I4 and I6 rather than pass them.
         except Exception:
+            run.unsampled += 1
             return None, frozenset()
+        run.sampled += 1
         return members, run.clients
 
 

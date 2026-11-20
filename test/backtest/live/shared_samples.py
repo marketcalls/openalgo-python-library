@@ -8,9 +8,10 @@ a test moves it). "A" is `SbinTrend` and "B" `SbinBreakout`, both on SBIN in MIS
 in call order: at their first decision (14:42:01, both filled at once at 500.00) A buys
 100 units with a stop 3 points below (an SL-M at 497.00) and a target 2 points above
 (502.00), B buys 50 units with a stop 3 points below (497.00); then neither trades again.
-`SbinShort` is a B that sells 50 instead, for the side gate. `OnceA` and `OnceB` buy A's
-and B's units once a day, flat or after a restart (they remember it in `self.state`), and
-`NeverB` never trades, for the restarts.
+`LateBreakout` is a B that buys its 50 at its second decision (14:43:01), so that its
+position opened after A's; `SbinShort` is a B that sells 50 instead, for the side gate.
+`OnceA` and `OnceB` buy A's and B's units once a day, flat or after a restart (they
+remember it in `self.state`), and `NeverB` never trades, for the restarts.
 
 Expected values come from the fake's books and the scenario, never from the session's
 code.
@@ -45,6 +46,18 @@ class SbinBreakout(StopHold):
     """B: buys 50 SBIN at its first decision with a stop 3 points below."""
 
     qty = B_UNITS
+
+
+class LateBreakout(StopHold):
+    """B as `SbinBreakout`, buying its 50 units at its second decision (14:43:01) instead:
+    the position of the two that opened most recently."""
+
+    qty = B_UNITS
+
+    def on_bar(self, bar):
+        self.calls += 1
+        if self.calls == 2:
+            self.buy(self.qty, **type(self).rules)
 
 
 class SbinShort(bt.Strategy):
@@ -105,6 +118,7 @@ __all__ = [
     "B_UNITS",
     "DECIDED",
     "TARGET_POINTS",
+    "LateBreakout",
     "NeverB",
     "OnceA",
     "OnceB",

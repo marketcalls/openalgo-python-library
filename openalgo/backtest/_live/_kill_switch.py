@@ -30,7 +30,9 @@ Which read counts for a strategy, and how often one is asked for, is `_kill_read
 strategy of the session that trades the instrument, so a member's exit is agreed only when
 the broker holds at least their sum on its side (the group agreeing, or only an excess),
 and a flat member is flat at the broker when the book shows what the others hold. A group
-difference sends nothing: the reconciler's comparison of the group locks and alerts.
+difference sends nothing: the reconciler's comparison of the group locks and alerts, and
+shares out a difference other orders' trades explain (4.7), after which a read agrees and
+each member's exit sells what it holds.
 
 **No exit beyond the broker's units.** When the broker holds fewer units than the engine on
 the same side, the reconciler's adoption of an explained difference (16-session-design
@@ -230,13 +232,20 @@ class KillSwitch:
         """The ERROR alert of a lasting disagreement: what the books say, and what the
         session's other exits will do (module docstring): with a book that cannot be read
         the engine still counts its own units; with one that shows fewer, no exit is sent
-        beyond them (the reconciler's exit guard)."""
+        beyond them (the reconciler's exit guard), and an explained difference is adopted
+        (on a shared instrument shared out among the members, 18-multi-strategy 4.7)."""
         book = "cannot be read" if kill.broker is None else f"shows {kill.broker} units"
         others = self._others(trader)
         held = f"{units:g} units of {trader.symbol} {trader.exchange}"
+        taken = "taken as the engine's"
         if self._session.groups.shared(trader):
             names = and_join(self._other_names(trader))
             held += f", {units + others:g} with {names}'s,"
+            everyone = and_join([member.name for member in self._session.groups.members(trader)])
+            taken = (
+                f"shared out among {everyone}, the most recently opened position first, each "
+                "taking its share as its own"
+            )
         exits = f"the square-off at {ist_time(trader.square_off_ns):%H:%M} IST"
         if self._session.parts.spec.arguments.on_stop == "flatten":
             exits = f'a Ctrl+C (on_stop="flatten") and {exits}'
@@ -245,8 +254,8 @@ class KillSwitch:
             f"{exits} would still {side} all {abs(units):g} units"
             if kill.broker is None
             else f"no exit of the session ({exits}) is sent for more than the broker holds: "
-            "trades of other orders that explain the difference are taken as the engine's, "
-            "else the exits wait for the books to agree"
+            f"trades of other orders that explain the difference are {taken}, else the exits "
+            "wait for the books to agree"
         )
         return (
             f"kill switch ({kill.reason}): {trader.name} holds {held} and OpenAlgo's position "

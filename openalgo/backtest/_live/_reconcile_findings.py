@@ -23,7 +23,10 @@ position difference keeps it (`late`) for the close, which names its figures as 
 saw them, neither carried nor confirmed (16-session-design 5.4, the unit 12 follow-up).
 One that comparisons in time confirmed and acted on while it lasted is kept and named the
 same way, but marked counted (`late_counted`): it was a mismatch of the day then, and the
-close counts it no more (the unit 13 follow-up, lead's rule of 2026-11-18).
+close counts it no more (the unit 13 follow-up, lead's rule of 2026-11-18). A member of
+an instrument several strategies of the session share keeps, with its sighting, its group
+as that comparison judged it (18-multi-strategy 4.11): OpenAlgo's figure is the group's
+net, which the close weighs against the members' sum.
 
 Quantities are signed units, times UTC nanoseconds. Used by the loop only.
 """
@@ -34,9 +37,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from .._layout import NANOS_PER_SECOND
-from ._group_rules import and_join
-from ._reconcile_act import Corrections, Finding
+from ._group_rules import GroupFigure, and_join
+from ._reconcile_act import Corrections
 from ._reconcile_rules import Kind, LegBooks
+from ._reconcile_steps import Finding
 from ._session_trader import Trader
 from ._types import AlertKind
 
@@ -50,10 +54,12 @@ FILL_DURING_READ = "fill_during_read"
 @dataclass(frozen=True)
 class Sighting:
     """A position difference a comparison saw for the first time: the engine's signed
-    units as compared and OpenAlgo's books'."""
+    units as compared and OpenAlgo's books'; for a member of a shared instrument, its
+    `group` as the comparison judged it, whose net OpenAlgo's books showed (None alone)."""
 
     engine_units: int
     broker_units: int
+    group: GroupFigure | None = None
 
 
 @dataclass(frozen=True)
@@ -161,11 +167,13 @@ class Findings:
         own: frozenset[str],
         *,
         late: bool,
+        group: GroupFigure | None = None,
     ) -> bool:
         """Take one comparison's `findings` of `trader`'s leg (module docstring); `late` for
         a leg compared while in flight past the limit (alerted at once, nothing done, no
-        sighting taken, its position difference kept for the close). True when a finding
-        was seen for the first time: a read soon confirms it."""
+        sighting taken, its position difference kept for the close); `group` the leg's
+        group on a shared instrument, as the comparison judged it. True when a finding was
+        seen for the first time: a read soon confirms it."""
         name = trader.name
         last, self._last[name] = self._last.get(name, set()), findings
         confirmed = self._confirmed.setdefault(name, set())
@@ -173,10 +181,10 @@ class Findings:
         if not any(finding[0] is Kind.UNEXPLAINED for finding in findings):
             self._lag_since.pop(name, None)
         if books.units is not None and books.trades is not None and not late:
-            self._sighted(name, findings, last)
+            self._sighted(name, findings, last, group)
             self._unjudged.discard(name)
         if books.units is not None:
-            self._late_difference(name, findings, confirmed, late=late)
+            self._late_difference(name, findings, confirmed, late=late, group=group)
         for finding in sorted(findings, key=repr):
             if finding[0] is Kind.UNEXPLAINED:
                 self._lag(trader, books)
@@ -225,7 +233,13 @@ class Findings:
         return "alerted"
 
     def _late_difference(
-        self, name: str, findings: set[Finding], confirmed: set[Finding], *, late: bool
+        self,
+        name: str,
+        findings: set[Finding],
+        confirmed: set[Finding],
+        *,
+        late: bool,
+        group: GroupFigure | None,
     ) -> None:
         """Keep the position difference of a late comparison for the close; a comparison
         in time, or a late one that agrees, ends it. One that comparisons in time confirmed
@@ -234,7 +248,7 @@ class Findings:
         in-time path takes no sighting of it either)."""
         position = next((f for f in findings if isinstance(f[0], Kind)), None)
         if late and position is not None:
-            self._late[name] = Sighting(position[1], position[2])
+            self._late[name] = Sighting(position[1], position[2], group)
             if position in confirmed and (name, position) in self._acted:
                 self._late_counted.add(name)
             else:
@@ -243,14 +257,16 @@ class Findings:
             self._late.pop(name, None)
             self._late_counted.discard(name)
 
-    def _sighted(self, name: str, findings: set[Finding], last: set[Finding]) -> None:
+    def _sighted(
+        self, name: str, findings: set[Finding], last: set[Finding], group: GroupFigure | None
+    ) -> None:
         """A comparison that judged the position: its difference, when the comparison
         before did not show it, is the leg's first sighting; none otherwise."""
         position = next((f for f in findings if isinstance(f[0], Kind)), None)
         if position is None or position in last:
             self._first.pop(name, None)
         else:
-            self._first[name] = Sighting(position[1], position[2])
+            self._first[name] = Sighting(position[1], position[2], group)
 
     def _row(
         self, name: str, kind: str, engine_units: int, broker_units: int | None, action: str

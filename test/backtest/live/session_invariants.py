@@ -32,7 +32,8 @@ Over each run's event stream and the fake's log (`session_invariants_stream`):
 
 Over each run, of instrument groups (`session_invariants_groups`; 18-multi-strategy 5.1):
 
-10. **I4, the sum rule**, at every change while a run is open.
+10. **I4, the sum rule**, at every change while a run is open (a run whose members'
+    books could be read at none of its changes fails it, and I6).
 11. **I5, isolation**: a kernel takes only its own orders' words, an order is bound to
     one member only and to the one the fake records it for, and the session makes no
     member act while another's order word is applied.
@@ -59,7 +60,7 @@ from session_invariants_end import (
     no_orphan,
     working_at_the_end,
 )
-from session_invariants_groups import isolation, one_side, sum_rule
+from session_invariants_groups import isolation, one_side, sampled, sum_rule
 from session_invariants_stream import (
     modifies_and_cancels_answered,
     nothing_after_a_guard_lock,
@@ -77,6 +78,7 @@ from session_trace import (
     PRICED,
     SUM_RULE,
     WITHIN,
+    OrderChange,
     SessionTrace,
 )
 
@@ -143,6 +145,14 @@ def _check(session: SessionTrace, fake: FakeOpenAlgo) -> None:
         sum_rule(changes, mine)
     if ONE_SIDE not in waived:
         one_side(changes)
+    _each_run(session, fake, changes, mine)
+
+
+def _each_run(
+    session: SessionTrace, fake: FakeOpenAlgo, changes: list[OrderChange], mine: frozenset[str]
+) -> None:
+    """7 to 9, I5 and the sample check of I4 and I6 (module docstring), over each run."""
+    waived = session.waived
     for at, run in enumerate(session.runs):
         if ANSWERED not in waived:
             modifies_and_cancels_answered(run)
@@ -155,6 +165,8 @@ def _check(session: SessionTrace, fake: FakeOpenAlgo) -> None:
             priced_fills(run, fake)
         if ISOLATION not in waived:
             isolation(run, changes, mine)
+        if SUM_RULE not in waived or ONE_SIDE not in waived:
+            sampled(run)
 
 
 __all__ = ["InvariantBroken", "assert_session_invariants"]

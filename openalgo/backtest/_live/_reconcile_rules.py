@@ -22,11 +22,10 @@ the strategy's entries, alert, and allow only this (`RULES`):
 | N | flat or fewer, unexplained | UNEXPLAINED | nothing: a lag of the broker's books |
 | N or flat | same side, more | MORE | nothing: the excess is not the engine's |
 | N | the other side | OTHER_SIDE | cancel the leg's own working stop; close by hand |
-| N (a group's sum) | flat or fewer, explained | EXPLAINED_SHARED | nothing: no member adopts |
 
-The last row is an instrument several strategies of the session share
-(`_group_rules.group_kind`): until unit M7's allocation decides which member takes the
-other orders' trades, nothing is adopted (18-multi-strategy 4.6, 4.7).
+On an instrument several strategies of the session share, an explained difference of the
+members' sum is EXPLAINED_SHARED: each member adopts its share of it
+(`_reconcile_allocate`, 18-multi-strategy 4.7).
 
 Adopting is `apply_external_fill` of the difference at the other orders' price. From the
 first comparison that shows the broker holding fewer units on the engine's side,
@@ -68,8 +67,8 @@ class Kind(enum.Enum):
     UNEXPLAINED = "unexplained"
     MORE = "more"
     OTHER_SIDE = "other_side"
-    #: A shared instrument's group holds fewer units than its sum, or none, and trades of
-    #: other orders explain it: nothing is adopted before unit M7's allocation.
+    #: A shared instrument's broker holds fewer units than its members' sum, or none, and
+    #: trades of other orders explain it: each member adopts its share (`_reconcile_allocate`).
     EXPLAINED_SHARED = "explained_shared"
     #: The position book could not be read: nothing is judged.
     UNREADABLE = "unreadable"
@@ -122,14 +121,6 @@ RULES: Mapping[Kind, Rule] = MappingProxyType(
             True,
             "the broker holds the other side: the engine asks for its stop to be cancelled "
             "and sends nothing else. Close the position by hand in OpenAlgo",
-        ),
-        Kind.EXPLAINED_SHARED: Rule(
-            False,
-            False,
-            "trades of other orders explain it, but on an instrument several strategies of "
-            "the session share this version takes none of them as a strategy's own: nothing "
-            "is adopted, and no exit of any of them is sent while the books differ. Check "
-            "the position in OpenAlgo and close it by hand",
         ),
     }
 )

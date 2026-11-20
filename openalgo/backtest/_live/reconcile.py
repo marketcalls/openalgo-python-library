@@ -7,7 +7,7 @@ safe corrections; it never exits a position and never fires the kill switch).
 `_reconcile_schedule`'s. An instrument several strategies of the session share is compared
 as one group (`_reconcile_groups`, 18-multi-strategy 4.6).
 
-**In flight** (`_reconcile_act.in_flight`). A read compares a leg only when it was out of
+**In flight** (`_reconcile_steps.in_flight`). A read compares a leg only when it was out of
 flight from before the read began (a fill restarts that) and still is; a leg in flight
 past `RECONCILE_IN_FLIGHT_MAX_S` is compared anyway (late): a difference is alerted, with
 no automatic action and no sighting. A fill of the leg's own orders the read's trade book
@@ -49,7 +49,7 @@ from typing import Any
 from .._engine import call
 from .._layout import NANOS_PER_SECOND
 from ._group_rules import GroupFigure
-from ._reconcile_act import Corrections, attribute, in_flight, order_findings, own_orders
+from ._reconcile_act import Corrections
 from ._reconcile_ended import EndQueries
 from ._reconcile_findings import FILL_DURING_READ, Findings, Reconciliation
 from ._reconcile_groups import GroupComparison
@@ -72,6 +72,7 @@ from ._reconcile_schedule import (
     SQUARE_OFF_READ_BEFORE_S,
     ReadSchedule,
 )
+from ._reconcile_steps import attribute, in_flight, order_findings, own_orders
 from ._session_trader import Trader
 from ._worker_queue import StreamGap
 from .inbox import Books, PositionRows
@@ -81,7 +82,7 @@ from .inbox import Books, PositionRows
 RECONCILE_IN_FLIGHT_MAX_S = 180.0
 _NS = NANOS_PER_SECOND
 #: The differences a restart acts on with nothing adopted: the exit guard holds the leg.
-UNADOPTED = frozenset({Kind.UNEXPLAINED, Kind.OTHER_SIDE, Kind.EXPLAINED_SHARED})
+UNADOPTED = frozenset({Kind.UNEXPLAINED, Kind.OTHER_SIDE})
 
 
 class Reconciler(EndQueries, GroupComparison, ReadSchedule):

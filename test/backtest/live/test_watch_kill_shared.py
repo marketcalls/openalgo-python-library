@@ -66,6 +66,9 @@ class Session:
         self.exits: list[str] = []
         self.alerts: list[str] = []
         self.margin = SimpleNamespace(request_exit=self.request_exit)
+        self.parts = SimpleNamespace(
+            spec=SimpleNamespace(arguments=SimpleNamespace(on_stop="flatten"))
+        )
 
     def request_exit(self, trader: Member, reason: str) -> str:
         self.exits.append(f"{trader.name} {reason}")
@@ -143,3 +146,22 @@ def test_a_flat_member_names_what_the_book_shows_beyond_the_other_members_units(
     switch.duties(session.clock_ns + 1)
     [flat] = [text for text in session.alerts if "A is flat" in text]
     assert "still shows 80 units, 50 of them B's: close the rest by hand" in flat
+
+
+def test_a_lasting_disagreement_tells_each_member_an_explained_sale_is_shared_out():
+    # A sale by hand of 30: two reads in a row show 120 against the members' 150. Other
+    # orders' trades that explain it are shared out among the members (18-multi-strategy
+    # 4.7), never taken by one member as a strategy alone takes them.
+    session = Session(100, 50)
+    switch = fired_and_read(session, 120)
+    session.clock_ns = 2 * 10**12
+    row = {"symbol": "SBIN", "exchange": "NSE", "product": "MIS", "quantity": 120}
+    switch.positions(PositionRows({"status": "success", "data": [row]}, session.clock_ns))
+    switch.duties(session.clock_ns + 1)
+    for name in ("A", "B"):
+        [text] = [text for text in session.alerts if f"{name} holds" in text]
+        assert (
+            "trades of other orders that explain the difference are shared out among A and "
+            "B, the most recently opened position first, each taking its share as its own"
+        ) in text
+        assert "taken as the engine's" not in text

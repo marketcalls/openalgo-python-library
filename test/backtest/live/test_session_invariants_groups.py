@@ -1,8 +1,10 @@
 """The invariants of instrument groups on order changes and runs written by hand
 (`session_invariants_groups`, 18-multi-strategy 5.1, unit M6): I4 the sum rule, I5
-isolation and I6 one side each find what they must and nothing more; and, on a session
-run on the fake OpenAlgo (`session_hooks`), I5's hooks note a member made to act while
-another member's order word is applied.
+isolation and I6 one side each find what they must and nothing more; on a session run on
+the fake OpenAlgo (`session_hooks`), I5's hooks note a member made to act while another
+member's order word is applied, and an order word handed to a member it is not bound to;
+and a run whose members' books the trace could read at none of its changes fails I4 and
+I6 rather than pass them unjudged.
 
 The session's client is "s", another client of the account "o"; "A" and "B" trade SBIN in
 one session. Each change carries the members' books as the trace samples them: a
@@ -13,14 +15,17 @@ ledgers gave its kernel.
 from __future__ import annotations
 
 import pytest
+import session_trace
 from fake_openalgo.fixtures import *  # noqa: F403
-from session_invariants_groups import isolation, one_side, sum_rule
-from session_trace import ISOLATION, Member, OrderChange, Run
+from session_invariants_groups import isolation, one_side, sampled, sum_rule
+from session_trace import ISOLATION, ONE_SIDE, SUM_RULE, Member, OrderChange, Run
 from shared_samples import SbinBreakout, SbinTrend
 from stops_samples import stop_world
 
+from openalgo.backtest._live._session_news import News
 from openalgo.backtest._live._types import Mode
 from openalgo.backtest._live.stops import StopsSupervisor
+from openalgo.backtest.errors import LiveError
 
 MINE = frozenset({"s"})
 
@@ -184,3 +189,64 @@ def test_the_hooks_note_a_member_made_to_act_while_anothers_order_word_is_applie
 
     strayed = world.trace.runs[-1].strayed
     assert "protect of SbinTrend while a word of SbinBreakout's order was applied" in strayed
+
+
+def test_the_hooks_note_an_order_word_handed_to_a_member_it_is_not_bound_to(world, monkeypatch):
+    # A session broken on purpose: the first word of B's order reaches A's kernel. The
+    # hooks note it twice (not bound in A's venue map; recorded for B at the fake) before
+    # A's venue map refuses it and the session stops.
+    world.trace.waive(ISOLATION, "the test breaks isolation and reads what the hooks noted")
+    owner, misrouted = News._owner, []
+
+    def to_the_other_member(news, order_id, intent_id):
+        trader = owner(news, order_id, intent_id)
+        if trader is not None and trader.name == "SbinBreakout" and not misrouted:
+            misrouted.append(order_id)
+            return next(t for t in news._session.traders if t.name == "SbinTrend")
+        return trader
+
+    monkeypatch.setattr(News, "_owner", to_the_other_member)
+    with pytest.raises(LiveError, match="is not bound in this venue map"):
+        world.run([SbinTrend, SbinBreakout])
+
+    (order_id,) = misrouted
+    assert world.trace.runs[-1].strayed == [
+        f"SbinTrend took order {order_id}, not bound to it",
+        f"SbinTrend took order {order_id}, recorded for SbinBreakout",
+    ]
+
+
+# ----- I4 and I6 judge only where the members' books were read -----------------------------
+
+
+def test_a_run_whose_members_books_were_read_at_some_change_passes_the_sample_check():
+    sampled(Run(None, MINE, sampled=1, unsampled=4))
+    sampled(Run(None, MINE))
+
+
+def test_a_run_whose_members_books_were_read_at_no_change_fails_the_sample_check():
+    with pytest.raises(AssertionError, match="none of the 3 order changes"):
+        sampled(Run(None, MINE, unsampled=3))
+
+
+def test_the_trace_counts_the_changes_whose_members_books_it_could_not_read(world, monkeypatch):
+    # Every read of a member's books fails: no change is sampled, so I4 and I6 judge
+    # nothing, which the sample check finds.
+    for check in (SUM_RULE, ONE_SIDE):
+        world.trace.waive(check, "the test reads the sample check itself")
+
+    def unreadable(session, trader):
+        raise RuntimeError("the kernel cannot be read")
+
+    monkeypatch.setattr(session_trace, "_member", unreadable)
+    world.run([SbinTrend, SbinBreakout])
+    run = world.trace.runs[-1]
+    assert (run.sampled, run.unsampled > 0) == (0, True)
+    with pytest.raises(AssertionError, match="I4 and I6"):
+        sampled(run)
+
+
+def test_a_session_run_samples_the_members_books_at_its_changes(world):
+    world.run([SbinTrend, SbinBreakout])
+    run = world.trace.runs[-1]
+    assert (run.sampled > 0, run.unsampled) == (True, 0)

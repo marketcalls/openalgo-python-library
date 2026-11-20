@@ -1,7 +1,8 @@
 """A shared instrument's rules against the broker's net position, on their own
-(`_live/_group_rules.py`, `_live/_restart_groups.py`; 18-multi-strategy 4.6, 4.8 and 4.10,
-unit M6): the group's kind, what a restart does with the group, and the words that name
-it.
+(`_live/_group_rules.py`, `_live/_reconcile_allocate.py`, `_live/_restart_groups.py`;
+18-multi-strategy 4.6 to 4.8 and 4.10, unit M6): the group's kind, the allocation of a
+difference other orders' trades explain, what a restart does with the group, and the words
+that name it.
 
 The comparison of a session is tested on the fake OpenAlgo (`test_session_shared_*.py`).
 Expected values are worked by hand: signed units, long above 0; "A" holds 100 and "B" 50
@@ -14,15 +15,29 @@ import pytest
 
 from openalgo.backtest._live._group_rules import (
     GroupFigure,
+    Share,
     and_join,
     group_kind,
     group_restart_kind,
 )
 from openalgo.backtest._live._groups import InstrumentGroup
-from openalgo.backtest._live._reconcile_rules import Kind, RestartKind
+from openalgo.backtest._live._reconcile_allocate import allocate, allocation_words
+from openalgo.backtest._live._reconcile_rules import Kind, RestartKind, Trade
 from openalgo.backtest._live._restart_groups import judge_group
 
 SBIN = InstrumentGroup("SBIN", "NSE", "MIS", ("A", "B"))
+#: When each position opened: A at 10:05 IST, B at 11:20 IST (UTC nanoseconds, any day).
+TEN_FIVE, ELEVEN_TWENTY = 16_500 * 10**9, 21_000 * 10**9
+
+
+def sold(units: int, price: float = 499.0, order_id: str = "h1") -> Trade:
+    """Another order's sale of `units` at `price`."""
+    return Trade(order_id, "SELL", units, price)
+
+
+def bought(units: int, price: float = 501.0, order_id: str = "h1") -> Trade:
+    """Another order's purchase of `units` at `price`."""
+    return Trade(order_id, "BUY", units, price)
 
 
 @pytest.mark.parametrize(
@@ -44,13 +59,15 @@ SBIN = InstrumentGroup("SBIN", "NSE", "MIS", ("A", "B"))
         "more",
         "more of a flat group",
         "other side",
-        "fewer, explained: nothing adopted",
-        "flat, explained: nothing adopted",
+        "fewer, explained: shared out",
+        "flat, explained: shared out",
         "fewer, unexplained",
         "flat, unexplained",
     ],
 )
-def test_the_groups_kind_adopts_nothing_before_the_allocation(group, broker, unexplained, kind):
+def test_the_groups_kind_judges_the_members_sum_against_the_brokers_net(
+    group, broker, unexplained, kind
+):
     assert group_kind(group, broker, unexplained) is kind
 
 
@@ -88,35 +105,43 @@ def test_a_restart_judges_the_members_sum_against_the_brokers_net(
 
 
 def test_a_restart_of_a_group_whose_sum_agrees_resumes_with_nothing_to_act_on():
-    start = judge_group(SBIN, {"A": 100, "B": 50}, 150, 0, 0)
+    start = judge_group(SBIN, {"A": 100, "B": 50}, 150, (), 0)
     assert (start.restart, start.kind, start.refusal) == (RestartKind.RESUME, Kind.AGREE, None)
     assert start.figure == GroupFigure(("A", "B"), 150)
 
 
 def test_a_restart_of_a_group_names_the_instrument_and_every_member_when_it_refuses():
-    unknown = judge_group(SBIN, {"A": 0, "B": 0}, 30, 30, 0)
+    unknown = judge_group(SBIN, {"A": 0, "B": 0}, 30, (bought(30),), 0)
     assert unknown.refusal == (
         "OpenAlgo's books show 30 units of SBIN NSE, which A and B trade, and the journal "
         "holds none for them: close them or start with another symbol"
     )
     # Sold by hand: the trades of other orders explain the broker's flat book.
-    sold = judge_group(SBIN, {"A": 100, "B": 50}, 0, -150, 0)
-    assert sold.refusal is None
-    gone = judge_group(SBIN, {"A": 100, "B": 50}, 0, 0, 0)
+    closed = judge_group(SBIN, {"A": 100, "B": 50}, 0, (sold(150),), 0)
+    assert closed.refusal is None
+    gone = judge_group(SBIN, {"A": 100, "B": 50}, 0, (), 0)
     assert gone.refusal == (
         "the journal holds 150 units of SBIN NSE for A and B together (A 100, B 50), "
         "OpenAlgo's books show none and no trade explains it: check the account in OpenAlgo"
     )
 
 
-def test_a_restart_of_a_group_after_a_sale_by_hand_differs_and_adopts_nothing():
-    # 60 sold by hand while the session was down: the other orders' trades explain it.
-    start = judge_group(SBIN, {"A": 100, "B": 50}, 90, -60, 0)
+def test_a_restart_of_a_group_after_a_sale_by_hand_shares_it_out_by_the_saved_openings():
+    # 60 sold by hand while the session was down: the other orders' trades explain it, and
+    # B, whose saved position opened last, takes first.
+    opened = {"A": TEN_FIVE, "B": ELEVEN_TWENTY}
+    start = judge_group(SBIN, {"A": 100, "B": 50}, 90, (sold(60),), 0, opened)
     assert (start.restart, start.kind) == (RestartKind.DIFFERS, Kind.EXPLAINED_SHARED)
+    assert start.figure.shares == (Share("B", 50, -50, 499.0), Share("A", 100, -10, 499.0))
+
+
+def test_a_restart_of_a_group_whose_openings_are_not_saved_shares_out_by_call_order():
+    start = judge_group(SBIN, {"A": 100, "B": 50}, 90, (sold(60),), 0)
+    assert start.figure.shares == (Share("A", 100, -60, 499.0), Share("B", 50, 0))
 
 
 def test_a_member_moved_away_is_left_out_of_its_groups_sum():
-    start = judge_group(SBIN, {"A": 100}, 100, 0, 0)
+    start = judge_group(SBIN, {"A": 100}, 100, (), 0)
     assert (start.restart, start.figure) == (RestartKind.RESUME, GroupFigure(("A",), 100))
 
 
@@ -130,3 +155,98 @@ def test_names_are_joined_in_words(names, words):
 
 def test_a_figure_names_the_other_members_in_call_order():
     assert GroupFigure(("A", "B", "C"), 0).others("B") == ("A", "C")
+
+
+# ----- the allocation of an explained difference (4.7) ------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("holders", "difference", "external", "shares"),
+    [
+        (
+            [("A", 100, TEN_FIVE), ("B", 50, ELEVEN_TWENTY)],
+            -60,
+            [sold(60)],
+            (Share("B", 50, -50, 499.0), Share("A", 100, -10, 499.0)),
+        ),
+        (
+            [("A", 100, TEN_FIVE), ("B", 50, TEN_FIVE)],
+            -60,
+            [sold(60)],
+            (Share("A", 100, -60, 499.0), Share("B", 50, 0)),
+        ),
+        (
+            [("A", 100, TEN_FIVE), ("B", 50, ELEVEN_TWENTY)],
+            -150,
+            [sold(150)],
+            (Share("B", 50, -50, 499.0), Share("A", 100, -100, 499.0)),
+        ),
+        (
+            [("A", -100, TEN_FIVE), ("B", -50, ELEVEN_TWENTY)],
+            30,
+            [bought(30)],
+            (Share("B", -50, 30, 501.0), Share("A", -100, 0)),
+        ),
+        (
+            [("A", 100, ELEVEN_TWENTY), ("B", 50, None)],
+            -60,
+            [sold(60)],
+            (Share("B", 50, -50, 499.0), Share("A", 100, -10, 499.0)),
+        ),
+        (
+            [("A", 100, TEN_FIVE), ("B", 0, None)],
+            -60,
+            [sold(60)],
+            (Share("A", 100, -60, 499.0), Share("B", 0, 0)),
+        ),
+    ],
+    ids=[
+        "the position opened last takes first",
+        "positions opened together: call order",
+        "all of the group's units sold",
+        "a buy by hand on a short group",
+        "an opening not known counts as the latest",
+        "a flat member takes nothing",
+    ],
+)
+def test_an_explained_difference_is_shared_out_the_latest_opened_position_first(
+    holders, difference, external, shares
+):
+    assert allocate(holders, difference, external) == shares
+
+
+def test_the_newest_of_the_other_orders_trades_price_the_first_share():
+    # 60 sold by hand at 499.00, then 40 at 498.00 (and a purchase, on the other side): B,
+    # opened last, takes the newest 50 (40 at 498.00, 10 at 499.00), A the 50 left at 499.00.
+    trades = [sold(60, 499.0, "h1"), bought(10, 502.0, "h2"), sold(40, 498.0, "h3")]
+    shares = allocate([("A", 100, TEN_FIVE), ("B", 50, ELEVEN_TWENTY)], -100, trades)
+    assert [(s.name, s.taken) for s in shares] == [("B", -50), ("A", -50)]
+    assert shares[0].price == pytest.approx(498.2)
+    assert shares[1].price == pytest.approx(499.0)
+
+
+def test_a_share_beyond_the_other_orders_trades_is_priced_at_the_newest_of_them():
+    # Only 30 sold units are in the trade book (the rest adopted on an earlier day's start):
+    # B's 50 averages the 30 there, and A's 10 is priced from the newest again.
+    shares = allocate([("A", 100, TEN_FIVE), ("B", 50, ELEVEN_TWENTY)], -60, [sold(30, 497.0)])
+    assert [(s.name, s.taken, s.price) for s in shares] == [("B", -50, 497.0), ("A", -10, 497.0)]
+
+
+def test_the_allocation_names_each_share_and_what_it_leaves():
+    figure = GroupFigure(("A", "B"), 150, (Share("B", 50, -50, 499.0), Share("A", 100, -10, 499.0)))
+    assert allocation_words(figure, "A") == (
+        "60 units sold by other orders are shared out, the most recently opened position "
+        "first: taken from B 50 (flat) and A 10 (90 left); each takes its share as its own, "
+        "its stop cut down to what it is left with, or cancelled"
+    )
+
+
+def test_the_allocation_tells_a_member_it_takes_nothing_from_that_it_keeps_its_units():
+    figure = GroupFigure(("A", "B"), 150, (Share("A", 100, -60, 499.0), Share("B", 50, 0)))
+    assert "taken from A 60 (40 left); B keeps its 50 units;" in allocation_words(figure, "B")
+
+
+def test_a_figure_gives_each_members_share_and_none_for_a_member_without_one():
+    figure = GroupFigure(("A", "B"), 150, (Share("A", 100, -60, 499.0),))
+    assert (figure.share("A"), figure.share("B")) == (Share("A", 100, -60, 499.0), None)
+    assert Share("A", 100, -60).left == 40

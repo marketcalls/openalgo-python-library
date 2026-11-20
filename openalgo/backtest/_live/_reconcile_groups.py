@@ -1,5 +1,6 @@
 """A comparison of an instrument several strategies of the session trade (18-multi-strategy
-4.1, 4.2 and 4.6; unit M6, the part the session needs before the group rows of unit M7).
+4.1, 4.2, 4.6 and 4.7; unit M6, the part the session needs before the group rows of unit
+M7).
 
 A broker nets the members of an instrument group into one position, so their legs are
 compared together, never one by one against the broker's net (`GroupComparison`, a part
@@ -17,13 +18,16 @@ of `reconcile.Reconciler`). A group of one is compared as a leg always was
   member's, and an order of an earlier start that no member holds is the group's orphan,
   found by its first member only (`order_findings`).
 - **Positions**: the sum of the members' units against the broker's net
-  (`_group_rules.group_kind`). Until the allocation of unit M7, a difference trades of
-  other orders explain adopts nothing (`Kind.EXPLAINED_SHARED`). Each member's finding is
-  the group's kind with its own units and the broker's net, acted on by the rules of a
-  leg (16-session-design 5.3), its alert naming the group's sum: the entries locked and
-  alerted; on the other side each member's own stop cancelled. While the broker holds
-  fewer units than the sum, or none, or the other side, every closing order of every
-  member is held by the exit guard until a comparison of the group agrees
+  (`_group_rules.group_kind`). A difference trades of other orders explain
+  (`Kind.EXPLAINED_SHARED`) is shared out among the members it closes, the most recently
+  opened position first (`_reconcile_allocate.allocate`, their positions' oldest open
+  tranche telling when each opened). Each member's finding is the group's kind with its
+  own units and the broker's net, acted on, when two comparisons in a row show it, by the
+  rules of a leg (16-session-design 5.3), its alert naming the group's sum: the entries
+  locked and alerted; an explained difference's share adopted by each member, which cuts
+  its stop to what is left; on the other side each member's own stop cancelled. While
+  the broker holds fewer units than the sum, or none, or the other side, every closing
+  order of every member is held by the exit guard until a comparison of the group agrees
   (18-multi-strategy 4.8: holding the whole group is simpler to verify than a room per
   member).
 - **Agreement** tells the margin holds (`_margin_reject`): a position a closing order's
@@ -37,12 +41,16 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from .._engine import call
 from .._layout import NANOS_PER_SECOND
-from ._group_rules import GroupFigure, group_kind
-from ._reconcile_act import Finding, attribute, in_flight, order_findings, own_orders
+from ._group_rules import GroupFigure, Share, group_kind
+from ._plan_catch_up import INSTRUMENT
+from ._reconcile_allocate import allocate
 from ._reconcile_findings import FILL_DURING_READ
-from ._reconcile_rules import GUARDED, Kind, LegBooks, leg_books, unexplained_by
+from ._reconcile_rules import GUARDED, Kind, LegBooks, Trade, leg_books, unexplained_by
+from ._reconcile_steps import Finding, attribute, in_flight, order_findings, own_orders
 from ._session_trader import Trader
+from ._venue_requests import LIVE_PRODUCT
 from .inbox import Books
 
 _NS = NANOS_PER_SECOND
@@ -144,13 +152,16 @@ class GroupComparison:
         everyone = frozenset().union(*bound.values()) | self._earlier
         units = {m.name: round(m.open_units()) for m in members}
         group_units = sum(units.values())
-        kind = Kind.UNREADABLE
+        kind, shares = Kind.UNREADABLE, ()
         if books.units is not None and books.trades is not None:
-            external = sum(trade.signed for trade in books.external(everyone))
+            trades = books.external(everyone)
+            external = sum(trade.signed for trade in trades)
             adopted = sum(self.adopted(m.name) for m in members)
             unexplained = unexplained_by(group_units, books.units, external, adopted)
             kind = group_kind(group_units, books.units, unexplained)
-        figure = GroupFigure(tuple(m.name for m in members), group_units)
+            if kind is Kind.EXPLAINED_SHARED:
+                shares = _shared_out(members, units, books.units - group_units, trades)
+        figure = GroupFigure(tuple(m.name for m in members), group_units, shares)
         polls = False
         for member in active:
             self._figures[member.name] = figure
@@ -170,7 +181,7 @@ class GroupComparison:
             self._noted(member, kind.value, books.units, len(findings))
             if kind in GUARDED and books.units is not None:
                 self.guard.open(member.name, books.units, hold_all=True)
-            if self._findings.judged(member, findings, books, everyone, late=late):
+            if self._findings.judged(member, findings, books, everyone, late=late, group=figure):
                 self._soon(session.now() + round(again_s * _NS))
             if kind in (Kind.AGREE, Kind.MORE):
                 self.guard.close(member.name)
@@ -179,6 +190,28 @@ class GroupComparison:
         if kind is Kind.AGREE and not late:
             session.margin.agreed(list(active), message.started_ns)
         return polls
+
+
+def _shared_out(
+    members: Sequence[Trader],
+    units: dict[str, int],
+    difference: int,
+    trades: Sequence[Trade],
+) -> tuple[Share, ...]:
+    """The allocation of an explained `difference` (the broker's net less the members'
+    sum) among the members whose kernel session runs, whatever members a read asked for:
+    each share is adopted when that member's comparison confirms it."""
+    holders = [(m.name, units[m.name], _opened_ns(m)) for m in members if not m.finished]
+    return allocate(holders, difference, trades)
+
+
+def _opened_ns(trader: Trader) -> int | None:
+    """When `trader`'s current position opened, UTC nanoseconds: its oldest open
+    tranche's opening; None when it holds none."""
+    position = call(trader.engine.position, INSTRUMENT, LIVE_PRODUCT)
+    tranches = () if position is None else position["tranches"]
+    opened = [int(at) for _number, units, _price, at in tranches if units]
+    return min(opened) if opened else None
 
 
 __all__ = ["GroupComparison"]

@@ -25,6 +25,10 @@ a group of one: each holds for it as for a group.
 - **I6, one side.** At no change do two members of a live group hold positions on
   opposite sides.
 
+I4 and I6 judge a change only where the trace read the members' books at it; a run whose
+books it could read at none of its changes (every kernel read failing) fails both rather
+than pass them silently (`sampled`).
+
 Quantities are signed units.
 """
 
@@ -59,6 +63,14 @@ def sum_rule(changes: Iterable[OrderChange], mine: frozenset[str]) -> None:
             f"given, and {others.get(change.instrument, 0) - adopted} of other orders not "
             f"adopted ({change.members})"
         )
+
+
+def sampled(run: Run) -> None:
+    """The guard of I4 and I6 (module docstring) over `run`."""
+    assert run.sampled or not run.unsampled, (
+        f"18-multi-strategy I4 and I6: the members' books could be read at none of the "
+        f"{run.unsampled} order changes of the run, so neither invariant judged it"
+    )
 
 
 def one_side(changes: Iterable[OrderChange]) -> None:
@@ -115,4 +127,4 @@ def _not_given(change: OrderChange, own: Iterable[OrderChange]) -> int:
     return waiting
 
 
-__all__ = ["isolation", "one_side", "sum_rule"]
+__all__ = ["isolation", "one_side", "sampled", "sum_rule"]
