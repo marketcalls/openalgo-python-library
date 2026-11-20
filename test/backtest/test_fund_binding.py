@@ -298,6 +298,28 @@ def test_an_engine_advanced_outside_its_fund_stops_the_fund_naming_its_strategy(
         fund.advance()
 
 
+def test_an_engine_finished_before_the_fund_ended_stops_the_fund_naming_its_strategy():
+    # Both strategies end at the last round; SbinTrend's "finished" pause comes first, and
+    # its driver finishes its engine there, as a single run's driver would.
+    engines = two()
+    fund = native_attr("Fund")(engines, ["SbinTrend", "InfyTrend"], shared())
+    while (step := fund.advance())[1][0] != "finished":
+        pass
+    engines[step[0]].finish()
+    early = "SbinTrend: its engine was finished before the portfolio run ended: finish each"
+    with pytest.raises(native_attr("NativeEngineError"), match=early):
+        fund.advance()
+
+
+def test_an_engine_the_fund_refuses_is_named_by_its_strategy():
+    advanced = engine("INFY", 500_000.0, wave(1_500.0))
+    advanced.advance()
+    engines = [engine("SBIN", 1_000_000.0, wave(100.0)), advanced]
+    refused = "engines: InfyTrend has an engine that has advanced already"
+    with pytest.raises(native_attr("NativeEngineInputError"), match=refused):
+        native_attr("Fund")(engines, ["SbinTrend", "InfyTrend"], shared())
+
+
 def test_an_engine_error_names_its_strategy():
     engines = two()
     fund = native_attr("Fund")(engines, ["SbinTrend", "InfyTrend"], shared())

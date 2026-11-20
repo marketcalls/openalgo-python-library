@@ -14,12 +14,15 @@
 //! account = fund.finish()
 //! ```
 //!
-//! The fund holds the engines and lends them to the kernel's fund at each `advance`; a
-//! strategy decides on its own `Engine` (submit, cancel, the queries) while the fund has
-//! stopped at its pause, exactly as at a pause of `Engine.advance`. The engines are
-//! advanced by the fund only (an `Engine.advance` of one of them makes the next
-//! `Fund.advance` raise `NativeEngineError`), and finished once `advance` has returned
-//! None: a fund lends every engine at each call.
+//! The fund holds the engines and lends them to the kernel's fund at each `advance`
+//! (holding them, it cannot be given them in another order); a strategy decides on its
+//! own `Engine` (submit, cancel, the queries) while the fund has stopped at its pause,
+//! exactly as at a pause of `Engine.advance`. The engines are advanced by the fund only
+//! (an `Engine.advance` of one of them makes the next `Fund.advance` raise
+//! `NativeEngineError`), and finished once `advance` has returned None, not at a
+//! strategy's "finished" pause as a single run's driver does: a fund lends every engine
+//! at each call, and one finished earlier makes the next `advance` raise
+//! `NativeEngineError` naming its strategy.
 //!
 //! `config` has "pool" ("shared" or "separate", `POOLS`), "account_capital" (rupees, or
 //! None for the sum of the capitals; in a separate pool None or that sum) and
@@ -134,7 +137,13 @@ impl NativeFund {
     fn advance<'py>(&mut self, py: Python<'py>) -> PyResult<Option<(usize, PauseTuple<'py>)>> {
         let fund = self.inner.as_mut().ok_or_else(finished)?;
         let mut guards = borrowed_mut(py, &self.engines)?;
-        let lent = guards.iter_mut().map(|g| g.engine_mut());
+        let names = &self.names;
+        let lent = guards.iter_mut().enumerate().map(|(index, guard)| {
+            // An engine's only failure here is that its run was taken by `finish`.
+            guard
+                .engine_mut()
+                .map_err(|_| finished_early(name_of(names, index)))
+        });
         let mut lent = lent.collect::<PyResult<Vec<&mut Engine>>>()?;
         let step = fund
             .advance(&mut lent)
@@ -166,6 +175,19 @@ impl NativeFund {
 /// `NativeEngineError` for a fund that `finish` has taken.
 fn finished() -> PyErr {
     NativeEngineError::new_err(FINISHED)
+}
+
+/// `NativeEngineError` for the engine of strategy `name`, finished while the fund runs.
+fn finished_early(name: &str) -> PyErr {
+    NativeEngineError::new_err(format!(
+        "{name}: its engine was finished before the portfolio run ended: finish each \
+         engine after Fund.advance has returned None"
+    ))
+}
+
+/// The name of strategy `strategy` (its index in call order), for a message.
+fn name_of(names: &[String], strategy: usize) -> &str {
+    names.get(strategy).map_or("a strategy", String::as_str)
 }
 
 /// Every engine, borrowed to read.
@@ -205,8 +227,13 @@ fn fund_config(dict: &Bound<'_, PyDict>) -> PyResult<FundConfig> {
 
 /// A fund's error as the Python exception of its kind (module docs), naming the strategy.
 fn fund_error(names: &[String], error: FundError) -> PyErr {
-    let name = |strategy: usize| names.get(strategy).map_or("a strategy", String::as_str);
+    let name = |strategy: usize| name_of(names, strategy);
     match error {
+        FundError::InvalidConfig {
+            field,
+            strategy: Some(strategy),
+            reason,
+        } => NativeEngineInputError::new_err(format!("{field}: {} {reason}", name(strategy))),
         FundError::Engine { strategy, error } => {
             let message = format!("{}: {error}", name(strategy));
             error_of_kind(&error, message)

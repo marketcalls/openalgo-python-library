@@ -79,6 +79,7 @@ pub struct RefusedOrder {
     pub order: OrderId,
     /// When, in the strategy's own engine: the rejection's or the cancellation's stamp.
     pub stamp: EventStamp,
+    /// Why the account refused or ended it.
     pub refusal: Refusal,
 }
 
@@ -87,6 +88,7 @@ pub struct RefusedOrder {
 pub struct FundOutput {
     /// The account's capital, rupees.
     pub account_capital_rupees: f64,
+    /// The account's row of every round, in round order.
     pub account: AccountRows,
     /// Every breach of the account's daily loss limit, in time order.
     pub breaches: Vec<AccountBreach>,

@@ -110,6 +110,7 @@ impl Pool {
 /// The account of a portfolio run (18-multi-strategy 1.1).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FundConfig {
+    /// One account shared by the strategies, or fixed allocations (`Pool`).
     pub pool: Pool,
     /// Rupees: the account's funds; `None` for the sum of the strategies' capitals. In a
     /// separate pool it is that sum.
@@ -134,8 +135,15 @@ pub enum FundPause {
 /// Why the fund stopped.
 #[derive(Clone, Debug, PartialEq)]
 pub enum FundError {
-    /// A setting of the fund, or the engines given to it, that cannot be used.
-    InvalidConfig { field: &'static str, reason: String },
+    /// A setting of the fund, or the engines given to it, that cannot be used: `field`
+    /// names the setting and `strategy` the strategy it concerns (its index in call
+    /// order; `None` for the fund as a whole). `reason` says what was wrong and what to
+    /// do; with a strategy it reads on from the strategy's name ("strategy 1 has ...").
+    InvalidConfig {
+        field: &'static str,
+        strategy: Option<usize>,
+        reason: String,
+    },
     /// The engine of strategy `strategy` (its index in call order) refused a call.
     Engine { strategy: usize, error: KernelError },
     /// The engine of strategy `strategy` was advanced outside the fund.
@@ -161,7 +169,16 @@ impl FundError {
 impl fmt::Display for FundError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FundError::InvalidConfig { field, reason } => write!(f, "{field}: {reason}"),
+            FundError::InvalidConfig {
+                field,
+                strategy: None,
+                reason,
+            } => write!(f, "{field}: {reason}"),
+            FundError::InvalidConfig {
+                field,
+                strategy: Some(strategy),
+                reason,
+            } => write!(f, "{field}: strategy {strategy} {reason}"),
             FundError::Engine { strategy, error } => write!(f, "strategy {strategy}: {error}"),
             FundError::OutOfStep { strategy } => write!(
                 f,
@@ -225,6 +242,7 @@ impl Fund {
         if let Some(limit) = limit.filter(|limit| !(limit.is_finite() && *limit > 0.0)) {
             return Err(FundError::InvalidConfig {
                 field: "account_max_daily_loss",
+                strategy: None,
                 reason: format!("{limit}: give the account's daily loss limit in rupees, above 0"),
             });
         }
@@ -249,34 +267,40 @@ impl Fund {
     ///
     /// Errors: `InvalidConfig` (field `conditions`) for a strategy the fund does not run,
     /// one given arrays already, and a call after the first `advance`; `InvalidConfig`
-    /// (field `engines`) when `engine` is not that strategy's; `Engine` for arrays the
-    /// engine refuses (`SignalArrays::validate`).
+    /// (field `engines`) when `engine` differs from that strategy's in its capital, grid
+    /// or instruments (the fund tells engines apart by these only, `Fund::advance`);
+    /// `Engine` for arrays the engine refuses (`SignalArrays::validate`).
     pub fn set_signals(
         &mut self,
         strategy: usize,
         arrays: SignalArrays,
         engine: &Engine,
     ) -> Result<(), FundError> {
-        let refuse = |reason: String| FundError::InvalidConfig {
+        let refuse = |strategy: Option<usize>, reason: String| FundError::InvalidConfig {
             field: "conditions",
+            strategy,
             reason,
         };
         if self.started {
             return Err(refuse(
+                None,
                 "give a strategy's conditions before the first advance".into(),
             ));
         }
         match self.deciders.get(strategy) {
-            None => Err(refuse(format!("the fund runs no strategy {strategy}"))),
-            Some(Decider::Signals { .. }) => Err(refuse(format!(
-                "strategy {strategy} was given its conditions already"
-            ))),
+            None => Err(refuse(
+                None,
+                format!("the fund runs no strategy {strategy}"),
+            )),
+            Some(Decider::Signals { .. }) => Err(refuse(
+                Some(strategy),
+                "was given its conditions already".into(),
+            )),
             Some(Decider::Caller) if !self.lanes[strategy].holds(engine) => {
                 Err(FundError::InvalidConfig {
                     field: "engines",
-                    reason: format!(
-                        "the engine given is not the fund's engine of strategy {strategy}"
-                    ),
+                    strategy: Some(strategy),
+                    reason: "was given an engine that is not its own: give its own engine".into(),
                 })
             }
             Some(Decider::Caller) => {
@@ -294,10 +318,15 @@ impl Fund {
     /// Run to the next pause the caller decides (module docs), lending the engines in
     /// call order.
     ///
-    /// Errors: `InvalidConfig` (field `engines`) when the engines are not the fund's, in
-    /// call order; `OutOfStep` when one was advanced outside the fund; `Engine` for an
-    /// error of an engine's phase or of a Rust driver; `Finished` after
-    /// `FundPause::Finished`.
+    /// The fund tells its engines apart by their capital, grid (number of slices and
+    /// first open) and instruments (symbol and exchange), so two engines alike in all of
+    /// these (two strategies with one capital on one instrument) cannot be told apart:
+    /// the caller keeps them in call order.
+    ///
+    /// Errors: `InvalidConfig` (field `engines`) for a number of engines other than the
+    /// fund's, or an engine that differs from its strategy's in those; `OutOfStep` when
+    /// one was advanced outside the fund; `Engine` for an error of an engine's phase or
+    /// of a Rust driver; `Finished` after `FundPause::Finished`.
     pub fn advance(&mut self, engines: &mut [&mut Engine]) -> Result<FundPause, FundError> {
         timeline::check_engines(&self.lanes, engines)?;
         self.started = true;
@@ -338,6 +367,7 @@ fn account_capital(config: &FundConfig, capitals: &[f64]) -> Result<f64, FundErr
     };
     let refuse = |reason: String| FundError::InvalidConfig {
         field: "account_capital",
+        strategy: None,
         reason,
     };
     if !(given.is_finite() && given > 0.0) {

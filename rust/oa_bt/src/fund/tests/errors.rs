@@ -68,6 +68,29 @@ fn a_fund_refuses_no_engine_a_live_session_and_an_engine_that_has_advanced() {
 }
 
 #[test]
+fn a_refused_engine_is_named_by_its_strategy() {
+    let mut advanced = sbin(100_000.0);
+    assert!(matches!(advanced.advance(), Ok(Pause::BarClose { .. })));
+    let refused = new_fund(account(Pool::Shared, None, None), &[sbin(1.0), advanced]);
+    let Err(error) = refused else {
+        panic!("an engine that has advanced is refused");
+    };
+    assert!(matches!(
+        error,
+        FundError::InvalidConfig {
+            field: "engines",
+            strategy: Some(1),
+            ..
+        }
+    ));
+    assert_eq!(
+        error.to_string(),
+        "engines: strategy 1 has an engine that has advanced already: give engines before \
+         their first advance"
+    );
+}
+
+#[test]
 fn advance_refuses_engines_that_are_not_the_fund_own_in_call_order() {
     let engines = vec![sbin(100_000.0), sbin(200_000.0)];
     let mut fund = new_fund(account(Pool::Shared, None, None), &engines).expect("a fund");
@@ -83,6 +106,31 @@ fn advance_refuses_engines_that_are_not_the_fund_own_in_call_order() {
     lent.pop();
     assert!(matches!(
         fund.advance(&mut lent),
+        Err(FundError::InvalidConfig {
+            field: "engines",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn advance_refuses_engines_alike_in_capital_and_grid_given_out_of_call_order() {
+    // SBIN and INFY with Rs 10,00,000 each on the same NSE minutes of 2025-07-07: alike in
+    // capital, number of slices and first open, told apart by their instruments.
+    let infy = Run::minutes(Symbol::Infy, july(7), july(7), 1_000_000.0);
+    let mut engines = vec![sbin(1_000_000.0), infy.engine(|_, _| flat(100.0))];
+    let mut fund = new_fund(account(Pool::Shared, None, None), &engines).expect("a fund");
+    let mut lent: Vec<&mut Engine> = engines.iter_mut().rev().collect();
+    assert!(matches!(
+        fund.advance(&mut lent),
+        Err(FundError::InvalidConfig {
+            field: "engines",
+            ..
+        })
+    ));
+    let infy_conditions = quiet_arrays(&engines[1]);
+    assert!(matches!(
+        fund.set_signals(0, infy_conditions, &engines[1]),
         Err(FundError::InvalidConfig {
             field: "engines",
             ..

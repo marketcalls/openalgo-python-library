@@ -9,7 +9,8 @@
 
 use crate::engine::kernel::Phase;
 use crate::engine::{Engine, SliceInfo};
-use crate::model::{Day, TsNanos};
+use crate::exec::InstrumentSpec;
+use crate::model::{Day, Exchange, TsNanos};
 
 use super::FundError;
 
@@ -32,15 +33,37 @@ pub(super) struct Lane {
     pub(super) cursor: Cursor,
     /// The engine's events already read for the refused orders (`rounds`).
     pub(super) events_read: usize,
-    /// What tells the lane's engine from another: its capital (rupees), its number of
-    /// slices and its first slice's open (`check_engines`).
-    identity: (f64, usize, TsNanos),
+    identity: Identity,
+}
+
+/// What tells the lane's engine from another (`check_engines`). Two engines alike in all
+/// of it (one capital and one grid on the same instruments) cannot be told apart.
+#[derive(Clone, Debug, PartialEq)]
+struct Identity {
+    /// The strategy's capital, rupees.
+    capital_rupees: f64,
+    /// The grid's number of slices.
+    slices: usize,
+    /// The first slice's open, UTC nanoseconds (`first_open`).
+    first_open: TsNanos,
+    /// Each instrument's symbol and exchange, in registration order.
+    instruments: Vec<(String, Exchange)>,
 }
 
 impl Lane {
-    /// True when `engine` is the lane's own (its identity, `check_engines`).
+    /// True when `engine` is the lane's own (its identity, `check_engines`). It compares
+    /// in place, allocating nothing: the fund checks every engine at every `advance`.
     pub(super) fn holds(&self, engine: &Engine) -> bool {
-        self.identity == identity(engine)
+        let id = &self.identity;
+        let specs = engine.instruments();
+        let same = |((symbol, exchange), spec): (&(String, Exchange), &InstrumentSpec)| {
+            *symbol == spec.symbol && *exchange == spec.exchange
+        };
+        id.capital_rupees == engine.capital_rupees()
+            && id.slices == engine.timeline().len()
+            && id.first_open == first_open(engine)
+            && id.instruments.len() == specs.len()
+            && id.instruments.iter().zip(specs).all(same)
     }
 }
 
@@ -55,10 +78,23 @@ pub(super) enum Instant {
     Open(TsNanos),
 }
 
-fn identity(engine: &Engine) -> (f64, usize, TsNanos) {
-    let grid = engine.timeline();
-    let first = grid.slice_opens().first().copied().unwrap_or(TsNanos::MIN);
-    (engine.capital_rupees(), grid.len(), first)
+/// The open of the engine's first slice, UTC nanoseconds; `TsNanos::MIN` for an empty
+/// grid.
+fn first_open(engine: &Engine) -> TsNanos {
+    let opens = engine.timeline().slice_opens();
+    opens.first().copied().unwrap_or(TsNanos::MIN)
+}
+
+fn identity(engine: &Engine) -> Identity {
+    let instruments = engine.instruments().iter();
+    Identity {
+        capital_rupees: engine.capital_rupees(),
+        slices: engine.timeline().len(),
+        first_open: first_open(engine),
+        instruments: instruments
+            .map(|spec| (spec.symbol.clone(), spec.exchange))
+            .collect(),
+    }
 }
 
 /// The cursor of an engine standing before slice `index`: `Done` past its grid.
@@ -74,26 +110,28 @@ pub(super) fn before(engine: &Engine, index: usize) -> Cursor {
 /// Errors: `InvalidConfig` (field `engines`) for no engine, a live session and an engine
 /// that has advanced.
 pub(super) fn lanes(engines: &[&Engine]) -> Result<Vec<Lane>, FundError> {
-    let refuse = |reason: String| FundError::InvalidConfig {
+    let refuse = |strategy: Option<usize>, reason: &str| FundError::InvalidConfig {
         field: "engines",
-        reason,
+        strategy,
+        reason: reason.to_string(),
     };
     if engines.is_empty() {
-        return Err(refuse("a portfolio run needs at least one strategy".into()));
+        return Err(refuse(None, "a portfolio run needs at least one strategy"));
     }
     let mut lanes = Vec::with_capacity(engines.len());
     for (strategy, engine) in engines.iter().enumerate() {
         if engine.is_live() {
-            return Err(refuse(format!(
-                "strategy {strategy} is a live session, whose account is the broker's: a \
-                 fund runs backtests"
-            )));
+            return Err(refuse(
+                Some(strategy),
+                "is a live session, whose account is the broker's: a fund runs backtests",
+            ));
         }
         if engine.phase() != Phase::Ready(0) {
-            return Err(refuse(format!(
-                "strategy {strategy}'s engine has advanced already: give engines before \
-                 their first advance"
-            )));
+            return Err(refuse(
+                Some(strategy),
+                "has an engine that has advanced already: give engines before their first \
+                 advance",
+            ));
         }
         lanes.push(Lane {
             cursor: before(engine, 0),
@@ -104,31 +142,38 @@ pub(super) fn lanes(engines: &[&Engine]) -> Result<Vec<Lane>, FundError> {
     Ok(lanes)
 }
 
-/// Check that `engines` are the lanes' own, in call order.
+/// Check that `engines` are the lanes' own, in call order, as far as their identities
+/// tell them apart (`Lane::holds`).
 ///
-/// Errors: `InvalidConfig` (field `engines`) naming the first that is not.
+/// Errors: `InvalidConfig` (field `engines`) for a number of engines other than the
+/// lanes', and naming the first strategy whose engine is not its own.
 pub(super) fn check_engines(lanes: &[Lane], engines: &[&mut Engine]) -> Result<(), FundError> {
-    let refuse = |reason: String| FundError::InvalidConfig {
+    let refuse = |strategy: Option<usize>, reason: String| FundError::InvalidConfig {
         field: "engines",
+        strategy,
         reason,
     };
     if engines.len() != lanes.len() {
-        return Err(refuse(format!(
-            "the fund runs {} strategies and was given {} engines: give its engines, in \
-             call order",
-            lanes.len(),
-            engines.len()
-        )));
+        return Err(refuse(
+            None,
+            format!(
+                "the fund runs {} strategies and was given {} engines: give its engines, in \
+                 call order",
+                lanes.len(),
+                engines.len()
+            ),
+        ));
     }
     let wrong = lanes
         .iter()
         .zip(engines)
         .position(|(lane, engine)| !lane.holds(engine));
     match wrong {
-        Some(strategy) => Err(refuse(format!(
-            "engine {strategy} is not the fund's engine of strategy {strategy}: give its \
-             engines, in call order"
-        ))),
+        Some(strategy) => Err(refuse(
+            Some(strategy),
+            "was given an engine that is not its own: give the fund's engines, in call order"
+                .to_string(),
+        )),
         None => Ok(()),
     }
 }
