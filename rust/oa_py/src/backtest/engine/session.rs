@@ -55,15 +55,65 @@
 //! `NativeEngineInputError`.
 
 use oa_bt::engine::{
-    Engine, EngineExit, ExitRequest, GroupSide, KernelError, OrderRole, RiskExitReason,
+    Engine, EngineExit, ExitRequest, GroupSide, KernelError, OrderRole, Protect, RiskExitReason,
 };
-use oa_bt::exec::OrderId;
+use oa_bt::exec::{InstrumentId, OrderId};
 use oa_bt::rms::ExitReason;
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
 use super::engine_error;
-use super::setup::unknown;
+use super::setup::{parse_product, unknown};
+
+/// `request_exit`: the session's exit of a position for `reason`, at market or as LIMIT
+/// orders at `limit_rupees`; what it did, one of `EXIT_REQUESTS` (module docs).
+pub(super) fn request_exit(
+    engine: &mut Engine,
+    (instrument, product): (u32, &str),
+    reason: &str,
+    limit_rupees: Option<f64>,
+) -> PyResult<&'static str> {
+    let (product, exit) = (parse_product(product)?, engine_exit(reason)?);
+    let instrument = InstrumentId(instrument);
+    let asked = match limit_rupees {
+        None => engine.request_exit(instrument, product, exit),
+        Some(limit) => engine.request_limit_exit(instrument, product, exit, limit),
+    };
+    asked.map(ExitRequest::code).map_err(engine_error)
+}
+
+/// `protect`: the leg's stop placed again; what it did, one of `PROTECT_OUTCOMES`.
+pub(super) fn protect(
+    engine: &mut Engine,
+    instrument: u32,
+    product: &str,
+) -> PyResult<&'static str> {
+    let done = engine.protect(InstrumentId(instrument), parse_product(product)?);
+    done.map(Protect::code).map_err(engine_error)
+}
+
+/// `set_group_side`: the side the other strategies hold or enter on an instrument, or
+/// None (module docs).
+pub(super) fn set_group_side(
+    engine: &mut Engine,
+    (instrument, product): (u32, &str),
+    side: Option<&str>,
+) -> PyResult<()> {
+    let (product, side) = (parse_product(product)?, group_side(side)?);
+    let set = engine.set_group_side(InstrumentId(instrument), product, side);
+    set.map_err(engine_error)
+}
+
+/// `set_shared`: mark an instrument as traded by several strategies, or not (module
+/// docs).
+pub(super) fn set_shared(
+    engine: &mut Engine,
+    (instrument, product): (u32, &str),
+    shared: bool,
+) -> PyResult<()> {
+    let set = engine.set_shared(InstrumentId(instrument), parse_product(product)?, shared);
+    set.map_err(engine_error)
+}
 
 /// The engine exit a session's `reason` names (module docs).
 ///

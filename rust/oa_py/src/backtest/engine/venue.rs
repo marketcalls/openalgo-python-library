@@ -43,12 +43,12 @@
 //! step number). The session's own controls (an exit it asks for, the entry locks, the
 //! sizing cap, the stop) are in `session`.
 
-use oa_bt::engine::{BaseBar, EventStamp, KernelError, VenueCommand, VENUE_REFUSAL_KINDS};
-use oa_bt::exec::{OrderType, RejectCode};
+use oa_bt::engine::{BaseBar, Engine, EventStamp, KernelError, VenueCommand, VENUE_REFUSAL_KINDS};
+use oa_bt::exec::{InstrumentId, OrderId, OrderType, RejectCode};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 
-use super::errors::venue_result_error;
+use super::errors::{engine_error, venue_result_error};
 use super::session::role_codes;
 use super::setup::unknown;
 
@@ -58,7 +58,7 @@ pub(super) type BarTuple = (i64, f64, f64, f64, f64, f64);
 /// A recorded result's stamp: (slice index, slice open in UTC nanoseconds, step number).
 pub(super) type StampTuple = (u32, i64, u8);
 
-pub(super) fn base_bar((ts_open, open, high, low, close, volume): BarTuple) -> BaseBar {
+fn base_bar((ts_open, open, high, low, close, volume): BarTuple) -> BaseBar {
     BaseBar {
         ts_open,
         open,
@@ -67,6 +67,23 @@ pub(super) fn base_bar((ts_open, open, high, low, close, volume): BarTuple) -> B
         close,
         volume,
     }
+}
+
+/// `add_bar`: hand a live session an instrument's base bar once its slice has closed.
+pub(super) fn add_bar(engine: &mut Engine, instrument: u32, bar: BarTuple) -> PyResult<()> {
+    let added = engine.add_bar(InstrumentId(instrument), base_bar(bar));
+    added.map_err(engine_error)
+}
+
+/// `apply_reject`: the venue rejected an order with the reject code `reason`; the stamp.
+pub(super) fn reject(
+    py: Python<'_>,
+    engine: &mut Engine,
+    order_id: u64,
+    reason: &str,
+) -> PyResult<StampTuple> {
+    let reason = reject_code(reason)?;
+    recorded(py, engine.apply_reject(OrderId(order_id), reason))
 }
 
 /// A venue result's stamp, or the error it was refused with (`VenueRefusalError` for a
@@ -107,7 +124,7 @@ pub(super) fn commands<'py>(
 
 /// The reject code of a venue's rejection: "venue" for a reason of the venue's own, or
 /// a kernel code such as "margin" when the venue's reason is one.
-pub(super) fn reject_code(code: &str) -> PyResult<RejectCode> {
+fn reject_code(code: &str) -> PyResult<RejectCode> {
     RejectCode::from_code(code).ok_or_else(|| {
         let codes: Vec<&str> = RejectCode::ALL.iter().map(|code| code.code()).collect();
         unknown("reject code", code, &format!("one of {}", codes.join(", ")))
