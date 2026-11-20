@@ -12,7 +12,7 @@ other clients' fills) go to `_session_feed`.
   is a REJECT alert.
 - `Settled`: the venue map applies the read's verdict.
 - `Resolutions`: bound (with the order's update, if any), not placed, or ambiguous (the
-  strategy's entries locked, an ERROR alert).
+  strategy's entries locked, an ERROR alert): `_session_resolved`.
 - `HeldFills`: to the stops supervisor (held fills, 4.11).
 - `PositionRows`: to the stops supervisor (held cancels, 4.11) and the risk watch (the
   kill switch's position reads, `watch`).
@@ -22,12 +22,17 @@ other clients' fills) go to `_session_feed`.
 - `GuardLocked`: the session's guard lock (`Session.guard_locked`).
 - `WorkerFailed`: raised as `WorkerFailedError`, which stops the session (3.5).
 
-Each order answer reaches the stops supervisor after the venue map has applied it. Times
-are UTC nanoseconds, prices rupees, quantities units. Used by the loop only.
+Each order answer reaches the stops supervisor after the venue map has applied it. A
+closing order rejected on an instrument several strategies trade, by its placement's
+answer or its REJECTED word, is taken by `_margin_reject` first (its word's fills before
+it): the venue map then takes the answer, whose own rejection the kernel refuses as the
+race of an order ended already. Times are UTC nanoseconds, prices rupees, quantities
+units. Used by the loop only.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from collections.abc import Mapping
 from types import MappingProxyType
@@ -35,10 +40,10 @@ from typing import Any
 
 from ._fill_ledger import FillOutcome, FillResult, Increment
 from ._order_answers import Outcome
-from ._order_book import Resolved
 from ._order_state import ENTRY_PURPOSES
 from ._session_feed import MARKET
 from ._session_records import fill_record
+from ._session_resolved import ResolutionNews, order_words
 from ._session_trader import Trader
 from ._types import LOGGER_NAME, AlertKind, OrderIntent, OrderStatus, OrderUpdate
 from ._venue_requests import Applied, CancelRequest, ModifyRequest, PlaceRequest
@@ -63,8 +68,6 @@ logger = logging.getLogger(LOGGER_NAME)
 #: The entry lock a fill the kernel refused sets on its strategy (16-session-design 6.2,
 #: decision 2: lock and alert, nothing sent to fix it).
 RECONCILE_LOCK = "reconciliation"
-#: The entry lock of an order the order book cannot tell apart from another (6.2).
-AMBIGUOUS_LOCK = "ambiguous_order"
 #: Why a request was not sent, for the REJECT alert of an entry.
 _NOT_SENT_ENTRY = frozenset({NotSentReason.STALE, NotSentReason.REFUSED})
 
@@ -77,7 +80,7 @@ class WorkerFailedError(Exception):
         self.error = error
 
 
-class News:
+class News(ResolutionNews):
     """The handlers of the loop's messages (module docstring) for `session`, the
     `_session_loop.Session` that owns them."""
 
@@ -118,6 +121,8 @@ class News:
         alerts it calls for and note it in the event stream."""
         session = self._session
         kernel_order = trader.venue.kernel_order_of(update.order_id)
+        if update.status is OrderStatus.REJECTED and kernel_order is not None:
+            self._closing_rejected(trader, kernel_order, update)
         before = trader.open_units()
         result = trader.venue.news(update)
         if result.increment is not None:
@@ -142,12 +147,22 @@ class News:
             why = update.rejection_reason or "no reason given"
             session.rejected += 1
             session.alert(
-                AlertKind.REJECT, f"{_order_words(intent)} order {update.order_id} rejected: {why}"
+                AlertKind.REJECT, f"{order_words(intent)} order {update.order_id} rejected: {why}"
             )
             session.exits.rejected(trader, result.kernel_order, intent, why)
         if result.outcome is FillOutcome.REFUSED or result.mismatch:
             self._mismatch(trader, update)
         return result
+
+    def _closing_rejected(self, trader: Trader, kernel_order: int, update: OrderUpdate) -> None:
+        """A REJECTED word of `trader`'s working order: a closing order on a shared
+        instrument is held (`_margin_reject`), the word's fills given first."""
+        intent, margin = trader.venue.intent_of(kernel_order), self._session.margin
+        if not margin.takes(trader, intent) or kernel_order not in trader.working():
+            return
+        if update.filled_quantity > trader.venue.filled(kernel_order):
+            self.apply_update(trader, dataclasses.replace(update, status=OrderStatus.OPEN))
+        margin.reject(trader, kernel_order, intent, update.rejection_reason or "no reason given")
 
     def _fill_alert(self, intent: OrderIntent, update: OrderUpdate, increment: Increment) -> None:
         kind = AlertKind.ENTRY if intent.purpose in ENTRY_PURPOSES else AlertKind.EXIT
@@ -190,6 +205,11 @@ class News:
         if trader is None:
             logger.error("send result of request %d for no venue map", message.request_id)
             return
+        if message.outcome.kind is Outcome.REJECTED and message.intent_id:
+            refused = trader.venue.kernel_order_of_intent(message.intent_id)
+            intent = trader.venue.intent_of(refused) if refused is not None else None
+            if intent is not None and session.margin.takes(trader, intent):
+                session.margin.reject(trader, refused, intent, message.outcome.reason)
         handled = trader.venue.sent(message)
         session.stops.sent(trader, message)
         outcome = message.outcome
@@ -212,21 +232,21 @@ class News:
             session.rejected += 1
             session.alert(
                 AlertKind.REJECT,
-                f"{_order_words(intent)} order refused by OpenAlgo: {outcome.reason} "
+                f"{order_words(intent)} order refused by OpenAlgo: {outcome.reason} "
                 f"(intent {intent.intent_id})",
             )
             session.exits.rejected(trader, kernel_order, intent, outcome.reason)
         elif outcome.kind is Outcome.QUEUED:
             session.alert(
                 AlertKind.ERROR,
-                f"{_order_words(intent)} order was queued in OpenAlgo's Action Center as "
+                f"{order_words(intent)} order was queued in OpenAlgo's Action Center as "
                 f"{outcome.pending_order_id or 'a pending order'} (semi-auto mode), not "
                 "placed: reject it there. The session sends nothing more",
             )
         elif outcome.kind is Outcome.UNANSWERED and intent.purpose not in ENTRY_PURPOSES:
             session.alert(
                 AlertKind.ERROR,
-                f"{_order_words(intent)} order got no answer from OpenAlgo (intent "
+                f"{order_words(intent)} order got no answer from OpenAlgo (intent "
                 f"{intent.intent_id}): nothing more is sent for {intent.symbol} until the "
                 "order book shows whether it was placed",
             )
@@ -258,7 +278,7 @@ class News:
             session.rejected += 1
             session.alert(
                 AlertKind.REJECT,
-                f"{_order_words(request.intent)} order not sent ({message.reason.value}): "
+                f"{order_words(request.intent)} order not sent ({message.reason.value}): "
                 f"{message.error}",
             )
 
@@ -273,53 +293,6 @@ class News:
             request_id=request.request_id,
             expired=message.expired,
             applied=handled.applied.value,
-        )
-
-    def _resolutions(self, message: Resolutions) -> None:
-        session = self._session
-        for resolution in message.resolutions:
-            intent = resolution.intent
-            trader = session.trader_named(intent.strategy)
-            handled = trader.venue.resolved(resolution)
-            session.stops.resolved(trader, resolution)
-            session.event(
-                "resolved",
-                strategy=trader.name,
-                intent_id=intent.intent_id,
-                resolution=resolution.kind.value,
-                order_id=resolution.order_id,
-                applied=handled.applied.value,
-            )
-            session.hand_over(list(handled.requests))
-            if handled.applied is Applied.BOUND and resolution.update is not None:
-                self.apply_update(trader, resolution.update)
-            elif handled.applied is Applied.REJECTED:
-                session.rejected += 1
-                session.alert(
-                    AlertKind.REJECT,
-                    f"{_order_words(intent)} order was not placed: the order book does not "
-                    f"hold it (intent {intent.intent_id})",
-                )
-                kernel_order = trader.venue.kernel_order_of_intent(intent.intent_id)
-                session.exits.rejected(trader, kernel_order, intent, "not placed")
-            elif resolution.kind is Resolved.AMBIGUOUS:
-                self._ambiguous(trader, intent, resolution.candidates)
-
-    def _ambiguous(self, trader: Trader, intent: OrderIntent, candidates: tuple[str, ...]) -> None:
-        """Lock the strategy's entries and alert, once per intent: the resolver reports
-        the same intent at each book read while it stays unsettled."""
-        if intent.intent_id in self._ambiguous_seen:
-            return
-        self._ambiguous_seen.add(intent.intent_id)
-        session = self._session
-        if trader.lock(AMBIGUOUS_LOCK):
-            session.event("lock", strategy=trader.name, reason=AMBIGUOUS_LOCK)
-        session.alert(
-            AlertKind.ERROR,
-            f"{_order_words(intent)} order (intent {intent.intent_id}) cannot be told apart "
-            f"in the order book from {', '.join(candidates) or 'another order'}: nothing more "
-            f"is sent for {intent.symbol} and its entries are locked. Check the order book in "
-            "OpenAlgo",
         )
 
     def _held_fills(self, message: HeldFills) -> None:
@@ -356,14 +329,6 @@ class News:
         return None
 
 
-def _order_words(intent: OrderIntent) -> str:
-    """How an alert names an order: "ema_cross: BUY 10 SBIN NSE (entry)"."""
-    return (
-        f"{intent.strategy}: {intent.action} {intent.quantity} {intent.symbol} "
-        f"{intent.exchange} ({intent.purpose.value})"
-    )
-
-
 _HANDLERS: Mapping[type, Any] = MappingProxyType(
     {
         OrderNews: News._news,
@@ -380,4 +345,4 @@ _HANDLERS: Mapping[type, Any] = MappingProxyType(
 )
 
 
-__all__ = ["AMBIGUOUS_LOCK", "RECONCILE_LOCK", "News", "WorkerFailedError"]
+__all__ = ["RECONCILE_LOCK", "News", "WorkerFailedError"]

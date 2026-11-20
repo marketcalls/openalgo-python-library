@@ -35,7 +35,9 @@ one tick, a `reduce()` then an `exit()`), the kernel cancelled the stop for them
 not place it again, so the stops supervisor does (`_stops_bare`: `protect`, R7, with an
 ERROR alert) once the leg holds units with nothing working to close them. After the
 second Ctrl+C, or once protect by state holds a leg (`halt`), no exit is asked for again:
-the session only waits for what is in flight (16-session-design 3.3).
+the session only waits for what is in flight (16-session-design 3.3). Nor is one whose
+rejection holds its position on an instrument several strategies trade
+(`_margin_reject`): its exits wait for a book read that agrees (18-multi-strategy 4.14).
 
 Times are UTC nanoseconds. Used by the loop only.
 """
@@ -47,7 +49,7 @@ from typing import Any
 
 from .._layout import NANOS_PER_SECOND
 from ._session_trader import Trader
-from ._stops_kernel import PROTECT_PLACED, protect
+from ._stops_kernel import PROTECT_PLACED
 from ._stops_report import protect_words, while_running
 from ._types import LOGGER_NAME, AlertKind, OrderIntent, Purpose
 
@@ -87,6 +89,9 @@ class ExitRetries:
         if intent.purpose not in EXIT_PURPOSES or units == 0:
             return
         session, name = self._session, trader.name
+        if session.margin.holds(trader):
+            session.event("exit_rejected_held", strategy=name, reason=why)
+            return
         if intent.purpose is Purpose.EXIT and intent.quantity < _units_at_place(
             trader, kernel_order, units
         ):
@@ -137,7 +142,7 @@ class ExitRetries:
         achieved (module docstring)."""
         session, name = self._session, trader.name
         self._due_ns.pop(name, None)
-        protected = protect(trader)
+        protected = session.margin.protect(trader)
         session.event("protect", strategy=name, outcome=protected)
         if rejections > EXIT_ATTEMPTS:
             return
@@ -165,7 +170,7 @@ class ExitRetries:
             if due_ns is None or now_ns < due_ns or session.locked:
                 continue
             del self._due_ns[name]
-            what = trader.request_exit(self._reason[name])
+            what = session.margin.request_exit(trader, self._reason[name])
             session.event("exit_retried", strategy=name, outcome=what)
             logger.info("%s: exit asked for again (%s)", name, what)
 

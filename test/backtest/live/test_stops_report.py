@@ -457,12 +457,14 @@ def test_a_resting_exit_beside_orders_never_sent_comes_before_closing_it_by_hand
 
 
 #: The session of a supervisor whose reconciler's exit guard holds the leg: its last read
-#: showed the broker holding 6 of the engine's 10 units (4 sold by hand, seen once).
+#: showed the broker holding 6 of the engine's 10 units (4 sold by hand, seen once); the
+#: strategy alone on its instrument.
 BROKER_HOLDS_6 = SimpleNamespace(
     reconcile=SimpleNamespace(
         guard=SimpleNamespace(held_cancels=lambda name: frozenset()),
         broker_units=lambda name: 6,
-    )
+    ),
+    groups=SimpleNamespace(members=lambda trader: (trader,)),
 )
 
 

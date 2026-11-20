@@ -139,7 +139,6 @@ REFUSED = {
     "daily interval": (variant(interval="D"), {}, "a D strategy interval"),
     "CNC": (variant(product="CNC"), {}, "product CNC"),
     "NRML": (variant(product="NRML"), {}, "product NRML"),
-    "two on one symbol": ([BuyAndHold, variant("Other")], {}, "two strategies on NSE:SBIN"),
     "two with one name": (
         [variant("Twin"), variant("Twin", symbol="INFY")],
         {},

@@ -6,13 +6,17 @@ the receive time of the word that covers them, or of the leg going flat. A chang
 reason closes the window and opens the next at the same instant, so each window has one
 reason (`REASONS`, `reason_of`). The windows are the result's `unprotected` table, and
 their seconds the summary's `unprotected_seconds` (a window still open counts up to the
-moment asked).
+moment asked). On an instrument several strategies trade, a stop held back while another
+strategy's placement of the instrument is unanswered has its own reason
+(`INSTRUMENT_HELD`, `held_by_other`; 18-multi-strategy 4.4), and so has a leg whose
+closing order was rejected there (`REFUSED_FOR_MARGIN`, `CLOSE_REJECTED`; 4.14).
 
 Times are UTC nanoseconds, quantities whole units. Used by the loop only.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 
 from .._layout import NANOS_PER_SECOND
@@ -27,6 +31,9 @@ EXIT_RETRIES = "exit retries"
 UNBOUND_ADD = "unbound add"
 HELD_CANCEL = "held cancel"
 AMBIGUOUS_ORDER = "ambiguous order"
+INSTRUMENT_HELD = "instrument held by another strategy's order"
+REFUSED_FOR_MARGIN = "closing order refused for margin"
+CLOSE_REJECTED = "closing order rejected"
 REASONS = (
     STOP_UNCONFIRMED,
     STOP_HELD,
@@ -36,6 +43,9 @@ REASONS = (
     UNBOUND_ADD,
     HELD_CANCEL,
     AMBIGUOUS_ORDER,
+    INSTRUMENT_HELD,
+    REFUSED_FOR_MARGIN,
+    CLOSE_REJECTED,
 )
 
 
@@ -59,20 +69,34 @@ class Unprotected:
         return max(0, end - self.from_ns) / NANOS_PER_SECOND
 
 
-def reason_of(leg: LegOrders, *, held_cancel: bool, retries: bool) -> str:
+def reason_of(
+    leg: LegOrders,
+    *,
+    held_cancel: bool,
+    retries: bool,
+    held_by_other: bool = False,
+    closing_rejected: str | None = None,
+) -> str:
     """Why `leg`'s units are uncovered (one of `REASONS`): an order of it ambiguous in the
     order book (an entry's units uncovered too, `LegOrders.ambiguous_entry_units`), its
-    stop's cancel held for the trade book (`held_cancel`), an add whose answer was lost,
-    its stop held back or unanswered, an exit the exit owner retries (`retries`), an exit
-    working or the stop's cancel sent for one, else its stop not confirmed yet or ended."""
+    closing order rejected on a shared instrument (`closing_rejected`, the reason then),
+    its stop's cancel held for the trade book (`held_cancel`), an add whose answer was
+    lost, its stop held back while another strategy's placement of the instrument is
+    unanswered (`held_by_other`), its stop held back or unanswered, an exit the exit
+    owner retries (`retries`), an exit working or the stop's cancel sent for one, else its
+    stop not confirmed yet or ended."""
     live = [w for w in leg.orders.values() if w.state is not Sent.ENDED]
     if any(w.state is Sent.AMBIGUOUS for w in live):
         return AMBIGUOUS_ORDER
+    if closing_rejected is not None:
+        return closing_rejected
     stop = leg.orders.get(leg.stop) if leg.stop is not None else None
     if held_cancel:
         return HELD_CANCEL
     if leg.unbound_add_units:
         return UNBOUND_ADD
+    if stop is not None and (stop.state is Sent.HELD or stop.modify_held) and held_by_other:
+        return INSTRUMENT_HELD
     if stop is not None and (stop.state in (Sent.HELD, Sent.UNANSWERED) or stop.modify_held):
         return STOP_HELD
     if retries:
@@ -81,6 +105,18 @@ def reason_of(leg: LegOrders, *, held_cancel: bool, retries: bool) -> str:
         # A stop's cancel is sent only for an exit of the position (R4).
         return EXITING
     return STOP_ENDED if stop is None else STOP_UNCONFIRMED
+
+
+def held_by_other(others: Iterable[tuple[str, LegOrders]]) -> tuple[str, str] | None:
+    """The first of `others` (each a strategy's name and its leg, the other members of a
+    leg's group in call order) with a placement sent and unanswered, as (its strategy,
+    the placement's words), or None: while it is unbound nothing is sent for the
+    instrument (16-session-design 6.2)."""
+    for name, leg in others:
+        for watched in leg.orders.values():
+            if watched.state is Sent.UNANSWERED:
+                return name, watched.name()
+    return None
 
 
 class Windows:
@@ -131,13 +167,17 @@ __all__ = [
     "AMBIGUOUS_ORDER",
     "EXITING",
     "EXIT_RETRIES",
+    "CLOSE_REJECTED",
     "HELD_CANCEL",
+    "INSTRUMENT_HELD",
     "REASONS",
+    "REFUSED_FOR_MARGIN",
     "STOP_ENDED",
     "STOP_HELD",
     "STOP_UNCONFIRMED",
     "UNBOUND_ADD",
     "Unprotected",
     "Windows",
+    "held_by_other",
     "reason_of",
 ]

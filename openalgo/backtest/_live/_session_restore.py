@@ -261,7 +261,8 @@ def _place(kernel_order: int, intent: OrderIntent) -> PlaceRequest:
 def _after(session: Any, trader: Trader, leg: LegStart, restart: Restart) -> None:
     """The start's difference acted on, then the leg's stop or its square-off."""
     if leg.kind not in (Kind.AGREE, Kind.UNREADABLE):
-        session.reconcile.differs_at_start(trader, leg.kind, leg.journal_units, leg.books)
+        reconcile = session.reconcile
+        reconcile.differs_at_start(trader, leg.kind, leg.journal_units, leg.books, leg.group)
     units = trader.open_units()
     if units == 0:
         return

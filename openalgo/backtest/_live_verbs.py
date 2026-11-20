@@ -88,8 +88,8 @@ def live(
     Raises ConfigError for an unusable argument (one that chooses the mode among them);
     NotImplementedError, before any call to OpenAlgo, for what live trading does not run
     yet (condition strategies, signal and array strategies, several symbols or a
-    universe, futures series, daily or longer intervals, CNC and NRML, two strategies on
-    one symbol or with one name, bars from broker candles), saying what to do instead;
+    universe, futures series, daily or longer intervals, CNC and NRML, two strategies
+    with one name, bars from broker candles), saying what to do instead;
     PreflightError, listing every check that failed (another session holding the
     account or the server among them); LiveError when OpenAlgo does not report its mode,
     the call is not on the main thread (Ctrl+C reaches only the main thread), the feed

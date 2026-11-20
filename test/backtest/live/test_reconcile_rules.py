@@ -65,6 +65,7 @@ def test_every_kind_that_shows_fewer_units_at_the_broker_guards_the_exits():
         Kind.EXPLAINED_FEWER,
         Kind.UNEXPLAINED,
         Kind.OTHER_SIDE,
+        Kind.EXPLAINED_SHARED,
     } == GUARDED
 
 

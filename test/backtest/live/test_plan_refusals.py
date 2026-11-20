@@ -134,11 +134,11 @@ def test_two_strategies_with_the_same_name_are_refused():
         specify([first, second])
 
 
-def test_two_strategies_on_one_symbol_are_refused():
-    with pytest.raises(
-        NotImplementedError, match="two strategies on NSE:SBIN .* one strategy per symbol"
-    ):
-        specify([EmaTrend, subclass("Other")])
+def test_two_strategies_on_one_symbol_run_as_a_list_and_the_preflight_checks_it_once():
+    spec = specify([EmaTrend, subclass("Other")])
+    assert [each.name for each in spec.strategies] == ["EmaTrend", "Other"]
+    assert [(each.symbol, each.exchange) for each in spec.strategies] == [("SBIN", "NSE")] * 2
+    assert spec.instruments == (("SBIN", "NSE"),)
 
 
 def test_several_strategies_run_as_a_list_each_on_its_own_symbol():

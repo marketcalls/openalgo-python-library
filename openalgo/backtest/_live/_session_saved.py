@@ -61,10 +61,24 @@ class Saved:
     @property
     def units(self) -> int:
         """The saved position of the strategy's instrument in MIS, signed units."""
+        position = self._position()
+        return 0 if position is None else round(float(position["quantity_units"]))
+
+    @property
+    def opened_ns(self) -> int | None:
+        """When the saved position opened, UTC nanoseconds: its oldest open tranche's
+        opening; None when it holds none."""
+        position = self._position()
+        tranches = [] if position is None else position.get("tranches", [])
+        opened = [int(t["opened_at_ns"]) for t in tranches if float(t["open_units"])]
+        return min(opened) if opened else None
+
+    def _position(self) -> dict[str, Any] | None:
+        """The saved position of the strategy's instrument in MIS, None when it has none."""
         for position in self.live_state.get("positions", []):
             if position.get("instrument") == INSTRUMENT and position.get("product") == LIVE_PRODUCT:
-                return round(float(position["quantity_units"]))
-        return 0
+                return position
+        return None
 
     @property
     def instrument(self) -> tuple[str, str] | None:

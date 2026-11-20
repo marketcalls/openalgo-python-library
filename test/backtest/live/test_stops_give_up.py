@@ -20,6 +20,7 @@ from fake_openalgo.fixtures import *  # noqa: F403
 from session_samples import alerts, ist
 from stops_samples import STOP_TRIGGER, StopHold, stop_world
 
+from openalgo.backtest._live._margin_reject import MarginHolds
 from openalgo.backtest._live._session_exits import EXIT_ATTEMPTS, ExitRetries
 from openalgo.backtest._live._types import LOGGER_NAME, OrderIntent, Purpose
 
@@ -70,10 +71,12 @@ class _Leg:
 
 
 class _Session:
-    """The session's part the retry schedule uses: its clock, events and alerts."""
+    """The session's part the retry schedule uses: its clock, events and alerts, and the
+    positions a closing order's rejection holds (none here: no shared instrument)."""
 
     def __init__(self) -> None:
         self.alerts: list[str] = []
+        self.margin = MarginHolds(self)
 
     def now(self) -> int:
         return 0

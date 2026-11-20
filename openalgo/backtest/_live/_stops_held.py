@@ -16,7 +16,10 @@ protect.
   order filled nothing more and the cancel is released as reported; fewer on the same
   side by `d` at most the order's units left, it filled `d` before its cancel, released
   with them at the estimate (`release_cancel`); anything else, or a book that cannot be
-  read, an ERROR alert at once and a read again.
+  read, an ERROR alert at once and a read again. On an instrument several strategies of
+  the session share, the position book shows the net of all of them and cannot tell what
+  one order filled: the trade book alone decides, and an ERROR alert says so once the
+  wait is over (18-multi-strategy 4.5; the group's two-book read is unit M7's).
 
 A word is held's when its filled units are above what the kernel has of the order (a
 fill), else its terminal word waits (a cancel). Each held word is released once: it is
@@ -119,6 +122,8 @@ class HeldWords:
                     self._release(trader, kernel_order, word, word.filled_quantity, now_ns)
             elif self._decidable(trader, word, now_ns):
                 cancels.append(word)
+            elif self._session.groups.shared(trader) and _waited(word, now_ns):
+                self._left_to_trade_book(trader, word.order_id)
         if cancels and (self._read_due_ns is None or now_ns >= self._read_due_ns):
             self._read_due_ns = now_ns + round(POSITION_READ_EVERY_S * _NS)
             self._session.hand_over([ReadPositions()])
@@ -126,10 +131,12 @@ class HeldWords:
     def _decidable(self, trader: Trader, word: HeldFill, now_ns: int) -> bool:
         """Whether the position book may decide a held cancel of `trader` at `now_ns`: past
         its wait, not released yet (the worker's next word of the held list drops it),
-        and the only held word of its leg (with another, a fill the kernel does not have
-        yet, the broker's net units cannot tell what the cancelled order filled)."""
-        waited = now_ns - word.held_since_ns >= round(HELD_CANCEL_DECIDE_AFTER_S * _NS)
-        if not waited or _key(word) in self._released:
+        the only held word of its leg (with another, a fill the kernel does not have yet,
+        the broker's net units cannot tell what the cancelled order filled), and of an
+        instrument no other strategy of the session trades (module docstring)."""
+        if not _waited(word, now_ns) or _key(word) in self._released:
+            return False
+        if self._session.groups.shared(trader):
             return False
         return sum(self._leg_of(w) == trader.name for w in self._held) == 1
 
@@ -212,6 +219,20 @@ class HeldWords:
             "check the order book",
         )
 
+    def _left_to_trade_book(self, trader: Trader, order_id: str) -> None:
+        """A held cancel on a shared instrument past its wait: alerted once, left to the
+        trade book (module docstring)."""
+        if order_id in self._alerted:
+            return
+        self._alerted.add(order_id)
+        self._session.alert(
+            AlertKind.ERROR,
+            f"{trader.symbol}: stop {order_id} of {trader.name} cancelled, its fills not "
+            "confirmed; the position book shows the net of every strategy of the session on "
+            f"{trader.symbol}, so it cannot tell them: the trade book decides, and no exit of "
+            f"{trader.name} is sent until it does. Check the order book",
+        )
+
     def _is_cancel(self, trader: Trader, word: HeldFill) -> bool:
         kernel_order = trader.venue.kernel_order_of(word.order_id)
         order = None if kernel_order is None else order_of(trader, kernel_order)
@@ -227,6 +248,11 @@ class HeldWords:
     def _leg_of(self, word: HeldFill) -> str | None:
         owner = self._owner(word.order_id)
         return None if owner is None else owner[0].name
+
+
+def _waited(word: HeldFill, now_ns: int) -> bool:
+    """Whether a held cancel has waited `HELD_CANCEL_DECIDE_AFTER_S` for the trade book."""
+    return now_ns - word.held_since_ns >= round(HELD_CANCEL_DECIDE_AFTER_S * _NS)
 
 
 def _key(word: HeldFill) -> tuple[str, int]:
