@@ -11,9 +11,11 @@ every `START_BOOKS_RETRY_S` while one cannot be read, for at most `START_BOOKS_W
 (`StartBooks.deferred`), but the resolutions, which the journal holds already.
 
 A strategy whose saved state is of another instrument than the session trades for it
-(the same class name moved to another symbol or contract) refuses the start first, naming
-both and what to do (`_session_saved.refuse_another_instrument`); it is never started
-afresh, since its saved state may hold working orders.
+(the same class name moved to another symbol or contract) refuses the start, naming both
+and what to do (`_session_saved.another_instrument`); its position is not judged against
+the other instrument's books, and it is never started afresh, since its saved state may
+hold working orders. Every refusal of the start is raised at once, so a trader sees each
+strategy to fix before starting again.
 
 **The journal position** of each strategy (`judge_start`, 3.6): its saved position, plus,
 for each order its saved state worked, the units filled beyond its saved ledger by the
@@ -42,7 +44,7 @@ from ..errors import LiveError
 from ._order_book import Resolved
 from ._reconcile_rules import Kind, LegBooks, RestartKind, judge, leg_books, restart_kind
 from ._reconcile_rules import unexplained_by as unexplained_units
-from ._session_saved import Saved, read_saved, refuse_another_instrument
+from ._session_saved import Saved, another_instrument, read_saved
 from ._types import LOGGER_NAME, AlertKind
 from ._worker_queue import ReadBooks
 from .inbox import Books, Envelope, GuardLocked, NotSent, Resolutions, WorkerFailed
@@ -186,15 +188,20 @@ def _readable(books: Books) -> bool:
 
 def judge_start(spec: Any, journal: Any, start: StartBooks, alerts: Any) -> Restart:
     """Each strategy's journal position judged against the broker's (module docstring).
-    Raises LiveError for the positions a restart cannot resume, naming them."""
+    Raises LiveError, once, for the positions a restart cannot resume and the strategies
+    saved on another instrument, naming them."""
     day, books = spec.day, start.books
     own = frozenset(order.order_id for order in journal.bound_orders(day=day))
     legs: dict[str, LegStart] = {}
     refused: list[str] = []
+    moved: list[str] = []
     for each in spec.strategies:
         saved = read_saved(journal.rms_state(each.name, day=day), each.name)
         # Before its position is judged against another instrument's books.
-        refuse_another_instrument(saved, each.name, each.symbol, each.exchange)
+        elsewhere = another_instrument(saved, each.name, each.symbol, each.exchange)
+        if elsewhere is not None:
+            moved.append(elsewhere)
+            continue
         leg = leg_books(
             books.positionbook, books.tradebook, books.orderbook, each.symbol, each.exchange
         )
@@ -219,8 +226,9 @@ def judge_start(spec: Any, journal: Any, start: StartBooks, alerts: Any) -> Rest
                 f"{each.name}, OpenAlgo's books show none and no trade explains it: check "
                 "the account in OpenAlgo"
             )
-    if refused:
-        raise LiveError("the start cannot resume: " + "; ".join(refused))
+    if refused or moved:
+        positions = ["the start cannot resume: " + "; ".join(refused)] if refused else []
+        raise LiveError(". ".join([*positions, *moved]))
     _alert_missing_stops(spec, legs, journal, alerts)
     return Restart(legs, own, books.started_ns)
 

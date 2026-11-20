@@ -28,6 +28,7 @@ from session_hooks import trace_sessions
 from session_invariants import assert_session_invariants
 from session_samples import Hold, Rig, Script, alerts, ist
 from stops_samples import at_price, check_invariants, events, stop_world
+from test_session_figures import IdleINFY
 from test_stops_exits import TwoTrades, journal_stop, rising
 
 from openalgo.backtest._live._types import LOGGER_NAME
@@ -253,6 +254,21 @@ def test_a_restart_of_a_strategy_moved_to_another_instrument_says_what_to_do(
     with pytest.raises(LiveError) as refused:
         restart(two_symbols, MOVED, stop_ns=ist(14, 45), on_stop="keep")
     assert str(refused.value) == MOVED_REFUSAL
+    assert two_symbols.orders() == sent
+
+
+def test_a_restart_names_every_strategy_moved_to_another_instrument_at_once(two_symbols):
+    # StopWhenFlat (SBIN) and IdleINFY (INFY) swap their symbols under the same class
+    # names: the one refusal names both, so the trader fixes them in one go.
+    crash_at(two_symbols, ist(14, 41, 30))
+    run_to_crash(two_symbols, [StopWhenFlat, IdleINFY])
+    sent = list(two_symbols.orders())
+    swapped = [MOVED, type("IdleINFY", (IdleINFY,), {"symbol": "SBIN"})]
+    with pytest.raises(LiveError) as refused:
+        restart(two_symbols, swapped, stop_ns=ist(14, 45), on_stop="keep")
+    message = str(refused.value)
+    assert message.startswith(MOVED_REFUSAL + ". IdleINFY: its saved state is of INFY on NSE")
+    assert "keep its symbol INFY on NSE" in message
     assert two_symbols.orders() == sent
 
 
