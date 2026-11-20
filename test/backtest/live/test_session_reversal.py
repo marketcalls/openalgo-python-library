@@ -1,0 +1,129 @@
+"""A reversal in a live session, on the fake OpenAlgo (2.4.0 item P2-3 a): a short with a
+broker-held stop, then `buy(..., reverse=True, stop=...)`. The reversing order is an entry
+(`venue_roles`: the part beyond the position opens the other side): its stop is cancelled
+first, the buy goes as one order, and the new leg gets its own stop. The session's
+invariants (16-session-design 7.1) follow the leg to its new side.
+
+The market and the script are `session_samples`': the session starts at 14:40:05 IST on
+Monday 2026-11-16 and SBIN trades 10 units every 10 s at 500.00. The strategy decides at
+14:42 (the short) and 14:43 (the reversal); Ctrl+C at 14:44:30 flattens the long.
+"""
+
+from __future__ import annotations
+
+import logging
+
+import pytest
+from fake_openalgo.fixtures import *  # noqa: F403
+from session_samples import ist
+from stops_samples import stop_world
+
+import openalgo.backtest as bt
+from openalgo.backtest._live._types import LOGGER_NAME
+
+#: The short's units, and the stop's distance from each entry, points.
+UNITS = 10
+STOP_POINTS = 3.0
+
+
+class ShortThenReverse(bt.Strategy):
+    """Sells `UNITS` with a stop at its first decision, then reverses to a long of `UNITS`
+    (a buy of twice that, `reverse=True`) with a stop at its second."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "1m"
+
+    def init(self):
+        self.calls = 0
+
+    def on_bar(self, bar):
+        self.calls += 1
+        if self.calls == 1:
+            self.sell(UNITS, stop=bt.points(STOP_POINTS))
+        elif self.calls == 2:
+            self.buy(2 * UNITS, reverse=True, stop=bt.points(STOP_POINTS))
+
+
+@pytest.fixture
+def world(make_fake_openalgo, monkeypatch, tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+    world = stop_world(make_fake_openalgo, monkeypatch, tmp_path)
+    world.stop_at(ist(14, 44, 30))
+    return world
+
+
+def placed(world) -> list[tuple[str, int, str, str]]:
+    """The session's orders at the fake, oldest first: (action, units, type, status)."""
+    return [(o.action, o.quantity, o.price_type, o.status) for o in world.orders()]
+
+
+def test_a_reversal_cancels_the_short_s_stop_buys_once_and_protects_the_long(world):
+    world.run(ShortThenReverse)
+    # The short and its stop 3 points above; the stop cancelled before the reversal's buy
+    # of 20; the long's stop 3 points below; Ctrl+C cancels it and sells the 10 held.
+    assert placed(world) == [
+        ("SELL", UNITS, "MARKET", "complete"),
+        ("BUY", UNITS, "SL-M", "cancelled"),
+        ("BUY", 2 * UNITS, "MARKET", "complete"),
+        ("SELL", UNITS, "SL-M", "cancelled"),
+        ("SELL", UNITS, "MARKET", "complete"),
+    ]
+
+
+def test_the_reversing_order_is_filed_as_an_entry(world):
+    outcome = world.run(ShortThenReverse)
+    orders = outcome.orders
+    reversal = [order for order in orders if order.quantity == 2 * UNITS]
+    assert [(order.action, order.purpose) for order in reversal] == [("BUY", "entry")]
+
+
+def test_the_reversals_buy_is_placed_only_once_the_shorts_stop_has_ended(world):
+    # Never both at the broker: the stop's fill and the buy would leave a long of 20.
+    world.run(ShortThenReverse)
+    stop, reversal = (world.orders()[at].order_id for at in (1, 2))
+    changes = world.trace.changes
+    stop_ended = next(c.seq for c in changes if c.order_id == stop and not c.working)
+    reversal_placed = next(c.seq for c in changes if c.order_id == reversal)
+    assert stop_ended < reversal_placed
+
+
+def test_the_session_ends_flat_at_the_fake(world):
+    world.run(ShortThenReverse)
+    assert world.fake.position("SBIN", "NSE") == 0
+
+
+class LateReverse(bt.Strategy):
+    """Sells `UNITS` with a stop at its first decision, then orders the reversal at the
+    decision of 14:51, after NSE's MIS entry cut-off (14:50 IST)."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "1m"
+
+    def init(self):
+        self.calls = 0
+
+    def on_bar(self, bar):
+        self.calls += 1
+        if self.calls == 1:
+            self.sell(UNITS, stop=bt.points(STOP_POINTS))
+        elif bar.ts_close == ist(14, 51):
+            self.buy(2 * UNITS, reverse=True, stop=bt.points(STOP_POINTS))
+
+
+def test_a_reversal_after_the_entry_cut_off_is_refused_whole_as_in_a_backtest(
+    make_fake_openalgo, monkeypatch, tmp_path
+):
+    # Its opening part obeys the entry window: the kernel refuses an order that opens at
+    # submission (`entry_window`), the whole order, as a backtest refuses it. The short
+    # keeps its stop at the broker until Ctrl+C at 14:52:30 flattens it.
+    world = stop_world(make_fake_openalgo, monkeypatch, tmp_path)
+    world.stop_at(ist(14, 52, 30))
+    outcome = world.run(LateReverse)
+    orders = outcome.outputs["LateReverse"]["orders"]
+    refused = [
+        (side, units, code)
+        for side, units, code in zip(
+            orders["side"], orders["quantity_units"], orders["reject_code"], strict=True
+        )
+        if code is not None
+    ]
+    assert refused == [("BUY", 2.0 * UNITS, "entry_window")]
+    assert [o.quantity for o in world.orders() if o.price_type == "MARKET"] == [UNITS, UNITS]

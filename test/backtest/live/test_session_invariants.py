@@ -1,13 +1,14 @@
 """The session invariants' checks at every change of an order (`session_invariants_changes`,
 16-session-design 7.1, unit 14), on order changes written by hand: each check finds what it
 must and nothing more. The session's client is "s", another client of the account "o";
-SBIN's open side is BUY.
+SBIN's open side is BUY, and a reversal (an entry of the session's against the position,
+twice its units) moves it to SELL.
 """
 
 from __future__ import annotations
 
 import pytest
-from session_invariants_changes import SaleRoom, one_stop_per_leg, within_the_position
+from session_invariants_changes import SaleRoom, one_stop_per_leg, sides_of, within_the_position
 from session_trace import OrderChange
 
 from openalgo.backtest._live._types import Mode
@@ -170,3 +171,65 @@ def test_a_session_sale_deeper_on_the_side_another_client_took_the_account_to_is
 def test_a_waived_check_is_not_asserted():
     exit_ = change(2, "x", "SELL", "MARKET", "open", 10, position=10)
     within_the_position([*ENTERED, exit_], MINE, SIDES, within=False)
+
+
+# A reversal: the entry "r" sells 20 against the long of 10, once its stop is cancelled.
+STOP_CANCELLED = change(2, "s1", "SELL", "SL-M", "cancelled", 10, position=10)
+REVERSAL = change(3, "r", "SELL", "MARKET", "open", 20, position=10)
+REVERSED = change(4, "r", "SELL", "MARKET", "complete", 20, filled=20, fill=20, position=-10)
+#: The session's entries and adds, by broker order ID.
+ENTRIES = frozenset({"e", "r"})
+
+
+def test_a_reversal_holds_as_an_exit_only_the_position_it_closes():
+    assert (
+        within_the_position([*ENTERED, STOP_CANCELLED, REVERSAL], MINE, SIDES, entries=ENTRIES)
+        == {}
+    )
+
+
+def test_a_reversal_placed_while_the_stop_still_works_is_found():
+    early = change(2, "r", "SELL", "MARKET", "open", 20, position=10)
+    with pytest.raises(AssertionError, match="working exits"):
+        within_the_position([*ENTERED, early], MINE, SIDES, entries=ENTRIES)
+
+
+def test_a_reversals_fill_moves_the_leg_to_the_other_side():
+    changes = [*ENTERED, STOP_CANCELLED, REVERSAL, REVERSED]
+    assert within_the_position(changes, MINE, SIDES, entries=ENTRIES) == {}
+
+
+def test_an_exit_filled_through_zero_is_found_beside_a_reversal():
+    # The same sale of 20 as an exit (not an entry of the session's) crosses zero.
+    changes = [*ENTERED, STOP_CANCELLED, REVERSAL, REVERSED]
+    with pytest.raises(AssertionError, match="other side"):
+        within_the_position(changes, MINE, SIDES, within=False)
+
+
+def test_after_a_reversal_the_new_legs_stop_is_its_exit():
+    stop = change(5, "s2", "BUY", "SL-M", "trigger pending", 10, position=-10)
+    changes = [*ENTERED, STOP_CANCELLED, REVERSAL, REVERSED, stop]
+    assert within_the_position(changes, MINE, SIDES, entries=ENTRIES) == {}
+
+
+def test_after_a_reversal_an_exit_beside_the_new_legs_stop_is_found():
+    stop = change(5, "s2", "BUY", "SL-M", "trigger pending", 10, position=-10)
+    exit_ = change(6, "x", "BUY", "MARKET", "open", 10, position=-10)
+    changes = [*ENTERED, STOP_CANCELLED, REVERSAL, REVERSED, stop, exit_]
+    with pytest.raises(AssertionError, match="working exits"):
+        within_the_position(changes, MINE, SIDES, entries=ENTRIES)
+
+
+def test_the_legs_side_at_the_end_is_the_one_its_last_reversal_left():
+    changes = [*ENTERED, STOP_CANCELLED, REVERSAL, REVERSED]
+    assert sides_of(changes, ENTRIES) == {SBIN: "SELL"}
+
+
+def test_an_entry_on_the_other_side_after_the_leg_closed_moves_the_leg_there():
+    # The SBIN case of the probe runs: a leg closed by its stop, then an entry on the other
+    # side from flat (a short after the long), its order working and then filled.
+    stopped = change(2, "s1", "SELL", "SL-M", "complete", 10, filled=10, fill=10, position=0)
+    short = change(3, "e2", "SELL", "MARKET", "open", 10, position=0)
+    shorted = change(4, "e2", "SELL", "MARKET", "complete", 10, filled=10, fill=10, position=-10)
+    changes = [*ENTERED, stopped, short, shorted]
+    assert within_the_position(changes, MINE, SIDES, entries=frozenset({"e", "e2"})) == {}
