@@ -66,25 +66,33 @@ class AnalysisMethods:
         the benchmark figures (alpha, beta, information ratio, the comparison tables and
         charts) against its closes. Its trades carry `bars_held` in bars of the
         strategy's interval. Raises ConfigError when the run has no equity point."""
-        output, symbols = self._output, self._symbols
-        closes, multipliers = self._strategy_closes, self._multipliers()
-        trades = _result_report.trades_table(output, symbols, closes, multipliers)
         equity = _result_report.equity_series(self.equity)
         arguments = self._manifest["arguments"]
-        exchange, capital = arguments["exchange"], arguments["capital"]
-        opening = None
-        if len(equity):
-            first = int(output["equity"]["ts"][0])
-            opening = _result_report.opening_time(
-                first, arguments["base"], exchange, self._calendar
-            )
         return analyse(
             equity,
-            exchanges=exchange,
-            trades=trades,
+            exchanges=arguments["exchange"],
+            trades=self._metrics_trades(),
             benchmark=self._benchmark,
-            opening_wealth=capital,
-            opening_time=opening,
+            opening_wealth=arguments["capital"],
+            opening_time=self._opening_time(),
+        )
+
+    def _metrics_trades(self) -> pd.DataFrame | None:
+        """The run's closed and open trades in the metrics layout (`_result_report`), or
+        None when it has none."""
+        output, symbols = self._output, self._symbols
+        closes, multipliers = self._strategy_closes, self._multipliers()
+        return _result_report.trades_table(output, symbols, closes, multipliers)
+
+    def _opening_time(self) -> int | None:
+        """UTC nanoseconds of the open of the run's first slice, when it opened with its
+        capital; None for a run with no equity point or a result without its calendar."""
+        if not len(self._output["equity"]["ts"]):
+            return None
+        arguments = self._manifest["arguments"]
+        first = int(self._output["equity"]["ts"][0])
+        return _result_report.opening_time(
+            first, arguments["base"], arguments["exchange"], self._calendar
         )
 
     @property

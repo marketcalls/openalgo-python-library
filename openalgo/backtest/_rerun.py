@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ._benchmark import benchmark_partitions
+from ._messages import not_supported
 from .errors import ConfigError
 
 # Arguments that decide which bars a run reads.
@@ -73,4 +74,26 @@ class RunRecord:
         return result
 
 
-__all__ = ["RunRecord"]
+@dataclass(frozen=True)
+class PortfolioMember:
+    """The record of one strategy's `Result` inside a portfolio run (`bt.backtest` given a
+    list): `name` is the strategy's class name. Its run cannot be repeated on its own,
+    since a rerun alone would not face the account it shared with the other strategies,
+    so `rerun` and the robustness checks that rerun it raise NotImplementedError."""
+
+    name: str
+
+    def refuse(self, what: str) -> NotImplementedError:
+        """The NotImplementedError of `what` ("result.rerun") on this strategy's result."""
+        return not_supported(
+            f"{what} of {self.name}, one strategy of a portfolio run",
+            "a run of it alone would not face the account it shared: call bt.backtest "
+            "with the list again, or with the strategy alone for its stand-alone figures",
+        )
+
+    def rerun(self, overrides: dict[str, Any], manifest: dict[str, Any]) -> Any:
+        """Raise NotImplementedError (see the class docstring)."""
+        raise self.refuse("result.rerun()")
+
+
+__all__ = ["PortfolioMember", "RunRecord"]

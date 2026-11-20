@@ -22,10 +22,12 @@ strategy's bars, and sent along.
 `execute` keeps the history its parameters need (the needs `prepare` learnt for them,
 `_warm_up_history`; checked where it meets the run's bars), builds the native engine,
 binds a strategy instance to a `RunContext` whose series hold that history before the
-run's bars, runs `init` once on them and the driver to the end of the grid (the Rust
-signal driver for a condition strategy, `_conditions`), deciding only once the
+run's bars, runs `init` once on them (`begin`) and the driver to the end of the grid (the
+Rust signal driver for a condition strategy, `_conditions`), deciding only once the
 strategy's indicators are ready (`_warm_up`), and returns the `Result` with its
-Assumptions block, warnings and manifest.
+Assumptions block, warnings and manifest (`conclude`, `_pipeline_result`). A portfolio
+run calls `begin` and `conclude` for each strategy, with the fund's driver between them
+(`_portfolio_driver`).
 """
 
 from __future__ import annotations
@@ -39,34 +41,30 @@ from typing import Any
 import pandas as pd
 
 from . import calendar as calendar_module
-from ._base_interval import choose_base, meaning
+from ._base_interval import choose_base
 from ._benchmark import benchmark_request, load_benchmark
-from ._causality_checks import IndicatorChecks, RunChecks
+from ._causality_checks import IndicatorChecks
 from ._conditions import drive_conditions, evaluation_path, has_conditions
 from ._context import RunContext, RunData
 from ._driver import drive
 from ._engine import build_engine, call
 from ._expired_contracts import expired_contracts
 from ._futures import attach, resolve_futures
-from ._futures_margin import margin_assumption, margin_warnings
+from ._futures_margin import margin_warnings
 from ._instruments import resolve_instruments
-from ._intraday_assumptions import one_clock_time
-from ._manifest import build_manifest, strategy_source_hash
+from ._manifest import strategy_source_hash
 from ._margin_check import check_margin
 from ._market import MarketSettings, market_settings
 from ._messages import not_supported
-from ._perturbation import manifest_settings
-from ._rejections import reject_warnings
+from ._pipeline_result import _Finished, _result
 from ._run_corporate_actions import (
     UnadjustedEvent,
     check_crossings,
-    manifest_form,
     run_warnings,
     unadjusted_events,
 )
-from ._run_end import run_end_warnings
 from ._session_dates import session_dates_note
-from ._settings import RunPlan, assumptions, resolve
+from ._settings import RunPlan, resolve
 from ._slab_ticks import resolve_slab_ticks
 from ._warm_up import Readiness, SeriesNeed, readiness
 from ._warm_up_history import RunHistory
@@ -272,57 +270,6 @@ def prepare(
     )
 
 
-def _assumptions(
-    prepared: PreparedRun, calendar: Any, checks: RunChecks, market: MarketSettings
-) -> dict:
-    plan = prepared.plan
-    block = assumptions(plan, calendar) | market.assumptions
-    session = calendar.session(plan.exchange, plan.start)
-    square_off = one_clock_time(block["square_off"])
-    session_open = None
-    if session is not None and square_off is not None:
-        session_open = pd.Timestamp(session[0], tz="UTC").tz_convert("Asia/Kolkata")
-        session_open = session_open.strftime("%H:%M")
-    rule = meaning(plan.base, square_off, session_open)
-    block["base_rule"] = f"base {plan.base} ({prepared.notes['base_rule']}): {rule}"
-    block["instruments"] = prepared.notes["instruments"]
-    if "timestamps" in prepared.notes:
-        block["timestamps"] = prepared.notes["timestamps"]
-    if prepared.futures is not None:
-        block["futures"] = prepared.futures.assumption()
-    futures_margin = margin_assumption(plan.margin, prepared.instruments, plan.start)
-    if futures_margin is not None:
-        block["futures_margin"] = futures_margin
-    block["benchmark"] = None if prepared.benchmark is None else prepared.benchmark.assumption()
-    indicator_checks = checks.assumption()
-    if indicator_checks is not None:
-        block["indicator_checks"] = indicator_checks
-    return block
-
-
-def _arguments(
-    prepared: PreparedRun, args: dict[str, Any], market: MarketSettings
-) -> dict[str, Any]:
-    """Every argument of the run after defaults were resolved, for the manifest (the
-    cost model by its label: it is a native object)."""
-    resolved = manifest_settings(prepared.plan)
-    resolved.update(
-        costs=market.costs_label,
-        slippage_rule=market.slippage_label,
-        source=args["source"],
-        tz=args["tz"],
-        data="given" if args["data"] is not None else None,
-        client="given" if args.get("client") is not None else None,
-        calendar="default" if prepared.calendar is None else "given",
-        benchmark=None if prepared.benchmark is None else prepared.benchmark.record,
-        corporate_actions=manifest_form(args.get("corporate_actions")),
-    )
-    # The present only when `now=` fixed it: a run on the clock reruns to the same manifest.
-    present = resolved.pop("present")
-    resolved["now"] = None if args["now"] is None else present
-    return resolved
-
-
 def _kept_history(
     strategy: type, prepared: PreparedRun, params: Any, checks: IndicatorChecks
 ) -> RunHistory:
@@ -363,79 +310,29 @@ def _bound(
 
 
 @dataclass(frozen=True)
-class _Finished:
-    """A run the driver has finished: the strategy instance and its context, the market
-    settings, the history kept, the readiness, the kernel's output and the timers'
-    warnings."""
+class Begun:
+    """A run bound and initialised, before its driver runs: the strategy instance (its
+    `init` run), the engine, the run context, the market settings, the history kept and
+    the readiness (`state.first_decision`: UTC nanoseconds, None from the first pause)."""
 
     instance: Any
+    engine: Any
     context: RunContext
     market: MarketSettings
     history: RunHistory
     state: Readiness
-    output: dict[str, Any]
-    timer_warnings: list[str]
 
 
-def _result(
-    strategy: type,
-    prepared: PreparedRun,
-    args: dict[str, Any],
-    run: _Finished,
-    record: Any,
-    *,
-    assumptions: Mapping[str, str] | None = None,
-) -> Result:
-    """The `Result` of a finished run, with its Assumptions block, warnings and manifest;
-    `assumptions` replace lines of the block (a live session's, whose fills OpenAlgo
-    priced)."""
-    plan, calendar = prepared.plan, prepared.session_calendar()
-    market, output = run.market, run.output
-    parameters = {name: getattr(run.instance, name) for name in strategy.parameters()}
-    manifest = build_manifest(
-        strategy,
-        parameters,
-        _arguments(prepared, args, market) | {"warm_up": run.state.manifest()},
-        [instrument.to_dict() for instrument in prepared.instruments],
-        prepared.partitions | run.history.partitions(),
-        prepared.reference_tables,
-        market.cost_schedules,
-    )
-    block = _assumptions(prepared, calendar, run.context.run.checks, market)
-    return Result(
-        output,
-        list(plan.symbols),
-        block | {"warm_up": run.state.assumption()} | dict(assumptions or {}),
-        [
-            *run_end_warnings(output["run_end"]),
-            *reject_warnings(output["orders"], [i.kind for i in prepared.instruments]),
-            *run.state.warnings(plan.start),
-            *prepared.warnings,
-            *run.history.warnings,
-            *run.timer_warnings,
-        ],
-        run.context.skipped,
-        manifest.to_dict(),
-        record=record,
-        calendar=calendar,
-        benchmark=None if prepared.benchmark is None else prepared.benchmark.closes,
-        strategy_closes=[store.column("ts_close") for store in run.context.stores.values()],
-    )
-
-
-def execute(
+def begin(
     strategy: type,
     prepared: PreparedRun,
     args: dict[str, Any],
     checks: IndicatorChecks | None = None,
-    record: Any = None,
-    on_path: Callable[[str], Any] | None = None,
-) -> Result:
-    """Run `strategy` on a prepared run with the parameter values of `args["params"]`.
-    `checks` carries indicator checks already done (a sweep); `record` lets the result
-    rerun itself; `on_path`, when given, is told the evaluation path the run took
-    (`_conditions.evaluation_path`). Raises the kernel's and the strategy's errors
-    unchanged."""
+) -> Begun:
+    """The first half of `execute`: keep the history the parameters of `args["params"]`
+    need, build the engine and the run context, run the strategy's `init` and learn when
+    it is ready. Raises what `init` raises, ConfigError, BacktestError and
+    NotImplementedError (a condition strategy on a futures underlying)."""
     if checks is None:
         name = strategy_source_hash(strategy) or strategy.__qualname__
         checks = IndicatorChecks(name, measured=prepared.measured)
@@ -452,18 +349,54 @@ def execute(
         )
     state = readiness(context.run.checks.outcomes, context, history)
     context.waiting = state.waiting()
-    if has_conditions(instance):
-        drive_conditions(instance, engine, state.first_decision)
-    else:
-        drive(instance, engine, context, state.first_decision)
-    if on_path is not None:
-        on_path(evaluation_path(instance))
+    return Begun(instance, engine, context, market, history, state)
+
+
+def conclude(
+    strategy: type,
+    prepared: PreparedRun,
+    args: dict[str, Any],
+    begun: Begun,
+    record: Any = None,
+    *,
+    assumptions: Mapping[str, str] | None = None,
+) -> Result:
+    """The second half of `execute`, once the driver has run to the end of the grid:
+    finish the engine and build the `Result`; `assumptions` add lines to (or replace lines
+    of) its Assumptions block. Raises the kernel's errors and CorporateActionError for a
+    position held across an unadjusted split or bonus (`_run_corporate_actions`)."""
+    context = begun.context
     timer_warnings = context.timers.warnings()
-    output = call(engine.finish)
+    output = call(begun.engine.finish)
     check_crossings(output, prepared.unadjusted)
     context.close(output["orders"])
-    finished = _Finished(instance, context, market, history, state, output, timer_warnings)
-    return _result(strategy, prepared, args, finished, record)
+    kept = (begun.market, begun.history, begun.state)
+    finished = _Finished(begun.instance, context, *kept, output, timer_warnings)
+    return _result(strategy, prepared, args, finished, record, assumptions=assumptions)
 
 
-__all__ = ["PreparedRun", "execute", "prepare"]
+def execute(
+    strategy: type,
+    prepared: PreparedRun,
+    args: dict[str, Any],
+    checks: IndicatorChecks | None = None,
+    record: Any = None,
+    on_path: Callable[[str], Any] | None = None,
+) -> Result:
+    """Run `strategy` on a prepared run with the parameter values of `args["params"]`
+    (`begin`, the driver, `conclude`). `checks` carries indicator checks already done (a
+    sweep); `record` lets the result rerun itself; `on_path`, when given, is told the
+    evaluation path the run took (`_conditions.evaluation_path`). Raises the kernel's and
+    the strategy's errors unchanged."""
+    begun = begin(strategy, prepared, args, checks)
+    instance, ready_at = begun.instance, begun.state.first_decision
+    if has_conditions(instance):
+        drive_conditions(instance, begun.engine, ready_at)
+    else:
+        drive(instance, begun.engine, begun.context, ready_at)
+    if on_path is not None:
+        on_path(evaluation_path(instance))
+    return conclude(strategy, prepared, args, begun, record)
+
+
+__all__ = ["Begun", "PreparedRun", "begin", "conclude", "execute", "prepare"]

@@ -33,6 +33,7 @@ from ._scale_in import describe as describe_scale_limits
 from ._setting_checks import class_leverage, refuse_unusable, unused_settings
 from ._size_controls import describe as describe_size_controls
 from ._sizing_assumption import sizing_assumption
+from ._strategy_args import refuse_account_settings
 from .data._sessions import resolve_now
 from .errors import ConfigError
 
@@ -82,7 +83,9 @@ def _base(base: str | None, interval: str) -> str:
 
 def resolve(strategy: type, args: dict[str, Any]) -> RunPlan:
     """The plan of a run of `strategy` with the run arguments `args` (the keyword
-    arguments of `bt.backtest`). Raises ConfigError for unusable values and
+    arguments of `bt.backtest`; a portfolio run gives each strategy its own, with the
+    account's settings at their defaults). Raises ConfigError for unusable values, account
+    settings among them (`_strategy_args.refuse_account_settings`), and
     NotImplementedError for settings of later work."""
     symbols = strategy.traded_symbols()
     if not strategy.exchange or not strategy.interval:
@@ -93,6 +96,7 @@ def resolve(strategy: type, args: dict[str, Any]) -> RunPlan:
         raise ConfigError("capital must be a positive number of rupees")
     refuse_combined_rules(strategy)
     refuse_unusable(strategy, args)
+    refuse_account_settings(args)
     warnings: list[str] = []
     if args["costs"] is None:
         warnings.append("costs=None: no charges are modelled; results overstate P&L")

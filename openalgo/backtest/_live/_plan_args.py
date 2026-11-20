@@ -5,7 +5,8 @@ and 3.1 step 1; decisions 3 and 9 of its section 10.0; unit 7). Part of `plan`.
   one session. `capital` and `max_daily_loss` are one value for every strategy or a dict
   by strategy class name; with several strategies `params` is a dict of each one's
   parameter values by class name (one strategy takes its own values, as in
-  `bt.backtest`).
+  `bt.backtest`). The rules of a dict by name are `_strategy_args`', the ones
+  `bt.backtest` follows for a list of strategies.
 - No argument chooses or confirms the mode: sandbox or live is the analyzer switch inside
   OpenAlgo, which the session adopts (D21). An argument that looks like a mode choice is
   refused, saying so.
@@ -34,6 +35,14 @@ from types import MappingProxyType
 from typing import Any
 
 from .._messages import not_supported
+from .._strategy_args import (
+    MANDATORY,
+    by_name,
+    class_names,
+    params_by_name,
+    repeated,
+    strategy_classes,
+)
 from ..errors import ConfigError
 from ..strategy import Strategy
 from ._preflight_plan import positive_amount
@@ -47,6 +56,8 @@ ON_STOP = ("flatten", "keep")
 #: section 5); bars from broker candles come later.
 BARS_FROM_TICKS = "websocket"
 BARS_FROM_CANDLES = "candles"
+#: The call a dict by strategy name is checked against, as its messages name it.
+SESSION = "this session"
 #: Names a caller might use to choose or confirm the mode in code, which `bt.live` never
 #: takes: the analyzer switch inside OpenAlgo is the only control (D21).
 MODE_ARGUMENTS = frozenset(
@@ -158,19 +169,6 @@ class LiveArguments:
         return self.account if self.account is not None else broker
 
 
-def _strategies(strategy: Any) -> tuple[type[Strategy], ...]:
-    found = tuple(strategy) if isinstance(strategy, list | tuple) else (strategy,)
-    if not found:
-        raise ConfigError("bt.live takes a bt.Strategy subclass, or a list of them")
-    for each in found:
-        if not (isinstance(each, type) and issubclass(each, Strategy)):
-            raise ConfigError(
-                f"bt.live takes bt.Strategy subclasses, not {each!r}: pass the class itself, "
-                "or a list of classes"
-            )
-    return found
-
-
 def _refuse_not_live(not_live: Mapping[str, Any]) -> None:
     """Raise for every argument `bt.live` does not take (module docstring): ConfigError,
     or NotImplementedError for `bars="candles"`."""
@@ -198,42 +196,14 @@ def _refuse_not_live(not_live: Mapping[str, Any]) -> None:
 
 
 def _names(strategies: Sequence[type[Strategy]]) -> tuple[str, ...]:
-    names = tuple(strategy.__name__ for strategy in strategies)
-    repeated = sorted({name for name in names if names.count(name) > 1})
-    if repeated:
+    names = class_names(strategies)
+    twice = repeated(names)
+    if twice:
         raise not_supported(
-            f"two strategies with the same name ({', '.join(repeated)}) in one session",
+            f"two strategies with the same name ({', '.join(twice)}) in one session",
             "give each strategy class its own name: OpenAlgo shows it on every order",
         )
     return names
-
-
-def _by_name(value: Any, names: tuple[str, ...], what: str, *, required: bool) -> dict:
-    """`value` for each strategy: a dict keyed by strategy class name, or one value for
-    every strategy. Raises ConfigError for a key that names no strategy of the session,
-    and, when `required`, for a strategy the dict leaves out."""
-    if not isinstance(value, Mapping):
-        return dict.fromkeys(names, value)
-    unknown = [key for key in value if key not in names]
-    if unknown:
-        raise ConfigError(
-            f"{what} names {unknown}, which this session does not run: key it by strategy "
-            f"class name, one of {list(names)}"
-        )
-    missing = [name for name in names if name not in value]
-    if required and missing:
-        raise ConfigError(
-            f"{what} is mandatory for every strategy, and the dict gives none for {missing}"
-        )
-    return {name: value.get(name) for name in names}
-
-
-def _params(params: Any, names: tuple[str, ...]) -> dict[str, Mapping[str, Any] | None]:
-    if params is not None and not isinstance(params, Mapping):
-        raise ConfigError(f"params takes a dict of parameter values, not {params!r}")
-    if len(names) == 1:
-        return {names[0]: params}
-    return _by_name(params or {}, names, "params", required=False)
 
 
 def _session_options(
@@ -290,7 +260,7 @@ def live_arguments(
     `account_max_daily_loss`, `alerts_to`, `account`, `live_dir` or `on_stop`;
     NotImplementedError for `bars="candles"` and for two strategies with the same name."""
     _refuse_not_live(not_live)
-    strategies = _strategies(strategy)
+    strategies = strategy_classes(strategy, "bt.live")
     names = _names(strategies)
     if capital is None:
         raise ConfigError(
@@ -314,9 +284,9 @@ def live_arguments(
     return LiveArguments(
         strategies=strategies,
         names=names,
-        capital=_by_name(capital, names, "capital", required=True),
-        max_daily_loss=_by_name(max_daily_loss, names, "max_daily_loss", required=False),
-        params=_params(params, names),
+        capital=by_name(capital, names, "capital", owner=SESSION, required=MANDATORY),
+        max_daily_loss=by_name(max_daily_loss, names, "max_daily_loss", owner=SESSION),
+        params=params_by_name(params, names, owner=SESSION),
         settings={name: value for name, value in shared.items() if value is not BACKTEST_DEFAULT},
         account_max_daily_loss=positive_amount(account_max_daily_loss),
         alerts_to=alerts_to,

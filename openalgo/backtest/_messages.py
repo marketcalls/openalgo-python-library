@@ -8,11 +8,12 @@ kernel's own not-built errors do (`rust/oa_bt/src/model.rs`, `write_not_supporte
 
 from __future__ import annotations
 
-# (what is not supported, what to do instead) of a run of several strategies, which both
-# `bt.backtest` and the several-strategy views of a `Result` refuse.
+# (what is not supported, what to do instead) of the several-strategy views of a
+# single strategy's `Result`, which a list of strategies gives in its `PortfolioResult`.
 SEVERAL_STRATEGIES = (
-    "a run of several strategies",
-    "run each strategy with its own bt.backtest call",
+    "the several-strategy views of a single strategy's Result",
+    "pass a list of strategies to bt.backtest: its PortfolioResult has strategy(name), "
+    "the account's tables and the correlation of the strategies",
 )
 
 
@@ -35,4 +36,13 @@ def not_supported(feature: str, instead: str) -> NotImplementedError:
     return NotImplementedError(unsupported(feature, instead))
 
 
-__all__ = ["SEVERAL_STRATEGIES", "counted", "not_supported", "unsupported"]
+def one_strategy_only(verb: str) -> NotImplementedError:
+    """The NotImplementedError of `verb` ("bt.optimize"), which takes one strategy in this
+    version, given a list of them."""
+    return not_supported(
+        f"{verb} with a list of strategies",
+        f"call {verb} for each strategy of the list, one at a time",
+    )
+
+
+__all__ = ["SEVERAL_STRATEGIES", "counted", "not_supported", "one_strategy_only", "unsupported"]
