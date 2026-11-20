@@ -1,12 +1,13 @@
 //! A small JSON reader for test fixtures: the crate has no dependencies, and the risk
-//! vectors are JSON. It reads objects, arrays, strings with the common escapes, numbers,
-//! booleans and null; anything else is an error naming the byte offset.
+//! vectors and the account rule's cases are JSON. It reads objects, arrays, strings with the
+//! common escapes, numbers, booleans and null; anything else is an error naming the byte
+//! offset.
 
 use std::collections::BTreeMap;
 
 /// A JSON value. Objects keep their keys sorted, which no fixture depends on.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) enum Json {
+pub(crate) enum Json {
     Null,
     Bool(bool),
     Number(f64),
@@ -17,35 +18,35 @@ pub(super) enum Json {
 
 impl Json {
     /// The member `key` of an object; `Null` when absent or not an object.
-    pub(super) fn get(&self, key: &str) -> &Json {
+    pub(crate) fn get(&self, key: &str) -> &Json {
         match self {
             Json::Object(members) => members.get(key).unwrap_or(&Json::Null),
             _ => &Json::Null,
         }
     }
 
-    pub(super) fn number(&self) -> Option<f64> {
+    pub(crate) fn number(&self) -> Option<f64> {
         match self {
             Json::Number(value) => Some(*value),
             _ => None,
         }
     }
 
-    pub(super) fn text(&self) -> Option<&str> {
+    pub(crate) fn text(&self) -> Option<&str> {
         match self {
             Json::Text(value) => Some(value),
             _ => None,
         }
     }
 
-    pub(super) fn boolean(&self) -> Option<bool> {
+    pub(crate) fn boolean(&self) -> Option<bool> {
         match self {
             Json::Bool(value) => Some(*value),
             _ => None,
         }
     }
 
-    pub(super) fn list(&self) -> &[Json] {
+    pub(crate) fn list(&self) -> &[Json] {
         match self {
             Json::List(items) => items,
             _ => &[],
@@ -54,7 +55,7 @@ impl Json {
 }
 
 /// Parse a whole document.
-pub(super) fn parse(text: &str) -> Result<Json, String> {
+pub(crate) fn parse(text: &str) -> Result<Json, String> {
     let mut reader = Reader {
         bytes: text.as_bytes(),
         at: 0,

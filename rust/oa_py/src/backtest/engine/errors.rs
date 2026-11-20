@@ -38,6 +38,12 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 /// A kernel error as the Python exception that says what kind it is.
 pub(super) fn engine_error(error: KernelError) -> PyErr {
     let message = error.to_string();
+    error_of_kind(&error, message)
+}
+
+/// The Python exception of `error`'s kind (`engine_error`) with `message`: a portfolio
+/// run's fund names the strategy whose engine refused (`super::super::fund`).
+pub(in crate::backtest) fn error_of_kind(error: &KernelError, message: String) -> PyErr {
     if error.not_built_feature().is_some() {
         PyNotImplementedError::new_err(message)
     } else if error.is_input_error() {

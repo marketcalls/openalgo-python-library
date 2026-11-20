@@ -40,7 +40,7 @@ use crate::rms::{ExitReason, RiskEvent, RiskEventName, RiskScope};
 
 use super::clock::SliceInfo;
 use super::error::KernelError;
-use super::event::{Event, Step};
+use super::event::{Event, EventStamp, Step};
 use super::kernel::{Engine, Phase};
 
 /// The account's daily loss limit breached at a round of a portfolio run's fund, as the
@@ -127,7 +127,20 @@ impl Engine {
         if self.account.waiting.is_empty() {
             return Ok(());
         }
-        self.cancel_working_entries(Self::stamp(slice, Step::Levels))
+        self.cancel_entries_for_account(Self::stamp(slice, Step::Levels))
+    }
+
+    /// Cancel every working order that would open or add, in id order, as the strategy's
+    /// own daily loss limit cancels them (`aggregate`), and keep each for the fund's record
+    /// of the orders the account ended (`fund_view`).
+    ///
+    /// Errors: those of the cancels.
+    fn cancel_entries_for_account(&mut self, stamp: EventStamp) -> Result<(), KernelError> {
+        for id in self.working_entries() {
+            self.withdraw_order(stamp, id)?;
+            self.account.cancels.push((stamp, id));
+        }
+        Ok(())
     }
 
     /// Step 6 of `slice`, after the strategy's own aggregate rules: the breaches found
@@ -173,7 +186,7 @@ impl Engine {
             instrument: None,
             event,
         });
-        self.cancel_working_entries(stamp)?;
+        self.cancel_entries_for_account(stamp)?;
         let reason = ExitReason::AccountLossLimit;
         for key in self.positions_to_exit() {
             // Step 1 queues the exits for this slice's own open; step 6 follows its rule.

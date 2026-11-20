@@ -21,6 +21,24 @@ Rows:
   round trip cost 0.4 ms at this size, growing with the run's length.)
 - bars-N: that run at a fixed number of round trips with more and more bars; the time
   per bar of the largest run may be at most 1.5 times that of the smallest.
+- portfolio-3x1M: three array strategies, each the conditions-1M strategy on its own 1M
+  bars, in a shared pool (18-multi-strategy 2.7); then fund round: the fund's own cost
+  per round of the three engines (the phase calls and the ledger): the best run in the
+  fund less the best run of the three engines alone, per round. Both runs build their
+  engines and the strategies' arrays before the clock, so only the runs differ. (The
+  best of each, as in every row: the fund's run is the longer, so a disturbance costs it
+  more, and a difference of single runs measures the disturbance as much as the fund.)
+- portfolio-callbacks: three event strategies whose `on_bar` does nothing, each on the
+  callbacks row's bars, in a shared pool: `on_bar` calls per second in total. At each
+  pause the loop does what the event driver does (`_driver.drive`): it reveals the
+  strategy's bars to its run context, delivers its events and calls its `on_bar`.
+
+These two rows are interim. Until `bt.backtest` takes a list of strategies (2.4.0 unit
+M3), they build each strategy's native engine (and an event strategy's instance and run
+context) as `bt.backtest` builds them and time only the run through the binding: the
+kernel, the strategies' drivers and the fund, without the data checks, the result tables
+and the metrics of a `bt.backtest` call, which the targets they derive from (callbacks,
+conditions-1M) include. Once it does, both time that call.
 
 `--check` fails when a target is missed. `--slack` divides the rate target and
 multiplies the time targets by its value, for a machine slower than the one the targets
@@ -38,12 +56,14 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import inspect
 import sys
 import time
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -55,6 +75,11 @@ if list((ROOT / "openalgo").glob("_oaindicators*")):
     sys.path.insert(0, str(ROOT))
 
 import openalgo.backtest as bt  # noqa: E402
+from openalgo.backtest._calendar_convert import native_attr  # noqa: E402
+from openalgo.backtest._causality_checks import IndicatorChecks  # noqa: E402
+from openalgo.backtest._driver import deliver  # noqa: E402
+from openalgo.backtest._engine import build_engine  # noqa: E402
+from openalgo.backtest._pipeline import _bound, _kept_history, prepare  # noqa: E402
 
 # ----- targets ---------------------------------------------------------------------
 # NFR-PERF-04 (02-prd section 8): an event strategy with a trivial on_bar makes at least
@@ -74,6 +99,14 @@ ROUND_TRIP_MICROSECONDS_TARGET = 50.0
 # Linearity in bars: the time per bar of the largest bars-N run over that of the
 # smallest, at most this.
 BAR_GROWTH_LIMIT = 1.5
+# 18-multi-strategy 2.7: three condition strategies over 1M bars each in a shared pool
+# take at most three times the conditions-1M target plus 10 percent (6.6 seconds), and
+# three empty event strategies make at least the callbacks target in total.
+PORTFOLIO_STRATEGIES = 3
+PORTFOLIO_3X1M_SECONDS_TARGET = PORTFOLIO_STRATEGIES * CONDITIONS_1M_SECONDS_TARGET * 1.1
+# 18-multi-strategy 2.7: the fund's own cost per round of three engines, at most this
+# many microseconds.
+FUND_ROUND_MICROSECONDS_TARGET = 1.0
 
 # ----- the synthetic market --------------------------------------------------------
 SEED = 20_261_112
@@ -289,6 +322,148 @@ def bar_rows(repeat: int) -> list[Row]:
     return [*rows, check]
 
 
+def prepared_run(strategy: type[bt.Strategy], bars: pd.DataFrame) -> Any:
+    """The first half of a `bt.backtest` call of `strategy` on `bars` (`_pipeline.prepare`)."""
+    call = inspect.signature(bt.backtest).bind(strategy, None, **run_arguments(bars))
+    call.apply_defaults()
+    return prepare(strategy, None, dict(call.arguments))
+
+
+def native_engine(strategy: type[bt.Strategy], bars: pd.DataFrame) -> Any:
+    """The native engine `bt.backtest` builds for `strategy` on `bars`, before it runs."""
+    prepared = prepared_run(strategy, bars)
+    market = prepared.market_settings()
+    config = prepared.plan.native_config(deliver_events=False) | market.config
+    calendar = prepared.session_calendar()._cal
+    return build_engine(calendar, config, prepared.instruments, prepared.frames)
+
+
+def condition_spec(engine: Any, entries: np.ndarray, exits: np.ndarray) -> dict:
+    """The Rust driver's spec of the array strategy of `condition_strategy` on `engine`,
+    whose strategy bars are its 1-minute base bars."""
+    order = {
+        "instrument": 0,
+        "side": "BUY",
+        "quantity": {"kind": "units", "value": float(QUANTITY_UNITS)},
+        "order_type": "MARKET",
+        "validity": "DAY",
+        "product": "MIS",
+        "reduce_only": False,
+        "reverse": False,
+    }
+    opens = engine.strategy_bars(0)["ts_open"]
+    return {"instrument": 0, "product": "MIS", "bar_opens": opens, "entry": entries} | {
+        "exit": exits, "short": None, "cover": None,
+        "entry_order": order, "short_order": None, "pyramiding": 0,
+    }  # fmt: skip
+
+
+def event_strategy(
+    strategy: type[bt.Strategy], bars: pd.DataFrame
+) -> tuple[Any, Callable[[tuple], int]]:
+    """The native engine `bt.backtest` builds for the event strategy `strategy` (one
+    symbol, no indicators) on `bars`, with an instance bound to its run context and its
+    `init` run; and the decision of one of the engine's pauses as the event driver makes
+    it (`_driver.drive`): reveal the strategy bars, deliver the events, then fire the
+    timers, call `on_stop` at the end or `on_bar`. The decision returns the `on_bar`
+    calls it made, 0 or 1."""
+    prepared = prepared_run(strategy, bars)
+    checks = IndicatorChecks(strategy.__qualname__, measured=prepared.measured)
+    history = _kept_history(strategy, prepared, None, checks)
+    market = prepared.market_settings()
+    engine, context = _bound(strategy, prepared, market, checks.for_run(), history)
+    instance = strategy()
+    instance._ctx = context
+    instance.init()
+
+    def decide(pause: tuple) -> int:
+        kind, decided_at, rows, events, timers = pause
+        revealed = context.reveal(decided_at, rows)
+        if events:
+            deliver(instance, context, events)
+        if kind == "timers":
+            context.timers.fire(timers)
+        elif kind == "finished":
+            instance.on_stop()
+        elif revealed:
+            instance.on_bar(next(iter(revealed.values())))
+            return 1
+        return 0
+
+    return engine, decide
+
+
+def in_fund(engines: list, drivers: list[dict | Callable[[tuple], int]]) -> tuple[int, int]:
+    """Run `engines` in a shared fund to the end, each strategy decided by its driver: a
+    condition spec, decided in Rust, or a function that decides a pause in Python and
+    returns the `on_bar` calls it made (`event_strategy`); (`on_bar` calls, rounds)."""
+    names = [f"S{index}" for index in range(len(engines))]
+    account = {"pool": "shared", "account_capital": None, "account_max_daily_loss": None}
+    fund = native_attr("Fund")(engines, names, account)
+    for index, driver in enumerate(drivers):
+        if isinstance(driver, dict):
+            fund.add_signals(index, driver)
+    callbacks = 0
+    while (step := fund.advance()) is not None:
+        callbacks += drivers[step[0]](step[1])
+    for engine in engines:
+        engine.finish()
+    return callbacks, len(fund.finish()["account"]["ts"])
+
+
+def portfolio_3x1m_rows(repeat: int) -> list[Row]:
+    """portfolio-3x1M (the best of the runs in the fund), then the fund's own cost per
+    round (module docstring)."""
+    entries, exits = signal_arrays(MILLION, CONDITIONS_1M_TRADES)
+    strategy = condition_strategy(entries, exits)
+    markets = [synthetic_bars(MILLION, SEED + index) for index in range(PORTFOLIO_STRATEGIES)]
+
+    def built() -> tuple[list, list[dict]]:
+        """The three engines and their strategies' specs, built before either run's clock."""
+        engines = [native_engine(strategy, bars) for bars in markets]
+        return engines, [condition_spec(engine, entries, exits) for engine in engines]
+
+    def alone() -> float:
+        engines, specs = built()
+        start = time.perf_counter()
+        for engine, spec in zip(engines, specs, strict=True):
+            engine.run_signals(spec)
+            engine.finish()
+        return time.perf_counter() - start
+
+    def together() -> tuple[float, int]:
+        engines, specs = built()
+        start = time.perf_counter()
+        _, rounds = in_fund(engines, specs)
+        return time.perf_counter() - start, rounds
+
+    solo = min(alone() for _ in range(repeat))
+    seconds, rounds = min(together() for _ in range(repeat))
+    cost = (seconds - solo) / rounds * 1e6
+    bars = PORTFOLIO_STRATEGIES * MILLION
+    return [
+        Row("portfolio-3x1M", bars, 0, seconds, seconds, "s", PORTFOLIO_3X1M_SECONDS_TARGET),
+        Row("fund round", bars, 0, seconds, cost, "us", FUND_ROUND_MICROSECONDS_TARGET),
+    ]
+
+
+def portfolio_callbacks_row(bars: pd.DataFrame, repeat: int) -> Row:
+    """portfolio-callbacks (module docstring)."""
+
+    def run() -> tuple[float, int]:
+        strategies = [event_strategy(Trivial, bars) for _ in range(PORTFOLIO_STRATEGIES)]
+        engines = [engine for engine, _ in strategies]
+        start = time.perf_counter()
+        callbacks, _ = in_fund(engines, [decide for _, decide in strategies])
+        return time.perf_counter() - start, callbacks
+
+    seconds, callbacks = min(run() for _ in range(repeat))
+    return Row(
+        "portfolio-callbacks", PORTFOLIO_STRATEGIES * len(bars), 0, seconds, callbacks / seconds,
+        "callbacks/s", CALLBACKS_PER_SECOND_TARGET, higher_is_better=True,
+    )  # fmt: skip
+
+
 def number(value: float | None, unit: str) -> str:
     """A value and its unit for the table: thousands separated, else 3 significant digits."""
     if value is None:
@@ -297,13 +472,13 @@ def number(value: float | None, unit: str) -> str:
 
 
 def print_table(rows: list[Row], slack: float) -> None:
-    print(f"{'row':<15}{'bars':>10}{'trades':>8}{'seconds':>9}  {'value':>20}  target")
+    print(f"{'row':<20}{'bars':>10}{'trades':>8}{'seconds':>9}  {'value':>20}  target")
     for row in rows:
         value = number(row.value, row.unit)
         target = number(row.target, row.unit)
         verdict = "" if row.target is None else ("met" if row.meets(slack) else "MISSED")
         print(
-            f"{row.name:<15}{row.bars:>10,}{row.trades:>8,}{row.seconds:>9.3f}  "
+            f"{row.name:<20}{row.bars:>10,}{row.trades:>8,}{row.seconds:>9.3f}  "
             f"{value:>20}  {target} {verdict}".rstrip()
         )
 
@@ -325,7 +500,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", help="exit 1 when a target is missed")
     parser.add_argument("--slack", type=float, default=1.0, help="relax the targets by this")
     parser.add_argument("--repeat", type=int, default=3, help="runs per row; the best counts")
-    groups = ("callbacks", "conditions", "trades", "bars")
+    groups = ("callbacks", "conditions", "trades", "bars", "portfolio")
     parser.add_argument("--rows", default=",".join(groups), help="row groups to run")
     args = parser.parse_args(argv)
     chosen = set(args.rows.split(","))
@@ -348,6 +523,9 @@ def main(argv: list[str] | None = None) -> int:
         rows += trade_rows(run_bars, args.repeat)
     if "bars" in chosen:
         rows += bar_rows(args.repeat)
+    if "portfolio" in chosen:
+        rows += portfolio_3x1m_rows(args.repeat)
+        rows.append(portfolio_callbacks_row(run_bars, args.repeat))
     print_table(rows, args.slack)
     print_overhead(rows)
     missed = [row.name for row in rows if not row.meets(args.slack)]

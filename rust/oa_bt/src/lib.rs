@@ -1,7 +1,8 @@
 //! oa_bt: the OpenAlgo backtest and execution kernel.
 //!
 //! One crate, organised as modules: model, market, data, metrics, and the kernel
-//! (engine, exec, portfolio, rms, sizing; see `engine` for the architecture). It has no
+//! (engine, exec, portfolio, rms, sizing; see `engine` for the architecture), with the
+//! fund that advances several engines over one account (`fund`). It has no
 //! dependencies and knows nothing about Python; `oa_py` binds it into
 //! `openalgo._oaindicators.backtest`.
 //!
@@ -17,6 +18,8 @@ pub mod data;
 pub mod engine;
 #[cfg(all(feature = "costs", feature = "time"))]
 pub mod exec;
+#[cfg(all(feature = "costs", feature = "time"))]
+pub mod fund;
 pub mod market;
 #[cfg(feature = "metrics")]
 pub mod metrics;
@@ -26,6 +29,9 @@ pub mod portfolio;
 #[cfg(all(feature = "costs", feature = "time"))]
 pub mod rms;
 pub mod sizing;
+// Read by the tests of `rms` and `fund`, which need both features.
+#[cfg(all(test, feature = "costs", feature = "time"))]
+pub(crate) mod test_json;
 
 /// Version of the kernel, reported in run manifests.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -32,6 +32,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ConfigError` naming it and its block. The built-in tearsheet stays the default and is the
   same byte for byte: no layout, `layout=None` and `Layout(base=mode)` give today's page,
   pinned by twelve golden pages in the tests.
+- The fund: several strategies stepped together on one account in a backtest (2.4.0, kernel
+  unit M2; `bt.backtest` takes a list of strategies from a later unit, and nothing changes for a
+  single strategy). Each strategy keeps its own engine, instrument and bar interval, and the fund
+  advances them in order on one merged time line, across exchanges and intervals (an NSE minute
+  strategy beside an MCX one or a daily one). With a shared pool, an opening order also needs its
+  margin within the account's free cash, and a sizer sees at most the account's free cash; with
+  separate pools each strategy keeps its own capital and the account is only recorded. The
+  account's daily loss limit counts each strategy's loss of the round's session day only, and
+  fires once a day: every strategy's entries are locked, its working entries cancelled and its
+  positions exited (exit reason `account_loss_limit`). The account's figures each round (equity,
+  free cash, margin, daily loss), its breaches and the orders it refused or cancelled are kept for
+  the portfolio result. A strategy in a fund gives exactly the result it gives alone whenever the
+  account does not bind. Speed rows `portfolio-3x1M`, `fund round` and `portfolio-callbacks` in
+  `benchmark/backtest_speed.py`.
 - Live engine groundwork for two strategies on one symbol (2.4.0, kernel unit K5; the session
   uses it from a later unit). On an instrument several strategies of a session trade, an
   entry, add or reversal on the other side of the side the others hold or are entering is
