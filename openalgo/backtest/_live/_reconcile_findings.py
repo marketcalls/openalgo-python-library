@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .._layout import NANOS_PER_SECOND
+from ._group_rules import and_join
 from ._reconcile_act import Corrections, Finding
 from ._reconcile_rules import Kind, LegBooks
 from ._session_trader import Trader
@@ -266,11 +267,14 @@ class Findings:
         since = self._lag_since.setdefault(trader.name, now_ns)
         if now_ns - since > self._lag_after_ns and trader.name not in self._lag_alerted:
             self._lag_alerted.add(trader.name)
+            engine = f"the engine's {round(trader.open_units())}"
+            group = self._corrections.figures.get(trader.name)
+            if group is not None:
+                engine = f"the {group.units} {and_join(group.members)} hold together"
             self._session.alert(
                 AlertKind.ERROR,
                 f"{trader.name}: OpenAlgo's books have shown {books.units} units of "
-                f"{trader.symbol} {trader.exchange} against the engine's "
-                f"{round(trader.open_units())} for over "
+                f"{trader.symbol} {trader.exchange} against {engine} for over "
                 f"{self._lag_after_ns / NANOS_PER_SECOND:g} s with no trade to explain it: "
                 "check the account in OpenAlgo",
             )

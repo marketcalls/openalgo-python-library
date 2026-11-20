@@ -33,7 +33,9 @@ Over each run's event stream and the fake's log (`session_invariants_stream`):
 Over each run, of instrument groups (`session_invariants_groups`; 18-multi-strategy 5.1):
 
 10. **I4, the sum rule**, at every change while a run is open.
-11. **I5, isolation**: a kernel takes only its own orders' words.
+11. **I5, isolation**: a kernel takes only its own orders' words, an order is bound to
+    one member only and to the one the fake records it for, and the session makes no
+    member act while another's order word is applied.
 12. **I6, one side**: no two members of a group on opposite sides at any change.
 
 A sale by hand is the one thing a session learns of only by its comparisons, so what one
@@ -152,7 +154,7 @@ def _check(session: SessionTrace, fake: FakeOpenAlgo) -> None:
         if PRICED not in waived:
             priced_fills(run, fake)
         if ISOLATION not in waived:
-            isolation(run)
+            isolation(run, changes, mine)
 
 
 __all__ = ["InvariantBroken", "assert_session_invariants"]

@@ -124,10 +124,18 @@ All 93 rows are covered.
 Two strategies of one session on one instrument, "A" first in call order. Every test also
 runs the invariants of groups (18-multi-strategy 5.1, `session_invariants_groups.py`): I4
 the sum rule and I6 one side at every change of an order at the fake, and I5 isolation
-over each run (a kernel takes only its own orders' words, `session_hooks.py`). They run
-over every row of the table above too, each strategy alone being a group of one. The
-rows F98 to F103 and F106 to F112 (the sum rule's group rows, the kill switch and the
-restart per group) belong to unit M7.
+over each run (a kernel takes only its own orders' words and the fake records them for its
+strategy; an order is bound to one member only, the one the fake records it for; and no
+member is made to act while another member's order word is applied: `session_hooks.py`).
+Each check is shown to find what it must on hand-written changes and runs, and the hooks
+on a session broken on purpose, in `test_session_invariants_groups.py`. They run over
+every row of the table above too, each strategy alone being a group of one. The rows F98
+to F103 and F106 to F112 (the sum rule's group rows with the allocation and the cut, the
+kill switch's group rows and the restart rows with adoption) belong to unit M7, and must
+pass there: F103 (a held cancel decided by the two-book read), F106 and F107 (the kill
+switch of a group). Until then a shared instrument already is safe on them: a held cancel
+is left to the trade book, the kill switch exits a member only when the broker holds the
+group's sum, and a restart judges the group's sum (below).
 
 | Row | Tests |
 |---|---|
@@ -151,8 +159,21 @@ and neither the exit retries nor the bare-leg protector start for it
 (`test_session_shared_margin.py::test_an_exit_rejected_on_a_shared_instrument_is_not_asked_for_again`,
 `test_a_held_positions_exit_waits_for_an_agreeing_read_then_goes`; the gate on doubles in
 `test_margin_reject.py`); after a restart the hold is gone and the restart decides first
-(`test_after_a_restart_the_hold_is_gone_and_the_restart_decides_first`,
+(`test_after_a_restart_the_hold_is_gone_and_the_restart_decides_first`, which also pins
+that the restart's comparison of the group agrees and locks nothing,
 `test_a_rejection_the_restart_learns_from_the_journal_holds_the_position_again`).
+
+What unit M6 builds before unit M7's group rows, so that a shared instrument never meets a
+rule of one leg (review of M6, round 1):
+
+| Rule | Tests |
+|---|---|
+| A restart judges the sum of the members' journal positions against the broker's net (4.10): one member flat, both holding, a broker position no member holds (refused), a sale by hand while down (every member locked and guarded) | `test_session_shared_restart.py`; the rules on their own in `test_reconcile_groups.py` |
+| While the group differs, every closing order of every member is held (4.8), the guard's figure the broker's net | `test_session_shared_books.py::test_a_sale_by_hand_guards_every_member_with_the_brokers_net`; on a stand-in session in `test_reconcile_guard_rules.py` |
+| Each alert and note of a member names the group's net and sum; a difference other orders' trades explain is `explained_shared`, adopted by no member before M7 | `test_session_shared_books.py::test_each_open_position_names_the_groups_net_at_the_last_read`, `test_the_mismatch_names_the_groups_sum_and_adopts_what_explains_it_for_no_member` |
+| The kill switch exits a member only when the broker holds the group's sum (4.9); a flat member is flat at the broker when the book shows what the others hold | `test_session_shared_books.py::test_the_kill_switch_exits_no_member_while_the_broker_holds_less_than_their_sum`; on a stand-in session in `test_watch_kill_shared.py` |
+| A held cancel on a shared instrument is left to the trade book (4.5, until M7's two-book read) | `test_stops_held.py::test_a_held_cancel_on_a_shared_instrument_is_left_to_the_trade_book`, `test_a_held_cancel_on_a_shared_instrument_is_not_decided_by_anothers_position_read` |
+| An automatic exit the margin gate keeps is alerted as waiting, and a held LIMIT exit is priced again from the latest price when a read agrees (4.14a item 2) | `test_margin_reject.py` |
 
 ## The alerts of 08-live-trading section 8
 
@@ -268,3 +289,5 @@ Checks waived by single tests, each with its reason in the test:
 | `test_stops_protect.py::test_the_emergency_alert_names_an_exit_at_work_and_the_order_book_comes_first` | books agree | 3.5: the exit fills unheard and no books are read after an error; the alert names the exit in flight |
 | `test_stops_report.py::test_an_exit_accepted_with_no_final_word_is_in_flight_and_never_beside_close_it_by_hand` | books agree | 3.3 step 4: the exit fills unheard and the books are unreadable; the leg's line names the exit in flight |
 | `test_session_shared_gates.py::test_a_member_is_refused_every_entry_while_another_member_reverses` | exits within the position, never the other side | A's reversal (a sale of 200 against its long of 100) is an entry whose part beyond the position opens the short: the checks take the whole sale as an exit |
+| `test_session_shared_books.py` (a sale by hand on a shared instrument) and `test_session_shared_restart.py::test_a_restart_whose_sum_the_broker_holds_fewer_of_locks_every_member` | exits within the position, never the other side | 18-multi-strategy 4.7: the cut of kept stops after a sale by hand on a shared instrument is unit M7's; until then every member's stop stays as it was |
+| `test_session_invariants_groups.py::test_the_hooks_note_a_member_made_to_act_while_anothers_order_word_is_applied` | isolation | the test breaks isolation on purpose and reads what the hooks noted |

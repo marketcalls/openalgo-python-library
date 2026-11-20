@@ -22,11 +22,21 @@ import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from restart_samples import crash_at, crashing, restart, run_to_crash
 from session_samples import NS, alerts, ist
-from shared_samples import A_UNITS, B_UNITS, SbinBreakout, SbinTrend, sbin_orders, terms
+from shared_samples import (
+    A_UNITS,
+    B_UNITS,
+    OnceA,
+    OnceB,
+    SbinBreakout,
+    SbinTrend,
+    sbin_orders,
+    terms,
+)
 from stops_samples import STOP_POINTS, StopHold, at_price, stop_world
 
 import openalgo.backtest as bt
 from openalgo.backtest._live._margin_reject import MARGIN_LOCK
+from openalgo.backtest._live._session_news import RECONCILE_LOCK
 from openalgo.backtest._live._stops_cover import CLOSE_REJECTED, REFUSED_FOR_MARGIN
 from openalgo.backtest._live._types import LOGGER_NAME
 
@@ -246,25 +256,6 @@ def restart_read_before_bs_order(world, restarted: int) -> bool:
     return first_read < placed
 
 
-class OnceA(bt.Strategy):
-    """A that buys 100 SBIN with a stop 3 points below at its first decision of the day,
-    flat, and never again (it remembers across a restart, in `self.state`)."""
-
-    symbol, exchange, interval = "SBIN", "NSE", "1m"
-    qty = A_UNITS
-
-    def on_bar(self, bar):
-        if not self.state.get("bought") and not self.position.qty:
-            self.state["bought"] = True
-            self.buy(type(self).qty, stop=bt.points(STOP_POINTS))
-
-
-class OnceB(OnceA):
-    """B as `OnceA`, of 50 units."""
-
-    qty = B_UNITS
-
-
 def test_after_a_restart_the_hold_is_gone_and_the_restart_decides_first(world, monkeypatch):
     crashing(monkeypatch)
     other = world.fake.client()
@@ -290,11 +281,14 @@ def test_after_a_restart_the_hold_is_gone_and_the_restart_decides_first(world, m
     after = [o for o in sbin_orders(world, "OnceB") if o.placed_ns >= restarted]
     assert terms(after) == [("SELL", B_UNITS, "SL-M", "trigger pending")]
     assert restart_read_before_bs_order(world, restarted)
-    # Nor is the hold's entry lock set again: the restart's comparison decides afresh.
+    # Nor is the hold's entry lock set again: the restart's comparison decides afresh, and
+    # with the group's sum agreeing with the broker's net it finds nothing to lock.
     locks = [
         (e["strategy"], e["reason"]) for e in events(outcome, "lock") if e["ts_ns"] >= restarted
     ]
     assert ("OnceB", MARGIN_LOCK) not in locks
+    assert [lock for lock in locks if lock[1] == RECONCILE_LOCK] == []
+    assert outcome.reconciliations == ()
 
 
 def test_a_rejection_the_restart_learns_from_the_journal_holds_the_position_again(

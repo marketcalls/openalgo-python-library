@@ -34,6 +34,7 @@ from dataclasses import dataclass
 
 from .._engine import call
 from ..errors import LiveError
+from ._group_rules import and_join
 from ._order_state import ENTRY_PURPOSES
 from ._plan_catch_up import INSTRUMENT
 from ._session_trader import Trader
@@ -200,7 +201,7 @@ def shared_lines(groups: Iterable[InstrumentGroup]) -> list[str]:
     for group in groups:
         if not group.shared:
             continue
-        names = ", ".join(group.members[:-1]) + f" and {group.members[-1]}"
+        names = and_join(group.members)
         lines.append(
             f"{group.symbol} ({group.exchange}, {group.product}): {names} share one broker "
             "position; each holds its own stop; they trade one side at a time and with "

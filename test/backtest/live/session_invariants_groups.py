@@ -11,9 +11,17 @@ a group of one: each holds for it as for a group.
   clients' orders the fake has filled that the members have not adopted. So no fill
   reaches a kernel twice, or a kernel whose order it is not, and no kernel's position
   strays from the fills its own orders made.
-- **I5, isolation.** Every order word, answer and attributed trade a kernel takes is of
-  an order bound to its own strategy (`Run.strayed`, noted by `session_hooks`): a member
-  never takes another member's fill, rejection or cancel.
+- **I5, isolation.** No request of a member is caused by another member's news (the
+  design's cause of each request, 18-multi-strategy 5.1), checked where a cause can pass
+  from one member to another: (1) every order word a kernel takes is of an order its own
+  venue map binds and the fake records under its strategy's name; (2) at every change no
+  broker order is bound in two members' venue maps, and every order a member's venue map
+  binds is recorded at the fake under that member's name; (3) no session call makes a
+  member's kernel act (an exit, a cancel, a protect) while another member's order word
+  is applied (`Run.strayed`, noted by `session_hooks`). A member's requests come from its
+  own kernel, which then takes only its own orders' words, and the session never acts on
+  one member for another's word; the kill switch, the exit guard and the group's
+  corrections act from the books' reads, never from an order word.
 - **I6, one side.** At no change do two members of a live group hold positions on
   opposite sides.
 
@@ -65,11 +73,27 @@ def one_side(changes: Iterable[OrderChange]) -> None:
         )
 
 
-def isolation(run: Run) -> None:
-    """I5 (module docstring)."""
-    assert not run.strayed, (
-        f"18-multi-strategy I5: a kernel took an order word not of its own: {run.strayed}"
-    )
+def isolation(run: Run, changes: Iterable[OrderChange], mine: frozenset[str]) -> None:
+    """I5 (module docstring) of `run`, over `changes` (in order), `mine` the session's
+    clients."""
+    assert not run.strayed, f"18-multi-strategy I5: {run.strayed}"
+    changes = list(changes)
+    tags = {change.order_id: change.strategy for change in changes if change.client in mine}
+    for change in changes:
+        owners: dict[str, list[str]] = {}
+        for member in change.members or ():
+            for order_id, _ in member.given:
+                owners.setdefault(order_id, []).append(member.strategy)
+        for order_id, names in owners.items():
+            assert len(names) == 1, (
+                f"18-multi-strategy I5: order {order_id} is bound to both "
+                f"{' and '.join(names)} after {change}"
+            )
+            tag = tags.get(order_id, names[0])
+            assert tag == names[0], (
+                f"18-multi-strategy I5: {names[0]}'s venue map binds order {order_id}, "
+                f"which the fake records for {tag}, after {change}"
+            )
 
 
 def _not_given(change: OrderChange, own: Iterable[OrderChange]) -> int:

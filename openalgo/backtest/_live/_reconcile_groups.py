@@ -16,14 +16,16 @@ of `reconcile.Reconciler`). A group of one is compared as a leg always was
 - **Orders**: each member's rows as for a leg, but a row bound to another member is that
   member's, and an order of an earlier start that no member holds is the group's orphan,
   found by its first member only (`order_findings`).
-- **Positions**: the sum of the members' units against the broker's net (`judge`). Until
-  the allocation of unit M7, a difference trades of other orders explain is judged as one
-  they do not: nothing is adopted. Each member's finding is the group's kind with its own
-  units and the broker's net, acted on by the rules of a leg (16-session-design 5.3): the
-  entries locked and alerted; on the other side each member's own stop cancelled. While
-  the broker holds fewer units than the sum, or none, or the other side, each member's
-  closing orders are held to its share of what the broker holds (`share_of`), so they can
-  never together close more than it holds.
+- **Positions**: the sum of the members' units against the broker's net
+  (`_group_rules.group_kind`). Until the allocation of unit M7, a difference trades of
+  other orders explain adopts nothing (`Kind.EXPLAINED_SHARED`). Each member's finding is
+  the group's kind with its own units and the broker's net, acted on by the rules of a
+  leg (16-session-design 5.3), its alert naming the group's sum: the entries locked and
+  alerted; on the other side each member's own stop cancelled. While the broker holds
+  fewer units than the sum, or none, or the other side, every closing order of every
+  member is held by the exit guard until a comparison of the group agrees
+  (18-multi-strategy 4.8: holding the whole group is simpler to verify than a room per
+  member).
 - **Agreement** tells the margin holds (`_margin_reject`): a position a closing order's
   rejection held may be exited again.
 
@@ -36,35 +38,14 @@ from collections.abc import Sequence
 from typing import Any
 
 from .._layout import NANOS_PER_SECOND
+from ._group_rules import GroupFigure, group_kind
 from ._reconcile_act import Finding, attribute, in_flight, order_findings, own_orders
 from ._reconcile_findings import FILL_DURING_READ
-from ._reconcile_rules import GUARDED, Kind, LegBooks, judge, leg_books, unexplained_by
+from ._reconcile_rules import GUARDED, Kind, LegBooks, leg_books, unexplained_by
 from ._session_trader import Trader
 from .inbox import Books
 
 _NS = NANOS_PER_SECOND
-
-
-def share_of(broker_units: int, group_units: int, member_units: int) -> int:
-    """The broker's units a member's closing orders may be for while the group is guarded:
-    what the broker holds on the group's side beyond the other members' units (none when
-    the broker is flat or on the other side; the broker's own figure then, which leaves no
-    room). Summed over the members it never exceeds what the broker holds."""
-    if broker_units * group_units <= 0:
-        return broker_units
-    others = abs(group_units) - abs(member_units)
-    share = max(0, abs(broker_units) - others)
-    return share if broker_units > 0 else -share
-
-
-def group_kind(group_units: int, broker_units: int | None, unexplained: int) -> Kind:
-    """The group's position against the broker's (module docstring): `judge`'s kind of the
-    sum, a difference other orders' trades explain taken as unexplained (nothing is
-    adopted on a shared instrument before unit M7's allocation)."""
-    kind = judge(group_units, broker_units, unexplained)
-    if kind in (Kind.EXPLAINED_FLAT, Kind.EXPLAINED_FEWER):
-        return Kind.UNEXPLAINED
-    return kind
 
 
 class GroupComparison:
@@ -81,9 +62,23 @@ class GroupComparison:
     _flight: dict[str, int | None]
     _quiet: dict[str, int | None]
     _only: frozenset[str] | None
+    _figures: dict[str, GroupFigure]
     adopted: Any
     _noted: Any
     _soon: Any
+
+    def _compare_shared(self, message: Books, *, late_after_s: float, again_s: float) -> bool:
+        """Compare each shared instrument's group with a read (`_compare_group`), in the
+        order of their first members. True when an order's row has ended while its engine
+        works it."""
+        groups, polls = self._session.groups, False
+        for group in groups.groups:
+            if group.shared:
+                members = groups.of(group.symbol, group.exchange)
+                polls |= self._compare_group(
+                    members, message, late_after_s=late_after_s, again_s=again_s
+                )
+        return polls
 
     def _compare_group(
         self, members: Sequence[Trader], message: Books, *, late_after_s: float, again_s: float
@@ -155,8 +150,10 @@ class GroupComparison:
             adopted = sum(self.adopted(m.name) for m in members)
             unexplained = unexplained_by(group_units, books.units, external, adopted)
             kind = group_kind(group_units, books.units, unexplained)
+        figure = GroupFigure(tuple(m.name for m in members), group_units)
         polls = False
         for member in active:
+            self._figures[member.name] = figure
             others = frozenset().union(*(ids for name, ids in bound.items() if name != member.name))
             findings: set[Finding]
             findings, polled = order_findings(
@@ -172,8 +169,7 @@ class GroupComparison:
                 findings.add((kind, units[member.name], books.units))
             self._noted(member, kind.value, books.units, len(findings))
             if kind in GUARDED and books.units is not None:
-                share = share_of(books.units, group_units, units[member.name])
-                self.guard.open(member.name, share)
+                self.guard.open(member.name, books.units, hold_all=True)
             if self._findings.judged(member, findings, books, everyone, late=late):
                 self._soon(session.now() + round(again_s * _NS))
             if kind in (Kind.AGREE, Kind.MORE):
@@ -185,4 +181,4 @@ class GroupComparison:
         return polls
 
 
-__all__ = ["GroupComparison", "group_kind", "share_of"]
+__all__ = ["GroupComparison"]

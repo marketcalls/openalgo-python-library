@@ -8,7 +8,9 @@ a test moves it). "A" is `SbinTrend` and "B" `SbinBreakout`, both on SBIN in MIS
 in call order: at their first decision (14:42:01, both filled at once at 500.00) A buys
 100 units with a stop 3 points below (an SL-M at 497.00) and a target 2 points above
 (502.00), B buys 50 units with a stop 3 points below (497.00); then neither trades again.
-`SbinShort` is a B that sells 50 instead, for the side gate.
+`SbinShort` is a B that sells 50 instead, for the side gate. `OnceA` and `OnceB` buy A's
+and B's units once a day, flat or after a restart (they remember it in `self.state`), and
+`NeverB` never trades, for the restarts.
 
 Expected values come from the fake's books and the scenario, never from the session's
 code.
@@ -60,6 +62,34 @@ class SbinShort(bt.Strategy):
             self.sell(B_UNITS, stop=bt.points(STOP_POINTS))
 
 
+class OnceA(bt.Strategy):
+    """A that buys 100 SBIN with a stop 3 points below at its first decision of the day,
+    flat, and never again (it remembers across a restart, in `self.state`)."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "1m"
+    qty = A_UNITS
+
+    def on_bar(self, bar):
+        if not self.state.get("bought") and not self.position.qty:
+            self.state["bought"] = True
+            self.buy(type(self).qty, stop=bt.points(STOP_POINTS))
+
+
+class OnceB(OnceA):
+    """B as `OnceA`, of 50 units."""
+
+    qty = B_UNITS
+
+
+class NeverB(bt.Strategy):
+    """A B on SBIN that never trades."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "1m"
+
+    def on_bar(self, bar):
+        return None
+
+
 def sbin_orders(world: Any, strategy: str) -> list[Any]:
     """The fake's orders of `strategy` on SBIN, oldest first."""
     return [o for o in world.orders() if o.strategy == strategy and o.symbol == "SBIN"]
@@ -75,6 +105,9 @@ __all__ = [
     "B_UNITS",
     "DECIDED",
     "TARGET_POINTS",
+    "NeverB",
+    "OnceA",
+    "OnceB",
     "SbinBreakout",
     "SbinShort",
     "SbinTrend",

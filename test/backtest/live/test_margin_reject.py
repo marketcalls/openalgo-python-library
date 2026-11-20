@@ -10,12 +10,14 @@ values are written by hand.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from openalgo.backtest._live._margin_reject import (
     CLOSING_PURPOSES,
+    HELD_EXIT_WORDS,
     HELD_FOR_READ,
     MARGIN_LOCK,
     MARGIN_PHRASES,
@@ -24,6 +26,9 @@ from openalgo.backtest._live._margin_reject import (
     names_margin,
 )
 from openalgo.backtest._live._stops_cover import CLOSE_REJECTED, REFUSED_FOR_MARGIN
+from openalgo.backtest._live._stops_deadline import Deadlines
+from openalgo.backtest._live._stops_orders import Sent
+from openalgo.backtest._live._stops_price import PriceRule
 from openalgo.backtest._live._types import OrderIntent, Purpose
 
 NS = 10**9
@@ -69,6 +74,10 @@ class _Engine:
         self._trader.calls.append(("protect",))
         return "placed"
 
+    def request_exit(self, instrument: int, product: str, reason: str, limit: float) -> str:
+        self._trader.calls.append(("exit", reason, limit))
+        return "sent"
+
 
 class _Trader:
     def __init__(self, name: str) -> None:
@@ -108,7 +117,10 @@ class _Session:
         shared_ = shared
         self.groups = type("G", (), {"shared": staticmethod(lambda trader: shared_)})()
         self.reconcile = type("R", (), {"read_before_exits": self.reads.append})()
-        self.stops = type("S", (), {"covered": staticmethod(lambda trader: 0)})()
+        #: The price rule's LIMIT for an exit at the latest price, rupees.
+        self.latest_limit = 495.0
+        prices = SimpleNamespace(exit_limit=lambda trader: self.latest_limit)
+        self.stops = SimpleNamespace(covered=lambda trader: 0, prices=prices)
 
     def now(self) -> int:
         return self.clock
@@ -209,3 +221,73 @@ def test_a_hold_is_forgotten_once_the_position_is_flat():
     trader.units = 0.0
     holds.duties(REJECTED_AT + NS)
     assert not holds.holds(trader) and holds.unprotected_reason(trader) is None
+
+
+def test_a_held_limit_exit_is_priced_again_from_the_latest_price_when_a_read_agrees():
+    holds, trader, session = _held()
+    holds.reject(trader, 7, _intent(Purpose.STOP), "RMS: margin exceeds")
+    # The price rule asked for its exit at 480.00; the price moved before a read agreed.
+    assert holds.request_exit(trader, "stop_unfilled", 480.0) == HELD_FOR_READ
+    holds.agreed([trader], REJECTED_AT + NS)
+    assert trader.calls[-1] == ("exit", "stop_unfilled", session.latest_limit)
+
+
+def _deadline_world(asked: str) -> tuple[Any, list[str]]:
+    """A stops deadline over one leg whose stop was bound at 0 and never confirmed, whose
+    exit the margin gate answers `asked`: the deadline and the alerts it sent."""
+    trader = SimpleNamespace(name="B", symbol="SBIN", exchange="NSE")
+    stop = SimpleNamespace(state=Sent.BOUND, bound_ns=0, kernel_order=2, order_id="S2")
+    leg = SimpleNamespace(stop=2, orders={2: stop})
+    stops = SimpleNamespace(leg=lambda t: leg, protection=SimpleNamespace(holds=lambda t: False))
+    alerts: list[str] = []
+    worker = SimpleNamespace(busy_since_ns=None, raw_pending=0)
+    session = SimpleNamespace(
+        traders=(trader,),
+        parts=SimpleNamespace(worker=worker),
+        inbox_waiting=0,
+        margin=SimpleNamespace(request_exit=lambda t, reason: asked),
+        event=lambda kind, **fields: None,
+        alert=lambda kind, text: alerts.append(text),
+    )
+    return Deadlines(session, stops), alerts
+
+
+def test_the_stops_deadline_says_a_held_positions_exit_waits_rather_than_that_it_went():
+    deadlines, alerts = _deadline_world(HELD_FOR_READ)
+    deadlines.due(10**12)
+    [text] = alerts
+    assert HELD_EXIT_WORDS in text and "is exited" not in text
+
+
+def test_the_stops_deadline_says_the_position_is_exited_when_the_gate_lets_it_go():
+    deadlines, alerts = _deadline_world("exit_requested")
+    deadlines.due(10**12)
+    [text] = alerts
+    assert "the position is exited (the stop cancelled first)" in text
+
+
+def test_the_price_rule_says_a_held_positions_exit_waits_rather_than_that_it_went():
+    order = {"order_type": "SL", "side": "SELL", "trigger_rupees": 497.0}
+    engine = SimpleNamespace(order=lambda k: order, live_state=lambda: {"desk": {"cancelling": []}})
+    instruments = {0: SimpleNamespace(tick_size=0.05)}
+    trader = SimpleNamespace(
+        name="B",
+        symbol="SBIN",
+        exchange="NSE",
+        finished=False,
+        engine=engine,
+        working=lambda: [2],
+        open_units=lambda: 50.0,
+        part=SimpleNamespace(setup=SimpleNamespace(instruments=instruments)),
+    )
+    alerts: list[str] = []
+    session = SimpleNamespace(
+        margin=SimpleNamespace(request_exit=lambda t, reason, limit: HELD_FOR_READ),
+        event=lambda kind, **fields: None,
+        alert=lambda kind, text: alerts.append(text),
+    )
+    rule = PriceRule(session)
+    rule.observe(trader, 2, 496.0, 0)
+    rule.refused(trader, 2)
+    [text] = alerts
+    assert HELD_EXIT_WORDS in text and "LIMIT at" not in text

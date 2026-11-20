@@ -35,6 +35,7 @@ from typing import Any
 
 from .._engine import call
 from ..errors import VenueRefusalError
+from ._group_rules import GroupFigure, and_join
 from ._plan_catch_up import INSTRUMENT
 from ._reconcile_rules import FEWER_STOP_CANCELLED, RULES, Kind, LegBooks, adoption_price
 from ._session_news import RECONCILE_LOCK
@@ -174,12 +175,21 @@ def own_orders(trader: Trader, earlier: frozenset[str]) -> frozenset[str]:
 class Corrections:
     """The safe corrections of one session (module docstring); `session` is the
     `_session_loop.Session`, `adopted` the reconciler's signed units adopted by
-    strategy, `orphans` the order IDs it asked to cancel."""
+    strategy, `orphans` the order IDs it asked to cancel, `figures` each member of a
+    shared instrument's group as the comparison judged it (the words name it; none when
+    no strategy shares its instrument)."""
 
-    def __init__(self, session: Any, adopted: dict[str, int], orphans: set[str]) -> None:
+    def __init__(
+        self,
+        session: Any,
+        adopted: dict[str, int],
+        orphans: set[str],
+        figures: dict[str, GroupFigure] | None = None,
+    ) -> None:
         self._session = session
         self._adopted = adopted
         self._orphans = orphans
+        self.figures: dict[str, GroupFigure] = {} if figures is None else figures
 
     def act(self, trader: Trader, finding: Finding, books: LegBooks, own: frozenset[str]) -> str:
         """Act on a finding seen twice in a row; what was done."""
@@ -306,15 +316,20 @@ class Corrections:
         locked: bool = True,
     ) -> str:
         """The alert's words: the leg, the engine's units (as compared), the broker's, the
-        other orders on the instrument, what is done, and the lock."""
+        other orders on the instrument, what is done, and the lock. A member of a shared
+        instrument's words name its group's sum, which the broker's net was judged
+        against (18-multi-strategy 4.6)."""
         units = finding[1] if isinstance(finding[0], Kind) else round(trader.open_units())
         others = sorted({trade.order_id for trade in books.external(own)})
         orders = f"; other orders {', '.join(others)}" if others else ""
         lock = " Entries of the strategy are locked for the rest of the session" if locked else ""
-        return (
-            f"{trader.name} {trader.symbol} {trader.exchange}: the engine holds {units} units, "
-            f"OpenAlgo's books show {books.units}{orders}: {what}.{lock}"
-        )
+        held, shown = f"the engine holds {units} units", f"OpenAlgo's books show {books.units}"
+        group = self.figures.get(trader.name)
+        if group is not None:
+            held += f", {group.units} with {and_join(group.others(trader.name))}'s"
+            shown += " for them together"
+        leg = f"{trader.name} {trader.symbol} {trader.exchange}"
+        return f"{leg}: {held}, {shown}{orders}: {what}.{lock}"
 
 
 __all__ = [

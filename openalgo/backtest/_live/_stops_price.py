@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .._layout import NANOS_PER_SECOND
+from ._margin_reject import HELD_EXIT_WORDS, HELD_FOR_READ
 from ._session_trader import Trader
 from ._stops_kernel import cancelling, marketable_limit, order_of, reprice, tick_size
 from ._types import LOGGER_NAME, AlertKind
@@ -158,27 +159,37 @@ class PriceRule:
             return None
         return marketable_limit(price, str(order["side"]), tick_size(trader))
 
+    def exit_limit(self, trader: Trader) -> float | None:
+        """The marketable LIMIT that exits `trader`'s position at the latest price it saw,
+        rupees; None before a price came."""
+        price = self._prices.get(trader.name)
+        if price is None:
+            return None
+        side = "SELL" if trader.open_units() > 0 else "BUY"
+        return marketable_limit(price, side, tick_size(trader))
+
     def _fall_back(self, trader: Trader, clock: _Clock, why: str) -> None:
-        """Exit the position at a marketable LIMIT (the clock's last word), once."""
+        """Exit the position at a marketable LIMIT (the clock's last word), once; through
+        the margin gate, whose answer the alert says (`_margin_reject`)."""
         self._clocks.pop((clock.strategy, clock.kernel_order), None)
         if clock.fallback or trader.finished:
             logger.warning("%s: o%d does not fill (%s)", trader.name, clock.kernel_order, why)
             return
-        limit = self._limit(trader, clock.kernel_order)
-        price = self._prices.get(trader.name)
-        if limit is None and price is not None:
-            side = "SELL" if trader.open_units() > 0 else "BUY"
-            limit = marketable_limit(price, side, tick_size(trader))
+        limit = self._limit(trader, clock.kernel_order) or self.exit_limit(trader)
         if limit is None:
             return
         session = self._session
         asked = session.margin.request_exit(trader, STOP_UNFILLED, float(limit))
         session.event("stop_unfilled", strategy=trader.name, limit=limit, outcome=asked)
+        what = (
+            f"the position is exited with a LIMIT at {limit:.2f}, repriced while it does not fill"
+        )
+        if asked == HELD_FOR_READ:
+            what = HELD_EXIT_WORDS
         session.alert(
             AlertKind.ERROR,
             f"{trader.name}: the stop of {trader.symbol} {trader.exchange} was reached and "
-            f"did not fill ({why}): the position is exited with a LIMIT at {limit:.2f}, "
-            "repriced while it does not fill",
+            f"did not fill ({why}): {what}",
         )
 
 

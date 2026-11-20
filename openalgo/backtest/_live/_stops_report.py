@@ -228,7 +228,8 @@ def _note(stops: Any, trader: Trader, *, books: bool = True) -> tuple[list[str],
     if broker is not None:
         # The broker holds other units than the engine counts, or the other side: neither
         # a sale by hand of the engine's units nor its stop fits what the broker holds.
-        shown = [f"OpenAlgo's books showed {broker} units at the last read"] if books else []
+        figure = stops.books_words(trader, broker)
+        shown = [f"OpenAlgo's books showed {figure} at the last read"] if books else []
         return [*parts, stop_part, *shown], _CHECK
     if stop_part == NO_STOP and not sent:
         # Nothing sent works toward the position: only a sale by hand closes it.

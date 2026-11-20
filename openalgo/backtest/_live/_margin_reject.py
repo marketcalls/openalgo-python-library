@@ -28,10 +28,12 @@ retries and the bare-leg protector do not start for it (`holds`).
 position (the kill switch, the safe stop, the stops deadline, the price rule, protect by
 state, the square-off) waits for a comparison of its group that agrees, from a book read
 begun after the rejection (`agreed`); it is then made, once, and its orders pass the exit
-guard. From then on the session's own exits go again (the lock stays): at the strategy's
-square-off the session asks the kernel for it (`duties`), since the hold keeps the
-kernel from making it. A later rejection holds the position again, until another read
-agrees.
+guard; an exit at a LIMIT (the price rule's) is priced again from the latest price then,
+since the one it was asked at is stale by then. The callers' alerts say the exit waits
+(`HELD_EXIT_WORDS`). From then on the session's own exits go again (the lock stays): at
+the strategy's square-off the session asks the kernel for it (`duties`), since the hold
+keeps the kernel from making it. A later rejection holds the position again, until
+another read agrees.
 
 **Restart.** The hold is not saved (the kernel's is not either), nor is its entry lock
 set again (it is not one of `_session_saved.DAY_LOCKS`): after a restart the restart
@@ -67,6 +69,11 @@ MARGIN_LOCK = "margin_on_close"
 CLOSING_PURPOSES = frozenset({Purpose.STOP, *EXIT_PURPOSES})
 #: What `request_exit` and `protect` answer for a call that waits for an agreeing read.
 HELD_FOR_READ = "held_for_read"
+#: What the alert of an automatic exit the gate keeps says instead of "exited".
+HELD_EXIT_WORDS = (
+    "its exit waits until OpenAlgo's books agree with the strategies of the instrument, "
+    "since the broker rejected a closing order of the position"
+)
 #: The square-off the session asks for a position the kernel holds (an exit reason the
 #: binding's `request_exit` takes besides its RISK_EXIT_REASONS).
 SQUARE_OFF = "square_off"
@@ -229,7 +236,10 @@ class MarginHolds:
             hold.agreed = True
             self._session.event("margin_hold_agreed", strategy=trader.name)
             if hold.exit is not None:
-                what = self.request_exit(trader, *hold.exit)
+                reason, limit = hold.exit
+                if limit is not None:
+                    limit = self._session.stops.prices.exit_limit(trader) or limit
+                what = self.request_exit(trader, reason, limit)
                 self._session.event("exit_after_read", strategy=trader.name, outcome=what)
             if hold.protect:
                 what = self.protect(trader)
@@ -267,6 +277,7 @@ class MarginHolds:
 
 __all__ = [
     "CLOSING_PURPOSES",
+    "HELD_EXIT_WORDS",
     "HELD_FOR_READ",
     "MARGIN_LOCK",
     "MARGIN_PHRASES",

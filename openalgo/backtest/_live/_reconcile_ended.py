@@ -17,7 +17,8 @@ still confirm what a leg's last one saw.
   time had confirmed it and acted on it while it lasted, so the close names it and counts
   it no more.
 - `broker_units`: OpenAlgo's units of a leg while they differ from the engine's with
-  nothing taking them in.
+  nothing taking them in; of a member of a shared instrument, the net of every strategy
+  of the session that trades it (18-multi-strategy 4.11).
 
 Quantities are signed units. Used by the loop only.
 """
