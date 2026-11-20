@@ -107,15 +107,27 @@ class ExitsAsATarget(bt.Strategy):
             self.exit(reason="leg_target")
 
 
+def placed_purposes(world) -> list[str]:
+    """The purpose of each order the session handed to its order worker, in order."""
+    return [
+        event["purpose"]
+        for run in world.trace.runs
+        for event in run.events
+        if event["kind"] == "request" and event["type"] == "PlaceRequest"
+    ]
+
+
 def test_a_strategys_exit_cannot_pass_for_the_engines_target_exit(world):
     # The summary sets an exit with the reason leg_target against the bar after its
     # placing, as the engine's exit on a tick; a strategy's exit decided at a bar close and
     # naming that reason would be set a minute late. It is refused where it is made: the
-    # strategy stops the session at its second decision, 14:43, with the refusal.
+    # strategy stops the session at its second decision, 14:43, with the refusal, and the
+    # one sale after it is the safe stop's flatten (a risk exit), not the strategy's exit.
     world.stop_at(ist(14, 46))
     with pytest.raises(ConfigError, match="'leg_target' is the reason of the engine's own exit"):
         live(world, ExitsAsATarget)
-    assert [o.action for o in world.fake.orders() if o.placed_ns < ist(14, 43)] == ["BUY"]
+    assert placed_purposes(world) == ["entry", "risk_exit"]
+    assert [o.action for o in world.fake.orders()] == ["BUY", "SELL"]
 
 
 def test_a_daily_loss_exit_on_a_tick_is_set_against_the_bar_opening_after_it(
