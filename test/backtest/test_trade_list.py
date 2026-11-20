@@ -146,6 +146,15 @@ def test_a_strategys_exit_cannot_take_the_reason_of_the_engines_own_leg_exits(re
         exits_with(reason)
 
 
+def test_an_unknown_exit_reason_lists_only_the_reasons_a_strategy_may_give():
+    with pytest.raises(ConfigError) as refused:
+        exits_with("foo")
+    message = str(refused.value)
+    assert message.startswith('unknown exit reason "foo": use one of ')
+    assert "manual" in message and "signal" in message
+    assert "leg_sl" not in message and "leg_target" not in message
+
+
 def test_a_short_trade_loses_when_the_price_rises():
     def on_bar(self, bar):
         if len(self.close) == 1:
