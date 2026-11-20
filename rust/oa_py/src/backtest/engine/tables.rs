@@ -151,7 +151,7 @@ fn bar_tuple(bar: &StrategyBar) -> (u32, i64, i64, f64, f64, f64, f64, f64) {
 }
 
 /// What `pause` returns: (kind, decision instant, strategy bars, events, timer ids).
-pub(super) type PauseTuple<'py> = (
+pub(in crate::backtest) type PauseTuple<'py> = (
     Bound<'py, PyString>,
     Option<i64>,
     Bound<'py, PyList>,
@@ -166,7 +166,7 @@ pub(super) type PauseTuple<'py> = (
 /// (instrument, ts_open, ts_close, open, high, low, close, volume), the events as dicts
 /// and the timer ids (timer pauses). A tuple, not a dict: the event driver unpacks one
 /// per strategy-bar close, and its cost is part of every callback (NFR-PERF-04).
-pub(super) fn pause<'py>(py: Python<'py>, pause: &Pause) -> PyResult<PauseTuple<'py>> {
+pub(in crate::backtest) fn pause<'py>(py: Python<'py>, pause: &Pause) -> PyResult<PauseTuple<'py>> {
     let events = events(py, pause.events())?;
     let none = || PyList::empty_bound(py);
     Ok(match pause {

@@ -49,10 +49,16 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use super::calendar::NativeCalendar;
-use errors::{engine_error, venue_result_error, NativeEngineInputError};
+use errors::{engine_error, venue_result_error};
 use request::SubmissionTuple;
 use setup::BarArrays;
 use venue::StampTuple;
+
+// What the fund's binding (`super::fund`) reads of this one.
+pub(super) use errors::{error_of_kind, NativeEngineError, NativeEngineInputError};
+pub(super) use setup::{field, optional, unknown};
+pub(super) use signals::signal_arrays;
+pub(super) use tables::{pause as pause_tuple, PauseTuple};
 
 /// A dict argument or result.
 type Dict<'py> = Bound<'py, PyDict>;

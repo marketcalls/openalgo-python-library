@@ -9,6 +9,7 @@ use pyo3::prelude::*;
 mod calendar;
 mod costs;
 mod engine;
+mod fund;
 mod metrics;
 mod resample;
 
@@ -25,6 +26,7 @@ pub fn register(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     calendar::register(&m)?;
     resample::register(&m)?;
     engine::register(&m)?;
+    fund::register(&m)?;
     metrics::register(&m)?;
     parent.add_submodule(&m)?;
     Ok(())

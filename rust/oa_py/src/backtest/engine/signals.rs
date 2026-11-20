@@ -101,7 +101,7 @@ fn entry_signal(
 }
 
 /// The condition arrays and order templates of a run from their spec dict.
-pub(super) fn signal_arrays(dict: &Bound<'_, PyDict>) -> PyResult<SignalArrays> {
+pub(in crate::backtest) fn signal_arrays(dict: &Bound<'_, PyDict>) -> PyResult<SignalArrays> {
     let product: String = field(dict, "product")?;
     let bar_opens: PyReadonlyArray1<'_, i64> = field(dict, "bar_opens")?;
     Ok(SignalArrays {

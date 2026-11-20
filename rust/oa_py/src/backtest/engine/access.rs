@@ -30,13 +30,13 @@ impl NativeEngine {
     }
 
     /// The run; `NativeEngineError` once `finish` has taken it.
-    pub(super) fn engine(&self) -> PyResult<&Engine> {
+    pub(in crate::backtest) fn engine(&self) -> PyResult<&Engine> {
         let engine = self.inner.as_ref();
         engine.ok_or_else(|| NativeEngineError::new_err(FINISHED))
     }
 
     /// The run, to change; `NativeEngineError` once `finish` has taken it.
-    pub(super) fn engine_mut(&mut self) -> PyResult<&mut Engine> {
+    pub(in crate::backtest) fn engine_mut(&mut self) -> PyResult<&mut Engine> {
         let engine = self.inner.as_mut();
         engine.ok_or_else(|| NativeEngineError::new_err(FINISHED))
     }
