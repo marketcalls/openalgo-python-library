@@ -8,12 +8,13 @@
 //! eligible from the first base bar at or after it (SPEC-35); a triggered stop order
 //! starts over and must trigger again. A replacement that fails a check is refused and
 //! the order works on unchanged; so is one above the order value cap (`daily_caps`),
-//! which is not a new trade for the trade caps. A GTT order's GTT is replaced with it. Under a delay the
-//! replacement takes effect when its delay ends, the order working on its old terms until
-//! then (`held_changes`).
+//! which is not a new trade for the trade caps. A GTT order's GTT is replaced with it.
+//! Under a delay the replacement takes effect when its delay ends, the order working on
+//! its old terms until then (`held_changes`).
 
-use crate::exec::{ExecError, OrderId, OrderRequest};
+use crate::exec::{ExecError, OrderId, OrderRequest, RejectCode};
 
+use super::clock::SliceInfo;
 use super::daily_caps::Capped;
 use super::error::KernelError;
 use super::kernel::Engine;
@@ -92,37 +93,44 @@ impl Engine {
             (Err(code), _) | (Ok(_), Some(code)) => Err(code),
             (Ok(good_until), None) => {
                 self.check_replacement_role(id, &request, units)?;
-                self.live_checks(&request, units, &slice, Some(id))?
-                    .map(|()| good_until)
+                match self.live_checks(&request, units, &slice, Some(id))? {
+                    Ok(()) => self.replacement_caps(&request, units, &slice)?,
+                    Err(code) => Err(code),
+                }
+                .map(|()| good_until)
             }
         };
         let good_until = match checked {
             Ok(good_until) => good_until,
             Err(code) => return Ok(Submission::Rejected(id, code)),
         };
-        match self.daily_caps(&request, units, &slice, true)? {
-            Capped::Pass(_) => {}
-            Capped::Refuse(code) | Capped::CutReversal(code) => {
-                return Ok(Submission::Rejected(id, code))
-            }
-        }
-        if self.is_external() {
-            let replacement = Replacement {
-                request,
-                decided_at,
-                good_until,
-                units,
-            };
-            self.send_modify(id, replacement);
-            return Ok(Submission::Submitted(id));
-        }
         let replacement = Replacement {
             request,
             decided_at,
             good_until,
             units,
         };
-        self.modify_or_hold(Self::stamp(&slice, step), id, replacement)?;
+        if self.is_external() {
+            self.send_modify(id, replacement);
+        } else {
+            self.modify_or_hold(Self::stamp(&slice, step), id, replacement)?;
+        }
         Ok(Submission::Submitted(id))
+    }
+
+    /// The daily caps of a replacement of `units` (module docs): only the order value cap
+    /// can refuse it, since a modification is not a new trade; `Err(code)` refuses it.
+    ///
+    /// Errors: `Exec` for an instrument the run does not have.
+    fn replacement_caps(
+        &self,
+        request: &OrderRequest,
+        units: f64,
+        slice: &SliceInfo,
+    ) -> Result<Result<(), RejectCode>, KernelError> {
+        Ok(match self.daily_caps(request, units, slice, true)? {
+            Capped::Pass(_) => Ok(()),
+            Capped::Refuse(code) | Capped::CutReversal(code) => Err(code),
+        })
     }
 }

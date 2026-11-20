@@ -202,7 +202,8 @@ def backtest(
         reason "daily_profit_target") and entries are rejected "daily_profit_gate" until
         the next session day. `max_order_value`: rupees (or bt.rupees); an entry or add
         worth more (units times its limit, an SL-M's trigger or the last close, times the
-        multiplier) is rejected "order_value_limit"; exits never are.
+        multiplier) is rejected "order_value_limit", as is a MARKET entry of an instrument
+        with no bar yet (no price to value it at); exits never are.
     roll: sessions before expiry at which a futures position rolls to the next contract
         (1, the session before the last trading day; 0 rolls on it), or None to hold it
         to expiry and settle it there in cash (see `Result.settlements`). A futures

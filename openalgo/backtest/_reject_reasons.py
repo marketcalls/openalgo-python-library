@@ -188,8 +188,9 @@ REASONS = MappingProxyType(
         ),
         "order_value_limit": (
             "an entry or add was worth more than max_order_value (its units times its "
-            "limit, an SL-M's trigger or the last close, times the multiplier); exits are "
-            "never refused by it",
+            "limit, an SL-M's trigger or the last close, times the multiplier), or was a "
+            "MARKET order of an instrument with no bar yet, which has no price to value it "
+            "at; exits are never refused by it",
             "lower the size, or raise max_order_value",
         ),
         "live_in_flight": (

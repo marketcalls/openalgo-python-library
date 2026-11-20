@@ -7,10 +7,10 @@
 //! hand from those prices.
 
 use crate::engine::account_test_kit::{
-    events, fills, flat, held, july_2025, market, minute_bars, pause_at, Setup,
+    events, fills, flat, held, july_2025, market, minute_bars, pause_at, Setup, INFY,
     MINUTES_PER_SESSION, SBIN,
 };
-use crate::engine::{Engine, Submission};
+use crate::engine::{BarColumns, Engine, Submission};
 use crate::exec::{FillAt, OrderId, OrderRequest, OrderType, QuantitySpec, RejectCode};
 use crate::model::{Product, Side};
 use crate::rms::{AccountTrades, StrategyRiskConfig};
@@ -278,6 +278,51 @@ fn a_limit_order_is_judged_at_its_limit() {
     assert_eq!(outcomes, ["rejected order_value_limit"]);
 }
 
+/// A run of SBIN flat at 100.00 from 09:15 and INFY flat at 100.00 from 09:20 (minute 5),
+/// with `risk`: until INFY's first bar, a MARKET order of INFY has no price to judge.
+fn infy_late(risk: StrategyRiskConfig) -> Engine {
+    let day = july_2025(1);
+    let mut infy = minute_bars(&[day], |_, _| flat(100.0));
+    let BarColumns {
+        ts_open,
+        open,
+        high,
+        low,
+        close,
+        volume,
+    } = &mut infy;
+    ts_open.drain(..5);
+    for column in [open, high, low, close, volume] {
+        column.drain(..5);
+    }
+    Setup {
+        risk,
+        ..Setup::minutes(day, day)
+    }
+    .engine_over(vec![minute_bars(&[day], |_, _| flat(100.0)), infy])
+}
+
+/// A MARKET buy of `units` INFY in MIS.
+fn buy_infy(units: f64) -> OrderRequest {
+    OrderRequest {
+        product: Product::Mis,
+        ..OrderRequest::market(INFY, Side::Buy, QuantitySpec::Units(units))
+    }
+}
+
+#[test]
+fn a_market_entry_with_no_price_to_judge_is_refused_under_a_value_cap() {
+    // At slice 0 INFY has no bar yet: its MARKET entry has no value to compare with the
+    // cap, so it is refused rather than taken as worth nothing; without a cap it passes.
+    let mut capped = infy_late(value_capped(10_000.0));
+    assert_eq!(
+        run(&mut capped, &[(0, buy_infy(10.0))]),
+        ["rejected order_value_limit"]
+    );
+    let mut free = infy_late(StrategyRiskConfig::default());
+    assert_eq!(run(&mut free, &[(0, buy_infy(10.0))]), ["submitted"]);
+}
+
 #[test]
 fn the_order_value_cap_never_refuses_an_exit() {
     // Long 100 bought at 100.00 (10,000.00, at the cap); the price rises to 150.00 from
@@ -370,6 +415,34 @@ fn entries_after_the_profit_target_are_refused_until_the_next_session() {
     let mut engine = profit_day(1_000.0);
     let outcomes = run(&mut engine, &[(7, buy(10.0))]);
     assert_eq!(outcomes, ["rejected daily_profit_gate"]);
+}
+
+#[test]
+fn the_profit_lock_lifts_at_the_next_session_day() {
+    // Day 1 as `profit_day`: +1,000.00 at slice 5 reaches the target, so the entry of
+    // slice 7 is refused; day 2 (flat at 110.00) starts again, and its first entry goes.
+    let (first, second) = (july_2025(1), july_2025(2));
+    let mut engine = Setup {
+        risk: StrategyRiskConfig {
+            daily_profit_target_rupees: Some(1_000.0),
+            ..StrategyRiskConfig::default()
+        },
+        ..Setup::minutes(first, second)
+    }
+    .engine(minute_bars(&[first, second], |day, k| {
+        if day == 0 && k < 5 {
+            flat(100.0)
+        } else {
+            flat(110.0)
+        }
+    }));
+    let next_day = MINUTES_PER_SESSION as usize;
+    let script = [(0, buy(100.0)), (7, buy(10.0)), (next_day, buy(10.0))];
+    let outcomes = run(&mut engine, &script);
+    assert_eq!(
+        outcomes,
+        ["submitted", "rejected daily_profit_gate", "submitted"]
+    );
 }
 
 #[test]

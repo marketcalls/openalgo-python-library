@@ -16,10 +16,14 @@
 //!   `max_order_value` is rejected `order_value_limit`. The value is the order's units
 //!   (its opening part's for a reversal) times the price it is judged at times the
 //!   instrument's multiplier: a LIMIT or stop-limit order at its limit, an SL-M at its
-//!   trigger, a MARKET order at the last close, the price the sizers size it at. An order
-//!   the engine default sizes at the fill (part shares, `fractional`) is judged at its fill,
-//!   at the price it is sized at there (`sizing::size_at_fill`). Exits, stops, targets, the
-//!   square-off, risk exits and rolls are never refused by it.
+//!   trigger, a MARKET order at the last close, the price the sizers size it at. It is
+//!   judged at submission, in a backtest as live (where it is the price a live session's
+//!   margin check quotes, `venue_checks`, and no fill price is known before the order is
+//!   sent), so both refuse the same orders. A MARKET order of an instrument with no bar
+//!   yet has no price to judge: under a cap it is refused, never taken as worth nothing.
+//!   An order the engine default sizes at the fill (part shares, `fractional`) is judged at
+//!   its fill, at the price it is sized at there (`sizing::size_at_fill`). Exits, stops,
+//!   targets, the square-off, risk exits and rolls are never refused by it.
 //! - **A reversal at a cap** (rule 4) is cut to its close: an order that only reduces, for
 //!   the units held, goes through every check as an exit, and an order for the opening
 //!   part is recorded rejected with the cap's code (`cut_reversal`). A trader who caps
@@ -111,7 +115,12 @@ impl Engine {
             }
         }
         let opening = if reduces { units - held.abs() } else { units };
-        let value = self.order_value(request, opening, self.judged_price(request))?;
+        let value = match self.judged_price(request) {
+            Some(price) => self.order_value(request, opening, price)?,
+            // No price to judge it at (module docs): above any cap, so refused under one.
+            None if opening > 0.0 => f64::INFINITY,
+            None => 0.0,
+        };
         Ok(
             match order_value_gate(self.config.risk.max_order_value_rupees, value) {
                 Err(code) => refuse(code),
@@ -126,14 +135,15 @@ impl Engine {
     }
 
     /// The price an order is judged at for its value (module docs): its limit, an SL-M's
-    /// trigger, else the last close.
-    fn judged_price(&self, request: &OrderRequest) -> f64 {
+    /// trigger, else the last close; None for a MARKET order of an instrument with no bar
+    /// yet.
+    fn judged_price(&self, request: &OrderRequest) -> Option<f64> {
         match request.order_type {
             OrderType::Limit { limit_rupees } | OrderType::StopLimit { limit_rupees, .. } => {
-                limit_rupees
+                Some(limit_rupees)
             }
-            OrderType::StopMarket { trigger_rupees } => trigger_rupees,
-            OrderType::Market => self.last_close(request.instrument).unwrap_or(0.0),
+            OrderType::StopMarket { trigger_rupees } => Some(trigger_rupees),
+            OrderType::Market => self.last_close(request.instrument),
         }
     }
 
