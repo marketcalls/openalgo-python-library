@@ -17,7 +17,9 @@ state, so a restart adds exactly what the state it restores does not hold:
   figures did not hold yet: it is counted once. A strategy an
   earlier start saved and this start does not run adds its saved figures whole, and is
   named on the summary (`Earlier`) with the position its last save held, if any: the day
-  is not flat while one is held.
+  is not flat while one is held. Its entries of the day, as its kernel counted them at
+  its last save, still count toward the account's trade cap (`earlier_entries`;
+  18-multi-strategy 2.5a rule 8).
 - **For the session**, under `SESSION_KEY`: the orders refused, the reconciliation
   mismatches, the seconds positions had no confirmed stop and the alerts not delivered,
   as counted at the session's last save. A restart adds them to its own counts.
@@ -117,8 +119,8 @@ class Earlier:
 class DayFigures:
     """What the earlier starts of the day left (module docstring): `carried`, each
     running strategy's saved figures; `absent`, the saved figures of the strategies this
-    start does not run, together, and `earlier`, those strategies; `session`, the
-    session's saved counts."""
+    start does not run, together, `earlier`, those strategies, and `earlier_entries`, the
+    entries of the day their kernels had counted; `session`, the session's saved counts."""
 
     def __init__(
         self,
@@ -126,11 +128,13 @@ class DayFigures:
         absent: StrategyFigures,
         session: SessionFigures,
         earlier: Sequence[Earlier] = (),
+        earlier_entries: int = 0,
     ) -> None:
         self.carried = dict(carried)
         self.absent = absent
         self.session = session
         self.earlier = tuple(earlier)
+        self.earlier_entries = earlier_entries
 
     @classmethod
     def at_start(cls, saved: Mapping[str, Mapping[str, Any]], running: Sequence[str]) -> DayFigures:
@@ -138,7 +142,7 @@ class DayFigures:
         session's under `SESSION_KEY`) for a start that runs the strategies `running`.
         Raises LiveError for figures, or the position of a strategy it does not run, that
         cannot be read, naming them: the day's summary is never guessed."""
-        carried, absent, earlier = {}, StrategyFigures(), []
+        carried, absent, earlier, entries = {}, StrategyFigures(), [], 0
         for name, state in saved.items():
             if name == SESSION_KEY:
                 continue
@@ -148,8 +152,9 @@ class DayFigures:
             else:
                 absent = absent + figures
                 earlier.append(_earlier(name, state))
+                entries += _entries(name, state)
         session = _read(SessionFigures, saved.get(SESSION_KEY), SESSION_KEY)
-        return cls(carried, absent, session, earlier)
+        return cls(carried, absent, session, earlier, entries)
 
     @property
     def earlier_open(self) -> bool:
@@ -246,6 +251,19 @@ def _earlier(name: str, state: Mapping[str, Any]) -> Earlier:
     except (AttributeError, IndexError, KeyError, TypeError, ValueError):
         raise _unreadable(name, "its saved position") from None
     return Earlier(name, symbol, exchange, round(units))
+
+
+def _entries(name: str, state: Mapping[str, Any]) -> int:
+    """The entries of the day strategy `name`'s kernel had counted at its last save (its
+    live state's "trades": those filled and those still working); 0 when it saved none.
+    Raises LiveError for a count that cannot be read."""
+    try:
+        trades = ((state.get("live_state") or {}).get("risk") or {}).get("trades")
+        if trades is None:
+            return 0
+        return int(trades["filled"]) + len(trades["waiting"])
+    except (AttributeError, KeyError, TypeError, ValueError):
+        raise _unreadable(name, "its saved count of entries") from None
 
 
 def _read(kind: type, record: Any, name: str) -> Any:

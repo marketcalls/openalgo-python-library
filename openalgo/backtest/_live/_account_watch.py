@@ -19,10 +19,13 @@
   entry at the cap is rejected `account_trade_limit` at submission; nothing is exited.
 
 A restart keeps both: each strategy's count of the day comes back with its saved kernel
-state (`Engine.restore_live_state`), and the locks "account_loss" and "account_profit" are
-set again from it (`_session_saved.DAY_LOCKS`); a measure still past a rule at the restart
-fires the kill switch again, which exits what the earlier start left open. Amounts are
-rupees. Used by the loop only.
+state (`Engine.restore_live_state`), the entries of a strategy an earlier start of the day
+ran and this one does not still count toward the cap (`DayFigures.earlier_entries`), and
+the locks "account_loss" and "account_profit" are set again from the saved state
+(`_session_saved.DAY_LOCKS`); a measure still past a rule at the restart fires the kill
+switch again, which exits what the earlier start left open. The measure is the running
+strategies' only, as the account's daily loss limit always took it: a strategy that is no
+longer run has no marks. Amounts are rupees. Used by the loop only.
 """
 
 from __future__ import annotations
@@ -131,15 +134,15 @@ class AccountTrades:
         self._session = session
 
     def before_decisions(self, trader: Trader) -> None:
-        """Tell `trader`'s kernel the cap and the other strategies' entries of today;
-        nothing without a cap or for a finished kernel session."""
-        limit = self._session.parts.spec.arguments.account_max_trades_per_day
+        """Tell `trader`'s kernel the cap and the other strategies' entries of today,
+        those of the strategies only an earlier start of the day ran among them; nothing
+        without a cap or for a finished kernel session."""
+        session = self._session
+        limit = session.parts.spec.arguments.account_max_trades_per_day
         if limit is None or trader.finished:
             return
-        others = sum(
-            int(call(other.engine.trades_today))
-            for other in self._session.traders
-            if other is not trader
+        others = session.figures.earlier_entries + sum(
+            int(call(other.engine.trades_today)) for other in session.traders if other is not trader
         )
         call(trader.engine.set_account_trades, limit, others)
 

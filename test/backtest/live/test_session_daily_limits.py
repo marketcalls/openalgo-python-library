@@ -24,6 +24,7 @@ from shared_samples import B_UNITS, SbinBreakout, SbinTrend, sbin_orders
 from stops_samples import at_price, stop_world
 from watch_samples import Flipper, HoldInfy, HoldSbin, events, run
 
+import openalgo.backtest as bt
 from openalgo.backtest._live._types import LOGGER_NAME
 
 #: From this instant SBIN and INFY trade at `RISEN`: each strategy's 10 units are then up
@@ -197,7 +198,104 @@ def test_a_restart_keeps_the_profit_lock(stops):
     assert "daily_profit_gate" in reject_codes(outcome, "StopWhenFlat")
 
 
+class FlipInfy(Flipper):
+    """Buys 10 INFY at each decision at which it holds none, sells them at the next."""
+
+    symbol = "INFY"
+
+
+def test_a_restart_keeps_the_accounts_trade_count(world, monkeypatch):
+    # Under an account cap of 2, Flipper and FlipInfy each buy at 14:42:01: the day's two
+    # entries. After a crash at 14:42:30 both restart holding their 10 units and sell them
+    # at 14:43:01; at 14:44:01 their restored counts put the account at its cap.
+    crashing(monkeypatch)
+    crash_at(world, CRASHED)
+    run_to_crash(world, [Flipper, FlipInfy], account_max_trades_per_day=2)
+    outcome = restart(
+        world,
+        [Flipper, FlipInfy],
+        stop_ns=ist(14, 46),
+        on_stop="keep",
+        account_max_trades_per_day=2,
+    )
+    assert bought(world, "SBIN", CRASHED) == [] and bought(world, "INFY", CRASHED) == []
+    for name in ("Flipper", "FlipInfy"):
+        assert set(reject_codes(outcome, name)) == {"account_trade_limit"}
+
+
+def test_a_restart_keeps_the_accounts_profit_lock(world, monkeypatch):
+    # Both up 80.00 from 14:43:40: the account's 160.00 is past a target of 150.00, and the
+    # kill switch exits both and locks them. After a crash at 14:44:30 the restarted
+    # strategies, flat, are locked again for account_profit and buy nothing.
+    rising(world)
+    crashing(monkeypatch)
+    crash_at(world, ist(14, 44, 30))
+    run_to_crash(world, [HoldSbin, HoldInfy], account_daily_profit_target=150)
+    assert (world.fake.position("SBIN", "NSE"), world.fake.position("INFY", "NSE")) == (0, 0)
+    outcome = restart(
+        world,
+        [HoldSbin, HoldInfy],
+        stop_ns=ist(14, 47),
+        on_stop="keep",
+        account_daily_profit_target=150,
+    )
+    after = ist(14, 44, 30)
+    locks = events(outcome, "lock")
+    restored = {(e["strategy"], e["reason"]) for e in locks if e["ts_ns"] >= after}
+    assert restored == {("HoldSbin", "account_profit"), ("HoldInfy", "account_profit")}
+    assert bought(world, "SBIN", after) == [] and bought(world, "INFY", after) == []
+    assert set(reject_codes(outcome, "HoldSbin")) == {"live_lock"}
+
+
+def test_a_restart_counts_the_entries_of_a_strategy_it_no_longer_runs(world, monkeypatch):
+    # Under an account cap of 2, Flipper and HoldInfy each buy at 14:42:01: the day's two
+    # entries. The process dies at 14:42:30 and the restart runs Flipper alone: it sells
+    # its 10 at 14:43:01, and at 14:44:01 HoldInfy's entry of the earlier start still
+    # counts, so the account is at its cap and Flipper buys no more.
+    crashing(monkeypatch)
+    crash_at(world, CRASHED)
+    run_to_crash(world, [Flipper, HoldInfy], account_max_trades_per_day=2)
+    outcome = restart(
+        world, Flipper, stop_ns=ist(14, 46), on_stop="keep", account_max_trades_per_day=2
+    )
+    assert bought(world, "SBIN", after_ns=CRASHED) == []
+    assert set(reject_codes(outcome, "Flipper")) == {"account_trade_limit"}
+
+
 # ----- a shared instrument: each member's limits are its own (2.5a rule 10) ---------------
+
+
+class BuyAtThird(bt.Strategy):
+    """Buys 10 SBIN at its third decision (14:44:01) and holds them."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "1m"
+
+    def init(self):
+        self.decisions = 0
+
+    def on_bar(self, bar):
+        self.decisions += 1
+        if self.decisions == 3:
+            self.buy(10)
+
+
+def test_a_member_at_its_cap_is_refused_while_the_other_member_trades(world):
+    # Both on SBIN, Flipper first in call order: Flipper's day of one entry is spent at
+    # 14:42:01 (sold at 14:43:01), so its buy at 14:44:01 is refused trade_limit, while
+    # BuyAtThird's first entry at that same decision is placed and fills.
+    outcome = run(
+        world,
+        [Flipper, BuyAtThird],
+        max_trades_per_day={"Flipper": 1, "BuyAtThird": 1},
+        on_stop="keep",
+    )
+    flipper = [o for o in bought(world) if o.strategy == "Flipper"]
+    third = [o for o in bought(world) if o.strategy == "BuyAtThird"]
+    assert len(flipper) == 1
+    assert [(o.quantity, o.filled) for o in third] == [(10, 10)]
+    assert ist(14, 44) <= third[0].placed_ns < ist(14, 45)
+    assert set(reject_codes(outcome, "Flipper")) == {"trade_limit"}
+    assert reject_codes(outcome, "BuyAtThird") == []
 
 
 def test_a_members_profit_target_exits_its_own_units_and_leaves_the_others(stops):
