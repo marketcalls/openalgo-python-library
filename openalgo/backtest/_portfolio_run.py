@@ -90,8 +90,8 @@ def portfolio_plan(strategy: Any, args: Mapping[str, Any]) -> PortfolioPlan:
     name that names a strategy the call does not run or leaves one out (`params` may: that
     strategy keeps its defaults), for a capital that is not a positive number, for an
     unusable account (`_strategy_args.account_settings`), and for a setting keyed by
-    symbol that names a symbol no strategy trades, or no symbol while the strategies trade
-    several (`_portfolio_symbols`)."""
+    what is traded that no strategy can take, or that names no symbol while the
+    strategies trade several (`_portfolio_symbols`)."""
     strategies = strategy_classes(strategy, "bt.backtest")
     names = class_names(strategies)
     twice = repeated(names)

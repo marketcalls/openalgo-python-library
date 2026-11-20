@@ -665,13 +665,15 @@ REFUSED = [
         "corporate actions of a symbol no strategy trades",
         {"corporate_actions": {"TCS": [CorporateAction.none(DAY)]}},
         ConfigError,
-        "corporate_actions names ['TCS'], which no strategy of the run trades (INFY, SBIN)",
+        "corporate_actions names ['TCS'], which no strategy of the run trades as a share on "
+        "NSE or BSE (INFY, SBIN)",
     ),
     (
         "an instrument no strategy trades",
         {"instrument": Instrument.cash_equity("TCS", "NSE")},
         ConfigError,
-        "instrument= gives TCS, which no strategy of the run trades (INFY, SBIN)",
+        "instrument= gives TCS (equity, NSE), which no strategy of the run trades (INFY on "
+        "NSE, SBIN on NSE)",
     ),
     (
         "max_positions of the second strategy",
@@ -706,6 +708,24 @@ def test_a_portfolio_run_refuses_unusable_arguments_before_loading_data(given, e
     arguments = {"capital": LAKH, **given}
     with pytest.raises(error, match=re.escape(words)):
         bt.backtest([First, OnInfy], **arguments)
+
+
+class NiftyFuturesConditions(bt.Strategy):
+    """Declares an entry condition on the current NIFTY future."""
+
+    underlying, exchange, interval = "NIFTY", "NFO", "D"
+
+    def init(self):
+        self.entry_when(self.close > self.open)
+
+
+def test_a_condition_strategy_on_a_futures_underlying_is_refused_before_any_data_is_loaded():
+    # Its init runs on the reference bars in the checks, where a condition strategy is
+    # held to one symbol: no client and no data, so a refusal after the checks would be
+    # the data layer's.
+    words = "NiftyFuturesConditions: a condition strategy trades one symbol (set symbol)"
+    with pytest.raises(ConfigError, match=re.escape(words)):
+        bt.backtest([First, NiftyFuturesConditions], capital=LAKH, **DATES)
 
 
 @pytest.mark.parametrize("verb", [bt.optimize, bt.robustness, bt.walk_forward])

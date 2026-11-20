@@ -5,14 +5,15 @@ them; an entry no strategy uses is refused, or for `margin=` warned about once, 
 (18-multi-strategy 1.1; `_portfolio_symbols`).
 
 The futures runs trade the two NIFTY contracts of `test_run_futures_margin` (September
-2024 with lot 25, October 2024 with lot 50) beside a daily SBIN strategy on the same
-sessions; the minute runs are `portfolio_samples`' scripts. Costs and slippage are off and
-nothing contacts a server.
+2024 with lot 25, October 2024 with lot 50), or two SBIN contracts (lot 750), beside a
+daily SBIN strategy on the same sessions; the minute runs are `portfolio_samples`'
+scripts. Costs and slippage are off and nothing contacts a server.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import re
 import warnings
 
 import pandas as pd
@@ -23,6 +24,8 @@ from test_run_futures_margin import ROLL_BARS, ROLL_CONTRACTS, TwoLotsOfNifty
 
 import openalgo.backtest as bt
 from openalgo.backtest.data import CorporateAction
+from openalgo.backtest.errors import ConfigError
+from openalgo.backtest.reference import Instrument
 
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 CAPITAL = 1_000_000
@@ -105,10 +108,10 @@ def futures_beside_shares():
     return pf, alone
 
 
-def test_each_strategy_is_given_its_own_instruments_and_margin_and_runs_as_alone(
-    futures_beside_shares,
-):
-    pf, alone = futures_beside_shares
+def assert_each_runs_as_alone(pf, alone: dict) -> None:
+    """Each strategy's own `Result` in the portfolio run `pf` equals its run alone in
+    `alone` (by name): every table, the warnings, the manifest and the Assumptions block
+    but for the line naming the account it ran in."""
     for name, own in alone.items():
         member = pf.strategy(name)
         for table in TABLES:
@@ -118,6 +121,13 @@ def test_each_strategy_is_given_its_own_instruments_and_margin_and_runs_as_alone
         block = member.assumptions
         assert block.pop("account").startswith("ran in a shared account")
         assert block == own.assumptions
+
+
+def test_each_strategy_is_given_its_own_instruments_and_margin_and_runs_as_alone(
+    futures_beside_shares,
+):
+    pf, alone = futures_beside_shares
+    assert_each_runs_as_alone(pf, alone)
     # Two September lots of 25 at 1,00,000 a lot, then one October lot of 50 after the roll.
     assert pf.strategy("TwoLotsOfNifty").rolls["to_symbol"].tolist() == ["NIFTY31OCT24FUT"]
 
@@ -169,3 +179,161 @@ def test_each_strategy_records_only_the_corporate_actions_of_its_own_symbols():
         "OnSbin": {"SBIN": [{"ex_date": DAY.isoformat(), "kind": "none", "factor": 1.0}]},
         "OnInfy": None,
     }
+
+
+# ----- a share and the futures of the same name ------------------------------------------
+
+SBIN_SEPTEMBER = "SBIN26SEP24FUT"
+SBIN_OCTOBER = "SBIN31OCT24FUT"
+
+
+def sbin_future(symbol: str, last_day: dt.date) -> Instrument:
+    """An SBIN futures contract on NFO: lot 750, tick 0.05, expiring on `last_day`."""
+    return Instrument(
+        symbol=symbol,
+        exchange="NFO",
+        kind="future",
+        lot_size=750,
+        tick_size=0.05,
+        expiry=last_day,
+        underlying="SBIN",
+        settlement="cash",
+    )
+
+
+SBIN_CONTRACTS = {
+    SBIN_SEPTEMBER: sbin_future(SBIN_SEPTEMBER, dt.date(2024, 9, 26)),
+    SBIN_OCTOBER: sbin_future(SBIN_OCTOBER, dt.date(2024, 10, 31)),
+}
+SBIN_SHARE = {"SBIN": Instrument.cash_equity("SBIN", "NSE")}
+#: The September contract 2 rupees above the share to its last trading day, the October
+#: contract 4 rupees above from the 09-25 roll on.
+SBIN_FUTURE_BARS = {
+    SBIN_SEPTEMBER: september(
+        {day: tuple(price + 2.0 for price in SBIN_ROWS[day]) for day in SESSIONS[:5]}
+    ),
+    SBIN_OCTOBER: september(
+        {day: tuple(price + 4.0 for price in SBIN_ROWS[day]) for day in SESSIONS[3:]}
+    ),
+}
+SHARE_AND_FUTURES_RUN = {**FUTURES_RUN, "data": {**FUTURES_RUN["data"], **SBIN_FUTURE_BARS}}
+#: A checked date of SBIN: a session of the run with no split or bonus.
+CHECKED_SBIN = [CorporateAction.none(dt.date(2024, 9, 23))]
+
+
+class SbinFutures(bt.Strategy):
+    """Buys one lot of the current SBIN future at the 09-20 close and exits at the 09-27
+    close; the position rolls at the 09-25 open."""
+
+    underlying, exchange, interval = "SBIN", "NFO", "D"
+
+    def on_bar(self, bar):
+        if bar.time.day == 20:
+            self.buy(lots=1)
+        elif bar.time.day == 27:
+            self.exit()
+
+
+class SbinOnBse(SbinDaily):
+    """SbinDaily on BSE."""
+
+    exchange = "BSE"
+
+
+@pytest.mark.parametrize(
+    "actions", [{"SBIN": CHECKED_SBIN}, CHECKED_SBIN], ids=["by symbol", "one list"]
+)
+def test_a_share_and_the_futures_of_its_name_each_take_only_their_own_entries(actions):
+    # instrument= names the share and the contracts, corporate_actions= the share: the
+    # share strategy is given the share's instrument and actions, the futures strategy the
+    # contracts only (corporate actions apply to shares, and it trades none).
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        pf = bt.backtest(
+            [SbinDaily, SbinFutures],
+            instrument={**SBIN_CONTRACTS, **SBIN_SHARE},
+            corporate_actions=actions,
+            **SHARE_AND_FUTURES_RUN,
+        )
+        alone = {
+            "SbinDaily": bt.backtest(
+                SbinDaily,
+                instrument=SBIN_SHARE,
+                corporate_actions=actions,
+                **SHARE_AND_FUTURES_RUN,
+            ),
+            "SbinFutures": bt.backtest(
+                SbinFutures, instrument=SBIN_CONTRACTS, **SHARE_AND_FUTURES_RUN
+            ),
+        }
+    assert_each_runs_as_alone(pf, alone)
+    assert pf.strategy("SbinFutures").rolls["to_symbol"].tolist() == [SBIN_OCTOBER]
+    assert pf.strategy("SbinDaily").manifest["arguments"]["corporate_actions"] is not None
+
+
+def test_one_symbol_on_two_exchanges_takes_an_instrument_on_its_own_exchange_only():
+    # instrument= holds SBIN on NSE: the NSE strategy is given it, the BSE strategy the
+    # generic BSE share, as each alone.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        pf = bt.backtest([SbinDaily, SbinOnBse], instrument=SBIN_SHARE, **FUTURES_RUN)
+        alone = {
+            "SbinDaily": bt.backtest(SbinDaily, instrument=SBIN_SHARE, **FUTURES_RUN),
+            "SbinOnBse": bt.backtest(SbinOnBse, **FUTURES_RUN),
+        }
+    assert_each_runs_as_alone(pf, alone)
+
+
+#: Settings that no strategy of the run can take, refused before any data is loaded:
+#: (id, strategies, arguments, the refusal's words).
+REFUSED = [
+    (
+        "an instrument on an exchange no strategy trades on",
+        [SbinDaily, SbinFutures],
+        {"instrument": Instrument.cash_equity("SBIN", "BSE")},
+        "instrument= gives SBIN (equity, BSE), which no strategy of the run trades "
+        "(SBIN futures on NFO, SBIN on NSE)",
+    ),
+    (
+        "a future of an underlying no strategy trades",
+        [SbinDaily, SbinFutures],
+        {"instrument": ROLL_CONTRACTS},
+        "instrument= gives NIFTY26SEP24FUT (future, NFO), NIFTY31OCT24FUT (future, NFO), "
+        "which no strategy of the run trades (SBIN futures on NFO, SBIN on NSE)",
+    ),
+    (
+        "corporate actions of a futures underlying",
+        [SbinDaily, TwoLotsOfNifty],
+        {"corporate_actions": {"NIFTY": CHECKED_SBIN}},
+        "corporate_actions names ['NIFTY'], which no strategy of the run trades as a share "
+        "on NSE or BSE (SBIN)",
+    ),
+    (
+        "a list of corporate actions with no share traded",
+        [TwoLotsOfNifty, SbinFutures],
+        {"corporate_actions": CHECKED_SBIN},
+        "corporate_actions apply to shares on NSE and BSE, and no strategy of the run "
+        "trades one: leave them out",
+    ),
+    (
+        "one table of bars for a share and its futures",
+        [SbinDaily, SbinFutures],
+        {"data": september(SBIN_ROWS)},
+        "the strategies trade SBIN, SBIN futures: give data= as a dict of bars by symbol",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("strategies", "given", "words"),
+    [row[1:] for row in REFUSED],
+    ids=[row[0] for row in REFUSED],
+)
+def test_a_setting_no_strategy_can_take_is_refused_before_any_data_is_loaded(
+    strategies, given, words
+):
+    # No client and, but for the one table, no data: a refusal after the checks would be
+    # the data layer's, for the missing source.
+    arguments = {"capital": CAPITAL, "start": dt.date(2024, 9, 20), "end": dt.date(2024, 9, 30)}
+    with pytest.raises(ConfigError, match=re.escape(words)):
+        bt.backtest(strategies, **arguments, **given)
