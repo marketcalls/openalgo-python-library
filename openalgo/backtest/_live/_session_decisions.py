@@ -55,7 +55,7 @@ class DecisionNotes:
 
     def __init__(self, name: str, part: StrategyPlan, write: Callable[..., None]) -> None:
         self._name, self._part, self._write = name, part, write
-        self._told_not_ready = False
+        self._told_not_ready = self._told_unread = False
 
     def submitted(self) -> list[dict[str, Any]]:
         """What the strategy's code submitted since the last call, as a decision line
@@ -111,10 +111,24 @@ class DecisionNotes:
                 "volume": bar.volume,
             },
             source=" and ".join(sorted(sources, reverse=True)) or None,
-            indicators=self._part.context.indicator_values(),
+            indicators=self._indicators(),
             position_units=position_units,
             submitted=submitted,
         )
+
+    def _indicators(self) -> dict[str, Any] | str:
+        """The `self.I` values for a decision line, or what kept them from being read: an
+        indicator the strategy did not read at this decision is computed here, and a
+        failure of it must not stop a session the strategy's own reads let go on. Logged
+        at WARNING the first time, at DEBUG after."""
+        try:
+            return self._part.context.indicator_values()
+        # Diagnostic only: any failure is named in the line and logged, never raised.
+        except Exception as error:
+            level = logging.DEBUG if self._told_unread else logging.WARNING
+            self._told_unread = True
+            logger.log(level, "%s: the indicator values could not be read: %s", self._name, error)
+            return f"not read: {type(error).__name__}: {error}"
 
     def skipped(self, decided_at_ns: int, reason: str) -> None:
         """Write the line of a strategy bar not decided on, and why."""

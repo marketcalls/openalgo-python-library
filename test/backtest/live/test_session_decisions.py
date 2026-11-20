@@ -24,6 +24,7 @@ from session_samples import PRICE, ist, rig
 import openalgo.backtest as bt
 from openalgo import ta
 from openalgo.backtest._live._types import LOGGER_NAME
+from openalgo.backtest._live.series import LiveRunContext
 
 
 class AverageBuy(bt.Strategy):
@@ -221,3 +222,22 @@ def test_a_bar_that_closes_while_the_session_stops_writes_its_reason(world):
         "decided_at": "2026-11-16 14:43 IST",
         "reason": "session stopping",
     }
+
+
+def test_indicator_values_that_cannot_be_read_leave_the_decision_and_the_session_as_they_are(
+    world, monkeypatch, caplog
+):
+    # The decisions file is diagnostic: a failure reading the indicators for its line is
+    # logged (at WARNING once) and named in the line; the session goes on as before.
+    def unreadable(context):
+        raise ValueError("an indicator failed to compute")
+
+    monkeypatch.setattr(LiveRunContext, "indicator_values", unreadable)
+    world.stop_at(ist(14, 43, 30))
+    outcome = world.run(AverageBuy)
+    assert [line["indicators"] for line in decision_lines(outcome)] == [
+        "not read: ValueError: an indicator failed to compute"
+    ] * 2
+    assert outcome.stopped_by == "ctrl_c"
+    told = records(caplog, "indicator values could not be read")
+    assert [record.levelno for record in told] == [logging.WARNING, logging.DEBUG]
