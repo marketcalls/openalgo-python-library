@@ -11,7 +11,7 @@ from ..._trade_list import trade_list
 from .. import _format as fmt
 from .._combined import return_correlation
 from . import cards, data, excursions, tables
-from .layout import LARGE, SMALL, Section, View, card, stack
+from .layout import LARGE, SMALL, TITLES, Section, View, card, stack
 from .trades import compare, method_notes, r_tiles, trade_table
 
 #: The class of an assumption row that is a warning (its line starts "warning: ").
@@ -34,7 +34,7 @@ def metrics(view: View) -> Section | None:
     columns = " &#183; ".join(fmt.text(name) for name in names)
     subtitle = f"{len(tables.metric_keys(p))} metrics &#183; {columns}"
     body = f"<div class='card'><div class='card-body'>{table}</div></div>"
-    return Section("metrics", "Metrics", subtitle, body)
+    return Section("metrics", TITLES["metrics"], subtitle, body)
 
 
 def _closed_r(view: View) -> np.ndarray:
@@ -91,7 +91,7 @@ def trades(view: View) -> Section | None:
     ]
     body = stack(blocks)
     subtitle = "Closed trades, excursions &amp; trading cost"
-    return Section("trades", "Trades", subtitle, body) if body else None
+    return Section("trades", TITLES["trades"], subtitle, body) if body else None
 
 
 def strategies(view: View) -> Section | None:
@@ -113,7 +113,7 @@ def strategies(view: View) -> Section | None:
             (SMALL, card("Correlation", "Of session returns", _correlation(correlation))),
         ]
     )
-    return Section("strategies", "Strategies", "Side by side", body)
+    return Section("strategies", TITLES["strategies"], "Side by side", body)
 
 
 def _correlation(frame: pd.DataFrame) -> str:
@@ -137,7 +137,11 @@ def notes(view: View) -> Section | None:
         (SMALL, assumptions_card(view.assumptions) if view.has("assumptions") else ""),
     ]
     body = stack(blocks)
-    return Section("notes", "Notes", "Method, assumptions &amp; warnings", body) if body else None
+    return (
+        Section("notes", TITLES["notes"], "Method, assumptions &amp; warnings", body)
+        if body
+        else None
+    )
 
 
 def _assumption_row(line: str) -> str:

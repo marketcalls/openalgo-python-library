@@ -13,6 +13,13 @@ from .cards import tone
 
 #: Trades on one page of the trade table (every row shows without script).
 TRADES_PER_PAGE = 20
+#: The Prev and Next buttons under a paged table, filled in by the page's script; it
+#: finds them right after the table's scroll box.
+PAGER = (
+    "<div class='pager js-only'><span class='pager-info nums'></span>"
+    "<button type='button' class='btn pg-prev'>Prev</button>"
+    "<button type='button' class='btn pg-next'>Next</button></div>"
+)
 #: The figures compared across strategies: label, metrics key, and the direction that is
 #: better ("up" or "down").
 COMPARED = (
@@ -40,7 +47,7 @@ _PERCENT_KEYS = {
 }
 
 
-def _key(value: object) -> str:
+def sort_key(value: object) -> str:
     """The sort value of a cell: a number, the nanoseconds of a time, or lower-case
     text; empty when missing."""
     if fmt.is_missing(value):
@@ -53,7 +60,7 @@ def _key(value: object) -> str:
 
 
 def _td(text: str, value: object, css: str = "r nums") -> str:
-    return f"<td class='{css}' data-v='{_key(value)}'>{text}</td>"
+    return f"<td class='{css}' data-v='{sort_key(value)}'>{text}</td>"
 
 
 def _quantity(units: float) -> str:
@@ -79,7 +86,7 @@ def _excursion(trade: pd.Series, name: str) -> str:
         return _td(fmt.MISSING, None)
     hover = f"{fmt.percent(pct / 100)} of capital at work"
     return (
-        f"<td class='r nums{tone(value)}' data-v='{_key(value)}' title='{hover}'>"
+        f"<td class='r nums{tone(value)}' data-v='{sort_key(value)}' title='{hover}'>"
         f"{fmt.rupees(value)}</td>"
     )
 
@@ -147,15 +154,10 @@ def trade_table(listing: pd.DataFrame) -> str:
     rows = "".join(
         _row(int(number), trade, with_r, with_excursion) for number, trade in listing.iterrows()
     )
-    pager = (
-        "<div class='pager js-only'><span class='pager-info nums'></span>"
-        "<button type='button' class='btn pg-prev'>Prev</button>"
-        "<button type='button' class='btn pg-next'>Next</button></div>"
-    )
     return (
         f"<div class='scroll'><table class='tbl hover trades' data-sort "
         f"data-page='{TRADES_PER_PAGE}'><thead><tr>{head}</tr></thead><tbody>{rows}</tbody>"
-        f"</table></div>{pager}"
+        f"</table></div>{PAGER}"
     )
 
 
@@ -249,4 +251,13 @@ def method_notes(performance: Performance) -> str:
     return f"<div class='prose'>{paragraphs}</div>"
 
 
-__all__ = ["COMPARED", "TRADES_PER_PAGE", "compare", "method_notes", "r_tiles", "trade_table"]
+__all__ = [
+    "COMPARED",
+    "PAGER",
+    "TRADES_PER_PAGE",
+    "compare",
+    "method_notes",
+    "r_tiles",
+    "sort_key",
+    "trade_table",
+]

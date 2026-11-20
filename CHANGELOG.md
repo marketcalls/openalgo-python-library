@@ -18,6 +18,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejection `account_loss_gate` (entries after the account's daily loss limit is breached, until
   the next session), the exit reason `account_loss_limit` and the risk event `account_loss_hit`
   (scope `account`). Result warnings explain the new rejection codes and what to do.
+- Custom tearsheets (2.4.0, unit C1). `result.tearsheet(layout=...)` and
+  `report.tearsheet(..., layout=...)` take a `report.Layout`, which can hide or show built-in
+  sections and parts (`report.PARTS` lists them), add sections of your own with
+  `report.section` (charts and tables drawn in the tearsheet's look: `line`, `bar`,
+  `histogram`, `scatter`, `heatmap`, `table`, `tiles`, `text`), add blocks to the end of a
+  built-in section (name your section like it), place and order sections (`after=`,
+  `order=`) and set the page's light and dark colours (`report.Theme`). A block's data is a
+  pandas object or a function of the result, so one layout serves every run. `report.html`
+  and `report.svg` embed your own HTML or SVG, checked against an allow list (no script, no
+  style sheet, nothing fetched, links only inside the page, images only inline as PNG, JPEG
+  or SVG data), so the page stays one offline file; anything off the list raises a
+  `ConfigError` naming it and its block. The built-in tearsheet stays the default and is the
+  same byte for byte: no layout, `layout=None` and `Layout(base=mode)` give today's page,
+  pinned by twelve golden pages in the tests.
 
 ## [2.3.0] - 2026-11-20
 
