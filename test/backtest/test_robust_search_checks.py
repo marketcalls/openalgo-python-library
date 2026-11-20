@@ -11,6 +11,7 @@ so what one window favours the next does not.
 """
 
 import threading
+from itertools import product
 
 import numpy as np
 import pandas as pd
@@ -259,6 +260,58 @@ def test_each_value_off_its_range_is_named_with_a_keyword_range_around_it():
         "of its range (a, b). Give each a range that holds it as a keyword named after the "
         "parameter, for example fast=[6, 7, 8], label=['c']."
     )
+
+
+def off_grid_of(ranges: dict[str, tuple], run_params: dict[str, object]) -> Grid:
+    """The grid of `ranges` around a run whose parameters are `run_params`."""
+    combos = tuple(dict(zip(ranges, values, strict=True)) for values in product(*ranges.values()))
+    return Grid(tuple(ranges), combos, run_params, True)
+
+
+#: A float residue: 0.1 + 0.2 is 0.30000000000000004 as a float, not 0.3.
+RESIDUE = 0.1 + 0.2
+
+
+@pytest.mark.parametrize(
+    ("ranges", "run_params", "note"),
+    [
+        # The best of a sweep over np.arange(0.1, 0.7, 0.1) passed back in params= is off
+        # the declared range by a float residue only: the note says so, writes both values
+        # as they are, and gives the range's value to pass instead.
+        (
+            {"x": (0.1, 0.2, 0.3, 0.4, 0.5, 0.6)},
+            {"x": RESIDUE},
+            "The run's parameters (x 0.30000000000000004) are not a combination of the "
+            "ranges searched: x 0.30000000000000004 differs from 0.3, a value of its range "
+            "(0.1, 0.2, 0.3, 0.4, 0.5, 0.6), by a float residue only. Pass the range's value "
+            "in params=, for example params={'x': 0.3}.",
+        ),
+        # A value of more than six digits is written whole, so the keyword range holds it;
+        # its neighbours, 10 percent either side, need no more than twelve.
+        (
+            {"mult": (1.0, 1.5)},
+            {"mult": 2.3456789},
+            "The run's parameters (mult 2.3456789) are not a combination of the ranges "
+            "searched: mult 2.3456789 is not among the values of its range (1.0, 1.5). Give "
+            "it a range that holds it as a keyword named after the parameter, for example "
+            "mult=[2.11111101, 2.3456789, 2.58024679].",
+        ),
+        # Both at once: each is named, and each piece of advice names its own.
+        (
+            {"x": (0.1, 0.2, 0.3), "day": (0, 1)},
+            {"x": RESIDUE, "day": 3},
+            "The run's parameters (x 0.30000000000000004, day 3) are not a combination of "
+            "the ranges searched: x 0.30000000000000004 differs from 0.3, a value of its "
+            "range (0.1, 0.2, 0.3), by a float residue only; day 3 is not among the values "
+            "of its range (0, 1). Give it a range that holds it as a keyword named after the "
+            "parameter, for example day=[2, 3, 4]. Pass the range's value in params=, for "
+            "example params={'x': 0.3}.",
+        ),
+    ],
+    ids=["a float residue", "more than six digits", "both"],
+)
+def test_a_fractional_value_off_its_range_is_written_as_it_is(ranges, run_params, note):
+    assert _check_parameters._off_the_grid(off_grid_of(ranges, run_params), 0.10) == note
 
 
 # ----- 2.1 out of sample ----------------------------------------------------------------
