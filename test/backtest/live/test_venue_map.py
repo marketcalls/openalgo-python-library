@@ -21,6 +21,7 @@ from openalgo.backtest._live._venue_requests import (
     PlaceRequest,
     Priority,
 )
+from openalgo.backtest._live._worker_queue import WithdrawPlace
 from openalgo.backtest._live.inbox import NotSent, NotSentReason, SendResult, Settled
 from openalgo.backtest._live.venue_map import Applied
 from openalgo.backtest.errors import LiveError
@@ -126,7 +127,7 @@ def test_what_waited_for_the_bind_is_released_in_the_order_the_kernel_gave_it():
     rig.next_close()
     rig.engine.modify(kernel_order, LIMIT_CHANGE)
     rig.engine.cancel(kernel_order)
-    assert rig.wait() == []
+    assert rig.wait() == [WithdrawPlace(place)]
 
     handled = rig.map.sent(SendResult(place.request_id, accepted("B1")))
 
@@ -149,11 +150,12 @@ def test_an_unanswered_placement_releases_what_waited_when_the_order_book_binds_
 
 
 def with_a_waiting_cancel(rig: Rig) -> tuple[int, PlaceRequest]:
-    """A placement not bound yet, and a cancel of it waiting for the bind."""
+    """A placement not bound yet, and a cancel of it waiting for the bind (the worker is
+    asked to withdraw the placement, which it had taken already)."""
     kernel_order, place = placed(rig)
     rig.next_close()
     rig.engine.cancel(kernel_order)
-    assert rig.wait() == []
+    assert rig.wait() == [WithdrawPlace(place)]
     return kernel_order, place
 
 

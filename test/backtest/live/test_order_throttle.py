@@ -14,14 +14,22 @@ import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from worker_samples import PRICE, WorkerRig
 
+from openalgo.backtest._live import _order_throttle
 from openalgo.backtest._live._order_throttle import (
     NOTICE_AFTER_S,
+    THROTTLED_EVENT,
     WITHDRAW_AFTER_S,
     OrderThrottle,
+    throttled_news,
 )
-from openalgo.backtest._live._types import OrderIntent, Purpose
+from openalgo.backtest._live._types import AlertKind, OrderIntent, Purpose
 from openalgo.backtest._live._venue_requests import CancelRequest, PlaceRequest, Priority
-from openalgo.backtest._live._worker_queue import ReadBooks, WorkerQueue, is_order_call
+from openalgo.backtest._live._worker_queue import (
+    CancelOrphan,
+    ReadBooks,
+    WorkerQueue,
+    is_order_call,
+)
 from openalgo.backtest._live.inbox import NotSent, NotSentReason, Throttled
 from openalgo.backtest.errors import LiveError
 
@@ -180,6 +188,80 @@ def test_an_exit_is_never_dropped_however_long_it_waits():
     assert len(world.queue) == 1
     assert world.posted == [Throttled(held, NOTICE_AFTER_S, withdrawn=False)]
     assert world.finished == 0
+
+
+def test_an_entry_held_after_another_left_the_queue_waits_from_its_own_first_hold(monkeypatch):
+    # The first entry is held from 0 s and leaves the queue another way (the close's
+    # withdrawal, say); a later entry under the same id (the interpreter may reuse the
+    # address) is held from its own first hold, so it is not withdrawn early.
+    world = World(per_second=1)
+    full_window(world)
+    monkeypatch.setattr(_order_throttle, "id", lambda request: 1, raising=False)
+    first, later = entry(1), entry(2)
+    world.put(first)
+    world.throttle.take(world.queue, Priority.UPKEEP)
+    world.queue.remove(first)
+    world.clock.advance(WITHDRAW_AFTER_S - 1.0)
+    world.put(later)
+    world.throttle.take(world.queue, Priority.UPKEEP)
+    world.clock.advance(1.0)
+
+    world.throttle.take(world.queue, Priority.UPKEEP)
+
+    assert world.queue.waits(later)
+    assert world.posted == []
+
+
+class LoopSession:
+    """What the loop's handler of a `Throttled` note uses of the session: its order rate,
+    its event stream and its alerts."""
+
+    def __init__(self, per_second: int) -> None:
+        arguments = type("Arguments", (), {"max_orders_per_second": per_second})
+        spec = type("Spec", (), {"arguments": arguments})
+        self.parts = type("Parts", (), {"spec": spec})
+        self.events: list[tuple[str, dict]] = []
+        self.alerts: list[tuple[AlertKind, str]] = []
+
+    def event(self, kind: str, **fields) -> None:
+        self.events.append((kind, fields))
+
+    def alert(self, kind: AlertKind, text: str) -> None:
+        self.alerts.append((kind, text))
+
+
+def test_a_held_cancel_of_an_orphan_is_noted_with_its_broker_order_id():
+    # A restart hands over the cancels of five orders of its journal that no strategy
+    # holds (the reconciler's orphans). With one call a second, taken every half second,
+    # B4 and B5 have waited 2 s at 2.5 s, held since 0.5 s.
+    world = World(per_second=1)
+    orphans = [CancelOrphan(order_id=f"B{n}") for n in range(1, 6)]
+    world.put(*orphans)
+    for _ in range(6):
+        world.step()
+        world.clock.advance(0.5)
+    assert world.posted == [
+        Throttled(orphans[3], NOTICE_AFTER_S, withdrawn=False),
+        Throttled(orphans[4], NOTICE_AFTER_S, withdrawn=False),
+    ]
+    session = LoopSession(per_second=1)
+
+    assert throttled_news(session, world.posted[0], alerted=False) is True
+
+    assert session.events == [
+        (
+            THROTTLED_EVENT,
+            {
+                "strategy": None,
+                "order_id": "B4",
+                "purpose": "cancel_orphan",
+                "waited_s": NOTICE_AFTER_S,
+                "reason": None,
+            },
+        )
+    ]
+    ((kind, text),) = session.alerts
+    assert kind is AlertKind.ERROR and "cancel of order B4" in text
 
 
 @pytest.mark.parametrize("per_second", [0, -3, 1.5])

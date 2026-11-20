@@ -142,7 +142,7 @@ class OrderWorker:
         self.updates = RawUpdates(wake=self._wake)
         #: Since when (UTC nanoseconds) the worker is in a call that may reach the server.
         self.busy_since_ns: int | None = None
-        self._incoming = Incoming()
+        self._incoming = Incoming(self._post)
         self._queue = WorkerQueue()
         self._throttle = OrderThrottle(
             now, orders_per_second, post=self._post, finished=self._incoming.finished

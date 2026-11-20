@@ -149,6 +149,8 @@ class NotSentReason(enum.Enum):
     REFUSED = "refused"
     #: An entry or add the order rate held back too long (18-multi-strategy 2.5a rule 12).
     THROTTLED = "order_rate"
+    #: An entry or add the kernel cancelled while it waited in the worker's queue.
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True)
