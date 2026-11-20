@@ -46,7 +46,7 @@ from ._session_trader import Trader
 from ._stops_after import AfterLines
 from ._stops_bare import BareLegs
 from ._stops_cancels import CancelRetries
-from ._stops_cover import Windows, reason_of
+from ._stops_cover import Windows, held_by_other, reason_of
 from ._stops_deadline import UNPROTECTED, UNPROTECTED_EXIT_AFTER_S, Deadlines
 from ._stops_held import HeldWords
 from ._stops_kernel import cancelling, push_price
@@ -268,7 +268,13 @@ class StopsSupervisor:
                 stop = leg.orders.get(leg.stop) if leg.stop is not None else None
                 held = stop is not None and self.held.held_cancel(trader, stop.kernel_order)
                 retries = self._session.exits.owns(trader.name)
-                reason = reason_of(leg, held_cancel=held, retries=retries)
+                reason = reason_of(
+                    leg,
+                    held_cancel=held,
+                    retries=retries,
+                    held_by_other=self.held_by_other(trader) is not None,
+                    closing_rejected=self._session.margin.unprotected_reason(trader),
+                )
                 opened = self.windows.note(key, uncovered, reason, span)
                 if opened is not None:
                     self._session.event(
@@ -298,6 +304,12 @@ class StopsSupervisor:
         if terms.price_type not in STOP_TYPES:
             return 0
         return max(0, terms.quantity - trader.venue.filled(kernel_order))
+
+    def held_by_other(self, trader: Trader) -> tuple[str, str] | None:
+        """Another strategy of `trader`'s instrument with a placement unanswered, which
+        holds every send for the instrument, as (its name, the placement's words)."""
+        members = self._session.groups.members(trader)
+        return held_by_other((m.name, self.leg(m)) for m in members if m is not trader)
 
     def broker_units(self, trader: Trader) -> int | None:
         """The broker's signed units of `trader`'s leg as the last read showed them while
@@ -353,11 +365,15 @@ class StopsSupervisor:
         if isinstance(request, ModifyRequest):
             what = f"change of the {what}"
         units = round(abs(trader.open_units())) - self.covered(trader)
+        why = f"{message.reason.value}: {message.error}"
+        holder = self.held_by_other(trader) if message.reason is NotSentReason.HELD else None
+        if holder is not None:
+            why = f"{holder[0]}'s order {holder[1]} of the instrument has no answer yet"
         self._session.alert(
             AlertKind.ERROR,
             f"{trader.name}: the {what} of {trader.symbol} {trader.exchange} cannot be sent "
-            f"now ({message.reason.value}: {message.error}); it waits, and {max(units, 0)} "
-            "units have no confirmed stop at the broker meanwhile",
+            f"now ({why}); it waits, and {max(units, 0)} units have no confirmed stop at the "
+            "broker meanwhile",
         )
 
     def _unbound_add(self, trader: Trader, request: PlaceRequest) -> None:

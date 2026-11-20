@@ -63,7 +63,7 @@ class Deadlines:
                     "the session asks for no exit while it protects the leg: check the order book",
                 )
                 continue
-            asked = trader.request_exit(UNPROTECTED)
+            asked = session.margin.request_exit(trader, UNPROTECTED)
             session.event("stop_unconfirmed", strategy=trader.name, outcome=asked)
             self._alert(trader, stop.order_id, "the position is exited (the stop cancelled first)")
 

@@ -11,8 +11,13 @@ that fake left.
   object, the names of its clients (`FakeOpenAlgo.client`), its event stream and its
   alerts as it sent them, where the fake's log stood when it opened, when its mode guard
   locked and when it closed, each strategy's kernel state as its close stopped it
-  (`Closing`), and the outcome its close returned (None for a run that crashed or whose
-  close failed).
+  (`Closing`), the outcome its close returned (None for a run that crashed or whose
+  close failed), and each order word a kernel took that was not of its own orders
+  (`Run.strayed`, 18-multi-strategy 5.1 I5).
+- **The members' books at each change** (`OrderChange.members`, 18-multi-strategy 5.1 I4
+  and I6): for each strategy of the run open then that trades the change's instrument in
+  its book, its kernel's units, the units its kernel adopted from other orders' trades,
+  and what each of its bound orders' fill ledgers has given the kernel.
 
 `session_hooks.trace_sessions` installs the recording for one fake and has the invariants
 run when the test ends.
@@ -49,19 +54,49 @@ BOOKS_AGREE = "books agree"
 ANSWERED = "every modify and cancel answered"
 GUARD_LOCK = "nothing after a guard lock"
 PRICED = "priced fills"
+SUM_RULE = "the sum rule"
+ISOLATION = "isolation"
+ONE_SIDE = "one side"
 CHECKS = frozenset(
-    {ONE_STOP, WITHIN, OTHER_SIDE, NO_ORPHAN, PROTECTED, BOOKS_AGREE, ANSWERED, GUARD_LOCK, PRICED}
+    {
+        ONE_STOP,
+        WITHIN,
+        OTHER_SIDE,
+        NO_ORPHAN,
+        PROTECTED,
+        BOOKS_AGREE,
+        ANSWERED,
+        GUARD_LOCK,
+        PRICED,
+        SUM_RULE,
+        ISOLATION,
+        ONE_SIDE,
+    }
 )
 #: The rows 7.1 lists as leaving a leg without a confirmed stop at the end.
 LISTED_ROWS = frozenset({"F35", "F36", "F60", "F77 variant", "F80"})
 
 
 @dataclass(frozen=True)
+class Member:
+    """A strategy's books as one change at the fake found them (module docstring): its
+    kernel's signed units, the signed units it adopted from other orders' trades, and the
+    units each of its bound orders' fill ledgers has given the kernel, by broker order."""
+
+    strategy: str
+    units: int
+    adopted: int
+    given: tuple[tuple[str, int], ...]
+
+
+@dataclass(frozen=True)
 class OrderChange:
     """An order as it stood right after one change at the fake (module docstring): the
     change's place in the sequence, its time, the book's mode, the order's terms and
-    state, the units and price of the fill the change made (0 for none), and the net
-    position of the order's instrument in that book after it."""
+    state, the units and price of the fill the change made (0 for none), the net
+    position of the order's instrument in that book after it, the run's members of the
+    instrument then (None while no run is open, or a kernel cannot be read) and the
+    names of that run's clients."""
 
     seq: int
     ts_ns: int
@@ -79,6 +114,8 @@ class OrderChange:
     fill_units: int
     fill_price: float
     position: int
+    members: tuple[Member, ...] | None = None
+    run_clients: frozenset[str] = frozenset()
 
     @property
     def working(self) -> bool:
@@ -131,6 +168,7 @@ class Run:
     log_from: int = 0
     log_to: int | None = None
     locked_at: int | None = None
+    strayed: list[str] = field(default_factory=list)
 
     @property
     def mode(self) -> Mode:
@@ -264,8 +302,39 @@ class SessionTrace:
                 units,
                 0.0 if fill is None else fill.price,
                 self._positions.get(key, 0),
+                *self._members(mode, order.symbol, order.exchange),
             )
         )
+
+    def _members(
+        self, mode: Mode, symbol: str, exchange: str
+    ) -> tuple[tuple[Member, ...] | None, frozenset[str]]:
+        """The open run's strategies of `exchange:symbol` in book `mode`, as their kernels
+        and venue maps stand now (module docstring), and the run's clients."""
+        run = next((run for run in reversed(self.runs) if run.ended_at is None), None)
+        if run is None or run.mode is not mode:
+            return None, frozenset()
+        session = run.session
+        try:
+            members = tuple(
+                _member(session, trader)
+                for trader in session.traders
+                if (trader.symbol, trader.exchange) == (symbol, exchange)
+            )
+        # Any failure of a kernel (a test's hook broke it, the run ended): no sample.
+        except Exception:
+            return None, frozenset()
+        return members, run.clients
+
+
+def _member(session: Any, trader: Any) -> Member:
+    given = tuple(
+        (placed.order_id, trader.venue.filled(kernel_order))
+        for kernel_order, placed in trader.venue.placed()
+        if placed.order_id
+    )
+    adopted = session.reconcile.adopted(trader.name)
+    return Member(trader.name, round(trader.open_units()), adopted, given)
 
 
 def closing_of(session: Any, trader: Any) -> Closing | None:
@@ -293,14 +362,18 @@ __all__ = [
     "BOOKS_AGREE",
     "CHECKS",
     "GUARD_LOCK",
+    "ISOLATION",
     "LISTED_ROWS",
     "NO_ORPHAN",
+    "ONE_SIDE",
     "ONE_STOP",
     "OTHER_SIDE",
     "PRICED",
     "PROTECTED",
+    "SUM_RULE",
     "WITHIN",
     "Closing",
+    "Member",
     "OrderChange",
     "Run",
     "SessionTrace",

@@ -119,6 +119,41 @@ check the checks on hand-written changes and runs, and the trace's recording on 
 
 All 93 rows are covered.
 
+## Rows of a shared instrument built in unit M6 (18-multi-strategy 5.2)
+
+Two strategies of one session on one instrument, "A" first in call order. Every test also
+runs the invariants of groups (18-multi-strategy 5.1, `session_invariants_groups.py`): I4
+the sum rule and I6 one side at every change of an order at the fake, and I5 isolation
+over each run (a kernel takes only its own orders' words, `session_hooks.py`). They run
+over every row of the table above too, each strategy alone being a group of one. The
+rows F98 to F103 and F106 to F112 (the sum rule's group rows, the kill switch and the
+restart per group) belong to unit M7.
+
+| Row | Tests |
+|---|---|
+| F94 | `test_session_shared_stops.py::test_F94_a_target_of_one_member_cancels_its_stop_then_exits_it_alone`, `test_F94_the_net_never_falls_below_b_while_b_holds_its_units` |
+| F95 | `test_session_shared_gates.py::test_F95_an_entry_on_the_other_side_of_a_members_position_is_refused`, `test_F95_variant_an_entry_decided_after_a_members_entry_in_one_slice_is_refused`, `test_F95_the_refused_entry_reaches_the_strategy_in_on_order` |
+| F96 | `test_session_shared_stops.py::test_F96_both_stops_filled_by_one_trade_close_both_legs_and_nothing_is_sent` |
+| F97 | `test_session_shared_stops.py::test_F97_the_square_off_cancels_then_exits_each_member_and_ends_flat` |
+| F104 | `test_session_shared_stops.py::test_F104_one_members_unanswered_entry_holds_the_others_stop_until_bound` (A's entry has B's shape, and is bound to A's own order: the resolver leaves out the order bound to B) |
+| F113 | `test_session_shared_gates.py::test_F113_a_reversal_across_another_members_long_is_refused_whole` |
+| F114 | `test_session_shared_stops.py::test_F114_each_trailing_stop_is_modified_by_its_own_member_to_its_own_level` |
+| F115 | `test_session_shared_feed.py::test_F115_another_clients_order_tagged_with_a_members_name_locks_that_member` (in sandbox mode: OpenAlgo's live order book carries no strategy, its sandbox book does) |
+| F116 | `test_session_shared_stops.py::test_F116_a_dead_feed_quotes_each_shared_instrument_once_for_both_members` |
+| F117 | `test_session_shared_margin.py::test_F117_any_rejection_of_a_stop_on_a_shared_instrument_is_held_and_worded_rejected` (as the lead decided, 11.0a item 2: any rejection of a closing order on a shared instrument is held, with no market exit; the row's R3 exit applies to a strategy alone) |
+| F118 | `test_session_shared_margin.py::test_F118_a_stop_rejected_on_a_shared_instrument_is_neither_exited_nor_placed_again`, `test_F118_the_held_member_is_locked_and_alerted_once_and_a_read_is_asked_at_once`, `test_F118_the_held_leg_counts_unprotected_for_the_margin_refusal`, `test_F118_the_other_member_is_untouched`; the variant with one strategy keeps 2.3.0's path (11.0a item 1): `test_a_strategy_alone_keeps_the_exit_retries_for_the_same_rejection` |
+| F119 | `test_session_shared_gates.py::test_F119_a_resting_entry_on_a_shared_instrument_is_refused`, `test_F119_variant_a_strategy_alone_on_its_instrument_keeps_its_resting_orders` |
+
+The lead's items of 18-multi-strategy 4.14a: a working reversal counts as a pending side
+(`test_session_shared_gates.py::test_a_member_is_refused_every_entry_while_another_member_reverses`);
+automatic closes of a held position wait for an agreeing read and pass the exit guard,
+and neither the exit retries nor the bare-leg protector start for it
+(`test_session_shared_margin.py::test_an_exit_rejected_on_a_shared_instrument_is_not_asked_for_again`,
+`test_a_held_positions_exit_waits_for_an_agreeing_read_then_goes`; the gate on doubles in
+`test_margin_reject.py`); after a restart the hold is gone and the restart decides first
+(`test_after_a_restart_the_hold_is_gone_and_the_restart_decides_first`,
+`test_a_rejection_the_restart_learns_from_the_journal_holds_the_position_again`).
+
 ## The alerts of 08-live-trading section 8
 
 Each alert of "Operations and safety" is sent in a fault test through the session's alert
@@ -221,6 +256,7 @@ are for the lead to add to 7.1's list:
 | `test_stops_exits.py` (a stop placed again with its answer lost at the safe stop) | 3.3 step 4 and F74 |
 | `test_stops_protect.py::test_a_stop_whose_cancel_has_no_word_at_the_end_is_not_reported_confirmed` | 3.3 step 4: a second Ctrl+C before the cancel's word |
 | `test_stops_report.py` (a second Ctrl+C with the exit unanswered; a stop repriced to a resting LIMIT) | 3.3 step 4; 4.6 |
+| `test_session_shared_margin.py::test_a_held_leg_left_open_at_the_end_is_listed_with_its_reason` | 18-multi-strategy 4.14: a stop rejected on a shared instrument is placed again only after a book read agrees, and none can be read before the session ends |
 
 Checks waived by single tests, each with its reason in the test:
 
@@ -231,3 +267,4 @@ Checks waived by single tests, each with its reason in the test:
 | `test_session_close_hand_sale.py` (the cut held, dropped, or handed as the final read ends) and `test_reconcile_hand_sales.py` (the cut with no answer) | every modify answered | 3.3 step 5 "As built": the stop's cut is not sent or not answered by the close |
 | `test_stops_protect.py::test_the_emergency_alert_names_an_exit_at_work_and_the_order_book_comes_first` | books agree | 3.5: the exit fills unheard and no books are read after an error; the alert names the exit in flight |
 | `test_stops_report.py::test_an_exit_accepted_with_no_final_word_is_in_flight_and_never_beside_close_it_by_hand` | books agree | 3.3 step 4: the exit fills unheard and the books are unreadable; the leg's line names the exit in flight |
+| `test_session_shared_gates.py::test_a_member_is_refused_every_entry_while_another_member_reverses` | exits within the position, never the other side | A's reversal (a sale of 200 against its long of 100) is an entry whose part beyond the position opens the short: the checks take the whole sale as an exit |

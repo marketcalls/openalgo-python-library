@@ -60,7 +60,8 @@ from .._engine import call
 from .._layout import NANOS_PER_SECOND
 from ._reconcile_act import Corrections, attribute, in_flight, order_findings, own_orders
 from ._reconcile_ended import EndQueries
-from ._reconcile_findings import Findings, Reconciliation
+from ._reconcile_findings import FILL_DURING_READ, Findings, Reconciliation
+from ._reconcile_groups import GroupComparison
 from ._reconcile_guard import ExitGuard
 from ._reconcile_rules import (
     GUARDED,
@@ -92,14 +93,11 @@ SQUARE_OFF_READ_BEFORE_S = 5.0
 #: Seconds after which a read asked for and never answered is asked for again: well past
 #: the orders client's own wait (the SDK's 120 s), as for the kill switch's reads.
 RECONCILE_READ_LOST_AFTER_S = 300.0
-#: What the "reconcile" event of a leg says it found when a fill of the leg's own orders
-#: landed during the read: nothing judged (module docstring).
-FILL_DURING_READ = "fill_during_read"
 
 _NS = NANOS_PER_SECOND
 
 
-class Reconciler(EndQueries):
+class Reconciler(EndQueries, GroupComparison):
     """The reconciler of `session`, a `_session_loop.Session` (module docstring). `guard`
     is its exit guard, `rows` its differences."""
 
@@ -297,11 +295,16 @@ class Reconciler(EndQueries):
         session.risk.positions(PositionRows(message.positionbook, message.started_ns))
         # The funds cap each strategy's sizing by the account's available cash (6.6, R18).
         available = available_cash(message.funds)
-        polls = False
+        polls, shared = False, []
         for trader in session.traders:
             if available is not None and not trader.finished:
                 call(trader.engine.cap_sizing_equity, available)
-            if trader.finished or (self._only is not None and trader.name not in self._only):
+            members = session.groups.members(trader)
+            if len(members) > 1 and members[0] is trader:
+                shared.append(members)
+            if len(members) > 1 or trader.finished:
+                continue
+            if self._only is not None and trader.name not in self._only:
                 continue
             since = self._flight.get(trader.name)
             late = since is not None and session.now() - since > _s(RECONCILE_IN_FLIGHT_MAX_S)
@@ -311,6 +314,9 @@ class Reconciler(EndQueries):
             if not late and in_flight(session, trader):
                 continue
             polls |= self._compare(trader, message, late=late)
+        for members in shared:
+            limits = {"late_after_s": RECONCILE_IN_FLIGHT_MAX_S, "again_s": RECONCILE_AGAIN_AFTER_S}
+            polls |= self._compare_group(members, message, **limits)
         if polls:
             session.hand_over([StreamGap(message.started_ns)])
         awaited = self.guard.awaited_since()

@@ -174,7 +174,7 @@ class KillSwitch:
             self._disagree(trader, kill, held, now_ns)
             return True
         kill.exit_for = held
-        what = trader.request_exit(kill.reason)
+        what = self._session.margin.request_exit(trader, kill.reason)
         self._session.event("kill_exit", strategy=trader.name, units=units, outcome=what)
         return False
 

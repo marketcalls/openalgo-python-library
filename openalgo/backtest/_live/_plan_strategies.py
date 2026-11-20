@@ -182,22 +182,6 @@ def strategy_spec(
     )
 
 
-def refuse_shared_legs(specs: tuple[StrategySpec, ...]) -> None:
-    """Raise NotImplementedError when two strategies trade one symbol on one exchange:
-    each leg (a symbol and product) has one strategy, whose orders and broker-held stop
-    the session matches to it."""
-    seen: dict[tuple[str, str], str] = {}
-    for spec in specs:
-        key = (spec.symbol, spec.exchange)
-        if key in seen:
-            raise not_supported(
-                f"two strategies on {spec.exchange}:{spec.symbol} ({seen[key]} and "
-                f"{spec.name}) in one session",
-                "run one strategy per symbol",
-            )
-        seen[key] = spec.name
-
-
 def ist_day(present_ns: int) -> dt.date:
     """The IST date of `present_ns` (UTC nanoseconds): the session's trading day."""
     return ist_time(present_ns).date()
@@ -237,7 +221,6 @@ __all__ = [
     "ist_day",
     "probe",
     "refuse_conditions",
-    "refuse_shared_legs",
     "refuse_unsupported",
     "strategy_spec",
 ]

@@ -32,13 +32,11 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from .._engine import call
 from .._layout import NANOS_PER_SECOND
-from ._plan_catch_up import INSTRUMENT
 from ._session_trader import Trader
 from ._stops_kernel import cancelling, marketable_limit, order_of, reprice, tick_size
 from ._types import LOGGER_NAME, AlertKind
-from ._venue_requests import LIVE_PRODUCT, STOP_TYPES
+from ._venue_requests import STOP_TYPES
 
 logger = logging.getLogger(LOGGER_NAME)
 
@@ -173,10 +171,8 @@ class PriceRule:
             limit = marketable_limit(price, side, tick_size(trader))
         if limit is None:
             return
-        asked = call(
-            trader.engine.request_exit, INSTRUMENT, LIVE_PRODUCT, STOP_UNFILLED, float(limit)
-        )
         session = self._session
+        asked = session.margin.request_exit(trader, STOP_UNFILLED, float(limit))
         session.event("stop_unfilled", strategy=trader.name, limit=limit, outcome=asked)
         session.alert(
             AlertKind.ERROR,

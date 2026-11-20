@@ -121,13 +121,21 @@ def attribute(session: Any, trader: Trader, books: LegBooks, at_ns: int) -> bool
 
 
 def order_findings(
-    session: Any, trader: Trader, books: LegBooks, own: frozenset[str]
+    session: Any,
+    trader: Trader,
+    books: LegBooks,
+    own: frozenset[str],
+    *,
+    others: frozenset[str] = frozenset(),
+    orphans_of_earlier: bool = True,
 ) -> tuple[set[Finding], bool]:
     """A comparison's second and fourth steps (5.2): the order book's findings (an own
     order working that the engine does not hold, a working order naming the strategy that
     the session did not send, the leg's stop with other units or trigger than the
     engine's), and whether a row has ended while the engine works its order (a poll is
-    wanted)."""
+    wanted). On a shared instrument (18-multi-strategy 4.2) the rows of `others`, the
+    orders bound to its other strategies, are theirs, and an order of an earlier start no
+    strategy holds is found only where `orphans_of_earlier` (the group's first member)."""
     findings: set[Finding] = set()
     if books.rows is None:
         return findings, False
@@ -135,10 +143,13 @@ def order_findings(
     polls = False
     for row in books.rows:
         kernel_order = bound.get(row.order_id)
+        if row.order_id in others:
+            continue
         if kernel_order in working and not row.working:
             polls = True
         elif row.working and row.order_id in own and kernel_order not in working:
-            findings.add(("orphan", row.order_id))
+            if kernel_order is not None or orphans_of_earlier:
+                findings.add(("orphan", row.order_id))
         elif row.working and row.order_id not in own and row.strategy == trader.name:
             findings.add(("foreign", row.order_id))
     stop = session.stops.leg(trader).stop

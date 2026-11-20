@@ -34,7 +34,10 @@ function.
 | `_record_verb` | What `bt.record` runs: the recorder on a client of its own, until a time |
 
 Each row's module keeps its helpers in private modules named after it (`_reconcile_*`,
-`_session_*`, `_feedlink_*` and so on), each under the package's 400-line rule.
+`_session_*`, `_feedlink_*` and so on), each under the package's 400-line rule. Two
+serve several rows: `_groups`, the strategies of a session that trade one instrument and
+the entry gates set on them, and `_margin_reject`, a closing order rejected on such an
+instrument (18-multi-strategy 4).
 
 Times are UTC nanoseconds, prices rupees and quantities units, never lots. No module
 prints: they log to the `openalgo.backtest.live` logger, and a session's own output goes

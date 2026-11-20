@@ -41,6 +41,9 @@ from ._types import AlertKind
 
 #: What a row says was done of a late comparison's finding after the close's last lines.
 NAMED_AT_THE_CLOSE = "named at the close"
+#: What the "reconcile" event of a leg says it found when a fill of the leg's own orders
+#: landed during the read: nothing judged (module docstring).
+FILL_DURING_READ = "fill_during_read"
 
 
 @dataclass(frozen=True)
@@ -273,4 +276,4 @@ class Findings:
             )
 
 
-__all__ = ["NAMED_AT_THE_CLOSE", "Findings", "Reconciliation", "Sighting"]
+__all__ = ["FILL_DURING_READ", "NAMED_AT_THE_CLOSE", "Findings", "Reconciliation", "Sighting"]

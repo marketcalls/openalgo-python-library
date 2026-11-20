@@ -55,6 +55,7 @@ from typing import Any
 
 from ._order_state import ENTRY_PURPOSES
 from ._session_trader import Trader
+from ._stops_cover import CLOSE_REJECTED, REFUSED_FOR_MARGIN
 from ._stops_kernel import PROTECT_PLACED, order_of
 from ._stops_orders import IN_FLIGHT, Sent, Watched
 from ._types import Purpose
@@ -219,7 +220,7 @@ def _note(stops: Any, trader: Trader, *, books: bool = True) -> tuple[list[str],
     leg, working = stops.leg(trader), trader.working()
     sent = _working(stops, trader)
     unsent = [kernel_order for kernel_order in working if kernel_order not in leg.orders]
-    parts = [*sent]
+    parts = [*_held_words(stops, trader), *sent]
     if unsent:
         parts.append(f"order {', '.join(f'o{k}' for k in unsent)} not sent")
     stop_part = _stop_words(stops, trader)
@@ -239,6 +240,16 @@ def _note(stops: Any, trader: Trader, *, books: bool = True) -> tuple[list[str],
         # operator checks, not a stop it never was to have.
         parts.append(stop_part)
     return parts, _CHECK
+
+
+def _held_words(stops: Any, trader: Trader) -> list[str]:
+    """The leg's unprotected reason when a closing order's rejection on a shared
+    instrument holds it (18-multi-strategy 4.14: "listed in open_positions"), as the
+    first part of its note; none otherwise."""
+    window = stops.windows.current(trader.name)
+    if window is None or window.reason not in (REFUSED_FOR_MARGIN, CLOSE_REJECTED):
+        return []
+    return [f"{window.reason}: the broker may not hold these units"]
 
 
 def _working(stops: Any, trader: Trader) -> list[str]:

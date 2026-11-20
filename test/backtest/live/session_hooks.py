@@ -4,9 +4,10 @@
 `trace_sessions` installs the recording for one fake and registers the invariants to run
 when the test ends (`session_invariants.assert_session_invariants`). The hooks wrap the
 session's start, its close, the kernel stop of each strategy at the close, the event
-stream's writer, the shared alerts' sender and the mode guard's lock, once per test
-(monkeypatch undoes them), and hand each run to the trace of the fake whose clients it
-uses. Nothing here changes what a session does.
+stream's writer, the shared alerts' sender, the mode guard's lock and the order words
+handed to a kernel (18-multi-strategy 5.1 I5), once per test (monkeypatch undoes them),
+and hand each run to the trace of the fake whose clients it uses. Nothing here changes
+what a session does.
 
 Where the fake's log stood when the mode guard locked is taken as the lock begins: the
 call that showed the change is in the log by then, and anything the session's clients
@@ -26,6 +27,7 @@ from openalgo import api
 from openalgo.backtest._live import _session_close as close_module
 from openalgo.backtest._live import session as session_module
 from openalgo.backtest._live._alerts_logs import SessionLogs
+from openalgo.backtest._live._session_news import News
 from openalgo.backtest._live._shared_alerts import SharedAlerts
 from openalgo.backtest._live.guard import ModeGuard
 
@@ -65,6 +67,7 @@ class Hooks:
         self._write = SessionLogs.event
         self._send = SharedAlerts.send
         self._lock = ModeGuard._lock
+        self._apply_update = News.apply_update
 
     def install(self, monkeypatch: Any) -> None:
         """Wrap the session's start, close, kernel stops, event writer, alerts and guard
@@ -83,6 +86,9 @@ class Hooks:
         def locked(guard: Any, *args: Any, **kwargs: Any) -> None:
             hooks.locked(guard, *args, **kwargs)
 
+        def applied(news: Any, trader: Any, update: Any) -> Any:
+            return hooks.applied(news, trader, update)
+
         opened.hooks = self
         monkeypatch.setattr(session_module, "open_session", opened)
         monkeypatch.setattr(session_module, "close_session", self.closed)
@@ -90,6 +96,7 @@ class Hooks:
         monkeypatch.setattr(SessionLogs, "event", written)
         monkeypatch.setattr(SharedAlerts, "send", sent)
         monkeypatch.setattr(ModeGuard, "_lock", locked)
+        monkeypatch.setattr(News, "apply_update", applied)
 
     def opened(self, *args: Any, **kwargs: Any) -> Any:
         session = self._open(*args, **kwargs)
@@ -151,6 +158,15 @@ class Hooks:
         else:
             alerts.__dict__.setdefault("traced", []).append((kind, text))
         self._send(alerts, kind, text, **kwargs)
+
+    def applied(self, news: Any, trader: Any, update: Any) -> Any:
+        """An order word handed to `trader`'s kernel: noted in its run when its order is
+        not bound in `trader`'s venue map (I5), then handed on."""
+        if trader.venue.kernel_order_of(update.order_id) is None:
+            for run in {id(run): run for run in self._runs.values()}.values():
+                if any(t is trader for t in run.session.traders):
+                    run.strayed.append(f"{trader.name} took order {update.order_id}")
+        return self._apply_update(news, trader, update)
 
     def locked(self, guard: Any, *args: Any, **kwargs: Any) -> None:
         """Note where the fake's log stands as the lock begins (module docstring), then

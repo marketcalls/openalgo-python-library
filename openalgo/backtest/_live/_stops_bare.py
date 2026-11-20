@@ -14,7 +14,8 @@ what is left (`protect`, R7) and sends an ERROR alert, once each time the leg is
 bare. The alert says what the leg is (units with no stop and nothing working to close
 them), not how it got there: an exit filled in part and then cancelled leaves it bare the
 same way. A leg that never had a stop, one protect by state holds, one the reconciler's
-exit guard holds (the broker's books show fewer units), and every leg once the safe stop
+exit guard holds (the broker's books show fewer units), one a closing order's rejection
+holds on a shared instrument (18-multi-strategy 4.14a), and every leg once the safe stop
 has begun (its flatten exits the position) are left to their own rules.
 
 Quantities are units. Used by the loop only.
@@ -61,8 +62,10 @@ class BareLegs:
         if not self._stops.leg(trader).guarded or self._stops.protection.holds(trader):
             return False
         # While the broker's books show fewer units, a stop for the engine's units could
-        # take the broker through zero (the reconciler's exit guard holds the leg).
-        if session.reconcile.holds(trader):
+        # take the broker through zero (the reconciler's exit guard holds the leg); after
+        # a closing order's rejection on a shared instrument, the broker may not hold them
+        # (`_margin_reject`).
+        if session.reconcile.holds(trader) or session.margin.holds(trader):
             return False
         # Any closing order the kernel has, sent or not, a stop among them, covers the leg
         # or is on its way to.
