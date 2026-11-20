@@ -140,7 +140,8 @@ impl NativeEngine {
     }
 
     /// Record that the venue rejected a closing order in a way that says the broker may not
-    /// hold its units: nothing more is sent for it by the kernel (`venue`); returns the stamp.
+    /// hold its units: its position is held until the session asks (`venue`); returns the
+    /// stamp.
     fn apply_margin_reject(&mut self, py: Python<'_>, order_id: u64) -> PyResult<StampTuple> {
         let engine = self.engine_mut()?;
         venue::recorded(py, engine.apply_margin_reject(OrderId(order_id)))

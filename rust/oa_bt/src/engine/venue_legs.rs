@@ -32,8 +32,9 @@
 //!   leg holds more (an add not covered yet) exits the rest at market (`stop_unfilled`).
 //!   Nothing is sent while the market is closed.
 //! - **Rejected for margin** (`apply_margin_reject`, `venue_group`): the broker may not
-//!   hold the units, so the leg is neither exited at market nor protected again; the
-//!   session's `protect` re-places the stop.
+//!   hold the units, so the leg is neither exited at market nor protected again, and the
+//!   position is held: no stop of it is placed or given more units until the session's
+//!   `protect` (which re-places the stop) or `request_exit`.
 //! - **Cancelled for an exit** (or by the strategy), the stop is not placed again by the
 //!   kernel: the session's `protect` re-places it (`venue_protect`).
 //! - **Repriced** to a LIMIT by the session's price rule (`venue_protect`), it no longer
@@ -98,8 +99,8 @@ pub(super) enum StopEnd {
 
 impl Engine {
     /// A leg opened at `key`: its stop is placed once it has a level (module docs), none
-    /// of its targets has fired (`venue_ticks`), and an engine exit of an earlier leg that
-    /// a margin rejection held back no longer holds (`venue_group`). A stop of an earlier
+    /// of its targets has fired (`venue_ticks`), and a margin rejection of an earlier leg's
+    /// closing order no longer holds the position (`venue_group`). A stop of an earlier
     /// leg of the position is no longer the leg's: a new leg opens from flat only once no
     /// such stop works (`venue_gates`), and a reversal cancels it first or leaves it on the
     /// side that no longer closes, where it is cancelled (`venue_cover`).
@@ -107,7 +108,7 @@ impl Engine {
         self.venue.leg_stops.retain(|stop| stop.key != key);
         self.venue.leg_stops.push(LegStop::new(key));
         self.venue.fired_targets.retain(|(known, _)| *known != key);
-        self.venue.group.release_exit(key);
+        self.venue.group.release(key);
     }
 
     /// The leg's stop record of `key`, if the session keeps one.
@@ -174,7 +175,9 @@ impl Engine {
     /// still have to fill and less a partial exit that waits for the stop; 0 or more.
     /// When the waiting exits together close what is open, they wait for the stop's
     /// cancellation, and the stop covers all of it until that goes through (a refused
-    /// cancellation is retried, 16-session-design 4.5).
+    /// cancellation is retried, 16-session-design 4.5). A partial exit of a position a
+    /// margin rejection holds waits for the hold, not for the stop: it takes nothing from
+    /// the stop (`venue_group`).
     ///
     /// Errors: those of `partial_exit_units` and `waiting_exits_close_all`.
     pub(super) fn stop_cover_units(&self, key: PositionKey) -> Result<f64, KernelError> {
@@ -188,8 +191,10 @@ impl Engine {
             .iter()
             .find(|exit| exit.key == key && exit.sent.is_empty());
         let waiting = match first_waiting {
-            Some(exit) => self.partial_exit_units(exit, open)?.unwrap_or(0.0),
-            None => 0.0,
+            Some(exit) if !self.venue.group.holds(key) => {
+                self.partial_exit_units(exit, open)?.unwrap_or(0.0)
+            }
+            _ => 0.0,
         };
         Ok((open - waiting).max(0.0))
     }

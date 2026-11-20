@@ -13,7 +13,7 @@
 //! |---|---|---|
 //! | `set_group_side(instrument, product, side)` | any time | the side (`GroupSide`) the other members hold or are entering, or `None`: while set, an order that opens or adds (`OrderRole::opens`: an entry, an add, a reversal) on the other side is rejected at submission and at modification, `group_other_side` |
 //! | `set_shared(instrument, product, shared)` | any time | while shared, a strategy order that rests (LIMIT, SL, SL-M), an entry or an exit, is rejected at submission and at modification, `shared_resting` |
-//! | `apply_margin_reject(order)` | as `apply_reject` | a closing order (a leg's stop, a strategy exit, an engine exit) whose rejection the session takes as the broker not holding its units (any rejection of a closing order on an instrument of a group of two or more, 18-multi-strategy 11.0a): it ends rejected, reject code `venue`, and the kernel does not act on it (below) |
+//! | `apply_margin_reject(order)` | as `apply_reject` | a closing order (a leg's stop, a strategy exit, an engine exit) whose rejection the session takes as the broker not holding its units (any rejection of a closing order on an instrument of a group of two or more, 18-multi-strategy 11.0a): it ends rejected, reject code `venue`, and its position is held (below) |
 //!
 //! Exits are never gated by the side: a reduce-only order and an order against the
 //! position within the room its closing side has (`venue_roles`) only close. No gate
@@ -22,17 +22,32 @@
 //! no submission check. The gates come first among a session's checks (`venue_gates`):
 //! they stand whatever the entry locks do, so the strategy reads what keeps the order out.
 //!
-//! After a margin rejection every order of the same kind would meet the same refusal, so
-//! the kernel does not act on it by itself: a leg's stop so ended is neither exited at
-//! market nor placed again (requirement R3 does not apply, `venue_legs`), and an engine
-//! exit so ended is not sent again at the later opens (`venue_exits`) until the session
-//! asks for an exit of the position (`request_exit`) or `protect`s it, or a new leg opens
-//! there. An exit of the position that waited for the stop goes on as after any end of
-//! the stop. The held exit is not part of the saved state (`venue_state`): a restart's
-//! comparison with the broker decides afresh.
+//! After a margin rejection the broker may not hold, on that side, the units the kernel
+//! believes the position has: every closing order of it would meet the same refusal, or,
+//! with margin to spare, open the other side. So the rejection holds the position, and
+//! while it is held the kernel sends nothing that closes it, or would cover more of it,
+//! by itself:
+//!
+//! - a leg's stop so ended is neither exited at market nor placed again (requirement R3
+//!   does not apply, `venue_legs`), and no stop of the position is placed or raised: one
+//!   that still works may be cut down, cancelled or have its trigger moved, never given
+//!   more units (`venue_stop_terms`; so the put-back of R4 after a partial exit ended
+//!   unfilled waits too);
+//! - an exit of the position that waits (one that waited for the rejected order, or one
+//!   made while held: the strategy's, a target's, a risk rule's) stays unsent, and nothing
+//!   is cancelled for it (`venue_owner`);
+//! - no engine exit is made for it at the later opens (`venue_exits`: the risk lock's,
+//!   the time exit, the square-off), whatever closing order was rejected.
+//!
+//! The hold ends when the session asks for an exit of the position (`request_exit`, which
+//! also sends at once an engine exit the hold kept waiting) or `protect`s it (which moves
+//! the waiting exits on and puts the stop back), or when a new leg opens there. What the
+//! session sends itself (`reprice_exit`) and the venue's results are taken as always. The
+//! hold is not part of the saved state (`venue_state`): a restart's comparison with the
+//! broker decides afresh.
 
 use crate::exec::{
-    ExecError, InstrumentId, OrderAction, OrderId, OrderRequest, OrderType, RejectCode,
+    ExecError, InstrumentId, Order, OrderAction, OrderId, OrderRequest, OrderType, RejectCode,
 };
 use crate::model::{Product, Side};
 use crate::portfolio::PositionKey;
@@ -81,29 +96,38 @@ impl GroupSide {
     }
 }
 
-/// What the live layer has set on the members of instrument groups, and the engine exits a
-/// margin rejection holds back (module docs); positions in the order they were set.
+/// What the live layer has set on the members of instrument groups, and the positions a
+/// margin rejection holds (module docs); positions in the order they were set.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct GroupDesk {
     /// The side the other members hold or are entering, per position.
     sides: Vec<(PositionKey, GroupSide)>,
     /// The positions on an instrument several strategies of the session trade.
     shared: Vec<PositionKey>,
-    /// The positions whose engine exit a margin rejection ended: it is not sent again at
-    /// the later opens.
-    held_exits: Vec<PositionKey>,
+    /// The positions a margin rejection of a closing order holds: the kernel sends nothing
+    /// that closes them by itself.
+    held: Vec<PositionKey>,
 }
 
 impl GroupDesk {
-    /// True while a margin rejection holds back `key`'s engine exit (module docs).
-    pub(super) fn holds_exit(&self, key: PositionKey) -> bool {
-        self.held_exits.contains(&key)
+    /// True while a margin rejection holds `key` (module docs).
+    pub(super) fn holds(&self, key: PositionKey) -> bool {
+        self.held.contains(&key)
     }
 
-    /// Let `key`'s engine exit go again at the later opens: the session asked for an exit
-    /// or for `protect`, or a new leg opened.
-    pub(super) fn release_exit(&mut self, key: PositionKey) {
-        self.held_exits.retain(|held| *held != key);
+    /// Hold `key` after a margin rejection of one of its closing orders.
+    fn hold(&mut self, key: PositionKey) {
+        if !self.holds(key) {
+            self.held.push(key);
+        }
+    }
+
+    /// End the hold of `key`: the session asked for an exit or for `protect`, or a new leg
+    /// opened. True when `key` was held.
+    pub(super) fn release(&mut self, key: PositionKey) -> bool {
+        let was_held = self.holds(key);
+        self.held.retain(|held| *held != key);
+        was_held
     }
 
     fn side_of(&self, key: PositionKey) -> Option<GroupSide> {
@@ -189,9 +213,9 @@ impl Engine {
 
     /// Record that the venue rejected the closing order `order` in a way that says the
     /// broker may not hold its units (module docs): it ends `Rejected` with the reject
-    /// code `venue`, a partly filled order keeping its fills, and the kernel neither exits
-    /// the leg at market, nor places its stop again, nor sends its own exit again at the
-    /// later opens. Returns the stamp, as `apply_reject` does.
+    /// code `venue`, a partly filled order keeping its fills, and its position is held:
+    /// the kernel sends nothing that closes it, or covers more of it, by itself until the
+    /// session asks. Returns the stamp, as `apply_reject` does.
     ///
     /// Errors: those of `apply_reject` (`Venue(NotExternal)` in a backtest,
     /// `Venue(AtBarClose)` while paused at a bar close, `UnknownOrder`,
@@ -208,14 +232,21 @@ impl Engine {
         if !role.is_some_and(|role| !role.opens()) {
             return Err(not_closing(order, role));
         }
+        // Held before the order ends, so that what its end moves on (the exits that waited
+        // for it, the stop's units) already finds the position held.
+        self.venue.group.hold(key);
         let kind = OrderEventKind::Rejected(RejectCode::Venue);
-        let how = StopEnd::MarginRejected;
-        let stamp = self.end_at_venue(order, OrderAction::Reject, kind, how)?;
-        let engine_exit = matches!(role, Some(OrderRole::RiskExit(_) | OrderRole::SquareOff));
-        if engine_exit && !self.venue.group.holds_exit(key) {
-            self.venue.group.held_exits.push(key);
+        self.end_at_venue(order, OrderAction::Reject, kind, StopEnd::MarginRejected)
+    }
+
+    /// The units of `wanted` that `key`'s working leg stop `order` may be asked to cover:
+    /// while a margin rejection holds the position, at most what it covers now (module
+    /// docs).
+    pub(super) fn stop_units_allowed(&self, key: PositionKey, order: &Order, wanted: f64) -> f64 {
+        if self.venue.group.holds(key) {
+            return wanted.min(order.quantity_units - order.filled_units);
         }
-        Ok(stamp)
+        wanted
     }
 
     /// The gates of a group on the strategy's `request` of `units` (module docs), at
@@ -342,17 +373,19 @@ mod tests {
     }
 
     #[test]
-    fn a_held_exit_is_released_for_its_position_only() {
+    fn a_hold_is_released_for_its_position_only_and_says_whether_it_held() {
         let key = |index| PositionKey {
             instrument: InstrumentId(index),
             product: Product::Mis,
         };
-        let mut desk = GroupDesk {
-            held_exits: vec![key(0), key(1)],
-            ..GroupDesk::default()
-        };
-        desk.release_exit(key(0));
-        assert!(!desk.holds_exit(key(0)));
-        assert!(desk.holds_exit(key(1)));
+        let mut desk = GroupDesk::default();
+        desk.hold(key(0));
+        desk.hold(key(1));
+        desk.hold(key(0));
+        assert_eq!(desk.held, [key(0), key(1)], "one hold per position");
+        assert!(desk.release(key(0)));
+        assert!(!desk.release(key(0)), "released already");
+        assert!(!desk.holds(key(0)));
+        assert!(desk.holds(key(1)));
     }
 }

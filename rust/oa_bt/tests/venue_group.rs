@@ -3,8 +3,9 @@
 //! 4.13 and 4.14, requirements KR10 to KR12): the side the other members hold or are
 //! entering (`set_group_side`, reject `group_other_side`), the market orders only of a
 //! shared instrument (`set_shared`, reject `shared_resting`), and a closing order's
-//! margin rejection, after which the kernel neither exits at market, nor places the stop
-//! again, nor sends its own exit again at later opens (`apply_margin_reject`).
+//! margin rejection (`apply_margin_reject`), after which the kernel sends nothing that
+//! closes the position by itself until the session asks: no exit at market, no stop placed
+//! again or raised, no exit that waited, none at later opens.
 //!
 //! "Holding 100" is 100 units of SBIN in MIS bought at 500.10 at the open of minute 1
 //! (o1, `venue_support::holding_on`); the orders of the gate tests are decided at the
@@ -14,7 +15,7 @@ mod venue_support;
 
 use oa_bt::engine::{
     BarColumns, Engine, EngineExit, EventStamp, ExitRequest, GroupSide, KernelError, OrderRole,
-    Protect, RiskExitReason, RunConfig, Step, Submission, VenueCommand, VenueError,
+    Pause, Protect, RiskExitReason, RunConfig, Step, Submission, VenueCommand, VenueError,
 };
 use oa_bt::exec::{
     ExecError, InstrumentId, OrderId, OrderRequest, OrderStatus, OrderType, QuantitySpec,
@@ -421,13 +422,13 @@ fn a_stop_rejected_for_margin_is_neither_exited_at_market_nor_placed_again() {
             vec![],
         ),
         (
-            "rejected for margin while the square-off waits for it: only the square-off",
+            "rejected for margin while the square-off waits for it: nothing, it waits",
             |k| {
                 k.request_exit(SBIN, Product::Mis, EngineExit::SquareOff)?;
                 k.take_commands();
                 k.apply_margin_reject(STOP).map(|_| ())
             },
-            vec![(OrderId(3), Side::Sell, 100.0, OrderRole::SquareOff)],
+            vec![],
         ),
     ];
     for (what, ending, expected) in rows {
@@ -436,6 +437,24 @@ fn a_stop_rejected_for_margin_is_neither_exited_at_market_nor_placed_again() {
         ending(&mut kernel).expect("the venue's result is taken");
         assert_eq!(placed_roles(&kernel.take_commands()), expected, "{what}");
     }
+}
+
+#[test]
+fn an_exit_held_by_a_margin_rejection_goes_when_the_session_asks_for_an_exit() {
+    // The square-off waited for the stop's cancellation (o2) when the stop was rejected
+    // for margin; the session's safe stop then sends it (o3).
+    let mut kernel = holding_with(100.0, stop_points(3.0));
+    kernel.take_commands();
+    let asked = kernel.request_exit(SBIN, Product::Mis, EngineExit::SquareOff);
+    assert_eq!(asked, Ok(ExitRequest::WaitsForCancels));
+    kernel.take_commands();
+    assert!(kernel.apply_margin_reject(STOP).is_ok());
+    assert!(kernel.take_commands().is_empty(), "the square-off waits");
+    let stop = EngineExit::Risk(RiskExitReason::OperatorStop);
+    let asked = kernel.request_exit(SBIN, Product::Mis, stop);
+    assert_eq!(asked, Ok(ExitRequest::AlreadyExiting));
+    let square_off = (OrderId(3), Side::Sell, 100.0, OrderRole::SquareOff);
+    assert_eq!(placed_roles(&kernel.take_commands()), [square_off]);
 }
 
 #[test]
@@ -496,6 +515,184 @@ fn a_strategy_exit_rejected_for_margin_ends_rejected_and_nothing_follows() {
     assert_eq!(sale, Some(OrderStatus::Rejected));
     wait_before(&mut kernel, &bars(&[], &[]), &mut script, 6);
     assert!(kernel.take_commands().is_empty());
+}
+
+/// `reduce(fraction)`: a reduce-only MARKET sale of that fraction of the position.
+fn reduce(fraction: f64) -> OrderRequest {
+    OrderRequest {
+        quantity: QuantitySpec::PositionFraction(fraction),
+        ..exit(Side::Sell, 1.0, OrderType::Market)
+    }
+}
+
+/// Holding 100 with its stop (o2), the strategy halves the position at the close of
+/// minute 1 (o3): the stop is cut to 50 first, the venue confirms the cut, and o3 goes for
+/// 50 while the session waits before minute 2; every command is taken.
+fn half_exit_sent() -> Engine {
+    let mut kernel = holding_with(100.0, stop_points(3.0));
+    kernel.take_commands();
+    pause_at_close(&mut kernel, &bars(&[], &[]), 1);
+    let submitted = kernel.submit(reduce(0.5));
+    assert_eq!(submitted, Ok(Submission::Submitted(OrderId(3))));
+    let cut = (STOP, 50.0, stop_market(STOP_LEVEL));
+    assert_eq!(modified(&kernel.take_commands()), [cut]);
+    assert!(matches!(kernel.advance(), Ok(Pause::Waiting { .. })));
+    kernel
+        .apply_modify(STOP)
+        .expect("the venue confirms the cut");
+    let sent = placed_roles(&kernel.take_commands());
+    assert_eq!(sent, [(OrderId(3), Side::Sell, 50.0, OrderRole::Exit)]);
+    kernel
+}
+
+/// A modification: (order, units, order type).
+type Modified = (OrderId, f64, OrderType);
+
+#[test]
+fn a_partial_exit_rejected_for_margin_leaves_the_stop_cut_down() {
+    // Rejected the usual way, the exit ended unfilled, so the stop covers the whole
+    // position again (R4). Rejected for margin, the broker may not hold the 100: the
+    // stop is not raised.
+    let rows: [(&str, Ending, Vec<Modified>); 2] = [
+        (
+            "rejected",
+            |k| k.apply_reject(OrderId(3), RejectCode::Venue).map(|_| ()),
+            vec![(STOP, 100.0, stop_market(STOP_LEVEL))],
+        ),
+        (
+            "rejected for margin",
+            |k| k.apply_margin_reject(OrderId(3)).map(|_| ()),
+            vec![],
+        ),
+    ];
+    for (what, ending, expected) in rows {
+        let mut kernel = half_exit_sent();
+        ending(&mut kernel).expect("the venue's result is taken");
+        let commands = kernel.take_commands();
+        assert_eq!(modified(&commands), expected, "{what}");
+        assert!(
+            placed_roles(&commands).is_empty(),
+            "{what}: nothing is placed"
+        );
+    }
+}
+
+#[test]
+fn protect_puts_the_stop_back_over_the_position_after_a_partial_exits_margin_rejection() {
+    let mut kernel = half_exit_sent();
+    assert!(kernel.apply_margin_reject(OrderId(3)).is_ok());
+    assert_eq!(kernel.protect(SBIN, Product::Mis), Ok(Protect::StopWorks));
+    let raised = (STOP, 100.0, stop_market(STOP_LEVEL));
+    assert_eq!(modified(&kernel.take_commands()), [raised]);
+}
+
+/// `half_exit_sent` with o3 rejected for margin (the stop stays at 50 of the 100), then the
+/// strategy's `exit` decided at the close of minute 2 (o4), the session waiting before
+/// minute 4; every command is taken.
+fn exit_made_while_held(exit: OrderRequest) -> Engine {
+    let mut kernel = half_exit_sent();
+    assert!(kernel.apply_margin_reject(OrderId(3)).is_ok());
+    let mut script = Script::new(vec![at_close(2, Act::Submit(exit))]);
+    wait_before(&mut kernel, &bars(&[], &[]), &mut script, 4);
+    assert_eq!(script.submissions, [Submission::Submitted(OrderId(4))]);
+    kernel
+}
+
+#[test]
+fn an_exit_the_strategy_makes_while_a_margin_rejection_holds_the_position_waits() {
+    // Nothing is cancelled or sent for it, and the stop is not cut for it: exit() would
+    // cancel the stop first, reduce(0.75) would cut it to the 25 that stay.
+    for (what, exit) in [("exit()", whole_exit()), ("reduce(0.75)", reduce(0.75))] {
+        let mut kernel = exit_made_while_held(exit);
+        assert!(kernel.take_commands().is_empty(), "{what}");
+        let waiting = kernel.order(OrderId(4)).map(|o| o.status);
+        assert_eq!(waiting, Some(OrderStatus::Submitted), "{what}");
+    }
+}
+
+#[test]
+fn protect_moves_on_an_exit_the_hold_kept_waiting() {
+    // The strategy's exit() cancels the stop first, as it would have when it was made.
+    let mut kernel = exit_made_while_held(whole_exit());
+    kernel.take_commands();
+    assert_eq!(kernel.protect(SBIN, Product::Mis), Ok(Protect::Exiting));
+    assert_eq!(
+        kernel.take_commands(),
+        [VenueCommand::Cancel { order: STOP }]
+    );
+}
+
+#[test]
+fn the_sessions_exit_takes_over_from_an_exit_the_hold_kept_waiting() {
+    let mut kernel = exit_made_while_held(whole_exit());
+    kernel.take_commands();
+    let stop = EngineExit::Risk(RiskExitReason::OperatorStop);
+    let asked = kernel.request_exit(SBIN, Product::Mis, stop);
+    assert_eq!(asked, Ok(ExitRequest::WaitsForCancels));
+    assert_eq!(
+        kernel.take_commands(),
+        [VenueCommand::Cancel { order: STOP }]
+    );
+    let strategy_exit = kernel.order(OrderId(4)).map(|o| o.status);
+    assert_eq!(strategy_exit, Some(OrderStatus::Canceled));
+}
+
+/// The slice that opens at the square-off, 15:10.
+const SQUARE_OFF_SLICE: usize = 355;
+
+/// Holding 100 with no stop (o1), a plain sale of 40 (o2) decided at the close of minute
+/// 2, sent, and the session waiting before minute 3.
+fn sale_sent() -> Engine {
+    let mut kernel = paused_holding(100.0);
+    assert_eq!(code_of(&mut kernel, market(Side::Sell, 40.0)), None);
+    let mut script = Script::new(Vec::new());
+    wait_before(&mut kernel, &bars(&[], &[]), &mut script, 3);
+    kernel.take_commands();
+    kernel
+}
+
+/// A session in the state a row of a table starts from.
+type Holding = fn() -> Engine;
+
+/// Holding 100 with its stop (o2), the session waiting before minute 1.
+fn stop_placed() -> Engine {
+    let mut kernel = holding_with(100.0, stop_points(3.0));
+    kernel.take_commands();
+    kernel
+}
+
+#[test]
+fn a_position_held_by_a_margin_rejection_gets_no_square_off() {
+    // Any closing order rejected for margin holds the position; a sale rejected the usual
+    // way leaves it to the square-off (o3).
+    let square_off = (OrderId(3), Side::Sell, 100.0, OrderRole::SquareOff);
+    let rows: [(&str, Holding, Ending, Vec<Placed>); 3] = [
+        (
+            "a sale rejected",
+            sale_sent,
+            |k| k.apply_reject(OrderId(2), RejectCode::Venue).map(|_| ()),
+            vec![square_off],
+        ),
+        (
+            "a sale rejected for margin",
+            sale_sent,
+            |k| k.apply_margin_reject(OrderId(2)).map(|_| ()),
+            vec![],
+        ),
+        (
+            "the leg's stop rejected for margin",
+            stop_placed,
+            |k| k.apply_margin_reject(STOP).map(|_| ()),
+            vec![],
+        ),
+    ];
+    for (what, holding, ending, expected) in rows {
+        let mut kernel = holding();
+        ending(&mut kernel).expect("the venue's result is taken");
+        let mut script = Script::new(Vec::new());
+        wait_before(&mut kernel, &bars(&[], &[]), &mut script, SQUARE_OFF_SLICE);
+        assert_eq!(placed_roles(&kernel.take_commands()), expected, "{what}");
+    }
 }
 
 /// A crash at minute 10: open 494.00, close 494.05, a loss of about 605 on 100 units

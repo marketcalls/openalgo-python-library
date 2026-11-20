@@ -91,8 +91,11 @@ impl Engine {
             instrument,
             product,
         };
-        // The session asks: an exit a margin rejection held back may go again later.
-        self.venue.group.release_exit(key);
+        // The session asks: a margin rejection no longer holds the position, and the exits
+        // the hold kept waiting move on first (`venue_group`).
+        if self.venue.group.release(key) {
+            self.progress_exits(at)?;
+        }
         if self.held_units(key) == 0.0 {
             return Ok(Protect::Flat);
         }

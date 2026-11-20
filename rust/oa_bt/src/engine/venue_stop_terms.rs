@@ -21,6 +21,8 @@
 //! are the leg's) and go out with the answer, or once the throttle allows. One the venue
 //! refused is sent again `MODIFY_EVERY_NS` after it was sent. The stop is cancelled when it
 //! has nothing left to cover; one repriced to a LIMIT (`venue_protect`) no longer follows.
+//! While a margin rejection holds the position (`venue_group`) no stop of it is placed and
+//! none is given more units than it covers: a cut, a cancellation and a trigger move go.
 //!
 //! The same throttle would hold a backtest on recorded ticks; the kernel has no tick
 //! backtest yet, so a backtest moves its engine-held stop at every ratchet.
@@ -87,7 +89,7 @@ impl Engine {
 
     /// Keep `key`'s leg stop on its leg (`sync_leg_stops`): a stop not placed yet (the leg
     /// has had none, or `renew_leg_stop` asked for a new one) is placed once the leg has a
-    /// level and no exit closing the whole position waits.
+    /// level, no exit closing the whole position waits and no margin rejection holds it.
     ///
     /// Errors: those of `sync_leg_stops`.
     pub(super) fn sync_leg_stop(
@@ -103,7 +105,7 @@ impl Engine {
         };
         let wanted = self.stop_cover_units(key)?;
         let Some(id) = stop.order else {
-            if wanted > 0.0 && !self.exit_closes_leg(key)? {
+            if wanted > 0.0 && !self.venue.group.holds(key) && !self.exit_closes_leg(key)? {
                 let units = self.take_room_for_stop(at, key, None, wanted)?;
                 self.place_leg_stop(at, key, units, stop.replaced)?;
             }
@@ -124,6 +126,7 @@ impl Engine {
             self.withdraw_order(at.stamp(), id)?;
             return Ok(());
         }
+        let wanted = self.stop_units_allowed(key, &order, wanted);
         let cover = self.take_room_for_stop(at, key, Some(id), wanted)?;
         if cover <= 0.0 {
             // The orders in its way are being cancelled; it is never cancelled for them.

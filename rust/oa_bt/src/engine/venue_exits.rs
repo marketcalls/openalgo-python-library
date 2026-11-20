@@ -23,8 +23,8 @@
 //! (REDUCING after a daily loss breach, HALTED after the drawdown halt), the time exit,
 //! the square-off. So an exit the venue rejected, or a position a cancel race reopened, is
 //! exited again at the next open; how often to retry and when to stop are the live
-//! layer's to decide. An exit rejected for margin is not sent again (`venue_group`) until
-//! the session asks for an exit of the position or protects it, or a new leg opens there.
+//! layer's to decide. A position a margin rejection holds gets none (`venue_group`) until
+//! the session asks for an exit of it or protects it, or a new leg opens there.
 //!
 //! Also at each open: an MIS order that would open or add, still working once the open is
 //! at or after `entry_until`, is withdrawn (`Cancel`), since a backtest rejects it at its
@@ -74,7 +74,7 @@ impl Engine {
                 .map(|position| position.key)
                 .collect();
             for key in open {
-                if self.has_engine_exit(key) || self.venue.group.holds_exit(key) {
+                if self.has_engine_exit(key) || self.venue.group.holds(key) {
                     continue;
                 }
                 if let Some(exit) = self.exit_due(next, key)? {

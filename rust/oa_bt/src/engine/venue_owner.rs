@@ -124,8 +124,9 @@ impl Engine {
 
     /// Move every waiting exit on, in the order they were made (module docs): cancel what
     /// blocks it, or send it once nothing does; an exit of a position waits behind an
-    /// earlier one of it that still waits. Then forget the exits whose orders have all
-    /// ended, and keep the legs' stops on their legs (`venue_legs`).
+    /// earlier one of it that still waits, and every exit of a position a margin rejection
+    /// holds waits (`venue_group`). Then forget the exits whose orders have all ended, and
+    /// keep the legs' stops on their legs (`venue_legs`).
     ///
     /// Errors: those of the order book, of `fills::end_order` and of the leg stops.
     pub(super) fn progress_exits(&mut self, at: SendAt) -> Result<(), KernelError> {
@@ -153,6 +154,10 @@ impl Engine {
         if held == 0.0 {
             self.drop_exit(at, exit, OrderEventKind::Canceled)?;
             return Ok(false);
+        }
+        if self.venue.group.holds(exit.key) {
+            // The broker may not hold the units: nothing is cancelled or sent for it.
+            return Ok(true);
         }
         let open = held.abs() - self.left_to_exit(exit.key);
         let partial = self.partial_exit_units(exit, open)?;
