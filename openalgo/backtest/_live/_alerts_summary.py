@@ -13,7 +13,9 @@ style of `Result.summary()`:
     Reconcile   : 0 mismatches
     End state   : flat
 
-An "Alerts : 2 not delivered" line comes before the end state when an alert of the
+A "Limits : SbinTrend at most 3 trades a day; account trade cap 4 trades a day" line
+follows the strategies when the session set daily limits (18-multi-strategy 2.5a). An
+"Alerts : 2 not delivered" line comes before the end state when an alert of the
 session did not reach OpenAlgo. The Slippage line adds "(1 MARKET fill not compared: no
 bar of its decision)" when the session had no bar to set a MARKET fill against, and reads
 "not compared (2 MARKET fills: no bar of their decisions)" when it had none for any. The
@@ -87,6 +89,8 @@ class SessionSummary:
     with no difference to name: not a mismatch, named beside them. `earlier` names, in
     words, each strategy an earlier start of the day ran and this one does not, whose
     figures the day's include (with the position its last save held, when it held one).
+    `limits` names, in words, the daily limits the session set (each strategy's and the
+    account's), none when it set none.
 
     Raises ConfigError when a rupee figure or the seconds unprotected is not a finite
     number (None is allowed for `slippage` only), when the seconds unprotected are
@@ -112,6 +116,7 @@ class SessionSummary:
     unconfirmed: tuple[str, ...] = ()
     earlier: tuple[str, ...] = ()
     slippage_not_compared: int = 0
+    limits: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _check_figure("gross_pnl", self.gross_pnl)
@@ -129,6 +134,7 @@ class SessionSummary:
         _check_differing(self.differing, self.reconcile_mismatches)
         _check_legs("unconfirmed", self.unconfirmed)
         _check_legs("earlier", self.earlier)
+        _check_legs("limits", self.limits)
 
     @property
     def net_pnl(self) -> float:
@@ -143,8 +149,10 @@ def summary_text(summary: SessionSummary) -> str:
     named = (*summary.differing, *summary.unconfirmed)
     at_close = f" (at the close: {'; '.join(named)})" if named else ""
     earlier = f"; earlier today: {'; '.join(summary.earlier)}" if summary.earlier else ""
-    lines = [
-        ("Strategies", (", ".join(summary.strategies) or "none") + earlier),
+    lines = [("Strategies", (", ".join(summary.strategies) or "none") + earlier)]
+    if summary.limits:
+        lines.append(("Limits", "; ".join(summary.limits)))
+    lines += [
         ("Trades", f"{summary.closed_trades} closed"),
         ("Gross P&L", _rupees(summary.gross_pnl)),
         ("Charges", f"{_rupees(summary.charges)} (modelled)"),

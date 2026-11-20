@@ -34,7 +34,7 @@ from ._scale_in import describe as describe_scale_limits
 from ._setting_checks import class_leverage, refuse_unusable, unused_settings
 from ._size_controls import describe as describe_size_controls
 from ._sizing_assumption import sizing_assumption
-from ._strategy_args import refuse_account_settings
+from ._strategy_args import DAILY_LIMITS, refuse_account_settings
 from .data._sessions import resolve_now
 from .errors import ConfigError
 
@@ -53,9 +53,6 @@ CLASS_OVERRIDES = (
     "daily_profit_target",
     "max_order_value",
 )
-# The daily limits (18-multi-strategy 2.5a), named in the Assumptions block only when set,
-# so a run without them states what it always stated.
-DAILY_LIMITS = ("max_trades_per_day", "daily_profit_target", "max_order_value")
 
 
 def _slippage(value: Any) -> tuple[str, float, int]:
@@ -179,7 +176,8 @@ def assumptions(plan: RunPlan, calendar: Any) -> dict[str, Any]:
 def _risk_assumptions(plan: RunPlan) -> dict[str, Any]:
     """The strategy and session rules of the run, and where their exits fill: at the
     next base-bar open, or on a daily base at the close of the day that breached
-    (SPEC-17). The daily limits are named only when set (`DAILY_LIMITS`)."""
+    (SPEC-17). The daily limits are named only when set (`DAILY_LIMITS`), so a run
+    without them states what it always stated."""
     risk = plan.risk
     block = {
         "max_daily_loss": risk["max_daily_loss"],
@@ -204,4 +202,4 @@ def _risk_assumptions(plan: RunPlan) -> dict[str, Any]:
     return block
 
 
-__all__ = ["CLASS_OVERRIDES", "DAILY_LIMITS", "RunPlan", "assumptions", "resolve"]
+__all__ = ["CLASS_OVERRIDES", "RunPlan", "assumptions", "resolve"]

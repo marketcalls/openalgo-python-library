@@ -20,7 +20,9 @@ open decision 7). Times are UTC nanoseconds. Used by the worker's thread only, b
 executed them (`unfinished`), so the close knows when every answer it waits for has been
 posted (16-session-design 3.3 step 5). The close also asks for the requests put back to
 be withdrawn (`ask_withdrawal`): its last lines named them as not sent, so they are never
-sent after them and the close does not wait for them.
+sent after them and the close does not wait for them. The order rate throttle
+(`_order_throttle`) takes no request that makes an order call (`is_order_call`) while its
+window is full, and withdraws an entry held back too long (`remove`).
 """
 
 from __future__ import annotations
@@ -145,6 +147,12 @@ def order_key(request: OrderRequest) -> OrderKey:
     return request.intent.strategy, request.kernel_order
 
 
+def is_order_call(request: Request) -> bool:
+    """True for a request that makes an order call (place, modify or cancel), the calls
+    the order rate counts (18-multi-strategy 2.5a rule 12)."""
+    return isinstance(request, PlaceRequest | ModifyRequest | CancelRequest | CancelOrphan)
+
+
 def is_stale(request: Request, now_ns: int) -> bool:
     """Whether `request` is an entry or add decided more than `ENTRY_STALE_AFTER_S` before
     `now_ns` (its intent's creation, in the iteration of the decision)."""
@@ -221,14 +229,41 @@ class WorkerQueue:
         """True while order `key` is held."""
         return key in self._held
 
-    def take(self, now_ns: int, *, most: Priority = Priority.UPKEEP) -> Request | None:
+    def ready_orders(self, now_ns: int) -> list[Request]:
+        """The heads of the ready FIFOs that make an order call (`is_order_call`), in
+        the order of their arrival."""
+        heads = [
+            fifo[0]
+            for key, fifo in self._fifos.items()
+            if key not in self._held and fifo[0].not_before_ns <= now_ns
+        ]
+        heads.sort(key=lambda waiting: waiting.arrived)
+        return [waiting.request for waiting in heads if is_order_call(waiting.request)]
+
+    def remove(self, request: Request) -> None:
+        """Take `request`, the head of its FIFO, off the queue for good (an entry the
+        order rate withdraws); nothing for a request not at a head."""
+        for key, fifo in list(self._fifos.items()):
+            if fifo[0].request is request:
+                fifo.popleft()
+                if not fifo:
+                    del self._fifos[key]
+                return
+
+    def take(
+        self, now_ns: int, *, most: Priority = Priority.UPKEEP, orders: bool = True
+    ) -> Request | None:
         """The head of the most urgent ready FIFO whose rank is `most` or more urgent,
         taken off the queue; None when none is ready. A FIFO is ready when its order is
-        not held and its head's `not_before_ns` has passed at `now_ns`."""
+        not held and its head's `not_before_ns` has passed at `now_ns`; with `orders`
+        False, a head that makes an order call is not ready either (the order rate's
+        window is full)."""
         best: tuple[tuple[int, int], object] | None = None
         for key, fifo in self._fifos.items():
             head = fifo[0]
             if key in self._held or head.not_before_ns > now_ns:
+                continue
+            if not orders and is_order_call(head.request):
                 continue
             rank = (min(waiting.request.priority for waiting in fifo), head.arrived)
             if rank[0] <= most and (best is None or rank < best[0]):
@@ -314,6 +349,7 @@ __all__ = [
     "StreamGap",
     "WorkerQueue",
     "WorkerRequest",
+    "is_order_call",
     "is_stale",
     "order_key",
 ]

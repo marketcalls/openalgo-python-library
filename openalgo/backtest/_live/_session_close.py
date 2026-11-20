@@ -60,6 +60,7 @@ from ._reconcile_close import (
 )
 from ._reconcile_final import final_read
 from ._reconcile_findings import Reconciliation
+from ._session_banner import limit_lines
 from ._session_loop import Session
 from ._session_records import FillRecord, LockRecord, OrderRecord, Restored, order_records
 from ._session_saved import save, save_session
@@ -314,6 +315,7 @@ def _summary(
         differing=legs.differs,
         unconfirmed=legs.unsure,
         earlier=tuple(strategy.words() for strategy in figures.earlier),
+        limits=limit_lines(session),
     )
 
 

@@ -31,6 +31,8 @@ from .errors import ConfigError
 from .report._format import indian_digits
 from .strategy import Strategy
 
+#: The daily limits of a strategy (18-multi-strategy 2.5a), per strategy in both verbs.
+DAILY_LIMITS = ("max_trades_per_day", "daily_profit_target", "max_order_value")
 #: The settings a call takes per strategy: one value for every strategy, or a dict by
 #: strategy class name (18-multi-strategy 1.1).
 PER_STRATEGY = (
@@ -46,9 +48,7 @@ PER_STRATEGY = (
     "entry_from",
     "entry_until",
     "square_off",
-    "max_trades_per_day",
-    "daily_profit_target",
-    "max_order_value",
+    *DAILY_LIMITS,
 )
 #: The pool of a portfolio run when none is given: one account the strategies share.
 SHARED_POOL = "shared"
@@ -230,6 +230,7 @@ def account_trade_cap(value: Any) -> int | None:
 
 __all__ = [
     "ACCOUNT_SETTINGS",
+    "DAILY_LIMITS",
     "EVERY_STRATEGY",
     "MANDATORY",
     "PER_STRATEGY",

@@ -22,10 +22,12 @@ the loop.
 - **Clock skew** (6.4, `_clock_skew`): the banner's warning for a broker whose feed
   cannot be measured (and the result's, as every session warning); an ERROR alert, and
   a result warning once, when a window's estimate is beyond `SKEW_ALERT_S`. No lock.
-- **Account daily loss** (6.3): in each loop step, after its ticks and bars, the sum of
-  the strategies' `daily_loss_measure()` at or past `account_max_daily_loss` fires the
-  kill switch (`_kill_switch`) of every strategy with the reason "account_loss", once:
-  entries locked for the day, each position exited, an ERROR alert.
+- **The account's daily rules** (6.3; 18-multi-strategy 2.5a): in each loop step, after
+  its ticks and bars, the sum of the strategies' `daily_loss_measure()` at or past
+  `account_max_daily_loss` fires the kill switch (`_kill_switch`) of every strategy with
+  the reason "account_loss", and at or past `account_daily_profit_target` with
+  "account_profit", each once: entries locked for the day, each position exited, an
+  ERROR alert (`_account_watch`).
 
 Every lock and unlock is written to the event stream. Times are UTC nanoseconds, amounts
 rupees. Used by the loop only.
@@ -41,10 +43,10 @@ import bisect
 import logging
 from typing import Any
 
-from .._engine import call
 from .._layout import NANOS_PER_SECOND
+from ._account_watch import AccountRules
 from ._clock_skew import ClockSkew, skew_words, unmeasured_words
-from ._kill_switch import ACCOUNT_LOSS, KillSwitch
+from ._kill_switch import KillSwitch
 from ._session_trader import Trader
 from ._types import LOGGER_NAME, AlertKind, Tick
 from .bars import DEFAULT_DEAD_AFTER_S, FeedHealth
@@ -70,6 +72,7 @@ class RiskWatch:
         self._session = session
         self.skew = ClockSkew(session.parts.broker)
         self.kill = KillSwitch(session)
+        self.account = AccountRules(session, self.kill)
         self._health: FeedHealth | None = None
         self._watching_ns = 0
         self._last_tick_ns: int | None = None
@@ -78,7 +81,6 @@ class RiskWatch:
         self._spells: list[_Span] = []
         self._unlock_at_ns: int | None = None
         self._quotes: tuple[tuple[str, str], ...] = ()
-        self._account_hit = False
         self._skew_warned = self._untimed_warned = False
 
     # ----- the start (16-session-design 3.1 steps 13 and 14) -----------------------------
@@ -186,7 +188,7 @@ class RiskWatch:
 
     def duties(self, now_ns: int) -> None:
         """Step D: the skew window, the feed dying, the lock lifting, the quotes asked
-        for, the account's daily loss limit and the kill switch."""
+        for, the account's daily rules and the kill switch."""
         if self._health is None:
             return
         self._skew_due(now_ns)
@@ -196,7 +198,7 @@ class RiskWatch:
             self._unlock()
         self._ask_quotes()
         if self._session.trading:
-            self._account_limit()
+            self.account.duties()
         self.kill.duties(now_ns)
 
     def _went_dead(self) -> None:
@@ -273,32 +275,6 @@ class RiskWatch:
         self._quotes = wanted
         session.data.quote(wanted)
         session.event("quotes", instruments=[f"{symbol}:{exchange}" for symbol, exchange in wanted])
-
-    def _account_limit(self) -> None:
-        """Fire the kill switch of every strategy once the account's daily loss is at or
-        past its limit (6.3)."""
-        session = self._session
-        limit = session.parts.spec.arguments.account_max_daily_loss
-        if limit is None or self._account_hit:
-            return
-        measure = sum(float(call(t.engine.daily_loss_measure)) for t in session.traders)
-        if -measure < limit:
-            return
-        self._account_hit = True
-        session.event("account_loss", measure=measure, limit=limit)
-        # After a mode change nothing is sent: the kill switch only alerts (`_kill_switch`).
-        exits = (
-            "nothing is exited, as OpenAlgo's mode changed: close the positions by hand in OpenAlgo"
-            if session.locked
-            else "the kill switch exits every strategy's position"
-        )
-        session.alert(
-            AlertKind.ERROR,
-            f"the account's daily loss Rs {-measure:,.2f} is at or past its limit Rs "
-            f"{limit:,.2f}: every strategy's entries are locked for the day and {exits}",
-        )
-        for trader in session.traders:
-            self.kill.fire(trader, ACCOUNT_LOSS)
 
     def _skew_due(self, now_ns: int) -> None:
         session = self._session

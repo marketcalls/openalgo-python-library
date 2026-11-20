@@ -88,6 +88,19 @@ def test_a_live_day_with_a_loss_that_ended_open_reads_so():
     )
 
 
+def test_the_daily_limits_set_follow_the_strategies_line():
+    limited = replace(
+        A_GOOD_DAY,
+        limits=("ema_cross at most 3 trades a day", "account trade cap 4 trades a day"),
+    )
+    lines = summary_text(limited).splitlines()
+    assert lines[1:3] == [
+        "Strategies  : ema_cross, orb",
+        "Limits      : ema_cross at most 3 trades a day; account trade cap 4 trades a day",
+    ]
+    assert "Limits" not in summary_text(A_GOOD_DAY)
+
+
 def test_the_alerts_line_is_left_out_when_every_alert_reached_openalgo():
     assert "Alerts" not in summary_text(A_GOOD_DAY)
 

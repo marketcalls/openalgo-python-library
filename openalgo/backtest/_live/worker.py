@@ -1,13 +1,13 @@
 """The order worker of a live session (16-session-design 2.1, 2.4; unit 5): the one thread
 that sends the session's orders and reads its order books, so the loop never makes a
-network call. It owns the order path (`orders.OrderPath`, with its rate budget, server
-watch, follower and resolver), the mode guard once started, and journal handle W. One
-worker, serial: the order path is not thread-safe, its holds and send-once rules assume
-one sender per account, and the rate budget is the account's.
-
-Its startup phase (`start_up`, on the worker's own thread, since a journal handle is
-bound to the thread that opens it) opens W, starts the journal's session for the day,
-builds and restores the order path, and posts `inbox.WorkerReady`. Then each `step`:
+network call. It owns the order path (`orders.OrderPath`, with its server watch, follower
+and resolver), the order rate throttle (`_order_throttle`, whose window is the order path's
+rate budget: the requests it takes are the throttle's to give), the mode guard once
+started, and journal handle W. One worker, serial: the order path is not thread-safe, its
+holds and send-once rules assume one sender per account, and the order rate is the
+account's. Its startup phase (`start_up`, on its own thread, which then owns journal W)
+opens W, starts the journal's session for the day, builds and restores the order path,
+and posts `inbox.WorkerReady`. Then each `step`:
 
 1. drains the raw order updates (`updates`): each normalized (an unreadable one is logged
    and counted, never raised), taken by the order path, and its news posted as
@@ -28,14 +28,12 @@ builds and restores the order path, and posts `inbox.WorkerReady`. Then each `st
 
 A `JournalError` (any but a refused stop record, which is only alerted) is posted as
 `inbox.WorkerFailed`, after which nothing is sent: an intent can no longer be written
-first. So is any exception nothing expected, inline (`step`) as on the thread (`run`),
-so the fault suite meets what production does. `close` lets the step under way end
-without taking another request; `withdraw_put_back` drops what was put back before the
-session's last lines (3.3 step 5). The loop reads `busy_since_ns` (set around every call
-that may reach the server) and `raw_pending` (the order words not yet posted, in the raw
-FIFO or the worker's hands: `_worker_news`) (4.2), the requests not executed yet
-(`unfinished`, the close's last wait), and the order path's silence (`silent_since_ns`,
-`asked_ns`, 4.9). Times are UTC nanoseconds.
+first. So is any exception nothing expected, inline (`step`) as on the thread (`run`).
+`close` lets the step under way end without taking another request; `withdraw_put_back`
+drops what was put back before the session's last lines (3.3 step 5). The loop reads
+`busy_since_ns` (set around every call that may reach the server), `raw_pending` (the
+order words not yet posted: `_worker_news`) (4.2), `unfinished` (the close's last wait)
+and the order path's silence (`silent_since_ns`, `asked_ns`, 4.9). Times are UTC ns.
 """
 
 from __future__ import annotations
@@ -52,6 +50,7 @@ from ..errors import JournalError, LiveError
 from ._journal_file import DEFAULT_BUSY_TIMEOUT_S
 from ._journal_reads import JournalSession
 from ._order_state import HeldFill
+from ._order_throttle import DEFAULT_ORDERS_PER_SECOND, OrderThrottle
 from ._types import LOGGER_NAME, AlertsLike, Mode, Now, Purpose, Sleep
 from ._venue_requests import Priority
 from ._worker_news import NewsHandover
@@ -71,7 +70,7 @@ from .inbox import (
     WorkerReady,
 )
 from .journal import Journal
-from .orders import OrderPath, RateBudget
+from .orders import OrderPath
 
 logger = logging.getLogger(LOGGER_NAME)
 
@@ -79,8 +78,8 @@ logger = logging.getLogger(LOGGER_NAME)
 THREAD_NAME = "openalgo-live-orders"
 #: Seconds the thread waits for a request or an update when nothing is ready (2.4 step 9).
 WORKER_IDLE_WAIT_S = 0.05
-#: Seconds `close` waits for the thread by default; a call in flight can take the orders
-#: client's timeout, and the thread is a daemon, so the process can end meanwhile.
+#: Seconds `close` waits for the thread by default (a daemon: a call in flight may take
+#: the orders client's timeout, and the process can end meanwhile).
 CLOSE_WAIT_S = 10.0
 
 
@@ -112,7 +111,7 @@ class OrderWorker:
     """The order worker (module docstring). `client` is the session's orders client,
     `guard` its mode guard (started on the main thread before the worker), `alerts` the
     shared alerts, `inbox` the loop's, `journal` where W is; `now` gives UTC nanoseconds
-    and `sleep` waits seconds (the rate budget's waits).
+    and `sleep` waits seconds; `orders_per_second` is the order rate (`_order_throttle`).
 
     The loop calls `put` and `withdraw_put_back` and reads `busy_since_ns` and
     `raw_pending` from its thread, and the feed's order callback puts on `updates`;
@@ -129,6 +128,7 @@ class OrderWorker:
         journal: JournalTarget,
         now: Now,
         sleep: Sleep,
+        orders_per_second: int = DEFAULT_ORDERS_PER_SECOND,
     ) -> None:
         self._client = client
         self._guard = guard
@@ -144,6 +144,9 @@ class OrderWorker:
         self.busy_since_ns: int | None = None
         self._incoming = Incoming()
         self._queue = WorkerQueue()
+        self._throttle = OrderThrottle(
+            now, orders_per_second, post=self._post, finished=self._incoming.finished
+        )
         self._settle = Settlements()
         self._news = NewsHandover(
             self.updates, settle=self._settle, queue=self._queue, post=self._post
@@ -157,8 +160,7 @@ class OrderWorker:
 
     @property
     def raw_pending(self) -> int:
-        """The order words not yet posted to the loop (4.2): the raw updates waiting to be
-        drained, and the words the worker took in and has not posted (`_worker_news`)."""
+        """The order words not yet posted to the loop (4.2; `_worker_news`)."""
         return self._news.pending
 
     @property
@@ -169,17 +171,15 @@ class OrderWorker:
 
     @property
     def silent_since_ns(self) -> int | None:
-        """Since when (UTC nanoseconds) OpenAlgo has not answered the order path after a
-        client timeout or a dropped connection (`OrderPath.silent_since_ns`); None while
-        it answers, and before the start-up. Read from the loop's thread (4.9)."""
+        """Since when (UTC ns) OpenAlgo has not answered the order path after a timeout or
+        a dropped connection (`OrderPath.silent_since_ns`); None while it answers (4.9)."""
         started = self._started
         return None if started is None else started.path.silent_since_ns
 
     @property
     def asked_ns(self) -> int | None:
-        """When (UTC nanoseconds) the order path's last answer from OpenAlgo was noted,
-        whatever it was: when it came, or when its poll or book read began
-        (`OrderPath.asked_ns`); None before its first call. Read from the loop (4.9)."""
+        """When (UTC ns) the order path's last answer from OpenAlgo was noted, whatever
+        it was (`OrderPath.asked_ns`); None before its first call. Read from the loop (4.9)."""
         started = self._started
         return None if started is None else started.path.asked_ns
 
@@ -225,7 +225,7 @@ class OrderWorker:
                 alerts=self._alerts,
                 now=self._now,
                 sleep=self._sleep,
-                rate=RateBudget(self._now),
+                rate=self._throttle.budget,
             )
             path.restore()
         except BaseException:
@@ -305,7 +305,7 @@ class OrderWorker:
             return False
         for request in self._incoming.into(self._queue):
             logger.warning("withdrawn, put back before the session's last lines: %r", request)
-        request = self._queue.take(self._now(), most=most)
+        request = self._throttle.take(self._queue, most)
         if request is None:
             return False
         # The updates that came meanwhile first: a modify or cancel is never sent on

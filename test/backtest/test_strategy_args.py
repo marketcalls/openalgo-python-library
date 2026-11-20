@@ -2,7 +2,8 @@
 1.3, decision M5): one set of rules for `bt.backtest` given a list and for `bt.live`.
 
 `SHARED` is one table of the settings both verbs take by name today (capital,
-max_daily_loss, params): each row runs through `bt.backtest`'s list resolution
+max_daily_loss, params, and the daily limits max_trades_per_day, daily_profit_target and
+max_order_value of 18-multi-strategy 2.5a): each row runs through `bt.backtest`'s list resolution
 (`_portfolio_run.portfolio_plan`, before any data is loaded) and through `bt.live`'s
 argument checks (`_live._plan_args.live_arguments`, before any call to OpenAlgo), and both
 give the row's values or refuse it with the row's words. `BACKTEST_ONLY` holds the rows
@@ -52,6 +53,8 @@ def backtest_values(setting: str, given: dict) -> dict:
 def live_values(setting: str, given: dict) -> dict:
     """Each strategy's value of `setting` as `bt.live([Alpha, Beta], **given)` checks it."""
     checked = live_arguments([Alpha, Beta], **given)
+    if setting in checked.daily_limits[NAMES[0]]:
+        return {name: checked.daily_limits[name][setting] for name in NAMES}
     return dict(getattr(checked, setting))
 
 
@@ -111,6 +114,30 @@ SHARED = [
         "params",
         {"capital": CAPITAL, "params": 5},
         r"params takes a dict of parameter values, not 5",
+    ),
+    (
+        "max_trades_per_day one value",
+        "max_trades_per_day",
+        {"capital": CAPITAL, "max_trades_per_day": 3},
+        {"Alpha": 3, "Beta": 3},
+    ),
+    (
+        "daily_profit_target by name",
+        "daily_profit_target",
+        {"capital": CAPITAL, "daily_profit_target": {"Alpha": 1_000, "Beta": 2_500}},
+        {"Alpha": 1_000, "Beta": 2_500},
+    ),
+    (
+        "max_order_value leaves a strategy out",
+        "max_order_value",
+        {"capital": CAPITAL, "max_order_value": {"Alpha": 50_000}},
+        r"max_order_value as a dict must name every strategy of the run",
+    ),
+    (
+        "max_trades_per_day names a strategy the call does not run",
+        "max_trades_per_day",
+        {"capital": CAPITAL, "max_trades_per_day": {"Alpha": 1, "Beta": 1, "Gamma": 1}},
+        r"max_trades_per_day names ['Gamma'], which this * does not run",
     ),
 ]
 
