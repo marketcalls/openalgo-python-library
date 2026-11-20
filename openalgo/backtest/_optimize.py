@@ -324,6 +324,9 @@ def optimize(
         return execute(strategy, prepared, selected, record=record)
 
     named = isinstance(objective, str)
+    # After the table: the matrix takes each combination out of `measured` as it copies
+    # its returns, so they are never held twice.
+    returns = returns_matrix(measured)
     return OptimizeResult(
         table,
         combinations,
@@ -333,7 +336,7 @@ def optimize(
         path,
         plan,
         runner,
-        returns_matrix(measured),
+        returns,
         named,
         strategy.__name__,
     )

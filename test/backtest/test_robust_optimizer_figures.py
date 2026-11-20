@@ -9,6 +9,7 @@ own daily bars with no server, in this process.
 """
 
 import math
+import weakref
 
 import numpy as np
 import pandas as pd
@@ -107,6 +108,44 @@ def test_a_session_a_combination_has_no_return_for_counts_zero():
     first = _measured(["2025-01-01", "2025-01-03"], [0.01, 0.03])
     second = _measured(["2025-01-02", "2025-01-03"], [0.02, -0.01])
     assert returns_matrix([first, second]).tolist() == [[0.01, 0.0], [0.0, 0.02], [0.03, -0.01]]
+
+
+def _copies_seen_alive(sessions: list[list[str]]) -> tuple[list[int], list[Measured]]:
+    """Four combinations' returns on `sessions[k % len(sessions)]`, made into the matrix:
+    how many of the four Series were alive each time one was copied, and the list the
+    matrix was made from, afterwards."""
+    alive: list[weakref.ref] = []
+    seen: list[int] = []
+
+    class Counted(pd.Series):
+        """Session returns that count the Series still alive when they are copied."""
+
+        def to_numpy(self, *args, **kwargs):
+            seen.append(sum(ref() is not None for ref in alive))
+            return super().to_numpy(*args, **kwargs)
+
+    measured = []
+    for k in range(4):
+        days = sessions[k % len(sessions)]
+        measured.append(Measured({}, Counted([0.01 * k] * len(days), index=pd.DatetimeIndex(days))))
+    alive.extend(weakref.ref(kept.returns) for kept in measured)
+    from openalgo.backtest._sweep_pool import returns_matrix
+
+    returns_matrix(measured)
+    return seen, measured
+
+
+@pytest.mark.parametrize(
+    "sessions",
+    [[["2025-01-01", "2025-01-02"]], [["2025-01-01", "2025-01-02"], ["2025-01-02", "2025-01-03"]]],
+    ids=["the same sessions", "other sessions"],
+)
+def test_the_returns_matrix_lets_each_combinations_returns_go_once_copied(sessions):
+    # The last combination is copied first, while all four are alive; each copied one is
+    # let go before the next is read, so a sweep never holds its returns twice over.
+    seen, measured = _copies_seen_alive(sessions)
+    assert seen == [4, 3, 2, 1]
+    assert measured == []
 
 
 def test_a_best_that_dominates_every_block_never_overfits(spike):

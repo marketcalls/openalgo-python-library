@@ -127,17 +127,38 @@ def returns_matrix(measured: list[Measured]) -> np.ndarray:
     array, in grid order, on every session any of them has in date order; a session a
     combination has no return for counts 0 (its equity did not move). Each combination's
     returns lie together in memory (Fortran order), so a sum over sessions runs in
-    NumPy's pairwise order (`_robust._overfitting_probability`)."""
+    NumPy's pairwise order (`_robust._overfitting_probability`).
+
+    The array is filled one combination at a time, last first, each taken out of
+    `measured` before the next is read (the list is empty afterwards): a sweep that keeps
+    nothing else of them holds each combination's returns once, as a Series or as its
+    column, never both for the whole grid."""
     if not measured:
         return np.empty((0, 0))
+    indexes = {id(kept.returns.index): kept.returns.index for kept in measured}
     first = measured[0].returns.index
-    if all(kept.returns.index.equals(first) for kept in measured):
-        matrix = np.empty((len(first), len(measured)), order="F")
-        for position, kept in enumerate(measured):
-            matrix[:, position] = kept.returns.to_numpy(dtype=float)
-        return matrix
-    joined = pd.concat([kept.returns for kept in measured], axis=1, ignore_index=True)
-    return np.asfortranarray(joined.sort_index().fillna(0.0).to_numpy(dtype=float))
+    aligned = all(index.equals(first) for index in indexes.values())
+    sessions = first if aligned else _union(list(indexes.values()))
+    matrix = np.zeros((len(sessions), len(measured)), order="F")
+    for position in range(len(measured) - 1, -1, -1):
+        returns = measured.pop().returns
+        values = returns.to_numpy(dtype=float)
+        if aligned:
+            matrix[:, position] = values
+        else:
+            # On other sessions the column is the one an outer join gives, gaps filled
+            # with 0, so a return with no number reads 0 there too.
+            rows = sessions.get_indexer(returns.index)
+            matrix[rows, position] = np.where(np.isnan(values), 0.0, values)
+    return matrix
+
+
+def _union(indexes: list[pd.Index]) -> pd.Index:
+    """Every session of `indexes`, once each, in date order."""
+    union = indexes[0]
+    for index in indexes[1:]:
+        union = union.union(index)
+    return union.sort_values()
 
 
 def run_chunk(chunk: Chunk) -> list[Measured]:
