@@ -57,6 +57,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .._engine import call
+from .._strategy_orders import LEG_TARGET
 from ._plan_catch_up import INSTRUMENT
 from ._types import OrderIntent, Purpose
 
@@ -64,9 +65,9 @@ from ._types import OrderIntent, Purpose
 MARKET = "MARKET"
 #: The sign of a fill's slippage by its side: a buy that paid more is worse.
 _AGAINST_THE_TRADER = {"BUY": 1, "SELL": -1}
-#: The kernel's exit reason (`ExitReason` codes) of the exit a leg's target makes on a
-#: tick, and of the time exit, the one risk exit made at an open.
-_LEG_TARGET, _TIME_EXIT = "leg_target", "time_exit"
+#: The kernel's exit reason (an `ExitReason` code) of the time exit, the one risk exit
+#: made at an open; a leg's target exit, made on a tick, records `LEG_TARGET`.
+_TIME_EXIT = "time_exit"
 
 
 @dataclass(frozen=True)
@@ -124,10 +125,11 @@ def _made_on_an_event(purpose: Purpose, exit_reason: str | None) -> bool:
     """True for an order the engine makes on an event while its kernel session waits
     inside a minute (module docstring): a leg's target exit, a risk exit but the time
     exit. A strategy's exit shares the target exit's purpose and is told from it by the
-    exit reason the kernel records."""
+    exit reason the kernel records, which a strategy's exit cannot take
+    (`_strategy_orders.ENGINE_LEG_EXIT_REASONS`)."""
     if purpose is Purpose.RISK_EXIT:
         return exit_reason != _TIME_EXIT
-    return purpose is Purpose.EXIT and exit_reason == _LEG_TARGET
+    return purpose is Purpose.EXIT and exit_reason == LEG_TARGET
 
 
 def _bar_at_or_after(session: Any, trader: Any, decided_at_ns: int) -> tuple[int, float] | None:

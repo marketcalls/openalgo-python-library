@@ -32,6 +32,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ConfigError` naming it and its block. The built-in tearsheet stays the default and is the
   same byte for byte: no layout, `layout=None` and `Layout(base=mode)` give today's page,
   pinned by twelve golden pages in the tests.
+- The fund: several strategies stepped together on one account in a backtest (2.4.0, kernel
+  unit M2; `bt.backtest` takes a list of strategies from a later unit, and nothing changes for a
+  single strategy). Each strategy keeps its own engine, instrument and bar interval, and the fund
+  advances them in order on one merged time line, across exchanges and intervals (an NSE minute
+  strategy beside an MCX one or a daily one). With a shared pool, an opening order also needs its
+  margin within the account's free cash, and a sizer sees at most the account's free cash; with
+  separate pools each strategy keeps its own capital and the account is only recorded. The
+  account's daily loss limit counts each strategy's loss of the round's session day only, and
+  fires once a day: every strategy's entries are locked, its working entries cancelled and its
+  positions exited (exit reason `account_loss_limit`). The account's figures each round (equity,
+  free cash, margin, daily loss), its breaches and the orders it refused or cancelled are kept for
+  the portfolio result. A strategy in a fund gives exactly the result it gives alone whenever the
+  account does not bind. Speed rows `portfolio-3x1M`, `fund round` and `portfolio-callbacks` in
+  `benchmark/backtest_speed.py`.
 - Live engine groundwork for two strategies on one symbol (2.4.0, kernel unit K5; the session
   uses it from a later unit). On an instrument several strategies of a session trade, an
   entry, add or reversal on the other side of the side the others hold or are entering is
@@ -41,12 +55,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejects in such a group holds the position: no market exit, no re-placed stop and no
   square-off sent by the engine until the session has checked the broker's books. Both
   codes have a meaning and what to do in the rejection warnings.
+- MCX silver mini (SILVERM) and silver micro (SILVERMIC) can be backtested and traded: their
+  freeze quantity, 600 kg per order, is in the contract table from MCX circulars
+  MCX/TRD/114/2025, MCX/TRD/091/2026, MCX/TRD/275/2025 and MCX/TRD/302/2026 (contracts
+  outside those circulars carry the same terms as unverified, with a warning). Before, both
+  were refused for want of a freeze quantity.
 
 ### Changed
 
 - Live sessions: a trade closed by the account's daily loss limit (`account_max_daily_loss`,
   through the kill switch) now records the exit reason `account_loss_limit` instead of
   `manual`, the reason a portfolio backtest records for the same breach.
+- `Strategy.exit(reason=...)` refuses `"leg_sl"` and `"leg_target"` with a `ConfigError`:
+  they are the reasons of the engine's own exits at a leg's stop and target, and a live
+  session timed a strategy exit that named them as the engine's tick exit.
+- A restart that finds a strategy's saved state is of another symbol or contract (the same
+  class name moved to a new contract) still refuses it before sending anything, but now says
+  what to do: give the class a new name for the new contract, or keep its symbol. Every
+  strategy so moved is named at once.
+- Tearsheets: a figure that rounds to zero no longer shows a minus sign ("-0.0%" now reads
+  "0.0%", in the weekly cells and titles, the yearly axis and the charges table), a yearly
+  returns axis that steps by half a percent labels its ticks with one decimal, a histogram
+  no longer shows an empty bin of zero width at its low end, the noise check's tile gives the
+  count of noise runs above the run as well as the share, and the optimizer page no longer
+  prints the sweep's measured times, so two runs of one sweep give the same page.
+- The robustness check of the parameter neighbourhood names the range a `params=` value lies
+  outside and what to pass, where it said only that it could not judge.
+- `bt.optimize` uses less memory on large sweeps: the returns of each combination are copied
+  into the overfitting figures' array as they come back, not after all of them.
 
 ## [2.3.0] - 2026-11-20
 

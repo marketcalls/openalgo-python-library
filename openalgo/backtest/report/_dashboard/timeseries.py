@@ -111,7 +111,7 @@ def _value_ticks(pane: _Pane) -> list[float]:
 
 
 def _value_label(value: float, percent: bool) -> str:
-    return f"{value * 100:.1f}%" if percent else f"{value:.2f}"
+    return fmt.percent(value, 1) if percent else f"{value:.2f}"
 
 
 def _x(position: int, count: int) -> float:

@@ -14,12 +14,25 @@ what it cannot run yet with NotImplementedError.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from . import _orders, _rebalance
 from ._atr import decision_atr
 from ._orders import Order
 from .errors import ConfigError
+
+#: The kernel's exit reasons (`ExitReason` codes) of the engine's own exits at a leg's
+#: stop and at its target.
+LEG_SL, LEG_TARGET = "leg_sl", "leg_target"
+#: The exit reasons only the engine's own exits record, and what makes each: a strategy's
+#: exit cannot take them, so a trade read as stopped or as at its target is one, and a
+#: live session tells the engine's target exit, made on a tick, from a strategy's exit
+#: decided at a bar close by its reason (`_live/_session_slippage`).
+ENGINE_LEG_EXIT_REASONS = {LEG_SL: "stop", LEG_TARGET: "target"}
+#: How the kernel words an unknown exit reason (rust/oa_py engine/request.rs):
+#: `unknown exit reason "x": use one of leg_sl, leg_target, ...`.
+_UNKNOWN_REASON = re.compile(r"(unknown exit reason .*: use one of )(.*)", re.DOTALL)
 
 
 class OrderMethods:
@@ -143,8 +156,22 @@ class OrderMethods:
         """Close the position, or `fraction` of it, or `qty` units, at the next open.
         Returns None when flat. The fill's reason is "signal" unless `reason=` names
         another exit reason of the fills table, such as "manual"; an unknown reason is
-        an error that lists them."""
-        return self._reduce(symbol, fraction=fraction, qty=qty, reason=reason)
+        a ConfigError that lists the reasons a strategy may give. Raises ConfigError for
+        "leg_sl" and "leg_target", the reasons of the engine's own exits at a leg's stop
+        and target."""
+        if reason in ENGINE_LEG_EXIT_REASONS:
+            raise ConfigError(
+                f"exit(reason={reason!r}) is refused: {reason!r} is the reason of the engine's "
+                f"own exit at a leg's {ENGINE_LEG_EXIT_REASONS[reason]}. Give another reason, "
+                "such as 'manual', or none for 'signal'"
+            )
+        try:
+            return self._reduce(symbol, fraction=fraction, qty=qty, reason=reason)
+        except ConfigError as error:
+            rewritten = _strategy_reasons_only(error)
+            if rewritten is None:
+                raise
+            raise rewritten from None
 
     def reduce(
         self,
@@ -274,4 +301,15 @@ def order_leverage(given: float | None, strategy_leverage: float | None) -> floa
     return given if given is not None else strategy_leverage
 
 
-__all__ = ["OrderMethods", "order_leverage"]
+def _strategy_reasons_only(error: ConfigError) -> ConfigError | None:
+    """The kernel's error for an unknown exit reason with the reasons of the engine's own
+    leg exits taken out of the list it gives, since `exit` refuses them (the kernel keeps
+    one list of every reason); None for any other error."""
+    found = _UNKNOWN_REASON.fullmatch(str(error))
+    if found is None:
+        return None
+    reasons = [code for code in found[2].split(", ") if code not in ENGINE_LEG_EXIT_REASONS]
+    return ConfigError(found[1] + ", ".join(reasons))
+
+
+__all__ = ["ENGINE_LEG_EXIT_REASONS", "LEG_TARGET", "OrderMethods", "order_leverage"]

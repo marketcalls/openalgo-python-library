@@ -131,7 +131,7 @@ def search_grid(
     return Grid(tuple(names), tuple(combos), run_parameters(strategy, given), True)
 
 
-def _number(value: Any) -> bool:
+def is_number(value: Any) -> bool:
     """Whether a parameter value is a number the neighbourhood moves (not a flag)."""
     return isinstance(value, numbers.Real) and not isinstance(value, bool)
 
@@ -152,7 +152,7 @@ def cube(strategy: type, given: Mapping[str, Any] | None, step: float) -> Grid |
     """The neighbourhood of the run's own parameters (module docstring); None when the
     strategy has no number parameter to move."""
     run_params = run_parameters(strategy, given)
-    names = [name for name, value in run_params.items() if _number(value)]
+    names = [name for name, value in run_params.items() if is_number(value)]
     if not names:
         return None
     axes = [around(run_params[name], step) for name in names]
@@ -174,6 +174,7 @@ __all__ = [
     "around",
     "checked_ranges",
     "cube",
+    "is_number",
     "run_parameters",
     "search_grid",
 ]

@@ -71,6 +71,13 @@ def test_the_table_does_not_depend_on_the_number_of_workers(pooled):
     pd.testing.assert_frame_equal(sweep(workers=1).table, pooled[0].table, check_exact=True)
 
 
+def test_the_session_returns_from_worker_processes_are_those_of_the_single_runs(pooled):
+    # Each combination's returns are copied into the sweep's array as its chunk comes
+    # back, in grid order.
+    columns = [single(fast, slow).performance.session_returns.to_numpy() for fast, slow in GRID]
+    np.testing.assert_array_equal(pooled[0]._returns, np.column_stack(columns))
+
+
 def test_the_plan_is_reported_before_the_sweep_with_its_estimate(pooled):
     result, lines = pooled
     assert lines == [result.plan]

@@ -8,7 +8,10 @@ own daily bars with no server, in this process.
 (`test_robust_search_checks` describes them). The sweep is days 0 to 4.
 """
 
+import itertools
 import math
+import tracemalloc
+from collections.abc import Callable
 
 import numpy as np
 import pandas as pd
@@ -25,7 +28,7 @@ from test_report_tearsheet import FORBIDDEN_NAME_HASHES, Structure, section_ids
 
 import openalgo.backtest as bt
 from openalgo.backtest._robust._verdict import FAILED, NOT_JUDGED, PASSED
-from openalgo.backtest._sweep_pool import Measured
+from openalgo.backtest._sweep_returns import ReturnsMatrix
 from openalgo.backtest.errors import ConfigError
 
 SESSIONS = 300
@@ -87,26 +90,106 @@ def test_the_sweep_keeps_its_session_returns_as_one_array(spike):
     assert returns.nbytes == 8 * SESSIONS * 5
 
 
-def _measured(days: list[str], values: list[float]) -> Measured:
-    return Measured({}, pd.Series(values, index=pd.DatetimeIndex(days)))
+def returns_array(*combinations: tuple[list[str], list[float]]) -> list[list[float]]:
+    """The sweep's returns array of combinations given as (session dates, returns), in
+    grid order."""
+    built = ReturnsMatrix(len(combinations))
+    for days, values in combinations:
+        built.add(pd.Series(values, index=pd.DatetimeIndex(days)))
+    return built.array().tolist()
 
 
-def test_session_returns_on_the_same_sessions_stand_side_by_side():
-    from openalgo.backtest._sweep_pool import returns_matrix
-
-    days = ["2025-01-01", "2025-01-02", "2025-01-03"]
-    matrix = returns_matrix(
-        [_measured(days, [0.01, 0.02, 0.03]), _measured(days, [0.0, -0.01, 0.0])]
-    )
-    assert matrix.tolist() == [[0.01, 0.0], [0.02, -0.01], [0.03, 0.0]]
+JAN = ["2025-01-01", "2025-01-02", "2025-01-03"]
 
 
-def test_a_session_a_combination_has_no_return_for_counts_zero():
-    from openalgo.backtest._sweep_pool import returns_matrix
+@pytest.mark.parametrize(
+    ("combinations", "array"),
+    [
+        # The same sessions stand side by side, a missing number kept as it is.
+        (
+            [(JAN, [0.01, 0.02, 0.03]), (JAN, [0.0, -0.01, math.nan])],
+            [[0.01, 0.0], [0.02, -0.01], [0.03, math.nan]],
+        ),
+        # The second has no return on 2 January: it counts 0 there, as its missing one.
+        (
+            [(JAN, [0.01, 0.02, 0.03]), (JAN[::2], [math.nan, -0.01])],
+            [[0.01, 0.0], [0.02, 0.0], [0.03, -0.01]],
+        ),
+        # The second brings 2 January, a session the first lacks: the array grows to it
+        # in date order, the first counting 0 there.
+        (
+            [(JAN[::2], [0.01, 0.03]), (JAN[1:], [0.02, -0.01])],
+            [[0.01, 0.0], [0.0, 0.02], [0.03, -0.01]],
+        ),
+        # Grown after a combination on the first's sessions, which keeps its column.
+        (
+            [(JAN[:2], [0.01, 0.02]), (JAN[:2], [0.04, 0.05]), (JAN, [0.1, 0.2, 0.3])],
+            [[0.01, 0.04, 0.1], [0.02, 0.05, 0.2], [0.0, 0.0, 0.3]],
+        ),
+    ],
+    ids=["the same sessions", "fewer sessions", "a new session", "a new session later"],
+)
+def test_the_sweeps_returns_array_holds_each_combination_on_its_sessions(combinations, array):
+    np.testing.assert_array_equal(returns_array(*combinations), array)
 
-    first = _measured(["2025-01-01", "2025-01-03"], [0.01, 0.03])
-    second = _measured(["2025-01-02", "2025-01-03"], [0.02, -0.01])
-    assert returns_matrix([first, second]).tolist() == [[0.01, 0.0], [0.0, 0.02], [0.03, -0.01]]
+
+def test_a_sweep_with_nothing_measured_has_an_empty_returns_array():
+    assert ReturnsMatrix(0).array().shape == (0, 0)
+
+
+#: The size of the array the peak tests build: 200 combinations of 1,000 sessions, 1.6 MB.
+PEAK_COMBINATIONS, PEAK_SESSIONS = 200, 1_000
+#: A trading day of the peak tests' first session.
+PEAK_START = "2022-01-03"
+
+
+def built_peak(sessions_of: Callable[[int], pd.DatetimeIndex]) -> float:
+    """The most traced memory building the returns array takes, from the first
+    combination measured to the array made, over the array's size. Each combination's
+    returns (on `sessions_of(position)`) are made as its run would end, a Series with its
+    own session index, added, and let go, as a sweep does."""
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        before = tracemalloc.get_traced_memory()[0]
+        built = ReturnsMatrix(PEAK_COMBINATIONS)
+        for position in range(PEAK_COMBINATIONS):
+            sessions = sessions_of(position)
+            built.add(pd.Series(np.full(len(sessions), 0.001 * position), index=sessions))
+        array = built.array()
+        peak = tracemalloc.get_traced_memory()[1] - before
+    finally:
+        tracemalloc.stop()
+    return peak / array.nbytes
+
+
+def every_session(position: int) -> pd.DatetimeIndex:
+    return pd.bdate_range(PEAK_START, periods=PEAK_SESSIONS)
+
+
+def all_but_the_first_ten_after_the_first(position: int) -> pd.DatetimeIndex:
+    """Every session for the first combination; the others start trading ten sessions
+    later."""
+    return every_session(position)[0 if position == 0 else 10 :]
+
+
+def ten_more_after_the_first(position: int) -> pd.DatetimeIndex:
+    """The first combination starts trading ten sessions later than the others."""
+    return every_session(position)[10 if position == 0 else 0 :]
+
+
+@pytest.mark.parametrize(
+    "sessions_of",
+    [every_session, all_but_the_first_ten_after_the_first, ten_more_after_the_first],
+    ids=["the same sessions", "fewer sessions", "new sessions"],
+)
+def test_building_the_returns_array_holds_little_more_than_the_array(sessions_of):
+    # Each combination's returns are copied into the array as they come back and let go,
+    # so the build never holds them all beside it (which takes twice the array): at most
+    # the array, one combination's Series and the session index, 20 percent over at most.
+    # The second combination's new sessions grow the array while one column is filled,
+    # and only that column is held twice.
+    assert built_peak(sessions_of) < 1.2
 
 
 def test_a_best_that_dominates_every_block_never_overfits(spike):
@@ -282,6 +365,29 @@ def test_the_page_is_written_to_a_file(spike, tmp_path):
     target = tmp_path / "sweep.html"
     assert spike.tearsheet(target) == str(target)
     assert target.read_text(encoding="utf-8") == spike.tearsheet()
+
+
+def test_two_sweeps_of_one_grid_make_the_same_page(monkeypatch):
+    # The plan times the first combination, so two sweeps report other seconds (here a
+    # clock that steps 0.25 s, then one that steps 1.75 s, between its readings); the
+    # page's notes keep the plan without its timings, so the pages are the same.
+    from openalgo.backtest import _optimize
+
+    data = weekday_bars(SESSIONS, lambda s: (2,))
+    plans, pages = [], []
+    for step in (0.25, 1.75):
+        clock = itertools.count(0.0, step)
+        monkeypatch.setattr(_optimize.time, "perf_counter", lambda clock=clock: next(clock))
+        result = sweep(data)
+        plans.append(result.plan)
+        pages.append(result.tearsheet())
+    assert plans[0] != plans[1]
+    assert pages[0] == pages[1]
+    assert "took" not in pages[0]
+    assert (
+        "<p>bt.optimize: 5 combinations of Weekday on the event path (on_bar runs in Python "
+        "for every strategy bar), in this process.</p>"
+    ) in pages[0]
 
 
 def test_the_page_refuses_a_parameter_the_sweep_did_not_vary(spike):

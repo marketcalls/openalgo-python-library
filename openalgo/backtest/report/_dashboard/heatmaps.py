@@ -50,7 +50,7 @@ def monthly(table: pd.DataFrame) -> str:
         cells = []
         for name, value in zip(MONTHS, values.to_numpy(dtype=float), strict=True):
             known = math.isfinite(value)
-            shown = f"{value * 100:.1f}" if known else ""
+            shown = fmt.fixed(value * 100, 1) if known else ""
             cells.append(
                 f"<div class='hm-cell nums{'' if known else ' none'}' "
                 f"title='{name} {year}: {fmt.percent(value)}' "
@@ -76,7 +76,7 @@ def _weeks(weeks: Sequence[Week]) -> str:
     cells = []
     for w in weeks:
         known = math.isfinite(w.value)
-        shown = f"{w.value * 100:.1f}" if known else ""
+        shown = fmt.fixed(w.value * 100, 1) if known else ""
         cells.append(
             f"<div class='wk-cell{'' if known else ' none'}' "
             f"title='Week {w.week} ({w.label}): {fmt.percent(w.value)}' "

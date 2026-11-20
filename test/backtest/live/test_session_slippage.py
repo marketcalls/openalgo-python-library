@@ -40,7 +40,9 @@ from test_live_result import BuyEarlySellLate
 from test_session_figures import DAY_ENDS, TwoRoundTrips, world_of
 from watch_samples import HoldWithTarget
 
+import openalgo.backtest as bt
 from openalgo.backtest._live._alerts_summary import summary_text
+from openalgo.backtest.errors import ConfigError
 
 #: The day's slippage of the round trip of the module docstring, rupees.
 ROUND_TRIP = -2.50
@@ -90,6 +92,42 @@ def test_a_targets_exit_on_a_tick_is_set_against_the_bar_opening_after_it(
     world = moved_at_14_44_30(make_fake_openalgo, monkeypatch, tmp_path, 505.0)
     summary = live(world, HoldWithTarget).summary
     assert (summary.slippage, summary.slippage_not_compared) == (-1.00 - 1.50, 0)
+
+
+class ExitsAsATarget(bt.Strategy):
+    """Buys 10 SBIN at its first decision and, once it holds them, exits naming the reason
+    of the engine's own target exit."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "1m"
+
+    def on_bar(self, bar):
+        if not self.position.qty:
+            self.buy(10)
+        else:
+            self.exit(reason="leg_target")
+
+
+def placed_purposes(world) -> list[str]:
+    """The purpose of each order the session handed to its order worker, in order."""
+    return [
+        event["purpose"]
+        for run in world.trace.runs
+        for event in run.events
+        if event["kind"] == "request" and event["type"] == "PlaceRequest"
+    ]
+
+
+def test_a_strategys_exit_cannot_pass_for_the_engines_target_exit(world):
+    # The summary sets an exit with the reason leg_target against the bar after its
+    # placing, as the engine's exit on a tick; a strategy's exit decided at a bar close and
+    # naming that reason would be set a minute late. It is refused where it is made: the
+    # strategy stops the session at its second decision, 14:43, with the refusal, and the
+    # one sale after it is the safe stop's flatten (a risk exit), not the strategy's exit.
+    world.stop_at(ist(14, 46))
+    with pytest.raises(ConfigError, match="'leg_target' is the reason of the engine's own exit"):
+        live(world, ExitsAsATarget)
+    assert placed_purposes(world) == ["entry", "risk_exit"]
+    assert [o.action for o in world.fake.orders()] == ["BUY", "SELL"]
 
 
 def test_a_daily_loss_exit_on_a_tick_is_set_against_the_bar_opening_after_it(

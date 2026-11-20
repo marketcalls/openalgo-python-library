@@ -13,6 +13,7 @@ DEFERRED = (
     "openalgo.backtest._optimize",
     "openalgo.backtest._optimize_result",
     "openalgo.backtest._sweep_pool",
+    "openalgo.backtest._sweep_returns",
     "openalgo.backtest._objective",
     "openalgo.backtest._robust",
     "concurrent.futures.process",
