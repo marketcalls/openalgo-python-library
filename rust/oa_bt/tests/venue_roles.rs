@@ -311,7 +311,7 @@ fn an_exit_the_session_asks_for_carries_its_reason() {
         (
             EngineExit::Risk(RiskExitReason::AccountLoss),
             OrderRole::RiskExit(RiskExitReason::AccountLoss),
-            ExitReason::Manual,
+            ExitReason::AccountLossLimit,
         ),
         (
             EngineExit::Risk(RiskExitReason::OperatorStop),

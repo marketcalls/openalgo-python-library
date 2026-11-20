@@ -161,10 +161,16 @@ impl Engine {
             instrument,
             product,
         };
+        // The session asks: a margin rejection no longer holds the position.
+        let released = self.venue.group.release(key);
         if self.held_units(key) == 0.0 {
             return Ok(ExitRequest::Flat);
         }
         if self.has_engine_exit(key) {
+            if released {
+                // The engine's exit the hold kept waiting goes now (`venue_group`).
+                self.progress_exits(at)?;
+            }
             return Ok(ExitRequest::AlreadyExiting);
         }
         if self.day_validity(&at.slice, at.decided_at).is_err() {

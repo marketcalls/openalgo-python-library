@@ -55,6 +55,8 @@
 //! | `Engine::reprice_exit(OrderId, limit)` | while paused or waiting | a live session modifies a leg's stop (or the engine's exit) to a LIMIT at `limit` rupees for the order's total units, partly filled or not; sent now (true) or with the answer to the modification that waits (false); the repriced stop exits the position (`venue_protect`) |
 //! | `Engine::lock_entries(reason)`, `Engine::unlock_entries(reason)`, `entry_locks` | any time | a live session's entry locks, reasons in a set (names with no spaces around them): while any is set, entries and adds are rejected `live_lock` (`venue_gates`) |
 //! | `Engine::cap_sizing_equity(rupees)`, `Engine::daily_loss_measure()` | any time | a live session's cap on the engine default's sizing equity; the strategy's daily loss measure (`venue_session`) |
+//! | `Engine::set_group_side(InstrumentId, Product, Option<GroupSide>)`, `Engine::set_shared(InstrumentId, Product, bool)` | any time | a live session's gates on an instrument several of its strategies trade (`venue_group`): an entry, add or reversal on the other side of the side the others hold or are entering is rejected `group_other_side`; while shared, a strategy order that rests is rejected `shared_resting` |
+//! | `Engine::apply_margin_reject(OrderId)` | as `apply_fill` | a live session's closing order whose rejection says the broker may not hold its units: it ends rejected and holds its position, so the kernel sends nothing that closes it by itself (no exit at market, no stop placed again or raised, no waiting exit, none at later opens) until the session asks with `request_exit` or `protect` (`venue_group`) |
 //! | `Engine::apply_external_fill(InstrumentId, Product, Side, units, price, at, ExitReason)` | as `apply_fill` | a live session's fill with no order of its own (`venue_external`): the broker closed or reduced the position by itself; recorded through `execute_fill`, flagged `external`, then the closing orders are fitted to what is left; refused whole unless it only closes or reduces (`beyond_position`) |
 //! | `Engine::live_state()` | any time | a live session's state as plain data that survives a JSON round trip (`venue_state`): positions with tranches, legs, working orders with roles and terms, pending modifies and cancels, exits and leg stops, the daily loss totals, the trading state, counters, cash |
 //! | `Engine::restore_live_state(&StateValue)` | once, in a session built for a restart, after its catch-up and before any order | the saved state put back as it stood (`venue_state`), but for the entry locks (the session keeps its own) and a sizing cap the session has set; returns (saved id, new id) of each restored working order; refused whole (`LiveStateError`), also for parts that do not hold together and for a state saved while the session closed |
@@ -160,6 +162,7 @@
 //! | `venue_roles` | What each order of a live session is for: `OrderRole`, `EngineExit`, `RiskExitReason`; an order against the position beyond its closing side's room is an entry (a MARKET one is judged in the room the leg's stop makes for it, and the exit owner sends it), and a modification keeps the role |
 //! | `venue_session` | A live session's controls: an exit it asks for and what came of it (`ExitRequest`), the entry locks, the sizing cap, the daily loss measure, the stop where it stands |
 //! | `venue_gates` | The entry gates a live session adds at submission: the entry locks, nothing in flight, a position at most the freeze quantity |
+//! | `venue_group` | A live session's strategy on an instrument others of its strategies trade: the side gate, market orders only, a closing order's margin rejection (`GroupSide`) |
 //! | `queries` | `AccountView` and the queries of positions, legs, orders and the account |
 //! | `steps` | Steps 1 to 8 |
 //! | `fills` | Step 2 fills of queued orders, `execute_fill` |
@@ -297,6 +300,7 @@ mod venue_exits;
 mod venue_external;
 mod venue_fills;
 mod venue_gates;
+mod venue_group;
 mod venue_legs;
 mod venue_orders;
 mod venue_owner;
@@ -337,6 +341,7 @@ pub use target::TargetRequest;
 pub use timers::{TimerCount, TimerSpec};
 pub use venue::{Venue, VenueCommand};
 pub use venue_error::{Pending, VenueError, UNKNOWN_ORDER_KIND, VENUE_REFUSAL_KINDS};
+pub use venue_group::GroupSide;
 pub use venue_protect::Protect;
 pub use venue_roles::{EngineExit, OrderRole, RiskExitReason};
 pub use venue_session::ExitRequest;

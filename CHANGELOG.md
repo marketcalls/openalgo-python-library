@@ -32,6 +32,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ConfigError` naming it and its block. The built-in tearsheet stays the default and is the
   same byte for byte: no layout, `layout=None` and `Layout(base=mode)` give today's page,
   pinned by twelve golden pages in the tests.
+- Live engine groundwork for two strategies on one symbol (2.4.0, kernel unit K5; the session
+  uses it from a later unit). On an instrument several strategies of a session trade, an
+  entry, add or reversal on the other side of the side the others hold or are entering is
+  rejected `group_other_side` (a broker nets the two into one position), and a strategy's
+  resting order (LIMIT, SL, SL-M) is rejected `shared_resting`; the leg's broker-held stop,
+  its targets and the engine's own exits are not affected. A closing order the broker
+  rejects in such a group holds the position: no market exit, no re-placed stop and no
+  square-off sent by the engine until the session has checked the broker's books. Both
+  codes have a meaning and what to do in the rejection warnings.
+- MCX silver mini (SILVERM) and silver micro (SILVERMIC) can be backtested and traded: their
+  freeze quantity, 600 kg per order, is in the contract table from MCX circulars
+  MCX/TRD/114/2025, MCX/TRD/091/2026, MCX/TRD/275/2025 and MCX/TRD/302/2026 (contracts
+  outside those circulars carry the same terms as unverified, with a warning). Before, both
+  were refused for want of a freeze quantity.
+
+### Changed
+
+- Live sessions: a trade closed by the account's daily loss limit (`account_max_daily_loss`,
+  through the kill switch) now records the exit reason `account_loss_limit` instead of
+  `manual`, the reason a portfolio backtest records for the same breach.
+- `Strategy.exit(reason=...)` refuses `"leg_sl"` and `"leg_target"` with a `ConfigError`:
+  they are the reasons of the engine's own exits at a leg's stop and target, and a live
+  session timed a strategy exit that named them as the engine's tick exit.
+- A restart that finds a strategy's saved state is of another symbol or contract (the same
+  class name moved to a new contract) still refuses it before sending anything, but now says
+  what to do: give the class a new name for the new contract, or keep its symbol. Every
+  strategy so moved is named at once.
+- Tearsheets: a figure that rounds to zero no longer shows a minus sign ("-0.0%" now reads
+  "0.0%", in the weekly cells and titles, the yearly axis and the charges table), a yearly
+  returns axis that steps by half a percent labels its ticks with one decimal, a histogram
+  no longer shows an empty bin of zero width at its low end, the noise check's tile gives the
+  count of noise runs above the run as well as the share, and the optimizer page no longer
+  prints the sweep's measured times, so two runs of one sweep give the same page.
+- The robustness check of the parameter neighbourhood names the range a `params=` value lies
+  outside and what to pass, where it said only that it could not judge.
+- `bt.optimize` uses less memory on large sweeps: the returns of each combination are copied
+  into the overfitting figures' array as they come back, not after all of them.
 
 ## [2.3.0] - 2026-11-20
 

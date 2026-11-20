@@ -33,9 +33,19 @@ def test_the_exit_a_targets_tick_makes_records_leg_target():
         ("time_exit", "time_exit"),
         ("daily_loss", "daily_loss_limit"),
         ("stop_unfilled", "leg_sl"),
+        ("account_loss", "account_loss_limit"),
+        ("kill_switch", "manual"),
         ("operator_stop", "manual"),
     ],
-    ids=["square-off", "time exit", "daily loss", "stop unfilled", "Ctrl+C"],
+    ids=[
+        "square-off",
+        "time exit",
+        "daily loss",
+        "stop unfilled",
+        "account loss",
+        "kill switch",
+        "Ctrl+C",
+    ],
 )
 def test_an_exit_of_the_engine_records_the_reason_its_trade_reads(reason, exit_reason):
     engine = holding(100.0)
