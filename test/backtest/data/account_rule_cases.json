@@ -1,0 +1,131 @@
+{
+  "description": "The account's daily loss limit of several strategies on one account: at a round (a close instant, its IST session day), the account's measure is the sum, in call order, of the strategies' daily loss measures (rupees on the run's risk basis, negative for a loss), each counted only when the session day of its figures is the round's session day, else 0; the account breaches when the measure is at or past minus the limit, in whole paise, once per session day. A strategy's figures belong to the session day of the slice it last opened (null before its first slice). Read by the cargo test of rust/oa_bt/src/fund/rules.rs (the backtest's fund) and by the live risk watch's test, so the two rules cannot drift apart.",
+  "source": "18-multi-strategy sections 2.5 and 2.7 (lead decision H3, design rule 4); the measures are worked by hand from the engines' rows",
+  "fields": {
+    "round": "the round: the exchange and base of the strategy whose slice closes there, its IST session date and its close time",
+    "limit_rupees": "account_max_daily_loss, rupees above 0; null for no limit",
+    "breached_on": "the IST session date of an earlier breach, or null",
+    "engines": "each strategy in call order: its exchange and base, the session date of its figures (null before its first slice) and its daily loss measure",
+    "expected": "the account's measure counted (rupees) and whether the round breaches"
+  },
+  "cases": [
+    {
+      "name": "an NSE loss of yesterday counts nothing at an MCX evening round of today",
+      "round": {"exchange": "MCX", "base": "1m", "date": "2025-07-08", "time": "19:00"},
+      "limit_rupees": 10000.0,
+      "breached_on": null,
+      "engines": [
+        {"strategy": "NseTrend", "exchange": "NSE", "base": "1m", "date": "2025-07-07", "measure_rupees": -12000.0},
+        {"strategy": "CrudeTrend", "exchange": "MCX", "base": "1m", "date": "2025-07-08", "measure_rupees": -3000.0}
+      ],
+      "expected": {"measure_rupees": -3000.0, "breach": false}
+    },
+    {
+      "name": "an NSE loss of today counts at an MCX evening round of today",
+      "round": {"exchange": "MCX", "base": "1m", "date": "2025-07-08", "time": "19:00"},
+      "limit_rupees": 10000.0,
+      "breached_on": null,
+      "engines": [
+        {"strategy": "NseTrend", "exchange": "NSE", "base": "1m", "date": "2025-07-08", "measure_rupees": -6000.0},
+        {"strategy": "CrudeTrend", "exchange": "MCX", "base": "1m", "date": "2025-07-08", "measure_rupees": -4500.0}
+      ],
+      "expected": {"measure_rupees": -10500.0, "breach": true}
+    },
+    {
+      "name": "a daily engine that has not opened today's slice adds nothing",
+      "round": {"exchange": "MCX", "base": "1m", "date": "2025-07-08", "time": "09:05"},
+      "limit_rupees": 10000.0,
+      "breached_on": null,
+      "engines": [
+        {"strategy": "SbinDaily", "exchange": "NSE", "base": "D", "date": "2025-07-07", "measure_rupees": -8000.0},
+        {"strategy": "CrudeTrend", "exchange": "MCX", "base": "1m", "date": "2025-07-08", "measure_rupees": -2500.0}
+      ],
+      "expected": {"measure_rupees": -2500.0, "breach": false}
+    },
+    {
+      "name": "a daily engine counts its day's measure once its slice has opened",
+      "round": {"exchange": "NSE", "base": "1m", "date": "2025-07-08", "time": "11:00"},
+      "limit_rupees": 10000.0,
+      "breached_on": null,
+      "engines": [
+        {"strategy": "SbinDaily", "exchange": "NSE", "base": "D", "date": "2025-07-08", "measure_rupees": -6000.0},
+        {"strategy": "SbinMinute", "exchange": "NSE", "base": "1m", "date": "2025-07-08", "measure_rupees": -4000.0}
+      ],
+      "expected": {"measure_rupees": -10000.0, "breach": true}
+    },
+    {
+      "name": "a breach at the last NFO minute counts the NSE session of the same day",
+      "round": {"exchange": "NFO", "base": "1m", "date": "2026-08-03", "time": "15:40"},
+      "limit_rupees": 10000.0,
+      "breached_on": null,
+      "engines": [
+        {"strategy": "SbinTrend", "exchange": "NSE", "base": "1m", "date": "2026-08-03", "measure_rupees": -7000.0},
+        {"strategy": "NiftyFutTrend", "exchange": "NFO", "base": "1m", "date": "2026-08-03", "measure_rupees": -3500.0}
+      ],
+      "expected": {"measure_rupees": -10500.0, "breach": true}
+    },
+    {
+      "name": "a profit of one strategy offsets another's loss of the same day",
+      "round": {"exchange": "NSE", "base": "1m", "date": "2025-07-08", "time": "13:00"},
+      "limit_rupees": 10000.0,
+      "breached_on": null,
+      "engines": [
+        {"strategy": "SbinTrend", "exchange": "NSE", "base": "1m", "date": "2025-07-08", "measure_rupees": -12000.0},
+        {"strategy": "InfyTrend", "exchange": "NSE", "base": "1m", "date": "2025-07-08", "measure_rupees": 3000.0}
+      ],
+      "expected": {"measure_rupees": -9000.0, "breach": false}
+    },
+    {
+      "name": "a measure one paisa short of the limit does not breach",
+      "round": {"exchange": "NSE", "base": "1m", "date": "2025-07-08", "time": "13:00"},
+      "limit_rupees": 10000.0,
+      "breached_on": null,
+      "engines": [
+        {"strategy": "SbinTrend", "exchange": "NSE", "base": "1m", "date": "2025-07-08", "measure_rupees": -6000.0},
+        {"strategy": "InfyTrend", "exchange": "NSE", "base": "1m", "date": "2025-07-08", "measure_rupees": -3999.99}
+      ],
+      "expected": {"measure_rupees": -9999.99, "breach": false}
+    },
+    {
+      "name": "the limit fires once per session day",
+      "round": {"exchange": "NSE", "base": "1m", "date": "2025-07-08", "time": "14:00"},
+      "limit_rupees": 10000.0,
+      "breached_on": "2025-07-08",
+      "engines": [
+        {"strategy": "SbinTrend", "exchange": "NSE", "base": "1m", "date": "2025-07-08", "measure_rupees": -15000.0}
+      ],
+      "expected": {"measure_rupees": -15000.0, "breach": false}
+    },
+    {
+      "name": "the next session day breaches again",
+      "round": {"exchange": "NSE", "base": "1m", "date": "2025-07-09", "time": "10:00"},
+      "limit_rupees": 10000.0,
+      "breached_on": "2025-07-08",
+      "engines": [
+        {"strategy": "SbinTrend", "exchange": "NSE", "base": "1m", "date": "2025-07-09", "measure_rupees": -11000.0}
+      ],
+      "expected": {"measure_rupees": -11000.0, "breach": true}
+    },
+    {
+      "name": "strategies before their first slice count nothing",
+      "round": {"exchange": "MCX", "base": "1m", "date": "2025-07-08", "time": "09:01"},
+      "limit_rupees": 10000.0,
+      "breached_on": null,
+      "engines": [
+        {"strategy": "SbinTrend", "exchange": "NSE", "base": "1m", "date": null, "measure_rupees": 0.0},
+        {"strategy": "CrudeTrend", "exchange": "MCX", "base": "1m", "date": "2025-07-08", "measure_rupees": -400.0}
+      ],
+      "expected": {"measure_rupees": -400.0, "breach": false}
+    },
+    {
+      "name": "an account with no limit never breaches",
+      "round": {"exchange": "NSE", "base": "1m", "date": "2025-07-08", "time": "15:00"},
+      "limit_rupees": null,
+      "breached_on": null,
+      "engines": [
+        {"strategy": "SbinTrend", "exchange": "NSE", "base": "1m", "date": "2025-07-08", "measure_rupees": -50000.0}
+      ],
+      "expected": {"measure_rupees": -50000.0, "breach": false}
+    }
+  ]
+}

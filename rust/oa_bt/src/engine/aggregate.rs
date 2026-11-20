@@ -198,8 +198,15 @@ impl Engine {
 
     /// Cancel every working order that would open or add, in id order.
     pub(super) fn cancel_working_entries(&mut self, stamp: EventStamp) -> Result<(), KernelError> {
-        let entries: Vec<OrderId> = self
-            .book
+        for id in self.working_entries() {
+            self.withdraw_order(stamp, id)?;
+        }
+        Ok(())
+    }
+
+    /// The working orders that would open or add, in id order.
+    pub(super) fn working_entries(&self) -> Vec<OrderId> {
+        self.book
             .working()
             .filter(|order| {
                 let key = PositionKey {
@@ -211,11 +218,7 @@ impl Engine {
                 !order.request.reduce_only && adds
             })
             .map(|order| order.id)
-            .collect();
-        for id in entries {
-            self.withdraw_order(stamp, id)?;
-        }
-        Ok(())
+            .collect()
     }
 
     /// Exit every open position, in instrument registration order, with the exit reason

@@ -230,3 +230,21 @@ pub fn run_signals(
     pause::run(engine, &mut driver)?;
     Ok(driver.skipped)
 }
+
+/// Decide one pause of a condition strategy as `run_signals` decides it, for a portfolio
+/// run's fund, which advances the engine itself (`crate::fund`); the entries a sizer
+/// skipped are added to `skipped`. The arrays were validated when the fund took them.
+///
+/// Errors: those of `run_signals`' driver at a pause.
+pub(crate) fn decide_signals(
+    engine: &mut Engine,
+    signals: &SignalArrays,
+    pause: &pause::Pause,
+    skipped: &mut Vec<SkippedEntry>,
+) -> Result<(), KernelError> {
+    use pause::Driver;
+    let mut driver = driver::SignalDriver::new(signals);
+    driver.on_pause(engine, pause)?;
+    skipped.append(&mut driver.skipped);
+    Ok(())
+}

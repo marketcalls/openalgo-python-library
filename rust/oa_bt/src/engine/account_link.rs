@@ -35,12 +35,13 @@
 //! link: its account is the broker's, whose margin check and funds are the session's
 //! (`cap_sizing_equity`).
 
-use crate::exec::RejectCode;
+use crate::exec::{OrderId, RejectCode};
 use crate::model::Day;
 use crate::sizing::SizingContext;
 
 use super::clock::SliceInfo;
 use super::error::KernelError;
+use super::event::EventStamp;
 use super::kernel::Engine;
 
 /// What the account of a portfolio run in a shared pool leaves one engine, set by the
@@ -64,6 +65,9 @@ pub(super) struct AccountDesk {
     /// The breaches the engine records at its next step 6 or step 1, in the order the
     /// fund found them (`account_breach`).
     pub(super) waiting: Vec<super::account_breach::AccountBreach>,
+    /// The working orders a breach cancelled, with the stamp of each cancellation, until
+    /// the fund takes them for its record of refused orders (`fund_view`).
+    pub(super) cancels: Vec<(EventStamp, OrderId)>,
 }
 
 impl Engine {

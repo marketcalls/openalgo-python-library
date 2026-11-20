@@ -141,6 +141,7 @@
 //! | `kernel` | `Engine`, `advance` (as the phases of a slice), `finish` |
 //! | `account_link` | A portfolio run's account in one engine: the room it leaves the engine, the second margin check of opening fills, the sizing cap, the account's entry gate |
 //! | `account_breach` | The account's daily loss limit breached in one engine: the lock, the record stamped where the engine stands, the cancels and exits |
+//! | `fund_view` | What a portfolio run's fund (`crate::fund`) reads of one engine between its turns: where it stands, its grid, the ledger's figures, its events, the orders a breach cancelled |
 //! | `live_clock` | A live session: built before its bars, given each bar as its slice closes, holding before the slices not released |
 //! | `venue` | Who fills the orders (`Simulated`, `External`); the venue's types and its desk of what was asked and not answered; what a live session refuses as not built |
 //! | `venue_orders` | A live session's commands out: the units an order is sent with, the order sent or made an exit, a modification held until answered, a cancellation (the engine's own sent at most once in a slice) |
@@ -252,6 +253,7 @@ mod exit_scale;
 mod fill_bar;
 mod fill_model;
 mod fills;
+mod fund_view;
 mod futures;
 mod futures_plan;
 mod gtt;
@@ -323,6 +325,7 @@ pub use config::{
 };
 pub use error::KernelError;
 pub use event::{Event, EventStamp, OrderEventKind, Step};
+pub(crate) use fund_view::EngineFigures;
 pub use futures::{
     roll_session_day, session_after, FuturesOutput, FuturesSeries, RollRule, SeriesContract,
     SettlementKind, SettlementRecord, Switch,
