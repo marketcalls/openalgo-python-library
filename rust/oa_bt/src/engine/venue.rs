@@ -236,8 +236,8 @@ pub(super) struct VenueDesk {
     pub(super) roles: Vec<(OrderId, OrderRole)>,
     /// The session's entry locks and sizing cap (`venue_session`).
     pub(super) controls: SessionControls,
-    /// The gates the session set on a shared instrument, and the engine exits a margin
-    /// rejection holds back (`venue_group`).
+    /// The gates the session set on a shared instrument, and the positions a margin
+    /// rejection holds (`venue_group`).
     pub(super) group: GroupDesk,
     /// The legs' broker-held stops, in the order the legs opened (`venue_legs`).
     pub(super) leg_stops: Vec<LegStop>,

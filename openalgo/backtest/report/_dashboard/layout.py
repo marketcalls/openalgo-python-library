@@ -46,6 +46,19 @@ PARTS = {
     "strategies": ("strategies",),
     "notes": ("method", "assumptions"),
 }
+#: Each section's title: its heading, and its link in the page's header.
+TITLES = {
+    "overview": "Overview",
+    "performance": "Performance",
+    "risk": "Risk",
+    "monthly": "Monthly",
+    "distribution": "Distribution",
+    "metrics": "Metrics",
+    "trades": "Trades",
+    "overfitting": "Overfitting checks",
+    "strategies": "Strategies",
+    "notes": "Notes",
+}
 _EVERY = frozenset(part for parts in PARTS.values() for part in parts)
 #: The parts of each report mode.
 MODE_PARTS = {
@@ -95,8 +108,9 @@ class View:
     """What one page shows: the run's performance, the benchmark measured as the
     strategy is (None without one) and its name, the title, the assumption lines, the
     strategies of a combined result (None unless two or more), whether the cumulative
-    return is on a log scale, the parts of the report mode, and the quick overfitting
-    checks when the run already computed them (None: the page computes them)."""
+    return is on a log scale, the parts of the report mode, the quick overfitting
+    checks when the run already computed them (None: the page computes them), and the
+    portfolio result whose own parts a combined page shows (None for any other page)."""
 
     performance: Performance
     bench: Performance | None
@@ -107,6 +121,7 @@ class View:
     log_scale: bool
     parts: frozenset[str]
     overfitting: Any = None
+    portfolio: Any = None
 
     def has(self, part: str) -> bool:
         """Whether the page shows `part`."""
@@ -115,19 +130,22 @@ class View:
 
 @dataclass(frozen=True)
 class Section:
-    """A section's anchor, title, subtitle and body, before it is numbered."""
+    """A section's anchor, title, subtitle and body, before it is numbered, and whether
+    it is printed (Export PDF leaves out a section that is not)."""
 
     anchor: str
     title: str
     subtitle: str
     body: str
+    printed: bool = True
 
 
 def section(number: int, part: Section) -> str:
     """A numbered section: "01  Overview" over a hairline, the subtitle on the right."""
     subtitle = f"<span class='sec-sub'>{part.subtitle}</span>" if part.subtitle else ""
+    unprinted = "" if part.printed else " class='no-print'"
     return (
-        f"<section id='{part.anchor}'><div class='sec-head'><span class='sec-num nums'>"
+        f"<section id='{part.anchor}'{unprinted}><div class='sec-head'><span class='sec-num nums'>"
         f"{number:02d}</span><h2 class='serif'>{part.title}</h2>{subtitle}</div>"
         f"{part.body}</section>"
     )
@@ -165,6 +183,7 @@ __all__ = [
     "MODE_PARTS",
     "PARTS",
     "SMALL",
+    "TITLES",
     "Section",
     "View",
     "card",

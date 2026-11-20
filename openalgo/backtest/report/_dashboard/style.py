@@ -58,6 +58,18 @@ DARK = {
     "heat-pos": "hsl(142 69% 58%)",
     "benchmark": "hsl(217 91% 65%)",
 }
+#: The colours of a custom tearsheet's chart with several series (`--series-1` to
+#: `--series-6`), light and dark: the strategy's and the benchmark's, then four hues
+#: apart from them and from gains and losses. Written only on a page that draws such a
+#: chart (`report._custom._theme`), never on the default page.
+SERIES = (
+    ("var(--text)", "var(--text)"),
+    ("var(--benchmark)", "var(--benchmark)"),
+    ("hsl(32 95% 44%)", "hsl(38 92% 60%)"),
+    ("hsl(271 76% 53%)", "hsl(270 95% 75%)"),
+    ("hsl(173 80% 32%)", "hsl(172 66% 50%)"),
+    ("hsl(330 81% 50%)", "hsl(329 86% 70%)"),
+)
 FONTS = (
     "--font-sans:ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',"
     "Arial,sans-serif;--font-mono:ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,"
@@ -330,4 +342,4 @@ def stylesheet() -> str:
     return themes + _BASE + _HEADER + _MAIN + charts + _TABLES + _CHECKS + _PRINT
 
 
-__all__ = ["DARK", "LIGHT", "stylesheet"]
+__all__ = ["DARK", "LIGHT", "SERIES", "stylesheet"]

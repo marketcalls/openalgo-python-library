@@ -9,7 +9,9 @@
 //! position on the closing side but the position's exits and the orders sent for them,
 //! and is sent once they have all ended (cancelled, or filled), for the position then
 //! open: nothing when they filled it. An order placed on the closing side while an exit
-//! waits is cancelled too.
+//! waits is cancelled too, except while a margin rejection holds the position
+//! (`venue_group`): then nothing is cancelled or sent for a waiting exit until the session
+//! asks for an exit or `protect`, or a new leg opens.
 //!
 //! A partial exit beside a leg's broker-held stop is the exception (16-session-design
 //! 4.5, requirement R4): a strategy exit that asks for part of the position keeps the

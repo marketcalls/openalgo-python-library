@@ -4,7 +4,7 @@ the mode shows none of its parts."""
 
 from . import bars, cards, data, heatmaps, tables
 from . import timeseries as ts
-from .layout import LARGE, SMALL, Section, View, card, label, stack
+from .layout import LARGE, SMALL, TITLES, Section, View, card, label, stack
 
 STRATEGY_COLOUR = "var(--text)"
 BENCHMARK_COLOUR = "var(--benchmark)"
@@ -31,7 +31,7 @@ def overview(view: View) -> Section | None:
     if not view.has("overview"):
         return None
     return Section(
-        "overview", "Overview", "Headline risk &amp; return", _grid(view, cards.OVERVIEW)
+        "overview", TITLES["overview"], "Headline risk &amp; return", _grid(view, cards.OVERVIEW)
     )
 
 
@@ -114,7 +114,7 @@ def performance(view: View) -> Section | None:
     ]
     body = stack(blocks)
     return (
-        Section("performance", "Performance", "Equity curve &amp; rolling stats", body)
+        Section("performance", TITLES["performance"], "Equity curve &amp; rolling stats", body)
         if body
         else None
     )
@@ -194,7 +194,7 @@ def risk(view: View) -> Section | None:
         (LARGE, _streaks(view) if view.has("streaks") else ""),
     ]
     body = stack(blocks)
-    return Section("risk", "Risk", "Drawdown, tails &amp; exposure", body) if body else None
+    return Section("risk", TITLES["risk"], "Drawdown, tails &amp; exposure", body) if body else None
 
 
 def _annual(view: View) -> str:
@@ -240,7 +240,11 @@ def monthly(view: View) -> Section | None:
         (SMALL, _annual(view)),
     ]
     body = stack(blocks)
-    return Section("monthly", "Monthly", "Seasonality &amp; annual returns", body) if body else None
+    return (
+        Section("monthly", TITLES["monthly"], "Seasonality &amp; annual returns", body)
+        if body
+        else None
+    )
 
 
 def distribution(view: View) -> Section | None:
@@ -268,7 +272,9 @@ def distribution(view: View) -> Section | None:
     ]
     body = stack(blocks)
     return (
-        Section("distribution", "Distribution", "Return shape &amp; tails", body) if body else None
+        Section("distribution", TITLES["distribution"], "Return shape &amp; tails", body)
+        if body
+        else None
     )
 
 

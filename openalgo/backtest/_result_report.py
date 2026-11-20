@@ -38,8 +38,8 @@ from ._result_excursion import excursion_columns, trade_multipliers
 from ._result_r import r_values
 from ._series import IST
 from .errors import BacktestError
-from .report import tearsheet as render_tearsheet
 from .report._performance import Performance
+from .report.tearsheet import write_tearsheet
 
 _SIDES = {"long": "BUY", "short": "SELL"}
 #: The columns of a closed trade an open trade has no value for yet (NaN).
@@ -240,9 +240,20 @@ def benchmark_name(manifest: dict[str, Any]) -> str | None:
     return record["symbol"] or GIVEN_BENCHMARK
 
 
-def tearsheet(report: Report, path: str | None, mode: str, log_scale: bool) -> str:
-    """The HTML tearsheet of a run in `mode` (returned, or written to `path`)."""
-    return render_tearsheet(report, path, mode=mode, log_scale=log_scale)
+def tearsheet(
+    report: Report,
+    path: str | None,
+    mode: str,
+    log_scale: bool,
+    *,
+    layout: Any = None,
+    subject: object = None,
+) -> str:
+    """The HTML tearsheet of a run in `mode`, or of a custom `layout` whose blocks'
+    callables receive `subject` (the run's `Result`); returned, or written to `path`."""
+    return write_tearsheet(
+        report, path, subject=subject, mode=mode, log_scale=log_scale, layout=layout
+    )
 
 
 __all__ = [

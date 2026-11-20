@@ -61,6 +61,17 @@ def percent_decimals(low: float, high: float, count: int) -> int:
     return max(0, -math.floor(math.log10(step_pct) + 1e-9))
 
 
+def number_decimals(low: float, high: float, count: int) -> int:
+    """Decimals that show the ticks of [low, high] in `count` parts as distinct plain
+    numbers: as many as the round step needs (a step of 0.25 is 2 decimals), none for a
+    whole step or an empty span."""
+    step = round_step(low, high, count)
+    if step == 0:
+        return 0
+    # As in `percent_decimals`: a power of ten must keep its own decimals.
+    return max(0, -math.floor(math.log10(step) + 1e-9))
+
+
 def widen(low: float, high: float, count: int = 10) -> tuple[float, float]:
     """The axis [low, high] widened outward to multiples of its round step, repeated
     until the step no longer changes. A zero span is returned as it is."""
@@ -120,6 +131,7 @@ __all__ = [
     "Linear",
     "bands",
     "bins",
+    "number_decimals",
     "percent_decimals",
     "quartiles",
     "round_step",

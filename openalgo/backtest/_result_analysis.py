@@ -21,6 +21,7 @@ from ._trade_list import trade_list as closed_trade_list
 from .metrics import MonteCarlo, analyse, monte_carlo
 from .report import _montecarlo, metrics_table
 from .report._performance import Performance
+from .report.custom import Layout
 
 
 class AnalysisMethods:
@@ -146,20 +147,27 @@ class AnalysisMethods:
         )
 
     def tearsheet(
-        self, path: str | None = None, *, mode: str = "full", log_scale: bool = False
+        self,
+        path: str | None = None,
+        *,
+        mode: str = "full",
+        log_scale: bool = False,
+        layout: Layout | None = None,
     ) -> str:
         """The HTML tearsheet, a dashboard in `mode` ("full", "basic", "metrics" or
         "charts"; see `openalgo.backtest.report.tearsheet`): returned as a string, or
         written to `path` (and the path returned). `log_scale` draws the cumulative
         return on a log scale. Its trade table is `trade_list()`, its benchmark is named
         by the run's `benchmark=`, and its Notes section lists the run's assumptions and
-        every warning, so a cost-free run says so on the report."""
+        every warning, so a cost-free run says so on the report. `layout` (a
+        `report.custom.Layout`) makes a custom tearsheet whose blocks' callables receive
+        this result; `mode` then stays "full" (the layout's `base` is its mode)."""
         lines = [f"{key}: {value}" for key, value in self._assumptions.items()]
         lines += [f"warning: {text}" for text in [*self._warnings, *self._overfitting_warnings()]]
         name = self._manifest["strategy"]["name"]
         bench = _result_report.benchmark_name(self._manifest)
         report = _result_report.Report(self.performance, name, lines, bench, self._quick)
-        return _result_report.tearsheet(report, path, mode, log_scale)
+        return _result_report.tearsheet(report, path, mode, log_scale, layout=layout, subject=self)
 
 
 __all__ = ["AnalysisMethods"]
