@@ -82,6 +82,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A strategy alone on its symbol keeps 2.3.0's behaviour throughout. Until a later unit, the
   session's closing rows list each strategy of a shared symbol at its own units, with a note
   naming OpenAlgo's net for the group.
+- `bt.backtest` takes a list of strategies and runs them together on one account (2.4.0, unit
+  M3), returning a `bt.PortfolioResult`. Each strategy keeps its own `Result`
+  (`pf.strategy(name)`), measured on its own capital. The portfolio result gives the account's
+  figures and tables: `account` (equity, free cash, margin and daily loss each round), equity,
+  returns, performance and metrics, every strategy's tables in one with a `strategy` column,
+  `trade_list()`, `refused` (the orders the account refused), `net_positions`, `correlation`,
+  `contribution`, assumptions, warnings, the manifest, and CSV and Excel export.
+  - Per-strategy settings (`capital`, `params`, `product`, `base`, `max_daily_loss`,
+    `after_risk_exit`, `max_positions`, `drawdown_halt`, `cooldown`, `entry_from`,
+    `entry_until`, `square_off`) take one value for every strategy or a dict by strategy class
+    name. A `params` dict may leave a strategy out (it keeps its class defaults); the other
+    dicts may not. Every other argument is the run's: `data=` as a dict by symbol feeds every
+    strategy trading that symbol, and `instrument=` and `corporate_actions=` reach only the
+    strategies they apply to.
+  - New arguments, used only with a list: `pool` ("shared" by default, "separate" for fixed
+    allocations), `account_capital` (the account's funds, by default the sum of the capitals;
+    with that default a shared account refuses an order only when other strategies' open
+    losses leave too little free cash) and `account_max_daily_loss` (at or past it every
+    strategy exits with reason `account_loss_limit`, and later entries that day are refused
+    `account_loss_gate`).
+  - Two strategies may trade one symbol, on either side. A warning names an instrument held
+    on opposite sides (`bt.live` would refuse the later entry), and the days on which a
+    broker would net one strategy's delivery trade against another's in the same scrip,
+    which changes the charges.
+  - A list of one strategy also returns a `PortfolioResult`. A strategy class on its own runs
+    exactly as before, with the same figures.
 - MCX silver mini (SILVERM) and silver micro (SILVERMIC) can be backtested and traded: their
   freeze quantity, 600 kg per order, is in the contract table from MCX circulars
   MCX/TRD/114/2025, MCX/TRD/091/2026, MCX/TRD/275/2025 and MCX/TRD/302/2026 (contracts
@@ -90,6 +116,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `Result.strategy()`, `Result.combined` and `Result.correlation` still raise
+  NotImplementedError on a single strategy's result; the message now points to `bt.backtest`
+  with a list of strategies.
+- `bt.optimize`, `bt.robustness` and `bt.walk_forward` given a list of strategies raise
+  NotImplementedError: run them for each strategy. Given one strategy, they and `bt.backtest`
+  refuse `pool`, `account_capital` and `account_max_daily_loss` with a `ConfigError`, and
+  `bt.live` refuses `pool` and `account_capital` as it refuses the other backtest-only
+  arguments.
 - Live sessions: a trade closed by the account's daily loss limit (`account_max_daily_loss`,
   through the kill switch) now records the exit reason `account_loss_limit` instead of
   `manual`, the reason a portfolio backtest records for the same breach.

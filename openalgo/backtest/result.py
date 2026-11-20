@@ -15,9 +15,9 @@ history), `events`, `risk_events`, `stale_marks`, `final_positions`, `gross_pnl`
 (`_trade_list`), `performance`,
 `metrics`, `summary()` (`_summary`), `metrics_table()`, `monte_carlo()` and
 `tearsheet()` (full, basic, metrics or charts) from `_result_analysis`; and
-`to_dataframes()`, `to_csv()` and `to_excel()` from `_result_export`. Not supported in
-this version: the several-strategy views `strategy()`, `combined` and `correlation`,
-which raise NotImplementedError.
+`to_dataframes()`, `to_csv()` and `to_excel()` from `_result_export`. The several-strategy
+views `strategy()`, `combined` and `correlation` raise NotImplementedError on a single
+strategy's result: `bt.backtest` given a list returns a `PortfolioResult` with them.
 """
 
 from __future__ import annotations
@@ -39,6 +39,7 @@ from . import (
 )
 from ._messages import SEVERAL_STRATEGIES, not_supported
 from ._native import native
+from ._rerun import PortfolioMember
 from ._result_analysis import AnalysisMethods
 from ._result_export import ExportMethods
 from ._result_tables import (
@@ -322,8 +323,10 @@ class Result(AnalysisMethods, ExportMethods):
 
     def rerun(self, **overrides: Any) -> Result:
         """The same backtest again with run arguments or strategy parameters changed;
-        with none, this result bit for bit. Raises ConfigError for an unknown name and
-        BacktestError for a result that was not made by `bt.backtest`."""
+        with none, this result bit for bit. Raises ConfigError for an unknown name,
+        BacktestError for a result that was not made by `bt.backtest`, and
+        NotImplementedError for one strategy's result of a portfolio run (a run of it
+        alone would not face the account it shared)."""
         if self._record is None:
             raise BacktestError("this result was not made by bt.backtest and cannot rerun")
         return self._record.rerun(overrides, self.manifest)
@@ -333,25 +336,32 @@ class Result(AnalysisMethods, ExportMethods):
         through its rerun record: a `RobustnessReport`. Takes the settings of
         `bt.robustness` (checks, objective, runs, seed, workers, progress, a dict per
         check), not run arguments. Raises ConfigError for a run argument (call
-        `result.rerun(...).robustness()` to change one) and as `bt.robustness`, and
-        BacktestError for a result that was not made by `bt.backtest`."""
+        `result.rerun(...).robustness()` to change one) and as `bt.robustness`,
+        BacktestError for a result that was not made by `bt.backtest`, and
+        NotImplementedError for one strategy's result of a portfolio run, as `rerun`."""
         from ._robust import result_robustness
 
+        if isinstance(self._record, PortfolioMember):
+            raise self._record.refuse("result.robustness()")
         return result_robustness(self, **settings)
 
     def strategy(self, name: str) -> Result:
-        """One strategy's result in a run of several; not supported in this version."""
+        """One strategy's result in a run of several: a single strategy's result has
+        none, so this raises NotImplementedError; `bt.backtest` given a list returns a
+        `PortfolioResult`, whose `strategy(name)` it is."""
         raise not_supported(*SEVERAL_STRATEGIES)
 
     @property
     def combined(self) -> Result:
-        """The combined result of a run of several strategies; not supported in this
-        version."""
+        """The combined result of a run of several strategies: raises
+        NotImplementedError on a single strategy's result; the `PortfolioResult` of
+        `bt.backtest` given a list is the combined result."""
         raise not_supported(*SEVERAL_STRATEGIES)
 
     @property
     def correlation(self) -> pd.DataFrame:
-        """The correlation of a run's strategies; not supported in this version."""
+        """The correlation of a run's strategies: raises NotImplementedError on a single
+        strategy's result; see `PortfolioResult.correlation`."""
         raise not_supported(*SEVERAL_STRATEGIES)
 
     def __repr__(self) -> str:

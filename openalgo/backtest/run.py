@@ -1,5 +1,6 @@
-"""The run functions: `bt.backtest`, `bt.optimize`, `bt.live` and `bt.record` (and the
-signatures of the ones still to come).
+"""The run functions: `bt.backtest`, `bt.optimize` and the strategy builders; `bt.live` and
+`bt.record` are re-exported from `_live_verbs`, `bt.robustness` and `bt.walk_forward`
+from `_robust_verbs`.
 
 How a backtest runs (the Python half of the design in `rust/oa_bt/src/engine/mod.rs`):
 
@@ -26,40 +27,47 @@ How a backtest runs (the Python half of the design in `rust/oa_bt/src/engine/mod
 5. **Result** (`result.Result`): the kernel's result columns as DataFrames, with the
    Assumptions block, the warnings, the manifest (`_manifest`) and `rerun` (`_rerun`).
 
+A list of strategies is a portfolio run on one account (`_portfolio_run`): each strategy
+goes through steps 1 to 3 as it would alone (every strategy's settings checked before any
+strategy's data is loaded, `_run_check`), the native fund advances their engines
+together over the account (`_portfolio_driver`), and step 5 gives each strategy's
+`Result` and the account's `PortfolioResult`. A single strategy never reaches the fund.
+
 Python declares and decides; Rust executes: fills, positions, the ledger, the event
 stream and every market rule live in the kernel, so `bt.live` runs the same rules with a
 live clock, on an external venue (OpenAlgo and the broker fill the orders). Sandbox or
-live is chosen inside OpenAlgo, never here. `bt.live` and `bt.record` import the live
-layer when they run, not before.
+live is chosen inside OpenAlgo, never here.
 """
 
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
-from ._messages import SEVERAL_STRATEGIES, not_supported
+from ._live_verbs import live, record
+from ._messages import not_supported, one_strategy_only
 from ._pipeline import execute, prepare
+from ._portfolio_run import run_portfolio
 from ._rejection_notice import announce_unplaced
 from ._rerun import RunRecord
+from ._robust_verbs import robustness, walk_forward
+from ._strategy_args import SHARED_POOL
 from ._warm_up_notice import announce_wait
 from .errors import ConfigError
 from .reference import Instrument
 from .result import Result
-from .session_result import SessionResult
 from .strategy import Strategy
 from .units import Distance
 
 if TYPE_CHECKING:
-    from ._live._recorder_summary import RecordSummary
+    from .portfolio_result import PortfolioResult
 
 
 def backtest(
-    strategy: type[Strategy],
+    strategy: type[Strategy] | Sequence[type[Strategy]],
     client: Any = None,
     *,
-    capital: float,
+    capital: float | Mapping[str, float],
     start: Any = None,
     end: Any = None,
     data: Any = None,
@@ -92,11 +100,15 @@ def backtest(
     roll: int | None = 1,
     params: dict[str, Any] | None = None,
     now: Any = None,
-) -> Result:
-    """Backtest one strategy class and return its `Result`.
+    pool: str = SHARED_POOL,
+    account_capital: float | Distance | None = None,
+    account_max_daily_loss: float | Distance | None = None,
+) -> Result | PortfolioResult:
+    """Backtest one strategy class and return its `Result`; or several, given as a list,
+    on one account, and return their `PortfolioResult`.
 
-    strategy: a `bt.Strategy` subclass (a list of strategies is not supported in this
-        version).
+    strategy: a `bt.Strategy` subclass, or a list of them (a portfolio run, below; a list
+        of one is a portfolio of one).
     client: an `openalgo.api` client for OpenAlgo data; not needed with `data=`.
     capital: rupees allocated to the strategy (required).
     start, end: IST dates (inclusive); a datetime, or a string with a time of day
@@ -182,6 +194,8 @@ def backtest(
     params: parameter values for the strategy.
     now: the present (UTC nanoseconds, a datetime or an ISO string, naive is IST; the
         clock when None). The data load drops bars that have not closed by then.
+    pool, account_capital, account_max_daily_loss: the account of a list of strategies
+        (below); a run of one strategy leaves them at their defaults.
 
     The run ends at the earliest of `end`, the close of the last base bar any
     instrument has, and `now`; equity, trades and metrics stop there, a position still
@@ -197,14 +211,57 @@ def backtest(
     WarmUpWarning: the first decision and the strategy bars each symbol waited
     (`_warm_up_notice`).
 
-    Raises ConfigError for unusable arguments, the data layer's errors for data, and
-    NotImplementedError for any setting or feature the kernel does not run yet.
+    A list of strategies runs them together on one account and returns a
+    `PortfolioResult`: each strategy's own `Result` (`.strategy(name)`, measured on its own
+    capital) and the account's figures and tables. Strategies are named by class name,
+    which must differ (one logic twice is two subclasses, or one class and `params` by
+    name). Each strategy runs as it would alone (its own exchange, calendar, base interval
+    and rules); they meet only through the account, and at one step of one instant the
+    first in the list acts first. Two strategies may trade one symbol, on either side.
+    These take one value for every strategy, or a dict by strategy class name that names
+    every strategy: `capital`, `product`, `base`, `max_daily_loss`, `after_risk_exit`,
+    `max_positions`, `drawdown_halt`, `cooldown`, `entry_from`, `entry_until` and
+    `square_off`; a class attribute of the same name still wins. `params` is a dict by
+    strategy class name (one left out keeps its defaults); a list of one strategy takes
+    that strategy's own values, as a class does. Every other argument is the run's: one
+    value. Of those keyed by what is traded, each strategy is given the entries of what it
+    trades: `data` by symbol, `instrument` by symbol on the strategy's exchange (a
+    strategy on a futures underlying the contracts of that underlying, never the share of
+    its name), `corporate_actions` by symbol to the strategies on NSE and BSE shares only,
+    and `margin` by underlying; an instrument or corporate action no strategy takes is
+    refused, a `margin=` no strategy uses is a warning of the run, one table of bars is
+    refused when the strategies trade more than one series between them (a share and the
+    futures of its name are two), and one list of corporate actions unless they trade
+    exactly one share. Every strategy's settings are checked before any data is loaded.
+
+    pool: "shared" (the default): one account; an opening fill needs its margin within the
+        strategy's own free cash and within the account's free cash (else it is refused
+        `account_margin`), and the default sizer sizes from the lesser of the strategy's
+        equity and the account's free cash. "separate": fixed allocations, each strategy
+        limited by its own capital only; the account is their sum and no strategy's
+        margin can block another's.
+    account_capital: rupees, the account's funds (a number or bt.rupees(x)); None (the
+        default) for the sum of the capitals, with which a shared account refuses an order
+        only when other strategies' open losses leave too little free cash. Give it to
+        model a smaller account (three strategies of 5 lakh on 10 lakh of funds). With
+        pool="separate" it is None or that sum.
+    account_max_daily_loss: rupees (or bt.rupees(x)), the account's daily loss limit: the
+        strategies' daily loss measures (on `risk_basis`) of the IST session day added
+        up. At or past it every strategy's working entries are cancelled, its positions
+        exit as its own daily loss exits do (exit reason "account_loss_limit"), and its
+        entries are refused (`account_loss_gate`) until the next session day.
+
+    Raises ConfigError for unusable arguments (a list that names a strategy twice, a dict
+    by name that names a strategy the call does not run or leaves one out, account
+    settings for one strategy), the data layer's errors for data, and NotImplementedError
+    for any setting or feature the kernel does not run yet.
     """
+    arguments = dict(locals())
     if isinstance(strategy, list | tuple):
-        raise not_supported(*SEVERAL_STRATEGIES)
+        return run_portfolio(strategy, client, arguments)
     if not (isinstance(strategy, type) and issubclass(strategy, Strategy)):
-        raise ConfigError("backtest takes a bt.Strategy subclass")
-    return _run(strategy, client, dict(locals()))
+        raise ConfigError("backtest takes a bt.Strategy subclass, or a list of them")
+    return _run(strategy, client, arguments)
 
 
 def _run(strategy: type[Strategy], client: Any, args: dict[str, Any]) -> Result:
@@ -217,134 +274,6 @@ def _run(strategy: type[Strategy], client: Any, args: dict[str, Any]) -> Result:
     return result
 
 
-def live(
-    strategy: type[Strategy] | Sequence[type[Strategy]],
-    client: Any,
-    *,
-    capital: float | Mapping[str, float],
-    max_daily_loss: float | Distance | Mapping[str, float | Distance],
-    account_max_daily_loss: float | None = None,
-    alerts_to: str | None = None,
-    account: str | None = None,
-    params: Mapping[str, Any] | None = None,
-    costs: Any = "zerodha",
-    risk_basis: str = "gross",
-    after_risk_exit: str = "lock_session",
-    entry_from: str | None = None,
-    entry_until: str | None = None,
-    square_off: str | None = None,
-    max_positions: int | None = None,
-    drawdown_halt: float | Distance | None = None,
-    cooldown: int | None = None,
-    round_levels: bool = True,
-    strict_config: bool = True,
-    live_dir: str | os.PathLike[str] | None = None,
-    on_stop: str = "flatten",
-    **not_live: Any,
-) -> SessionResult:
-    """Trade strategies through OpenAlgo for today, in the mode set inside OpenAlgo, and
-    return the session's `SessionResult` when it ends.
-
-    Sandbox or live is OpenAlgo's analyzer switch, never an argument: the session reads
-    it at the start, shows it first in its start banner and in every alert, and adopts
-    it; if the switch changes during the session, nothing more is sent. The same strategy
-    class runs here as in `bt.backtest`, deciding in `on_bar` on 1-minute bars built from
-    the feed's ticks, with MIS orders; a stop given with `stop=` is held by the broker.
-
-    strategy: a `bt.Strategy` subclass, or a list of them; each trades its own symbol.
-    client: an `openalgo.api` client. The session makes clients of its own from its
-        settings and leaves it, and its callbacks, alone.
-    capital: rupees allocated to each strategy (a risk limit): one number for every
-        strategy, or a dict by strategy class name. Mandatory.
-    max_daily_loss: each strategy's daily loss limit in rupees (or `bt.rupees(...)`), on
-        `risk_basis`, as in `bt.backtest`; one value or a dict by class name. Mandatory: a
-        class attribute of the same name must agree with it.
-    account_max_daily_loss: rupees for all strategies together; at it every strategy is
-        flattened and its entries locked for the day.
-    alerts_to: the OpenAlgo username linked to its Telegram bot; None sends alerts to the
-        log and the console only (refused in LIVE mode, a warning in SANDBOX mode).
-    account: the name the journal, logs and lock are kept under; the broker's name by
-        default (give one per account when one broker has two).
-    params, costs, risk_basis, after_risk_exit, entry_from, entry_until, square_off,
-        max_positions, drawdown_halt, cooldown, round_levels, strict_config: as in
-        `bt.backtest`, with the same defaults. `costs` models the charges of the broker's
-        fills, since its trade book carries none.
-    live_dir: the absolute folder of the accounts' journals, logs and locks (default: the
-        OPENALGO_LIVE_DIR environment variable, else ~/.openalgo/live).
-    on_stop: what Ctrl+C does with open positions: "flatten" (exit them, then stop) or
-        "keep" (leave them with their stops at the broker).
-
-    The session ends at the end of the day (flat after the MIS square-off), on Ctrl+C
-    (a safe stop: a second Ctrl+C stops within seconds, naming each position left open),
-    or, once the analyzer switch changed, on Ctrl+C or a few minutes after the exchange's
-    close. A `bt.backtest` argument with no meaning live (`data`, `start`, `end`, `now`,
-    `source`, `base`, `fill`, `slippage`, `margin`, `quantity_mode`, `instrument`,
-    `product`, `roll`, `benchmark`, `calendar`) is refused, saying why.
-
-    Raises ConfigError for an unusable argument (one that chooses the mode among them);
-    NotImplementedError, before any call to OpenAlgo, for what live trading does not run
-    yet (condition strategies, signal and array strategies, several symbols or a
-    universe, futures series, daily or longer intervals, CNC and NRML, two strategies
-    with one name, bars from broker candles), saying what to do instead;
-    PreflightError, listing every check that failed (another session holding the
-    account or the server among them); LiveError when OpenAlgo does not report its mode,
-    the call is not on the main thread (Ctrl+C reaches only the main thread), the feed
-    does not connect, or a restart cannot resume today's positions; JournalError when the
-    journal cannot be used; and the strategy's own exception, after the session has
-    stopped safely.
-    """
-    arguments = {
-        name: value
-        for name, value in locals().items()
-        if name not in ("strategy", "client", "not_live")
-    }
-    from ._live import session as live_session
-    from ._live._plan_args import live_arguments
-    from ._live._result_build import session_result
-
-    # Checked here first, so that no argument of the session's own reaches it from a call.
-    live_arguments(strategy, **arguments, **not_live)
-    outcome = live_session.run_session(strategy, client, **arguments, **not_live)
-    return session_result(outcome)
-
-
-def record(
-    client: Any,
-    instruments: Sequence[Mapping[str, str]],
-    *,
-    mode: str = "quote",
-    cache_dir: str | os.PathLike[str] | None = None,
-    until: Any = None,
-) -> RecordSummary:
-    """Record the ticks of `instruments` from OpenAlgo's WebSocket feed into the local
-    cache, kept in the order they were received (`bt.read_ticks` reads a day of them
-    back), and return the recording's `RecordSummary`.
-
-    client: an `openalgo.api` client; the recording makes a feed client of its own from
-        its settings, so a session or a callback on it is left alone. It can run in a
-        process of its own beside a `bt.live` session.
-    instruments: [{"exchange": "NSE", "symbol": "SBIN"}, ...].
-    mode: the feed mode, "ltp", "quote" (the default) or "depth".
-    cache_dir: an absolute folder (the package's cache folder by default): recorded
-        ticks cannot be fetched again.
-    until: when to stop: an IST time of today as "HH:MM", a datetime (naive is IST), or
-        None for the latest close of the instruments' exchanges today. Ctrl+C stops it
-        too; one recording covers one day.
-
-    Raises ConfigError for an unusable argument (an `until` not after the start, or
-    past the end of its IST day, or None once the day's sessions closed, among them),
-    CalendarError when `until` is None on a day none of the instruments' exchanges
-    trades, LiveError when the feed does not connect, another recording holds the cache,
-    or ticks could not be written (the raw files are kept, and the next recording of the
-    day finalizes them), and OSError when the cache cannot be written at the start. The
-    return hint names `RecordSummary`, which loads with the live layer
-    (`openalgo.backtest.session_result.RecordSummary`): it is for static type checkers.
-    """
-    from ._live._record_verb import record_day
-
-    return record_day(client, instruments, mode=mode, cache_dir=cache_dir, until=until)
-
-
 def optimize(strategy: type[Strategy], client: Any = None, **settings: Any) -> Any:
     """Sweep the strategy's parameters over a grid and return an `OptimizeResult`
     (`.table`, `.best`, `.select(**params)`, `.heatmap(x, y)`, `.path`; and from the grid
@@ -355,126 +284,9 @@ def optimize(strategy: type[Strategy], client: Any = None, **settings: Any) -> A
     `workers=` and `progress=`. See `_optimize.optimize` for the rules and errors."""
     from ._optimize import optimize as sweep
 
+    if isinstance(strategy, list | tuple):
+        raise one_strategy_only("bt.optimize")
     return sweep(strategy, client, **settings)
-
-
-def robustness(strategy: type[Strategy], client: Any = None, **settings: Any) -> Any:
-    """Backtest the strategy once and run the robustness and overfitting checks on it;
-    returns a `RobustnessReport` (`.verdicts`, `.check(name)`, `.passed`, `.plan`,
-    `.tearsheet(path)`). Passing a check proves nothing on its own; failing one says
-    the edge did not hold up under that check (it may be fitted to the past or too small
-    to tell apart from the noise of the data tested), never that it proves overfitting;
-    a check with too little to judge is "not judged" and never passes. The trade-list
-    checks and the checks that rerun the chosen settings judge those settings, not the
-    search that chose them; the parameter neighbourhood and the noise-robust
-    optimization (and the deflated Sharpe ratio and the probability of backtest
-    overfitting of `bt.optimize`) can see a strategy picked as the best of many tried.
-
-    Takes the run arguments of `bt.backtest` and:
-
-    checks: "all" (the default: every check), "quick" (the trade-list checks, no rerun)
-        or a list of check names: the trade-list checks (random_out_of_sample, reshuffle,
-        resample, variance); the searching checks, which rerun the backtest over the
-        parameter ranges given (or declared with `bt.param`): out_of_sample (the last 30
-        percent of the sessions run with the parameters searched best on the first 70,
-        or as given without ranges), walk_forward (as `bt.walk_forward` runs it),
-        parameters (every combination of the ranges, or each number parameter at minus,
-        zero and plus 10 percent without, judged on the chosen setting's neighbours) and
-        noise_optimization (every combination on 50 noisy copies, scored by its median;
-        informational, its figure saying whether the best score sits on a plateau);
-        and the bar checks, which rerun the backtest on generated bars, other symbols'
-        bars or the run's own bars with one setting changed:
-        vs_random (random entries with the run's trades, and the strategy on permuted
-        bars), permutation (the same moves in another order), noise (every price moved
-        within a fifth of its bar's average true range), shifted (strategy bars ending
-        1 to n - 1 base bars earlier, or days ending 15 to 60 minutes earlier),
-        other_markets, stress (the noisy and permuted series whose drawdown, time to a
-        new high or fall below the average is half as bad again as the run's own, judged
-        against every generated series), random_exits (each trade's stop, target, trail
-        and breakeven distances scaled within a quarter, and exit_params drawn per run),
-        delayed (entries and exits held 0 to 2 strategy bars; not judged when the run a
-        bar late entered again while its entry was held, as a strategy deciding by
-        `self.position.is_flat` without `self.orders` does) and liquidity (fills at the
-        next bar's close, midpoint or average price, or their two-bar averages).
-    objective: what the checks measure: a metric name or a function of a `Result`
-        ("sharpe" by default). Random out of sample measures it on parts of the trades,
-        so it takes "sharpe", "sortino", "net_profit", "expectancy" or
-        "profit_factor"; "win_rate" (a win rate is not a measure of profit), another
-        metric or a function leaves that check not judged. The bar checks measure it on
-        each rerun; noise, vs_random, shifted and delayed also need its break-even value
-        (0, or 1 for a profit factor), and an objective without one (a win rate, a
-        function, whose value for a run that makes nothing is not known) leaves them not
-        judged.
-    ranges: keywords named after strategy parameters (`fast=range(5, 30, 5)`; the
-        `bt.param` ranges the strategy declares otherwise) are what the searching checks
-        search; `params=` holds the run's own parameters, its chosen settings, which the
-        parameter neighbourhood judges among their neighbours. A parameter named in
-        `params=` keeps its declared range searched (so the best of `bt.optimize`, given
-        as `params=`, is checked inside the grid it was picked from); a one-value range
-        keyword (`fast=[10]`) holds it at one value.
-    others: the symbols other_markets runs the strategy on, unchanged (["ICICIBANK",
-        "HDFCBANK"] on the strategy's exchange, or (symbol, exchange) pairs), read from
-        the run's source: a `data=` dict by symbol holding them, or OpenAlgo through
-        `client`. Without it other_markets is not judged.
-    runs: alternative runs of each check (1000); seed: the seed of every check's
-        stream (0), the same report for the same seed on every platform.
-    workers, progress: as in `bt.optimize`: the checks' reruns run in `workers`
-        processes (the CPU count by default; `workers=1` keeps them in this process),
-        and the plan, with the reruns it needs and an estimate of their time, is reported
-        through `progress` (or the `openalgo.backtest.robustness` logger) before the
-        checks run.
-    A keyword named after a check holds its settings as a dict (`variance={"points":
-        10}`, `noise={"runs": 500, "close": 0.75}`); `report.check(name).settings`
-        shows each check's.
-
-    The bar checks read the run's bars again from its source and rerun it as ordinary
-    backtests of the same kernel, the warm-up included; nothing changes the run's own
-    figures.
-
-    Raises ConfigError for unusable arguments or settings (naming what they take), and
-    for parameter ranges when checks= lists no check that searches them, the backtest's
-    errors, and NotImplementedError for the checks that rerun a futures series and for
-    other_markets of a strategy that trades no one named symbol."""
-    from ._robust import robustness as run_checks
-
-    return run_checks(strategy, client, **settings)
-
-
-def walk_forward(strategy: type[Strategy], client: Any = None, **settings: Any) -> Any:
-    """Walk the strategy forward through time and return a `WalkForwardResult`
-    (`.folds`, `.equity`, `.performance`, `.efficiency`, `.profitable_share`, `.drift`,
-    `.net_profit`, `.plan`).
-
-    The run's sessions are cut into `folds` (5) folds, each `in_sample` (0.7) of its
-    sessions in sample: rolling folds (the default) keep an in-sample window of fixed
-    length before each out-of-sample one, `anchored=True` keeps every session before it.
-    Each fold searches the parameter ranges on its in-sample window, by `objective`
-    ("net_profit" by default, any `bt.optimize` objective, higher better), trades the
-    best combination (the first of equal ones) on the next out-of-sample window, and the
-    out-of-sample runs, which cover the run after the first fold's sample once, are
-    stitched into one equity curve by their P&L. Each window is an ordinary backtest
-    that opens flat with the run's capital and reads its warm-up from the bars before it.
-
-    Takes the run arguments of `bt.backtest`, the parameter ranges named after strategy
-    parameters (`fast=range(5, 30, 5)`; `bt.param` ranges otherwise, a parameter that
-    `params=` names being fixed as in `bt.optimize`), and `folds`, `anchored`,
-    `in_sample`, `objective`, `workers` and `progress` as `bt.optimize` takes them (the
-    plan, with the reruns and an estimate, is reported before they run, through
-    `progress` or the `openalgo.backtest.walk_forward` logger). The run's bars are read
-    once in this process, through `client` or from `data=`; worker processes get the
-    bars, never the client. The efficiency is the stitched out-of-sample objective per
-    year over the mean in-sample one, both from the objective's break-even (a total such
-    as the net profit is divided by the years each lasted). `.folds` counts each fold's
-    closed trades as whole numbers. `bt.robustness(checks=["walk_forward"], ...)` runs
-    the same walk-forward, judges it and draws its folds; there `params=` names the run's
-    chosen settings, so a declared range stays searched.
-
-    Raises ConfigError for unusable arguments, a parameter both fixed by `params=` and
-    given a range, nothing to search, or too few sessions for the folds (each window
-    needs two), and whatever a backtest raises."""
-    from ._robust._walk_forward import walk_forward as walk
-
-    return walk(strategy, client, **settings)
 
 
 def rebalance(*args: Any, **settings: Any) -> Any:

@@ -89,7 +89,8 @@ def test_the_settings_shared_with_bt_backtest_take_its_defaults():
         for name, parameter in live_parameters.items()
         if name in backtest and parameter.default is not inspect.Parameter.empty
     ]
-    assert len(shared) == 12
+    # The twelve settings of a strategy and the account's daily loss limit.
+    assert len(shared) == 13
     assert {name: live_parameters[name].default for name in shared} == {
         name: backtest[name].default for name in shared
     }

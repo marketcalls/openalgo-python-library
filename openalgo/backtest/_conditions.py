@@ -352,23 +352,34 @@ def signal_spec(strategy: Any, ready_at: int | None = None) -> dict[str, Any]:
     return spec
 
 
-def drive_conditions(strategy: Any, engine: Any, ready_at: int | None = None) -> None:
-    """Run a condition strategy to the end of the grid: evaluate its conditions once,
-    hand them to the Rust signal driver (deciding nothing before `ready_at`, UTC
-    nanoseconds), record the entries a sizer skipped as `on_bar` would, then call
-    `on_stop`. Raises ConfigError for timers (they call Python during the run); errors
-    of the evaluation and of the kernel propagate (ConfigError, BacktestError,
-    NotImplementedError)."""
+def signals_of(strategy: Any, engine: Any, ready_at: int | None = None) -> dict[str, Any]:
+    """Begin the run of a condition strategy on `engine` and evaluate its conditions once:
+    the spec its Rust signal driver reads (`signal_spec`). Raises ConfigError for timers
+    (they call Python during the run) and what the evaluation raises."""
     strategy._ctx.begin_run()
     if call(engine.timer_counts):
         raise ConfigError(
             f"{type(strategy).__name__}: a condition strategy runs in Rust with no Python "
             "call during the run, and self.at or self.every would call Python; use on_bar"
         )
+    return signal_spec(strategy, ready_at)
+
+
+def record_skipped(strategy: Any, skipped: list[tuple[int, str]]) -> None:
+    """Record the entries the Rust driver's sizer skipped, (decision instant, reason)."""
     ctx = strategy._ctx
     symbol = ctx.symbol_of(ctx.instrument_index(None))
-    for decided_at, reason in call(engine.run_signals, signal_spec(strategy, ready_at)):
+    for decided_at, reason in skipped:
         ctx.skipped.append((decided_at, symbol, reason))
+
+
+def drive_conditions(strategy: Any, engine: Any, ready_at: int | None = None) -> None:
+    """Run a condition strategy to the end of the grid: its conditions (`signals_of`) to
+    the Rust signal driver (deciding nothing before `ready_at`, UTC nanoseconds), the
+    skipped entries recorded, then `on_stop`. Raises as `signals_of` does, and the
+    kernel's errors (ConfigError, BacktestError, NotImplementedError)."""
+    spec = signals_of(strategy, engine, ready_at)
+    record_skipped(strategy, call(engine.run_signals, spec))
     strategy.on_stop()
 
 
@@ -383,6 +394,8 @@ __all__ = [
     "drive_conditions",
     "evaluation_path",
     "has_conditions",
+    "record_skipped",
     "signal_spec",
+    "signals_of",
     "strategy_frame",
 ]

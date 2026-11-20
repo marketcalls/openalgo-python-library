@@ -88,6 +88,9 @@ AUDITED_RUN_ARGUMENTS = {
     "roll",
     "params",
     "now",
+    "pool",
+    "account_capital",
+    "account_max_daily_loss",
 }
 
 
