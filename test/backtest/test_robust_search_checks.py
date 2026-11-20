@@ -31,6 +31,7 @@ from robust_runs import (
 from test_quickstart import historify_rows
 
 import openalgo.backtest as bt
+from openalgo.backtest._robust import _check_parameters
 from openalgo.backtest._robust._grid import Grid
 from openalgo.backtest._robust._verdict import FAILED, INFORMATIONAL, NOT_JUDGED, PASSED
 from openalgo.backtest._robust._walk import FoldOutcome, WalkOutcome
@@ -214,6 +215,50 @@ def test_parameters_off_the_grid_given_are_not_judged(wednesday):
     found = check.check("parameters")
     assert found.verdict == NOT_JUDGED
     assert found.note.startswith("The run's parameters (day 2) are not a combination")
+
+
+class MondayOrTuesday(Weekday):
+    """`Weekday` with its weekday declared as a range of Monday and Tuesday only."""
+
+    day = bt.param(0, (0, 1))
+
+
+def test_a_declared_parameter_set_outside_its_range_says_how_to_search_around_it():
+    # params= day 3 is a value the declared range (0, 1) does not hold, so its
+    # neighbourhood cannot be read off that range. The note names the range and gives the
+    # keyword form around the run's value: 3 and a step of 10 percent either side, at
+    # least one day, 2 and 4.
+    data = weekday_bars(SESSIONS, lambda s: (3,))
+    result = bt.backtest(MondayOrTuesday, data=data, params={"day": 3}, **FREE)
+    check = result.robustness(checks=["parameters"], workers=1, progress=quiet).check("parameters")
+    assert check.verdict == NOT_JUDGED
+    assert check.note == (
+        "The run's parameters (day 3) are not a combination of the ranges searched: day 3 "
+        "is not among the values of its range (0, 1). Give it a range that holds it as a "
+        "keyword named after the parameter, for example day=[2, 3, 4]."
+    )
+
+
+def test_a_long_range_a_value_is_off_reads_as_its_ends():
+    # fast 5 to 50 in steps of 5, ten values; the run's 7 moves by 10 percent, at least 1.
+    grid = Grid(("fast",), tuple({"fast": v} for v in range(5, 55, 5)), {"fast": 7}, True)
+    assert _check_parameters._off_the_grid(grid, 0.10) == (
+        "The run's parameters (fast 7) are not a combination of the ranges searched: fast 7 "
+        "is not among the values of its range (5 to 50, 10 values). Give it a range that "
+        "holds it as a keyword named after the parameter, for example fast=[6, 7, 8]."
+    )
+
+
+def test_each_value_off_its_range_is_named_with_a_keyword_range_around_it():
+    # A name is not moved: its keyword range holds the run's value alone.
+    combos = tuple({"fast": f, "label": n} for f in (5, 10) for n in ("a", "b"))
+    grid = Grid(("fast", "label"), combos, {"fast": 7, "label": "c"}, True)
+    assert _check_parameters._off_the_grid(grid, 0.10) == (
+        "The run's parameters (fast 7, label c) are not a combination of the ranges searched: "
+        "fast 7 is not among the values of its range (5, 10); label c is not among the values "
+        "of its range (a, b). Give each a range that holds it as a keyword named after the "
+        "parameter, for example fast=[6, 7, 8], label=['c']."
+    )
 
 
 # ----- 2.1 out of sample ----------------------------------------------------------------

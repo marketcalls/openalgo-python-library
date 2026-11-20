@@ -13,7 +13,9 @@ objective above break-even and the median keeping at least `keep` (half) of the 
 Not judged when the run has too few closed trades or did not make money, when its
 objective is undefined, has no break-even or is not above it, when the strategy has no
 number parameter to move and no range is given, when the run's parameters are not a
-combination of the ranges searched, or when no neighbour's objective is defined.
+combination of the ranges searched (a `params=` value outside the range given or
+declared: the note names that range and the keyword form of a range around the value),
+or when no neighbour's objective is defined.
 
 Charts: the heatmap of the first two parameters that vary (the others held at the chosen
 values) with the chosen cell outlined; the same grid as an isometric surface; the
@@ -33,7 +35,7 @@ import pandas as pd
 from . import _words as words
 from ._bar_common import RerunSet, break_even, joined, real_path, rerun_set
 from ._blocks import LIMIT, REAL, REFERENCE, HistogramBlock, Mark, PathGroup, PathsBlock
-from ._grid import DEFAULT_STEP, Grid, cube
+from ._grid import DEFAULT_STEP, Grid, around, cube, is_number
 from ._neighbourhood import DEFAULT_KEEP, figure_words, plateau, rule_words
 from ._part_objective import objective_name
 from ._reruns import Family
@@ -42,11 +44,15 @@ from ._search_common import (
     objective_unjudged,
     params_text,
     search_unjudged,
+    value_text,
 )
 from ._search_setup import SearchRun
 from ._setting import Setting, between
 from ._trade_common import ENOUGH_TRADES
 from ._verdict import FAILED, PASSED, Outcome, not_judged
+
+#: The most values of a range a note lists one by one; a longer range reads as its ends.
+LISTED_VALUES = 6
 
 SETTINGS = (
     ENOUGH_TRADES,
@@ -98,15 +104,48 @@ def unjudged(subject: SearchRun, settings: Mapping[str, Any], objective: Any) ->
         )
     chosen = grid.chosen()
     if chosen is None:
-        shown = params_text({name: grid.run_params[name] for name in grid.names})
-        return not_judged(
-            text,
-            f"The run's parameters ({shown}) are not a combination of the ranges searched; "
-            "give or declare ranges that hold them.",
-        )
+        return not_judged(text, _off_the_grid(grid, settings["step"]))
     if not grid.neighbours(chosen):
         return not_judged(text, "The chosen parameters have no neighbour in the grid.")
     return None
+
+
+def _off_the_grid(grid: Grid, step: float) -> str:
+    """Why the run's parameters are not judged when they are not a combination of the
+    ranges searched: each value its range does not hold, that range, and the keyword
+    form of a range around it (the run's value and `step` either side, `_grid.around`)
+    that would let the check judge it. The grid holds every combination of its ranges'
+    values, so a combination it lacks has at least one value off its range."""
+    shown = params_text({name: grid.run_params[name] for name in grid.names})
+    lead = f"The run's parameters ({shown}) are not a combination of the ranges searched"
+    off = [name for name in grid.names if grid.run_params[name] not in grid.axis(name)]
+    where = "; ".join(
+        f"{name} {value_text(grid.run_params[name])} is not among the values of its range "
+        f"({_range_text(grid.axis(name))})"
+        for name in off
+    )
+    examples = ", ".join(f"{name}={_keyword_range(grid.run_params[name], step)}" for name in off)
+    whom = "it" if len(off) == 1 else "each"
+    return (
+        f"{lead}: {where}. Give {whom} a range that holds it as a keyword named after the "
+        f"parameter, for example {examples}."
+    )
+
+
+def _range_text(values: tuple[Any, ...]) -> str:
+    """A range's values in a note: each of them up to `LISTED_VALUES`, else its first and
+    last and how many."""
+    if len(values) <= LISTED_VALUES:
+        return ", ".join(value_text(value) for value in values)
+    return f"{value_text(values[0])} to {value_text(values[-1])}, {len(values)} values"
+
+
+def _keyword_range(value: Any, step: float) -> str:
+    """A range around `value` as a keyword's list: the value and `step` either side for
+    a number, the value alone (as Python writes it) otherwise."""
+    if not is_number(value):
+        return f"[{value!r}]"
+    return "[" + ", ".join(value_text(each) for each in around(value, step)) + "]"
 
 
 def _families(subject: SearchRun, grid: Grid) -> list[Family]:
