@@ -86,7 +86,7 @@ def test_provider_satisfies_the_data_provider_protocol():
 @pytest.mark.parametrize(
     "client, options, message",
     [
-        (FakeClient(), {"source": "yfinance"}, "source must be one of"),
+        (FakeClient(), {"source": "web"}, "source must be one of"),
         (None, {}, "an OpenAlgo client is required"),
         (object(), {}, "openalgo.api instance"),
     ],

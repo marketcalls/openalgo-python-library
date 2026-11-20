@@ -117,10 +117,10 @@ with no Python dependency, driven by `bt.backtest` through `Engine.advance()`.
 
 | Path | Responsibility |
 |------|----------------|
-| `rust/oa_bt/` | Zero-dependency Rust kernel crate: `model` (shared types and IST time helpers), `market` (costs, calendars, margin, slippage), `data` (resampling), `metrics` (performance metrics), and the kernel: `engine` (the slice loop and stepping API), `exec` (orders, fills, GTT), `portfolio` (positions and tranches, ledger), `rms` (risk rules and trading states), `sizing` |
+| `rust/oa_bt/` | Zero-dependency Rust kernel crate: `model` (shared types and IST time helpers), `market` (costs, calendars, margin, slippage), `data` (resampling), `metrics` (performance metrics), and the kernel: `engine` (the slice loop and stepping API), `exec` (orders, fills, GTT), `portfolio` (positions and tranches, ledger), `rms` (risk rules and trading states), `sizing`, and `fund` (several strategies' engines stepped together on one account) |
 | `rust/oa_py/src/backtest/` | PyO3 bindings, one file per area, exposed as `openalgo._oaindicators.backtest` |
 | `openalgo/backtest/` | Python package: `Strategy`, `backtest()` and its `Result` (`strategy.py`, `run.py`, `result.py`), `live()` and its `SessionResult` (`session_result.py`), costs, calendar, resample, data layer, reference tables, metrics, the HTML tearsheet (`report`) and the robustness and overfitting checks (`_robust`). `import openalgo` does not import it |
-| `openalgo/backtest/_live/` | The live layer behind `bt.live` (private, Phase 2): the session (start, loop, safe stop, close), its plan, the order worker and venue map, the stops supervisor, the risk watch and kill switch, the reconciler and restart, the order path, journal, mode guard, bars from ticks, feed link, data worker, preflight, alerts and the tick recorder; its `__init__.py` has the module table |
+| `openalgo/backtest/_live/` | The live layer behind `bt.live` (private, Phase 2): the session (start, loop, safe stop, close), its plan, the order worker and venue map, the stops supervisor, the risk watch and kill switch, the reconciler and restart, the instrument groups (several strategies on one symbol), the order path, journal, mode guard, bars from ticks, feed link, data worker, preflight, alerts and the tick recorder; its `__init__.py` has the module table |
 | `test/backtest/` | pytest suite. It never contacts a server; anything that needs a client uses an in-process fake |
 
 ### Product decisions (set by the maintainer)
@@ -145,7 +145,7 @@ These are settled. Do not redesign around them without asking.
 - **Reports are built in.** openstatz is not used. Everything a trader would get from
   it (the metrics, rolling statistics, drawdown tables, Monte Carlo, benchmark
   comparison, the charts and the HTML report) is built inside `openalgo` as original
-  code, with no plotting package and no market-data download (no yfinance).
+  code, with no plotting package and no third-party market-data downloader.
 - **Data comes from OpenAlgo or from the user.** Broker history and Historify through
   the SDK, or the user's own DataFrames and files with no server at all. No third-party
   market-data downloader is bundled.
@@ -233,9 +233,9 @@ These apply to every change under the four paths above.
   brand anywhere in the repository: code, identifiers, comments, docstrings, error
   messages, tests, benchmarks, data files, docs, the changelog or commit messages.
   That covers trading and charting platforms, their scripting languages, other
-  backtesting or trading engines and indicator libraries, also as abbreviations
-  (for example a `_tv` suffix). Describe what the code computes instead of whose
-  output it matches. Named freely: OpenAlgo and its own products, exchanges,
+  backtesting or trading engines, indicator libraries and market-data downloaders,
+  also as abbreviations or suffixes of identifiers. Describe what the code computes
+  instead of whose output it matches. Named freely: OpenAlgo and its own products, exchanges,
   regulators, brokers where they are functional identifiers (a cost preset, a broker
   adapter), and the technical dependencies (Python, Rust, NumPy, pandas, PyO3).
 

@@ -36,9 +36,9 @@ use super::strategy_risk::StrategyRisk;
 use super::timers::TimerBook;
 use super::venue::VenueDesk;
 
-/// Where the state machine stands.
+/// Where the state machine stands (read by a portfolio run's fund, `fund_view`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Phase {
+pub(crate) enum Phase {
     /// The slice at this index runs next, from step 1.
     Ready(usize),
     /// Steps 1 and 2 of this slice have run (its open phase, `steps::open_phase`); its
