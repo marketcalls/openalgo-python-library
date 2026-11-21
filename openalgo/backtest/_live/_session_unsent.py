@@ -38,9 +38,24 @@ gives `Trader.commands` the rest.
   it so (as it lists an order the broker refuses later), and until the decision ends the
   kernel's entry gates count it as working. The log names it as it names a rejection at
   submission, with its side, units and reject code.
+- **Refused as a resting order against the position** (2.4.0 item P4-1). A plain order
+  (no `reverse`) on the closing side of the strategy's open position that rests (a LIMIT,
+  SL or SL-M sale of a long, or purchase of a short) and that the position's closing
+  room cannot take, because its stop (or another closing order) already closes the whole
+  position, is an entry to the kernel (`venue_roles`: it could open the other side). At
+  the broker it works beside the stop, both on the closing side, and both can fill: long
+  10 with its stop selling 10 and a LIMIT sale of 10 resting as a take-profit, a fall
+  fills the stop and a rise then fills the LIMIT, leaving a short of 10 with no stop. So
+  a live session refuses it as it refuses a resting reversal, at the same handover, with
+  `venue`, and its warnings say once per strategy to put a take-profit in `targets=`
+  (held by the session, sent at MARKET) or to exit with a MARKET order. An order that
+  fits the closing room (a position with no stop working) is an exit and is sent; so is
+  a resting entry placed while flat, which the kernel's in-flight gate (`venue_gates`,
+  `live_in_flight`) keeps from standing beside an opposite entry. The backtest is
+  unchanged.
 
 Each is logged and written to the event stream ("withdrawn", "refused_locked",
-"refused_resting_reversal"). Used by the loop only.
+"refused_resting_reversal", "refused_resting_against"). Used by the loop only.
 """
 
 from __future__ import annotations
@@ -52,7 +67,7 @@ from typing import Any
 from .._engine import call
 from ._order_state import ENTRY_PURPOSES
 from ._session_decisions import units_text
-from ._types import LOGGER_NAME
+from ._types import LOGGER_NAME, Purpose
 from ._venue_requests import ROLE_PURPOSES
 
 #: The reject code of an entry or add while entries are locked (the kernel's `live_lock`).
@@ -68,6 +83,20 @@ RESTING_REVERSAL_WORDS = (
     "session takes a reversal as a MARKET order only: submit the reversal as a MARKET "
     "order, or exit and enter separately"
 )
+#: The reject code of a resting order against the open position the session refuses: the
+#: venue's, as for a resting reversal (module docstring).
+RESTING_AGAINST_CODE = "venue"
+#: The session's warning of a strategy whose resting order against its open position it
+#: refused (module docstring).
+RESTING_AGAINST_WORDS = (
+    "a resting order against the open position (a LIMIT, SL or SL-M sale of a long or "
+    "purchase of a short, beyond what its stop leaves to close) was refused and not sent: "
+    "at the broker it would work beside the position's stop, both could fill, and the "
+    "account would end on the other side with no stop. A live session holds a take-profit "
+    "itself: put it in targets= (sent at MARKET when reached), or exit with a MARKET order"
+)
+#: The one order type that never rests at the broker.
+_MARKET = "MARKET"
 
 logger = logging.getLogger(LOGGER_NAME)
 
@@ -89,6 +118,7 @@ def to_send(
     of the session."""
     kept = _withdraw_cancelled(engine, strategy, commands, event)
     kept = _refuse_resting_reversals(engine, strategy, kept, reversals, event, warn)
+    kept = _refuse_resting_against(engine, strategy, kept, event, warn)
     return _refuse_locked(engine, strategy, kept, event)
 
 
@@ -118,22 +148,60 @@ def _refuse_resting_reversals(
     placed = {int(c["order_id"]) for c in commands if c.get("command") == "place"}
     refused = sorted(placed & reversals)
     for kernel_order in refused:
-        call(engine.apply_reject, kernel_order, RESTING_REVERSAL_CODE)
-        order = call(engine.order, kernel_order)
-        logger.info(
-            "%s: order o%d rejected before it was sent: %s %s units, %s (a resting reversal, %s)",
-            strategy,
-            kernel_order,
-            order["side"],
-            units_text(order["quantity_units"]),
-            RESTING_REVERSAL_CODE,
-            order["order_type"],
-        )
+        _reject_unsent(engine, strategy, kernel_order, RESTING_REVERSAL_CODE, "a resting reversal")
         event("refused_resting_reversal", strategy=strategy, kernel_order=kernel_order)
         warn(f"{strategy}: {RESTING_REVERSAL_WORDS}")
     # Refused, or ended before its placement came: no placement of it will come.
     reversals.intersection_update(call(engine.working_orders))
     return [c for c in commands if int(c["order_id"]) not in refused]
+
+
+def _refuse_resting_against(
+    engine: Any,
+    strategy: str,
+    commands: list[dict[str, Any]],
+    event: Callable[..., None],
+    warn: Callable[[str], None],
+) -> list[dict[str, Any]]:
+    refused = {int(c["order_id"]) for c in commands if _rests_against(engine, c)}
+    for kernel_order in sorted(refused):
+        what = "a resting order against the position"
+        _reject_unsent(engine, strategy, kernel_order, RESTING_AGAINST_CODE, what)
+        event("refused_resting_against", strategy=strategy, kernel_order=kernel_order)
+        warn(f"{strategy}: {RESTING_AGAINST_WORDS}")
+    return [c for c in commands if int(c["order_id"]) not in refused]
+
+
+def _rests_against(engine: Any, command: dict[str, Any]) -> bool:
+    """True for the placement of an entry that rests at the broker on the closing side of
+    the strategy's open position (module docstring). The kernel files an order against the
+    position as an entry only when the position's closing room cannot take it, so the
+    position is read only for a resting entry, which most loop steps have none of."""
+    if command.get("command") != "place" or command.get("order_type") == _MARKET:
+        return False
+    if ROLE_PURPOSES.get(command.get("role")) is not Purpose.ENTRY:
+        return False
+    position = call(engine.position, int(command["instrument"]), str(command["product"]))
+    held = 0.0 if position is None else float(position["quantity_units"])
+    return held != 0 and (held > 0) == (command["side"] == "SELL")
+
+
+def _reject_unsent(engine: Any, strategy: str, kernel_order: int, code: str, what: str) -> None:
+    """Tell the kernel the venue rejected kernel order `kernel_order` with `code`, and log
+    it as a rejection at submission is logged: its side, units and reject code, then
+    `what` it is and its order type."""
+    call(engine.apply_reject, kernel_order, code)
+    order = call(engine.order, kernel_order)
+    logger.info(
+        "%s: order o%d rejected before it was sent: %s %s units, %s (%s, %s)",
+        strategy,
+        kernel_order,
+        order["side"],
+        units_text(order["quantity_units"]),
+        code,
+        what,
+        order["order_type"],
+    )
 
 
 def _refuse_locked(
@@ -162,4 +230,11 @@ def _opens(command: dict[str, Any]) -> bool:
     return command.get("command") == "place" and ROLE_PURPOSES.get(role) in ENTRY_PURPOSES
 
 
-__all__ = ["LOCKED_CODE", "RESTING_REVERSAL_CODE", "RESTING_REVERSAL_WORDS", "to_send"]
+__all__ = [
+    "LOCKED_CODE",
+    "RESTING_AGAINST_CODE",
+    "RESTING_AGAINST_WORDS",
+    "RESTING_REVERSAL_CODE",
+    "RESTING_REVERSAL_WORDS",
+    "to_send",
+]

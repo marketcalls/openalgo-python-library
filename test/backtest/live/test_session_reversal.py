@@ -336,14 +336,18 @@ def test_the_log_names_the_refused_reversal_as_a_rejection_of_its_order(resting_
     ) in lines
 
 
-def test_the_venue_reason_gives_a_brokers_refusal_and_a_resting_reversal_each_its_advice():
+def test_the_venue_reason_gives_each_refusal_of_the_broker_or_the_session_its_advice():
+    # A resting order against the open position is refused the same way (2.4.0 item P4-1).
     meaning, advice = REASONS["venue"]
 
     assert "broker or the exchange refused" in meaning and "resting reversal" in meaning
+    assert "resting order against the open position" in meaning
     assert advice == (
         "for a broker's refusal, read its reason in the session's journal and the OpenAlgo "
         "order book; for a resting reversal, which the session's warnings name, submit the "
-        "reversal as a MARKET order, or exit and enter separately"
+        "reversal as a MARKET order, or exit and enter separately; for a resting order "
+        "against the open position, put a take-profit in targets= or exit with a MARKET "
+        "order"
     )
 
 

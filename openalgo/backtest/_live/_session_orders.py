@@ -9,7 +9,8 @@ job.
   entries are locked (a reversal the kernel held for its stop's cancel) is refused, never
   sent (`_session_unsent`); one that still waits for the order worker when they lock is
   withdrawn (`_venue_withdraw`), and the worker refuses one it takes meanwhile
-  (`_locked_entries`). A resting reversal is refused, never sent (`_session_unsent`).
+  (`_locked_entries`). A resting reversal is refused, never sent, and so is a resting
+  order against the open position that its closing room cannot take (`_session_unsent`).
 - **Position and working orders**: the kernel's position in units, its working orders,
   those that open or add and those that close, and how an alert names an order.
 - **Exits and cancels** the session asks of the kernel.

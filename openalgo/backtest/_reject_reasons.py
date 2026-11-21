@@ -4,7 +4,8 @@ of the run's rejection warnings (`_rejections`).
 The codes are the kernel's (`RejectCode::code` in `rust/oa_bt/src/exec/checks.rs`), except
 `rate_limit`, which no kernel check makes: a backtest enforces no order rate limit. `venue`
 and `exit_cover` are a live session's: the broker's own rejection of an order (or the
-session's refusal to send a resting reversal, `_live/_session_unsent`), and a
+session's refusal to send a resting reversal or a resting order against the open
+position, `_live/_session_unsent`), and a
 reduce-only order that would leave more units resting to close a position than it has
 (`rust/oa_bt/src/engine/venue_cover.rs`). So are `live_lock` and `live_in_flight`, the
 entry gates a live session adds (`rust/oa_bt/src/engine/venue_gates.rs`), and the freeze
@@ -134,11 +135,14 @@ REASONS = MappingProxyType(
             "in a live session, the broker or the exchange refused the order for a reason "
             "of its own, or the session did not send it: a resting reversal (reverse=True "
             "on a LIMIT, SL or SL-M order), which a live session takes as a MARKET order "
-            "only, since at the broker it would work beside the position's stop and both "
-            "could fill",
+            "only, or a resting order against the open position beyond what its stop "
+            "leaves to close, since at the broker either would work beside the position's "
+            "stop and both could fill",
             "for a broker's refusal, read its reason in the session's journal and the "
             "OpenAlgo order book; for a resting reversal, which the session's warnings "
-            "name, submit the reversal as a MARKET order, or exit and enter separately",
+            "name, submit the reversal as a MARKET order, or exit and enter separately; "
+            "for a resting order against the open position, put a take-profit in targets= "
+            "or exit with a MARKET order",
         ),
         "exit_cover": (
             "a live session keeps at most the position's units resting to close it, so "
