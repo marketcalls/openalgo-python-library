@@ -266,13 +266,21 @@ def test_a_sandbox_session_passes_on_the_sandboxs_funds():
 # ----- the funds against the capital -------------------------------------------------
 
 
-def test_funds_below_the_capital_fail_with_both_amounts():
+def test_funds_below_the_capital_fail_with_both_amounts_in_indian_digit_grouping():
     (failure,) = failures_of(FakeOpenAlgo(funds=live_funds("99999.50")), capital=100_000)
 
     assert failure == (
         "OpenAlgo reports 99,999.50 rupees of available cash (collateral not counted), less "
-        "than the capital of 100,000.00 rupees: lower capital, or add funds to the broker "
+        "than the capital of 1,00,000.00 rupees: lower capital, or add funds to the broker "
         "account"
+    )
+
+
+def test_funds_that_cover_the_capital_say_so_in_indian_digit_grouping():
+    report = preflight(FakeOpenAlgo(funds=live_funds("1234567.89")), capital=200_000)
+
+    assert check_named(report, "funds").message == (
+        "12,34,567.89 rupees of available cash cover the capital of 2,00,000.00 rupees"
     )
 
 
@@ -400,6 +408,17 @@ def test_an_account_max_daily_loss_passes_when_left_out_or_positive(limit):
     report = preflight(account_max_daily_loss=limit)
 
     assert check_named(report, "account_max_daily_loss").ok
+
+
+def test_the_risk_limit_lines_state_rupees_in_indian_digit_grouping():
+    report = preflight(capital=250_000, max_daily_loss=12_500, account_max_daily_loss=1_50_000)
+
+    limits = ("capital", "max_daily_loss", "account_max_daily_loss")
+    assert [check_named(report, name).message for name in limits] == [
+        "capital is 2,50,000.00 rupees",
+        "max_daily_loss is 12,500.00 rupees",
+        "account_max_daily_loss is 1,50,000.00 rupees, over all the account's strategies",
+    ]
 
 
 # ----- the alert channel -------------------------------------------------------------

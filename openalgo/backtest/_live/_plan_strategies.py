@@ -44,6 +44,7 @@ from .._warm_up_probe import ProbeContext, history_needs, probe_setup
 from ..calendar import Calendar
 from ..errors import ConfigError
 from ..reference import Instrument
+from ..report._format import indian_digits
 from ..strategy import Strategy
 from ._version_id import StrategyVersion, version_of
 from .series import DEFAULT_BASE
@@ -213,9 +214,9 @@ def _live_daily_loss_limit(
         )
     if resolved != given:
         raise ConfigError(
-            f"{name}: max_daily_loss={given:g} differs from the class attribute "
-            f"max_daily_loss={resolved:g}: give bt.live the same value, or remove the class "
-            "attribute, so the live limit is the one you pass"
+            f"{name}: max_daily_loss of Rs {indian_digits(given)} differs from the class "
+            f"attribute max_daily_loss of Rs {indian_digits(resolved)}: give bt.live the same "
+            "value, or remove the class attribute, so the live limit is the one you pass"
         )
     return given
 
