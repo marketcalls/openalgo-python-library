@@ -32,13 +32,13 @@ def live(
     params: Mapping[str, Any] | None = None,
     costs: Any = "zerodha",
     risk_basis: str = "gross",
-    after_risk_exit: str = "lock_session",
-    entry_from: str | None = None,
-    entry_until: str | None = None,
-    square_off: str | None = None,
-    max_positions: int | None = None,
-    drawdown_halt: float | Distance | None = None,
-    cooldown: int | None = None,
+    after_risk_exit: str | Mapping[str, str] = "lock_session",
+    entry_from: str | Mapping[str, str | None] | None = None,
+    entry_until: str | Mapping[str, str | None] | None = None,
+    square_off: str | Mapping[str, str | None] | None = None,
+    max_positions: int | Mapping[str, int | None] | None = None,
+    drawdown_halt: float | Distance | Mapping[str, float | Distance | None] | None = None,
+    cooldown: int | Mapping[str, int | None] | None = None,
     round_levels: bool = True,
     strict_config: bool = True,
     live_dir: str | os.PathLike[str] | None = None,
@@ -74,10 +74,13 @@ def live(
         log and the console only (refused in LIVE mode, a warning in SANDBOX mode).
     account: the name the journal, logs and lock are kept under; the broker's name by
         default (give one per account when one broker has two).
-    params, costs, risk_basis, after_risk_exit, entry_from, entry_until, square_off,
-        max_positions, drawdown_halt, cooldown, round_levels, strict_config: as in
-        `bt.backtest`, with the same defaults. `costs` models the charges of the broker's
-        fills, since its trade book carries none.
+    params, costs, risk_basis, round_levels, strict_config: as in `bt.backtest`, with the
+        same defaults. `costs` models the charges of the broker's fills, since its trade
+        book carries none.
+    after_risk_exit, entry_from, entry_until, square_off, max_positions, drawdown_halt,
+        cooldown: each strategy's, as in `bt.backtest` given a list, with the same
+        defaults: one value for every strategy, or a dict naming each by class name; a
+        class attribute of the same name wins.
     live_dir: the absolute folder of the accounts' journals, logs and locks (default: the
         OPENALGO_LIVE_DIR environment variable, else ~/.openalgo/live).
     on_stop: what Ctrl+C does with open positions: "flatten" (exit them, then stop) or
