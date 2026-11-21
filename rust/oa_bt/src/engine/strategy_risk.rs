@@ -1,6 +1,7 @@
 //! The strategy's risk bookkeeping between the steps of the slice sequence: its trading
 //! state, the daily loss measure, the drawdown watch, the bars that the cooldown and
-//! the time exit count, and the engine exits waiting for an open.
+//! the time exit count, the engine exits waiting for an open, and the day's entries the
+//! trade caps count (`daily_caps`).
 //!
 //! The engine feeds it every fill (`after_fill`, from `fills::execute_fill`) and every
 //! session start; the rules that read it run in `aggregate` (steps 1, 2, 6 and 8) and
@@ -11,7 +12,9 @@ use crate::exec::{FillReason, InstrumentId};
 use crate::model::Day;
 use crate::portfolio::{FillEffect, FillKind, PositionChange, PositionKey};
 use crate::rms::StrategyRiskConfig;
-use crate::rms::{AccountTotals, DailyLossMeasure, DrawdownWatch, ExitReason, TradingLock};
+use crate::rms::{
+    AccountTotals, DailyLossMeasure, DrawdownWatch, ExitReason, TradeCount, TradingLock,
+};
 
 /// An engine exit waiting for its instrument's next base-bar open.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -53,6 +56,8 @@ pub(super) struct StrategyRisk {
     pub(super) roll_carry: Option<usize>,
     /// Exits of the aggregate rules waiting for an open, in the order they were queued.
     pub(super) pending_exits: Vec<PendingExit>,
+    /// The entries of the session day, for the trade caps (`daily_caps`).
+    pub(super) trades: TradeCount,
 }
 
 impl StrategyRisk {
@@ -74,6 +79,7 @@ impl StrategyRisk {
             entered_at: Vec::new(),
             roll_carry: None,
             pending_exits: Vec::new(),
+            trades: TradeCount::default(),
         }
     }
 

@@ -384,6 +384,8 @@ def test_the_role_and_reason_vocabularies_are_the_kernels():
         "kill_switch",
         "account_loss",
         "operator_stop",
+        "daily_profit",
+        "account_profit",
     )
     assert native_attr("EXIT_REQUESTS") == (
         "sent",

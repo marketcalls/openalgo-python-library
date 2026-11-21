@@ -16,7 +16,12 @@ import numpy as np
 import pandas as pd
 
 from ._portfolio_tables import STRATEGY
-from ._reject_reasons import ACCOUNT_LOSS_GATE, ACCOUNT_MARGIN
+from ._reject_reasons import (
+    ACCOUNT_LOSS_GATE,
+    ACCOUNT_MARGIN,
+    ACCOUNT_PROFIT_GATE,
+    ACCOUNT_TRADE_LIMIT,
+)
 from .metrics import analyse
 from .report._performance import Performance
 from .result import Result
@@ -24,7 +29,7 @@ from .result import Result
 PERCENT = 100.0
 #: The refusals that count as orders the account refused a strategy (an order a breach
 #: cancelled was working, not refused).
-REFUSALS = (ACCOUNT_MARGIN, ACCOUNT_LOSS_GATE)
+REFUSALS = (ACCOUNT_MARGIN, ACCOUNT_LOSS_GATE, ACCOUNT_PROFIT_GATE, ACCOUNT_TRADE_LIMIT)
 #: The columns of `contribution`, in order.
 CONTRIBUTION_COLUMNS = (
     "net_pnl_rupees",
@@ -124,7 +129,8 @@ def contribution(
     from the start to the trough of the account's maximum drawdown; NaN when the account
     never fell below a peak), `peak_margin_rupees` (its margin when the account's margin
     was at its highest, first such round, as `_margin_at` reads it) and `orders_refused`
-    (its orders the account refused, `account_margin` or `account_loss_gate`). `account`
+    (its orders the account refused: `account_margin`, `account_loss_gate`,
+    `account_profit_gate` or `account_trade_limit`). `account`
     is `PortfolioResult.account`."""
     equity = account["equity_rupees"]
     total = float(equity.iloc[-1]) - funds if len(equity) else 0.0

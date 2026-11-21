@@ -37,9 +37,12 @@
 //! # The account (2.4, 2.5)
 //!
 //! `ledger` holds the account's capital and each engine's capital and last figures, in
-//! paise; `rules` the account's daily loss limit, measured on the round's IST session day
-//! only (H3), once per session day. In a separate pool no engine is linked: each runs as
-//! it would alone, and the account's figures are only recorded.
+//! paise; `rules` the account's daily loss limit and daily profit target, measured on the
+//! round's IST session day only (H3), each once per session day (2.5a rule 6). In a
+//! separate pool no engine is linked to the account's cash: each runs as it would alone,
+//! and the account's figures are only recorded. The account's trade cap (2.5a rule 7)
+//! links every engine, in either pool, to the other engines' entries of its session day,
+//! which its trade gate counts with its own.
 //!
 //! # Drivers
 //!
@@ -55,6 +58,7 @@
 //! order; no clock and no hash-ordered container. The same engines and decisions give
 //! the same outputs, bit for bit.
 
+mod config;
 mod ledger;
 mod output;
 mod rounds;
@@ -67,7 +71,6 @@ mod tests;
 use std::fmt;
 
 use crate::engine::{Engine, KernelError, Pause, SignalArrays, SkippedEntry};
-use crate::portfolio::round_to_paise;
 
 use ledger::AccountBook;
 use output::Recorder;
@@ -75,50 +78,8 @@ use rounds::{Round, Stage};
 use rules::AccountRules;
 use timeline::Lane;
 
+pub use config::{FundConfig, Pool};
 pub use output::{AccountRows, FundOutput, Refusal, RefusedOrder};
-
-/// How the strategies of a portfolio run share the account (18-multi-strategy 1.1).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Pool {
-    /// One account: an opening fill needs its margin within the strategy's own free cash
-    /// and within the account's, and sizers see at most the account's free cash
-    /// (`engine::AccountLink`).
-    Shared,
-    /// Fixed allocations: each strategy limited by its own capital only; the account is
-    /// their sum, recorded.
-    Separate,
-}
-
-impl Pool {
-    /// Every pool, in the order of their codes.
-    pub const ALL: [Pool; 2] = [Pool::Shared, Pool::Separate];
-
-    /// The argument's value: "shared" or "separate".
-    pub fn code(self) -> &'static str {
-        match self {
-            Pool::Shared => "shared",
-            Pool::Separate => "separate",
-        }
-    }
-
-    /// The pool a code names.
-    pub fn from_code(code: &str) -> Option<Pool> {
-        Pool::ALL.into_iter().find(|pool| pool.code() == code)
-    }
-}
-
-/// The account of a portfolio run (18-multi-strategy 1.1).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct FundConfig {
-    /// One account shared by the strategies, or fixed allocations (`Pool`).
-    pub pool: Pool,
-    /// Rupees: the account's funds; `None` for the sum of the strategies' capitals. In a
-    /// separate pool it is that sum.
-    pub account_capital_rupees: Option<f64>,
-    /// Rupees, above 0: the account's daily loss limit (`account_max_daily_loss`); `None`
-    /// for none.
-    pub account_max_daily_loss_rupees: Option<f64>,
-}
 
 /// Where `advance` stopped.
 #[derive(Clone, Debug, PartialEq)]
@@ -212,6 +173,8 @@ enum Decider {
 #[derive(Clone, Debug)]
 pub struct Fund {
     pool: Pool,
+    /// The account's trade cap (`FundConfig::account_max_trades_per_day`).
+    trade_cap: Option<u32>,
     lanes: Vec<Lane>,
     deciders: Vec<Decider>,
     book: AccountBook,
@@ -232,26 +195,22 @@ impl Fund {
     ///
     /// Errors: `InvalidConfig` for no engine, a live session (its account is the
     /// broker's), an engine that has advanced, an account capital that is not a positive
-    /// number of rupees (or, in a separate pool, not the sum of the capitals), and a daily
-    /// loss limit that is not a positive number of rupees.
+    /// number of rupees (or, in a separate pool, not the sum of the capitals), a daily
+    /// loss limit or daily profit target that is not a positive number of rupees, and a
+    /// trade cap of 0.
     pub fn new(config: FundConfig, engines: &[&Engine]) -> Result<Fund, FundError> {
         let lanes = timeline::lanes(engines)?;
         let capitals: Vec<f64> = engines.iter().map(|e| e.capital_rupees()).collect();
-        let account_capital = account_capital(&config, &capitals)?;
+        let account_capital = config.checked_capital(&capitals)?;
         let limit = config.account_max_daily_loss_rupees;
-        if let Some(limit) = limit.filter(|limit| !(limit.is_finite() && *limit > 0.0)) {
-            return Err(FundError::InvalidConfig {
-                field: "account_max_daily_loss",
-                strategy: None,
-                reason: format!("{limit}: give the account's daily loss limit in rupees, above 0"),
-            });
-        }
+        let target = config.account_daily_profit_target_rupees;
         let figures = engines.iter().map(|e| e.figures()).collect();
         Ok(Fund {
             pool: config.pool,
+            trade_cap: config.account_max_trades_per_day,
             deciders: vec![Decider::Caller; engines.len()],
             book: AccountBook::new(account_capital, &capitals, figures),
-            rules: AccountRules::new(limit),
+            rules: AccountRules::new(limit, target),
             record: Recorder::new(account_capital, engines.len()),
             stage: Stage::Next,
             started: false,
@@ -326,8 +285,12 @@ impl Fund {
     /// Errors: `InvalidConfig` (field `engines`) for a number of engines other than the
     /// fund's, or an engine that differs from its strategy's in those; `OutOfStep` when
     /// one was advanced outside the fund; `Engine` for an error of an engine's phase or
-    /// of a Rust driver; `Finished` after `FundPause::Finished`.
+    /// of a Rust driver; `Finished` after `FundPause::Finished`, before the engines are
+    /// looked at (they may have been finished since).
     pub fn advance(&mut self, engines: &mut [&mut Engine]) -> Result<FundPause, FundError> {
+        if self.is_finished() {
+            return Err(FundError::Finished);
+        }
         timeline::check_engines(&self.lanes, engines)?;
         self.started = true;
         self.run(engines)
@@ -355,31 +318,4 @@ impl Fund {
             .collect();
         Ok(self.record.into_output(skipped))
     }
-}
-
-/// The account's capital (`FundConfig::account_capital_rupees`), rupees.
-///
-/// Errors: `InvalidConfig` (field `account_capital`) as `Fund::new` says.
-fn account_capital(config: &FundConfig, capitals: &[f64]) -> Result<f64, FundError> {
-    let sum = round_to_paise(capitals.iter().sum());
-    let Some(given) = config.account_capital_rupees else {
-        return Ok(sum);
-    };
-    let refuse = |reason: String| FundError::InvalidConfig {
-        field: "account_capital",
-        strategy: None,
-        reason,
-    };
-    if !(given.is_finite() && given > 0.0) {
-        return Err(refuse(format!(
-            "{given}: give the account's funds in rupees, above 0"
-        )));
-    }
-    if config.pool == Pool::Separate && round_to_paise(given) != sum {
-        return Err(refuse(format!(
-            "a separate pool's account is the sum of the capitals, Rs {sum}: leave \
-             account_capital out, or give pool=\"shared\" for an account of Rs {given}"
-        )));
-    }
-    Ok(given)
 }

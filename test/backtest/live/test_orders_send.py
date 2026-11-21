@@ -602,11 +602,12 @@ def test_place_modify_and_cancel_share_one_budget_of_five_a_second():
     assert rig.clock.slept == [1.0]
 
 
-def test_the_budget_allows_five_requests_in_a_second():
+def test_the_budget_allows_eight_requests_in_a_second_by_default():
+    # OpenAlgo's 10 a second less 2 for the trader's own orders (18-multi-strategy 2.5a).
     clock = Clock()
     budget = RateBudget(clock.now)
 
-    for _ in range(5):
+    for _ in range(8):
         assert budget.wait_seconds() == 0.0
         budget.take()
 
@@ -615,7 +616,7 @@ def test_the_budget_allows_five_requests_in_a_second():
 
 def test_a_request_waits_until_the_oldest_of_the_five_is_a_second_old():
     clock = Clock()
-    budget = RateBudget(clock.now)
+    budget = RateBudget(clock.now, per_second=5)
     for _ in range(5):
         budget.take()
         clock.advance(0.1)
@@ -634,7 +635,14 @@ def test_take_raises_when_the_budget_is_spent():
         budget.take()
 
 
-@pytest.mark.parametrize("per_second", [0, 6, 10])
-def test_a_budget_outside_one_to_half_of_openalgos_raises(per_second):
-    with pytest.raises(LiveError, match="at most half of OpenAlgo's 10"):
+@pytest.mark.parametrize("per_second", [0, -1, 2.5, True])
+def test_a_budget_that_is_not_a_whole_number_of_at_least_one_raises(per_second):
+    with pytest.raises(LiveError, match="a whole number of order calls a second, at least 1"):
         RateBudget(Clock().now, per_second=per_second)
+
+
+def test_a_server_set_higher_takes_a_budget_above_openalgos_default():
+    budget = RateBudget(Clock().now, per_second=20)
+    for _ in range(20):
+        budget.take()
+    assert budget.wait_seconds() == 1.0

@@ -7,7 +7,8 @@ the kernel sessions, and its iteration, `Session.step`.
        in order (`_session_trader`), and the broker candle checks asked for, one per
        instrument (`_session_candles`)
     C. drive the kernel sessions to their decisions (`Trader.drive`), each member of a
-       shared instrument's group given its gates first (`_groups`)
+       shared instrument's group given its gates first (`_groups`), and each strategy
+       the account's trade cap (`_account_watch`)
     D. duties by time: the stops supervisor's (`stops`), the positions a closing order's
        rejection holds on a shared instrument (`_margin_reject`), the risk watch
        (`watch`), the reconciler's reads (`reconcile`), the safe stop, the end of the day
@@ -44,6 +45,7 @@ from typing import Any
 from .._calendar_convert import format_ist
 from .._layout import NANOS_PER_SECOND
 from ..errors import LiveError
+from ._account_watch import AccountTrades
 from ._groups import Groups
 from ._guard_breach import ModeBreach, breach_alert, breach_text
 from ._margin_reject import MarginHolds
@@ -112,6 +114,7 @@ class Session:
         self._wait_max_ns = round(wait_max_s * _NS)
         self._traders: tuple[Trader, ...] = ()
         self.groups = Groups((), event=self.event)
+        self.trades = AccountTrades(self)
         self.news = News(self)
         self.exits = ExitRetries(self)
         self.margin = MarginHolds(self)
@@ -252,6 +255,7 @@ class Session:
             released = self._close_slices(self.now())
             for trader in self.traders:
                 self.groups.before_decisions(trader)
+                self.trades.before_decisions(trader)
                 trader.drive(deciding=self.deciding)
         self.stops.duties(self.now(), protecting=protecting)
         # The commands are taken after the duties, so an entry the safe stop cancels in

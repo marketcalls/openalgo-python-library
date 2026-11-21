@@ -121,6 +121,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     which changes the charges.
   - A list of one strategy also returns a `PortfolioResult`. A strategy class on its own runs
     exactly as before, with the same figures.
+- Daily limits per strategy and for the account, in `bt.backtest` and `bt.live` (2.4.0, unit
+  M10). Each is off unless set, and takes one value or a dict by strategy class name; a class
+  attribute of the same name wins.
+  - `max_trades_per_day`: the entries of a session day. An entry is an order that opens a
+    position from flat, or a reversal; adds, exits and the engine's own exits never count.
+    An entry counts from submission while it works, and for good once any part fills. At the
+    cap an entry is rejected `trade_limit`, and a reversal is cut to its close (the close is
+    sent as an order that only reduces the units held, and the opening part is recorded
+    rejected). Nothing is exited.
+  - `daily_profit_target`: when the day's profit (the measure `max_daily_loss` uses) reaches
+    it, every position exits with the reason `daily_profit_target` and entries are rejected
+    `daily_profit_gate` until the next session day, whatever `after_risk_exit` says.
+  - `max_order_value`: an entry or add worth more is rejected `order_value_limit`. Its worth
+    is the units times the limit price, an SL-M's trigger or the last close, times the
+    multiplier, judged at submission; a MARKET entry with no last close yet is refused. A
+    modify is checked too and, when refused, leaves the order as it was. Exits are never
+    refused.
+  - For a list of strategies in `bt.backtest`, and in `bt.live`: `account_max_trades_per_day`
+    (the entries of every strategy together; at the cap entries are rejected
+    `account_trade_limit` and nothing is exited) and `account_daily_profit_target` (works as
+    `account_max_daily_loss` does: exit reason `account_profit_target`, entries rejected
+    `account_profit_gate` in a backtest, the kill switch fired for `account_profit` live).
+    `pf.refused` lists the account's refusals; a strategy's own cap codes are in its
+    `result.orders` and in `pf.orders`.
+  - Each limit is named in the Assumptions block, in the live start banner and in the daily
+    summary's Limits line. Refusals by these limits are told once in `result.warnings` and
+    raise no OrdersNotPlacedWarning. A live restart of the day keeps the trade counts
+    (the account's include the entries of strategies an earlier start ran) and the profit
+    locks.
+- `bt.live(max_orders_per_second=8)`: at most this many order calls (place, modify and cancel
+  together) in any second, OpenAlgo's limit of 10 less 2 for your own orders (2.4.0, unit
+  M10). A call beyond the limit waits, stops and exits first. A call that waits 2 s writes the
+  event `order_throttled` and sends one alert per session start. An entry or add that waits
+  5 s is not sent (reason `order_rate`); an exit is never dropped. An entry still waiting
+  when its strategy is locked (a profit target, the kill switch, a safe stop) is withdrawn,
+  not placed.
+- Live sessions write a decisions file per day beside the event stream,
+  `<live_dir>/<account>/logs/YYYY-MM-DD.decisions.jsonl` (`SessionResult.paths["decisions"]`):
+  one line per strategy bar, off the console and the event stream. A decision line gives the
+  bar as the strategy saw it and whether it came from ticks or a broker candle, the latest
+  value of each `self.I` output, the position in units, and what `on_bar` submitted (each
+  order with its side, units, type, status and reject code). A skipped line says why no
+  decision was made: missing data, indicators not ready, trading not begun, the session
+  stopping, or the strategy failed. A line that cannot be written is logged and dropped.
+  - Each `drift` event carries the tick bar's and the broker candle's open, high, low, close
+    and volume beside their differences.
+  - An order the engine rejects at submission is logged at INFO with the strategy, side,
+    units and reject code, and so is the first decision per strategy skipped because its
+    indicators are not ready (later ones at DEBUG).
 - MCX silver mini (SILVERM) and silver micro (SILVERMIC) can be backtested and traded: their
   freeze quantity, 600 kg per order, is in the contract table from MCX circulars
   MCX/TRD/114/2025, MCX/TRD/091/2026, MCX/TRD/275/2025 and MCX/TRD/302/2026 (contracts
@@ -137,6 +186,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refuse `pool`, `account_capital` and `account_max_daily_loss` with a `ConfigError`, and
   `bt.live` refuses `pool` and `account_capital` as it refuses the other backtest-only
   arguments.
+- Live sessions send at most 8 order calls a second by default (it was 5), set by
+  `max_orders_per_second`.
+- Live sessions save their state in layout 5 (the day's trade counts), so a restart cannot
+  resume a state that 2.3.0 saved earlier the same day: start it fresh.
+- `Fund.advance` called after a portfolio run has ended raises the fund's "has finished"
+  error, and each of the fund's breach records carries its rule (`account_loss` or
+  `account_profit`).
+- Live sessions: the strategy decides, and keeps deciding, on the bars built from ticks. A
+  broker candle read after a decision (2 seconds after the close, often before the broker's
+  final candle) no longer replaces the tick bar in the strategy's series or its indicators,
+  so a crossing between the tick bar and a later, different candle of the same minute is
+  seen by exactly one decision, never by none and never twice. On the 2026-11-20 sandbox
+  day a reversal on a 1-minute EMA crossing was seen by no decision this way. Candles are
+  still checked against every tick bar for the drift log. A candle is the bar only of a
+  minute with no ticks (the feed was dead, or watching began in it after a start or
+  restart): it refreshes the indicators and no decision is made on it afterwards. The
+  engine and the strategy now hold the same bars. Within one run only: after a restart the
+  minutes before it come from broker candles, as before.
 - Live sessions: a trade closed by the account's daily loss limit (`account_max_daily_loss`,
   through the kill switch) now records the exit reason `account_loss_limit` instead of
   `manual`, the reason a portfolio backtest records for the same breach.
@@ -160,6 +227,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Live sessions: a reversal (`reverse=True`) waits for its position's stop to be cancelled
+  before it is sent; if entries were locked meanwhile (a dead feed, a reconciliation
+  mismatch, a failed exit, the account loss limit), it was still sent and opened the other
+  side. It is now refused whole with `live_lock`, as it is when it is submitted under a lock,
+  and the position gets its stop back. A reversal no longer raises a false "had no stop at
+  the broker" alert between the stop's cancel and the order's fill.
 - Live sessions: a decision is skipped for missing data when the bar before its own holds a
   minute with no data, as it already was when its own bar held one. After a start or restart
   in the middle of a minute, that minute's bar comes from its broker candle; when the candle

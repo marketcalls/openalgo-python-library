@@ -3,7 +3,8 @@
 //! The three states drive the entry locks, the daily loss limit and the kill switch
 //! (03-architecture 9). REDUCING refuses entries and adds but lets exits through; it
 //! lasts until the next session boundary (03:00 IST by default) after a daily loss
-//! breach (always, SPEC-18 and the lead ruling) or a combined-stop or lock-profit exit
+//! breach (always, SPEC-18 and the lead ruling), the daily profit target reached (as the
+//! daily loss, 18-multi-strategy 2.5a rule 5) or a combined-stop or lock-profit exit
 //! with `after_risk_exit="lock_session"`. HALTED (drawdown halt, kill switch) latches
 //! for the rest of a backtest, and until an operator reset in live.
 //!
@@ -56,16 +57,19 @@ pub enum TradingStateCause {
     KillSwitch = 3,
     /// The session boundary passed.
     SessionBoundary = 4,
+    /// The daily profit target was reached (18-multi-strategy 2.5a rule 5).
+    DailyProfitTarget = 5,
 }
 
 impl TradingStateCause {
     /// Every cause, in code order.
-    pub const ALL: [TradingStateCause; 5] = [
+    pub const ALL: [TradingStateCause; 6] = [
         TradingStateCause::DailyLossBreach,
         TradingStateCause::StrategyExit,
         TradingStateCause::DrawdownHalt,
         TradingStateCause::KillSwitch,
         TradingStateCause::SessionBoundary,
+        TradingStateCause::DailyProfitTarget,
     ];
 
     /// The cause name used in events and results.
@@ -76,6 +80,7 @@ impl TradingStateCause {
             TradingStateCause::DrawdownHalt => "drawdown_halt",
             TradingStateCause::KillSwitch => "kill_switch",
             TradingStateCause::SessionBoundary => "session_boundary",
+            TradingStateCause::DailyProfitTarget => "daily_profit_target",
         }
     }
 }
@@ -85,8 +90,9 @@ use TradingStateCause as C;
 
 /// Every legal change as (from, cause, to). A cause with no row leaves the state as it
 /// is: a second breach while REDUCING changes nothing.
-pub const TRADING_STATE_TRANSITIONS: [(TradingState, TradingStateCause, TradingState); 7] = [
+pub const TRADING_STATE_TRANSITIONS: [(TradingState, TradingStateCause, TradingState); 8] = [
     (T::Active, C::DailyLossBreach, T::Reducing),
+    (T::Active, C::DailyProfitTarget, T::Reducing),
     (T::Active, C::StrategyExit, T::Reducing),
     (T::Active, C::DrawdownHalt, T::Halted),
     (T::Active, C::KillSwitch, T::Halted),
@@ -146,11 +152,13 @@ impl TradingLock {
     /// The trading-state gate for an order that opens or adds.
     ///
     /// Errors: `DailyLossGate` while REDUCING after a daily loss breach (SPEC-18);
+    /// `DailyProfitGate` while REDUCING after the daily profit target was reached;
     /// `Halted` while HALTED, or REDUCING for any other cause.
     pub fn entry_gate(&self) -> Result<(), RejectCode> {
         match (self.state, self.cause) {
             (T::Active, _) => Ok(()),
             (T::Reducing, Some(C::DailyLossBreach)) => Err(RejectCode::DailyLossGate),
+            (T::Reducing, Some(C::DailyProfitTarget)) => Err(RejectCode::DailyProfitGate),
             _ => Err(RejectCode::Halted),
         }
     }
@@ -208,14 +216,21 @@ mod tests {
     }
 
     #[test]
+    fn a_daily_profit_target_reduces_with_its_own_gate_until_the_session_boundary() {
+        let mut lock = TradingLock::default();
+        let change = lock.apply(C::DailyProfitTarget).map(|c| (c.from, c.to));
+        assert_eq!(change, Some((T::Active, T::Reducing)));
+        assert_eq!(lock.entry_gate(), Err(RejectCode::DailyProfitGate));
+        // A second target, or a loss breach, while REDUCING changes nothing.
+        assert_eq!(lock.apply(C::DailyProfitTarget), None);
+        assert_eq!(lock.apply(C::DailyLossBreach), None);
+        lock.apply(C::SessionBoundary);
+        assert_eq!(lock.entry_gate(), Ok(()));
+    }
+
+    #[test]
     fn cause_codes_are_distinct() {
-        let causes = [
-            C::DailyLossBreach,
-            C::StrategyExit,
-            C::DrawdownHalt,
-            C::KillSwitch,
-            C::SessionBoundary,
-        ];
+        let causes = TradingStateCause::ALL;
         let mut codes: Vec<&str> = causes.iter().map(|cause| cause.code()).collect();
         codes.sort_unstable();
         codes.dedup();

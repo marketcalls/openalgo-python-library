@@ -31,7 +31,7 @@ from typing import Any
 
 from .._engine import call
 from ..errors import LiveError
-from ._kill_switch import ACCOUNT_LOSS
+from ._kill_switch import ACCOUNT_LOSS, ACCOUNT_PROFIT
 from ._plan_catch_up import INSTRUMENT
 from ._session_exits import EXIT_FAILED_LOCK
 from ._session_figures import FIGURES, SESSION_KEY
@@ -43,8 +43,9 @@ from ._venue_saved import SavedOrder, read_records
 #: The roles of the kernel's saved orders that are leg stops (the binding's ORDER_ROLES).
 LEG_STOP_ROLE = "leg_stop"
 #: The entry locks that last the day, set again at a restart from the saved state (6.2):
-#: a reconciliation mismatch, an exit that failed every attempt, the account's daily loss.
-DAY_LOCKS = frozenset({RECONCILE_LOCK, EXIT_FAILED_LOCK, ACCOUNT_LOSS})
+#: a reconciliation mismatch, an exit that failed every attempt, the account's daily loss
+#: limit and daily profit target (18-multi-strategy 2.5a rule 8).
+DAY_LOCKS = frozenset({RECONCILE_LOCK, EXIT_FAILED_LOCK, ACCOUNT_LOSS, ACCOUNT_PROFIT})
 
 
 @dataclass(frozen=True)

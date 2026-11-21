@@ -13,6 +13,7 @@ worker put on it; only the loop takes from it, in the order the messages were pu
 | `OtherFill` | order worker | a fill the order stream reported of an order not the session's |
 | `SendResult` | order worker | a request sent: its ID, intent or order ID, the outcome |
 | `NotSent` | order worker | a request not sent, and why |
+| `Throttled` | order worker | a request the order rate held back too long; withdrawn or not |
 | `Settled` | order worker | an unanswered or refused modify or cancel, and what settled it |
 | `Resolutions` | order worker | unbound intents settled against the order book |
 | `HeldFills` | order worker | the fills the order path holds, when they changed |
@@ -146,6 +147,10 @@ class NotSentReason(enum.Enum):
     ORDER_ENDED = "order_ended"
     #: Refused before it was sent (an entry or add is not tried again).
     REFUSED = "refused"
+    #: An entry or add the order rate held back too long (18-multi-strategy 2.5a rule 12).
+    THROTTLED = "order_rate"
+    #: An entry or add the kernel cancelled while it waited in the worker's queue.
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True)
@@ -156,6 +161,17 @@ class NotSent:
     request: object
     reason: NotSentReason
     error: str = ""
+
+
+@dataclass(frozen=True)
+class Throttled:
+    """A request (the worker's own request object) the order rate held back for
+    `waited_s` seconds; `withdrawn` when it is an entry or add that is not sent
+    (`_order_throttle`)."""
+
+    request: Any
+    waited_s: float
+    withdrawn: bool
 
 
 @dataclass(frozen=True)
@@ -269,6 +285,7 @@ Message = (
     | OtherFill
     | SendResult
     | NotSent
+    | Throttled
     | Settled
     | Resolutions
     | HeldFills
@@ -359,6 +376,7 @@ __all__ = [
     "Resolutions",
     "SendResult",
     "Settled",
+    "Throttled",
     "WorkerFailed",
     "WorkerReady",
 ]

@@ -96,8 +96,9 @@ def account_frame(records: Mapping[str, Any]) -> pd.DataFrame:
 def refused_frame(records: Mapping[str, Any], results: Mapping[str, Result]) -> pd.DataFrame:
     """The orders the account refused or ended (`REFUSED_COLUMNS`): the strategy, its
     kernel order id, the order's symbol and side, when (the IST open of the slice of the
-    refusal, its slice and step) and why ("account_margin", "account_loss_gate", or
-    "account_loss" for a working order an account breach cancelled), in time order (one
+    refusal, its slice and step) and why ("account_margin", "account_loss_gate",
+    "account_profit_gate", "account_trade_limit", or the lock "account_loss" or
+    "account_profit" for a working order an account breach cancelled), in time order (one
     instant's in call order, then by order id)."""
     names = list(results)
     raw = pd.DataFrame(records["refused"])

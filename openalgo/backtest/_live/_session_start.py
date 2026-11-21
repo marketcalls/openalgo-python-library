@@ -175,6 +175,7 @@ def _open(
         journal=target,
         now=now,
         sleep=settings.sleep,
+        orders_per_second=spec.arguments.max_orders_per_second,
     )
     stack.callback(worker.close)
     journal_session = _start_worker(worker, inbox, settings)

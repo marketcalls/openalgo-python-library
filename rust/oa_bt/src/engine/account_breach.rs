@@ -1,21 +1,27 @@
-//! An account breach in one engine (18-multi-strategy 2.5): the account's daily loss
-//! limit of a portfolio run, found at a round of the fund, as each strategy of the run
-//! takes it (`Engine::account_breach`).
+//! An account breach in one engine (18-multi-strategy 2.5 and 2.5a rule 6): the account's
+//! daily loss limit, or its daily profit target, of a portfolio run, found at a round of
+//! the fund, as each strategy of the run takes it (`Engine::account_breach`). The two
+//! rules (`AccountRule`) act alike under their own names:
+//!
+//! | Rule | Lock | Reject code | Risk event | Trades' exit reason |
+//! |---|---|---|---|---|
+//! | `Loss` (`account_max_daily_loss`) | `account_loss` | `account_loss_gate` | `account_loss_hit` | `account_loss_limit` |
+//! | `Profit` (`account_daily_profit_target`) | `account_profit` | `account_profit_gate` | `account_profit_hit` | `account_profit_target` |
 //!
 //! - **The lock.** From the breach on, an entry or add decided in a slice of the round's
-//!   IST session day is rejected `account_loss_gate` (`entry_rules`); the next session
-//!   boundary lifts it, as the boundary ends REDUCING (`aggregate`). The lock is named
-//!   `account_loss`, as a live session's entry lock for the account's limit. It is not a
-//!   trading state: the strategy's own rules keep theirs.
-//! - **The record.** The risk event `account_loss_hit` (scope account, minus the limit as
-//!   its level, the account's measure as observed), then every working order that would
-//!   open or add is cancelled (as a live kill switch's first step), then every open
-//!   position with no exit waiting is exited by step 6's rule, as the strategy's own daily
-//!   loss limit exits it: at its instrument's next base-bar open, or at once at its last
-//!   close, flagged, when the slice closes the session; one whose instrument has no later
-//!   bar in the session fills at the session close (`aggregate`). The trades record the
-//!   exit reason `account_loss_limit`. A position whose exit already waits keeps it, with
-//!   its own reason.
+//!   IST session day is rejected with the rule's code (`entry_rules`); the next session
+//!   boundary lifts it, as the boundary ends REDUCING (`aggregate`). The lock is named as
+//!   a live session's entry lock for the rule is. It is not a trading state: the
+//!   strategy's own rules keep theirs.
+//! - **The record.** The rule's risk event (scope account; its level minus the loss limit,
+//!   or the profit target; the account's measure as observed), then every working order
+//!   that would open or add is cancelled (as a live kill switch's first step), then every
+//!   open position with no exit waiting is exited by step 6's rule, as the strategy's own
+//!   daily loss limit exits it: at its instrument's next base-bar open, or at once at its
+//!   last close, flagged, when the slice closes the session; one whose instrument has no
+//!   later bar in the session fills at the session close (`aggregate`). The trades record
+//!   the rule's exit reason. A position whose exit already waits keeps it, with its own
+//!   reason.
 //! - **Where it is recorded** (2.5, the breach's stamps), by where the engine stands when
 //!   the fund finds the breach at the round closing at `at`:
 //!
@@ -33,8 +39,9 @@
 //! position is exited once, since one whose exit already waits keeps it.
 //!
 //! A backtest's only: a live session's risk watch fires the kill switch for the account's
-//! limit (16-session-design 6.3).
+//! limit and target (16-session-design 6.3).
 
+use crate::exec::RejectCode;
 use crate::model::{Day, TsNanos};
 use crate::rms::{ExitReason, RiskEvent, RiskEventName, RiskScope};
 
@@ -43,17 +50,83 @@ use super::error::KernelError;
 use super::event::{Event, EventStamp, Step};
 use super::kernel::{Engine, Phase};
 
-/// The account's daily loss limit breached at a round of a portfolio run's fund, as the
-/// fund hands it to each engine (module docs).
+/// Which of the account's daily rules a breach is (module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccountRule {
+    /// The account's daily loss limit (`account_max_daily_loss`).
+    Loss,
+    /// The account's daily profit target (`account_daily_profit_target`).
+    Profit,
+}
+
+impl AccountRule {
+    /// Every rule, in the order of the module docs.
+    pub const ALL: [AccountRule; 2] = [AccountRule::Loss, AccountRule::Profit];
+
+    /// The name of the rule's entry lock: `account_loss` or `account_profit`.
+    pub fn code(self) -> &'static str {
+        match self {
+            AccountRule::Loss => "account_loss",
+            AccountRule::Profit => "account_profit",
+        }
+    }
+
+    /// The setting the rule is: `account_max_daily_loss` or `account_daily_profit_target`.
+    pub fn setting(self) -> &'static str {
+        match self {
+            AccountRule::Loss => "account_max_daily_loss",
+            AccountRule::Profit => "account_daily_profit_target",
+        }
+    }
+
+    /// The reject code of an entry or add while the rule locks entries.
+    pub fn gate(self) -> RejectCode {
+        match self {
+            AccountRule::Loss => RejectCode::AccountLossGate,
+            AccountRule::Profit => RejectCode::AccountProfitGate,
+        }
+    }
+
+    /// The risk event of a breach of the rule.
+    fn event(self) -> RiskEventName {
+        match self {
+            AccountRule::Loss => RiskEventName::AccountLossHit,
+            AccountRule::Profit => RiskEventName::AccountProfitHit,
+        }
+    }
+
+    /// The exit reason of the trades the rule's exits close.
+    fn exit_reason(self) -> ExitReason {
+        match self {
+            AccountRule::Loss => ExitReason::AccountLossLimit,
+            AccountRule::Profit => ExitReason::AccountProfitTarget,
+        }
+    }
+
+    /// The level the risk event records, rupees: minus the loss limit, or the profit
+    /// target.
+    fn level_rupees(self, limit_rupees: f64) -> f64 {
+        match self {
+            AccountRule::Loss => -limit_rupees,
+            AccountRule::Profit => limit_rupees,
+        }
+    }
+}
+
+/// The account's daily loss limit breached, or its daily profit target reached, at a round
+/// of a portfolio run's fund, as the fund hands it to each engine (module docs).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AccountBreach {
     /// The close instant of the round the fund found the breach at, UTC nanoseconds.
     pub at: TsNanos,
     /// The round's IST session day: entries are locked for it.
     pub day: Day,
-    /// The account's daily loss limit, rupees, positive (`account_max_daily_loss`).
+    /// Which rule: the daily loss limit or the daily profit target.
+    pub rule: AccountRule,
+    /// The rule's amount, rupees, positive: the loss limit (`account_max_daily_loss`) or
+    /// the profit target (`account_daily_profit_target`).
     pub limit_rupees: f64,
-    /// The account's daily loss measure at the breach, rupees, negative for a loss.
+    /// The account's daily measure at the breach, rupees, negative for a loss.
     pub measure_rupees: f64,
 }
 
@@ -62,16 +135,17 @@ impl Engine {
     /// record it where the engine stands, now or at its next step 6 or step 1. An engine
     /// whose run has ended takes nothing.
     ///
-    /// Errors: `InvalidConfig` (field `account_max_daily_loss`) for a limit that is not a
-    /// positive amount of rupees or a measure that is not a finite one; `NotBuilt` in a live
-    /// session, whose risk watch holds the account's limit; those of the record.
+    /// Errors: `InvalidConfig` (field the rule's setting, `AccountRule::setting`) for a
+    /// limit that is not a positive amount of rupees or a measure that is not a finite
+    /// one; `NotBuilt` in a live session, whose risk watch holds the account's rules; those
+    /// of the record.
     pub fn account_breach(&mut self, breach: AccountBreach) -> Result<(), KernelError> {
         let usable = breach.limit_rupees.is_finite()
             && breach.limit_rupees > 0.0
             && breach.measure_rupees.is_finite();
         if !usable {
             return Err(KernelError::InvalidConfig {
-                field: "account_max_daily_loss",
+                field: breach.rule.setting(),
                 reason: format!(
                     "a breach needs a positive limit and a finite measure, got a limit of {} \
                      and a measure of {} rupees",
@@ -81,20 +155,21 @@ impl Engine {
         }
         if self.is_external() {
             return Err(KernelError::NotBuilt {
-                feature: "the account's daily loss breach in a live session's kernel",
+                feature: "the account's daily loss breach or profit target in a live \
+                          session's kernel",
                 instead: "a live session's risk watch fires the kill switch for the \
-                          account's daily loss limit",
+                          account's daily loss limit and daily profit target",
             });
         }
         match self.phase {
             Phase::Finished => Ok(()),
             Phase::Ready(0) if self.starts_after(breach.day) => Ok(()),
             Phase::Opened(slice) if slice.close <= breach.at => {
-                self.account.locked_day = Some(breach.day);
+                self.account.locked = Some((breach.day, breach.rule));
                 self.record_account_breach(&slice, Step::AggregateRules, breach)
             }
             _ => {
-                self.account.locked_day = Some(breach.day);
+                self.account.locked = Some((breach.day, breach.rule));
                 self.account.waiting.push(breach);
                 Ok(())
             }
@@ -124,21 +199,26 @@ impl Engine {
         &mut self,
         slice: &SliceInfo,
     ) -> Result<(), KernelError> {
-        if self.account.waiting.is_empty() {
+        let Some(first) = self.account.waiting.first() else {
             return Ok(());
-        }
-        self.cancel_entries_for_account(Self::stamp(slice, Step::Levels))
+        };
+        let rule = first.rule;
+        self.cancel_entries_for_account(Self::stamp(slice, Step::Levels), rule)
     }
 
     /// Cancel every working order that would open or add, in id order, as the strategy's
-    /// own daily loss limit cancels them (`aggregate`), and keep each for the fund's record
-    /// of the orders the account ended (`fund_view`).
+    /// own daily loss limit cancels them (`aggregate`), and keep each, with the `rule` that
+    /// ended it, for the fund's record of the orders the account ended (`fund_view`).
     ///
     /// Errors: those of the cancels.
-    fn cancel_entries_for_account(&mut self, stamp: EventStamp) -> Result<(), KernelError> {
+    fn cancel_entries_for_account(
+        &mut self,
+        stamp: EventStamp,
+        rule: AccountRule,
+    ) -> Result<(), KernelError> {
         for id in self.working_entries() {
             self.withdraw_order(stamp, id)?;
-            self.account.cancels.push((stamp, id));
+            self.account.cancels.push((stamp, id, rule));
         }
         Ok(())
     }
@@ -174,10 +254,11 @@ impl Engine {
         breach: AccountBreach,
     ) -> Result<(), KernelError> {
         let stamp = Self::stamp(slice, step);
+        let rule = breach.rule;
         let event = RiskEvent {
-            name: RiskEventName::AccountLossHit,
+            name: rule.event(),
             scope: RiskScope::Account,
-            level_rupees: Some(-breach.limit_rupees),
+            level_rupees: Some(rule.level_rupees(breach.limit_rupees)),
             target_index: None,
             observed_rupees: Some(breach.measure_rupees),
         };
@@ -186,8 +267,8 @@ impl Engine {
             instrument: None,
             event,
         });
-        self.cancel_entries_for_account(stamp)?;
-        let reason = ExitReason::AccountLossLimit;
+        self.cancel_entries_for_account(stamp, rule)?;
+        let reason = rule.exit_reason();
         for key in self.positions_to_exit() {
             // Step 1 queues the exits for this slice's own open; step 6 follows its rule.
             match step {

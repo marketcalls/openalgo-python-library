@@ -58,6 +58,7 @@ from ._session_records import StrategyRecords
 from ._session_unsent import to_send
 from ._types import LOGGER_NAME, LiveBar, Now
 from ._venue_requests import LIVE_PRODUCT, OrderRequest
+from ._worker_queue import WithdrawPlace
 from .venue_map import VenueMap
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -309,14 +310,15 @@ class Trader(Bookkeeping):
 
     # ----- orders and positions ----------------------------------------------------
 
-    def commands(self) -> list[OrderRequest]:
+    def commands(self) -> list[OrderRequest | WithdrawPlace]:
         """The kernel's commands since the last call, as the order worker's requests (a
-        placement the kernel cancelled before this call withdrawn: module docstring); the
-        reason of each risk exit placed is kept (`reasons`), and the position's units at
-        each placement (`units_at_place`)."""
+        placement the kernel cancelled before this call withdrawn: module docstring; one
+        it cancelled after, while it waits for the worker, withdrawn there: `WithdrawPlace`);
+        the reason of each risk exit placed is kept (`reasons`), and the position's units
+        at each placement (`units_at_place`)."""
         if self.finished:
             return []
-        requests: list[OrderRequest] = []
+        requests: list[OrderRequest | WithdrawPlace] = []
         commands = call(self.engine.take_commands)
         while commands:
             kept = to_send(self.engine, self.name, commands, event=self._event)

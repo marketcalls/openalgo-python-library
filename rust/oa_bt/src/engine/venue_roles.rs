@@ -27,10 +27,11 @@
 //! place a new one), and the fill of an order whose role only closes is never recorded
 //! beyond the position (`venue_fills`).
 //!
-//! The risk reasons are the kernel's own rules (`daily_loss`, `drawdown`, `time_exit`) and
-//! those the live layer names when it asks for an exit (`Engine::request_exit`:
-//! `unprotected`, `stop_rejected`, `stop_unfilled`, `kill_switch`, `account_loss`,
-//! `operator_stop`). The trade an engine exit closes records the backtest's exit reason:
+//! The risk reasons are the kernel's own rules (`daily_loss`, `daily_profit`, `drawdown`,
+//! `time_exit`) and those the live layer names when it asks for an exit
+//! (`Engine::request_exit`: `unprotected`, `stop_rejected`, `stop_unfilled`,
+//! `kill_switch`, `account_loss`, `account_profit`, `operator_stop`). The trade an engine
+//! exit closes records the backtest's exit reason:
 //!
 //! | Engine exit | Exit reason of the trade |
 //! |---|---|
@@ -38,6 +39,8 @@
 //! | `daily_loss`, `drawdown`, `time_exit` | `daily_loss_limit`, `drawdown_halt`, `time_exit`, as the backtest's rules |
 //! | `stop_unfilled` | `leg_sl`: the leg's stop level was reached |
 //! | `account_loss` | `account_loss_limit`, as a portfolio backtest's account breach (`account_breach`; 18-multi-strategy 1.3) |
+//! | `daily_profit` | `daily_profit_target`, as the backtest's daily profit target (`daily_caps`; 18-multi-strategy 2.5a) |
+//! | `account_profit` | `account_profit_target`, as a portfolio backtest's account profit target (`account_breach`) |
 //! | `unprotected`, `stop_rejected`, `kill_switch`, `operator_stop` | `manual`: neither the strategy nor a kernel rule made it |
 
 use crate::exec::{ExecError, Order, OrderId, OrderRequest, OrderType};
@@ -75,11 +78,15 @@ pub enum RiskExitReason {
     AccountLoss,
     /// The operator stopped the session (Ctrl+C).
     OperatorStop,
+    /// The daily profit target (`daily_profit_target`).
+    DailyProfit,
+    /// The account's daily profit target, across the session's strategies.
+    AccountProfit,
 }
 
 impl RiskExitReason {
     /// Every reason, in the order of the module docs.
-    pub const ALL: [RiskExitReason; 9] = [
+    pub const ALL: [RiskExitReason; 11] = [
         RiskExitReason::DailyLoss,
         RiskExitReason::Drawdown,
         RiskExitReason::TimeExit,
@@ -89,6 +96,8 @@ impl RiskExitReason {
         RiskExitReason::KillSwitch,
         RiskExitReason::AccountLoss,
         RiskExitReason::OperatorStop,
+        RiskExitReason::DailyProfit,
+        RiskExitReason::AccountProfit,
     ];
 
     /// The code the bindings use.
@@ -103,6 +112,8 @@ impl RiskExitReason {
             RiskExitReason::KillSwitch => "kill_switch",
             RiskExitReason::AccountLoss => "account_loss",
             RiskExitReason::OperatorStop => "operator_stop",
+            RiskExitReason::DailyProfit => "daily_profit",
+            RiskExitReason::AccountProfit => "account_profit",
         }
     }
 }
@@ -141,6 +152,8 @@ impl EngineExit {
                 RiskExitReason::TimeExit => ExitReason::TimeExit,
                 RiskExitReason::StopUnfilled => ExitReason::LegSl,
                 RiskExitReason::AccountLoss => ExitReason::AccountLossLimit,
+                RiskExitReason::DailyProfit => ExitReason::DailyProfitTarget,
+                RiskExitReason::AccountProfit => ExitReason::AccountProfitTarget,
                 RiskExitReason::Unprotected
                 | RiskExitReason::StopRejected
                 | RiskExitReason::KillSwitch
@@ -361,6 +374,14 @@ mod tests {
                 "operator_stop",
                 EngineExit::Risk(RiskExitReason::OperatorStop),
             ),
+            (
+                "daily_profit",
+                EngineExit::Risk(RiskExitReason::DailyProfit),
+            ),
+            (
+                "account_profit",
+                EngineExit::Risk(RiskExitReason::AccountProfit),
+            ),
         ];
         for (code, exit) in table {
             assert_eq!(EngineExit::from_code(code), Some(exit), "{code}");
@@ -409,6 +430,14 @@ mod tests {
             (
                 EngineExit::Risk(RiskExitReason::OperatorStop),
                 ExitReason::Manual,
+            ),
+            (
+                EngineExit::Risk(RiskExitReason::DailyProfit),
+                ExitReason::DailyProfitTarget,
+            ),
+            (
+                EngineExit::Risk(RiskExitReason::AccountProfit),
+                ExitReason::AccountProfitTarget,
             ),
         ];
         for (exit, reason) in table {

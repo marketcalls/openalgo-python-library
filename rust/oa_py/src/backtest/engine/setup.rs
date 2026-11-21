@@ -132,6 +132,9 @@ fn risk(dict: &Bound<'_, PyDict>) -> PyResult<StrategyRiskConfig> {
         round_levels: field(dict, "round_levels")?,
         strict_config: field(dict, "strict_config")?,
         scale: scale_limits(dict)?,
+        max_trades_per_day: optional(dict, "max_trades_per_day")?,
+        daily_profit_target_rupees: optional(dict, "daily_profit_target")?,
+        max_order_value_rupees: optional(dict, "max_order_value")?,
     })
 }
 

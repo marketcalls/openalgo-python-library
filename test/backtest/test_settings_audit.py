@@ -46,6 +46,9 @@ AUDITED_DECLARATIONS = {
     "square_off",
     "drawdown_halt",
     "cooldown",
+    "max_trades_per_day",
+    "daily_profit_target",
+    "max_order_value",
     "combined_stop",
     "combined_target",
     "lock_profit",
@@ -83,6 +86,9 @@ AUDITED_RUN_ARGUMENTS = {
     "max_positions",
     "drawdown_halt",
     "cooldown",
+    "max_trades_per_day",
+    "daily_profit_target",
+    "max_order_value",
     "round_levels",
     "strict_config",
     "roll",
@@ -91,6 +97,8 @@ AUDITED_RUN_ARGUMENTS = {
     "pool",
     "account_capital",
     "account_max_daily_loss",
+    "account_max_trades_per_day",
+    "account_daily_profit_target",
 }
 
 

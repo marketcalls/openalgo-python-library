@@ -95,6 +95,9 @@ def backtest(
     max_positions: int | None = None,
     drawdown_halt: float | Distance | None = None,
     cooldown: int | None = None,
+    max_trades_per_day: int | None = None,
+    daily_profit_target: float | Distance | None = None,
+    max_order_value: float | Distance | None = None,
     round_levels: bool = True,
     strict_config: bool = True,
     roll: int | None = 1,
@@ -103,6 +106,8 @@ def backtest(
     pool: str = SHARED_POOL,
     account_capital: float | Distance | None = None,
     account_max_daily_loss: float | Distance | None = None,
+    account_max_trades_per_day: int | None = None,
+    account_daily_profit_target: float | Distance | None = None,
 ) -> Result | PortfolioResult:
     """Backtest one strategy class and return its `Result`; or several, given as a list,
     on one account, and return their `PortfolioResult`.
@@ -186,6 +191,19 @@ def backtest(
         round_levels, strict_config: risk settings; strategy class attributes of the
         same names win. `max_daily_loss` is rupees (or bt.rupees), `drawdown_halt`
         percent from peak equity (bt.pct(x)), `cooldown` base bars.
+    max_trades_per_day, daily_profit_target, max_order_value: the daily limits, each off
+        when None (the default); class attributes of the same names win.
+        `max_trades_per_day`: the entries of an IST session day (an order that opens a
+        position from flat, or a reversal; adds, exits and the engine's own exits never
+        count), counted from submission while they work and once any part fills; an entry
+        at the cap is rejected "trade_limit" and a reversal is cut to its close, with
+        nothing exited. `daily_profit_target`: rupees (or bt.rupees); once the day's
+        measure (the one max_daily_loss uses) reaches it, every position exits (exit
+        reason "daily_profit_target") and entries are rejected "daily_profit_gate" until
+        the next session day. `max_order_value`: rupees (or bt.rupees); an entry or add
+        worth more (units times its limit, an SL-M's trigger or the last close, times the
+        multiplier) is rejected "order_value_limit", as is a MARKET entry of an instrument
+        with no bar yet (no price to value it at); exits never are.
     roll: sessions before expiry at which a futures position rolls to the next contract
         (1, the session before the last trading day; 0 rolls on it), or None to hold it
         to expiry and settle it there in cash (see `Result.settlements`). A futures
@@ -194,8 +212,9 @@ def backtest(
     params: parameter values for the strategy.
     now: the present (UTC nanoseconds, a datetime or an ISO string, naive is IST; the
         clock when None). The data load drops bars that have not closed by then.
-    pool, account_capital, account_max_daily_loss: the account of a list of strategies
-        (below); a run of one strategy leaves them at their defaults.
+    pool, account_capital, account_max_daily_loss, account_max_trades_per_day,
+        account_daily_profit_target: the account of a list of strategies (below); a run
+        of one strategy leaves them at their defaults.
 
     The run ends at the earliest of `end`, the close of the last base bar any
     instrument has, and `now`; equity, trades and metrics stop there, a position still
@@ -220,8 +239,9 @@ def backtest(
     first in the list acts first. Two strategies may trade one symbol, on either side.
     These take one value for every strategy, or a dict by strategy class name that names
     every strategy: `capital`, `product`, `base`, `max_daily_loss`, `after_risk_exit`,
-    `max_positions`, `drawdown_halt`, `cooldown`, `entry_from`, `entry_until` and
-    `square_off`; a class attribute of the same name still wins. `params` is a dict by
+    `max_positions`, `drawdown_halt`, `cooldown`, `entry_from`, `entry_until`,
+    `square_off`, `max_trades_per_day`, `daily_profit_target` and `max_order_value`; a
+    class attribute of the same name still wins. `params` is a dict by
     strategy class name (one left out keeps its defaults); a list of one strategy takes
     that strategy's own values, as a class does. Every other argument is the run's: one
     value. Of those keyed by what is traded, each strategy is given the entries of what it
@@ -250,6 +270,13 @@ def backtest(
         up. At or past it every strategy's working entries are cancelled, its positions
         exit as its own daily loss exits do (exit reason "account_loss_limit"), and its
         entries are refused (`account_loss_gate`) until the next session day.
+    account_daily_profit_target: rupees (or bt.rupees(x)), the account's daily profit
+        target on the same measure: at or past it the same as the account's loss limit,
+        under its own names (exit reason "account_profit_target", entries refused
+        `account_profit_gate`).
+    account_max_trades_per_day: the entries of every strategy together in one session
+        day (a whole number, at least 1): at it every strategy's entries are refused
+        `account_trade_limit`; nothing is exited.
 
     Raises ConfigError for unusable arguments (a list that names a strategy twice, a dict
     by name that names a strategy the call does not run or leaves one out, account

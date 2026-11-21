@@ -11,6 +11,10 @@
 //!    as the observed value), moves the strategy to REDUCING until the next session
 //!    whatever `after_risk_exit` says, and exits every position, reason
 //!    `daily_loss_limit`.
+//!    Then the daily profit target (18-multi-strategy 2.5a rule 5, `daily_caps`): the same
+//!    measure at or beyond `+daily_profit_target` while ACTIVE does the same under its own
+//!    names (`daily_profit_hit`, scope session, the target as the level; REDUCING until the
+//!    next session; exits with the reason `daily_profit_target`).
 //! 2. Drawdown halt: unless HALTED, equity at or below the peak less the limit writes
 //!    `risk_halt` (scope strategy, the floor as the level, the equity as observed),
 //!    latches HALTED for the rest of the run and exits every position, reason
@@ -85,6 +89,15 @@ impl Engine {
             });
             self.change_trading_state(stamp, TradingStateCause::DailyLossBreach);
             exit = Some(EngineExit::Risk(RiskExitReason::DailyLoss));
+        }
+        if let Some(event) = self.daily_profit_reached() {
+            self.emit(Event::Risk {
+                stamp,
+                instrument: None,
+                event,
+            });
+            self.change_trading_state(stamp, TradingStateCause::DailyProfitTarget);
+            exit = Some(EngineExit::Risk(RiskExitReason::DailyProfit));
         }
         if let Some(event) = self.drawdown_breach() {
             self.emit(Event::Risk {

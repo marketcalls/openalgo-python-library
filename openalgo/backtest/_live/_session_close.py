@@ -58,6 +58,7 @@ from ._alerts_summary import SessionSummary, summary_text
 from ._plan_catch_up import StrategyPlan
 from ._reconcile_final import final_read
 from ._reconcile_findings import Reconciliation
+from ._session_banner import limit_lines
 from ._session_loop import Session
 from ._session_named import (
     NamedLegs,
@@ -293,6 +294,7 @@ def _summary(
         unconfirmed=legs.unsure,
         earlier=tuple(strategy.words() for strategy in figures.earlier),
         shared=tuple(instrument.line() for instrument in named.shared),
+        limits=limit_lines(session),
     )
 
 

@@ -102,7 +102,8 @@ def assumptions(
     opposite: Sequence[OppositeSides],
 ) -> dict[str, Any]:
     """The Assumptions block of a portfolio run: the strategies, the pool, the account's
-    funds (`funds`, rupees, as the fund kept them) and note, its daily loss limit, the
+    funds (`funds`, rupees, as the fund kept them) and note, its daily loss limit (and its
+    daily profit target and trade cap, named only when set), the
     instruments several strategies trade (None when none is shared) with what a backtest
     does differently from a broker there, those held on opposite sides (`opposite`; None
     when none was), then a line per strategy: what it trades, on which interval and base,
@@ -114,6 +115,14 @@ def assumptions(
         "account_capital": funds,
         "account": account_note(account, funds),
         "account_max_daily_loss": account.account_max_daily_loss,
+        **{
+            name: value
+            for name, value in (
+                ("account_daily_profit_target", account.account_daily_profit_target),
+                ("account_max_trades_per_day", account.account_max_trades_per_day),
+            )
+            if value is not None
+        },
         "shared_instruments": "; ".join(
             f"{symbol} ({exchange}): {spoken_list(who)}"
             for (symbol, exchange), who in shared.items()

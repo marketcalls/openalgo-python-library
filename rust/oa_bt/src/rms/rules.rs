@@ -235,6 +235,22 @@ pub struct StrategyRiskConfig {
     pub strict_config: bool,
     /// Scale-in limits.
     pub scale: ScaleLimits,
+    /// Most entries of one IST session day (`max_trades_per_day`, 18-multi-strategy 2.5a
+    /// rules 1 to 4): an entry opens a position from flat or is a reversal's opening part,
+    /// counted from its submission while it works and once any part of it fills. At the
+    /// cap an entry is rejected `trade_limit` and a reversal is cut to its close; nothing
+    /// is exited.
+    pub max_trades_per_day: Option<u32>,
+    /// Daily profit target in rupees (`daily_profit_target`, 2.5a rule 5): once the day's
+    /// measure (the daily loss limit's, on `risk_basis`) reaches it, the positions exit
+    /// (reason `daily_profit_target`) and the strategy is REDUCING until the next session,
+    /// whatever `after_risk_exit` says, as for the daily loss limit; new entries are then
+    /// rejected `daily_profit_gate`.
+    pub daily_profit_target_rupees: Option<f64>,
+    /// Largest value of an entry or add in rupees (`max_order_value`, 2.5a rule 11): its
+    /// units times the price it is judged at times the instrument's multiplier; above it
+    /// the order is rejected `order_value_limit`. Exits are never refused by it.
+    pub max_order_value_rupees: Option<f64>,
 }
 
 impl Default for StrategyRiskConfig {
@@ -251,6 +267,9 @@ impl Default for StrategyRiskConfig {
             round_levels: true,
             strict_config: true,
             scale: ScaleLimits::default(),
+            max_trades_per_day: None,
+            daily_profit_target_rupees: None,
+            max_order_value_rupees: None,
         }
     }
 }
@@ -258,22 +277,24 @@ impl Default for StrategyRiskConfig {
 impl StrategyRiskConfig {
     /// Check the strategy and session rules before the run starts.
     ///
-    /// Errors: `InvalidRule` for a daily loss limit that is not a positive amount of
-    /// rupees, a drawdown halt that is not above 0 and below 100 percent, a position
-    /// count, cooldown or holding time of zero bars, or an unusable scale-in limit
-    /// (`ScaleLimits::validate`).
+    /// Errors: `InvalidRule` for a daily loss limit, daily profit target or order value
+    /// cap that is not a positive amount of rupees, a drawdown halt that is not above 0
+    /// and below 100 percent, a position count, trade cap, cooldown or holding time of
+    /// zero, or an unusable scale-in limit (`ScaleLimits::validate`).
     pub fn validate(&self) -> Result<(), RmsError> {
         let invalid = |rule: &'static str, reason: &str| RmsError::InvalidRule {
             rule,
             reason: reason.to_string(),
         };
         self.scale.validate()?;
-        if let Some(limit) = self.max_daily_loss_rupees {
-            if !(limit.is_finite() && limit > 0.0) {
-                return Err(invalid(
-                    "max_daily_loss",
-                    "give a positive amount of rupees",
-                ));
+        let amounts = [
+            ("max_daily_loss", self.max_daily_loss_rupees),
+            ("daily_profit_target", self.daily_profit_target_rupees),
+            ("max_order_value", self.max_order_value_rupees),
+        ];
+        for (rule, amount) in amounts {
+            if amount.is_some_and(|rupees| !(rupees.is_finite() && rupees > 0.0)) {
+                return Err(invalid(rule, "give a positive amount of rupees"));
             }
         }
         if let Some(percent) = self.drawdown_halt_percent {
@@ -288,6 +309,7 @@ impl StrategyRiskConfig {
             ("max_positions", self.max_positions),
             ("cooldown", self.cooldown_bars),
             ("max_hold", self.max_hold_bars),
+            ("max_trades_per_day", self.max_trades_per_day),
         ];
         match counts.into_iter().find(|(_, count)| *count == Some(0)) {
             Some((rule, _)) => Err(invalid(rule, "give at least 1, or None for no limit")),
@@ -304,6 +326,50 @@ mod tests {
     fn empty_rules_are_valid() {
         assert!(LegRules::default().is_empty());
         assert_eq!(LegRules::default().validate(true), Ok(()));
+    }
+
+    #[test]
+    fn the_daily_limits_must_be_usable() {
+        let rule_of = |config: StrategyRiskConfig| match config.validate() {
+            Err(RmsError::InvalidRule { rule, .. }) => Some(rule),
+            _ => None,
+        };
+        let base = StrategyRiskConfig::default();
+        let cases = [
+            (
+                StrategyRiskConfig {
+                    max_trades_per_day: Some(0),
+                    ..base
+                },
+                Some("max_trades_per_day"),
+            ),
+            (
+                StrategyRiskConfig {
+                    daily_profit_target_rupees: Some(0.0),
+                    ..base
+                },
+                Some("daily_profit_target"),
+            ),
+            (
+                StrategyRiskConfig {
+                    max_order_value_rupees: Some(f64::NAN),
+                    ..base
+                },
+                Some("max_order_value"),
+            ),
+            (
+                StrategyRiskConfig {
+                    max_trades_per_day: Some(1),
+                    daily_profit_target_rupees: Some(5_000.0),
+                    max_order_value_rupees: Some(100_000.0),
+                    ..base
+                },
+                None,
+            ),
+        ];
+        for (config, rule) in cases {
+            assert_eq!(rule_of(config), rule);
+        }
     }
 
     #[test]
