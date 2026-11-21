@@ -18,7 +18,11 @@ from ._size_controls import size_controls
 from .errors import ConfigError
 from .units import Distance
 
-RISK_BASES = ("gross", "net")
+#: The risk bases of the daily loss limit: P&L before charges ("gross") or after them
+#: ("net").
+GROSS_BASIS = "gross"
+NET_BASIS = "net"
+RISK_BASES = (GROSS_BASIS, NET_BASIS)
 AFTER_RISK_EXIT = ("lock_session", "allow_reentry")
 # Combined rules of a run, class attributes for strategies that open single positions
 # (14-strategy-api 2.1); refused until Phase 3 builds them.
@@ -116,6 +120,8 @@ def risk_settings(
 __all__ = [
     "AFTER_RISK_EXIT",
     "COMBINED_RULES",
+    "GROSS_BASIS",
+    "NET_BASIS",
     "RISK_BASES",
     "choice",
     "refuse_combined_rules",

@@ -7,8 +7,11 @@ In the account's session, SBIN and INFY fall to 492.00 from 14:43:40; `HoldSbin`
 `HoldInfy` (capital Rs 1,00,000 each) buy 10 units at 500.00 at their first decision
 (14:42:01), and the account's daily loss limit of Rs 150 fires the kill switch at the
 first trade at 492.00, which sells both at 492.00: -80.00 each, with no charges modelled
-(`costs=None`); Ctrl+C at 14:47. Expected values are worked from the scenario and the
-fake's books, never from the portfolio's code.
+(`costs=None`); Ctrl+C at 14:47. In the capped session (test_session_daily_limits) the
+account's trade cap is 1 entry: HoldSbin, deciding first, buys SBIN at 14:42:01, and
+HoldInfy finds the account at its cap at each of its decisions to the Ctrl+C at 14:47.
+Expected values are worked from the scenario and the fake's books, never from the
+portfolio's code.
 """
 
 from __future__ import annotations
@@ -58,6 +61,16 @@ def account(make_fake_openalgo, monkeypatch, tmp_path, caplog):
     made.stop_at(ist(14, 47))
     seam(made, monkeypatch)
     return live(made, [HoldSbin, HoldInfy], account_max_daily_loss=ACCOUNT_LIMIT, costs=None)
+
+
+@pytest.fixture
+def capped(make_fake_openalgo, monkeypatch, tmp_path, caplog):
+    """The capped session (module docstring) through `bt.live`: its result."""
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+    made = rig(make_fake_openalgo, monkeypatch, tmp_path, symbols=("SBIN", "INFY"))
+    made.stop_at(ist(14, 47))
+    seam(made, monkeypatch)
+    return live(made, [HoldSbin, HoldInfy], account_max_trades_per_day=1)
 
 
 def as_of_sum(results, column: str, before: dict[str, float]) -> pd.Series:
@@ -165,10 +178,36 @@ def test_the_accounts_daily_loss_measure_ends_at_both_losses_together(account):
     assert measure.min() == 2 * LOSS_EACH
 
 
-def test_the_account_refuses_nothing_the_brokers_margin_check_is_its(account):
+def test_the_kill_switchs_lock_leaves_its_refusals_in_the_strategies_orders(account):
+    # Flat and locked from 14:43:40, each strategy is refused at its later decisions by
+    # the lock, live_lock, which its own orders hold: the account refused nothing itself.
     refused = account.portfolio.refused
     assert list(refused.columns) == list(REFUSED_COLUMNS)
     assert refused.empty
+    for result in account.results.values():
+        assert set(result.orders["reject_code"].dropna()) == {"live_lock"}
+
+
+def test_the_entries_the_accounts_trade_cap_refused_are_listed_by_strategy(capped):
+    # HoldInfy's five entries, decided on the bars opening 14:41 to 14:45, its orders 1 to 5.
+    refused = capped.portfolio.refused
+    opens = [pd.Timestamp(f"2026-11-16 14:{minute}", tz=IST) for minute in range(41, 46)]
+    assert refused["strategy"].tolist() == ["HoldInfy"] * 5
+    assert refused["order_id"].tolist() == [1, 2, 3, 4, 5]
+    assert refused["time"].tolist() == opens
+    assert set(zip(refused["symbol"], refused["side"], refused["reason"], strict=True)) == {
+        ("INFY", "BUY", "account_trade_limit")
+    }
+
+
+def test_the_contribution_counts_the_entries_the_account_refused(capped):
+    assert capped.portfolio.contribution["orders_refused"].tolist() == [0, 5]
+
+
+def test_the_combined_page_lists_the_entries_the_account_refused(capped):
+    page = capped.portfolio.tearsheet()
+    assert "The account refused no order and ended none." not in page
+    assert "5 orders the account refused or ended, with the times" in page
 
 
 def test_each_strategys_contribution_is_its_own_loss(account):
@@ -197,6 +236,8 @@ def test_the_assumptions_name_the_capitals_and_the_funds_openalgo_reported_at_th
     assert LIVE_CASH == 250_000
     assert "OpenAlgo reported Rs 2,50,000 of funds at the start" in notes["account"]
     assert "the broker's margin check is the account's" in notes["account"]
+    assert "the entries the account's trade cap refused are listed in refused" in notes["account"]
+    assert "stay in its orders with the code live_lock" in notes["account"]
 
 
 def test_a_session_without_a_shared_instrument_states_no_rule_of_one(account):
@@ -264,3 +305,5 @@ def test_after_a_restart_the_portfolio_covers_the_restarted_start_only(world):
     assert len(pf.trades) == 1
     own = second.results["TwoRoundTrips"].metrics["net_profit"]
     assert pf.equity.iloc[-1] - CAPITAL == pytest.approx(own, abs=0.005)
+    # Its daily loss measure counts from the restart too, and its note says so.
+    assert "the daily loss measure counts this start only" in pf.assumptions["account"]

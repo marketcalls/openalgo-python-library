@@ -60,7 +60,8 @@ def live(
     class runs here as in `bt.backtest`, deciding in `on_bar` on 1-minute bars built from
     the feed's ticks, with MIS orders; a stop given with `stop=` is held by the broker.
 
-    strategy: a `bt.Strategy` subclass, or a list of them; each trades its own symbol.
+    strategy: a `bt.Strategy` subclass, or a list of them; two may trade one symbol, one
+        side at a time and with market orders only.
     client: an `openalgo.api` client. The session makes clients of its own from its
         settings and leaves it, and its callbacks, alone.
     capital: rupees allocated to each strategy (a risk limit): one number for every

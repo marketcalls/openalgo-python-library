@@ -6,8 +6,9 @@ is the strategies together: its rows (`account`: equity, free cash, margin and d
 at every round of the run), its equity and returns on its funds, its `performance` and
 metrics, every strategy's tables in one (a `strategy` column first), the orders the
 account refused, the net position of each instrument (what a broker holds), the
-correlation of the strategies' session returns and each one's contribution, and its
-reports: `summary()` and the combined `tearsheet()` (`_portfolio_report`).
+correlation of the strategies' session returns and each one's contribution, its
+reports: `summary()` and the combined `tearsheet()` (`_portfolio_report`), and its
+exports: `to_dataframes()`, `to_csv()` and `to_excel()` (`_portfolio_export`).
 
 Conventions are `Result`'s: tz-aware IST times beside the kernel's UTC nanoseconds
 (`*_ts` columns), rupees, quantities in units. Kernel ids restart in every strategy's
@@ -20,7 +21,6 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping, Sequence
 from functools import cached_property
-from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
@@ -29,8 +29,8 @@ import pandas as pd
 from . import _portfolio_notes, _portfolio_report, _portfolio_tables
 from ._messages import ALONE_POINTER
 from ._native import native
+from ._portfolio_export import PortfolioExport
 from ._portfolio_figures import account_performance, contribution
-from ._result_export import EXPORTED_TABLES, write_csv, write_excel
 from ._result_report import slice_returns
 from ._strategy_args import Account
 from .metrics import MonteCarlo, monte_carlo, return_correlation
@@ -39,26 +39,8 @@ from .report._performance import Performance
 from .report.custom import Layout
 from .result import Result
 
-#: The account's tables `to_dataframes` returns first, in order: the properties of these
-#: names; then every strategy's own tables (`EXPORTED_TABLES`), prefixed by its name.
-PORTFOLIO_TABLES = (
-    "account",
-    "contribution",
-    "refused",
-    "net_positions",
-    "trades",
-    "fills",
-    "orders",
-    "events",
-    "costs",
-    "contract_notes",
-    "final_positions",
-)
-#: The letter of a strategy's sheet prefix in a workbook (`to_excel`): S1, S2, ...
-STRATEGY_SHEET = "S"
 
-
-class PortfolioResult:
+class PortfolioResult(PortfolioExport):
     """The result of a portfolio run (see the module docstring). `account` is the run's
     checked account, `results` each strategy's `Result` by class name in call order,
     `records` the native fund's records (`Fund.finish`), `benchmark` the closes the
@@ -124,7 +106,8 @@ class PortfolioResult:
         strategies' by the fill's charges and its price against the last close, and at
         the slice's close it is equal again), `free_cash_rupees`, `margin_rupees` and
         `daily_loss_rupees` (the strategies' daily loss measures of the IST session day,
-        added up; the figure `account_max_daily_loss` is held to)."""
+        added up; in a backtest the figure `account_max_daily_loss` is held to, while a
+        live session's counts from its start, `SessionResult.portfolio`)."""
         return self._rows.copy()
 
     @property
@@ -351,49 +334,6 @@ class PortfolioResult:
                 for name, result in self._results.items()
             },
         }
-
-    # ----- export ---------------------------------------------------------------------
-
-    def _account_tables(self) -> dict[str, pd.DataFrame]:
-        """The account's tables by name (`PORTFOLIO_TABLES`), `contribution` with its
-        strategy names as a column."""
-        tables = {name: getattr(self, name) for name in PORTFOLIO_TABLES}
-        tables["contribution"] = tables["contribution"].reset_index()
-        return tables
-
-    def _strategy_tables(self, prefixes: Sequence[str]) -> dict[str, pd.DataFrame]:
-        """Each strategy's own tables (`EXPORTED_TABLES`) named `<prefix>_<table>`, with
-        `prefixes` one per strategy in call order."""
-        return {
-            f"{prefix}_{table}": getattr(result, table)
-            for prefix, result in zip(prefixes, self._results.values(), strict=True)
-            for table in EXPORTED_TABLES
-        }
-
-    def to_dataframes(self) -> dict[str, pd.DataFrame]:
-        """Every table by name: the account's (`PORTFOLIO_TABLES`; `contribution` with its
-        strategy names as a column), then each strategy's own tables (`Result
-        .to_dataframes`) named `<strategy>_<table>`."""
-        return self._account_tables() | self._strategy_tables(list(self._results))
-
-    def to_csv(self, folder: str | os.PathLike) -> list[Path]:
-        """Write every table of `to_dataframes()` to `folder` (created when missing), one
-        CSV file each named after it, and return the paths. Times are plain IST
-        date-times; the `*_ts` columns stay UTC nanoseconds."""
-        return write_csv(self.to_dataframes(), folder)
-
-    def to_excel(self, path: str | os.PathLike) -> Path:
-        """Write every table of `to_dataframes()` to one Excel workbook at `path`, a sheet
-        each, and return the path. A sheet name holds at most 31 characters, too few for
-        a strategy's name and a table's, so the account's tables keep their names, a
-        `strategies` sheet gives each strategy a prefix by its place in call order (S1 for
-        the first) and its tables are the sheets `<prefix>_<table>` (`S1_fills`). Needs
-        openpyxl, which openalgo does not install: raises MissingDependencyError (an
-        ImportError) when it is missing."""
-        prefixes = [f"{STRATEGY_SHEET}{place}" for place in range(1, len(self._results) + 1)]
-        index = pd.DataFrame({"sheet_prefix": prefixes, "strategy": list(self._results)})
-        sheets = self._account_tables() | {"strategies": index}
-        return write_excel(sheets | self._strategy_tables(prefixes), path)
 
     def __repr__(self) -> str:
         account = self._account

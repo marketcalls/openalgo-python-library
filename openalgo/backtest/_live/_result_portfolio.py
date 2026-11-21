@@ -13,10 +13,17 @@
   live session trades MIS: no delivery is held and no sale's proceeds are waited for), and
   its daily loss measure their measures added up, each counted from this start: realized
   P&L plus the open P&L at the marks, less the charges on the net `risk_basis`. Each sum is
-  rounded to the paisa.
-- **The broker's account** holds every strategy: its margin check is the account's, so the
-  account here refuses nothing (`refused` is empty; an entry the account's trade cap
-  refused is in its strategy's orders, with the code `account_trade_limit`). The
+  rounded to the paisa. After a restart the account's daily limits stay held to the day's
+  measure (the restored kernels keep the day's figures), which `SessionResult.summary`
+  gives; this account's measure is this start's.
+- **The broker's account** holds every strategy: its margin check is the account's, so no
+  order is refused for the account's margin here. The account's refusals are those the
+  strategies' kernels make for its daily limits, read from their event streams as a
+  backtest's fund reads them (`refused_records`): an entry at the account's trade cap,
+  `account_trade_limit`, is in `refused` and counted in `contribution`. An entry a
+  strategy's kill switch locked out after the account's daily loss limit or profit target
+  fired it stays in the strategy's orders as `live_lock`, the session's entry lock, whose
+  rejection does not carry the lock's reason (`SessionResult.locks` has it). The
   Assumptions block says so, with the funds OpenAlgo reported at the start, in place of a
   backtest's pool, and, in a session with an instrument several strategies share, what the
   session does there in place of a backtest's netting rules.
@@ -33,26 +40,36 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from .._portfolio_figures import REFUSALS
 from .._portfolio_notes import rupees_text
-from .._portfolio_tables import ACCOUNT_COLUMNS
+from .._portfolio_tables import ACCOUNT_COLUMNS, STRATEGY
+from .._risk_settings import NET_BASIS
 from .._strategy_args import PAISE_PER_RUPEE, SHARED_POOL, Account
 from ..portfolio_result import PortfolioResult
 from ..result import Result
 from ._groups import SHARED_RULE
 from ._plan_args import LiveArguments
 
-#: The risk basis on which a strategy's daily loss measure takes its charges off (one of
-#: `_risk_settings.RISK_BASES`).
-NET_BASIS = "net"
 #: The account's line of a live session (module docstring): the sum of the capitals, the
-#: funds OpenAlgo reported at the start, and the broker's margin check.
+#: funds OpenAlgo reported at the start, the broker's margin check, the account's
+#: refusals and the start its daily loss measure counts from.
 ACCOUNT_NOTE = (
     "the broker's account, which every strategy of the session shares: {capitals} here is "
     "the sum of the strategies' capitals, each strategy's figures measured on its own and "
     "the account's theirs added up; OpenAlgo reported {funds} of funds at the start (the "
-    "sandbox's own in SANDBOX mode); the broker's margin check is the account's, so the "
-    "account refuses no order here, and its margin and free cash are the engines' model"
+    "sandbox's own in SANDBOX mode); the broker's margin check is the account's, so no "
+    "order is refused here for the account's margin, and its margin and free cash are the "
+    "engines' model; the entries the account's trade cap refused are listed in refused, "
+    "while the entries a strategy's kill switch locked out once the account's daily loss "
+    "limit or profit target fired it stay in its orders with the code live_lock (the "
+    "lock's reason is in SessionResult.locks); the daily loss measure counts this start "
+    "only: after a restart the account's daily limits stay held to the day's measure, "
+    "whose figures are SessionResult.summary's"
 )
+#: The stamp of a refusal the fund records beside the strategy and the reason: the order
+#: in the strategy's own engine and its rejection's slice, slice open (UTC nanoseconds) and
+#: step (`_portfolio_tables.refused_frame` reads them).
+REFUSAL_STAMP = ("order_id", "slice", "slice_ts", "step")
 #: The Assumptions line of a session with an instrument several strategies share, in
 #: place of a backtest's netting rules (18-multi-strategy 4.13).
 SHARED_NOTE = (
@@ -103,6 +120,24 @@ def account_rows(results: Mapping[str, Result]) -> dict[str, np.ndarray]:
     return {"ts": stamps, **{name: paise[:, i] for i, name in enumerate(ACCOUNT_COLUMNS)}}
 
 
+def refused_records(results: Mapping[str, Result]) -> dict[str, list[Any]]:
+    """The orders the account refused among `results` (strategy name to its `Result`, call
+    order), as a portfolio run's fund records them: every rejection in a strategy's event
+    stream with a code of the account's (`_portfolio_figures.REFUSALS`; in a live session
+    `account_trade_limit`, the only one its kernels make), with the strategy's place in
+    call order (`strategy`), its `REFUSAL_STAMP` and the code as its `reason`."""
+    rows: dict[str, list[Any]] = {STRATEGY: [], **{name: [] for name in REFUSAL_STAMP}}
+    rows["reason"] = []
+    for place, result in enumerate(results.values()):
+        events = result.events
+        refused = events[events["reject_code"].isin(REFUSALS)]
+        rows[STRATEGY] += [place] * len(refused)
+        for name in REFUSAL_STAMP:
+            rows[name] += refused[name].astype("int64").tolist()
+        rows["reason"] += refused["reject_code"].tolist()
+    return rows
+
+
 def session_account(results: Mapping[str, Result], arguments: LiveArguments) -> Account:
     """The account of a session of `results` with the checked `bt.live` arguments: one
     account every strategy shares, its funds the sum of the capitals, and the account's
@@ -131,11 +166,10 @@ def session_portfolio(
     when they cannot be read."""
     account = session_account(results, arguments)
     funds = sum(account.capitals)
-    # The broker's margin check is the account's: the account refused nothing here.
     records: dict[str, Any] = {
         "account_capital": funds,
         "account": account_rows(results),
-        "refused": {},
+        "refused": refused_records(results),
     }
     words = ACCOUNT_NOTE.format(capitals=rupees_text(funds), funds=rupees_text(funds_at_start))
     notes = {"account": words}
@@ -146,9 +180,10 @@ def session_portfolio(
 
 __all__ = [
     "ACCOUNT_NOTE",
-    "NET_BASIS",
+    "REFUSAL_STAMP",
     "SHARED_NOTE",
     "account_rows",
+    "refused_records",
     "session_account",
     "session_portfolio",
 ]
