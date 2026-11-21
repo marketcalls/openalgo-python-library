@@ -20,7 +20,12 @@ open decision 7). Times are UTC nanoseconds. Used by the worker's thread only, b
 executed them (`unfinished`), so the close knows when every answer it waits for has been
 posted (16-session-design 3.3 step 5). The close also asks for the requests put back to
 be withdrawn (`ask_withdrawal`): its last lines named them as not sent, so they are never
-sent after them and the close does not wait for them.
+sent after them and the close does not wait for them. The order rate throttle
+(`_order_throttle`) takes no request that makes an order call (`is_order_call`) while its
+window is full, and withdraws an entry held back too long (`remove`). An entry or add the
+kernel cancelled while it waits is withdrawn as it is taken in (`WithdrawPlace`), so a
+lock of entries (a daily profit target, the kill switch, the safe stop) is never followed
+by a placement the order rate held (18-multi-strategy 2.5a rules 5, 6 and 12).
 """
 
 from __future__ import annotations
@@ -29,17 +34,21 @@ import collections
 import itertools
 import queue
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from .._layout import NANOS_PER_SECOND
 from ._order_state import ENTRY_PURPOSES
 from ._venue_requests import CancelRequest, ModifyRequest, OrderRequest, PlaceRequest, Priority
+from .inbox import Message, NotSent, NotSentReason
 
 #: An entry or add decided this long before the worker takes it is dropped and reported
 #: rejected: decided at a bar close and sent much later, it is a different trade
 #: (16-session-design 10.0, decision 7).
 ENTRY_STALE_AFTER_S = 10.0
 _STALE_NS = round(ENTRY_STALE_AFTER_S * NANOS_PER_SECOND)
+#: The words of the `NotSent(cancelled)` of an entry or add withdrawn (`WithdrawPlace`).
+CANCELLED_WORDS = "the engine cancelled it before it was sent"
 
 
 @dataclass(frozen=True)
@@ -126,6 +135,18 @@ class CancelOrphan:
     priority = Priority.PROTECT
 
 
+@dataclass(frozen=True)
+class WithdrawPlace:
+    """Withdraw `place`, the placement of an entry or add the kernel cancelled before it
+    was bound (`venue_map`). Taken in by `Incoming.into`, never queued: while `place` still
+    waits in the queue it is taken off and answered `NotSent(cancelled)`; once the worker
+    has taken it, nothing (the kernel's cancel waits for the bind, 2.5 E)."""
+
+    place: PlaceRequest
+
+    priority = Priority.PROTECT
+
+
 #: The worker's own requests.
 WorkerRequest = (
     ReleaseFill
@@ -136,6 +157,7 @@ WorkerRequest = (
     | StreamGap
     | Settle
     | CancelOrphan
+    | WithdrawPlace
 )
 #: Everything the worker takes.
 Request = OrderRequest | WorkerRequest
@@ -147,6 +169,12 @@ OrderKey = tuple[str, int]
 def order_key(request: OrderRequest) -> OrderKey:
     """The FIFO key of a request of a kernel order."""
     return request.intent.strategy, request.kernel_order
+
+
+def is_order_call(request: Request) -> bool:
+    """True for a request that makes an order call (place, modify or cancel), the calls
+    the order rate counts (18-multi-strategy 2.5a rule 12)."""
+    return isinstance(request, PlaceRequest | ModifyRequest | CancelRequest | CancelOrphan)
 
 
 def is_stale(request: Request, now_ns: int) -> bool:
@@ -225,14 +253,43 @@ class WorkerQueue:
         """True while order `key` is held."""
         return key in self._held
 
-    def take(self, now_ns: int, *, most: Priority = Priority.UPKEEP) -> Request | None:
+    def ready_orders(self, now_ns: int) -> list[Request]:
+        """The heads of the ready FIFOs that make an order call (`is_order_call`), in
+        the order of their arrival."""
+        heads = [
+            fifo[0]
+            for key, fifo in self._fifos.items()
+            if key not in self._held and fifo[0].not_before_ns <= now_ns
+        ]
+        heads.sort(key=lambda waiting: waiting.arrived)
+        return [waiting.request for waiting in heads if is_order_call(waiting.request)]
+
+    def remove(self, request: Request) -> bool:
+        """Take `request`, the head of its FIFO, off the queue for good (an entry the
+        order rate withdraws, or one the kernel cancelled); True when it was taken, False
+        for a request not at a head."""
+        for key, fifo in list(self._fifos.items()):
+            if fifo[0].request is request:
+                fifo.popleft()
+                if not fifo:
+                    del self._fifos[key]
+                return True
+        return False
+
+    def take(
+        self, now_ns: int, *, most: Priority = Priority.UPKEEP, orders: bool = True
+    ) -> Request | None:
         """The head of the most urgent ready FIFO whose rank is `most` or more urgent,
         taken off the queue; None when none is ready. A FIFO is ready when its order is
-        not held and its head's `not_before_ns` has passed at `now_ns`."""
+        not held and its head's `not_before_ns` has passed at `now_ns`; with `orders`
+        False, a head that makes an order call is not ready either (the order rate's
+        window is full)."""
         best: tuple[tuple[int, int], object] | None = None
         for key, fifo in self._fifos.items():
             head = fifo[0]
             if key in self._held or head.not_before_ns > now_ns:
+                continue
+            if not orders and is_order_call(head.request):
                 continue
             rank = (min(waiting.request.priority for waiting in fifo), head.arrived)
             if rank[0] <= most and (best is None or rank < best[0]):
@@ -255,13 +312,15 @@ class Incoming:
     """The requests handed to the worker until it takes them into its queue, and how many
     it has not finished (module docstring). Any thread puts, and asks for the withdrawal
     of what was put back; the worker's thread takes them into its queue (`into`) and says
-    when one is finished."""
+    when one is finished. `post` puts a message on the loop's inbox (the answer of an
+    entry withdrawn, `WithdrawPlace`)."""
 
-    def __init__(self) -> None:
+    def __init__(self, post: Callable[[Message], None]) -> None:
         self._requests: queue.SimpleQueue[Request] = queue.SimpleQueue()
         self._lock = threading.Lock()
         self._unfinished = 0
         self._withdraw = threading.Event()
+        self._post = post
 
     @property
     def unfinished(self) -> int:
@@ -282,9 +341,9 @@ class Incoming:
 
     def into(self, waiting: WorkerQueue) -> list[Request]:
         """Put every request handed over since the last call into `waiting`, the worker's
-        queue, oldest first. When a withdrawal was asked for, first take every request put
-        back off `waiting` (`WorkerQueue.withdraw_put_back`), no longer unfinished; those
-        are returned."""
+        queue, oldest first; a `WithdrawPlace` is carried out instead (`_cancelled`). When
+        a withdrawal was asked for, first take every request put back off `waiting`
+        (`WorkerQueue.withdraw_put_back`), no longer unfinished; those are returned."""
         withdrawn: list[Request] = []
         if self._withdraw.is_set():
             self._withdraw.clear()
@@ -293,9 +352,22 @@ class Incoming:
                 self._unfinished -= len(withdrawn)
         while True:
             try:
-                waiting.put(self._requests.get_nowait())
+                request = self._requests.get_nowait()
             except queue.Empty:
                 return withdrawn
+            if isinstance(request, WithdrawPlace):
+                self._cancelled(waiting, request.place)
+            else:
+                waiting.put(request)
+
+    def _cancelled(self, waiting: WorkerQueue, place: PlaceRequest) -> None:
+        """Withdraw `place` while it waits in `waiting`, answered `NotSent(cancelled)`
+        before it stops counting (one the worker took already is left to its bind); the
+        withdrawal itself is done with either way."""
+        if waiting.remove(place):
+            self._post(NotSent(place, NotSentReason.CANCELLED, CANCELLED_WORDS))
+            self.finished()
+        self.finished()
 
     def finished(self) -> None:
         """The worker executed a request and did not put it back."""
@@ -304,6 +376,7 @@ class Incoming:
 
 
 __all__ = [
+    "CANCELLED_WORDS",
     "ENTRY_STALE_AFTER_S",
     "CancelOrphan",
     "Incoming",
@@ -316,8 +389,10 @@ __all__ = [
     "Request",
     "Settle",
     "StreamGap",
+    "WithdrawPlace",
     "WorkerQueue",
     "WorkerRequest",
+    "is_order_call",
     "is_stale",
     "order_key",
 ]

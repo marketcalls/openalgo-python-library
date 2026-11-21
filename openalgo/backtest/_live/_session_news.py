@@ -8,8 +8,10 @@ other clients' fills) go to `_session_feed`.
   mismatch: the strategy's entries are locked and a RECONCILE_MISMATCH alert sent.
 - `SendResult`: the venue map binds, rejects or waits; a refused placement is a REJECT
   alert, a queued one (semi-auto) an ERROR alert, an exit with no answer an ERROR alert.
-- `NotSent`: the venue map rejects an entry or refuses a modify; a stale or refused entry
-  is a REJECT alert.
+- `NotSent`: the venue map rejects an entry or refuses a modify; a stale or refused entry,
+  or one the order rate withdrew, is a REJECT alert.
+- `Throttled`: a request the order rate held back, the event `order_throttled` and an
+  ERROR alert once a session (`_order_throttle.throttled_news`).
 - `Settled`: the venue map applies the read's verdict.
 - `Resolutions`: bound (with the order's update, if any), not placed, or ambiguous (the
   strategy's entries locked, an ERROR alert): `_session_resolved`.
@@ -41,6 +43,7 @@ from typing import Any
 from ._fill_ledger import FillOutcome, FillResult, Increment
 from ._order_answers import Outcome
 from ._order_state import ENTRY_PURPOSES
+from ._order_throttle import throttled_news
 from ._session_feed import MARKET
 from ._session_records import fill_record
 from ._session_resolved import ResolutionNews, order_words
@@ -60,6 +63,7 @@ from .inbox import (
     Resolutions,
     SendResult,
     Settled,
+    Throttled,
     WorkerFailed,
 )
 
@@ -69,7 +73,7 @@ logger = logging.getLogger(LOGGER_NAME)
 #: decision 2: lock and alert, nothing sent to fix it).
 RECONCILE_LOCK = "reconciliation"
 #: Why a request was not sent, for the REJECT alert of an entry.
-_NOT_SENT_ENTRY = frozenset({NotSentReason.STALE, NotSentReason.REFUSED})
+_NOT_SENT_ENTRY = frozenset({NotSentReason.STALE, NotSentReason.REFUSED, NotSentReason.THROTTLED})
 
 
 class WorkerFailedError(Exception):
@@ -87,6 +91,7 @@ class News(ResolutionNews):
     def __init__(self, session: Any) -> None:
         self._session = session
         self._ambiguous_seen: set[str] = set()
+        self._throttle_alerted = False
 
     def take(self, message: Message) -> None:
         """Handle one message. Raises WorkerFailedError for `WorkerFailed`."""
@@ -282,6 +287,10 @@ class News(ResolutionNews):
                 f"{message.error}",
             )
 
+    def _throttled(self, message: Throttled) -> None:
+        alerted = self._throttle_alerted
+        self._throttle_alerted = throttled_news(self._session, message, alerted=alerted)
+
     def _settled(self, message: Settled) -> None:
         request = message.request
         trader = self._session.trader_named(request.intent.strategy)
@@ -334,6 +343,7 @@ _HANDLERS: Mapping[type, Any] = MappingProxyType(
         OrderNews: News._news,
         SendResult: News._sent,
         NotSent: News._not_sent,
+        Throttled: News._throttled,
         Settled: News._settled,
         Resolutions: News._resolutions,
         HeldFills: News._held_fills,

@@ -15,7 +15,7 @@
 //!   is -6,000 - 3,000 = -9,000, a breach; the NSE strategy's run has ended, and the MCX
 //!   strategy exits at the next open, 20:41, at 5,970.
 
-use crate::engine::{AccountBreach, RunOutput};
+use crate::engine::{AccountBreach, AccountRule, RunOutput};
 use crate::model::{Product, Side};
 
 use super::super::{FundOutput, Pool};
@@ -78,6 +78,7 @@ fn the_same_day_losses_of_both_exchanges_breach_at_an_mcx_evening_round() {
     let breach = AccountBreach {
         at,
         day: july(7),
+        rule: AccountRule::Loss,
         limit_rupees: LIMIT,
         measure_rupees: -9_000.0,
     };

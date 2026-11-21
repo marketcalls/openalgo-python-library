@@ -111,7 +111,8 @@ impl Engine {
         Ok(())
     }
 
-    /// The fill hook: called by `execute_fill` after every fill is recorded.
+    /// The fill hook: called by `execute_fill` after every fill is recorded. A fill of an
+    /// entry the trade count waits on keeps it counted for good (`daily_caps`).
     pub(super) fn risk_after_fill(
         &mut self,
         stamp: EventStamp,
@@ -119,6 +120,9 @@ impl Engine {
         fill: &Fill,
         effect: &FillEffect,
     ) {
+        if let Some(order) = fill.order {
+            self.risk.trades.filled(order);
+        }
         let facts = FillFacts {
             slice: stamp.slice as usize,
             key,

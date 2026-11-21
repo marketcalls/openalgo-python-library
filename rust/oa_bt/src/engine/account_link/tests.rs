@@ -19,6 +19,7 @@ use crate::sizing::{SizerSpec, SkipReason};
 fn link(room_rupees: f64) -> AccountLink {
     AccountLink {
         room_rupees: Some(room_rupees),
+        trades: None,
     }
 }
 

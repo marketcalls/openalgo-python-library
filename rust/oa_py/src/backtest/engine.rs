@@ -306,6 +306,18 @@ impl NativeEngine {
         Ok(self.engine()?.daily_loss_measure())
     }
 
+    /// The entries the strategy has counted on its session day (`session`).
+    fn trades_today(&self) -> PyResult<u32> {
+        Ok(self.engine()?.trades_today())
+    }
+
+    /// The account's trade cap (None for none) and the other strategies' entries of the
+    /// day, for a live session's next decisions (`session`).
+    #[pyo3(signature = (limit, others))]
+    fn set_account_trades(&mut self, limit: Option<u32>, others: u32) -> PyResult<()> {
+        session::set_account_trades(self.engine_mut()?, limit, others)
+    }
+
     /// End a live session where it stands (`session`); the "finished" pause tuple.
     fn stop_session<'py>(&mut self, py: Python<'py>) -> PyResult<tables::PauseTuple<'py>> {
         let events = self.engine_mut()?.stop_session().map_err(engine_error)?;

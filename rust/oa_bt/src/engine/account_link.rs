@@ -30,15 +30,23 @@
 //!   `account_margin` at its submission or, for the engine default sized at the fill, at
 //!   the fill (`sizing`).
 //!
-//! The account's daily loss limit reaches the engine as a breach (`account_breach`); the
-//! entry lock it sets is kept here with the link (`AccountDesk`). A live session has no
-//! link: its account is the broker's, whose margin check and funds are the session's
-//! (`cap_sizing_equity`).
+//! - **The trade cap.** The link also carries the account's trade cap
+//!   (`account_max_trades_per_day`) and the entries the other strategies have made on the
+//!   session day (`rms::AccountTrades`), which the account's trade gate counts with the
+//!   engine's own (`daily_caps`; 18-multi-strategy 2.5a rule 7). It is set in either pool.
+//!
+//! The account's daily loss limit and daily profit target reach the engine as a breach
+//! (`account_breach`); the entry lock it sets is kept here with the link (`AccountDesk`).
+//! A live session has no room: its account is the broker's, whose margin check and funds
+//! are the session's (`cap_sizing_equity`); it sets the account's trade cap with
+//! `set_account_trades`, from the session's other strategies.
 
 use crate::exec::{OrderId, RejectCode};
 use crate::model::Day;
+use crate::rms::AccountTrades;
 use crate::sizing::SizingContext;
 
+use super::account_breach::AccountRule;
 use super::clock::SliceInfo;
 use super::error::KernelError;
 use super::event::EventStamp;
@@ -53,6 +61,9 @@ pub struct AccountLink {
     /// engine's own; `None` when the engine is not linked to an account (a run alone, a
     /// separate pool), which changes nothing.
     pub room_rupees: Option<f64>,
+    /// The account's trade cap and the other strategies' entries of the session day;
+    /// `None` for no account trade cap.
+    pub trades: Option<AccountTrades>,
 }
 
 /// What the account of a portfolio run has told one engine: its link, and the entry lock
@@ -60,14 +71,16 @@ pub struct AccountLink {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct AccountDesk {
     pub(super) link: AccountLink,
-    /// The IST session day the account's daily loss limit locks entries for.
-    pub(super) locked_day: Option<Day>,
+    /// The IST session day an account breach locks entries for, and the rule that locked
+    /// them (its reject code).
+    pub(super) locked: Option<(Day, AccountRule)>,
     /// The breaches the engine records at its next step 6 or step 1, in the order the
     /// fund found them (`account_breach`).
     pub(super) waiting: Vec<super::account_breach::AccountBreach>,
-    /// The working orders a breach cancelled, with the stamp of each cancellation, until
-    /// the fund takes them for its record of refused orders (`fund_view`).
-    pub(super) cancels: Vec<(EventStamp, OrderId)>,
+    /// The working orders a breach cancelled, with the stamp of each cancellation and the
+    /// rule of the breach, until the fund takes them for its record of refused orders
+    /// (`fund_view`).
+    pub(super) cancels: Vec<(EventStamp, OrderId, AccountRule)>,
 }
 
 impl Engine {
@@ -75,7 +88,8 @@ impl Engine {
     /// `AccountLink::default()` unlinks it.
     ///
     /// Errors: `InvalidConfig` (field `account_link`) for a room that is not a finite
-    /// number of rupees, and for a live session, whose account is the broker's.
+    /// number of rupees, for a room in a live session, whose account is the broker's, and
+    /// for an account trade cap of 0.
     pub fn set_account_link(&mut self, link: AccountLink) -> Result<(), KernelError> {
         let refuse = |reason: &str| KernelError::InvalidConfig {
             field: "account_link",
@@ -90,7 +104,25 @@ impl Engine {
                  (cap_sizing_equity) stand for the account",
             ));
         }
+        self.set_account_trades(link.trades)?;
         self.account.link = link;
+        Ok(())
+    }
+
+    /// Set the account's trade cap for the engine's next decisions (module docs): the cap
+    /// and the other strategies' entries of the session day; `None` for no account trade
+    /// cap. A live session sets it before each of its strategy's decisions, as the fund
+    /// does before each turn of a portfolio run.
+    ///
+    /// Errors: `InvalidConfig` (field `account_max_trades_per_day`) for a cap of 0.
+    pub fn set_account_trades(&mut self, trades: Option<AccountTrades>) -> Result<(), KernelError> {
+        if trades.is_some_and(|trades| trades.limit == 0) {
+            return Err(KernelError::InvalidConfig {
+                field: "account_max_trades_per_day",
+                reason: "give the account's trade cap as at least 1, or None for none".to_string(),
+            });
+        }
+        self.account.link.trades = trades;
         Ok(())
     }
 
@@ -124,12 +156,13 @@ impl Engine {
 
     /// The account's entry gate for an order that opens or adds, decided in `slice`.
     ///
-    /// Errors: `AccountLossGate` in a slice of the session day an account breach locked.
+    /// Errors: in a slice of the session day an account breach locked, the rule's code:
+    /// `AccountLossGate` for the daily loss limit, `AccountProfitGate` for the daily
+    /// profit target.
     pub(super) fn account_entry_gate(&self, slice: &SliceInfo) -> Result<(), RejectCode> {
-        if self.account.locked_day == Some(slice.day) {
-            Err(RejectCode::AccountLossGate)
-        } else {
-            Ok(())
+        match self.account.locked {
+            Some((day, rule)) if day == slice.day => Err(rule.gate()),
+            _ => Ok(()),
         }
     }
 }

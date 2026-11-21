@@ -7,8 +7,9 @@ the one kernel call it calls for.
   (`intent_fields`); a "modify" a `ModifyRequest` with the `modifyorder` fields; a
   "cancel" a `CancelRequest`. A modify or cancel of an order whose placement is not bound
   yet waits here until it is, and is dropped when the placement ends rejected or not
-  placed (the kernel ends the order then). Each request carries its priority
-  (`_venue_requests`).
+  placed (the kernel ends the order then); the cancel of an entry or add not answered yet
+  also asks the worker to withdraw its placement (`_venue_withdraw`). Each request
+  carries its priority (`_venue_requests`).
 - **One result per Modify** (R8). A modify is pending from its command until exactly one
   of: `apply_modify` (an accepted answer, a row that shows its terms, or an order update
   that shows its quantity, which the kernel needs before fills beyond the old units),
@@ -18,8 +19,7 @@ the one kernel call it calls for.
 - **Cancels.** An accepted cancel changes nothing in the kernel: the CANCELLED news ends
   the order, since a fill may come first. A cancel the row shows still working is
   `apply_cancel_refused`, after which the session sends it again (4.5); so is one the
-  exit guard held and withdraws, never sent (`withdraw_cancel`), which waits for its
-  answer again if the guard holds it again (`restore_cancel`).
+  exit guard held and withdraws, never sent (`_venue_withdraw`).
 - **Fills** go through each order's `FillLedger`, the one door (`news`).
 
 The kernel is always waiting when these run (2.5), so a refusal of "order_ended" or
@@ -58,6 +58,8 @@ from ._venue_requests import (
     terms_of,
 )
 from ._venue_saved import RestoredOrders, VenueOrder
+from ._venue_withdraw import Withdrawals
+from ._worker_queue import WithdrawPlace
 from .inbox import NotSent, NotSentReason, SendResult, Settled
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -69,9 +71,10 @@ HELD_REASONS = frozenset({NotSentReason.HELD, NotSentReason.SILENT})
 RACES = frozenset({"order_ended", "not_pending"})
 
 
-class VenueMap(RestoredOrders):
+class VenueMap(RestoredOrders, Withdrawals):
     """The venue map of `engine` (an `Engine.session`), the session of strategy `strategy`
-    (module docstring); a restart saves and rebuilds it (`_venue_saved.RestoredOrders`).
+    (module docstring); a restart saves and rebuilds it (`_venue_saved.RestoredOrders`),
+    and the session withdraws what it will not send (`_venue_withdraw.Withdrawals`).
 
     `instruments` are the engine's in registration order, each with `symbol`, `exchange`
     and `tick_size` (rupees: the preflight's facts); `session` is the journal session
@@ -151,12 +154,13 @@ class VenueMap(RestoredOrders):
 
     # ----- commands to requests --------------------------------------------------------
 
-    def requests(self, commands: Iterable[Mapping[str, Any]]) -> list[OrderRequest]:
+    def requests(self, commands: Iterable[Mapping[str, Any]]) -> list[OrderRequest | WithdrawPlace]:
         """The requests for the worker of `engine.take_commands()`'s dicts, in order; a
-        modify or cancel of an order not bound yet waits for the bind. Raises LiveError
-        for a command this session cannot send (`intent_fields`), a modify or cancel of an
+        modify or cancel of an order not bound yet waits for the bind (a cancel of an
+        entry or add may withdraw its placement: `withdrawal`). Raises LiveError for a
+        command this session cannot send (`intent_fields`), a modify or cancel of an
         order this map did not place, or an unknown command."""
-        made: list[OrderRequest] = []
+        made: list[OrderRequest | WithdrawPlace] = []
         for command in commands:
             kind = command.get("command")
             if kind == "place":
@@ -186,14 +190,14 @@ class VenueMap(RestoredOrders):
         self._issued[request.request_id] = request
         return request
 
-    def _change(self, command: Mapping[str, Any]) -> list[OrderRequest]:
+    def _change(self, command: Mapping[str, Any]) -> list[OrderRequest | WithdrawPlace]:
         order = self._order(int(command["order_id"]))
         if order.ended:
             logger.debug("a %s of ended order %s is dropped", command["command"], order.intent)
             return []
         if not order.order_id:
             order.deferred.append(command)
-            return []
+            return list(self.withdrawal(command))
         return [self._request(order, command)]
 
     def _request(self, order: VenueOrder, command: Mapping[str, Any]) -> OrderRequest:
@@ -237,7 +241,8 @@ class VenueMap(RestoredOrders):
 
     def not_sent(self, message: NotSent) -> Handled:
         """Take a request the worker did not send (2.5 A.4): one put back waits; an entry
-        or add is rejected; a modify gets `apply_modify_refused`; a stop or exit after the
+        or add is rejected, or cancelled when it was withdrawn for the kernel's cancel
+        (`cancelled_place`); a modify gets `apply_modify_refused`; a stop or exit after the
         guard locked, and a cancel, change nothing (a refused cancel is settled by the
         worker's read); any other stop not sent is placed again once (R3), an exit
         rejected."""
@@ -250,6 +255,8 @@ class VenueMap(RestoredOrders):
         order = self._order(request.kernel_order)
         if isinstance(request, ModifyRequest):
             return self._modify_result(order, request, confirmed=False)
+        if message.reason is NotSentReason.CANCELLED:
+            return self.cancelled_place(request.kernel_order)
         if isinstance(request, PlaceRequest):
             entry = request.intent.purpose in ENTRY_PURPOSES
             if entry or message.reason is not NotSentReason.LOCKED:
@@ -280,29 +287,6 @@ class VenueMap(RestoredOrders):
         if self._answer(self._engine.apply_cancel_refused, request.kernel_order):
             return Handled(Applied.CANCEL_REFUSED)
         return Handled(Applied.NOTHING)
-
-    def withdraw_cancel(self, request: CancelRequest) -> bool:
-        """A cancel this map made that the session will never send (the exit guard held it
-        and withdraws it: 16-session-design 3.3 step 5 "As built", round 7): it waits for
-        no answer, and the kernel takes it as refused (`apply_cancel_refused`), so the
-        order works on and the kernel may fit it to the position. True when the kernel
-        took it. Raises LiveError for an order this map did not place."""
-        self._issued.pop(request.request_id, None)
-        order = self._order(request.kernel_order)
-        if order.cancel is not None and order.cancel.request_id == request.request_id:
-            order.cancel = None
-        return self._answer(self._engine.apply_cancel_refused, request.kernel_order)
-
-    def restore_cancel(self, request: CancelRequest) -> None:
-        """A cancel `withdraw_cancel` withdrew that the session holds again (the exit
-        guard puts it back when the adoption it made way for is refused): it waits for its
-        answer again, should it ever be sent. The kernel took it as refused, so the order
-        works on there as at the broker, where it was never sent; a later refusal of it is
-        the "not_pending" race. Raises LiveError for an order this map did not place."""
-        order = self._order(request.kernel_order)
-        self._issued[request.request_id] = request
-        if order.cancel is None:
-            order.cancel = request
 
     def resolved(self, resolution: Resolution) -> Handled:
         """Take an unbound placement the order book settled (2.5 A.6): BOUND binds it (the

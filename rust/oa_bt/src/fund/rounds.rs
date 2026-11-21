@@ -2,8 +2,10 @@
 //! turn at a time, so that a pause handed to a strategy's driver resumes exactly where it
 //! stopped.
 //!
-//! Every turn of an engine is the same: in a shared pool, link the engine to the account
-//! from the ledger (but in phase S, whose step 8 opens nothing); check that the engine
+//! Every turn of an engine is the same: in a shared pool, or with an account trade cap,
+//! link the engine to the account from the ledger (but in phase S, whose step 8 opens
+//! nothing): its room, and the other engines' entries of the turn's session day; check
+//! that the engine
 //! stands where the fund left it; run its phase; then the ledger takes the engine's
 //! figures and the record reads the orders the account refused or ended. A turn whose
 //! phase pauses for a strategy's driver ends when the fund is advanced again, after the
@@ -13,6 +15,7 @@ use crate::engine::kernel::Phase;
 use crate::engine::signals::decide_signals;
 use crate::engine::{AccountLink, Engine, KernelError, Pause, SliceInfo};
 use crate::model::{Day, TsNanos};
+use crate::rms::AccountTrades;
 
 use super::rules::account_measure;
 use super::timeline::{self, Cursor, Instant};
@@ -122,7 +125,7 @@ impl Fund {
             return Err(FundError::OutOfStep { strategy });
         };
         let engine = &mut *engines[strategy];
-        self.link(strategy, engine)?;
+        self.link(strategy, engine, slice.day)?;
         let failed = of_engine(strategy);
         if paused {
             expect(strategy, engine, Phase::Timers(slice))?;
@@ -158,7 +161,7 @@ impl Fund {
         };
         let slice = self.open_slice(strategy)?;
         let engine = &mut *engines[strategy];
-        self.link(strategy, engine)?;
+        self.link(strategy, engine, slice.day)?;
         expect(strategy, engine, Phase::Opened(slice))?;
         engine.levels_phase(&slice).map_err(of_engine(strategy))?;
         self.after_turn(strategy, engine);
@@ -204,7 +207,7 @@ impl Fund {
         if paused {
             expect(strategy, engine, Phase::Paused(slice))?;
         } else {
-            self.link(strategy, engine)?;
+            self.link(strategy, engine, slice.day)?;
             expect(strategy, engine, Phase::Opened(slice))?;
             if let Some(pause) = engine.decision_phase(&slice) {
                 if !self.decide_in_rust(strategy, engine, &pause)? {
@@ -294,13 +297,21 @@ impl Fund {
         }
     }
 
-    /// In a shared pool, link the engine to the account for its turn (module docs).
-    fn link(&self, strategy: usize, engine: &mut Engine) -> Result<(), FundError> {
-        if self.pool == Pool::Separate {
+    /// Link the engine to the account for its turn on session day `day` (module docs): in
+    /// a shared pool its room, and with an account trade cap the other engines' entries of
+    /// that day. A separate pool with no trade cap links nothing.
+    fn link(&self, strategy: usize, engine: &mut Engine, day: Day) -> Result<(), FundError> {
+        let room_rupees = (self.pool == Pool::Shared).then(|| self.book.room_rupees(strategy));
+        let trades = self.trade_cap.map(|limit| AccountTrades {
+            limit,
+            others: self.book.trades_of_others(strategy, day),
+        });
+        if room_rupees.is_none() && trades.is_none() {
             return Ok(());
         }
         let link = AccountLink {
-            room_rupees: Some(self.book.room_rupees(strategy)),
+            room_rupees,
+            trades,
         };
         engine.set_account_link(link).map_err(of_engine(strategy))
     }

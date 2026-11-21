@@ -37,7 +37,12 @@ from ._portfolio_symbols import (
     own_margins,
     refuse_one_frame,
 )
-from ._reject_reasons import ACCOUNT_LOSS_GATE, ACCOUNT_MARGIN
+from ._reject_reasons import (
+    ACCOUNT_LOSS_GATE,
+    ACCOUNT_MARGIN,
+    ACCOUNT_PROFIT_GATE,
+    ACCOUNT_TRADE_LIMIT,
+)
 from ._rejection_notice import announce_unplaced
 from ._rerun import PortfolioMember
 from ._run_check import check_run
@@ -142,7 +147,8 @@ def _refusals(records: Mapping[str, Any], index: int, reason: str) -> int:
 
 def member_line(plan: PortfolioPlan, index: int, records: Mapping[str, Any]) -> str:
     """The Assumptions line of strategy `index`'s own result: the account it ran in, the
-    strategies it shared it with, and the orders the account refused it."""
+    strategies it shared it with, and the orders the account refused it (for its margin,
+    and for each of its daily rules that is set)."""
     account = plan.account
     others = [name for position, name in enumerate(plan.names) if position != index]
     beside = f" with {spoken_list(others)}" if others else " alone"
@@ -157,11 +163,23 @@ def member_line(plan: PortfolioPlan, index: int, records: Mapping[str, Any]) -> 
             f"ran in a shared account of {rupees_text(records['account_capital'])}{beside}; "
             f"{counted(refused, 'order')} refused for the account's margin"
         )
-    if account.account_max_daily_loss is not None:
-        gated = _refusals(records, index, ACCOUNT_LOSS_GATE)
+    rules = (
+        (account.account_max_daily_loss, "daily loss limit", ACCOUNT_LOSS_GATE),
+        (account.account_daily_profit_target, "daily profit target", ACCOUNT_PROFIT_GATE),
+    )
+    for amount, what, code in rules:
+        if amount is not None:
+            gated = _refusals(records, index, code)
+            line += (
+                f"; the account's {what} {rupees_text(amount)} refused "
+                f"{counted(gated, 'entry', 'entries')}"
+            )
+    cap = account.account_max_trades_per_day
+    if cap is not None:
+        capped = _refusals(records, index, ACCOUNT_TRADE_LIMIT)
         line += (
-            f"; the account's daily loss limit {rupees_text(account.account_max_daily_loss)} "
-            f"refused {counted(gated, 'entry', 'entries')}"
+            f"; the account's cap of {counted(cap, 'entry', 'entries')} a day refused "
+            f"{counted(capped, 'entry', 'entries')}"
         )
     return line
 

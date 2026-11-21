@@ -251,7 +251,7 @@ def test_the_account_limit_exits_every_strategy_and_is_recorded_once():
     engines = [engine("SBIN", 100_000.0, falling) for _ in range(2)]
     outputs, records, _ = in_fund(engines, [first, second], shared(limit=5_000.0))
     at = close_of(10)
-    assert records["breaches"] == [(at, to_day(DAY), 5_000.0, -5_000.0)]
+    assert records["breaches"] == [(at, to_day(DAY), 5_000.0, -5_000.0, "account_loss")]
     for tables in outputs:
         assert tables["trades"]["exit_reason"] == ["account_loss_limit"]
         assert tables["trades"]["exit_price_rupees"] == [95.0]
@@ -342,3 +342,49 @@ def test_a_fund_finishes_once_after_its_end():
     assert fund.finish()["account"]["ts"].dtype == np.int64
     with pytest.raises(native_attr("NativeEngineError"), match="already finished"):
         fund.finish()
+
+
+def test_advancing_a_finished_fund_after_its_engines_finished_raises_the_funds_finished_error():
+    # Each driver finishes its engine once the fund has returned None; a later advance is
+    # the fund's finished error, not the error of an engine finished early.
+    engines = two()
+    fund = native_attr("Fund")(engines, ["SbinTrend", "InfyTrend"], shared())
+    while fund.advance() is not None:
+        pass
+    for target in engines:
+        target.finish()
+    finished = "the portfolio run has finished; nothing to advance"
+    with pytest.raises(native_attr("NativeEngineError"), match=finished):
+        fund.advance()
+
+
+def test_the_accounts_profit_target_exits_every_strategy_and_is_recorded_with_its_rule():
+    # SBIN flat at 100.00 to 09:20, then 105.00; both strategies hold 100 from 09:16: at
+    # the round closing at 09:21 each is up 500, the account 1,000, its target. Both exit
+    # at the next open at 105.00, reason account_profit_target.
+    rising = lambda k: (100.0,) * 4 if k < 5 else (105.0,) * 4  # noqa: E731
+    buy = {close_of(0): [order("BUY", 100.0)]}
+    engines = [engine("SBIN", 100_000.0, rising) for _ in range(2)]
+    account = shared() | {"account_daily_profit_target": 1_000.0}
+    outputs, records, _ = in_fund(engines, [buy, buy], account)
+    assert records["breaches"] == [(close_of(5), to_day(DAY), 1_000.0, 1_000.0, "account_profit")]
+    for tables in outputs:
+        assert tables["trades"]["exit_reason"] == ["account_profit_target"]
+        assert tables["trades"]["exit_price_rupees"] == [105.0]
+
+
+def test_the_accounts_trade_cap_refuses_the_entry_past_it_with_its_code():
+    # A cap of 2 entries: each strategy enters at 09:16 (one entry each), the first exits
+    # at 09:18 and enters again at 09:20, which the cap refuses.
+    first = {
+        close_of(0): [order("BUY", 100.0)],
+        close_of(2): [exit_all("SELL")],
+        close_of(4): [order("BUY", 100.0)],
+    }
+    second = {close_of(0): [order("BUY", 100.0)]}
+    engines = [engine("SBIN", 100_000.0, flat(100.0)) for _ in range(2)]
+    account = shared() | {"account_max_trades_per_day": 2}
+    outputs, records, _ = in_fund(engines, [first, second], account)
+    assert records["refused"]["reason"] == ["account_trade_limit"]
+    assert records["refused"]["strategy"] == [0]
+    assert outputs[0]["orders"]["reject_code"] == [None, None, "account_trade_limit"]

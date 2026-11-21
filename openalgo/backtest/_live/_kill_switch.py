@@ -78,9 +78,11 @@ logger = logging.getLogger(LOGGER_NAME)
 
 #: The kill switch fired by the account's daily loss limit (16-session-design 6.3).
 ACCOUNT_LOSS = "account_loss"
+#: The kill switch fired by the account's daily profit target (18-multi-strategy 2.5a).
+ACCOUNT_PROFIT = "account_profit"
 #: The reasons the kill switch takes, each one of the kernel's exit reasons
-#: (`RISK_EXIT_REASONS` of the binding): the account's daily loss limit is its only caller.
-KILL_REASONS = (ACCOUNT_LOSS,)
+#: (`RISK_EXIT_REASONS` of the binding): the account's daily rules are its only callers.
+KILL_REASONS = (ACCOUNT_LOSS, ACCOUNT_PROFIT)
 #: Seconds the kill switch waits for the cancels of the strategy's entries before it
 #: exits what the strategy holds: as the safe stop waits for its last words
 #: (`_session_stop.SAFE_STOP_STATE_WAIT_S`).
@@ -307,6 +309,7 @@ class KillSwitch:
 
 __all__ = [
     "ACCOUNT_LOSS",
+    "ACCOUNT_PROFIT",
     "KILL_CANCEL_WAIT_S",
     "KILL_DISAGREEMENTS_ALERTED",
     "KILL_READ_BACKOFF_S",

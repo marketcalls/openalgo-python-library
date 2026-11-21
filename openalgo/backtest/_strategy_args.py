@@ -13,7 +13,9 @@ strategy's own values, as `bt.backtest` takes them.
 The account's settings (`ACCOUNT_SETTINGS`) are one value for all the strategies of a call
 together. They describe the account of a list of strategies: a run of one strategy leaves
 them at their defaults (`refuse_account_settings`), so its figures are those it has always
-had. Amounts are rupees.
+had. They include the account's daily limits of 18-multi-strategy 2.5a,
+`account_max_trades_per_day` (a whole number of entries of every strategy together in one
+session day) and `account_daily_profit_target`. Amounts are rupees.
 """
 
 from __future__ import annotations
@@ -29,6 +31,8 @@ from .errors import ConfigError
 from .report._format import indian_digits
 from .strategy import Strategy
 
+#: The daily limits of a strategy (18-multi-strategy 2.5a), per strategy in both verbs.
+DAILY_LIMITS = ("max_trades_per_day", "daily_profit_target", "max_order_value")
 #: The settings a call takes per strategy: one value for every strategy, or a dict by
 #: strategy class name (18-multi-strategy 1.1).
 PER_STRATEGY = (
@@ -44,13 +48,20 @@ PER_STRATEGY = (
     "entry_from",
     "entry_until",
     "square_off",
+    *DAILY_LIMITS,
 )
 #: The pool of a portfolio run when none is given: one account the strategies share.
 SHARED_POOL = "shared"
 #: The account's settings of a list of strategies and their defaults, which a run of one
 #: strategy keeps (the defaults of `bt.backtest`'s signature).
 ACCOUNT_SETTINGS = MappingProxyType(
-    {"pool": SHARED_POOL, "account_capital": None, "account_max_daily_loss": None}
+    {
+        "pool": SHARED_POOL,
+        "account_capital": None,
+        "account_max_daily_loss": None,
+        "account_max_trades_per_day": None,
+        "account_daily_profit_target": None,
+    }
 )
 #: Why a missing name is refused, as the message says it: `capital` must be given for
 #: each strategy in every call; a backtest's other settings name every strategy or none.
@@ -138,21 +149,26 @@ def refuse_account_settings(args: Mapping[str, Any]) -> None:
         names = ", ".join(f"{name}=" for name in given)
         raise ConfigError(
             f"{names} set the account of a list of strategies, as in bt.backtest([SbinTrend, "
-            "SbinBreakout], ...); a single strategy's own daily loss limit is max_daily_loss="
+            "SbinBreakout], ...); a single strategy's own daily limits are max_daily_loss=, "
+            "max_trades_per_day= and daily_profit_target="
         )
 
 
 @dataclass(frozen=True)
 class Account:
     """The account of a portfolio run, checked: `pool` ("shared" or "separate"),
-    `account_capital` in rupees (None for the sum of the strategies' capitals) and
+    `account_capital` in rupees (None for the sum of the strategies' capitals),
     `account_max_daily_loss` in rupees (None for no limit); `capitals` are the strategies'
-    capitals in rupees, in call order."""
+    capitals in rupees, in call order; `account_max_trades_per_day` the entries of every
+    strategy together in one session day and `account_daily_profit_target` in rupees
+    (each None for none)."""
 
     pool: str
     account_capital: float | None
     account_max_daily_loss: float | None
     capitals: tuple[float, ...]
+    account_max_trades_per_day: int | None = None
+    account_daily_profit_target: float | None = None
 
     def fund_config(self) -> dict[str, Any]:
         """The config dict the native `Fund` reads."""
@@ -160,15 +176,18 @@ class Account:
             "pool": self.pool,
             "account_capital": self.account_capital,
             "account_max_daily_loss": self.account_max_daily_loss,
+            "account_max_trades_per_day": self.account_max_trades_per_day,
+            "account_daily_profit_target": self.account_daily_profit_target,
         }
 
 
 def account_settings(args: Mapping[str, Any], capitals: Sequence[float]) -> Account:
     """The account of a list of strategies from the run arguments `args` and the
     strategies' `capitals` (positive rupees, call order). Raises ConfigError for a pool
-    other than those the engine runs, an account capital or daily loss limit that is not a
-    positive amount of rupees (a number or bt.rupees(x)), and, with pool="separate", an
-    account capital other than the sum of the capitals."""
+    other than those the engine runs, an account capital, daily loss limit or daily profit
+    target that is not a positive amount of rupees (a number or bt.rupees(x)), a trade cap
+    that is not a whole number of at least 1, and, with pool="separate", an account
+    capital other than the sum of the capitals."""
     pools = tuple(native_attr("POOLS"))
     pool = args.get("pool", SHARED_POOL)
     if pool not in pools:
@@ -186,17 +205,39 @@ def account_settings(args: Mapping[str, Any], capitals: Sequence[float]) -> Acco
             f"sum, Rs {indian_digits(total)}: leave account_capital out, or give "
             f"pool='shared' for an account of Rs {indian_digits(funds)}"
         )
-    return Account(pool, funds, limit, tuple(float(capital) for capital in capitals))
+    return Account(
+        pool,
+        funds,
+        limit,
+        tuple(float(capital) for capital in capitals),
+        account_trade_cap(args.get("account_max_trades_per_day")),
+        rupees_amount(args.get("account_daily_profit_target"), "account_daily_profit_target"),
+    )
+
+
+def account_trade_cap(value: Any) -> int | None:
+    """`account_max_trades_per_day` checked: None, or a whole number of entries of every
+    strategy together in one session day, at least 1. Raises ConfigError otherwise."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ConfigError(
+            "account_max_trades_per_day takes a whole number of entries of every strategy "
+            f"together in one session day, at least 1, or None, not {value!r}"
+        )
+    return value
 
 
 __all__ = [
     "ACCOUNT_SETTINGS",
+    "DAILY_LIMITS",
     "EVERY_STRATEGY",
     "MANDATORY",
     "PER_STRATEGY",
     "SHARED_POOL",
     "Account",
     "account_settings",
+    "account_trade_cap",
     "by_name",
     "class_names",
     "params_by_name",

@@ -162,6 +162,9 @@ class Applied(enum.Enum):
     #: `apply_cancel_refused`: the order works on, and the session sends the cancel again
     #: after its retry wait (4.5).
     CANCEL_REFUSED = "cancel_refused"
+    #: `apply_cancel`: an entry or add the kernel cancelled was withdrawn before it was
+    #: sent (`_venue_withdraw`).
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True)

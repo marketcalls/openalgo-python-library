@@ -12,7 +12,7 @@ use crate::engine::account_test_kit::{
     open_and_level, pause_at, run_to_end, slice, Setup, MINUTES_PER_SESSION,
 };
 use crate::engine::venue_test_kit::holding_100;
-use crate::engine::{AccountBreach, Engine, Event, KernelError, Step, Submission};
+use crate::engine::{AccountBreach, AccountRule, Engine, Event, KernelError, Step, Submission};
 use crate::exec::{FillAt, OrderId, OrderRequest, OrderType, RejectCode};
 use crate::model::{Day, Product, Side};
 use crate::rms::{RiskEvent, RiskEventName, RiskScope, StrategyRiskConfig};
@@ -28,6 +28,7 @@ fn breach(at: i64, day: Day) -> AccountBreach {
     AccountBreach {
         at,
         day,
+        rule: AccountRule::Loss,
         limit_rupees: LIMIT_RUPEES,
         measure_rupees: MEASURE_RUPEES,
     }

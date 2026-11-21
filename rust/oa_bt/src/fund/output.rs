@@ -6,7 +6,7 @@
 //! Kernel order ids and event stamps are each engine's own (every engine numbers its
 //! orders from o1), so a refused order is named by its strategy and its id together.
 
-use crate::engine::{AccountBreach, Event, EventStamp, OrderEventKind, SkippedEntry};
+use crate::engine::{AccountBreach, AccountRule, Event, EventStamp, OrderEventKind, SkippedEntry};
 use crate::exec::{OrderId, RejectCode};
 use crate::model::{Day, TsNanos};
 
@@ -41,22 +41,38 @@ pub enum Refusal {
     /// Cancelled working by a breach of the account's daily loss limit (the lock
     /// `account_loss`).
     AccountLoss,
+    /// Rejected `account_profit_gate`: entries were locked by the account's daily profit
+    /// target (18-multi-strategy 2.5a rule 6).
+    AccountProfitGate,
+    /// Cancelled working when the account's daily profit target was reached (the lock
+    /// `account_profit`).
+    AccountProfit,
+    /// Rejected `account_trade_limit`: the account's entries of the day had reached its
+    /// trade cap (2.5a rule 7).
+    AccountTradeLimit,
 }
 
 impl Refusal {
     /// Every refusal, in the order of their codes.
-    pub const ALL: [Refusal; 3] = [
+    pub const ALL: [Refusal; 6] = [
         Refusal::AccountMargin,
         Refusal::AccountLossGate,
         Refusal::AccountLoss,
+        Refusal::AccountProfitGate,
+        Refusal::AccountProfit,
+        Refusal::AccountTradeLimit,
     ];
 
-    /// The reason's code: the reject code of a rejection, `account_loss` for a cancel.
+    /// The reason's code: the reject code of a rejection, the lock's name (`account_loss`,
+    /// `account_profit`) for a cancel.
     pub fn code(self) -> &'static str {
         match self {
             Refusal::AccountMargin => RejectCode::AccountMargin.code(),
             Refusal::AccountLossGate => RejectCode::AccountLossGate.code(),
-            Refusal::AccountLoss => "account_loss",
+            Refusal::AccountLoss => AccountRule::Loss.code(),
+            Refusal::AccountProfitGate => RejectCode::AccountProfitGate.code(),
+            Refusal::AccountProfit => AccountRule::Profit.code(),
+            Refusal::AccountTradeLimit => RejectCode::AccountTradeLimit.code(),
         }
     }
 
@@ -65,7 +81,17 @@ impl Refusal {
         match code {
             RejectCode::AccountMargin => Some(Refusal::AccountMargin),
             RejectCode::AccountLossGate => Some(Refusal::AccountLossGate),
+            RejectCode::AccountProfitGate => Some(Refusal::AccountProfitGate),
+            RejectCode::AccountTradeLimit => Some(Refusal::AccountTradeLimit),
             _ => None,
+        }
+    }
+
+    /// The refusal of a working order a breach of `rule` cancelled.
+    fn of_cancel(rule: AccountRule) -> Refusal {
+        match rule {
+            AccountRule::Loss => Refusal::AccountLoss,
+            AccountRule::Profit => Refusal::AccountProfit,
         }
     }
 }
@@ -90,7 +116,8 @@ pub struct FundOutput {
     pub account_capital_rupees: f64,
     /// The account's row of every round, in round order.
     pub account: AccountRows,
-    /// Every breach of the account's daily loss limit, in time order.
+    /// Every breach of the account's daily loss limit, and every time its daily profit
+    /// target was reached, in time order.
     pub breaches: Vec<AccountBreach>,
     /// The orders the account refused or ended, in the order the fund read them: by turn,
     /// then a turn's rejections before its cancels.
@@ -131,18 +158,18 @@ impl Recorder {
         rows.daily_loss_rupees.push(daily_loss);
     }
 
-    /// A breach of the account's daily loss limit.
+    /// A breach of the account's daily loss limit, or its daily profit target reached.
     pub(super) fn breach(&mut self, breach: AccountBreach) {
         self.output.breaches.push(breach);
     }
 
     /// The account's rejections among `events` of strategy `strategy`, then the orders a
-    /// breach cancelled, `cancels`.
+    /// breach cancelled, `cancels`, each with its breach's rule.
     pub(super) fn refusals(
         &mut self,
         strategy: usize,
         events: &[Event],
-        cancels: Vec<(EventStamp, OrderId)>,
+        cancels: Vec<(EventStamp, OrderId, AccountRule)>,
     ) {
         for event in events {
             let Event::Order {
@@ -162,12 +189,14 @@ impl Recorder {
                 });
             }
         }
-        let cancelled = cancels.into_iter().map(|(stamp, order)| RefusedOrder {
-            strategy,
-            order,
-            stamp,
-            refusal: Refusal::AccountLoss,
-        });
+        let cancelled = cancels
+            .into_iter()
+            .map(|(stamp, order, rule)| RefusedOrder {
+                strategy,
+                order,
+                stamp,
+                refusal: Refusal::of_cancel(rule),
+            });
         self.output.refused.extend(cancelled);
     }
 

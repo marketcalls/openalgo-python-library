@@ -11,6 +11,7 @@ with a warning).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from .._calendar_convert import format_ist
@@ -37,10 +38,11 @@ def banner_lines(session: Any) -> list[str]:
     set): the guard's mode line first ("OpenAlgo is in LIVE mode: orders go to
     zerodha"), at a restart the start's number and each resumed leg with its stop, then
     the funds, each strategy's instrument, interval, capital, daily loss limit, entry
-    cut-off and square-off, each instrument's freeze cap (once), each instrument several
-    strategies share with its members and the rule on trading by hand (18-multi-strategy
-    4.11), the rule of broker-held stops (`STOPS_LINE`), the account's limit, the cost
-    model, the sandbox's difference, and the warnings, each once with one prefix."""
+    cut-off and square-off, and its daily limits when set (18-multi-strategy 2.5a), each
+    instrument's freeze cap (once), each instrument several strategies share with its
+    members and the rule on trading by hand (4.11), the rule of broker-held stops
+    (`STOPS_LINE`), the account's limits, the order rate, the cost model, the sandbox's
+    difference, and the warnings, each once with one prefix."""
     parts = session.parts
     spec, report = parts.spec, parts.report
     lines = [parts.banner, *restart_lines(session)]
@@ -58,6 +60,9 @@ def banner_lines(session: Any) -> list[str]:
             f"Rs {each.capital:,.2f}, daily loss limit Rs {each.max_daily_loss:,.2f}, "
             f"entries until {_clock(until)} IST, square-off {_clock(trader.square_off_ns)} IST"
         )
+        limits = daily_limit_words(each.plan.risk)
+        if limits:
+            lines.append(f"{each.name} daily limits: {limits}")
         if (each.symbol, each.exchange) not in shown:
             shown.add((each.symbol, each.exchange))
             fact = facts.get((each.symbol, each.exchange))
@@ -68,6 +73,11 @@ def banner_lines(session: Any) -> list[str]:
     if spec.arguments.account_max_daily_loss is not None:
         limit = spec.arguments.account_max_daily_loss
         lines.append(f"Account daily loss limit: Rs {limit:,.2f}")
+    lines += account_limit_lines(spec.arguments)
+    lines.append(
+        f"Order rate: at most {spec.arguments.max_orders_per_second} order calls a second "
+        "(place, modify and cancel together); stops and exits go first"
+    )
     costs = spec.strategies[0].plan.costs
     lines.append(f"Charges modelled with: {costs or 'no cost model'}")
     if parts.mode is Mode.SANDBOX:
@@ -78,9 +88,63 @@ def banner_lines(session: Any) -> list[str]:
     return lines
 
 
+def daily_limit_words(risk: Mapping[str, Any]) -> str:
+    """A strategy's daily limits that are set, in words ("at most 3 trades a day, profit
+    target Rs 5,000.00, orders of at most Rs 2,00,000.00 each"); "" for none
+    (18-multi-strategy 2.5a). `risk` is its resolved risk settings (`RunPlan.risk`)."""
+    words = []
+    if risk["max_trades_per_day"] is not None:
+        words.append(f"at most {risk['max_trades_per_day']} trades a day")
+    if risk["daily_profit_target"] is not None:
+        words.append(f"profit target Rs {risk['daily_profit_target']:,.2f}")
+    if risk["max_order_value"] is not None:
+        words.append(f"orders of at most Rs {risk['max_order_value']:,.2f} each")
+    return ", ".join(words)
+
+
+def account_limit_lines(arguments: Any) -> list[str]:
+    """The banner's lines of the account's daily trade cap and profit target that are
+    set (`_plan_args.LiveArguments`)."""
+    lines = []
+    if arguments.account_max_trades_per_day is not None:
+        lines.append(f"Account trade cap: {arguments.account_max_trades_per_day} trades a day")
+    if arguments.account_daily_profit_target is not None:
+        target = arguments.account_daily_profit_target
+        lines.append(f"Account daily profit target: Rs {target:,.2f}")
+    return lines
+
+
+def limit_lines(session: Any) -> tuple[str, ...]:
+    """The daily limits the session set, in words, for its daily summary: each strategy's
+    that are set, then the account's ("account trade cap 4 trades a day, daily profit
+    target Rs 3,000.00"); none when it set none."""
+    spec = session.parts.spec
+    lines = [
+        f"{each.name} {words}"
+        for each in spec.strategies
+        if (words := daily_limit_words(each.plan.risk))
+    ]
+    arguments = spec.arguments
+    account = []
+    if arguments.account_max_trades_per_day is not None:
+        account.append(f"trade cap {arguments.account_max_trades_per_day} trades a day")
+    if arguments.account_daily_profit_target is not None:
+        account.append(f"daily profit target Rs {arguments.account_daily_profit_target:,.2f}")
+    if account:
+        lines.append("account " + ", ".join(account))
+    return tuple(lines)
+
+
 def _clock(ts_ns: int) -> str:
     """ "HH:MM" of an instant, IST."""
     return format_ist(ts_ns)[-9:-4]
 
 
-__all__ = ["BANNER_ALERT_LINES", "STOPS_LINE", "banner_lines"]
+__all__ = [
+    "BANNER_ALERT_LINES",
+    "STOPS_LINE",
+    "account_limit_lines",
+    "banner_lines",
+    "daily_limit_words",
+    "limit_lines",
+]

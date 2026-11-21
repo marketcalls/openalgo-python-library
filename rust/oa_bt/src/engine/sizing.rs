@@ -242,7 +242,9 @@ impl Engine {
     ///
     /// Errors: `Ok(Err(Margin))` when nothing fits the engine's own figures (no free cash,
     /// or the position changed side since the decision), `Ok(Err(AccountMargin))` when
-    /// they fit and the account's free cash leaves nothing; `Err` for those of sizing.
+    /// they fit and the account's free cash leaves nothing, `Ok(Err(OrderValueLimit))`
+    /// for units above the order value cap at that price (`daily_caps`); `Err` for those
+    /// of sizing.
     pub(super) fn size_at_fill(
         &mut self,
         slice: &SliceInfo,
@@ -270,7 +272,10 @@ impl Engine {
         let sizer = SizerSpec::EngineDefault;
         Ok(
             match self.sized_under_link(sizer, own, request, slice.day)? {
-                Ok(SizeOutcome::Units(units)) => Ok(units),
+                // Sized here, so the order value cap judges it here (`daily_caps`).
+                Ok(SizeOutcome::Units(units)) => self
+                    .order_value_at_fill(request, units, price)?
+                    .map(|()| units),
                 Ok(SizeOutcome::Skipped(_)) => Err(RejectCode::Margin),
                 Err(code) => Err(code),
             },

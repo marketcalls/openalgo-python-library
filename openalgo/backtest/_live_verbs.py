@@ -43,6 +43,12 @@ def live(
     strict_config: bool = True,
     live_dir: str | os.PathLike[str] | None = None,
     on_stop: str = "flatten",
+    max_trades_per_day: int | Mapping[str, int] | None = None,
+    daily_profit_target: float | Distance | Mapping[str, float | Distance] | None = None,
+    max_order_value: float | Distance | Mapping[str, float | Distance] | None = None,
+    account_max_trades_per_day: int | None = None,
+    account_daily_profit_target: float | Distance | None = None,
+    max_orders_per_second: int = 8,
     **not_live: Any,
 ) -> SessionResult:
     """Trade strategies through OpenAlgo for today, in the mode set inside OpenAlgo, and
@@ -76,6 +82,19 @@ def live(
         OPENALGO_LIVE_DIR environment variable, else ~/.openalgo/live).
     on_stop: what Ctrl+C does with open positions: "flatten" (exit them, then stop) or
         "keep" (leave them with their stops at the broker).
+    max_trades_per_day, daily_profit_target, max_order_value: each strategy's daily
+        limits, as in `bt.backtest` (one value or a dict naming each by class name; a class
+        attribute wins), each off when None. The daily profit target is held on ticks, as
+        the daily loss limit is: its exits go at once and entries stay locked for the day.
+    account_max_trades_per_day, account_daily_profit_target: the account's, for all
+        strategies together: at the trade cap every strategy's entries are refused; at the
+        profit target the kill switch exits every strategy and locks its entries for the
+        day, as at `account_max_daily_loss`. A restart of the day keeps the counts and the
+        locks.
+    max_orders_per_second: the most order calls (place, modify and cancel together) the
+        session makes in any second, 8 by default (OpenAlgo's limit of 10 less 2 for your
+        own orders on the same server; give more for a server set higher). A call beyond it
+        waits, stops and exits first; an entry or add that waits 5 s is not sent.
 
     The session ends at the end of the day (flat after the MIS square-off), on Ctrl+C
     (a safe stop: a second Ctrl+C stops within seconds, naming each position left open),

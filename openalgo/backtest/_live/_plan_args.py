@@ -19,6 +19,11 @@ and 3.1 step 1; decisions 3 and 9 of its section 10.0; unit 7). Part of `plan`.
   defaults, read from its signature (`BACKTEST_DEFAULT`), so the two cannot drift
   apart. `capital` and `max_daily_loss` are mandatory in the call, for each strategy; a
   class attribute `max_daily_loss` must agree with the call's (`_plan_strategies`).
+- The daily limits of 18-multi-strategy 2.5a (`DAILY_LIMITS`: `max_trades_per_day`,
+  `daily_profit_target`, `max_order_value`) take one value for every strategy or a dict
+  naming each by class name, as in `bt.backtest` given a list; the account's
+  (`account_max_trades_per_day`, `account_daily_profit_target`) one value for the session.
+  `max_orders_per_second` is the session's order rate (rule 12, `_order_throttle`).
 
 Every other value is checked where `bt.backtest` checks it, when the plan resolves each
 strategy's settings (`_plan_strategies`), so a live session and a backtest refuse the
@@ -35,8 +40,12 @@ from types import MappingProxyType
 from typing import Any
 
 from .._messages import not_supported
+from .._risk_settings import rupees_amount
 from .._strategy_args import (
+    DAILY_LIMITS,
+    EVERY_STRATEGY,
     MANDATORY,
+    account_trade_cap,
     by_name,
     class_names,
     params_by_name,
@@ -45,6 +54,7 @@ from .._strategy_args import (
 )
 from ..errors import ConfigError
 from ..strategy import Strategy
+from ._order_rate import DEFAULT_ORDERS_PER_SECOND
 from ._preflight_plan import positive_amount
 from .data_worker import HISTORY_SOURCE
 from .series import DEFAULT_BASE
@@ -132,7 +142,9 @@ class LiveArguments:
     settings, which a strategy's class attributes of the same names override as in a
     backtest); the others take `bt.backtest`'s defaults (`backtest_arguments`). The rest are
     the session's own: `account_max_daily_loss` in rupees, `alerts_to`, `account`,
-    `live_dir` and `on_stop`.
+    `live_dir` and `on_stop`; `daily_limits` each strategy's daily limits by name
+    (`DAILY_LIMITS`, None where not set), the account's `account_max_trades_per_day` and
+    `account_daily_profit_target` (rupees), and `max_orders_per_second`, the order rate.
     """
 
     strategies: tuple[type[Strategy], ...]
@@ -146,6 +158,10 @@ class LiveArguments:
     account: str | None
     live_dir: str | os.PathLike[str] | None
     on_stop: str
+    daily_limits: Mapping[str, Mapping[str, Any]]
+    account_max_trades_per_day: int | None
+    account_daily_profit_target: float | None
+    max_orders_per_second: int
 
     def backtest_arguments(self, name: str, day: Any, present_ns: int) -> dict[str, Any]:
         """The arguments of the backtest of strategy `name` on the IST date `day` with
@@ -158,6 +174,7 @@ class LiveArguments:
             "capital": self.capital[name],
             "max_daily_loss": self.max_daily_loss[name],
             "params": self.params[name],
+            **self.daily_limits[name],
             "start": day,
             "end": day,
             "now": present_ns,
@@ -228,6 +245,28 @@ def _session_options(
         )
 
 
+def _orders_per_second(value: Any) -> int:
+    """`max_orders_per_second` checked: a whole number of order calls a second, at least
+    1. Raises ConfigError otherwise."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ConfigError(
+            "max_orders_per_second takes a whole number of order calls a second, at least 1 "
+            f"({DEFAULT_ORDERS_PER_SECOND} by default: OpenAlgo's 10 less 2 for your own "
+            f"orders), not {value!r}"
+        )
+    return value
+
+
+def _daily_limits(given: Mapping[str, Any], names: Sequence[str]) -> dict[str, dict[str, Any]]:
+    """Each strategy's daily limits by name (`DAILY_LIMITS`), from one value each or a
+    dict naming every strategy. Raises ConfigError as `_strategy_args.by_name` does."""
+    resolved = {
+        setting: by_name(given[setting], names, setting, owner=SESSION, required=EVERY_STRATEGY)
+        for setting in DAILY_LIMITS
+    }
+    return {name: {setting: resolved[setting][name] for setting in DAILY_LIMITS} for name in names}
+
+
 def live_arguments(
     strategy: type[Strategy] | Sequence[type[Strategy]],
     *,
@@ -250,6 +289,12 @@ def live_arguments(
     strict_config: bool = BACKTEST_DEFAULT,
     live_dir: str | os.PathLike[str] | None = None,
     on_stop: str = "flatten",
+    max_trades_per_day: Any = None,
+    daily_profit_target: Any = None,
+    max_order_value: Any = None,
+    account_max_trades_per_day: int | None = None,
+    account_daily_profit_target: Any = None,
+    max_orders_per_second: int = DEFAULT_ORDERS_PER_SECOND,
     **not_live: Any,
 ) -> LiveArguments:
     """Check the arguments of a `bt.live` call (16-session-design 1.2; module docstring)
@@ -258,9 +303,11 @@ def live_arguments(
     Raises ConfigError for an argument `bt.live` does not take (a mode choice, a
     `bt.backtest` argument with no meaning live, an unknown name), for a strategy that is
     not a `bt.Strategy` subclass, for no `capital`, for a dict of values keyed by a name
-    the session does not run or, for `capital`, missing one, and for an unusable
-    `account_max_daily_loss`, `alerts_to`, `account`, `live_dir` or `on_stop`;
-    NotImplementedError for `bars="candles"` and for two strategies with the same name."""
+    the session does not run or, for `capital` and the daily limits, missing one, and for
+    an unusable `account_max_daily_loss`, `account_max_trades_per_day`,
+    `account_daily_profit_target`, `max_orders_per_second`, `alerts_to`, `account`,
+    `live_dir` or `on_stop`; NotImplementedError for `bars="candles"` and for two
+    strategies with the same name."""
     _refuse_not_live(not_live)
     strategies = strategy_classes(strategy, "bt.live")
     names = _names(strategies)
@@ -295,6 +342,19 @@ def live_arguments(
         account=account,
         live_dir=live_dir,
         on_stop=on_stop,
+        daily_limits=_daily_limits(
+            {
+                "max_trades_per_day": max_trades_per_day,
+                "daily_profit_target": daily_profit_target,
+                "max_order_value": max_order_value,
+            },
+            names,
+        ),
+        account_max_trades_per_day=account_trade_cap(account_max_trades_per_day),
+        account_daily_profit_target=rupees_amount(
+            account_daily_profit_target, "account_daily_profit_target"
+        ),
+        max_orders_per_second=_orders_per_second(max_orders_per_second),
     )
 
 

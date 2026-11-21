@@ -244,7 +244,10 @@ class PortfolioResult:
         that strategy's engine), symbol, side, time, slice, slice_ts, step and reason
         ("account_margin": the account's free cash did not cover the margin;
         "account_loss_gate": an entry after the account's daily loss limit was reached;
-        "account_loss": a working entry the limit's breach cancelled)."""
+        "account_loss": a working entry the limit's breach cancelled;
+        "account_profit_gate" and "account_profit": the same for the account's daily
+        profit target; "account_trade_limit": an entry once the account's entries of the
+        day reached its trade cap)."""
         return self._refused.copy()
 
     @property
