@@ -15,8 +15,12 @@ A restart whose version id of a strategy differs from the day's latest earlier s
 is allowed: the start banner says so and the event `version_changed` records both ids, so
 the record shows the trader changed the code or the parameters. The banner names every
 strategy's version id, each strategy whose source could not be hashed (a class built at
-run time), and each parameter hashed by its type alone (`_version_id`), with the record of
-the start's versions (`_version_id.StartVersions`). Times are UTC nanoseconds.
+run time) with what was hashed instead (its compiled code under the Python version, or its
+name when its code could not be read at all), and each value hashed by its type alone (a
+parameter, or a class attribute, default argument or callable of a class hashed by its
+compiled code; `_version_id`), with the record of the start's versions
+(`_version_id.StartVersions`).
+Times are UTC nanoseconds.
 """
 
 from __future__ import annotations
@@ -71,6 +75,7 @@ def record_versions(session: Any) -> StartVersions:
             start_manifest(part),
             earlier.get(spec.name),
             spec.version.by_type,
+            spec.version.compiled_under,
         )
         journal.record_version(one.name, one.version_id, one.manifest, day=day)
         if one.changed:

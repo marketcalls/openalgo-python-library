@@ -35,6 +35,7 @@ from ._result_report import slice_returns
 from ._strategy_args import Account
 from .metrics import MonteCarlo, monte_carlo, return_correlation
 from .report import _montecarlo, metrics_table
+from .report._format import indian_digits
 from .report._performance import Performance
 from .report.custom import Layout
 from .result import Result
@@ -342,7 +343,7 @@ class PortfolioResult(PortfolioExport):
         lines = [
             f"PortfolioResult({', '.join(self._results)})",
             f"  pool: {account.pool}; account: {_portfolio_notes.rupees_text(self._funds)}",
-            f"  net P&L: {net:,.2f}",
+            f"  net P&L: {indian_digits(net)}",
             f"  orders the account refused or ended: {len(self._refused)}",
         ]
         lines += [f"  warning: {text}" for text in self.warnings]

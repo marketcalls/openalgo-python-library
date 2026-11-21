@@ -233,6 +233,49 @@ def test_the_summary_gives_the_account_figures_and_each_strategy_overfitting_lin
     ]
 
 
+class Penny(Scripted):
+    qty = 20
+
+
+def test_the_summary_of_an_account_that_lost_a_rupee_reads_a_return_and_drawdown_of_zero():
+    # Penny buys 20 SBIN at the 09:16 open at 100.00; SBIN is 99.95 (one tick lower) from
+    # the bar opening at 09:25 to the 15:10 square-off: 20 x -0.05 = -1.00 on an account of
+    # Rs 2,00,000, a return and a maximum drawdown of -0.0005 percent, which read 0.00%
+    # with no minus sign.
+    pf = bt.backtest(
+        [Penny, Watcher], data={"SBIN": stepped_bars(100.0, 99.95, 10)}, capital=LAKH, **no_costs()
+    )
+    assert pf.metrics["max_drawdown"] < 0
+    assert pf.summary().splitlines()[:4] == [
+        "Net profit   : Rs -1.00",
+        "Return       : 0.00%",
+        "Max drawdown : 0.00%",
+        "Trades       : 1 (0% won)",
+    ]
+
+
+def test_the_repr_reads_a_net_pnl_below_half_a_paisa_without_a_minus_sign():
+    # Penny buys and squares off 20 SBIN at 100.00 all day: the account ends at its funds of
+    # Rs 2,00,000. The same records with funds 0.004 rupees higher end 0.004 below them,
+    # less than half a paisa, which reads "0.00" as every rupee figure of a report does.
+    pf = bt.backtest([Penny, Watcher], data={"SBIN": flat_bars(100.0)}, capital=LAKH, **no_costs())
+    records = dict(pf._records) | {"account_capital": pf._records["account_capital"] + 0.004}
+    shifted = bt.PortfolioResult(pf._account, pf.results, records)
+    assert repr(shifted).splitlines()[2] == "  net P&L: 0.00"
+
+
+class Big(Scripted):
+    qty = 10_000
+
+
+def test_the_repr_reads_the_net_pnl_in_indian_digits():
+    # Big buys 10,000 SBIN at the 09:16 open at 100.00; SBIN is 120.00 from the bar opening
+    # at 09:25 to the 15:10 square-off: 10,000 x 20.00 = Rs 2,00,000.
+    data = {"SBIN": stepped_bars(100.0, 120.0, 10)}
+    pf = bt.backtest([Big, Watcher], data=data, capital=10 * LAKH, **no_costs())
+    assert repr(pf).splitlines()[2] == "  net P&L: 2,00,000.00"
+
+
 class StrategyWithALongName(Scripted):
     entries = 0
 

@@ -2,7 +2,8 @@
 characters, the start of the SHA-256 of the strategy's source hash and its parameter values
 as canonical JSON (keys sorted, no spaces). The same code with the same parameters gives the
 same id on every day and restart; a change to either gives a new one; a class with no
-source (built at run time) hashes its qualified name in its place."""
+source (built at run time) hashes its compiled code in its place (`test_version_code`), or
+its qualified name when its code cannot be read at all."""
 
 from __future__ import annotations
 
@@ -38,20 +39,25 @@ class SameCodeOtherName(Cross):
 Built = type("Built", (bt.Strategy,), {"symbol": "SBIN", "exchange": "NSE", "fast": 5})
 
 
+class Rule:
+    """An object a class calls as a method: Python keeps no compiled code of it there."""
+
+    def __call__(self, strategy, bar):
+        return None
+
+
+#: A class built at run time whose code cannot be read at all: its one callable is an object.
+Opaque = type("Opaque", (Built,), {"on_bar": Rule()})
+
+
 def by_hand(canonical: str) -> str:
     """The first 12 hexadecimal characters of the SHA-256 of `canonical`'s UTF-8 bytes."""
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
 
 
-def test_a_class_with_no_source_hashes_its_qualified_name_and_parameters():
-    version = version_of(Built, None)
-    assert version.version_id == by_hand('{"parameters":{"fast":5},"source":"Built"}')
-    assert not version.source_hashed
-
-
-def test_a_class_with_no_source_and_parameters_given_hashes_the_given_values():
-    version = version_of(Built, {"fast": 7})
-    assert version.version_id == by_hand('{"parameters":{"fast":7},"source":"Built"}')
+def test_a_class_with_no_readable_code_and_parameters_given_hashes_the_given_values():
+    version = version_of(Opaque, {"fast": 7})
+    assert version.version_id == by_hand('{"parameters":{"fast":7},"source":"Opaque"}')
 
 
 def test_a_class_with_source_hashes_its_source_hash_and_parameters():

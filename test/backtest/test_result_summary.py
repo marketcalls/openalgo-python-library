@@ -19,15 +19,18 @@ The runs, with no charges and no slippage:
   on the five sessions: 1.01 x 1.02 x 0.99 x 1.005 x 1.01 - 1 = 3.52%.
 - `SellsToOpen`: a daily stock strategy whose three delivery shorts are all rejected, so
   nothing ever trades.
+- `Penny`, a `Scripted` of `portfolio_samples`, which loses a rupee on a lakh (its test
+  says how).
 
 The wording rules are checked on `summary_text` with figures given by hand: a win rate
-never reads 0% or 100% unless it is exactly so, and an amount that rounds to zero has no
-minus sign.
+never reads 0% or 100% unless it is exactly so, and an amount or a percent that rounds to
+zero has no minus sign (`report._format`'s rule, as the tearsheet shows them).
 """
 
 import pytest
 from accounting_runs import CAPITAL, daily_bars, daily_round_trip
 from benchmark_runs import index_bars, nifty_closes, own_run, share_bars
+from portfolio_samples import Scripted, no_costs, stepped_bars
 
 import openalgo.backtest as bt
 from openalgo.backtest._summary import summary_text
@@ -129,3 +132,43 @@ def test_the_win_rate_shows_zero_or_a_hundred_percent_only_when_exact(trades, wi
 def test_a_loss_below_half_a_paisa_reads_as_zero_rupees():
     lines = summary_text(figures(net_profit=-0.004), None, QUICK_LINE).splitlines()
     assert lines[0] == "Net profit   : Rs 0.00"
+
+
+@pytest.mark.parametrize(
+    ("figure", "line", "label"),
+    [("total_return", 1, "Return      "), ("max_drawdown", 2, "Max drawdown")],
+)
+def test_a_percent_that_rounds_to_zero_reads_without_a_minus_sign(figure, line, label):
+    # -0.00003 is -0.003 percent: "0.00%" at two places, with no sign.
+    lines = summary_text(figures(**{figure: -0.00003}), None, QUICK_LINE).splitlines()
+    assert lines[line] == f"{label} : 0.00%"
+
+
+def test_a_benchmark_return_that_rounds_to_zero_reads_without_a_minus_sign():
+    shown = summary_text(figures(benchmark_total_return=-0.00003), "NIFTY", QUICK_LINE)
+    assert shown.splitlines()[-1] == "Benchmark    : 0.00% return (NIFTY)"
+
+
+def test_a_percent_that_does_not_round_to_zero_keeps_its_minus_sign():
+    # -0.00006 is -0.006 percent, which two places show as -0.01%.
+    lines = summary_text(figures(max_drawdown=-0.00006), None, QUICK_LINE).splitlines()
+    assert lines[2] == "Max drawdown : -0.01%"
+
+
+class Penny(Scripted):
+    qty = 20
+
+
+def test_a_run_that_lost_a_rupee_on_a_lakh_reads_a_return_and_drawdown_of_zero():
+    # Penny buys 20 SBIN at the 09:16 open at 100.00; SBIN is 99.95 (one tick lower) from
+    # the bar opening at 09:25 to the 15:10 square-off: 20 x -0.05 = -1.00 on 1,00,000, a
+    # return and a maximum drawdown of -0.001 percent, which read 0.00%.
+    data = {"SBIN": stepped_bars(100.0, 99.95, 10)}
+    result = bt.backtest(Penny, data=data, capital=100_000, **no_costs())
+    assert result.metrics["max_drawdown"] < 0
+    assert result.summary().splitlines()[:4] == [
+        "Net profit   : Rs -1.00",
+        "Return       : 0.00%",
+        "Max drawdown : 0.00%",
+        "Trades       : 1 (0% won)",
+    ]

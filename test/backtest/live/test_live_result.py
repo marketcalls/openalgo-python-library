@@ -12,6 +12,7 @@ values come from the fake's books and the scenario.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import logging
 import typing
@@ -355,6 +356,16 @@ def test_the_summary_text_is_the_daily_summary_the_alert_sent(world, caplog):
 
 def test_the_repr_names_the_session(day):
     assert repr(day).startswith("SessionResult(LIVE 2026-11-16, broker zerodha, stopped by")
+
+
+@pytest.mark.parametrize(
+    ("gross", "shown"),
+    [(-0.004, "net P&L Rs 0.00,"), (1234567.891, "net P&L Rs 12,34,567.89,")],
+    ids=["a loss below half a paisa, without a minus sign", "Indian digit grouping"],
+)
+def test_the_repr_reads_the_net_pnl_by_the_shared_rupee_rule(day, gross, shown):
+    figures = dataclasses.replace(day.summary, gross_pnl=gross, charges=0.0)
+    assert shown in repr(dataclasses.replace(day, summary=figures))
 
 
 # ----- a leg the close names, unconfirmed ---------------------------------------------------

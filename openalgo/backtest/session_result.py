@@ -42,7 +42,9 @@ not it has rows.
   schedule versions; never the API key). Each order carries its strategy's version id
   (`orders`' `version_id`), the first 12 hexadecimal characters of the SHA-256 of its
   source hash and parameter values: the same code with the same parameters gives the same
-  id on every day and restart. The journal keeps each start's.
+  id on every day and restart. A class whose source cannot be read (defined in a notebook
+  cell) has its compiled code hashed instead, which depends on the Python version. The
+  journal keeps each start's.
 - `summary`: the day's figures across every start of the day: `gross_pnl`, `charges`
   (modelled: the broker's trade book carries none; each fill's rounded to the paisa, so a
   result's charges, its contract notes', differ from them by the notes' rounding, the
@@ -128,6 +130,7 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 
 from .portfolio_result import PortfolioResult
+from .report._format import indian_digits
 from .result import Result
 
 if TYPE_CHECKING:
@@ -189,7 +192,7 @@ class SessionResult:
         return (
             f"SessionResult({self.mode.upper()} {self.day.isoformat()}, broker "
             f"{self.broker}, stopped by {self.stopped_by}, {figures.closed_trades} closed "
-            f"trades, net P&L Rs {figures.net_pnl:,.2f}, "
+            f"trades, net P&L Rs {indian_digits(figures.net_pnl)}, "
             f"{self._legs_open()} positions open{self._legs_named()})"
         )
 
