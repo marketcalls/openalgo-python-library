@@ -1,8 +1,10 @@
 """The fault rows of a shared instrument on its members' stops and exits, on the fake
 OpenAlgo (18-multi-strategy 5.2 rows F97 and F118, 4.9 and 4.14 as the lead decided it in
-11.0a; unit M8): the square-off's check that the account is flat reads the group, and a
-member's closing order the broker refuses while a sale by hand has left it fewer units is
-held, while the reconciler's rows share the sale out.
+11.0a; unit M8): after the square-off the session ends once each member's kernel is flat,
+and the close's final read verifies the group's net against the members' sum, a
+difference going into `reconciliations` (5.1 I7); a member's closing order the broker
+refuses while a sale by hand has left it fewer units is held, while the reconciler's rows
+share the sale out.
 
 The market and the strategies are `shared_samples`': SBIN at 500.00, A first in call
 order; `SbinTrend` (100 units, target 502.00) and `SbinBreakout` (50 units) buy at
@@ -24,6 +26,7 @@ from shared_samples import A_UNITS, B_UNITS, LateTrend, SbinBreakout, SbinTrend,
 from stops_samples import stop_world
 
 from openalgo.backtest._live._margin_reject import MARGIN_LOCK
+from openalgo.backtest._live._result_build import session_result
 from openalgo.backtest._live._session_news import RECONCILE_LOCK
 from openalgo.backtest._live._stops_cover import REFUSED_FOR_MARGIN
 from openalgo.backtest._live._types import LOGGER_NAME
@@ -34,6 +37,9 @@ SQUARE_OFF = ist(15, 0)
 VERIFY_AT = SQUARE_OFF + 30 * NS
 #: The broker's words of the refusal (18-multi-strategy F118).
 MARGIN_WORDS = "RMS: margin exceeds"
+#: The purchase by hand of F97's variant, in units, and the instrument's row of the two.
+BOUGHT = 10
+BOTH = "SbinTrend and SbinBreakout"
 #: The sale by hand of F118: 120 of the members' 150, so the broker holds 30.
 SOLD = 120
 SOLD_AT = ist(14, 44)
@@ -45,6 +51,23 @@ def world(make_fake_openalgo, monkeypatch, tmp_path, caplog):
     return stop_world(make_fake_openalgo, monkeypatch, tmp_path)
 
 
+def buy_by_hand(world, units: int, at_ns: int) -> None:
+    """Another client buys `units` SBIN at market at `at_ns`."""
+    other = world.fake.client()
+    world.script.at(
+        at_ns,
+        lambda: other.placeorder(
+            strategy="manual",
+            symbol="SBIN",
+            action="BUY",
+            exchange="NSE",
+            price_type="MARKET",
+            product="MIS",
+            quantity=units,
+        ),
+    )
+
+
 def events(outcome, kind: str) -> list[dict]:
     """The run's event-stream lines of `kind`."""
     with open(outcome.paths["events"], encoding="utf-8") as stream:
@@ -54,11 +77,14 @@ def events(outcome, kind: str) -> list[dict]:
 # ----- F97: the square-off of a shared instrument --------------------------------------------
 
 
-def test_F97_the_session_ends_once_a_read_shows_the_group_flat(world, caplog):
+def test_F97_the_session_ends_with_each_member_flat_and_the_closes_read_finds_the_group_flat(
+    world, caplog
+):
     outcome = world.run([SbinTrend, SbinBreakout])
 
-    # Each member's square-off exit fills as it is placed; the session ends (3.4) only
-    # after a read of the books taken once both had filled shows the broker's net flat.
+    # Each member's square-off exit fills as it is placed. The session ends (3.4) once each
+    # member's kernel is flat; the close's final read, taken after both exits filled,
+    # compares the group's net with the members' sum and finds both flat.
     exits = [sbin_orders(world, name)[-1] for name in ("SbinTrend", "SbinBreakout")]
     assert [(o.action, o.price_type, o.status) for o in exits] == [
         ("SELL", "MARKET", "complete")
@@ -68,6 +94,34 @@ def test_F97_the_session_ends_once_a_read_shows_the_group_flat(world, caplog):
     assert reads and reads[0] < VERIFY_AT
     assert [t for t in alerts(caplog, "error") if "still not flat after square-off" in t] == []
     assert (outcome.stopped_by, world.fake.position("SBIN", "NSE")) == ("session_end", 0)
+    assert (outcome.summary.flat, outcome.summary.reconcile_mismatches) == (True, 0)
+
+
+def test_F97_a_buy_by_hand_at_the_square_off_is_one_difference_of_the_group_at_the_close(world):
+    # Another client buys 10 SBIN just before the members' square-off exits go. The
+    # session still ends once each member's kernel is flat: 3.4's end on the broker's books
+    # too is not built, for a strategy alone either. The close's final read finds the
+    # group's net 10 against the members' 0 and names it once, for the group (5.1 I7).
+    buy_by_hand(world, BOUGHT, SQUARE_OFF + 2 * NS)
+    outcome = world.run([SbinTrend, SbinBreakout])
+
+    assert (outcome.stopped_by, world.fake.position("SBIN", "NSE")) == ("session_end", BOUGHT)
+    # Each member's row carries the group's figures: the broker's net, the members' sum
+    # and the external trade; nothing is sent once the session has ended.
+    table = session_result(outcome).reconciliations
+    columns = ["strategy", "kind", "broker_units", "action", "group", "group_units"]
+    group = "SbinTrend, SbinBreakout"
+    assert table[[*columns, "external_units"]].astype(object).values.tolist() == [
+        ["SbinTrend", "more", BOUGHT, "noted", group, 0, BOUGHT],
+        ["SbinBreakout", "more", BOUGHT, "noted", group, 0, BOUGHT],
+    ]
+    summary = outcome.summary
+    assert (summary.reconcile_mismatches, summary.flat) == (1, False)
+    assert summary.differing == (
+        f"SBIN NSE {BOUGHT} units of SBIN for {BOTH} together in OpenAlgo's books, their 0",
+    )
+    (row,) = outcome.open_positions
+    assert (row.strategy, row.units, row.stop_confirmed) == (BOTH, BOUGHT, False)
 
 
 # ----- F118: a closing order refused while a sale by hand left fewer units -------------------

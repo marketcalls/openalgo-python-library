@@ -41,8 +41,9 @@ Over each run, of instrument groups (`session_invariants_groups`; 18-multi-strat
 12. **I6, one side**: no two members of a group on opposite sides at any change.
 13. **I3 per member** (`session_invariants_members`; unit M8): a member's working closing
     orders never hold more than its own kernel position at any change; checked with 2,
-    and waived with it. 4 and 5 are restated per member too (I1 and I7: a stop of a
-    member whose own leg is flat; each member's units covered by its own stops).
+    and waived on its own (`MEMBERS_WITHIN`), so a test whose sale by hand breaks 2 keeps
+    it. 4 and 5 are restated per member too (I1 and I7: a stop of a member whose own leg
+    is flat; each member's units covered by its own stops).
 
 18-multi-strategy 5.1 numbers them I1 to I10: I1 is 4, I2 is 1, I3 is 2 with 13, I4 is
 10, I5 is 11, I6 is 12, I7 is 5 with 6, and I8 to I10 are 7 to 9.
@@ -80,6 +81,7 @@ from session_trace import (
     BOOKS_AGREE,
     GUARD_LOCK,
     ISOLATION,
+    MEMBERS_WITHIN,
     NO_ORPHAN,
     ONE_SIDE,
     ONE_STOP,
@@ -132,7 +134,7 @@ def _check(session: SessionTrace, fake: FakeOpenAlgo) -> None:
         used=oversold_used,
         entries=entries,
     )
-    if WITHIN not in waived:
+    if MEMBERS_WITHIN not in waived:
         members_within(changes, mine, entries)
     # The legs' sides at the end, a reversal's new side among them.
     sides = sides_of(own, entries)

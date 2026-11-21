@@ -16,6 +16,7 @@ import logging
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from session_samples import alerts, ist
+from session_trace import MEMBERS_WITHIN, WITHIN
 from stops_samples import stop_world
 
 import openalgo.backtest as bt
@@ -176,12 +177,13 @@ def test_a_resting_reversal_does_not_cover_a_short_left_without_its_stop(world, 
     world.script.at(ist(14, 43, 57) + 500_000_000, hold_the_words)
     world.script.at(ist(14, 44, 1), faults.release_order_updates)
     world.script.price = lambda now_ns: 498.0 if now_ns >= ist(14, 43, 50) else 500.0
-    world.trace.waive(
-        "exits within the position",
+    why = (
         "the kernel works a resting reversal beside the leg's stop, both on the closing side "
         "(as for a strategy that rests one while its stop works, 2.3.0); reported to the "
-        "lead with item M8-X1",
+        "lead with item M8-X1"
     )
+    for check in (WITHIN, MEMBERS_WITHIN):
+        world.trace.waive(check, why)
     world.run(ShortTwoTargetsThenRestingReverse, on_stop="keep")
 
     reversal = next(o for o in world.orders() if o.price_type == "LIMIT")

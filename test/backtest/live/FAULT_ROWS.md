@@ -126,10 +126,10 @@ Two strategies of one session on one instrument, "A" first in call order. Every 
 F119 is covered below, and runs with the rows F01 to F93 above in one suite. Units M6 and
 M7 built most rows' tests beside the code they test (`test_session_shared_*.py`); unit M8
 checked each row's Expected and Assertion columns against them and added, in
-`test_session_faults_shared_*.py`, what they left: F97's end on a read of the group, F104's
-"never two unbound intents" and the entry the hold refuses, F105 (no test before M8),
-F109's trailing after a restart, and F118 with the sale by hand of its row, which the
-reconciler's rows then share out. The lead's rulings that change a row: 11.0a items 1 and
+`test_session_faults_shared_*.py`, what they left: F97's verification of the group by the
+close's read, F104's "never two unbound intents" and the entry the hold refuses, F105 (no
+test before M8), F109's trailing after a restart, and F118 with the sale by hand of its
+row, which the reconciler's rows then share out. The lead's rulings that change a row: 11.0a items 1 and
 2 (F117 and F118: any rejection of a closing order on a shared instrument is held; a
 strategy alone keeps 2.3.0's path), 4.14b (F98: the adoption first, the cut after it; F99:
 the members' cancels in call order, their order not asserted), and 4.14b "As built (M7"
@@ -150,7 +150,7 @@ They run over every row of the table above too, each strategy alone being a grou
 | F94 | `test_session_shared_stops.py::test_F94_a_target_of_one_member_cancels_its_stop_then_exits_it_alone`, `test_F94_the_net_never_falls_below_b_while_b_holds_its_units` |
 | F95 | `test_session_shared_gates.py::test_F95_an_entry_on_the_other_side_of_a_members_position_is_refused`, `test_F95_variant_an_entry_decided_after_a_members_entry_in_one_slice_is_refused`, `test_F95_the_refused_entry_reaches_the_strategy_in_on_order` |
 | F96 | `test_session_shared_stops.py::test_F96_both_stops_filled_by_one_trade_close_both_legs_and_nothing_is_sent` |
-| F97 | `test_session_shared_stops.py::test_F97_the_square_off_cancels_then_exits_each_member_and_ends_flat`; `test_session_faults_shared_stops.py::test_F97_the_session_ends_once_a_read_shows_the_group_flat` (verify flat per group: the session ends only on a read after both exits filled, with no "still not flat" alert) |
+| F97 | `test_session_shared_stops.py::test_F97_the_square_off_cancels_then_exits_each_member_and_ends_flat`; `test_session_faults_shared_stops.py::test_F97_the_session_ends_with_each_member_flat_and_the_closes_read_finds_the_group_flat` (verify flat per group: the session ends once each member's kernel is flat, and the close's final read, after both exits filled, finds the group's net flat: no "still not flat" alert, no mismatch), `test_F97_a_buy_by_hand_at_the_square_off_is_one_difference_of_the_group_at_the_close` (a difference the close's read finds goes into `reconciliations`, each member's row carrying the group's figures, and is counted once, as 5.1 I7 allows; the end of 16-session-design 3.4 on the broker's books too is not built, for a strategy alone either: for the lead) |
 | F98 | `test_session_shared_rows.py::test_F98_a_sale_by_hand_is_shared_out_and_each_stop_cut_to_what_its_member_keeps`, `test_F98_each_member_adopts_its_share_before_its_stop_is_cut` (the lead's ruling of 4.14b: the adoption first, the kernel's cut after it), `test_F98_both_members_are_locked_and_the_alert_names_the_allocation`, `test_F98_each_members_row_carries_the_group_the_allocation_and_its_own_stop_cut`, `test_F98_the_first_sighting_carries_the_group_but_no_allocation_yet`, `test_F98_a_difference_of_the_group_is_one_mismatch_of_the_day` |
 | F99 | `test_session_shared_rows.py::test_F99_the_other_side_cancels_every_members_stop_and_adopts_nothing`, `test_F99_no_sell_stop_works_once_the_other_side_is_acted_on`, `test_F99_one_error_alert_names_the_instrument_and_each_row_its_stop_cancelled`, `test_F99_each_members_alert_says_nothing_is_adopted_and_to_end_the_session` (members act in call order within the confirming comparison, so the order of the two cancels is not asserted: 4.14b) |
 | F100 | `test_session_shared_rows.py::test_F100_a_buy_by_hand_on_a_short_group_is_taken_from_the_short_opened_last` |
@@ -165,14 +165,14 @@ They run over every row of the table above too, each strategy alone being a grou
 | F109 | `test_session_shared_restart.py::test_F109_each_member_resumes_with_its_own_stop_verified_by_its_order_id`, `test_F109_the_gates_are_set_before_the_first_decision_of_the_restart`; `test_session_faults_shared_restart.py::test_F109_each_members_stop_trails_again_after_the_restart_by_its_own_distance`, `test_F109_no_member_enters_again_after_the_restart` |
 | F110 | `test_session_shared_restart.py::test_F110_a_stop_that_filled_while_down_is_its_own_members_and_the_other_resumes` |
 | F111 | `test_session_shared_restart.py::test_F111_a_members_missing_stop_is_placed_again_before_the_banner` |
-| F112 | `test_session_shared_restart.py::test_F112_a_stop_no_member_holds_is_cancelled_as_an_orphan` (waives one stop, within and no orphan, as unit 12's test of one leg does: the test drops the venue record of a stop the broker holds) |
+| F112 | `test_session_shared_restart.py::test_F112_a_stop_no_member_holds_is_cancelled_as_an_orphan` (waives one stop, within, each member's within and no orphan, as unit 12's test of one leg does: the test drops the venue record of a stop the broker holds) |
 | F113 | `test_session_shared_gates.py::test_F113_a_reversal_across_another_members_long_is_refused_whole` |
 | F114 | `test_session_shared_stops.py::test_F114_each_trailing_stop_is_modified_by_its_own_member_to_its_own_level` |
 | F115 | `test_session_shared_feed.py::test_F115_another_clients_order_tagged_with_a_members_name_locks_that_member` (in sandbox mode: OpenAlgo's live order book carries no strategy, its sandbox book does) |
 | F116 | `test_session_shared_stops.py::test_F116_a_dead_feed_quotes_each_shared_instrument_once_for_both_members` |
 | F117 | `test_session_shared_margin.py::test_F117_any_rejection_of_a_stop_on_a_shared_instrument_is_held_and_worded_rejected` (as the lead decided, 11.0a item 2: any rejection of a closing order on a shared instrument is held, with no market exit; the row's R3 exit applies to a strategy alone) |
 | F118 | `test_session_shared_margin.py::test_F118_a_stop_rejected_on_a_shared_instrument_is_neither_exited_nor_placed_again`, `test_F118_the_held_member_is_locked_and_alerted_once_and_a_read_is_asked_at_once`, `test_F118_the_held_leg_counts_unprotected_for_the_margin_refusal`, `test_F118_the_other_member_is_untouched`; with the row's sale by hand of 120 (the broker holds 30), the stop placed again and refused before the second comparison: `test_session_faults_shared_stops.py::test_F118_the_refused_stop_is_one_request_none_repeated_and_no_exit_is_sent`, `test_F118_b_is_locked_alerted_and_a_read_is_asked_at_once`, `test_F118_the_reconcilers_rows_then_share_the_sale_out` (A, opened last, takes 100, B 20), `test_F118_b_is_counted_unprotected_for_the_refusal_and_listed_with_what_is_left`; the variant with one strategy keeps 2.3.0's path (11.0a item 1): `test_session_shared_margin.py::test_a_strategy_alone_keeps_the_exit_retries_for_the_same_rejection` |
-| F119 | `test_session_shared_gates.py::test_F119_a_resting_entry_on_a_shared_instrument_is_refused`, `test_F119_variant_a_strategy_alone_on_its_instrument_keeps_its_resting_orders` |
+| F119 | `test_session_shared_gates.py::test_F119_a_resting_entry_on_a_shared_instrument_is_refused`, `test_F119_the_groups_comparisons_run_while_a_members_stop_rests` (B's confirmed resting stop is not in flight: the group is compared at the first read after it is placed and at each read after it, never late), `test_F119_variant_a_strategy_alone_on_its_instrument_keeps_its_resting_orders` |
 
 All 26 rows of a shared instrument are covered.
 
@@ -184,7 +184,9 @@ unit M8); **I2** one stop per leg (1: a leg is a member's); **I3** exits within 
 position, of the group against the broker's net (2) and of each member against its own
 kernel units at every change (13, `session_invariants_members.py`: unit M8), a member's
 exits overtaken by its own adoption allowed beyond its position by no more than it
-adopted until its cut (the 4.14b ruling); **I4** the sum rule (10); **I5** isolation (11);
+adopted until its cut (the 4.14b ruling), each waived on its own (a test waiving the
+group's check keeps each member's unless it waives "each member's exits within its own
+position" too); **I4** the sum rule (10); **I5** isolation (11);
 **I6** one side (12); **I7** protected (5), each member's units covered by its own stops
 (per member: unit M8), and books agree (6); **I8 to I10** every modify and cancel answered,
 nothing after a guard lock, priced fills (7 to 9).
@@ -335,12 +337,12 @@ Checks waived by single tests, each with its reason in the test:
 
 | Test | Check waived | Why |
 |---|---|---|
-| `test_restart_stops.py::test_a_restored_stop_with_no_record_is_placed_again_and_no_exit_is_sent` | one stop per leg, exits within the position, no orphan | the test drops the venue record of a stop the broker holds, a state the save before every send never leaves |
+| `test_restart_stops.py::test_a_restored_stop_with_no_record_is_placed_again_and_no_exit_is_sent` | one stop per leg, exits within the position, each member's exits within its own position, no orphan | the test drops the venue record of a stop the broker holds, a state the save before every send never leaves |
 | `test_session_threads.py::test_an_entry_unanswered_at_the_close_is_one_error_alert` | no orphan | the entry's answer comes after the session closed (3.3 step 5 "As built") |
 | `test_session_close_hand_sale.py` (the cut held, dropped, or handed as the final read ends) and `test_reconcile_hand_sales.py` (the cut with no answer) | every modify answered | 3.3 step 5 "As built": the stop's cut is not sent or not answered by the close |
 | `test_stops_protect.py::test_the_emergency_alert_names_an_exit_at_work_and_the_order_book_comes_first` | books agree | 3.5: the exit fills unheard and no books are read after an error; the alert names the exit in flight |
 | `test_stops_report.py::test_an_exit_accepted_with_no_final_word_is_in_flight_and_never_beside_close_it_by_hand` | books agree | 3.3 step 4: the exit fills unheard and the books are unreadable; the leg's line names the exit in flight |
 | `test_session_invariants_groups.py::test_the_hooks_note_a_member_made_to_act_while_anothers_order_word_is_applied`, `test_the_hooks_note_an_order_word_handed_to_a_member_it_is_not_bound_to` | isolation | the test breaks isolation on purpose and reads what the hooks noted |
 | `test_session_invariants_groups.py::test_the_trace_counts_the_changes_whose_members_books_it_could_not_read` | the sum rule, one side | the test makes every read of the members' books fail and runs the sample check itself |
-| `test_session_faults_shared_stops.py` (the four F118 tests with the sale by hand) | exits within the position | 18-multi-strategy F118 as its row sets it: B's stop is placed again (R3) after the sale by hand and before a comparison sees it, for more than the broker holds (16-session-design 5.4 "As built": the exit guard opens on a comparison); the broker refuses it, which is the row |
-| `test_session_reversal.py::test_a_resting_reversal_does_not_cover_a_short_left_without_its_stop` | exits within the position | the kernel works a resting reversal (a LIMIT buy beyond a short) beside the leg's stop, both on the closing side, as it does for any strategy that rests one while its stop works (2.3.0); reported to the lead with item M8-X1 |
+| `test_session_faults_shared_stops.py` (the four F118 tests with the sale by hand) | exits within the position (the group's against the broker's net only: each member's within its own position is still checked, and holds) | 18-multi-strategy F118 as its row sets it: B's stop is placed again (R3) after the sale by hand and before a comparison sees it, for more than the broker holds (16-session-design 5.4 "As built": the exit guard opens on a comparison); the broker refuses it, which is the row |
+| `test_session_reversal.py::test_a_resting_reversal_does_not_cover_a_short_left_without_its_stop` | exits within the position, each member's exits within its own position | the kernel works a resting reversal (a LIMIT buy beyond a short) beside the leg's stop, both on the closing side, as it does for any strategy that rests one while its stop works (2.3.0); reported to the lead with item M8-X1 |

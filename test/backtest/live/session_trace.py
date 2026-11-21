@@ -60,6 +60,9 @@ PRICED = "priced fills"
 SUM_RULE = "the sum rule"
 ISOLATION = "isolation"
 ONE_SIDE = "one side"
+#: I3 per member (18-multi-strategy 5.1), waived on its own: a test may waive the group's
+#: exits against the broker's net (`WITHIN`) and keep each member's against its own units.
+MEMBERS_WITHIN = "each member's exits within its own position"
 CHECKS = frozenset(
     {
         ONE_STOP,
@@ -74,6 +77,7 @@ CHECKS = frozenset(
         SUM_RULE,
         ISOLATION,
         ONE_SIDE,
+        MEMBERS_WITHIN,
     }
 )
 #: The rows 7.1 lists as leaving a leg without a confirmed stop at the end, and the two
@@ -388,6 +392,7 @@ __all__ = [
     "GUARD_LOCK",
     "ISOLATION",
     "LISTED_ROWS",
+    "MEMBERS_WITHIN",
     "NO_ORPHAN",
     "ONE_SIDE",
     "ONE_STOP",
