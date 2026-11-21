@@ -23,9 +23,9 @@ be withdrawn (`ask_withdrawal`): its last lines named them as not sent, so they 
 sent after them and the close does not wait for them. The order rate throttle
 (`_order_throttle`) takes no request that makes an order call (`is_order_call`) while its
 window is full, and withdraws an entry held back too long (`remove`). An entry or add the
-kernel cancelled while it waits is withdrawn as it is taken in (`WithdrawPlace`), so a
-lock of entries (a daily profit target, the kill switch, the safe stop) is never followed
-by a placement the order rate held (18-multi-strategy 2.5a rules 5, 6 and 12).
+kernel cancelled, or one waiting when its strategy's entries lock, is withdrawn as it is
+taken in (`WithdrawPlace`), so no lock of entries is followed by a placement the order
+rate held (18-multi-strategy 2.5a rules 5, 6 and 12; 2.4.0 item M8-X2).
 """
 
 from __future__ import annotations
@@ -137,12 +137,14 @@ class CancelOrphan:
 
 @dataclass(frozen=True)
 class WithdrawPlace:
-    """Withdraw `place`, the placement of an entry or add the kernel cancelled before it
-    was bound (`venue_map`). Taken in by `Incoming.into`, never queued: while `place` still
-    waits in the queue it is taken off and answered `NotSent(cancelled)`; once the worker
-    has taken it, nothing (the kernel's cancel waits for the bind, 2.5 E)."""
+    """Withdraw `place`, an entry or add not bound yet that the kernel cancelled, or that
+    waits as its strategy's entries lock (`venue_map`). Taken in by `Incoming.into`, never
+    queued: while `place` waits in the queue it is taken off and answered `NotSent(reason,
+    words)`; once the worker took it, nothing (a cancel waits for the bind, 2.5 E)."""
 
     place: PlaceRequest
+    reason: NotSentReason = NotSentReason.CANCELLED
+    words: str = CANCELLED_WORDS
 
     priority = Priority.PROTECT
 
@@ -356,16 +358,16 @@ class Incoming:
             except queue.Empty:
                 return withdrawn
             if isinstance(request, WithdrawPlace):
-                self._cancelled(waiting, request.place)
+                self._withdrawn(waiting, request)
             else:
                 waiting.put(request)
 
-    def _cancelled(self, waiting: WorkerQueue, place: PlaceRequest) -> None:
-        """Withdraw `place` while it waits in `waiting`, answered `NotSent(cancelled)`
-        before it stops counting (one the worker took already is left to its bind); the
-        withdrawal itself is done with either way."""
-        if waiting.remove(place):
-            self._post(NotSent(place, NotSentReason.CANCELLED, CANCELLED_WORDS))
+    def _withdrawn(self, waiting: WorkerQueue, withdrawal: WithdrawPlace) -> None:
+        """Withdraw the placement of `withdrawal` while it waits in `waiting`, answered
+        `NotSent` with the withdrawal's reason before it stops counting (one the worker
+        took already is left as it is); the withdrawal itself is done with either way."""
+        if waiting.remove(withdrawal.place):
+            self._post(NotSent(withdrawal.place, withdrawal.reason, withdrawal.words))
             self.finished()
         self.finished()
 

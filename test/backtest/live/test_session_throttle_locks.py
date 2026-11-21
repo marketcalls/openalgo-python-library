@@ -17,7 +17,7 @@ import logging
 
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
-from session_samples import ist, rig
+from session_samples import NS, ist, rig
 from watch_samples import events, run
 
 import openalgo.backtest as bt
@@ -66,11 +66,10 @@ def sbin_buys_after(world, instant_ns: int) -> list:
     ]
 
 
-def withdrawn(outcome) -> list[tuple[str, str]]:
+def withdrawn(outcome, reason: str = "cancelled") -> list[tuple[str, str]]:
+    """(strategy, reason) of each request the worker did not send for `reason`."""
     return [
-        (e["strategy"], e["reason"])
-        for e in events(outcome, "not_sent")
-        if e["reason"] == "cancelled"
+        (e["strategy"], e["reason"]) for e in events(outcome, "not_sent") if e["reason"] == reason
     ]
 
 
@@ -100,6 +99,34 @@ def test_an_add_held_by_the_order_rate_is_not_sent_after_the_account_kill_switch
     assert [(o.quantity, o.filled) for o in sbin_sells] == [(10, 10)]
     assert (world.fake.position("SBIN", "NSE"), world.fake.position("INFY", "NSE")) == (0, 0)
     assert withdrawn(outcome) == [("SbinAdds", "cancelled")]
+
+
+def test_an_add_held_by_the_order_rate_is_not_sent_after_a_feed_dead_lock(world):
+    # 2.4.0 item M8-X2. The last tick comes at 14:42:51.5, so the feed is dead (10 s with no
+    # tick on any symbol) and every strategy's entries lock at `LOCKED_AT`, while SBIN's add
+    # still waits for the window: no kernel cancel withdraws it, the lock must.
+    def last_tick_then_dead():
+        world.fake.trade("SBIN", "NSE", 500.0, volume=10.0)
+        world.fake.faults.feed_dead()
+
+    world.script.at(LOCKED_AT - 10 * NS, last_tick_then_dead)
+    outcome = run(world, [InfyAdds, SbinAdds], max_orders_per_second=1, on_stop="keep")
+    assert sbin_buys_after(world, LOCKED_AT) == []
+    assert world.fake.position("SBIN", "NSE") == 10
+    assert withdrawn(outcome, "entries_locked") == [("SbinAdds", "entries_locked")]
+
+
+def test_the_add_withdrawn_for_the_lock_is_rejected_with_the_locks_code(world):
+    def last_tick_then_dead():
+        world.fake.trade("SBIN", "NSE", 500.0, volume=10.0)
+        world.fake.faults.feed_dead()
+
+    world.script.at(LOCKED_AT - 10 * NS, last_tick_then_dead)
+    outcome = run(world, [InfyAdds, SbinAdds], max_orders_per_second=1, on_stop="keep")
+    orders = outcome.outputs["SbinAdds"]["orders"]
+    codes = [code for code in orders["reject_code"] if code is not None]
+    # The code an entry submitted while entries are locked gets (the kernel's `live_lock`).
+    assert codes == ["live_lock"]
 
 
 def test_an_add_held_by_the_order_rate_is_not_sent_after_a_safe_stop(world):

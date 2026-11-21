@@ -86,6 +86,57 @@ def test_a_withdrawn_entry_is_cancelled_in_the_kernel_and_drops_what_waited():
     assert kernel_order not in rig.engine.working_orders()
 
 
+# ----- an entry waiting when the strategy's entries lock (2.4.0 item M8-X2) ---------
+
+
+def test_an_entry_not_answered_yet_is_withdrawn_once_its_entries_lock():
+    rig = Rig()
+    _, place = placed(rig)
+    assert rig.map.withdraw_locked() == []
+    rig.engine.lock_entries("feed_dead")
+
+    (withdrawal,) = rig.map.withdraw_locked()
+
+    assert (withdrawal.place, withdrawal.reason) == (place, NotSentReason.ENTRIES_LOCKED)
+    assert "feed_dead" in withdrawal.words
+    assert rig.map.withdraw_locked() == []
+
+
+def test_an_entry_answered_already_is_not_withdrawn_for_the_entry_locks():
+    rig = Rig()
+    _, place = placed(rig)
+    rig.map.sent(SendResult(place.request_id, unanswered()))
+    rig.engine.lock_entries("feed_dead")
+
+    assert rig.map.withdraw_locked() == []
+
+
+def test_an_exit_is_never_withdrawn_for_the_entry_locks():
+    rig = Rig()
+    _, entry_place = placed(rig, order("BUY", 100.0))
+    rig.map.sent(SendResult(entry_place.request_id, accepted("B0")))
+    rig.map.news(update("B0", OrderStatus.COMPLETE, filled=100, average=500.0))
+    rig.next_close()
+    placed(rig, order("SELL", 100.0))
+    rig.engine.lock_entries("feed_dead")
+
+    assert rig.map.withdraw_locked() == []
+
+
+def test_an_entry_withdrawn_for_the_entry_locks_is_rejected_with_live_lock():
+    rig = Rig()
+    kernel_order, place = placed(rig)
+    rig.engine.lock_entries("feed_dead")
+    (withdrawal,) = rig.map.withdraw_locked()
+
+    handled = rig.map.not_sent(NotSent(place, withdrawal.reason, withdrawal.words))
+
+    assert (handled.applied, handled.requests) == (Applied.REJECTED, ())
+    assert rig.status(kernel_order) == "Rejected"
+    assert rig.engine.order(kernel_order)["reject_code"] == "live_lock"
+    assert not rig.map.owns_request(place.request_id)
+
+
 # ----- the worker's intake withdraws -------------------------------------------------
 
 
@@ -148,6 +199,16 @@ def test_an_entry_the_worker_took_already_is_left_to_its_bind():
     assert intake.posted == []
     # The entry taken still counts until the worker finishes it; the withdrawal does not.
     assert intake.incoming.unfinished == 1
+
+
+def test_an_entry_withdrawn_for_the_entry_locks_is_answered_with_that_reason():
+    intake, held = Intake(), entry(1)
+    intake.hand(held)
+
+    intake.hand(WithdrawPlace(held, NotSentReason.ENTRIES_LOCKED, "locked"))
+
+    assert intake.posted == [NotSent(held, NotSentReason.ENTRIES_LOCKED, "locked")]
+    assert (len(intake.queue), intake.incoming.unfinished) == (0, 0)
 
 
 @pytest.mark.parametrize("others", [0, 2])
