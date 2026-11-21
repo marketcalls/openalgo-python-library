@@ -114,6 +114,14 @@ def _value_label(value: float, percent: bool) -> str:
     return fmt.percent(value, 1) if percent else f"{value:.2f}"
 
 
+def number_labels(ticks: list[float]) -> list[str]:
+    """Value labels of plain numbers in Indian notation, for `chart`'s `value_labels`
+    (a custom tearsheet's line charts, a portfolio's rupees): whole numbers when every
+    tick is one, else two decimals."""
+    whole = all(float(t).is_integer() for t in ticks)
+    return [fmt.number(t, 0 if whole else 2) for t in ticks]
+
+
 def _x(position: int, count: int) -> float:
     return position / (count - 1) * VIEW_WIDTH
 
@@ -294,4 +302,4 @@ def chart(
     )
 
 
-__all__ = ["HALF", "THIRD", "WIDE", "Line", "chart"]
+__all__ = ["HALF", "THIRD", "WIDE", "Line", "chart", "number_labels"]

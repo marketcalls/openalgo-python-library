@@ -16,10 +16,14 @@ the page it renders.
                on a run without trades) the blocks form it, under its own title, printed
                as the custom section asks
     anchors    a custom section's anchor is `u-` and its name made a slug (`u-exposure`),
-               so it never takes a built-in anchor; its blocks' anchors follow it
+               so it never takes a built-in anchor; its blocks' anchors follow it after
+               a "_" (`u-exposure_1`), which no slug holds, so no id a block writes is
+               another section's anchor
 
 The page is the default page's shell (`page.render`) with these sections and, when a
-theme or a chart of several series asks for one, a second stylesheet (`_theme`).
+theme or a chart of several series asks for one, a second stylesheet (`_theme`); a
+portfolio's Portfolio section counts as such a chart (its monthly bars by strategy), so a
+theme's series colours colour its strategies.
 """
 
 import dataclasses
@@ -29,6 +33,7 @@ from typing import Any, NamedTuple
 
 from ...errors import ConfigError
 from .._dashboard import page
+from .._dashboard import portfolio as portfolio_section
 from .._dashboard.layout import LARGE, MODE_PARTS, PARTS, TITLES, Section, View, stack
 from . import _render, _theme
 from ._text import escape
@@ -240,6 +245,7 @@ def render(layout: Any, view: View, subject: object, version: str) -> str:
         sections.append(section)
         several = several or uses
     light, dark, theme_series = _theme.checked(layout.theme)
+    several = several or portfolio_section.draws_series(view, sections)
     series = _theme.series_tokens(theme_series) if several else None
     extra = _theme.stylesheet(light, dark, series)
     return page.render(view, version, sections, extra_style=extra)

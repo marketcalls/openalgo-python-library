@@ -191,6 +191,26 @@ def test_a_custom_anchor_never_takes_a_built_in_anchor(busy_page):
     assert custom == ["u-exposure", "u-u", "u-overview-2"]
 
 
+def test_a_fragment_id_never_takes_another_custom_sections_anchor(performance):
+    # Section "S" (anchor u-s) holds a fragment whose element has the id "x"; section
+    # "s 1 x" has the anchor u-s-1-x. Prefixed with its block's anchor, the fragment's id
+    # must not be that anchor too, or the header link and the scroll spy find it first.
+    sections = (rp.section("S", rp.html("<div id='x'>a</div>")), rp.section("s 1 x", rp.text("b")))
+    ids = element_ids(page_of(performance, sections=sections))
+    assert ids.count("u-s-1-x") == 1
+    assert len(ids) == len(set(ids))
+
+
+def test_a_charts_own_ids_never_take_another_custom_sections_anchor(performance):
+    # An area line draws a gradient whose id comes from its block's anchor (block 1 of
+    # section "S", series 0); section "s 1 0" has the anchor u-s-1-0.
+    area = rp.line(performance.session_returns, title="Area", area=True)
+    sections = (rp.section("S", area), rp.section("s 1 0", rp.text("b")))
+    ids = element_ids(page_of(performance, sections=sections))
+    assert ids.count("u-s-1-0") == 1
+    assert len(ids) == len(set(ids))
+
+
 # ----- printing and repeatability ----------------------------------------------------------
 
 
@@ -229,9 +249,22 @@ def test_a_layout_is_plain_data_that_pickles_with_its_functions(performance):
 
 
 def test_parts_lists_the_built_in_sections_in_page_order_read_only():
-    assert list(rp.PARTS) == [*FULL[:-1], "strategies", "notes"]
+    assert list(rp.PARTS) == [*FULL[:-1], "strategies", "portfolio", "notes"]
     with pytest.raises(TypeError):
         rp.PARTS["mine"] = ("x",)
+
+
+def test_the_portfolio_section_holds_the_four_parts_only_a_portfolio_shows():
+    assert rp.PARTS["portfolio"] == ("contribution", "account_margin", "refused", "net_positions")
+
+
+def test_a_layout_with_a_theme_hashes_as_one_without_does():
+    # A theme is equal only to itself, as a block is: its mappings can change after it is
+    # made, so they cannot be hashed.
+    theme = rp.Theme(light={"bg": "red"})
+    layout = rp.Layout(theme=theme)
+    assert hash(layout) == hash(rp.Layout(theme=theme))
+    assert theme != rp.Theme(light={"bg": "red"})
 
 
 # ----- the result the blocks receive ---------------------------------------------------------

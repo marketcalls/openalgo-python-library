@@ -1,6 +1,8 @@
 """A general bar chart for a custom tearsheet: values by category, one bar per series side
 by side, upright or in rows, as inline SVG in the look of the dashboard's bar charts
-(`bars`), beside its yearly returns chart, which is unchanged.
+(`bars`), beside its yearly returns chart, which is unchanged; and the same chart with
+the series of a category stacked on one bar (`stacked_chart`, a portfolio's P&L by
+strategy).
 
 Each bar carries a `<title>` with its category, series and value, the browser's hover
 readout, so a label cut short or thinned out on a crowded axis still reads whole.
@@ -73,8 +75,44 @@ def _bars(
     return marks
 
 
-def _upright(categories, series, axis, percent, signed) -> tuple[Margin, int, list[str]]:
-    """An upright chart's margin, height and marks: values up, categories across."""
+def _stacked_bars(
+    categories: Sequence[str],
+    series: Sequence[BarSeries],
+    bands: tuple[list[float], float],
+    y: scale.Linear,
+    percent: bool,
+) -> list[str]:
+    """Each category's series on one bar, in series order: a value above zero stacked
+    up from the top of those before it, one below zero down from the bottom of those
+    before it; a zero or unknown value draws nothing."""
+    starts, band = bands
+    marks = []
+    for i, (start, category) in enumerate(zip(starts, categories, strict=True)):
+        above, below = 0.0, 0.0  # the stack's top above zero and its bottom below
+        for one in series:
+            value = float(one.values[i])
+            if not np.isfinite(value) or value == 0.0:
+                continue
+            if value > 0:
+                base, above = above, above + value
+            else:
+                base, below = below, below + value
+            # Pixels grow downwards: the rectangle starts at the smaller of its two ends.
+            start_px, end_px = sorted((y(base), y(base + value)))
+            marks.append(
+                f"<rect x='{start:.2f}' y='{start_px:.2f}' width='{band:.2f}' "
+                f"height='{end_px - start_px:.2f}' style='fill:{one.colour}' rx='1'><title>"
+                f"{fmt.text(category)} &#183; {fmt.text(one.name)}: "
+                f"{value_text(value, percent)}</title></rect>"
+            )
+    return marks
+
+
+def _upright(
+    categories, series, axis, percent, signed, stacked=False
+) -> tuple[Margin, int, list[str]]:
+    """An upright chart's margin, height and marks: values up, categories across; the
+    series of a category side by side, or on one bar when `stacked`."""
     low, high, ticks = axis
     widest = max(len(text) for _, text in ticks)
     margin = Margin(14, 14, 34, max(44, widest * CHAR_PX + 14))
@@ -98,7 +136,10 @@ def _upright(categories, series, axis, percent, signed) -> tuple[Margin, int, li
     def place(at: float, size: float, value: float) -> tuple[float, float, float, float]:
         return at, min(y(value), y(0)), size, abs(y(value) - y(0))
 
-    marks += _bars(categories, series, (starts, band), place, percent)
+    if stacked:
+        marks += _stacked_bars(categories, series, (starts, band), y, percent)
+    else:
+        marks += _bars(categories, series, (starts, band), place, percent)
     if signed:
         marks.append(f"<line x1='0' x2='{inner_w}' y1='{y(0):.2f}' y2='{y(0):.2f}' class='base'/>")
     return margin, HEIGHT, marks
@@ -159,4 +200,24 @@ def bar_chart(
     return frame(WIDTH, height, margin, fmt.text(label), "".join(marks))
 
 
-__all__ = ["BarSeries", "bar_chart"]
+def stacked_chart(
+    categories: Sequence[str], series: Sequence[BarSeries], *, label: str, percent: bool = False
+) -> str:
+    """Each category's series stacked on one upright bar, in series order (values above
+    zero up from zero, those below down from it), on one value axis that holds zero and
+    every stack, with a solid zero line when a stack falls below zero and another rises
+    above it. Values, labels and hover readouts as `bar_chart`'s. "No data" when no
+    value is known."""
+    known = [np.where(np.isfinite(one.values), one.values, 0.0) for one in series]
+    if not len(categories) or not any(np.isfinite(one.values).any() for one in series):
+        return "<p class='empty'>No data</p>"
+    stack = np.vstack(known)
+    ups, downs = np.where(stack > 0, stack, 0.0).sum(0), np.where(stack < 0, stack, 0.0).sum(0)
+    low, high = scale.widen(min(0.0, float(downs.min())), max(0.0, float(ups.max())))
+    axis = (low, high, tick_texts(low, high, VALUE_TICKS, percent))
+    signed = float(downs.min()) < 0 < float(ups.max())
+    margin, height, marks = _upright(categories, series, axis, percent, signed, stacked=True)
+    return frame(WIDTH, height, margin, fmt.text(label), "".join(marks))
+
+
+__all__ = ["BarSeries", "bar_chart", "stacked_chart"]

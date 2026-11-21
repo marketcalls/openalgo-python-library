@@ -6,7 +6,8 @@ is the strategies together: its rows (`account`: equity, free cash, margin and d
 at every round of the run), its equity and returns on its funds, its `performance` and
 metrics, every strategy's tables in one (a `strategy` column first), the orders the
 account refused, the net position of each instrument (what a broker holds), the
-correlation of the strategies' session returns and each one's contribution.
+correlation of the strategies' session returns and each one's contribution, and its
+reports: `summary()` and the combined `tearsheet()` (`_portfolio_report`).
 
 Conventions are `Result`'s: tz-aware IST times beside the kernel's UTC nanoseconds
 (`*_ts` columns), rupees, quantities in units. Kernel ids restart in every strategy's
@@ -25,7 +26,7 @@ from typing import Any
 
 import pandas as pd
 
-from . import _portfolio_notes, _portfolio_tables
+from . import _portfolio_notes, _portfolio_report, _portfolio_tables
 from ._native import native
 from ._portfolio_figures import account_performance, contribution
 from ._result_export import EXPORTED_TABLES, write_csv, write_excel
@@ -34,6 +35,7 @@ from ._strategy_args import Account
 from .metrics import MonteCarlo, monte_carlo, return_correlation
 from .report import _montecarlo, metrics_table
 from .report._performance import Performance
+from .report.custom import Layout
 from .result import Result
 
 #: The account's tables `to_dataframes` returns first, in order: the properties of these
@@ -168,6 +170,35 @@ class PortfolioResult:
             resample=resample,
             bust=bust,
             goal=goal,
+        )
+
+    def summary(self) -> str:
+        """`Result.summary()` for the account: its net profit in rupees, return, maximum
+        drawdown, closed trades with their win rate and the positions still open, its
+        benchmark's return when it has one, and the quick overfitting checks of each
+        strategy's own trades on a line each, none of the trades together
+        (`_portfolio_report`). Raises ConfigError when the run has no equity point."""
+        return _portfolio_report.summary(self)
+
+    def tearsheet(
+        self,
+        path: str | os.PathLike | None = None,
+        *,
+        mode: str = "full",
+        log_scale: bool = False,
+        layout: Layout | None = None,
+    ) -> str:
+        """The combined HTML tearsheet: the account's page in `mode` (see
+        `openalgo.backtest.report.tearsheet`) with the Strategies section, each strategy's
+        quick overfitting checks in a row of their own, and the Portfolio section (each
+        strategy's contribution and its P&L by month, the account's margin and free cash,
+        the orders it refused and the net position of each instrument two strategies
+        held; full mode). Returned as a string, or written to `path` and the path
+        returned. `layout` (a `report.custom.Layout`) makes a custom page whose blocks'
+        callables receive this portfolio. Each strategy's own page is
+        `strategy(name).tearsheet()`. Raises ConfigError as `report.tearsheet` does."""
+        return _portfolio_report.tearsheet(
+            self, path, mode=mode, log_scale=log_scale, layout=layout
         )
 
     # ----- the strategies' tables together -----------------------------------------------
