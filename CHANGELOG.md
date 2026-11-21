@@ -121,6 +121,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     which changes the charges.
   - A list of one strategy also returns a `PortfolioResult`. A strategy class on its own runs
     exactly as before, with the same figures.
+- Combined reports of a portfolio run (2.4.0, unit M4).
+  - `PortfolioResult.summary()`: the account's net profit, return, maximum drawdown, closed
+    trades and benchmark, as `Result.summary()` gives them for one strategy, then the quick
+    overfitting checks of each strategy's own trades on a line each. None are run on the
+    account's trades together, which overlap in time.
+  - `PortfolioResult.tearsheet(path=None, *, mode="full", log_scale=False, layout=None)`: the
+    account's page, with the Strategies section (the strategies head to head and the
+    correlation of their returns), the overfitting checks in a row per strategy, a trade
+    list with a Strategy column, and a new Portfolio section (full mode): each strategy's
+    contribution and its P&L by month, stacked; the account's highest margin and lowest
+    free cash in each session and each strategy's margin at the account's peak; the orders
+    the account refused, with times; and the net position of each instrument two strategies
+    held, at every change. `report.tearsheet(pf)` gives the same page. Each strategy's own
+    page is still `pf.strategy(name).tearsheet()`.
+  - Custom tearsheets: `report.PARTS` gains the "portfolio" section with the parts
+    `contribution`, `account_margin`, `refused` and `net_positions`, which a layout hides,
+    shows and orders like any other part. On a portfolio a layout's block functions receive
+    the `PortfolioResult`, and a Theme's series colours colour the strategies.
 - Daily limits per strategy and for the account, in `bt.backtest` and `bt.live` (2.4.0, unit
   M10). Each is off unless set, and takes one value or a dict by strategy class name; a class
   attribute of the same name wins.
@@ -157,6 +175,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   5 s is not sent (reason `order_rate`); an exit is never dropped. An entry still waiting
   when its strategy is locked (a profit target, the kill switch, a safe stop) is withdrawn,
   not placed.
+- Live sessions write a decisions file per day beside the event stream,
+  `<live_dir>/<account>/logs/YYYY-MM-DD.decisions.jsonl` (`SessionResult.paths["decisions"]`):
+  one line per strategy bar, off the console and the event stream. A decision line gives the
+  bar as the strategy saw it and whether it came from ticks or a broker candle, the latest
+  value of each `self.I` output, the position in units, and what `on_bar` submitted (each
+  order with its side, units, type, status and reject code). A skipped line says why no
+  decision was made: missing data, indicators not ready, trading not begun, the session
+  stopping, or the strategy failed. A line that cannot be written is logged and dropped.
+  - Each `drift` event carries the tick bar's and the broker candle's open, high, low, close
+    and volume beside their differences.
+  - An order the engine rejects at submission is logged at INFO with the strategy, side,
+    units and reject code, and so is the first decision per strategy skipped because its
+    indicators are not ready (later ones at DEBUG).
 - MCX silver mini (SILVERM) and silver micro (SILVERMIC) can be backtested and traded: their
   freeze quantity, 600 kg per order, is in the contract table from MCX circulars
   MCX/TRD/114/2025, MCX/TRD/091/2026, MCX/TRD/275/2025 and MCX/TRD/302/2026 (contracts
@@ -180,6 +211,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Fund.advance` called after a portfolio run has ended raises the fund's "has finished"
   error, and each of the fund's breach records carries its rule (`account_loss` or
   `account_profit`).
+- Live sessions: the strategy decides, and keeps deciding, on the bars built from ticks. A
+  broker candle read after a decision (2 seconds after the close, often before the broker's
+  final candle) no longer replaces the tick bar in the strategy's series or its indicators,
+  so a crossing between the tick bar and a later, different candle of the same minute is
+  seen by exactly one decision, never by none and never twice. On the 2026-11-20 sandbox
+  day a reversal on a 1-minute EMA crossing was seen by no decision this way. Candles are
+  still checked against every tick bar for the drift log. A candle is the bar only of a
+  minute with no ticks (the feed was dead, or watching began in it after a start or
+  restart): it refreshes the indicators and no decision is made on it afterwards. The
+  engine and the strategy now hold the same bars. Within one run only: after a restart the
+  minutes before it come from broker candles, as before.
 - Live sessions: a trade closed by the account's daily loss limit (`account_max_daily_loss`,
   through the kill switch) now records the exit reason `account_loss_limit` instead of
   `manual`, the reason a portfolio backtest records for the same breach.
@@ -200,6 +242,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outside and what to pass, where it said only that it could not judge.
 - `bt.optimize` uses less memory on large sweeps: the returns of each combination are copied
   into the overfitting figures' array as they come back, not after all of them.
+
+### Fixed
+
+- Live sessions: a reversal (`reverse=True`) waits for its position's stop to be cancelled
+  before it is sent; if entries were locked meanwhile (a dead feed, a reconciliation
+  mismatch, a failed exit, the account loss limit), it was still sent and opened the other
+  side. It is now refused whole with `live_lock`, as it is when it is submitted under a lock,
+  and the position gets its stop back. A reversal no longer raises a false "had no stop at
+  the broker" alert between the stop's cancel and the order's fill.
+- Live sessions: a decision is skipped for missing data when the bar before its own holds a
+  minute with no data, as it already was when its own bar held one. After a start or restart
+  in the middle of a minute, that minute's bar comes from its broker candle; when the candle
+  came after the first whole bar closed, a 1-minute strategy's first decision read a series
+  without the bar before its own, and a crossing (or `shift(1)`, `[-2]`) compared it with the
+  bar two minutes back. On the 2026-11-20 sandbox day the first decision after a restart sold
+  on an EMA crossing that the full series shows one minute earlier, before that decision. The
+  strategy now decides at the next close, with the minute's bar in its series once its
+  candle is read. A minute whose candle never comes holds up one more decision, no more.
 
 ## [2.3.0] - 2026-11-20
 

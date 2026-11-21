@@ -44,6 +44,7 @@ from typing import Any
 from fake_openalgo import FakeOpenAlgo
 
 from openalgo.backtest._engine import call
+from openalgo.backtest._live._order_state import ENTRY_PURPOSES
 from openalgo.backtest._live._types import Mode
 
 #: The checks of 7.1 (`session_invariants`), by the name a waiver gives.
@@ -269,6 +270,18 @@ class SessionTrace:
     def session_clients(self) -> frozenset[str]:
         """The names of every client a run of this trace used."""
         return frozenset(name for run in self.runs for name in run.clients)
+
+    def entry_orders(self) -> frozenset[str]:
+        """The broker order IDs of the orders the runs' venue maps placed as entries or
+        adds (a reversal is an entry, `venue_roles`): what may move a leg to the other
+        side (`session_invariants_changes`)."""
+        return frozenset(
+            placed.order_id
+            for run in self.runs
+            for trader in run.session.traders
+            for _, placed in trader.venue.placed()
+            if placed.order_id and placed.intent.purpose in ENTRY_PURPOSES
+        )
 
     def _record_modifies(self, book: Any) -> None:
         """Record each modify of `book` as the book makes it: the sandbox's is never

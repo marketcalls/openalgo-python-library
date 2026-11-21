@@ -3,8 +3,8 @@ store grows (16-session-design 1.5 and 2.5 C, unit 6).
 
 A backtest computes every view and indicator once over the whole run and shows a growing
 part of it (`_views`). A live store's bars arrive one close at a time, and a broker
-candle may replace a bar already shown (D27), so here a view holds how its values are
-computed instead of the values themselves:
+candle may fill a minute that had no bar after later bars were shown (D27), so here a
+view holds how its values are computed instead of the values themselves:
 
 - the view of a bar field reads the store's column;
 - a view built from other views (arithmetic, comparisons, `&`, `|`, `~`, `shift`,
@@ -13,7 +13,7 @@ computed instead of the values themselves:
 - an indicator calls its `openalgo.ta` function on its inputs' values as they stand.
 
 A view recomputes the first time it is read after the store changed (a close revealed a
-bar, or a candle replaced one) and keeps the values until the next change, so each view
+bar, or a candle filled a minute) and keeps the values until the next change, so each view
 is computed at most once per change, and a view built in `init` stays current all day.
 Only causal outputs reach a strategy: `_indicators.register` refuses a function whose
 outputs all look ahead and turns a look-ahead output into a `LookaheadOutput`, as in a
@@ -166,7 +166,8 @@ class LiveIndicator:
     `whole` are its causal outputs on the store's bars at registration, and `compute`
     gives them on part of those bars, for the causality checks (`_causality_checks`);
     `adopt` turns the views `register` built into live views of `outputs`, every output
-    on the store's bars now. `call` is the indicator call of `_indicators` (its
+    on the store's bars now, and keeps them (`views`, the causal outputs' only, for the
+    session's decisions file). `call` is the indicator call of `_indicators` (its
     function, inputs, parameters and label), `names` its output names and `causal` the
     names that do not look ahead.
 
@@ -183,6 +184,7 @@ class LiveIndicator:
         self._causal = [k for k, name in enumerate(names) if name in causal]
         self._cached: tuple[int, list[np.ndarray]] | None = None
         self.whole = [self.outputs()[k] for k in self._causal]
+        self.views: list[LiveView] = []
 
     def _on(self, start: int, stop: int) -> list[np.ndarray]:
         """Every output on the store's bars [start, stop), the inputs' values as they
@@ -220,12 +222,14 @@ class LiveIndicator:
     def adopt(self, views: list[Any]) -> list[Any]:
         """The views `register` built, each output a live view of `outputs`; a
         `LookaheadOutput` stays as it is (any use of it raises)."""
-        return [
+        adopted = [
             LiveView(self._store, self._output(k), view.label, view._recipe, view.need)
             if isinstance(view, TimelineView)
             else view
             for k, view in enumerate(views)
         ]
+        self.views = [view for view in adopted if isinstance(view, LiveView)]
+        return adopted
 
 
 __all__ = ["LiveIndicator", "LiveSource", "LiveView", "ValuesNow", "adopted"]

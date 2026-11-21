@@ -9,9 +9,10 @@ At every change of an order at the fake, as it happened (`session_invariants_cha
 1. **One stop.** At most one stop of the session's works per leg.
 2. **Exits within the position.** The session's working exits never hold more units than
    the position; the exits a sale by hand overtook, by no more than the units sold, until
-   they fit the position again.
+   they fit the position again. A reversal (an entry against the position) holds as an
+   exit only the position it closes.
 3. **Never the other side.** No fill of the session's orders takes the position to the
-   other side of the leg.
+   other side of the leg, but a reversal's, which moves the leg there.
 
 When the last run ends (its close returned, or the test ended after a crash), of that run
 (`session_invariants_end`):
@@ -109,19 +110,22 @@ def _check(session: SessionTrace, fake: FakeOpenAlgo) -> None:
     # orders once the session has ended) is not the session's.
     changes = session.changes[: last.ended_at]
     own = [c for c in changes if c.client in mine]
-    sides = sides_of(own)
+    entries = session.entry_orders()
     if ONE_STOP not in waived:
         one_stop_per_leg(changes, mine)
     oversold_used: set[str] = set()
     rooms = within_the_position(
         changes,
         mine,
-        sides,
+        sides_of(own),
         session.oversold,
         within=WITHIN not in waived,
         side=OTHER_SIDE not in waived,
         used=oversold_used,
+        entries=entries,
     )
+    # The legs' sides at the end, a reversal's new side among them.
+    sides = sides_of(own, entries)
     closing = last.closing or closing_now(last)
     working = working_at_the_end(own)
     held = {c.instrument: c.position for c in changes}

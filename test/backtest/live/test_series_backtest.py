@@ -2,8 +2,9 @@
 strategy class, run once by `bt.backtest` over the bars of `series_samples` and once in
 a live run context on a kernel session of the live day fed the same bars slice by
 slice, sees the same bars, the same history, the same indicator values and the same
-views built in `init`, at every decision. A broker candle that replaces a tick bar feeds
-every later close, as a backtest of the candles would.
+views built in `init`, at every decision. Every later close continues from the tick bars
+the strategy decided on, as a backtest of those bars would: a broker candle never
+replaces one (lead decision 2026-11-21, 2.4.0 item P2-1).
 
 The strategy decides on 5-minute bars. Its 10-bar EMA needs 128 bars of warm-up on the
 engine's reference bars, so the backtest keeps the two sessions before the live day
@@ -147,22 +148,28 @@ def tick_bar_of(row) -> LiveBar:
     return dataclasses.replace(bar, close=close, high=max(bar.high, close))
 
 
-def test_candles_feed_every_later_close_as_a_backtest_of_the_candles(backtest_seen):
-    """Each slice closes on its tick bar and its candle arrives after the decision of
-    that close, as the candle check reads it at the close plus 2 s. At every decision
-    the bars before the latest are the candles' bars, with the indicator values a
-    backtest of the candles computes; the latest bar still ends on its tick bar."""
+def ticked_bars() -> pd.DataFrame:
+    """`BARS` with the live day's slices as their tick bars (`tick_bar_of`)."""
+    today = [tick_bar_of(row) for row in TODAY.itertuples()]
+    ticked = TODAY.assign(close=[bar.close for bar in today], high=[bar.high for bar in today])
+    return pd.concat((before(BARS, LIVE_DAY), ticked), ignore_index=True)
+
+
+def test_every_later_close_continues_from_the_tick_bars_as_a_backtest_of_them(backtest_seen):
+    """Each slice closes on its tick bar, five paise off the broker's candle that the
+    candle check reads after the decision; the strategy keeps the tick bar (the candle is
+    drift only). At every decision the bars and the indicator values are those a
+    backtest of the tick bars computes."""
     seen: list[tuple] = []
 
     class Recording(EmaTrend):
         def on_bar(self, bar):
-            seen.append((tuple(bar), self.close.values, self.fast.values))
+            seen.append((self.close.values, self.fast.values))
 
     run = LiveRun(Recording, live_history(backtest_seen[0][2]["history"][1]), 5)
     for row in TODAY.itertuples():
         run.close_slice(tick_bar_of(row))
-        run.series.take(live_bar(row, "candle"))
-    for (bar, closes, fast), (_, _, backtest) in zip(seen, backtest_seen, strict=True):
-        np.testing.assert_array_equal(closes[:-1], backtest["close"][:-1])
-        np.testing.assert_array_equal(fast[:-1], backtest["fast"][:-1])
-        assert closes[-1] == bar[6] == round(backtest["close"][-1] + 0.05, 2)
+    backtest = backtest_views(EmaTrend, ticked_bars(), reading)
+    for (closes, fast), (when, _, expected) in zip(seen, backtest, strict=True):
+        np.testing.assert_array_equal(closes, expected["close"], err_msg=f"at {when}")
+        np.testing.assert_array_equal(fast, expected["fast"], err_msg=f"at {when}")

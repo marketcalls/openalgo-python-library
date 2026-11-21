@@ -1,5 +1,5 @@
-"""The session logs of a live session (08-live-trading section 8): a daily log file and a
-structured event stream, one of each per IST trading day.
+"""The session logs of a live session (08-live-trading section 8): a daily log file, a
+structured event stream and a decisions file, one of each per IST trading day.
 
 `configure_session_logs(folder, day, now=...)` opens, under `folder`:
 
@@ -8,8 +8,12 @@ structured event stream, one of each per IST trading day.
   `2026-11-16 09:15:00.250 IST WARNING alert feed_dead: LIVE (orb): no tick for 30 s`.
 - `<day>.events.jsonl`: one JSON object per line, written by `SessionLogs.event`: the
   event's time in UTC nanoseconds (`ts_ns`), its `kind`, then its fields.
+- `<day>.decisions.jsonl`: the strategies' decisions (2.4.0 item P2-2,
+  `_session_decisions`), one JSON object per line in the event stream's form, written by
+  `SessionLogs.decision`, off the console and off the event stream. It is diagnostic: a
+  line that cannot be written is logged and dropped, and never stops a session.
 
-Both files are appended to, so a session restarted on the same day continues them. While
+The files are appended to, so a session restarted on the same day continues them. While
 the logs are open the logger's level is lowered to INFO if it was higher (else INFO
 records never reach a handler), and restored by `close`; records still propagate to the
 handlers the program configured.
@@ -63,8 +67,9 @@ class SessionLogs:
     """The open session logs of one IST day. Made by `configure_session_logs`; also a
     context manager that closes them.
 
-    `log_path` is the daily log file and `events_path` the event stream. `event` is
-    called from the session loop's thread.
+    `log_path` is the daily log file, `events_path` the event stream and
+    `decisions_path` the decisions file. `event` and `decision` are called from the
+    session loop's thread.
     """
 
     def __init__(
@@ -72,18 +77,23 @@ class SessionLogs:
         *,
         log_path: Path,
         events_path: Path,
+        decisions_path: Path,
         handler: logging.Handler,
         events: TextIO,
+        decisions: TextIO,
         now: Now,
         restore_level: int | None,
     ) -> None:
         self._log_path = log_path
         self._events_path = events_path
+        self._decisions_path = decisions_path
         self._handler = handler
         self._events = events
+        self._decisions = decisions
         self._now = now
         self._restore_level = restore_level
         self._closed = False
+        self._decision_failed = False
 
     @property
     def log_path(self) -> Path:
@@ -95,6 +105,11 @@ class SessionLogs:
         """The event stream, `<folder>/<YYYY-MM-DD>.events.jsonl`."""
         return self._events_path
 
+    @property
+    def decisions_path(self) -> Path:
+        """The decisions file, `<folder>/<YYYY-MM-DD>.decisions.jsonl`."""
+        return self._decisions_path
+
     def event(self, kind: str, **fields: Any) -> None:
         """Append one event line: `{"ts_ns": <now>, "kind": kind, **fields}`, flushed to
         the file before it returns. A field named like a key or token is written as
@@ -103,8 +118,27 @@ class SessionLogs:
         Raises ConfigError for an empty `kind` or a field named `ts_ns`, and LiveError
         once the logs are closed or when the line cannot be written.
         """
+        self._append(self._events, self._events_path, "the session event stream", kind, fields)
+
+    def decision(self, kind: str, **fields: Any) -> None:
+        """Append one line to the decisions file, as `event` writes an event line. A line
+        that cannot be written (the logs closed, a full disk) is logged, at ERROR the
+        first time and at DEBUG after, and dropped: the file is diagnostic and never stops
+        a session. Raises ConfigError for an empty `kind` or a field named `ts_ns`."""
+        try:
+            self._append(self._decisions, self._decisions_path, "the decisions file", kind, fields)
+        except LiveError as error:
+            level = logging.DEBUG if self._decision_failed else logging.ERROR
+            self._decision_failed = True
+            logger.log(level, "%s; the session goes on without the line", error)
+
+    def _append(
+        self, stream: TextIO, path: Path, name: str, kind: str, fields: dict[str, Any]
+    ) -> None:
+        """Write one line `{"ts_ns": <now>, "kind": kind, **fields}` to `stream`, the file
+        at `path` called `name` in messages, flushed. Raises as `event` does."""
         if self._closed:
-            raise LiveError(f"session event {kind!r} after the session logs were closed")
+            raise LiveError(f"{kind!r} for {name} after the session logs were closed")
         if not isinstance(kind, str) or not kind:
             raise ConfigError(f"an event kind must be a non-empty string, got {kind!r}")
         if TIME_FIELD in fields:
@@ -114,15 +148,13 @@ class SessionLogs:
             )
         line = {TIME_FIELD: self._now(), "kind": kind, **_clean(fields, kind, path="")}
         try:
-            self._events.write(json.dumps(line, ensure_ascii=False) + "\n")
-            self._events.flush()
+            stream.write(json.dumps(line, ensure_ascii=False) + "\n")
+            stream.flush()
         except OSError as error:
-            raise LiveError(
-                f"cannot write the session event stream {self._events_path}: {error}"
-            ) from error
+            raise LiveError(f"cannot write {name} {path}: {error}") from error
 
     def close(self) -> None:
-        """Detach the log file from the logger, restore its level and close both files.
+        """Detach the log file from the logger, restore its level and close the files.
         Safe to call twice."""
         if self._closed:
             return
@@ -133,6 +165,7 @@ class SessionLogs:
         if self._restore_level is not None and logger.level == LOG_FILE_LEVEL:
             logger.setLevel(self._restore_level)
         self._events.close()
+        self._decisions.close()
 
     def __enter__(self) -> SessionLogs:
         return self
@@ -143,8 +176,9 @@ class SessionLogs:
 
 def configure_session_logs(folder: str | Path, day: DateLike, *, now: Now) -> SessionLogs:
     """Open the session logs of IST day `day` under `folder` (created if missing): attach
-    the daily log file to the `openalgo.backtest.live` logger and open the event stream.
-    `now` gives the present in UTC nanoseconds, for the log lines and the events.
+    the daily log file to the `openalgo.backtest.live` logger and open the event stream
+    and the decisions file. `now` gives the present in UTC nanoseconds, for the log lines,
+    the events and the decisions.
 
     Raises ConfigError for a `day` that is not a date, and LiveError when the logs of
     another session are attached to the logger, or the folder or a file cannot be opened.
@@ -158,6 +192,7 @@ def configure_session_logs(folder: str | Path, day: DateLike, *, now: Now) -> Se
     root = Path(folder)
     log_path = root / f"{date.isoformat()}.log"
     events_path = root / f"{date.isoformat()}.events.jsonl"
+    decisions_path = root / f"{date.isoformat()}.decisions.jsonl"
     try:
         root.mkdir(parents=True, exist_ok=True)
         handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
@@ -165,14 +200,19 @@ def configure_session_logs(folder: str | Path, day: DateLike, *, now: Now) -> Se
         raise LiveError(
             f"cannot open the session log {log_path}: {error}. Give a folder you can write to"
         ) from None
+    opened: list[TextIO] = []
     try:
-        events = events_path.open("a", encoding="utf-8", newline="\n")
+        for path in (events_path, decisions_path):
+            opened.append(path.open("a", encoding="utf-8", newline="\n"))
     except OSError as error:
         handler.close()
+        for stream in opened:
+            stream.close()
         raise LiveError(
-            f"cannot open the session event stream {events_path}: {error}. Give a folder "
+            f"cannot open the session logs' file {error.filename}: {error}. Give a folder "
             f"you can write to"
         ) from None
+    events, decisions = opened
     handler.set_name(_HANDLER_NAME)
     handler.setLevel(LOG_FILE_LEVEL)
     handler.setFormatter(_IstFormatter(now))
@@ -185,8 +225,10 @@ def configure_session_logs(folder: str | Path, day: DateLike, *, now: Now) -> Se
     return SessionLogs(
         log_path=log_path,
         events_path=events_path,
+        decisions_path=decisions_path,
         handler=handler,
         events=events,
+        decisions=decisions,
         now=now,
         restore_level=restore_level,
     )

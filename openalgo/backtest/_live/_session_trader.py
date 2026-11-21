@@ -13,14 +13,21 @@ venue map, the slices it releases live, its decisions and its broker candles.
 - **Decisions** (`drive`): at each strategy bar close the bars are revealed and the
   kernel's events delivered; `on_bar` runs when the strategy decides: trading has begun
   (the decision at or after `decide_from_ns`), its indicators are ready, and no base
-  slice of the bar is marked missing. Timers fire on the same terms. A skipped decision
-  is logged, and kept when it was skipped for missing data. An exception of the
-  strategy's code is raised as `StrategyFailed` once the kernel waits again (it refuses
-  the venue's results at a bar close), after which the strategy is called no more.
+  slice of the bar, nor of the bar before it in the series, is marked missing: a
+  crossing reads that bar too, and the candle that fills such a hole (the slice
+  watching began in) usually comes seconds later (`_unread`). Timers fire on the same
+  terms. A skipped decision is logged, and kept when it was skipped for missing data. An
+  exception of the strategy's code is raised as `StrategyFailed` once the kernel waits
+  again (it refuses the venue's results at a bar close), after which the strategy is
+  called no more. Every strategy bar gets a line in the decisions file, the one whose
+  `on_bar` raised among them, and each order the strategy's code submitted is looked at
+  for a rejection (`notes`, `_session_decisions.DecisionNotes`).
 - **Commands** (`commands`): the kernel's commands as the order worker's requests. A
   placement the kernel cancelled before the loop took it (the safe stop's cancel of an
   entry decided in the same loop step) is withdrawn: it is never sent, and the kernel is
-  told it was cancelled (`apply_cancel`).
+  told it was cancelled (`apply_cancel`). An entry or add placed while the strategy's
+  entries are locked (a reversal the kernel held for its stop's cancel) is refused,
+  never sent (`_session_unsent`).
 - **Candles**: the strategy's broker candles are `candles`, a `_session_candles.
   CandleKeeper`.
 - **Bookkeeping**: its entry locks and its saved `self.state` are
@@ -46,7 +53,9 @@ from ..errors import LiveError
 from ._plan_catch_up import INSTRUMENT, StrategyPlan
 from ._session_bookkeeping import Bookkeeping
 from ._session_candles import CandleKeeper
+from ._session_decisions import DecisionNotes
 from ._session_records import StrategyRecords
+from ._session_unsent import to_send
 from ._types import LOGGER_NAME, LiveBar, Now
 from ._venue_requests import LIVE_PRODUCT, OrderRequest
 from ._worker_queue import WithdrawPlace
@@ -65,12 +74,16 @@ _SLOW_NS = round(SLOW_CALLBACK_WARN_S * NANOS_PER_SECOND)
 
 class StrategyFailed(Exception):
     """The code of strategy `strategy` raised `error` (in `on_bar`, a callback or a
-    timer). The session stops safely, then raises `error` again (16-session-design 3.5)."""
+    timer), after it `submitted` what a decision line lists (`DecisionNotes.submitted`).
+    The session stops safely, then raises `error` again (16-session-design 3.5)."""
 
-    def __init__(self, strategy: str, error: BaseException) -> None:
+    def __init__(
+        self, strategy: str, error: BaseException, submitted: list[dict[str, Any]] | None = None
+    ) -> None:
         super().__init__(f"{strategy} raised {type(error).__name__}: {error}")
         self.strategy = strategy
         self.error = error
+        self.submitted = submitted or []
 
 
 @dataclass(frozen=True)
@@ -91,8 +104,8 @@ def ist_instant(day: dt.date, hhmm: str) -> int:
 class Trader(Bookkeeping):
     """One strategy of the session (module docstring): `part`, its share of the plan,
     `venue`, its venue map; `square_off_ns` its MIS square-off and `close_ns` its
-    exchange's session close (UTC nanoseconds); `now` the session's clock and `event`
-    the event stream's writer."""
+    exchange's session close (UTC nanoseconds); `now` the session's clock, `event` the
+    event stream's writer and `decision` the decisions file's."""
 
     def __init__(
         self,
@@ -103,6 +116,7 @@ class Trader(Bookkeeping):
         close_ns: int,
         now: Now,
         event: Callable[..., None],
+        decision: Callable[..., None],
     ) -> None:
         self.part, self.venue = part, venue
         self.name, self.symbol = part.spec.name, part.spec.symbol
@@ -111,6 +125,7 @@ class Trader(Bookkeeping):
         self._now, self._event = now, event
         self._opens = [opened for opened, _ in part.slices]
         self.candles = CandleKeeper(part, event=event)
+        self.notes = DecisionNotes(self.name, part, decision)
         self.first_live: int | None = None
         self.decide_from_ns: int | None = None
         self._seed: int | None = None
@@ -228,28 +243,40 @@ class Trader(Bookkeeping):
                 logger.info("%s: timers due at %s skipped", self.name, format_ist(decided_at))
         elif bars and decides:
             self._decide(next(iter(bars.values())), decided_at)
+        elif bars:
+            self.notes.not_deciding(decided_at, failed=self.failed, deciding=deciding)
 
     def _decide(self, bar: Any, decided_at: int) -> None:
         part = self.part
         if not part.indicators_ready(decided_at):
-            logger.debug("%s: indicators not ready at %s", self.name, format_ist(decided_at))
+            self.notes.not_ready(decided_at)
             return
-        missing = part.series.missing_slices(bar.ts_open, bar.ts_close)
+        missing = self._unread(bar.ts_open, bar.ts_close)
         if missing:
             skipped = Skipped(self.name, decided_at, SKIP_MISSING)
             self.skipped.append(skipped)
             logger.warning(
-                "%s: the decision at %s is skipped: the bar holds %d minute(s) with no data "
-                "(from %s)",
+                "%s: the decision at %s is skipped: its bar or the bar before it holds %d "
+                "minute(s) with no data (from %s)",
                 self.name,
                 format_ist(decided_at),
                 len(missing),
                 format_ist(missing[0]),
             )
             self._event("skipped_decision", strategy=self.name, decided_at_ns=decided_at)
+            self.notes.skipped(decided_at, SKIP_MISSING)
             return
+        # What code outside a pause submitted (a catch-up's callbacks) is not this decision's.
+        self.notes.submitted()
         started = self._now()
-        self._calling(part.strategy.on_bar, bar)
+        try:
+            submitted = self._calling(part.strategy.on_bar, bar)
+        except StrategyFailed as failed:
+            # The bar the strategy failed on is the one most worth a line.
+            self.notes.decided(
+                decided_at, bar, failed.submitted, self.open_units(), error=failed.error
+            )
+            raise
         if self._now() - started > _SLOW_NS and not self._slow_warned:
             self._slow_warned = True
             logger.warning(
@@ -257,14 +284,29 @@ class Trader(Bookkeeping):
                 self.name,
                 SLOW_CALLBACK_WARN_S,
             )
+        self.notes.decided(decided_at, bar, submitted, self.open_units())
 
-    def _calling(self, function: Callable[..., Any], *args: Any) -> None:
+    def _unread(self, ts_open_ns: int, ts_close_ns: int) -> tuple[int, ...]:
+        """The opens (UTC nanoseconds, oldest first) of the slices marked missing in the
+        strategy bar [ts_open_ns, ts_close_ns) or in the bar before it in the strategy's
+        series: a crossing, `shift(1)` or `[-2]` reads that bar too, so a hole there (the
+        minute watching began in, after a start in the middle of the session, until its
+        candle is read) would make the decision on values a backtest never has. A hole
+        further back skips no decision: a minute whose candle never comes holds up one
+        decision more, not the rest of the day."""
+        opens = self.part.context.store(self.symbol).column("ts_open")
+        since = int(opens[-2]) if len(opens) > 1 else ts_open_ns
+        return self.part.series.missing_slices(since, ts_close_ns)
+
+    def _calling(self, function: Callable[..., Any], *args: Any) -> list[dict[str, Any]]:
+        """Call the strategy's code; what it submitted (`DecisionNotes.submitted`)."""
         try:
             function(*args)
         # The strategy's own code: any exception it raises stops the session safely.
         except Exception as error:
             self.failed = True
-            raise StrategyFailed(self.name, error) from error
+            raise StrategyFailed(self.name, error, self.notes.submitted()) from error
+        return self.notes.submitted()
 
     # ----- orders and positions ----------------------------------------------------
 
@@ -279,7 +321,7 @@ class Trader(Bookkeeping):
         requests: list[OrderRequest | WithdrawPlace] = []
         commands = call(self.engine.take_commands)
         while commands:
-            kept = self._withdraw_cancelled(commands)
+            kept = to_send(self.engine, self.name, commands, event=self._event)
             for command in kept:
                 if command.get("command") != "place":
                     continue
@@ -288,22 +330,10 @@ class Trader(Bookkeeping):
                 if command.get("reason"):
                     self.reasons[kernel_order] = str(command["reason"])
             requests += self.venue.requests(kept)
-            # A withdrawal ends an order in the kernel, which may free an exit that waited
-            # for it: its commands go out in this same call.
+            # A withdrawal or a refusal ends an order in the kernel, which may free an exit
+            # that waited for it: its commands go out in this same call.
             commands = call(self.engine.take_commands) if len(kept) < len(commands) else []
         return requests
-
-    def _withdraw_cancelled(self, commands: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """`commands` without those of the orders both placed and cancelled in them, each
-        such order confirmed cancelled to the kernel (it never reached the broker)."""
-        placed = {int(c["order_id"]) for c in commands if c.get("command") == "place"}
-        cancelled = {int(c["order_id"]) for c in commands if c.get("command") == "cancel"}
-        withdrawn = placed & cancelled
-        for kernel_order in sorted(withdrawn):
-            call(self.engine.apply_cancel, kernel_order)
-            logger.info("%s: order o%d was cancelled before it was sent", self.name, kernel_order)
-            self._event("withdrawn", strategy=self.name, kernel_order=kernel_order)
-        return [c for c in commands if int(c["order_id"]) not in withdrawn]
 
     def open_units(self) -> float:
         """The kernel's position in the strategy's instrument, signed units (0 flat)."""

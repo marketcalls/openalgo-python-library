@@ -18,7 +18,6 @@ import logging
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from session_samples import ist
-from session_trace import OTHER_SIDE, WITHIN
 from shared_samples import A_UNITS, B_UNITS, SbinBreakout, SbinShort, SbinTrend, sbin_orders
 from stops_samples import STOP_POINTS, stop_world
 
@@ -156,12 +155,8 @@ def test_F113_a_reversal_across_another_members_long_is_refused_whole(world):
 
 
 def test_a_member_is_refused_every_entry_while_another_member_reverses(world):
-    reason = (
-        "A's reversal (a sale of 200 against its long of 100) is an entry whose part beyond "
-        "the position opens the short: the checks take the whole sale as an exit"
-    )
-    world.trace.waive(WITHIN, reason)
-    world.trace.waive(OTHER_SIDE, reason)
+    # A's reversal (a sale of 200 against its long of 100) is an entry: the invariants
+    # hold its closing part as an exit and follow A's leg to the short (2.4.0 item P2-3).
     outcome = world.run([LongThenReverse, BuyAtSecond])
 
     # A's reversal works when B decides in the same step: B's buy would end long against

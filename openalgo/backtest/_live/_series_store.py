@@ -39,8 +39,8 @@ class LiveStore(SeriesStore):
     first pause.
 
     `version` changes whenever the bars change: a decision revealed a bar, or a candle
-    replaced a base bar. Its views (`view`) and indicators are live views that recompute
-    once per change (`_series_indicators`). Made by `LiveSeries.store`.
+    filled a base slice that had none. Its views (`view`) and indicators are live views
+    that recompute once per change (`_series_indicators`). Made by `LiveSeries.store`.
     """
 
     def __init__(
@@ -59,6 +59,8 @@ class LiveStore(SeriesStore):
         self._held = 0
         self._version = 0
         self._bars_of: tuple[int, dict[str, Any]] | None = None
+        #: The `self.I` indicators registered on the store, in order.
+        self.indicators: list[LiveIndicator] = []
 
     @property
     def version(self) -> int:
@@ -124,8 +126,8 @@ class LiveStore(SeriesStore):
     def reveal(self, row: tuple) -> Bar:
         """The bar of the kernel's strategy-bar row (index, ts_open, ...) as the store
         holds it, after the run context has moved the clock to the row's decision: the
-        series' bar, built from the accepted candles where they came (`series` module
-        docstring).
+        series' bar, built from the bars built from ticks and the candles of minutes that
+        made none (`series` module docstring).
 
         Raises LiveError when the store holds no bar opening at the row's open: the
         kernel was given a bar the series was not.
@@ -141,8 +143,11 @@ class LiveStore(SeriesStore):
         return Bar(self.symbol, *(self._series[name].item(index) for name in COLUMNS))
 
     def indicator_adapter(self, call: Any, names: list[str], causal: tuple[str, ...]) -> Any:
-        """What `_indicators.register` needs for an indicator on this store."""
-        return LiveIndicator(self, call, names, causal)
+        """What `_indicators.register` needs for an indicator on this store, kept in
+        `indicators`."""
+        indicator = LiveIndicator(self, call, names, causal)
+        self.indicators.append(indicator)
+        return indicator
 
 
 __all__ = ["COLUMNS", "Clock", "LiveStore"]
