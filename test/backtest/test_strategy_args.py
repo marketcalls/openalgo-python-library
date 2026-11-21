@@ -243,6 +243,68 @@ def test_both_verbs_resolve_a_setting_by_strategy_name_alike(resolve, setting, g
         assert resolve(setting, given) == expected
 
 
+#: The per-strategy settings that are off for a strategy given None (no cap, no halt, no
+#: cooldown, no daily limit): a dict that leaves a strategy out says how to leave it so.
+OFF_WHEN_NONE = (
+    "max_positions",
+    "drawdown_halt",
+    "cooldown",
+    "max_trades_per_day",
+    "daily_profit_target",
+    "max_order_value",
+)
+
+
+@pytest.mark.parametrize("resolve", [backtest_values, live_values], ids=["backtest", "live"])
+@pytest.mark.parametrize("setting", OFF_WHEN_NONE)
+def test_a_dict_leaving_out_a_strategy_says_none_leaves_it_without_the_setting(resolve, setting):
+    with pytest.raises(ConfigError) as refused:
+        resolve(setting, {"capital": CAPITAL, setting: {"Alpha": 2}})
+    assert str(refused.value) == (
+        f"{setting} as a dict must name every strategy of the run (give one value for all of "
+        f"them, or a value for each), and the dict gives none for ['Beta']: give None for a "
+        f"strategy that has no {setting}"
+    )
+
+
+@pytest.mark.parametrize("resolve", [backtest_values, live_values], ids=["backtest", "live"])
+def test_a_capital_dict_leaving_out_a_strategy_keeps_its_words(resolve):
+    with pytest.raises(ConfigError) as refused:
+        resolve("capital", {"capital": {"Alpha": 50_000}})
+    assert str(refused.value) == (
+        "capital is mandatory for every strategy, and the dict gives none for ['Beta']"
+    )
+
+
+@pytest.mark.parametrize(
+    ("setting", "value"),
+    [
+        ("max_daily_loss", 2_000),
+        ("entry_from", "09:30"),
+        ("square_off", "15:00"),
+        ("after_risk_exit", "lock_session"),
+    ],
+    ids=["max_daily_loss", "entry_from (None is the calendar's time)", "square_off", "after"],
+)
+def test_a_backtest_dict_of_a_setting_none_does_not_turn_off_keeps_its_words(setting, value):
+    # max_daily_loss is mandatory live; None for the others is a default, not "none".
+    with pytest.raises(ConfigError) as refused:
+        backtest_values(setting, {"capital": CAPITAL, setting: {"Alpha": value}})
+    assert str(refused.value) == (
+        f"{setting} as a dict must name every strategy of the run (give one value for all of "
+        "them, or a value for each), and the dict gives none for ['Beta']"
+    )
+
+
+@pytest.mark.parametrize("resolve", [backtest_values, live_values], ids=["backtest", "live"])
+@pytest.mark.parametrize("setting", OFF_WHEN_NONE)
+def test_none_in_a_dict_leaves_that_strategy_without_the_setting(resolve, setting):
+    assert resolve(setting, {"capital": CAPITAL, setting: {"Alpha": None, "Beta": 2}}) == {
+        "Alpha": None,
+        "Beta": 2,
+    }
+
+
 def test_the_shared_table_holds_every_per_strategy_setting_but_those_refused_live():
     # product and base are refused live (bt.live takes no product= and no base=).
     shared = {row[1] for row in SHARED}

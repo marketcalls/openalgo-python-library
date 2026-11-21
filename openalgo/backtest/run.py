@@ -241,8 +241,10 @@ def backtest(
     every strategy: `capital`, `product`, `base`, `max_daily_loss`, `after_risk_exit`,
     `max_positions`, `drawdown_halt`, `cooldown`, `entry_from`, `entry_until`,
     `square_off`, `max_trades_per_day`, `daily_profit_target` and `max_order_value`; a
-    class attribute of the same name still wins. `params` is a dict by
-    strategy class name (one left out keeps its defaults); a list of one strategy takes
+    class attribute of the same name still wins. None for a strategy in such a dict leaves
+    it without `max_positions`, `drawdown_halt`, `cooldown` or that daily limit (each off
+    when None). `params` is a dict by strategy class name (one left out keeps its
+    defaults); a list of one strategy takes
     that strategy's own values, as a class does. Every other argument is the run's: one
     value. Of those keyed by what is traded, each strategy is given the entries of what it
     trades: `data` by symbol, `instrument` by symbol on the strategy's exchange (a
