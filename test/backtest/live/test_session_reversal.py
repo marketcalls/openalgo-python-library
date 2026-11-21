@@ -346,8 +346,8 @@ def test_the_venue_reason_gives_each_refusal_of_the_broker_or_the_session_its_ad
         "for a broker's refusal, read its reason in the session's journal and the OpenAlgo "
         "order book; for a resting reversal, which the session's warnings name, submit the "
         "reversal as a MARKET order, or exit and enter separately; for a resting order "
-        "against the open position, put a take-profit in targets= or exit with a MARKET "
-        "order"
+        "against the open position, set target= or targets= on the entry, or exit with a "
+        "MARKET order"
     )
 
 

@@ -7,10 +7,11 @@ entry (`venue_roles`: it could open the other side). At the broker it would work
 the stop, both on the closing side, for twice the position, and both could fill: the
 stop first and the order later leave the account on the other side with no stop. So a
 live session refuses it before anything reaches the broker, rejected with `venue`, as it
-refuses a resting reversal (2.4.0 item P3-2). A take-profit belongs in `targets=` (held
-by the engine, sent at MARKET), and an exit at MARKET is sent as before. A resting order
-that fits the position's closing room (no stop working) and a resting entry placed while
-flat are sent as before, and a backtest takes every one of them as before.
+refuses a resting reversal (2.4.0 item P3-2). A take-profit belongs in `target=` or
+`targets=` on the entry (held by the engine, sent at MARKET), and an exit at MARKET is
+sent as before. A resting order that fits the position's closing room (no stop working)
+and a resting entry placed while flat are sent as before, and a backtest takes every one
+of them as before.
 
 The market and the script are `session_samples`': the session starts at 14:40:05 IST on
 Monday 2026-11-16 and SBIN trades 10 units every 10 s (at :05, :15 and so on) at 500.00
@@ -252,7 +253,10 @@ def test_the_log_names_the_refused_sale_as_a_rejection_of_its_order(world, caplo
     ) in lines
 
 
-def test_the_refusal_says_to_put_a_take_profit_in_targets_or_to_exit_at_market(world, caplog):
+def test_the_refusal_says_to_set_a_take_profit_on_the_entry_or_to_exit_at_market(world, caplog):
+    # Risk arguments attach to the position the order opens, so a take-profit for the
+    # next position goes on its entry: `target=` for one, `targets=` for (distance,
+    # fraction) pairs. The open position can still be exited at MARKET.
     outcome = world.run(LongThenRestingSale, on_stop="keep")
 
     (line,) = [
@@ -261,7 +265,8 @@ def test_the_refusal_says_to_put_a_take_profit_in_targets_or_to_exit_at_market(w
         if record.levelname == "WARNING" and "against the open position" in record.getMessage()
     ]
     assert line.startswith("LongThenRestingSale: ")
-    assert "targets=" in line and "MARKET" in line
+    assert "set target= or targets= on the entry" in line
+    assert line.endswith("or exit with a MARKET order")
     assert line in outcome.warnings
 
 
@@ -318,19 +323,19 @@ def resting_against(side: str, price: float | None, trigger: float | None) -> ty
 
 
 @pytest.mark.parametrize(
-    ("side", "price", "trigger"),
+    ("side", "price", "trigger", "order_type"),
     [
-        ("SELL", TAKE_PROFIT, None),
-        ("SELL", None, 495.0),
-        ("SELL", 494.0, 495.0),
-        ("BUY", 495.0, None),
-        ("BUY", None, 505.0),
-        ("BUY", 506.0, 505.0),
+        ("SELL", TAKE_PROFIT, None, "LIMIT"),
+        ("SELL", None, 495.0, "SL-M"),
+        ("SELL", 494.0, 495.0, "SL"),
+        ("BUY", 495.0, None, "LIMIT"),
+        ("BUY", None, 505.0, "SL-M"),
+        ("BUY", 506.0, 505.0, "SL"),
     ],
     ids=["long-LIMIT", "long-SL-M", "long-SL", "short-LIMIT", "short-SL-M", "short-SL"],
 )
 def test_a_resting_order_against_the_position_of_any_type_is_never_sent(
-    world, side, price, trigger
+    world, side, price, trigger, order_type
 ):
     # The price stays at 500.00: the position and its stop (an SL-M on the closing side,
     # `side`) are all the broker holds.
@@ -341,7 +346,9 @@ def test_a_resting_order_against_the_position_of_any_type_is_never_sent(
         (opening, UNITS, "MARKET", "complete"),
         (side, UNITS, "SL-M", "trigger pending"),
     ]
-    assert [row[-1] for row in refused(outcome, "RestingAgainst")] == ["venue"]
+    assert [(row[2], row[-1]) for row in refused(outcome, "RestingAgainst")] == [
+        (order_type, "venue")
+    ]
 
 
 # ----- what is sent as before ----------------------------------------------------------------
@@ -460,8 +467,12 @@ def test_an_opposite_entry_while_a_resting_entry_works_is_refused_in_flight(
     assert world.fake.position("SBIN", "NSE") == 0
 
 
-def test_no_alert_names_a_leg_left_without_a_stop(world, caplog):
-    # The refusal leaves the long with its stop working: nothing is bare.
+def test_stop_first_no_error_alert_names_a_position_left_without_a_stop(world, caplog):
+    # Before 2.4.0 item P4-1 the sale filled after the stop and the session alerted
+    # "LongThenRestingSale SBIN NSE -10 units: no stop at the broker, close it by hand".
+    # Now the refusal leaves the long with its stop alone, the stop closes it, and no
+    # error alert comes.
+    world.script.price = STOP_FIRST
     world.run(LongThenRestingSale, on_stop="keep")
 
-    assert not [text for text in alerts(caplog, "error") if "had no stop" in text]
+    assert alerts(caplog, "error") == []
