@@ -76,8 +76,9 @@ CHECKS = frozenset(
         ONE_SIDE,
     }
 )
-#: The rows 7.1 lists as leaving a leg without a confirmed stop at the end.
-LISTED_ROWS = frozenset({"F35", "F36", "F60", "F77 variant", "F80"})
+#: The rows 7.1 lists as leaving a leg without a confirmed stop at the end, and the two
+#: rows of a shared instrument 18-multi-strategy 5.1 (I7) adds.
+LISTED_ROWS = frozenset({"F35", "F36", "F60", "F77 variant", "F80", "F105", "F118"})
 
 
 @dataclass(frozen=True)
@@ -218,10 +219,11 @@ class SessionTrace:
             self._record_modifies(book)
 
     def leave_unprotected(self, strategy: str, row: str) -> None:
-        """The test (one of the rows 7.1 lists: F35, F36, F60, the F77 variant, F80)
-        asserts `strategy`'s leg unprotected in `open_positions` and the ERROR alert that
-        names it: the end's protection invariant takes that instead of a stop. Raises
-        ValueError for a row 7.1 does not list (`left_unprotected_by_decision`)."""
+        """The test (one of the rows 7.1 lists: F35, F36, F60, the F77 variant, F80, and
+        18-multi-strategy's F105 and F118) asserts `strategy`'s leg unprotected in
+        `open_positions` and the ERROR alert that names it: the end's protection
+        invariant takes that instead of a stop. Raises ValueError for a row 7.1 does not
+        list (`left_unprotected_by_decision`)."""
         if row not in LISTED_ROWS:
             raise ValueError(f"7.1 lists {sorted(LISTED_ROWS)}, not {row!r}")
         self.unprotected[strategy] = row
