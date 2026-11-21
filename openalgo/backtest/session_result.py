@@ -45,7 +45,9 @@ not it has rows.
 - `drift`: each broker candle against the bar built from the feed's ticks. The strategy
   decided, and kept deciding, on the bars built from ticks: a broker candle never
   replaced one, and was the bar only of a minute with no ticks (one the feed was dead
-  in, the minute watching began in). `unprotected`:
+  in, the minute watching began in). A restart is the exception: the bars built from
+  ticks before it are not kept, so the restarted session, its strategy and its kernel
+  alike, holds the broker's candles for the minutes before it. `unprotected`:
   each window a position had no confirmed stop at the broker, and why. `locks`: each
   entry lock, when it was set and lifted. `reconciliations`: each comparison with the
   broker's books that differed, and what was done; in a session with an instrument

@@ -16,7 +16,6 @@ import numpy as np
 import pytest
 from series_samples import LIVE_DAY, MINUTE_NS, before, live_bar, minute_bars, on_day
 
-from openalgo.backtest._live.bars import CandleCheck
 from openalgo.backtest._live.series import LiveSeries
 from openalgo.backtest.errors import CalendarError, ConfigError, LiveError
 
@@ -213,17 +212,12 @@ def test_a_candle_equal_to_the_bar_its_slice_has_changes_nothing():
     assert series.version == before_again
 
 
-def test_the_tick_bar_a_check_gives_back_for_another_slices_candle_changes_nothing():
+def test_the_tick_bar_its_slice_has_taken_again_changes_nothing():
     series = series_with(1)
     opened = int(TODAY.ts_open.iloc[0])
-    # A two-minute candle opening with the slice does not cover it: the check gives the
-    # tick bar back, and the slice keeps it.
-    wide = dataclasses.replace(
-        live_bar(TODAY.iloc[0], "candle"), ts_close_ns=int(TODAY.ts_close.iloc[1])
-    )
-    before_check = series.version
-    series.take(CandleCheck().accepted(series.tick_bar(opened), wide))
-    assert (series.version, series.bar(opened)) == (before_check, live_bar(TODAY.iloc[0]))
+    before_again = series.version
+    series.take(series.tick_bar(opened))
+    assert (series.version, series.bar(opened)) == (before_again, live_bar(TODAY.iloc[0]))
 
 
 @pytest.mark.parametrize(

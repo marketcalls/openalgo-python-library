@@ -12,10 +12,13 @@ candles that fill the minutes no tick bar was built for, and missing-data marks.
   decision or show one twice. So a broker candle is the bar only of a slice that has
   none (a minute with no tick, a slice marked missing, the minute watching began in),
   and for a slice with a tick bar it is only checked against it (`tick_bar`,
-  `CandleCheck.accepted`) for the drift log. A slice that closed while the feed was dead
+  `CandleCheck.covers`) for the drift log. A slice that closed while the feed was dead
   with no bar is marked missing until a bar of it arrives (2.5 B and C); the candle that
   fills it refreshes the indicators, and no decision is made on it after the fact
-  (08-live-trading section 5 rules 3 and 7).
+  (08-live-trading section 5 rules 3 and 7). The tick bars live only as long as the
+  process: a restart's catch-up gives the series and the kernel the broker's candles of
+  the minutes before it (`plan`), so a crossing near a restart may be read on a candle
+  where the decision before the restart read the tick bar.
 - `LiveStore` (`_series_store`, re-exported here) is the series at one interval as a
   strategy reads it: the bars closed by the decision instant, built from the base bars
   with the resampler a backtest builds its bars with (`resample.resample_bars`), so the

@@ -7,7 +7,7 @@ steps 11 to 15; unit 8): what the candle checks ask for, and what each read's ca
   given up on as a read with no candle would (`give_up`).
 - A candle of a live slice already released is taken as the slice's bar when it has
   none (a minute with no tick, a seed minute, a slice marked missing). When the slice
-  has a tick bar the candle is checked against it (`CandleCheck.accepted`: kept as drift
+  has a tick bar the candle is checked against it (`CandleCheck.covers`: kept as drift
   when it covers the slice, its event carrying both bars' prices and volume, so the
   bars decided on can be rebuilt) and the series keeps the tick bar: the strategy keeps the
   bars it decided on, as the kernel keeps the bar it ran (lead decision 2026-11-21, 2.4.0
@@ -119,7 +119,7 @@ class CandleKeeper:
         elif bar.source != TICKS_SOURCE or self._checked.get(opened) == candle:
             # A slice a candle filled keeps that candle; a candle read again was checked.
             self._needs.discard(opened)
-        elif self._checks.accepted(bar, candle) is candle:
+        elif self._checks.covers(bar, candle):
             self._checked[opened] = candle
             self._needs.discard(opened)
             self._drift_event(bar, candle)

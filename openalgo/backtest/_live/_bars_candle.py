@@ -253,16 +253,15 @@ class CandleCheck:
             ticks=tick_bar.ticks,
         )
 
-    def accepted(self, tick_bar: LiveBar, candle: LiveBar) -> LiveBar:
-        """The candle when it covers the tick bar's slice (same open and close, so a
+    def covers(self, tick_bar: LiveBar, candle: LiveBar) -> bool:
+        """True when the candle covers the tick bar's slice (same open and close, so a
         candle of another interval never checks the bar), its drift then kept in
-        `drifts`; else the tick bar, with nothing kept (the session asks the broker
-        again). Raises ConfigError as `compare` does."""
+        `drifts`; False with nothing kept (the session asks the broker again). Either
+        way the bar stays the tick bar. Raises ConfigError as `compare` does."""
         drift = self.compare(tick_bar, candle)
-        if not drift.same_slice:
-            return tick_bar
-        self._drifts.append(drift)
-        return candle
+        if drift.same_slice:
+            self._drifts.append(drift)
+        return drift.same_slice
 
 
 __all__ = [
