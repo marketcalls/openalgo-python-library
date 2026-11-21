@@ -113,6 +113,7 @@ class VenueMap(RestoredOrders, Withdrawals):
         self._by_intent: dict[str, int] = {}
         # Requests handed over whose answer (SendResult or NotSent) has not come.
         self._issued: dict[int, OrderRequest] = {}
+        self._withdrawing: set[int] = set()
 
     @property
     def strategy(self) -> str:
@@ -242,10 +243,11 @@ class VenueMap(RestoredOrders, Withdrawals):
     def not_sent(self, message: NotSent) -> Handled:
         """Take a request the worker did not send (2.5 A.4): one put back waits; an entry
         or add is rejected, or cancelled when it was withdrawn for the kernel's cancel
-        (`cancelled_place`); a modify gets `apply_modify_refused`; a stop or exit after the
-        guard locked, and a cancel, change nothing (a refused cancel is settled by the
-        worker's read); any other stop not sent is placed again once (R3), an exit
-        rejected."""
+        (`cancelled_place`), or rejected with `live_lock` when it was withdrawn for the
+        strategy's entry locks (`locked_place`); a modify gets `apply_modify_refused`; a
+        stop or exit after the guard locked, and a cancel, change nothing (a refused
+        cancel is settled by the worker's read); any other stop not sent is placed again
+        once (R3), an exit rejected."""
         request = message.request
         if not isinstance(request, PlaceRequest | ModifyRequest | CancelRequest):
             raise LiveError(f"the venue map makes order requests only, not {request!r}")
@@ -257,6 +259,8 @@ class VenueMap(RestoredOrders, Withdrawals):
             return self._modify_result(order, request, confirmed=False)
         if message.reason is NotSentReason.CANCELLED:
             return self.cancelled_place(request.kernel_order)
+        if message.reason is NotSentReason.ENTRIES_LOCKED:
+            return self.locked_place(request.kernel_order)
         if isinstance(request, PlaceRequest):
             entry = request.intent.purpose in ENTRY_PURPOSES
             if entry or message.reason is not NotSentReason.LOCKED:

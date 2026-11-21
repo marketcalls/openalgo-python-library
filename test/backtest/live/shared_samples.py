@@ -9,7 +9,8 @@ in call order: at their first decision (14:42:01, both filled at once at 500.00)
 100 units with a stop 3 points below (an SL-M at 497.00) and a target 2 points above
 (502.00), B buys 50 units with a stop 3 points below (497.00); then neither trades again.
 `LateBreakout` is a B that buys its 50 at its second decision (14:43:01), so that its
-position opened after A's; `SbinShort` is a B that sells 50 instead, for the side gate.
+position opened after A's, and `LateTrend` an A without a target that buys its 100 so;
+`SbinShort` is a B that sells 50 instead, for the side gate.
 `ShortTrend` is an A that sells 100 with a stop 3 points above (an SL-M buy at 503.00),
 and `LateShort` a B that sells 50 so at its second decision.
 `OnceA` and `OnceB` buy A's and B's units once a day, flat or after a restart (they
@@ -55,6 +56,19 @@ class LateBreakout(StopHold):
     the position of the two that opened most recently."""
 
     qty = B_UNITS
+
+    def on_bar(self, bar):
+        self.calls += 1
+        if self.calls == 2:
+            self.buy(self.qty, **type(self).rules)
+
+
+class LateTrend(StopHold):
+    """A as `SbinTrend` without its target, buying its 100 units at its second decision
+    (14:43:01) instead: the position of the two that opened most recently when B buys at
+    its first."""
+
+    qty = A_UNITS
 
     def on_bar(self, bar):
         self.calls += 1
@@ -147,6 +161,7 @@ __all__ = [
     "TARGET_POINTS",
     "LateBreakout",
     "LateShort",
+    "LateTrend",
     "NeverB",
     "OnceA",
     "OnceB",

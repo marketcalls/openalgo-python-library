@@ -16,6 +16,7 @@ import logging
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from session_samples import alerts, ist
+from session_trace import MEMBERS_WITHIN, WITHIN
 from stops_samples import stop_world
 
 import openalgo.backtest as bt
@@ -132,6 +133,68 @@ def test_a_reversal_released_once_entries_locked_is_rejected_with_the_lock_s_cod
     # The code a submission gets while entries are locked (the kernel's entry gates).
     outcome = locked_world.run(ShortThenReverse)
     assert reject_codes(outcome) == [("BUY", 2.0 * UNITS, "live_lock")]
+
+
+class ShortTwoTargetsThenRestingReverse(bt.Strategy):
+    """Sells `UNITS` at its first decision with a stop 3 points above and two targets, half
+    at 1 point and the rest at 2 points below; at its third decision (14:44:01), while
+    short, it rests a reversal: a LIMIT buy of 20 at 495.00, below the market."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "1m"
+
+    def init(self):
+        self.calls = 0
+
+    def on_bar(self, bar):
+        self.calls += 1
+        if self.calls == 1:
+            targets = [(bt.points(1), 0.5), (bt.points(2), 0.5)]
+            self.sell(UNITS, stop=bt.points(STOP_POINTS), targets=targets)
+        elif self.calls == 3 and self.position.qty < 0:
+            self.buy(2 * UNITS, price=495.0, reverse=True)
+
+
+def test_a_resting_reversal_does_not_cover_a_short_left_without_its_stop(world, caplog):
+    # 2.4.0 item M8-X1. SBIN trades at 498.00 at 14:43:55: both targets are reached on one
+    # tick, so the kernel cancels the short's stop for the two purchases of 5 (14:43:58),
+    # and the broker refuses the first. The second fills, but its words are held until
+    # 14:44:01, so 5 units are found short with no stop in the loop step of the decision
+    # of 14:44:01. That decision rests the reversal, a buy below the market, which closes
+    # nothing on a rise: the leg is bare all the same, so its stop is placed again over
+    # the 5 units at once and an ERROR alert says so (not only by the safe stop's
+    # protect at 14:44:30, which cancels the resting entry).
+    faults = world.fake.faults
+
+    def refuse_the_first():
+        world.fake.reject_next("RMS: blocked", price_type="MARKET", at_placement=True)
+
+    def hold_the_words():
+        faults.hold_order_updates()
+        for _ in range(10):
+            faults.gateway_error("orderstatus")
+
+    world.script.at(ist(14, 43, 50), refuse_the_first)
+    world.script.at(ist(14, 43, 57) + 500_000_000, hold_the_words)
+    world.script.at(ist(14, 44, 1), faults.release_order_updates)
+    world.script.price = lambda now_ns: 498.0 if now_ns >= ist(14, 43, 50) else 500.0
+    why = (
+        "the kernel works a resting reversal beside the leg's stop, both on the closing side "
+        "(as for a strategy that rests one while its stop works, 2.3.0); reported to the "
+        "lead with item M8-X1"
+    )
+    for check in (WITHIN, MEMBERS_WITHIN):
+        world.trace.waive(check, why)
+    world.run(ShortTwoTargetsThenRestingReverse, on_stop="keep")
+
+    reversal = next(o for o in world.orders() if o.price_type == "LIMIT")
+    stops = [o for o in world.orders() if o.price_type == "SL-M"]
+    assert [(o.quantity, o.status) for o in stops] == [
+        (UNITS, "cancelled"),
+        (UNITS // 2, "trigger pending"),
+    ]
+    assert ist(14, 44, 1) <= stops[-1].placed_ns < ist(14, 44, 5)
+    assert reversal.placed_ns < ist(14, 44, 5)
+    assert [text for text in alerts(caplog, "error") if "had no stop" in text]
 
 
 class LateReverse(bt.Strategy):

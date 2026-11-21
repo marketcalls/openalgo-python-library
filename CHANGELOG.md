@@ -135,10 +135,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the account refused, with times; and the net position of each instrument two strategies
     held, at every change. `report.tearsheet(pf)` gives the same page. Each strategy's own
     page is still `pf.strategy(name).tearsheet()`.
+    On this page the hover title of each MAE and MFE scatter mark names its strategy
+    ("LongDaily trade 1: MAE ..."), since each strategy numbers its own trades.
   - Custom tearsheets: `report.PARTS` gains the "portfolio" section with the parts
     `contribution`, `account_margin`, `refused` and `net_positions`, which a layout hides,
     shows and orders like any other part. On a portfolio a layout's block functions receive
     the `PortfolioResult`, and a Theme's series colours colour the strategies.
+- A live session's strategies as one account, and every per-strategy live setting by name
+  (2.4.0, unit M5).
+  - `SessionResult.portfolio`: a `PortfolioResult` of the session's strategies, holding the
+    same `results`, so it covers this start only. It has the account on the sum of the
+    strategies' capitals (its equity as `metrics.combine_equity` adds theirs, the margin the
+    engines block, free cash and this start's daily loss measure), the metrics, `summary()`,
+    the combined `tearsheet()`, every strategy's tables in one with a `strategy` column, and
+    `net_positions` for an instrument several strategies share. Its Assumptions name the
+    funds OpenAlgo reported at the start and say the margin and free cash are the engines'
+    model, not the broker's. `refused` lists the entries the account's trade cap refused
+    (`account_trade_limit`); entries locked out by the account's loss limit or profit target
+    are in each strategy's orders as `live_lock`.
+  - `bt.live`: `after_risk_exit`, `max_positions`, `drawdown_halt`, `cooldown`, `entry_from`,
+    `entry_until` and `square_off` each take one value for every strategy, as before, or a
+    dict naming each strategy by class name, as `bt.backtest` takes them for a list of
+    strategies. A dict that names a strategy the session does not run, or leaves one out, is
+    refused before anything is sent. A class attribute of the same name still wins. Every
+    existing `bt.live` call works unchanged.
+  - `PortfolioResult` takes an optional keyword `notes`: Assumptions lines a run words
+    itself, in place of the block's own lines of the same key.
 - Daily limits per strategy and for the account, in `bt.backtest` and `bt.live` (2.4.0, unit
   M10). Each is off unless set, and takes one value or a dict by strategy class name; a class
   attribute of the same name wins.
@@ -260,6 +282,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on an EMA crossing that the full series shows one minute earlier, before that decision. The
   strategy now decides at the next close, with the minute's bar in its series once its
   candle is read. A minute whose candle never comes holds up one more decision, no more.
+- Live sessions: an entry or add held in the order worker's queue by
+  `max_orders_per_second` is now withdrawn once its strategy's entries lock for any reason (a
+  dead feed, a reconciliation mismatch, failed exits, a closing order refused on a shared
+  instrument), and the strategy sees it rejected with `live_lock`. Before, only the daily
+  profit target, the kill switch and the safe stop withdrew it, so an add could be bought up
+  to 5 s after such a lock.
+- Live sessions: a position left with no stop at the broker and nothing to close it (for
+  example after one of two targets that fired together was refused) gets its stop placed
+  again and an alert even when the strategy rests a reversal, such as a LIMIT buy below the
+  market against a short. Only a MARKET reversal, which closes the position at once, now
+  counts as covering it; before, a resting reversal hid the missing stop.
 
 ## [2.3.0] - 2026-11-20
 

@@ -12,17 +12,19 @@ opposite sides at any change) among them.
 
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
-from session_samples import ist
+from session_samples import NS, ist
 from shared_samples import A_UNITS, B_UNITS, SbinBreakout, SbinShort, SbinTrend, sbin_orders
 from stops_samples import STOP_POINTS, stop_world
 
 import openalgo.backtest as bt
 from openalgo.backtest._live._groups import GROUP_REVERSING_LOCK
+from openalgo.backtest._live._reconcile_schedule import RECONCILE_EVERY_S
 from openalgo.backtest._live._types import LOGGER_NAME
 
 
@@ -179,6 +181,23 @@ def test_F119_a_resting_entry_on_a_shared_instrument_is_refused(world):
         ("MARKET", "complete"),
         ("SL-M", "cancelled"),
     ]
+
+
+def test_F119_the_groups_comparisons_run_while_a_members_stop_rests(world):
+    outcome = world.run([LimitBuy, SbinBreakout])
+
+    # A confirmed resting stop is not in flight (4.6 item 1): the group is compared at the
+    # first scheduled read after B's stop is placed, not late, and at each read after it.
+    stop = next(o for o in sbin_orders(world, "SbinBreakout") if o.price_type == "SL-M")
+    agreed = [
+        e["ts_ns"]
+        for e in outcome_events(outcome, "reconcile")
+        if e["strategy"] == "SbinBreakout"
+        and (e["found"], e["engine_units"], e["broker_units"]) == ("agree", B_UNITS, B_UNITS)
+    ]
+    every = RECONCILE_EVERY_S * NS
+    assert agreed and stop.placed_ns < agreed[0] <= stop.placed_ns + every
+    assert all(later - earlier <= every for earlier, later in itertools.pairwise(agreed))
 
 
 def test_F119_variant_a_strategy_alone_on_its_instrument_keeps_its_resting_orders(

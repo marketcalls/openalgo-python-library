@@ -5,9 +5,11 @@ state as the close stopped it (`Closing`; as it stands, for a run that crashed).
 
 4. **No orphan.** Every order of the session's working at the fake is a working kernel
    order of that run (bound to its broker ID), and no stop of it works for a position the
-   fake holds flat.
+   fake holds flat, or for a member of an instrument group whose own leg is flat
+   (18-multi-strategy I1).
 5. **Protected.** Each position the fake holds on the side of a leg that wants a stop is
-   covered by the session's working stops, confirmed working by its stops supervisor,
+   covered by the session's working stops of that leg's own strategy (18-multi-strategy
+   I7: per member), confirmed working by its stops supervisor,
    unless the test leaves the leg unprotected by a row 7.1 lists or a decided end (then
    named: a row of `open_positions` with no confirmed stop and an ERROR alert naming the
    strategy). 2 is asserted once more here, over what works at the end.
@@ -91,7 +93,10 @@ def no_orphan(
                 f"order of the session: an orphan ({order})"
             )
     for order in working:
-        flat = held.get(order.instrument, 0) == 0
+        # A flat position of the instrument, or of the member the stop is of
+        # (18-multi-strategy I1, per member).
+        member = closing.get(order.strategy)
+        flat = held.get(order.instrument, 0) == 0 or (member is not None and not member.units)
         if order.mode is run.mode and order.price_type in STOP_TYPES and flat:
             room = rooms.get(order.instrument)
             assert room is not None and room.took(order), (
@@ -144,7 +149,10 @@ def at_the_end(
             continue
         if not leg.wants_stop or not leg.units:
             continue
-        stops = sum(o.remaining for o in exits if o.price_type in STOP_TYPES)
+        # Its own stops (18-multi-strategy I7, per member): another member's stop on the
+        # instrument covers that member's units, never this one's.
+        own = [o for o in exits if o.strategy == leg.strategy]
+        stops = sum(o.remaining for o in own if o.price_type in STOP_TYPES)
         needed = min(held, abs(round(leg.units)))
         assert min(stops, leg.stop_covers) >= needed, (
             f"7.1: {leg.strategy} ends with {position} units of {leg.symbol} at the fake, "
