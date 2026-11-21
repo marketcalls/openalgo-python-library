@@ -35,7 +35,7 @@ from .._engine import call
 from ._session_trader import Trader
 from ._stops_kernel import PROTECT_PLACED, protect
 from ._stops_report import protect_words, while_running
-from ._types import LOGGER_NAME, AlertKind
+from ._types import LOGGER_NAME, MARKET, AlertKind
 
 logger = logging.getLogger(LOGGER_NAME)
 
@@ -101,7 +101,7 @@ def _closing_orders(trader: Trader) -> list[int]:
     reversals = []
     for kernel_order in trader.entry_orders():
         order = call(trader.engine.order, kernel_order)
-        if order["order_type"] == "MARKET" and order["side"] == closing:
+        if order["order_type"] == MARKET and order["side"] == closing:
             reversals.append(kernel_order)
     return trader.exit_orders() + reversals
 

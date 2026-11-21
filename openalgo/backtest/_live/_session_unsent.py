@@ -69,7 +69,7 @@ from .._engine import call
 from ._fill_ledger import VENUE_REJECT_CODE
 from ._order_state import ENTRY_PURPOSES
 from ._session_decisions import units_text
-from ._types import LOGGER_NAME, Purpose
+from ._types import LOGGER_NAME, MARKET, Purpose
 from ._venue_requests import ROLE_PURPOSES
 
 #: The reject code of an entry or add while entries are locked (the kernel's `live_lock`).
@@ -92,8 +92,6 @@ RESTING_AGAINST_WORDS = (
     "itself: set target= or targets= on the entry (sent at MARKET when reached), or exit "
     "with a MARKET order"
 )
-#: The one order type that never rests at the broker.
-_MARKET = "MARKET"
 
 logger = logging.getLogger(LOGGER_NAME)
 
@@ -173,7 +171,7 @@ def _rests_against(engine: Any, command: dict[str, Any]) -> bool:
     the strategy's open position (module docstring). The kernel files an order against the
     position as an entry only when the position's closing room cannot take it, so the
     position is read only for a resting entry, which most loop steps have none of."""
-    if command.get("command") != "place" or command.get("order_type") == _MARKET:
+    if command.get("command") != "place" or command.get("order_type") == MARKET:
         return False
     if ROLE_PURPOSES.get(command.get("role")) is not Purpose.ENTRY:
         return False

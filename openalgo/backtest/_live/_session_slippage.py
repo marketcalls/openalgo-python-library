@@ -59,8 +59,6 @@ from .._strategy_orders import LEG_TARGET
 from ._plan_catch_up import INSTRUMENT
 from ._types import OrderIntent, Purpose
 
-#: The price type of the orders priced at a bar's open.
-MARKET = "MARKET"
 #: The price types of the orders priced at their trigger: stops.
 TRIGGERED = frozenset({"SL-M", "SL"})
 #: The sign of a fill's slippage by its side: a buy that paid more is worse.
@@ -320,7 +318,6 @@ def _so_far(session: Any, trader: Any, opened: int) -> tuple[int, float] | None:
 __all__ = [
     "AGAINST_THE_TRADER",
     "BEYOND_LIMIT",
-    "MARKET",
     "NOT_KNOWN",
     "NOT_REACHED",
     "NO_BAR",

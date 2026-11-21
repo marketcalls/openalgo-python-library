@@ -44,7 +44,6 @@ from ._plan_catch_up import INSTRUMENT
 from ._session_records import EXTERNAL, FillRecord
 from ._session_slippage import (
     AGAINST_THE_TRADER,
-    MARKET,
     NO_LEVEL,
     NOT_KNOWN,
     TRIGGERED,
@@ -56,7 +55,7 @@ from ._session_slippage import (
     stop_price,
     target_price,
 )
-from ._types import Purpose
+from ._types import MARKET, Purpose
 
 #: The key of a strategy's saved state that holds its rows (`_session_saved`).
 COMPARED = "fill_comparison"

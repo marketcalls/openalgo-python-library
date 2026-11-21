@@ -59,7 +59,7 @@ from ._session_trader import Trader
 from ._stops_cover import CLOSE_REJECTED, REFUSED_FOR_MARGIN
 from ._stops_kernel import PROTECT_PLACED, order_of
 from ._stops_orders import IN_FLIGHT, Sent, Watched
-from ._types import Purpose
+from ._types import MARKET, Purpose
 
 #: How an alert says a leg has no stop.
 NO_STOP = "no stop at the broker"
@@ -278,7 +278,7 @@ def _how_far(trader: Trader, watched: Watched) -> str:
     if watched.state in IN_FLIGHT:
         return f"in flight, {_IN_FLIGHT_WORDS[watched.state]}"
     order = order_of(trader, watched.kernel_order)
-    if order is not None and order["order_type"] == "MARKET":
+    if order is not None and order["order_type"] == MARKET:
         return f"in flight, {_ACCEPTED_WORDS}"
     return "resting at the broker"
 
