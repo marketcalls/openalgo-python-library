@@ -1,7 +1,9 @@
 """The fault rows of a shared instrument on its orders' answers, on the fake OpenAlgo
 (18-multi-strategy 5.2 rows F104 and F105, 4.4; unit M8): one member's unanswered order
 holds the instrument for every member, so two members' orders of one shape can never be
-told apart, and an ambiguous one holds the instrument for the rest of the day.
+told apart, and an ambiguous one holds the instrument for the rest of the day: the
+square-off then starts no cancel-then-exit for it, so a member's stop keeps working and is
+reported as working (2.4.0 item P3-3).
 
 The market and the strategies are `shared_samples`': SBIN at 500.00, A first in call order.
 `LateTrend` is an A that buys its 100 units with a stop 3 points below (497.00) at its
@@ -86,12 +88,10 @@ def ambiguous_stop_of_a(world) -> None:
 
 def run_ambiguous(world):
     """F105 to the end: past NSE's square-off at 15:00, then Ctrl+C twice (the flatten can
-    send nothing for SBIN). Both members end unprotected as the row asserts (18-multi-
-    strategy 5.1 I7 lists F105): A has no stop, and B's stop, though it works on at the
-    broker, waits for the square-off's cancel, which can never be sent, so no line claims
-    it (16-session-design 3.3 step 5 "As built", round 6)."""
+    send nothing for SBIN). A ends unprotected as the row asserts (18-multi-strategy 5.1 I7
+    lists F105): it has no stop. B's stop works on at the broker and is reported working:
+    the square-off keeps back its cancel, which could never be sent (2.4.0 item P3-3)."""
     world.trace.leave_unprotected("LateTrend", "F105")
-    world.trace.leave_unprotected("SbinBreakout", "F105")
     ambiguous_stop_of_a(world)
     world.stop_at(ist(15, 1))
     world.stop_at(ist(15, 2))
@@ -128,18 +128,54 @@ def test_F105_b_keeps_its_stop_working_and_both_are_in_open_positions(world):
     a, b = rows["LateTrend"], rows["SbinBreakout"]
     assert (a.units, a.stop_confirmed) == (A_UNITS, False)
     assert "ambiguous stop order" in a.note
-    assert (b.units, b.stop_order_id) == (B_UNITS, b_stop.order_id)
+    assert (b.units, b.stop_order_id, b.stop_confirmed) == (B_UNITS, b_stop.order_id, True)
     assert world.fake.position("SBIN", "NSE") == A_UNITS + B_UNITS
 
 
-def test_F105_a_is_unprotected_for_the_ambiguous_order_and_b_only_from_the_square_off(world):
+#: What every member's note and square-off alert says of SBIN held for the day by A's stop.
+HELD = (
+    "SBIN NSE is held for the day by LateTrend's stop order, intent "
+    "20261116-live-1-LateTrend-o2, which the order book cannot tell apart from another "
+    "order: nothing can be sent for it today, so close it by hand in OpenAlgo; the broker's "
+    "own MIS square-off remains the backstop"
+)
+
+
+def test_F105_each_members_note_says_the_instrument_is_held_and_bs_says_its_stop_works(world):
+    outcome = run_ambiguous(world)
+
+    (b_stop,) = [o for o in sbin_orders(world, "SbinBreakout") if o.price_type == "SL-M"]
+    rows = {p.strategy: p for p in outcome.open_positions}
+    assert rows["LateTrend"].note.endswith(HELD)
+    assert rows["SbinBreakout"].note == (
+        f"stop {b_stop.order_id} confirmed at the broker: it protects the position, so cancel "
+        f"the stop before any sale by hand; {HELD}"
+    )
+
+
+def test_F105_one_error_alert_per_member_at_the_square_off_says_nothing_is_sent(world, caplog):
+    run_ambiguous(world)
+
+    (b_stop,) = [o for o in sbin_orders(world, "SbinBreakout") if o.price_type == "SL-M"]
+    said = [text for text in alerts(caplog, "error") if "no square-off is sent" in text]
+    assert [text.split(": ", 1)[1] for text in said] == [
+        f"LateTrend SBIN NSE {A_UNITS} units: no square-off is sent for it: ambiguous stop "
+        f"order (intent 20261116-live-1-LateTrend-o2): check the order book; {HELD}",
+        f"SbinBreakout SBIN NSE {B_UNITS} units: no square-off is sent for it: stop "
+        f"{b_stop.order_id} confirmed at the broker; {HELD}",
+    ]
+    assert not [text for text in alerts(caplog, "error") if "cannot be sent now" in text]
+
+
+def test_F105_a_is_unprotected_for_the_ambiguous_order_and_b_never_after_its_stop(world):
     outcome = run_ambiguous(world)
 
     reasons = {(w.strategy, w.reason) for w in outcome.unprotected}
     assert ("LateTrend", "ambiguous order") in reasons
-    # B's stop protected it until the square-off asked for its cancel, held all along.
+    # B's stop protects it from its confirmation to the end: the square-off starts no
+    # cancel of it.
     b_windows = [w for w in outcome.unprotected if w.strategy == "SbinBreakout"]
-    assert [w.from_ns >= ist(15, 0) for w in b_windows if w.from_ns > A_STOP_DUE] == [True]
+    assert [w for w in b_windows if w.from_ns > A_STOP_DUE] == []
 
 
 # ----- F104: never two unbound intents on one instrument ------------------------------------

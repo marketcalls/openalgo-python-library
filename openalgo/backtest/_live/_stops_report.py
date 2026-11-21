@@ -148,14 +148,17 @@ def protected(stops: Any, trader: Trader) -> bool:
 
 def left_open(stops: Any, trader: Trader, *, books: bool = True) -> str:
     """The note of `trader`'s position left open once the session has ended (module
-    docstring); with `books` False it leaves out the units OpenAlgo's books showed, for a
-    caller whose words name them."""
+    docstring), then, for an instrument held for the day, that nothing can be sent for it
+    (`_stops_held_day`); with `books` False it leaves out the units OpenAlgo's books
+    showed, for a caller whose words name them."""
     parts, advice = _note(stops, trader, books=books)
+    held_day = stops.day.words(trader)
+    held = [] if held_day is None else [held_day]
     if advice == _CHECK:
-        return "; ".join([*parts, CHECK_FIRST])
+        return "; ".join([*parts, CHECK_FIRST, *held])
     *before, last = parts
     words = f"{last}, close it by hand" if advice == _CLOSE else f"{last}: {STOP_PROTECTS}"
-    return "; ".join([*before, words])
+    return "; ".join([*before, words, *held])
 
 
 def still_working(stops: Any, trader: Trader) -> list[str]:

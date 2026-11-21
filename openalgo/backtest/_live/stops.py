@@ -23,7 +23,9 @@ runs, on the loop's thread, the rules about the broker's behaviour in time:
 - Held fills and held cancels (`_stops_held`, 4.11), refused cancels sent again
   (`_stops_cancels`, 4.5), a guarded leg left bare given its stop again (`_stops_bare`),
   a silent OpenAlgo probed and alerted while a stop or an exit waits (`_stops_silent`,
-  4.9), and protect by state (`_stops_protect`, 3.3).
+  4.9), protect by state (`_stops_protect`, 3.3), and the square-off of an instrument
+  held for the day, whose stop's cancel is kept back so the stop works on
+  (`_stops_held_day`, 2.4.0 item P3-3).
 
 The loop calls the hooks as it takes each message, `duties` in its step D, and `review`
 after the commands are handed over (E), so a window opens at the receive time of the
@@ -52,6 +54,7 @@ from ._stops_cancels import CancelRetries
 from ._stops_cover import Windows, reason_of
 from ._stops_deadline import UNPROTECTED, UNPROTECTED_EXIT_AFTER_S, Deadlines
 from ._stops_held import HeldWords
+from ._stops_held_day import DayHolds
 from ._stops_kernel import cancelling, push_price
 from ._stops_orders import LegOrders, Sent
 from ._stops_price import PriceRule
@@ -94,6 +97,7 @@ class StopsSupervisor:
         self.deadlines = Deadlines(session, self)
         self.silence = SilentServer(session, self)
         self.after = AfterLines()
+        self.day = DayHolds(session, self)
 
     def leg(self, trader: Trader) -> LegOrders:
         """What the supervisor knows of `trader`'s leg."""
@@ -293,6 +297,7 @@ class StopsSupervisor:
                     )
                 continue
             self.windows.note(key, 0, "", span)
+        self.day.review(now_ns)
 
     # ----- what the alerts and the close read -------------------------------------------
 
@@ -331,10 +336,11 @@ class StopsSupervisor:
 
     def cancelling(self, trader: Trader) -> frozenset[int]:
         """The kernel orders of `trader` whose cancel the kernel decided and the venue has
-        not answered, but those whose cancel the reconciler's exit guard holds back: never
-        sent, so they work at the broker."""
+        not answered, but those whose cancel the reconciler's exit guard or the square-off
+        of an instrument held for the day holds back: never sent, so they work at the
+        broker."""
         held = self._session.reconcile.guard.held_cancels(trader.name)
-        return cancelling(trader) - held
+        return cancelling(trader) - held - self.day.held_cancels(trader.name)
 
     # ----- helpers ------------------------------------------------------------------
 
