@@ -42,7 +42,9 @@ not it has rows.
   schedule versions; never the API key). Each order carries its strategy's version id
   (`orders`' `version_id`), the first 12 hexadecimal characters of the SHA-256 of its
   source hash and parameter values: the same code with the same parameters gives the same
-  id on every day and restart. The journal keeps each start's.
+  id on every day and restart. A class whose source cannot be read (defined in a notebook
+  cell) has its compiled code hashed instead, which depends on the Python version. The
+  journal keeps each start's.
 - `summary`: the day's figures across every start of the day: `gross_pnl`, `charges`
   (modelled: the broker's trade book carries none; each fill's rounded to the paisa, so a
   result's charges, its contract notes', differ from them by the notes' rounding, the

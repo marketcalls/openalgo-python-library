@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -138,14 +139,35 @@ def test_a_restart_with_the_same_version_records_no_change(world):
     assert not any("its version changed" in line for line in world.lines)
 
 
-def test_a_class_with_no_source_is_named_in_the_banner(world):
+def test_a_class_with_no_source_is_named_in_the_banner_with_the_python_its_code_is_hashed_under(
+    world,
+):
     Built = type("Built", (BuyAndHold,), {})
     world.stop_at(ist(14, 41))
     live(world, Built)
     built = version_of(Built, None).version_id
+    python = f"CPython {sys.version_info.major}.{sys.version_info.minor}"
     assert f"Versions: Built {built}" in world.lines
     assert (
-        "Built: its source was not hashed (a class built at run time): its version id "
+        "Built: its source could not be read (a class built at run time): its version id "
+        f"hashes its compiled code (its functions and plain class attributes) under {python} "
+        "and its parameters, so the same code under another Python version gets another id"
+    ) in world.lines
+
+
+class Rule:
+    """An object a class calls as a method: Python keeps no compiled code of it there."""
+
+    def __call__(self, bar):
+        return None
+
+
+def test_a_class_whose_code_cannot_be_read_either_is_named_in_the_banner_as_before(world):
+    Opaque = type("Opaque", (BuyAndHold,), {"rule": Rule()})
+    world.stop_at(ist(14, 41))
+    live(world, Opaque)
+    assert (
+        "Opaque: its source was not hashed (a class built at run time): its version id "
         "hashes its name and parameters only"
     ) in world.lines
 
