@@ -13,6 +13,11 @@ history too short for an indicator refuses the start (`check_history`).
 For the session's decisions file (2.4.0 item P2-2) the context notes each order request
 of the strategy's code as the kernel took it (`take_submissions`) and gives the latest
 value of each `self.I` output (`indicator_values`); neither changes an order or a value.
+
+A resting reversal (`reverse=True` on a LIMIT, SL or SL-M order) is noted as the kernel
+takes it (`resting_reversals`), for the loop to refuse its placement before anything is
+sent (`_session_unsent`, 2.4.0 item P3-2): the order carries no sign of `reverse` once in
+the kernel.
 """
 
 from __future__ import annotations
@@ -42,6 +47,12 @@ class Submission:
 
     order: int | None
     skipped: str | None = None
+
+
+def _rests_and_reverses(request: Mapping[str, Any]) -> bool:
+    """True for an order request that may reverse the position and rests at the broker:
+    `reverse=True` on any order type but MARKET."""
+    return bool(request.get("reverse")) and request.get("order_type") != "MARKET"
 
 
 def _latest(view: LiveView) -> float | bool | None:
@@ -77,6 +88,9 @@ class LiveRunContext(RunContext):
                 )
         self._live = {instrument.symbol: series[instrument.symbol] for instrument in instruments}
         self._submitted: list[Submission] = []
+        #: The kernel orders of the resting reversals the strategy's code submitted that
+        #: the kernel took, until the loop has refused their placement (`_session_unsent`).
+        self.resting_reversals: set[int] = set()
         super().__init__(engine, instruments, product, default_size, run)
 
     def _decision(self) -> int | None:
@@ -127,8 +141,12 @@ class LiveRunContext(RunContext):
         super().begin_run()
 
     def submit(self, request: dict) -> Order | None:
-        """`RunContext.submit`, the submission noted (`take_submissions`)."""
-        return self._noted(super().submit, request)
+        """`RunContext.submit`, the submission noted (`take_submissions`), and a resting
+        reversal the kernel took kept in `resting_reversals` (module docstring)."""
+        order = self._noted(super().submit, request)
+        if order is not None and _rests_and_reverses(request) and order.reject_code is None:
+            self.resting_reversals.add(order.number)
+        return order
 
     def submit_target(self, request: dict) -> Order | None:
         """`RunContext.submit_target`, the submission noted (`take_submissions`)."""

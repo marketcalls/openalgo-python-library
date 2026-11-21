@@ -39,12 +39,10 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
-import itertools
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
-from .._engine import call
 from .._layout import NANOS_PER_SECOND
 from ..calendar import default_calendar
 from ..errors import LiveError
@@ -59,7 +57,8 @@ from ._session_figures import DayFigures
 from ._session_loop import Session
 from ._session_parts import SessionParts, StopFlag
 from ._session_restore import RESTART_PROTECT_WAIT_S, protect_restored, restore
-from ._session_trader import Trader, ist_instant
+from ._session_trader import ist_instant
+from ._session_traders import build_traders
 from ._shared_alerts import SharedAlerts
 from ._types import LOGGER_NAME, AlertKind, Mode, Now, Sleep
 from .alerts import Alerts
@@ -71,7 +70,6 @@ from .inbox import Inbox, WorkerFailed, WorkerReady
 from .journal import JOURNAL_FILE_NAME, Journal
 from .plan import SessionSpec, build, specify
 from .preflight import COUNTDOWN_SECONDS, AccountLock, PreflightPlan, check_preflight, countdown
-from .venue_map import VenueMap
 from .worker import JournalTarget, OrderWorker
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -222,7 +220,9 @@ def _open(
         emit=settings.emit,
         wait_max_s=settings.wait_max_s,
     )
-    session.traders = _traders(session, report.funds_available)
+    session.traders = build_traders(session, report.funds_available)
+    for trader in session.traders:
+        trader.lock(STARTING_LOCK)
     session.figures = DayFigures.at_start(snapshot.rms_states, names)
     for envelope in start.deferred:
         # What the worker posted during the start's reads, for the loop to take.
@@ -310,41 +310,6 @@ def _start_worker(worker: OrderWorker, inbox: Inbox, settings: StartSettings) ->
         f"the order worker did not start within {WORKER_READY_TIMEOUT_S:g} s: the journal "
         "may be locked by another program"
     )
-
-
-def _traders(session: Session, funds_available: float) -> tuple[Trader, ...]:
-    """Each strategy's `Trader`, its venue map numbered with the session's request IDs,
-    its entries locked until trading begins and its sizing capped by the funds."""
-    parts = session.parts
-    calendar, day = default_calendar(), parts.spec.day
-    numbers = itertools.count(1)
-    traders = []
-    for part in parts.plan.strategies:
-        venue = VenueMap(
-            part.engine,
-            strategy=part.spec.name,
-            instruments=part.setup.instruments,
-            session=parts.journal_session,
-            request_ids=numbers,
-            alerts=parts.alerts,
-            now=session.now,
-        )
-        times = calendar.intraday_times(part.spec.exchange, day)
-        square_off = part.spec.plan.square_off
-        square_off_ns = times.square_off if square_off is None else ist_instant(day, square_off)
-        trader = Trader(
-            part,
-            venue,
-            square_off_ns=square_off_ns,
-            close_ns=times.session_close,
-            now=session.now,
-            event=session.event,
-            decision=parts.logs.decision,
-        )
-        trader.lock(STARTING_LOCK)
-        call(part.engine.cap_sizing_equity, float(funds_available))
-        traders.append(trader)
-    return tuple(traders)
 
 
 def begin_trading(session: Session, source: FeedSource) -> None:

@@ -264,6 +264,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outside and what to pass, where it said only that it could not judge.
 - `bt.optimize` uses less memory on large sweeps: the returns of each combination are copied
   into the overfitting figures' array as they come back, not after all of them.
+- Live sessions no longer send a resting reversal (`reverse=True` on a LIMIT, SL or SL-M
+  order): the session rejects it with `venue` before it reaches the broker, the strategy sees
+  it rejected in `on_order` before its next decision, and a warning says to submit the
+  reversal as a MARKET order or to exit and enter separately. At the broker it worked beside
+  the position's stop, both on the closing side, and both could fill: a short of 10 with a
+  LIMIT buy of 20 resting ended long 20, not long 10. A MARKET reversal is sent as before,
+  and backtests are unchanged.
+  The reason a live result gives for the `venue` code now names both causes (the broker
+  refused the order, or the session refused a resting reversal) with the advice for each.
 
 ### Fixed
 
@@ -293,6 +302,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again and an alert even when the strategy rests a reversal, such as a LIMIT buy below the
   market against a short. Only a MARKET reversal, which closes the position at once, now
   counts as covering it; before, a resting reversal hid the missing stop.
+- Live sessions: an entry or add the order worker had already taken off its queue when its
+  strategy's entries locked is no longer sent. The worker reads the strategy's locks just
+  before it sends an entry or add, and the strategy sees it rejected with `live_lock`; exits
+  and stops are never held by it. Before, such an order could still go out a few
+  milliseconds after the lock.
+- Live sessions: on an instrument held for the day (an order the order book cannot tell
+  apart from another, so nothing more can be sent for the instrument), the square-off no
+  longer reports a stop that still works at the broker as being cancelled, nor its position
+  as unprotected from 15:00. The stop is reported as working, and one ERROR alert per
+  strategy at its square-off says that nothing is sent for the position and what to do:
+  cancel its stop at the broker, then close the position by hand in OpenAlgo, the broker's
+  own MIS square-off remaining the backstop. The note of the position left open says the
+  same.
 
 ## [2.3.0] - 2026-11-20
 

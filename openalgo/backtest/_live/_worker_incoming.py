@@ -56,7 +56,7 @@ class Incoming:
 
     def into(self, waiting: WorkerQueue) -> list[Request]:
         """Put every request handed over since the last call into `waiting`, the worker's
-        queue, oldest first; a `WithdrawPlace` is carried out instead (`_cancelled`). When
+        queue, oldest first; a `WithdrawPlace` is carried out instead (`_withdrawn`). When
         a withdrawal was asked for, first take every request put back off `waiting`
         (`WorkerQueue.withdraw_put_back`), no longer unfinished; those are returned."""
         withdrawn: list[Request] = []

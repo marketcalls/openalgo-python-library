@@ -17,11 +17,11 @@ same way. Its stops and exits cover it, and so does a MARKET reversal: the kerne
 the short's stop before it sends `buy(..., reverse=True)`, and the buy closes the short
 before it opens the long (2.4.0 item P2-3 a). A resting reversal (a LIMIT buy below the
 market) does not: it may never fill, so it protects nothing against a rise (2.4.0 item
-M8-X1). A leg that
-never had a stop, one protect by state holds, one the reconciler's exit guard holds (the
-broker's books show fewer units), one a closing order's rejection holds on a shared
-instrument (18-multi-strategy 4.14a), and every leg once the safe stop has begun (its
-flatten exits the position) are left to their own rules.
+M8-X1); the session refuses it in the loop step that made it (`_session_unsent`, item
+P3-2), after this rule has run. A leg that never had a stop, one protect by state holds,
+one the reconciler's exit guard holds (the broker's books show fewer units), one a closing
+order's rejection holds on a shared instrument (18-multi-strategy 4.14a), and every leg
+once the safe stop has begun (its flatten exits the position) are left to their own rules.
 
 Quantities are units. Used by the loop only.
 """

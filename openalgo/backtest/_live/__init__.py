@@ -36,10 +36,11 @@ function.
 Each row's module keeps its helpers in private modules named after it (`_reconcile_*`,
 `_session_*`, `_feedlink_*` and so on), each under the package's 400-line rule; the order
 rate is `_order_throttle` (for `worker`) and the account's daily rules `_account_watch` (for
-`watch`). Three serve several rows: `_groups`, the strategies of a session that trade one
+`watch`). Four serve several rows: `_groups`, the strategies of a session that trade one
 instrument and the entry gates set on them, `_group_rules`, the rules of such a group
 against the broker's net position, and `_margin_reject`, a closing order rejected on such
-an instrument (18-multi-strategy 4).
+an instrument (18-multi-strategy 4), and `_locked_entries`, the strategies whose entries
+are locked, which the loop writes and the order worker reads before an entry or add.
 
 Times are UTC nanoseconds, prices rupees and quantities units, never lots. No module
 prints: they log to the `openalgo.backtest.live` logger, and a session's own output goes
