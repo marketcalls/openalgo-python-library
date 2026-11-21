@@ -260,6 +260,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on an EMA crossing that the full series shows one minute earlier, before that decision. The
   strategy now decides at the next close, with the minute's bar in its series once its
   candle is read. A minute whose candle never comes holds up one more decision, no more.
+- Live sessions: an entry or add held in the order worker's queue by
+  `max_orders_per_second` is now withdrawn once its strategy's entries lock for any reason (a
+  dead feed, a reconciliation mismatch, failed exits, a closing order refused on a shared
+  instrument), and the strategy sees it rejected with `live_lock`. Before, only the daily
+  profit target, the kill switch and the safe stop withdrew it, so an add could be bought up
+  to 5 s after such a lock.
+- Live sessions: a position left with no stop at the broker and nothing to close it (for
+  example after one of two targets that fired together was refused) gets its stop placed
+  again and an alert even when the strategy rests a reversal, such as a LIMIT buy below the
+  market against a short. Only a MARKET reversal, which closes the position at once, now
+  counts as covering it; before, a resting reversal hid the missing stop.
 
 ## [2.3.0] - 2026-11-20
 

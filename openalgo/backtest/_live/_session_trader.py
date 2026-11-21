@@ -27,7 +27,8 @@ venue map, the slices it releases live, its decisions and its broker candles.
   entry decided in the same loop step) is withdrawn: it is never sent, and the kernel is
   told it was cancelled (`apply_cancel`). An entry or add placed while the strategy's
   entries are locked (a reversal the kernel held for its stop's cancel) is refused,
-  never sent (`_session_unsent`).
+  never sent (`_session_unsent`); one that still waits for the order worker when they
+  lock is withdrawn (`_venue_withdraw`).
 - **Candles**: the strategy's broker candles are `candles`, a `_session_candles.
   CandleKeeper`.
 - **Bookkeeping**: its entry locks and its saved `self.state` are
@@ -313,9 +314,9 @@ class Trader(Bookkeeping):
     def commands(self) -> list[OrderRequest | WithdrawPlace]:
         """The kernel's commands since the last call, as the order worker's requests (a
         placement the kernel cancelled before this call withdrawn: module docstring; one
-        it cancelled after, while it waits for the worker, withdrawn there: `WithdrawPlace`);
-        the reason of each risk exit placed is kept (`reasons`), and the position's units
-        at each placement (`units_at_place`)."""
+        it cancelled after, or that waits once its entries lock, withdrawn by the worker:
+        `WithdrawPlace`); the reason of each risk exit placed is kept (`reasons`), and the
+        position's units at each placement (`units_at_place`)."""
         if self.finished:
             return []
         requests: list[OrderRequest | WithdrawPlace] = []
@@ -333,7 +334,7 @@ class Trader(Bookkeeping):
             # A withdrawal or a refusal ends an order in the kernel, which may free an exit
             # that waited for it: its commands go out in this same call.
             commands = call(self.engine.take_commands) if len(kept) < len(commands) else []
-        return requests
+        return requests + self.venue.withdraw_locked()
 
     def open_units(self) -> float:
         """The kernel's position in the strategy's instrument, signed units (0 flat)."""

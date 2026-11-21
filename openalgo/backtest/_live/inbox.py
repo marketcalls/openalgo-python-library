@@ -151,6 +151,9 @@ class NotSentReason(enum.Enum):
     THROTTLED = "order_rate"
     #: An entry or add the kernel cancelled while it waited in the worker's queue.
     CANCELLED = "cancelled"
+    #: An entry or add that waited in the worker's queue when its strategy's entries
+    #: locked (`_venue_withdraw`).
+    ENTRIES_LOCKED = "entries_locked"
 
 
 @dataclass(frozen=True)

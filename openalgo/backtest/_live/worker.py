@@ -53,8 +53,9 @@ from ._order_state import HeldFill
 from ._order_throttle import DEFAULT_ORDERS_PER_SECOND, OrderThrottle
 from ._types import LOGGER_NAME, AlertsLike, Mode, Now, Purpose, Sleep
 from ._venue_requests import Priority
+from ._worker_incoming import Incoming
 from ._worker_news import NewsHandover
-from ._worker_queue import Incoming, Request, WorkerQueue
+from ._worker_queue import Request, WorkerQueue
 from ._worker_send import Sender
 from ._worker_settle import Settlements
 from ._worker_stops import StopBook
@@ -63,7 +64,6 @@ from .inbox import (
     GuardLocked,
     HeldFills,
     Inbox,
-    Message,
     RawUpdates,
     Resolutions,
     WorkerFailed,
@@ -133,7 +133,8 @@ class OrderWorker:
         self._client = client
         self._guard = guard
         self._alerts = alerts
-        self._inbox = inbox
+        # What the worker and its parts post goes on the loop's inbox.
+        self._post = inbox.put
         self._target = journal
         self._now = now
         self._sleep = sleep
@@ -346,9 +347,6 @@ class OrderWorker:
             yield
         finally:
             self.busy_since_ns = None
-
-    def _post(self, message: Message) -> None:
-        self._inbox.put(message)
 
     def start(self) -> None:
         """Start the worker's thread (`THREAD_NAME`), whose startup phase opens journal W.

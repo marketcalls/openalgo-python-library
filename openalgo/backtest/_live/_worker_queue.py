@@ -15,32 +15,27 @@ The worker's own requests (`ReleaseFill`, `ReleaseCancel`, `ReadBooks`, `ReadPos
 `Probe`, `StreamGap`, and a restart's `Settle` and the reconciler's `CancelOrphan`) belong
 to no order: each is its own FIFO. An entry or add whose
 decision is older than `ENTRY_STALE_AFTER_S` when it is taken is not sent (`is_stale`,
-open decision 7). Times are UTC nanoseconds. Used by the worker's thread only, but for
-`Incoming`: the requests any thread hands the worker, counted until the worker has
-executed them (`unfinished`), so the close knows when every answer it waits for has been
-posted (16-session-design 3.3 step 5). The close also asks for the requests put back to
-be withdrawn (`ask_withdrawal`): its last lines named them as not sent, so they are never
-sent after them and the close does not wait for them. The order rate throttle
-(`_order_throttle`) takes no request that makes an order call (`is_order_call`) while its
-window is full, and withdraws an entry held back too long (`remove`). An entry or add the
-kernel cancelled while it waits is withdrawn as it is taken in (`WithdrawPlace`), so a
-lock of entries (a daily profit target, the kill switch, the safe stop) is never followed
-by a placement the order rate held (18-multi-strategy 2.5a rules 5, 6 and 12).
+open decision 7). Times are UTC nanoseconds. Used by the worker's thread only; the
+requests any thread hands the worker wait in `_worker_incoming.Incoming` until the worker
+takes them in. The order rate throttle (`_order_throttle`) takes no request that makes an
+order call (`is_order_call`) while its window is full, and withdraws an entry held back
+too long (`remove`). An entry or add the kernel cancelled, or one waiting when its
+strategy's entries lock, is withdrawn as it is taken in (`WithdrawPlace`, `remove`), so
+a placement the order rate holds is not sent after the kernel's cancel or the lock, but
+for one the worker took before the withdrawal reached it (`_venue_withdraw`;
+18-multi-strategy 2.5a rules 5, 6 and 12; 2.4.0 item M8-X2).
 """
 
 from __future__ import annotations
 
 import collections
 import itertools
-import queue
-import threading
-from collections.abc import Callable
 from dataclasses import dataclass
 
 from .._layout import NANOS_PER_SECOND
 from ._order_state import ENTRY_PURPOSES
 from ._venue_requests import CancelRequest, ModifyRequest, OrderRequest, PlaceRequest, Priority
-from .inbox import Message, NotSent, NotSentReason
+from .inbox import NotSentReason
 
 #: An entry or add decided this long before the worker takes it is dropped and reported
 #: rejected: decided at a bar close and sent much later, it is a different trade
@@ -137,12 +132,15 @@ class CancelOrphan:
 
 @dataclass(frozen=True)
 class WithdrawPlace:
-    """Withdraw `place`, the placement of an entry or add the kernel cancelled before it
-    was bound (`venue_map`). Taken in by `Incoming.into`, never queued: while `place` still
-    waits in the queue it is taken off and answered `NotSent(cancelled)`; once the worker
-    has taken it, nothing (the kernel's cancel waits for the bind, 2.5 E)."""
+    """Withdraw `place`, an entry or add not bound yet that the kernel cancelled, or that
+    waits as its strategy's entries lock (`venue_map`). Taken in by
+    `_worker_incoming.Incoming.into`, never queued: while `place` waits in the queue it is
+    taken off and answered `NotSent(reason, words)`; once the worker took it, nothing: it
+    is sent (a kernel's cancel then waits for the bind, 2.5 E)."""
 
     place: PlaceRequest
+    reason: NotSentReason = NotSentReason.CANCELLED
+    words: str = CANCELLED_WORDS
 
     priority = Priority.PROTECT
 
@@ -308,78 +306,10 @@ class WorkerQueue:
         return ("", arrived)
 
 
-class Incoming:
-    """The requests handed to the worker until it takes them into its queue, and how many
-    it has not finished (module docstring). Any thread puts, and asks for the withdrawal
-    of what was put back; the worker's thread takes them into its queue (`into`) and says
-    when one is finished. `post` puts a message on the loop's inbox (the answer of an
-    entry withdrawn, `WithdrawPlace`)."""
-
-    def __init__(self, post: Callable[[Message], None]) -> None:
-        self._requests: queue.SimpleQueue[Request] = queue.SimpleQueue()
-        self._lock = threading.Lock()
-        self._unfinished = 0
-        self._withdraw = threading.Event()
-        self._post = post
-
-    @property
-    def unfinished(self) -> int:
-        """The requests handed over and not executed yet, one put back among them. Any
-        thread reads it: the worker posts a request's answer before it is finished."""
-        return self._unfinished
-
-    def put(self, request: Request) -> None:
-        """Hand over `request`, counted unfinished from now; it never waits."""
-        with self._lock:
-            self._unfinished += 1
-        self._requests.put(request)
-
-    def ask_withdrawal(self) -> None:
-        """Ask for the withdrawal of every request put back so far, made at the worker's
-        next `into` (any thread; it never waits)."""
-        self._withdraw.set()
-
-    def into(self, waiting: WorkerQueue) -> list[Request]:
-        """Put every request handed over since the last call into `waiting`, the worker's
-        queue, oldest first; a `WithdrawPlace` is carried out instead (`_cancelled`). When
-        a withdrawal was asked for, first take every request put back off `waiting`
-        (`WorkerQueue.withdraw_put_back`), no longer unfinished; those are returned."""
-        withdrawn: list[Request] = []
-        if self._withdraw.is_set():
-            self._withdraw.clear()
-            withdrawn = waiting.withdraw_put_back()
-            with self._lock:
-                self._unfinished -= len(withdrawn)
-        while True:
-            try:
-                request = self._requests.get_nowait()
-            except queue.Empty:
-                return withdrawn
-            if isinstance(request, WithdrawPlace):
-                self._cancelled(waiting, request.place)
-            else:
-                waiting.put(request)
-
-    def _cancelled(self, waiting: WorkerQueue, place: PlaceRequest) -> None:
-        """Withdraw `place` while it waits in `waiting`, answered `NotSent(cancelled)`
-        before it stops counting (one the worker took already is left to its bind); the
-        withdrawal itself is done with either way."""
-        if waiting.remove(place):
-            self._post(NotSent(place, NotSentReason.CANCELLED, CANCELLED_WORDS))
-            self.finished()
-        self.finished()
-
-    def finished(self) -> None:
-        """The worker executed a request and did not put it back."""
-        with self._lock:
-            self._unfinished -= 1
-
-
 __all__ = [
     "CANCELLED_WORDS",
     "ENTRY_STALE_AFTER_S",
     "CancelOrphan",
-    "Incoming",
     "OrderKey",
     "Probe",
     "ReadBooks",

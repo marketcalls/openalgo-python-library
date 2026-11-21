@@ -31,7 +31,7 @@ import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from restart_samples import crash_at, crashing, restart, run_to_crash, stops_working
 from session_samples import alerts, ist
-from session_trace import NO_ORPHAN, ONE_STOP, WITHIN
+from session_trace import MEMBERS_WITHIN, NO_ORPHAN, ONE_STOP, WITHIN
 from shared_samples import A_UNITS, B_UNITS, NeverB, OnceA, OnceB, sbin_orders, terms
 from stops_samples import STOP_POINTS, at_price, stop_world
 
@@ -280,7 +280,7 @@ def test_F112_a_stop_no_member_holds_is_cancelled_as_an_orphan(world, monkeypatc
     # the group's comparisons cancel it. Two stops of B work in between (as unit 12's test
     # of one leg says), so those checks cannot hold at every instant here.
     why = "the venue record of a stop the broker holds is dropped by the test"
-    for check in (ONE_STOP, WITHIN, NO_ORPHAN):
+    for check in (ONE_STOP, WITHIN, MEMBERS_WITHIN, NO_ORPHAN):
         world.trace.waive(check, why)
     run_to_crash(world, [OnceA, OnceB])
     old = _first_stop(world, "OnceB")

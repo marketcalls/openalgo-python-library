@@ -13,9 +13,11 @@ more than the strategy asked for); instead the session places the leg's stop aga
 what is left (`protect`, R7) and sends an ERROR alert, once each time the leg is left
 bare. The alert says what the leg is (units with no stop and nothing working to close
 them), not how it got there: an exit filled in part and then cancelled leaves it bare the
-same way. Any order working on the side that closes the position covers it, a reversal
-among them: the kernel cancels the short's stop before it sends `buy(..., reverse=True)`,
-and the buy closes the short before it opens the long (2.4.0 item P2-3 a). A leg that
+same way. Its stops and exits cover it, and so does a MARKET reversal: the kernel cancels
+the short's stop before it sends `buy(..., reverse=True)`, and the buy closes the short
+before it opens the long (2.4.0 item P2-3 a). A resting reversal (a LIMIT buy below the
+market) does not: it may never fill, so it protects nothing against a rise (2.4.0 item
+M8-X1). A leg that
 never had a stop, one protect by state holds, one the reconciler's exit guard holds (the
 broker's books show fewer units), one a closing order's rejection holds on a shared
 instrument (18-multi-strategy 4.14a), and every leg once the safe stop has begun (its
@@ -71,10 +73,9 @@ class BareLegs:
         # (`_margin_reject`).
         if session.reconcile.holds(trader) or session.margin.holds(trader):
             return False
-        # Any closing order the kernel has, sent or not, a stop or a reversal among them,
-        # covers the leg or is on its way to.
-        held = trader.open_units()
-        return held != 0 and not _closing_orders(trader, held)
+        # A closing order the kernel has, sent or not, a stop or a market reversal among
+        # them, covers the leg or is on its way to.
+        return trader.open_units() != 0 and not _closing_orders(trader)
 
     def _protect(self, trader: Trader) -> None:
         session, name = self._session, trader.name
@@ -91,13 +92,18 @@ class BareLegs:
         )
 
 
-def _closing_orders(trader: Trader, held_units: float) -> list[int]:
-    """The kernel orders of `trader` working on the side that closes its position of
-    `held_units` (signed): its stops and exits, and a reversal, an entry beyond the
-    position on that side, which closes it before it opens the other side."""
-    closing = "SELL" if held_units > 0 else "BUY"
-    engine = trader.engine
-    return [order for order in trader.working() if call(engine.order, order)["side"] == closing]
+def _closing_orders(trader: Trader) -> list[int]:
+    """The kernel orders of `trader` certain to close its position: its stops and exits
+    (reduce-only), and a MARKET reversal, the entry the exit owner holds for the stop's
+    cancel, which closes the position before it opens the other side. A resting reversal
+    (LIMIT, SL or SL-M) may never fill, so it covers nothing (2.4.0 item M8-X1)."""
+    closing = "SELL" if trader.open_units() > 0 else "BUY"
+    reversals = []
+    for kernel_order in trader.entry_orders():
+        order = call(trader.engine.order, kernel_order)
+        if order["order_type"] == "MARKET" and order["side"] == closing:
+            reversals.append(kernel_order)
+    return trader.exit_orders() + reversals
 
 
 __all__ = ["BareLegs"]
