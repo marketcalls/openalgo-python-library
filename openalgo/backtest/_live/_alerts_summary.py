@@ -22,7 +22,9 @@ session did not reach OpenAlgo. The Slippage line adds "(1 MARKET fill not compa
 bar of its decision)" when the session had no bar to set a MARKET fill against, and reads
 "not compared (2 MARKET fills: no bar of their decisions)" when it had none for any. The
 Stop fills line, the same for the fills of the stops (18-multi-strategy 12.3), is printed
-only when a stop filled ("(1 stop fill not compared)" for one with no bar). The
+only when a stop filled; a stop fill it leaves out is counted with "see fill_comparison",
+whose row gives the reason (no bar reached its trigger, a repriced stop, a bar that opened
+beyond a stop-limit's limit). The
 Strategies line names after "; earlier today:" the
 strategies an earlier start of the day ran and this one does not, whose figures the day's
 include. A leg whose OpenAlgo books differed from the engine at the
@@ -265,13 +267,18 @@ def _slippage(slippage: float | None, not_compared: int) -> str:
     return figure + _not_compared(not_compared, words=" not compared")
 
 
+# Where the reason a stop fill was not compared is given: each row of
+# `SessionResult.fill_comparison` names its own, and they differ from fill to fill.
+_SEE_ROWS = "see fill_comparison"
+
+
 def _stop_line(summary: SessionSummary) -> list[tuple[str, str]]:
     """The Stop fills line (module docstring), none when no stop filled."""
     missed = summary.stop_slippage_not_compared
     if summary.stop_slippage is None and not missed:
         return []
     if summary.stop_slippage is None:
-        return [("Stop fills", f"not compared ({_count(missed, 'stop fill')}: no bar)")]
+        return [("Stop fills", f"not compared ({_count(missed, 'stop fill')}: {_SEE_ROWS})")]
     shown = round(summary.stop_slippage, _PAISE_DECIMALS)
     if shown == 0:
         figure = "none against the backtest"
@@ -279,7 +286,7 @@ def _stop_line(summary: SessionSummary) -> list[tuple[str, str]]:
         figure = f"{_rupees(summary.stop_slippage)} worse than the backtest"
     else:
         figure = f"{_rupees(-summary.stop_slippage)} better than the backtest"
-    note = f" ({_count(missed, 'stop fill')} not compared)" if missed else ""
+    note = f" ({_count(missed, 'stop fill')} not compared: {_SEE_ROWS})" if missed else ""
     return [("Stop fills", figure + note)]
 
 

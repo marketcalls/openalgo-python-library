@@ -166,6 +166,24 @@ def test_the_market_fills_the_slippage_leaves_out_are_counted_on_its_line(count,
 
 
 @pytest.mark.parametrize(
+    ("stop_slippage", "count", "shown"),
+    [
+        (None, 1, "not compared (1 stop fill: see fill_comparison)"),
+        (None, 2, "not compared (2 stop fills: see fill_comparison)"),
+        (4.5, 1, "Rs 4.50 worse than the backtest (1 stop fill not compared: see fill_comparison)"),
+    ],
+    ids=["one left out", "two left out", "one of several left out"],
+)
+def test_the_stop_fills_left_out_point_to_the_fill_comparison_for_their_reason(
+    stop_slippage, count, shown
+):
+    # A stop fill is left out for one of several reasons (no bar reached its trigger, a
+    # repriced stop, a bar that opened beyond a stop-limit's limit); the row names it.
+    day = replace(A_GOOD_DAY, stop_slippage=stop_slippage, stop_slippage_not_compared=count)
+    assert line(day, "Stop fills") == shown
+
+
+@pytest.mark.parametrize(
     "slippage", [0.0, 0.004, -0.004], ids=["zero", "under half a paisa", "under half a paisa back"]
 )
 def test_slippage_that_rounds_to_no_paisa_reads_as_none(slippage):
