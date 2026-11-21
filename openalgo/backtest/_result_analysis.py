@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from . import _result_report
+from ._messages import ALONE_POINTER
 from ._result_excursion import instrument_multipliers
 from ._summary import summary_text
 from ._trade_list import trade_list as closed_trade_list
@@ -115,6 +116,13 @@ class AnalysisMethods:
     def _overfitting_warnings(self) -> list[str]:
         """A warning line per quick overfitting check that failed."""
         return [] if self._quick is None else self._quick.warnings()
+
+    def _member_warnings(self) -> list[str]:
+        """`warnings` as the portfolio run this result belongs to tells them: a failed
+        quick check's line points to a run of the strategy alone
+        (`_messages.ALONE_POINTER`), since its own `robustness()` is refused there."""
+        quick = [] if self._quick is None else self._quick.warnings(ALONE_POINTER)
+        return [*self._warnings, *quick]
 
     def summary(self) -> str:
         """A short plain-text summary to print: net profit in rupees with Indian digit

@@ -89,6 +89,22 @@ def test_a_colour_in_any_other_form_is_refused(colour):
         rp.Theme(dark={"bg": colour})
 
 
+#: Every form of colour a theme takes, as the refusal and the Theme docstring name them.
+COLOUR_FORMS = ("#rgb", "#rrggbb", "rgb(...)", "rgba(...)", "hsl(...)", "hsla(...)", "colour name")
+
+
+@pytest.mark.parametrize("form", COLOUR_FORMS)
+def test_the_refusal_of_a_colour_names_every_form_a_colour_may_take(form):
+    with pytest.raises(ConfigError) as refused:
+        rp.Theme(light={"bg": "red;}"})
+    assert form in str(refused.value)
+
+
+@pytest.mark.parametrize("form", COLOUR_FORMS)
+def test_the_theme_docstring_names_every_form_a_colour_may_take(form):
+    assert form in " ".join(rp.Theme.__doc__.split())
+
+
 def test_an_unknown_token_is_refused_naming_the_tokens():
     with pytest.raises(ConfigError, match="'pnl' is not a token of the page; the tokens are bg,"):
         rp.Theme(light={"pnl": "red"})

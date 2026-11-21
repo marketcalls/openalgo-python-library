@@ -42,8 +42,8 @@ def colour(value: object, where: str) -> str:
         if known or HEX_COLOUR.fullmatch(text) or FUNCTION_COLOUR.fullmatch(lower):
             return text
     raise ConfigError(
-        f"{where}: {value!r} is not a colour; give #rgb, #rrggbb, rgb(...), hsl(...) or a "
-        "CSS colour name"
+        f"{where}: {value!r} is not a colour; give #rgb, #rrggbb, rgb(...), rgba(...), "
+        "hsl(...), hsla(...) or a CSS colour name"
     )
 
 

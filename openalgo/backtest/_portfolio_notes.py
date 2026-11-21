@@ -17,7 +17,7 @@ from typing import Any
 
 import pandas as pd
 
-from ._messages import counted
+from ._messages import counted, spoken_list
 from ._portfolio_tables import OppositeSides
 from ._strategy_args import PAISE_PER_RUPEE, Account
 from .report._format import indian_digits
@@ -42,13 +42,6 @@ SHARED_RULES = (
 def rupees_text(amount: float) -> str:
     """Rupees with Indian digit grouping and no paise: "Rs 8,00,000"."""
     return f"Rs {indian_digits(amount, 0)}"
-
-
-def spoken_list(names: Sequence[str]) -> str:
-    """Names as a sentence says them: "A", "A and B", "A, B and C"."""
-    if len(names) < 2:
-        return "".join(names)
-    return f"{', '.join(names[:-1])} and {names[-1]}"
 
 
 def account_note(account: Account, funds_rupees: float) -> str:

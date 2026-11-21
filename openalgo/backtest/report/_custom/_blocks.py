@@ -3,10 +3,10 @@
 `report.custom` exports them), and the check of a block's data (`prepared`).
 
 A block's `data` is a value, or a callable that takes the result being rendered (a
-`Result`, or the object handed to `report.tearsheet`) and returns one, so one layout
-serves every run. Data given as a value is checked when the block is made; data a
-callable returns, when the page is rendered. Every refusal is a ConfigError naming the
-block, and at render its section too.
+`Result`, a `PortfolioResult`, or the object handed to `report.tearsheet`) and returns
+one, so one layout serves every run. Data given as a value is checked when the block is
+made; data a callable returns, when the page is rendered. Every refusal is a ConfigError
+naming the block, and at render its section too.
 """
 
 from collections.abc import Callable

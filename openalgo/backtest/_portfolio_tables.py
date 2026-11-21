@@ -18,9 +18,9 @@ import numpy as np
 import pandas as pd
 
 from ._result_tables import ist_times
+from ._trade_list import STRATEGY
 from .result import Result
 
-STRATEGY = "strategy"
 #: How each combined table is put in time order: the columns of its sort key, the kernel's
 #: UTC nanoseconds and the step of the slice's sequence where a table has them. Rows of
 #: one key keep their call order (a stable sort of the strategies' tables in call order).

@@ -26,9 +26,10 @@ stays the default; a layout is used only when it is passed.
     result.tearsheet("custom.html", layout=layout)
 
 A block's data is a pandas object (or text, for `text`, `html` and `svg`), or a callable
-that takes the result being rendered (a `Result`, or the object handed to
-`report.tearsheet`) and returns one, so one layout serves every run. User charts are
-drawn by the tearsheet's own chart code, in its look; the page stays one offline file.
+that takes the result being rendered (a `Result`, a `PortfolioResult`, or the object
+handed to `report.tearsheet`) and returns one, so one layout serves every run. User
+charts are drawn by the tearsheet's own chart code, in its look; the page stays one
+offline file.
 
 Names: `Layout`, `Theme`, `section` (and the `CustomSection` it returns), the blocks
 `line`, `bar`, `histogram`, `scatter`, `heatmap`, `table`, `tiles`, `text`, `html` and
@@ -65,7 +66,7 @@ PARTS = MappingProxyType(_dashboard_layout.PARTS)
 MAX_SERIES = _theme.MAX_SERIES
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Theme:
     """The page's colours. `light` and `dark` map the page's token names to colours for
     its light and dark themes (a token not given keeps the page's value): bg, panel,
@@ -75,10 +76,12 @@ class Theme:
     one colour for both themes or a (light, dark) pair; the rest keep the page's (the
     strategy's and the benchmark's colours, then four more).
 
-    A colour is `#rgb`, `#rrggbb`, `rgb(...)`, `hsl(...)` or a CSS colour name. Raises
-    ConfigError for an unknown token or a colour in any other form, which is never
-    written into the page: when the theme is made, and again when a page is rendered
-    (its mappings can be changed in between)."""
+    A colour is `#rgb`, `#rrggbb`, `rgb(...)`, `rgba(...)`, `hsl(...)`, `hsla(...)` or a
+    CSS colour name. Raises ConfigError for an unknown token or a colour in any other
+    form, which is never written into the page: when the theme is made, and again when a
+    page is rendered (its mappings can be changed in between). A theme equals only
+    itself, as a block does: its mappings can change, so they are neither compared nor
+    hashed, and a layout holding a theme hashes."""
 
     light: Mapping[str, str] | None = None
     dark: Mapping[str, str] | None = None
@@ -138,7 +141,8 @@ def section(
 @dataclass(frozen=True)
 class Layout:
     """A custom tearsheet: plain data, reusable across results (and picklable when its
-    callables are). Pass it as `layout=` to `Result.tearsheet` or `report.tearsheet`.
+    callables are). Pass it as `layout=` to `Result.tearsheet`,
+    `PortfolioResult.tearsheet` or `report.tearsheet`.
 
     base       the built-in mode it starts from, one of "full", "basic", "metrics" and
                "charts": its parts are that mode's

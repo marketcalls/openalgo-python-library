@@ -17,8 +17,10 @@ from .. import _format as fmt
 from .._dashboard import bars
 from .._dashboard import timeseries as ts
 from .._dashboard.grouped_bars import BarSeries, bar_chart
+from .._dashboard.layout import legend as swatches
 from .._dashboard.scatter import Group, scatter_chart
 from .._dashboard.sections import STRATEGY_COLOUR
+from .._dashboard.timeseries import number_labels
 from .._periods import IST
 from ._blocks import Block
 from ._data import Points
@@ -49,16 +51,7 @@ def series_colour(position: int) -> str:
 
 def legend(names: list[str]) -> str:
     """A row of colour swatches naming the series, over a chart of several."""
-    items = "".join(
-        "<span style='display:inline-flex;align-items:center;gap:6px'>"
-        f"<span style='width:10px;height:10px;border-radius:2px;background:{series_colour(k)}'>"
-        f"</span>{fmt.text(name)}</span>"
-        for k, name in enumerate(names)
-    )
-    return (
-        "<div class='nums' style='display:flex;flex-wrap:wrap;gap:4px 16px;margin-bottom:8px;"
-        f"font-size:.75rem;color:var(--text-muted)'>{items}</div>"
-    )
+    return swatches([(name, series_colour(k)) for k, name in enumerate(names)])
 
 
 def _with_legend(chart: str, names: list[str], several: bool) -> Drawn:
@@ -86,13 +79,6 @@ def on_sessions(series: pd.Series, sessions: pd.DatetimeIndex) -> np.ndarray:
     by_day = by_day[~by_day.index.duplicated(keep="last")]
     days = pd.DatetimeIndex(sessions).as_unit("ns")
     return by_day.set_axis(by_day.index.as_unit("ns")).reindex(days, method="ffill").to_numpy()
-
-
-def number_labels(ticks: list[float]) -> list[str]:
-    """A line chart's value labels for plain numbers, in Indian notation: whole numbers
-    when every tick is one, else two decimals."""
-    whole = all(float(t).is_integer() for t in ticks)
-    return [fmt.number(t, 0 if whole else 2) for t in ticks]
 
 
 def line(block: Block, data: tuple, sessions: pd.DatetimeIndex, anchor: str) -> Drawn:

@@ -64,26 +64,34 @@ class QuickChecks:
         """The quick checks that failed, in report order."""
         return [result for result in self.results if result.verdict == FAILED]
 
-    def summary_line(self) -> str:
-        """One line for `Result.summary()`: "too few trades to judge (12 closed, 30
-        needed)", or how many quick checks had each verdict with the failed ones named:
-        "quick checks: 2 passed, 1 failed (variance), 1 informational; see
-        result.robustness()"."""
+    def verdict_line(self) -> str:
+        """The verdicts in words: "too few trades to judge (12 closed, 30 needed)", or
+        how many quick checks had each verdict with the failed ones named: "quick
+        checks: 2 passed, 1 failed (variance), 1 informational"."""
         if self.too_few_trades:
             return f"too few trades to judge ({self.closed} closed, {MIN_TRADES} needed)"
         counted = counts_line(self.counts())
         failed = [result.name for result in self.failed()]
         if failed:
             counted = counted.replace(FAILED, f"{FAILED} ({', '.join(failed)})", 1)
-        return f"quick checks: {counted}; see result.robustness()"
+        return f"quick checks: {counted}"
 
-    def warnings(self) -> list[str]:
+    def summary_line(self) -> str:
+        """One line for `Result.summary()`: `verdict_line`, and when the checks judged,
+        where the full set is: "quick checks: 2 passed, 1 failed (variance), 1
+        informational; see result.robustness()"."""
+        line = self.verdict_line()
+        return line if self.too_few_trades else f"{line}; see result.robustness()"
+
+    def warnings(self, pointer: str = POINTER) -> list[str]:
         """A line for `Result.warnings` for each quick check that failed, saying what a
-        failure of the trade list shows (`QUICK_READING`)."""
+        failure of the trade list shows (`QUICK_READING`) and, last, `pointer`: where the
+        full set of checks is (`_messages.ALONE_POINTER` for a strategy of a portfolio
+        run)."""
         return [
             f"Overfitting check failed, {result.title.lower()}: {result.figure}, where the rule "
             f"is {result.rule}. The edge is fragile or small next to the noise of the run's "
-            f"own trades; {POINTER}"
+            f"own trades; {pointer}"
             for result in self.failed()
         ]
 
