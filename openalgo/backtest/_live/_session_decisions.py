@@ -7,10 +7,12 @@ off it and off the console), and the log lines that say why a decision sent noth
   prices and volume) and where its base bars came from (`source`: "ticks", "candle", or
   "ticks and candle" for a bar of several minutes holding both; a candle is a minute's
   bar only when the minute made no tick bar), the value of each `self.I` output by its
-  label, the position in units (signed, at the decision: its own orders have not filled
+  label (`LiveRunContext.indicator_values`: null while not known), the position in
+  units (signed, at the decision: its own orders have not filled
   yet), and what `on_bar` submitted: each kernel order (its id, side, units, type,
   status and reject code: a rejection at submission has its code) and each order request
-  that made none (`skipped`, its code).
+  that made none (`skipped`, its code). A decision whose `on_bar` raised has its line too,
+  with what it submitted before the exception and the exception (`error`).
 - **A strategy bar not decided on** (kind "skipped"): the strategy, the decision's
   instant and why (`reason`): missing data, indicators not ready, trading not begun
   (before the first whole minute watched), the session stopping, or the strategy failed.
@@ -82,20 +84,28 @@ class DecisionNotes:
             )
             if order["reject_code"] is not None:
                 logger.info(
-                    "%s: order o%d rejected at submission: %s %g units, %s",
+                    "%s: order o%d rejected at submission: %s %s units, %s",
                     self._name,
                     submission.order,
                     order["side"],
-                    order["quantity_units"],
+                    _units_text(order["quantity_units"]),
                     order["reject_code"],
                 )
         return listed
 
     def decided(
-        self, decided_at_ns: int, bar: Bar, submitted: list[dict[str, Any]], position_units: float
+        self,
+        decided_at_ns: int,
+        bar: Bar,
+        submitted: list[dict[str, Any]],
+        position_units: float,
+        *,
+        error: BaseException | None = None,
     ) -> None:
-        """Write the line of a decision made on `bar` (module docstring)."""
+        """Write the line of a decision made on `bar` (module docstring); `error`, the
+        exception `on_bar` raised, adds its `error` field."""
         sources = set(self._part.series.sources(bar.ts_open, bar.ts_close))
+        failed = {} if error is None else {"error": f"{type(error).__name__}: {error}"}
         self._write(
             DECISION,
             strategy=self._name,
@@ -114,6 +124,7 @@ class DecisionNotes:
             indicators=self._indicators(),
             position_units=position_units,
             submitted=submitted,
+            **failed,
         )
 
     def _indicators(self) -> dict[str, Any] | str:
@@ -159,6 +170,11 @@ class DecisionNotes:
         else:
             reason = NOT_TRADING
         self.skipped(decided_at_ns, reason)
+
+
+def _units_text(units: float) -> str:
+    """`units` as the log writes them: a whole number exactly, with no exponent."""
+    return str(int(units)) if float(units).is_integer() else str(units)
 
 
 __all__ = [

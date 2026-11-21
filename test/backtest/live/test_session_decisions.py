@@ -72,6 +72,33 @@ class LongAverage(bt.Strategy):
         raise AssertionError("no decision is made before the indicators are ready")
 
 
+class BuysThenRaises(bt.Strategy):
+    """Buys 10 units at its first decision, then raises in the same `on_bar`."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "1m"
+
+    def on_bar(self, bar):
+        self.buy(10)
+        raise RuntimeError("the strategy's own error")
+
+
+class LateHugeBuy(LateBuy):
+    """`LateBuy` of 1,234,567 units, rejected at submission as the cut-off has passed."""
+
+    def on_bar(self, bar):
+        if bar.ts_close >= ist(14, 51) and not self.tried:
+            self.tried = True
+            self.buy(1_234_567)
+
+
+class AverageTwice(AverageBuy):
+    """`AverageBuy` that registers its average twice, as two uses of one call would."""
+
+    def init(self):
+        super().init()
+        self.again = self.I(ta.sma, self.close, 2)
+
+
 @pytest.fixture
 def world(make_fake_openalgo, monkeypatch, tmp_path, caplog):
     caplog.set_level(logging.DEBUG, logger=LOGGER_NAME)
@@ -172,6 +199,35 @@ def test_a_rejection_at_submission_is_logged_at_info_with_the_side_units_and_cod
         record.getMessage()
         == "LateBuy: order o1 rejected at submission: BUY 10 units, entry_window"
     )
+
+
+def test_a_huge_rejected_order_is_logged_with_its_exact_units(world, caplog):
+    world.stop_at(ist(14, 51, 30))
+    world.run(LateHugeBuy)
+    (record,) = records(caplog, "rejected at submission")
+    assert record.getMessage().endswith("BUY 1234567 units, entry_window")
+
+
+def test_a_decision_whose_on_bar_raises_writes_its_line_with_the_error(world):
+    # The bar the strategy failed on is the one most worth a line: what it submitted
+    # before the exception, and the exception.
+    with pytest.raises(RuntimeError, match="the strategy's own error"):
+        world.run(BuysThenRaises)
+    (path,) = (world.folder / "live").rglob("*.decisions.jsonl")
+    with open(path, encoding="utf-8") as stream:
+        first = json.loads(stream.readline())
+    assert (first["kind"], first["decided_at_ns"]) == ("decision", ist(14, 42))
+    assert [(o["side"], o["units"]) for o in first["submitted"]] == [("BUY", 10.0)]
+    assert first["error"] == "RuntimeError: the strategy's own error"
+
+
+def test_a_decision_line_names_each_indicator_output_once_its_label_repeats(world):
+    world.stop_at(ist(14, 42, 30))
+    outcome = world.run(AverageTwice)
+    assert list(decision_lines(outcome)[0]["indicators"]) == [
+        "sma(SBIN.close, 2)",
+        "sma(SBIN.close, 2)#2",
+    ]
 
 
 def test_a_decision_skipped_for_missing_data_writes_its_reason(

@@ -19,9 +19,9 @@ venue map, the slices it releases live, its decisions and its broker candles.
   terms. A skipped decision is logged, and kept when it was skipped for missing data. An
   exception of the strategy's code is raised as `StrategyFailed` once the kernel waits
   again (it refuses the venue's results at a bar close), after which the strategy is
-  called no more. Every strategy bar gets a line in the decisions file, and each order
-  the strategy's code submitted is looked at for a rejection (`notes`,
-  `_session_decisions.DecisionNotes`).
+  called no more. Every strategy bar gets a line in the decisions file, the one whose
+  `on_bar` raised among them, and each order the strategy's code submitted is looked at
+  for a rejection (`notes`, `_session_decisions.DecisionNotes`).
 - **Commands** (`commands`): the kernel's commands as the order worker's requests. A
   placement the kernel cancelled before the loop took it (the safe stop's cancel of an
   entry decided in the same loop step) is withdrawn: it is never sent, and the kernel is
@@ -73,12 +73,16 @@ _SLOW_NS = round(SLOW_CALLBACK_WARN_S * NANOS_PER_SECOND)
 
 class StrategyFailed(Exception):
     """The code of strategy `strategy` raised `error` (in `on_bar`, a callback or a
-    timer). The session stops safely, then raises `error` again (16-session-design 3.5)."""
+    timer), after it `submitted` what a decision line lists (`DecisionNotes.submitted`).
+    The session stops safely, then raises `error` again (16-session-design 3.5)."""
 
-    def __init__(self, strategy: str, error: BaseException) -> None:
+    def __init__(
+        self, strategy: str, error: BaseException, submitted: list[dict[str, Any]] | None = None
+    ) -> None:
         super().__init__(f"{strategy} raised {type(error).__name__}: {error}")
         self.strategy = strategy
         self.error = error
+        self.submitted = submitted or []
 
 
 @dataclass(frozen=True)
@@ -264,7 +268,14 @@ class Trader(Bookkeeping):
         # What code outside a pause submitted (a catch-up's callbacks) is not this decision's.
         self.notes.submitted()
         started = self._now()
-        submitted = self._calling(part.strategy.on_bar, bar)
+        try:
+            submitted = self._calling(part.strategy.on_bar, bar)
+        except StrategyFailed as failed:
+            # The bar the strategy failed on is the one most worth a line.
+            self.notes.decided(
+                decided_at, bar, failed.submitted, self.open_units(), error=failed.error
+            )
+            raise
         if self._now() - started > _SLOW_NS and not self._slow_warned:
             self._slow_warned = True
             logger.warning(
@@ -293,8 +304,7 @@ class Trader(Bookkeeping):
         # The strategy's own code: any exception it raises stops the session safely.
         except Exception as error:
             self.failed = True
-            self.notes.submitted()
-            raise StrategyFailed(self.name, error) from error
+            raise StrategyFailed(self.name, error, self.notes.submitted()) from error
         return self.notes.submitted()
 
     # ----- orders and positions ----------------------------------------------------

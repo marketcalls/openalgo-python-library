@@ -147,14 +147,20 @@ class LiveRunContext(RunContext):
 
     def indicator_values(self) -> dict[str, float | bool | None]:
         """The value of each `self.I` output at the latest decision, by its label (an
-        output that looks ahead has none): None before its store shows a bar, NaN while
-        it is not known. A value is computed once per change of its store, as when the
-        strategy reads it."""
+        output that looks ahead has none); a label met again (one call registered twice)
+        is suffixed with its count ("#2"), so each output keeps its value. None before its
+        store shows a bar, NaN while it is not known; the decisions file writes both as
+        null. A value is computed once per change of its store, as when the strategy reads
+        it."""
         values: dict[str, float | bool | None] = {}
         for store in self._all_stores():
             for indicator in store.indicators:
                 for view in indicator.views:
-                    values[view.label] = _latest(view)
+                    label, count = view.label, 1
+                    while label in values:
+                        count += 1
+                        label = f"{view.label}#{count}"
+                    values[label] = _latest(view)
         return values
 
     def _noted(self, submit: Callable[[dict], Order | None], request: dict) -> Order | None:
