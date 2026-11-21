@@ -16,12 +16,8 @@ from venue_samples import Rig, accepted, order, unanswered, update
 
 from openalgo.backtest._live._types import OrderIntent, OrderStatus, Purpose
 from openalgo.backtest._live._venue_requests import Applied, PlaceRequest, Priority
-from openalgo.backtest._live._worker_queue import (
-    CANCELLED_WORDS,
-    Incoming,
-    WithdrawPlace,
-    WorkerQueue,
-)
+from openalgo.backtest._live._worker_incoming import Incoming
+from openalgo.backtest._live._worker_queue import CANCELLED_WORDS, WithdrawPlace, WorkerQueue
 from openalgo.backtest._live.inbox import NotSent, NotSentReason, SendResult
 
 LIMIT_ENTRY = order("BUY", 10.0, order_type="LIMIT", price=450.0)
@@ -135,6 +131,24 @@ def test_an_entry_withdrawn_for_the_entry_locks_is_rejected_with_live_lock():
     assert rig.status(kernel_order) == "Rejected"
     assert rig.engine.order(kernel_order)["reject_code"] == "live_lock"
     assert not rig.map.owns_request(place.request_id)
+
+
+@pytest.mark.parametrize("answer", ["sent", "withdrawn"])
+def test_a_withdrawal_for_the_entry_locks_is_forgotten_once_its_entry_is_answered(answer):
+    # The worker may have taken the entry before the withdrawal reached it (sent), or
+    # taken it off its queue (withdrawn): either way the map keeps no note of the request
+    # for the rest of the day.
+    rig = Rig()
+    _, place = placed(rig)
+    rig.engine.lock_entries("feed_dead")
+    (withdrawal,) = rig.map.withdraw_locked()
+    if answer == "sent":
+        rig.map.sent(SendResult(place.request_id, unanswered()))
+    else:
+        rig.map.not_sent(NotSent(place, withdrawal.reason, withdrawal.words))
+
+    assert rig.map.withdraw_locked() == []
+    assert rig.map._withdrawing == set()
 
 
 # ----- the worker's intake withdraws -------------------------------------------------

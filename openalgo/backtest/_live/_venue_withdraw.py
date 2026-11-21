@@ -23,7 +23,12 @@ of `venue_map.VenueMap`).
   each loop step): while it still waits the worker answers
   `NotSent(entries_locked)`, and the kernel takes it as an entry refused under the lock
   (`locked_place`, `apply_reject` with `live_lock`, the code a submission gets then).
-  Once the worker has taken it, it goes as sent before the lock.
+  The withdrawal reaches the worker when the loop step that set the lock hands over its
+  commands, not at the lock itself: an entry the worker's thread takes off its queue in
+  between (its order rate window opening then) is sent, though after the lock, and is
+  answered and filled as any sent order. That window is the rest of one loop step,
+  against the order rate's hold of up to `_order_throttle.WITHDRAW_AFTER_S` without the
+  withdrawal.
 - **A cancel the exit guard withdraws** (16-session-design 3.3 step 5 "As built", round
   7): never sent, the kernel takes it as refused (`withdraw_cancel`); held again, it
   waits for its answer again (`restore_cancel`).
@@ -53,7 +58,8 @@ class Withdrawals:
     _engine: Any
     _orders: dict[int, VenueOrder]
     _issued: dict[int, OrderRequest]
-    #: The requests whose withdrawal for the strategy's entry locks was asked already.
+    #: The requests whose withdrawal for the strategy's entry locks was asked already,
+    #: while they wait for their answer.
     _withdrawing: set[int]
     _order: Callable[[int], VenueOrder]
     _answer: Callable[..., bool]
@@ -79,6 +85,8 @@ class Withdrawals:
         once; none while no lock is set. The kernel's locks are read only while such a
         placement waits: most loop steps have none."""
         waiting = self._waiting_entries()
+        # A request answered (sent, or withdrawn) no longer waits: its note goes with it.
+        self._withdrawing.intersection_update(self._issued)
         locks = sorted(call(self._engine.entry_locks)) if waiting else []
         if not locks:
             return []

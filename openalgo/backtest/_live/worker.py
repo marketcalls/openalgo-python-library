@@ -53,8 +53,9 @@ from ._order_state import HeldFill
 from ._order_throttle import DEFAULT_ORDERS_PER_SECOND, OrderThrottle
 from ._types import LOGGER_NAME, AlertsLike, Mode, Now, Purpose, Sleep
 from ._venue_requests import Priority
+from ._worker_incoming import Incoming
 from ._worker_news import NewsHandover
-from ._worker_queue import Incoming, Request, WorkerQueue
+from ._worker_queue import Request, WorkerQueue
 from ._worker_send import Sender
 from ._worker_settle import Settlements
 from ._worker_stops import StopBook
