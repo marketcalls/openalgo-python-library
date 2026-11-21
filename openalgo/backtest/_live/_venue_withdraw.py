@@ -25,10 +25,9 @@ of `venue_map.VenueMap`).
   (`locked_place`, `apply_reject` with `live_lock`, the code a submission gets then).
   The withdrawal reaches the worker when the loop step that set the lock hands over its
   commands, not at the lock itself: an entry the worker's thread takes off its queue in
-  between (its order rate window opening then) is sent, though after the lock, and is
-  answered and filled as any sent order. That window is the rest of one loop step,
-  against the order rate's hold of up to `_order_throttle.WITHDRAW_AFTER_S` without the
-  withdrawal.
+  between (its order rate window opening then) is refused by the worker itself, which
+  reads the strategy's locks just before it sends an entry or add (`_locked_entries`,
+  2.4.0 item P3-1), with the same answer.
 - **A cancel the exit guard withdraws** (16-session-design 3.3 step 5 "As built", round
   7): never sent, the kernel takes it as refused (`withdraw_cancel`); held again, it
   waits for its answer again (`restore_cancel`).
@@ -42,6 +41,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from .._engine import call
+from ._locked_entries import locked_words
 from ._order_state import ENTRY_PURPOSES
 from ._session_unsent import LOCKED_CODE
 from ._venue_requests import Applied, CancelRequest, Handled, OrderRequest, PlaceRequest
@@ -90,7 +90,7 @@ class Withdrawals:
         locks = sorted(call(self._engine.entry_locks)) if waiting else []
         if not locks:
             return []
-        words = f"the strategy's entries were locked ({', '.join(locks)}) before it was sent"
+        words = locked_words(locks)
         for request in waiting:
             self._withdrawing.add(request.request_id)
         return [WithdrawPlace(r, NotSentReason.ENTRIES_LOCKED, words) for r in waiting]
