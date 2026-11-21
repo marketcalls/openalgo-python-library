@@ -14,7 +14,9 @@ limit: live it is the `max_daily_loss=` of the call, in rupees, and a class attr
 must agree with it) and learns what history its indicators need by running `init` on the engine's
 reference bars, as a backtest does before it loads data (`_warm_up_probe`): that run is
 also the strategy layer's causality and window-stability check, and the one that finds
-a condition strategy, since conditions are declared in `init`.
+a condition strategy, since conditions are declared in `init`. Its version, the id of its
+code and parameters every order carries, is read then too (`_version_id`; 18-multi-strategy
+12.1).
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ from ..calendar import Calendar
 from ..errors import ConfigError
 from ..reference import Instrument
 from ..strategy import Strategy
+from ._version_id import StrategyVersion, version_of
 from .series import DEFAULT_BASE
 
 #: The product of every live order in this release (16-session-design 1.1, Tier 1).
@@ -62,6 +65,7 @@ class StrategySpec:
     the arguments of the backtest of today they were resolved from, `instruments` its
     instruments from the reference tables, `needs` the bars its indicators need before
     today and `measured` the warm-ups measured to learn them, by indicator label.
+    `version` is its version: the id of its code and parameters (`_version_id`).
     """
 
     strategy: type[Strategy]
@@ -76,6 +80,7 @@ class StrategySpec:
     instruments: tuple[Instrument, ...]
     needs: tuple[SeriesNeed, ...]
     measured: Mapping[str, WarmUp]
+    version: StrategyVersion
 
     @property
     def params(self) -> Mapping[str, Any] | None:
@@ -179,6 +184,7 @@ def strategy_spec(
         instruments=tuple(instruments),
         needs=needs,
         measured=measured,
+        version=version_of(strategy, arguments["params"]),
     )
 
 

@@ -1,6 +1,7 @@
 """Each strategy's `Trader` at the start of a live session (16-session-design 3.1 step 11;
 unit 8), split from `_session_start` so each module keeps one job: its venue map, numbered
-with the session's request IDs, its square-off and its exchange's close, its sizing capped
+with the session's request IDs and carrying the strategy's version id onto every intent
+(18-multi-strategy 12.1), its square-off and its exchange's close, its sizing capped
 by the funds available, and the order worker's record of locked entries
 (`_locked_entries`), which its entry locks are copied to.
 
@@ -34,6 +35,7 @@ def build_traders(session: Session, funds_available: float) -> tuple[Trader, ...
             request_ids=numbers,
             alerts=parts.alerts,
             now=session.now,
+            version_id=part.spec.version.version_id,
         )
         times = calendar.intraday_times(part.spec.exchange, day)
         square_off = part.spec.plan.square_off

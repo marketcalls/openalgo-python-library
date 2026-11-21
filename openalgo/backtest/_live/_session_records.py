@@ -172,15 +172,16 @@ class StrategyRecords:
 @dataclass(frozen=True)
 class OrderRecord:
     """An order a venue map placed: the strategy, the kernel's order number, the intent
-    (its ID, purpose, symbol, exchange, action, price type, units, limit and trigger in
-    rupees, 0 for none, and when it was made), the broker's order ID ("" when never
-    bound), how far it got at the broker (`reached`, module docstring), and the kernel's
-    final status, units filled, average fill price (None for none) and reject code (None
-    for none)."""
+    (its ID, the strategy's version id, purpose, symbol, exchange, action, price type,
+    units, limit and trigger in rupees, 0 for none, and when it was made), the broker's
+    order ID ("" when never bound), how far it got at the broker (`reached`, module
+    docstring), and the kernel's final status, units filled, average fill price (None for
+    none) and reject code (None for none)."""
 
     strategy: str
     kernel_order: int
     intent_id: str
+    version_id: str
     order_id: str
     purpose: str
     symbol: str
@@ -214,6 +215,7 @@ def order_records(session: Any, outputs: Mapping[str, Any]) -> tuple[OrderRecord
                     strategy=trader.name,
                     kernel_order=kernel_order,
                     intent_id=intent.intent_id,
+                    version_id=intent.version_id,
                     order_id=placed.order_id,
                     purpose=intent.purpose.value,
                     symbol=intent.symbol,

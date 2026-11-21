@@ -23,10 +23,14 @@
   `account_trade_limit`, is in `refused` and counted in `contribution`. An entry a
   strategy's kill switch locked out after the account's daily loss limit or profit target
   fired it stays in the strategy's orders as `live_lock`, the session's entry lock, whose
-  rejection does not carry the lock's reason (`SessionResult.locks` has it). The
-  Assumptions block says so, with the funds OpenAlgo reported at the start, in place of a
-  backtest's pool, and, in a session with an instrument several strategies share, what the
-  session does there in place of a backtest's netting rules.
+  rejection does not carry the lock's reason (`SessionResult.locks` has it), and the
+  working entries and adds the kill switch cancelled are in the strategy's orders as
+  cancelled. The Assumptions block says so, with the funds OpenAlgo reported at the start,
+  in place of a backtest's pool, and, in a session with an instrument several strategies
+  share, what the session does there in place of a backtest's netting rules. When the
+  account refused nothing, the combined page's card of the account's refusals says so in
+  the words of the limits the session set (`nothing_refused`; a backtest's words when it
+  set none), in the card only.
 
 Amounts are rupees; the account's rows carry UTC nanoseconds, shown as IST times.
 """
@@ -46,6 +50,7 @@ from .._portfolio_tables import ACCOUNT_COLUMNS, STRATEGY
 from .._risk_settings import NET_BASIS
 from .._strategy_args import PAISE_PER_RUPEE, SHARED_POOL, Account
 from ..portfolio_result import PortfolioResult
+from ..report._dashboard.portfolio_tables import REFUSED_NOTE
 from ..result import Result
 from ._groups import SHARED_RULE
 from ._plan_args import LiveArguments
@@ -62,9 +67,18 @@ ACCOUNT_NOTE = (
     "engines' model; the entries the account's trade cap refused are listed in refused, "
     "while the entries a strategy's kill switch locked out once the account's daily loss "
     "limit or profit target fired it stay in its orders with the code live_lock (the "
-    "lock's reason is in SessionResult.locks); the daily loss measure counts this start "
-    "only: after a restart the account's daily limits stay held to the day's measure, "
-    "whose figures are SessionResult.summary's"
+    "lock's reason is in SessionResult.locks), and the working entries and adds the kill "
+    "switch cancelled stay in its orders as cancelled; the daily loss measure counts this "
+    "start only: after a restart the account's daily limits stay held to the day's "
+    "measure, whose figures are SessionResult.summary's"
+)
+#: Where the entries the account's daily loss limit or profit target locked out are, and
+#: the kill switch's cancels, as the empty card of the account's refusals says it
+#: (`nothing_refused`), the limits the session set named first.
+LOCKED_OUT_NOTE = (
+    "the entries the account's {limits} locked out are in the strategies' orders with the "
+    "code live_lock, and the working entries and adds its kill switch cancelled are in "
+    "their orders as cancelled"
 )
 #: The stamp of a refusal the fund records beside the strategy and the reason: the order
 #: in the strategy's own engine and its rejection's slice, slice open (UTC nanoseconds) and
@@ -152,6 +166,29 @@ def session_account(results: Mapping[str, Result], arguments: LiveArguments) -> 
     )
 
 
+def nothing_refused(arguments: LiveArguments) -> str | None:
+    """The words of the empty card of the account's refusals of a session with the checked
+    `bt.live` `arguments` (module docstring): the account's trade cap, when set, refused no
+    order, and the entries its daily loss limit or profit target, those set, locked out are
+    in the strategies' orders; None when the session set no account limit (the card says
+    a backtest's words then)."""
+    capped = arguments.account_max_trades_per_day is not None
+    limits = [
+        name
+        for name, given in (
+            ("daily loss limit", arguments.account_max_daily_loss),
+            ("profit target", arguments.account_daily_profit_target),
+        )
+        if given is not None
+    ]
+    if not capped and not limits:
+        return None
+    words = "the account's trade cap refused no order" if capped else "the account refused no order"
+    if limits:
+        words += "; " + LOCKED_OUT_NOTE.format(limits=" or ".join(limits))
+    return words
+
+
 def session_portfolio(
     results: Mapping[str, Result],
     arguments: LiveArguments,
@@ -173,6 +210,9 @@ def session_portfolio(
     }
     words = ACCOUNT_NOTE.format(capitals=rupees_text(funds), funds=rupees_text(funds_at_start))
     notes = {"account": words}
+    nothing = nothing_refused(arguments)
+    if nothing is not None and not records["refused"][STRATEGY]:
+        notes[REFUSED_NOTE] = nothing
     if shared:
         notes["shared_instrument_rules"] = SHARED_NOTE
     return PortfolioResult(account, results, records, notes=notes)
@@ -180,9 +220,11 @@ def session_portfolio(
 
 __all__ = [
     "ACCOUNT_NOTE",
+    "LOCKED_OUT_NOTE",
     "REFUSAL_STAMP",
     "SHARED_NOTE",
     "account_rows",
+    "nothing_refused",
     "refused_records",
     "session_account",
     "session_portfolio",

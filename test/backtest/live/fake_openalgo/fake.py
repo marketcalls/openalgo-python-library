@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable, Iterable
+from typing import Any
 
 import httpx
 from feed_fakes import retire, shorten
@@ -250,6 +251,17 @@ class FakeOpenAlgo:
         """The position book shows every fill again after `lag_positionbook`."""
         with self._venue.lock:
             self._venue.catch_up_positions()
+
+    def set_master_expiry(self, symbol: str, exchange: str, expiry: str) -> None:
+        """Make OpenAlgo's master contract give a known instrument `expiry` ("DD-MMM-YY",
+        or "" for none)."""
+        market = self._venue.markets[(symbol, exchange)]
+        market.instrument = dataclasses.replace(market.instrument, expiry=expiry)
+
+    def set_holidays(self, rows: Iterable[dict[str, Any]]) -> None:
+        """Replace OpenAlgo's market holidays (`market/holidays` rows, as
+        `holidays.HOLIDAYS_2026` holds them)."""
+        self._venue.holidays = tuple(dict(row) for row in rows)
 
     def set_analyzer(self, on: bool) -> None:
         """Flip OpenAlgo's analyzer switch (True: sandbox mode)."""

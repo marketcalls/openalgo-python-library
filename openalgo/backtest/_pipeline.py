@@ -51,6 +51,7 @@ from ._context import RunContext, RunData
 from ._driver import drive
 from ._engine import build_engine, call
 from ._expired_contracts import expired_contracts
+from ._expiry_check import check_listed_expiries
 from ._futures import attach
 from ._futures_margin import margin_warnings
 from ._manifest import strategy_source_hash
@@ -198,9 +199,11 @@ def load(checked: CheckedRun, client: Any, args: dict[str, Any]) -> PreparedRun:
     """The second stage of `prepare`: the base interval and its bars for the run
     `checked` (`_run_check.check_run`), through `client` or the run's own data, then the
     ticks chosen by a price slab, the market settings, the benchmark's closes and the
-    history before `start` that the needs probed ask for. Raises the data layer's errors
-    and ConfigError for data the run cannot use."""
+    history before `start` that the needs probed ask for; first, a listed contract whose
+    expiry the client's master contract gives otherwise is warned of (`_expiry_check`).
+    Raises the data layer's errors and ConfigError for data the run cannot use."""
     plan, futures, needs = checked.plan, checked.futures, checked.needs
+    check_listed_expiries(checked.instruments, client, plan.present)
     calendar = checked.session_calendar()
     windows = None if futures is None else futures.windows
     with expired_contracts(checked.instruments, plan.present):

@@ -39,7 +39,9 @@ def banner_lines(session: Any) -> list[str]:
     zerodha"), at a restart the start's number and each resumed leg with its stop, then
     the funds, each strategy's instrument, interval, capital, daily loss limit, entry
     cut-off and square-off, and its daily limits when set (18-multi-strategy 2.5a), each
-    instrument's freeze cap (once), each instrument several strategies share with its
+    instrument's freeze cap (once), each strategy's version id, a version changed since
+    the day's earlier start and a source not hashed (12.1, `_session_versions`), each
+    instrument several strategies share with its
     members and the rule on trading by hand (4.11), the rule of broker-held stops
     (`STOPS_LINE`), the account's limits, the order rate, the cost model, the sandbox's
     difference, and the warnings, each once with one prefix."""
@@ -68,6 +70,7 @@ def banner_lines(session: Any) -> list[str]:
             fact = facts.get((each.symbol, each.exchange))
             freeze = None if fact is None else fact.freeze_quantity
             lines.append(f"{each.symbol}: freeze quantity {freeze if freeze else 'none'}")
+    lines += session.versions.banner_lines()
     lines += shared_lines(session.groups.groups)
     lines.append(STOPS_LINE)
     if spec.arguments.account_max_daily_loss is not None:

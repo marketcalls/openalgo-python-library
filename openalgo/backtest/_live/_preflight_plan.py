@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..errors import ConfigError, PreflightError
+from ..reference import Instrument
 from ._types import AlertsLike, Mode
 
 #: How the message of a check that passed, with something the user should know, starts.
@@ -44,7 +45,9 @@ class PreflightPlan:
     (D21), and `alerts` the session's alert channel, None when it has none.
     `tested_alerts` is the alerts check of an earlier preflight of the same session,
     given when the preflight runs again while the broker's login is awaited: that check
-    is reported again and no second test alert is sent.
+    is reported again and no second test alert is sent. `contracts` are the session's
+    futures and options as the reference tables resolved them, whose expiry is checked
+    against OpenAlgo's master contract (`_preflight_expiry`; a list is kept as a tuple).
 
     Raises ConfigError when `instruments` is empty or holds anything but pairs of
     non-blank strings, when neither `interval` nor `intervals` names an interval or
@@ -62,9 +65,11 @@ class PreflightPlan:
     mode: Mode
     alerts: AlertsLike | None = None
     tested_alerts: Check | None = None
+    contracts: tuple[Instrument, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "instruments", _instrument_pairs(self.instruments))
+        object.__setattr__(self, "contracts", tuple(self.contracts))
         object.__setattr__(self, "intervals", _intervals(self.interval, self.intervals))
         if not isinstance(self.mode, Mode):
             raise ConfigError(
@@ -108,27 +113,33 @@ class Check:
 @dataclass(frozen=True)
 class InstrumentFacts:
     """What OpenAlgo's master contract gives of an instrument: `lot_size` in units (1 for
-    cash equity), `tick_size` in rupees, and `freeze_quantity`, the most units one order
-    may carry on the exchange, None when OpenAlgo knows no such limit for it."""
+    cash equity), `tick_size` in rupees, `freeze_quantity`, the most units one order
+    may carry on the exchange, None when OpenAlgo knows no such limit for it, and
+    `expiry`, a contract's expiry as the answer wrote it ("29-DEC-26"; "" or None for
+    cash equity, or an answer without one)."""
 
     symbol: str
     exchange: str
     lot_size: int
     tick_size: float
     freeze_quantity: int | None
+    expiry: Any = None
 
 
 @dataclass(frozen=True)
 class PreflightReport:
     """What a passed preflight found: every check in the order it ran, the `broker`
     OpenAlgo is logged in to (as `ping` names it), `funds_available`, the available cash
-    in rupees OpenAlgo reported (the sandbox's own funds in SANDBOX mode), and the facts
-    of each instrument, in the plan's order."""
+    in rupees OpenAlgo reported (the sandbox's own funds in SANDBOX mode), the facts
+    of each instrument, in the plan's order, and the later days on which OpenAlgo's
+    holidays and the package calendar disagree, in words (`calendar_disagrees`,
+    `_preflight_calendar`)."""
 
     checks: tuple[Check, ...]
     broker: str
     funds_available: float
     instruments: tuple[InstrumentFacts, ...]
+    calendar_disagrees: tuple[str, ...] = ()
 
     @property
     def warnings(self) -> tuple[str, ...]:
@@ -140,12 +151,14 @@ class PreflightReport:
 class PreflightOutcome:
     """Every check of one preflight run in the order it ran, passed or failed, with what
     the server checks found: the `broker` ping named and the available cash in rupees
-    (each None when not answered) and the facts of each instrument found."""
+    (each None when not answered), the facts of each instrument found, and the days on
+    which OpenAlgo's holidays and the package calendar disagree, in words."""
 
     checks: tuple[Check, ...]
     broker: str | None
     funds_available: float | None
     instruments: tuple[InstrumentFacts, ...]
+    calendar_disagrees: tuple[str, ...] = ()
 
     @property
     def failures(self) -> tuple[str, ...]:
@@ -172,7 +185,9 @@ class PreflightOutcome:
         # whenever every check passed.
         if self.failures or broker is None or available is None:
             raise PreflightError(_failed_text(self.failures), self.failures)
-        return PreflightReport(self.checks, broker, available, self.instruments)
+        return PreflightReport(
+            self.checks, broker, available, self.instruments, self.calendar_disagrees
+        )
 
 
 def _failed_text(failures: tuple[str, ...]) -> str:

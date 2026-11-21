@@ -29,6 +29,13 @@ each of them, not only the first. The checks, by name:
 - `trading_day:<EXCHANGE>`: the exchange trades today and its session has not closed
   (the package calendar); a warning after the day's MIS entry cut-off, and when the
   calendar does not confirm the day;
+- `expiry:<EXCHANGE>:<SYMBOL>`: each futures and options contract's expiry in OpenAlgo's
+  master contract agrees with the reference tables (`_preflight_expiry`); a warning when
+  OpenAlgo gives none;
+- `holidays`: OpenAlgo's market holidays (`holidays`, one call) agree with the package
+  calendar for the session's exchanges from today to the year's end; a disagreement about
+  today fails, one about a later day is a warning, its days kept in the report
+  (`_preflight_calendar`);
 - `clock`: the local clock within 2 seconds of the server's, read from the `Date`
   header of one HEAD request to the server's root (`_preflight_clock`); it fails only
   when a clock is certainly off, and warns when it cannot tell, as for a server on this
@@ -58,6 +65,7 @@ from collections.abc import Callable
 
 from ..calendar import Calendar, default_calendar
 from ..errors import ConfigError
+from ._preflight_calendar import holiday_check
 from ._preflight_clock import clock_check
 from ._preflight_local import alerts_check, limit_checks, product_check, trading_day_checks
 from ._preflight_lock import LOCK_FILE_NAME, AccountLock
@@ -96,9 +104,10 @@ def check_preflight(
     client: PreflightClient, plan: PreflightPlan, *, now: Now, calendar: Calendar | None = None
 ) -> PreflightOutcome:
     """Run every check of `plan` (see the module docstring) against `client`, an
-    `openalgo.api` client of which only `ping`, `funds`, `symbol`, `quotes` (once) and
-    `intervals` are called, and its pooled HTTP client for one HEAD request to the
-    server's root (the clock check, not sent to a server on this computer); the plan's
+    `openalgo.api` client of which only `ping`, `funds`, `symbol`, `quotes` (once),
+    `intervals` and `holidays` (once) are called, and its pooled HTTP client for one
+    HEAD request to the server's root (the clock check, not sent to a server on this
+    computer); the plan's
     alert channel sends one test alert once `ping` has succeeded, unless the plan carries
     the alerts check of an earlier run (`tested_alerts`), which is reported again. `now`
     gives the present in UTC nanoseconds, and `calendar` the sessions (the package's
@@ -120,17 +129,21 @@ def check_preflight(
         product_check(plan.product),
         *trading_day_checks((exchange for _, exchange in plan.instruments), now_ns, calendar),
     ]
-    # The clock is read from OpenAlgo's server and the test alert goes through it, so both
-    # wait for ping to succeed; a missing alert channel is known without it.
+    # The clock and the holidays are read from OpenAlgo's server and the test alert goes
+    # through it, so they wait for ping to succeed; a missing alert channel is known
+    # without it.
+    disagrees: tuple[str, ...] = ()
     if server.broker is not None:
-        checks.append(clock_check(client, now))
+        exchanges = (exchange for _, exchange in plan.instruments)
+        holidays, disagrees = holiday_check(client, exchanges, now_ns, calendar)
+        checks += [holidays, clock_check(client, now)]
     if plan.tested_alerts is not None:
         checks.append(plan.tested_alerts)
     elif plan.alerts is None or server.broker is not None:
         checks.append(alerts_check(plan.alerts, plan.mode))
     _log(checks)
     return PreflightOutcome(
-        tuple(checks), server.broker, server.funds_available, server.instruments
+        tuple(checks), server.broker, server.funds_available, server.instruments, disagrees
     )
 
 

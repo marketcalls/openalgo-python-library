@@ -10,7 +10,8 @@ runs steps 1 to 11 and returns the loop, `begin_trading` runs steps 12 to 15 on 
 7. The preflight. Started before the open, a preflight that fails only on the broker's
    login is run again every `LOGIN_RETRY_EVERY_S`, its alert test reported again rather
    than sent, with an ERROR alert at `LOGIN_ALERT_AT` IST; at the open it fails. The
-   guard's banner line is read now.
+   guard's banner line is read now. The later days on which OpenAlgo's holidays and the
+   package calendar disagree are the event `CALENDAR_DISAGREES` once the session exists.
 8. The order worker starts journal handle W, the journal's session of the day and the
    order path (on its own thread, or inline under the test seam), and the main thread
    opens journal handle L.
@@ -21,8 +22,9 @@ runs steps 1 to 11 and returns the loop, `begin_trading` runs steps 12 to 15 on 
 11. The plan (`plan.build`): warm-up from broker history, each strategy's kernel session,
    live series and `init`, its saved `self.state` merged, the catch-up to the present.
    Each kernel session's entries are locked ("starting") and its sizing equity capped by
-   the funds available; a restart's saved state restored and checked
-   (`_session_restore.restore`).
+   the funds available (`_session_traders`); each strategy's version and run manifest
+   written to journal L (`_session_versions`); a restart's saved state restored and
+   checked (`_session_restore.restore`).
 
 A failure up to step 11 closes what was opened, in reverse, and is raised. Then
 `begin_trading`: 12. the data worker starts and the loop turns (the start phase): with a
@@ -59,6 +61,7 @@ from ._session_parts import SessionParts, StopFlag
 from ._session_restore import RESTART_PROTECT_WAIT_S, protect_restored, restore
 from ._session_trader import ist_instant
 from ._session_traders import build_traders
+from ._session_versions import record_versions
 from ._shared_alerts import SharedAlerts
 from ._types import LOGGER_NAME, AlertKind, Mode, Now, Sleep
 from .alerts import Alerts
@@ -87,6 +90,9 @@ PRODUCT = "MIS"
 STARTING_LOCK = "starting"
 #: The folder of the day's logs, under the account's folder.
 LOGS_FOLDER = "logs"
+#: The event naming the later days OpenAlgo's holidays and the package calendar disagree
+#: on (18-multi-strategy 12.2; `_preflight_calendar`).
+CALENDAR_DISAGREES = "calendar_disagrees"
 
 _NS = NANOS_PER_SECOND
 
@@ -223,6 +229,7 @@ def _open(
     session.traders = build_traders(session, report.funds_available)
     for trader in session.traders:
         trader.lock(STARTING_LOCK)
+    _audit_records(session, report)
     session.figures = DayFigures.at_start(snapshot.rms_states, names)
     for envelope in start.deferred:
         # What the worker posted during the start's reads, for the loop to take.
@@ -233,6 +240,16 @@ def _open(
         session.warn(note)
     session.risk.warn_at_start()
     return session
+
+
+def _audit_records(session: Session, report: Any) -> None:
+    """The start's audit records (18-multi-strategy 12): each strategy's version and run
+    manifest written to journal L (`_session_versions`), and the event naming the later
+    days on which OpenAlgo's holidays and the package calendar disagree (the preflight's
+    `report`). Raises JournalError when the journal cannot write them."""
+    session.versions = record_versions(session)
+    if report.calendar_disagrees:
+        session.event(CALENDAR_DISAGREES, days=list(report.calendar_disagrees))
 
 
 def _broker(client: Any, account: str | None) -> str:
@@ -268,6 +285,7 @@ def _preflight(
         account_max_daily_loss=options.account_max_daily_loss,
         mode=mode,
         alerts=alerts,
+        contracts=[i for each in spec.strategies for i in each.instruments if i.expiry is not None],
     )
     calendar = default_calendar()
     opens = [calendar.session(exchange, spec.day) for _, exchange in spec.instruments]
@@ -353,6 +371,7 @@ def begin_trading(session: Session, source: FeedSource) -> None:
 
 
 __all__ = [
+    "CALENDAR_DISAGREES",
     "LOGIN_ALERT_AT",
     "LOGIN_RETRY_EVERY_S",
     "LOGS_FOLDER",

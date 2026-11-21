@@ -7,13 +7,15 @@ state, so a restart adds exactly what the state it restores does not hold:
 
 - **Per strategy**, in its saved state (`FIGURES`): the round trips closed today, the
   gross P&L and modelled charges of its account, and the slippage of its MARKET fills
-  against the backtest's (`_session_slippage`) with the counts of those compared and not
-  compared. The account is in the saved state itself (the kernel restores the cash with
-  its realized P&L and its charges), so a restored engine's gross P&L and charges are the day's, and
-  the saved ones are never added to them. Its round trips and its slippage are not (a
-  restored engine's result begins at the restart, and a start compares its own fills
-  only), so the saved ones are carried and the restored start's own are added to them. A
-  fill applied after the save is applied again in the restored engine, which the saved
+  and of its stops' fills against the backtest's (`_fill_comparison`) with the counts of
+  those compared and not compared; beside them its fills' rows of the comparison
+  (`_fill_comparison.COMPARED`, carried as the slippage is: `rows`). The account is in
+  the saved state itself (the kernel restores the cash with its realized P&L and its
+  charges), so a restored engine's gross P&L and charges are the day's, and the saved
+  ones are never added to them. Its round trips and its slippage are not (a restored
+  engine's result begins at the restart, and a start compares its own fills only), so
+  the saved ones are carried and the restored start's own are added to them. A fill
+  applied after the save is applied again in the restored engine, which the saved
   figures did not hold yet: it is counted once. A strategy an
   earlier start saved and this start does not run adds its saved figures whole, and is
   named on the summary (`Earlier`) with the position its last save held, if any: the day
@@ -42,8 +44,9 @@ from typing import Any
 
 from .._engine import call
 from ..errors import LiveError
+from ._fill_comparison import DayRows
 from ._plan_catch_up import INSTRUMENT
-from ._session_slippage import Slippage, strategy_slippage
+from ._session_slippage import Slippage
 from ._venue_requests import LIVE_PRODUCT
 
 #: The key of a strategy's saved state that holds its figures (`_session_saved`).
@@ -57,8 +60,8 @@ SESSION_KEY = "(session)"
 class StrategyFigures:
     """A strategy's figures of the day (module docstring): round trips closed, gross P&L,
     modelled charges and the slippage of its MARKET fills against the backtest's, rupees,
-    and how many of those fills were not compared and compared. A save of an earlier
-    version holds no slippage: it reads as none."""
+    and how many of those fills were not compared and compared; the same of its stops'
+    fills. A save of an earlier version holds no slippage: it reads as none."""
 
     closed_trades: int = 0
     gross_pnl: float = 0.0
@@ -66,6 +69,9 @@ class StrategyFigures:
     slippage: float = 0.0
     slippage_not_compared: int = 0
     slippage_compared: int = 0
+    stop_slippage: float = 0.0
+    stop_slippage_not_compared: int = 0
+    stop_slippage_compared: int = 0
 
     def __add__(self, other: StrategyFigures) -> StrategyFigures:
         return StrategyFigures(*(a + b for a, b in zip(_values(self), _values(other), strict=True)))
@@ -78,6 +84,12 @@ class StrategyFigures:
         if self.slippage_not_compared and not self.slippage_compared:
             return None
         return self.slippage
+
+    @property
+    def summary_stop_slippage(self) -> float | None:
+        """The stops' slippage the day summary shows: rupees, or None when no stop's fill
+        was compared (there is no figure to show)."""
+        return self.stop_slippage if self.stop_slippage_compared else None
 
 
 @dataclass(frozen=True)
@@ -120,7 +132,8 @@ class DayFigures:
     """What the earlier starts of the day left (module docstring): `carried`, each
     running strategy's saved figures; `absent`, the saved figures of the strategies this
     start does not run, together, `earlier`, those strategies, and `earlier_entries`, the
-    entries of the day their kernels had counted; `session`, the session's saved counts."""
+    entries of the day their kernels had counted; `session`, the session's saved counts;
+    `rows`, the fill comparison's saved rows."""
 
     def __init__(
         self,
@@ -129,12 +142,14 @@ class DayFigures:
         session: SessionFigures,
         earlier: Sequence[Earlier] = (),
         earlier_entries: int = 0,
+        rows: DayRows | None = None,
     ) -> None:
         self.carried = dict(carried)
         self.absent = absent
         self.session = session
         self.earlier = tuple(earlier)
         self.earlier_entries = earlier_entries
+        self.rows = DayRows({}, []) if rows is None else rows
 
     @classmethod
     def at_start(cls, saved: Mapping[str, Mapping[str, Any]], running: Sequence[str]) -> DayFigures:
@@ -154,7 +169,8 @@ class DayFigures:
                 earlier.append(_earlier(name, state))
                 entries += _entries(name, state)
         session = _read(SessionFigures, saved.get(SESSION_KEY), SESSION_KEY)
-        return cls(carried, absent, session, earlier, entries)
+        rows = DayRows.at_start(saved, running)
+        return cls(carried, absent, session, earlier, entries, rows)
 
     @property
     def earlier_open(self) -> bool:
@@ -162,13 +178,13 @@ class DayFigures:
         save."""
         return any(strategy.units for strategy in self.earlier)
 
-    def strategy(self, session: Any, trader: Any) -> dict[str, Any]:
-        """The running figures of `trader`'s strategy in `session` now, to save with its
-        state: the round trips and the slippage carried and its own since, its account's
-        gross P&L and charges."""
+    def strategy(self, trader: Any, slipped: Slippage) -> dict[str, Any]:
+        """The running figures of `trader`'s strategy now, to save with its state: the
+        round trips and the slippage carried and its own since (`slipped`, this start's),
+        its account's gross P&L and charges."""
         _equity, _cash, realized, unrealized, costs, _margin = call(trader.engine.account)
         traded = (trader.records.closed_trades, realized + unrealized, costs)
-        return asdict(self._with_carried(trader.name, traded, strategy_slippage(session, trader)))
+        return asdict(self._with_carried(trader.name, traded, slipped))
 
     def session_counts(
         self, session: Any, *, unprotected_s: float | None = None, named: int = 0
@@ -193,13 +209,17 @@ class DayFigures:
         strategy's `finish()` tables and (gross P&L, charges) of its account, by name;
         `unprotected_s` this start's seconds unprotected; `slippages` each running
         strategy's slippage in this start, by name, measured before its kernel session
-        finished (`_session_slippage`; a name not given had no MARKET fill). The day's
-        slippage is rounded to the paisa."""
+        finished (`_fill_comparison.slippage_of`; a name not given had no fill). The day's
+        slippages are rounded to the paisa."""
         total = self.absent
         for name, (output, (gross, charges)) in outputs.items():
             traded = (len(output["trades"]["trade_id"]), gross, charges)
             total = total + self._with_carried(name, traded, slippages.get(name, Slippage()))
-        total = replace(total, slippage=round(total.slippage, 2))
+        total = replace(
+            total,
+            slippage=round(total.slippage, 2),
+            stop_slippage=round(total.stop_slippage, 2),
+        )
         return total, self.session + _own(session, unprotected_s)
 
     def _carried(self, name: str) -> StrategyFigures:
@@ -220,6 +240,9 @@ class DayFigures:
             round(carried.slippage + own.rupees, 2),
             carried.slippage_not_compared + own.not_compared,
             carried.slippage_compared + own.compared,
+            round(carried.stop_slippage + own.stop_rupees, 2),
+            carried.stop_slippage_not_compared + own.stop_not_compared,
+            carried.stop_slippage_compared + own.stop_compared,
         )
 
 

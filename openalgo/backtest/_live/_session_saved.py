@@ -10,15 +10,18 @@ plain-data dict:
 | "venue_map" | the venue map's records of the orders the kernel still works (`_venue_saved`) |
 | "adopted" | the signed units the reconciler adopted from other orders' trades (5.3) |
 | "figures" | the strategy's figures of the day as that state holds them (`_session_figures`) |
+| "fill_comparison" | its fills against a backtest, the day's so far (`_fill_comparison`) |
 
 It is saved before each batch of the kernel's commands reaches the order worker (design
 rule 4: a restart never meets an order the saved state lacks) and after each slice a
 strategy releases (the trail's extremes move on ticks without commands), with the
 strategy's `self.state` when it changed (`save_released`), and the session's own counts
 of the day after them (`save_session`, under `_session_figures.SESSION_KEY`); the close
-saves them once more after its final fills (`_session_close`). A kernel session that has
-finished saves nothing: no session resumes at its close. A journal that cannot write
-raises JournalError, which stops the session (3.5).
+saves them once more after its final fills (`_session_close`). Each save teaches the
+session the level of each target exit the live state shows working
+(`_session_slippage.TargetLevels`), which the fill comparison sets the exit's fill
+against. A kernel session that has finished saves nothing: no session resumes at its
+close. A journal that cannot write raises JournalError, which stops the session (3.5).
 
 Quantities are signed units, prices rupees.
 """
@@ -31,6 +34,7 @@ from typing import Any
 
 from .._engine import call
 from ..errors import LiveError
+from ._fill_comparison import COMPARED, slippage_of, strategy_rows
 from ._kill_switch import ACCOUNT_LOSS, ACCOUNT_PROFIT
 from ._plan_catch_up import INSTRUMENT
 from ._session_exits import EXIT_FAILED_LOCK
@@ -118,11 +122,15 @@ def save(session: Any, trader: Trader) -> None:
     cannot write it."""
     if trader.finished:
         return
+    live_state = call(trader.engine.live_state)
+    session.levels.learn(trader.name, live_state)
+    rows = strategy_rows(session, trader)
     saved = {
-        "live_state": call(trader.engine.live_state),
+        "live_state": live_state,
         "venue_map": trader.venue.saved(),
         "adopted": session.reconcile.adopted(trader.name),
-        FIGURES: session.figures.strategy(session, trader),
+        FIGURES: session.figures.strategy(trader, slippage_of(rows)),
+        COMPARED: session.figures.rows.saved(trader.name, rows),
     }
     session.parts.journal.put_rms_state(trader.name, saved, day=session.parts.spec.day)
 

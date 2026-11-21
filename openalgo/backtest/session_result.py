@@ -36,6 +36,13 @@ not it has rows.
   trade cap refused (`account_trade_limit`), while an entry a strategy's kill switch
   locked out after an account limit fired it stays in that strategy's orders as
   `live_lock` (the lock's reason is in `locks`).
+- `versions`: each strategy's run manifest of this start, by name in call order: what a
+  backtest's manifest records (the engine version, the strategy's module, name, source
+  hash and parameter values, every resolved argument, the reference table and cost
+  schedule versions; never the API key). Each order carries its strategy's version id
+  (`orders`' `version_id`), the first 12 hexadecimal characters of the SHA-256 of its
+  source hash and parameter values: the same code with the same parameters gives the same
+  id on every day and restart. The journal keeps each start's.
 - `summary`: the day's figures across every start of the day: `gross_pnl`, `charges`
   (modelled: the broker's trade book carries none; each fill's rounded to the paisa, so a
   result's charges, its contract notes', differ from them by the notes' rounding, the
@@ -44,17 +51,34 @@ not it has rows.
   opening at each decision, with the run's modelled slippage; negative when live did
   better; None when not one of them could be compared) and `slippage_not_compared`
   (MARKET fills with no bar to set them against),
-  `closed_trades`, `rejected_orders`, `unprotected_seconds`,
+  `stop_slippage` and `stop_slippage_not_compared` (the same for the fills of the
+  legs' stops, each at its trigger with the run's slippage, or its bar's open when the
+  bar opened through it), `closed_trades`, `rejected_orders`, `unprotected_seconds`,
   `reconcile_mismatches`, `undelivered_alerts` and `flat`, and the legs the close names
   (`differing`, `unconfirmed`; a difference of an instrument several strategies share is
   named and counted once), the strategies of earlier starts (`earlier`) and each
   instrument several strategies share, OpenAlgo's net against their sum (`shared`), in
   words; `summary_text()` gives them as the DAILY_SUMMARY alert sent them. Its type is
   `SessionSummary`, loaded with the live layer.
-- `orders`: every order the session placed through OpenAlgo, with its intent ID, broker
-  order ID, purpose, how far it got at the broker and its final status. `fills`: every
+- `orders`: every order the session placed through OpenAlgo, with its intent ID, its
+  strategy's version id, broker order ID, purpose, how far it got at the broker and its
+  final status. `fills`: every
   fill the engine took, with where it was heard (`source`) and whether its price was
   released unconfirmed (`estimated`) or may lie on another tick (`derived_from_average`).
+- `fill_comparison`: each fill of the day's orders (every start's, as `summary`) against
+  the price a backtest of the session's own bars fills the same order at: `strategy`,
+  `version_id`, `symbol`, `exchange`, `order_id`, `purpose` (entry, add, exit, stop,
+  target for the engine's exit at a leg's target, square_off, risk_exit, or hand for a
+  fill of an order placed by hand that the session adopted), `price_type` as placed,
+  `side`, `units`, `live_time` and `live_price`, `backtest_time` (the open of the bar a
+  backtest fills it in) and `backtest_price`, `difference` (rupees per unit, signed
+  against the trader: positive when live did worse), `rupees` (the difference times the
+  units and the multiplier), `compared` and `reason` (why a row is not compared: no bar
+  yet, a LIMIT order, a hand order). A MARKET order is set against the open of the bar
+  opening at its decision, the engine's target exit against its level, a stop order against
+  its trigger (or the bar's open through a gap) in the first bar that reached it, each with
+  the run's slippage. The compared MARKET rows add up to `summary.slippage`, the legs'
+  stops' (purpose stop) to `summary.stop_slippage`.
 - `drift`: each broker candle against the bar built from the feed's ticks. The strategy
   decided, and kept deciding, on the bars built from ticks: a broker candle never
   replaced one, and was the bar only of a minute with no ticks (one the feed was dead
@@ -127,9 +151,11 @@ class SessionResult:
     strategies: tuple[str, ...]
     results: Mapping[str, Result]
     portfolio: PortfolioResult
+    versions: Mapping[str, Mapping[str, Any]]
     summary: SessionSummary
     orders: pd.DataFrame
     fills: pd.DataFrame
+    fill_comparison: pd.DataFrame
     drift: pd.DataFrame
     unprotected: pd.DataFrame
     locks: pd.DataFrame
