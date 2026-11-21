@@ -146,6 +146,7 @@ def session_result(outcome: SessionOutcome) -> SessionResult:
             outcome.funds_at_start,
             shared=bool(outcome.summary.shared),
         ),
+        versions=MappingProxyType(dict(outcome.versions)),
         summary=outcome.summary,
         orders=orders_frame(outcome.orders),
         fills=fills_frame(outcome.fills),
@@ -177,8 +178,21 @@ def strategy_result(
     output = dict(output) if restore is None else this_start(output, restore)
     state = readiness(context.run.checks.outcomes, context, setup.history)
     context.close(output["orders"])
-    arguments = dict(spec.arguments)
-    prepared = PreparedRun(
+    arguments, prepared = dict(spec.arguments), prepared_run(part)
+    finished = FinishedRun(
+        part.strategy, context, setup.market, setup.history, state, output, list(timer_warnings)
+    )
+    base_rule = f"base {setup.plan.base} ({BASE_RULE}): {LIVE_BASE_MEANING}"
+    lines = LIVE_ASSUMPTIONS | {"base_rule": base_rule}
+    return finished_result(spec.strategy, prepared, arguments, finished, None, assumptions=lines)
+
+
+def prepared_run(part: StrategyPlan) -> PreparedRun:
+    """The prepared run of a backtest of the day that one strategy's part of the session
+    plan stands for (its settings, instruments, today's bars and market settings), as its
+    result and its start's manifest (`_session_versions`) read it."""
+    setup, arguments = part.setup, part.spec.arguments
+    return PreparedRun(
         plan=setup.plan,
         calendar=None,
         instruments=list(setup.instruments),
@@ -194,12 +208,6 @@ def strategy_result(
         },
         market=setup.market,
     )
-    finished = FinishedRun(
-        part.strategy, context, setup.market, setup.history, state, output, list(timer_warnings)
-    )
-    base_rule = f"base {setup.plan.base} ({BASE_RULE}): {LIVE_BASE_MEANING}"
-    lines = LIVE_ASSUMPTIONS | {"base_rule": base_rule}
-    return finished_result(spec.strategy, prepared, arguments, finished, None, assumptions=lines)
 
 
 def this_start(output: Mapping[str, Any], restore: Restored) -> dict[str, Any]:
@@ -302,6 +310,7 @@ __all__ = [
     "MODE_WARNINGS",
     "NOT_CONFIRMED_AT_CLOSE",
     "instrument_lines",
+    "prepared_run",
     "result_warnings",
     "session_result",
     "strategy_result",

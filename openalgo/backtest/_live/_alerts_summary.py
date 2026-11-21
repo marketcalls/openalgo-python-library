@@ -2,7 +2,7 @@
 style of `Result.summary()`:
 
     Session of 2026-11-16 (IST): SANDBOX mode, broker zerodha
-    Strategies  : ema_cross, orb
+    Strategies  : ema_cross (version 1f3a9c0b7d2e), orb (version 0c4d5e6f7a8b)
     Trades      : 4 closed
     Gross P&L   : Rs 1,250.00
     Charges     : Rs 182.40 (modelled)
@@ -13,7 +13,8 @@ style of `Result.summary()`:
     Reconcile   : 0 mismatches
     End state   : flat
 
-A "Limits : SbinTrend at most 3 trades a day; account trade cap 4 trades a day" line
+Each strategy is named with its version id (18-multi-strategy 12.1), when the session gave
+them. A "Limits : SbinTrend at most 3 trades a day; account trade cap 4 trades a day" line
 follows the strategies when the session set daily limits (18-multi-strategy 2.5a). An
 "Alerts : 2 not delivered" line comes before the end state when an alert of the
 session did not reach OpenAlgo. The Slippage line adds "(1 MARKET fill not compared: no
@@ -94,13 +95,15 @@ class SessionSummary:
     `shared` gives, in words, each instrument several strategies of the session share:
     OpenAlgo's net, the members' sum and whether they agree. `limits` names, in words,
     the daily limits the session set (each strategy's and the account's), none when it
-    set none.
+    set none. `versions` are the strategies' version ids, in the order of `strategies`
+    (none: not given).
 
     Raises ConfigError when a rupee figure or the seconds unprotected is not a finite
     number (None is allowed for `slippage` only), when the seconds unprotected are
     negative, when a count is not a whole number of at least zero, when a leg of
-    `differing`, `unconfirmed`, `shared` or `limits` is not named in words, or when
-    `differing` names more legs than the mismatches counted.
+    `differing`, `unconfirmed`, `shared` or `limits` is not named in words, when
+    `differing` names more legs than the mismatches counted, or when `versions` are given
+    and are not one id in words per strategy.
     """
 
     day: dt.date
@@ -122,6 +125,7 @@ class SessionSummary:
     slippage_not_compared: int = 0
     shared: tuple[str, ...] = ()
     limits: tuple[str, ...] = ()
+    versions: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _check_figure("gross_pnl", self.gross_pnl)
@@ -141,6 +145,12 @@ class SessionSummary:
         _check_legs("earlier", self.earlier)
         _check_legs("shared", self.shared)
         _check_legs("limits", self.limits)
+        _check_legs("versions", self.versions)
+        if self.versions and len(self.versions) != len(self.strategies):
+            raise ConfigError(
+                f"the session summary names {len(self.strategies)} strategies and gives "
+                f"{len(self.versions)} version ids: give one per strategy, or none"
+            )
 
     @property
     def net_pnl(self) -> float:
@@ -155,7 +165,7 @@ def summary_text(summary: SessionSummary) -> str:
     named = (*summary.differing, *summary.unconfirmed)
     at_close = f" (at the close: {'; '.join(named)})" if named else ""
     earlier = f"; earlier today: {'; '.join(summary.earlier)}" if summary.earlier else ""
-    lines = [("Strategies", (", ".join(summary.strategies) or "none") + earlier)]
+    lines = [("Strategies", (", ".join(_named(summary)) or "none") + earlier)]
     if summary.limits:
         lines.append(("Limits", "; ".join(summary.limits)))
     lines += [
@@ -182,6 +192,15 @@ def summary_text(summary: SessionSummary) -> str:
         f"broker {summary.broker}"
     )
     return "\n".join([title, *(f"{label:<{width}} : {value}" for label, value in lines)])
+
+
+def _named(summary: SessionSummary) -> list[str]:
+    """The strategies as the Strategies line names them: each with its version id, when
+    the summary has them."""
+    if not summary.versions:
+        return list(summary.strategies)
+    pairs = zip(summary.strategies, summary.versions, strict=True)
+    return [f"{name} (version {version})" for name, version in pairs]
 
 
 def _check_figure(name: str, value: object) -> None:

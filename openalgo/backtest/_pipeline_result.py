@@ -59,11 +59,12 @@ def _assumptions(
     return block
 
 
-def _arguments(
+def manifest_arguments(
     prepared: PreparedRun, args: dict[str, Any], market: MarketSettings
 ) -> dict[str, Any]:
     """Every argument of the run after defaults were resolved, for the manifest (the
-    cost model by its label: it is a native object)."""
+    cost model by its label: it is a native object). A live session's start writes the
+    same to its journal (`_live/_session_versions`)."""
     resolved = manifest_settings(prepared.plan)
     resolved.update(
         costs=market.costs_label,
@@ -115,7 +116,7 @@ def finished_result(
     manifest = build_manifest(
         strategy,
         parameters,
-        _arguments(prepared, args, market) | {"warm_up": run.state.manifest()},
+        manifest_arguments(prepared, args, market) | {"warm_up": run.state.manifest()},
         [instrument.to_dict() for instrument in prepared.instruments],
         prepared.partitions | run.history.partitions(),
         prepared.reference_tables,
@@ -143,4 +144,4 @@ def finished_result(
     )
 
 
-__all__ = ["FinishedRun", "finished_result"]
+__all__ = ["FinishedRun", "finished_result", "manifest_arguments"]

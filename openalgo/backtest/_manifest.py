@@ -49,12 +49,12 @@ def strategy_source_hash(strategy: type) -> str | None:
     return f"sha256:{hasher.hexdigest()}"
 
 
-def _plain(value: Any) -> Any:
+def plain(value: Any) -> Any:
     """A JSON-ready copy of a value: dates as ISO strings, tuples as lists."""
     if isinstance(value, dict):
-        return {str(key): _plain(item) for key, item in value.items()}
+        return {str(key): plain(item) for key, item in value.items()}
     if isinstance(value, list | tuple):
-        return [_plain(item) for item in value]
+        return [plain(item) for item in value]
     if isinstance(value, dt.date):
         return value.isoformat()
     if isinstance(value, np.generic):
@@ -123,14 +123,14 @@ def build_manifest(
         "module": strategy.__module__,
         "name": strategy.__qualname__,
         "source_hash": strategy_source_hash(strategy),
-        "parameters": _plain(parameters),
+        "parameters": plain(parameters),
     }
     return RunManifest(
         engine_version=native.engine_version(),
         strategy=described,
-        arguments=_plain(arguments),
-        instruments=_plain(instruments),
-        data=_plain(data),
+        arguments=plain(arguments),
+        instruments=plain(instruments),
+        data=plain(data),
         reference_tables=reference_tables,
         cost_schedules=cost_schedules,
         random_seed=None,
@@ -138,4 +138,4 @@ def build_manifest(
     )
 
 
-__all__ = ["RunManifest", "build_manifest", "strategy_source_hash"]
+__all__ = ["RunManifest", "build_manifest", "plain", "strategy_source_hash"]

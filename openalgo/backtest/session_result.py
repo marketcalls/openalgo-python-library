@@ -36,6 +36,13 @@ not it has rows.
   trade cap refused (`account_trade_limit`), while an entry a strategy's kill switch
   locked out after an account limit fired it stays in that strategy's orders as
   `live_lock` (the lock's reason is in `locks`).
+- `versions`: each strategy's run manifest of this start, by name in call order: what a
+  backtest's manifest records (the engine version, the strategy's module, name, source
+  hash and parameter values, every resolved argument, the reference table and cost
+  schedule versions; never the API key). Each order carries its strategy's version id
+  (`orders`' `version_id`), the first 12 hexadecimal characters of the SHA-256 of its
+  source hash and parameter values: the same code with the same parameters gives the same
+  id on every day and restart. The journal keeps each start's.
 - `summary`: the day's figures across every start of the day: `gross_pnl`, `charges`
   (modelled: the broker's trade book carries none; each fill's rounded to the paisa, so a
   result's charges, its contract notes', differ from them by the notes' rounding, the
@@ -51,8 +58,9 @@ not it has rows.
   instrument several strategies share, OpenAlgo's net against their sum (`shared`), in
   words; `summary_text()` gives them as the DAILY_SUMMARY alert sent them. Its type is
   `SessionSummary`, loaded with the live layer.
-- `orders`: every order the session placed through OpenAlgo, with its intent ID, broker
-  order ID, purpose, how far it got at the broker and its final status. `fills`: every
+- `orders`: every order the session placed through OpenAlgo, with its intent ID, its
+  strategy's version id, broker order ID, purpose, how far it got at the broker and its
+  final status. `fills`: every
   fill the engine took, with where it was heard (`source`) and whether its price was
   released unconfirmed (`estimated`) or may lie on another tick (`derived_from_average`).
 - `drift`: each broker candle against the bar built from the feed's ticks. The strategy
@@ -127,6 +135,7 @@ class SessionResult:
     strategies: tuple[str, ...]
     results: Mapping[str, Result]
     portfolio: PortfolioResult
+    versions: Mapping[str, Mapping[str, Any]]
     summary: SessionSummary
     orders: pd.DataFrame
     fills: pd.DataFrame

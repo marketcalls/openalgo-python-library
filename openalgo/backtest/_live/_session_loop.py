@@ -146,6 +146,8 @@ class Session:
         #: sets it from journal L at a restart).
         self.fills: list[FillRecord] = []
         self.figures = DayFigures({}, StrategyFigures(), SessionFigures())
+        #: The strategies' versions at this start (`_session_versions.StartVersions`).
+        self.versions: Any = None
         self.started_ns = now()
         self._held: collections.deque[Envelope] = collections.deque()
         self._event_failed = False

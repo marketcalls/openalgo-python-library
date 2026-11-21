@@ -108,7 +108,8 @@ class SessionOutcome:
     records of `_session_records`: `orders`, `fills` and `locks`; `plans`, each
     strategy's part of the session plan by name (its settings, strategy and run context,
     for its result), `timer_warnings`, its timers' notes, read before its kernel
-    session finished, and `restored`, each restored strategy's restore at a restart."""
+    session finished, `restored`, each restored strategy's restore at a restart, and
+    `versions`, each strategy's run manifest of this start by name (`_session_versions`)."""
 
     mode: str
     broker: str
@@ -138,6 +139,7 @@ class SessionOutcome:
     plans: dict[str, StrategyPlan] = field(default_factory=dict)
     timer_warnings: dict[str, tuple[str, ...]] = field(default_factory=dict)
     restored: dict[str, Restored] = field(default_factory=dict)
+    versions: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def close_session(
@@ -260,6 +262,7 @@ def _outcome(
         plans={trader.name: trader.part for trader in session.traders},
         timer_warnings=timers,
         restored={t.name: t.records.restored for t in session.traders if t.records.restored},
+        versions=session.versions.manifests,
     )
 
 
@@ -302,6 +305,7 @@ def _summary(
         earlier=tuple(strategy.words() for strategy in figures.earlier),
         shared=tuple(instrument.line() for instrument in named.shared),
         limits=limit_lines(session),
+        versions=tuple(session.versions.ids.values()),
     )
 
 

@@ -39,6 +39,7 @@ COLUMNS = {
         "strategy",
         "kernel_order",
         "intent_id",
+        "version_id",
         "order_id",
         "purpose",
         "symbol",

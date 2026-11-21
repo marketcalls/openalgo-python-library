@@ -101,6 +101,18 @@ def test_the_daily_limits_set_follow_the_strategies_line():
     assert "Limits" not in summary_text(A_GOOD_DAY)
 
 
+def test_the_strategies_line_names_each_strategys_version_id():
+    versioned = replace(A_GOOD_DAY, versions=("1f3a9c0b7d2e", "0c4d5e6f7a8b"))
+    assert line(versioned, "Strategies") == (
+        "ema_cross (version 1f3a9c0b7d2e), orb (version 0c4d5e6f7a8b)"
+    )
+
+
+def test_a_version_id_short_of_one_per_strategy_is_refused():
+    with pytest.raises(ConfigError, match="names 2 strategies and gives 1 version ids"):
+        replace(A_GOOD_DAY, versions=("1f3a9c0b7d2e",))
+
+
 def test_the_alerts_line_is_left_out_when_every_alert_reached_openalgo():
     assert "Alerts" not in summary_text(A_GOOD_DAY)
 

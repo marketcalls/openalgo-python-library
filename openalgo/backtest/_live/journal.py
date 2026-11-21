@@ -7,7 +7,7 @@ that it is resolved against the order book before anything else is sent, or queu
 semi-auto mode put it in OpenAlgo's Action Center. Every order update is kept, in
 arrival order. The journal also holds each leg's broker-held stop (one exit owner per
 leg, `_journal_stops`), the risk rules' state (extremes, trail level, daily realized
-P&L) and the strategy's own `self.state`.
+P&L), the strategy's own `self.state` and its version at each start (`_journal_versions`).
 
 Every write is committed, and synced to disk, before its method returns: an intent is
 durable before its order is sent. The file (`_journal_file`) uses write-ahead logging
@@ -50,7 +50,6 @@ from ._journal_file import (
     connect,
     default_journal_path,
 )
-from ._journal_handle import JournalHandle
 from ._journal_reads import JournalSession, JournalSnapshot, SavedState
 from ._journal_rows import (
     INSERT_INTENT,
@@ -62,6 +61,7 @@ from ._journal_rows import (
     update_values,
 )
 from ._journal_stops import needs_recording
+from ._journal_versions import JournalVersions
 from ._types import BoundOrder, Mode, Now, OrderIntent, OrderUpdate, QueuedIntent
 
 _START_SESSION = (
@@ -70,7 +70,7 @@ _START_SESSION = (
 )
 
 
-class Journal(JournalHandle):
+class Journal(JournalVersions):
     """The journal of one account; see the module docstring. Implements `JournalLike`.
     Opened with `Journal.open`; `close()` or a `with` block closes it.
 
