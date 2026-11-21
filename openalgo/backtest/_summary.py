@@ -10,7 +10,9 @@
 Net profit is rupees with Indian digit grouping (`report._format.indian_digits`; a loss
 below half a paisa reads "Rs 0.00"); the return and the maximum drawdown are those of the
 time-weighted wealth index, in percent (`metrics` keys `net_profit`, `total_return`,
-`max_drawdown`). The win rate is winning trades over closed trades, in whole percent
+`max_drawdown`), a percent that rounds to zero read without a minus sign as the
+tearsheet reads it (`report._format.fixed`: -0.00003 is "0.00%"). The win rate is
+winning trades over closed trades, in whole percent
 unless that would read 0% or 100% for a rate that is neither (then with the fewest
 decimals that do not: "0.4% won" for 1 winner in 250). It is undefined (NaN) for a run
 with no closed trade, such as a buy-and-hold or rebalanced portfolio or a run whose
@@ -30,7 +32,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ._result_report import GIVEN_BENCHMARK
-from .report._format import MISSING, indian_digits, is_missing
+from .report._format import MISSING, fixed, indian_digits, is_missing
 
 # The width of the longest label, "Max drawdown", so the colons line up.
 LABEL_WIDTH = 12
@@ -46,7 +48,9 @@ BOUNDS_PERCENT = (0.0, 100.0)
 
 
 def _percent(fraction: float, decimals: int) -> str:
-    return MISSING if is_missing(fraction) else f"{fraction:.{decimals}%}"
+    """A fraction as a percent at `decimals` places, through the report's rule
+    (`report._format.fixed`): one that rounds to zero there reads without a minus sign."""
+    return MISSING if is_missing(fraction) else f"{fixed(fraction * 100, decimals)}%"
 
 
 def _win_rate(rate: float) -> str:

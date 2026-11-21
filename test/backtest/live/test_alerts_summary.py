@@ -129,6 +129,12 @@ def test_rupees_use_indian_digit_grouping():
     assert line(replace(A_GOOD_DAY, gross_pnl=1234567.891), "Gross P&L") == "Rs 12,34,567.89"
 
 
+def test_a_pnl_that_rounds_to_zero_reads_without_a_minus_sign():
+    # A loss of 0.004 rupees, less than half a paisa, with no charges: "Rs 0.00" twice.
+    flat_day = replace(A_GOOD_DAY, gross_pnl=-0.004, charges=0.0)
+    assert (line(flat_day, "Gross P&L"), line(flat_day, "Net P&L")) == ("Rs 0.00", "Rs 0.00")
+
+
 def test_slippage_with_no_fill_compared_reads_not_compared():
     assert line(replace(A_GOOD_DAY, slippage=None), "Slippage") == "not compared"
 

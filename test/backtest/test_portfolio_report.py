@@ -233,6 +233,27 @@ def test_the_summary_gives_the_account_figures_and_each_strategy_overfitting_lin
     ]
 
 
+class Penny(Scripted):
+    qty = 20
+
+
+def test_the_summary_of_an_account_that_lost_a_rupee_reads_a_return_and_drawdown_of_zero():
+    # Penny buys 20 SBIN at the 09:16 open at 100.00; SBIN is 99.95 (one tick lower) from
+    # the bar opening at 09:25 to the 15:10 square-off: 20 x -0.05 = -1.00 on an account of
+    # Rs 2,00,000, a return and a maximum drawdown of -0.0005 percent, which read 0.00%
+    # with no minus sign.
+    pf = bt.backtest(
+        [Penny, Watcher], data={"SBIN": stepped_bars(100.0, 99.95, 10)}, capital=LAKH, **no_costs()
+    )
+    assert pf.metrics["max_drawdown"] < 0
+    assert pf.summary().splitlines()[:4] == [
+        "Net profit   : Rs -1.00",
+        "Return       : 0.00%",
+        "Max drawdown : 0.00%",
+        "Trades       : 1 (0% won)",
+    ]
+
+
 class StrategyWithALongName(Scripted):
     entries = 0
 
