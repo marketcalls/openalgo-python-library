@@ -130,6 +130,7 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 
 from .portfolio_result import PortfolioResult
+from .report._format import indian_digits
 from .result import Result
 
 if TYPE_CHECKING:
@@ -191,7 +192,7 @@ class SessionResult:
         return (
             f"SessionResult({self.mode.upper()} {self.day.isoformat()}, broker "
             f"{self.broker}, stopped by {self.stopped_by}, {figures.closed_trades} closed "
-            f"trades, net P&L Rs {figures.net_pnl:,.2f}, "
+            f"trades, net P&L Rs {indian_digits(figures.net_pnl)}, "
             f"{self._legs_open()} positions open{self._legs_named()})"
         )
 
