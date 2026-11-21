@@ -58,7 +58,7 @@ def test_without_a_telegram_user_the_fills_are_echoed_on_the_console(sandbox):
     [entry] = starting(sandbox.lines, "ENTRY: ")
     [exit_] = starting(sandbox.lines, "EXIT: ")
     assert entry.startswith("ENTRY: BUY 10 SBIN NSE at 500.00 (entry, order ")
-    assert exit_.startswith("EXIT: SELL 10 SBIN NSE at 500.00 (exit, order ")
+    assert exit_.startswith("EXIT: SELL 10 SBIN NSE at 500.00 (exit: strategy exit, order ")
 
 
 def test_without_a_telegram_user_the_daily_summary_is_echoed_on_the_console(sandbox):

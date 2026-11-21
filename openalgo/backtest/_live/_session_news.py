@@ -4,7 +4,8 @@ supervisor (`stops`); the market's messages (ticks, quotes, candles, the feed's 
 other clients' fills) go to `_session_feed`.
 
 - `OrderNews`: through the order's venue map and fill ledger to the kernel; ENTRY, EXIT
-  and REJECT alerts with the order IDs; a fill the kernel refuses is a reconciliation
+  and REJECT alerts with the order IDs, an EXIT alert with the order's exit reason
+  (`_exit_reasons`); a fill the kernel refuses is a reconciliation
   mismatch: the strategy's entries are locked and a RECONCILE_MISMATCH alert sent.
 - `SendResult`: the venue map binds, rejects or waits; a refused placement is a REJECT
   alert, a queued one (semi-auto) an ERROR alert, an exit with no answer an ERROR alert.
@@ -40,6 +41,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any
 
+from ._exit_reasons import exit_reason, reason_words
 from ._fill_ledger import FillOutcome, FillResult, Increment
 from ._order_answers import Outcome
 from ._order_state import ENTRY_PURPOSES
@@ -147,7 +149,8 @@ class News(ResolutionNews):
         )
         if result.increment is not None:
             session.reconcile.filled(trader, update.ts_recv_ns)
-            self._fill_alert(intent, update, result.increment)
+            reason = exit_reason(trader, result.kernel_order, intent.purpose)
+            self._fill_alert(intent, update, result.increment, reason)
         if result.ended is OrderStatus.REJECTED:
             why = update.rejection_reason or "no reason given"
             session.rejected += 1
@@ -169,8 +172,15 @@ class News(ResolutionNews):
             self.apply_update(trader, dataclasses.replace(update, status=OrderStatus.OPEN))
         margin.reject(trader, kernel_order, intent, update.rejection_reason or "no reason given")
 
-    def _fill_alert(self, intent: OrderIntent, update: OrderUpdate, increment: Increment) -> None:
+    def _fill_alert(
+        self, intent: OrderIntent, update: OrderUpdate, increment: Increment, reason: str | None
+    ) -> None:
+        """The fill's record, its event and its ENTRY or EXIT alert, which names the exit
+        `reason` of an order that closes a position (`_exit_reasons`)."""
         kind = AlertKind.ENTRY if intent.purpose in ENTRY_PURPOSES else AlertKind.EXIT
+        why = intent.purpose.value
+        if reason is not None:
+            why = f"{why}: {reason_words(reason)}"
         session = self._session
         estimated = session.stops.held.estimated(update.order_id, update.filled_quantity)
         record = fill_record(intent, update, increment, estimated=estimated)
@@ -188,7 +198,7 @@ class News(ResolutionNews):
         self._session.alert(
             kind,
             f"{intent.action} {increment.units} {intent.symbol} {intent.exchange} at "
-            f"{increment.price:.2f} ({intent.purpose.value}, order {update.order_id})",
+            f"{increment.price:.2f} ({why}, order {update.order_id})",
         )
 
     def _mismatch(self, trader: Trader, update: OrderUpdate) -> None:

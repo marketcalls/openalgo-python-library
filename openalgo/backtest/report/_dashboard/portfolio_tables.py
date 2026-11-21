@@ -5,10 +5,12 @@ with the sortable table they share.
 Each part is None when the page's `View.portfolio` is None (every page but a
 portfolio's) or when the page does not show it. `View.portfolio` is the
 `PortfolioResult`, read through its public tables (`refused`, `net_positions`,
-`strategies`). Times are IST and quantities units.
+`strategies`) and its `assumptions`, whose line `REFUSED_NOTE` words an account that
+refused nothing in a run's own terms. Times are IST and quantities units.
 """
 
 from collections.abc import Sequence
+from typing import Any
 
 import pandas as pd
 
@@ -30,6 +32,12 @@ REASONS = {
 }
 #: The column of a strategy's units in `PortfolioResult.net_positions`.
 UNITS_COLUMN = "{name}_units"
+#: The key of the Assumptions line in which a run words its account's empty refusals
+#: itself (a live session's account, whose own refusals are its trade cap's: the
+#: `SessionResult.portfolio` notes); a run without it shows `NOTHING_REFUSED`.
+REFUSED_NOTE = "refused"
+#: What the card of the account's refusals says when the account refused and ended none.
+NOTHING_REFUSED = "The account refused no order and ended none."
 
 #: One cell of a table: its HTML, its sort value and its CSS class.
 Cell = tuple[str, object, str]
@@ -71,7 +79,7 @@ def refused(view: View) -> str | None:
     frame = portfolio.refused
     title = "Refused by the Account"
     if not len(frame):
-        return card(title, "", "<p class='empty'>The account refused no order and ended none.</p>")
+        return card(title, "", f"<p class='empty'>{fmt.text(_nothing_refused(portfolio))}</p>")
     columns = [
         ("Time (IST)", "l"),
         ("Strategy", "l"),
@@ -93,6 +101,15 @@ def refused(view: View) -> str | None:
     ]
     subtitle = f"{counted(len(frame), 'order')} the account refused or ended, with the times"
     return card(title, subtitle, table(columns, rows, paged=True))
+
+
+def _nothing_refused(portfolio: Any) -> str:
+    """The words of an account that refused and ended no order: the run's own
+    (`REFUSED_NOTE`), as a sentence, or `NOTHING_REFUSED`."""
+    words = portfolio.assumptions.get(REFUSED_NOTE)
+    if not words:
+        return NOTHING_REFUSED
+    return f"{words[0].upper()}{words[1:]}."
 
 
 def _opposite_note(rows: pd.DataFrame, members: list[str]) -> str:
@@ -160,4 +177,13 @@ def net_positions(view: View) -> str | None:
     return stack([("" if i == 0 else SMALL, part) for i, part in enumerate(cards)])
 
 
-__all__ = ["REASONS", "UNITS_COLUMN", "net_positions", "refused", "table", "units"]
+__all__ = [
+    "NOTHING_REFUSED",
+    "REASONS",
+    "REFUSED_NOTE",
+    "UNITS_COLUMN",
+    "net_positions",
+    "refused",
+    "table",
+    "units",
+]

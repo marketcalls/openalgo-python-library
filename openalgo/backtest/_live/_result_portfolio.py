@@ -23,8 +23,11 @@
   `account_trade_limit`, is in `refused` and counted in `contribution`. An entry a
   strategy's kill switch locked out after the account's daily loss limit or profit target
   fired it stays in the strategy's orders as `live_lock`, the session's entry lock, whose
-  rejection does not carry the lock's reason (`SessionResult.locks` has it). The
-  Assumptions block says so, with the funds OpenAlgo reported at the start, in place of a
+  rejection does not carry the lock's reason (`SessionResult.locks` has it), and the
+  working entries and adds the kill switch cancelled are in the strategy's orders as
+  cancelled. The Assumptions block says so (and, when the account refused nothing, the
+  combined page's card of the account's refusals says it in those words,
+  `NOTHING_REFUSED_NOTE`), with the funds OpenAlgo reported at the start, in place of a
   backtest's pool, and, in a session with an instrument several strategies share, what the
   session does there in place of a backtest's netting rules.
 
@@ -46,6 +49,7 @@ from .._portfolio_tables import ACCOUNT_COLUMNS, STRATEGY
 from .._risk_settings import NET_BASIS
 from .._strategy_args import PAISE_PER_RUPEE, SHARED_POOL, Account
 from ..portfolio_result import PortfolioResult
+from ..report._dashboard.portfolio_tables import REFUSED_NOTE
 from ..result import Result
 from ._groups import SHARED_RULE
 from ._plan_args import LiveArguments
@@ -62,9 +66,20 @@ ACCOUNT_NOTE = (
     "engines' model; the entries the account's trade cap refused are listed in refused, "
     "while the entries a strategy's kill switch locked out once the account's daily loss "
     "limit or profit target fired it stay in its orders with the code live_lock (the "
-    "lock's reason is in SessionResult.locks); the daily loss measure counts this start "
-    "only: after a restart the account's daily limits stay held to the day's measure, "
-    "whose figures are SessionResult.summary's"
+    "lock's reason is in SessionResult.locks), and the working entries and adds the kill "
+    "switch cancelled stay in its orders as cancelled; the daily loss measure counts this "
+    "start only: after a restart the account's daily limits stay held to the day's "
+    "measure, whose figures are SessionResult.summary's"
+)
+#: The line of a session whose account refused nothing (`refused` has no row), which the
+#: combined page's card of the account's refusals shows in place of a backtest's words: a
+#: live account's own refusals are its trade cap's, and the kill switch's lock and
+#: cancels are in the strategies' orders (`report._dashboard.portfolio_tables`).
+NOTHING_REFUSED_NOTE = (
+    "the account's trade cap refused no order; the entries the account's daily loss limit "
+    "or profit target locked out are in the strategies' orders with the code live_lock, "
+    "and the working entries and adds its kill switch cancelled are in their orders as "
+    "cancelled"
 )
 #: The stamp of a refusal the fund records beside the strategy and the reason: the order
 #: in the strategy's own engine and its rejection's slice, slice open (UTC nanoseconds) and
@@ -173,6 +188,8 @@ def session_portfolio(
     }
     words = ACCOUNT_NOTE.format(capitals=rupees_text(funds), funds=rupees_text(funds_at_start))
     notes = {"account": words}
+    if not records["refused"][STRATEGY]:
+        notes[REFUSED_NOTE] = NOTHING_REFUSED_NOTE
     if shared:
         notes["shared_instrument_rules"] = SHARED_NOTE
     return PortfolioResult(account, results, records, notes=notes)
@@ -180,6 +197,7 @@ def session_portfolio(
 
 __all__ = [
     "ACCOUNT_NOTE",
+    "NOTHING_REFUSED_NOTE",
     "REFUSAL_STAMP",
     "SHARED_NOTE",
     "account_rows",

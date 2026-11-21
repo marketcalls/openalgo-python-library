@@ -188,6 +188,24 @@ def test_the_kill_switchs_lock_leaves_its_refusals_in_the_strategies_orders(acco
         assert set(result.orders["reject_code"].dropna()) == {"live_lock"}
 
 
+def test_the_empty_refused_card_after_the_kill_switch_says_where_its_refusals_are(account):
+    # The account's trade cap refused nothing, but the account's loss limit fired the kill
+    # switch: the card must not read as if the account had refused and ended nothing.
+    page = account.portfolio.tearsheet()
+    assert "The account refused no order and ended none." not in page
+    assert (
+        "The account&#x27;s trade cap refused no order; the entries the account&#x27;s daily "
+        "loss limit or profit target locked out are in the strategies&#x27; orders with the "
+        "code live_lock, and the working entries and adds its kill switch cancelled are in "
+        "their orders as cancelled."
+    ) in page
+
+
+def test_the_account_note_names_the_kill_switchs_cancels(account):
+    note = account.portfolio.assumptions["account"]
+    assert "the working entries and adds the kill switch cancelled" in note
+
+
 def test_the_entries_the_accounts_trade_cap_refused_are_listed_by_strategy(capped):
     # HoldInfy's five entries, decided on the bars opening 14:41 to 14:45, its orders 1 to 5.
     refused = capped.portfolio.refused
@@ -305,5 +323,8 @@ def test_after_a_restart_the_portfolio_covers_the_restarted_start_only(world):
     assert len(pf.trades) == 1
     own = second.results["TwoRoundTrips"].metrics["net_profit"]
     assert pf.equity.iloc[-1] - CAPITAL == pytest.approx(own, abs=0.005)
-    # Its daily loss measure counts from the restart too, and its note says so.
+    # Its daily loss measure counts from the restart too, and its note says so: the
+    # restarted start's round trip alone, 10 units bought at 505.00 and sold at 510.00 on
+    # the gross basis, where the day's measure holds both round trips (about Rs 100).
     assert "the daily loss measure counts this start only" in pf.assumptions["account"]
+    assert pf.account["daily_loss_rupees"].iloc[-1] == pytest.approx(10 * (510.0 - 505.0))

@@ -46,6 +46,7 @@ from .._calendar_convert import format_ist
 from .._layout import NANOS_PER_SECOND
 from ..errors import LiveError
 from ._account_watch import AccountTrades
+from ._exit_reasons import request_reason
 from ._groups import Groups
 from ._guard_breach import ModeBreach, breach_alert, breach_text
 from ._margin_reject import MarginHolds
@@ -213,7 +214,7 @@ class Session:
         guard holds; none after a guard lock (each is noted as not sent)."""
         handed = []
         for request in self.reconcile.guard.admit(requests):
-            fields = request_fields(request)
+            fields = request_fields(request) | request_reason(self.traders, request)
             if self.locked:
                 self.event("not_sent_locked", **fields)
                 continue
