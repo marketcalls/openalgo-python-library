@@ -321,6 +321,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the strategies' orders as live_lock, and that the entries and adds its kill switch
   cancelled are in their orders as cancelled (2.4.0, unit M11). The account note names the
   kill switch's cancels. A backtest portfolio's page is unchanged.
+- Live sessions no longer send a resting order against the strategy's open position (a
+  LIMIT, SL or SL-M sale of a long, or purchase of a short, without `reverse=True`) when the
+  position's stop already closes the whole position, such as a LIMIT take-profit placed
+  beside the stop: the session rejects it with `venue` before it reaches the broker, the
+  strategy sees it rejected in `on_order` before its next decision, and a warning says once
+  per strategy to set the take-profit with `target=` or `targets=` on the entry (held by
+  the session and sent at MARKET when reached) or to exit with a MARKET order. At the
+  broker it worked beside the stop, both on the closing side, and both could fill: long 10
+  with its stop at 497.00 and a LIMIT sale of 10 at 505.00, a fall to 496.00 filled the stop
+  and a rise to 506.00 then filled the sale, leaving the account short 10 with no stop. A
+  resting exit that the position's closing orders leave room for (a position with no stop)
+  and a resting entry placed while flat are sent as before, and backtests are unchanged
+  (the backtest of that sequence still ends short 10). The reason for the `venue` code
+  names this cause too, with its advice.
 
 ### Fixed
 

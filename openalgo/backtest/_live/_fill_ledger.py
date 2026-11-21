@@ -65,8 +65,8 @@ AVERAGE_DECIMALS_AT_LEAST = 2
 #: Decimals a derived price or value keeps: finer digits are the noise of float arithmetic,
 #: not money (the paisa is 2 decimals, the finest tick 4).
 PRICE_DECIMALS = 6
-#: The reject code the kernel records for a refusal by the broker or OpenAlgo
-#: (`_reject_reasons.REASONS["venue"]`).
+#: The reject code the kernel records for a refusal by the broker or OpenAlgo, or by the
+#: session before sending (`_session_unsent`; `_reject_reasons.REASONS["venue"]`).
 VENUE_REJECT_CODE = "venue"
 #: The refusal kind of a terminal result for an order the kernel had already ended: a
 #: fill, a cancel or a rejection reported after the kernel completed it is the race the
