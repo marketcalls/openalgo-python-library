@@ -258,7 +258,7 @@ def test_the_portfolio_section_holds_the_four_parts_only_a_portfolio_shows():
     assert rp.PARTS["portfolio"] == ("contribution", "account_margin", "refused", "net_positions")
 
 
-def test_a_layout_with_a_theme_hashes_as_one_without_does():
+def test_a_layout_holding_a_theme_hashes_by_the_theme_identity():
     # A theme is equal only to itself, as a block is: its mappings can change after it is
     # made, so they cannot be hashed.
     theme = rp.Theme(light={"bg": "red"})

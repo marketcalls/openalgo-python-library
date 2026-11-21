@@ -112,14 +112,19 @@ class PortfolioResult:
     def account(self) -> pd.DataFrame:
         """The account's row of every round of the run (each instant at which a
         strategy's slice closed), indexed by its IST time: `equity_rupees` (the account's
-        funds less the capitals plus every strategy's equity), `free_cash_rupees`,
-        `margin_rupees` and `daily_loss_rupees` (the strategies' daily loss measures of
-        the IST session day, added up; the figure `account_max_daily_loss` is held to)."""
+        funds less the capitals plus every strategy's equity at its last slice close, but
+        a fill at the open of a slice still open, as a daily strategy's beside minute
+        ones, counts from that open, its charges to the paisa and its units at the fill
+        price: inside that slice the equity differs from `metrics.combine_equity` of the
+        strategies' by the fill's charges and its price against the last close, and at
+        the slice's close it is equal again), `free_cash_rupees`, `margin_rupees` and
+        `daily_loss_rupees` (the strategies' daily loss measures of the IST session day,
+        added up; the figure `account_max_daily_loss` is held to)."""
         return self._rows.copy()
 
     @property
     def equity(self) -> pd.Series:
-        """The account's equity in rupees, by the IST time of each round."""
+        """The account's equity in rupees, by the IST time of each round (see `account`)."""
         return self._rows["equity_rupees"].copy()
 
     @property
@@ -313,12 +318,13 @@ class PortfolioResult:
         """What the reader must know: the account's own warnings first (an instrument held
         on opposite sides; days a broker would have netted the charges of several
         strategies; a run setting no strategy used), then every strategy's
-        (`Result.warnings`), each after its name."""
+        (`Result.warnings`, a failed quick check's pointing to a run of it alone,
+        `_messages.ALONE_POINTER`), each after its name."""
         notes = [_portfolio_notes.opposite_sides_warning(found) for found in self._net[1]]
         notes += _portfolio_notes.netting_warnings(self._results)
         notes += self._run_warnings
         for name, result in self._results.items():
-            notes += [f"{name}: {text}" for text in result.warnings]
+            notes += [f"{name}: {text}" for text in result._member_warnings()]
         return notes
 
     @property

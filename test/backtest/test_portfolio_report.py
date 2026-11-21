@@ -15,10 +15,17 @@ import warnings
 
 import pandas as pd
 import pytest
-from custom_pages import element_ids, header_links, section_anchors, section_of
+from custom_pages import (
+    element_ids,
+    header_links,
+    judged_quick_checks,
+    section_anchors,
+    section_of,
+)
 from portfolio_samples import DAYS, Scripted, flat_bars, no_costs, stepped_bars
 from strategy_samples import CAPITAL as STRATEGY_CAPITAL
-from test_portfolio_run import THREE, THREE_RUN
+from strategy_samples import daily_bars
+from test_portfolio_run import THREE, THREE_RUN, DailyInfy, MinuteSbin
 
 import openalgo.backtest as bt
 from openalgo.backtest import metrics
@@ -157,9 +164,10 @@ def test_results_maps_each_strategy_name_to_its_result_in_call_order(loss):
 # ----- the account's equity ----------------------------------------------------------------------
 
 
-def test_the_account_equity_of_a_separate_pool_is_the_combined_equity_of_its_strategies():
-    # Fixed allocations: the account is the strategies' equities added up on the union of
-    # their times, as metrics.combine_equity adds them with each strategy's capital.
+def test_on_one_base_grid_a_separate_pool_account_is_the_combined_equity_of_its_strategies():
+    # Fixed allocations of strategies that all close their slices on one 1-minute grid: the
+    # account is the strategies' equities added up on the union of their times, as
+    # metrics.combine_equity adds them with each strategy's capital.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         pf = bt.backtest(THREE, pool="separate", **THREE_RUN)
@@ -168,6 +176,39 @@ def test_the_account_equity_of_a_separate_pool_is_the_combined_equity_of_its_str
     combined = metrics.combine_equity(equities, opening_wealth=capitals)
     assert pf.equity.index.tolist() == combined.index.tolist()
     assert pf.equity.tolist() == pytest.approx(combined.tolist(), abs=0.005)
+
+
+def test_beside_a_daily_strategy_the_account_counts_its_open_fill_before_its_own_equity_does():
+    # MinuteSbin (1-minute bars) and DailyInfy (daily bars) on separate allocations of
+    # Rs 1,00,000, with the default charges and no slippage, 1 to 4 July. DailyInfy's own
+    # equity moves only at its 15:30 closes, while the account takes its fills from the
+    # 09:15 open of their session (18-multi-strategy 2.3): the fill's charges paid, to the
+    # paisa, and the units at the fill price. So the account equals metrics.combine_equity
+    # at every 15:30 close, and its rounds from 09:16 to 15:29 differ from it by:
+    # - 1 and 3 July: nothing, DailyInfy does not fill;
+    # - 2 July: its buy of 10 INFY at the 101.00 open, nothing held before, so the charges
+    #   only: STT 1.01, exchange 0.031007, SEBI 0.00101, stamp duty 0.1515 and GST 18% of
+    #   0.032017 (0.0057631), 1.1992801 or -1.20 to the paisa;
+    # - 4 July: its sale of the 10 at the 103.00 open, held at the 3 July close of 102.05:
+    #   10 x 0.95 = 9.50 of price, less STT 1.03, exchange 0.031621, SEBI 0.00103, GST
+    #   0.0058772 and the DP charge of 15.34 (16.4085282), -6.9085282 or -6.91.
+    minutes = pd.concat([flat_bars(100.0 + number, day=day) for number, day in enumerate(DAYS)])
+    data = {"SBIN": minutes, "INFY": daily_bars(DAYS)}
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        pf = bt.backtest(
+            [MinuteSbin, DailyInfy], pool="separate", data=data, capital=LAKH, slippage=0
+        )
+    equities = {name: result.equity["equity_rupees"] for name, result in pf.results.items()}
+    combined = metrics.combine_equity(equities, opening_wealth=dict.fromkeys(pf.results, LAKH))
+    assert pf.equity.index.tolist() == combined.index.tolist()
+    gap = pd.Series(pf.equity.to_numpy() - combined.to_numpy(), index=pf.equity.index)
+    inside = {DAYS[0]: 0.0, DAYS[1]: -1.20, DAYS[2]: 0.0, DAYS[3]: -6.91}
+    for day, expected in inside.items():
+        rounds = gap[gap.index.date == day]
+        assert rounds.index[-1].time() == dt.time(15, 30)
+        assert rounds.iloc[-1] == pytest.approx(0.0, abs=1e-6)
+        assert rounds.iloc[:-1].to_numpy() == pytest.approx(expected, abs=1e-6)
 
 
 # ----- summary() ---------------------------------------------------------------------------------
@@ -203,6 +244,42 @@ def test_a_long_strategy_name_moves_the_colons_of_the_strategy_lines_only():
     lines = pf.summary().splitlines()
     assert lines[4].index(":") == 13
     assert [line.index(":") for line in lines[5:]] == [2 + 21 + 1] * 2
+
+
+@pytest.fixture
+def judged_loss():
+    # The loss run, with Faller's quick checks those of `judged_quick_checks` (40 closed
+    # trades, variance failed), set where its Result caches its own.
+    pf = bt.backtest(
+        [Faller, Watcher], data={"SBIN": stepped_bars(100.0, 95.0, 10)}, capital=LAKH, **no_costs()
+    )
+    pf.strategy("Faller").__dict__["_quick"] = judged_quick_checks()
+    return pf
+
+
+def test_the_summary_line_of_a_judged_strategy_counts_its_verdicts_and_names_the_failed_one(
+    judged_loss,
+):
+    assert judged_loss.summary().splitlines()[5:] == [
+        "  Faller     : quick checks: 2 passed, 1 failed (variance), 1 informational",
+        "  Watcher    : too few trades to judge (0 closed, 30 needed)",
+    ]
+
+
+def test_a_failed_quick_check_of_a_strategy_points_to_a_run_of_it_alone(judged_loss):
+    # A strategy of a portfolio cannot call robustness(), so the portfolio's warnings, and
+    # the Notes of its page, point to a run of the strategy alone; the strategy's own
+    # Result keeps the single run's pointer.
+    failed = [line for line in judged_loss.warnings if "Overfitting check failed" in line]
+    assert failed == [
+        "Faller: Overfitting check failed, variance: p = 0.20, where the rule is p below "
+        "0.05. The edge is fragile or small next to the noise of the run's own trades; "
+        "result.robustness() on a run of the strategy alone with bt.backtest runs the full "
+        "set of checks, with charts"
+    ]
+    assert escaped(failed[0]) in section_of(judged_loss.tearsheet(), "notes")
+    own = judged_loss.strategy("Faller").warnings[-1]
+    assert own.endswith("own trades; result.robustness() runs the full set of checks, with charts")
 
 
 def test_the_summary_gives_the_benchmark_of_the_first_strategy():
@@ -261,6 +338,42 @@ def test_the_contribution_table_gives_each_strategy_net_pnl(two_days_page):
     assert [row[:2] for row in cells(table)] == [
         ["LongDaily", "&#8377;500.00"],
         ["ShortDaily", "-&#8377;500.00"],
+    ]
+
+
+def trade_list_of(page: str) -> str:
+    """The trade list table of a page's Trades section."""
+    trades = section_of(page, "trades")
+    listing = trades[trades.index("Trade List") :]
+    return listing[: listing.index("</table>")]
+
+
+def test_the_combined_trade_list_names_the_strategy_of_each_row(two_days_page):
+    # Each strategy numbers its own trades from 1, so a row is told by its strategy and
+    # its number together.
+    listing = trade_list_of(two_days_page)
+    heads = "<th class='r s'>#</th><th class='l s'>Strategy</th><th class='l s'>Symbol</th>"
+    assert heads in listing
+    assert sorted(row[:4] for row in cells(listing)) == [
+        ["1", "LongDaily", "SBIN", "Long"],
+        ["1", "ShortDaily", "SBIN", "Short"],
+        ["2", "LongDaily", "SBIN", "Long"],
+        ["2", "ShortDaily", "SBIN", "Short"],
+    ]
+
+
+def test_the_combined_trade_list_is_in_the_order_the_trades_closed(two_days_page):
+    # LongDaily and ShortDaily each close a trade at the 15:10 square-off of 1 July and
+    # of 2 July: in closing order, those of one instant in call order, each row marked
+    # by its place in the list (a sort's ties fall back on it).
+    listing = trade_list_of(two_days_page)
+    places = re.findall(r"<tr data-i='(\d+)'>", listing)
+    assert places == ["1", "2", "3", "4"]
+    assert [row[:2] for row in cells(listing)] == [
+        ["1", "LongDaily"],
+        ["1", "ShortDaily"],
+        ["2", "LongDaily"],
+        ["2", "ShortDaily"],
     ]
 
 
@@ -326,6 +439,14 @@ def test_the_basic_mode_leaves_out_the_strategies_and_portfolio_sections(two_day
     assert "portfolio" not in anchors and "strategies" not in anchors
     assert "Quick checks by strategy" in section_of(page, "overfitting")
     assert len(stylesheets(page)) == 1
+
+
+def test_the_report_tearsheet_of_a_portfolio_is_its_combined_page(two_days, two_days_page):
+    assert rp.tearsheet(two_days) == two_days_page
+
+
+def test_the_report_tearsheet_of_a_portfolio_takes_a_title(two_days):
+    assert "<h1 class='serif'>Two sides</h1>" in rp.tearsheet(two_days, title="Two sides")
 
 
 def test_the_page_is_written_to_a_path(two_days, two_days_page, tmp_path):

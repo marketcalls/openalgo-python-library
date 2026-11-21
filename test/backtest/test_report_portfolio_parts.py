@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
-from custom_pages import small_performance
+from custom_pages import judged_quick_checks, small_performance
 
 from openalgo.backtest import metrics
 from openalgo.backtest._native import native
@@ -25,7 +25,6 @@ from openalgo.backtest.report._dashboard import portfolio as section
 from openalgo.backtest.report._dashboard import portfolio_tables as tables
 from openalgo.backtest.report._dashboard.layout import MODE_PARTS, PARTS, View
 from openalgo.backtest.report._dashboard.overfitting import (
-    PORTFOLIO_POINTER,
     PORTFOLIO_SCOPE,
     by_strategy,
     overfitting,
@@ -382,11 +381,35 @@ def test_a_portfolio_page_shows_each_strategy_quick_checks_in_a_row_of_its_own()
     assert "<td class='l'>A</td><td class='r nums'>8 of 30 needed</td>" in rows[0]
     assert rows[0].count("not judged") == 4
     assert "<td class='l'>B</td><td class='r nums'>n/a</td>" in rows[1]
-    assert escaped(PORTFOLIO_SCOPE) in body and escaped(PORTFOLIO_POINTER) in body
+    assert escaped(PORTFOLIO_SCOPE) in body
+    pointer = (
+        "<p class='key'>result.robustness() on a run of the strategy alone with bt.backtest "
+        "runs the full set of checks, with charts.</p>"
+    )
+    assert pointer in body
     assert found.subtitle == "Quick checks of each strategy's trade list, 2 strategies"
 
 
-def test_the_rows_are_the_strategies_in_call_order_and_none_of_the_trades_together():
+def test_the_rows_are_the_strategies_in_call_order():
     section_found = by_strategy({"B": None, "A": None})
     names = re.findall(r"<tr><td class='l'>([^<]+)</td>", section_found.body)
     assert names == ["B", "A"]
+
+
+def test_a_judged_strategy_row_shows_each_verdict_with_its_figure_and_rule_on_hover():
+    # 40 closed trades, enough to judge: the count alone, then the four checks in report
+    # order, each verdict coloured (passed green, failed red, informational muted).
+    found = by_strategy({"A": judged_quick_checks()})
+    row = re.findall(r"<tbody>(.*)</tbody>", found.body)[0]
+    assert row == (
+        "<tr><td class='l'>A</td><td class='r nums'>40</td>"
+        "<td class='l' title='Sharpe 1.10 out of sample; rule: at least half the Sharpe in "
+        "sample'><span class='verdict passed'>passed</span></td>"
+        "<td class='l' title='drawdown -8.0% at the 95th; rule: read only'>"
+        "<span class='verdict quiet'>informational</span></td>"
+        "<td class='l' title='return 2.0% at the 5th; rule: above zero'>"
+        "<span class='verdict passed'>passed</span></td>"
+        "<td class='l' title='p = 0.20; rule: p below 0.05'>"
+        "<span class='verdict failed'>failed</span></td></tr>"
+    )
+    assert "From each strategy's trade list, no rerun: 200 runs each, seed 7" in found.body

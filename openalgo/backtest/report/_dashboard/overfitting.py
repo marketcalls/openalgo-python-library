@@ -11,23 +11,18 @@ On a portfolio's page (`View.portfolio` set) the section shows each strategy's q
 checks instead, a row per strategy (`View.overfitting` maps each strategy's name to its
 own, or to None for a strategy with no equity point), and none for the account's trades
 together: the strategies' trades overlap in time, so they are not one sequence the
-trade-list checks can read.
+trade-list checks can read. Its last line points to a run of a strategy alone for the
+full set (`_messages.ALONE_POINTER`), as a strategy of a portfolio has no robustness().
 """
 
 from collections.abc import Mapping
 from typing import Any
 
-from ..._messages import counted
+from ..._messages import ALONE_POINTER, counted
 from .. import _format as fmt
 from .layout import TITLES, Section, View, card
 from .tables import head
 
-#: Where a portfolio's page points for a strategy's full set of checks: a strategy of a
-#: portfolio cannot rerun alone, so the full checks need a run of it alone.
-PORTFOLIO_POINTER = (
-    "A strategy's full set of checks: run it alone with bt.backtest and call "
-    "result.robustness() on that result"
-)
 #: What a portfolio's page says of the account's trades together.
 PORTFOLIO_SCOPE = (
     "Each strategy's quick checks read its own closed trades, as its own page shows them. "
@@ -111,7 +106,7 @@ def by_strategy(checks_by_name: Mapping[str, Any]) -> Section:
         f"<p class='key'>{fmt.text(PORTFOLIO_SCOPE)}</p>"
         f"<div class='scroll'><table class='tbl hover'>{head(*columns)}<tbody>{rows}</tbody>"
         "</table></div>"
-        f"<p class='key'>{fmt.text(PORTFOLIO_POINTER)}.</p>"
+        f"<p class='key'>{fmt.text(ALONE_POINTER)}.</p>"
     )
     strategies = counted(len(checks_by_name), "strategy", "strategies")
     return Section(
@@ -122,4 +117,4 @@ def by_strategy(checks_by_name: Mapping[str, Any]) -> Section:
     )
 
 
-__all__ = ["PORTFOLIO_POINTER", "PORTFOLIO_SCOPE", "by_strategy", "overfitting"]
+__all__ = ["PORTFOLIO_SCOPE", "by_strategy", "overfitting"]

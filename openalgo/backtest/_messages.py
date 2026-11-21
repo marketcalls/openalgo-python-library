@@ -1,6 +1,7 @@
 """The wording that messages a user sees share: a count with its noun in the right
-number, names listed as a sentence lists them, and the error for a part of the engine
-this version does not run.
+number, names listed as a sentence lists them, the error for a part of the engine this
+version does not run, and where a strategy of a portfolio run finds its full set of
+overfitting checks.
 
 A message never cites an internal planning document (a requirement, decision or phase
 number): it says what is not supported and what the user can do instead, as the
@@ -17,6 +18,14 @@ SEVERAL_STRATEGIES = (
     "result.strategy(), result.combined or result.correlation on a single strategy's Result",
     "pass a list of strategies to bt.backtest: its PortfolioResult has strategy(name), "
     "the account's tables and the correlation of the strategies",
+)
+#: Where one strategy of a portfolio run finds the full set of overfitting checks: its own
+#: `Result.robustness()` is refused (a rerun of it alone would not face the account it
+#: shared), so a run of it alone. A failed quick check's warning in the portfolio and the
+#: combined page's Overfitting checks section end with it.
+ALONE_POINTER = (
+    "result.robustness() on a run of the strategy alone with bt.backtest runs the full set "
+    "of checks, with charts"
 )
 
 

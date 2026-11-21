@@ -17,6 +17,7 @@ page is `pf.strategy(name).tearsheet()`, unchanged.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -85,19 +86,22 @@ def report(portfolio: PortfolioResult) -> Report:
 
 def tearsheet(
     portfolio: PortfolioResult,
-    path: str | None,
+    path: str | os.PathLike | None,
     *,
     mode: str,
     log_scale: bool,
     layout: Layout | None,
+    title: str | None = None,
 ) -> str:
     """The combined tearsheet of `portfolio` (module docstring) in `mode`, or of a custom
-    `layout` whose blocks' callables receive `portfolio`; returned, or written to
-    `path` (and the path returned)."""
+    `layout` whose blocks' callables receive `portfolio`, titled `title` (by default
+    "Portfolio:" and the strategies' names); returned, or written to `path` (and the path
+    returned)."""
     return write_tearsheet(
         report(portfolio),
         path,
         subject=portfolio,
+        title=title,
         mode=mode,
         log_scale=log_scale,
         layout=layout,

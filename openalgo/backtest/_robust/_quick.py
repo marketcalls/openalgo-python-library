@@ -83,13 +83,15 @@ class QuickChecks:
         line = self.verdict_line()
         return line if self.too_few_trades else f"{line}; see result.robustness()"
 
-    def warnings(self) -> list[str]:
+    def warnings(self, pointer: str = POINTER) -> list[str]:
         """A line for `Result.warnings` for each quick check that failed, saying what a
-        failure of the trade list shows (`QUICK_READING`)."""
+        failure of the trade list shows (`QUICK_READING`) and, last, `pointer`: where the
+        full set of checks is (`_messages.ALONE_POINTER` for a strategy of a portfolio
+        run)."""
         return [
             f"Overfitting check failed, {result.title.lower()}: {result.figure}, where the rule "
             f"is {result.rule}. The edge is fragile or small next to the noise of the run's "
-            f"own trades; {POINTER}"
+            f"own trades; {pointer}"
             for result in self.failed()
         ]
 

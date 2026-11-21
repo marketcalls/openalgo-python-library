@@ -37,8 +37,9 @@ def tearsheet(
     """Render a performance report as one self-contained HTML dashboard.
 
     `result_like` is a `Performance` (from `openalgo.backtest.metrics.analyse`), or any
-    object with a `performance` attribute holding one. Optional attributes of that
-    object are read when present:
+    object with a `performance` attribute holding one. A `PortfolioResult` gives its
+    combined page, `PortfolioResult.tearsheet()` (with `title` when given). Optional
+    attributes of any other object are read when present:
 
         name            the report title (overridden by `title=`)
         assumptions     what the engine assumed, shown in the Notes: a mapping gives
@@ -112,6 +113,14 @@ def tearsheet(
     the mode it starts from), else ConfigError. Without one (the default) the page is
     exactly the built-in tearsheet.
     """
+    # Imported here: the portfolio's modules import this one.
+    from .. import _portfolio_report
+    from ..portfolio_result import PortfolioResult
+
+    if isinstance(result_like, PortfolioResult):
+        return _portfolio_report.tearsheet(
+            result_like, path, title=title, mode=mode, log_scale=log_scale, layout=layout
+        )
     return write_tearsheet(
         result_like,
         path,
