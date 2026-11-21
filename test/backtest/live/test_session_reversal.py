@@ -15,7 +15,7 @@ import logging
 
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
-from session_samples import ist
+from session_samples import alerts, ist
 from stops_samples import stop_world
 
 import openalgo.backtest as bt
@@ -89,6 +89,49 @@ def test_the_reversals_buy_is_placed_only_once_the_shorts_stop_has_ended(world):
 def test_the_session_ends_flat_at_the_fake(world):
     world.run(ShortThenReverse)
     assert world.fake.position("SBIN", "NSE") == 0
+
+
+def test_a_reversal_raises_no_alert_of_a_leg_left_without_a_stop(world, caplog):
+    # Between the short's stop ending and the buy's fill the reversal closes the short:
+    # the leg is not bare, and no stop is placed again beside the buy.
+    world.run(ShortThenReverse)
+    assert not [text for text in alerts(caplog, "error") if "had no stop" in text]
+
+
+def reject_codes(outcome) -> list[tuple[str, float, str]]:
+    """(side, units, reject code) of each order the kernel rejected, oldest first."""
+    orders = outcome.outputs["ShortThenReverse"]["orders"]
+    rows = zip(orders["side"], orders["quantity_units"], orders["reject_code"], strict=True)
+    return [(side, units, code) for side, units, code in rows if code is not None]
+
+
+@pytest.fixture
+def locked_world(world):
+    """The feed dies at 14:42:58 and OpenAlgo answers the next cancel 8 s late from
+    14:43:00: the reversal decided at 14:43:01 waits for its stop's cancel while the
+    feed-dead lock is set (10 s without a tick, 14:43:08 or later)."""
+    world.script.at(ist(14, 42, 58), world.fake.faults.feed_dead)
+    world.script.at(ist(14, 43), lambda: world.fake.faults.slow("cancelorder", 8.0))
+    return world
+
+
+def test_a_reversal_released_once_entries_locked_is_never_sent(locked_world):
+    # Its buy would open a long while entries are locked. The short is given its stop
+    # again, and Ctrl+C at 14:44:30 cancels it and buys the 10 back.
+    locked_world.run(ShortThenReverse)
+    assert placed(locked_world) == [
+        ("SELL", UNITS, "MARKET", "complete"),
+        ("BUY", UNITS, "SL-M", "cancelled"),
+        ("BUY", UNITS, "SL-M", "cancelled"),
+        ("BUY", UNITS, "MARKET", "complete"),
+    ]
+    assert locked_world.fake.position("SBIN", "NSE") == 0
+
+
+def test_a_reversal_released_once_entries_locked_is_rejected_with_the_lock_s_code(locked_world):
+    # The code a submission gets while entries are locked (the kernel's entry gates).
+    outcome = locked_world.run(ShortThenReverse)
+    assert reject_codes(outcome) == [("BUY", 2.0 * UNITS, "live_lock")]
 
 
 class LateReverse(bt.Strategy):

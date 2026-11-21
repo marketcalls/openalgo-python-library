@@ -25,7 +25,9 @@ venue map, the slices it releases live, its decisions and its broker candles.
 - **Commands** (`commands`): the kernel's commands as the order worker's requests. A
   placement the kernel cancelled before the loop took it (the safe stop's cancel of an
   entry decided in the same loop step) is withdrawn: it is never sent, and the kernel is
-  told it was cancelled (`apply_cancel`).
+  told it was cancelled (`apply_cancel`). An entry or add placed while the strategy's
+  entries are locked (a reversal the kernel held for its stop's cancel) is refused,
+  never sent (`_session_unsent`).
 - **Candles**: the strategy's broker candles are `candles`, a `_session_candles.
   CandleKeeper`.
 - **Bookkeeping**: its entry locks and its saved `self.state` are
@@ -53,6 +55,7 @@ from ._session_bookkeeping import Bookkeeping
 from ._session_candles import CandleKeeper
 from ._session_decisions import DecisionNotes
 from ._session_records import StrategyRecords
+from ._session_unsent import to_send
 from ._types import LOGGER_NAME, LiveBar, Now
 from ._venue_requests import LIVE_PRODUCT, OrderRequest
 from .venue_map import VenueMap
@@ -306,7 +309,7 @@ class Trader(Bookkeeping):
         requests: list[OrderRequest] = []
         commands = call(self.engine.take_commands)
         while commands:
-            kept = self._withdraw_cancelled(commands)
+            kept = to_send(self.engine, self.name, commands, event=self._event)
             for command in kept:
                 if command.get("command") != "place":
                     continue
@@ -315,22 +318,10 @@ class Trader(Bookkeeping):
                 if command.get("reason"):
                     self.reasons[kernel_order] = str(command["reason"])
             requests += self.venue.requests(kept)
-            # A withdrawal ends an order in the kernel, which may free an exit that waited
-            # for it: its commands go out in this same call.
+            # A withdrawal or a refusal ends an order in the kernel, which may free an exit
+            # that waited for it: its commands go out in this same call.
             commands = call(self.engine.take_commands) if len(kept) < len(commands) else []
         return requests
-
-    def _withdraw_cancelled(self, commands: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """`commands` without those of the orders both placed and cancelled in them, each
-        such order confirmed cancelled to the kernel (it never reached the broker)."""
-        placed = {int(c["order_id"]) for c in commands if c.get("command") == "place"}
-        cancelled = {int(c["order_id"]) for c in commands if c.get("command") == "cancel"}
-        withdrawn = placed & cancelled
-        for kernel_order in sorted(withdrawn):
-            call(self.engine.apply_cancel, kernel_order)
-            logger.info("%s: order o%d was cancelled before it was sent", self.name, kernel_order)
-            self._event("withdrawn", strategy=self.name, kernel_order=kernel_order)
-        return [c for c in commands if int(c["order_id"]) not in withdrawn]
 
     def open_units(self) -> float:
         """The kernel's position in the strategy's instrument, signed units (0 flat)."""
