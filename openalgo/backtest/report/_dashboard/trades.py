@@ -7,6 +7,7 @@ from collections.abc import Mapping
 import pandas as pd
 
 from ..._messages import counted
+from ..._trade_list import STRATEGY
 from .. import _format as fmt
 from .._performance import Performance
 from .cards import tone
@@ -91,11 +92,13 @@ def _excursion(trade: pd.Series, name: str) -> str:
     )
 
 
-def _row(number: int, trade: pd.Series, with_r: bool, with_excursion: bool) -> str:
+def _row(number: int, trade: pd.Series, with_r: bool, with_excursion: bool, place: int) -> str:
     net, ret = float(trade["net_pnl"]), float(trade["return_pct"])
     bars = trade["bars_held"]
+    named = STRATEGY in trade.index
     cells = [
         _td(str(number), number),
+        *([_td(fmt.text(trade[STRATEGY]), trade[STRATEGY], "l")] if named else []),
         _td(fmt.text(trade["symbol"]), trade["symbol"], "l"),
         _td(fmt.text(str(trade["direction"]).capitalize()), trade["direction"], "l"),
         _when(trade["entry_time"]),
@@ -123,17 +126,20 @@ def _row(number: int, trade: pd.Series, with_r: bool, with_excursion: bool) -> s
         cells.append(
             _td(fmt.MISSING if math.isnan(r) else f"{fmt.number(r)}R", r, "r nums" + tone(r))
         )
-    return f"<tr data-i='{number}'>{''.join(cells)}</tr>"
+    return f"<tr data-i='{place}'>{''.join(cells)}</tr>"
 
 
 def trade_table(listing: pd.DataFrame) -> str:
     """The trade list (`openalgo.backtest._trade_list`) as a sortable table, paged by
     `TRADES_PER_PAGE` rows with script; the MAE and MFE columns when a trade has them,
-    the R column when a trade has one."""
+    the R column when a trade has one, and the Strategy column after the trade number
+    when the list names each trade's strategy (a portfolio's account)."""
     with_r = bool(listing["r_multiple"].notna().any())
     with_excursion = bool(listing[["mae", "mfe"]].notna().any().any())
+    with_strategy = STRATEGY in listing.columns
     columns = [
         ("#", "r"),
+        *([("Strategy", "l")] if with_strategy else []),
         ("Symbol", "l"),
         ("Side", "l"),
         ("Entry (IST)", "l"),
@@ -151,8 +157,12 @@ def trade_table(listing: pd.DataFrame) -> str:
         ("Exit Reason", "l"),
     ] + ([("R", "r")] if with_r else [])
     head = "".join(f"<th class='{align} s'>{label}</th>" for label, align in columns)
+    # A sort's ties fall back on each row's data-i: the trade number, unique in one run's
+    # list, but on an account's list each strategy numbers its own trades, so there the
+    # row's place in the list.
     rows = "".join(
-        _row(int(number), trade, with_r, with_excursion) for number, trade in listing.iterrows()
+        _row(int(number), trade, with_r, with_excursion, place if with_strategy else int(number))
+        for place, (number, trade) in enumerate(listing.iterrows(), start=1)
     )
     return (
         f"<div class='scroll'><table class='tbl hover trades' data-sort "

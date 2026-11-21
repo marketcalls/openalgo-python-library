@@ -7,7 +7,7 @@ import pandas as pd
 
 from ..._messages import counted
 from ..._result_r import r_summary
-from ..._trade_list import trade_list
+from ..._trade_list import STRATEGY, trade_list
 from .. import _format as fmt
 from .._combined import return_correlation
 from . import cards, data, excursions, tables
@@ -45,6 +45,16 @@ def _closed_r(view: View) -> np.ndarray:
     return trades.loc[trades["exit_time"].notna(), "r_multiple"].to_numpy(dtype=float)
 
 
+def _listing(view: View) -> pd.DataFrame:
+    """The closed trades the page lists (`trade_list`); an account's, which name their
+    strategies (a portfolio's page), in the order they closed, those of one instant in
+    call order, as `PortfolioResult.trade_list()` lists them."""
+    listing = trade_list(view.performance.trades)
+    if STRATEGY in listing.columns:
+        listing = listing.sort_values("exit_time", kind="stable")
+    return listing
+
+
 def _trade_list_card(view: View, listing: pd.DataFrame) -> str:
     m = view.performance.metrics
     closed = counted(m["trades"], "closed trade")
@@ -58,7 +68,7 @@ def trades(view: View) -> Section | None:
     (`excursions`), the trade list, the charges by component and, when a closed trade
     has an initial risk, the R-multiples."""
     p = view.performance
-    listing = trade_list(p.trades)
+    listing = _listing(view)
     r_values = _closed_r(view)
     has_r = bool(np.isfinite(r_values).any())
     r_card = ""

@@ -34,6 +34,11 @@ GRIDS = {"half": "grid2", "third": "grid3"}
 NO_DATA = "<p class='empty'>No data</p>"
 #: A blank line: where a text block starts a new paragraph.
 PARAGRAPH_BREAK = re.compile(r"\n\s*\n")
+#: What joins a section's anchor and a block's number in the block's anchor, which starts
+#: every id the block writes (a fragment's, a chart's gradients). A section's anchor is a
+#: slug of letters, digits and "-" (`_layout.anchor`), so an id holding "_" can never be
+#: another section's anchor.
+BLOCK_SEPARATOR = "_"
 
 
 class Placed(NamedTuple):
@@ -230,9 +235,10 @@ def draw(block: Block, placed: Placed, anchor: str) -> tuple[str, bool]:
 
 def body(blocks: tuple[Block, ...], placed: Placed) -> tuple[str, bool]:
     """The blocks of a section, placed in rows by width, and whether any uses the
-    series colours. Block k's anchor is the section's anchor and k (from 1)."""
+    series colours. Block k's anchor is the section's anchor, `BLOCK_SEPARATOR` and k
+    (from 1)."""
     cells = [
-        (block.width, *draw(block, placed, f"{placed.anchor}-{k}"))
+        (block.width, *draw(block, placed, f"{placed.anchor}{BLOCK_SEPARATOR}{k}"))
         for k, block in enumerate(blocks, start=1)
     ]
     rows = []
@@ -246,4 +252,4 @@ def body(blocks: tuple[Block, ...], placed: Placed) -> tuple[str, bool]:
     return markup, any(several for _, _, several in cells)
 
 
-__all__ = ["DRAW", "Placed", "body", "draw"]
+__all__ = ["BLOCK_SEPARATOR", "DRAW", "Placed", "body", "draw"]

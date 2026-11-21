@@ -5,10 +5,11 @@ A report mode is a set of parts; a section shows the parts of the mode it holds 
 left out when it holds none. Sections are numbered in page order among those shown.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from .. import _format as fmt
 from .._performance import Performance
 
 #: Every part of a page, by section, in page order.
@@ -44,6 +45,7 @@ PARTS = {
     ),
     "overfitting": ("overfitting_checks",),
     "strategies": ("strategies",),
+    "portfolio": ("contribution", "account_margin", "refused", "net_positions"),
     "notes": ("method", "assumptions"),
 }
 #: Each section's title: its heading, and its link in the page's header.
@@ -57,6 +59,7 @@ TITLES = {
     "trades": "Trades",
     "overfitting": "Overfitting checks",
     "strategies": "Strategies",
+    "portfolio": "Portfolio",
     "notes": "Notes",
 }
 _EVERY = frozenset(part for parts in PARTS.values() for part in parts)
@@ -109,8 +112,9 @@ class View:
     strategy is (None without one) and its name, the title, the assumption lines, the
     strategies of a combined result (None unless two or more), whether the cumulative
     return is on a log scale, the parts of the report mode, the quick overfitting
-    checks when the run already computed them (None: the page computes them), and the
-    portfolio result whose own parts a combined page shows (None for any other page)."""
+    checks when the run already computed them (None: the page computes them; on a
+    portfolio's page, each strategy's by name), and the portfolio result whose own
+    parts a combined page shows (None for any other page)."""
 
     performance: Performance
     bench: Performance | None
@@ -163,6 +167,21 @@ def label(text: str) -> str:
     return f"<div class='eyebrow grid-label'>{text}</div>"
 
 
+def legend(entries: Sequence[tuple[str, str]]) -> str:
+    """A row of colour swatches over a chart of several series: (name, CSS colour)
+    pairs, in order; the names are plain text."""
+    items = "".join(
+        "<span style='display:inline-flex;align-items:center;gap:6px'>"
+        f"<span style='width:10px;height:10px;border-radius:2px;background:{colour}'>"
+        f"</span>{fmt.text(name)}</span>"
+        for name, colour in entries
+    )
+    return (
+        "<div class='nums' style='display:flex;flex-wrap:wrap;gap:4px 16px;margin-bottom:8px;"
+        f"font-size:.75rem;color:var(--text-muted)'>{items}</div>"
+    )
+
+
 #: The gaps between blocks of a section: a small one between cards of one kind, a large
 #: one before a block of another kind (pixels, as the reference dashboard spaces them).
 SMALL, LARGE = "gap-s", "gap-l"
@@ -188,6 +207,7 @@ __all__ = [
     "View",
     "card",
     "label",
+    "legend",
     "section",
     "stack",
 ]

@@ -312,8 +312,9 @@ def test_html_and_svg_blocks_sit_in_cards_with_their_ids_prefixed():
     )
     hand = section_of(rp.tearsheet(small_performance(), layout=layout), "u-hand-notes")
     assert "<h3 class='serif'>Hand</h3>" in hand
-    assert "<div class='card-body'><p id='u-hand-notes-1-n'>Seen <b>here</b></p></div>" in hand
-    assert "<circle id='u-hand-notes-2-c' cx='1' cy='1' r='1'/>" in hand
+    # Block k's anchor is the section's, "_" and k: no section's anchor holds a "_".
+    assert "<div class='card-body'><p id='u-hand-notes_1-n'>Seen <b>here</b></p></div>" in hand
+    assert "<circle id='u-hand-notes_2-c' cx='1' cy='1' r='1'/>" in hand
 
 
 def test_a_fragment_given_as_a_value_is_checked_when_the_block_is_made():

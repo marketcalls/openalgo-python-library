@@ -121,6 +121,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     which changes the charges.
   - A list of one strategy also returns a `PortfolioResult`. A strategy class on its own runs
     exactly as before, with the same figures.
+- Combined reports of a portfolio run (2.4.0, unit M4).
+  - `PortfolioResult.summary()`: the account's net profit, return, maximum drawdown, closed
+    trades and benchmark, as `Result.summary()` gives them for one strategy, then the quick
+    overfitting checks of each strategy's own trades on a line each. None are run on the
+    account's trades together, which overlap in time.
+  - `PortfolioResult.tearsheet(path=None, *, mode="full", log_scale=False, layout=None)`: the
+    account's page, with the Strategies section (the strategies head to head and the
+    correlation of their returns), the overfitting checks in a row per strategy, a trade
+    list with a Strategy column, and a new Portfolio section (full mode): each strategy's
+    contribution and its P&L by month, stacked; the account's highest margin and lowest
+    free cash in each session and each strategy's margin at the account's peak; the orders
+    the account refused, with times; and the net position of each instrument two strategies
+    held, at every change. `report.tearsheet(pf)` gives the same page. Each strategy's own
+    page is still `pf.strategy(name).tearsheet()`.
+  - Custom tearsheets: `report.PARTS` gains the "portfolio" section with the parts
+    `contribution`, `account_margin`, `refused` and `net_positions`, which a layout hides,
+    shows and orders like any other part. On a portfolio a layout's block functions receive
+    the `PortfolioResult`, and a Theme's series colours colour the strategies.
 - Daily limits per strategy and for the account, in `bt.backtest` and `bt.live` (2.4.0, unit
   M10). Each is off unless set, and takes one value or a dict by strategy class name; a class
   attribute of the same name wins.
@@ -242,6 +260,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on an EMA crossing that the full series shows one minute earlier, before that decision. The
   strategy now decides at the next close, with the minute's bar in its series once its
   candle is read. A minute whose candle never comes holds up one more decision, no more.
+- Live sessions: an entry or add held in the order worker's queue by
+  `max_orders_per_second` is now withdrawn once its strategy's entries lock for any reason (a
+  dead feed, a reconciliation mismatch, failed exits, a closing order refused on a shared
+  instrument), and the strategy sees it rejected with `live_lock`. Before, only the daily
+  profit target, the kill switch and the safe stop withdrew it, so an add could be bought up
+  to 5 s after such a lock.
+- Live sessions: a position left with no stop at the broker and nothing to close it (for
+  example after one of two targets that fired together was refused) gets its stop placed
+  again and an alert even when the strategy rests a reversal, such as a LIMIT buy below the
+  market against a short. Only a MARKET reversal, which closes the position at once, now
+  counts as covering it; before, a resting reversal hid the missing stop.
 
 ## [2.3.0] - 2026-11-20
 

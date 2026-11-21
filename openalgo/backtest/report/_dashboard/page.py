@@ -2,7 +2,7 @@
 toggle), the title line, the numbered sections the mode shows and the footer."""
 
 from .. import _format as fmt
-from . import overfitting, script, sections, sections_run, style
+from . import overfitting, portfolio, script, sections, sections_run, style
 from .layout import Section, View, section
 from .timeseries import MIN_TIME_GAP_PX
 
@@ -17,6 +17,7 @@ SECTIONS = (
     sections_run.trades,
     overfitting.overfitting,
     sections_run.strategies,
+    portfolio.portfolio,
     sections_run.notes,
 )
 #: The class of the section link marked as in view (the first, until script runs).

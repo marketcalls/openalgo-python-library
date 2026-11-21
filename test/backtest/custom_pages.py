@@ -1,6 +1,6 @@
 """Shared inputs and readers of the custom tearsheet tests (`test_report_custom_*.py`): a
-small performance with a benchmark and closed trades, and readers of a page's sections,
-header links and section numbers."""
+small performance with a benchmark and closed trades, a judged set of quick overfitting
+checks, and readers of a page's sections, header links and section numbers."""
 
 from __future__ import annotations
 
@@ -10,8 +10,22 @@ import numpy as np
 import pandas as pd
 
 from openalgo.backtest import metrics
+from openalgo.backtest._robust._quick import QuickChecks
+from openalgo.backtest._robust._verdict import CheckResult
 
 IST = "Asia/Kolkata"
+#: The verdict, figure and rule of each quick check in `judged_quick_checks`, by name and
+#: title.
+JUDGED = {
+    ("random_out_of_sample", "Random out of sample"): (
+        "passed",
+        "Sharpe 1.10 out of sample",
+        "at least half the Sharpe in sample",
+    ),
+    ("reshuffle", "Trade reshuffle"): ("informational", "drawdown -8.0% at the 95th", "read only"),
+    ("resample", "Trade resample"): ("passed", "return 2.0% at the 5th", "above zero"),
+    ("variance", "Variance"): ("failed", "p = 0.20", "p below 0.05"),
+}
 
 
 def session_closes(start: str, end: str) -> pd.DatetimeIndex:
@@ -45,6 +59,16 @@ def small_performance() -> metrics.Performance:
     )
 
 
+def judged_quick_checks() -> QuickChecks:
+    """Quick checks of 40 closed trades, judged (`JUDGED`): random out of sample and trade
+    resample passed, trade reshuffle informational and variance failed; 200 runs, seed 7."""
+    results = tuple(
+        CheckResult(name, title, "", verdict, figure, rule, "", pd.DataFrame(), {}, {})
+        for (name, title), (verdict, figure, rule) in JUDGED.items()
+    )
+    return QuickChecks(results, closed=40, runs=200, seed=7)
+
+
 def section_anchors(page: str) -> list[str]:
     """The ids of the page's numbered sections, in page order."""
     return re.findall(r"<section id='([^']+)'", page)
@@ -73,8 +97,10 @@ def element_ids(page: str) -> list[str]:
 
 
 __all__ = [
+    "JUDGED",
     "element_ids",
     "header_links",
+    "judged_quick_checks",
     "section_anchors",
     "section_numbers",
     "section_of",

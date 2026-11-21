@@ -3,7 +3,8 @@
 Built from a trades table in the layout of the metrics package (`metrics.analyse`
 documents it; `_result_report.closed_trades` makes it from a run, and
 `Performance.trades` holds it), so the trade list of a `Result` and the trade table of
-the tearsheet are the same table. Open trades (no exit time) are left out.
+the tearsheet are the same table. Open trades (no exit time) are left out. The account's
+trades of a portfolio run carry the strategy of each (`STRATEGY`), which its list keeps.
 """
 
 from __future__ import annotations
@@ -11,6 +12,9 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+#: The column naming the strategy of each row of a portfolio run's combined tables, the
+#: account's trades among them (`_portfolio_tables` takes it from here).
+STRATEGY = "strategy"
 #: The columns of the trade list, in order (see `trade_list`).
 TRADE_LIST_COLUMNS = (
     "symbol",
@@ -93,7 +97,9 @@ def trade_list(trades: pd.DataFrame | None) -> pd.DataFrame:
 
     The excursion and slippage columns are NaN for a table without them. The columns
     are the same, with no rows, when there are no closed trades or no trades table
-    (None).
+    (None). A table with a `strategy` column (a portfolio's account trades,
+    `PortfolioResult.performance.trades`) gives it first, the strategy that made each
+    trade: each strategy numbers its own trades, so a trade is (strategy, trade).
     """
     if trades is None or trades.empty:
         empty = pd.DataFrame(columns=list(TRADE_LIST_COLUMNS))
@@ -129,6 +135,8 @@ def trade_list(trades: pd.DataFrame | None) -> pd.DataFrame:
         },
         columns=list(TRADE_LIST_COLUMNS),
     )
+    if STRATEGY in closed.columns:
+        frame.insert(0, STRATEGY, closed[STRATEGY])
     if "trade_id" in closed.columns:
         frame.index = pd.Index(closed["trade_id"].astype("int64"), name="trade")
     else:
@@ -136,4 +144,4 @@ def trade_list(trades: pd.DataFrame | None) -> pd.DataFrame:
     return frame
 
 
-__all__ = ["DIRECTIONS", "TRADE_LIST_COLUMNS", "trade_list"]
+__all__ = ["DIRECTIONS", "STRATEGY", "TRADE_LIST_COLUMNS", "trade_list"]

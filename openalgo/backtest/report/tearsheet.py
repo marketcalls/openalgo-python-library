@@ -11,8 +11,9 @@ import pandas as pd
 from ... import __version__
 from ..errors import ConfigError
 from . import _dashboard
-from ._custom import _layout
+from ._custom import _layout, _theme
 from ._dashboard import data
+from ._dashboard import portfolio as portfolio_section
 from ._definitions import DEFINITIONS, GROUPS
 from ._performance import Performance
 from .custom import Layout
@@ -36,8 +37,9 @@ def tearsheet(
     """Render a performance report as one self-contained HTML dashboard.
 
     `result_like` is a `Performance` (from `openalgo.backtest.metrics.analyse`), or any
-    object with a `performance` attribute holding one. Optional attributes of that
-    object are read when present:
+    object with a `performance` attribute holding one. A `PortfolioResult` gives its
+    combined page, `PortfolioResult.tearsheet()` (with `title` when given). Optional
+    attributes of any other object are read when present:
 
         name            the report title (overridden by `title=`)
         assumptions     what the engine assumed, shown in the Notes: a mapping gives
@@ -111,6 +113,14 @@ def tearsheet(
     the mode it starts from), else ConfigError. Without one (the default) the page is
     exactly the built-in tearsheet.
     """
+    # Imported here: the portfolio's modules import this one.
+    from .. import _portfolio_report
+    from ..portfolio_result import PortfolioResult
+
+    if isinstance(result_like, PortfolioResult):
+        return _portfolio_report.tearsheet(
+            result_like, path, title=title, mode=mode, log_scale=log_scale, layout=layout
+        )
     return write_tearsheet(
         result_like,
         path,
@@ -131,10 +141,12 @@ def write_tearsheet(
     mode: str = "full",
     log_scale: bool = False,
     layout: Layout | None = None,
+    portfolio: object = None,
 ) -> str:
     """`tearsheet` (which documents the arguments), with `subject` the object a custom
     layout's callables receive: a `Result` hands itself, while its page reads the
-    adapter it passes as `result_like`."""
+    adapter it passes as `result_like`. `portfolio` is the `PortfolioResult` whose page
+    this is (its Portfolio section's parts read it), None for any other page."""
     performance, name, assumptions, strategies, bench_name = _resolve(result_like)
     page = render(
         performance,
@@ -147,6 +159,7 @@ def write_tearsheet(
         overfitting=getattr(result_like, "overfitting", None),
         layout=layout,
         subject=subject,
+        portfolio=portfolio,
     )
     if path is None:
         return page
@@ -217,11 +230,15 @@ def render(
     overfitting: object = None,
     layout: Layout | None = None,
     subject: object = None,
+    portfolio: object = None,
 ) -> str:
     """The HTML page for `performance` in `mode` (see `tearsheet`); `overfitting` is its
     quick overfitting checks when already computed. With `layout`, the custom page,
-    whose blocks' callables receive `subject`. Raises ConfigError for an unknown mode,
-    a layout with a mode other than "full", or a layout that is not a `Layout`."""
+    whose blocks' callables receive `subject`. With `portfolio` (a `PortfolioResult`),
+    a portfolio's page: its Portfolio section, `overfitting` each strategy's quick
+    checks by name, and the series colours its monthly bars need. Raises ConfigError
+    for an unknown mode, a layout with a mode other than "full", or a layout that is
+    not a `Layout`."""
     if mode not in MODES:
         raise ConfigError(f"mode is one of {MODES}, got {mode!r}")
     if layout is not None:
@@ -241,10 +258,16 @@ def render(
         log_scale=log_scale,
         parts=parts,
         overfitting=overfitting,
+        portfolio=portfolio,
     )
-    if layout is None:
+    if layout is not None:
+        return _layout.render(layout, view, subject, __version__)
+    if portfolio is None:
         return _dashboard.render(view, __version__)
-    return _layout.render(layout, view, subject, __version__)
+    sections = _dashboard.page.built(view)
+    drawn = portfolio_section.draws_series(view, sections)
+    series = _theme.stylesheet({}, {}, _theme.series_tokens(())) if drawn else ""
+    return _dashboard.page.render(view, __version__, sections, extra_style=series)
 
 
 def _check_layout(layout: object, mode: str) -> None:
