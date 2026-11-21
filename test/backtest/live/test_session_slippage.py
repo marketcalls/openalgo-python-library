@@ -2,8 +2,10 @@
 16-session-design 1.4 and decided item 11 of 10.0): each MARKET fill against the price a
 backtest fills the same order at, the open of the base bar opening at its decision with
 the run's modelled slippage, signed against the trader, times the units. An order the
-engine makes on an event while it waits inside a minute (a target's exit, a risk exit,
-Ctrl+C) is decided when the session places it, so its bar is the next minute's.
+engine makes on an event while it waits inside a minute (a risk exit, Ctrl+C) is decided
+when the session places it, so its bar is the next minute's; the engine's exit at a leg's
+target is set against the target's level in the minute of the tick that reached it
+(18-multi-strategy 12.3).
 
 The market and the script are `session_samples`': the session starts at 14:40:05 IST on
 Monday 2026-11-16 and SBIN (tick 0.05) trades every 10 s, five seconds past each tenth
@@ -81,14 +83,15 @@ def moved_at_14_44_30(make_fake_openalgo, monkeypatch, tmp_path, price: float):
     return world
 
 
-def test_a_targets_exit_on_a_tick_is_set_against_the_bar_opening_after_it(
+def test_a_targets_exit_on_a_tick_is_set_against_its_level(
     make_fake_openalgo, monkeypatch, tmp_path
 ):
     # `HoldWithTarget` buys 10 at 500.00 (-1.00, as above) with a target 5 points above the
     # fill, 505.00. The 14:44:35 trade at 505.00 reaches it, and the engine's MARKET sale,
-    # placed then, fills at 505.00. The bar opening after it is 14:45's, at 505.00: the
-    # backtest sells at 504.85, so the live sale did 0.15 better a unit (-1.50). Against
-    # the 14:44 bar, which opened at 500.00 before the tick, it would read -51.00.
+    # placed then, fills at 505.00. A backtest fills the target at its level less 2 bps,
+    # 504.899, rounded down to the tick, 504.85, so the live sale did 0.15 better a unit
+    # (-1.50). Against the open of the 14:44 bar, 500.00, it would read -51.00
+    # (test_session_fill_comparison sets a target whose fill differs from its level).
     world = moved_at_14_44_30(make_fake_openalgo, monkeypatch, tmp_path, 505.0)
     summary = live(world, HoldWithTarget).summary
     assert (summary.slippage, summary.slippage_not_compared) == (-1.00 - 1.50, 0)

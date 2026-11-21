@@ -101,6 +101,18 @@ def test_the_daily_limits_set_follow_the_strategies_line():
     assert "Limits" not in summary_text(A_GOOD_DAY)
 
 
+def test_the_strategies_line_names_each_strategys_version_id():
+    versioned = replace(A_GOOD_DAY, versions=("1f3a9c0b7d2e", "0c4d5e6f7a8b"))
+    assert line(versioned, "Strategies") == (
+        "ema_cross (version 1f3a9c0b7d2e), orb (version 0c4d5e6f7a8b)"
+    )
+
+
+def test_a_version_id_short_of_one_per_strategy_is_refused():
+    with pytest.raises(ConfigError, match="names 2 strategies and gives 1 version ids"):
+        replace(A_GOOD_DAY, versions=("1f3a9c0b7d2e",))
+
+
 def test_the_alerts_line_is_left_out_when_every_alert_reached_openalgo():
     assert "Alerts" not in summary_text(A_GOOD_DAY)
 
@@ -151,6 +163,24 @@ def test_slippage_with_every_market_fill_left_out_reads_not_compared_with_their_
 )
 def test_the_market_fills_the_slippage_leaves_out_are_counted_on_its_line(count, shown):
     assert line(replace(A_GOOD_DAY, slippage_not_compared=count), "Slippage") == shown
+
+
+@pytest.mark.parametrize(
+    ("stop_slippage", "count", "shown"),
+    [
+        (None, 1, "not compared (1 stop fill: see fill_comparison)"),
+        (None, 2, "not compared (2 stop fills: see fill_comparison)"),
+        (4.5, 1, "Rs 4.50 worse than the backtest (1 stop fill not compared: see fill_comparison)"),
+    ],
+    ids=["one left out", "two left out", "one of several left out"],
+)
+def test_the_stop_fills_left_out_point_to_the_fill_comparison_for_their_reason(
+    stop_slippage, count, shown
+):
+    # A stop fill is left out for one of several reasons (no bar reached its trigger, a
+    # repriced stop, a bar that opened beyond a stop-limit's limit); the row names it.
+    day = replace(A_GOOD_DAY, stop_slippage=stop_slippage, stop_slippage_not_compared=count)
+    assert line(day, "Stop fills") == shown
 
 
 @pytest.mark.parametrize(

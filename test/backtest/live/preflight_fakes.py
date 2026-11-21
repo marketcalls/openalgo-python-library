@@ -1,5 +1,6 @@
 """In-process fakes for the preflight's tests: an OpenAlgo client that answers `ping`,
-`funds`, `symbol`, `quotes` and `intervals` as the SDK returns the server's answers and dates its
+`funds`, `symbol`, `quotes`, `intervals` and `holidays` (the 2026 rows OpenAlgo ships, by
+default) as the SDK returns the server's answers and dates its
 HTTP answers by a clock of its own, an alert channel whose test alert is scripted, and a
 plan to change one field at a time. Nothing here contacts a server.
 
@@ -19,6 +20,7 @@ import json
 from typing import Any
 
 import httpx
+from fake_openalgo.holidays import HOLIDAYS_2026, holidays_answer
 
 from openalgo.backtest._live._types import AlertKind, Mode
 from openalgo.backtest._live.preflight import PreflightPlan
@@ -154,6 +156,7 @@ class FakeOpenAlgo:
         symbols: dict[tuple[str, str], dict[str, Any]] | None = None,
         quotes: dict[str, Any] | None = None,
         intervals: dict[str, Any] | None = None,
+        holidays: dict[str, Any] | None = None,
         server_ns: int = NOW_NS,
         head_status: int = 404,
         head_headers: dict[str, str] | None = None,
@@ -167,6 +170,7 @@ class FakeOpenAlgo:
         )
         self._quotes = quote() if quotes is None else quotes
         self._intervals = INTERVALS if intervals is None else intervals
+        self._holidays = holidays
         self.server_ns = server_ns
         self._head_status = head_status
         self._head_headers = head_headers
@@ -205,6 +209,10 @@ class FakeOpenAlgo:
     def intervals(self) -> dict[str, Any]:
         self.calls.append(("intervals",))
         return self._intervals
+
+    def holidays(self, year: int) -> dict[str, Any]:
+        self.calls.append(("holidays", year))
+        return holidays_answer(year, HOLIDAYS_2026) if self._holidays is None else self._holidays
 
     def __getattr__(self, name: str) -> Any:
         raise AssertionError(f"the preflight must not call {name}")

@@ -90,13 +90,14 @@ def test_a_passed_preflight_reports_every_check_in_the_order_it_ran():
         "account_max_daily_loss",
         "product",
         "trading_day:NSE",
+        "holidays",
         "clock",
         "alerts",
     ]
     assert all(check.ok for check in report.checks)
 
 
-def test_the_preflight_asks_for_ping_funds_each_symbol_one_quote_the_intervals_and_the_time():
+def test_the_preflight_asks_for_ping_funds_each_symbol_one_quote_the_intervals_holidays_time():
     client = FakeOpenAlgo(
         symbols={
             ("SBIN", "NSE"): symbol_found("SBIN", "NSE"),
@@ -113,6 +114,7 @@ def test_the_preflight_asks_for_ping_funds_each_symbol_one_quote_the_intervals_a
         ("symbol", "INFY", "NSE"),
         ("quotes", "SBIN", "NSE"),
         ("intervals",),
+        ("holidays", 2026),
         ("HEAD", ROOT_URL),
     ]
 

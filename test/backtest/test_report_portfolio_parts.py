@@ -71,6 +71,7 @@ def stand_in(**tables_given) -> SimpleNamespace:
         "net_positions": pd.DataFrame(
             columns=["time", "symbol", "exchange", "product", "net_units", "A_units", "B_units"]
         ),
+        "assumptions": {},
     }
     return SimpleNamespace(**{**given, **tables_given})
 

@@ -189,9 +189,11 @@ def intent_fields(
     markets: Sequence[tuple[str, str]],
     session: JournalSession,
     created_ns: int,
+    version_id: str = "",
 ) -> OrderIntent:
     """The intent of a "place" command of `strategy`'s engine, whose instruments are
-    `markets` ((symbol, exchange) in registration order), created at `created_ns`.
+    `markets` ((symbol, exchange) in registration order), created at `created_ns` by the
+    strategy's version `version_id`.
 
     Raises LiveError for a fraction of a unit (the kernel sizes in whole units in a live
     session), an unknown role, side or instrument, or a product other than MIS.
@@ -222,6 +224,7 @@ def intent_fields(
         created_ns=created_ns,
         price=terms.price,
         trigger_price=terms.trigger_price,
+        version_id=version_id,
     )
 
 

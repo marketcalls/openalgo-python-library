@@ -82,8 +82,10 @@ def test_F09_the_exit_alert_names_the_exit_that_filled_after_a_rate_limited_try(
     world.script.at(ist(14, 45, 2), lambda: world.fake.faults.rate_limit("placeorder"))
     world.run(StopRoundTrip)
     exit_order = world.orders()[-1].order_id
-    # The strategy's exit() is sent as the engine's risk exit of the position.
-    words = f"SELL 10 SBIN NSE at 500.00 (risk_exit, order {exit_order})"
+    # The strategy's exit() was refused at the rate limit; the session asked for it again
+    # as a risk exit, which the kernel records as a manual exit and the alert words as the
+    # session's own.
+    words = f"SELL 10 SBIN NSE at 500.00 (risk_exit: Ctrl+C or a retried exit, order {exit_order})"
     assert times(sent(world, AlertKind.EXIT), words) == 1
 
 
