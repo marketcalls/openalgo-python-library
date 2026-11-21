@@ -5,7 +5,8 @@ other clients' fills) go to `_session_feed`.
 
 - `OrderNews`: through the order's venue map and fill ledger to the kernel; ENTRY, EXIT
   and REJECT alerts with the order IDs, an EXIT alert with the order's exit reason
-  (`_exit_reasons`); a fill the kernel refuses is a reconciliation
+  (`_exit_reasons`), an ENTRY or EXIT alert of a session of several strategies with the
+  strategy's name after its kind; a fill the kernel refuses is a reconciliation
   mismatch: the strategy's entries are locked and a RECONCILE_MISMATCH alert sent.
 - `SendResult`: the venue map binds, rejects or waits; a refused placement is a REJECT
   alert, a queued one (semi-auto) an ERROR alert, an exit with no answer an ERROR alert.
@@ -178,12 +179,16 @@ class News(ResolutionNews):
         self, intent: OrderIntent, update: OrderUpdate, increment: Increment, words: str | None
     ) -> None:
         """The fill's record, its event and its ENTRY or EXIT alert, which names in `words`
-        the exit reason of an order that closes a position (`_exit_reasons`)."""
+        the exit reason of an order that closes a position (`_exit_reasons`), and in a
+        session of several strategies, first, the strategy whose order filled."""
         kind = AlertKind.ENTRY if intent.purpose in ENTRY_PURPOSES else AlertKind.EXIT
         why = intent.purpose.value
         if words is not None:
             why = f"{why}: {words}"
         session = self._session
+        # The alert's prefix lists every strategy of the session, so with several the line
+        # says whose order it was (2.4.0 item P5-1); a session of one keeps its old line.
+        named = f"{intent.strategy} " if len(session.traders) > 1 else ""
         estimated = session.stops.held.estimated(update.order_id, update.filled_quantity)
         record = fill_record(intent, update, increment, estimated=estimated)
         session.fills.append(record)
@@ -199,7 +204,7 @@ class News(ResolutionNews):
         )
         self._session.alert(
             kind,
-            f"{intent.action} {increment.units} {intent.symbol} {intent.exchange} at "
+            f"{named}{intent.action} {increment.units} {intent.symbol} {intent.exchange} at "
             f"{increment.price:.2f} ({why}, order {update.order_id})",
         )
 
