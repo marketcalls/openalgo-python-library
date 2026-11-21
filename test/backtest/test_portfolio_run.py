@@ -28,12 +28,13 @@ from strategy_samples import (
     wave_bars,
     wave_with_history,
 )
+from test_settings_modules import SIZE_GUIDE_LINES
 
 import openalgo.backtest as bt
-from openalgo.backtest import portfolio_result
+from openalgo.backtest import _portfolio_export, portfolio_result
+from openalgo.backtest._portfolio_export import PORTFOLIO_TABLES
 from openalgo.backtest.data import CorporateAction
 from openalgo.backtest.errors import ConfigError, OrdersNotPlacedWarning
-from openalgo.backtest.portfolio_result import PORTFOLIO_TABLES
 from openalgo.backtest.reference import Instrument
 
 LAKH = 100_000
@@ -209,7 +210,7 @@ def test_a_workbook_names_each_strategy_sheets_by_its_place_within_the_name_limi
         written.update(tables)
         return Path(path)
 
-    monkeypatch.setattr(portfolio_result, "write_excel", capture)
+    monkeypatch.setattr(_portfolio_export, "write_excel", capture)
     long_names.to_excel(tmp_path / "portfolio.xlsx")
     assert max(len(name) for name in written) <= SHEET_NAME_LIMIT
     assert list(written)[: len(PORTFOLIO_TABLES)] == list(PORTFOLIO_TABLES)
@@ -229,6 +230,11 @@ def test_a_workbook_holds_a_sheet_for_every_table(long_names, tmp_path):
     expected = [*PORTFOLIO_TABLES, "strategies"]
     expected += [f"S{place}_{table}" for place in (1, 2) for table in own]
     assert sheets == expected
+
+
+def test_the_portfolio_result_module_stays_under_the_size_guide():
+    lines = Path(portfolio_result.__file__).read_text(encoding="utf-8").count("\n")
+    assert lines < SIZE_GUIDE_LINES
 
 
 @pytest.mark.parametrize("given", [{}, {"account_capital": 2 * LAKH}], ids=["default", "given"])

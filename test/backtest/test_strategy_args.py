@@ -1,29 +1,33 @@
 """Per-strategy arguments by strategy class name (`_strategy_args`; 18-multi-strategy 1.1,
 1.3, decision M5): one set of rules for `bt.backtest` given a list and for `bt.live`.
 
-`SHARED` is one table of the settings both verbs take by name today (capital,
-max_daily_loss, params, and the daily limits max_trades_per_day, daily_profit_target and
-max_order_value of 18-multi-strategy 2.5a): each row runs through `bt.backtest`'s list resolution
-(`_portfolio_run.portfolio_plan`, before any data is loaded) and through `bt.live`'s
-argument checks (`_live._plan_args.live_arguments`, before any call to OpenAlgo), and both
-give the row's values or refuse it with the row's words. `BACKTEST_ONLY` holds the rows
-of the settings only a backtest takes by name in this version, and of the backtest's
-rule that a dict by name names every strategy: `bt.live` checks a `max_daily_loss` dict
-that leaves a strategy out later, in its plan, where it is mandatory for each strategy.
-Expected values are the rows' own inputs.
+`SHARED` is one table of every per-strategy setting both verbs take (capital,
+max_daily_loss, params, the risk settings after_risk_exit, max_positions, drawdown_halt,
+cooldown, entry_from, entry_until and square_off, and the daily limits
+max_trades_per_day, daily_profit_target and max_order_value of 18-multi-strategy 2.5a):
+each row runs through `bt.backtest`'s list resolution (`_portfolio_run.portfolio_plan`,
+before any data is loaded) and through `bt.live`'s argument checks
+(`_live._plan_args.live_arguments`, before any call to OpenAlgo, read as the arguments of
+each strategy's backtest of the day, which the session plan resolves its settings from),
+and both give the row's values or refuse it with the row's words. `BACKTEST_ONLY` holds
+the rows of the settings only a backtest takes (`product` and `base`, which a live
+session refuses), and of the backtest's rule that a dict by name names every strategy:
+`bt.live` checks a `max_daily_loss` dict that leaves a strategy out later, in its plan,
+where it is mandatory for each strategy. Expected values are the rows' own inputs.
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import inspect
 import re
 
 import pytest
 
 import openalgo.backtest as bt
-from openalgo.backtest._live._plan_args import live_arguments
+from openalgo.backtest._live._plan_args import NOT_LIVE, live_arguments
 from openalgo.backtest._portfolio_run import portfolio_plan
-from openalgo.backtest._strategy_args import refuse_account_settings
+from openalgo.backtest._strategy_args import PER_STRATEGY, refuse_account_settings
 from openalgo.backtest.errors import ConfigError
 
 
@@ -39,6 +43,9 @@ class Beta(bt.Strategy):
 
 NAMES = ("Alpha", "Beta")
 CAPITAL = 100_000
+#: The day and the present (UTC nanoseconds) of a live session's backtest arguments.
+DAY = dt.date(2026, 11, 16)
+PRESENT_NS = 1_763_284_500_000_000_000
 
 
 def backtest_values(setting: str, given: dict) -> dict:
@@ -51,11 +58,11 @@ def backtest_values(setting: str, given: dict) -> dict:
 
 
 def live_values(setting: str, given: dict) -> dict:
-    """Each strategy's value of `setting` as `bt.live([Alpha, Beta], **given)` checks it."""
+    """Each strategy's value of `setting` as `bt.live([Alpha, Beta], **given)` checks it:
+    in the arguments of the strategy's backtest of the day, which the session plan
+    resolves its settings from."""
     checked = live_arguments([Alpha, Beta], **given)
-    if setting in checked.daily_limits[NAMES[0]]:
-        return {name: checked.daily_limits[name][setting] for name in NAMES}
-    return dict(getattr(checked, setting))
+    return {name: checked.backtest_arguments(name, DAY, PRESENT_NS)[setting] for name in NAMES}
 
 
 # (row, setting, the call's arguments, each strategy's value or the refusal's words)
@@ -139,6 +146,81 @@ SHARED = [
         {"capital": CAPITAL, "max_trades_per_day": {"Alpha": 1, "Beta": 1, "Gamma": 1}},
         r"max_trades_per_day names ['Gamma'], which this * does not run",
     ),
+    # after_risk_exit takes "lock_session" only in this version (its value is checked when
+    # each strategy's settings are resolved, after these rules).
+    (
+        "after_risk_exit one value",
+        "after_risk_exit",
+        {"capital": CAPITAL, "after_risk_exit": "lock_session"},
+        {"Alpha": "lock_session", "Beta": "lock_session"},
+    ),
+    (
+        "after_risk_exit by name",
+        "after_risk_exit",
+        {"capital": CAPITAL, "after_risk_exit": {"Alpha": "lock_session", "Beta": "lock_session"}},
+        {"Alpha": "lock_session", "Beta": "lock_session"},
+    ),
+    (
+        "after_risk_exit leaves a strategy out",
+        "after_risk_exit",
+        {"capital": CAPITAL, "after_risk_exit": {"Alpha": "lock_session"}},
+        "after_risk_exit as a dict must name every strategy of the run",
+    ),
+    (
+        "max_positions by name",
+        "max_positions",
+        {"capital": CAPITAL, "max_positions": {"Alpha": 1, "Beta": 2}},
+        {"Alpha": 1, "Beta": 2},
+    ),
+    (
+        "drawdown_halt by name",
+        "drawdown_halt",
+        {"capital": CAPITAL, "drawdown_halt": {"Alpha": 10, "Beta": 15}},
+        {"Alpha": 10, "Beta": 15},
+    ),
+    (
+        "cooldown one value",
+        "cooldown",
+        {"capital": CAPITAL, "cooldown": 3},
+        {"Alpha": 3, "Beta": 3},
+    ),
+    (
+        "cooldown by name",
+        "cooldown",
+        {"capital": CAPITAL, "cooldown": {"Alpha": 3, "Beta": 5}},
+        {"Alpha": 3, "Beta": 5},
+    ),
+    (
+        "cooldown leaves a strategy out",
+        "cooldown",
+        {"capital": CAPITAL, "cooldown": {"Alpha": 3}},
+        "cooldown as a dict must name every strategy of the run (give one value for all of "
+        "them, or a value for each), and the dict gives none for ['Beta']",
+    ),
+    (
+        "entry_from by name",
+        "entry_from",
+        {"capital": CAPITAL, "entry_from": {"Alpha": "09:30", "Beta": "10:00"}},
+        {"Alpha": "09:30", "Beta": "10:00"},
+    ),
+    (
+        "entry_until one value",
+        "entry_until",
+        {"capital": CAPITAL, "entry_until": "14:30"},
+        {"Alpha": "14:30", "Beta": "14:30"},
+    ),
+    (
+        "square_off by name",
+        "square_off",
+        {"capital": CAPITAL, "square_off": {"Alpha": "14:45", "Beta": "15:00"}},
+        {"Alpha": "14:45", "Beta": "15:00"},
+    ),
+    (
+        "square_off names a strategy the call does not run",
+        "square_off",
+        {"capital": CAPITAL, "square_off": {"Alpha": "15:00", "Beta": "15:00", "Omega": "15:00"}},
+        r"square_off names ['Omega'], which this * does not run",
+    ),
 ]
 
 
@@ -161,21 +243,14 @@ def test_both_verbs_resolve_a_setting_by_strategy_name_alike(resolve, setting, g
         assert resolve(setting, given) == expected
 
 
+def test_the_shared_table_holds_every_per_strategy_setting_but_those_refused_live():
+    # product and base are refused live (bt.live takes no product= and no base=).
+    shared = {row[1] for row in SHARED}
+    assert shared == set(PER_STRATEGY) - {"product", "base"}
+    assert {"product", "base"} <= set(NOT_LIVE)
+
+
 BACKTEST_ONLY = [
-    ("cooldown one value", "cooldown", {"cooldown": 3}, {"Alpha": 3, "Beta": 3}),
-    (
-        "cooldown by name",
-        "cooldown",
-        {"cooldown": {"Alpha": 3, "Beta": 5}},
-        {"Alpha": 3, "Beta": 5},
-    ),
-    (
-        "cooldown leaves a strategy out",
-        "cooldown",
-        {"cooldown": {"Alpha": 3}},
-        "cooldown as a dict must name every strategy of the run (give one value for all of "
-        "them, or a value for each), and the dict gives none for ['Beta']",
-    ),
     (
         "max_daily_loss leaves a strategy out",
         "max_daily_loss",
@@ -184,12 +259,6 @@ BACKTEST_ONLY = [
     ),
     ("product by name", "product", {"product": {"Alpha": "MIS", "Beta": "CNC"}}, None),
     ("base by name", "base", {"base": {"Alpha": "1m", "Beta": "5m"}}, None),
-    (
-        "square_off names a strategy the call does not run",
-        "square_off",
-        {"square_off": {"Alpha": "15:00", "Beta": "15:00", "Omega": "15:00"}},
-        "square_off names ['Omega'], which this backtest does not run",
-    ),
 ]
 
 

@@ -292,7 +292,7 @@ class Result(AnalysisMethods, ExportMethods):
         skip reason (`_skips`) and per reject code (`_rejections`) that occurred, with
         what to do, among the others, and last a line per quick overfitting check that
         failed (`_robust._quick`; computed on first read, from the trade list)."""
-        return [*self._warnings, *self._overfitting_warnings()]
+        return self._all_warnings()
 
     @property
     def skipped(self) -> pd.DataFrame:

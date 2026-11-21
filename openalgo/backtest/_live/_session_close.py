@@ -55,6 +55,7 @@ from .._driver import deliver
 from .._engine import call
 from ..errors import JournalError
 from ._alerts_summary import SessionSummary, summary_text
+from ._plan_args import LiveArguments
 from ._plan_catch_up import StrategyPlan
 from ._reconcile_final import final_read
 from ._reconcile_findings import Reconciliation
@@ -98,7 +99,9 @@ class SessionOutcome:
     "error"), `restarts`, the `strategies` in call order, `outputs` (each kernel
     session's `finish()` tables by strategy), `summary` (the day's figures across its
     restarts, `_session_figures`), `open_positions`, `mode_breach` (the guard's text or
-    None), `warnings`, `skipped_decisions`, `drift` (the accepted candles' drift), `paths`
+    None), `warnings`, `skipped_decisions`, `drift` (the accepted candles' drift), the
+    checked `bt.live` `arguments` and `funds_at_start` (the rupees OpenAlgo reported
+    available at the start, for `SessionResult.portfolio`), `paths`
     (journal, log, events, decisions), `unprotected` (each window a leg had no confirmed stop at the
     broker), `estimated` (the fills released at a price the books did not confirm),
     `reconciliations` (each comparison with the broker's books that differed), and the
@@ -123,6 +126,8 @@ class SessionOutcome:
     warnings: tuple[str, ...]
     skipped_decisions: tuple[Skipped, ...]
     drift: tuple[BarDrift, ...]
+    arguments: LiveArguments
+    funds_at_start: float
     paths: dict[str, str] = field(default_factory=dict)
     unprotected: tuple[Unprotected, ...] = ()
     estimated: tuple[Estimate, ...] = ()
@@ -238,6 +243,8 @@ def _outcome(
         warnings=tuple(session.warnings),
         skipped_decisions=tuple(s for t in session.traders for s in t.skipped),
         drift=tuple(d for t in session.traders for d in t.candles.drifts),
+        arguments=parts.spec.arguments,
+        funds_at_start=parts.report.funds_available,
         paths={
             "journal": str(parts.journal.path),
             "log": str(parts.logs.log_path),

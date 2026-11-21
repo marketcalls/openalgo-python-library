@@ -1,12 +1,15 @@
 """The arguments of `bt.live`, checked before anything is called (16-session-design 1.2
 and 3.1 step 1; decisions 3 and 9 of its section 10.0; unit 7). Part of `plan`.
 
-- One strategy class or a list of them (decision 3): each trades its own symbol in the
-  one session. `capital` and `max_daily_loss` are one value for every strategy or a dict
-  by strategy class name; with several strategies `params` is a dict of each one's
-  parameter values by class name (one strategy takes its own values, as in
-  `bt.backtest`). The rules of a dict by name are `_strategy_args`', the ones
-  `bt.backtest` follows for a list of strategies.
+- One strategy class or a list of them (decision 3). Every per-strategy setting a session
+  takes is one value for every strategy or a dict by strategy class name (18-multi-
+  strategy 1.3, decision M5): `capital`, `max_daily_loss`, the risk settings
+  (`_strategy_args.RISK_SETTINGS`: `after_risk_exit`, `max_positions`, `drawdown_halt`,
+  `cooldown`, `entry_from`, `entry_until`, `square_off`) and the daily limits; with
+  several strategies `params` is a dict of each one's parameter values by class name (one
+  strategy takes its own values, as in `bt.backtest`). The rules of a dict by name are
+  `_strategy_args`', the ones `bt.backtest` follows for a list of strategies; a class
+  attribute of the same name still wins, as in a backtest.
 - No argument chooses or confirms the mode: sandbox or live is the analyzer switch inside
   OpenAlgo, which the session adopts (D21). An argument that looks like a mode choice is
   refused, saying so.
@@ -42,11 +45,10 @@ from typing import Any
 from .._messages import not_supported
 from .._risk_settings import rupees_amount
 from .._strategy_args import (
-    DAILY_LIMITS,
-    EVERY_STRATEGY,
     MANDATORY,
     account_trade_cap,
     by_name,
+    by_strategy,
     class_names,
     params_by_name,
     repeated,
@@ -138,12 +140,15 @@ class LiveArguments:
     `strategies` are the strategy classes in call order and `names` their class names.
     `capital`, `max_daily_loss` and `params` are each strategy's values as given, by
     name (`max_daily_loss` None where only the class may set it). `settings` are the
-    `bt.backtest` settings every strategy shares that the call gave (`costs` and the risk
-    settings, which a strategy's class attributes of the same names override as in a
-    backtest); the others take `bt.backtest`'s defaults (`backtest_arguments`). The rest are
-    the session's own: `account_max_daily_loss` in rupees, `alerts_to`, `account`,
-    `live_dir` and `on_stop`; `daily_limits` each strategy's daily limits by name
-    (`DAILY_LIMITS`, None where not set), the account's `account_max_trades_per_day` and
+    `bt.backtest` settings of the session that the call gave (`costs`, `risk_basis`,
+    `round_levels`, `strict_config`: one value for every strategy) and `risk` each
+    strategy's risk settings the call gave (`_strategy_args.RISK_SETTINGS`), by name; a
+    strategy's class attributes of the same names override them as in a backtest, and
+    the settings not
+    given take `bt.backtest`'s defaults (`backtest_arguments`). The rest are the session's
+    own: `account_max_daily_loss` in rupees, `alerts_to`, `account`, `live_dir` and
+    `on_stop`; `daily_limits` each strategy's daily limits by name (`DAILY_LIMITS`, None
+    where not set), the account's `account_max_trades_per_day` and
     `account_daily_profit_target` (rupees), and `max_orders_per_second`, the order rate.
     """
 
@@ -153,6 +158,7 @@ class LiveArguments:
     max_daily_loss: Mapping[str, Any]
     params: Mapping[str, Mapping[str, Any] | None]
     settings: Mapping[str, Any]
+    risk: Mapping[str, Mapping[str, Any]]
     account_max_daily_loss: float | None
     alerts_to: str | None
     account: str | None
@@ -171,6 +177,7 @@ class LiveArguments:
         return {
             **_backtest_defaults(),
             **self.settings,
+            **self.risk[name],
             "capital": self.capital[name],
             "max_daily_loss": self.max_daily_loss[name],
             "params": self.params[name],
@@ -257,14 +264,9 @@ def _orders_per_second(value: Any) -> int:
     return value
 
 
-def _daily_limits(given: Mapping[str, Any], names: Sequence[str]) -> dict[str, dict[str, Any]]:
-    """Each strategy's daily limits by name (`DAILY_LIMITS`), from one value each or a
-    dict naming every strategy. Raises ConfigError as `_strategy_args.by_name` does."""
-    resolved = {
-        setting: by_name(given[setting], names, setting, owner=SESSION, required=EVERY_STRATEGY)
-        for setting in DAILY_LIMITS
-    }
-    return {name: {setting: resolved[setting][name] for setting in DAILY_LIMITS} for name in names}
+def _given(settings: Mapping[str, Any]) -> dict[str, Any]:
+    """The settings the call gave: those not left at `bt.backtest`'s default."""
+    return {name: value for name, value in settings.items() if value is not BACKTEST_DEFAULT}
 
 
 def live_arguments(
@@ -278,13 +280,13 @@ def live_arguments(
     params: Mapping[str, Any] | None = None,
     costs: Any = BACKTEST_DEFAULT,
     risk_basis: str = BACKTEST_DEFAULT,
-    after_risk_exit: str = BACKTEST_DEFAULT,
-    entry_from: str | None = BACKTEST_DEFAULT,
-    entry_until: str | None = BACKTEST_DEFAULT,
-    square_off: str | None = BACKTEST_DEFAULT,
-    max_positions: int | None = BACKTEST_DEFAULT,
+    after_risk_exit: str | Mapping[str, str] = BACKTEST_DEFAULT,
+    entry_from: str | Mapping[str, str | None] | None = BACKTEST_DEFAULT,
+    entry_until: str | Mapping[str, str | None] | None = BACKTEST_DEFAULT,
+    square_off: str | Mapping[str, str | None] | None = BACKTEST_DEFAULT,
+    max_positions: int | Mapping[str, int | None] | None = BACKTEST_DEFAULT,
     drawdown_halt: Any = BACKTEST_DEFAULT,
-    cooldown: int | None = BACKTEST_DEFAULT,
+    cooldown: int | Mapping[str, int | None] | None = BACKTEST_DEFAULT,
     round_levels: bool = BACKTEST_DEFAULT,
     strict_config: bool = BACKTEST_DEFAULT,
     live_dir: str | os.PathLike[str] | None = None,
@@ -303,11 +305,11 @@ def live_arguments(
     Raises ConfigError for an argument `bt.live` does not take (a mode choice, a
     `bt.backtest` argument with no meaning live, an unknown name), for a strategy that is
     not a `bt.Strategy` subclass, for no `capital`, for a dict of values keyed by a name
-    the session does not run or, for `capital` and the daily limits, missing one, and for
-    an unusable `account_max_daily_loss`, `account_max_trades_per_day`,
-    `account_daily_profit_target`, `max_orders_per_second`, `alerts_to`, `account`,
-    `live_dir` or `on_stop`; NotImplementedError for `bars="candles"` and for two
-    strategies with the same name."""
+    the session does not run or, for `capital`, the risk settings and the daily limits,
+    missing one, and for an unusable `account_max_daily_loss`,
+    `account_max_trades_per_day`, `account_daily_profit_target`, `max_orders_per_second`,
+    `alerts_to`, `account`, `live_dir` or `on_stop`; NotImplementedError for
+    `bars="candles"` and for two strategies with the same name."""
     _refuse_not_live(not_live)
     strategies = strategy_classes(strategy, "bt.live")
     names = _names(strategies)
@@ -317,9 +319,13 @@ def live_arguments(
             "every strategy or a dict by strategy class name (a risk limit, mandatory live)"
         )
     _session_options(account_max_daily_loss, alerts_to, account, live_dir, on_stop)
-    shared = {
+    session = {
         "costs": costs,
         "risk_basis": risk_basis,
+        "round_levels": round_levels,
+        "strict_config": strict_config,
+    }
+    risk = {
         "after_risk_exit": after_risk_exit,
         "entry_from": entry_from,
         "entry_until": entry_until,
@@ -327,8 +333,6 @@ def live_arguments(
         "max_positions": max_positions,
         "drawdown_halt": drawdown_halt,
         "cooldown": cooldown,
-        "round_levels": round_levels,
-        "strict_config": strict_config,
     }
     return LiveArguments(
         strategies=strategies,
@@ -336,19 +340,21 @@ def live_arguments(
         capital=by_name(capital, names, "capital", owner=SESSION, required=MANDATORY),
         max_daily_loss=by_name(max_daily_loss, names, "max_daily_loss", owner=SESSION),
         params=params_by_name(params, names, owner=SESSION),
-        settings={name: value for name, value in shared.items() if value is not BACKTEST_DEFAULT},
+        settings=_given(session),
+        risk=by_strategy(_given(risk), names, owner=SESSION),
         account_max_daily_loss=positive_amount(account_max_daily_loss),
         alerts_to=alerts_to,
         account=account,
         live_dir=live_dir,
         on_stop=on_stop,
-        daily_limits=_daily_limits(
+        daily_limits=by_strategy(
             {
                 "max_trades_per_day": max_trades_per_day,
                 "daily_profit_target": daily_profit_target,
                 "max_order_value": max_order_value,
             },
             names,
+            owner=SESSION,
         ),
         account_max_trades_per_day=account_trade_cap(account_max_trades_per_day),
         account_daily_profit_target=rupees_amount(

@@ -30,7 +30,10 @@ from test_portfolio_run import THREE, THREE_RUN, DailyInfy, MinuteSbin
 import openalgo.backtest as bt
 from openalgo.backtest import metrics
 from openalgo.backtest import report as rp
+from openalgo.backtest._messages import ALONE_POINTER
 from openalgo.backtest._portfolio_report import PER_STRATEGY
+from openalgo.backtest._result_analysis import AnalysisMethods
+from openalgo.backtest._robust._quick import POINTER as QUICK_POINTER
 from openalgo.backtest.report._dashboard.portfolio_tables import REASONS
 from openalgo.backtest.report._format import text as escaped
 
@@ -282,6 +285,34 @@ def test_a_failed_quick_check_of_a_strategy_points_to_a_run_of_it_alone(judged_l
     assert own.endswith("own trades; result.robustness() runs the full set of checks, with charts")
 
 
+def test_a_members_warnings_differ_from_its_own_only_in_the_pointer(judged_loss):
+    # The portfolio names each line of a strategy's warnings by the strategy; the line of a
+    # failed quick check points to a run of the strategy alone where its own result
+    # points to its robustness().
+    faller = judged_loss.strategy("Faller")
+    named = [line for line in judged_loss.warnings if line.startswith("Faller: ")]
+    own = [line.removeprefix("Faller: ") for line in named]
+    assert len(own) == len(faller.warnings)
+    assert [line.replace(ALONE_POINTER, QUICK_POINTER) for line in own] == faller.warnings
+
+
+def test_a_line_the_warnings_gain_reaches_the_portfolio_named_by_its_strategy(
+    judged_loss, monkeypatch
+):
+    # One composition makes a Result's warnings, the Notes of its page and its lines in a
+    # portfolio: a kind of line it gains is in each of them.
+    composed = AnalysisMethods._all_warnings
+    later = "a later kind of warning"
+    monkeypatch.setattr(
+        AnalysisMethods,
+        "_all_warnings",
+        lambda result, pointer=None: [*composed(result, pointer), later],
+    )
+    assert judged_loss.strategy("Faller").warnings[-1] == later
+    assert f"Faller: {later}" in judged_loss.warnings
+    assert escaped(later) in section_of(judged_loss.strategy("Faller").tearsheet(), "notes")
+
+
 def test_the_summary_gives_the_benchmark_of_the_first_strategy():
     # Closes given for 30 June (100) and 1 July (103): a return of 3.00 percent over the
     # run's one session.
@@ -374,6 +405,42 @@ def test_the_combined_trade_list_is_in_the_order_the_trades_closed(two_days_page
         ["1", "ShortDaily"],
         ["2", "LongDaily"],
         ["2", "ShortDaily"],
+    ]
+
+
+def excursion_titles(page: str, name: str) -> list[str]:
+    """The hover readouts of the marks of the `name` ("MAE" or "MFE") scatter of a page's
+    Trades section, in the order they are drawn."""
+    trades = section_of(page, "trades")
+    chart = trades[trades.index(f"aria-label='{name} against return'") :]
+    chart = chart[: chart.index("</svg>")]
+    return re.findall(r"<title>([^<]*)</title>", chart)
+
+
+def test_each_mark_of_the_excursion_scatters_names_its_strategy_and_trade(two_days_page):
+    # Each strategy numbers its own trades from 1, so a mark is told by its strategy and
+    # its number together, as a row of the combined trade list is. 100 units on 10,000 of
+    # capital at work: LongDaily makes +10.00% on 1 July (never below its entry, MAE 0,
+    # MFE +10.00%) and -5.00% on 2 July (MAE -5.00%, MFE 0); ShortDaily the mirror.
+    assert sorted(excursion_titles(two_days_page, "MAE")) == [
+        "LongDaily trade 1: MAE 0.00%, return 10.00%",
+        "LongDaily trade 2: MAE -5.00%, return -5.00%",
+        "ShortDaily trade 1: MAE -10.00%, return -10.00%",
+        "ShortDaily trade 2: MAE 0.00%, return 5.00%",
+    ]
+    assert sorted(excursion_titles(two_days_page, "MFE")) == [
+        "LongDaily trade 1: MFE 10.00%, return 10.00%",
+        "LongDaily trade 2: MFE 0.00%, return -5.00%",
+        "ShortDaily trade 1: MFE 0.00%, return -10.00%",
+        "ShortDaily trade 2: MFE 5.00%, return 5.00%",
+    ]
+
+
+def test_a_strategy_page_inside_a_portfolio_numbers_its_marks_by_trade_alone(two_days):
+    page = two_days.strategy("LongDaily").tearsheet()
+    assert excursion_titles(page, "MAE") == [
+        "Trade 1: MAE 0.00%, return 10.00%",
+        "Trade 2: MAE -5.00%, return -5.00%",
     ]
 
 
