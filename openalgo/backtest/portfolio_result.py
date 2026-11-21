@@ -62,8 +62,10 @@ class PortfolioResult:
     """The result of a portfolio run (see the module docstring). `account` is the run's
     checked account, `results` each strategy's `Result` by class name in call order,
     `records` the native fund's records (`Fund.finish`), `benchmark` the closes the
-    account is compared with (the first strategy's benchmark; None without one) and
-    `run_warnings` the run's own warnings (a setting no strategy used)."""
+    account is compared with (the first strategy's benchmark; None without one),
+    `run_warnings` the run's own warnings (a setting no strategy used) and `notes` the
+    Assumptions lines the run words itself, by key, in place of the block's own (a live
+    session's account, `SessionResult.portfolio`; none for a backtest)."""
 
     def __init__(
         self,
@@ -73,9 +75,11 @@ class PortfolioResult:
         *,
         benchmark: pd.Series | None = None,
         run_warnings: Sequence[str] = (),
+        notes: Mapping[str, str] | None = None,
     ) -> None:
         self._account = account
         self._run_warnings = list(run_warnings)
+        self._notes = dict(notes or {})
         # The account's funds in rupees, as the fund kept them (the sum of the capitals to
         # the paisa when no account_capital was given).
         self._funds = float(records["account_capital"])
@@ -309,10 +313,12 @@ class PortfolioResult:
         """The run's settings in words: the account (pool, funds, what the pool lets one
         strategy do to another, the daily loss limit), the instruments several strategies
         trade, what a backtest does there that a broker does not and those held on
-        opposite sides, and a line per strategy. Each strategy's own block is in
+        opposite sides, and a line per strategy; a line the run words itself (a live
+        session's account) in place of its own. Each strategy's own block is in
         `strategy(name).assumptions`."""
         account, opposite = self._account, self._net[1]
-        return _portfolio_notes.assumptions(account, self._funds, self._results, opposite)
+        block = _portfolio_notes.assumptions(account, self._funds, self._results, opposite)
+        return {**block, **self._notes}
 
     @property
     def warnings(self) -> list[str]:

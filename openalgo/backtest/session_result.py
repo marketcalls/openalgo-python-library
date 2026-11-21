@@ -23,6 +23,14 @@ not it has rows.
   fill to the last included, so its net profit is its trades' net plus an open position's
   value at its mark less what its fills were charged. Its Assumptions block says OpenAlgo
   priced the fills (no fill model, no slippage).
+- `portfolio`: the strategies as one account, a `bt.PortfolioResult` of the same
+  `results`, so it covers this start too: the account on the sum of their capitals (its
+  equity every strategy's at its last slice close, as `metrics.combine_equity` adds them;
+  its margin, free cash and daily loss measure of this start), its metrics, `summary()`
+  and combined `tearsheet()`, every strategy's tables in one with a `strategy` column, and
+  the net position of each instrument (`net_positions`, the broker's view of one several
+  strategies share). Its Assumptions block names the funds OpenAlgo reported at the start;
+  the broker's margin check is the account's, so its `refused` is empty.
 - `summary`: the day's figures across every start of the day: `gross_pnl`, `charges`
   (modelled: the broker's trade book carries none; each fill's rounded to the paisa, so a
   result's charges, its contract notes', differ from them by the notes' rounding, the
@@ -90,6 +98,7 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from .portfolio_result import PortfolioResult
 from .result import Result
 
 if TYPE_CHECKING:
@@ -112,6 +121,7 @@ class SessionResult:
     restarts: int
     strategies: tuple[str, ...]
     results: Mapping[str, Result]
+    portfolio: PortfolioResult
     summary: SessionSummary
     orders: pd.DataFrame
     fills: pd.DataFrame

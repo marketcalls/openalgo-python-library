@@ -29,6 +29,7 @@ records (`_session_close.SessionOutcome`).
   orders not placed, as `bt.backtest` does (`_rejection_notice`): the session alerted
   each refusal as it came, and each result's warnings name every reject code, the live
   session's entry locks (`live_lock`) and in-flight gate (`live_in_flight`) among them.
+- **The portfolio** is the strategies' results as one account (`_result_portfolio`).
 - **The day's summary** is the session's (`_session_figures`): every start of the day,
   each counted once.
 - **The tables** are `_result_frames`'.
@@ -71,6 +72,7 @@ from ._result_frames import (
     skipped_frame,
     unprotected_frame,
 )
+from ._result_portfolio import session_portfolio
 from ._session_close import SessionOutcome
 from ._session_open import OpenPosition
 from ._session_records import Restored
@@ -138,6 +140,12 @@ def session_result(outcome: SessionOutcome) -> SessionResult:
         restarts=outcome.restarts,
         strategies=outcome.strategies,
         results=MappingProxyType(results),
+        portfolio=session_portfolio(
+            results,
+            outcome.arguments,
+            outcome.funds_at_start,
+            shared=bool(outcome.summary.shared),
+        ),
         summary=outcome.summary,
         orders=orders_frame(outcome.orders),
         fills=fills_frame(outcome.fills),
