@@ -11,6 +11,7 @@ columns, or a run with no closed trade, gets one line saying so instead of empty
 
 import pandas as pd
 
+from ..._trade_list import STRATEGY
 from .._excursion import EXCURSION_COLUMNS
 from .._performance import Performance
 from . import bars, cards
@@ -64,13 +65,16 @@ def _unavailable(performance: Performance, listing: pd.DataFrame) -> str | None:
 
 def _points(listing: pd.DataFrame, column: str) -> list[Point]:
     """The closed trades as points of `column` ("mae_pct" or "mfe_pct") against the
-    return, fractions."""
+    return, fractions; each names its strategy when the listing does (an account's,
+    whose strategies each number their own trades)."""
+    named = STRATEGY in listing.columns
     return [
         Point(
             int(number),
             float(row[column]) / PERCENT,
             float(row["return_pct"]) / PERCENT,
             float(row["net_pnl"]) > 0,
+            str(row[STRATEGY]) if named else None,
         )
         for number, row in listing.iterrows()
     ]

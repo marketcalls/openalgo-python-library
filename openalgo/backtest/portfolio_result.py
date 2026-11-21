@@ -27,6 +27,7 @@ from typing import Any
 import pandas as pd
 
 from . import _portfolio_notes, _portfolio_report, _portfolio_tables
+from ._messages import ALONE_POINTER
 from ._native import native
 from ._portfolio_figures import account_performance, contribution
 from ._result_export import EXPORTED_TABLES, write_csv, write_excel
@@ -324,7 +325,7 @@ class PortfolioResult:
         notes += _portfolio_notes.netting_warnings(self._results)
         notes += self._run_warnings
         for name, result in self._results.items():
-            notes += [f"{name}: {text}" for text in result._member_warnings()]
+            notes += [f"{name}: {text}" for text in result._all_warnings(ALONE_POINTER)]
         return notes
 
     @property

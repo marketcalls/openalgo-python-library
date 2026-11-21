@@ -15,7 +15,6 @@ import numpy as np
 import pandas as pd
 
 from . import _result_report
-from ._messages import ALONE_POINTER
 from ._result_excursion import instrument_multipliers
 from ._summary import summary_text
 from ._trade_list import trade_list as closed_trade_list
@@ -113,16 +112,20 @@ class AnalysisMethods:
 
         return quick_checks(self.performance)
 
-    def _overfitting_warnings(self) -> list[str]:
-        """A warning line per quick overfitting check that failed."""
-        return [] if self._quick is None else self._quick.warnings()
+    def _overfitting_warnings(self, pointer: str | None = None) -> list[str]:
+        """A warning line per quick overfitting check that failed, ending with `pointer`,
+        where the full set of checks is (None: the quick checks' own, which loads with
+        them, `_robust._quick.POINTER`)."""
+        if self._quick is None:
+            return []
+        return self._quick.warnings() if pointer is None else self._quick.warnings(pointer)
 
-    def _member_warnings(self) -> list[str]:
-        """`warnings` as the portfolio run this result belongs to tells them: a failed
-        quick check's line points to a run of the strategy alone
-        (`_messages.ALONE_POINTER`), since its own `robustness()` is refused there."""
-        quick = [] if self._quick is None else self._quick.warnings(ALONE_POINTER)
-        return [*self._warnings, *quick]
+    def _all_warnings(self, pointer: str | None = None) -> list[str]:
+        """The run's warnings, then a line per failed quick check ending with `pointer`
+        (None: the result's own). The one composition of `Result.warnings`, the Notes of
+        the tearsheet and, with `_messages.ALONE_POINTER` (a strategy of a portfolio run,
+        whose own `robustness()` is refused), its lines in `PortfolioResult.warnings`."""
+        return [*self._warnings, *self._overfitting_warnings(pointer)]
 
     def summary(self) -> str:
         """A short plain-text summary to print: net profit in rupees with Indian digit
@@ -179,7 +182,7 @@ class AnalysisMethods:
         `report.custom.Layout`) makes a custom tearsheet whose blocks' callables receive
         this result; `mode` then stays "full" (the layout's `base` is its mode)."""
         lines = [f"{key}: {value}" for key, value in self._assumptions.items()]
-        lines += [f"warning: {text}" for text in [*self._warnings, *self._overfitting_warnings()]]
+        lines += [f"warning: {text}" for text in self._all_warnings()]
         name = self._manifest["strategy"]["name"]
         bench = _result_report.benchmark_name(self._manifest)
         report = _result_report.Report(self.performance, name, lines, bench, self._quick)

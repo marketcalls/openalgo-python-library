@@ -32,13 +32,15 @@ MARGIN = Margin(28, 14, 42, 56)
 
 
 class Point(NamedTuple):
-    """One closed trade: its number, the excursion and the return (fractions), and
-    whether it won (net P&L above zero)."""
+    """One closed trade: its number, the excursion and the return (fractions), whether
+    it won (net P&L above zero) and, on the page of several strategies, the strategy
+    that made it (each numbers its own trades; None on a strategy's own page)."""
 
     trade: int
     excursion: float
     ret: float
     win: bool
+    strategy: str | None = None
 
 
 def _axis(values: list[float]) -> tuple[float, float]:
@@ -111,8 +113,12 @@ def _grid(x: scale.Linear, y: scale.Linear, size: tuple[int, int]) -> list[str]:
 
 
 def _mark(point: Point, cx: float, cy: float, name: str) -> str:
+    # A trade number alone names two trades on a page of several strategies.
+    trade = f"Trade {point.trade}"
+    if point.strategy is not None:
+        trade = f"{fmt.text(point.strategy)} trade {point.trade}"
     readout = (
-        f"<title>Trade {point.trade}: {name} {fmt.percent(point.excursion)}, "
+        f"<title>{trade}: {name} {fmt.percent(point.excursion)}, "
         f"return {fmt.percent(point.ret)}</title>"
     )
     if point.win:
