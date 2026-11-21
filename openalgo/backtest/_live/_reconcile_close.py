@@ -24,7 +24,9 @@ group's: carried by every member's own fills since (`Differing.group_units`), na
 the members and their sum (`DIFFERS_SHARED`, `SINCE_SHARED`), never weighed against one
 member's units. No member's share of it is known before the allocation a later read
 would make, so each member is listed open at its own units (`Differing.open_units`),
-unless the net is flat by then: nothing is left to close by hand.
+unless the net is flat by then: nothing is left to close by hand. The DAILY_SUMMARY names
+the group's difference once, whichever member's sighting holds it
+(`Differing.group_summary`, `late_group_summary`; unit M7).
 
 A leg no comparison judged after a fill of its own orders landed during a read
 (`Reconciler.unjudged`, round 9) is never called flat or agreeing unqualified: the close
@@ -200,6 +202,13 @@ class Differing:
         )
         return f"{words}, {NOT_CONFIRMED}" if self.unjudged else words
 
+    def group_summary(self, trader: Trader) -> str:
+        """The difference of `trader`'s shared instrument in the DAILY_SUMMARY's words,
+        named once for its group (module docstring): the instrument, OpenAlgo's net now
+        (`figures`), the members' units now, and whether it is confirmed."""
+        words = f"{trader.symbol} {trader.exchange} {self.figures()}, their {self.group_units}"
+        return f"{words}, {NOT_CONFIRMED}" if self.unjudged else words
+
 
 def differing(reconcile: Any, trader: Trader) -> Differing | None:
     """`trader`'s difference with OpenAlgo's books that no later read will confirm, once the
@@ -264,6 +273,16 @@ def late_summary(trader: Trader, seen: Sighting) -> str:
     )
 
 
+def late_group_summary(trader: Trader, seen: Sighting) -> str:
+    """A shared instrument whose last comparison was late and saw a difference, in the
+    DAILY_SUMMARY's words, named once for its group (`late_summary`): the group's net
+    against the members' sum as that read saw them."""
+    return (
+        f"{trader.symbol} {trader.exchange} OpenAlgo's books showed {_against(trader, seen)} "
+        f"{LATE_READ}, {NEITHER}"
+    )
+
+
 def _against(trader: Trader, seen: Sighting) -> str:
     """OpenAlgo's units against the engine's as a read saw them, in words; of a member of
     a shared instrument, the group's net against the members' sum."""
@@ -303,6 +322,7 @@ __all__ = [
     "Differing",
     "differing",
     "late_alert",
+    "late_group_summary",
     "late_summary",
     "not_confirmed_alert",
     "not_confirmed_summary",

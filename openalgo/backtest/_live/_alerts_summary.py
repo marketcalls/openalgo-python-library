@@ -29,7 +29,9 @@ position is still open", or after "flat" when OpenAlgo's books show every such l
 (round 8: "s1 SBIN NSE no position in OpenAlgo's books, the engine's 10"). A leg no read
 judged after a fill of its own orders landed during a read is named there too, as not
 confirmed, and is no mismatch (round 9: "s1 SBIN NSE the engine's 0 units, not confirmed,
-since ...").
+since ..."). An instrument several strategies of the session share has a "Shared" line
+after the Reconcile line (18-multi-strategy 4.11): "SBIN NSE (A and B): OpenAlgo's net 90
+by the last read, their sum 90: they agree"; a session with none prints none.
 
 Rupees are written as `Result.summary()` writes them (Indian digit grouping, a loss as
 "Rs -500.00"). `alerts` re-exports both names.
@@ -89,14 +91,16 @@ class SessionSummary:
     with no difference to name: not a mismatch, named beside them. `earlier` names, in
     words, each strategy an earlier start of the day ran and this one does not, whose
     figures the day's include (with the position its last save held, when it held one).
-    `limits` names, in words, the daily limits the session set (each strategy's and the
-    account's), none when it set none.
+    `shared` gives, in words, each instrument several strategies of the session share:
+    OpenAlgo's net, the members' sum and whether they agree. `limits` names, in words,
+    the daily limits the session set (each strategy's and the account's), none when it
+    set none.
 
     Raises ConfigError when a rupee figure or the seconds unprotected is not a finite
     number (None is allowed for `slippage` only), when the seconds unprotected are
     negative, when a count is not a whole number of at least zero, when a leg of
-    `differing` or `unconfirmed` is not named in words, or when `differing` names more legs
-    than the mismatches counted.
+    `differing`, `unconfirmed`, `shared` or `limits` is not named in words, or when
+    `differing` names more legs than the mismatches counted.
     """
 
     day: dt.date
@@ -116,6 +120,7 @@ class SessionSummary:
     unconfirmed: tuple[str, ...] = ()
     earlier: tuple[str, ...] = ()
     slippage_not_compared: int = 0
+    shared: tuple[str, ...] = ()
     limits: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -134,6 +139,7 @@ class SessionSummary:
         _check_differing(self.differing, self.reconcile_mismatches)
         _check_legs("unconfirmed", self.unconfirmed)
         _check_legs("earlier", self.earlier)
+        _check_legs("shared", self.shared)
         _check_legs("limits", self.limits)
 
     @property
@@ -164,6 +170,7 @@ def summary_text(summary: SessionSummary) -> str:
             "Reconcile",
             _count(summary.reconcile_mismatches, "mismatch", "mismatches") + at_close,
         ),
+        *(("Shared", line) for line in summary.shared),
     ]
     if summary.undelivered_alerts:
         lines.append(("Alerts", f"{summary.undelivered_alerts} not delivered"))

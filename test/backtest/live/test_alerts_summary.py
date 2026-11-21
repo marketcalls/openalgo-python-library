@@ -289,3 +289,25 @@ def test_a_leg_not_confirmed_is_named_after_the_legs_that_differ():
 def test_a_leg_not_confirmed_is_named_in_words(words):
     with pytest.raises(ConfigError, match="unconfirmed names each leg in words"):
         replace(A_GOOD_DAY, unconfirmed=(words,))
+
+
+#: The lines of two instruments several strategies of the session share (18-multi-strategy
+#: 4.11), as the close words them.
+SHARED_SBIN = "SBIN NSE (A and B): OpenAlgo's net 90 by the last read, their sum 90: they agree"
+SHARED_INFY = "INFY NSE (C and D): OpenAlgo's net 0 by the last read, their sum 40: they differ"
+
+
+def test_each_shared_instrument_has_a_line_after_the_reconcile_line():
+    lines = summary_text(replace(A_GOOD_DAY, shared=(SHARED_SBIN, SHARED_INFY))).splitlines()
+    at = next(i for i, text in enumerate(lines) if text.startswith("Reconcile"))
+    assert lines[at + 1 : at + 3] == [
+        f"Shared      : {SHARED_SBIN}",
+        f"Shared      : {SHARED_INFY}",
+    ]
+    assert lines[at + 3].startswith("End state")
+
+
+@pytest.mark.parametrize("words", ["", 5], ids=["empty", "not text"])
+def test_a_shared_instrument_is_named_in_words(words):
+    with pytest.raises(ConfigError, match="shared names each leg in words"):
+        replace(A_GOOD_DAY, shared=(words,))

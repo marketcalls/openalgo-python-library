@@ -227,10 +227,12 @@ class Books:
 @dataclass(frozen=True)
 class PositionRows:
     """A position book read for a held cancel (4.11), as the SDK returned it, and when it
-    was read."""
+    was read; with the order book read after it when it was asked for
+    (`ReadPositions.orders`), else None."""
 
     positionbook: Mapping[str, Any]
     read_ns: int
+    orderbook: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)

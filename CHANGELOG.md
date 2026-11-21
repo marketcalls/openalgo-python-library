@@ -55,7 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejects in such a group holds the position: no market exit, no re-placed stop and no
   square-off sent by the engine until the session has checked the broker's books. Both
   codes have a meaning and what to do in the rejection warnings.
-- Two or more strategies on one symbol in a live session (2.4.0, unit M6). `bt.live` used to
+- Two or more strategies on one symbol in a live session (2.4.0, units M6 and M7). `bt.live` used to
   refuse a second strategy on a symbol and product ("run one strategy per symbol"); now each
   strategy keeps its own position and its own stop at the broker while OpenAlgo holds one net
   position for the symbol. The symbol is subscribed and checked against broker candles once,
@@ -79,9 +79,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     by hand while the session runs. A new unprotected reason, "instrument held by another
     strategy's order", comes with an ERROR alert naming that order. An order the order book
     cannot tell apart locks the entries of every strategy on its symbol.
-  A strategy alone on its symbol keeps 2.3.0's behaviour throughout. Until a later unit, the
-  session's closing rows list each strategy of a shared symbol at its own units, with a note
-  naming OpenAlgo's net for the group.
+  - The reports show the group. `SessionResult.open_positions` gains a row per shared symbol
+    whose OpenAlgo net is a position, named by its strategies ("A and B"), with that net and
+    whether it equals their sum, and the DAILY_SUMMARY a "Shared" line per shared symbol
+    (`SessionSummary.shared`). In a session with a shared symbol,
+    `SessionResult.reconciliations` gains the columns `group`, `group_units`,
+    `member_units`, `external_units`, `allocation` and `stops_cut`. A difference of the group
+    counts as one reconcile mismatch and is named once at the close.
+  - Units beyond every strategy's position, or a difference on the other side of the
+    strategies, are taken in by none: nothing is sent, every strategy on the symbol is
+    locked, and the alert says to end the session and close by hand. On the other side every
+    strategy's stop is cancelled, with one ERROR alert for the symbol.
+  - A stop's cancel whose fills the trade book has not yet confirmed is decided from the
+    position book and then the order book when the order book counts every other strategy's
+    fills (sandbox books do). A live broker's order book shows a resting stop without a fill
+    count, so there the cancel waits for the trade book, reading both books every 2 seconds.
+  A strategy alone on its symbol keeps 2.3.0's behaviour throughout, its reports included.
 - `bt.backtest` takes a list of strategies and runs them together on one account (2.4.0, unit
   M3), returning a `bt.PortfolioResult`. Each strategy keeps its own `Result`
   (`pf.strategy(name)`), measured on its own capital. The portfolio result gives the account's
@@ -108,6 +121,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     which changes the charges.
   - A list of one strategy also returns a `PortfolioResult`. A strategy class on its own runs
     exactly as before, with the same figures.
+- Daily limits per strategy and for the account, in `bt.backtest` and `bt.live` (2.4.0, unit
+  M10). Each is off unless set, and takes one value or a dict by strategy class name; a class
+  attribute of the same name wins.
+  - `max_trades_per_day`: the entries of a session day. An entry is an order that opens a
+    position from flat, or a reversal; adds, exits and the engine's own exits never count.
+    An entry counts from submission while it works, and for good once any part fills. At the
+    cap an entry is rejected `trade_limit`, and a reversal is cut to its close (the close is
+    sent as an order that only reduces the units held, and the opening part is recorded
+    rejected). Nothing is exited.
+  - `daily_profit_target`: when the day's profit (the measure `max_daily_loss` uses) reaches
+    it, every position exits with the reason `daily_profit_target` and entries are rejected
+    `daily_profit_gate` until the next session day, whatever `after_risk_exit` says.
+  - `max_order_value`: an entry or add worth more is rejected `order_value_limit`. Its worth
+    is the units times the limit price, an SL-M's trigger or the last close, times the
+    multiplier, judged at submission; a MARKET entry with no last close yet is refused. A
+    modify is checked too and, when refused, leaves the order as it was. Exits are never
+    refused.
+  - For a list of strategies in `bt.backtest`, and in `bt.live`: `account_max_trades_per_day`
+    (the entries of every strategy together; at the cap entries are rejected
+    `account_trade_limit` and nothing is exited) and `account_daily_profit_target` (works as
+    `account_max_daily_loss` does: exit reason `account_profit_target`, entries rejected
+    `account_profit_gate` in a backtest, the kill switch fired for `account_profit` live).
+    `pf.refused` lists the account's refusals; a strategy's own cap codes are in its
+    `result.orders` and in `pf.orders`.
+  - Each limit is named in the Assumptions block, in the live start banner and in the daily
+    summary's Limits line. Refusals by these limits are told once in `result.warnings` and
+    raise no OrdersNotPlacedWarning. A live restart of the day keeps the trade counts
+    (the account's include the entries of strategies an earlier start ran) and the profit
+    locks.
+- `bt.live(max_orders_per_second=8)`: at most this many order calls (place, modify and cancel
+  together) in any second, OpenAlgo's limit of 10 less 2 for your own orders (2.4.0, unit
+  M10). A call beyond the limit waits, stops and exits first. A call that waits 2 s writes the
+  event `order_throttled` and sends one alert per session start. An entry or add that waits
+  5 s is not sent (reason `order_rate`); an exit is never dropped. An entry still waiting
+  when its strategy is locked (a profit target, the kill switch, a safe stop) is withdrawn,
+  not placed.
 - MCX silver mini (SILVERM) and silver micro (SILVERMIC) can be backtested and traded: their
   freeze quantity, 600 kg per order, is in the contract table from MCX circulars
   MCX/TRD/114/2025, MCX/TRD/091/2026, MCX/TRD/275/2025 and MCX/TRD/302/2026 (contracts
@@ -124,6 +173,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refuse `pool`, `account_capital` and `account_max_daily_loss` with a `ConfigError`, and
   `bt.live` refuses `pool` and `account_capital` as it refuses the other backtest-only
   arguments.
+- Live sessions send at most 8 order calls a second by default (it was 5), set by
+  `max_orders_per_second`.
+- Live sessions save their state in layout 5 (the day's trade counts), so a restart cannot
+  resume a state that 2.3.0 saved earlier the same day: start it fresh.
+- `Fund.advance` called after a portfolio run has ended raises the fund's "has finished"
+  error, and each of the fund's breach records carries its rule (`account_loss` or
+  `account_profit`).
 - Live sessions: a trade closed by the account's daily loss limit (`account_max_daily_loss`,
   through the kill switch) now records the exit reason `account_loss_limit` instead of
   `manual`, the reason a portfolio backtest records for the same breach.
