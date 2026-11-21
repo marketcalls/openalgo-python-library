@@ -49,6 +49,12 @@ OPENING_ROLES = frozenset({"entry", "add"})
 #: The entry lock of a member while another member reverses, or the others' resulting
 #: sides differ (module docstring).
 GROUP_REVERSING_LOCK = "group_reversing"
+#: What the members of a shared instrument do, as the start banner and the session's
+#: portfolio (`SessionResult.portfolio`) say it (18-multi-strategy 4.11 and 4.13).
+SHARED_RULE = (
+    "share one broker position; each holds its own stop; they trade one side at a time and "
+    "with market orders only"
+)
 
 
 @dataclass(frozen=True)
@@ -202,11 +208,7 @@ def shared_lines(groups: Iterable[InstrumentGroup]) -> list[str]:
         if not group.shared:
             continue
         names = and_join(group.members)
-        lines.append(
-            f"{group.symbol} ({group.exchange}, {group.product}): {names} share one broker "
-            "position; each holds its own stop; they trade one side at a time and with "
-            "market orders only"
-        )
+        lines.append(f"{group.symbol} ({group.exchange}, {group.product}): {names} {SHARED_RULE}")
     if lines:
         lines.append("Never trade a session's symbol by hand while it runs")
     return lines
@@ -216,6 +218,7 @@ __all__ = [
     "GROUP_REVERSING_LOCK",
     "LONG",
     "OPENING_ROLES",
+    "SHARED_RULE",
     "SHORT",
     "Groups",
     "InstrumentGroup",

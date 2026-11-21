@@ -2,13 +2,15 @@
 list of strategies and for `bt.live`.
 
 A per-strategy setting (`PER_STRATEGY`) takes one value for every strategy, or a dict keyed
-by strategy class name ({"SbinTrend": 200_000, "SbinBreakout": 150_000}). A key that names
+by strategy class name ({"SbinTrend": 200_000, "SbinBreakout": 150_000}); `bt.live` takes
+every one of them but `product` and `base`, which a live session refuses. A key that names
 no strategy of the call is refused, naming the strategies it may name. A strategy the dict
-leaves out is refused where the setting must be given for each one (`capital`, and in a
-backtest every setting but `params`); `params` leaves a strategy it does not name on its
-class defaults. A strategy class attribute of the same name still wins over the run
-argument, as for one strategy (`_settings`). With one strategy, `params` holds that
-strategy's own values, as `bt.backtest` takes them.
+leaves out is refused where the setting must be given for each one (`capital`, and every
+setting but `params` and, in `bt.live`, `max_daily_loss`, which its plan checks for each
+strategy); `params` leaves a strategy it does not name on its class defaults. A strategy
+class attribute of the same name still wins over the run argument, as for one strategy
+(`_settings`). With one strategy, `params` holds that strategy's own values, as
+`bt.backtest` takes them.
 
 The account's settings (`ACCOUNT_SETTINGS`) are one value for all the strategies of a call
 together. They describe the account of a list of strategies: a run of one strategy leaves
@@ -33,6 +35,17 @@ from .strategy import Strategy
 
 #: The daily limits of a strategy (18-multi-strategy 2.5a), per strategy in both verbs.
 DAILY_LIMITS = ("max_trades_per_day", "daily_profit_target", "max_order_value")
+#: The risk settings of a strategy, per strategy in both verbs (18-multi-strategy 1.1 and
+#: 1.3, decision M5).
+RISK_SETTINGS = (
+    "after_risk_exit",
+    "max_positions",
+    "drawdown_halt",
+    "cooldown",
+    "entry_from",
+    "entry_until",
+    "square_off",
+)
 #: The settings a call takes per strategy: one value for every strategy, or a dict by
 #: strategy class name (18-multi-strategy 1.1).
 PER_STRATEGY = (
@@ -41,13 +54,7 @@ PER_STRATEGY = (
     "product",
     "base",
     "max_daily_loss",
-    "after_risk_exit",
-    "max_positions",
-    "drawdown_halt",
-    "cooldown",
-    "entry_from",
-    "entry_until",
-    "square_off",
+    *RISK_SETTINGS,
     *DAILY_LIMITS,
 )
 #: The pool of a portfolio run when none is given: one account the strategies share.
@@ -122,6 +129,20 @@ def by_name(
     if required is not None and missing:
         raise ConfigError(f"{what} {required}, and the dict gives none for {missing}")
     return {name: value.get(name) for name in names}
+
+
+def by_strategy(
+    given: Mapping[str, Any], names: Sequence[str], *, owner: str
+) -> dict[str, dict[str, Any]]:
+    """Each strategy's value of every setting in `given` (a setting's name to one value
+    for every strategy, or a dict by strategy class name naming each of `names`), by
+    strategy name in call order. Raises ConfigError as `by_name` does with
+    `EVERY_STRATEGY`."""
+    resolved = {
+        setting: by_name(value, names, setting, owner=owner, required=EVERY_STRATEGY)
+        for setting, value in given.items()
+    }
+    return {name: {setting: values[name] for setting, values in resolved.items()} for name in names}
 
 
 def params_by_name(
@@ -234,11 +255,13 @@ __all__ = [
     "EVERY_STRATEGY",
     "MANDATORY",
     "PER_STRATEGY",
+    "RISK_SETTINGS",
     "SHARED_POOL",
     "Account",
     "account_settings",
     "account_trade_cap",
     "by_name",
+    "by_strategy",
     "class_names",
     "params_by_name",
     "refuse_account_settings",
